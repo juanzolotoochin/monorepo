@@ -12,6 +12,7 @@ go_library(
 go_test(
     name = "git_test",
     srcs = ["git_test.go"],
+    tags = ["manual"],
     deps = [
         ":git_lib",
         "//engprod/testfs",

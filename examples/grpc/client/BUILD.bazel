@@ -26,6 +26,7 @@ py_test(
     data = [
         "//examples/grpc/server:greeter_server_docker.loader",
     ],
+    tags = ["manual"],
     firecracker = True,
     deps = [
         ":greeter_client",

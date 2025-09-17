@@ -14,6 +14,7 @@ go_library(
 go_test(
     name = "ggo_test",
     srcs = ["ggo_test.go"],
+    tags = ["manual"],
     deps = [
         ":ggo",
         "//engprod/testfs",

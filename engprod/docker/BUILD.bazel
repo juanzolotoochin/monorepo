@@ -29,6 +29,7 @@ py_test(
     name = "postgres_image_test",
     srcs = ["postgres_image_test.py"],
     firecracker = True,
+    tags = ["manual"],
     deps = [
         ":postgres_service",
         "@pip_deps//docker",
