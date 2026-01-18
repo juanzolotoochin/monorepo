@@ -1917,7 +1917,7 @@
     },
     "@@rules_multitool+//multitool:extension.bzl%multitool": {
       "general": {
-        "bzlTransitiveDigest": "LgDKqUIlbHpL34fOhGnCBZakWBh2UiNXWx038GrNmqA=",
+        "bzlTransitiveDigest": "NHJC/P9mqQTf0C/WZOgOzEMLeqDvLD3qQg9RgflMdKs=",
         "usagesDigest": "DwfcqGUrxKK2ANfhZR3x1C/nT+QeY/QgujLbyGDYTTY=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
