@@ -48,15 +48,6 @@ gazelle_binary(
     visibility = ["//visibility:public"],
 )
 
-gazelle(
-    name = "gazelle-update-repos",
-    args = [
-        "--from_file=go.mod",
-        "--to_macro=deps.bzl%go_repositories",
-    ],
-    command = "update-repos",
-)
-
 compile_pip_requirements(
     name = "compile_pip",
     requirements_in = "requirements.txt",
