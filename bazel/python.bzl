@@ -1,5 +1,11 @@
+load("@aspect_rules_lint//lint:ruff.bzl", "lint_ruff_aspect")
 load("@pip_deps//:requirements.bzl", "requirement")
 load("@rules_python//python:defs.bzl", _py_binary = "py_binary", _py_library = "py_library", _py_test = "py_test")
+
+ruff_aspect = lint_ruff_aspect(
+    binary = Label("@aspect_rules_lint//lint:ruff_bin"),
+    configs = [Label("//:pyproject.toml")],
+)
 
 FIRECRACKER_EXEC_PROPERTIES = {
     # Tell BuildBuddy to run this test using a Firecracker microVM.
@@ -32,11 +38,8 @@ def py_binary(name, srcs, **kwargs):
 
     _py_binary(name = name, srcs = srcs, **kwargs)
 
-    py_ruff_test(name = name + "_pylint", srcs = srcs)
-
 def py_library(name, srcs, **kwargs):
     _py_library(name = name, srcs = srcs, **kwargs)
-    py_ruff_test(name = name + "_pylint", srcs = srcs)
 
 def py_test(name, srcs, firecracker = False, **kwargs):
     if firecracker:
@@ -52,7 +55,7 @@ def py_test(name, srcs, firecracker = False, **kwargs):
             srcs = srcs,
             **kwargs
         )
-    py_ruff_test(name = name + "_pylint", srcs = srcs)
+
     py_debug(name = name + "_debug", srcs = srcs, og_name = name, **kwargs)
 
 def pylint_test(name, srcs, deps = [], args = [], data = [], **kwargs):
@@ -156,39 +159,4 @@ _py_executable_wrapper = rule(
     attrs = {
         "binary": attr.label(allow_single_file = True, mandatory = True),
     },
-)
-
-def _py_ruff_test_impl(ctx):
-    file_list = " ".join([file.short_path for file in ctx.files.srcs])
-    srcs_hash = hash(file_list)
-    script = "{runner} {file_list}".format(runner = ctx.executable._ruff_runner.short_path, file_list = file_list)
-    script_file = ctx.actions.declare_file("ruff_check_" + str(srcs_hash) + ".sh")
-    ctx.actions.write(output = script_file, content = script)
-
-    runfiles = ctx.runfiles(files = ctx.files.srcs)
-    runfiles = runfiles.merge(ctx.attr._ruff_runner[DefaultInfo].default_runfiles)
-    runfiles = runfiles.merge(ctx.attr._config_file[DefaultInfo].default_runfiles)
-    return DefaultInfo(files = depset([script_file]), executable = script_file, runfiles = runfiles)
-
-py_ruff_test = rule(
-    implementation = _py_ruff_test_impl,
-    attrs = {
-        "srcs": attr.label_list(
-            allow_files = True,
-            mandatory = True,
-            doc = "*.py files to check with ruff",
-        ),
-        "_ruff_runner": attr.label(
-            default = "//bazel/workspace/tools/ruff",
-            allow_single_file = True,
-            executable = True,
-            cfg = "exec",
-        ),
-        "_config_file": attr.label(
-            default = "//:pyproject.toml",
-            allow_single_file = True,
-        ),
-    },
-    doc = "Wrapper for running ruff checks on python files.",
-    test = True,
 )
