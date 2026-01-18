@@ -1,6 +1,6 @@
 load("@aspect_rules_lint//lint:ruff.bzl", "lint_ruff_aspect")
 load("@pip_deps//:requirements.bzl", "requirement")
-load("@rules_python//python:defs.bzl", _py_binary = "py_binary", _py_library = "py_library", _py_test = "py_test")
+load("@rules_python//python:defs.bzl", "PyInfo", _py_binary = "py_binary", _py_library = "py_library", _py_test = "py_test")
 
 ruff_aspect = lint_ruff_aspect(
     binary = Label("@aspect_rules_lint//lint:ruff_bin"),
