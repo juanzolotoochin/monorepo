@@ -3,6 +3,7 @@ build --bes_backend=grpcs://remote.buildbuddy.io
 build --bes_results_url=https://app.buildbuddy.io/invocation/
 build --build_metadata=REPO_URL=https://github.com/juanique/monorepo.git
 build --keep_backend_build_event_connections_alive=false
+build --incompatible_strict_action_env
 
 # Detailed timing profile
 build --noslim_profile

@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 class TestGreeterClient(unittest.TestCase):
     def setUp(self) -> None:
+        logger.info("Setting up test")
         self.docker_client = docker.from_env()
         self.service = DockerService(
             self.docker_client,

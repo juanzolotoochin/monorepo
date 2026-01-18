@@ -125,7 +125,7 @@ func (i *Image) AddLayersAsLabels(blobsDir string) error {
 	}
 
 	labels, ok := nestedConfig.(map[string]interface{})["Labels"]
-	if !ok {
+	if !ok || labels == nil {
 		nestedConfig.(map[string]interface{})["Labels"] = map[string]interface{}{}
 		labels = nestedConfig.(map[string]interface{})["Labels"]
 	}
@@ -207,14 +207,14 @@ type ImageBuilder struct {
 
 	// Stateful
 	filesToCopy []OutputFile
-	configPath  string
+	ConfigPath  string
 }
 
 func (b *ImageBuilder) Prepare(i *Image) error {
 	err := os.MkdirAll(b.blobsDir, 0o755)
 
 	// By default we use the original config blob path
-	b.configPath = i.ConfigBlobPath()
+	b.ConfigPath = i.ConfigBlobPath()
 
 	if err != nil {
 		return fmt.Errorf("Failed to create output dir: %w", err)
@@ -230,7 +230,7 @@ func (b *ImageBuilder) Prepare(i *Image) error {
 
 	b.outputManifest.RepoTags = b.repoTags
 
-	b.configPath = filepath.Join(b.blobsDir, strings.Replace(i.Manifest.Config.Digest, "sha256:", "", -1))
+	b.ConfigPath = filepath.Join(b.blobsDir, strings.Replace(i.Manifest.Config.Digest, "sha256:", "", -1))
 
 	return nil
 }
@@ -241,7 +241,7 @@ type BuildOpts struct {
 
 // Build creates an OCI image tar from an OCI image directory.
 func (b *ImageBuilder) Build(i Image, opts BuildOpts) (string, error) {
-	configOutput := b.AddBlob(b.configPath)
+	configOutput := b.AddBlob(b.ConfigPath)
 	b.outputManifest.Config = configOutput.rel
 	layersToSkip := []string{}
 

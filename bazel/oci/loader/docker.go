@@ -7,13 +7,125 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/client"
-	"github.com/juanique/monorepo/salsa/go/json"
+ 	"github.com/docker/docker/api/types"
+ 	"github.com/docker/docker/client"
+ 	"github.com/juanique/monorepo/salsa/go/json"
 )
+
+// areConfigsEqual compares the OCI config map with the Docker image config.
+func areConfigsEqual(ociConfig map[string]interface{}, dockerImage types.ImageInspect) bool {
+	// Compare Architecture and OS
+	if ociConfig["architecture"] != dockerImage.Architecture {
+		return false
+	}
+	if ociConfig["os"] != dockerImage.Os {
+		return false
+	}
+
+	// Extract the nested 'config' from OCI
+	ociContainerConfig, ok := ociConfig["config"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+
+	// Compare specific fields like Env, Cmd, Entrypoint, Labels
+	// We construct a temporary container.Config from OCI map to let usage of reflect or manual comparison
+	// But since we have a map, let's check key fields.
+
+	// Check Env
+	if !slicesEqual(getStringSlice(ociContainerConfig, "Env"), dockerImage.Config.Env) {
+		return false
+	}
+	// Check Entrypoint
+	if !slicesEqual(getStringSlice(ociContainerConfig, "Entrypoint"), dockerImage.Config.Entrypoint) {
+		return false
+	}
+	// Check Cmd
+	if !slicesEqual(getStringSlice(ociContainerConfig, "Cmd"), dockerImage.Config.Cmd) {
+		return false
+	}
+	// Check WorkingDir
+	if getString(ociContainerConfig, "WorkingDir") != dockerImage.Config.WorkingDir {
+		return false
+	}
+	// Check User
+	if getString(ociContainerConfig, "User") != dockerImage.Config.User {
+		return false
+	}
+
+	// Check Labels
+	ociLabels := getMapStringString(ociContainerConfig, "Labels")
+	if len(ociLabels) != len(dockerImage.Config.Labels) {
+		return false
+	}
+	for k, v := range ociLabels {
+		if dockerImage.Config.Labels[k] != v {
+			return false
+		}
+	}
+
+	return true
+}
+
+func getStringSlice(m map[string]interface{}, key string) []string {
+	val, ok := m[key]
+	if !ok || val == nil {
+		return nil
+	}
+	// Handle []interface{} decoding from JSON
+	if slice, ok := val.([]interface{}); ok {
+		res := make([]string, len(slice))
+		for i, v := range slice {
+			res[i] = fmt.Sprint(v)
+		}
+		return res
+	}
+	// Handle []string
+	if slice, ok := val.([]string); ok {
+		return slice
+	}
+	return nil
+}
+
+func getString(m map[string]interface{}, key string) string {
+	val, ok := m[key]
+	if !ok {
+		return ""
+	}
+	return fmt.Sprint(val)
+}
+
+func getMapStringString(m map[string]interface{}, key string) map[string]string {
+	val, ok := m[key]
+	if !ok {
+		return nil
+	}
+	if mp, ok := val.(map[string]interface{}); ok {
+		res := make(map[string]string)
+		for k, v := range mp {
+			res[k] = fmt.Sprint(v)
+		}
+		return res
+	}
+	if mp, ok := val.(map[string]string); ok {
+		return mp
+	}
+	return nil
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
 
 // DockerLoadAction contains information of the action that was actually
 // performed when requesting to load the image.  Since the image may have
@@ -116,22 +228,75 @@ type LoadError struct {
 	} `json:"errorDetail"`
 }
 
-func (d *DockerLoader) GetImageLayerDigests(ctx context.Context, label string) ([]string, error) {
-	image, _, err := d.cli.ImageInspectWithRaw(ctx, label)
+
+
+// CheckImageExists checks if the image already exists in Docker using ID or fuzzy config match.
+// If valid, returns true and an Action with AlreadyLoaded=true (and ensures tags).
+// If invalid, returns false.
+func (d *DockerLoader) CheckImageExists(ctx context.Context, imageID string, ociConfig map[string]interface{}, repoTags []string) (bool, DockerLoadAction, error) {
+	action := DockerLoadAction{Digest: imageID}
+
+	// 1. Check Strict ID
+	_, _, err := d.cli.ImageInspectWithRaw(ctx, imageID)
+	if err == nil {
+		action.AlreadyLoaded = true
+		// Ensure tags
+		if err := d.ensureTags(ctx, imageID, repoTags, &action); err != nil {
+			return true, action, err
+		}
+		return true, action, nil
+	} else if !client.IsErrNotFound(err) {
+		return false, action, fmt.Errorf("error inspecting image ID: %w", err)
+	}
+
+	// 2. Check Loose Match via First Tag
+	if len(repoTags) == 0 {
+		return false, action, nil
+	}
+	firstTag := repoTags[0]
+	inspect, _, err := d.cli.ImageInspectWithRaw(ctx, firstTag)
+	if err == nil {
+		// Tag exists. Compare Configs.
+		if areConfigsEqual(ociConfig, inspect) {
+			action.AlreadyLoaded = true
+			log.Println("Found existing image with matching config (ID mismatch ignored due to normalization).")
+			if err := d.ensureTags(ctx, inspect.ID, repoTags, &action); err != nil {
+				return true, action, err
+			}
+			return true, action, nil
+		} else {
+			log.Println("Existing image tag found but config does not match.")
+		}
+	} else if !client.IsErrNotFound(err) {
+		log.Println("Error inspecting existing tag:", err)
+	}
+
+	return false, action, nil
+}
+
+func (d *DockerLoader) ensureTags(ctx context.Context, imageID string, repoTags []string, action *DockerLoadAction) error {
+	// We need to know current tags to populate TagsAlreadyPresent
+	inspect, _, err := d.cli.ImageInspectWithRaw(ctx, imageID)
 	if err != nil {
-		if strings.Contains(err.Error(), "No such image") {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("error inspecting image: %w", err)
+		return err
 	}
 
-	for labelKey, labelValue := range image.Config.Labels {
-		if labelKey == "oci_layers" {
-			return strings.Split(labelValue, ","), nil
-		}
+	currentTags := map[string]bool{}
+	for _, t := range inspect.RepoTags {
+		currentTags[t] = true
 	}
 
-	return nil, nil
+	for _, tag := range repoTags {
+		if currentTags[tag] {
+			action.TagsAlreadyPresent = append(action.TagsAlreadyPresent, tag)
+		} else {
+			if err := d.TagImage(ctx, imageID, tag); err != nil {
+				return err
+			}
+			action.TagsAdded = append(action.TagsAdded, tag)
+		}
+	}
+	return nil
 }
 
 // LoadTarIntoDocker ensures that the given tar is loaded and tagged with the given tags.
