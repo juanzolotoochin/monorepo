@@ -1,4 +1,5 @@
 load("@pip_deps//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", _py_binary = "py_binary", _py_library = "py_library", _py_test = "py_test")
 
 FIRECRACKER_EXEC_PROPERTIES = {
     # Tell BuildBuddy to run this test using a Firecracker microVM.
@@ -29,24 +30,24 @@ def py_binary(name, srcs, **kwargs):
         else:
             fail("Missing main attribute for multi srcs target.")
 
-    native.py_binary(name = name, srcs = srcs, **kwargs)
+    _py_binary(name = name, srcs = srcs, **kwargs)
 
     py_ruff_test(name = name + "_pylint", srcs = srcs)
 
 def py_library(name, srcs, **kwargs):
-    native.py_library(name = name, srcs = srcs, **kwargs)
+    _py_library(name = name, srcs = srcs, **kwargs)
     py_ruff_test(name = name + "_pylint", srcs = srcs)
 
 def py_test(name, srcs, firecracker = False, **kwargs):
     if firecracker:
-        native.py_test(
+        _py_test(
             name = name,
             exec_properties = FIRECRACKER_EXEC_PROPERTIES,
             srcs = srcs,
             **kwargs
         )
     else:
-        native.py_test(
+        _py_test(
             name = name,
             srcs = srcs,
             **kwargs
@@ -56,15 +57,13 @@ def py_test(name, srcs, firecracker = False, **kwargs):
 
 def pylint_test(name, srcs, deps = [], args = [], data = [], **kwargs):
     kwargs["main"] = "pylint_test_wrapper.py"
-    native.py_test(
+    _py_test(
         name = name,
         srcs = ["//bazel/workspace/tools/pylint:pylint_test_wrapper.py"] + srcs,
         args = ["--pylint-rcfile=$(location //bazel/workspace/tools/pylint:.pylintrc)"] + args + ["$(location :%s)" % x for x in srcs],
-        python_version = "PY3",
-        srcs_version = "PY3",
         deps = deps + [
-            requirement("pytest"),
-            requirement("pytest-pylint"),
+            "@pip_deps//pytest",
+            "@pip_deps//pytest-pylint",
         ],
         data = [
             "//bazel/workspace/tools/pylint:.pylintrc",
@@ -72,18 +71,16 @@ def pylint_test(name, srcs, deps = [], args = [], data = [], **kwargs):
         **kwargs
     )
 
-def py_debug(name, og_name, srcs, deps = [], args = [], data = [], **kwargs):
+def py_debug(name, og_name, srcs, deps = [], **kwargs):
     wrapper_dep_name = og_name + "_debug_wrapper"
     wrapper_filename = wrapper_dep_name + ".py"
 
     py_debug_wrapper(name = wrapper_dep_name, out = wrapper_filename)
 
-    native.py_binary(
+    _py_binary(
         name = name,
         srcs = [wrapper_filename] + srcs,
         main = wrapper_filename,
-        python_version = "PY3",
-        srcs_version = "PY3",
         deps = deps + [
             requirement("pytest"),
             requirement("debugpy"),
@@ -117,7 +114,7 @@ py_debug_wrapper = rule(
 )
 
 def pytest_test(name, srcs, deps = [], args = [], **kwargs):
-    native.py_test(
+    _py_test(
         name = name,
         srcs = [
             "//bazel/workspace/tools/pytest:pytest_wrapper.py",
@@ -126,8 +123,6 @@ def pytest_test(name, srcs, deps = [], args = [], **kwargs):
         args = [
             "--capture=no",
         ] + args + ["$(location :%s)" % x for x in srcs],
-        python_version = "PY3",
-        srcs_version = "PY3",
         deps = deps + [
             requirement("pytest"),
         ],

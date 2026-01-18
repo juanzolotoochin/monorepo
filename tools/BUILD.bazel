@@ -1,4 +1,4 @@
-load("@python3_10//:defs.bzl", "interpreter")
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 
 sh_binary(
     name = "go-get",
@@ -7,5 +7,5 @@ sh_binary(
 
 alias(
     name = "python",
-    actual = interpreter,
+    actual = "@python_3_11//:python3",
 )
