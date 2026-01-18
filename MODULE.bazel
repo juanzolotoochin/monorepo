@@ -172,3 +172,89 @@ pip.parse(
     requirements_lock = "//:requirements_lock.txt",
 )
 use_repo(pip, pip_deps = "monorepo_deps")
+# Http Archives
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "libssh2",
+    build_file = "//third_party/libssh2:BUILD.libssh2.bazel",
+    sha256 = "d5fb8bd563305fd1074dda90bd053fb2d29fc4bce048d182f96eaa466dfadafd",
+    strip_prefix = "libssh2-1.9.0",
+    type = "tar.gz",
+    urls = [
+        "https://mirror.bazel.build/github.com/libssh2/libssh2/releases/download/libssh2-1.9.0/libssh2-1.9.0.tar.gz",
+        "https://github.com/libssh2/libssh2/releases/download/libssh2-1.9.0/libssh2-1.9.0.tar.gz",
+    ],
+)
+
+http_archive(
+    name = "pcre",
+    build_file = "//third_party/pcre:BUILD.pcre.bazel",
+    sha256 = "04e214c0c40a97b8a5c2b4ae88a3aa8a93e6f2e45c6b3534ddac351f26548577",
+    strip_prefix = "pcre2-10.37",
+    urls = [
+        "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.37/pcre2-10.37.tar.gz",
+    ],
+)
+
+http_archive(
+    name = "openssl",
+    build_file = "//third_party/openssl:BUILD.openssl3.bazel",
+    sha256 = "aa7d8d9bef71ad6525c55ba11e5f4397889ce49c2c9349dcea6d3e4f0b024a7a",
+    strip_prefix = "openssl-3.0.5",
+    urls = ["https://www.openssl.org/source/openssl-3.0.5.tar.gz"],
+)
+
+http_archive(
+    name = "alsa",
+    build_file = "//third_party/alsa:BUILD.alsa.bazel",
+    sha256 = "4868cd908627279da5a634f468701625be8cc251d84262c7e5b6a218391ad0d2",
+    strip_prefix = "alsa-lib-1.2.12",
+    urls = [
+        "https://www.alsa-project.org/files/pub/lib/alsa-lib-1.2.12.tar.bz2",
+    ],
+)
+
+http_archive(
+    name = "docker",
+    build_file = "//third_party/binaries:BUILD.docker.bazel",
+    sha256 = "23db817b99aac6d5d7fcb1f706e50b5a412d78a9438975d6b4a54c58dc409bfb",
+    strip_prefix = "docker",
+    url = "https://download.docker.com/linux/static/stable/x86_64/docker-25.0.4.tgz",
+)
+
+CHROME_BUILD_CONTENT = """
+load("@bazel_skylib//rules:native_binary.bzl", "native_binary")
+package(default_visibility = ["//visibility:public"])
+filegroup(
+    name = "all_files",
+    srcs = glob(["**/*"]),
+)
+native_binary(
+    name = "chromium-bin",
+    src = "{binary}",
+    out = "{binary}",
+    data = [":all_files"],
+)
+"""
+
+http_archive(
+    name = "chromium_linux_amd64",
+    build_file_content = CHROME_BUILD_CONTENT.format(binary = "chrome-linux/chrome"),
+    sha256 = "e6091f35f81cfbdf4fd3eb4f3f7916e841d43582f113f39f6e0d0c253485e56a",
+    url = "https://playwright.azureedge.net/builds/chromium/1129/chromium-linux.zip",
+)
+
+http_archive(
+    name = "chromium_linux_arm64",
+    build_file_content = CHROME_BUILD_CONTENT.format(binary = "chrome-linux/chrome"),
+    sha256 = "67aab2cec5a4927667575452a2b6c57566085c154f47f924d6e3efa47f7bd777",
+    url = "https://playwright.azureedge.net/builds/chromium/1129/chromium-linux-arm64.zip",
+)
+
+http_archive(
+    name = "chromium_macos_arm64",
+    build_file_content = CHROME_BUILD_CONTENT.format(binary = "chrome-mac/Chromium.app/Contents/MacOS/Chromium"),
+    sha256 = "59d179d0ad9ad792e51db81aef2d7bcc164e6f5df434c081888fbbeb4568bd0e",
+    url = "https://playwright.azureedge.net/builds/chromium/1129/chromium-mac-arm64.zip",
+)
