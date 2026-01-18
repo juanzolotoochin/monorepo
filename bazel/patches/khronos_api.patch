@@ -1,0 +1,40 @@
+diff --git a/build.rs b/build.rs
+index abc1234..def5678 100644
+--- a/build.rs
++++ b/build.rs
+@@ -19,17 +19,25 @@ use std::fs::File;
+ use std::io::Write;
+ use std::path::*;
+
+ fn main() {
++    // Get the manifest dir to find relative paths
++    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
++    let relative_root_path = Path::new("api_webgl/extensions");
++
++    // Resolution of absolute path for traversing to find files
++    let root = manifest_dir.join(relative_root_path);
++
+     // Create and open a file in the output directory to contain our generated rust code
+     let dest = env::var("OUT_DIR").unwrap();
+     let mut file = File::create(&Path::new(&dest).join("webgl_exts.rs")).unwrap();
+
+     // Find the absolute path to the folder containing the WebGL extensions.
+     // The absolute path is needed, because we don't know where the output
+     // directory will be, and `include_bytes!(..)` resolves paths relative to the
+     // containing file.
+-    let root = env::current_dir().unwrap().join("api_webgl/extensions");
+
+     // Generate a slice literal, looking like this:
+     // `&[&*include_bytes!(..), &*include_bytes!(..), ..]`
+@@ -51,7 +59,10 @@ fn main() {
+             let ext_path = path.join("extension.xml");
+             if ext_path.is_file() {
+                 // Include the XML file, making sure to use an absolute path.
+-                writeln!(file, "&*include_bytes!({:?}),", ext_path.to_str().unwrap()).unwrap();
++                writeln!(file, "&*include_bytes!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/{}/{}/extension.xml\")),",
++                         relative_root_path.display(),
++                         path.file_name().unwrap().to_str().unwrap()
++                ).unwrap();
+             }
+         }
+     }
