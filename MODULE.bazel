@@ -223,6 +223,22 @@ http_archive(
     url = "https://download.docker.com/linux/static/stable/x86_64/docker-25.0.4.tgz",
 )
 
+bazel_dep(name = "rules_rust", version = "0.56.0")
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(edition = "2021")
+use_repo(rust, "rust_toolchains")
+
+register_toolchains("@rust_toolchains//:all")
+
+crate = use_extension("@rules_rust//crate_universe:extension.bzl", "crate")
+crate.spec(
+    package = "ferris-says",
+    version = "0.3.1",
+)
+crate.from_specs()
+use_repo(crate, "crates")
+
 CHROME_BUILD_CONTENT = """
 load("@bazel_skylib//rules:native_binary.bzl", "native_binary")
 package(default_visibility = ["//visibility:public"])

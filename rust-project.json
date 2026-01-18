@@ -1,0 +1,713 @@
+{
+  "sysroot": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/external/rules_rust++rust+rust_analyzer_1.86.0_tools",
+  "sysroot_src": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/external/rules_rust++rust+rust_analyzer_1.86.0_tools/lib/rustlib/src/library",
+  "crates": [
+    {
+      "display_name": "formatting",
+      "root_module": "/home/juanique/git/monorepo/examples/rust/formatting_lib_demo/formatting/src/lib.rs",
+      "edition": "2021",
+      "deps": [],
+      "is_workspace_member": true,
+      "cfg": [
+        "test",
+        "debug_assertions"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "env": {
+        "BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN": "1",
+        "CARGO_CFG_TARGET_ARCH": "x86_64",
+        "CARGO_CFG_TARGET_OS": "linux",
+        "CARGO_CRATE_NAME": "formatting",
+        "CARGO_MANIFEST_DIR": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/examples/rust/formatting_lib_demo/formatting",
+        "CARGO_PKG_AUTHORS": "",
+        "CARGO_PKG_DESCRIPTION": "",
+        "CARGO_PKG_HOMEPAGE": "",
+        "CARGO_PKG_NAME": "formatting",
+        "CARGO_PKG_VERSION": "0.0.0",
+        "CARGO_PKG_VERSION_MAJOR": "0",
+        "CARGO_PKG_VERSION_MINOR": "0",
+        "CARGO_PKG_VERSION_PATCH": "0",
+        "CARGO_PKG_VERSION_PRE": "",
+        "PATH": "/bin:/usr/bin:/usr/local/bin",
+        "REPOSITORY_NAME": ""
+      },
+      "is_proc_macro": false,
+      "build": {
+        "label": "examples/rust/formatting_lib_demo/formatting:formatting",
+        "build_file": "/home/juanique/git/monorepo/examples/rust/formatting_lib_demo/formatting/BUILD.bazel",
+        "target_kind": "lib"
+      }
+    },
+    {
+      "display_name": "demo",
+      "root_module": "/home/juanique/git/monorepo/examples/rust/formatting_lib_demo/src/main.rs",
+      "edition": "2021",
+      "deps": [
+        {
+          "crate": 0,
+          "name": "formatting"
+        }
+      ],
+      "is_workspace_member": true,
+      "cfg": [
+        "test",
+        "debug_assertions"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "env": {
+        "BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN": "1",
+        "CARGO_CFG_TARGET_ARCH": "x86_64",
+        "CARGO_CFG_TARGET_OS": "linux",
+        "CARGO_CRATE_NAME": "demo",
+        "CARGO_MANIFEST_DIR": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/examples/rust/formatting_lib_demo",
+        "CARGO_PKG_AUTHORS": "",
+        "CARGO_PKG_DESCRIPTION": "",
+        "CARGO_PKG_HOMEPAGE": "",
+        "CARGO_PKG_NAME": "demo",
+        "CARGO_PKG_VERSION": "0.0.0",
+        "CARGO_PKG_VERSION_MAJOR": "0",
+        "CARGO_PKG_VERSION_MINOR": "0",
+        "CARGO_PKG_VERSION_PATCH": "0",
+        "CARGO_PKG_VERSION_PRE": "",
+        "PATH": "/bin:/usr/bin:/usr/local/bin",
+        "REPOSITORY_NAME": ""
+      },
+      "is_proc_macro": false,
+      "build": {
+        "label": "examples/rust/formatting_lib_demo:demo",
+        "build_file": "/home/juanique/git/monorepo/examples/rust/formatting_lib_demo/BUILD.bazel",
+        "target_kind": "bin"
+      }
+    },
+    {
+      "display_name": "hello_world",
+      "root_module": "/home/juanique/git/monorepo/examples/rust/helloworld/src/main.rs",
+      "edition": "2021",
+      "deps": [],
+      "is_workspace_member": true,
+      "cfg": [
+        "test",
+        "debug_assertions"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "env": {
+        "BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN": "1",
+        "CARGO_CFG_TARGET_ARCH": "x86_64",
+        "CARGO_CFG_TARGET_OS": "linux",
+        "CARGO_CRATE_NAME": "hello_world",
+        "CARGO_MANIFEST_DIR": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/examples/rust/helloworld",
+        "CARGO_PKG_AUTHORS": "",
+        "CARGO_PKG_DESCRIPTION": "",
+        "CARGO_PKG_HOMEPAGE": "",
+        "CARGO_PKG_NAME": "hello_world",
+        "CARGO_PKG_VERSION": "0.0.0",
+        "CARGO_PKG_VERSION_MAJOR": "0",
+        "CARGO_PKG_VERSION_MINOR": "0",
+        "CARGO_PKG_VERSION_PATCH": "0",
+        "CARGO_PKG_VERSION_PRE": "",
+        "PATH": "/bin:/usr/bin:/usr/local/bin",
+        "REPOSITORY_NAME": ""
+      },
+      "is_proc_macro": false,
+      "build": {
+        "label": "examples/rust/helloworld:hello_world",
+        "build_file": "/home/juanique/git/monorepo/examples/rust/helloworld/BUILD.bazel",
+        "target_kind": "bin"
+      }
+    },
+    {
+      "display_name": "memchr",
+      "root_module": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/external/rules_rust++crate+crates__memchr-2.7.6/src/lib.rs",
+      "edition": "2021",
+      "deps": [],
+      "is_workspace_member": false,
+      "cfg": [
+        "test",
+        "debug_assertions",
+        "feature=\"alloc\"",
+        "feature=\"std\""
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "env": {
+        "BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN": "1",
+        "CARGO_CFG_TARGET_ARCH": "x86_64",
+        "CARGO_CFG_TARGET_OS": "linux",
+        "CARGO_CRATE_NAME": "memchr",
+        "CARGO_MANIFEST_DIR": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/external/rules_rust++crate+crates__memchr-2.7.6",
+        "CARGO_PKG_AUTHORS": "",
+        "CARGO_PKG_DESCRIPTION": "",
+        "CARGO_PKG_HOMEPAGE": "",
+        "CARGO_PKG_NAME": "memchr",
+        "CARGO_PKG_VERSION": "2.7.6",
+        "CARGO_PKG_VERSION_MAJOR": "2",
+        "CARGO_PKG_VERSION_MINOR": "7",
+        "CARGO_PKG_VERSION_PATCH": "6",
+        "CARGO_PKG_VERSION_PRE": "",
+        "PATH": "/bin:/usr/bin:/usr/local/bin",
+        "REPOSITORY_NAME": "rules_rust++crate+crates__memchr-2.7.6"
+      },
+      "is_proc_macro": false
+    },
+    {
+      "display_name": "regex_syntax",
+      "root_module": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/external/rules_rust++crate+crates__regex-syntax-0.8.8/src/lib.rs",
+      "edition": "2021",
+      "deps": [],
+      "is_workspace_member": false,
+      "cfg": [
+        "test",
+        "debug_assertions",
+        "feature=\"default\"",
+        "feature=\"std\"",
+        "feature=\"unicode\"",
+        "feature=\"unicode-age\"",
+        "feature=\"unicode-bool\"",
+        "feature=\"unicode-case\"",
+        "feature=\"unicode-gencat\"",
+        "feature=\"unicode-perl\"",
+        "feature=\"unicode-script\"",
+        "feature=\"unicode-segment\""
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "env": {
+        "BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN": "1",
+        "CARGO_CFG_TARGET_ARCH": "x86_64",
+        "CARGO_CFG_TARGET_OS": "linux",
+        "CARGO_CRATE_NAME": "regex_syntax",
+        "CARGO_MANIFEST_DIR": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/external/rules_rust++crate+crates__regex-syntax-0.8.8",
+        "CARGO_PKG_AUTHORS": "",
+        "CARGO_PKG_DESCRIPTION": "",
+        "CARGO_PKG_HOMEPAGE": "",
+        "CARGO_PKG_NAME": "regex_syntax",
+        "CARGO_PKG_VERSION": "0.8.8",
+        "CARGO_PKG_VERSION_MAJOR": "0",
+        "CARGO_PKG_VERSION_MINOR": "8",
+        "CARGO_PKG_VERSION_PATCH": "8",
+        "CARGO_PKG_VERSION_PRE": "",
+        "PATH": "/bin:/usr/bin:/usr/local/bin",
+        "REPOSITORY_NAME": "rules_rust++crate+crates__regex-syntax-0.8.8"
+      },
+      "is_proc_macro": false
+    },
+    {
+      "display_name": "smallvec",
+      "root_module": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/external/rules_rust++crate+crates__smallvec-1.15.1/src/lib.rs",
+      "edition": "2018",
+      "deps": [],
+      "is_workspace_member": false,
+      "cfg": [
+        "test",
+        "debug_assertions"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "env": {
+        "BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN": "1",
+        "CARGO_CFG_TARGET_ARCH": "x86_64",
+        "CARGO_CFG_TARGET_OS": "linux",
+        "CARGO_CRATE_NAME": "smallvec",
+        "CARGO_MANIFEST_DIR": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/external/rules_rust++crate+crates__smallvec-1.15.1",
+        "CARGO_PKG_AUTHORS": "",
+        "CARGO_PKG_DESCRIPTION": "",
+        "CARGO_PKG_HOMEPAGE": "",
+        "CARGO_PKG_NAME": "smallvec",
+        "CARGO_PKG_VERSION": "1.15.1",
+        "CARGO_PKG_VERSION_MAJOR": "1",
+        "CARGO_PKG_VERSION_MINOR": "15",
+        "CARGO_PKG_VERSION_PATCH": "1",
+        "CARGO_PKG_VERSION_PRE": "",
+        "PATH": "/bin:/usr/bin:/usr/local/bin",
+        "REPOSITORY_NAME": "rules_rust++crate+crates__smallvec-1.15.1"
+      },
+      "is_proc_macro": false
+    },
+    {
+      "display_name": "smawk",
+      "root_module": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/external/rules_rust++crate+crates__smawk-0.3.2/src/lib.rs",
+      "edition": "2021",
+      "deps": [],
+      "is_workspace_member": false,
+      "cfg": [
+        "test",
+        "debug_assertions"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "env": {
+        "BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN": "1",
+        "CARGO_CFG_TARGET_ARCH": "x86_64",
+        "CARGO_CFG_TARGET_OS": "linux",
+        "CARGO_CRATE_NAME": "smawk",
+        "CARGO_MANIFEST_DIR": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/external/rules_rust++crate+crates__smawk-0.3.2",
+        "CARGO_PKG_AUTHORS": "",
+        "CARGO_PKG_DESCRIPTION": "",
+        "CARGO_PKG_HOMEPAGE": "",
+        "CARGO_PKG_NAME": "smawk",
+        "CARGO_PKG_VERSION": "0.3.2",
+        "CARGO_PKG_VERSION_MAJOR": "0",
+        "CARGO_PKG_VERSION_MINOR": "3",
+        "CARGO_PKG_VERSION_PATCH": "2",
+        "CARGO_PKG_VERSION_PRE": "",
+        "PATH": "/bin:/usr/bin:/usr/local/bin",
+        "REPOSITORY_NAME": "rules_rust++crate+crates__smawk-0.3.2"
+      },
+      "is_proc_macro": false
+    },
+    {
+      "display_name": "unicode_linebreak",
+      "root_module": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/external/rules_rust++crate+crates__unicode-linebreak-0.1.5/src/lib.rs",
+      "edition": "2021",
+      "deps": [],
+      "is_workspace_member": false,
+      "cfg": [
+        "test",
+        "debug_assertions"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "env": {
+        "BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN": "1",
+        "CARGO_CFG_TARGET_ARCH": "x86_64",
+        "CARGO_CFG_TARGET_OS": "linux",
+        "CARGO_CRATE_NAME": "unicode_linebreak",
+        "CARGO_MANIFEST_DIR": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/external/rules_rust++crate+crates__unicode-linebreak-0.1.5",
+        "CARGO_PKG_AUTHORS": "",
+        "CARGO_PKG_DESCRIPTION": "",
+        "CARGO_PKG_HOMEPAGE": "",
+        "CARGO_PKG_NAME": "unicode_linebreak",
+        "CARGO_PKG_VERSION": "0.1.5",
+        "CARGO_PKG_VERSION_MAJOR": "0",
+        "CARGO_PKG_VERSION_MINOR": "1",
+        "CARGO_PKG_VERSION_PATCH": "5",
+        "CARGO_PKG_VERSION_PRE": "",
+        "PATH": "/bin:/usr/bin:/usr/local/bin",
+        "REPOSITORY_NAME": "rules_rust++crate+crates__unicode-linebreak-0.1.5"
+      },
+      "is_proc_macro": false
+    },
+    {
+      "display_name": "unicode_width",
+      "root_module": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/external/rules_rust++crate+crates__unicode-width-0.1.14/src/lib.rs",
+      "edition": "2021",
+      "deps": [],
+      "is_workspace_member": false,
+      "cfg": [
+        "test",
+        "debug_assertions",
+        "feature=\"cjk\"",
+        "feature=\"default\""
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "env": {
+        "BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN": "1",
+        "CARGO_CFG_TARGET_ARCH": "x86_64",
+        "CARGO_CFG_TARGET_OS": "linux",
+        "CARGO_CRATE_NAME": "unicode_width",
+        "CARGO_MANIFEST_DIR": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/external/rules_rust++crate+crates__unicode-width-0.1.14",
+        "CARGO_PKG_AUTHORS": "",
+        "CARGO_PKG_DESCRIPTION": "",
+        "CARGO_PKG_HOMEPAGE": "",
+        "CARGO_PKG_NAME": "unicode_width",
+        "CARGO_PKG_VERSION": "0.1.14",
+        "CARGO_PKG_VERSION_MAJOR": "0",
+        "CARGO_PKG_VERSION_MINOR": "1",
+        "CARGO_PKG_VERSION_PATCH": "14",
+        "CARGO_PKG_VERSION_PRE": "",
+        "PATH": "/bin:/usr/bin:/usr/local/bin",
+        "REPOSITORY_NAME": "rules_rust++crate+crates__unicode-width-0.1.14"
+      },
+      "is_proc_macro": false
+    },
+    {
+      "display_name": "unicode_width",
+      "root_module": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/external/rules_rust++crate+crates__unicode-width-0.2.2/src/lib.rs",
+      "edition": "2021",
+      "deps": [],
+      "is_workspace_member": false,
+      "cfg": [
+        "test",
+        "debug_assertions",
+        "feature=\"cjk\"",
+        "feature=\"default\""
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "env": {
+        "BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN": "1",
+        "CARGO_CFG_TARGET_ARCH": "x86_64",
+        "CARGO_CFG_TARGET_OS": "linux",
+        "CARGO_CRATE_NAME": "unicode_width",
+        "CARGO_MANIFEST_DIR": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/external/rules_rust++crate+crates__unicode-width-0.2.2",
+        "CARGO_PKG_AUTHORS": "",
+        "CARGO_PKG_DESCRIPTION": "",
+        "CARGO_PKG_HOMEPAGE": "",
+        "CARGO_PKG_NAME": "unicode_width",
+        "CARGO_PKG_VERSION": "0.2.2",
+        "CARGO_PKG_VERSION_MAJOR": "0",
+        "CARGO_PKG_VERSION_MINOR": "2",
+        "CARGO_PKG_VERSION_PATCH": "2",
+        "CARGO_PKG_VERSION_PRE": "",
+        "PATH": "/bin:/usr/bin:/usr/local/bin",
+        "REPOSITORY_NAME": "rules_rust++crate+crates__unicode-width-0.2.2"
+      },
+      "is_proc_macro": false
+    },
+    {
+      "display_name": "aho_corasick",
+      "root_module": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/external/rules_rust++crate+crates__aho-corasick-1.1.4/src/lib.rs",
+      "edition": "2021",
+      "deps": [
+        {
+          "crate": 3,
+          "name": "memchr"
+        }
+      ],
+      "is_workspace_member": false,
+      "cfg": [
+        "test",
+        "debug_assertions",
+        "feature=\"perf-literal\"",
+        "feature=\"std\""
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "env": {
+        "BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN": "1",
+        "CARGO_CFG_TARGET_ARCH": "x86_64",
+        "CARGO_CFG_TARGET_OS": "linux",
+        "CARGO_CRATE_NAME": "aho_corasick",
+        "CARGO_MANIFEST_DIR": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/external/rules_rust++crate+crates__aho-corasick-1.1.4",
+        "CARGO_PKG_AUTHORS": "",
+        "CARGO_PKG_DESCRIPTION": "",
+        "CARGO_PKG_HOMEPAGE": "",
+        "CARGO_PKG_NAME": "aho_corasick",
+        "CARGO_PKG_VERSION": "1.1.4",
+        "CARGO_PKG_VERSION_MAJOR": "1",
+        "CARGO_PKG_VERSION_MINOR": "1",
+        "CARGO_PKG_VERSION_PATCH": "4",
+        "CARGO_PKG_VERSION_PRE": "",
+        "PATH": "/bin:/usr/bin:/usr/local/bin",
+        "REPOSITORY_NAME": "rules_rust++crate+crates__aho-corasick-1.1.4"
+      },
+      "is_proc_macro": false
+    },
+    {
+      "display_name": "regex_automata",
+      "root_module": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/external/rules_rust++crate+crates__regex-automata-0.4.13/src/lib.rs",
+      "edition": "2021",
+      "deps": [
+        {
+          "crate": 10,
+          "name": "aho_corasick"
+        },
+        {
+          "crate": 3,
+          "name": "memchr"
+        },
+        {
+          "crate": 4,
+          "name": "regex_syntax"
+        }
+      ],
+      "is_workspace_member": false,
+      "cfg": [
+        "test",
+        "debug_assertions",
+        "feature=\"alloc\"",
+        "feature=\"dfa-onepass\"",
+        "feature=\"hybrid\"",
+        "feature=\"meta\"",
+        "feature=\"nfa-backtrack\"",
+        "feature=\"nfa-pikevm\"",
+        "feature=\"nfa-thompson\"",
+        "feature=\"perf-inline\"",
+        "feature=\"perf-literal\"",
+        "feature=\"perf-literal-multisubstring\"",
+        "feature=\"perf-literal-substring\"",
+        "feature=\"std\"",
+        "feature=\"syntax\"",
+        "feature=\"unicode\"",
+        "feature=\"unicode-age\"",
+        "feature=\"unicode-bool\"",
+        "feature=\"unicode-case\"",
+        "feature=\"unicode-gencat\"",
+        "feature=\"unicode-perl\"",
+        "feature=\"unicode-script\"",
+        "feature=\"unicode-segment\"",
+        "feature=\"unicode-word-boundary\""
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "env": {
+        "BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN": "1",
+        "CARGO_CFG_TARGET_ARCH": "x86_64",
+        "CARGO_CFG_TARGET_OS": "linux",
+        "CARGO_CRATE_NAME": "regex_automata",
+        "CARGO_MANIFEST_DIR": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/external/rules_rust++crate+crates__regex-automata-0.4.13",
+        "CARGO_PKG_AUTHORS": "",
+        "CARGO_PKG_DESCRIPTION": "",
+        "CARGO_PKG_HOMEPAGE": "",
+        "CARGO_PKG_NAME": "regex_automata",
+        "CARGO_PKG_VERSION": "0.4.13",
+        "CARGO_PKG_VERSION_MAJOR": "0",
+        "CARGO_PKG_VERSION_MINOR": "4",
+        "CARGO_PKG_VERSION_PATCH": "13",
+        "CARGO_PKG_VERSION_PRE": "",
+        "PATH": "/bin:/usr/bin:/usr/local/bin",
+        "REPOSITORY_NAME": "rules_rust++crate+crates__regex-automata-0.4.13"
+      },
+      "is_proc_macro": false
+    },
+    {
+      "display_name": "textwrap",
+      "root_module": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/external/rules_rust++crate+crates__textwrap-0.16.2/src/lib.rs",
+      "edition": "2021",
+      "deps": [
+        {
+          "crate": 6,
+          "name": "smawk"
+        },
+        {
+          "crate": 7,
+          "name": "unicode_linebreak"
+        },
+        {
+          "crate": 9,
+          "name": "unicode_width"
+        }
+      ],
+      "is_workspace_member": false,
+      "cfg": [
+        "test",
+        "debug_assertions",
+        "feature=\"default\"",
+        "feature=\"smawk\"",
+        "feature=\"unicode-linebreak\"",
+        "feature=\"unicode-width\""
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "env": {
+        "BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN": "1",
+        "CARGO_CFG_TARGET_ARCH": "x86_64",
+        "CARGO_CFG_TARGET_OS": "linux",
+        "CARGO_CRATE_NAME": "textwrap",
+        "CARGO_MANIFEST_DIR": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/external/rules_rust++crate+crates__textwrap-0.16.2",
+        "CARGO_PKG_AUTHORS": "",
+        "CARGO_PKG_DESCRIPTION": "",
+        "CARGO_PKG_HOMEPAGE": "",
+        "CARGO_PKG_NAME": "textwrap",
+        "CARGO_PKG_VERSION": "0.16.2",
+        "CARGO_PKG_VERSION_MAJOR": "0",
+        "CARGO_PKG_VERSION_MINOR": "16",
+        "CARGO_PKG_VERSION_PATCH": "2",
+        "CARGO_PKG_VERSION_PRE": "",
+        "PATH": "/bin:/usr/bin:/usr/local/bin",
+        "REPOSITORY_NAME": "rules_rust++crate+crates__textwrap-0.16.2"
+      },
+      "is_proc_macro": false
+    },
+    {
+      "display_name": "regex",
+      "root_module": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/external/rules_rust++crate+crates__regex-1.12.2/src/lib.rs",
+      "edition": "2021",
+      "deps": [
+        {
+          "crate": 10,
+          "name": "aho_corasick"
+        },
+        {
+          "crate": 3,
+          "name": "memchr"
+        },
+        {
+          "crate": 11,
+          "name": "regex_automata"
+        },
+        {
+          "crate": 4,
+          "name": "regex_syntax"
+        }
+      ],
+      "is_workspace_member": false,
+      "cfg": [
+        "test",
+        "debug_assertions",
+        "feature=\"default\"",
+        "feature=\"perf\"",
+        "feature=\"perf-backtrack\"",
+        "feature=\"perf-cache\"",
+        "feature=\"perf-dfa\"",
+        "feature=\"perf-inline\"",
+        "feature=\"perf-literal\"",
+        "feature=\"perf-onepass\"",
+        "feature=\"std\"",
+        "feature=\"unicode\"",
+        "feature=\"unicode-age\"",
+        "feature=\"unicode-bool\"",
+        "feature=\"unicode-case\"",
+        "feature=\"unicode-gencat\"",
+        "feature=\"unicode-perl\"",
+        "feature=\"unicode-script\"",
+        "feature=\"unicode-segment\""
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "env": {
+        "BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN": "1",
+        "CARGO_CFG_TARGET_ARCH": "x86_64",
+        "CARGO_CFG_TARGET_OS": "linux",
+        "CARGO_CRATE_NAME": "regex",
+        "CARGO_MANIFEST_DIR": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/external/rules_rust++crate+crates__regex-1.12.2",
+        "CARGO_PKG_AUTHORS": "",
+        "CARGO_PKG_DESCRIPTION": "",
+        "CARGO_PKG_HOMEPAGE": "",
+        "CARGO_PKG_NAME": "regex",
+        "CARGO_PKG_VERSION": "1.12.2",
+        "CARGO_PKG_VERSION_MAJOR": "1",
+        "CARGO_PKG_VERSION_MINOR": "12",
+        "CARGO_PKG_VERSION_PATCH": "2",
+        "CARGO_PKG_VERSION_PRE": "",
+        "PATH": "/bin:/usr/bin:/usr/local/bin",
+        "REPOSITORY_NAME": "rules_rust++crate+crates__regex-1.12.2"
+      },
+      "is_proc_macro": false
+    },
+    {
+      "display_name": "ferris_says",
+      "root_module": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/external/rules_rust++crate+crates__ferris-says-0.3.2/src/lib.rs",
+      "edition": "2021",
+      "deps": [
+        {
+          "crate": 13,
+          "name": "regex"
+        },
+        {
+          "crate": 5,
+          "name": "smallvec"
+        },
+        {
+          "crate": 12,
+          "name": "textwrap"
+        },
+        {
+          "crate": 8,
+          "name": "unicode_width"
+        }
+      ],
+      "is_workspace_member": false,
+      "cfg": [
+        "test",
+        "debug_assertions"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "env": {
+        "BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN": "1",
+        "CARGO_CFG_TARGET_ARCH": "x86_64",
+        "CARGO_CFG_TARGET_OS": "linux",
+        "CARGO_CRATE_NAME": "ferris_says",
+        "CARGO_MANIFEST_DIR": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/external/rules_rust++crate+crates__ferris-says-0.3.2",
+        "CARGO_PKG_AUTHORS": "",
+        "CARGO_PKG_DESCRIPTION": "",
+        "CARGO_PKG_HOMEPAGE": "",
+        "CARGO_PKG_NAME": "ferris_says",
+        "CARGO_PKG_VERSION": "0.3.2",
+        "CARGO_PKG_VERSION_MAJOR": "0",
+        "CARGO_PKG_VERSION_MINOR": "3",
+        "CARGO_PKG_VERSION_PATCH": "2",
+        "CARGO_PKG_VERSION_PRE": "",
+        "PATH": "/bin:/usr/bin:/usr/local/bin",
+        "REPOSITORY_NAME": "rules_rust++crate+crates__ferris-says-0.3.2"
+      },
+      "is_proc_macro": false
+    },
+    {
+      "display_name": "third_party_demo",
+      "root_module": "/home/juanique/git/monorepo/examples/rust/third_party_demo/src/main.rs",
+      "edition": "2021",
+      "deps": [
+        {
+          "crate": 14,
+          "name": "ferris_says"
+        }
+      ],
+      "is_workspace_member": true,
+      "cfg": [
+        "test",
+        "debug_assertions"
+      ],
+      "target": "x86_64-unknown-linux-gnu",
+      "env": {
+        "BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN": "1",
+        "CARGO_CFG_TARGET_ARCH": "x86_64",
+        "CARGO_CFG_TARGET_OS": "linux",
+        "CARGO_CRATE_NAME": "third_party_demo",
+        "CARGO_MANIFEST_DIR": "/home/juanique/.cache/bazel/_bazel_juanique/f62ca2177d2f573d30b6544a3c78c8bf/execroot/_main/examples/rust/third_party_demo",
+        "CARGO_PKG_AUTHORS": "",
+        "CARGO_PKG_DESCRIPTION": "",
+        "CARGO_PKG_HOMEPAGE": "",
+        "CARGO_PKG_NAME": "third_party_demo",
+        "CARGO_PKG_VERSION": "0.0.0",
+        "CARGO_PKG_VERSION_MAJOR": "0",
+        "CARGO_PKG_VERSION_MINOR": "0",
+        "CARGO_PKG_VERSION_PATCH": "0",
+        "CARGO_PKG_VERSION_PRE": "",
+        "PATH": "/bin:/usr/bin:/usr/local/bin",
+        "REPOSITORY_NAME": ""
+      },
+      "is_proc_macro": false,
+      "build": {
+        "label": "examples/rust/third_party_demo:third_party_demo",
+        "build_file": "/home/juanique/git/monorepo/examples/rust/third_party_demo/BUILD.bazel",
+        "target_kind": "bin"
+      }
+    }
+  ],
+  "runnables": [
+    {
+      "program": "bazel",
+      "args": [
+        "build",
+        "{label}"
+      ],
+      "cwd": "/home/juanique/git/monorepo",
+      "kind": "check"
+    },
+    {
+      "program": "bazel",
+      "args": [
+        "test",
+        "{label}",
+        "--test_output",
+        "streamed",
+        "--test_arg",
+        "--nocapture",
+        "--test_arg",
+        "--exact",
+        "--test_arg",
+        "{test_id}"
+      ],
+      "cwd": "/home/juanique/git/monorepo",
+      "kind": "testOne"
+    },
+    {
+      "program": "bazel",
+      "args": [
+        "run",
+        "examples/rust/formatting_lib_demo:demo"
+      ],
+      "cwd": "/home/juanique/git/monorepo",
+      "kind": "run"
+    },
+    {
+      "program": "bazel",
+      "args": [
+        "run",
+        "examples/rust/helloworld:hello_world"
+      ],
+      "cwd": "/home/juanique/git/monorepo",
+      "kind": "run"
+    },
+    {
+      "program": "bazel",
+      "args": [
+        "run",
+        "examples/rust/third_party_demo:third_party_demo"
+      ],
+      "cwd": "/home/juanique/git/monorepo",
+      "kind": "run"
+    }
+  ]
+}
