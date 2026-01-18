@@ -5,7 +5,6 @@ build --build_metadata=REPO_URL=https://github.com/juanique/monorepo.git
 build --keep_backend_build_event_connections_alive=false
 build --incompatible_strict_action_env
 build --incompatible_disallow_empty_glob=false
-build --enable_workspace
 
 # Detailed timing profile
 build --noslim_profile
