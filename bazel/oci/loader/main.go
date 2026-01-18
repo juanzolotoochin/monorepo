@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/juanique/monorepo/salsa/go/json"
 	"github.com/juanique/monorepo/salsa/go/must"
 	"github.com/spf13/cobra"
 )
@@ -38,6 +39,7 @@ func buildAndLoadImage(i Image, repoTags []string) error {
 	originalImage := i
 
 	dockerImageId := i.Manifest.Config.Digest
+	log.Println("Computed Image ID:", dockerImageId)
 	builder := NewImageBuilder(dockerImageId, repoTags)
 	if err := builder.Prepare(&i); err != nil {
 		log.Println("Could not prepare image:", err)
@@ -60,22 +62,58 @@ func buildAndLoadImage(i Image, repoTags []string) error {
 		return fmt.Errorf("No repo tags specified")
 	}
 
-	firstTag := repoTags[0]
-	existingLayers, err := loader.GetImageLayerDigests(ctx, firstTag)
-	log.Println("Found existing layers:", existingLayers)
+	// 1. Check if Image is already loaded (Strict ID or Loose Config match)
+	var configData map[string]interface{}
+	if err := json.FromFile(builder.ConfigPath, &configData); err != nil {
+		return fmt.Errorf("failed to read config: %w", err)
+	}
+
+	found, action, err := loader.CheckImageExists(ctx, dockerImageId, configData, repoTags)
+	log.Println("Checking for ID:", dockerImageId)
 	if err != nil {
 		return err
 	}
 
-	if opts.NoReuseExistingLayers {
-		existingLayers = []string{}
+	if found {
+		log.Println("Image already loaded.")
+		// We still print the action JSON for bazel consumption if needed?
+		// Existing code prints action JSON if opts.Output == "json"
+		if opts.Output == "json" {
+			fmt.Println(action.JSON())
+		}
+		// Print legacy logs
+		if action.AlreadyLoaded {
+			log.Println("Image ID", dockerImageId, "was already loaded.")
+			fmt.Println("Image ID", dockerImageId, "was already loaded.")
+		}
+		for _, tag := range action.TagsAlreadyPresent {
+			log.Println("Image was already tagged with", tag)
+			fmt.Println("Image was already tagged with", tag)
+		}
+		for _, tag := range action.TagsAdded {
+			log.Println("Tagged image with", tag)
+			fmt.Println("Tagged image with", tag)
+		}
+		return nil
 	}
-	tarPath, err := builder.Build(i, BuildOpts{SkipLayers: existingLayers})
+
+	// 2. If not loaded, we must load.
+	// Since containerd might be strict about layers, we should provide ALL layers.
+	// We do NOT use SkipLayers optimization here because we've determined the image isn't "the same"
+	// or we can't reliably perform a partial load.
+	// NOTE: CheckImageExists handles the case where "Content is same, ID differs".
+	// If it returned false, it means content (config) is effectively different or strict check failed and loose check failed.
+	// So we are treating it as a new image -> Full Load.
+
+	tarPath, err := builder.Build(i, BuildOpts{SkipLayers: nil})
 	if err != nil {
 		return err
 	}
 
-	action := must.Must(loader.LoadTarIntoDocker(context.Background(), tarPath, i.Manifest.Config.Digest, repoTags))
+	// LoadTarIntoDocker will check for existing image strictly by ID again,
+	// but we already know it's not there by ID (from CheckImageExists strict check).
+	// So it should proceed to load.
+	action = must.Must(loader.LoadTarIntoDocker(context.Background(), tarPath, i.Manifest.Config.Digest, repoTags))
 
 	if opts.Output == "json" {
 		fmt.Println(action.JSON())
