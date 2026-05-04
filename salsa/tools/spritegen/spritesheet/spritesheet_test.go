@@ -1,6 +1,8 @@
 package spritesheet_test
 
 import (
+	"context"
+	"fmt"
 	"image"
 	"image/color"
 	_ "image/png"
@@ -129,4 +131,62 @@ func TestSlice_MainCharacter(t *testing.T) {
 		assert.False(t, row.Label.Empty(), "row %d label empty", i)
 		assert.Greater(t, len(row.Sprites), 0, "row %d has no sprites", i)
 	}
+}
+
+type fakeLabelReader struct {
+	labels []string
+	idx    int
+}
+
+func (f *fakeLabelReader) ReadLabel(_ context.Context, _ image.Image) (string, error) {
+	if f.idx >= len(f.labels) {
+		return "", fmt.Errorf("fakeLabelReader: unexpected call %d (only %d labels configured)", f.idx, len(f.labels))
+	}
+	label := f.labels[f.idx]
+	f.idx++
+	return label, nil
+}
+
+func TestSlicer_WithFakeReader(t *testing.T) {
+	bg := color.RGBA{21, 23, 31, 255}
+	content := color.RGBA{200, 100, 50, 255}
+	img := image.NewRGBA(image.Rect(0, 0, 200, 100))
+	fillRect(img, img.Bounds(), bg)
+
+	for _, rowY := range [][2]int{{5, 45}, {55, 95}} {
+		fillRect(img, image.Rect(0, rowY[0], 20, rowY[1]), content)   // label
+		fillRect(img, image.Rect(30, rowY[0], 70, rowY[1]), content)  // sprite 0
+		fillRect(img, image.Rect(80, rowY[0], 120, rowY[1]), content) // sprite 1
+	}
+
+	slicer := spritesheet.Slicer{
+		LabelReader: &fakeLabelReader{labels: []string{"idle", "walk"}},
+	}
+	rows, err := slicer.Slice(context.Background(), img)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	assert.Equal(t, "idle", rows[0].LabelText)
+	assert.Equal(t, "walk", rows[1].LabelText)
+	assert.Len(t, rows[0].Sprites, 2)
+	assert.Len(t, rows[1].Sprites, 2)
+}
+
+func TestSlicer_NilLabelReader(t *testing.T) {
+	bg := color.RGBA{21, 23, 31, 255}
+	content := color.RGBA{200, 100, 50, 255}
+	img := image.NewRGBA(image.Rect(0, 0, 200, 100))
+	fillRect(img, img.Bounds(), bg)
+
+	for _, rowY := range [][2]int{{5, 45}, {55, 95}} {
+		fillRect(img, image.Rect(0, rowY[0], 20, rowY[1]), content)
+		fillRect(img, image.Rect(30, rowY[0], 70, rowY[1]), content)
+		fillRect(img, image.Rect(80, rowY[0], 120, rowY[1]), content)
+	}
+
+	slicer := spritesheet.Slicer{} // LabelReader is nil
+	rows, err := slicer.Slice(context.Background(), img)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	assert.Equal(t, "", rows[0].LabelText)
+	assert.Equal(t, "", rows[1].LabelText)
 }
