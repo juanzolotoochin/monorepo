@@ -1,0 +1,5 @@
+filegroup(
+    name = "testdata",
+    srcs = ["main-character.png"],
+    visibility = ["//visibility:public"],
+)
