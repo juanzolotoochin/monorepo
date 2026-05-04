@@ -59,6 +59,7 @@ var sliceCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		outputDir, _ := cmd.Flags().GetString("output")
 		readLabels, _ := cmd.Flags().GetBool("read-labels")
+		transparentBg, _ := cmd.Flags().GetBool("transparent-bg")
 		filePath := args[0]
 
 		f, err := os.Open(filePath)
@@ -106,6 +107,14 @@ var sliceCmd = &cobra.Command{
 			return err
 		}
 
+		var info *spritesheet.Info
+		if transparentBg {
+			info, err = spritesheet.Analyze(img)
+			if err != nil {
+				return err
+			}
+		}
+
 		for i, row := range labeledRows {
 			labelPart := ""
 			if row.LabelText != "" {
@@ -113,13 +122,21 @@ var sliceCmd = &cobra.Command{
 			}
 			if !row.Label.Empty() {
 				labelPath := filepath.Join(outputDir, fmt.Sprintf("%02d_%slabel.png", i, labelPart))
-				if err := writeSubImage(sub, row.Label, labelPath); err != nil {
+				subImg := sub.SubImage(row.Label)
+				if transparentBg {
+					subImg = spritesheet.RemoveBackground(subImg, info.Background, info.BgTolerance)
+				}
+				if err := writeImage(subImg, labelPath); err != nil {
 					return err
 				}
 			}
 			for j, sprite := range row.Sprites {
 				spritePath := filepath.Join(outputDir, fmt.Sprintf("%02d_%s%02d.png", i, labelPart, j))
-				if err := writeSubImage(sub, sprite, spritePath); err != nil {
+				subImg := sub.SubImage(sprite)
+				if transparentBg {
+					subImg = spritesheet.RemoveBackground(subImg, info.Background, info.BgTolerance)
+				}
+				if err := writeImage(subImg, spritePath); err != nil {
 					return err
 				}
 			}
@@ -138,21 +155,20 @@ func sanitizeLabel(s string) string {
 	return strings.Trim(s, "_")
 }
 
-func writeSubImage(img interface {
-	SubImage(image.Rectangle) image.Image
-}, rect image.Rectangle, path string) error {
+func writeImage(img image.Image, path string) error {
 	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	return png.Encode(f, img.SubImage(rect))
+	return png.Encode(f, img)
 }
 
 func main() {
 	sliceCmd.Flags().String("output", "", "directory to write subimages into (required)")
 	_ = sliceCmd.MarkFlagRequired("output")
 	sliceCmd.Flags().Bool("read-labels", false, "use LLM OCR to read label text and include it in filenames (requires ANTHROPIC_API_KEY)")
+	sliceCmd.Flags().Bool("transparent-bg", false, "replace background-colored pixels with transparency in output PNGs")
 	rootCmd.AddCommand(infoCmd)
 	rootCmd.AddCommand(sliceCmd)
 	if err := rootCmd.Execute(); err != nil {

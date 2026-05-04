@@ -300,6 +300,25 @@ func tightenRect(img image.Image, rect image.Rectangle, bg color.RGBA, tolerance
 	return image.Rect(minX, minY, maxX, maxY)
 }
 
+// RemoveBackground returns a new *image.NRGBA with the same bounds as img.
+// Each pixel whose R, G, B channels are all within tolerance of bg is replaced
+// with full transparency; all other pixels are copied with A=255.
+func RemoveBackground(img image.Image, bg color.RGBA, tolerance int) *image.NRGBA {
+	bounds := img.Bounds()
+	out := image.NewNRGBA(bounds)
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			if isBackground(img, x, y, bg, tolerance) {
+				out.SetNRGBA(x, y, color.NRGBA{R: 0, G: 0, B: 0, A: 0})
+			} else {
+				r, g, b, _ := img.At(x, y).RGBA()
+				out.SetNRGBA(x, y, color.NRGBA{R: uint8(r >> 8), G: uint8(g >> 8), B: uint8(b >> 8), A: 255})
+			}
+		}
+	}
+	return out
+}
+
 func absDiff(a, b int) int {
 	if a > b {
 		return a - b
