@@ -190,3 +190,29 @@ func TestSlicer_NilLabelReader(t *testing.T) {
 	assert.Equal(t, "", rows[0].LabelText)
 	assert.Equal(t, "", rows[1].LabelText)
 }
+
+func TestRemoveBackground(t *testing.T) {
+	bg := color.RGBA{21, 23, 31, 255}
+	content := color.RGBA{200, 100, 50, 255}
+	img := image.NewRGBA(image.Rect(0, 0, 40, 20))
+	fillRect(img, img.Bounds(), bg)
+	contentRect := image.Rect(10, 5, 30, 15)
+	fillRect(img, contentRect, content)
+
+	result := spritesheet.RemoveBackground(img, bg, 30)
+
+	bounds := result.Bounds()
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			c := result.NRGBAAt(x, y)
+			if (image.Point{X: x, Y: y}).In(contentRect) {
+				assert.Equal(t, uint8(200), c.R, "content R at (%d,%d)", x, y)
+				assert.Equal(t, uint8(100), c.G, "content G at (%d,%d)", x, y)
+				assert.Equal(t, uint8(50), c.B, "content B at (%d,%d)", x, y)
+				assert.Equal(t, uint8(255), c.A, "content A at (%d,%d)", x, y)
+			} else {
+				assert.Equal(t, uint8(0), c.A, "bg alpha at (%d,%d)", x, y)
+			}
+		}
+	}
+}
