@@ -147,6 +147,57 @@ var sliceCmd = &cobra.Command{
 	},
 }
 
+var normalizeCmd = &cobra.Command{
+	Use:   "normalize <file>",
+	Short: "Normalize a sprite sheet into a uniform grid with transparent background",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		outputPath, _ := cmd.Flags().GetString("output")
+		padding, _ := cmd.Flags().GetInt("padding")
+		filePath := args[0]
+
+		f, err := os.Open(filePath)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+
+		img, _, err := image.Decode(f)
+		if err != nil {
+			return err
+		}
+
+		result, err := spritesheet.Normalize(img, padding)
+		if err != nil {
+			return err
+		}
+
+		if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+			return err
+		}
+
+		out, err := os.Create(outputPath)
+		if err != nil {
+			return err
+		}
+
+		if err := png.Encode(out, result.Image); err != nil {
+			out.Close()
+			os.Remove(outputPath)
+			return err
+		}
+		if err := out.Close(); err != nil {
+			os.Remove(outputPath)
+			return fmt.Errorf("closing output file: %w", err)
+		}
+
+		fmt.Printf("Sprite offset: %d\n", 2*result.Padding+result.LabelWidth)
+		fmt.Printf("Sprite size:   %d x %d\n", result.SpriteWidth+result.Padding, result.CellHeight+result.Padding)
+		fmt.Printf("Written to:    %s\n", outputPath)
+		return nil
+	},
+}
+
 var labelSanitizeRe = regexp.MustCompile(`[^a-z0-9]+`)
 
 func sanitizeLabel(s string) string {
@@ -169,6 +220,10 @@ func main() {
 	_ = sliceCmd.MarkFlagRequired("output")
 	sliceCmd.Flags().Bool("read-labels", false, "use LLM OCR to read label text and include it in filenames (requires ANTHROPIC_API_KEY)")
 	sliceCmd.Flags().Bool("transparent-bg", false, "replace background-colored pixels with transparency in output PNGs")
+	normalizeCmd.Flags().String("output", "", "path to write the normalized PNG (required)")
+	_ = normalizeCmd.MarkFlagRequired("output")
+	normalizeCmd.Flags().Int("padding", 8, "gap in pixels between cells and around the sheet edges")
+	rootCmd.AddCommand(normalizeCmd)
 	rootCmd.AddCommand(infoCmd)
 	rootCmd.AddCommand(sliceCmd)
 	if err := rootCmd.Execute(); err != nil {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	"sort"
 )
 
@@ -324,4 +325,98 @@ func absDiff(a, b int) int {
 		return a - b
 	}
 	return b - a
+}
+
+// NormalizedSheet is the result of normalizing a sprite sheet.
+type NormalizedSheet struct {
+	Image        *image.NRGBA
+	LabelWidth   int // width of the label column
+	SpriteWidth  int // normalized sprite cell width
+	CellHeight   int // normalized cell height (max across sprites and labels)
+	Padding      int // gap between cells and around the sheet edges
+}
+
+// Normalize detects sprite rows, removes the background, and renders a new
+// spritesheet with uniform cell dimensions. Sprites are bottom-center aligned
+// within each cell. padding is the gap in pixels between cells and around edges.
+func Normalize(img image.Image, padding int) (*NormalizedSheet, error) {
+	if padding < 0 {
+		return nil, fmt.Errorf("spritesheet: padding must be non-negative")
+	}
+
+	rows, err := Slice(img)
+	if err != nil {
+		return nil, err
+	}
+
+	sub, ok := img.(interface {
+		SubImage(image.Rectangle) image.Image
+	})
+	if !ok {
+		return nil, fmt.Errorf("spritesheet: image does not support SubImage")
+	}
+
+	if len(rows) == 0 {
+		return &NormalizedSheet{
+			Image:   image.NewNRGBA(image.Rect(0, 0, 0, 0)),
+			Padding: padding,
+		}, nil
+	}
+
+	bg := detectBackground(img)
+
+	// Compute grid dimensions.
+	labelW, spriteW, cellH, maxCols := 0, 0, 0, 0
+	for _, row := range rows {
+		if w := row.Label.Dx(); w > labelW {
+			labelW = w
+		}
+		if h := row.Label.Dy(); h > cellH {
+			cellH = h
+		}
+		if len(row.Sprites) > maxCols {
+			maxCols = len(row.Sprites)
+		}
+		for _, s := range row.Sprites {
+			if w := s.Dx(); w > spriteW {
+				spriteW = w
+			}
+			if h := s.Dy(); h > cellH {
+				cellH = h
+			}
+		}
+	}
+
+	numRows := len(rows)
+	outW := padding*(maxCols+2) + labelW + maxCols*spriteW
+	outH := padding*(numRows+1) + numRows*cellH
+	out := image.NewNRGBA(image.Rect(0, 0, outW, outH))
+
+	for i, row := range rows {
+		cellY := padding + i*(cellH+padding)
+
+		if !row.Label.Empty() {
+			src := RemoveBackground(sub.SubImage(row.Label), bg, bgTolerance)
+			w, h := src.Bounds().Dx(), src.Bounds().Dy()
+			dx := padding + (labelW-w)/2
+			dy := cellY + cellH - h
+			draw.Draw(out, image.Rect(dx, dy, dx+w, dy+h), src, src.Bounds().Min, draw.Src)
+		}
+
+		for j, sprite := range row.Sprites {
+			src := RemoveBackground(sub.SubImage(sprite), bg, bgTolerance)
+			w, h := src.Bounds().Dx(), src.Bounds().Dy()
+			dx := 2*padding + labelW + j*(spriteW+padding) + (spriteW-w)/2
+			dy := cellY + cellH - h
+			draw.Draw(out, image.Rect(dx, dy, dx+w, dy+h), src, src.Bounds().Min, draw.Src)
+		}
+	}
+
+	return &NormalizedSheet{
+		Image:        out,
+		LabelWidth:   labelW,
+		SpriteWidth:  spriteW,
+		CellHeight:   cellH,
+		Padding:      padding,
+	}, nil
 }

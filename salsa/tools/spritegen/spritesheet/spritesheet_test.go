@@ -216,3 +216,69 @@ func TestRemoveBackground(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalize_MainCharacter(t *testing.T) {
+	path, err := bazel.Runfile("salsa/tools/spritegen/testing/main-character.png")
+	require.NoError(t, err)
+
+	f, err := os.Open(path)
+	require.NoError(t, err)
+	defer f.Close()
+
+	img, _, err := image.Decode(f)
+	require.NoError(t, err)
+
+	rows, err := spritesheet.Slice(img)
+	require.NoError(t, err)
+
+	maxCols := 0
+	for _, row := range rows {
+		if len(row.Sprites) > maxCols {
+			maxCols = len(row.Sprites)
+		}
+	}
+	numRows := len(rows)
+
+	result, err := spritesheet.Normalize(img, 8)
+	require.NoError(t, err)
+
+	expectedW := 8*(maxCols+2) + result.LabelWidth + maxCols*result.SpriteWidth
+	expectedH := 8*(numRows+1) + numRows*result.CellHeight
+	assert.Equal(t, expectedW, result.Image.Bounds().Dx(), "output width should match formula")
+	assert.Equal(t, expectedH, result.Image.Bounds().Dy(), "output height should match formula")
+}
+
+func TestNormalize(t *testing.T) {
+	bg := color.RGBA{21, 23, 31, 255}
+	content := color.RGBA{200, 100, 50, 255}
+	img := image.NewRGBA(image.Rect(0, 0, 200, 100))
+	fillRect(img, img.Bounds(), bg)
+	// Row 0 (y 10-50): label 20×10, sprite0 30×40, sprite1 25×35
+	fillRect(img, image.Rect(0, 10, 20, 20), content)
+	fillRect(img, image.Rect(30, 10, 60, 50), content)
+	fillRect(img, image.Rect(70, 15, 95, 50), content)
+	// Row 1 (y 60-100): label 18×8, sprite0 32×36
+	fillRect(img, image.Rect(0, 60, 18, 68), content)
+	fillRect(img, image.Rect(30, 64, 62, 100), content)
+
+	result, err := spritesheet.Normalize(img, 4)
+	require.NoError(t, err)
+
+	// labelW=20, spriteW=32, cellH=40, maxCols=2, numRows=2, padding=4
+	// outW = 4*(2+2) + 20 + 2*32 = 100
+	// outH = 4*(2+1) + 2*40 = 92
+	assert.Equal(t, image.Rect(0, 0, 100, 92), result.Image.Bounds())
+	assert.Equal(t, 20, result.LabelWidth)
+	assert.Equal(t, 32, result.SpriteWidth)
+	assert.Equal(t, 40, result.CellHeight)
+	assert.Equal(t, 4, result.Padding)
+
+	// Row 0, sprite 0: cellX=2*4+20=28, cellY=4, sprite 30×40
+	// drawX=28+(32-30)/2=29, drawY=4+(40-40)=4
+	// Bottom-center pixel: (29+15, 4+39) = (44, 43) — must be opaque
+	assert.Equal(t, uint8(255), result.Image.NRGBAAt(44, 43).A, "row 0 sprite 0 bottom should be opaque")
+
+	// Row 1, sprite 1 cell (empty): cellX=2*4+20+1*(32+4)=64, cellY=4+1*(40+4)=48
+	// Center pixel: (64+16, 48+20) = (80, 68) — must be transparent
+	assert.Equal(t, uint8(0), result.Image.NRGBAAt(80, 68).A, "empty cell should be transparent")
+}
