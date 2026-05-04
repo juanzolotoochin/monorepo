@@ -26,8 +26,8 @@ py_test(
     data = [
         "//examples/grpc/server:greeter_server_docker.loader",
     ],
-    tags = ["manual"],
     firecracker = True,
+    tags = ["manual"],
     deps = [
         ":greeter_client",
         "//salsa/docker/testing:docker_service",
