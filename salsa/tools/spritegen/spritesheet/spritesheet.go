@@ -1,6 +1,8 @@
 package spritesheet
 
 import (
+	"context"
+	"fmt"
 	"image"
 	"image/color"
 	"sort"
@@ -32,6 +34,56 @@ type Info struct {
 type Row struct {
 	Label   image.Rectangle
 	Sprites []image.Rectangle
+}
+
+// LabelReader reads the text label visible in an image.
+type LabelReader interface {
+	ReadLabel(ctx context.Context, img image.Image) (string, error)
+}
+
+// LabeledRow is a Row with an optional text label read by OCR.
+type LabeledRow struct {
+	Row
+	LabelText string // empty when Slicer.LabelReader is nil
+}
+
+// Slicer slices a sprite sheet and optionally reads labels via an injected LabelReader.
+type Slicer struct {
+	LabelReader LabelReader // nil → labels are not read
+}
+
+// Slice slices img into labeled rows. If s.LabelReader is non-nil, it reads
+// the label text for each row by calling ReadLabel on the label subimage.
+func (s *Slicer) Slice(ctx context.Context, img image.Image) ([]LabeledRow, error) {
+	rows, err := Slice(img)
+	if err != nil {
+		return nil, err
+	}
+
+	labeled := make([]LabeledRow, len(rows))
+	for i, row := range rows {
+		labeled[i] = LabeledRow{Row: row}
+	}
+
+	if s.LabelReader == nil {
+		return labeled, nil
+	}
+
+	sub, ok := img.(interface {
+		SubImage(image.Rectangle) image.Image
+	})
+	if !ok {
+		return nil, fmt.Errorf("spritesheet: image does not support SubImage")
+	}
+
+	for i, row := range rows {
+		text, err := s.LabelReader.ReadLabel(ctx, sub.SubImage(row.Label))
+		if err != nil {
+			return nil, fmt.Errorf("spritesheet: row %d: %w", i, err)
+		}
+		labeled[i].LabelText = text
+	}
+	return labeled, nil
 }
 
 // Analyze detects the background color and counts state rows in img.

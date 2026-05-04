@@ -1,0 +1,12 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "vision",
+    srcs = ["vision.go"],
+    importpath = "github.com/juanique/monorepo/salsa/llm/vision",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_anthropics_anthropic_sdk_go//:anthropic-sdk-go",
+        "@com_github_anthropics_anthropic_sdk_go//option",
+    ],
+)

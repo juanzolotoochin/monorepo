@@ -8,7 +8,10 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
+	"github.com/juanique/monorepo/salsa/llm/vision"
 	"github.com/juanique/monorepo/salsa/tools/spritegen/spritesheet"
 	"github.com/spf13/cobra"
 )
@@ -55,6 +58,7 @@ var sliceCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		outputDir, _ := cmd.Flags().GetString("output")
+		readLabels, _ := cmd.Flags().GetBool("read-labels")
 		filePath := args[0]
 
 		f, err := os.Open(filePath)
@@ -68,15 +72,6 @@ var sliceCmd = &cobra.Command{
 			return err
 		}
 
-		rows, err := spritesheet.Slice(img)
-		if err != nil {
-			return err
-		}
-
-		if err := os.MkdirAll(outputDir, 0755); err != nil {
-			return err
-		}
-
 		sub, ok := img.(interface {
 			SubImage(image.Rectangle) image.Image
 		})
@@ -84,22 +79,63 @@ var sliceCmd = &cobra.Command{
 			return fmt.Errorf("image does not support SubImage")
 		}
 
-		for i, row := range rows {
-			labelPath := filepath.Join(outputDir, fmt.Sprintf("%02d_label.png", i))
-			if err := writeSubImage(sub, row.Label, labelPath); err != nil {
-				return err
+		if err := os.MkdirAll(outputDir, 0755); err != nil {
+			return err
+		}
+
+		// labeledRows and err are declared here so both branches below can assign with =.
+		var labeledRows []spritesheet.LabeledRow
+		if readLabels {
+			apiKey := os.Getenv("ANTHROPIC_API_KEY")
+			if apiKey == "" {
+				return fmt.Errorf("ANTHROPIC_API_KEY environment variable not set")
+			}
+			slicer := spritesheet.Slicer{LabelReader: vision.New(apiKey)}
+			labeledRows, err = slicer.Slice(cmd.Context(), img)
+		} else {
+			var rows []spritesheet.Row
+			rows, err = spritesheet.Slice(img)
+			if err == nil {
+				labeledRows = make([]spritesheet.LabeledRow, len(rows))
+				for i, row := range rows {
+					labeledRows[i] = spritesheet.LabeledRow{Row: row}
+				}
+			}
+		}
+		if err != nil {
+			return err
+		}
+
+		for i, row := range labeledRows {
+			labelPart := ""
+			if row.LabelText != "" {
+				labelPart = sanitizeLabel(row.LabelText) + "_"
+			}
+			if !row.Label.Empty() {
+				labelPath := filepath.Join(outputDir, fmt.Sprintf("%02d_%slabel.png", i, labelPart))
+				if err := writeSubImage(sub, row.Label, labelPath); err != nil {
+					return err
+				}
 			}
 			for j, sprite := range row.Sprites {
-				spritePath := filepath.Join(outputDir, fmt.Sprintf("%02d_%02d.png", i, j))
+				spritePath := filepath.Join(outputDir, fmt.Sprintf("%02d_%s%02d.png", i, labelPart, j))
 				if err := writeSubImage(sub, sprite, spritePath); err != nil {
 					return err
 				}
 			}
 		}
 
-		fmt.Printf("Sliced %d rows to %s\n", len(rows), outputDir)
+		fmt.Printf("Sliced %d rows to %s\n", len(labeledRows), outputDir)
 		return nil
 	},
+}
+
+var labelSanitizeRe = regexp.MustCompile(`[^a-z0-9]+`)
+
+func sanitizeLabel(s string) string {
+	s = strings.ToLower(s)
+	s = labelSanitizeRe.ReplaceAllString(s, "_")
+	return strings.Trim(s, "_")
 }
 
 func writeSubImage(img interface {
@@ -116,6 +152,7 @@ func writeSubImage(img interface {
 func main() {
 	sliceCmd.Flags().String("output", "", "directory to write subimages into (required)")
 	_ = sliceCmd.MarkFlagRequired("output")
+	sliceCmd.Flags().Bool("read-labels", false, "use LLM OCR to read label text and include it in filenames (requires ANTHROPIC_API_KEY)")
 	rootCmd.AddCommand(infoCmd)
 	rootCmd.AddCommand(sliceCmd)
 	if err := rootCmd.Execute(); err != nil {

@@ -5,6 +5,7 @@ go_binary(
     srcs = ["main.go"],
     visibility = ["//visibility:public"],
     deps = [
+        "//salsa/llm/vision",
         "//salsa/tools/spritegen/spritesheet",
         "@com_github_spf13_cobra//:cobra",
     ],
