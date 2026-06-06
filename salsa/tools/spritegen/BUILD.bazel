@@ -26,6 +26,7 @@ go_binary(
     data = [":rembg_tool"],
     visibility = ["//visibility:public"],
     deps = [
+        "//salsa/llm/claude",
         "//salsa/llm/vision",
         "//salsa/tools/spritegen/spritesheet",
         "@com_github_spf13_cobra//:cobra",

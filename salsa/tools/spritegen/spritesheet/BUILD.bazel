@@ -3,12 +3,18 @@ load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "spritesheet",
     srcs = [
+        "label.go",
         "pack.go",
         "rembg.go",
         "spritesheet.go",
     ],
     importpath = "github.com/juanique/monorepo/salsa/tools/spritegen/spritesheet",
     visibility = ["//visibility:public"],
+    deps = [
+        "@org_golang_x_image//font",
+        "@org_golang_x_image//font/basicfont",
+        "@org_golang_x_image//math/fixed",
+    ],
 )
 
 go_test(

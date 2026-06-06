@@ -331,7 +331,8 @@ func TestPack_NegativePadding(t *testing.T) {
 }
 
 func TestPack_Layout(t *testing.T) {
-	// Two rows, two frames each. Row 0: 20×30 frames. Row 1: 15×20 frames.
+	// Two rows, two frames each, no labels (empty Label) so no label column.
+	// Row 0: 20×30 frames. Row 1: 15×20 frames.
 	// Cell size = max(20,15) × max(30,20) = 20×30. Padding = 4.
 	// outW = 4*(2+1) + 2*20 = 52
 	// outH = 4*(2+1) + 2*30 = 72
@@ -344,8 +345,8 @@ func TestPack_Layout(t *testing.T) {
 	blue := color.RGBA{0, 0, 255, 255}
 
 	rows := []spritesheet.FrameRow{
-		{Label: "attack", Frames: []image.Image{frame(20, 30, red), frame(20, 30, red)}},
-		{Label: "idle", Frames: []image.Image{frame(15, 20, blue), frame(15, 20, blue)}},
+		{Frames: []image.Image{frame(20, 30, red), frame(20, 30, red)}},
+		{Frames: []image.Image{frame(15, 20, blue), frame(15, 20, blue)}},
 	}
 	sheet, err := spritesheet.Pack(rows, 4)
 	require.NoError(t, err)
@@ -369,8 +370,44 @@ func TestPack_Layout(t *testing.T) {
 	assert.Equal(t, uint8(0), c.A, "gap between rows should be transparent")
 }
 
+func TestPack_LabelColumn(t *testing.T) {
+	// Verify that a label column spanning 3 sprite cells is prepended when Label is set.
+	// One row, label "Walk", one 20×20 frame, padding=2.
+	// labelColW = 3*20 + 2*2 = 64. labelExtra = 64 + 2 = 66.
+	// outW = 66 + 2*(1+1) + 1*20 = 66 + 4 + 20 = 90
+	// outH = 2*(1+1) + 1*20 = 24
+	frame := image.NewRGBA(image.Rect(0, 0, 20, 20))
+	fillRect(frame, frame.Bounds(), color.RGBA{255, 0, 0, 255})
+
+	rows := []spritesheet.FrameRow{
+		{Label: "Walk", Frames: []image.Image{frame}},
+	}
+	sheet, err := spritesheet.Pack(rows, 2)
+	require.NoError(t, err)
+
+	assert.Equal(t, image.Rect(0, 0, 90, 24), sheet.Bounds())
+
+	// Frame starts at x=labelExtra+padding=68, y=2. Center: (68+10, 2+10) = (78, 12).
+	c := sheet.NRGBAAt(78, 12)
+	assert.Equal(t, uint8(255), c.R, "frame center should be red")
+	assert.Equal(t, uint8(255), c.A, "frame center should be opaque")
+
+	// Label column (x < 64) should contain at least one non-transparent pixel (the text).
+	found := false
+	for y := range 24 {
+		for x := range 64 {
+			if sheet.NRGBAAt(x, y).A > 0 {
+				found = true
+				break
+			}
+		}
+	}
+	assert.True(t, found, "label column should contain rendered text pixels")
+}
+
 func TestPack_TransparentSourcePreserved(t *testing.T) {
-	// Frames with alpha transparency: center opaque, corners transparent.
+	// No label so frame coordinates are simple. Frames with alpha transparency:
+	// center opaque, corners transparent.
 	img := image.NewRGBA(image.Rect(0, 0, 10, 10))
 	for y := 0; y < 10; y++ {
 		for x := 0; x < 10; x++ {
@@ -380,11 +417,11 @@ func TestPack_TransparentSourcePreserved(t *testing.T) {
 			// corners stay transparent (zero value)
 		}
 	}
-	rows := []spritesheet.FrameRow{{Label: "run", Frames: []image.Image{img}}}
+	rows := []spritesheet.FrameRow{{Frames: []image.Image{img}}}
 	sheet, err := spritesheet.Pack(rows, 2)
 	require.NoError(t, err)
 
-	// Frame placed at x=2, y=2 (padding=2, one frame, one row, frame fills cell exactly).
+	// Frame placed at x=2, y=2 (padding=2, no label column, frame fills cell exactly).
 	// Corner pixel (2,2) in the sheet corresponds to frame pixel (0,0) — transparent.
 	assert.Equal(t, uint8(0), sheet.NRGBAAt(2, 2).A, "transparent corner should stay transparent")
 	// Center pixel (2+5, 2+5) = (7,7) — opaque.
