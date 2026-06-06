@@ -37,6 +37,23 @@ build --cxxopt='-std=c++17'
 build --host_cxxopt=-std=c++17
 
 
+# Default target/host/exec platform. rules_rs crate targets require an explicit
+# glibc constraint (@llvm//constraints/libc:gnu.2.28) that bare host platforms
+# lack, so we point at the rules_rs platforms which carry os/cpu + libc.
+#
+# The linux x86_64 platform is the base default (covers local linux dev + CI).
+# It is set on the base `build` config so that `--config=remote` (applied after
+# base flags) cleanly overrides it with //:docker_image_platform, and so that
+# the auto `build:macos` config (via --enable_platform_specific_config, applied
+# after base flags on macOS hosts) overrides it for local macOS dev.
+build --platforms=@rules_rs//rs/platforms:x86_64-unknown-linux-gnu
+build --host_platform=@rules_rs//rs/platforms:x86_64-unknown-linux-gnu
+build --extra_execution_platforms=@rules_rs//rs/platforms:x86_64-unknown-linux-gnu
+common --enable_platform_specific_config
+build:macos --platforms=@rules_rs//rs/platforms:aarch64-apple-darwin
+build:macos --host_platform=@rules_rs//rs/platforms:aarch64-apple-darwin
+build:macos --extra_execution_platforms=@rules_rs//rs/platforms:aarch64-apple-darwin
+
 # fully local build
 build:full_local --bes_backend=""
 build:full_local --bes_results_url=""
