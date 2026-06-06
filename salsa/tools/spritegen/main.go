@@ -7,10 +7,12 @@ import (
 	_ "image/jpeg"
 	"image/png"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 
+	"github.com/bazelbuild/rules_go/go/tools/bazel"
 	"github.com/juanique/monorepo/salsa/llm/vision"
 	"github.com/juanique/monorepo/salsa/tools/spritegen/spritesheet"
 	"github.com/spf13/cobra"
@@ -60,6 +62,7 @@ var sliceCmd = &cobra.Command{
 		outputDir, _ := cmd.Flags().GetString("output")
 		readLabels, _ := cmd.Flags().GetBool("read-labels")
 		transparentBg, _ := cmd.Flags().GetBool("transparent-bg")
+		useRembg, _ := cmd.Flags().GetBool("rembg")
 		filePath := args[0]
 
 		f, err := os.Open(filePath)
@@ -84,7 +87,6 @@ var sliceCmd = &cobra.Command{
 			return err
 		}
 
-		// labeledRows and err are declared here so both branches below can assign with =.
 		var labeledRows []spritesheet.LabeledRow
 		if readLabels {
 			apiKey := os.Getenv("ANTHROPIC_API_KEY")
@@ -105,6 +107,49 @@ var sliceCmd = &cobra.Command{
 		}
 		if err != nil {
 			return err
+		}
+
+		if useRembg {
+			toolPath, err := bazel.Runfile("salsa/tools/spritegen/rembg_tool")
+			if err != nil {
+				return fmt.Errorf("rembg_tool not found in runfiles (build with Bazel): %w", err)
+			}
+			rb := &rembgTool{toolPath: toolPath}
+
+			tmpDir, err := os.MkdirTemp("", "spritegen-rembg-*")
+			if err != nil {
+				return err
+			}
+			defer os.RemoveAll(tmpDir)
+
+			var items []spritesheet.RembgBatchItem
+			for i, row := range labeledRows {
+				labelPart := ""
+				if row.LabelText != "" {
+					labelPart = sanitizeLabel(row.LabelText) + "_"
+				}
+				if !row.Label.Empty() {
+					tmpIn := filepath.Join(tmpDir, fmt.Sprintf("%04d_label.png", i))
+					finalPath := filepath.Join(outputDir, fmt.Sprintf("%02d_%slabel.png", i, labelPart))
+					if err := writeImage(sub.SubImage(row.Label), tmpIn); err != nil {
+						return err
+					}
+					items = append(items, spritesheet.RembgBatchItem{In: tmpIn, Out: finalPath})
+				}
+				for j, sprite := range row.Sprites {
+					tmpIn := filepath.Join(tmpDir, fmt.Sprintf("%04d_%04d.png", i, j))
+					finalPath := filepath.Join(outputDir, fmt.Sprintf("%02d_%s%02d.png", i, labelPart, j))
+					if err := writeImage(sub.SubImage(sprite), tmpIn); err != nil {
+						return err
+					}
+					items = append(items, spritesheet.RembgBatchItem{In: tmpIn, Out: finalPath})
+				}
+			}
+			if err := rb.Process(items); err != nil {
+				return err
+			}
+			fmt.Printf("Sliced %d rows to %s\n", len(labeledRows), outputDir)
+			return nil
 		}
 
 		var info *spritesheet.Info
@@ -154,6 +199,7 @@ var normalizeCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		outputPath, _ := cmd.Flags().GetString("output")
 		padding, _ := cmd.Flags().GetInt("padding")
+		useRembg, _ := cmd.Flags().GetBool("rembg")
 		filePath := args[0]
 
 		f, err := os.Open(filePath)
@@ -167,9 +213,21 @@ var normalizeCmd = &cobra.Command{
 			return err
 		}
 
-		result, err := spritesheet.Normalize(img, padding)
-		if err != nil {
-			return err
+		var result *spritesheet.NormalizedSheet
+		if useRembg {
+			toolPath, err := bazel.Runfile("salsa/tools/spritegen/rembg_tool")
+			if err != nil {
+				return fmt.Errorf("rembg_tool not found in runfiles (build with Bazel): %w", err)
+			}
+			result, err = spritesheet.NormalizeWithRembg(img, &rembgTool{toolPath: toolPath}, padding)
+			if err != nil {
+				return err
+			}
+		} else {
+			result, err = spritesheet.Normalize(img, padding)
+			if err != nil {
+				return err
+			}
 		}
 
 		if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
@@ -198,6 +256,38 @@ var normalizeCmd = &cobra.Command{
 	},
 }
 
+// rembgTool implements spritesheet.RembgBatch by invoking the rembg Python tool.
+// Items are passed via a manifest JSON file so the model loads only once.
+type rembgTool struct {
+	toolPath string
+}
+
+func (r *rembgTool) Process(items []spritesheet.RembgBatchItem) error {
+	manifestFile, err := os.CreateTemp("", "spritegen-rembg-manifest-*.json")
+	if err != nil {
+		return err
+	}
+	manifestPath := manifestFile.Name()
+	manifestFile.Close()
+	defer os.Remove(manifestPath)
+
+	data, err := spritesheet.ManifestJSON(items)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(manifestPath, data, 0644); err != nil {
+		return err
+	}
+
+	c := exec.Command(r.toolPath, manifestPath)
+	c.Stdout = os.Stderr
+	c.Stderr = os.Stderr
+	if err := c.Run(); err != nil {
+		return fmt.Errorf("rembg: %w", err)
+	}
+	return nil
+}
+
 var labelSanitizeRe = regexp.MustCompile(`[^a-z0-9]+`)
 
 func sanitizeLabel(s string) string {
@@ -220,9 +310,11 @@ func main() {
 	_ = sliceCmd.MarkFlagRequired("output")
 	sliceCmd.Flags().Bool("read-labels", false, "use LLM OCR to read label text and include it in filenames (requires ANTHROPIC_API_KEY)")
 	sliceCmd.Flags().Bool("transparent-bg", false, "replace background-colored pixels with transparency in output PNGs")
+	sliceCmd.Flags().Bool("rembg", false, "use rembg AI model for background removal (requires Bazel runfiles)")
 	normalizeCmd.Flags().String("output", "", "path to write the normalized PNG (required)")
 	_ = normalizeCmd.MarkFlagRequired("output")
 	normalizeCmd.Flags().Int("padding", 8, "gap in pixels between cells and around the sheet edges")
+	normalizeCmd.Flags().Bool("rembg", false, "use rembg AI model for background removal (requires Bazel runfiles)")
 	rootCmd.AddCommand(normalizeCmd)
 	rootCmd.AddCommand(infoCmd)
 	rootCmd.AddCommand(sliceCmd)

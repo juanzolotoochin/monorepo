@@ -1,12 +1,34 @@
 load("@io_bazel_rules_go//go:def.bzl", "go_binary")
+load("//:bazel/python.bzl", "py_binary")
+
+py_binary(
+    name = "rembg_tool",
+    srcs = ["rembg_tool.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "@pip_deps//onnxruntime",
+        "@pip_deps//rembg",
+    ],
+)
+
+py_binary(
+    name = "rembg_model_test",
+    srcs = ["rembg_model_test.py"],
+    deps = [
+        "@pip_deps//onnxruntime",
+        "@pip_deps//rembg",
+    ],
+)
 
 go_binary(
     name = "spritegen",
     srcs = ["main.go"],
+    data = [":rembg_tool"],
     visibility = ["//visibility:public"],
     deps = [
         "//salsa/llm/vision",
         "//salsa/tools/spritegen/spritesheet",
         "@com_github_spf13_cobra//:cobra",
+        "@io_bazel_rules_go//go/tools/bazel",
     ],
 )

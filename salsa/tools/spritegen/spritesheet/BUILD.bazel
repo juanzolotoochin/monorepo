@@ -2,7 +2,10 @@ load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "spritesheet",
-    srcs = ["spritesheet.go"],
+    srcs = [
+        "rembg.go",
+        "spritesheet.go",
+    ],
     importpath = "github.com/juanique/monorepo/salsa/tools/spritegen/spritesheet",
     visibility = ["//visibility:public"],
 )
@@ -10,12 +13,15 @@ go_library(
 go_test(
     name = "spritesheet_test",
     srcs = ["spritesheet_test.go"],
-    data = ["//salsa/tools/spritegen/testing:testdata"],
+    data = [
+        "//salsa/tools/spritegen:rembg_tool",
+        "//salsa/tools/spritegen/testing:testdata",
+    ],
+    size = "large",
     deps = [
         ":spritesheet",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
-        # used by TestAnalyze_MainCharacter (added in Task 3)
         "@io_bazel_rules_go//go/tools/bazel",
     ],
 )

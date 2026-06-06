@@ -2,11 +2,13 @@ package spritesheet_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/color"
 	_ "image/png"
 	"os"
+	"os/exec"
 	"testing"
 
 	"github.com/bazelbuild/rules_go/go/tools/bazel"
@@ -14,6 +16,40 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// rembgToolBatch implements spritesheet.RembgBatch using the rembg Python tool binary.
+type rembgToolBatch struct{ toolPath string }
+
+func (r *rembgToolBatch) Process(items []spritesheet.RembgBatchItem) error {
+	data, err := spritesheet.ManifestJSON(items)
+	if err != nil {
+		return err
+	}
+	// Verify ManifestJSON round-trips correctly.
+	var check []struct {
+		In  string `json:"in"`
+		Out string `json:"out"`
+	}
+	if err := json.Unmarshal(data, &check); err != nil {
+		return err
+	}
+
+	manifestFile, err := os.CreateTemp("", "rembg-manifest-*.json")
+	if err != nil {
+		return err
+	}
+	manifestPath := manifestFile.Name()
+	manifestFile.Close()
+	defer os.Remove(manifestPath)
+
+	if err := os.WriteFile(manifestPath, data, 0644); err != nil {
+		return err
+	}
+	c := exec.Command(r.toolPath, manifestPath)
+	c.Stdout = os.Stderr
+	c.Stderr = os.Stderr
+	return c.Run()
+}
 
 // fillRect fills a rectangle in img with c.
 func fillRect(img *image.RGBA, r image.Rectangle, c color.RGBA) {
@@ -281,4 +317,32 @@ func TestNormalize(t *testing.T) {
 	// Row 1, sprite 1 cell (empty): cellX=2*4+20+1*(32+4)=64, cellY=4+1*(40+4)=48
 	// Center pixel: (64+16, 48+20) = (80, 68) — must be transparent
 	assert.Equal(t, uint8(0), result.Image.NRGBAAt(80, 68).A, "empty cell should be transparent")
+}
+
+// TestNormalizeWithRembg_BackgroundTransparent is an integration test that verifies
+// the per-sprite rembg path produces a transparent background. The 30×30 square at
+// (375, 490) in the output (padding=1) is a known background-only region.
+func TestNormalizeWithRembg_BackgroundTransparent(t *testing.T) {
+	toolPath, err := bazel.Runfile("salsa/tools/spritegen/rembg_tool")
+	require.NoError(t, err)
+
+	imgPath, err := bazel.Runfile("salsa/tools/spritegen/testing/main-character.png")
+	require.NoError(t, err)
+
+	f, err := os.Open(imgPath)
+	require.NoError(t, err)
+	defer f.Close()
+
+	img, _, err := image.Decode(f)
+	require.NoError(t, err)
+
+	result, err := spritesheet.NormalizeWithRembg(img, &rembgToolBatch{toolPath: toolPath}, 1)
+	require.NoError(t, err)
+
+	for y := 490; y < 520; y++ {
+		for x := 375; x < 405; x++ {
+			c := result.Image.NRGBAAt(x, y)
+			assert.Equal(t, uint8(0), c.A, "pixel at (%d,%d) should be transparent (background)", x, y)
+		}
+	}
 }
