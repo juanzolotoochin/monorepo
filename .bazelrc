@@ -46,13 +46,13 @@ build --host_cxxopt=-std=c++17
 # base flags) cleanly overrides it with //:docker_image_platform, and so that
 # the auto `build:macos` config (via --enable_platform_specific_config, applied
 # after base flags on macOS hosts) overrides it for local macOS dev.
-build --platforms=@rules_rs//rs/platforms:x86_64-unknown-linux-gnu
-build --host_platform=@rules_rs//rs/platforms:x86_64-unknown-linux-gnu
-build --extra_execution_platforms=@rules_rs//rs/platforms:x86_64-unknown-linux-gnu
+build --platforms=//platforms:rust_linux_x86_64
+build --host_platform=//platforms:rust_linux_x86_64
+build --extra_execution_platforms=//platforms:rust_linux_x86_64
 common --enable_platform_specific_config
-build:macos --platforms=@rules_rs//rs/platforms:aarch64-apple-darwin
-build:macos --host_platform=@rules_rs//rs/platforms:aarch64-apple-darwin
-build:macos --extra_execution_platforms=@rules_rs//rs/platforms:aarch64-apple-darwin
+build:macos --platforms=//platforms:rust_macos_arm64
+build:macos --host_platform=//platforms:rust_macos_arm64
+build:macos --extra_execution_platforms=//platforms:rust_macos_arm64
 
 # fully local build
 build:full_local --bes_backend=""
