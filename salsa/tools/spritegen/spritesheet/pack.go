@@ -9,12 +9,17 @@ import (
 
 // FrameRow is one animation's frames in display order.
 type FrameRow struct {
+	// Label is the human-readable animation name. When non-empty, Pack draws a
+	// label column to the left of the frames for this row.
 	Label  string
 	Frames []image.Image
 }
 
 // Pack assembles rows of animation frames into a single sprite sheet.
 // Each row corresponds to one animation; columns are frames left-to-right.
+// When any row has a non-empty Label, a label column equal to the width of
+// three sprite cells (3*cellW + 2*padding) is prepended to each row. Text is
+// scaled to the largest integer multiple that fits within that column.
 // All frames are composited onto a transparent NRGBA canvas with the given
 // padding (pixels) between cells and around the sheet edges.
 // Frames of varying sizes are bottom-center aligned within their cells.
@@ -43,8 +48,22 @@ func Pack(rows []FrameRow, padding int) (*image.NRGBA, error) {
 		}
 	}
 
+	// Label column is as wide as 3 sprite cells (including the 2 gaps between
+	// them), but only when at least one row has a label.
+	labelColW := 0
+	for _, row := range rows {
+		if row.Label != "" {
+			labelColW = 3*cellW + 2*padding
+			break
+		}
+	}
+
 	numRows := len(rows)
-	outW := padding*(maxCols+1) + maxCols*cellW
+	labelExtra := 0
+	if labelColW > 0 {
+		labelExtra = labelColW + padding
+	}
+	outW := labelExtra + padding*(maxCols+1) + maxCols*cellW
 	outH := padding*(numRows+1) + numRows*cellH
 	out := image.NewNRGBA(image.Rect(0, 0, outW, outH))
 
@@ -53,11 +72,17 @@ func Pack(rows []FrameRow, padding int) (*image.NRGBA, error) {
 
 	for r, row := range rows {
 		cellY := padding + r*(cellH+padding)
+
+		if labelColW > 0 {
+			lbl := renderLabel(row.Label, labelColW, cellH)
+			dst := image.Rect(0, cellY, labelColW, cellY+cellH)
+			draw.Draw(out, dst, lbl, image.Point{}, draw.Over)
+		}
+
 		for c, frame := range row.Frames {
 			b := frame.Bounds()
 			fw, fh := b.Dx(), b.Dy()
-			// Bottom-center alignment within cell.
-			cellX := padding + c*(cellW+padding)
+			cellX := labelExtra + padding + c*(cellW+padding)
 			dstX := cellX + (cellW-fw)/2
 			dstY := cellY + (cellH - fh)
 			dst := image.Rect(dstX, dstY, dstX+fw, dstY+fh)
