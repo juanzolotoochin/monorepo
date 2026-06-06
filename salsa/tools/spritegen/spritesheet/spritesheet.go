@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"image/draw"
 	"sort"
 )
 
@@ -133,12 +132,18 @@ func detectBackground(img image.Image) color.RGBA {
 	for _, o := range origins {
 		for dy := 0; dy < p; dy++ {
 			for dx := 0; dx < p; dx++ {
-				r, g, b, _ := img.At(o[0]+dx, o[1]+dy).RGBA()
+				r, g, b, a := img.At(o[0]+dx, o[1]+dy).RGBA()
+				if a == 0 {
+					continue // skip transparent pixels (pre-masked input)
+				}
 				rs = append(rs, int(r>>8))
 				gs = append(gs, int(g>>8))
 				bs = append(bs, int(b>>8))
 			}
 		}
+	}
+	if len(rs) == 0 {
+		return color.RGBA{A: 255} // fully transparent image; colour doesn't matter
 	}
 	sort.Ints(rs)
 	sort.Ints(gs)
@@ -197,9 +202,13 @@ func countRows(img image.Image, bg color.RGBA, tolerance int) int {
 	return len(findRowRanges(img, bg, tolerance))
 }
 
-// isBackground checks if the pixel at (x, y) matches the background color within tolerance.
+// isBackground checks if the pixel at (x, y) is background: either fully transparent
+// (pre-masked input) or within tolerance of bg's RGB values.
 func isBackground(img image.Image, x, y int, bg color.RGBA, tolerance int) bool {
-	r, g, b, _ := img.At(x, y).RGBA()
+	r, g, b, a := img.At(x, y).RGBA()
+	if a == 0 {
+		return true
+	}
 	return absDiff(int(r>>8), int(bg.R)) <= tolerance &&
 		absDiff(int(g>>8), int(bg.G)) <= tolerance &&
 		absDiff(int(b>>8), int(bg.B)) <= tolerance
@@ -336,9 +345,144 @@ type NormalizedSheet struct {
 	Padding      int // gap between cells and around the sheet edges
 }
 
+// identifyBackgroundPixels returns a flat byte slice (indexed by (y-bounds.Min.Y)*width +
+// (x-bounds.Min.X)) where 1 means the pixel is background: it both matches bg within
+// tolerance AND is reachable from the image boundary via flood-fill through similarly
+// matching pixels. Enclosed dark pixels that happen to be close to the background color
+// (e.g. character shadows) are not reachable and therefore not marked as background.
+func identifyBackgroundPixels(img image.Image, bg color.RGBA, tolerance int) []byte {
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	mask := make([]byte, w*h) // 0=unvisited, 1=background, 2=visited content
+
+	type pt struct{ x, y int }
+	queue := make([]pt, 0, 2*(w+h))
+
+	visit := func(x, y int) {
+		if x < b.Min.X || x >= b.Max.X || y < b.Min.Y || y >= b.Max.Y {
+			return
+		}
+		i := (y-b.Min.Y)*w + (x-b.Min.X)
+		if mask[i] != 0 {
+			return
+		}
+		if isBackground(img, x, y, bg, tolerance) {
+			mask[i] = 1
+			queue = append(queue, pt{x, y})
+		} else {
+			mask[i] = 2
+		}
+	}
+
+	for x := b.Min.X; x < b.Max.X; x++ {
+		visit(x, b.Min.Y)
+		visit(x, b.Max.Y-1)
+	}
+	for y := b.Min.Y + 1; y < b.Max.Y-1; y++ {
+		visit(b.Min.X, y)
+		visit(b.Max.X-1, y)
+	}
+
+	for len(queue) > 0 {
+		p := queue[0]
+		queue = queue[1:]
+		visit(p.x+1, p.y)
+		visit(p.x-1, p.y)
+		visit(p.x, p.y+1)
+		visit(p.x, p.y-1)
+	}
+
+	return mask
+}
+
+// NormalizeWithMask is like Normalize but uses maskImg's alpha channel to determine
+// which pixels are foreground (alpha > 0) vs background (alpha == 0).
+// Row/column detection uses img so that label/sprite bounds are accurate.
+// Pixel colors are copied from img (preserving original palette).
+func NormalizeWithMask(img image.Image, maskImg image.Image, padding int) (*NormalizedSheet, error) {
+	if padding < 0 {
+		return nil, fmt.Errorf("spritesheet: padding must be non-negative")
+	}
+
+	rows, err := Slice(img)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(rows) == 0 {
+		return &NormalizedSheet{
+			Image:   image.NewNRGBA(image.Rect(0, 0, 0, 0)),
+			Padding: padding,
+		}, nil
+	}
+
+	labelW, spriteW, cellH, maxCols := 0, 0, 0, 0
+	for _, row := range rows {
+		if w := row.Label.Dx(); w > labelW {
+			labelW = w
+		}
+		if h := row.Label.Dy(); h > cellH {
+			cellH = h
+		}
+		if len(row.Sprites) > maxCols {
+			maxCols = len(row.Sprites)
+		}
+		for _, s := range row.Sprites {
+			if w := s.Dx(); w > spriteW {
+				spriteW = w
+			}
+			if h := s.Dy(); h > cellH {
+				cellH = h
+			}
+		}
+	}
+
+	numRows := len(rows)
+	outW := padding*(maxCols+2) + labelW + maxCols*spriteW
+	outH := padding*(numRows+1) + numRows*cellH
+	out := image.NewNRGBA(image.Rect(0, 0, outW, outH))
+
+	copyContent := func(rect image.Rectangle, dstX, dstY int) {
+		for sy := rect.Min.Y; sy < rect.Max.Y; sy++ {
+			for sx := rect.Min.X; sx < rect.Max.X; sx++ {
+				_, _, _, a := maskImg.At(sx, sy).RGBA()
+				if a > 0 {
+					r, g, b, _ := img.At(sx, sy).RGBA()
+					out.SetNRGBA(dstX+(sx-rect.Min.X), dstY+(sy-rect.Min.Y),
+						color.NRGBA{uint8(r >> 8), uint8(g >> 8), uint8(b >> 8), 255})
+				}
+			}
+		}
+	}
+
+	for i, row := range rows {
+		cellY := padding + i*(cellH+padding)
+		if !row.Label.Empty() {
+			w, h := row.Label.Dx(), row.Label.Dy()
+			copyContent(row.Label, padding+(labelW-w)/2, cellY+cellH-h)
+		}
+		for j, sprite := range row.Sprites {
+			w, h := sprite.Dx(), sprite.Dy()
+			dx := 2*padding + labelW + j*(spriteW+padding) + (spriteW-w)/2
+			copyContent(sprite, dx, cellY+cellH-h)
+		}
+	}
+
+	return &NormalizedSheet{
+		Image:       out,
+		LabelWidth:  labelW,
+		SpriteWidth: spriteW,
+		CellHeight:  cellH,
+		Padding:     padding,
+	}, nil
+}
+
 // Normalize detects sprite rows, removes the background, and renders a new
 // spritesheet with uniform cell dimensions. Sprites are bottom-center aligned
 // within each cell. padding is the gap in pixels between cells and around edges.
+//
+// Background removal uses flood-fill from the image edges so that dark character
+// pixels enclosed by other content are preserved even when close to the background color.
 func Normalize(img image.Image, padding int) (*NormalizedSheet, error) {
 	if padding < 0 {
 		return nil, fmt.Errorf("spritesheet: padding must be non-negative")
@@ -349,13 +493,6 @@ func Normalize(img image.Image, padding int) (*NormalizedSheet, error) {
 		return nil, err
 	}
 
-	sub, ok := img.(interface {
-		SubImage(image.Rectangle) image.Image
-	})
-	if !ok {
-		return nil, fmt.Errorf("spritesheet: image does not support SubImage")
-	}
-
 	if len(rows) == 0 {
 		return &NormalizedSheet{
 			Image:   image.NewNRGBA(image.Rect(0, 0, 0, 0)),
@@ -364,6 +501,9 @@ func Normalize(img image.Image, padding int) (*NormalizedSheet, error) {
 	}
 
 	bg := detectBackground(img)
+	bgMask := identifyBackgroundPixels(img, bg, bgTolerance)
+	bounds := img.Bounds()
+	bw := bounds.Dx()
 
 	// Compute grid dimensions.
 	labelW, spriteW, cellH, maxCols := 0, 0, 0, 0
@@ -392,31 +532,36 @@ func Normalize(img image.Image, padding int) (*NormalizedSheet, error) {
 	outH := padding*(numRows+1) + numRows*cellH
 	out := image.NewNRGBA(image.Rect(0, 0, outW, outH))
 
+	copyContent := func(rect image.Rectangle, dstX, dstY int) {
+		for sy := rect.Min.Y; sy < rect.Max.Y; sy++ {
+			for sx := rect.Min.X; sx < rect.Max.X; sx++ {
+				if bgMask[(sy-bounds.Min.Y)*bw+(sx-bounds.Min.X)] != 1 {
+					r, g, b, _ := img.At(sx, sy).RGBA()
+					out.SetNRGBA(dstX+(sx-rect.Min.X), dstY+(sy-rect.Min.Y),
+						color.NRGBA{uint8(r >> 8), uint8(g >> 8), uint8(b >> 8), 255})
+				}
+			}
+		}
+	}
+
 	for i, row := range rows {
 		cellY := padding + i*(cellH+padding)
-
 		if !row.Label.Empty() {
-			src := RemoveBackground(sub.SubImage(row.Label), bg, bgTolerance)
-			w, h := src.Bounds().Dx(), src.Bounds().Dy()
-			dx := padding + (labelW-w)/2
-			dy := cellY + cellH - h
-			draw.Draw(out, image.Rect(dx, dy, dx+w, dy+h), src, src.Bounds().Min, draw.Src)
+			w, h := row.Label.Dx(), row.Label.Dy()
+			copyContent(row.Label, padding+(labelW-w)/2, cellY+cellH-h)
 		}
-
 		for j, sprite := range row.Sprites {
-			src := RemoveBackground(sub.SubImage(sprite), bg, bgTolerance)
-			w, h := src.Bounds().Dx(), src.Bounds().Dy()
+			w, h := sprite.Dx(), sprite.Dy()
 			dx := 2*padding + labelW + j*(spriteW+padding) + (spriteW-w)/2
-			dy := cellY + cellH - h
-			draw.Draw(out, image.Rect(dx, dy, dx+w, dy+h), src, src.Bounds().Min, draw.Src)
+			copyContent(sprite, dx, cellY+cellH-h)
 		}
 	}
 
 	return &NormalizedSheet{
-		Image:        out,
-		LabelWidth:   labelW,
-		SpriteWidth:  spriteW,
-		CellHeight:   cellH,
-		Padding:      padding,
+		Image:       out,
+		LabelWidth:  labelW,
+		SpriteWidth: spriteW,
+		CellHeight:  cellH,
+		Padding:     padding,
 	}, nil
 }
