@@ -319,6 +319,78 @@ func TestNormalize(t *testing.T) {
 	assert.Equal(t, uint8(0), result.Image.NRGBAAt(80, 68).A, "empty cell should be transparent")
 }
 
+func TestPack_EmptyRows(t *testing.T) {
+	sheet, err := spritesheet.Pack(nil, 4)
+	require.NoError(t, err)
+	assert.Equal(t, image.Rect(0, 0, 0, 0), sheet.Bounds())
+}
+
+func TestPack_NegativePadding(t *testing.T) {
+	_, err := spritesheet.Pack([]spritesheet.FrameRow{{Label: "idle", Frames: []image.Image{image.NewRGBA(image.Rect(0, 0, 10, 10))}}}, -1)
+	assert.Error(t, err)
+}
+
+func TestPack_Layout(t *testing.T) {
+	// Two rows, two frames each. Row 0: 20×30 frames. Row 1: 15×20 frames.
+	// Cell size = max(20,15) × max(30,20) = 20×30. Padding = 4.
+	// outW = 4*(2+1) + 2*20 = 52
+	// outH = 4*(2+1) + 2*30 = 72
+	frame := func(w, h int, c color.RGBA) image.Image {
+		img := image.NewRGBA(image.Rect(0, 0, w, h))
+		fillRect(img, img.Bounds(), c)
+		return img
+	}
+	red := color.RGBA{255, 0, 0, 255}
+	blue := color.RGBA{0, 0, 255, 255}
+
+	rows := []spritesheet.FrameRow{
+		{Label: "attack", Frames: []image.Image{frame(20, 30, red), frame(20, 30, red)}},
+		{Label: "idle", Frames: []image.Image{frame(15, 20, blue), frame(15, 20, blue)}},
+	}
+	sheet, err := spritesheet.Pack(rows, 4)
+	require.NoError(t, err)
+	assert.Equal(t, image.Rect(0, 0, 52, 72), sheet.Bounds())
+
+	// Row 0, frame 0: cellX=4, cellY=4, frame 20×30 — bottom-center aligned (fits exactly)
+	// Center of that cell: (4+10, 4+15) = (14, 19) — should be red and opaque
+	c := sheet.NRGBAAt(14, 19)
+	assert.Equal(t, uint8(255), c.R, "row 0 frame 0 should be red")
+	assert.Equal(t, uint8(255), c.A, "row 0 frame 0 should be opaque")
+
+	// Row 1, frame 1: cellX=4+20+4=28, cellY=4+30+4=38
+	// Frame is 15×20, bottom-center in 20×30 cell: dstX=28+(20-15)/2=30, dstY=38+(30-20)=48
+	// Center of that frame: (30+7, 48+10) = (37, 58) — should be blue
+	c = sheet.NRGBAAt(37, 58)
+	assert.Equal(t, uint8(255), c.B, "row 1 frame 1 should be blue")
+	assert.Equal(t, uint8(255), c.A, "row 1 frame 1 should be opaque")
+
+	// Gap between rows (row 0 ends at y=33, row 1 starts at y=38): y=35 col 14 — transparent
+	c = sheet.NRGBAAt(14, 35)
+	assert.Equal(t, uint8(0), c.A, "gap between rows should be transparent")
+}
+
+func TestPack_TransparentSourcePreserved(t *testing.T) {
+	// Frames with alpha transparency: center opaque, corners transparent.
+	img := image.NewRGBA(image.Rect(0, 0, 10, 10))
+	for y := 0; y < 10; y++ {
+		for x := 0; x < 10; x++ {
+			if x >= 2 && x < 8 && y >= 2 && y < 8 {
+				img.SetRGBA(x, y, color.RGBA{100, 200, 50, 255})
+			}
+			// corners stay transparent (zero value)
+		}
+	}
+	rows := []spritesheet.FrameRow{{Label: "run", Frames: []image.Image{img}}}
+	sheet, err := spritesheet.Pack(rows, 2)
+	require.NoError(t, err)
+
+	// Frame placed at x=2, y=2 (padding=2, one frame, one row, frame fills cell exactly).
+	// Corner pixel (2,2) in the sheet corresponds to frame pixel (0,0) — transparent.
+	assert.Equal(t, uint8(0), sheet.NRGBAAt(2, 2).A, "transparent corner should stay transparent")
+	// Center pixel (2+5, 2+5) = (7,7) — opaque.
+	assert.Equal(t, uint8(255), sheet.NRGBAAt(7, 7).A, "opaque center should remain opaque")
+}
+
 // TestNormalizeWithRembg_BackgroundTransparent is an integration test that verifies
 // the per-sprite rembg path produces a transparent background. The 30×30 square at
 // (375, 490) in the output (padding=1) is a known background-only region.
