@@ -24,7 +24,10 @@ py_grpc_library(
 
 go_proto_library(
     name = "helloworld_go_proto",
-    compilers = ["@io_bazel_rules_go//proto:go_grpc_v2"],
+    compilers = [
+        "@io_bazel_rules_go//proto:go_proto",
+        "@io_bazel_rules_go//proto:go_grpc_v2",
+    ],
     importpath = "github.com/juanique/monorepo/examples/grpc/protos",
     proto = ":helloworld_proto",
     visibility = ["//visibility:public"],
