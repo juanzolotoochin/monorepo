@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/bazelbuild/rules_go/go/tools/bazel"
@@ -288,6 +290,102 @@ func (r *rembgTool) Process(items []spritesheet.RembgBatchItem) error {
 	return nil
 }
 
+// frameNameRe matches filenames like "Attack (3).png" → groups: name, number.
+var frameNameRe = regexp.MustCompile(`^(.+?)\s+\((\d+)\)\.png$`)
+
+var packCmd = &cobra.Command{
+	Use:   "pack <dir>",
+	Short: "Assemble individual frame PNGs from a directory into a sprite sheet",
+	Long: `Reads PNG files named "<Animation> (<N>).png" from dir,
+groups them by animation name (one row each), and writes a sprite sheet.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		dir := args[0]
+		outputPath, _ := cmd.Flags().GetString("output")
+		padding, _ := cmd.Flags().GetInt("padding")
+
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return err
+		}
+
+		type frameEntry struct {
+			name  string
+			index int
+			path  string
+		}
+		grouped := map[string][]frameEntry{}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			m := frameNameRe.FindStringSubmatch(e.Name())
+			if m == nil {
+				continue
+			}
+			animName := m[1]
+			idx, _ := strconv.Atoi(m[2])
+			grouped[animName] = append(grouped[animName], frameEntry{animName, idx, filepath.Join(dir, e.Name())})
+		}
+		if len(grouped) == 0 {
+			return fmt.Errorf("no matching PNG files found in %s (expected \"Name (N).png\" pattern)", dir)
+		}
+
+		animNames := make([]string, 0, len(grouped))
+		for name := range grouped {
+			animNames = append(animNames, name)
+		}
+		sort.Strings(animNames)
+
+		rows := make([]spritesheet.FrameRow, 0, len(animNames))
+		for _, name := range animNames {
+			frames := grouped[name]
+			sort.Slice(frames, func(i, j int) bool { return frames[i].index < frames[j].index })
+			imgs := make([]image.Image, 0, len(frames))
+			for _, fe := range frames {
+				f, err := os.Open(fe.path)
+				if err != nil {
+					return err
+				}
+				img, _, err := image.Decode(f)
+				f.Close()
+				if err != nil {
+					return fmt.Errorf("decoding %s: %w", fe.path, err)
+				}
+				imgs = append(imgs, img)
+			}
+			rows = append(rows, spritesheet.FrameRow{Label: name, Frames: imgs})
+		}
+
+		sheet, err := spritesheet.Pack(rows, padding)
+		if err != nil {
+			return err
+		}
+
+		if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+			return err
+		}
+		out, err := os.Create(outputPath)
+		if err != nil {
+			return err
+		}
+		if err := png.Encode(out, sheet); err != nil {
+			out.Close()
+			os.Remove(outputPath)
+			return err
+		}
+		if err := out.Close(); err != nil {
+			os.Remove(outputPath)
+			return fmt.Errorf("closing output: %w", err)
+		}
+
+		fmt.Printf("Animations: %s\n", strings.Join(animNames, ", "))
+		fmt.Printf("Sheet size: %d x %d\n", sheet.Bounds().Dx(), sheet.Bounds().Dy())
+		fmt.Printf("Written to: %s\n", outputPath)
+		return nil
+	},
+}
+
 var labelSanitizeRe = regexp.MustCompile(`[^a-z0-9]+`)
 
 func sanitizeLabel(s string) string {
@@ -315,6 +413,10 @@ func main() {
 	_ = normalizeCmd.MarkFlagRequired("output")
 	normalizeCmd.Flags().Int("padding", 8, "gap in pixels between cells and around the sheet edges")
 	normalizeCmd.Flags().Bool("rembg", false, "use rembg AI model for background removal (requires Bazel runfiles)")
+	packCmd.Flags().String("output", "", "path to write the output PNG (required)")
+	_ = packCmd.MarkFlagRequired("output")
+	packCmd.Flags().Int("padding", 4, "gap in pixels between cells and around sheet edges")
+	rootCmd.AddCommand(packCmd)
 	rootCmd.AddCommand(normalizeCmd)
 	rootCmd.AddCommand(infoCmd)
 	rootCmd.AddCommand(sliceCmd)
