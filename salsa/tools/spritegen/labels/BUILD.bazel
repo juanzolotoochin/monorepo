@@ -1,0 +1,25 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "labels",
+    srcs = [
+        "claude_client.go",
+        "diskcache.go",
+        "labels.go",
+    ],
+    importpath = "github.com/juanique/monorepo/salsa/tools/spritegen/labels",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//salsa/llm/claude",
+    ],
+)
+
+go_test(
+    name = "labels_test",
+    srcs = ["labels_test.go"],
+    deps = [
+        ":labels",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

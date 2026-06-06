@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -16,8 +15,8 @@ import (
 	"strings"
 
 	"github.com/bazelbuild/rules_go/go/tools/bazel"
-	"github.com/juanique/monorepo/salsa/llm/claude"
 	"github.com/juanique/monorepo/salsa/llm/vision"
+	"github.com/juanique/monorepo/salsa/tools/spritegen/labels"
 	"github.com/juanique/monorepo/salsa/tools/spritegen/spritesheet"
 	"github.com/spf13/cobra"
 )
@@ -295,39 +294,6 @@ func (r *rembgTool) Process(items []spritesheet.RembgBatchItem) error {
 // frameNameRe matches filenames like "Attack (3).png" → groups: name, number.
 var frameNameRe = regexp.MustCompile(`^(.+?)\s+\((\d+)\)\.png$`)
 
-// animLabel is a single entry in the LLM's structured label response.
-type animLabel struct {
-	Raw     string `json:"raw"     desc:"The raw animation name as found in the filename"`
-	Display string `json:"display" desc:"Human-readable display label for this animation, suitable for printing on a sprite sheet"`
-}
-
-// animLabelsResponse is the structured output from the LLM label extraction call.
-type animLabelsResponse struct {
-	Labels []animLabel `json:"labels"`
-}
-
-// extractAnimLabels calls Claude to produce a display label for each raw animation name.
-// Names not returned by the LLM fall back to their raw value.
-func extractAnimLabels(ctx context.Context, apiKey string, names []string) (map[string]string, error) {
-	prompt := "I have a sprite sheet with animations named by these filename prefixes:\n"
-	for _, n := range names {
-		prompt += "  - " + n + "\n"
-	}
-	prompt += "\nFor each name, return a clean, human-readable label suitable for display on a sprite sheet (e.g. split CamelCase into words, capitalize correctly). Return them in the same order as given."
-
-	llm := claude.New(apiKey)
-	var resp animLabelsResponse
-	if err := llm.Query(ctx, prompt, &resp); err != nil {
-		return nil, fmt.Errorf("LLM label extraction: %w", err)
-	}
-
-	result := make(map[string]string, len(names))
-	for _, l := range resp.Labels {
-		result[l.Raw] = l.Display
-	}
-	return result, nil
-}
-
 var packCmd = &cobra.Command{
 	Use:   "pack <dir>",
 	Short: "Assemble individual frame PNGs from a directory into a sprite sheet",
@@ -377,18 +343,23 @@ Each row is prefixed with a label column showing the animation name.`,
 		// displayLabel maps raw animation name → label to render in the sheet.
 		displayLabel := make(map[string]string, len(animNames))
 		for _, name := range animNames {
-			displayLabel[name] = name // default: use raw name
+			displayLabel[name] = name // default: raw name
 		}
 		if readLabels {
 			apiKey := os.Getenv("ANTHROPIC_API_KEY")
 			if apiKey == "" {
 				return fmt.Errorf("ANTHROPIC_API_KEY environment variable not set")
 			}
-			extracted, err := extractAnimLabels(cmd.Context(), apiKey, animNames)
+			diskCache, err := labels.DefaultDiskCache()
 			if err != nil {
 				return err
 			}
-			for raw, display := range extracted {
+			ex := labels.New(labels.NewClaudeClient(apiKey), diskCache)
+			resolved, err := ex.Extract(cmd.Context(), animNames)
+			if err != nil {
+				return err
+			}
+			for raw, display := range resolved {
 				displayLabel[raw] = display
 			}
 		}
