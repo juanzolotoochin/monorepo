@@ -74,3 +74,4 @@ user.bazelrc
 yarn.lock
 
 auto.bazelrc
+/.superpowers/
