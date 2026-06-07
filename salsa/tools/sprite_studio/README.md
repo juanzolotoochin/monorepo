@@ -62,7 +62,11 @@ The first action is selected automatically and playback starts.
 
 ### Import
 
-Click **Import** and pick a source directory containing per-frame PNGs. The app groups them into actions using the filename heuristic (see below), copies them into `sprites/<Action>/NNN.png`, and saves an updated `project.json`. Re-importing an action replaces its frames (stale files are removed). Files that do not match the heuristic are skipped and reported as unmatched.
+Click **Import** and pick a source directory containing per-frame PNGs. The app groups them into actions using the filename heuristic (see below), copies them into `sprites/<Action>/NNN.png`, and saves an updated `project.json`. Re-importing an action replaces its frames (stale files are removed). Files that do not match the heuristic are skipped.
+
+If no project is open when you import, the **source directory itself becomes the project** — `project.json` and `sprites/` are written into it in place. Open a project first if you want the frames copied elsewhere.
+
+The core import returns a summary (frames copied, actions added, unmatched files), but the MVP UI does not yet surface it (see Known limitations).
 
 **Filename heuristic** — the trailing integer in the stem is the frame number; everything before it (after stripping trailing `(`, `)`, `_`, `-`, spaces) is the action name. Examples:
 
@@ -93,9 +97,11 @@ Click **Export** and pick an output directory. Two files are written:
 - `sheet.png` — one row per action, frames left-to-right, uniform cells (max frame width × max frame height), each frame centered horizontally and bottom-aligned vertically, with 4 px padding between cells and at the edges.
 - `sheet.json` — a JSON atlas array. Each entry has `action`, `frame` (0-based column index), `x`, `y`, `w`, `h` (pixel coordinates of the frame within `sheet.png`).
 
-## Known limitation
+## Known limitations
 
-The frame strip uses `overflow_x_hidden`. GPUI 0.2.2 does not expose `overflow_x_scroll`, so with many frames the strip clips rather than scrolling.
+- The frame strip uses `overflow_x_hidden`. GPUI 0.2.2 does not expose `overflow_x_scroll`, so with many frames the strip clips rather than scrolling.
+- FPS changes are in-memory only and are not persisted to `project.json`.
+- Errors (a malformed `project.json` on Open, a failed copy on Import, a write failure on Export) and the import summary are currently not surfaced in the UI — a failed action appears to do nothing.
 
 ## Run & test
 

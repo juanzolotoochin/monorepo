@@ -7,7 +7,6 @@ rust_library(
     visibility = ["//salsa/tools/sprite_studio:__subpackages__"],
     deps = [
         "//salsa/tools/sprite_studio/core:sprite_studio_core",
-        "@crates//:anyhow",
         "@crates//:gpui",
     ],
 )
