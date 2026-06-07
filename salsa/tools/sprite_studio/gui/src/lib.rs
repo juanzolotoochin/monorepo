@@ -13,7 +13,25 @@ pub struct SpriteStudio {
 }
 
 impl SpriteStudio {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
+    pub fn new(cx: &mut Context<Self>) -> Self {
+        cx.spawn(async move |this, cx| loop {
+            // Re-evaluate the delay each tick so FPS/selection changes take effect.
+            let fps = this.read_with(cx, |this, _| this.state.current_fps()).unwrap_or(12).max(1);
+            gpui::Timer::after(std::time::Duration::from_millis(1000 / fps as u64)).await;
+            if this
+                .update(cx, |this, cx| {
+                    if this.state.playing {
+                        this.state.advance_frame();
+                        cx.notify();
+                    }
+                })
+                .is_err()
+            {
+                break;
+            }
+        })
+        .detach();
+
         Self { state: AppState::default() }
     }
 }
