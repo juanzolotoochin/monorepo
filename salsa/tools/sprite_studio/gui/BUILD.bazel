@@ -1,0 +1,13 @@
+load("@rules_rs//rs:rust_library.bzl", "rust_library")
+
+rust_library(
+    name = "sprite_studio_gui",
+    srcs = glob(["src/**/*.rs"]),
+    edition = "2021",
+    visibility = ["//salsa/tools/sprite_studio:__subpackages__"],
+    deps = [
+        "//salsa/tools/sprite_studio/core:sprite_studio_core",
+        "@crates//:anyhow",
+        "@crates//:gpui",
+    ],
+)
