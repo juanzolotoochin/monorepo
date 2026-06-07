@@ -2,7 +2,7 @@
 
 use crate::SpriteStudio;
 use gpui::{div, prelude::*, px, rgb, Context, Div, Stateful, Window};
-use sprite_studio_core::{import::import_directory, project::Project, resolver::HeuristicResolver};
+use sprite_studio_core::{import::import_directory, project::Project, resolver::HeuristicResolver, sheet::export as export_sheet};
 use std::path::PathBuf;
 
 fn button(id: &'static str, label: &str) -> Stateful<Div> {
@@ -28,7 +28,7 @@ pub fn render(app: &mut SpriteStudio, _window: &mut Window, cx: &mut Context<Spr
         .bg(rgb(0x252525))
         .child(button("open", "Open").on_click(cx.listener(|_, _, _, cx| open_project(cx))))
         .child(button("import", "Import").on_click(cx.listener(|_, _, _, cx| import(cx))))
-        .child(button("export", "Export")) // wired in Task 13
+        .child(button("export", "Export").on_click(cx.listener(|_, _, _, cx| export(cx))))
         .child(
             button("play", if playing { "Pause" } else { "Play" })
                 .on_click(cx.listener(|app, _, _, cx| {
@@ -80,6 +80,35 @@ fn open_project(cx: &mut Context<SpriteStudio>) {
                         this.state.set_project(project, dir);
                         cx.notify();
                     });
+                }
+            }
+        }
+    })
+    .detach();
+}
+
+/// Prompts for an output directory and writes sheet.png + sheet.json there.
+fn export(cx: &mut Context<SpriteStudio>) {
+    let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
+        files: false,
+        directories: true,
+        multiple: false,
+        prompt: None,
+    });
+    cx.spawn(async move |this, cx| {
+        if let Ok(Ok(Some(dirs))) = paths.await {
+            if let Some(out_dir) = dirs.into_iter().next() {
+                let data = this
+                    .read_with(cx, |this, _| {
+                        this.state
+                            .project
+                            .clone()
+                            .zip(this.state.project_dir.clone())
+                    })
+                    .ok()
+                    .flatten();
+                if let Some((project, project_dir)) = data {
+                    let _ = export_sheet(&project, &project_dir, &out_dir, 4);
                 }
             }
         }
