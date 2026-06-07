@@ -9,6 +9,7 @@ use std::path::Path;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AtlasEntry {
     pub action: String,
+    /// Column index of this frame within its action's row (0-based).
     pub frame: usize,
     pub x: u32,
     pub y: u32,
@@ -126,6 +127,17 @@ mod tests {
         assert_eq!((b0e.x, b0e.y, b0e.w, b0e.h), (2, 8, 2, 2));
         // The blue pixel actually landed there.
         assert_eq!(packed.image.get_pixel(2, 8), &image::Rgba([0, 0, 255, 255]));
+    }
+
+    #[test]
+    fn pack_empty_project_produces_empty_atlas_without_panicking() {
+        let dir = tempdir().unwrap();
+        let project = Project { version: 1, name: "t".into(), actions: vec![] };
+        let packed = pack(&project, dir.path(), 4).unwrap();
+        assert!(packed.atlas.is_empty());
+        // Degenerate but valid image dimensions (no panic).
+        let (w, h) = packed.image.dimensions();
+        assert!(w >= 1 && h >= 1);
     }
 
     #[test]

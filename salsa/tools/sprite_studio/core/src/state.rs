@@ -48,8 +48,9 @@ impl AppState {
 
     /// Pauses and jumps to a specific frame.
     pub fn scrub_to(&mut self, frame: usize) {
+        let n = self.selected().map(|a| a.frames.len()).unwrap_or(0);
         self.playing = false;
-        self.current_frame = frame;
+        self.current_frame = if n == 0 { 0 } else { frame.min(n - 1) };
     }
 
     pub fn current_fps(&self) -> u32 {
@@ -132,6 +133,14 @@ mod tests {
         s.scrub_to(2);
         assert!(!s.playing);
         assert_eq!(s.current_frame, 2);
+    }
+
+    #[test]
+    fn scrub_clamps_to_last_frame_when_out_of_range() {
+        let mut s = AppState::default();
+        s.set_project(project_with(&[3]), PathBuf::from("/p"));
+        s.scrub_to(99);
+        assert_eq!(s.current_frame, 2); // clamped to len-1
     }
 
     #[test]

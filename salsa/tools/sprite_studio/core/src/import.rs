@@ -57,6 +57,12 @@ pub fn import_directory(
 
     for (action_name, frames) in by_action {
         let action_dir = project_dir.join("sprites").join(&action_name);
+        // Clear any previously-imported frames so a re-import with fewer frames
+        // does not leave stale NNN.png files behind.
+        if action_dir.exists() {
+            std::fs::remove_dir_all(&action_dir)
+                .with_context(|| format!("clearing {}", action_dir.display()))?;
+        }
         std::fs::create_dir_all(&action_dir)
             .with_context(|| format!("creating {}", action_dir.display()))?;
 
@@ -97,6 +103,32 @@ mod tests {
     fn write_png(path: &Path) {
         let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 0, 0]));
         img.save(path).unwrap();
+    }
+
+    #[test]
+    fn reimport_with_fewer_frames_removes_stale_files() {
+        let proj = tempdir().unwrap();
+
+        // First import: 3 "Run" frames.
+        let src1 = tempdir().unwrap();
+        for name in ["Run (1).png", "Run (2).png", "Run (3).png"] {
+            write_png(&src1.path().join(name));
+        }
+        import_directory(proj.path(), src1.path(), &HeuristicResolver).unwrap();
+        assert!(proj.path().join("sprites/Run/002.png").exists());
+
+        // Re-import: only 2 "Run" frames.
+        let src2 = tempdir().unwrap();
+        for name in ["Run (1).png", "Run (2).png"] {
+            write_png(&src2.path().join(name));
+        }
+        import_directory(proj.path(), src2.path(), &HeuristicResolver).unwrap();
+
+        let project = Project::load(proj.path()).unwrap();
+        let run = project.actions.iter().find(|a| a.name == "Run").unwrap();
+        assert_eq!(run.frames.len(), 2);
+        // The stale third frame must be gone.
+        assert!(!proj.path().join("sprites/Run/002.png").exists());
     }
 
     #[test]
