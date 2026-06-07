@@ -9,6 +9,7 @@ edition = "2021"
 [dependencies]
 ferris-says = "0.3.1"
 piston_window = "0.131.0"
+gpui = "0.2.2"
 
 [lib]
 path = "bazel/cargo_manifest_lib.rs"
