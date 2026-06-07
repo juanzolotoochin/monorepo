@@ -4,7 +4,7 @@ module(
 )
 
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
-bazel_dep(name = "hermetic_cc_toolchain", version = "4.0.1")
+bazel_dep(name = "hermetic_cc_toolchain", version = "4.1.0")
 bazel_dep(name = "aspect_rules_js", version = "2.1.0")
 bazel_dep(name = "bazel_features", version = "1.23.0", repo_name = "proto_bazel_features")
 bazel_dep(name = "protobuf", version = "34.0.bcr.1", repo_name = "com_google_protobuf")
@@ -249,6 +249,33 @@ crate.annotation(
     crate = "khronos_api",
     patch_args = ["-p1"],
     patches = ["//bazel/patches:khronos_api.patch"],
+)
+
+# Several no_std-capable crates in gpui's font/text stack need their default
+# `std` feature, which from_cargo did not enable, leaving float math
+# (sqrt/sin_cos/tan/...) unavailable. Force `std` on each.
+crate.annotation(
+    crate = "zeno",
+    crate_features = ["std"],
+)
+crate.annotation(
+    crate = "skrifa",
+    crate_features = ["std"],
+)
+crate.annotation(
+    crate = "read-fonts",
+    crate_features = ["std"],
+)
+
+# gpui gates its inspector code on `any(feature = "inspector", debug_assertions)`,
+# so debug-config builds reference `derive_inspector_reflection`. That macro
+# lives in the gpui-macros proc-macro crate behind the same cfg, but proc-macro
+# crates build in the exec config (opt, debug_assertions off), so the macro is
+# absent unless its `inspector` feature is on. Enable it. (The crate is named
+# `gpui-macros`; gpui renames it to `gpui_macros`.)
+crate.annotation(
+    crate = "gpui-macros",
+    crate_features = ["inspector"],
 )
 use_repo(crate, "crates")
 
