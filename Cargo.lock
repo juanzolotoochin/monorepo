@@ -3491,9 +3491,14 @@ dependencies = [
 name = "monorepo-crates"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "ferris-says",
  "gpui",
+ "image 0.25.10",
  "piston_window",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
