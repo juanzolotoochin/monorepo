@@ -7,8 +7,8 @@ bazel_dep(name = "bazel_skylib", version = "1.9.0")
 bazel_dep(name = "hermetic_cc_toolchain", version = "4.0.1")
 bazel_dep(name = "aspect_rules_js", version = "2.1.0")
 bazel_dep(name = "bazel_features", version = "1.23.0", repo_name = "proto_bazel_features")
-bazel_dep(name = "protobuf", version = "29.0", repo_name = "com_google_protobuf")
-bazel_dep(name = "grpc", version = "1.69.0")
+bazel_dep(name = "protobuf", version = "34.0.bcr.1", repo_name = "com_google_protobuf")
+bazel_dep(name = "grpc", version = "1.81.0")
 bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "rules_pkg", version = "1.0.1")
 bazel_dep(name = "rules_cc", version = "0.0.17")
@@ -223,29 +223,33 @@ http_archive(
     url = "https://download.docker.com/linux/static/stable/x86_64/docker-25.0.4.tgz",
 )
 
-bazel_dep(name = "rules_rust", version = "0.56.0")
+bazel_dep(name = "rules_rs", version = "0.0.61")
 
-rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
-rust.toolchain(edition = "2021")
-use_repo(rust, "rust_toolchains")
-
-register_toolchains("@rust_toolchains//:all")
-
-crate = use_extension("@rules_rust//crate_universe:extension.bzl", "crate")
-crate.spec(
-    package = "ferris-says",
-    version = "0.3.1",
+rust_toolchains = use_extension("@rules_rs//rs/toolchains:module_extension.bzl", "toolchains")
+rust_toolchains.toolchain(
+    edition = "2021",
+    version = "1.92.0",
 )
-crate.spec(
-    package = "piston_window",
-    version = "0.131.0",
+use_repo(rust_toolchains, "default_rust_toolchains")
+
+register_toolchains("@default_rust_toolchains//:all")
+
+crate = use_extension("@rules_rs//rs:extensions.bzl", "crate")
+crate.from_cargo(
+    name = "crates",
+    cargo_lock = "//:Cargo.lock",
+    cargo_toml = "//:Cargo.toml",
+    platform_triples = [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "aarch64-apple-darwin",
+    ],
 )
 crate.annotation(
     crate = "khronos_api",
     patch_args = ["-p1"],
     patches = ["//bazel/patches:khronos_api.patch"],
 )
-crate.from_specs()
 use_repo(crate, "crates")
 
 CHROME_BUILD_CONTENT = """

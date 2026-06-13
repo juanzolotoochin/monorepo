@@ -1,0 +1,14 @@
+# Dependency manifest for Bazel's rules_rs crate.from_cargo resolver.
+# Bazel builds all first-party Rust code; cargo only resolves third-party
+# crate versions/checksums into Cargo.lock. Not built by cargo directly.
+[package]
+name = "monorepo-crates"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+ferris-says = "0.3.1"
+piston_window = "0.131.0"
+
+[lib]
+path = "bazel/cargo_manifest_lib.rs"

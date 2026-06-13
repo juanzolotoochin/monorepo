@@ -45,3 +45,18 @@ platform(
         "@platforms//cpu:arm64",
     ],
 )
+
+# Main-repo aliases for the rules_rs platforms (which carry os/cpu + the
+# @llvm//constraints/libc glibc constraint that rules_rs crate targets require).
+# Referenced from .bazelrc via //platforms:... so the label resolves in every
+# bazel subprocess context (e.g. the rust-analyzer generator), unlike the
+# @rules_rs apparent repo name.
+platform(
+    name = "rust_linux_x86_64",
+    parents = ["@rules_rs//rs/platforms:x86_64-unknown-linux-gnu"],
+)
+
+platform(
+    name = "rust_macos_arm64",
+    parents = ["@rules_rs//rs/platforms:aarch64-apple-darwin"],
+)
