@@ -75,3 +75,6 @@ yarn.lock
 
 auto.bazelrc
 /.superpowers/
+
+# AI-generated design specs and implementation plans (kept locally, not tracked)
+docs/superpowers/
