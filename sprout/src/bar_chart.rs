@@ -14,6 +14,8 @@ pub struct BarChart {
     x_label: Option<String>,
     y_label: Option<String>,
     theme: Theme,
+    y_max: Option<f64>,
+    tooltips: Option<Rc<Vec<String>>>,
     hovered: Option<usize>,
     geometry: Rc<RefCell<Option<crate::layout::Layout>>>,
 }
@@ -26,6 +28,8 @@ impl BarChart {
             x_label: None,
             y_label: None,
             theme: Theme::default(),
+            y_max: None,
+            tooltips: None,
             hovered: None,
             geometry: Rc::new(RefCell::new(None)),
         }
@@ -60,6 +64,19 @@ impl BarChart {
         self
     }
 
+    /// Pin the Y axis maximum (e.g. to keep multiple charts on one scale).
+    pub fn y_max(mut self, max: f64) -> Self {
+        self.y_max = Some(max);
+        self
+    }
+
+    /// Per-bar tooltip text (newline-separated for multiple lines). Bars without
+    /// an entry fall back to the default "label: value".
+    pub fn tooltips(mut self, tips: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.tooltips = Some(Rc::new(tips.into_iter().map(Into::into).collect()));
+        self
+    }
+
     pub fn theme(mut self, theme: Theme) -> Self {
         self.theme = theme;
         self
@@ -77,10 +94,12 @@ impl Render for BarChart {
         // Captured by value into the 'static canvas closures.
         let data = self.data.clone();
         let theme = self.theme;
+        let y_max = self.y_max;
         let hovered = self.hovered;
         let title = self.title.clone();
         let x_label = self.x_label.clone();
         let y_label = self.y_label.clone();
+        let tooltips = self.tooltips.clone();
 
         let prepaint_data = data.clone();
         let prepaint_geometry = self.geometry.clone();
@@ -103,11 +122,12 @@ impl Render for BarChart {
             .child(
                 canvas(
                     move |area, _window, _cx| {
-                        let layout = crate::layout::Layout::compute(area, &prepaint_data, &theme);
+                        let layout = crate::layout::Layout::compute(area, &prepaint_data, &theme, y_max);
                         *prepaint_geometry.borrow_mut() = Some(layout.clone());
                         layout
                     },
                     move |_area, layout, window, cx| {
+                        let tips: Option<&[String]> = tooltips.as_deref().map(|v| v.as_slice());
                         crate::render::paint(
                             &layout,
                             title.as_deref(),
@@ -116,6 +136,7 @@ impl Render for BarChart {
                             &theme,
                             hovered,
                             &data,
+                            tips,
                             window,
                             cx,
                         );

@@ -1,0 +1,20 @@
+load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
+load("@rules_rs//rs:rust_test.bzl", "rust_test")
+
+rust_binary(
+    name = "energy_viz",
+    srcs = glob(["src/**/*.rs"]),
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//sprout:sprout",
+        "@crates//:gpui",
+    ],
+)
+
+rust_test(
+    name = "data_test",
+    srcs = ["src/data.rs"],
+    edition = "2021",
+    crate_root = "src/data.rs",
+)
