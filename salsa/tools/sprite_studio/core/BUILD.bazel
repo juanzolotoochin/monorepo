@@ -1,0 +1,22 @@
+load("@rules_rs//rs:rust_library.bzl", "rust_library")
+load("@rules_rs//rs:rust_test.bzl", "rust_test")
+
+rust_library(
+    name = "sprite_studio_core",
+    srcs = glob(["src/**/*.rs"]),
+    edition = "2021",
+    visibility = ["//salsa/tools/sprite_studio:__subpackages__"],
+    deps = [
+        "@crates//:anyhow",
+        "@crates//:image",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "core_test",
+    crate = ":sprite_studio_core",
+    edition = "2021",
+    deps = ["@crates//:tempfile"],
+)

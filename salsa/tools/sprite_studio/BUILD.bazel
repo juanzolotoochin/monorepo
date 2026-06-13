@@ -1,0 +1,12 @@
+load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
+
+rust_binary(
+    name = "sprite_studio",
+    srcs = ["src/main.rs"],
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//salsa/tools/sprite_studio/gui:sprite_studio_gui",
+        "@crates//:gpui",
+    ],
+)
