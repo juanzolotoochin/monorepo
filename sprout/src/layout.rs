@@ -22,7 +22,12 @@ impl Layout {
     }
 
     /// Compute geometry for `area` (absolute window pixels), `bars`, and `theme`.
-    pub fn compute(area: Bounds<Pixels>, bars: &[Bar], theme: &Theme) -> Layout {
+    pub fn compute(
+        area: Bounds<Pixels>,
+        bars: &[Bar],
+        theme: &Theme,
+        y_max_override: Option<f64>,
+    ) -> Layout {
         let plot_area = bounds(
             point(area.origin.x + theme.margin_left, area.origin.y + theme.margin_top),
             size(
@@ -37,7 +42,8 @@ impl Layout {
         let left: f32 = plot_area.origin.x.into();
 
         let data_max = bars.iter().map(|b| b.value).fold(0.0_f64, f64::max);
-        let ticks = nice_ticks(data_max, theme.y_tick_count);
+        let basis = y_max_override.unwrap_or(data_max);
+        let ticks = nice_ticks(basis, theme.y_tick_count);
         let y_max = *ticks.last().unwrap_or(&1.0);
 
         let y_scale = LinearScale::new(y_max, plot_h as f64);
@@ -45,7 +51,7 @@ impl Layout {
 
         let mut bar_rects = Vec::with_capacity(bars.len());
         for (i, b) in bars.iter().enumerate() {
-            let h = y_scale.pixels(b.value) as f32;
+            let h = y_scale.pixels(b.value).min(plot_h as f64) as f32;
             let x = left + band.left(i) as f32;
             bar_rects.push(bounds(
                 point(px(x), px(baseline - h)),
@@ -89,7 +95,7 @@ mod tests {
     #[test]
     fn plot_area_honors_margins() {
         let t = Theme::default();
-        let l = Layout::compute(at(0., 0., 400., 300.), &sample(), &t);
+        let l = Layout::compute(at(0., 0., 400., 300.), &sample(), &t, None);
         assert_eq!(l.plot_area.origin.x, t.margin_left);
         assert_eq!(l.plot_area.origin.y, t.margin_top);
         assert_eq!(l.plot_area.size.width, px(400.) - t.margin_left - t.margin_right);
@@ -98,7 +104,7 @@ mod tests {
 
     #[test]
     fn one_bar_rect_per_datum_on_baseline() {
-        let l = Layout::compute(at(0., 0., 400., 300.), &sample(), &Theme::default());
+        let l = Layout::compute(at(0., 0., 400., 300.), &sample(), &Theme::default(), None);
         assert_eq!(l.bars.len(), 2);
         let baseline = l.plot_area.origin.y + l.plot_area.size.height;
         for b in &l.bars {
@@ -109,7 +115,7 @@ mod tests {
 
     #[test]
     fn bar_at_finds_and_misses() {
-        let l = Layout::compute(at(0., 0., 400., 300.), &sample(), &Theme::default());
+        let l = Layout::compute(at(0., 0., 400., 300.), &sample(), &Theme::default(), None);
         let b = l.bars[1];
         let inside = point(b.origin.x + b.size.width / 2., b.origin.y + b.size.height / 2.);
         assert_eq!(l.bar_at(inside), Some(1));
@@ -118,8 +124,32 @@ mod tests {
 
     #[test]
     fn empty_data_has_no_bars_but_has_ticks() {
-        let l = Layout::compute(at(0., 0., 400., 300.), &[], &Theme::default());
+        let l = Layout::compute(at(0., 0., 400., 300.), &[], &Theme::default(), None);
         assert!(l.bars.is_empty());
         assert!(!l.y_ticks.is_empty());
+    }
+
+    #[test]
+    fn y_max_override_fixes_tick_basis() {
+        let small = vec![Bar { label: "a".into(), value: 1.0 }];
+        let big = vec![Bar { label: "a".into(), value: 9.0 }];
+        let l1 = Layout::compute(at(0., 0., 400., 300.), &small, &Theme::default(), Some(10.0));
+        let l2 = Layout::compute(at(0., 0., 400., 300.), &big, &Theme::default(), Some(10.0));
+        let t1: Vec<f64> = l1.y_ticks.iter().map(|(v, _)| *v).collect();
+        let t2: Vec<f64> = l2.y_ticks.iter().map(|(v, _)| *v).collect();
+        assert_eq!(t1, t2); // same override => identical ticks regardless of data
+        assert!(!t1.is_empty());
+    }
+
+    #[test]
+    fn bar_value_above_y_max_clamps_to_plot() {
+        // value 20 with y_max override 10 => bar fills the plot height, top at plot top.
+        let bars = vec![Bar { label: "a".into(), value: 20.0 }];
+        let l = Layout::compute(at(0., 0., 400., 300.), &bars, &Theme::default(), Some(10.0));
+        let b = l.bars[0];
+        let top = l.plot_area.origin.y;
+        let h = l.plot_area.size.height;
+        assert!((b.size.height - h).abs() < px(0.5));
+        assert!((b.origin.y - top).abs() < px(0.5));
     }
 }

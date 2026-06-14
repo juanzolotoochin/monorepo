@@ -23,6 +23,7 @@ pub fn paint(
     theme: &Theme,
     hovered: Option<usize>,
     bars: &[Bar],
+    tooltips: Option<&[String]>,
     window: &mut Window,
     cx: &mut gpui::App,
 ) {
@@ -80,24 +81,34 @@ pub fn paint(
         draw(window, cx, y, plot.origin.x - px(40.), plot.origin.y - px(22.), Align::Left, theme.label, theme.font_size);
     }
 
-    // Tooltip for the hovered bar.
+    // Tooltip for the hovered bar (caller text if provided, else "label: value").
     if let Some(i) = hovered {
         if let (Some(rect), Some(bar)) = (layout.bars.get(i), bars.get(i)) {
-            let text = format!("{}: {:.2}", bar.label, bar.value);
-            let w = measure(window, &text, theme.font_size);
-            let origin = point(rect.origin.x, rect.origin.y - line_height - px(8.));
-            let tip = bounds(origin, size(w + px(10.), line_height + px(6.)));
+            let text = tooltips
+                .and_then(|t| t.get(i))
+                .cloned()
+                .unwrap_or_else(|| format!("{}: {:.2}", bar.label, bar.value));
+            let lines: Vec<&str> = text.lines().collect();
+            let n = lines.len().max(1) as f32;
+            let max_w = lines
+                .iter()
+                .map(|l| measure(window, l, theme.font_size))
+                .fold(px(0.), |a, b| if b > a { b } else { a });
+            let origin = point(rect.origin.x, rect.origin.y - line_height * n - px(8.));
+            let tip = bounds(origin, size(max_w + px(10.), line_height * n + px(6.)));
             window.paint_quad(fill(tip, theme.tooltip_bg));
-            draw(
-                window,
-                cx,
-                &text,
-                origin.x + px(5.),
-                origin.y + px(3.),
-                Align::Left,
-                theme.tooltip_text,
-                theme.font_size,
-            );
+            for (j, l) in lines.iter().enumerate() {
+                draw(
+                    window,
+                    cx,
+                    l,
+                    origin.x + px(5.),
+                    origin.y + px(3.) + line_height * j as f32,
+                    Align::Left,
+                    theme.tooltip_text,
+                    theme.font_size,
+                );
+            }
         }
     }
 }
