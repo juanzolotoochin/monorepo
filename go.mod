@@ -1,22 +1,24 @@
 module github.com/juanique/monorepo
 
-go 1.24.0
+go 1.24.12
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.38.0
-	github.com/bazelbuild/bazel-gazelle v0.47.0
+	github.com/bazelbuild/bazel-gazelle v0.54.0
+	github.com/bazelbuild/rules_go v0.63.0
 	github.com/docker/docker v25.0.2+incompatible
 	github.com/google/go-github/v38 v38.1.0
 	github.com/spf13/cobra v1.7.0
 	github.com/stretchr/testify v1.11.1
+	golang.org/x/image v0.18.0
 	golang.org/x/oauth2 v0.32.0
 )
 
 require (
 	github.com/Microsoft/go-winio v0.4.14 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
+	github.com/bazel-contrib/bazel-gazelle/v2 v2.0.0-3 // indirect
 	github.com/bazelbuild/buildtools v0.0.0-20250930140053-2eb4fccefb52 // indirect
-	github.com/bazelbuild/rules_go v0.55.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/containerd/log v0.1.0 // indirect
@@ -52,9 +54,8 @@ require (
 	go.opentelemetry.io/otel/sdk v1.39.0 // indirect
 	go.opentelemetry.io/otel/trace v1.39.0 // indirect
 	golang.org/x/crypto v0.44.0 // indirect
-	golang.org/x/image v0.18.0 // indirect
 	golang.org/x/mod v0.29.0 // indirect
-	golang.org/x/sync v0.16.0 // indirect
+	golang.org/x/sync v0.18.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	golang.org/x/tools/go/vcs v0.1.0-deprecated // indirect

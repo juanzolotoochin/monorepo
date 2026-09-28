@@ -1,0 +1,50 @@
+# Link-time copies of the X11/xkb shared libraries that gpui's Linux backend
+# links against (via the xkbcommon and x11rb crates). The @llvm toolchain has
+# no sysroot, so they are taken from the pinned Debian 13 packages. Each library
+# is exposed as lib<name>.so so that the crates' `#[link(name = "<name>")]`
+# resolves; the embedded SONAME (e.g. libxcb.so.1) is unchanged, so at runtime
+# the binary loads the system's copy.
+load("@rules_cc//cc:cc_import.bzl", "cc_import")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+_LIBS = {
+    # name: (debian package, shared object inside the package)
+    "xcb": ("libxcb1", "libxcb.so.1"),
+    "xkbcommon": ("libxkbcommon0", "libxkbcommon.so.0"),
+    "xkbcommon-x11": ("libxkbcommon-x11-0", "libxkbcommon-x11.so.0"),
+}
+
+[
+    genrule(
+        name = "lib%s_so" % name,
+        srcs = ["@debian13//%s:data" % package],
+        outs = ["lib/lib%s.so" % name],
+        # The versioned name is a symlink in the package; -L follows it.
+        cmd = "$(BSDTAR_BIN) -xzf $< -C $(RULEDIR) -s ',.*/,lib/,' --include './usr/lib/*/%s*' && " % so +
+              "cp -L $(RULEDIR)/lib/%s $@.tmp && mv $@.tmp $@" % so,
+        toolchains = ["@bsd_tar_toolchains//:resolved_toolchain"],
+    )
+    for name, (package, so) in _LIBS.items()
+]
+
+[
+    cc_import(
+        name = "%s_import" % name,
+        shared_library = ":lib%s_so" % name,
+    )
+    for name in _LIBS
+]
+
+# Debian 13 builds these against glibc 2.41, newer than the glibc 2.28 we
+# target, so lld would reject their references to newer glibc symbols. They are
+# only link-time stand-ins for the host's libraries, so allow that.
+[
+    cc_library(
+        name = name,
+        linkopts = ["-Wl,--allow-shlib-undefined"],
+        deps = [":%s_import" % name],
+    )
+    for name in _LIBS
+]

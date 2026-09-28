@@ -1,6 +1,6 @@
-load("@rules_pkg//:pkg.bzl", "pkg_tar")
 load("@rules_oci//oci:defs.bzl", "oci_image")
-load("@aspect_bazel_lib//lib:tar.bzl", "tar")
+load("@rules_pkg//:pkg.bzl", "pkg_tar")
+load("@tar.bzl//tar:tar.bzl", "tar")
 
 def image(name, binary = None, tars = [], base = "@distroless_base", **kwargs):
     tars = list(tars)

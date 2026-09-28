@@ -7,8 +7,8 @@ package(default_visibility = ["//visibility:public"])
 cacerts(
     name = "cacerts",
     package = select({
-        "@platforms//cpu:arm64": "@debian12//ca-certificates/arm64:data",
-        "@platforms//cpu:x86_64": "@debian12//ca-certificates/amd64:data",
+        "@platforms//cpu:arm64": "@debian13//ca-certificates/arm64:data",
+        "@platforms//cpu:x86_64": "@debian13//ca-certificates/amd64:data",
     }),
 )
 
@@ -44,13 +44,13 @@ pkg_mklink(
 pkg_mklink(
     name = "usr_bin_python_symlink",
     link_name = "/usr/bin/python",
-    target = "/usr/bin/python3.11",
+    target = "/usr/bin/python3.13",
 )
 
 pkg_mklink(
     name = "usr_bin_python3_symlink",
     link_name = "/usr/bin/python3",
-    target = "/usr/bin/python3.11",
+    target = "/usr/bin/python3.13",
 )
 
 pkg_mklink(

@@ -1,4 +1,4 @@
-load("//base_images/debian:debian12.bzl", "debian_image")
+load("//base_images/debian:debian13.bzl", "debian_image")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -6,26 +6,26 @@ debian_image(
     name = "debian",
     debian_packages = [
         # core packages
-        "@debian12//ncurses-base",
-        "@debian12//libncurses6",
-        "@debian12//bash",
-        "@debian12//dpkg",
-        "@debian12//libstdc++6",
-        "@debian12//curl",
-        "@debian12//coreutils",
-        "@debian12//base-files",
-        "@debian12//netbase",
-        "@debian12//tzdata",
-        "@debian12//ca-certificates",
-        "@debian12//libc6",
-        "@debian12//libssl3",
-        "@debian12//openssl",
-        "@debian12//libgomp1",
+        "@debian13//ncurses-base",
+        "@debian13//libncurses6",
+        "@debian13//bash",
+        "@debian13//dpkg",
+        "@debian13//libstdc++6",
+        "@debian13//curl",
+        "@debian13//coreutils",
+        "@debian13//base-files",
+        "@debian13//netbase",
+        "@debian13//tzdata",
+        "@debian13//ca-certificates",
+        "@debian13//libc6",
+        "@debian13//libssl3t64",
+        "@debian13//openssl",
+        "@debian13//libgomp1",
 
         # Random utilities
-        "@debian12//grep",
-        "@debian12//sed",
-        "@debian12//findutils",
+        "@debian13//grep",
+        "@debian13//sed",
+        "@debian13//findutils",
     ],
     tars = [
         "//base_images/debian/core:passwd",

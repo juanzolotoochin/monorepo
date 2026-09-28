@@ -2,15 +2,15 @@ load("@rules_oci//oci:defs.bzl", "oci_image")
 load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
 
 LIBPANGO_PACKAGES = [
-    "@debian12//fonts-freefont-ttf",
-    "@debian12//fonts-noto",
-    "@debian12//fonts-terminus",
-    "@debian12//libcairo2",
-    "@debian12//fontconfig",
-    "@debian12//libpango-1.0-0",
-    "@debian12//libharfbuzz0b",
-    "@debian12//libpangoft2-1.0-0",
-    "@debian12//libpangocairo-1.0-0",
+    "@debian13//fonts-freefont-ttf",
+    "@debian13//fonts-noto",
+    "@debian13//fonts-terminus",
+    "@debian13//libcairo2",
+    "@debian13//fontconfig",
+    "@debian13//libpango-1.0-0",
+    "@debian13//libharfbuzz0b",
+    "@debian13//libpangoft2-1.0-0",
+    "@debian13//libpangocairo-1.0-0",
 ]
 
 def debian_image(name, debian_packages, tars = [], base = None, **kwargs):

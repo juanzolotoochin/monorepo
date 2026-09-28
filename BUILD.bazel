@@ -1,11 +1,10 @@
-load("@aspect_bazel_lib//lib:copy_to_bin.bzl", "copy_to_bin")
+load("@aspect_rules_js//js:defs.bzl", "js_library")
 load("@aspect_rules_ts//ts:defs.bzl", "ts_config")
 load("@bazel_gazelle//:def.bzl", "DEFAULT_LANGUAGES", "gazelle", "gazelle_binary")
 load("@buildifier_prebuilt//:rules.bzl", "buildifier")
 load("@npm//:defs.bzl", "npm_link_all_packages")
 load("@npm//:vite/package_json.bzl", "bin")
 load("@pip_deps//:requirements.bzl", "all_whl_requirements")
-load("@rules_apko//apko:defs.bzl", "apko_bazelrc")
 load("@rules_python//python:pip.bzl", "compile_pip_requirements")
 load("@rules_python_gazelle_plugin//manifest:defs.bzl", "gazelle_python_manifest")
 load("@rules_python_gazelle_plugin//modules_mapping:def.bzl", "modules_mapping")
@@ -17,8 +16,6 @@ exports_files([
     "tsconfig.json",
     "package.json",
 ])
-
-apko_bazelrc()
 
 bin.vite_binary(
     name = "vite.bin",
@@ -59,11 +56,11 @@ compile_pip_requirements(
 # resolve as compatible under remote execution, then layer on the RBE container.
 platform(
     name = "docker_image_platform",
-    parents = ["@rules_rs//rs/platforms:x86_64-unknown-linux-gnu"],
     exec_properties = {
         "OSFamily": "Linux",
         "container-image": "docker://docker.io/juanzolotoochin/ubuntu-build-v2@sha256:4a898ae754ac575962392232dc0154937427bbd52f5b79cd65c0992b2ed6cc84",
     },
+    parents = ["@rules_rs//rs/platforms:x86_64-unknown-linux-gnu"],
 )
 
 buildifier(
@@ -114,7 +111,7 @@ npm_link_all_packages(
     name = "node_modules",
 )
 
-copy_to_bin(
+js_library(
     name = "package_json",
     srcs = ["package.json"],
     visibility = ["//visibility:public"],
