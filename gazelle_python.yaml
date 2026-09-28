@@ -6,55 +6,133 @@
 ---
 manifest:
   modules_mapping:
+    PIL: pillow
+    aiofiles: aiofiles
+    aiohappyeyeballs: aiohappyeyeballs
+    aiohttp: aiohttp
+    aiosignal: aiosignal
+    altair: altair
+    annotated_doc: annotated_doc
+    anyio: anyio
     astroid: astroid
+    asyncer: asyncer
+    attr: attrs
+    attrs: attrs
     certifi: certifi
     cffi: cffi
     charset_normalizer: charset_normalizer
     click: click
     colorama: colorama
     commonmark: commonmark
+    contourpy: contourpy
+    cv2: opencv_python_headless
+    cycler: cycler
+    dateutil: python_dateutil
     debugpy: debugpy
     deprecated: Deprecated
     dill: dill
     docker: docker
+    fastapi: fastapi
+    ffmpy: ffmpy
+    filelock: filelock
+    filetype: filetype
+    flatbuffers: flatbuffers
+    fontTools: fonttools
+    frozenlist: frozenlist
+    fsspec: fsspec
     git: GitPython
     gitdb: gitdb
     github: PyGithub
     google.protobuf: protobuf
+    gradio: gradio
+    gradio_client: gradio_client
     grpc: grpcio
     grpc_reflection: grpcio_reflection
     grpclib: grpclib
+    h11: h11
     h2: h2
+    hf_xet: hf_xet
     hpack: hpack
+    httpcore: httpcore
+    httpx: httpx
+    huggingface_hub: huggingface_hub
     humanize: humanize
     hyperframe: hyperframe
     idna: idna
+    imageio: imageio
+    importlib_resources: importlib_resources
     iniconfig: iniconfig
     isort: isort
+    jinja2: jinja2
+    jsonschema: jsonschema
+    jsonschema_specifications: jsonschema_specifications
     jwt: PyJWT
+    kiwisolver: kiwisolver
+    lazy_loader: lazy_loader
+    llvmlite: llvmlite
+    markupsafe: MarkupSafe
+    matplotlib: matplotlib
     mccabe: mccabe
+    mpl_toolkits.axes_grid1: matplotlib
+    mpl_toolkits.axisartist: matplotlib
+    mpl_toolkits.mplot3d: matplotlib
     multidict: multidict
+    multipart: python_multipart
     nacl: PyNaCl
+    narwhals: narwhals
+    networkx: networkx
+    numba: numba
+    numpy: numpy
+    onnxruntime: onnxruntime
+    opencv_python_headless.libs.libopenblas-r0-f650aae0: opencv_python_headless
+    orjson: orjson
     packaging: packaging
+    pandas: pandas
     platformdirs: platformdirs
     pluggy: pluggy
+    pooch: pooch
+    propcache: propcache
     psycopg2: psycopg2_binary
     py: pytest
     pycparser: pycparser
     pydantic: pydantic
+    pydub: pydub
     pygments: pygments
+    pylab: matplotlib
     pylint: pylint
+    pymatting: pymatting
+    pyparsing: pyparsing
     pytest: pytest
     pytest_pylint: pytest_pylint
+    python_multipart: python_multipart
+    pytz: pytz
+    referencing: referencing
+    rembg: rembg
     requests: requests
     rich: rich
+    rpds: rpds_py
+    scipy: scipy
+    semantic_version: semantic_version
+    shellingham: shellingham
+    six: six
+    skimage: scikit_image
     smmap: smmap
-    toml: toml
+    sniffio: sniffio
+    starlette: starlette
+    tifffile: tifffile
     tomlkit: tomlkit
+    tqdm: tqdm
+    typer: typer
     typing_extensions: typing_extensions
+    tzdata: tzdata
     unidecode: Unidecode
     urllib3: urllib3
+    uvicorn: uvicorn
+    watchdog: watchdog
+    websockets: websockets
     wrapt: wrapt
+    yaml: pyyaml
+    yarl: yarl
   pip_repository:
     name: pip_deps
-integrity: 14aa16e0b8dffb2222cc6267f890139deeea69b5a6625ca09ac0f7a71239a1b1
+integrity: 7d6144a76f3c92376c4350c051f7f11cfdfbab9dd1375b08ddf34133b51f5af6

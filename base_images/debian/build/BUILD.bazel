@@ -2,7 +2,7 @@ load("@rules_distroless//distroless:defs.bzl", "passwd")
 load("@rules_oci//oci:defs.bzl", "oci_push")
 load("@rules_pkg//pkg:mappings.bzl", "pkg_mklink")
 load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
-load("//base_images/debian:debian12.bzl", "debian_image")
+load("//base_images/debian:debian13.bzl", "debian_image")
 load("//bazel/oci:defs.bzl", "image")
 
 package(default_visibility = ["//visibility:public"])
@@ -24,13 +24,13 @@ passwd(
 pkg_mklink(
     name = "usr_bin_python_symlink",
     link_name = "/usr/bin/python",
-    target = "/usr/bin/python3.11",
+    target = "/usr/bin/python3.13",
 )
 
 pkg_mklink(
     name = "usr_bin_python3_symlink",
     link_name = "/usr/bin/python3",
-    target = "/usr/bin/python3.11",
+    target = "/usr/bin/python3.13",
 )
 
 pkg_mklink(
@@ -73,41 +73,40 @@ pkg_tar(
 debian_image(
     name = "build_base",
     debian_packages = [
-        "@debian12//thin-provisioning-tools",
-        "@debian12//fuse-overlayfs",
-        "@debian12//iptables",
-        "@debian12//libmpfr6",
-        "@debian12//libsigsegv2",
-        "@debian12//grep",
-        "@debian12//git",
-        "@debian12//findutils",
-        "@debian12//gawk",
-        "@debian12//diffutils",
-        "@debian12//sed",
-        "@debian12//xz-utils",
-        "@debian12//liblz4-1",
-        "@debian12//libzstd-dev",
-        "@debian12//coreutils",
-        "@debian12//bash",
+        "@debian13//thin-provisioning-tools",
+        "@debian13//fuse-overlayfs",
+        "@debian13//iptables",
+        "@debian13//libmpfr6",
+        "@debian13//libsigsegv2",
+        "@debian13//grep",
+        "@debian13//git",
+        "@debian13//findutils",
+        "@debian13//gawk",
+        "@debian13//diffutils",
+        "@debian13//sed",
+        "@debian13//xz-utils",
+        "@debian13//liblz4-1",
+        "@debian13//libzstd-dev",
+        "@debian13//coreutils",
+        "@debian13//bash",
         # required to replicate distroless/static
-        "@debian12//base-files",
-        "@debian12//netbase",
-        "@debian12//tzdata",
-        "@debian12//ca-certificates",
+        "@debian13//base-files",
+        "@debian13//netbase",
+        "@debian13//tzdata",
+        "@debian13//ca-certificates",
         # required to replicate distroless/base
-        "@debian12//libc6",
-        "@debian12//libssl3",
-        "@debian12//openssl",
+        "@debian13//libc6",
+        "@debian13//libssl3t64",
+        "@debian13//openssl",
         # required to replicate distroless/cc
-        "@debian12//libgcc-s1",
-        "@debian12//libgomp1",
-        "@debian12//libstdc++6",
+        "@debian13//libgcc-s1",
+        "@debian13//libgomp1",
+        "@debian13//libstdc++6",
         # required to replicate distroless/python
-        "@debian12//dash",
-        "@debian12//libc-bin",
-        "@debian12//python3.11-minimal",
-        "@debian12//libpython3.11-stdlib",
-        "@debian12//python3-distutils",
+        "@debian13//dash",
+        "@debian13//libc-bin",
+        "@debian13//python3.13-minimal",
+        "@debian13//libpython3.13-stdlib",
     ],
     env = {"LANG": "C.UTF-8"},
 )
@@ -116,10 +115,10 @@ debian_image(
     name = "build_base_cpp",
     base = ":build_base",
     debian_packages = [
-        "@debian12//autotools-dev",
-        "@debian12//automake",
-        "@debian12//binutils",
-        "@debian12//g++",
+        "@debian13//autotools-dev",
+        "@debian13//automake",
+        "@debian13//binutils",
+        "@debian13//g++",
     ],
 )
 
