@@ -42,7 +42,7 @@ def demo():
     # Prove that the executable does not launch utilities or read ALSA config.
     env = dict(os.environ, PATH="/nonexistent", ALSA_CONFIG_PATH="/nonexistent")
     process = subprocess.Popen(
-        [str(BINARY), "--demo"], stdin=slave, stdout=slave, stderr=slave, env=env
+        [str(BINARY), "--demo", "--silent"], stdin=slave, stdout=slave, stderr=slave, env=env
     )
     try:
         read_until(master, b"Held: C4(80)  E4(92)  G4(104)")

@@ -1,6 +1,7 @@
 use keyboard::{Event, InputSelection, Keyboard};
+use piano::Piano;
 use std::ffi::{c_char, c_int, c_void, CStr};
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::time::{Duration, Instant};
 
 // All FFI is confined to wrappers below. Native handles stay on this thread;
@@ -103,6 +104,7 @@ impl Midi {
         keyboard: &mut Keyboard,
         selection: &mut InputSelection,
         ports: &[Port],
+        piano: Option<&Piano>,
     ) -> Result<bool, String> {
         let mut changed = false;
         // Bound each batch so MIDI clocks or a noisy device cannot starve input.
@@ -131,7 +133,7 @@ impl Midi {
                                 }
                             }
                         }
-                        keyboard.apply(event);
+                        apply_event(keyboard, piano, event)?;
                         changed = true;
                     }
                 }
@@ -180,33 +182,64 @@ impl Drop for Terminal {
 const HELP: &str = "MIDI Keys - ASCII piano for Linux MIDI input
 
 Usage: midi_keys [--list | --port CLIENT:PORT | --demo | --snapshot]
+                 [--silent]
+       midi_keys --render-demo FILE.wav
 
   no options    Press a key on your MIDI keyboard to select its input
   --list        List available MIDI input ports
   --port 24:0   Connect to a specific input (see --list)
-  --demo        Animate example chords without a MIDI device
+  --demo        Play example piano chords without a MIDI device
   --snapshot    Print a demo frame and exit; no terminal or device required
+  --silent      Visualize only, without loading samples or opening audio
+  --render-demo FILE.wav  Render a piano preview without an audio device
 
-Controls: [ / ] octave, f follow notes, space clear, q / Ctrl-C quit
+Controls: [ / ] octave, f follow, space panic, -/+ volume, m mute, q quit
 Middle C is C4 (MIDI 60). Highlights show held keys, not sustain pedal state.
 Use a terminal at least 64 columns by 23 rows.";
 
-fn demo_chord(keyboard: &mut Keyboard, step: usize) {
+fn apply_event(keyboard: &mut Keyboard, piano: Option<&Piano>, event: Event) -> Result<(), String> {
+    if let Some(piano) = piano {
+        piano.event(event)?;
+    }
+    keyboard.apply(event);
+    Ok(())
+}
+
+fn demo_chord(keyboard: &mut Keyboard, piano: Option<&Piano>, step: usize) -> Result<(), String> {
     const CHORDS: [[usize; 3]; 4] = [[60, 64, 67], [62, 65, 69], [61, 65, 68], [59, 62, 67]];
-    keyboard.clear();
-    if step % 2 == 0 {
-        for (index, &note) in CHORDS[(step / 2) % CHORDS.len()].iter().enumerate() {
-            keyboard.apply(Event::Note {
-                channel: 0,
-                note,
-                velocity: 80 + index as u8 * 12,
-            });
+    for note in 0..128 {
+        if keyboard.velocity(note) > 0 {
+            apply_event(
+                keyboard,
+                piano,
+                Event::Note {
+                    channel: 0,
+                    note,
+                    velocity: 0,
+                },
+            )?;
         }
     }
+    if step % 2 == 0 {
+        for (index, &note) in CHORDS[(step / 2) % CHORDS.len()].iter().enumerate() {
+            apply_event(
+                keyboard,
+                piano,
+                Event::Note {
+                    channel: 0,
+                    note,
+                    velocity: 80 + index as u8 * 12,
+                },
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn run() -> Result<(), String> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let silent = args.iter().any(|arg| arg == "--silent");
+    args.retain(|arg| arg != "--silent");
     let option = args.first().map(String::as_str).unwrap_or("");
     if matches!(option, "--help" | "-h") && args.len() == 1 {
         println!("{HELP}");
@@ -215,7 +248,7 @@ fn run() -> Result<(), String> {
     let valid = match option {
         "" => args.is_empty(),
         "--list" | "--demo" | "--snapshot" => args.len() == 1,
-        "--port" => args.len() == 2,
+        "--port" | "--render-demo" => args.len() == 2,
         _ => false,
     };
     if !valid {
@@ -223,10 +256,27 @@ fn run() -> Result<(), String> {
     }
     let mut keyboard = Keyboard::default();
     if option == "--snapshot" {
-        demo_chord(&mut keyboard, 0);
+        demo_chord(&mut keyboard, None, 0)?;
         print!("{}", keyboard.render("Demo | C major", false));
         return Ok(());
     }
+    if option == "--render-demo" {
+        eprintln!("Loading Salamander Grand Piano...");
+        piano::render_demo(std::path::Path::new(&args[1]))?;
+        println!("Saved piano preview to {}", args[1]);
+        return Ok(());
+    }
+    if option != "--list" && (!io::stdin().is_terminal() || !io::stdout().is_terminal()) {
+        return Err("An interactive terminal is required. Use --snapshot or --render-demo for noninteractive output.".into());
+    }
+    let piano = if silent || option == "--list" {
+        None
+    } else {
+        eprintln!("Loading Salamander Grand Piano...");
+        Some(Piano::start()?)
+    };
+    let mut volume = 0.6f32;
+    let mut muted = false;
     let midi = if option == "--demo" {
         None
     } else {
@@ -283,9 +333,9 @@ fn run() -> Result<(), String> {
     let mut escape_sequence = 0;
     loop {
         if let Some(midi) = &midi {
-            dirty |= midi.drain(&mut keyboard, &mut selection, &ports)?;
+            dirty |= midi.drain(&mut keyboard, &mut selection, &ports, piano.as_ref())?;
         } else if Instant::now() >= next_demo {
-            demo_chord(&mut keyboard, step);
+            demo_chord(&mut keyboard, piano.as_ref(), step)?;
             step += 1;
             next_demo = Instant::now() + Duration::from_millis(700);
             dirty = true;
@@ -310,7 +360,14 @@ fn run() -> Result<(), String> {
                 } else {
                     "Press a key on your MIDI keyboard to select it.".to_owned()
                 };
-                keyboard.render(&source, true)
+                let audio = if silent {
+                    "Piano: disabled (--silent)".into()
+                } else if muted {
+                    "Piano: muted | -/+ volume, m unmute".into()
+                } else {
+                    format!("Piano: {:.0}% | -/+ volume, m mute", volume * 100.0)
+                };
+                format!("{}{audio}\n", keyboard.render(&source, true))
             };
             let mut stdout = io::stdout().lock();
             write!(stdout, "\x1b[H{}\x1b[J", frame.replace('\n', "\x1b[K\r\n"))
@@ -353,7 +410,21 @@ fn run() -> Result<(), String> {
                 dirty = true;
             }
             32 => {
-                keyboard.clear();
+                apply_event(&mut keyboard, piano.as_ref(), Event::Reset)?;
+                dirty = true;
+            }
+            109 => {
+                muted = !muted;
+                if let Some(piano) = &piano {
+                    piano.volume(if muted { 0.0 } else { volume })?;
+                }
+                dirty = true;
+            }
+            43 | 61 | 45 => {
+                volume = (volume + if key == 45 { -0.05 } else { 0.05 }).clamp(0.0, 1.0);
+                if let Some(piano) = &piano {
+                    piano.volume(if muted { 0.0 } else { volume })?;
+                }
                 dirty = true;
             }
             _ => {}

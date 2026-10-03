@@ -253,6 +253,24 @@ use_repo(pip, pip_deps = "monorepo_deps")
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 http_archive(
+    name = "miniaudio",
+    build_file = "//third_party/miniaudio:BUILD.miniaudio.bazel",
+    sha256 = "b900edcffe979816e2560a0580b9b1216d674b4f17fbadeca8f777a7f8ab0274",
+    strip_prefix = "miniaudio-0.11.25",
+    type = "tar.gz",
+    urls = ["https://codeload.github.com/mackron/miniaudio/tar.gz/refs/tags/0.11.25"],
+)
+
+# Sampled Yamaha C5 piano; kept in Bazel's external cache, not in Git.
+http_archive(
+    name = "salamander_piano",
+    build_file = "//third_party/salamander_piano:BUILD.soundfont.bazel",
+    sha256 = "15edb061d7ba60d58332f72dba8f8ce40988048cc703f935e6320f37d650e213",
+    strip_prefix = "SalamanderGrandPiano-SF2-V3+20200602",
+    urls = ["https://freepats.zenvoid.org/Piano/SalamanderGrandPiano/SalamanderGrandPiano-SF2-V3+20200602.tar.xz"],
+)
+
+http_archive(
     name = "libssh2",
     build_file = "//third_party/libssh2:BUILD.libssh2.bazel",
     sha256 = "d5fb8bd563305fd1074dda90bd053fb2d29fc4bce048d182f96eaa466dfadafd",
