@@ -1,0 +1,10 @@
+--- a/BUILD.bazel
++++ b/BUILD.bazel
+@@ -273,6 +273,7 @@
+         name = "{}_h".format(out[:-len(".h")]),
+         src = src,
+         out = out,
++        allow_symlink = True,
+     )
+     for src, out in ALSA_INCLUDE.items()
+ ]

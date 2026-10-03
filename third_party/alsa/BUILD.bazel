@@ -1,0 +1,5 @@
+alias(
+    name = "alsa",
+    actual = "@alsa_lib//:asound",
+    visibility = ["//visibility:public"],
+)
