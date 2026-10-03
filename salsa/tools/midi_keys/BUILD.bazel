@@ -1,0 +1,46 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_python//python:defs.bzl", "py_test")
+load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
+load("@rules_rs//rs:rust_library.bzl", "rust_library")
+load("@rules_rs//rs:rust_test.bzl", "rust_test")
+
+rust_library(
+    name = "keyboard",
+    srcs = ["src/lib.rs"],
+    edition = "2021",
+)
+
+rust_binary(
+    name = "midi_keys",
+    srcs = ["src/main.rs"],
+    edition = "2021",
+    target_compatible_with = ["@platforms//os:linux"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":keyboard",
+        ":native",
+    ],
+)
+
+cc_library(
+    name = "native",
+    srcs = ["src/native.c"],
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = ["//third_party/alsa"],
+)
+
+rust_test(
+    name = "keyboard_test",
+    size = "small",
+    crate = ":keyboard",
+    edition = "2021",
+)
+
+py_test(
+    name = "terminal_test",
+    size = "small",
+    srcs = ["terminal_test.py"],
+    data = [":midi_keys"],
+    legacy_create_init = 0,
+    target_compatible_with = ["@platforms//os:linux"],
+)

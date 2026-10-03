@@ -11,6 +11,7 @@ bazel_dep(name = "grpc", version = "1.84.0")
 bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "rules_pkg", version = "1.3.0")
 bazel_dep(name = "rules_cc", version = "0.2.25")
+bazel_dep(name = "alsa_lib", version = "1.2.9.bcr.4")
 bazel_dep(name = "rules_python", version = "2.3.4")
 bazel_dep(name = "aspect_rules_lint", version = "2.9.0")
 
@@ -41,6 +42,12 @@ use_repo(version, "bazel_features_globals", "bazel_features_version")
 
 # NodeJS version is determined by rules_nodejs default
 bazel_dep(name = "rules_nodejs", version = "6.7.5")
+
+single_version_override(
+    module_name = "alsa_lib",
+    patch_strip = 1,
+    patches = ["//bazel/patches:alsa_lib_hermetic_headers.patch"],
+)
 
 single_version_override(
     module_name = "aspect_rules_js",
@@ -273,16 +280,6 @@ http_archive(
     sha256 = "aa7d8d9bef71ad6525c55ba11e5f4397889ce49c2c9349dcea6d3e4f0b024a7a",
     strip_prefix = "openssl-3.0.5",
     urls = ["https://www.openssl.org/source/openssl-3.0.5.tar.gz"],
-)
-
-http_archive(
-    name = "alsa",
-    build_file = "//third_party/alsa:BUILD.alsa.bazel",
-    sha256 = "4868cd908627279da5a634f468701625be8cc251d84262c7e5b6a218391ad0d2",
-    strip_prefix = "alsa-lib-1.2.12",
-    urls = [
-        "https://www.alsa-project.org/files/pub/lib/alsa-lib-1.2.12.tar.bz2",
-    ],
 )
 
 http_archive(
