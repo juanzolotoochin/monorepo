@@ -515,21 +515,22 @@ fn profile_with_lock_extension_has_a_distinct_lock_across_atomic_saves() {
 }
 
 #[test]
-fn midi_release_submits_once_and_saved_progress_survives_restart() {
+fn complete_answer_submits_automatically_but_partial_answers_can_pause() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("learner.json");
     let mut session = Session::open(path.clone()).unwrap();
     let now = Instant::now();
     session.ready(now);
     let notes = session.exercise.as_ref().unwrap().expected_evidence();
-    for note in notes {
+    for (index, note) in notes.into_iter().enumerate() {
+        let at = now + Duration::from_secs(index as u64 * 31);
         session.input(
             Event::Note {
                 channel: 0,
                 note,
                 velocity: 90,
             },
-            now,
+            at,
         );
         session.input(
             Event::Note {
@@ -537,10 +538,15 @@ fn midi_release_submits_once_and_saved_progress_survives_restart() {
                 note,
                 velocity: 0,
             },
-            now,
+            at,
         );
+        if index == 0 {
+            session.tick(at + Duration::from_secs(30)).unwrap();
+            assert!(session.phase == Phase::Answering);
+            assert_eq!(session.profile.completed, 0);
+        }
     }
-    session.tick(now + Duration::from_millis(500)).unwrap();
+    session.tick(now + Duration::from_secs(32)).unwrap();
     assert!(session.phase == Phase::Feedback);
     assert_eq!(session.profile.completed, 1);
     session.submit(false).unwrap();
@@ -950,4 +956,112 @@ fn curriculum_stages_cover_all_basics_and_promote_their_dependencies() {
     let get = |id: &str| graph.iter().find(|s| s.id == id).unwrap();
     assert!(get("melody.0.8").stage < get("tonic.1.major").stage);
     assert!(get("melody.0.5").stage < get("scale.0.dorian.up").stage);
+}
+
+#[test]
+fn tonic_exploration_is_ungraded_and_enter_starts_a_clean_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::open(dir.path().join("learner.json")).unwrap();
+    let tonic = session
+        .graph
+        .iter()
+        .find(|s| s.id == "tonic.0.major")
+        .unwrap();
+    session.exercise = Some(Exercise::generate(tonic, 42));
+    let start = Instant::now();
+    session.ready(start);
+    let after = start + Duration::from_secs(10);
+    session.tick(after).unwrap();
+    assert!(session.view().exploring);
+    for note in [61, 62, 63, 60] {
+        for velocity in [90, 0] {
+            session.input(
+                Event::Note {
+                    channel: 0,
+                    note,
+                    velocity,
+                },
+                after,
+            );
+        }
+    }
+    session.tick(after + Duration::from_secs(60)).unwrap();
+    assert_eq!(session.profile.completed, 0);
+    assert!(session.played.is_empty() && session.evidence.is_empty());
+    session.submit(false).unwrap();
+    assert!(!session.view().exploring);
+    assert!(session.phase == Phase::Answering);
+    for velocity in [90, 0] {
+        session.input(
+            Event::Note {
+                channel: 0,
+                note: 60,
+                velocity,
+            },
+            after,
+        );
+    }
+    session.tick(after + Duration::from_millis(500)).unwrap();
+    assert_eq!(session.profile.completed, 1);
+    assert!(session.profile.recent_attempts[0].correct);
+    assert_eq!(session.profile.recent_attempts[0].answer, vec![60]);
+}
+
+#[test]
+fn answer_policies_keep_intervals_direct_and_scale_prompts_explicit() {
+    for skill in curriculum() {
+        let ex = Exercise::generate(&skill, 42);
+        if matches!(
+            skill.task,
+            Task::BuildInterval { .. } | Task::HearInterval { .. }
+        ) {
+            assert!(ex.answer_policy == exercise::AnswerPolicy::Direct);
+        }
+        if matches!(skill.task, Task::Scale { .. }) || ex.title == "SCALE CONSTRUCTION" {
+            assert!(ex.prompt.contains(" scale "), "{}: {}", skill.id, ex.prompt);
+        }
+    }
+}
+
+#[test]
+fn fixed_length_answers_finish_on_last_attack_without_release_or_delay() {
+    for id in ["interval.build.2.up", "tonic.0.major"] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = Session::open(dir.path().join("learner.json")).unwrap();
+        let skill = session.graph.iter().find(|s| s.id == id).unwrap();
+        session.exercise = Some(Exercise::generate(skill, 42));
+        let now = Instant::now();
+        session.ready(now);
+        let now = now + Duration::from_secs(10);
+        session.tick(now).unwrap();
+        if session.exploring {
+            session.submit(false).unwrap();
+        }
+        let notes = session.exercise.as_ref().unwrap().expected_evidence();
+        for (i, note) in notes.iter().enumerate() {
+            session.input(
+                Event::Note {
+                    channel: 0,
+                    note: *note,
+                    velocity: 90,
+                },
+                now,
+            );
+            if i + 1 == notes.len() {
+                // A queued extra attack must not extend the completed answer.
+                session.input(
+                    Event::Note {
+                        channel: 0,
+                        note: 99,
+                        velocity: 90,
+                    },
+                    now,
+                );
+            }
+            session.tick(now).unwrap();
+            assert_eq!(session.profile.completed, u64::from(i + 1 == notes.len()));
+        }
+        assert!(session.profile.recent_attempts[0].correct);
+        assert_eq!(session.profile.recent_attempts[0].answer, notes);
+    }
 }

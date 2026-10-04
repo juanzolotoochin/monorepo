@@ -198,7 +198,7 @@ pub fn generate(task: &Practice, seed: u64, ex: &mut Exercise) {
         Practice::Tonic { root, scale } => {
             ex.title = "FIND THE TONIC".into();
             ex.prompt =
-                "Hear a short progression. Play its home note (tonic), in any octave.".into();
+                "Hear four chords. The first and last are the home chord. Hum their bass note, then find it on your keyboard. Play that home note (tonic), in any octave.".into();
             for (i, degree) in [0, 3, 4, 0].into_iter().enumerate() {
                 chord(
                     &mut ex.playback,
@@ -207,14 +207,7 @@ pub fn generate(task: &Practice, seed: u64, ex: &mut Exercise) {
                     650,
                 );
             }
-            // Finish on another scale tone so copying the last note isn't sufficient.
-            note(
-                &mut ex.playback,
-                60 + root + scale.steps()[2],
-                3400,
-                450,
-                80,
-            );
+            ex.answer_policy = crate::exercise::AnswerPolicy::ExploreThenAnswer;
             ex.answer = Answer::PitchClasses(vec![root]);
             ex.explanation = format!("The home note is {} ({}).", ROOTS[root], scale.id());
         }
@@ -333,7 +326,7 @@ pub fn generate(task: &Practice, seed: u64, ex: &mut Exercise) {
                 format!("Hear a scale. Play the same scale pattern ascending from any starting note ({} notes, including the octave).", notes.len())
             } else {
                 format!(
-                    "Play {} {} {}. Any starting octave; one octave, one note at a time.",
+                    "Play {} {} scale {}. Any starting octave; one octave, one note at a time.",
                     ROOTS[root],
                     scale.id(),
                     match direction {

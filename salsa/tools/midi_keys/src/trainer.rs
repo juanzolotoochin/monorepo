@@ -77,6 +77,7 @@ pub struct TrainingView<'a> {
     pub mastered: usize,
     pub total: usize,
     pub timed_phrase: bool,
+    pub exploring: bool,
 }
 
 pub struct Session {
@@ -92,6 +93,7 @@ pub struct Session {
     down: BTreeSet<(usize, usize)>,
     playback: VecDeque<(Instant, Event)>,
     listening_until: Option<Instant>,
+    exploring: bool,
     submit_at: Option<Instant>,
     onsets: Vec<Instant>,
     evidence: Vec<MidiEvidence>,
@@ -171,9 +173,8 @@ impl Session {
             completed: self.profile.completed,
             mastered: self.mastered_count(),
             total: self.graph.len(),
-            timed_phrase: self.exercise.as_ref().is_some_and(
-                |e| matches!(&e.answer, exercise::Answer::Performance(score) if score.timed),
-            ),
+            exploring: self.exploring,
+            timed_phrase: self.exercise.as_ref().is_some_and(|e| e.bpm.is_some()),
         }
     }
     pub fn open(path: PathBuf) -> Result<Self, String> {
@@ -193,6 +194,7 @@ impl Session {
             down: BTreeSet::new(),
             playback: VecDeque::new(),
             listening_until: None,
+            exploring: false,
             submit_at: None,
             onsets: vec![],
             evidence: vec![],
@@ -243,6 +245,7 @@ impl Session {
         }
         self.clear_answer();
         if let Some(exercise) = &self.exercise {
+            self.exploring = exercise.answer_policy == exercise::AnswerPolicy::ExploreThenAnswer;
             self.playback = exercise
                 .playback
                 .iter()
@@ -272,9 +275,9 @@ impl Session {
         }
     }
     pub fn clear_answer(&mut self) {
+        self.submit_at = None;
         self.played.clear();
         self.down.clear();
-        self.submit_at = None;
         self.onsets.clear();
         self.evidence.clear();
         self.input_started = None;
@@ -306,7 +309,7 @@ impl Session {
             self.phase = Phase::Answering;
             self.listening_until = None;
         }
-        if self.phase != Phase::Answering {
+        if self.phase != Phase::Answering || self.exploring {
             return;
         }
         match event {
@@ -315,6 +318,10 @@ impl Session {
                 note,
                 velocity,
             } if channel < 16 && note < 128 => {
+                let fixed_notes = self.exercise.as_ref().and_then(|e| e.fixed_answer_notes());
+                if velocity > 0 && fixed_notes.is_some_and(|n| self.played.len() >= n) {
+                    return;
+                }
                 let start = *self.input_started.get_or_insert(now);
                 if self.evidence.len() < 4096 {
                     self.evidence.push(MidiEvidence {
@@ -325,6 +332,7 @@ impl Session {
                     });
                 }
                 if velocity > 0 {
+                    self.submit_at = None;
                     if self.played.is_empty() {
                         if let Some(ms) = self
                             .exercise
@@ -339,10 +347,13 @@ impl Session {
                         self.played.push(note);
                         self.onsets.push(now);
                     }
-                    self.submit_at = None;
+                    if fixed_notes.is_some_and(|n| self.played.len() >= n) {
+                        self.submit_at = Some(now);
+                    }
                 } else {
                     self.down.remove(&(channel, note));
-                    if self.down.is_empty()
+                    if fixed_notes.is_none()
+                        && self.down.is_empty()
                         && self
                             .exercise
                             .as_ref()
@@ -394,8 +405,8 @@ impl Session {
             self.listening_until = None;
         }
         if self.phase == Phase::Answering
-            && (self.submit_at.is_some_and(|at| at <= now)
-                || self.finish_at.is_some_and(|at| at <= now))
+            && (self.finish_at.is_some_and(|at| at <= now)
+                || self.submit_at.is_some_and(|at| at <= now))
         {
             self.finish(self.played.is_empty(), now)?;
         }
@@ -421,6 +432,11 @@ impl Session {
         }
     }
     pub fn submit(&mut self, give_up: bool) -> Result<(), String> {
+        if self.visible && self.phase == Phase::Answering && self.exploring && !give_up {
+            self.clear_answer();
+            self.exploring = false;
+            return Ok(());
+        }
         self.finish(give_up, Instant::now())
     }
     fn finish(&mut self, give_up: bool, now: Instant) -> Result<(), String> {
