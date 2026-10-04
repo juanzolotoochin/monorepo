@@ -76,7 +76,19 @@ pub struct Keyboard {
     velocities: [[u8; 128]; 16],
     pub start: usize,
     pub follow: bool,
+    visible_span: usize,
     pub last: String,
+    pub last_strike: Option<(usize, u8, usize)>,
+    pub strikes: std::collections::VecDeque<Strike>,
+    sustain: [bool; 16],
+}
+
+pub struct Strike {
+    pub channel: usize,
+    pub note: usize,
+    pub velocity: u8,
+    pub at: std::time::Instant,
+    pub released_at: Option<std::time::Instant>,
 }
 
 impl Default for Keyboard {
@@ -85,7 +97,11 @@ impl Default for Keyboard {
             velocities: [[0; 128]; 16],
             start: 48,
             follow: true,
+            visible_span: 24,
             last: "Waiting for a note...".into(),
+            last_strike: None,
+            strikes: std::collections::VecDeque::with_capacity(64),
+            sustain: [false; 16],
         }
     }
 }
@@ -99,6 +115,40 @@ impl Keyboard {
                 velocity,
             } if channel < 16 && note < 128 && velocity < 128 => {
                 self.velocities[channel][note] = velocity;
+                let now = std::time::Instant::now();
+                for strike in &mut self.strikes {
+                    if strike.channel == channel
+                        && strike.note == note
+                        && strike.released_at.is_none()
+                    {
+                        strike.released_at = Some(now);
+                    }
+                }
+                if velocity > 0 {
+                    self.last_strike = Some((note, velocity, channel));
+                    // Keep held notes even during a long, busy passage. Retain
+                    // at most 64 completed strokes plus currently held keys.
+                    while self
+                        .strikes
+                        .iter()
+                        .filter(|s| s.released_at.is_some())
+                        .count()
+                        > 64
+                    {
+                        if let Some(index) =
+                            self.strikes.iter().position(|s| s.released_at.is_some())
+                        {
+                            self.strikes.remove(index);
+                        }
+                    }
+                    self.strikes.push_back(Strike {
+                        channel,
+                        note,
+                        velocity,
+                        at: now,
+                        released_at: None,
+                    });
+                }
                 self.last = format!(
                     "{}  MIDI {}  ch {}  velocity {}  {}",
                     note_name(note),
@@ -107,12 +157,25 @@ impl Keyboard {
                     velocity,
                     if velocity > 0 { "ON" } else { "OFF" }
                 );
-                if velocity > 0 && self.follow && (note < self.start || note > self.start + 24) {
-                    self.start = (note / 12 * 12).min(108);
+                if velocity > 0
+                    && self.follow
+                    && (note < self.start || note > self.start + self.visible_span)
+                {
+                    self.start = (note / 12 * 12).min(self.max_start());
                 }
             }
-            Event::ClearChannel(channel) if channel < 16 => self.velocities[channel].fill(0),
+            Event::ClearChannel(channel) if channel < 16 => {
+                self.velocities[channel].fill(0);
+                let now = std::time::Instant::now();
+                for strike in &mut self.strikes {
+                    if strike.channel == channel && strike.released_at.is_none() {
+                        strike.released_at = Some(now);
+                    }
+                }
+            }
             Event::Reset => self.clear(),
+            Event::Sustain { channel, down } if channel < 16 => self.sustain[channel] = down,
+            Event::ResetControllers(channel) if channel < 16 => self.sustain[channel] = false,
             _ => {}
         }
     }
@@ -120,6 +183,33 @@ impl Keyboard {
     pub fn clear(&mut self) {
         self.velocities = [[0; 128]; 16];
         self.last = "Notes cleared".into();
+        self.last_strike = None;
+        self.strikes.clear();
+        self.sustain.fill(false);
+    }
+
+    pub fn sustaining(&self) -> bool {
+        self.sustain.iter().any(|&down| down)
+    }
+
+    fn max_start(&self) -> usize {
+        (127 - self.visible_span).div_ceil(12) * 12
+    }
+
+    pub fn set_visible_span(&mut self, semitones: usize) {
+        let span = semitones.clamp(24, 127);
+        if span == self.visible_span {
+            return;
+        }
+        self.visible_span = span;
+        // When widening near the top of MIDI's range, reveal lower octaves
+        // rather than clipping the right edge and leaving usable width empty.
+        self.start = self.start.min((127 - span) / 12 * 12);
+        if let Some((note, _, _)) = self.last_strike {
+            if self.follow && (note < self.start || note > self.start + self.visible_span) {
+                self.start = (note / 12 * 12).min(self.max_start());
+            }
+        }
     }
 
     pub fn velocity(&self, note: usize) -> u8 {
@@ -133,7 +223,7 @@ impl Keyboard {
     pub fn shift(&mut self, up: bool) {
         self.follow = false;
         self.start = if up {
-            (self.start + 12).min(108)
+            (self.start + 12).min(self.max_start())
         } else {
             self.start.saturating_sub(12)
         };
@@ -357,6 +447,71 @@ mod tests {
         assert_eq!(note_name(60), "C4");
         assert_eq!(note_name(0), "C-1");
         assert_eq!(note_name(127), "G9");
+    }
+
+    #[test]
+    fn trail_release_is_channel_specific_and_tracks_retriggers_and_panic() {
+        let mut keyboard = Keyboard::default();
+        for channel in [0, 1] {
+            keyboard.apply(Event::Note {
+                channel,
+                note: 60,
+                velocity: 90,
+            });
+        }
+        keyboard.apply(Event::Note {
+            channel: 0,
+            note: 60,
+            velocity: 0,
+        });
+        assert!(keyboard.strikes[0].released_at.is_some());
+        assert!(keyboard.strikes[1].released_at.is_none());
+        keyboard.apply(Event::Note {
+            channel: 1,
+            note: 60,
+            velocity: 100,
+        });
+        assert!(keyboard.strikes[1].released_at.is_some());
+        assert!(keyboard.strikes[2].released_at.is_none());
+        keyboard.apply(Event::ClearChannel(1));
+        assert!(keyboard.strikes.iter().all(|s| s.released_at.is_some()));
+        keyboard.apply(Event::Reset);
+        assert!(keyboard.strikes.is_empty());
+    }
+
+    #[test]
+    fn follow_uses_visible_span_and_keeps_last_note_visible_after_resize() {
+        let mut keyboard = Keyboard::default();
+        keyboard.set_visible_span(60);
+        keyboard.apply(Event::Note {
+            channel: 0,
+            note: 96,
+            velocity: 90,
+        });
+        assert_eq!(
+            keyboard.start, 48,
+            "An already visible note must not shift the view"
+        );
+        keyboard.set_visible_span(36);
+        assert!(keyboard.start <= 96 && keyboard.start + 36 >= 96);
+        for span in [24, 36, 60, 120] {
+            keyboard.set_visible_span(span);
+            for note in 0..128 {
+                keyboard.apply(Event::Note {
+                    channel: 0,
+                    note,
+                    velocity: 90,
+                });
+                assert!(note >= keyboard.start && note <= keyboard.start + span);
+            }
+        }
+        keyboard.shift(false);
+        let start = keyboard.start;
+        keyboard.set_visible_span(36);
+        assert_eq!(
+            keyboard.start, start,
+            "Resizing preserves a manual range when it fits"
+        );
     }
 
     #[test]

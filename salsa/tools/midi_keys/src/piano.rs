@@ -5,7 +5,8 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const RATE: usize = 48_000;
 const BLOCK: usize = 256;
@@ -160,10 +161,33 @@ pub struct Piano {
     // Kept at a stable address while the device calls into Rust.
     _callback: Box<Callback>,
     commands: SyncSender<Command>,
+    trace: Option<Mutex<File>>,
+    started: Instant,
 }
 
 impl Piano {
-    pub fn start() -> Result<Self, String> {
+    pub fn start(trace_path: Option<&Path>, mode: &str) -> Result<Self, String> {
+        let trace = trace_path
+            .map(|path| {
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)
+                    .map_err(|e| format!("Cannot create event trace {}: {e}", path.display()))?;
+                writeln!(
+                    file,
+                    "# MIDI Keys pid={} mode={} started_unix={}\n# elapsed_us source event",
+                    std::process::id(),
+                    mode,
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs()
+                )
+                .map_err(|e| e.to_string())?;
+                Ok::<_, String>(Mutex::new(file))
+            })
+            .transpose()?;
         let renderer = Renderer::load()?;
         let (commands, receiver) = mpsc::sync_channel(1024);
         let mut callback = Box::new(Callback {
@@ -186,6 +210,8 @@ impl Piano {
             device,
             _callback: callback,
             commands,
+            trace,
+            started: Instant::now(),
         })
     }
 
@@ -197,7 +223,22 @@ impl Piano {
     }
 
     pub fn event(&self, event: Event) -> Result<(), String> {
-        self.send(Command::Event(event))
+        self.event_from(event, "midi/control")
+    }
+    /// Optional diagnostic logging happens on the caller, never the audio callback.
+    pub fn event_from(&self, event: Event, source: &str) -> Result<(), String> {
+        self.send(Command::Event(event))?;
+        if let Some(trace) = &self.trace {
+            writeln!(
+                trace.lock().map_err(|e| e.to_string())?,
+                "{} {} {:?}",
+                self.started.elapsed().as_micros(),
+                source,
+                event
+            )
+            .map_err(|e| format!("Cannot write audio event trace: {e}"))?;
+        }
+        Ok(())
     }
     pub fn volume(&self, value: f32) -> Result<(), String> {
         self.send(Command::Volume(value))
