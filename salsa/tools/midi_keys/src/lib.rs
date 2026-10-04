@@ -6,6 +6,11 @@ pub enum Event {
         velocity: u8,
     },
     ClearChannel(usize),
+    Sustain {
+        channel: usize,
+        down: bool,
+    },
+    ResetControllers(usize),
     Reset,
 }
 
@@ -27,6 +32,11 @@ impl Event {
                 velocity: if status & 0xf0 == 0x90 { value } else { 0 },
             }),
             0xb0 if matches!(key, 120 | 123) => Some(Self::ClearChannel(channel)),
+            0xb0 if key == 64 => Some(Self::Sustain {
+                channel,
+                down: value >= 64,
+            }),
+            0xb0 if key == 121 => Some(Self::ResetControllers(channel)),
             _ => None,
         }
     }
@@ -219,6 +229,10 @@ mod tests {
         let mut keyboard = Keyboard::default();
         for event in [
             Event::Reset,
+            Event::Sustain {
+                channel: 0,
+                down: true,
+            },
             Event::ClearChannel(0),
             Event::from_midi(0x90, 60, 0).unwrap(),
             Event::from_midi(0x80, 60, 64).unwrap(),
@@ -278,11 +292,42 @@ mod tests {
             (0xfe, 0, 0),
             (0x90, 128, 2),
             (0x90, 60, 255),
-            (0xb0, 64, 127),
+            (0xb0, 1, 127),
             (0xe0, 0, 64),
         ] {
             assert_eq!(Event::from_midi(status, key, value), None);
         }
+    }
+
+    #[test]
+    fn sustain_is_decoded_without_leaving_released_keys_highlighted() {
+        assert_eq!(
+            Event::from_midi(0xb2, 64, 127),
+            Some(Event::Sustain {
+                channel: 2,
+                down: true
+            })
+        );
+        assert_eq!(
+            Event::from_midi(0xb2, 64, 63),
+            Some(Event::Sustain {
+                channel: 2,
+                down: false
+            })
+        );
+        assert_eq!(
+            Event::from_midi(0xb2, 121, 0),
+            Some(Event::ResetControllers(2))
+        );
+        let mut keyboard = Keyboard::default();
+        for event in [
+            Event::from_midi(0x92, 60, 90).unwrap(),
+            Event::from_midi(0xb2, 64, 127).unwrap(),
+            Event::from_midi(0x82, 60, 0).unwrap(),
+        ] {
+            keyboard.apply(event);
+        }
+        assert_eq!(keyboard.velocity(60), 0);
     }
 
     #[test]

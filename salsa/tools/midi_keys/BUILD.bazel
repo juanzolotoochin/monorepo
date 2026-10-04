@@ -19,7 +19,42 @@ rust_binary(
     deps = [
         ":keyboard",
         ":native",
+        ":piano",
     ],
+)
+
+rust_library(
+    name = "piano",
+    srcs = ["src/piano.rs"],
+    crate_root = "src/piano.rs",
+    data = ["@salamander_piano//:soundfont"],
+    edition = "2021",
+    rustc_env = {
+        "MIDI_PIANO_SF2": "$(rlocationpath @salamander_piano//:soundfont)",
+    },
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        ":audio_native",
+        ":keyboard",
+        "@crates//:rustysynth",
+    ],
+)
+
+cc_library(
+    name = "audio_native",
+    srcs = ["src/audio.c"],
+    copts = ["-O2"],
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = ["@miniaudio//:headers"],
+)
+
+rust_test(
+    name = "piano_test",
+    size = "large",
+    crate = ":piano",
+    data = ["@salamander_piano//:soundfont"],
+    edition = "2021",
+    target_compatible_with = ["@platforms//os:linux"],
 )
 
 cc_library(

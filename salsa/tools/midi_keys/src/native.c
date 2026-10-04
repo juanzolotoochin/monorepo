@@ -152,11 +152,11 @@ void mk_terminal_leave(void) {
     terminal_active = 0;
 }
 
-// Wait at most 16ms; -1 requests exit, 0 means no key, otherwise an input byte.
+// Wait at most 2ms; -1 requests exit, 0 means no key, otherwise an input byte.
 int mk_key(void) {
     if (stopping) return -1;
     struct pollfd input = {STDIN_FILENO, POLLIN, 0};
-    int result = poll(&input, 1, 16);
+    int result = poll(&input, 1, 2);
     if (stopping) return -1;
     if (result < 0) return errno == EINTR ? 0 : -1;
     if (input.revents & (POLLHUP | POLLERR | POLLNVAL)) return -1;
