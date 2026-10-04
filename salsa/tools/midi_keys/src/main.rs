@@ -105,6 +105,7 @@ impl Midi {
         selection: &mut InputSelection,
         ports: &[Port],
         piano: Option<&Piano>,
+        trainer: &mut Option<trainer::Session>,
     ) -> Result<bool, String> {
         let mut changed = false;
         // Bound each batch so MIDI clocks or a noisy device cannot starve input.
@@ -134,6 +135,11 @@ impl Midi {
                             }
                         }
                         apply_event(keyboard, piano, event)?;
+                        if !was_selecting {
+                            if let Some(trainer) = trainer {
+                                trainer.input(event, Instant::now());
+                            }
+                        }
                         changed = true;
                     }
                 }
@@ -179,23 +185,31 @@ impl Drop for Terminal {
     }
 }
 
-const HELP: &str = "MIDI Keys - ASCII piano for Linux MIDI input
+const HELP: &str = "MIDI Keys - adaptive ear training and theory practice
 
 Usage: midi_keys [--list | --port CLIENT:PORT | --demo | --snapshot]
-                 [--silent]
+                 [--free-play] [--silent] [--note-names] [--profile FILE]
+                 [--trace-events FILE]
        midi_keys --render-demo FILE.wav
 
-  no options    Press a key on your MIDI keyboard to select its input
+  no options    Adaptive training. Press a MIDI key to select its input
+  --free-play   Piano and visualizer without training
+  --profile FILE  Use a separate learner profile (JSON)
+  --trace-events FILE  Diagnose audio by logging its input events to a new file
   --list        List available MIDI input ports
   --port 24:0   Connect to a specific input (see --list)
   --demo        Play example piano chords without a MIDI device
   --snapshot    Print a demo frame and exit; no terminal or device required
   --silent      Visualize only, without loading samples or opening audio
+  --note-names  Show note names on the piano keys (hidden by default)
   --render-demo FILE.wav  Render a piano preview without an audio device
 
-Controls: [ / ] octave, f follow, space panic, -/+ volume, m mute, q quit
+Controls: [ / ] octave, f follow, space panic, -/+ volume, m mute, n names, q quit
+Training: release keys to submit; next exercise starts automatically.
+          r replay/restart listening, Enter submit/next now, Backspace clear,
+          h hint (no mastery credit), x don't know
 Middle C is C4 (MIDI 60). Highlights show held keys, not sustain pedal state.
-Use a terminal at least 64 columns by 23 rows.";
+Use at least 64 columns by 22 rows; 100 x 32 shows the full instrument panel.";
 
 fn apply_event(keyboard: &mut Keyboard, piano: Option<&Piano>, event: Event) -> Result<(), String> {
     if let Some(piano) = piano {
@@ -205,11 +219,23 @@ fn apply_event(keyboard: &mut Keyboard, piano: Option<&Piano>, event: Event) -> 
     Ok(())
 }
 
+fn apply_demo_event(
+    keyboard: &mut Keyboard,
+    piano: Option<&Piano>,
+    event: Event,
+) -> Result<(), String> {
+    if let Some(piano) = piano {
+        piano.event_from(event, "demo")?;
+    }
+    keyboard.apply(event);
+    Ok(())
+}
+
 fn demo_chord(keyboard: &mut Keyboard, piano: Option<&Piano>, step: usize) -> Result<(), String> {
     const CHORDS: [[usize; 3]; 4] = [[60, 64, 67], [62, 65, 69], [61, 65, 68], [59, 62, 67]];
     for note in 0..128 {
         if keyboard.velocity(note) > 0 {
-            apply_event(
+            apply_demo_event(
                 keyboard,
                 piano,
                 Event::Note {
@@ -222,7 +248,7 @@ fn demo_chord(keyboard: &mut Keyboard, piano: Option<&Piano>, step: usize) -> Re
     }
     if step % 2 == 0 {
         for (index, &note) in CHORDS[(step / 2) % CHORDS.len()].iter().enumerate() {
-            apply_event(
+            apply_demo_event(
                 keyboard,
                 piano,
                 Event::Note {
@@ -240,6 +266,28 @@ fn run() -> Result<(), String> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let silent = args.iter().any(|arg| arg == "--silent");
     args.retain(|arg| arg != "--silent");
+    let mut note_names = args.iter().any(|arg| arg == "--note-names");
+    args.retain(|arg| arg != "--note-names");
+    let free_play = args.iter().any(|arg| arg == "--free-play");
+    args.retain(|arg| arg != "--free-play");
+    let profile_path = if let Some(index) = args.iter().position(|arg| arg == "--profile") {
+        args.remove(index);
+        if index >= args.len() || args[index].starts_with("--") {
+            return Err("--profile requires a file path".into());
+        }
+        Some(std::path::PathBuf::from(args.remove(index)))
+    } else {
+        None
+    };
+    let trace_path = if let Some(index) = args.iter().position(|arg| arg == "--trace-events") {
+        args.remove(index);
+        if index >= args.len() || args[index].starts_with("--") {
+            return Err("--trace-events requires a new file path".into());
+        }
+        Some(std::path::PathBuf::from(args.remove(index)))
+    } else {
+        None
+    };
     let option = args.first().map(String::as_str).unwrap_or("");
     if matches!(option, "--help" | "-h") && args.len() == 1 {
         println!("{HELP}");
@@ -253,6 +301,14 @@ fn run() -> Result<(), String> {
     };
     if !valid {
         return Err(format!("Invalid arguments.\n\n{HELP}"));
+    }
+    if free_play && option == "--demo" {
+        return Err("--free-play and --demo are different modes. Omit --demo for a piano without automatic playback.".into());
+    }
+    if trace_path.is_some()
+        && (silent || matches!(option, "--list" | "--snapshot" | "--render-demo"))
+    {
+        return Err("--trace-events requires interactive piano audio (omit --silent).".into());
     }
     let mut keyboard = Keyboard::default();
     if option == "--snapshot" {
@@ -269,11 +325,34 @@ fn run() -> Result<(), String> {
     if option != "--list" && (!io::stdin().is_terminal() || !io::stdout().is_terminal()) {
         return Err("An interactive terminal is required. Use --snapshot or --render-demo for noninteractive output.".into());
     }
+    let training = !free_play && matches!(option, "" | "--port");
+    if training && silent {
+        return Err(
+            "Ear training needs sound. Use --free-play --silent for the silent visualizer.".into(),
+        );
+    }
+    let mut trainer = if training {
+        Some(trainer::Session::open(match profile_path {
+            Some(path) => path,
+            None => trainer::default_profile_path()?,
+        })?)
+    } else {
+        None
+    };
     let piano = if silent || option == "--list" {
         None
     } else {
         eprintln!("Loading Salamander Grand Piano...");
-        Some(Piano::start()?)
+        Some(Piano::start(
+            trace_path.as_deref(),
+            if training {
+                "training"
+            } else if option == "--demo" {
+                "demo"
+            } else {
+                "free-play"
+            },
+        )?)
     };
     let mut volume = 0.6f32;
     let mut muted = false;
@@ -326,53 +405,81 @@ fn run() -> Result<(), String> {
         }
     }
     let terminal = Terminal::enter()?;
+    let mut display = ui::Display::new().map_err(|e| e.to_string())?;
+    let mut last_frame = Instant::now();
     let mut size = terminal.size();
     let mut dirty = true;
     let mut step = 0;
     let mut next_demo = Instant::now();
     let mut escape_sequence = 0;
     loop {
+        let new_size = terminal.size();
+        dirty |= new_size != size;
+        size = new_size;
+        if let Some(trainer) = &mut trainer {
+            let fits = ui::training_fits(
+                size.0.clamp(0, u16::MAX as i32) as u16,
+                size.1.clamp(0, u16::MAX as i32) as u16,
+            );
+            if let Some(event) = trainer.set_visible(fits, Instant::now()) {
+                if let Some(piano) = &piano {
+                    piano.event_from(event, "training")?;
+                }
+            }
+        }
+        keyboard.set_visible_span(ui::visible_span(size.0.clamp(0, u16::MAX as i32) as u16));
+        if selection.source.is_some() && (0..128).all(|note| keyboard.velocity(note) == 0) {
+            if let Some(trainer) = &mut trainer {
+                trainer.ready(Instant::now());
+            }
+        }
         if let Some(midi) = &midi {
-            dirty |= midi.drain(&mut keyboard, &mut selection, &ports, piano.as_ref())?;
+            dirty |= midi.drain(
+                &mut keyboard,
+                &mut selection,
+                &ports,
+                piano.as_ref(),
+                &mut trainer,
+            )?;
         } else if Instant::now() >= next_demo {
             demo_chord(&mut keyboard, piano.as_ref(), step)?;
             step += 1;
             next_demo = Instant::now() + Duration::from_millis(700);
             dirty = true;
         }
-        let new_size = terminal.size();
-        dirty |= new_size != size;
-        size = new_size;
-        if dirty {
-            let frame = if size.0 < 64 || size.1 < 23 {
-                "Resize to 64 x 23.\nq to quit.\n".to_owned()
-            } else {
-                let source = if midi.is_none() {
-                    "Demo | example chords (no MIDI device)".to_owned()
-                } else if let Some(port) = ports
-                    .iter()
-                    .find(|p| Some((p.client, p.port)) == selection.source)
-                {
-                    format!("{} | {}", port.address(), port.name)
-                        .chars()
-                        .take(60)
-                        .collect()
-                } else {
-                    "Press a key on your MIDI keyboard to select it.".to_owned()
-                };
-                let audio = if silent {
-                    "Piano: disabled (--silent)".into()
-                } else if muted {
-                    "Piano: muted | -/+ volume, m unmute".into()
-                } else {
-                    format!("Piano: {:.0}% | -/+ volume, m mute", volume * 100.0)
-                };
-                format!("{}{audio}\n", keyboard.render(&source, true))
+        if let Some(trainer) = &mut trainer {
+            for event in trainer.tick(Instant::now())? {
+                // Listening prompts go only to audio: the visual keyboard and
+                // note trail must never reveal an ear-training answer.
+                if let Some(piano) = &piano {
+                    piano.event_from(event, "training")?;
+                }
+            }
+        }
+        if dirty || last_frame.elapsed() >= Duration::from_millis(33) {
+            let source = ports
+                .iter()
+                .find(|p| Some((p.client, p.port)) == selection.source)
+                .map(|port| format!("{}  /  {}", port.address(), port.name))
+                .unwrap_or_default();
+            let view = ui::View {
+                keyboard: &keyboard,
+                source: &source,
+                connected: selection.source.is_some(),
+                demo: midi.is_none(),
+                silent,
+                muted,
+                note_names,
+                volume,
+                now: Instant::now(),
             };
-            let mut stdout = io::stdout().lock();
-            write!(stdout, "\x1b[H{}\x1b[J", frame.replace('\n', "\x1b[K\r\n"))
-                .map_err(|e| e.to_string())?;
-            stdout.flush().map_err(|e| e.to_string())?;
+            if let Some(trainer) = &trainer {
+                display.draw_training(&view, &trainer.view())
+            } else {
+                display.draw(&view)
+            }
+            .map_err(|e| e.to_string())?;
+            last_frame = Instant::now();
             dirty = false;
         }
         let key = unsafe { mk_key() };
@@ -394,6 +501,49 @@ fn run() -> Result<(), String> {
             }
             continue;
         }
+        if let Some(trainer) = &mut trainer {
+            let handled = match key {
+                10 | 13 => {
+                    if trainer.phase() == trainer::Phase::Feedback {
+                        apply_event(&mut keyboard, piano.as_ref(), Event::Reset)?;
+                        trainer.advance();
+                    } else {
+                        trainer.submit(false)?;
+                    }
+                    true
+                }
+                114 | 82 => {
+                    if matches!(
+                        trainer.phase(),
+                        trainer::Phase::Answering
+                            | trainer::Phase::Waiting
+                            | trainer::Phase::Listening
+                    ) {
+                        apply_event(&mut keyboard, piano.as_ref(), Event::Reset)?;
+                        trainer.replay(Instant::now());
+                    }
+                    true
+                }
+                8 | 127 => {
+                    trainer.clear_answer();
+                    apply_event(&mut keyboard, piano.as_ref(), Event::Reset)?;
+                    true
+                }
+                104 => {
+                    trainer.hint();
+                    true
+                }
+                120 => {
+                    trainer.submit(true)?;
+                    true
+                }
+                _ => false,
+            };
+            if handled {
+                dirty = true;
+                continue;
+            }
+        }
         match key {
             27 => escape_sequence = 1,
             113 | 81 => break,
@@ -411,6 +561,9 @@ fn run() -> Result<(), String> {
             }
             32 => {
                 apply_event(&mut keyboard, piano.as_ref(), Event::Reset)?;
+                if let Some(trainer) = &mut trainer {
+                    trainer.panic();
+                }
                 dirty = true;
             }
             109 => {
@@ -418,6 +571,10 @@ fn run() -> Result<(), String> {
                 if let Some(piano) = &piano {
                     piano.volume(if muted { 0.0 } else { volume })?;
                 }
+                dirty = true;
+            }
+            110 => {
+                note_names = !note_names;
                 dirty = true;
             }
             43 | 61 | 45 => {

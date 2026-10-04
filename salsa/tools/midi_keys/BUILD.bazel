@@ -20,6 +20,73 @@ rust_binary(
         ":keyboard",
         ":native",
         ":piano",
+        ":trainer",
+        ":ui",
+    ],
+)
+
+rust_library(
+    name = "ui",
+    srcs = ["src/ui.rs"],
+    crate_root = "src/ui.rs",
+    edition = "2021",
+    deps = [
+        ":keyboard",
+        ":trainer",
+        "@crates//:ratatui",
+    ],
+)
+
+rust_library(
+    name = "trainer",
+    srcs = [
+        "src/courses.rs",
+        "src/curriculum.rs",
+        "src/curriculum_analysis.rs",
+        "src/exercise.rs",
+        "src/learner.rs",
+        "src/music.rs",
+        "src/performance.rs",
+        "src/practice.rs",
+        "src/practice_tests.rs",
+        "src/spelling.rs",
+        "src/tests.rs",
+        "src/trainer.rs",
+    ],
+    crate_root = "src/trainer.rs",
+    edition = "2021",
+    deps = [
+        ":keyboard",
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "trainer_test",
+    size = "small",
+    crate = ":trainer",
+    edition = "2021",
+)
+
+rust_test(
+    name = "ui_test",
+    size = "small",
+    crate = ":ui",
+    edition = "2021",
+)
+
+rust_binary(
+    name = "ui_preview",
+    testonly = True,
+    srcs = ["src/ui_preview.rs"],
+    edition = "2021",
+    deps = [
+        ":keyboard",
+        ":trainer",
+        ":ui",
+        "@crates//:tempfile",
     ],
 )
 
