@@ -36,8 +36,14 @@ configuration. After building, the executable is also available at
 
 ## Adaptive training
 
-All musical answers use MIDI. For untimed exercises, after the last key is
-released, a 450 ms pause submits a complete answer. Timed phrases finish at their
+All musical answers use MIDI. Intervals and chord recognition go directly to
+answering. Tonic exercises first allow ungraded exploration: try notes freely,
+then press Enter once to start a fresh answer. Fixed-length untimed
+answers submit on the final note attack (one for a single pitch, two for an
+interval); no second Enter or key release is needed. Chords submit after enough
+notes, all keys released, and a 450 ms pause to collect the whole voicing.
+Untimed partial answers can pause indefinitely.
+Replaying a tonic exercise returns to exploration. Timed phrases finish at their
 scheduled end, including rests and held notes; an empty fixed-time answer counts
 as a missed attempt. Enter can submit sooner, or after a partial answer.
 Feedback advances automatically after two seconds for an independent correct
@@ -57,7 +63,7 @@ shows C–Bb), including in keyboard labels and feedback.
 | Backspace | Clear an answer and try again before submission |
 | `h` | Show a hint; the attempt receives no mastery credit |
 | `x` | Record "don't know" and show feedback |
-| Enter | Submit / continue after feedback |
+| Enter | Start answer during exploration / submit answer / continue after feedback |
 
 The curriculum contains 6,645 separately tracked skill variants. Keys, scale
 families, directions, listening/construction, and tempos have independent scores:

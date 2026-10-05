@@ -27,7 +27,14 @@ pub enum Answer {
     },
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum AnswerPolicy {
+    Direct,
+    ExploreThenAnswer,
+}
+
 pub struct Exercise {
+    pub answer_policy: AnswerPolicy,
     pub spelling: NoteSpelling,
     pub skill_id: String,
     pub title: String,
@@ -110,6 +117,7 @@ impl Exercise {
         let spelling = NoteSpelling::for_task(&skill.task, tonic);
         let notes_text = |notes: &[usize]| notes_text(notes, &spelling);
         let mut exercise = Self {
+            answer_policy: AnswerPolicy::Direct,
             spelling: NoteSpelling::default(),
             skill_id: skill.id.clone(),
             title: String::new(),
@@ -241,7 +249,7 @@ impl Exercise {
                 }
                 exercise.title = "SCALES".into();
                 exercise.prompt = format!(
-                    "Play {} {} {}. Start on {} in any octave. One note at a time.",
+                    "Play {} {} scale {}. Start on {} in any octave. One note at a time.",
                     ROOTS[root],
                     if minor { "natural minor" } else { "major" },
                     match direction {
@@ -379,6 +387,20 @@ impl Exercise {
             range: start..self.prompt.len(),
             role,
         });
+    }
+
+    /// Sequential untimed answers have an exact number of note attacks.
+    /// Chords still collect the whole voicing; performances may require holds/rests.
+    pub fn fixed_answer_notes(&self) -> Option<usize> {
+        if self.bpm.is_some() {
+            return None;
+        }
+        match &self.answer {
+            Answer::Interval(_) | Answer::AnchoredInterval { .. } => Some(2),
+            Answer::OctaveSequence(notes) | Answer::TransposedSequence(notes) => Some(notes.len()),
+            Answer::PitchClasses(notes) if notes.len() == 1 => Some(1),
+            _ => None,
+        }
     }
 
     pub fn minimum_notes(&self) -> usize {

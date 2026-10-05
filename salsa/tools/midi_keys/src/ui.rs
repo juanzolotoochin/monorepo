@@ -160,8 +160,11 @@ pub fn draw_training(frame: &mut Frame<'_>, view: &View<'_>, session: &trainer::
                 }
             }
             Phase::Listening => "●  Listen…  r to restart",
+            Phase::Answering if session.exploring => {
+                "Explore freely · ungraded · Enter to start your answer"
+            }
             Phase::Answering if session.timed_phrase => "Your turn · auto finish · r to restart",
-            Phase::Answering => "Your turn · release final keys to submit · Enter now",
+            Phase::Answering => "Play all answer notes · submits automatically",
             Phase::Feedback => "Next exercise shortly… Enter to continue now.",
             Phase::Rest => "No exercises due.",
         };
@@ -230,7 +233,15 @@ pub fn draw_training(frame: &mut Frame<'_>, view: &View<'_>, session: &trainer::
                 text("x", TEAL),
                 text(" don't know  ", MUTED),
                 text("Enter", TEAL),
-                text(" next", MUTED),
+                text(
+                    match session.phase {
+                        Phase::Feedback => " next",
+                        Phase::Answering if session.exploring => " start answer",
+                        Phase::Answering => " submit",
+                        _ => "",
+                    },
+                    MUTED,
+                ),
             ]),
             Line::from(text(
                 "−/+ volume · m mute · n labels · space panic · q quit",
@@ -1026,6 +1037,7 @@ mod tests {
                 mastered: 2,
                 total: 2088,
                 timed_phrase: false,
+                exploring: false,
             };
             terminal
                 .draw(|frame| draw_training(frame, &view, &training))
