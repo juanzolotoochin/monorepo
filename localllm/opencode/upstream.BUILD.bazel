@@ -1,4 +1,4 @@
-load("@monorepo//localllm/private:build.bzl", "opencode_binary")
+load("@monorepo//localllm/opencode:build.bzl", "opencode_binary")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -8,7 +8,7 @@ filegroup(
         ["**"],
         exclude = [
             "BUILD.bazel",
-            "node_modules/opencode/**",
+            "node_modules/@opencode/cli/**",
         ],
     ),
 )
@@ -17,5 +17,5 @@ opencode_binary(
     name = "opencode",
     srcs = [":sources"],
     bun = "@localllm_bun//:bun_tool",
-    package = "packages/opencode/package.json",
+    package = "packages/cli/package.json",
 )

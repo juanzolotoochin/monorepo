@@ -1,8 +1,15 @@
 load("@rules_python//python:defs.bzl", "py_binary")
 load("@rules_rs//rs:rust_test.bzl", "rust_test")
-load("//localllm/private:build.bzl", "draft_pack", "model_pack")
+load("//localllm/strata:pack.bzl", "draft_pack", "model_pack")
 
-exports_files(["requirements.lock.txt"])
+exports_files([
+    "ggml.BUILD.bazel",
+    "strata.BUILD.bazel",
+    "model-iq2-xs.lock.json",
+    "model-iq3-xxs.lock.json",
+    "mtp.lock.json",
+    "requirements.lock.txt",
+])
 
 py_binary(
     name = "draft_pack_tool",

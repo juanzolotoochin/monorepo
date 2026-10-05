@@ -3,88 +3,19 @@ module(
     version = "1.0",
 )
 
-# Local inference: all source archives and CUDA components are content-pinned.
-cuda_repository = use_repo_rule("//localllm/private:repositories.bzl", "cuda_repository")
-
-cuda_repository(
-    name = "localllm_cuda",
-    lock = "//localllm/private:cuda.lock.json",
-)
-
-localllm_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
-
-localllm_source = use_repo_rule("//localllm/private:repositories.bzl", "source_repository")
-
-localllm_source(
-    name = "localllm_strata",
-    build_file = "//localllm/private:strata.BUILD.bazel",
-    cuda_sources = "//localllm/private:cuda-sources.json",
-    sha256 = "c043e9f4c55fef75bfffeed2c034b3c91eb02e5e5fca44739839baca58f961ce",
-    source_key = "strata",
-    strip_prefix = "Strata-6f32ec070f23ced9f50e704d854d775da52591ab",
-    url = "https://codeload.github.com/Niko1221/Strata/tar.gz/6f32ec070f23ced9f50e704d854d775da52591ab",
-)
-
-localllm_source(
-    name = "localllm_ggml",
-    build_file = "//localllm/private:ggml.BUILD.bazel",
-    cuda_sources = "//localllm/private:cuda-sources.json",
-    sha256 = "c076d7534afa0e5d0ec2a0d425b11e791c16f3de0d727221aea071cef156a280",
-    source_key = "ggml",
-    strip_prefix = "llama.cpp-3cf03257f219afbe7334045ff7c6a06ac68c627d",
-    url = "https://codeload.github.com/ggml-org/llama.cpp/tar.gz/3cf03257f219afbe7334045ff7c6a06ac68c627d",
-)
-
-localllm_pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
-localllm_pip.parse(
-    hub_name = "localllm_pip",
-    python_version = "3.11",
-    requirements_lock = "//localllm/strata:requirements.lock.txt",
-)
-use_repo(localllm_pip, "localllm_pip")
-
-model_repository = use_repo_rule("//localllm/private:repositories.bzl", "model_repository")
-
-model_repository(
-    name = "localllm_model",
-    lock = "//localllm/private:model.lock.json",
-)
-
-model_repository(
-    name = "localllm_model_iq3_xxs",
-    lock = "//localllm/private:model-iq3-xxs.lock.json",
-)
-
-mtp_repository = use_repo_rule("//localllm/private:mtp_repository.bzl", "mtp_repository")
-
-mtp_repository(
-    name = "localllm_mtp",
-    lock = "//localllm/private:mtp.lock.json",
-)
-
-opencode_repository = use_repo_rule("//localllm/private:repositories.bzl", "opencode_repository")
-
-opencode_repository(
-    name = "localllm_opencode",
-    build_file = "//localllm/private:opencode.BUILD.bazel",
-    lock = "//localllm/private:opencode-npm.lock.json",
-    patch = "//localllm/private:opencode-offline.patch",
-)
-
-localllm_archive(
-    name = "localllm_bun",
-    build_file_content = 'load("@bazel_skylib//rules:native_binary.bzl", "native_binary")\nnative_binary(name = "bun_tool", src = "bun", out = "bun-bin", visibility = ["//visibility:public"])',
-    sha256 = "951ee2aee855f08595aeec6225226a298d3fea83a3dcd6465c09cbccdf7e848f",
-    strip_prefix = "bun-linux-x64",
-    urls = ["https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-linux-x64.zip"],
-)
-
-localllm_archive(
-    name = "localllm_ripgrep",
-    build_file_content = 'exports_files(["rg"], visibility = ["//visibility:public"])',
-    sha256 = "1c9297be4a084eea7ecaedf93eb03d058d6faae29bbc57ecdaf5063921491599",
-    strip_prefix = "ripgrep-15.1.0-x86_64-unknown-linux-musl",
-    urls = ["https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep-15.1.0-x86_64-unknown-linux-musl.tar.gz"],
+# Local inference dependencies are pinned and organized by component.
+localllm = use_extension("//localllm:extensions.bzl", "dependencies")
+use_repo(
+    localllm,
+    "localllm_bun",
+    "localllm_cuda",
+    "localllm_ggml",
+    "localllm_model",
+    "localllm_model_iq3_xxs",
+    "localllm_mtp",
+    "localllm_opencode",
+    "localllm_ripgrep",
+    "localllm_strata",
 )
 
 bazel_dep(name = "bazel_skylib", version = "1.9.2")
@@ -331,7 +262,12 @@ pip.parse(
     python_version = "3.11",
     requirements_lock = "//:requirements_lock.txt",
 )
-use_repo(pip, pip_deps = "monorepo_deps")
+pip.parse(
+    hub_name = "localllm_pip",
+    python_version = "3.11",
+    requirements_lock = "//localllm/strata:requirements.lock.txt",
+)
+use_repo(pip, "localllm_pip", pip_deps = "monorepo_deps")
 
 # Http Archives
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")

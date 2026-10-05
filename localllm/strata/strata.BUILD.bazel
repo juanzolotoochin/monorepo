@@ -1,9 +1,33 @@
 load("@localllm_pip//:requirements.bzl", "requirement")
-load("@monorepo//localllm/private:cuda.bzl", "cuda_library")
+load("@monorepo//localllm/cuda:defs.bzl", "cuda_library")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
 load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 
 package(default_visibility = ["//visibility:public"])
+
+# Keep ISA-specific kernels in separate compilation units so upstream's
+# runtime dispatch can choose the implementation supported by the host CPU.
+_CPU_COPTS = [
+    "-std=c++20",
+    "-O3",
+]
+
+_AVX2_COPTS = _CPU_COPTS + [
+    "-mavx2",
+    "-mfma",
+    "-mf16c",
+]
+
+_AVX512_COPTS = _CPU_COPTS + [
+    "-mavx512f",
+    "-mavx512bw",
+    "-mavx512vl",
+    "-mavx512dq",
+    "-mavx512vnni",
+    "-mavx512vbmi",
+    "-mf16c",
+    "-mfma",
+]
 
 py_binary(
     name = "server",
@@ -110,10 +134,7 @@ cc_library(
         "src/spec/draft_policy.cpp",
         "src/spec/suffix_drafter.cpp",
     ],
-    copts = [
-        "-std=c++20",
-        "-O3",
-    ],
+    copts = _CPU_COPTS,
     deps = [
         ":headers",
         "@localllm_ggml//:cpu",
@@ -165,10 +186,7 @@ cuda_library(
 cc_binary(
     name = "engine",
     srcs = ["src/program/generate.cpp"],
-    copts = [
-        "-std=c++20",
-        "-O3",
-    ],
+    copts = _CPU_COPTS,
     linkopts = [
         "-lm",
         "-lpthread",
@@ -176,12 +194,12 @@ cc_binary(
     ],
     deps = [
         ":cpu",
-        ":cpu_0",
-        ":cpu_1",
-        ":cpu_2",
-        ":cpu_3",
-        ":cpu_4",
-        ":cpu_5",
+        ":cpu_expert_avx512",
+        ":cpu_iq_avx2",
+        ":cpu_iq_avx512",
+        ":cpu_kq_avx",
+        ":cpu_kq_avx2",
+        ":cpu_q2_avx2",
         ":gpu",
         ":gpu_approximate",
         "@localllm_cuda//:runtime_libs",
@@ -190,20 +208,9 @@ cc_binary(
 )
 
 cc_library(
-    name = "cpu_0",
+    name = "cpu_expert_avx512",
     srcs = ["src/kernels/cpu/expert.cpp"],
-    copts = [
-        "-std=c++20",
-        "-O3",
-        "-mavx512f",
-        "-mavx512bw",
-        "-mavx512vl",
-        "-mavx512dq",
-        "-mavx512vnni",
-        "-mavx512vbmi",
-        "-mf16c",
-        "-mfma",
-    ],
+    copts = _AVX512_COPTS,
     deps = [
         ":headers",
         "@localllm_ggml//:cpu",
@@ -211,15 +218,9 @@ cc_library(
 )
 
 cc_library(
-    name = "cpu_1",
+    name = "cpu_q2_avx2",
     srcs = ["src/kernels/cpu/q2_avx2.cpp"],
-    copts = [
-        "-std=c++20",
-        "-O3",
-        "-mavx2",
-        "-mfma",
-        "-mf16c",
-    ],
+    copts = _AVX2_COPTS,
     deps = [
         ":headers",
         "@localllm_ggml//:cpu",
@@ -227,20 +228,9 @@ cc_library(
 )
 
 cc_library(
-    name = "cpu_2",
+    name = "cpu_iq_avx512",
     srcs = ["src/kernels/cpu/iq_avx512.cpp"],
-    copts = [
-        "-std=c++20",
-        "-O3",
-        "-mavx512f",
-        "-mavx512bw",
-        "-mavx512vl",
-        "-mavx512dq",
-        "-mavx512vnni",
-        "-mavx512vbmi",
-        "-mf16c",
-        "-mfma",
-    ],
+    copts = _AVX512_COPTS,
     deps = [
         ":headers",
         "@localllm_ggml//:cpu",
@@ -248,15 +238,9 @@ cc_library(
 )
 
 cc_library(
-    name = "cpu_3",
+    name = "cpu_iq_avx2",
     srcs = ["src/kernels/cpu/iq_avx2.cpp"],
-    copts = [
-        "-std=c++20",
-        "-O3",
-        "-mavx2",
-        "-mfma",
-        "-mf16c",
-    ],
+    copts = _AVX2_COPTS,
     deps = [
         ":headers",
         "@localllm_ggml//:cpu",
@@ -264,15 +248,9 @@ cc_library(
 )
 
 cc_library(
-    name = "cpu_4",
+    name = "cpu_kq_avx2",
     srcs = ["src/kernels/cpu/kq_avx2.cpp"],
-    copts = [
-        "-std=c++20",
-        "-O3",
-        "-mavx2",
-        "-mfma",
-        "-mf16c",
-    ],
+    copts = _AVX2_COPTS,
     deps = [
         ":headers",
         "@localllm_ggml//:cpu",
@@ -280,13 +258,9 @@ cc_library(
 )
 
 cc_library(
-    name = "cpu_5",
+    name = "cpu_kq_avx",
     srcs = ["src/kernels/cpu/kq_avx1.cpp"],
-    copts = [
-        "-std=c++20",
-        "-O3",
-        "-mavx",
-    ],
+    copts = _CPU_COPTS + ["-mavx"],
     deps = [
         ":headers",
         "@localllm_ggml//:cpu",

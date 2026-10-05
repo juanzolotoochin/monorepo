@@ -5,16 +5,19 @@ bazel run //localllm/opencode
 ```
 
 The Rust launcher starts Strata on an unused loopback port, waits for model
-readiness, and starts OpenCode with a local OpenAI-compatible provider. Exiting
-OpenCode stops the server and its engine. Both the primary and small-model
-providers point to Strata. Nothing downloads at application startup.
+readiness, and starts OpenCode **2.0.32** with a local OpenAI-compatible provider.
+Exiting OpenCode stops the server and its engine. The default model and title
+agent both use Strata. Nothing downloads at application startup. OpenCode uses
+its private standalone server mode, so each launch receives its own Strata
+endpoint and API key without starting or reusing a persistent OpenCode
+background service.
 
 This configuration targets **Linux x86-64 with AVX2 and an NVIDIA Ada GPU
 (sm_89)**. It has been exercised on an RTX 4090 (24 GB VRAM), 64 GB system RAM,
 and NVIDIA driver 615.71.09. A host NVIDIA driver compatible with CUDA 13 is
 required; CUDA headers, compiler components, and user-space libraries come from
 pinned Bazel repositories. Other GPUs need an explicit architecture change in
-`private/cuda.bzl` and validation; they are not automatically detected at build
+`cuda/defs.bzl` and validation; they are not automatically detected at build
 time.
 
 The selected model is Qwen3.8 Flash Next GSQ-RCO IQ3_XXS, with a quantized MTP
@@ -75,6 +78,11 @@ bazel build //localllm/opencode --config=full_local --nofetch \
 # Lightweight launcher tests, without fetching model weights.
 bazel test //localllm/opencode:launcher_test --config=full_local
 
+# Compiled V2 client: config isolation, provider selection, and a streamed tool
+# round trip against a loopback test endpoint. No model weights or GPU needed.
+bazel test //localllm/opencode:client_test --config=full_local \
+  --sandbox_default_allow_network=false
+
 # Explicit, large-input reproducibility test: independently convert both models
 # into different output paths and compare every output file byte for byte.
 bazel test //localllm/strata:reproducibility_test --config=full_local \
@@ -112,7 +120,8 @@ and CPU/GPU options. This replaces upstream CMake's dependency fetching and
 host CPU detection. Python uses the registered Python 3.11 runtime and a
 hash-locked wheel dependency set. OpenCode builds from pinned source with
 pinned Bun and an SRI-locked npm closure, without npm lifecycle scripts or
-`bun install`. CommonJS build paths are normalized before bundling.
+`bun install`. Upstream Bun dependency patches are applied during repository
+fetching; the source archive pins those patches alongside the lockfile. CommonJS build paths are normalized before bundling.
 
 Main-model preparation and draft quantization are ordinary sandboxed Bazel
 actions with declared inputs. Draft conversion excludes upstream timing reports,
@@ -122,7 +131,7 @@ floating Hugging Face revisions or runtime model lookups.
 
 The launcher supplies a private configuration, a random local API key, a pinned
 ripgrep, and local model definitions. Automatic updates, models.dev refreshes,
-project/global plugin discovery, package installation, LSP downloads, sharing,
+project/global configuration and external plugin discovery, package installation, LSP downloads, sharing,
 and formatters are disabled. The web UI is not embedded. This is the terminal
 coding client; dynamically installing extensions is intentionally unavailable.
 
@@ -133,13 +142,17 @@ and PATH. The launcher does not itself impose a network sandbox: a coding
 request can still invoke network tools. Reproducible binaries and model packs
 also do not promise identical model responses across runs or GPU drivers.
 
-Verification includes separately built, byte-identical Strata and OpenCode
-executables, model-conversion comparison tests, and local inference/tool use
-with only loopback networking available. The checked-in tests make model
-conversion reproducibility repeatable; comparing native/application builds
+Earlier validation included separately built, byte-identical Strata and
+OpenCode 1 executables, model-conversion comparison tests, and local inference
+with only loopback networking available. The OpenCode 2 upgrade is covered by a
+compiled-client test for configuration isolation, provider selection, and a
+streamed tool round trip. GPU inference and independent binary comparisons
+have not been repeated for that upgrade. Comparing native/application builds
 requires separate Bazel output bases to avoid an action-cache hit.
 
 ## Quality trial
+
+These recorded trials used the earlier OpenCode 1 client.
 
 `quality-comparison.json` records the exact user-requested `midi_keys` code-quality
 prompt, settings, final model responses, and source spot-checks. IQ2_XS completed
@@ -213,17 +226,27 @@ established.
 
 ## Pins and updates
 
-- `MODULE.bazel`: Strata, llama.cpp/ggml, Bun, ripgrep, Python dependency hub.
-- `private/repositories.bzl`: OpenCode source commit and archive digest.
-- `private/cuda.lock.json`: NVIDIA redistribution components and SHA-256 hashes.
-- `private/model.lock.json` and `private/model-iq3-xxs.lock.json`: GGUF revision,
-  immutable URLs, sizes, hashes for IQ2_XS and IQ3_XXS respectively.
-- `private/mtp.lock.json`: immutable safetensors revision, tensor ranges, shapes,
-  dtypes, and per-range SHA-256 hashes. Range downloads fail closed on a digest
-  mismatch, including servers that return the wrong range.
-- `private/opencode-npm.lock.json`: resolved Linux x64 dependency closure from
-  the pinned upstream Bun lock, including workspace mappings.
-- `strata/requirements.lock.txt`: pinned Python packages and artifact hashes.
+- `extensions.bzl`: one entry point declaring the local inference repositories.
+- `cuda/`: CUDA compilation rules, source aliases, and pinned NVIDIA components.
+- `opencode/`: launcher, asset/runfiles rule, upstream build overlay, source pin,
+  Bun/ripgrep pins, npm lock, and offline patch.
+- `strata/`: Strata/ggml source pins and overlays, model locks, conversion rules,
+  Python adapter/dependencies, and reproducibility checks.
+
+`MODULE.bazel` imports the dependency extension's repositories and registers the
+Strata dependency hub through the existing rules_python pip extension. Fetching
+stays in repository rules; compilation and conversion stay in build actions.
+Both model variants are declared, but only the selected variant is fetched.
+
+Python is required by upstream Strata's HTTP server and model converters. The
+local `strata/draft_pack.py` only adapts those converters to a deterministic
+Bazel action; it does not implement another inference server or quantizer.
+
+The model locks (`strata/model-iq2-xs.lock.json`,
+`strata/model-iq3-xxs.lock.json`, and `strata/mtp.lock.json`) record immutable
+revisions and hashes. MTP entries also record tensor ranges, shapes, and dtypes;
+range downloads fail closed on a digest mismatch. `opencode/npm.lock.json`
+records the SRI-locked Linux x64 npm closure and workspace mappings.
 
 For a source update, review upstream changes and update the archive digest,
 explicit native source lists/build overlays, CUDA aliases, and patches together.
@@ -231,10 +254,12 @@ Do not restore upstream network fetches or `-march=native`. Regenerate the npm
 closure from the new source's `bun.lock` with the pinned Bun executable:
 
 ```sh
-/path/to/pinned/bun localllm/private/lock_opencode.ts /path/to/opencode-source
+/path/to/pinned/bun localllm/opencode/lock.ts /path/to/opencode-source
 ```
 
-Update the OpenCode version in `private/build_opencode.ts` with its source pin.
+The build reads the OpenCode version from the pinned CLI package and verifies
+it with the compiled binary's `--version` command. Update the expected version
+in `opencode/client_test.rs` when changing the source pin.
 The lock generator is TypeScript because it uses Bun's own lockfile parser; the
 launcher and output-comparison test are Rust. The small draft adapter is Python
 because the upstream quantizers are Python.

@@ -3,7 +3,7 @@ import path from "node:path";
 
 // Update-time utility only; Bazel fetches the resulting manifest by SRI.
 const root = process.argv[2];
-if (!root) throw new Error("Usage: bun localllm/private/lock_opencode.ts <upstream-source>");
+if (!root) throw new Error("Usage: bun localllm/opencode/lock.ts <upstream-source>");
 const lock = Bun.JSON5.parse(fs.readFileSync(path.join(root, "bun.lock"), "utf8"));
 const packages = lock.packages;
 const atoms = (key: string) => key.match(/(?:@[^/]+\/)?[^/]+/g) || [];
@@ -26,7 +26,7 @@ function supports(input: string | string[] | undefined, value: string) {
 }
 
 const selected = new Set<string>();
-const queue = ["opencode"];
+const queue = ["@opencode/cli"];
 const workspaces = Object.fromEntries(
   Object.entries(lock.workspaces).map(([directory, metadata]: any) => [
     metadata.name, { path: directory, ...metadata },
@@ -72,7 +72,8 @@ const entries = [...selected].sort().map(key => {
     dest,
     url: `https://registry.npmjs.org/${name}/-/${name.split("/").pop()}-${version}.tgz`,
     integrity: entry[3],
+    ...(lock.patchedDependencies?.[entry[0]] ? { patch: lock.patchedDependencies[entry[0]] } : {}),
   };
 });
-fs.writeFileSync("localllm/private/opencode-npm.lock.json", JSON.stringify(entries, null, 2) + "\n");
+fs.writeFileSync("localllm/opencode/npm.lock.json", JSON.stringify(entries, null, 2) + "\n");
 console.log(`${entries.length} packages`);

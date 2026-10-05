@@ -1,4 +1,7 @@
+mod config;
+
 use anyhow::{bail, Context, Result};
+use config::provider;
 use serde_json::{json, Value};
 use std::{
     env, fs,
@@ -91,25 +94,6 @@ fn context_window(value: Option<&str>) -> Result<u32> {
         bail!("LOCALLLM_CONTEXT must be 32768, 65536, or 131072 (tested capacities)");
     }
     Ok(context)
-}
-
-fn provider(port: u16, key: &str, context: u32, quantization: &str) -> Value {
-    json!({
-        "model": "strata/local", "small_model": "strata/local",
-        "enabled_providers": ["strata"], "autoupdate": false,
-        "share": "disabled", "plugin": [], "mcp": {}, "lsp": false, "formatter": false,
-        // Explicit input limit makes this OpenCode version honor `reserved`.
-        // Leave 16K output plus 4K for new tool results before compacting.
-        "compaction": {"auto": true, "prune": true, "reserved": 20480,
-            "preserve_recent_tokens": 4096},
-        "tool_output": {"max_lines": 400, "max_bytes": 16000},
-        "provider": {"strata": {
-            "npm": "@ai-sdk/openai-compatible", "name": "Strata (local)",
-            "options": {"baseURL": format!("http://127.0.0.1:{port}/v1"), "apiKey": key},
-            "models": {"local": {"name": format!("Qwen3.8 Flash Next {quantization}"), "tool_call": true,
-                "limit": {"context": context, "input": context, "output": 16384}}}
-        }}
-    })
 }
 
 fn run() -> Result<i32> {
@@ -337,25 +321,6 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn provider_uses_local_model_for_all_requests() {
-        let config = provider(12345, "test-key", 65536, "IQ3_XXS");
-        assert_eq!(config["model"], config["small_model"]);
-        let output = config["provider"]["strata"]["models"]["local"]["limit"]["output"]
-            .as_u64()
-            .unwrap();
-        let reserved = config["compaction"]["reserved"].as_u64().unwrap();
-        assert!(reserved >= output + 4096);
-        assert!(reserved < 32768);
-        assert_eq!(
-            config["provider"]["strata"]["models"]["local"]["name"],
-            "Qwen3.8 Flash Next IQ3_XXS"
-        );
-        assert_eq!(
-            config["provider"]["strata"]["options"]["baseURL"],
-            "http://127.0.0.1:12345/v1"
-        );
-    }
     #[test]
     fn context_setting_rejects_untested_or_malformed_values() {
         assert_eq!(context_window(None).unwrap(), 65536);

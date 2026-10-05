@@ -1,5 +1,5 @@
 load("@localllm_pip//:requirements.bzl", "requirement")
-load("@monorepo//localllm/private:cuda.bzl", "cuda_library")
+load("@monorepo//localllm/cuda:defs.bzl", "cuda_library")
 load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_python//python:defs.bzl", "py_library")
 

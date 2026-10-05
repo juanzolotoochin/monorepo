@@ -1,6 +1,13 @@
 load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
 load("@rules_rs//rs:rust_test.bzl", "rust_test")
-load("//localllm/private:build.bzl", "launcher_assets")
+load("//localllm/opencode:assets.bzl", "launcher_assets")
+
+exports_files([
+    "build.ts",
+    "npm.lock.json",
+    "offline.patch",
+    "upstream.BUILD.bazel",
+])
 
 filegroup(
     name = "engine",
@@ -34,7 +41,10 @@ launcher_assets(
 
 rust_binary(
     name = "opencode",
-    srcs = ["main.rs"],
+    srcs = [
+        "config.rs",
+        "main.rs",
+    ],
     data = [":assets"],
     edition = "2021",
     tags = ["manual"],
@@ -53,7 +63,11 @@ rust_binary(
 
 rust_test(
     name = "launcher_test",
-    srcs = ["main.rs"],
+    srcs = [
+        "config.rs",
+        "main.rs",
+    ],
+    crate_root = "main.rs",
     edition = "2021",
     target_compatible_with = [
         "@platforms//os:linux",
@@ -62,6 +76,35 @@ rust_test(
     deps = [
         "@crates//:anyhow",
         "@crates//:libc-0.2.186",
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+    ],
+)
+
+# Exercise the compiled V2 client and launcher config without a GPU or model.
+rust_test(
+    name = "client_test",
+    size = "small",
+    timeout = "short",
+    srcs = [
+        "client_test.rs",
+        "config.rs",
+    ],
+    data = [
+        "@localllm_opencode//:opencode",
+        "@localllm_ripgrep//:rg",
+    ],
+    edition = "2021",
+    env = {
+        "CLIENT_DIST": "$(rootpath @localllm_opencode//:opencode)",
+        "RIPGREP": "$(rootpath @localllm_ripgrep//:rg)",
+    },
+    tags = ["manual"],
+    target_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+    deps = [
         "@crates//:serde_json",
         "@crates//:tempfile",
     ],
