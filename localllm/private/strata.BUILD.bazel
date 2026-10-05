@@ -1,0 +1,347 @@
+load("@localllm_pip//:requirements.bzl", "requirement")
+load("@monorepo//localllm/private:cuda.bzl", "cuda_library")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
+
+package(default_visibility = ["//visibility:public"])
+
+py_binary(
+    name = "server",
+    srcs = glob([
+        "serve/*.py",
+        "tools/*.py",
+    ]),
+    data = glob([
+        "serve/*.jinja",
+        "serve/web/**",
+    ]),
+    legacy_create_init = 0,
+    main = "serve/server.py",
+    deps = [requirement(p) for p in [
+        "numpy",
+        "jinja2",
+        "regex",
+        "psutil",
+        "pillow",
+    ]],
+)
+
+py_binary(
+    name = "pack",
+    srcs = glob(["tools/*.py"]),
+    legacy_create_init = 0,
+    main = "tools/iq_pack.py",
+    deps = [
+        requirement("numpy"),
+        requirement("regex"),
+    ],
+)
+
+exports_files([
+    "data/expert-profile.bin",
+    "data/draft_vocab.bin",
+])
+
+py_library(
+    name = "draft_tools",
+    srcs = glob(["tools/*.py"]),
+    imports = ["tools"],
+    deps = [
+        "@localllm_ggml//:gguf",
+        requirement("numpy"),
+    ],
+)
+
+cc_library(
+    name = "headers",
+    hdrs = glob([
+        "include/**/*.hpp",
+        "include/**/*.h",
+        "include/**/*.cuh",
+        "third_party/ggml/*.h",
+        "src/**/*.hpp",
+        "src/**/*.h",
+        "src/**/*.cuh",
+    ]),
+    defines = [
+        "STRATA_NATIVE_EXPERTS=1",
+        "STRATA_PREFILL_FUSED=1",
+        "STRATA_PREFILL_MMQ=1",
+        "STRATA_VERSION=\\\"0.1.39\\\"",
+    ],
+    includes = [
+        "include",
+        "third_party/ggml",
+    ],
+    deps = [
+        "@localllm_cuda//:headers",
+        "@localllm_ggml//:headers",
+    ],
+)
+
+cc_library(
+    name = "cpu",
+    srcs = [
+        "src/core/conversation_memory.cpp",
+        "src/core/conversation_snapshot.cpp",
+        "src/core/conversation_state.cpp",
+        "src/core/expert_cache.cpp",
+        "src/core/expert_source.cpp",
+        "src/core/graph.cpp",
+        "src/core/layer.cpp",
+        "src/core/layout.cpp",
+        "src/core/mtp.cpp",
+        "src/core/native_dense.cpp",
+        "src/core/native_head.cpp",
+        "src/core/peer_experts.cpp",
+        "src/core/remote_experts.cpp",
+        "src/core/session.cpp",
+        "src/core/verify.cpp",
+        "src/core/weights.cpp",
+        "src/kernels/cpu/expert_layout.cpp",
+        "src/kernels/cpu/native_expert.cpp",
+        "src/kernels/cpu/pool.cpp",
+        "src/kernels/ngram.cpp",
+        "src/ngram/ple_reader.cpp",
+        "src/platform/direct_file.cpp",
+        "src/platform/memory.cpp",
+        "src/prefill/prefill.cpp",
+        "src/spec/controller.cpp",
+        "src/spec/draft_policy.cpp",
+        "src/spec/suffix_drafter.cpp",
+    ],
+    copts = [
+        "-std=c++20",
+        "-O3",
+    ],
+    deps = [
+        ":headers",
+        "@localllm_ggml//:cpu",
+    ],
+)
+
+cuda_library(
+    name = "gpu",
+    srcs = [
+        "src/core/device.cu.cc",
+        "src/core/pinned.cu.cc",
+        "src/core/remote_expert_opt.cu.cc",
+        "src/kernels/cuda/bf16_gemv.cu.cc",
+        "src/kernels/cuda/cvec.cu.cc",
+        "src/kernels/cuda/dequant_bf16.cu.cc",
+        "src/kernels/cuda/dequant_s2.cu.cc",
+        "src/kernels/cuda/elementwise.cu.cc",
+        "src/kernels/cuda/fused_gdn.cu.cc",
+        "src/kernels/cuda/fused_gr.cu.cc",
+        "src/kernels/cuda/gdn.cu.cc",
+        "src/kernels/cuda/gr.cu.cc",
+        "src/kernels/cuda/iq_kernels.cu.cc",
+        "src/kernels/cuda/kv_q4.cu.cc",
+        "src/kernels/cuda/kv_q8.cu.cc",
+        "src/kernels/cuda/kv_stream.cu.cc",
+        "src/kernels/cuda/ple.cu.cc",
+        "src/kernels/cuda/qsa.cu.cc",
+        "src/kernels/cuda/qsa_decode_attn.cu.cc",
+        "src/kernels/cuda/qsa_prompt_attn.cu.cc",
+        "src/kernels/cuda/qsa_select.cu.cc",
+        "src/kernels/cuda/quantize_act.cu.cc",
+        "src/kernels/cuda/rope.cu.cc",
+        "src/kernels/cuda/router_top10.cu.cc",
+        "src/kernels/cuda/s2_expert_grouped.cu.cc",
+        "src/kernels/cuda/s2_gemv.cu.cc",
+        "src/kernels/cuda/s2_gemv_fast.cu.cc",
+        "src/kernels/cuda/s2_gemv_q8.cu.cc",
+        "src/kernels/cuda/s2_gemv_quads.cu.cc",
+        "src/kernels/cuda/s_gemv.cu.cc",
+        "src/kernels/cuda/sampler.cu.cc",
+        "src/kernels/cuda/shared_expert.cu.cc",
+        "src/kernels/cuda/verify_kernels.cu.cc",
+        "src/prefill/gemm.cu.cc",
+        "src/prefill/kernels.cu.cc",
+    ],
+    deps = [":headers"],
+)
+
+cc_binary(
+    name = "engine",
+    srcs = ["src/program/generate.cpp"],
+    copts = [
+        "-std=c++20",
+        "-O3",
+    ],
+    linkopts = [
+        "-lm",
+        "-lpthread",
+        "-ldl",
+    ],
+    deps = [
+        ":cpu",
+        ":cpu_0",
+        ":cpu_1",
+        ":cpu_2",
+        ":cpu_3",
+        ":cpu_4",
+        ":cpu_5",
+        ":gpu",
+        ":gpu_approximate",
+        "@localllm_cuda//:runtime_libs",
+        "@localllm_ggml//:gpu",
+    ],
+)
+
+cc_library(
+    name = "cpu_0",
+    srcs = ["src/kernels/cpu/expert.cpp"],
+    copts = [
+        "-std=c++20",
+        "-O3",
+        "-mavx512f",
+        "-mavx512bw",
+        "-mavx512vl",
+        "-mavx512dq",
+        "-mavx512vnni",
+        "-mavx512vbmi",
+        "-mf16c",
+        "-mfma",
+    ],
+    deps = [
+        ":headers",
+        "@localllm_ggml//:cpu",
+    ],
+)
+
+cc_library(
+    name = "cpu_1",
+    srcs = ["src/kernels/cpu/q2_avx2.cpp"],
+    copts = [
+        "-std=c++20",
+        "-O3",
+        "-mavx2",
+        "-mfma",
+        "-mf16c",
+    ],
+    deps = [
+        ":headers",
+        "@localllm_ggml//:cpu",
+    ],
+)
+
+cc_library(
+    name = "cpu_2",
+    srcs = ["src/kernels/cpu/iq_avx512.cpp"],
+    copts = [
+        "-std=c++20",
+        "-O3",
+        "-mavx512f",
+        "-mavx512bw",
+        "-mavx512vl",
+        "-mavx512dq",
+        "-mavx512vnni",
+        "-mavx512vbmi",
+        "-mf16c",
+        "-mfma",
+    ],
+    deps = [
+        ":headers",
+        "@localllm_ggml//:cpu",
+    ],
+)
+
+cc_library(
+    name = "cpu_3",
+    srcs = ["src/kernels/cpu/iq_avx2.cpp"],
+    copts = [
+        "-std=c++20",
+        "-O3",
+        "-mavx2",
+        "-mfma",
+        "-mf16c",
+    ],
+    deps = [
+        ":headers",
+        "@localllm_ggml//:cpu",
+    ],
+)
+
+cc_library(
+    name = "cpu_4",
+    srcs = ["src/kernels/cpu/kq_avx2.cpp"],
+    copts = [
+        "-std=c++20",
+        "-O3",
+        "-mavx2",
+        "-mfma",
+        "-mf16c",
+    ],
+    deps = [
+        ":headers",
+        "@localllm_ggml//:cpu",
+    ],
+)
+
+cc_library(
+    name = "cpu_5",
+    srcs = ["src/kernels/cpu/kq_avx1.cpp"],
+    copts = [
+        "-std=c++20",
+        "-O3",
+        "-mavx",
+    ],
+    deps = [
+        ":headers",
+        "@localllm_ggml//:cpu",
+    ],
+)
+
+cuda_library(
+    name = "gpu_approximate",
+    srcs = [
+        "src/kernels/cuda/native_bf16.cu.cc",
+        "src/kernels/cuda/native_flash_attn.cu.cc",
+        "src/kernels/cuda/native_gdn.cu.cc",
+        "src/kernels/cuda/native_gdn_preprocess.cu.cc",
+        "src/kernels/cuda/native_gr_norm.cu.cc",
+        "src/kernels/cuda/native_gr_postops.cu.cc",
+        "src/kernels/cuda/native_mmvq.cu.cc",
+        "src/kernels/cuda/native_moe.cu.cc",
+        "src/kernels/cuda/native_ple_postops.cu.cc",
+        "src/kernels/cuda/native_qsa.cu.cc",
+        "src/kernels/cuda/native_qsa_indexer.cu.cc",
+        "src/kernels/cuda/native_qsa_score.cu.cc",
+        "src/kernels/cuda/native_rope.cu.cc",
+        "src/kernels/cuda/native_router.cu.cc",
+        "src/prefill/ggml_cuda_host.cu.cc",
+        "src/prefill/moe_fused.cu.cc",
+        "src/prefill/moe_fused_iq.cu.cc",
+        "src/prefill/moe_mmq.cu.cc",
+    ],
+    approximate = True,
+    deps = [":headers"],
+)
+
+# Exercise upstream HTTP budgeting against a mock engine; no model/GPU needed.
+py_test(
+    name = "context_budget_test",
+    srcs = glob([
+        "serve/*.py",
+        "tools/*.py",
+    ]),
+    args = [
+        "FitMaxTokens",
+        "MaxTokens",
+        "ThinkingBudget",
+    ],
+    data = glob([
+        "serve/*.jinja",
+        "serve/web/**",
+    ]),
+    legacy_create_init = 0,
+    main = "serve/test_server.py",
+    deps = [requirement(p) for p in [
+        "numpy",
+        "jinja2",
+        "regex",
+        "psutil",
+        "pillow",
+    ]],
+)

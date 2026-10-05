@@ -1,0 +1,39 @@
+diff --git a/packages/opencode/src/config/paths.ts b/packages/opencode/src/config/paths.ts
+--- a/packages/opencode/src/config/paths.ts
++++ b/packages/opencode/src/config/paths.ts
+@@ -21,6 +21,7 @@
+ })
+ 
+ export const directories = Effect.fn("ConfigPaths.directories")(function* (directory: string, worktree?: string) {
++  if (process.env.OPENCODE_HERMETIC === "1") return []
+   const afs = yield* FSUtil.Service
+   return unique([
+     Global.Path.config,
+diff --git a/packages/core/src/npm.ts b/packages/core/src/npm.ts
+--- a/packages/core/src/npm.ts
++++ b/packages/core/src/npm.ts
+@@ -87,6 +87,9 @@
+     const directory = (pkg: string) => path.join(global.cache, "packages", sanitize(pkg))
+     const reify = (input: { dir: string; add?: string[] }) =>
+       Effect.gen(function* () {
++        if (process.env.OPENCODE_HERMETIC === "1") {
++          return yield* new InstallFailedError({ dir: input.dir, add: input.add ?? [], cause: new Error("Runtime package installation is disabled in the Bazel build") })
++        }
+         yield* flock.acquire(`npm-install:${input.dir}`)
+         const { Arborist } = yield* Effect.promise(() => import("@npmcli/arborist"))
+         const add = input.add ?? []
+diff --git a/packages/core/src/ripgrep/binary.ts b/packages/core/src/ripgrep/binary.ts
+--- a/packages/core/src/ripgrep/binary.ts
++++ b/packages/core/src/ripgrep/binary.ts
+@@ -91,6 +91,11 @@
+       return Service.of({
+         filepath: yield* Effect.cached(
+           Effect.gen(function* () {
++            if (process.env.OPENCODE_HERMETIC === "1") {
++              const pinned = process.env.LOCALLLM_RIPGREP
++              if (!pinned || !(yield* fs.isFile(pinned).pipe(Effect.orDie))) throw new Error("Pinned ripgrep is missing")
++              return pinned
++            }
+             const system = yield* Effect.sync(() => which(process.platform === "win32" ? "rg.exe" : "rg"))
+             if (system && (yield* fs.isFile(system).pipe(Effect.orDie))) return system
+ 

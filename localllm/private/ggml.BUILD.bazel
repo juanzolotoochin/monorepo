@@ -1,0 +1,103 @@
+load("@localllm_pip//:requirements.bzl", "requirement")
+load("@monorepo//localllm/private:cuda.bzl", "cuda_library")
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_python//python:defs.bzl", "py_library")
+
+package(default_visibility = ["//visibility:public"])
+
+py_library(
+    name = "gguf",
+    srcs = glob(["gguf-py/gguf/*.py"]),
+    imports = ["gguf-py"],
+    deps = [
+        requirement("numpy"),
+        requirement("pyyaml"),
+        requirement("tqdm"),
+    ],
+)
+
+cc_library(
+    name = "headers",
+    hdrs = glob([
+        "ggml/include/*.h",
+        "ggml/src/**/*.h",
+        "ggml/src/**/*.cuh",
+    ]),
+    includes = [
+        "ggml/include",
+        "ggml/src",
+        "ggml/src/ggml-cpu",
+        "ggml/src/ggml-cuda",
+    ],
+)
+
+cc_library(
+    name = "cpu",
+    srcs = [
+        "ggml/src/ggml.c",
+        "ggml/src/ggml.cpp",
+        "ggml/src/ggml-alloc.c",
+        "ggml/src/ggml-backend.cpp",
+        "ggml/src/ggml-backend-meta.cpp",
+        "ggml/src/ggml-cpu/amx/amx.cpp",
+        "ggml/src/ggml-cpu/amx/mmq.cpp",
+        "ggml/src/ggml-cpu/arch/x86/quants.c",
+        "ggml/src/ggml-cpu/arch/x86/repack.cpp",
+        "ggml/src/ggml-cpu/binary-ops.cpp",
+        "ggml/src/ggml-cpu/ggml-cpu.c",
+        "ggml/src/ggml-cpu/ggml-cpu.cpp",
+        "ggml/src/ggml-cpu/hbm.cpp",
+        "ggml/src/ggml-cpu/iqp.cpp",
+        "ggml/src/ggml-cpu/ops.cpp",
+        "ggml/src/ggml-cpu/quants.c",
+        "ggml/src/ggml-cpu/repack.cpp",
+        "ggml/src/ggml-cpu/traits.cpp",
+        "ggml/src/ggml-cpu/unary-ops.cpp",
+        "ggml/src/ggml-cpu/vec.cpp",
+        "ggml/src/ggml-opt.cpp",
+        "ggml/src/ggml-quants.c",
+        "ggml/src/ggml-threading.cpp",
+        "ggml/src/gguf.cpp",
+    ],
+    copts = [
+        "-O3",
+        "-mavx2",
+        "-mfma",
+        "-mf16c",
+        "-mbmi2",
+    ],
+    defines = [
+        "GGML_SCHED_MAX_COPIES=4",
+        "_GNU_SOURCE",
+        "_XOPEN_SOURCE=600",
+        "GGML_AVX",
+        "GGML_AVX2",
+        "GGML_BMI2",
+        "GGML_F16C",
+        "GGML_FMA",
+        "GGML_SSE42",
+        "GGML_USE_CPU_REPACK",
+    ],
+    deps = [":headers"],
+)
+
+cuda_library(
+    name = "gpu",
+    srcs = [
+        "ggml/src/ggml-cuda/quantize.cu.cc",
+        "ggml/src/ggml-cuda/template-instances/mmq-instance-iq2_s.cu.cc",
+        "ggml/src/ggml-cuda/template-instances/mmq-instance-iq2_xs.cu.cc",
+        "ggml/src/ggml-cuda/template-instances/mmq-instance-iq2_xxs.cu.cc",
+        "ggml/src/ggml-cuda/template-instances/mmq-instance-iq3_s.cu.cc",
+        "ggml/src/ggml-cuda/template-instances/mmq-instance-iq3_xxs.cu.cc",
+        "ggml/src/ggml-cuda/template-instances/mmq-instance-iq4_nl.cu.cc",
+        "ggml/src/ggml-cuda/template-instances/mmq-instance-iq4_xs.cu.cc",
+        "ggml/src/ggml-cuda/template-instances/mmq-instance-q2_0.cu.cc",
+        "ggml/src/ggml-cuda/template-instances/mmq-instance-q8_0.cu.cc",
+    ],
+    approximate = True,
+    deps = [
+        ":headers",
+        "@localllm_cuda//:headers",
+    ],
+)

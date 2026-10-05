@@ -1,0 +1,44 @@
+{
+  "cuda_nvcc": {
+    "relative_path": "cuda_nvcc/linux-x86_64/cuda_nvcc-linux-x86_64-13.0.88-archive.tar.xz",
+    "sha256": "48e35be3cfbf4b4fbc16828eaec8a7048ee789403049dc409f7b643d6259cf7a",
+    "md5": "e3e925c644055b9306aec9c9b84d1975",
+    "size": "26657716"
+  },
+  "cuda_cudart": {
+    "relative_path": "cuda_cudart/linux-x86_64/cuda_cudart-linux-x86_64-13.0.96-archive.tar.xz",
+    "sha256": "25b8071951baba827be1580b841d363464f6ee6c39f48d33a81646f90cc95ed1",
+    "md5": "26ebf8fd2c0fe1f303d5d27c49624d5e",
+    "size": "1487960"
+  },
+  "cuda_cccl": {
+    "relative_path": "cuda_cccl/linux-x86_64/cuda_cccl-linux-x86_64-13.0.85-archive.tar.xz",
+    "sha256": "ed845eae8c1767706b6ee91e40c608a03f6f633551a849b63f7346d32d73ee60",
+    "md5": "c0dd26e0c41dc35bd73435a4799c7508",
+    "size": "991284"
+  },
+  "cuda_crt": {
+    "relative_path": "cuda_crt/linux-x86_64/cuda_crt-linux-x86_64-13.0.88-archive.tar.xz",
+    "sha256": "5a3279a049ffc1cdb951c44cb95206acfdde9e9ae5e87825fc18d7e4a6878bb0",
+    "md5": "f90b38d702a29668d97e8f94a399ea31",
+    "size": "79800"
+  },
+  "libnvvm": {
+    "relative_path": "libnvvm/linux-x86_64/libnvvm-linux-x86_64-13.0.88-archive.tar.xz",
+    "sha256": "17ef1665b63670887eeba7d908da5669fa8c66bb73b5b4c1367f49929c086353",
+    "md5": "816927093ffbdc10fddd751f045396b1",
+    "size": "43645408"
+  },
+  "libcublas": {
+    "relative_path": "libcublas/linux-x86_64/libcublas-linux-x86_64-13.1.0.3-archive.tar.xz",
+    "sha256": "88bc951efd906032a371153ca61975e0d9c4761e4012169169a6b3a47931606e",
+    "md5": "980968a3f2a7fc483be4a07dd56e09ad",
+    "size": "838952932"
+  },
+  "libcurand": {
+    "relative_path": "libcurand/linux-x86_64/libcurand-linux-x86_64-10.4.0.35-archive.tar.xz",
+    "sha256": "ee0dbf473998050bda876cb945634bec87d44b90b05a5550e9c2499ab7c1a5c3",
+    "md5": "e236c0f2483e83d614b563a9dc136ba3",
+    "size": "86175028"
+  }
+}
