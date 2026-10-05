@@ -679,6 +679,10 @@ fn run() -> Result<(), String> {
                     trainer.cycle_insights(false);
                     true
                 }
+                74 | 75 => {
+                    trainer.browse_insights(key == 74);
+                    true
+                }
                 105 | 73 => {
                     trainer.toggle_insights();
                     true

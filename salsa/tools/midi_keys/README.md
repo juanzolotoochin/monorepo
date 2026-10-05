@@ -152,8 +152,12 @@ Untimed partial answers can pause indefinitely.
 Replaying a tonic exercise returns to exploration. Timed phrases finish at their
 scheduled end, including rests and held notes; an empty fixed-time answer counts
 as a missed attempt. Enter can submit sooner, or after a partial answer.
-Feedback advances automatically after two seconds for an independent correct
-answer, or four seconds for a mistake or assisted answer. Enter continues sooner.
+Feedback advances automatically after two seconds only for an independent, fully
+correct answer. Mistakes, imperfect graded answers, and assisted attempts stay
+on screen until `r` retries or Enter continues. A prominent red **NEEDS WORK**
+banner identifies unsuccessful results; graded results retain their numeric score.
+Feedback keeps the exercise’s original theory, score, or rhythm layout. Score
+comparisons put Played above Expected; rhythm retains its attack/hold table.
 The next prompt waits until all physical keys are released.
 The device-selection note is not counted as an answer.
 
@@ -765,3 +769,34 @@ feedback without starting a new attempt. `c` pauses any result to review it.
 Retries after seeing the answer are marked assisted and do not earn mastery credit.
 At startup, tap and release one MIDI key to select the input device; that note
 is only for connection, not an exercise answer. `--port CLIENT:PORT` skips selection.
+
+All exercise families share the same outer training screen. Guided scales,
+sight reading, lead sheets, accompaniment, and rhythm render inside the exercise
+area, alongside the same history, insights, and piano as theory questions.
+At widths of 120 columns or more, history and insights appear together; at
+narrower widths, `i` switches the shared panel. The piano appears at 34 rows or
+more. These size rules are consistent across exercise families and phases.
+
+Rhythm and meter exercises now use a 0–100 grade, saved in the same optional
+`performance_score` field as accompaniment. Attacks contribute 70% and graded
+holds 30%; exercises without hold targets use attack credit only. Within the
+tolerance they earn full credit; outside it, credit falls linearly over one beat.
+A missing or extra attack costs one note's share. Imperfect attempts cap at 99,
+and grades of 90 or more qualify as successful for mastery. Imperfect attempts
+still wait for explicit retry/next so their feedback can be reviewed.
+
+Rhythm tolerance is one fifth of a beat (minimum 60 ms): ±200 ms at 60 BPM.
+The played percussion score appears above the expected score; red notes/rests
+and the exact-timing table use the same aligned report as grading. Notation
+rounds to eighth-note ticks; small timing errors can therefore have the same
+written duration but a red symbol. Compact terminals use colored text notation.
+Other exercise families retain their existing grading policies.
+
+Insights summarize the last 24 hours, the last 40 independent attempts, repeated
+weaknesses, current mastery evidence, mixed-interval recognition, mastered skills,
+and a nearby unlock requirement. Assisted attempts do not establish weaknesses;
+a single miss is explicitly distinguished from a pattern. Historical results
+retain their original grading; changing tolerances does not rewrite history.
+Use **Shift+J / Shift+K** to browse insights even while a result's timing table
+uses lowercase `j/k`. The historical profile itself is never regraded by these
+summaries.

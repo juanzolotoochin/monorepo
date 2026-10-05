@@ -5,6 +5,7 @@ mod curriculum;
 mod debug_capture;
 mod evidence;
 mod exercise;
+mod insights;
 mod learner;
 mod music;
 mod performance;
@@ -81,8 +82,19 @@ pub struct BrowserView<'a> {
     pub selected: usize,
 }
 
-/// Exercise presentation without grading answers or mutable learner evidence.
+/// Stable screen family selected before an answer, independent of feedback notation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExerciseLayout {
+    Theory,
+    Score,
+    Rhythm,
+}
+
+/// Exercise presentation without unrevealed answers or mutable learner evidence.
 pub struct TrainingView<'a> {
+    pub layout: ExerciseLayout,
+    pub feedback_correct: Option<bool>,
+    pub feedback_grade: Option<u8>,
     pub skill_id: &'a str,
     /// Newest first, including results saved in previous sessions.
     pub recent_exercises: Vec<ExerciseLogEntry<'a>>,
@@ -119,6 +131,7 @@ pub struct TrainingView<'a> {
 }
 
 pub struct Session {
+    feedback_correct: Option<bool>,
     debug: Option<debug_capture::Capture>,
     feedback_score: Option<WrittenScore>,
     played_score: Option<WrittenScore>,
@@ -256,7 +269,10 @@ impl Session {
             return;
         }
 
-        let count = self.profile.insights(&self.graph).len().max(1);
+        self.browse_insights(forward);
+    }
+    pub fn browse_insights(&mut self, forward: bool) {
+        let count = self.view().insights.len().max(1);
         self.insight_offset =
             (self.insight_offset % count + if forward { 1 } else { count - 1 }) % count;
     }
@@ -296,6 +312,17 @@ impl Session {
     }
     pub fn view(&self) -> TrainingView<'_> {
         TrainingView {
+            layout: self.exercise.as_ref().map_or(ExerciseLayout::Theory, |e| {
+                if e.rhythm_score().is_some() {
+                    ExerciseLayout::Rhythm
+                } else if e.prompt_score.is_some() {
+                    ExerciseLayout::Score
+                } else {
+                    ExerciseLayout::Theory
+                }
+            }),
+            feedback_correct: self.feedback_correct,
+            feedback_grade: self.performance_score,
             recent_exercises: self
                 .profile
                 .recent_attempts
@@ -381,7 +408,11 @@ impl Session {
                     "b: exercise list · v: another variant · r: replay".into(),
                 ]
             } else {
-                self.profile.insights(&self.graph)
+                self.profile.insights_at(
+                    &self.graph,
+                    now_seconds(),
+                    self.exercise.as_ref().map(|e| e.skill_id.as_str()),
+                )
             },
             insights_open: self.insights_open,
             insight_offset: self.insight_offset,
@@ -406,11 +437,7 @@ impl Session {
                 .max(self.played_score.as_ref().map_or(1, |s| s.page_count())),
             reading_score: self.exercise.as_ref().and_then(|e| e.reading.as_ref()),
             reading_result: self.reading_result.as_ref(),
-            rhythm_score: self
-                .exercise
-                .as_ref()
-                .and_then(|e| e.rhythm_score())
-                .filter(|s| s.quarter_notes || self.phase == Phase::Feedback),
+            rhythm_score: self.exercise.as_ref().and_then(|e| e.rhythm_score()),
             rhythm_report: self.rhythm_report.as_ref(),
             comparison_paused: self.comparison_paused,
             comparison_offset: self.comparison_offset,
@@ -453,6 +480,7 @@ impl Session {
             reading_supported: true,
             reading_result: None,
             rhythm_report: None,
+            feedback_correct: None,
             comparison_paused: false,
             comparison_offset: 0,
             browser: preview.then(|| browser::Browser::new(&graph)),
@@ -490,6 +518,7 @@ impl Session {
         if let Some(debug) = &mut self.debug {
             debug.reset_result();
         }
+        self.feedback_correct = None;
         self.feedback_score = None;
         self.played_score = None;
         self.score_page = 0;
@@ -597,6 +626,7 @@ impl Session {
         if let Some(debug) = &mut self.debug {
             debug.reset_result();
         }
+        self.feedback_correct = None;
         self.feedback_score = None;
         self.played_score = None;
         self.score_page = 0;
@@ -864,23 +894,40 @@ impl Session {
             }
             _ => None,
         };
+        self.rhythm_report =
+            exercise.rhythm_report(&self.onsets, self.answer_started_at, &self.evidence);
+        let rhythm = exercise.rhythm_score();
+        let rhythm_result = self.rhythm_report.as_ref().zip(rhythm.as_ref());
         let pitch_correct = !give_up
-            && accompaniment.as_ref().map_or_else(
-                || exercise.correct(&self.played),
-                |r| r.pitches == r.total && r.extras == 0,
-            );
-        let timing_correct = accompaniment.as_ref().map_or_else(
-            || exercise.performance_timing_correct(&self.onsets, self.answer_started_at),
-            |r| r.timing == r.total,
-        );
-        let duration_correct = accompaniment.as_ref().map_or_else(
-            || exercise.holds_correct(&self.evidence),
-            |r| r.holds == r.total,
-        );
+            && if let Some((report, _)) = rhythm_result {
+                report.count_correct()
+            } else {
+                accompaniment.as_ref().map_or_else(
+                    || exercise.correct(&self.played),
+                    |r| r.pitches == r.total && r.extras == 0,
+                )
+            };
+        let timing_correct = if let Some((report, score)) = rhythm_result {
+            report.timing_correct(score.tolerance_ms)
+        } else {
+            accompaniment.as_ref().map_or_else(
+                || exercise.performance_timing_correct(&self.onsets, self.answer_started_at),
+                |r| r.timing == r.total,
+            )
+        };
+        let duration_correct = if let Some((report, score)) = rhythm_result {
+            report.holds_correct(score.tolerance_ms)
+        } else {
+            accompaniment.as_ref().map_or_else(
+                || exercise.holds_correct(&self.evidence),
+                |r| r.holds == r.total,
+            )
+        };
         let correct = pitch_correct && timing_correct && duration_correct;
-        self.performance_score = accompaniment
-            .as_ref()
-            .map(|r| if give_up { 0 } else { r.score() });
+        self.performance_score = rhythm_result
+            .map(|(report, score)| report.grade(score))
+            .or_else(|| accompaniment.as_ref().map(|r| r.score()))
+            .map(|grade| if give_up { 0 } else { grade });
         self.reading_result = exercise
             .reading
             .as_ref()
@@ -948,8 +995,13 @@ impl Session {
                 }
             );
         }
-        self.rhythm_report =
-            exercise.rhythm_report(&self.onsets, self.answer_started_at, &self.evidence);
+        if rhythm_result.is_some() {
+            self.feedback = format!(
+                "{}/100 · {}",
+                self.performance_score.unwrap(),
+                self.feedback
+            );
+        }
         // Small terminals should land on the first mistake, not a screen of
         // correct notes above it. The view clamps this when every row fits.
         self.comparison_offset = self
@@ -960,29 +1012,34 @@ impl Session {
                 report.rows.iter().position(|row| !row.correct(tolerance))
             })
             .unwrap_or(0);
-        self.feedback_score = Some(score_support::feedback_expected(
-            exercise,
-            &self.played,
-            correct,
-        ));
-        self.played_score = Some(score_support::response(
-            exercise,
-            &self.played,
-            &self.evidence,
-            if matches!(&exercise.answer, exercise::Answer::Performance(p) if p.fixed_start) {
-                origin_ms
-            } else {
-                0
-            },
-            correct,
-        ));
+        if let Some((report, score)) = rhythm_result {
+            self.feedback_score = Some(score.notation());
+            self.played_score = Some(report.notation(score));
+        } else {
+            self.feedback_score = Some(score_support::feedback_expected(
+                exercise,
+                &self.played,
+                correct,
+            ));
+            self.played_score = Some(score_support::response(
+                exercise,
+                &self.played,
+                &self.evidence,
+                if matches!(&exercise.answer, exercise::Answer::Performance(p) if p.fixed_start) {
+                    origin_ms
+                } else {
+                    0
+                },
+                correct,
+            ));
+        }
         self.score_page = 0;
         self.current_bar = None;
         self.phase = Phase::Feedback;
-        self.advance_at = self
-            .store
-            .as_ref()
-            .map(|_| now + Duration::from_secs(if correct && !self.assisted { 2 } else { 4 }));
+        self.feedback_correct = Some(correct);
+        // Preserve every imperfect attempt for deliberate review, across all families.
+        self.comparison_paused = !correct || self.assisted || self.store.is_none();
+        self.advance_at = (!self.comparison_paused).then_some(now + Duration::from_secs(2));
         self.submit_at = None;
         self.finish_at = None;
         self.metronome = None;

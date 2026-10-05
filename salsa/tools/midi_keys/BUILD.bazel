@@ -51,6 +51,7 @@ rust_library(
         "src/exercise.rs",
         "src/evidence.rs",
         "src/learner.rs",
+        "src/insights.rs",
         "src/music.rs",
         "src/performance.rs",
         "src/practice.rs",

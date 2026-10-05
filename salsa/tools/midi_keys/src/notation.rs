@@ -4,20 +4,20 @@ mod coordinates;
 mod staff;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ImageScore {
-    Pulse(usize),
     Reading(trainer::WrittenScore),
+    Rhythm(trainer::WrittenScore),
 }
 impl ImageScore {
     fn pixels(&self) -> (usize, usize, Vec<u8>) {
         match self {
-            Self::Pulse(n) => (WIDTH, HEIGHT, pixels(*n)),
             Self::Reading(score) => staff::scene(score).pixels(),
+            Self::Rhythm(score) => staff::percussion_scene(score).pixels(),
         }
     }
     pub fn svg(&self) -> String {
         match self {
-            Self::Pulse(n) => svg(*n),
             Self::Reading(score) => staff::scene(score).svg(),
+            Self::Rhythm(score) => staff::percussion_scene(score).svg(),
         }
     }
 }
@@ -26,83 +26,9 @@ impl ImageScore {
 use ratatui::layout::Rect;
 use std::io::{self, Write};
 
-const WIDTH: usize = 960;
-const HEIGHT: usize = 120;
 #[cfg(test)]
 const IMAGE_ID: u32 = 72491;
 
-#[derive(Clone)]
-enum Shape {
-    Rect(f64, f64, f64, f64),
-    Head(f64, f64),
-}
-fn shapes(notes: usize) -> Vec<Shape> {
-    let mut out = vec![Shape::Rect(22., 64., 912., 1.5)];
-    // Neutral percussion clef and 4/4 meter on a one-line staff.
-    out.extend([
-        Shape::Rect(28., 51., 4., 27.),
-        Shape::Rect(37., 51., 4., 27.),
-    ]);
-    for y in [40., 69.] {
-        // A geometric numeral four, independent of terminal fonts.
-        out.extend([
-            Shape::Rect(60., y, 3., 14.),
-            Shape::Rect(60., y + 11., 16., 3.),
-            Shape::Rect(70., y, 3., 23.),
-        ]);
-    }
-    let step = 816. / notes.max(1) as f64;
-    for i in 0..notes {
-        let x = 114. + i as f64 * step;
-        out.extend([Shape::Head(x, 65.), Shape::Rect(x + 8., 19., 2.3, 45.)]);
-        if i % 4 == 3 {
-            out.push(Shape::Rect(x + step * 0.55, 45., 1.7, 40.));
-        }
-    }
-    out
-}
-pub fn svg(notes: usize) -> String {
-    let mut out = format!("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {WIDTH} {HEIGHT}'><rect width='100%' height='100%' fill='#0f1824'/><g fill='#e3ecef'>");
-    for shape in shapes(notes) {
-        match shape {
-            Shape::Rect(x, y, w, h) => {
-                out += &format!("<rect x='{x}' y='{y}' width='{w}' height='{h}'/>")
-            }
-            Shape::Head(x, y) => {
-                out += &format!(
-                    "<ellipse cx='{x}' cy='{y}' rx='10' ry='6.6' transform='rotate(-20 {x} {y})'/>"
-                )
-            }
-        }
-    }
-    out + "</g></svg>"
-}
-fn pixels(notes: usize) -> Vec<u8> {
-    let mut rgb = vec![0u8; WIDTH * HEIGHT * 3];
-    let shapes = shapes(notes);
-    // Four subpixel samples smooth stems and elliptical noteheads.
-    for y in 0..HEIGHT {
-        for x in 0..WIDTH {
-            let mut covered = 0;
-            for (dx, dy) in [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)] {
-                let (px, py) = (x as f64 + dx, y as f64 + dy);
-                covered += usize::from(shapes.iter().any(|shape| match *shape {
-                    Shape::Rect(sx, sy, w, h) => px >= sx && px < sx + w && py >= sy && py < sy + h,
-                    Shape::Head(sx, sy) => {
-                        let (a, b) = (px - sx, py - sy);
-                        ((a * 0.9397 - b * 0.342) / 10.).powi(2)
-                            + ((a * 0.342 + b * 0.9397) / 6.6).powi(2)
-                            <= 1.
-                    }
-                }));
-            }
-            for (c, (bg, fg)) in [(15, 227), (24, 236), (36, 239)].iter().enumerate() {
-                rgb[(y * WIDTH + x) * 3 + c] = (bg + (fg - bg) * covered / 4) as u8;
-            }
-        }
-    }
-    rgb
-}
 fn base64(bytes: &[u8]) -> String {
     const DIGITS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
@@ -291,6 +217,14 @@ impl Drop for Graphics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn test_rhythm() -> ImageScore {
+        let score = trainer::Session::preview("rhythm.0.60")
+            .unwrap()
+            .view()
+            .rhythm_score
+            .unwrap();
+        ImageScore::Rhythm(score.notation())
+    }
     #[test]
     fn images_are_cached_and_deleted_on_resize_or_leaving_the_score() {
         let mut graphics = Graphics {
@@ -298,10 +232,10 @@ mod tests {
             tmux: false,
             image_id: IMAGE_ID,
             shown: None,
-            cached: Some((ImageScore::Pulse(8), "AAAA".into(), WIDTH, HEIGHT)),
+            cached: Some((test_rhythm(), "AAAA".into(), 2400, 380)),
         };
         let mut wire = Vec::new();
-        let first = Some((Rect::new(3, 8, 90, 5), ImageScore::Pulse(8)));
+        let first = Some((Rect::new(3, 8, 90, 5), test_rhythm()));
         graphics.update_to(first.clone(), &mut wire).unwrap();
         assert!(!wire.is_empty());
         wire.clear();
@@ -311,10 +245,7 @@ mod tests {
             "unchanged frames must not resend the image"
         );
         graphics
-            .update_to(
-                Some((Rect::new(3, 8, 110, 5), ImageScore::Pulse(8))),
-                &mut wire,
-            )
+            .update_to(Some((Rect::new(3, 8, 110, 5), test_rhythm())), &mut wire)
             .unwrap();
         assert!(String::from_utf8_lossy(&wire).starts_with("\x1b_Ga=d,d=I"));
         wire.clear();
@@ -334,8 +265,8 @@ mod tests {
             &mut wire,
             Rect::new(2, 3, 90, 6),
             &"A".repeat(9000),
-            WIDTH,
-            HEIGHT,
+            2400,
+            380,
             false,
             IMAGE_ID,
         )
@@ -349,10 +280,12 @@ mod tests {
     }
     #[test]
     fn score_has_eight_noteheads_and_rgb_data() {
-        assert_eq!(svg(8).matches("<ellipse").count(), 8);
-        let rgb = pixels(8);
-        assert_eq!(rgb.len(), WIDTH * HEIGHT * 3);
-        assert!(rgb.chunks(3).any(|p| p == [227, 236, 239]));
+        let score = test_rhythm();
+        let svg = score.svg();
+        assert!(svg.contains("<path"));
+        let (width, height, rgb) = score.pixels();
+        assert_eq!(rgb.len(), width * height * 3);
+        assert!(rgb.chunks_exact(3).any(|p| p == [227, 236, 239]));
     }
     #[test]
     fn tmux_detects_outer_terminal_without_mistaking_screen_for_ghostty() {
@@ -370,10 +303,10 @@ mod tests {
             tmux: true,
             image_id: 0x123456,
             shown: None,
-            cached: Some((ImageScore::Pulse(8), "A".repeat(9000), WIDTH, HEIGHT)),
+            cached: Some((test_rhythm(), "A".repeat(9000), 2400, 380)),
         };
         let mut wire = vec![];
-        let target = Some((Rect::new(11, 7, 80, 8), ImageScore::Pulse(8)));
+        let target = Some((Rect::new(11, 7, 80, 8), test_rhythm()));
         graphics.update_to(target.clone(), &mut wire).unwrap();
         let text = String::from_utf8(wire.clone()).unwrap();
         assert_eq!(text.matches("\x1bPtmux;").count(), 3);
@@ -480,5 +413,22 @@ mod tests {
             payload.len() < rgb.len() / 20,
             "scores should not send megabytes of blank pixels"
         );
+    }
+}
+
+#[cfg(test)]
+mod rhythm_pixels_tests {
+    use super::*;
+    #[test]
+    fn rhythm_error_is_red_in_actual_terminal_pixels() {
+        let score = trainer::Session::preview("rhythm.0.60")
+            .unwrap()
+            .view()
+            .rhythm_score
+            .unwrap();
+        let mut written = score.notation();
+        written.events[5].incorrect = true;
+        let (_, _, rgb) = ImageScore::Rhythm(written).pixels();
+        assert!(rgb.chunks_exact(3).any(|p| p == [255, 120, 120]));
     }
 }

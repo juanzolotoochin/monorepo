@@ -44,6 +44,39 @@ fn performed(score: &Performance) -> (Vec<usize>, Vec<Instant>, Vec<MidiEvidence
     (notes, onsets, evidence, start)
 }
 #[test]
+fn single_note_recognition_reuses_the_reference_pitch_but_accepts_other_octaves() {
+    let mut checked = 0;
+    for skill in curriculum() {
+        let Task::Practice(Practice::Degree { degree, .. }) = skill.task else {
+            continue;
+        };
+        for seed in 1..=32 {
+            let ex = Exercise::generate(&skill, seed);
+            let sounded: Vec<_> = ex
+                .playback
+                .iter()
+                .filter_map(|(_, event)| match event {
+                    Event::Note { note, velocity, .. } if *velocity > 0 => Some(*note),
+                    _ => None,
+                })
+                .collect();
+            let target = *sounded.last().unwrap();
+            assert_eq!(target, sounded[degree], "{} seed {seed}", skill.id);
+            for pitch in [target - 12, target, target + 12] {
+                assert!(
+                    ex.correct(&[pitch]),
+                    "{} rejects octave-equivalent answer",
+                    skill.id
+                );
+            }
+            assert!(!ex.correct(&[(target + 1) % 128]));
+        }
+        checked += 1;
+    }
+    assert!(checked > 0);
+}
+
+#[test]
 fn every_new_exercise_has_a_valid_sounding_and_gradeable_example() {
     let graph = curriculum();
     eprintln!("Curriculum contains {} skills", graph.len());
@@ -654,7 +687,7 @@ fn rhythm_report_uses_grading_anchor_and_labels_missing_extra_and_short_notes() 
 }
 
 #[test]
-fn rhythm_comparison_can_pause_auto_advance_and_does_not_leak_into_next_attempt() {
+fn failed_rhythm_comparison_stays_paused_and_does_not_leak_into_next_attempt() {
     let dir = tempfile::tempdir().unwrap();
     let mut session = Session::open(dir.path().join("profile.json")).unwrap();
     let skill = session
@@ -683,7 +716,7 @@ fn rhythm_comparison_can_pause_auto_advance_and_does_not_leak_into_next_attempt(
     );
     session.tick(start + Duration::from_secs(9)).unwrap();
     assert!(session.view().rhythm_report.is_some());
-    assert!(session.advance_at.is_some());
+    assert!(session.advance_at.is_none());
     session.pause_comparison();
     session.tick(start + Duration::from_secs(60)).unwrap();
     assert!(session.phase == Phase::Feedback);
@@ -736,7 +769,7 @@ fn rhythm_accepts_the_reported_scale_with_overlapping_releases() {
     }
     session.tick(start + Duration::from_secs(12)).unwrap();
     assert!(session.phase == Phase::Feedback);
-    assert_eq!(session.feedback, "Correct!");
+    assert_eq!(session.feedback, "100/100 · Correct!");
     let result = session.profile.recent_attempts.last().unwrap();
     assert!(
         result.correct && result.pitch_correct && result.timing_correct && result.duration_correct
@@ -787,4 +820,58 @@ fn accompaniment_keeps_all_bars_visible_and_exposes_its_id() {
     assert_eq!(view.score_pages, 1);
     assert_eq!(view.display_score.unwrap().chords.len(), 12);
     assert_eq!(view.current_bar, Some(5));
+}
+
+#[test]
+fn regular_practice_attempt_441_passes_with_relaxed_rhythm_tolerance_and_saves_grade() {
+    // Captured attacks/releases from regular practice #441. Never read or modify the live profile.
+    let attacks = [0, 1025, 2031, 2960, 3980, 4942, 6024, 7050];
+    let releases = [1033, 2040, 2951, 4013, 4968, 6052, 7063, 8003];
+    let notes = [60, 62, 64, 65, 67, 69, 71, 72];
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("profile.json");
+    let mut session = Session::open(path.clone()).unwrap();
+    let skill = session
+        .graph
+        .iter()
+        .find(|s| s.id == "rhythm.0.60")
+        .unwrap();
+    session.exercise = Some(Exercise::generate(skill, 42));
+    let start = Instant::now();
+    session.start(start);
+    let mut events = vec![];
+    for i in 0..8 {
+        events.push((attacks[i], notes[i], 90));
+        events.push((releases[i], notes[i], 0));
+    }
+    events.sort_by_key(|e| e.0);
+    for (ms, note, velocity) in events {
+        session.input(
+            Event::Note {
+                channel: 0,
+                note,
+                velocity,
+            },
+            start + Duration::from_millis(ms),
+        );
+    }
+    session.tick(start + Duration::from_secs(9)).unwrap();
+    let attempt = session.profile.recent_attempts.last().unwrap();
+    assert!(attempt.correct);
+    assert_eq!(attempt.performance_score, Some(100));
+    let saved: Profile = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(
+        saved.recent_attempts.last().unwrap().performance_score,
+        Some(100)
+    );
+    let score = session.view().rhythm_score.unwrap();
+    assert_eq!(score.tolerance_ms, 200);
+    assert!(session
+        .rhythm_report
+        .as_ref()
+        .unwrap()
+        .notation(&score)
+        .events
+        .iter()
+        .all(|e| !e.incorrect));
 }

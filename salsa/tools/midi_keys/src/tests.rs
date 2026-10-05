@@ -322,8 +322,8 @@ fn scales_and_chords_use_their_written_key_but_listening_answers_do_not_leak() {
 }
 
 #[test]
-fn feedback_advances_automatically_once_with_time_to_read_mistakes_and_hints() {
-    for (correct, assisted, seconds) in [(true, false, 2), (false, false, 4), (true, true, 4)] {
+fn only_successful_unassisted_feedback_advances_automatically() {
+    for (correct, assisted) in [(true, false), (false, false), (true, true)] {
         let dir = tempfile::tempdir().unwrap();
         let mut session = Session::open(dir.path().join("learner.json")).unwrap();
         let now = Instant::now();
@@ -333,19 +333,23 @@ fn feedback_advances_automatically_once_with_time_to_read_mistakes_and_hints() {
             session.hint();
         }
         session.finish(!correct, now).unwrap();
-        session
-            .tick(now + Duration::from_millis(seconds * 1000 - 1))
-            .unwrap();
-        assert!(session.phase == Phase::Feedback);
-        let events = session.tick(now + Duration::from_secs(seconds)).unwrap();
-        assert!(events.iter().any(|e| matches!(e, Event::Reset)));
-        assert!(session.phase == Phase::Waiting);
-        assert!(session.played.is_empty());
-        assert!(session.advance_at.is_none());
+        session.tick(now + Duration::from_millis(1999)).unwrap();
+        assert_eq!(session.phase, Phase::Feedback);
+        session.tick(now + Duration::from_secs(120)).unwrap();
+        assert_eq!(
+            session.phase,
+            if correct && !assisted {
+                Phase::Waiting
+            } else {
+                Phase::Feedback
+            }
+        );
         assert_eq!(session.profile.completed, 1);
-        session.tick(now + Duration::from_secs(20)).unwrap();
-        assert!(session.phase == Phase::Waiting);
-        assert_eq!(session.profile.completed, 1);
+        if !correct || assisted {
+            assert!(session.view().comparison_paused);
+            session.advance();
+            assert_eq!(session.phase, Phase::Waiting);
+        }
     }
 }
 
@@ -639,16 +643,17 @@ fn resizing_during_feedback_preserves_the_result_and_its_remaining_delay() {
     let mut session = Session::open(dir.path().join("learner.json")).unwrap();
     let now = Instant::now();
     session.start(now);
-    session.finish(true, now).unwrap();
+    session.played = session.exercise.as_ref().unwrap().expected_evidence();
+    session.finish(false, now).unwrap();
     session.set_visible(false, now + Duration::from_secs(1));
     let later = now + Duration::from_secs(600);
     session.tick(later).unwrap();
     assert!(session.phase == Phase::Feedback);
     assert_eq!(session.profile.completed, 1);
     session.set_visible(true, later);
-    session.tick(later + Duration::from_secs(2)).unwrap();
+    session.tick(later + Duration::from_millis(999)).unwrap();
     assert!(session.phase == Phase::Feedback);
-    session.tick(later + Duration::from_secs(3)).unwrap();
+    session.tick(later + Duration::from_secs(1)).unwrap();
     assert!(session.phase == Phase::Waiting);
 }
 
@@ -1128,7 +1133,7 @@ fn live_interval_answers_save_the_actual_confusion_and_context() {
     assert!(
         !session
             .profile
-            .insights(&session.graph)
+            .insights_at(&session.graph, now_seconds(), None)
             .iter()
             .any(|s| s.starts_with("Confusion:")),
         "one mistake is not a pattern"
@@ -1652,4 +1657,60 @@ fn any_feedback_can_be_paused_before_automatic_advance() {
     session.tick(now + Duration::from_secs(60)).unwrap();
     assert!(session.phase == Phase::Feedback);
     assert!(session.advance_at.is_none());
+}
+
+#[test]
+fn every_exercise_keeps_its_layout_and_preserves_failed_feedback() {
+    let mut session = Session::browse().unwrap();
+    session.browser = None;
+    for skill in curriculum() {
+        session.exercise = Some(Exercise::generate(&skill, 42));
+        session.phase = Phase::Waiting;
+        let layout = session.view().layout;
+        session.phase = Phase::Answering;
+        let now = Instant::now();
+        session.finish(true, now).unwrap();
+        assert_eq!(session.view().layout, layout, "{}", skill.id);
+        assert_eq!(session.view().feedback_correct, Some(false), "{}", skill.id);
+        assert!(session.advance_at.is_none(), "{}", skill.id);
+        session.tick(now + Duration::from_secs(3600)).unwrap();
+        assert_eq!(session.phase, Phase::Feedback, "{}", skill.id);
+        session.set_visible(false, now);
+        session.set_visible(true, now + Duration::from_secs(3600));
+        assert!(session.advance_at.is_none(), "{}", skill.id);
+    }
+}
+
+#[test]
+fn failed_attempts_wait_for_explicit_next_in_training_and_preview_across_families() {
+    for id in [
+        "interval.hear.2.up",
+        "chord.build.3.11",
+        "melody.0.5",
+        "scale.0.major.up",
+        "tonic.1.major",
+        "rhythm.0.60",
+        "reading.together.3",
+        "harmony.7.major.accompany.12.true",
+    ] {
+        for preview in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut session = if preview {
+                Session::preview(id).unwrap()
+            } else {
+                Session::open(dir.path().join("profile.json")).unwrap()
+            };
+            let skill = session.graph.iter().find(|s| s.id == id).unwrap();
+            session.exercise = Some(Exercise::generate(skill, 42));
+            session.phase = Phase::Answering;
+            let now = Instant::now();
+            session.finish(true, now).unwrap();
+            assert!(session.advance_at.is_none(), "{id}, preview={preview}");
+            session.tick(now + Duration::from_secs(3600)).unwrap();
+            assert_eq!(session.phase, Phase::Feedback, "{id}");
+            assert_eq!(session.profile.completed, if preview { 0 } else { 1 });
+            session.advance();
+            assert_eq!(session.phase, Phase::Waiting, "{id}");
+        }
+    }
 }
