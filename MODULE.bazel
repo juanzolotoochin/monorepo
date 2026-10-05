@@ -270,6 +270,16 @@ http_archive(
     urls = ["https://freepats.zenvoid.org/Piano/SalamanderGrandPiano/SalamanderGrandPiano-SF2-V3+20200602.tar.xz"],
 )
 
+# GeneralUser GS 2.0.3 supplies recorded acoustic drum samples.
+http_archive(
+    name = "generaluser_drums",
+    type = "tar.gz",
+    build_file = "//third_party/generaluser_drums:BUILD.soundfont.bazel",
+    sha256 = "aef2e2901ab399061ac3765e259ab4c3409bdcb24b7cf814b4b54aaad549dbff",
+    strip_prefix = "GeneralUser-GS-684543d5e5efaef08d02be50dcda8d552478fa60",
+    urls = ["https://codeload.github.com/mrbumpy409/GeneralUser-GS/tar.gz/684543d5e5efaef08d02be50dcda8d552478fa60"],
+)
+
 http_archive(
     name = "libssh2",
     build_file = "//third_party/libssh2:BUILD.libssh2.bazel",

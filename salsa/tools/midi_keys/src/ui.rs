@@ -1,3 +1,4 @@
+mod notation;
 use keyboard::{note_name, Keyboard};
 use ratatui::{
     backend::{CrosstermBackend, TestBackend},
@@ -33,18 +34,30 @@ pub struct View<'a> {
     pub now: Instant,
 }
 
-pub struct Display(Terminal<CrosstermBackend<io::Stdout>>);
+pub struct Display(
+    Terminal<CrosstermBackend<io::Stdout>>,
+    [notation::Graphics; 2],
+);
 
 impl Display {
+    pub fn supports_score_images(&self) -> bool {
+        self.1[0].enabled()
+    }
     pub fn new() -> io::Result<Self> {
         // The native terminal guard already clears the alternate screen. Avoid
         // Terminal::clear(), which queries the cursor and competes with MIDI's
         // terminal input loop for a terminal response.
         let terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
-        Ok(Self(terminal))
+        Ok(Self(
+            terminal,
+            [notation::Graphics::detect(0), notation::Graphics::detect(1)],
+        ))
     }
 
     pub fn draw(&mut self, view: &View<'_>) -> io::Result<()> {
+        for graphics in &mut self.1 {
+            graphics.update(None)?;
+        }
         self.0.draw(|frame| draw(frame, view))?;
         Ok(())
     }
@@ -53,13 +66,38 @@ impl Display {
         view: &View<'_>,
         session: &trainer::TrainingView<'_>,
     ) -> io::Result<()> {
-        self.0.draw(|frame| draw_training(frame, view, session))?;
+        if !view.connected && !view.demo && session.browser.is_none() {
+            return self.draw(view);
+        }
+        let mut images = vec![];
+        let graphics = self.1[0].enabled();
+        self.0.draw(|frame| {
+            draw_training(frame, view, session);
+            images = score_images(frame.area(), session)
+                .into_iter()
+                .enumerate()
+                .map(|(i, (area, score))| (self.1[i].image_area(area), score))
+                .collect();
+            if graphics {
+                for (i, (rect, _)) in images.iter().enumerate() {
+                    frame.render_widget(Block::default().style(Style::default().bg(PANEL)), *rect);
+                    self.1[i].placeholders(*rect, frame.buffer_mut());
+                }
+            }
+        })?;
+        for (i, graphics) in self.1.iter_mut().enumerate() {
+            graphics.update(images.get(i).cloned())?;
+        }
         Ok(())
     }
 }
 
 pub fn draw_training(frame: &mut Frame<'_>, view: &View<'_>, session: &trainer::TrainingView<'_>) {
     use trainer::Phase;
+    if !view.connected && !view.demo && session.browser.is_none() {
+        draw_connection(frame);
+        return;
+    }
     let area = frame.area();
     if !training_fits(area.width, area.height) {
         frame.render_widget(
@@ -81,6 +119,27 @@ pub fn draw_training(frame: &mut Frame<'_>, view: &View<'_>, session: &trainer::
         Block::default().style(Style::default().bg(BG).fg(TEXT)),
         area,
     );
+    if let Some(browser) = &session.browser {
+        draw_browser(frame, area, view, browser);
+        return;
+    }
+    frame.render_widget(
+        Paragraph::new(format!("ID: {}", session.skill_id)).style(Style::default().fg(MUTED)),
+        Rect::new(
+            area.x + 2,
+            area.bottom().saturating_sub(1),
+            area.width.saturating_sub(4),
+            1,
+        ),
+    );
+    if let Some(score) = session.display_score.as_ref() {
+        draw_reading(frame, area, session, score);
+        return;
+    }
+    if let Some(score) = &session.rhythm_score {
+        draw_rhythm(frame, area, view, session, score);
+        return;
+    }
     let parts = Layout::vertical([
         Constraint::Length(2),
         Constraint::Length(1),
@@ -95,14 +154,32 @@ pub fn draw_training(frame: &mut Frame<'_>, view: &View<'_>, session: &trainer::
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
-                text("◈  EAR / THEORY", TEAL),
-                text(format!("    Exercise {}", session.completed + 1), TEXT),
+                text(
+                    if session.preview {
+                        "◈  EXERCISE PREVIEW"
+                    } else {
+                        "◈  EAR / THEORY"
+                    },
+                    TEAL,
+                ),
+                text(
+                    if session.preview {
+                        String::new()
+                    } else {
+                        format!("    Exercise {}", session.completed + 1)
+                    },
+                    TEXT,
+                ),
             ]),
             Line::from(text(
-                format!(
-                    "{} skills established · {} in the curriculum",
-                    session.mastered, session.total
-                ),
+                if session.preview {
+                    "No progress recorded · b browse · v new variant".into()
+                } else {
+                    format!(
+                        "{} skills established · {} in the curriculum",
+                        session.mastered, session.total
+                    )
+                },
                 MUTED,
             )),
         ]),
@@ -153,7 +230,9 @@ pub fn draw_training(frame: &mut Frame<'_>, view: &View<'_>, session: &trainer::
         }
         let status = match session.phase {
             Phase::Waiting => {
-                if view.connected {
+                if session.awaiting_start {
+                    "Read the instructions · Enter to begin"
+                } else if view.connected {
                     "Release keys to begin."
                 } else {
                     "Waiting for your keyboard."
@@ -165,7 +244,11 @@ pub fn draw_training(frame: &mut Frame<'_>, view: &View<'_>, session: &trainer::
             }
             Phase::Answering if session.timed_phrase => "Your turn · auto finish · r to restart",
             Phase::Answering => "Play all answer notes · submits automatically",
-            Phase::Feedback => "Next exercise shortly… Enter to continue now.",
+            Phase::Feedback if session.preview => {
+                "r retry · Enter new variant · b exercise list"
+            }
+            Phase::Feedback if session.comparison_paused => "Result paused · r retry · Enter next",
+            Phase::Feedback => "Next shortly · c pause · r retry · Enter next",
             Phase::Rest => "No exercises due.",
         };
         lines.push(Line::from(text(status, TEAL)));
@@ -203,7 +286,47 @@ pub fn draw_training(frame: &mut Frame<'_>, view: &View<'_>, session: &trainer::
         lines.push(Line::from(text("Your progress is saved. q to quit.", TEAL)));
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
-    draw_exercise_log(frame, log_area, &session.recent_exercises);
+    let (insight_area, history_area) = if area.width >= 120 {
+        let panels = Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(log_area);
+        (Some(panels[0]), Some(panels[1]))
+    } else if session.insights_open {
+        (Some(log_area), None)
+    } else {
+        (None, Some(log_area))
+    };
+    if let Some(area) = insight_area {
+        let block = card(if area.width < 60 {
+            "INSIGHTS · j/k browse"
+        } else {
+            "INSIGHTS"
+        });
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        let lines: Vec<_> = session
+            .insights
+            .iter()
+            .cycle()
+            .skip(session.insight_offset % session.insights.len().max(1))
+            .take(session.insights.len())
+            .map(|insight| {
+                Line::from(text(
+                    insight,
+                    if insight.starts_with("Mastered:") {
+                        TEAL
+                    } else if insight.starts_with("Confusion:") {
+                        AMBER
+                    } else {
+                        TEXT
+                    },
+                ))
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+    }
+    if let Some(area) = history_area {
+        draw_exercise_log(frame, area, &session.recent_exercises);
+    }
     if parts[3].height > 0 {
         let piano = card("YOUR KEYBOARD");
         let inner = piano.inner(parts[3]).inner(Margin {
@@ -225,7 +348,7 @@ pub fn draw_training(frame: &mut Frame<'_>, view: &View<'_>, session: &trainer::
         Paragraph::new(vec![
             Line::from(vec![
                 text("r", TEAL),
-                text(" replay  ", MUTED),
+                text(" retry/restart  ", MUTED),
                 text("⌫", TEAL),
                 text(" clear  ", MUTED),
                 text("h", TEAL),
@@ -235,6 +358,7 @@ pub fn draw_training(frame: &mut Frame<'_>, view: &View<'_>, session: &trainer::
                 text("Enter", TEAL),
                 text(
                     match session.phase {
+                        Phase::Waiting if session.awaiting_start => " begin",
                         Phase::Feedback => " next",
                         Phase::Answering if session.exploring => " start answer",
                         Phase::Answering => " submit",
@@ -247,8 +371,133 @@ pub fn draw_training(frame: &mut Frame<'_>, view: &View<'_>, session: &trainer::
                 "−/+ volume · m mute · n labels · space panic · q quit",
                 MUTED,
             )),
+            Line::from(text(
+                if session.preview {
+                    "b exercise list · v new variant · r retry"
+                } else {
+                    "c pause result · i insights/history · j/k browse insights"
+                },
+                MUTED,
+            )),
         ]),
         parts[4],
+    );
+}
+
+fn draw_browser(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    view: &View<'_>,
+    browser: &trainer::BrowserView<'_>,
+) {
+    let parts = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Min(4),
+        Constraint::Length(2),
+    ])
+    .split(area.inner(Margin {
+        horizontal: 2,
+        vertical: 1,
+    }));
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(text(
+                "EXERCISE BROWSER · no training progress recorded",
+                TEAL,
+            )),
+            Line::from(text(
+                if view.connected {
+                    "Select any exercise, including locked curriculum skills."
+                } else {
+                    "Tap a MIDI key to connect; you can browse meanwhile."
+                },
+                MUTED,
+            )),
+        ]),
+        parts[0],
+    );
+    let category_label = format!(
+        "Category: {} · ←/→ or Tab",
+        browser.categories[browser.category]
+    );
+    frame.render_widget(
+        Paragraph::new(text(category_label, TEAL)),
+        Rect {
+            y: parts[0].y + 2,
+            height: 1,
+            ..parts[0]
+        },
+    );
+    frame.render_widget(
+        Paragraph::new(format!("{}▏", browser.query)).block(card("SEARCH · title or skill ID")),
+        parts[1],
+    );
+    let list_area = if area.width >= 100 {
+        let columns = Layout::horizontal([Constraint::Length(24), Constraint::Min(20)])
+            .spacing(1)
+            .split(parts[2]);
+        let categories: Vec<_> = browser
+            .categories
+            .iter()
+            .enumerate()
+            .map(|(index, name)| {
+                Line::from(text(
+                    format!(
+                        "{} {name}",
+                        if index == browser.category {
+                            "▶"
+                        } else {
+                            " "
+                        }
+                    ),
+                    if index == browser.category {
+                        TEAL
+                    } else {
+                        MUTED
+                    },
+                ))
+            })
+            .collect();
+        frame.render_widget(
+            Paragraph::new(categories).block(card("CATEGORIES")),
+            columns[0],
+        );
+        columns[1]
+    } else {
+        parts[2]
+    };
+    let title = format!("{} MATCHES", browser.items.len());
+    let block = card(&title);
+    let inner = block.inner(list_area);
+    frame.render_widget(block, list_area);
+    let capacity = usize::from(inner.height / 2).max(1);
+    let start = browser
+        .selected
+        .saturating_sub(capacity / 2)
+        .min(browser.items.len().saturating_sub(capacity));
+    let mut rows = Vec::new();
+    for (index, (title, id)) in browser.items.iter().enumerate().skip(start).take(capacity) {
+        let selected = index == browser.selected;
+        rows.push(Line::from(text(
+            format!("{} {}", if selected { "▶" } else { " " }, title),
+            if selected { TEAL } else { TEXT },
+        )));
+        rows.push(Line::from(text(format!("  {id}"), MUTED)));
+    }
+    if browser.items.is_empty() {
+        rows.push(Line::from(text(
+            "No matches. Backspace to edit your search.",
+            AMBER,
+        )));
+    }
+    frame.render_widget(Paragraph::new(rows), inner);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from("Type to search · ↑/↓ select · Enter preview"),
+            Line::from("Backspace edit · Ctrl-U clear search · Ctrl-C quit"),
+        ]),
+        parts[3],
     );
 }
 
@@ -295,7 +544,16 @@ fn draw_exercise_log(frame: &mut Frame<'_>, area: Rect, entries: &[trainer::Exer
     for entry in entries {
         lines.push(Line::from(vec![
             text(
-                if entry.correct { "✓ " } else { "✗ " },
+                entry.performance_score.map_or_else(
+                    || {
+                        if entry.correct {
+                            "✓ ".into()
+                        } else {
+                            "✗ ".into()
+                        }
+                    },
+                    |s| format!("{s}/100 "),
+                ),
                 if entry.correct { TEAL } else { BELOW },
             ),
             text(format!("#{}  {}", entry.number, entry.title), TEXT),
@@ -324,7 +582,7 @@ fn instruction_line<'a>(prompt: &'a str, highlights: &[trainer::PromptHighlight]
         ));
         let color = match highlight.role {
             trainer::PromptRole::Note => TEAL,
-            trainer::PromptRole::Interval => AMBER,
+            trainer::PromptRole::Interval | trainer::PromptRole::ChordQuality => AMBER,
             trainer::PromptRole::Above => ABOVE,
             trainer::PromptRole::Below => BELOW,
         };
@@ -359,7 +617,34 @@ pub fn visible_span(terminal_width: u16) -> usize {
     intervals / 7 * 12 + [0, 2, 4, 5, 7, 9, 11][intervals % 7]
 }
 
+fn draw_connection(frame: &mut Frame<'_>) {
+    let area = frame.area();
+    frame.render_widget(
+        Block::default().style(Style::default().bg(BG).fg(TEXT)),
+        area,
+    );
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(text("CONNECT YOUR MIDI KEYBOARD", TEAL)),
+            Line::from(""),
+            Line::from("Tap and release any MIDI key to select your device."),
+            Line::from("This first note connects the keyboard; it is NOT an answer."),
+            Line::from("Release the key to finish connecting."),
+            Line::from("q quit"),
+        ])
+        .wrap(Wrap { trim: true }),
+        area.inner(Margin {
+            horizontal: 2,
+            vertical: 2,
+        }),
+    );
+}
+
 pub fn draw(frame: &mut Frame<'_>, view: &View<'_>) {
+    if !view.connected && !view.demo {
+        draw_connection(frame);
+        return;
+    }
     let area = frame.area();
     frame.render_widget(
         Block::default().style(Style::default().bg(BG).fg(TEXT)),
@@ -951,7 +1236,31 @@ pub fn training_preview_svg(
     terminal
         .draw(|frame| draw_training(frame, view, session))
         .unwrap();
-    buffer_svg(terminal.backend().buffer())
+    let mut svg = buffer_svg(terminal.backend().buffer());
+    for (rect, score) in score_images(Rect::new(0, 0, width, height), session) {
+        let image = score.svg().replacen(
+            "<svg ",
+            &format!(
+                "<svg x='{}' y='{}' width='{}' height='{}' ",
+                rect.x * 9,
+                rect.y * 19,
+                rect.width * 9,
+                rect.height * 19
+            ),
+            1,
+        );
+        svg.truncate(svg.len() - 6);
+        svg += &format!(
+            "<rect x='{}' y='{}' width='{}' height='{}' fill='#0f1824'/>",
+            rect.x * 9,
+            rect.y * 19,
+            rect.width * 9,
+            rect.height * 19
+        );
+        svg += &image;
+        svg += "</svg>";
+    }
+    svg
 }
 
 fn buffer_svg(buffer: &Buffer) -> String {
@@ -1008,6 +1317,129 @@ mod tests {
     use keyboard::Event;
 
     #[test]
+    fn rhythm_feedback_keeps_the_score_errors_and_navigation_visible() {
+        let keyboard = Keyboard::default();
+        let view = View {
+            keyboard: &keyboard,
+            source: "Test MIDI",
+            connected: true,
+            demo: false,
+            silent: false,
+            muted: false,
+            note_names: false,
+            volume: 0.6,
+            now: Instant::now(),
+        };
+        let mut session = trainer::Session::browse().unwrap();
+        for &key in b"rhythm.0.60" {
+            session.browser_edit(key);
+        }
+        session.browser_select();
+        let now = Instant::now();
+        session.start(now);
+        session.input(
+            Event::Note {
+                channel: 0,
+                note: 60,
+                velocity: 90,
+            },
+            now,
+        );
+        session.input(
+            Event::Note {
+                channel: 0,
+                note: 60,
+                velocity: 0,
+            },
+            now + std::time::Duration::from_millis(100),
+        );
+        session
+            .tick(now + std::time::Duration::from_secs(9))
+            .unwrap();
+        for (width, height) in [(64, 22), (80, 24), (120, 34)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| draw_training(frame, &view, &session.view()))
+                .unwrap();
+            let content = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|c| c.symbol())
+                .collect::<String>();
+            for expected in ["SCORE", "100ms / 940ms", "MISSING", "j/k", "Enter next"] {
+                assert!(
+                    content.contains(expected),
+                    "{width}x{height}: missing {expected}"
+                );
+            }
+        }
+        for _ in 0..8 {
+            session.cycle_insights(true);
+        }
+        let mut terminal = Terminal::new(TestBackend::new(64, 22)).unwrap();
+        terminal
+            .draw(|frame| draw_training(frame, &view, &session.view()))
+            .unwrap();
+        let content = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<String>();
+        assert!(
+            content.contains("8.0"),
+            "last beat must be accessible on small terminals"
+        );
+    }
+    #[test]
+    fn exercise_catalog_is_searchable_and_legible_at_supported_sizes() {
+        let keyboard = Keyboard::default();
+        let view = View {
+            keyboard: &keyboard,
+            source: "Test MIDI",
+            connected: true,
+            demo: false,
+            silent: false,
+            muted: false,
+            note_names: false,
+            volume: 0.6,
+            now: Instant::now(),
+        };
+        let mut session = trainer::Session::browse().unwrap();
+        for key in b"rhythm.0.60" {
+            session.browser_edit(*key);
+        }
+        for (width, height) in [(64, 22), (80, 24), (140, 42)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| draw_training(frame, &view, &session.view()))
+                .unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|c| c.symbol())
+                .collect();
+            for expected in [
+                "EXERCISE BROWSER",
+                "1 MATCHES",
+                "rhythm.0.60",
+                "Enter preview",
+                "Ctrl-C quit",
+            ] {
+                assert!(
+                    text.contains(expected),
+                    "Missing {expected} at {width}x{height}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn training_layout_keeps_prompts_and_feedback_visible_without_answer_metadata() {
         let keyboard = Keyboard::default();
         let view = View {
@@ -1025,6 +1457,7 @@ mod tests {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             let mut training = trainer::TrainingView {
                 recent_exercises: vec![],
+                skill_id: "test.exercise",
                 title: "CHORD RECOGNITION",
                 prompt: "Listen, then play any chord of the same quality.",
                 prompt_highlights: &[],
@@ -1036,7 +1469,24 @@ mod tests {
                 completed: 10,
                 mastered: 2,
                 total: 2088,
+                browser: None,
+                preview: false,
+                insights_open: true,
+                insight_offset: 0,
+                insights: vec!["Mastered: seconds · ascending recognition".into()],
+                display_score: None,
+                played_score: None,
+                score_page: 0,
+                current_bar: None,
+                score_pages: 1,
+                reading_score: None,
+                reading_result: None,
+                rhythm_score: None,
+                rhythm_report: None,
+                comparison_paused: false,
+                comparison_offset: 0,
                 timed_phrase: false,
+                awaiting_start: false,
                 exploring: false,
             };
             terminal
@@ -1052,7 +1502,11 @@ mod tests {
             assert!(text.contains("CHORD RECOGNITION"));
             assert!(!text.contains("major"));
             assert!(text.contains("Listen"));
+            assert!(text.contains("INSIGHTS"));
+            assert!(text.contains("Mastered: seconds"));
+            training.insights_open = false;
             training.recent_exercises = vec![trainer::ExerciseLogEntry {
+                performance_score: None,
                 number: 10,
                 title: "INTERVAL CONSTRUCTION",
                 prompt: "Play C, then a major 2nd below it. Any starting octave.",
@@ -1087,12 +1541,13 @@ mod tests {
                 .map(|c| c.symbol())
                 .collect();
             assert!(text.contains("Progress saved."));
-            assert!(text.contains("Next exercise shortly"));
+            assert!(text.contains("Next shortly"));
+            assert!(text.contains("r retry"));
             training.title = "ACCOMPANIMENT";
             training.phase = trainer::Phase::Answering;
             training.timed_phrase = true;
             training.feedback = "";
-            training.prompt = "In C major: 12 bars, 4/4, 60 BPM. After four count-in beats, accompany the melody with 1–7 voicings on chord degrees 1–1–1–1–4–4–1–1–5–4–1–5. Play two notes on each downbeat; hold 3½ beats and release. Any octave.";
+            training.prompt = "In C major: 12 bars, 4/4, 60 BPM. After four count-in beats, play each chord's root and seventh together on beat 1 and hold through the bar. Any octave. One chord per bar: Cmaj7 | Cmaj7 | Cmaj7 | Cmaj7 | Fmaj7 | Fmaj7 | Cmaj7 | Cmaj7 | G7 | Fmaj7 | Cmaj7 | G7.";
             terminal
                 .draw(|frame| draw_training(frame, &view, &training))
                 .unwrap();
@@ -1319,5 +1774,648 @@ mod tests {
                 assert!(symbols.contains("Resize to at least 64 × 22"));
             }
         }
+    }
+}
+
+fn rhythm_areas(area: Rect) -> std::rc::Rc<[Rect]> {
+    Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Length(4),
+        Constraint::Length(7),
+        Constraint::Min(4),
+        Constraint::Length(2),
+    ])
+    .split(area.inner(Margin {
+        horizontal: 2,
+        vertical: 1,
+    }))
+}
+fn draw_rhythm(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    view: &View<'_>,
+    session: &trainer::TrainingView<'_>,
+    score: &trainer::RhythmScore,
+) {
+    let parts = rhythm_areas(area);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(text(
+                format!("◈ {} · {} BPM", session.title, score.bpm),
+                TEAL,
+            )),
+            Line::from(text(
+                if view.connected {
+                    view.source
+                } else {
+                    "Waiting for your keyboard"
+                },
+                MUTED,
+            )),
+        ]),
+        parts[0],
+    );
+    frame.render_widget(
+        Paragraph::new(session.prompt)
+            .style(Style::default().fg(TEXT))
+            .wrap(Wrap { trim: true }),
+        parts[1],
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(BORDER))
+        .style(Style::default().bg(PANEL))
+        .title_style(Style::default().fg(TEAL))
+        .title(if score.quarter_notes {
+            " SCORE · 4/4 · each ♩ = one beat "
+        } else {
+            " RHYTHM · expected attacks in beats "
+        });
+    let inner = block.inner(parts[2]);
+    frame.render_widget(block, parts[2]);
+    let beat = 60000.0 / f64::from(score.bpm);
+    let fallback = if score.quarter_notes {
+        vec![
+            Line::from(""),
+            Line::from("  4/4    ♩    ♩    ♩    ♩   │   ♩    ♩    ♩    ♩   │"),
+            Line::from("         1    2    3    4       1    2    3    4"),
+        ]
+    } else {
+        vec![Line::from(
+            score
+                .notes
+                .iter()
+                .map(|n| format!("{:.1}", 1.0 + n.0 as f64 / beat))
+                .collect::<Vec<_>>()
+                .join("  "),
+        )]
+    };
+    frame.render_widget(
+        Paragraph::new(fallback).style(Style::default().fg(TEXT).bg(PANEL)),
+        inner,
+    );
+    let mut lines = Vec::new();
+    if let Some(report) = session.rhythm_report {
+        lines.push(Line::from(text(session.feedback, AMBER)));
+        lines.push(Line::from(text(
+            format!(
+                "Attack / hold tolerance ±{}ms · hold uses key release",
+                score.tolerance_ms
+            ),
+            MUTED,
+        )));
+        lines.push(Line::from(text(
+            "Beat   Played key / attack     Held: played / expected",
+            TEAL,
+        )));
+        let available = parts[3].height.saturating_sub(lines.len() as u16) as usize;
+        let offset = session
+            .comparison_offset
+            .min(report.rows.len().saturating_sub(available.max(1)));
+        for row in report.rows.iter().skip(offset).take(available) {
+            let beat_label = row
+                .expected_ms
+                .map(|t| format!("{:.1}", 1.0 + t as f64 / beat))
+                .unwrap_or_else(|| "—".into());
+            let key = row.note.map(note_name).unwrap_or_else(|| "—".into());
+            let held = if row.actual_ms.is_none() {
+                "—".into()
+            } else {
+                row.actual_hold_ms
+                    .map(|h| format!("{h}ms"))
+                    .unwrap_or_else(|| "no release".into())
+            };
+            let expected = row
+                .expected_hold_ms
+                .map(|h| format!("{h}ms"))
+                .unwrap_or_else(|| "—".into());
+            let ok = row.correct(score.tolerance_ms);
+            lines.push(Line::from(text(
+                format!(
+                    "{beat_label:<5} {key:<4} {:<17} {held} / {expected} {}",
+                    row.timing_label(),
+                    if ok { "✓" } else { "✗" }
+                ),
+                if ok { TEAL } else { AMBER },
+            )));
+        }
+    } else {
+        lines.push(Line::from(text(
+            match session.phase {
+                trainer::Phase::Waiting if session.awaiting_start => {
+                    "Read the score · Enter starts the count-in"
+                }
+                trainer::Phase::Waiting => "Release keys to begin.",
+                trainer::Phase::Listening => "Listen… r to repeat",
+                _ if score.quarter_notes => "Join on any drum beat · answer finishes automatically",
+                _ => "Your turn · answer finishes automatically",
+            },
+            TEAL,
+        )));
+        lines.push(Line::from(text(
+            format!(
+                "{} / {} notes played",
+                session.played.len(),
+                score.notes.len()
+            ),
+            TEXT,
+        )));
+        if score.quarter_notes {
+            lines.push(Line::from(text(
+                "One-line percussion staff: pitches are up to you.",
+                MUTED,
+            )));
+            lines.push(Line::from(text(
+                "Hold each quarter note until just before the next beat.",
+                MUTED,
+            )));
+        }
+    }
+    frame.render_widget(Paragraph::new(lines), parts[3]);
+    let status = if session.rhythm_report.is_some() {
+        if session.preview || session.comparison_paused {
+            "Paused · r retry · Enter next · j/k scroll"
+        } else {
+            "c pause · r retry · Enter next · j/k scroll"
+        }
+    } else {
+        "r restart · Backspace clear · x give up · q quit"
+    };
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(text(status, TEAL)),
+            Line::from(text(
+                if session.preview {
+                    "b exercise list · v new variant · q quit"
+                } else {
+                    "q quit · +/- volume · m mute"
+                },
+                MUTED,
+            )),
+        ]),
+        parts[4],
+    );
+}
+
+fn score_panels(area: Rect, session: &trainer::TrainingView<'_>) -> Vec<Rect> {
+    let rect = reading_areas(area, session)[2];
+    if session.played_score.is_some() {
+        // Equal pixel scale requires equal terminal rectangles. With an odd
+        // available height, leave the spare row unused instead of stretching
+        // one score to an extra row.
+        let height = rect.height / 2;
+        vec![
+            Rect::new(rect.x, rect.y, rect.width, height),
+            Rect::new(rect.x, rect.y + height, rect.width, height),
+        ]
+    } else {
+        vec![rect]
+    }
+}
+fn notation_area(panel: Rect, _score: &trainer::WrittenScore) -> Rect {
+    panel.inner(Margin {
+        horizontal: 1,
+        vertical: 1,
+    })
+}
+
+fn score_images(
+    area: Rect,
+    session: &trainer::TrainingView<'_>,
+) -> Vec<(Rect, notation::ImageScore)> {
+    if !training_fits(area.width, area.height) || session.browser.is_some() {
+        return vec![];
+    }
+    if let Some(score) = &session.display_score {
+        let panels = score_panels(area, session);
+        let ticks = score
+            .ticks
+            .max(session.played_score.as_ref().map_or(0, |s| s.ticks));
+        let comparison = session.played_score.is_some();
+        let hands: Vec<_> = [trainer::Hand::Right, trainer::Hand::Left]
+            .into_iter()
+            .filter(|h| {
+                score.hands.contains(h)
+                    || session
+                        .played_score
+                        .as_ref()
+                        .is_some_and(|s| s.hands.contains(h))
+            })
+            .collect();
+        [Some(score), session.played_score.as_ref()]
+            .into_iter()
+            .flatten()
+            .zip(panels)
+            .filter_map(|(score, panel)| {
+                if score.symbols_only {
+                    return None;
+                }
+                let area = notation_area(panel, score);
+                if area.is_empty() {
+                    return None;
+                }
+                let mut score = score.clone();
+                score.ticks = ticks;
+                if comparison {
+                    score.hands = hands.clone();
+                }
+                Some((area, notation::ImageScore::Reading(score)))
+            })
+            .collect()
+    } else {
+        session
+            .rhythm_score
+            .as_ref()
+            .filter(|s| s.quarter_notes)
+            .map(|score| {
+                (
+                    rhythm_areas(area)[2].inner(Margin {
+                        horizontal: 1,
+                        vertical: 1,
+                    }),
+                    notation::ImageScore::Pulse(score.notes.len()),
+                )
+            })
+            .into_iter()
+            .collect()
+    }
+}
+fn reading_areas(area: Rect, session: &trainer::TrainingView<'_>) -> std::rc::Rc<[Rect]> {
+    let feedback = session.phase == trainer::Phase::Feedback;
+    let height = |score: &trainer::WrittenScore| {
+        if score.symbols_only {
+            3
+        } else {
+            (if score.hands.len() > 1 && !score.lead {
+                12
+            } else {
+                9
+            }) + u16::from(!score.chords.is_empty())
+        }
+    };
+    let desired = session.display_score.as_ref().map_or(9, height)
+        + session.played_score.as_ref().map_or(0, height);
+    Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Length(if feedback { 1 } else { 3 }),
+        Constraint::Length(desired.min(area.height.saturating_sub(13).max(6))),
+        Constraint::Min(4),
+        Constraint::Length(2),
+    ])
+    .split(area.inner(Margin {
+        horizontal: 2,
+        vertical: 1,
+    }))
+}
+fn draw_reading(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    session: &trainer::TrainingView<'_>,
+    score: &trainer::WrittenScore,
+) {
+    let parts = reading_areas(area, session);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(text(
+                format!(
+                    "◈ {} · {}",
+                    session.title,
+                    score
+                        .bpm
+                        .map(|b| format!("{b} BPM"))
+                        .unwrap_or_else(|| "UNTIMED".into())
+                ),
+                TEAL,
+            )),
+            Line::from(text(
+                if score.key_fifths > 0 {
+                    format!("Key signature: {} sharp(s)", score.key_fifths)
+                } else if score.key_fifths < 0 {
+                    format!("Key signature: {} flat(s)", -score.key_fifths)
+                } else {
+                    "Treble / bass notation".into()
+                },
+                MUTED,
+            )),
+        ]),
+        parts[0],
+    );
+    frame.render_widget(
+        Paragraph::new(session.prompt)
+            .style(Style::default().fg(TEXT))
+            .wrap(Wrap { trim: true }),
+        parts[1],
+    );
+    let panels = score_panels(area, session);
+    draw_score_panel(
+        frame,
+        panels[0],
+        session,
+        score,
+        if session.played_score.is_some() {
+            " EXPECTED "
+        } else if score.lead {
+            " LEAD SHEET "
+        } else {
+            " SCORE "
+        },
+    );
+    if let Some(played) = &session.played_score {
+        draw_score_panel(
+            frame,
+            panels[1],
+            session,
+            played,
+            " PLAYED · red = pitch / timing / hold error ",
+        );
+    }
+    let mut lines = vec![];
+    if session.phase == trainer::Phase::Feedback && session.reading_result.is_none() {
+        lines.push(Line::from(text(session.feedback, AMBER)));
+        lines.push(Line::from(text(&score.caption, MUTED)));
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), parts[3]);
+    } else if let Some(result) = session.reading_result {
+        lines.push(Line::from(text(session.feedback, AMBER)));
+        lines.push(Line::from(text(
+            result
+                .components()
+                .iter()
+                .map(|(part, ok)| format!("{part} {}", if *ok { "✓" } else { "✗" }))
+                .collect::<Vec<_>>()
+                .join("  "),
+            TEAL,
+        )));
+        for detail in &result.details {
+            lines.push(Line::from(text(detail, TEXT)));
+        }
+        let rows: usize = lines
+            .iter()
+            .map(|line| wrapped_rows(&line.to_string(), parts[3].width) as usize)
+            .sum();
+        let offset = session
+            .comparison_offset
+            .min(rows.saturating_sub(parts[3].height as usize));
+        frame.render_widget(
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: true })
+                .scroll((offset as u16, 0)),
+            parts[3],
+        );
+    } else {
+        lines.push(Line::from(text(
+            match session.phase {
+                trainer::Phase::Waiting if session.awaiting_start => {
+                    "Read the score · Enter starts the count-in"
+                }
+                trainer::Phase::Waiting => "Release keys to begin.",
+                trainer::Phase::Listening => "Count-in / playback · wait before playing your part.",
+                _ => "Play now · follow the score; p/n changes pages.",
+            },
+            TEAL,
+        )));
+        lines.push(Line::from(text(
+            format!(
+                "{} notes entered · {}",
+                session.played.len(),
+                if session.reading_score.is_some() {
+                    "MIDI checks the written parts, not physical hands"
+                } else {
+                    &score.caption
+                }
+            ),
+            MUTED,
+        )));
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), parts[3]);
+    }
+    let page_label = format!(
+        "Page {}/{} · p previous / n next · {}",
+        session.score_page + 1,
+        session.score_pages,
+        if session.preview {
+            "b list · q quit"
+        } else {
+            "q quit"
+        }
+    );
+    let actions = if session.awaiting_start {
+        "Enter start count-in · p/n score pages · q quit"
+    } else if session.phase == trainer::Phase::Feedback {
+        if session.reading_score.is_some() {
+            "r retry · e example · c pause · j/k details · Enter next"
+        } else {
+            "r retry · c pause · p/n score pages · Enter next"
+        }
+    } else {
+        "r restart · x give up · auto submit"
+    };
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(text(actions, TEAL)),
+            Line::from(text(page_label, MUTED)),
+        ]),
+        parts[4],
+    );
+}
+
+fn draw_score_panel(
+    frame: &mut Frame<'_>,
+    panel: Rect,
+    session: &trainer::TrainingView<'_>,
+    score: &trainer::WrittenScore,
+    title: &str,
+) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(BORDER))
+        .style(Style::default().bg(PANEL))
+        .title_style(Style::default().fg(TEAL))
+        .title(title);
+    let inner = notation_area(panel, score);
+    frame.render_widget(block, panel);
+    if score.symbols_only && !score.chords.is_empty() {
+        let row = Rect::new(panel.x + 2, panel.y + 1, panel.width.saturating_sub(4), 1);
+        let count = score.chords.len() as u16;
+        for (i, chord) in score.chords.iter().enumerate() {
+            let x = row.x + row.width * i as u16 / count;
+            let end = row.x + row.width * (i as u16 + 1) / count;
+            let bar =
+                session.score_page * score.bars_per_page as usize + chord.tick as usize / 8 + 1;
+            let beat = chord.tick as f32 / 2. % 4. + 1.;
+            let active =
+                session.current_bar == Some(bar - 1) && session.phase == trainer::Phase::Answering;
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    text(
+                        if score.bars_per_page > 2 {
+                            format!("{}{bar}: ", if active { "▶" } else { "" })
+                        } else {
+                            format!("Bar {bar} · beat {beat}: ")
+                        },
+                        MUTED,
+                    ),
+                    Span::styled(
+                        &chord.text,
+                        Style::default()
+                            .fg(if active { TEAL } else { AMBER })
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ])),
+                Rect::new(x, row.y, end - x, 1),
+            );
+        }
+    }
+    if score.symbols_only {
+        return;
+    }
+    // Unsupported terminals pause reading; never replace staff reading with note names.
+    // Ghostty/Kitty replace this rectangle with the engraved image.
+    let mut fallback = vec![Line::from(text(
+        if std::env::var_os("TMUX").is_some() {
+            "Outer Ghostty/Kitty not detected in tmux. Enable allow-passthrough and start tmux from Ghostty/Kitty."
+        } else if std::env::var_os("STY").is_some() {
+            "Images disabled inside GNU Screen. Run directly in Ghostty/Kitty."
+        } else if session.reading_score.is_some() {
+            "PAUSED: score images unavailable. Use Ghostty/Kitty directly."
+        } else {
+            "Score images unavailable: Ghostty/Kitty was not detected. Text pattern below."
+        },
+        MUTED,
+    ))];
+    if session.reading_score.is_none() {
+        for hand in &score.hands {
+            fallback.push(Line::from(text(
+                format!(
+                    "{}: {}",
+                    hand.label(),
+                    score
+                        .events
+                        .iter()
+                        .filter(|e| e.hand == *hand)
+                        .map(|e| format!(
+                            "{} [{} beats]",
+                            if e.notes().is_empty() {
+                                "rest".into()
+                            } else {
+                                e.notes()
+                                    .iter()
+                                    .map(|n| score.spelling().note_name(*n))
+                                    .collect::<Vec<_>>()
+                                    .join("+")
+                            },
+                            e.duration as f32 / 2.
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(" → ")
+                ),
+                TEXT,
+            )));
+        }
+    } else if !score.symbols_only {
+        fallback.push(Line::from(text(
+            "Use a graphics-capable terminal to read the staff.",
+            AMBER,
+        )));
+    }
+    frame.render_widget(Paragraph::new(fallback).wrap(Wrap { trim: true }), inner);
+}
+
+#[cfg(test)]
+mod score_layout_tests {
+    use super::*;
+    #[test]
+    fn comparison_images_have_equal_sizes_even_at_odd_terminal_heights() {
+        let session = trainer::Session::preview("harmony.7.major.accompany.12.true").unwrap();
+        let mut view = session.view();
+        view.phase = trainer::Phase::Feedback;
+        view.played_score = view.display_score.clone();
+        for height in 30..60 {
+            let images = score_images(Rect::new(0, 0, 120, height), &view);
+            assert_eq!(images.len(), 2);
+            assert_eq!(images[0].0.width, images[1].0.width);
+            assert_eq!(images[0].0.height, images[1].0.height);
+        }
+    }
+    #[test]
+    fn comparisons_have_compact_images_and_real_terminal_labels() {
+        let session = trainer::Session::preview("guided.scale.0.major.up").unwrap();
+        let mut view = session.view();
+        view.phase = trainer::Phase::Feedback;
+        view.played_score = view.display_score.clone();
+        let area = Rect::new(0, 0, 120, 50);
+        let images = score_images(area, &view);
+        assert_eq!(images.len(), 2);
+        assert!(images[0].0.bottom() < images[1].0.top());
+        assert!(images.iter().all(|(rect, _)| rect.height <= 7));
+        let mut terminal = Terminal::new(TestBackend::new(120, 50)).unwrap();
+        terminal
+            .draw(|frame| draw_reading(frame, area, &view, view.display_score.as_ref().unwrap()))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("EXPECTED"));
+        assert!(text.contains("PLAYED"));
+    }
+    #[test]
+    fn chord_symbols_share_the_score_image_instead_of_an_independent_text_row() {
+        let session = trainer::Session::preview("reading.lead.2").unwrap();
+        let view = session.view();
+        let area = Rect::new(0, 0, 120, 38);
+        let image = score_images(area, &view).remove(0).0;
+        let panel = score_panels(area, &view)[0];
+        assert_eq!(image.y, panel.y + 1);
+        let mut terminal = Terminal::new(TestBackend::new(120, 38)).unwrap();
+        terminal
+            .draw(|frame| draw_reading(frame, area, &view, view.display_score.as_ref().unwrap()))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(!text.contains("Bar 1 · beat 1:"));
+    }
+}
+
+#[cfg(test)]
+mod connection_tests {
+    use super::*;
+    #[test]
+    fn connection_screen_explains_consumed_note_before_showing_exercise() {
+        let keyboard = Keyboard::default();
+        let view = View {
+            keyboard: &keyboard,
+            source: "",
+            connected: false,
+            demo: false,
+            silent: true,
+            muted: false,
+            note_names: false,
+            volume: 1.0,
+            now: Instant::now(),
+        };
+        let session = trainer::Session::preview("reading.together.3").unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| draw_training(frame, &view, &session.view()))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("CONNECT YOUR MIDI KEYBOARD"));
+        assert!(text.contains("NOT an answer"));
+        assert!(!text.contains("Enter starts"));
     }
 }

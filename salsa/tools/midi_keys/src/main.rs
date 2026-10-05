@@ -20,7 +20,15 @@ unsafe extern "C" {
     ) -> c_int;
     fn mk_connect(seq: *mut c_void, client: c_int, port: c_int) -> c_int;
     fn mk_disconnect(seq: *mut c_void, client: c_int, port: c_int);
-    fn mk_event(seq: *mut c_void, message: *mut u8, client: *mut c_int, port: *mut c_int) -> c_int;
+    fn mk_event(
+        seq: *mut c_void,
+        message: *mut u8,
+        client: *mut c_int,
+        port: *mut c_int,
+        event_type: *mut c_int,
+        raw: *mut *const u8,
+        raw_size: *mut usize,
+    ) -> c_int;
     fn mk_terminal_enter() -> c_int;
     fn mk_terminal_leave();
     fn mk_key() -> c_int;
@@ -112,13 +120,48 @@ impl Midi {
         for _ in 0..512 {
             let mut message = [0u8; 3];
             let (mut client, mut port) = (0, 0);
-            let result =
-                checked(unsafe { mk_event(self.0, message.as_mut_ptr(), &mut client, &mut port) })
-                    .map_err(|error| {
-                        format!("MIDI input stopped: {error}. Check the connection and restart.")
-                    })?;
+            let mut event_type = 0;
+            let mut raw = std::ptr::null();
+            let mut raw_size = 0;
+            let result = checked(unsafe {
+                mk_event(
+                    self.0,
+                    message.as_mut_ptr(),
+                    &mut client,
+                    &mut port,
+                    &mut event_type,
+                    &mut raw,
+                    &mut raw_size,
+                )
+            })
+            .map_err(|error| {
+                format!("MIDI input stopped: {error}. Check the connection and restart.")
+            })?;
             if result == 0 {
                 break;
+            }
+            if let Some(trainer) = trainer {
+                // ALSA owns the data until the next read. Capture copies it synchronously.
+                let bytes = if raw_size == 0 || raw.is_null() {
+                    &[]
+                } else {
+                    unsafe { std::slice::from_raw_parts(raw, raw_size) }
+                };
+                let name = ports
+                    .iter()
+                    .find(|p| p.client == client && p.port == port)
+                    .map(|p| p.name.as_str())
+                    .unwrap_or("");
+                trainer.debug_midi(
+                    Instant::now(),
+                    client,
+                    port,
+                    name,
+                    event_type,
+                    bytes,
+                    if result == 1 { Some(message) } else { None },
+                    selection.source == Some((client, port)),
+                );
             }
             if result == 3 && selection.source == Some((client, port)) {
                 return Err("Selected MIDI device disconnected. Reconnect it and restart.".into());
@@ -188,13 +231,16 @@ impl Drop for Terminal {
 const HELP: &str = "MIDI Keys - adaptive ear training and theory practice
 
 Usage: midi_keys [--list | --port CLIENT:PORT | --demo | --snapshot]
-                 [--free-play] [--silent] [--note-names] [--profile FILE]
-                 [--trace-events FILE]
+                 [--free-play | --exercises | --exercise ID] [--silent] [--note-names] [--profile FILE]
+                 [--trace-events FILE] [--debug-exercise FILE]
        midi_keys --render-demo FILE.wav
 
   no options    Adaptive training. Press a MIDI key to select its input
   --free-play   Piano and visualizer without training
+  --exercises   Search and try any exercise without reading or saving a profile
+  --exercise ID Open a specific exercise directly in preview mode
   --profile FILE  Use a separate learner profile (JSON)
+  --debug-exercise FILE  Save the latest preview attempt, MIDI input and grading as JSON
   --trace-events FILE  Diagnose audio by logging its input events to a new file
   --list        List available MIDI input ports
   --port 24:0   Connect to a specific input (see --list)
@@ -205,9 +251,14 @@ Usage: midi_keys [--list | --port CLIENT:PORT | --demo | --snapshot]
   --render-demo FILE.wav  Render a piano preview without an audio device
 
 Controls: [ / ] octave, f follow, space panic, -/+ volume, m mute, n names, q quit
-Training: release keys to submit; next exercise starts automatically.
-          r replay/restart listening, Enter submit/next now, Backspace clear,
+Training: answers finish automatically. Timed count-ins wait for Enter so you can prepare.
+          r retry/restart, e hear reading example, c pause result,
+          Enter begin/submit/next, Backspace clear,
+          c pause rhythm results, j/k scroll rhythm comparison,
           h hint (no mastery credit), x don't know
+Exercise browser: Left/Right or Tab category, Up/Down select, type to search,
+                  Enter preview, Ctrl-C quit
+Preview: b return to list, v new variant, r replay; training progress is not saved
 Middle C is C4 (MIDI 60). Highlights show held keys, not sustain pedal state.
 Use at least 64 columns by 22 rows; 100 x 32 shows the full instrument panel.";
 
@@ -268,12 +319,32 @@ fn run() -> Result<(), String> {
     args.retain(|arg| arg != "--silent");
     let mut note_names = args.iter().any(|arg| arg == "--note-names");
     args.retain(|arg| arg != "--note-names");
+    let exercise_id = if let Some(index) = args.iter().position(|arg| arg == "--exercise") {
+        args.remove(index);
+        if index >= args.len() || args[index].starts_with('-') || args[index].is_empty() {
+            return Err("--exercise requires a skill ID (for example rhythm.0.60)".into());
+        }
+        Some(args.remove(index))
+    } else {
+        None
+    };
+    let exercises = exercise_id.is_some() || args.iter().any(|arg| arg == "--exercises");
+    args.retain(|arg| arg != "--exercises");
     let free_play = args.iter().any(|arg| arg == "--free-play");
     args.retain(|arg| arg != "--free-play");
     let profile_path = if let Some(index) = args.iter().position(|arg| arg == "--profile") {
         args.remove(index);
         if index >= args.len() || args[index].starts_with("--") {
             return Err("--profile requires a file path".into());
+        }
+        Some(std::path::PathBuf::from(args.remove(index)))
+    } else {
+        None
+    };
+    let debug_path = if let Some(index) = args.iter().position(|arg| arg == "--debug-exercise") {
+        args.remove(index);
+        if index >= args.len() || args[index].starts_with('-') || args[index].is_empty() {
+            return Err("--debug-exercise requires a file path".into());
         }
         Some(std::path::PathBuf::from(args.remove(index)))
     } else {
@@ -302,6 +373,16 @@ fn run() -> Result<(), String> {
     if !valid {
         return Err(format!("Invalid arguments.\n\n{HELP}"));
     }
+    if exercises && (free_play || profile_path.is_some() || !matches!(option, "" | "--port")) {
+        return Err(
+            "Use --exercises or --exercise ID by itself or with --port; preview mode does not use a learner profile.".into(),
+        );
+    }
+    if debug_path.is_some() && !exercises {
+        return Err(
+            "--debug-exercise requires --exercise ID or --exercises (preview mode).".into(),
+        );
+    }
     if free_play && option == "--demo" {
         return Err("--free-play and --demo are different modes. Omit --demo for a piano without automatic playback.".into());
     }
@@ -310,6 +391,14 @@ fn run() -> Result<(), String> {
     {
         return Err("--trace-events requires interactive piano audio (omit --silent).".into());
     }
+    // Resolve exact IDs before touching terminal, audio, MIDI, or profile storage.
+    let preview_session = if let Some(id) = &exercise_id {
+        Some(trainer::Session::preview(id)?)
+    } else if exercises {
+        Some(trainer::Session::browse()?)
+    } else {
+        None
+    };
     let mut keyboard = Keyboard::default();
     if option == "--snapshot" {
         demo_chord(&mut keyboard, None, 0)?;
@@ -331,7 +420,9 @@ fn run() -> Result<(), String> {
             "Ear training needs sound. Use --free-play --silent for the silent visualizer.".into(),
         );
     }
-    let mut trainer = if training {
+    let mut trainer = if exercises {
+        preview_session
+    } else if training {
         Some(trainer::Session::open(match profile_path {
             Some(path) => path,
             None => trainer::default_profile_path()?,
@@ -339,6 +430,9 @@ fn run() -> Result<(), String> {
     } else {
         None
     };
+    if let (Some(trainer), Some(path)) = (&mut trainer, debug_path) {
+        trainer.enable_debug(path)?;
+    }
     let piano = if silent || option == "--list" {
         None
     } else {
@@ -406,6 +500,9 @@ fn run() -> Result<(), String> {
     }
     let terminal = Terminal::enter()?;
     let mut display = ui::Display::new().map_err(|e| e.to_string())?;
+    if let Some(trainer) = &mut trainer {
+        trainer.set_reading_supported(display.supports_score_images());
+    }
     let mut last_frame = Instant::now();
     let mut size = terminal.size();
     let mut dirty = true;
@@ -417,13 +514,24 @@ fn run() -> Result<(), String> {
         dirty |= new_size != size;
         size = new_size;
         if let Some(trainer) = &mut trainer {
+            trainer.debug_runtime(size.0, size.1, silent, muted, volume);
             let fits = ui::training_fits(
                 size.0.clamp(0, u16::MAX as i32) as u16,
                 size.1.clamp(0, u16::MAX as i32) as u16,
             );
+            let fits = fits
+                && selection.source.is_some()
+                && (trainer.view().reading_score.is_none() || display.supports_score_images());
             if let Some(event) = trainer.set_visible(fits, Instant::now()) {
                 if let Some(piano) = &piano {
-                    piano.event_from(event, "training")?;
+                    piano.event_from(
+                        event,
+                        if trainer.previewing() {
+                            "preview"
+                        } else {
+                            "training"
+                        },
+                    )?;
                 }
             }
         }
@@ -449,10 +557,18 @@ fn run() -> Result<(), String> {
         }
         if let Some(trainer) = &mut trainer {
             for event in trainer.tick(Instant::now())? {
+                trainer.debug_event("exercise_output", event, Instant::now());
                 // Listening prompts go only to audio: the visual keyboard and
                 // note trail must never reveal an ear-training answer.
                 if let Some(piano) = &piano {
-                    piano.event_from(event, "training")?;
+                    piano.event_from(
+                        event,
+                        if trainer.previewing() {
+                            "preview"
+                        } else {
+                            "training"
+                        },
+                    )?;
                 }
             }
         }
@@ -482,7 +598,16 @@ fn run() -> Result<(), String> {
             last_frame = Instant::now();
             dirty = false;
         }
+        if let Some(trainer) = &mut trainer {
+            trainer.flush_debug(false)?;
+        }
         let key = unsafe { mk_key() };
+        if key != 0 {
+            if let Some(trainer) = &mut trainer {
+                trainer.debug_control(key, Instant::now());
+                trainer.flush_debug(true)?;
+            }
+        }
         if matches!(key, -1 | 3 | 4) {
             break;
         }
@@ -496,13 +621,68 @@ fn run() -> Result<(), String> {
             continue;
         }
         if escape_sequence == 2 {
+            if let Some(trainer) = &mut trainer {
+                if trainer.browsing() {
+                    if matches!(key, 65 | 66) {
+                        trainer.browser_navigate(key == 66);
+                        dirty = true;
+                    }
+                    if matches!(key, 67 | 68) {
+                        trainer.browser_category(key == 67);
+                        dirty = true;
+                    }
+                }
+            }
             if (0x40..=0x7e).contains(&key) {
                 escape_sequence = 0;
             }
             continue;
         }
         if let Some(trainer) = &mut trainer {
+            if trainer.browsing() {
+                match key {
+                    27 => escape_sequence = 1,
+                    10 | 13 => {
+                        apply_event(&mut keyboard, piano.as_ref(), Event::Reset)?;
+                        trainer.browser_select();
+                    }
+                    9 => trainer.browser_category(true),
+                    14 | 16 => trainer.browser_navigate(key == 14),
+                    8 | 21 | 127 | 32..=126 => trainer.browser_edit(key as u8),
+                    _ => {}
+                }
+                dirty = true;
+                continue;
+            }
+            if trainer.previewing() && matches!(key, 98 | 118) {
+                apply_event(&mut keyboard, piano.as_ref(), Event::Reset)?;
+                if key == 98 {
+                    trainer.show_browser();
+                } else {
+                    trainer.new_preview();
+                }
+                dirty = true;
+                continue;
+            }
             let handled = match key {
+                112 => trainer.navigate_score(false),
+                110 => trainer.navigate_score(true),
+                99 => {
+                    trainer.pause_comparison();
+                    true
+                }
+                106 => {
+                    trainer.cycle_insights(true);
+                    true
+                }
+                107 => {
+                    trainer.cycle_insights(false);
+                    true
+                }
+                105 | 73 => {
+                    trainer.toggle_insights();
+                    true
+                }
                 10 | 13 => {
                     if trainer.phase() == trainer::Phase::Feedback {
                         apply_event(&mut keyboard, piano.as_ref(), Event::Reset)?;
@@ -512,13 +692,12 @@ fn run() -> Result<(), String> {
                     }
                     true
                 }
+                101 | 69 => {
+                    trainer.play_reading_solution(Instant::now());
+                    true
+                }
                 114 | 82 => {
-                    if matches!(
-                        trainer.phase(),
-                        trainer::Phase::Answering
-                            | trainer::Phase::Waiting
-                            | trainer::Phase::Listening
-                    ) {
+                    if trainer.phase() != trainer::Phase::Rest {
                         apply_event(&mut keyboard, piano.as_ref(), Event::Reset)?;
                         trainer.replay(Instant::now());
                     }

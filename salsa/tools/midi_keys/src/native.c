@@ -73,11 +73,21 @@ void mk_disconnect(snd_seq_t *seq, int client, int port) {
 }
 
 // 0 = no event, 1 = MIDI, 2 = unrelated, 3 = disconnected, negative = error.
-int mk_event(snd_seq_t *seq, unsigned char *message, int *client, int *port) {
+int mk_event(snd_seq_t *seq, unsigned char *message, int *client, int *port,
+             int *event_type, const unsigned char **raw, size_t *raw_size) {
     snd_seq_event_t *event = NULL;
     int result = snd_seq_event_input(seq, &event);
     if (result == -EAGAIN) return 0;
     if (result < 0) return result;
+    // Borrowed ALSA storage: Rust copies this before the next event read.
+    *event_type = event->type;
+    if ((event->flags & SND_SEQ_EVENT_LENGTH_MASK) != SND_SEQ_EVENT_LENGTH_FIXED) {
+        *raw = event->data.ext.ptr;
+        *raw_size = event->data.ext.len;
+    } else {
+        *raw = (const unsigned char *)&event->data;
+        *raw_size = sizeof(event->data);
+    }
     *client = event->source.client;
     *port = event->source.port;
     switch (event->type) {

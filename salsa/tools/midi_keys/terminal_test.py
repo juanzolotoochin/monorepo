@@ -151,6 +151,28 @@ class TerminalTest(unittest.TestCase):
             read_until(master, b"MIDI KEYS")
             os.write(master, b"q")
 
+    def test_direct_exercise_arguments_are_validated_before_devices(self):
+        cases = [
+            (["--debug-exercise"], b"requires a file path"),
+            (["--debug-exercise", "/unused"], b"requires --exercise ID or --exercises"),
+            (["--exercise", "reading.right.0", "--debug-exercise", "--silent"], b"requires a file path"),
+            (["--exercise"], b"requires a skill ID"),
+            (["--exercise", "--port", "32:0"], b"requires a skill ID"),
+            (["--exercise", "rhythm.0"], b"Unknown exercise ID"),
+            (["--exercise", "rhythm.0.60", "--free-play"], b"preview mode"),
+            (["--exercise", "rhythm.0.60", "--profile", "/unused"], b"preview mode"),
+            (["--exercise", "rhythm.0.60", "--snapshot"], b"preview mode"),
+            (["--exercise", "rhythm.0.60"], b"An interactive terminal is required"),
+            (["--port", "32:0", "--exercise", "rhythm.0.60"], b"An interactive terminal is required"),
+            (["--exercises", "--exercise", "chord.build.3.11"], b"An interactive terminal is required"),
+        ]
+        for args, expected in cases:
+            with self.subTest(args=args):
+                result = subprocess.run([str(BINARY), *args], capture_output=True, timeout=5)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected, result.stderr)
+                self.assertNotIn(b"Loading Salamander", result.stderr)
+
     def test_noninteractive_modes(self):
         snapshot = subprocess.run([str(BINARY), "--snapshot"], capture_output=True, check=True)
         self.assertIn(b"Held: C4(80)  E4(92)  G4(104)", snapshot.stdout)

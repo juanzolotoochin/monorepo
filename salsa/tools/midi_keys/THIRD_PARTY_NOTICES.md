@@ -15,6 +15,20 @@ is preserved in the external repository `@salamander_piano`. The SF2 conversion
 does not include all of the original SFZ release/pedal/hammer-noise features.
 The sample archive is downloaded into Bazel's external cache, not committed here.
 
+## GeneralUser GS sampled drums
+
+- Creator: S. Christian Collins.
+- Version: 2.0.3; revision `684543d5e5efaef08d02be50dcda8d552478fa60`.
+- Source: https://github.com/mrbumpy409/GeneralUser-GS
+- License: GeneralUser GS License v2.0, preserved in runfiles as
+  `@generaluser_drums//:license` (`documentation/LICENSE.txt`).
+- Archive SHA-256:
+  `aef2e2901ab399061ac3765e259ab4c3409bdcb24b7cf814b4b54aaad549dbff`.
+
+The app uses the unmodified SF2's standard GM percussion kit. The license permits
+use in software projects; retain its full terms, including the upstream notes
+on sample provenance, with redistributions.
+
 ## RustySynth
 
 - Version: 1.3.7.
@@ -32,3 +46,7 @@ The sample archive is downloaded into Bazel's external cache, not committed here
 
 When redistributing, retain the upstream license files and the piano attribution
 with the binary and its runfiles.
+
+Spoken count-in: recordings by Dvortygirl from Wikimedia Commons. One, two,
+and three are CC BY-SA 3.0; four is public domain. The adapted PCM files retain
+those terms. Source links and conversion details: `assets/count-in/NOTICE.txt`.

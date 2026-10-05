@@ -29,9 +29,41 @@ impl Mastery {
     pub fn mastered(&self) -> bool {
         self.score >= 9.0 && self.attempts >= 12 && self.streak >= 5
     }
+    fn observe(&mut self, correct: bool, attempt: &Attempt) {
+        self.observe_quality(correct, if correct { 1.0 } else { 0.0 }, attempt);
+    }
+    fn observe_quality(&mut self, correct: bool, quality: f32, attempt: &Attempt) {
+        if self.attempts == 0 {
+            self.introduced_at = attempt.number;
+        }
+        self.attempts += 1;
+        let independent = correct && !attempt.assisted;
+        self.score = (self.score * 0.8 + if attempt.assisted { 0.0 } else { 2.0 * quality })
+            .clamp(0.0, 10.0);
+        if self.score >= 7.0 && self.attempts >= 6 {
+            self.first_qualified_at.get_or_insert(attempt.number);
+        }
+        if independent {
+            self.correct += 1;
+            self.streak += 1;
+            self.variants.insert(attempt.variant.clone());
+        } else {
+            self.streak = 0;
+        }
+        self.last_turn = attempt.number;
+        self.last_practiced = attempt.at;
+        self.review_requested = false;
+    }
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Attempt {
+    /// Optional 0–100 grade; old histories and discrete exercises stay binary.
+    #[serde(default)]
+    pub performance_score: Option<u8>,
+    #[serde(default)]
+    pub reading: Option<crate::reading::ReadingResult>,
+    #[serde(default)]
+    pub recognition: Option<crate::recognition::Context>,
     #[serde(default)]
     pub title: String,
     #[serde(default)]
@@ -57,18 +89,22 @@ pub struct Attempt {
     #[serde(default = "default_true")]
     pub duration_correct: bool,
 }
+impl Attempt {
+    pub fn successful(&self) -> bool {
+        self.performance_score
+            .map_or(self.correct, |score| score >= 90)
+    }
+}
 fn default_true() -> bool {
     true
 }
-#[derive(Clone, Serialize, Deserialize)]
-pub struct MidiEvidence {
-    pub offset_ms: u64,
-    pub channel: usize,
-    pub note: usize,
-    pub velocity: u8,
-}
+pub use crate::evidence::MidiEvidence;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Profile {
+    #[serde(default)]
+    pub reading_components: BTreeMap<String, Mastery>,
+    #[serde(default)]
+    pub recognition: crate::recognition::Recognition,
     pub version: u32,
     pub completed: u64,
     pub skills: BTreeMap<String, Mastery>,
@@ -77,6 +113,8 @@ pub struct Profile {
 impl Default for Profile {
     fn default() -> Self {
         Self {
+            reading_components: BTreeMap::new(),
+            recognition: Default::default(),
             version: 1,
             completed: 0,
             skills: BTreeMap::new(),
@@ -85,6 +123,26 @@ impl Default for Profile {
     }
 }
 impl Profile {
+    pub fn insights(&self, graph: &[Skill]) -> Vec<String> {
+        let mut insights = self.recognition.insights();
+        let mut mastered: Vec<_> = graph
+            .iter()
+            .filter_map(|skill| {
+                if matches!(skill.task, crate::curriculum::Task::HearInterval { .. }) {
+                    return None;
+                }
+                self.skills
+                    .get(&skill.id)
+                    .filter(|s| s.mastered())
+                    .map(|s| (s.last_turn, &skill.title))
+            })
+            .collect();
+        mastered.sort_by_key(|(turn, _)| std::cmp::Reverse(*turn));
+        for (_, title) in mastered.into_iter().take(1).rev() {
+            insights.insert(0, format!("Mastered: {title}"));
+        }
+        insights
+    }
     pub fn unlocked(&self, skill: &Skill) -> bool {
         // Initial qualification opens a path permanently. Later weakness lowers
         // scores and requests review without repeatedly closing that path.
@@ -97,6 +155,12 @@ impl Profile {
             })
     }
     pub fn next<'a>(&self, graph: &'a [Skill], now: u64) -> Option<(&'a Skill, &'static str)> {
+        let recognition = self.recognition.next(self, graph, now);
+        if self.completed % 2 == 1 {
+            if let Some(candidate) = recognition {
+                return Some(candidate);
+            }
+        }
         let mut candidates = Vec::new();
         let mut new_skills = Vec::new();
         let mut learning = 0;
@@ -109,6 +173,9 @@ impl Profile {
             .max()
             .unwrap_or(0);
         for (index, skill) in graph.iter().enumerate() {
+            if matches!(skill.task, crate::curriculum::Task::HearInterval { .. }) {
+                continue;
+            }
             if !self.unlocked(skill) {
                 continue;
             }
@@ -175,31 +242,30 @@ impl Profile {
         candidates
             .first()
             .map(|(_, _, skill, reason)| (*skill, *reason))
+            .or(recognition)
     }
     pub fn record(&mut self, skill: &Skill, mut attempt: Attempt) {
         self.completed += 1;
         attempt.number = self.completed;
+        self.recognition.record(skill, &mut attempt);
+        if let Some(reading) = &attempt.reading {
+            for (part, correct) in reading.components() {
+                let state = self
+                    .reading_components
+                    .entry(format!("{}:{part}", skill.id))
+                    .or_default();
+                state.observe(correct, &attempt);
+            }
+        }
         let state = self.skills.entry(skill.id.clone()).or_default();
-        if state.attempts == 0 {
-            state.introduced_at = self.completed;
-        }
-        state.attempts += 1;
-        let independent = attempt.correct && !attempt.assisted;
-        state.score = (state.score * 0.8 + if independent { 2.0 } else { 0.0 }).clamp(0.0, 10.0);
-        if state.score >= 7.0 && state.attempts >= 6 {
-            state.first_qualified_at.get_or_insert(self.completed);
-        }
-        if independent {
-            state.correct += 1;
-            state.streak += 1;
-            state.variants.insert(attempt.variant.clone());
-        } else {
-            state.streak = 0;
-        }
-        state.last_practiced = attempt.at;
-        state.last_turn = self.completed;
-        state.review_requested = false;
-        if !independent {
+        let quality = attempt
+            .performance_score
+            .map_or(if attempt.correct { 1.0 } else { 0.0 }, |score| {
+                f32::from(score.min(100)) / 100.0
+            });
+        state.observe_quality(attempt.successful(), quality, &attempt);
+        let independent = attempt.successful() && !attempt.assisted;
+        if !independent && attempt.reading.is_none() {
             for prerequisite in &skill.requires {
                 if let Some(state) = self.skills.get_mut(&prerequisite.skill) {
                     state.review_requested = true;
@@ -261,9 +327,17 @@ impl Store {
         if profile
             .skills
             .values()
+            .chain(profile.reading_components.values())
             .any(|s| !s.score.is_finite() || !(0.0..=10.0).contains(&s.score))
         {
             return Err("Invalid mastery score in learner profile".into());
+        }
+        if profile
+            .recent_attempts
+            .iter()
+            .any(|a| a.performance_score.is_some_and(|s| s > 100))
+        {
+            return Err("Invalid performance score in learner profile".into());
         }
         Ok((Self { path, _lock: lock }, profile))
     }

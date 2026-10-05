@@ -58,9 +58,94 @@ fn main() {
     };
     let svg = if training {
         let directory = tempfile::tempdir().unwrap();
-        let mut session = trainer::Session::open(directory.path().join("learner.json")).unwrap();
-        session.ready(Instant::now());
-        ui::training_preview_svg(width, height, &view, &session.view())
+        let mut session = if args.get(5).is_some_and(|value| value == "--browser-demo") {
+            let mut session = trainer::Session::browse().unwrap();
+            for _ in 0..6 {
+                session.browser_category(true);
+            }
+            session
+        } else {
+            trainer::Session::open(directory.path().join("learner.json")).unwrap()
+        };
+        if args.get(5).is_some_and(|value| value == "--rhythm-demo") {
+            session = trainer::Session::browse().unwrap();
+            for &key in b"rhythm.0.60" {
+                session.browser_edit(key);
+            }
+            session.browser_select();
+            let start = Instant::now();
+            session.start(start);
+            for i in 0..8 {
+                let at =
+                    start + Duration::from_millis(3000 + i * 1000 + if i == 3 { 260 } else { 0 });
+                session.input(
+                    Event::Note {
+                        channel: 0,
+                        note: 60,
+                        velocity: 90,
+                    },
+                    at,
+                );
+                session.input(
+                    Event::Note {
+                        channel: 0,
+                        note: 60,
+                        velocity: 0,
+                    },
+                    at + Duration::from_millis(if i == 5 { 250 } else { 940 }),
+                );
+            }
+            session.tick(start + Duration::from_secs(12)).unwrap();
+        }
+        if let Some(id) = args.get(5).and_then(|arg| arg.strip_prefix("--reading=")) {
+            session = trainer::Session::preview(id).unwrap();
+        }
+        if !args.iter().any(|arg| arg == "--prepare") {
+            session.start(Instant::now());
+        }
+        if let Some(answer) = args.iter().find_map(|a| a.strip_prefix("--answer=")) {
+            let start = Instant::now() + Duration::from_secs(30);
+            session.tick(start).unwrap();
+            if session.view().exploring {
+                session.submit(false).unwrap();
+            }
+            for (i, note) in answer
+                .split(',')
+                .map(|n| n.parse::<usize>().unwrap())
+                .enumerate()
+            {
+                let at = start + Duration::from_millis(i as u64 * 500);
+                session.input(
+                    Event::Note {
+                        channel: 0,
+                        note,
+                        velocity: 90,
+                    },
+                    at,
+                );
+                session.input(
+                    Event::Note {
+                        channel: 0,
+                        note,
+                        velocity: 0,
+                    },
+                    at + Duration::from_millis(350),
+                );
+            }
+            session.submit(false).unwrap();
+        }
+        let mut training = session.view();
+        if args.get(5).is_some_and(|value| value == "--insights-demo") {
+            training.insights = vec![
+                "Mastered: C natural minor scale · ascending".into(),
+                "Mastered: seconds and thirds · ascending recognition".into(),
+                "Confusion: major 3rd → perfect 5th · ascending (4/10 recent major 3rd prompts)"
+                    .into(),
+                "Checking: through fifths and octaves · ascending (4/6 intervals established)"
+                    .into(),
+            ];
+        }
+        ui::training_preview_svg(width, height, &view, &training)
     } else {
         ui::preview_svg(width, height, &view)
     };

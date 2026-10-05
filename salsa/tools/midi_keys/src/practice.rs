@@ -104,6 +104,47 @@ impl Practice {
         }
     }
 }
+pub(crate) fn accompaniment_degrees(bars: usize) -> &'static [usize] {
+    if bars == 12 {
+        &[0, 0, 0, 0, 3, 3, 0, 0, 4, 3, 0, 4]
+    } else {
+        &[0, 3, 4, 0]
+    }
+}
+
+pub(crate) fn accompaniment_chord(
+    root: usize,
+    scale: Scale,
+    degree: usize,
+    thirds: bool,
+) -> String {
+    let base = scale.steps()[degree];
+    let interval = |n: usize| scale.steps()[n % 7] + 12 * (n / 7) - base;
+    let third = interval(degree + 2);
+    let fifth = interval(degree + 4);
+    let seventh = interval(degree + 6);
+    let name = NoteSpelling::for_scale(root, scale).note_name(60 + root + base);
+    let root_name = name.trim_end_matches(|c: char| c.is_ascii_digit());
+    let quality = if thirds {
+        if fifth == 6 {
+            "dim"
+        } else if third == 3 {
+            "m"
+        } else {
+            ""
+        }
+    } else if fifth == 6 {
+        "m7b5"
+    } else if third == 3 {
+        "m7"
+    } else if seventh == 11 {
+        "maj7"
+    } else {
+        "7"
+    };
+    format!("{root_name}{quality}")
+}
+
 fn note(events: &mut Vec<(u64, Event)>, pitch: usize, at: u64, duration: u64, velocity: u8) {
     events.push((
         at,
@@ -145,6 +186,7 @@ fn frame(notes: Vec<usize>, at_ms: u64, hold_ms: Option<u64>) -> Frame {
 fn performance(frames: Vec<Frame>, timed: bool) -> Performance {
     Performance {
         frames,
+        accompaniment: false,
         timed,
         exact_register: false,
         any_pitch: false,
@@ -168,19 +210,6 @@ fn render_performance(ex: &mut Exercise, score: &Performance, start: u64) {
             f.hold_ms.unwrap_or(short),
         );
     }
-}
-fn count_in(ex: &mut Exercise, start: u64, beats: usize, bpm: u32) -> u64 {
-    let beat = 60000 / u64::from(bpm);
-    for i in 0..beats {
-        note(
-            &mut ex.playback,
-            96,
-            start + i as u64 * beat,
-            60,
-            if i == 0 { 80 } else { 45 },
-        );
-    }
-    start + beats as u64 * beat
 }
 fn describe(notes: &[usize], spelling: &NoteSpelling) -> String {
     notes
@@ -355,7 +384,7 @@ pub fn generate(task: &Practice, seed: u64, ex: &mut Exercise) {
                 ex.prompt.push_str(&format!(
                     " {bpm} BPM; four count-in beats, then one note per beat."
                 ));
-                let start = count_in(ex, 0, 4, bpm);
+                let start = ex.add_count_in(4, bpm);
                 ex.answer_after_ms = Some(start);
                 ex.bpm = Some(bpm);
                 ex.metronome = true;
@@ -504,27 +533,37 @@ pub fn generate(task: &Practice, seed: u64, ex: &mut Exercise) {
             score.tolerance_ms = (beat / 6).max(60);
             ex.title = "RHYTHM".into();
             ex.bpm = Some(bpm);
-            ex.prompt = format!("Listen, then echo {} taps on any single MIDI key at {bpm} BPM. Match the spacing and held lengths; start when ready.", units.len());
-            if kind == Rhythm::SilentPulse {
-                ex.prompt = format!("Keep the pulse at {bpm} BPM: four count-in beats, then eight short taps on one key. The click drops out after your first four taps.");
-                let start = count_in(ex, 0, 4, bpm);
+            ex.prompt = format!("Listen, then echo {} taps using any MIDI notes at {bpm} BPM. Match the spacing and held lengths; start when ready.", units.len());
+            if kind == Rhythm::Pulse {
+                ex.prompt = format!("Play 8 quarter notes using any MIDI notes at {bpm} BPM with the drum beat. Join on any beat; hold each note until just before the next beat.");
+                ex.metronome = true;
+                ex.pulse_backing = true;
+                for frame in &mut score.frames {
+                    frame.hold_ms = Some(beat.saturating_sub(60));
+                }
+            } else if kind == Rhythm::SilentPulse {
+                ex.prompt = format!("Keep the pulse at {bpm} BPM: four count-in beats, then eight short taps using any MIDI notes. The click drops out after your first four taps.");
+                let start = ex.add_count_in(4, bpm);
                 for i in 0..4 {
                     note(&mut ex.playback, 96, start + i * beat, 60, 45);
                 }
                 ex.answer_after_ms = Some(start);
                 score.fixed_start = true;
             } else {
-                let start = count_in(ex, 0, 4, bpm);
+                let start = ex.add_count_in(4, bpm);
                 render_performance(ex, &score, start);
             }
-            ex.explanation =
-                format!("{kind:?} at {bpm} BPM. Match the heard attacks, rests, and releases.");
+            ex.explanation = if kind == Rhythm::Pulse {
+                format!("Eight evenly spaced quarter notes at {bpm} BPM, aligned with the drums and held for almost one beat each.")
+            } else {
+                format!("{kind:?} at {bpm} BPM. Match the heard attacks, rests, and releases.")
+            };
             ex.answer = Answer::Performance(score);
         }
         Practice::Meter { beats, bpm } => {
             let beat = 60000 / u64::from(bpm);
             ex.title = "METER / DOWNBEATS".into();
-            ex.prompt = format!("Hear three bars of accented pulse ({bpm} BPM). Tap only the next four downbeats on one MIDI key, beginning immediately after the third bar.");
+            ex.prompt = format!("Hear three bars of accented pulse ({bpm} BPM). Tap only the next four downbeats using any MIDI notes, beginning immediately after the third bar.");
             for i in 0..beats * 3 {
                 note(
                     &mut ex.playback,
@@ -750,12 +789,8 @@ fn harmony(
         }
         Harmony::Accompany { bars, thirds } => {
             ex.title = "ACCOMPANIMENT".into();
-            let degrees: Vec<_> = if bars == 12 {
-                vec![0, 0, 0, 0, 3, 3, 0, 0, 4, 3, 0, 4]
-            } else {
-                vec![0, 3, 4, 0]
-            };
-            let start = count_in(ex, 0, 4, 60);
+            let degrees = accompaniment_degrees(bars);
+            let start = ex.add_count_in(4, 60);
             let frames: Vec<_> = degrees
                 .iter()
                 .enumerate()
@@ -778,21 +813,22 @@ fn harmony(
                             70,
                         );
                     }
-                    frame(notes, i as u64 * 4000, Some(3500))
+                    frame(notes, i as u64 * 4000, Some(4000))
                 })
                 .collect();
             let mut score = performance(frames, true);
             score.fixed_start = true;
             score.tolerance_ms = 250;
-            ex.prompt.push_str(&format!("{bars} bars, 4/4, 60 BPM. After four count-in beats, accompany the melody with {} voicings on chord degrees {}. Play two notes on each downbeat; hold 3½ beats and release. Any octave.",if thirds {"3–5"} else {"1–7"},degrees.iter().map(|d|(d+1).to_string()).collect::<Vec<_>>().join("–")));
-            ex.explanation="Follow the displayed chord degrees. Each voicing starts on its bar's first beat and lasts 3½ beats.".into();
+            score.accompaniment = true;
+            ex.prompt.push_str(&format!("{bars} bars · 60 BPM · four count-in beats. Follow the chord names above the score. Play each chord's {} together on beat 1; sustain for three beats or longer (±250 ms); a gap before the next chord is fine. Repeat on every bar, even when the chord stays the same. Any octave.", if thirds { "third and fifth" } else { "root and seventh" }));
+            ex.explanation = "Follow the chord names above the score. Play the written two-note voicing on beat 1 of every bar, including repeated chords; sustain for at least three beats.".into();
             ex.answer_after_ms = Some(start);
             ex.bpm = Some(60);
             ex.answer = Answer::Performance(score);
         }
         Harmony::Coordination(changing) => {
             ex.title = "BASS + MELODY COORDINATION".into();
-            let start = count_in(ex, 0, 4, 60);
+            let start = ex.add_count_in(4, 60);
             let bars = if changing { 4 } else { 1 };
             let mut frames = vec![];
             for bar in 0..bars {
@@ -810,7 +846,7 @@ fn harmony(
             score.fixed_start = true;
             score.exact_register = true;
             score.tolerance_ms = 180;
-            ex.prompt.push_str(&format!("{bars} bar(s), 60 BPM. Four count-in beats. Play the low bass on each downbeat and hold four beats; play the four upper notes on the offbeats, holding each briefly. Follow: {}",score.frames.iter().map(|f|ex.spelling.note_name(f.choices[0][0])).collect::<Vec<_>>().join(" → ")));
+            ex.prompt=format!("{bars} bar(s), 4/4, 60 BPM. Read the score, then press Enter for the spoken count-in. LEFT HAND: hold the bass for the whole bar. RIGHT HAND: rest on 1, 2, 3, 4; play the written eighth notes on each &. Count: 1 & 2 & 3 & 4 &.");
             ex.explanation="Keep the bass held while playing the upper part. MIDI checks overlapping notes and timing, not which physical hand you use.".into();
             ex.answer_after_ms = Some(start);
             ex.bpm = Some(60);

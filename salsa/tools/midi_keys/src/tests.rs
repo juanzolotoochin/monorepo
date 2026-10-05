@@ -12,8 +12,11 @@ fn skill(task: Task) -> Skill {
         requires: vec![],
     }
 }
-fn result(id: &str, correct: bool, turn: u64) -> Attempt {
+pub(crate) fn result(id: &str, correct: bool, turn: u64) -> Attempt {
     Attempt {
+        performance_score: None,
+        reading: None,
+        recognition: None,
         title: String::new(),
         prompt: String::new(),
         spelled_answer: vec![],
@@ -51,7 +54,13 @@ fn established() -> Mastery {
 fn curriculum_is_a_valid_connected_dag_with_specific_skills() {
     let graph = curriculum();
     curriculum::validate(&graph).unwrap();
-    assert_eq!(graph.len(), 6645);
+    assert_eq!(
+        graph
+            .iter()
+            .filter(|s| !matches!(s.task, Task::GuidedScale(_)))
+            .count(),
+        6687
+    );
     let profile = Profile::default();
     let (first, _) = profile.next(&graph, 1000).unwrap();
     assert_eq!(first.id, "interval.build.2.up");
@@ -318,7 +327,7 @@ fn feedback_advances_automatically_once_with_time_to_read_mistakes_and_hints() {
         let dir = tempfile::tempdir().unwrap();
         let mut session = Session::open(dir.path().join("learner.json")).unwrap();
         let now = Instant::now();
-        session.ready(now);
+        session.start(now);
         session.played = session.exercise.as_ref().unwrap().expected_evidence();
         if assisted {
             session.hint();
@@ -351,7 +360,7 @@ fn replay_restarts_audio_and_clears_draft_without_scoring_or_erasing_hint_usage(
         .unwrap();
     session.exercise = Some(Exercise::generate(hearing, 42));
     let now = Instant::now();
-    session.ready(now);
+    session.start(now);
     session.tick(now).unwrap();
     let restart = now + Duration::from_millis(200);
     session.replay(restart);
@@ -520,7 +529,7 @@ fn complete_answer_submits_automatically_but_partial_answers_can_pause() {
     let path = dir.path().join("learner.json");
     let mut session = Session::open(path.clone()).unwrap();
     let now = Instant::now();
-    session.ready(now);
+    session.start(now);
     let notes = session.exercise.as_ref().unwrap().expected_evidence();
     for (index, note) in notes.into_iter().enumerate() {
         let at = now + Duration::from_secs(index as u64 * 31);
@@ -571,7 +580,7 @@ fn failed_save_does_not_advance_or_claim_credit() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("learner.json");
     let mut session = Session::open(path.clone()).unwrap();
-    session.ready(Instant::now());
+    session.start(Instant::now());
     std::fs::create_dir(&path).unwrap(); // Persist cannot overwrite a directory.
     assert!(session.submit(true).is_err());
     assert_eq!(session.profile.completed, 0);
@@ -591,7 +600,7 @@ fn hidden_training_silences_backing_ignores_inputs_and_restarts_without_scoring(
         .unwrap();
     session.exercise = Some(Exercise::generate(skill, 42));
     let now = Instant::now();
-    session.ready(now);
+    session.start(now);
     session.tick(now + Duration::from_secs(5)).unwrap();
     assert!(session.phase == Phase::Answering);
     session.hint();
@@ -608,14 +617,14 @@ fn hidden_training_silences_backing_ignores_inputs_and_restarts_without_scoring(
         },
         later,
     );
-    session.ready(later);
+    session.start(later);
     session.replay(later);
     session.submit(true).unwrap();
     assert!(session.tick(later).unwrap().is_empty());
     assert!(session.played.is_empty());
     assert_eq!(session.profile.completed, 0);
     session.set_visible(true, later);
-    session.ready(later);
+    session.start(later);
     assert!(session.phase == Phase::Listening);
     assert!(session.assisted);
     assert_eq!(
@@ -629,7 +638,7 @@ fn resizing_during_feedback_preserves_the_result_and_its_remaining_delay() {
     let dir = tempfile::tempdir().unwrap();
     let mut session = Session::open(dir.path().join("learner.json")).unwrap();
     let now = Instant::now();
-    session.ready(now);
+    session.start(now);
     session.finish(true, now).unwrap();
     session.set_visible(false, now + Duration::from_secs(1));
     let later = now + Duration::from_secs(600);
@@ -755,7 +764,7 @@ fn prompts_ignore_midi_answers_and_tempo_results_preserve_timestamps() {
         .unwrap();
     session.exercise = Some(Exercise::generate(skill, 42));
     let start = Instant::now();
-    session.ready(start);
+    session.start(start);
     assert!(session.phase == Phase::Listening);
     session.input(
         Event::Note {
@@ -793,7 +802,7 @@ fn prompts_ignore_midi_answers_and_tempo_results_preserve_timestamps() {
     assert_eq!(attempt.bpm, Some(120));
     assert_eq!(attempt.evidence.len(), 16);
     assert_eq!(attempt.evidence[2].offset_ms, 500);
-    assert!(session.metronome_at.is_none());
+    assert!(session.metronome.is_none());
 }
 
 #[test]
@@ -802,19 +811,27 @@ fn basic_descending_intervals_are_introduced_early_at_ninety_percent() {
     for seed in [87654, 42, 777] {
         let mut profile = Profile::default();
         let mut rng = exercise::Random(seed);
-        for turn in 0..500 {
+        for turn in 0..3000 {
             let skill = profile.next(&graph, 1000).unwrap().0;
             let mut attempt = result(&skill.id, rng.take(100) < 90, turn);
             attempt.at = 1000;
             profile.record(skill, attempt);
-        }
-        for semitones in [1, 2, 3, 4] {
-            for direction in ["up", "down"] {
-                let id = format!("interval.hear.{semitones}.{direction}");
-                assert!(
-                    profile.skills.contains_key(&id),
-                    "{id} delayed beyond 500 exercises, seed {seed}"
-                );
+            profile.recent_attempts.clear();
+            let expected: &[usize] = match turn + 1 {
+                500 => &[1, 2, 3, 4],
+                1000 => &[1, 2, 3, 4, 5, 7, 12],
+                3000 => &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+                _ => continue,
+            };
+            for semitones in expected {
+                for direction in ["up", "down", "together"] {
+                    let id = format!("interval.hear.{semitones}.{direction}");
+                    assert!(
+                        profile.skills.contains_key(&id),
+                        "{id} delayed beyond {} exercises, seed {seed}",
+                        turn + 1
+                    );
+                }
             }
         }
     }
@@ -969,7 +986,7 @@ fn tonic_exploration_is_ungraded_and_enter_starts_a_clean_answer() {
         .unwrap();
     session.exercise = Some(Exercise::generate(tonic, 42));
     let start = Instant::now();
-    session.ready(start);
+    session.start(start);
     let after = start + Duration::from_secs(10);
     session.tick(after).unwrap();
     assert!(session.view().exploring);
@@ -1031,7 +1048,7 @@ fn fixed_length_answers_finish_on_last_attack_without_release_or_delay() {
         let skill = session.graph.iter().find(|s| s.id == id).unwrap();
         session.exercise = Some(Exercise::generate(skill, 42));
         let now = Instant::now();
-        session.ready(now);
+        session.start(now);
         let now = now + Duration::from_secs(10);
         session.tick(now).unwrap();
         if session.exploring {
@@ -1064,4 +1081,575 @@ fn fixed_length_answers_finish_on_last_attack_without_release_or_delay() {
         assert!(session.profile.recent_attempts[0].correct);
         assert_eq!(session.profile.recent_attempts[0].answer, notes);
     }
+}
+
+#[test]
+fn live_interval_answers_save_the_actual_confusion_and_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("learner.json");
+    let mut session = Session::open(path.clone()).unwrap();
+    let skill = session
+        .graph
+        .iter()
+        .find(|s| s.id == "interval.hear.2.up")
+        .unwrap();
+    session.exercise = Some(Exercise::generate(skill, 42));
+    let now = Instant::now();
+    session.start(now);
+    let answer_at = now + Duration::from_secs(10);
+    session.tick(answer_at).unwrap();
+    for note in [60, 67] {
+        session.input(
+            Event::Note {
+                channel: 0,
+                note,
+                velocity: 90,
+            },
+            answer_at,
+        );
+    }
+    session.tick(answer_at).unwrap();
+    assert!(session.phase == Phase::Feedback);
+    drop(session);
+    let session = Session::open(path).unwrap();
+    let attempt = &session.profile.recent_attempts[0];
+    assert!(!attempt.correct);
+    let context = attempt.recognition.as_ref().unwrap();
+    assert_eq!(
+        (
+            context.version,
+            context.set,
+            context.expected,
+            context.heard_as
+        ),
+        (1, 0, 2, Some(7))
+    );
+    assert_eq!(context.direction, "ascending");
+    assert!(
+        !session
+            .profile
+            .insights(&session.graph)
+            .iter()
+            .any(|s| s.starts_with("Confusion:")),
+        "one mistake is not a pattern"
+    );
+}
+
+#[test]
+fn exercise_browser_filters_selects_and_never_touches_training_progress() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("learner.json");
+    let mut training = Session::open(path.clone()).unwrap();
+    training.start(Instant::now());
+    training.submit(true).unwrap();
+    let saved = std::fs::read(&path).unwrap();
+    // Keep the real profile locked while previewing: previews must not open it.
+    let mut preview = Session::browse().unwrap();
+    assert!(preview.path().is_none());
+    assert!(preview.browsing());
+    let now = Instant::now();
+    preview.start(now);
+    assert!(preview.tick(now).unwrap().is_empty());
+    for key in b"interval.build.2.up" {
+        preview.browser_edit(*key);
+    }
+    assert_eq!(preview.view().browser.unwrap().items.len(), 1);
+    preview.browser_select();
+    assert!(!preview.browsing());
+    preview.start(now);
+    let notes = preview.exercise.as_ref().unwrap().expected_evidence();
+    for note in notes {
+        preview.input(
+            Event::Note {
+                channel: 0,
+                note,
+                velocity: 90,
+            },
+            now,
+        );
+    }
+    preview.tick(now).unwrap();
+    assert!(preview.phase == Phase::Feedback);
+    assert_eq!(preview.feedback, "Correct!");
+    assert!(preview.advance_at.is_none());
+    assert_eq!(preview.profile.completed, 0);
+    assert!(preview.profile.skills.is_empty());
+    assert!(preview.profile.recent_attempts.is_empty());
+    assert_eq!(std::fs::read(path).unwrap(), saved);
+    preview.tick(now + Duration::from_secs(60)).unwrap();
+    assert!(preview.phase == Phase::Feedback);
+    let original = preview.exercise.as_ref().unwrap().variant.clone();
+    preview.replay(now);
+    assert!(preview.phase == Phase::Answering);
+    assert_eq!(preview.exercise.as_ref().unwrap().variant, original);
+    preview.show_browser();
+    assert!(preview
+        .tick(now + Duration::from_secs(120))
+        .unwrap()
+        .is_empty());
+    assert!(preview.browsing());
+}
+
+#[test]
+fn browser_handles_empty_search_and_stops_continuous_backing_on_return() {
+    let mut session = Session::browse().unwrap();
+    for key in b"no-such-exercise" {
+        session.browser_edit(*key);
+    }
+    session.browser_navigate(true);
+    session.browser_select();
+    assert!(session.browsing());
+    assert!(session.view().browser.unwrap().items.is_empty());
+    session.browser_edit(21);
+    for key in b"rhythm.0.60" {
+        session.browser_edit(*key);
+    }
+    assert_eq!(session.view().browser.unwrap().items.len(), 1);
+    session.browser_select();
+    let now = Instant::now();
+    session.start(now);
+    assert!(session
+        .tick(now)
+        .unwrap()
+        .iter()
+        .any(|e| matches!(e, Event::DrumBeat { .. })));
+    session.show_browser();
+    assert!(session
+        .tick(now + Duration::from_secs(2))
+        .unwrap()
+        .is_empty());
+    session.browser_edit(21);
+    for key in b"ninth" {
+        session.browser_edit(*key);
+    }
+    assert!(!session.view().browser.unwrap().items.is_empty());
+    session.browser_navigate(true);
+    session.browser_select();
+    assert!(
+        session.exercise.is_some(),
+        "locked advanced exercises must be selectable"
+    );
+    session.new_preview();
+    assert_eq!(session.browser.as_ref().unwrap().variation, 3);
+}
+
+#[test]
+fn direct_preview_uses_exact_ids_and_returns_to_the_selected_category() {
+    for id in ["rhythm.0.60", "chord.build.3.11"] {
+        let mut session = Session::preview(id).unwrap();
+        assert!(session.previewing());
+        assert!(!session.browsing());
+        assert!(session.path().is_none());
+        assert_eq!(session.exercise.as_ref().unwrap().skill_id, id);
+        session.new_preview();
+        assert_eq!(session.exercise.as_ref().unwrap().skill_id, id);
+        session.show_browser();
+        let browser = session.view().browser.unwrap();
+        assert_eq!(browser.items[browser.selected].1, id);
+        assert_ne!(browser.category, 0);
+        assert_eq!(session.profile.completed, 0);
+    }
+    for id in ["", "rhythm.0", "rhythm.0.60.extra", "not-an-exercise"] {
+        let error = Session::preview(id).err().unwrap();
+        assert!(error.contains("Unknown exercise ID"));
+    }
+}
+
+#[test]
+fn accompaniment_accepts_early_first_chord_without_shifting_the_remaining_bars() {
+    let mut session = Session::preview("harmony.7.major.accompany.12.true").unwrap();
+    let start = Instant::now();
+    session.start(start);
+    let answer_start = session.answer_started_at;
+    session.input(
+        Event::Note {
+            channel: 0,
+            note: 72,
+            velocity: 80,
+        },
+        start + Duration::from_millis(3500),
+    );
+    assert!(
+        session.played.is_empty(),
+        "Notes outside the early tolerance remain count-in practice"
+    );
+    assert_eq!(session.phase, Phase::Listening);
+    // Captured attempt: the first two notes were 63/53 ms early, then eleven
+    // well-timed chords. Previously the first chord was discarded entirely.
+    for (offset_us, note, velocity) in [
+        (3936798, 62, 57),
+        (3947393, 59, 55),
+        (7409666, 59, 0),
+        (7431208, 62, 0),
+        (7967511, 59, 61),
+        (7978550, 62, 58),
+        (11624466, 59, 0),
+        (11630514, 62, 0),
+        (11865710, 59, 69),
+        (11891927, 62, 60),
+        (15509220, 59, 0),
+        (15521979, 62, 0),
+        (15968404, 62, 66),
+        (15976576, 59, 69),
+        (19375988, 59, 0),
+        (19431084, 62, 0),
+        (19949886, 67, 72),
+        (19949957, 64, 71),
+        (23511070, 64, 0),
+        (23522865, 67, 0),
+        (23958915, 64, 71),
+        (23958986, 67, 70),
+        (26999206, 67, 0),
+        (27074892, 64, 0),
+        (28002188, 62, 66),
+        (28067728, 59, 53),
+        (31712912, 59, 0),
+        (31723845, 62, 0),
+        (31988573, 62, 67),
+        (31988638, 59, 55),
+        (35598055, 62, 0),
+        (35626762, 59, 0),
+        (35960384, 66, 67),
+        (35972366, 69, 67),
+        (39615128, 69, 0),
+        (39679523, 66, 0),
+        (39991565, 67, 62),
+        (40022583, 64, 56),
+        (43224088, 64, 0),
+        (43601651, 67, 0),
+        (43978260, 62, 64),
+        (43989074, 59, 45),
+        (47494107, 59, 0),
+        (47515566, 62, 0),
+        (47969873, 69, 60),
+        (47981811, 66, 66),
+        (52144732, 66, 0),
+        (52156937, 69, 0),
+    ] {
+        session.input(
+            Event::Note {
+                channel: 0,
+                note,
+                velocity,
+            },
+            start + Duration::from_micros(offset_us),
+        );
+    }
+    assert_eq!(session.answer_started_at, answer_start);
+    assert_eq!(session.played.len(), 24);
+    session.tick(start + Duration::from_secs(54)).unwrap();
+    assert_eq!(session.phase, Phase::Feedback);
+    assert!(
+        session.feedback.starts_with("100/100"),
+        "{}",
+        session.feedback
+    );
+    assert!(session
+        .feedback
+        .contains("Chords 12/12 · on time 12/12 · holds 12/12"));
+    let played = session.played_score.as_ref().unwrap();
+    assert_eq!(played.events.len(), 12);
+    assert!(played
+        .events
+        .iter()
+        .all(|e| !e.incorrect && e.duration == 8));
+}
+
+#[test]
+fn leading_release_does_not_shift_fixed_clock_grading() {
+    let session = Session::preview("harmony.7.major.accompany.12.true").unwrap();
+    let ex = session.exercise.as_ref().unwrap();
+    let Answer::Performance(p) = &ex.answer else {
+        panic!()
+    };
+    let mut evidence = vec![MidiEvidence {
+        offset_ms: 0,
+        channel: 0,
+        note: 59,
+        velocity: 0,
+    }];
+    // Evidence zero is 3409 ms after the answer clock. Bar 2 starts at 4000 ms.
+    for frame in p.frames.iter().skip(1) {
+        for &note in &frame.choices[0] {
+            evidence.push(MidiEvidence {
+                offset_ms: frame.at_ms - 3409,
+                channel: 0,
+                note,
+                velocity: 80,
+            });
+            evidence.push(MidiEvidence {
+                offset_ms: frame.at_ms - 3409 + 3500,
+                channel: 0,
+                note,
+                velocity: 0,
+            });
+        }
+    }
+    evidence.sort_by_key(|e| e.offset_ms);
+    let report = p.accompaniment_report(&evidence, 3409);
+    assert_eq!(
+        (report.pitches, report.timing, report.holds, report.extras),
+        (11, 11, 11, 0)
+    );
+    assert_eq!(report.issues, ["bar 1 missing"]);
+    let notes: Vec<_> = evidence
+        .iter()
+        .filter(|e| e.velocity > 0)
+        .map(|e| e.note)
+        .collect();
+    let score = score_support::response(ex, &notes, &evidence, 3409, false);
+    let chords: Vec<_> = score
+        .events
+        .iter()
+        .filter(|e| !e.notes().is_empty())
+        .collect();
+    assert_eq!(chords[0].tick, 8);
+    assert!(chords.iter().all(|e| !e.incorrect));
+}
+
+#[test]
+fn performance_grades_update_mastery_proportionally_and_preserve_old_attempts() {
+    let graph = curriculum();
+    let skill = graph
+        .iter()
+        .find(|s| s.id == "harmony.7.major.accompany.12.true")
+        .unwrap();
+    let mut profile = Profile::default();
+    let mut graded = result(&skill.id, false, 1);
+    graded.performance_score = Some(95);
+    profile.record(skill, graded.clone());
+    assert!((profile.skills[&skill.id].score - 1.9).abs() < 0.001);
+    assert_eq!(profile.skills[&skill.id].streak, 1);
+    assert_eq!(profile.recent_attempts[0].performance_score, Some(95));
+    let serialized = serde_json::to_value(&graded).unwrap();
+    let round_trip: Attempt = serde_json::from_value(serialized.clone()).unwrap();
+    assert_eq!(round_trip.performance_score, Some(95));
+    let mut legacy = serialized;
+    legacy.as_object_mut().unwrap().remove("performance_score");
+    let old: Attempt = serde_json::from_value(legacy).unwrap();
+    assert_eq!(old.performance_score, None);
+    assert!(!old.successful());
+    let mut assisted = Profile::default();
+    graded.assisted = true;
+    assisted.record(skill, graded);
+    assert_eq!(assisted.skills[&skill.id].score, 0.0);
+    assert_eq!(assisted.skills[&skill.id].streak, 0);
+    let mut partial = result(&skill.id, false, 2);
+    partial.performance_score = Some(50);
+    let mut developing = Profile::default();
+    developing.record(skill, partial);
+    assert!((developing.skills[&skill.id].score - 1.0).abs() < 0.001);
+    assert_eq!(developing.skills[&skill.id].streak, 0);
+}
+#[test]
+fn accompaniment_countdown_is_four_three_two_one_before_the_answer_clock() {
+    let mut session = Session::preview("harmony.7.major.accompany.12.true").unwrap();
+    let start = Instant::now();
+    session.start(start);
+    for i in 0..4 {
+        let output = session.tick(start + Duration::from_secs(i)).unwrap();
+        assert!(output.contains(&Event::CountIn((4 - i) as u8)));
+    }
+    assert_eq!(
+        session.answer_started_at,
+        Some(start + Duration::from_secs(4))
+    );
+    let output = session.tick(start + Duration::from_secs(4)).unwrap();
+    assert!(output.iter().all(|e| !matches!(e, Event::CountIn(_))));
+}
+
+#[test]
+fn one_short_accompaniment_hold_is_a_grade_and_keeps_its_error_highlight() {
+    let mut session = Session::preview("harmony.7.major.accompany.12.true").unwrap();
+    let start = Instant::now();
+    session.start(start);
+    let Answer::Performance(p) = &session.exercise.as_ref().unwrap().answer else {
+        panic!()
+    };
+    let mut inputs = vec![];
+    for (i, frame) in p.frames.iter().enumerate() {
+        for &note in &frame.choices[0] {
+            inputs.push((frame.at_ms + 4000, note, 80));
+            inputs.push((
+                frame.at_ms + 4000 + if i == 9 { 2000 } else { 3400 },
+                note,
+                0,
+            ));
+        }
+    }
+    inputs.sort_by_key(|e| e.0);
+    for (ms, note, velocity) in inputs {
+        session.input(
+            Event::Note {
+                channel: 0,
+                note,
+                velocity,
+            },
+            start + Duration::from_millis(ms),
+        );
+    }
+    session.tick(start + Duration::from_secs(54)).unwrap();
+    assert_eq!(session.performance_score, Some(99));
+    assert!(session.feedback.starts_with("99/100"));
+    assert!(!session.feedback.contains("Not yet"));
+    assert!(session
+        .played_score
+        .as_ref()
+        .unwrap()
+        .events
+        .iter()
+        .any(|e| e.incorrect && e.tick == 72));
+}
+
+#[test]
+fn every_timed_count_in_uses_the_shared_policy() {
+    let mut covered = BTreeSet::new();
+    for skill in curriculum() {
+        let ex = Exercise::generate(&skill, 42);
+        if let Some(count_in) = ex.count_in {
+            assert!(ex.requires_explicit_start());
+            if let Some(answer_after) = ex.answer_after_ms {
+                assert_eq!(answer_after, count_in.duration_ms(), "{}", skill.id);
+            }
+            for event in count_in.events() {
+                assert!(
+                    ex.playback.contains(&event),
+                    "{} is missing shared countdown event {event:?}",
+                    skill.id
+                );
+            }
+            covered.insert(ex.title.clone());
+        }
+    }
+    assert!(covered.contains("ACCOMPANIMENT"));
+    assert!(covered.contains("BASS + MELODY COORDINATION"));
+    assert!(covered.contains("SCALES / TEMPO"));
+}
+
+#[test]
+fn fixed_start_exercises_wait_for_enter_without_audio_or_grading() {
+    for id in [
+        "harmony.0.major.coordination.true",
+        "harmony.7.major.accompany.12.true",
+    ] {
+        let mut session = Session::preview(id).unwrap();
+        let now = Instant::now();
+        for seconds in [0, 10, 60] {
+            let at = now + Duration::from_secs(seconds);
+            session.ready(at);
+            assert!(session.tick(at).unwrap().is_empty());
+            session.input(
+                Event::Note {
+                    channel: 0,
+                    note: 60,
+                    velocity: 80,
+                },
+                at,
+            );
+            assert!(session.played.is_empty());
+            assert_eq!(session.phase, Phase::Waiting);
+            assert!(session.answer_started_at.is_none());
+            assert!(session.finish_at.is_none());
+            assert!(session.view().awaiting_start);
+            assert!(session.view().display_score.is_some());
+        }
+        session.submit(false).unwrap(); // The actual Enter-key entry point.
+        assert_eq!(session.phase, Phase::Listening);
+        assert!(!session.view().awaiting_start);
+        let answer = session.answer_started_at.unwrap();
+        let beginning = answer - Duration::from_secs(4);
+        for i in 0..4 {
+            let output = session.tick(beginning + Duration::from_secs(i)).unwrap();
+            assert!(output.contains(&Event::CountIn((4 - i) as u8)), "{id}");
+        }
+        session.tick(answer).unwrap();
+        assert_eq!(session.phase, Phase::Answering);
+        session.set_visible(false, answer);
+        session.set_visible(true, answer);
+        session.ready(answer);
+        assert!(
+            session.view().awaiting_start,
+            "Resize must not start the clock again"
+        );
+    }
+}
+
+#[test]
+fn panic_returns_a_fixed_start_exercise_to_preparation() {
+    let mut session = Session::preview("harmony.0.major.coordination.true").unwrap();
+    let now = Instant::now();
+    session.start(now);
+    session.tick(now + Duration::from_secs(4)).unwrap();
+    session.panic();
+    assert!(session.view().awaiting_start);
+    session.ready(now + Duration::from_secs(30));
+    assert!(session
+        .tick(now + Duration::from_secs(30))
+        .unwrap()
+        .is_empty());
+    assert!(session.finish_at.is_none());
+    session.submit(false).unwrap();
+    assert_eq!(session.phase, Phase::Listening);
+    assert!(session.answer_started_at.is_some());
+}
+
+#[test]
+fn feedback_retry_preserves_exercise_and_cancels_old_advance_in_both_modes() {
+    for preview in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = if preview {
+            Session::preview("interval.build.2.up").unwrap()
+        } else {
+            Session::open(dir.path().join("learner.json")).unwrap()
+        };
+        let now = Instant::now();
+        session.start(now);
+        session.played = session.exercise.as_ref().unwrap().expected_evidence();
+        session.finish(false, now).unwrap();
+        let original = session.exercise.as_ref().unwrap().variant.clone();
+        let completed = session.profile.completed;
+        session.replay(now + Duration::from_secs(1));
+        assert!(session.phase == Phase::Answering);
+        assert!(session.assisted);
+        assert!(session.played.is_empty());
+        assert!(session.feedback.is_empty());
+        assert!(session.advance_at.is_none());
+        assert!(session.reading_result.is_none());
+        session.tick(now + Duration::from_secs(10)).unwrap();
+        assert!(session.phase == Phase::Answering);
+        assert_eq!(session.exercise.as_ref().unwrap().variant, original);
+        assert_eq!(session.profile.completed, completed);
+    }
+}
+
+#[test]
+fn reading_example_and_retry_are_separate_actions() {
+    let mut session = Session::preview("reading.together.3").unwrap();
+    let now = Instant::now();
+    session.start(now);
+    session.tick(now + Duration::from_secs(10)).unwrap();
+    session.phase = Phase::Answering;
+    session.finish(true, now).unwrap();
+    assert!(session.play_reading_solution(now));
+    assert!(session.phase == Phase::Feedback);
+    assert!(session.comparison_paused);
+    assert!(!session.playback.is_empty());
+    session.replay(now);
+    assert!(session.phase != Phase::Feedback);
+    assert!(session.reading_result.is_none());
+    assert!(session.assisted);
+    assert!(!session.play_reading_solution(now));
+}
+
+#[test]
+fn any_feedback_can_be_paused_before_automatic_advance() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::open(dir.path().join("learner.json")).unwrap();
+    let now = Instant::now();
+    session.start(now);
+    session.finish(true, now).unwrap();
+    session.pause_comparison();
+    session.tick(now + Duration::from_secs(60)).unwrap();
+    assert!(session.phase == Phase::Feedback);
+    assert!(session.advance_at.is_none());
 }

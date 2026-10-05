@@ -292,7 +292,7 @@ fn accompaniment_collects_midi_during_backing_and_saves_only_after_the_phrase() 
         panic!()
     };
     let (_, _, evidence, now) = performed(score);
-    session.ready(now);
+    session.start(now);
     session.tick(now + Duration::from_millis(start_ms)).unwrap();
     assert!(session.phase == Phase::Answering);
     for event in evidence {
@@ -336,7 +336,7 @@ fn fixed_phrase_timeout_and_restart_do_not_leave_old_backing_or_award_empty_answ
         .unwrap();
     session.exercise = Some(Exercise::generate(skill, 42));
     let now = Instant::now();
-    session.ready(now);
+    session.start(now);
     session.tick(now + Duration::from_secs(5)).unwrap();
     session.input(
         Event::Note {
@@ -513,4 +513,278 @@ fn cadences_and_bass_lines_do_not_wait_for_longer_phrase_exercises() {
             _ => {}
         }
     }
+}
+
+#[test]
+fn quarter_notes_follow_continuous_drums_without_a_listening_phase() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::open(dir.path().join("learner.json")).unwrap();
+    let skill = session
+        .graph
+        .iter()
+        .find(|s| s.id == "rhythm.0.60")
+        .unwrap();
+    session.exercise = Some(Exercise::generate(skill, 42));
+    let start = Instant::now();
+    session.start(start);
+    assert!(session.phase == Phase::Answering);
+    assert!(session.exercise.as_ref().unwrap().playback.is_empty());
+    for beat in 0..3 {
+        let events = session.tick(start + Duration::from_secs(beat)).unwrap();
+        assert!(events.iter().any(|e| matches!(e, Event::DrumBeat { .. })));
+        assert_eq!(session.profile.completed, 0);
+    }
+    // Join on any later beat, not at a prescribed end of a demo/count-in.
+    for beat in 3..11 {
+        let at = start + Duration::from_secs(beat);
+        assert!(session
+            .tick(at)
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e, Event::DrumBeat { .. })));
+        session.input(
+            Event::Note {
+                channel: 0,
+                note: 60,
+                velocity: 90,
+            },
+            at,
+        );
+        session.input(
+            Event::Note {
+                channel: 0,
+                note: 60,
+                velocity: 0,
+            },
+            at + Duration::from_millis(940),
+        );
+    }
+    session.tick(start + Duration::from_millis(11600)).unwrap();
+    assert!(session.phase == Phase::Feedback);
+    assert!(session.profile.recent_attempts[0].correct);
+    assert!(session
+        .tick(start + Duration::from_secs(12))
+        .unwrap()
+        .iter()
+        .all(|e| !matches!(e, Event::DrumBeat { .. })));
+}
+
+#[test]
+fn pulse_checks_alignment_to_backing_and_quarter_note_lengths() {
+    let ex = generated(Practice::Rhythm {
+        kind: Rhythm::Pulse,
+        bpm: 60,
+    });
+    let Answer::Performance(ref score) = ex.answer else {
+        panic!()
+    };
+    let (_, onsets, evidence, start) = performed(score);
+    assert!(ex.performance_timing_correct(&onsets, Some(start)));
+    let delayed: Vec<_> = onsets
+        .iter()
+        .map(|at| *at + Duration::from_secs(3))
+        .collect();
+    assert!(ex.performance_timing_correct(&delayed, Some(start)));
+    let offbeat: Vec<_> = onsets
+        .iter()
+        .map(|at| *at + Duration::from_millis(500))
+        .collect();
+    assert!(!ex.performance_timing_correct(&offbeat, Some(start)));
+    assert!(ex.holds_correct(&evidence));
+    let mut short = evidence.clone();
+    for (i, event) in short.iter_mut().filter(|e| e.velocity == 0).enumerate() {
+        event.offset_ms = i as u64 * 1000 + 100;
+    }
+    assert!(!ex.holds_correct(&short));
+}
+
+#[test]
+fn rhythm_report_uses_grading_anchor_and_labels_missing_extra_and_short_notes() {
+    let ex = generated(Practice::Rhythm {
+        kind: Rhythm::Pulse,
+        bpm: 60,
+    });
+    let Answer::Performance(ref score) = ex.answer else {
+        panic!()
+    };
+    let (_, onsets, mut evidence, start) = performed(score);
+    let delayed: Vec<_> = onsets
+        .iter()
+        .map(|at| *at + Duration::from_millis(3100))
+        .collect();
+    let report = ex.rhythm_report(&delayed, Some(start), &evidence).unwrap();
+    assert!(report.rows.iter().all(|r| r.correct(score.tolerance_ms)));
+    assert!(report.rows.iter().all(|r| r.timing_label() == "100ms late"));
+    let early: Vec<_> = onsets
+        .iter()
+        .map(|at| *at + Duration::from_millis(2900))
+        .collect();
+    assert_eq!(
+        ex.rhythm_report(&early, Some(start), &evidence)
+            .unwrap()
+            .rows[0]
+            .timing_label(),
+        "100ms early"
+    );
+    evidence[1].offset_ms = 100;
+    assert!(!ex
+        .rhythm_report(&onsets, Some(start), &evidence)
+        .unwrap()
+        .rows[0]
+        .correct(score.tolerance_ms));
+    let mut missing = onsets.clone();
+    missing.remove(3);
+    evidence.drain(6..8);
+    let report = ex.rhythm_report(&missing, Some(start), &evidence).unwrap();
+    assert_eq!(report.rows[3].timing_label(), "MISSING");
+    assert!(report.rows[4..]
+        .iter()
+        .all(|r| r.timing_label() == "on time"));
+    let mut extra = missing.clone();
+    extra.push(start + Duration::from_millis(8500));
+    evidence.push(crate::learner::MidiEvidence {
+        offset_ms: 8500,
+        channel: 0,
+        note: 61,
+        velocity: 90,
+    });
+    let report = ex.rhythm_report(&extra, Some(start), &evidence).unwrap();
+    assert_eq!(report.rows.last().unwrap().timing_label(), "EXTRA");
+    assert_eq!(report.rows.last().unwrap().actual_hold_ms, None);
+}
+
+#[test]
+fn rhythm_comparison_can_pause_auto_advance_and_does_not_leak_into_next_attempt() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::open(dir.path().join("profile.json")).unwrap();
+    let skill = session
+        .graph
+        .iter()
+        .find(|s| s.id == "rhythm.0.60")
+        .unwrap();
+    session.exercise = Some(Exercise::generate(skill, 42));
+    let start = Instant::now();
+    session.start(start);
+    session.input(
+        Event::Note {
+            channel: 0,
+            note: 60,
+            velocity: 90,
+        },
+        start,
+    );
+    session.input(
+        Event::Note {
+            channel: 0,
+            note: 60,
+            velocity: 0,
+        },
+        start + Duration::from_millis(100),
+    );
+    session.tick(start + Duration::from_secs(9)).unwrap();
+    assert!(session.view().rhythm_report.is_some());
+    assert!(session.advance_at.is_some());
+    session.pause_comparison();
+    session.tick(start + Duration::from_secs(60)).unwrap();
+    assert!(session.phase == Phase::Feedback);
+    assert!(session.view().comparison_paused);
+    session.advance();
+    assert!(session.view().rhythm_report.is_none());
+    assert!(!session.view().comparison_paused);
+}
+
+#[test]
+fn rhythm_accepts_the_reported_scale_with_overlapping_releases() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::open(dir.path().join("profile.json")).unwrap();
+    let skill = session
+        .graph
+        .iter()
+        .find(|s| s.id == "rhythm.0.60")
+        .unwrap();
+    session.exercise = Some(Exercise::generate(skill, 42));
+    let start = Instant::now();
+    session.start(start);
+    let notes = [60, 62, 64, 65, 67, 69, 71, 72];
+    let attack_errors = [-65i64, -12, 28, -21, -15, -16, -38, -36];
+    let holds = [1070, 1067, 941, 1024, 1046, 1005, 1048, 969];
+    let mut events = Vec::new();
+    for i in 0..8 {
+        let attack = (3000 + i as i64 * 1000 + attack_errors[i]) as u64;
+        events.push((
+            attack,
+            Event::Note {
+                channel: 0,
+                note: notes[i],
+                velocity: 90,
+            },
+        ));
+        events.push((
+            attack + holds[i],
+            Event::Note {
+                channel: 0,
+                note: notes[i],
+                velocity: 0,
+            },
+        ));
+    }
+    events.sort_by_key(|(ms, _)| *ms);
+    for (ms, event) in events {
+        let at = start + Duration::from_millis(ms);
+        session.tick(at).unwrap();
+        session.input(event, at);
+    }
+    session.tick(start + Duration::from_secs(12)).unwrap();
+    assert!(session.phase == Phase::Feedback);
+    assert_eq!(session.feedback, "Correct!");
+    let result = session.profile.recent_attempts.last().unwrap();
+    assert!(
+        result.correct && result.pitch_correct && result.timing_correct && result.duration_correct
+    );
+    assert_eq!(result.answer, notes);
+    assert!(session
+        .view()
+        .rhythm_report
+        .unwrap()
+        .rows
+        .iter()
+        .all(|r| r.correct(166)));
+}
+
+#[test]
+fn all_rhythm_only_exercises_ignore_pitch_but_still_require_the_exact_note_count() {
+    let graph = curriculum();
+    let mut checked = 0;
+    for skill in &graph {
+        let ex = Exercise::generate(skill, 42);
+        let Answer::Performance(score) = &ex.answer else {
+            continue;
+        };
+        if !score.any_pitch {
+            continue;
+        }
+        let notes: Vec<_> = (0..score.note_count()).map(|i| 60 + i % 12).collect();
+        assert!(ex.correct(&notes), "{}", skill.id);
+        assert!(!ex.correct(&notes[..notes.len() - 1]), "{}", skill.id);
+        let mut extra = notes;
+        extra.push(60);
+        assert!(!ex.correct(&extra), "{}", skill.id);
+        checked += 1;
+    }
+    assert!(checked > 0);
+}
+
+#[test]
+fn accompaniment_keeps_all_bars_visible_and_exposes_its_id() {
+    let mut session = Session::preview("harmony.7.major.accompany.12.true").unwrap();
+    let now = Instant::now();
+    session.start(now);
+    session.tick(now + Duration::from_secs(4)).unwrap();
+    session.tick(now + Duration::from_secs(25)).unwrap();
+    let view = session.view();
+    assert_eq!(view.skill_id, "harmony.7.major.accompany.12.true");
+    assert_eq!(view.score_page, 0);
+    assert_eq!(view.score_pages, 1);
+    assert_eq!(view.display_score.unwrap().chords.len(), 12);
+    assert_eq!(view.current_bar, Some(5));
 }

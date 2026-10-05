@@ -1,7 +1,7 @@
 //! Curriculum data and prerequisites, independent of terminal and MIDI I/O.
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum Direction {
     Up,
     Down,
@@ -11,6 +11,8 @@ pub enum Direction {
 
 #[derive(Clone, Debug)]
 pub enum Task {
+    GuidedScale(Box<Task>),
+    Reading(crate::reading::ReadingTask),
     Practice(crate::practice::Practice),
     BuildInterval {
         semitones: usize,
@@ -347,6 +349,8 @@ pub fn curriculum() -> Vec<Skill> {
         }
     }
     crate::courses::extend(&mut graph);
+    crate::reading::extend(&mut graph);
+    crate::score_support::extend(&mut graph);
     crate::courses::prioritize_foundations(&mut graph);
     graph
 }

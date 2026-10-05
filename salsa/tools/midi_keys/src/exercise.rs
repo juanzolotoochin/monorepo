@@ -3,7 +3,7 @@ use crate::{NoteSpelling, PromptHighlight, PromptRole};
 use keyboard::Event;
 use std::collections::BTreeSet;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub enum Answer {
     OctaveSequence(Vec<usize>),
     TransposedSequence(Vec<usize>),
@@ -27,13 +27,17 @@ pub enum Answer {
     },
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum AnswerPolicy {
     Direct,
     ExploreThenAnswer,
 }
 
 pub struct Exercise {
+    pub count_in: Option<crate::tempo::CountIn>,
+    pub prompt_score: Option<crate::reading::WrittenScore>,
+    pub expected_score: Option<crate::reading::WrittenScore>,
+    pub reading: Option<crate::reading::WrittenScore>,
     pub answer_policy: AnswerPolicy,
     pub spelling: NoteSpelling,
     pub skill_id: String,
@@ -47,6 +51,7 @@ pub struct Exercise {
     pub bpm: Option<u32>,
     pub answer_after_ms: Option<u64>,
     pub metronome: bool,
+    pub pulse_backing: bool,
 }
 
 pub(crate) struct Random(pub(crate) u64);
@@ -111,12 +116,25 @@ fn together(notes: &[usize]) -> Vec<(u64, Event)> {
 
 impl Exercise {
     pub fn generate(skill: &Skill, seed: u64) -> Self {
+        let mut exercise = Self::generate_inner(skill, seed);
+        crate::score_support::decorate(&skill.task, &mut exercise);
+        exercise
+    }
+    fn generate_inner(skill: &Skill, seed: u64) -> Self {
+        if let Task::GuidedScale(inner) = &skill.task {
+            let mut source = skill.clone();
+            source.task = *inner.clone();
+            return Self::generate_inner(&source, seed);
+        }
         let mut rng = Random(seed.max(1));
         let register = 36 + rng.take(5) * 12;
         let tonic = 48 + rng.take(25);
         let spelling = NoteSpelling::for_task(&skill.task, tonic);
         let notes_text = |notes: &[usize]| notes_text(notes, &spelling);
         let mut exercise = Self {
+            reading: None,
+            prompt_score: None,
+            expected_score: None,
             answer_policy: AnswerPolicy::Direct,
             spelling: NoteSpelling::default(),
             skill_id: skill.id.clone(),
@@ -129,9 +147,16 @@ impl Exercise {
             playback: vec![],
             bpm: None,
             answer_after_ms: None,
+            count_in: None,
             metronome: true,
+            pulse_backing: false,
         };
         match skill.task {
+            Task::GuidedScale(_) => unreachable!("handled before generation"),
+            Task::Reading(task) => {
+                crate::reading::generate(task, seed, &mut exercise);
+                return exercise;
+            }
             Task::Practice(ref task) => {
                 crate::practice::generate(task, seed, &mut exercise);
                 return exercise;
@@ -201,11 +226,15 @@ impl Exercise {
                     "CHORD CONSTRUCTION"
                 }
                 .into();
-                exercise.prompt = if hearing {
-                    format!("Listen, then play a {}-note chord of the same quality. Any key or inversion; play together or roll the chord.",notes.len())
+                if hearing {
+                    exercise.prompt = format!("Listen, then play a {}-note chord of the same quality. Any key or inversion; play together or roll the chord.", notes.len());
                 } else {
-                    format!("Play a {} {} chord ({} distinct notes). Any octave or inversion; play together or roll it.", ROOTS[root], QUALITIES[quality],notes.len())
-                };
+                    exercise.prompt.push_str("Play a ");
+                    exercise.emphasize(ROOTS[root], PromptRole::Note);
+                    exercise.prompt.push(' ');
+                    exercise.emphasize(QUALITIES[quality], PromptRole::ChordQuality);
+                    exercise.prompt.push_str(&format!(" chord ({} distinct notes). Any octave or inversion; play together or roll it.", notes.len()));
+                }
                 exercise.explanation = if hearing {
                     format!(
                         "A {} chord. Any root or inversion is accepted.",
@@ -351,34 +380,23 @@ impl Exercise {
                     " {bpm} BPM: four count-in beats, then one note per beat."
                 ));
                 exercise.bpm = Some(bpm);
-                let beat = 60000 / u64::from(bpm);
-                exercise.answer_after_ms = Some(4 * beat);
-                exercise.playback = (0..4)
-                    .flat_map(|i| {
-                        [
-                            (
-                                i * beat,
-                                Event::Note {
-                                    channel: 15,
-                                    note: 96,
-                                    velocity: if i == 0 { 70 } else { 45 },
-                                },
-                            ),
-                            (
-                                i * beat + 60,
-                                Event::Note {
-                                    channel: 15,
-                                    note: 96,
-                                    velocity: 0,
-                                },
-                            ),
-                        ]
-                    })
-                    .collect();
+                exercise.answer_after_ms = Some(exercise.add_count_in(4, bpm));
             }
         }
         exercise.spelling = spelling;
         exercise
+    }
+    /// Exercises with a timed count-in must allow preparation before starting
+    /// the backing track and answer clock. Ordinary listening stays automatic.
+    pub fn requires_explicit_start(&self) -> bool {
+        self.count_in.is_some() || matches!(&self.answer, Answer::Performance(p) if p.fixed_start)
+    }
+    pub fn add_count_in(&mut self, beats: usize, bpm: u32) -> u64 {
+        assert!(self.count_in.is_none(), "An exercise has only one count-in");
+        let count_in = crate::tempo::CountIn { beats, bpm };
+        self.playback.extend(count_in.events());
+        self.count_in = Some(count_in);
+        count_in.duration_ms()
     }
     fn emphasize(&mut self, text: &str, role: PromptRole) {
         let start = self.prompt.len();
@@ -396,6 +414,7 @@ impl Exercise {
             return None;
         }
         match &self.answer {
+            Answer::Performance(score) if self.reading.is_some() => Some(score.note_count()),
             Answer::Interval(_) | Answer::AnchoredInterval { .. } => Some(2),
             Answer::OctaveSequence(notes) | Answer::TransposedSequence(notes) => Some(notes.len()),
             Answer::PitchClasses(notes) if notes.len() == 1 => Some(1),
@@ -509,18 +528,53 @@ impl Exercise {
                 <= beat * 0.25
         })
     }
+    /// Shared by grading and feedback: free joining still follows the backing clock.
+    pub fn performance_anchor(
+        &self,
+        onsets: &[std::time::Instant],
+        start: Option<std::time::Instant>,
+    ) -> Option<std::time::Instant> {
+        if self.pulse_backing {
+            let origin = start?;
+            let first = onsets.first()?;
+            let beat_ms = 60000 / u64::from(self.bpm?);
+            let elapsed = first.saturating_duration_since(origin).as_millis() as u64;
+            Some(
+                origin
+                    + std::time::Duration::from_millis(
+                        ((elapsed + beat_ms / 2) / beat_ms) * beat_ms,
+                    ),
+            )
+        } else if matches!(&self.answer, Answer::Performance(score) if score.fixed_start) {
+            start
+        } else {
+            onsets.first().copied()
+        }
+    }
     pub fn performance_timing_correct(
         &self,
         onsets: &[std::time::Instant],
         start: Option<std::time::Instant>,
     ) -> bool {
         if let Answer::Performance(score) = &self.answer {
-            score.timing_correct(onsets, start)
+            if self.pulse_backing {
+                let Some(nearest) = self.performance_anchor(onsets, start) else {
+                    return false;
+                };
+                let mut aligned = score.clone();
+                aligned.fixed_start = true;
+                aligned.timing_correct(onsets, Some(nearest))
+            } else {
+                score.timing_correct(onsets, start)
+            }
         } else {
             self.timing_correct(onsets)
         }
     }
     pub fn holds_correct(&self, evidence: &[crate::learner::MidiEvidence]) -> bool {
+        if let Some(score) = &self.reading {
+            return score.holds_correct(evidence);
+        }
         if let Answer::Performance(score) = &self.answer {
             score.holds_correct(evidence)
         } else {
@@ -536,6 +590,9 @@ impl Exercise {
         }
     }
     pub fn relative_duration_ms(&self) -> Option<u64> {
+        if let Some(score) = &self.reading {
+            return score.bpm.map(|_| score.end_ms());
+        }
         match &self.answer {
             Answer::Performance(score) if score.timed && !score.fixed_start => {
                 Some(score.end_ms() + score.tolerance_ms + 450)
