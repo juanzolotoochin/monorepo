@@ -27,27 +27,37 @@ rust_binary(
 
 rust_library(
     name = "ui",
-    srcs = ["src/ui.rs"],
+    data = ["assets/BRAVURA-LICENSE.txt", "assets/BRAVURA-FONTLOG.txt", "assets/LIBERATION-LICENSE.txt"],
+    srcs = ["src/ui.rs", "src/notation.rs", "src/staff_notation.rs", "src/music_glyphs.rs", "src/chord_glyphs.rs", "src/kitty_coordinates.rs"],
     crate_root = "src/ui.rs",
     edition = "2021",
     deps = [
         ":keyboard",
         ":trainer",
         "@crates//:ratatui",
+        "@crates//:flate2-1.1.9",
     ],
 )
 
 rust_library(
     name = "trainer",
     srcs = [
+        "src/browser.rs",
+        "src/debug_capture.rs",
         "src/courses.rs",
+        "src/tempo.rs",
         "src/curriculum.rs",
         "src/curriculum_analysis.rs",
         "src/exercise.rs",
+        "src/evidence.rs",
         "src/learner.rs",
         "src/music.rs",
         "src/performance.rs",
         "src/practice.rs",
+        "src/recognition.rs",
+        "src/rhythm.rs",
+        "src/reading.rs",
+        "src/score_support.rs",
         "src/practice_tests.rs",
         "src/spelling.rs",
         "src/tests.rs",
@@ -92,12 +102,14 @@ rust_binary(
 
 rust_library(
     name = "piano",
-    srcs = ["src/piano.rs"],
+    srcs = ["src/piano.rs", "src/count_in.rs"],
+    compile_data = ["assets/count-in/count-in.sf2"],
     crate_root = "src/piano.rs",
-    data = ["@salamander_piano//:soundfont"],
+    data = ["@salamander_piano//:soundfont", "@generaluser_drums//:soundfont", "@generaluser_drums//:license", "assets/count-in/NOTICE.txt"],
     edition = "2021",
     rustc_env = {
         "MIDI_PIANO_SF2": "$(rlocationpath @salamander_piano//:soundfont)",
+        "MIDI_DRUMS_SF2": "$(rlocationpath @generaluser_drums//:soundfont)",
     },
     target_compatible_with = ["@platforms//os:linux"],
     deps = [
@@ -119,7 +131,7 @@ rust_test(
     name = "piano_test",
     size = "large",
     crate = ":piano",
-    data = ["@salamander_piano//:soundfont"],
+    data = ["@salamander_piano//:soundfont", "@generaluser_drums//:soundfont", "@generaluser_drums//:license", "assets/count-in/NOTICE.txt"],
     edition = "2021",
     target_compatible_with = ["@platforms//os:linux"],
 )

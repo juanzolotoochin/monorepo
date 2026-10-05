@@ -1,5 +1,13 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
+    /// Internal unpitched metronome, independent of the piano soundfont.
+    MetronomeClick,
+    /// Internal spoken countdown; never sent to a MIDI device.
+    CountIn(u8),
+    /// Internal backing percussion; never decoded from external MIDI.
+    DrumBeat {
+        beat: u8,
+    },
     Note {
         channel: usize,
         note: usize,

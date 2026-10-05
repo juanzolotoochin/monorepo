@@ -8,8 +8,11 @@ fn audit_revision() -> String {
     let mut hash = 0xcbf29ce484222325u64;
     for source in [
         include_str!("learner.rs"),
+        include_str!("recognition.rs"),
         include_str!("courses.rs"),
         include_str!("curriculum.rs"),
+        include_str!("reading.rs"),
+        include_str!("score_support.rs"),
     ] {
         for byte in source.bytes() {
             hash = (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3);
@@ -68,6 +71,9 @@ fn report_learning_paths() {
             profile.record(
                 skill,
                 Attempt {
+                    performance_score: None,
+                    reading: None,
+                    recognition: None,
                     title: String::new(),
                     prompt: String::new(),
                     spelled_answer: vec![],
@@ -142,7 +148,12 @@ fn report_trusted_history_continuation() {
             .iter()
             .find(|s| s.id == attempt.skill)
             .expect("History refers to unknown skill");
+        let recognition = profile.recognition.clone();
         profile.record(skill, attempt.clone());
+        if attempt.recognition.is_none() {
+            profile.recognition = recognition;
+            profile.recent_attempts.last_mut().unwrap().recognition = None;
+        }
     }
     let correct = profile
         .recent_attempts
@@ -253,6 +264,9 @@ fn simulate_distribution(initial: &Profile, percent: usize, label: &str) {
             profile.record(
                 skill,
                 Attempt {
+                    performance_score: None,
+                    reading: None,
+                    recognition: None,
                     title: String::new(),
                     prompt: String::new(),
                     spelled_answer: vec![],

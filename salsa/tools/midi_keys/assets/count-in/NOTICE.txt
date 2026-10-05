@@ -1,0 +1,34 @@
+Spoken count-in recordings: Dvortygirl, Wikimedia Commons.
+
+one.pcm, two.pcm, three.pcm are adaptations licensed under
+Creative Commons Attribution-ShareAlike 3.0 Unported:
+https://creativecommons.org/licenses/by-sa/3.0/
+The license applies to these audio assets, including our adaptations.
+Sources:
+https://commons.wikimedia.org/wiki/File:En-us-one.ogg (16 March 2006)
+https://commons.wikimedia.org/wiki/File:En-us-two.ogg (18 March 2006)
+https://commons.wikimedia.org/wiki/File:En-us-three.ogg (16 March 2006)
+
+four.pcm: public-domain dedication by Dvortygirl.
+https://commons.wikimedia.org/wiki/File:En-us-four.ogg (13 August 2005)
+
+Changes: decoded Ogg to mono 48 kHz signed 16-bit little-endian PCM;
+normalized each recording to peak 22000/32768. No voice synthesis.
+Conversion used ffmpeg -i INPUT -ac 1 -ar 48000 -f s16le OUTPUT,
+then integer sample scaling by 22000 / source peak.
+The PCM source and generated SoundFont are checked in. Bazel embeds the
+SoundFont; ffmpeg, Python, networking, and system voices are not required
+to build or run the application.
+
+Original Ogg SHA-256:
+one b6c167f5c2d94d3215e143f3269b0f67956097203b858e798580067088411464
+two 15cd7538bfc343f1b67087b4d9a60d99f81fc306023e22711dfd4395f56952e3
+three 379f15eb7f0874797c580253194fcff778ffdc608d73e68055d1a2e8dbf799c3
+four 521f780c7e8a2561b818c9915e9406665cf619028a16829c9fd725465ffc800d
+
+count-in.sf2 packages the adapted recordings under the same terms, mapping
+MIDI notes 60–63 to one–four in bank 0, program 0. build_soundfont.py removes
+leading/trailing silence with 2 ms padding and writes deterministic SF2 data.
+Rebuild: python3 salsa/tools/midi_keys/assets/count-in/build_soundfont.py
+The Rust application embeds only count-in.sf2 and plays it via RustySynth.
+The PCM files are source assets, not a separate runtime playback path.

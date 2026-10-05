@@ -104,6 +104,36 @@ fn add_practice(graph: &mut Vec<Skill>, id: String, task: Practice, deps: Vec<St
         ),
         Practice::Rhythm { kind, bpm } => format!("Rhythm · {kind:?} · {bpm} BPM"),
         Practice::Meter { beats, bpm } => format!("Find downbeats · {beats}/4 · {bpm} BPM"),
+        Practice::Harmony {
+            root,
+            scale,
+            kind: Harmony::Function(degree),
+        } => format!(
+            "Hear chord function · {} {} · {}",
+            ROOTS[*root],
+            scale.id(),
+            if *scale == Scale::Minor {
+                [
+                    "i / tonic",
+                    "ii° / supertonic",
+                    "III / relative major",
+                    "iv / subdominant",
+                    "v / minor dominant",
+                    "VI / submediant",
+                    "VII / subtonic",
+                ][*degree]
+            } else {
+                [
+                    "I / tonic",
+                    "ii / supertonic",
+                    "iii / mediant",
+                    "IV / subdominant",
+                    "V / dominant",
+                    "vi / relative minor",
+                    "vii° / leading tone",
+                ][*degree]
+            }
+        ),
         Practice::Harmony { root, scale, kind } => {
             format!("{} {} · {kind:?}", ROOTS[*root], scale.id())
         }
@@ -484,6 +514,8 @@ fn introduction_stage(task: &Task) -> u8 {
         }
     };
     match task {
+        Task::Reading(task) => task.stage(),
+        Task::GuidedScale(task) => introduction_stage(task),
         Task::BuildInterval { semitones, .. } | Task::HearInterval { semitones, .. } => {
             u8::from(![1, 2, 3, 4, 5, 7, 12].contains(semitones))
         }
@@ -570,7 +602,7 @@ fn introduction_stage(task: &Task) -> u8 {
 
 fn harmony_course(graph: &mut Vec<Skill>, root: usize, scale: Scale) {
     let minor = scale == Scale::Minor;
-    for degree in [0, 4, 3, 5, 1, 2, 6] {
+    for degree in [0, 4, 3, 5, 1, 6, 2] {
         let chord = scale.triad(root, degree);
         let intervals = [chord[1] - chord[0], chord[2] - chord[0]];
         let quality = match intervals {
@@ -584,7 +616,15 @@ fn harmony_course(graph: &mut Vec<Skill>, root: usize, scale: Scale) {
             format!("chord.hear.{}.{quality}", chord[0] % 12),
         ];
         if degree != 0 {
-            deps.push(harmony(root, scale, "function.0"));
+            let previous = match degree {
+                4 => 0,
+                3 => 4,
+                5 => 3,
+                1 => 5,
+                6 => 1,
+                _ => 6,
+            };
+            deps.push(harmony(root, scale, &format!("function.{previous}")));
         }
         add_practice(
             graph,

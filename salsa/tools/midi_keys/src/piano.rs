@@ -1,3 +1,4 @@
+mod count_in;
 use keyboard::Event;
 use rustysynth::{SoundFont, Synthesizer, SynthesizerSettings};
 use std::ffi::{c_char, c_int, c_void, CStr};
@@ -11,6 +12,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 const RATE: usize = 48_000;
 const BLOCK: usize = 256;
 const FONT: &str = env!("MIDI_PIANO_SF2");
+const DRUM_FONT: &str = env!("MIDI_DRUMS_SF2");
 
 unsafe extern "C" {
     fn piano_audio_start(
@@ -23,7 +25,7 @@ unsafe extern "C" {
 }
 
 /// Resolve Bazel runfiles without depending on the caller's working directory.
-fn soundfont_path() -> Result<PathBuf, String> {
+fn soundfont_path(font: &str) -> Result<PathBuf, String> {
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut directories: Vec<PathBuf> = ["RUNFILES_DIR", "TEST_SRCDIR"]
         .iter()
@@ -32,7 +34,7 @@ fn soundfont_path() -> Result<PathBuf, String> {
         .collect();
     directories.push(PathBuf::from(format!("{}.runfiles", executable.display())));
     for directory in directories {
-        let path = directory.join(FONT);
+        let path = directory.join(font);
         if path.is_file() {
             return Ok(path);
         }
@@ -43,23 +45,29 @@ fn soundfont_path() -> Result<PathBuf, String> {
     if let Ok(contents) = std::fs::read_to_string(manifest) {
         if let Some(path) = contents.lines().find_map(|line| {
             let (key, path) = line.split_once(' ')?;
-            (key == FONT).then(|| PathBuf::from(path))
+            (key == font).then(|| PathBuf::from(path))
         }) {
             return Ok(path);
         }
     }
-    Err("Piano samples not found. Run with `bazel run //salsa/tools/midi_keys` so its runfiles are available.".into())
+    Err("SoundFont samples not found. Run with `bazel run //salsa/tools/midi_keys` so its runfiles are available.".into())
 }
 
 struct Renderer {
+    voice: count_in::Voice,
+    voice_left: [f32; BLOCK],
+    voice_right: [f32; BLOCK],
     synth: Synthesizer,
     left: [f32; BLOCK],
     right: [f32; BLOCK],
+    drums: Synthesizer,
+    drum_left: [f32; BLOCK],
+    drum_right: [f32; BLOCK],
 }
 
 impl Renderer {
     fn load() -> Result<Self, String> {
-        let path = soundfont_path()?;
+        let path = soundfont_path(FONT)?;
         let file = File::open(&path).map_err(|e| format!("Cannot open piano samples: {e}"))?;
         let font = SoundFont::new(&mut BufReader::new(file))
             .map_err(|e| format!("Cannot read Salamander piano: {e}"))?;
@@ -68,10 +76,26 @@ impl Renderer {
         settings.block_size = 64;
         settings.enable_reverb_and_chorus = true;
         let synth = Synthesizer::new(&Arc::new(font), &settings).map_err(|e| e.to_string())?;
+        let drum_file = File::open(soundfont_path(DRUM_FONT)?)
+            .map_err(|e| format!("Cannot open drum samples: {e}"))?;
+        let drum_font = SoundFont::new(&mut BufReader::new(drum_file))
+            .map_err(|e| format!("Cannot read GeneralUser GS drums: {e}"))?;
+        let mut drum_settings = SynthesizerSettings::new(RATE as i32);
+        drum_settings.maximum_polyphony = 32;
+        drum_settings.block_size = 64;
+        drum_settings.enable_reverb_and_chorus = false;
+        let drums =
+            Synthesizer::new(&Arc::new(drum_font), &drum_settings).map_err(|e| e.to_string())?;
         let mut renderer = Self {
+            voice: count_in::Voice::load()?,
+            voice_left: [0.0; BLOCK],
+            voice_right: [0.0; BLOCK],
             synth,
             left: [0.0; BLOCK],
             right: [0.0; BLOCK],
+            drums,
+            drum_left: [0.0; BLOCK],
+            drum_right: [0.0; BLOCK],
         };
         renderer.reset();
         renderer.volume(0.6);
@@ -79,6 +103,8 @@ impl Renderer {
     }
 
     fn reset(&mut self) {
+        self.voice.stop();
+        self.drums.reset();
         self.synth.reset();
         for channel in 0..16 {
             // A little room around the piano, with no chorus or instrument changes.
@@ -88,6 +114,8 @@ impl Renderer {
     }
 
     fn volume(&mut self, value: f32) {
+        self.voice.volume(value);
+        self.drums.set_master_volume(value.clamp(0.0, 1.0));
         // The sample bank has generous recording headroom. Leave space for
         // chords while bringing a normal key strike to a useful listening level.
         self.synth.set_master_volume(value.clamp(0.0, 1.0) * 2.0);
@@ -95,6 +123,13 @@ impl Renderer {
 
     fn event(&mut self, event: Event) {
         match event {
+            Event::CountIn(number) => self.voice.start(number),
+            Event::MetronomeClick => self.drums.note_on(9, 42, 78),
+            Event::DrumBeat { beat } => {
+                self.drums.note_on(9, 42, 65);
+                self.drums
+                    .note_on(9, if beat % 2 == 0 { 36 } else { 38 }, 88);
+            }
             Event::Note {
                 channel,
                 note,
@@ -111,7 +146,13 @@ impl Renderer {
                     if down { 127 } else { 0 },
                 );
             }
-            Event::ClearChannel(channel) => self.synth.note_off_all_channel(channel as i32, true),
+            Event::ClearChannel(channel) => {
+                if channel == 15 {
+                    self.voice.stop();
+                    self.drums.reset();
+                }
+                self.synth.note_off_all_channel(channel as i32, true);
+            }
             Event::ResetControllers(channel) => {
                 self.synth.reset_all_controllers_channel(channel as i32)
             }
@@ -124,9 +165,19 @@ impl Renderer {
             let frames = chunk.len() / 2;
             self.synth
                 .render(&mut self.left[..frames], &mut self.right[..frames]);
+            self.drums.render(
+                &mut self.drum_left[..frames],
+                &mut self.drum_right[..frames],
+            );
+            self.voice.render(
+                &mut self.voice_left[..frames],
+                &mut self.voice_right[..frames],
+            );
             for (index, frame) in chunk.chunks_exact_mut(2).enumerate() {
-                frame[0] = self.left[index].clamp(-1.0, 1.0);
-                frame[1] = self.right[index].clamp(-1.0, 1.0);
+                frame[0] = (self.left[index] + self.drum_left[index] + self.voice_left[index])
+                    .clamp(-1.0, 1.0);
+                frame[1] = (self.right[index] + self.drum_right[index] + self.voice_right[index])
+                    .clamp(-1.0, 1.0);
             }
         }
     }
@@ -301,6 +352,53 @@ pub fn render_demo(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sampled_hat_respects_mute_and_clear() {
+        let mut renderer = Renderer::load().unwrap();
+        let mut audio = vec![0.0; RATE * 2];
+        renderer.event(Event::MetronomeClick);
+        renderer.render(&mut audio);
+        assert!(audio.iter().any(|s| s.abs() > 0.01));
+        assert!(audio[RATE..].iter().all(|s| *s == 0.0));
+        renderer.volume(0.0);
+        renderer.event(Event::MetronomeClick);
+        renderer.render(&mut audio);
+        assert!(audio.iter().all(|s| *s == 0.0));
+        renderer.volume(0.6);
+        renderer.event(Event::MetronomeClick);
+        renderer.event(Event::ClearChannel(15));
+        renderer.render(&mut audio);
+        assert!(audio.iter().all(|s| *s == 0.0));
+    }
+    #[test]
+    fn sampled_drums_are_distinct_bounded_and_obey_mute_and_reset() {
+        let mut renderer = Renderer::load().unwrap();
+        let mut kick = vec![0.0; RATE / 2];
+        renderer.event(Event::DrumBeat { beat: 0 });
+        renderer.render(&mut kick);
+        assert!(kick.iter().any(|sample| sample.abs() > 0.01));
+        assert!(kick
+            .iter()
+            .all(|sample| sample.is_finite() && sample.abs() <= 1.0));
+        let mut snare = vec![0.0; RATE / 2];
+        renderer.event(Event::DrumBeat { beat: 1 });
+        renderer.render(&mut snare);
+        assert_ne!(kick, snare);
+        renderer.event(Event::DrumBeat { beat: 0 });
+        renderer.event(Event::ClearChannel(15));
+        renderer.render(&mut snare);
+        assert!(snare.iter().all(|sample| *sample == 0.0));
+        renderer.volume(0.0);
+        renderer.event(Event::DrumBeat { beat: 1 });
+        renderer.render(&mut snare);
+        assert!(snare.iter().all(|sample| *sample == 0.0));
+        renderer.volume(0.6);
+        renderer.event(Event::DrumBeat { beat: 0 });
+        renderer.event(Event::Reset);
+        renderer.render(&mut snare);
+        assert!(snare.iter().all(|sample| *sample == 0.0));
+    }
 
     #[test]
     fn sampled_piano_has_dynamics_sustain_release_and_panic() {

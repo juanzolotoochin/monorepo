@@ -1,0 +1,10 @@
+filegroup(
+    name = "soundfont",
+    srcs = ["GeneralUser-GS.sf2"],
+    visibility = ["//visibility:public"],
+)
+filegroup(
+    name = "license",
+    srcs = ["documentation/LICENSE.txt"],
+    visibility = ["//visibility:public"],
+)

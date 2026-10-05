@@ -4,12 +4,13 @@ use crate::curriculum::{Direction, Task, CHORDS, ROOTS};
 const NATURALS: [i32; 7] = [0, 2, 4, 5, 7, 9, 11];
 const LETTERS: [char; 7] = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 struct SpelledNote {
     letter: usize,
     accidental: i32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct NoteSpelling([SpelledNote; 12]);
 
 impl Default for NoteSpelling {
@@ -41,6 +42,8 @@ impl NoteSpelling {
     pub(crate) fn for_task(task: &Task, interval_root: usize) -> Self {
         let mut names = Self::default();
         match *task {
+            Task::GuidedScale(ref task) => return Self::for_task(task, interval_root),
+            Task::Reading(_) => {}
             Task::Practice(ref practice) => return practice.spelling(),
             Task::BuildInterval {
                 semitones,
@@ -100,6 +103,11 @@ impl NoteSpelling {
         names
     }
 
+    pub fn staff_position(&self, midi: usize) -> (i32, i8) {
+        let note = self.0[midi % 12];
+        let octave = (midi as i32 - NATURALS[note.letter] - note.accidental).div_euclid(12);
+        (octave * 7 + note.letter as i32, note.accidental as i8)
+    }
     pub fn note_name(&self, midi: usize) -> String {
         let note = self.0[midi % 12];
         let accidental = if note.accidental < 0 { "b" } else { "#" }
