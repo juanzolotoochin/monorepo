@@ -1,0 +1,664 @@
+{
+  "hardware": {
+    "gpu": "NVIDIA RTX 4090",
+    "vram_mib": 24564,
+    "driver": "615.71.09",
+    "system_ram_gib": 64
+  },
+  "model_context_metadata": 262144,
+  "method": {
+    "capacity": "Cold prompts of numbered synthetic Python function definitions with unique marker values at the start, middle, and end; request marker retrieval, max_tokens=128, thinking disabled. Actual token counts are in usage. Each capacity used a fresh Strata process.",
+    "generation": "Identical 3840-token code review prompt over the Rust launcher, max_tokens=512, temperature=0, thinking disabled. Each capacity used a fresh Strata process. All replies reached the intentional 512-token cap.",
+    "limitations": "Single-run smoke measurements, not averaged benchmarks or comprehensive reasoning-quality evaluations. Desktop GPU usage varied; background build work overlapped part of the 128K capacity run. Generation comparisons ran after the build completed. Successful retrieval does not establish a maximum safe context or full-window code-review quality."
+  },
+  "runs": [
+    {
+      "context": 32768,
+      "expert_cache_gib": 15.82,
+      "capacity_run": {
+        "context": 32768,
+        "baseline_gpu_mib": "1800",
+        "requests": [
+          {
+            "target_tokens": 24000,
+            "wall_seconds": 7.75,
+            "gpu_mib": "23734",
+            "usage": {
+              "prompt_tokens": 23950,
+              "completion_tokens": 19,
+              "total_tokens": 23969,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            },
+            "timings": {
+              "cache_n": 0,
+              "prompt_n": 23950,
+              "prompt_ms": 7504.1,
+              "prompt_per_token_ms": 0.313,
+              "prompt_per_second": 3191.6,
+              "predicted_n": 19,
+              "predicted_ms": 204.9,
+              "predicted_per_token_ms": 10.784,
+              "predicted_per_second": 92.7,
+              "draft_n": 15,
+              "draft_n_accepted": 15
+            },
+            "answer": "quartz-731, copper-482, violet-956",
+            "finish_reason": "stop",
+            "retrieval_pass": true
+          },
+          {
+            "target_tokens": 24576,
+            "wall_seconds": 7.41,
+            "gpu_mib": "23749",
+            "usage": {
+              "prompt_tokens": 24508,
+              "completion_tokens": 19,
+              "total_tokens": 24527,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            },
+            "timings": {
+              "cache_n": 0,
+              "prompt_n": 24508,
+              "prompt_ms": 7199.5,
+              "prompt_per_token_ms": 0.294,
+              "prompt_per_second": 3404.1,
+              "predicted_n": 19,
+              "predicted_ms": 173.4,
+              "predicted_per_token_ms": 9.126,
+              "predicted_per_second": 109.6,
+              "draft_n": 15,
+              "draft_n_accepted": 15
+            },
+            "answer": "quartz-731, copper-482, violet-956",
+            "finish_reason": "stop",
+            "retrieval_pass": true
+          }
+        ],
+        "startup_seconds": 20.02,
+        "ready_gpu_mib": "23683"
+      },
+      "generation_run": {
+        "context": 32768,
+        "baseline_gpu_mib": "1750",
+        "requests": [
+          {
+            "target_tokens": 0,
+            "wall_seconds": 6.72,
+            "gpu_mib": "23791",
+            "usage": {
+              "prompt_tokens": 3840,
+              "completion_tokens": 512,
+              "total_tokens": 4352,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            },
+            "timings": {
+              "cache_n": 0,
+              "prompt_n": 3840,
+              "prompt_ms": 2153.0,
+              "prompt_per_token_ms": 0.561,
+              "prompt_per_second": 1783.6,
+              "predicted_n": 512,
+              "predicted_ms": 4534.3,
+              "predicted_per_token_ms": 8.856,
+              "predicted_per_second": 112.9,
+              "draft_n": 428,
+              "draft_n_accepted": 297
+            },
+            "finish_reason": "length",
+            "answer_preview": "This Rust launcher demonstrates a sophisticated approach to managing a local LLM server, handling process lifecycle, signal management, and configuration isolation. However, while the code is function"
+          }
+        ],
+        "startup_seconds": 16.01,
+        "ready_gpu_mib": "23609"
+      }
+    },
+    {
+      "context": 65536,
+      "expert_cache_gib": 15.34,
+      "capacity_run": {
+        "context": 65536,
+        "baseline_gpu_mib": "1773",
+        "requests": [
+          {
+            "target_tokens": 24000,
+            "wall_seconds": 8.11,
+            "gpu_mib": "23887",
+            "usage": {
+              "prompt_tokens": 23950,
+              "completion_tokens": 19,
+              "total_tokens": 23969,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            },
+            "timings": {
+              "cache_n": 0,
+              "prompt_n": 23950,
+              "prompt_ms": 7833.4,
+              "prompt_per_token_ms": 0.327,
+              "prompt_per_second": 3057.4,
+              "predicted_n": 19,
+              "predicted_ms": 236.3,
+              "predicted_per_token_ms": 12.437,
+              "predicted_per_second": 80.4,
+              "draft_n": 15,
+              "draft_n_accepted": 15
+            },
+            "answer": "quartz-731, copper-482, violet-956",
+            "finish_reason": "stop",
+            "retrieval_pass": true
+          },
+          {
+            "target_tokens": 57344,
+            "wall_seconds": 19.2,
+            "gpu_mib": "23935",
+            "usage": {
+              "prompt_tokens": 57273,
+              "completion_tokens": 19,
+              "total_tokens": 57292,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            },
+            "timings": {
+              "cache_n": 0,
+              "prompt_n": 57273,
+              "prompt_ms": 18913.2,
+              "prompt_per_token_ms": 0.33,
+              "prompt_per_second": 3028.2,
+              "predicted_n": 19,
+              "predicted_ms": 213.7,
+              "predicted_per_token_ms": 11.247,
+              "predicted_per_second": 88.9,
+              "draft_n": 16,
+              "draft_n_accepted": 15
+            },
+            "answer": "quartz-731, copper-482, violet-956",
+            "finish_reason": "stop",
+            "retrieval_pass": true
+          }
+        ],
+        "startup_seconds": 19.01,
+        "ready_gpu_mib": "23684"
+      },
+      "generation_run": {
+        "context": 65536,
+        "baseline_gpu_mib": "1803",
+        "requests": [
+          {
+            "target_tokens": 0,
+            "wall_seconds": 6.65,
+            "gpu_mib": "23941",
+            "usage": {
+              "prompt_tokens": 3840,
+              "completion_tokens": 512,
+              "total_tokens": 4352,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            },
+            "timings": {
+              "cache_n": 0,
+              "prompt_n": 3840,
+              "prompt_ms": 2003.9,
+              "prompt_per_token_ms": 0.522,
+              "prompt_per_second": 1916.3,
+              "predicted_n": 512,
+              "predicted_ms": 4624.7,
+              "predicted_per_token_ms": 9.033,
+              "predicted_per_second": 110.7,
+              "draft_n": 404,
+              "draft_n_accepted": 285
+            },
+            "finish_reason": "length",
+            "answer_preview": "This Rust launcher demonstrates a sophisticated approach to managing a local LLM server lifecycle, but it contains several critical correctness issues, maintainability concerns, and unsafe practices t"
+          }
+        ],
+        "startup_seconds": 16.01,
+        "ready_gpu_mib": "23772"
+      }
+    },
+    {
+      "context": 131072,
+      "expert_cache_gib": 14.27,
+      "capacity_run": {
+        "context": 131072,
+        "baseline_gpu_mib": "1908",
+        "requests": [
+          {
+            "target_tokens": 24000,
+            "wall_seconds": 8.41,
+            "gpu_mib": "23689",
+            "usage": {
+              "prompt_tokens": 23950,
+              "completion_tokens": 19,
+              "total_tokens": 23969,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            },
+            "timings": {
+              "cache_n": 0,
+              "prompt_n": 23950,
+              "prompt_ms": 8116.5,
+              "prompt_per_token_ms": 0.339,
+              "prompt_per_second": 2950.8,
+              "predicted_n": 19,
+              "predicted_ms": 254.1,
+              "predicted_per_token_ms": 13.374,
+              "predicted_per_second": 74.8,
+              "draft_n": 15,
+              "draft_n_accepted": 15
+            },
+            "answer": "quartz-731, copper-482, violet-956",
+            "finish_reason": "stop",
+            "retrieval_pass": true
+          },
+          {
+            "target_tokens": 122880,
+            "wall_seconds": 42.7,
+            "gpu_mib": "23741",
+            "usage": {
+              "prompt_tokens": 122804,
+              "completion_tokens": 21,
+              "total_tokens": 122825,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            },
+            "timings": {
+              "cache_n": 0,
+              "prompt_n": 122804,
+              "prompt_ms": 41795.7,
+              "prompt_per_token_ms": 0.34,
+              "prompt_per_second": 2938.2,
+              "predicted_n": 21,
+              "predicted_ms": 748.2,
+              "predicted_per_token_ms": 35.629,
+              "predicted_per_second": 28.1,
+              "draft_n": 15,
+              "draft_n_accepted": 15
+            },
+            "answer": "quartz-731\ncopper-482\nviolet-956",
+            "finish_reason": "stop",
+            "retrieval_pass": true
+          }
+        ],
+        "startup_seconds": 20.01,
+        "ready_gpu_mib": "23751"
+      },
+      "generation_run": {
+        "context": 131072,
+        "baseline_gpu_mib": "1931",
+        "requests": [
+          {
+            "target_tokens": 0,
+            "wall_seconds": 6.79,
+            "gpu_mib": "23847",
+            "usage": {
+              "prompt_tokens": 3840,
+              "completion_tokens": 512,
+              "total_tokens": 4352,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            },
+            "timings": {
+              "cache_n": 0,
+              "prompt_n": 3840,
+              "prompt_ms": 2012.0,
+              "prompt_per_token_ms": 0.524,
+              "prompt_per_second": 1908.5,
+              "predicted_n": 512,
+              "predicted_ms": 4760.0,
+              "predicted_per_token_ms": 9.297,
+              "predicted_per_second": 107.6,
+              "draft_n": 450,
+              "draft_n_accepted": 285
+            },
+            "finish_reason": "length",
+            "answer_preview": "This Rust launcher demonstrates a sophisticated approach to managing a local LLM server, handling process lifecycle, signal management, and configuration isolation. However, while the code is function"
+          }
+        ],
+        "startup_seconds": 15.01,
+        "ready_gpu_mib": "23666"
+      }
+    }
+  ],
+  "vram_reserve_validation": {
+    "reserve_mib": 3072,
+    "reason": "User reported verify: instantiate: out of memory during a 64K OpenCode session. The old 64K decode run logged only 391 MiB free at startup.",
+    "method": "Six sequential independent code-like prompts in one 64K engine session, with 512-517-token response budgets and thinking disabled; all marker retrieval checks passed. Boundary memory samples are not peak-memory measurements. This is not a replay of the user session.",
+    "chat_only_run": {
+      "context": 65536,
+      "baseline_gpu_mib": "1958",
+      "requests": [
+        {
+          "target_tokens": 6000,
+          "wall_seconds": 7.65,
+          "gpu_mib": "21446",
+          "usage": {
+            "prompt_tokens": 5926,
+            "completion_tokens": 512,
+            "total_tokens": 6438,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 5926,
+            "prompt_ms": 2275.7,
+            "prompt_per_token_ms": 0.384,
+            "prompt_per_second": 2604.0,
+            "predicted_n": 512,
+            "predicted_ms": 5361.9,
+            "predicted_per_token_ms": 10.472,
+            "predicted_per_second": 95.5,
+            "draft_n": 440,
+            "draft_n_accepted": 304
+          },
+          "finish_reason": "length",
+          "retrieval_pass": true,
+          "answer_preview": "**START_MARKER:** quartz-731\n**MIDDLE_MARKER:** copper-482\n**END_MARKER:** violet-956\n\n### Code Quality Review\n\nThe provided dataset consists of 139 distinct fu"
+        },
+        {
+          "target_tokens": 24000,
+          "wall_seconds": 11.04,
+          "gpu_mib": "21446",
+          "usage": {
+            "prompt_tokens": 24058,
+            "completion_tokens": 513,
+            "total_tokens": 24571,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 24058,
+            "prompt_ms": 7119.1,
+            "prompt_per_token_ms": 0.296,
+            "prompt_per_second": 3379.4,
+            "predicted_n": 513,
+            "predicted_ms": 3874.8,
+            "predicted_per_token_ms": 7.553,
+            "predicted_per_second": 132.4,
+            "draft_n": 446,
+            "draft_n_accepted": 317
+          },
+          "finish_reason": "length",
+          "retrieval_pass": true,
+          "answer_preview": "**START_MARKER:** quartz-731\n**MIDDLE_MARKER:** copper-482\n**END_MARKER:** violet-956\n\n### Code Quality Review\n\nThe provided dataset consists of 558 distinct fu"
+        },
+        {
+          "target_tokens": 48000,
+          "wall_seconds": 18.05,
+          "gpu_mib": "21446",
+          "usage": {
+            "prompt_tokens": 48017,
+            "completion_tokens": 514,
+            "total_tokens": 48531,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 48017,
+            "prompt_ms": 14055.3,
+            "prompt_per_token_ms": 0.293,
+            "prompt_per_second": 3416.3,
+            "predicted_n": 514,
+            "predicted_ms": 3928.7,
+            "predicted_per_token_ms": 7.643,
+            "predicted_per_second": 130.8,
+            "draft_n": 444,
+            "draft_n_accepted": 323
+          },
+          "finish_reason": "length",
+          "retrieval_pass": true,
+          "answer_preview": "**START_MARKER:** quartz-731\n**MIDDLE_MARKER:** copper-482\n**END_MARKER:** violet-956\n\n### Code Quality Review\n\nThe provided dataset consists of 1,116 distinct "
+        },
+        {
+          "target_tokens": 8000,
+          "wall_seconds": 6.85,
+          "gpu_mib": "21446",
+          "usage": {
+            "prompt_tokens": 7897,
+            "completion_tokens": 515,
+            "total_tokens": 8412,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 7897,
+            "prompt_ms": 2496.9,
+            "prompt_per_token_ms": 0.316,
+            "prompt_per_second": 3162.7,
+            "predicted_n": 515,
+            "predicted_ms": 4341.3,
+            "predicted_per_token_ms": 8.43,
+            "predicted_per_second": 118.6,
+            "draft_n": 447,
+            "draft_n_accepted": 306
+          },
+          "finish_reason": "length",
+          "retrieval_pass": true,
+          "answer_preview": "**START_MARKER:** quartz-731\n**MIDDLE_MARKER:** copper-482\n**END_MARKER:** violet-956\n\n### Code Quality Review\n\nThe provided dataset consists of 186 distinct fu"
+        },
+        {
+          "target_tokens": 40000,
+          "wall_seconds": 15.86,
+          "gpu_mib": "21446",
+          "usage": {
+            "prompt_tokens": 40032,
+            "completion_tokens": 516,
+            "total_tokens": 40548,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 40032,
+            "prompt_ms": 11746.6,
+            "prompt_per_token_ms": 0.293,
+            "prompt_per_second": 3408.0,
+            "predicted_n": 516,
+            "predicted_ms": 4051.6,
+            "predicted_per_token_ms": 7.852,
+            "predicted_per_second": 127.4,
+            "draft_n": 446,
+            "draft_n_accepted": 319
+          },
+          "finish_reason": "length",
+          "retrieval_pass": true,
+          "answer_preview": "**START_MARKER:** quartz-731\n**MIDDLE_MARKER:** copper-482\n**END_MARKER:** violet-956\n\n### Code Quality Review\n\nThe provided dataset consists of 40,000 distinct"
+        },
+        {
+          "target_tokens": 48000,
+          "wall_seconds": 18.15,
+          "gpu_mib": "21446",
+          "usage": {
+            "prompt_tokens": 48017,
+            "completion_tokens": 517,
+            "total_tokens": 48534,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 48017,
+            "prompt_ms": 14074.0,
+            "prompt_per_token_ms": 0.293,
+            "prompt_per_second": 3411.8,
+            "predicted_n": 517,
+            "predicted_ms": 4003.8,
+            "predicted_per_token_ms": 7.744,
+            "predicted_per_second": 129.1,
+            "draft_n": 427,
+            "draft_n_accepted": 325
+          },
+          "finish_reason": "length",
+          "retrieval_pass": true,
+          "answer_preview": "**START_MARKER:** quartz-731\n**MIDDLE_MARKER:** copper-482\n**END_MARKER:** violet-956\n\n### Code Quality Review\n\nThe provided dataset consists of 1,116 distinct "
+        }
+      ],
+      "startup_seconds": 17.02,
+      "ready_gpu_mib": "21314",
+      "captured_verify_windows": [
+        1,
+        2,
+        3,
+        4,
+        6
+      ],
+      "startup_free_vram_mib": 2825
+    },
+    "initial_attempt": {
+      "context": 65536,
+      "baseline_gpu_mib": "1976",
+      "requests": [
+        {
+          "target_tokens": 6000,
+          "wall_seconds": 6.46,
+          "gpu_mib": "21464",
+          "usage": {
+            "prompt_tokens": 5926,
+            "completion_tokens": 512,
+            "total_tokens": 6438,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 5926,
+            "prompt_ms": 2139.1,
+            "prompt_per_token_ms": 0.361,
+            "prompt_per_second": 2770.3,
+            "predicted_n": 512,
+            "predicted_ms": 4303.9,
+            "predicted_per_token_ms": 8.406,
+            "predicted_per_second": 119.0,
+            "draft_n": 437,
+            "draft_n_accepted": 322
+          },
+          "finish_reason": "length",
+          "retrieval_pass": true,
+          "answer_preview": "**START_MARKER:** quartz-731\n**MIDDLE_MARKER:** copper-482\n**END_MARKER:** violet-956\n\n### Code Quality Review\n\nThe provided dataset consists of 139 distinct fu"
+        },
+        {
+          "target_tokens": 24000,
+          "wall_seconds": 11.07,
+          "gpu_mib": "21462",
+          "usage": {
+            "prompt_tokens": 23929,
+            "completion_tokens": 513,
+            "total_tokens": 24442,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 23929,
+            "prompt_ms": 7012.9,
+            "prompt_per_token_ms": 0.293,
+            "prompt_per_second": 3412.1,
+            "predicted_n": 513,
+            "predicted_ms": 4022.2,
+            "predicted_per_token_ms": 7.841,
+            "predicted_per_second": 127.5,
+            "draft_n": 446,
+            "draft_n_accepted": 319
+          },
+          "finish_reason": "length",
+          "retrieval_pass": true,
+          "answer_preview": "**START_MARKER:** quartz-731\n**MIDDLE_MARKER:** copper-482\n**END_MARKER:** violet-956\n\n### Code Quality Review\n\nThe provided dataset consists of 555 distinct fu"
+        },
+        {
+          "target_tokens": 48000,
+          "wall_seconds": 19.13,
+          "gpu_mib": "21463",
+          "usage": {
+            "prompt_tokens": 47931,
+            "completion_tokens": 514,
+            "total_tokens": 48445,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 47931,
+            "prompt_ms": 13985.6,
+            "prompt_per_token_ms": 0.292,
+            "prompt_per_second": 3427.2,
+            "predicted_n": 514,
+            "predicted_ms": 5079.4,
+            "predicted_per_token_ms": 9.882,
+            "predicted_per_second": 101.2,
+            "draft_n": 462,
+            "draft_n_accepted": 305
+          },
+          "finish_reason": "length",
+          "retrieval_pass": true,
+          "answer_preview": "**START_MARKER:** quartz-731\n**MIDDLE_MARKER:** copper-482\n**END_MARKER:** violet-956\n\n### Code Quality Review\n\nThe provided dataset consists of 1,114 functions"
+        },
+        {
+          "target_tokens": 8000,
+          "wall_seconds": 6.88,
+          "gpu_mib": "21462",
+          "usage": {
+            "prompt_tokens": 7938,
+            "completion_tokens": 515,
+            "total_tokens": 8453,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 7938,
+            "prompt_ms": 2473.1,
+            "prompt_per_token_ms": 0.312,
+            "prompt_per_second": 3209.7,
+            "predicted_n": 515,
+            "predicted_ms": 4385.8,
+            "predicted_per_token_ms": 8.516,
+            "predicted_per_second": 117.4,
+            "draft_n": 436,
+            "draft_n_accepted": 304
+          },
+          "finish_reason": "length",
+          "retrieval_pass": true,
+          "answer_preview": "START_MARKER = quartz-731\nMIDDLE_MARKER = copper-482\nEND_MARKER = violet-956\n\n### Code Quality Review\n\nThe provided dataset consists of 187 distinct functions, "
+        }
+      ],
+      "startup_seconds": 15.02,
+      "ready_gpu_mib": "21312",
+      "error": "Remote end closed connection without response",
+      "captured_verify_windows": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "startup_free_vram_mib": 2826
+    },
+    "initial_attempt_note": "Four generation requests passed and all six verification graphs instantiated. A subsequent diagnostic /v1/messages/count_tokens request failed with TypeError: int object is not subscriptable in strata_tokenizer._bpe. The chat-only rerun avoids that endpoint; this separate tokenizer error has not been fixed."
+  }
+}

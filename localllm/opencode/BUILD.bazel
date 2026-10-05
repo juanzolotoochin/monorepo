@@ -1,0 +1,68 @@
+load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
+load("@rules_rs//rs:rust_test.bzl", "rust_test")
+load("//localllm/private:build.bzl", "launcher_assets")
+
+filegroup(
+    name = "engine",
+    srcs = ["@localllm_strata//:engine"],
+    tags = ["manual"],
+)
+
+launcher_assets(
+    name = "assets",
+    draft = "//localllm/strata:draft_pack",
+    engine = ":engine",
+    libraries = ["@localllm_cuda//:runtime"],
+    opencode = "@localllm_opencode//:opencode",
+    pack = select({
+        "//localllm/strata:iq2_xs": "//localllm/strata:model_pack",
+        "//conditions:default": "//localllm/strata:model_pack_iq3_xxs",
+    }),
+    profile = "@localllm_strata//:data/expert-profile.bin",
+    quantization = select({
+        "//localllm/strata:iq2_xs": "IQ2_XS",
+        "//conditions:default": "IQ3_XXS",
+    }),
+    ripgrep = "@localllm_ripgrep//:rg",
+    server = "@localllm_strata//:server",
+    shards = select({
+        "//localllm/strata:iq2_xs": ["@localllm_model//:files"],
+        "//conditions:default": ["@localllm_model_iq3_xxs//:files"],
+    }),
+    tags = ["manual"],
+)
+
+rust_binary(
+    name = "opencode",
+    srcs = ["main.rs"],
+    data = [":assets"],
+    edition = "2021",
+    tags = ["manual"],
+    target_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:anyhow",
+        "@crates//:libc-0.2.186",
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "launcher_test",
+    srcs = ["main.rs"],
+    edition = "2021",
+    target_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+    deps = [
+        "@crates//:anyhow",
+        "@crates//:libc-0.2.186",
+        "@crates//:serde_json",
+        "@crates//:tempfile",
+    ],
+)

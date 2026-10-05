@@ -3,6 +3,90 @@ module(
     version = "1.0",
 )
 
+# Local inference: all source archives and CUDA components are content-pinned.
+cuda_repository = use_repo_rule("//localllm/private:repositories.bzl", "cuda_repository")
+
+cuda_repository(
+    name = "localllm_cuda",
+    lock = "//localllm/private:cuda.lock.json",
+)
+
+localllm_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+localllm_source = use_repo_rule("//localllm/private:repositories.bzl", "source_repository")
+
+localllm_source(
+    name = "localllm_strata",
+    build_file = "//localllm/private:strata.BUILD.bazel",
+    cuda_sources = "//localllm/private:cuda-sources.json",
+    sha256 = "c043e9f4c55fef75bfffeed2c034b3c91eb02e5e5fca44739839baca58f961ce",
+    source_key = "strata",
+    strip_prefix = "Strata-6f32ec070f23ced9f50e704d854d775da52591ab",
+    url = "https://codeload.github.com/Niko1221/Strata/tar.gz/6f32ec070f23ced9f50e704d854d775da52591ab",
+)
+
+localllm_source(
+    name = "localllm_ggml",
+    build_file = "//localllm/private:ggml.BUILD.bazel",
+    cuda_sources = "//localllm/private:cuda-sources.json",
+    sha256 = "c076d7534afa0e5d0ec2a0d425b11e791c16f3de0d727221aea071cef156a280",
+    source_key = "ggml",
+    strip_prefix = "llama.cpp-3cf03257f219afbe7334045ff7c6a06ac68c627d",
+    url = "https://codeload.github.com/ggml-org/llama.cpp/tar.gz/3cf03257f219afbe7334045ff7c6a06ac68c627d",
+)
+
+localllm_pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
+localllm_pip.parse(
+    hub_name = "localllm_pip",
+    python_version = "3.11",
+    requirements_lock = "//localllm/strata:requirements.lock.txt",
+)
+use_repo(localllm_pip, "localllm_pip")
+
+model_repository = use_repo_rule("//localllm/private:repositories.bzl", "model_repository")
+
+model_repository(
+    name = "localllm_model",
+    lock = "//localllm/private:model.lock.json",
+)
+
+model_repository(
+    name = "localllm_model_iq3_xxs",
+    lock = "//localllm/private:model-iq3-xxs.lock.json",
+)
+
+mtp_repository = use_repo_rule("//localllm/private:mtp_repository.bzl", "mtp_repository")
+
+mtp_repository(
+    name = "localllm_mtp",
+    lock = "//localllm/private:mtp.lock.json",
+)
+
+opencode_repository = use_repo_rule("//localllm/private:repositories.bzl", "opencode_repository")
+
+opencode_repository(
+    name = "localllm_opencode",
+    build_file = "//localllm/private:opencode.BUILD.bazel",
+    lock = "//localllm/private:opencode-npm.lock.json",
+    patch = "//localllm/private:opencode-offline.patch",
+)
+
+localllm_archive(
+    name = "localllm_bun",
+    build_file_content = 'load("@bazel_skylib//rules:native_binary.bzl", "native_binary")\nnative_binary(name = "bun_tool", src = "bun", out = "bun-bin", visibility = ["//visibility:public"])',
+    sha256 = "951ee2aee855f08595aeec6225226a298d3fea83a3dcd6465c09cbccdf7e848f",
+    strip_prefix = "bun-linux-x64",
+    urls = ["https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-linux-x64.zip"],
+)
+
+localllm_archive(
+    name = "localllm_ripgrep",
+    build_file_content = 'exports_files(["rg"], visibility = ["//visibility:public"])',
+    sha256 = "1c9297be4a084eea7ecaedf93eb03d058d6faae29bbc57ecdaf5063921491599",
+    strip_prefix = "ripgrep-15.1.0-x86_64-unknown-linux-musl",
+    urls = ["https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep-15.1.0-x86_64-unknown-linux-musl.tar.gz"],
+)
+
 bazel_dep(name = "bazel_skylib", version = "1.9.2")
 bazel_dep(name = "aspect_rules_js", version = "3.4.1")
 bazel_dep(name = "bazel_features", version = "1.51.0", repo_name = "proto_bazel_features")
@@ -263,18 +347,20 @@ http_archive(
 
 # Source fonts for hermetic MIDI notation code generation.
 http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+
 http_file(
     name = "bravura_font",
-    urls = ["https://raw.githubusercontent.com/steinbergmedia/bravura/37b194378b710cc40e406ab6c4b07608bb9548ae/redist/otf/Bravura.otf"],
-    sha256 = "cdf0f893ee1fdb64b7f6713d71ee0dcfc349c0ac01429a8e451b01a9e79f5f3b",
     downloaded_file_path = "Bravura.otf",
+    sha256 = "cdf0f893ee1fdb64b7f6713d71ee0dcfc349c0ac01429a8e451b01a9e79f5f3b",
+    urls = ["https://raw.githubusercontent.com/steinbergmedia/bravura/37b194378b710cc40e406ab6c4b07608bb9548ae/redist/otf/Bravura.otf"],
 )
+
 http_archive(
     name = "liberation_fonts",
-    urls = ["https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz"],
+    build_file_content = 'exports_files(["LiberationSans-Regular.ttf"])',
     sha256 = "7191c669bf38899f73a2094ed00f7b800553364f90e2637010a69c0e268f25d0",
     strip_prefix = "liberation-fonts-ttf-2.1.5",
-    build_file_content = 'exports_files(["LiberationSans-Regular.ttf"])',
+    urls = ["https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz"],
 )
 
 # Sampled Yamaha C5 piano; kept in Bazel's external cache, not in Git.
@@ -289,10 +375,10 @@ http_archive(
 # GeneralUser GS 2.0.3 supplies recorded acoustic drum samples.
 http_archive(
     name = "generaluser_drums",
-    type = "tar.gz",
     build_file = "//third_party/generaluser_drums:BUILD.soundfont.bazel",
     sha256 = "aef2e2901ab399061ac3765e259ab4c3409bdcb24b7cf814b4b54aaad549dbff",
     strip_prefix = "GeneralUser-GS-684543d5e5efaef08d02be50dcda8d552478fa60",
+    type = "tar.gz",
     urls = ["https://codeload.github.com/mrbumpy409/GeneralUser-GS/tar.gz/684543d5e5efaef08d02be50dcda8d552478fa60"],
 )
 

@@ -1,0 +1,111 @@
+load("@rules_python//python:defs.bzl", "py_binary")
+load("@rules_rs//rs:rust_test.bzl", "rust_test")
+load("//localllm/private:build.bzl", "draft_pack", "model_pack")
+
+exports_files(["requirements.lock.txt"])
+
+py_binary(
+    name = "draft_pack_tool",
+    srcs = ["draft_pack.py"],
+    legacy_create_init = 0,
+    main = "draft_pack.py",
+    tags = ["manual"],
+    deps = ["@localllm_strata//:draft_tools"],
+)
+
+draft_pack(
+    name = "draft_pack",
+    manifest = "@localllm_mtp//:mtp-manifest.json",
+    tags = ["manual"],
+    tensors = ["@localllm_mtp//:files"],
+    tool = ":draft_pack_tool",
+    visibility = ["//visibility:public"],
+    vocab = "@localllm_strata//:data/draft_vocab.bin",
+)
+
+model_pack(
+    name = "model_pack",
+    first = "@localllm_model//:Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS-00001-of-00002.gguf",
+    shards = ["@localllm_model//:files"],
+    tags = ["manual"],
+    visibility = ["//visibility:public"],
+)
+
+# Independent actions with different output paths detect embedded paths,
+# timestamps, and nondeterministic quantization. Explicit opt-in: large inputs.
+model_pack(
+    name = "model_pack_repeat",
+    first = "@localllm_model//:Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS-00001-of-00002.gguf",
+    shards = ["@localllm_model//:files"],
+    tags = ["manual"],
+)
+
+draft_pack(
+    name = "draft_pack_repeat",
+    manifest = "@localllm_mtp//:mtp-manifest.json",
+    tags = ["manual"],
+    tensors = ["@localllm_mtp//:files"],
+    tool = ":draft_pack_tool",
+    vocab = "@localllm_strata//:data/draft_vocab.bin",
+)
+
+rust_test(
+    name = "reproducibility_test",
+    size = "large",
+    srcs = ["reproducibility_test.rs"],
+    data = [
+        ":draft_pack",
+        ":draft_pack_repeat",
+    ] + select({
+        ":iq2_xs": [
+            ":model_pack",
+            ":model_pack_repeat",
+        ],
+        "//conditions:default": [
+            ":model_pack_iq3_xxs",
+            ":model_pack_iq3_xxs_repeat",
+        ],
+    }),
+    edition = "2021",
+    env = select({
+        ":iq2_xs": {
+            "DRAFT": "$(rootpath :draft_pack)",
+            "DRAFT_REPEAT": "$(rootpath :draft_pack_repeat)",
+            "MODEL": "$(rootpath :model_pack)",
+            "MODEL_REPEAT": "$(rootpath :model_pack_repeat)",
+        },
+        "//conditions:default": {
+            "DRAFT": "$(rootpath :draft_pack)",
+            "DRAFT_REPEAT": "$(rootpath :draft_pack_repeat)",
+            "MODEL": "$(rootpath :model_pack_iq3_xxs)",
+            "MODEL_REPEAT": "$(rootpath :model_pack_iq3_xxs_repeat)",
+        },
+    }),
+    tags = ["manual"],
+    target_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+# Select model artifacts at build time, so only the requested variant is fetched.
+config_setting(
+    name = "iq2_xs",
+    define_values = {"localllm_quant": "IQ2_XS"},
+    visibility = ["//visibility:public"],
+)
+
+model_pack(
+    name = "model_pack_iq3_xxs",
+    first = "@localllm_model_iq3_xxs//:Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-00001-of-00002.gguf",
+    shards = ["@localllm_model_iq3_xxs//:files"],
+    tags = ["manual"],
+    visibility = ["//visibility:public"],
+)
+
+model_pack(
+    name = "model_pack_iq3_xxs_repeat",
+    first = "@localllm_model_iq3_xxs//:Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-00001-of-00002.gguf",
+    shards = ["@localllm_model_iq3_xxs//:files"],
+    tags = ["manual"],
+)
