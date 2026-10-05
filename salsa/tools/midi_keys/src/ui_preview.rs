@@ -58,6 +58,13 @@ fn main() {
     };
     let svg = if training {
         let directory = tempfile::tempdir().unwrap();
+        if let Some(path) = args
+            .iter()
+            .find_map(|a| a.strip_prefix("--profile-insights="))
+        {
+            // Visual QA reads a copy; never locks or changes the real learner profile.
+            std::fs::copy(path, directory.path().join("learner.json")).unwrap();
+        }
         let mut session = if args.get(5).is_some_and(|value| value == "--browser-demo") {
             let mut session = trainer::Session::browse().unwrap();
             for _ in 0..6 {

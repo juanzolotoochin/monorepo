@@ -168,9 +168,15 @@ fn chord(events: &mut Vec<(u64, Event)>, pitches: &[usize], at: u64, duration: u
         note(events, pitch, at, duration, 80);
     }
 }
+const REFERENCE_OCTAVE: usize = 60;
+
 fn reference(ex: &mut Exercise, root: usize, scale: Scale) -> u64 {
-    let mut notes: Vec<_> = scale.steps().iter().map(|n| 60 + root + n).collect();
-    notes.push(72 + root);
+    let mut notes: Vec<_> = scale
+        .steps()
+        .iter()
+        .map(|n| REFERENCE_OCTAVE + root + n)
+        .collect();
+    notes.push(REFERENCE_OCTAVE + 12 + root);
     for (i, &pitch) in notes.iter().enumerate() {
         note(&mut ex.playback, pitch, i as u64 * 300, 240, 70);
     }
@@ -247,12 +253,12 @@ pub fn generate(task: &Practice, seed: u64, ex: &mut Exercise) {
         } => {
             ex.title = "ONE NOTE IN A SCALE".into();
             ex.prompt = format!(
-                "Hear {} {}, then one note. Play that note in any octave.",
+                "Hear the {} {} scale, then one of those notes in the same octave. Play that note in any octave.",
                 ROOTS[root],
                 scale.id()
             );
             let start = reference(ex, root, scale);
-            let target = 48 + 12 * rng.take(3) + root + scale.steps()[degree];
+            let target = REFERENCE_OCTAVE + root + scale.steps()[degree];
             note(&mut ex.playback, target, start, 650, 85);
             ex.answer = Answer::PitchClasses(vec![target]);
             ex.explanation = format!(
@@ -530,7 +536,7 @@ pub fn generate(task: &Practice, seed: u64, ex: &mut Exercise) {
                 true,
             );
             score.any_pitch = true;
-            score.tolerance_ms = (beat / 6).max(60);
+            score.tolerance_ms = (beat / 5).max(60);
             ex.title = "RHYTHM".into();
             ex.bpm = Some(bpm);
             ex.prompt = format!("Listen, then echo {} taps using any MIDI notes at {bpm} BPM. Match the spacing and held lengths; start when ready.", units.len());

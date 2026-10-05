@@ -177,6 +177,7 @@ impl Session {
         for source in [
             include_str!("exercise.rs"),
             include_str!("tempo.rs"),
+            include_str!("rhythm.rs"),
             include_str!("evidence.rs"),
             include_str!("performance.rs"),
             include_str!("practice.rs"),
@@ -194,7 +195,7 @@ impl Session {
             "result":capture.result,"feedback":self.feedback,"played_notes":self.played,"grading_evidence":self.evidence,
             "timing_us":{"answer_started":capture.offset(self.answer_started_at),"input_started":capture.offset(self.input_started),"onsets":self.onsets.iter().map(|t|capture.offset(Some(*t))).collect::<Vec<_>>(),"listening_until":capture.offset(self.listening_until),"finish_at":capture.offset(self.finish_at)},
             "scores":{"expected_feedback":self.feedback_score,"played":self.played_score,"page":self.score_page},
-            "reading_result":self.reading_result,"events":capture.events,"runtime":capture.runtime,
+            "reading_result":self.reading_result,"rhythm_report":self.rhythm_report,"rhythm_score":self.exercise.as_ref().and_then(|e|e.rhythm_score()),"events":capture.events,"runtime":capture.runtime,
             "terminal":{"term":std::env::var("TERM").ok(),"term_program":std::env::var("TERM_PROGRAM").ok(),"tmux":std::env::var_os("TMUX").is_some(),"score_images":self.reading_supported},
         });
         let path = capture.path.clone();

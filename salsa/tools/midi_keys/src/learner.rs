@@ -123,36 +123,17 @@ impl Default for Profile {
     }
 }
 impl Profile {
-    pub fn insights(&self, graph: &[Skill]) -> Vec<String> {
-        let mut insights = self.recognition.insights();
-        let mut mastered: Vec<_> = graph
-            .iter()
-            .filter_map(|skill| {
-                if matches!(skill.task, crate::curriculum::Task::HearInterval { .. }) {
-                    return None;
-                }
-                self.skills
-                    .get(&skill.id)
-                    .filter(|s| s.mastered())
-                    .map(|s| (s.last_turn, &skill.title))
-            })
-            .collect();
-        mastered.sort_by_key(|(turn, _)| std::cmp::Reverse(*turn));
-        for (_, title) in mastered.into_iter().take(1).rev() {
-            insights.insert(0, format!("Mastered: {title}"));
-        }
-        insights
+    pub(crate) fn requirement_met(&self, r: &crate::curriculum::Requirement) -> bool {
+        self.skills.get(&r.skill).is_some_and(|s| {
+            (s.score >= r.score && s.attempts >= r.attempts)
+                || (r.score <= 7.0 && r.attempts <= 6 && s.first_qualified_at.is_some())
+        })
     }
     pub fn unlocked(&self, skill: &Skill) -> bool {
         // Initial qualification opens a path permanently. Later weakness lowers
         // scores and requests review without repeatedly closing that path.
         self.skills.get(&skill.id).is_some_and(|s| s.attempts > 0)
-            || skill.requires.iter().all(|r| {
-                self.skills.get(&r.skill).is_some_and(|s| {
-                    (s.score >= r.score && s.attempts >= r.attempts)
-                        || (r.score <= 7.0 && r.attempts <= 6 && s.first_qualified_at.is_some())
-                })
-            })
+            || skill.requires.iter().all(|r| self.requirement_met(r))
     }
     pub fn next<'a>(&self, graph: &'a [Skill], now: u64) -> Option<(&'a Skill, &'static str)> {
         let recognition = self.recognition.next(self, graph, now);

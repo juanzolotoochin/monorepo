@@ -191,8 +191,19 @@ pub fn expected(ex: &Exercise) -> WrittenScore {
                 score.events.push(event(vec![n], i as u32 * 2, 2));
             }
         }
-        Answer::Interval(semitones) => {
-            score.events = vec![event(vec![60], 0, 2), event(vec![60 + semitones], 2, 2)];
+        Answer::Interval(_) => {
+            // Preserve the stimulus, including descending and simultaneous notes.
+            let mut attacks = std::collections::BTreeMap::<u64, Vec<usize>>::new();
+            for (at, sound) in &ex.playback {
+                if let keyboard::Event::Note { note, velocity, .. } = sound {
+                    if *velocity > 0 {
+                        attacks.entry(*at).or_default().push(*note);
+                    }
+                }
+            }
+            for (i, notes) in attacks.values().enumerate() {
+                grouped(&mut score, notes, i as u32 * 2, 2);
+            }
         }
         Answer::Quality(q) => grouped(&mut score, &chord_example(0, *q, 0), 0, 4),
         Answer::RootChord { root, quality } => {
@@ -245,7 +256,7 @@ fn key_fifths(root: usize, scale: Scale) -> i8 {
     }
 }
 /// Fill written rests so an offbeat melody cannot look like downbeat quarters.
-fn fill_rests(score: &mut WrittenScore) {
+pub(crate) fn fill_rests(score: &mut WrittenScore) {
     let mut rests = vec![];
     for &hand in &score.hands {
         let occupied: BTreeSet<_> = score
@@ -681,17 +692,20 @@ pub fn feedback_expected(ex: &Exercise, notes: &[usize], correct: bool) -> Writt
         && ex.reading.is_none()
         && !matches!(
             ex.answer,
-            Answer::OctaveSequence(_) | Answer::TransposedSequence(_) | Answer::PitchClasses(_)
+            Answer::OctaveSequence(_)
+                | Answer::TransposedSequence(_)
+                | Answer::PitchClasses(_)
+                | Answer::Interval(_)
         )
     {
         score = played(ex, notes, &[], 0);
         score.caption="Your answer is a valid realization; other permitted octaves or voicings may also work.".into();
+    } else if matches!(ex.answer, Answer::Interval(_)) {
+        score.caption =
+            "What you heard; answers may use any starting note and either direction.".into();
     } else if matches!(
         ex.answer,
-        Answer::Quality(_)
-            | Answer::RootChord { .. }
-            | Answer::Inversion { .. }
-            | Answer::Interval(_)
+        Answer::Quality(_) | Answer::RootChord { .. } | Answer::Inversion { .. }
     ) {
         score.caption =
             "Example solution: allowed transpositions / voicings may differ from this notation."
@@ -707,6 +721,66 @@ mod tests {
         curriculum::curriculum,
         learner::{Mastery, Profile},
     };
+
+    #[test]
+    fn interval_feedback_preserves_the_heard_pitches_and_direction_for_every_answer() {
+        let graph = curriculum();
+        let mut checked = 0;
+        for skill in &graph {
+            let Task::HearInterval {
+                semitones,
+                direction,
+            } = skill.task
+            else {
+                continue;
+            };
+            for seed in [1, 42, 777] {
+                let ex = Exercise::generate(skill, seed);
+                let heard: Vec<_> = ex
+                    .playback
+                    .iter()
+                    .filter_map(|(_, e)| match e {
+                        keyboard::Event::Note { note, velocity, .. } if *velocity > 0 => {
+                            Some(*note)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                for response in [
+                    vec![60, 60 + semitones],
+                    vec![72, 72 - semitones],
+                    vec![60, 60],
+                ] {
+                    let correct = ex.correct(&response);
+                    assert_eq!(correct, response[0] != response[1]);
+                    let score = feedback_expected(&ex, &response, correct);
+                    let mut rendered: Vec<_> = score
+                        .events
+                        .iter()
+                        .flat_map(|e| e.notes().iter().copied())
+                        .collect();
+                    let mut expected = heard.clone();
+                    if direction == Direction::Together {
+                        // Simultaneous pitches may be split between the two staves.
+                        rendered.sort_unstable();
+                        expected.sort_unstable();
+                    }
+                    assert_eq!(rendered, expected, "{} seed {seed}", skill.id);
+                    let ticks: BTreeSet<_> = score.events.iter().map(|e| e.tick).collect();
+                    assert_eq!(
+                        ticks.len(),
+                        if direction == Direction::Together {
+                            1
+                        } else {
+                            2
+                        }
+                    );
+                }
+            }
+            checked += 1;
+        }
+        assert!(checked > 0);
+    }
 
     #[test]
     fn accompaniment_has_a_complete_named_chart_and_whole_bar_voicings() {

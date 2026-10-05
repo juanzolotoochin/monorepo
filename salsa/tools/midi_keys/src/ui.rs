@@ -132,25 +132,7 @@ pub fn draw_training(frame: &mut Frame<'_>, view: &View<'_>, session: &trainer::
             1,
         ),
     );
-    if let Some(score) = session.display_score.as_ref() {
-        draw_reading(frame, area, session, score);
-        return;
-    }
-    if let Some(score) = &session.rhythm_score {
-        draw_rhythm(frame, area, view, session, score);
-        return;
-    }
-    let parts = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Length(1),
-        Constraint::Min(9),
-        Constraint::Length(if area.height >= 34 { 8 } else { 0 }),
-        Constraint::Length(3),
-    ])
-    .split(area.inner(Margin {
-        horizontal: 2,
-        vertical: 1,
-    }));
+    let parts = training_areas(area);
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(vec![
@@ -197,95 +179,140 @@ pub fn draw_training(frame: &mut Frame<'_>, view: &View<'_>, session: &trainer::
         parts[1],
     );
     let title = session.title;
-    let (exercise_area, log_area) = if area.width >= 120 {
-        let columns = Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)])
-            .spacing(1)
-            .split(parts[2]);
-        (columns[0], columns[1])
+    let (exercise_area, log_area) = exercise_areas(area, session);
+    if let Some(score) = session
+        .display_score
+        .as_ref()
+        .filter(|_| !inline_feedback(session))
+    {
+        draw_reading(frame, area, session, score);
+    } else if let Some(score) = &session.rhythm_score {
+        draw_rhythm(frame, area, view, session, score);
     } else {
-        let needed = wrapped_rows(session.prompt, parts[2].width.saturating_sub(4)) + 4;
-        let rows = Layout::vertical([
-            Constraint::Min(7),
-            Constraint::Length(parts[2].height.saturating_sub(needed.max(7)).clamp(4, 10)),
-        ])
-        .split(parts[2]);
-        (rows[0], rows[1])
-    };
-    let block = card(title);
-    let inner = block.inner(exercise_area).inner(Margin {
-        horizontal: 1,
-        vertical: 0,
-    });
-    frame.render_widget(block, exercise_area);
-    let prompt_rows = wrapped_rows(session.prompt, inner.width);
-    let mut lines = if inner.height >= prompt_rows + 6 {
-        vec![Line::from(text(session.reason, MUTED)), Line::from("")]
-    } else {
-        Vec::new()
-    };
-    if session.phase != Phase::Rest {
-        lines.push(instruction_line(session.prompt, session.prompt_highlights));
-        if inner.height >= prompt_rows + 3 {
-            lines.push(Line::from(""));
-        }
-        let status = match session.phase {
-            Phase::Waiting => {
-                if session.awaiting_start {
-                    "Read the instructions · Enter to begin"
-                } else if view.connected {
-                    "Release keys to begin."
-                } else {
-                    "Waiting for your keyboard."
-                }
-            }
-            Phase::Listening => "●  Listen…  r to restart",
-            Phase::Answering if session.exploring => {
-                "Explore freely · ungraded · Enter to start your answer"
-            }
-            Phase::Answering if session.timed_phrase => "Your turn · auto finish · r to restart",
-            Phase::Answering => "Play all answer notes · submits automatically",
-            Phase::Feedback if session.preview => {
-                "r retry · Enter new variant · b exercise list"
-            }
-            Phase::Feedback if session.comparison_paused => "Result paused · r retry · Enter next",
-            Phase::Feedback => "Next shortly · c pause · r retry · Enter next",
-            Phase::Rest => "No exercises due.",
+        let block = card(title);
+        let inner = block.inner(exercise_area).inner(Margin {
+            horizontal: 1,
+            vertical: 0,
+        });
+        frame.render_widget(block, exercise_area);
+        let prompt_rows = wrapped_rows(session.prompt, inner.width);
+        let mut lines = if inner.height >= prompt_rows + 6 {
+            vec![Line::from(text(session.reason, MUTED)), Line::from("")]
+        } else {
+            Vec::new()
         };
-        lines.push(Line::from(text(status, TEAL)));
-        if session.phase != Phase::Listening && !session.played.is_empty() {
-            lines.push(Line::from(text(
-                format!(
-                    "Played: {}",
-                    session
-                        .played
-                        .iter()
-                        .take(20)
-                        .map(|&n| session
-                            .spelling
-                            .map_or_else(|| note_name(n), |s| s.note_name(n)))
-                        .collect::<Vec<_>>()
-                        .join("  ")
-                ),
-                MUTED,
-            )));
+        if session.phase != Phase::Rest {
+            lines.push(instruction_line(session.prompt, session.prompt_highlights));
+            if inner.height >= prompt_rows + 3 {
+                lines.push(Line::from(""));
+            }
+            let status = match session.phase {
+                Phase::Waiting => {
+                    if session.awaiting_start {
+                        "Read the instructions · Enter to begin"
+                    } else if view.connected {
+                        "Release keys to begin."
+                    } else {
+                        "Waiting for your keyboard."
+                    }
+                }
+                Phase::Listening => "●  Listen…  r to restart",
+                Phase::Answering if session.exploring => {
+                    "Explore freely · ungraded · Enter to start your answer"
+                }
+                Phase::Answering if session.timed_phrase => {
+                    "Your turn · auto finish · r to restart"
+                }
+                Phase::Answering => "Play all answer notes · submits automatically",
+                Phase::Feedback if session.preview => {
+                    "r retry · Enter new variant · b exercise list"
+                }
+                Phase::Feedback if session.comparison_paused => {
+                    "Result paused · r retry · Enter next"
+                }
+                Phase::Feedback => "Next shortly · c pause · r retry · Enter next",
+                Phase::Rest => "No exercises due.",
+            };
+            lines.push(Line::from(text(status, TEAL)));
+            if session.phase != Phase::Listening && !session.played.is_empty() {
+                lines.push(Line::from(text(
+                    format!(
+                        "Played: {}",
+                        session
+                            .played
+                            .iter()
+                            .take(20)
+                            .map(|&n| session
+                                .spelling
+                                .map_or_else(|| note_name(n), |s| s.note_name(n)))
+                            .collect::<Vec<_>>()
+                            .join("  ")
+                    ),
+                    MUTED,
+                )));
+            }
+            if session.phase == Phase::Feedback {
+                // Keep the result and next action visible even on short terminals.
+                // Repeating the original prompt would push long scale feedback out.
+                lines = if inline_feedback(session) {
+                    vec![
+                        instruction_line(session.prompt, session.prompt_highlights),
+                        Line::from(feedback_line(session)),
+                        Line::from(text(status, TEAL)),
+                    ]
+                } else {
+                    vec![
+                        Line::from(feedback_line(session)),
+                        Line::from(""),
+                        Line::from(text(status, TEAL)),
+                    ]
+                };
+                if inline_feedback(session) && inline_score_panels(area, session).is_empty() {
+                    for (label, score) in [
+                        ("Played", session.played_score.as_ref()),
+                        ("Expected", session.display_score.as_ref()),
+                    ] {
+                        if let Some(score) = score {
+                            let notes = score
+                                .events
+                                .iter()
+                                .flat_map(|event| event.choices.first().into_iter().flatten())
+                                .map(|&note| {
+                                    session
+                                        .spelling
+                                        .map_or_else(|| note_name(note), |s| s.note_name(note))
+                                })
+                                .collect::<Vec<_>>()
+                                .join(" → ");
+                            lines.push(Line::from(format!("{label}: {notes}")));
+                        }
+                    }
+                }
+            } else if !session.feedback.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(feedback_line(session)));
+            }
+        } else {
+            lines.push(Line::from(text("Everything currently available is established. Come back for a retention check in two weeks.",TEXT)));
+            lines.push(Line::from(text("Your progress is saved. q to quit.", TEAL)));
         }
-        if session.phase == Phase::Feedback {
-            // Keep the result and next action visible even on short terminals.
-            // Repeating the original prompt would push long scale feedback out.
-            lines = vec![
-                Line::from(text(session.feedback, AMBER)),
-                Line::from(""),
-                Line::from(text(status, TEAL)),
-            ];
-        } else if !session.feedback.is_empty() {
-            lines.push(Line::from(""));
-            lines.push(Line::from(text(session.feedback, AMBER)));
+        let panels = inline_score_panels(area, session);
+        let text_area = panels.first().map_or(inner, |p| {
+            Rect::new(inner.x, inner.y, inner.width, p.y.saturating_sub(inner.y))
+        });
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), text_area);
+        for ((label, score), panel) in [
+            (" PLAYED ", session.played_score.as_ref()),
+            (" EXPECTED ", session.display_score.as_ref()),
+        ]
+        .into_iter()
+        .zip(panels)
+        {
+            if let Some(score) = score {
+                draw_score_panel(frame, panel, session, score, label);
+            }
         }
-    } else {
-        lines.push(Line::from(text("Everything currently available is established. Come back for a retention check in two weeks.",TEXT)));
-        lines.push(Line::from(text("Your progress is saved. q to quit.", TEAL)));
     }
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
     let (insight_area, history_area) = if area.width >= 120 {
         let panels = Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(log_area);
@@ -297,9 +324,9 @@ pub fn draw_training(frame: &mut Frame<'_>, view: &View<'_>, session: &trainer::
     };
     if let Some(area) = insight_area {
         let block = card(if area.width < 60 {
-            "INSIGHTS · j/k browse"
+            "INSIGHTS · J/K browse"
         } else {
-            "INSIGHTS"
+            "INSIGHTS · J/K browse"
         });
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -314,7 +341,10 @@ pub fn draw_training(frame: &mut Frame<'_>, view: &View<'_>, session: &trainer::
                     insight,
                     if insight.starts_with("Mastered:") {
                         TEAL
-                    } else if insight.starts_with("Confusion:") {
+                    } else if insight.starts_with("Confusion:")
+                        || insight.starts_with("Focus:")
+                        || insight.starts_with("Last miss:")
+                    {
                         AMBER
                     } else {
                         TEXT
@@ -348,13 +378,13 @@ pub fn draw_training(frame: &mut Frame<'_>, view: &View<'_>, session: &trainer::
         Paragraph::new(vec![
             Line::from(vec![
                 text("r", TEAL),
-                text(" retry/restart  ", MUTED),
+                text(" retry  ", MUTED),
                 text("⌫", TEAL),
                 text(" clear  ", MUTED),
                 text("h", TEAL),
                 text(" hint  ", MUTED),
                 text("x", TEAL),
-                text(" don't know  ", MUTED),
+                text(" skip  ", MUTED),
                 text("Enter", TEAL),
                 text(
                     match session.phase {
@@ -368,20 +398,116 @@ pub fn draw_training(frame: &mut Frame<'_>, view: &View<'_>, session: &trainer::
                 ),
             ]),
             Line::from(text(
-                "−/+ volume · m mute · n labels · space panic · q quit",
+                if session.display_score.is_some() {
+                    "p/n pages · j/k details · e example · −/+ volume · q quit"
+                } else if session.rhythm_report.is_some() {
+                    "j/k details · −/+ volume · m mute · space panic · q quit"
+                } else {
+                    "−/+ volume · m mute · n labels · space panic · q quit"
+                },
                 MUTED,
             )),
             Line::from(text(
                 if session.preview {
                     "b exercise list · v new variant · r retry"
                 } else {
-                    "c pause result · i insights/history · j/k browse insights"
+                    "c pause · i history/insights · J/K browse insights"
                 },
                 MUTED,
             )),
         ]),
         parts[4],
     );
+}
+
+// Feedback cannot change the layout chosen by the exercise before answering.
+fn feedback_line<'a>(session: &trainer::TrainingView<'a>) -> Span<'a> {
+    let Some(correct) = session.feedback_correct else {
+        return text(session.feedback, AMBER);
+    };
+    let passed = session.feedback_grade.map_or(correct, |grade| grade >= 90);
+    let label = if passed {
+        "✓ PASSED"
+    } else {
+        "✗ NEEDS WORK"
+    };
+    Span::styled(
+        format!("{label} · {}", session.feedback),
+        Style::default()
+            .fg(if passed {
+                TEAL
+            } else {
+                Color::Rgb(255, 120, 120)
+            })
+            .bg(if passed {
+                PANEL
+            } else {
+                Color::Rgb(65, 22, 30)
+            })
+            .add_modifier(Modifier::BOLD),
+    )
+}
+
+fn inline_feedback(session: &trainer::TrainingView<'_>) -> bool {
+    session.layout == trainer::ExerciseLayout::Theory && session.phase == trainer::Phase::Feedback
+}
+fn training_areas(area: Rect) -> std::rc::Rc<[Rect]> {
+    Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Length(1),
+        Constraint::Min(9),
+        Constraint::Length(if area.height >= 34 { 8 } else { 0 }),
+        Constraint::Length(3),
+    ])
+    .split(area.inner(Margin {
+        horizontal: 2,
+        vertical: 1,
+    }))
+}
+fn exercise_areas(area: Rect, session: &trainer::TrainingView<'_>) -> (Rect, Rect) {
+    let parts = training_areas(area);
+    if area.width >= 120 {
+        let columns = Layout::horizontal([Constraint::Percentage(65), Constraint::Percentage(35)])
+            .spacing(1)
+            .split(parts[2]);
+        (columns[0], columns[1])
+    } else {
+        let minimum = 9;
+        let needed = wrapped_rows(session.prompt, parts[2].width.saturating_sub(4)) + 7;
+        let rows = Layout::vertical([
+            Constraint::Min(minimum),
+            Constraint::Length(
+                parts[2]
+                    .height
+                    .saturating_sub(needed.max(minimum))
+                    .clamp(4, 10),
+            ),
+        ])
+        .split(parts[2]);
+        (rows[0], rows[1])
+    }
+}
+fn inline_score_panels(area: Rect, session: &trainer::TrainingView<'_>) -> Vec<Rect> {
+    if !inline_feedback(session) || session.display_score.is_none() {
+        return vec![];
+    }
+    let (exercise, _) = exercise_areas(area, session);
+    let inner = exercise.inner(Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
+    let text_rows = wrapped_rows(session.prompt, inner.width)
+        + wrapped_rows(&feedback_line(session).content, inner.width)
+        + 2;
+    let height = (inner.height.saturating_sub(text_rows) / 2).min(10);
+    if height < 5 {
+        return vec![];
+    }
+    let width = inner.width;
+    vec![
+        Rect::new(inner.x, inner.y + text_rows, width, height),
+        Rect::new(inner.x, inner.y + text_rows + height, width, height),
+    ]
 }
 
 fn draw_browser(
@@ -569,7 +695,15 @@ fn draw_exercise_log(frame: &mut Frame<'_>, area: Rect, entries: &[trainer::Exer
         ]));
         lines.push(Line::from(""));
     }
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(
+        if inner.height <= 4 {
+            paragraph
+        } else {
+            paragraph.wrap(Wrap { trim: true })
+        },
+        inner,
+    );
 }
 
 fn instruction_line<'a>(prompt: &'a str, highlights: &[trainer::PromptHighlight]) -> Line<'a> {
@@ -1456,6 +1590,9 @@ mod tests {
         for (width, height) in [(64, 22), (80, 24), (120, 38)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             let mut training = trainer::TrainingView {
+                layout: trainer::ExerciseLayout::Theory,
+                feedback_correct: None,
+                feedback_grade: None,
                 recent_exercises: vec![],
                 skill_id: "test.exercise",
                 title: "CHORD RECOGNITION",
@@ -1777,19 +1914,39 @@ mod tests {
     }
 }
 
-fn rhythm_areas(area: Rect) -> std::rc::Rc<[Rect]> {
+fn rhythm_areas(area: Rect, session: &trainer::TrainingView<'_>) -> std::rc::Rc<[Rect]> {
+    let area = exercise_areas(area, session).0;
+    let compact = area.height < 18;
     Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Length(4),
-        Constraint::Length(7),
+        Constraint::Length(if compact { 1 } else { 2 }),
+        Constraint::Length(if compact { 0 } else { 3 }),
+        Constraint::Length(if compact {
+            3
+        } else if session.rhythm_report.is_some() {
+            10
+        } else {
+            5
+        }),
         Constraint::Min(4),
-        Constraint::Length(2),
+        Constraint::Length(if compact { 0 } else { 2 }),
     ])
-    .split(area.inner(Margin {
-        horizontal: 2,
-        vertical: 1,
-    }))
+    .split(area)
 }
+fn rhythm_panels(area: Rect, session: &trainer::TrainingView<'_>) -> Vec<Rect> {
+    let rect = rhythm_areas(area, session)[2];
+    if session.rhythm_report.is_none() {
+        return vec![rect];
+    }
+    if rect.height < 6 {
+        return vec![];
+    }
+    let height = rect.height / 2;
+    vec![
+        Rect::new(rect.x, rect.y, rect.width, height),
+        Rect::new(rect.x, rect.y + height, rect.width, height),
+    ]
+}
+
 fn draw_rhythm(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -1797,74 +1954,124 @@ fn draw_rhythm(
     session: &trainer::TrainingView<'_>,
     score: &trainer::RhythmScore,
 ) {
-    let parts = rhythm_areas(area);
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(text(
-                format!("◈ {} · {} BPM", session.title, score.bpm),
-                TEAL,
-            )),
-            Line::from(text(
-                if view.connected {
-                    view.source
+    let parts = rhythm_areas(area, session);
+    if parts[0].height == 1 && session.phase == trainer::Phase::Feedback {
+        frame.render_widget(Paragraph::new(feedback_line(session)), parts[0]);
+    } else {
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(text(
+                    format!("◈ {} · {} BPM", session.title, score.bpm),
+                    TEAL,
+                )),
+                Line::from(if session.phase == trainer::Phase::Feedback {
+                    feedback_line(session)
                 } else {
-                    "Waiting for your keyboard"
-                },
-                MUTED,
-            )),
-        ]),
-        parts[0],
-    );
+                    text(
+                        if view.connected {
+                            view.source
+                        } else {
+                            "Waiting for your keyboard"
+                        },
+                        MUTED,
+                    )
+                }),
+            ]),
+            parts[0],
+        );
+    }
     frame.render_widget(
         Paragraph::new(session.prompt)
             .style(Style::default().fg(TEXT))
             .wrap(Wrap { trim: true }),
         parts[1],
     );
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(BORDER))
-        .style(Style::default().bg(PANEL))
-        .title_style(Style::default().fg(TEAL))
-        .title(if score.quarter_notes {
-            " SCORE · 4/4 · each ♩ = one beat "
-        } else {
-            " RHYTHM · expected attacks in beats "
-        });
-    let inner = block.inner(parts[2]);
-    frame.render_widget(block, parts[2]);
     let beat = 60000.0 / f64::from(score.bpm);
-    let fallback = if score.quarter_notes {
-        vec![
-            Line::from(""),
-            Line::from("  4/4    ♩    ♩    ♩    ♩   │   ♩    ♩    ♩    ♩   │"),
-            Line::from("         1    2    3    4       1    2    3    4"),
-        ]
+    if let Some(report) = session.rhythm_report {
+        let panels = rhythm_panels(area, session);
+        if panels.is_empty() {
+            // Compact terminals retain colored feedback even without room for images.
+            let mut played = vec![text("PLAYED ", TEAL)];
+            for row in &report.rows {
+                played.push(text(
+                    if row.actual_ms.is_some() {
+                        "♩ "
+                    } else {
+                        "— "
+                    },
+                    if row.correct(score.tolerance_ms) {
+                        TEXT
+                    } else {
+                        Color::Rgb(255, 120, 120)
+                    },
+                ));
+            }
+            frame.render_widget(
+                Paragraph::new(vec![
+                    Line::from("SCORE · rhythm comparison"),
+                    Line::from(played),
+                    Line::from(format!("EXPECTED {}", "♩ ".repeat(score.notes.len()))),
+                ]),
+                parts[2],
+            );
+        } else {
+            for (panel, label) in panels
+                .into_iter()
+                .zip([" PLAYED SCORE · red = attack / hold error ", " EXPECTED "])
+            {
+                frame.render_widget(card(label), panel);
+            }
+        }
     } else {
-        vec![Line::from(
-            score
-                .notes
-                .iter()
-                .map(|n| format!("{:.1}", 1.0 + n.0 as f64 / beat))
-                .collect::<Vec<_>>()
-                .join("  "),
-        )]
-    };
-    frame.render_widget(
-        Paragraph::new(fallback).style(Style::default().fg(TEXT).bg(PANEL)),
-        inner,
-    );
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(BORDER))
+            .style(Style::default().bg(PANEL))
+            .title_style(Style::default().fg(TEAL))
+            .title(if score.quarter_notes {
+                " SCORE · 4/4 · each ♩ = one beat "
+            } else {
+                " RHYTHM · expected attacks in beats "
+            });
+        let inner = block.inner(parts[2]);
+        frame.render_widget(block, parts[2]);
+        let fallback = if !score.quarter_notes && session.phase != trainer::Phase::Feedback {
+            vec![Line::from(
+                "Listen to the rhythm; the comparison appears after your answer.",
+            )]
+        } else if score.quarter_notes {
+            vec![
+                Line::from(""),
+                Line::from("  4/4    ♩    ♩    ♩    ♩   │   ♩    ♩    ♩    ♩   │"),
+                Line::from("         1    2    3    4       1    2    3    4"),
+            ]
+        } else {
+            vec![Line::from(
+                score
+                    .notes
+                    .iter()
+                    .map(|n| format!("{:.1}", 1.0 + n.0 as f64 / beat))
+                    .collect::<Vec<_>>()
+                    .join("  "),
+            )]
+        };
+        frame.render_widget(
+            Paragraph::new(fallback).style(Style::default().fg(TEXT).bg(PANEL)),
+            inner,
+        );
+    }
     let mut lines = Vec::new();
     if let Some(report) = session.rhythm_report {
-        lines.push(Line::from(text(session.feedback, AMBER)));
-        lines.push(Line::from(text(
-            format!(
-                "Attack / hold tolerance ±{}ms · hold uses key release",
-                score.tolerance_ms
-            ),
-            MUTED,
-        )));
+        if parts[3].height >= 6 {
+            lines.push(Line::from(text(
+                format!(
+                    "Attack / hold tolerance ±{}ms · hold uses key release",
+                    score.tolerance_ms
+                ),
+                MUTED,
+            )));
+        }
         lines.push(Line::from(text(
             "Beat   Played key / attack     Held: played / expected",
             TEAL,
@@ -1959,6 +2166,9 @@ fn draw_rhythm(
 }
 
 fn score_panels(area: Rect, session: &trainer::TrainingView<'_>) -> Vec<Rect> {
+    if inline_feedback(session) {
+        return inline_score_panels(area, session);
+    }
     let rect = reading_areas(area, session)[2];
     if session.played_score.is_some() {
         // Equal pixel scale requires equal terminal rectangles. With an odd
@@ -2003,7 +2213,12 @@ fn score_images(
                         .is_some_and(|s| s.hands.contains(h))
             })
             .collect();
-        [Some(score), session.played_score.as_ref()]
+        let scores = if session.played_score.is_some() {
+            [session.played_score.as_ref(), Some(score)]
+        } else {
+            [Some(score), None]
+        };
+        scores
             .into_iter()
             .flatten()
             .zip(panels)
@@ -2023,50 +2238,59 @@ fn score_images(
                 Some((area, notation::ImageScore::Reading(score)))
             })
             .collect()
+    } else if let Some(score) = session.rhythm_score.as_ref() {
+        if let Some(report) = session.rhythm_report {
+            let mut expected = score.notation();
+            let played = report.notation(score);
+            expected.ticks = expected.ticks.max(played.ticks);
+            [played, expected]
+                .into_iter()
+                .zip(rhythm_panels(area, session))
+                .map(|(score, panel)| {
+                    (
+                        notation_area(panel, &score),
+                        notation::ImageScore::Rhythm(score),
+                    )
+                })
+                .filter(|(rect, _)| !rect.is_empty())
+                .collect()
+        } else if score.quarter_notes {
+            vec![(
+                rhythm_areas(area, session)[2].inner(Margin {
+                    horizontal: 1,
+                    vertical: 1,
+                }),
+                notation::ImageScore::Rhythm(score.notation()),
+            )]
+        } else {
+            vec![]
+        }
     } else {
-        session
-            .rhythm_score
-            .as_ref()
-            .filter(|s| s.quarter_notes)
-            .map(|score| {
-                (
-                    rhythm_areas(area)[2].inner(Margin {
-                        horizontal: 1,
-                        vertical: 1,
-                    }),
-                    notation::ImageScore::Pulse(score.notes.len()),
-                )
-            })
-            .into_iter()
-            .collect()
+        vec![]
     }
 }
 fn reading_areas(area: Rect, session: &trainer::TrainingView<'_>) -> std::rc::Rc<[Rect]> {
-    let feedback = session.phase == trainer::Phase::Feedback;
-    let height = |score: &trainer::WrittenScore| {
-        if score.symbols_only {
-            3
-        } else {
-            (if score.hands.len() > 1 && !score.lead {
-                12
-            } else {
-                9
-            }) + u16::from(!score.chords.is_empty())
-        }
-    };
-    let desired = session.display_score.as_ref().map_or(9, height)
-        + session.played_score.as_ref().map_or(0, height);
+    let area = exercise_areas(area, session).0;
+    let compact = area.height < 18;
+    let comparison = session.played_score.is_some();
+    let header = if compact { 1 } else { 2 };
+    let prompt = if compact { 1 } else { 3 };
+    let footer = if compact { 0 } else { 2 };
+    let details = if compact { 1 } else { 3 };
+    let desired = if comparison { 18 } else { 10 };
     Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Length(if feedback { 1 } else { 3 }),
-        Constraint::Length(desired.min(area.height.saturating_sub(13).max(6))),
-        Constraint::Min(4),
-        Constraint::Length(2),
+        Constraint::Length(header),
+        Constraint::Length(prompt),
+        Constraint::Length(
+            desired.min(
+                area.height
+                    .saturating_sub(header + prompt + footer + details),
+            ),
+        ),
+        Constraint::Min(details),
+        Constraint::Length(footer),
     ])
-    .split(area.inner(Margin {
-        horizontal: 2,
-        vertical: 1,
-    }))
+    .split(area)
 }
 fn draw_reading(
     frame: &mut Frame<'_>,
@@ -2075,32 +2299,40 @@ fn draw_reading(
     score: &trainer::WrittenScore,
 ) {
     let parts = reading_areas(area, session);
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(text(
-                format!(
-                    "◈ {} · {}",
-                    session.title,
-                    score
-                        .bpm
-                        .map(|b| format!("{b} BPM"))
-                        .unwrap_or_else(|| "UNTIMED".into())
-                ),
-                TEAL,
-            )),
-            Line::from(text(
-                if score.key_fifths > 0 {
-                    format!("Key signature: {} sharp(s)", score.key_fifths)
-                } else if score.key_fifths < 0 {
-                    format!("Key signature: {} flat(s)", -score.key_fifths)
+    if parts[0].height == 1 && session.phase == trainer::Phase::Feedback {
+        frame.render_widget(Paragraph::new(feedback_line(session)), parts[0]);
+    } else {
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(text(
+                    format!(
+                        "◈ {} · {}",
+                        session.title,
+                        score
+                            .bpm
+                            .map(|b| format!("{b} BPM"))
+                            .unwrap_or_else(|| "UNTIMED".into())
+                    ),
+                    TEAL,
+                )),
+                Line::from(if session.phase == trainer::Phase::Feedback {
+                    feedback_line(session)
                 } else {
-                    "Treble / bass notation".into()
-                },
-                MUTED,
-            )),
-        ]),
-        parts[0],
-    );
+                    text(
+                        if score.key_fifths > 0 {
+                            format!("Key signature: {} sharp(s)", score.key_fifths)
+                        } else if score.key_fifths < 0 {
+                            format!("Key signature: {} flat(s)", -score.key_fifths)
+                        } else {
+                            "Treble / bass notation".into()
+                        },
+                        MUTED,
+                    )
+                }),
+            ]),
+            parts[0],
+        );
+    }
     frame.render_widget(
         Paragraph::new(session.prompt)
             .style(Style::default().fg(TEXT))
@@ -2108,35 +2340,29 @@ fn draw_reading(
         parts[1],
     );
     let panels = score_panels(area, session);
-    draw_score_panel(
-        frame,
-        panels[0],
-        session,
-        score,
-        if session.played_score.is_some() {
-            " EXPECTED "
-        } else if score.lead {
-            " LEAD SHEET "
-        } else {
-            " SCORE "
-        },
-    );
     if let Some(played) = &session.played_score {
+        draw_score_panel(frame, panels[0], session, played, " PLAYED · red = error ");
+        draw_score_panel(frame, panels[1], session, score, " EXPECTED ");
+    } else {
         draw_score_panel(
             frame,
-            panels[1],
+            panels[0],
             session,
-            played,
-            " PLAYED · red = pitch / timing / hold error ",
+            score,
+            if score.lead {
+                " LEAD SHEET "
+            } else {
+                " SCORE "
+            },
         );
     }
     let mut lines = vec![];
     if session.phase == trainer::Phase::Feedback && session.reading_result.is_none() {
-        lines.push(Line::from(text(session.feedback, AMBER)));
+        lines.push(Line::from(feedback_line(session)));
         lines.push(Line::from(text(&score.caption, MUTED)));
         frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), parts[3]);
     } else if let Some(result) = session.reading_result {
-        lines.push(Line::from(text(session.feedback, AMBER)));
+        lines.push(Line::from(feedback_line(session)));
         lines.push(Line::from(text(
             result
                 .components()
@@ -2417,5 +2643,329 @@ mod connection_tests {
         assert!(text.contains("CONNECT YOUR MIDI KEYBOARD"));
         assert!(text.contains("NOT an answer"));
         assert!(!text.contains("Enter starts"));
+    }
+}
+
+#[cfg(test)]
+mod feedback_layout_tests {
+    use super::*;
+    use keyboard::Event;
+    use std::time::Duration;
+
+    #[test]
+    fn theory_feedback_stays_in_main_layout_and_uses_its_exercise_card() {
+        for id in [
+            "interval.hear.2.up",
+            "interval.build.2.up",
+            "chord.build.3.11",
+            "melody.0.5",
+            "scale.0.major.up",
+            "tonic.1.major",
+        ] {
+            for answer in [[60, 62], [60, 67]] {
+                let mut session = trainer::Session::preview(id).unwrap();
+                let now = Instant::now();
+                session.start(now);
+                let answer_at = now + Duration::from_secs(10);
+                session.tick(answer_at).unwrap();
+                assert!(score_images(Rect::new(0, 0, 140, 45), &session.view()).is_empty());
+                if session.view().exploring {
+                    session.submit(false).unwrap();
+                }
+                for note in answer {
+                    session.input(
+                        Event::Note {
+                            channel: 0,
+                            note,
+                            velocity: 90,
+                        },
+                        answer_at,
+                    );
+                    session.input(
+                        Event::Note {
+                            channel: 0,
+                            note,
+                            velocity: 0,
+                        },
+                        answer_at,
+                    );
+                }
+                session.submit(true).unwrap();
+                assert_eq!(session.phase(), trainer::Phase::Feedback);
+                let keyboard = Keyboard::default();
+                let view = View {
+                    keyboard: &keyboard,
+                    source: "Test MIDI",
+                    connected: true,
+                    demo: false,
+                    silent: true,
+                    muted: false,
+                    note_names: false,
+                    volume: 1.0,
+                    now,
+                };
+                for (width, height) in [(64, 22), (80, 24), (120, 38), (140, 45)] {
+                    let area = Rect::new(0, 0, width, height);
+                    let training = session.view();
+                    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                    terminal
+                        .draw(|frame| draw_training(frame, &view, &training))
+                        .unwrap();
+                    let text: String = terminal
+                        .backend()
+                        .buffer()
+                        .content
+                        .iter()
+                        .map(|c| c.symbol())
+                        .collect();
+                    assert!(text.contains("EXERCISE PREVIEW"));
+                    assert!(text.contains("Test MIDI"));
+                    assert!(text.contains("NEEDS WORK"));
+                    assert!(!text.contains("Treble / bass notation"));
+                    assert!(
+                        text.contains("EXPECTED") || text.contains("Expected:"),
+                        "{width}x{height}: {text}"
+                    );
+                    assert!(
+                        text.contains("PLAYED") || text.contains("Played:"),
+                        "{width}x{height}: {text}"
+                    );
+                    if height >= 34 {
+                        assert!(text.contains("YOUR KEYBOARD"));
+                    }
+                    let images = score_images(area, &training);
+                    if height >= 38 {
+                        assert_eq!(images.len(), 2);
+                        assert!(images[0].0.bottom() <= images[1].0.y);
+                        assert_eq!(images[0].0.x, images[1].0.x);
+                        assert_eq!(images[0].0.width, images[1].0.width);
+                        assert!(text.find("PLAYED").unwrap() < text.find("EXPECTED").unwrap());
+                        assert_eq!(images[0].0.height, images[1].0.height);
+                        let card = exercise_areas(area, &training).0;
+                        assert!(images.iter().all(|(r, _)| r.intersection(card) == *r));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod shared_feedback_tests {
+    use super::*;
+    use std::time::Duration;
+    #[test]
+    fn score_and_rhythm_results_keep_their_layout_and_show_failure_in_both_modes() {
+        for id in [
+            "reading.right.0",
+            "reading.together.3",
+            "reading.lead.0",
+            "guided.scale.0.major.up",
+            "harmony.7.major.accompany.12.true",
+            "rhythm.0.60",
+        ] {
+            let mut session = trainer::Session::preview(id).unwrap();
+            let before = session.view().layout;
+            let now = Instant::now();
+            session.start(now);
+            session.tick(now + Duration::from_secs(300)).unwrap();
+            session.submit(true).unwrap();
+            let keyboard = Keyboard::default();
+            let view = View {
+                keyboard: &keyboard,
+                source: "Test MIDI",
+                connected: true,
+                demo: false,
+                silent: true,
+                muted: false,
+                note_names: false,
+                volume: 1.0,
+                now,
+            };
+            for preview in [false, true] {
+                for (w, h) in [(64, 22), (80, 24), (120, 38), (140, 45)] {
+                    let mut training = session.view();
+                    training.preview = preview;
+                    assert_eq!(training.layout, before);
+                    assert_eq!(training.phase, trainer::Phase::Feedback, "{id}");
+                    let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+                    terminal
+                        .draw(|f| draw_training(f, &view, &training))
+                        .unwrap();
+                    let text: String = terminal
+                        .backend()
+                        .buffer()
+                        .content
+                        .iter()
+                        .map(|c| c.symbol())
+                        .collect();
+                    assert!(text.contains("NEEDS WORK"), "{id} {w}x{h}: {text}");
+                    assert!(text.contains("r retry"), "{id} {w}x{h}: {text}");
+                    assert!(text.contains("Enter next"), "{id} {w}x{h}: {text}");
+                    if before == trainer::ExerciseLayout::Score {
+                        assert!(text.find("PLAYED").unwrap() < text.find("EXPECTED").unwrap());
+                        let images = score_images(Rect::new(0, 0, w, h), &training);
+                        assert_eq!(images.len(), 2);
+                        assert!(images[0].0.bottom() <= images[1].0.y);
+                    } else {
+                        assert!(text.contains("Held: played / expected"));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod shared_frame_tests {
+    use super::*;
+
+    #[test]
+    fn every_exercise_family_keeps_the_shared_frame_and_confines_score_images() {
+        let keyboard = Keyboard::default();
+        let view = View {
+            keyboard: &keyboard,
+            source: "Test MIDI",
+            connected: true,
+            demo: false,
+            silent: true,
+            muted: false,
+            note_names: false,
+            volume: 1.0,
+            now: Instant::now(),
+        };
+        for (width, height) in [(64, 22), (80, 24), (120, 34), (140, 45), (160, 50)] {
+            let area = Rect::new(0, 0, width, height);
+            let mut keyboard_position = None;
+            for id in [
+                "interval.hear.2.up",
+                "chord.build.3.11",
+                "melody.0.5",
+                "guided.scale.0.major.up",
+                "reading.right.0",
+                "reading.together.3",
+                "reading.lead.0",
+                "harmony.7.major.accompany.12.true",
+                "rhythm.0.60",
+            ] {
+                let session = trainer::Session::preview(id).unwrap();
+                for preview in [false, true] {
+                    for phase in [
+                        trainer::Phase::Waiting,
+                        trainer::Phase::Listening,
+                        trainer::Phase::Answering,
+                        trainer::Phase::Feedback,
+                    ] {
+                        let mut training = session.view();
+                        training.preview = preview;
+                        training.phase = phase;
+                        if phase == trainer::Phase::Feedback {
+                            training.feedback = "Review your answer.";
+                            training.feedback_correct = Some(false);
+                            training.comparison_paused = true;
+                            training.played_score = training.display_score.clone();
+                        }
+                        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                        terminal
+                            .draw(|f| draw_training(f, &view, &training))
+                            .unwrap();
+                        let text: String = terminal
+                            .backend()
+                            .buffer()
+                            .content
+                            .iter()
+                            .map(|c| c.symbol())
+                            .collect();
+                        assert!(
+                            text.contains(if preview {
+                                "EXERCISE PREVIEW"
+                            } else {
+                                "EAR / THEORY"
+                            }),
+                            "{id} {phase:?}"
+                        );
+                        assert!(text.contains("Test MIDI"), "{id} {phase:?}");
+                        if width >= 120 {
+                            assert!(text.contains("INSIGHTS"), "{id} {phase:?}");
+                            assert!(text.contains("RECENT EXERCISES"), "{id} {phase:?}");
+                        }
+                        if height >= 34 {
+                            let position = terminal
+                                .backend()
+                                .buffer()
+                                .content
+                                .chunks(width as usize)
+                                .position(|row| {
+                                    row.iter()
+                                        .map(|cell| cell.symbol())
+                                        .collect::<String>()
+                                        .contains("YOUR KEYBOARD")
+                                })
+                                .expect(id);
+                            assert_eq!(
+                                *keyboard_position.get_or_insert(position),
+                                position,
+                                "{id} {phase:?}"
+                            );
+                        }
+                        let card = exercise_areas(area, &training).0;
+                        for (rect, _) in score_images(area, &training) {
+                            assert_eq!(
+                                rect.intersection(card),
+                                rect,
+                                "{id} {phase:?}: image escaped exercise area"
+                            );
+                            assert!(
+                                rect.intersection(training_areas(area)[3]).is_empty(),
+                                "image covers piano"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod rhythm_score_feedback_tests {
+    use super::*;
+    #[test]
+    fn percussion_feedback_marks_only_the_bad_note_in_svg_pixels_and_table() {
+        let session = trainer::Session::preview("rhythm.0.60").unwrap();
+        let mut training = session.view();
+        let score = training.rhythm_score.as_ref().unwrap();
+        let report = trainer::RhythmReport {
+            rows: score
+                .notes
+                .iter()
+                .enumerate()
+                .map(|(i, &(ms, hold))| trainer::RhythmRow {
+                    expected_ms: Some(ms),
+                    expected_hold_ms: hold,
+                    actual_ms: Some(ms as i64),
+                    actual_hold_ms: Some(if i == 5 { 1144 } else { 940 }),
+                    note: Some(60 + i),
+                })
+                .collect(),
+        };
+        assert_eq!(report.grade(score), 99);
+        training.phase = trainer::Phase::Feedback;
+        training.feedback_correct = Some(false);
+        training.feedback_grade = Some(99);
+        training.rhythm_report = Some(&report);
+        let images = score_images(Rect::new(0, 0, 140, 45), &training);
+        assert_eq!(images.len(), 2);
+        assert!(images[0].0.bottom() <= images[1].0.y);
+        let notation::ImageScore::Rhythm(played) = &images[0].1 else {
+            panic!()
+        };
+        let bad: Vec<_> = played.events.iter().filter(|e| e.incorrect).collect();
+        assert_eq!(bad.len(), 1);
+        assert_eq!(bad[0].tick, 10);
+        assert!(images[0].1.svg().contains("#ff7878"));
+        assert!(!images[1].1.svg().contains("#ff7878"));
+        assert!(!report.rows[5].correct(score.tolerance_ms));
+        assert!(report.rows[4].correct(score.tolerance_ms));
     }
 }

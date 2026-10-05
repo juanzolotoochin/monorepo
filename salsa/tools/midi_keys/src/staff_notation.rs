@@ -283,6 +283,12 @@ fn musical_x(tick: u32, ticks: u32, first_x: f64) -> f64 {
 }
 
 pub fn scene(score: &WrittenScore) -> Scene {
+    engrave(score, false)
+}
+pub fn percussion_scene(score: &WrittenScore) -> Scene {
+    engrave(score, true)
+}
+fn engrave(score: &WrittenScore, percussion: bool) -> Scene {
     let visible: Vec<_> = score
         .hands
         .iter()
@@ -294,13 +300,25 @@ pub fn scene(score: &WrittenScore) -> Scene {
         red_shapes: Default::default(),
         incorrect: false,
         width: 1200,
-        height: (if visible.len() == 2 { 320 } else { 190 }) + chord_space as usize,
+        height: (if percussion {
+            120
+        } else if visible.len() == 2 {
+            320
+        } else {
+            190
+        }) + chord_space as usize,
         shapes: vec![],
     };
     let time_x = 100. + f64::from(score.key_fifths.unsigned_abs()) * 10.;
     let first_x = (time_x + 44.).max(160.);
     let x_at = |tick: u32| musical_x(tick, score.ticks, first_x);
-    let pitch_position = |note: usize| score.spelling().staff_position(note);
+    let pitch_position = |note: usize| {
+        if percussion {
+            (41, 0)
+        } else {
+            score.spelling().staff_position(note)
+        }
+    };
     if score.symbols_only {
         return scene;
     }
@@ -313,26 +331,33 @@ pub fn scene(score: &WrittenScore) -> Scene {
     }
     for (staff, hand) in visible.iter().enumerate() {
         scene.incorrect = false;
-        let bottom = 130. + chord_space + staff as f64 * 150.;
+        let bottom = (if percussion { 90. } else { 130. }) + chord_space + staff as f64 * 150.;
         let lowest = if *hand == Hand::Right { 37 } else { 25 }; // E4 / G2 in MIDI-octave indexing.
         for line in 0..5 {
-            scene.rect(25., bottom - line as f64 * SPACE, 1150., 1.2);
+            if !percussion || line == 2 {
+                scene.rect(25., bottom - line as f64 * SPACE, 1150., 1.2);
+            }
         }
-        scene.glyph(
-            if *hand == Hand::Right {
-                glyphs::TREBLE
-            } else {
-                glyphs::BASS
-            },
-            42.,
-            bottom
-                - if *hand == Hand::Right {
-                    SPACE
+        if percussion {
+            scene.rect(42., bottom - 3. * SPACE, 4., 2. * SPACE);
+            scene.rect(51., bottom - 3. * SPACE, 4., 2. * SPACE);
+        } else {
+            scene.glyph(
+                if *hand == Hand::Right {
+                    glyphs::TREBLE
                 } else {
-                    3. * SPACE
+                    glyphs::BASS
                 },
-            SPACE,
-        );
+                42.,
+                bottom
+                    - if *hand == Hand::Right {
+                        SPACE
+                    } else {
+                        3. * SPACE
+                    },
+                SPACE,
+            );
+        }
         let sharps = [3, 0, 4, 1, 5, 2, 6];
         let flats = [6, 2, 5, 1, 4, 0, 3];
         let signature = if score.key_fifths > 0 {
@@ -358,11 +383,14 @@ pub fn scene(score: &WrittenScore) -> Scene {
                 SPACE,
             );
         }
-        if score.bpm.is_some() {
+        if score.bpm.is_some() && !percussion {
             scene.glyph(glyphs::FOUR, time_x, bottom - 2. * SPACE, SPACE);
             scene.glyph(glyphs::FOUR, time_x, bottom, SPACE);
         }
-        for tick in (8..=score.ticks).step_by(8).filter(|_| score.bpm.is_some()) {
+        for tick in (8..=score.ticks)
+            .step_by(8)
+            .filter(|_| score.bpm.is_some() && !percussion)
+        {
             scene.rect(x_at(tick) - 16., bottom - 4. * SPACE, 1.5, 4. * SPACE);
         }
         let mut accidental_state = std::collections::BTreeMap::new();
@@ -374,7 +402,11 @@ pub fn scene(score: &WrittenScore) -> Scene {
             let end = event.tick + event.duration;
             let mut pieces = vec![];
             while tick < end {
-                let boundary = ((tick / 8 + 1) * 8).min(end);
+                let boundary = if percussion {
+                    end
+                } else {
+                    ((tick / 8 + 1) * 8).min(end)
+                };
                 let boundary = event
                     .tie_tick
                     .filter(|t| *t > tick)
