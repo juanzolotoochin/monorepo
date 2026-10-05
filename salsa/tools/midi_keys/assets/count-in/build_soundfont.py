@@ -1,12 +1,13 @@
-"""Build the checked-in SF2 deterministically; not a build/runtime dependency.
+"""Build the SF2 deterministically from explicitly supplied PCM source files.
 
-Run from any directory with Python 3. Inputs and licensing: NOTICE.txt.
+Bazel supplies the output path followed by one/two/three/four PCM inputs.
+Inputs and licensing: NOTICE.txt.
 Bank 0/program 0: MIDI notes 60..63 speak one..four, at their original pitch.
 """
 from pathlib import Path
 import struct
+import sys
 
-BASE = Path(__file__).resolve().parent
 
 
 def chunk(tag, data):
@@ -23,13 +24,13 @@ def generator(op, value):
     return struct.pack('<HH', op, value & 0xffff)
 
 
-def build():
+def build(paths):
     samples = bytearray()
     headers = bytearray()
     bags = bytearray()
     generators = bytearray()
     for index, word in enumerate(('one', 'two', 'three', 'four')):
-        raw = (BASE / (word + '.pcm')).read_bytes()
+        raw = Path(paths[index]).read_bytes()
         values = struct.unpack('<' + 'h' * (len(raw) // 2), raw)
         audible = [i for i, value in enumerate(values) if abs(value) >= 64]
         # Remove leading silence, retaining 2 ms around consonants; no pitch shift.
@@ -70,4 +71,6 @@ def build():
 
 
 if __name__ == '__main__':
-    (BASE / 'count-in.sf2').write_bytes(build())
+    if len(sys.argv) != 6:
+        raise SystemExit('Expected output.sf2 followed by one/two/three/four PCM paths')
+    Path(sys.argv[1]).write_bytes(build(sys.argv[2:]))

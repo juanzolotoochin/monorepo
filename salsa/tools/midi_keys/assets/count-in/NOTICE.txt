@@ -16,9 +16,9 @@ Changes: decoded Ogg to mono 48 kHz signed 16-bit little-endian PCM;
 normalized each recording to peak 22000/32768. No voice synthesis.
 Conversion used ffmpeg -i INPUT -ac 1 -ar 48000 -f s16le OUTPUT,
 then integer sample scaling by 22000 / source peak.
-The PCM source and generated SoundFont are checked in. Bazel embeds the
-SoundFont; ffmpeg, Python, networking, and system voices are not required
-to build or run the application.
+The adapted PCM recordings are checked-in source assets. Bazel generates the
+SoundFont using its pinned Python toolchain and embeds it in the Rust application.
+No host Python, ffmpeg, system voices, or runtime downloads are needed.
 
 Original Ogg SHA-256:
 one b6c167f5c2d94d3215e143f3269b0f67956097203b858e798580067088411464
@@ -29,6 +29,7 @@ four 521f780c7e8a2561b818c9915e9406665cf619028a16829c9fd725465ffc800d
 count-in.sf2 packages the adapted recordings under the same terms, mapping
 MIDI notes 60–63 to one–four in bank 0, program 0. build_soundfont.py removes
 leading/trailing silence with 2 ms padding and writes deterministic SF2 data.
-Rebuild: python3 salsa/tools/midi_keys/assets/count-in/build_soundfont.py
+Build: bazel build //salsa/tools/midi_keys/assets:count_in
+The normal MIDI app build depends on this generation action.
 The Rust application embeds only count-in.sf2 and plays it via RustySynth.
 The PCM files are source assets, not a separate runtime playback path.

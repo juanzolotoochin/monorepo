@@ -133,30 +133,24 @@ def pytest_test(name, srcs, deps = [], args = [], **kwargs):
     )
 
 def py_executable(name, binary):
-    zip_target_name = binary.replace(":", "") + "_zip"
-    native.filegroup(
-        name = zip_target_name,
-        srcs = [binary],
-        output_group = "python_zip_file",
-    )
+    """Expose a Python executable together with its hermetic runtime runfiles.
 
-    _py_executable_wrapper(name = name, binary = zip_target_name)
+    Distribute the executable and its .runfiles tree together, as with py_binary.
+    A zipapp with a host-python shebang cannot provide a hermetic interpreter.
+    """
+    _py_executable_wrapper(name = name, binary = binary)
 
 def _py_executable_wrapper_impl(ctx):
-    output = ctx.actions.declare_file(ctx.attr.name)
-    input = ctx.file.binary
-    ctx.actions.run_shell(
-        inputs = [input],
-        outputs = [output],
-        arguments = [input.path, output.path],
-        command = "echo '#!/usr/bin/env python' >> $2 && cat $1 >> $2",
-    )
-
-    return [DefaultInfo(files = depset([output]))]
+    output = ctx.actions.declare_file(ctx.label.name)
+    binary = ctx.executable.binary
+    ctx.actions.symlink(output = output, target_file = binary, is_executable = True)
+    runfiles = ctx.runfiles(files = [binary]).merge(ctx.attr.binary[DefaultInfo].default_runfiles)
+    return [DefaultInfo(executable = output, runfiles = runfiles)]
 
 _py_executable_wrapper = rule(
     implementation = _py_executable_wrapper_impl,
+    executable = True,
     attrs = {
-        "binary": attr.label(allow_single_file = True, mandatory = True),
+        "binary": attr.label(executable = True, cfg = "target"),
     },
 )

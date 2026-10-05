@@ -261,6 +261,22 @@ http_archive(
     urls = ["https://codeload.github.com/mackron/miniaudio/tar.gz/refs/tags/0.11.25"],
 )
 
+# Source fonts for hermetic MIDI notation code generation.
+http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+http_file(
+    name = "bravura_font",
+    urls = ["https://raw.githubusercontent.com/steinbergmedia/bravura/37b194378b710cc40e406ab6c4b07608bb9548ae/redist/otf/Bravura.otf"],
+    sha256 = "cdf0f893ee1fdb64b7f6713d71ee0dcfc349c0ac01429a8e451b01a9e79f5f3b",
+    downloaded_file_path = "Bravura.otf",
+)
+http_archive(
+    name = "liberation_fonts",
+    urls = ["https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz"],
+    sha256 = "7191c669bf38899f73a2094ed00f7b800553364f90e2637010a69c0e268f25d0",
+    strip_prefix = "liberation-fonts-ttf-2.1.5",
+    build_file_content = 'exports_files(["LiberationSans-Regular.ttf"])',
+)
+
 # Sampled Yamaha C5 piano; kept in Bazel's external cache, not in Git.
 http_archive(
     name = "salamander_piano",

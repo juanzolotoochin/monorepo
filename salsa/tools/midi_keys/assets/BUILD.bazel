@@ -1,0 +1,58 @@
+load("@rules_python//python:defs.bzl", "py_binary")
+load("@rules_rs//rs:rust_library.bzl", "rust_library")
+load(":codegen.bzl", "count_in_soundfont", "music_glyphs")
+
+package(default_visibility = ["//salsa/tools/midi_keys:__pkg__"])
+
+exports_files(["BRAVURA-LICENSE.txt", "BRAVURA-FONTLOG.txt", "LIBERATION-LICENSE.txt", "count-in/NOTICE.txt"])
+
+py_binary(
+    name = "extract_music_glyphs",
+    srcs = ["extract_music_glyphs.py"],
+    legacy_create_init = 0,
+    deps = ["@pip_deps//fonttools"],
+)
+
+music_glyphs(
+    name = "glyphs",
+    music_font = "@bravura_font//file",
+    lettering_font = "@liberation_fonts//:LiberationSans-Regular.ttf",
+    music = "generated/music_glyphs.rs",
+    lettering = "generated/chord_glyphs.rs",
+)
+
+rust_library(
+    name = "music_glyphs",
+    srcs = ["generated/music_glyphs.rs"],
+    crate_root = "generated/music_glyphs.rs",
+    edition = "2021",
+)
+
+rust_library(
+    name = "chord_glyphs",
+    srcs = ["generated/chord_glyphs.rs"],
+    crate_root = "generated/chord_glyphs.rs",
+    edition = "2021",
+)
+
+py_binary(
+    name = "build_soundfont",
+    srcs = ["count-in/build_soundfont.py"],
+    main = "count-in/build_soundfont.py",
+    legacy_create_init = 0,
+)
+
+count_in_soundfont(
+    name = "count_in",
+    samples = ["count-in/one.pcm", "count-in/two.pcm", "count-in/three.pcm", "count-in/four.pcm"],
+    soundfont = "generated/count-in.sf2",
+    rust = "generated/count_in_data.rs",
+)
+
+rust_library(
+    name = "count_in_data",
+    srcs = ["generated/count_in_data.rs"],
+    crate_root = "generated/count_in_data.rs",
+    compile_data = ["generated/count-in.sf2"],
+    edition = "2021",
+)

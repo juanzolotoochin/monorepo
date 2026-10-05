@@ -20,6 +20,11 @@ automatically. Rhythm feedback must retain its detailed attack/hold comparison.
 Run `bazel build //salsa/tools/midi_keys` and appropriate tests using the existing
 Bazel configuration. Do not change build flags merely for convenience.
 
+Derived assets belong in declared Bazel generation actions, not checked-in
+outputs with manual regeneration instructions. Declare source inputs, tools,
+and outputs; pin downloaded inputs and use Bazel Python tools with the repo's
+hermetic bootstrap configuration rather than invoking host Python.
+
 The header, device status, piano, insights, history, and global controls belong
 in one shared outer training frame. Exercise renderers may only draw within the
 exercise content area, including terminal images. Changing exercise families or
