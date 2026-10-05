@@ -8,10 +8,8 @@ pub struct Voice {
 }
 impl Voice {
     pub fn load() -> Result<Self, String> {
-        let font = SoundFont::new(&mut Cursor::new(include_bytes!(
-            "../assets/count-in/count-in.sf2"
-        )))
-        .map_err(|e| format!("Cannot read count-in SoundFont: {e}"))?;
+        let font = SoundFont::new(&mut Cursor::new(count_in_data::SOUNDFONT))
+            .map_err(|e| format!("Cannot read count-in SoundFont: {e}"))?;
         let mut settings = SynthesizerSettings::new(48000);
         settings.maximum_polyphony = 8;
         settings.block_size = 64;

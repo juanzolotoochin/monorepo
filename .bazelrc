@@ -61,6 +61,10 @@ build:full_local --remote_cache=""
 
 common --@aspect_rules_ts//ts:skipLibCheck=honor_tsconfig
 
+# Launch Python binaries/tests directly with the registered hermetic runtime.
+# The legacy bootstrap starts through /usr/bin/env python3 on the host.
+common --@rules_python//python/config_settings:bootstrap_impl=script
+
 # rules_python 2 otherwise stores the venv's bin/python3 as an unresolved
 # (declared) symlink in runfiles, which can't be packaged into image tars.
 # Create the venv symlinks at runtime instead.

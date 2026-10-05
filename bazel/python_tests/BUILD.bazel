@@ -1,0 +1,31 @@
+load("@rules_python//python:defs.bzl", raw_py_binary = "py_binary", raw_py_test = "py_test")
+load("//:bazel/python.bzl", "py_binary", "py_executable")
+
+raw_py_binary(
+    name = "raw_probe",
+    srcs = ["probe.py"],
+    main = "probe.py",
+    legacy_create_init = 0,
+    deps = ["@pip_deps//fonttools"],
+)
+
+py_binary(
+    name = "wrapped_probe",
+    srcs = ["probe.py"],
+    legacy_create_init = 0,
+    deps = ["@pip_deps//fonttools"],
+)
+
+py_executable(
+    name = "executable_probe",
+    binary = ":wrapped_probe",
+)
+
+raw_py_test(
+    name = "hermetic_bootstrap_test",
+    size = "small",
+    srcs = ["hermetic_bootstrap_test.py"],
+    args = ["$(rootpath :raw_probe)", "$(rootpath :wrapped_probe)", "$(rootpath :executable_probe)"],
+    data = [":raw_probe", ":wrapped_probe", ":executable_probe"],
+    legacy_create_init = 0,
+)

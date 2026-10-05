@@ -1,9 +1,7 @@
 //! Compact engraving for the finite notation vocabulary used by reading tasks.
 //! SVG review artifacts and terminal RGB use exactly the same scene geometry.
-#[path = "music_glyphs.rs"]
-mod glyphs;
-#[path = "chord_glyphs.rs"]
-mod lettering;
+use chord_glyphs as lettering;
+use music_glyphs as glyphs;
 use trainer::{Hand, WrittenScore};
 const SPACE: f64 = 12.0;
 #[derive(Clone)]
