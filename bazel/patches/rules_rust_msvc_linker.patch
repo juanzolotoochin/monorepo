@@ -1,0 +1,38 @@
+diff --git a/rust/private/rustc.bzl b/rust/private/rustc.bzl
+--- a/rust/private/rustc.bzl
++++ b/rust/private/rustc.bzl
+@@ -476,8 +476,19 @@
+ def _get_linker_path(linker_config):
+     if linker_config.rust_linker:
+         return linker_config.rust_linker.path
+-    return cc_common.get_tool_for_action(
++    linker = cc_common.get_tool_for_action(
+         feature_configuration = linker_config.feature_configuration,
+         action_name = linker_config.action_name,
+     )
++    # rustc emits link.exe arguments for MSVC, not clang-cl driver arguments.
++    if linker.replace("\\", "/").endswith("/clang-cl.exe"):
++        return linker[:-len("clang-cl.exe")] + "lld-link.exe"
++    return linker
++
++def _uses_clang_cl(linker_config):
++    return not linker_config.rust_linker and cc_common.get_tool_for_action(
++        feature_configuration = linker_config.feature_configuration,
++        action_name = linker_config.action_name,
++    ).replace("\\", "/").endswith("/clang-cl.exe")
+@@ -572,1 +583,14 @@
+-    return link_args
++    if _uses_clang_cl(linker_config):
++        # Unwrap linker switches; omit compiler-driver-only options.
++        direct_args = []
++        for arg in link_args:
++            if arg == "/clang:-Xlinker":
++                continue
++            if arg.startswith("/clang:"):
++                arg = arg[len("/clang:"):]
++            if arg.startswith("-") and not arg.startswith("-LIBPATH:"):
++                continue
++            if arg not in ("/MD", "/MDd", "/MT", "/MTd"):
++                direct_args.append(arg)
++        return direct_args
++    return link_args

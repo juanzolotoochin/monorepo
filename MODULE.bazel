@@ -47,6 +47,11 @@ bazel_dep(name = "rules_perl", version = "1.1.2")
 bazel_dep(name = "tar.bzl", version = "0.10.9")
 bazel_dep(name = "rules_oci", version = "2.3.0")
 bazel_dep(name = "llvm", version = "0.8.24")
+single_version_override(
+    module_name = "llvm",
+    patch_strip = 1,
+    patches = ["//bazel/patches:llvm_windows_bootstrap.patch"],
+)
 bazel_dep(name = "rules_shell", version = "0.8.0")
 
 tar_toolchains = use_extension("@tar.bzl//tar:extensions.bzl", "toolchains")
@@ -358,6 +363,13 @@ http_archive(
 
 bazel_dep(name = "rules_rs", version = "0.0.112")
 
+rules_rust = use_extension("@rules_rs//rs:rules_rust.bzl", "rules_rust")
+rules_rust.patch(
+    patches = ["//bazel/patches:rules_rust_msvc_linker.patch"],
+    strip = 1,
+)
+use_repo(rules_rust, "rules_rust")
+
 rust_toolchains = use_extension("@rules_rs//rs/toolchains:module_extension.bzl", "toolchains")
 rust_toolchains.toolchain(
     edition = "2021",
@@ -383,6 +395,11 @@ crate.annotation(
     crate = "khronos_api",
     patch_args = ["-p1"],
     patches = ["//bazel/patches:khronos_api.patch"],
+)
+crate.annotation(
+    crate = "rav1e",
+    patch_args = ["-p1"],
+    patches = ["//bazel/patches:rav1e_build_metadata.patch"],
 )
 
 # blake3 otherwise invokes Microsoft's ml64.exe assembler on MSVC targets.
