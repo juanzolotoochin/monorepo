@@ -1,5 +1,6 @@
 //! Procedural voxel art: shared cuboid geometry, authored silhouettes and palette.
 use crate::{
+    assets::{IndustrialProp, ModelCache, SceneLibrary},
     effects::{CameraRig, FxAssets},
     gameplay::*,
     navigation::Disc,
@@ -260,82 +261,8 @@ pub fn setup(
         }
     }
 
-    // Stepped ore deposits. Each is a collection of actual cubes, not a smooth mesh.
-    let deposits = [
-        (Vec3::new(1.6, 0.0, -0.1), 0.85, 1.25),
-        (Vec3::new(-2.6, 0.0, -1.4), 1.0, 1.55),
-        (Vec3::new(4.7, 0.0, -3.1), 1.05, 1.8),
-        (Vec3::new(-5.2, 0.0, 2.8), 0.95, 1.1),
-        (Vec3::new(4.8, 0.0, 4.1), 0.85, 1.25),
-        (Vec3::new(-0.4, 0.0, -5.5), 0.82, 1.35),
-    ];
+    // Boulders come from compiled scene packs (see assets.rs).
     let rock_dark = material(&mut materials, [0.14, 0.17, 0.23], 0.10);
-    let rock_light = material(&mut materials, [0.39, 0.40, 0.47], 0.12);
-    for (index, (center, radius, height)) in deposits.into_iter().enumerate() {
-        let rock_mat = material(&mut materials, [0.27, 0.29, 0.36], 0.18);
-        commands
-            .spawn((
-                Transform::from_translation(center),
-                Visibility::default(),
-                Obstacle(Disc { center, radius }),
-                Rock {
-                    base: center,
-                    contact_radius: radius * (1.0 - (0.9_f32 / height).powf(1.8) * 0.65),
-                    kick: Vec3::ZERO,
-                    flash: 0.0,
-                    material: rock_mat.clone(),
-                },
-            ))
-            .with_children(|p| {
-                let step = 0.31;
-                for y in 0..(height / step) as i32 {
-                    for x in -4..=4 {
-                        for z in -4..=4 {
-                            let h = hash(x + index as i32 * 13, y, z);
-                            let taper = 1.0 - (y as f32 * step / height).powf(1.8) * 0.65;
-                            let radial = ((x as f32 * step).powi(2)
-                                + (z as f32 * step * 1.08).powi(2))
-                            .sqrt();
-                            if radial > radius * taper + (h % 3) as f32 * 0.045 {
-                                continue;
-                            }
-                            let mat = if h % 17 == 0 {
-                                &amber
-                            } else if h % 7 == 0 {
-                                &rock_light
-                            } else if h % 4 == 0 {
-                                &rock_dark
-                            } else {
-                                &rock_mat
-                            };
-                            block(
-                                p,
-                                &cube,
-                                mat,
-                                Vec3::new(
-                                    x as f32 * step,
-                                    y as f32 * step + step * 0.5,
-                                    z as f32 * step,
-                                ),
-                                Vec3::splat(step + 0.003),
-                            );
-                        }
-                    }
-                }
-                // Small surface fragments break the perfect circular footprint.
-                for i in 0..8 {
-                    let angle = i as f32 * 2.4;
-                    let distance = radius + 0.30 + (i % 3) as f32 * 0.12;
-                    block(
-                        p,
-                        &cube,
-                        &rock_dark,
-                        Vec3::new(angle.cos() * distance, 0.075, angle.sin() * distance),
-                        Vec3::new(0.20, 0.15, 0.20),
-                    );
-                }
-            });
-    }
 
     // Back-left coolant relay: chunky housing, fins, emissive core and conduits.
     let reactor = Vec3::new(-5.0, 0.0, -5.3);
@@ -344,6 +271,10 @@ pub fn setup(
             Transform::from_translation(reactor),
             Visibility::default(),
             Obstacle(Disc {
+                center: reactor,
+                radius: 1.45,
+            }),
+            IndustrialProp(Disc {
                 center: reactor,
                 radius: 1.45,
             }),
@@ -440,6 +371,10 @@ pub fn setup(
                     center,
                     radius: 0.72,
                 }),
+                IndustrialProp(Disc {
+                    center,
+                    radius: 0.72,
+                }),
             ))
             .with_children(|p| {
                 block(
@@ -515,6 +450,10 @@ pub fn setup(
                 Transform::from_translation(center),
                 Visibility::default(),
                 Obstacle(Disc {
+                    center,
+                    radius: 0.66,
+                }),
+                IndustrialProp(Disc {
                     center,
                     radius: 0.66,
                 }),
@@ -842,6 +781,8 @@ pub fn setup(
 }
 
 #[derive(Component)]
+pub struct SceneLabel;
+#[derive(Component)]
 pub struct Status;
 #[derive(Component)]
 pub struct Gauge;
@@ -871,7 +812,8 @@ pub fn hud(mut commands: Commands) {
                 TextColor(white),
             ));
             p.spawn((
-                Text::new("EXTRACTION DECK     /     NEREID BELT"),
+                SceneLabel,
+                Text::new("LOADING SCENE"),
                 TextFont {
                     font_size: 11.0,
                     ..default()
@@ -991,7 +933,7 @@ pub fn hud(mut commands: Commands) {
                 TextColor(white),
             ));
             p.spawn((
-                Text::new("WASD  STEER    SHIFT  RUN    WHEEL  ZOOM    R  RESET    M  AUDIO"),
+                Text::new("1 / 2  SCENES    WASD  STEER    SHIFT  RUN    WHEEL  ZOOM    M  AUDIO"),
                 TextFont {
                     font_size: 10.0,
                     ..default()
@@ -1004,6 +946,9 @@ pub fn hud(mut commands: Commands) {
 pub fn update_hud(
     controls: Res<Controls>,
     sound: Res<Sound>,
+    library: Res<SceneLibrary>,
+    cache: Res<ModelCache>,
+    mut scene_label: Single<&mut Text, (With<SceneLabel>, Without<Status>, Without<ContactCount>)>,
     mut status: Single<(&mut Text, &mut TextColor), With<Status>>,
     mut gauge: Single<&mut Node, With<Gauge>>,
     mut contacts: Single<&mut Text, (With<ContactCount>, Without<Status>)>,
@@ -1034,8 +979,14 @@ pub fn update_hud(
     }
     status.1 .0 = color;
     gauge.width = percent(progress.clamp(0.0, 1.0) * 100.0);
+    if scene_label.0 != library.title() {
+        scene_label.0 = library.title().into();
+    }
     let audio = if sound.muted { "  /  MUTED" } else { "" };
-    let text = format!("CONTACTS   {:02}{audio}", controls.impacts);
+    let text = format!(
+        "CONTACTS {:02} / DYNAMIC BUILDS {}{audio}",
+        controls.impacts, cache.runtime_generations
+    );
     if contacts.0 != text {
         contacts.0 = text;
     }

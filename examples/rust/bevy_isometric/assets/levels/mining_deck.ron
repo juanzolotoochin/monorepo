@@ -1,0 +1,14 @@
+Scene(
+    name: "EXTRACTION DECK / NEREID BELT",
+    spawn: (0.0, 0.0, 2.0),
+    industrial: true,
+    instances: [
+        (prefab: "ore_small", position: (1.6, 0.0, -0.1)),
+        (prefab: "ore_tall", position: (-2.6, 0.0, -1.4)),
+        (prefab: "ore_large", position: (4.7, 0.0, -3.1)),
+        (prefab: "ore_flat", position: (-5.2, 0.0, 2.8)),
+        // Reuse the same baked mesh with a different placement and rotation.
+        (prefab: "ore_small", position: (4.8, 0.0, 4.1), yaw: 1.57),
+        (prefab: "ore_narrow", position: (-0.4, 0.0, -5.5)),
+    ],
+)

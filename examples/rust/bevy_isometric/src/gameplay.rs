@@ -321,7 +321,10 @@ pub fn swept_hit(
         let hit = obstacles
             .iter()
             .enumerate()
-            .filter(|(_, o)| navigation::segment_distance(o.center, base, tip) <= o.radius + 0.10)
+            .filter(|(_, o)| {
+                o.radius > 0.0
+                    && navigation::segment_distance(o.center, base, tip) <= o.radius + 0.10
+            })
             .min_by(|(_, a), (_, b)| {
                 a.center
                     .distance_squared(pivot)

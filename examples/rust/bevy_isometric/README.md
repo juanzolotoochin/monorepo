@@ -5,7 +5,8 @@ salvager carries an industrial cleaver across a suspended mining deck. Cuboid
 geometry, materials, effects and sound are generated locally; no art downloads
 or runtime asset paths are required.
 
-Asset provenance: models and effects are authored in this example's Rust code;
+Asset provenance: models and effects are authored in this example's Rust code
+and RON recipes;
 the swing, clang and footsteps are original procedural synthesis in `sound.c`
 (noise, low tones and inharmonic ringing modes). Miniaudio provides playback,
 not sound samples. The HUD uses Bevy's bundled default font.
@@ -59,6 +60,7 @@ startup sequence; run it on Windows with:
 
 | Control | Action |
 | --- | --- |
+| 1 / 2 | Load the mining deck / boulder lab |
 | Right click / hold | Move / steer toward the cursor; find a route around obstacles |
 | WASD / arrows | Camera-relative movement; cancel the click route |
 | Shift | Run |
@@ -100,7 +102,8 @@ bazel run //examples/rust/bevy_isometric:demo -- \
 This writes `overview.png` and `impact.png`, then exits. `--showcase` alone
 plays the short sequence and leaves the window open for further interaction.
 
-Code is split into `scene.rs` (voxel art and HUD), `gameplay.rs` (controls and
+Code is split into `assets.rs` (compiled scenes and prefab caching),
+`scene.rs` (shared deck, character art and HUD), `gameplay.rs` (controls and
 combat), `navigation.rs` (paths and clearance), `effects.rs` (impact feedback),
 `sound.rs` / `sound.c` (procedural foley), and `preview.rs` (visual QA).
 Headless tests cover obstacle routing, slide collision, blade reach and sweep
@@ -110,3 +113,27 @@ Third-party versions come from the root `Cargo.toml` / `Cargo.lock`.
 The targets expose that manifest as a compile-time input because Bevy's
 derive macros read it to find the `bevy` crate path. First-party code builds
 with Bazel, following the other Rust examples in the repository.
+
+
+Boulders now use the [Bazel voxel asset pipeline](../../../bazel/voxel_assets/README.md).
+Edit recipes in `assets/prefabs/`, material values in `assets/palette.ron`, and
+placements in `assets/levels/`. `assets/BUILD.bazel` declares reusable prefab
+and scene targets. The generator loops live in `//tools/assetc/core`; changing
+a recipe rebuilds its mesh during the Bazel build. The deck's other props and
+character parts are still authored in `scene.rs`.
+
+Press **1** or **2** to load the mining deck or boulder lab. Both use the same
+deck stage; the lab hides the industrial dressing. Baked assets are shared
+between the two layouts. The lab also shows runtime seed/size overrides and
+repeated instances that reuse one generated mesh. The HUD's `DYNAMIC BUILDS`
+count stays unchanged on repeat visits because geometry is cached. Scene
+changes reset movement, attacks and contact feedback.
+
+```sh
+bazel run //examples/rust/bevy_isometric:demo -- --scene boulder-lab
+bazel build //examples/rust/bevy_isometric/assets:ore_small
+```
+
+For visual QA of either scene, add `--scene mining-deck` or `--scene boulder-lab`
+to the existing `--showcase --capture-dir ...` command. All packs are embedded,
+including in the Windows `.exe`.
