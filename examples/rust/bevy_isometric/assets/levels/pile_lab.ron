@@ -1,0 +1,18 @@
+Scene(
+    name: "PILE LAB / MINERAL LOGISTICS",
+    spawn: (0.0, 0.0, 1.0),
+    industrial: false,
+    instances: [],
+    piles: Some((
+        capacity: 12,
+        dispensers: [
+            (material: AmberOre, position: (-5.4, 0.0, -3.0), output: (-3.1, 0.0, -2.0)),
+            (material: BlueCrystal, position: (0.4, 0.0, -5.3), output: (2.2, 0.0, -3.1)),
+        ],
+        piles: [
+            (material: AmberOre, position: (-4.0, 0.0, 3.4), units: 8),
+            (material: BlueCrystal, position: (0.2, 0.0, 4.3), units: 24),
+            (material: AmberOre, position: (4.6, 0.0, 1.0), units: 64),
+        ],
+    )),
+)

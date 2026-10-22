@@ -61,6 +61,7 @@ pub fn capture(
     if !preview.configured {
         preview.configured = true;
         let args: Vec<_> = std::env::args().collect();
+        preview.enabled = args.iter().any(|a| a == "--haul-showcase");
         preview.directory = args
             .windows(2)
             .find(|pair| pair[0] == "--capture-dir")
@@ -68,6 +69,9 @@ pub fn capture(
         if let Some(dir) = &preview.directory {
             std::fs::create_dir_all(dir).expect("create capture directory");
         }
+    }
+    if preview.enabled {
+        return;
     }
     let Some(directory) = preview.directory.clone() else {
         return;

@@ -1,10 +1,12 @@
 //! Renderer-independent prefab recipes, meshing and versioned asset packs.
 mod boulder;
+mod piles;
 pub use boulder::generate_boulder;
+pub use piles::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 pub type Result<T> = std::result::Result<T, String>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -231,6 +233,8 @@ pub struct Scene {
     #[serde(default = "industrial")]
     pub industrial: bool,
     pub instances: Vec<Instance>,
+    #[serde(default)]
+    pub piles: Option<PileLayout>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScenePack {
@@ -303,6 +307,9 @@ impl ScenePack {
             || !self.scene.spawn.iter().all(|v| v.is_finite())
         {
             return Err("invalid scene header or instance count".into());
+        }
+        if let Some(piles) = &self.scene.piles {
+            piles.validate()?;
         }
         let mut ids = BTreeSet::new();
         for prefab in &self.prefabs {
@@ -430,6 +437,7 @@ mod tests {
                 name: "test".into(),
                 spawn: [0.0; 3],
                 industrial: true,
+                piles: None,
                 instances: vec![Instance {
                     prefab: "rock".into(),
                     position: [0.0; 3],
