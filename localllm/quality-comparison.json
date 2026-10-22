@@ -1,0 +1,192 @@
+{
+  "protocol": "Exact user prompt, fresh OpenCode sessions, read-only plan agent. Same engine, draft, context/output budgets, and VRAM reserve. IQ2 baseline overlapped the IQ3 download; timings are indicative only. Responses are model-generated claims requiring source verification, not verified code-review findings. The final IQ3 run changes the output/reasoning budgets as well as precision, so it does not isolate quantization quality. All runs are single samples, not a quality benchmark.",
+  "model_revision": "ed59f92082b1e93c0e96d60a8b11aab089b52f09",
+  "results": {
+    "iq2": {
+      "variant": "iq2",
+      "prompt": "Evaluate the code quality of /home/juanmunoz/git/monorepo/salsa/tools/midi_keys",
+      "agent": "plan",
+      "context": 65536,
+      "max_output_tokens": 8192,
+      "event_duration_seconds": 196.582,
+      "duration_excludes": "model startup; timings are single runs, not controlled performance benchmarks",
+      "steps": 17,
+      "tool_calls": 30,
+      "finish_reasons": {
+        "tool-calls": 15,
+        "stop": 2
+      },
+      "output_tokens": 14157,
+      "final_text": "Investigation is complete. Findings:\n\n**Strengths**\n- Clean boundaries: `trainer` is pure logic, UI is isolated in `ui`, FFI confined to `main.rs`/`native.c`/`piano.rs`; `main.rs:38` `checked()` wraps every ALSA call.\n- 169 tests across 19 files, all test modules properly `#[cfg(test)]`-gated (`trainer.rs:1104-1109`), plus a real PTY integration test (`terminal_test.py`) that runs the binary without MIDI hardware.\n- AGENTS.md-mandated behaviors have dedicated tests: `shared_frame_tests` (ui.rs:2820), `feedback_layout_tests` (ui.rs:2650), `rhythm_score_feedback_tests` (ui.rs:2931).\n- No TODO/FIXME markers; `curriculum_analysis.rs` is an opt-in audit that never writes progress.\n\n**Concerns**\n- Hotspots: `ui.rs` 2972 lines / 9 functions >60 (draw_training 327, draw 305); `practice.rs` `generate` 387; `courses.rs` `extend` 328; `main.rs` `run` 459; `staff_notation.rs` `engrave` 270 at nesting depth 11.\n- Coverage is concentrated in `tests.rs`/`practice_tests.rs`; `main.rs`, `practice.rs`, `exercise.rs`, `courses.rs`, `curriculum.rs`, `learner.rs`, `trainer.rs`, `kitty_coordinates.rs` have no in-file tests.\n- `Instant::now()` in library code (trainer, piano, reading) makes timing nondeterministic in tests; 11 `unwrap`/`expect` in `trainer.rs` production path.\n- `Result<_, String>` + 26 `map_err(|e| e.to_string())` loses error type; doc coverage is thin (99 doc lines total).\n\nTwo loose ends before I go further:\n1. Verification requires `bazel build //salsa/tools/midi_keys` and the test targets, which writes artifacts \u2014 do you want me to run them (needs plan mode lifted), or keep this read-only?\n2. Do you want just this assessment, or a prioritized refactor plan targeting the hotspots above?",
+      "errors": []
+    },
+    "iq3": {
+      "variant": "iq3",
+      "prompt": "Evaluate the code quality of /home/juanmunoz/git/monorepo/salsa/tools/midi_keys",
+      "agent": "plan",
+      "context": 65536,
+      "max_output_tokens": 8192,
+      "event_duration_seconds": 378.214,
+      "duration_excludes": "model startup; timings are single runs, not controlled performance benchmarks",
+      "steps": 6,
+      "tool_calls": 13,
+      "finish_reasons": {
+        "tool-calls": 6
+      },
+      "output_tokens": 1944,
+      "final_text": null,
+      "errors": [],
+      "status": "Stopped diagnostic run after two 8192-token responses reached length; one had no answer because it was entirely thinking. No completed top-level review.",
+      "runtime_errors": [
+        "Tokenizer TypeError: int object is not subscriptable during chat-completion prompt encoding; request was retried."
+      ],
+      "output_tokens_note": "CLI events omit unfinished/nested work; engine logged additional output.",
+      "sampled_peak_gpu_mib": 21495,
+      "minimum_host_available_kib": 4333804,
+      "resource_note": "Independent draft conversion overlapped this run; host swap grew. Not a controlled speed comparison."
+    },
+    "iq3-16k": {
+      "variant": "iq3-16k",
+      "prompt": "Evaluate the code quality of /home/juanmunoz/git/monorepo/salsa/tools/midi_keys",
+      "agent": "plan",
+      "context": 65536,
+      "max_output_tokens": 16384,
+      "event_duration_seconds": 141.943,
+      "duration_excludes": "model startup; timings are single runs, not controlled performance benchmarks",
+      "steps": 14,
+      "tool_calls": 25,
+      "finish_reasons": {
+        "tool-calls": 12,
+        "stop": 2
+      },
+      "output_tokens": 7327,
+      "final_text": "## Code Quality Evaluation: `salsa/tools/midi_keys`\n\n**Overall: solid, well-maintained codebase.** 19,695 lines, 169 tests, 7 commits, no tech-debt markers.\n\n### Strengths\n- **No lint suppressions**: zero `#[allow]`, zero `TODO/FIXME/XXX/HACK`.\n- **`unsafe` is well-contained**: only `src/main.rs:17-63` (ALSA FFI) and `src/piano.rs:17-301` (audio callback). Both wrap C ABI behind checked helpers (`checked(code)` at `src/main.rs:38`).\n- **Clean module layering**: `lib.rs` (input model) \u2192 `trainer.rs` (state machine) \u2192 `ui.rs` (rendering), with `reading/practice/score_support/courses` as exercise generators.\n- **Test-only code is properly gated**: `#[cfg(test)] mod tests/practice_tests/curriculum_analysis/ui_preview` in `src/trainer.rs:30-34`.\n- **Real integration coverage**: `terminal_test.py` drives the actual binary in a PTY with a minimal VT screen, no MIDI hardware needed.\n- **Assets follow repo policy**: `assets/BUILD.bazel` + `assets/codegen.bzl` generate MIDI/sample data via declared Bazel actions.\n\n### Risks\n1. **`Result<_, String>` everywhere** \u2014 no `thiserror`/`anyhow`/custom error enums. Errors lose context and can't be matched on. Pervasive across all modules.\n2. **Very long functions** (brace-matched line counts):\n   - `main.rs:316` `run()` \u2014 **459 lines** (event loop + input + rendering + MIDI wiring in one body)\n   - `ui.rs:95` `draw_training()` \u2014 **327 lines**\n   - `ui.rs:777` `draw()` \u2014 **305 lines**\n   - `reading.rs:353` `generate()` \u2014 **284 lines**\n   - `trainer.rs:882` `finish()` \u2014 **176 lines**, `trainer.rs:313` `view()` \u2014 **139 lines**\n3. **Production unwraps** in `trainer.rs` (21) and `score_support.rs` (10) \u2014 worth auditing for panic-on-user-input paths.\n4. **`ui.rs` at 2,971 lines** is the single largest liability; layout logic and test assertions are interleaved.\n\n### Recommended Priority\n1. Split `main.rs run()` into `poll` / `handle_key` / `render` phases.\n2. Introduce a crate error enum (`thiserror`) replacing `String`.\n3. Decompose `draw_training`/`draw` into per-region widgets.\n4. Audit `trainer.rs` unwraps for externally-triggerable panics.\n\nWant me to draft a concrete refactor plan for any of these, or run `bazel test //salsa/tools/midi_keys/...` + clippy to validate the baseline first?",
+      "errors": [],
+      "reasoning_budget_tokens": 12288,
+      "compaction_reserved_tokens": 20480,
+      "status": "Completed",
+      "runtime_error_markers": [],
+      "sampled_peak_gpu_mib": 21786,
+      "minimum_host_available_kib": 7589904,
+      "runtime_log_note": "Sampled every five seconds until launcher cleanup; may omit final seconds.",
+      "completed_engine_requests": [
+        {
+          "output_tokens": 118,
+          "wall_seconds": 3,
+          "decode_tokens_per_second": 80.6,
+          "finish": "stop"
+        },
+        {
+          "output_tokens": 133,
+          "wall_seconds": 7,
+          "decode_tokens_per_second": 87.9,
+          "finish": "stop"
+        },
+        {
+          "output_tokens": 205,
+          "wall_seconds": 4,
+          "decode_tokens_per_second": 94.9,
+          "finish": "stop"
+        },
+        {
+          "output_tokens": 160,
+          "wall_seconds": 3,
+          "decode_tokens_per_second": 101.5,
+          "finish": "stop"
+        },
+        {
+          "output_tokens": 381,
+          "wall_seconds": 11,
+          "decode_tokens_per_second": 95.2,
+          "finish": "stop"
+        },
+        {
+          "output_tokens": 418,
+          "wall_seconds": 6,
+          "decode_tokens_per_second": 76.4,
+          "finish": "stop"
+        },
+        {
+          "output_tokens": 312,
+          "wall_seconds": 5,
+          "decode_tokens_per_second": 72.8,
+          "finish": "stop"
+        },
+        {
+          "output_tokens": 422,
+          "wall_seconds": 7,
+          "decode_tokens_per_second": 74.8,
+          "finish": "stop"
+        },
+        {
+          "output_tokens": 562,
+          "wall_seconds": 9,
+          "decode_tokens_per_second": 77.2,
+          "finish": "stop"
+        },
+        {
+          "output_tokens": 322,
+          "wall_seconds": 5,
+          "decode_tokens_per_second": 71.0,
+          "finish": "stop"
+        },
+        {
+          "output_tokens": 434,
+          "wall_seconds": 8,
+          "decode_tokens_per_second": 66.9,
+          "finish": "stop"
+        },
+        {
+          "output_tokens": 371,
+          "wall_seconds": 7,
+          "decode_tokens_per_second": 66.6,
+          "finish": "stop"
+        },
+        {
+          "output_tokens": 254,
+          "wall_seconds": 5,
+          "decode_tokens_per_second": 69.0,
+          "finish": "stop"
+        },
+        {
+          "output_tokens": 2306,
+          "wall_seconds": 36,
+          "decode_tokens_per_second": 71.9,
+          "finish": "stop"
+        }
+      ]
+    }
+  },
+  "assessment": {
+    "conclusion": "No clear quality winner from this single broad review prompt. The higher-precision final run completed, but both reviews relied mainly on structural metrics and contained overstatements or incorrect references.",
+    "verified_limit": "The first IQ3 run exhausted 8192 output tokens entirely on reasoning for one request; a second request also reached length. The final configuration requests 16384 tokens and caps reasoning at 12288.",
+    "spot_checks": [
+      {
+        "variant": "iq2",
+        "claim": "checked() wraps every ALSA call",
+        "finding": "Overstated: main.rs has direct calls to mk_port, mk_event, mk_disconnect, and mk_close. This is not itself evidence of a bug."
+      },
+      {
+        "variant": "iq2",
+        "claim": "Several modules have no in-file tests",
+        "finding": "This is not evidence they are untested: trainer.rs includes tests.rs and practice_tests.rs, which exercise learner/session and practice behavior."
+      },
+      {
+        "variant": "iq3-16k",
+        "claim": "tests/practice_tests/curriculum_analysis/ui_preview are test-gated in trainer.rs:30-34",
+        "finding": "Incorrect: the first three modules are gated at trainer.rs:1104-1109; ui_preview is not declared there."
+      },
+      {
+        "variant": "iq3-16k",
+        "claim": "unsafe only occurs in main.rs:17-63 and piano.rs:17-301",
+        "finding": "Incorrect range: main.rs also contains unsafe operations in its MIDI wrappers, terminal helpers, and event loop (including line 604)."
+      }
+    ],
+    "limitations": [
+      "Fresh read-only plan sessions; build/test execution was not part of these model reviews.",
+      "One task and one completed run per configuration; no statistical quality conclusion.",
+      "Final IQ3 settings change both quantization and output/thinking budgets.",
+      "Known intermittent tokenizer exception remains unresolved; occurred in initial IQ3 run, not in captured final-run logs."
+    ]
+  }
+}

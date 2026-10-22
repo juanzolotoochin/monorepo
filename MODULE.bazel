@@ -3,6 +3,21 @@ module(
     version = "1.0",
 )
 
+# Local inference dependencies are pinned and organized by component.
+localllm = use_extension("//localllm:extensions.bzl", "dependencies")
+use_repo(
+    localllm,
+    "localllm_bun",
+    "localllm_cuda",
+    "localllm_ggml",
+    "localllm_model",
+    "localllm_model_iq3_xxs",
+    "localllm_mtp",
+    "localllm_opencode",
+    "localllm_ripgrep",
+    "localllm_strata",
+)
+
 bazel_dep(name = "bazel_skylib", version = "1.9.2")
 bazel_dep(name = "aspect_rules_js", version = "3.4.1")
 bazel_dep(name = "bazel_features", version = "1.51.0", repo_name = "proto_bazel_features")
@@ -247,7 +262,12 @@ pip.parse(
     python_version = "3.11",
     requirements_lock = "//:requirements_lock.txt",
 )
-use_repo(pip, pip_deps = "monorepo_deps")
+pip.parse(
+    hub_name = "localllm_pip",
+    python_version = "3.11",
+    requirements_lock = "//localllm/strata:requirements.lock.txt",
+)
+use_repo(pip, "localllm_pip", pip_deps = "monorepo_deps")
 
 # Http Archives
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
@@ -263,18 +283,20 @@ http_archive(
 
 # Source fonts for hermetic MIDI notation code generation.
 http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+
 http_file(
     name = "bravura_font",
-    urls = ["https://raw.githubusercontent.com/steinbergmedia/bravura/37b194378b710cc40e406ab6c4b07608bb9548ae/redist/otf/Bravura.otf"],
-    sha256 = "cdf0f893ee1fdb64b7f6713d71ee0dcfc349c0ac01429a8e451b01a9e79f5f3b",
     downloaded_file_path = "Bravura.otf",
+    sha256 = "cdf0f893ee1fdb64b7f6713d71ee0dcfc349c0ac01429a8e451b01a9e79f5f3b",
+    urls = ["https://raw.githubusercontent.com/steinbergmedia/bravura/37b194378b710cc40e406ab6c4b07608bb9548ae/redist/otf/Bravura.otf"],
 )
+
 http_archive(
     name = "liberation_fonts",
-    urls = ["https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz"],
+    build_file_content = 'exports_files(["LiberationSans-Regular.ttf"])',
     sha256 = "7191c669bf38899f73a2094ed00f7b800553364f90e2637010a69c0e268f25d0",
     strip_prefix = "liberation-fonts-ttf-2.1.5",
-    build_file_content = 'exports_files(["LiberationSans-Regular.ttf"])',
+    urls = ["https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz"],
 )
 
 # Sampled Yamaha C5 piano; kept in Bazel's external cache, not in Git.
@@ -289,10 +311,10 @@ http_archive(
 # GeneralUser GS 2.0.3 supplies recorded acoustic drum samples.
 http_archive(
     name = "generaluser_drums",
-    type = "tar.gz",
     build_file = "//third_party/generaluser_drums:BUILD.soundfont.bazel",
     sha256 = "aef2e2901ab399061ac3765e259ab4c3409bdcb24b7cf814b4b54aaad549dbff",
     strip_prefix = "GeneralUser-GS-684543d5e5efaef08d02be50dcda8d552478fa60",
+    type = "tar.gz",
     urls = ["https://codeload.github.com/mrbumpy409/GeneralUser-GS/tar.gz/684543d5e5efaef08d02be50dcda8d552478fa60"],
 )
 
