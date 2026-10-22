@@ -1,0 +1,16 @@
+Scene(
+    name: "BOULDER LAB / BAKED + PROCEDURAL",
+    spawn: (0.0, 0.0, 2.0),
+    industrial: false,
+    instances: [
+        // Same baked assets as the mining deck; no additional geometry work.
+        (prefab: "ore_small", position: (1.6, 0.0, -0.1)),
+        (prefab: "ore_small", position: (-2.8, 0.0, -0.2), scale: 1.15),
+        (prefab: "ore_large", position: (-4.5, 0.0, -4.0)),
+        // This recipe is evaluated once per distinct parameter set at runtime.
+        (prefab: "dynamic_ore", position: (0.0, 0.0, -4.5), parameters: Some((seed: Some(42), radius: Some(1.4), height: Some(2.0)))),
+        (prefab: "dynamic_ore", position: (4.5, 0.0, -3.0), parameters: Some((seed: Some(99), radius: Some(0.9), height: Some(1.2)))),
+        // Reuse the previous runtime-generated mesh from the cache.
+        (prefab: "dynamic_ore", position: (4.5, 0.0, 3.0), parameters: Some((seed: Some(99), radius: Some(0.9), height: Some(1.2)))),
+    ],
+)

@@ -1,0 +1,2 @@
+// All other generator parameters use the shared Boulder defaults.
+Boulder(seed: 0, radius: 0.85, height: 1.25, voxel_size: 0.31)

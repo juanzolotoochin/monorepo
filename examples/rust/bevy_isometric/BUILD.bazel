@@ -20,7 +20,12 @@ rust_binary(
     }),
     rustc_env = {"CARGO_MANIFEST_DIR": "."},
     visibility = ["//visibility:public"],
-    deps = ["@crates//:bevy"],
+    deps = [
+        "//examples/rust/bevy_isometric/assets:boulder_lab",
+        "//examples/rust/bevy_isometric/assets:mining_deck",
+        "//tools/assetc/core:voxel_assets",
+        "@crates//:bevy",
+    ],
 )
 
 rust_test(

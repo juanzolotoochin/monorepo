@@ -1,0 +1,47 @@
+load("//bazel/voxel_assets:defs.bzl", "boulder_prefab", "scene_assets")
+
+package(default_visibility = ["//examples/rust/bevy_isometric:__pkg__"])
+
+[
+    boulder_prefab(
+        name = name,
+        src = "prefabs/" + name + ".ron",
+        palette = "palette.ron",
+    )
+    for name in [
+        "ore_small",
+        "ore_tall",
+        "ore_large",
+        "ore_flat",
+        "ore_narrow",
+    ]
+]
+
+boulder_prefab(
+    name = "dynamic_ore",
+    src = "prefabs/ore_large.ron",
+    palette = "palette.ron",
+    runtime = True,
+)
+
+scene_assets(
+    name = "mining_deck",
+    layout = "levels/mining_deck.ron",
+    prefabs = [
+        ":ore_small",
+        ":ore_tall",
+        ":ore_large",
+        ":ore_flat",
+        ":ore_narrow",
+    ],
+)
+
+scene_assets(
+    name = "boulder_lab",
+    layout = "levels/boulder_lab.ron",
+    prefabs = [
+        ":ore_small",
+        ":ore_large",
+        ":dynamic_ore",
+    ],
+)
