@@ -143,9 +143,11 @@ pub fn mouse_commands(
     mut controls: ResMut<Controls>,
     player: Single<&Transform, With<Player>>,
     obstacles: Query<&Obstacle>,
+    library: Res<crate::assets::SceneLibrary>,
+    flight: Res<crate::jetpack::Flight>,
 ) {
     controls.repath -= time.delta_secs();
-    let Some(point) = cursor_ground(camera.0, camera.1, &window) else {
+    let Some(point) = crate::jetpack::cursor_surface(camera.0, camera.1, &window, &library) else {
         return;
     };
     let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
@@ -159,10 +161,10 @@ pub fn mouse_commands(
         if controls
             .route
             .last()
-            .is_none_or(|last| last.distance(point) > 0.25)
+            .is_none_or(|last| flat(*last - point).length() > 0.25)
         {
             let discs: Vec<_> = obstacles.iter().map(|o| o.0).collect();
-            let route = navigation::path(player.translation, point, &discs);
+            let route = crate::jetpack::route(&library, &flight, player.translation, point, &discs);
             if !route.is_empty() {
                 controls.route = route;
             }
@@ -207,10 +209,14 @@ pub fn move_player(
     obstacles: Query<&Obstacle>,
     feedback: Res<Feedback>,
     sound: Res<Sound>,
+    library: Option<Res<crate::assets::SceneLibrary>>,
+    flight: Option<Res<crate::jetpack::Flight>>,
 ) {
     let dt = time.delta_secs().min(0.1);
     if keys.just_pressed(KeyCode::KeyR) {
-        player.translation = Vec3::new(0.0, 0.0, 2.0);
+        player.translation = library.as_ref().map_or(Vec3::new(0.0, 0.0, 2.0), |l| {
+            Vec3::from_array(l.scenes[l.current].scene.spawn)
+        });
         player.rotation = Quat::from_rotation_y(std::f32::consts::PI);
         *controls = Controls::default();
         return;
@@ -262,7 +268,9 @@ pub fn move_player(
         };
         desired = delta.normalize_or_zero() * speed.min(braking_speed);
         if delta.length() < 0.055 {
+            let y = player.translation.y;
             player.translation = controls.route[0];
+            player.translation.y = y;
             controls.velocity = Vec3::ZERO;
             controls.route.clear();
             desired = Vec3::ZERO;
@@ -283,11 +291,34 @@ pub fn move_player(
             controls.velocity = Vec3::ZERO;
         }
     }
-    player.translation = slide(previous, delta, &discs);
+    let mut candidate = slide(previous, delta, &discs);
+    let allowed = library.as_ref().is_none_or(|lib| {
+        crate::jetpack::can_move(
+            lib,
+            previous,
+            candidate,
+            flight.as_ref().is_some_and(|f| f.airborne),
+        )
+    });
+    if allowed {
+        if !flight.as_ref().is_some_and(|f| f.airborne) {
+            if let Some(y) = library
+                .as_ref()
+                .and_then(|lib| crate::jetpack::height(lib, candidate))
+            {
+                candidate.y = y;
+            }
+        }
+        player.translation = candidate;
+    }
     let actual = flat(player.translation - previous);
     controls.stride += actual.length() * 8.5;
-    controls.foot_distance += actual.length();
-    if controls.foot_distance > 0.72 {
+    if flight.as_ref().is_some_and(|f| f.airborne) {
+        controls.foot_distance = 0.0;
+    } else {
+        controls.foot_distance += actual.length();
+    }
+    if controls.foot_distance > 0.72 && !flight.as_ref().is_some_and(|f| f.airborne) {
         controls.foot_distance -= 0.72;
         sound.play(Cue::Step);
     }
@@ -474,6 +505,7 @@ pub fn animate_character(
     time: Res<Time>,
     controls: Res<Controls>,
     feedback: Res<Feedback>,
+    flight: Option<Res<crate::jetpack::Flight>>,
     mut parts: Query<(&Part, &mut Transform), Without<Player>>,
 ) {
     if feedback.hit_stop > 0.0
@@ -483,7 +515,12 @@ pub fn animate_character(
     {
         return;
     }
-    let speed = (controls.velocity.length() / WALK_SPEED).min(1.4);
+    let airborne = flight.as_ref().is_some_and(|f| f.airborne);
+    let speed = if airborne {
+        0.0
+    } else {
+        (controls.velocity.length() / WALK_SPEED).min(1.4)
+    };
     let breathe = (time.elapsed_secs() * 2.0).sin() * 0.012;
     for (part, mut transform) in &mut parts {
         *transform = part.rest;
@@ -504,7 +541,9 @@ pub fn animate_character(
             PartKind::Leg(side) => {
                 transform.rotation =
                     Quat::from_rotation_x(controls.stride.sin() * 0.55 * speed * side);
-                if controls.attack.is_some() {
+                if airborne {
+                    transform.rotation = Quat::from_rotation_x(-0.25);
+                } else if controls.attack.is_some() {
                     transform.rotation = Quat::from_rotation_x(-0.12 * side);
                 }
             }
@@ -536,15 +575,29 @@ pub fn draw_navigation(
     controls: Res<Controls>,
     player: Single<&Transform, With<Player>>,
     mut gizmos: Gizmos,
+    library: Res<crate::assets::SceneLibrary>,
+    flight: Res<crate::jetpack::Flight>,
     time: Res<Time>,
 ) {
     if let Some(goal) = controls.route.last() {
         let color = Color::srgba(0.25, 0.95, 1.0, 0.7);
         let y = Vec3::Y * 0.035;
+        let waypoint = |p: Vec3| {
+            Vec3::new(
+                p.x,
+                crate::jetpack::height(&library, p).unwrap_or(flight.support)
+                    + if flight.airborne {
+                        crate::jetpack::HOVER
+                    } else {
+                        0.0
+                    },
+                p.z,
+            )
+        };
         let r = 0.24 + 0.025 * (time.elapsed_secs() * 7.0).sin();
         gizmos.circle(
             Isometry3d::new(
-                *goal + y,
+                waypoint(*goal) + y,
                 Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
             ),
             r,
@@ -552,7 +605,7 @@ pub fn draw_navigation(
         );
         let mut previous = player.translation + y;
         for point in &controls.route {
-            let end = *point + y;
+            let end = waypoint(*point) + y;
             let delta = end - previous;
             let count = (delta.length() / 0.3) as usize;
             for i in 0..count {

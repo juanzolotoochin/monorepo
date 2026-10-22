@@ -4,6 +4,7 @@ mod control;
 mod effects;
 mod gameplay;
 mod impact;
+mod jetpack;
 mod navigation;
 mod pile_model;
 mod piles;
@@ -29,6 +30,7 @@ fn main() {
             "mining-deck" => 0,
             "boulder-lab" => 1,
             "pile-lab" => 2,
+            "jetpack-lab" => 3,
             name => {
                 eprintln!("Unknown scene {name}");
                 std::process::exit(2)
@@ -62,6 +64,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .insert_resource(scenes)
         .init_resource::<assets::ModelCache>()
         .init_resource::<Controls>()
+        .init_resource::<jetpack::Flight>()
         .init_resource::<piles::PileLab>()
         .init_resource::<effects::Feedback>()
         .insert_resource(if simulation || offscreen {
@@ -120,13 +123,13 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
     app.add_systems(
         Update,
         (
-            assets::switch_scene,
+            (assets::switch_scene, jetpack::scene_changed).chain(),
             piles::setup_scene,
             control::begin,
             piles::input.run_if(control::interactive),
             mouse_commands.run_if(control::interactive),
             preview::playback.run_if(control::interactive),
-            move_player,
+            (jetpack::update, move_player).chain(),
             piles::arrive,
             piles::update_transit,
             piles::render,

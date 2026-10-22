@@ -1,10 +1,13 @@
 use super::protocol::{Command, PileCheck};
 use super::*;
 fn run(steps: Vec<Command>) -> Value {
+    run_at(steps, 30)
+}
+fn run_at(steps: Vec<Command>, fps: u32) -> Value {
     let script = Script {
         version: 1,
         scene: "pile-lab".into(),
-        fps: 30,
+        fps,
         width: 1440,
         height: 960,
         max_frames: 1200,
@@ -21,6 +24,15 @@ fn run(steps: Vec<Command>) -> Value {
     let mut app = crate::build_app(options, scenes, hub);
     for _ in 0..1300 {
         app.update();
+        let world = app.world_mut();
+        let p = player_position(world);
+        let library = world.resource::<SceneLibrary>();
+        if library.current == 3 {
+            assert!(
+                crate::jetpack::height(library, p).is_none_or(|y| p.y >= y - 0.025),
+                "player entered terrain: {p:?}"
+            );
+        }
         let hub = app.world().resource::<Hub>();
         if !hub.latest.is_null() && !hub.latest["totals"].is_null() {
             assert_eq!(
@@ -122,4 +134,102 @@ fn inspection_works_in_other_scenes_and_commands_validate_bounds() {
         10
     );
     assert!(report["state"]["player"]["cargo"].is_null());
+}
+
+#[test]
+fn jetpack_script_climbs_crosses_chasm_hovers_safely_and_lands() {
+    for fps in [20, 30, 60] {
+        let report = run_at(
+            vec![
+                Command::Scene {
+                    scene: "jetpack-lab".into(),
+                },
+                Command::Jetpack { enabled: true },
+                Command::Walk {
+                    position: [0.0, 2.0],
+                },
+                Command::Wait { frames: fps },
+                Command::Walk {
+                    position: [2.0, 2.0],
+                },
+                Command::Jetpack { enabled: false },
+                Command::Wait { frames: fps },
+                Command::Inspect,
+                Command::Jetpack { enabled: true },
+                Command::Walk {
+                    position: [5.0, 1.0],
+                },
+                Command::Wait { frames: fps },
+                Command::Jetpack { enabled: false },
+                Command::Wait { frames: fps * 2 },
+            ],
+            fps,
+        );
+        assert_eq!(report["status"], "passed", "{report}");
+        let receipts = report["receipts"].as_array().unwrap();
+        let top = receipts[3]["state"]["player"]["position"][1]
+            .as_f64()
+            .unwrap();
+        assert!((top - 3.8).abs() < 0.05, "{top}");
+        let gap = &receipts[6]["state"]["player"];
+        assert_eq!(gap["jetpack"]["requested"], false);
+        assert_eq!(gap["jetpack"]["airborne"], true);
+        assert!(gap["position"][1].as_f64().unwrap() > 3.7);
+        let final_player = &report["state"]["player"];
+        assert_eq!(final_player["jetpack"]["airborne"], false);
+        assert!((final_player["position"][1].as_f64().unwrap() - 3.5).abs() < 0.01);
+    }
+}
+
+#[test]
+fn space_lifts_and_releases_and_scene_switch_restores_deck() {
+    use bevy::prelude::*;
+    let options = Options {
+        simulation: true,
+        ..default()
+    };
+    let mut scenes = SceneLibrary::new();
+    scenes.initial = 3;
+    let hub = Hub::new(options.clone()).unwrap();
+    let mut app = crate::build_app(options, scenes, hub);
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::Space);
+    for _ in 0..60 {
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+    }
+    let p = player_position(app.world_mut());
+    assert!((p.y - crate::jetpack::HOVER).abs() < 0.01);
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .release(KeyCode::Space);
+    for _ in 0..60 {
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+    }
+    assert!(player_position(app.world_mut()).y.abs() < 0.01);
+    assert!(!app.world().resource::<crate::jetpack::Flight>().airborne);
+    for index in [0, 3, 1, 3, 2] {
+        app.world_mut().resource_mut::<SceneLibrary>().requested = Some(index);
+        app.update();
+        let world = app.world_mut();
+        assert!(!world.resource::<crate::jetpack::Flight>().requested);
+        let count = world
+            .query_filtered::<Entity, With<crate::jetpack::TerrainVisual>>()
+            .iter(world)
+            .count();
+        assert_eq!(count > 0, index == 3);
+        for visibility in world
+            .query_filtered::<&Visibility, With<crate::jetpack::Deck>>()
+            .iter(world)
+        {
+            assert_eq!(*visibility == Visibility::Hidden, index == 3);
+        }
+    }
 }

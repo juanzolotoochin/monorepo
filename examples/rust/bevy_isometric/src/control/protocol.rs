@@ -7,6 +7,15 @@ pub const VERSION: u32 = 1;
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
     Inspect,
+    Jetpack {
+        enabled: bool,
+    },
+    AssertFlight {
+        airborne: bool,
+        altitude: f32,
+        #[serde(default = "flight_tolerance")]
+        tolerance: f32,
+    },
     Scene {
         scene: String,
     },
@@ -107,6 +116,7 @@ pub fn scene_index(name: &str) -> Result<usize, String> {
         "mining-deck" => Ok(0),
         "boulder-lab" => Ok(1),
         "pile-lab" => Ok(2),
+        "jetpack-lab" => Ok(3),
         _ => Err(format!("Unknown scene {name}")),
     }
 }
@@ -115,4 +125,8 @@ pub fn point(position: [f32; 2]) -> Result<bevy::prelude::Vec3, String> {
         return Err("Position must be finite and inside the deck".into());
     }
     Ok(bevy::prelude::Vec3::new(position[0], 0.0, position[1]))
+}
+
+fn flight_tolerance() -> f32 {
+    0.05
 }

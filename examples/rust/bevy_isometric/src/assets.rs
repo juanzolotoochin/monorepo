@@ -35,6 +35,8 @@ impl SceneLibrary {
                 ScenePack::decode(boulder_lab::PACK_BYTES)
                     .expect("validated boulder lab asset pack"),
                 ScenePack::decode(pile_lab::PACK_BYTES).expect("validated pile lab asset pack"),
+                ScenePack::decode(jetpack_lab::PACK_BYTES)
+                    .expect("validated jetpack lab asset pack"),
             ],
             current: usize::MAX,
             initial: 0,
@@ -113,6 +115,8 @@ pub fn switch_scene(
         Some(0)
     } else if keys.just_pressed(KeyCode::Digit2) {
         Some(1)
+    } else if keys.just_pressed(KeyCode::Digit4) {
+        Some(3)
     } else if keys.just_pressed(KeyCode::Digit3) {
         Some(2)
     } else if library.current == usize::MAX {

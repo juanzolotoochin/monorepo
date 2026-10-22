@@ -73,6 +73,7 @@ pub enum Cue {
     Toss = 6,
     Land = 7,
     Dispense = 8,
+    Jetpack = 9,
     Stone = 3,
     Crystal = 4,
     Polymer = 5,

@@ -140,3 +140,20 @@ The compiler validates capacities, quantities, finite coordinates, and deck
 bounds. See `examples/rust/bevy_isometric/assets/levels/pile_lab.ron` for an
 example. Recipes and layouts without logistics fixtures remain valid source
 inputs and rebuild into the current pack version.
+
+Scene pack version 4 adds optional elevated terrain:
+
+```ron
+terrain: Some((platforms: [
+    (min: (-7.0, -1.0), max: (-2.0, 6.0), height: 0.0),
+    (min: (-2.0, -1.0), max: (1.0, 4.0), height: 2.0),
+])),
+```
+
+Bounds are `[x, z]`, within the navigable -8..8 range, and top heights are
+0..6 meters. The compiler rejects nonfinite values, inverted bounds, empty or
+oversized layouts, and spawns outside a platform or at the wrong elevation.
+Uncovered space is void; overlapping platforms use the highest top. Omitting
+`terrain` retains the flat deck. Geometry handles are shared and reused when
+switching scenes. See `jetpack_lab.ron` for an elevated scene using the existing
+`scene_assets` rule.

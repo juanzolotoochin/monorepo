@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "scene": "jetpack-lab",
+  "fps": 30,
+  "width": 1440,
+  "height": 960,
+  "max_frames": 1200,
+  "steps": [
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "jetpack",
+      "enabled": true
+    },
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "walk",
+      "position": [
+        0,
+        2
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "assert_flight",
+      "airborne": true,
+      "altitude": 3.8
+    },
+    {
+      "op": "walk",
+      "position": [
+        2,
+        2
+      ]
+    },
+    {
+      "op": "jetpack",
+      "enabled": false
+    },
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "assert_flight",
+      "airborne": true,
+      "altitude": 3.8
+    },
+    {
+      "op": "jetpack",
+      "enabled": true
+    },
+    {
+      "op": "walk",
+      "position": [
+        5,
+        1
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "jetpack",
+      "enabled": false
+    },
+    {
+      "op": "wait",
+      "frames": 40
+    },
+    {
+      "op": "assert_flight",
+      "airborne": false,
+      "altitude": 3.5
+    },
+    {
+      "op": "inspect"
+    }
+  ]
+}

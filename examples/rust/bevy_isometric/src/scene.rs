@@ -56,6 +56,7 @@ fn object(
     size: Vec3,
 ) {
     commands.spawn((
+        crate::jetpack::Deck,
         Mesh3d(cube.clone()),
         MeshMaterial3d(mat.clone()),
         Transform::from_translation(pos).with_scale(size),
@@ -515,6 +516,22 @@ pub fn setup(
             Visibility::default(),
         ))
         .with_children(|p| {
+            for x in [-0.32, 0.32] {
+                block(
+                    p,
+                    &cube,
+                    &frame,
+                    Vec3::new(x, 0.8, -0.22),
+                    Vec3::new(0.2, 0.4, 0.24),
+                );
+                p.spawn((
+                    crate::jetpack::Exhaust,
+                    Mesh3d(cube.clone()),
+                    MeshMaterial3d(cyan.clone()),
+                    Transform::from_xyz(x, 0.42, -0.22).with_scale(Vec3::new(0.12, 0.5, 0.12)),
+                    Visibility::Hidden,
+                ));
+            }
             let body = Transform::from_xyz(0.0, 0.94, 0.0);
             p.spawn((
                 Part {
@@ -936,7 +953,7 @@ pub fn hud(mut commands: Commands) {
             ));
             p.spawn((
                 Text::new(
-                    "1 / 2 / 3  SCENES    WASD  STEER    SHIFT  RUN    WHEEL  ZOOM    M  AUDIO",
+                    "1 / 2 / 3 / 4  SCENES    SPACE  JETPACK    WASD  STEER    SHIFT  RUN    WHEEL  ZOOM    M  AUDIO",
                 ),
                 TextFont {
                     font_size: 10.0,
@@ -952,6 +969,8 @@ pub fn update_hud(
     sound: Res<Sound>,
     library: Res<SceneLibrary>,
     cache: Res<ModelCache>,
+    flight: Res<crate::jetpack::Flight>,
+    player: Single<&Transform, With<Player>>,
     mut scene_label: Single<&mut Text, (With<SceneLabel>, Without<Status>, Without<ContactCount>)>,
     mut status: Single<(&mut Text, &mut TextColor), With<Status>>,
     mut gauge: Single<&mut Node, With<Gauge>>,
@@ -975,6 +994,16 @@ pub fn update_hud(
                 Color::srgb(0.42, 0.65, 0.72),
             )
         }
+    } else if flight.airborne {
+        (
+            if flight.requested {
+                "JETPACK / HOVER"
+            } else {
+                "JETPACK / SAFE LANDING"
+            },
+            1.0,
+            Color::srgb(0.34, 0.88, 0.93),
+        )
     } else {
         ("READY", 1.0, Color::srgb(0.34, 0.88, 0.93))
     };
@@ -994,6 +1023,16 @@ pub fn update_hud(
         "CONTACTS {:02} / HIT {last} / DYNAMIC BUILDS {}{audio}",
         controls.impacts, cache.runtime_generations
     );
+    let text = if library.current == 3 {
+        format!(
+            "ALT {:.1}m / SUPPORT {:.1}m / HOVER {:.1}m / HOLD SPACE TO FLY",
+            player.translation.y,
+            flight.support,
+            crate::jetpack::HOVER
+        )
+    } else {
+        text
+    };
     if contacts.0 != text {
         contacts.0 = text;
     }

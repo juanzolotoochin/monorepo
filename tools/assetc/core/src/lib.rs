@@ -6,7 +6,7 @@ pub use piles::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 pub type Result<T> = std::result::Result<T, String>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -226,6 +226,20 @@ fn industrial() -> bool {
     true
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TerrainPlatform {
+    pub min: [f32; 2],
+    pub max: [f32; 2],
+    pub height: f32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Terrain {
+    pub platforms: Vec<TerrainPlatform>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename = "Scene", deny_unknown_fields)]
 pub struct Scene {
     pub name: String,
@@ -235,6 +249,8 @@ pub struct Scene {
     pub instances: Vec<Instance>,
     #[serde(default)]
     pub piles: Option<PileLayout>,
+    #[serde(default)]
+    pub terrain: Option<Terrain>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScenePack {
@@ -307,6 +323,37 @@ impl ScenePack {
             || !self.scene.spawn.iter().all(|v| v.is_finite())
         {
             return Err("invalid scene header or instance count".into());
+        }
+        if let Some(terrain) = &self.scene.terrain {
+            if terrain.platforms.is_empty() || terrain.platforms.len() > 128 {
+                return Err("terrain requires 1..128 platforms".into());
+            }
+            for p in &terrain.platforms {
+                if !p.height.is_finite()
+                    || !(0.0..=6.0).contains(&p.height)
+                    || (0..2).any(|i| {
+                        !p.min[i].is_finite()
+                            || !p.max[i].is_finite()
+                            || p.min[i] < -8.0
+                            || p.max[i] > 8.0
+                            || p.min[i] >= p.max[i]
+                    })
+                {
+                    return Err("invalid terrain platform bounds or height".into());
+                }
+            }
+        }
+        if let Some(terrain) = &self.scene.terrain {
+            let [x, y, z] = self.scene.spawn;
+            let top = terrain
+                .platforms
+                .iter()
+                .filter(|p| x >= p.min[0] && x <= p.max[0] && z >= p.min[1] && z <= p.max[1])
+                .map(|p| p.height)
+                .max_by(f32::total_cmp);
+            if top.is_none_or(|h| (h - y).abs() > 0.01) {
+                return Err("terrain scene spawn must rest on a platform".into());
+            }
         }
         if let Some(piles) = &self.scene.piles {
             piles.validate()?;
@@ -438,6 +485,7 @@ mod tests {
                 spawn: [0.0; 3],
                 industrial: true,
                 piles: None,
+                terrain: None,
                 instances: vec![Instance {
                     prefab: "rock".into(),
                     position: [0.0; 3],
@@ -457,6 +505,38 @@ mod tests {
         assert!(pack.validate().is_err());
         pack.scene.instances[0].scale = 1.0;
         pack.scene.instances[0].parameters = Some(BoulderParameters::default());
+        assert!(pack.validate().is_err());
+    }
+    #[test]
+    fn terrain_validation_rejects_invalid_bounds_heights_and_void_spawns() {
+        let mut pack = ScenePack {
+            version: VERSION,
+            prefabs: vec![],
+            scene: Scene {
+                name: "terrain".into(),
+                spawn: [0.0; 3],
+                industrial: false,
+                instances: vec![],
+                piles: None,
+                terrain: Some(Terrain {
+                    platforms: vec![TerrainPlatform {
+                        min: [-1.0; 2],
+                        max: [1.0; 2],
+                        height: 0.0,
+                    }],
+                }),
+            },
+        };
+        assert!(pack.validate().is_ok());
+        pack.scene.spawn = [5.0, 0.0, 5.0];
+        assert!(pack.validate().is_err());
+        pack.scene.spawn = [0.0; 3];
+        let t = pack.scene.terrain.as_mut().unwrap();
+        t.platforms[0].height = f32::NAN;
+        assert!(pack.validate().is_err());
+        let t = pack.scene.terrain.as_mut().unwrap();
+        t.platforms[0].height = 0.0;
+        t.platforms[0].min[0] = 2.0;
         assert!(pack.validate().is_err());
     }
 }
