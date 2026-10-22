@@ -1,6 +1,6 @@
 Palette(materials: [
-    (name: "basalt", color: (0.27, 0.29, 0.36), emissive: (0.0, 0.0, 0.0), metallic: 0.18, roughness: 0.72),
-    (name: "dark_basalt", color: (0.14, 0.17, 0.23), emissive: (0.0, 0.0, 0.0), metallic: 0.10, roughness: 0.72),
-    (name: "light_basalt", color: (0.39, 0.40, 0.47), emissive: (0.0, 0.0, 0.0), metallic: 0.12, roughness: 0.72),
-    (name: "amber_ore", color: (1.0, 0.28, 0.045), emissive: (4.0, 1.12, 0.18), metallic: 0.0, roughness: 0.5),
+    (name: "basalt", color: (0.27, 0.29, 0.36), emissive: (0.0, 0.0, 0.0), metallic: 0.18, roughness: 0.72, impact: Stone),
+    (name: "dark_basalt", color: (0.14, 0.17, 0.23), emissive: (0.0, 0.0, 0.0), metallic: 0.10, roughness: 0.72, impact: Stone),
+    (name: "light_basalt", color: (0.39, 0.40, 0.47), emissive: (0.0, 0.0, 0.0), metallic: 0.12, roughness: 0.72, impact: Stone),
+    (name: "amber_ore", color: (1.0, 0.28, 0.045), emissive: (4.0, 1.12, 0.18), metallic: 0.0, roughness: 0.5, impact: Metal),
 ])

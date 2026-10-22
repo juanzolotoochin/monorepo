@@ -1,5 +1,9 @@
-use crate::gameplay::{Player, Rock};
+use crate::{
+    gameplay::Player,
+    impact::{self, ImpactTarget},
+};
 use bevy::{camera::ScalingMode, input::mouse::AccumulatedMouseScroll, prelude::*};
+use voxel_assets::ImpactResponse;
 
 #[derive(Resource, Default)]
 pub struct Feedback {
@@ -16,8 +20,8 @@ pub struct CameraRig {
 #[derive(Resource)]
 pub struct FxAssets {
     pub cube: Handle<Mesh>,
-    pub spark: [Handle<StandardMaterial>; 3],
-    pub debris: Handle<StandardMaterial>,
+    pub spark: [Handle<StandardMaterial>; 4],
+    pub debris: [Handle<StandardMaterial>; 4],
     pub trail: Handle<StandardMaterial>,
 }
 #[derive(Component)]
@@ -32,6 +36,7 @@ pub struct Particle {
 #[derive(Component)]
 pub struct Flash {
     age: f32,
+    intensity: f32,
 }
 
 fn random(seed: &mut u32) -> f32 {
@@ -47,27 +52,30 @@ pub fn impact(
     position: Vec3,
     normal: Vec3,
     number: u32,
+    kind: ImpactResponse,
 ) {
+    let response = impact::response(kind);
+    let bank = impact::index(kind);
     let mut seed = number.wrapping_mul(747796405).wrapping_add(2891336453);
-    for i in 0..44 {
+    for i in 0..response.sparks + response.debris {
         let random_dir = Vec3::new(
             random(&mut seed) * 2.0 - 1.0,
             random(&mut seed) * 1.3,
             random(&mut seed) * 2.0 - 1.0,
         );
         let direction = (normal * 1.4 + random_dir).normalize_or(Vec3::Y);
-        let speed = 4.0 + random(&mut seed) * 7.0;
-        let size = if i < 32 {
+        let speed = response.speed * (0.5 + random(&mut seed));
+        let size = if i < response.sparks {
             Vec3::new(0.045, 0.045, 0.20 + random(&mut seed) * 0.20)
         } else {
             Vec3::splat(0.06 + random(&mut seed) * 0.08)
         };
         commands.spawn((
             Mesh3d(assets.cube.clone()),
-            MeshMaterial3d(if i < 32 {
-                assets.spark[i % 3].clone()
+            MeshMaterial3d(if i < response.sparks {
+                assets.spark[bank].clone()
             } else {
-                assets.debris.clone()
+                assets.debris[bank].clone()
             }),
             Transform::from_translation(position + normal * 0.06).with_scale(size),
             Particle {
@@ -80,31 +88,36 @@ pub fn impact(
             },
         ));
     }
-    // A bright, short contact flash and local light, both cleaned up within a tenth second.
-    commands.spawn((
-        Mesh3d(assets.cube.clone()),
-        MeshMaterial3d(assets.spark[2].clone()),
-        Transform::from_translation(position).with_scale(Vec3::splat(0.16)),
-        Particle {
-            velocity: Vec3::ZERO,
-            age: 0.0,
-            life: 0.065,
-            size: Vec3::splat(0.16),
-            gravity: 0.0,
-            bounce: false,
-        },
-    ));
-    commands.spawn((
-        PointLight {
-            color: Color::srgb(1.0, 0.48, 0.12),
-            intensity: 45000.0,
-            range: 4.5,
-            radius: 0.15,
-            ..default()
-        },
-        Transform::from_translation(position + normal * 0.2),
-        Flash { age: 0.0 },
-    ));
+    // Soft surfaces shed flakes without a hot contact flash or point light.
+    if response.light > 0.0 {
+        commands.spawn((
+            Mesh3d(assets.cube.clone()),
+            MeshMaterial3d(assets.spark[bank].clone()),
+            Transform::from_translation(position).with_scale(Vec3::splat(0.16)),
+            Particle {
+                velocity: Vec3::ZERO,
+                age: 0.0,
+                life: 0.065,
+                size: Vec3::splat(0.16),
+                gravity: 0.0,
+                bounce: false,
+            },
+        ));
+        commands.spawn((
+            PointLight {
+                color: Color::srgb(response.color[0], response.color[1], response.color[2]),
+                intensity: response.light,
+                range: 4.5,
+                radius: 0.15,
+                ..default()
+            },
+            Transform::from_translation(position + normal * 0.2),
+            Flash {
+                age: 0.0,
+                intensity: response.light,
+            },
+        ));
+    }
 }
 
 pub fn blade_echo(
@@ -139,9 +152,12 @@ pub fn update_effects(
     mut commands: Commands,
     time: Res<Time>,
     mut feedback: ResMut<Feedback>,
-    mut particles: Query<(Entity, &mut Transform, &mut Particle), (Without<Rock>, Without<Player>)>,
+    mut particles: Query<
+        (Entity, &mut Transform, &mut Particle),
+        (Without<ImpactTarget>, Without<Player>),
+    >,
     mut flashes: Query<(Entity, &mut PointLight, &mut Flash)>,
-    mut rocks: Query<(&mut Transform, &mut Rock), (Without<Particle>, Without<Player>)>,
+    mut rocks: Query<(&mut Transform, &mut ImpactTarget), (Without<Particle>, Without<Player>)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let dt = time.delta_secs().min(0.1);
@@ -170,18 +186,27 @@ pub fn update_effects(
     }
     for (entity, mut light, mut flash) in &mut flashes {
         flash.age += dt;
-        light.intensity = 45000.0 * (1.0 - flash.age / 0.1).max(0.0).powi(2);
+        light.intensity = flash.intensity * (1.0 - flash.age / 0.1).max(0.0).powi(2);
         if flash.age > 0.1 {
             commands.entity(entity).despawn();
         }
     }
     for (mut transform, mut rock) in &mut rocks {
-        rock.flash = (rock.flash - dt * 5.0).max(0.0);
         let base = rock.base;
         transform.translation = base + rock.kick;
         rock.kick *= (-28.0 * dt).exp();
-        if let Some(mat) = materials.get_mut(&rock.material) {
-            mat.emissive = LinearRgba::rgb(rock.flash * 2.4, rock.flash * 0.55, rock.flash * 0.05);
+        for slot in &mut rock.slots {
+            let response = impact::response(slot.kind);
+            slot.flash = (slot.flash - dt / response.flash_seconds).max(0.0);
+            if let Some(mat) = materials.get_mut(&slot.handle) {
+                // Add to, rather than overwrite, authored emission (e.g. crystal).
+                mat.emissive = LinearRgba {
+                    red: slot.rest_emissive.red + response.color[0] * slot.flash * 3.0,
+                    green: slot.rest_emissive.green + response.color[1] * slot.flash * 3.0,
+                    blue: slot.rest_emissive.blue + response.color[2] * slot.flash * 3.0,
+                    ..slot.rest_emissive
+                };
+            }
         }
     }
 }

@@ -764,12 +764,14 @@ pub fn setup(
         });
     commands.insert_resource(FxAssets {
         cube,
-        spark: [
-            glow(&mut materials, [1.0, 0.78, 0.25], 16.0),
-            glow(&mut materials, [1.0, 0.29, 0.035], 9.0),
-            white,
+        spark: crate::impact::KINDS
+            .map(|kind| glow(&mut materials, crate::impact::response(kind).color, 12.0)),
+        debris: [
+            rock_dark,
+            material(&mut materials, [0.5, 0.57, 0.65], 0.9),
+            glow(&mut materials, [0.08, 0.5, 1.0], 1.5),
+            material(&mut materials, [0.12, 0.5, 0.23], 0.0),
         ],
-        debris: rock_dark,
         trail: materials.add(StandardMaterial {
             base_color: Color::srgba(0.15, 0.75, 1.0, 0.16),
             emissive: LinearRgba::rgb(0.1, 1.6, 2.5),
@@ -983,8 +985,11 @@ pub fn update_hud(
         scene_label.0 = library.title().into();
     }
     let audio = if sound.muted { "  /  MUTED" } else { "" };
+    let last = controls
+        .last_material
+        .map_or_else(|| "—".into(), |kind| format!("{kind:?}").to_uppercase());
     let text = format!(
-        "CONTACTS {:02} / DYNAMIC BUILDS {}{audio}",
+        "CONTACTS {:02} / HIT {last} / DYNAMIC BUILDS {}{audio}",
         controls.impacts, cache.runtime_generations
     );
     if contacts.0 != text {

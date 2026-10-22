@@ -1,5 +1,6 @@
 use crate::{
     effects::{self, Feedback, FxAssets},
+    impact::{self, ImpactTarget},
     navigation::{self, flat, Disc, EDGE, RADIUS},
     sound::{Cue, Sound},
 };
@@ -16,14 +17,6 @@ pub const REST_ANGLE: f32 = 0.45;
 pub struct Player;
 #[derive(Component, Clone, Copy)]
 pub struct Obstacle(pub Disc);
-#[derive(Component)]
-pub struct Rock {
-    pub base: Vec3,
-    pub contact_radius: f32,
-    pub kick: Vec3,
-    pub flash: f32,
-    pub material: Handle<StandardMaterial>,
-}
 #[derive(Component)]
 pub struct Part {
     pub kind: PartKind,
@@ -87,6 +80,7 @@ pub struct Controls {
     pub queued: Option<(Vec3, f32)>,
     pub repath: f32,
     pub impacts: u32,
+    pub last_material: Option<voxel_assets::ImpactResponse>,
 }
 impl Controls {
     pub fn strike(&mut self, aim: Vec3) {
@@ -343,7 +337,7 @@ pub fn combat(
     time: Res<Time>,
     mut controls: ResMut<Controls>,
     mut player: Single<&mut Transform, With<Player>>,
-    mut obstacles: Query<(&Obstacle, Option<&mut Rock>)>,
+    mut obstacles: Query<(&Obstacle, Option<&mut ImpactTarget>)>,
     mut feedback: ResMut<Feedback>,
     assets: Res<FxAssets>,
     sound: Res<Sound>,
@@ -377,26 +371,81 @@ pub fn combat(
                 radius: rock.as_ref().map_or(o.0.radius, |r| r.contact_radius),
             })
             .collect();
-        if let Some((index, angle, position)) =
-            swept_hit(player.translation, player.rotation, from, to, &discs)
-        {
-            let normal = flat(position - discs[index].center).normalize_or(-attack.aim);
+        // Broad-phase discs reject distant targets; exact prefab triangles select
+        // the contacted material and prevent feedback in empty parts of the bounds.
+        let samples = ((to - from).abs() / 0.025).ceil().max(1.0) as usize;
+        let mut contact = None;
+        for sample in 0..=samples {
+            let angle = lerp(from, to, sample as f32 / samples as f32);
+            let pivot = player.translation + player.rotation * Vec3::new(0.38, 0.9, 0.0);
+            let blade = player.rotation * Quat::from_rotation_y(angle) * Vec3::Z;
+            let (base, tip) = (pivot + blade * 0.25, pivot + blade * 1.95);
+            let mut candidates = Vec::new();
+            for (index, (_, target)) in obstacles.iter().enumerate() {
+                let disc = discs[index];
+                if disc.radius <= 0.0
+                    || navigation::segment_distance(disc.center, base, tip) > disc.radius + 0.10
+                {
+                    continue;
+                }
+                if let Some(target) = target {
+                    if let Some((t, material, normal)) = target.contact(base, tip) {
+                        candidates.push((t, index, material, base.lerp(tip, t), normal));
+                    }
+                } else if let Some((_, _, position)) =
+                    swept_hit(player.translation, player.rotation, angle, angle, &[disc])
+                {
+                    let normal = flat(position - disc.center).normalize_or(-attack.aim);
+                    candidates.push((
+                        base.distance(position) / base.distance(tip),
+                        index,
+                        0,
+                        position,
+                        normal,
+                    ));
+                }
+            }
+            if let Some((_, index, material, position, normal)) =
+                candidates.into_iter().min_by(|a, b| a.0.total_cmp(&b.0))
+            {
+                contact = Some((index, angle, material, position, normal));
+                break;
+            }
+        }
+        if let Some((index, angle, material, position, normal)) = contact {
+            let mut kind = voxel_assets::ImpactResponse::Metal;
+            if let Some((_, Some(mut target))) = obstacles.iter_mut().nth(index) {
+                let slot = &mut target.slots[material];
+                kind = slot.kind;
+                slot.flash = 1.0;
+                target.kick = -normal * impact::response(kind).kick;
+            }
+            controls.last_material = Some(kind);
+            let response = impact::response(kind);
             attack.impact_angle = Some(angle);
             attack.age = 0.0;
             controls.velocity = Vec3::ZERO;
             controls.impacts += 1;
-            feedback.hit_stop = 0.058;
-            feedback.trauma = 0.48;
+            feedback.hit_stop = response.hit_stop;
+            feedback.trauma = response.trauma;
             feedback.flash = 1.0;
             let base = player.translation;
             let body_discs: Vec<_> = obstacles.iter().map(|(o, _)| o.0).collect();
             player.translation = slide(base, -attack.aim * 0.075, &body_discs);
-            if let Some((_, Some(mut rock))) = obstacles.iter_mut().nth(index) {
-                rock.kick = -normal * 0.045;
-                rock.flash = 1.0;
-            }
-            effects::impact(&mut commands, &assets, position, normal, controls.impacts);
-            sound.play(Cue::Clang);
+            effects::impact(
+                &mut commands,
+                &assets,
+                position,
+                normal,
+                controls.impacts,
+                kind,
+            );
+            sound.play(match kind {
+                voxel_assets::ImpactResponse::Stone => Cue::Stone,
+                voxel_assets::ImpactResponse::Metal => Cue::Clang,
+                voxel_assets::ImpactResponse::Crystal => Cue::Crystal,
+                voxel_assets::ImpactResponse::Polymer => Cue::Polymer,
+            });
         } else {
             // Short-lived afterimages follow the actual blade sweep.
             for fraction in [0.25, 0.65, 1.0] {
@@ -527,8 +576,8 @@ mod tests {
         let mut app = App::new();
         let fx = FxAssets {
             cube: default(),
-            spark: [default(), default(), default()],
-            debris: default(),
+            spark: std::array::from_fn(|_| default()),
+            debris: std::array::from_fn(|_| default()),
             trail: default(),
         };
         app.init_resource::<Time>()
@@ -582,6 +631,93 @@ mod tests {
                 .count(),
             0
         );
+    }
+
+    #[test]
+    fn combat_uses_the_struck_quadrant_at_different_frame_rates() {
+        use crate::impact::{surfaces, ImpactSlot, KINDS};
+        use voxel_assets::{generate_boulder, BoulderRecipe, MaterialPattern};
+        let model = generate_boulder(&BoulderRecipe {
+            radius: 1.15,
+            height: 1.6,
+            voxel_size: 0.25,
+            taper: 0.15,
+            debris: 0,
+            material_pattern: MaterialPattern::Quadrants,
+            ..default()
+        })
+        .unwrap();
+        for dt in [1.0 / 30.0, 1.0 / 120.0] {
+            for (slot, (x, z)) in [(-1.8, -1.8), (1.8, -1.8), (-1.8, 1.8), (1.8, 1.8)]
+                .into_iter()
+                .enumerate()
+            {
+                let mut app = App::new();
+                app.init_resource::<Time>()
+                    .init_resource::<Controls>()
+                    .init_resource::<Feedback>()
+                    .insert_resource(Sound::silent())
+                    .insert_resource(FxAssets {
+                        cube: default(),
+                        spark: std::array::from_fn(|_| default()),
+                        debris: std::array::from_fn(|_| default()),
+                        trail: default(),
+                    })
+                    .add_systems(Update, combat);
+                let position = Vec3::new(x, 0.0, z);
+                let aim = -position.normalize();
+                app.world_mut().spawn((
+                    Player,
+                    Transform::from_translation(position)
+                        .with_rotation(Quat::from_rotation_y(aim.x.atan2(aim.z))),
+                ));
+                let target = app
+                    .world_mut()
+                    .spawn((
+                        Obstacle(Disc {
+                            center: Vec3::ZERO,
+                            radius: model.collision.radius,
+                        }),
+                        ImpactTarget {
+                            base: Vec3::ZERO,
+                            contact_radius: model.collision.strike_radius_at(0.9),
+                            kick: Vec3::ZERO,
+                            slots: KINDS
+                                .map(|kind| ImpactSlot {
+                                    handle: default(),
+                                    rest_emissive: LinearRgba::BLACK,
+                                    kind,
+                                    flash: 0.0,
+                                })
+                                .into(),
+                            surfaces: surfaces(&model),
+                            local_from_world: bevy::math::Affine3A::IDENTITY,
+                        },
+                    ))
+                    .id();
+                app.world_mut().resource_mut::<Controls>().strike(aim);
+                app.world_mut()
+                    .resource_mut::<Time>()
+                    .advance_by(std::time::Duration::from_secs_f32(dt));
+                for _ in 0..60 {
+                    app.update();
+                    if app.world().resource::<Controls>().impacts > 0 {
+                        break;
+                    }
+                }
+                let controls = app.world().resource::<Controls>();
+                assert_eq!(controls.impacts, 1, "quadrant {slot} at dt {dt}");
+                assert_eq!(controls.last_material, Some(KINDS[slot]));
+                assert_eq!(
+                    app.world().resource::<Feedback>().hit_stop,
+                    impact::response(KINDS[slot]).hit_stop
+                );
+                let target = app.world().get::<ImpactTarget>(target).unwrap();
+                for (index, material) in target.slots.iter().enumerate() {
+                    assert_eq!(material.flash, if index == slot { 1.0 } else { 0.0 });
+                }
+            }
+        }
     }
 
     #[test]

@@ -57,7 +57,7 @@ live in `//tools/assetc/core:voxel_assets`:
 Boulder(seed: 42, radius: 1.2, height: 1.6, voxel_size: 0.25)
 ```
 
-Optional recipe fields include `taper`, `ore_every`, and `debris`. Unknown
+Optional recipe fields include `taper`, `ore_every`, `debris`, and `material_pattern`. Unknown
 fields are errors. Dimensions, finite values, and a 262144-cell work budget
 are checked before generation. The palette supplies four material definitions
 in order: base, dark, light, ore. See the example's `assets/palette.ron`.
@@ -105,3 +105,31 @@ bazel test //tools/assetc:assetc_test //tools/assetc/core:core_test \
 Tests cover deterministic output, face winding, face reduction, invalid recipes,
 missing references, baked/runtime equivalence, pack versions, scene switching,
 cache reuse, collider visibility, and per-instance material cleanup.
+
+## Material responses
+
+Each of the four palette entries can select `impact: Stone`, `Metal`, `Crystal`,
+or `Polymer` (omitting it defaults to `Stone`). Visual appearance and impact
+response are independent, so one prefab can mix response types:
+
+```ron
+(name: "titanium", color: (0.45, 0.57, 0.68), emissive: (0.0, 0.0, 0.0),
+ metallic: 0.95, roughness: 0.22, impact: Metal)
+```
+
+The response enum is renderer-independent asset data. The game's `impact.rs`
+provides the preset tuning for flash, particles, lighting, displacement, and
+hit pause; `sound.rs`/`sound.c` provide distinct procedural sound cues. Changing
+preset tuning requires rebuilding the game. These are impact effects, not
+material destruction or a physics simulation.
+
+`material_pattern: Speckled` (the default) uses the original base/dark/light/ore
+assignment. `material_pattern: Quadrants` gives all four slots large accessible
+regions: -X/-Z = slot 0, +X/-Z = slot 1, -X/+Z = slot 2, +X/+Z = slot 3. It works
+with baked and runtime recipes. Material boundaries remain intact during greedy
+meshing, so the game can identify the actual surface struck. Scene instances
+may also include `label: Some("METAL")` for a sample caption.
+
+Pack version 2 records material response semantics, recipe patterns, and a
+build-time geometry key shared across palette variants. Rebuild
+packs together with their consumers; version 1 packs are rejected explicitly.

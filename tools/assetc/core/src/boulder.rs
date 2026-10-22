@@ -1,4 +1,6 @@
-use crate::{BoulderRecipe, Collision, CollisionLayer, MeshData, Model, Result, Statistics};
+use crate::{
+    BoulderRecipe, Collision, CollisionLayer, MaterialPattern, MeshData, Model, Result, Statistics,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn hash(x: i32, y: i32, z: i32) -> u32 {
@@ -67,7 +69,9 @@ pub fn generate_boulder(recipe: &BoulderRecipe) -> Result<Model> {
                 if px * px + pz * pz > radius * radius {
                     continue;
                 }
-                let material = if h % recipe.ore_every == 0 {
+                let material = if matches!(recipe.material_pattern, MaterialPattern::Quadrants) {
+                    usize::from(x >= 0) + 2 * usize::from(z >= 0)
+                } else if h % recipe.ore_every == 0 {
                     3
                 } else if h % 7 == 0 {
                     2

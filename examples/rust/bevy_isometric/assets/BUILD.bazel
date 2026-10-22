@@ -24,6 +24,20 @@ boulder_prefab(
     runtime = True,
 )
 
+[
+    boulder_prefab(
+        name = name + "_sample",
+        src = "prefabs/mixed_sample.ron" if name == "mixed" else "prefabs/material_sample.ron",
+        palette = name + ".ron",
+    )
+    for name in [
+        "metal",
+        "crystal",
+        "polymer",
+        "mixed",
+    ]
+]
+
 scene_assets(
     name = "mining_deck",
     layout = "levels/mining_deck.ron",
@@ -43,5 +57,9 @@ scene_assets(
         ":ore_small",
         ":ore_large",
         ":dynamic_ore",
+        ":metal_sample",
+        ":crystal_sample",
+        ":polymer_sample",
+        ":mixed_sample",
     ],
 )

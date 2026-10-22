@@ -1,19 +1,22 @@
 //! Bevy adapter for baked prefabs and the shared runtime boulder generator.
 use crate::{
     effects::Feedback,
-    gameplay::{Controls, Obstacle, Player, Rock},
+    gameplay::{Controls, Obstacle, Player},
+    impact::{self, ImpactSlot, ImpactTarget, Surface},
     navigation::Disc,
 };
 use bevy::{
     asset::RenderAssetUsages, mesh::Indices, prelude::*, render::render_resource::PrimitiveTopology,
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 use voxel_assets::{
     content_key, generate_boulder, Collision, Geometry, Material, MeshData, Model, ScenePack,
 };
 
 #[derive(Component)]
 pub struct BoulderInstance;
+#[derive(Component)]
+pub struct SampleCaption(Vec3);
 #[derive(Component)]
 pub struct IndustrialProp(pub Disc);
 #[derive(Resource)]
@@ -45,11 +48,11 @@ impl SceneLibrary {
 struct CachedModel {
     meshes: Vec<(Handle<Mesh>, usize)>,
     collision: Collision,
+    surfaces: Arc<Vec<Surface>>,
 }
 #[derive(Resource, Default)]
 pub struct ModelCache {
     models: HashMap<String, CachedModel>,
-    palettes: HashMap<String, Vec<Handle<StandardMaterial>>>,
     pub runtime_generations: usize,
 }
 fn standard(material: &Material) -> StandardMaterial {
@@ -82,6 +85,7 @@ fn upload(model: Model, meshes: &mut Assets<Mesh>) -> CachedModel {
             .iter()
             .map(|m| (meshes.add(mesh(m)), m.material))
             .collect(),
+        surfaces: impact::surfaces(&model),
         collision: model.collision,
     }
 }
@@ -93,7 +97,8 @@ pub fn switch_scene(
     mut cache: ResMut<ModelCache>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    old: Query<(Entity, &Rock), With<BoulderInstance>>,
+    old: Query<(Entity, &ImpactTarget), With<BoulderInstance>>,
+    captions: Query<Entity, With<SampleCaption>>,
     mut industrial: Query<(Entity, &IndustrialProp, &mut Visibility)>,
     mut player: Single<&mut Transform, With<Player>>,
     mut controls: ResMut<Controls>,
@@ -115,8 +120,13 @@ pub fn switch_scene(
         return;
     }
     for (entity, rock) in &old {
-        materials.remove(&rock.material);
+        for slot in &rock.slots {
+            materials.remove(&slot.handle);
+        }
         commands.entity(entity).despawn();
+    }
+    for caption in &captions {
+        commands.entity(caption).despawn();
     }
     library.current = index;
     let scene = &library.scenes[index];
@@ -140,7 +150,7 @@ pub fn switch_scene(
             .find(|p| p.id == instance.prefab)
             .expect("validated prefab reference");
         let (key, recipe) = match &prefab.geometry {
-            Geometry::Baked(_) => (prefab.fingerprint.clone(), None),
+            Geometry::Baked(_) => (format!("baked:{}", prefab.geometry_key), None),
             Geometry::Runtime(recipe) => {
                 let recipe = instance
                     .parameters
@@ -162,56 +172,69 @@ pub fn switch_scene(
             cache.models.insert(key.clone(), upload(model, &mut meshes));
         }
         let model = cache.models[&key].clone();
-        let palette_key = content_key(&prefab.palette);
-        let palette = cache
-            .palettes
-            .entry(palette_key)
-            .or_insert_with(|| {
-                prefab
-                    .palette
-                    .materials
-                    .iter()
-                    .map(|m| materials.add(standard(m)))
-                    .collect()
+        // Geometry is shared. Materials belong to each target so only the struck
+        // slot flashes, including when another instance uses the same prefab.
+        let slots: Vec<_> = prefab
+            .palette
+            .materials
+            .iter()
+            .map(|m| {
+                let material = standard(m);
+                ImpactSlot {
+                    rest_emissive: material.emissive,
+                    handle: materials.add(material),
+                    kind: m.impact,
+                    flash: 0.0,
+                }
             })
-            .clone();
-        // Each rock owns its flashing base material; other materials and all
-        // mesh buffers are shared between instances and scene loads.
-        let base_material = materials.add(standard(&prefab.palette.materials[0]));
+            .collect();
+        let handles: Vec<_> = slots.iter().map(|s| s.handle.clone()).collect();
         let center = Vec3::from_array(instance.position);
         let radius = model.collision.radius * instance.scale;
         let contact_radius = model
             .collision
             .strike_radius_at((0.9 - center.y) / instance.scale)
             * instance.scale;
+        let transform = Transform::from_translation(center)
+            .with_scale(Vec3::splat(instance.scale))
+            .with_rotation(Quat::from_rotation_y(instance.yaw));
         commands
             .spawn((
                 BoulderInstance,
-                Transform::from_translation(center)
-                    .with_scale(Vec3::splat(instance.scale))
-                    .with_rotation(Quat::from_rotation_y(instance.yaw)),
+                transform,
                 Visibility::default(),
                 Obstacle(Disc { center, radius }),
-                Rock {
+                ImpactTarget {
                     base: center,
                     contact_radius,
                     kick: Vec3::ZERO,
-                    flash: 0.0,
-                    material: base_material.clone(),
+                    slots,
+                    surfaces: model.surfaces,
+                    local_from_world: transform.compute_affine().inverse(),
                 },
             ))
             .with_children(|parent| {
                 for (mesh, material) in model.meshes {
-                    parent.spawn((
-                        Mesh3d(mesh),
-                        MeshMaterial3d(if material == 0 {
-                            base_material.clone()
-                        } else {
-                            palette[material].clone()
-                        }),
-                    ));
+                    parent.spawn((Mesh3d(mesh), MeshMaterial3d(handles[material].clone())));
                 }
             });
+        if let Some(label) = &instance.label {
+            commands.spawn((
+                SampleCaption(center + Vec3::Y * 2.1),
+                Text::new(label),
+                TextFont {
+                    font_size: 13.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.65, 0.9, 1.0)),
+                TextLayout::new_with_justify(Justify::Center),
+                Node {
+                    position_type: PositionType::Absolute,
+                    width: px(200.0),
+                    ..default()
+                },
+            ));
+        }
     }
     info!(
         "Loaded scene {}: {} instances, {} cached models, {} runtime generations",
@@ -220,6 +243,22 @@ pub fn switch_scene(
         cache.models.len(),
         cache.runtime_generations
     );
+}
+
+/// Project sample captions into the UI without requiring a second sprite renderer.
+pub fn update_captions(
+    camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>,
+    mut captions: Query<(&SampleCaption, &mut Node, &mut Visibility)>,
+) {
+    for (caption, mut node, mut visibility) in &mut captions {
+        if let Ok(point) = camera.0.world_to_viewport(camera.1, caption.0) {
+            node.left = px(point.x - 100.0);
+            node.top = px(point.y);
+            *visibility = Visibility::Inherited;
+        } else {
+            *visibility = Visibility::Hidden;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -267,22 +306,32 @@ mod tests {
                 });
             }
             app.world_mut().resource_mut::<Controls>().impacts = 5;
+            app.world_mut().resource_mut::<Controls>().last_material =
+                Some(voxel_assets::ImpactResponse::Metal);
             app.world_mut().resource_mut::<Controls>().velocity = Vec3::X;
             app.update();
             assert_eq!(app.world().resource::<SceneLibrary>().current, index);
             assert_eq!(app.world().resource::<ModelCache>().runtime_generations, 2);
             assert_eq!(app.world().resource::<Controls>().impacts, 0);
+            assert!(app.world().resource::<Controls>().last_material.is_none());
+            assert_eq!(
+                app.world_mut()
+                    .query::<&SampleCaption>()
+                    .iter(app.world())
+                    .count(),
+                if index == 0 { 0 } else { 4 }
+            );
             assert_eq!(app.world().resource::<Controls>().velocity, Vec3::ZERO);
             assert_eq!(
                 app.world_mut()
                     .query::<&BoulderInstance>()
                     .iter(app.world())
                     .count(),
-                6
+                if index == 0 { 6 } else { 10 }
             );
             assert_eq!(
                 app.world().resource::<Assets<StandardMaterial>>().len(),
-                baseline_materials
+                baseline_materials + if index == 0 { 0 } else { 16 }
             );
             assert_eq!(app.world().get::<Obstacle>(prop).is_some(), index == 0);
         }
