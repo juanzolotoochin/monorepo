@@ -2,6 +2,7 @@
 mod assets;
 mod effects;
 mod gameplay;
+mod impact;
 mod navigation;
 mod preview;
 mod scene;
@@ -65,6 +66,10 @@ fn main() {
                 .chain(),
         )
         .add_systems(Update, (draw_navigation, keyboard_actions))
+        .add_systems(
+            PostUpdate,
+            assets::update_captions.after(bevy::transform::TransformSystems::Propagate),
+        )
         .run();
 }
 

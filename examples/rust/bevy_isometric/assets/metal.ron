@@ -1,0 +1,6 @@
+Palette(materials: [
+    (name: "titanium", color: (0.45, 0.57, 0.68), emissive: (0, 0, 0), metallic: 0.95, roughness: 0.22, impact: Metal),
+    (name: "dark_alloy", color: (0.15, 0.24, 0.32), emissive: (0, 0, 0), metallic: 0.9, roughness: 0.3, impact: Metal),
+    (name: "polished_alloy", color: (0.7, 0.78, 0.85), emissive: (0, 0, 0), metallic: 1.0, roughness: 0.15, impact: Metal),
+    (name: "copper", color: (0.8, 0.35, 0.1), emissive: (0, 0, 0), metallic: 0.9, roughness: 0.25, impact: Metal),
+])

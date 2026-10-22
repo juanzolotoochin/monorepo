@@ -4,7 +4,7 @@ pub use boulder::generate_boulder;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 pub type Result<T> = std::result::Result<T, String>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -17,6 +17,7 @@ pub struct BoulderRecipe {
     pub taper: f32,
     pub ore_every: u32,
     pub debris: u32,
+    pub material_pattern: MaterialPattern,
 }
 impl Default for BoulderRecipe {
     fn default() -> Self {
@@ -28,6 +29,7 @@ impl Default for BoulderRecipe {
             taper: 0.65,
             ore_every: 17,
             debris: 8,
+            material_pattern: MaterialPattern::Speckled,
         }
     }
 }
@@ -74,6 +76,24 @@ impl BoulderParameters {
     }
 }
 
+/// Assign palette slots either as natural inclusions or four readable surface regions.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+pub enum MaterialPattern {
+    #[default]
+    Speckled,
+    Quadrants,
+}
+
+/// Shared material semantics; the renderer maps these to visual and audio feedback.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ImpactResponse {
+    #[default]
+    Stone,
+    Metal,
+    Crystal,
+    Polymer,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Material {
@@ -82,6 +102,8 @@ pub struct Material {
     pub emissive: [f32; 3],
     pub metallic: f32,
     pub roughness: f32,
+    #[serde(default)]
+    pub impact: ImpactResponse,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename = "Palette", deny_unknown_fields)]
@@ -160,16 +182,19 @@ pub struct Prefab {
     pub version: u32,
     pub id: String,
     pub fingerprint: String,
+    pub geometry_key: String,
     pub palette: Palette,
     pub geometry: Geometry,
 }
 impl Prefab {
     pub fn new(id: String, palette: Palette, geometry: Geometry) -> Result<Self> {
         let fingerprint = content_key(&(&palette, &geometry));
+        let geometry_key = content_key(&geometry);
         let prefab = Self {
             version: VERSION,
             id,
             fingerprint,
+            geometry_key,
             palette,
             geometry,
         };
@@ -189,6 +214,8 @@ pub struct Instance {
     pub yaw: f32,
     #[serde(default)]
     pub parameters: Option<BoulderParameters>,
+    #[serde(default)]
+    pub label: Option<String>,
 }
 fn one() -> f32 {
     1.0
@@ -340,6 +367,7 @@ mod tests {
                     emissive: [0.0; 3],
                     metallic: 0.0,
                     roughness: 0.8,
+                    impact: ImpactResponse::Stone,
                 })
                 .collect(),
         }
@@ -376,6 +404,19 @@ mod tests {
         );
     }
     #[test]
+    fn material_variants_share_geometry_but_not_prefab_identity() {
+        let geometry = Geometry::Baked(generate_boulder(&Default::default()).unwrap());
+        let stone = Prefab::new("stone".into(), palette(), geometry.clone()).unwrap();
+        let mut metal_palette = palette();
+        for material in &mut metal_palette.materials {
+            material.impact = ImpactResponse::Metal;
+        }
+        let metal = Prefab::new("metal".into(), metal_palette, geometry).unwrap();
+        assert_eq!(stone.geometry_key, metal.geometry_key);
+        assert_ne!(stone.fingerprint, metal.fingerprint);
+    }
+
+    #[test]
     fn pack_validation_rejects_bad_versions_transforms_and_baked_parameters() {
         let prefab = Prefab::new(
             "rock".into(),
@@ -395,6 +436,7 @@ mod tests {
                     scale: 1.0,
                     yaw: 0.0,
                     parameters: None,
+                    label: None,
                 }],
             },
             prefabs: vec![prefab],

@@ -64,6 +64,9 @@ pub enum Cue {
     Swing = 0,
     Clang = 1,
     Step = 2,
+    Stone = 3,
+    Crystal = 4,
+    Polymer = 5,
 }
 #[derive(Resource)]
 pub struct Sound {

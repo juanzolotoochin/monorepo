@@ -31,7 +31,7 @@ static void render(ma_device *d, void *output, const void *input, ma_uint32 fram
     (void)d; (void)input;
     float *out = output;
     unsigned int events = atomic_exchange_explicit(&pending, 0, memory_order_relaxed);
-    for (int kind = 0; kind < 3; ++kind) {
+    for (int kind = 0; kind < 6; ++kind) {
         if (events & (1u << kind)) {
             int slot = 0;
             for (int i = 0; i < 12; ++i) if (!voices[i].alive) { slot = i; break; }
@@ -59,6 +59,20 @@ static void render(ma_device *d, void *output, const void *input, ma_uint32 fram
                        + 0.18f * noise() * expf(-100.0f * t);
                 sample *= fminf(t * 3000.0f, 1.0f);
                 if (t > 0.70f) v->alive = 0;
+            } else if (v->kind == 3) {
+                // Dry stone fracture: coarse noise with a low body, little ring.
+                sample = 0.22f * noise() * expf(-40.0f * t) + 0.18f * tone(140.0f, t, 35.0f);
+                if (t > 0.25f) v->alive = 0;
+            } else if (v->kind == 4) {
+                // Crystal has a long, bright, inharmonic chime.
+                sample = 0.12f * tone(1245.0f, t, 5.0f) + 0.08f * tone(2037.0f, t, 7.0f)
+                       + 0.04f * tone(3511.0f, t, 12.0f) + 0.09f * noise() * expf(-130.0f * t);
+                sample *= fminf(t * 3000.0f, 1.0f);
+                if (t > 1.0f) v->alive = 0;
+            } else if (v->kind == 5) {
+                // Soft polymer absorbs the blade: short muffled knock, no ring.
+                sample = 0.24f * tone(82.0f, t, 50.0f) + 0.035f * noise() * expf(-100.0f * t);
+                if (t > 0.16f) v->alive = 0;
             } else {
                 sample = 0.055f * tone(76.0f, t, 55.0f) + 0.035f * noise() * expf(-90.0f * t);
                 if (t > 0.12f) v->alive = 0;
@@ -87,7 +101,7 @@ int kestrel_audio_start(void) {
     return 0;
 }
 void kestrel_audio_play(int cue) {
-    if (cue >= 0 && cue < 3) atomic_fetch_or_explicit(&pending, 1u << cue, memory_order_relaxed);
+    if (cue >= 0 && cue < 6) atomic_fetch_or_explicit(&pending, 1u << cue, memory_order_relaxed);
 }
 void kestrel_audio_stop(void) {
     if (!active) return;

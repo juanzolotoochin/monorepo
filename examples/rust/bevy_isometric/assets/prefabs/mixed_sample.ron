@@ -1,0 +1,1 @@
+Boulder(seed: 12, radius: 1.15, height: 1.6, voxel_size: 0.25, taper: 0.15, ore_every: 7, debris: 0, material_pattern: Quadrants)

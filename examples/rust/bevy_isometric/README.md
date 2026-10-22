@@ -137,3 +137,19 @@ bazel build //examples/rust/bevy_isometric/assets:ore_small
 For visual QA of either scene, add `--scene mining-deck` or `--scene boulder-lab`
 to the existing `--showcase --capture-dir ...` command. All packs are embedded,
 including in the Windows `.exe`.
+
+The lab includes labeled **metal**, **crystal**, **polymer**, and **mixed** samples.
+Material palettes (`assets/{metal,crystal,polymer,mixed}.ron`) assign an `impact`
+response independently of their visual color, emission, and roughness. Stone
+chips, metal throws hot sparks, crystal pulses blue and chimes, and polymer
+absorbs the blow with a muffled knock and greater displacement.
+
+The mixed sample uses four material quadrants: strike different sides to try
+all four reactions on one asset. The HUD reports the last response under `HIT`.
+Existing ore boulders also mix stone and metal
+reactions. Exact sword-segment/mesh contact selects the struck material after
+broad-phase collision checks. Only that material slot on that instance flashes;
+authored emission is restored afterward. Meshes and CPU contact triangles are
+cached; reactive material handles belong to each instance and are removed when
+switching scenes. The contact query currently scans nearby targets' triangles;
+it has no spatial acceleration structure for very large models.

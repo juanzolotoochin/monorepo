@@ -1,0 +1,6 @@
+Palette(materials: [
+    (name: "basalt", color: (0.3, 0.3, 0.36), emissive: (0, 0, 0), metallic: 0.1, roughness: 0.8, impact: Stone),
+    (name: "titanium", color: (0.45, 0.57, 0.68), emissive: (0, 0, 0), metallic: 0.95, roughness: 0.22, impact: Metal),
+    (name: "blue_crystal", color: (0.08, 0.32, 0.65), emissive: (0.02, 0.15, 0.5), metallic: 0.2, roughness: 0.18, impact: Crystal),
+    (name: "green_polymer", color: (0.12, 0.48, 0.23), emissive: (0, 0, 0), metallic: 0.0, roughness: 0.92, impact: Polymer),
+])
