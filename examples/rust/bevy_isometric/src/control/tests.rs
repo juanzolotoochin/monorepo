@@ -233,3 +233,125 @@ fn space_lifts_and_releases_and_scene_switch_restores_deck() {
         }
     }
 }
+
+#[test]
+fn field_trial_can_be_solved_through_shared_control_without_copying_stock() {
+    for fps in [20, 60] {
+        let report = run_at(
+            vec![
+                Command::Scene {
+                    scene: "surprise-lab".into(),
+                },
+                Command::MemoryRecord,
+                Command::Walk {
+                    position: [-4.0, -2.0],
+                },
+                Command::Wait { frames: fps / 2 },
+                Command::MemoryDeploy,
+                Command::Walk {
+                    position: [-1.0, 3.0],
+                },
+                Command::Wait { frames: fps * 4 },
+                Command::AssertTrial {
+                    unlocked: true,
+                    collected: false,
+                },
+                Command::Walk {
+                    position: [5.0, 0.0],
+                },
+                Command::AssertTrial {
+                    unlocked: true,
+                    collected: true,
+                },
+            ],
+            fps,
+        );
+        assert_eq!(report["status"], "passed", "{report}");
+        assert_eq!(report["state"]["memory"]["collected"], true);
+        let deployed = &report["receipts"][4]["state"];
+        assert!((deployed["player"]["position"][0].as_f64().unwrap() + 5.0).abs() < 0.01);
+        assert_eq!(deployed["memory"]["recording"], false);
+        assert!(!deployed["memory"]["ghost_position"].is_null());
+    }
+}
+
+#[test]
+fn trial_cannot_be_completed_alone_and_scene_reset_cleans_it_up() {
+    let report = run(vec![
+        Command::Scene {
+            scene: "surprise-lab".into(),
+        },
+        Command::Walk {
+            position: [-4.0, -2.0],
+        },
+        Command::Wait { frames: 60 },
+        Command::Walk {
+            position: [-1.0, 3.0],
+        },
+        Command::Wait { frames: 60 },
+        Command::AssertTrial {
+            unlocked: false,
+            collected: false,
+        },
+        Command::MemoryRecord,
+        Command::Wait { frames: 15 },
+        Command::MemoryDeploy,
+        Command::Scene {
+            scene: "pile-lab".into(),
+        },
+    ]);
+    assert_eq!(report["status"], "passed", "{report}");
+    assert_eq!(report["state"]["memory"]["sample_count"], 0);
+    assert_eq!(report["state"]["memory"]["ghost_position"], Value::Null);
+    assert_eq!(report["state"]["totals"]["created"], 96);
+}
+
+#[test]
+fn projection_does_not_rewind_or_duplicate_materials_and_rejects_empty_tapes() {
+    let report = run(vec![Command::MemoryDeploy]);
+    assert_eq!(report["status"], "failed");
+    assert_eq!(report["state"]["totals"]["created"], 96);
+    let report = run(vec![
+        Command::Add {
+            dispenser: 0,
+            units: 8,
+        },
+        Command::Grab {
+            pile: 0,
+            units: 4,
+            material: None,
+            seconds_per_unit: 0.0,
+            approach: None,
+        },
+        Command::MemoryRecord,
+        Command::Walk {
+            position: [0.0, 1.0],
+        },
+        Command::MemoryDeploy,
+        Command::Wait { frames: 60 },
+    ]);
+    assert_eq!(report["status"], "passed", "{report}");
+    assert_eq!(report["state"]["player"]["cargo"]["units"], 4);
+    assert_eq!(report["state"]["totals"]["created"], 104);
+    assert_eq!(report["state"]["totals"]["conserved"], true);
+    assert_eq!(report["state"]["visible_mineral_units"], 104);
+}
+
+#[test]
+fn recording_is_bounded_and_automatically_deploys_then_can_be_dismissed() {
+    let report = run(vec![
+        Command::MemoryRecord,
+        Command::Wait { frames: 270 },
+        Command::Inspect,
+        Command::MemoryClear,
+        Command::Inspect,
+    ]);
+    assert_eq!(report["status"], "passed", "{report}");
+    let memory = &report["receipts"][2]["state"]["memory"];
+    assert_eq!(memory["recording"], false);
+    assert!(!memory["ghost_position"].is_null());
+    assert!(memory["recorded_seconds"].as_f64().unwrap() <= 8.0);
+    assert!(memory["sample_count"].as_u64().unwrap() <= 243);
+    assert_eq!(report["state"]["memory"]["ghost_position"], Value::Null);
+    assert_eq!(report["state"]["memory"]["sample_count"], 0);
+}

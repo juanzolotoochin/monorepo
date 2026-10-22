@@ -244,3 +244,47 @@ Live/script commands `{"op":"jetpack","enabled":true}` and
 `airborne` and `altitude`, with an optional `tolerance` (default 0.05 meters).
 World inspection includes authored `terrain` and `player.jetpack` fields for
 requested flight, airborne status, support height, hover height, and clearance.
+
+## Field trial 05
+
+A new mechanic has a dedicated scene with instructions inside the game. Press
+**5** to visit it, or start directly:
+
+```sh
+bazel run --config=full_local //examples/rust/bevy_isometric:demo -- --scene surprise-lab
+```
+
+The scene explains its own controls and objective. **R** restarts the trial.
+To generate its scripted audiovisual playthrough and state trace:
+
+```sh
+bazel build --config=full_local //examples/rust/bevy_isometric:surprise_demo
+```
+
+The outputs are `surprise_demo.mp4`, `.state.json`, `.frames.jsonl`, and `.wav`
+in `bazel-bin/examples/rust/bevy_isometric/`.
+
+<details>
+<summary>Mechanic and implementation notes (spoilers)</summary>
+
+**Echo Anchor:** press E to record up to eight seconds of movement. Press E
+again to return to the recording's anchor and project a holographic partner
+that repeats the recorded route and holds its final pose. Q dismisses it.
+Reaching eight seconds automatically deploys the echo. A new recording replaces
+the previous one. Recording and playback work in every scene; the trial adds
+receivers that can be operated by either the player or the projection.
+
+The trial asks you to power two distant plates together for 1.2 seconds. An
+echo can hold one plate while you stand on the other. The lock then latches
+open, allowing you to recover the core. The echo has no cargo, collectible,
+combat, or collision components: only spatial motion is recorded, and the
+world and its inventory are never rewound or duplicated. Recorded height is
+preserved, so a projection flying above a plate does not activate it.
+
+`src/palimpsest/mod.rs` owns recording, interpolation, replay, plate logic, and
+state inspection; `view.rs` owns scene geometry, projection visuals, UI, and
+lock animation. Shared handles survive scene changes. Scene changes and R clear
+the projection and trial state. Existing live/script controls gain
+`memory_record`, `memory_deploy`, `memory_clear`, and `assert_trial`.
+
+</details>

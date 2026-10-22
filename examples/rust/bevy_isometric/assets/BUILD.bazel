@@ -75,3 +75,9 @@ scene_assets(
     layout = "levels/jetpack_lab.ron",
     prefabs = [],
 )
+
+scene_assets(
+    name = "surprise_lab",
+    layout = "levels/surprise_lab.ron",
+    prefabs = [],
+)

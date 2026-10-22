@@ -157,3 +157,30 @@ release over a chasm, and landing, and records turbine audio:
 ```sh
 bazel build --config=full_local //examples/rust/bevy_isometric:jetpack_demo
 ```
+
+### Field trial 05
+
+The `surprise-lab` scene and `surprise_demo` target provide another complete
+programmatically controlled demonstration, with in-scene instructions.
+
+<details>
+<summary>Protocol additions (mechanic spoilers)</summary>
+
+- `memory_record`: start a fresh movement recording, replacing the previous
+  projection. Rejects a second start while already recording.
+- `memory_deploy`: finish the recording, return the player to its initial pose,
+  and project a replay that holds its final pose. Requires 0.15 seconds of tape.
+- `memory_clear`: cancel recording and dismiss the projection.
+- `assert_trial`: check `unlocked` and `collected` boolean fields.
+
+Recordings are limited to eight seconds and automatically deploy at the limit.
+Replay interpolates poses in simulation seconds. Inventory and world state
+remain live. The shared dispatcher invokes the same functions used by E and Q.
+
+Snapshots include `memory`: `recording`, `recorded_seconds`, `replay_seconds`,
+`sample_count`, `ghost_position`, `plates`, `charge`, `unlocked`, and `collected`.
+The trial script asserts that the objective starts locked, unlocks through the
+new interaction, and is ultimately collected by the player. State traces let
+clients inspect the replay while other commands run.
+
+</details>
