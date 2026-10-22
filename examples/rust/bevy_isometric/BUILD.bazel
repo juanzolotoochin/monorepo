@@ -1,15 +1,19 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
 load("@rules_rs//rs:rust_test.bzl", "rust_test")
 
 rust_binary(
     name = "demo",
-    srcs = ["src/main.rs"],
+    srcs = glob(["src/*.rs"]),
     # Bevy's derive macros inspect Cargo.toml to locate the `bevy` re-exports.
     compile_data = ["//:Cargo.toml"],
     edition = "2021",
     rustc_env = {"CARGO_MANIFEST_DIR": "."},
     visibility = ["//visibility:public"],
-    deps = ["@crates//:bevy"],
+    deps = [
+        ":sound",
+        "@crates//:bevy",
+    ],
 )
 
 rust_test(
@@ -19,4 +23,11 @@ rust_test(
     crate = ":demo",
     edition = "2021",
     rustc_env = {"CARGO_MANIFEST_DIR": "."},
+)
+
+cc_library(
+    name = "sound",
+    srcs = ["src/sound.c"],
+    copts = ["-O2"],
+    deps = ["@miniaudio//:headers"],
 )

@@ -11,7 +11,7 @@ cd monorepo
 bazel run //examples/python:version
 ```
 
-For a small Rust game scene, run the [Bevy isometric garden](examples/rust/bevy_isometric/README.md):
+For a small Rust game scene, run the [Kestrel voxel sci-fi scene](examples/rust/bevy_isometric/README.md):
 
 ```sh
 bazel run //examples/rust/bevy_isometric:demo
