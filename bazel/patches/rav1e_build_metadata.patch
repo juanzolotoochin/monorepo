@@ -1,0 +1,19 @@
+diff --git a/build.rs b/build.rs
+--- a/build.rs
++++ b/build.rs
+@@ -261,3 +261,15 @@
+ fn main() {
+   built::write_built_file().expect("Failed to acquire build-time information");
++  // Do not retain the machine-specific compiler path in compiled metadata.
++  let metadata_path = std::path::PathBuf::from(env::var_os("OUT_DIR").unwrap())
++    .join("built.rs");
++  let metadata = std::fs::read_to_string(&metadata_path).unwrap();
++  let metadata = metadata.lines().map(|line| {
++    if line.starts_with("pub static RUSTC: &str =") {
++      "pub static RUSTC: &str = \"rustc\";"
++    } else {
++      line
++    }
++  }).collect::<Vec<_>>().join("\n");
++  std::fs::write(metadata_path, metadata).unwrap();
+ 

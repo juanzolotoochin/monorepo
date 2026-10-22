@@ -1,0 +1,60 @@
+diff --git a/toolchain/args/windows/msvc/BUILD.bazel b/toolchain/args/windows/msvc/BUILD.bazel
+index f71435d..8997ce6 100644
+--- a/toolchain/args/windows/msvc/BUILD.bazel
++++ b/toolchain/args/windows/msvc/BUILD.bazel
+@@ -198,20 +198,16 @@ cc_args(
+         "@rules_cc//cc/toolchains/actions:link_actions",
+     ],
+     args = [
+-        "/clang:-Xlinker",
+-        "/clang:/vfsoverlay:{sdk_library_case_overlay}",
+         "/clang:-Xlinker",
+         "/clang:/LIBPATH:{winsdk_ucrt_lib}",
+         "/clang:-Xlinker",
+         "/clang:/LIBPATH:{winsdk_um_lib}",
+     ],
+     data = [
+-        "//runtimes/msvc:msvc_sdk_library_case_overlay",
+         "//runtimes/msvc:winsdk_ucrt_lib",
+         "//runtimes/msvc:winsdk_um_lib",
+     ],
+     format = {
+-        "sdk_library_case_overlay": "//runtimes/msvc:msvc_sdk_library_case_overlay",
+         "winsdk_ucrt_lib": "//runtimes/msvc:winsdk_ucrt_lib",
+         "winsdk_um_lib": "//runtimes/msvc:winsdk_um_lib",
+     },
+@@ -221,12 +217,22 @@ cc_args_list(
+     name = "normalized_sdk_compile_args",
+     args = [
+         "windows_sdk_compile_defines",
+-        "sdk_header_case_overlay",
+         "sdk_includes",
+-    ],
++    ] + select({
++        "//toolchain:runtimes_all": ["sdk_header_case_overlay"],
++        "//conditions:default": [],
++    }),
+     visibility = ["//visibility:public"],
+ )
+ 
++cc_args(
++    name = "sdk_library_case_overlay",
++    actions = ["@rules_cc//cc/toolchains/actions:link_actions"],
++    args = ["/clang:-Xlinker", "/clang:/vfsoverlay:{overlay}"],
++    data = ["//runtimes/msvc:msvc_sdk_library_case_overlay"],
++    format = {"overlay": "//runtimes/msvc:msvc_sdk_library_case_overlay"},
++)
++
+ cc_args_list(
+     name = "normalized_default_libs",
+     args = [
+@@ -235,6 +241,9 @@ cc_args_list(
+     ] + select({
+         "//toolchain/features/msvc:static_crt_config": ["static_crt_library_search_paths"],
+         "//conditions:default": ["dynamic_crt_library_search_paths"],
++    }) + select({
++        "//toolchain:runtimes_all": ["sdk_library_case_overlay"],
++        "//conditions:default": [],
+     }) + select({
+         # Hosted C construction tools need the target CRT and SDK, but do not
+         # consume the C++ standard library.
