@@ -22,6 +22,14 @@ config_setting(
     ],
 )
 
+config_setting(
+    name = "windows_msvc",
+    constraint_values = [
+        "@platforms//os:windows",
+        "@llvm//constraints/windows/abi:msvc",
+    ],
+)
+
 platform(
     name = "linux_arm64_platform",
     constraint_values = [
@@ -59,4 +67,11 @@ platform(
 platform(
     name = "rust_macos_arm64",
     parents = ["@rules_rs//rs/platforms:aarch64-apple-darwin"],
+)
+
+# Windows target ABI matches the hermetic clang-cl/lld-link C/C++ toolchain.
+# Build scripts and proc macros keep using the host execution platform.
+platform(
+    name = "rust_windows_x86_64",
+    parents = ["@rules_rs//rs/platforms:x86_64-pc-windows-msvc"],
 )
