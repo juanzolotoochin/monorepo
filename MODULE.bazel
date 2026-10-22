@@ -376,12 +376,22 @@ crate.from_cargo(
         "x86_64-unknown-linux-gnu",
         "aarch64-unknown-linux-gnu",
         "aarch64-apple-darwin",
+        "x86_64-pc-windows-msvc",
     ],
 )
 crate.annotation(
     crate = "khronos_api",
     patch_args = ["-p1"],
     patches = ["//bazel/patches:khronos_api.patch"],
+)
+
+# blake3 otherwise invokes Microsoft's ml64.exe assembler on MSVC targets.
+# Intrinsics keep SIMD acceleration while using the hermetic Rust/Clang tools
+# that can execute on Linux and macOS build hosts.
+crate.annotation_select(
+    crate = "blake3",
+    crate_features = ["prefer_intrinsics"],
+    triples = ["x86_64-pc-windows-msvc"],
 )
 
 # Several no_std-capable crates in gpui's font/text stack need their default

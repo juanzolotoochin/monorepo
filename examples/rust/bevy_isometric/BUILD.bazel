@@ -8,12 +8,19 @@ rust_binary(
     # Bevy's derive macros inspect Cargo.toml to locate the `bevy` re-exports.
     compile_data = ["//:Cargo.toml"],
     edition = "2021",
+    # Let Bazel drive clang-cl's link action. Rust's MSVC linker arguments
+    # otherwise reach clang-cl as compiler arguments when cross-compiling.
+    experimental_use_cc_common_link = select({
+        "//platforms:windows_msvc": 1,
+        "//conditions:default": -1,
+    }),
+    link_deps = [":sound"] + select({
+        "//platforms:windows_msvc": [":windows_system_libs"],
+        "//conditions:default": [],
+    }),
     rustc_env = {"CARGO_MANIFEST_DIR": "."},
     visibility = ["//visibility:public"],
-    deps = [
-        ":sound",
-        "@crates//:bevy",
-    ],
+    deps = ["@crates//:bevy"],
 )
 
 rust_test(
@@ -22,6 +29,10 @@ rust_test(
     compile_data = ["//:Cargo.toml"],
     crate = ":demo",
     edition = "2021",
+    experimental_use_cc_common_link = select({
+        "//platforms:windows_msvc": 1,
+        "//conditions:default": -1,
+    }),
     rustc_env = {"CARGO_MANIFEST_DIR": "."},
 )
 
@@ -30,4 +41,18 @@ cc_library(
     srcs = ["src/sound.c"],
     copts = ["-O2"],
     deps = ["@miniaudio//:headers"],
+)
+
+# Explicit SDK imports needed by winit touch input and Rust's Windows pipes
+# when Bazel links the Rust objects through cc_common instead of rustc.
+cc_library(
+    name = "windows_system_libs",
+    linkopts = [
+        "user32.lib",
+        "ntdll.lib",
+    ],
+    target_compatible_with = [
+        "@platforms//os:windows",
+        "@llvm//constraints/windows/abi:msvc",
+    ],
 )

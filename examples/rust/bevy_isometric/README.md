@@ -15,6 +15,48 @@ bazel run //examples/rust/bevy_isometric:demo
 bazel test //examples/rust/bevy_isometric:movement_test
 ```
 
+To cross-compile a Windows x64 release from Linux or macOS, use the MSVC
+target platform. The compiler and build scripts run on the host; Rust and the
+native audio code target Windows through hermetic Clang/LLD, the Microsoft
+runtime and Windows SDK. No host Visual Studio installation is needed.
+
+The upstream toolchain requires explicit acceptance of both Microsoft licenses.
+After accepting the [runtime and SDK license terms](https://github.com/hermeticbuild/hermetic-llvm/tree/v0.8.24#windows), run:
+
+```sh
+bazel build -c opt \
+  --platforms=//platforms:rust_windows_x86_64 \
+  --repo_env=BAZEL_MSVC_RUNTIME_VISUAL_STUDIO_EULA=1 \
+  --repo_env=BAZEL_WINDOWS_SDK_EULA=1 \
+  //examples/rust/bevy_isometric:demo
+```
+
+Copy `bazel-bin/examples/rust/bevy_isometric/demo.exe` to Windows. All scene
+assets and sound synthesis are embedded in the executable. The default MSVC
+configuration links the runtime dynamically: install the current
+[Visual C++ v14 x64 Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)
+if `VCRUNTIME140.dll` is unavailable. A compatible GPU driver is also needed.
+Cross-compilation verifies the build; rendering, input and audio still need a
+smoke test on Windows. Use `bazel build`, rather than `bazel run` or `bazel test`,
+for Windows targets on a Linux/macOS host. To compile the headless test executable,
+use the same flags with `//examples/rust/bevy_isometric:movement_test`.
+
+Windows integration notes: BLAKE3 uses intrinsics to avoid the host-only MASM
+assembler; Bazel drives the MSVC link action and supplies the windowing/pipe
+SDK libraries. `Cargo.lock` intentionally resolves `gpu-allocator`'s broad
+Windows API dependency to `windows 0.58.0`, matching `wgpu-hal`'s DirectX types.
+Other dependencies still use `windows 0.57.0`; preserve that separate resolution
+when updating the lockfile.
+
+Audio initialization and shutdown run on a dedicated thread. On Windows this
+keeps miniaudio's multithreaded COM apartment separate from winit's window-thread
+OLE apartment. The Windows test executable includes a regression for this
+startup sequence; run it on Windows with:
+
+```powershell
+.\movement_test.exe sound::tests::audio_startup_leaves_the_window_thread_compatible_with_ole --exact --nocapture
+```
+
 | Control | Action |
 | --- | --- |
 | Right click / hold | Move / steer toward the cursor; find a route around obstacles |
