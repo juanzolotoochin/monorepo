@@ -79,17 +79,24 @@ impl Stock {
         Ok(amount)
     }
     pub fn pickup(&mut self, id: PileId) -> Result<u32, &'static str> {
+        let pile = self.piles.get(&id).ok_or("Pile no longer exists")?;
+        let amount = pile.units.min(self.cargo.capacity - self.cargo.units);
+        self.pickup_amount(id, amount)
+    }
+    /// Programmatic requests are exact: rejected requests leave all quantities unchanged.
+    pub fn pickup_amount(&mut self, id: PileId, amount: u32) -> Result<u32, &'static str> {
         let pile = self.piles.get_mut(&id).ok_or("Pile no longer exists")?;
         if self.cargo.material.is_some_and(|m| m != pile.material) {
             return Err("Unload before collecting a different mineral");
         }
-        let amount = pile.units.min(self.cargo.capacity - self.cargo.units);
         if amount == 0 {
-            return Err(if pile.units == 0 {
-                "This pile is empty"
-            } else {
-                "Carrier is full"
-            });
+            return Err("No units available or carrier full");
+        }
+        if amount > pile.units {
+            return Err("Requested quantity exceeds pile stock");
+        }
+        if amount > self.cargo.capacity - self.cargo.units {
+            return Err("Requested quantity exceeds free carrying capacity");
         }
         self.cargo.material = Some(pile.material);
         self.cargo.units += amount;
@@ -100,14 +107,17 @@ impl Stock {
         Ok(amount)
     }
     pub fn deposit(&mut self, id: PileId) -> Result<u32, &'static str> {
+        let pile = self.piles.get(&id).ok_or("Pile no longer exists")?;
+        self.deposit_amount(id, self.cargo.units.min(PILE_CAPACITY - pile.units))
+    }
+    pub fn deposit_amount(&mut self, id: PileId, amount: u32) -> Result<u32, &'static str> {
         let material = self.cargo.material.ok_or("Carrier is empty")?;
         let pile = self.piles.get_mut(&id).ok_or("Pile no longer exists")?;
         if pile.material != material {
             return Err("Different minerals stay in separate piles");
         }
-        let amount = self.cargo.units.min(PILE_CAPACITY - pile.units);
-        if amount == 0 {
-            return Err("Destination pile is full (96 units)");
+        if amount == 0 || amount > self.cargo.units || amount > PILE_CAPACITY - pile.units {
+            return Err("Requested deposit does not fit cargo or pile capacity");
         }
         pile.units += amount;
         self.cargo.units -= amount;
@@ -117,6 +127,13 @@ impl Stock {
         Ok(amount)
     }
     pub fn drop_new(&mut self, position: [f32; 2]) -> Result<PileId, &'static str> {
+        self.drop_new_amount(position, self.cargo.units)
+    }
+    pub fn drop_new_amount(
+        &mut self,
+        position: [f32; 2],
+        amount: u32,
+    ) -> Result<PileId, &'static str> {
         let material = self.cargo.material.ok_or("Carrier is empty")?;
         if position.iter().any(|v| !v.is_finite() || v.abs() > 6.5) {
             return Err("Drop position must be on the deck");
@@ -124,10 +141,14 @@ impl Stock {
         if self.piles.len() >= MAX_PILES {
             return Err("Pile limit reached; deposit into an existing pile");
         }
-        let units = self.cargo.units;
-        let id = self.insert(material, position, units, false);
-        self.cargo.units = 0;
-        self.cargo.material = None;
+        if amount == 0 || amount > self.cargo.units {
+            return Err("Requested quantity exceeds cargo");
+        }
+        let id = self.insert(material, position, amount, false);
+        self.cargo.units -= amount;
+        if self.cargo.units == 0 {
+            self.cargo.material = None;
+        }
         Ok(id)
     }
     pub fn total(&self) -> u64 {

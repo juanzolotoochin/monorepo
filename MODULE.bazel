@@ -52,6 +52,7 @@ single_version_override(
     patch_strip = 1,
     patches = ["//bazel/patches:llvm_windows_bootstrap.patch"],
 )
+
 bazel_dep(name = "rules_shell", version = "0.8.0")
 
 tar_toolchains = use_extension("@tar.bzl//tar:extensions.bzl", "toolchains")
@@ -502,3 +503,8 @@ http_archive(
     sha256 = "59d179d0ad9ad792e51db81aef2d7bcc164e6f5df434c081888fbbeb4568bd0e",
     url = "https://playwright.azureedge.net/builds/chromium/1129/chromium-mac-arm64.zip",
 )
+
+# Opt-in local GPU video demos; encoder discovery is lazy until a demo is built.
+local_demo_tools = use_repo_rule("//bazel/game_demo:repositories.bzl", "local_demo_tools")
+
+local_demo_tools(name = "game_demo_tools")

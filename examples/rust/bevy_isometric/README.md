@@ -173,7 +173,7 @@ Fixtures and starting quantities are authored in `assets/levels/pile_lab.ron`
 and validated during the Bazel scene-pack build. `pile_model.rs` owns pure
 quantity bookkeeping; `piles/mod.rs` owns interaction and movement jobs;
 `piles/view.rs` owns shared visual assets and quantity displays. Pile and cargo
-views only rebuild when their quantities change. Shader assets and chunk meshes
+views rebuild when quantities or airborne slots change. Shader assets and chunk meshes
 are shared rather than generated per unit.
 
 ```sh
@@ -182,3 +182,22 @@ bazel run //examples/rust/bevy_isometric:demo -- --scene pile-lab
 bazel run //examples/rust/bevy_isometric:demo -- \
   --scene pile-lab --haul-showcase --capture-dir /tmp/kestrel-piles
 ```
+
+The [controlled-demo rule and command protocol](../../../bazel/game_demo/README.md)
+provide MP4 generation, scripted assertions, renderer-free tests, and live JSON
+world inspection. Generate the four-unit hauling demonstration with:
+
+```sh
+bazel build --config=full_local //examples/rust/bevy_isometric:haul_four_demo
+```
+
+The output video, final-state report, and per-frame state trace are alongside
+`demo` in `bazel-bin/examples/rust/bevy_isometric/`.
+
+Controlled transfers can specify `seconds_per_unit` and an `approach` standing
+point. The example video uses a side approach and 0.7 seconds per unit; chunks
+spin through a high arc into the backpack and back onto the floor. Airborne
+chunks replace their resting representation until landing, so the visual count
+continues to match conserved stock. The MP4 includes procedural footsteps,
+dispenser beeps, and synchronized toss/landing foley; its `.wav` sidecar uses the
+same sound bank as interactive playback.

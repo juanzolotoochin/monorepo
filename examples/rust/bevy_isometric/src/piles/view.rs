@@ -67,6 +67,9 @@ pub fn setup_scene(
     }
     lab.scene = library.current;
     lab.job = None;
+    lab.last_error = None;
+    lab.in_flight = 0;
+    lab.job_serial = lab.job_serial.wrapping_add(1);
     lab.layout = library.scenes[library.current].scene.piles.clone();
     lab.stock = lab.layout.as_ref().map(Stock::new);
     let Some(layout) = lab.layout.clone() else {
@@ -185,6 +188,7 @@ pub fn setup_scene(
         CarryVisual {
             units: u32::MAX,
             material: None,
+            hidden: 0,
         },
         Transform::default(),
         Visibility::default(),
@@ -209,10 +213,25 @@ pub fn render(
     mut piles: Query<(Entity, &mut PileVisual)>,
     mut carriers: Query<(Entity, &mut CarryVisual)>,
     captions: Query<(Entity, &Caption)>,
+    airborne: Query<&transfer::Transit>,
 ) {
     let (Some(stock), Some(assets)) = (&lab.stock, &lab.assets) else {
         return;
     };
+    let mut hidden_piles: std::collections::BTreeMap<PileId, std::collections::BTreeSet<u32>> =
+        std::collections::BTreeMap::new();
+    let mut hidden_cargo = std::collections::BTreeSet::new();
+    for transit in &airborne {
+        match transit.destination {
+            transfer::Destination::Cargo(index) => {
+                hidden_cargo.insert(index);
+            }
+            transfer::Destination::Pile(id, index) => {
+                hidden_piles.entry(id).or_default().insert(index);
+            }
+        }
+    }
+    let empty = std::collections::BTreeSet::new();
     let mut existing = std::collections::BTreeSet::new();
     for (entity, mut visual) in &mut piles {
         let Some(pile) = stock.piles.get(&visual.id) else {
@@ -220,10 +239,12 @@ pub fn render(
             continue;
         };
         existing.insert(visual.id);
-        if visual.units == pile.units {
+        let hidden = hidden_piles.get(&visual.id).unwrap_or(&empty);
+        if visual.units == pile.units && visual.hidden == hidden.len() as u32 {
             continue;
         }
         visual.units = pile.units;
+        visual.hidden = hidden.len() as u32;
         commands.entity(entity).despawn_children();
         if pile.units > 0 {
             commands.entity(entity).insert(Obstacle(Disc {
@@ -235,17 +256,19 @@ pub fn render(
         }
         commands
             .entity(entity)
-            .with_children(|p| spawn_units(p, assets, pile.material, pile.units));
+            .with_children(|p| spawn_units(p, assets, pile.material, pile.units, hidden));
     }
     for (&id, pile) in &stock.piles {
         if existing.contains(&id) {
             continue;
         }
+        let hidden = hidden_piles.get(&id).unwrap_or(&empty);
         let mut root = commands.spawn((
             LabEntity,
             PileVisual {
                 id,
                 units: pile.units,
+                hidden: hidden.len() as u32,
             },
             Transform::from_translation(point(pile.position)),
             Visibility::default(),
@@ -256,7 +279,7 @@ pub fn render(
                 radius: pile_radius(pile.units),
             }));
         }
-        root.with_children(|p| spawn_units(p, assets, pile.material, pile.units));
+        root.with_children(|p| spawn_units(p, assets, pile.material, pile.units, hidden));
         label(
             &mut commands,
             CaptionKind::Pile(id),
@@ -272,10 +295,14 @@ pub fn render(
         }
     }
     for (entity, mut visual) in &mut carriers {
-        if visual.units == stock.cargo.units && visual.material == stock.cargo.material {
+        if visual.units == stock.cargo.units
+            && visual.material == stock.cargo.material
+            && visual.hidden == hidden_cargo.len() as u32
+        {
             continue;
         }
         visual.units = stock.cargo.units;
+        visual.hidden = hidden_cargo.len() as u32;
         visual.material = stock.cargo.material;
         commands.entity(entity).despawn_children();
         commands.entity(entity).with_children(|p| {
@@ -288,11 +315,10 @@ pub fn render(
             );
             if let Some(material) = stock.cargo.material {
                 for i in 0..stock.cargo.units {
-                    let position = Vec3::new(
-                        (i % 3) as f32 * 0.25 - 0.25,
-                        0.77 + ((i / 3) % 2) as f32 * 0.24,
-                        -0.44 - (i / 6) as f32 * 0.24,
-                    );
+                    if hidden_cargo.contains(&i) {
+                        continue;
+                    }
+                    let position = transfer::backpack_slot(i);
                     unit(
                         p,
                         assets,
@@ -310,6 +336,7 @@ fn spawn_units(
     assets: &LabAssets,
     material: Mineral,
     units: u32,
+    hidden: &std::collections::BTreeSet<u32>,
 ) {
     if units == 0 {
         for sign in [-1.0, 1.0] {
@@ -329,7 +356,10 @@ fn spawn_units(
             );
         }
     }
-    for position in unit_positions().iter().take(units as usize) {
+    for (index, position) in unit_positions().iter().take(units as usize).enumerate() {
+        if hidden.contains(&(index as u32)) {
+            continue;
+        }
         unit(
             parent,
             assets,
