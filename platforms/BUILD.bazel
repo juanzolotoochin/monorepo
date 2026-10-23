@@ -73,13 +73,5 @@ platform(
 # Build scripts and proc macros keep using the host execution platform.
 platform(
     name = "rust_windows_x86_64",
-    # Apply these only when Windows is selected, including for execution tools.
-    # Host-OS bazelrc configs also apply when cross-building remotely for Linux.
-    flags = [
-        "--@rules_rust//rust/settings:experimental_use_cc_common_link=true",
-        "--linkopt=ntdll.lib",
-        "--linkopt=ole32.lib",
-        "--linkopt=oleaut32.lib",
-    ],
     parents = ["@rules_rs//rs/platforms:x86_64-pc-windows-msvc"],
 )

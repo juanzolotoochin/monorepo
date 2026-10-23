@@ -1,10 +1,13 @@
 """Render a command script through the real game and encode its frames as MP4."""
 
 load("@rules_python//python:defs.bzl", "py_test")
+load(":native_execution.bzl", "NativeExecutionInfo")
 
 GameDemoInfo = provider(fields = ["video", "report", "trace", "audio"])
 
 def _demo_impl(ctx):
+    if not ctx.attr._native_execution[NativeExecutionInfo].matches_host:
+        fail("GPU video demos run locally and require native tools. Build this target without --config=remote.")
     video = ctx.actions.declare_file(ctx.label.name + ".mp4")
     report = ctx.actions.declare_file(ctx.label.name + ".state.json")
     trace = ctx.actions.declare_file(ctx.label.name + ".frames.jsonl")
@@ -29,7 +32,7 @@ def _demo_impl(ctx):
         outputs = [video, report, trace, audio],
         mnemonic = "GameDemo",
         progress_message = "Rendering controlled game demo %{label}",
-        # GPU drivers and the configured encoder belong to this execution host.
+        # GPU drivers belong to the native client host, checked above.
         # Keep hardware-dependent renders off remote workers and caches.
         execution_requirements = {"local": "1", "no-remote": "1", "no-sandbox": "1"},
         use_default_shell_env = True,
@@ -48,6 +51,7 @@ game_demo = rule(
         "script": attr.label(allow_single_file = [".json"], mandatory = True),
         "_runner": attr.label(default = "//game/tools/demo:runner", executable = True, cfg = "exec"),
         "_ffmpeg": attr.label(default = "@game_demo_tools//:ffmpeg", executable = True, allow_single_file = True, cfg = "exec"),
+        "_native_execution": attr.label(default = "//game/build/game_demo:native_execution", cfg = "exec"),
     },
 )
 

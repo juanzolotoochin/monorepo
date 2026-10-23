@@ -12,7 +12,6 @@ game_demo(
     game = ":demo",
     script = "demos/haul_four.json",
     tags = ["manual"],
-    target_compatible_with = ["@platforms//os:linux"],
 )
 ```
 
@@ -29,12 +28,15 @@ Outputs in `bazel-bin/game/app/`:
 - `haul_four_demo.frames.jsonl`: one semantic world snapshot per video frame,
   with its zero-based frame number and video timestamp.
 
-The action executes locally on Linux using a Vulkan-capable GPU/driver (including
-compatible software Vulkan) and a local FFmpeg with `libx264`. It renders without
-X11 or Wayland. Encoder discovery uses `PATH`, or an explicit
-`--repo_env=GAME_DEMO_FFMPEG=/absolute/path`. The encoder version is recorded in
-the report. Hardware-dependent GPU renders stay local and out of remote caches.
-Bazel reuses local outputs when inputs are unchanged. The game executable is built for the execution platform.
+The action executes locally using the native GPU/driver and renders offscreen.
+Windows x86-64 and Linux x86-64/ARM64 use checksum-pinned FFmpeg binaries with
+`libx264`; no FFmpeg installation or PATH discovery is required. Other hosts
+can explicitly configure `--repo_env=GAME_DEMO_FFMPEG=/absolute/path`.
+The encoder version is recorded in the report. Hardware-dependent GPU renders
+stay local and out of remote caches, and remain `manual` so ordinary recursive
+builds do not require a GPU. The rule checks that its execution tools match the
+client's native OS and CPU; omit `--config=remote` when building video demos.
+Bazel reuses local outputs when inputs are unchanged.
 
 ## Scripts
 

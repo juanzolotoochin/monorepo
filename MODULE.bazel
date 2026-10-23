@@ -28,6 +28,12 @@ bazel_dep(name = "rules_pkg", version = "1.3.0")
 bazel_dep(name = "rules_cc", version = "0.2.25")
 bazel_dep(name = "alsa_lib", version = "1.2.9.bcr.4")
 bazel_dep(name = "rules_python", version = "2.3.4")
+single_version_override(
+    module_name = "rules_python",
+    patch_strip = 1,
+    patches = ["//bazel/patches:rules_python_windows_venv_copy.patch"],
+)
+
 bazel_dep(name = "aspect_rules_lint", version = "2.9.0")
 
 # Not used directly: bumps the re2 requested by grpc/protobuf, which still uses
@@ -54,6 +60,23 @@ single_version_override(
 )
 
 bazel_dep(name = "rules_shell", version = "0.8.0")
+single_version_override(
+    module_name = "rules_shell",
+    patch_strip = 1,
+    patches = ["//bazel/patches:rules_shell_runtime_runfiles.patch"],
+)
+
+windows_shell_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+windows_shell_archive(
+    name = "windows_shell_runtime",
+    build_file = "//bazel/windows_shell:runtime.BUILD.bazel",
+    sha256 = "ea2f31a0b6ade63914ce441ffb022f0f6aa96982bfefa2326460a26d5fb01322",
+    strip_prefix = "msys64",
+    urls = ["https://github.com/msys2/msys2-installer/releases/download/2026-09-27/msys2-base-x86_64-20260927.tar.xz"],
+)
+
+register_toolchains("//bazel/windows_shell:toolchain")
 
 tar_toolchains = use_extension("@tar.bzl//tar:extensions.bzl", "toolchains")
 use_repo(tar_toolchains, "bsd_tar_toolchains")
@@ -419,6 +442,7 @@ crate.annotation_select(
     crate_features = ["prefer_intrinsics"],
     triples = ["x86_64-pc-windows-msvc"],
 )
+
 # Several no_std-capable crates in gpui's font/text stack need their default
 # `std` feature, which from_cargo did not enable, leaving float math
 # (sqrt/sin_cos/tan/...) unavailable. Force `std` on each.
@@ -511,7 +535,7 @@ http_archive(
     url = "https://playwright.azureedge.net/builds/chromium/1129/chromium-mac-arm64.zip",
 )
 
-# Opt-in local GPU video demos; encoder discovery is lazy until a demo is built.
+# Opt-in local GPU video demos; the pinned native encoder is fetched lazily.
 local_demo_tools = use_repo_rule("//game/build/game_demo:repositories.bzl", "local_demo_tools")
 
 local_demo_tools(name = "game_demo_tools")

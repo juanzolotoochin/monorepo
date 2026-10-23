@@ -65,6 +65,11 @@ impl Drop for Server {
     }
 }
 fn client(mut stream: TcpStream, tx: mpsc::SyncSender<Envelope>) {
+    // Windows can inherit the listener's nonblocking mode on accepted sockets.
+    // Client workers use blocking reads with timeouts on every platform.
+    if stream.set_nonblocking(false).is_err() {
+        return;
+    }
     let Ok(read) = stream.try_clone() else {
         return;
     };
@@ -102,5 +107,34 @@ fn client(mut stream: TcpStream, tx: mpsc::SyncSender<Envelope>) {
         if writeln!(stream, "{response}").is_err() {
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_waits_for_a_request_on_an_initially_nonblocking_socket() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let mut peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        stream.set_nonblocking(true).unwrap();
+        let (tx, rx) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || client(stream, tx));
+        let request = thread::spawn(move || {
+            // The worker must keep the connection open before data arrives.
+            thread::sleep(Duration::from_millis(50));
+            writeln!(peer, "{{\"id\":\"idle\",\"command\":{{\"op\":\"inspect\"}}}}")
+                .unwrap();
+            let mut response = String::new();
+            BufReader::new(peer).read_line(&mut response).unwrap();
+            serde_json::from_str::<Value>(&response).unwrap()
+        });
+        let envelope = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        envelope.reply.unwrap().send(json!({"status": "completed"})).unwrap();
+        assert_eq!(request.join().unwrap()["status"], "completed");
+        worker.join().unwrap();
     }
 }

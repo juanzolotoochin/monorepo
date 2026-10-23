@@ -1,0 +1,9 @@
+diff --git a/shell/private/sh_executable.bzl b/shell/private/sh_executable.bzl
+--- a/shell/private/sh_executable.bzl
++++ b/shell/private/sh_executable.bzl
+@@ -92,1 +92,5 @@
+         direct_files.append(main_executable)
++        # A packaged shell must travel with the script, including its DLLs.
++        shell_runfiles = getattr(ctx.toolchains[_SH_TOOLCHAIN_TYPE], "runtime_runfiles", None)
++        if shell_runfiles:
++            runfiles = runfiles.merge(shell_runfiles)
