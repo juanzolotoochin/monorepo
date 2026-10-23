@@ -218,6 +218,8 @@ pub struct SceneSetup {
     pub doors: Vec<Disc>,
     pub surfaces: Vec<crate::terrain::Surface>,
     pub platforms_only: bool,
+    /// Avatars can dig pits into the ground.
+    pub diggable: bool,
     pub spawn: [Fx; 3],
     pub piles: Option<PileSetup>,
     pub memory_trial: bool,
@@ -430,6 +432,7 @@ impl Settlement {
             .map(|s| crate::terrain::Surface { min: at([s.min.x, s.min.y]), max: at([s.max.x, s.max.y]), height: s.height })
             .collect();
         terrain.platforms_only = setup.platforms_only;
+        terrain.diggable = setup.diggable;
         terrain.revision += 1;
         settlement.spawn = at([setup.spawn[0], setup.spawn[2]]);
         settlement.spawn_height = setup.spawn[1];

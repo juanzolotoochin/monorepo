@@ -7,6 +7,7 @@ mod impact;
 mod jetpack;
 mod legacy;
 mod lockstep;
+mod digging;
 mod nametags;
 mod navigation;
 mod palimpsest;
@@ -230,6 +231,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
                 piles::mirror,
                 lockstep::follow_avatar,
                 peers::update.run_if(control::rendered),
+                digging::update,
                 jetpack::update,
                 palimpsest::tick,
             )
@@ -267,6 +269,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
                 piles::captions,
                 settlement::captions,
                 nametags::update,
+                digging::feedback,
             )
                 .after(bevy::transform::TransformSystems::Propagate),
         );

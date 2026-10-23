@@ -126,6 +126,14 @@ impl Game {
         self.command(CommandKind::Equip { agent, weapon });
     }
 
+    /// Digs out a layer under the avatar, where the scene allows it.
+    pub fn dig(&mut self) {
+        let Some(agent) = self.player() else { return };
+        if self.world().is_some_and(|w| w.terrain().diggable) {
+            self.command(CommandKind::DigDown { agent });
+        }
+    }
+
     /// The local player's avatar ID, as views name agents.
     pub fn player_id(&self) -> Option<String> {
         Some(self.settlement()?.agents[self.player()? as usize].id.clone())
@@ -242,6 +250,7 @@ pub fn build_world(world: &mut World) {
             piles: p.piles.iter().map(|s| (material(s.material), [q(s.position[0]), q(s.position[2])], s.units)).collect(),
         }),
         memory_trial: library.has_feature(voxel_assets::SceneFeature::MemoryTrial),
+        diggable: library.has_feature(voxel_assets::SceneFeature::Digging),
     };
     let scene_id = scene.id.clone();
     let mut game = world.resource_mut::<Game>();
@@ -412,7 +421,7 @@ pub fn end_frame(mut game: ResMut<Game>) {
     game.events.clear();
 }
 
-/// Keyboard movement: camera-relative walking, the jetpack, and respawning.
+/// Keyboard movement: camera-relative walking, the jetpack, digging, and respawning.
 pub fn keyboard_input(keys: Res<ButtonInput<KeyCode>>, mut controls: ResMut<Controls>, mut game: ResMut<Game>) {
     let Some(agent) = game.player() else { return };
     if keys.just_pressed(KeyCode::KeyR) {
@@ -426,6 +435,10 @@ pub fn keyboard_input(keys: Res<ButtonInput<KeyCode>>, mut controls: ResMut<Cont
     }
     if keys.just_released(KeyCode::Space) {
         game.command(CommandKind::Jetpack { agent, enabled: false });
+    }
+    // X picks the spear in combat scenes, so digging is F.
+    if keys.just_pressed(KeyCode::KeyF) {
+        game.dig();
     }
     let pressed = |a, b| if keys.pressed(a) || keys.pressed(b) { 1.0 } else { 0.0 };
     let right = Vec3::new(1.0, 0.0, -1.0).normalize();

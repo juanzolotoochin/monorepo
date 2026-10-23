@@ -319,6 +319,14 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             send(world, CommandKind::Jetpack { agent, enabled: *enabled });
             Ok(Pending::Applied)
         }
+        Command::Dig => {
+            let game = world.resource::<Game>();
+            if !game.world().is_some_and(|w| w.terrain().diggable) {
+                return Err("This scene has no diggable ground".into());
+            }
+            world.resource_mut::<Game>().dig();
+            Ok(Pending::Applied)
+        }
         Command::AssertFlight { airborne, altitude, tolerance } => {
             if !altitude.is_finite() || !tolerance.is_finite() || !(0.0..=1.0).contains(tolerance) {
                 return Err("Flight assertion requires a finite altitude and tolerance in 0..1".into());
@@ -527,6 +535,7 @@ pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
         .scene
         .terrain;
     let terrain = json!(terrain);
+    let digging = crate::digging::snapshot(world.resource::<Game>());
     let controls = world.resource::<Controls>();
     let movement = json!({"route":controls.route.iter().map(|p|p.to_array()).collect::<Vec<_>>(),"velocity":controls.velocity.to_array(),"attacking":controls.attack.is_some(),"weapon":controls.weapon,"impacts":controls.impacts});
     let scene = world.resource::<SceneLibrary>().title().to_string();
@@ -562,7 +571,7 @@ pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
     let sim_tick = world.resource::<Game>().world().map(|w| w.tick());
     let network = world.resource::<Game>().network.is_some().then(|| world.resource::<Game>().status.clone());
     let peers = crate::peers::snapshot(world);
-    let result = json!({"telemetry":telemetry,"settlement":settlement,"version":VERSION,"tick":hub.tick,"sim_tick":sim_tick,"network":network,"peers":peers,"scene":scene,"player":{"position":position.to_array(),"movement":movement,"cargo":cargo,"jetpack":jetpack},"terrain":terrain,"memory":memory,"style":style,"piles":piles,"totals":totals,"visible_mineral_units":visible_units,"airborne_units":airborne,"airborne":flying,"targets":targets,"obstacles":obstacles,"active_command":hub.active.as_ref().map(|a|&a.envelope.request)});
+    let result = json!({"telemetry":telemetry,"settlement":settlement,"version":VERSION,"tick":hub.tick,"sim_tick":sim_tick,"network":network,"peers":peers,"scene":scene,"player":{"position":position.to_array(),"movement":movement,"cargo":cargo,"jetpack":jetpack},"terrain":terrain,"digging":digging,"memory":memory,"style":style,"piles":piles,"totals":totals,"visible_mineral_units":visible_units,"airborne_units":airborne,"airborne":flying,"targets":targets,"obstacles":obstacles,"active_command":hub.active.as_ref().map(|a|&a.envelope.request)});
     crate::telemetry::elapsed(world, "inspection_snapshot", started);
     world
         .resource_mut::<crate::telemetry::Telemetry>()

@@ -996,7 +996,7 @@ pub fn hud(mut commands: Commands) {
             ));
             p.spawn((
                 Text::new(
-                    "1 / 2 / 3 / 4 / 5 / 6 / 7 / 8  SCENES    SPACE  JETPACK    WASD  STEER    SHIFT  RUN    WHEEL  ZOOM    M  AUDIO",
+                    "1 - 9 / 0  SCENES    SPACE  JETPACK    WASD  STEER    SHIFT  RUN    WHEEL  ZOOM    M  AUDIO",
                 ),
                 TextFont {
                     font_size: FontSize::Px(10.0),
@@ -1074,6 +1074,9 @@ pub fn update_hud(
             flight.support,
             crate::jetpack::HOVER
         )
+    } else if library.has_feature(voxel_assets::SceneFeature::Digging) {
+        let net = if game.network.is_some() { format!(" / NET / {}", game.status.to_uppercase()) } else { String::new() };
+        format!("DEPTH {:.1}m / F TO DIG / HOLD SPACE TO FLY OUT{net}", (-player.translation.y).max(0.0))
     } else if game.network.is_some() {
         format!("NET / {}", game.status.to_uppercase())
     } else {

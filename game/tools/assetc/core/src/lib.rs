@@ -268,6 +268,8 @@ pub struct Scene {
 pub enum SceneFeature {
     MemoryTrial,
     FlightHud,
+    /// Avatars dig pits into the deck.
+    Digging,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScenePack {

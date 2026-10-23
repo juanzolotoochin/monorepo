@@ -99,6 +99,8 @@ pub enum CommandKind {
     Join,
     /// The sending player's name, for their avatar.
     Name { name: String },
+    /// A player's avatar digs out a layer of the tile it stands on.
+    DigDown { agent: u16 },
 }
 
 impl CommandKind {
@@ -112,6 +114,7 @@ impl CommandKind {
             | CommandKind::Jetpack { agent, .. }
             | CommandKind::Equip { agent, .. }
             | CommandKind::Respawn { agent }
+            | CommandKind::DigDown { agent }
             | CommandKind::Pile { agent, .. } => Some(agent),
             _ => None,
         }
@@ -382,6 +385,11 @@ impl World {
                 CommandKind::Respawn { agent } => {
                     if let Some(s) = &mut self.settlement {
                         s.respawn(agent as usize, &mut self.terrain);
+                    }
+                }
+                CommandKind::DigDown { agent } => {
+                    if let Some(s) = &mut self.settlement {
+                        s.dig(self.tick, agent as usize, &self.terrain);
                     }
                 }
                 CommandKind::Pile { agent, action, pace, approach } => {
@@ -750,6 +758,7 @@ impl World {
         if let Some(settlement) = &mut self.settlement {
             settlement.combat_housekeeping(self.tick, &self.terrain);
             settlement.avatar_housekeeping(self.tick);
+            settlement.dig_housekeeping(self.tick, &mut self.terrain);
             settlement.pile_housekeeping(self.tick);
             settlement.memory_housekeeping(&mut self.terrain);
         }

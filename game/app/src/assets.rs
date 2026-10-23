@@ -44,6 +44,7 @@ impl SceneLibrary {
                 ScenePack::decode(atlantis::PACK_BYTES).expect("validated Atlantis asset pack"),
                 ScenePack::decode(forest_outpost::PACK_BYTES).expect("validated forest asset pack"),
                 ScenePack::decode(combat_arena::PACK_BYTES).expect("validated combat asset pack"),
+                ScenePack::decode(dig_lab::PACK_BYTES).expect("validated dig lab asset pack"),
                 ScenePack::decode(field::PACK_BYTES).expect("validated field asset pack"),
             ];
         let mut ids = std::collections::HashSet::new();
@@ -151,6 +152,8 @@ pub fn switch_scene(
         Some(7)
     } else if keys.just_pressed(KeyCode::Digit9) {
         Some(8)
+    } else if keys.just_pressed(KeyCode::Digit0) {
+        Some(9)
     } else if keys.just_pressed(KeyCode::Digit6) {
         Some(5)
     } else if keys.just_pressed(KeyCode::Digit5) {
@@ -399,7 +402,9 @@ mod tests {
         let lab = &library.scenes[1];
         assert_eq!(library.index("mining-deck"), Ok(0));
         assert_eq!(library.index("combat-arena"), Ok(7));
-        assert_eq!(library.index("field"), Ok(8));
+        assert_eq!(library.index("dig-lab"), Ok(8));
+        assert_eq!(library.index("field"), Ok(9));
+        assert!(library.scenes[8].scene.features.contains(&SceneFeature::Digging));
         assert!(library.index("missing").is_err());
         assert!(library.scenes[4].scene.features.contains(&SceneFeature::MemoryTrial));
         assert!(library.scenes[3].scene.features.contains(&SceneFeature::FlightHud));

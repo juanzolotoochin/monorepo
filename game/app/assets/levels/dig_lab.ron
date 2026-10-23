@@ -1,0 +1,6 @@
+Scene(id: "dig-lab", features: [Digging],
+    name: "DIG LAB / PITS & JETPACK",
+    spawn: (0.0, 0.0, 2.0),
+    industrial: false,
+    instances: [],
+)

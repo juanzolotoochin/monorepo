@@ -3,7 +3,8 @@
 //! Scenes are arenas centered on `center` with half-width `extent`.
 //! Movement is blocked by authored obstacles (discs: rocks, trees, machines)
 //! and by rock voxels, 1 × 1 tile columns that can be dug out. Walkable
-//! surfaces are raised boxes (platforms) that set the ground height.
+//! surfaces are raised boxes (platforms) that set the ground height. In
+//! digging scenes, avatars dig pits into the ground, a layer at a time.
 //! Terrain is part of the saved state; navigation caches built from it are not.
 
 use fx::{Fx, FxVec2};
@@ -13,6 +14,11 @@ use crate::hash::{StateHash, StateHasher};
 
 /// Extra separation kept from obstacles, as in the original game (1.5 cm).
 pub const CLEARANCE_MARGIN: Fx = Fx::from_bits(64_424_509); // 0.015
+
+/// How much ground one dig removes.
+pub const LAYER: Fx = Fx::HALF;
+/// The deepest a pit goes, in layers.
+pub const MAX_LAYERS: u8 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Disc {
@@ -40,6 +46,12 @@ pub struct Terrain {
     pub platforms_only: bool,
     /// Diggable rock columns by integer tile, sorted.
     pub rock: Vec<(i32, i32)>,
+    /// Avatars can dig pits here.
+    #[serde(default)]
+    pub diggable: bool,
+    /// Dug pits by [`Terrain::pit_tile`], with how many layers deep, sorted.
+    #[serde(default)]
+    pub pits: Vec<((i32, i32), u8)>,
     /// Bumped by every change, so cached paths know to rebuild.
     pub revision: u64,
 }
@@ -53,6 +65,8 @@ impl Terrain {
             surfaces: Vec::new(),
             platforms_only: false,
             rock: Vec::new(),
+            diggable: false,
+            pits: Vec::new(),
             revision: 0,
         }
     }
@@ -71,8 +85,17 @@ impl Terrain {
     }
 
     /// Ground height at `p`: the highest surface containing it; elsewhere
-    /// zero, or nothing (a drop) in platform scenes.
+    /// zero, or nothing (a drop) in platform scenes. Pits sink it.
     pub fn ground(&self, p: FxVec2) -> Option<Fx> {
+        let top = self.top(p)?;
+        if self.pits.is_empty() {
+            return Some(top);
+        }
+        Some(top - LAYER.mul_int(self.pit(Self::pit_tile(p)) as i64))
+    }
+
+    /// [`Terrain::ground`] before digging.
+    fn top(&self, p: FxVec2) -> Option<Fx> {
         let top = self
             .surfaces
             .iter()
@@ -123,6 +146,34 @@ impl Terrain {
             let p = a + (b - a) * Fx::from_ratio(i, steps);
             offsets.iter().all(|&(dx, dy)| self.ground(FxVec2::new(p.x + dx, p.y + dy)).is_none_or(|y| y <= ceiling))
         })
+    }
+
+    /// The tile a pit at `p` would be dug in: tiles are 1 × 1 and centered
+    /// on whole meters, as the deck's floor plates are.
+    pub fn pit_tile(p: FxVec2) -> (i32, i32) {
+        ((p.x + Fx::HALF).floor_to_int() as i32, (p.y + Fx::HALF).floor_to_int() as i32)
+    }
+
+    /// The center of a pit tile.
+    pub fn pit_center(tile: (i32, i32)) -> FxVec2 {
+        FxVec2::new(Fx::from_int(tile.0), Fx::from_int(tile.1))
+    }
+
+    /// How many layers deep the pit at `tile` is.
+    pub fn pit(&self, tile: (i32, i32)) -> u8 {
+        self.pits.binary_search_by_key(&tile, |&(t, _)| t).map_or(0, |at| self.pits[at].1)
+    }
+
+    /// Digs one more layer out of `tile`, down to [`MAX_LAYERS`]. Returns
+    /// whether it did.
+    pub fn deepen(&mut self, tile: (i32, i32)) -> bool {
+        match self.pits.binary_search_by_key(&tile, |&(t, _)| t) {
+            Ok(at) if self.pits[at].1 < MAX_LAYERS => self.pits[at].1 += 1,
+            Ok(_) => return false,
+            Err(at) => self.pits.insert(at, (tile, 1)),
+        }
+        self.revision += 1;
+        true
     }
 
     pub fn is_rock(&self, tile: (i32, i32)) -> bool {
@@ -206,6 +257,12 @@ impl StateHash for Terrain {
         for &(x, y) in &self.rock {
             h.write_u64((x as u32 as u64) << 32 | y as u32 as u64);
         }
+        h.write(&self.diggable);
+        h.write_u64(self.pits.len() as u64);
+        for &((x, y), depth) in &self.pits {
+            h.write_u64((x as u32 as u64) << 32 | y as u32 as u64);
+            h.write_u64(depth as u64);
+        }
         h.write_u64(self.revision);
     }
 }
@@ -288,5 +345,24 @@ mod tests {
         assert_eq!(terrain.height(v(-0.5, -0.5)), Fx::ONE);
         assert_eq!(terrain.height(v(0.5, 0.5)), Fx::from_int(2));
         assert_eq!(terrain.height(v(5.0, 5.0)), Fx::ZERO);
+    }
+
+    #[test]
+    fn pits_sink_the_ground_down_to_three_layers() {
+        let mut terrain = Terrain::flat(v(0.0, 0.0), Fx::from_int(8));
+        let tile = Terrain::pit_tile(v(2.3, -0.6));
+        assert_eq!(tile, (2, -1));
+        for depth in 1..=MAX_LAYERS {
+            assert!(terrain.deepen(tile));
+            assert_eq!(terrain.pit(tile), depth);
+        }
+        assert!(!terrain.deepen(tile), "no deeper than the last layer");
+        assert_eq!(terrain.height(v(1.6, -1.4)), -LAYER.mul_int(3));
+        assert_eq!(terrain.height(v(2.6, -1.4)), Fx::ZERO, "the next tile");
+        // On foot, a pit is a drop too deep to walk into or out of.
+        let r = Fx::from_ratio(8, 25);
+        assert!(!terrain.walkable(v(0.0, -1.0), v(2.0, -1.0), r));
+        assert!(!terrain.walkable(v(2.0, -1.0), v(4.0, -1.0), r));
+        assert!(terrain.walkable(v(0.0, 1.0), v(4.0, 1.0), r));
     }
 }

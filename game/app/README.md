@@ -254,6 +254,25 @@ Live/script commands `{"op":"jetpack","enabled":true}` and
 World inspection includes authored `terrain` and `player.jetpack` fields for
 requested flight, airborne status, support height, hover height, and clearance.
 
+## Dig lab
+
+Press **9** for the dig lab, or launch it directly:
+
+```sh
+bazel run --config=full_local //game/app:demo -- --scene dig-lab
+```
+
+Press **F** to dig out the deck tile you stand on (**X** picks the spear in
+combat scenes). A dig takes 2 seconds standing still, stepping to the middle of
+the tile, with a bar over your head; walking off, attacking or the jetpack
+stops it. Each dig takes out one 0.5 m layer, down to 3 layers (1.5 m). Pit
+walls are too steep to walk into or out of, and routes go around pits: hold
+**Space** to fly out. The pits are part of the simulation, so in a networked
+game everyone digs the same deck (`--scene dig-lab` on every machine).
+
+The control port's `{"op":"dig"}` digs, and inspection's `digging` lists the
+pits by arena tile and whether the player is digging.
+
 ## Field trial 05
 
 A new mechanic has a dedicated scene with instructions inside the game. Press
@@ -435,7 +454,7 @@ A name tag floats over every player (yours in cyan): `--name Ada` sets
 yours, otherwise it's who is logged in to the computer. Names travel
 through the simulation, so everyone sees the same ones.
 
-Networked games start on the flat `field` scene (also on key **9** when
+Networked games start on the flat `field` scene (also on key **0** when
 playing alone). `--scene` picks another one; every player must pass the same
 scene. Scene keys are disabled while networked. The HUD's top right shows the
 connection. Leaving and rejoining gives a new avatar; the old one stays put.

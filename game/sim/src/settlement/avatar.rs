@@ -5,7 +5,8 @@
 //! way. A command sets an intent (walk in a direction, go to a point, or
 //! stop); each tick the avatar accelerates toward it and slides along
 //! obstacles. Attacks wind up, resolve on a tick, and lock movement until
-//! the swing (or the rebound after a hit) ends.
+//! the swing (or the rebound after a hit) ends. In digging scenes an avatar
+//! digs out the tile it stands on, standing still for the dig.
 
 use content::scenario::Weapon;
 use fx::{Fx, FxVec2};
@@ -15,7 +16,7 @@ use super::haulers::AgentState;
 use super::{AgentIx, DepotIx, Endpoint, ItemIx, Settlement};
 use crate::messages::{ManualUnit, Messages, Strike};
 use crate::nav::{self, angle_between, distance};
-use crate::terrain::Terrain;
+use crate::terrain::{Terrain, MAX_LAYERS};
 
 /// The longest player name, in characters.
 pub const NAME_CHARS: usize = 16;
@@ -49,6 +50,11 @@ const DOCK_REACH: Fx = Fx::from_bits(3_650_722_202); // 0.85
 const HOVER: Fx = Fx::from_bits(7_730_941_133); // 1.8
 const CLIMB_PER_TICK: Fx = Fx::from_bits(787_410_671); // 5.5/30
 const SINK_PER_TICK: Fx = Fx::from_bits(429_496_730); // 3/30
+/// A dig takes 2 s, standing still.
+pub const DIG_TICKS: u64 = 60;
+/// While digging, the avatar steps to the middle of its tile (1.5 m/s), so
+/// it drops into the pit cleanly.
+const DIG_CENTERING: Fx = Fx::from_bits(214_748_365); // 1.5/30
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Intent {
@@ -72,6 +78,15 @@ pub struct Swing {
     /// Set once contact was resolved; then `hits` holds how many it hit.
     pub resolved: bool,
     pub hits: u32,
+}
+
+/// Digging out the tile under the avatar.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Dig {
+    pub tile: (i32, i32),
+    pub started: u64,
+    /// The layer comes out on this tick.
+    pub until: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,6 +124,8 @@ pub struct AvatarState {
     /// A follow-up attack clicked during the end of a swing.
     pub queued: Option<(Weapon, FxVec2, [Fx; 3])>,
     pub job: Option<ManualJob>,
+    #[serde(default)]
+    pub dig: Option<Dig>,
 }
 
 fn approach(current: FxVec2, target: FxVec2, max_change: Fx) -> FxVec2 {
@@ -164,6 +181,12 @@ pub(super) fn self_update(a: &mut AgentState, tick: u64, terrain: &Terrain, pile
 fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain) {
     let per_tick = Fx::from_int(content::TICKS_PER_SECOND);
     let avatar = &mut a.avatar;
+    if let Some(dig) = &avatar.dig {
+        avatar.velocity = approach(avatar.velocity, FxVec2::ZERO, BRAKING);
+        let center = Terrain::pit_center(dig.tile);
+        a.position = slide(terrain, a.position, approach(a.position, center, DIG_CENTERING) - a.position);
+        return;
+    }
     if let Some(swing) = &avatar.swing {
         if tick < swing.until {
             avatar.velocity = approach(avatar.velocity, FxVec2::ZERO, ATTACK_BRAKING);
@@ -341,10 +364,44 @@ impl Settlement {
         });
     }
 
-    /// Commands: holds the jetpack on or off.
+    /// Commands: holds the jetpack on or off. Flying off stops a dig.
     pub fn jetpack(&mut self, agent: usize, enabled: bool) {
         if let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) {
             a.avatar.flight.requested = enabled;
+            if enabled {
+                a.avatar.dig = None;
+            }
+        }
+    }
+
+    /// Commands: starts digging out the tile under the avatar, if the scene
+    /// allows digging, the avatar stands on the ground with its hands free,
+    /// and the pit there isn't as deep as it goes.
+    pub fn dig(&mut self, tick: u64, agent: usize, terrain: &Terrain) {
+        if !terrain.diggable {
+            return;
+        }
+        let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
+        let busy = a.avatar.swing.as_ref().is_some_and(|s| tick < s.until) || a.avatar.job.is_some();
+        let flight = &a.avatar.flight;
+        if busy || a.avatar.dig.is_some() || flight.requested || flight.airborne {
+            return;
+        }
+        let tile = Terrain::pit_tile(a.position);
+        if terrain.pit(tile) >= MAX_LAYERS || !terrain.inside(Terrain::pit_center(tile)) {
+            return;
+        }
+        a.route.clear();
+        a.avatar.intent = Some(Intent::Stop);
+        a.avatar.dig = Some(Dig { tile, started: tick, until: tick + DIG_TICKS });
+    }
+
+    /// Housekeeping: digs that are done take their layer out of the ground.
+    pub(crate) fn dig_housekeeping(&mut self, tick: u64, terrain: &mut Terrain) {
+        for a in self.agents.iter_mut().filter(|a| a.controlled) {
+            if let Some(dig) = a.avatar.dig.take_if(|d| tick + 1 >= d.until) {
+                terrain.deepen(dig.tile);
+            }
         }
     }
 
@@ -401,6 +458,16 @@ impl Settlement {
             self.cancel_pile_job();
         }
         let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
+        // Walking off stops a dig.
+        let walking = match intent {
+            Intent::Stop => false,
+            Intent::Walk { direction, .. } => direction != FxVec2::ZERO,
+            Intent::GoTo { .. } => true,
+        };
+        if a.avatar.dig.is_some() && !walking {
+            return;
+        }
+        a.avatar.dig = None;
         a.route.clear();
         if let Intent::GoTo { target, run } = intent {
             // On foot, routes avoid steps and drops; with the jetpack, anything goes.
@@ -423,6 +490,9 @@ impl Settlement {
             self.cancel_pile_job();
         }
         let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
+        if a.avatar.dig.is_some() {
+            return;
+        }
         let aim = aim.normalize_or_zero();
         if aim == FxVec2::ZERO || muzzle.iter().any(|v| v.abs() > Fx::from_int(4)) {
             return;

@@ -98,6 +98,13 @@ scene_assets(
     prefabs = [],
 )
 
+# The flat deck, diggable: pits a layer at a time, out with the jetpack.
+scene_assets(
+    name = "dig_lab",
+    layout = "levels/dig_lab.ron",
+    prefabs = [],
+)
+
 boulder_prefab(
     name = "aether_stone",
     src = "prefabs/ore_small.ron",

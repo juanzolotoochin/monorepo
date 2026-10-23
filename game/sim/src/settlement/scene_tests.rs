@@ -374,3 +374,69 @@ fn players_name_their_own_avatar() {
     scene.command(CommandKind::Respawn { agent });
     assert_eq!(scene.avatar().name, "Ada");
 }
+
+/// The field with diggable ground.
+fn dig_lab() -> SceneSetup {
+    SceneSetup { diggable: true, ..field() }
+}
+
+/// Digging takes the avatar's tile down a layer after two seconds standing
+/// still, three layers at most; walking off stops it; on foot there's no
+/// way out of a pit, and the jetpack lifts the avatar out.
+#[test]
+fn avatars_dig_pits_and_fly_out() {
+    use super::avatar::DIG_TICKS;
+    use crate::terrain::{Terrain, LAYER};
+    let mut scene = Scene::new(field());
+    let agent = scene.agent();
+    scene.command(CommandKind::DigDown { agent });
+    assert_eq!(scene.avatar().avatar.dig, None, "the field isn't diggable");
+
+    let mut scene = Scene::new(dig_lab());
+    scene.walk(0.3, 1.8);
+    let tile = Terrain::pit_tile(scene.avatar().position);
+    let pit = |scene: &Scene| scene.sim.world().terrain().pit(tile);
+    let walk = |direction| CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction, run: false } };
+
+    // Walking off before it's done leaves the ground as it was.
+    scene.command(CommandKind::DigDown { agent });
+    scene.wait(20);
+    scene.command(walk(v(0.0, 1.0)));
+    scene.command(walk(FxVec2::ZERO));
+    assert_eq!(scene.avatar().avatar.dig, None);
+    scene.wait(DIG_TICKS);
+    assert_eq!(pit(&scene), 0);
+    scene.walk(0.3, 1.8);
+
+    for depth in 1..=3 {
+        scene.command(CommandKind::DigDown { agent });
+        // Standing still: a stop or an attack doesn't interrupt.
+        scene.command(walk(FxVec2::ZERO));
+        let weapon = content::scenario::Weapon::Sword;
+        scene.command(CommandKind::Attack { agent, weapon, aim: v(1.0, 0.0), muzzle: [Fx::ZERO; 3] });
+        scene.wait(DIG_TICKS - 4);
+        assert_eq!(pit(&scene), depth - 1, "still digging");
+        scene.wait(1);
+        assert_eq!(pit(&scene), depth);
+        assert_eq!(scene.avatar().position, Terrain::pit_center(tile), "dug in the middle of the tile");
+        scene.wait(30);
+        assert_eq!(scene.altitude(), -LAYER.mul_int(depth as i64), "dropped into the pit");
+        assert!(!scene.avatar().avatar.flight.airborne);
+    }
+    scene.command(CommandKind::DigDown { agent });
+    assert_eq!(scene.avatar().avatar.dig, None, "three layers is as deep as it goes");
+
+    // On foot, the walls are too high to climb.
+    scene.command(walk(v(1.0, 0.0)));
+    scene.wait(30);
+    assert_eq!(Terrain::pit_tile(scene.avatar().position), tile, "still in the pit");
+    // The jetpack lifts the avatar out, and it lands on the ground beside.
+    scene.command(CommandKind::Jetpack { agent, enabled: true });
+    scene.wait(45);
+    scene.command(CommandKind::Jetpack { agent, enabled: false });
+    scene.command(walk(FxVec2::ZERO));
+    scene.wait(45);
+    assert_ne!(Terrain::pit_tile(scene.avatar().position), tile, "out of the pit");
+    assert_eq!(scene.altitude(), Fx::ZERO);
+    assert!(!scene.avatar().avatar.flight.airborne);
+}

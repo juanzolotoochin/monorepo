@@ -56,6 +56,8 @@ pub enum Command {
     Jetpack {
         enabled: bool,
     },
+    /// Digs out a layer under the player, in a digging scene.
+    Dig,
     AssertFlight {
         airborne: bool,
         altitude: f32,
