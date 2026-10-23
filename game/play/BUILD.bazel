@@ -11,6 +11,7 @@ rust_binary(
     deps = [
         "//game/content",
         "//game/fx",
+        "//game/net",
         "//game/save",
         "//game/sim",
         "//game/view",

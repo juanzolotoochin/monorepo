@@ -172,8 +172,10 @@ Details: [desyncs and host loss](design/desync-host-loss.html).
   ID, session epoch), and turn authority is its own module.
 - **Player identity:** a stable player ID (a local profile ID now, Steam or EOS
   ID later) maps returning players back to their avatars.
-- **Layers:** the lockstep protocol sits on a `Transport` trait (send bytes to a
-  peer, reliable or unreliable) and a `Sessions` trait (find, create, join).
+- **Layers:** the lockstep protocol sits on a `Transport` trait (send and
+  receive unreliable datagrams; the protocol repeats whatever isn't
+  acknowledged, so it needs nothing more) and, later, a `Sessions` trait (find,
+  create, join) for Steam and EOS lobbies. Direct IP needs no session layer.
   Implementations come in this order:
   1. Loopback simulator for tests
   2. UDP with direct IP, for LAN and Tailscale

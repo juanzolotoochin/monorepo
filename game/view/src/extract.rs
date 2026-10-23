@@ -18,6 +18,8 @@ pub struct MoverExtract {
 pub struct Extract {
     /// The tick this extract shows (the last tick that ran).
     pub tick: u64,
+    /// World size in tiles (x, y).
+    pub world_size: [f32; 2],
     /// Sorted by `id`.
     pub movers: Vec<MoverExtract>,
 }
@@ -39,7 +41,8 @@ impl Extract {
             })
             .collect();
         movers.sort_unstable_by_key(|m| m.id);
-        Extract { tick: world.tick().saturating_sub(1), movers }
+        let size = world.config().size();
+        Extract { tick: world.tick().saturating_sub(1), world_size: [size.x.to_f32(), size.y.to_f32()], movers }
     }
 
     pub fn mover(&self, id: u64) -> Option<&MoverExtract> {
@@ -100,8 +103,8 @@ mod tests {
     #[test]
     fn interpolates_between_ticks_and_pops_in_new_movers() {
         let mut view = Interpolator::default();
-        view.push(Extract { tick: 0, movers: vec![mover(1, 0.0)] });
-        view.push(Extract { tick: 1, movers: vec![mover(1, 2.0), mover(2, 5.0)] });
+        view.push(Extract { tick: 0, movers: vec![mover(1, 0.0)], ..Default::default() });
+        view.push(Extract { tick: 1, movers: vec![mover(1, 2.0), mover(2, 5.0)], ..Default::default() });
         let drawn: Vec<Drawn> = view.sample(0.25).collect();
         assert_eq!(drawn[0].pos[0], 0.5);
         assert_eq!(drawn[1].pos[0], 5.0);

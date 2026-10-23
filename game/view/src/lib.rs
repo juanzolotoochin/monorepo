@@ -29,8 +29,6 @@ pub struct SimView {
 pub struct ViewConfig {
     /// Per mover kind, by dense index.
     pub mover_colors: Vec<(f32, f32, f32)>,
-    /// World size in tiles.
-    pub world_size: Vec2,
     pub chunk_tiles: f32,
 }
 
@@ -49,7 +47,9 @@ impl Plugin for ViewPlugin {
             .add_systems(Startup, setup)
             .add_systems(
                 Update,
-                (sync_movers, draw_chunk_grid, camera_controls, spawn_markers, fade_markers).in_set(DrawSystems),
+                (setup_ground, sync_movers, draw_chunk_grid, camera_controls, spawn_markers, fade_markers)
+                    .chain()
+                    .in_set(DrawSystems),
             );
     }
 }
@@ -65,6 +65,8 @@ struct Visuals {
     materials: Vec<(Handle<StandardMaterial>, Handle<StandardMaterial>)>,
     marker: Handle<Mesh>,
     marker_material: Handle<StandardMaterial>,
+    /// The world size once the first extract arrived; the ground exists from then on.
+    world_size: Option<Vec2>,
 }
 
 #[derive(Component)]
@@ -110,7 +112,36 @@ fn setup(
         ..default()
     });
 
-    let size = config.world_size;
+    commands.spawn((
+        DirectionalLight { illuminance: 9000.0, shadow_maps_enabled: false, ..default() },
+        Transform::from_xyz(-0.5, 1.0, 0.3).looking_at(Vec3::ZERO, Vec3::Y),
+    ));
+    commands.spawn((
+        MainCamera,
+        Camera3d::default(),
+        Projection::Orthographic(OrthographicProjection {
+            scaling_mode: ScalingMode::FixedVertical { viewport_height: 120.0 },
+            ..OrthographicProjection::default_3d()
+        }),
+        Transform::from_xyz(100.0, 140.0, 100.0).looking_at(Vec3::ZERO, Vec3::Y),
+    ));
+}
+
+/// Builds the ground and centers the camera once the world size is known.
+fn setup_ground(
+    mut commands: Commands,
+    view: Res<SimView>,
+    mut visuals: ResMut<Visuals>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut camera: Single<&mut Transform, With<MainCamera>>,
+) {
+    let [x, y] = view.interpolator.current().world_size;
+    if visuals.world_size.is_some() || x <= 0.0 {
+        return;
+    }
+    let size = Vec2::new(x, y);
+    visuals.world_size = Some(size);
     let center = Vec3::new(size.x / 2.0, 0.0, size.y / 2.0);
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::default().mesh().size(size.x, size.y))),
@@ -121,19 +152,7 @@ fn setup(
         })),
         Transform::from_translation(center),
     ));
-    commands.spawn((
-        DirectionalLight { illuminance: 9000.0, shadow_maps_enabled: false, ..default() },
-        Transform::from_xyz(-0.5, 1.0, 0.3).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
-    commands.spawn((
-        MainCamera,
-        Camera3d::default(),
-        Projection::Orthographic(OrthographicProjection {
-            scaling_mode: ScalingMode::FixedVertical { viewport_height: size.y.min(120.0) },
-            ..OrthographicProjection::default_3d()
-        }),
-        Transform::from_translation(center + Vec3::new(100.0, 140.0, 100.0)).looking_at(center, Vec3::Y),
-    ));
+    **camera = Transform::from_translation(center + Vec3::new(100.0, 140.0, 100.0)).looking_at(center, Vec3::Y);
 }
 
 /// Spawns, despawns and moves one Bevy entity per mover in the extract.
@@ -177,18 +196,19 @@ fn sync_movers(
     visuals.entities = seen;
 }
 
-fn draw_chunk_grid(config: Res<Config>, mut gizmos: Gizmos) {
-    let config = &config.0;
-    let color = Color::srgba(0.6, 0.7, 0.6, 0.15);
+fn draw_chunk_grid(config: Res<Config>, visuals: Res<Visuals>, mut gizmos: Gizmos) {
+    let Some(size) = visuals.world_size else { return };
+    let step = config.0.chunk_tiles;
+    let color = Color::srgba(0.6, 0.7, 0.6, 0.25);
     let mut x = 0.0;
-    while x <= config.world_size.x {
-        gizmos.line(Vec3::new(x, 0.02, 0.0), Vec3::new(x, 0.02, config.world_size.y), color);
-        x += config.chunk_tiles;
+    while x <= size.x {
+        gizmos.line(Vec3::new(x, 0.02, 0.0), Vec3::new(x, 0.02, size.y), color);
+        x += step;
     }
     let mut y = 0.0;
-    while y <= config.world_size.y {
-        gizmos.line(Vec3::new(0.0, 0.02, y), Vec3::new(config.world_size.x, 0.02, y), color);
-        y += config.chunk_tiles;
+    while y <= size.y {
+        gizmos.line(Vec3::new(0.0, 0.02, y), Vec3::new(size.x, 0.02, y), color);
+        y += step;
     }
 }
 

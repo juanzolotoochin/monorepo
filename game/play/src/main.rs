@@ -1,112 +1,148 @@
 //! The game binary.
 //!
 //! ```text
-//! play [--scenario small|large|empty] [--input-delay TICKS] [--threads N]
-//!     [--exit-after SECONDS [--screenshot PATH]]
+//! play [--scenario small|large|empty | --load SAVE] [--host ADDR:PORT]
+//! play --join ADDR:PORT
+//!     [--input-delay TICKS] [--threads N] [--resync] [--exit-after SECONDS [--screenshot PATH]]
 //! ```
 //!
+//! Without `--host` or `--join` the game is single-player: a host with no
+//! clients. `--load` hosts from a save, which is how a game continues after
+//! the host is lost (every peer writes `autosave.gsav` on the same ticks and
+//! `hostlost.gsav` when the host goes away).
+//!
 //! Controls: left click spawns movers, right click pushes the nearest mover
-//! toward the cursor, WASD pans, the wheel zooms, F5 quicksaves, F9 quickloads.
+//! toward the cursor, WASD pans, the wheel zooms, F5 saves to `quicksave.gsav`.
 
 mod session;
+
+use std::net::SocketAddr;
 
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use content::Content;
 use fx::{Fx, FxVec2};
+use net::{DesyncPolicy, NetConfig, NetEvent};
 use sim::scenario::Scenario;
-use sim::{CommandKind, CHUNK_TILES};
+use sim::{CommandKind, World, CHUNK_TILES};
 use view::{cursor_ground, DrawSystems, MainCamera, ShowMarker, SimView, ViewConfig, ViewPlugin};
 
-use session::Session;
+use session::{local_stable_id, Mode, Session};
 
 const QUICKSAVE: &str = "quicksave.gsav";
 
+#[derive(Default)]
 struct Options {
-    scenario: String,
-    input_delay: u64,
+    scenario: Option<String>,
+    load: Option<String>,
+    host: Option<SocketAddr>,
+    join: Option<SocketAddr>,
+    input_delay: Option<u64>,
     threads: usize,
+    resync: bool,
     exit_after: Option<f32>,
     screenshot: Option<String>,
 }
 
 fn parse_options() -> Result<Options, String> {
-    let mut options = Options { scenario: "small".into(), input_delay: 3, threads: 0, exit_after: None, screenshot: None };
+    let mut options = Options::default();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
+        if arg == "--resync" {
+            options.resync = true;
+            continue;
+        }
         let value = iter.next().ok_or(format!("{arg} needs a value"))?;
         let number = || value.parse::<f64>().map_err(|_| format!("{arg}: invalid number {value}"));
+        let addr = || value.parse::<SocketAddr>().map_err(|_| format!("{arg}: expected ADDRESS:PORT, got {value}"));
         match arg.as_str() {
-            "--scenario" => options.scenario = value.clone(),
-            "--input-delay" => options.input_delay = number()? as u64,
+            "--scenario" => options.scenario = Some(value.clone()),
+            "--load" => options.load = Some(value.clone()),
+            "--host" => options.host = Some(addr()?),
+            "--join" => options.join = Some(addr()?),
+            "--input-delay" => options.input_delay = Some(number()? as u64),
             "--threads" => options.threads = number()? as usize,
             "--exit-after" => options.exit_after = Some(number()? as f32),
             "--screenshot" => options.screenshot = Some(value.clone()),
             _ => return Err(format!("unknown option {arg}")),
         }
     }
+    if options.join.is_some() && (options.host.is_some() || options.load.is_some() || options.scenario.is_some()) {
+        return Err("--join can't be combined with --host, --load or --scenario".into());
+    }
     Ok(options)
 }
 
-fn main() {
-    let options = parse_options().unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(2)
-    });
-    let content = Content::builtin();
-    let (config, opening) = match options.scenario.as_str() {
-        "empty" => (Scenario::small().config, None),
-        "small" => (Scenario::small().config, Some(Scenario::small())),
-        "large" => (Scenario::large().config, Some(Scenario::large())),
-        other => {
-            eprintln!("unknown scenario {other}");
-            std::process::exit(2)
-        }
+/// The world to host and the commands that set it up.
+fn starting_world(options: &Options, content: &Content) -> Result<(World, Vec<CommandKind>), String> {
+    if let Some(path) = &options.load {
+        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        let world = save::read(&bytes, content).map_err(|e| format!("{path}: {e}"))?;
+        return Ok((world, Vec::new()));
+    }
+    let scenario = match options.scenario.as_deref().unwrap_or("small") {
+        "empty" => return Ok((World::new(Scenario::small().config, content.rules.clone()), Vec::new())),
+        "small" => Scenario::small(),
+        "large" => Scenario::large(),
+        other => return Err(format!("unknown scenario {other}")),
     };
-    let threads = if options.threads == 0 { headless_threads() } else { options.threads };
-    let mut session = Session::new_game(config.clone(), &content, threads, options.input_delay);
-    if let Some(scenario) = opening {
-        // The scenario's opening spawns go through the turn path like any input.
-        let probe = scenario.start(1);
-        for command in scenario.turn(&probe) {
-            session.queue(command.kind);
-        }
+    // The scenario's opening spawns go through the turn path like any input.
+    let opening = scenario.turn(&scenario.start(1)).into_iter().map(|c| c.kind).collect();
+    Ok((World::new(scenario.config.clone(), content.rules.clone()), opening))
+}
+
+fn main() {
+    let options = parse_options().unwrap_or_else(|e| fail(&e));
+    let content = Content::builtin();
+    let threads = if options.threads == 0 { std::thread::available_parallelism().map_or(4, |n| n.get()) } else { options.threads };
+    let defaults = NetConfig::default();
+    let config = NetConfig {
+        threads,
+        input_delay: options.input_delay.unwrap_or(if options.host.is_some() { defaults.input_delay } else { 2 }),
+        desync: if options.resync { DesyncPolicy::Resync } else { DesyncPolicy::Halt },
+        ..defaults
+    };
+    let mode_and_opening = match options.join {
+        Some(host) => Ok((Mode::Join { host, stable_id: local_stable_id() }, Vec::new())),
+        None => starting_world(&options, &content).map(|(world, opening)| (Mode::Host { world, listen: options.host }, opening)),
+    };
+    let (mode, opening) = mode_and_opening.unwrap_or_else(|e| fail(&e));
+    let mut session = Session::start(mode, content.clone(), config).unwrap_or_else(|e| fail(&format!("network: {e}")));
+    for kind in opening {
+        session.queue(kind);
     }
 
     let view_config = ViewConfig {
         mover_colors: content.views.movers.iter().map(|v| v.color).collect(),
-        world_size: Vec2::new(config.size().x.to_f32(), config.size().y.to_f32()),
         chunk_tiles: CHUNK_TILES as f32,
     };
-    let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window {
-            title: "Lockstep — left click: spawn · right click: push · F5/F9: save/load".into(),
-            resolution: (1440, 960).into(),
+    App::new()
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "Lockstep — left click: spawn · right click: push · F5: save".into(),
+                resolution: (1440, 960).into(),
+                ..default()
+            }),
             ..default()
-        }),
-        ..default()
-    }))
-    .add_plugins(FrameTimeDiagnosticsPlugin::default())
-    .add_plugins(ViewPlugin(view_config))
-    .insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.08)))
-    .insert_resource(session)
-    .insert_resource(ContentRes(content))
-    .insert_resource(RunStats { exit_after: options.exit_after, screenshot: options.screenshot, ..default() })
-    .add_systems(Startup, spawn_hud)
-    .add_systems(Update, (player_input, step_simulation).chain().before(DrawSystems))
-    .add_systems(Update, (update_hud, quicksave, exit_after).after(DrawSystems))
-    .run();
+        }))
+        .add_plugins(FrameTimeDiagnosticsPlugin::default())
+        .add_plugins(ViewPlugin(view_config))
+        .insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.08)))
+        .insert_resource(session)
+        .insert_resource(RunStats { exit_after: options.exit_after, screenshot: options.screenshot, ..default() })
+        .add_systems(Startup, spawn_hud)
+        .add_systems(Update, (player_input, step_simulation, handle_events).chain().before(DrawSystems))
+        .add_systems(Update, (update_hud, quicksave, exit_after).after(DrawSystems))
+        .add_systems(Last, say_goodbye)
+        .run();
 }
 
-fn headless_threads() -> usize {
-    std::thread::available_parallelism().map_or(4, |n| n.get())
+fn fail(message: &str) -> ! {
+    eprintln!("{message}");
+    std::process::exit(2)
 }
-
-#[derive(Resource)]
-struct ContentRes(Content);
 
 #[derive(Resource, Default)]
 struct RunStats {
@@ -116,15 +152,35 @@ struct RunStats {
     exit_countdown: Option<u32>,
     elapsed: f32,
     frames: u64,
-    ticks_at_start: u64,
+    ticks_at_start: Option<u64>,
+    message: Option<String>,
 }
 
-/// Steps the simulation at 30 Hz in fixed steps and hands the view a new extract.
-fn step_simulation(time: Res<Time>, mut session: ResMut<Session>, mut view: ResMut<SimView>) {
-    for extract in session.advance(time.delta()) {
+/// Runs the network and the simulation, and hands the view the new extract.
+fn step_simulation(mut session: ResMut<Session>, mut view: ResMut<SimView>) {
+    if let Some(extract) = session.update() {
         view.interpolator.push(extract);
     }
     view.alpha = session.alpha();
+}
+
+fn handle_events(mut session: ResMut<Session>, mut stats: ResMut<RunStats>) {
+    for event in std::mem::take(&mut session.events) {
+        info!("{event:?}");
+        match event {
+            NetEvent::Desync { tick, .. } => {
+                session.dump_desync(tick);
+                stats.message = Some(format!("DESYNC at tick {tick}: wrote desync-{tick}-*.gsav and .hashes"));
+            }
+            NetEvent::HostLost => {
+                stats.message = Some("Lost the host. Saved hostlost.gsav; re-host with --load hostlost.gsav --host ADDR:PORT".into());
+            }
+            NetEvent::Rejected { reason } => stats.message = Some(format!("Rejected: {reason}")),
+            NetEvent::PlayerJoined { player } => stats.message = Some(format!("{player:?} joined")),
+            NetEvent::PlayerLeft { player } => stats.message = Some(format!("{player:?} left")),
+            NetEvent::Loaded { tick } => stats.message = Some(format!("Joined at tick {tick}")),
+        }
+    }
 }
 
 fn player_input(
@@ -137,7 +193,8 @@ fn player_input(
 ) {
     let (camera, camera_transform) = *camera;
     let Some(ground) = cursor_ground(&window, camera, camera_transform) else { return };
-    let size = session.world().config().size();
+    let Some(world) = session.world() else { return };
+    let size = world.config().size();
     if ground.x < 0.0 || ground.y < 0.0 || ground.x >= size.x.to_f32() || ground.y >= size.y.to_f32() {
         return;
     }
@@ -180,46 +237,50 @@ fn spawn_hud(mut commands: Commands) {
     ));
 }
 
-fn update_hud(
-    session: Res<Session>,
-    diagnostics: Res<DiagnosticsStore>,
-    mut text: Single<&mut Text, With<Hud>>,
-) {
-    let fps = diagnostics
-        .get(&FrameTimeDiagnosticsPlugin::FPS)
-        .and_then(|d| d.smoothed())
-        .unwrap_or(0.0);
-    let world = session.world();
-    text.0 = format!(
-        "tick {}  movers {}  sim {:.2} ms/tick  input delay {} ticks  {:.0} fps",
-        world.tick(),
-        world.mover_count(),
-        session.last_step_ms(),
+/// The HUD, including the net graph numbers.
+fn update_hud(session: Res<Session>, stats: Res<RunStats>, diagnostics: Res<DiagnosticsStore>, mut text: Single<&mut Text, With<Hud>>) {
+    let fps = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS).and_then(|d| d.smoothed()).unwrap_or(0.0);
+    let net = session.stats();
+    let mut lines = vec![session.status()];
+    if let Some(world) = session.world() {
+        lines.push(format!(
+            "tick {}  movers {}  update {:.2} ms  {:.0} fps",
+            world.tick(),
+            world.mover_count(),
+            session.last_update_ms(),
+            fps
+        ));
+    }
+    let rtt = net.rtt.map_or("-".to_string(), |rtt| format!("{} ms", rtt.as_millis()));
+    lines.push(format!(
+        "net: rtt {rtt}  input delay {}  buffered {}  behind host {}  late inputs {}  out {} KB  in {} KB",
         session.input_delay(),
-        fps
-    );
+        net.turns_buffered,
+        net.ticks_behind_host,
+        net.late_inputs,
+        net.bytes_sent / 1024,
+        net.bytes_received / 1024
+    ));
+    if let Some(message) = &stats.message {
+        lines.push(message.clone());
+    }
+    text.0 = lines.join("\n");
 }
 
-fn quicksave(keys: Res<ButtonInput<KeyCode>>, mut session: ResMut<Session>, content: Res<ContentRes>, mut view: ResMut<SimView>) {
+fn quicksave(keys: Res<ButtonInput<KeyCode>>, session: Res<Session>) {
     if keys.just_pressed(KeyCode::F5) {
-        match std::fs::write(QUICKSAVE, session.save(&content.0)) {
-            Ok(()) => info!("saved {QUICKSAVE} at tick {}", session.world().tick()),
-            Err(e) => error!("could not save {QUICKSAVE}: {e}"),
+        if let Some(bytes) = session.save() {
+            match std::fs::write(QUICKSAVE, bytes) {
+                Ok(()) => info!("saved {QUICKSAVE}"),
+                Err(e) => error!("could not save {QUICKSAVE}: {e}"),
+            }
         }
     }
-    if keys.just_pressed(KeyCode::F9) {
-        let loaded = std::fs::read(QUICKSAVE).map_err(|e| e.to_string()).and_then(|bytes| {
-            session.load(&bytes, &content.0).map_err(|e| e.to_string())
-        });
-        match loaded {
-            Ok(extract) => {
-                // A load is a teleport: show it without interpolating.
-                view.interpolator.push(extract.clone());
-                view.interpolator.push(extract);
-                info!("loaded {QUICKSAVE} at tick {}", session.world().tick());
-            }
-            Err(e) => error!("could not load {QUICKSAVE}: {e}"),
-        }
+}
+
+fn say_goodbye(mut exits: MessageReader<AppExit>, mut session: ResMut<Session>) {
+    if exits.read().next().is_some() {
+        session.shutdown();
     }
 }
 
@@ -241,19 +302,21 @@ fn exit_after(
         }
         return;
     }
-    if stats.frames == 0 {
-        stats.ticks_at_start = session.world().tick();
+    let tick = session.world().map_or(0, World::tick);
+    if stats.ticks_at_start.is_none() {
+        stats.ticks_at_start = Some(tick);
     }
     stats.frames += 1;
     stats.elapsed += time.delta_secs();
     if stats.elapsed >= limit {
-        let ticks = session.world().tick() - stats.ticks_at_start;
+        let ticks = tick - stats.ticks_at_start.unwrap();
         println!(
-            "ran {:.1} s: {:.1} frames/s, {:.1} ticks/s, {} movers",
+            "ran {:.1} s: {:.1} frames/s, {:.1} ticks/s, tick {tick}, {} movers, {}",
             stats.elapsed,
             stats.frames as f32 / stats.elapsed,
             ticks as f32 / stats.elapsed,
-            session.world().mover_count()
+            session.world().map_or(0, World::mover_count),
+            session.status()
         );
         match stats.screenshot.take() {
             Some(path) => {
