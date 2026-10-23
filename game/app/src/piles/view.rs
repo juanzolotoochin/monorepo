@@ -195,6 +195,7 @@ pub fn setup_scene(
     commands.spawn((
         LabEntity,
         CarryVisual {
+            agent: None,
             units: u32::MAX,
             material: None,
             hidden: 0,
@@ -233,17 +234,19 @@ pub fn render(
     mut carriers: Query<(Entity, &mut CarryVisual)>,
     captions: Query<(Entity, &Caption)>,
     airborne: Query<&transfer::Transit>,
+    peers: Query<(Entity, &crate::peers::Peer)>,
 ) {
     let (Some(stock), Some(assets)) = (&lab.stock, &lab.assets) else {
         return;
     };
     let mut hidden_piles: std::collections::BTreeMap<PileId, std::collections::BTreeSet<u32>> =
         std::collections::BTreeMap::new();
-    let mut hidden_cargo = std::collections::BTreeSet::new();
+    let mut hidden_cargo: std::collections::BTreeMap<u16, std::collections::BTreeSet<u32>> =
+        std::collections::BTreeMap::new();
     for transit in &airborne {
         match transit.destination {
-            transfer::Destination::Cargo(index) => {
-                hidden_cargo.insert(index);
+            transfer::Destination::Cargo(agent, index) => {
+                hidden_cargo.entry(agent).or_default().insert(index);
             }
             transfer::Destination::Pile(id, index) => {
                 hidden_piles.entry(id).or_default().insert(index);
@@ -315,16 +318,32 @@ pub fn render(
             }
         }
     }
+    // Other players carry backpacks too, on their copies of the suit.
+    let carried: Vec<Option<u16>> = carriers.iter().map(|(_, v)| v.agent).collect();
+    for (entity, peer) in &peers {
+        if !carried.contains(&Some(peer.agent())) {
+            commands.spawn((
+                LabEntity,
+                CarryVisual { agent: Some(peer.agent()), units: u32::MAX, material: None, hidden: 0 },
+                Transform::default(),
+                Visibility::default(),
+                ChildOf(entity),
+            ));
+        }
+    }
+    let nothing = crate::pile_model::Cargo { material: None, units: 0, capacity: 0 };
     for (entity, mut visual) in &mut carriers {
-        if visual.units == stock.cargo.units
-            && visual.material == stock.cargo.material
-            && visual.hidden == hidden_cargo.len() as u32
-        {
+        let cargo = match visual.agent {
+            None => &stock.cargo,
+            Some(agent) => lab.others.get(&agent).unwrap_or(&nothing),
+        };
+        let hidden = visual.agent.or(lab.me).and_then(|a| hidden_cargo.get(&a)).unwrap_or(&empty);
+        if visual.units == cargo.units && visual.material == cargo.material && visual.hidden == hidden.len() as u32 {
             continue;
         }
-        visual.units = stock.cargo.units;
-        visual.hidden = hidden_cargo.len() as u32;
-        visual.material = stock.cargo.material;
+        visual.units = cargo.units;
+        visual.hidden = hidden.len() as u32;
+        visual.material = cargo.material;
         commands.entity(entity).despawn_children();
         commands.entity(entity).with_children(|p| {
             chunk(
@@ -334,9 +353,9 @@ pub fn render(
                 Vec3::new(0.0, 0.95, -0.28),
                 Vec3::new(0.78, 0.65, 0.12),
             );
-            if let Some(material) = stock.cargo.material {
-                for i in 0..stock.cargo.units {
-                    if hidden_cargo.contains(&i) {
+            if let Some(material) = cargo.material {
+                for i in 0..cargo.units {
+                    if hidden.contains(&i) {
                         continue;
                     }
                     let position = transfer::backpack_slot(i);
@@ -469,7 +488,7 @@ pub fn update_display(
                 "CARRY: {material}  {} / {}\nGROUND: {}   MINED: {}   COLLECTED: {collected}\n\n{}",
                 stock.cargo.units,
                 stock.cargo.capacity,
-                stock.total() - u64::from(stock.cargo.units),
+                stock.ground(),
                 stock.created,
                 lab.notice
             )
@@ -478,7 +497,7 @@ pub fn update_display(
                 "CARRY: {material}  {} / {}\nGROUND: {}   CREATED: {}\n\n{}",
                 stock.cargo.units,
                 stock.cargo.capacity,
-                stock.total() - u64::from(stock.cargo.units),
+                stock.ground(),
                 stock.created,
                 lab.notice
             )

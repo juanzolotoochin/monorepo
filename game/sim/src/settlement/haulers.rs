@@ -307,7 +307,7 @@ pub(crate) fn move_route(position: &mut FxVec2, route: &mut Vec<FxVec2>, mut dis
 /// Stage 2 for one non-controlled agent.
 pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
     if a.controlled {
-        return super::avatar::self_update(a, ctx.tick, ctx.terrain, ctx.piles);
+        return super::avatar::self_update(a, me, ctx.tick, ctx.terrain, ctx.piles);
     }
     if let Some(d) = a.departure_dock {
         let dock = ctx.depots[d as usize].position;

@@ -25,6 +25,9 @@ pub struct Stock {
     pub piles: BTreeMap<PileId, Pile>,
     pub cargo: Cargo,
     pub created: u64,
+    /// Units neither on the ground nor carried by this player: in other
+    /// players' backpacks, or delivered to a collector.
+    pub elsewhere: u64,
 }
 impl Stock {
     /// The layout's starting piles, before the first simulated tick.
@@ -38,10 +41,14 @@ impl Stock {
             piles.insert(first + i as PileId, Pile { material: p.material, position: [p.position[0], p.position[2]], units: p.units, source: false, height: 0.0 });
         }
         let created = layout.piles.iter().map(|p| u64::from(p.units)).sum();
-        Self { piles, cargo: Cargo { material: None, units: 0, capacity: layout.capacity }, created }
+        Self { piles, cargo: Cargo { material: None, units: 0, capacity: layout.capacity }, created, elsewhere: 0 }
+    }
+    /// Units in piles.
+    pub fn ground(&self) -> u64 {
+        self.piles.values().map(|p| u64::from(p.units)).sum()
     }
     pub fn total(&self) -> u64 {
-        self.piles.values().map(|p| u64::from(p.units)).sum::<u64>() + u64::from(self.cargo.units)
+        self.piles.values().map(|p| u64::from(p.units)).sum::<u64>() + u64::from(self.cargo.units) + self.elsewhere
     }
 }
 

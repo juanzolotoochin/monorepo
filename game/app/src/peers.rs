@@ -127,7 +127,8 @@ pub fn update(
                 sound.play(crate::sound::Cue::Swing);
             }
         }
-        poses.push((entity, current.avatar.weapon, Pose { stride: peer.stride, speed, breathe, airborne, attack }));
+        let dig = current.avatar.dig.as_ref().map(|d| crate::gameplay::dig_age(&game, d));
+        poses.push((entity, current.avatar.weapon, Pose { stride: peer.stride, speed, breathe, airborne, attack, dig }));
     }
     for (entity, part, mut transform) in &mut parts {
         // Part pivots hang off the root or the body: find the peer above.
@@ -228,7 +229,10 @@ fn copy(world: &mut World, source: Entity, parent: Option<Entity>) -> Entity {
     }
     let id = copied.id();
     for child in children {
-        if world.entity(child).contains::<PointLight>() || world.entity(child).contains::<SpotLight>() {
+        // Lights stay with the player; so does the backpack (each peer gets
+        // its own, see `piles::render`).
+        let child_ref = world.entity(child);
+        if child_ref.contains::<PointLight>() || child_ref.contains::<SpotLight>() || child_ref.contains::<crate::piles::CarryVisual>() {
             continue;
         }
         copy(world, child, Some(id));

@@ -364,6 +364,7 @@ pub fn animate_character(
     controls: Res<Controls>,
     feedback: Res<Feedback>,
     flight: Option<Res<crate::jetpack::Flight>>,
+    game: Res<crate::lockstep::Game>,
     mut parts: Query<(&Part, &mut Transform), Without<Player>>,
 ) {
     if feedback.hit_stop > 0.0
@@ -380,12 +381,14 @@ pub fn animate_character(
         (controls.velocity.length() / WALK_SPEED).min(1.4)
     };
     let breathe = (time.elapsed_secs() * 2.0).sin() * 0.012;
+    let dig = game.player().zip(game.current.as_ref()).and_then(|(i, s)| s.agents[i as usize].avatar.dig.as_ref()).map(|d| dig_age(&game, d));
     let pose = Pose {
         stride: controls.stride,
         speed,
         breathe,
         airborne,
         attack: controls.attack,
+        dig,
     };
     for (part, mut transform) in &mut parts {
         *transform = pose.place(part.kind, part.rest);
@@ -401,11 +404,42 @@ pub struct Pose {
     pub breathe: f32,
     pub airborne: bool,
     pub attack: Option<Attack>,
+    /// Seconds into a dig.
+    pub dig: Option<f32>,
+}
+
+/// One chop of a dig: the tool comes down every half second, when the
+/// dust flies (`digging::feedback`).
+const CHOP: f32 = 0.5;
+
+/// Seconds into a dig, at render time.
+pub fn dig_age(game: &crate::lockstep::Game, dig: &sim::settlement::avatar::Dig) -> f32 {
+    let now = game.tick as f32 - 1.0 + game.alpha;
+    (now - dig.started as f32).max(0.0) / content::TICKS_PER_SECOND as f32
+}
+
+/// The tool's pitch through a chop (positive points it at the ground), and
+/// how far down the swing is (0 raised overhead, 1 in the ground). It rises
+/// slowly for most of the beat and drives down at the end.
+fn chop(age: f32) -> (f32, f32) {
+    const DOWN: f32 = 0.95;
+    const UP: f32 = -1.9;
+    const RISE: f32 = 0.7;
+    let beat = (age / CHOP).fract();
+    let pitch = if beat < RISE {
+        lerp(DOWN, UP, smooth(beat / RISE))
+    } else {
+        lerp(UP, DOWN, ((beat - RISE) / (1.0 - RISE)).powi(2))
+    };
+    (pitch, (pitch - UP) / (DOWN - UP))
 }
 
 impl Pose {
     /// A part's rest transform, posed.
     pub fn place(&self, kind: PartKind, rest: Transform) -> Transform {
+        if let Some(age) = self.dig {
+            return self.digging(kind, rest, age);
+        }
         let mut transform = rest;
         match kind {
             PartKind::Body => {
@@ -463,6 +497,29 @@ impl Pose {
                     }
                 }
                 transform.translation.y += self.breathe;
+            }
+        }
+        transform
+    }
+
+    /// Digging: crouched over the tile, feet apart, chopping into the ground
+    /// in front, leaning into each strike.
+    fn digging(&self, kind: PartKind, rest: Transform, age: f32) -> Transform {
+        let (pitch, down) = chop(age);
+        let mut transform = rest;
+        match kind {
+            PartKind::Body => {
+                transform.translation.y += self.breathe - 0.09 - 0.05 * down;
+                transform.rotation = Quat::from_rotation_x(0.22 + 0.2 * down);
+            }
+            PartKind::Leg(side) => {
+                transform.rotation = Quat::from_rotation_x(-0.3 * side) * Quat::from_rotation_z(0.12 * side);
+            }
+            PartKind::Sword => {
+                transform.translation.x *= 0.4;
+                transform.translation.z += 0.18;
+                transform.translation.y -= 0.05 + 0.1 * down;
+                transform.rotation = Quat::from_rotation_x(pitch);
             }
         }
         transform

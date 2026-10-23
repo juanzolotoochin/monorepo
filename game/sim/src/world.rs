@@ -727,8 +727,8 @@ impl World {
             for message in messages.manual_unit {
                 settlement.manual_unit(tick, message);
             }
-            for _ in messages.pile_step {
-                settlement.pile_step(tick, &self.terrain);
+            for step in messages.pile_step {
+                settlement.pile_step(tick, &self.terrain, step.agent);
             }
             for message in messages.strike {
                 let agent = message.agent;

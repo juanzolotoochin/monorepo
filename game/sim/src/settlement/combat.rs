@@ -186,7 +186,8 @@ pub enum Event {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TossEnd {
     Pile { id: u32, slot: u32, position: FxVec2 },
-    Cargo { slot: u32 },
+    /// A slot in an avatar's backpack.
+    Cargo { agent: AgentIx, slot: u32 },
     /// The floor of a pit, where dug ore comes from.
     Pit { position: FxVec2 },
     /// The collector's hopper.

@@ -171,9 +171,9 @@ fn slide(terrain: &Terrain, mut position: FxVec2, delta: FxVec2) -> FxVec2 {
 }
 
 /// Stage 2 for one avatar.
-pub(super) fn self_update(a: &mut AgentState, tick: u64, terrain: &Terrain, piles: Option<&super::piles::PileLab>) {
+pub(super) fn self_update(a: &mut AgentState, me: AgentIx, tick: u64, terrain: &Terrain, piles: Option<&super::piles::PileLab>) {
     if let Some(lab) = piles {
-        if let Some(error) = Settlement::pile_job_self_update(lab, a, terrain) {
+        if let Some(error) = Settlement::pile_job_self_update(lab, me, a, terrain) {
             a.avatar.pile_failure = Some(error.to_string());
         }
     }
@@ -447,7 +447,7 @@ impl Settlement {
         a.route.clear();
         a.avatar = AvatarState { height, ..AvatarState::default() };
         a.avatar.intent = Some(Intent::Stop);
-        self.cancel_pile_job();
+        self.cancel_pile_job(agent);
     }
 
     /// Stage 3 for one avatar: a strike resolving this tick, and manual
@@ -480,7 +480,7 @@ impl Settlement {
     /// Commands: sets an avatar's movement intent.
     pub fn move_avatar(&mut self, agent: usize, intent: Intent, terrain: &Terrain) {
         if self.agents.get(agent).is_some_and(|a| a.controlled) {
-            self.cancel_pile_job();
+            self.cancel_pile_job(agent);
         }
         let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
         // Walking off stops a dig.
@@ -512,7 +512,7 @@ impl Settlement {
             return;
         }
         if self.agents.get(agent).is_some_and(|a| a.controlled) {
-            self.cancel_pile_job();
+            self.cancel_pile_job(agent);
         }
         let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
         if a.avatar.dig.is_some() {

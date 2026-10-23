@@ -271,8 +271,9 @@ state. The camera follows you over it.
 
 Press **F** to dig out the tile you stand on (**X** picks the spear in combat
 scenes). A dig takes 2 seconds standing still, stepping to the middle of the
-tile, with a bar over your head; walking off, attacking or the jetpack stops
-it. Each dig takes out one 0.5 m layer, down to 3 layers (1.5 m). Pit walls are
+tile, crouched and chopping into the ground with your tool (a strike every
+half second, with a puff of dust), with a bar over your head; walking off,
+attacking or the jetpack stops it. Each dig takes out one 0.5 m layer, down to 3 layers (1.5 m). Pit walls are
 too steep to walk into or out of, and routes go around pits: hold **Space** to
 fly out.
 
@@ -285,8 +286,10 @@ and left click the **collector** by the landing to deliver; it takes every
 mineral and counts each. Up to 512 piles; no pile or machine can be dug under.
 
 The pits are part of the simulation, so in a networked game everyone digs the
-same ground (`--scene dig-lab` on every machine). Piles and carrying are still
-the pile lab's single carrier: only the host's avatar hauls.
+same ground (`--scene dig-lab` on every machine). Every player has their own
+carrier and haul (in the pile lab too): two players can collect and deliver at
+once, each sees the other's backpack fill, and tosses fly to and from whoever
+made them. The logistics panel shows your own load.
 
 The control port's `{"op":"dig"}` digs and `{"op":"deliver"}` delivers the
 cargo. Inspection's `digging` lists the pits by arena tile, whether the player

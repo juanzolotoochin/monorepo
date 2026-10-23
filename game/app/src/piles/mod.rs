@@ -65,6 +65,9 @@ pub struct PileLab {
     /// Where the collector stands (on the ground), and what it holds by mineral.
     pub(crate) collector: Option<Vec3>,
     pub(crate) collected: Vec<u32>,
+    /// This player's avatar, and what everyone else carries.
+    pub(crate) me: Option<u16>,
+    pub(crate) others: std::collections::BTreeMap<u16, crate::pile_model::Cargo>,
 }
 impl Default for PileLab {
     fn default() -> Self {
@@ -80,6 +83,8 @@ impl Default for PileLab {
             job_serial: 0,
             collector: None,
             collected: Vec::new(),
+            me: None,
+            others: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -95,6 +100,8 @@ pub struct PileVisual {
 }
 #[derive(Component)]
 pub struct CarryVisual {
+    /// Whose backpack: another player's avatar, or (none) this player's.
+    agent: Option<u16>,
     units: u32,
     material: Option<Mineral>,
     hidden: u32,
@@ -147,7 +154,8 @@ fn ray_sphere(origin: Vec3, direction: Vec3, center: Vec3, radius: f32) -> Optio
     (t >= 0.0).then_some(t)
 }
 
-/// Fills the view's piles, carrier and job state from the simulation.
+/// Fills the view's piles, carriers, and this player's job state from the
+/// simulation.
 pub fn mirror(game: Res<Game>, mut lab: ResMut<PileLab>) {
     let Some(sim) = game.current.as_ref().and_then(|s| s.piles.as_ref()) else {
         return;
@@ -164,15 +172,22 @@ pub fn mirror(game: Res<Game>, mut lab: ResMut<PileLab>) {
         .collect();
     lab.collector = sim.collector.as_ref().map(|c| game.to_view(c.position).with_y(ground(c.position)));
     lab.collected = sim.collector.as_ref().map_or_else(Vec::new, |c| c.stored.clone());
-    let cargo = crate::pile_model::Cargo { material: sim.cargo.material.map(mineral), units: sim.cargo.units, capacity: sim.cargo.capacity };
-    lab.stock = Some(Stock { piles, cargo, created: sim.created });
-    lab.job = sim.job.as_ref().map(|_| sim.job_serial);
-    lab.job_serial = sim.job_serial;
-    lab.in_flight = sim.in_flight.len() as u32;
-    if !sim.notice.is_empty() {
-        lab.notice = sim.notice.clone();
+    let view = |c: sim::settlement::piles::Cargo| crate::pile_model::Cargo { material: c.material.map(mineral), units: c.units, capacity: c.capacity };
+    let me = game.player();
+    let mine = me.and_then(|m| sim.hauler(m));
+    let cargo = view(me.map_or_else(|| sim.cargo(u16::MAX), |m| sim.cargo(m)));
+    let others: u64 = sim.haulers.iter().filter(|(&a, _)| Some(a) != me).map(|(_, h)| u64::from(h.cargo.units)).sum();
+    let collected: u64 = sim.collector.as_ref().map_or(0, |c| c.stored.iter().map(|&n| u64::from(n)).sum());
+    lab.stock = Some(Stock { piles, cargo, created: sim.created, elsewhere: others + collected });
+    lab.me = me;
+    lab.others = sim.haulers.iter().filter(|(&a, _)| Some(a) != me).map(|(&a, h)| (a, view(h.cargo.clone()))).collect();
+    lab.job = mine.and_then(|h| h.job.as_ref().map(|_| h.job_serial));
+    lab.job_serial = mine.map_or(0, |h| h.job_serial);
+    lab.in_flight = mine.map_or(0, |h| h.in_flight.len() as u32);
+    if let Some(h) = mine.filter(|h| !h.notice.is_empty()) {
+        lab.notice = h.notice.clone();
     }
-    lab.last_error = sim.last_error.clone();
+    lab.last_error = mine.and_then(|h| h.last_error.clone());
 }
 
 /// Starts a haul: the player walks to the pile and transfers, `pace`

@@ -4,7 +4,8 @@ use crate::sound::{Cue, Sound};
 use sim::settlement::TossEnd;
 #[derive(Clone, Copy)]
 pub enum Destination {
-    Cargo(u32),
+    /// A slot in an avatar's backpack.
+    Cargo(u16, u32),
     Pile(PileId, u32),
     /// Into the collector's hopper, here.
     Collector(Vec3),
@@ -24,6 +25,14 @@ pub fn backpack_slot(index: u32) -> Vec3 {
     )
 }
 
+/// Where an avatar's body is: this player's, or another player's copy.
+fn body<F: bevy::ecs::query::QueryFilter>(game: &Game, player: &Transform, peers: &Query<(&crate::peers::Peer, &Transform), F>, agent: u16) -> Option<Transform> {
+    if game.player() == Some(agent) {
+        return Some(*player);
+    }
+    peers.iter().find(|(p, _)| p.agent() == agent).map(|(_, t)| *t)
+}
+
 /// Spawns a flying unit for every toss the simulation made since last frame.
 pub fn spawn_tosses(
     mut commands: Commands,
@@ -31,10 +40,12 @@ pub fn spawn_tosses(
     lab: Res<PileLab>,
     sound: Res<Sound>,
     player: Single<&Transform, With<Player>>,
+    peers: Query<(&crate::peers::Peer, &Transform), Without<Player>>,
 ) {
     let Some(assets) = lab.assets.clone() else {
         return;
     };
+    let body = |agent: u16| body(&game, &player, &peers, agent);
     for event in &game.events {
         let sim::settlement::Event::PileToss { material, from, to, ticks } = event else {
             continue;
@@ -42,13 +53,16 @@ pub fn spawn_tosses(
         let ground = |p: fx::FxVec2| game.to_view(p).with_y(game.world().map_or(0.0, |w| w.terrain().height(p).to_f32()));
         let start = match *from {
             TossEnd::Pile { slot, position, .. } => ground(position) + Vec3::from_array(unit_positions()[slot as usize]),
-            TossEnd::Cargo { slot } => player.transform_point(backpack_slot(slot)),
+            TossEnd::Cargo { agent, slot } => {
+                let Some(body) = body(agent) else { continue };
+                body.transform_point(backpack_slot(slot))
+            }
             TossEnd::Pit { position } => ground(position) + Vec3::Y * 0.2,
             TossEnd::Collector { position } => ground(position) + Vec3::Y * 1.6,
         };
         let destination = match *to {
             TossEnd::Pile { id, slot, .. } => Destination::Pile(id, slot),
-            TossEnd::Cargo { slot } => Destination::Cargo(slot),
+            TossEnd::Cargo { agent, slot } => Destination::Cargo(agent, slot),
             TossEnd::Collector { position } => Destination::Collector(ground(position) + Vec3::Y * 1.6),
             TossEnd::Pit { position } => Destination::Collector(ground(position)),
         };
@@ -69,8 +83,10 @@ pub fn update_transit(
     time: Res<Time>,
     sound: Res<Sound>,
     lab: Res<PileLab>,
+    game: Res<Game>,
     player: Single<&Transform, (With<Player>, Without<Transit>)>,
-    mut transits: Query<(Entity, &mut Transit, &mut Transform), Without<Player>>,
+    peers: Query<(&crate::peers::Peer, &Transform), (Without<Player>, Without<Transit>)>,
+    mut transits: Query<(Entity, &mut Transit, &mut Transform), (Without<Player>, Without<crate::peers::Peer>)>,
 ) {
     let Some(stock) = &lab.stock else {
         return;
@@ -79,7 +95,13 @@ pub fn update_transit(
         transit.age += time.delta_secs().min(0.1);
         let t = (transit.age / transit.duration).min(1.0);
         let end = match transit.destination {
-            Destination::Cargo(slot) => player.transform_point(backpack_slot(slot)),
+            Destination::Cargo(agent, slot) => {
+                let Some(body) = body(&game, &player, &peers, agent) else {
+                    commands.entity(entity).despawn();
+                    continue;
+                };
+                body.transform_point(backpack_slot(slot))
+            }
             Destination::Pile(id, slot) => {
                 let Some(pile) = stock.piles.get(&id) else {
                     commands.entity(entity).despawn();

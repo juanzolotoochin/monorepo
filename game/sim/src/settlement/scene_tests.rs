@@ -70,6 +70,15 @@ impl Scene {
         &self.s().agents[self.agent() as usize]
     }
 
+    fn lab(&self) -> &super::piles::PileLab {
+        self.s().piles.as_ref().unwrap()
+    }
+
+    /// The player's pile-lab hauler, once it has hauled.
+    fn hauler(&self) -> super::piles::Hauler {
+        self.s().piles.as_ref().unwrap().hauler(self.agent()).cloned().expect("the player has hauled")
+    }
+
     fn altitude(&self) -> Fx {
         self.avatar().avatar.height
     }
@@ -226,10 +235,9 @@ fn pile_lab() -> SceneSetup {
 fn pile_lab_hauls_exactly_four_units() {
     let mut scene = Scene::new(pile_lab());
     let agent = scene.agent();
-    let lab = |scene: &Scene| scene.s().piles.clone().unwrap();
     let finish = |scene: &mut Scene| {
         for _ in 0..900 {
-            if lab(scene).job.is_none() {
+            if scene.hauler().job.is_none() {
                 return;
             }
             scene.sim.step(&[]);
@@ -243,23 +251,23 @@ fn pile_lab_hauls_exactly_four_units() {
     scene.command(CommandKind::Pile { agent, action: PileAction::PickupAmount(0, 4), pace: fx(0.7), approach });
     let start = scene.avatar().position;
     finish(&mut scene);
-    let l = lab(&scene);
+    let l = scene.hauler();
     assert_eq!(l.last_error, None);
     assert_eq!(l.cargo.units, 4);
-    assert_eq!(l.total(), 104);
-    assert_eq!(l.piles[&0].units, 4);
+    assert_eq!(scene.lab().total(), 104);
+    assert_eq!(scene.lab().piles[&0].units, 4);
     assert_ne!(scene.avatar().position, start, "walked before transferring");
     scene.wait(30);
     scene.walk(2.0, 1.0);
     let (drop, approach) = (scene.at(4.0, 4.5), Some(scene.at(2.9, 5.0)));
     scene.command(CommandKind::Pile { agent, action: PileAction::Drop(drop), pace: fx(0.7), approach });
     finish(&mut scene);
-    let l = lab(&scene);
+    let l = scene.hauler();
     assert_eq!(l.last_error, None);
     assert_eq!(l.cargo.units, 0);
-    assert_eq!(l.total(), 104);
-    assert_eq!(l.piles[&5].units, 4);
-    assert!(l.conserved());
+    assert_eq!(scene.lab().total(), 104);
+    assert_eq!(scene.lab().piles[&5].units, 4);
+    assert!(scene.lab().conserved());
 }
 
 #[test]
@@ -267,12 +275,12 @@ fn moving_cancels_a_haul_and_keeps_the_cargo() {
     let mut scene = Scene::new(pile_lab());
     let agent = scene.agent();
     scene.command(CommandKind::Pile { agent, action: PileAction::Pickup(2), pace: Fx::ZERO, approach: None });
-    assert!(scene.s().piles.as_ref().unwrap().job.is_some());
+    assert!(scene.hauler().job.is_some());
     scene.command(CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: FxVec2::new(Fx::ONE, Fx::ZERO), run: false } });
-    let l = scene.s().piles.clone().unwrap();
+    let l = scene.hauler();
     assert!(l.job.is_none());
     assert_eq!(l.last_error.as_deref(), Some("Haul canceled by player input"));
-    assert!(l.conserved());
+    assert!(scene.lab().conserved());
 }
 
 #[test]
@@ -281,20 +289,20 @@ fn blocked_drops_are_rejected_without_losing_cargo() {
     let agent = scene.agent();
     scene.command(CommandKind::Pile { agent, action: PileAction::Pickup(2), pace: Fx::ZERO, approach: None });
     for _ in 0..600 {
-        if scene.s().piles.as_ref().unwrap().job.is_none() {
+        if scene.hauler().job.is_none() {
             break;
         }
         scene.sim.step(&[]);
     }
-    let carried = scene.s().piles.as_ref().unwrap().cargo.units;
+    let carried = scene.hauler().cargo.units;
     assert_eq!(carried, 8);
     // Off the deck.
     let edge = scene.at(7.5, 7.5);
     scene.command(CommandKind::Pile { agent, action: PileAction::Drop(edge), pace: Fx::ZERO, approach: None });
-    let l = scene.s().piles.clone().unwrap();
+    let l = scene.hauler();
     assert!(l.job.is_none() && l.last_error.is_some());
     assert_eq!(l.cargo.units, carried);
-    assert!(l.conserved());
+    assert!(scene.lab().conserved());
 }
 
 /// Scenes save and continue like any world: piles, ghosts and flight included.
@@ -493,7 +501,7 @@ fn dug_ore_piles_up_and_goes_to_the_collector() {
     let haul = |scene: &mut Scene, action| {
         scene.command(pile_action(action));
         for _ in 0..900 {
-            if scene.s().piles.as_ref().unwrap().job.is_none() {
+            if scene.hauler().job.is_none() {
                 return;
             }
             scene.sim.step(&[]);
@@ -501,12 +509,11 @@ fn dug_ore_piles_up_and_goes_to_the_collector() {
         panic!("{action:?} never finished");
     };
     haul(&mut scene, PileAction::Pickup(pile));
-    let lab = scene.s().piles.as_ref().unwrap();
-    assert_eq!(lab.last_error, None, "the pile is in reach from the pit");
-    assert_eq!(lab.cargo.units, units);
+    assert_eq!(scene.hauler().last_error, None, "the pile is in reach from the pit");
+    assert_eq!(scene.hauler().cargo.units, units);
     // There's no walking to the collector from the pit: fly out first.
     scene.command(pile_action(PileAction::Deliver));
-    assert!(scene.s().piles.as_ref().unwrap().last_error.is_some(), "no route out of the pit on foot");
+    assert!(scene.hauler().last_error.is_some(), "no route out of the pit on foot");
     scene.command(CommandKind::Jetpack { agent, enabled: true });
     scene.command(CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: v(0.0, 1.0), run: false } });
     scene.wait(20);
@@ -516,8 +523,8 @@ fn dug_ore_piles_up_and_goes_to_the_collector() {
     assert!(!scene.avatar().avatar.flight.airborne);
     haul(&mut scene, PileAction::Deliver);
     let lab = scene.s().piles.as_ref().unwrap();
-    assert_eq!(lab.last_error, None);
-    assert_eq!(lab.cargo.units, 0);
+    assert_eq!(scene.hauler().last_error, None);
+    assert_eq!(scene.hauler().cargo.units, 0);
     assert_eq!(lab.collector.as_ref().unwrap().stored[material as usize], units);
     assert!(lab.conserved());
 }
@@ -531,4 +538,40 @@ fn routes_cross_the_mine() {
     scene.walk(30.0, 25.0);
     assert!(crate::nav::distance(scene.avatar().position, scene.at(30.0, 25.0)) < fx(0.1));
     assert!(started.elapsed().as_secs() < 20, "took {:?}", started.elapsed());
+}
+
+/// Two players haul at once in the mine: each collects a different ore into
+/// their own carrier and delivers it, and the collector counts both.
+#[test]
+fn two_players_haul_their_own_loads() {
+    let p = |x: f64, y: f64| [fx(x), fx(y)];
+    let mut setup = mine();
+    setup.piles.as_mut().unwrap().piles = vec![(0, p(-3.0, 4.0), 10), (1, p(3.0, 5.0), 10)];
+    let mut scene = Scene::new(setup);
+    let (host, guest) = (PlayerId(0), PlayerId(1));
+    scene.sim.step(&[Command { player: guest, kind: CommandKind::Join }]);
+    let (a, b) = (scene.s().avatar_of(host).unwrap(), scene.s().avatar_of(guest).unwrap());
+    let haul = |agent, action| CommandKind::Pile { agent, action, pace: fx(0.2), approach: None };
+    let idle = |scene: &Scene, agent| scene.lab().hauler(agent).is_some_and(|h| h.job.is_none());
+    let both = |scene: &mut Scene, first: CommandKind, second: CommandKind| {
+        scene.sim.step(&[Command { player: host, kind: first }, Command { player: guest, kind: second }]);
+        for _ in 0..900 {
+            if idle(scene, a) && idle(scene, b) {
+                return;
+            }
+            scene.sim.step(&[]);
+        }
+        panic!("the hauls never finished");
+    };
+    both(&mut scene, haul(a, PileAction::Pickup(0)), haul(b, PileAction::Pickup(1)));
+    let lab = scene.lab();
+    assert_eq!((lab.cargo(a).material, lab.cargo(a).units), (Some(0), 10));
+    assert_eq!((lab.cargo(b).material, lab.cargo(b).units), (Some(1), 10));
+    assert!(lab.piles.is_empty());
+    both(&mut scene, haul(a, PileAction::Deliver), haul(b, PileAction::Deliver));
+    let lab = scene.lab();
+    assert_eq!(lab.hauler(a).unwrap().last_error, None);
+    assert_eq!(lab.hauler(b).unwrap().last_error, None);
+    assert_eq!(lab.collector.as_ref().unwrap().stored, vec![10, 10, 0]);
+    assert!(lab.conserved());
 }

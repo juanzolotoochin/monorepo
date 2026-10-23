@@ -550,7 +550,7 @@ pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
     let lab = world.resource::<PileLab>();
     let airborne = lab.in_flight;
     let (piles, cargo, totals) = if let Some(stock) = &lab.stock {
-        (stock.piles.iter().map(|(&id,p)|json!({"id":id,"material":p.material,"position":[p.position[0],0.0,p.position[1]],"units":p.units,"source":p.source,"capacity":voxel_assets::PILE_CAPACITY})).collect::<Vec<_>>(),json!({"material":stock.cargo.material,"units":stock.cargo.units,"capacity":stock.cargo.capacity}),json!({"created":stock.created,"ground":stock.total()-u64::from(stock.cargo.units),"carried":stock.cargo.units,"conserved":stock.total()==stock.created}))
+        (stock.piles.iter().map(|(&id,p)|json!({"id":id,"material":p.material,"position":[p.position[0],0.0,p.position[1]],"units":p.units,"source":p.source,"capacity":voxel_assets::PILE_CAPACITY})).collect::<Vec<_>>(),json!({"material":stock.cargo.material,"units":stock.cargo.units,"capacity":stock.cargo.capacity}),json!({"created":stock.created,"ground":stock.ground(),"carried":stock.cargo.units,"conserved":stock.total()==stock.created}))
     } else {
         (vec![], Value::Null, Value::Null)
     };
@@ -566,7 +566,7 @@ pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
         .iter(world)
         .map(|(transform, transit)| {
             let destination = match transit.destination {
-                crate::piles::Destination::Cargo(slot) => json!({"cargo_slot":slot}),
+                crate::piles::Destination::Cargo(agent, slot) => json!({"agent":agent,"cargo_slot":slot}),
                 crate::piles::Destination::Pile(id, slot) => json!({"pile":id,"slot":slot}),
                 crate::piles::Destination::Collector(_) => json!({"collector":true}),
             };
