@@ -37,7 +37,7 @@ All under `game/`, built by Bazel with `rules_rs`.
 
 | Crate | Deterministic | Purpose |
 |---|---|---|
-| `fx` | yes | `Fx` (i64, 32.32), vectors, table-based sqrt/sin/cos/atan2, decimal parsing |
+| `fx` | yes | `Fx` (i64, 32.32), vectors, integer sqrt, table-based sin/cos/atan2, decimal parsing |
 | `sim` | yes | Entity tables, chunks, the tick pipeline, message queues, RNG, timers, hashing |
 | `content` | yes | Definition files, sim/view split, name tables, rules hash |
 | `save` | yes | Sectioned save format, remapping on load, RON dumps, diff tool |
@@ -58,9 +58,12 @@ Details: [message system](design/message-system.html),
 ### Fixed point
 
 `Fx` is our own newtype over `i64` in 32.32 format. Overflow checks are on in
-debug builds. Trig and sqrt come from our own tables, so results are bit-exact on
-every platform. Content files contain decimals (`speed: 1.5`), parsed into `Fx`
-once at load.
+debug builds. Sqrt is an exact integer square root. Sin, cos and atan2
+interpolate tables that are computed at compile time with integer math, so no
+platform's float library is involved and results are bit-exact everywhere.
+Content files contain decimals (`speed: 1.5`), parsed into `Fx` once at load
+with integer arithmetic. `game/fx/testdata/golden.txt` hashes every operation
+over fixed inputs; `bazel run //game/fx:update_golden` regenerates it.
 
 ### World and chunks
 
