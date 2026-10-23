@@ -8,7 +8,29 @@
   "steps": [
     {
       "op": "wait",
-      "frames": 1800
+      "frames": 180
+    },
+    {
+      "op": "settlement_transfer",
+      "depot": "ore",
+      "item": "iron",
+      "units": 4,
+      "deposit": false
+    },
+    {
+      "op": "wait",
+      "frames": 60
+    },
+    {
+      "op": "settlement_transfer",
+      "depot": "mill_input",
+      "item": "iron",
+      "units": 4,
+      "deposit": true
+    },
+    {
+      "op": "wait",
+      "frames": 1200
     },
     {
       "op": "assert_settlement",

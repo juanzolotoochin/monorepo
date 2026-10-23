@@ -16,6 +16,7 @@ fn depot(id: &str, position: [f32; 2], capacity: u32, stock: Vec<Stack>) -> Depo
 }
 fn agent(id: &str) -> Agent {
     Agent {
+        controlled: false,
         id: id.into(),
         label: id.into(),
         skin: "worker".into(),
@@ -130,6 +131,7 @@ fn recipes_and_equipment_produce_a_cart_then_upgrade_real_transport_capacity() {
         cargo_anchor: [0.0, 0.6, 0.0],
     });
     config.producers.push(Producer {
+        radius: 0.,
         id: "factory".into(),
         label: "Factory".into(),
         position: [-1.0, 2.0],
@@ -167,6 +169,7 @@ fn processing_reserves_output_space_and_defense_cannot_fire_free_ammunition() {
     let mut config = scenario();
     config.agents.clear();
     config.producers.push(Producer {
+        radius: 0.,
         id: "mill".into(),
         label: "Mill".into(),
         position: [0.0, 0.0],
@@ -180,6 +183,7 @@ fn processing_reserves_output_space_and_defense_cannot_fire_free_ammunition() {
     });
     config.depots[4].capacity = 4;
     config.defenders.push(Defender {
+        radius: 0.,
         id: "turret".into(),
         position: [3.0, 2.0],
         skin: "turret".into(),
@@ -259,4 +263,48 @@ fn scenario_validation_rejects_unknown_references_and_duplicate_inventory_entrie
     config = scenario();
     config.agents[0].speed = f32::NAN;
     assert!(config.validate().is_err());
+}
+
+#[test]
+fn controlled_transfers_share_reservations_and_cancellation_preserves_airborne_units() {
+    let mut config = scenario();
+    let mut player = agent("player");
+    player.controlled = true;
+    player.links.clear();
+    player.capacity = 8;
+    config.agents.push(player);
+    let mut sim = Simulation::new(config, vec![]).unwrap();
+    // Determine fixture IDs from the authored haul link.
+    let depot = sim.config().links[0].from.clone();
+    let item = sim.config().links[0].item.clone();
+    let p = sim
+        .config()
+        .depots
+        .iter()
+        .find(|d| d.id == depot)
+        .unwrap()
+        .position;
+    sim.set_controlled_pose("player", p, 0.).unwrap();
+    let available = sim.transfer_limit("player", &depot, &item, false).min(3);
+    assert!(available > 0);
+    sim.transfer("player", &depot, &item, available, false)
+        .unwrap();
+    assert!(sim.transfer("player", &depot, &item, 1, false).is_err());
+    sim.advance(1. / 60.).unwrap();
+    assert!(sim
+        .transfers
+        .values()
+        .any(|t| matches!(&t.to,Endpoint::Cargo(id) if id=="player")));
+    sim.cancel_transfer("player").unwrap();
+    for _ in 0..30 {
+        sim.advance(1. / 60.).unwrap();
+        sim.validate_state().unwrap();
+    }
+    assert_eq!(sim.agents["player"].cargo.units(&item), 1);
+    sim.transfer("player", &depot, &item, 1, true).unwrap();
+    for _ in 0..30 {
+        sim.advance(1. / 60.).unwrap();
+        sim.validate_state().unwrap();
+    }
+    assert_eq!(sim.agents["player"].cargo.total(), 0);
 }

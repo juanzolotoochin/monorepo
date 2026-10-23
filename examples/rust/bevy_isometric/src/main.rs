@@ -138,12 +138,13 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
                 jetpack::scene_changed,
                 palimpsest::setup,
                 style::apply,
-                settlement::setup,
             )
                 .chain(),
-            piles::setup_scene,
+            (piles::setup_scene, settlement::setup).chain(),
             (control::begin, settlement::tick).chain(),
-            piles::input.run_if(control::interactive),
+            (piles::input, settlement::input)
+                .chain()
+                .run_if(control::interactive),
             mouse_commands.run_if(control::interactive),
             preview::playback.run_if(control::interactive),
             (jetpack::update, move_player, palimpsest::tick).chain(),

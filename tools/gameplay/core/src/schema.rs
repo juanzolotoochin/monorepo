@@ -57,6 +57,8 @@ pub struct Equipment {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Agent {
+    #[serde(default)]
+    pub controlled: bool,
     pub id: String,
     pub label: String,
     pub skin: String,
@@ -72,6 +74,8 @@ pub struct Agent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Producer {
+    #[serde(default)]
+    pub radius: f32,
     pub id: String,
     pub label: String,
     pub position: Point,
@@ -86,6 +90,8 @@ pub struct Producer {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Defender {
+    #[serde(default)]
+    pub radius: f32,
     pub id: String,
     pub position: Point,
     pub skin: String,
@@ -224,7 +230,8 @@ impl Scenario {
                 || !number(a.radius, 0.05, 1.0)
                 || !(1..=64).contains(&a.capacity)
                 || !number(a.transfer_seconds, 0.05, 5.0)
-                || a.links.is_empty()
+                || (!a.controlled && a.links.is_empty())
+                || (a.controlled && (!a.links.is_empty() || a.equipment.is_some()))
                 || a.links.iter().any(|l| !links.contains(l.as_str()))
                 || a.cargo_anchor
                     .iter()
@@ -248,6 +255,9 @@ impl Scenario {
             }
         }
         for p in &self.producers {
+            if !number(p.radius, 0., 3.) {
+                return Err("invalid machine footprint".into());
+            }
             if !finite(p.position)
                 || !ident(&p.skin)
                 || !depots.contains(p.input.as_str())
@@ -261,6 +271,9 @@ impl Scenario {
             }
         }
         for d in &self.defenders {
+            if !number(d.radius, 0., 3.) {
+                return Err("invalid defender footprint".into());
+            }
             if !finite(d.position)
                 || !ident(&d.skin)
                 || !depots.contains(d.depot.as_str())
