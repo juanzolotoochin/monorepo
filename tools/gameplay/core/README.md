@@ -39,3 +39,15 @@ A* grid used by the game's player adapter, with a per-agent body radius.
 ```sh
 bazel test --config=full_local //tools/gameplay/core:core_test
 ```
+
+Controlled actors use `controlled: true` with no automatic haul links. An
+external movement controller supplies their validated pose. `transfer` reserves
+an exact pickup/deposit and waits for the actor to reach the dock; unit transfers
+then use the shared cadence and airborne ownership model. `cancel_transfer`
+releases unlaunched reservations, preserving items already in flight. `strike`
+applies a bounded forward melee strike to the same threats used by defenders.
+Producer and defender `radius` fields supply physical navigation footprints.
+
+Subsystems live under `src/model/`: workers, production, combat and controlled
+interaction. `model.rs` retains the fixed-step coordinator, state, shared
+inventory/reservation primitives and accounting invariants.

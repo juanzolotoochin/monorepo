@@ -6,41 +6,73 @@ pub struct Rig {
     bones: Vec<(Entity, ActorPart, Transform)>,
     motion: Motion,
 }
-impl Rig {
-    pub fn spawn(world: &mut World, skin: &SkinMesh, profile: &StyleProfile) -> Self {
-        let root = world.spawn(Transform::default()).id();
-        let mut bones = vec![];
-        for part in &skin.parts {
-            let default_pivot = match part.part {
-                ActorPart::Body => [0., 0.94, 0.],
-                ActorPart::LeftLeg => [-0.17, 0.58, 0.],
-                ActorPart::RightLeg => [0.17, 0.58, 0.],
-                ActorPart::Weapon => [0.4, 0.9, 0.],
-            };
-            let rest =
-                Transform::from_translation(Vec3::from_array(part.pivot.unwrap_or(default_pivot)));
-            let bone = world.spawn(rest).id();
-            world.entity_mut(root).add_child(bone);
-            let handles = crate::style::upload(
-                world,
-                voxel_assets::content_key(&(profile, part)),
-                &part.meshes,
-                profile,
-            );
-            for (mesh, material) in handles {
-                let entity = world
-                    .spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::default()))
-                    .id();
-                world.entity_mut(bone).add_child(entity);
-            }
-            bones.push((bone, part.part, rest));
-        }
+pub struct RigTemplate {
+    pub scale: f32,
+    motion: Motion,
+    parts: Vec<(
+        ActorPart,
+        Transform,
+        Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
+    )>,
+}
+impl RigTemplate {
+    pub fn upload(world: &mut World, skin: &SkinMesh, profile: &StyleProfile) -> Self {
+        let parts = skin
+            .parts
+            .iter()
+            .map(|part| {
+                let default_pivot = match part.part {
+                    ActorPart::Body => [0., 0.94, 0.],
+                    ActorPart::LeftLeg => [-0.17, 0.58, 0.],
+                    ActorPart::RightLeg => [0.17, 0.58, 0.],
+                    ActorPart::Weapon => [0.4, 0.9, 0.],
+                };
+                let rest = Transform::from_translation(Vec3::from_array(
+                    part.pivot.unwrap_or(default_pivot),
+                ));
+                let handles = crate::style::upload(
+                    world,
+                    voxel_assets::content_key(&(profile, part)),
+                    &part.meshes,
+                    profile,
+                );
+                (part.part, rest, handles)
+            })
+            .collect();
         Self {
-            root,
-            bones,
+            scale: skin.scale,
             motion: skin.motion.clone(),
+            parts,
         }
     }
+    pub fn spawn(&self, world: &mut World) -> Rig {
+        let root = world
+            .spawn((Transform::default(), Visibility::Inherited))
+            .id();
+        let mut bones = vec![];
+        for (part, rest, handles) in &self.parts {
+            let bone = world.spawn(*rest).id();
+            world.entity_mut(root).add_child(bone);
+            for (mesh, material) in handles {
+                let e = world
+                    .spawn((
+                        Mesh3d(mesh.clone()),
+                        MeshMaterial3d(material.clone()),
+                        Transform::default(),
+                    ))
+                    .id();
+                world.entity_mut(bone).add_child(e);
+            }
+            bones.push((bone, *part, *rest));
+        }
+        Rig {
+            root,
+            bones,
+            motion: self.motion.clone(),
+        }
+    }
+}
+impl Rig {
     pub fn pose(
         &self,
         world: &mut World,
@@ -50,10 +82,18 @@ impl Rig {
         travel: f32,
         activity: f32,
         aim: Option<f32>,
-    ) {
-        *world.get_mut::<Transform>(self.root).unwrap() = Transform::from_translation(position)
+    ) -> (u64, u64) {
+        let mut writes = 0;
+        let mut skips = 0;
+        let root = Transform::from_translation(position)
             .with_rotation(Quat::from_rotation_y(heading))
             .with_scale(Vec3::splat(scale));
+        if *world.get::<Transform>(self.root).unwrap() != root {
+            *world.get_mut::<Transform>(self.root).unwrap() = root;
+            writes += 1;
+        } else {
+            skips += 1;
+        }
         for (entity, part, rest) in &self.bones {
             let mut t = *rest;
             let side = if *part == ActorPart::LeftLeg { -1. } else { 1. };
@@ -87,7 +127,13 @@ impl Rig {
                 }
                 Motion::Static => {}
             }
-            *world.get_mut::<Transform>(*entity).unwrap() = t;
+            if *world.get::<Transform>(*entity).unwrap() != t {
+                *world.get_mut::<Transform>(*entity).unwrap() = t;
+                writes += 1;
+            } else {
+                skips += 1;
+            }
         }
+        (writes, skips)
     }
 }

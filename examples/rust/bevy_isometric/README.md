@@ -327,3 +327,84 @@ layout, and pass `style = "styles/your_style.ron"` to `scene_assets` and opted-i
 See the [asset rule documentation](../../../bazel/voxel_assets/README.md).
 The controlled-demo report and frame trace expose style density, actor parts,
 weapon identity, baked statistics, fixture lights, and moving actor lights.
+
+## Brasswood: a living supply chain
+
+Press **7**, or launch the outdoor medieval / forest / steampunk style directly:
+
+```sh
+bazel run --config=full_local //examples/rust/bevy_isometric:demo -- --scene forest-outpost
+```
+
+Smaller actors and a wider camera show several workers operating at once.
+Foresters deliver lumber, the ironmonger supplies metal, and the fletching mill
+turns one lumber plus one iron into four arrows. A runner resupplies the
+ballista, which spends actual arrows protecting the camp against ghoul waves.
+The cartworks consumes two lumber and one iron to build a cart. Bramble the ox
+collects and attaches it, increasing carrying capacity from three to nine units.
+Every ground item, carried item, and airborne transfer represents one real unit.
+
+The player remains active in this scene. **RMB / WASD** moves, **LMB** on stock
+queues collection of up to four units, and **Ctrl+LMB** on a depot deposits the
+first carried material. **E** toggles a nearby machine, **P** pauses automation,
+and **Shift+LMB** attacks ghouls with the axe. Manual movement cancels pending
+player transfers; already airborne items still arrive. The player shares stock,
+capacity reservations, and production inputs with the workers, so diverting
+supplies changes how the settlement runs.
+
+The architecture is split into independent layers:
+
+- `//tools/gameplay/core` owns deterministic 60 Hz decisions, quantities,
+  reservations, processing, equipment, controlled actors, threats and defense.
+- `assets/levels/forest_supply.ron` defines the supply chain and agent abilities.
+  `scene_assets(scenario = ...)` validates and embeds it at build time.
+- `assets/styles/forest.ron` defines the palette, smaller actor scale, articulated
+  workers, animals, carts, machines, turret and item skins. Generic biped,
+  quadruped, wheel, rotor and aiming animations come from skin metadata.
+- `src/settlement.rs` projects model state into cached rigs, quantity displays,
+  airborne arcs, captions and audio. It does not decide who hauls what.
+
+Generate an audiovisual tour that also demonstrates the player helping the mill:
+
+```sh
+bazel build --config=full_local //examples/rust/bevy_isometric:forest_outpost_demo
+```
+
+Outputs are `forest_outpost_demo.mp4`, `.state.json`, `.frames.jsonl`, and `.wav`
+in `bazel-bin/examples/rust/bevy_isometric/`. The script asserts delivery,
+production, cart attachment, defense, and material conservation.
+
+The existing JSON/TCP interface also exposes `settlement_transfer` (`depot`,
+`item`, `units`, `deposit`), `settlement_cancel`, `settlement_pause` (`paused`),
+`settlement_rate` (`rate`, 0.25–4), `settlement_link`, `settlement_machine`, and
+`settlement_defender` (each `id`, `enabled`), and `settlement_stock` (`depot`,
+`item`, `units`). Transfers walk the player to the dock and wait for the precise
+quantity to arrive. `assert_settlement` checks minimum `delivered`, `cycles`,
+`equipped`, and `kills` counts plus all accounting invariants. `inspect` includes
+full `settlement.simulation`, scenario data, and per-material `balances`.
+
+## Performance telemetry
+
+**F3** toggles a compact performance overlay. Live inspection, script receipts,
+and demo frame traces include a versioned `telemetry` object. Timing histories
+are bounded to 240 samples; counters and all-time maxima accumulate for the run.
+Timings expose last, mean, p50, p95, p99 and maximum milliseconds. CPU wall time
+is separate from game time: recorded frame pacing and GPU readback are included
+in `frame_wall`, while `settlement_simulation`, `settlement_projection`, and
+`settlement_sync` isolate simulation, presentation preparation, and ECS work.
+
+Gauges include entity/mesh/material counts, asset-cache entries, active and
+pooled rigs, and fixed steps per frame. Counters expose rig creation, reuse,
+pooling, destruction, transform writes and avoided writes, label changes,
+clamped simulation frames, and frames over 16.7 / 33.3 ms. Render diagnostics
+include CPU/GPU pass timings and pipeline statistics where the backend supports
+them, plus mesh-allocator slab sizes and allocations. These are observations,
+not portable pass/fail budgets; compare equivalent resolution, quality,
+backend, optimization mode and warm-up periods.
+
+The deterministic core also counts navigation requests/failures/waypoints,
+assignment attempts and retries, dock waiting, loaded versus empty travel,
+per-agent phase ticks, and per-producer processing/starvation/output-blocking/
+disabled/completed ticks. These explain simulation waste separately from CPU
+cost. Capture telemetry measures inspection snapshots, trace writes, pending
+screenshots, and PNG conversion/write time so recording overhead is visible.

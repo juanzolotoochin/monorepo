@@ -547,3 +547,8 @@ mod tests {
         assert_eq!(app.world().resource::<ActiveStyle>().cache.len(), 5);
     }
 }
+
+pub fn cache_metrics(world: &World) -> (usize, usize) {
+    let a = world.resource::<ActiveStyle>();
+    (a.cache.len(), a.palettes.len())
+}
