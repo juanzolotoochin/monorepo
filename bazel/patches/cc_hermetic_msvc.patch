@@ -1,0 +1,19 @@
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -2964,7 +2964,14 @@
+             fallback
+         };
+ 
+-        let cl_exe = self.find_msvc_tools_find_tool(&target, msvc);
++        // Only probe the host for an MSVC installation when no compiler was
++        // given via CC/CXX. Otherwise the host's LIB/INCLUDE env is copied onto
++        // the provided clang-cl, leaking non-hermetic paths into the build.
++        let cl_exe = if self.env_tool(env).is_some() {
++            None
++        } else {
++            self.find_msvc_tools_find_tool(&target, msvc)
++        };
+ 
+         let tool_opt: Option<Tool> = self
+             .env_tool(env)
