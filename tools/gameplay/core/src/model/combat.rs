@@ -20,13 +20,13 @@ impl Simulation {
             p.position[0] += p.heading.sin() * (1. - f) * 0.095;
             p.position[1] += p.heading.cos() * (1. - f) * 0.095;
         }
-        let free: Vec<_> = self
+        let flying: Vec<_> = self
             .projectiles
             .values()
-            .filter(|p| p.target.is_none() && p.born < self.tick)
+            .filter(|p| p.born < self.tick)
             .map(|p| p.id)
             .collect();
-        for id in free {
+        for id in flying {
             let p = &self.projectiles[&id];
             let duration = (p.arrival - p.born) as f32;
             let previous = ((self.tick - 1 - p.born) as f32 / duration).clamp(0., 1.);
@@ -42,6 +42,7 @@ impl Simulation {
             let obstacle = self
                 .obstacles
                 .iter()
+                .filter(|o| !self.config.defenders.iter().any(|d| d.id == p.defender && d.position == o.center))
                 .filter_map(|o| segment_disc(start, end, o.center, o.radius + 0.04))
                 .min_by(f32::total_cmp);
             let threat = self
@@ -87,6 +88,9 @@ impl Simulation {
                         arrival: self.tick + 12,
                     },
                 );
+            } else if self.projectiles[&id].arrival <= self.tick {
+                // Aimed at a target's old position: the shot can miss.
+                self.projectiles.remove(&id);
             }
         }
         let arrived: Vec<_> = self
@@ -116,7 +120,7 @@ impl Simulation {
                         Impact::Arrow
                     }
                     ProjectileKind::Bolt
-                        if (self.metrics.bolt_impales + self.metrics.bolt_pierces) % 3 == 2 =>
+                        if combat_roll(p.born, target_id, p.id ^ 0x424f4c5b) % 3 == 0 =>
                     {
                         target.hp = target.hp.saturating_sub(1).max(1);
                         target.pierced = true;
@@ -261,11 +265,8 @@ impl Simulation {
                 position: t.position,
             });
         }
-        for projectile in self.projectiles.values_mut() {
-            if let Some(t) = projectile.target.and_then(|id| self.threats.get(&id)) {
-                projectile.to = t.position;
-            }
-        }
+        // The launch point and direction are immutable. Target IDs are only
+        // hints for rendering and avoiding needless overkill, never homing.
         for d in self.config.defenders.clone() {
             let state = &self.defenders[&d.id];
             if !state.enabled

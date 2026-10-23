@@ -6,7 +6,7 @@ rust_library(
     srcs = glob(["src/**/*.rs"]),
     edition = "2021",
     visibility = ["//visibility:public"],
-    deps = ["@crates//:serde"],
+    deps = ["@crates//:serde", "@crates//:serde_json"],
 )
 
 rust_test(

@@ -10,6 +10,14 @@ pub use interaction::ManualJob;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 pub const HZ: u64 = 60;
+/// A stable, counter-based roll. Gameplay outcomes must never depend on the
+/// number or order of unrelated hits elsewhere in the world.
+pub(crate) fn combat_roll(tick: u64, entity: u64, stream: u64) -> u64 {
+    let mut x = tick ^ entity.wrapping_mul(0x9e3779b97f4a7c15) ^ stream;
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);
+    x ^ (x >> 31)
+}
 fn ticks(seconds: f32) -> u64 {
     (seconds as f64 * HZ as f64).ceil().max(1.0) as u64
 }
@@ -315,6 +323,42 @@ pub struct Simulation {
     pub events: Vec<Event>,
 }
 impl Simulation {
+    /// Reproducible fingerprint of gameplay state for same-build replay tests.
+    /// This legacy f32 model is not a cross-platform lockstep hash; game/sim
+    /// will use fixed point and a versioned canonical encoding instead.
+    pub fn replay_fingerprint(&self) -> String {
+        let bytes = serde_json::to_vec(&((
+            &self.config,
+            &self.obstacles.iter().map(|d| (d.center, d.radius)).collect::<Vec<_>>(),
+            self.next_id,
+            &self.source_totals,
+            &self.wave_totals,
+            self.tick,
+            self.paused,
+            self.rate,
+            self.health,
+            &self.depots,
+            &self.agents,
+        ), (
+            &self.dock_owners,
+            &self.producers,
+            &self.defenders,
+            &self.links,
+            &self.transfers,
+            &self.threats,
+            &self.projectiles,
+            &self.spent_projectiles,
+            &self.pinned,
+            &self.accounts,
+            &self.manual_jobs,
+            &self.attack_ready,
+        )
+        )).expect("finite validated simulation state");
+        let hash = bytes.iter().fold(0xcbf29ce484222325_u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+        });
+        format!("{hash:016x}")
+    }
     pub fn new(config: Scenario, mut obstacles: Vec<Disc>) -> Result<Self> {
         config.validate()?;
         obstacles.extend(
@@ -543,6 +587,16 @@ impl Simulation {
             self.step();
         }
         Ok(())
+    }
+    /// Step an exact number of simulation ticks for replay and headless tests.
+    /// Frame duration and rendering cadence never enter this path.
+    pub fn advance_ticks(&mut self, count: u32) {
+        self.events.clear();
+        if !self.paused {
+            for _ in 0..count {
+                self.step();
+            }
+        }
     }
     fn id(&mut self) -> u64 {
         let id = self.next_id;
