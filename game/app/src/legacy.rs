@@ -390,7 +390,8 @@ pub enum Event {
     Produced { producer: String },
     Equipped { agent: String },
     Shot { defender: String },
-    Hit { target: u64, projectile: Option<u64>, position: Point, killed: bool, impact: Impact },
+    /// `by` is the avatar that struck, for melee and arc hits.
+    Hit { target: u64, by: Option<String>, projectile: Option<u64>, position: Point, killed: bool, impact: Impact },
     PinnedLanded { target: u64, position: Point },
     BlockedShot { position: Point },
     ArcFired { from: Point, to: Point },
@@ -620,8 +621,9 @@ impl Simulation {
                     s::Event::Shot { defender } => Event::Shot {
                         defender: defender.map_or_else(|| "player".to_string(), |d| current.defenders[d as usize].id.clone()),
                     },
-                    s::Event::Hit { target, projectile, position, killed, impact } => Event::Hit {
+                    s::Event::Hit { target, agent, projectile, position, killed, impact } => Event::Hit {
                         target: *target,
+                        by: agent.map(agent_name),
                         projectile: *projectile,
                         position: p(*position),
                         killed: *killed,

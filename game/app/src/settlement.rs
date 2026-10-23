@@ -212,9 +212,14 @@ pub fn setup(world: &mut World) {
     }
     world.insert_resource(state);
 }
+/// An agent's definition. Players who joined copy the scenario's avatar.
+fn agent_config<'a>(sim: &'a Simulation, id: &str) -> &'a crate::legacy::Agent {
+    let agents = &sim.config().agents;
+    agents.iter().find(|c| c.id == id).or_else(|| agents.iter().find(|c| c.controlled)).expect("a scenario agent")
+}
 fn cargo_position(sim: &Simulation, id: &str) -> Vec3 {
     let a = &sim.agents[id];
-    let config = sim.config().agents.iter().find(|c| c.id == id).unwrap();
+    let config = agent_config(sim, id);
     let (p, h, anchor) = if let (Some(t), Some(e)) = (&a.trailer, &config.equipment) {
         (t.position, t.heading, e.cargo_anchor)
     } else {
@@ -262,7 +267,10 @@ pub fn tick(world: &mut World) {
     {
         return;
     }
-    if world.resource::<ButtonInput<KeyCode>>().just_pressed(KeyCode::KeyP) {
+    // Networked games can't pause: everyone shares one clock.
+    if world.resource::<ButtonInput<KeyCode>>().just_pressed(KeyCode::KeyP)
+        && world.resource::<crate::lockstep::Game>().network.is_none()
+    {
         let mut game = world.resource_mut::<crate::lockstep::Game>();
         game.paused = !game.paused;
     }
@@ -278,8 +286,13 @@ pub fn tick(world: &mut World) {
         .single(world)
         .unwrap()
         .translation;
-    let projection_start = std::time::Instant::now();
-    let hits = sim.events.iter().filter(|event| matches!(event, crate::legacy::Event::Hit { projectile: None, .. })).count() as u32;
+    let me = world.resource::<crate::lockstep::Game>().player_id();
+    // Hit pause, rebound and camera shake are for this player's own hits.
+    let hits = sim
+        .events
+        .iter()
+        .filter(|event| matches!(event, crate::legacy::Event::Hit { projectile: None, by, .. } if *by == me))
+        .count() as u32;
     let projection_start = std::time::Instant::now();
     if hits > 0 && world.resource::<crate::gameplay::Controls>().attack
         .is_some_and(|a| matches!(a.weapon, content::scenario::Weapon::Sword | content::scenario::Weapon::Spear)) {
@@ -310,14 +323,20 @@ pub fn tick(world: &mut World) {
         }
         if let Event::Hit {
             target,
+            by,
             projectile,
             killed,
             position,
             impact,
         } = event
         {
+            // Blood sprays away from whoever struck.
+            let from = by
+                .as_ref()
+                .and_then(|id| sim.agents.get(id))
+                .map_or(pos, |a| Vec3::new(a.position[0], 0.0, a.position[1]));
             let direction =
-                Vec3::new(position[0] - pos.x, 0.0, position[1] - pos.z).normalize_or(Vec3::Z);
+                Vec3::new(position[0] - from.x, 0.0, position[1] - from.z).normalize_or(Vec3::Z);
             if *impact == crate::legacy::Impact::Arc {
                 let end = Vec3::new(position[0], 0.72, position[1]);
                 if !arc_fired {
@@ -472,8 +491,8 @@ pub fn tick(world: &mut World) {
         }
     }
     let mut desired = BTreeMap::new();
-    for config in &sim.config().agents {
-        let a = &sim.agents[&config.id];
+    for a in sim.agents.values() {
+        let config = agent_config(sim, &a.id);
         let mut view = View::new(&config.skin, a.position);
         view.heading = a.heading;
         view.travel = a.travelled;
@@ -647,9 +666,8 @@ pub fn tick(world: &mut World) {
         }
     }
     if let Some(e) = state.hud {
-        let cargo = sim
-            .agents
-            .get("player")
+        let mine = me.as_ref().and_then(|id| sim.agents.get(id));
+        let cargo = mine
             .map(|a| {
                 a.cargo
                     .items
@@ -672,7 +690,7 @@ pub fn tick(world: &mut World) {
                 "BASE {}  /  {} GHOULS STOPPED  /  PACK {} /8 {}   [P] pause  [F3] metrics",
                 sim.health,
                 sim.metrics.kills,
-                sim.agents.get("player").map_or(0, |a| a.cargo.total()),
+                mine.map_or(0, |a| a.cargo.total()),
                 cargo
             )
         };
@@ -980,7 +998,7 @@ mod tests {
 pub fn player_transfer(world: &mut World, depot: &str, item: &str, units: u32, deposit: bool) -> Result<u32, String> {
     let state = world.resource::<Settlement>();
     let sim = state.simulation.as_ref().ok_or("No settlement loaded")?;
-    let actor = sim.config().agents.iter().find(|a| a.controlled).ok_or("No controlled actor")?.id.clone();
+    let actor = world.resource::<crate::lockstep::Game>().player_id().ok_or("No controlled actor")?;
     let dock = sim.config().depots.iter().find(|d| d.id == depot).ok_or("Unknown depot")?.position;
     let before = sim.agents[&actor].cargo.total();
     let game = world.resource::<crate::lockstep::Game>();
@@ -1082,7 +1100,7 @@ pub fn input(world: &mut World) {
     };
     let state = world.resource::<Settlement>();
     let sim = state.simulation.as_ref().unwrap();
-    let Some(actor) = sim.config().agents.iter().find(|a| a.controlled) else {
+    let Some(actor) = world.resource::<crate::lockstep::Game>().player_id() else {
         return;
     };
     let Some(depot) = sim
@@ -1099,7 +1117,7 @@ pub fn input(world: &mut World) {
         return;
     };
     let stock = if deposit {
-        &sim.agents[&actor.id].cargo
+        &sim.agents[&actor].cargo
     } else {
         &sim.depots[&depot.id]
     };

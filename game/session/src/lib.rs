@@ -367,4 +367,84 @@ mod tests {
         assert_eq!(host.world().unwrap().tick(), client.world().unwrap().tick());
         assert_eq!(host.save(), client.save(), "both machines have the same world");
     }
+
+    /// A bot for one player: walks at the nearest ghoul from its `lanes`
+    /// (wave indices) and strikes it, deciding from this peer's own world
+    /// every few ticks.
+    fn fight(session: &mut Session, weapon: content::scenario::Weapon, lanes: &[u16], last: &mut u64) {
+        use sim::settlement::avatar::Intent;
+        let Some(world) = session.world() else { return };
+        let tick = world.tick();
+        let Some(s) = world.settlement() else { return };
+        let Some(agent) = session.player().and_then(|p| s.avatar_of(p)) else { return };
+        if tick < *last + 6 {
+            return;
+        }
+        *last = tick;
+        let a = &s.agents[agent as usize];
+        let mine = s.threats.iter().filter(|t| lanes.contains(&t.wave));
+        let Some(t) = mine.min_by_key(|t| (t.position - a.position).length()) else { return };
+        let to = t.position - a.position;
+        let kind = if to.length() > Fx::ONE {
+            CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: to.normalize_or_zero(), run: true } }
+        } else {
+            CommandKind::Attack { agent, weapon, aim: to, muzzle: [Fx::ZERO, Fx::from_ratio(3, 5), Fx::from_ratio(1, 4)] }
+        };
+        session.queue(kind);
+    }
+
+    /// The ghoul defense over the network: a client joins the Red Clearing
+    /// over UDP, both players fight the waves with their own weapons, and
+    /// the two machines end with the same world.
+    #[test]
+    fn two_players_fight_ghouls_over_udp() {
+        use content::scenario::{Scenario, Weapon};
+        use sim::settlement::Event;
+        let content = Content::builtin();
+        let scenario = Scenario::parse(include_str!("../../app/assets/levels/combat_arena_supply.ron")).unwrap();
+        let world = World::new_settlement(1, content.rules.clone(), &scenario, &[]).unwrap();
+        let config = NetConfig { threads: 2, ..NetConfig::default() };
+        let listen = Some("127.0.0.1:0".parse().unwrap());
+        let mut host = Session::start(Mode::Host { world, listen }, content.clone(), config.clone()).unwrap();
+        let addr = host.local_addr().unwrap();
+        let mut client = Session::start(Mode::Join { host: addr, stable_id: 7 }, content.clone(), config).unwrap();
+
+        // Hits by each avatar, counted on the host.
+        let mut hits = std::collections::BTreeMap::<u16, u32>::new();
+        let (mut host_last, mut client_last) = (0, 0);
+        let start = std::time::Instant::now();
+        while start.elapsed() < Duration::from_secs(9) {
+            let now = start.elapsed();
+            host.update(now, |world| {
+                for event in &world.settlement().unwrap().events {
+                    if let Event::Hit { agent: Some(agent), .. } = event {
+                        *hits.entry(*agent).or_default() += 1;
+                    }
+                }
+            });
+            client.update(now, |_| {});
+            // The host holds the center lane, the guest the flanks.
+            fight(&mut host, Weapon::Sword, &[0], &mut host_last);
+            fight(&mut client, Weapon::Spear, &[1, 2], &mut client_last);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let s = host.world().unwrap().settlement().unwrap();
+        let (mine, theirs) = (s.avatar_of(net::HOST_PLAYER).unwrap(), s.avatar_of(client.player().unwrap()).unwrap());
+        assert!(hits.get(&mine).is_some_and(|&n| n > 0) && hits.get(&theirs).is_some_and(|&n| n > 0), "both players hit ghouls: {hits:?}");
+        assert!(s.combat.spear_hits > 0 && s.combat.melee_hits > 0, "{:?}", s.combat);
+
+        // Every tick both machines ran hashed the same.
+        let hashes = |session: &Session| -> std::collections::BTreeMap<u64, String> {
+            session.desync_evidence().1.lines().map(|line| {
+                let (tick, hash) = line.split_once(' ').unwrap();
+                (tick.parse().unwrap(), hash.to_string())
+            }).collect()
+        };
+        let (on_host, on_client) = (hashes(&host), hashes(&client));
+        let shared: Vec<_> = on_client.iter().filter(|(tick, _)| on_host.contains_key(tick)).collect();
+        assert!(shared.len() > 100, "only {} ticks in common", shared.len());
+        for (tick, hash) in shared {
+            assert_eq!(&on_host[tick], hash, "the machines diverged at tick {tick}");
+        }
+    }
 }

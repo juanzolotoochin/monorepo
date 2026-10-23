@@ -23,6 +23,10 @@ pub struct Peer {
     stride: f32,
     /// The weapon in hand: the one last swung.
     weapon: Weapon,
+    /// The start tick of the last swing heard, so each whooshes once.
+    heard: u64,
+    /// Meters walked since the last footstep.
+    foot_distance: f32,
 }
 
 /// A copied part pivot. Not a `Part`, so the local player's animation and
@@ -65,6 +69,7 @@ pub fn update(
     game: Res<Game>,
     style: Res<ActiveStyle>,
     time: Res<Time>,
+    sound: Res<crate::sound::Sound>,
     player: Single<Entity, With<Player>>,
     mut peers: Query<(Entity, &mut Peer, &mut Transform), (Without<PeerPart>, Without<Player>)>,
     mut parts: Query<(Entity, &PeerPart, &mut Transform), Without<Peer>>,
@@ -94,7 +99,15 @@ pub fn update(
         let alpha = if from.distance(to) > 1.5 { 1.0 } else { game.alpha };
         let mut position = from.lerp(to, alpha);
         position.y = before.avatar.height.to_f32() + (current.avatar.height - before.avatar.height).to_f32() * alpha;
-        peer.stride += position.with_y(0.0).distance(transform.translation.with_y(0.0)).min(1.0) * 8.5;
+        let moved = position.with_y(0.0).distance(transform.translation.with_y(0.0)).min(1.0);
+        peer.stride += moved * 8.5;
+        if !current.avatar.flight.airborne {
+            peer.foot_distance += moved;
+            if peer.foot_distance > 0.72 {
+                peer.foot_distance -= 0.72;
+                sound.play(crate::sound::Cue::Step);
+            }
+        }
         transform.translation = position;
         let turn = (current.heading - before.heading).to_f32();
         let turn = (turn + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
@@ -106,6 +119,12 @@ pub fn update(
             peer.weapon = swing.weapon;
         }
         let attack = swing.and_then(|s| attack(s, ticks));
+        if let (Some(swing), Some(_)) = (swing, attack) {
+            if peer.heard != swing.started {
+                peer.heard = swing.started;
+                sound.play(crate::sound::Cue::Swing);
+            }
+        }
         poses.push((entity, peer.weapon, Pose { stride: peer.stride, speed, breathe, airborne, attack }));
     }
     for (entity, part, mut transform) in &mut parts {
@@ -134,7 +153,7 @@ pub fn update(
     for agent in others.into_iter().filter(|a| !shown.contains(a)) {
         commands.queue(move |world: &mut World| {
             let root = copy(world, player, None);
-            world.entity_mut(root).insert(Peer { agent, style, stride: 0.0, weapon: Weapon::Sword });
+            world.entity_mut(root).insert(Peer { agent, style, stride: 0.0, weapon: Weapon::Sword, heard: 0, foot_distance: 0.0 });
         });
     }
 }

@@ -590,3 +590,59 @@ fn parity_probe() {
         }
     }
 }
+
+/// Two players hold the Red Clearing together: a guest joins, each chases
+/// the nearest ghoul and strikes it (sword and spear), and the guest also
+/// fetches bolts from the rack. Each player's hits are their own.
+#[test]
+fn two_players_defend_the_clearing() {
+    let scenario = Scenario::parse(ARENA).unwrap();
+    let world = World::new_settlement(9, Content::builtin().rules, &scenario, &[]).unwrap();
+    let mut sim = Simulation::from_world(world, 2);
+    let (host, guest) = (PlayerId(0), PlayerId(1));
+    sim.step(&[Command { player: guest, kind: CommandKind::Join }]);
+    let s = sim.world().settlement().unwrap();
+    let players = [(host, s.avatar_of(host).unwrap(), Weapon::Sword), (guest, s.avatar_of(guest).unwrap(), Weapon::Spear)];
+    let (rack, bolt) = (s.depot_index("bolt_rack").unwrap(), s.item_index("bolt").unwrap());
+
+    // The guest takes two bolts off the rack first.
+    let dock = s.depots[rack as usize].position;
+    let fetch = |kind| Command { player: guest, kind };
+    sim.step(&[
+        fetch(CommandKind::MoveAvatar { agent: players[1].1, intent: Intent::GoTo { target: dock, run: true } }),
+        fetch(CommandKind::Transfer { agent: players[1].1, depot: rack, item: bolt, units: 2, deposit: false }),
+    ]);
+    for _ in 0..240 {
+        sim.step(&[]);
+    }
+    assert_eq!(sim.world().settlement().unwrap().agents[players[1].1 as usize].cargo[bolt as usize], 2, "the guest carries two bolts");
+
+    let mut hits = [0u32; 2];
+    for _ in 0..1800 {
+        let s = sim.world().settlement().unwrap();
+        let tick = sim.world().tick();
+        let mut turn = Vec::new();
+        for &(player, agent, weapon) in &players {
+            let a = &s.agents[agent as usize];
+            let Some(t) = s.threats.iter().min_by_key(|t| (t.position - a.position).length()) else { continue };
+            let to = t.position - a.position;
+            let kind = if to.length() > fx(1.0) {
+                CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: to.normalize_or_zero(), run: true } }
+            } else if tick >= a.attack_ready && a.avatar.swing.as_ref().is_none_or(|s| tick >= s.until) {
+                CommandKind::Attack { agent, weapon, aim: to, muzzle: [Fx::ZERO, fx(0.6), fx(0.25)] }
+            } else {
+                continue;
+            };
+            turn.push(Command { player, kind });
+        }
+        sim.step(&turn);
+        for event in &sim.world().settlement().unwrap().events {
+            if let Event::Hit { agent: Some(agent), .. } = event {
+                hits[players.iter().position(|p| p.1 == *agent).unwrap()] += 1;
+            }
+        }
+    }
+    let s = sim.world().settlement().unwrap();
+    assert!(hits.iter().all(|&n| n > 3), "both players hit ghouls: {hits:?}");
+    assert!(s.combat.melee_hits > 0 && s.combat.spear_hits > 0 && s.combat.kills > 5, "{:?}", s.combat);
+}

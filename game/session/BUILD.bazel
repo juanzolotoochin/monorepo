@@ -17,6 +17,7 @@ rust_library(
 rust_test(
     name = "session_test",
     size = "small",
+    compile_data = ["//game/app/assets:levels/combat_arena_supply.ron"],
     crate = ":session",
     edition = "2021",
     deps = ["//game/fx"],

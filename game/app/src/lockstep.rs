@@ -113,6 +113,11 @@ impl Game {
         self.settlement()?.avatar_of(me)
     }
 
+    /// The local player's avatar ID, as views name agents.
+    pub fn player_id(&self) -> Option<String> {
+        Some(self.settlement()?.agents[self.player()? as usize].id.clone())
+    }
+
     /// Sends a command; it applies on the next tick in single-player, and
     /// after the input delay in a networked game.
     pub fn command(&mut self, kind: CommandKind) {
@@ -280,6 +285,10 @@ pub fn step(time: Res<Time>, hub: Option<Res<crate::control::Hub>>, mut game: Re
         // The first tick runs on the first frame after warmup, as it does
         // without one (Bevy's first frame has no delta).
         game.clock = Duration::ZERO;
+    } else if game.network.is_some() {
+        // Everyone shares one clock: pausing or speeding up alone would
+        // only fall behind or run out of turns.
+        game.clock += time.delta();
     } else if !game.paused {
         let rate = game.rate;
         game.clock += time.delta().mul_f32(rate);

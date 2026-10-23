@@ -416,13 +416,13 @@ bazel build --config=full_local //game/app:combat_arena_demo
 The demo produces an MP4 with audio, a WAV, a final state report, and a per-frame
 trace. Its assertions check hits, a kill, and actual knockback displacement.
 
-## Multiplayer (open field)
+## Multiplayer
 
 One machine hosts and others join over UDP. Each player who joins gets an
 avatar of their own beside the spawn point and drives it with the usual
 controls. Other players wear the same exosuit, dressed by the scene's style,
 and walk, idle, fly and swing with the same animation, holding the weapon
-they last swung. Their hits don't play sparks or sound yet.
+they last swung, with their footsteps and swings audible.
 
 ```sh
 # The host listens on a UDP port:
@@ -436,10 +436,26 @@ playing alone). `--scene` picks another one; every player must pass the same
 scene. Scene keys are disabled while networked. The HUD's top right shows the
 connection. Leaving and rejoining gives a new avatar; the old one stays put.
 
+To defend the Red Clearing together, both pass `--scene combat-arena`:
+
+```sh
+bazel run --config=full_local //game/app:demo -- --host 7777 --scene combat-arena
+bazel run --config=full_local //game/app:demo -- --join my-desktop:7777 --scene combat-arena
+```
+
+Everything in the single-player arena works for both players: each picks
+their own weapon (Z/X/C/V) and fights the three ghoul lanes; blood, sounds,
+deflections, decapitations, bolts and arc chains show for everyone's hits,
+while the hit pause, rebound and camera shake are only for your own. Either
+player can carry bolts from the rack, switch the ballista off and on (shared,
+like the base's health and the kill count), and respawn with **R**. Networked
+games can't pause or change speed.
+
 The host's world is the only real one: clients load it from the host and then
 run the same 30 Hz simulation on the same turns, so commands apply on every
 machine after the input delay (4 ticks). `//game/session:session_test` runs
-two players over localhost UDP and checks that both end with the same world.
+two players over localhost UDP, on the field and fighting the arena's ghouls,
+and checks that both machines simulate the same world.
 
 ## Performance telemetry
 

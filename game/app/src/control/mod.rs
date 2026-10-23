@@ -239,11 +239,17 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
         }
         Command::SettlementPause { paused } => {
             settlement(world)?;
+            if world.resource::<Game>().network.is_some() {
+                return Err("Networked games can't pause".into());
+            }
             world.resource_mut::<Game>().paused = *paused;
             Ok(Pending::Instant)
         }
         Command::SettlementRate { rate } => {
             settlement(world)?;
+            if world.resource::<Game>().network.is_some() {
+                return Err("Networked games run at one speed".into());
+            }
             if !rate.is_finite() || !(0.25..=4.0).contains(rate) {
                 return Err("simulation rate must be 0.25..4".into());
             }

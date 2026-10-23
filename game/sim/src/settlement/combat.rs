@@ -170,7 +170,8 @@ pub enum Impact {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     Shot { defender: Option<u16> },
-    Hit { target: u64, projectile: Option<u64>, position: FxVec2, killed: bool, impact: Impact },
+    /// `agent` is the avatar that struck, for melee and arc hits.
+    Hit { target: u64, agent: Option<AgentIx>, projectile: Option<u64>, position: FxVec2, killed: bool, impact: Impact },
     PinnedLanded { target: u64, position: FxVec2 },
     BlockedShot { position: FxVec2 },
     ArcFired { from: FxVec2, to: FxVec2 },
@@ -485,7 +486,7 @@ impl Settlement {
             }
             hits += 1;
             let (killed, position) = (t.hp == 0, t.position);
-            self.events.push(Event::Hit { target, projectile: None, position, killed, impact });
+            self.events.push(Event::Hit { target, agent: Some(agent as AgentIx), projectile: None, position, killed, impact });
             if killed {
                 self.threats.remove(i);
                 self.combat.kills += 1;
@@ -544,7 +545,7 @@ impl Settlement {
                 arrival: tick + DEFLECTED_TICKS,
             });
         }
-        self.events.push(Event::Hit { target: message.target, projectile: Some(p.id), position, killed, impact });
+        self.events.push(Event::Hit { target: message.target, agent: None, projectile: Some(p.id), position, killed, impact });
         if killed {
             self.threats.remove(i);
             self.combat.kills += 1;
