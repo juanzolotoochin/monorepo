@@ -13,6 +13,13 @@ pub struct ActiveStyle {
     cache: HashMap<String, Vec<(Handle<Mesh>, Handle<StandardMaterial>)>>,
     palettes: HashMap<String, Vec<Handle<StandardMaterial>>>,
 }
+
+impl ActiveStyle {
+    /// The scene whose style the player wears.
+    pub fn current(&self) -> Option<usize> {
+        self.current
+    }
+}
 #[derive(Resource)]
 pub struct MaterialBindings(pub Vec<(Handle<StandardMaterial>, String, StandardMaterial)>);
 

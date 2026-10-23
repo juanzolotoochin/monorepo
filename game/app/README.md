@@ -420,7 +420,9 @@ trace. Its assertions check hits, a kill, and actual knockback displacement.
 
 One machine hosts and others join over UDP. Each player who joins gets an
 avatar of their own beside the spawn point and drives it with the usual
-controls. Other players show up as plain figures tinted by player.
+controls. Other players wear the same exosuit, dressed by the scene's style,
+and walk, idle and fly with the same animation (their attacks aren't shown
+yet).
 
 ```sh
 # The host listens on a UDP port:

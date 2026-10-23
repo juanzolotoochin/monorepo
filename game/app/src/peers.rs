@@ -1,39 +1,57 @@
-//! Other players' avatars in a networked game: a plain voxel figure per
-//! avatar this machine doesn't control, tinted per player, placed where the
-//! simulation has it between ticks.
+//! Other players' avatars in a networked game: a copy of the local player's
+//! exosuit (as the scene's style dresses it) per avatar this machine doesn't
+//! control, placed where the simulation has it between ticks and posed like
+//! the local player.
 
+use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 
-use crate::gameplay::Player;
+use crate::gameplay::{Part, PartKind, Player, Pose, WALK_SPEED};
+use crate::jetpack::Exhaust;
 use crate::lockstep::Game;
+use crate::style::ActiveStyle;
 
 #[derive(Component)]
 pub struct Peer {
     agent: u16,
+    /// The style the copy was made in; a restyle makes a new copy.
+    style: Option<usize>,
     /// Walk cycle phase, advanced by distance moved.
     stride: f32,
 }
 
-/// A leg's hip pivot; `1.0` or `-1.0` for which side swings forward first.
+/// A copied part pivot. Not a `Part`, so the local player's animation and
+/// styling leave it alone.
 #[derive(Component)]
-pub struct Leg(f32);
+pub struct PeerPart {
+    kind: PartKind,
+    rest: Transform,
+}
+
+/// A copied jetpack exhaust, shown while that avatar flies.
+#[derive(Component)]
+pub struct PeerExhaust;
 
 pub fn update(
     mut commands: Commands,
     game: Res<Game>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    player: Single<&Transform, (With<Player>, Without<Peer>, Without<Leg>)>,
-    mut peers: Query<(Entity, &mut Peer, &mut Transform, &Children), Without<Leg>>,
-    mut legs: Query<(&Leg, &mut Transform), Without<Peer>>,
+    style: Res<ActiveStyle>,
+    time: Res<Time>,
+    player: Single<Entity, With<Player>>,
+    mut peers: Query<(Entity, &mut Peer, &mut Transform), (Without<PeerPart>, Without<Player>)>,
+    mut parts: Query<(Entity, &PeerPart, &mut Transform), Without<Peer>>,
+    parents: Query<&ChildOf>,
+    mut exhausts: Query<(&ChildOf, &mut Visibility), With<PeerExhaust>>,
 ) {
     let me = game.player();
     let others: Vec<u16> = game.current.as_ref().map_or_else(Vec::new, |s| {
         (0..s.agents.len() as u16).filter(|&i| s.agents[i as usize].controlled && Some(i) != me).collect()
     });
+    let breathe = (time.elapsed_secs() * 2.0).sin() * 0.012;
+    let mut poses = Vec::new();
     let mut shown = Vec::new();
-    for (entity, mut peer, mut transform, children) in &mut peers {
-        if !others.contains(&peer.agent) {
+    for (entity, mut peer, mut transform) in &mut peers {
+        if !others.contains(&peer.agent) || peer.style != style.current() {
             commands.entity(entity).despawn();
             continue;
         }
@@ -49,45 +67,73 @@ pub fn update(
         let turn = (current.heading - before.heading).to_f32();
         let turn = (turn + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
         transform.rotation = Quat::from_rotation_y(before.heading.to_f32() + turn * alpha);
-        transform.scale = player.scale;
-        let moving = current.avatar.velocity.length().to_f32() > 0.05;
-        for &child in children {
-            if let Ok((leg, mut hip)) = legs.get_mut(child) {
-                let swing = if moving { peer.stride.sin() * 0.6 * leg.0 } else { 0.0 };
-                hip.rotation = Quat::from_rotation_x(swing);
-            }
+        let airborne = current.avatar.flight.airborne;
+        let speed = if airborne { 0.0 } else { (current.avatar.velocity.length().to_f32() / WALK_SPEED).min(1.4) };
+        poses.push((entity, Pose { stride: peer.stride, speed, breathe, airborne, attack: None }));
+    }
+    for (entity, part, mut transform) in &mut parts {
+        // Part pivots hang off the root or the body: find the peer above.
+        let pose = parents.iter_ancestors(entity).find_map(|e| poses.iter().find(|(p, _)| *p == e).map(|(_, pose)| pose));
+        if let Some(pose) = pose {
+            *transform = pose.place(part.kind, part.rest);
         }
     }
+    for (parent, mut visibility) in &mut exhausts {
+        if let Some((_, pose)) = poses.iter().find(|(e, _)| *e == parent.parent()) {
+            *visibility = if pose.airborne { Visibility::Inherited } else { Visibility::Hidden };
+        }
+    }
+    // The player's suit is only complete once the scene's style dresses it.
+    if style.current().is_none() {
+        return;
+    }
+    let (player, style) = (*player, style.current());
     for agent in others.into_iter().filter(|a| !shown.contains(a)) {
-        let owner = game.current.as_ref().unwrap().agents[agent as usize].owner.map_or(0, |p| p.0);
-        spawn(&mut commands, &mut meshes, &mut materials, agent, owner);
+        commands.queue(move |world: &mut World| {
+            let root = copy(world, player, None);
+            world.entity_mut(root).insert(Peer { agent, style, stride: 0.0 });
+        });
     }
 }
 
-fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>, agent: u16, owner: u32) {
-    let cube = meshes.add(Cuboid::default());
-    // Golden-angle hues, so each player's color is far from the last.
-    let hue = (owner as f32 * 137.5 + 20.0) % 360.0;
-    let suit = materials.add(StandardMaterial { base_color: Color::hsl(hue, 0.65, 0.5), perceptual_roughness: 0.7, ..default() });
-    let dark = materials.add(StandardMaterial { base_color: Color::srgb(0.08, 0.09, 0.12), perceptual_roughness: 0.8, ..default() });
-    let visor = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.55, 0.97, 1.0),
-        emissive: LinearRgba::rgb(0.6, 1.6, 1.8),
-        ..default()
-    });
-    let block = |p: &mut ChildSpawnerCommands, material: &Handle<StandardMaterial>, position: Vec3, size: Vec3| {
-        p.spawn((Mesh3d(cube.clone()), MeshMaterial3d(material.clone()), Transform::from_translation(position).with_scale(size)));
-    };
-    commands
-        .spawn((Peer { agent, stride: 0.0 }, Transform::default(), Visibility::default()))
-        .with_children(|p| {
-            block(p, &suit, Vec3::new(0.0, 1.05, 0.0), Vec3::new(0.62, 0.62, 0.38));
-            block(p, &dark, Vec3::new(0.0, 0.76, 0.0), Vec3::new(0.66, 0.12, 0.42));
-            block(p, &suit, Vec3::new(0.0, 1.62, 0.0), Vec3::new(0.48, 0.44, 0.46));
-            block(p, &visor, Vec3::new(0.0, 1.64, 0.235), Vec3::new(0.4, 0.12, 0.03));
-            for (side, swing) in [(-0.17, 1.0), (0.17, -1.0)] {
-                p.spawn((Leg(swing), Transform::from_xyz(side, 0.72, 0.0), Visibility::default()))
-                    .with_children(|hip| block(hip, &dark, Vec3::new(0.0, -0.36, 0.0), Vec3::new(0.2, 0.72, 0.24)));
-            }
-        });
+/// Copies an entity and its children: their meshes, materials, transforms
+/// and visibility, with part pivots and exhausts as their peer versions.
+/// Lights are left out, so each peer doesn't add shadow-casting lights.
+fn copy(world: &mut World, source: Entity, parent: Option<Entity>) -> Entity {
+    let e = world.entity(source);
+    let transform = e.get::<Transform>().copied().unwrap_or_default();
+    let visibility = e.get::<Visibility>().copied().unwrap_or_default();
+    let mesh = e.get::<Mesh3d>().cloned();
+    let material = e.get::<MeshMaterial3d<StandardMaterial>>().cloned();
+    let part = e.get::<Part>().map(|p| PeerPart { kind: p.kind, rest: p.rest });
+    let exhaust = e.contains::<Exhaust>();
+    let no_shadow = e.contains::<NotShadowCaster>();
+    let children: Vec<Entity> = e.get::<Children>().map_or_else(Vec::new, |c| c.iter().collect());
+    let mut copied = world.spawn((transform, visibility));
+    if let Some(mesh) = mesh {
+        copied.insert(mesh);
+    }
+    if let Some(material) = material {
+        copied.insert(material);
+    }
+    if let Some(part) = part {
+        copied.insert(part);
+    }
+    if exhaust {
+        copied.insert(PeerExhaust);
+    }
+    if no_shadow {
+        copied.insert(NotShadowCaster);
+    }
+    if let Some(parent) = parent {
+        copied.insert(ChildOf(parent));
+    }
+    let id = copied.id();
+    for child in children {
+        if world.entity(child).contains::<PointLight>() || world.entity(child).contains::<SpotLight>() {
+            continue;
+        }
+        copy(world, child, Some(id));
+    }
+    id
 }

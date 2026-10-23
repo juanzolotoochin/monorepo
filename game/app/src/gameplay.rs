@@ -380,13 +380,38 @@ pub fn animate_character(
         (controls.velocity.length() / WALK_SPEED).min(1.4)
     };
     let breathe = (time.elapsed_secs() * 2.0).sin() * 0.012;
+    let pose = Pose {
+        stride: controls.stride,
+        speed,
+        breathe,
+        airborne,
+        attack: controls.attack,
+    };
     for (part, mut transform) in &mut parts {
-        *transform = part.rest;
-        match part.kind {
+        *transform = pose.place(part.kind, part.rest);
+    }
+}
+
+/// What a character is doing this frame, for posing its parts.
+pub struct Pose {
+    /// Walk cycle phase.
+    pub stride: f32,
+    /// Walking speed relative to `WALK_SPEED`.
+    pub speed: f32,
+    pub breathe: f32,
+    pub airborne: bool,
+    pub attack: Option<Attack>,
+}
+
+impl Pose {
+    /// A part's rest transform, posed.
+    pub fn place(&self, kind: PartKind, rest: Transform) -> Transform {
+        let mut transform = rest;
+        match kind {
             PartKind::Body => {
-                transform.translation.y += breathe + controls.stride.sin().abs() * 0.035 * speed;
-                transform.rotation = Quat::from_rotation_x(0.06 * speed);
-                if let Some(attack) = controls.attack {
+                transform.translation.y += self.breathe + self.stride.sin().abs() * 0.035 * self.speed;
+                transform.rotation = Quat::from_rotation_x(0.06 * self.speed);
+                if let Some(attack) = self.attack {
                     let twist = if attack.weapon == content::scenario::Weapon::Spear {
                         let (extension, _) = spear_pose(attack.age, attack.impact_angle.is_some());
                         transform.rotation *= Quat::from_rotation_x(-0.14 * extension.max(0.0));
@@ -403,16 +428,16 @@ pub fn animate_character(
             }
             PartKind::Leg(side) => {
                 transform.rotation =
-                    Quat::from_rotation_x(controls.stride.sin() * 0.55 * speed * side);
-                if airborne {
+                    Quat::from_rotation_x(self.stride.sin() * 0.55 * self.speed * side);
+                if self.airborne {
                     transform.rotation = Quat::from_rotation_x(-0.25);
-                } else if controls.attack.is_some() {
+                } else if self.attack.is_some() {
                     transform.rotation = Quat::from_rotation_x(-0.12 * side);
                 }
             }
             PartKind::Sword => {
-                let angle = controls.attack.map_or(REST_ANGLE, |a| a.angle());
-                let tilt = controls.attack.map_or(-0.6, |a| {
+                let angle = self.attack.map_or(REST_ANGLE, |a| a.angle());
+                let tilt = self.attack.map_or(-0.6, |a| {
                     if a.impact_angle.is_some() {
                         -0.1 - 0.5 * smooth(a.age / REBOUND_END)
                     } else if a.age < WINDUP {
@@ -428,7 +453,7 @@ pub fn animate_character(
                     }
                 });
                 transform.rotation = Quat::from_rotation_y(angle) * Quat::from_rotation_x(tilt);
-                if let Some(attack) = controls.attack {
+                if let Some(attack) = self.attack {
                     if attack.weapon == content::scenario::Weapon::Spear {
                         let (extension, pitch) =
                             spear_pose(attack.age, attack.impact_angle.is_some());
@@ -437,9 +462,10 @@ pub fn animate_character(
                         transform.rotation = Quat::from_rotation_x(pitch);
                     }
                 }
-                transform.translation.y += breathe;
+                transform.translation.y += self.breathe;
             }
         }
+        transform
     }
 }
 
