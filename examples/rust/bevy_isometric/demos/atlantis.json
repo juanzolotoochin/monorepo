@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "scene": "atlantis",
+  "fps": 30,
+  "width": 1440,
+  "height": 960,
+  "max_frames": 1200,
+  "steps": [
+    {
+      "op": "wait",
+      "frames": 45
+    },
+    {
+      "op": "walk",
+      "position": [
+        1,
+        6.5
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "walk",
+      "position": [
+        0,
+        3
+      ]
+    },
+    {
+      "op": "walk",
+      "position": [
+        2,
+        2.7
+      ]
+    },
+    {
+      "op": "strike",
+      "target": [
+        3.5,
+        2.7
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "walk",
+      "position": [
+        3,
+        -2.5
+      ]
+    },
+    {
+      "op": "walk",
+      "position": [
+        0,
+        -4
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 45
+    },
+    {
+      "op": "inspect"
+    }
+  ]
+}

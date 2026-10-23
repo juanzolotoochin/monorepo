@@ -184,3 +184,12 @@ new interaction, and is ultimately collected by the player. State traces let
 clients inspect the replay while other commands run.
 
 </details>
+
+### Inspecting visual styles
+
+Scene `atlantis` (key 6) has its own `atlantis_demo` audiovisual target. Its
+script walks through the environment and strikes a styled reactive asset.
+Snapshots expose `style`: profile ID, voxel size/density, actor density/parts,
+weapon identity, palette roles, baked geometry statistics, fixture lights,
+moving actor light positions, exposure, and sun-shadow policy. Actor light
+positions resolve the animated hierarchy even in renderer-free simulations.

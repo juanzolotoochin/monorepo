@@ -1,12 +1,14 @@
 //! Renderer-independent prefab recipes, meshing and versioned asset packs.
 mod boulder;
 mod piles;
+mod style;
 pub use boulder::generate_boulder;
 pub use piles::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+pub use style::*;
 
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 pub type Result<T> = std::result::Result<T, String>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -251,12 +253,20 @@ pub struct Scene {
     pub piles: Option<PileLayout>,
     #[serde(default)]
     pub terrain: Option<Terrain>,
+    #[serde(default)]
+    pub style: Option<StyleProfile>,
+    #[serde(default)]
+    pub architecture: Vec<VoxelShape>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScenePack {
     pub version: u32,
     pub scene: Scene,
     pub prefabs: Vec<Prefab>,
+    #[serde(default)]
+    pub environment: Option<EnvironmentMesh>,
+    #[serde(default)]
+    pub actor: Vec<ActorMesh>,
 }
 
 impl Prefab {
@@ -323,6 +333,77 @@ impl ScenePack {
             || !self.scene.spawn.iter().all(|v| v.is_finite())
         {
             return Err("invalid scene header or instance count".into());
+        }
+        if let Some(env) = &self.environment {
+            if env.lights.len() > 64 {
+                return Err("too many baked lights".into());
+            }
+            for light in &env.lights {
+                light.validate()?;
+            }
+            let count = self.scene.style.as_ref().map_or(6, |s| s.materials.len());
+            if env.meshes.len() > 16
+                || env.obstacles.len() > 4096
+                || env.meshes.iter().any(|m| {
+                    m.material >= count
+                        || m.positions.len() != m.normals.len()
+                        || m.indices.len() % 3 != 0
+                        || m.indices.iter().any(|&i| i as usize >= m.positions.len())
+                        || m.positions
+                            .iter()
+                            .chain(m.normals.iter())
+                            .flatten()
+                            .any(|v| !v.is_finite())
+                })
+                || env
+                    .obstacles
+                    .iter()
+                    .any(|(p, r)| p.iter().any(|v| !v.is_finite()) || !r.is_finite() || *r <= 0.0)
+            {
+                return Err("invalid compiled style environment".into());
+            }
+        }
+        let required_parts: std::collections::BTreeSet<_> = self
+            .scene
+            .style
+            .iter()
+            .flat_map(|s| s.actor.iter().map(|a| a.part))
+            .collect();
+        let actual_parts: std::collections::BTreeSet<_> =
+            self.actor.iter().map(|a| a.part).collect();
+        if self.actor.len() != actual_parts.len() || required_parts != actual_parts {
+            return Err("styled actor parts must be compiled before packing".into());
+        }
+        let count = self.scene.style.as_ref().map_or(6, |s| s.materials.len());
+        for actor in &self.actor {
+            if actor.lights.len() > 16 {
+                return Err("too many actor lights".into());
+            }
+            for light in &actor.lights {
+                light.validate()?;
+            }
+            if actor.meshes.is_empty()
+                || actor.meshes.len() > 16
+                || actor.meshes.iter().any(|m| {
+                    m.material >= count
+                        || m.positions.len() != m.normals.len()
+                        || m.indices.len() % 3 != 0
+                        || m.indices.iter().any(|&i| i as usize >= m.positions.len())
+                        || m.positions
+                            .iter()
+                            .chain(m.normals.iter())
+                            .flatten()
+                            .any(|v| !v.is_finite())
+                })
+            {
+                return Err("invalid compiled actor mesh".into());
+            }
+        }
+        if let Some(style) = &self.scene.style {
+            style.validate()?;
+        }
+        if !self.scene.architecture.is_empty() && self.environment.is_none() {
+            return Err("architecture must be compiled before packing".into());
         }
         if let Some(terrain) = &self.scene.terrain {
             if terrain.platforms.is_empty() || terrain.platforms.len() > 128 {
@@ -486,6 +567,8 @@ mod tests {
                 industrial: true,
                 piles: None,
                 terrain: None,
+                style: None,
+                architecture: vec![],
                 instances: vec![Instance {
                     prefab: "rock".into(),
                     position: [0.0; 3],
@@ -496,6 +579,8 @@ mod tests {
                 }],
             },
             prefabs: vec![prefab],
+            environment: None,
+            actor: vec![],
         };
         assert!(pack.validate().is_ok());
         pack.version = 99;
@@ -512,12 +597,16 @@ mod tests {
         let mut pack = ScenePack {
             version: VERSION,
             prefabs: vec![],
+            environment: None,
+            actor: vec![],
             scene: Scene {
                 name: "terrain".into(),
                 spawn: [0.0; 3],
                 industrial: false,
                 instances: vec![],
                 piles: None,
+                style: None,
+                architecture: vec![],
                 terrain: Some(Terrain {
                     platforms: vec![TerrainPlatform {
                         min: [-1.0; 2],

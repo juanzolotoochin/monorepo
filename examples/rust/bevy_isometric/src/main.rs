@@ -12,6 +12,7 @@ mod piles;
 mod preview;
 mod scene;
 mod sound;
+mod style;
 
 use bevy::{app::AppExit, prelude::*};
 use gameplay::*;
@@ -33,6 +34,7 @@ fn main() {
             "pile-lab" => 2,
             "jetpack-lab" => 3,
             "surprise-lab" => 4,
+            "atlantis" => 5,
             name => {
                 eprintln!("Unknown scene {name}");
                 std::process::exit(2)
@@ -66,6 +68,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .insert_resource(scenes)
         .init_resource::<assets::ModelCache>()
         .init_resource::<Controls>()
+        .init_resource::<style::ActiveStyle>()
         .init_resource::<palimpsest::Memory>()
         .init_resource::<jetpack::Flight>()
         .init_resource::<piles::PileLab>()
@@ -130,6 +133,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
                 assets::switch_scene,
                 jetpack::scene_changed,
                 palimpsest::setup,
+                style::apply,
             )
                 .chain(),
             piles::setup_scene,

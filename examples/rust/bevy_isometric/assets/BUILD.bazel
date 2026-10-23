@@ -81,3 +81,16 @@ scene_assets(
     layout = "levels/surprise_lab.ron",
     prefabs = [],
 )
+
+boulder_prefab(
+    name = "aether_stone",
+    src = "prefabs/ore_small.ron",
+    style = "styles/atlantis.ron",
+)
+
+scene_assets(
+    name = "atlantis",
+    layout = "levels/atlantis.ron",
+    prefabs = [":aether_stone"],
+    style = "styles/atlantis.ron",
+)

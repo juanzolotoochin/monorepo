@@ -39,6 +39,7 @@ impl SceneLibrary {
                     .expect("validated jetpack lab asset pack"),
                 ScenePack::decode(surprise_lab::PACK_BYTES)
                     .expect("validated field trial asset pack"),
+                ScenePack::decode(atlantis::PACK_BYTES).expect("validated Atlantis asset pack"),
             ],
             current: usize::MAX,
             initial: 0,
@@ -62,7 +63,7 @@ pub struct ModelCache {
     models: HashMap<String, CachedModel>,
     pub runtime_generations: usize,
 }
-fn standard(material: &Material) -> StandardMaterial {
+pub(crate) fn standard(material: &Material) -> StandardMaterial {
     StandardMaterial {
         base_color: Color::srgb(material.color[0], material.color[1], material.color[2]),
         emissive: LinearRgba::rgb(
@@ -75,7 +76,7 @@ fn standard(material: &Material) -> StandardMaterial {
         ..default()
     }
 }
-fn mesh(data: &MeshData) -> Mesh {
+pub(crate) fn mesh(data: &MeshData) -> Mesh {
     Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
@@ -117,6 +118,8 @@ pub fn switch_scene(
         Some(0)
     } else if keys.just_pressed(KeyCode::Digit2) {
         Some(1)
+    } else if keys.just_pressed(KeyCode::Digit6) {
+        Some(5)
     } else if keys.just_pressed(KeyCode::Digit5) {
         Some(4)
     } else if keys.just_pressed(KeyCode::Digit4) {
