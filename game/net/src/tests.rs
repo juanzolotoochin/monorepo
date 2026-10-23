@@ -164,7 +164,9 @@ fn client_inputs_apply_everywhere() {
     h.add_client();
     h.run_for(Duration::from_secs(3), 0);
     h.clients[0].queue(CommandKind::SpawnMovers { center: FxVec2::new(Fx::from_int(50), Fx::from_int(50)), count: 7 });
+    assert_eq!(h.clients[0].pending_inputs(), 1);
     h.run_for(Duration::from_secs(2), 0);
+    assert_eq!(h.clients[0].pending_inputs(), 0);
     assert_eq!(h.host.world().mover_count(), 7);
     assert_eq!(h.clients[0].world().unwrap().mover_count(), 7);
     h.assert_in_sync();

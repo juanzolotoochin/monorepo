@@ -985,7 +985,7 @@ pub fn player_transfer(world: &mut World, depot: &str, item: &str, units: u32, d
     let before = sim.agents[&actor].cargo.total();
     let game = world.resource::<crate::lockstep::Game>();
     let current = game.settlement().ok_or("No settlement loaded")?;
-    let (Some(agent), Some(d), Some(i)) = (current.player(), current.depot_index(depot), current.item_index(item)) else {
+    let (Some(agent), Some(d), Some(i)) = (game.player(), current.depot_index(depot), current.item_index(item)) else {
         return Err("Unknown depot or item".into());
     };
     if sim.manual_jobs.contains_key(&actor) {
@@ -1107,7 +1107,7 @@ pub fn input(world: &mut World) {
     let Some(current) = game.settlement() else {
         return;
     };
-    let (Some(agent), Some(d)) = (current.player(), current.depot_index(&depot.id)) else {
+    let (Some(agent), Some(d)) = (game.player(), current.depot_index(&depot.id)) else {
         return;
     };
     let limit = |item: &str| current.item_index(item).map_or(0, |i| current.transfer_limit(agent as usize, d as usize, i as usize, deposit));

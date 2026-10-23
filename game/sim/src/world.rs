@@ -93,6 +93,24 @@ pub enum CommandKind {
     MemoryRecord,
     MemoryDeploy,
     MemoryClear,
+    /// The sending player joined: gives them an avatar if they have none.
+    Join,
+}
+
+impl CommandKind {
+    /// The avatar a command drives, if it drives one.
+    pub fn avatar(&self) -> Option<u16> {
+        match *self {
+            CommandKind::MoveAvatar { agent, .. }
+            | CommandKind::Attack { agent, .. }
+            | CommandKind::Transfer { agent, .. }
+            | CommandKind::CancelTransfer { agent }
+            | CommandKind::Jetpack { agent, .. }
+            | CommandKind::Respawn { agent }
+            | CommandKind::Pile { agent, .. } => Some(agent),
+            _ => None,
+        }
+    }
 }
 
 /// One player input, scheduled for a tick by the network layer.
@@ -292,6 +310,13 @@ impl World {
         order.sort_by_key(|&i| turn[i].player);
         for (n, i) in order.into_iter().enumerate() {
             let mut rng = Rng::new(self.config.seed, self.tick, n as u64, stream::COMMAND);
+            // Players only drive their own avatar.
+            if let Some(agent) = turn[i].kind.avatar() {
+                let owner = self.settlement.as_ref().and_then(|s| s.agents.get(agent as usize)).and_then(|a| a.owner);
+                if owner != Some(turn[i].player) {
+                    continue;
+                }
+            }
             match turn[i].kind {
                 CommandKind::SpawnMovers { center, count } => self.spawn_movers(center, count, &mut rng),
                 CommandKind::Impulse { mover, velocity } => {
@@ -377,6 +402,11 @@ impl World {
                 CommandKind::MemoryClear => {
                     if let Some(s) = &mut self.settlement {
                         s.memory_clear();
+                    }
+                }
+                CommandKind::Join => {
+                    if let Some(s) = &mut self.settlement {
+                        s.join(turn[i].player);
                     }
                 }
             }

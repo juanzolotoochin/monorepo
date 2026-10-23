@@ -1013,6 +1013,7 @@ pub fn update_hud(
     library: Res<SceneLibrary>,
     cache: Res<ModelCache>,
     flight: Res<crate::jetpack::Flight>,
+    game: Res<crate::lockstep::Game>,
     player: Single<&Transform, With<Player>>,
     mut scene_label: Single<&mut Text, (With<SceneLabel>, Without<Status>, Without<ContactCount>)>,
     mut status: Single<(&mut Text, &mut TextColor), With<Status>>,
@@ -1073,6 +1074,8 @@ pub fn update_hud(
             flight.support,
             crate::jetpack::HOVER
         )
+    } else if game.network.is_some() {
+        format!("NET / {}", game.status.to_uppercase())
     } else {
         text
     };

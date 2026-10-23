@@ -147,6 +147,11 @@ impl<T: Transport> Host<T> {
         self.open.entry(tick).or_default().push(Command { player: HOST_PLAYER, kind });
     }
 
+    /// Commands the host queued that haven't been simulated yet.
+    pub fn pending_inputs(&self) -> u64 {
+        self.open.values().flatten().filter(|c| c.player == HOST_PLAYER).count() as u64
+    }
+
     /// Handles packets, runs every tick due by `now` (calling `on_step` after
     /// each), and sends turns.
     pub fn update(&mut self, now: Duration, mut on_step: impl FnMut(&World)) {

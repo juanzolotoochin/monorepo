@@ -3,7 +3,12 @@
 //! builds each scene's world, steps it on Bevy's clock, and turns input into
 //! commands. Views read the mirrors it fills (`legacy`, piles, memory,
 //! flight); nothing moves gameplay state except commands.
+//!
+//! With `--host` or `--join` the session is networked: the host builds the
+//! world and clients load it from the host, then each player drives their
+//! own avatar (`peers` draws the others).
 
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use bevy::prelude::*;
@@ -21,6 +26,15 @@ use crate::gameplay::{Controls, Obstacle, Player};
 /// The world seed. Scenes don't use randomness outside combat rolls, which are
 /// keyed on ticks and IDs, so one seed serves every scene.
 const SEED: u64 = 1;
+
+/// How this machine takes part in a networked game.
+#[derive(Clone, Copy, Debug)]
+pub enum Network {
+    /// Hosts the game, listening for players on this address.
+    Host(SocketAddr),
+    /// Joins the game hosted at this address.
+    Join(SocketAddr),
+}
 
 #[derive(Resource)]
 pub struct Game {
@@ -52,6 +66,9 @@ pub struct Game {
     start_save: Option<Vec<u8>>,
     /// The control hub held the clock last frame.
     warming_up: bool,
+    pub network: Option<Network>,
+    /// The connection, for the HUD.
+    pub status: String,
 }
 
 impl Default for Game {
@@ -75,6 +92,8 @@ impl Default for Game {
             replay: None,
             start_save: None,
             warming_up: false,
+            network: None,
+            status: String::new(),
         }
     }
 }
@@ -88,13 +107,14 @@ impl Game {
         self.world().and_then(SimWorld::settlement)
     }
 
-    /// The player's avatar index.
+    /// The local player's avatar index. Replays watch the host's.
     pub fn player(&self) -> Option<u16> {
-        self.settlement().and_then(SimSettlement::player)
+        let me = self.session.as_ref()?.player().unwrap_or(net::HOST_PLAYER);
+        self.settlement()?.avatar_of(me)
     }
 
-    /// Sends a command; it applies on the next tick (single-player has no
-    /// input delay).
+    /// Sends a command; it applies on the next tick in single-player, and
+    /// after the input delay in a networked game.
     pub fn command(&mut self, kind: CommandKind) {
         let Some(session) = self.session.as_mut() else { return };
         let tick = session.world().map_or(0, |w| w.tick());
@@ -109,7 +129,8 @@ impl Game {
 
     /// Whether every command sent so far has been applied.
     pub fn caught_up(&self) -> bool {
-        self.world().is_some_and(|w| w.tick() > self.applies_at)
+        let pending = self.session.as_ref().map_or(0, session::Session::pending_inputs);
+        self.world().is_some_and(|w| w.tick() > self.applies_at) && pending == 0
     }
 
     /// Arena coordinates (meters from the center, Bevy x/z) to world tiles.
@@ -208,7 +229,9 @@ pub fn build_world(world: &mut World) {
     let mut game = world.resource_mut::<Game>();
     let content = game.content.clone();
     let threads = std::thread::available_parallelism().map_or(2, |n| n.get().min(4));
-    let config = NetConfig { threads, input_delay: 0, ..NetConfig::default() };
+    // Single-player has nobody to wait for, so no input delay.
+    let input_delay = if game.network.is_some() { NetConfig::default().input_delay } else { 0 };
+    let config = NetConfig { threads, input_delay, ..NetConfig::default() };
     let built = SimWorld::new_scene(SEED, content.rules.clone(), &setup);
     let world_state = match built {
         Ok(world) => world,
@@ -216,15 +239,24 @@ pub fn build_world(world: &mut World) {
     };
     game.center = world_state.terrain().center;
     let start = save::write(&world_state, &content);
-    let mode = match game.replay.take() {
-        Some((bytes, log)) => {
+    let fresh = || save::read(&start, &content).expect("a fresh save loads");
+    let mode = match (game.replay.take(), game.network) {
+        (Some((bytes, log)), _) => {
             let replayed = save::read(&bytes, &content).expect("the recording's save loads");
             session::Mode::Replay { world: replayed, log }
         }
-        None => session::Mode::Host { world: save::read(&start, &content).expect("a fresh save loads"), listen: None },
+        // A client's world comes from the host; the scene built here is
+        // only for the view.
+        (None, Some(Network::Join(host))) => session::Mode::Join { host, stable_id: stable_id() },
+        (None, Some(Network::Host(listen))) => session::Mode::Host { world: fresh(), listen: Some(listen) },
+        (None, None) => session::Mode::Host { world: fresh(), listen: None },
     };
+    let session = session::Session::start(mode, content, config).unwrap_or_else(|e| panic!("could not start the session: {e}"));
+    if let Some(addr) = session.local_addr() {
+        info!("hosting on {addr}");
+    }
     game.start_save = Some(start);
-    game.session = Some(session::Session::start(mode, content, config).expect("a local session"));
+    game.session = Some(session);
     game.scene = Some(index);
     game.clock = Duration::ZERO;
     game.previous = None;
@@ -266,7 +298,27 @@ pub fn step(time: Res<Time>, hub: Option<Res<crate::control::Hub>>, mut game: Re
         game.tick = tick.saturating_sub(1);
     }
     game.alpha = session.alpha(clock);
+    for event in session.events.drain(..) {
+        match event {
+            net::NetEvent::Desync { .. } | net::NetEvent::HostLost | net::NetEvent::Rejected { .. } => warn!("{event:?}"),
+            _ => info!("{event:?}"),
+        }
+    }
+    if let Some(world) = session.world() {
+        // A client learns where the arena is once the host's save loads.
+        game.center = world.terrain().center;
+    }
+    if game.network.is_some() {
+        game.status = session.status();
+    }
     game.session = Some(session);
+}
+
+/// Tells this machine apart from others when joining. A random ID per run:
+/// a rejoining player gets a new avatar.
+fn stable_id() -> net::StableId {
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64);
+    nanos ^ (u64::from(std::process::id()) << 32)
 }
 
 /// Places the player where the simulation has the avatar, between ticks.

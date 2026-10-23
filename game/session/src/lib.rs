@@ -4,6 +4,9 @@
 //!
 //! Callers pass the time, so a scripted run on a fixed clock is as
 //! deterministic as the simulation.
+//!
+//! A client that finishes loading asks for an avatar (`CommandKind::Join`);
+//! the host's avatar comes with the scene.
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -34,6 +37,8 @@ pub struct Session {
     pub events: Vec<NetEvent>,
     /// Autosaves: write them where the app keeps saves.
     pub autosave: Option<Vec<u8>>,
+    /// The address a networked host listens on.
+    local_addr: Option<SocketAddr>,
 }
 
 pub enum Mode {
@@ -46,10 +51,15 @@ pub enum Mode {
 
 impl Session {
     pub fn start(mode: Mode, content: Content, config: NetConfig) -> std::io::Result<Session> {
+        let mut local_addr = None;
         let peer = match mode {
             Mode::Host { world, listen } => {
                 let socket: Socket = match listen {
-                    Some(addr) => Box::new(UdpTransport::bind(addr)?),
+                    Some(addr) => {
+                        let udp = UdpTransport::bind(addr)?;
+                        local_addr = Some(udp.local_addr()?);
+                        Box::new(udp)
+                    }
                     None => Box::new(NullTransport),
                 };
                 // A new epoch per hosting session, so stray packets from an
@@ -71,7 +81,7 @@ impl Session {
                 next: Duration::ZERO,
             },
         };
-        Ok(Session { peer, content, events: Vec::new(), autosave: None })
+        Ok(Session { peer, content, events: Vec::new(), autosave: None, local_addr })
     }
 
     /// The world, once there is one (a joining client has none until loaded).
@@ -121,7 +131,12 @@ impl Session {
             }
             Peer::Client(client) => {
                 client.update(now, &mut step);
-                self.events.extend(client.take_events());
+                for event in client.take_events() {
+                    if matches!(event, NetEvent::Loaded { .. }) {
+                        client.queue(CommandKind::Join);
+                    }
+                    self.events.push(event);
+                }
             }
             Peer::Replay { sim, log, pacer, next } => {
                 while now >= *next && sim.world().tick() < log.end_tick() {
@@ -147,6 +162,15 @@ impl Session {
                 let since = now.saturating_sub(next.saturating_sub(*pacer));
                 (since.as_secs_f32() / pacer.as_secs_f32()).min(1.0)
             }
+        }
+    }
+
+    /// Commands this peer queued that haven't been simulated yet.
+    pub fn pending_inputs(&self) -> u64 {
+        match &self.peer {
+            Peer::Host(host) => host.pending_inputs(),
+            Peer::Client(client) => client.pending_inputs(),
+            Peer::Replay { .. } => 0,
         }
     }
 
@@ -218,6 +242,11 @@ impl Session {
         (self.save(), text)
     }
 
+    /// The address a networked host listens on.
+    pub fn local_addr(&self) -> Option<SocketAddr> {
+        self.local_addr
+    }
+
     pub fn is_host(&self) -> bool {
         matches!(self.peer, Peer::Host(_))
     }
@@ -282,5 +311,60 @@ mod tests {
         replay.update(Duration::from_secs(60), |_| {});
         assert!(replay.finished());
         assert_eq!(save::write(replay.world().unwrap(), &content), original);
+    }
+
+    /// The networking MVP: a client joins a host over UDP on localhost, gets
+    /// its own avatar, and both players walk; the two machines end up with
+    /// the same world.
+    #[test]
+    fn two_players_walk_around_together() {
+        use sim::settlement::avatar::Intent;
+        use sim::settlement::SceneSetup;
+        let content = Content::builtin();
+        let setup = SceneSetup { extent: Fx::from_int(8), spawn: [Fx::ZERO, Fx::ZERO, Fx::from_int(2)], ..SceneSetup::default() };
+        let world = World::new_scene(1, content.rules.clone(), &setup).unwrap();
+        let config = NetConfig { threads: 2, ..NetConfig::default() };
+        let listen = Some("127.0.0.1:0".parse().unwrap());
+        let mut host = Session::start(Mode::Host { world, listen }, content.clone(), config.clone()).unwrap();
+        let addr = host.local_addr().unwrap();
+        let mut client = Session::start(Mode::Join { host: addr, stable_id: 42 }, content.clone(), config).unwrap();
+
+        let avatar = |session: &Session| session.world()?.settlement()?.avatar_of(session.player()?);
+        let position = |session: &Session, agent: u16| session.world().unwrap().settlement().unwrap().agents[agent as usize].position;
+        let walk = |agent: u16, x: i32| CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: FxVec2::new(Fx::from_int(x), Fx::ZERO), run: false } };
+        let start = std::time::Instant::now();
+        let (mut walking, mut now) = (false, Duration::ZERO);
+        while start.elapsed() < Duration::from_secs(4) {
+            now = start.elapsed();
+            host.update(now, |_| {});
+            client.update(now, |_| {});
+            if !walking {
+                if let (Some(mine), Some(theirs)) = (avatar(&client), avatar(&host)) {
+                    host.queue(walk(theirs, -1));
+                    client.queue(walk(mine, 1));
+                    walking = true;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(walking, "the client never got an avatar: {}", client.status());
+        assert_eq!(host.status(), "hosting, 2 players");
+
+        // Stop the host and let the client run (a tick at most per update)
+        // until it reaches the host's tick.
+        let target = host.world().unwrap().tick();
+        let wait = std::time::Instant::now();
+        while client.world().unwrap().tick() < target && wait.elapsed() < Duration::from_secs(2) {
+            now += Duration::from_millis(2);
+            client.update(now, |_| {});
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let (mine, theirs) = (avatar(&client).unwrap(), avatar(&host).unwrap());
+        assert_ne!(mine, theirs);
+        let spawn = host.world().unwrap().settlement().unwrap().spawn;
+        assert!(position(&host, mine).x > spawn.x + Fx::from_int(2), "the guest walked right");
+        assert!(position(&host, theirs).x < spawn.x - Fx::from_int(2), "the host walked left");
+        assert_eq!(host.world().unwrap().tick(), client.world().unwrap().tick());
+        assert_eq!(host.save(), client.save(), "both machines have the same world");
     }
 }

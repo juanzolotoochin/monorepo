@@ -9,6 +9,7 @@ mod legacy;
 mod lockstep;
 mod navigation;
 mod palimpsest;
+mod peers;
 mod pile_model;
 mod piles;
 mod preview;
@@ -35,6 +36,16 @@ fn main() {
     }) {
         scenes.initial = index;
     }
+    let network = network(&args).unwrap_or_else(|error| {
+        eprintln!("{error}");
+        std::process::exit(2)
+    });
+    if network.is_some() {
+        // Networked games start on the field unless asked otherwise, and
+        // every peer must pick the same scene.
+        scenes.initial = scenes.index("field").expect("the field scene exists");
+        scenes.locked = true;
+    }
     if let Some(pair) = args.windows(2).find(|pair| pair[0] == "--scene") {
         scenes.initial = scenes.index(&pair[1]).unwrap_or_else(|error| {
             eprintln!("{error}");
@@ -46,6 +57,7 @@ fn main() {
         std::process::exit(2)
     });
     let mut game = lockstep::Game::default();
+    game.network = network;
     if let Some(pair) = args.windows(2).find(|pair| pair[0] == "--record-input") {
         game.record = Some(pair[1].clone());
     }
@@ -65,10 +77,36 @@ fn main() {
     app.run();
 }
 
-/// Writes the recording when the app exits.
-fn write_recording(mut exits: MessageReader<AppExit>, game: Res<lockstep::Game>) {
+/// `--host <port>` hosts a networked game; `--join <host:port>` joins one
+/// (the host may be a name, such as a Tailscale machine name).
+fn network(args: &[String]) -> Result<Option<lockstep::Network>, String> {
+    use std::net::ToSocketAddrs;
+    let value = |flag: &str| args.windows(2).find(|pair| pair[0] == flag).map(|pair| pair[1].as_str());
+    match (value("--host"), value("--join")) {
+        (Some(_), Some(_)) => Err("Pass --host or --join, not both".into()),
+        (Some(port), None) => {
+            let port: u16 = port.parse().map_err(|e| format!("Invalid --host port {port}: {e}"))?;
+            Ok(Some(lockstep::Network::Host(([0, 0, 0, 0], port).into())))
+        }
+        (None, Some(host)) => {
+            let addr = host
+                .to_socket_addrs()
+                .map_err(|e| format!("Cannot resolve --join {host}: {e}"))?
+                .find(|a| a.is_ipv4())
+                .ok_or_else(|| format!("No IPv4 address for --join {host}"))?;
+            Ok(Some(lockstep::Network::Join(addr)))
+        }
+        (None, None) => Ok(None),
+    }
+}
+
+/// Writes the recording and leaves the session when the app exits.
+fn on_exit(mut exits: MessageReader<AppExit>, mut game: ResMut<lockstep::Game>) {
     if exits.read().next().is_some() {
         game.write_recording();
+        if let Some(session) = game.session.as_mut() {
+            session.shutdown();
+        }
     }
 }
 
@@ -183,6 +221,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
                 lockstep::mirror_settlement,
                 piles::mirror,
                 lockstep::follow_avatar,
+                peers::update.run_if(control::rendered),
                 jetpack::update,
                 palimpsest::tick,
             )
@@ -207,7 +246,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         )
             .chain(),
     );
-    app.add_systems(Last, write_recording);
+    app.add_systems(Last, on_exit);
     if !simulation {
         app.add_systems(
             Update,

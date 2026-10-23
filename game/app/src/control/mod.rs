@@ -232,7 +232,8 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             Ok(Pending::SettlementTransfer { scene: world.resource::<SceneLibrary>().current, expected })
         }
         Command::SettlementCancel => {
-            let agent = settlement(world)?.player().ok_or("No controlled actor")?;
+            settlement(world)?;
+            let agent = world.resource::<Game>().player().ok_or("No controlled actor")?;
             send(world, CommandKind::CancelTransfer { agent });
             Ok(Pending::Instant)
         }
@@ -317,7 +318,7 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
                 return Err("Flight assertion requires a finite altitude and tolerance in 0..1".into());
             }
             let game = world.resource::<Game>();
-            let a = game.settlement().and_then(|s| s.player().map(|p| &s.agents[p as usize])).ok_or("No player")?;
+            let a = game.settlement().zip(game.player()).map(|(s, p)| &s.agents[p as usize]).ok_or("No player")?;
             let (flying, actual) = (a.avatar.flight.airborne, a.avatar.height.to_f32());
             if flying != *airborne || (actual - altitude).abs() > *tolerance {
                 return Err(format!("Flight assertion failed: airborne={flying}, altitude={actual:.3}"));
@@ -448,9 +449,8 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
             if !applied {
                 return None;
             }
-            let s = world.resource::<Game>().settlement()?;
-            let player = s.player()?;
-            let a = &s.agents[player as usize];
+            let game = world.resource::<Game>();
+            let a = &game.settlement()?.agents[game.player()? as usize];
             if a.avatar.job.is_some() || a.pending_in > 0 || a.pending_out > 0 {
                 None
             } else {
@@ -470,8 +470,7 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
                 return None;
             }
             let game = world.resource::<Game>();
-            let s = game.settlement()?;
-            let a = &s.agents[s.player()? as usize];
+            let a = &game.settlement()?.agents[game.player()? as usize];
             if !a.route.is_empty() {
                 None
             } else if navigation::flat(game.to_view(a.position) - *goal).length() < 0.15 {
@@ -554,7 +553,9 @@ pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
         .iter(world)
         .count();
     let sim_tick = world.resource::<Game>().world().map(|w| w.tick());
-    let result = json!({"telemetry":telemetry,"settlement":settlement,"version":VERSION,"tick":hub.tick,"sim_tick":sim_tick,"scene":scene,"player":{"position":position.to_array(),"movement":movement,"cargo":cargo,"jetpack":jetpack},"terrain":terrain,"memory":memory,"style":style,"piles":piles,"totals":totals,"visible_mineral_units":visible_units,"airborne_units":airborne,"airborne":flying,"targets":targets,"obstacles":obstacles,"active_command":hub.active.as_ref().map(|a|&a.envelope.request)});
+    let network = world.resource::<Game>().network.is_some().then(|| world.resource::<Game>().status.clone());
+    let peers: Vec<_> = world.query_filtered::<&Transform, With<crate::peers::Peer>>().iter(world).map(|t| t.translation.to_array()).collect();
+    let result = json!({"telemetry":telemetry,"settlement":settlement,"version":VERSION,"tick":hub.tick,"sim_tick":sim_tick,"network":network,"peers":peers,"scene":scene,"player":{"position":position.to_array(),"movement":movement,"cargo":cargo,"jetpack":jetpack},"terrain":terrain,"memory":memory,"style":style,"piles":piles,"totals":totals,"visible_mineral_units":visible_units,"airborne_units":airborne,"airborne":flying,"targets":targets,"obstacles":obstacles,"active_command":hub.active.as_ref().map(|a|&a.envelope.request)});
     crate::telemetry::elapsed(world, "inspection_snapshot", started);
     world
         .resource_mut::<crate::telemetry::Telemetry>()

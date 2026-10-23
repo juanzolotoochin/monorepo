@@ -314,3 +314,33 @@ fn scenes_are_deterministic_across_thread_counts() {
     };
     assert_eq!(run(1), run(8));
 }
+
+/// A flat field with nothing on it, like the app's `field` scene.
+fn field() -> SceneSetup {
+    SceneSetup { extent: Fx::from_int(8), spawn: [Fx::ZERO, Fx::ZERO, fx(2.0)], ..SceneSetup::default() }
+}
+
+/// A player who joins gets an avatar of their own, drives only that one,
+/// and joining twice doesn't add a second.
+#[test]
+fn joining_players_get_their_own_avatar() {
+    let mut scene = Scene::new(field());
+    let guest = PlayerId(1);
+    let host_avatar = scene.agent();
+    assert_eq!(scene.s().avatar_of(PlayerId(0)), Some(host_avatar));
+    assert_eq!(scene.s().avatar_of(guest), None);
+    scene.sim.step(&[Command { player: guest, kind: CommandKind::Join }]);
+    scene.sim.step(&[Command { player: guest, kind: CommandKind::Join }]);
+    let mine = scene.s().avatar_of(guest).expect("the guest has an avatar");
+    assert_ne!(mine, host_avatar);
+    assert_eq!(scene.s().agents.iter().filter(|a| a.controlled).count(), 2);
+
+    let start = scene.s().agents[mine as usize].position;
+    let host_start = scene.avatar().position;
+    let walk = |agent| CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: v(1.0, 0.0), run: false } };
+    // The guest's command for the host's avatar is ignored.
+    scene.sim.step(&[Command { player: guest, kind: walk(mine) }, Command { player: guest, kind: walk(host_avatar) }]);
+    scene.wait(30);
+    assert!(scene.s().agents[mine as usize].position.x > start.x + Fx::ONE, "the guest walked");
+    assert_eq!(scene.avatar().position, host_start, "the host's avatar stayed put");
+}

@@ -17,6 +17,7 @@ rust_binary(
         "//game/app/assets:atlantis",
         "//game/app/assets:boulder_lab",
         "//game/app/assets:combat_arena",
+        "//game/app/assets:field",
         "//game/app/assets:forest_outpost",
         "//game/app/assets:jetpack_lab",
         "//game/app/assets:mining_deck",

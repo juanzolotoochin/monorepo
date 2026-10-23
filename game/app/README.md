@@ -416,6 +416,29 @@ bazel build --config=full_local //game/app:combat_arena_demo
 The demo produces an MP4 with audio, a WAV, a final state report, and a per-frame
 trace. Its assertions check hits, a kill, and actual knockback displacement.
 
+## Multiplayer (open field)
+
+One machine hosts and others join over UDP. Each player who joins gets an
+avatar of their own beside the spawn point and drives it with the usual
+controls. Other players show up as plain figures tinted by player.
+
+```sh
+# The host listens on a UDP port:
+bazel run --config=full_local //game/app:demo -- --host 7777
+# Others join by address or machine name (a Tailscale name works):
+bazel run --config=full_local //game/app:demo -- --join my-desktop:7777
+```
+
+Networked games start on the flat `field` scene (also on key **9** when
+playing alone). `--scene` picks another one; every player must pass the same
+scene. Scene keys are disabled while networked. The HUD's top right shows the
+connection. Leaving and rejoining gives a new avatar; the old one stays put.
+
+The host's world is the only real one: clients load it from the host and then
+run the same 30 Hz simulation on the same turns, so commands apply on every
+machine after the input delay (4 ticks). `//game/session:session_test` runs
+two players over localhost UDP and checks that both end with the same world.
+
 ## Performance telemetry
 
 **F3** toggles a compact performance overlay. Live inspection, script receipts,

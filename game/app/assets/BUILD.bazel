@@ -91,6 +91,13 @@ scene_assets(
     prefabs = [],
 )
 
+# A flat deck with nothing on it, for trying out multiplayer.
+scene_assets(
+    name = "field",
+    layout = "levels/field.ron",
+    prefabs = [],
+)
+
 boulder_prefab(
     name = "aether_stone",
     src = "prefabs/ore_small.ron",

@@ -1,0 +1,6 @@
+Scene(id: "field", features: [],
+    name: "OPEN FIELD / NETWORK TEST",
+    spawn: (0.0, 0.0, 2.0),
+    industrial: false,
+    instances: [],
+)

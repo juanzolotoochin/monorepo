@@ -68,6 +68,8 @@ pub struct AgentState {
     pub id: String,
     /// Player avatars: driven by commands, never by haul links.
     pub controlled: bool,
+    /// The player whose commands drive this avatar.
+    pub owner: Option<crate::PlayerId>,
     pub home: FxVec2,
     /// Meters per tick.
     pub speed: Fx,
@@ -130,6 +132,8 @@ impl AgentState {
         AgentState {
             id: def.id.clone(),
             controlled: def.controlled,
+            // A scenario's avatar belongs to the host.
+            owner: def.controlled.then_some(crate::PlayerId(0)),
             home: position,
             speed: def.speed.div_int(content::TICKS_PER_SECOND as i64),
             base_radius: def.radius,

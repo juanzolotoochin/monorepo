@@ -25,6 +25,9 @@ pub struct SceneLibrary {
     pub current: usize,
     pub initial: usize,
     pub requested: Option<usize>,
+    /// Networked games stay on their first scene: every peer builds the
+    /// scene's view, and only the host's world is real.
+    pub locked: bool,
 }
 impl SceneLibrary {
     pub fn new() -> Self {
@@ -41,6 +44,7 @@ impl SceneLibrary {
                 ScenePack::decode(atlantis::PACK_BYTES).expect("validated Atlantis asset pack"),
                 ScenePack::decode(forest_outpost::PACK_BYTES).expect("validated forest asset pack"),
                 ScenePack::decode(combat_arena::PACK_BYTES).expect("validated combat asset pack"),
+                ScenePack::decode(field::PACK_BYTES).expect("validated field asset pack"),
             ];
         let mut ids = std::collections::HashSet::new();
         for pack in &scenes {
@@ -51,6 +55,7 @@ impl SceneLibrary {
             current: usize::MAX,
             initial: 0,
             requested: None,
+            locked: false,
         }
     }
     pub fn index(&self, id: &str) -> Result<usize, String> {
@@ -134,6 +139,8 @@ pub fn switch_scene(
 ) {
     let requested = if let Some(index) = library.requested.take() {
         Some(index)
+    } else if library.locked && library.current != usize::MAX {
+        None
     } else if keys.just_pressed(KeyCode::Digit1) {
         Some(0)
     } else if keys.just_pressed(KeyCode::Digit2) {
@@ -142,6 +149,8 @@ pub fn switch_scene(
         Some(6)
     } else if keys.just_pressed(KeyCode::Digit8) {
         Some(7)
+    } else if keys.just_pressed(KeyCode::Digit9) {
+        Some(8)
     } else if keys.just_pressed(KeyCode::Digit6) {
         Some(5)
     } else if keys.just_pressed(KeyCode::Digit5) {
@@ -390,6 +399,7 @@ mod tests {
         let lab = &library.scenes[1];
         assert_eq!(library.index("mining-deck"), Ok(0));
         assert_eq!(library.index("combat-arena"), Ok(7));
+        assert_eq!(library.index("field"), Ok(8));
         assert!(library.index("missing").is_err());
         assert!(library.scenes[4].scene.features.contains(&SceneFeature::MemoryTrial));
         assert!(library.scenes[3].scene.features.contains(&SceneFeature::FlightHud));

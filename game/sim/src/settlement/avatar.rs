@@ -268,6 +268,55 @@ impl Settlement {
         self.agents.iter().position(|a| a.controlled).map(|i| i as super::AgentIx)
     }
 
+    /// The avatar `player` controls.
+    pub fn avatar_of(&self, player: crate::PlayerId) -> Option<AgentIx> {
+        self.agents.iter().position(|a| a.owner == Some(player)).map(|i| i as AgentIx)
+    }
+
+    /// Commands: gives a player who joined an avatar of their own, a copy
+    /// of the scene's first avatar beside the spawn point. Players who
+    /// already have one keep it.
+    pub fn join(&mut self, player: crate::PlayerId) {
+        if self.avatar_of(player).is_some() {
+            return;
+        }
+        let Some(template) = self.player().map(|i| self.agents[i as usize].clone()) else { return };
+        // Joiners stand in a row beside the spawn, so they don't overlap.
+        let slot = self.agents.iter().filter(|a| a.controlled).count() as i64;
+        let position = FxVec2::new(self.spawn.x + Fx::from_ratio(slot * 9, 10), self.spawn.y);
+        // Only the definition carries over; the state starts fresh.
+        self.agents.push(AgentState {
+            id: format!("player-{}", player.0),
+            owner: Some(player),
+            home: position,
+            position,
+            heading: Fx::PI,
+            travel_heading: Fx::ZERO,
+            travelled: Fx::ZERO,
+            phase: super::haulers::Phase::Idle,
+            route: Vec::new(),
+            cargo: vec![0; template.cargo.len()],
+            assignment: None,
+            equipped: false,
+            trailer: None,
+            transfer_at: 0,
+            retries: 0,
+            departure_dock: None,
+            traffic_replan_at: 0,
+            yielding: 0,
+            pending_in: 0,
+            pending_out: 0,
+            avatar: AvatarState { height: self.spawn_height, intent: Some(Intent::Stop), ..AvatarState::default() },
+            attack_ready: 0,
+            avoidance_steers: 0,
+            dock_wait_ticks: 0,
+            traffic_wait_ticks: 0,
+            loaded_travel: Fx::ZERO,
+            empty_travel: Fx::ZERO,
+            ..template
+        });
+    }
+
     /// Commands: holds the jetpack on or off.
     pub fn jetpack(&mut self, agent: usize, enabled: bool) {
         if let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) {

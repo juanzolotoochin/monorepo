@@ -43,6 +43,9 @@ pub struct Client<T: Transport> {
     /// Official turns received and not simulated yet.
     turns: BTreeMap<u64, Vec<sim::Command>>,
     next_seq: u64,
+    /// Inputs queued and, of those, simulated so far.
+    queued: u64,
+    applied: u64,
     unacked: VecDeque<Input>,
     reports: VecDeque<(u64, u64)>,
     history: HashLog,
@@ -74,6 +77,8 @@ impl<T: Transport> Client<T> {
             player: None,
             turns: BTreeMap::new(),
             next_seq: 1,
+            queued: 0,
+            applied: 0,
             unacked: VecDeque::new(),
             reports: VecDeque::new(),
             history: HashLog::default(),
@@ -146,9 +151,18 @@ impl<T: Transport> Client<T> {
             return;
         }
         let one_way = self.rtt.map_or(0, |rtt| (rtt / 2).as_nanos().div_ceil(TICK.as_nanos()) as u64);
+        // `host_tick` runs ahead of this client's world (the jitter buffer),
+        // so this tick says little about when the command applies here;
+        // `pending_inputs` does.
         let tick = self.host_tick + one_way + self.input_delay;
         self.unacked.push_back(Input { seq: self.next_seq, tick, kind });
         self.next_seq += 1;
+        self.queued += 1;
+    }
+
+    /// Commands this client queued that haven't been simulated yet.
+    pub fn pending_inputs(&self) -> u64 {
+        self.queued.saturating_sub(self.applied)
     }
 
     /// Handles packets, runs every tick that is due and available (calling
@@ -174,6 +188,7 @@ impl<T: Transport> Client<T> {
             for _ in 0..steps {
                 let tick = sim.world().tick();
                 let mut turn = self.turns.remove(&tick).expect("ready turn");
+                self.applied += turn.iter().filter(|c| Some(c.player) == self.player).count() as u64;
                 turn.extend(self.diverge.take());
                 let hash = sim.step(&turn);
                 self.history.push(tick, hash.total);
@@ -239,6 +254,8 @@ impl<T: Transport> Client<T> {
                 self.turns.retain(|&tick, _| tick >= save_tick);
                 self.unacked.clear();
                 self.next_seq = 1;
+                // Inputs not in the new save are lost.
+                (self.queued, self.applied) = (0, 0);
                 self.reports.clear();
                 let chunks = (save_len as usize).div_ceil(SAVE_CHUNK);
                 self.state = State::Loading { tick: save_tick, len: save_len as usize, chunks: vec![None; chunks] };
