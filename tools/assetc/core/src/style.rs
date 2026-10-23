@@ -9,6 +9,7 @@ pub struct StyleProfile {
     pub voxel_size: f32,
     pub actor_voxel_size: Option<f32>,
     pub weapon_name: String,
+    pub weapon_skins: Vec<WeaponSkin>,
     pub actor: Vec<ActorRecipe>,
     pub actor_scale: f32,
     pub skins: Vec<SkinRecipe>,
@@ -36,6 +37,7 @@ impl Default for StyleProfile {
             voxel_size: 0.3,
             actor_voxel_size: None,
             weapon_name: "MK. IV / INDUSTRIAL CLEAVER".into(),
+            weapon_skins: vec![],
             actor: vec![],
             actor_scale: 1.0,
             skins: vec![],
@@ -91,7 +93,7 @@ impl StyleProfile {
         {
             return Err("invalid style identity, density or palette size".into());
         }
-        if self.actor.len() > 4
+        if self.actor.len() > 8
             || self.weapon_name.trim().is_empty()
             || self.weapon_name.len() > 80
             || self
@@ -99,6 +101,21 @@ impl StyleProfile {
                 .is_some_and(|v| !v.is_finite() || !(0.05..=0.5).contains(&v))
         {
             return Err("invalid style actor density or weapon label".into());
+        }
+        if self.weapon_skins.len() > 8
+            || self
+                .weapon_skins
+                .iter()
+                .map(|w| w.weapon)
+                .collect::<BTreeSet<_>>()
+                .len()
+                != self.weapon_skins.len()
+            || self.weapon_skins.iter().any(|w| {
+                !self.skins.iter().any(|s| s.id == w.skin)
+                    || w.muzzle.iter().any(|v| !v.is_finite() || v.abs() > 4.0)
+            })
+        {
+            return Err("invalid weapon skin mapping".into());
         }
         let mut parts = BTreeSet::new();
         if self.actor.iter().any(|a| !parts.insert(a.part)) {
@@ -517,6 +534,17 @@ pub enum ActorPart {
     LeftLeg,
     RightLeg,
     Weapon,
+    Head,
+    WoundPlug,
+    Armor,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WeaponSkin {
+    pub weapon: gameplay_core::Weapon,
+    pub skin: String,
+    #[serde(default)]
+    pub muzzle: [f32; 3],
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -757,6 +785,7 @@ pub fn compile_skins(profile: &StyleProfile) -> Result<Vec<SkinMesh>> {
         }
         let mut p = profile.clone();
         p.skins.clear();
+        p.weapon_skins.clear();
         p.actor = if recipe.use_actor {
             profile.actor.clone()
         } else {

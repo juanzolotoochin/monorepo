@@ -175,6 +175,19 @@ pub struct Defender {
     pub period: f32,
     pub damage: u32,
     pub projectile_speed: f32,
+    #[serde(default = "default_muzzle_height")]
+    pub muzzle_height: f32,
+    #[serde(default)]
+    pub projectile: ProjectileKind,
+}
+fn default_muzzle_height() -> f32 {
+    1.6
+}
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ProjectileKind {
+    #[default]
+    Arrow,
+    Bolt,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -187,6 +200,8 @@ pub struct Wave {
     pub every: f32,
     pub speed: f32,
     pub hp: u32,
+    #[serde(default)]
+    pub armor: u32,
     pub damage: u32,
     pub count: u32,
 }
@@ -196,6 +211,8 @@ pub struct Scenario {
     #[serde(default = "default_extent")]
     pub extent: f32,
     pub id: String,
+    #[serde(default)]
+    pub weapons: Vec<crate::Weapon>,
     pub items: Vec<Item>,
     pub depots: Vec<Depot>,
     pub sources: Vec<Source>,
@@ -248,6 +265,8 @@ impl Scenario {
             || self.waves.len() > 8
             || self.sources.len() > 32
             || self.base_health == 0
+            || self.weapons.len() > 8
+            || self.weapons.iter().collect::<BTreeSet<_>>().len() != self.weapons.len()
         {
             return Err("scenario counts exceed supported limits".into());
         }
@@ -375,6 +394,7 @@ impl Scenario {
                 || !number(d.period, 0.1, 60.0)
                 || d.damage == 0
                 || !number(d.projectile_speed, 0.1, 40.0)
+                || !number(d.muzzle_height, 0.05, 4.0)
             {
                 return Err("invalid defender".into());
             }
@@ -387,6 +407,7 @@ impl Scenario {
                 || !number(w.every, 0.5, 3600.0)
                 || !number(w.speed, 0.1, 4.0)
                 || w.hp == 0
+                || w.armor > 8
                 || w.damage == 0
                 || w.count > 256
             {

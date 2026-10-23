@@ -35,6 +35,12 @@ pub struct Particle {
     pub bounce: bool,
 }
 #[derive(Component)]
+pub struct SeveredHead {
+    floor_height: f32,
+    original_rotation: Quat,
+    spin: f32,
+}
+#[derive(Component)]
 pub struct Flash {
     age: f32,
     intensity: f32,
@@ -206,12 +212,97 @@ pub fn blood(world: &mut World, position: Vec3, direction: Vec3, seed: u32) {
     }
 }
 
+pub fn severed_head(
+    world: &mut World,
+    template: &crate::rig::RigTemplate,
+    transform: Transform,
+    seed: u32,
+) {
+    let side = if seed & 1 == 0 { 1.0 } else { -1.0 };
+    if let Some(root) = template.spawn_part(world, voxel_assets::ActorPart::Head, transform) {
+        world.entity_mut(root).insert((
+            Particle {
+                velocity: Vec3::new(side * 2.4, 3.5, 1.2),
+                age: 0.,
+                life: 2.0,
+                size: transform.scale,
+                gravity: 12.,
+                bounce: true,
+            },
+            SeveredHead {
+                floor_height: transform.scale.y * 0.21,
+                original_rotation: transform.rotation,
+                spin: side,
+            },
+        ));
+    }
+}
+
+pub fn arc(world: &mut World, from: Vec3, to: Vec3, seed: u32) {
+    let assets = world.resource::<FxAssets>();
+    let cube = assets.cube.clone();
+    let glow = assets.spark[2].clone();
+    let delta = to - from;
+    let segments = (delta.length() * 9.0).ceil().max(3.0) as usize;
+    let mut seed = seed.wrapping_mul(747796405).wrapping_add(2891336453);
+    for i in 0..segments {
+        let f = (i as f32 + 0.5) / segments as f32;
+        let jitter = Vec3::new(
+            random(&mut seed) - 0.5,
+            random(&mut seed) - 0.5,
+            random(&mut seed) - 0.5,
+        ) * 0.12;
+        let size = Vec3::splat(0.045 + random(&mut seed) * 0.035);
+        world.spawn((
+            Mesh3d(cube.clone()),
+            MeshMaterial3d(glow.clone()),
+            Transform::from_translation(from + delta * f + jitter).with_scale(size),
+            Particle {
+                velocity: Vec3::ZERO,
+                age: 0.,
+                life: 0.13,
+                size,
+                gravity: 0.,
+                bounce: false,
+            },
+        ));
+    }
+}
+
+pub fn deflection(world: &mut World, position: Vec3, seed: u32) {
+    let assets = world.resource::<FxAssets>();
+    let cube = assets.cube.clone();
+    let glow = assets.spark[1].clone();
+    let mut seed = seed.wrapping_mul(747796405).wrapping_add(2891336453);
+    for _ in 0..14 {
+        let velocity = Vec3::new(
+            random(&mut seed) * 2. - 1.,
+            random(&mut seed) * 1.5,
+            random(&mut seed) * 2. - 1.,
+        ) * 2.5;
+        let size = Vec3::new(0.035, 0.035, 0.16);
+        world.spawn((
+            Mesh3d(cube.clone()),
+            MeshMaterial3d(glow.clone()),
+            Transform::from_translation(position).with_scale(size),
+            Particle {
+                velocity,
+                age: 0.,
+                life: 0.33,
+                size,
+                gravity: 7.,
+                bounce: true,
+            },
+        ));
+    }
+}
+
 pub fn update_effects(
     mut commands: Commands,
     time: Res<Time>,
     mut feedback: ResMut<Feedback>,
     mut particles: Query<
-        (Entity, &mut Transform, &mut Particle),
+        (Entity, &mut Transform, &mut Particle, Option<&SeveredHead>),
         (Without<ImpactTarget>, Without<Player>),
     >,
     mut flashes: Query<(Entity, &mut PointLight, &mut Flash)>,
@@ -222,7 +313,7 @@ pub fn update_effects(
     feedback.hit_stop = (feedback.hit_stop - dt).max(0.0);
     feedback.trauma = (feedback.trauma - dt * 1.5).max(0.0);
     feedback.flash = (feedback.flash - dt * 5.0).max(0.0);
-    for (entity, mut transform, mut particle) in &mut particles {
+    for (entity, mut transform, mut particle, head) in &mut particles {
         particle.age += dt;
         if particle.age >= particle.life {
             commands.entity(entity).despawn();
@@ -230,13 +321,18 @@ pub fn update_effects(
         }
         particle.velocity.y -= particle.gravity * dt;
         transform.translation += particle.velocity * dt;
-        if particle.bounce && transform.translation.y < 0.045 {
-            transform.translation.y = 0.045;
+        let floor_height = head.map_or(0.045, |head| head.floor_height);
+        if particle.bounce && transform.translation.y < floor_height {
+            transform.translation.y = floor_height;
             particle.velocity.y = particle.velocity.y.abs() * 0.32;
             particle.velocity.x *= 0.65;
             particle.velocity.z *= 0.65;
         }
-        if particle.velocity.length_squared() > 0.1 {
+        if let Some(head) = head {
+            transform.rotation = head.original_rotation
+                * Quat::from_rotation_z(head.spin * particle.age * 7.0)
+                * Quat::from_rotation_x(particle.age * 2.5);
+        } else if particle.velocity.length_squared() > 0.1 {
             transform.rotation = Quat::from_rotation_arc(Vec3::Z, particle.velocity.normalize());
         }
         let fade = (1.0 - particle.age / particle.life).powf(0.65);

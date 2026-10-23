@@ -37,6 +37,7 @@ fn scenario() -> Scenario {
     Scenario {
         extent: 8.,
         id: "test".into(),
+        weapons: vec![],
         items: ["wood", "iron", "arrow", "cart"]
             .iter()
             .map(|s| Item {
@@ -97,7 +98,8 @@ fn melee_staggers_a_wounded_ghoul_then_it_resumes_advancing() {
         first: 3600.0,
         every: 10.0,
         speed: 1.0,
-        hp: 2,
+        hp: 3,
+        armor: 0,
         damage: 1,
         count: 1,
     });
@@ -111,7 +113,10 @@ fn melee_staggers_a_wounded_ghoul_then_it_resumes_advancing() {
             position: [0.0, 1.1],
             heading: 0.0,
             travelled: 0.0,
-            hp: 2,
+            hp: 3,
+            armor: 0,
+            pierced: false,
+            shocked_until: 0,
             route: vec![[0.0, -6.0]],
             stagger_until: 0,
             knockback: [0.0, 0.0],
@@ -120,6 +125,13 @@ fn melee_staggers_a_wounded_ghoul_then_it_resumes_advancing() {
     assert_eq!(sim.strike("player").unwrap(), 1);
     assert_eq!(sim.threats[&999].hp, 1);
     assert_eq!(sim.metrics.melee_hits, 1);
+    for _ in 0..6 {
+        sim.advance(1. / 60.).unwrap();
+    }
+    assert!(
+        sim.threats[&999].heading.abs() < 0.01,
+        "recoiling ghoul must keep facing the attacker"
+    );
     run(&mut sim, 1, 60);
     let advanced = sim.threats[&999].position[1];
     assert!(sim.metrics.knockback_meters > 0.3);
@@ -263,6 +275,8 @@ fn processing_reserves_output_space_and_defense_cannot_fire_free_ammunition() {
         period: 0.3,
         damage: 1,
         projectile_speed: 12.0,
+        muzzle_height: 1.6,
+        projectile: ProjectileKind::Arrow,
     });
     config.waves.push(Wave {
         id: "ghouls".into(),
@@ -273,6 +287,7 @@ fn processing_reserves_output_space_and_defense_cannot_fire_free_ammunition() {
         every: 1.5,
         speed: 0.5,
         hp: 2,
+        armor: 0,
         damage: 1,
         count: 8,
     });
@@ -476,4 +491,174 @@ fn cart_reversal_uses_a_forward_arc_and_keeps_the_animal_out_of_the_trailer() {
         }
     }
     assert_eq!(body, [0., -6.]);
+}
+
+fn combat_test_sim() -> Simulation {
+    let mut config = scenario();
+    let mut player = agent("player");
+    player.controlled = true;
+    player.links.clear();
+    player.position = [0., 0.];
+    config.agents.push(player);
+    config.weapons = vec![Weapon::Sword, Weapon::Spear, Weapon::Bow, Weapon::ArcCoil];
+    config.waves.push(Wave {
+        id: "standard".into(),
+        position: [0., 6.],
+        target: [0., -6.],
+        skin: "ghoul".into(),
+        first: 3600.,
+        every: 10.,
+        speed: 0.5,
+        hp: 3,
+        armor: 0,
+        damage: 1,
+        count: 1,
+    });
+    let mut sim = Simulation::new(config, vec![]).unwrap();
+    sim.set_controlled_pose("player", [0., 0.], 0.).unwrap();
+    sim
+}
+fn combat_threat(id: u64, position: [f32; 2], hp: u32, armor: u32) -> Threat {
+    Threat {
+        id,
+        wave: 0,
+        position,
+        heading: 0.,
+        travelled: 0.,
+        hp,
+        armor,
+        pierced: false,
+        shocked_until: 0,
+        route: vec![[0., -6.]],
+        stagger_until: 0,
+        knockback: [0., 0.],
+    }
+}
+#[test]
+fn sword_critical_severs_a_head_but_armor_deflects_the_cut() {
+    let mut sim = combat_test_sim();
+    for hit in 1..=4 {
+        let id = 100 + hit;
+        sim.threats.insert(id, combat_threat(id, [0., 1.], 3, 0));
+        sim.attack_ready.clear();
+        assert_eq!(sim.attack("player", Weapon::Sword).unwrap(), 1);
+        let impact = sim
+            .events
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                Event::Hit { target, impact, .. } if *target == id => Some(*impact),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            impact,
+            if hit == 4 {
+                Impact::Decapitate
+            } else {
+                Impact::Sword
+            }
+        );
+        if hit == 4 {
+            assert!(!sim.threats.contains_key(&id));
+        }
+        sim.threats.clear();
+    }
+    assert_eq!(sim.metrics.decapitations, 1);
+    sim.threats.insert(200, combat_threat(200, [0., 1.], 5, 2));
+    sim.attack_ready.clear();
+    sim.attack("player", Weapon::Sword).unwrap();
+    assert_eq!(sim.threats[&200].hp, 5);
+    assert_eq!(sim.threats[&200].armor, 1);
+    assert_eq!(sim.metrics.deflections, 1);
+}
+#[test]
+fn bow_breaks_armor_spear_punctures_and_coil_chains() {
+    let mut sim = combat_test_sim();
+    sim.threats.insert(100, combat_threat(100, [0., 1.8], 5, 2));
+    sim.threats
+        .insert(101, combat_threat(101, [0.5, 2.0], 3, 0));
+    assert_eq!(sim.attack("player", Weapon::Bow).unwrap(), 1);
+    for _ in 0..5 {
+        sim.advance(1. / 60.).unwrap();
+    }
+    assert_eq!(sim.threats[&100].hp, 5);
+    assert_eq!(sim.threats[&100].armor, 1);
+    assert_eq!(sim.metrics.deflections, 1);
+    assert_eq!(sim.spent_projectiles.len(), 1);
+    sim.attack_ready.clear();
+    assert_eq!(sim.attack("player", Weapon::Spear).unwrap(), 2);
+    assert_eq!(sim.threats[&100].armor, 0);
+    assert_eq!(sim.threats[&100].hp, 4);
+    assert_eq!(sim.metrics.armor_breaks, 1);
+    sim.attack_ready.clear();
+    assert_eq!(sim.attack("player", Weapon::ArcCoil).unwrap(), 2);
+    assert_eq!(sim.metrics.arc_hits, 2);
+    assert!(sim.threats.values().all(|t| t.shocked_until > sim.tick));
+}
+#[test]
+fn ranged_attacks_follow_the_aimed_line_instead_of_seeking_a_threat() {
+    let mut sim = combat_test_sim();
+    sim.threats.insert(100, combat_threat(100, [0., 2.], 3, 0));
+    // A target inside the old broad aiming cone must not catch a shot to its side.
+    assert_eq!(
+        sim.attack_aim("player", Weapon::Bow, [0., 0.6, 0.25], [0.6, 2.])
+            .unwrap(),
+        1
+    );
+    for _ in 0..24 {
+        sim.advance(1. / 60.).unwrap();
+    }
+    assert_eq!(sim.threats[&100].hp, 3);
+    sim.attack_ready.clear();
+    assert_eq!(
+        sim.attack_aim("player", Weapon::ArcCoil, [0., 0.6, 0.25], [0.6, 2.])
+            .unwrap(),
+        0
+    );
+    assert_eq!(sim.threats[&100].hp, 3);
+    assert!(sim
+        .events
+        .iter()
+        .any(|e| matches!(e, Event::ArcFired { .. })));
+}
+#[test]
+fn ballista_impales_twice_then_leaves_a_living_pierced_ghoul() {
+    let mut sim = combat_test_sim();
+    for id in 100..103 {
+        sim.threats
+            .insert(id, combat_threat(id, [id as f32 - 101., 2.], 3, 0));
+        sim.projectiles.insert(
+            id,
+            Projectile {
+                id,
+                defender: "ballista".into(),
+                target: Some(id),
+                item: "arrow".into(),
+                from: [0., 0.],
+                to: [0., 2.],
+                launch_height: 1.6,
+                born: 0,
+                arrival: 1,
+                damage: 8,
+                kind: ProjectileKind::Bolt,
+            },
+        );
+    }
+    sim.advance(1. / 60.).unwrap();
+    assert_eq!(sim.metrics.bolt_impales, 2);
+    assert_eq!(sim.metrics.bolt_pierces, 1);
+    assert_eq!(sim.pinned.len(), 2);
+    assert_eq!(sim.threats.len(), 1);
+    assert!(sim.threats[&102].pierced);
+    assert_eq!(sim.threats[&102].hp, 2);
+    assert_eq!(sim.spent_projectiles.len(), 1);
+    for _ in 0..36 {
+        sim.advance(1. / 60.).unwrap();
+    }
+    assert!(sim.pinned.is_empty());
+    assert!(sim
+        .events
+        .iter()
+        .any(|e| matches!(e, Event::PinnedLanded { .. })));
 }

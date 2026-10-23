@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "always": [
+    {"path": "settlement.simulation.health", "min": 1}
+  ],
+  "ever": [
+    {"path": "settlement.simulation.pinned", "min_len": 1},
+    {"path": "settlement.simulation.threats.*.pierced", "contains": true}
+  ],
+  "final": [
+    {"path": "settlement.simulation.metrics.bow_hits", "min": 3},
+    {"path": "settlement.simulation.metrics.spear_hits", "min": 1},
+    {"path": "settlement.simulation.metrics.arc_hits", "min": 2},
+    {"path": "settlement.simulation.metrics.melee_hits", "min": 1},
+    {"path": "settlement.simulation.metrics.decapitations", "min": 1},
+    {"path": "settlement.simulation.metrics.bolt_impales", "min": 2},
+    {"path": "settlement.simulation.metrics.bolt_pierces", "min": 1},
+    {"path": "settlement.simulation.metrics.kills", "min": 6}
+  ]
+}

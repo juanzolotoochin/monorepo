@@ -99,6 +99,9 @@ pub enum Command {
     Strike {
         target: [f32; 2],
     },
+    EquipWeapon {
+        weapon: String,
+    },
     Wait {
         frames: u32,
     },

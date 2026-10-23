@@ -35,17 +35,22 @@ pub struct Attack {
     pub aim: Vec3,
     pub impact_angle: Option<f32>,
     pub whooshed: bool,
+    pub weapon: gameplay_core::Weapon,
 }
 impl Attack {
-    pub fn new(aim: Vec3) -> Self {
+    pub fn new(aim: Vec3, weapon: gameplay_core::Weapon) -> Self {
         Self {
             age: 0.0,
             aim: flat(aim).normalize_or(Vec3::Z),
             impact_angle: None,
             whooshed: false,
+            weapon,
         }
     }
     pub fn angle(&self) -> f32 {
+        if self.weapon == gameplay_core::Weapon::Spear {
+            return 0.05;
+        }
         if let Some(angle) = self.impact_angle {
             if self.age < 0.15 {
                 lerp(angle, angle - 0.9, ease_out(self.age / 0.15))
@@ -57,7 +62,12 @@ impl Attack {
                 )
             }
         } else {
-            swing_angle(self.age)
+            match self.weapon {
+                gameplay_core::Weapon::Sword => swing_angle(self.age),
+                gameplay_core::Weapon::Spear => -0.15 + 0.25 * smooth(self.age / 0.22),
+                gameplay_core::Weapon::Bow => -0.9 + 0.4 * smooth(self.age / 0.22),
+                gameplay_core::Weapon::ArcCoil => -0.5 + 0.8 * smooth(self.age / 0.22),
+            }
         }
     }
     pub fn finished(&self) -> bool {
@@ -72,6 +82,7 @@ impl Attack {
 
 #[derive(Resource, Default)]
 pub struct Controls {
+    pub weapon: gameplay_core::Weapon,
     pub route: Vec<Vec3>,
     pub velocity: Vec3,
     pub stride: f32,
@@ -85,7 +96,7 @@ pub struct Controls {
 impl Controls {
     pub fn strike(&mut self, aim: Vec3) {
         if self.attack.is_none() {
-            self.attack = Some(Attack::new(aim));
+            self.attack = Some(Attack::new(aim, self.weapon));
             self.route.clear();
         } else {
             // A short recovery buffer accepts the next deliberate click, not a held button.
@@ -123,6 +134,27 @@ pub fn swing_angle(age: f32) -> f32 {
     }
 }
 
+/// Pull the shaft in, drive the point forward over eleven frames, then recover.
+/// On contact recovery starts from full extension so the weapon never snaps home.
+pub fn spear_pose(age: f32, contacted: bool) -> (f32, f32) {
+    if contacted {
+        let f = smooth(age / 0.33);
+        return (1.05 * (1.0 - f), -0.14 + 0.22 * f);
+    }
+    if age < 0.12 {
+        let f = smooth(age / 0.12);
+        (-0.38 * f, 0.17 + 0.18 * f)
+    } else if age < 0.23 {
+        let f = ease_out((age - 0.12) / 0.11);
+        (-0.38 + 1.43 * f, 0.35 - 0.49 * f)
+    } else if age < 0.30 {
+        (1.05, -0.14)
+    } else {
+        let f = smooth((age - 0.30) / 0.28);
+        (1.05 * (1.0 - f), -0.14 + 0.31 * f)
+    }
+}
+
 pub fn cursor_ground(
     camera: &Camera,
     transform: &GlobalTransform,
@@ -147,6 +179,18 @@ pub fn mouse_commands(
     flight: Res<crate::jetpack::Flight>,
 ) {
     controls.repath -= time.delta_secs();
+    if let Some(scenario) = library.scenes[library.current].scene.scenario.as_ref() {
+        for (key, weapon) in [
+            (KeyCode::KeyZ, gameplay_core::Weapon::Sword),
+            (KeyCode::KeyX, gameplay_core::Weapon::Spear),
+            (KeyCode::KeyC, gameplay_core::Weapon::Bow),
+            (KeyCode::KeyV, gameplay_core::Weapon::ArcCoil),
+        ] {
+            if keys.just_pressed(key) && scenario.weapons.contains(&weapon) {
+                controls.weapon = weapon;
+            }
+        }
+    }
     let Some(point) = crate::jetpack::cursor_surface(camera.0, camera.1, &window, &library) else {
         return;
     };
@@ -406,7 +450,11 @@ pub fn combat(
     }
     let previous_age = attack.age;
     attack.age += dt;
-    if attack.impact_angle.is_none() && attack.age >= WINDUP && previous_age < ACTIVE_END {
+    if attack.weapon == gameplay_core::Weapon::Sword
+        && attack.impact_angle.is_none()
+        && attack.age >= WINDUP
+        && previous_age < ACTIVE_END
+    {
         if !attack.whooshed {
             sound.play(Cue::Swing);
             attack.whooshed = true;
@@ -550,7 +598,12 @@ pub fn animate_character(
                 transform.translation.y += breathe + controls.stride.sin().abs() * 0.035 * speed;
                 transform.rotation = Quat::from_rotation_x(0.06 * speed);
                 if let Some(attack) = controls.attack {
-                    let twist = if attack.impact_angle.is_some() {
+                    let twist = if attack.weapon == gameplay_core::Weapon::Spear {
+                        let (extension, _) = spear_pose(attack.age, attack.impact_angle.is_some());
+                        transform.rotation *= Quat::from_rotation_x(-0.14 * extension.max(0.0));
+                        transform.translation.z += extension.max(0.0) * 0.16;
+                        -0.10 * extension
+                    } else if attack.impact_angle.is_some() {
                         -0.18 * (1.0 - smooth(attack.age / REBOUND_END))
                     } else {
                         (attack.angle() - REST_ANGLE) * 0.12
@@ -586,6 +639,15 @@ pub fn animate_character(
                     }
                 });
                 transform.rotation = Quat::from_rotation_y(angle) * Quat::from_rotation_x(tilt);
+                if let Some(attack) = controls.attack {
+                    if attack.weapon == gameplay_core::Weapon::Spear {
+                        let (extension, pitch) =
+                            spear_pose(attack.age, attack.impact_angle.is_some());
+                        transform.translation.z += extension;
+                        transform.translation.y -= extension.max(0.0) * 0.04;
+                        transform.rotation = Quat::from_rotation_x(pitch);
+                    }
+                }
                 transform.translation.y += breathe;
             }
         }
@@ -854,13 +916,22 @@ mod tests {
         assert!((swing_angle(WINDUP) + 1.7).abs() < 1e-5);
         assert!((swing_angle(ACTIVE_END) - 1.4).abs() < 1e-5);
         assert!((swing_angle(ATTACK_END) - REST_ANGLE).abs() < 1e-5);
-        let mut attack = Attack::new(Vec3::Z);
+        let mut attack = Attack::new(Vec3::Z, gameplay_core::Weapon::Sword);
         attack.impact_angle = Some(0.0);
         attack.age = 0.10;
         assert!(attack.angle() < -0.5);
         attack.age = REBOUND_END;
         assert!(attack.finished());
         assert!((attack.angle() - REST_ANGLE).abs() < 1e-5);
+    }
+    #[test]
+    fn spear_draws_back_accelerates_forward_and_recovers_from_contact() {
+        assert!(spear_pose(0.10, false).0 < -0.2);
+        assert!(spear_pose(0.20, false).0 > 0.5);
+        assert!((spear_pose(0.24, false).0 - 1.05).abs() < 0.01);
+        assert!((spear_pose(0.0, true).0 - 1.05).abs() < 0.01);
+        assert!(spear_pose(0.25, true).0 < 0.3);
+        assert!(spear_pose(0.58, false).0.abs() < 0.01);
     }
     #[test]
     fn movement_slides_without_tunneling_and_stops_smoothly() {

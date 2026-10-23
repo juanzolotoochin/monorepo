@@ -395,7 +395,7 @@ impl ScenePack {
             if !skin.scale.is_finite()
                 || !(0.02..=4.).contains(&skin.scale)
                 || skin.parts.is_empty()
-                || skin.parts.len() > 4
+                || skin.parts.len() > 8
                 || skin
                     .parts
                     .iter()
