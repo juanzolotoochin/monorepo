@@ -386,3 +386,54 @@ fn atlantis_is_navigable_reactive_and_inspectable_without_runtime_asset_generati
     assert!(state["player"]["movement"]["impacts"].as_u64().unwrap() > 0);
     assert_eq!(state["targets"].as_array().unwrap().len(), 2);
 }
+
+#[test]
+fn player_can_divert_real_supply_chain_stock_while_workers_continue() {
+    let report = run(vec![
+        Command::Scene {
+            scene: "forest-outpost".into(),
+        },
+        Command::SettlementLink {
+            id: "mill_iron".into(),
+            enabled: false,
+        },
+        Command::SettlementTransfer {
+            depot: "ore".into(),
+            item: "iron".into(),
+            units: 4,
+            deposit: false,
+        },
+        Command::Inspect,
+        Command::SettlementTransfer {
+            depot: "mill_input".into(),
+            item: "iron".into(),
+            units: 4,
+            deposit: true,
+        },
+        Command::Inspect,
+        Command::Wait { frames: 60 },
+    ]);
+    assert_eq!(report["status"], "passed", "{report}");
+    let receipts = report["receipts"].as_array().unwrap();
+    assert_eq!(
+        receipts[3]["state"]["settlement"]["simulation"]["agents"]["player"]["cargo"]["items"]
+            ["iron"],
+        4
+    );
+    let settlement = &report["state"]["settlement"];
+    assert_eq!(
+        settlement["simulation"]["agents"]["player"]["cargo"]["items"],
+        json!({})
+    );
+    assert!(
+        settlement["simulation"]["metrics"]["delivered"]
+            .as_u64()
+            .unwrap()
+            >= 4
+    );
+    assert!(settlement["balances"]
+        .as_object()
+        .unwrap()
+        .values()
+        .all(|b| b["conserved"] == true));
+}

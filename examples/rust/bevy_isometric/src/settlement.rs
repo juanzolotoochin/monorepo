@@ -10,6 +10,8 @@ pub struct Settlement {
     views: BTreeMap<String, (String, Rig)>,
     labels: BTreeMap<String, Entity>,
     hud: Option<Entity>,
+    blockers: Vec<Entity>,
+    pub notice: String,
 }
 #[derive(Component)]
 pub struct Caption(Vec3);
@@ -50,6 +52,10 @@ pub fn setup(world: &mut World) {
     if let Some(e) = state.hud.take() {
         world.despawn(e);
     }
+    for e in state.blockers.drain(..) {
+        world.despawn(e);
+    }
+    state.notice = "LMB stock: take 4 / Ctrl+LMB: deposit cargo / E: toggle nearby machine".into();
     state.current = Some(index);
     let scenario = world.resource::<SceneLibrary>().scenes[index]
         .scene
@@ -65,6 +71,29 @@ pub fn setup(world: &mut World) {
         .collect();
     state.simulation = scenario.map(|s| Simulation::new(s, obstacles).expect("validated scenario"));
     if let Some(sim) = &state.simulation {
+        for (p, r) in sim
+            .config()
+            .producers
+            .iter()
+            .map(|p| (p.position, p.radius))
+            .chain(
+                sim.config()
+                    .defenders
+                    .iter()
+                    .map(|p| (p.position, p.radius)),
+            )
+        {
+            if r > 0. {
+                state.blockers.push(
+                    world
+                        .spawn(crate::gameplay::Obstacle(crate::navigation::Disc {
+                            center: Vec3::new(p[0], 0., p[1]),
+                            radius: r,
+                        }))
+                        .id(),
+                );
+            }
+        }
         for d in &sim.config().depots {
             let e = world
                 .spawn((
@@ -95,7 +124,7 @@ pub fn setup(world: &mut World) {
                     Node {
                         position_type: PositionType::Absolute,
                         left: px(36),
-                        bottom: px(50),
+                        top: px(146),
                         ..default()
                     },
                 ))
@@ -166,7 +195,39 @@ pub fn tick(world: &mut World) {
     {
         sim.paused = !sim.paused;
     }
-    sim.advance(dt).expect("bounded frame duration");
+    let player = world
+        .query_filtered::<&Transform, With<crate::gameplay::Player>>()
+        .single(world)
+        .unwrap();
+    let pos = player.translation;
+    let heading = player.rotation.to_euler(EulerRot::YXZ).0;
+    let controlled: Vec<_> = sim
+        .config()
+        .agents
+        .iter()
+        .filter(|a| a.controlled)
+        .map(|a| a.id.clone())
+        .collect();
+    for id in controlled {
+        sim.set_controlled_pose(&id, [pos.x, pos.z], heading)
+            .unwrap();
+    }
+    sim.advance(dt.min(0.25)).expect("bounded frame duration");
+    if world
+        .resource::<crate::gameplay::Controls>()
+        .attack
+        .is_some_and(|a| a.age >= crate::gameplay::WINDUP && a.age < crate::gameplay::ACTIVE_END)
+    {
+        if let Some(id) = sim
+            .config()
+            .agents
+            .iter()
+            .find(|a| a.controlled)
+            .map(|a| a.id.clone())
+        {
+            sim.strike(&id).unwrap();
+        }
+    }
     for event in &sim.events {
         use gameplay_core::Event;
         let cue = match event {
@@ -187,7 +248,9 @@ pub fn tick(world: &mut World) {
         let mut view = View::new(&config.skin, a.position);
         view.heading = a.heading;
         view.travel = a.travelled;
-        desired.insert(format!("agent/{}", a.id), view);
+        if !config.controlled {
+            desired.insert(format!("agent/{}", a.id), view);
+        }
         inventory(
             &mut desired,
             sim,
@@ -279,7 +342,19 @@ pub fn tick(world: &mut World) {
         );
     }
     if let Some(e) = state.hud {
-        world.get_mut::<Text>(e).unwrap().0=format!("LUMBER + IRON → ARROWS → DEFENSE    |    LUMBER + IRON → CART → OX\n{} delivered   ·   {} crafted   ·   {} shots / {} ghouls stopped   ·   base {}    [P] pause",sim.metrics.delivered,sim.metrics.cycles,sim.metrics.shots,sim.metrics.kills,sim.health);
+        let cargo = sim
+            .agents
+            .get("player")
+            .map(|a| {
+                a.cargo
+                    .items
+                    .iter()
+                    .map(|(i, n)| format!("{n} {i}"))
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            })
+            .unwrap_or_default();
+        world.get_mut::<Text>(e).unwrap().0=format!("LUMBER + IRON > ARROWS > DEFENSE | LUMBER + IRON > CART > OX\n{} delivered / {} crafted / {} shots / {} kills / base {} [P] pause\nPACK {}/8  {}\n{}",sim.metrics.delivered,sim.metrics.cycles,sim.metrics.shots,sim.metrics.kills,sim.health,sim.agents.get("player").map_or(0,|a|a.cargo.total()),cargo,state.notice);
     }
     let pack = &world.resource::<SceneLibrary>().scenes[world.resource::<SceneLibrary>().current];
     let profile = pack.scene.style.clone().unwrap_or_default();
@@ -371,5 +446,177 @@ mod tests {
         assert_eq!(sim.health, 20);
         assert_eq!(sim.agents["bramble"].cargo.capacity, 9);
         assert!(sim.balances().values().all(|b| b.conserved));
+    }
+}
+
+/// Queue a precise shared-model transfer and walk to a reachable side of its dock.
+pub fn player_transfer(
+    world: &mut World,
+    depot: &str,
+    item: &str,
+    units: u32,
+    deposit: bool,
+) -> Result<u32, String> {
+    let start = world
+        .query_filtered::<&Transform, With<crate::gameplay::Player>>()
+        .single(world)
+        .unwrap()
+        .translation;
+    let state = world.resource::<Settlement>();
+    let sim = state.simulation.as_ref().ok_or("No settlement loaded")?;
+    let actor = sim
+        .config()
+        .agents
+        .iter()
+        .find(|a| a.controlled)
+        .ok_or("No controlled actor")?
+        .id
+        .clone();
+    let dock = sim
+        .config()
+        .depots
+        .iter()
+        .find(|d| d.id == depot)
+        .ok_or("Unknown depot")?
+        .position;
+    let goal = Vec3::new(dock[0], 0., dock[1]);
+    let obstacles: Vec<_> = world
+        .query::<&crate::gameplay::Obstacle>()
+        .iter(world)
+        .map(|o| o.0)
+        .collect();
+    let route = crate::navigation::path(start, goal, &obstacles);
+    if route.is_empty() {
+        return Err("Dock is unreachable".into());
+    }
+    let mut state = world.resource_mut::<Settlement>();
+    let sim = state.simulation.as_mut().unwrap();
+    let before = sim.agents[&actor].cargo.total();
+    sim.transfer(&actor, depot, item, units, deposit)?;
+    let expected = if deposit {
+        before - units
+    } else {
+        before + units
+    };
+    state.notice = format!(
+        "{} {units} {item} {} {depot}",
+        if deposit { "Delivering" } else { "Collecting" },
+        if deposit { "to" } else { "from" }
+    );
+    world.resource_mut::<crate::gameplay::Controls>().route = route;
+    Ok(expected)
+}
+pub fn input(world: &mut World) {
+    if world.resource::<Settlement>().simulation.is_none() {
+        return;
+    }
+    let keys = world.resource::<ButtonInput<KeyCode>>();
+    let toggle = keys.just_pressed(KeyCode::KeyE);
+    let deposit = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+    let manual = world
+        .resource::<ButtonInput<MouseButton>>()
+        .pressed(MouseButton::Right)
+        || [KeyCode::KeyW, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD]
+            .iter()
+            .any(|k| keys.pressed(*k));
+    if manual {
+        let mut state = world.resource_mut::<Settlement>();
+        let sim = state.simulation.as_mut().unwrap();
+        if let Some(id) = sim
+            .config()
+            .agents
+            .iter()
+            .find(|a| a.controlled)
+            .map(|a| a.id.clone())
+        {
+            if sim.manual_jobs.contains_key(&id) {
+                sim.cancel_transfer(&id).unwrap();
+                state.notice = "Transfer canceled; airborne items still arrive.".into();
+            }
+        }
+    }
+    if toggle {
+        let p = world
+            .query_filtered::<&Transform, With<crate::gameplay::Player>>()
+            .single(world)
+            .unwrap()
+            .translation;
+        let mut state = world.resource_mut::<Settlement>();
+        let sim = state.simulation.as_mut().unwrap();
+        let nearest = sim
+            .config()
+            .producers
+            .iter()
+            .filter(|m| Vec2::new(m.position[0] - p.x, m.position[1] - p.z).length() < 2.5)
+            .min_by(|a, b| {
+                Vec2::new(a.position[0] - p.x, a.position[1] - p.z)
+                    .length_squared()
+                    .total_cmp(
+                        &Vec2::new(b.position[0] - p.x, b.position[1] - p.z).length_squared(),
+                    )
+            })
+            .map(|m| m.id.clone());
+        if let Some(id) = nearest {
+            let enabled = !sim.producers[&id].enabled;
+            sim.set_machine(&id, enabled).unwrap();
+            state.notice = format!("{id} {}", if enabled { "enabled" } else { "paused" });
+        }
+    }
+    if shift
+        || !world
+            .resource::<ButtonInput<MouseButton>>()
+            .just_pressed(MouseButton::Left)
+    {
+        return;
+    }
+    let mut windows = world.query::<&Window>();
+    let mut cameras = world.query_filtered::<(&Camera, &GlobalTransform), With<Camera3d>>();
+    let Some(window) = windows.iter(world).next() else {
+        return;
+    };
+    let Some((camera, transform)) = cameras.iter(world).next() else {
+        return;
+    };
+    let Some(p) = crate::gameplay::cursor_ground(camera, transform, window) else {
+        return;
+    };
+    let state = world.resource::<Settlement>();
+    let sim = state.simulation.as_ref().unwrap();
+    let Some(actor) = sim.config().agents.iter().find(|a| a.controlled) else {
+        return;
+    };
+    let Some(depot) = sim
+        .config()
+        .depots
+        .iter()
+        .filter(|d| Vec2::new(d.position[0] - p.x, d.position[1] - p.z).length() < 0.9)
+        .min_by(|a, b| {
+            Vec2::new(a.position[0] - p.x, a.position[1] - p.z)
+                .length_squared()
+                .total_cmp(&Vec2::new(b.position[0] - p.x, b.position[1] - p.z).length_squared())
+        })
+    else {
+        return;
+    };
+    let stock = if deposit {
+        &sim.agents[&actor.id].cargo
+    } else {
+        &sim.depots[&depot.id]
+    };
+    let Some(item) = stock
+        .items
+        .keys()
+        .find(|i| sim.transfer_limit(&actor.id, &depot.id, i, deposit) > 0)
+        .cloned()
+    else {
+        return;
+    };
+    let units = sim
+        .transfer_limit(&actor.id, &depot.id, &item, deposit)
+        .min(if deposit { 64 } else { 4 });
+    let depot = depot.id.clone();
+    if let Err(e) = player_transfer(world, &depot, &item, units, deposit) {
+        world.resource_mut::<Settlement>().notice = e;
     }
 }

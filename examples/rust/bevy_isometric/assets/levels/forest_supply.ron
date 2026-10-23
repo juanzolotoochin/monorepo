@@ -53,22 +53,25 @@
 ], transfer_seconds: 0.45, cargo_anchor: (0.0, 0.8, -0.22), equipment: None),
 (id: "bramble", label: "BRAMBLE", skin: "ox", position: (-4.0, 0.0), speed: 1.1, radius: 0.28, capacity: 3, links: [
 "mill_lumber"
-], transfer_seconds: 0.45, cargo_anchor: (0.0, 1.1, -0.25), equipment: Some((depot: "cart_yard", item: "cart", skin: "cart", capacity: 9, speed_factor: 0.85, offset: (0.0, 0.0, -1.1), cargo_anchor: (0.0, 0.67, 0.0))))
+], transfer_seconds: 0.45, cargo_anchor: (0.0, 1.1, -0.25), equipment: Some((depot: "cart_yard", item: "cart", skin: "cart", capacity: 9, speed_factor: 0.85, offset: (0.0, 0.0, -1.1), cargo_anchor: (0.0, 0.67, 0.0)))),
+(id: "player", label: "YOU", skin: "worker", position: (1.0, -1.0), speed: 3.8, radius: 0.18, capacity: 8, links: [
+
+], transfer_seconds: 0.4, cargo_anchor: (0.0, 0.7, -0.2), equipment: None, controlled: true)
 ], producers: [
 (id: "sawmill", label: "FLETCHING MILL", position: (-1.8, -3.0), skin: "mill", input: "mill_input", output: "mill_output", ingredients: [
 (item: "lumber", units: 1),
 (item: "iron", units: 1)
 ], products: [
 (item: "arrow", units: 4)
-], seconds: 4.0, max_cycles: None),
+], seconds: 4.0, max_cycles: None, radius: 1.35),
 (id: "cartworks", label: "CARTWORKS", position: (-1.4, 2.8), skin: "factory", input: "cart_input", output: "cart_yard", ingredients: [
 (item: "lumber", units: 2),
 (item: "iron", units: 1)
 ], products: [
 (item: "cart", units: 1)
-], seconds: 8.0, max_cycles: Some(1))
+], seconds: 8.0, max_cycles: Some(1), radius: 1.1)
 ], defenders: [
-(id: "watchtower", position: (4.8, 2.0), skin: "turret", depot: "turret_ammo", ammo: "arrow", range: 4.8, period: 1.0, damage: 1, projectile_speed: 8.0)
+(id: "watchtower", position: (4.8, 2.0), skin: "turret", depot: "turret_ammo", ammo: "arrow", range: 4.8, period: 1.0, damage: 1, projectile_speed: 8.0, radius: 0.5)
 ], waves: [
 (id: "ghouls", position: (7.4, 5.5), target: (0.0, 0.5), skin: "ghoul", first: 12.0, every: 6.0, speed: 0.55, hp: 2, damage: 1, count: 20)
 ], base_health: 20)

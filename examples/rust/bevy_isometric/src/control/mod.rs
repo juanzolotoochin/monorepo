@@ -88,6 +88,7 @@ pub fn interactive(options: Res<Options>) -> bool {
 
 enum Pending {
     Instant,
+    SettlementTransfer { scene: usize, expected: u32 },
     Walk(Vec3),
     Haul { expected_cargo: u32, serial: u64 },
     Scene(usize),
@@ -212,6 +213,23 @@ fn queue_haul(
 fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, String> {
     match command {
         Command::Inspect => Ok(Pending::Instant),
+        Command::SettlementTransfer {
+            depot,
+            item,
+            units,
+            deposit,
+        } => {
+            let expected =
+                crate::settlement::player_transfer(world, depot, item, *units, *deposit)?;
+            Ok(Pending::SettlementTransfer {
+                scene: world.resource::<SceneLibrary>().current,
+                expected,
+            })
+        }
+        Command::SettlementCancel => {
+            crate::settlement::model(world)?.cancel_transfer("player")?;
+            Ok(Pending::Instant)
+        }
         Command::SettlementPause { paused } => {
             crate::settlement::model(world)?.paused = *paused;
             Ok(Pending::Instant)
@@ -472,6 +490,27 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
 fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), String>> {
     match pending {
         Pending::Instant => Some(Ok(())),
+        Pending::SettlementTransfer { scene, expected } => {
+            if world.resource::<SceneLibrary>().current != *scene {
+                return Some(Err("Scene changed during transfer".into()));
+            }
+            let state = world.resource::<crate::settlement::Settlement>();
+            let sim = state.simulation.as_ref()?;
+            if sim.manual_jobs.contains_key("player")
+                || sim.transfers.values().any(|t| {
+                    matches!(&t.from,gameplay_core::Endpoint::Cargo(id) if id=="player")
+                        || matches!(&t.to,gameplay_core::Endpoint::Cargo(id) if id=="player")
+                })
+            {
+                None
+            } else {
+                Some(if sim.agents["player"].cargo.total() == *expected {
+                    Ok(())
+                } else {
+                    Err("Transfer canceled before exact quantity completed".into())
+                })
+            }
+        }
         Pending::Failed(e) => Some(Err(e.clone())),
         Pending::Wait(until) => (tick >= *until).then_some(Ok(())),
         Pending::Scene(index) => {

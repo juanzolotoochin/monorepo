@@ -1,7 +1,12 @@
+mod combat;
+mod interaction;
+mod production;
+mod workers;
 use crate::{
     navigation::{self, Disc, Point},
     *,
 };
+pub use interaction::ManualJob;
 use serde::Serialize;
 use std::collections::BTreeMap;
 pub const HZ: u64 = 60;
@@ -209,12 +214,34 @@ pub struct Simulation {
     pub projectiles: BTreeMap<u64, Projectile>,
     pub accounts: BTreeMap<String, Accounting>,
     pub metrics: Metrics,
+    pub manual_jobs: BTreeMap<String, ManualJob>,
+    pub attack_ready: BTreeMap<String, u64>,
     #[serde(skip)]
     pub events: Vec<Event>,
 }
 impl Simulation {
-    pub fn new(config: Scenario, obstacles: Vec<Disc>) -> Result<Self> {
+    pub fn new(config: Scenario, mut obstacles: Vec<Disc>) -> Result<Self> {
         config.validate()?;
+        obstacles.extend(
+            config
+                .producers
+                .iter()
+                .filter(|p| p.radius > 0.)
+                .map(|p| Disc {
+                    center: p.position,
+                    radius: p.radius,
+                }),
+        );
+        obstacles.extend(
+            config
+                .defenders
+                .iter()
+                .filter(|p| p.radius > 0.)
+                .map(|p| Disc {
+                    center: p.position,
+                    radius: p.radius,
+                }),
+        );
         let mut depots = BTreeMap::new();
         let mut accounts: BTreeMap<String, Accounting> = config
             .items
@@ -303,6 +330,8 @@ impl Simulation {
             projectiles: BTreeMap::new(),
             accounts,
             metrics: Metrics::default(),
+            manual_jobs: BTreeMap::new(),
+            attack_ready: BTreeMap::new(),
             events: vec![],
         };
         for a in &s.config.agents {
@@ -388,29 +417,37 @@ impl Simulation {
             .position
     }
     fn outgoing(&self, depot: &str, item: &str) -> u32 {
-        self.agents
+        let manual: u32 = self
+            .manual_jobs
             .values()
-            .map(|a| {
-                let haul = a
-                    .assignment
-                    .as_ref()
-                    .filter(|j| {
-                        let l = &self.config.links[j.link];
-                        l.from == depot && l.item == item
-                    })
-                    .map_or(0, |j| j.units - j.loaded);
-                let equip = self
-                    .config
-                    .agents
-                    .iter()
-                    .find(|d| d.id == a.id)
-                    .and_then(|d| d.equipment.as_ref())
-                    .is_some_and(|e| {
-                        e.depot == depot && e.item == item && a.phase == Phase::ToEquip
-                    }) as u32;
-                haul + equip
-            })
-            .sum()
+            .filter(|j| !j.deposit && j.depot == depot && j.item == item)
+            .map(|j| j.remaining)
+            .sum();
+        manual
+            + self
+                .agents
+                .values()
+                .map(|a| {
+                    let haul = a
+                        .assignment
+                        .as_ref()
+                        .filter(|j| {
+                            let l = &self.config.links[j.link];
+                            l.from == depot && l.item == item
+                        })
+                        .map_or(0, |j| j.units - j.loaded);
+                    let equip = self
+                        .config
+                        .agents
+                        .iter()
+                        .find(|d| d.id == a.id)
+                        .and_then(|d| d.equipment.as_ref())
+                        .is_some_and(|e| {
+                            e.depot == depot && e.item == item && a.phase == Phase::ToEquip
+                        }) as u32;
+                    haul + equip
+                })
+                .sum::<u32>()
     }
     fn incoming(&self, depot: &str, item: Option<&str>) -> u32 {
         let hauling: u32 = self
@@ -439,7 +476,13 @@ impl Simulation {
             .filter(|s| item.is_none_or(|i| i == s.item))
             .map(|s| s.units)
             .sum();
-        hauling + flying + production
+        let manual: u32 = self
+            .manual_jobs
+            .values()
+            .filter(|j| j.deposit && j.depot == depot && item.is_none_or(|i| i == j.item))
+            .map(|j| j.remaining)
+            .sum();
+        hauling + flying + production + manual
     }
     fn free(&self, depot: &str) -> u32 {
         let d = &self.depots[depot];
@@ -456,6 +499,7 @@ impl Simulation {
         self.arrivals();
         self.sources();
         self.production();
+        self.manual_transfers();
         self.workers();
         self.combat();
     }
@@ -481,453 +525,6 @@ impl Simulation {
                 Endpoint::Cargo(a) => self.agents.get_mut(a).unwrap().cargo.add(&t.item, 1),
             }
             self.events.push(Event::TransferArrived(id));
-        }
-    }
-    fn sources(&mut self) {
-        for i in 0..self.config.sources.len() {
-            let s = self.config.sources[i].clone();
-            if self.tick % ticks(s.every) != 0 {
-                continue;
-            }
-            let units = s.units.min(self.free(&s.depot)).min(
-                s.max_units
-                    .map_or(u32::MAX, |m| m.saturating_sub(self.source_totals[i])),
-            );
-            if units > 0 {
-                self.depots.get_mut(&s.depot).unwrap().add(&s.item, units);
-                self.accounts.get_mut(&s.item).unwrap().generated += units as u64;
-                self.source_totals[i] += units;
-            }
-        }
-    }
-    fn production(&mut self) {
-        for p in self.config.producers.clone() {
-            let mut state = self.producers[&p.id].clone();
-            if state.remaining > 0 {
-                state.remaining -= 1;
-                if state.remaining == 0 {
-                    for s in &p.products {
-                        self.depots
-                            .get_mut(&p.output)
-                            .unwrap()
-                            .add(&s.item, s.units);
-                        self.accounts.get_mut(&s.item).unwrap().produced += s.units as u64;
-                    }
-                    state.cycles += 1;
-                    self.metrics.cycles += 1;
-                    self.events.push(Event::Produced {
-                        producer: p.id.clone(),
-                        products: p.products.clone(),
-                    });
-                }
-            } else if state.enabled && p.max_cycles.is_none_or(|limit| state.cycles < limit) {
-                let required: u32 = p.products.iter().map(|s| s.units).sum();
-                let freed = if p.input == p.output {
-                    p.ingredients.iter().map(|s| s.units).sum()
-                } else {
-                    0
-                };
-                if self.free(&p.output) + freed >= required
-                    && p.ingredients
-                        .iter()
-                        .all(|s| self.available(&p.input, &s.item) >= s.units)
-                {
-                    for s in &p.ingredients {
-                        self.depots
-                            .get_mut(&p.input)
-                            .unwrap()
-                            .take(&s.item, s.units);
-                        self.accounts.get_mut(&s.item).unwrap().consumed += s.units as u64;
-                    }
-                    state.remaining = ticks(p.seconds);
-                }
-            }
-            self.producers.insert(p.id, state);
-        }
-    }
-    fn pending_cargo(&self, agent: &str) -> bool {
-        self.transfers
-            .values()
-            .any(|t| matches!(&t.to,Endpoint::Cargo(id) if id==agent))
-    }
-    fn pending_drop(&self, agent: &str) -> bool {
-        self.transfers
-            .values()
-            .any(|t| matches!(&t.from,Endpoint::Cargo(id) if id==agent))
-    }
-    fn radius(def: &Agent, state: &AgentState) -> f32 {
-        if state.equipment.is_some() {
-            def.radius.max(0.35)
-        } else {
-            def.radius
-        }
-    }
-    fn plan(&self, from: Point, to: Point, radius: f32) -> Vec<Point> {
-        navigation::path(from, to, &self.obstacles, radius)
-    }
-    fn assign(&mut self, def: &Agent, a: &mut AgentState) {
-        if self.tick < a.retries {
-            return;
-        }
-        let radius = Self::radius(def, a);
-        if a.equipment.is_none() {
-            if let Some(e) = &def.equipment {
-                if self.available(&e.depot, &e.item) > 0 {
-                    let route = self.plan(a.position, self.depot_position(&e.depot), radius);
-                    if !route.is_empty() {
-                        a.phase = Phase::ToEquip;
-                        a.route = route;
-                        return;
-                    }
-                }
-            }
-        }
-        let mut links: Vec<_> = self
-            .config
-            .links
-            .iter()
-            .enumerate()
-            .filter(|(_, l)| def.links.contains(&l.id) && self.links[&l.id])
-            .map(|(i, l)| (i, l.clone()))
-            .collect();
-        links.sort_by_key(|(i, l)| (std::cmp::Reverse(l.priority), *i));
-        for (index, l) in links {
-            let demand = l.target.saturating_sub(
-                self.depots[&l.to].units(&l.item) + self.incoming(&l.to, Some(&l.item)),
-            );
-            let units = self
-                .available(&l.from, &l.item)
-                .min(self.free(&l.to))
-                .min(demand)
-                .min(a.cargo.capacity);
-            if units == 0 {
-                continue;
-            }
-            let from = self.depot_position(&l.from);
-            let to = self.depot_position(&l.to);
-            let route = self.plan(a.position, from, radius);
-            if route.is_empty() || self.plan(from, to, radius).is_empty() {
-                continue;
-            }
-            a.assignment = Some(Assignment {
-                link: index,
-                units,
-                loaded: 0,
-                unloaded: 0,
-            });
-            a.phase = Phase::ToPickup;
-            a.route = route;
-            return;
-        }
-        a.retries = self.tick + 15;
-    }
-    fn launch(&mut self, item: &str, from: Endpoint, to: Endpoint, start: Point, end: Point) {
-        let id = self.id();
-        self.transfers.insert(
-            id,
-            Transfer {
-                id,
-                item: item.into(),
-                from,
-                to,
-                start,
-                end,
-                born: self.tick,
-                arrival: self.tick + 21,
-            },
-        );
-        self.events.push(Event::TransferStarted(id));
-    }
-    fn workers(&mut self) {
-        let mut docks: BTreeMap<String, String> = BTreeMap::new();
-        for def in &self.config.agents {
-            let a = &self.agents[&def.id];
-            let dock = match a.phase {
-                Phase::Loading => a
-                    .assignment
-                    .as_ref()
-                    .map(|j| self.config.links[j.link].from.clone()),
-                Phase::Unloading => a
-                    .assignment
-                    .as_ref()
-                    .map(|j| self.config.links[j.link].to.clone()),
-                Phase::Attaching => def.equipment.as_ref().map(|e| e.depot.clone()),
-                _ => None,
-            };
-            if let Some(d) = dock {
-                docks.insert(d, a.id.clone());
-            }
-        }
-        for def in self.config.agents.clone() {
-            let mut a = self.agents.remove(&def.id).unwrap();
-            match a.phase {
-                Phase::Idle => self.assign(&def, &mut a),
-                Phase::ToPickup | Phase::ToDrop | Phase::ToEquip => {
-                    let dock = if a.phase == Phase::ToEquip {
-                        def.equipment.as_ref().unwrap().depot.clone()
-                    } else {
-                        let j = a.assignment.as_ref().unwrap();
-                        let l = &self.config.links[j.link];
-                        if a.phase == Phase::ToPickup {
-                            l.from.clone()
-                        } else {
-                            l.to.clone()
-                        }
-                    };
-                    let goal = self.depot_position(&dock);
-                    let busy = docks.get(&dock).is_some_and(|id| id != &a.id);
-                    if !(busy && navigation::distance(a.position, goal) < 0.75) {
-                        let speed = def.speed
-                            * if a.equipment.is_some() {
-                                def.equipment.as_ref().map_or(1.0, |e| e.speed_factor)
-                            } else {
-                                1.0
-                            };
-                        let before = a.position;
-                        move_route(&mut a.position, &mut a.route, speed / HZ as f32);
-                        let delta = [a.position[0] - before[0], a.position[1] - before[1]];
-                        let distance = navigation::distance(a.position, before);
-                        a.travelled += distance;
-                        if distance > 0.00001 {
-                            a.heading = delta[0].atan2(delta[1]);
-                        }
-                        if let Some(trailer) = &mut a.trailer {
-                            let hitch = def.equipment.as_ref().unwrap().offset[2].abs().max(0.6);
-                            let d = navigation::distance(trailer.position, a.position);
-                            if d > hitch {
-                                let previous = trailer.position;
-                                let direction = [
-                                    (a.position[0] - trailer.position[0]) / d,
-                                    (a.position[1] - trailer.position[1]) / d,
-                                ];
-                                trailer.position = [
-                                    a.position[0] - direction[0] * hitch,
-                                    a.position[1] - direction[1] * hitch,
-                                ];
-                                trailer.heading = direction[0].atan2(direction[1]);
-                                trailer.travelled +=
-                                    navigation::distance(previous, trailer.position);
-                            }
-                        }
-                        if a.route.is_empty() && !busy {
-                            docks.insert(dock.clone(), a.id.clone());
-                            a.transfer_at = self.tick;
-                            if a.phase == Phase::ToPickup {
-                                a.phase = Phase::Loading;
-                            } else if a.phase == Phase::ToDrop {
-                                a.phase = Phase::Unloading;
-                            } else {
-                                let e = def.equipment.as_ref().unwrap();
-                                self.depots.get_mut(&e.depot).unwrap().take(&e.item, 1);
-                                a.equipment = Some(e.item.clone());
-                                a.trailer = Some(Trailer {
-                                    position: [
-                                        a.position[0] - a.heading.sin() * e.offset[2].abs(),
-                                        a.position[1] - a.heading.cos() * e.offset[2].abs(),
-                                    ],
-                                    heading: a.heading,
-                                    travelled: 0.0,
-                                });
-                                a.phase = Phase::Attaching;
-                                a.transfer_at = self.tick + 60;
-                            }
-                        }
-                    }
-                }
-                Phase::Loading => {
-                    let j = a.assignment.as_mut().unwrap();
-                    let l = self.config.links[j.link].clone();
-                    if j.loaded < j.units && self.tick >= a.transfer_at {
-                        self.depots.get_mut(&l.from).unwrap().take(&l.item, 1);
-                        j.loaded += 1;
-                        self.metrics.picked += 1;
-                        self.launch(
-                            &l.item,
-                            Endpoint::Depot(l.from.clone()),
-                            Endpoint::Cargo(a.id.clone()),
-                            self.depot_position(&l.from),
-                            a.position,
-                        );
-                        a.transfer_at = self.tick + ticks(def.transfer_seconds);
-                    }
-                    if j.loaded == j.units && !self.pending_cargo(&a.id) {
-                        a.route = self.plan(
-                            a.position,
-                            self.depot_position(&l.to),
-                            Self::radius(&def, &a),
-                        );
-                        a.phase = Phase::ToDrop;
-                    }
-                }
-                Phase::Unloading => {
-                    let j = a.assignment.as_mut().unwrap();
-                    let l = self.config.links[j.link].clone();
-                    if j.unloaded < j.units && self.tick >= a.transfer_at {
-                        a.cargo.take(&l.item, 1);
-                        j.unloaded += 1;
-                        self.launch(
-                            &l.item,
-                            Endpoint::Cargo(a.id.clone()),
-                            Endpoint::Depot(l.to.clone()),
-                            a.position,
-                            self.depot_position(&l.to),
-                        );
-                        a.transfer_at = self.tick + ticks(def.transfer_seconds);
-                    }
-                    if j.unloaded == j.units && !self.pending_drop(&a.id) {
-                        a.assignment = None;
-                        a.phase = Phase::Idle;
-                    }
-                }
-                Phase::Attaching => {
-                    if self.tick >= a.transfer_at {
-                        a.cargo.capacity = def.equipment.as_ref().unwrap().capacity;
-                        a.phase = Phase::Idle;
-                        self.metrics.equipped += 1;
-                        self.events.push(Event::Equipped {
-                            agent: a.id.clone(),
-                            item: a.equipment.clone().unwrap(),
-                        });
-                    }
-                }
-            }
-            self.agents.insert(a.id.clone(), a);
-        }
-    }
-    fn combat(&mut self) {
-        let arrived: Vec<_> = self
-            .projectiles
-            .values()
-            .filter(|p| p.arrival <= self.tick)
-            .map(|p| p.id)
-            .collect();
-        for id in arrived {
-            let p = self.projectiles.remove(&id).unwrap();
-            if let Some(target) = self.threats.get_mut(&p.target) {
-                target.hp = target.hp.saturating_sub(p.damage);
-                let killed = target.hp == 0;
-                let position = target.position;
-                self.events.push(Event::Hit { position, killed });
-                if killed {
-                    self.threats.remove(&p.target);
-                    self.metrics.kills += 1;
-                }
-            }
-        }
-        for i in 0..self.config.waves.len() {
-            let w = &self.config.waves[i];
-            let first = ((w.first as f64 * HZ as f64).round() as u64).max(1);
-            if self.tick < first
-                || self.wave_totals[i] >= w.count
-                || (self.tick - first) % ticks(w.every) != 0
-            {
-                continue;
-            }
-            let w = w.clone();
-            let route = self.plan(w.position, w.target, 0.2);
-            if route.is_empty() {
-                continue;
-            }
-            let id = self.id();
-            self.threats.insert(
-                id,
-                Threat {
-                    id,
-                    wave: i,
-                    position: w.position,
-                    heading: 0.0,
-                    travelled: 0.0,
-                    hp: w.hp,
-                    route,
-                },
-            );
-            self.wave_totals[i] += 1;
-        }
-        let mut breached = vec![];
-        for threat in self.threats.values_mut() {
-            let w = &self.config.waves[threat.wave];
-            let previous = threat.position;
-            move_route(&mut threat.position, &mut threat.route, w.speed / HZ as f32);
-            let moved = navigation::distance(previous, threat.position);
-            threat.travelled += moved;
-            if moved > 0.0 {
-                threat.heading =
-                    (threat.position[0] - previous[0]).atan2(threat.position[1] - previous[1]);
-            }
-            if threat.route.is_empty() {
-                breached.push(threat.id);
-            }
-        }
-        for id in breached {
-            let t = self.threats.remove(&id).unwrap();
-            self.health = self.health.saturating_sub(self.config.waves[t.wave].damage);
-            self.metrics.breaches += 1;
-            self.events.push(Event::Breach {
-                position: t.position,
-            });
-        }
-        for projectile in self.projectiles.values_mut() {
-            if let Some(t) = self.threats.get(&projectile.target) {
-                projectile.to = t.position;
-            }
-        }
-        for d in self.config.defenders.clone() {
-            let state = &self.defenders[&d.id];
-            if !state.enabled
-                || state.ready_at > self.tick
-                || self.available(&d.depot, &d.ammo) == 0
-            {
-                continue;
-            }
-            let target = self
-                .threats
-                .values()
-                .filter(|t| {
-                    navigation::distance(d.position, t.position) <= d.range
-                        && self
-                            .projectiles
-                            .values()
-                            .filter(|p| p.target == t.id)
-                            .map(|p| p.damage)
-                            .sum::<u32>()
-                            < t.hp
-                })
-                .min_by(|a, b| {
-                    navigation::distance(d.position, a.position)
-                        .total_cmp(&navigation::distance(d.position, b.position))
-                        .then(a.id.cmp(&b.id))
-                })
-                .map(|t| (t.id, t.position));
-            if let Some((target, position)) = target {
-                self.depots.get_mut(&d.depot).unwrap().take(&d.ammo, 1);
-                self.accounts.get_mut(&d.ammo).unwrap().spent += 1;
-                self.metrics.shots += 1;
-                let id = self.id();
-                self.projectiles.insert(
-                    id,
-                    Projectile {
-                        id,
-                        defender: d.id.clone(),
-                        target,
-                        item: d.ammo.clone(),
-                        from: d.position,
-                        to: position,
-                        born: self.tick,
-                        arrival: self.tick
-                            + ticks(
-                                navigation::distance(d.position, position) / d.projectile_speed,
-                            ),
-                        damage: d.damage,
-                    },
-                );
-                let state = self.defenders.get_mut(&d.id).unwrap();
-                state.aim = Some(position);
-                state.ready_at = self.tick + ticks(d.period);
-                state.fired_at = self.tick;
-                self.events.push(Event::Shot {
-                    defender: d.id.clone(),
-                });
-            }
         }
     }
     pub fn balances(&self) -> BTreeMap<String, Balance> {
@@ -980,7 +577,12 @@ impl Simulation {
                 .values()
                 .filter(|t| matches!(&t.to,Endpoint::Cargo(id) if id==&a.id))
                 .count() as u32;
-            if a.cargo.total() + incoming > a.cargo.capacity {
+            let reserved = self
+                .manual_jobs
+                .get(&a.id)
+                .filter(|j| !j.deposit)
+                .map_or(0, |j| j.remaining);
+            if a.cargo.total() + incoming + reserved > a.cargo.capacity {
                 return Err("agent capacity exceeded".into());
             }
         }

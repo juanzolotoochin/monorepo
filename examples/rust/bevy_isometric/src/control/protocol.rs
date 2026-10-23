@@ -7,6 +7,13 @@ pub const VERSION: u32 = 1;
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
     Inspect,
+    SettlementTransfer {
+        depot: String,
+        item: String,
+        units: u32,
+        deposit: bool,
+    },
+    SettlementCancel,
     SettlementPause {
         paused: bool,
     },
