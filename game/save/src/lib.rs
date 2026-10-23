@@ -20,6 +20,10 @@ use content::{Content, Names};
 use serde::{Deserialize, Serialize};
 use sim::{ChunkState, World, WorldConfig, WorldState};
 
+mod inputs;
+
+pub use inputs::{InputLog, INPUT_FORMAT_VERSION};
+
 pub const FORMAT_VERSION: u32 = 1;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";

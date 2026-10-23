@@ -1,0 +1,55 @@
+load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
+load("@rules_rs//rs:rust_library.bzl", "rust_library")
+load("@rules_rs//rs:rust_test.bzl", "rust_test")
+
+rust_library(
+    name = "headless_lib",
+    srcs = [
+        "src/lib.rs",
+        "src/tests.rs",
+    ],
+    crate_name = "headless",
+    edition = "2021",
+    visibility = ["//game:__subpackages__"],
+    deps = [
+        "//game/content",
+        "//game/save",
+        "//game/sim",
+    ],
+)
+
+# The determinism suite: golden hash files, thread count and replay checks.
+rust_test(
+    name = "determinism_test",
+    size = "small",
+    compile_data = ["//game/testdata:hashes"],
+    crate = ":headless_lib",
+    edition = "2021",
+)
+
+rust_binary(
+    name = "headless",
+    srcs = ["src/main.rs"],
+    edition = "2021",
+    deps = [
+        ":headless_lib",
+        "//game/content",
+        "//game/save",
+        "//game/sim",
+    ],
+)
+
+# The 10 ms budget only means something in an optimized build:
+#   bazel test -c opt //game/headless:bench_test
+# In other builds it only checks that the benchmark runs.
+rust_test(
+    name = "bench_test",
+    size = "small",
+    srcs = ["bench_test.rs"],
+    edition = "2021",
+    deps = [
+        ":headless_lib",
+        "//game/content",
+        "//game/sim",
+    ],
+)

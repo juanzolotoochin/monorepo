@@ -52,10 +52,10 @@ impl WorldConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub struct PlayerId(pub u32);
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CommandKind {
     /// Spawns up to `count` movers around `center`.
     SpawnMovers { center: FxVec2, count: u32 },
@@ -64,7 +64,7 @@ pub enum CommandKind {
 }
 
 /// One player input, scheduled for a tick by the network layer.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Command {
     pub player: PlayerId,
     pub kind: CommandKind,
