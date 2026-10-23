@@ -7,6 +7,13 @@ pub const VERSION: u32 = 1;
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
     Inspect,
+    MemoryRecord,
+    MemoryDeploy,
+    MemoryClear,
+    AssertTrial {
+        unlocked: bool,
+        collected: bool,
+    },
     Jetpack {
         enabled: bool,
     },
@@ -117,6 +124,7 @@ pub fn scene_index(name: &str) -> Result<usize, String> {
         "boulder-lab" => Ok(1),
         "pile-lab" => Ok(2),
         "jetpack-lab" => Ok(3),
+        "surprise-lab" => Ok(4),
         _ => Err(format!("Unknown scene {name}")),
     }
 }

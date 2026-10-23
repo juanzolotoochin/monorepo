@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "scene": "surprise-lab",
+  "fps": 30,
+  "width": 1440,
+  "height": 960,
+  "max_frames": 1200,
+  "steps": [
+    {
+      "op": "wait",
+      "frames": 40
+    },
+    {
+      "op": "assert_trial",
+      "unlocked": false,
+      "collected": false
+    },
+    {
+      "op": "memory_record"
+    },
+    {
+      "op": "walk",
+      "position": [
+        -4,
+        -2
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 20
+    },
+    {
+      "op": "memory_deploy"
+    },
+    {
+      "op": "wait",
+      "frames": 20
+    },
+    {
+      "op": "walk",
+      "position": [
+        -1,
+        3
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 100
+    },
+    {
+      "op": "assert_trial",
+      "unlocked": true,
+      "collected": false
+    },
+    {
+      "op": "walk",
+      "position": [
+        5,
+        0
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 40
+    },
+    {
+      "op": "assert_trial",
+      "unlocked": true,
+      "collected": true
+    },
+    {
+      "op": "inspect"
+    }
+  ]
+}

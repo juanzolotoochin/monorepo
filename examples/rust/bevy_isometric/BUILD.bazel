@@ -27,6 +27,7 @@ rust_binary(
         "//examples/rust/bevy_isometric/assets:jetpack_lab",
         "//examples/rust/bevy_isometric/assets:mining_deck",
         "//examples/rust/bevy_isometric/assets:pile_lab",
+        "//examples/rust/bevy_isometric/assets:surprise_lab",
         "//tools/assetc/core:voxel_assets",
         "@crates//:bevy",
         "@crates//:serde",
@@ -89,6 +90,14 @@ game_demo(
     name = "jetpack_demo",
     game = ":demo",
     script = "demos/jetpack.json",
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
+game_demo(
+    name = "surprise_demo",
+    game = ":demo",
+    script = "demos/surprise.json",
     tags = ["manual"],
     target_compatible_with = ["@platforms//os:linux"],
 )

@@ -6,6 +6,7 @@ mod gameplay;
 mod impact;
 mod jetpack;
 mod navigation;
+mod palimpsest;
 mod pile_model;
 mod piles;
 mod preview;
@@ -31,6 +32,7 @@ fn main() {
             "boulder-lab" => 1,
             "pile-lab" => 2,
             "jetpack-lab" => 3,
+            "surprise-lab" => 4,
             name => {
                 eprintln!("Unknown scene {name}");
                 std::process::exit(2)
@@ -64,6 +66,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .insert_resource(scenes)
         .init_resource::<assets::ModelCache>()
         .init_resource::<Controls>()
+        .init_resource::<palimpsest::Memory>()
         .init_resource::<jetpack::Flight>()
         .init_resource::<piles::PileLab>()
         .init_resource::<effects::Feedback>()
@@ -123,13 +126,18 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
     app.add_systems(
         Update,
         (
-            (assets::switch_scene, jetpack::scene_changed).chain(),
+            (
+                assets::switch_scene,
+                jetpack::scene_changed,
+                palimpsest::setup,
+            )
+                .chain(),
             piles::setup_scene,
             control::begin,
             piles::input.run_if(control::interactive),
             mouse_commands.run_if(control::interactive),
             preview::playback.run_if(control::interactive),
-            (jetpack::update, move_player).chain(),
+            (jetpack::update, move_player, palimpsest::tick).chain(),
             piles::arrive,
             piles::update_transit,
             piles::render,
