@@ -1,7 +1,7 @@
 diff --git a/rust/private/rustc.bzl b/rust/private/rustc.bzl
 --- a/rust/private/rustc.bzl
 +++ b/rust/private/rustc.bzl
-@@ -476,8 +476,19 @@
+@@ -476,8 +476,20 @@
  def _get_linker_path(linker_config):
      if linker_config.rust_linker:
          return linker_config.rust_linker.path
@@ -11,16 +11,17 @@ diff --git a/rust/private/rustc.bzl b/rust/private/rustc.bzl
          action_name = linker_config.action_name,
      )
 +    # rustc emits link.exe arguments for MSVC, not clang-cl driver arguments.
-+    if linker.replace("\\", "/").endswith("/clang-cl.exe"):
-+        return linker[:-len("clang-cl.exe")] + "lld-link.exe"
++    if linker.replace("\\", "/").removesuffix(".exe").endswith("/clang-cl"):
++        suffix = ".exe" if linker.endswith(".exe") else ""
++        return linker[:-len("clang-cl" + suffix)] + "lld-link" + suffix
 +    return linker
 +
 +def _uses_clang_cl(linker_config):
 +    return not linker_config.rust_linker and cc_common.get_tool_for_action(
 +        feature_configuration = linker_config.feature_configuration,
 +        action_name = linker_config.action_name,
-+    ).replace("\\", "/").endswith("/clang-cl.exe")
-@@ -572,1 +583,14 @@
++    ).replace("\\", "/").removesuffix(".exe").endswith("/clang-cl")
+@@ -572,1 +584,14 @@
 -    return link_args
 +    if _uses_clang_cl(linker_config):
 +        # Unwrap linker switches; omit compiler-driver-only options.

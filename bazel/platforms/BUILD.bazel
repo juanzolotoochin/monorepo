@@ -1,0 +1,15 @@
+load("@rules_python//python:defs.bzl", "py_test")
+
+exports_files([
+    "host.bzl",
+    "sdk_vfs.py",
+])
+
+py_test(
+    name = "sdk_vfs_test",
+    srcs = [
+        "sdk_vfs.py",
+        "sdk_vfs_test.py",
+    ],
+    main = "sdk_vfs_test.py",
+)

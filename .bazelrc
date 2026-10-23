@@ -25,6 +25,10 @@ build:remote --remote_executor=grpcs://remote.buildbuddy.io
 build:remote --extra_execution_platforms=//:docker_image_platform
 build:remote --host_platform=//:docker_image_platform
 build:remote --platforms=//:docker_image_platform
+# Run downloads and launches the result on this client. Only execution tools
+# target the remote Linux platform; the runnable binary targets the client.
+run --platforms=@native_platform//:host
+run:remote --platforms=@native_platform//:host
 build:remote --remote_timeout=1800
 build:remote --jobs=50
 # Windows clients otherwise send their MSYS/Windows PATH to Linux workers.

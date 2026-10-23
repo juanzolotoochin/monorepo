@@ -78,6 +78,10 @@ windows_shell_archive(
 
 register_toolchains("//bazel/windows_shell:toolchain")
 
+host_platform = use_repo_rule("//bazel/platforms:host.bzl", "host_platform")
+
+host_platform(name = "native_platform")
+
 tar_toolchains = use_extension("@tar.bzl//tar:extensions.bzl", "toolchains")
 use_repo(tar_toolchains, "bsd_tar_toolchains")
 

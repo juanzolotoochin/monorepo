@@ -19,6 +19,13 @@ Build the Linux targets on remote workers from any client platform with
 `bazelisk build //game/... --config=remote`. The remote configuration selects
 the pinned Linux execution image and a Linux action environment. Windows
 linker options belong to the Windows platform and do not apply to this build.
+
+`bazelisk run //game/app:demo --config=remote` builds for the client OS and CPU,
+using the Linux workers for compilation. On Windows this cross-compiles a
+Windows executable, downloads the executable and its runfiles, and launches it
+locally. The `host_platform` setting describes build tools; the `run` target
+platform is selected separately from the actual client machine.
+
 The manual video demo targets still require local GPU drivers; FFmpeg is
 fetched from pinned archives on supported hosts. They are excluded from the
 recursive build above. For example, build a video locally with
