@@ -240,7 +240,7 @@ pub enum Weapon {
 }
 
 /// Simulation-side weapon rules. Tick counts are 60 Hz, as authored.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WeaponTuning {
     pub weapon: Weapon,

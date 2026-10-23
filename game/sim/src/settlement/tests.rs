@@ -225,7 +225,7 @@ fn opposing_haulers_pass_without_body_overlap_and_clear_the_docks() {
     assert!(s.agents.iter().map(|a| a.avoidance_steers).sum::<u64>() > 0);
 }
 
-const FOREST: &str = include_str!("../../../app/assets/levels/forest_supply.ron");
+pub(super) const FOREST: &str = include_str!("../../../app/assets/levels/forest_supply.ron");
 
 /// The forest outpost's supply chain runs for five minutes with every
 /// invariant holding: haulers deliver, the cartworks builds the cart, the ox

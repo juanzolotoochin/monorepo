@@ -185,6 +185,31 @@ As built in `game/sim::settlement` (Milestone 1):
   can't find a turning circle takes the direct route instead of waiting
   forever. The original could deadlock on both, depending on the arrival angle.
 
+### Combat and the player (Milestone 1)
+
+`game/sim::settlement::{combat, avatar}` port the original rules: waves,
+defenders, arrows and ballista bolts (deflect, pierce, impale), sword
+criticals, spear punctures, arc-coil chains, stagger and knockback.
+
+- Threats move themselves in parallel. The read phase decides projectile
+  collisions, breaches, defender shots and which threats a strike reaches;
+  the apply phase computes damage against current armor and health.
+- The player's avatar is a simulated body now, not a Bevy transform. Commands
+  set an intent (walk a direction, go to a point, stop); the original
+  controller's acceleration, braking, run speed, click routes and sliding
+  collision run each tick. Attacks are commands: contact resolves on the
+  windup tick, and movement stays locked for the swing or the rebound after a
+  hit. One follow-up click near the end of a swing is buffered.
+- Manual transfers are commands and use the same reservation counters as
+  haulers. Cancelling releases unlaunched units; units in the air still land.
+- Tick-based tuning in scenario files (60 Hz) is converted to 30 Hz.
+
+Compared with the original over the same two minutes (`parity_probe`), the
+forest outpost delivers 99 units versus 98 and kills 21 ghouls versus 23. The
+combat arena's ballista lands all 18 bolts in both; the pierce rolls fall
+differently (same formula, different tick numbers and IDs at 30 Hz), so 8
+ghouls die instead of 13.
+
 ## Networking
 
 Details: [desyncs and host loss](design/desync-host-loss.html).

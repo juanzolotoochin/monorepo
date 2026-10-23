@@ -12,8 +12,10 @@ use crate::messages::{Attach, ClaimDock, DockClaim, Equip, Load, Messages, Reser
 use crate::terrain::Terrain;
 
 impl Settlement {
-    /// Stage 2: every agent moves itself, reading last tick's bodies.
+    /// Stage 2: every agent and threat moves itself, reading last tick's bodies.
     pub(crate) fn self_update(&mut self, tick: u64, terrain: &Terrain) {
+        self.events.clear();
+        self.threats_self_update(tick, terrain);
         let bodies: Vec<_> = self.agents.iter().map(body).collect();
         let Settlement { agents, dock_owner, depots, links, .. } = self;
         let ctx = Ctx { tick, terrain, bodies: &bodies, dock_owner, depots, links };
@@ -23,7 +25,8 @@ impl Settlement {
     /// Stage 3: each agent's messages, with the position that files them
     /// under a chunk.
     pub(crate) fn read(&self, tick: u64, terrain: &Terrain) -> Vec<(FxVec2, Messages)> {
-        self.agents
+        let mut result: Vec<(FxVec2, Messages)> = self
+            .agents
             .par_iter()
             .enumerate()
             .map(|(i, a)| {
@@ -31,7 +34,9 @@ impl Settlement {
                 haulers::read(a, i as AgentIx, tick, self, terrain, &mut out);
                 (a.position, out)
             })
-            .collect()
+            .collect();
+        result.extend(self.read_combat(tick, terrain));
+        result
     }
 
     /// The start of stage 5: units land, sources produce, recipes run.
@@ -101,6 +106,7 @@ impl Settlement {
                         self.accounts[item as usize].produced += units as u64;
                     }
                     self.metrics.cycles += 1;
+                    self.events.push(super::Event::Produced { producer: i as u16 });
                 }
                 continue;
             }
@@ -207,6 +213,7 @@ impl Settlement {
         self.depots[depot].stock[item] -= 1;
         self.depots[depot].out[item] -= 1;
         self.metrics.equipped += 1;
+        self.events.push(super::Event::Equipped { agent: message.agent });
         let a = &mut self.agents[message.agent as usize];
         a.equipped = true;
         a.travel_heading = heading;

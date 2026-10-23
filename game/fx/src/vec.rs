@@ -57,6 +57,12 @@ macro_rules! fx_vec {
                 self / length
             }
 
+            /// Divides every component by an integer, rounding toward zero.
+            #[inline]
+            pub fn div_int(self, n: i64) -> $name {
+                $name { $($field: self.$field.div_int(n)),+ }
+            }
+
             #[inline]
             pub fn lerp(a: $name, b: $name, t: Fx) -> $name {
                 a + (b - a) * t

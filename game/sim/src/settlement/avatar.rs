@@ -1,0 +1,364 @@
+//! Player avatars: controlled agents, moved by commands instead of haul links.
+//!
+//! This is the original game's player controller (which lived in the Bevy
+//! app) moved into the simulation, so every peer moves every avatar the same
+//! way. A command sets an intent (walk in a direction, go to a point, or
+//! stop); each tick the avatar accelerates toward it and slides along
+//! obstacles. Attacks wind up, resolve on a tick, and lock movement until
+//! the swing (or the rebound after a hit) ends.
+
+use content::scenario::Weapon;
+use fx::{Fx, FxVec2};
+use serde::{Deserialize, Serialize};
+
+use super::haulers::AgentState;
+use super::{AgentIx, DepotIx, Endpoint, ItemIx, Settlement};
+use crate::messages::{ManualUnit, Messages, Strike};
+use crate::nav::{self, angle_between, distance};
+use crate::terrain::Terrain;
+
+/// The avatar's collision radius, as in the original controller.
+pub const BODY_RADIUS: Fx = Fx::from_bits(1_374_389_535); // 0.32
+const WALK_SPEED: Fx = Fx::from_bits(16_320_875_725); // 3.8 m/s
+const RUN_SPEED: Fx = Fx::from_bits(24_051_816_858); // 5.6 m/s
+/// Velocity change per tick, in m/s: accelerating 26 m/s², braking 32 m/s²,
+/// stopping for an attack 35 m/s².
+const ACCELERATION: Fx = Fx::from_bits(3_722_304_990); // 26/30
+const BRAKING: Fx = Fx::from_bits(4_581_298_449); // 32/30
+const ATTACK_BRAKING: Fx = Fx::from_bits(5_010_795_179); // 35/30
+/// Fraction of the remaining turn taken per tick (1 - e^(-20/30)).
+const TURN_BLEND: Fx = Fx::from_bits(2_089_857_561); // 0.4866
+/// Turning toward the aim during the windup (1 - e^(-28/30)).
+const AIM_BLEND: Fx = Fx::from_bits(2_606_011_260); // 0.6068
+/// Ticks from an attack command to contact (13 ticks at 60 Hz).
+pub const WINDUP_TICKS: u64 = 7;
+/// The visible windup, during which the avatar turns toward the aim (0.16 s).
+const AIM_TICKS: u64 = 5;
+/// A swing that hits nothing ends at 0.58 s; one that lands rebounds for 0.42 s.
+const SWING_TICKS: u64 = 18;
+const REBOUND_TICKS: u64 = 13;
+/// A click this close to the end of a swing is kept and played next (0.18 s).
+const BUFFER_TICKS: u64 = 6;
+/// Manual transfers start within this distance of the dock.
+const DOCK_REACH: Fx = Fx::from_bits(3_650_722_202); // 0.85
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Intent {
+    Stop,
+    /// Walk this way until told otherwise. `direction` has length 0 or 1.
+    Walk { direction: FxVec2, run: bool },
+    /// Walk to this point along a planned route.
+    GoTo { target: FxVec2, run: bool },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Swing {
+    pub weapon: Weapon,
+    /// Unit vector toward the aim.
+    pub aim: FxVec2,
+    pub muzzle: [Fx; 3],
+    pub started: u64,
+    pub resolve_at: u64,
+    /// Movement resumes on this tick.
+    pub until: u64,
+    /// Set once contact was resolved; then `hits` holds how many it hit.
+    pub resolved: bool,
+    pub hits: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManualJob {
+    pub depot: DepotIx,
+    pub item: ItemIx,
+    pub remaining: u32,
+    pub deposit: bool,
+    pub next_tick: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AvatarState {
+    /// Meters per second.
+    pub velocity: FxVec2,
+    pub intent: Option<Intent>,
+    pub run: bool,
+    pub swing: Option<Swing>,
+    /// A follow-up attack clicked during the end of a swing.
+    pub queued: Option<(Weapon, FxVec2, [Fx; 3])>,
+    pub job: Option<ManualJob>,
+}
+
+fn approach(current: FxVec2, target: FxVec2, max_change: Fx) -> FxVec2 {
+    let delta = target - current;
+    let length = delta.length();
+    if length <= max_change {
+        target
+    } else {
+        current + delta * (max_change / length)
+    }
+}
+
+/// Moves `position` by `delta` in small steps, pushing out of obstacles and
+/// never leaving the arena, as the original controller did.
+fn slide(terrain: &Terrain, mut position: FxVec2, delta: FxVec2) -> FxVec2 {
+    let step = Fx::from_ratio(3, 50);
+    let steps = (delta.length() / step).ceil().floor_to_int().max(1);
+    let (min, max) = (terrain.min(), terrain.max());
+    let clamp = |p: FxVec2| FxVec2::new(p.x.clamp(min.x, max.x), p.y.clamp(min.y, max.y));
+    let extra = Fx::from_ratio(1, 50);
+    for _ in 0..steps {
+        let previous = position;
+        position = clamp(position + delta.div_int(steps));
+        for _ in 0..3 {
+            for o in &terrain.obstacles {
+                let separation = position - o.center;
+                let clearance = o.radius + BODY_RADIUS + extra;
+                if separation.length_squared() < clearance * clearance {
+                    let length = separation.length();
+                    let away = if length == Fx::ZERO { FxVec2::new(Fx::ONE, Fx::ZERO) } else { separation / length };
+                    position += away * (clearance - length);
+                }
+            }
+        }
+        if !terrain.inside(position) {
+            position = previous;
+        }
+    }
+    position
+}
+
+/// Stage 2 for one avatar.
+pub(super) fn self_update(a: &mut AgentState, tick: u64, terrain: &Terrain) {
+    let per_tick = Fx::from_int(content::TICKS_PER_SECOND);
+    let avatar = &mut a.avatar;
+    if let Some(swing) = &avatar.swing {
+        if tick < swing.until {
+            avatar.velocity = approach(avatar.velocity, FxVec2::ZERO, ATTACK_BRAKING);
+            if tick < swing.started + AIM_TICKS {
+                let target = nav::bearing(FxVec2::ZERO, swing.aim);
+                a.heading += angle_between(a.heading, target) * AIM_BLEND;
+            }
+            return;
+        }
+        avatar.swing = None;
+    }
+    let speed = if avatar.run { RUN_SPEED } else { WALK_SPEED };
+    let mut desired = FxVec2::ZERO;
+    match &avatar.intent {
+        Some(Intent::Walk { direction, .. }) => desired = *direction * speed,
+        Some(Intent::GoTo { .. }) if !a.route.is_empty() => {
+            let near = Fx::from_ratio(9, 50);
+            while a.route.len() > 1 && distance(a.route[0], a.position) < near {
+                a.route.remove(0);
+            }
+            let delta = a.route[0] - a.position;
+            let remaining = delta.length();
+            let braking = if a.route.len() == 1 { (Fx::from_int(56) * remaining).sqrt() } else { speed };
+            desired = delta.normalize_or_zero() * speed.min(braking);
+            if remaining < Fx::from_ratio(11, 200) {
+                a.position = a.route[0];
+                avatar.velocity = FxVec2::ZERO;
+                a.route.clear();
+                avatar.intent = Some(Intent::Stop);
+                desired = FxVec2::ZERO;
+            }
+        }
+        _ => {}
+    }
+    let change = if desired == FxVec2::ZERO { BRAKING } else { ACCELERATION };
+    avatar.velocity = approach(avatar.velocity, desired, change);
+    let previous = a.position;
+    let mut delta = avatar.velocity / per_tick;
+    if a.route.len() == 1 {
+        let remaining = a.route[0] - previous;
+        if delta.length() > remaining.length() {
+            delta = remaining;
+            avatar.velocity = FxVec2::ZERO;
+        }
+    }
+    a.position = slide(terrain, previous, delta);
+    let moved = a.position - previous;
+    let length = moved.length();
+    a.travelled += length;
+    if length > Fx::from_ratio(1, 1000) {
+        let target = nav::bearing(FxVec2::ZERO, moved);
+        a.heading += angle_between(a.heading, target) * TURN_BLEND;
+    }
+}
+
+impl Settlement {
+    /// Stage 3 for one avatar: a strike resolving this tick, and manual
+    /// transfer units that are due.
+    pub(super) fn read_avatar(&self, me: AgentIx, a: &AgentState, tick: u64, terrain: &Terrain, out: &mut Messages) {
+        if let Some(swing) = &a.avatar.swing {
+            if !swing.resolved && swing.resolve_at == tick && a.attack_ready <= tick {
+                let (targets, beam_end) = self.strike_targets(a.position, swing.aim, swing.weapon, terrain);
+                out.strike.push(Strike {
+                    agent: me,
+                    weapon: swing.weapon,
+                    origin: a.position,
+                    forward: swing.aim,
+                    muzzle: swing.muzzle,
+                    targets,
+                    beam_end,
+                });
+            }
+        }
+        if let Some(job) = &a.avatar.job {
+            if tick >= job.next_tick && distance(a.position, self.depots[job.depot as usize].position) <= DOCK_REACH {
+                out.manual_unit.push(ManualUnit { agent: me });
+            }
+        }
+    }
+
+    /// Commands: sets an avatar's movement intent.
+    pub fn move_avatar(&mut self, agent: usize, intent: Intent, terrain: &Terrain) {
+        let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
+        a.route.clear();
+        if let Intent::GoTo { target, run } = intent {
+            a.route = nav::path(terrain, a.position, target, BODY_RADIUS);
+            a.avatar.run = run;
+        } else if let Intent::Walk { run, .. } = intent {
+            a.avatar.run = run;
+        }
+        a.avatar.intent = Some(intent);
+    }
+
+    /// Commands: starts an attack, or buffers it near the end of the current one.
+    pub fn attack(&mut self, tick: u64, agent: usize, weapon: Weapon, aim: FxVec2, muzzle: [Fx; 3]) {
+        if !self.has_weapon(weapon) {
+            return;
+        }
+        let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
+        let aim = aim.normalize_or_zero();
+        if aim == FxVec2::ZERO || muzzle.iter().any(|v| v.abs() > Fx::from_int(4)) {
+            return;
+        }
+        match &a.avatar.swing {
+            Some(swing) if tick < swing.until => {
+                if swing.until - tick <= BUFFER_TICKS {
+                    a.avatar.queued = Some((weapon, aim, muzzle));
+                }
+            }
+            _ => start_swing(a, tick, weapon, aim, muzzle),
+        }
+    }
+
+    /// Housekeeping: a buffered attack starts once the swing ends.
+    pub(crate) fn avatar_housekeeping(&mut self, tick: u64) {
+        for a in self.agents.iter_mut().filter(|a| a.controlled) {
+            let finished = a.avatar.swing.as_ref().is_none_or(|s| tick + 1 >= s.until);
+            if finished {
+                if let Some((weapon, aim, muzzle)) = a.avatar.queued.take() {
+                    start_swing(a, tick + 1, weapon, aim, muzzle);
+                }
+            }
+        }
+    }
+
+    /// Records a resolved strike on the avatar: a hit shortens the swing to the rebound.
+    pub(crate) fn swing_resolved(&mut self, agent: AgentIx, tick: u64, hits: u32) {
+        let a = &mut self.agents[agent as usize];
+        if let Some(swing) = &mut a.avatar.swing {
+            swing.resolved = true;
+            swing.hits = hits;
+            if hits > 0 && matches!(swing.weapon, Weapon::Sword | Weapon::Spear) {
+                swing.until = tick + REBOUND_TICKS;
+            }
+        }
+    }
+
+    /// The most units `agent` could move between its cargo and `depot` now.
+    pub fn transfer_limit(&self, agent: usize, depot: usize, item: usize, deposit: bool) -> u32 {
+        let (Some(a), Some(d)) = (self.agents.get(agent), self.depots.get(depot)) else { return 0 };
+        if item >= self.items.len() {
+            return 0;
+        }
+        if deposit {
+            a.cargo[item].min(d.free())
+        } else {
+            let carried: u32 = a.cargo.iter().sum::<u32>() + a.pending_in;
+            a.cargo_capacity.saturating_sub(carried).min(d.available(item as ItemIx))
+        }
+    }
+
+    /// Commands: reserves an exact transfer; units move once the avatar is at the dock.
+    pub fn transfer(&mut self, tick: u64, agent: usize, depot: usize, item: usize, units: u32, deposit: bool) {
+        let Some(a) = self.agents.get(agent).filter(|a| a.controlled) else { return };
+        if a.avatar.job.is_some() || a.pending_in > 0 || a.pending_out > 0 || units == 0 {
+            return;
+        }
+        if self.transfer_limit(agent, depot, item, deposit) < units {
+            return;
+        }
+        if deposit {
+            self.depots[depot].incoming[item] += units;
+        } else {
+            self.depots[depot].out[item] += units;
+        }
+        self.agents[agent].avatar.job = Some(ManualJob {
+            depot: depot as DepotIx,
+            item: item as ItemIx,
+            remaining: units,
+            deposit,
+            next_tick: tick,
+        });
+    }
+
+    /// Commands: releases the unlaunched part of a transfer. Units in the air
+    /// finish their flight.
+    pub fn cancel_transfer(&mut self, agent: usize) {
+        let Some(job) = self.agents.get_mut(agent).and_then(|a| a.avatar.job.take()) else { return };
+        let depot = &mut self.depots[job.depot as usize];
+        if job.deposit {
+            depot.incoming[job.item as usize] -= job.remaining;
+        } else {
+            depot.out[job.item as usize] -= job.remaining;
+        }
+    }
+
+    /// Moves one unit of a manual transfer.
+    pub(crate) fn manual_unit(&mut self, tick: u64, message: ManualUnit) {
+        let agent = message.agent as usize;
+        let Some(job) = self.agents[agent].avatar.job.clone() else { return };
+        if tick < job.next_tick {
+            return;
+        }
+        let (d, item) = (job.depot as usize, job.item);
+        let dock = self.depots[d].position;
+        let at = self.agents[agent].position;
+        if job.deposit {
+            self.agents[agent].cargo[item as usize] -= 1;
+            self.agents[agent].pending_out += 1;
+            self.launch(tick, item, Endpoint::Cargo(message.agent), Endpoint::Depot(job.depot), at, dock);
+        } else {
+            self.depots[d].stock[item as usize] -= 1;
+            self.depots[d].out[item as usize] -= 1;
+            self.metrics.picked += 1;
+            self.agents[agent].pending_in += 1;
+            self.launch(tick, item, Endpoint::Depot(job.depot), Endpoint::Cargo(message.agent), dock, at);
+        }
+        let a = &mut self.agents[agent];
+        let next = tick + a.transfer_ticks;
+        let job = a.avatar.job.as_mut().expect("checked");
+        job.remaining -= 1;
+        job.next_tick = next;
+        if job.remaining == 0 {
+            a.avatar.job = None;
+        }
+    }
+}
+
+fn start_swing(a: &mut AgentState, tick: u64, weapon: Weapon, aim: FxVec2, muzzle: [Fx; 3]) {
+    a.route.clear();
+    a.avatar.intent = Some(Intent::Stop);
+    a.avatar.swing = Some(Swing {
+        weapon,
+        aim,
+        muzzle,
+        started: tick,
+        resolve_at: tick + WINDUP_TICKS,
+        until: tick + SWING_TICKS,
+        resolved: false,
+        hits: 0,
+    });
+}

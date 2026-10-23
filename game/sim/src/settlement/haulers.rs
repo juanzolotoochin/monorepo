@@ -95,6 +95,11 @@ pub struct AgentState {
     pub pending_in: u32,
     pub pending_out: u32,
 
+    /// Player avatars only.
+    pub avatar: super::avatar::AvatarState,
+    /// Weapons are ready again on this tick.
+    pub attack_ready: u64,
+
     pub avoidance_steers: u64,
     pub dock_wait_ticks: u64,
     pub traffic_wait_ticks: u64,
@@ -151,6 +156,8 @@ impl AgentState {
             traffic_replan_at: 0,
             pending_in: 0,
             pending_out: 0,
+            avatar: Default::default(),
+            attack_ready: 0,
             avoidance_steers: 0,
             dock_wait_ticks: 0,
             traffic_wait_ticks: 0,
@@ -284,7 +291,7 @@ pub(crate) fn move_route(position: &mut FxVec2, route: &mut Vec<FxVec2>, mut dis
 /// Stage 2 for one non-controlled agent.
 pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
     if a.controlled {
-        return;
+        return super::avatar::self_update(a, ctx.tick, ctx.terrain);
     }
     if let Some(d) = a.departure_dock {
         let dock = ctx.depots[d as usize].position;

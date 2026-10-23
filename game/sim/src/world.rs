@@ -69,6 +69,16 @@ pub enum CommandKind {
     SetLink { link: u16, enabled: bool },
     /// Switches a settlement machine on or off.
     SetMachine { producer: u16, enabled: bool },
+    /// Switches a settlement defender on or off.
+    SetDefender { defender: u16, enabled: bool },
+    /// Sets how a player's avatar moves.
+    MoveAvatar { agent: u16, intent: crate::settlement::avatar::Intent },
+    /// A player's avatar attacks toward `aim` (a direction on the ground).
+    Attack { agent: u16, weapon: content::scenario::Weapon, aim: FxVec2, muzzle: [Fx; 3] },
+    /// A player's avatar takes units from (or, with `deposit`, gives units to) a depot.
+    Transfer { agent: u16, depot: u16, item: u16, units: u32, deposit: bool },
+    /// Cancels an avatar's transfer; units in the air still land.
+    CancelTransfer { agent: u16 },
 }
 
 /// One player input, scheduled for a tick by the network layer.
@@ -207,6 +217,11 @@ impl World {
         self.settlement.as_deref()
     }
 
+    #[cfg(test)]
+    pub(crate) fn settlement_mut(&mut self) -> &mut Settlement {
+        self.settlement.as_deref_mut().expect("a settlement world")
+    }
+
     /// Replaces the terrain. For building a new world before tick 0; during
     /// play, terrain changes only through commands and messages.
     pub fn set_terrain(&mut self, terrain: Terrain) {
@@ -271,6 +286,31 @@ impl World {
                 CommandKind::SetMachine { producer, enabled } => {
                     if let Some(s) = &mut self.settlement {
                         s.set_machine(producer as usize, enabled);
+                    }
+                }
+                CommandKind::SetDefender { defender, enabled } => {
+                    if let Some(s) = &mut self.settlement {
+                        s.set_defender(defender as usize, enabled);
+                    }
+                }
+                CommandKind::MoveAvatar { agent, ref intent } => {
+                    if let Some(s) = &mut self.settlement {
+                        s.move_avatar(agent as usize, intent.clone(), &self.terrain);
+                    }
+                }
+                CommandKind::Attack { agent, weapon, aim, muzzle } => {
+                    if let Some(s) = &mut self.settlement {
+                        s.attack(self.tick, agent as usize, weapon, aim, muzzle);
+                    }
+                }
+                CommandKind::Transfer { agent, depot, item, units, deposit } => {
+                    if let Some(s) = &mut self.settlement {
+                        s.transfer(self.tick, agent as usize, depot as usize, item as usize, units, deposit);
+                    }
+                }
+                CommandKind::CancelTransfer { agent } => {
+                    if let Some(s) = &mut self.settlement {
+                        s.cancel_transfer(agent as usize);
                     }
                 }
             }
@@ -565,11 +605,38 @@ impl World {
             for message in messages.unload {
                 settlement.unload(tick, message);
             }
+            for message in messages.manual_unit {
+                settlement.manual_unit(tick, message);
+            }
+            for message in messages.strike {
+                let agent = message.agent;
+                let hits = settlement.strike(tick, message);
+                settlement.swing_resolved(agent, tick, hits);
+            }
+            for message in messages.projectile_hit {
+                settlement.projectile_hit(tick, message);
+            }
+            for message in messages.projectile_blocked {
+                settlement.projectile_blocked(tick, message);
+            }
+            for message in messages.projectile_expired {
+                settlement.projectile_expired(message);
+            }
+            for message in messages.breach {
+                settlement.breach(message);
+            }
+            for message in messages.fire {
+                settlement.fire(tick, message);
+            }
         }
     }
 
     // Stage 6: housekeeping.
     fn housekeeping(&mut self) -> TickHash {
+        if let Some(settlement) = &mut self.settlement {
+            settlement.combat_housekeeping(self.tick, &self.terrain);
+            settlement.avatar_housekeeping(self.tick);
+        }
         self.despawn();
         self.move_between_chunks();
         self.insert_spawns();
@@ -872,6 +939,11 @@ impl Simulation {
 
     pub fn world(&self) -> &World {
         &self.world
+    }
+
+    #[cfg(test)]
+    pub(crate) fn world_mut(&mut self) -> &mut World {
+        &mut self.world
     }
 
     pub fn step(&mut self, turn: &[Command]) -> TickHash {

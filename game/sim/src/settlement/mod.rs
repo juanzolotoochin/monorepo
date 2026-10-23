@@ -14,12 +14,14 @@
 //! Positions are world tiles (1 tile = 1 m). Scenario files use arena
 //! coordinates; [`Settlement::from_scenario`] offsets them by the arena center.
 
+pub mod avatar;
+pub mod combat;
 mod economy;
 mod haulers;
 
 use std::collections::BTreeMap;
 
-use content::scenario::{self, Scenario};
+use content::scenario::{self, Scenario, Weapon, WeaponTuning};
 use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
@@ -27,7 +29,8 @@ use crate::hash::{StateHash, StateHasher};
 use crate::nav;
 use crate::terrain::{Disc, Terrain};
 
-pub use haulers::Phase;
+pub use combat::{CombatMetrics, DefenderState, Event, Impact, Pinned, Projectile, SpentProjectile, Threat, WaveState};
+pub use haulers::{AgentState, Phase};
 
 pub type ItemIx = u16;
 pub type DepotIx = u16;
@@ -173,6 +176,24 @@ pub struct Settlement {
     pub accounts: Vec<Accounting>,
     pub metrics: Metrics,
     pub next_id: u64,
+
+    pub base_health: u32,
+    pub health: u32,
+    pub weapons: Vec<Weapon>,
+    /// By `Weapon as usize`: the scenario's tuning or the defaults.
+    pub tuning: Vec<WeaponTuning>,
+    pub waves: Vec<WaveState>,
+    /// Sorted by ID.
+    pub threats: Vec<Threat>,
+    pub defenders: Vec<DefenderState>,
+    /// Sorted by ID.
+    pub projectiles: Vec<Projectile>,
+    pub spent: Vec<SpentProjectile>,
+    pub pinned: Vec<Pinned>,
+    pub combat: CombatMetrics,
+    /// What happened during the last tick. Not part of the state.
+    #[serde(skip)]
+    pub events: Vec<Event>,
 }
 
 impl Settlement {
@@ -274,7 +295,60 @@ impl Settlement {
                 return Err(format!("agent {} spawns inside an obstacle", a.id));
             }
         }
+        let per_second = Fx::from_int(content::TICKS_PER_SECOND);
+        let waves = scenario
+            .waves
+            .iter()
+            .map(|w| WaveState {
+                id: w.id.clone(),
+                position: at(w.position),
+                target: at(w.target),
+                first: (w.first * per_second).round().floor_to_int().max(1) as u64,
+                every: scenario::ticks(w.every),
+                speed: w.speed / per_second,
+                hp: w.hp,
+                armor: w.armor,
+                damage: w.damage,
+                count: w.count,
+                spawned: 0,
+                route: None,
+            })
+            .collect();
+        let defenders = scenario
+            .defenders
+            .iter()
+            .map(|d| DefenderState {
+                id: d.id.clone(),
+                position: at(d.position),
+                radius: d.radius,
+                depot: depot(&d.depot),
+                ammo: item(&d.ammo),
+                range: d.range,
+                period: scenario::ticks(d.period),
+                damage: d.damage,
+                speed: d.projectile_speed,
+                muzzle_height: d.muzzle_height,
+                kind: d.projectile,
+                enabled: true,
+                ready_at: 0,
+                aim: None,
+                fired_at: 0,
+            })
+            .collect();
+        let tuning = [Weapon::Sword, Weapon::Spear, Weapon::Bow, Weapon::ArcCoil].map(|w| scenario.weapon_tuning(w)).to_vec();
         let settlement = Settlement {
+            base_health: scenario.base_health,
+            health: scenario.base_health,
+            weapons: scenario.weapons.clone(),
+            tuning,
+            waves,
+            threats: Vec::new(),
+            defenders,
+            projectiles: Vec::new(),
+            spent: Vec::new(),
+            pinned: Vec::new(),
+            combat: CombatMetrics::default(),
+            events: Vec::new(),
             scenario: scenario.id.clone(),
             dock_owner: vec![None; scenario.depots.len()],
             items,
@@ -396,6 +470,15 @@ impl Settlement {
                 }
             }
         }
+        for a in &self.agents {
+            if let Some(job) = &a.avatar.job {
+                if job.deposit {
+                    incoming[job.depot as usize][job.item as usize] += job.remaining;
+                } else {
+                    out[job.depot as usize][job.item as usize] += job.remaining;
+                }
+            }
+        }
         for (i, d) in self.depots.iter().enumerate() {
             if d.out != out[i] {
                 return Err(format!("depot {} outgoing reservations drifted: {:?} vs {:?}", d.id, d.out, out[i]));
@@ -435,3 +518,5 @@ impl StateHash for Settlement {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod combat_tests;

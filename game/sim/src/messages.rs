@@ -103,6 +103,114 @@ pub struct Unload {
     pub agent: u16,
 }
 
+/// A player's attack resolves against these threats, in damage order.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Strike {
+    pub agent: u16,
+    pub weapon: content::scenario::Weapon,
+    pub origin: FxVec2,
+    pub forward: FxVec2,
+    pub muzzle: [Fx; 3],
+    pub targets: Vec<u64>,
+    /// Where an arc coil's beam ends.
+    pub beam_end: Option<FxVec2>,
+}
+
+/// A projectile reached a threat this tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectileHit {
+    pub projectile: u64,
+    pub target: u64,
+}
+
+/// A projectile hit an obstacle this tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectileBlocked {
+    pub projectile: u64,
+    pub at: FxVec2,
+}
+
+/// A projectile reached the end of its flight without hitting anything.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectileExpired {
+    pub projectile: u64,
+}
+
+/// A threat reached the end of its route.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Breach {
+    pub threat: u64,
+}
+
+/// A defender shoots at a threat's current position.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Fire {
+    pub defender: u16,
+    pub target: u64,
+    pub to: FxVec2,
+}
+
+/// A player's manual transfer moves its next unit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManualUnit {
+    pub agent: u16,
+}
+
+impl StateHash for Strike {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+        h.write_u64(self.weapon as u64);
+        h.write(&self.origin);
+        h.write(&self.forward);
+        h.write(&self.muzzle[..]);
+        h.write(&self.targets);
+        match &self.beam_end {
+            Some(end) => h.write(end),
+            None => h.write_u64(u64::MAX),
+        }
+    }
+}
+
+impl StateHash for ProjectileHit {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.projectile);
+        h.write(&self.target);
+    }
+}
+
+impl StateHash for ProjectileBlocked {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.projectile);
+        h.write(&self.at);
+    }
+}
+
+impl StateHash for ProjectileExpired {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.projectile);
+    }
+}
+
+impl StateHash for Breach {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.threat);
+    }
+}
+
+impl StateHash for Fire {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.defender);
+        h.write(&self.target);
+        h.write(&self.to);
+    }
+}
+
+impl StateHash for ManualUnit {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+    }
+}
+
 impl StateHash for ClaimDock {
     fn hash_into(&self, h: &mut StateHasher) {
         h.write(&self.depot);
@@ -239,4 +347,13 @@ message_queues! {
     attach: Attach,
     load: Load,
     unload: Unload,
+    manual_unit: ManualUnit,
+    // Combat: strikes and projectile hits before breaches, so a killing
+    // blow on the last tick saves the base; shots last.
+    strike: Strike,
+    projectile_hit: ProjectileHit,
+    projectile_blocked: ProjectileBlocked,
+    projectile_expired: ProjectileExpired,
+    breach: Breach,
+    fire: Fire,
 }
