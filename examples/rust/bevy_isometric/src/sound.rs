@@ -9,6 +9,7 @@ unsafe extern "C" {
     fn kestrel_audio_start() -> i32;
     fn kestrel_audio_play(cue: i32);
     fn kestrel_audio_stop();
+    fn kestrel_audio_cue_count() -> i32;
     fn kestrel_audio_synthesize(
         events: *const SynthEvent,
         count: u32,
@@ -65,7 +66,8 @@ impl Drop for AudioThread {
     }
 }
 
-#[derive(Clone, Copy)]
+#[repr(i32)]
+#[derive(Clone, Copy, Debug)]
 pub enum Cue {
     Swing = 0,
     Clang = 1,
@@ -85,6 +87,23 @@ pub enum Cue {
     ArrowHit = 15,
     Decapitate = 16,
     Pierce = 17,
+}
+impl Cue {
+    pub const ALL: [Self; 18] = [
+        Self::Swing, Self::Clang, Self::Step, Self::Stone, Self::Crystal,
+        Self::Polymer, Self::Toss, Self::Land, Self::Dispense, Self::Jetpack,
+        Self::GhoulHit, Self::Bow, Self::Spear, Self::Ballista, Self::Arc,
+        Self::ArrowHit, Self::Decapitate, Self::Pierce,
+    ];
+    pub fn name(id: i32) -> String {
+        let cue = Self::ALL.get(id as usize).expect("recorded cue id");
+        let mut name = String::new();
+        for (index, character) in format!("{cue:?}").chars().enumerate() {
+            if character.is_uppercase() && index > 0 { name.push('_'); }
+            name.push(character.to_ascii_lowercase());
+        }
+        name
+    }
 }
 #[repr(C)]
 struct SynthEvent {
@@ -117,6 +136,7 @@ impl Sound {
         }
     }
     pub fn new() -> Self {
+        assert_eq!(unsafe { kestrel_audio_cue_count() } as usize, Cue::ALL.len());
         // The worker owns the native context/device for their entire lifetime.
         // Initialization completes before any cue can be submitted.
         let worker = AudioThread::start(
@@ -221,6 +241,15 @@ impl Sound {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cue_ids_and_names_match_native_bank() {
+        assert_eq!(unsafe { kestrel_audio_cue_count() } as usize, Cue::ALL.len());
+        for (index, cue) in Cue::ALL.iter().enumerate() {
+            assert_eq!(*cue as usize, index);
+            assert!(!Cue::name(index as i32).is_empty());
+        }
+        assert_eq!(Cue::name(Cue::GhoulHit as i32), "ghoul_hit");
+    }
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,

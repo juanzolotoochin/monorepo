@@ -16,6 +16,7 @@ pub struct Settlement {
     labels: BTreeMap<String, Entity>,
     hud: Option<Entity>,
     last_sound: u64,
+    last_attack_serial: u64,
     dying: Vec<Corpse>,
     attached: BTreeMap<u64, Vec<Rig>>,
     hit_until: BTreeMap<u64, u64>,
@@ -92,6 +93,7 @@ pub fn setup(world: &mut World) {
     state.hit_until.clear();
     state.inspection = None;
     state.last_sound = 0;
+    state.last_attack_serial = 0;
     state.templates.clear();
     for (_, e) in std::mem::take(&mut state.labels) {
         world.despawn(e);
@@ -291,7 +293,9 @@ pub fn tick(world: &mut World) {
     {
         return;
     }
-    let dt = world.resource::<Time>().delta_secs_f64();
+    let dt = world.get_resource::<crate::control::Options>()
+        .and_then(|options| options.script.as_ref().map(|_| 1.0 / f64::from(options.fps())))
+        .unwrap_or_else(|| world.resource::<Time>().delta_secs_f64());
     let mut state = world.remove_resource::<Settlement>().unwrap();
     let Some(sim) = &mut state.simulation else {
         world.insert_resource(state);
@@ -321,6 +325,21 @@ pub fn tick(world: &mut World) {
         sim.set_controlled_pose(&id, [pos.x, pos.z], heading)
             .unwrap();
     }
+    if let Some(attack) = world.resource::<crate::gameplay::Controls>().attack {
+        if attack.serial > state.last_attack_serial {
+            if let Some(id) = sim.config().agents.iter().find(|a| a.controlled).map(|a| a.id.clone()) {
+                let library = world.resource::<SceneLibrary>();
+                let muzzle = library.scenes[library.current].scene.style.as_ref()
+                    .and_then(|style| style.weapon_skins.iter()
+                        .find(|skin| skin.weapon == attack.weapon)
+                        .map(|skin| skin.muzzle.map(|v| v * style.actor_scale)))
+                    .unwrap_or([0.0, 0.6, 0.25]);
+                sim.queue_attack_aim(&id, attack.weapon, muzzle, [attack.aim.x, attack.aim.z], 13)
+                    .expect("validated player attack");
+            }
+            state.last_attack_serial = attack.serial;
+        }
+    }
     let simulation_start = std::time::Instant::now();
     let tick_before = sim.tick;
     sim.advance(dt.min(0.25)).expect("bounded frame duration");
@@ -341,53 +360,19 @@ pub fn tick(world: &mut World) {
             .gauge("last_clamped_seconds", dt - 0.25);
     }
     let projection_start = std::time::Instant::now();
-    if let Some((weapon, aim)) = world
-        .resource::<crate::gameplay::Controls>()
-        .attack
-        .and_then(|a| {
-            (a.age >= crate::gameplay::WINDUP + 0.055 && a.age < crate::gameplay::ACTIVE_END)
-                .then_some((a.weapon, a.aim))
-        })
-    {
-        if let Some(id) = sim
-            .config()
-            .agents
-            .iter()
-            .find(|a| a.controlled)
-            .map(|a| a.id.clone())
-        {
-            let muzzle = world.resource::<SceneLibrary>().scenes
-                [world.resource::<SceneLibrary>().current]
-                .scene
-                .style
-                .as_ref()
-                .and_then(|style| {
-                    style
-                        .weapon_skins
-                        .iter()
-                        .find(|skin| skin.weapon == weapon)
-                        .map(|skin| skin.muzzle.map(|v| v * style.actor_scale))
-                })
-                .unwrap_or([0.0, 0.6, 0.25]);
-            let hits = sim.attack_aim(&id, weapon, muzzle, [aim.x, aim.z]).unwrap();
-            if hits > 0
-                && matches!(
-                    weapon,
-                    gameplay_core::Weapon::Sword | gameplay_core::Weapon::Spear
-                )
-            {
-                let mut controls = world.resource_mut::<crate::gameplay::Controls>();
-                if let Some(attack) = &mut controls.attack {
-                    attack.impact_angle = Some(attack.angle());
-                    attack.age = 0.0;
-                }
-                controls.velocity = Vec3::ZERO;
-                controls.impacts += hits;
-                let mut feedback = world.resource_mut::<crate::effects::Feedback>();
-                feedback.hit_stop = 0.075;
-                feedback.trauma = 0.24;
-            }
+    let hits = sim.events.iter().filter(|event| matches!(event, gameplay_core::Event::Hit { projectile: None, .. })).count() as u32;
+    if hits > 0 && world.resource::<crate::gameplay::Controls>().attack
+        .is_some_and(|a| matches!(a.weapon, gameplay_core::Weapon::Sword | gameplay_core::Weapon::Spear)) {
+        let mut controls = world.resource_mut::<crate::gameplay::Controls>();
+        if let Some(attack) = &mut controls.attack {
+            attack.impact_angle = Some(attack.angle());
+            attack.age = 0.0;
         }
+        controls.velocity = Vec3::ZERO;
+        controls.impacts += hits;
+        let mut feedback = world.resource_mut::<crate::effects::Feedback>();
+        feedback.hit_stop = 0.075;
+        feedback.trauma = 0.24;
     }
     let mut arc_source = pos + Vec3::Y * 0.75;
     let mut arc_fired = false;

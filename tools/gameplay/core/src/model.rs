@@ -182,6 +182,14 @@ pub struct Projectile {
     pub kind: ProjectileKind,
 }
 #[derive(Clone, Debug, Serialize)]
+pub struct PendingAttack {
+    pub actor: String,
+    pub weapon: Weapon,
+    pub muzzle: [f32; 3],
+    pub aim: Point,
+    pub resolve_at: u64,
+}
+#[derive(Clone, Debug, Serialize)]
 pub struct SpentProjectile {
     pub id: u64,
     pub item: String,
@@ -319,6 +327,7 @@ pub struct Simulation {
     pub metrics: Metrics,
     pub manual_jobs: BTreeMap<String, ManualJob>,
     pub attack_ready: BTreeMap<String, u64>,
+    pub pending_attacks: Vec<PendingAttack>,
     #[serde(skip)]
     pub events: Vec<Event>,
 }
@@ -352,6 +361,7 @@ impl Simulation {
             &self.accounts,
             &self.manual_jobs,
             &self.attack_ready,
+            &self.pending_attacks,
         )
         )).expect("finite validated simulation state");
         let hash = bytes.iter().fold(0xcbf29ce484222325_u64, |hash, byte| {
@@ -477,6 +487,7 @@ impl Simulation {
             metrics: Metrics::default(),
             manual_jobs: BTreeMap::new(),
             attack_ready: BTreeMap::new(),
+            pending_attacks: vec![],
             events: vec![],
         };
         for a in &s.config.agents {
@@ -716,6 +727,12 @@ impl Simulation {
         self.production();
         self.manual_transfers();
         self.workers();
+        let (ready, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending_attacks)
+            .into_iter().partition(|attack| attack.resolve_at <= self.tick);
+        self.pending_attacks = waiting;
+        for attack in ready {
+            let _ = self.attack_aim(&attack.actor, attack.weapon, attack.muzzle, attack.aim);
+        }
         self.combat();
     }
     fn arrivals(&mut self) {

@@ -71,7 +71,7 @@ pub fn capture_frame(
             }
             hub.audio_events=sound.recorded_events().into_iter().filter(|(tick,_)|*tick>hub.warmup).map(|(tick,kind)| {
                 let frame=tick-hub.warmup-1;
-                let name=["swing","clang","step","stone","crystal","polymer","toss","land","dispense","jetpack","ghoul_hit","bow","spear","ballista","arc","arrow_hit","decapitate","pierce"][kind as usize];
+                let name=crate::sound::Cue::name(kind);
                 json!({"frame":frame,"seconds":frame as f64/f64::from(hub.options.fps()),"cue":name})
             }).collect();
             hub.save_report(video.completed);

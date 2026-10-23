@@ -718,7 +718,7 @@ pub fn end(world: &mut World) {
             && hub.tick > hub.warmup
             && hub.queue.is_empty()
             && hub.active.is_none());
-    if hub.trace.is_some() || !hub.inspect.is_empty() || finishing {
+    if hub.options.trace.is_some() || !hub.inspect.is_empty() || finishing {
         hub.latest = snapshot(world, &hub);
     }
     if hub.trace.is_some() {

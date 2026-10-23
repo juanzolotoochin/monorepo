@@ -702,6 +702,20 @@ fn authored_weapon_tuning_changes_reach_damage_and_cooldown() {
     assert_eq!(sim.attack("player", Weapon::Sword).unwrap(), 0);
 }
 #[test]
+fn scheduled_attack_contacts_on_an_integer_simulation_tick() {
+    let mut sim = combat_test_sim();
+    sim.threats.insert(100, combat_threat(100, [0., 1.], 8, 0));
+    sim.queue_attack_aim("player", Weapon::Sword, [0., 0.6, 0.25], [0., 1.], 13).unwrap();
+    let before = sim.replay_fingerprint();
+    sim.advance_ticks(12);
+    assert_eq!(sim.threats[&100].hp, 8);
+    assert_eq!(sim.pending_attacks.len(), 1);
+    assert_ne!(before, sim.replay_fingerprint());
+    sim.advance_ticks(1);
+    assert!(sim.threats[&100].hp < 8);
+    assert!(sim.pending_attacks.is_empty());
+}
+#[test]
 fn ballista_pierces_or_impales_from_stable_per_projectile_rolls() {
     let mut sim = combat_test_sim();
     let mut ids = Vec::new();
