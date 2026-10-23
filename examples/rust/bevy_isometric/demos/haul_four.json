@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "scene": "pile-lab",
+  "fps": 30,
+  "width": 1440,
+  "height": 960,
+  "max_frames": 1200,
+  "steps": [
+    {
+      "op": "add",
+      "dispenser": 0,
+      "units": 8
+    },
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "walk",
+      "position": [
+        -1.7,
+        -3.4
+      ]
+    },
+    {
+      "op": "grab",
+      "pile": 0,
+      "units": 4,
+      "material": "AmberOre",
+      "seconds_per_unit": 0.7,
+      "approach": [
+        -2.3,
+        -2.8
+      ]
+    },
+    {
+      "op": "assert",
+      "cargo_units": 4,
+      "total_units": 104,
+      "piles": [
+        {
+          "id": 0,
+          "units": 4
+        }
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "walk",
+      "position": [
+        2.0,
+        1.0
+      ]
+    },
+    {
+      "op": "drop_all",
+      "position": [
+        4.0,
+        4.5
+      ],
+      "seconds_per_unit": 0.7,
+      "approach": [
+        2.9,
+        5.0
+      ]
+    },
+    {
+      "op": "assert",
+      "cargo_units": 0,
+      "total_units": 104,
+      "piles": [
+        {
+          "id": 0,
+          "units": 4
+        },
+        {
+          "id": 5,
+          "units": 4
+        }
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "inspect"
+    }
+  ]
+}

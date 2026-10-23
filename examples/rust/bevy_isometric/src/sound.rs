@@ -9,6 +9,12 @@ unsafe extern "C" {
     fn kestrel_audio_start() -> i32;
     fn kestrel_audio_play(cue: i32);
     fn kestrel_audio_stop();
+    fn kestrel_audio_synthesize(
+        events: *const SynthEvent,
+        count: u32,
+        output: *mut f32,
+        frames: u32,
+    );
 }
 
 // Miniaudio initializes Windows COM as MTA. Winit needs STA on the window
@@ -64,23 +70,41 @@ pub enum Cue {
     Swing = 0,
     Clang = 1,
     Step = 2,
+    Toss = 6,
+    Land = 7,
+    Dispense = 8,
     Stone = 3,
     Crystal = 4,
     Polymer = 5,
+}
+#[repr(C)]
+struct SynthEvent {
+    sample: u64,
+    kind: i32,
+}
+#[derive(Clone)]
+struct RecordedCue {
+    tick: u64,
+    kind: i32,
 }
 #[derive(Resource)]
 pub struct Sound {
     pub muted: bool,
     active: bool,
     _worker: Option<AudioThread>,
+    recording: bool,
+    tick: std::sync::atomic::AtomicU64,
+    cues: std::sync::Mutex<Vec<RecordedCue>>,
 }
 impl Sound {
-    #[cfg(test)]
     pub fn silent() -> Self {
         Self {
             muted: true,
             active: false,
             _worker: None,
+            recording: false,
+            tick: std::sync::atomic::AtomicU64::new(0),
+            cues: std::sync::Mutex::new(vec![]),
         }
     }
     pub fn new() -> Self {
@@ -98,9 +122,85 @@ impl Sound {
             muted: !active,
             active,
             _worker: worker.map(|(_, worker)| worker),
+            recording: false,
+            tick: std::sync::atomic::AtomicU64::new(0),
+            cues: std::sync::Mutex::new(vec![]),
         }
     }
+    pub fn recording() -> Self {
+        Self {
+            recording: true,
+            muted: false,
+            ..Self::silent()
+        }
+    }
+    pub fn set_recording_tick(&self, tick: u64) {
+        self.tick.store(tick, std::sync::atomic::Ordering::Relaxed);
+    }
+    pub fn recorded_events(&self) -> Vec<(u64, i32)> {
+        self.cues
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|cue| (cue.tick, cue.kind))
+            .collect()
+    }
+    pub fn write_wav(
+        &self,
+        path: &str,
+        fps: u32,
+        start_tick: u64,
+        frames: usize,
+    ) -> std::io::Result<()> {
+        use std::io::Write;
+        let sample_frames = (frames as u64 * 48000 / u64::from(fps)) as u32;
+        let events: Vec<_> = self
+            .cues
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|cue| cue.tick >= start_tick)
+            .map(|cue| SynthEvent {
+                sample: (cue.tick - start_tick) * 48000 / u64::from(fps),
+                kind: cue.kind,
+            })
+            .filter(|event| event.sample < u64::from(sample_frames))
+            .collect();
+        let mut samples = vec![0.0_f32; sample_frames as usize * 2];
+        unsafe {
+            kestrel_audio_synthesize(
+                events.as_ptr(),
+                events.len() as u32,
+                samples.as_mut_ptr(),
+                sample_frames,
+            );
+        }
+        let data_bytes = sample_frames * 4;
+        let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
+        file.write_all(b"RIFF")?;
+        file.write_all(&(data_bytes + 36).to_le_bytes())?;
+        file.write_all(b"WAVEfmt ")?;
+        file.write_all(&16_u32.to_le_bytes())?;
+        file.write_all(&1_u16.to_le_bytes())?;
+        file.write_all(&2_u16.to_le_bytes())?;
+        file.write_all(&48000_u32.to_le_bytes())?;
+        file.write_all(&192000_u32.to_le_bytes())?;
+        file.write_all(&4_u16.to_le_bytes())?;
+        file.write_all(&16_u16.to_le_bytes())?;
+        file.write_all(b"data")?;
+        file.write_all(&data_bytes.to_le_bytes())?;
+        for sample in samples {
+            file.write_all(&((sample.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes())?;
+        }
+        file.flush()
+    }
     pub fn play(&self, cue: Cue) {
+        if self.recording {
+            self.cues.lock().unwrap().push(RecordedCue {
+                tick: self.tick.load(std::sync::atomic::Ordering::Relaxed),
+                kind: cue as i32,
+            });
+        }
         if self.active && !self.muted {
             unsafe {
                 kestrel_audio_play(cue as i32);
@@ -116,6 +216,31 @@ mod tests {
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     };
+
+    #[test]
+    fn offline_foley_is_deterministic_audible_and_silent_outside_cue_windows() {
+        let events = [
+            SynthEvent {
+                sample: 2400,
+                kind: Cue::Toss as i32,
+            },
+            SynthEvent {
+                sample: 12000,
+                kind: Cue::Land as i32,
+            },
+        ];
+        let mut first = vec![0.0; 96000];
+        let mut second = first.clone();
+        unsafe {
+            kestrel_audio_synthesize(events.as_ptr(), 2, first.as_mut_ptr(), 48000);
+            kestrel_audio_synthesize(events.as_ptr(), 2, second.as_mut_ptr(), 48000);
+        }
+        assert_eq!(first, second);
+        assert!(first.iter().all(|s| s.is_finite() && s.abs() < 1.0));
+        assert!(first[..4800].iter().all(|s| *s == 0.0));
+        assert!(first[4800..36000].iter().any(|s| s.abs() > 0.05));
+        assert!(first[90000..].iter().all(|s| *s == 0.0));
+    }
 
     #[test]
     fn audio_init_and_shutdown_share_a_dedicated_thread() {

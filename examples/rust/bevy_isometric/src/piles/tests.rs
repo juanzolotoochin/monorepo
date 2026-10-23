@@ -14,7 +14,14 @@ fn app() -> App {
         .insert_resource(crate::sound::Sound::silent())
         .add_systems(
             Update,
-            (setup_scene, crate::gameplay::move_player, arrive, render).chain(),
+            (
+                setup_scene,
+                crate::gameplay::move_player,
+                arrive,
+                update_transit,
+                render,
+            )
+                .chain(),
         );
     app.world_mut()
         .spawn((Player, Transform::from_xyz(0.0, 0.0, 1.0)));

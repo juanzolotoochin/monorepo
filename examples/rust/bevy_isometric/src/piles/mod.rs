@@ -37,27 +37,38 @@ struct LabAssets {
     trim: Handle<StandardMaterial>,
 }
 #[derive(Clone, Copy, Debug)]
-enum Action {
+pub(crate) enum Action {
     Pickup(PileId),
+    PickupAmount(PileId, u32),
     Deposit(PileId),
     Drop(Vec3),
 }
 #[derive(Clone, Copy)]
-struct Job {
+pub(crate) struct Job {
     action: Action,
     center: Vec3,
     age: f32,
     stalled: f32,
     previous: Vec3,
+    pace: f32,
+    clock: f32,
+    remaining: Option<u32>,
+    transferred: u32,
+    planned: u32,
+    radius: f32,
+    destination: Option<PileId>,
 }
 #[derive(Resource)]
 pub struct PileLab {
     scene: usize,
-    stock: Option<Stock>,
+    pub(crate) stock: Option<Stock>,
     layout: Option<PileLayout>,
     assets: Option<LabAssets>,
-    job: Option<Job>,
-    notice: String,
+    pub(crate) job: Option<Job>,
+    pub(crate) notice: String,
+    pub(crate) last_error: Option<String>,
+    pub(crate) in_flight: u32,
+    pub(crate) job_serial: u64,
 }
 impl Default for PileLab {
     fn default() -> Self {
@@ -68,6 +79,9 @@ impl Default for PileLab {
             assets: None,
             job: None,
             notice: String::new(),
+            last_error: None,
+            in_flight: 0,
+            job_serial: 0,
         }
     }
 }
@@ -79,11 +93,13 @@ pub struct MineralUnit;
 pub struct PileVisual {
     id: PileId,
     units: u32,
+    hidden: u32,
 }
 #[derive(Component)]
 pub struct CarryVisual {
     units: u32,
     material: Option<Mineral>,
+    hidden: u32,
 }
 #[derive(Clone, Copy)]
 enum CaptionKind {
@@ -108,8 +124,11 @@ pub struct CapacityTick(u32);
 mod demo;
 #[cfg(test)]
 mod tests;
+mod transfer;
 mod view;
 pub use demo::showcase;
+pub use transfer::update_transit;
+pub(crate) use transfer::{Destination, Transit};
 pub use view::{captions, render, setup_scene, update_display};
 
 fn ray_sphere(origin: Vec3, direction: Vec3, center: Vec3, radius: f32) -> Option<f32> {
@@ -194,6 +213,7 @@ pub fn input(
     if manual && lab.job.take().is_some() {
         controls.route.clear();
         lab.notice = "Haul canceled. Cargo is retained.".into();
+        lab.last_error = Some("Haul canceled by player input".into());
     }
     if !buttons.just_pressed(MouseButton::Left) || shift {
         return;
@@ -300,7 +320,7 @@ pub fn input(
 
 fn action_target(stock: &Stock, action: Action) -> Result<(Vec3, f32), &'static str> {
     match action {
-        Action::Pickup(id) | Action::Deposit(id) => {
+        Action::Pickup(id) | Action::PickupAmount(id, _) | Action::Deposit(id) => {
             let p = stock.piles.get(&id).ok_or("Pile no longer exists")?;
             let units = if matches!(action, Action::Deposit(_)) {
                 (p.units + stock.cargo.units).min(voxel_assets::PILE_CAPACITY)
@@ -312,25 +332,58 @@ fn action_target(stock: &Stock, action: Action) -> Result<(Vec3, f32), &'static 
         Action::Drop(p) => Ok((p, pile_radius(stock.cargo.units))),
     }
 }
-fn begin_job(
+pub(crate) fn begin_job(
     lab: &mut PileLab,
     controls: &mut Controls,
     player: Vec3,
     action: Action,
     obstacles: &[Disc],
 ) -> Result<(), &'static str> {
+    begin_job_with_options(lab, controls, player, action, obstacles, 0.18, None)
+}
+pub(crate) fn begin_job_with_options(
+    lab: &mut PileLab,
+    controls: &mut Controls,
+    player: Vec3,
+    action: Action,
+    obstacles: &[Disc],
+    pace: f32,
+    approach: Option<Vec3>,
+) -> Result<(), &'static str> {
+    if !pace.is_finite() || !(0.0..=5.0).contains(&pace) {
+        return Err("Invalid transfer interval");
+    }
+    if lab.in_flight > 0 {
+        return Err("Wait for airborne units to land before starting another transfer");
+    }
+    lab.job_serial = lab.job_serial.wrapping_add(1);
     lab.job = None;
+    lab.last_error = None;
     controls.route.clear();
     let stock = lab.stock.as_ref().ok_or("Pile lab is inactive")?;
     let (center, radius) = action_target(stock, action)?;
     if matches!(action, Action::Drop(_)) && !free_drop(center, stock.cargo.units, obstacles) {
         return Err("Choose open floor away from piles, machines and the deck edge");
     }
-    if matches!(action, Action::Pickup(_)) && stock.cargo.units == stock.cargo.capacity {
+    if matches!(action, Action::Pickup(_) | Action::PickupAmount(..))
+        && stock.cargo.units == stock.cargo.capacity
+    {
         return Err("Carrier is full. Deposit before collecting more");
     }
-    let route = approach_route(player, center, radius, obstacles)
-        .ok_or("No clear route to that pile location")?;
+    let route = if let Some(stand) = approach {
+        let gap = flat(stand - center).length();
+        if gap < radius + RADIUS + 0.04 || gap > radius + RADIUS + 0.45 {
+            return Err("Approach point must be within safe transfer reach");
+        }
+        let path = navigation::path(player, stand, obstacles);
+        if path.is_empty() {
+            return Err("Approach point is blocked");
+        }
+        path
+    } else {
+        approach_route(player, center, radius, obstacles)
+            .ok_or("No clear route to that pile location")?
+    };
     controls.route = route;
     controls.attack = None;
     controls.queued = None;
@@ -340,8 +393,15 @@ fn begin_job(
         age: 0.0,
         stalled: 0.0,
         previous: player,
+        pace,
+        clock: pace,
+        remaining: None,
+        transferred: 0,
+        planned: 0,
+        radius,
+        destination: None,
     });
-    lab.notice = if matches!(action, Action::Pickup(_)) {
+    lab.notice = if matches!(action, Action::Pickup(_) | Action::PickupAmount(..)) {
         "Walking to collect mineral…"
     } else {
         "Walking to deposit cargo…"
@@ -351,6 +411,8 @@ fn begin_job(
 }
 
 pub fn arrive(
+    mut commands: Commands,
+    sound: Res<crate::sound::Sound>,
     time: Res<Time>,
     player: Single<&Transform, With<Player>>,
     obstacles: Query<&Obstacle>,
@@ -371,19 +433,63 @@ pub fn arrive(
         0.0
     };
     job.previous = player.translation;
+    if job.remaining == Some(0) {
+        if lab.in_flight == 0 {
+            lab.job = None;
+            lab.notice = format!("Transferred {} units. All items landed.", job.transferred);
+        } else {
+            lab.job = Some(job);
+        }
+        return;
+    }
     let stock = lab.stock.as_ref().unwrap();
-    let Ok((_, radius)) = action_target(stock, job.action) else {
+    let target = if job.remaining.is_some() {
+        Ok((job.center, job.radius))
+    } else {
+        action_target(stock, job.action)
+    };
+    let Ok((_, radius)) = target else {
         lab.job = None;
         controls.route.clear();
         lab.notice = "That pile no longer exists. Cargo retained.".into();
+        lab.last_error = Some(lab.notice.clone());
         return;
     };
     let distance = flat(player.translation - job.center).length();
     if distance >= radius + RADIUS + 0.02 && distance <= radius + RADIUS + 0.45 {
         let discs: Vec<_> = obstacles.iter().map(|o| o.0).collect();
+        if job.pace > 0.0 {
+            controls.route.clear();
+            controls.velocity = Vec3::ZERO;
+            match transfer::step(
+                &mut commands,
+                &sound,
+                &mut lab,
+                &mut job,
+                &player,
+                dt,
+                &discs,
+            ) {
+                Ok(()) => {
+                    lab.job = Some(job);
+                }
+                Err(error) => {
+                    lab.job = None;
+                    lab.last_error = Some(error.into());
+                    lab.notice = error.into();
+                }
+            }
+            return;
+        }
         let stock = lab.stock.as_mut().unwrap();
         let result = match job.action {
             Action::Pickup(id) => stock.pickup(id).map(|n| {
+                format!(
+                    "Collected {n} units. Carrying {}/{}.",
+                    stock.cargo.units, stock.cargo.capacity
+                )
+            }),
+            Action::PickupAmount(id, amount) => stock.pickup_amount(id, amount).map(|n| {
                 format!(
                     "Collected {n} units. Carrying {}/{}.",
                     stock.cargo.units, stock.cargo.capacity
@@ -403,6 +509,7 @@ pub fn arrive(
                 }
             }
         };
+        lab.last_error = result.as_ref().err().map(|e| e.to_string());
         lab.notice = result.unwrap_or_else(str::to_string);
         lab.job = None;
         controls.route.clear();
@@ -413,6 +520,7 @@ pub fn arrive(
         lab.job = None;
         controls.route.clear();
         lab.notice = "Haul timed out. Cargo retained; choose another approach.".into();
+        lab.last_error = Some(lab.notice.clone());
         return;
     }
     if controls.route.is_empty() || job.stalled > 0.8 {
@@ -424,6 +532,7 @@ pub fn arrive(
             lab.job = None;
             controls.route.clear();
             lab.notice = "Route blocked. Cargo retained.".into();
+            lab.last_error = Some(lab.notice.clone());
             return;
         }
     }

@@ -1,5 +1,6 @@
 //! Kestrel: an asset-free voxel action scene. See ../README.md.
 mod assets;
+mod control;
 mod effects;
 mod gameplay;
 mod impact;
@@ -14,20 +15,44 @@ use bevy::{app::AppExit, prelude::*};
 use gameplay::*;
 
 fn main() {
-    let mut scenes = assets::SceneLibrary::new();
     let args: Vec<_> = std::env::args().collect();
+    let options = control::Options::from_args(&args).unwrap_or_else(|error| {
+        eprintln!("{error}");
+        std::process::exit(2)
+    });
+    let mut scenes = assets::SceneLibrary::new();
+    if let Some(index) = options.initial_scene() {
+        scenes.initial = index;
+    }
     if let Some(pair) = args.windows(2).find(|pair| pair[0] == "--scene") {
         scenes.initial = match pair[1].as_str() {
             "mining-deck" => 0,
             "boulder-lab" => 1,
             "pile-lab" => 2,
             name => {
-                eprintln!("Unknown scene {name}; use mining-deck, boulder-lab or pile-lab");
-                std::process::exit(2);
+                eprintln!("Unknown scene {name}");
+                std::process::exit(2)
             }
         };
     }
-    App::new()
+    let hub = control::Hub::new(options.clone()).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(2)
+    });
+    build_app(options, scenes, hub).run();
+}
+
+fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: control::Hub) -> App {
+    use bevy::{app::ScheduleRunnerPlugin, time::TimeUpdateStrategy};
+    use std::time::Duration;
+    let simulation = options.simulation;
+    let offscreen = options.frames_dir.is_some();
+    let fps = options.fps();
+    let deterministic = simulation || options.script.is_some();
+    let mut app = App::new();
+    app.insert_resource(options)
+        .insert_resource(hub)
+        .init_resource::<control::Video>()
         .insert_resource(ClearColor(Color::srgb(0.018, 0.025, 0.045)))
         .insert_resource(GlobalAmbientLight {
             color: Color::srgb(0.57, 0.70, 1.0),
@@ -39,8 +64,38 @@ fn main() {
         .init_resource::<Controls>()
         .init_resource::<piles::PileLab>()
         .init_resource::<effects::Feedback>()
-        .insert_resource(sound::Sound::new())
-        .add_plugins(
+        .insert_resource(if simulation || offscreen {
+            sound::Sound::recording()
+        } else {
+            sound::Sound::new()
+        });
+    if simulation {
+        app.add_plugins(
+            MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_millis(1))),
+        )
+        .init_resource::<Assets<Mesh>>()
+        .init_resource::<Assets<StandardMaterial>>()
+        .init_resource::<ButtonInput<KeyCode>>()
+        .init_resource::<ButtonInput<MouseButton>>();
+    } else if offscreen {
+        app.add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: None,
+                    exit_condition: bevy::window::ExitCondition::DontExit,
+                    ..default()
+                })
+                .set(bevy::render::RenderPlugin {
+                    synchronous_pipeline_compilation: true,
+                    ..default()
+                })
+                .disable::<bevy::winit::WinitPlugin>(),
+        )
+        .add_plugins(ScheduleRunnerPlugin::run_loop(Duration::from_secs_f64(
+            1.0 / f64::from(fps),
+        )));
+    } else {
+        app.add_plugins(
             DefaultPlugins.set(WindowPlugin {
                 primary_window: Some(Window {
                     title:
@@ -51,37 +106,55 @@ fn main() {
                 }),
                 ..default()
             }),
+        );
+    }
+    if deterministic {
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / f64::from(fps),
+        )));
+    }
+    app.add_systems(Startup, (scene::setup, scene::hud).chain());
+    if offscreen {
+        app.add_systems(Startup, control::setup_render.after(scene::setup));
+    }
+    app.add_systems(
+        Update,
+        (
+            assets::switch_scene,
+            piles::setup_scene,
+            control::begin,
+            piles::input.run_if(control::interactive),
+            mouse_commands.run_if(control::interactive),
+            preview::playback.run_if(control::interactive),
+            move_player,
+            piles::arrive,
+            piles::update_transit,
+            piles::render,
+            piles::update_display.run_if(control::rendered),
+            piles::showcase.run_if(control::interactive),
+            combat,
+            animate_character,
+            effects::update_effects,
+            effects::camera_feedback.run_if(control::rendered),
+            scene::update_hud.run_if(control::rendered),
+            preview::capture.run_if(control::interactive),
+            control::end,
+            control::capture_frame.run_if(control::rendered),
         )
-        .add_systems(Startup, (scene::setup, scene::hud))
-        .add_systems(
+            .chain(),
+    );
+    if !simulation {
+        app.add_systems(
             Update,
-            (
-                assets::switch_scene,
-                piles::setup_scene,
-                piles::input,
-                mouse_commands,
-                preview::playback,
-                move_player,
-                piles::arrive,
-                piles::render,
-                piles::update_display,
-                piles::showcase,
-                combat,
-                animate_character,
-                effects::update_effects,
-                effects::camera_feedback,
-                scene::update_hud,
-                preview::capture,
-            )
-                .chain(),
+            (draw_navigation, keyboard_actions).run_if(control::interactive),
         )
-        .add_systems(Update, (draw_navigation, keyboard_actions))
         .add_systems(
             PostUpdate,
             (assets::update_captions, piles::captions)
                 .after(bevy::transform::TransformSystems::Propagate),
-        )
-        .run();
+        );
+    }
+    app
 }
 
 fn keyboard_actions(

@@ -24,6 +24,7 @@ pub struct SceneLibrary {
     pub scenes: Vec<ScenePack>,
     pub current: usize,
     pub initial: usize,
+    pub requested: Option<usize>,
 }
 impl SceneLibrary {
     pub fn new() -> Self {
@@ -37,6 +38,7 @@ impl SceneLibrary {
             ],
             current: usize::MAX,
             initial: 0,
+            requested: None,
         }
     }
     pub fn title(&self) -> &str {
@@ -105,7 +107,9 @@ pub fn switch_scene(
     mut controls: ResMut<Controls>,
     mut feedback: ResMut<Feedback>,
 ) {
-    let requested = if keys.just_pressed(KeyCode::Digit1) {
+    let requested = if let Some(index) = library.requested.take() {
+        Some(index)
+    } else if keys.just_pressed(KeyCode::Digit1) {
         Some(0)
     } else if keys.just_pressed(KeyCode::Digit2) {
         Some(1)
