@@ -421,8 +421,8 @@ trace. Its assertions check hits, a kill, and actual knockback displacement.
 One machine hosts and others join over UDP. Each player who joins gets an
 avatar of their own beside the spawn point and drives it with the usual
 controls. Other players wear the same exosuit, dressed by the scene's style,
-and walk, idle and fly with the same animation (their attacks aren't shown
-yet).
+and walk, idle, fly and swing with the same animation, holding the weapon
+they last swung. Their hits don't play sparks or sound yet.
 
 ```sh
 # The host listens on a UDP port:

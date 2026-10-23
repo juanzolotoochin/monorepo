@@ -1,15 +1,18 @@
 //! Other players' avatars in a networked game: a copy of the local player's
 //! exosuit (as the scene's style dresses it) per avatar this machine doesn't
 //! control, placed where the simulation has it between ticks and posed like
-//! the local player.
+//! the local player, swings included.
 
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 
-use crate::gameplay::{Part, PartKind, Player, Pose, WALK_SPEED};
+use content::scenario::Weapon;
+use sim::settlement::avatar::Swing;
+
+use crate::gameplay::{Attack, Part, PartKind, Player, Pose, ATTACK_END, REBOUND_END, WALK_SPEED};
 use crate::jetpack::Exhaust;
 use crate::lockstep::Game;
-use crate::style::ActiveStyle;
+use crate::style::{ActiveStyle, WeaponVisual};
 
 #[derive(Component)]
 pub struct Peer {
@@ -18,6 +21,8 @@ pub struct Peer {
     style: Option<usize>,
     /// Walk cycle phase, advanced by distance moved.
     stride: f32,
+    /// The weapon in hand: the one last swung.
+    weapon: Weapon,
 }
 
 /// A copied part pivot. Not a `Part`, so the local player's animation and
@@ -32,6 +37,29 @@ pub struct PeerPart {
 #[derive(Component)]
 pub struct PeerExhaust;
 
+/// A copied weapon model, shown while it's the weapon in hand.
+#[derive(Component)]
+pub struct PeerWeapon(Weapon);
+
+/// The swing as the local player's animation sees it, `ticks` after the
+/// last simulated tick began: wind-up and cut from the swing's start, or a
+/// rebound from the tick its blade hit something.
+fn attack(swing: &Swing, ticks: f32) -> Option<Attack> {
+    let seconds = |from: u64| ((ticks - from as f32) / content::TICKS_PER_SECOND as f32).max(0.0);
+    let mut attack = Attack::new(Vec3::new(swing.aim.x.to_f32(), 0.0, swing.aim.y.to_f32()), swing.weapon);
+    let rebound = swing.resolved && swing.hits > 0 && matches!(swing.weapon, Weapon::Sword | Weapon::Spear);
+    if rebound {
+        // The blade stops where it was when the hit resolved.
+        attack.age = swing.resolve_at.saturating_sub(swing.started) as f32 / content::TICKS_PER_SECOND as f32;
+        attack.impact_angle = Some(attack.angle());
+        attack.age = seconds(swing.resolve_at);
+        (attack.age < REBOUND_END).then_some(attack)
+    } else {
+        attack.age = seconds(swing.started);
+        (attack.age < ATTACK_END).then_some(attack)
+    }
+}
+
 pub fn update(
     mut commands: Commands,
     game: Res<Game>,
@@ -41,13 +69,17 @@ pub fn update(
     mut peers: Query<(Entity, &mut Peer, &mut Transform), (Without<PeerPart>, Without<Player>)>,
     mut parts: Query<(Entity, &PeerPart, &mut Transform), Without<Peer>>,
     parents: Query<&ChildOf>,
-    mut exhausts: Query<(&ChildOf, &mut Visibility), With<PeerExhaust>>,
+    mut exhausts: Query<(&ChildOf, &mut Visibility), (With<PeerExhaust>, Without<PeerWeapon>)>,
+    mut weapons: Query<(Entity, &PeerWeapon, &mut Visibility), Without<PeerExhaust>>,
 ) {
     let me = game.player();
     let others: Vec<u16> = game.current.as_ref().map_or_else(Vec::new, |s| {
         (0..s.agents.len() as u16).filter(|&i| s.agents[i as usize].controlled && Some(i) != me).collect()
     });
     let breathe = (time.elapsed_secs() * 2.0).sin() * 0.012;
+    // Render time in ticks: views sit `alpha` of the way from the previous
+    // tick's state to the current one's.
+    let ticks = game.tick as f32 - 1.0 + game.alpha;
     let mut poses = Vec::new();
     let mut shown = Vec::new();
     for (entity, mut peer, mut transform) in &mut peers {
@@ -69,18 +101,29 @@ pub fn update(
         transform.rotation = Quat::from_rotation_y(before.heading.to_f32() + turn * alpha);
         let airborne = current.avatar.flight.airborne;
         let speed = if airborne { 0.0 } else { (current.avatar.velocity.length().to_f32() / WALK_SPEED).min(1.4) };
-        poses.push((entity, Pose { stride: peer.stride, speed, breathe, airborne, attack: None }));
+        let swing = current.avatar.swing.as_ref();
+        if let Some(swing) = swing {
+            peer.weapon = swing.weapon;
+        }
+        let attack = swing.and_then(|s| attack(s, ticks));
+        poses.push((entity, peer.weapon, Pose { stride: peer.stride, speed, breathe, airborne, attack }));
     }
     for (entity, part, mut transform) in &mut parts {
         // Part pivots hang off the root or the body: find the peer above.
-        let pose = parents.iter_ancestors(entity).find_map(|e| poses.iter().find(|(p, _)| *p == e).map(|(_, pose)| pose));
+        let pose = parents.iter_ancestors(entity).find_map(|e| poses.iter().find(|(p, ..)| *p == e).map(|(.., pose)| pose));
         if let Some(pose) = pose {
             *transform = pose.place(part.kind, part.rest);
         }
     }
     for (parent, mut visibility) in &mut exhausts {
-        if let Some((_, pose)) = poses.iter().find(|(e, _)| *e == parent.parent()) {
+        if let Some((.., pose)) = poses.iter().find(|(e, ..)| *e == parent.parent()) {
             *visibility = if pose.airborne { Visibility::Inherited } else { Visibility::Hidden };
+        }
+    }
+    for (entity, weapon, mut visibility) in &mut weapons {
+        let held = parents.iter_ancestors(entity).find_map(|e| poses.iter().find(|(p, ..)| *p == e).map(|(_, held, _)| *held));
+        if let Some(held) = held {
+            *visibility = if weapon.0 == held { Visibility::Inherited } else { Visibility::Hidden };
         }
     }
     // The player's suit is only complete once the scene's style dresses it.
@@ -91,7 +134,7 @@ pub fn update(
     for agent in others.into_iter().filter(|a| !shown.contains(a)) {
         commands.queue(move |world: &mut World| {
             let root = copy(world, player, None);
-            world.entity_mut(root).insert(Peer { agent, style, stride: 0.0 });
+            world.entity_mut(root).insert(Peer { agent, style, stride: 0.0, weapon: Weapon::Sword });
         });
     }
 }
@@ -107,6 +150,7 @@ fn copy(world: &mut World, source: Entity, parent: Option<Entity>) -> Entity {
     let material = e.get::<MeshMaterial3d<StandardMaterial>>().cloned();
     let part = e.get::<Part>().map(|p| PeerPart { kind: p.kind, rest: p.rest });
     let exhaust = e.contains::<Exhaust>();
+    let weapon = e.get::<WeaponVisual>().map(|w| PeerWeapon(w.0));
     let no_shadow = e.contains::<NotShadowCaster>();
     let children: Vec<Entity> = e.get::<Children>().map_or_else(Vec::new, |c| c.iter().collect());
     let mut copied = world.spawn((transform, visibility));
@@ -122,6 +166,9 @@ fn copy(world: &mut World, source: Entity, parent: Option<Entity>) -> Entity {
     if exhaust {
         copied.insert(PeerExhaust);
     }
+    if let Some(weapon) = weapon {
+        copied.insert(weapon);
+    }
     if no_shadow {
         copied.insert(NotShadowCaster);
     }
@@ -136,4 +183,43 @@ fn copy(world: &mut World, source: Entity, parent: Option<Entity>) -> Entity {
         copy(world, child, Some(id));
     }
     id
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fx::{Fx, FxVec2};
+
+    fn swing(hits: u32) -> Swing {
+        Swing {
+            weapon: Weapon::Sword,
+            aim: FxVec2::new(Fx::ONE, Fx::ZERO),
+            muzzle: [Fx::ZERO; 3],
+            started: 100,
+            resolve_at: 105,
+            until: 117,
+            resolved: hits > 0,
+            hits,
+        }
+    }
+
+    #[test]
+    fn a_swing_plays_from_its_start_tick_and_ends() {
+        let s = swing(0);
+        assert_eq!(attack(&s, 100.0).unwrap().age, 0.0);
+        let mid = attack(&s, 106.0).unwrap();
+        assert!((mid.age - 0.2).abs() < 1e-4 && mid.impact_angle.is_none());
+        assert!((mid.aim - Vec3::X).length() < 1e-4);
+        assert!(attack(&s, 100.0 + ATTACK_END * 30.0 + 0.1).is_none());
+    }
+
+    #[test]
+    fn a_hit_rebounds_from_where_the_blade_was() {
+        let s = swing(1);
+        let at_hit = attack(&swing(0), 105.0).unwrap().angle();
+        let rebound = attack(&s, 106.5).unwrap();
+        assert_eq!(rebound.impact_angle, Some(at_hit));
+        assert!((rebound.age - 0.05).abs() < 1e-4);
+        assert!(attack(&s, 105.0 + REBOUND_END * 30.0 + 0.1).is_none());
+    }
 }
