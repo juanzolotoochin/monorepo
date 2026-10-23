@@ -34,6 +34,17 @@ impl<T: Copy> TimerWheel<T> {
         });
     }
 
+    /// Every pending timer as `(tick, item)`, slot by slot in insertion order.
+    pub fn to_state(&self) -> Vec<Vec<(u64, T)>> {
+        self.slots.clone()
+    }
+
+    pub fn from_state(slots: Vec<Vec<(u64, T)>>) -> Option<TimerWheel<T>> {
+        let valid = slots.len() == SLOTS
+            && slots.iter().enumerate().all(|(i, slot)| slot.iter().all(|&(tick, _)| tick as usize % SLOTS == i));
+        valid.then_some(TimerWheel { slots })
+    }
+
     pub fn len(&self) -> usize {
         self.slots.iter().map(Vec::len).sum()
     }

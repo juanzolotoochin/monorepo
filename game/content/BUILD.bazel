@@ -1,0 +1,29 @@
+load("@rules_rs//rs:rust_library.bzl", "rust_library")
+load("@rules_rs//rs:rust_test.bzl", "rust_test")
+
+filegroup(
+    name = "data",
+    srcs = glob(["data/**/*.ron"]),
+    visibility = ["//game:__subpackages__"],
+)
+
+rust_library(
+    name = "content",
+    srcs = glob(["src/**/*.rs"]),
+    compile_data = [":data"],
+    edition = "2021",
+    visibility = ["//game:__subpackages__"],
+    deps = [
+        "//game/fx",
+        "@crates//:postcard",
+        "@crates//:ron",
+        "@crates//:serde",
+    ],
+)
+
+rust_test(
+    name = "content_test",
+    size = "small",
+    crate = ":content",
+    edition = "2021",
+)

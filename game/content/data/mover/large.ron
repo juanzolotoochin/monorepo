@@ -1,0 +1,12 @@
+// Size class 4: a 4 × 4 tile body.
+(
+    sim: (
+        radius: 2,
+        max_hp: 40,
+        speed: 4.5,
+        spawn_weight: 1,
+    ),
+    view: (
+        color: (0.75, 0.25, 0.25),
+    ),
+)

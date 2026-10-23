@@ -3,6 +3,7 @@
 //! and spawns children, so every tick stage has real work to do.
 
 use fx::{Fx, FxVec3};
+use serde::{Deserialize, Serialize};
 
 use crate::id::Id;
 use crate::soa::soa_table;
@@ -13,6 +14,8 @@ pub struct Mover;
 soa_table! {
     pub struct Movers / MoverRow {
         pub id: Id<Mover>,
+        /// Dense index into `Rules::movers`.
+        pub kind: u16,
         pub pos: FxVec3,
         pub vel: FxVec3,
         pub radius: Fx,
@@ -24,15 +27,9 @@ soa_table! {
     }
 }
 
-/// Tiles per tick.
-pub const MAX_SPEED: Fx = Fx::from_bits(1 << 30); // 0.25
-pub const MAX_HP: i32 = 20;
 /// How far beyond the two bodies' edges an attack reaches, in tiles.
 pub const REACH: Fx = Fx::ONE;
 pub const HUNGRY_AT: i32 = 90;
-
-/// Body radii for size classes 1, 2 and 4.
-pub const RADII: [Fx; 3] = [Fx::HALF, Fx::ONE, Fx::from_int(2)];
 
 impl MoverRow {
     pub fn awake(&self) -> bool {

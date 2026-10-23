@@ -2,14 +2,15 @@
 //! is a message. There is one queue per message type, and types are applied in
 //! the order they are declared in `message_queues!`.
 
-use fx::{Fx, FxVec3};
+use fx::FxVec3;
+use serde::{Deserialize, Serialize};
 
 use crate::hash::{StateHash, StateHasher};
 use crate::id::Id;
 use crate::mover::Mover;
 
 /// One mover attacks another.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Damage {
     pub source: Id<Mover>,
     pub target: Id<Mover>,
@@ -18,7 +19,7 @@ pub struct Damage {
 
 /// A mover takes food from a chunk. Contested: when the food runs out, later
 /// messages in the order are rejected.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Eat {
     pub mover: Id<Mover>,
     pub chunk: u32,
@@ -26,21 +27,21 @@ pub struct Eat {
 }
 
 /// A mover asks for a child. Rejected when the world is full.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Spawn {
     pub parent: Id<Mover>,
     pub pos: FxVec3,
-    pub radius: Fx,
+    pub kind: u16,
 }
 
 /// Sent during apply to a mover whose attack killed its target. Handled next tick.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Killed {
     pub mover: Id<Mover>,
 }
 
 /// Sent during apply to a mover whose `Eat` was rejected. Handled next tick.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EatFailed {
     pub mover: Id<Mover>,
 }
@@ -65,7 +66,7 @@ impl StateHash for Spawn {
     fn hash_into(&self, h: &mut StateHasher) {
         h.write(&self.parent);
         h.write(&self.pos);
-        h.write(&self.radius);
+        h.write(&self.kind);
     }
 }
 
@@ -84,7 +85,7 @@ impl StateHash for EatFailed {
 macro_rules! message_queues {
     ($($field:ident: $ty:ty,)+) => {
         /// One queue per message type, in apply order.
-        #[derive(Clone, Debug, Default, PartialEq, Eq)]
+        #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
         pub struct Messages {
             $(pub $field: Vec<$ty>,)+
         }

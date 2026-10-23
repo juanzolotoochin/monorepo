@@ -5,6 +5,8 @@ use std::fmt::Write;
 
 use fx::{Fx, FxVec2};
 
+use content::Content;
+
 use crate::{Command, CommandKind, PlayerId, Simulation, TickHash, WorldConfig};
 
 pub struct Scenario {
@@ -71,10 +73,20 @@ impl Scenario {
 
     /// Runs `ticks` ticks and returns every tick's hash.
     pub fn run(&self, ticks: u64, threads: usize) -> Vec<TickHash> {
-        let mut sim = Simulation::new(self.config.clone(), threads);
+        let mut sim = self.start(threads);
+        self.run_from(&mut sim, ticks)
+    }
+
+    /// A fresh simulation with the builtin content.
+    pub fn start(&self, threads: usize) -> Simulation {
+        Simulation::new(self.config.clone(), Content::builtin().rules, threads)
+    }
+
+    /// Runs `ticks` more ticks of an existing simulation.
+    pub fn run_from(&self, sim: &mut Simulation, ticks: u64) -> Vec<TickHash> {
         (0..ticks)
             .map(|_| {
-                let turn = self.turn(&sim);
+                let turn = self.turn(sim);
                 sim.step(&turn)
             })
             .collect()

@@ -2,7 +2,6 @@ use std::fmt;
 use std::iter::Sum;
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use serde::{Deserialize, Serialize};
 
 use crate::trig;
 
@@ -11,8 +10,7 @@ use crate::trig;
 /// The range is about ±2.1e9 with a resolution of 2^-32 (about 2.3e-10).
 /// Overflow panics in builds with debug assertions and wraps otherwise, the
 /// same as Rust integers. Wrapping is still deterministic, but it is a bug.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Fx(i64);
 
 impl Fx {

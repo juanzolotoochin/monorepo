@@ -48,7 +48,7 @@ macro_rules! hash_as_u64 {
     };
 }
 
-hash_as_u64!(u8, u32, u64, i32, i64, bool);
+hash_as_u64!(u8, u16, u32, u64, i32, i64, bool);
 
 impl StateHash for Fx {
     #[inline]

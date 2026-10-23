@@ -1,22 +1,22 @@
+use content::{MoverDef, Rules};
 use fx::{Fx, FxVec2, FxVec3};
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::hash::{hash_of, StateHasher, TickHash};
-use crate::id::{Id, Ids, Location};
+use crate::id::{Id, Ids, IdsState, Location};
 use crate::messages::{Damage, Eat, EatFailed, Killed, Messages, Spawn};
-use crate::mover::{Mover, MoverRow, Movers, HUNGRY_AT, MAX_HP, MAX_SPEED, RADII, REACH};
+use crate::mover::{Mover, MoverRow, Movers, HUNGRY_AT, REACH};
 use crate::rng::{stream, Rng};
 use crate::spatial::{for_each_near, SpatialIndex};
 use crate::timer::TimerWheel;
 
 /// Chunks are square columns of this many tiles per side, covering the full height.
 pub const CHUNK_TILES: i64 = 32;
-/// The largest body radius. Queries widen their search by this much.
-pub const MAX_BODY_RADIUS: Fx = Fx::from_int(2);
 const FOOD_MAX: i32 = 100;
 const MAX_SPAWN_COMMAND: u32 = 4096;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorldConfig {
     pub seed: u64,
     pub chunks_x: u32,
@@ -114,6 +114,11 @@ impl Chunk {
 
 pub struct World {
     config: WorldConfig,
+    rules: Rules,
+    /// The largest body radius and speed in the rules. Queries widen their
+    /// search by these.
+    max_body_radius: Fx,
+    max_speed: Fx,
     /// The next tick to run.
     tick: u64,
     chunks: Vec<Chunk>,
@@ -130,9 +135,12 @@ pub struct World {
 }
 
 impl World {
-    pub fn new(config: WorldConfig) -> World {
+    pub fn new(config: WorldConfig, rules: Rules) -> World {
         let count = config.chunk_count();
         World {
+            max_body_radius: rules.max_body_radius(),
+            max_speed: rules.max_speed(),
+            rules,
             tick: 0,
             chunks: (0..count).map(|_| Chunk::new()).collect(),
             indices: (0..count).map(|_| SpatialIndex::default()).collect(),
@@ -147,6 +155,10 @@ impl World {
 
     pub fn config(&self) -> &WorldConfig {
         &self.config
+    }
+
+    pub fn rules(&self) -> &Rules {
+        &self.rules
     }
 
     /// The next tick to run.
@@ -193,7 +205,8 @@ impl World {
                     let Some(location) = self.ids.get(mover) else { continue };
                     let (chunk, slot) = (location.chunk as usize, location.slot as usize);
                     self.wake(chunk, slot);
-                    self.chunks[chunk].movers.vel[slot] = clamp_speed(FxVec3::new(velocity.x, velocity.y, Fx::ZERO));
+                    let max_speed = self.def(self.chunks[chunk].movers.kind[slot]).max_speed;
+                    self.chunks[chunk].movers.vel[slot] = clamp_speed(FxVec3::new(velocity.x, velocity.y, Fx::ZERO), max_speed);
                 }
             }
         }
@@ -213,18 +226,16 @@ impl World {
                 center.x + rng.range(-spread, spread),
                 center.y + rng.range(-spread, spread),
             );
-            let radius = match rng.below(10) {
-                0..=5 => RADII[0],
-                6..=8 => RADII[1],
-                _ => RADII[2],
-            };
-            let quarter = MAX_SPEED.div_int(2);
+            let Some(kind) = self.pick_kind(rng) else { return };
+            let def = self.def(kind).clone();
+            let half = def.max_speed.div_int(2);
             let row = MoverRow {
                 id: self.ids.alloc(),
+                kind,
                 pos: clamp_to_world(FxVec3::new(pos.x, pos.y, Fx::ZERO), size),
-                vel: FxVec3::new(rng.range(-quarter, quarter), rng.range(-quarter, quarter), Fx::ZERO),
-                radius,
-                hp: 10 + rng.below(10) as i32,
+                vel: FxVec3::new(rng.range(-half, half), rng.range(-half, half), Fx::ZERO),
+                radius: def.radius,
+                hp: def.max_hp - rng.below(def.max_hp as u64 / 2) as i32,
                 hunger: rng.below(HUNGRY_AT as u64) as i32,
                 kills: 0,
                 sleep_until: 0,
@@ -233,10 +244,30 @@ impl World {
         }
     }
 
+    /// Picks a mover kind by spawn weight.
+    fn pick_kind(&self, rng: &mut Rng) -> Option<u16> {
+        let total: u64 = self.rules.movers.iter().map(|m| m.spawn_weight as u64).sum();
+        if total == 0 {
+            return None;
+        }
+        let mut roll = rng.below(total);
+        for (kind, def) in self.rules.movers.iter().enumerate() {
+            if roll < def.spawn_weight as u64 {
+                return Some(kind as u16);
+            }
+            roll -= def.spawn_weight as u64;
+        }
+        unreachable!("roll is below the total weight")
+    }
+
+    fn def(&self, kind: u16) -> &MoverDef {
+        &self.rules.movers[kind as usize]
+    }
+
     // Stage 2: self update. Each mover changes only itself.
     fn self_update(&mut self) {
-        let World { chunks, indices, config, tick, .. } = self;
-        let (config, tick, indices) = (&*config, *tick, &*indices);
+        let World { chunks, indices, config, tick, rules, max_body_radius, .. } = self;
+        let (config, tick, indices, rules, max_body_radius) = (&*config, *tick, &*indices, &*rules, *max_body_radius);
         chunks.par_iter_mut().for_each(|chunk| {
             if chunk.awake == 0 {
                 return;
@@ -260,15 +291,16 @@ impl World {
 
                 let pos = movers.pos[slot];
                 let radius = movers.radius[slot];
-                let push = separation(indices, config, id, pos, radius);
+                let max_speed = rules.movers[movers.kind[slot] as usize].max_speed;
+                let push = separation(indices, config, max_body_radius, id, pos, radius);
 
                 let mut vel = movers.vel[slot];
                 if rng.chance(1, 30) {
-                    let jitter = MAX_SPEED.div_int(5);
+                    let jitter = max_speed.div_int(5);
                     vel += FxVec3::new(rng.range(-jitter, jitter), rng.range(-jitter, jitter), Fx::ZERO);
                 }
-                vel = clamp_speed(vel);
-                let mut next = pos + vel + clamp_speed(push);
+                vel = clamp_speed(vel, max_speed);
+                let mut next = pos + vel + clamp_speed(push, max_speed);
                 // Bounce off the world's edges.
                 if next.x < Fx::ZERO || next.x >= size.x {
                     vel.x = -vel.x;
@@ -323,7 +355,7 @@ impl World {
             if movers.kills[slot] >= 3 && rng.chance(1, 50) {
                 let offset = FxVec2::from_angle(rng.range(Fx::ZERO, Fx::TAU)) * (radius.mul_int(3));
                 let child = clamp_to_world(pos + FxVec3::new(offset.x, offset.y, Fx::ZERO), self.config.size());
-                out.spawn.push(Spawn { parent: id, pos: child, radius });
+                out.spawn.push(Spawn { parent: id, pos: child, kind: movers.kind[slot] });
             }
         }
         out
@@ -331,7 +363,7 @@ impl World {
 
     /// The closest live mover within reach, by current position. Ties go to the lower ID.
     fn nearest_target(&self, id: Id<Mover>, pos: FxVec3, radius: Fx) -> Option<Id<Mover>> {
-        let search = radius + REACH + MAX_BODY_RADIUS + MAX_SPEED;
+        let search = radius + REACH + self.max_body_radius + self.max_speed;
         let mut best: Option<(Fx, Id<Mover>)> = None;
         for_each_near(&self.indices, &self.config, pos.xy(), search, |chunk, body| {
             if body.id == id {
@@ -389,9 +421,10 @@ impl World {
             *food -= message.amount;
             self.chunks[message.chunk as usize].dirty = true;
             self.wake(chunk, slot);
+            let max_hp = self.def(self.chunks[chunk].movers.kind[slot]).max_hp;
             let movers = &mut self.chunks[chunk].movers;
             movers.hunger[slot] = 0;
-            movers.hp[slot] = (movers.hp[slot] + 1).min(MAX_HP);
+            movers.hp[slot] = (movers.hp[slot] + 1).min(max_hp);
         }
 
         for message in messages.spawn {
@@ -402,13 +435,16 @@ impl World {
             self.wake(chunk, slot);
             self.chunks[chunk].movers.kills[slot] = 0;
             let id = self.ids.alloc();
+            let def = self.def(message.kind);
+            let (radius, max_hp) = (def.radius, def.max_hp);
             let mut rng = Rng::new(self.config.seed, self.tick, id.to_bits(), stream::SPAWN);
             self.spawns.push(MoverRow {
                 id,
+                kind: message.kind,
                 pos: message.pos,
                 vel: FxVec3::ZERO,
-                radius: message.radius,
-                hp: 5 + rng.below(5) as i32,
+                radius,
+                hp: max_hp / 4 + 1 + rng.below(max_hp as u64 / 4 + 1) as i32,
                 hunger: 0,
                 kills: 0,
                 sleep_until: 0,
@@ -570,6 +606,68 @@ impl World {
         TickHash { tick: self.tick, total: total.finish(), subsystems, chunks }
     }
 
+    /// The complete state between ticks, for saves. Derived data (locations,
+    /// awake counts, spatial indices, hashes) is left out and rebuilt on load.
+    pub fn to_state(&self) -> WorldState {
+        debug_assert!(self.despawns.is_empty() && self.spawns.is_empty());
+        WorldState {
+            config: self.config.clone(),
+            tick: self.tick,
+            ids: self.ids.to_state(),
+            timers: self.timers.to_state(),
+            pending: self.pending.clone(),
+            chunks: self
+                .chunks
+                .iter()
+                .map(|c| ChunkState {
+                    food: c.food,
+                    movers: (0..c.movers.len()).map(|slot| c.movers.row(slot)).collect(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Rebuilds a world from saved state. The result continues exactly as the
+    /// saved world would have.
+    pub fn from_state(state: WorldState, rules: Rules) -> Result<World, String> {
+        if state.chunks.len() != state.config.chunk_count() {
+            return Err(format!("{} chunks saved, config needs {}", state.chunks.len(), state.config.chunk_count()));
+        }
+        let timers = TimerWheel::from_state(state.timers).ok_or("malformed timer wheel")?;
+        let mut world = World::new(state.config, rules);
+        world.tick = state.tick;
+        world.ids = Ids::from_state(&state.ids);
+        world.timers = timers;
+        world.pending = state.pending;
+        for (index, saved) in state.chunks.into_iter().enumerate() {
+            world.chunks[index].food = saved.food;
+            for row in saved.movers {
+                if row.kind as usize >= world.rules.movers.len() {
+                    return Err(format!("{:?} has unknown kind {}", row.id, row.kind));
+                }
+                if !world.ids.is_allocated(row.id) || world.ids.get(row.id).is_some() {
+                    return Err(format!("{:?} is not allocated or appears twice", row.id));
+                }
+                if world.config.chunk_of(row.pos) != index {
+                    return Err(format!("{:?} is saved in chunk {index} but lies outside it", row.id));
+                }
+                world.insert_row(row);
+            }
+        }
+        if world.mover_count() != world.ids.allocated() as usize {
+            return Err("allocated IDs do not match saved movers".into());
+        }
+        let config = &world.config;
+        world.indices.par_iter_mut().zip(world.chunks.par_iter_mut()).enumerate().for_each(
+            |(index, (spatial, chunk))| {
+                spatial.rebuild(config.chunk_origin(index), &chunk.movers);
+                chunk.hash = chunk.compute_hash(index);
+                chunk.dirty = false;
+            },
+        );
+        Ok(world)
+    }
+
     /// Checks internal bookkeeping. For tests; panics on the first problem.
     pub fn check_invariants(&self) {
         let mut count = 0;
@@ -590,10 +688,17 @@ impl World {
 
 /// Soft, mass-weighted push away from overlapping neighbors, read from the
 /// spatial index (last tick's positions).
-fn separation(indices: &[SpatialIndex], config: &WorldConfig, id: Id<Mover>, pos: FxVec3, radius: Fx) -> FxVec3 {
+fn separation(
+    indices: &[SpatialIndex],
+    config: &WorldConfig,
+    max_body_radius: Fx,
+    id: Id<Mover>,
+    pos: FxVec3,
+    radius: Fx,
+) -> FxVec3 {
     let mut push = FxVec2::ZERO;
     let mass = radius * radius;
-    for_each_near(indices, config, pos.xy(), radius + MAX_BODY_RADIUS, |_, body| {
+    for_each_near(indices, config, pos.xy(), radius + max_body_radius, |_, body| {
         if body.id == id {
             return;
         }
@@ -619,10 +724,10 @@ fn separation(indices: &[SpatialIndex], config: &WorldConfig, id: Id<Mover>, pos
     FxVec3::new(push.x, push.y, Fx::ZERO)
 }
 
-fn clamp_speed(vel: FxVec3) -> FxVec3 {
+fn clamp_speed(vel: FxVec3, max_speed: Fx) -> FxVec3 {
     let speed = vel.length();
-    if speed > MAX_SPEED {
-        vel * (MAX_SPEED / speed)
+    if speed > max_speed {
+        vel * (max_speed / speed)
     } else {
         vel
     }
@@ -641,12 +746,21 @@ pub struct Simulation {
 }
 
 impl Simulation {
-    pub fn new(config: WorldConfig, threads: usize) -> Simulation {
+    pub fn new(config: WorldConfig, rules: Rules, threads: usize) -> Simulation {
+        Simulation::from_world(World::new(config, rules), threads)
+    }
+
+    /// Wraps a world, for example one just loaded from a save.
+    pub fn from_world(world: World, threads: usize) -> Simulation {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
             .build()
             .expect("build simulation thread pool");
-        Simulation { world: World::new(config), pool }
+        Simulation { world, pool }
+    }
+
+    pub fn into_world(self) -> World {
+        self.world
     }
 
     pub fn world(&self) -> &World {
@@ -659,3 +773,27 @@ impl Simulation {
     }
 }
 
+/// The saved form of a [`World`], between ticks.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorldState {
+    pub config: WorldConfig,
+    /// The next tick to run.
+    pub tick: u64,
+    pub ids: IdsState,
+    pub timers: Vec<Vec<(u64, Id<Mover>)>>,
+    /// Messages created during the last apply phase, handled next tick.
+    pub pending: Messages,
+    pub chunks: Vec<ChunkState>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChunkState {
+    pub food: i32,
+    pub movers: Vec<MoverRow>,
+}
+
+impl std::fmt::Debug for World {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("World").field("tick", &self.tick).field("movers", &self.mover_count()).finish_non_exhaustive()
+    }
+}

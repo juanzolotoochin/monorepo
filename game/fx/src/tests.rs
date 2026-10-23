@@ -4,10 +4,6 @@ fn fx(text: &str) -> Fx {
     text.parse().unwrap()
 }
 
-fn from_f64(v: f64) -> Fx {
-    Fx::from_bits((v * (1u64 << 32) as f64).round() as i64)
-}
-
 /// A deterministic stream of test inputs.
 fn inputs(seed: u64, count: usize) -> impl Iterator<Item = i64> {
     let mut state = seed;

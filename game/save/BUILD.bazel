@@ -1,0 +1,24 @@
+load("@rules_rs//rs:rust_library.bzl", "rust_library")
+load("@rules_rs//rs:rust_test.bzl", "rust_test")
+
+rust_library(
+    name = "save",
+    srcs = glob(["src/**/*.rs"]),
+    edition = "2021",
+    visibility = ["//game:__subpackages__"],
+    deps = [
+        "//game/content",
+        "//game/sim",
+        "@crates//:postcard",
+        "@crates//:ron",
+        "@crates//:ruzstd",
+        "@crates//:serde",
+    ],
+)
+
+rust_test(
+    name = "save_test",
+    size = "small",
+    crate = ":save",
+    edition = "2021",
+)

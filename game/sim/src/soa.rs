@@ -9,7 +9,7 @@ macro_rules! soa_table {
         }
     ) => {
         $(#[$meta])*
-        #[derive(Clone, Debug, PartialEq, Eq)]
+        #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
         pub struct $row {
             pub id: $id_ty,
             $($(#[$field_meta])* pub $field: $ty,)+

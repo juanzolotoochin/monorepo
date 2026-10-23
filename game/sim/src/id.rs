@@ -5,6 +5,8 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
 use crate::hash::{StateHash, StateHasher};
 
 /// A handle to an entity of type `T`. Stale handles (to a freed entity whose
@@ -27,6 +29,23 @@ impl<T> Id<T> {
     /// A unique 64-bit key, for RNG streams and hashing.
     pub const fn to_bits(self) -> u64 {
         (self.generation as u64) << 32 | self.index as u64
+    }
+
+    pub const fn from_bits(bits: u64) -> Id<T> {
+        Id { index: bits as u32, generation: (bits >> 32) as u32, _type: PhantomData }
+    }
+}
+
+impl<T> Serialize for Id<T> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        (self.index, self.generation).serialize(serializer)
+    }
+}
+
+impl<'de, T> Deserialize<'de> for Id<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Id<T>, D::Error> {
+        let (index, generation) = <(u32, u32)>::deserialize(deserializer)?;
+        Ok(Id { index, generation, _type: PhantomData })
     }
 }
 
@@ -154,6 +173,28 @@ impl<T> Ids<T> {
         self.slots[id.index as usize].location = Some(location);
     }
 
+    /// The allocator's saved state. Locations are not saved; they are rebuilt
+    /// from the chunks on load.
+    pub fn to_state(&self) -> IdsState {
+        IdsState {
+            slots: self.slots.iter().map(|s| (s.generation, s.allocated)).collect(),
+            free: self.free.clone(),
+        }
+    }
+
+    pub fn from_state(state: &IdsState) -> Ids<T> {
+        Ids {
+            slots: state
+                .slots
+                .iter()
+                .map(|&(generation, allocated)| Slot { generation, location: None, allocated })
+                .collect(),
+            free: state.free.clone(),
+            allocated: state.slots.iter().filter(|s| s.1).count() as u32,
+            _type: PhantomData,
+        }
+    }
+
     /// The number of allocated IDs, including ones not inserted yet.
     pub fn allocated(&self) -> u32 {
         self.allocated
@@ -175,4 +216,11 @@ impl<T> StateHash for Ids<T> {
             h.write_u64(index as u64);
         }
     }
+}
+
+/// The saved form of [`Ids`]: per index, its generation and whether it is allocated.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IdsState {
+    pub slots: Vec<(u32, bool)>,
+    pub free: Vec<u32>,
 }

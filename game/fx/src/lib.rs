@@ -8,6 +8,7 @@
 mod fx;
 pub mod golden;
 mod parse;
+mod serde_impl;
 mod trig;
 mod vec;
 

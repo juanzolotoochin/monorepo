@@ -29,7 +29,9 @@ pub use hash::TickHash;
 pub use id::Id;
 pub use mover::{Mover, MoverRow};
 pub use rng::Rng;
-pub use world::{Chunk, Command, CommandKind, PlayerId, Simulation, World, WorldConfig};
+pub use world::{
+    Chunk, ChunkState, Command, CommandKind, PlayerId, Simulation, World, WorldConfig, WorldState, CHUNK_TILES,
+};
 
 #[cfg(test)]
 mod tests;

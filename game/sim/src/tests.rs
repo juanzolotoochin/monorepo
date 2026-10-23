@@ -42,7 +42,7 @@ fn replay_is_identical_and_seed_matters() {
 #[test]
 fn invariants_hold_and_every_stage_has_work() {
     let scenario = Scenario::small();
-    let mut sim = Simulation::new(scenario.config.clone(), 4);
+    let mut sim = scenario.start(4);
     let spawned = scenario.per_cluster * scenario.clusters * scenario.clusters;
     let (mut max_sleeping, mut min_movers, mut max_movers) = (0, usize::MAX, 0);
     let mut eaten = false;
@@ -69,7 +69,7 @@ fn quiet_chunks_are_skipped() {
     // keeps its hash from tick 0.
     let mut config = Scenario::small().config;
     config.max_movers = 1;
-    let mut sim = Simulation::new(config, 2);
+    let mut sim = Simulation::new(config, content::Content::builtin().rules, 2);
     let first = sim.step(&[crate::Command {
         player: crate::PlayerId(0),
         kind: crate::CommandKind::SpawnMovers { center: fx::FxVec2::new(fx::Fx::from_int(16), fx::Fx::from_int(16)), count: 1 },
@@ -140,7 +140,7 @@ fn golden_report_matches() {
 fn bench_large() {
     let scenario = Scenario::large();
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
-    let mut sim = Simulation::new(scenario.config.clone(), threads);
+    let mut sim = scenario.start(threads);
     for _ in 0..10 {
         let turn = scenario.turn(&sim);
         sim.step(&turn);
