@@ -33,7 +33,9 @@ in a browser.
 
 ## Crates
 
-All under `game/`, built by Bazel with `rules_rs`.
+All under `game/`, built by Bazel with `rules_rs`. The prototype keeps
+`game/app` and `game/core` until the port reaches parity, so the new game
+binary is `game/play` until then.
 
 | Crate | Deterministic | Purpose |
 |---|---|---|
@@ -44,7 +46,7 @@ All under `game/`, built by Bazel with `rules_rs`.
 | `net` | yes | Turns, input delay, time sync, `Transport` and `Sessions` traits, loopback simulator, UDP |
 | `headless` | tool | Runs a save plus an input log, writes per-tick hashes, benchmarks |
 | `view` | no (Bevy) | Consumes the render extract: interpolation, prediction, overlays |
-| `app` | no (Bevy) | The game binary: single-player, host, join |
+| `play` | no (Bevy) | The game binary: single-player, host, join |
 
 Bazel visibility keeps `@crates//:bevy` out of the deterministic crates. `net`
 counts as deterministic because its decisions depend only on its inputs and a
@@ -280,7 +282,7 @@ Details: [milestone plan](design/milestone-plan.html).
 | 0.2 | `game/sim` core | Thread-count test passes |
 | 0.3 | `game/content`, `game/save` | Save-and-continue test passes |
 | 0.4 | `game/headless` | Determinism suite runs in CI; benchmark under 10 ms per tick |
-| 0.5 | Minimal `game/view` and `game/app` | Smooth 144 Hz view of the 30 Hz simulation, single-player through the turn path |
+| 0.5 | Minimal `game/view` and `game/play` | Smooth 144 Hz view of the 30 Hz simulation, single-player through the turn path |
 | 0.6 | `game/net` | 30 minutes over Tailscale with no desync, plus a working mid-game join |
 
 **Milestone 1, gameplay port:**
