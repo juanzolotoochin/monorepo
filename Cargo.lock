@@ -5875,6 +5875,7 @@ dependencies = [
  "image 0.25.10",
  "piston_window",
  "ratatui",
+ "rayon",
  "ron",
  "rustysynth",
  "serde",

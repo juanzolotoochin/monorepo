@@ -76,6 +76,12 @@ over fixed inputs; `bazel run //game/fx:update_golden` regenerates it.
   only during housekeeping.
 - The chunk is the unit for parallel work, message ordering, sleeping, spatial
   queries, hashing, and terrain and navigation rebuilds.
+- Each chunk has a **spatial index** of 8 × 8 cells (4 × 4 tiles each), rebuilt
+  in housekeeping for chunks that changed. During a tick it holds last tick's
+  positions, which is exactly the snapshot self update reads. Read-phase queries
+  widen their radius by the maximum speed and test current positions.
+- Only chunks that changed (**dirty** chunks) are reindexed and rehashed, so
+  sleeping chunks cost nothing per tick.
 
 ### The tick
 
