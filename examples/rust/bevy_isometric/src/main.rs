@@ -10,7 +10,9 @@ mod palimpsest;
 mod pile_model;
 mod piles;
 mod preview;
+mod rig;
 mod scene;
+mod settlement;
 mod sound;
 mod style;
 
@@ -35,6 +37,7 @@ fn main() {
             "jetpack-lab" => 3,
             "surprise-lab" => 4,
             "atlantis" => 5,
+            "forest-outpost" => 6,
             name => {
                 eprintln!("Unknown scene {name}");
                 std::process::exit(2)
@@ -69,6 +72,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .init_resource::<assets::ModelCache>()
         .init_resource::<Controls>()
         .init_resource::<style::ActiveStyle>()
+        .init_resource::<settlement::Settlement>()
         .init_resource::<palimpsest::Memory>()
         .init_resource::<jetpack::Flight>()
         .init_resource::<piles::PileLab>()
@@ -134,10 +138,11 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
                 jetpack::scene_changed,
                 palimpsest::setup,
                 style::apply,
+                settlement::setup,
             )
                 .chain(),
             piles::setup_scene,
-            control::begin,
+            (control::begin, settlement::tick).chain(),
             piles::input.run_if(control::interactive),
             mouse_commands.run_if(control::interactive),
             preview::playback.run_if(control::interactive),
@@ -165,7 +170,11 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         )
         .add_systems(
             PostUpdate,
-            (assets::update_captions, piles::captions)
+            (
+                assets::update_captions,
+                piles::captions,
+                settlement::captions,
+            )
                 .after(bevy::transform::TransformSystems::Propagate),
         );
     }

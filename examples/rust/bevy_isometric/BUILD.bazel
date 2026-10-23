@@ -24,6 +24,7 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         "//examples/rust/bevy_isometric/assets:atlantis",
+        "//examples/rust/bevy_isometric/assets:forest_outpost",
         "//examples/rust/bevy_isometric/assets:boulder_lab",
         "//examples/rust/bevy_isometric/assets:jetpack_lab",
         "//examples/rust/bevy_isometric/assets:mining_deck",
@@ -108,6 +109,14 @@ game_demo(
     name = "atlantis_demo",
     game = ":demo",
     script = "demos/atlantis.json",
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
+game_demo(
+    name = "forest_outpost_demo",
+    game = ":demo",
+    script = "demos/forest_outpost.json",
     tags = ["manual"],
     target_compatible_with = ["@platforms//os:linux"],
 )

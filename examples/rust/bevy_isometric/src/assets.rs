@@ -40,6 +40,7 @@ impl SceneLibrary {
                 ScenePack::decode(surprise_lab::PACK_BYTES)
                     .expect("validated field trial asset pack"),
                 ScenePack::decode(atlantis::PACK_BYTES).expect("validated Atlantis asset pack"),
+                ScenePack::decode(forest_outpost::PACK_BYTES).expect("validated forest asset pack"),
             ],
             current: usize::MAX,
             initial: 0,
@@ -118,6 +119,8 @@ pub fn switch_scene(
         Some(0)
     } else if keys.just_pressed(KeyCode::Digit2) {
         Some(1)
+    } else if keys.just_pressed(KeyCode::Digit7) {
+        Some(6)
     } else if keys.just_pressed(KeyCode::Digit6) {
         Some(5)
     } else if keys.just_pressed(KeyCode::Digit5) {

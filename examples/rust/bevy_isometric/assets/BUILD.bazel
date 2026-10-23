@@ -94,3 +94,11 @@ scene_assets(
     prefabs = [":aether_stone"],
     style = "styles/atlantis.ron",
 )
+
+scene_assets(
+    name = "forest_outpost",
+    layout = "levels/forest_outpost.ron",
+    prefabs = [],
+    scenario = "levels/forest_supply.ron",
+    style = "styles/forest.ron",
+)

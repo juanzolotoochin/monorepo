@@ -7,6 +7,35 @@ pub const VERSION: u32 = 1;
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
     Inspect,
+    SettlementPause {
+        paused: bool,
+    },
+    SettlementRate {
+        rate: f32,
+    },
+    SettlementLink {
+        id: String,
+        enabled: bool,
+    },
+    SettlementMachine {
+        id: String,
+        enabled: bool,
+    },
+    SettlementDefender {
+        id: String,
+        enabled: bool,
+    },
+    SettlementStock {
+        depot: String,
+        item: String,
+        units: u32,
+    },
+    AssertSettlement {
+        delivered: u64,
+        cycles: u64,
+        equipped: u64,
+        kills: u64,
+    },
     MemoryRecord,
     MemoryDeploy,
     MemoryClear,
@@ -126,6 +155,7 @@ pub fn scene_index(name: &str) -> Result<usize, String> {
         "jetpack-lab" => Ok(3),
         "surprise-lab" => Ok(4),
         "atlantis" => Ok(5),
+        "forest-outpost" => Ok(6),
         _ => Err(format!("Unknown scene {name}")),
     }
 }

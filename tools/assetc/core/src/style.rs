@@ -10,6 +10,8 @@ pub struct StyleProfile {
     pub actor_voxel_size: Option<f32>,
     pub weapon_name: String,
     pub actor: Vec<ActorRecipe>,
+    pub actor_scale: f32,
+    pub skins: Vec<SkinRecipe>,
     pub materials: Vec<Material>,
     pub background: [f32; 3],
     pub ambient: [f32; 3],
@@ -35,6 +37,8 @@ impl Default for StyleProfile {
             actor_voxel_size: None,
             weapon_name: "MK. IV / INDUSTRIAL CLEAVER".into(),
             actor: vec![],
+            actor_scale: 1.0,
+            skins: vec![],
             materials: vec![
                 material("stone", [0.17, 0.22, 0.28], 0.0, 0.3),
                 material("shadow", [0.065, 0.095, 0.14], 0.0, 0.35),
@@ -137,6 +141,7 @@ impl StyleProfile {
                 (self.shadow_depth_bias, 0.0, 0.2),
                 (self.shadow_normal_bias, 0.0, 2.0),
                 (self.ao_thickness, 0.025, 1.0),
+                (self.actor_scale, 0.25, 2.0),
             ]
             .iter()
             .any(|&(v, min, max)| !v.is_finite() || v < min || v > max)
@@ -151,6 +156,9 @@ pub enum ShapeKind {
     Box,
     Cylinder,
     Octahedron,
+    Cone,
+    CylinderX,
+    RingX,
     Ellipsoid,
     RingFloor,
     Ring,
@@ -185,6 +193,9 @@ pub struct EnvironmentMesh {
 fn inside(kind: ShapeKind, p: [f32; 3]) -> bool {
     match kind {
         ShapeKind::Box => true,
+        ShapeKind::Cone => p[0] * p[0] + p[2] * p[2] <= ((1.0 - p[1]) * 0.5).powi(2),
+        ShapeKind::CylinderX => p[1] * p[1] + p[2] * p[2] <= 1.0,
+        ShapeKind::RingX => (0.64..=1.0).contains(&(p[1] * p[1] + p[2] * p[2])),
         ShapeKind::Ellipsoid => p.iter().map(|x| x * x).sum::<f32>() <= 1.0,
         ShapeKind::RingFloor => (0.86..=1.0).contains(&(p[0] * p[0] + p[2] * p[2])),
         ShapeKind::Cylinder => p[0] * p[0] + p[2] * p[2] <= 1.0,
@@ -479,11 +490,14 @@ pub enum ActorPart {
 #[serde(deny_unknown_fields)]
 pub struct ActorRecipe {
     pub part: ActorPart,
+    #[serde(default)]
+    pub pivot: Option<[f32; 3]>,
     pub shapes: Vec<VoxelShape>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ActorMesh {
     pub part: ActorPart,
+    pub pivot: Option<[f32; 3]>,
     pub meshes: Vec<MeshData>,
     pub statistics: Statistics,
     pub lights: Vec<BakedLight>,
@@ -503,6 +517,7 @@ pub fn compile_actor(profile: &StyleProfile) -> Result<Vec<ActorMesh>> {
             }
             Ok(ActorMesh {
                 part: recipe.part,
+                pivot: recipe.pivot,
                 meshes: env.meshes,
                 statistics: env.statistics,
                 lights: env.lights,
@@ -529,6 +544,7 @@ mod actor_tests {
         let mut profile = StyleProfile {
             actor: vec![ActorRecipe {
                 part: ActorPart::Body,
+                pivot: None,
                 shapes: vec![shape],
             }],
             actor_voxel_size: Some(0.05),
@@ -638,4 +654,108 @@ pub enum LightKind {
         inner: f32,
         outer: f32,
     },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub enum Motion {
+    Biped,
+    Quadruped,
+    Vehicle {
+        wheel_radius: f32,
+    },
+    Machine {
+        axis: [f32; 3],
+    },
+    Turret,
+    #[default]
+    Static,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkinRecipe {
+    pub id: String,
+    pub scale: f32,
+    #[serde(default)]
+    pub motion: Motion,
+    #[serde(default)]
+    pub use_actor: bool,
+    #[serde(default)]
+    pub voxel_size: Option<f32>,
+    #[serde(default)]
+    pub material_map: BTreeMap<String, String>,
+    #[serde(default)]
+    pub parts: Vec<ActorRecipe>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SkinMesh {
+    pub id: String,
+    pub scale: f32,
+    pub motion: Motion,
+    pub parts: Vec<ActorMesh>,
+}
+pub fn compile_skins(profile: &StyleProfile) -> Result<Vec<SkinMesh>> {
+    if profile.skins.len() > 32 {
+        return Err("too many actor skins".into());
+    }
+    let mut ids = BTreeSet::new();
+    let mut result = vec![];
+    for recipe in &profile.skins {
+        if recipe.id.is_empty()
+            || !ids.insert(&recipe.id)
+            || !recipe.scale.is_finite()
+            || !(0.02..=4.0).contains(&recipe.scale)
+        {
+            return Err("invalid actor skin identity or scale".into());
+        }
+        match recipe.motion {
+            Motion::Vehicle { wheel_radius }
+                if !wheel_radius.is_finite() || wheel_radius <= 0.01 =>
+            {
+                return Err("invalid wheel radius".into())
+            }
+            Motion::Machine { axis }
+                if axis.iter().any(|v| !v.is_finite())
+                    || axis.iter().map(|v| v * v).sum::<f32>() < 0.01 =>
+            {
+                return Err("invalid machine axis".into())
+            }
+            _ => {}
+        }
+        let mut p = profile.clone();
+        p.skins.clear();
+        p.actor = if recipe.use_actor {
+            profile.actor.clone()
+        } else {
+            recipe.parts.clone()
+        };
+        p.actor_voxel_size = Some(recipe.voxel_size.unwrap_or(if recipe.use_actor {
+            profile.actor_voxel_size.unwrap_or(profile.voxel_size)
+        } else {
+            profile.voxel_size
+        }));
+        for part in &mut p.actor {
+            if part
+                .pivot
+                .is_some_and(|p| p.iter().any(|v| !v.is_finite() || v.abs() > 16.0))
+            {
+                return Err("invalid rig pivot".into());
+            }
+            for shape in &mut part.shapes {
+                if let Some(material) = recipe.material_map.get(&shape.material) {
+                    shape.material = material.clone();
+                }
+            }
+        }
+        let parts = compile_actor(&p)?;
+        if parts.is_empty() {
+            return Err("skin must contain geometry".into());
+        }
+        result.push(SkinMesh {
+            id: recipe.id.clone(),
+            scale: recipe.scale,
+            motion: recipe.motion.clone(),
+            parts,
+        });
+    }
+    Ok(result)
 }
