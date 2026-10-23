@@ -78,7 +78,7 @@ impl Simulation {
                 threat.knockback[0] *= 0.85;
                 threat.knockback[1] *= 0.85;
             } else {
-                let wounded_speed = if threat.hp < w.hp { 0.62 } else { 1.0 };
+                let wounded_speed = if threat.hp < w.hp { 0.55 } else { 1.0 };
                 move_route(
                     &mut threat.position,
                     &mut threat.route,

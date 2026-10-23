@@ -8,8 +8,9 @@
   "steps": [
     {"op": "wait", "frames": 140},
     {"op": "walk", "position": [0.0, 0.0]},
-    {"op": "wait", "frames": 35},
+    {"op": "wait", "frames": 45},
     {"op": "strike", "target": [0.0, 2.0]},
+    {"op": "wait", "frames": 30},
     {"op": "strike", "target": [0.0, 2.0]},
     {"op": "wait", "frames": 100},
     {"op": "inspect"}

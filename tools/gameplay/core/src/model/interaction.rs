@@ -32,7 +32,7 @@ impl Simulation {
             .filter(|t| {
                 let d = [t.position[0] - position[0], t.position[1] - position[1]];
                 let distance = navigation::distance(t.position, position);
-                distance <= 1.75
+                distance <= 1.2
                     && (distance < 0.2 || (d[0] * forward[0] + d[1] * forward[1]) / distance > 0.35)
             })
             .map(|t| t.id)

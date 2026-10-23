@@ -46,6 +46,7 @@ struct View {
     scale: f32,
     travel: f32,
     activity: f32,
+    injury: f32,
     aim: Option<f32>,
 }
 impl View {
@@ -58,6 +59,7 @@ impl View {
             scale: 1.,
             travel: 0.,
             activity: 0.,
+            injury: 0.,
             aim: None,
         }
     }
@@ -483,7 +485,8 @@ pub fn tick(world: &mut World) {
                 (until.saturating_sub(sim.tick) as f32 / 14.).max(if wounded { 0.58 } else { 0.0 })
             });
         if wounded {
-            v.roll = 0.12 + (t.travelled * 13.0).sin() * 0.05;
+            v.injury = 1.0;
+            v.roll = 0.18 + (t.travelled * 13.0).sin() * 0.05;
         }
         desired.insert(format!("threat/{}", t.id), v);
     }
@@ -671,6 +674,7 @@ pub fn tick(world: &mut World) {
             template.scale * view.scale,
             view.travel,
             view.activity,
+            view.injury,
             view.aim,
         );
         writes += changed;

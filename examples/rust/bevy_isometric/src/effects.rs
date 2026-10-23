@@ -127,11 +127,13 @@ pub fn blade_echo(
     origin: Vec3,
     facing: Quat,
     angle: f32,
+    scale: f32,
 ) {
     let rotation = facing * Quat::from_rotation_y(angle);
-    let position =
-        origin + facing * Vec3::new(0.38, 0.90, 0.0) + rotation * Vec3::new(0.0, 0.0, 1.1);
-    let size = Vec3::new(0.07, 0.035, 1.55);
+    let position = origin
+        + facing * Vec3::new(0.4, 0.90, 0.0) * scale
+        + rotation * Vec3::new(0.0, 0.0, 0.85 * scale);
+    let size = Vec3::new(0.07, 0.035, 1.30) * scale;
     commands.spawn((
         Mesh3d(assets.cube.clone()),
         MeshMaterial3d(assets.trail.clone()),

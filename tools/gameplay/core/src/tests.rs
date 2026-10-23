@@ -127,7 +127,14 @@ fn melee_staggers_a_wounded_ghoul_then_it_resumes_advancing() {
         advanced < 1.5,
         "wounded ghoul should resume approaching: {advanced}"
     );
-    sim.set_controlled_pose("player", [0.0, advanced - 1.0], 0.0)
+    run(&mut sim, 1, 60);
+    let limped = sim.threats[&999].position[1];
+    assert!(
+        ((advanced - limped) - 0.55).abs() < 0.03,
+        "wounded ghoul should advance at 55% speed: {}",
+        advanced - limped
+    );
+    sim.set_controlled_pose("player", [0.0, limped - 1.0], 0.0)
         .unwrap();
     assert_eq!(sim.strike("player").unwrap(), 1);
     assert!(!sim.threats.contains_key(&999));
