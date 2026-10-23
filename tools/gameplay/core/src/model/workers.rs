@@ -39,7 +39,7 @@ impl Simulation {
             let route = navigation::articulated_path(
                 a.position,
                 to,
-                a.heading,
+                a.travel_heading,
                 t.position,
                 e.offset[2].abs().max(0.6),
                 &self.obstacles,
@@ -141,6 +141,15 @@ impl Simulation {
     /// Bounded local steering: retain the global route, steer right around occupied
     /// body/trailer footprints, and stop if no collision-free step exists.
     fn move_worker(&mut self, def: &Agent, a: &mut AgentState, distance: f32) {
+        // Quantized movement can stop a few centimeters short of a waypoint.
+        // Treat that point as reached instead of alternating around it forever.
+        while let Some(&waypoint) = a.route.first() {
+            let tolerance = 0.1;
+            if navigation::distance(a.position, waypoint) > tolerance {
+                break;
+            }
+            a.route.remove(0);
+        }
         if a.route.is_empty() {
             return;
         }
@@ -165,6 +174,20 @@ impl Simulation {
                 }
             }
         }
+        let dynamic_len = nearby.len();
+        // A destination hidden under another actor's trailer cannot be reached.
+        // Hold nearby instead of taking alternating sidesteps around the point.
+        if a.route.len() == 1 {
+            let goal = a.route[0];
+            if navigation::distance(a.position, goal) < 0.8
+                && nearby
+                    .iter()
+                    .any(|o| navigation::distance(goal, o.center) < radius + o.radius + 0.08)
+            {
+                self.metrics.traffic_wait_ticks += 1;
+                return;
+            }
+        }
         if let (Some(t), Some(e)) = (&a.trailer, &def.equipment) {
             nearby.push(navigation::Disc {
                 center: t.position,
@@ -174,6 +197,49 @@ impl Simulation {
         let mut route = a.route.clone();
         let mut direct = a.position;
         move_route(&mut direct, &mut route, distance);
+        let blocked_by_agent = nearby[..dynamic_len].iter().any(|o| {
+            let before = navigation::distance(a.position, o.center);
+            let after = navigation::distance(direct, o.center);
+            after <= radius + o.radius + 0.08 && after <= before + 0.00001
+        });
+        if blocked_by_agent && self.tick >= a.traffic_replan_at {
+            let mut obstacles = self.obstacles.clone();
+            obstacles.extend_from_slice(&nearby[..dynamic_len]);
+            let goal = *a.route.last().unwrap();
+            let detour = if let (Some(t), Some(e)) = (&a.trailer, &def.equipment) {
+                navigation::articulated_path(
+                    a.position,
+                    goal,
+                    a.travel_heading,
+                    t.position,
+                    e.offset[2].abs().max(0.6),
+                    &obstacles,
+                    radius,
+                    e.radius,
+                    self.config.extent,
+                )
+            } else {
+                navigation::path_with_bounds(
+                    a.position,
+                    goal,
+                    &obstacles,
+                    radius,
+                    self.config.extent,
+                    |_, _| true,
+                )
+            };
+            self.metrics.navigation_requests += 1;
+            if detour.is_empty() {
+                self.metrics.navigation_failures += 1;
+            } else {
+                self.metrics.navigation_waypoints += detour.len() as u64;
+                a.route = detour;
+                route = a.route.clone();
+                direct = a.position;
+                move_route(&mut direct, &mut route, distance);
+            }
+            a.traffic_replan_at = self.tick + 240;
+        }
         let dx = direct[0] - a.position[0];
         let dz = direct[1] - a.position[1];
         for angle in [0.0_f32, 0.55, 1.05, 1.55, -0.55, -1.05, -1.55] {
@@ -196,6 +262,17 @@ impl Simulation {
                 after > radius + o.radius + 0.08 || after > before + 0.00001
             });
             if clear {
+                let target = (next[0] - a.position[0]).atan2(next[1] - a.position[1]);
+                let travel_turn = (target - a.travel_heading)
+                    .sin()
+                    .atan2((target - a.travel_heading).cos());
+                let turn = (target - a.heading).sin().atan2((target - a.heading).cos());
+                a.heading += turn.clamp(-3.0 / HZ as f32, 3.0 / HZ as f32);
+                if travel_turn.abs() > 0.25 {
+                    a.travel_heading += travel_turn.clamp(-0.25, 0.25);
+                    return;
+                }
+                a.travel_heading = target;
                 a.position = next;
                 if angle == 0. {
                     a.route = route;
@@ -263,10 +340,19 @@ impl Simulation {
                 ));
             }
         }
+        // Keep the previous approach owner until it leaves this dock's lifecycle.
+        // Re-electing the nearest agent every tick causes competing arrivals to
+        // repeatedly advance and retreat as their distances cross.
+        for (_, id, dock) in &approaches {
+            if self.dock_owners.get(dock) == Some(id) {
+                docks.entry(dock.clone()).or_insert_with(|| id.clone());
+            }
+        }
         approaches.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
         for (_, id, dock) in approaches {
             docks.entry(dock).or_insert(id);
         }
+        self.dock_owners = docks.clone();
         for def in self.config.agents.clone() {
             if def.controlled {
                 continue;
@@ -304,10 +390,6 @@ impl Simulation {
                         let d = navigation::distance(before, a.position);
                         a.travelled += d;
                         self.metrics.empty_travel_meters += d as f64;
-                        if d > 0.00001 {
-                            a.heading =
-                                (a.position[0] - before[0]).atan2(a.position[1] - before[1]);
-                        }
                         if a.route.is_empty() {
                             a.phase = Phase::Idle;
                         }
@@ -338,7 +420,7 @@ impl Simulation {
                         a.route = self.plan_agent(&def, &a, goal);
                         a.retries = self.tick + 60;
                     }
-                    if busy && navigation::distance(a.position, goal) < queue_distance {
+                    if busy && navigation::distance(a.position, goal) < queue_distance + 0.2 {
                         self.metrics.dock_wait_ticks += 1;
                         // A larger carrier may take ownership while a pedestrian is
                         // already queued close by. Back out of its turning envelope.
@@ -358,14 +440,9 @@ impl Simulation {
                             } else {
                                 self.metrics.empty_travel_meters += moved as f64;
                             }
-                            if moved > 0.00001 {
-                                a.heading =
-                                    (a.position[0] - before[0]).atan2(a.position[1] - before[1]);
-                            }
                             a.route = route;
                         }
-                    }
-                    if !(busy && navigation::distance(a.position, goal) < queue_distance) {
+                    } else {
                         let speed = def.speed
                             * if a.equipment.is_some() {
                                 def.equipment.as_ref().map_or(1.0, |e| e.speed_factor)
@@ -374,16 +451,12 @@ impl Simulation {
                             };
                         let before = a.position;
                         self.move_worker(&def, &mut a, speed / HZ as f32);
-                        let delta = [a.position[0] - before[0], a.position[1] - before[1]];
                         let distance = navigation::distance(a.position, before);
                         a.travelled += distance;
                         if a.cargo.total() > 0 {
                             self.metrics.loaded_travel_meters += distance as f64;
                         } else {
                             self.metrics.empty_travel_meters += distance as f64;
-                        }
-                        if distance > 0.00001 {
-                            a.heading = delta[0].atan2(delta[1]);
                         }
                         if a.route.is_empty()
                             && !busy
@@ -401,10 +474,10 @@ impl Simulation {
                                 a.equipment = Some(e.item.clone());
                                 a.trailer = Some(Trailer {
                                     position: [
-                                        a.position[0] - a.heading.sin() * e.offset[2].abs(),
-                                        a.position[1] - a.heading.cos() * e.offset[2].abs(),
+                                        a.position[0] - a.travel_heading.sin() * e.offset[2].abs(),
+                                        a.position[1] - a.travel_heading.cos() * e.offset[2].abs(),
                                     ],
-                                    heading: a.heading,
+                                    heading: a.travel_heading,
                                     travelled: 0.0,
                                 });
                                 a.phase = Phase::Attaching;

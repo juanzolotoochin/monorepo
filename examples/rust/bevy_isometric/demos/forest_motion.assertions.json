@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "motion": [
+    {
+      "path": "settlement.simulation.agents.bramble",
+      "window_seconds": 2,
+      "max_turn_degrees": 360,
+      "max_rate_degrees": 180,
+      "max_travel_turn_degrees": 800
+    },
+    {
+      "path": "settlement.simulation.agents.ironmonger",
+      "window_seconds": 2,
+      "max_turn_degrees": 360,
+      "max_rate_degrees": 180,
+      "max_travel_turn_degrees": 800
+    },
+    {
+      "path": "settlement.simulation.agents.forester",
+      "window_seconds": 2,
+      "max_turn_degrees": 360,
+      "max_rate_degrees": 180,
+      "max_travel_turn_degrees": 800
+    },
+    {
+      "path": "settlement.simulation.agents.lumberjack",
+      "window_seconds": 2,
+      "max_turn_degrees": 360,
+      "max_rate_degrees": 180,
+      "max_travel_turn_degrees": 800
+    },
+    {
+      "path": "settlement.simulation.agents.runner",
+      "window_seconds": 2,
+      "max_turn_degrees": 360,
+      "max_rate_degrees": 180,
+      "max_travel_turn_degrees": 800
+    }
+  ],
+  "final": [
+    {
+      "path": "settlement.simulation.metrics.deliveries_by_agent.bramble",
+      "min": 1
+    },
+    {
+      "path": "settlement.simulation.metrics.deliveries_by_agent.ironmonger",
+      "min": 1
+    },
+    {
+      "path": "settlement.simulation.metrics.deliveries_by_agent.forester",
+      "min": 1
+    },
+    {
+      "path": "settlement.simulation.metrics.deliveries_by_agent.lumberjack",
+      "min": 1
+    },
+    {
+      "path": "settlement.simulation.metrics.deliveries_by_agent.runner",
+      "min": 1
+    }
+  ]
+}

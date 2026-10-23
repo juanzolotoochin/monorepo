@@ -193,3 +193,42 @@ Snapshots expose `style`: profile ID, voxel size/density, actor density/parts,
 weapon identity, palette roles, baked geometry statistics, fixture lights,
 moving actor light positions, exposure, and sun-shadow policy. Actor light
 positions resolve the animated hierarchy even in renderer-free simulations.
+
+## Assertions over recorded world state
+
+Add an `assertions` JSON file to `game_demo` to check each world snapshot before
+encoding the video. The same file works with `game_simulation_test`, which runs
+the full script without a renderer as a Bazel build action. That action writes
+a `.frames.jsonl` trace and `.state.json` report. The separate test consumes
+those files; repeated tests reuse the cached dump. A failed check reports the
+frame, timestamp, actor, measured value, and limit. For example:
+
+```starlark
+load("//bazel/game_demo:defs.bzl", "game_demo", "game_simulation_test")
+
+game_simulation_test(
+    name = "forest_motion_test",
+    game = ":demo",
+    script = "demos/forest_outpost.json",
+    assertions = "demos/forest_motion.assertions.json",
+)
+```
+
+```sh
+bazel build --config=full_local //examples/rust/bevy_isometric:forest_motion_test_capture
+bazel test --config=full_local //examples/rust/bevy_isometric:forest_motion_test
+bazel build --config=full_local //examples/rust/bevy_isometric:forest_outpost_demo
+bazel run //tools/game_demo:assert_trace -- \
+  --trace bazel-bin/examples/rust/bevy_isometric/forest_outpost_demo.frames.jsonl \
+  --assertions examples/rust/bevy_isometric/demos/forest_motion.assertions.json
+```
+
+The assertion format is version 1. `always` and `final` compare dot-separated
+paths in `state` using `min`, `max`, or `equals`. `motion` checks an agent object
+with `heading` (radians) and `position` (`[x,z]`) against maximum facing turn
+rate, cumulative facing turn, and cumulative travel-direction turn over a time
+window. Limits are degrees or degrees per second. The latter check detects
+back-and-forth movement even if the animation's facing angle is smoothed. Each
+agent in the forest test must also have completed a delivery, preventing an
+immobile worker from passing the motion checks. The validator processes one
+record at a time and retains only the configured rolling windows.
