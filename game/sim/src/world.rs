@@ -97,6 +97,8 @@ pub enum CommandKind {
     MemoryClear,
     /// The sending player joined: gives them an avatar if they have none.
     Join,
+    /// The sending player's name, for their avatar.
+    Name { name: String },
 }
 
 impl CommandKind {
@@ -410,6 +412,11 @@ impl World {
                 CommandKind::MemoryClear => {
                     if let Some(s) = &mut self.settlement {
                         s.memory_clear();
+                    }
+                }
+                CommandKind::Name { ref name } => {
+                    if let Some(s) = &mut self.settlement {
+                        s.rename(turn[i].player, name);
                     }
                 }
                 CommandKind::Join => {

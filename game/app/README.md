@@ -431,6 +431,10 @@ bazel run --config=full_local //game/app:demo -- --host 7777
 bazel run --config=full_local //game/app:demo -- --join my-desktop:7777
 ```
 
+A name tag floats over every player (yours in cyan): `--name Ada` sets
+yours, otherwise it's who is logged in to the computer. Names travel
+through the simulation, so everyone sees the same ones.
+
 Networked games start on the flat `field` scene (also on key **9** when
 playing alone). `--scene` picks another one; every player must pass the same
 scene. Scene keys are disabled while networked. The HUD's top right shows the

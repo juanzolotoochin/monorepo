@@ -27,6 +27,13 @@ pub struct Peer {
     foot_distance: f32,
 }
 
+impl Peer {
+    /// The avatar this copy shows.
+    pub fn agent(&self) -> u16 {
+        self.agent
+    }
+}
+
 /// A copied part pivot. Not a `Part`, so the local player's animation and
 /// styling leave it alone.
 #[derive(Component)]

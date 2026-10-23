@@ -17,6 +17,9 @@ use crate::messages::{ManualUnit, Messages, Strike};
 use crate::nav::{self, angle_between, distance};
 use crate::terrain::Terrain;
 
+/// The longest player name, in characters.
+pub const NAME_CHARS: usize = 16;
+
 /// The avatar's collision radius, as in the original controller.
 pub const BODY_RADIUS: Fx = Fx::from_bits(1_374_389_535); // 0.32
 const WALK_SPEED: Fx = Fx::from_bits(16_320_875_725); // 3.8 m/s
@@ -270,6 +273,14 @@ impl Settlement {
         self.agents.iter().position(|a| a.controlled).map(|i| i as super::AgentIx)
     }
 
+    /// Commands: names `player`'s avatar, keeping up to `NAME_CHARS`
+    /// printable characters.
+    pub fn rename(&mut self, player: crate::PlayerId, name: &str) {
+        let Some(agent) = self.avatar_of(player) else { return };
+        let name: String = name.chars().filter(|c| !c.is_control()).take(NAME_CHARS).collect();
+        self.agents[agent as usize].name = name.trim().to_string();
+    }
+
     /// Commands: puts a weapon the scenario offers in the avatar's hand.
     pub fn equip_weapon(&mut self, agent: usize, weapon: Weapon) {
         if !self.has_weapon(weapon) {
@@ -300,6 +311,7 @@ impl Settlement {
         self.agents.push(AgentState {
             id: format!("player-{}", player.0),
             owner: Some(player),
+            name: String::new(),
             home: position,
             position,
             heading: Fx::PI,

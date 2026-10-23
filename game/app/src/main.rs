@@ -7,6 +7,7 @@ mod impact;
 mod jetpack;
 mod legacy;
 mod lockstep;
+mod nametags;
 mod navigation;
 mod palimpsest;
 mod peers;
@@ -58,6 +59,13 @@ fn main() {
     });
     let mut game = lockstep::Game::default();
     game.network = network;
+    // `--name`, or who is logged in.
+    game.name = args
+        .windows(2)
+        .find(|pair| pair[0] == "--name")
+        .map(|pair| pair[1].clone())
+        .or_else(|| std::env::var("USERNAME").or_else(|_| std::env::var("USER")).ok())
+        .unwrap_or_default();
     if let Some(pair) = args.windows(2).find(|pair| pair[0] == "--record-input") {
         game.record = Some(pair[1].clone());
     }
@@ -258,6 +266,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
                 assets::update_captions,
                 piles::captions,
                 settlement::captions,
+                nametags::update,
             )
                 .after(bevy::transform::TransformSystems::Propagate),
         );

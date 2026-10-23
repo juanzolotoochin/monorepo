@@ -353,3 +353,24 @@ fn unavailable_weapons_cannot_be_equipped() {
     scene.command(CommandKind::Equip { agent, weapon: content::scenario::Weapon::Spear });
     assert_eq!(scene.avatar().avatar.weapon, content::scenario::Weapon::Sword);
 }
+
+/// Players name their own avatar; names are trimmed, lose control
+/// characters, stop at `NAME_CHARS`, and survive a respawn.
+#[test]
+fn players_name_their_own_avatar() {
+    let mut scene = Scene::new(field());
+    let guest = PlayerId(1);
+    scene.sim.step(&[Command { player: guest, kind: CommandKind::Join }]);
+    let name = |name: &str| CommandKind::Name { name: name.into() };
+    scene.sim.step(&[
+        Command { player: PlayerId(0), kind: name("  Ada\n ") },
+        Command { player: guest, kind: name("a very long name that keeps going") },
+    ]);
+    let s = scene.s();
+    assert_eq!(s.agents[s.avatar_of(PlayerId(0)).unwrap() as usize].name, "Ada");
+    let guest_name = &s.agents[s.avatar_of(guest).unwrap() as usize].name;
+    assert_eq!(guest_name.chars().count(), super::avatar::NAME_CHARS);
+    let agent = scene.agent();
+    scene.command(CommandKind::Respawn { agent });
+    assert_eq!(scene.avatar().name, "Ada");
+}

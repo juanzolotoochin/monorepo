@@ -69,6 +69,10 @@ pub struct Game {
     pub network: Option<Network>,
     /// The connection, for the HUD.
     pub status: String,
+    /// What other players see over this player's avatar.
+    pub name: String,
+    /// The name was sent for this session's avatar.
+    named: bool,
 }
 
 impl Default for Game {
@@ -94,6 +98,8 @@ impl Default for Game {
             warming_up: false,
             network: None,
             status: String::new(),
+            name: String::new(),
+            named: false,
         }
     }
 }
@@ -275,6 +281,7 @@ pub fn build_world(world: &mut World) {
     game.current = game.settlement().cloned();
     game.tick = 0;
     game.walking = None;
+    game.named = false;
     game.applies_at = 0;
     game.events.clear();
 }
@@ -328,6 +335,13 @@ pub fn step(time: Res<Time>, hub: Option<Res<crate::control::Hub>>, mut game: Re
         game.status = session.status();
     }
     game.session = Some(session);
+    // Introduce ourselves once our avatar exists (a client's appears after
+    // it joins).
+    if game.network.is_some() && !game.named && game.player().is_some() {
+        let name = game.name.clone();
+        game.command(CommandKind::Name { name });
+        game.named = true;
+    }
 }
 
 /// Tells this machine apart from others when joining. A random ID per run:
