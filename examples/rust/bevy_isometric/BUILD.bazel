@@ -30,6 +30,7 @@ rust_binary(
         "//examples/rust/bevy_isometric/assets:pile_lab",
         "//examples/rust/bevy_isometric/assets:surprise_lab",
         "//tools/assetc/core:voxel_assets",
+        "//tools/gameplay/core:gameplay_core",
         "@crates//:bevy",
         "@crates//:serde",
         "@crates//:serde_json",
