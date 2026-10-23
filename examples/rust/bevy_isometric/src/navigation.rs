@@ -37,11 +37,21 @@ pub fn path_with(
     obstacles: &[Disc],
     valid: impl Fn(Vec3, Vec3) -> bool,
 ) -> Vec<Vec3> {
-    gameplay_core::navigation::path_with(
+    path_with_extent(start, goal, obstacles, EDGE, valid)
+}
+pub fn path_with_extent(
+    start: Vec3,
+    goal: Vec3,
+    obstacles: &[Disc],
+    extent: f32,
+    valid: impl Fn(Vec3, Vec3) -> bool,
+) -> Vec<Vec3> {
+    gameplay_core::navigation::path_with_bounds(
         [start.x, start.z],
         [goal.x, goal.z],
         &discs(obstacles),
         RADIUS,
+        extent,
         |a, b| valid(Vec3::new(a[0], 0.0, a[1]), Vec3::new(b[0], 0.0, b[1])),
     )
     .into_iter()

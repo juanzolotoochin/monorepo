@@ -43,7 +43,12 @@ impl Simulation {
             t.hp = t.hp.saturating_sub(1);
             let killed = t.hp == 0;
             let position = t.position;
-            self.events.push(Event::Hit { position, killed });
+            self.events.push(Event::Hit {
+                target,
+                projectile: None,
+                position,
+                killed,
+            });
             if killed {
                 self.threats.remove(&target);
                 self.metrics.kills += 1;
@@ -62,7 +67,11 @@ impl Simulation {
         {
             return Err("actor is not externally controlled".into());
         }
-        if position.iter().any(|v| !v.is_finite() || v.abs() > 8.) || !heading.is_finite() {
+        if position
+            .iter()
+            .any(|v| !v.is_finite() || v.abs() > self.config.extent)
+            || !heading.is_finite()
+        {
             return Err("invalid actor pose".into());
         }
         let a = self.agents.get_mut(id).unwrap();

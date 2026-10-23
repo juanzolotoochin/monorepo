@@ -408,3 +408,16 @@ per-agent phase ticks, and per-producer processing/starvation/output-blocking/
 disabled/completed ticks. These explain simulation waste separately from CPU
 cost. Capture telemetry measures inspection snapshots, trace writes, pending
 screenshots, and PNG conversion/write time so recording overhead is visible.
+
+Brasswood uses continuous forest ground and separated work sites rather than a
+floating platform. Ghouls emerge in three staggered lanes from the ruined burial
+gate; hits recoil and kills briefly collapse before disappearing. Routine bulk
+transfer audio is silent and other activity cues are coalesced. Depot counts
+remain small; hovering a count expands its inventory and interaction hints.
+Raised roads declare baked `walkable` support so player feet, workers and cart
+wheels follow the rendered surface height.
+
+The enlarged Brasswood map uses a 12-meter navigation half-width. Landed arrows
+attach to a ghoul's rig and follow its movement and collapse; the corpse and its
+arrows fade over three seconds. Temporary fade materials are removed before
+rigs are reused, and pooled rig visibility propagates through every bone.

@@ -167,8 +167,8 @@ pub fn scene_index(name: &str) -> Result<usize, String> {
     }
 }
 pub fn point(position: [f32; 2]) -> Result<bevy::prelude::Vec3, String> {
-    if position.iter().any(|v| !v.is_finite() || v.abs() > 8.0) {
-        return Err("Position must be finite and inside the deck".into());
+    if position.iter().any(|v| !v.is_finite() || v.abs() > 24.0) {
+        return Err("Position must be finite and inside the supported world bounds".into());
     }
     Ok(bevy::prelude::Vec3::new(position[0], 0.0, position[1]))
 }

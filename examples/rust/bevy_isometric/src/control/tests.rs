@@ -437,3 +437,26 @@ fn player_can_divert_real_supply_chain_stock_while_workers_continue() {
         .values()
         .all(|b| b["conserved"] == true));
 }
+
+#[test]
+fn player_stands_on_baked_raised_roads_and_steps_back_to_the_ground() {
+    let report = run(vec![
+        Command::Scene {
+            scene: "forest-outpost".into(),
+        },
+        Command::Walk {
+            position: [1., -5.175],
+        },
+        Command::Inspect,
+        Command::Walk { position: [1., 0.] },
+        Command::Inspect,
+    ]);
+    assert_eq!(report["status"], "passed", "{report}");
+    let receipts = report["receipts"].as_array().unwrap();
+    let raised = receipts[2]["state"]["player"]["position"][1]
+        .as_f64()
+        .unwrap();
+    let ground = report["state"]["player"]["position"][1].as_f64().unwrap();
+    assert!((raised - 0.15).abs() < 0.005, "road support {raised}");
+    assert!(ground.abs() < 0.005, "ground support {ground}");
+}

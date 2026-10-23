@@ -256,3 +256,26 @@ Cone angles are radians; omitting `kind` selects a point light. The compiler
 requires an emissive source material and validates finite power/range, source
 radius, direction/cone, offsets, and light counts. Small display-like glows can
 remain emissive without a light; important lamps declare a real source.
+
+### Reusable animated skins and simulation scenes
+
+A style's `skins` list supplies named rigs with a `scale`, `motion`, optional
+`voxel_size`, and articulated `parts` (each may specify a local `pivot`).
+`use_actor: true` reuses the profile's player recipe; `material_map` remaps its
+named materials. Supported motions are `Biped`, `Quadruped`,
+`Vehicle(wheel_radius: ...)`, `Machine(axis: ...)`, `Turret`, and `Static`.
+Shapes also support `Cone`, `CylinderX`, and `RingX` for trees and wheel geometry.
+The compiler bakes and validates each skin; the renderer uploads templates once
+and shares their mesh/material handles across instances.
+
+Pass `scenario = "levels/supply_chain.ron"` to `scene_assets` to compile a
+`gameplay_core::Scenario`. Item, actor, equipment, producer, defender and enemy
+skin references must exist. Both the data schema and initial navigation
+footprints are validated before the pack is embedded.
+
+A box shape may declare `walkable: true`. The compiler emits a support rectangle
+at the **actual voxelized top face**, including repeated shapes and density
+rounding. The movement/jetpack controller uses these surfaces for foot height
+and step traversal, and settlement rigs use the same heights. Decorative shapes
+remain non-walkable unless explicitly marked. This keeps road height independent
+of ad hoc per-character offsets.

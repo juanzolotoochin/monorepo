@@ -51,7 +51,7 @@ impl RigTemplate {
             .id();
         let mut bones = vec![];
         for (part, rest, handles) in &self.parts {
-            let bone = world.spawn(*rest).id();
+            let bone = world.spawn((*rest, Visibility::Inherited)).id();
             world.entity_mut(root).add_child(bone);
             for (mesh, material) in handles {
                 let e = world
@@ -104,6 +104,8 @@ impl Rig {
                     }
                     if *part == ActorPart::Body {
                         t.translation.y += (travel * 24.).cos() * 0.018;
+                        t.rotation = Quat::from_rotation_x(-activity * 0.25);
+                        t.translation.z -= activity * 0.1;
                     }
                 }
                 Motion::Vehicle { wheel_radius } => {
@@ -135,5 +137,67 @@ impl Rig {
             }
         }
         (writes, skips)
+    }
+}
+
+/// Temporary material overrides are explicitly restored before a pooled rig is reused.
+pub struct Fade {
+    materials: Vec<(
+        Entity,
+        Handle<StandardMaterial>,
+        Handle<StandardMaterial>,
+        bool,
+    )>,
+}
+impl Fade {
+    pub fn new(world: &mut World, root: Entity) -> Self {
+        let mut pending = vec![root];
+        let mut materials = vec![];
+        while let Some(e) = pending.pop() {
+            if let Some(children) = world.get::<Children>(e) {
+                pending.extend(children.iter());
+            }
+            if let Some(handle) = world.get::<MeshMaterial3d<StandardMaterial>>(e) {
+                let original = handle.0.clone();
+                let mut material = world
+                    .resource::<Assets<StandardMaterial>>()
+                    .get(&original)
+                    .unwrap()
+                    .clone();
+                material.alpha_mode = AlphaMode::Blend;
+                let faded = world
+                    .resource_mut::<Assets<StandardMaterial>>()
+                    .add(material);
+                let no_shadow = world.get::<bevy::light::NotShadowCaster>(e).is_some();
+                world
+                    .entity_mut(e)
+                    .insert((MeshMaterial3d(faded.clone()), bevy::light::NotShadowCaster));
+                materials.push((e, original, faded, no_shadow));
+            }
+        }
+        Self { materials }
+    }
+    pub fn opacity(&self, world: &mut World, opacity: f32) {
+        let mut assets = world.resource_mut::<Assets<StandardMaterial>>();
+        for (_, _, handle, _) in &self.materials {
+            assets
+                .get_mut(handle)
+                .unwrap()
+                .base_color
+                .set_alpha(opacity.clamp(0., 1.));
+        }
+    }
+    pub fn restore(self, world: &mut World) {
+        for (e, original, faded, no_shadow) in self.materials {
+            world
+                .resource_mut::<Assets<StandardMaterial>>()
+                .remove(&faded);
+            if let Ok(mut e) = world.get_entity_mut(e) {
+                e.insert(MeshMaterial3d(original));
+                if !no_shadow {
+                    e.remove::<bevy::light::NotShadowCaster>();
+                }
+            }
+        }
     }
 }

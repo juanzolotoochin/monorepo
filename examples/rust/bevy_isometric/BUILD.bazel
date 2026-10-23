@@ -24,8 +24,8 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         "//examples/rust/bevy_isometric/assets:atlantis",
-        "//examples/rust/bevy_isometric/assets:forest_outpost",
         "//examples/rust/bevy_isometric/assets:boulder_lab",
+        "//examples/rust/bevy_isometric/assets:forest_outpost",
         "//examples/rust/bevy_isometric/assets:jetpack_lab",
         "//examples/rust/bevy_isometric/assets:mining_deck",
         "//examples/rust/bevy_isometric/assets:pile_lab",
@@ -33,6 +33,7 @@ rust_binary(
         "//tools/assetc/core:voxel_assets",
         "//tools/gameplay/core:gameplay_core",
         "@crates//:bevy",
+        "@crates//:image",
         "@crates//:serde",
         "@crates//:serde_json",
     ],

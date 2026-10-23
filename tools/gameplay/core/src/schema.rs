@@ -119,6 +119,8 @@ pub struct Wave {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Scenario {
+    #[serde(default = "default_extent")]
+    pub extent: f32,
     pub id: String,
     pub items: Vec<Item>,
     pub depots: Vec<Depot>,
@@ -137,8 +139,11 @@ fn ident(id: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
-fn finite(p: Point) -> bool {
-    p.iter().all(|v| v.is_finite() && v.abs() <= 8.0)
+pub fn default_extent() -> f32 {
+    8.
+}
+fn finite(p: Point, extent: f32) -> bool {
+    p.iter().all(|v| v.is_finite() && v.abs() <= extent)
 }
 fn number(v: f32, min: f32, max: f32) -> bool {
     v.is_finite() && (min..=max).contains(&v)
@@ -154,6 +159,10 @@ fn ids<'a>(values: impl Iterator<Item = &'a str>) -> Result<BTreeSet<&'a str>> {
 }
 impl Scenario {
     pub fn validate(&self) -> Result<()> {
+        if !number(self.extent, 4., 24.) {
+            return Err("invalid scenario extent".into());
+        }
+        let finite = |p| finite(p, self.extent);
         if !ident(&self.id)
             || self.items.is_empty()
             || self.items.len() > 32

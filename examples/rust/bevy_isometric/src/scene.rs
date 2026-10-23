@@ -829,6 +829,12 @@ pub fn setup(
 #[derive(Component)]
 pub struct SceneLabel;
 #[derive(Component)]
+pub struct CombatPanel;
+#[derive(Component)]
+pub struct ContactPanel;
+#[derive(Component)]
+pub struct ControlHelp;
+#[derive(Component)]
 pub struct Status;
 #[derive(Component)]
 pub struct Gauge;
@@ -877,15 +883,18 @@ pub fn hud(mut commands: Commands) {
             ));
         });
     commands
-        .spawn((Node {
-            position_type: PositionType::Absolute,
-            right: px(36),
-            top: px(32),
-            align_items: AlignItems::End,
-            flex_direction: FlexDirection::Column,
-            row_gap: px(7),
-            ..default()
-        },))
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                right: px(36),
+                top: px(32),
+                align_items: AlignItems::End,
+                flex_direction: FlexDirection::Column,
+                row_gap: px(7),
+                ..default()
+            },
+            ContactPanel,
+        ))
         .with_children(|p| {
             p.spawn((
                 Text::new("[ LIVE ]   SURFACE LINK ESTABLISHED"),
@@ -918,6 +927,7 @@ pub fn hud(mut commands: Commands) {
                 border: UiRect::left(px(2)),
                 ..default()
             },
+            CombatPanel,
             BackgroundColor(Color::srgba(0.025, 0.045, 0.07, 0.88)),
             BorderColor::all(cyan),
         ))
@@ -972,6 +982,7 @@ pub fn hud(mut commands: Commands) {
         },))
         .with_children(|p| {
             p.spawn((
+                ControlHelp,
                 Text::new("RMB   MOVE     /     SHIFT + LMB   STRIKE"),
                 TextFont {
                     font_size: 13.0,
@@ -981,7 +992,7 @@ pub fn hud(mut commands: Commands) {
             ));
             p.spawn((
                 Text::new(
-                    "1 / 2 / 3 / 4 / 5 / 6  SCENES    SPACE  JETPACK    WASD  STEER    SHIFT  RUN    WHEEL  ZOOM    M  AUDIO",
+                    "1 / 2 / 3 / 4 / 5 / 6 / 7  SCENES    SPACE  JETPACK    WASD  STEER    SHIFT  RUN    WHEEL  ZOOM    M  AUDIO",
                 ),
                 TextFont {
                     font_size: 10.0,

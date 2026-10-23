@@ -179,6 +179,8 @@ pub enum Event {
         defender: String,
     },
     Hit {
+        target: u64,
+        projectile: Option<u64>,
         position: Point,
         killed: bool,
     },
@@ -346,12 +348,30 @@ impl Simulation {
             events: vec![],
         };
         for a in &s.config.agents {
-            if !navigation::clear(a.position, a.position, &s.obstacles, a.radius) {
+            if navigation::path_with_bounds(
+                a.position,
+                a.position,
+                &s.obstacles,
+                a.radius,
+                s.config.extent,
+                |_, _| true,
+            )
+            .is_empty()
+            {
                 return Err(format!("agent {} spawns inside an obstacle", a.id));
             }
         }
         for d in &s.config.depots {
-            if !navigation::clear(d.position, d.position, &s.obstacles, 0.15) {
+            if navigation::path_with_bounds(
+                d.position,
+                d.position,
+                &s.obstacles,
+                0.15,
+                s.config.extent,
+                |_, _| true,
+            )
+            .is_empty()
+            {
                 return Err(format!("depot {} dock is blocked", d.id));
             }
         }

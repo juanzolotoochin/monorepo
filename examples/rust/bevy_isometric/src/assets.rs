@@ -47,6 +47,12 @@ impl SceneLibrary {
             requested: None,
         }
     }
+    pub fn extent(&self) -> f32 {
+        self.scenes
+            .get(self.current)
+            .and_then(|s| s.scene.scenario.as_ref())
+            .map_or(8., |s| s.extent)
+    }
     pub fn title(&self) -> &str {
         self.scenes
             .get(self.current)
