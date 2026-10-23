@@ -9,6 +9,8 @@ pub const MAX_PILES: usize = 32;
 pub enum Mineral {
     AmberOre,
     BlueCrystal,
+    /// Only found by digging, deep in a mine.
+    GreenMalachite,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -30,11 +32,13 @@ pub struct PileLayout {
     pub capacity: u32,
     pub dispensers: Vec<DispenserLayout>,
     pub piles: Vec<PileSeed>,
+    /// A machine that takes any mineral delivered to it.
+    #[serde(default)]
+    pub collector: Option<[f32; 3]>,
 }
 impl PileLayout {
     pub fn validate(&self) -> Result<()> {
         if !(1..=CARRY_CAPACITY).contains(&self.capacity)
-            || self.dispensers.is_empty()
             || self.dispensers.len() > 4
             || self.piles.len() + self.dispensers.len() > MAX_PILES
         {
@@ -51,6 +55,7 @@ impl PileLayout {
                 .piles
                 .iter()
                 .any(|p| !position(&p.position) || !(1..=PILE_CAPACITY).contains(&p.units))
+            || self.collector.is_some_and(|c| !position(&c))
         {
             return Err("pile fixtures must be on the deck and quantities within capacity".into());
         }
@@ -75,6 +80,7 @@ mod tests {
                 position: [3.0, 0.0, 0.0],
                 units: 24,
             }],
+            collector: None,
         };
         assert!(layout.validate().is_ok());
         layout.capacity = 13;

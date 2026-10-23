@@ -214,6 +214,7 @@ fn pile_lab() -> SceneSetup {
             capacity: 12,
             dispensers: vec![(0, p(-3.1, -2.0)), (1, p(2.2, -3.1))],
             piles: vec![(0, p(-4.0, 3.4), 8), (1, p(0.2, 4.3), 24), (0, p(4.6, 1.0), 64)],
+            collector: None,
         }),
         ..SceneSetup::default()
     }
@@ -439,4 +440,95 @@ fn avatars_dig_pits_and_fly_out() {
     assert_ne!(Terrain::pit_tile(scene.avatar().position), tile, "out of the pit");
     assert_eq!(scene.altitude(), Fx::ZERO);
     assert!(!scene.avatar().avatar.flight.airborne);
+}
+
+/// The dig lab's mine: 256 x 256 m of generated ground with a collector by
+/// the spawn.
+fn mine() -> SceneSetup {
+    let collector = Some([fx(3.5), fx(-2.5)]);
+    SceneSetup {
+        extent: Fx::from_int(128),
+        diggable: true,
+        mine: Some(7),
+        piles: Some(PileSetup { capacity: 12, dispensers: Vec::new(), piles: Vec::new(), collector }),
+        ..field()
+    }
+}
+
+/// Digging an ore layer throws its ore onto a pile beside the pit, within
+/// reach; the avatar collects it, flies out, and delivers it to the
+/// collector, and every unit is accounted for.
+#[test]
+fn dug_ore_piles_up_and_goes_to_the_collector() {
+    use super::avatar::DIG_TICKS;
+    use crate::terrain::Terrain;
+    let mut scene = Scene::new(mine());
+    let agent = scene.agent();
+    let terrain = scene.sim.world().terrain();
+    let mine = terrain.mine().expect("a mine");
+    assert_eq!(terrain.height(scene.at(0.0, 2.0)), Fx::ZERO, "the spawn is on the landing");
+    // The nearest ore at the surface of the landing, clear of the collector.
+    let lab = scene.s().piles.as_ref().unwrap();
+    let tile = (-6..=6)
+        .flat_map(|y| (-6..=6).map(move |x| (x, y)))
+        .map(|(x, y)| Terrain::pit_tile(scene.at(x as f64, y as f64)))
+        .filter(|&t| mine.ore(t, 0).is_some() && !lab.blocks_dig(t))
+        .min_by_key(|&t| {
+            let d = Terrain::pit_center(t) - scene.at(0.0, 2.0);
+            (d.length_squared(), t)
+        })
+        .expect("ore near the spawn");
+    let (material, units) = (mine.ore(tile, 0).unwrap(), mine.yield_of(tile, 0));
+    let spot = Terrain::pit_center(tile) - scene.center;
+    scene.walk(spot.x.to_f64(), spot.y.to_f64());
+    scene.command(CommandKind::DigDown { agent });
+    scene.wait(DIG_TICKS);
+    let lab = scene.s().piles.as_ref().unwrap();
+    let (&pile, p) = lab.piles.iter().next().expect("the ore landed in a pile");
+    assert_eq!((p.material, p.units), (material, units));
+    assert!(crate::nav::distance(p.position, Terrain::pit_center(tile)) < fx(3.0), "beside the pit");
+    assert!(lab.conserved());
+
+    let pile_action = |action| CommandKind::Pile { agent, action, pace: Fx::ZERO, approach: None };
+    let haul = |scene: &mut Scene, action| {
+        scene.command(pile_action(action));
+        for _ in 0..900 {
+            if scene.s().piles.as_ref().unwrap().job.is_none() {
+                return;
+            }
+            scene.sim.step(&[]);
+        }
+        panic!("{action:?} never finished");
+    };
+    haul(&mut scene, PileAction::Pickup(pile));
+    let lab = scene.s().piles.as_ref().unwrap();
+    assert_eq!(lab.last_error, None, "the pile is in reach from the pit");
+    assert_eq!(lab.cargo.units, units);
+    // There's no walking to the collector from the pit: fly out first.
+    scene.command(pile_action(PileAction::Deliver));
+    assert!(scene.s().piles.as_ref().unwrap().last_error.is_some(), "no route out of the pit on foot");
+    scene.command(CommandKind::Jetpack { agent, enabled: true });
+    scene.command(CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: v(0.0, 1.0), run: false } });
+    scene.wait(20);
+    scene.command(CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: FxVec2::ZERO, run: false } });
+    scene.command(CommandKind::Jetpack { agent, enabled: false });
+    scene.wait(40);
+    assert!(!scene.avatar().avatar.flight.airborne);
+    haul(&mut scene, PileAction::Deliver);
+    let lab = scene.s().piles.as_ref().unwrap();
+    assert_eq!(lab.last_error, None);
+    assert_eq!(lab.cargo.units, 0);
+    assert_eq!(lab.collector.as_ref().unwrap().stored[material as usize], units);
+    assert!(lab.conserved());
+}
+
+/// Routes across the big mine stay quick to plan: a long walk over the
+/// terraces arrives.
+#[test]
+fn routes_cross_the_mine() {
+    let mut scene = Scene::new(mine());
+    let started = std::time::Instant::now();
+    scene.walk(30.0, 25.0);
+    assert!(crate::nav::distance(scene.avatar().position, scene.at(30.0, 25.0)) < fx(0.1));
+    assert!(started.elapsed().as_secs() < 20, "took {:?}", started.elapsed());
 }

@@ -354,7 +354,8 @@ impl Scenario {
 
     /// The same checks as the original game.
     pub fn validate(&self) -> Result<(), String> {
-        if !within(self.extent, Fx::from_int(4), Fx::from_int(24)) {
+        // Up to 24 in the original game; mines are 128.
+        if !within(self.extent, Fx::from_int(4), Fx::from_int(128)) {
             return Err("invalid scenario extent".into());
         }
         let point = |p: Point| p.iter().all(|v| v.abs() <= self.extent);

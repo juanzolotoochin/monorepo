@@ -76,7 +76,7 @@ pub fn setup_scene(
         return;
     };
     if lab.assets.is_none() {
-        let mineral = [Mineral::AmberOre, Mineral::BlueCrystal].map(|m| {
+        let mineral = MINERALS.map(|m| {
             let c = mineral_color(m);
             materials.add(StandardMaterial {
                 base_color: Color::srgb(c[0], c[1], c[2]),
@@ -168,24 +168,30 @@ pub fn setup_scene(
             },
         ));
     }
+    if let Some(at) = layout.collector {
+        spawn_collector(&mut commands, &assets, Vec3::from_array(at));
+    }
+    let mine = layout.dispensers.is_empty();
     // An empty destination bay suggests a place to start; mineral can be dropped elsewhere too.
-    commands
-        .spawn((
-            LabEntity,
-            Transform::from_xyz(4.0, 0.025, 4.5),
-            Visibility::default(),
-        ))
-        .with_children(|p| {
-            for (x, z) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-                chunk(
-                    p,
-                    &assets,
-                    &assets.trim,
-                    Vec3::new(x, 0.0, z),
-                    Vec3::new(0.35, 0.04, 0.35),
-                );
-            }
-        });
+    if !mine {
+        commands
+            .spawn((
+                LabEntity,
+                Transform::from_xyz(4.0, 0.025, 4.5),
+                Visibility::default(),
+            ))
+            .with_children(|p| {
+                for (x, z) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+                    chunk(
+                        p,
+                        &assets,
+                        &assets.trim,
+                        Vec3::new(x, 0.0, z),
+                        Vec3::new(0.35, 0.04, 0.35),
+                    );
+                }
+            });
+    }
     commands.spawn((
         LabEntity,
         CarryVisual {
@@ -205,9 +211,19 @@ pub fn setup_scene(
             p.spawn(Node { column_gap: px(4.0), ..default() }).with_children(|row| {
                 for index in 0..layout.capacity { row.spawn((CapacityTick(index),Node { width: px(21.0), height: px(12.0), ..default() },BackgroundColor(Color::srgb(0.1,0.18,0.22)))); }
             });
-            p.spawn((Text::new("LMB dispenser: add 5 units\nLMB pile: walk over + collect\nCtrl+LMB pile: collect / top up\nCarrying? LMB ground / matching pile:\nwalk over + deposit\nRMB / WASD: cancel hauling\nOne chunk = one unit"),TextFont { font_size: FontSize::Px(12.0), ..default() },TextColor(Color::srgb(0.45,0.65,0.72))));
+            let help = if mine {
+                "F: dig the tile underfoot (2 s)\nOre flies out onto a pile beside the pit\nLMB pile: walk over + collect\nCarrying? LMB collector: deliver\nSPACE: fly out of a pit\nRMB / WASD: cancel hauling\nOne chunk = one unit"
+            } else {
+                "LMB dispenser: add 5 units\nLMB pile: walk over + collect\nCtrl+LMB pile: collect / top up\nCarrying? LMB ground / matching pile:\nwalk over + deposit\nRMB / WASD: cancel hauling\nOne chunk = one unit"
+            };
+            p.spawn((Text::new(help),TextFont { font_size: FontSize::Px(12.0), ..default() },TextColor(Color::srgb(0.45,0.65,0.72))));
         });
-    lab.notice = "Click a dispenser to add mineral, or collect an existing pile.".into();
+    lab.notice = if mine {
+        "Dig for ore (F), then carry it to the collector."
+    } else {
+        "Click a dispenser to add mineral, or collect an existing pile."
+    }
+    .into();
 }
 
 pub fn render(
@@ -232,6 +248,7 @@ pub fn render(
             transfer::Destination::Pile(id, index) => {
                 hidden_piles.entry(id).or_default().insert(index);
             }
+            transfer::Destination::Collector(_) => {}
         }
     }
     let empty = std::collections::BTreeSet::new();
@@ -249,6 +266,7 @@ pub fn render(
         visual.units = pile.units;
         visual.hidden = hidden.len() as u32;
         commands.entity(entity).despawn_children();
+        commands.entity(entity).insert(Transform::from_translation(place(pile)));
         if pile.units > 0 {
             commands.entity(entity).insert(Obstacle(Disc {
                 center: point(pile.position),
@@ -273,7 +291,7 @@ pub fn render(
                 units: pile.units,
                 hidden: hidden.len() as u32,
             },
-            Transform::from_translation(point(pile.position)),
+            Transform::from_translation(place(pile)),
             Visibility::default(),
         ));
         if pile.units > 0 {
@@ -286,7 +304,7 @@ pub fn render(
         label(
             &mut commands,
             CaptionKind::Pile(id),
-            point(pile.position),
+            place(pile),
             "",
         );
     }
@@ -334,6 +352,28 @@ pub fn render(
         });
     }
 }
+/// The collector: a hopper on legs over a squat bin, with a lamp for each
+/// mineral it takes.
+fn spawn_collector(commands: &mut Commands, assets: &LabAssets, position: Vec3) {
+    commands
+        .spawn((
+            LabEntity,
+            Transform::from_translation(position),
+            Visibility::default(),
+            Obstacle(Disc { center: position, radius: 0.9 }),
+        ))
+        .with_children(|p| {
+            chunk(p, assets, &assets.trim, Vec3::new(0.0, 0.1, 0.0), Vec3::new(1.7, 0.2, 1.7));
+            chunk(p, assets, &assets.dark, Vec3::new(0.0, 0.6, 0.0), Vec3::new(1.4, 0.8, 1.4));
+            chunk(p, assets, &assets.dark, Vec3::new(0.0, 1.25, 0.0), Vec3::new(1.0, 0.5, 1.0));
+            chunk(p, assets, &assets.trim, Vec3::new(0.0, 1.55, 0.0), Vec3::new(1.5, 0.12, 1.5));
+            for (i, material) in assets.mineral.iter().enumerate() {
+                chunk(p, assets, material, Vec3::new(-0.4 + i as f32 * 0.4, 0.75, 0.72), Vec3::new(0.24, 0.24, 0.06));
+            }
+        });
+    label(commands, CaptionKind::Collector, position + Vec3::Y * 3.0, "");
+}
+
 fn spawn_units(
     parent: &mut ChildSpawnerCommands,
     assets: &LabAssets,
@@ -398,8 +438,19 @@ pub fn update_display(
                     .take(p.units as usize)
                     .map(|p| p[1])
                     .fold(0.14, f32::max);
-                caption.anchor = point(p.position) + Vec3::Y * (top + 0.65);
+                caption.anchor = place(p) + Vec3::Y * (top + 0.65);
                 format!("{}  {} / 96", mineral_name(p.material), p.units)
+            }
+            CaptionKind::Collector => {
+                let Some(at) = lab.collector else {
+                    continue;
+                };
+                caption.anchor = at + Vec3::Y * 3.8;
+                let counts: Vec<String> = MINERALS
+                    .iter()
+                    .map(|&m| format!("{} {}", mineral_name(m), lab.collected.get(mineral_index(m)).copied().unwrap_or(0)))
+                    .collect();
+                format!("COLLECTOR\n{}", counts.join("\n"))
             }
             CaptionKind::Cargo => {
                 caption.anchor = player.translation + Vec3::Y * 1.5;
@@ -412,14 +463,26 @@ pub fn update_display(
     }
     let material = stock.cargo.material.map_or("EMPTY", mineral_name);
     for mut text in &mut status {
-        let value = format!(
-            "CARRY: {material}  {} / {}\nGROUND: {}   CREATED: {}\n\n{}",
-            stock.cargo.units,
-            stock.cargo.capacity,
-            stock.total() - u64::from(stock.cargo.units),
-            stock.created,
-            lab.notice
-        );
+        let collected: u32 = lab.collected.iter().sum();
+        let value = if lab.collector.is_some() {
+            format!(
+                "CARRY: {material}  {} / {}\nGROUND: {}   MINED: {}   COLLECTED: {collected}\n\n{}",
+                stock.cargo.units,
+                stock.cargo.capacity,
+                stock.total() - u64::from(stock.cargo.units),
+                stock.created,
+                lab.notice
+            )
+        } else {
+            format!(
+                "CARRY: {material}  {} / {}\nGROUND: {}   CREATED: {}\n\n{}",
+                stock.cargo.units,
+                stock.cargo.capacity,
+                stock.total() - u64::from(stock.cargo.units),
+                stock.created,
+                lab.notice
+            )
+        };
         if text.0 != value {
             text.0 = value;
         }

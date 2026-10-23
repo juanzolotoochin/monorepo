@@ -319,6 +319,14 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             send(world, CommandKind::Jetpack { agent, enabled: *enabled });
             Ok(Pending::Applied)
         }
+        Command::Deliver { seconds_per_unit } => {
+            let carried = world.resource::<PileLab>().stock.as_ref().ok_or("No logistics scene loaded")?.cargo.units;
+            if carried == 0 {
+                return Err("Carrier is empty".into());
+            }
+            let serial = queue_haul(world, PileAction::Deliver, *seconds_per_unit, None)?;
+            Ok(Pending::Haul { expected_cargo: 0, serial })
+        }
         Command::Dig => {
             let game = world.resource::<Game>();
             if !game.world().is_some_and(|w| w.terrain().diggable) {
@@ -560,6 +568,7 @@ pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
             let destination = match transit.destination {
                 crate::piles::Destination::Cargo(slot) => json!({"cargo_slot":slot}),
                 crate::piles::Destination::Pile(id, slot) => json!({"pile":id,"slot":slot}),
+                crate::piles::Destination::Collector(_) => json!({"collector":true}),
             };
             json!({"position":transform.translation.to_array(),"destination":destination})
         })

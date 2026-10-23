@@ -4,13 +4,17 @@
 //! Movement is blocked by authored obstacles (discs: rocks, trees, machines)
 //! and by rock voxels, 1 × 1 tile columns that can be dug out. Walkable
 //! surfaces are raised boxes (platforms) that set the ground height. In
-//! digging scenes, avatars dig pits into the ground, a layer at a time.
+//! digging scenes, avatars dig pits into the ground, a layer at a time, and
+//! mines generate their ground (terraces and ore) from a seed.
 //! Terrain is part of the saved state; navigation caches built from it are not.
+
+use std::sync::{Arc, OnceLock};
 
 use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
 use crate::hash::{StateHash, StateHasher};
+use crate::mine::{Mine, MineSpec};
 
 /// Extra separation kept from obstacles, as in the original game (1.5 cm).
 pub const CLEARANCE_MARGIN: Fx = Fx::from_bits(64_424_509); // 0.015
@@ -52,8 +56,32 @@ pub struct Terrain {
     /// Dug pits by [`Terrain::pit_tile`], with how many layers deep, sorted.
     #[serde(default)]
     pub pits: Vec<((i32, i32), u8)>,
+    /// Generated ground under the whole arena, if this is a mine.
+    #[serde(default)]
+    pub mine: Option<MineSpec>,
+    #[serde(skip)]
+    generated: Generated,
     /// Bumped by every change, so cached paths know to rebuild.
     pub revision: u64,
+}
+
+/// The mine generated from [`Terrain::mine`] on first use. Not state: equal
+/// to any other, so a fresh copy (say, a loaded save) compares the same.
+#[derive(Clone, Default)]
+struct Generated(OnceLock<Arc<Mine>>);
+
+impl PartialEq for Generated {
+    fn eq(&self, _: &Generated) -> bool {
+        true
+    }
+}
+
+impl Eq for Generated {}
+
+impl std::fmt::Debug for Generated {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Generated")
+    }
 }
 
 impl Terrain {
@@ -67,6 +95,8 @@ impl Terrain {
             rock: Vec::new(),
             diggable: false,
             pits: Vec::new(),
+            mine: None,
+            generated: Generated::default(),
             revision: 0,
         }
     }
@@ -105,8 +135,24 @@ impl Terrain {
         if self.platforms_only {
             top
         } else {
-            Some(top.unwrap_or(Fx::ZERO))
+            let base = || self.mine().and_then(|m| m.height(Self::pit_tile(p))).unwrap_or(Fx::ZERO);
+            Some(top.unwrap_or_else(base))
         }
+    }
+
+    /// The generated mine, if this terrain is one.
+    pub fn mine(&self) -> Option<&Mine> {
+        let spec = self.mine?;
+        Some(self.generated.0.get_or_init(|| Arc::new(Mine::generate(spec))))
+    }
+
+    /// Makes the arena a mine generated from `seed`, its landing at `spawn`.
+    pub fn generate_mine(&mut self, seed: u64, spawn: FxVec2) {
+        let min = Self::pit_tile(self.min());
+        let size = (Self::pit_tile(self.max()).0 - min.0 + 1) as u32;
+        self.mine = Some(MineSpec { seed, min, size, landing: Self::pit_tile(spawn) });
+        self.generated = Generated::default();
+        self.revision += 1;
     }
 
     /// [`Terrain::ground`], with drops at zero.
@@ -262,6 +308,12 @@ impl StateHash for Terrain {
         for &((x, y), depth) in &self.pits {
             h.write_u64((x as u32 as u64) << 32 | y as u32 as u64);
             h.write_u64(depth as u64);
+        }
+        if let Some(mine) = &self.mine {
+            h.write_u64(mine.seed);
+            h.write_u64((mine.min.0 as u32 as u64) << 32 | mine.min.1 as u32 as u64);
+            h.write_u64(mine.size as u64);
+            h.write_u64((mine.landing.0 as u32 as u64) << 32 | mine.landing.1 as u32 as u64);
         }
         h.write_u64(self.revision);
     }

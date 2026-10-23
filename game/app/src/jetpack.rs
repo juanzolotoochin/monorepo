@@ -175,16 +175,21 @@ pub fn update(
     }
 }
 
-/// Pick the closest visible platform top, rather than projecting elevated clicks onto y=0.
+/// Pick the closest visible platform top (or the dug ground in a digging
+/// scene), rather than projecting elevated clicks onto y=0.
 pub fn cursor_surface(
     camera: &Camera,
     transform: &GlobalTransform,
     window: &Window,
     library: &SceneLibrary,
+    game: &crate::lockstep::Game,
 ) -> Option<Vec3> {
     let ray = camera
         .viewport_to_world(transform, window.cursor_position()?)
         .ok()?;
+    if library.has_feature(voxel_assets::SceneFeature::Digging) {
+        return crate::digging::ground_hit(ray, game);
+    }
     let Some(terrain) = &library.scenes[library.current].scene.terrain else {
         return crate::gameplay::cursor_ground(camera, transform, window);
     };

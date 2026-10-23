@@ -242,6 +242,16 @@ pub struct Terrain {
     pub platforms: Vec<TerrainPlatform>,
 }
 
+/// A generated mining ground: rolling terraces with ore underground, the
+/// same on every machine for a seed.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MineLayout {
+    /// Half-width of the square ground, in meters.
+    pub extent: f32,
+    pub seed: u64,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename = "Scene", deny_unknown_fields)]
 pub struct Scene {
@@ -255,6 +265,9 @@ pub struct Scene {
     pub instances: Vec<Instance>,
     #[serde(default)]
     pub piles: Option<PileLayout>,
+    /// Generated ground to dig and mine, instead of the deck.
+    #[serde(default)]
+    pub mine: Option<MineLayout>,
     #[serde(default)]
     pub terrain: Option<Terrain>,
     #[serde(default)]
@@ -558,6 +571,14 @@ impl ScenePack {
         if let Some(piles) = &self.scene.piles {
             piles.validate()?;
         }
+        if let Some(mine) = &self.scene.mine {
+            if !(8.0..=128.0).contains(&mine.extent) || mine.extent.fract() != 0.0 {
+                return Err("a mine's extent must be a whole number of meters from 8 to 128".into());
+            }
+            if !self.scene.features.contains(&SceneFeature::Digging) {
+                return Err("a mine needs the Digging feature".into());
+            }
+        }
         let mut ids = BTreeSet::new();
         for prefab in &self.prefabs {
             prefab.validate()?;
@@ -687,6 +708,7 @@ mod tests {
                 spawn: [0.0; 3],
                 industrial: true,
                 piles: None,
+                mine: None,
                 terrain: None,
                 style: None,
                 architecture: vec![],
@@ -731,6 +753,7 @@ mod tests {
                 industrial: false,
                 instances: vec![],
                 piles: None,
+                mine: None,
                 style: None,
                 architecture: vec![],
                 scenario: None,

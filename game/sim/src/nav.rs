@@ -1,7 +1,8 @@
 //! Clearance-aware A* on a half-tile grid, ported from the original game's
 //! navigation in fixed point. Paths are string-pulled into straight segments.
 //! Every query is a pure function of the terrain, so the read phase can plan
-//! in parallel.
+//! in parallel. On big arenas (mines), a query searches a window around its
+//! start and goal instead of the whole arena.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -11,21 +12,58 @@ use fx::{Fx, FxVec2};
 use crate::terrain::{Disc, Terrain};
 
 const SPACING: Fx = Fx::HALF;
+/// Arenas up to this half-width search all of themselves.
+const WHOLE_ARENA: Fx = Fx::from_bits(32 << 32);
+/// Bigger ones search this far around the start and goal.
+const WINDOW_MARGIN: Fx = Fx::from_bits(16 << 32);
+/// Nodes this close to a point are tried first for its nearest visible node.
+const NEAR_NODES: i64 = 4;
 
 struct Grid<'a> {
     terrain: &'a Terrain,
     extra: &'a [Disc],
     radius: Fx,
-    side: usize,
+    width: usize,
+    height: usize,
     origin: FxVec2,
     valid: &'a dyn Fn(FxVec2, FxVec2) -> bool,
 }
 
 impl Grid<'_> {
+    /// The searched part of the arena's half-tile lattice.
+    fn new<'a>(
+        terrain: &'a Terrain,
+        start: FxVec2,
+        goal: FxVec2,
+        radius: Fx,
+        extra: &'a [Disc],
+        valid: &'a dyn Fn(FxVec2, FxVec2) -> bool,
+    ) -> Grid<'a> {
+        let side = (terrain.extent.mul_int(2) / SPACING).round().floor_to_int() + 1;
+        let min = terrain.min();
+        let (mut x0, mut y0, mut x1, mut y1) = (0, 0, side - 1, side - 1);
+        if terrain.extent > WHOLE_ARENA {
+            let node = |v: Fx, from: Fx| ((v - from) / SPACING).floor_to_int().clamp(0, side - 1);
+            x0 = node(start.x.min(goal.x) - WINDOW_MARGIN, min.x);
+            y0 = node(start.y.min(goal.y) - WINDOW_MARGIN, min.y);
+            x1 = node(start.x.max(goal.x) + WINDOW_MARGIN, min.x);
+            y1 = node(start.y.max(goal.y) + WINDOW_MARGIN, min.y);
+        }
+        Grid {
+            terrain,
+            extra,
+            radius,
+            width: (x1 - x0 + 1) as usize,
+            height: (y1 - y0 + 1) as usize,
+            origin: FxVec2::new(min.x + SPACING.mul_int(x0), min.y + SPACING.mul_int(y0)),
+            valid,
+        }
+    }
+
     fn point(&self, index: usize) -> FxVec2 {
         FxVec2::new(
-            self.origin.x + SPACING.mul_int((index % self.side) as i64),
-            self.origin.y + SPACING.mul_int((index / self.side) as i64),
+            self.origin.x + SPACING.mul_int((index % self.width) as i64),
+            self.origin.y + SPACING.mul_int((index / self.width) as i64),
         )
     }
 
@@ -33,11 +71,23 @@ impl Grid<'_> {
         self.terrain.clear_with(a, b, self.radius, self.extra) && (self.valid)(a, b)
     }
 
-    /// The grid node nearest to `p` that `p` can see.
+    /// The grid node nearest to `p` that `p` can see. Nodes close by go
+    /// first; the rest only if none of those is closer than they could be.
     fn nearest_visible(&self, p: FxVec2) -> Option<usize> {
-        (0..self.side * self.side)
-            .filter(|&i| self.clear(p, self.point(i)))
-            .min_by_key(|&i| ((self.point(i) - p).length_squared(), i))
+        let best = |nodes: &mut dyn Iterator<Item = usize>| {
+            nodes.filter(|&i| self.clear(p, self.point(i))).min_by_key(|&i| ((self.point(i) - p).length_squared(), i))
+        };
+        let cx = ((p.x - self.origin.x) / SPACING).round().floor_to_int();
+        let cy = ((p.y - self.origin.y) / SPACING).round().floor_to_int();
+        let (w, h) = (self.width as i64, self.height as i64);
+        let near = (cy - NEAR_NODES).max(0)..=(cy + NEAR_NODES).min(h - 1);
+        let mut nodes = near.flat_map(|y| ((cx - NEAR_NODES).max(0)..=(cx + NEAR_NODES).min(w - 1)).map(move |x| (y * w + x) as usize));
+        let reach = SPACING.mul_int(NEAR_NODES);
+        match best(&mut nodes) {
+            // Every node outside the square is at least `reach` away.
+            Some(i) if (self.point(i) - p).length_squared() < reach * reach => Some(i),
+            _ => best(&mut (0..self.width * self.height)),
+        }
     }
 }
 
@@ -62,8 +112,8 @@ pub fn path_with(
     extra: &[Disc],
     valid: &dyn Fn(FxVec2, FxVec2) -> bool,
 ) -> Vec<FxVec2> {
-    let side = (terrain.extent.mul_int(2) / SPACING).round().floor_to_int() as usize + 1;
-    let grid = Grid { terrain, extra, radius, side, origin: terrain.min(), valid };
+    let grid = Grid::new(terrain, start, goal, radius, extra, valid);
+    let (width, height) = (grid.width, grid.height);
     if !grid.clear(goal, goal) {
         return Vec::new();
     }
@@ -73,11 +123,11 @@ pub fn path_with(
     let (Some(first), Some(last)) = (grid.nearest_visible(start), grid.nearest_visible(goal)) else {
         return Vec::new();
     };
-    let mut costs = vec![u32::MAX; side * side];
-    let mut parents = vec![usize::MAX; side * side];
+    let mut costs = vec![u32::MAX; width * height];
+    let mut parents = vec![usize::MAX; width * height];
     let heuristic = |i: usize| -> u32 {
-        let dx = (i % side).abs_diff(last % side) as u32;
-        let dy = (i / side).abs_diff(last / side) as u32;
+        let dx = (i % width).abs_diff(last % width) as u32;
+        let dy = (i / width).abs_diff(last / width) as u32;
         10 * dx.max(dy) + 4 * dx.min(dy)
     };
     let mut open = BinaryHeap::new();
@@ -90,17 +140,17 @@ pub fn path_with(
         if current == last {
             break;
         }
-        let (x, y) = ((current % side) as i64, (current / side) as i64);
+        let (x, y) = ((current % width) as i64, (current / width) as i64);
         for dy in -1..=1i64 {
             for dx in -1..=1i64 {
                 if dx == 0 && dy == 0 {
                     continue;
                 }
                 let (nx, ny) = (x + dx, y + dy);
-                if nx < 0 || ny < 0 || nx >= side as i64 || ny >= side as i64 {
+                if nx < 0 || ny < 0 || nx >= width as i64 || ny >= height as i64 {
                     continue;
                 }
-                let next = ny as usize * side + nx as usize;
+                let next = ny as usize * width + nx as usize;
                 let new_cost = cost + if dx != 0 && dy != 0 { 14 } else { 10 };
                 if new_cost < costs[next] && grid.clear(grid.point(current), grid.point(next)) {
                     costs[next] = new_cost;

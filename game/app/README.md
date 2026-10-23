@@ -262,16 +262,35 @@ Press **9** for the dig lab, or launch it directly:
 bazel run --config=full_local //game/app:demo -- --scene dig-lab
 ```
 
-Press **F** to dig out the deck tile you stand on (**X** picks the spear in
-combat scenes). A dig takes 2 seconds standing still, stepping to the middle of
-the tile, with a bar over your head; walking off, attacking or the jetpack
-stops it. Each dig takes out one 0.5 m layer, down to 3 layers (1.5 m). Pit
-walls are too steep to walk into or out of, and routes go around pits: hold
-**Space** to fly out. The pits are part of the simulation, so in a networked
-game everyone digs the same deck (`--scene dig-lab` on every machine).
+The lab is an open-pit mine: 256 × 256 m of generated ground (`mine` in
+`assets/levels/dig_lab.ron`: its size and seed). Terraces rise a walkable
+quarter meter at a time, mesas a meter at once (fly up), and a round landing
+around the spawn is flat. The simulation generates the same ground on every
+machine from the seed (`game/sim/src/mine.rs`); only the seed and the pits are
+state. The camera follows you over it.
 
-The control port's `{"op":"dig"}` digs, and inspection's `digging` lists the
-pits by arena tile and whether the player is digging.
+Press **F** to dig out the tile you stand on (**X** picks the spear in combat
+scenes). A dig takes 2 seconds standing still, stepping to the middle of the
+tile, with a bar over your head; walking off, attacking or the jetpack stops
+it. Each dig takes out one 0.5 m layer, down to 3 layers (1.5 m). Pit walls are
+too steep to walk into or out of, and routes go around pits: hold **Space** to
+fly out.
+
+Each layer may hold ore: **amber ore** and **blue crystal**, richer deeper
+down, and rarer **green malachite** below the top layer. Ore shows as a tint on
+the ground and in pit walls. Digging out an ore layer throws 3 to 6 units onto a
+pile beside the pit (or onto a pile of the same ore already there). Collect it
+as in the pile lab (left click a pile; you can reach it from the pit), fly out,
+and left click the **collector** by the landing to deliver; it takes every
+mineral and counts each. Up to 512 piles; no pile or machine can be dug under.
+
+The pits are part of the simulation, so in a networked game everyone digs the
+same ground (`--scene dig-lab` on every machine). Piles and carrying are still
+the pile lab's single carrier: only the host's avatar hauls.
+
+The control port's `{"op":"dig"}` digs and `{"op":"deliver"}` delivers the
+cargo. Inspection's `digging` lists the pits by arena tile, whether the player
+is digging, the collector's counts by mineral, and the nearest ore within 8 m.
 
 ## Field trial 05
 

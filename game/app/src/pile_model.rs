@@ -11,6 +11,8 @@ pub struct Pile {
     pub position: [f32; 2],
     pub units: u32,
     pub source: bool,
+    /// The ground under the pile.
+    pub height: f32,
 }
 #[derive(Clone, Debug)]
 pub struct Cargo {
@@ -29,11 +31,11 @@ impl Stock {
     pub fn new(layout: &PileLayout) -> Self {
         let mut piles = BTreeMap::new();
         for (id, d) in layout.dispensers.iter().enumerate() {
-            piles.insert(id as PileId, Pile { material: d.material, position: [d.output[0], d.output[2]], units: 0, source: true });
+            piles.insert(id as PileId, Pile { material: d.material, position: [d.output[0], d.output[2]], units: 0, source: true, height: 0.0 });
         }
         let first = layout.dispensers.len() as PileId;
         for (i, p) in layout.piles.iter().enumerate() {
-            piles.insert(first + i as PileId, Pile { material: p.material, position: [p.position[0], p.position[2]], units: p.units, source: false });
+            piles.insert(first + i as PileId, Pile { material: p.material, position: [p.position[0], p.position[2]], units: p.units, source: false, height: 0.0 });
         }
         let created = layout.piles.iter().map(|p| u64::from(p.units)).sum();
         Self { piles, cargo: Cargo { material: None, units: 0, capacity: layout.capacity }, created }

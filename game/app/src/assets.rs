@@ -67,10 +67,11 @@ impl SceneLibrary {
         self.scenes.get(self.current).is_some_and(|pack| pack.scene.features.contains(&feature))
     }
     pub fn extent(&self) -> f32 {
-        self.scenes
-            .get(self.current)
-            .and_then(|s| s.scene.scenario.as_ref())
-            .map_or(8., |s| s.extent.to_f32())
+        let Some(scene) = self.scenes.get(self.current).map(|s| &s.scene) else { return 8. };
+        if let Some(mine) = &scene.mine {
+            return mine.extent;
+        }
+        scene.scenario.as_ref().map_or(8., |s| s.extent.to_f32())
     }
     pub fn title(&self) -> &str {
         self.scenes

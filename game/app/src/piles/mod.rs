@@ -17,27 +17,35 @@ fn mineral_name(m: Mineral) -> &'static str {
     match m {
         Mineral::AmberOre => "AMBER ORE",
         Mineral::BlueCrystal => "BLUE CRYSTAL",
+        Mineral::GreenMalachite => "GREEN MALACHITE",
     }
 }
 fn mineral_index(m: Mineral) -> usize {
     match m {
         Mineral::AmberOre => 0,
         Mineral::BlueCrystal => 1,
+        Mineral::GreenMalachite => 2,
     }
 }
-fn mineral_color(m: Mineral) -> [f32; 3] {
+pub(crate) fn mineral_color(m: Mineral) -> [f32; 3] {
     match m {
         Mineral::AmberOre => [1.0, 0.4, 0.06],
         Mineral::BlueCrystal => [0.08, 0.65, 1.0],
+        Mineral::GreenMalachite => [0.12, 0.9, 0.35],
     }
 }
+const MINERALS: [Mineral; 3] = [Mineral::AmberOre, Mineral::BlueCrystal, Mineral::GreenMalachite];
 fn point(p: [f32; 2]) -> Vec3 {
     Vec3::new(p[0], 0.0, p[1])
+}
+/// Where a pile sits, on the ground under it.
+fn place(p: &Pile) -> Vec3 {
+    Vec3::new(p.position[0], p.height, p.position[1])
 }
 #[derive(Clone)]
 struct LabAssets {
     cube: Handle<Mesh>,
-    mineral: [Handle<StandardMaterial>; 2],
+    mineral: [Handle<StandardMaterial>; 3],
     dark: Handle<StandardMaterial>,
     trim: Handle<StandardMaterial>,
 }
@@ -54,6 +62,9 @@ pub struct PileLab {
     pub(crate) last_error: Option<String>,
     pub(crate) in_flight: u32,
     pub(crate) job_serial: u64,
+    /// Where the collector stands (on the ground), and what it holds by mineral.
+    pub(crate) collector: Option<Vec3>,
+    pub(crate) collected: Vec<u32>,
 }
 impl Default for PileLab {
     fn default() -> Self {
@@ -67,6 +78,8 @@ impl Default for PileLab {
             last_error: None,
             in_flight: 0,
             job_serial: 0,
+            collector: None,
+            collected: Vec::new(),
         }
     }
 }
@@ -91,6 +104,7 @@ enum CaptionKind {
     Dispenser(usize),
     Pile(PileId),
     Cargo,
+    Collector,
 }
 #[derive(Component)]
 pub struct Caption {
@@ -115,10 +129,10 @@ pub(crate) use transfer::{Destination, Transit};
 pub use view::{captions, render, setup_scene, update_display};
 
 pub(crate) fn mineral(material: u8) -> Mineral {
-    if material == 0 {
-        Mineral::AmberOre
-    } else {
-        Mineral::BlueCrystal
+    match material {
+        0 => Mineral::AmberOre,
+        1 => Mineral::BlueCrystal,
+        _ => Mineral::GreenMalachite,
     }
 }
 
@@ -139,11 +153,17 @@ pub fn mirror(game: Res<Game>, mut lab: ResMut<PileLab>) {
         return;
     };
     let local = |p: fx::FxVec2| [(p.x - game.center.x).to_f32(), (p.y - game.center.y).to_f32()];
+    let ground = |p: fx::FxVec2| game.world().map_or(0.0, |w| w.terrain().height(p).to_f32());
     let piles = sim
         .piles
         .iter()
-        .map(|(&id, p)| (id, Pile { material: mineral(p.material), position: local(p.position), units: p.units, source: p.source }))
+        .map(|(&id, p)| {
+            let pile = Pile { material: mineral(p.material), position: local(p.position), units: p.units, source: p.source, height: ground(p.position) };
+            (id, pile)
+        })
         .collect();
+    lab.collector = sim.collector.as_ref().map(|c| game.to_view(c.position).with_y(ground(c.position)));
+    lab.collected = sim.collector.as_ref().map_or_else(Vec::new, |c| c.stored.clone());
     let cargo = crate::pile_model::Cargo { material: sim.cargo.material.map(mineral), units: sim.cargo.units, capacity: sim.cargo.capacity };
     lab.stock = Some(Stock { piles, cargo, created: sim.created });
     lab.job = sim.job.as_ref().map(|_| sim.job_serial);
@@ -168,6 +188,7 @@ pub fn input(
     keys: Res<ButtonInput<KeyCode>>,
     camera: Single<(&Camera, &GlobalTransform)>,
     window: Single<&Window>,
+    library: Res<SceneLibrary>,
     source_buttons: Query<(&Interaction, &SourceButton)>,
     panels: Query<&Interaction, With<LabPanel>>,
     mut lab: ResMut<PileLab>,
@@ -211,7 +232,12 @@ pub fn input(
     if cursor.y < 110.0 || cursor.y > window.height() - 135.0 {
         return;
     }
-    let Some(ground) = cursor_ground(camera.0, camera.1, &window) else {
+    let ground = if library.has_feature(voxel_assets::SceneFeature::Digging) {
+        crate::digging::ground_hit(ray, &game)
+    } else {
+        cursor_ground(camera.0, camera.1, &window)
+    };
+    let Some(ground) = ground else {
         return;
     };
     let stock = lab.stock.as_ref().unwrap();
@@ -220,11 +246,20 @@ pub fn input(
         .iter()
         .filter_map(|(&id, p)| {
             let radius = pile_radius(p.units);
-            ray_sphere(ray.origin, *ray.direction, point(p.position) + Vec3::Y * 0.3, radius.max(0.55)).map(|t| (t, id))
+            ray_sphere(ray.origin, *ray.direction, place(p) + Vec3::Y * 0.3, radius.max(0.55)).map(|t| (t, id))
         })
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map(|(_, id)| id);
     let carrying = stock.cargo.units > 0;
+    let collector = lab.collector.and_then(|c| ray_sphere(ray.origin, *ray.direction, c + Vec3::Y * 1.0, 1.1));
+    if collector.is_some() && pile.is_none() {
+        if carrying {
+            haul(&mut game, PileAction::Deliver, 0.18, None);
+        } else {
+            lab.notice = "Collect ore from a pile, then click the collector to deliver it.".into();
+        }
+        return;
+    }
     let collect = !carrying || keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     let action = if let Some(id) = pile {
         let p = &stock.piles[&id];

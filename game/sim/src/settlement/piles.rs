@@ -1,9 +1,11 @@
 //! The pile lab: loose mineral piles, dispensers that add to their output
 //! pile, and a player who walks to a pile and tosses units one at a time.
-//! Ported from the original Bevy app (`piles/` and `pile_model.rs`).
+//! Ported from the original Bevy app (`piles/` and `pile_model.rs`). In a
+//! mine, dug ore lands in piles beside the pit, and a collector takes any
+//! mineral delivered to it.
 //!
-//! Every unit is conserved: `created` equals the units in piles plus cargo,
-//! checked by [`PileLab::conserved`]. Positions are world tiles.
+//! Every unit is conserved: `created` equals the units in piles, cargo and
+//! the collector, checked by [`PileLab::conserved`]. Positions are world tiles.
 
 use std::collections::BTreeMap;
 
@@ -20,6 +22,10 @@ use crate::terrain::Terrain;
 
 pub const PILE_CAPACITY: u32 = 96;
 pub const MAX_PILES: usize = 32;
+/// Mines leave a pile by every few pits.
+pub const MAX_MINE_PILES: usize = 512;
+/// The collector's footprint.
+pub const COLLECTOR_RADIUS: Fx = Fx::from_bits(3_865_470_566); // 0.9
 /// A walk-and-toss job gives up after 30 s, and replans after 0.8 s without moving.
 const JOB_TIMEOUT_TICKS: u64 = 900;
 const STALL_TICKS: u64 = 24;
@@ -52,6 +58,22 @@ pub enum PileAction {
     Deposit(PileId),
     /// Starts a new pile here.
     Drop(FxVec2),
+    /// Empties the cargo into the collector.
+    Deliver,
+}
+
+/// Takes any mineral delivered to it, and keeps count.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Collector {
+    pub position: FxVec2,
+    /// Units delivered, by mineral.
+    pub stored: Vec<u32>,
+}
+
+impl Collector {
+    pub fn new(position: FxVec2) -> Collector {
+        Collector { position, stored: vec![0; crate::mine::MINERALS] }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +110,10 @@ pub struct PileLab {
     pub in_flight: Vec<u64>,
     pub notice: String,
     pub last_error: Option<String>,
+    /// Piles go down no farther than this from the center, on either axis.
+    pub limit: Fx,
+    pub max_piles: usize,
+    pub collector: Option<Collector>,
 }
 
 /// Where unit `n` of a pile sits, in lattice cells (x, layer, z): a stable,
@@ -126,6 +152,9 @@ impl PileLab {
             in_flight: Vec::new(),
             notice: String::new(),
             last_error: None,
+            limit: DROP_LIMIT,
+            max_piles: MAX_PILES,
+            collector: None,
         };
         for &(material, output) in dispensers {
             lab.insert(material, output, 0, true);
@@ -145,7 +174,8 @@ impl PileLab {
     }
 
     pub fn total(&self) -> u64 {
-        self.piles.values().map(|p| p.units as u64).sum::<u64>() + self.cargo.units as u64
+        let collected = self.collector.as_ref().map_or(0, |c| c.stored.iter().map(|&n| n as u64).sum::<u64>());
+        self.piles.values().map(|p| p.units as u64).sum::<u64>() + self.cargo.units as u64 + collected
     }
 
     pub fn conserved(&self) -> bool {
@@ -221,10 +251,10 @@ impl PileLab {
     pub fn drop_new_amount(&mut self, position: FxVec2, amount: u32) -> Result<PileId, &'static str> {
         let material = self.cargo.material.ok_or("Carrier is empty")?;
         let offset = position - self.center;
-        if offset.x.abs() > DROP_LIMIT || offset.y.abs() > DROP_LIMIT {
+        if offset.x.abs() > self.limit || offset.y.abs() > self.limit {
             return Err("Drop position must be on the deck");
         }
-        if self.piles.len() >= MAX_PILES {
+        if self.piles.len() >= self.max_piles {
             return Err("Pile limit reached; deposit into an existing pile");
         }
         if amount == 0 || amount > self.cargo.units {
@@ -242,6 +272,66 @@ impl PileLab {
         self.drop_new_amount(position, self.cargo.units)
     }
 
+    /// Exact: puts `amount` carried units in the collector.
+    pub fn deliver_amount(&mut self, amount: u32) -> Result<u32, &'static str> {
+        let material = self.cargo.material.ok_or("Carrier is empty")?;
+        let collector = self.collector.as_mut().ok_or("There is no collector here")?;
+        if amount == 0 || amount > self.cargo.units {
+            return Err("Requested delivery exceeds cargo");
+        }
+        collector.stored[material as usize] += amount;
+        self.cargo.units -= amount;
+        if self.cargo.units == 0 {
+            self.cargo.material = None;
+        }
+        Ok(amount)
+    }
+
+    /// Dug ore: `units` of `material` out of the pit at `tile`, onto a pile
+    /// of the same ore beside it with room, or a new one on the nearest open
+    /// tile around. Returns the pile and the slot the first unit lands in,
+    /// or nothing if there is nowhere to put it (the ore stays buried).
+    pub fn mined(&mut self, material: u8, units: u32, tile: (i32, i32), terrain: &Terrain) -> Option<(PileId, u32)> {
+        let pit = Terrain::pit_center(tile);
+        let beside = self
+            .piles
+            .iter()
+            .filter(|(_, p)| !p.source && p.material == material && p.units + units <= PILE_CAPACITY)
+            .map(|(&id, p)| (nav::distance(p.position, pit), id))
+            .filter(|&(d, _)| d < Fx::from_ratio(11, 5))
+            .min();
+        if let Some((_, id)) = beside {
+            let pile = self.piles.get_mut(&id).expect("found above");
+            let slot = pile.units;
+            pile.units += units;
+            self.created += units as u64;
+            return Some((id, slot));
+        }
+        if self.piles.len() >= self.max_piles {
+            return None;
+        }
+        let radius = pile_radius(units);
+        let mut around: Vec<(i32, i32)> = (-2..=2).flat_map(|y| (-2..=2).map(move |x| (x, y))).filter(|&o| o != (0, 0)).collect();
+        around.sort_by_key(|&(x, y)| (x * x + y * y, y, x));
+        let spot = around.into_iter().map(|(x, y)| (tile.0 + x, tile.1 + y)).find(|&t| {
+            let center = Terrain::pit_center(t);
+            terrain.pit(t) == 0
+                && self.free_drop(terrain, center, units)
+                && self.piles.values().all(|p| nav::distance(p.position, center) > pile_radius(p.units) + radius + Fx::from_ratio(1, 10))
+        })?;
+        let id = self.insert(material, Terrain::pit_center(spot), units, false);
+        self.created += units as u64;
+        Some((id, 0))
+    }
+
+    /// Whether digging `tile` would undermine a pile or the collector.
+    pub fn blocks_dig(&self, tile: (i32, i32)) -> bool {
+        let center = Terrain::pit_center(tile);
+        let reach = COLLECTOR_RADIUS + Fx::from_ratio(71, 100);
+        self.piles.values().any(|p| Terrain::pit_tile(p.position) == tile)
+            || self.collector.as_ref().is_some_and(|c| nav::distance(c.position, center) < reach)
+    }
+
     /// Where an action happens and how big the pile there is (or will be).
     fn target(&self, action: PileAction) -> Result<(FxVec2, Fx), &'static str> {
         match action {
@@ -255,14 +345,15 @@ impl PileLab {
                 Ok((p.position, pile_radius(units)))
             }
             PileAction::Drop(p) => Ok((p, pile_radius(self.cargo.units))),
+            PileAction::Deliver => Ok((self.collector.as_ref().ok_or("There is no collector here")?.position, COLLECTOR_RADIUS)),
         }
     }
 
     fn free_drop(&self, terrain: &Terrain, center: FxVec2, units: u32) -> bool {
         let radius = pile_radius(units);
         let offset = center - self.center;
-        offset.x.abs() <= DROP_LIMIT
-            && offset.y.abs() <= DROP_LIMIT
+        offset.x.abs() <= self.limit
+            && offset.y.abs() <= self.limit
             && terrain.obstacles.iter().all(|o| nav::distance(o.center, center) > o.radius + radius + Fx::from_ratio(1, 5))
     }
 
@@ -286,7 +377,7 @@ fn approach_route(terrain: &Terrain, start: FxVec2, center: FxVec2, radius: Fx) 
             let angle = Fx::TAU.mul_int(i).div_int(24);
             let (sin, cos) = angle.sin_cos();
             let goal = center + FxVec2::new(cos, sin) * stand;
-            let route = nav::path(terrain, start, goal, BODY_RADIUS);
+            let route = walk_path(terrain, start, goal);
             if route.is_empty() {
                 return None;
             }
@@ -300,6 +391,11 @@ fn approach_route(terrain: &Terrain, start: FxVec2, center: FxVec2, radius: Fx) 
         })
         .min_by_key(|(cost, i, _)| (*cost, *i))
         .map(|(_, _, route)| route)
+}
+
+/// A route on foot: around obstacles, pits and cliffs.
+fn walk_path(terrain: &Terrain, start: FxVec2, goal: FxVec2) -> Vec<FxVec2> {
+    nav::path_with(terrain, start, goal, BODY_RADIUS, &[], &|a, b| terrain.walkable(a, b, BODY_RADIUS))
 }
 
 /// Whether the avatar stands within reach of the job's pile.
@@ -337,13 +433,13 @@ impl Settlement {
                     if gap < radius + BODY_RADIUS + Fx::from_ratio(1, 25) || gap > radius + BODY_RADIUS + Fx::from_ratio(9, 20) {
                         return Err("Approach point must be within safe transfer reach");
                     }
-                    let path = nav::path(terrain, a.position, stand, BODY_RADIUS);
+                    let path = walk_path(terrain, a.position, stand);
                     if path.is_empty() {
                         return Err("Approach point is blocked");
                     }
                     path
                 }
-                None => approach_route(terrain, a.position, center, radius).ok_or("No clear route to that pile location")?,
+                None => approach_route(terrain, a.position, center, radius).ok_or("No clear route there on foot")?,
             };
             let pace = if pace == Fx::ZERO { 0 } else { (pace * Fx::from_int(content::TICKS_PER_SECOND)).round().floor_to_int().max(1) as u64 };
             follow(a, route);
@@ -361,8 +457,13 @@ impl Settlement {
                 planned: 0,
                 destination: None,
             });
+            if action == PileAction::Deliver && lab.cargo.units == 0 {
+                return Err("Carrier is empty. Collect ore before delivering");
+            }
             lab.notice = if matches!(action, PileAction::Pickup(_) | PileAction::PickupAmount(..)) {
                 "Walking to collect mineral…"
+            } else if action == PileAction::Deliver {
+                "Walking to the collector…"
             } else {
                 "Walking to deposit cargo…"
             }
@@ -466,6 +567,7 @@ impl Settlement {
                         let n = lab.cargo.units;
                         lab.drop_new(p).map(|_| format!("Placed a new pile of {n} units."))
                     }
+                    PileAction::Deliver => lab.deliver_amount(lab.cargo.units).map(|n| format!("Delivered {n} units to the collector.")),
                 }?;
                 return Ok(Some(message));
             }
@@ -492,6 +594,7 @@ impl Settlement {
                         }
                         lab.cargo.units
                     }
+                    PileAction::Deliver => lab.cargo.units,
                 };
                 if amount == 0 {
                     return Err("Nothing can be transferred");
@@ -528,6 +631,11 @@ impl Settlement {
                         }
                     };
                     (TossEnd::Cargo { slot: carried - 1 }, TossEnd::Pile { id, slot, position: p }, material.expect("dropped"))
+                }
+                PileAction::Deliver => {
+                    lab.deliver_amount(1)?;
+                    let position = lab.collector.as_ref().expect("delivered").position;
+                    (TossEnd::Cargo { slot: carried - 1 }, TossEnd::Collector { position }, material.expect("delivered"))
                 }
             };
             // The unit flies for 0.85 × the pace, clamped to 0.3–1.0 s.

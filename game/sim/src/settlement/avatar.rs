@@ -12,6 +12,7 @@ use content::scenario::Weapon;
 use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
+use super::combat::{Event, TossEnd};
 use super::haulers::AgentState;
 use super::{AgentIx, DepotIx, Endpoint, ItemIx, Settlement};
 use crate::messages::{ManualUnit, Messages, Strike};
@@ -52,6 +53,8 @@ const CLIMB_PER_TICK: Fx = Fx::from_bits(787_410_671); // 5.5/30
 const SINK_PER_TICK: Fx = Fx::from_bits(429_496_730); // 3/30
 /// A dig takes 2 s, standing still.
 pub const DIG_TICKS: u64 = 60;
+/// Dug ore flies out of the pit for 0.6 s.
+const ORE_FLIGHT_TICKS: u64 = 18;
 /// While digging, the avatar steps to the middle of its tile (1.5 m/s), so
 /// it drops into the pit cleanly.
 const DIG_CENTERING: Fx = Fx::from_bits(214_748_365); // 1.5/30
@@ -376,9 +379,14 @@ impl Settlement {
 
     /// Commands: starts digging out the tile under the avatar, if the scene
     /// allows digging, the avatar stands on the ground with its hands free,
-    /// and the pit there isn't as deep as it goes.
+    /// the pit there isn't as deep as it goes, and no pile or machine sits
+    /// on the tile.
     pub fn dig(&mut self, tick: u64, agent: usize, terrain: &Terrain) {
         if !terrain.diggable {
+            return;
+        }
+        let Some(position) = self.agents.get(agent).map(|a| a.position) else { return };
+        if self.piles.as_ref().is_some_and(|lab| lab.blocks_dig(Terrain::pit_tile(position))) {
             return;
         }
         let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
@@ -397,10 +405,27 @@ impl Settlement {
     }
 
     /// Housekeeping: digs that are done take their layer out of the ground.
+    /// In a mine, the layer's ore flies out onto a pile beside the pit.
     pub(crate) fn dig_housekeeping(&mut self, tick: u64, terrain: &mut Terrain) {
+        let mut dug = Vec::new();
         for a in self.agents.iter_mut().filter(|a| a.controlled) {
             if let Some(dig) = a.avatar.dig.take_if(|d| tick + 1 >= d.until) {
-                terrain.deepen(dig.tile);
+                if terrain.deepen(dig.tile) {
+                    dug.push(dig.tile);
+                }
+            }
+        }
+        for tile in dug {
+            let layer = terrain.pit(tile) - 1;
+            let Some(mine) = terrain.mine() else { continue };
+            let Some(material) = mine.ore(tile, layer) else { continue };
+            let units = mine.yield_of(tile, layer);
+            let Some(lab) = self.piles.as_mut() else { continue };
+            let Some((id, first)) = lab.mined(material, units, tile, terrain) else { continue };
+            let position = lab.piles[&id].position;
+            let from = TossEnd::Pit { position: Terrain::pit_center(tile) };
+            for slot in first..first + units {
+                self.events.push(Event::PileToss { material, from, to: TossEnd::Pile { id, slot, position }, ticks: ORE_FLIGHT_TICKS });
             }
         }
     }

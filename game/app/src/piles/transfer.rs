@@ -6,6 +6,8 @@ use sim::settlement::TossEnd;
 pub enum Destination {
     Cargo(u32),
     Pile(PileId, u32),
+    /// Into the collector's hopper, here.
+    Collector(Vec3),
 }
 #[derive(Component)]
 pub struct Transit {
@@ -37,16 +39,18 @@ pub fn spawn_tosses(
         let sim::settlement::Event::PileToss { material, from, to, ticks } = event else {
             continue;
         };
+        let ground = |p: fx::FxVec2| game.to_view(p).with_y(game.world().map_or(0.0, |w| w.terrain().height(p).to_f32()));
         let start = match *from {
-            TossEnd::Pile { slot, position, .. } => {
-                let p = game.to_view(position);
-                p + Vec3::from_array(unit_positions()[slot as usize])
-            }
+            TossEnd::Pile { slot, position, .. } => ground(position) + Vec3::from_array(unit_positions()[slot as usize]),
             TossEnd::Cargo { slot } => player.transform_point(backpack_slot(slot)),
+            TossEnd::Pit { position } => ground(position) + Vec3::Y * 0.2,
+            TossEnd::Collector { position } => ground(position) + Vec3::Y * 1.6,
         };
         let destination = match *to {
             TossEnd::Pile { id, slot, .. } => Destination::Pile(id, slot),
             TossEnd::Cargo { slot } => Destination::Cargo(slot),
+            TossEnd::Collector { position } => Destination::Collector(ground(position) + Vec3::Y * 1.6),
+            TossEnd::Pit { position } => Destination::Collector(ground(position)),
         };
         commands.spawn((
             LabEntity,
@@ -81,8 +85,9 @@ pub fn update_transit(
                     commands.entity(entity).despawn();
                     continue;
                 };
-                point(pile.position) + Vec3::from_array(unit_positions()[slot as usize])
+                place(pile) + Vec3::from_array(unit_positions()[slot as usize])
             }
+            Destination::Collector(at) => at,
         };
         transform.translation = transit.start.lerp(end, t) + Vec3::Y * (std::f32::consts::PI * t).sin() * 1.5;
         transform.rotation = Quat::from_rotation_y(t * std::f32::consts::TAU) * Quat::from_rotation_z((t * std::f32::consts::PI).sin() * 0.6);

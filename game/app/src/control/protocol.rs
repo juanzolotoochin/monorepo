@@ -58,6 +58,11 @@ pub enum Command {
     },
     /// Digs out a layer under the player, in a digging scene.
     Dig,
+    /// Walks to the collector and empties the cargo into it.
+    Deliver {
+        #[serde(default)]
+        seconds_per_unit: f32,
+    },
     AssertFlight {
         airborne: bool,
         altitude: f32,
@@ -165,7 +170,7 @@ impl Script {
     }
 }
 pub fn point(position: [f32; 2]) -> Result<bevy::prelude::Vec3, String> {
-    if position.iter().any(|v| !v.is_finite() || v.abs() > 24.0) {
+    if position.iter().any(|v| !v.is_finite() || v.abs() > 128.0) {
         return Err("Position must be finite and inside the supported world bounds".into());
     }
     Ok(bevy::prelude::Vec3::new(position[0], 0.0, position[1]))

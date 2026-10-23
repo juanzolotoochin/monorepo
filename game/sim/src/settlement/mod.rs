@@ -220,6 +220,8 @@ pub struct SceneSetup {
     pub platforms_only: bool,
     /// Avatars can dig pits into the ground.
     pub diggable: bool,
+    /// Generates the arena's ground as a mine from this seed.
+    pub mine: Option<u64>,
     pub spawn: [Fx; 3],
     pub piles: Option<PileSetup>,
     pub memory_trial: bool,
@@ -231,6 +233,8 @@ pub struct PileSetup {
     /// Material and output position of each dispenser.
     pub dispensers: Vec<(u8, [Fx; 2])>,
     pub piles: Vec<(u8, [Fx; 2], u32)>,
+    /// Where the collector stands, if there is one.
+    pub collector: Option<[Fx; 2]>,
 }
 
 impl Settlement {
@@ -433,6 +437,9 @@ impl Settlement {
             .collect();
         terrain.platforms_only = setup.platforms_only;
         terrain.diggable = setup.diggable;
+        if let Some(seed) = setup.mine {
+            terrain.generate_mine(seed, at([setup.spawn[0], setup.spawn[2]]));
+        }
         terrain.revision += 1;
         settlement.spawn = at([setup.spawn[0], setup.spawn[2]]);
         settlement.spawn_height = setup.spawn[1];
@@ -446,8 +453,21 @@ impl Settlement {
         settlement.piles = setup.piles.as_ref().map(|p| {
             let dispensers: Vec<(u8, FxVec2)> = p.dispensers.iter().map(|&(m, o)| (m, at(o))).collect();
             let piles: Vec<(u8, FxVec2, u32)> = p.piles.iter().map(|&(m, pos, units)| (m, at(pos), units)).collect();
-            piles::PileLab::new(center, p.capacity, &dispensers, &piles)
+            let mut lab = piles::PileLab::new(center, p.capacity, &dispensers, &piles);
+            if setup.mine.is_some() {
+                // Ore can be piled anywhere in a mine, and there's a lot of it.
+                lab.limit = terrain.extent - Fx::ONE;
+                lab.max_piles = piles::MAX_MINE_PILES;
+            }
+            if let Some(position) = p.collector {
+                lab.collector = Some(piles::Collector::new(at(position)));
+            }
+            lab
         });
+        if let Some(c) = settlement.piles.as_ref().and_then(|lab| lab.collector.as_ref()) {
+            terrain.obstacles.push(Disc { center: c.position, radius: piles::COLLECTOR_RADIUS });
+            terrain.revision += 1;
+        }
         let doors = setup.doors.iter().map(place).collect();
         settlement.memory = Some(memory::Memory::new(setup.memory_trial, center, doors));
         Ok(settlement)

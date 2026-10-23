@@ -232,6 +232,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
                 lockstep::follow_avatar,
                 peers::update.run_if(control::rendered),
                 digging::update,
+                digging::follow_camera,
                 jetpack::update,
                 palimpsest::tick,
             )

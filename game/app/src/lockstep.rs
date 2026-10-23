@@ -235,6 +235,7 @@ pub fn build_world(world: &mut World) {
     let material = |m: voxel_assets::Mineral| match m {
         voxel_assets::Mineral::AmberOre => 0u8,
         voxel_assets::Mineral::BlueCrystal => 1,
+        voxel_assets::Mineral::GreenMalachite => 2,
     };
     let setup = SceneSetup {
         scenario: scene.scenario.clone(),
@@ -248,9 +249,11 @@ pub fn build_world(world: &mut World) {
             capacity: p.capacity,
             dispensers: p.dispensers.iter().map(|d| (material(d.material), [q(d.output[0]), q(d.output[2])])).collect(),
             piles: p.piles.iter().map(|s| (material(s.material), [q(s.position[0]), q(s.position[2])], s.units)).collect(),
+            collector: p.collector.map(|c| [q(c[0]), q(c[2])]),
         }),
         memory_trial: library.has_feature(voxel_assets::SceneFeature::MemoryTrial),
         diggable: library.has_feature(voxel_assets::SceneFeature::Digging),
+        mine: scene.mine.as_ref().map(|m| m.seed),
     };
     let scene_id = scene.id.clone();
     let mut game = world.resource_mut::<Game>();
@@ -470,7 +473,7 @@ pub fn mouse_input(
     controls.repath -= time.delta_secs();
     if buttons.pressed(MouseButton::Right) && controls.attack.is_none() && controls.repath <= 0.0 {
         controls.repath = 0.12;
-        if let Some(point) = crate::jetpack::cursor_surface(camera.0, camera.1, &window, &library) {
+        if let Some(point) = crate::jetpack::cursor_surface(camera.0, camera.1, &window, &library, &game) {
             if controls.route.last().is_none_or(|last| crate::navigation::flat(*last - point).length() > 0.25) {
                 game.go_to(point, run);
             }
@@ -502,7 +505,7 @@ pub fn attack_input(
     if !(shift && buttons.just_pressed(MouseButton::Left)) {
         return;
     }
-    if let Some(point) = crate::jetpack::cursor_surface(camera.0, camera.1, &window, &library) {
+    if let Some(point) = crate::jetpack::cursor_surface(camera.0, camera.1, &window, &library, &game) {
         strike(&mut game, &mut controls, &library, point - player.translation);
     }
 }

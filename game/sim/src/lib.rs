@@ -17,6 +17,7 @@
 pub mod hash;
 pub mod id;
 pub mod messages;
+pub mod mine;
 pub mod mover;
 pub mod nav;
 pub mod rng;

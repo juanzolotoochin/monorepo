@@ -1076,7 +1076,9 @@ pub fn update_hud(
         )
     } else if library.has_feature(voxel_assets::SceneFeature::Digging) {
         let net = if game.network.is_some() { format!(" / NET / {}", game.status.to_uppercase()) } else { String::new() };
-        format!("DEPTH {:.1}m / F TO DIG / HOLD SPACE TO FLY OUT{net}", (-player.translation.y).max(0.0))
+        let tile = sim::terrain::Terrain::pit_tile(game.to_sim(player.translation));
+        let pit = game.world().map_or(0, |w| w.terrain().pit(tile));
+        format!("PIT {pit}/{} / F TO DIG / HOLD SPACE TO FLY OUT{net}", sim::terrain::MAX_LAYERS)
     } else if game.network.is_some() {
         format!("NET / {}", game.status.to_uppercase())
     } else {

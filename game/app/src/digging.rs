@@ -1,37 +1,39 @@
-//! Digging scenes: the deck's floor rests on layers of earth, and the
-//! simulation's pits take them out a tile and a layer at a time. A bar over
-//! each digging avatar fills over the dig, with a chip of dust now and then.
+//! Digging scenes: the ground is drawn from the simulation's terrain, in
+//! chunks of 16 × 16 tiles: terraces, pits, the layers their walls cut
+//! through, and the ore in them. A chunk is rebuilt when a pit in or next to
+//! it changes. The camera follows the player over the ground; a bar over
+//! each digging avatar fills over the dig, with a chip of dust now and then
+//! and a burst when a layer comes out.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
+use bevy::asset::RenderAssetUsages;
+use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use voxel_assets::{ImpactResponse, SceneFeature};
 
+use sim::mine::STEP;
 use sim::settlement::avatar::Dig;
-use sim::terrain::{LAYER, MAX_LAYERS};
+use sim::terrain::{Terrain, LAYER, MAX_LAYERS};
 
 use crate::assets::SceneLibrary;
-use crate::effects::FxAssets;
+use crate::effects::{CameraRig, FxAssets};
 use crate::gameplay::Player;
 use crate::jetpack::Deck;
 use crate::lockstep::Game;
 
-/// One layer of earth under a deck tile, shown in digging scenes until it
-/// is dug out. Bedrock, under everything, has no tile.
-#[derive(Component)]
-pub struct Layer {
-    tile: Option<IVec2>,
-    depth: u8,
-}
+/// Tiles per chunk side.
+const CHUNK: i32 = 16;
+/// The arena's outer walls go down to here.
+const BOTTOM: f32 = -3.0;
+/// Dust flies off every this many ticks of a dig.
+const CHIP_TICKS: u64 = 15;
+/// The bar's offset above the head, in avatar heights (before style scale).
+const ABOVE: f32 = 2.15;
 
-/// A deck piece on a tile's surface (its floor plate and markings), gone
-/// once the tile is dug.
+/// A chunk of drawn ground, by its index from the arena's corner.
 #[derive(Component)]
-pub struct Plate(IVec2);
-
-/// The deck's body below the floor, hidden in digging scenes so pits show.
-#[derive(Component)]
-pub struct Underdeck;
+pub struct GroundChunk(IVec2);
 
 #[derive(Component)]
 pub struct DigBar {
@@ -41,111 +43,267 @@ pub struct DigBar {
 #[derive(Component)]
 pub struct DigFill;
 
-/// The deck's tiles run from -`DECK` to `DECK` on both axes.
-const DECK: i32 = 8;
-/// The floor plates are this thick; the first layer starts under them.
-const PLATE: f32 = 0.12;
-/// Dust flies off every this many ticks of a dig.
-const CHIP_TICKS: u64 = 15;
-/// The bar's offset above the head, in avatar heights (before style scale).
-const ABOVE: f32 = 2.15;
+/// What the drawn ground was built from.
+#[derive(Default)]
+pub struct Drawn {
+    /// The scene and arena center it belongs to.
+    world: Option<(usize, IVec2)>,
+    pits: Vec<((i32, i32), u8)>,
+    material: Option<Handle<StandardMaterial>>,
+}
 
-/// The simulation's pit tile at the arena's center.
+/// The simulation's tile at the arena's center.
 fn center_tile(game: &Game) -> IVec2 {
     IVec2::new(game.center.x.round().floor_to_int() as i32, game.center.y.round().floor_to_int() as i32)
 }
 
-/// Arena tile of a simulation pit tile.
+/// Arena tile of a simulation tile.
 fn arena_tile(game: &Game, tile: (i32, i32)) -> IVec2 {
     IVec2::new(tile.0, tile.1) - center_tile(game)
 }
 
-/// How many layers are dug out of an arena tile.
-fn dug(game: &Game, tile: IVec2) -> u8 {
-    let Some(terrain) = game.world().map(sim::World::terrain) else { return 0 };
-    let tile = tile + center_tile(game);
-    terrain.pit((tile.x, tile.y))
-}
-
+/// Builds the ground for digging scenes, hides the deck there, and rebuilds
+/// chunks whose pits changed.
 pub fn update(
     mut commands: Commands,
     game: Res<Game>,
     library: Res<SceneLibrary>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    unsorted: Query<(Entity, &Transform), (With<Deck>, Without<Plate>, Without<Underdeck>)>,
-    mut plates: Query<(&Plate, &mut Visibility), (Without<Layer>, Without<Underdeck>)>,
-    mut under: Query<&mut Visibility, (With<Underdeck>, Without<Plate>, Without<Layer>)>,
-    mut layers: Query<(&Layer, &mut Visibility), (Without<Plate>, Without<Underdeck>)>,
-    mut built: Local<bool>,
+    mut deck: Query<&mut Visibility, With<Deck>>,
+    chunks: Query<(Entity, &GroundChunk)>,
+    mut drawn: Local<Drawn>,
 ) {
-    // Sort the deck's pieces once: what lies on a tile goes with it, and
-    // what's under the floor gives way to the earth.
-    for (entity, transform) in &unsorted {
-        let p = transform.translation;
-        if p.y < -0.3 {
-            commands.entity(entity).insert(Underdeck);
-        } else if p.x.abs() <= DECK as f32 + 0.5 && p.z.abs() <= DECK as f32 + 0.5 {
-            commands.entity(entity).insert(Plate(IVec2::new(p.x.round() as i32, p.z.round() as i32)));
+    let terrain = game.world().map(sim::World::terrain).filter(|_| library.has_feature(SceneFeature::Digging));
+    let Some(terrain) = terrain else {
+        if drawn.world.take().is_some() {
+            for (entity, _) in &chunks {
+                commands.entity(entity).despawn();
+            }
         }
-    }
-    let digging = library.has_feature(SceneFeature::Digging);
-    if digging && !*built {
-        *built = true;
-        spawn_layers(&mut commands, &mut meshes, &mut materials);
-    }
-    for (layer, mut visibility) in &mut layers {
-        let shown = digging && layer.tile.is_none_or(|t| dug(&game, t) <= layer.depth);
-        visibility.set_if_neq(if shown { Visibility::Inherited } else { Visibility::Hidden });
-    }
-    // Elsewhere the deck is the scene's (see `jetpack::scene_changed`).
-    if !digging {
         return;
-    }
-    for mut visibility in &mut under {
+    };
+    // Elsewhere the deck is the scene's (see `jetpack::scene_changed`).
+    for mut visibility in &mut deck {
         visibility.set_if_neq(Visibility::Hidden);
     }
-    for (plate, mut visibility) in &mut plates {
-        let shown = dug(&game, plate.0) == 0;
-        visibility.set_if_neq(if shown { Visibility::Inherited } else { Visibility::Hidden });
+    let center = center_tile(&game);
+    let extent = terrain.extent.round().floor_to_int() as i32;
+    let material = drawn
+        .material
+        .get_or_insert_with(|| materials.add(StandardMaterial { base_color: Color::WHITE, perceptual_roughness: 0.93, ..default() }))
+        .clone();
+    let mut dirty = BTreeSet::new();
+    if drawn.world != Some((library.current, center)) {
+        for (entity, _) in &chunks {
+            commands.entity(entity).despawn();
+        }
+        drawn.world = Some((library.current, center));
+        drawn.pits = terrain.pits.clone();
+        let count = (2 * extent + 1 + CHUNK - 1) / CHUNK;
+        for y in 0..count {
+            for x in 0..count {
+                let key = IVec2::new(x, y);
+                let mesh = meshes.add(chunk_mesh(terrain, center, extent, key));
+                commands.spawn((GroundChunk(key), Mesh3d(mesh), MeshMaterial3d(material.clone()), Transform::default()));
+            }
+        }
+        return;
+    }
+    if drawn.pits == terrain.pits {
+        return;
+    }
+    // A pit changes its own tile's top and its neighbors' walls.
+    let changed = drawn.pits.iter().chain(&terrain.pits).filter(|p| !(drawn.pits.contains(p) && terrain.pits.contains(p)));
+    for &(tile, _) in changed {
+        let a = arena_tile(&game, tile);
+        for offset in [IVec2::ZERO, IVec2::X, IVec2::NEG_X, IVec2::Y, IVec2::NEG_Y] {
+            dirty.insert(((a + offset + IVec2::splat(extent)).div_euclid(IVec2::splat(CHUNK))).to_array());
+        }
+    }
+    drawn.pits = terrain.pits.clone();
+    for (entity, chunk) in &chunks {
+        if dirty.contains(&chunk.0.to_array()) {
+            let mesh = meshes.add(chunk_mesh(terrain, center, extent, chunk.0));
+            commands.entity(entity).insert(Mesh3d(mesh));
+        }
     }
 }
 
-/// Earth under every deck tile, in checkered layers that darken with
-/// depth, on a bedrock slab.
-fn spawn_layers(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
-    let cube = meshes.add(Cuboid::default());
-    let earth = |m: &mut Assets<StandardMaterial>, shade: f32| {
-        m.add(StandardMaterial { base_color: Color::srgb(0.36 * shade, 0.27 * shade, 0.21 * shade), perceptual_roughness: 0.95, ..default() })
-    };
-    let shades: Vec<[Handle<StandardMaterial>; 2]> =
-        (0..MAX_LAYERS).map(|k| 1.0 - k as f32 * 0.22).map(|s| [earth(materials, s), earth(materials, s * 0.88)]).collect();
-    let layer = LAYER.to_f32();
-    for x in -DECK..=DECK {
-        for z in -DECK..=DECK {
-            for depth in 0..MAX_LAYERS {
-                let top = if depth == 0 { -PLATE } else { -layer * depth as f32 };
-                let bottom = -layer * (depth + 1) as f32;
-                commands.spawn((
-                    Layer { tile: Some(IVec2::new(x, z)), depth },
-                    Mesh3d(cube.clone()),
-                    MeshMaterial3d(shades[depth as usize][((x + z + depth as i32) & 1) as usize].clone()),
-                    Transform::from_xyz(x as f32, (top + bottom) / 2.0, z as f32).with_scale(Vec3::new(1.0, top - bottom, 1.0)),
-                    Visibility::Hidden,
-                ));
+/// The ground of one chunk: a top for every tile, and walls down to every
+/// lower neighbor, banded by terrace step and colored by the layer (or ore)
+/// they cut through.
+fn chunk_mesh(terrain: &Terrain, center: IVec2, extent: i32, key: IVec2) -> Mesh {
+    let mine = terrain.mine();
+    let tile = |a: IVec2| ((a + center).x, (a + center).y);
+    let inside = |a: IVec2| a.x.abs() <= extent && a.y.abs() <= extent;
+    let ground = |a: IVec2| if inside(a) { terrain.height(Terrain::pit_center(tile(a))).to_f32() } else { BOTTOM };
+    let ore = |a: IVec2, layer: u8| mine.and_then(|m| m.ore(tile(a), layer));
+    let mut mesh = MeshBuilder::default();
+    let first = key * CHUNK - IVec2::splat(extent);
+    for y in first.y..(first.y + CHUNK).min(extent + 1) {
+        for x in first.x..(first.x + CHUNK).min(extent + 1) {
+            let a = IVec2::new(x, y);
+            let top = ground(a);
+            let steps = mine.and_then(|m| m.steps(tile(a))).unwrap_or(0);
+            let base = steps as f32 * STEP.to_f32();
+            let dug = terrain.pit(tile(a));
+            let shade = if (x + y) & 1 == 0 { 1.0 } else { 0.94 };
+            let color = if dug == 0 {
+                mix(surface(steps), ore(a, 0), 0.3)
+            } else {
+                mix(layer(dug), ore(a, dug), 0.65)
+            };
+            let (cx, cz) = (x as f32, y as f32);
+            mesh.quad(
+                [Vec3::new(cx - 0.5, top, cz - 0.5), Vec3::new(cx + 0.5, top, cz - 0.5), Vec3::new(cx + 0.5, top, cz + 0.5), Vec3::new(cx - 0.5, top, cz + 0.5)],
+                Vec3::Y,
+                color * shade,
+            );
+            for side in [IVec2::X, IVec2::NEG_X, IVec2::Y, IVec2::NEG_Y] {
+                let below = ground(a + side);
+                if below >= top - 0.001 {
+                    continue;
+                }
+                let normal = Vec3::new(side.x as f32, 0.0, side.y as f32);
+                let edge = Vec3::new(cx, 0.0, cz) + normal * 0.5;
+                let along = Vec3::new(-normal.z, 0.0, normal.x) * 0.5;
+                let mut wall = |from: f32, to: f32, color: Vec3| {
+                    mesh.quad(
+                        [edge - along + Vec3::Y * from, edge + along + Vec3::Y * from, edge + along + Vec3::Y * to, edge - along + Vec3::Y * to],
+                        normal,
+                        color,
+                    );
+                };
+                // Quarter-meter bands through the diggable layers, then rock.
+                let deepest = base - LAYER.to_f32() * MAX_LAYERS as f32;
+                let mut upper = top;
+                while upper > below + 0.001 && upper > deepest + 0.001 {
+                    let band = ((base - upper) / STEP.to_f32()).round() as i32;
+                    let lower = (upper - STEP.to_f32()).max(below);
+                    let k = (band / 2) as u8;
+                    let tone = if band % 2 == 0 { 1.0 } else { 0.9 };
+                    wall(lower, upper, mix(layer(k), ore(a, k), 0.7) * tone);
+                    upper = lower;
+                }
+                if upper > below + 0.001 {
+                    wall(below, upper, layer(MAX_LAYERS));
+                }
             }
         }
     }
-    let bedrock = materials.add(StandardMaterial { base_color: Color::srgb(0.07, 0.09, 0.12), metallic: 0.5, ..default() });
-    let floor = -layer * MAX_LAYERS as f32;
-    let width = (2 * DECK + 1) as f32 + 0.5;
-    commands.spawn((
-        Layer { tile: None, depth: MAX_LAYERS },
-        Mesh3d(cube),
-        MeshMaterial3d(bedrock),
-        Transform::from_xyz(0.0, floor - 0.2, 0.0).with_scale(Vec3::new(width, 0.4, width)),
-        Visibility::Hidden,
-    ));
+    mesh.build()
+}
+
+/// Ground color by terrace height: dusty low ground, redder high up.
+fn surface(steps: u8) -> Vec3 {
+    let t = (steps as f32 / 12.0).min(1.0);
+    Vec3::new(0.23, 0.18, 0.15).lerp(Vec3::new(0.38, 0.26, 0.19), t)
+}
+
+/// Earth by layer, darker deeper; below the diggable layers, rock.
+fn layer(k: u8) -> Vec3 {
+    if k >= MAX_LAYERS {
+        Vec3::new(0.15, 0.14, 0.16)
+    } else {
+        Vec3::new(0.24, 0.17, 0.13) * (1.0 - 0.17 * k as f32)
+    }
+}
+
+/// `color` tinted toward a mineral's color.
+fn mix(color: Vec3, ore: Option<u8>, amount: f32) -> Vec3 {
+    match ore {
+        Some(m) => color.lerp(Vec3::from_array(crate::piles::mineral_color(crate::piles::mineral(m))), amount),
+        None => color,
+    }
+}
+
+#[derive(Default)]
+struct MeshBuilder {
+    positions: Vec<[f32; 3]>,
+    normals: Vec<[f32; 3]>,
+    colors: Vec<[f32; 4]>,
+    indices: Vec<u32>,
+}
+
+impl MeshBuilder {
+    /// A flat quad facing `normal`, in sRGB `color`.
+    fn quad(&mut self, mut corners: [Vec3; 4], normal: Vec3, color: Vec3) {
+        if (corners[1] - corners[0]).cross(corners[2] - corners[0]).dot(normal) < 0.0 {
+            corners.reverse();
+        }
+        let first = self.positions.len() as u32;
+        let linear = Color::srgb(color.x, color.y, color.z).to_linear().to_f32_array();
+        for corner in corners {
+            self.positions.push(corner.to_array());
+            self.normals.push(normal.to_array());
+            self.colors.push(linear);
+        }
+        self.indices.extend([first, first + 1, first + 2, first, first + 2, first + 3]);
+    }
+
+    fn build(self) -> Mesh {
+        let uvs = vec![[0.0, 0.0]; self.positions.len()];
+        Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.positions)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, self.colors)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+            .with_inserted_indices(Indices::U32(self.indices))
+    }
+}
+
+/// In digging scenes the camera follows the player over the big ground;
+/// elsewhere it stays where the scene put it.
+pub fn follow_camera(
+    time: Res<Time>,
+    library: Res<SceneLibrary>,
+    player: Single<&Transform, With<Player>>,
+    mut rig: Single<&mut CameraRig>,
+    mut home: Local<Option<(Vec3, Vec3)>>,
+) {
+    let (base, target) = *home.get_or_insert((rig.base, rig.target));
+    if !library.has_feature(SceneFeature::Digging) {
+        if rig.base != base || rig.target != target {
+            rig.base = base;
+            rig.target = target;
+        }
+        return;
+    }
+    let focus = player.translation;
+    let blend = 1.0 - (-8.0 * time.delta_secs()).exp();
+    rig.base = rig.base.lerp(base + focus, blend);
+    rig.target = rig.target.lerp(target + focus, blend);
+}
+
+/// Where a ray (from the camera, through the cursor) meets the ground.
+pub fn ground_hit(ray: Ray3d, game: &Game) -> Option<Vec3> {
+    let terrain = game.world()?.terrain();
+    let height = |p: Vec3| terrain.height(game.to_sim(p)).to_f32();
+    let plane = InfinitePlane3d::new(Vec3::Y);
+    let (start, end) = (ray.intersect_plane(Vec3::Y * 6.0, plane)?, ray.intersect_plane(Vec3::Y * BOTTOM, plane)?);
+    let steps = ((end - start) / 0.05).ceil().max(1.0) as usize;
+    let mut previous = start;
+    for i in 1..=steps {
+        let t = start + (end - start) * i as f32 / steps as f32;
+        let p = ray.get_point(t);
+        if p.y <= height(p) {
+            let (mut above, mut below) = (previous, t);
+            for _ in 0..12 {
+                let middle = (above + below) / 2.0;
+                let q = ray.get_point(middle);
+                if q.y <= height(q) {
+                    below = middle;
+                } else {
+                    above = middle;
+                }
+            }
+            let p = ray.get_point(below);
+            return Some(p.with_y(height(p)));
+        }
+        previous = t;
+    }
+    None
 }
 
 /// Progress bars over digging avatars, dust while they dig, and a burst
@@ -180,13 +338,13 @@ pub fn feedback(
         }
     }
     chips.retain(|agent, _| digs.iter().any(|(a, ..)| a == agent));
-    // A layer came out: a burst where the floor was.
+    // A layer came out: a burst from the new floor.
     if let Some(terrain) = terrain {
         if terrain.pits != *pits {
             for &(tile, depth) in &terrain.pits {
                 if pits.iter().find(|(t, _)| *t == tile).is_none_or(|&(_, d)| d < depth) {
                     let center = arena_tile(&game, tile).as_vec2();
-                    let floor = -(LAYER.to_f32() * depth as f32);
+                    let floor = terrain.height(Terrain::pit_center(tile)).to_f32();
                     burst(&mut commands, &assets, Vec3::new(center.x, floor, center.y), depth as u32 * 977 + tile.0 as u32);
                     sound.play(crate::sound::Cue::Stone);
                 }
@@ -235,8 +393,9 @@ fn burst(commands: &mut Commands, assets: &FxAssets, at: Vec3, seed: u32) {
     crate::effects::impact(commands, assets, at + Vec3::Y * 0.05, Vec3::Y, seed, ImpactResponse::Stone);
 }
 
-/// For the control snapshot: dug pits by arena tile, and whether the
-/// player is digging.
+/// For the control snapshot: dug pits by arena tile, whether the player is
+/// digging, what the collector holds by mineral, and the nearest tile
+/// (within 8 m of the player) whose next layer down holds ore.
 pub fn snapshot(game: &Game) -> serde_json::Value {
     let Some(terrain) = game.world().map(sim::World::terrain) else { return serde_json::Value::Null };
     let pits: Vec<_> = terrain
@@ -248,5 +407,17 @@ pub fn snapshot(game: &Game) -> serde_json::Value {
         })
         .collect();
     let digging = game.player().zip(game.current.as_ref()).is_some_and(|(i, s)| s.agents[i as usize].avatar.dig.is_some());
-    serde_json::json!({"pits": pits, "digging": digging})
+    let collected = game.current.as_ref().and_then(|s| s.piles.as_ref()?.collector.as_ref()).map(|c| c.stored.clone());
+    let me = game.player().zip(game.current.as_ref()).map(|(i, s)| Terrain::pit_tile(s.agents[i as usize].position));
+    let nearest_ore = me.zip(terrain.mine()).and_then(|(me, mine)| {
+        (-8..=8)
+            .flat_map(|y| (-8..=8).map(move |x| (me.0 + x, me.1 + y)))
+            .filter(|&t| terrain.pit(t) < MAX_LAYERS && mine.ore(t, terrain.pit(t)).is_some())
+            .min_by_key(|&t| ((t.0 - me.0).pow(2) + (t.1 - me.1).pow(2), t))
+            .map(|t| {
+                let a = arena_tile(game, t);
+                serde_json::json!({"tile": [a.x, a.y], "mineral": mine.ore(t, terrain.pit(t))})
+            })
+    });
+    serde_json::json!({"pits": pits, "digging": digging, "collected": collected, "nearest_ore": nearest_ore})
 }
