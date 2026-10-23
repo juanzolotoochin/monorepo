@@ -213,6 +213,10 @@ fn queue_haul(
 fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, String> {
     match command {
         Command::Inspect => Ok(Pending::Instant),
+        Command::InspectBuilding { building } => {
+            crate::settlement::inspect_building(world, building.as_deref())?;
+            Ok(Pending::Instant)
+        }
         Command::SettlementTransfer {
             depot,
             item,

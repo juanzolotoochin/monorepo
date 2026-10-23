@@ -23,6 +23,22 @@ pub struct Depot {
     pub position: Point,
     pub capacity: u32,
     pub stock: Vec<Stack>,
+    #[serde(default = "stock_anchor")]
+    pub stock_anchor: [f32; 3],
+    #[serde(default = "stock_layout")]
+    pub stock_layout: CargoLayout,
+}
+fn stock_anchor() -> [f32; 3] {
+    [0., 0.08, -0.6]
+}
+pub fn stock_layout() -> CargoLayout {
+    CargoLayout {
+        columns: 4,
+        rows: 3,
+        spacing: [0.39, 0.12, 0.15],
+        scale: 1.,
+        roll: 0.,
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -43,6 +59,49 @@ pub struct HaulLink {
     pub target: u32,
     pub priority: u32,
 }
+/// Local-space packing for visible cargo. One mesh remains one inventory unit.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CargoLayout {
+    pub columns: u32,
+    pub rows: u32,
+    pub spacing: [f32; 3],
+    pub scale: f32,
+    pub roll: f32,
+}
+impl Default for CargoLayout {
+    fn default() -> Self {
+        Self {
+            columns: 2,
+            rows: 2,
+            spacing: [0.10, 0.08, 0.08],
+            scale: 0.65,
+            roll: std::f32::consts::FRAC_PI_2,
+        }
+    }
+}
+impl CargoLayout {
+    fn valid(&self) -> bool {
+        (1..=16).contains(&self.columns)
+            && (1..=16).contains(&self.rows)
+            && self
+                .spacing
+                .iter()
+                .all(|v| v.is_finite() && *v > 0. && *v <= 2.)
+            && self.scale.is_finite()
+            && self.scale > 0.
+            && self.scale <= 2.
+            && self.roll.is_finite()
+    }
+    pub fn offset(&self, n: u32) -> [f32; 3] {
+        [
+            ((n % self.columns) as f32 - (self.columns - 1) as f32 * 0.5) * self.spacing[0],
+            (n / (self.columns * self.rows)) as f32 * self.spacing[1],
+            (((n / self.columns) % self.rows) as f32 - (self.rows - 1) as f32 * 0.5)
+                * self.spacing[2],
+        ]
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Equipment {
@@ -51,8 +110,15 @@ pub struct Equipment {
     pub skin: String,
     pub capacity: u32,
     pub speed_factor: f32,
+    #[serde(default = "trailer_radius")]
+    pub radius: f32,
     pub offset: [f32; 3],
     pub cargo_anchor: [f32; 3],
+    #[serde(default)]
+    pub cargo_layout: CargoLayout,
+}
+fn trailer_radius() -> f32 {
+    0.7
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -69,11 +135,15 @@ pub struct Agent {
     pub links: Vec<String>,
     pub transfer_seconds: f32,
     pub cargo_anchor: [f32; 3],
+    #[serde(default)]
+    pub cargo_layout: CargoLayout,
     pub equipment: Option<Equipment>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Producer {
+    #[serde(default)]
+    pub description: String,
     #[serde(default)]
     pub radius: f32,
     pub id: String,
@@ -90,6 +160,10 @@ pub struct Producer {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Defender {
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub label: String,
     #[serde(default)]
     pub radius: f32,
     pub id: String,
@@ -198,6 +272,10 @@ impl Scenario {
         }
         for d in &self.depots {
             if !finite(d.position)
+                || !d.stock_layout.valid()
+                || d.stock_anchor
+                    .iter()
+                    .any(|v| !v.is_finite() || v.abs() > 4.)
                 || !(1..=4096).contains(&d.capacity)
                 || d.stock.iter().any(|s| !stack(s))
                 || d.stock.iter().map(|s| s.units as u64).sum::<u64>() > d.capacity as u64
@@ -233,7 +311,8 @@ impl Scenario {
             }
         }
         for a in &self.agents {
-            if !finite(a.position)
+            if !a.cargo_layout.valid()
+                || !finite(a.position)
                 || !ident(&a.skin)
                 || !number(a.speed, 0.1, 8.0)
                 || !number(a.radius, 0.05, 1.0)
@@ -249,7 +328,9 @@ impl Scenario {
                 return Err(format!("invalid agent {}", a.id));
             }
             if let Some(e) = &a.equipment {
-                if !depots.contains(e.depot.as_str())
+                if !number(e.radius, 0.1, 2.)
+                    || !e.cargo_layout.valid()
+                    || !depots.contains(e.depot.as_str())
                     || !items.contains(e.item.as_str())
                     || !ident(&e.skin)
                     || !(a.capacity..=64).contains(&e.capacity)
@@ -264,7 +345,7 @@ impl Scenario {
             }
         }
         for p in &self.producers {
-            if !number(p.radius, 0., 3.) {
+            if p.description.len() > 512 || !number(p.radius, 0., 3.) {
                 return Err("invalid machine footprint".into());
             }
             if !finite(p.position)
@@ -280,6 +361,9 @@ impl Scenario {
             }
         }
         for d in &self.defenders {
+            if d.description.len() > 512 || d.label.len() > 128 {
+                return Err("invalid defender description".into());
+            }
             if !number(d.radius, 0., 3.) {
                 return Err("invalid defender footprint".into());
             }

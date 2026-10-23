@@ -61,6 +61,9 @@ pub struct Metrics {
     pub assignments: u64,
     pub assignment_retries: u64,
     pub dock_wait_ticks: u64,
+    pub avoidance_checks: u64,
+    pub avoidance_steers: u64,
+    pub traffic_wait_ticks: u64,
     pub empty_travel_meters: f64,
     pub loaded_travel_meters: f64,
     pub agent_phase_ticks: BTreeMap<String, BTreeMap<String, u64>>,
@@ -73,10 +76,12 @@ pub struct Metrics {
     pub kills: u64,
     pub breaches: u64,
     pub delivered_items: BTreeMap<String, u64>,
+    pub deliveries_by_agent: BTreeMap<String, u64>,
 }
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub enum Phase {
     Idle,
+    Returning,
     ToPickup,
     Loading,
     ToDrop,
@@ -99,6 +104,7 @@ pub struct Trailer {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct AgentState {
+    pub departure_dock: Option<String>,
     pub id: String,
     pub position: Point,
     pub heading: f32,
@@ -281,6 +287,7 @@ impl Simulation {
                         heading: 0.0,
                         travelled: 0.0,
                         phase: Phase::Idle,
+                        departure_dock: None,
                         route: vec![],
                         cargo: Inventory::new(a.capacity),
                         assignment: None,
@@ -379,6 +386,28 @@ impl Simulation {
     }
     pub fn config(&self) -> &Scenario {
         &self.config
+    }
+    pub fn production_status(&self, id: &str) -> Option<&'static str> {
+        let p = self.config.producers.iter().find(|p| p.id == id)?;
+        let state = self.producers.get(id)?;
+        let reason = if state.remaining > 0 {
+            "processing"
+        } else if !state.enabled {
+            "disabled"
+        } else if p.max_cycles.is_some_and(|limit| state.cycles >= limit) {
+            "commission_complete"
+        } else if self.free(&p.output) < p.products.iter().map(|s| s.units).sum::<u32>() {
+            "output_blocked"
+        } else if p
+            .ingredients
+            .iter()
+            .any(|s| self.available(&p.input, &s.item) < s.units)
+        {
+            "input_starved"
+        } else {
+            "ready"
+        };
+        Some(reason)
     }
     pub fn seconds(&self) -> f64 {
         self.tick as f64 / HZ as f64
@@ -538,24 +567,7 @@ impl Simulation {
                 .or_default() += 1;
         }
         for p in &self.config.producers {
-            let state = &self.producers[&p.id];
-            let reason = if state.remaining > 0 {
-                "processing"
-            } else if !state.enabled {
-                "disabled"
-            } else if p.max_cycles.is_some_and(|limit| state.cycles >= limit) {
-                "commission_complete"
-            } else if self.free(&p.output) < p.products.iter().map(|s| s.units).sum::<u32>() {
-                "output_blocked"
-            } else if p
-                .ingredients
-                .iter()
-                .any(|s| self.available(&p.input, &s.item) < s.units)
-            {
-                "input_starved"
-            } else {
-                "ready"
-            };
+            let reason = self.production_status(&p.id).unwrap();
             *self
                 .metrics
                 .producer_state_ticks
@@ -584,6 +596,13 @@ impl Simulation {
                 Endpoint::Depot(d) => {
                     self.depots.get_mut(d).unwrap().add(&t.item, 1);
                     self.metrics.delivered += 1;
+                    if let Endpoint::Cargo(agent) = &t.from {
+                        *self
+                            .metrics
+                            .deliveries_by_agent
+                            .entry(agent.clone())
+                            .or_default() += 1;
+                    }
                     *self
                         .metrics
                         .delivered_items

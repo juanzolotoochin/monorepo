@@ -55,3 +55,23 @@ inventory/reservation primitives and accounting invariants.
 `Scenario.extent` defaults to the legacy eight-meter half-width and supports up
 to 24 meters. The shared A* grid sizes itself to the requested bounds; the game
 adapter uses the same extent for player pathfinding and collision boundaries.
+
+Carriers steer around nearby agent and trailer footprints with bounded local
+candidate steps. Idle haulers return to their starting positions so they do not
+occupy unloading docks. Equipped carriers plan forward turning arcs for sharp
+departures, validating both the body and trailer sweep against static obstacles;
+a blocked departure waits for a valid route rather than unloading remotely.
+`avoidance_checks`, `avoidance_steers`, and `traffic_wait_ticks` expose crowd cost
+and congestion. `Equipment.radius` describes the trailer clearance footprint.
+
+Visible packing is data: `CargoLayout` specifies columns, rows, XYZ spacing,
+unit scale and roll. Agents and equipment have separate cargo layouts; depots
+have `stock_anchor` and `stock_layout`, allowing floor piles and backpack bundles
+to use different packing while preserving one visible item per inventory unit.
+Producer and defender descriptions are optional authoring metadata. Production
+status is shared by telemetry and hover inspection through `production_status`.
+Dock reservations include the approach and departure envelope. Queued workers
+step back when a larger carrier needs turning room, and the reservation releases
+only after both carrier and trailer clear the dock. `deliveries_by_agent` makes
+individual transport progress inspectable instead of hiding a stalled carrier
+behind aggregate throughput.

@@ -87,7 +87,7 @@ impl StyleProfile {
             || !self.voxel_size.is_finite()
             || !(0.05..=0.5).contains(&self.voxel_size)
             || self.materials.is_empty()
-            || self.materials.len() > 16
+            || self.materials.len() > 32
         {
             return Err("invalid style identity, density or palette size".into());
         }
@@ -228,7 +228,7 @@ fn inside(kind: ShapeKind, p: [f32; 3]) -> bool {
 }
 pub fn compile_environment(style: &StyleProfile, shapes: &[VoxelShape]) -> Result<EnvironmentMesh> {
     style.validate()?;
-    if shapes.len() > 256 {
+    if shapes.len() > 512 {
         return Err("too many architecture shapes".into());
     }
     let step = style.voxel_size;

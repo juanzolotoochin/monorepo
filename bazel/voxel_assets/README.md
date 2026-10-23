@@ -279,3 +279,8 @@ rounding. The movement/jetpack controller uses these surfaces for foot height
 and step traversal, and settlement rigs use the same heights. Decorative shapes
 remain non-walkable unless explicitly marked. This keeps road height independent
 of ad hoc per-character offsets.
+
+Style packs support up to 32 named materials and 512 authored architecture
+shapes; existing instance and voxel-work limits still bound compilation cost.
+Scene pack version 8 includes data-driven carrier/depot packing and building
+descriptions. Rebuild scene packs when updating the shared schema.
