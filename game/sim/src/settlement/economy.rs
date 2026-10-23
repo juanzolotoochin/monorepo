@@ -17,8 +17,8 @@ impl Settlement {
         self.events.clear();
         self.threats_self_update(tick, terrain);
         let bodies: Vec<_> = self.agents.iter().map(body).collect();
-        let Settlement { agents, dock_owner, depots, links, .. } = self;
-        let ctx = Ctx { tick, terrain, bodies: &bodies, dock_owner, depots, links };
+        let Settlement { agents, dock_owner, depots, links, piles, .. } = self;
+        let ctx = Ctx { tick, terrain, piles: piles.as_ref(), bodies: &bodies, dock_owner, depots, links };
         agents.par_iter_mut().enumerate().for_each(|(i, a)| haulers::self_update(a, i as AgentIx, &ctx));
     }
 

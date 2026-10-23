@@ -253,6 +253,7 @@ pub(super) struct Body {
 pub(super) struct Ctx<'a> {
     pub tick: u64,
     pub terrain: &'a Terrain,
+    pub piles: Option<&'a super::piles::PileLab>,
     pub bodies: &'a [Body],
     pub dock_owner: &'a [Option<AgentIx>],
     pub depots: &'a [DepotState],
@@ -291,7 +292,7 @@ pub(crate) fn move_route(position: &mut FxVec2, route: &mut Vec<FxVec2>, mut dis
 /// Stage 2 for one non-controlled agent.
 pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
     if a.controlled {
-        return super::avatar::self_update(a, ctx.tick, ctx.terrain);
+        return super::avatar::self_update(a, ctx.tick, ctx.terrain, ctx.piles);
     }
     if let Some(d) = a.departure_dock {
         let dock = ctx.depots[d as usize].position;

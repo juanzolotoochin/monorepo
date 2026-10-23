@@ -18,6 +18,8 @@ pub mod avatar;
 pub mod combat;
 mod economy;
 mod haulers;
+pub mod memory;
+pub mod piles;
 
 use std::collections::BTreeMap;
 
@@ -194,6 +196,39 @@ pub struct Settlement {
     /// What happened during the last tick. Not part of the state.
     #[serde(skip)]
     pub events: Vec<Event>,
+
+    /// Where the player starts and respawns.
+    pub spawn: FxVec2,
+    pub spawn_height: Fx,
+    pub piles: Option<piles::PileLab>,
+    pub memory: Option<memory::Memory>,
+}
+
+/// Everything a scene contributes to a new world, in arena coordinates
+/// (meters from the arena center).
+#[derive(Clone, Debug, Default)]
+pub struct SceneSetup {
+    /// The settlement, if the scene has one. Without it the world holds just
+    /// the player.
+    pub scenario: Option<Scenario>,
+    /// Half-width of the arena when there is no scenario.
+    pub extent: Fx,
+    pub obstacles: Vec<Disc>,
+    /// Obstacles that open when the memory trial's door unlocks.
+    pub doors: Vec<Disc>,
+    pub surfaces: Vec<crate::terrain::Surface>,
+    pub platforms_only: bool,
+    pub spawn: [Fx; 3],
+    pub piles: Option<PileSetup>,
+    pub memory_trial: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct PileSetup {
+    pub capacity: u32,
+    /// Material and output position of each dispenser.
+    pub dispensers: Vec<(u8, [Fx; 2])>,
+    pub piles: Vec<(u8, [Fx; 2], u32)>,
 }
 
 impl Settlement {
@@ -349,6 +384,10 @@ impl Settlement {
             pinned: Vec::new(),
             combat: CombatMetrics::default(),
             events: Vec::new(),
+            spawn: FxVec2::ZERO,
+            spawn_height: Fx::ZERO,
+            piles: None,
+            memory: None,
             scenario: scenario.id.clone(),
             dock_owner: vec![None; scenario.depots.len()],
             items,
@@ -368,6 +407,80 @@ impl Settlement {
             }
         }
         Ok(settlement)
+    }
+
+    /// Builds the tick-0 settlement for a scene, with or without a supply
+    /// scenario, and adds the scene to the terrain.
+    pub fn from_scene(setup: &SceneSetup, terrain: &mut Terrain) -> Result<Settlement, String> {
+        let center = terrain.center;
+        let at = |p: [Fx; 2]| FxVec2::new(center.x + p[0], center.y + p[1]);
+        let place = |d: &Disc| Disc { center: FxVec2::new(center.x + d.center.x, center.y + d.center.y), radius: d.radius };
+        let obstacles: Vec<Disc> = setup.obstacles.iter().chain(&setup.doors).map(place).collect();
+        let mut settlement = match &setup.scenario {
+            Some(scenario) => Settlement::from_scenario(scenario, &obstacles, terrain)?,
+            None => {
+                terrain.extent = setup.extent;
+                terrain.obstacles.extend_from_slice(&obstacles);
+                Settlement::from_scenario(&Self::player_only(setup.extent), &[], terrain)?
+            }
+        };
+        terrain.surfaces = setup
+            .surfaces
+            .iter()
+            .map(|s| crate::terrain::Surface { min: at([s.min.x, s.min.y]), max: at([s.max.x, s.max.y]), height: s.height })
+            .collect();
+        terrain.platforms_only = setup.platforms_only;
+        terrain.revision += 1;
+        settlement.spawn = at([setup.spawn[0], setup.spawn[2]]);
+        settlement.spawn_height = setup.spawn[1];
+        if let Some(player) = settlement.player() {
+            let a = &mut settlement.agents[player as usize];
+            a.position = settlement.spawn;
+            a.home = settlement.spawn;
+            a.heading = Fx::PI;
+            a.avatar.height = settlement.spawn_height;
+        }
+        settlement.piles = setup.piles.as_ref().map(|p| {
+            let dispensers: Vec<(u8, FxVec2)> = p.dispensers.iter().map(|&(m, o)| (m, at(o))).collect();
+            let piles: Vec<(u8, FxVec2, u32)> = p.piles.iter().map(|&(m, pos, units)| (m, at(pos), units)).collect();
+            piles::PileLab::new(center, p.capacity, &dispensers, &piles)
+        });
+        let doors = setup.doors.iter().map(place).collect();
+        settlement.memory = Some(memory::Memory::new(setup.memory_trial, center, doors));
+        Ok(settlement)
+    }
+
+    /// The scenario of a scene without a settlement: just the player.
+    fn player_only(extent: Fx) -> Scenario {
+        Scenario {
+            extent,
+            id: "scene".into(),
+            weapons: Vec::new(),
+            weapon_tuning: Vec::new(),
+            items: vec![scenario::Item { id: "none".into(), label: "NONE".into(), skin: "none".into(), scale: 1.0 }],
+            depots: Vec::new(),
+            sources: Vec::new(),
+            links: Vec::new(),
+            agents: vec![scenario::Agent {
+                controlled: true,
+                id: "player".into(),
+                label: "YOU".into(),
+                skin: "worker".into(),
+                position: [Fx::ZERO, Fx::ZERO],
+                speed: Fx::from_ratio(19, 5),
+                radius: Fx::from_ratio(9, 50),
+                capacity: 8,
+                links: Vec::new(),
+                transfer_seconds: Fx::from_ratio(2, 5),
+                cargo_anchor: [0.0, 0.65, -0.19],
+                cargo_layout: scenario::CargoLayout::default(),
+                equipment: None,
+            }],
+            producers: Vec::new(),
+            defenders: Vec::new(),
+            waves: Vec::new(),
+            base_health: 1,
+        }
     }
 
     pub fn item_index(&self, id: &str) -> Option<ItemIx> {
@@ -520,3 +633,5 @@ impl StateHash for Settlement {
 mod tests;
 #[cfg(test)]
 mod combat_tests;
+#[cfg(test)]
+mod scene_tests;

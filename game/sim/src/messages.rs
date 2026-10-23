@@ -150,6 +150,18 @@ pub struct Fire {
     pub to: FxVec2,
 }
 
+/// The player's pile job moves its next unit (or all of it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PileStep {
+    pub agent: u16,
+}
+
+impl StateHash for PileStep {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+    }
+}
+
 /// A player's manual transfer moves its next unit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManualUnit {
@@ -348,6 +360,7 @@ message_queues! {
     load: Load,
     unload: Unload,
     manual_unit: ManualUnit,
+    pile_step: PileStep,
     // Combat: strikes and projectile hits before breaches, so a killing
     // blow on the last tick saves the base; shots last.
     strike: Strike,

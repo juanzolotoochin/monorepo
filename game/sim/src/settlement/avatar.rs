@@ -41,6 +41,11 @@ const REBOUND_TICKS: u64 = 13;
 const BUFFER_TICKS: u64 = 6;
 /// Manual transfers start within this distance of the dock.
 const DOCK_REACH: Fx = Fx::from_bits(3_650_722_202); // 0.85
+/// Jetpack: hover height above the ground, and climb and sink speeds per tick
+/// (5.5 m/s and 3 m/s).
+const HOVER: Fx = Fx::from_bits(7_730_941_133); // 1.8
+const CLIMB_PER_TICK: Fx = Fx::from_bits(787_410_671); // 5.5/30
+const SINK_PER_TICK: Fx = Fx::from_bits(429_496_730); // 3/30
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Intent {
@@ -76,7 +81,21 @@ pub struct ManualJob {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Flight {
+    /// The jetpack is held on.
+    pub requested: bool,
+    pub airborne: bool,
+    /// The last ground height under the avatar.
+    pub support: Fx,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AvatarState {
+    /// Height of the feet above the arena floor.
+    pub height: Fx,
+    pub flight: Flight,
+    /// A pile job that failed while walking, for housekeeping to report.
+    pub pile_failure: Option<String>,
     /// Meters per second.
     pub velocity: FxVec2,
     pub intent: Option<Intent>,
@@ -127,7 +146,17 @@ fn slide(terrain: &Terrain, mut position: FxVec2, delta: FxVec2) -> FxVec2 {
 }
 
 /// Stage 2 for one avatar.
-pub(super) fn self_update(a: &mut AgentState, tick: u64, terrain: &Terrain) {
+pub(super) fn self_update(a: &mut AgentState, tick: u64, terrain: &Terrain, piles: Option<&super::piles::PileLab>) {
+    if let Some(lab) = piles {
+        if let Some(error) = Settlement::pile_job_self_update(lab, a, terrain) {
+            a.avatar.pile_failure = Some(error.to_string());
+        }
+    }
+    walk(a, tick, terrain);
+    fly(a, terrain);
+}
+
+fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain) {
     let per_tick = Fx::from_int(content::TICKS_PER_SECOND);
     let avatar = &mut a.avatar;
     if let Some(swing) = &avatar.swing {
@@ -175,7 +204,21 @@ pub(super) fn self_update(a: &mut AgentState, tick: u64, terrain: &Terrain) {
             avatar.velocity = FxVec2::ZERO;
         }
     }
-    a.position = slide(terrain, previous, delta);
+    let candidate = slide(terrain, previous, delta);
+    let airborne = a.avatar.flight.airborne;
+    let allowed = if airborne {
+        terrain.flyable(previous, candidate, a.avatar.height, BODY_RADIUS)
+    } else {
+        terrain.walkable(previous, candidate, BODY_RADIUS)
+    };
+    if allowed {
+        if !airborne {
+            if let Some(ground) = terrain.ground(candidate) {
+                a.avatar.height = ground;
+            }
+        }
+        a.position = candidate;
+    }
     let moved = a.position - previous;
     let length = moved.length();
     a.travelled += length;
@@ -185,7 +228,65 @@ pub(super) fn self_update(a: &mut AgentState, tick: u64, terrain: &Terrain) {
     }
 }
 
+/// The jetpack: hover over the highest ground ahead while held, fall back to
+/// the ground when released, and keep flying over drops.
+fn fly(a: &mut AgentState, terrain: &Terrain) {
+    let flight = &mut a.avatar.flight;
+    let ground = terrain.ground(a.position);
+    let landing = terrain.footprint(a.position, BODY_RADIUS).filter(|y| ground.is_some_and(|g| (*y - g).abs() < Fx::from_ratio(1, 100)));
+    if let Some(y) = ground {
+        flight.support = y;
+    }
+    let active = flight.requested || (flight.airborne && landing.is_none());
+    let direction = match a.route.first() {
+        Some(&next) => (next - a.position).normalize_or_zero(),
+        None => a.avatar.velocity.normalize_or_zero(),
+    };
+    let mut target = ground.unwrap_or(flight.support);
+    if active {
+        // Look far enough ahead to climb at walking and running speed.
+        let r = BODY_RADIUS;
+        let offsets = [(Fx::ZERO, Fx::ZERO), (r, Fx::ZERO), (-r, Fx::ZERO), (Fx::ZERO, r), (Fx::ZERO, -r)];
+        for i in 0..=20 {
+            let p = a.position + direction * Fx::from_ratio(i, 10);
+            for &(dx, dy) in &offsets {
+                if let Some(y) = terrain.ground(FxVec2::new(p.x + dx, p.y + dy)) {
+                    target = target.max(y);
+                }
+            }
+        }
+        target += HOVER;
+    }
+    let delta = (target - a.avatar.height).clamp(-SINK_PER_TICK, CLIMB_PER_TICK);
+    a.avatar.height += delta;
+    flight.airborne = active || ground.is_none_or(|y| a.avatar.height > y + Fx::from_ratio(1, 100));
+}
+
 impl Settlement {
+    /// The first player avatar, if there is one.
+    pub fn player(&self) -> Option<super::AgentIx> {
+        self.agents.iter().position(|a| a.controlled).map(|i| i as super::AgentIx)
+    }
+
+    /// Commands: holds the jetpack on or off.
+    pub fn jetpack(&mut self, agent: usize, enabled: bool) {
+        if let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) {
+            a.avatar.flight.requested = enabled;
+        }
+    }
+
+    /// Commands: puts the avatar back at the scene's spawn point.
+    pub fn respawn(&mut self, agent: usize) {
+        let (spawn, height) = (self.spawn, self.spawn_height);
+        let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
+        a.position = spawn;
+        a.heading = Fx::PI;
+        a.route.clear();
+        a.avatar = AvatarState { height, ..AvatarState::default() };
+        a.avatar.intent = Some(Intent::Stop);
+        self.cancel_pile_job();
+    }
+
     /// Stage 3 for one avatar: a strike resolving this tick, and manual
     /// transfer units that are due.
     pub(super) fn read_avatar(&self, me: AgentIx, a: &AgentState, tick: u64, terrain: &Terrain, out: &mut Messages) {
@@ -208,14 +309,23 @@ impl Settlement {
                 out.manual_unit.push(ManualUnit { agent: me });
             }
         }
+        if let Some(step) = self.read_pile_job(me, a, tick) {
+            out.pile_step.push(step);
+        }
     }
 
     /// Commands: sets an avatar's movement intent.
     pub fn move_avatar(&mut self, agent: usize, intent: Intent, terrain: &Terrain) {
+        if self.agents.get(agent).is_some_and(|a| a.controlled) {
+            self.cancel_pile_job();
+        }
         let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
         a.route.clear();
         if let Intent::GoTo { target, run } = intent {
-            a.route = nav::path(terrain, a.position, target, BODY_RADIUS);
+            // On foot, routes avoid steps and drops; with the jetpack, anything goes.
+            let flying = a.avatar.flight.requested || a.avatar.flight.airborne;
+            let walkable = |p: FxVec2, q: FxVec2| flying || terrain.walkable(p, q, BODY_RADIUS);
+            a.route = nav::path_with(terrain, a.position, target, BODY_RADIUS, &[], &walkable);
             a.avatar.run = run;
         } else if let Intent::Walk { run, .. } = intent {
             a.avatar.run = run;
@@ -227,6 +337,9 @@ impl Settlement {
     pub fn attack(&mut self, tick: u64, agent: usize, weapon: Weapon, aim: FxVec2, muzzle: [Fx; 3]) {
         if !self.has_weapon(weapon) {
             return;
+        }
+        if self.agents.get(agent).is_some_and(|a| a.controlled) {
+            self.cancel_pile_job();
         }
         let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
         let aim = aim.normalize_or_zero();

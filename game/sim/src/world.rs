@@ -79,6 +79,18 @@ pub enum CommandKind {
     Transfer { agent: u16, depot: u16, item: u16, units: u32, deposit: bool },
     /// Cancels an avatar's transfer; units in the air still land.
     CancelTransfer { agent: u16 },
+    /// Holds a player's jetpack on or off.
+    Jetpack { agent: u16, enabled: bool },
+    /// Puts a player back at the spawn point.
+    Respawn { agent: u16 },
+    /// Pile lab: walk to a pile and transfer, `pace` seconds per unit (0: all at once).
+    Pile { agent: u16, action: crate::settlement::piles::PileAction, pace: Fx, approach: Option<FxVec2> },
+    /// Pile lab: a dispenser adds units to its output pile.
+    Dispense { dispenser: u32, units: u32 },
+    /// Memory trial: start recording, deploy the ghost, or forget it.
+    MemoryRecord,
+    MemoryDeploy,
+    MemoryClear,
 }
 
 /// One player input, scheduled for a tick by the network layer.
@@ -189,6 +201,18 @@ impl World {
 
     pub fn terrain(&self) -> &Terrain {
         &self.terrain
+    }
+
+    /// A new world for a scene, sized to fit its arena, at tick 0.
+    pub fn new_scene(seed: u64, rules: Rules, setup: &crate::settlement::SceneSetup) -> Result<World, String> {
+        let extent = setup.scenario.as_ref().map_or(setup.extent, |s| s.extent);
+        let span = (extent.mul_int(2) + Fx::from_int(2)).ceil().floor_to_int() as u32;
+        let chunks = span.div_ceil(CHUNK_TILES as u32).max(1);
+        let config = WorldConfig { seed, chunks_x: chunks, chunks_y: chunks, max_movers: 0 };
+        let mut world = World::new(config, rules);
+        let settlement = Settlement::from_scene(setup, &mut world.terrain)?;
+        world.settlement = Some(Box::new(settlement));
+        Ok(world)
     }
 
     /// A new world for a settlement scenario, sized to fit its arena, at tick 0.
@@ -311,6 +335,41 @@ impl World {
                 CommandKind::CancelTransfer { agent } => {
                     if let Some(s) = &mut self.settlement {
                         s.cancel_transfer(agent as usize);
+                    }
+                }
+                CommandKind::Jetpack { agent, enabled } => {
+                    if let Some(s) = &mut self.settlement {
+                        s.jetpack(agent as usize, enabled);
+                    }
+                }
+                CommandKind::Respawn { agent } => {
+                    if let Some(s) = &mut self.settlement {
+                        s.respawn(agent as usize);
+                    }
+                }
+                CommandKind::Pile { agent, action, pace, approach } => {
+                    if let Some(s) = &mut self.settlement {
+                        s.pile_action(self.tick, &self.terrain, agent as usize, action, pace, approach);
+                    }
+                }
+                CommandKind::Dispense { dispenser, units } => {
+                    if let Some(s) = &mut self.settlement {
+                        s.dispense(dispenser, units);
+                    }
+                }
+                CommandKind::MemoryRecord => {
+                    if let Some(s) = &mut self.settlement {
+                        s.memory_record();
+                    }
+                }
+                CommandKind::MemoryDeploy => {
+                    if let Some(s) = &mut self.settlement {
+                        s.memory_deploy();
+                    }
+                }
+                CommandKind::MemoryClear => {
+                    if let Some(s) = &mut self.settlement {
+                        s.memory_clear();
                     }
                 }
             }
@@ -608,6 +667,9 @@ impl World {
             for message in messages.manual_unit {
                 settlement.manual_unit(tick, message);
             }
+            for _ in messages.pile_step {
+                settlement.pile_step(tick, &self.terrain);
+            }
             for message in messages.strike {
                 let agent = message.agent;
                 let hits = settlement.strike(tick, message);
@@ -636,6 +698,8 @@ impl World {
         if let Some(settlement) = &mut self.settlement {
             settlement.combat_housekeeping(self.tick, &self.terrain);
             settlement.avatar_housekeeping(self.tick);
+            settlement.pile_housekeeping(self.tick);
+            settlement.memory_housekeeping(&mut self.terrain);
         }
         self.despawn();
         self.move_between_chunks();

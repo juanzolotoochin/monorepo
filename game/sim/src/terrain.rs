@@ -36,6 +36,8 @@ pub struct Terrain {
     pub extent: Fx,
     pub obstacles: Vec<Disc>,
     pub surfaces: Vec<Surface>,
+    /// Platform scenes: only the surfaces are ground; elsewhere is a drop.
+    pub platforms_only: bool,
     /// Diggable rock columns by integer tile, sorted.
     pub rock: Vec<(i32, i32)>,
     /// Bumped by every change, so cached paths know to rebuild.
@@ -44,7 +46,15 @@ pub struct Terrain {
 
 impl Terrain {
     pub fn flat(center: FxVec2, extent: Fx) -> Terrain {
-        Terrain { center, extent, obstacles: Vec::new(), surfaces: Vec::new(), rock: Vec::new(), revision: 0 }
+        Terrain {
+            center,
+            extent,
+            obstacles: Vec::new(),
+            surfaces: Vec::new(),
+            platforms_only: false,
+            rock: Vec::new(),
+            revision: 0,
+        }
     }
 
     pub fn min(&self) -> FxVec2 {
@@ -60,14 +70,59 @@ impl Terrain {
         p.x >= min.x && p.x <= max.x && p.y >= min.y && p.y <= max.y
     }
 
-    /// Ground height at `p`: the highest surface containing it, or zero.
-    pub fn height(&self, p: FxVec2) -> Fx {
-        self.surfaces
+    /// Ground height at `p`: the highest surface containing it; elsewhere
+    /// zero, or nothing (a drop) in platform scenes.
+    pub fn ground(&self, p: FxVec2) -> Option<Fx> {
+        let top = self
+            .surfaces
             .iter()
             .filter(|s| p.x >= s.min.x && p.x <= s.max.x && p.y >= s.min.y && p.y <= s.max.y)
             .map(|s| s.height)
-            .max()
-            .unwrap_or(Fx::ZERO)
+            .max();
+        if self.platforms_only {
+            top
+        } else {
+            Some(top.unwrap_or(Fx::ZERO))
+        }
+    }
+
+    /// [`Terrain::ground`], with drops at zero.
+    pub fn height(&self, p: FxVec2) -> Fx {
+        self.ground(p).unwrap_or(Fx::ZERO)
+    }
+
+    /// The highest ground under a body of `radius` at `p` (center and four
+    /// sides), or nothing if any of it overhangs a drop.
+    pub fn footprint(&self, p: FxVec2, radius: Fx) -> Option<Fx> {
+        let offsets = [(Fx::ZERO, Fx::ZERO), (radius, Fx::ZERO), (-radius, Fx::ZERO), (Fx::ZERO, radius), (Fx::ZERO, -radius)];
+        offsets.iter().try_fold(Fx::MIN, |top, &(dx, dy)| Some(top.max(self.ground(FxVec2::new(p.x + dx, p.y + dy))?)))
+    }
+
+    /// Whether a body can walk from `a` to `b` without a step over 0.25 m or a drop.
+    pub fn walkable(&self, a: FxVec2, b: FxVec2, radius: Fx) -> bool {
+        let steps = ((b - a).length() / Fx::from_ratio(1, 10)).ceil().floor_to_int().max(1);
+        let Some(mut last) = self.footprint(a, radius) else { return false };
+        for i in 1..=steps {
+            let p = a + (b - a) * Fx::from_ratio(i, steps);
+            let Some(next) = self.footprint(p, radius) else { return false };
+            if (next - last).abs() > Fx::from_ratio(1, 4) {
+                return false;
+            }
+            last = next;
+        }
+        true
+    }
+
+    /// Whether a flying body at height `z` can move from `a` to `b`: no ground
+    /// along the way may rise above it.
+    pub fn flyable(&self, a: FxVec2, b: FxVec2, z: Fx, radius: Fx) -> bool {
+        let steps = ((b - a).length() / Fx::from_ratio(1, 20)).ceil().floor_to_int().max(1);
+        let ceiling = z + Fx::from_ratio(1, 50);
+        let offsets = [(Fx::ZERO, Fx::ZERO), (radius, Fx::ZERO), (-radius, Fx::ZERO), (Fx::ZERO, radius), (Fx::ZERO, -radius)];
+        (0..=steps).all(|i| {
+            let p = a + (b - a) * Fx::from_ratio(i, steps);
+            offsets.iter().all(|&(dx, dy)| self.ground(FxVec2::new(p.x + dx, p.y + dy)).is_none_or(|y| y <= ceiling))
+        })
     }
 
     pub fn is_rock(&self, tile: (i32, i32)) -> bool {
@@ -146,6 +201,7 @@ impl StateHash for Terrain {
             h.write(&s.max);
             h.write(&s.height);
         }
+        h.write(&self.platforms_only);
         h.write_u64(self.rock.len() as u64);
         for &(x, y) in &self.rock {
             h.write_u64((x as u32 as u64) << 32 | y as u32 as u64);

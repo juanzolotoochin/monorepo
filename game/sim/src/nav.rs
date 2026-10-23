@@ -18,6 +18,7 @@ struct Grid<'a> {
     radius: Fx,
     side: usize,
     origin: FxVec2,
+    valid: &'a dyn Fn(FxVec2, FxVec2) -> bool,
 }
 
 impl Grid<'_> {
@@ -29,7 +30,7 @@ impl Grid<'_> {
     }
 
     fn clear(&self, a: FxVec2, b: FxVec2) -> bool {
-        self.terrain.clear_with(a, b, self.radius, self.extra)
+        self.terrain.clear_with(a, b, self.radius, self.extra) && (self.valid)(a, b)
     }
 
     /// The grid node nearest to `p` that `p` can see.
@@ -48,8 +49,21 @@ pub fn path(terrain: &Terrain, start: FxVec2, goal: FxVec2, radius: Fx) -> Vec<F
 
 /// [`path`], also avoiding `extra` discs (other bodies).
 pub fn path_avoiding(terrain: &Terrain, start: FxVec2, goal: FxVec2, radius: Fx, extra: &[Disc]) -> Vec<FxVec2> {
+    path_with(terrain, start, goal, radius, extra, &|_, _| true)
+}
+
+/// [`path_avoiding`], where every straight segment must also pass `valid`
+/// (for example, walkable ground without drops).
+pub fn path_with(
+    terrain: &Terrain,
+    start: FxVec2,
+    goal: FxVec2,
+    radius: Fx,
+    extra: &[Disc],
+    valid: &dyn Fn(FxVec2, FxVec2) -> bool,
+) -> Vec<FxVec2> {
     let side = (terrain.extent.mul_int(2) / SPACING).round().floor_to_int() as usize + 1;
-    let grid = Grid { terrain, extra, radius, side, origin: terrain.min() };
+    let grid = Grid { terrain, extra, radius, side, origin: terrain.min(), valid };
     if !grid.clear(goal, goal) {
         return Vec::new();
     }
