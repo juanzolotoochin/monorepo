@@ -1,0 +1,16 @@
+diff --git a/python/private/python_bootstrap_template.txt b/python/private/python_bootstrap_template.txt
+--- a/python/private/python_bootstrap_template.txt
++++ b/python/private/python_bootstrap_template.txt
+@@ -570,2 +570,12 @@
+   except FileExistsError:
+     pass
++  except OSError as error:
++    # Windows symlinks require privileges that ordinary test processes lack.
++    # Keep the venv tied to its declared runtime using copies in that case.
++    if not IS_WINDOWS or getattr(error, "winerror", None) != 1314:
++      raise
++    if os.path.isdir(to):
++      shutil.copytree(to, from_, dirs_exist_ok=True)
++    else:
++      shutil.copy2(to, from_)
++

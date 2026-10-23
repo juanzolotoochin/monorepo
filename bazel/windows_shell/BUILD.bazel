@@ -1,0 +1,35 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load(":toolchain.bzl", "windows_shell")
+
+exports_files(["runtime.BUILD.bazel"])
+
+windows_shell(
+    name = "runtime",
+    runtime = "@windows_shell_runtime//:runtime",
+    shell = "@windows_shell_runtime//:usr/bin/bash.exe",
+)
+
+toolchain(
+    name = "toolchain",
+    exec_compatible_with = [
+        "@platforms//os:windows",
+        "@platforms//cpu:x86_64",
+    ],
+    target_compatible_with = [
+        "@platforms//os:windows",
+        "@platforms//cpu:x86_64",
+    ],
+    toolchain = ":runtime",
+    toolchain_type = "@rules_shell//shell:toolchain_type",
+)
+
+sh_test(
+    name = "smoke_test",
+    srcs = ["smoke_test.sh"],
+    # The Windows test wrapper requires PATH to be nonempty.
+    env = {"PATH": "C:/__no_host_shell_tools__"},
+    target_compatible_with = [
+        "@platforms//os:windows",
+        "@platforms//cpu:x86_64",
+    ],
+)

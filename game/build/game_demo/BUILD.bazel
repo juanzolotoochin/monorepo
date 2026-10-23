@@ -1,4 +1,11 @@
+load(":native_execution.bzl", "native_execution")
+
 exports_files([
     "defs.bzl",
     "repositories.bzl",
 ])
+
+native_execution(
+    name = "native_execution",
+    visibility = ["//visibility:public"],
+)

@@ -14,3 +14,12 @@ The playable Kestrel prototype and its game-specific tooling live here:
 
 Run the game with `bazel run //game/app:demo` and its tests with
 `bazel test --config=full_local //game/...`.
+
+Build the Linux targets on remote workers from any client platform with
+`bazelisk build //game/... --config=remote`. The remote configuration selects
+the pinned Linux execution image and a Linux action environment. Windows
+linker options belong to the Windows platform and do not apply to this build.
+The manual video demo targets still require local GPU drivers; FFmpeg is
+fetched from pinned archives on supported hosts. They are excluded from the
+recursive build above. For example, build a video locally with
+`bazelisk build //game/app:combat_weapons_demo` on Windows or Linux.

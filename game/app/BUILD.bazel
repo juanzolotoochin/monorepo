@@ -10,16 +10,7 @@ rust_binary(
     # Bevy's derive macros inspect Cargo.toml to locate the `bevy` re-exports.
     compile_data = ["//:Cargo.toml"],
     edition = "2021",
-    # Let Bazel drive clang-cl's link action. Rust's MSVC linker arguments
-    # otherwise reach clang-cl as compiler arguments when cross-compiling.
-    experimental_use_cc_common_link = select({
-        "//platforms:windows_msvc": 1,
-        "//conditions:default": -1,
-    }),
-    link_deps = [":sound"] + select({
-        "//platforms:windows_msvc": [":windows_system_libs"],
-        "//conditions:default": [],
-    }),
+    link_deps = [":sound"],
     rustc_env = {"CARGO_MANIFEST_DIR": "."},
     visibility = ["//visibility:public"],
     deps = [
@@ -31,8 +22,8 @@ rust_binary(
         "//game/app/assets:mining_deck",
         "//game/app/assets:pile_lab",
         "//game/app/assets:surprise_lab",
-        "//game/tools/assetc/core:voxel_assets",
         "//game/core:gameplay_core",
+        "//game/tools/assetc/core:voxel_assets",
         "@crates//:bevy",
         "@crates//:image",
         "@crates//:serde",
@@ -46,10 +37,6 @@ rust_test(
     compile_data = ["//:Cargo.toml"],
     crate = ":demo",
     edition = "2021",
-    experimental_use_cc_common_link = select({
-        "//platforms:windows_msvc": 1,
-        "//conditions:default": -1,
-    }),
     rustc_env = {"CARGO_MANIFEST_DIR": "."},
 )
 
@@ -60,26 +47,11 @@ cc_library(
     deps = ["@miniaudio//:headers"],
 )
 
-# Explicit SDK imports needed by winit touch input and Rust's Windows pipes
-# when Bazel links the Rust objects through cc_common instead of rustc.
-cc_library(
-    name = "windows_system_libs",
-    linkopts = [
-        "user32.lib",
-        "ntdll.lib",
-    ],
-    target_compatible_with = [
-        "@platforms//os:windows",
-        "@llvm//constraints/windows/abi:msvc",
-    ],
-)
-
 game_demo(
     name = "haul_four_demo",
     game = ":demo",
     script = "demos/haul_four.json",
     tags = ["manual"],
-    target_compatible_with = ["@platforms//os:linux"],
 )
 
 py_test(
@@ -96,7 +68,6 @@ game_demo(
     game = ":demo",
     script = "demos/jetpack.json",
     tags = ["manual"],
-    target_compatible_with = ["@platforms//os:linux"],
 )
 
 game_demo(
@@ -104,7 +75,6 @@ game_demo(
     game = ":demo",
     script = "demos/surprise.json",
     tags = ["manual"],
-    target_compatible_with = ["@platforms//os:linux"],
 )
 
 game_demo(
@@ -112,7 +82,6 @@ game_demo(
     game = ":demo",
     script = "demos/atlantis.json",
     tags = ["manual"],
-    target_compatible_with = ["@platforms//os:linux"],
 )
 
 game_demo(
@@ -121,7 +90,6 @@ game_demo(
     game = ":demo",
     script = "demos/forest_outpost.json",
     tags = ["manual"],
-    target_compatible_with = ["@platforms//os:linux"],
 )
 
 game_simulation_test(
@@ -130,7 +98,6 @@ game_simulation_test(
     assertions = "demos/forest_motion.assertions.json",
     game = ":demo",
     script = "demos/forest_outpost.json",
-    tags = ["linux"],
 )
 
 game_demo(
@@ -139,7 +106,6 @@ game_demo(
     game = ":demo",
     script = "demos/combat_arena.json",
     tags = ["manual"],
-    target_compatible_with = ["@platforms//os:linux"],
 )
 
 game_simulation_test(
@@ -148,7 +114,6 @@ game_simulation_test(
     assertions = "demos/combat_arena.assertions.json",
     game = ":demo",
     script = "demos/combat_arena.json",
-    tags = ["linux"],
 )
 
 game_demo(
@@ -157,7 +122,6 @@ game_demo(
     game = ":demo",
     script = "demos/combat_weapons.json",
     tags = ["manual"],
-    target_compatible_with = ["@platforms//os:linux"],
 )
 
 game_simulation_test(
@@ -166,16 +130,20 @@ game_simulation_test(
     assertions = "demos/combat_weapons.assertions.json",
     game = ":demo",
     script = "demos/combat_weapons.json",
-    tags = ["linux"],
 )
 
 py_test(
     name = "combat_replay_test",
     size = "medium",
     srcs = ["tests/replay_test.py"],
-    main = "tests/replay_test.py",
-    args = ["$(rootpath :demo)", "$(rootpath demos/combat_weapons.json)"],
-    data = [":demo", "demos/combat_weapons.json"],
+    args = [
+        "$(rootpath :demo)",
+        "$(rootpath demos/combat_weapons.json)",
+    ],
+    data = [
+        "demos/combat_weapons.json",
+        ":demo",
+    ],
     legacy_create_init = 0,
-    tags = ["linux"],
+    main = "tests/replay_test.py",
 )
