@@ -154,3 +154,22 @@ fn bench_large() {
     let per_tick = start.elapsed().as_secs_f64() * 1000.0 / ticks as f64;
     println!("{} movers, {threads} threads: {per_tick:.2} ms per tick", sim.world().mover_count());
 }
+
+#[test]
+fn dig_commands_change_terrain_and_the_hash() {
+    let config = Scenario::small().config;
+    let rules = content::Content::builtin().rules;
+    let mut world = crate::World::new(config.clone(), rules.clone());
+    let mut terrain = world.terrain().clone();
+    terrain.add_rock((40, 40));
+    world.set_terrain(terrain);
+    let mut other = crate::World::new(config, rules);
+    other.set_terrain(world.terrain().clone());
+
+    let dig = crate::Command { player: crate::PlayerId(0), kind: crate::CommandKind::Dig { tile: (40, 40) } };
+    let dug = world.step(&[dig]);
+    let kept = other.step(&[]);
+    assert!(!world.terrain().is_rock((40, 40)));
+    assert!(other.terrain().is_rock((40, 40)));
+    assert_eq!(dug.first_difference(&kept).unwrap(), "tick 0: subsystem terrain");
+}

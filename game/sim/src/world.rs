@@ -9,6 +9,7 @@ use crate::messages::{Damage, Eat, EatFailed, Killed, Messages, Spawn};
 use crate::mover::{Mover, MoverRow, Movers, HUNGRY_AT, REACH};
 use crate::rng::{stream, Rng};
 use crate::spatial::{for_each_near, SpatialIndex};
+use crate::terrain::Terrain;
 use crate::timer::TimerWheel;
 
 /// Chunks are square columns of this many tiles per side, covering the full height.
@@ -61,6 +62,8 @@ pub enum CommandKind {
     SpawnMovers { center: FxVec2, count: u32 },
     /// Sets a mover's velocity, waking it.
     Impulse { mover: Id<Mover>, velocity: FxVec2 },
+    /// Digs out the rock column at this tile, if there is one.
+    Dig { tile: (i32, i32) },
 }
 
 /// One player input, scheduled for a tick by the network layer.
@@ -126,6 +129,7 @@ pub struct World {
     /// every chunk's index.
     indices: Vec<SpatialIndex>,
     ids: Ids<Mover>,
+    terrain: Terrain,
     timers: TimerWheel<Id<Mover>>,
     /// Messages created during apply, handled next tick.
     pending: Messages,
@@ -145,6 +149,11 @@ impl World {
             chunks: (0..count).map(|_| Chunk::new()).collect(),
             indices: (0..count).map(|_| SpatialIndex::default()).collect(),
             ids: Ids::default(),
+            terrain: {
+                let size = config.size();
+                let center = FxVec2::new(size.x.div_int(2), size.y.div_int(2));
+                Terrain::flat(center, size.x.min(size.y).div_int(2))
+            },
             timers: TimerWheel::default(),
             pending: Messages::default(),
             despawns: Vec::new(),
@@ -159,6 +168,16 @@ impl World {
 
     pub fn rules(&self) -> &Rules {
         &self.rules
+    }
+
+    pub fn terrain(&self) -> &Terrain {
+        &self.terrain
+    }
+
+    /// Replaces the terrain. For building a new world before tick 0; during
+    /// play, terrain changes only through commands and messages.
+    pub fn set_terrain(&mut self, terrain: Terrain) {
+        self.terrain = terrain;
     }
 
     /// The next tick to run.
@@ -207,6 +226,9 @@ impl World {
                     self.wake(chunk, slot);
                     let max_speed = self.def(self.chunks[chunk].movers.kind[slot]).max_speed;
                     self.chunks[chunk].movers.vel[slot] = clamp_speed(FxVec3::new(velocity.x, velocity.y, Fx::ZERO), max_speed);
+                }
+                CommandKind::Dig { tile } => {
+                    self.terrain.dig(tile);
                 }
             }
         }
@@ -596,6 +618,7 @@ impl World {
             ("tick", hash_of(&self.tick)),
             ("chunks", hash_of(&chunks)),
             ("ids", hash_of(&self.ids)),
+            ("terrain", hash_of(&self.terrain)),
             ("timers", hash_of(&self.timers)),
             ("pending", hash_of(&self.pending)),
         ];
@@ -614,6 +637,7 @@ impl World {
             config: self.config.clone(),
             tick: self.tick,
             ids: self.ids.to_state(),
+            terrain: self.terrain.clone(),
             timers: self.timers.to_state(),
             pending: self.pending.clone(),
             chunks: self
@@ -637,6 +661,7 @@ impl World {
         let mut world = World::new(state.config, rules);
         world.tick = state.tick;
         world.ids = Ids::from_state(&state.ids);
+        world.terrain = state.terrain;
         world.timers = timers;
         world.pending = state.pending;
         for (index, saved) in state.chunks.into_iter().enumerate() {
@@ -780,6 +805,7 @@ pub struct WorldState {
     /// The next tick to run.
     pub tick: u64,
     pub ids: IdsState,
+    pub terrain: Terrain,
     pub timers: Vec<Vec<(u64, Id<Mover>)>>,
     /// Messages created during the last apply phase, handled next tick.
     pub pending: Messages,

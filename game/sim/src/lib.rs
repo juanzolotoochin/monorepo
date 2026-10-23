@@ -18,10 +18,12 @@ pub mod hash;
 pub mod id;
 pub mod messages;
 pub mod mover;
+pub mod nav;
 pub mod rng;
 pub mod scenario;
 mod soa;
 pub mod spatial;
+pub mod terrain;
 pub mod timer;
 mod world;
 

@@ -140,6 +140,20 @@ Skipping work is the main performance lever.
   Per-type collision opt-outs (for example a spider walking over small units)
   can be added later.
 
+### Terrain (Milestone 1)
+
+Today's scenes are arenas: flat ground, raised walkable boxes, and disc-shaped
+obstacles (rocks, trees, machines). `game/sim::terrain` holds exactly that as
+simulation state, in world tiles (1 tile = 1 m), plus diggable rock columns.
+Digging is a command (later also a message) that changes the terrain and its
+hash. `game/sim::nav` is the original clearance-aware A* (half-tile grid,
+string pulling, a turning-circle planner for carts) in fixed point.
+
+Not built yet, because no current scene needs them: voxel chunks with
+multi-level walkable spans, flow fields and hierarchical A*. Each wave's
+enemies share one planned route, which is what a flow field per target would
+give at this scale.
+
 ### Logistics
 
 Items move only by haulers (no belts). Reservations use incremental counters on

@@ -24,7 +24,7 @@ mod inputs;
 
 pub use inputs::{InputLog, INPUT_FORMAT_VERSION};
 
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 
@@ -54,6 +54,7 @@ struct WorldSection {
     config: WorldConfig,
     tick: u64,
     ids: sim::id::IdsState,
+    terrain: sim::terrain::Terrain,
     timers: Vec<Vec<(u64, sim::Id<sim::Mover>)>>,
     pending: sim::messages::Messages,
 }
@@ -107,6 +108,7 @@ pub fn write(world: &World, content: &Content) -> Vec<u8> {
         config: state.config,
         tick: state.tick,
         ids: state.ids,
+        terrain: state.terrain,
         timers: state.timers,
         pending: state.pending,
     };
@@ -165,6 +167,7 @@ pub fn read_state(bytes: &[u8]) -> Result<(Header, WorldState), LoadError> {
         config: world.config,
         tick: world.tick,
         ids: world.ids,
+        terrain: world.terrain,
         timers: world.timers,
         pending: world.pending,
         chunks,
@@ -212,8 +215,8 @@ pub fn dump_ron(bytes: &[u8]) -> Result<String, LoadError> {
         out.push_str(&format!("// {name}\n{}\n\n", text.expect("save types always print")));
     };
     section("header", ron::ser::to_string_pretty(&header, pretty()));
-    let WorldState { config, tick, ids, timers, pending, chunks } = state;
-    section("world", ron::ser::to_string_pretty(&WorldSection { config, tick, ids, timers, pending }, pretty()));
+    let WorldState { config, tick, ids, terrain, timers, pending, chunks } = state;
+    section("world", ron::ser::to_string_pretty(&WorldSection { config, tick, ids, terrain, timers, pending }, pretty()));
     for (index, chunk) in chunks.iter().enumerate() {
         section(&chunk_section_name(index), ron::ser::to_string_pretty(chunk, pretty()));
     }
