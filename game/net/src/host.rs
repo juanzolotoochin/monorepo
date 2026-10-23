@@ -112,6 +112,11 @@ impl<T: Transport> Host<T> {
         &self.history
     }
 
+    /// Every closed turn: the first turn's tick and the turns.
+    pub fn turns(&self) -> (u64, &[Vec<Command>]) {
+        (self.turns_start, &self.turns)
+    }
+
     pub fn stats(&self) -> &NetStats {
         &self.stats
     }

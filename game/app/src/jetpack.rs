@@ -1,9 +1,5 @@
 //! Terrain-aware hover flight. The same controller runs for keyboard and scripted demos.
-use crate::{
-    assets::SceneLibrary,
-    gameplay::{Controls, Player},
-    navigation::{self, Disc, RADIUS},
-};
+use crate::assets::SceneLibrary;
 use bevy::prelude::*;
 
 pub const HOVER: f32 = 1.8;
@@ -42,66 +38,6 @@ pub fn height(library: &SceneLibrary, p: Vec3) -> Option<f32> {
             .max_by(f32::total_cmp),
     }
 }
-fn footprint(library: &SceneLibrary, p: Vec3) -> Option<f32> {
-    let mut top: f32 = f32::NEG_INFINITY;
-    for offset in [
-        Vec3::ZERO,
-        Vec3::X * RADIUS,
-        -Vec3::X * RADIUS,
-        Vec3::Z * RADIUS,
-        -Vec3::Z * RADIUS,
-    ] {
-        top = top.max(height(library, p + offset)?);
-    }
-    Some(top)
-}
-fn walkable(library: &SceneLibrary, a: Vec3, b: Vec3) -> bool {
-    let steps = (navigation::flat(b - a).length() / 0.1).ceil().max(1.0) as usize;
-    let Some(mut last) = footprint(library, a) else {
-        return false;
-    };
-    for i in 1..=steps {
-        let Some(next) = footprint(library, a.lerp(b, i as f32 / steps as f32)) else {
-            return false;
-        };
-        if (next - last).abs() > 0.25 {
-            return false;
-        }
-        last = next;
-    }
-    true
-}
-pub fn route(
-    library: &SceneLibrary,
-    flight: &Flight,
-    start: Vec3,
-    goal: Vec3,
-    obstacles: &[Disc],
-) -> Vec<Vec3> {
-    navigation::path_with_extent(start, goal, obstacles, library.extent(), |a, b| {
-        flight.requested || flight.airborne || walkable(library, a, b)
-    })
-}
-pub fn can_move(library: &SceneLibrary, a: Vec3, b: Vec3, flying: bool) -> bool {
-    if !flying {
-        return walkable(library, a, b);
-    }
-    // Check the swept body rather than the center so no frame can enter a wall.
-    let steps = (navigation::flat(b - a).length() / 0.05).ceil().max(1.0) as usize;
-    (0..=steps).all(|i| {
-        let p = a.lerp(b, i as f32 / steps as f32);
-        [
-            Vec3::ZERO,
-            Vec3::X * RADIUS,
-            -Vec3::X * RADIUS,
-            Vec3::Z * RADIUS,
-            -Vec3::Z * RADIUS,
-        ]
-        .iter()
-        .all(|&offset| height(library, p + offset).is_none_or(|y| y <= a.y + 0.02))
-    })
-}
-
 pub fn scene_changed(
     mut commands: Commands,
     library: Res<SceneLibrary>,
@@ -205,62 +141,26 @@ pub fn scene_changed(
     }
 }
 
+/// Mirrors the avatar's flight for the HUD, sound and exhaust. The flight
+/// itself is simulated (`game/sim::settlement::avatar`).
 pub fn update(
-    keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
-    library: Res<SceneLibrary>,
+    game: Res<crate::lockstep::Game>,
     mut flight: ResMut<Flight>,
     sound: Res<crate::sound::Sound>,
-    controls: Res<Controls>,
-    mut player: Single<&mut Transform, (With<Player>, Without<Exhaust>)>,
     mut exhaust: Query<(&mut Transform, &mut Visibility), With<Exhaust>>,
 ) {
-    if keys.pressed(KeyCode::Space) {
-        flight.requested = true;
-    }
-    if keys.just_released(KeyCode::Space) {
-        flight.requested = false;
-    }
-    if keys.just_pressed(KeyCode::KeyR) {
-        flight.requested = false;
-        flight.airborne = false;
-        player.translation = Vec3::from_array(library.scenes[library.current].scene.spawn);
-    }
-    let ground = height(&library, player.translation);
-    let landing = footprint(&library, player.translation)
-        .filter(|y| ground.is_some_and(|g| (*y - g).abs() < 0.01));
-    if let Some(y) = ground {
-        flight.support = y;
-    }
-    let active = flight.requested || (flight.airborne && landing.is_none());
-    let direction = controls
-        .route
-        .first()
-        .map(|p| navigation::flat(*p - player.translation).normalize_or_zero())
-        .unwrap_or(controls.velocity.normalize_or_zero());
-    let mut target = ground.unwrap_or(flight.support);
-    if active {
-        // Look ahead far enough to climb at walking/running speed; pause at a face if needed.
-        for i in 0..=20 {
-            let p = player.translation + direction * (i as f32 * 0.1);
-            for offset in [
-                Vec3::ZERO,
-                Vec3::X * RADIUS,
-                -Vec3::X * RADIUS,
-                Vec3::Z * RADIUS,
-                -Vec3::Z * RADIUS,
-            ] {
-                if let Some(y) = height(&library, p + offset) {
-                    target = target.max(y);
-                }
-            }
-        }
-        target += HOVER;
-    }
+    let (Some(current), Some(index)) = (&game.current, game.player()) else { return };
+    let avatar = &current.agents[index as usize].avatar;
+    let climbing = game
+        .previous
+        .as_ref()
+        .and_then(|p| p.agents.get(index as usize))
+        .is_some_and(|before| avatar.height > before.avatar.height);
+    flight.requested = avatar.flight.requested;
+    flight.airborne = avatar.flight.airborne;
+    flight.support = avatar.flight.support.to_f32();
     let dt = time.delta_secs().min(0.1);
-    let delta = (target - player.translation.y).clamp(-3.0 * dt, 5.5 * dt);
-    player.translation.y += delta;
-    flight.airborne = active || ground.is_none_or(|y| player.translation.y > y + 0.01);
     flight.sound_timer -= dt;
     if flight.airborne && flight.sound_timer <= 0.0 {
         sound.play(crate::sound::Cue::Jetpack);
@@ -270,53 +170,8 @@ pub fn update(
         flight.sound_timer = 0.0;
     }
     for (mut transform, mut visibility) in &mut exhaust {
-        *visibility = if flight.airborne {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
-        transform.scale.y =
-            0.4 + 0.1 * (time.elapsed_secs() * 35.0).sin() + if delta > 0.0 { 0.25 } else { 0.0 };
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    fn lab() -> SceneLibrary {
-        let mut l = SceneLibrary::new();
-        l.current = 3;
-        l
-    }
-    #[test]
-    fn ground_routes_cannot_cross_walls_or_void() {
-        let l = lab();
-        let f = Flight::default();
-        let a = Vec3::new(-5.0, 0.0, 3.0);
-        assert!(!route(&l, &f, a, Vec3::new(-4.0, 0.0, 0.0), &[]).is_empty());
-        assert!(route(&l, &f, a, Vec3::new(0.0, 0.0, 2.0), &[]).is_empty());
-        assert!(route(&l, &f, a, Vec3::new(2.0, 0.0, 2.0), &[]).is_empty());
-        let f = Flight {
-            requested: true,
-            ..default()
-        };
-        assert!(!route(&l, &f, a, Vec3::new(5.0, 0.0, 2.0), &[]).is_empty());
-    }
-    #[test]
-    fn swept_body_waits_until_above_wall() {
-        let l = lab();
-        assert!(!can_move(
-            &l,
-            Vec3::new(-2.5, 1.8, 2.0),
-            Vec3::new(-2.1, 1.8, 2.0),
-            true
-        ));
-        assert!(can_move(
-            &l,
-            Vec3::new(-2.5, 2.1, 2.0),
-            Vec3::new(-2.1, 2.1, 2.0),
-            true
-        ));
+        *visibility = if flight.airborne { Visibility::Inherited } else { Visibility::Hidden };
+        transform.scale.y = 0.4 + 0.1 * (time.elapsed_secs() * 35.0).sin() + if climbing { 0.25 } else { 0.0 };
     }
 }
 

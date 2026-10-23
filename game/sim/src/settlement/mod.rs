@@ -31,7 +31,7 @@ use crate::hash::{StateHash, StateHasher};
 use crate::nav;
 use crate::terrain::{Disc, Terrain};
 
-pub use combat::{CombatMetrics, DefenderState, Event, Impact, Pinned, Projectile, SpentProjectile, Threat, WaveState};
+pub use combat::{CombatMetrics, DefenderState, Event, Impact, Pinned, Projectile, SpentProjectile, Threat, TossEnd, WaveState};
 pub use haulers::{AgentState, Phase};
 
 pub type ItemIx = u16;

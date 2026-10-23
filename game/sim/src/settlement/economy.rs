@@ -265,6 +265,17 @@ impl Settlement {
         self.transfers.insert(id, Transfer { id, item, from, to, start, end, born: tick, arrival: tick + TRANSFER_FLIGHT_TICKS });
     }
 
+    /// Commands: adds stock to a depot, within its unreserved space. For
+    /// scripted demos and tests.
+    pub fn add_stock(&mut self, depot: usize, item: usize, units: u32) {
+        let (Some(d), true) = (self.depots.get_mut(depot), item < self.items.len()) else { return };
+        if units == 0 || units > d.free() {
+            return;
+        }
+        d.stock[item] += units;
+        self.accounts[item].generated += units as u64;
+    }
+
     /// Commands: a player switches a haul link on or off.
     pub fn set_link(&mut self, link: usize, enabled: bool) {
         if let Some(l) = self.links.get_mut(link) {

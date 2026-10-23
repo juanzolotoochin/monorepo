@@ -177,6 +177,15 @@ pub enum Event {
     Breach { position: FxVec2 },
     Produced { producer: u16 },
     Equipped { agent: AgentIx },
+    /// A pile-lab unit left `from` and lands at `to` after `ticks`.
+    PileToss { material: u8, from: TossEnd, to: TossEnd, ticks: u64 },
+}
+
+/// One end of a pile-lab toss: a unit slot in a pile, or in the carrier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TossEnd {
+    Pile { id: u32, slot: u32, position: FxVec2 },
+    Cargo { slot: u32 },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

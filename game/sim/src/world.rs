@@ -87,6 +87,8 @@ pub enum CommandKind {
     Pile { agent: u16, action: crate::settlement::piles::PileAction, pace: Fx, approach: Option<FxVec2> },
     /// Pile lab: a dispenser adds units to its output pile.
     Dispense { dispenser: u32, units: u32 },
+    /// Adds stock to a settlement depot (scripted demos and tests).
+    AddStock { depot: u16, item: u16, units: u32 },
     /// Memory trial: start recording, deploy the ghost, or forget it.
     MemoryRecord,
     MemoryDeploy,
@@ -344,7 +346,7 @@ impl World {
                 }
                 CommandKind::Respawn { agent } => {
                     if let Some(s) = &mut self.settlement {
-                        s.respawn(agent as usize);
+                        s.respawn(agent as usize, &mut self.terrain);
                     }
                 }
                 CommandKind::Pile { agent, action, pace, approach } => {
@@ -355,6 +357,11 @@ impl World {
                 CommandKind::Dispense { dispenser, units } => {
                     if let Some(s) = &mut self.settlement {
                         s.dispense(dispenser, units);
+                    }
+                }
+                CommandKind::AddStock { depot, item, units } => {
+                    if let Some(s) = &mut self.settlement {
+                        s.add_stock(depot as usize, item as usize, units);
                     }
                 }
                 CommandKind::MemoryRecord => {

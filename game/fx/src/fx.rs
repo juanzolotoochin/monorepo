@@ -147,6 +147,13 @@ impl Fx {
         Fx(trig::atan2_bits(y.0, x.0))
     }
 
+    /// Rounds a float to the nearest 1/1024. For turning view-side numbers
+    /// (player input, compiled scene assets) into simulation values before
+    /// they enter the simulation; never used inside it.
+    pub fn quantize(v: f32) -> Fx {
+        Fx::from_ratio((v as f64 * 1024.0).round() as i64, 1024)
+    }
+
     /// For the view only. The simulation must never convert to floating point.
     #[inline]
     pub fn to_f32(self) -> f32 {

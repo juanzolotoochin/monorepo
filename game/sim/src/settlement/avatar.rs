@@ -275,8 +275,16 @@ impl Settlement {
         }
     }
 
-    /// Commands: puts the avatar back at the scene's spawn point.
-    pub fn respawn(&mut self, agent: usize) {
+    /// Commands: puts the avatar back at the scene's spawn point, and
+    /// restarts the memory trial (closing its door again).
+    pub fn respawn(&mut self, agent: usize, terrain: &mut Terrain) {
+        if let Some(m) = self.memory.as_mut() {
+            if m.unlocked {
+                terrain.obstacles.extend_from_slice(&m.doors);
+                terrain.revision += 1;
+            }
+            *m = super::memory::Memory::new(m.trial, m.center, std::mem::take(&mut m.doors));
+        }
         let (spawn, height) = (self.spawn, self.spawn_height);
         let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
         a.position = spawn;

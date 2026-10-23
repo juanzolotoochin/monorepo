@@ -3,7 +3,7 @@ mod boulder;
 mod piles;
 mod style;
 pub use boulder::generate_boulder;
-pub use gameplay_core::Scenario;
+pub use content::scenario::Scenario;
 pub use piles::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -482,16 +482,18 @@ impl ScenePack {
         }
         if let Some(scenario) = &self.scene.scenario {
             scenario.validate()?;
-            let obstacles = self
+            // The scenario must build a world: no hauler inside an obstacle,
+            // every dock reachable.
+            let obstacles: Vec<_> = self
                 .environment
                 .iter()
                 .flat_map(|e| e.obstacles.iter())
-                .map(|(p, r)| gameplay_core::navigation::Disc {
-                    center: [p[0], p[2]],
-                    radius: *r,
+                .map(|(p, r)| sim::terrain::Disc {
+                    center: fx::FxVec2::new(fx::Fx::quantize(p[0]), fx::Fx::quantize(p[2])),
+                    radius: fx::Fx::quantize(*r),
                 })
                 .collect();
-            gameplay_core::Simulation::new(scenario.clone(), obstacles)?;
+            sim::World::new_settlement(0, content::Content::builtin().rules, scenario, &obstacles)?;
             let ids: std::collections::BTreeSet<_> =
                 self.skins.iter().map(|s| s.id.as_str()).collect();
             for id in scenario

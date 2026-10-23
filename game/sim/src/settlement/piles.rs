@@ -11,6 +11,7 @@ use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
 use super::avatar::{Intent, BODY_RADIUS};
+use super::combat::{Event, TossEnd};
 use super::haulers::AgentState;
 use super::{AgentIx, Settlement};
 use crate::messages::PileStep;
@@ -442,6 +443,12 @@ impl Settlement {
 
     /// Moves one unit of the job (or all of it at pace zero).
     pub(crate) fn pile_step(&mut self, tick: u64, terrain: &Terrain) {
+        let mut tosses = Vec::new();
+        self.pile_step_inner(tick, terrain, &mut tosses);
+        self.events.extend(tosses);
+    }
+
+    fn pile_step_inner(&mut self, tick: u64, terrain: &Terrain, tosses: &mut Vec<Event>) {
         let Some(lab) = self.piles.as_mut() else { return };
         let Some(mut job) = lab.job.clone() else { return };
         let result = (|| -> Result<Option<String>, &'static str> {
@@ -492,23 +499,41 @@ impl Settlement {
                 job.remaining = Some(amount);
                 job.planned = amount;
             }
-            match job.action {
+            let material = lab.cargo.material;
+            let carried = lab.cargo.units;
+            let (from, to, material) = match job.action {
                 PileAction::Pickup(id) | PileAction::PickupAmount(id, _) => {
+                    let pile = lab.piles.get(&id).ok_or("Pile disappeared")?;
+                    let (slot, material, position) = (pile.units.checked_sub(1).ok_or("Pile is empty")?, pile.material, pile.position);
                     lab.pickup_amount(id, 1)?;
+                    (TossEnd::Pile { id, slot, position }, TossEnd::Cargo { slot: carried }, material)
                 }
                 PileAction::Deposit(id) => {
+                    let pile = lab.piles.get(&id).ok_or("Pile disappeared")?;
+                    let (slot, position) = (pile.units, pile.position);
                     lab.deposit_amount(id, 1)?;
+                    (TossEnd::Cargo { slot: carried - 1 }, TossEnd::Pile { id, slot, position }, material.expect("deposited"))
                 }
-                PileAction::Drop(p) => match job.destination {
-                    Some(id) => {
-                        lab.deposit_amount(id, 1)?;
-                    }
-                    None => job.destination = Some(lab.drop_new_amount(p, 1)?),
-                },
-            }
+                PileAction::Drop(p) => {
+                    let (id, slot) = match job.destination {
+                        Some(id) => {
+                            let slot = lab.piles.get(&id).ok_or("Pile disappeared")?.units;
+                            lab.deposit_amount(id, 1)?;
+                            (id, slot)
+                        }
+                        None => {
+                            let id = lab.drop_new_amount(p, 1)?;
+                            job.destination = Some(id);
+                            (id, 0)
+                        }
+                    };
+                    (TossEnd::Cargo { slot: carried - 1 }, TossEnd::Pile { id, slot, position: p }, material.expect("dropped"))
+                }
+            };
             // The unit flies for 0.85 × the pace, clamped to 0.3–1.0 s.
             let flight = (job.pace.clamp(9, 30) * 85).div_ceil(100);
             lab.in_flight.push(tick + flight);
+            tosses.push(Event::PileToss { material, from, to, ticks: flight });
             job.transferred += 1;
             *job.remaining.as_mut().expect("set above") -= 1;
             job.next_toss = tick + job.pace;

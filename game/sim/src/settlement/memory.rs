@@ -30,6 +30,8 @@ pub struct Sample {
 pub struct Memory {
     /// Whether this scene has the pads, door and core.
     pub trial: bool,
+    /// The arena center the pads and core are placed around.
+    pub center: FxVec2,
     pub pads: Vec<FxVec2>,
     pub core: FxVec2,
     /// Obstacles that open with the door.
@@ -51,6 +53,7 @@ impl Memory {
         let at = |x: i32, y: i32| FxVec2::new(center.x + Fx::from_int(x), center.y + Fx::from_int(y));
         Memory {
             trial,
+            center,
             pads: vec![at(-4, -2), at(-1, 3)],
             core: at(5, 0),
             doors,

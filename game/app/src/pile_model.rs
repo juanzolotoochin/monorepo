@@ -1,6 +1,8 @@
-//! Quantity bookkeeping without rendering, input, or frame timing.
+//! The view's pile quantities, mirrored from the simulation
+//! (`game/sim::settlement::piles`, which owns the rules), and the mound
+//! packing used to draw them.
 use std::collections::BTreeMap;
-use voxel_assets::{Mineral, PileLayout, MAX_PILES, PILE_CAPACITY};
+use voxel_assets::{Mineral, PileLayout, PILE_CAPACITY};
 
 pub type PileId = u32;
 #[derive(Clone, Debug)]
@@ -21,200 +23,23 @@ pub struct Stock {
     pub piles: BTreeMap<PileId, Pile>,
     pub cargo: Cargo,
     pub created: u64,
-    next_id: PileId,
 }
 impl Stock {
+    /// The layout's starting piles, before the first simulated tick.
     pub fn new(layout: &PileLayout) -> Self {
-        // Layouts are validated by the asset compiler and again on decoding.
-        let mut stock = Self {
-            piles: BTreeMap::new(),
-            cargo: Cargo {
-                material: None,
-                units: 0,
-                capacity: layout.capacity,
-            },
-            created: 0,
-            next_id: 0,
-        };
-        for d in &layout.dispensers {
-            stock.insert(d.material, [d.output[0], d.output[2]], 0, true);
+        let mut piles = BTreeMap::new();
+        for (id, d) in layout.dispensers.iter().enumerate() {
+            piles.insert(id as PileId, Pile { material: d.material, position: [d.output[0], d.output[2]], units: 0, source: true });
         }
-        for p in &layout.piles {
-            stock.insert(p.material, [p.position[0], p.position[2]], p.units, false);
-            stock.created += u64::from(p.units);
+        let first = layout.dispensers.len() as PileId;
+        for (i, p) in layout.piles.iter().enumerate() {
+            piles.insert(first + i as PileId, Pile { material: p.material, position: [p.position[0], p.position[2]], units: p.units, source: false });
         }
-        stock
-    }
-    fn insert(
-        &mut self,
-        material: Mineral,
-        position: [f32; 2],
-        units: u32,
-        source: bool,
-    ) -> PileId {
-        let id = self.next_id;
-        self.next_id += 1;
-        self.piles.insert(
-            id,
-            Pile {
-                material,
-                position,
-                units,
-                source,
-            },
-        );
-        id
-    }
-    pub fn add(&mut self, id: PileId, requested: u32) -> Result<u32, &'static str> {
-        let pile = self.piles.get_mut(&id).ok_or("Pile no longer exists")?;
-        if !pile.source {
-            return Err("Only dispensers create mineral");
-        }
-        let amount = requested.min(PILE_CAPACITY - pile.units);
-        if amount == 0 {
-            return Err("Output pile is full (96 units)");
-        }
-        pile.units += amount;
-        self.created += u64::from(amount);
-        Ok(amount)
-    }
-    pub fn pickup(&mut self, id: PileId) -> Result<u32, &'static str> {
-        let pile = self.piles.get(&id).ok_or("Pile no longer exists")?;
-        let amount = pile.units.min(self.cargo.capacity - self.cargo.units);
-        self.pickup_amount(id, amount)
-    }
-    /// Programmatic requests are exact: rejected requests leave all quantities unchanged.
-    pub fn pickup_amount(&mut self, id: PileId, amount: u32) -> Result<u32, &'static str> {
-        let pile = self.piles.get_mut(&id).ok_or("Pile no longer exists")?;
-        if self.cargo.material.is_some_and(|m| m != pile.material) {
-            return Err("Unload before collecting a different mineral");
-        }
-        if amount == 0 {
-            return Err("No units available or carrier full");
-        }
-        if amount > pile.units {
-            return Err("Requested quantity exceeds pile stock");
-        }
-        if amount > self.cargo.capacity - self.cargo.units {
-            return Err("Requested quantity exceeds free carrying capacity");
-        }
-        self.cargo.material = Some(pile.material);
-        self.cargo.units += amount;
-        pile.units -= amount;
-        if pile.units == 0 && !pile.source {
-            self.piles.remove(&id);
-        }
-        Ok(amount)
-    }
-    pub fn deposit(&mut self, id: PileId) -> Result<u32, &'static str> {
-        let pile = self.piles.get(&id).ok_or("Pile no longer exists")?;
-        self.deposit_amount(id, self.cargo.units.min(PILE_CAPACITY - pile.units))
-    }
-    pub fn deposit_amount(&mut self, id: PileId, amount: u32) -> Result<u32, &'static str> {
-        let material = self.cargo.material.ok_or("Carrier is empty")?;
-        let pile = self.piles.get_mut(&id).ok_or("Pile no longer exists")?;
-        if pile.material != material {
-            return Err("Different minerals stay in separate piles");
-        }
-        if amount == 0 || amount > self.cargo.units || amount > PILE_CAPACITY - pile.units {
-            return Err("Requested deposit does not fit cargo or pile capacity");
-        }
-        pile.units += amount;
-        self.cargo.units -= amount;
-        if self.cargo.units == 0 {
-            self.cargo.material = None;
-        }
-        Ok(amount)
-    }
-    pub fn drop_new(&mut self, position: [f32; 2]) -> Result<PileId, &'static str> {
-        self.drop_new_amount(position, self.cargo.units)
-    }
-    pub fn drop_new_amount(
-        &mut self,
-        position: [f32; 2],
-        amount: u32,
-    ) -> Result<PileId, &'static str> {
-        let material = self.cargo.material.ok_or("Carrier is empty")?;
-        if position.iter().any(|v| !v.is_finite() || v.abs() > 6.5) {
-            return Err("Drop position must be on the deck");
-        }
-        if self.piles.len() >= MAX_PILES {
-            return Err("Pile limit reached; deposit into an existing pile");
-        }
-        if amount == 0 || amount > self.cargo.units {
-            return Err("Requested quantity exceeds cargo");
-        }
-        let id = self.insert(material, position, amount, false);
-        self.cargo.units -= amount;
-        if self.cargo.units == 0 {
-            self.cargo.material = None;
-        }
-        Ok(id)
+        let created = layout.piles.iter().map(|p| u64::from(p.units)).sum();
+        Self { piles, cargo: Cargo { material: None, units: 0, capacity: layout.capacity }, created }
     }
     pub fn total(&self) -> u64 {
         self.piles.values().map(|p| u64::from(p.units)).sum::<u64>() + u64::from(self.cargo.units)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use voxel_assets::{DispenserLayout, PileSeed};
-    fn stock() -> Stock {
-        Stock::new(&PileLayout {
-            capacity: 12,
-            dispensers: vec![DispenserLayout {
-                material: Mineral::AmberOre,
-                position: [-4.0, 0.0, 0.0],
-                output: [-2.0, 0.0, 0.0],
-            }],
-            piles: vec![PileSeed {
-                material: Mineral::BlueCrystal,
-                position: [3.0, 0.0, 0.0],
-                units: 24,
-            }],
-        })
-    }
-    #[test]
-    fn transfers_conserve_units_respect_capacity_and_keep_materials_separate() {
-        let mut s = stock();
-        assert_eq!(s.add(0, 20), Ok(20));
-        assert_eq!(s.pickup(0), Ok(12));
-        assert_eq!(s.piles[&0].units, 8);
-        let before = s.total();
-        assert!(s.pickup(1).is_err());
-        assert!(s.deposit(1).is_err());
-        assert_eq!(s.total(), before);
-        let destination = s.drop_new([1.0, 2.0]).unwrap();
-        assert_eq!(s.piles[&destination].units, 12);
-        assert_eq!(s.cargo.units, 0);
-        assert_eq!(s.pickup(0), Ok(8));
-        assert_eq!(s.deposit(destination), Ok(8));
-        assert_eq!(s.piles[&destination].units, 20);
-        assert!(s.deposit(destination).is_err());
-        assert_eq!(s.total(), s.created);
-    }
-    #[test]
-    fn partial_transfers_and_empty_pile_removal_never_destroy_material() {
-        let mut s = stock();
-        s.add(0, 200).unwrap();
-        assert_eq!(s.piles[&0].units, PILE_CAPACITY);
-        s.pickup(0).unwrap();
-        let id = s.drop_new([1.0, 2.0]).unwrap();
-        s.add(0, 200).unwrap();
-        s.pickup(id).unwrap();
-        assert!(!s.piles.contains_key(&id));
-        assert!(s.deposit(0).is_err());
-        assert_eq!(s.cargo.units, 12);
-        let id = s.drop_new([1.0, 2.0]).unwrap();
-        s.pickup(0).unwrap();
-        s.deposit(id).unwrap();
-        s.pickup(id).unwrap();
-        // Source has room for twelve; deposit part, then collect remaining cargo.
-        s.add(0, 7).unwrap();
-        assert_eq!(s.deposit(0), Ok(5));
-        assert_eq!(s.cargo.units, 7);
-        assert_eq!(s.total(), s.created);
     }
 }
 
