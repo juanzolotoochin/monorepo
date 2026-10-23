@@ -421,3 +421,16 @@ The enlarged Brasswood map uses a 12-meter navigation half-width. Landed arrows
 attach to a ghoul's rig and follow its movement and collapse; the corpse and its
 arrows fade over three seconds. Temporary fade materials are removed before
 rigs are reused, and pooled rig visibility propagates through every bone.
+
+Brasswood uses slate and warm timber workshops, mixed evergreen/broadleaf groves,
+flower clusters and connected dirt tracks. Foresters gather locally into the
+timber yard; Bramble carries lumber across the camp to the mill. Backpacks use
+compact upright bundles, while the cart keeps full-sized horizontal loads.
+Carrier packing and trailer clearance are scenario settings, not skin-name checks.
+
+Hover a workshop for its description, recipe, cycle time and live production
+status. Hover the ballista for ammunition, damage, firing interval and range.
+Building cards stay hidden otherwise. Controlled demos can pin the same card
+with `{"op":"inspect_building","building":"sawmill"}` (or `cartworks` /
+`watchtower`); pass `"building":null` to restore normal mouse hover. The forest
+video demonstrates both workshop cards after the player clears the unloading dock.

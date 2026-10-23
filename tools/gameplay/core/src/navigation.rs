@@ -94,6 +94,9 @@ fn nearest_visible(
 pub fn clear(a: Point, b: Point, obstacles: &[Disc], radius: f32) -> bool {
     clear_inner(V2(a[0], a[1]), V2(b[0], b[1]), obstacles, radius, EDGE)
 }
+pub fn clear_with_bounds(a: Point, b: Point, obstacles: &[Disc], radius: f32, edge: f32) -> bool {
+    clear_inner(V2(a[0], a[1]), V2(b[0], b[1]), obstacles, radius, edge)
+}
 pub fn path(start: Point, goal: Point, obstacles: &[Disc], radius: f32) -> Vec<Point> {
     path_with(start, goal, obstacles, radius, |_, _| true)
 }
@@ -211,4 +214,96 @@ pub fn path_with_bounds(
 
 pub fn distance(a: Point, b: Point) -> f32 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
+}
+
+/// Plan a trailer-safe departure. Sharp changes of direction use a sampled
+/// turning circle before joining the ordinary obstacle route; no reverse step
+/// is allowed through the trailer. The trailer's swept path is checked too.
+pub fn articulated_path(
+    start: Point,
+    goal: Point,
+    heading: f32,
+    trailer: Point,
+    hitch: f32,
+    obstacles: &[Disc],
+    radius: f32,
+    trailer_radius: f32,
+    edge: f32,
+) -> Vec<Point> {
+    let direct = path_with_bounds(start, goal, obstacles, radius, edge, |_, _| true);
+    if distance(start, goal) < 0.1 {
+        return direct;
+    }
+    let Some(first) = direct.first() else {
+        return direct;
+    };
+    let angle = |from: f32, to: f32| {
+        (to - from + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+    };
+    let bearing = |a: Point, b: Point| (b[0] - a[0]).atan2(b[1] - a[1]);
+    if angle(heading, bearing(start, *first)).abs() < 0.9 {
+        return direct;
+    }
+    let turn_radius = hitch.max(1.2);
+    let mut best = Vec::new();
+    let mut best_length = f32::INFINITY;
+    for side in [1_f32, -1.] {
+        for sixths in 2..=10 {
+            let turn = sixths as f32 * std::f32::consts::PI / 6.;
+            let steps = (turn * turn_radius / 0.15).ceil() as usize;
+            let mut route = Vec::with_capacity(steps + 8);
+            let mut previous = start;
+            let mut cart = trailer;
+            let mut valid = true;
+            for i in 1..=steps {
+                let theta = turn * i as f32 / steps as f32;
+                let forward = turn_radius * theta.sin();
+                let sideways = turn_radius * (1. - theta.cos()) * side;
+                let next = [
+                    start[0] + heading.sin() * forward + heading.cos() * sideways,
+                    start[1] + heading.cos() * forward - heading.sin() * sideways,
+                ];
+                let d = distance(cart, next);
+                let next_cart = if d > hitch {
+                    [
+                        next[0] + (cart[0] - next[0]) * hitch / d,
+                        next[1] + (cart[1] - next[1]) * hitch / d,
+                    ]
+                } else {
+                    cart
+                };
+                if !clear_with_bounds(previous, next, obstacles, radius, edge)
+                    || !clear_with_bounds(cart, next_cart, obstacles, trailer_radius, edge)
+                    || distance(next, next_cart) < radius + trailer_radius + 0.05
+                {
+                    valid = false;
+                    break;
+                }
+                route.push(next);
+                previous = next;
+                cart = next_cart;
+            }
+            if !valid {
+                continue;
+            }
+            let tail = path_with_bounds(previous, goal, obstacles, radius, edge, |_, _| true);
+            let Some(next) = tail.first() else {
+                continue;
+            };
+            if angle(heading + side * turn, bearing(previous, *next)).abs() > 0.75 {
+                continue;
+            }
+            let mut length = turn * turn_radius;
+            for p in &tail {
+                length += distance(previous, *p);
+                previous = *p;
+            }
+            if length < best_length {
+                route.extend(tail);
+                best = route;
+                best_length = length;
+            }
+        }
+    }
+    best
 }

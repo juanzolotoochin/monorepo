@@ -78,6 +78,7 @@ impl Rig {
         world: &mut World,
         position: Vec3,
         heading: f32,
+        roll: f32,
         scale: f32,
         travel: f32,
         activity: f32,
@@ -86,7 +87,7 @@ impl Rig {
         let mut writes = 0;
         let mut skips = 0;
         let root = Transform::from_translation(position)
-            .with_rotation(Quat::from_rotation_y(heading))
+            .with_rotation(Quat::from_rotation_y(heading) * Quat::from_rotation_z(roll))
             .with_scale(Vec3::splat(scale));
         if *world.get::<Transform>(self.root).unwrap() != root {
             *world.get_mut::<Transform>(self.root).unwrap() = root;

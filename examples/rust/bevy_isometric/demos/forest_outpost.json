@@ -4,7 +4,7 @@
   "fps": 30,
   "width": 1440,
   "height": 960,
-  "max_frames": 2400,
+  "max_frames": 3300,
   "steps": [
     {
       "op": "wait",
@@ -29,8 +29,15 @@
       "deposit": true
     },
     {
+      "op": "walk",
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
       "op": "wait",
-      "frames": 1200
+      "frames": 1950
     },
     {
       "op": "assert_settlement",
@@ -38,6 +45,26 @@
       "cycles": 5,
       "equipped": 1,
       "kills": 4
+    },
+    {
+      "op": "inspect_building",
+      "building": "sawmill"
+    },
+    {
+      "op": "wait",
+      "frames": 90
+    },
+    {
+      "op": "inspect_building",
+      "building": "cartworks"
+    },
+    {
+      "op": "wait",
+      "frames": 90
+    },
+    {
+      "op": "inspect_building",
+      "building": null
     },
     {
       "op": "inspect"

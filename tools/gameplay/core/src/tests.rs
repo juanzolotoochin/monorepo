@@ -12,6 +12,8 @@ fn depot(id: &str, position: [f32; 2], capacity: u32, stock: Vec<Stack>) -> Depo
         position,
         capacity,
         stock,
+        stock_anchor: [0., 0.08, -0.6],
+        stock_layout: stock_layout(),
     }
 }
 fn agent(id: &str) -> Agent {
@@ -26,6 +28,7 @@ fn agent(id: &str) -> Agent {
         capacity: 3,
         links: vec!["wood".into()],
         transfer_seconds: 0.1,
+        cargo_layout: CargoLayout::default(),
         cargo_anchor: [0.0, 0.5, -0.2],
         equipment: None,
     }
@@ -127,11 +130,14 @@ fn recipes_and_equipment_produce_a_cart_then_upgrade_real_transport_capacity() {
         item: "cart".into(),
         skin: "cart".into(),
         capacity: 8,
+        radius: 0.7,
         speed_factor: 0.9,
         offset: [0.0, 0.0, -1.1],
+        cargo_layout: CargoLayout::default(),
         cargo_anchor: [0.0, 0.6, 0.0],
     });
     config.producers.push(Producer {
+        description: String::new(),
         radius: 0.,
         id: "factory".into(),
         label: "Factory".into(),
@@ -170,6 +176,7 @@ fn processing_reserves_output_space_and_defense_cannot_fire_free_ammunition() {
     let mut config = scenario();
     config.agents.clear();
     config.producers.push(Producer {
+        description: String::new(),
         radius: 0.,
         id: "mill".into(),
         label: "Mill".into(),
@@ -184,6 +191,8 @@ fn processing_reserves_output_space_and_defense_cannot_fire_free_ammunition() {
     });
     config.depots[4].capacity = 4;
     config.defenders.push(Defender {
+        description: String::new(),
+        label: String::new(),
         radius: 0.,
         id: "turret".into(),
         position: [3.0, 2.0],
@@ -323,4 +332,88 @@ fn larger_scenes_route_around_obstacles_without_expanding_legacy_bounds() {
     assert_eq!(route.last(), Some(&[11., 0.]));
     assert!(route.iter().flatten().all(|v| v.abs() <= 12.));
     assert!(path_with_bounds([0., 0.], [25., 0.], &[], 0.2, 12., |_, _| true).is_empty());
+}
+
+#[test]
+fn opposing_haulers_pass_without_body_overlap_and_clear_the_docks() {
+    let mut config = scenario();
+    config.agents.truncate(2);
+    config.agents[0].position = [-2., 0.];
+    config.agents[1].position = [2., 0.];
+    config.agents[1].links = vec!["return_iron".into()];
+    config.depots[1].stock = vec![stack("iron", 12)];
+    config.links.push(HaulLink {
+        id: "return_iron".into(),
+        from: "mill".into(),
+        to: "forest".into(),
+        item: "iron".into(),
+        target: 12,
+        priority: 1,
+    });
+    let mut sim = Simulation::new(config, vec![]).unwrap();
+    for _ in 0..3600 {
+        sim.advance(1. / 60.).unwrap();
+        let a = &sim.agents["a"];
+        let b = &sim.agents["b"];
+        assert!(
+            navigation::distance(a.position, b.position) >= 0.36,
+            "haulers overlapped at tick {}",
+            sim.tick
+        );
+        sim.validate_state().unwrap();
+    }
+    assert!(sim.depots["forest"].units("iron") >= 9);
+    assert!(sim.depots["mill"].units("wood") >= 9);
+    assert!(sim.metrics.avoidance_steers > 0);
+}
+
+#[test]
+fn cargo_layout_validation_rejects_invalid_divisors_and_nonfinite_offsets() {
+    let mut config = scenario();
+    config.agents[0].cargo_layout.columns = 0;
+    assert!(config.validate().is_err());
+    config.agents[0].cargo_layout = CargoLayout::default();
+    config.depots[0].stock_anchor[0] = f32::NAN;
+    assert!(config.validate().is_err());
+    let layout = CargoLayout::default();
+    let offsets: Vec<_> = (0..8).map(|i| layout.offset(i)).collect();
+    for (i, p) in offsets.iter().enumerate() {
+        assert!(p[0].abs() <= 0.1 && p[2].abs() <= 0.1);
+        assert!(!offsets[..i].contains(p));
+    }
+}
+
+#[test]
+fn cart_reversal_uses_a_forward_arc_and_keeps_the_animal_out_of_the_trailer() {
+    let hitch = 1.85;
+    let mut body = [0., 0.];
+    let mut trailer = [0., -hitch];
+    let route =
+        navigation::articulated_path(body, [0., -6.], 0., trailer, hitch, &[], 0.75, 0.7, 12.);
+    assert!(route.len() > 10, "reversal must include a turn");
+    assert!(route[0][1] > 0., "start forward, never through the cart");
+    for next in route {
+        let distance = navigation::distance(body, next);
+        let steps = (distance / 0.02).ceil().max(1.) as u32;
+        let start = body;
+        for n in 1..=steps {
+            let f = n as f32 / steps as f32;
+            body = [
+                start[0] + (next[0] - start[0]) * f,
+                start[1] + (next[1] - start[1]) * f,
+            ];
+            let d = navigation::distance(body, trailer);
+            if d > hitch {
+                trailer = [
+                    body[0] + (trailer[0] - body[0]) * hitch / d,
+                    body[1] + (trailer[1] - body[1]) * hitch / d,
+                ];
+            }
+            assert!(
+                navigation::distance(body, trailer) >= 1.45,
+                "animal clipped its cart"
+            );
+        }
+    }
+    assert_eq!(body, [0., -6.]);
 }

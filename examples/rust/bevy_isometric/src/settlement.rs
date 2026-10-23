@@ -21,6 +21,7 @@ pub struct Settlement {
     hit_until: BTreeMap<u64, u64>,
     blockers: Vec<Entity>,
     pub notice: String,
+    pub inspection: Option<String>,
 }
 struct Corpse {
     skin: String,
@@ -32,6 +33,7 @@ struct Corpse {
 }
 #[derive(Component)]
 pub struct Caption {
+    building: bool,
     position: Vec3,
     detail: String,
     units: u32,
@@ -40,6 +42,7 @@ struct View {
     skin: String,
     position: Vec3,
     heading: f32,
+    roll: f32,
     scale: f32,
     travel: f32,
     activity: f32,
@@ -51,6 +54,7 @@ impl View {
             skin: skin.into(),
             position: Vec3::new(p[0], 0., p[1]),
             heading: 0.,
+            roll: 0.,
             scale: 1.,
             travel: 0.,
             activity: 0.,
@@ -78,6 +82,7 @@ pub fn setup(world: &mut World) {
     }
     state.attached.clear();
     state.hit_until.clear();
+    state.inspection = None;
     state.last_sound = 0;
     state.templates.clear();
     for (_, e) in std::mem::take(&mut state.labels) {
@@ -142,6 +147,7 @@ pub fn setup(world: &mut World) {
             let e = world
                 .spawn((
                     Caption {
+                        building: false,
                         position: Vec3::new(d.position[0], 0.7, d.position[1]),
                         detail: String::new(),
                         units: 0,
@@ -160,6 +166,42 @@ pub fn setup(world: &mut World) {
                 ))
                 .id();
             state.labels.insert(d.id.clone(), e);
+        }
+        for (key, position) in sim
+            .config()
+            .producers
+            .iter()
+            .map(|p| (format!("producer/{}", p.id), p.position))
+            .chain(
+                sim.config()
+                    .defenders
+                    .iter()
+                    .map(|d| (format!("defender/{}", d.id), d.position)),
+            )
+        {
+            let e = world
+                .spawn((
+                    Caption {
+                        building: true,
+                        position: Vec3::new(position[0], 1.4, position[1]),
+                        detail: String::new(),
+                        units: 0,
+                    },
+                    BackgroundColor(Color::NONE),
+                    Text::new(""),
+                    TextFont {
+                        font_size: 14.,
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.96, 0.90, 0.76)),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        max_width: px(310.),
+                        ..default()
+                    },
+                ))
+                .id();
+            state.labels.insert(key, e);
         }
         state.hud = Some(
             world
@@ -182,13 +224,6 @@ pub fn setup(world: &mut World) {
     }
     world.insert_resource(state);
 }
-fn slots(n: u32, spacing: f32) -> Vec3 {
-    Vec3::new(
-        (n % 4) as f32 * spacing - 1.5 * spacing,
-        (n / 12) as f32 * spacing + 0.18,
-        ((n / 4) % 3) as f32 * spacing - spacing,
-    )
-}
 fn cargo_position(sim: &Simulation, id: &str) -> Vec3 {
     let a = &sim.agents[id];
     let config = sim.config().agents.iter().find(|c| c.id == id).unwrap();
@@ -203,7 +238,7 @@ fn endpoint(sim: &Simulation, e: &Endpoint) -> Vec3 {
     match e {
         Endpoint::Depot(id) => {
             let d = sim.config().depots.iter().find(|d| d.id == *id).unwrap();
-            Vec3::new(d.position[0], 0.25, d.position[1])
+            Vec3::new(d.position[0], 0., d.position[1]) + Vec3::from_array(d.stock_anchor)
         }
         Endpoint::Cargo(id) => cargo_position(sim, id),
     }
@@ -215,15 +250,17 @@ fn inventory(
     stock: &Inventory,
     p: Vec3,
     heading: f32,
-    spacing: f32,
+    layout: &gameplay_core::CargoLayout,
 ) {
     let mut slot = 0;
     for (id, units) in &stock.items {
         let item = sim.config().items.iter().find(|i| i.id == *id).unwrap();
         for i in 0..*units {
             let mut view = View::new(&item.skin, [0., 0.]);
-            view.position = p + Quat::from_rotation_y(heading) * slots(slot, spacing);
-            view.scale = item.scale;
+            let offset = Vec3::from_array(layout.offset(slot));
+            view.position = p + Quat::from_rotation_y(heading) * offset;
+            view.scale = item.scale * layout.scale;
+            view.roll = layout.roll;
             view.heading = heading;
             views.insert(format!("{key}/{id}/{i}"), view);
             slot += 1;
@@ -372,7 +409,11 @@ pub fn tick(world: &mut World) {
             &a.cargo,
             cargo_position(sim, &a.id),
             a.trailer.as_ref().map_or(a.heading, |t| t.heading),
-            0.18,
+            config
+                .equipment
+                .as_ref()
+                .filter(|_| a.trailer.is_some())
+                .map_or(&config.cargo_layout, |e| &e.cargo_layout),
         );
         if let (Some(t), Some(e)) = (&a.trailer, &config.equipment) {
             let mut v = View::new(&e.skin, t.position);
@@ -417,9 +458,9 @@ pub fn tick(world: &mut World) {
             sim,
             &format!("depot/{}", d.id),
             &sim.depots[&d.id],
-            Vec3::new(d.position[0], 0., d.position[1]),
+            Vec3::new(d.position[0], 0., d.position[1]) + Vec3::from_array(d.stock_anchor),
             0.,
-            0.23,
+            &d.stock_layout,
         );
     }
     for t in sim.transfers.values() {
@@ -465,6 +506,31 @@ pub fn tick(world: &mut World) {
             world
                 .resource_mut::<crate::telemetry::Telemetry>()
                 .count("label_updates", 1);
+        }
+    }
+    for p in &sim.config().producers {
+        let detail = producer_description(sim, p);
+        let mut caption = world
+            .get_mut::<Caption>(state.labels[&format!("producer/{}", p.id)])
+            .unwrap();
+        if caption.detail != detail {
+            caption.detail = detail;
+        }
+    }
+    for d in &sim.config().defenders {
+        let stock = sim.depots[&d.depot].units(&d.ammo);
+        let label = if d.label.is_empty() {
+            d.id.to_uppercase()
+        } else {
+            d.label.clone()
+        };
+        let detail = format!("{}\n{}\n\nConsumes: 1 {} per shot\nProduces: {} damage per hit\nFire interval: {:.1}s · Range: {:.1}m\nAmmunition: {}\nStatus: {}", label, d.description, d.ammo, d.damage, d.period, d.range, stock,
+            if !sim.defenders[&d.id].enabled { "Disabled" } else if stock == 0 { "Waiting for arrows" } else { "Guarding the approach" });
+        let mut caption = world
+            .get_mut::<Caption>(state.labels[&format!("defender/{}", d.id)])
+            .unwrap();
+        if caption.detail != detail {
+            caption.detail = detail;
         }
     }
     if let Some(e) = state.hud {
@@ -557,6 +623,7 @@ pub fn tick(world: &mut World) {
             world,
             view.position,
             view.heading,
+            view.roll,
             template.scale * view.scale,
             view.travel,
             view.activity,
@@ -592,7 +659,44 @@ pub fn tick(world: &mut World) {
 pub fn snapshot(world: &World) -> serde_json::Value {
     world.resource::<Settlement>().simulation.as_ref().map_or(serde_json::Value::Null,|s|serde_json::json!({"simulation":s,"balances":s.balances(),"scenario":s.config(),"seconds":s.seconds()}))
 }
+/// Pin the same hover card for deterministic capture or remote inspection.
+/// Passing None restores mouse-driven hover.
+pub fn inspect_building(world: &mut World, id: Option<&str>) -> Result<(), String> {
+    let mut state = world.resource_mut::<Settlement>();
+    let key = if let Some(id) = id {
+        [format!("producer/{id}"), format!("defender/{id}")]
+            .into_iter()
+            .find(|key| state.labels.contains_key(key))
+            .ok_or("Unknown building")
+            .map(Some)?
+    } else {
+        None
+    };
+    state.inspection = key;
+    Ok(())
+}
+fn producer_description(sim: &Simulation, p: &gameplay_core::Producer) -> String {
+    let recipe = |stacks: &[gameplay_core::Stack]| {
+        stacks
+            .iter()
+            .map(|s| format!("{} {}", s.units, s.item))
+            .collect::<Vec<_>>()
+            .join(" + ")
+    };
+    let state = &sim.producers[&p.id];
+    let status = match sim.production_status(&p.id).unwrap() {
+        "processing" => format!("Working · {:.1}s remaining", state.remaining as f32 / 60.),
+        "disabled" => "Disabled; current job will finish".into(),
+        "commission_complete" => "Commission complete".into(),
+        "output_blocked" => "Waiting for output space".into(),
+        "input_starved" => "Waiting for ingredients".into(),
+        _ => "Ready".into(),
+    };
+    format!("{}\n{}\n\nConsumes: {}\nProduces: {}\nCycle: {:.1}s · Completed: {}\nStatus: {}\nE nearby: enable / disable", p.label, p.description,
+        recipe(&p.ingredients), recipe(&p.products), p.seconds, state.cycles, status)
+}
 pub fn captions(
+    settlement: Res<Settlement>,
     camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>,
     windows: Query<&Window>,
     mut labels: Query<(
@@ -607,20 +711,32 @@ pub fn captions(
     )>,
 ) {
     let cursor = windows.iter().next().and_then(|w| w.cursor_position());
-    let hovered = cursor.and_then(|cursor| {
-        labels
-            .iter()
-            .filter_map(|(e, p, _, _, _, _, _, _)| {
-                camera
-                    .0
-                    .world_to_viewport(camera.1, p.position)
-                    .ok()
-                    .map(|v| (e, v.distance_squared(cursor)))
+    let hovered = settlement
+        .inspection
+        .as_ref()
+        .and_then(|key| settlement.labels.get(key).copied())
+        .or_else(|| {
+            cursor.and_then(|cursor| {
+                labels
+                    .iter()
+                    .filter_map(|(e, p, _, _, _, _, _, _)| {
+                        camera
+                            .0
+                            .world_to_viewport(camera.1, p.position)
+                            .ok()
+                            .map(|v| {
+                                (
+                                    e,
+                                    v.distance_squared(cursor),
+                                    if p.building { 65.0_f32 } else { 40.0_f32 },
+                                )
+                            })
+                    })
+                    .filter(|(_, d, radius)| *d < radius * radius)
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                    .map(|(e, _, _)| e)
             })
-            .filter(|(_, d)| *d < 1600.)
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(e, _)| e)
-    });
+        });
     for (e, p, mut node, mut visibility, mut text, mut font, mut color, mut background) in
         &mut labels
     {
@@ -629,20 +745,24 @@ pub fn captions(
             continue;
         };
         let expanded = hovered == Some(e);
-        *visibility = if hovered.is_some() && !expanded {
+        *visibility = if (hovered.is_some() || p.building) && !expanded {
             Visibility::Hidden
         } else {
             Visibility::Inherited
         };
         let content = if expanded {
-            format!("{}\nLMB take / Ctrl+LMB deposit", p.detail)
+            if p.building {
+                p.detail.clone()
+            } else {
+                format!("{}\nLMB take / Ctrl+LMB deposit", p.detail)
+            }
         } else {
             p.units.to_string()
         };
         if text.0 != content {
             text.0 = content;
         }
-        font.font_size = if expanded { 12. } else { 10. };
+        font.font_size = if expanded { 14. } else { 10. };
         color.0 = if expanded {
             Color::srgb(0.95, 0.89, 0.72)
         } else {
@@ -654,8 +774,14 @@ pub fn captions(
             Color::NONE
         };
         node.padding = UiRect::all(px(if expanded { 8. } else { 0. }));
-        node.left = px(v.x - if expanded { 45. } else { 3. });
-        node.top = px(v.y);
+        let size = windows
+            .iter()
+            .next()
+            .map_or(Vec2::new(1440., 960.), |w| Vec2::new(w.width(), w.height()));
+        node.left = px((v.x - if expanded { 45. } else { 3. })
+            .clamp(8., (size.x - if expanded { 330. } else { 20. }).max(8.)));
+        node.top =
+            px(v.y.clamp(8., (size.y - if expanded { 300. } else { 20. }).max(8.)));
     }
 }
 
@@ -686,15 +812,45 @@ mod tests {
             })
             .collect();
         let mut sim = Simulation::new(pack.scene.scenario.clone().unwrap(), obstacles).unwrap();
-        for _ in 0..1800 {
+        for frame in 0..3000 {
             sim.advance(1. / 30.).unwrap();
             sim.validate_state().unwrap();
+            if frame == 1799 {
+                assert_eq!(sim.health, 20, "first minute defense failed");
+            }
+            let a = &sim.agents["bramble"];
+            if let Some(t) = &a.trailer {
+                assert!(
+                    gameplay_core::navigation::distance(a.position, t.position) >= 1.45,
+                    "ox overlapped the cart at tick {}",
+                    sim.tick
+                );
+            }
         }
+        let p = &sim.config().producers[0];
+        let card = producer_description(&sim, p);
+        assert!(card.contains(&p.description));
+        assert!(card.contains("Consumes: 1 lumber + 1 iron"));
+        assert!(card.contains("Produces: 4 arrow"));
+        assert!(card.contains("Cycle: 4.0s"));
+        assert!(
+            sim.metrics
+                .deliveries_by_agent
+                .get("bramble")
+                .copied()
+                .unwrap_or(0)
+                >= 12,
+            "ox never completed a loaded cart trip: {:?}",
+            sim.metrics
+        );
         assert!(sim.metrics.delivered > 30, "{:?}", sim.metrics);
         assert!(sim.metrics.cycles > 8);
         assert_eq!(sim.metrics.equipped, 1);
         assert!(sim.metrics.kills >= 7);
-        assert_eq!(sim.health, 20);
+        assert!(
+            sim.health > 0,
+            "settlement fell during the extended transport check"
+        );
         assert_eq!(sim.agents["bramble"].cargo.capacity, 9);
         assert!(sim.balances().values().all(|b| b.conserved));
     }
@@ -920,10 +1076,13 @@ mod lifecycle_tests {
         }
         assert!(attached);
         assert!(corpse);
+        inspect_building(app.world_mut(), Some("sawmill")).unwrap();
+        assert!(inspect_building(app.world_mut(), Some("unknown")).is_err());
         app.world_mut().resource_mut::<SceneLibrary>().requested = Some(0);
         app.update();
         let state = app.world().resource::<Settlement>();
         assert!(state.simulation.is_none());
+        assert!(state.inspection.is_none());
         assert!(state.dying.is_empty());
         assert!(state.attached.is_empty());
         assert_eq!(
