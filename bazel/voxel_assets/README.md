@@ -133,3 +133,10 @@ may also include `label: Some("METAL")` for a sample caption.
 Pack version 2 records material response semantics, recipe patterns, and a
 build-time geometry key shared across palette variants. Rebuild
 packs together with their consumers; version 1 packs are rejected explicitly.
+
+Scene pack version 3 adds optional `piles` logistics fixtures: a carrying
+capacity, typed mineral dispensers with output locations, and initial piles.
+The compiler validates capacities, quantities, finite coordinates, and deck
+bounds. See `examples/rust/bevy_isometric/assets/levels/pile_lab.ron` for an
+example. Recipes and layouts without logistics fixtures remain valid source
+inputs and rebuild into the current pack version.

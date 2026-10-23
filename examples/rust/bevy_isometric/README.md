@@ -153,3 +153,32 @@ authored emission is restored afterward. Meshes and CPU contact triangles are
 cached; reactive material handles belong to each instance and are removed when
 switching scenes. The contact query currently scans nearby targets' triangles;
 it has no spatial acceleration structure for very large models.
+
+Press **3** or use `--scene pile-lab` for mineral logistics. Click either
+world dispenser or its button to create 5 units in its output pile. Left click
+a pile to walk over and collect up to **12 units**. While carrying, left click
+open floor to walk there and create a pile, or a matching pile to deposit into
+it. **Ctrl + left click** collects more into a partial load. Different minerals
+stay separate; full destinations leave excess cargo on the player. Right click,
+WASD, or a sword strike cancels a hauling job without losing carried material.
+
+Every mineral chunk represents **one unit**, both on the ground and in the
+player's backpack. Labels give exact pile counts, and the logistics HUD shows
+cargo, 12 capacity indicators, ground stock, and total created units. The scene
+starts with 8, 24, and 64-unit samples. Piles cap at 96 units; the scene supports
+32 piles. Transfers conserve quantities; only dispensers create new stock.
+Returning to this demonstration scene resets its stock and fixtures.
+
+Fixtures and starting quantities are authored in `assets/levels/pile_lab.ron`
+and validated during the Bazel scene-pack build. `pile_model.rs` owns pure
+quantity bookkeeping; `piles/mod.rs` owns interaction and movement jobs;
+`piles/view.rs` owns shared visual assets and quantity displays. Pile and cargo
+views only rebuild when their quantities change. Shader assets and chunk meshes
+are shared rather than generated per unit.
+
+```sh
+bazel run //examples/rust/bevy_isometric:demo -- --scene pile-lab
+# Scripted real navigation + pickup + drop, with captures and quantity assertions:
+bazel run //examples/rust/bevy_isometric:demo -- \
+  --scene pile-lab --haul-showcase --capture-dir /tmp/kestrel-piles
+```

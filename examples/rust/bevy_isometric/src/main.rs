@@ -4,6 +4,8 @@ mod effects;
 mod gameplay;
 mod impact;
 mod navigation;
+mod pile_model;
+mod piles;
 mod preview;
 mod scene;
 mod sound;
@@ -18,8 +20,9 @@ fn main() {
         scenes.initial = match pair[1].as_str() {
             "mining-deck" => 0,
             "boulder-lab" => 1,
+            "pile-lab" => 2,
             name => {
-                eprintln!("Unknown scene {name}; use mining-deck or boulder-lab");
+                eprintln!("Unknown scene {name}; use mining-deck, boulder-lab or pile-lab");
                 std::process::exit(2);
             }
         };
@@ -34,6 +37,7 @@ fn main() {
         .insert_resource(scenes)
         .init_resource::<assets::ModelCache>()
         .init_resource::<Controls>()
+        .init_resource::<piles::PileLab>()
         .init_resource::<effects::Feedback>()
         .insert_resource(sound::Sound::new())
         .add_plugins(
@@ -53,9 +57,15 @@ fn main() {
             Update,
             (
                 assets::switch_scene,
+                piles::setup_scene,
+                piles::input,
                 mouse_commands,
                 preview::playback,
                 move_player,
+                piles::arrive,
+                piles::render,
+                piles::update_display,
+                piles::showcase,
                 combat,
                 animate_character,
                 effects::update_effects,
@@ -68,7 +78,8 @@ fn main() {
         .add_systems(Update, (draw_navigation, keyboard_actions))
         .add_systems(
             PostUpdate,
-            assets::update_captions.after(bevy::transform::TransformSystems::Propagate),
+            (assets::update_captions, piles::captions)
+                .after(bevy::transform::TransformSystems::Propagate),
         )
         .run();
 }

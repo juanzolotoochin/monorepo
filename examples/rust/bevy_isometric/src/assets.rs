@@ -21,7 +21,7 @@ pub struct SampleCaption(Vec3);
 pub struct IndustrialProp(pub Disc);
 #[derive(Resource)]
 pub struct SceneLibrary {
-    scenes: Vec<ScenePack>,
+    pub scenes: Vec<ScenePack>,
     pub current: usize,
     pub initial: usize,
 }
@@ -33,6 +33,7 @@ impl SceneLibrary {
                     .expect("validated mining deck asset pack"),
                 ScenePack::decode(boulder_lab::PACK_BYTES)
                     .expect("validated boulder lab asset pack"),
+                ScenePack::decode(pile_lab::PACK_BYTES).expect("validated pile lab asset pack"),
             ],
             current: usize::MAX,
             initial: 0,
@@ -108,6 +109,8 @@ pub fn switch_scene(
         Some(0)
     } else if keys.just_pressed(KeyCode::Digit2) {
         Some(1)
+    } else if keys.just_pressed(KeyCode::Digit3) {
+        Some(2)
     } else if library.current == usize::MAX {
         Some(library.initial)
     } else {

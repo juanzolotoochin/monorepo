@@ -63,3 +63,9 @@ scene_assets(
         ":mixed_sample",
     ],
 )
+
+scene_assets(
+    name = "pile_lab",
+    layout = "levels/pile_lab.ron",
+    prefabs = [],
+)

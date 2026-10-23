@@ -935,7 +935,9 @@ pub fn hud(mut commands: Commands) {
                 TextColor(white),
             ));
             p.spawn((
-                Text::new("1 / 2  SCENES    WASD  STEER    SHIFT  RUN    WHEEL  ZOOM    M  AUDIO"),
+                Text::new(
+                    "1 / 2 / 3  SCENES    WASD  STEER    SHIFT  RUN    WHEEL  ZOOM    M  AUDIO",
+                ),
                 TextFont {
                     font_size: 10.0,
                     ..default()
