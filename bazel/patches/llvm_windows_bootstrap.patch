@@ -23,20 +23,7 @@ index f71435d..8997ce6 100644
          "winsdk_ucrt_lib": "//runtimes/msvc:winsdk_ucrt_lib",
          "winsdk_um_lib": "//runtimes/msvc:winsdk_um_lib",
      },
-@@ -221,12 +217,22 @@ cc_args_list(
-     name = "normalized_sdk_compile_args",
-     args = [
-         "windows_sdk_compile_defines",
--        "sdk_header_case_overlay",
-         "sdk_includes",
--    ],
-+    ] + select({
-+        "//toolchain:runtimes_all": ["sdk_header_case_overlay"],
-+        "//conditions:default": [],
-+    }),
-     visibility = ["//visibility:public"],
- )
- 
+@@ -230,2 +226,10 @@
 +cc_args(
 +    name = "sdk_library_case_overlay",
 +    actions = ["@rules_cc//cc/toolchains/actions:link_actions"],
@@ -47,14 +34,37 @@ index f71435d..8997ce6 100644
 +
  cc_args_list(
      name = "normalized_default_libs",
-     args = [
-@@ -235,6 +241,9 @@ cc_args_list(
-     ] + select({
-         "//toolchain/features/msvc:static_crt_config": ["static_crt_library_search_paths"],
-         "//conditions:default": ["dynamic_crt_library_search_paths"],
-+    }) + select({
-+        "//toolchain:runtimes_all": ["sdk_library_case_overlay"],
-+        "//conditions:default": [],
-     }) + select({
-         # Hosted C construction tools need the target CRT and SDK, but do not
-         # consume the C++ standard library.
+@@ -233,1 +237,2 @@
+         "sdk_library_search_paths",
++        "sdk_library_case_overlay",
+diff --git a/case_insensitive_vfs.bzl b/case_insensitive_vfs.bzl
+--- a/case_insensitive_vfs.bzl
++++ b/case_insensitive_vfs.bzl
+@@ -6,4 +6,8 @@
+ def _case_insensitive_vfs_overlay_impl(ctx):
++    # Use the execution interpreter directly: py_binary itself resolves C++
++    # toolchains on Windows, which would depend on the overlay being generated.
++    runtime = ctx.toolchains["@rules_python//python:exec_tools_toolchain_type"].exec_tools.exec_interpreter[platform_common.ToolchainInfo].py3_runtime
+     output = ctx.actions.declare_file(ctx.label.name + ".yaml")
+     args = ctx.actions.args()
++    args.add(ctx.file._generator)
+     args.add("-output", output)
+@@ -15,3 +19,3 @@
+-        executable = ctx.executable._generator,
++        executable = runtime.interpreter,
+         arguments = [args],
+-        inputs = depset(transitive = inputs),
++        inputs = depset(direct = [ctx.file._generator], transitive = inputs + [runtime.files]),
+@@ -30,10 +34,10 @@
+     attrs = {
+         "roots": attr.label_list(providers = [DirectoryInfo]),
+         "_generator": attr.label(
+             allow_single_file = True,
+-            default = "//tools/case_insensitive_vfs",
++            default = "@@//bazel/platforms:sdk_vfs.py",
+             cfg = "exec",
+-            executable = True,
+         ),
+     },
++    toolchains = ["@rules_python//python:exec_tools_toolchain_type"],
+ )
