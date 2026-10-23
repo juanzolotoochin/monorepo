@@ -397,6 +397,11 @@ crate.annotation(
     patches = ["//bazel/patches:khronos_api.patch"],
 )
 crate.annotation(
+    crate = "cc",
+    patch_args = ["-p1"],
+    patches = ["//bazel/patches:cc_hermetic_msvc.patch"],
+)
+crate.annotation(
     crate = "rav1e",
     patch_args = ["-p1"],
     patches = ["//bazel/patches:rav1e_build_metadata.patch"],
@@ -410,7 +415,6 @@ crate.annotation_select(
     crate_features = ["prefer_intrinsics"],
     triples = ["x86_64-pc-windows-msvc"],
 )
-
 # Several no_std-capable crates in gpui's font/text stack need their default
 # `std` feature, which from_cargo did not enable, leaving float math
 # (sqrt/sin_cos/tan/...) unavailable. Force `std` on each.
