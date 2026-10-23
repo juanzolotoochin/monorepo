@@ -27,6 +27,9 @@ build:remote --host_platform=//:docker_image_platform
 build:remote --platforms=//:docker_image_platform
 build:remote --remote_timeout=1800
 build:remote --jobs=50
+# Windows clients otherwise send their MSYS/Windows PATH to Linux workers.
+build:remote --action_env=PATH=/usr/local/bin:/usr/bin:/bin
+build:remote --host_action_env=PATH=/usr/local/bin:/usr/bin:/bin
 
 
 test --test_output=errors
@@ -44,14 +47,6 @@ build:windows --platforms=//platforms:rust_windows_x86_64
 build:windows --host_platform=//platforms:rust_windows_x86_64
 build:windows --extra_execution_platforms=//platforms:rust_windows_x86_64
 build:windows --repo_env=BAZEL_MSVC_RUNTIME_VISUAL_STUDIO_EULA=1
-# clang-cl requires Bazel's C++ link action rather than rustc's MSVC link args.
-build:windows --@rules_rust//rust/settings:experimental_use_cc_common_link=true
-# Rust's Windows standard library uses NT APIs, including in build tools.
-build:windows --linkopt=ntdll.lib
-build:windows --host_linkopt=ntdll.lib
-# The cc crate's MSVC discovery code uses COM in Windows build scripts.
-build:windows --host_linkopt=ole32.lib
-build:windows --host_linkopt=oleaut32.lib
 build:macos --platforms=//platforms:rust_macos_arm64
 build:macos --host_platform=//platforms:rust_macos_arm64
 build:macos --extra_execution_platforms=//platforms:rust_macos_arm64
@@ -66,6 +61,8 @@ common --@aspect_rules_ts//ts:skipLibCheck=honor_tsconfig
 # Launch Python binaries/tests directly with the registered hermetic runtime.
 # The legacy bootstrap starts through /usr/bin/env python3 on the host.
 common --@rules_python//python/config_settings:bootstrap_impl=script
+# Use normal Python launchers and runfiles rather than implicit ZIP apps.
+build --@rules_python//python/config_settings:build_python_zip=false
 
 # rules_python 2 otherwise stores the venv's bin/python3 as an unresolved
 # (declared) symlink in runfiles, which can't be packaged into image tars.

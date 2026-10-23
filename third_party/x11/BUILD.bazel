@@ -6,8 +6,24 @@
 # the binary loads the system's copy.
 load("@rules_cc//cc:cc_import.bzl", "cc_import")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_python//python:defs.bzl", "py_binary", "py_test")
+load(":extract_library.bzl", "extract_library")
 
 package(default_visibility = ["//visibility:public"])
+
+py_binary(
+    name = "extract_library_tool",
+    srcs = ["extract_library.py"],
+    main = "extract_library.py",
+    legacy_create_init = 0,
+)
+
+py_test(
+    name = "extract_library_test",
+    srcs = ["extract_library.py", "extract_library_test.py"],
+    main = "extract_library_test.py",
+    legacy_create_init = 0,
+)
 
 _LIBS = {
     # name: (debian package, shared object inside the package)
@@ -17,14 +33,11 @@ _LIBS = {
 }
 
 [
-    genrule(
+    extract_library(
         name = "lib%s_so" % name,
-        srcs = ["@debian13//%s:data" % package],
-        outs = ["lib/lib%s.so" % name],
-        # The versioned name is a symlink in the package; -L follows it.
-        cmd = "$(BSDTAR_BIN) -xzf $< -C $(RULEDIR) -s ',.*/,lib/,' --include './usr/lib/*/%s*' && " % so +
-              "cp -L $(RULEDIR)/lib/%s $@.tmp && mv $@.tmp $@" % so,
-        toolchains = ["@bsd_tar_toolchains//:resolved_toolchain"],
+        archive = "@debian13//%s:data" % package,
+        library = name,
+        soname = so,
     )
     for name, (package, so) in _LIBS.items()
 ]

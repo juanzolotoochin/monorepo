@@ -256,6 +256,9 @@ oci.pull(
 use_repo(oci, "build", "distroless_base", "distroless_base_linux_amd64", "distroless_base_linux_arm64", "postgres", "ubuntu", "ubuntu22")
 
 # rules_python
+rules_python_config = use_extension("@rules_python//python/extensions:config.bzl", "config")
+rules_python_config.explicit_init_py(default = True)
+
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.toolchain(
     python_version = "3.11",
