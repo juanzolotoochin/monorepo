@@ -646,3 +646,31 @@ fn two_players_defend_the_clearing() {
     assert!(hits.iter().all(|&n| n > 3), "both players hit ghouls: {hits:?}");
     assert!(s.combat.melee_hits > 0 && s.combat.spear_hits > 0 && s.combat.kills > 5, "{:?}", s.combat);
 }
+
+/// The weapon in hand is shared state, so every peer can show it: players
+/// equip their own avatar only, with weapons the scenario offers, and a
+/// swing puts its weapon in hand too.
+#[test]
+fn players_equip_their_own_weapons() {
+    let scenario = Scenario::parse(ARENA).unwrap();
+    let world = World::new_settlement(9, Content::builtin().rules, &scenario, &[]).unwrap();
+    let mut sim = Simulation::from_world(world, 2);
+    let (host, guest) = (PlayerId(0), PlayerId(1));
+    sim.step(&[Command { player: guest, kind: CommandKind::Join }]);
+    let s = sim.world().settlement().unwrap();
+    let (mine, theirs) = (s.avatar_of(host).unwrap(), s.avatar_of(guest).unwrap());
+    let weapon = |sim: &Simulation, agent: u16| sim.world().settlement().unwrap().agents[agent as usize].avatar.weapon;
+    assert_eq!(weapon(&sim, theirs), Weapon::Sword);
+
+    sim.step(&[
+        Command { player: guest, kind: CommandKind::Equip { agent: theirs, weapon: Weapon::Bow } },
+        // Not the host's avatar to arm.
+        Command { player: host, kind: CommandKind::Equip { agent: theirs, weapon: Weapon::ArcCoil } },
+    ]);
+    assert_eq!(weapon(&sim, theirs), Weapon::Bow);
+    assert_eq!(weapon(&sim, mine), Weapon::Sword);
+
+    let aim = FxVec2::new(Fx::ZERO, Fx::ONE);
+    sim.step(&[Command { player: host, kind: CommandKind::Attack { agent: mine, weapon: Weapon::Spear, aim, muzzle: [Fx::ZERO; 3] } }]);
+    assert_eq!(weapon(&sim, mine), Weapon::Spear, "a swing puts its weapon in hand");
+}

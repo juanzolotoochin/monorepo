@@ -412,6 +412,7 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
                 return Err("Weapon is unavailable in this scenario".into());
             }
             world.resource_mut::<Controls>().weapon = selected;
+            world.resource_mut::<Game>().equip(selected);
             Ok(Pending::Instant)
         }
         Command::Wait { frames } => {
@@ -560,7 +561,7 @@ pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
         .count();
     let sim_tick = world.resource::<Game>().world().map(|w| w.tick());
     let network = world.resource::<Game>().network.is_some().then(|| world.resource::<Game>().status.clone());
-    let peers: Vec<_> = world.query_filtered::<&Transform, With<crate::peers::Peer>>().iter(world).map(|t| t.translation.to_array()).collect();
+    let peers = crate::peers::snapshot(world);
     let result = json!({"telemetry":telemetry,"settlement":settlement,"version":VERSION,"tick":hub.tick,"sim_tick":sim_tick,"network":network,"peers":peers,"scene":scene,"player":{"position":position.to_array(),"movement":movement,"cargo":cargo,"jetpack":jetpack},"terrain":terrain,"memory":memory,"style":style,"piles":piles,"totals":totals,"visible_mineral_units":visible_units,"airborne_units":airborne,"airborne":flying,"targets":targets,"obstacles":obstacles,"active_command":hub.active.as_ref().map(|a|&a.envelope.request)});
     crate::telemetry::elapsed(world, "inspection_snapshot", started);
     world

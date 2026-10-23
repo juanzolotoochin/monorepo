@@ -101,6 +101,8 @@ pub struct AvatarState {
     pub intent: Option<Intent>,
     pub run: bool,
     pub swing: Option<Swing>,
+    /// The weapon in hand, so every peer shows it.
+    pub weapon: Weapon,
     /// A follow-up attack clicked during the end of a swing.
     pub queued: Option<(Weapon, FxVec2, [Fx; 3])>,
     pub job: Option<ManualJob>,
@@ -266,6 +268,16 @@ impl Settlement {
     /// The first player avatar, if there is one.
     pub fn player(&self) -> Option<super::AgentIx> {
         self.agents.iter().position(|a| a.controlled).map(|i| i as super::AgentIx)
+    }
+
+    /// Commands: puts a weapon the scenario offers in the avatar's hand.
+    pub fn equip_weapon(&mut self, agent: usize, weapon: Weapon) {
+        if !self.has_weapon(weapon) {
+            return;
+        }
+        if let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) {
+            a.avatar.weapon = weapon;
+        }
     }
 
     /// The avatar `player` controls.
@@ -519,6 +531,7 @@ impl Settlement {
 }
 
 fn start_swing(a: &mut AgentState, tick: u64, weapon: Weapon, aim: FxVec2, muzzle: [Fx; 3]) {
+    a.avatar.weapon = weapon;
     a.route.clear();
     a.avatar.intent = Some(Intent::Stop);
     a.avatar.swing = Some(Swing {

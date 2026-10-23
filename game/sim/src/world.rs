@@ -79,6 +79,8 @@ pub enum CommandKind {
     Transfer { agent: u16, depot: u16, item: u16, units: u32, deposit: bool },
     /// Cancels an avatar's transfer; units in the air still land.
     CancelTransfer { agent: u16 },
+    /// Puts a weapon in a player's avatar's hand.
+    Equip { agent: u16, weapon: content::scenario::Weapon },
     /// Holds a player's jetpack on or off.
     Jetpack { agent: u16, enabled: bool },
     /// Puts a player back at the spawn point.
@@ -106,6 +108,7 @@ impl CommandKind {
             | CommandKind::Transfer { agent, .. }
             | CommandKind::CancelTransfer { agent }
             | CommandKind::Jetpack { agent, .. }
+            | CommandKind::Equip { agent, .. }
             | CommandKind::Respawn { agent }
             | CommandKind::Pile { agent, .. } => Some(agent),
             _ => None,
@@ -362,6 +365,11 @@ impl World {
                 CommandKind::CancelTransfer { agent } => {
                     if let Some(s) = &mut self.settlement {
                         s.cancel_transfer(agent as usize);
+                    }
+                }
+                CommandKind::Equip { agent, weapon } => {
+                    if let Some(s) = &mut self.settlement {
+                        s.equip_weapon(agent as usize, weapon);
                     }
                 }
                 CommandKind::Jetpack { agent, enabled } => {

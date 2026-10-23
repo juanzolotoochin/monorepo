@@ -422,7 +422,7 @@ One machine hosts and others join over UDP. Each player who joins gets an
 avatar of their own beside the spawn point and drives it with the usual
 controls. Other players wear the same exosuit, dressed by the scene's style,
 and walk, idle, fly and swing with the same animation, holding the weapon
-they last swung, with their footsteps and swings audible.
+they have picked, with their footsteps and swings audible.
 
 ```sh
 # The host listens on a UDP port:

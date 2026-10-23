@@ -113,6 +113,13 @@ impl Game {
         self.settlement()?.avatar_of(me)
     }
 
+    /// Puts a weapon in the avatar's hand, for every peer to see; the local
+    /// view switches right away.
+    pub fn equip(&mut self, weapon: content::scenario::Weapon) {
+        let Some(agent) = self.player() else { return };
+        self.command(CommandKind::Equip { agent, weapon });
+    }
+
     /// The local player's avatar ID, as views name agents.
     pub fn player_id(&self) -> Option<String> {
         Some(self.settlement()?.agents[self.player()? as usize].id.clone())
@@ -460,6 +467,7 @@ pub fn attack_input(
         for (key, weapon) in [(KeyCode::KeyZ, Weapon::Sword), (KeyCode::KeyX, Weapon::Spear), (KeyCode::KeyC, Weapon::Bow), (KeyCode::KeyV, Weapon::ArcCoil)] {
             if keys.just_pressed(key) && scenario.weapons.contains(&weapon) {
                 controls.weapon = weapon;
+                game.equip(weapon);
             }
         }
     }

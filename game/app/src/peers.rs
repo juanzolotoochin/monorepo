@@ -21,8 +21,6 @@ pub struct Peer {
     style: Option<usize>,
     /// Walk cycle phase, advanced by distance moved.
     stride: f32,
-    /// The weapon in hand: the one last swung.
-    weapon: Weapon,
     /// The start tick of the last swing heard, so each whooshes once.
     heard: u64,
     /// Meters walked since the last footstep.
@@ -41,7 +39,7 @@ pub struct PeerPart {
 #[derive(Component)]
 pub struct PeerExhaust;
 
-/// A copied weapon model, shown while it's the weapon in hand.
+/// A copied weapon model, shown while it's the weapon the avatar holds.
 #[derive(Component)]
 pub struct PeerWeapon(Weapon);
 
@@ -115,9 +113,6 @@ pub fn update(
         let airborne = current.avatar.flight.airborne;
         let speed = if airborne { 0.0 } else { (current.avatar.velocity.length().to_f32() / WALK_SPEED).min(1.4) };
         let swing = current.avatar.swing.as_ref();
-        if let Some(swing) = swing {
-            peer.weapon = swing.weapon;
-        }
         let attack = swing.and_then(|s| attack(s, ticks));
         if let (Some(swing), Some(_)) = (swing, attack) {
             if peer.heard != swing.started {
@@ -125,7 +120,7 @@ pub fn update(
                 sound.play(crate::sound::Cue::Swing);
             }
         }
-        poses.push((entity, peer.weapon, Pose { stride: peer.stride, speed, breathe, airborne, attack }));
+        poses.push((entity, current.avatar.weapon, Pose { stride: peer.stride, speed, breathe, airborne, attack }));
     }
     for (entity, part, mut transform) in &mut parts {
         // Part pivots hang off the root or the body: find the peer above.
@@ -153,9 +148,39 @@ pub fn update(
     for agent in others.into_iter().filter(|a| !shown.contains(a)) {
         commands.queue(move |world: &mut World| {
             let root = copy(world, player, None);
-            world.entity_mut(root).insert(Peer { agent, style, stride: 0.0, weapon: Weapon::Sword, heard: 0, foot_distance: 0.0 });
+            world.entity_mut(root).insert(Peer { agent, style, stride: 0.0, heard: 0, foot_distance: 0.0 });
         });
     }
+}
+
+/// Other players for the control snapshot: where each stands and which
+/// weapon models are showing.
+pub fn snapshot(world: &mut World) -> Vec<serde_json::Value> {
+    let shown: Vec<(Entity, Weapon)> = world
+        .query::<(Entity, &PeerWeapon, &InheritedVisibility)>()
+        .iter(world)
+        .filter(|(_, _, visible)| visible.get())
+        .map(|(e, w, _)| (e, w.0))
+        .collect();
+    let owner = |world: &World, mut e: Entity| {
+        while let Some(parent) = world.get::<ChildOf>(e) {
+            e = parent.parent();
+            if world.get::<Peer>(e).is_some() {
+                return Some(e);
+            }
+        }
+        None
+    };
+    let held: Vec<(Entity, Weapon)> = shown.iter().filter_map(|&(e, w)| Some((owner(world, e)?, w))).collect();
+    let mut peers = world.query_filtered::<(Entity, &Transform), With<Peer>>();
+    peers
+        .iter(world)
+        .map(|(e, t)| {
+            let mut weapons: Vec<_> = held.iter().filter(|(p, _)| *p == e).map(|(_, w)| format!("{w:?}")).collect();
+            weapons.dedup();
+            serde_json::json!({"position": t.translation.to_array(), "weapons": weapons})
+        })
+        .collect()
 }
 
 /// Copies an entity and its children: their meshes, materials, transforms

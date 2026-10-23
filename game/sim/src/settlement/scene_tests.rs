@@ -344,3 +344,12 @@ fn joining_players_get_their_own_avatar() {
     assert!(scene.s().agents[mine as usize].position.x > start.x + Fx::ONE, "the guest walked");
     assert_eq!(scene.avatar().position, host_start, "the host's avatar stayed put");
 }
+
+/// Scenes without weapons only offer the sword.
+#[test]
+fn unavailable_weapons_cannot_be_equipped() {
+    let mut scene = Scene::new(field());
+    let agent = scene.agent();
+    scene.command(CommandKind::Equip { agent, weapon: content::scenario::Weapon::Spear });
+    assert_eq!(scene.avatar().avatar.weapon, content::scenario::Weapon::Sword);
+}
