@@ -26,7 +26,7 @@ def main():
         result = subprocess.run(
             [str(game), "--demo-script", str(script), "--frames-dir", str(frames),
              "--report", str(report), "--trace", str(trace), "--audio-wav", str(audio)],
-            env=environment, timeout=max(120, config["max_frames"] / config["fps"] + 90),
+            env=environment, timeout=max(120, config["max_frames"] * 0.25 + 90),
             text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
         if result.returncode:

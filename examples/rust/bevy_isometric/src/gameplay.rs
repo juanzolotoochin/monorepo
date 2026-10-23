@@ -176,13 +176,16 @@ fn approach(current: Vec3, target: Vec3, max_change: f32) -> Vec3 {
     current + (target - current).clamp_length_max(max_change)
 }
 
-pub fn slide(mut position: Vec3, delta: Vec3, obstacles: &[Disc]) -> Vec3 {
+pub fn slide(position: Vec3, delta: Vec3, obstacles: &[Disc]) -> Vec3 {
+    slide_in_bounds(position, delta, obstacles, EDGE)
+}
+fn slide_in_bounds(mut position: Vec3, delta: Vec3, obstacles: &[Disc], edge: f32) -> Vec3 {
     let steps = (delta.length() / 0.06).ceil().max(1.0) as usize;
     for _ in 0..steps {
         let previous = position;
         position += delta / steps as f32;
-        position.x = position.x.clamp(-EDGE, EDGE);
-        position.z = position.z.clamp(-EDGE, EDGE);
+        position.x = position.x.clamp(-edge, edge);
+        position.z = position.z.clamp(-edge, edge);
         for _ in 0..3 {
             for disc in obstacles {
                 let separation = flat(position - disc.center);
@@ -194,7 +197,7 @@ pub fn slide(mut position: Vec3, delta: Vec3, obstacles: &[Disc]) -> Vec3 {
             }
         }
         // A prop near the perimeter must not push the body off the deck.
-        if position.x.abs() > EDGE || position.z.abs() > EDGE {
+        if position.x.abs() > edge || position.z.abs() > edge {
             position = previous;
         }
     }
@@ -291,7 +294,12 @@ pub fn move_player(
             controls.velocity = Vec3::ZERO;
         }
     }
-    let mut candidate = slide(previous, delta, &discs);
+    let mut candidate = slide_in_bounds(
+        previous,
+        delta,
+        &discs,
+        library.as_ref().map_or(EDGE, |l| l.extent()),
+    );
     let allowed = library.as_ref().is_none_or(|lib| {
         crate::jetpack::can_move(
             lib,

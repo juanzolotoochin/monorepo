@@ -44,6 +44,31 @@ pub fn apply(world: &mut World) {
     let actor = scene.actor.clone();
     let fixture_lighting = environment.as_ref().is_some_and(|e| !e.lights.is_empty());
     let hide_deck = environment.is_some() || scene.scene.terrain.is_some();
+    let settlement = scene.scene.scenario.is_some();
+    for mut visible in world
+        .query_filtered::<&mut Visibility, Or<(
+            With<crate::scene::CombatPanel>,
+            With<crate::scene::ContactPanel>,
+        )>>()
+        .iter_mut(world)
+    {
+        *visible = if settlement {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
+    }
+    for mut help in world
+        .query_filtered::<&mut Text, With<crate::scene::ControlHelp>>()
+        .iter_mut(world)
+    {
+        help.0 = if settlement {
+            "LMB STOCK / CTRL DEPOSIT / E MACHINE / SHIFT+LMB ATTACK"
+        } else {
+            "RMB MOVE / SHIFT+LMB STRIKE"
+        }
+        .into();
+    }
     let old_actors: Vec<_> = world
         .query_filtered::<Entity, With<StyledActor>>()
         .iter(world)

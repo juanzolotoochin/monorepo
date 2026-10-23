@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 pub use style::*;
 
-pub const VERSION: u32 = 6;
+pub const VERSION: u32 = 7;
 pub type Result<T> = std::result::Result<T, String>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -380,7 +380,72 @@ impl ScenePack {
             return Err("styled actor parts must be compiled before packing".into());
         }
         let count = self.scene.style.as_ref().map_or(6, |s| s.materials.len());
-        for actor in &self.actor {
+        let skin_ids: BTreeSet<_> = self.skins.iter().map(|s| s.id.as_str()).collect();
+        let required_skins: BTreeSet<_> = self
+            .scene
+            .style
+            .iter()
+            .flat_map(|s| s.skins.iter().map(|s| s.id.as_str()))
+            .collect();
+        if self.skins.len() > 32 || self.skins.len() != skin_ids.len() || skin_ids != required_skins
+        {
+            return Err("skin recipes must be compiled exactly once before packing".into());
+        }
+        for skin in &self.skins {
+            if !skin.scale.is_finite()
+                || !(0.02..=4.).contains(&skin.scale)
+                || skin.parts.is_empty()
+                || skin.parts.len() > 4
+                || skin
+                    .parts
+                    .iter()
+                    .map(|p| p.part)
+                    .collect::<BTreeSet<_>>()
+                    .len()
+                    != skin.parts.len()
+            {
+                return Err("invalid compiled skin".into());
+            }
+            match skin.motion {
+                Motion::Vehicle { wheel_radius }
+                    if !wheel_radius.is_finite() || wheel_radius <= 0.01 =>
+                {
+                    return Err("invalid compiled wheel radius".into())
+                }
+                Motion::Machine { axis }
+                    if axis.iter().any(|v| !v.is_finite())
+                        || axis.iter().map(|v| v * v).sum::<f32>() < 0.01 =>
+                {
+                    return Err("invalid compiled rotor axis".into())
+                }
+                _ => {}
+            }
+        }
+        if let Some(env) = &self.environment {
+            for p in &env.walkable {
+                if p.min
+                    .iter()
+                    .chain(p.max.iter())
+                    .chain([p.height].iter())
+                    .any(|v| !v.is_finite())
+                    || p.min[0] >= p.max[0]
+                    || p.min[1] >= p.max[1]
+                {
+                    return Err("invalid compiled walkable surface".into());
+                }
+            }
+        }
+        for actor in self
+            .actor
+            .iter()
+            .chain(self.skins.iter().flat_map(|s| &s.parts))
+        {
+            if actor
+                .pivot
+                .is_some_and(|p| p.iter().any(|v| !v.is_finite() || v.abs() > 16.))
+            {
+                return Err("invalid compiled actor pivot".into());
+            }
             if actor.lights.len() > 16 {
                 return Err("too many actor lights".into());
             }
@@ -406,6 +471,16 @@ impl ScenePack {
         }
         if let Some(scenario) = &self.scene.scenario {
             scenario.validate()?;
+            let obstacles = self
+                .environment
+                .iter()
+                .flat_map(|e| e.obstacles.iter())
+                .map(|(p, r)| gameplay_core::navigation::Disc {
+                    center: [p[0], p[2]],
+                    radius: *r,
+                })
+                .collect();
+            gameplay_core::Simulation::new(scenario.clone(), obstacles)?;
             let ids: std::collections::BTreeSet<_> =
                 self.skins.iter().map(|s| s.id.as_str()).collect();
             for id in scenario

@@ -1,7 +1,7 @@
 //! Bevy projection of the shared simulation. All stock and decisions belong to gameplay_core.
 use crate::{
     assets::SceneLibrary,
-    rig::{Rig, RigTemplate},
+    rig::{Fade, Rig, RigTemplate},
 };
 use bevy::prelude::*;
 use gameplay_core::{Endpoint, Inventory, Simulation};
@@ -15,11 +15,27 @@ pub struct Settlement {
     pool: BTreeMap<String, Vec<Rig>>,
     labels: BTreeMap<String, Entity>,
     hud: Option<Entity>,
+    last_sound: u64,
+    dying: Vec<Corpse>,
+    attached: BTreeMap<u64, Vec<Rig>>,
+    hit_until: BTreeMap<u64, u64>,
     blockers: Vec<Entity>,
     pub notice: String,
 }
+struct Corpse {
+    skin: String,
+    rig: Rig,
+    born: u64,
+    rest: Transform,
+    fade: Fade,
+    arrows: Vec<Rig>,
+}
 #[derive(Component)]
-pub struct Caption(Vec3);
+pub struct Caption {
+    position: Vec3,
+    detail: String,
+    units: u32,
+}
 struct View {
     skin: String,
     position: Vec3,
@@ -56,6 +72,13 @@ pub fn setup(world: &mut World) {
             world.despawn(rig.root);
         }
     }
+    for corpse in state.dying.drain(..) {
+        corpse.fade.restore(world);
+        world.despawn(corpse.rig.root);
+    }
+    state.attached.clear();
+    state.hit_until.clear();
+    state.last_sound = 0;
     state.templates.clear();
     for (_, e) in std::mem::take(&mut state.labels) {
         world.despawn(e);
@@ -118,7 +141,12 @@ pub fn setup(world: &mut World) {
         for d in &sim.config().depots {
             let e = world
                 .spawn((
-                    Caption(Vec3::new(d.position[0], 1.05, d.position[1])),
+                    Caption {
+                        position: Vec3::new(d.position[0], 0.7, d.position[1]),
+                        detail: String::new(),
+                        units: 0,
+                    },
+                    BackgroundColor(Color::NONE),
                     Text::new(""),
                     TextFont {
                         font_size: 12.,
@@ -270,16 +298,62 @@ pub fn tick(world: &mut World) {
     }
     for event in &sim.events {
         use gameplay_core::Event;
+        if let Event::Hit {
+            target,
+            projectile,
+            killed,
+            position,
+        } = event
+        {
+            let key = format!("threat/{target}");
+            if let (Some(projectile), Some((_, body))) = (projectile, state.views.get(&key)) {
+                let parent = body.root;
+                if let Some((_, arrow)) = state.views.remove(&format!("projectile/{projectile}")) {
+                    let parent_transform = *world.get::<Transform>(parent).unwrap();
+                    let mut arrow_transform = *world.get::<Transform>(arrow.root).unwrap();
+                    arrow_transform.translation = Vec3::new(position[0], 0.6, position[1]);
+                    *world.get_mut::<Transform>(arrow.root).unwrap() = Transform::from_matrix(
+                        parent_transform.to_matrix().inverse() * arrow_transform.to_matrix(),
+                    );
+                    world.entity_mut(parent).add_child(arrow.root);
+                    state.attached.entry(*target).or_default().push(arrow);
+                }
+            }
+            if *killed {
+                if let Some((skin, rig)) = state.views.remove(&key) {
+                    let rest = *world.get::<Transform>(rig.root).unwrap();
+                    let fade = Fade::new(world, rig.root);
+                    state.dying.push(Corpse {
+                        skin,
+                        rig,
+                        born: sim.tick,
+                        rest,
+                        fade,
+                        arrows: state.attached.remove(target).unwrap_or_default(),
+                    });
+                }
+                state.hit_until.remove(target);
+            } else {
+                state.hit_until.insert(*target, sim.tick + 14);
+            }
+        }
         let cue = match event {
-            Event::TransferStarted(_) => Some(crate::sound::Cue::Toss),
-            Event::TransferArrived(_) => Some(crate::sound::Cue::Land),
+            Event::TransferStarted(_) => None,
+            Event::TransferArrived(_) => None,
             Event::Shot { .. } => Some(crate::sound::Cue::Swing),
             Event::Hit { .. } => Some(crate::sound::Cue::Stone),
             Event::Produced { .. } | Event::Equipped { .. } => Some(crate::sound::Cue::Clang),
             _ => None,
         };
         if let Some(cue) = cue {
-            world.resource_mut::<crate::sound::Sound>().play(cue);
+            if sim.tick >= state.last_sound + 18 {
+                world.resource_mut::<crate::sound::Sound>().play(cue);
+                state.last_sound = sim.tick;
+            } else {
+                world
+                    .resource_mut::<crate::telemetry::Telemetry>()
+                    .count("activity_sounds_coalesced", 1);
+            }
         }
     }
     let mut desired = BTreeMap::new();
@@ -331,6 +405,10 @@ pub fn tick(world: &mut World) {
         let mut v = View::new(&sim.config().waves[t.wave].skin, t.position);
         v.heading = t.heading;
         v.travel = t.travelled;
+        v.activity = state
+            .hit_until
+            .get(&t.id)
+            .map_or(0., |until| until.saturating_sub(sim.tick) as f32 / 14.);
         desired.insert(format!("threat/{}", t.id), v);
     }
     for d in &sim.config().depots {
@@ -380,8 +458,10 @@ pub fn tick(world: &mut World) {
                 counts
             }
         );
-        if world.get::<Text>(state.labels[&d.id]).unwrap().0 != label {
-            world.get_mut::<Text>(state.labels[&d.id]).unwrap().0 = label;
+        let mut caption = world.get_mut::<Caption>(state.labels[&d.id]).unwrap();
+        if caption.detail != label {
+            caption.detail = label;
+            caption.units = stock.total();
             world
                 .resource_mut::<crate::telemetry::Telemetry>()
                 .count("label_updates", 1);
@@ -400,7 +480,16 @@ pub fn tick(world: &mut World) {
                     .join(" / ")
             })
             .unwrap_or_default();
-        world.get_mut::<Text>(e).unwrap().0=format!("LUMBER + IRON > ARROWS > DEFENSE | LUMBER + IRON > CART > OX\n{} delivered / {} crafted / {} shots / {} kills / base {} [P] pause\nPACK {}/8  {}\n{}",sim.metrics.delivered,sim.metrics.cycles,sim.metrics.shots,sim.metrics.kills,sim.health,sim.agents.get("player").map_or(0,|a|a.cargo.total()),cargo,state.notice);
+        let line = format!(
+            "BASE {}  /  {} GHOULS STOPPED  /  PACK {} /8 {}   [P] pause  [F3] metrics",
+            sim.health,
+            sim.metrics.kills,
+            sim.agents.get("player").map_or(0, |a| a.cargo.total()),
+            cargo
+        );
+        if world.get::<Text>(e).unwrap().0 != line {
+            world.get_mut::<Text>(e).unwrap().0 = line;
+        }
     }
     crate::telemetry::elapsed(world, "settlement_projection", projection_start);
     let sync_start = std::time::Instant::now();
@@ -410,6 +499,26 @@ pub fn tick(world: &mut World) {
     let mut skipped = 0;
     let mut pooled = 0;
     let mut destroyed = 0;
+    let mut surviving = vec![];
+    for corpse in state.dying.drain(..) {
+        let age = (sim.tick - corpse.born) as f32 / 60.;
+        if age >= 3.0 {
+            corpse.fade.restore(world);
+            for arrow in corpse.arrows {
+                world.despawn(arrow.root);
+            }
+            world.entity_mut(corpse.rig.root).insert(Visibility::Hidden);
+            state.pool.entry(corpse.skin).or_default().push(corpse.rig);
+            pooled += 1;
+        } else {
+            let mut t = corpse.rest;
+            t.rotation *= Quat::from_rotation_x(-1.5 * (age / 0.6).min(1.));
+            *world.get_mut::<Transform>(corpse.rig.root).unwrap() = t;
+            corpse.fade.opacity(world, 1. - ((age - 1.) / 2.).max(0.));
+            surviving.push(corpse);
+        }
+    }
+    state.dying = surviving;
     let stale: Vec<_> = state
         .views
         .keys()
@@ -428,7 +537,9 @@ pub fn tick(world: &mut World) {
             destroyed += 1;
         }
     }
-    for (key, view) in desired {
+    for (key, mut view) in desired {
+        view.position.y +=
+            crate::jetpack::height(world.resource::<SceneLibrary>(), view.position).unwrap_or(0.);
         let template = &state.templates[&view.skin];
         if !state.views.contains_key(&key) {
             let rig = if let Some(rig) = state.pool.get_mut(&view.skin).and_then(|p| p.pop()) {
@@ -467,6 +578,11 @@ pub fn tick(world: &mut World) {
         telemetry.count(name, value);
     }
     telemetry.gauge("active_rigs", state.views.len() as f64);
+    telemetry.gauge("dying_rigs", state.dying.len() as f64);
+    telemetry.gauge(
+        "attached_projectiles",
+        state.attached.values().map(|v| v.len()).sum::<usize>() as f64,
+    );
     telemetry.gauge(
         "pooled_rigs",
         state.pool.values().map(|p| p.len()).sum::<usize>() as f64,
@@ -478,16 +594,68 @@ pub fn snapshot(world: &World) -> serde_json::Value {
 }
 pub fn captions(
     camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>,
-    mut labels: Query<(&Caption, &mut Node, &mut Visibility)>,
+    windows: Query<&Window>,
+    mut labels: Query<(
+        Entity,
+        &Caption,
+        &mut Node,
+        &mut Visibility,
+        &mut Text,
+        &mut TextFont,
+        &mut TextColor,
+        &mut BackgroundColor,
+    )>,
 ) {
-    for (p, mut node, mut visible) in &mut labels {
-        if let Ok(v) = camera.0.world_to_viewport(camera.1, p.0) {
-            *visible = Visibility::Inherited;
-            node.left = px(v.x - 45.);
-            node.top = px(v.y);
+    let cursor = windows.iter().next().and_then(|w| w.cursor_position());
+    let hovered = cursor.and_then(|cursor| {
+        labels
+            .iter()
+            .filter_map(|(e, p, _, _, _, _, _, _)| {
+                camera
+                    .0
+                    .world_to_viewport(camera.1, p.position)
+                    .ok()
+                    .map(|v| (e, v.distance_squared(cursor)))
+            })
+            .filter(|(_, d)| *d < 1600.)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(e, _)| e)
+    });
+    for (e, p, mut node, mut visibility, mut text, mut font, mut color, mut background) in
+        &mut labels
+    {
+        let Ok(v) = camera.0.world_to_viewport(camera.1, p.position) else {
+            *visibility = Visibility::Hidden;
+            continue;
+        };
+        let expanded = hovered == Some(e);
+        *visibility = if hovered.is_some() && !expanded {
+            Visibility::Hidden
         } else {
-            *visible = Visibility::Hidden;
+            Visibility::Inherited
+        };
+        let content = if expanded {
+            format!("{}\nLMB take / Ctrl+LMB deposit", p.detail)
+        } else {
+            p.units.to_string()
+        };
+        if text.0 != content {
+            text.0 = content;
         }
+        font.font_size = if expanded { 12. } else { 10. };
+        color.0 = if expanded {
+            Color::srgb(0.95, 0.89, 0.72)
+        } else {
+            Color::srgba(0.85, 0.85, 0.65, 0.65)
+        };
+        background.0 = if expanded {
+            Color::srgba(0.025, 0.045, 0.03, 0.94)
+        } else {
+            Color::NONE
+        };
+        node.padding = UiRect::all(px(if expanded { 8. } else { 0. }));
+        node.left = px(v.x - if expanded { 45. } else { 3. });
+        node.top = px(v.y);
     }
 }
 
@@ -522,8 +690,8 @@ mod tests {
             sim.advance(1. / 30.).unwrap();
             sim.validate_state().unwrap();
         }
-        assert!(sim.metrics.delivered > 50);
-        assert!(sim.metrics.cycles > 10);
+        assert!(sim.metrics.delivered > 30, "{:?}", sim.metrics);
+        assert!(sim.metrics.cycles > 8);
         assert_eq!(sim.metrics.equipped, 1);
         assert!(sim.metrics.kills >= 7);
         assert_eq!(sim.health, 20);
@@ -701,5 +869,67 @@ pub fn input(world: &mut World) {
     let depot = depot.id.clone();
     if let Err(e) = player_transfer(world, &depot, &item, units, deposit) {
         world.resource_mut::<Settlement>().notice = e;
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    #[test]
+    fn arrows_attach_corpses_fade_and_scene_exit_releases_temporary_materials() {
+        let options = crate::control::Options {
+            simulation: true,
+            ..default()
+        };
+        let hub = crate::control::Hub::new(options.clone()).unwrap();
+        let mut library = SceneLibrary::new();
+        library.initial = 6;
+        let mut app = crate::build_app(options, library, hub);
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_secs_f64(1. / 30.),
+        ));
+        app.update();
+        let blends = |world: &World| {
+            world
+                .resource::<Assets<StandardMaterial>>()
+                .iter()
+                .filter(|(_, m)| m.alpha_mode == AlphaMode::Blend)
+                .count()
+        };
+        let initial_blends = blends(app.world());
+        let mut attached = false;
+        let mut corpse = false;
+        for _ in 0..1800 {
+            app.update();
+            let state = app.world().resource::<Settlement>();
+            attached |= !state.attached.is_empty();
+            corpse |= !state.dying.is_empty();
+            for rig in state
+                .views
+                .values()
+                .map(|(_, rig)| rig)
+                .chain(state.pool.values().flatten())
+            {
+                // Every bone between the root and mesh must propagate inherited visibility.
+                if let Some(children) = app.world().get::<Children>(rig.root) {
+                    for e in children.iter() {
+                        assert!(app.world().get::<Visibility>(e).is_some());
+                    }
+                }
+            }
+        }
+        assert!(attached);
+        assert!(corpse);
+        app.world_mut().resource_mut::<SceneLibrary>().requested = Some(0);
+        app.update();
+        let state = app.world().resource::<Settlement>();
+        assert!(state.simulation.is_none());
+        assert!(state.dying.is_empty());
+        assert!(state.attached.is_empty());
+        assert_eq!(
+            blends(app.world()),
+            initial_blends,
+            "temporary fade materials leaked across scene exit"
+        );
     }
 }

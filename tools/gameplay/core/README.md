@@ -51,3 +51,7 @@ Producer and defender `radius` fields supply physical navigation footprints.
 Subsystems live under `src/model/`: workers, production, combat and controlled
 interaction. `model.rs` retains the fixed-step coordinator, state, shared
 inventory/reservation primitives and accounting invariants.
+
+`Scenario.extent` defaults to the legacy eight-meter half-width and supports up
+to 24 meters. The shared A* grid sizes itself to the requested bounds; the game
+adapter uses the same extent for player pathfinding and collision boundaries.

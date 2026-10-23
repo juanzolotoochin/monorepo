@@ -32,6 +32,7 @@ fn agent(id: &str) -> Agent {
 }
 fn scenario() -> Scenario {
     Scenario {
+        extent: 8.,
         id: "test".into(),
         items: ["wood", "iron", "arrow", "cart"]
             .iter()
@@ -307,4 +308,19 @@ fn controlled_transfers_share_reservations_and_cancellation_preserves_airborne_u
         sim.validate_state().unwrap();
     }
     assert_eq!(sim.agents["player"].cargo.total(), 0);
+}
+
+#[test]
+fn larger_scenes_route_around_obstacles_without_expanding_legacy_bounds() {
+    use navigation::{path_with_bounds, Disc};
+    let obstacle = Disc {
+        center: [9., 0.],
+        radius: 0.9,
+    };
+    assert!(navigation::path([7., 0.], [11., 0.], &[obstacle], 0.2).is_empty());
+    let route = path_with_bounds([7., 0.], [11., 0.], &[obstacle], 0.2, 12., |_, _| true);
+    assert!(route.len() > 1);
+    assert_eq!(route.last(), Some(&[11., 0.]));
+    assert!(route.iter().flatten().all(|v| v.abs() <= 12.));
+    assert!(path_with_bounds([0., 0.], [25., 0.], &[], 0.2, 12., |_, _| true).is_empty());
 }

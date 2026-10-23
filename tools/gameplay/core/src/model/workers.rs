@@ -19,7 +19,14 @@ impl Simulation {
     }
     pub(super) fn plan(&mut self, from: Point, to: Point, radius: f32) -> Vec<Point> {
         self.metrics.navigation_requests += 1;
-        let path = navigation::path(from, to, &self.obstacles, radius);
+        let path = navigation::path_with_bounds(
+            from,
+            to,
+            &self.obstacles,
+            radius,
+            self.config.extent,
+            |_, _| true,
+        );
         self.metrics.navigation_waypoints += path.len() as u64;
         if path.is_empty() {
             self.metrics.navigation_failures += 1;

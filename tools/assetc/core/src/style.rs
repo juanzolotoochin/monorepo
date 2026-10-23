@@ -168,6 +168,8 @@ pub enum ShapeKind {
 #[serde(deny_unknown_fields)]
 pub struct VoxelShape {
     pub kind: ShapeKind,
+    #[serde(default)]
+    pub walkable: bool,
     pub position: [f32; 3],
     pub size: [f32; 3],
     pub material: String,
@@ -184,11 +186,19 @@ fn once() -> [u32; 3] {
     [1; 3]
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WalkableSurface {
+    pub min: [f32; 2],
+    pub max: [f32; 2],
+    pub height: f32,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EnvironmentMesh {
     pub meshes: Vec<MeshData>,
     pub statistics: Statistics,
     pub obstacles: Vec<([f32; 3], f32)>,
     pub lights: Vec<BakedLight>,
+    #[serde(default)]
+    pub walkable: Vec<WalkableSurface>,
 }
 fn inside(kind: ShapeKind, p: [f32; 3]) -> bool {
     match kind {
@@ -224,11 +234,15 @@ pub fn compile_environment(style: &StyleProfile, shapes: &[VoxelShape]) -> Resul
     let step = style.voxel_size;
     let mut voxels = BTreeMap::<[i32; 3], usize>::new();
     let mut obstacles = vec![];
+    let mut walkable = vec![];
     let mut lights = vec![];
     let mut work = 0u64;
     let mut estimated_work = 0u64;
     let mut instances = 0u64;
     for shape in shapes {
+        if shape.walkable && !matches!(shape.kind, ShapeKind::Box) {
+            return Err("walkable surfaces must be boxes".into());
+        }
         let material = style
             .materials
             .iter()
@@ -279,6 +293,22 @@ pub fn compile_environment(style: &StyleProfile, shapes: &[VoxelShape]) -> Resul
                     work += (0..3).map(|i| (max[i] - min[i]) as u64).product::<u64>();
                     if work > 4_000_000 {
                         return Err("architecture exceeds voxel work budget".into());
+                    }
+                    if shape.walkable {
+                        let lo = std::array::from_fn::<_, 3, _>(|i| {
+                            ((center[i] - shape.size[i] * 0.5) / step - 0.5 - 0.00001).ceil() as i32
+                        });
+                        let hi = std::array::from_fn::<_, 3, _>(|i| {
+                            ((center[i] + shape.size[i] * 0.5) / step - 0.5 + 0.00001).floor()
+                                as i32
+                        });
+                        if (0..3).all(|i| hi[i] >= lo[i]) {
+                            walkable.push(WalkableSurface {
+                                min: [lo[0] as f32 * step, lo[2] as f32 * step],
+                                max: [(hi[0] + 1) as f32 * step, (hi[2] + 1) as f32 * step],
+                                height: (hi[1] + 1) as f32 * step,
+                            });
+                        }
                     }
                     if let Some(light) = &shape.light {
                         let position = std::array::from_fn(|i| center[i] + light.offset[i]);
@@ -398,6 +428,7 @@ pub fn compile_environment(style: &StyleProfile, shapes: &[VoxelShape]) -> Resul
         },
         obstacles,
         lights,
+        walkable,
     })
 }
 
@@ -406,6 +437,7 @@ mod tests {
     use super::*;
     fn shape() -> VoxelShape {
         VoxelShape {
+            walkable: false,
             kind: ShapeKind::Gear,
             position: [0.0, 1.0, 0.0],
             size: [2.0, 2.0, 0.6],
@@ -512,7 +544,7 @@ pub fn compile_actor(profile: &StyleProfile) -> Result<Vec<ActorMesh>> {
         .iter()
         .map(|recipe| {
             let env = compile_environment(&style, &recipe.shapes)?;
-            if env.meshes.is_empty() || !env.obstacles.is_empty() {
+            if env.meshes.is_empty() || !env.obstacles.is_empty() || !env.walkable.is_empty() {
                 return Err("actor parts require visible geometry without world colliders".into());
             }
             Ok(ActorMesh {
@@ -532,6 +564,7 @@ mod actor_tests {
     #[test]
     fn actor_profiles_bake_finer_meshes_and_reject_missing_or_duplicate_parts() {
         let shape = VoxelShape {
+            walkable: false,
             kind: ShapeKind::Cylinder,
             position: [0.0; 3],
             size: [0.5; 3],
@@ -616,6 +649,7 @@ mod lighting_tests {
     fn repeated_fixture_lights_share_geometry_positions_and_require_emission() {
         let style = StyleProfile::default();
         let mut shape = VoxelShape {
+            walkable: false,
             kind: ShapeKind::Octahedron,
             position: [0.0, 2.0, 0.0],
             size: [0.3; 3],
@@ -758,4 +792,43 @@ pub fn compile_skins(profile: &StyleProfile) -> Result<Vec<SkinMesh>> {
         });
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod surface_tests {
+    use super::*;
+    #[test]
+    fn walkable_metadata_matches_baked_top_faces_at_different_voxel_densities() {
+        for step in [0.1, 0.15, 0.3] {
+            let style = StyleProfile {
+                voxel_size: step,
+                ..Default::default()
+            };
+            let shape = VoxelShape {
+                kind: ShapeKind::Box,
+                walkable: true,
+                position: [0., 0., 0.],
+                size: [3., 0.3, 2.],
+                material: "stone".into(),
+                repeat: [1; 3],
+                spacing: [0.; 3],
+                solid_radius: None,
+                light: None,
+            };
+            let mesh = compile_environment(&style, &[shape]).unwrap();
+            let top = mesh
+                .meshes
+                .iter()
+                .flat_map(|m| &m.positions)
+                .map(|p| p[1])
+                .max_by(f32::total_cmp)
+                .unwrap();
+            assert_eq!(mesh.walkable.len(), 1);
+            assert!(
+                (mesh.walkable[0].height - top).abs() < 1e-5,
+                "{step}: {} != {top}",
+                mesh.walkable[0].height
+            );
+        }
+    }
 }

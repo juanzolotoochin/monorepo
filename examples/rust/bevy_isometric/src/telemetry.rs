@@ -91,12 +91,18 @@ pub fn end(world: &mut World) {
     if let Some(start) = start {
         elapsed(world, "update_cpu", start);
     }
-    let entities = world.entities().len();
+    let entity_slots = world.entities().len();
+    let entities = world
+        .archetypes()
+        .iter()
+        .map(|a| a.len() as usize)
+        .sum::<usize>();
     let meshes = world.resource::<Assets<Mesh>>().len();
     let materials = world.resource::<Assets<StandardMaterial>>().len();
     let cache = crate::style::cache_metrics(world);
     let mut t = world.remove_resource::<Telemetry>().unwrap();
     t.gauge("entities", entities as f64);
+    t.gauge("allocated_entity_slots", entity_slots as f64);
     t.gauge("mesh_assets", meshes as f64);
     t.gauge("material_assets", materials as f64);
     t.gauge("style_cache_entries", cache.0 as f64);

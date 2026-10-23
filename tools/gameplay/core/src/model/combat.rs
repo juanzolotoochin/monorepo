@@ -13,7 +13,12 @@ impl Simulation {
                 target.hp = target.hp.saturating_sub(p.damage);
                 let killed = target.hp == 0;
                 let position = target.position;
-                self.events.push(Event::Hit { position, killed });
+                self.events.push(Event::Hit {
+                    target: p.target,
+                    projectile: Some(p.id),
+                    position,
+                    killed,
+                });
                 if killed {
                     self.threats.remove(&p.target);
                     self.metrics.kills += 1;

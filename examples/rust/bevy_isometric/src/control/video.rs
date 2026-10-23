@@ -98,13 +98,24 @@ pub fn capture_frame(
               mut video: ResMut<Video>,
               mut telemetry: ResMut<crate::telemetry::Telemetry>| {
             let start = std::time::Instant::now();
-            capture
+            let rgb = capture
                 .image
                 .clone()
                 .try_into_dynamic()
                 .expect("captured image")
-                .to_rgb8()
-                .save(&path)
+                .to_rgb8();
+            use image::{
+                codecs::png::{CompressionType, FilterType, PngEncoder},
+                ImageEncoder,
+            };
+            let file = std::io::BufWriter::new(std::fs::File::create(&path).expect("frame file"));
+            PngEncoder::new_with_quality(file, CompressionType::Fast, FilterType::NoFilter)
+                .write_image(
+                    rgb.as_raw(),
+                    rgb.width(),
+                    rgb.height(),
+                    image::ExtendedColorType::Rgb8,
+                )
                 .expect("write video frame");
             video.completed += 1;
             telemetry.sample("capture_png_write", start.elapsed().as_secs_f64() * 1000.);

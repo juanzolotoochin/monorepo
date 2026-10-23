@@ -23,9 +23,17 @@ pub struct TerrainVisual;
 pub struct Exhaust;
 
 pub fn height(library: &SceneLibrary, p: Vec3) -> Option<f32> {
-    let scene = &library.scenes.get(library.current)?.scene;
+    let pack = library.scenes.get(library.current)?;
+    let scene = &pack.scene;
+    let surface = pack
+        .environment
+        .iter()
+        .flat_map(|e| &e.walkable)
+        .filter(|b| p.x >= b.min[0] && p.x <= b.max[0] && p.z >= b.min[1] && p.z <= b.max[1])
+        .map(|b| b.height)
+        .max_by(f32::total_cmp);
     match &scene.terrain {
-        None => Some(0.0),
+        None => Some(surface.unwrap_or(0.0)),
         Some(t) => t
             .platforms
             .iter()
@@ -70,7 +78,7 @@ pub fn route(
     goal: Vec3,
     obstacles: &[Disc],
 ) -> Vec<Vec3> {
-    navigation::path_with(start, goal, obstacles, |a, b| {
+    navigation::path_with_extent(start, goal, obstacles, library.extent(), |a, b| {
         flight.requested || flight.airborne || walkable(library, a, b)
     })
 }
