@@ -212,6 +212,29 @@ fn queue_haul(
 fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, String> {
     match command {
         Command::Inspect => Ok(Pending::Instant),
+        Command::Jetpack { enabled } => {
+            world.resource_mut::<crate::jetpack::Flight>().requested = *enabled;
+            Ok(Pending::Instant)
+        }
+        Command::AssertFlight {
+            airborne,
+            altitude,
+            tolerance,
+        } => {
+            if !altitude.is_finite() || !tolerance.is_finite() || !(0.0..=1.0).contains(tolerance) {
+                return Err(
+                    "Flight assertion requires a finite altitude and tolerance in 0..1".into(),
+                );
+            }
+            let actual = player_position(world).y;
+            let flying = world.resource::<crate::jetpack::Flight>().airborne;
+            if flying != *airborne || (actual - altitude).abs() > *tolerance {
+                return Err(format!(
+                    "Flight assertion failed: airborne={flying}, altitude={actual:.3}"
+                ));
+            }
+            Ok(Pending::Instant)
+        }
         Command::Scene { scene } => {
             let index = scene_index(scene)?;
             world.resource_mut::<SceneLibrary>().requested = Some(index);
@@ -221,7 +244,13 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             let goal = point(*position)?;
             let start = player_position(world);
             let obstacles = discs(world);
-            let route = navigation::path(start, goal, &obstacles);
+            let route = crate::jetpack::route(
+                world.resource::<SceneLibrary>(),
+                world.resource::<crate::jetpack::Flight>(),
+                start,
+                goal,
+                &obstacles,
+            );
             if route.is_empty() {
                 return Err("Destination is blocked or unreachable".into());
             }
@@ -390,11 +419,13 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
             if !world.resource::<Controls>().route.is_empty() {
                 None
             } else {
-                Some(if player_position(world).distance(*goal) < 0.15 {
-                    Ok(())
-                } else {
-                    Err("Walk was interrupted".into())
-                })
+                Some(
+                    if navigation::flat(player_position(world) - *goal).length() < 0.15 {
+                        Ok(())
+                    } else {
+                        Err("Walk was interrupted".into())
+                    },
+                )
             }
         }
         Pending::Haul {
@@ -421,6 +452,13 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
 
 pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
     let position = player_position(world);
+    let flight = world.resource::<crate::jetpack::Flight>();
+    let jetpack = json!({"requested":flight.requested,"airborne":flight.airborne,"support_height":flight.support,"hover_height":crate::jetpack::HOVER,"clearance":position.y-flight.support});
+    let terrain = &world.resource::<SceneLibrary>().scenes
+        [world.resource::<SceneLibrary>().current]
+        .scene
+        .terrain;
+    let terrain = json!(terrain);
     let controls = world.resource::<Controls>();
     let movement = json!({"route":controls.route.iter().map(|p|p.to_array()).collect::<Vec<_>>(),"velocity":controls.velocity.to_array(),"attacking":controls.attack.is_some(),"impacts":controls.impacts});
     let scene = world.resource::<SceneLibrary>().title().to_string();
@@ -453,7 +491,7 @@ pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
         .query::<&crate::piles::MineralUnit>()
         .iter(world)
         .count();
-    json!({"version":VERSION,"tick":hub.tick,"scene":scene,"player":{"position":position.to_array(),"movement":movement,"cargo":cargo},"piles":piles,"totals":totals,"visible_mineral_units":visible_units,"airborne_units":airborne,"airborne":flying,"targets":targets,"obstacles":obstacles,"active_command":hub.active.as_ref().map(|a|&a.envelope.request)})
+    json!({"version":VERSION,"tick":hub.tick,"scene":scene,"player":{"position":position.to_array(),"movement":movement,"cargo":cargo,"jetpack":jetpack},"terrain":terrain,"piles":piles,"totals":totals,"visible_mineral_units":visible_units,"airborne_units":airborne,"airborne":flying,"targets":targets,"obstacles":obstacles,"active_command":hub.active.as_ref().map(|a|&a.envelope.request)})
 }
 
 pub fn begin(world: &mut World) {

@@ -136,3 +136,24 @@ per unit. Scripts can choose a slower interval for presentation or zero for
 instant transfers in fast tests. Quantities commit when a toss starts; an
 airborne unit is a reserved part of its cargo/destination total. The `airborne`
 state describes that visual subset, and completion waits for every unit to land.
+
+### Flight and elevated scenes
+
+`jetpack-lab` is scene 4. `{"op":"jetpack","enabled":true}` enables the same
+terrain-following controller used by Space. `walk` then navigates across raised
+platforms and chasms. Setting `enabled` to false requests landing; over a void,
+the controller keeps hovering until it reaches supported ground. Commands are
+sequential, so a flight request completes immediately; follow it with `wait`
+when a demo should show takeoff or landing before the next movement.
+
+`{"op":"assert_flight","airborne":true,"altitude":3.8,"tolerance":0.05}`
+checks actual flight state and altitude. Tolerance defaults to 0.05 meters.
+Snapshots expose `terrain.platforms` and `player.jetpack` (`requested`,
+`airborne`, `support_height`, `hover_height`, `clearance`). Clearance is relative
+to the current/last supported top; during anticipatory climbs it can exceed the
+nominal hover height. The jetpack demo exercises and asserts climb, gap crossing,
+release over a chasm, and landing, and records turbine audio:
+
+```sh
+bazel build --config=full_local //examples/rust/bevy_isometric:jetpack_demo
+```

@@ -40,9 +40,13 @@ fn point(index: usize) -> Vec3 {
     )
 }
 
-fn nearest_visible(p: Vec3, obstacles: &[Disc]) -> Option<usize> {
+fn nearest_visible(
+    p: Vec3,
+    obstacles: &[Disc],
+    valid: &impl Fn(Vec3, Vec3) -> bool,
+) -> Option<usize> {
     (0..SIDE * SIDE)
-        .filter(|&i| clear(p, point(i), obstacles))
+        .filter(|&i| clear(p, point(i), obstacles) && valid(p, point(i)))
         .min_by(|&a, &b| {
             point(a)
                 .distance_squared(p)
@@ -51,6 +55,16 @@ fn nearest_visible(p: Vec3, obstacles: &[Disc]) -> Option<usize> {
 }
 
 pub fn path(start: Vec3, goal: Vec3, obstacles: &[Disc]) -> Vec<Vec3> {
+    path_with(start, goal, obstacles, |_, _| true)
+}
+
+pub fn path_with(
+    start: Vec3,
+    goal: Vec3,
+    obstacles: &[Disc],
+    valid: impl Fn(Vec3, Vec3) -> bool,
+) -> Vec<Vec3> {
+    let clear = |a, b, obs: &[Disc]| self::clear(a, b, obs) && valid(a, b);
     let start = flat(start);
     let goal = flat(goal);
     if !clear(goal, goal, obstacles) {
@@ -60,8 +74,8 @@ pub fn path(start: Vec3, goal: Vec3, obstacles: &[Disc]) -> Vec<Vec3> {
         return vec![goal];
     }
     let (Some(first), Some(last)) = (
-        nearest_visible(start, obstacles),
-        nearest_visible(goal, obstacles),
+        nearest_visible(start, obstacles, &valid),
+        nearest_visible(goal, obstacles, &valid),
     ) else {
         return vec![];
     };

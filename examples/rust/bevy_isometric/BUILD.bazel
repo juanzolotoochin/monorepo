@@ -24,6 +24,7 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         "//examples/rust/bevy_isometric/assets:boulder_lab",
+        "//examples/rust/bevy_isometric/assets:jetpack_lab",
         "//examples/rust/bevy_isometric/assets:mining_deck",
         "//examples/rust/bevy_isometric/assets:pile_lab",
         "//tools/assetc/core:voxel_assets",
@@ -82,4 +83,12 @@ py_test(
     args = ["$(rootpath :demo)"],
     data = [":demo"],
     legacy_create_init = 0,
+)
+
+game_demo(
+    name = "jetpack_demo",
+    game = ":demo",
+    script = "demos/jetpack.json",
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
 )

@@ -201,3 +201,46 @@ chunks replace their resting representation until landing, so the visual count
 continues to match conserved stock. The MP4 includes procedural footsteps,
 dispenser beeps, and synchronized toss/landing foley; its `.wav` sidecar uses the
 same sound bank as interactive playback.
+
+## Jetpack and elevated terrain
+
+Press **4** for the jetpack lab, or launch it directly:
+
+```sh
+bazel run --config=full_local //examples/rust/bevy_isometric:demo -- --scene jetpack-lab
+```
+
+Hold **Space** to hover 1.8 meters above the terrain; steer with WASD or right
+click a destination. The controller looks ahead and climbs toward taller
+platforms before reaching their walls. Swept body clearance stops horizontal
+movement if a wall still needs more altitude. Ground navigation rejects steep
+steps and gaps. Release Space to descend onto a platform. Above a chasm, the
+jetpack keeps the last supported hover altitude until you reach a safe landing
+surface. There is currently no fuel limit. **R** resets to the current scene's
+spawn, and switching scenes resets flight.
+
+The lab has four islands at 0, 1, 2, and 3.5 meters, including a contiguous
+vertical step and an open chasm. Its optional `terrain` layout is authored in
+`assets/levels/jetpack_lab.ron` and validated by the existing scene-pack Bazel
+rule. Rectangular platforms define their bounds and top height; overlapping
+platforms use the highest top, and uncovered locations are void. Other scenes
+retain their flat deck. Terrain collision and navigation use the same authored
+surfaces as rendering. Existing prop obstacles still use their planar clearance.
+
+Generate the audiovisual ascent, gap-crossing, safety-hover, and landing demo:
+
+```sh
+bazel build --config=full_local //examples/rust/bevy_isometric:jetpack_demo
+```
+
+Outputs are `jetpack_demo.mp4`, `.state.json`, `.frames.jsonl`, and `.wav` in
+`bazel-bin/examples/rust/bevy_isometric/`. The script uses the same flight
+controller as Space, and asserts both hover and landed altitudes. Thruster
+plumes, altitude telemetry, and procedural turbine audio are included.
+
+Live/script commands `{"op":"jetpack","enabled":true}` and
+`{"op":"jetpack","enabled":false}` request flight and landing. The existing
+`walk` command plans a flight route while airborne. `assert_flight` checks
+`airborne` and `altitude`, with an optional `tolerance` (default 0.05 meters).
+World inspection includes authored `terrain` and `player.jetpack` fields for
+requested flight, airborne status, support height, hover height, and clearance.

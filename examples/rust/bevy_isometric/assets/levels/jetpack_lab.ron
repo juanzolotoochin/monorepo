@@ -1,0 +1,12 @@
+Scene(
+    name: "JETPACK LAB / ELEVATION & CHASMS",
+    spawn: (-5.0, 0.0, 3.0),
+    industrial: false,
+    instances: [],
+    terrain: Some((platforms: [
+        (min: (-7.0, -1.0), max: (-2.0, 6.0), height: 0.0),
+        (min: (-2.0, -1.0), max: (1.0, 4.0), height: 2.0),
+        (min: (3.0, -3.0), max: (7.0, 4.0), height: 3.5),
+        (min: (-4.0, -6.0), max: (1.0, -3.0), height: 1.0),
+    ])),
+)
