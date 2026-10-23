@@ -21,6 +21,7 @@ pub mod mover;
 pub mod nav;
 pub mod rng;
 pub mod scenario;
+pub mod settlement;
 mod soa;
 pub mod spatial;
 pub mod terrain;

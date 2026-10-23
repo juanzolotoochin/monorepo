@@ -55,6 +55,7 @@ struct WorldSection {
     tick: u64,
     ids: sim::id::IdsState,
     terrain: sim::terrain::Terrain,
+    settlement: Option<sim::settlement::Settlement>,
     timers: Vec<Vec<(u64, sim::Id<sim::Mover>)>>,
     pending: sim::messages::Messages,
 }
@@ -109,6 +110,7 @@ pub fn write(world: &World, content: &Content) -> Vec<u8> {
         tick: state.tick,
         ids: state.ids,
         terrain: state.terrain,
+        settlement: state.settlement,
         timers: state.timers,
         pending: state.pending,
     };
@@ -168,6 +170,7 @@ pub fn read_state(bytes: &[u8]) -> Result<(Header, WorldState), LoadError> {
         tick: world.tick,
         ids: world.ids,
         terrain: world.terrain,
+        settlement: world.settlement,
         timers: world.timers,
         pending: world.pending,
         chunks,
@@ -215,8 +218,8 @@ pub fn dump_ron(bytes: &[u8]) -> Result<String, LoadError> {
         out.push_str(&format!("// {name}\n{}\n\n", text.expect("save types always print")));
     };
     section("header", ron::ser::to_string_pretty(&header, pretty()));
-    let WorldState { config, tick, ids, terrain, timers, pending, chunks } = state;
-    section("world", ron::ser::to_string_pretty(&WorldSection { config, tick, ids, terrain, timers, pending }, pretty()));
+    let WorldState { config, tick, ids, terrain, settlement, timers, pending, chunks } = state;
+    section("world", ron::ser::to_string_pretty(&WorldSection { config, tick, ids, terrain, settlement, timers, pending }, pretty()));
     for (index, chunk) in chunks.iter().enumerate() {
         section(&chunk_section_name(index), ron::ser::to_string_pretty(chunk, pretty()));
     }

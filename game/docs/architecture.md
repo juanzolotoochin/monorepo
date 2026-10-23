@@ -160,6 +160,31 @@ Items move only by haulers (no belts). Reservations use incremental counters on
 each depot, updated in the apply phase. Today's stock conservation ledger is
 kept as a debug and test invariant.
 
+As built in `game/sim::settlement` (Milestone 1):
+
+- Scenario files keep the original format (`game/content::scenario`), parsed
+  into `Fx`. A host turns a scenario plus the scene's obstacle discs into the
+  world at tick 0. View-only fields (labels, skins, cargo layouts) stay `f32`
+  and never reach the simulation.
+- Each depot counts `out` (promised stock) and `incoming` (units on their way)
+  per item. `Settlement::validate` recomputes both from scratch every tick in
+  tests, along with the conservation ledger.
+- Haulers move themselves in the parallel self update, avoiding last tick's
+  bodies. Taking a job (`Reserve`), loading, unloading, fetching and attaching
+  equipment are messages; a job that no longer fits when applied shrinks or is
+  rejected, and the hauler retries later.
+- Docks are claimed by message every tick and resolved per depot, independent
+  of message order: an agent using or leaving the dock keeps it, then the
+  previous owner if still approaching, then the nearest approaching agent. An
+  agent may only start loading once it owns the dock.
+- Settlement agents live in world-wide tables rather than per-chunk ones, since
+  scenes have at most 32 of them; their messages are still filed under the
+  chunk they stand in, so they join the shuffled chunk order.
+- Differences from the original game, on purpose: a newly attached trailer is
+  placed in the nearest clear direction behind the animal, and a cart that
+  can't find a turning circle takes the direct route instead of waiting
+  forever. The original could deadlock on both, depending on the arrival angle.
+
 ## Networking
 
 Details: [desyncs and host loss](design/desync-host-loss.html).

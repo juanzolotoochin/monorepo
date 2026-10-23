@@ -106,5 +106,17 @@ pub fn golden_report() -> String {
     for (name, hash) in &last.subsystems {
         writeln!(out, "{name} {hash:016x}").unwrap();
     }
+    // The forest outpost's settlement, 20 seconds in.
+    let forest = content::scenario::Scenario::parse(FOREST).expect("forest scenario");
+    let world = crate::World::new_settlement(11, Content::builtin().rules, &forest, &[]).expect("forest world");
+    let mut sim = Simulation::from_world(world, 1);
+    for tick in 0..600 {
+        let hash = sim.step(&[]);
+        if tick % 150 == 149 {
+            writeln!(out, "forest tick {} {:016x}", hash.tick, hash.total).unwrap();
+        }
+    }
     out
 }
+
+const FOREST: &str = include_str!("../../app/assets/levels/forest_supply.ron");

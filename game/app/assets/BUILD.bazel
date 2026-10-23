@@ -1,5 +1,14 @@
 load("//game/build/voxel_assets:defs.bzl", "boulder_prefab", "scene_assets")
 
+# Scenario files are also read by the new simulation (game/content::scenario).
+exports_files(
+    [
+        "levels/combat_arena_supply.ron",
+        "levels/forest_supply.ron",
+    ],
+    visibility = ["//game:__subpackages__"],
+)
+
 package(default_visibility = ["//game/app:__pkg__"])
 
 [

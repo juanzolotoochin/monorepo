@@ -5,11 +5,14 @@ load("@rules_rs//rs:rust_test.bzl", "rust_test")
 rust_library(
     name = "sim",
     srcs = glob(["src/**/*.rs"]),
+    # The golden report replays the forest outpost's scenario.
+    compile_data = ["//game/app/assets:levels/forest_supply.ron"],
     edition = "2021",
     visibility = ["//game:__subpackages__"],
     deps = [
         "//game/content",
         "//game/fx",
+        "@crates//:postcard",
         "@crates//:rayon",
         "@crates//:serde",
     ],
@@ -18,7 +21,11 @@ rust_library(
 rust_test(
     name = "sim_test",
     size = "small",
-    compile_data = ["testdata/golden.txt"],
+    compile_data = [
+        "testdata/golden.txt",
+        "//game/app/assets:levels/combat_arena_supply.ron",
+        "//game/app/assets:levels/forest_supply.ron",
+    ],
     crate = ":sim",
     edition = "2021",
 )

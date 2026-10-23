@@ -10,6 +10,8 @@
 //! feed the rules hash. Peers with different rules hashes can't play together;
 //! changing a `view` section keeps them compatible.
 
+pub mod scenario;
+
 use std::fmt;
 use std::path::Path;
 

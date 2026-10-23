@@ -158,7 +158,23 @@ pub fn articulated_path(
     radius: Fx,
     trailer_radius: Fx,
 ) -> Vec<FxVec2> {
-    let direct = path(terrain, start, goal, radius);
+    articulated_path_avoiding(terrain, start, goal, heading, trailer, hitch, radius, trailer_radius, &[])
+}
+
+/// [`articulated_path`], also avoiding `extra` discs (other bodies).
+#[allow(clippy::too_many_arguments)]
+pub fn articulated_path_avoiding(
+    terrain: &Terrain,
+    start: FxVec2,
+    goal: FxVec2,
+    heading: Fx,
+    trailer: FxVec2,
+    hitch: Fx,
+    radius: Fx,
+    trailer_radius: Fx,
+    extra: &[Disc],
+) -> Vec<FxVec2> {
+    let direct = path_avoiding(terrain, start, goal, radius, extra);
     if distance(start, goal) < Fx::from_ratio(1, 10) {
         return direct;
     }
@@ -189,8 +205,8 @@ pub fn articulated_path(
                 );
                 let d = distance(cart, next);
                 let next_cart = if d > hitch { next + (cart - next) * (hitch / d) } else { cart };
-                if !terrain.clear(previous, next, radius)
-                    || !terrain.clear(cart, next_cart, trailer_radius)
+                if !terrain.clear_with(previous, next, radius, extra)
+                    || !terrain.clear_with(cart, next_cart, trailer_radius, extra)
                     || distance(next, next_cart) < radius + trailer_radius + Fx::from_ratio(1, 20)
                 {
                     valid = false;
@@ -203,7 +219,7 @@ pub fn articulated_path(
             if !valid {
                 continue;
             }
-            let tail = path(terrain, previous, goal, radius);
+            let tail = path_avoiding(terrain, previous, goal, radius, extra);
             let Some(&next) = tail.first() else { continue };
             if angle_between(heading + side * turn, bearing(previous, next)).abs() > Fx::from_ratio(3, 4) {
                 continue;

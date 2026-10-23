@@ -9,7 +9,8 @@ use crate::messages::{Damage, Eat, EatFailed, Killed, Messages, Spawn};
 use crate::mover::{Mover, MoverRow, Movers, HUNGRY_AT, REACH};
 use crate::rng::{stream, Rng};
 use crate::spatial::{for_each_near, SpatialIndex};
-use crate::terrain::Terrain;
+use crate::settlement::Settlement;
+use crate::terrain::{Disc, Terrain};
 use crate::timer::TimerWheel;
 
 /// Chunks are square columns of this many tiles per side, covering the full height.
@@ -64,6 +65,10 @@ pub enum CommandKind {
     Impulse { mover: Id<Mover>, velocity: FxVec2 },
     /// Digs out the rock column at this tile, if there is one.
     Dig { tile: (i32, i32) },
+    /// Switches a settlement haul link on or off.
+    SetLink { link: u16, enabled: bool },
+    /// Switches a settlement machine on or off.
+    SetMachine { producer: u16, enabled: bool },
 }
 
 /// One player input, scheduled for a tick by the network layer.
@@ -130,6 +135,7 @@ pub struct World {
     indices: Vec<SpatialIndex>,
     ids: Ids<Mover>,
     terrain: Terrain,
+    settlement: Option<Box<Settlement>>,
     timers: TimerWheel<Id<Mover>>,
     /// Messages created during apply, handled next tick.
     pending: Messages,
@@ -154,6 +160,7 @@ impl World {
                 let center = FxVec2::new(size.x.div_int(2), size.y.div_int(2));
                 Terrain::flat(center, size.x.min(size.y).div_int(2))
             },
+            settlement: None,
             timers: TimerWheel::default(),
             pending: Messages::default(),
             despawns: Vec::new(),
@@ -172,6 +179,32 @@ impl World {
 
     pub fn terrain(&self) -> &Terrain {
         &self.terrain
+    }
+
+    /// A new world for a settlement scenario, sized to fit its arena, at tick 0.
+    /// `obstacles` are the scene's blocking props, in arena coordinates.
+    pub fn new_settlement(
+        seed: u64,
+        rules: Rules,
+        scenario: &content::scenario::Scenario,
+        obstacles: &[Disc],
+    ) -> Result<World, String> {
+        let span = (scenario.extent.mul_int(2) + Fx::from_int(2)).ceil().floor_to_int() as u32;
+        let chunks = span.div_ceil(CHUNK_TILES as u32).max(1);
+        let config = WorldConfig { seed, chunks_x: chunks, chunks_y: chunks, max_movers: 0 };
+        let mut world = World::new(config, rules);
+        let center = world.terrain.center;
+        let placed: Vec<Disc> = obstacles
+            .iter()
+            .map(|o| Disc { center: FxVec2::new(center.x + o.center.x, center.y + o.center.y), radius: o.radius })
+            .collect();
+        let settlement = Settlement::from_scenario(scenario, &placed, &mut world.terrain)?;
+        world.settlement = Some(Box::new(settlement));
+        Ok(world)
+    }
+
+    pub fn settlement(&self) -> Option<&Settlement> {
+        self.settlement.as_deref()
     }
 
     /// Replaces the terrain. For building a new world before tick 0; during
@@ -229,6 +262,16 @@ impl World {
                 }
                 CommandKind::Dig { tile } => {
                     self.terrain.dig(tile);
+                }
+                CommandKind::SetLink { link, enabled } => {
+                    if let Some(s) = &mut self.settlement {
+                        s.set_link(link as usize, enabled);
+                    }
+                }
+                CommandKind::SetMachine { producer, enabled } => {
+                    if let Some(s) = &mut self.settlement {
+                        s.set_machine(producer as usize, enabled);
+                    }
                 }
             }
         }
@@ -288,6 +331,9 @@ impl World {
 
     // Stage 2: self update. Each mover changes only itself.
     fn self_update(&mut self) {
+        if let Some(settlement) = &mut self.settlement {
+            settlement.self_update(self.tick, &self.terrain);
+        }
         let World { chunks, indices, config, tick, rules, max_body_radius, .. } = self;
         let (config, tick, indices, rules, max_body_radius) = (&*config, *tick, &*indices, &*rules, *max_body_radius);
         chunks.par_iter_mut().for_each(|chunk| {
@@ -340,10 +386,19 @@ impl World {
 
     // Stage 3: read phase. Reads the whole world, writes only to its chunk's outbox.
     fn read_phase(&self) -> Vec<Messages> {
-        (0..self.chunks.len())
+        let mut outboxes: Vec<Messages> = (0..self.chunks.len())
             .into_par_iter()
             .map(|chunk| self.read_chunk(chunk))
-            .collect()
+            .collect();
+        // Settlement agents file their messages under the chunk they stand in,
+        // so they take part in the shuffled chunk order like everyone else.
+        if let Some(settlement) = &self.settlement {
+            for (position, mut messages) in settlement.read(self.tick, &self.terrain) {
+                let chunk = self.config.chunk_of(FxVec3::new(position.x, position.y, Fx::ZERO));
+                outboxes[chunk].append(&mut messages);
+            }
+        }
+        outboxes
     }
 
     fn read_chunk(&self, chunk_index: usize) -> Messages {
@@ -487,6 +542,30 @@ impl World {
             movers.vel[slot] = -movers.vel[slot];
             movers.hunger[slot] = HUNGRY_AT - 30;
         }
+
+        if let Some(settlement) = &mut self.settlement {
+            let tick = self.tick;
+            settlement.economy(tick);
+            settlement.resolve_docks(messages.claim_dock);
+            for message in messages.retry {
+                settlement.retry(tick, message);
+            }
+            for message in messages.equip {
+                settlement.equip(tick, message);
+            }
+            for message in messages.reserve {
+                settlement.reserve(tick, message);
+            }
+            for message in messages.attach {
+                settlement.attach(tick, &self.terrain, message);
+            }
+            for message in messages.load {
+                settlement.load(tick, message);
+            }
+            for message in messages.unload {
+                settlement.unload(tick, message);
+            }
+        }
     }
 
     // Stage 6: housekeeping.
@@ -619,6 +698,7 @@ impl World {
             ("chunks", hash_of(&chunks)),
             ("ids", hash_of(&self.ids)),
             ("terrain", hash_of(&self.terrain)),
+            ("settlement", self.settlement.as_ref().map_or(0, |s| hash_of(s.as_ref()))),
             ("timers", hash_of(&self.timers)),
             ("pending", hash_of(&self.pending)),
         ];
@@ -638,6 +718,7 @@ impl World {
             tick: self.tick,
             ids: self.ids.to_state(),
             terrain: self.terrain.clone(),
+            settlement: self.settlement.as_deref().cloned(),
             timers: self.timers.to_state(),
             pending: self.pending.clone(),
             chunks: self
@@ -662,6 +743,7 @@ impl World {
         world.tick = state.tick;
         world.ids = Ids::from_state(&state.ids);
         world.terrain = state.terrain;
+        world.settlement = state.settlement.map(Box::new);
         world.timers = timers;
         world.pending = state.pending;
         for (index, saved) in state.chunks.into_iter().enumerate() {
@@ -806,6 +888,7 @@ pub struct WorldState {
     pub tick: u64,
     pub ids: IdsState,
     pub terrain: Terrain,
+    pub settlement: Option<Settlement>,
     pub timers: Vec<Vec<(u64, Id<Mover>)>>,
     /// Messages created during the last apply phase, handled next tick.
     pub pending: Messages,

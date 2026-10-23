@@ -24,6 +24,11 @@ rust_library(
 rust_test(
     name = "content_test",
     size = "small",
+    # The original scene files, to check they still load.
+    compile_data = [
+        "//game/app/assets:levels/combat_arena_supply.ron",
+        "//game/app/assets:levels/forest_supply.ron",
+    ],
     crate = ":content",
     edition = "2021",
 )

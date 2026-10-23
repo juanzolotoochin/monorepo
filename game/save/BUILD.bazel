@@ -19,6 +19,7 @@ rust_library(
 rust_test(
     name = "save_test",
     size = "small",
+    compile_data = ["//game/app/assets:levels/forest_supply.ron"],
     crate = ":save",
     edition = "2021",
 )

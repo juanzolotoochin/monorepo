@@ -138,3 +138,29 @@ fn large_save_size() {
     let bytes = write(sim.world(), &content);
     println!("{} movers: {} KiB", sim.world().mover_count(), bytes.len() / 1024);
 }
+
+/// A settlement saved mid-haul continues exactly: agents, reservations,
+/// docks and items in flight all come back.
+#[test]
+fn settlement_save_and_continue() {
+    let content = Content::builtin();
+    let text = include_str!("../../app/assets/levels/forest_supply.ron");
+    let scenario = content::scenario::Scenario::parse(text).unwrap();
+    let start = || sim::World::new_settlement(5, content.rules.clone(), &scenario, &[]).unwrap();
+    let mut uninterrupted = Simulation::from_world(start(), 2);
+    let expected: Vec<_> = (0..600).map(|_| uninterrupted.step(&[])).collect();
+
+    let mut first = Simulation::from_world(start(), 2);
+    for _ in 0..317 {
+        first.step(&[]);
+    }
+    assert!(!first.world().settlement().unwrap().transfers.is_empty() || first.world().settlement().unwrap().agents.iter().any(|a| a.assignment.is_some()));
+    let bytes = write(first.world(), &content);
+    let mut resumed = Simulation::from_world(read(&bytes, &content).unwrap(), 2);
+    for expected in &expected[317..] {
+        let actual = resumed.step(&[]);
+        if let Some(difference) = expected.first_difference(&actual) {
+            panic!("first difference at {difference}");
+        }
+    }
+}
