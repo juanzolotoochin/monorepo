@@ -823,6 +823,10 @@ pub fn setup(
             unlit: true,
             ..default()
         }),
+        blood: [
+            material(&mut materials, [0.42, 0.025, 0.035], 0.55),
+            material(&mut materials, [0.73, 0.075, 0.055], 0.48),
+        ],
     });
 }
 
@@ -992,7 +996,7 @@ pub fn hud(mut commands: Commands) {
             ));
             p.spawn((
                 Text::new(
-                    "1 / 2 / 3 / 4 / 5 / 6 / 7  SCENES    SPACE  JETPACK    WASD  STEER    SHIFT  RUN    WHEEL  ZOOM    M  AUDIO",
+                    "1 / 2 / 3 / 4 / 5 / 6 / 7 / 8  SCENES    SPACE  JETPACK    WASD  STEER    SHIFT  RUN    WHEEL  ZOOM    M  AUDIO",
                 ),
                 TextFont {
                     font_size: 10.0,

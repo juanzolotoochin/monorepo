@@ -347,7 +347,7 @@ Every ground item, carried item, and airborne transfer represents one real unit.
 The player remains active in this scene. **RMB / WASD** moves, **LMB** on stock
 queues collection of up to four units, and **Ctrl+LMB** on a depot deposits the
 first carried material. **E** toggles a nearby machine, **P** pauses automation,
-and **Shift+LMB** attacks ghouls with the axe. Manual movement cancels pending
+and **Shift+LMB** attacks ghouls with the longsword. Manual movement cancels pending
 player transfers; already airborne items still arrive. The player shares stock,
 capacity reservations, and production inputs with the workers, so diverting
 supplies changes how the settlement runs.
@@ -382,6 +382,28 @@ The existing JSON/TCP interface also exposes `settlement_transfer` (`depot`,
 quantity to arrive. `assert_settlement` checks minimum `delivered`, `cycles`,
 `equipped`, and `kills` counts plus all accounting invariants. `inspect` includes
 full `settlement.simulation`, scenario data, and per-material `balances`.
+
+## Red Clearing combat arena
+
+Press **8** or start the focused forest combat scene directly:
+
+```sh
+bazel run --config=full_local //examples/rust/bevy_isometric:demo -- --scene combat-arena
+```
+
+Right click to position the player, then Shift + left click toward an approaching
+ghoul. The faster longsword stops on contact. A short hit pause, camera jolt,
+growl, and voxel blood burst mark the hit; a surviving ghoul recoils before
+limping forward. The same 60 Hz simulation owns health, knockback, kills, and
+the melee metrics in the world-state dump.
+
+```sh
+bazel test --config=full_local //examples/rust/bevy_isometric:combat_arena_test
+bazel build --config=full_local //examples/rust/bevy_isometric:combat_arena_demo
+```
+
+The demo produces an MP4 with audio, a WAV, a final state report, and a per-frame
+trace. Its assertions check hits, a kill, and actual knockback displacement.
 
 ## Performance telemetry
 

@@ -77,6 +77,7 @@ pub enum Cue {
     Stone = 3,
     Crystal = 4,
     Polymer = 5,
+    GhoulHit = 10,
 }
 #[repr(C)]
 struct SynthEvent {

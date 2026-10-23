@@ -7,9 +7,9 @@ use crate::{
 use bevy::prelude::*;
 
 pub const WALK_SPEED: f32 = 3.8;
-pub const WINDUP: f32 = 0.24;
-pub const ACTIVE_END: f32 = 0.38;
-pub const ATTACK_END: f32 = 0.76;
+pub const WINDUP: f32 = 0.16;
+pub const ACTIVE_END: f32 = 0.29;
+pub const ATTACK_END: f32 = 0.58;
 pub const REBOUND_END: f32 = 0.42;
 pub const REST_ANGLE: f32 = 0.45;
 
@@ -394,6 +394,9 @@ pub fn combat(
     let Some(mut attack) = controls.attack else {
         return;
     };
+    if attack.age < 0.05 {
+        player.rotation = Quat::from_rotation_y(attack.aim.x.atan2(attack.aim.z));
+    }
     let previous_age = attack.age;
     attack.age += dt;
     if attack.impact_angle.is_none() && attack.age >= WINDUP && previous_age < ACTIVE_END {
@@ -640,6 +643,7 @@ mod tests {
             spark: std::array::from_fn(|_| default()),
             debris: std::array::from_fn(|_| default()),
             trail: default(),
+            blood: std::array::from_fn(|_| default()),
         };
         app.init_resource::<Time>()
             .init_resource::<ButtonInput<KeyCode>>()
@@ -723,6 +727,7 @@ mod tests {
                         spark: std::array::from_fn(|_| default()),
                         debris: std::array::from_fn(|_| default()),
                         trail: default(),
+                        blood: std::array::from_fn(|_| default()),
                     })
                     .add_systems(Update, combat);
                 let position = Vec3::new(x, 0.0, z);

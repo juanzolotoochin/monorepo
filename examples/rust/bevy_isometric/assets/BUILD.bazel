@@ -102,3 +102,11 @@ scene_assets(
     scenario = "levels/forest_supply.ron",
     style = "styles/forest.ron",
 )
+
+scene_assets(
+    name = "combat_arena",
+    layout = "levels/combat_arena.ron",
+    prefabs = [],
+    scenario = "levels/combat_arena_supply.ron",
+    style = "styles/combat.ron",
+)

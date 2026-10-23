@@ -166,6 +166,7 @@ pub fn scene_index(name: &str) -> Result<usize, String> {
         "surprise-lab" => Ok(4),
         "atlantis" => Ok(5),
         "forest-outpost" => Ok(6),
+        "combat-arena" => Ok(7),
         _ => Err(format!("Unknown scene {name}")),
     }
 }

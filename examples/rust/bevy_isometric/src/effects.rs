@@ -23,6 +23,7 @@ pub struct FxAssets {
     pub spark: [Handle<StandardMaterial>; 4],
     pub debris: [Handle<StandardMaterial>; 4],
     pub trail: Handle<StandardMaterial>,
+    pub blood: [Handle<StandardMaterial>; 2],
 }
 #[derive(Component)]
 pub struct Particle {
@@ -146,6 +147,61 @@ pub fn blade_echo(
             bounce: false,
         },
     ));
+}
+
+/// Voxel droplets travel away from the cut, then bounce and fade on the ground.
+pub fn blood(world: &mut World, position: Vec3, direction: Vec3, seed: u32) {
+    let assets = world.resource::<FxAssets>();
+    let cube = assets.cube.clone();
+    let materials = assets.blood.clone();
+    let mut seed = seed.wrapping_mul(747796405).wrapping_add(2891336453);
+    for i in 0..22 {
+        let spread = Vec3::new(
+            random(&mut seed) * 2.0 - 1.0,
+            random(&mut seed) * 1.2,
+            random(&mut seed) * 2.0 - 1.0,
+        );
+        let velocity = (direction * 2.2 + spread).normalize_or(Vec3::Y)
+            * (2.0 + random(&mut seed) * 2.8)
+            + Vec3::Y * 1.5;
+        let size = Vec3::splat(0.07 + random(&mut seed) * 0.075);
+        world.spawn((
+            Mesh3d(cube.clone()),
+            MeshMaterial3d(materials[i % 2].clone()),
+            Transform::from_translation(position).with_scale(size),
+            Particle {
+                velocity,
+                age: 0.0,
+                life: 0.48 + random(&mut seed) * 0.45,
+                size,
+                gravity: 13.0,
+                bounce: true,
+            },
+        ));
+    }
+    for i in 0..7 {
+        let x = (random(&mut seed) * 2.0 - 1.0) * 0.55;
+        let z = (random(&mut seed) * 2.0 - 1.0) * 0.55;
+        let size = Vec3::new(
+            0.13 + random(&mut seed) * 0.14,
+            0.012,
+            0.12 + random(&mut seed) * 0.17,
+        );
+        world.spawn((
+            Mesh3d(cube.clone()),
+            MeshMaterial3d(materials[i % 2].clone()),
+            Transform::from_translation(Vec3::new(position.x + x, 0.012, position.z + z))
+                .with_scale(size),
+            Particle {
+                velocity: Vec3::ZERO,
+                age: 0.0,
+                life: 3.0,
+                size,
+                gravity: 0.0,
+                bounce: false,
+            },
+        ));
+    }
 }
 
 pub fn update_effects(

@@ -80,6 +80,59 @@ fn run(sim: &mut Simulation, seconds: u32, fps: u32) {
         sim.validate_state().unwrap();
     }
 }
+
+#[test]
+fn melee_staggers_a_wounded_ghoul_then_it_resumes_advancing() {
+    let mut config = scenario();
+    let mut player = agent("player");
+    player.controlled = true;
+    player.links.clear();
+    player.position = [0.0, 0.0];
+    config.agents.push(player);
+    config.waves.push(Wave {
+        id: "ghouls".into(),
+        position: [0.0, 6.0],
+        target: [0.0, -6.0],
+        skin: "ghoul".into(),
+        first: 3600.0,
+        every: 10.0,
+        speed: 1.0,
+        hp: 2,
+        damage: 1,
+        count: 1,
+    });
+    let mut sim = Simulation::new(config, vec![]).unwrap();
+    sim.set_controlled_pose("player", [0.0, 0.0], 0.0).unwrap();
+    sim.threats.insert(
+        999,
+        Threat {
+            id: 999,
+            wave: 0,
+            position: [0.0, 1.1],
+            heading: 0.0,
+            travelled: 0.0,
+            hp: 2,
+            route: vec![[0.0, -6.0]],
+            stagger_until: 0,
+            knockback: [0.0, 0.0],
+        },
+    );
+    assert_eq!(sim.strike("player").unwrap(), 1);
+    assert_eq!(sim.threats[&999].hp, 1);
+    assert_eq!(sim.metrics.melee_hits, 1);
+    run(&mut sim, 1, 60);
+    let advanced = sim.threats[&999].position[1];
+    assert!(sim.metrics.knockback_meters > 0.3);
+    assert!(
+        advanced < 1.5,
+        "wounded ghoul should resume approaching: {advanced}"
+    );
+    sim.set_controlled_pose("player", [0.0, advanced - 1.0], 0.0)
+        .unwrap();
+    assert_eq!(sim.strike("player").unwrap(), 1);
+    assert!(!sim.threats.contains_key(&999));
+    assert_eq!(sim.metrics.melee_kills, 1);
+}
 #[test]
 fn reservations_and_in_flight_units_prevent_overbooking_and_preserve_every_item() {
     let mut config = scenario();

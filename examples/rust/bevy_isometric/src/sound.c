@@ -89,6 +89,14 @@ static void synth_frames(audio_state *state, float *out, ma_uint32 frames) {
                 float envelope = sinf(3.1415926f * fminf(t / 0.32f, 1.0f));
                 sample = (0.035f * sinf(6.2831853f * 92.0f * t) + 0.045f * noise(state)) * envelope;
                 if (t > 0.32f) v->alive = 0;
+            } else if (v->kind == 10) {
+                // Chest-thump impact under a short, descending throat growl.
+                float rasp = noise(state) * (0.08f + 0.05f * sinf(6.2831853f * 32.0f * t));
+                sample = 0.25f * tone(112.0f - t * 95.0f, t, 9.0f)
+                       + 0.14f * tone(58.0f - t * 22.0f, t, 13.0f)
+                       + rasp * expf(-8.0f * t);
+                sample *= fminf(t * 900.0f, 1.0f);
+                if (t > 0.42f) v->alive = 0;
             } else {
                 sample = 0.055f * tone(76.0f, t, 55.0f) + 0.035f * noise(state) * expf(-90.0f * t);
                 if (t > 0.12f) v->alive = 0;
@@ -103,7 +111,7 @@ static void synth_frames(audio_state *state, float *out, ma_uint32 frames) {
 static void render(ma_device *d,void *output,const void *input,ma_uint32 frames) {
     (void)d;(void)input;
     unsigned int events=atomic_exchange_explicit(&pending,0,memory_order_relaxed);
-    for (int kind=0;kind<10;++kind) if (events & (1u<<kind)) play_voice(&playback,kind);
+    for (int kind=0;kind<11;++kind) if (events & (1u<<kind)) play_voice(&playback,kind);
     synth_frames(&playback,output,frames);
 }
 typedef struct { uint64_t sample; int kind; } audio_event;
@@ -136,7 +144,7 @@ int kestrel_audio_start(void) {
     return 0;
 }
 void kestrel_audio_play(int cue) {
-    if (cue >= 0 && cue < 10) atomic_fetch_or_explicit(&pending, 1u << cue, memory_order_relaxed);
+    if (cue >= 0 && cue < 11) atomic_fetch_or_explicit(&pending, 1u << cue, memory_order_relaxed);
 }
 void kestrel_audio_stop(void) {
     if (!active) return;

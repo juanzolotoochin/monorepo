@@ -39,6 +39,7 @@ fn main() {
             "surprise-lab" => 4,
             "atlantis" => 5,
             "forest-outpost" => 6,
+            "combat-arena" => 7,
             name => {
                 eprintln!("Unknown scene {name}");
                 std::process::exit(2)
