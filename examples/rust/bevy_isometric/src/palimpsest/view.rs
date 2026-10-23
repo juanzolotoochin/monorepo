@@ -94,7 +94,7 @@ pub fn setup(world: &mut World) {
                 Transform::from_xyz(0.0, 1.66, 0.225).with_scale(Vec3::new(0.34, 0.08, 0.02)),
             ));
         });
-    if index != 4 {
+    if !world.resource::<SceneLibrary>().has_feature(voxel_assets::SceneFeature::MemoryTrial) {
         return;
     }
     for (i, p) in PADS.iter().enumerate() {
@@ -224,7 +224,7 @@ pub(super) fn update(world: &mut World, m: &Memory, elapsed: f32, dt: f32) {
             *visibility = Visibility::Hidden;
         }
     }
-    if m.current == Some(4) {
+    if world.resource::<SceneLibrary>().has_feature(voxel_assets::SceneFeature::MemoryTrial) {
         let a = world.resource::<Art>();
         let (blue, green, dark) = (a.blue.clone(), a.green.clone(), a.dark.clone());
         for (pad, mut mat) in world

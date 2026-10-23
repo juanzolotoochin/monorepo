@@ -1066,7 +1066,7 @@ pub fn update_hud(
         "CONTACTS {:02} / HIT {last} / DYNAMIC BUILDS {}{audio}",
         controls.impacts, cache.runtime_generations
     );
-    let text = if library.current == 3 {
+    let text = if library.has_feature(voxel_assets::SceneFeature::FlightHud) {
         format!(
             "ALT {:.1}m / SUPPORT {:.1}m / HOVER {:.1}m / HOLD SPACE TO FLY",
             player.translation.y,

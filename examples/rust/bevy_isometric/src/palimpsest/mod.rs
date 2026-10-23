@@ -6,6 +6,7 @@ use crate::{
     sound::{Cue, Sound},
 };
 use bevy::prelude::*;
+use voxel_assets::SceneFeature;
 mod view;
 pub use view::setup;
 
@@ -130,6 +131,7 @@ pub fn tick(world: &mut World) {
     let interactive = !options.simulation && options.frames_dir.is_none();
     let library = world.resource::<crate::assets::SceneLibrary>();
     let reserved_e = library.scenes[library.current].scene.scenario.is_some();
+    let memory_trial = library.has_feature(SceneFeature::MemoryTrial);
     if interactive && !reserved_e {
         let keys = world.resource::<ButtonInput<KeyCode>>();
         let e = keys.just_pressed(KeyCode::KeyE);
@@ -160,7 +162,7 @@ pub fn tick(world: &mut World) {
         m.replay = (m.replay + dt).min(m.elapsed);
         m.ghost = sample_at(&m.samples, m.replay);
     }
-    if m.current == Some(4) {
+    if memory_trial {
         let old = m.pads;
         for (i, p) in PADS.iter().enumerate() {
             let on = |v: Vec3| flat(v - *p).length() < 0.62 && (v.y - p.y).abs() < 0.25;

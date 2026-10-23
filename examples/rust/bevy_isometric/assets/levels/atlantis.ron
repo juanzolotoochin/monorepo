@@ -1,5 +1,5 @@
 // World-space dimensions; the style profile determines the baked voxel grid.
-Scene(
+Scene(id: "atlantis", features: [],
     name: "ATLANTIS / THE TIDAL AETHERWORKS",
     spawn: (0.0, 0.0, 5.8),
     industrial: false,
