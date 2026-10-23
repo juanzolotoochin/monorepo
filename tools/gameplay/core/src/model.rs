@@ -74,6 +74,9 @@ pub struct Metrics {
     pub cycles: u64,
     pub shots: u64,
     pub kills: u64,
+    pub melee_hits: u64,
+    pub melee_kills: u64,
+    pub knockback_meters: f64,
     pub breaches: u64,
     pub delivered_items: BTreeMap<String, u64>,
     pub deliveries_by_agent: BTreeMap<String, u64>,
@@ -142,6 +145,8 @@ pub struct Threat {
     pub travelled: f32,
     pub hp: u32,
     pub route: Vec<Point>,
+    pub stagger_until: u64,
+    pub knockback: Point,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct Projectile {

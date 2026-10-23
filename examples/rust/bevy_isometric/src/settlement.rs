@@ -46,6 +46,7 @@ struct View {
     scale: f32,
     travel: f32,
     activity: f32,
+    injury: f32,
     aim: Option<f32>,
 }
 impl View {
@@ -58,6 +59,7 @@ impl View {
             scale: 1.,
             travel: 0.,
             activity: 0.,
+            injury: 0.,
             aim: None,
         }
     }
@@ -94,7 +96,11 @@ pub fn setup(world: &mut World) {
     for e in state.blockers.drain(..) {
         world.despawn(e);
     }
-    state.notice = "LMB stock: take 4 / Ctrl+LMB: deposit cargo / E: toggle nearby machine".into();
+    state.notice = if index == 7 {
+        "RIGHT CLICK TO MOVE  /  SHIFT + LEFT CLICK TO STRIKE".into()
+    } else {
+        "LMB stock: take 4 / Ctrl+LMB: deposit cargo / E: toggle nearby machine".into()
+    };
     state.current = Some(index);
     let scenario = world.resource::<SceneLibrary>().scenes[index]
         .scene
@@ -321,7 +327,9 @@ pub fn tick(world: &mut World) {
     if world
         .resource::<crate::gameplay::Controls>()
         .attack
-        .is_some_and(|a| a.age >= crate::gameplay::WINDUP && a.age < crate::gameplay::ACTIVE_END)
+        .is_some_and(|a| {
+            a.age >= crate::gameplay::WINDUP + 0.055 && a.age < crate::gameplay::ACTIVE_END
+        })
     {
         if let Some(id) = sim
             .config()
@@ -330,7 +338,19 @@ pub fn tick(world: &mut World) {
             .find(|a| a.controlled)
             .map(|a| a.id.clone())
         {
-            sim.strike(&id).unwrap();
+            let hits = sim.strike(&id).unwrap();
+            if hits > 0 {
+                let mut controls = world.resource_mut::<crate::gameplay::Controls>();
+                if let Some(attack) = &mut controls.attack {
+                    attack.impact_angle = Some(attack.angle());
+                    attack.age = 0.0;
+                }
+                controls.velocity = Vec3::ZERO;
+                controls.impacts += hits;
+                let mut feedback = world.resource_mut::<crate::effects::Feedback>();
+                feedback.hit_stop = 0.075;
+                feedback.trauma = 0.24;
+            }
         }
     }
     for event in &sim.events {
@@ -342,6 +362,14 @@ pub fn tick(world: &mut World) {
             position,
         } = event
         {
+            let direction =
+                Vec3::new(position[0] - pos.x, 0.0, position[1] - pos.z).normalize_or(Vec3::Z);
+            crate::effects::blood(
+                world,
+                Vec3::new(position[0], 0.65, position[1]),
+                direction,
+                (*target as u32).wrapping_add(sim.tick as u32),
+            );
             let key = format!("threat/{target}");
             if let (Some(projectile), Some((_, body))) = (projectile, state.views.get(&key)) {
                 let parent = body.root;
@@ -378,6 +406,9 @@ pub fn tick(world: &mut World) {
             Event::TransferStarted(_) => None,
             Event::TransferArrived(_) => None,
             Event::Shot { .. } => Some(crate::sound::Cue::Swing),
+            Event::Hit {
+                projectile: None, ..
+            } => Some(crate::sound::Cue::GhoulHit),
             Event::Hit { .. } => Some(crate::sound::Cue::Stone),
             Event::Produced { .. } | Event::Equipped { .. } => Some(crate::sound::Cue::Clang),
             _ => None,
@@ -446,10 +477,17 @@ pub fn tick(world: &mut World) {
         let mut v = View::new(&sim.config().waves[t.wave].skin, t.position);
         v.heading = t.heading;
         v.travel = t.travelled;
+        let wounded = t.hp < sim.config().waves[t.wave].hp;
         v.activity = state
             .hit_until
             .get(&t.id)
-            .map_or(0., |until| until.saturating_sub(sim.tick) as f32 / 14.);
+            .map_or(if wounded { 0.58 } else { 0.0 }, |until| {
+                (until.saturating_sub(sim.tick) as f32 / 14.).max(if wounded { 0.58 } else { 0.0 })
+            });
+        if wounded {
+            v.injury = 1.0;
+            v.roll = 0.18 + (t.travelled * 13.0).sin() * 0.05;
+        }
         desired.insert(format!("threat/{}", t.id), v);
     }
     for d in &sim.config().depots {
@@ -546,13 +584,22 @@ pub fn tick(world: &mut World) {
                     .join(" / ")
             })
             .unwrap_or_default();
-        let line = format!(
-            "BASE {}  /  {} GHOULS STOPPED  /  PACK {} /8 {}   [P] pause  [F3] metrics",
-            sim.health,
-            sim.metrics.kills,
-            sim.agents.get("player").map_or(0, |a| a.cargo.total()),
-            cargo
-        );
+        let line = if state.current == Some(7) {
+            format!(
+                "{} GHOULS SLAIN  /  {} STRIKES LANDED  /  {} APPROACHING",
+                sim.metrics.melee_kills,
+                sim.metrics.melee_hits,
+                sim.threats.len()
+            )
+        } else {
+            format!(
+                "BASE {}  /  {} GHOULS STOPPED  /  PACK {} /8 {}   [P] pause  [F3] metrics",
+                sim.health,
+                sim.metrics.kills,
+                sim.agents.get("player").map_or(0, |a| a.cargo.total()),
+                cargo
+            )
+        };
         if world.get::<Text>(e).unwrap().0 != line {
             world.get_mut::<Text>(e).unwrap().0 = line;
         }
@@ -627,6 +674,7 @@ pub fn tick(world: &mut World) {
             template.scale * view.scale,
             view.travel,
             view.activity,
+            view.injury,
             view.aim,
         );
         writes += changed;

@@ -50,6 +50,8 @@ impl Simulation {
                     travelled: 0.0,
                     hp: w.hp,
                     route,
+                    stagger_until: 0,
+                    knockback: [0.0, 0.0],
                 },
             );
             self.wave_totals[i] += 1;
@@ -58,7 +60,31 @@ impl Simulation {
         for threat in self.threats.values_mut() {
             let w = &self.config.waves[threat.wave];
             let previous = threat.position;
-            move_route(&mut threat.position, &mut threat.route, w.speed / HZ as f32);
+            if self.tick < threat.stagger_until {
+                let next = [
+                    threat.position[0] + threat.knockback[0] / HZ as f32,
+                    threat.position[1] + threat.knockback[1] / HZ as f32,
+                ];
+                if navigation::clear_with_bounds(
+                    threat.position,
+                    next,
+                    &self.obstacles,
+                    0.2,
+                    self.config.extent,
+                ) {
+                    threat.position = next;
+                    self.metrics.knockback_meters += navigation::distance(previous, next) as f64;
+                }
+                threat.knockback[0] *= 0.85;
+                threat.knockback[1] *= 0.85;
+            } else {
+                let wounded_speed = if threat.hp < w.hp { 0.55 } else { 1.0 };
+                move_route(
+                    &mut threat.position,
+                    &mut threat.route,
+                    w.speed * wounded_speed / HZ as f32,
+                );
+            }
             let moved = navigation::distance(previous, threat.position);
             threat.travelled += moved;
             if moved > 0.0 {

@@ -7,9 +7,9 @@ use crate::{
 use bevy::prelude::*;
 
 pub const WALK_SPEED: f32 = 3.8;
-pub const WINDUP: f32 = 0.24;
-pub const ACTIVE_END: f32 = 0.38;
-pub const ATTACK_END: f32 = 0.76;
+pub const WINDUP: f32 = 0.16;
+pub const ACTIVE_END: f32 = 0.29;
+pub const ATTACK_END: f32 = 0.58;
 pub const REBOUND_END: f32 = 0.42;
 pub const REST_ANGLE: f32 = 0.45;
 
@@ -338,6 +338,7 @@ pub fn move_player(
 
 /// Earliest contact along a swept blade, sampled in angle space (not frame time).
 /// This prevents a fast cut from tunneling through a rock at low frame rates.
+#[cfg(test)]
 pub fn swept_hit(
     origin: Vec3,
     facing: Quat,
@@ -348,9 +349,9 @@ pub fn swept_hit(
     let samples = ((to - from).abs() / 0.025).ceil().max(1.0) as usize;
     for sample in 0..=samples {
         let angle = lerp(from, to, sample as f32 / samples as f32);
-        let pivot = origin + facing * Vec3::new(0.38, 0.9, 0.0);
+        let pivot = origin + facing * Vec3::new(0.4, 0.9, 0.0);
         let blade = facing * Quat::from_rotation_y(angle) * Vec3::Z;
-        let (base, tip) = (pivot + blade * 0.25, pivot + blade * 1.95);
+        let (base, tip) = blade_segment(origin, facing, angle, 1.0);
         let hit = obstacles
             .iter()
             .enumerate()
@@ -364,11 +365,17 @@ pub fn swept_hit(
                     .total_cmp(&b.center.distance_squared(pivot))
             });
         if let Some((index, disc)) = hit {
-            let nearest = flat(disc.center - base).dot(blade).clamp(0.0, 1.7);
+            let nearest = flat(disc.center - base).dot(blade).clamp(0.0, 1.3);
             return Some((index, angle, base + blade * nearest));
         }
     }
     None
+}
+
+fn blade_segment(origin: Vec3, facing: Quat, angle: f32, scale: f32) -> (Vec3, Vec3) {
+    let pivot = origin + facing * Vec3::new(0.4, 0.9, 0.0) * scale;
+    let blade = facing * Quat::from_rotation_y(angle) * Vec3::Z;
+    (pivot + blade * 0.20 * scale, pivot + blade * 1.50 * scale)
 }
 
 pub fn combat(
@@ -394,6 +401,9 @@ pub fn combat(
     let Some(mut attack) = controls.attack else {
         return;
     };
+    if attack.age < 0.05 {
+        player.rotation = Quat::from_rotation_y(attack.aim.x.atan2(attack.aim.z));
+    }
     let previous_age = attack.age;
     attack.age += dt;
     if attack.impact_angle.is_none() && attack.age >= WINDUP && previous_age < ACTIVE_END {
@@ -416,9 +426,9 @@ pub fn combat(
         let mut contact = None;
         for sample in 0..=samples {
             let angle = lerp(from, to, sample as f32 / samples as f32);
-            let pivot = player.translation + player.rotation * Vec3::new(0.38, 0.9, 0.0);
             let blade = player.rotation * Quat::from_rotation_y(angle) * Vec3::Z;
-            let (base, tip) = (pivot + blade * 0.25, pivot + blade * 1.95);
+            let (base, tip) =
+                blade_segment(player.translation, player.rotation, angle, player.scale.x);
             let mut candidates = Vec::new();
             for (index, (_, target)) in obstacles.iter().enumerate() {
                 let disc = discs[index];
@@ -431,9 +441,11 @@ pub fn combat(
                     if let Some((t, material, normal)) = target.contact(base, tip) {
                         candidates.push((t, index, material, base.lerp(tip, t), normal));
                     }
-                } else if let Some((_, _, position)) =
-                    swept_hit(player.translation, player.rotation, angle, angle, &[disc])
-                {
+                } else {
+                    let nearest = flat(disc.center - base)
+                        .dot(blade)
+                        .clamp(0.0, base.distance(tip));
+                    let position = base + blade * nearest;
                     let normal = flat(position - disc.center).normalize_or(-attack.aim);
                     candidates.push((
                         base.distance(position) / base.distance(tip),
@@ -495,6 +507,7 @@ pub fn combat(
                     player.translation,
                     player.rotation,
                     angle,
+                    player.scale.x,
                 );
             }
         }
@@ -640,6 +653,7 @@ mod tests {
             spark: std::array::from_fn(|_| default()),
             debris: std::array::from_fn(|_| default()),
             trail: default(),
+            blood: std::array::from_fn(|_| default()),
         };
         app.init_resource::<Time>()
             .init_resource::<ButtonInput<KeyCode>>()
@@ -723,6 +737,7 @@ mod tests {
                         spark: std::array::from_fn(|_| default()),
                         debris: std::array::from_fn(|_| default()),
                         trail: default(),
+                        blood: std::array::from_fn(|_| default()),
                     })
                     .add_systems(Update, combat);
                 let position = Vec3::new(x, 0.0, z);

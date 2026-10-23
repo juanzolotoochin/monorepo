@@ -82,6 +82,7 @@ impl Rig {
         scale: f32,
         travel: f32,
         activity: f32,
+        injury: f32,
         aim: Option<f32>,
     ) -> (u64, u64) {
         let mut writes = 0;
@@ -101,12 +102,21 @@ impl Rig {
             match &self.motion {
                 Motion::Biped | Motion::Quadruped => {
                     if matches!(part, ActorPart::LeftLeg | ActorPart::RightLeg) {
-                        t.rotation = Quat::from_rotation_x((travel * 12.).sin() * 0.5 * side);
+                        let stride =
+                            (travel * (12.0 - injury * 3.0)).sin() * (0.5 - injury * 0.23) * side;
+                        let drag = if side < 0.0 {
+                            injury * 0.24
+                        } else {
+                            -injury * 0.07
+                        };
+                        t.rotation = Quat::from_rotation_x(stride + drag);
                     }
                     if *part == ActorPart::Body {
                         t.translation.y += (travel * 24.).cos() * 0.018;
-                        t.rotation = Quat::from_rotation_x(-activity * 0.25);
-                        t.translation.z -= activity * 0.1;
+                        t.rotation = Quat::from_rotation_x(-activity * 0.25 - injury * 0.26)
+                            * Quat::from_rotation_z(injury * 0.16);
+                        t.translation.y -= injury * 0.06;
+                        t.translation.z -= activity * 0.1 + injury * 0.08;
                     }
                 }
                 Motion::Vehicle { wheel_radius } => {

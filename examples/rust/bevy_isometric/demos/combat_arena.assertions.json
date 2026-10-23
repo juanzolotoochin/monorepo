@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "final": [
+    {"path": "settlement.simulation.metrics.melee_hits", "min": 2},
+    {"path": "settlement.simulation.metrics.melee_kills", "min": 1},
+    {"path": "settlement.simulation.metrics.knockback_meters", "min": 0.3}
+  ]
+}

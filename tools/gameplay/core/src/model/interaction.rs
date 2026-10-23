@@ -22,7 +22,7 @@ impl Simulation {
         if self.attack_ready.get(id).is_some_and(|t| *t > self.tick) {
             return Ok(0);
         }
-        self.attack_ready.insert(id.into(), self.tick + 46);
+        self.attack_ready.insert(id.into(), self.tick + 38);
         let a = &self.agents[id];
         let position = a.position;
         let forward = [a.heading.sin(), a.heading.cos()];
@@ -32,8 +32,8 @@ impl Simulation {
             .filter(|t| {
                 let d = [t.position[0] - position[0], t.position[1] - position[1]];
                 let distance = navigation::distance(t.position, position);
-                distance <= 1.3
-                    && (distance < 0.2 || (d[0] * forward[0] + d[1] * forward[1]) / distance > 0.1)
+                distance <= 1.2
+                    && (distance < 0.2 || (d[0] * forward[0] + d[1] * forward[1]) / distance > 0.35)
             })
             .map(|t| t.id)
             .collect();
@@ -41,6 +41,11 @@ impl Simulation {
         for target in targets {
             let t = self.threats.get_mut(&target).unwrap();
             t.hp = t.hp.saturating_sub(1);
+            let direction = [t.position[0] - position[0], t.position[1] - position[1]];
+            let length = navigation::distance(t.position, position).max(0.001);
+            t.knockback = [direction[0] / length * 5.5, direction[1] / length * 5.5];
+            t.stagger_until = self.tick + 15;
+            self.metrics.melee_hits += 1;
             let killed = t.hp == 0;
             let position = t.position;
             self.events.push(Event::Hit {
@@ -52,6 +57,7 @@ impl Simulation {
             if killed {
                 self.threats.remove(&target);
                 self.metrics.kills += 1;
+                self.metrics.melee_kills += 1;
             }
         }
         Ok(count)

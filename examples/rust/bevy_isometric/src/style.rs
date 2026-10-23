@@ -62,7 +62,9 @@ pub fn apply(world: &mut World) {
         .query_filtered::<&mut Text, With<crate::scene::ControlHelp>>()
         .iter_mut(world)
     {
-        help.0 = if settlement {
+        help.0 = if index == 7 {
+            "RMB MOVE / SHIFT+LMB SLASH / WASD DODGE"
+        } else if settlement {
             "LMB STOCK / CTRL DEPOSIT / E MACHINE / SHIFT+LMB ATTACK"
         } else {
             "RMB MOVE / SHIFT+LMB STRIKE"

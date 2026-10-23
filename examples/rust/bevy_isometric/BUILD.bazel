@@ -25,6 +25,7 @@ rust_binary(
     deps = [
         "//examples/rust/bevy_isometric/assets:atlantis",
         "//examples/rust/bevy_isometric/assets:boulder_lab",
+        "//examples/rust/bevy_isometric/assets:combat_arena",
         "//examples/rust/bevy_isometric/assets:forest_outpost",
         "//examples/rust/bevy_isometric/assets:jetpack_lab",
         "//examples/rust/bevy_isometric/assets:mining_deck",
@@ -129,5 +130,23 @@ game_simulation_test(
     assertions = "demos/forest_motion.assertions.json",
     game = ":demo",
     script = "demos/forest_outpost.json",
+    tags = ["linux"],
+)
+
+game_demo(
+    name = "combat_arena_demo",
+    assertions = "demos/combat_arena.assertions.json",
+    game = ":demo",
+    script = "demos/combat_arena.json",
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
+game_simulation_test(
+    name = "combat_arena_test",
+    size = "medium",
+    assertions = "demos/combat_arena.assertions.json",
+    game = ":demo",
+    script = "demos/combat_arena.json",
     tags = ["linux"],
 )
