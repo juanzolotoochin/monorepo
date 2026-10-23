@@ -23,6 +23,7 @@ rust_binary(
     rustc_env = {"CARGO_MANIFEST_DIR": "."},
     visibility = ["//visibility:public"],
     deps = [
+        "//examples/rust/bevy_isometric/assets:atlantis",
         "//examples/rust/bevy_isometric/assets:boulder_lab",
         "//examples/rust/bevy_isometric/assets:jetpack_lab",
         "//examples/rust/bevy_isometric/assets:mining_deck",
@@ -98,6 +99,14 @@ game_demo(
     name = "surprise_demo",
     game = ":demo",
     script = "demos/surprise.json",
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
+game_demo(
+    name = "atlantis_demo",
+    game = ":demo",
+    script = "demos/atlantis.json",
     tags = ["manual"],
     target_compatible_with = ["@platforms//os:linux"],
 )

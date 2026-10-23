@@ -355,3 +355,34 @@ fn recording_is_bounded_and_automatically_deploys_then_can_be_dismissed() {
     assert_eq!(report["state"]["memory"]["ghost_position"], Value::Null);
     assert_eq!(report["state"]["memory"]["sample_count"], 0);
 }
+
+#[test]
+fn atlantis_is_navigable_reactive_and_inspectable_without_runtime_asset_generation() {
+    let report = run(vec![
+        Command::Scene {
+            scene: "atlantis".into(),
+        },
+        Command::Walk {
+            position: [2.0, 2.7],
+        },
+        Command::Strike { target: [3.5, 2.7] },
+        Command::Walk {
+            position: [3.0, -2.5],
+        },
+        Command::Walk {
+            position: [0.0, -4.0],
+        },
+    ]);
+    assert_eq!(report["status"], "passed", "{report}");
+    let state = &report["state"];
+    assert_eq!(state["style"]["id"], "atlantean-aetherworks");
+    assert_eq!(state["style"]["baked"], true);
+    assert!(
+        state["style"]["environment_statistics"]["voxels"]
+            .as_u64()
+            .unwrap()
+            > 100_000
+    );
+    assert!(state["player"]["movement"]["impacts"].as_u64().unwrap() > 0);
+    assert_eq!(state["targets"].as_array().unwrap().len(), 2);
+}

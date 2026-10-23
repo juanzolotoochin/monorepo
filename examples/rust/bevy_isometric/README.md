@@ -288,3 +288,42 @@ the projection and trial state. Existing live/script controls gain
 `memory_record`, `memory_deploy`, `memory_clear`, and `assert_trial`.
 
 </details>
+
+## Styles and the Tidal Aetherworks
+
+Press **6** for a dark Atlantis / magic / steampunk scene, or launch it directly:
+
+```sh
+bazel run --config=full_local //examples/rust/bevy_isometric:demo -- --scene atlantis
+bazel build --config=full_local //examples/rust/bevy_isometric:atlantis_demo
+```
+
+The scene uses deep teal stone, aged bronze, water channels, a tide gate,
+clockwork machinery, irregular pavement wear, broken inlays, sea plants, coral,
+and workshop salvage. A detailed diving suit and aether trident replace the
+industrial character meshes. A visible helmet lamp illuminates the nearby path
+and follows the character. Other lamps and crystals have real local lights;
+there is no invisible sun casting this scene's shadows.
+
+Styles are data in `assets/styles/atlantis.ron`. A profile supplies named
+materials, physical voxel size, optional articulated actor/weapon recipes,
+lighting, camera exposure, fog, bloom, and shadow/contact-shading settings.
+Atlantis uses **10 voxels/m** for the environment and **20 voxels/m** for the
+suit and trident; the original style's nominal density is about **3.3 voxels/m**.
+Voxel density controls geometry detail in world units, independently of screen
+resolution. Existing hand-authored meshes retain their topology unless the
+profile supplies replacements.
+
+Both architectural and character geometry bake during Bazel asset compilation.
+Hidden faces are removed and coplanar faces merge into rectangles. Character
+parts attach to existing animation pivots, preserving movement and combat.
+Shared meshes/materials are cached across visits; switching back restores the
+original character, palette, lighting, and shadow settings. Styled boulders use
+the same profile's grid and material roles and retain per-material hit reactions.
+
+To add another setting, author a style RON file, optionally an architectural
+layout, and pass `style = "styles/your_style.ron"` to `scene_assets` and opted-in
+`boulder_prefab` targets. No new renderer branch for the style is necessary.
+See the [asset rule documentation](../../../bazel/voxel_assets/README.md).
+The controlled-demo report and frame trace expose style density, actor parts,
+weapon identity, baked statistics, fixture lights, and moving actor lights.

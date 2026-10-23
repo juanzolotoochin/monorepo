@@ -91,6 +91,26 @@ pub fn setup(
         material(&mut materials, [0.19, 0.24, 0.30], 0.25),
         material(&mut materials, [0.15, 0.20, 0.26], 0.25),
     ];
+    commands.insert_resource(crate::style::MaterialBindings(
+        [
+            (&dark, "shadow"),
+            (&frame, "metal"),
+            (&panel, "metal"),
+            (&ivory, "stone"),
+            (&orange, "metal"),
+            (&gold, "trim"),
+            (&cyan, "magic"),
+        ]
+        .into_iter()
+        .map(|(handle, role)| {
+            (
+                handle.clone(),
+                role.to_string(),
+                materials.get(handle).unwrap().clone(),
+            )
+        })
+        .collect(),
+    ));
     let camera_base = Vec3::new(20.0, 20.0, 20.0);
     let camera_target = Vec3::new(0.0, 0.0, -0.4);
     commands.spawn((
@@ -126,7 +146,7 @@ pub fn setup(
         },
         Transform::from_xyz(-8.0, 12.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
-    for (p, color, intensity) in [
+    for (index, (p, color, intensity)) in [
         (
             Vec3::new(-4.8, 3.0, -4.8),
             Color::srgb(0.05, 0.65, 1.0),
@@ -142,8 +162,15 @@ pub fn setup(
             Color::srgb(0.32, 0.58, 1.0),
             65000.0,
         ),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         commands.spawn((
+            crate::style::AccentLight {
+                role: index,
+                intensity,
+            },
             PointLight {
                 color,
                 intensity,
@@ -896,6 +923,7 @@ pub fn hud(mut commands: Commands) {
         ))
         .with_children(|p| {
             p.spawn((
+                crate::style::WeaponLabel,
                 Text::new("MK. IV  /  INDUSTRIAL CLEAVER"),
                 TextFont {
                     font_size: 11.0,
@@ -953,7 +981,7 @@ pub fn hud(mut commands: Commands) {
             ));
             p.spawn((
                 Text::new(
-                    "1 / 2 / 3 / 4 / 5  SCENES    SPACE  JETPACK    WASD  STEER    SHIFT  RUN    WHEEL  ZOOM    M  AUDIO",
+                    "1 / 2 / 3 / 4 / 5 / 6  SCENES    SPACE  JETPACK    WASD  STEER    SHIFT  RUN    WHEEL  ZOOM    M  AUDIO",
                 ),
                 TextFont {
                     font_size: 10.0,

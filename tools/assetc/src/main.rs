@@ -20,7 +20,18 @@ fn assemble(scene: Scene, mut prefabs: Vec<Prefab>) -> Result<ScenePack> {
     let required: BTreeSet<_> = scene.instances.iter().map(|i| i.prefab.as_str()).collect();
     prefabs.retain(|p| required.contains(p.id.as_str()));
     prefabs.sort_by(|a, b| a.id.cmp(&b.id));
+    let environment = if scene.architecture.is_empty() {
+        None
+    } else {
+        Some(voxel_assets::compile_environment(
+            scene.style.as_ref().unwrap_or(&Default::default()),
+            &scene.architecture,
+        )?)
+    };
+    let actor = voxel_assets::compile_actor(scene.style.as_ref().unwrap_or(&Default::default()))?;
     let pack = ScenePack {
+        actor,
+        environment,
         version: VERSION,
         scene,
         prefabs,
@@ -53,9 +64,27 @@ fn run(args: Vec<String>) -> Result<()> {
     };
     match command.as_str() {
         "prefab" => {
-            let recipe: BoulderRecipe = read_ron(one("--recipe")?)?;
+            let mut recipe: BoulderRecipe = read_ron(one("--recipe")?)?;
+            let palette: Palette = if flags.contains_key("--style") {
+                let style: voxel_assets::StyleProfile = read_ron(one("--style")?)?;
+                style.validate()?;
+                recipe.voxel_size = style.voxel_size;
+                let materials = ["stone", "shadow", "trim", "magic"]
+                    .iter()
+                    .map(|name| {
+                        style
+                            .materials
+                            .iter()
+                            .find(|m| m.name == *name)
+                            .cloned()
+                            .ok_or_else(|| format!("style is missing prefab material {name}"))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Palette { materials }
+            } else {
+                read_ron(one("--palette")?)?
+            };
             recipe.validate()?;
-            let palette: Palette = read_ron(one("--palette")?)?;
             palette.validate()?;
             let geometry = match one("--mode")? {
                 "baked" => Geometry::Baked(generate_boulder(&recipe)?),
@@ -67,7 +96,13 @@ fn run(args: Vec<String>) -> Result<()> {
             write_json(one("--out")?, &prefab)
         }
         "scene" => {
-            let scene: Scene = read_ron(one("--layout")?)?;
+            let mut scene: Scene = read_ron(one("--layout")?)?;
+            if let Some(paths) = flags.get("--style") {
+                if paths.len() != 1 {
+                    return Err("expected one style".into());
+                }
+                scene.style = Some(read_ron(&paths[0])?);
+            }
             let mut prefabs = vec![];
             for path in flags.get("--prefab").into_iter().flatten() {
                 let bytes = fs::read(path).map_err(|e| format!("{path}: {e}"))?;

@@ -157,3 +157,102 @@ Uncovered space is void; overlapping platforms use the highest top. Omitting
 `terrain` retains the flat deck. Geometry handles are shared and reused when
 switching scenes. See `jetpack_lab.ron` for an elevated scene using the existing
 `scene_assets` rule.
+
+## Style profiles and architectural baking
+
+Scene pack version 5 carries optional style profiles, baked architecture,
+articulated actor meshes, and explicit fixture lights. Existing layouts omit
+these fields and keep the industrial presentation.
+
+```starlark
+boulder_prefab(
+    name = "aether_stone",
+    src = "prefabs/ore_small.ron",
+    style = "styles/atlantis.ron",
+)
+scene_assets(
+    name = "atlantis",
+    layout = "levels/atlantis.ron",
+    style = "styles/atlantis.ron",
+    prefabs = [":aether_stone"],
+)
+```
+
+Use either `palette` or `style` for a prefab. A styled boulder takes the
+profile's `voxel_size` and the named roles `stone`, `shadow`, `trim`, and
+`magic`; other generator dimensions stay in world units. The style file is an
+explicit action input. Geometry/material identities still participate in cache
+keys, and `runtime = True` remains an explicit choice for dynamic boulders.
+
+A `Style(...)` profile defines `id`, `voxel_size` (0.05–0.5 world units), up to
+16 named materials, ambient/sun/accent colors, ambient brightness, illuminance,
+`sun_shadows`, bloom, fog density, viewport height, camera `exposure_ev100`,
+shadow depth/normal bias, shadow-map resolution, and AO object thickness.
+Architectural layouts refer to material names instead of hard-coded colors:
+
+```ron
+architecture: [
+    (kind: Cylinder, position: (-4.8, 1.5, -5.8),
+     size: (0.65, 2.7, 0.65), material: "stone"),
+    (kind: Octahedron, position: (-4.8, 3.35, -5.8),
+     size: (0.65, 0.8, 0.65), material: "magic",
+     light: Some((intensity: 14000.0, range: 8.0, radius: 0.3))),
+],
+```
+
+Supported solids are `Box`, `Cylinder` (Y axis), `Octahedron`, `Ellipsoid`,
+`Ring`/`Gear` (XY plane), and `RingFloor` (XZ plane). `position` and `size` are
+world-space center and dimensions. Optional `repeat`/`spacing` expand loops at
+build time. Later solids overwrite occupied cells, allowing embedded inlays and
+surface wear without coplanar overlaps. Optional `solid_radius` creates a
+world-space navigation obstacle, independent of visual grid resolution. These
+are architectural/decorative solids; walkable elevation and chasm behavior still
+comes from the `terrain` layout.
+
+The compiler samples occupied cells on the style grid, removes interior faces,
+and greedily merges faces by plane/normal/material. It bounds layouts to 256
+recipes, 4096 expanded instances, and a four-million-cell work budget, and
+rejects invalid dimensions, material names, lights, and buffers before embedding.
+Runtime code uploads the baked meshes and caches handles; it does not voxelize
+architecture or characters.
+
+`actor_voxel_size` can use a finer grid for optional `actor` recipes. Each
+recipe names `Body`, `LeftLeg`, `RightLeg`, or `Weapon`, with shapes in that
+animation pivot's local coordinates. Actor geometry uses the same compiler;
+world colliders are rejected for actor parts. `weapon_name` labels the HUD.
+Profiles without replacement parts keep the original meshes. The engine also
+binds shared character/effect material handles to semantic palette roles and
+restores their originals when leaving a styled scene.
+
+### Emission, lights, and grounding
+
+Emissive materials glow in the image; they do not provide automatic global
+illumination. Add an explicit `light` to an emissive shape to illuminate nearby
+surfaces. Lights inherit the material color and repeated shape position. Actor
+lights attach to the corresponding animated part. Light data supports power in
+lumens, range, source radius, shadow casting, bounded position offsets, and
+point/spot sources. Spot direction is local to its parent, so a helmet beam
+turns with the character. Emissive source meshes do not self-occlude their own
+lights; opaque surfaces still cast shadows.
+
+Atlantis disables the old accent rig and directional sun, uses real fixture
+lights, and tunes its shadow bias, resolution, and contact shading for the
+finer grid. The helmet lamp and central crystal cast shadows. Profiles restore
+the original renderer settings on scene exit. Fixture and actor light positions
+are exposed through programmatic inspection for testing.
+
+For example, the diver's helmet uses a broad downward spotlight, in the body's
+local coordinates:
+
+```ron
+light: Some((
+    intensity: 25000.0, range: 8.0, radius: 0.12, shadows: true,
+    kind: Spot(direction: (0.0, -0.65, 1.0), inner: 0.9, outer: 1.25),
+    offset: (0.0, 0.08, 0.15),
+)),
+```
+
+Cone angles are radians; omitting `kind` selects a point light. The compiler
+requires an emissive source material and validates finite power/range, source
+radius, direction/cone, offsets, and light counts. Small display-like glows can
+remain emissive without a light; important lamps declare a real source.

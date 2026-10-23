@@ -125,6 +125,7 @@ pub fn scene_index(name: &str) -> Result<usize, String> {
         "pile-lab" => Ok(2),
         "jetpack-lab" => Ok(3),
         "surprise-lab" => Ok(4),
+        "atlantis" => Ok(5),
         _ => Err(format!("Unknown scene {name}")),
     }
 }
