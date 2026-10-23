@@ -12,9 +12,17 @@ import sys
 
 
 def value_at(state, path):
+    values = [state]
+    wildcard = False
     for key in path.split('.'):
-        state = state[int(key)] if isinstance(state, list) else state[key]
-    return state
+        if key == '*':
+            wildcard = True
+            values = [child for value in values for child in
+                      (value.values() if isinstance(value, dict) else value)]
+        else:
+            values = [value[int(key)] if isinstance(value, list) else value[key]
+                      for value in values]
+    return values if wildcard else values[0]
 
 
 def angle_delta(a, b):
@@ -23,23 +31,34 @@ def angle_delta(a, b):
 
 class TraceAssertions:
     def __init__(self, spec):
-        if spec.get('version') != 1 or set(spec) - {'version', 'motion', 'always', 'final'}:
-            raise ValueError('Expected assertion version 1 with motion/always/final checks')
+        if spec.get('version') != 1 or set(spec) - {'version', 'motion', 'always', 'ever', 'final'}:
+            raise ValueError('Expected assertion version 1 with motion/always/ever/final checks')
         self.spec = spec
         self.previous = {}
         self.windows = {}
         self.last = None
         self.count = 0
         self.peaks = {}
+        self.reached = [False] * len(spec.get('ever', []))
         for check in spec.get('motion', []):
             if set(check) != {'path', 'window_seconds', 'max_turn_degrees', 'max_rate_degrees', 'max_travel_turn_degrees'}:
                 raise ValueError('Motion check requires path, window_seconds and all three limits')
             for key in ('window_seconds', 'max_turn_degrees', 'max_rate_degrees', 'max_travel_turn_degrees'):
                 if not math.isfinite(check[key]) or check[key] <= 0:
                     raise ValueError(f'{key} must be finite and positive')
-        for check in spec.get('always', []) + spec.get('final', []):
-            if set(check) - {'path', 'min', 'max', 'equals'} or 'path' not in check or len(check) < 2:
+        for check in spec.get('always', []) + spec.get('ever', []) + spec.get('final', []):
+            if set(check) - {'path', 'min', 'max', 'equals', 'min_len', 'max_len', 'contains'} or 'path' not in check or len(check) < 2:
                 raise ValueError('State checks require path and min/max/equals')
+
+    @staticmethod
+    def matches(value, check):
+        return all((value >= limit if op == 'min' else
+                    value <= limit if op == 'max' else
+                    value == limit if op == 'equals' else
+                    len(value) >= limit if op == 'min_len' else
+                    len(value) <= limit if op == 'max_len' else
+                    limit in value)
+                   for op, limit in check.items() if op != 'path')
 
     def fail(self, message):
         raise AssertionError(f'frame {self.last["frame"]}, t={self.last["time"]:.3f}s: {message}')
@@ -47,13 +66,8 @@ class TraceAssertions:
     def state_checks(self, checks):
         for check in checks:
             value = value_at(self.last['state'], check['path'])
-            for op in ('min', 'max', 'equals'):
-                if op not in check:
-                    continue
-                limit = check[op]
-                valid = (value >= limit if op == 'min' else value <= limit if op == 'max' else value == limit)
-                if not valid:
-                    self.fail(f'{check["path"]}={value!r}; expected {op} {limit!r}')
+            if not self.matches(value, check):
+                self.fail(f'{check["path"]}={value!r}; expected {check!r}')
 
     def feed(self, record):
         time = record['time']
@@ -62,6 +76,9 @@ class TraceAssertions:
         self.last = record
         self.count += 1
         self.state_checks(self.spec.get('always', []))
+        for index, check in enumerate(self.spec.get('ever', [])):
+            if not self.reached[index]:
+                self.reached[index] = self.matches(value_at(record['state'], check['path']), check)
         for i, check in enumerate(self.spec.get('motion', [])):
             actor = value_at(record['state'], check['path'])
             heading, position = actor['heading'], actor['position']
@@ -96,6 +113,9 @@ class TraceAssertions:
     def finish(self):
         if self.count < 2:
             raise AssertionError('At least two trace frames are required')
+        for index, reached in enumerate(self.reached):
+            if not reached:
+                self.fail(f'never satisfied {self.spec["ever"][index]!r}')
         self.state_checks(self.spec.get('final', []))
         return {'frames': self.count, 'peaks': self.peaks}
 

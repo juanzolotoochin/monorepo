@@ -78,6 +78,13 @@ pub enum Cue {
     Crystal = 4,
     Polymer = 5,
     GhoulHit = 10,
+    Bow = 11,
+    Spear = 12,
+    Ballista = 13,
+    Arc = 14,
+    ArrowHit = 15,
+    Decapitate = 16,
+    Pierce = 17,
 }
 #[repr(C)]
 struct SynthEvent {
@@ -241,7 +248,10 @@ mod tests {
         assert!(first.iter().all(|s| s.is_finite() && s.abs() < 1.0));
         assert!(first[..4800].iter().all(|s| *s == 0.0));
         assert!(first[4800..36000].iter().any(|s| s.abs() > 0.05));
-        assert!(first[90000..].iter().all(|s| *s == 0.0));
+        assert!(first[90000..].iter().all(|s| s.abs() < 0.00001));
+        assert!(first[4800..36000]
+            .chunks_exact(2)
+            .any(|channels| (channels[0] - channels[1]).abs() > 0.001));
     }
 
     #[test]

@@ -47,7 +47,10 @@ struct View {
     travel: f32,
     activity: f32,
     injury: f32,
+    recoil: f32,
     aim: Option<f32>,
+    pierced: bool,
+    armored: bool,
 }
 impl View {
     fn new(skin: &str, p: [f32; 2]) -> Self {
@@ -60,7 +63,10 @@ impl View {
             travel: 0.,
             activity: 0.,
             injury: 0.,
+            recoil: 0.,
             aim: None,
+            pierced: false,
+            armored: true,
         }
     }
 }
@@ -96,8 +102,13 @@ pub fn setup(world: &mut World) {
     for e in state.blockers.drain(..) {
         world.despawn(e);
     }
-    state.notice = if index == 7 {
-        "RIGHT CLICK TO MOVE  /  SHIFT + LEFT CLICK TO STRIKE".into()
+    let has_weapons = world.resource::<SceneLibrary>().scenes[index]
+        .scene
+        .scenario
+        .as_ref()
+        .is_some_and(|s| !s.weapons.is_empty());
+    state.notice = if has_weapons {
+        "RIGHT CLICK: MOVE  /  SHIFT+CLICK: ATTACK  /  Z SWORD  X SPEAR  C BOW  V ARC COIL".into()
     } else {
         "LMB stock: take 4 / Ctrl+LMB: deposit cargo / E: toggle nearby machine".into()
     };
@@ -274,6 +285,12 @@ fn inventory(
     }
 }
 pub fn tick(world: &mut World) {
+    if world
+        .get_resource::<crate::control::Hub>()
+        .is_some_and(|hub| hub.warming_up())
+    {
+        return;
+    }
     let dt = world.resource::<Time>().delta_secs_f64();
     let mut state = world.remove_resource::<Settlement>().unwrap();
     let Some(sim) = &mut state.simulation else {
@@ -324,11 +341,12 @@ pub fn tick(world: &mut World) {
             .gauge("last_clamped_seconds", dt - 0.25);
     }
     let projection_start = std::time::Instant::now();
-    if world
+    if let Some((weapon, aim)) = world
         .resource::<crate::gameplay::Controls>()
         .attack
-        .is_some_and(|a| {
-            a.age >= crate::gameplay::WINDUP + 0.055 && a.age < crate::gameplay::ACTIVE_END
+        .and_then(|a| {
+            (a.age >= crate::gameplay::WINDUP + 0.055 && a.age < crate::gameplay::ACTIVE_END)
+                .then_some((a.weapon, a.aim))
         })
     {
         if let Some(id) = sim
@@ -338,8 +356,26 @@ pub fn tick(world: &mut World) {
             .find(|a| a.controlled)
             .map(|a| a.id.clone())
         {
-            let hits = sim.strike(&id).unwrap();
-            if hits > 0 {
+            let muzzle = world.resource::<SceneLibrary>().scenes
+                [world.resource::<SceneLibrary>().current]
+                .scene
+                .style
+                .as_ref()
+                .and_then(|style| {
+                    style
+                        .weapon_skins
+                        .iter()
+                        .find(|skin| skin.weapon == weapon)
+                        .map(|skin| skin.muzzle.map(|v| v * style.actor_scale))
+                })
+                .unwrap_or([0.0, 0.6, 0.25]);
+            let hits = sim.attack_aim(&id, weapon, muzzle, [aim.x, aim.z]).unwrap();
+            if hits > 0
+                && matches!(
+                    weapon,
+                    gameplay_core::Weapon::Sword | gameplay_core::Weapon::Spear
+                )
+            {
                 let mut controls = world.resource_mut::<crate::gameplay::Controls>();
                 if let Some(attack) = &mut controls.attack {
                     attack.impact_angle = Some(attack.angle());
@@ -353,38 +389,84 @@ pub fn tick(world: &mut World) {
             }
         }
     }
+    let mut arc_source = pos + Vec3::Y * 0.75;
+    let mut arc_fired = false;
     for event in &sim.events {
         use gameplay_core::Event;
+        if let Event::ArcFired { from, to } = event {
+            arc_source = Vec3::new(from[0], 0.72, from[1]);
+            crate::effects::arc(
+                world,
+                arc_source,
+                Vec3::new(to[0], 0.72, to[1]),
+                sim.tick as u32,
+            );
+            arc_fired = true;
+        }
         if let Event::Hit {
             target,
             projectile,
             killed,
             position,
+            impact,
         } = event
         {
             let direction =
                 Vec3::new(position[0] - pos.x, 0.0, position[1] - pos.z).normalize_or(Vec3::Z);
-            crate::effects::blood(
-                world,
-                Vec3::new(position[0], 0.65, position[1]),
-                direction,
-                (*target as u32).wrapping_add(sim.tick as u32),
-            );
+            if *impact == gameplay_core::Impact::Arc {
+                let end = Vec3::new(position[0], 0.72, position[1]);
+                if !arc_fired {
+                    crate::effects::arc(world, arc_source, end, *target as u32);
+                }
+                arc_fired = false;
+                arc_source = end;
+            } else if *impact == gameplay_core::Impact::Deflect {
+                crate::effects::deflection(
+                    world,
+                    Vec3::new(position[0], 0.72, position[1]),
+                    *target as u32,
+                );
+            } else {
+                crate::effects::blood(
+                    world,
+                    Vec3::new(position[0], 0.65, position[1]),
+                    direction,
+                    (*target as u32).wrapping_add(sim.tick as u32),
+                );
+            }
             let key = format!("threat/{target}");
             if let (Some(projectile), Some((_, body))) = (projectile, state.views.get(&key)) {
-                let parent = body.root;
-                if let Some((_, arrow)) = state.views.remove(&format!("projectile/{projectile}")) {
-                    let parent_transform = *world.get::<Transform>(parent).unwrap();
-                    let mut arrow_transform = *world.get::<Transform>(arrow.root).unwrap();
-                    arrow_transform.translation = Vec3::new(position[0], 0.6, position[1]);
-                    *world.get_mut::<Transform>(arrow.root).unwrap() = Transform::from_matrix(
-                        parent_transform.to_matrix().inverse() * arrow_transform.to_matrix(),
-                    );
-                    world.entity_mut(parent).add_child(arrow.root);
-                    state.attached.entry(*target).or_default().push(arrow);
+                if matches!(
+                    impact,
+                    gameplay_core::Impact::Arrow | gameplay_core::Impact::BoltImpale
+                ) {
+                    let parent = body.root;
+                    if let Some((_, arrow)) =
+                        state.views.remove(&format!("projectile/{projectile}"))
+                    {
+                        let parent_transform = *world.get::<Transform>(parent).unwrap();
+                        let mut arrow_transform = *world.get::<Transform>(arrow.root).unwrap();
+                        arrow_transform.translation = Vec3::new(position[0], 0.6, position[1]);
+                        *world.get_mut::<Transform>(arrow.root).unwrap() = Transform::from_matrix(
+                            parent_transform.to_matrix().inverse() * arrow_transform.to_matrix(),
+                        );
+                        world.entity_mut(parent).add_child(arrow.root);
+                        state.attached.entry(*target).or_default().push(arrow);
+                    }
                 }
             }
-            if *killed {
+            if *impact == gameplay_core::Impact::Decapitate {
+                if let Some((skin, rig)) = state.views.get(&key) {
+                    if let (Some(template), Some(transform)) = (
+                        state.templates.get(skin),
+                        rig.part_world_transform(world, voxel_assets::ActorPart::Head),
+                    ) {
+                        crate::effects::severed_head(world, template, transform, *target as u32);
+                    }
+                    rig.show_part(world, voxel_assets::ActorPart::Head, false);
+                }
+            }
+            if *killed && *impact != gameplay_core::Impact::BoltImpale {
                 if let Some((skin, rig)) = state.views.remove(&key) {
                     let rest = *world.get::<Transform>(rig.root).unwrap();
                     let fade = Fade::new(world, rig.root);
@@ -402,19 +484,81 @@ pub fn tick(world: &mut World) {
                 state.hit_until.insert(*target, sim.tick + 14);
             }
         }
+        if let Event::PinnedLanded { target, .. } = event {
+            let key = format!("threat/{target}");
+            if let Some((skin, rig)) = state.views.remove(&key) {
+                let rest = *world.get::<Transform>(rig.root).unwrap();
+                let fade = Fade::new(world, rig.root);
+                state.dying.push(Corpse {
+                    skin,
+                    rig,
+                    born: sim.tick,
+                    rest,
+                    fade,
+                    arrows: state.attached.remove(target).unwrap_or_default(),
+                });
+            }
+        }
+        if let Event::BlockedShot { position } = event {
+            crate::effects::deflection(
+                world,
+                Vec3::new(position[0], 0.3, position[1]),
+                sim.tick as u32,
+            );
+        }
         let cue = match event {
             Event::TransferStarted(_) => None,
             Event::TransferArrived(_) => None,
-            Event::Shot { .. } => Some(crate::sound::Cue::Swing),
+            Event::Shot { defender } if defender == "player" => Some(crate::sound::Cue::Bow),
+            Event::Shot { .. } => Some(crate::sound::Cue::Ballista),
+            Event::ArcFired { .. } => Some(crate::sound::Cue::Arc),
+            Event::Hit {
+                impact: gameplay_core::Impact::Arc,
+                ..
+            } => Some(crate::sound::Cue::GhoulHit),
+            Event::Hit {
+                impact: gameplay_core::Impact::Deflect,
+                ..
+            } => Some(crate::sound::Cue::Clang),
+            Event::Hit {
+                impact: gameplay_core::Impact::Spear,
+                ..
+            } => Some(crate::sound::Cue::Spear),
+            Event::Hit {
+                impact: gameplay_core::Impact::BoltPierce,
+                ..
+            } => Some(crate::sound::Cue::Pierce),
+            Event::Hit {
+                impact: gameplay_core::Impact::BoltImpale,
+                ..
+            } => Some(crate::sound::Cue::Pierce),
+            Event::Hit {
+                impact: gameplay_core::Impact::Decapitate,
+                ..
+            } => Some(crate::sound::Cue::Decapitate),
+            Event::Hit {
+                impact: gameplay_core::Impact::Arrow,
+                ..
+            } => Some(crate::sound::Cue::ArrowHit),
             Event::Hit {
                 projectile: None, ..
             } => Some(crate::sound::Cue::GhoulHit),
             Event::Hit { .. } => Some(crate::sound::Cue::Stone),
+            Event::PinnedLanded { .. } => Some(crate::sound::Cue::GhoulHit),
+            Event::BlockedShot { .. } => Some(crate::sound::Cue::Stone),
             Event::Produced { .. } | Event::Equipped { .. } => Some(crate::sound::Cue::Clang),
             _ => None,
         };
         if let Some(cue) = cue {
-            if sim.tick >= state.last_sound + 18 {
+            let combat_event = matches!(
+                event,
+                Event::Shot { .. }
+                    | Event::ArcFired { .. }
+                    | Event::Hit { .. }
+                    | Event::PinnedLanded { .. }
+                    | Event::BlockedShot { .. }
+            );
+            if combat_event || sim.tick >= state.last_sound + 18 {
                 world.resource_mut::<crate::sound::Sound>().play(cue);
                 state.last_sound = sim.tick;
             } else {
@@ -488,7 +632,24 @@ pub fn tick(world: &mut World) {
             v.injury = 1.0;
             v.roll = 0.18 + (t.travelled * 13.0).sin() * 0.05;
         }
+        v.pierced = t.pierced;
+        v.armored = t.armor > 0;
+        v.recoil = if sim.tick < t.stagger_until
+            && t.knockback.iter().map(|v| v * v).sum::<f32>() > 0.04
+        {
+            1.0
+        } else {
+            0.0
+        };
         desired.insert(format!("threat/{}", t.id), v);
+    }
+    for p in sim.pinned.values() {
+        let mut v = View::new(&sim.config().waves[p.wave].skin, p.position);
+        let f = ((sim.tick - p.born) as f32 / (p.land - p.born) as f32).min(1.);
+        v.position.y = (std::f32::consts::PI * f).sin() * 0.8;
+        v.heading = p.heading;
+        v.roll = -f * 0.8;
+        desired.insert(format!("threat/{}", p.target), v);
     }
     for d in &sim.config().depots {
         inventory(
@@ -515,9 +676,20 @@ pub fn tick(world: &mut World) {
         let item = sim.config().items.iter().find(|i| i.id == p.item).unwrap();
         let f = (sim.tick - p.born) as f32 / (p.arrival - p.born) as f32;
         let mut v = View::new(&item.skin, [0., 0.]);
-        v.position = Vec3::new(p.from[0], 1.6, p.from[1]).lerp(Vec3::new(p.to[0], 0.5, p.to[1]), f);
+        v.position = Vec3::new(p.from[0], p.launch_height, p.from[1])
+            .lerp(Vec3::new(p.to[0], 0.55, p.to[1]), f);
         v.heading = -(p.to[1] - p.from[1]).atan2(p.to[0] - p.from[0]);
-        v.scale = 0.8;
+        v.scale = 0.65;
+        desired.insert(format!("projectile/{}", p.id), v);
+    }
+    for p in sim.spent_projectiles.values() {
+        let item = sim.config().items.iter().find(|i| i.id == p.item).unwrap();
+        let f = (sim.tick - p.born) as f32 / (p.arrival - p.born) as f32;
+        let mut v = View::new(&item.skin, [0., 0.]);
+        v.position =
+            Vec3::new(p.from[0], 0.55, p.from[1]).lerp(Vec3::new(p.to[0], 0.09, p.to[1]), f);
+        v.heading = -(p.to[1] - p.from[1]).atan2(p.to[0] - p.from[0]);
+        v.scale = 0.65;
         desired.insert(format!("projectile/{}", p.id), v);
     }
     for d in &sim.config().depots {
@@ -584,10 +756,11 @@ pub fn tick(world: &mut World) {
                     .join(" / ")
             })
             .unwrap_or_default();
-        let line = if state.current == Some(7) {
+        let line = if !sim.config().weapons.is_empty() {
             format!(
-                "{} GHOULS SLAIN  /  {} STRIKES LANDED  /  {} APPROACHING",
-                sim.metrics.melee_kills,
+                "{:?}  /  {} SLAIN  /  {} SWORD HITS  /  {} APPROACHING",
+                world.resource::<crate::gameplay::Controls>().weapon,
+                sim.metrics.kills,
                 sim.metrics.melee_hits,
                 sim.threats.len()
             )
@@ -666,6 +839,9 @@ pub fn tick(world: &mut World) {
             state.views.insert(key.clone(), (view.skin.clone(), rig));
         }
         let (_, rig) = &state.views[&key];
+        rig.show_part(world, voxel_assets::ActorPart::WoundPlug, !view.pierced);
+        rig.show_part(world, voxel_assets::ActorPart::Armor, view.armored);
+        rig.show_part(world, voxel_assets::ActorPart::Head, true);
         let (changed, unchanged) = rig.pose(
             world,
             view.position,
@@ -675,6 +851,7 @@ pub fn tick(world: &mut World) {
             view.travel,
             view.activity,
             view.injury,
+            view.recoil,
             view.aim,
         );
         writes += changed;

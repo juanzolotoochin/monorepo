@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "scene": "combat-arena",
+  "fps": 30,
+  "width": 1440,
+  "height": 960,
+  "max_frames": 1200,
+  "steps": [
+    {
+      "op": "settlement_defender",
+      "id": "ballista",
+      "enabled": false
+    },
+    {
+      "op": "wait",
+      "frames": 90
+    },
+    {
+      "op": "equip_weapon",
+      "weapon": "bow"
+    },
+    {
+      "op": "strike",
+      "target": [
+        0,
+        4
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 25
+    },
+    {
+      "op": "strike",
+      "target": [
+        0,
+        4
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 25
+    },
+    {
+      "op": "strike",
+      "target": [
+        0,
+        4
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 85
+    },
+    {
+      "op": "walk",
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "op": "equip_weapon",
+      "weapon": "arc_coil"
+    },
+    {
+      "op": "strike",
+      "target": [
+        -1.8,
+        1.5
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 62
+    },
+    {
+      "op": "equip_weapon",
+      "weapon": "spear"
+    },
+    {
+      "op": "strike",
+      "target": [
+        0,
+        2
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 34
+    },
+    {
+      "op": "equip_weapon",
+      "weapon": "sword"
+    },
+    {
+      "op": "walk",
+      "position": [
+        0,
+        1.2
+      ]
+    },
+    {
+      "op": "strike",
+      "target": [
+        0,
+        1.5
+      ]
+    },
+    {"op": "wait", "frames": 64},
+    {"op": "strike", "target": [0, 1.5]},
+    {"op": "wait", "frames": 90},
+    {"op": "strike", "target": [0, 1.8]},
+    {"op": "wait", "frames": 60},
+    {"op": "strike", "target": [0, 1.5]},
+    {"op": "wait", "frames": 45},
+    {"op": "strike", "target": [0, 1.5]},
+    {
+      "op": "settlement_defender",
+      "id": "ballista",
+      "enabled": true
+    },
+    {
+      "op": "wait",
+      "frames": 250
+    },
+    {
+      "op": "inspect"
+    }
+  ]
+}

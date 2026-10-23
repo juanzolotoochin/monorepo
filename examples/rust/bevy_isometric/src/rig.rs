@@ -26,6 +26,9 @@ impl RigTemplate {
                     ActorPart::LeftLeg => [-0.17, 0.58, 0.],
                     ActorPart::RightLeg => [0.17, 0.58, 0.],
                     ActorPart::Weapon => [0.4, 0.9, 0.],
+                    ActorPart::Head => [0., 1.49, 0.],
+                    ActorPart::WoundPlug => [0., 0.94, 0.],
+                    ActorPart::Armor => [0., 0.94, 0.],
                 };
                 let rest = Transform::from_translation(Vec3::from_array(
                     part.pivot.unwrap_or(default_pivot),
@@ -71,8 +74,48 @@ impl RigTemplate {
             motion: self.motion.clone(),
         }
     }
+    pub fn spawn_part(
+        &self,
+        world: &mut World,
+        part: ActorPart,
+        transform: Transform,
+    ) -> Option<Entity> {
+        let (_, _, handles) = self.parts.iter().find(|(kind, _, _)| *kind == part)?;
+        let root = world.spawn((transform, Visibility::Inherited)).id();
+        for (mesh, material) in handles {
+            let child = world
+                .spawn((
+                    Mesh3d(mesh.clone()),
+                    MeshMaterial3d(material.clone()),
+                    Transform::default(),
+                ))
+                .id();
+            world.entity_mut(root).add_child(child);
+        }
+        Some(root)
+    }
 }
 impl Rig {
+    pub fn part_world_transform(&self, world: &World, part: ActorPart) -> Option<Transform> {
+        let (bone, _, _) = self.bones.iter().find(|(_, kind, _)| *kind == part)?;
+        let root = world.get::<Transform>(self.root)?;
+        let local = world.get::<Transform>(*bone)?;
+        Some(Transform::from_matrix(root.to_matrix() * local.to_matrix()))
+    }
+    pub fn show_part(&self, world: &mut World, part: ActorPart, show: bool) {
+        for (entity, kind, _) in &self.bones {
+            if *kind == part {
+                let desired = if show {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                };
+                if world.get::<Visibility>(*entity) != Some(&desired) {
+                    *world.get_mut::<Visibility>(*entity).unwrap() = desired;
+                }
+            }
+        }
+    }
     pub fn pose(
         &self,
         world: &mut World,
@@ -83,6 +126,7 @@ impl Rig {
         travel: f32,
         activity: f32,
         injury: f32,
+        recoil: f32,
         aim: Option<f32>,
     ) -> (u64, u64) {
         let mut writes = 0;
@@ -102,19 +146,25 @@ impl Rig {
             match &self.motion {
                 Motion::Biped | Motion::Quadruped => {
                     if matches!(part, ActorPart::LeftLeg | ActorPart::RightLeg) {
-                        let stride =
-                            (travel * (12.0 - injury * 3.0)).sin() * (0.5 - injury * 0.23) * side;
+                        let stride = (travel * (12.0 - injury * 3.0)).sin()
+                            * (0.5 - injury * 0.23)
+                            * side
+                            * if recoil > 0.0 { -1.0 } else { 1.0 };
                         let drag = if side < 0.0 {
                             injury * 0.24
                         } else {
                             -injury * 0.07
                         };
-                        t.rotation = Quat::from_rotation_x(stride + drag);
+                        t.rotation = Quat::from_rotation_x(stride + drag + recoil * 0.18);
                     }
-                    if *part == ActorPart::Body {
+                    if matches!(
+                        part,
+                        ActorPart::Body | ActorPart::Armor | ActorPart::WoundPlug | ActorPart::Head
+                    ) {
                         t.translation.y += (travel * 24.).cos() * 0.018;
-                        t.rotation = Quat::from_rotation_x(-activity * 0.25 - injury * 0.26)
-                            * Quat::from_rotation_z(injury * 0.16);
+                        t.rotation =
+                            Quat::from_rotation_x(-activity * 0.25 - injury * 0.26 + recoil * 0.28)
+                                * Quat::from_rotation_z(injury * 0.16);
                         t.translation.y -= injury * 0.06;
                         t.translation.z -= activity * 0.1 + injury * 0.08;
                     }

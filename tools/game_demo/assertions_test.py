@@ -76,6 +76,21 @@ class AssertionsTest(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, 'delivered'):
             c.feed(frame(0, delivered=4))
 
+    def test_eventual_nested_state_and_collection_size(self):
+        spec = dict(version=1, ever=[
+            dict(path='threats.*.pierced', contains=True),
+            dict(path='pinned', min_len=1),
+        ])
+        c = TraceAssertions(spec)
+        c.feed(dict(frame=0, time=0., state=dict(threats={'a': {'pierced': False}}, pinned={})))
+        c.feed(dict(frame=1, time=0.1, state=dict(threats={'a': {'pierced': True}}, pinned={'b': {}})))
+        c.finish()
+        missing = TraceAssertions(spec)
+        missing.feed(dict(frame=0, time=0., state=dict(threats={}, pinned={})))
+        missing.feed(dict(frame=1, time=0.1, state=dict(threats={}, pinned={})))
+        with self.assertRaisesRegex(AssertionError, 'never satisfied'):
+            missing.finish()
+
 
 if __name__ == '__main__':
     unittest.main()

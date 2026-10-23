@@ -120,6 +120,9 @@ pub struct Hub {
     trace: Option<std::fs::File>,
 }
 impl Hub {
+    pub fn warming_up(&self) -> bool {
+        self.tick <= self.warmup
+    }
     pub fn new(options: Options) -> Result<Self, String> {
         let (tx, rx) = mpsc::sync_channel(64);
         let server = options
@@ -468,6 +471,25 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             world.resource_mut::<Controls>().strike(aim);
             Ok(Pending::Strike)
         }
+        Command::EquipWeapon { weapon } => {
+            let selected = match weapon.as_str() {
+                "sword" => gameplay_core::Weapon::Sword,
+                "spear" => gameplay_core::Weapon::Spear,
+                "bow" => gameplay_core::Weapon::Bow,
+                "arc_coil" => gameplay_core::Weapon::ArcCoil,
+                _ => return Err("Unknown weapon".into()),
+            };
+            let available = world
+                .resource::<crate::settlement::Settlement>()
+                .simulation
+                .as_ref()
+                .is_some_and(|sim| sim.config().weapons.contains(&selected));
+            if !available {
+                return Err("Weapon is unavailable in this scenario".into());
+            }
+            world.resource_mut::<Controls>().weapon = selected;
+            Ok(Pending::Instant)
+        }
         Command::Wait { frames } => {
             if *frames > 7200 {
                 return Err("Wait exceeds frame budget".into());
@@ -587,7 +609,7 @@ pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
         .terrain;
     let terrain = json!(terrain);
     let controls = world.resource::<Controls>();
-    let movement = json!({"route":controls.route.iter().map(|p|p.to_array()).collect::<Vec<_>>(),"velocity":controls.velocity.to_array(),"attacking":controls.attack.is_some(),"impacts":controls.impacts});
+    let movement = json!({"route":controls.route.iter().map(|p|p.to_array()).collect::<Vec<_>>(),"velocity":controls.velocity.to_array(),"attacking":controls.attack.is_some(),"weapon":controls.weapon,"impacts":controls.impacts});
     let scene = world.resource::<SceneLibrary>().title().to_string();
     let lab = world.resource::<PileLab>();
     let airborne = lab.in_flight;

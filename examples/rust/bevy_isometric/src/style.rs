@@ -21,6 +21,8 @@ struct Environment;
 #[derive(Component)]
 struct StyledActor;
 #[derive(Component)]
+pub struct WeaponVisual(pub gameplay_core::Weapon);
+#[derive(Component)]
 pub struct WeaponLabel;
 #[derive(Component)]
 pub struct AccentLight {
@@ -42,6 +44,12 @@ pub fn apply(world: &mut World) {
     let profile = scene.scene.style.clone().unwrap_or_default();
     let environment = scene.environment.clone();
     let actor = scene.actor.clone();
+    let skins = scene.skins.clone();
+    let available_weapons = scene
+        .scene
+        .scenario
+        .as_ref()
+        .map_or(vec![], |s| s.weapons.clone());
     let fixture_lighting = environment.as_ref().is_some_and(|e| !e.lights.is_empty());
     let hide_deck = environment.is_some() || scene.scene.terrain.is_some();
     let settlement = scene.scene.scenario.is_some();
@@ -62,8 +70,8 @@ pub fn apply(world: &mut World) {
         .query_filtered::<&mut Text, With<crate::scene::ControlHelp>>()
         .iter_mut(world)
     {
-        help.0 = if index == 7 {
-            "RMB MOVE / SHIFT+LMB SLASH / WASD DODGE"
+        help.0 = if !available_weapons.is_empty() {
+            "RMB MOVE / SHIFT+LMB ATTACK / Z SWORD / X SPEAR / C BOW / V ARC"
         } else if settlement {
             "LMB STOCK / CTRL DEPOSIT / E MACHINE / SHIFT+LMB ATTACK"
         } else {
@@ -247,6 +255,11 @@ pub fn apply(world: &mut World) {
                             Transform::default(),
                         ))
                         .id();
+                    if a.part == ActorPart::Weapon && !available_weapons.is_empty() {
+                        world
+                            .entity_mut(e)
+                            .insert(WeaponVisual(gameplay_core::Weapon::Sword));
+                    }
                     let material = world.get::<MeshMaterial3d<StandardMaterial>>(e).unwrap();
                     let emitting = world
                         .resource::<Assets<StandardMaterial>>()
@@ -256,6 +269,41 @@ pub fn apply(world: &mut World) {
                         world.entity_mut(e).insert(bevy::light::NotShadowCaster);
                     }
                     world.entity_mut(parent).add_child(e);
+                }
+            }
+        }
+    }
+    if !available_weapons.is_empty() {
+        for appearance in &profile.weapon_skins {
+            if !available_weapons.contains(&appearance.weapon) {
+                continue;
+            }
+            if let Some(skin) = skins.iter().find(|s| s.id == appearance.skin) {
+                for part in &skin.parts {
+                    let handles = upload(
+                        world,
+                        content_key(&(&profile, part)),
+                        &part.meshes,
+                        &profile,
+                    );
+                    for (&parent, kind) in &parts {
+                        if *kind != ActorPart::Weapon {
+                            continue;
+                        }
+                        for (mesh, material) in &handles {
+                            let e = world
+                                .spawn((
+                                    StyledActor,
+                                    WeaponVisual(appearance.weapon),
+                                    Mesh3d(mesh.clone()),
+                                    MeshMaterial3d(material.clone()),
+                                    Transform::default(),
+                                    Visibility::Hidden,
+                                ))
+                                .id();
+                            world.entity_mut(parent).add_child(e);
+                        }
+                    }
                 }
             }
         }
@@ -293,6 +341,22 @@ pub fn apply(world: &mut World) {
         },
     ));
     world.resource_mut::<ActiveStyle>().current = Some(index);
+}
+
+pub fn select_weapon(
+    controls: Res<crate::gameplay::Controls>,
+    mut visuals: Query<(&WeaponVisual, &mut Visibility)>,
+) {
+    if !controls.is_changed() {
+        return;
+    }
+    for (weapon, mut visible) in &mut visuals {
+        *visible = if weapon.0 == controls.weapon {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
 }
 fn spawn_light(
     world: &mut World,

@@ -150,3 +150,21 @@ game_simulation_test(
     script = "demos/combat_arena.json",
     tags = ["linux"],
 )
+
+game_demo(
+    name = "combat_weapons_demo",
+    assertions = "demos/combat_weapons.assertions.json",
+    game = ":demo",
+    script = "demos/combat_weapons.json",
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
+game_simulation_test(
+    name = "combat_weapons_test",
+    size = "medium",
+    assertions = "demos/combat_weapons.assertions.json",
+    game = ":demo",
+    script = "demos/combat_weapons.json",
+    tags = ["linux"],
+)

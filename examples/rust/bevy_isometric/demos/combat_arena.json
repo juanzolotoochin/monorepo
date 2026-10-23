@@ -6,6 +6,7 @@
   "height": 960,
   "max_frames": 420,
   "steps": [
+    {"op": "settlement_defender", "id": "ballista", "enabled": false},
     {"op": "wait", "frames": 140},
     {"op": "walk", "position": [0.0, 0.0]},
     {"op": "wait", "frames": 45},

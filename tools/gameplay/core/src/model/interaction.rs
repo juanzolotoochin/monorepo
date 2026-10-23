@@ -9,8 +9,41 @@ pub struct ManualJob {
     pub next_tick: u64,
 }
 impl Simulation {
-    /// A controlled actor's forward melee strike uses the same threat health and death events.
+    /// All controlled attacks resolve in the deterministic simulation, independent of rendering.
     pub fn strike(&mut self, id: &str) -> Result<u32> {
+        self.attack(id, Weapon::Sword)
+    }
+    pub fn attack(&mut self, id: &str, weapon: Weapon) -> Result<u32> {
+        self.attack_with_muzzle(id, weapon, [0.0, 0.6, 0.25])
+    }
+    pub fn attack_with_muzzle(
+        &mut self,
+        id: &str,
+        weapon: Weapon,
+        muzzle: [f32; 3],
+    ) -> Result<u32> {
+        let heading = self.agents.get(id).ok_or("unknown actor")?.heading;
+        self.attack_aim(id, weapon, muzzle, [heading.sin(), heading.cos()])
+    }
+    pub fn attack_aim(
+        &mut self,
+        id: &str,
+        weapon: Weapon,
+        muzzle: [f32; 3],
+        aim: Point,
+    ) -> Result<u32> {
+        if muzzle.iter().any(|v| !v.is_finite() || v.abs() > 4.0) {
+            return Err("invalid weapon muzzle".into());
+        }
+        let magnitude = (aim[0] * aim[0] + aim[1] * aim[1]).sqrt();
+        if !magnitude.is_finite() || magnitude < 0.001 {
+            return Err("invalid attack aim".into());
+        }
+        if !self.config.weapons.contains(&weapon)
+            && !(self.config.weapons.is_empty() && weapon == Weapon::Sword)
+        {
+            return Err("weapon is unavailable in this scenario".into());
+        }
         if !self
             .config
             .agents
@@ -22,30 +55,197 @@ impl Simulation {
         if self.attack_ready.get(id).is_some_and(|t| *t > self.tick) {
             return Ok(0);
         }
-        self.attack_ready.insert(id.into(), self.tick + 38);
-        let a = &self.agents[id];
-        let position = a.position;
-        let forward = [a.heading.sin(), a.heading.cos()];
-        let targets: Vec<_> = self
+        self.attack_ready.insert(
+            id.into(),
+            self.tick
+                + match weapon {
+                    Weapon::Sword => 38,
+                    Weapon::Spear => 42,
+                    Weapon::Bow => 28,
+                    Weapon::ArcCoil => 65,
+                },
+        );
+        let actor = &self.agents[id];
+        let origin = actor.position;
+        let forward = [aim[0] / magnitude, aim[1] / magnitude];
+        let (reach, cone) = match weapon {
+            Weapon::Sword => (1.2, 0.35),
+            Weapon::Spear => (2.4, 0.80),
+            Weapon::Bow => (9.0, 0.91),
+            Weapon::ArcCoil => (4.0, 0.55),
+        };
+        let mut targets: Vec<_> = self
             .threats
             .values()
-            .filter(|t| {
-                let d = [t.position[0] - position[0], t.position[1] - position[1]];
-                let distance = navigation::distance(t.position, position);
-                distance <= 1.2
-                    && (distance < 0.2 || (d[0] * forward[0] + d[1] * forward[1]) / distance > 0.35)
+            .filter_map(|t| {
+                let delta = [t.position[0] - origin[0], t.position[1] - origin[1]];
+                let distance = navigation::distance(t.position, origin);
+                (distance <= reach
+                    && (distance < 0.2
+                        || (delta[0] * forward[0] + delta[1] * forward[1]) / distance > cone))
+                    .then_some((t.id, distance))
             })
-            .map(|t| t.id)
             .collect();
+        targets.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+        if weapon == Weapon::Bow {
+            let id = self.id();
+            let right = [forward[1], -forward[0]];
+            let from = [
+                origin[0] + right[0] * muzzle[0] + forward[0] * muzzle[2],
+                origin[1] + right[1] * muzzle[0] + forward[1] * muzzle[2],
+            ];
+            let to = [from[0] + forward[0] * 9.0, from[1] + forward[1] * 9.0];
+            self.projectiles.insert(
+                id,
+                Projectile {
+                    id,
+                    defender: "player".into(),
+                    target: None,
+                    item: "arrow".into(),
+                    from,
+                    launch_height: muzzle[1],
+                    to,
+                    born: self.tick,
+                    arrival: self.tick + ticks(9.0 / 28.0),
+                    damage: 1,
+                    kind: ProjectileKind::Arrow,
+                },
+            );
+            self.metrics.shots += 1;
+            self.events.push(Event::Shot {
+                defender: "player".into(),
+            });
+            return Ok(1);
+        }
+        if weapon == Weapon::ArcCoil {
+            let ray_end = [origin[0] + forward[0] * 4.0, origin[1] + forward[1] * 4.0];
+            let blocked = self
+                .obstacles
+                .iter()
+                .filter_map(|obstacle| {
+                    super::combat::segment_disc(
+                        origin,
+                        ray_end,
+                        obstacle.center,
+                        obstacle.radius + 0.04,
+                    )
+                })
+                .min_by(f32::total_cmp)
+                .unwrap_or(1.0);
+            targets.retain(|(id, _)| {
+                let t = &self.threats[id];
+                let delta = [t.position[0] - origin[0], t.position[1] - origin[1]];
+                let along = delta[0] * forward[0] + delta[1] * forward[1];
+                let sideways = (delta[0] * forward[1] - delta[1] * forward[0]).abs();
+                along >= 0.0 && along <= 4.0 * blocked && sideways <= 0.42
+            });
+            let beam_end = targets
+                .first()
+                .map(|(id, _)| self.threats[id].position)
+                .unwrap_or([
+                    origin[0] + forward[0] * 4.0 * blocked,
+                    origin[1] + forward[1] * 4.0 * blocked,
+                ]);
+            self.events.push(Event::ArcFired {
+                from: origin,
+                to: beam_end,
+            });
+            if let Some((first, _)) = targets.first().copied() {
+                let anchor = self.threats[&first].position;
+                let mut chain: Vec<_> = self
+                    .threats
+                    .values()
+                    .filter(|t| t.id != first && navigation::distance(t.position, anchor) <= 2.2)
+                    .map(|t| (t.id, navigation::distance(t.position, anchor)))
+                    .collect();
+                chain.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+                targets = std::iter::once((first, 0.0))
+                    .chain(chain.into_iter().take(2))
+                    .collect();
+            }
+        } else if weapon == Weapon::Spear {
+            targets.truncate(2);
+        }
         let count = targets.len() as u32;
-        for target in targets {
+        for (index, (target, _)) in targets.into_iter().enumerate() {
             let t = self.threats.get_mut(&target).unwrap();
-            t.hp = t.hp.saturating_sub(1);
-            let direction = [t.position[0] - position[0], t.position[1] - position[1]];
-            let length = navigation::distance(t.position, position).max(0.001);
-            t.knockback = [direction[0] / length * 5.5, direction[1] / length * 5.5];
-            t.stagger_until = self.tick + 15;
-            self.metrics.melee_hits += 1;
+            let mut impact = match weapon {
+                Weapon::Sword => Impact::Sword,
+                Weapon::Spear => Impact::Spear,
+                Weapon::ArcCoil => Impact::Arc,
+                Weapon::Bow => unreachable!(),
+            };
+            let armored = t.armor > 0;
+            let damage = match weapon {
+                Weapon::Sword if armored => {
+                    t.armor -= 1;
+                    impact = Impact::Deflect;
+                    0
+                }
+                Weapon::Sword => {
+                    if (self.metrics.melee_hits + 1) % 4 == 0 {
+                        impact = Impact::Decapitate;
+                        t.hp
+                    } else {
+                        2
+                    }
+                }
+                Weapon::Spear if armored => {
+                    t.armor = t.armor.saturating_sub(2);
+                    1
+                }
+                Weapon::Spear => {
+                    if index == 0 {
+                        2
+                    } else {
+                        1
+                    }
+                }
+                Weapon::ArcCoil => {
+                    if armored {
+                        2
+                    } else {
+                        1
+                    }
+                }
+                Weapon::Bow => unreachable!(),
+            };
+            if armored && t.armor == 0 {
+                self.metrics.armor_breaks += 1;
+            }
+            if impact == Impact::Deflect {
+                self.metrics.deflections += 1;
+            }
+            if impact == Impact::Decapitate {
+                self.metrics.decapitations += 1;
+            }
+            t.hp = t.hp.saturating_sub(damage);
+            let direction = [t.position[0] - origin[0], t.position[1] - origin[1]];
+            let length = navigation::distance(t.position, origin).max(0.001);
+            let force = match weapon {
+                Weapon::Sword => 5.5,
+                Weapon::Spear => 8.0,
+                Weapon::ArcCoil => 0.0,
+                Weapon::Bow => 0.0,
+            };
+            t.knockback = [direction[0] / length * force, direction[1] / length * force];
+            t.stagger_until = self.tick
+                + match weapon {
+                    Weapon::Sword => 15,
+                    Weapon::Spear => 24,
+                    Weapon::ArcCoil => 45,
+                    Weapon::Bow => 0,
+                };
+            if weapon == Weapon::ArcCoil {
+                t.shocked_until = t.stagger_until;
+                self.metrics.arc_hits += 1;
+            }
+            if weapon == Weapon::Spear {
+                self.metrics.spear_hits += 1;
+            }
+            if weapon == Weapon::Sword {
+                self.metrics.melee_hits += 1;
+            }
             let killed = t.hp == 0;
             let position = t.position;
             self.events.push(Event::Hit {
@@ -53,11 +253,14 @@ impl Simulation {
                 projectile: None,
                 position,
                 killed,
+                impact,
             });
             if killed {
                 self.threats.remove(&target);
                 self.metrics.kills += 1;
-                self.metrics.melee_kills += 1;
+                if weapon == Weapon::Sword {
+                    self.metrics.melee_kills += 1;
+                }
             }
         }
         Ok(count)

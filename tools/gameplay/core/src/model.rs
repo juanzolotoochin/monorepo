@@ -7,7 +7,7 @@ use crate::{
     *,
 };
 pub use interaction::ManualJob;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 pub const HZ: u64 = 60;
 fn ticks(seconds: f32) -> u64 {
@@ -76,6 +76,14 @@ pub struct Metrics {
     pub kills: u64,
     pub melee_hits: u64,
     pub melee_kills: u64,
+    pub bow_hits: u64,
+    pub spear_hits: u64,
+    pub arc_hits: u64,
+    pub decapitations: u64,
+    pub deflections: u64,
+    pub armor_breaks: u64,
+    pub bolt_impales: u64,
+    pub bolt_pierces: u64,
     pub knockback_meters: f64,
     pub breaches: u64,
     pub delivered_items: BTreeMap<String, u64>,
@@ -144,6 +152,9 @@ pub struct Threat {
     pub heading: f32,
     pub travelled: f32,
     pub hp: u32,
+    pub armor: u32,
+    pub pierced: bool,
+    pub shocked_until: u64,
     pub route: Vec<Point>,
     pub stagger_until: u64,
     pub knockback: Point,
@@ -152,13 +163,56 @@ pub struct Threat {
 pub struct Projectile {
     pub id: u64,
     pub defender: String,
-    pub target: u64,
+    pub target: Option<u64>,
+    pub item: String,
+    pub from: Point,
+    pub launch_height: f32,
+    pub to: Point,
+    pub born: u64,
+    pub arrival: u64,
+    pub damage: u32,
+    pub kind: ProjectileKind,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct SpentProjectile {
+    pub id: u64,
     pub item: String,
     pub from: Point,
     pub to: Point,
     pub born: u64,
     pub arrival: u64,
-    pub damage: u32,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct Pinned {
+    pub target: u64,
+    pub wave: usize,
+    pub position: Point,
+    pub heading: f32,
+    pub born: u64,
+    pub land: u64,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Weapon {
+    Sword,
+    Spear,
+    Bow,
+    ArcCoil,
+}
+impl Default for Weapon {
+    fn default() -> Self {
+        Self::Sword
+    }
+}
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+pub enum Impact {
+    Sword,
+    Decapitate,
+    Spear,
+    Arrow,
+    Deflect,
+    Arc,
+    BoltImpale,
+    BoltPierce,
 }
 #[derive(Clone, Debug, Serialize)]
 pub enum Endpoint {
@@ -196,6 +250,18 @@ pub enum Event {
         projectile: Option<u64>,
         position: Point,
         killed: bool,
+        impact: Impact,
+    },
+    PinnedLanded {
+        target: u64,
+        position: Point,
+    },
+    BlockedShot {
+        position: Point,
+    },
+    ArcFired {
+        from: Point,
+        to: Point,
     },
     Breach {
         position: Point,
@@ -239,6 +305,8 @@ pub struct Simulation {
     pub transfers: BTreeMap<u64, Transfer>,
     pub threats: BTreeMap<u64, Threat>,
     pub projectiles: BTreeMap<u64, Projectile>,
+    pub spent_projectiles: BTreeMap<u64, SpentProjectile>,
+    pub pinned: BTreeMap<u64, Pinned>,
     pub accounts: BTreeMap<String, Accounting>,
     pub metrics: Metrics,
     pub manual_jobs: BTreeMap<String, ManualJob>,
@@ -359,6 +427,8 @@ impl Simulation {
             transfers: BTreeMap::new(),
             threats: BTreeMap::new(),
             projectiles: BTreeMap::new(),
+            spent_projectiles: BTreeMap::new(),
+            pinned: BTreeMap::new(),
             accounts,
             metrics: Metrics::default(),
             manual_jobs: BTreeMap::new(),
