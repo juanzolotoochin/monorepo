@@ -6,11 +6,14 @@ from pathlib import Path
 import subprocess
 import tempfile
 
+from tools.game_demo.assertions import validate
+
 
 def main():
     parser = argparse.ArgumentParser()
     for name in ("game", "script", "ffmpeg", "video", "report", "trace", "audio"):
         parser.add_argument(f"--{name}", required=True, type=Path)
+    parser.add_argument("--assertions", type=Path)
     args = parser.parse_args()
     game, script, ffmpeg, video, report, trace, audio = (
         getattr(args, name).absolute()
@@ -38,6 +41,9 @@ def main():
         count = len(list(frames.glob("frame_*.png")))
         if state["status"] != "passed" or count == 0 or count != state["frames"]:
             raise SystemExit(f"Incomplete demo capture: {count} frames, report {state}")
+        if args.assertions:
+            with trace.open() as stream:
+                state["trace_assertions"] = validate(stream, json.loads(args.assertions.read_text()))
         version = subprocess.check_output([str(ffmpeg), "-version"], text=True).splitlines()[0]
         subprocess.run(
             [str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y",

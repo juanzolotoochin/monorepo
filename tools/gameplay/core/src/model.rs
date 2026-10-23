@@ -105,6 +105,8 @@ pub struct Trailer {
 #[derive(Clone, Debug, Serialize)]
 pub struct AgentState {
     pub departure_dock: Option<String>,
+    pub travel_heading: f32,
+    pub traffic_replan_at: u64,
     pub id: String,
     pub position: Point,
     pub heading: f32,
@@ -225,6 +227,7 @@ pub struct Simulation {
     pub health: u32,
     pub depots: BTreeMap<String, Inventory>,
     pub agents: BTreeMap<String, AgentState>,
+    pub dock_owners: BTreeMap<String, String>,
     pub producers: BTreeMap<String, ProducerState>,
     pub defenders: BTreeMap<String, DefenderState>,
     pub links: BTreeMap<String, bool>,
@@ -288,6 +291,8 @@ impl Simulation {
                         travelled: 0.0,
                         phase: Phase::Idle,
                         departure_dock: None,
+                        travel_heading: 0.0,
+                        traffic_replan_at: 0,
                         route: vec![],
                         cargo: Inventory::new(a.capacity),
                         assignment: None,
@@ -342,6 +347,7 @@ impl Simulation {
             rate: 1.0,
             depots,
             agents,
+            dock_owners: BTreeMap::new(),
             producers,
             defenders,
             links,

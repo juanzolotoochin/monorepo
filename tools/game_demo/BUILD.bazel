@@ -1,10 +1,11 @@
-load("@rules_python//python:defs.bzl", "py_binary")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 
 py_binary(
     name = "runner",
     srcs = ["runner.py"],
     legacy_create_init = 0,
     visibility = ["//visibility:public"],
+    deps = [":trace_assertions"],
 )
 
 py_binary(
@@ -12,4 +13,25 @@ py_binary(
     srcs = ["client.py"],
     legacy_create_init = 0,
     visibility = ["//visibility:public"],
+)
+
+exports_files(["simulation_test.py"])
+
+py_library(
+    name = "trace_assertions",
+    srcs = ["assertions.py"],
+    visibility = ["//visibility:public"],
+)
+
+py_binary(
+    name = "assert_trace",
+    srcs = ["assertions.py"],
+    main = "assertions.py",
+    visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "assertions_test",
+    srcs = ["assertions_test.py"],
+    deps = [":trace_assertions"],
 )

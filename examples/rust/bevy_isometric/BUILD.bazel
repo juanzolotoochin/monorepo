@@ -2,7 +2,7 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_python//python:defs.bzl", "py_test")
 load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
 load("@rules_rs//rs:rust_test.bzl", "rust_test")
-load("//bazel/game_demo:defs.bzl", "game_demo")
+load("//bazel/game_demo:defs.bzl", "game_demo", "game_simulation_test")
 
 rust_binary(
     name = "demo",
@@ -116,8 +116,18 @@ game_demo(
 
 game_demo(
     name = "forest_outpost_demo",
+    assertions = "demos/forest_motion.assertions.json",
     game = ":demo",
     script = "demos/forest_outpost.json",
     tags = ["manual"],
     target_compatible_with = ["@platforms//os:linux"],
+)
+
+game_simulation_test(
+    name = "forest_motion_test",
+    size = "medium",
+    assertions = "demos/forest_motion.assertions.json",
+    game = ":demo",
+    script = "demos/forest_outpost.json",
+    tags = ["linux"],
 )

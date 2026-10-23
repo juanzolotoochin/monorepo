@@ -117,6 +117,7 @@ pub struct Hub {
     pub audio_events: Vec<Value>,
     warmup: u64,
     quit: Option<u64>,
+    trace: Option<std::fs::File>,
 }
 impl Hub {
     pub fn new(options: Options) -> Result<Self, String> {
@@ -144,7 +145,18 @@ impl Hub {
             })
             .unwrap_or_default();
         let warmup = if options.frames_dir.is_some() { 30 } else { 0 };
+        let trace = if options.frames_dir.is_none() {
+            options
+                .trace
+                .as_ref()
+                .map(std::fs::File::create)
+                .transpose()
+                .map_err(|error| format!("Cannot open world trace: {error}"))?
+        } else {
+            None
+        };
         Ok(Self {
+            trace,
             options,
             rx: Mutex::new(rx),
             _server: server,
@@ -679,6 +691,12 @@ pub fn end(world: &mut World) {
         }
     }
     hub.latest = snapshot(world, &hub);
+    if hub.trace.is_some() {
+        use std::io::Write;
+        let record = json!({"frame":hub.tick,"time":hub.tick as f64 / f64::from(hub.options.fps()),"state":hub.latest});
+        // Unbuffered newline records can also be consumed through a named pipe.
+        writeln!(hub.trace.as_mut().unwrap(), "{record}").expect("write world trace");
+    }
     for envelope in hub.inspect.drain(..) {
         if let Some(reply) = envelope.reply {
             let _=reply.send(json!({"version":VERSION,"id":envelope.request.id,"status":"completed","state":hub.latest}));
