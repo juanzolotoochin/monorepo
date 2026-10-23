@@ -1,6 +1,10 @@
 (id: "red_clearing", extent: 8.0,
  items: [(id: "arrow", label: "ARROW", skin: "item_arrow", scale: 0.45), (id: "bolt", label: "BALLISTA BOLT", skin: "item_bolt", scale: 0.8)],
  weapons: [Sword, Spear, Bow, ArcCoil],
+ weapon_tuning: [
+  (weapon: Sword, cooldown_ticks: 38, reach: 1.2, cone: 0.35, damage: 2, knockback: 5.5, stagger_ticks: 15, projectile_speed: 0.0, critical_one_in: 4),
+  (weapon: Spear, cooldown_ticks: 42, reach: 2.4, cone: 0.8, damage: 2, knockback: 8.0, stagger_ticks: 24, projectile_speed: 0.0, critical_one_in: 0),
+ ],
  depots: [(id: "bolt_rack", label: "BOLT RACK", position: (5.0, -2.5), capacity: 24, stock: [(item: "bolt", units: 18)], stock_anchor: (0.0, 0.1, -0.7))], sources: [], links: [],
  agents: [(id: "player", label: "YOU", skin: "worker", position: (0.0, -1.5), speed: 3.8, radius: 0.18, capacity: 8, links: [], transfer_seconds: 0.4, cargo_anchor: (0.0, 0.65, -0.19), equipment: None, controlled: true)],
  producers: [], defenders: [(id: "ballista", label: "FRONTIER BALLISTA", description: "Heavy crank bow. A bolt can carry a ghoul into the dirt or punch clean through its torso.", radius: 0.65, position: (3.9, -2.5), skin: "turret", depot: "bolt_rack", ammo: "bolt", range: 5.8, period: 2.8, damage: 8, projectile_speed: 18.0, projectile: Bolt)],

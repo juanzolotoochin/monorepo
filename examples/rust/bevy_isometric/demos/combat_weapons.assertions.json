@@ -13,8 +13,8 @@
     {"path": "settlement.simulation.metrics.arc_hits", "min": 2},
     {"path": "settlement.simulation.metrics.melee_hits", "min": 1},
     {"path": "settlement.simulation.metrics.decapitations", "min": 1},
-    {"path": "settlement.simulation.metrics.bolt_impales", "min": 2},
+    {"path": "settlement.simulation.metrics.bolt_impales", "min": 1},
     {"path": "settlement.simulation.metrics.bolt_pierces", "min": 1},
-    {"path": "settlement.simulation.metrics.kills", "min": 6}
+    {"path": "settlement.simulation.metrics.kills", "min": 5}
   ]
 }

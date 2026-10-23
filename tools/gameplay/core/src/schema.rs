@@ -213,6 +213,8 @@ pub struct Scenario {
     pub id: String,
     #[serde(default)]
     pub weapons: Vec<crate::Weapon>,
+    #[serde(default)]
+    pub weapon_tuning: Vec<WeaponTuning>,
     pub items: Vec<Item>,
     pub depots: Vec<Depot>,
     pub sources: Vec<Source>,
@@ -222,6 +224,43 @@ pub struct Scenario {
     pub defenders: Vec<Defender>,
     pub waves: Vec<Wave>,
     pub base_health: u32,
+}
+/// Simulation-side weapon rules. Omitted entries use the shared defaults.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WeaponTuning {
+    pub weapon: crate::Weapon,
+    pub cooldown_ticks: u64,
+    pub reach: f32,
+    pub cone: f32,
+    pub damage: u32,
+    pub knockback: f32,
+    pub stagger_ticks: u64,
+    pub projectile_speed: f32,
+    pub critical_one_in: u64,
+}
+impl WeaponTuning {
+    pub fn defaults(weapon: crate::Weapon) -> Self {
+        use crate::Weapon;
+        let (cooldown_ticks, reach, cone, damage, knockback, stagger_ticks, projectile_speed, critical_one_in) = match weapon {
+            Weapon::Sword => (38, 1.2, 0.35, 2, 5.5, 15, 0., 4),
+            Weapon::Spear => (42, 2.4, 0.80, 2, 8., 24, 0., 0),
+            Weapon::Bow => (28, 9., 0.91, 1, 0., 0, 28., 0),
+            Weapon::ArcCoil => (65, 4., 0.55, 1, 0., 45, 0., 0),
+        };
+        Self { weapon, cooldown_ticks, reach, cone, damage, knockback, stagger_ticks, projectile_speed, critical_one_in }
+    }
+    fn valid(&self) -> bool {
+        (1..=600).contains(&self.cooldown_ticks)
+            && number(self.reach, 0.1, 24.)
+            && number(self.cone, -1., 1.)
+            && (1..=100).contains(&self.damage)
+            && number(self.knockback, 0., 40.)
+            && self.stagger_ticks <= 600
+            && number(self.projectile_speed, 0., 100.)
+            && (self.weapon != crate::Weapon::Bow || self.projectile_speed > 0.)
+            && self.critical_one_in <= 1000
+    }
 }
 fn ident(id: &str) -> bool {
     !id.is_empty()
@@ -267,6 +306,8 @@ impl Scenario {
             || self.base_health == 0
             || self.weapons.len() > 8
             || self.weapons.iter().collect::<BTreeSet<_>>().len() != self.weapons.len()
+            || self.weapon_tuning.iter().map(|t| t.weapon).collect::<BTreeSet<_>>().len() != self.weapon_tuning.len()
+            || self.weapon_tuning.iter().any(|t| !t.valid() || !self.weapons.contains(&t.weapon))
         {
             return Err("scenario counts exceed supported limits".into());
         }

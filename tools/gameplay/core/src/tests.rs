@@ -38,6 +38,7 @@ fn scenario() -> Scenario {
         extent: 8.,
         id: "test".into(),
         weapons: vec![],
+        weapon_tuning: vec![],
         items: ["wood", "iron", "arrow", "cart"]
             .iter()
             .map(|s| Item {
@@ -494,7 +495,14 @@ fn cart_reversal_uses_a_forward_arc_and_keeps_the_animal_out_of_the_trailer() {
 }
 
 fn combat_test_sim() -> Simulation {
+    combat_test_sim_with_obstacles(vec![])
+}
+fn combat_test_sim_with_obstacles(obstacles: Vec<crate::navigation::Disc>) -> Simulation {
+    combat_test_sim_with(obstacles, vec![])
+}
+fn combat_test_sim_with(obstacles: Vec<crate::navigation::Disc>, weapon_tuning: Vec<WeaponTuning>) -> Simulation {
     let mut config = scenario();
+    config.weapon_tuning = weapon_tuning;
     let mut player = agent("player");
     player.controlled = true;
     player.links.clear();
@@ -514,7 +522,7 @@ fn combat_test_sim() -> Simulation {
         damage: 1,
         count: 1,
     });
-    let mut sim = Simulation::new(config, vec![]).unwrap();
+    let mut sim = Simulation::new(config, obstacles).unwrap();
     sim.set_controlled_pose("player", [0., 0.], 0.).unwrap();
     sim
 }
@@ -537,6 +545,7 @@ fn combat_threat(id: u64, position: [f32; 2], hp: u32, armor: u32) -> Threat {
 #[test]
 fn sword_critical_severs_a_head_but_armor_deflects_the_cut() {
     let mut sim = combat_test_sim();
+    let mut criticals = 0;
     for hit in 1..=4 {
         let id = 100 + hit;
         sim.threats.insert(id, combat_threat(id, [0., 1.], 3, 0));
@@ -551,20 +560,15 @@ fn sword_critical_severs_a_head_but_armor_deflects_the_cut() {
                 _ => None,
             })
             .unwrap();
-        assert_eq!(
-            impact,
-            if hit == 4 {
-                Impact::Decapitate
-            } else {
-                Impact::Sword
-            }
-        );
-        if hit == 4 {
+        let critical = super::model::combat_roll(sim.tick, id, 0x53574f5244) % 4 == 0;
+        assert_eq!(impact, if critical { Impact::Decapitate } else { Impact::Sword });
+        if critical {
+            criticals += 1;
             assert!(!sim.threats.contains_key(&id));
         }
         sim.threats.clear();
     }
-    assert_eq!(sim.metrics.decapitations, 1);
+    assert_eq!(sim.metrics.decapitations, criticals);
     sim.threats.insert(200, combat_threat(200, [0., 1.], 5, 2));
     sim.attack_ready.clear();
     sim.attack("player", Weapon::Sword).unwrap();
@@ -623,11 +627,96 @@ fn ranged_attacks_follow_the_aimed_line_instead_of_seeking_a_threat() {
         .any(|e| matches!(e, Event::ArcFired { .. })));
 }
 #[test]
-fn ballista_impales_twice_then_leaves_a_living_pierced_ghoul() {
+fn rock_blocks_melee_and_defender_shots() {
+    let mut sim = combat_test_sim_with_obstacles(vec![crate::navigation::Disc { center: [0., 0.65], radius: 0.15 }]);
+    sim.threats.insert(100, combat_threat(100, [0., 1.], 3, 0));
+    assert_eq!(sim.attack("player", Weapon::Sword).unwrap(), 0);
+    assert_eq!(sim.threats[&100].hp, 3);
+    sim.projectiles.insert(200, Projectile {
+        id: 200, defender: "ballista".into(), target: Some(100), item: "arrow".into(),
+        from: [0., 0.], to: [0., 1.], launch_height: 1.6,
+        born: 0, arrival: 3, damage: 8, kind: ProjectileKind::Bolt,
+    });
+    sim.advance_ticks(3);
+    assert_eq!(sim.threats[&100].hp, 3);
+    assert!(sim.events.iter().any(|e| matches!(e, Event::BlockedShot { .. })));
+}
+#[test]
+fn defender_bolt_hits_first_body_and_does_not_home() {
     let mut sim = combat_test_sim();
-    for id in 100..103 {
+    sim.threats.insert(100, combat_threat(100, [0., 1.], 3, 0));
+    sim.threats.insert(101, combat_threat(101, [0., 2.], 3, 0));
+    sim.projectiles.insert(200, Projectile {
+        id: 200, defender: "ballista".into(), target: Some(101), item: "arrow".into(),
+        from: [0., 0.], to: [0., 2.], launch_height: 1.6,
+        born: 0, arrival: 4, damage: 8, kind: ProjectileKind::Bolt,
+    });
+    sim.advance_ticks(4);
+    assert!(sim.events.iter().any(|e| matches!(e, Event::Hit { target: 100, .. })));
+    assert_eq!(sim.threats[&101].hp, 3);
+    let mut missed = combat_test_sim();
+    missed.threats.insert(101, combat_threat(101, [1., 2.], 3, 0));
+    missed.projectiles.insert(200, Projectile {
+        id: 200, defender: "ballista".into(), target: Some(101), item: "arrow".into(),
+        from: [0., 0.], to: [0., 2.], launch_height: 1.6,
+        born: 0, arrival: 4, damage: 8, kind: ProjectileKind::Bolt,
+    });
+    missed.advance_ticks(4);
+    assert_eq!(missed.threats[&101].hp, 3);
+    assert!(missed.projectiles.is_empty());
+}
+#[test]
+fn replay_fingerprint_matches_identical_tick_and_command_logs() {
+    let run = || {
+        let mut sim = combat_test_sim();
+        let mut hashes = Vec::new();
+        sim.threats.insert(100, combat_threat(100, [0., 1.], 5, 0));
+        for tick in 0..120 {
+            if tick == 3 {
+                sim.attack("player", Weapon::Sword).unwrap();
+            }
+            if tick == 50 {
+                sim.attack("player", Weapon::Bow).unwrap();
+            }
+            sim.advance_ticks(1);
+            hashes.push(sim.replay_fingerprint());
+        }
+        hashes
+    };
+    let first = run();
+    assert_eq!(first, run());
+    assert_ne!(first[0], first[1]);
+    assert_ne!(first[3], first[4]);
+}
+#[test]
+fn authored_weapon_tuning_changes_reach_damage_and_cooldown() {
+    let mut sim = combat_test_sim_with(vec![], vec![WeaponTuning {
+        weapon: Weapon::Sword, cooldown_ticks: 90, reach: 2.0,
+        cone: 0.35, damage: 3, knockback: 5.5, stagger_ticks: 15,
+        projectile_speed: 0., critical_one_in: 0,
+    }]);
+    sim.threats.insert(100, combat_threat(100, [0., 1.6], 8, 0));
+    assert_eq!(sim.attack("player", Weapon::Sword).unwrap(), 1);
+    assert_eq!(sim.threats[&100].hp, 5);
+    assert_eq!(sim.attack_ready["player"], 90);
+    assert_eq!(sim.attack("player", Weapon::Sword).unwrap(), 0);
+}
+#[test]
+fn ballista_pierces_or_impales_from_stable_per_projectile_rolls() {
+    let mut sim = combat_test_sim();
+    let mut ids = Vec::new();
+    for id in 100..200 {
+        let pierces = super::model::combat_roll(0, id, id ^ 0x424f4c54) % 3 == 0;
+        if pierces == (ids.len() == 2) {
+            ids.push(id);
+        }
+        if ids.len() == 3 { break; }
+    }
+    assert_eq!(ids.len(), 3);
+    for (index, id) in ids.into_iter().enumerate() {
+        let x = index as f32 - 1.;
         sim.threats
-            .insert(id, combat_threat(id, [id as f32 - 101., 2.], 3, 0));
+            .insert(id, combat_threat(id, [x, 2.], 3, 0));
         sim.projectiles.insert(
             id,
             Projectile {
@@ -635,8 +724,8 @@ fn ballista_impales_twice_then_leaves_a_living_pierced_ghoul() {
                 defender: "ballista".into(),
                 target: Some(id),
                 item: "arrow".into(),
-                from: [0., 0.],
-                to: [0., 2.],
+                from: [x, 0.],
+                to: [x, 2.],
                 launch_height: 1.6,
                 born: 0,
                 arrival: 1,
@@ -650,8 +739,7 @@ fn ballista_impales_twice_then_leaves_a_living_pierced_ghoul() {
     assert_eq!(sim.metrics.bolt_pierces, 1);
     assert_eq!(sim.pinned.len(), 2);
     assert_eq!(sim.threats.len(), 1);
-    assert!(sim.threats[&102].pierced);
-    assert_eq!(sim.threats[&102].hp, 2);
+    assert_eq!(sim.threats.values().filter(|t| t.pierced && t.hp == 2).count(), 1);
     assert_eq!(sim.spent_projectiles.len(), 1);
     for _ in 0..36 {
         sim.advance(1. / 60.).unwrap();

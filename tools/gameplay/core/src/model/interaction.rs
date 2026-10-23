@@ -55,25 +55,13 @@ impl Simulation {
         if self.attack_ready.get(id).is_some_and(|t| *t > self.tick) {
             return Ok(0);
         }
-        self.attack_ready.insert(
-            id.into(),
-            self.tick
-                + match weapon {
-                    Weapon::Sword => 38,
-                    Weapon::Spear => 42,
-                    Weapon::Bow => 28,
-                    Weapon::ArcCoil => 65,
-                },
-        );
+        let tuning = self.config.weapon_tuning.iter().find(|t| t.weapon == weapon)
+            .cloned().unwrap_or_else(|| WeaponTuning::defaults(weapon));
+        self.attack_ready.insert(id.into(), self.tick + tuning.cooldown_ticks);
         let actor = &self.agents[id];
         let origin = actor.position;
         let forward = [aim[0] / magnitude, aim[1] / magnitude];
-        let (reach, cone) = match weapon {
-            Weapon::Sword => (1.2, 0.35),
-            Weapon::Spear => (2.4, 0.80),
-            Weapon::Bow => (9.0, 0.91),
-            Weapon::ArcCoil => (4.0, 0.55),
-        };
+        let (reach, cone) = (tuning.reach, tuning.cone);
         let mut targets: Vec<_> = self
             .threats
             .values()
@@ -82,7 +70,15 @@ impl Simulation {
                 let distance = navigation::distance(t.position, origin);
                 (distance <= reach
                     && (distance < 0.2
-                        || (delta[0] * forward[0] + delta[1] * forward[1]) / distance > cone))
+                        || (delta[0] * forward[0] + delta[1] * forward[1]) / distance > cone)
+                    && (weapon == Weapon::Bow
+                        || navigation::clear_with_bounds(
+                            origin,
+                            t.position,
+                            &self.obstacles,
+                            0.02,
+                            self.config.extent,
+                        )))
                     .then_some((t.id, distance))
             })
             .collect();
@@ -94,7 +90,7 @@ impl Simulation {
                 origin[0] + right[0] * muzzle[0] + forward[0] * muzzle[2],
                 origin[1] + right[1] * muzzle[0] + forward[1] * muzzle[2],
             ];
-            let to = [from[0] + forward[0] * 9.0, from[1] + forward[1] * 9.0];
+            let to = [from[0] + forward[0] * reach, from[1] + forward[1] * reach];
             self.projectiles.insert(
                 id,
                 Projectile {
@@ -106,8 +102,8 @@ impl Simulation {
                     launch_height: muzzle[1],
                     to,
                     born: self.tick,
-                    arrival: self.tick + ticks(9.0 / 28.0),
-                    damage: 1,
+                    arrival: self.tick + ticks(reach / tuning.projectile_speed),
+                    damage: tuning.damage,
                     kind: ProjectileKind::Arrow,
                 },
             );
@@ -118,7 +114,7 @@ impl Simulation {
             return Ok(1);
         }
         if weapon == Weapon::ArcCoil {
-            let ray_end = [origin[0] + forward[0] * 4.0, origin[1] + forward[1] * 4.0];
+            let ray_end = [origin[0] + forward[0] * reach, origin[1] + forward[1] * reach];
             let blocked = self
                 .obstacles
                 .iter()
@@ -137,14 +133,14 @@ impl Simulation {
                 let delta = [t.position[0] - origin[0], t.position[1] - origin[1]];
                 let along = delta[0] * forward[0] + delta[1] * forward[1];
                 let sideways = (delta[0] * forward[1] - delta[1] * forward[0]).abs();
-                along >= 0.0 && along <= 4.0 * blocked && sideways <= 0.42
+                along >= 0.0 && along <= reach * blocked && sideways <= 0.42
             });
             let beam_end = targets
                 .first()
                 .map(|(id, _)| self.threats[id].position)
                 .unwrap_or([
-                    origin[0] + forward[0] * 4.0 * blocked,
-                    origin[1] + forward[1] * 4.0 * blocked,
+                    origin[0] + forward[0] * reach * blocked,
+                    origin[1] + forward[1] * reach * blocked,
                 ]);
             self.events.push(Event::ArcFired {
                 from: origin,
@@ -183,11 +179,11 @@ impl Simulation {
                     0
                 }
                 Weapon::Sword => {
-                    if (self.metrics.melee_hits + 1) % 4 == 0 {
+                    if tuning.critical_one_in > 0 && combat_roll(self.tick, target, 0x53574f5244) % tuning.critical_one_in == 0 {
                         impact = Impact::Decapitate;
                         t.hp
                     } else {
-                        2
+                        tuning.damage
                     }
                 }
                 Weapon::Spear if armored => {
@@ -195,17 +191,13 @@ impl Simulation {
                     1
                 }
                 Weapon::Spear => {
-                    if index == 0 {
-                        2
-                    } else {
-                        1
-                    }
+                    tuning.damage.saturating_sub(index as u32).max(1)
                 }
                 Weapon::ArcCoil => {
                     if armored {
-                        2
+                        tuning.damage + 1
                     } else {
-                        1
+                        tuning.damage
                     }
                 }
                 Weapon::Bow => unreachable!(),
@@ -222,20 +214,9 @@ impl Simulation {
             t.hp = t.hp.saturating_sub(damage);
             let direction = [t.position[0] - origin[0], t.position[1] - origin[1]];
             let length = navigation::distance(t.position, origin).max(0.001);
-            let force = match weapon {
-                Weapon::Sword => 5.5,
-                Weapon::Spear => 8.0,
-                Weapon::ArcCoil => 0.0,
-                Weapon::Bow => 0.0,
-            };
+            let force = tuning.knockback;
             t.knockback = [direction[0] / length * force, direction[1] / length * force];
-            t.stagger_until = self.tick
-                + match weapon {
-                    Weapon::Sword => 15,
-                    Weapon::Spear => 24,
-                    Weapon::ArcCoil => 45,
-                    Weapon::Bow => 0,
-                };
+            t.stagger_until = self.tick + tuning.stagger_ticks;
             if weapon == Weapon::ArcCoil {
                 t.shocked_until = t.stagger_until;
                 self.metrics.arc_hits += 1;
