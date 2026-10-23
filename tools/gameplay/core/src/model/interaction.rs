@@ -9,6 +9,26 @@ pub struct ManualJob {
     pub next_tick: u64,
 }
 impl Simulation {
+    /// Accept an attack command now; contact is resolved by the simulation on
+    /// an integer tick, independent of Bevy's animation/frame cadence.
+    pub fn queue_attack_aim(&mut self, id: &str, weapon: Weapon, muzzle: [f32; 3], aim: Point, windup_ticks: u64) -> Result<()> {
+        if windup_ticks == 0 || windup_ticks > HZ
+            || !self.config.agents.iter().any(|a| a.id == id && a.controlled)
+            || (!self.config.weapons.contains(&weapon)
+                && !(self.config.weapons.is_empty() && weapon == Weapon::Sword))
+            || muzzle.iter().any(|v| !v.is_finite() || v.abs() > 4.)
+            || aim.iter().any(|v| !v.is_finite())
+            || !aim[0].hypot(aim[1]).is_finite()
+            || aim[0].hypot(aim[1]) < 0.001
+        {
+            return Err("invalid scheduled attack".into());
+        }
+        self.pending_attacks.push(PendingAttack {
+            actor: id.into(), weapon, muzzle, aim,
+            resolve_at: self.tick + windup_ticks,
+        });
+        Ok(())
+    }
     /// All controlled attacks resolve in the deterministic simulation, independent of rendering.
     pub fn strike(&mut self, id: &str) -> Result<u32> {
         self.attack(id, Weapon::Sword)

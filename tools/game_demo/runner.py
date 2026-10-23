@@ -43,7 +43,41 @@ def main():
             raise SystemExit(f"Incomplete demo capture: {count} frames, report {state}")
         if args.assertions:
             with trace.open() as stream:
-                state["trace_assertions"] = validate(stream, json.loads(args.assertions.read_text()))
+                checks = json.loads(args.assertions.read_text())
+                first_command = state["receipts"][0]["started_tick"]
+                active_frames = (
+                    line for line in stream
+                    if (record := json.loads(line))["frame"] >= first_command
+                )
+                state["trace_assertions"] = validate(active_frames, checks)
+        # The GPU capture and the headless test must drive the same settlement
+        # state at every completed command. Warmup and video tail frames differ;
+        # receipt fingerprints compare the gameplay timeline itself.
+        headless_report = Path(temporary) / "headless.json"
+        headless = subprocess.run(
+            [str(game), "--simulation", "--demo-script", str(script),
+             "--report", str(headless_report)],
+            env=environment, timeout=max(120, config["max_frames"] * 0.25 + 90),
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        )
+        if headless.returncode:
+            raise SystemExit(f"Headless parity run failed: {headless.stdout[-2000:]}")
+        reference = json.loads(headless_report.read_text())
+        if reference["status"] != "passed" or len(reference["receipts"]) != len(state["receipts"]):
+            raise SystemExit("Rendered and headless demo command receipts differ")
+        compared = 0
+        for index, (expected, actual) in enumerate(zip(reference["receipts"], state["receipts"])):
+            if expected["command"] != actual["command"] or expected["status"] != actual["status"]:
+                raise SystemExit(f"Rendered/headless command {index} differs")
+            left = expected["state"]["settlement"]
+            right = actual["state"]["settlement"]
+            if (left is None) != (right is None):
+                raise SystemExit(f"Rendered/headless scene state differs at command {index}")
+            if left is not None:
+                compared += 1
+                if left["replay_fingerprint"] != right["replay_fingerprint"]:
+                    raise SystemExit(f"Rendered/headless gameplay diverged at command {index}")
+        state["headless_parity_receipts"] = compared
         version = subprocess.check_output([str(ffmpeg), "-version"], text=True).splitlines()[0]
         subprocess.run(
             [str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y",

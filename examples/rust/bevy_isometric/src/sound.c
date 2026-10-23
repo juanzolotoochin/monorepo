@@ -26,6 +26,7 @@ typedef struct {
 } audio_state;
 static audio_state playback;
 static int active;
+int kestrel_audio_cue_count(void) { return 18; }
 
 static float noise(audio_state *state) {
     state->noise_seed ^= state->noise_seed << 13; state->noise_seed ^= state->noise_seed >> 17; state->noise_seed ^= state->noise_seed << 5;

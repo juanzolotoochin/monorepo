@@ -31,6 +31,7 @@ pub enum PartKind {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Attack {
+    pub serial: u64,
     pub age: f32,
     pub aim: Vec3,
     pub impact_angle: Option<f32>,
@@ -40,6 +41,7 @@ pub struct Attack {
 impl Attack {
     pub fn new(aim: Vec3, weapon: gameplay_core::Weapon) -> Self {
         Self {
+            serial: 0,
             age: 0.0,
             aim: flat(aim).normalize_or(Vec3::Z),
             impact_angle: None,
@@ -82,6 +84,7 @@ impl Attack {
 
 #[derive(Resource, Default)]
 pub struct Controls {
+    pub attack_serial: u64,
     pub weapon: gameplay_core::Weapon,
     pub route: Vec<Vec3>,
     pub velocity: Vec3,
@@ -96,7 +99,10 @@ pub struct Controls {
 impl Controls {
     pub fn strike(&mut self, aim: Vec3) {
         if self.attack.is_none() {
-            self.attack = Some(Attack::new(aim, self.weapon));
+            self.attack_serial += 1;
+            let mut attack = Attack::new(aim, self.weapon);
+            attack.serial = self.attack_serial;
+            self.attack = Some(attack);
             self.route.clear();
         } else {
             // A short recovery buffer accepts the next deliberate click, not a held button.
@@ -265,7 +271,8 @@ pub fn move_player(
             Vec3::from_array(l.scenes[l.current].scene.spawn)
         });
         player.rotation = Quat::from_rotation_y(std::f32::consts::PI);
-        *controls = Controls::default();
+        let attack_serial = controls.attack_serial;
+        *controls = Controls { attack_serial, ..default() };
         return;
     }
     if feedback.hit_stop > 0.0 {

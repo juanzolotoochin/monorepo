@@ -6,15 +6,21 @@ prototype. The target architecture is [architecture.md](architecture.md): a
 sending tick-stamped commands. The prototype is **not** a lockstep peer yet.
 
 The prototype now has exact-tick stepping, a same-build replay fingerprint,
-counter-keyed combat variation, swept projectile collision, and a Bazel test
+counter-keyed combat variation, integer-tick attack contact, swept projectile
+collision, and a Bazel test
 that replays the same command script twice. These catch accidental state drift
 while combat and content are still being explored. A replay fingerprint is not
 a rules hash or a cross-platform desync hash: the prototype still uses `f32`,
 frame-duration accumulation, and player movement authored in Bevy.
 
+Scripted runs feed the simulation an exact duration per script frame. The local
+`game_demo` action also runs the same script headlessly and compares gameplay
+fingerprints at every completed command before encoding the video. This checks
+rendered/headless parity for the prototype's settlement scenes.
+
 The migration must preserve these boundaries:
 
-1. Move player movement, attack windup/contact, transfers, and AI decisions
+1. Move player movement, attack windup input, transfers, and AI decisions
    behind a tick-stamped command API in `game/sim`. Remove
    `set_controlled_pose` from the view path. Interactive input and demo scripts
    must produce the same command type and run through the same turn path.
