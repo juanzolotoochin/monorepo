@@ -269,7 +269,7 @@ The compiler bakes and validates each skin; the renderer uploads templates once
 and shares their mesh/material handles across instances.
 
 Pass `scenario = "levels/supply_chain.ron"` to `scene_assets` to compile a
-`gameplay_core::Scenario`. Item, actor, equipment, producer, defender and enemy
+`content::scenario::Scenario`. Item, actor, equipment, producer, defender and enemy
 skin references must exist. Both the data schema and initial navigation
 footprints are validated before the pack is embedded.
 

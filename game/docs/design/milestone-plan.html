@@ -141,7 +141,7 @@ td:first-child { font-weight: 600; }
     <div class="stack">
       <span class="eyebrow">Layout</span>
       <h2 id="crates">Crates under <code>game/</code></h2>
-      <p>Each is a Bazel <code>rust_library</code> or <code>rust_binary</code> using <code>rules_rs</code>, like <code>game/core</code> today. The blue ones are deterministic and may never depend on Bevy, f32 math or wall-clock time. A Bazel visibility rule enforces that only <code>view</code> and <code>app</code> can see <code>@crates//:bevy</code>.</p>
+      <p>Each is a Bazel <code>rust_library</code> or <code>rust_binary</code> using <code>rules_rs</code>, like the rest of <code>game/</code>. The blue ones are deterministic and may never depend on Bevy, f32 math or wall-clock time. A Bazel visibility rule enforces that only <code>view</code> and <code>app</code> can see <code>@crates//:bevy</code>.</p>
     </div>
     <div class="panel">
       <div class="crates">

@@ -64,7 +64,7 @@ impl SceneLibrary {
         self.scenes
             .get(self.current)
             .and_then(|s| s.scene.scenario.as_ref())
-            .map_or(8., |s| s.extent)
+            .map_or(8., |s| s.extent.to_f32())
     }
     pub fn title(&self) -> &str {
         self.scenes

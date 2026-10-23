@@ -5,6 +5,8 @@ mod effects;
 mod gameplay;
 mod impact;
 mod jetpack;
+mod legacy;
+mod lockstep;
 mod navigation;
 mod palimpsest;
 mod pile_model;
@@ -43,7 +45,31 @@ fn main() {
         eprintln!("{e}");
         std::process::exit(2)
     });
-    build_app(options, scenes, hub).run();
+    let mut game = lockstep::Game::default();
+    if let Some(pair) = args.windows(2).find(|pair| pair[0] == "--record-input") {
+        game.record = Some(pair[1].clone());
+    }
+    if let Some(pair) = args.windows(2).find(|pair| pair[0] == "--replay-input") {
+        let read = |path: &str| std::fs::read(path).unwrap_or_else(|e| {
+            eprintln!("{path}: {e}");
+            std::process::exit(2)
+        });
+        let log = save::InputLog::from_bytes(&read(&pair[1])).unwrap_or_else(|e| {
+            eprintln!("{}: {e}", pair[1]);
+            std::process::exit(2)
+        });
+        game.replay = Some((read(&format!("{}.gsav", pair[1])), log));
+    }
+    let mut app = build_app(options, scenes, hub);
+    app.insert_resource(game);
+    app.run();
+}
+
+/// Writes the recording when the app exits.
+fn write_recording(mut exits: MessageReader<AppExit>, game: Res<lockstep::Game>) {
+    if exits.read().next().is_some() {
+        game.write_recording();
+    }
 }
 
 fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: control::Hub) -> App {
@@ -54,7 +80,8 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
     let fps = options.fps();
     let deterministic = simulation || options.script.is_some();
     let mut app = App::new();
-    app.insert_resource(options)
+    app.init_resource::<lockstep::Game>()
+        .insert_resource(options)
         .insert_resource(hub)
         .init_resource::<control::Video>()
         .insert_resource(ClearColor(Color::srgb(0.018, 0.025, 0.045)))
@@ -144,29 +171,43 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
                 style::apply,
             )
                 .chain(),
-            (piles::setup_scene, settlement::setup).chain(),
-            (control::begin, settlement::tick).chain(),
-            (piles::input, settlement::input)
+            (piles::setup_scene, settlement::setup, lockstep::build_world).chain(),
+            control::begin,
+            (piles::input, settlement::input, lockstep::mouse_input, lockstep::attack_input)
                 .chain()
                 .run_if(control::interactive),
-            mouse_commands.run_if(control::interactive),
+            lockstep::keyboard_input,
             preview::playback.run_if(control::interactive),
-            (jetpack::update, move_player, palimpsest::tick).chain(),
-            piles::arrive,
-            piles::update_transit,
-            piles::render,
-            piles::update_display.run_if(control::rendered),
-            piles::showcase.run_if(control::interactive),
+            lockstep::step,
+            (
+                lockstep::mirror_settlement,
+                piles::mirror,
+                lockstep::follow_avatar,
+                jetpack::update,
+                palimpsest::tick,
+            )
+                .chain(),
+            settlement::tick,
+            (
+                piles::spawn_tosses,
+                piles::update_transit,
+                piles::render,
+                piles::update_display.run_if(control::rendered),
+                piles::showcase.run_if(control::interactive),
+            )
+                .chain(),
             (combat, animate_character, style::select_weapon).chain(),
             effects::update_effects,
             effects::camera_feedback.run_if(control::rendered),
             scene::update_hud.run_if(control::rendered),
             preview::capture.run_if(control::interactive),
+            lockstep::end_frame,
             (telemetry::end, control::end).chain(),
             control::capture_frame.run_if(control::rendered),
         )
             .chain(),
     );
+    app.add_systems(Last, write_recording);
     if !simulation {
         app.add_systems(
             Update,

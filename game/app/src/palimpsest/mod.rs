@@ -1,6 +1,8 @@
 //! A motion recording projects a persistent partner without copying world state or inventory.
 use crate::{
+    assets::SceneLibrary,
     gameplay::{Controls, Obstacle},
+    navigation::Disc,
     sound::{Cue, Sound},
 };
 use bevy::prelude::*;

@@ -21,7 +21,7 @@ struct Environment;
 #[derive(Component)]
 struct StyledActor;
 #[derive(Component)]
-pub struct WeaponVisual(pub gameplay_core::Weapon);
+pub struct WeaponVisual(pub content::scenario::Weapon);
 #[derive(Component)]
 pub struct WeaponLabel;
 #[derive(Component)]
@@ -258,7 +258,7 @@ pub fn apply(world: &mut World) {
                     if a.part == ActorPart::Weapon && !available_weapons.is_empty() {
                         world
                             .entity_mut(e)
-                            .insert(WeaponVisual(gameplay_core::Weapon::Sword));
+                            .insert(WeaponVisual(content::scenario::Weapon::Sword));
                     }
                     let material = world.get::<MeshMaterial3d<StandardMaterial>>(e).unwrap();
                     let emitting = world

@@ -201,9 +201,12 @@ fn player_position(world: &mut World) -> Vec3 {
 }
 /// The simulated settlement, or an error for scenes without one.
 fn settlement(world: &World) -> Result<&sim::settlement::Settlement, String> {
-    world.resource::<Game>().settlement().filter(|s| !s.depots.is_empty() || !s.waves.is_empty()).ok_or_else(|| "No settlement loaded".to_string())
+    if world.resource::<crate::settlement::Settlement>().config.is_none() {
+        return Err("No settlement loaded".into());
+    }
+    world.resource::<Game>().settlement().ok_or_else(|| "No settlement loaded".to_string())
 }
-fn command(world: &mut World, kind: CommandKind) {
+fn send(world: &mut World, kind: CommandKind) {
     world.resource_mut::<Game>().command(kind);
 }
 /// Starts a haul toward a pile. The job serial lets the poll tell this job
@@ -230,7 +233,7 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
         }
         Command::SettlementCancel => {
             let agent = settlement(world)?.player().ok_or("No controlled actor")?;
-            command(world, CommandKind::CancelTransfer { agent });
+            send(world, CommandKind::CancelTransfer { agent });
             Ok(Pending::Instant)
         }
         Command::SettlementPause { paused } => {
@@ -248,18 +251,18 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
         }
         Command::SettlementLink { id, enabled } => {
             let link = settlement(world)?.link_index(id).ok_or("unknown haul link")?;
-            command(world, CommandKind::SetLink { link, enabled: *enabled });
+            send(world, CommandKind::SetLink { link, enabled: *enabled });
             Ok(Pending::Instant)
         }
         Command::SettlementMachine { id, enabled } => {
             let producer = settlement(world)?.producer_index(id).ok_or("unknown producer")?;
-            command(world, CommandKind::SetMachine { producer, enabled: *enabled });
+            send(world, CommandKind::SetMachine { producer, enabled: *enabled });
             Ok(Pending::Instant)
         }
         Command::SettlementDefender { id, enabled } => {
             let s = settlement(world)?;
             let defender = s.defenders.iter().position(|d| d.id == *id).ok_or("unknown defender")? as u16;
-            command(world, CommandKind::SetDefender { defender, enabled: *enabled });
+            send(world, CommandKind::SetDefender { defender, enabled: *enabled });
             Ok(Pending::Instant)
         }
         Command::SettlementStock { depot, item, units } => {
@@ -273,7 +276,7 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             if *units > s.depots[d as usize].free() {
                 return Err("stock does not fit unreserved destination capacity".into());
             }
-            command(world, CommandKind::AddStock { depot: d, item: i, units: *units });
+            send(world, CommandKind::AddStock { depot: d, item: i, units: *units });
             Ok(Pending::Applied)
         }
         Command::AssertSettlement { delivered, cycles, equipped, kills } => {
@@ -306,7 +309,7 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
         }
         Command::Jetpack { enabled } => {
             let agent = world.resource::<Game>().player().ok_or("No player")?;
-            command(world, CommandKind::Jetpack { agent, enabled: *enabled });
+            send(world, CommandKind::Jetpack { agent, enabled: *enabled });
             Ok(Pending::Applied)
         }
         Command::AssertFlight { airborne, altitude, tolerance } => {
@@ -341,7 +344,7 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             if *units == 0 || *units > voxel_assets::PILE_CAPACITY - pile.units {
                 return Err("Requested amount does not fit the output pile".into());
             }
-            command(world, CommandKind::Dispense { dispenser: *dispenser, units: *units });
+            send(world, CommandKind::Dispense { dispenser: *dispenser, units: *units });
             world.resource_mut::<PileLab>().notice = format!("Program added {units} units.");
             world.resource::<crate::sound::Sound>().play(crate::sound::Cue::Dispense);
             Ok(Pending::Applied)
@@ -550,7 +553,8 @@ pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
         .query::<&crate::piles::MineralUnit>()
         .iter(world)
         .count();
-    let result = json!({"telemetry":telemetry,"settlement":settlement,"version":VERSION,"tick":hub.tick,"scene":scene,"player":{"position":position.to_array(),"movement":movement,"cargo":cargo,"jetpack":jetpack},"terrain":terrain,"memory":memory,"style":style,"piles":piles,"totals":totals,"visible_mineral_units":visible_units,"airborne_units":airborne,"airborne":flying,"targets":targets,"obstacles":obstacles,"active_command":hub.active.as_ref().map(|a|&a.envelope.request)});
+    let sim_tick = world.resource::<Game>().world().map(|w| w.tick());
+    let result = json!({"telemetry":telemetry,"settlement":settlement,"version":VERSION,"tick":hub.tick,"sim_tick":sim_tick,"scene":scene,"player":{"position":position.to_array(),"movement":movement,"cargo":cargo,"jetpack":jetpack},"terrain":terrain,"memory":memory,"style":style,"piles":piles,"totals":totals,"visible_mineral_units":visible_units,"airborne_units":airborne,"airborne":flying,"targets":targets,"obstacles":obstacles,"active_command":hub.active.as_ref().map(|a|&a.envelope.request)});
     crate::telemetry::elapsed(world, "inspection_snapshot", started);
     world
         .resource_mut::<crate::telemetry::Telemetry>()

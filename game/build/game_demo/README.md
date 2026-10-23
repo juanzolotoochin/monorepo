@@ -27,6 +27,14 @@ Outputs in `bazel-bin/game/app/`:
 - `haul_four_demo.wav`: deterministic 48 kHz stereo game-audio mix.
 - `haul_four_demo.frames.jsonl`: one semantic world snapshot per video frame,
   with its zero-based frame number and video timestamp.
+- `haul_four_demo.glog` and `haul_four_demo.glog.gsav`: the tick-indexed input
+  log and the save it starts from. The run is fully determined by these two
+  files.
+
+The action first plays the script without a renderer and records its input
+log. The video is a replay of that log: the script still paces the camera and
+the receipts, but the replay ignores the commands it sends. The action fails
+unless the replay reaches the recorded state at every completed command.
 
 The action executes locally using the native GPU/driver and renders offscreen.
 Windows x86-64 and Linux x86-64/ARM64 use checksum-pinned FFmpeg binaries with
@@ -201,7 +209,7 @@ positions resolve the animated hierarchy even in renderer-free simulations.
 Add an `assertions` JSON file to `game_demo` to check each world snapshot before
 encoding the video. The same file works with `game_simulation_test`, which runs
 the full script without a renderer as a Bazel build action. That action writes
-a `.frames.jsonl` trace and `.state.json` report. The separate test consumes
+a `.frames.jsonl` trace, a `.state.json` report and the run's input log. The separate test consumes
 those files; repeated tests reuse the cached dump. A failed check reports the
 frame, timestamp, actor, measured value, and limit. For example:
 

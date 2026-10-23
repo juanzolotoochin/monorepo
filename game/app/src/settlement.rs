@@ -412,8 +412,6 @@ pub fn tick(world: &mut World) {
             );
         }
         let cue = match event {
-            Event::TransferStarted(_) => None,
-            Event::TransferArrived(_) => None,
             Event::Shot { defender } if defender == "player" => Some(crate::sound::Cue::Bow),
             Event::Shot { .. } => Some(crate::sound::Cue::Ballista),
             Event::ArcFired { .. } => Some(crate::sound::Cue::Arc),
@@ -531,7 +529,7 @@ pub fn tick(world: &mut World) {
             .hit_until
             .get(&t.id)
             .map_or(if wounded { 0.58 } else { 0.0 }, |until| {
-                ((until as f32 - sim.time()) / (0.23 * HZ)).max(if wounded { 0.58 } else { 0.0 })
+                ((*until as f32 - sim.time()) / (0.23 * HZ)).max(if wounded { 0.58 } else { 0.0 })
             });
         if wounded {
             v.injury = 1.0;

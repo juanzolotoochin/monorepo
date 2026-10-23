@@ -1,7 +1,7 @@
 use crate::{
     effects::{self, Feedback, FxAssets},
     impact::{self, ImpactTarget},
-    navigation::{self, flat, Disc, EDGE, RADIUS},
+    navigation::{self, flat, Disc},
     sound::{Cue, Sound},
 };
 use bevy::prelude::*;
@@ -36,10 +36,10 @@ pub struct Attack {
     pub aim: Vec3,
     pub impact_angle: Option<f32>,
     pub whooshed: bool,
-    pub weapon: gameplay_core::Weapon,
+    pub weapon: content::scenario::Weapon,
 }
 impl Attack {
-    pub fn new(aim: Vec3, weapon: gameplay_core::Weapon) -> Self {
+    pub fn new(aim: Vec3, weapon: content::scenario::Weapon) -> Self {
         Self {
             serial: 0,
             age: 0.0,
@@ -50,7 +50,7 @@ impl Attack {
         }
     }
     pub fn angle(&self) -> f32 {
-        if self.weapon == gameplay_core::Weapon::Spear {
+        if self.weapon == content::scenario::Weapon::Spear {
             return 0.05;
         }
         if let Some(angle) = self.impact_angle {
@@ -65,10 +65,10 @@ impl Attack {
             }
         } else {
             match self.weapon {
-                gameplay_core::Weapon::Sword => swing_angle(self.age),
-                gameplay_core::Weapon::Spear => -0.15 + 0.25 * smooth(self.age / 0.22),
-                gameplay_core::Weapon::Bow => -0.9 + 0.4 * smooth(self.age / 0.22),
-                gameplay_core::Weapon::ArcCoil => -0.5 + 0.8 * smooth(self.age / 0.22),
+                content::scenario::Weapon::Sword => swing_angle(self.age),
+                content::scenario::Weapon::Spear => -0.15 + 0.25 * smooth(self.age / 0.22),
+                content::scenario::Weapon::Bow => -0.9 + 0.4 * smooth(self.age / 0.22),
+                content::scenario::Weapon::ArcCoil => -0.5 + 0.8 * smooth(self.age / 0.22),
             }
         }
     }
@@ -85,7 +85,7 @@ impl Attack {
 #[derive(Resource, Default)]
 pub struct Controls {
     pub attack_serial: u64,
-    pub weapon: gameplay_core::Weapon,
+    pub weapon: content::scenario::Weapon,
     pub route: Vec<Vec3>,
     pub velocity: Vec3,
     pub stride: f32,
@@ -172,221 +172,6 @@ pub fn cursor_ground(
     Some(ray.get_point(ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y))?))
 }
 
-pub fn mouse_commands(
-    buttons: Res<ButtonInput<MouseButton>>,
-    keys: Res<ButtonInput<KeyCode>>,
-    time: Res<Time>,
-    camera: Single<(&Camera, &GlobalTransform)>,
-    window: Single<&Window>,
-    mut controls: ResMut<Controls>,
-    player: Single<&Transform, With<Player>>,
-    obstacles: Query<&Obstacle>,
-    library: Res<crate::assets::SceneLibrary>,
-    flight: Res<crate::jetpack::Flight>,
-) {
-    controls.repath -= time.delta_secs();
-    if let Some(scenario) = library.scenes[library.current].scene.scenario.as_ref() {
-        for (key, weapon) in [
-            (KeyCode::KeyZ, gameplay_core::Weapon::Sword),
-            (KeyCode::KeyX, gameplay_core::Weapon::Spear),
-            (KeyCode::KeyC, gameplay_core::Weapon::Bow),
-            (KeyCode::KeyV, gameplay_core::Weapon::ArcCoil),
-        ] {
-            if keys.just_pressed(key) && scenario.weapons.contains(&weapon) {
-                controls.weapon = weapon;
-            }
-        }
-    }
-    let Some(point) = crate::jetpack::cursor_surface(camera.0, camera.1, &window, &library) else {
-        return;
-    };
-    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-    if buttons.just_pressed(MouseButton::Left) && shift {
-        controls.strike(point - player.translation);
-    } else if buttons.pressed(MouseButton::Right)
-        && controls.attack.is_none()
-        && controls.repath <= 0.0
-    {
-        controls.repath = 0.12;
-        if controls
-            .route
-            .last()
-            .is_none_or(|last| flat(*last - point).length() > 0.25)
-        {
-            let discs: Vec<_> = obstacles.iter().map(|o| o.0).collect();
-            let route = crate::jetpack::route(&library, &flight, player.translation, point, &discs);
-            if !route.is_empty() {
-                controls.route = route;
-            }
-        }
-    }
-}
-
-fn approach(current: Vec3, target: Vec3, max_change: f32) -> Vec3 {
-    current + (target - current).clamp_length_max(max_change)
-}
-
-pub fn slide(position: Vec3, delta: Vec3, obstacles: &[Disc]) -> Vec3 {
-    slide_in_bounds(position, delta, obstacles, EDGE)
-}
-fn slide_in_bounds(mut position: Vec3, delta: Vec3, obstacles: &[Disc], edge: f32) -> Vec3 {
-    let steps = (delta.length() / 0.06).ceil().max(1.0) as usize;
-    for _ in 0..steps {
-        let previous = position;
-        position += delta / steps as f32;
-        position.x = position.x.clamp(-edge, edge);
-        position.z = position.z.clamp(-edge, edge);
-        for _ in 0..3 {
-            for disc in obstacles {
-                let separation = flat(position - disc.center);
-                let clearance = disc.radius + RADIUS + 0.02;
-                if separation.length_squared() < clearance * clearance {
-                    position +=
-                        separation.normalize_or(Vec3::X) * (clearance - separation.length());
-                }
-            }
-        }
-        // A prop near the perimeter must not push the body off the deck.
-        if position.x.abs() > edge || position.z.abs() > edge {
-            position = previous;
-        }
-    }
-    position
-}
-
-pub fn move_player(
-    keys: Res<ButtonInput<KeyCode>>,
-    time: Res<Time>,
-    mut controls: ResMut<Controls>,
-    mut player: Single<&mut Transform, With<Player>>,
-    obstacles: Query<&Obstacle>,
-    feedback: Res<Feedback>,
-    sound: Res<Sound>,
-    library: Option<Res<crate::assets::SceneLibrary>>,
-    flight: Option<Res<crate::jetpack::Flight>>,
-) {
-    let dt = time.delta_secs().min(0.1);
-    if keys.just_pressed(KeyCode::KeyR) {
-        player.translation = library.as_ref().map_or(Vec3::new(0.0, 0.0, 2.0), |l| {
-            Vec3::from_array(l.scenes[l.current].scene.spawn)
-        });
-        player.rotation = Quat::from_rotation_y(std::f32::consts::PI);
-        let attack_serial = controls.attack_serial;
-        *controls = Controls { attack_serial, ..default() };
-        return;
-    }
-    if feedback.hit_stop > 0.0 {
-        return;
-    }
-    if let Some(attack) = controls.attack {
-        controls.velocity = approach(controls.velocity, Vec3::ZERO, dt * 35.0);
-        if attack.impact_angle.is_none() && attack.age < WINDUP {
-            let target = Quat::from_rotation_y(attack.aim.x.atan2(attack.aim.z));
-            player.rotation = player.rotation.slerp(target, 1.0 - (-28.0 * dt).exp());
-        }
-        return;
-    }
-    let pressed = |a, b| {
-        if keys.pressed(a) || keys.pressed(b) {
-            1.0
-        } else {
-            0.0
-        }
-    };
-    let right = Vec3::new(1.0, 0.0, -1.0).normalize();
-    let up = Vec3::new(-1.0, 0.0, -1.0).normalize();
-    let input = Vec2::new(
-        pressed(KeyCode::KeyD, KeyCode::ArrowRight) - pressed(KeyCode::KeyA, KeyCode::ArrowLeft),
-        pressed(KeyCode::KeyW, KeyCode::ArrowUp) - pressed(KeyCode::KeyS, KeyCode::ArrowDown),
-    )
-    .normalize_or_zero();
-    let speed = if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) {
-        5.6
-    } else {
-        WALK_SPEED
-    };
-    let mut desired = (right * input.x + up * input.y) * speed;
-    if input != Vec2::ZERO {
-        controls.route.clear();
-    } else if !controls.route.is_empty() {
-        while controls.route.len() > 1
-            && flat(controls.route[0] - player.translation).length() < 0.18
-        {
-            controls.route.remove(0);
-        }
-        let delta = flat(controls.route[0] - player.translation);
-        let braking_speed = if controls.route.len() == 1 {
-            (2.0 * 28.0 * delta.length()).sqrt()
-        } else {
-            speed
-        };
-        desired = delta.normalize_or_zero() * speed.min(braking_speed);
-        if delta.length() < 0.055 {
-            let y = player.translation.y;
-            player.translation = controls.route[0];
-            player.translation.y = y;
-            controls.velocity = Vec3::ZERO;
-            controls.route.clear();
-            desired = Vec3::ZERO;
-        }
-    }
-    controls.velocity = approach(
-        controls.velocity,
-        desired,
-        dt * if desired == Vec3::ZERO { 32.0 } else { 26.0 },
-    );
-    let discs: Vec<_> = obstacles.iter().map(|o| o.0).collect();
-    let previous = player.translation;
-    let mut delta = controls.velocity * dt;
-    if controls.route.len() == 1 {
-        let remaining = flat(controls.route[0] - previous);
-        if delta.length() > remaining.length() {
-            delta = remaining;
-            controls.velocity = Vec3::ZERO;
-        }
-    }
-    let mut candidate = slide_in_bounds(
-        previous,
-        delta,
-        &discs,
-        library.as_ref().map_or(EDGE, |l| l.extent()),
-    );
-    let allowed = library.as_ref().is_none_or(|lib| {
-        crate::jetpack::can_move(
-            lib,
-            previous,
-            candidate,
-            flight.as_ref().is_some_and(|f| f.airborne),
-        )
-    });
-    if allowed {
-        if !flight.as_ref().is_some_and(|f| f.airborne) {
-            if let Some(y) = library
-                .as_ref()
-                .and_then(|lib| crate::jetpack::height(lib, candidate))
-            {
-                candidate.y = y;
-            }
-        }
-        player.translation = candidate;
-    }
-    let actual = flat(player.translation - previous);
-    controls.stride += actual.length() * 8.5;
-    if flight.as_ref().is_some_and(|f| f.airborne) {
-        controls.foot_distance = 0.0;
-    } else {
-        controls.foot_distance += actual.length();
-    }
-    if controls.foot_distance > 0.72 && !flight.as_ref().is_some_and(|f| f.airborne) {
-        controls.foot_distance -= 0.72;
-        sound.play(Cue::Step);
-    }
-    if actual.length_squared() > 1e-6 {
-        let target = Quat::from_rotation_y(actual.x.atan2(actual.z));
-        player.rotation = player.rotation.slerp(target, 1.0 - (-20.0 * dt).exp());
-    }
-}
-
 /// Earliest contact along a swept blade, sampled in angle space (not frame time).
 /// This prevents a fast cut from tunneling through a rock at low frame rates.
 #[cfg(test)]
@@ -457,7 +242,7 @@ pub fn combat(
     }
     let previous_age = attack.age;
     attack.age += dt;
-    if attack.weapon == gameplay_core::Weapon::Sword
+    if attack.weapon == content::scenario::Weapon::Sword
         && attack.impact_angle.is_none()
         && attack.age >= WINDUP
         && previous_age < ACTIVE_END
@@ -535,9 +320,6 @@ pub fn combat(
             feedback.hit_stop = response.hit_stop;
             feedback.trauma = response.trauma;
             feedback.flash = 1.0;
-            let base = player.translation;
-            let body_discs: Vec<_> = obstacles.iter().map(|(o, _)| o.0).collect();
-            player.translation = slide(base, -attack.aim * 0.075, &body_discs);
             effects::impact(
                 &mut commands,
                 &assets,
@@ -605,7 +387,7 @@ pub fn animate_character(
                 transform.translation.y += breathe + controls.stride.sin().abs() * 0.035 * speed;
                 transform.rotation = Quat::from_rotation_x(0.06 * speed);
                 if let Some(attack) = controls.attack {
-                    let twist = if attack.weapon == gameplay_core::Weapon::Spear {
+                    let twist = if attack.weapon == content::scenario::Weapon::Spear {
                         let (extension, _) = spear_pose(attack.age, attack.impact_angle.is_some());
                         transform.rotation *= Quat::from_rotation_x(-0.14 * extension.max(0.0));
                         transform.translation.z += extension.max(0.0) * 0.16;
@@ -647,7 +429,7 @@ pub fn animate_character(
                 });
                 transform.rotation = Quat::from_rotation_y(angle) * Quat::from_rotation_x(tilt);
                 if let Some(attack) = controls.attack {
-                    if attack.weapon == gameplay_core::Weapon::Spear {
+                    if attack.weapon == content::scenario::Weapon::Spear {
                         let (extension, pitch) =
                             spear_pose(attack.age, attack.impact_angle.is_some());
                         transform.translation.z += extension;
@@ -733,7 +515,7 @@ mod tests {
             .insert_resource(Sound::silent())
             .add_systems(
                 Update,
-                (move_player, combat, effects::update_effects).chain(),
+                (combat, effects::update_effects).chain(),
             );
         let player = app.world_mut().spawn((Player, Transform::default())).id();
         app.world_mut().spawn((Obstacle(Disc {
@@ -755,7 +537,6 @@ mod tests {
         let age = app.world().resource::<Controls>().attack.unwrap().age;
         app.update();
         assert_eq!(app.world().resource::<Controls>().attack.unwrap().age, age);
-        assert!(app.world().get::<Transform>(player).unwrap().translation.z < 0.0);
         for _ in 0..180 {
             app.update();
         }
@@ -923,7 +704,7 @@ mod tests {
         assert!((swing_angle(WINDUP) + 1.7).abs() < 1e-5);
         assert!((swing_angle(ACTIVE_END) - 1.4).abs() < 1e-5);
         assert!((swing_angle(ATTACK_END) - REST_ANGLE).abs() < 1e-5);
-        let mut attack = Attack::new(Vec3::Z, gameplay_core::Weapon::Sword);
+        let mut attack = Attack::new(Vec3::Z, content::scenario::Weapon::Sword);
         attack.impact_angle = Some(0.0);
         attack.age = 0.10;
         assert!(attack.angle() < -0.5);
@@ -940,25 +721,5 @@ mod tests {
         assert!(spear_pose(0.25, true).0 < 0.3);
         assert!(spear_pose(0.58, false).0.abs() < 0.01);
     }
-    #[test]
-    fn movement_slides_without_tunneling_and_stops_smoothly() {
-        let rock = Disc {
-            center: Vec3::ZERO,
-            radius: 0.8,
-        };
-        let p = slide(Vec3::new(-3.0, 0.0, 0.0), Vec3::X * 5.0, &[rock]);
-        assert!(p.x < -1.1);
-        assert!(p.distance(rock.center) >= rock.radius + RADIUS);
-        let p = slide(Vec3::new(-1.2, 0.0, 0.0), Vec3::new(0.5, 0.0, 1.0), &[rock]);
-        assert!(p.z > 0.5);
-        let edge_rock = Disc {
-            center: Vec3::new(7.7, 0.0, 0.0),
-            radius: 0.72,
-        };
-        let edge = slide(Vec3::new(7.8, 0.0, 2.0), -Vec3::Z * 2.0, &[edge_rock]);
-        assert!(edge.x.abs() <= EDGE && edge.z.abs() <= EDGE);
-        assert!(edge.distance(edge_rock.center) >= edge_rock.radius + RADIUS);
-        let stopped = approach(Vec3::X * 0.1, Vec3::ZERO, 0.2);
-        assert_eq!(stopped, Vec3::ZERO);
-    }
+
 }

@@ -3,7 +3,7 @@
 load("@rules_python//python:defs.bzl", "py_test")
 load(":native_execution.bzl", "NativeExecutionInfo")
 
-GameDemoInfo = provider(fields = ["video", "report", "trace", "audio"])
+GameDemoInfo = provider(fields = ["video", "report", "trace", "audio", "inputs"])
 
 def _demo_impl(ctx):
     if not ctx.attr._native_execution[NativeExecutionInfo].matches_host:
@@ -12,6 +12,8 @@ def _demo_impl(ctx):
     report = ctx.actions.declare_file(ctx.label.name + ".state.json")
     trace = ctx.actions.declare_file(ctx.label.name + ".frames.jsonl")
     audio = ctx.actions.declare_file(ctx.label.name + ".wav")
+    inputs_log = ctx.actions.declare_file(ctx.label.name + ".glog")
+    inputs_save = ctx.actions.declare_file(ctx.label.name + ".glog.gsav")
     args = ctx.actions.args()
     args.add("--game", ctx.executable.game)
     args.add("--script", ctx.file.script)
@@ -20,6 +22,7 @@ def _demo_impl(ctx):
     args.add("--report", report)
     args.add("--trace", trace)
     args.add("--audio", audio)
+    args.add("--inputs", inputs_log)
     inputs = [ctx.file.script]
     if ctx.file.assertions:
         inputs.append(ctx.file.assertions)
@@ -29,7 +32,7 @@ def _demo_impl(ctx):
         arguments = [args],
         inputs = inputs,
         tools = [ctx.attr.game[DefaultInfo].files_to_run, ctx.attr._ffmpeg[DefaultInfo].files_to_run],
-        outputs = [video, report, trace, audio],
+        outputs = [video, report, trace, audio, inputs_log, inputs_save],
         mnemonic = "GameDemo",
         progress_message = "Rendering controlled game demo %{label}",
         # GPU drivers belong to the native client host, checked above.
@@ -38,9 +41,9 @@ def _demo_impl(ctx):
         use_default_shell_env = True,
     )
     return [
-        DefaultInfo(files = depset([video, report, trace, audio])),
-        GameDemoInfo(video = video, report = report, trace = trace, audio = audio),
-        OutputGroupInfo(video = depset([video]), state = depset([report]), trace = depset([trace]), audio = depset([audio])),
+        DefaultInfo(files = depset([video, report, trace, audio, inputs_log, inputs_save])),
+        GameDemoInfo(video = video, report = report, trace = trace, audio = audio, inputs = [inputs_log, inputs_save]),
+        OutputGroupInfo(video = depset([video]), state = depset([report]), trace = depset([trace]), audio = depset([audio]), inputs = depset([inputs_log, inputs_save])),
     ]
 
 game_demo = rule(
@@ -55,7 +58,7 @@ game_demo = rule(
     },
 )
 
-GameSimulationInfo = provider(fields = ["report", "trace"])
+GameSimulationInfo = provider(fields = ["report", "trace", "inputs"])
 
 def _simulation_impl(ctx):
     report = ctx.outputs.report
@@ -70,22 +73,30 @@ def _simulation_impl(ctx):
             report.path,
             "--trace",
             trace.path,
+            "--record-input",
+            ctx.outputs.inputs.path,
         ],
         inputs = [ctx.file.script],
         tools = [ctx.attr.game[DefaultInfo].files_to_run],
-        outputs = [report, trace],
+        outputs = [report, trace, ctx.outputs.inputs, ctx.outputs.inputs_save],
         mnemonic = "GameSimulation",
         progress_message = "Recording game simulation %{label}",
     )
     return [
-        DefaultInfo(files = depset([report, trace])),
-        GameSimulationInfo(report = report, trace = trace),
-        OutputGroupInfo(state = depset([report]), trace = depset([trace])),
+        DefaultInfo(files = depset([report, trace, ctx.outputs.inputs, ctx.outputs.inputs_save])),
+        GameSimulationInfo(report = report, trace = trace, inputs = [ctx.outputs.inputs, ctx.outputs.inputs_save]),
+        OutputGroupInfo(state = depset([report]), trace = depset([trace]), inputs = depset([ctx.outputs.inputs, ctx.outputs.inputs_save])),
     ]
 
 game_simulation = rule(
     implementation = _simulation_impl,
-    outputs = {"report": "%{name}.state.json", "trace": "%{name}.frames.jsonl"},
+    outputs = {
+        "report": "%{name}.state.json",
+        "trace": "%{name}.frames.jsonl",
+        # The tick-indexed input log and the save it starts from.
+        "inputs": "%{name}.glog",
+        "inputs_save": "%{name}.glog.gsav",
+    },
     attrs = {
         "game": attr.label(executable = True, cfg = "exec", mandatory = True),
         "script": attr.label(allow_single_file = [".json"], mandatory = True),

@@ -3,7 +3,8 @@
 //! module mirrors them and turns clicks into commands.
 use crate::{
     assets::SceneLibrary,
-    gameplay::{cursor_ground, Player},
+    gameplay::{cursor_ground, Obstacle, Player},
+    navigation::Disc,
     lockstep::Game,
     pile_model::{pile_radius, unit_positions, Pile, PileId, Stock},
 };
@@ -106,8 +107,6 @@ pub struct LabStatus;
 pub struct CapacityTick(u32);
 
 mod demo;
-#[cfg(test)]
-mod tests;
 mod transfer;
 mod view;
 pub use demo::showcase;

@@ -1,4 +1,4 @@
-//! Ported from the original game's tests (`game/core/src/tests.rs`), at 30 Hz.
+//! Ported from the original game's tests (the retired `game/core`), at 30 Hz.
 
 use content::scenario::{Agent, CargoLayout, Depot, Equipment, HaulLink, Item, Producer, Scenario, Stack};
 use content::Content;

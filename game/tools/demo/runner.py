@@ -11,13 +11,13 @@ from game.tools.demo.assertions import validate
 
 def main():
     parser = argparse.ArgumentParser()
-    for name in ("game", "script", "ffmpeg", "video", "report", "trace", "audio"):
+    for name in ("game", "script", "ffmpeg", "video", "report", "trace", "audio", "inputs"):
         parser.add_argument(f"--{name}", required=True, type=Path)
     parser.add_argument("--assertions", type=Path)
     args = parser.parse_args()
-    game, script, ffmpeg, video, report, trace, audio = (
+    game, script, ffmpeg, video, report, trace, audio, inputs = (
         getattr(args, name).absolute()
-        for name in ("game", "script", "ffmpeg", "video", "report", "trace", "audio")
+        for name in ("game", "script", "ffmpeg", "video", "report", "trace", "audio", "inputs")
     )
     config = json.loads(script.read_text())
     with tempfile.TemporaryDirectory(prefix="kestrel-demo-") as temporary:
@@ -26,8 +26,24 @@ def main():
         environment.pop("DISPLAY", None)
         environment.pop("WAYLAND_DISPLAY", None)
         environment["XDG_RUNTIME_DIR"] = temporary
+        # The headless run plays the script and records its input log (and the
+        # starting save beside it). The video is a replay of that log: the
+        # script still paces the camera and receipts, but sends no commands.
+        headless_report = Path(temporary) / "headless.json"
+        headless = subprocess.run(
+            [str(game), "--simulation", "--demo-script", str(script),
+             "--report", str(headless_report), "--record-input", str(inputs)],
+            env=environment, timeout=max(120, config["max_frames"] * 0.25 + 90),
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        )
+        if headless.returncode:
+            raise SystemExit(f"Headless run failed: {headless.stdout[-2000:]}")
+        reference = json.loads(headless_report.read_text())
+        if reference["status"] != "passed":
+            raise SystemExit(f"Headless run did not pass: {reference.get('error')}")
         result = subprocess.run(
-            [str(game), "--demo-script", str(script), "--frames-dir", str(frames),
+            [str(game), "--demo-script", str(script), "--replay-input", str(inputs),
+             "--frames-dir", str(frames),
              "--report", str(report), "--trace", str(trace), "--audio-wav", str(audio)],
             env=environment, timeout=max(120, config["max_frames"] * 0.25 + 90),
             text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -50,20 +66,10 @@ def main():
                     if (record := json.loads(line))["frame"] >= first_command
                 )
                 state["trace_assertions"] = validate(active_frames, checks)
-        # The GPU capture and the headless test must drive the same settlement
-        # state at every completed command. Warmup and video tail frames differ;
-        # receipt fingerprints compare the gameplay timeline itself.
-        headless_report = Path(temporary) / "headless.json"
-        headless = subprocess.run(
-            [str(game), "--simulation", "--demo-script", str(script),
-             "--report", str(headless_report)],
-            env=environment, timeout=max(120, config["max_frames"] * 0.25 + 90),
-            text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        )
-        if headless.returncode:
-            raise SystemExit(f"Headless parity run failed: {headless.stdout[-2000:]}")
-        reference = json.loads(headless_report.read_text())
-        if reference["status"] != "passed" or len(reference["receipts"]) != len(state["receipts"]):
+        # The replay must reach the recorded state at every completed command.
+        # Warmup and video tail frames differ; receipt fingerprints compare the
+        # gameplay timeline itself.
+        if len(reference["receipts"]) != len(state["receipts"]):
             raise SystemExit("Rendered and headless demo command receipts differ")
         compared = 0
         for index, (expected, actual) in enumerate(zip(reference["receipts"], state["receipts"])):

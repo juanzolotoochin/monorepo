@@ -421,7 +421,7 @@ impl Settlement {
             None => {
                 terrain.extent = setup.extent;
                 terrain.obstacles.extend_from_slice(&obstacles);
-                Settlement::from_scenario(&Self::player_only(setup.extent), &[], terrain)?
+                Settlement::from_scenario(&Self::player_only(setup.extent, [setup.spawn[0], setup.spawn[2]]), &[], terrain)?
             }
         };
         terrain.surfaces = setup
@@ -451,7 +451,7 @@ impl Settlement {
     }
 
     /// The scenario of a scene without a settlement: just the player.
-    fn player_only(extent: Fx) -> Scenario {
+    fn player_only(extent: Fx, spawn: [Fx; 2]) -> Scenario {
         Scenario {
             extent,
             id: "scene".into(),
@@ -466,7 +466,7 @@ impl Settlement {
                 id: "player".into(),
                 label: "YOU".into(),
                 skin: "worker".into(),
-                position: [Fx::ZERO, Fx::ZERO],
+                position: spawn,
                 speed: Fx::from_ratio(19, 5),
                 radius: Fx::from_ratio(9, 50),
                 capacity: 8,

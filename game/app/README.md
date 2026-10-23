@@ -191,6 +191,15 @@ world inspection. Generate the four-unit hauling demonstration with:
 bazel build --config=full_local //game/app:haul_four_demo
 ```
 
+Any run can be recorded and replayed exactly. `--record-input run.glog` writes
+the input log on exit (and the starting save as `run.glog.gsav`);
+`--replay-input run.glog` plays it back in the same scene:
+
+```sh
+bazel run //game/app:demo -- --scene forest-outpost --record-input /tmp/run.glog
+bazel run //game/app:demo -- --scene forest-outpost --replay-input /tmp/run.glog
+```
+
 The output video, final-state report, and per-frame state trace are alongside
 `demo` in `bazel-bin/game/app/`.
 
@@ -354,8 +363,10 @@ supplies changes how the settlement runs.
 
 The architecture is split into independent layers:
 
-- `//game/core` owns deterministic 60 Hz decisions, quantities,
-  reservations, processing, equipment, controlled actors, threats and defense.
+- `//game/sim` owns the deterministic 30 Hz decisions, quantities,
+  reservations, processing, equipment, the player's movement, threats and
+  defense. The app runs it through `//game/session` and only sends commands;
+  see [the architecture](../docs/architecture.md).
 - `assets/levels/forest_supply.ron` defines the supply chain and agent abilities.
   `scene_assets(scenario = ...)` validates and embeds it at build time.
 - `assets/styles/forest.ron` defines the palette, smaller actor scale, articulated
@@ -394,7 +405,7 @@ bazel run --config=full_local //game/app:demo -- --scene combat-arena
 Right click to position the player, then Shift + left click toward an approaching
 ghoul. The faster longsword stops on contact. A short hit pause, camera jolt,
 growl, and voxel blood burst mark the hit; a surviving ghoul recoils before
-limping forward. The same 60 Hz simulation owns health, knockback, kills, and
+limping forward. The same 30 Hz simulation owns health, knockback, kills, and
 the melee metrics in the world-state dump.
 
 ```sh
@@ -424,7 +435,7 @@ them, plus mesh-allocator slab sizes and allocations. These are observations,
 not portable pass/fail budgets; compare equivalent resolution, quality,
 backend, optimization mode and warm-up periods.
 
-The deterministic core also counts navigation requests/failures/waypoints,
+The simulation also counts navigation requests/failures/waypoints,
 assignment attempts and retries, dock waiting, loaded versus empty travel,
 per-agent phase ticks, and per-producer processing/starvation/output-blocking/
 disabled/completed ticks. These explain simulation waste separately from CPU

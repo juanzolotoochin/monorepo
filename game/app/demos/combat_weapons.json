@@ -4,7 +4,7 @@
   "fps": 30,
   "width": 1440,
   "height": 960,
-  "max_frames": 1200,
+  "max_frames": 1500,
   "steps": [
     {
       "op": "settlement_defender",
@@ -122,7 +122,7 @@
     },
     {
       "op": "wait",
-      "frames": 250
+      "frames": 330
     },
     {
       "op": "inspect"

@@ -1,8 +1,8 @@
 # Game architecture
 
-This is the architecture for rewriting the game (today `game/core` and
-`game/app`) as a deterministic lockstep simulation with Bevy
-as a view. The goal is the same gameplay as today, rebuilt to scale to about
+This is the architecture of the game: a deterministic lockstep simulation
+with Bevy as a view. It replaced the original prototype (`game/core`, a
+60 Hz f32 simulation driven by `game/app`). The goal is the same gameplay as today, rebuilt to scale to about
 100k entities and 2–8 co-op players over the internet (more on LAN).
 
 The approach was validated in an earlier prototype:
@@ -33,9 +33,9 @@ in a browser.
 
 ## Crates
 
-All under `game/`, built by Bazel with `rules_rs`. The prototype keeps
-`game/app` and `game/core` until the port reaches parity, so the new game
-binary is `game/play` until then.
+All under `game/`, built by Bazel with `rules_rs`. `game/app` is the full game
+(the prototype's scenes, now on `game/sim` through `game/session`); `game/play`
+is a minimal binary over `game/view`, used to test sessions and networking.
 
 | Crate | Deterministic | Purpose |
 |---|---|---|
@@ -44,9 +44,11 @@ binary is `game/play` until then.
 | `content` | yes | Definition files, sim/view split, name tables, rules hash |
 | `save` | yes | Sectioned save format, remapping on load, RON dumps, diff tool |
 | `net` | yes | Turns, input delay, time sync, `Transport` and `Sessions` traits, loopback simulator, UDP |
+| `session` | yes | One running game for a front end: host, client or replay, with input-log recording |
 | `headless` | tool | Runs a save plus an input log, writes per-tick hashes, benchmarks |
 | `view` | no (Bevy) | Consumes the render extract: interpolation, prediction, overlays |
-| `play` | no (Bevy) | The game binary: single-player, host, join |
+| `play` | no (Bevy) | Minimal binary: single-player, host, join |
+| `app` | no (Bevy) | The game: every scene, scripted demos, inspection protocol |
 
 Bazel visibility keeps `@crates//:bevy` out of the deterministic crates. `net`
 counts as deterministic because its decisions depend only on its inputs and a
@@ -358,6 +360,7 @@ Details: [milestone plan](design/milestone-plan.html).
 3. Combat and player actions
 4. `game_demo` rebuilt on input logs, every scene reproduced, then
    `game/core` retired and the prototype implementation in `game/app` replaced
+   (done: each demo is a replay of its recorded input log)
 
 ## Deferred
 

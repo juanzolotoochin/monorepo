@@ -50,6 +50,8 @@ pub struct Game {
     /// A recording to play back instead of live input.
     pub replay: Option<(Vec<u8>, InputLog)>,
     start_save: Option<Vec<u8>>,
+    /// The control hub held the clock last frame.
+    warming_up: bool,
 }
 
 impl Default for Game {
@@ -72,6 +74,7 @@ impl Default for Game {
             record: None,
             replay: None,
             start_save: None,
+            warming_up: false,
         }
     }
 }
@@ -201,6 +204,7 @@ pub fn build_world(world: &mut World) {
         }),
         memory_trial: library.has_feature(voxel_assets::SceneFeature::MemoryTrial),
     };
+    let scene_id = scene.id.clone();
     let mut game = world.resource_mut::<Game>();
     let content = game.content.clone();
     let threads = std::thread::available_parallelism().map_or(2, |n| n.get().min(4));
@@ -208,7 +212,7 @@ pub fn build_world(world: &mut World) {
     let built = SimWorld::new_scene(SEED, content.rules.clone(), &setup);
     let world_state = match built {
         Ok(world) => world,
-        Err(e) => panic!("scene {} does not build a world: {e}", scene.id),
+        Err(e) => panic!("scene {scene_id} does not build a world: {e}"),
     };
     game.center = world_state.terrain().center;
     let start = save::write(&world_state, &content);
@@ -232,8 +236,19 @@ pub fn build_world(world: &mut World) {
 }
 
 /// Runs every tick due by this frame's time and keeps the last two for interpolation.
-pub fn step(time: Res<Time>, mut game: ResMut<Game>) {
-    if !game.paused {
+pub fn step(time: Res<Time>, hub: Option<Res<crate::control::Hub>>, mut game: ResMut<Game>) {
+    // Scripted runs warm up for different lengths with and without rendering;
+    // holding the clock until then lines up ticks with script frames, so a
+    // rendered replay of a headless recording matches it command for command.
+    if hub.is_some_and(|hub| hub.warming_up()) {
+        game.warming_up = true;
+        return;
+    }
+    if std::mem::take(&mut game.warming_up) {
+        // The first tick runs on the first frame after warmup, as it does
+        // without one (Bevy's first frame has no delta).
+        game.clock = Duration::ZERO;
+    } else if !game.paused {
         let rate = game.rate;
         game.clock += time.delta().mul_f32(rate);
     }
@@ -268,6 +283,8 @@ pub fn follow_avatar(
     let alpha = game.alpha;
     let from = game.to_view(before.position);
     let to = game.to_view(a.position);
+    // A teleport (respawn, deploying a recording) snaps instead of sliding.
+    let alpha = if from.distance(to) > 1.5 { 1.0 } else { alpha };
     let mut position = from.lerp(to, alpha);
     position.y = before.avatar.height.to_f32() + (a.avatar.height - before.avatar.height).to_f32() * alpha;
     let previous = player.translation;
@@ -313,18 +330,8 @@ pub fn end_frame(mut game: ResMut<Game>) {
     game.events.clear();
 }
 
-/// Keyboard and mouse movement: camera-relative walking, click-to-move,
-/// the jetpack, and respawning.
-pub fn movement_input(
-    keys: Res<ButtonInput<KeyCode>>,
-    buttons: Res<ButtonInput<MouseButton>>,
-    time: Res<Time>,
-    camera: Single<(&Camera, &GlobalTransform)>,
-    window: Single<&Window>,
-    library: Res<SceneLibrary>,
-    mut controls: ResMut<Controls>,
-    mut game: ResMut<Game>,
-) {
+/// Keyboard movement: camera-relative walking, the jetpack, and respawning.
+pub fn keyboard_input(keys: Res<ButtonInput<KeyCode>>, mut controls: ResMut<Controls>, mut game: ResMut<Game>) {
     let Some(agent) = game.player() else { return };
     if keys.just_pressed(KeyCode::KeyR) {
         game.command(CommandKind::Respawn { agent });
@@ -351,6 +358,20 @@ pub fn movement_input(
     if input != Vec2::ZERO || game.walking.is_some_and(|(d, _)| d != FxVec2::ZERO) {
         game.walk(Vec2::new(direction.x, direction.z), run);
     }
+}
+
+/// Right click (held) walks to the cursor.
+pub fn mouse_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    buttons: Res<ButtonInput<MouseButton>>,
+    time: Res<Time>,
+    camera: Single<(&Camera, &GlobalTransform)>,
+    window: Single<&Window>,
+    library: Res<SceneLibrary>,
+    mut controls: ResMut<Controls>,
+    mut game: ResMut<Game>,
+) {
+    let run = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     controls.repath -= time.delta_secs();
     if buttons.pressed(MouseButton::Right) && controls.attack.is_none() && controls.repath <= 0.0 {
         controls.repath = 0.12;

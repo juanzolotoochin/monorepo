@@ -17,6 +17,8 @@ use crate::terrain::{Disc, Terrain};
 pub(super) const RETRY_TICKS: u64 = 8;
 const APPROACH_REPLAN_TICKS: u64 = 30;
 const TRAFFIC_REPLAN_TICKS: u64 = 120;
+/// The longest an agent gives way before steering on its own.
+const YIELD_TICKS: u64 = 45;
 pub(super) const ATTACH_TICKS: u64 = 30;
 /// Facing turns at up to 3 rad/s.
 const TURN_PER_TICK: Fx = Fx::from_bits(429_496_730); // 0.1
@@ -91,6 +93,8 @@ pub struct AgentState {
     pub retries: u64,
     pub departure_dock: Option<DepotIx>,
     pub traffic_replan_at: u64,
+    /// Consecutive ticks spent giving way to another agent.
+    pub yielding: u64,
     /// Units flying into / out of the cargo bed.
     pub pending_in: u32,
     pub pending_out: u32,
@@ -154,6 +158,7 @@ impl AgentState {
             retries: 0,
             departure_dock: None,
             traffic_replan_at: 0,
+            yielding: 0,
             pending_in: 0,
             pending_out: 0,
             avatar: Default::default(),
@@ -248,6 +253,8 @@ pub(super) struct Body {
     pub position: FxVec2,
     pub radius: Fx,
     pub trailer: Option<Disc>,
+    /// Where it is walking to next, if it is walking.
+    pub next: Option<FxVec2>,
 }
 
 pub(super) struct Ctx<'a> {
@@ -268,6 +275,7 @@ pub(super) fn body(a: &AgentState) -> Body {
             (Some(t), Some(e)) => Some(Disc { center: t.position, radius: e.radius }),
             _ => None,
         },
+        next: if a.controlled { None } else { a.route.first().copied() },
     }
 }
 
@@ -424,6 +432,14 @@ fn move_worker(a: &mut AgentState, me: AgentIx, ctx: &Ctx, step: Fx) {
         return;
     }
     let radius = a.radius();
+    // Skip a waypoint once the one after it is in reach: grid waypoints in a
+    // tight gap can be closer to a rock than the body fits, and circling them
+    // wastes time. Carts keep theirs, which shape the turns the cart can make.
+    if a.trailer.is_none() {
+        while a.route.len() >= 2 && ctx.terrain.clear(a.position, a.route[1], radius) {
+            a.route.remove(0);
+        }
+    }
     let near = Fx::from_int(3);
     let mut nearby = Vec::new();
     for (i, b) in ctx.bodies.iter().enumerate() {
@@ -478,9 +494,35 @@ fn move_worker(a: &mut AgentState, me: AgentIx, ctx: &Ctx, step: Fx) {
         a.traffic_replan_at = ctx.tick + TRAFFIC_REPLAN_TICKS;
     }
     let delta = direct - a.position;
-    let angles = [0, 55, 105, 155, -55, -105, -155];
-    for hundredths in angles {
-        let angle = Fx::from_ratio(hundredths, 100);
+    // Two agents meeting head-on would both step aside and back forever: the
+    // later one waits while the earlier one steers around it.
+    let oncoming = ctx.bodies[..me as usize].iter().any(|b| {
+        let Some(next) = b.next else {
+            return false;
+        };
+        let after = distance(direct, b.position);
+        after <= radius + b.radius + gap && after <= distance(a.position, b.position) + epsilon && (next - b.position).dot(a.position - b.position) > Fx::ZERO
+    });
+    if oncoming && a.yielding < YIELD_TICKS {
+        a.yielding += 1;
+        a.traffic_wait_ticks += 1;
+        return;
+    }
+    if !oncoming {
+        a.yielding = 0;
+    }
+    // If going straight is blocked, keep the way it is already going before
+    // trying fixed swerves: picking a new swerve each tick (each needing a turn
+    // in place) makes an agent dither around an obstacle instead of passing it.
+    let straight = Fx::ZERO;
+    let mut angles: Vec<Fx> = [0, 55, 105, 155, -55, -105, -155].iter().map(|&h| Fx::from_ratio(h, 100)).collect();
+    if delta != FxVec2::ZERO {
+        let keep = angle_between(nav::bearing(FxVec2::ZERO, delta), a.travel_heading);
+        if keep != straight && keep.abs() <= Fx::from_ratio(3, 2) {
+            angles.insert(1, keep);
+        }
+    }
+    for angle in angles {
         let (sin, cos) = angle.sin_cos();
         let next = FxVec2::new(a.position.x + delta.x * cos + delta.y * sin, a.position.y + delta.y * cos - delta.x * sin);
         let clear = ctx.terrain.clear(a.position, next, radius)
@@ -501,7 +543,7 @@ fn move_worker(a: &mut AgentState, me: AgentIx, ctx: &Ctx, step: Fx) {
             }
             a.travel_heading = target;
             a.position = next;
-            if hundredths == 0 {
+            if angle == straight {
                 a.route = route;
             } else {
                 a.avoidance_steers += 1;
