@@ -1,6 +1,6 @@
-load("//bazel/voxel_assets:defs.bzl", "boulder_prefab", "scene_assets")
+load("//game/build/voxel_assets:defs.bzl", "boulder_prefab", "scene_assets")
 
-package(default_visibility = ["//examples/rust/bevy_isometric:__pkg__"])
+package(default_visibility = ["//game/app:__pkg__"])
 
 [
     boulder_prefab(

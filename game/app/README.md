@@ -12,8 +12,8 @@ the swing, clang and footsteps are original procedural synthesis in `sound.c`
 not sound samples. The HUD uses Bevy's bundled default font.
 
 ```sh
-bazel run //examples/rust/bevy_isometric:demo
-bazel test //examples/rust/bevy_isometric:movement_test
+bazel run //game/app:demo
+bazel test //game/app:movement_test
 ```
 
 To cross-compile a Windows x64 release from Linux or macOS, use the MSVC
@@ -29,10 +29,10 @@ bazel build -c opt \
   --platforms=//platforms:rust_windows_x86_64 \
   --repo_env=BAZEL_MSVC_RUNTIME_VISUAL_STUDIO_EULA=1 \
   --repo_env=BAZEL_WINDOWS_SDK_EULA=1 \
-  //examples/rust/bevy_isometric:demo
+  //game/app:demo
 ```
 
-Copy `bazel-bin/examples/rust/bevy_isometric/demo.exe` to Windows. All scene
+Copy `bazel-bin/game/app/demo.exe` to Windows. All scene
 assets and sound synthesis are embedded in the executable. The default MSVC
 configuration links the runtime dynamically: install the current
 [Visual C++ v14 x64 Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)
@@ -40,7 +40,7 @@ if `VCRUNTIME140.dll` is unavailable. A compatible GPU driver is also needed.
 Cross-compilation verifies the build; rendering, input and audio still need a
 smoke test on Windows. Use `bazel build`, rather than `bazel run` or `bazel test`,
 for Windows targets on a Linux/macOS host. To compile the headless test executable,
-use the same flags with `//examples/rust/bevy_isometric:movement_test`.
+use the same flags with `//game/app:movement_test`.
 
 Windows integration notes: BLAKE3 uses intrinsics to avoid the host-only MASM
 assembler; Bazel drives the MSVC link action and supplies the windowing/pipe
@@ -95,7 +95,7 @@ Audio uses the repository's pinned miniaudio, without host development headers.
 For a repeatable approach-and-strike preview with rendered screenshots:
 
 ```sh
-bazel run //examples/rust/bevy_isometric:demo -- \
+bazel run //game/app:demo -- \
   --showcase --capture-dir /tmp/kestrel
 ```
 
@@ -115,10 +115,10 @@ derive macros read it to find the `bevy` crate path. First-party code builds
 with Bazel, following the other Rust examples in the repository.
 
 
-Boulders now use the [Bazel voxel asset pipeline](../../../bazel/voxel_assets/README.md).
+Boulders now use the [Bazel voxel asset pipeline](../build/voxel_assets/README.md).
 Edit recipes in `assets/prefabs/`, material values in `assets/palette.ron`, and
 placements in `assets/levels/`. `assets/BUILD.bazel` declares reusable prefab
-and scene targets. The generator loops live in `//tools/assetc/core`; changing
+and scene targets. The generator loops live in `//game/tools/assetc/core`; changing
 a recipe rebuilds its mesh during the Bazel build. The deck's other props and
 character parts are still authored in `scene.rs`.
 
@@ -130,8 +130,8 @@ count stays unchanged on repeat visits because geometry is cached. Scene
 changes reset movement, attacks and contact feedback.
 
 ```sh
-bazel run //examples/rust/bevy_isometric:demo -- --scene boulder-lab
-bazel build //examples/rust/bevy_isometric/assets:ore_small
+bazel run //game/app:demo -- --scene boulder-lab
+bazel build //game/app/assets:ore_small
 ```
 
 For visual QA of either scene, add `--scene mining-deck` or `--scene boulder-lab`
@@ -177,22 +177,22 @@ views rebuild when quantities or airborne slots change. Shader assets and chunk 
 are shared rather than generated per unit.
 
 ```sh
-bazel run //examples/rust/bevy_isometric:demo -- --scene pile-lab
+bazel run //game/app:demo -- --scene pile-lab
 # Scripted real navigation + pickup + drop, with captures and quantity assertions:
-bazel run //examples/rust/bevy_isometric:demo -- \
+bazel run //game/app:demo -- \
   --scene pile-lab --haul-showcase --capture-dir /tmp/kestrel-piles
 ```
 
-The [controlled-demo rule and command protocol](../../../bazel/game_demo/README.md)
+The [controlled-demo rule and command protocol](../build/game_demo/README.md)
 provide MP4 generation, scripted assertions, renderer-free tests, and live JSON
 world inspection. Generate the four-unit hauling demonstration with:
 
 ```sh
-bazel build --config=full_local //examples/rust/bevy_isometric:haul_four_demo
+bazel build --config=full_local //game/app:haul_four_demo
 ```
 
 The output video, final-state report, and per-frame state trace are alongside
-`demo` in `bazel-bin/examples/rust/bevy_isometric/`.
+`demo` in `bazel-bin/game/app/`.
 
 Controlled transfers can specify `seconds_per_unit` and an `approach` standing
 point. The example video uses a side approach and 0.7 seconds per unit; chunks
@@ -207,7 +207,7 @@ same sound bank as interactive playback.
 Press **4** for the jetpack lab, or launch it directly:
 
 ```sh
-bazel run --config=full_local //examples/rust/bevy_isometric:demo -- --scene jetpack-lab
+bazel run --config=full_local //game/app:demo -- --scene jetpack-lab
 ```
 
 Hold **Space** to hover 1.8 meters above the terrain; steer with WASD or right
@@ -230,11 +230,11 @@ surfaces as rendering. Existing prop obstacles still use their planar clearance.
 Generate the audiovisual ascent, gap-crossing, safety-hover, and landing demo:
 
 ```sh
-bazel build --config=full_local //examples/rust/bevy_isometric:jetpack_demo
+bazel build --config=full_local //game/app:jetpack_demo
 ```
 
 Outputs are `jetpack_demo.mp4`, `.state.json`, `.frames.jsonl`, and `.wav` in
-`bazel-bin/examples/rust/bevy_isometric/`. The script uses the same flight
+`bazel-bin/game/app/`. The script uses the same flight
 controller as Space, and asserts both hover and landed altitudes. Thruster
 plumes, altitude telemetry, and procedural turbine audio are included.
 
@@ -251,18 +251,18 @@ A new mechanic has a dedicated scene with instructions inside the game. Press
 **5** to visit it, or start directly:
 
 ```sh
-bazel run --config=full_local //examples/rust/bevy_isometric:demo -- --scene surprise-lab
+bazel run --config=full_local //game/app:demo -- --scene surprise-lab
 ```
 
 The scene explains its own controls and objective. **R** restarts the trial.
 To generate its scripted audiovisual playthrough and state trace:
 
 ```sh
-bazel build --config=full_local //examples/rust/bevy_isometric:surprise_demo
+bazel build --config=full_local //game/app:surprise_demo
 ```
 
 The outputs are `surprise_demo.mp4`, `.state.json`, `.frames.jsonl`, and `.wav`
-in `bazel-bin/examples/rust/bevy_isometric/`.
+in `bazel-bin/game/app/`.
 
 <details>
 <summary>Mechanic and implementation notes (spoilers)</summary>
@@ -294,8 +294,8 @@ the projection and trial state. Existing live/script controls gain
 Press **6** for a dark Atlantis / magic / steampunk scene, or launch it directly:
 
 ```sh
-bazel run --config=full_local //examples/rust/bevy_isometric:demo -- --scene atlantis
-bazel build --config=full_local //examples/rust/bevy_isometric:atlantis_demo
+bazel run --config=full_local //game/app:demo -- --scene atlantis
+bazel build --config=full_local //game/app:atlantis_demo
 ```
 
 The scene uses deep teal stone, aged bronze, water channels, a tide gate,
@@ -324,7 +324,7 @@ the same profile's grid and material roles and retain per-material hit reactions
 To add another setting, author a style RON file, optionally an architectural
 layout, and pass `style = "styles/your_style.ron"` to `scene_assets` and opted-in
 `boulder_prefab` targets. No new renderer branch for the style is necessary.
-See the [asset rule documentation](../../../bazel/voxel_assets/README.md).
+See the [asset rule documentation](../build/voxel_assets/README.md).
 The controlled-demo report and frame trace expose style density, actor parts,
 weapon identity, baked statistics, fixture lights, and moving actor lights.
 
@@ -333,7 +333,7 @@ weapon identity, baked statistics, fixture lights, and moving actor lights.
 Press **7**, or launch the outdoor medieval / forest / steampunk style directly:
 
 ```sh
-bazel run --config=full_local //examples/rust/bevy_isometric:demo -- --scene forest-outpost
+bazel run --config=full_local //game/app:demo -- --scene forest-outpost
 ```
 
 Smaller actors and a wider camera show several workers operating at once.
@@ -354,7 +354,7 @@ supplies changes how the settlement runs.
 
 The architecture is split into independent layers:
 
-- `//tools/gameplay/core` owns deterministic 60 Hz decisions, quantities,
+- `//game/core` owns deterministic 60 Hz decisions, quantities,
   reservations, processing, equipment, controlled actors, threats and defense.
 - `assets/levels/forest_supply.ron` defines the supply chain and agent abilities.
   `scene_assets(scenario = ...)` validates and embeds it at build time.
@@ -367,11 +367,11 @@ The architecture is split into independent layers:
 Generate an audiovisual tour that also demonstrates the player helping the mill:
 
 ```sh
-bazel build --config=full_local //examples/rust/bevy_isometric:forest_outpost_demo
+bazel build --config=full_local //game/app:forest_outpost_demo
 ```
 
 Outputs are `forest_outpost_demo.mp4`, `.state.json`, `.frames.jsonl`, and `.wav`
-in `bazel-bin/examples/rust/bevy_isometric/`. The script asserts delivery,
+in `bazel-bin/game/app/`. The script asserts delivery,
 production, cart attachment, defense, and material conservation.
 
 The existing JSON/TCP interface also exposes `settlement_transfer` (`depot`,
@@ -388,7 +388,7 @@ full `settlement.simulation`, scenario data, and per-material `balances`.
 Press **8** or start the focused forest combat scene directly:
 
 ```sh
-bazel run --config=full_local //examples/rust/bevy_isometric:demo -- --scene combat-arena
+bazel run --config=full_local //game/app:demo -- --scene combat-arena
 ```
 
 Right click to position the player, then Shift + left click toward an approaching
@@ -398,8 +398,8 @@ limping forward. The same 60 Hz simulation owns health, knockback, kills, and
 the melee metrics in the world-state dump.
 
 ```sh
-bazel test --config=full_local //examples/rust/bevy_isometric:combat_arena_test
-bazel build --config=full_local //examples/rust/bevy_isometric:combat_arena_demo
+bazel test --config=full_local //game/app:combat_arena_test
+bazel build --config=full_local //game/app:combat_arena_demo
 ```
 
 The demo produces an MP4 with audio, a WAV, a final state report, and a per-frame

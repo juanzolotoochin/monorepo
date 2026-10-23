@@ -141,7 +141,7 @@ td:first-child { font-weight: 600; }
     <div class="stack">
       <span class="eyebrow">Layout</span>
       <h2 id="crates">Crates under <code>game/</code></h2>
-      <p>Each is a Bazel <code>rust_library</code> or <code>rust_binary</code> using <code>rules_rs</code>, like <code>tools/gameplay/core</code> today. The blue ones are deterministic and may never depend on Bevy, f32 math or wall-clock time. A Bazel visibility rule enforces that only <code>view</code> and <code>app</code> can see <code>@crates//:bevy</code>.</p>
+      <p>Each is a Bazel <code>rust_library</code> or <code>rust_binary</code> using <code>rules_rs</code>, like <code>game/core</code> today. The blue ones are deterministic and may never depend on Bevy, f32 math or wall-clock time. A Bazel visibility rule enforces that only <code>view</code> and <code>app</code> can see <code>@crates//:bevy</code>.</p>
     </div>
     <div class="panel">
       <div class="crates">
@@ -345,7 +345,7 @@ const STEPS = [
     items: ["Threat waves, defenders, projectiles, melee, chain lightning", "Player transfers and strikes as commands"],
     done: "combat_arena and combat_arena_supply play the same as today." },
   { id: "1.4", t: "Tooling and parity", s: "game_demo on input logs, retire the old game", later: true,
-    items: ["Scripts compile to input logs; headless assertions; game_demo renders a log to MP4", "Port the remaining scenes, then delete tools/gameplay/core and bevy_isometric"],
+    items: ["Scripts compile to input logs; headless assertions; game_demo renders a log to MP4", "Port the remaining scenes, then retire game/core and replace the prototype in game/app"],
     done: "Every current scene and demo is reproduced in the new architecture." }
 ];
 const list = document.getElementById("road-list");

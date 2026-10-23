@@ -7,7 +7,7 @@ rust_library(
     edition = "2021",
     visibility = ["//visibility:public"],
     deps = [
-        "//tools/gameplay/core:gameplay_core",
+        "//game/core:gameplay_core",
         "@crates//:serde",
         "@crates//:serde_json",
     ],

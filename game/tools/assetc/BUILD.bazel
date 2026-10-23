@@ -7,7 +7,7 @@ rust_binary(
     edition = "2021",
     visibility = ["//visibility:public"],
     deps = [
-        "//tools/assetc/core:voxel_assets",
+        "//game/tools/assetc/core:voxel_assets",
         "@crates//:ron",
         "@crates//:serde",
         "@crates//:serde_json",

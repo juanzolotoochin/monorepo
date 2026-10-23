@@ -37,7 +37,7 @@ and duplicate IDs/stacks. Navigation is the same deterministic clearance-aware
 A* grid used by the game's player adapter, with a per-agent body radius.
 
 ```sh
-bazel test --config=full_local //tools/gameplay/core:core_test
+bazel test --config=full_local //game/core:core_test
 ```
 
 Controlled actors use `controlled: true` with no automatic haul links. An

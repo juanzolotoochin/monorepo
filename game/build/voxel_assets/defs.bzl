@@ -43,7 +43,7 @@ voxel_prefab = rule(
         "palette": attr.label(allow_single_file = [".ron"]),
         "style": attr.label(allow_single_file = [".ron"]),
         "mode": attr.string(default = "baked", values = ["baked", "runtime"]),
-        "_compiler": attr.label(default = "//tools/assetc:assetc", executable = True, cfg = "exec"),
+        "_compiler": attr.label(default = "//game/tools/assetc:assetc", executable = True, cfg = "exec"),
     },
     outputs = {"pack": "%{name}.prefab.json"},
 )
@@ -89,7 +89,7 @@ _scene_pack = rule(
         "scenario": attr.label(allow_single_file = [".ron"]),
         "layout": attr.label(allow_single_file = [".ron"], mandatory = True),
         "prefabs": attr.label_list(providers = [VoxelPrefabInfo], mandatory = True),
-        "_compiler": attr.label(default = "//tools/assetc:assetc", executable = True, cfg = "exec"),
+        "_compiler": attr.label(default = "//game/tools/assetc:assetc", executable = True, cfg = "exec"),
     },
     outputs = {"pack": "%{name}.scene.json", "rust": "%{name}.rs"},
 )
