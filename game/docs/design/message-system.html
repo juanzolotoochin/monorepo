@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tick Message System</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,750&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: single reading column; each decision = problem, interactive demo, options, recommendation. Shares the look of the netcode decision pages. */
+:root {
+  --bg: #f4f6f8; --surface: #ffffff; --fg: #172029; --muted: #5a6875; --line: #d8dee4;
+  --accent: #1d5fa8; --accent-soft: #e3edf8;
+  --ok: #2f8a57; --ok-soft: #dcefe3; --bad: #c2362f; --bad-soft: #f8dedc;
+  --warn: #b7791f; --warn-soft: #f6ead3; --idle: #e7ebef; --idle-fg: #8794a0;
+  --c1: #7a4fb5; --c1-soft: #ece4f6;
+  --f-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --f-body: "Instrument Sans", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1318; --surface: #161c23; --fg: #e3e8ed; --muted: #95a3b0; --line: #2a333d;
+    --accent: #7fb2ec; --accent-soft: #1b2c40;
+    --ok: #5cc48a; --ok-soft: #173326; --bad: #f07a72; --bad-soft: #3d1c1a;
+    --warn: #e2ad57; --warn-soft: #3a2c14; --idle: #222a33; --idle-fg: #6c7a87;
+    --c1: #b994ea; --c1-soft: #2b2140;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1318; --surface: #161c23; --fg: #e3e8ed; --muted: #95a3b0; --line: #2a333d;
+  --accent: #7fb2ec; --accent-soft: #1b2c40;
+  --ok: #5cc48a; --ok-soft: #173326; --bad: #f07a72; --bad-soft: #3d1c1a;
+  --warn: #e2ad57; --warn-soft: #3a2c14; --idle: #222a33; --idle-fg: #6c7a87;
+  --c1: #b994ea; --c1-soft: #2b2140;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); font: 16px/1.6 var(--f-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 72px;
+}
+main { max-width: 880px; margin: 0 auto; display: flex; flex-direction: column; gap: 56px; }
+h1, h2, h3 { font-family: var(--f-display); text-wrap: balance; line-height: 1.15; margin: 0; }
+h1 { font-size: clamp(2rem, 5vw, 2.8rem); font-weight: 750; letter-spacing: -0.01em; }
+h2 { font-size: 1.7rem; font-weight: 750; }
+h3 { font-size: 1.15rem; font-weight: 600; }
+p { margin: 0; max-width: 68ch; }
+code, .mono { font-family: var(--f-mono); font-size: 0.88em; }
+.eyebrow { font: 600 0.75rem/1 var(--f-mono); text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent); }
+.stack { display: flex; flex-direction: column; gap: 16px; }
+.lead { color: var(--muted); font-size: 1.08rem; }
+section.decision { display: flex; flex-direction: column; gap: 24px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+ul, ol { margin: 0; padding-left: 1.3em; display: flex; flex-direction: column; gap: 6px; max-width: 68ch; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 680px) { .two { grid-template-columns: 1fr; } }
+.muted { color: var(--muted); }
+.small { font-size: 0.88rem; }
+
+button.chip, .tabs button {
+  font: 500 0.92rem var(--f-body); color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; cursor: pointer;
+}
+.tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+.tabs button:hover, button.chip:hover { border-color: var(--accent); }
+.tabs button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:disabled { opacity: 0.4; cursor: default; }
+.rec { font: 600 0.68rem var(--f-mono); letter-spacing: 0.06em; text-transform: uppercase; margin-left: 6px; opacity: 0.85; }
+
+/* Pipeline */
+.pipeline { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+@media (max-width: 680px) { .pipeline { grid-template-columns: repeat(2, 1fr); } }
+.stage { border: 1px solid var(--line); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 4px; background: var(--bg); min-width: 0; }
+.stage b { font: 600 0.72rem var(--f-mono); color: var(--muted); letter-spacing: 0.06em; }
+.stage span { font-weight: 600; font-size: 0.92rem; line-height: 1.25; }
+.stage em { font-style: normal; font: 600 0.66rem var(--f-mono); text-transform: uppercase; letter-spacing: 0.06em; }
+.stage .par { color: var(--ok); } .stage .ser { color: var(--warn); }
+.stage.active { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 1px var(--accent) inset; }
+
+.rule { border: 2px solid var(--fg); border-radius: 10px; padding: 18px 20px; display: flex; flex-direction: column; gap: 10px; }
+.rule p { font-family: var(--f-display); font-size: 1.25rem; font-weight: 600; line-height: 1.3; max-width: none; }
+
+/* Stepper */
+.stepper-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+.stepper-nav { display: flex; gap: 8px; align-items: center; }
+.stepcount { font: 600 0.8rem var(--f-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.stepdesc { font-size: 1rem; min-height: 3.2em; }
+.world { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 680px) { .world { grid-template-columns: 1fr; } }
+.box { border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.box h4 { margin: 0; font: 600 0.72rem var(--f-mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.ent { display: flex; justify-content: space-between; gap: 8px; font-family: var(--f-mono); font-size: 0.82rem; padding: 4px 8px; border-radius: 4px; background: var(--bg); }
+.ent.changed { background: var(--accent-soft); color: var(--accent); }
+.ent.dead { text-decoration: line-through; color: var(--idle-fg); }
+.msg { font-family: var(--f-mono); font-size: 0.8rem; padding: 4px 8px; border-radius: 4px; display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.msg.pending { background: var(--c1-soft); color: var(--c1); }
+.msg.applied { background: var(--ok-soft); color: var(--ok); }
+.msg.rejected { background: var(--bad-soft); color: var(--bad); }
+.msg.event { background: var(--warn-soft); color: var(--warn); }
+.empty { font-size: 0.82rem; color: var(--idle-fg); font-style: italic; }
+
+/* Thread demo */
+.threads { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 680px) { .threads { grid-template-columns: 1fr; } }
+.lane { display: flex; flex-direction: column; gap: 6px; }
+.tchunk { font-family: var(--f-mono); font-size: 0.8rem; padding: 6px 8px; border-radius: 4px; background: var(--bg); border: 1px solid var(--line); display: flex; justify-content: space-between; gap: 8px; }
+.tchunk small { color: var(--muted); }
+
+/* Queues */
+.qcol { display: flex; flex-direction: column; gap: 6px; }
+.qlabel { font: 600 0.72rem var(--f-mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); padding-top: 6px; }
+.t-reserve { background: var(--accent-soft); color: var(--accent); }
+.t-damage { background: var(--bad-soft); color: var(--bad); }
+.t-dig { background: var(--warn-soft); color: var(--warn); }
+.t-despawn { background: var(--idle); color: var(--muted); }
+
+/* Fairness */
+.wins { display: grid; grid-template-columns: repeat(32, 1fr); gap: 3px; }
+.win { height: 26px; border-radius: 3px; display: flex; align-items: center; justify-content: center; font: 600 0.62rem var(--f-mono); }
+.win.a { background: var(--accent); color: var(--surface); }
+.win.b { background: var(--c1); color: var(--surface); }
+@media (max-width: 680px) { .wins { grid-template-columns: repeat(16, 1fr); } }
+.tally { display: flex; gap: 18px; flex-wrap: wrap; font-size: 0.95rem; }
+.tally span { display: inline-flex; align-items: center; gap: 8px; }
+.tally i { width: 14px; height: 14px; border-radius: 3px; display: inline-block; }
+
+/* Option cards */
+.options { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.opt { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.opt.recd { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.opt .tag { font: 600 0.68rem var(--f-mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); }
+.opt ul { font-size: 0.92rem; gap: 4px; }
+.pro::marker { content: "+  "; color: var(--ok); font-weight: 700; }
+.con::marker { content: "−  "; color: var(--bad); font-weight: 700; }
+
+/* Timer wheel */
+.wheel { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; }
+@media (max-width: 680px) { .wheel { grid-template-columns: repeat(5, 1fr); } }
+.slot { border: 1px solid var(--line); border-radius: 6px; padding: 6px; min-height: 64px; display: flex; flex-direction: column; gap: 3px; font-family: var(--f-mono); font-size: 0.68rem; }
+.slot b { color: var(--muted); font-variant-numeric: tabular-nums; }
+.slot.now { border-color: var(--accent); background: var(--accent-soft); }
+.slot span { background: var(--bg); border-radius: 3px; padding: 1px 4px; }
+
+/* Chunk map */
+.cmap { display: grid; grid-template-columns: repeat(16, minmax(18px, 1fr)); gap: 2px; min-width: 340px; max-width: 560px; }
+.cc { aspect-ratio: 1; border-radius: 3px; background: var(--idle); display: flex; align-items: center; justify-content: center; font: 600 0.55rem var(--f-mono); color: var(--surface); }
+.cc.awake { background: var(--ok); }
+.cc.hot { background: var(--warn); }
+.cc.sel { background: var(--accent); }
+.cc.nb { background: var(--accent-soft); box-shadow: 0 0 0 1px var(--accent) inset; }
+.cc.base { background: var(--c1); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 0.8rem; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 14px; height: 14px; border-radius: 3px; display: inline-block; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; min-width: 460px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 600 0.72rem var(--f-mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+td:first-child { font-weight: 600; white-space: nowrap; }
+.ask { border-top: 2px solid var(--fg); padding-top: 24px; display: flex; flex-direction: column; gap: 16px; }
+.ask ol { gap: 12px; }
+.ask li strong { font-family: var(--f-display); font-weight: 600; }
+.callout { border-left: 3px solid var(--accent); padding: 4px 0 4px 14px; }
+@media (prefers-reduced-motion: no-preference) { .stage, .msg, .ent, .win { transition: background-color .2s, color .2s, border-color .2s; } }
+</style>
+
+<main>
+  <header class="stack">
+    <span class="eyebrow">Simulation core · open decisions</span>
+    <h1>The tick message system</h1>
+    <p class="lead">How one simulation tick runs so that it can use many threads and still produce exactly the same result on every machine. Three decisions are open: the mutation rule, how messages are queued, and who wins when two messages conflict.</p>
+  </header>
+
+  <!-- ===== PROBLEM ===== -->
+  <section class="decision" aria-labelledby="p">
+    <div class="stack">
+      <span class="eyebrow">The problem</span>
+      <h2 id="p">Threads finish in random order</h2>
+      <p>With 100k entities we want every core working. But if two threads both change the same depot, the result depends on which thread got there first, and that differs between machines and between runs. One different number and the peers desync.</p>
+      <p>The fix is to split each tick into a parallel phase that <strong>never writes shared state</strong> and a single-threaded phase that applies changes in a <strong>fixed order</strong>.</p>
+    </div>
+
+    <div class="panel">
+      <h3>One tick, six stages</h3>
+      <div class="pipeline" id="pipeline"></div>
+      <p class="small muted">Green stages run in parallel across chunks. Amber stages run on one thread. In the stepper below, the stage of the current step is highlighted.</p>
+    </div>
+
+    <div class="rule">
+      <span class="eyebrow">Decision 1 · the core rule</span>
+      <p>An entity may change itself directly in a parallel loop. Anything that touches another entity or a shared resource must be a message.</p>
+    </div>
+
+    <div class="two">
+      <div class="panel">
+        <h3>Self-changes (direct, parallel)</h3>
+        <ul>
+          <li>Moving along a path</li>
+          <li>Projectile flight</li>
+          <li>Cooldowns and timers</li>
+          <li>Animation phase and facing</li>
+        </ul>
+        <p class="small muted">These are the hot paths: tight loops over arrays with no allocation. Each entity writes only its own memory, so thread order can't change the result.</p>
+      </div>
+      <div class="panel">
+        <h3>Interactions (messages)</h3>
+        <ul>
+          <li>Damage to another entity</li>
+          <li>Reserving, taking or depositing stock</li>
+          <li>Placing or removing buildings</li>
+          <li>Digging a voxel</li>
+          <li>Spawning and despawning</li>
+        </ul>
+        <p class="small muted">These are rare compared with movement. They are validated when applied, so a message can be rejected if the world changed first.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== STEPPER ===== -->
+  <section class="decision" aria-labelledby="ex">
+    <div class="stack">
+      <span class="eyebrow">Walkthrough</span>
+      <h2 id="ex">Step through a tick</h2>
+      <p>Pick an example and step through it. Purple messages are waiting, green ones were applied, red ones were rejected during validation, and amber ones are events sent to the Bevy view for effects and sound.</p>
+    </div>
+    <div class="panel">
+      <div class="stepper-head">
+        <div class="tabs" role="group" aria-label="Example" id="ex-tabs"></div>
+        <div class="stepper-nav">
+          <button class="chip" type="button" id="prev">Back</button>
+          <span class="stepcount" id="stepcount"></span>
+          <button class="chip" type="button" id="next">Next step</button>
+        </div>
+      </div>
+      <p class="stepdesc" id="stepdesc"></p>
+      <div class="world">
+        <div class="box"><h4>World state</h4><div id="ents" class="stack" style="gap:6px"></div></div>
+        <div class="box"><h4>Messages and events</h4><div id="msgs" class="stack" style="gap:6px"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== THREADS ===== -->
+  <section class="decision" aria-labelledby="th">
+    <div class="stack">
+      <span class="eyebrow">Why it is deterministic</span>
+      <h2 id="th">Per-chunk outboxes</h2>
+      <p>During the read phase each chunk writes messages into its own outbox, iterating its entities in ID order. Threads can finish chunks in any order. The merge always concatenates outboxes in chunk order, so the merged list is identical.</p>
+    </div>
+    <div class="panel">
+      <div class="stepper-head">
+        <h3>Same messages, different thread timing</h3>
+        <button class="chip" type="button" id="shuffle">Run again with different timing</button>
+      </div>
+      <div class="threads">
+        <div class="lane"><span class="qlabel">Order chunks finished</span><div id="finished" class="lane"></div></div>
+        <div class="lane"><span class="qlabel">Merged order (always the same)</span><div id="merged" class="lane"></div></div>
+      </div>
+      <p class="callout small">This gives an automatic test: run the same input log with 1 thread and with 16 threads. The state hash must match on every tick.</p>
+    </div>
+  </section>
+
+  <!-- ===== QUEUES ===== -->
+  <section class="decision" aria-labelledby="q2">
+    <div class="stack">
+      <span class="eyebrow">Decision 2</span>
+      <h2 id="q2">How messages are queued</h2>
+      <p>Messages of different kinds (reserve, damage, dig, despawn) have to be applied in some order. The question is whether that order comes from one mixed list or from an explicit order of message types.</p>
+    </div>
+    <div class="panel">
+      <div class="tabs" role="group" aria-label="Queue layout" id="q-tabs"></div>
+      <div id="q-view" class="qcol"></div>
+    </div>
+    <div class="options">
+      <div class="opt">
+        <span class="tag">Option A</span>
+        <h3>One mixed stream</h3>
+        <ul>
+          <li class="pro">One global order, simple to explain</li>
+          <li class="pro">A new message type needs no ordering decision</li>
+          <li class="con">The order of kinds depends on where things are on the map</li>
+          <li class="con">One big enum; small messages pay for the largest one</li>
+          <li class="con">Apply code jumps between kinds, so cache use is worse</li>
+        </ul>
+      </div>
+      <div class="opt recd">
+        <span class="tag">Option B · recommended</span>
+        <h3>A queue per type, fixed type order</h3>
+        <ul>
+          <li class="pro">The type order is an explicit rule you choose, for example that damage resolves before pickups</li>
+          <li class="pro">Each queue is a tight array of one struct</li>
+          <li class="pro">Easy to profile and debug per message type</li>
+          <li class="con">The type order is one more thing to maintain</li>
+          <li class="con">A new message type needs a place in that order</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== FAIRNESS ===== -->
+  <section class="decision" aria-labelledby="q3">
+    <div class="stack">
+      <span class="eyebrow">Decision 3</span>
+      <h2 id="q3">Who wins a conflict</h2>
+      <p>When two messages want the same thing, such as the last 4 iron, the earlier one in the order wins and the other is rejected. If chunk order never changes, the entity in the lower-numbered chunk always wins. Players would notice that one side of the base always gets served first.</p>
+      <p>The demo shows hauler <strong>A in chunk 2</strong> and hauler <strong>B in chunk 7</strong>, out of 16 chunks, competing on every one of 32 ticks.</p>
+    </div>
+    <div class="panel">
+      <div class="tabs" role="group" aria-label="Chunk order" id="f-tabs"></div>
+      <div class="wins" id="wins"></div>
+      <div class="tally" id="tally"></div>
+      <p class="small" id="f-note"></p>
+    </div>
+    <p class="callout">Player actions are a separate case. They are applied in stage 1, before any AI messages, so a player always beats an AI hauler to the same stock regardless of this choice.</p>
+  </section>
+
+  <!-- ===== CHUNKS ===== -->
+  <section class="decision" aria-labelledby="ch">
+    <div class="stack">
+      <span class="eyebrow">Context · what a chunk is</span>
+      <h2 id="ch">A chunk is a square of the map</h2>
+      <p>A chunk is a fixed <strong>32 × 32 tile</strong> square of the world, covering the full height. The MVP world is 512 × 512 tiles and 32 voxels deep, which makes a <strong>16 × 16 grid of 256 chunks</strong>. Chunk (3,7) covers tiles x 96–127, y 224–255.</p>
+      <p>It is the same square the terrain is already split into for voxel storage and meshing. The simulation reuses it as the unit for nearly everything, so one concept does several jobs.</p>
+    </div>
+
+    <div class="panel">
+      <div class="stepper-head">
+        <h3>The MVP world, chunk by chunk</h3>
+        <div class="tabs" role="group" aria-label="Chunk view" id="c-tabs"></div>
+      </div>
+      <div class="timeline-wrap" style="overflow-x:auto">
+        <div class="cmap" id="cmap"></div>
+      </div>
+      <div class="legend" id="c-legend"></div>
+      <p class="small" id="c-note"></p>
+    </div>
+
+    <div class="panel">
+      <h3>What the chunk is used for</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Job</th><th>What it means</th></tr></thead>
+          <tbody>
+            <tr><td>Membership</td><td>Every entity belongs to exactly one chunk, the one containing its position. A building that spans a border belongs to the chunk of its anchor tile.</td></tr>
+            <tr><td>Parallel work</td><td>Stages 2 and 3 hand out chunks to threads. 256 chunks keep 16 cores busy.</td></tr>
+            <tr><td>Ordering</td><td>Each chunk iterates its entities by ID and writes its own outbox. The merge order is the chunk order.</td></tr>
+            <tr><td>Sleeping</td><td>A chunk with no awake entities is skipped by every stage.</td></tr>
+            <tr><td>Spatial queries</td><td>A tower with range 10 only looks at entities in its own chunk and the neighbors its range reaches.</td></tr>
+            <tr><td>Hashing</td><td>Each chunk has its own hash, which is how a desync gets pinned to "chunk (3,7)".</td></tr>
+            <tr><td>Terrain and navigation</td><td>Digging marks the chunk's voxels and walkable spans dirty, and only that chunk is rebuilt.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="two">
+      <div class="panel">
+        <h3>Crossing a border</h3>
+        <p>A hauler walking from chunk (3,7) into (4,7) moves during self update, but its membership doesn't change mid-tick. In housekeeping (stage 6), entities whose position left their chunk are moved to the new chunk's lists. So during the parallel stages, which chunk owns what never changes.</p>
+      </div>
+      <div class="panel">
+        <h3>Hotspots</h3>
+        <p>When 5,000 enemies pile up at one gate, one chunk holds most of the work and one thread does it while the others wait. The fix, when we need it, is to split a heavy chunk into sub-batches by ID range, each with its own outbox, merged in order. Ordering stays deterministic. We can add this later without changing anything else.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== SLEEPING ===== -->
+  <section class="decision" aria-labelledby="sl">
+    <div class="stack">
+      <span class="eyebrow">Context · no decision needed</span>
+      <h2 id="sl">Sleeping</h2>
+      <p>Skipping work is the biggest performance win. Most entities are idle most of the time: a full depot, a miner between cycles, a hauler with no job. Sleep and wake must themselves be deterministic, so they only happen through messages or timers, and the sleep flag is part of the save and the hash.</p>
+    </div>
+    <div class="two">
+      <div class="panel">
+        <h3>Ways to sleep</h3>
+        <ul>
+          <li><strong>Chunk sleep:</strong> a chunk with no awake entities is skipped in every stage.</li>
+          <li><strong>Wake by message:</strong> an idle hauler sleeps until a depot gains stock and sends <code>WakeHaulersNear</code>.</li>
+          <li><strong>Wake by timer:</strong> a miner producing every 90 ticks is filed under its next tick and not touched until then.</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <h3>Timer wheel</h3>
+        <div class="wheel" id="wheel"></div>
+        <p class="small muted">Each slot holds the entities to wake on that tick. A tick only looks at its own slot, so 10,000 sleeping miners cost nothing until their slot comes up.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== ASK ===== -->
+  <section class="ask" aria-labelledby="ask">
+    <span class="eyebrow">Your call</span>
+    <h2 id="ask">The open questions</h2>
+    <ol>
+      <li><strong>Core rule.</strong> Decided: entities change only themselves in parallel loops, and all interactions are messages.</li>
+      <li><strong>Queues.</strong> One queue per message type with a fixed type order (recommended), or one mixed stream.</li>
+      <li><strong>Conflict order.</strong> Fixed chunk order, rotate the starting chunk each tick, or shuffle chunk order each tick with a seed (recommended).</li>
+    </ol>
+    <p class="lead">Answer in the terminal.</p>
+  </section>
+</main>
+
+<script>
+const STAGES = [
+  ["1", "Apply inputs", "ser", "single thread"],
+  ["2", "Self update", "par", "parallel"],
+  ["3", "Read phase", "par", "parallel"],
+  ["4", "Merge", "ser", "single thread"],
+  ["5", "Apply phase", "ser", "single thread"],
+  ["6", "Housekeeping", "ser", "mostly single"]
+];
+const pipe = document.getElementById("pipeline");
+pipe.innerHTML = STAGES.map(([n, name, k, label]) =>
+  `<div class="stage" data-stage="${n}"><b>${n}</b><span>${name}</span><em class="${k}">${label}</em></div>`).join("");
+function highlight(stage) {
+  pipe.querySelectorAll(".stage").forEach(s => s.classList.toggle("active", s.dataset.stage === String(stage)));
+}
+
+// ---- Stepper examples ----
+const EXAMPLES = [
+  { id: "towers", name: "Two towers, one enemy", steps: [
+    { stage: 2, text: "Self update: enemy E walks one step toward the base. Tower cooldowns tick down. Nothing outside each entity changes.",
+      ents: [["Tower A (chunk 5)", "ammo 3, ready"], ["Tower B (chunk 9)", "ammo 1, ready"], ["Enemy E", "HP 10", "changed"]], msgs: [] },
+    { stage: 3, text: "Read phase: both towers see E in range. Neither changes anything; each writes a Fire message into its chunk's outbox.",
+      ents: [["Tower A (chunk 5)", "ammo 3, ready"], ["Tower B (chunk 9)", "ammo 1, ready"], ["Enemy E", "HP 10"]],
+      msgs: [["pending", "Fire { A → E }", "chunk 5"], ["pending", "Fire { B → E }", "chunk 9"]] },
+    { stage: 5, text: "Apply phase: each Fire is validated (cooldown, ammo), ammo is spent and a projectile is spawned. IDs are only ever allocated here. The view gets muzzle-flash events.",
+      ents: [["Tower A (chunk 5)", "ammo 2, cooling", "changed"], ["Tower B (chunk 9)", "ammo 0, cooling", "changed"], ["Projectile #811", "→ E", "changed"], ["Projectile #812", "→ E", "changed"], ["Enemy E", "HP 10"]],
+      msgs: [["applied", "Fire { A → E }", "ok"], ["applied", "Fire { B → E }", "ok"], ["event", "view: muzzle flash ×2", "event"]] },
+    { stage: 3, text: "A few ticks later both projectiles arrive. Flight was pure self update. The read phase notices the arrivals and emits Damage messages.",
+      ents: [["Projectile #811", "arrived"], ["Projectile #812", "arrived"], ["Enemy E", "HP 10"]],
+      msgs: [["pending", "Damage { E, 8 }", "from #811"], ["pending", "Damage { E, 8 }", "from #812"]] },
+    { stage: 5, text: "Apply: the first Damage takes E to 2 HP. The second takes it to 0, so E is queued for despawn and a death event goes to the view. A third hit on dead E would be rejected as a wasted shot.",
+      ents: [["Projectile #811", "removed", "dead"], ["Projectile #812", "removed", "dead"], ["Enemy E", "HP 0, despawning", "changed"]],
+      msgs: [["applied", "Damage { E, 8 }", "HP 10 → 2"], ["applied", "Damage { E, 8 }", "HP 2 → 0"], ["event", "view: death effect + sound", "event"]] },
+    { stage: 6, text: "Housekeeping: E is despawned and its slot freed (generational IDs make stale references safe). The state is hashed for the desync check.",
+      ents: [["Enemy E", "gone", "dead"]], msgs: [["applied", "Despawn { E }", "ok"]] }
+  ]},
+  { id: "haulers", name: "Two haulers, last 4 iron", steps: [
+    { stage: 3, text: "Read phase: hauler H1 in chunk 2 and hauler H2 in chunk 7 both see 4 iron free in the smelter depot. Both want all of it.",
+      ents: [["Depot smelter_in", "iron 4 free"], ["Hauler H1 (chunk 2)", "idle"], ["Hauler H2 (chunk 7)", "idle"]],
+      msgs: [["pending", "Reserve { depot, iron, 4 } by H1", "chunk 2"], ["pending", "Reserve { depot, iron, 4 } by H2", "chunk 7"]] },
+    { stage: 4, text: "Merge: the outboxes are concatenated in chunk order. This tick that puts chunk 2 first, so H1's message comes first.",
+      ents: [["Depot smelter_in", "iron 4 free"], ["Hauler H1 (chunk 2)", "idle"], ["Hauler H2 (chunk 7)", "idle"]],
+      msgs: [["pending", "1. Reserve by H1", "chunk 2"], ["pending", "2. Reserve by H2", "chunk 7"]] },
+    { stage: 5, text: "Apply: H1's reservation is validated and succeeds. H2's is validated against the updated depot (0 free) and is rejected. Earlier in the order wins.",
+      ents: [["Depot smelter_in", "iron 0 free, 4 reserved", "changed"], ["Hauler H1 (chunk 2)", "job: fetch 4 iron", "changed"], ["Hauler H2 (chunk 7)", "idle"]],
+      msgs: [["applied", "Reserve by H1", "ok"], ["rejected", "Reserve by H2", "only 0 free"], ["pending", "ReserveFailed → H2", "next tick"]] },
+    { stage: 3, text: "Next tick: H2 receives ReserveFailed and picks a different job in its read phase. Nothing was double-counted, and the stock ledger still balances.",
+      ents: [["Depot smelter_in", "iron 0 free, 4 reserved"], ["Hauler H1 (chunk 2)", "walking to depot"], ["Hauler H2 (chunk 7)", "re-planning", "changed"]],
+      msgs: [["pending", "Reserve { mill_in, wood, 6 } by H2", "chunk 7"]] }
+  ]}
+];
+let ex = EXAMPLES[0], step = 0;
+const exTabs = document.getElementById("ex-tabs");
+EXAMPLES.forEach(e => {
+  const b = document.createElement("button"); b.type = "button"; b.textContent = e.name; b.dataset.id = e.id;
+  b.addEventListener("click", () => { ex = e; step = 0; drawStep(); }); exTabs.appendChild(b);
+});
+function drawStep() {
+  [...exTabs.children].forEach(b => b.setAttribute("aria-pressed", String(b.dataset.id === ex.id)));
+  const s = ex.steps[step];
+  highlight(s.stage);
+  document.getElementById("stepcount").textContent = `${step + 1} / ${ex.steps.length}`;
+  document.getElementById("stepdesc").innerHTML = `<b class="mono">Stage ${s.stage}</b> · ${s.text}`;
+  document.getElementById("ents").innerHTML = s.ents.map(([n, v, c]) => `<div class="ent ${c || ""}"><span>${n}</span><span>${v}</span></div>`).join("");
+  document.getElementById("msgs").innerHTML = s.msgs.length
+    ? s.msgs.map(([k, m, note]) => `<div class="msg ${k}"><span>${m}</span><span>${note}</span></div>`).join("")
+    : `<span class="empty">No messages. Self updates write directly.</span>`;
+  document.getElementById("prev").disabled = step === 0;
+  document.getElementById("next").disabled = step === ex.steps.length - 1;
+}
+document.getElementById("prev").addEventListener("click", () => { if (step > 0) { step--; drawStep(); } });
+document.getElementById("next").addEventListener("click", () => { if (step < ex.steps.length - 1) { step++; drawStep(); } });
+drawStep();
+
+// ---- Thread timing demo ----
+const OUTBOX = [
+  [0, ["Reserve by H4"]], [1, []], [2, ["Reserve by H1", "Damage E7"]], [3, ["Dig (12,40,3)"]],
+  [4, []], [5, ["Fire A→E"]], [6, ["Damage E2"]], [7, ["Reserve by H2"]]
+];
+function shuffleTiming() {
+  const order = OUTBOX.map(x => x).sort(() => Math.random() - 0.5);
+  document.getElementById("finished").innerHTML = order.map(([c, m], i) =>
+    `<div class="tchunk"><span>chunk ${c}</span><small>thread ${i % 4} · ${m.length} msg</small></div>`).join("");
+  document.getElementById("merged").innerHTML = OUTBOX.flatMap(([c, m]) => m.map(x =>
+    `<div class="msg pending"><span>${x}</span><span>chunk ${c}</span></div>`)).join("");
+}
+document.getElementById("shuffle").addEventListener("click", shuffleTiming);
+shuffleTiming();
+
+// ---- Queue layouts ----
+const MSGS = [
+  ["reserve", "Reserve H1", 1], ["damage", "Damage E2", 1], ["dig", "Dig (4,9,2)", 3], ["damage", "Damage E5", 4],
+  ["reserve", "Reserve H3", 4], ["despawn", "Despawn P9", 6], ["dig", "Dig (30,2,1)", 8], ["reserve", "Reserve H2", 9], ["damage", "Damage E2", 11]
+];
+const TYPE_ORDER = ["reserve", "dig", "damage", "despawn"];
+const qTabs = document.getElementById("q-tabs");
+const Q_OPTS = [{ id: "stream", name: "One mixed stream" }, { id: "typed", name: "Queue per type", rec: true }];
+Q_OPTS.forEach(o => {
+  const b = document.createElement("button"); b.type = "button"; b.dataset.id = o.id;
+  b.innerHTML = o.name + (o.rec ? `<span class="rec">rec.</span>` : "");
+  b.addEventListener("click", () => drawQ(o.id)); qTabs.appendChild(b);
+});
+function drawQ(id) {
+  [...qTabs.children].forEach(b => b.setAttribute("aria-pressed", String(b.dataset.id === id)));
+  const view = document.getElementById("q-view");
+  const row = ([t, m, c], i) => `<div class="msg t-${t}"><span>${i + 1}. ${m}</span><span>chunk ${c}</span></div>`;
+  if (id === "stream") {
+    view.innerHTML = `<span class="qlabel">Apply order: chunk order, kinds mixed</span>` + MSGS.map(row).join("") +
+      `<p class="small muted">Whether a dig lands before or after the damage next to it depends on which chunk each came from.</p>`;
+  } else {
+    let i = 0;
+    view.innerHTML = TYPE_ORDER.map(t => `<span class="qlabel">${t} queue</span>` +
+      MSGS.filter(m => m[0] === t).map(m => row(m, i++)).join("")).join("") +
+      `<p class="small muted">Type order here is reserve → dig → damage → despawn. Within each queue, chunk order. The relationship between kinds is a rule, not a side effect of the map.</p>`;
+  }
+}
+drawQ("typed");
+
+// ---- Fairness ----
+const N = 16, CA = 2, CB = 7, TICKS = 32;
+function mulberry(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function permutation(tick) {
+  const r = mulberry(0xC0FFEE ^ (tick * 2654435761)); const p = [...Array(N).keys()];
+  for (let i = N - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [p[i], p[j]] = [p[j], p[i]]; }
+  return p;
+}
+const F_OPTS = [
+  { id: "fixed", name: "Fixed order", winner: () => "a",
+    note: "Chunk 2 comes before chunk 7 on every tick, so A always wins. Simple and easy to debug, but visibly unfair." },
+  { id: "rotate", name: "Rotate start chunk", winner: t => { const s = t % N; return ((CA - s + N) % N) < ((CB - s + N) % N) ? "a" : "b"; },
+    note: "The starting chunk moves by one each tick. Better, but not even: A wins whenever the start falls in the 11 positions from chunk 8 around to chunk 2. The odds depend on how far apart the chunks are." },
+  { id: "shuffle", name: "Seeded shuffle", rec: true, winner: t => { const p = permutation(t); return p.indexOf(CA) < p.indexOf(CB) ? "a" : "b"; },
+    note: "Each tick, chunk order is a shuffle generated from the tick number. Every pair of chunks has even odds over time, and it costs a 16-element shuffle per tick. It is fully deterministic because the seed is the tick." }
+];
+const fTabs = document.getElementById("f-tabs");
+F_OPTS.forEach(o => {
+  const b = document.createElement("button"); b.type = "button"; b.dataset.id = o.id;
+  b.innerHTML = o.name + (o.rec ? `<span class="rec">rec.</span>` : "");
+  b.addEventListener("click", () => drawF(o)); fTabs.appendChild(b);
+});
+function drawF(o) {
+  [...fTabs.children].forEach(b => b.setAttribute("aria-pressed", String(b.dataset.id === o.id)));
+  let a = 0, html = "";
+  for (let t = 0; t < TICKS; t++) { const w = o.winner(t); if (w === "a") a++; html += `<div class="win ${w}" title="tick ${t}: ${w === "a" ? "A" : "B"} wins">${w === "a" ? "A" : "B"}</div>`; }
+  document.getElementById("wins").innerHTML = html;
+  document.getElementById("tally").innerHTML =
+    `<span><i style="background:var(--accent)"></i>A (chunk 2) wins ${a} of ${TICKS}</span>` +
+    `<span><i style="background:var(--c1)"></i>B (chunk 7) wins ${TICKS - a} of ${TICKS}</span>`;
+  document.getElementById("f-note").textContent = o.note;
+}
+drawF(F_OPTS[2]);
+
+// ---- Chunk map ----
+const BASE = new Set(["7,7", "8,7", "7,8", "8,8"]);
+const AWAKE = new Set(["6,7", "9,7", "6,8", "9,8", "7,6", "8,6", "7,9", "8,9", "6,6", "10,8", "11,8", "12,8", "13,8", "14,8", "15,8", "3,4", "4,4", "3,5", "8,10", "8,11"]);
+const HOT = new Set(["15,8"]);
+const C_OPTS = [
+  { id: "sleep", name: "Awake vs asleep",
+    legend: [["base", "Player base"], ["awake", "Awake: has active entities"], ["hot", "Hotspot: enemies piling up"], ["", "Asleep: skipped entirely"]],
+    note: "A typical moment: the base, an enemy lane coming in from the east edge, a mining outpost and a supply route are awake. The other ~230 chunks cost nothing this tick.",
+    cls: (x, y) => { const k = `${x},${y}`; return HOT.has(k) ? "hot" : BASE.has(k) ? "base" : AWAKE.has(k) ? "awake" : ""; } },
+  { id: "query", name: "Tower range query",
+    legend: [["sel", "Tower's chunk (3,7)"], ["nb", "Neighbors its range reaches"], ["", "Not looked at"]],
+    note: "A tower near the corner of chunk (3,7) with range 10 tiles only searches the chunks its range circle overlaps, here 4 of 256.",
+    cls: (x, y) => (x === 3 && y === 7) ? "sel" : ((x === 4 && y === 7) || (x === 3 && y === 8) || (x === 4 && y === 8)) ? "nb" : "" }
+];
+const cTabs = document.getElementById("c-tabs");
+C_OPTS.forEach(o => {
+  const b = document.createElement("button"); b.type = "button"; b.dataset.id = o.id; b.textContent = o.name;
+  b.addEventListener("click", () => drawC(o)); cTabs.appendChild(b);
+});
+function drawC(o) {
+  [...cTabs.children].forEach(b => b.setAttribute("aria-pressed", String(b.dataset.id === o.id)));
+  let html = "";
+  for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+    const c = o.cls(x, y);
+    html += `<div class="cc ${c}" title="chunk (${x},${y}): tiles x ${x * 32}–${x * 32 + 31}, y ${y * 32}–${y * 32 + 31}"></div>`;
+  }
+  document.getElementById("cmap").innerHTML = html;
+  document.getElementById("c-legend").innerHTML = o.legend.map(([c, t]) =>
+    `<span><i class="cc ${c}" style="aspect-ratio:auto"></i>${t}</span>`).join("");
+  document.getElementById("c-note").textContent = o.note;
+}
+drawC(C_OPTS[0]);
+
+// ---- Timer wheel ----
+const SLOTS = { 1200: ["miner 14"], 1201: [], 1202: ["miner 3", "turret 8"], 1203: [], 1204: ["smelter 2"], 1205: [], 1206: ["miner 9"], 1207: [], 1208: ["miner 1", "miner 22", "farm 4"], 1209: [] };
+document.getElementById("wheel").innerHTML = Object.entries(SLOTS).map(([t, es], i) =>
+  `<div class="slot ${i === 0 ? "now" : ""}"><b>${t}${i === 0 ? " ◂ now" : ""}</b>${es.map(e => `<span>${e}</span>`).join("")}</div>`).join("");
+</script>
+
+</html>

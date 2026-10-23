@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Saves, Content and IDs</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,750&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: single reading column; data lifecycle, then one interactive demo per decision, options, recommendation. Same look as the other simulation decision pages. */
+:root {
+  --bg: #f4f6f8; --surface: #ffffff; --fg: #172029; --muted: #5a6875; --line: #d8dee4;
+  --accent: #1d5fa8; --accent-soft: #e3edf8;
+  --ok: #2f8a57; --ok-soft: #dcefe3; --bad: #c2362f; --bad-soft: #f8dedc;
+  --warn: #b7791f; --warn-soft: #f6ead3; --idle: #e7ebef; --idle-fg: #8794a0;
+  --c1: #7a4fb5; --c1-soft: #ece4f6;
+  --f-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --f-body: "Instrument Sans", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1318; --surface: #161c23; --fg: #e3e8ed; --muted: #95a3b0; --line: #2a333d;
+    --accent: #7fb2ec; --accent-soft: #1b2c40;
+    --ok: #5cc48a; --ok-soft: #173326; --bad: #f07a72; --bad-soft: #3d1c1a;
+    --warn: #e2ad57; --warn-soft: #3a2c14; --idle: #222a33; --idle-fg: #6c7a87;
+    --c1: #b994ea; --c1-soft: #2b2140;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1318; --surface: #161c23; --fg: #e3e8ed; --muted: #95a3b0; --line: #2a333d;
+  --accent: #7fb2ec; --accent-soft: #1b2c40;
+  --ok: #5cc48a; --ok-soft: #173326; --bad: #f07a72; --bad-soft: #3d1c1a;
+  --warn: #e2ad57; --warn-soft: #3a2c14; --idle: #222a33; --idle-fg: #6c7a87;
+  --c1: #b994ea; --c1-soft: #2b2140;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); font: 16px/1.6 var(--f-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 72px;
+}
+main { max-width: 880px; margin: 0 auto; display: flex; flex-direction: column; gap: 56px; }
+h1, h2, h3 { font-family: var(--f-display); text-wrap: balance; line-height: 1.15; margin: 0; }
+h1 { font-size: clamp(2rem, 5vw, 2.8rem); font-weight: 750; letter-spacing: -0.01em; }
+h2 { font-size: 1.7rem; font-weight: 750; }
+h3 { font-size: 1.15rem; font-weight: 600; }
+p { margin: 0; max-width: 68ch; }
+code, .mono { font-family: var(--f-mono); font-size: 0.88em; }
+.eyebrow { font: 600 0.75rem/1 var(--f-mono); text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent); }
+.stack { display: flex; flex-direction: column; gap: 16px; }
+.lead { color: var(--muted); font-size: 1.08rem; }
+section.decision { display: flex; flex-direction: column; gap: 24px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+ul, ol { margin: 0; padding-left: 1.3em; display: flex; flex-direction: column; gap: 6px; max-width: 68ch; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 680px) { .two { grid-template-columns: 1fr; } }
+.small { font-size: 0.88rem; }
+.muted { color: var(--muted); }
+.tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+.tabs button {
+  font: 500 0.92rem var(--f-body); color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; cursor: pointer;
+}
+.tabs button:hover { border-color: var(--accent); }
+.tabs button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rec { font: 600 0.68rem var(--f-mono); letter-spacing: 0.06em; text-transform: uppercase; margin-left: 6px; opacity: 0.85; }
+.callout { border-left: 3px solid var(--accent); padding: 4px 0 4px 14px; }
+.options { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.opt { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.opt.recd { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.opt .tag { font: 600 0.68rem var(--f-mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); }
+.opt ul { font-size: 0.92rem; gap: 4px; }
+.pro::marker { content: "+  "; color: var(--ok); font-weight: 700; }
+.con::marker { content: "−  "; color: var(--bad); font-weight: 700; }
+.verdict { font-weight: 600; padding: 8px 12px; border-radius: 6px; }
+.verdict.ok { background: var(--ok-soft); color: var(--ok); }
+.verdict.bad { background: var(--bad-soft); color: var(--bad); }
+
+/* Lifecycle */
+.life { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+@media (max-width: 680px) { .life { grid-template-columns: 1fr 1fr; } }
+.lnode { border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: var(--bg); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.lnode b { font-size: 0.95rem; }
+.lnode small { color: var(--muted); font-size: 0.8rem; line-height: 1.35; }
+.lnode .k { font: 600 0.66rem var(--f-mono); text-transform: uppercase; letter-spacing: 0.08em; }
+.k.authored { color: var(--c1); } .k.runtime { color: var(--accent); }
+
+/* Code */
+.code { font-family: var(--f-mono); font-size: 0.8rem; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; overflow-x: auto; white-space: pre; line-height: 1.55; }
+.code .simk { color: var(--accent); font-weight: 600; }
+.code .viewk { color: var(--c1); font-weight: 600; }
+.code .chg { background: var(--warn-soft); color: var(--warn); border-radius: 3px; padding: 0 2px; font-weight: 600; }
+.hashes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.hash { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; }
+.hash span { font: 600 0.7rem var(--f-mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.hash b { font-family: var(--f-mono); font-size: 0.95rem; }
+.hash.changed { border-color: var(--warn); background: var(--warn-soft); }
+.hash.changed b { color: var(--warn); }
+
+/* ID tables */
+.idgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 680px) { .idgrid { grid-template-columns: 1fr; } }
+.idcol { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.idcol h4 { margin: 0 0 4px; font: 600 0.72rem var(--f-mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.idrow { display: flex; justify-content: space-between; gap: 8px; font-family: var(--f-mono); font-size: 0.8rem; padding: 4px 8px; border-radius: 4px; background: var(--bg); }
+.idrow.new { background: var(--ok-soft); color: var(--ok); }
+.idrow.wrong { background: var(--bad-soft); color: var(--bad); }
+.idrow.mapped { background: var(--accent-soft); color: var(--accent); }
+
+/* Save layout */
+.savebar { display: flex; height: 44px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); }
+.savebar div { display: flex; align-items: center; justify-content: center; font: 600 0.66rem var(--f-mono); color: var(--surface); overflow: hidden; white-space: nowrap; min-width: 0; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; min-width: 500px; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 600 0.72rem var(--f-mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+td.num { font-family: var(--f-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+td .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+.ask { border-top: 2px solid var(--fg); padding-top: 24px; display: flex; flex-direction: column; gap: 16px; }
+.ask ol { gap: 12px; }
+.ask li strong { font-family: var(--f-display); font-weight: 600; }
+</style>
+
+<main>
+  <header class="stack">
+    <span class="eyebrow">Data · open decisions</span>
+    <h1>Saves, content and IDs</h1>
+    <p class="lead">The game reads authored files (items, units, recipes, maps) and writes runtime state (saves, input logs). In lockstep every peer must load exactly the same rules, and a save is also what a joining player receives. This page covers how that data is split, named and stored.</p>
+  </header>
+
+  <section class="decision" aria-labelledby="life">
+    <div class="stack">
+      <span class="eyebrow">The shape of it</span>
+      <h2 id="life">Four kinds of data, one loading path</h2>
+      <p>The key simplification: <strong>a new game is just a save at tick 0</strong>. The host turns a scenario into a tick-0 save, and from then on, starting, loading, joining, resyncing and re-hosting all go through the same "load a save" code.</p>
+    </div>
+    <div class="panel">
+      <div class="life">
+        <div class="lnode"><span class="k authored">Authored</span><b>Content</b><small>Item, unit, building and recipe definitions. Ships with the game. Same on every peer.</small></div>
+        <div class="lnode"><span class="k authored">Authored</span><b>Scenario</b><small>A starting setup: world generator seed and settings, hand-placed buildings, waves. The successor to today's level <code>.ron</code> files.</small></div>
+        <div class="lnode"><span class="k runtime">Runtime</span><b>Save</b><small>Full simulation state at one tick. Used to load, join, resync and re-host.</small></div>
+        <div class="lnode"><span class="k runtime">Runtime</span><b>Input log</b><small>Turns since a save. Save plus log replays exactly. Used by demos, tests and desync debugging.</small></div>
+      </div>
+      <p class="small muted">A side effect: world generation only runs on the host, and everyone else receives the result as a save. So the generator itself doesn't need to be cross-platform deterministic for multiplayer. It's still worth making it deterministic for tests and replays.</p>
+    </div>
+  </section>
+
+  <!-- ===== Q1 CONTENT SPLIT ===== -->
+  <section class="decision" aria-labelledby="q1">
+    <div class="stack">
+      <span class="eyebrow">Decision 1</span>
+      <h2 id="q1">Separating gameplay data from visual data</h2>
+      <p>Today one scenario entry mixes rules (<code>capacity</code>, <code>speed</code>, <code>every</code>) with presentation (<code>skin</code>, <code>label</code>, <code>stock_layout</code>, <code>cargo_anchor</code>). In lockstep, peers must refuse to play together if their <em>rules</em> differ, so we hash the rules. If visuals are part of that hash, nudging a cargo anchor breaks multiplayer between two builds that play identically.</p>
+    </div>
+    <div class="panel">
+      <div class="tabs" role="group" aria-label="Edit" id="c-tabs"></div>
+      <div class="code" id="c-code"></div>
+      <div class="hashes">
+        <div class="hash" id="h-sim"><span>Rules hash (checked when joining)</span><b></b></div>
+        <div class="hash" id="h-view"><span>Visual hash (not checked)</span><b></b></div>
+      </div>
+      <div class="verdict" id="c-verdict"></div>
+    </div>
+    <div class="options">
+      <div class="opt recd">
+        <span class="tag">Option A · recommended</span>
+        <h3>One file per definition, with <code>sim</code> and <code>view</code> sections</h3>
+        <ul>
+          <li class="pro">Everything about the ox stays in one place for whoever edits it</li>
+          <li class="pro">The loader gives the simulation only the <code>sim</code> section, so the simulation crate can't depend on visual fields</li>
+          <li class="pro">Only <code>sim</code> sections feed the rules hash</li>
+          <li class="con">The schema has two halves to keep in mind</li>
+        </ul>
+      </div>
+      <div class="opt">
+        <span class="tag">Option B</span>
+        <h3>Separate files for rules and visuals</h3>
+        <ul>
+          <li class="pro">Strictest separation; could live in different folders or be owned by different people</li>
+          <li class="con">Two files to keep in sync per definition, joined by string ID</li>
+          <li class="con">Easy to add a unit and forget its visuals, or the reverse</li>
+        </ul>
+      </div>
+      <div class="opt">
+        <span class="tag">Option C</span>
+        <h3>Mixed, as today</h3>
+        <ul>
+          <li class="pro">No change to authoring</li>
+          <li class="con">Every visual tweak forces every player onto the exact same build</li>
+          <li class="con">The simulation has to carry fields it never uses</li>
+        </ul>
+      </div>
+    </div>
+    <p class="callout">Numbers in content are written as decimals (<code>speed: 1.5</code>) and converted to <code>Fx</code> once at load. Decimal parsing is exact on every platform, so every peer gets the same bits. Authors never see fixed-point.</p>
+  </section>
+
+  <!-- ===== Q2 IDS ===== -->
+  <section class="decision" aria-labelledby="q2">
+    <div class="stack">
+      <span class="eyebrow">Decision 2</span>
+      <h2 id="q2">Content IDs: names in files, numbers at runtime</h2>
+      <p>Files name things with strings like <code>"iron"</code>. The simulation should use small numbers, an index into the item table, so that stock is an array indexed by item instead of a <code>BTreeMap&lt;String, u32&gt;</code> as today. The question is what a save stores, because indices shift when content is added.</p>
+    </div>
+    <div class="panel">
+      <div class="tabs" role="group" aria-label="Save stores" id="i-tabs"></div>
+      <div class="idgrid" id="i-grid"></div>
+      <div class="verdict" id="i-verdict"></div>
+      <p class="small muted">Scenario: a save was written with build 1. Build 2 adds <code>"copper"</code>, which sorts before <code>"iron"</code>. Then the old save is loaded.</p>
+    </div>
+    <div class="options">
+      <div class="opt">
+        <span class="tag">Option A</span>
+        <h3>Raw indices only</h3>
+        <ul>
+          <li class="pro">Smallest saves, nothing to remap</li>
+          <li class="con">Any content change silently turns iron into copper in old saves</li>
+        </ul>
+      </div>
+      <div class="opt recd">
+        <span class="tag">Option B · recommended</span>
+        <h3>Indices plus the save's own name table</h3>
+        <ul>
+          <li class="pro">Runtime is dense indices everywhere</li>
+          <li class="pro">The save header lists index → name as it was when written. Loading remaps old indices to the current ones.</li>
+          <li class="pro">A name that no longer exists gives a clear error, for example "save uses item 'tin', which was removed"</li>
+          <li class="con">A small remap pass at load</li>
+        </ul>
+      </div>
+      <div class="opt">
+        <span class="tag">Option C</span>
+        <h3>Strings everywhere</h3>
+        <ul>
+          <li class="pro">Saves are self-describing</li>
+          <li class="con">String keys in hot simulation data, which is slow and large at 100k entities</li>
+        </ul>
+      </div>
+    </div>
+    <p class="callout">Entity IDs (generational, assigned in apply) and player IDs are separate from content IDs. Player IDs are stable across sessions: a local profile ID now, Steam or EOS ID later. They let a re-hosted save give each returning player their own avatar back.</p>
+  </section>
+
+  <!-- ===== Q3 SAVE FORMAT ===== -->
+  <section class="decision" aria-labelledby="q3">
+    <div class="stack">
+      <span class="eyebrow">Decision 3</span>
+      <h2 id="q3">What a save file looks like</h2>
+      <p>A save has three jobs. It must be <strong>byte-identical</strong> on every peer at the same tick, so peers can compare hashes and skip the download when joining. It must be <strong>small and fast</strong>, because joining players wait for it. And it must be <strong>readable</strong> when something goes wrong, because desync dumps are diffs of saves.</p>
+    </div>
+    <div class="panel">
+      <h3>A save for the MVP world at 100k entities (estimates)</h3>
+      <div class="savebar" id="savebar"></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Section</th><th>Contents</th><th>Raw</th><th>Compressed</th></tr></thead>
+          <tbody id="savetable"></tbody>
+        </table>
+      </div>
+      <p class="small muted">Rough numbers: terrain is 512 × 512 × 32 voxels at 1 byte each, and mostly uniform rock compresses very well. At 2–5 MB, a join over a typical home connection takes a few seconds, and over LAN it is instant.</p>
+    </div>
+    <div class="options">
+      <div class="opt recd">
+        <span class="tag">Option A · recommended</span>
+        <h3>Sectioned binary, plus a text view for debugging</h3>
+        <ul>
+          <li class="pro">A header (format version, game version, rules hash, name tables, tick) followed by one section per subsystem and per terrain chunk</li>
+          <li class="pro">Each section uses <code>serde</code> derives encoded with <code>postcard</code> and compressed with <code>zstd</code></li>
+          <li class="pro">The same serde types can print as RON text, which gives readable dumps and diffs for free</li>
+          <li class="pro">Sections line up with the per-chunk hashes, so a joiner can skip the chunks that already match</li>
+          <li class="con">The container format is ours to write, though it is small</li>
+        </ul>
+      </div>
+      <div class="opt">
+        <span class="tag">Option B</span>
+        <h3>One serde blob</h3>
+        <ul>
+          <li class="pro">One line to save, one line to load</li>
+          <li class="con">All or nothing: no partial transfer, no per-section versions</li>
+          <li class="con">A dump is one huge diff</li>
+        </ul>
+      </div>
+      <div class="opt">
+        <span class="tag">Option C</span>
+        <h3>Text saves (RON or JSON)</h3>
+        <ul>
+          <li class="pro">Human-readable everywhere</li>
+          <li class="con">Several times larger and slower; tens of MB for terrain</li>
+          <li class="con">Float-looking text for Fx values invites mistakes</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Q4 COMPAT ===== -->
+  <section class="decision" aria-labelledby="q4">
+    <div class="stack">
+      <span class="eyebrow">Decision 4</span>
+      <h2 id="q4">Old saves after the game changes</h2>
+      <p>While the architecture is young, the save layout will change every week. Keeping old saves loadable means writing a migration for every change. Multiplayer already requires the exact same build, so compatibility matters only for single-player or re-hosting old worlds.</p>
+    </div>
+    <div class="options">
+      <div class="opt recd">
+        <span class="tag">Option A · recommended</span>
+        <h3>Refuse mismatches for now</h3>
+        <ul>
+          <li class="pro">No migration code while things move fast</li>
+          <li class="pro">Saves state their format version, and loading an old one gives a clear message, not a crash or corrupt world</li>
+          <li class="pro">Name tables (decision 2) already handle the most common change: added content</li>
+          <li class="con">Long test worlds are lost when the format changes</li>
+        </ul>
+      </div>
+      <div class="opt">
+        <span class="tag">Option B</span>
+        <h3>Migrations from day 1</h3>
+        <ul>
+          <li class="pro">Worlds survive every update</li>
+          <li class="con">Every field rename needs a migration and a test</li>
+          <li class="con">Slows down exactly the phase where the design is still changing</li>
+        </ul>
+      </div>
+    </div>
+    <p class="callout">The usual turning point is when other people start keeping worlds they care about, such as an early-access release. Per-section versions make it possible to add migrations then, one section at a time.</p>
+  </section>
+
+  <section class="ask" aria-labelledby="ask">
+    <span class="eyebrow">Your call</span>
+    <h2 id="ask">The four questions</h2>
+    <ol>
+      <li><strong>Content split.</strong> One file per definition with <code>sim</code> and <code>view</code> sections (recommended), separate files, or mixed as today.</li>
+      <li><strong>Content IDs.</strong> Dense indices with a name table in each save (recommended), raw indices, or strings.</li>
+      <li><strong>Save format.</strong> Sectioned binary with a RON debug view (recommended), one serde blob, or text.</li>
+      <li><strong>Compatibility.</strong> Refuse mismatched saves for now (recommended), or migrations from day 1.</li>
+    </ol>
+    <p class="lead">Answer in the terminal.</p>
+  </section>
+</main>
+
+<script>
+function tabs(id, opts, onPick, initial) {
+  const host = document.getElementById(id);
+  const mark = sel => [...host.children].forEach(c => c.setAttribute("aria-pressed", String(c.dataset.id === sel)));
+  opts.forEach(o => {
+    const b = document.createElement("button"); b.type = "button"; b.dataset.id = o.id;
+    b.innerHTML = o.name + (o.rec ? `<span class="rec">rec.</span>` : "");
+    b.addEventListener("click", () => { mark(o.id); onPick(o); });
+    host.appendChild(b);
+  });
+  const first = opts.find(o => o.id === initial) || opts[0];
+  mark(first.id); onPick(first);
+}
+
+// ---- Content split demo ----
+const C_OPTS = [
+  { id: "none", name: "Original", speed: "1.1", scale: "0.8", anchor: "1.08" },
+  { id: "view", name: "Artist moves the cargo anchor", speed: "1.1", scale: "0.8", anchor: "1.15", chg: "anchor" },
+  { id: "sim", name: "Designer speeds up the ox", speed: "1.25", scale: "0.8", anchor: "1.08", chg: "speed" }
+];
+function fakeHash(s) { let h = 0x811c9dc5; for (const c of s) { h ^= c.charCodeAt(0); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16).padStart(8, "0"); }
+tabs("c-tabs", C_OPTS, o => {
+  const v = (k, val) => o.chg === k ? `<span class="chg">${val}</span>` : val;
+  document.getElementById("c-code").innerHTML =
+`// content/units/ox.ron
+(
+  id: "ox",
+  <span class="simk">sim</span>: (
+    speed: ${v("speed", o.speed)},
+    body: Size2,
+    capacity: 3,
+    transfer_seconds: 0.45,
+  ),
+  <span class="viewk">view</span>: (
+    label: "OX",
+    skin: "ox",
+    scale: ${o.scale},
+    cargo_anchor: (0.0, ${v("anchor", o.anchor)}, -0.15),
+  ),
+)`;
+  const sim = fakeHash(`ox|${o.speed}|Size2|3|0.45`), view = fakeHash(`OX|ox|${o.scale}|${o.anchor}`);
+  const s0 = fakeHash("ox|1.1|Size2|3|0.45"), v0 = fakeHash("OX|ox|0.8|1.08");
+  const hs = document.getElementById("h-sim"), hv = document.getElementById("h-view");
+  hs.querySelector("b").textContent = sim; hv.querySelector("b").textContent = view;
+  hs.classList.toggle("changed", sim !== s0); hv.classList.toggle("changed", view !== v0);
+  const vd = document.getElementById("c-verdict");
+  if (o.id === "none") { vd.className = "verdict ok"; vd.textContent = "Both builds identical. Anyone can join anyone."; }
+  else if (o.id === "view") { vd.className = "verdict ok"; vd.textContent = "Only the visual hash changed. A friend on the previous build can still join; their ox just carries its load slightly lower."; }
+  else { vd.className = "verdict bad"; vd.textContent = "The rules hash changed. Peers on the old build are refused with “game rules differ, update to join” instead of desyncing a minute later."; }
+}, "none");
+
+// ---- ID demo ----
+const OLD = ["arrow", "iron", "lumber"];
+const NEW = ["arrow", "copper", "iron", "lumber"];
+const SAVE = [["iron", 18], ["lumber", 24]];
+const I_OPTS = [
+  { id: "raw", name: "Raw indices only" },
+  { id: "table", name: "Indices + name table", rec: true },
+  { id: "str", name: "Strings everywhere" }
+];
+tabs("i-tabs", I_OPTS, o => {
+  const row = (l, r, c = "") => `<div class="idrow ${c}"><span>${l}</span><span>${r}</span></div>`;
+  const col1 = `<div class="idcol"><h4>Build 1 item table</h4>${OLD.map((n, i) => row(i, n)).join("")}</div>`;
+  const col2 = `<div class="idcol"><h4>Build 2 item table</h4>${NEW.map((n, i) => row(i, n, n === "copper" ? "new" : "")).join("")}</div>`;
+  let col3, verdict;
+  if (o.id === "raw") {
+    col3 = `<div class="idcol"><h4>Old save loaded in build 2</h4>${SAVE.map(([n, u]) => { const idx = OLD.indexOf(n); return row(`stock[${idx}] = ${u}`, `read as ${NEW[idx]}`, "wrong"); }).join("")}</div>`;
+    verdict = ["bad", "18 iron became 18 copper, and 24 lumber became 24 iron. No error, just a quietly wrong world."];
+  } else if (o.id === "table") {
+    col3 = `<div class="idcol"><h4>Old save loaded in build 2</h4>${row("save header", "0=arrow 1=iron 2=lumber")}${SAVE.map(([n, u]) => { const a = OLD.indexOf(n), b = NEW.indexOf(n); return row(`stock[${a}] = ${u}`, `${n} → index ${b}`, "mapped"); }).join("")}</div>`;
+    verdict = ["ok", "The header says old index 1 meant “iron”, so the loader remaps it to the new index 2. Correct world, dense indices at runtime."];
+  } else {
+    col3 = `<div class="idcol"><h4>Old save loaded in build 2</h4>${SAVE.map(([n, u]) => row(`"${n}": ${u}`, "ok", "mapped")).join("")}</div>`;
+    verdict = ["ok", "Correct, but every stock lookup in the simulation hashes or compares a string, as the current code does with BTreeMap<String, _>."];
+  }
+  document.getElementById("i-grid").innerHTML = col1 + col2 + col3;
+  const vd = document.getElementById("i-verdict"); vd.className = `verdict ${verdict[0]}`; vd.textContent = verdict[1];
+}, "table");
+
+// ---- Save layout ----
+const SECTIONS = [
+  ["Header", "Format and game version, rules hash, name tables, tick, RNG state", "4 KB", 0.004, "--fg"],
+  ["Players", "Stable player IDs, names, avatar and owned entities", "2 KB", 0.002, "--c1"],
+  ["Entities", "Per-type tables: 100k entities, ~64 bytes each", "6.4 MB", 2.0, "--accent"],
+  ["Pending", "Messages queued for next tick, timer wheel, sleep state", "0.3 MB", 0.1, "--warn"],
+  ["Terrain", "256 chunks × 32³ voxels, one section per chunk", "8.4 MB", 0.8, "--ok"],
+  ["Navigation", "Not saved: rebuilt from terrain on load", "0", 0, "--idle-fg"]
+];
+const total = SECTIONS.reduce((a, s) => a + s[3], 0);
+document.getElementById("savebar").innerHTML = SECTIONS.filter(s => s[3] > 0.05).map(s =>
+  `<div style="flex:${s[3]};background:var(${s[4]})" title="${s[0]}">${s[0]}</div>`).join("");
+document.getElementById("savetable").innerHTML = SECTIONS.map(s =>
+  `<tr><td><span class="sw" style="background:var(${s[4]})"></span>${s[0]}</td><td>${s[1]}</td><td class="num">${s[2]}</td><td class="num">${s[3] ? (s[3] >= 1 ? s[3].toFixed(1) + " MB" : s[3] >= 0.05 ? (s[3] * 1000).toFixed(0) + " KB" : "<10 KB") : "—"}</td></tr>`).join("") +
+  `<tr><td><b>Total</b></td><td></td><td class="num"><b>~15 MB</b></td><td class="num"><b>~${total.toFixed(1)} MB</b></td></tr>`;
+</script>
+
+</html>
