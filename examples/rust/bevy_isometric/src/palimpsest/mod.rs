@@ -128,7 +128,9 @@ fn sample_at(samples: &[Sample], time: f32) -> Option<Sample> {
 pub fn tick(world: &mut World) {
     let options = world.resource::<crate::control::Options>();
     let interactive = !options.simulation && options.frames_dir.is_none();
-    if interactive {
+    let library = world.resource::<crate::assets::SceneLibrary>();
+    let reserved_e = library.scenes[library.current].scene.scenario.is_some();
+    if interactive && !reserved_e {
         let keys = world.resource::<ButtonInput<KeyCode>>();
         let e = keys.just_pressed(KeyCode::KeyE);
         let q = keys.just_pressed(KeyCode::KeyQ);

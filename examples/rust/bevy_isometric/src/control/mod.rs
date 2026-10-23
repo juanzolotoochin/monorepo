@@ -557,6 +557,8 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
 }
 
 pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
+    let started = std::time::Instant::now();
+    let telemetry = crate::telemetry::snapshot(world);
     let settlement = crate::settlement::snapshot(world);
     let style = crate::style::snapshot(world);
     let memory = crate::palimpsest::snapshot(world);
@@ -600,7 +602,12 @@ pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
         .query::<&crate::piles::MineralUnit>()
         .iter(world)
         .count();
-    json!({"settlement":settlement,"version":VERSION,"tick":hub.tick,"scene":scene,"player":{"position":position.to_array(),"movement":movement,"cargo":cargo,"jetpack":jetpack},"terrain":terrain,"memory":memory,"style":style,"piles":piles,"totals":totals,"visible_mineral_units":visible_units,"airborne_units":airborne,"airborne":flying,"targets":targets,"obstacles":obstacles,"active_command":hub.active.as_ref().map(|a|&a.envelope.request)})
+    let result = json!({"telemetry":telemetry,"settlement":settlement,"version":VERSION,"tick":hub.tick,"scene":scene,"player":{"position":position.to_array(),"movement":movement,"cargo":cargo,"jetpack":jetpack},"terrain":terrain,"memory":memory,"style":style,"piles":piles,"totals":totals,"visible_mineral_units":visible_units,"airborne_units":airborne,"airborne":flying,"targets":targets,"obstacles":obstacles,"active_command":hub.active.as_ref().map(|a|&a.envelope.request)});
+    crate::telemetry::elapsed(world, "inspection_snapshot", started);
+    world
+        .resource_mut::<crate::telemetry::Telemetry>()
+        .count("snapshot_calls", 1);
+    result
 }
 
 pub fn begin(world: &mut World) {

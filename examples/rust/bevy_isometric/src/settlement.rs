@@ -1,5 +1,8 @@
 //! Bevy projection of the shared simulation. All stock and decisions belong to gameplay_core.
-use crate::{assets::SceneLibrary, rig::Rig};
+use crate::{
+    assets::SceneLibrary,
+    rig::{Rig, RigTemplate},
+};
 use bevy::prelude::*;
 use gameplay_core::{Endpoint, Inventory, Simulation};
 use std::collections::BTreeMap;
@@ -8,6 +11,8 @@ pub struct Settlement {
     current: Option<usize>,
     pub simulation: Option<Simulation>,
     views: BTreeMap<String, (String, Rig)>,
+    templates: BTreeMap<String, RigTemplate>,
+    pool: BTreeMap<String, Vec<Rig>>,
     labels: BTreeMap<String, Entity>,
     hud: Option<Entity>,
     blockers: Vec<Entity>,
@@ -46,6 +51,12 @@ pub fn setup(world: &mut World) {
     for (_, (_, rig)) in std::mem::take(&mut state.views) {
         world.despawn(rig.root);
     }
+    for (_, rigs) in std::mem::take(&mut state.pool) {
+        for rig in rigs {
+            world.despawn(rig.root);
+        }
+    }
+    state.templates.clear();
     for (_, e) in std::mem::take(&mut state.labels) {
         world.despawn(e);
     }
@@ -69,6 +80,16 @@ pub fn setup(world: &mut World) {
             radius: o.0.radius,
         })
         .collect();
+    if scenario.is_some() {
+        let pack = &world.resource::<SceneLibrary>().scenes[index];
+        let skins = pack.skins.clone();
+        let profile = pack.scene.style.clone().unwrap_or_default();
+        for skin in &skins {
+            state
+                .templates
+                .insert(skin.id.clone(), RigTemplate::upload(world, skin, &profile));
+        }
+    }
     state.simulation = scenario.map(|s| Simulation::new(s, obstacles).expect("validated scenario"));
     if let Some(sim) = &state.simulation {
         for (p, r) in sim
@@ -212,7 +233,26 @@ pub fn tick(world: &mut World) {
         sim.set_controlled_pose(&id, [pos.x, pos.z], heading)
             .unwrap();
     }
+    let simulation_start = std::time::Instant::now();
+    let tick_before = sim.tick;
     sim.advance(dt.min(0.25)).expect("bounded frame duration");
+    crate::telemetry::elapsed(world, "settlement_simulation", simulation_start);
+    world
+        .resource_mut::<crate::telemetry::Telemetry>()
+        .count("simulation_steps", sim.tick - tick_before);
+    world.resource_mut::<crate::telemetry::Telemetry>().gauge(
+        "simulation_steps_this_frame",
+        (sim.tick - tick_before) as f64,
+    );
+    if dt > 0.25 {
+        world
+            .resource_mut::<crate::telemetry::Telemetry>()
+            .count("simulation_clamped_frames", 1);
+        world
+            .resource_mut::<crate::telemetry::Telemetry>()
+            .gauge("last_clamped_seconds", dt - 0.25);
+    }
+    let projection_start = std::time::Instant::now();
     if world
         .resource::<crate::gameplay::Controls>()
         .attack
@@ -331,7 +371,7 @@ pub fn tick(world: &mut World) {
             .map(|(id, n)| format!("{n} {id}"))
             .collect::<Vec<_>>()
             .join(" · ");
-        world.get_mut::<Text>(state.labels[&d.id]).unwrap().0 = format!(
+        let label = format!(
             "{}\n{}",
             d.label,
             if counts.is_empty() {
@@ -340,6 +380,12 @@ pub fn tick(world: &mut World) {
                 counts
             }
         );
+        if world.get::<Text>(state.labels[&d.id]).unwrap().0 != label {
+            world.get_mut::<Text>(state.labels[&d.id]).unwrap().0 = label;
+            world
+                .resource_mut::<crate::telemetry::Telemetry>()
+                .count("label_updates", 1);
+        }
     }
     if let Some(e) = state.hud {
         let cargo = sim
@@ -356,9 +402,14 @@ pub fn tick(world: &mut World) {
             .unwrap_or_default();
         world.get_mut::<Text>(e).unwrap().0=format!("LUMBER + IRON > ARROWS > DEFENSE | LUMBER + IRON > CART > OX\n{} delivered / {} crafted / {} shots / {} kills / base {} [P] pause\nPACK {}/8  {}\n{}",sim.metrics.delivered,sim.metrics.cycles,sim.metrics.shots,sim.metrics.kills,sim.health,sim.agents.get("player").map_or(0,|a|a.cargo.total()),cargo,state.notice);
     }
-    let pack = &world.resource::<SceneLibrary>().scenes[world.resource::<SceneLibrary>().current];
-    let profile = pack.scene.style.clone().unwrap_or_default();
-    let skins = pack.skins.clone();
+    crate::telemetry::elapsed(world, "settlement_projection", projection_start);
+    let sync_start = std::time::Instant::now();
+    let mut spawned = 0;
+    let mut recycled = 0;
+    let mut writes = 0;
+    let mut skipped = 0;
+    let mut pooled = 0;
+    let mut destroyed = 0;
     let stale: Vec<_> = state
         .views
         .keys()
@@ -366,28 +417,60 @@ pub fn tick(world: &mut World) {
         .cloned()
         .collect();
     for key in stale {
-        let (_, rig) = state.views.remove(&key).unwrap();
-        world.despawn(rig.root);
+        let (skin, rig) = state.views.remove(&key).unwrap();
+        let pool = state.pool.entry(skin).or_default();
+        if pool.len() < 64 {
+            world.entity_mut(rig.root).insert(Visibility::Hidden);
+            pool.push(rig);
+            pooled += 1;
+        } else {
+            world.despawn(rig.root);
+            destroyed += 1;
+        }
     }
     for (key, view) in desired {
-        let skin = skins
-            .iter()
-            .find(|s| s.id == view.skin)
-            .expect("validated skin");
-        let (_, rig) = state
-            .views
-            .entry(key)
-            .or_insert_with(|| (view.skin.clone(), Rig::spawn(world, skin, &profile)));
-        rig.pose(
+        let template = &state.templates[&view.skin];
+        if !state.views.contains_key(&key) {
+            let rig = if let Some(rig) = state.pool.get_mut(&view.skin).and_then(|p| p.pop()) {
+                world.entity_mut(rig.root).insert(Visibility::Inherited);
+                recycled += 1;
+                rig
+            } else {
+                spawned += 1;
+                template.spawn(world)
+            };
+            state.views.insert(key.clone(), (view.skin.clone(), rig));
+        }
+        let (_, rig) = &state.views[&key];
+        let (changed, unchanged) = rig.pose(
             world,
             view.position,
             view.heading,
-            skin.scale * view.scale,
+            template.scale * view.scale,
             view.travel,
             view.activity,
             view.aim,
         );
+        writes += changed;
+        skipped += unchanged;
     }
+    crate::telemetry::elapsed(world, "settlement_sync", sync_start);
+    let mut telemetry = world.resource_mut::<crate::telemetry::Telemetry>();
+    for (name, value) in [
+        ("rigs_spawned", spawned),
+        ("rigs_reused", recycled),
+        ("rigs_pooled", pooled),
+        ("rigs_destroyed", destroyed),
+        ("transform_writes", writes),
+        ("transform_writes_avoided", skipped),
+    ] {
+        telemetry.count(name, value);
+    }
+    telemetry.gauge("active_rigs", state.views.len() as f64);
+    telemetry.gauge(
+        "pooled_rigs",
+        state.pool.values().map(|p| p.len()).sum::<usize>() as f64,
+    );
     world.insert_resource(state);
 }
 pub fn snapshot(world: &World) -> serde_json::Value {

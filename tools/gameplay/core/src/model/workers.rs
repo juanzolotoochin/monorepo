@@ -17,8 +17,14 @@ impl Simulation {
             def.radius
         }
     }
-    pub(super) fn plan(&self, from: Point, to: Point, radius: f32) -> Vec<Point> {
-        navigation::path(from, to, &self.obstacles, radius)
+    pub(super) fn plan(&mut self, from: Point, to: Point, radius: f32) -> Vec<Point> {
+        self.metrics.navigation_requests += 1;
+        let path = navigation::path(from, to, &self.obstacles, radius);
+        self.metrics.navigation_waypoints += path.len() as u64;
+        if path.is_empty() {
+            self.metrics.navigation_failures += 1;
+        }
+        path
     }
     pub(super) fn assign(&mut self, def: &Agent, a: &mut AgentState) {
         if self.tick < a.retries {
@@ -64,6 +70,7 @@ impl Simulation {
             if route.is_empty() || self.plan(from, to, radius).is_empty() {
                 continue;
             }
+            self.metrics.assignments += 1;
             a.assignment = Some(Assignment {
                 link: index,
                 units,
@@ -74,6 +81,7 @@ impl Simulation {
             a.route = route;
             return;
         }
+        self.metrics.assignment_retries += 1;
         a.retries = self.tick + 15;
     }
     pub(super) fn launch(
@@ -141,6 +149,9 @@ impl Simulation {
                     };
                     let goal = self.depot_position(&dock);
                     let busy = docks.get(&dock).is_some_and(|id| id != &a.id);
+                    if busy && navigation::distance(a.position, goal) < 0.75 {
+                        self.metrics.dock_wait_ticks += 1;
+                    }
                     if !(busy && navigation::distance(a.position, goal) < 0.75) {
                         let speed = def.speed
                             * if a.equipment.is_some() {
@@ -153,6 +164,11 @@ impl Simulation {
                         let delta = [a.position[0] - before[0], a.position[1] - before[1]];
                         let distance = navigation::distance(a.position, before);
                         a.travelled += distance;
+                        if a.cargo.total() > 0 {
+                            self.metrics.loaded_travel_meters += distance as f64;
+                        } else {
+                            self.metrics.empty_travel_meters += distance as f64;
+                        }
                         if distance > 0.00001 {
                             a.heading = delta[0].atan2(delta[1]);
                         }

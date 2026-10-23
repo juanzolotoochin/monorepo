@@ -15,6 +15,7 @@ mod scene;
 mod settlement;
 mod sound;
 mod style;
+mod telemetry;
 
 use bevy::{app::AppExit, prelude::*};
 use gameplay::*;
@@ -72,6 +73,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .init_resource::<assets::ModelCache>()
         .init_resource::<Controls>()
         .init_resource::<style::ActiveStyle>()
+        .init_resource::<telemetry::Telemetry>()
         .init_resource::<settlement::Settlement>()
         .init_resource::<palimpsest::Memory>()
         .init_resource::<jetpack::Flight>()
@@ -121,6 +123,13 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
             }),
         );
     }
+    app.add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default());
+    if !simulation {
+        app.add_plugins((
+            bevy::render::diagnostic::RenderDiagnosticsPlugin,
+            bevy::render::diagnostic::MeshAllocatorDiagnosticPlugin,
+        ));
+    }
     if deterministic {
         app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
             1.0 / f64::from(fps),
@@ -134,6 +143,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         Update,
         (
             (
+                telemetry::begin,
                 assets::switch_scene,
                 jetpack::scene_changed,
                 palimpsest::setup,
@@ -159,7 +169,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
             effects::camera_feedback.run_if(control::rendered),
             scene::update_hud.run_if(control::rendered),
             preview::capture.run_if(control::interactive),
-            control::end,
+            (telemetry::end, control::end).chain(),
             control::capture_frame.run_if(control::rendered),
         )
             .chain(),

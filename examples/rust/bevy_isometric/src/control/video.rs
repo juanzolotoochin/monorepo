@@ -52,6 +52,7 @@ pub fn capture_frame(
     mut video: ResMut<Video>,
     mut hub: ResMut<Hub>,
     sound: Res<crate::sound::Sound>,
+    mut telemetry: ResMut<crate::telemetry::Telemetry>,
     mut exit: MessageWriter<AppExit>,
 ) {
     let Some(target) = video.target.clone() else {
@@ -81,12 +82,22 @@ pub fn capture_frame(
     let frame = video.submitted;
     let path = std::path::Path::new(hub.options.frames_dir.as_ref().unwrap())
         .join(format!("frame_{frame:06}.png"));
+    let trace_start = std::time::Instant::now();
     if let Some(trace) = &mut video.trace {
         writeln!(trace,"{}",json!({"frame":frame,"time":frame as f64/f64::from(hub.options.fps()),"state":hub.latest})).expect("write frame state");
     }
+    telemetry.sample("trace_write", trace_start.elapsed().as_secs_f64() * 1000.);
+    telemetry.gauge(
+        "capture_pending",
+        (video.submitted - video.completed) as f64,
+    );
+    telemetry.count("capture_submitted", 1);
     video.submitted += 1;
     commands.spawn(Screenshot::image(target)).observe(
-        move |capture: On<ScreenshotCaptured>, mut video: ResMut<Video>| {
+        move |capture: On<ScreenshotCaptured>,
+              mut video: ResMut<Video>,
+              mut telemetry: ResMut<crate::telemetry::Telemetry>| {
+            let start = std::time::Instant::now();
             capture
                 .image
                 .clone()
@@ -96,6 +107,8 @@ pub fn capture_frame(
                 .save(&path)
                 .expect("write video frame");
             video.completed += 1;
+            telemetry.sample("capture_png_write", start.elapsed().as_secs_f64() * 1000.);
+            telemetry.count("capture_completed", 1);
         },
     );
 }

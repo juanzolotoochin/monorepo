@@ -54,6 +54,17 @@ pub struct Accounting {
 }
 #[derive(Clone, Debug, Serialize, Default)]
 pub struct Metrics {
+    pub fixed_steps: u64,
+    pub navigation_requests: u64,
+    pub navigation_failures: u64,
+    pub navigation_waypoints: u64,
+    pub assignments: u64,
+    pub assignment_retries: u64,
+    pub dock_wait_ticks: u64,
+    pub empty_travel_meters: f64,
+    pub loaded_travel_meters: f64,
+    pub agent_phase_ticks: BTreeMap<String, BTreeMap<String, u64>>,
+    pub producer_state_ticks: BTreeMap<String, BTreeMap<String, u64>>,
     pub picked: u64,
     pub delivered: u64,
     pub equipped: u64,
@@ -496,6 +507,43 @@ impl Simulation {
     }
     fn step(&mut self) {
         self.tick += 1;
+        self.metrics.fixed_steps += 1;
+        for a in self.agents.values() {
+            *self
+                .metrics
+                .agent_phase_ticks
+                .entry(a.id.clone())
+                .or_default()
+                .entry(format!("{:?}", a.phase))
+                .or_default() += 1;
+        }
+        for p in &self.config.producers {
+            let state = &self.producers[&p.id];
+            let reason = if state.remaining > 0 {
+                "processing"
+            } else if !state.enabled {
+                "disabled"
+            } else if p.max_cycles.is_some_and(|limit| state.cycles >= limit) {
+                "commission_complete"
+            } else if self.free(&p.output) < p.products.iter().map(|s| s.units).sum::<u32>() {
+                "output_blocked"
+            } else if p
+                .ingredients
+                .iter()
+                .any(|s| self.available(&p.input, &s.item) < s.units)
+            {
+                "input_starved"
+            } else {
+                "ready"
+            };
+            *self
+                .metrics
+                .producer_state_ticks
+                .entry(p.id.clone())
+                .or_default()
+                .entry(reason.into())
+                .or_default() += 1;
+        }
         self.arrivals();
         self.sources();
         self.production();
