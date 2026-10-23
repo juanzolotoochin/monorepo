@@ -143,7 +143,9 @@ impl Script {
         if self.version != VERSION {
             return Err("Unsupported demo script version".into());
         }
-        scene_index(&self.scene)?;
+        if self.scene.is_empty() || !self.scene.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') {
+            return Err("Invalid scene id".into());
+        }
         if !(10..=60).contains(&self.fps)
             || !(640..=1920).contains(&self.width)
             || !(480..=1080).contains(&self.height)
@@ -158,19 +160,6 @@ impl Script {
             return Err("Invalid demo dimensions, FPS, frame limit or step count".into());
         }
         Ok(())
-    }
-}
-pub fn scene_index(name: &str) -> Result<usize, String> {
-    match name {
-        "mining-deck" => Ok(0),
-        "boulder-lab" => Ok(1),
-        "pile-lab" => Ok(2),
-        "jetpack-lab" => Ok(3),
-        "surprise-lab" => Ok(4),
-        "atlantis" => Ok(5),
-        "forest-outpost" => Ok(6),
-        "combat-arena" => Ok(7),
-        _ => Err(format!("Unknown scene {name}")),
     }
 }
 pub fn point(position: [f32; 2]) -> Result<bevy::prelude::Vec3, String> {

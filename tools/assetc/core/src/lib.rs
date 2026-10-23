@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 pub use style::*;
 
-pub const VERSION: u32 = 8;
+pub const VERSION: u32 = 9;
 pub type Result<T> = std::result::Result<T, String>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -245,7 +245,10 @@ pub struct Terrain {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename = "Scene", deny_unknown_fields)]
 pub struct Scene {
+    pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub features: Vec<SceneFeature>,
     pub spawn: [f32; 3],
     #[serde(default = "industrial")]
     pub industrial: bool,
@@ -260,6 +263,11 @@ pub struct Scene {
     pub architecture: Vec<VoxelShape>,
     #[serde(default)]
     pub scenario: Option<Scenario>,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SceneFeature {
+    MemoryTrial,
+    FlightHud,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScenePack {
@@ -333,7 +341,10 @@ impl ScenePack {
         if self.version != VERSION {
             return Err(format!("unsupported scene version {}", self.version));
         }
-        if self.scene.name.trim().is_empty()
+        if self.scene.id.is_empty()
+            || !self.scene.id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            || self.scene.name.trim().is_empty()
+            || self.scene.features.iter().collect::<std::collections::BTreeSet<_>>().len() != self.scene.features.len()
             || self.scene.instances.len() > 512
             || !self.scene.spawn.iter().all(|v| v.is_finite())
         {
@@ -666,7 +677,9 @@ mod tests {
         let mut pack = ScenePack {
             version: VERSION,
             scene: Scene {
+                id: "test".into(),
                 name: "test".into(),
+                features: vec![],
                 spawn: [0.0; 3],
                 industrial: true,
                 piles: None,
@@ -707,7 +720,9 @@ mod tests {
             actor: vec![],
             skins: vec![],
             scene: Scene {
+                id: "terrain".into(),
                 name: "terrain".into(),
+                features: vec![],
                 spawn: [0.0; 3],
                 industrial: false,
                 instances: vec![],

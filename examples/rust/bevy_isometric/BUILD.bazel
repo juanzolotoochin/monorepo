@@ -168,3 +168,14 @@ game_simulation_test(
     script = "demos/combat_weapons.json",
     tags = ["linux"],
 )
+
+py_test(
+    name = "combat_replay_test",
+    size = "medium",
+    srcs = ["tests/replay_test.py"],
+    main = "tests/replay_test.py",
+    args = ["$(rootpath :demo)", "$(rootpath demos/combat_weapons.json)"],
+    data = [":demo", "demos/combat_weapons.json"],
+    legacy_create_init = 0,
+    tags = ["linux"],
+)

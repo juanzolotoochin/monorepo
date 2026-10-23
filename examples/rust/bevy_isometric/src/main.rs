@@ -27,24 +27,17 @@ fn main() {
         std::process::exit(2)
     });
     let mut scenes = assets::SceneLibrary::new();
-    if let Some(index) = options.initial_scene() {
+    if let Some(index) = options.initial_scene(&scenes).unwrap_or_else(|error| {
+        eprintln!("{error}");
+        std::process::exit(2)
+    }) {
         scenes.initial = index;
     }
     if let Some(pair) = args.windows(2).find(|pair| pair[0] == "--scene") {
-        scenes.initial = match pair[1].as_str() {
-            "mining-deck" => 0,
-            "boulder-lab" => 1,
-            "pile-lab" => 2,
-            "jetpack-lab" => 3,
-            "surprise-lab" => 4,
-            "atlantis" => 5,
-            "forest-outpost" => 6,
-            "combat-arena" => 7,
-            name => {
-                eprintln!("Unknown scene {name}");
-                std::process::exit(2)
-            }
-        };
+        scenes.initial = scenes.index(&pair[1]).unwrap_or_else(|error| {
+            eprintln!("{error}");
+            std::process::exit(2)
+        });
     }
     let hub = control::Hub::new(options.clone()).unwrap_or_else(|e| {
         eprintln!("{e}");

@@ -1,4 +1,4 @@
-Scene(name: "BRASSWOOD / THE LIVING FRONTIER", spawn: (1.0, 0.0, -1.0), industrial: false, instances: [
+Scene(id: "forest-outpost", features: [], name: "BRASSWOOD / THE LIVING FRONTIER", spawn: (1.0, 0.0, -1.0), industrial: false, instances: [
 
 ], architecture: [
 (kind: Box, position: (-16.0, -0.075, -16.0), size: (32.0, 0.15, 32.0), material: "grass", repeat: (2, 1, 2), spacing: (32.0, 0.0, 32.0)),

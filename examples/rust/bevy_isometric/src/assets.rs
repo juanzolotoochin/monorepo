@@ -10,7 +10,7 @@ use bevy::{
 };
 use std::{collections::HashMap, sync::Arc};
 use voxel_assets::{
-    content_key, generate_boulder, Collision, Geometry, Material, MeshData, Model, ScenePack,
+    content_key, generate_boulder, Collision, Geometry, Material, MeshData, Model, SceneFeature, ScenePack,
 };
 
 #[derive(Component)]
@@ -28,8 +28,7 @@ pub struct SceneLibrary {
 }
 impl SceneLibrary {
     pub fn new() -> Self {
-        Self {
-            scenes: vec![
+        let scenes = vec![
                 ScenePack::decode(mining_deck::PACK_BYTES)
                     .expect("validated mining deck asset pack"),
                 ScenePack::decode(boulder_lab::PACK_BYTES)
@@ -42,11 +41,24 @@ impl SceneLibrary {
                 ScenePack::decode(atlantis::PACK_BYTES).expect("validated Atlantis asset pack"),
                 ScenePack::decode(forest_outpost::PACK_BYTES).expect("validated forest asset pack"),
                 ScenePack::decode(combat_arena::PACK_BYTES).expect("validated combat asset pack"),
-            ],
+            ];
+        let mut ids = std::collections::HashSet::new();
+        for pack in &scenes {
+            assert!(ids.insert(pack.scene.id.as_str()), "duplicate scene id {}", pack.scene.id);
+        }
+        Self {
+            scenes,
             current: usize::MAX,
             initial: 0,
             requested: None,
         }
+    }
+    pub fn index(&self, id: &str) -> Result<usize, String> {
+        self.scenes.iter().position(|pack| pack.scene.id == id)
+            .ok_or_else(|| format!("Unknown scene {id}"))
+    }
+    pub fn has_feature(&self, feature: SceneFeature) -> bool {
+        self.scenes.get(self.current).is_some_and(|pack| pack.scene.features.contains(&feature))
     }
     pub fn extent(&self) -> f32 {
         self.scenes
@@ -376,6 +388,11 @@ mod tests {
         let library = SceneLibrary::new();
         let mining = &library.scenes[0];
         let lab = &library.scenes[1];
+        assert_eq!(library.index("mining-deck"), Ok(0));
+        assert_eq!(library.index("combat-arena"), Ok(7));
+        assert!(library.index("missing").is_err());
+        assert!(library.scenes[4].scene.features.contains(&SceneFeature::MemoryTrial));
+        assert!(library.scenes[3].scene.features.contains(&SceneFeature::FlightHud));
         assert_ne!(mining.scene.name, lab.scene.name);
         assert!(mining
             .prefabs

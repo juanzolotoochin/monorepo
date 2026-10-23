@@ -882,7 +882,7 @@ pub fn tick(world: &mut World) {
     world.insert_resource(state);
 }
 pub fn snapshot(world: &World) -> serde_json::Value {
-    world.resource::<Settlement>().simulation.as_ref().map_or(serde_json::Value::Null,|s|serde_json::json!({"simulation":s,"balances":s.balances(),"scenario":s.config(),"seconds":s.seconds()}))
+    world.resource::<Settlement>().simulation.as_ref().map_or(serde_json::Value::Null,|s|serde_json::json!({"simulation":s,"replay_fingerprint":s.replay_fingerprint(),"balances":s.balances(),"scenario":s.config(),"seconds":s.seconds()}))
 }
 /// Pin the same hover card for deterministic capture or remote inspection.
 /// Passing None restores mouse-driven hover.

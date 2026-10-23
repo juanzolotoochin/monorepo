@@ -1,4 +1,4 @@
-Scene(name: "BRASSWOOD / THE RED CLEARING", spawn: (0.0, 0.0, -1.5), industrial: false, instances: [], architecture: [
+Scene(id: "combat-arena", features: [], name: "BRASSWOOD / THE RED CLEARING", spawn: (0.0, 0.0, -1.5), industrial: false, instances: [], architecture: [
 (kind: Box, position: (0.00, -0.09, 0.00), size: (18.00, 0.18, 18.00), material: "grass"),
 (kind: Ellipsoid, position: (-4.00, -0.08, -5.00), size: (1.50, 0.04, 0.90), material: "dirt"),
 (kind: Ellipsoid, position: (-2.00, -0.08, 2.00), size: (1.50, 0.04, 0.90), material: "dirt"),

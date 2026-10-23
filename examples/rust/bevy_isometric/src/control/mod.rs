@@ -12,7 +12,7 @@ use crate::{
     piles::{begin_job_with_options, Action, PileLab},
 };
 use bevy::{app::AppExit, prelude::*};
-use protocol::{point, scene_index, Command, Request, Script, VERSION};
+use protocol::{point, Command, Request, Script, VERSION};
 use serde_json::{json, Value};
 use std::{
     collections::VecDeque,
@@ -73,10 +73,8 @@ impl Options {
     pub fn fps(&self) -> u32 {
         self.script.as_ref().map_or(60, |s| s.fps)
     }
-    pub fn initial_scene(&self) -> Option<usize> {
-        self.script
-            .as_ref()
-            .map(|s| scene_index(&s.scene).expect("validated scene"))
+    pub fn initial_scene(&self, scenes: &SceneLibrary) -> Result<Option<usize>, String> {
+        self.script.as_ref().map(|s| scenes.index(&s.scene)).transpose()
     }
 }
 pub fn rendered(options: Res<Options>) -> bool {
@@ -340,7 +338,7 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             Ok(Pending::Instant)
         }
         Command::Scene { scene } => {
-            let index = scene_index(scene)?;
+            let index = world.resource::<SceneLibrary>().index(scene)?;
             world.resource_mut::<SceneLibrary>().requested = Some(index);
             Ok(Pending::Scene(index))
         }
@@ -712,7 +710,17 @@ pub fn end(world: &mut World) {
             hub.active = Some(active);
         }
     }
-    hub.latest = snapshot(world, &hub);
+    // Full inspection includes serialized inventories, world geometry, and
+    // telemetry. Build it only for a trace, an inspection reply, or a report.
+    let finishing = hub.failed.is_some()
+        || hub.quit.is_some_and(|tick| hub.tick >= tick)
+        || (hub.options.script.is_some()
+            && hub.tick > hub.warmup
+            && hub.queue.is_empty()
+            && hub.active.is_none());
+    if hub.trace.is_some() || !hub.inspect.is_empty() || finishing {
+        hub.latest = snapshot(world, &hub);
+    }
     if hub.trace.is_some() {
         use std::io::Write;
         let record = json!({"frame":hub.tick,"time":hub.tick as f64 / f64::from(hub.options.fps()),"state":hub.latest});
