@@ -59,6 +59,9 @@ def _scene_impl(ctx):
     if ctx.file.style:
         inputs.append(ctx.file.style)
         args.add("--style", ctx.file.style)
+    if ctx.file.scenario:
+        inputs.append(ctx.file.scenario)
+        args.add("--scenario", ctx.file.scenario)
     for dep in ctx.attr.prefabs:
         prefab = dep[VoxelPrefabInfo]
         if prefab.asset_id in seen:
@@ -83,6 +86,7 @@ _scene_pack = rule(
     implementation = _scene_impl,
     attrs = {
         "style": attr.label(allow_single_file = [".ron"]),
+        "scenario": attr.label(allow_single_file = [".ron"]),
         "layout": attr.label(allow_single_file = [".ron"], mandatory = True),
         "prefabs": attr.label_list(providers = [VoxelPrefabInfo], mandatory = True),
         "_compiler": attr.label(default = "//tools/assetc:assetc", executable = True, cfg = "exec"),
@@ -94,10 +98,10 @@ def boulder_prefab(name, src, palette = None, runtime = False, **kwargs):
     """Convenience preset; runtime mode stores the recipe instead of baking it."""
     voxel_prefab(name = name, src = src, palette = palette, mode = "runtime" if runtime else "baked", **kwargs)
 
-def scene_assets(name, layout, prefabs, style = None, **kwargs):
+def scene_assets(name, layout, prefabs, style = None, scenario = None, **kwargs):
     """Validate a scene and expose its embedded bytes as a Rust library target."""
     pack = name + "_pack"
-    _scene_pack(name = pack, layout = layout, prefabs = prefabs, style = style)
+    _scene_pack(name = pack, layout = layout, prefabs = prefabs, style = style, scenario = scenario)
     rust_library(
         name = name,
         srcs = [":" + pack + ".rs"],

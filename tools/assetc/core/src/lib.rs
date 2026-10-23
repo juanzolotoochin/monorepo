@@ -3,12 +3,13 @@ mod boulder;
 mod piles;
 mod style;
 pub use boulder::generate_boulder;
+pub use gameplay_core::Scenario;
 pub use piles::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 pub use style::*;
 
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 pub type Result<T> = std::result::Result<T, String>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -257,6 +258,8 @@ pub struct Scene {
     pub style: Option<StyleProfile>,
     #[serde(default)]
     pub architecture: Vec<VoxelShape>,
+    #[serde(default)]
+    pub scenario: Option<Scenario>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScenePack {
@@ -267,6 +270,8 @@ pub struct ScenePack {
     pub environment: Option<EnvironmentMesh>,
     #[serde(default)]
     pub actor: Vec<ActorMesh>,
+    #[serde(default)]
+    pub skins: Vec<SkinMesh>,
 }
 
 impl Prefab {
@@ -397,6 +402,30 @@ impl ScenePack {
                 })
             {
                 return Err("invalid compiled actor mesh".into());
+            }
+        }
+        if let Some(scenario) = &self.scene.scenario {
+            scenario.validate()?;
+            let ids: std::collections::BTreeSet<_> =
+                self.skins.iter().map(|s| s.id.as_str()).collect();
+            for id in scenario
+                .items
+                .iter()
+                .map(|s| s.skin.as_str())
+                .chain(scenario.agents.iter().map(|s| s.skin.as_str()))
+                .chain(
+                    scenario
+                        .agents
+                        .iter()
+                        .filter_map(|a| a.equipment.as_ref().map(|e| e.skin.as_str())),
+                )
+                .chain(scenario.producers.iter().map(|s| s.skin.as_str()))
+                .chain(scenario.defenders.iter().map(|s| s.skin.as_str()))
+                .chain(scenario.waves.iter().map(|s| s.skin.as_str()))
+            {
+                if !ids.contains(id) {
+                    return Err(format!("scenario references unknown skin {id}"));
+                }
             }
         }
         if let Some(style) = &self.scene.style {
@@ -569,6 +598,7 @@ mod tests {
                 terrain: None,
                 style: None,
                 architecture: vec![],
+                scenario: None,
                 instances: vec![Instance {
                     prefab: "rock".into(),
                     position: [0.0; 3],
@@ -581,6 +611,7 @@ mod tests {
             prefabs: vec![prefab],
             environment: None,
             actor: vec![],
+            skins: vec![],
         };
         assert!(pack.validate().is_ok());
         pack.version = 99;
@@ -599,6 +630,7 @@ mod tests {
             prefabs: vec![],
             environment: None,
             actor: vec![],
+            skins: vec![],
             scene: Scene {
                 name: "terrain".into(),
                 spawn: [0.0; 3],
@@ -607,6 +639,7 @@ mod tests {
                 piles: None,
                 style: None,
                 architecture: vec![],
+                scenario: None,
                 terrain: Some(Terrain {
                     platforms: vec![TerrainPlatform {
                         min: [-1.0; 2],

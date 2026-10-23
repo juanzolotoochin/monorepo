@@ -198,6 +198,7 @@ pub fn apply(world: &mut World) {
         .query_filtered::<Entity, With<crate::gameplay::Player>>()
         .single(world)
         .unwrap();
+    world.get_mut::<Transform>(player).unwrap().scale = Vec3::splat(profile.actor_scale);
     for (parent,mut visibility,exhaust) in world.query_filtered::<(&ChildOf,&mut Visibility,Option<&crate::jetpack::Exhaust>),With<Mesh3d>>().iter_mut(world) {
         let hide=parts.get(&parent.parent()).is_some_and(|part|actor.iter().any(|a|a.part==*part)) || (parent.parent()==player && exhaust.is_none() && actor.iter().any(|a|a.part==ActorPart::Body));
         *visibility=if hide {Visibility::Hidden} else {Visibility::Inherited};
@@ -320,7 +321,7 @@ fn spawn_light(
         world.entity_mut(e).insert(Environment);
     }
 }
-fn upload(
+pub(crate) fn upload(
     world: &mut World,
     key: String,
     meshes: &[voxel_assets::MeshData],

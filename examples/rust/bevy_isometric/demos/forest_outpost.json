@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "scene": "forest-outpost",
+  "fps": 30,
+  "width": 1440,
+  "height": 960,
+  "max_frames": 2400,
+  "steps": [
+    {
+      "op": "wait",
+      "frames": 1800
+    },
+    {
+      "op": "assert_settlement",
+      "delivered": 20,
+      "cycles": 5,
+      "equipped": 1,
+      "kills": 4
+    },
+    {
+      "op": "inspect"
+    }
+  ]
+}

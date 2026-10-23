@@ -212,6 +212,51 @@ fn queue_haul(
 fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, String> {
     match command {
         Command::Inspect => Ok(Pending::Instant),
+        Command::SettlementPause { paused } => {
+            crate::settlement::model(world)?.paused = *paused;
+            Ok(Pending::Instant)
+        }
+        Command::SettlementRate { rate } => {
+            crate::settlement::model(world)?.set_rate(*rate)?;
+            Ok(Pending::Instant)
+        }
+        Command::SettlementLink { id, enabled } => {
+            crate::settlement::model(world)?.set_link(id, *enabled)?;
+            Ok(Pending::Instant)
+        }
+        Command::SettlementMachine { id, enabled } => {
+            crate::settlement::model(world)?.set_machine(id, *enabled)?;
+            Ok(Pending::Instant)
+        }
+        Command::SettlementDefender { id, enabled } => {
+            crate::settlement::model(world)?.set_defender(id, *enabled)?;
+            Ok(Pending::Instant)
+        }
+        Command::SettlementStock { depot, item, units } => {
+            crate::settlement::model(world)?.add_stock(depot, item, *units)?;
+            Ok(Pending::Instant)
+        }
+        Command::AssertSettlement {
+            delivered,
+            cycles,
+            equipped,
+            kills,
+        } => {
+            let mut state = world.resource_mut::<crate::settlement::Settlement>();
+            let sim = state.simulation.as_mut().ok_or("No settlement loaded")?;
+            sim.validate_state()?;
+            if sim.metrics.delivered < *delivered
+                || sim.metrics.cycles < *cycles
+                || sim.metrics.equipped < *equipped
+                || sim.metrics.kills < *kills
+            {
+                return Err(format!(
+                    "Supply chain milestones not reached: {:?}",
+                    sim.metrics
+                ));
+            }
+            Ok(Pending::Instant)
+        }
         Command::MemoryRecord => {
             crate::palimpsest::record(world)?;
             Ok(Pending::Instant)
@@ -473,6 +518,7 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
 }
 
 pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
+    let settlement = crate::settlement::snapshot(world);
     let style = crate::style::snapshot(world);
     let memory = crate::palimpsest::snapshot(world);
     let position = player_position(world);
@@ -515,7 +561,7 @@ pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
         .query::<&crate::piles::MineralUnit>()
         .iter(world)
         .count();
-    json!({"version":VERSION,"tick":hub.tick,"scene":scene,"player":{"position":position.to_array(),"movement":movement,"cargo":cargo,"jetpack":jetpack},"terrain":terrain,"memory":memory,"style":style,"piles":piles,"totals":totals,"visible_mineral_units":visible_units,"airborne_units":airborne,"airborne":flying,"targets":targets,"obstacles":obstacles,"active_command":hub.active.as_ref().map(|a|&a.envelope.request)})
+    json!({"settlement":settlement,"version":VERSION,"tick":hub.tick,"scene":scene,"player":{"position":position.to_array(),"movement":movement,"cargo":cargo,"jetpack":jetpack},"terrain":terrain,"memory":memory,"style":style,"piles":piles,"totals":totals,"visible_mineral_units":visible_units,"airborne_units":airborne,"airborne":flying,"targets":targets,"obstacles":obstacles,"active_command":hub.active.as_ref().map(|a|&a.envelope.request)})
 }
 
 pub fn begin(world: &mut World) {

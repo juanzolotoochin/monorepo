@@ -29,7 +29,9 @@ fn assemble(scene: Scene, mut prefabs: Vec<Prefab>) -> Result<ScenePack> {
         )?)
     };
     let actor = voxel_assets::compile_actor(scene.style.as_ref().unwrap_or(&Default::default()))?;
+    let skins = voxel_assets::compile_skins(scene.style.as_ref().unwrap_or(&Default::default()))?;
     let pack = ScenePack {
+        skins,
         actor,
         environment,
         version: VERSION,
@@ -102,6 +104,12 @@ fn run(args: Vec<String>) -> Result<()> {
                     return Err("expected one style".into());
                 }
                 scene.style = Some(read_ron(&paths[0])?);
+            }
+            if let Some(paths) = flags.get("--scenario") {
+                if paths.len() != 1 {
+                    return Err("expected one scenario".into());
+                }
+                scene.scenario = Some(read_ron(&paths[0])?);
             }
             let mut prefabs = vec![];
             for path in flags.get("--prefab").into_iter().flatten() {
