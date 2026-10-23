@@ -1,0 +1,499 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bevy View Layer</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,750&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: single reading column; data-flow diagram, then one interactive demo per decision, options, recommendation. Same look as the other simulation decision pages. */
+:root {
+  --bg: #f4f6f8; --surface: #ffffff; --fg: #172029; --muted: #5a6875; --line: #d8dee4;
+  --accent: #1d5fa8; --accent-soft: #e3edf8;
+  --ok: #2f8a57; --ok-soft: #dcefe3; --bad: #c2362f; --bad-soft: #f8dedc;
+  --warn: #b7791f; --warn-soft: #f6ead3; --idle: #e7ebef; --idle-fg: #8794a0;
+  --c1: #7a4fb5; --c1-soft: #ece4f6;
+  --f-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --f-body: "Instrument Sans", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1318; --surface: #161c23; --fg: #e3e8ed; --muted: #95a3b0; --line: #2a333d;
+    --accent: #7fb2ec; --accent-soft: #1b2c40;
+    --ok: #5cc48a; --ok-soft: #173326; --bad: #f07a72; --bad-soft: #3d1c1a;
+    --warn: #e2ad57; --warn-soft: #3a2c14; --idle: #222a33; --idle-fg: #6c7a87;
+    --c1: #b994ea; --c1-soft: #2b2140;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1318; --surface: #161c23; --fg: #e3e8ed; --muted: #95a3b0; --line: #2a333d;
+  --accent: #7fb2ec; --accent-soft: #1b2c40;
+  --ok: #5cc48a; --ok-soft: #173326; --bad: #f07a72; --bad-soft: #3d1c1a;
+  --warn: #e2ad57; --warn-soft: #3a2c14; --idle: #222a33; --idle-fg: #6c7a87;
+  --c1: #b994ea; --c1-soft: #2b2140;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); font: 16px/1.6 var(--f-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 72px;
+}
+main { max-width: 880px; margin: 0 auto; display: flex; flex-direction: column; gap: 56px; }
+h1, h2, h3 { font-family: var(--f-display); text-wrap: balance; line-height: 1.15; margin: 0; }
+h1 { font-size: clamp(2rem, 5vw, 2.8rem); font-weight: 750; letter-spacing: -0.01em; }
+h2 { font-size: 1.7rem; font-weight: 750; }
+h3 { font-size: 1.15rem; font-weight: 600; }
+p { margin: 0; max-width: 68ch; }
+code, .mono { font-family: var(--f-mono); font-size: 0.88em; }
+.eyebrow { font: 600 0.75rem/1 var(--f-mono); text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent); }
+.stack { display: flex; flex-direction: column; gap: 16px; }
+.lead { color: var(--muted); font-size: 1.08rem; }
+section.decision { display: flex; flex-direction: column; gap: 24px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+ul, ol { margin: 0; padding-left: 1.3em; display: flex; flex-direction: column; gap: 6px; max-width: 68ch; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 680px) { .two { grid-template-columns: 1fr; } }
+.small { font-size: 0.88rem; }
+.muted { color: var(--muted); }
+.tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+.tabs button, button.chip {
+  font: 500 0.92rem var(--f-body); color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; cursor: pointer;
+}
+.tabs button:hover, button.chip:hover { border-color: var(--accent); }
+.tabs button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rec { font: 600 0.68rem var(--f-mono); letter-spacing: 0.06em; text-transform: uppercase; margin-left: 6px; opacity: 0.85; }
+.head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+.callout { border-left: 3px solid var(--accent); padding: 4px 0 4px 14px; }
+.options { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.opt { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.opt.recd { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.opt .tag { font: 600 0.68rem var(--f-mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); }
+.opt ul { font-size: 0.92rem; gap: 4px; }
+.pro::marker { content: "+  "; color: var(--ok); font-weight: 700; }
+.con::marker { content: "−  "; color: var(--bad); font-weight: 700; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 0.8rem; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 14px; height: 14px; border-radius: 3px; display: inline-block; }
+
+/* Flow diagram */
+.flow { display: grid; grid-template-columns: repeat(7, auto); align-items: center; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
+.node { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--bg); min-width: 104px; }
+.node b { display: block; font-size: 0.9rem; }
+.node small { color: var(--muted); font-size: 0.76rem; line-height: 1.3; display: block; }
+.node.sim { border-color: var(--accent); background: var(--accent-soft); }
+.node.view { border-color: var(--c1); background: var(--c1-soft); }
+.arrow { color: var(--muted); font-family: var(--f-mono); }
+@media (max-width: 680px) {
+  .flow { grid-template-columns: 1fr; }
+  .arrow { transform: rotate(90deg); justify-self: center; }
+}
+
+canvas { width: 100%; max-width: 640px; height: auto; display: block; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); }
+
+/* Timeline */
+.timeline-wrap { overflow-x: auto; }
+.timeline { display: grid; gap: 3px; min-width: 640px; font-family: var(--f-mono); font-size: 0.72rem; }
+.timeline .lane { color: var(--muted); font-weight: 600; display: flex; align-items: center; padding-right: 8px; white-space: nowrap; font-family: var(--f-body); font-size: 0.82rem; }
+.timeline .tick { color: var(--idle-fg); text-align: center; font-variant-numeric: tabular-nums; }
+.cell { min-height: 32px; border-radius: 4px; display: flex; align-items: center; justify-content: center; text-align: center; font-weight: 600; font-size: 0.64rem; line-height: 1.15; padding: 2px; background: var(--idle); color: var(--idle-fg); }
+.s-input { background: var(--fg); color: var(--surface); }
+.s-wait { background: var(--idle); color: var(--idle-fg); }
+.s-pred { background: var(--c1-soft); color: var(--c1); border: 1px dashed var(--c1); }
+.s-conf { background: var(--ok-soft); color: var(--ok); }
+.s-bad { background: var(--bad-soft); color: var(--bad); border: 1px solid var(--bad); }
+.s-fix { background: var(--warn-soft); color: var(--warn); }
+
+/* Frame bars */
+.frames { display: grid; grid-template-columns: repeat(12, 1fr); gap: 4px; align-items: end; height: 160px; position: relative; border-bottom: 1px solid var(--line); }
+.bar { display: flex; flex-direction: column-reverse; border-radius: 3px 3px 0 0; overflow: hidden; }
+.bar .r { background: var(--c1); }
+.bar .s { background: var(--accent); }
+.bar.miss { outline: 2px solid var(--bad); outline-offset: 1px; }
+.budget { position: absolute; left: 0; right: 0; border-top: 1.5px dashed var(--bad); }
+.budget span { position: absolute; right: 0; top: -18px; font: 600 0.68rem var(--f-mono); color: var(--bad); }
+.verdict { font-weight: 600; padding: 8px 12px; border-radius: 6px; }
+.verdict.ok { background: var(--ok-soft); color: var(--ok); }
+.verdict.bad { background: var(--bad-soft); color: var(--bad); }
+
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; min-width: 460px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 600 0.72rem var(--f-mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+td:first-child { font-weight: 600; white-space: nowrap; }
+.ask { border-top: 2px solid var(--fg); padding-top: 24px; display: flex; flex-direction: column; gap: 16px; }
+.ask ol { gap: 12px; }
+.ask li strong { font-family: var(--f-display); font-weight: 600; }
+</style>
+
+<main>
+  <header class="stack">
+    <span class="eyebrow">View layer · open decisions</span>
+    <h1>The Bevy view layer</h1>
+    <p class="lead">The simulation ticks 30 times a second in fixed-point, on data Bevy never touches. The screen refreshes 60 to 144 times a second in f32. This page covers how one becomes the other: smooth motion, instant feedback despite input delay, effects and sound, and where the simulation runs.</p>
+  </header>
+
+  <section class="decision" aria-labelledby="flow">
+    <div class="stack">
+      <span class="eyebrow">Settled by earlier decisions</span>
+      <h2 id="flow">Data flows one way</h2>
+      <p>Bevy reads input, turns it into commands, and draws what the simulation says. Nothing in Bevy ever writes simulation state. Today's game breaks this rule: the player's walking is done in Bevy and its pose is pushed into the simulation each frame (<code>set_controlled_pose</code>). In the new design, walking is a command and the simulation moves the avatar.</p>
+    </div>
+    <div class="panel">
+      <div class="flow">
+        <div class="node view"><b>Bevy input</b><small>keys, mouse, f32 cursor</small></div>
+        <span class="arrow">→</span>
+        <div class="node"><b>Command</b><small>quantized to Fx or tile, tagged with tick t+D</small></div>
+        <span class="arrow">→</span>
+        <div class="node sim"><b>Simulation</b><small>turns from host, ticks at 30 Hz</small></div>
+        <span class="arrow">→</span>
+        <div class="node view"><b>View</b><small>render state + events, drawn by Bevy</small></div>
+      </div>
+      <p class="small muted">After each tick, the simulation produces a <strong>render extract</strong>: positions, headings, animation states and health of entities in visible chunks, converted to f32, plus that tick's events. Bevy only ever sees the extract.</p>
+    </div>
+    <div class="two">
+      <div class="panel">
+        <h3>Matching entities</h3>
+        <p>The view keeps a map from simulation ID to Bevy entity. Spawns, despawns and state changes arrive as events. Continuous values like positions are copied from the extract each frame, only for visible chunks.</p>
+      </div>
+      <div class="panel">
+        <h3>The view may be non-deterministic</h3>
+        <p>The view can use <code>HashMap</code>, f32, random particle seeds and wall-clock time. It can skip effects off screen. None of it can affect the game, because nothing flows back except commands.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Q1 SMOOTHING ===== -->
+  <section class="decision" aria-labelledby="q1">
+    <div class="stack">
+      <span class="eyebrow">Decision 1</span>
+      <h2 id="q1">Smooth motion between ticks</h2>
+      <p>At 30 Hz, positions only change every 33 ms. Drawn directly, units visibly step on a 60 Hz or 144 Hz screen. The view needs to invent positions between ticks. It can blend between the last two ticks, or guess ahead from the last one.</p>
+    </div>
+    <div class="panel">
+      <div class="head">
+        <div class="tabs" role="group" aria-label="Smoothing" id="s-tabs"></div>
+        <button class="chip" type="button" id="s-play">Pause</button>
+      </div>
+      <canvas id="scv" width="640" height="220" aria-label="A unit moving right, turning down, and stopping"></canvas>
+      <div class="legend">
+        <span><i style="background:var(--accent)"></i>What the screen draws</span>
+        <span><i style="border:1.5px solid var(--muted)"></i>Latest simulation tick</span>
+        <span><i style="background:var(--line)"></i>Path</span>
+      </div>
+      <p id="s-text"></p>
+      <p class="small muted">Slowed down 6×, so it looks like 5 ticks a second. At real speed the differences are smaller but still visible as stutter or jitter.</p>
+    </div>
+    <div class="options">
+      <div class="opt">
+        <span class="tag">Option A</span>
+        <h3>Draw ticks directly</h3>
+        <ul>
+          <li class="pro">No lag, nothing to build</li>
+          <li class="con">Motion steps every 33 ms. It looks like a 30 fps game on any monitor.</li>
+        </ul>
+      </div>
+      <div class="opt recd">
+        <span class="tag">Option B · recommended</span>
+        <h3>Interpolate</h3>
+        <ul>
+          <li class="pro">Always smooth, and always shows a position the simulation actually had</li>
+          <li class="pro">Simple: keep the previous and current extract and blend</li>
+          <li class="con">Everything is shown one tick (33 ms) late</li>
+          <li class="con">Spawns and teleports must be flagged so they don't slide in</li>
+        </ul>
+      </div>
+      <div class="opt">
+        <span class="tag">Option C</span>
+        <h3>Extrapolate</h3>
+        <ul>
+          <li class="pro">No added lag</li>
+          <li class="con">Overshoots on every turn and stop, then snaps back</li>
+          <li class="con">Projectiles can visibly pass through their target</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Q2 PREDICTION ===== -->
+  <section class="decision" aria-labelledby="q2">
+    <div class="stack">
+      <span class="eyebrow">Decision 2</span>
+      <h2 id="q2">Instant feedback despite input delay</h2>
+      <p>With an input delay of 4 ticks, a click on tick 100 only takes effect on tick 104, and interpolation shows it a tick later. That's about 170 ms, which feels sluggish for walking and casting. Visual-only prediction shows the start of the action right away, then lets the confirmed simulation take over. The prediction never touches the simulation.</p>
+    </div>
+    <div class="panel">
+      <div class="tabs" role="group" aria-label="Action" id="p-tabs"></div>
+      <div class="timeline-wrap"><div class="timeline" id="p-timeline"></div></div>
+      <div class="legend">
+        <span><i class="s-input" style="background:var(--fg)"></i>Your input</span>
+        <span><i style="background:var(--idle)"></i>Nothing visible yet</span>
+        <span><i style="background:var(--c1-soft);border:1px dashed var(--c1)"></i>Predicted (view only)</span>
+        <span><i style="background:var(--ok-soft)"></i>Confirmed by the simulation</span>
+        <span><i style="background:var(--bad-soft);border:1px solid var(--bad)"></i>Prediction was wrong</span>
+        <span><i style="background:var(--warn-soft)"></i>Smoothly corrected</span>
+      </div>
+      <p id="p-text"></p>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Action</th><th>Shown immediately</th><th>Waits for the confirmed tick</th></tr></thead>
+        <tbody>
+          <tr><td>Walking</td><td>Your own avatar moves</td><td>Other players see you move. Collisions and pushes are final.</td></tr>
+          <tr><td>Chain lightning</td><td>Cast animation, arc to the targets you picked, sound</td><td>Damage numbers, deaths, loot</td></tr>
+          <tr><td>Place building</td><td>Translucent ghost marked as pending</td><td>Solid building, construction starts</td></tr>
+          <tr><td>Order a hauler</td><td>UI tick mark, route preview</td><td>Hauler starts moving</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="options">
+      <div class="opt">
+        <span class="tag">Option A</span>
+        <h3>No prediction</h3>
+        <ul>
+          <li class="pro">Nothing to build, never wrong</li>
+          <li class="con">Every action has about 170 ms of visible delay online, and about 70 ms on LAN</li>
+        </ul>
+      </div>
+      <div class="opt recd">
+        <span class="tag">Option B · recommended</span>
+        <h3>Cosmetic feedback, plus a predicted own avatar</h3>
+        <ul>
+          <li class="pro">Casts, ghosts and UI respond instantly with no simulation involved</li>
+          <li class="pro">Your avatar runs the same Fx movement code on a private copy: last confirmed position plus your unconfirmed inputs</li>
+          <li class="pro">When the confirmed position differs, for example because the spider shoved you, the view eases toward it</li>
+          <li class="con">The movement code must be callable on a single entity outside the tick</li>
+        </ul>
+      </div>
+      <div class="opt">
+        <span class="tag">Option C</span>
+        <h3>Cosmetic feedback only</h3>
+        <ul>
+          <li class="pro">Simpler: the avatar just leans or starts its walk animation toward the input</li>
+          <li class="con">Your own walking still feels delayed, and walking is the most frequent action</li>
+        </ul>
+      </div>
+    </div>
+    <p class="callout">Option B's avatar prediction is a tiny rollback for one entity. It replays a few ticks of your own movement against the confirmed world, in the view, every frame. It's cheap because it's one entity, and safe because the result is only drawn.</p>
+  </section>
+
+  <!-- ===== Q3 THREADING ===== -->
+  <section class="decision" aria-labelledby="q3">
+    <div class="stack">
+      <span class="eyebrow">Decision 3</span>
+      <h2 id="q3">Where the simulation runs</h2>
+      <p>At 60 fps a frame has 16.7 ms. A 30 Hz tick happens every other frame. If the tick runs inside the Bevy frame, those frames carry its whole cost. A heavy tick then makes every second frame late, which shows up as a steady stutter even though the average is fine.</p>
+    </div>
+    <div class="panel">
+      <div class="head">
+        <div class="tabs" role="group" aria-label="Where the tick runs" id="t-tabs"></div>
+        <div class="tabs" role="group" aria-label="Tick cost" id="c-tabs"></div>
+      </div>
+      <div class="frames" id="frames"></div>
+      <div class="legend">
+        <span><i style="background:var(--c1)"></i>Bevy rendering work (6 ms)</span>
+        <span><i style="background:var(--accent)"></i>Simulation tick on the frame's thread</span>
+        <span><i style="border-top:2px dashed var(--bad);height:0;width:16px"></i>16.7 ms frame budget</span>
+      </div>
+      <div class="verdict" id="t-verdict"></div>
+    </div>
+    <div class="options">
+      <div class="opt recd">
+        <span class="tag">Option A · recommended</span>
+        <h3>In the frame first, behind the extract</h3>
+        <ul>
+          <li class="pro">Simplest to build and debug: one thread of control</li>
+          <li class="pro">Fine while ticks stay under about 8 ms, and your prototype ran 1M entities in 6 ms</li>
+          <li class="pro">Bevy only reads the render extract, so moving the tick to its own thread later doesn't change view code</li>
+          <li class="con">If ticks grow, stutter appears and we have to do the move</li>
+        </ul>
+      </div>
+      <div class="opt">
+        <span class="tag">Option B</span>
+        <h3>Own thread from the start</h3>
+        <ul>
+          <li class="pro">Frame times stay flat regardless of tick cost</li>
+          <li class="pro">A stall waiting for network turns never freezes rendering</li>
+          <li class="con">Commands and extracts cross threads through queues and a triple buffer</li>
+          <li class="con">Harder to debug while the basics are still moving</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="decision" aria-labelledby="ev">
+    <div class="stack">
+      <span class="eyebrow">Context · no decision needed</span>
+      <h2 id="ev">Effects and sound</h2>
+      <p>The apply phase emits events (<code>Fired</code>, <code>Hit</code>, <code>Died</code>, <code>Dug</code>, <code>Delivered</code>) tagged with their tick. The view plays each one when interpolated render time reaches that tick, so the impact sound lands exactly when the projectile is drawn arriving.</p>
+      <ul>
+        <li>Events are advisory. The view may drop them (off screen, too many sounds at once), and the simulation never knows.</li>
+        <li>When several ticks run in one frame to catch up, events from all of them are queued and play in order.</li>
+        <li>Dying units are handed to the view: the simulation removes the entity, and the view keeps a corpse for its death animation. Today's game already does this.</li>
+        <li>While the simulation stalls waiting for a turn, render time stops at the latest tick. Units freeze in place rather than sliding past where they really are.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="ask" aria-labelledby="ask">
+    <span class="eyebrow">Your call</span>
+    <h2 id="ask">The three questions</h2>
+    <ol>
+      <li><strong>Smoothing.</strong> Interpolate between the last two ticks (recommended), extrapolate, or draw ticks directly.</li>
+      <li><strong>Prediction.</strong> Cosmetic feedback plus a predicted own avatar (recommended), cosmetic feedback only, or none.</li>
+      <li><strong>Simulation thread.</strong> In the Bevy frame first, behind the render extract (recommended), or on its own thread from the start.</li>
+    </ol>
+    <p class="lead">Answer in the terminal.</p>
+  </section>
+</main>
+
+<script>
+const cssv = n => getComputedStyle(document.documentElement).getPropertyValue(`--${n}`).trim();
+function tabs(id, opts, onPick, initial) {
+  const host = document.getElementById(id);
+  opts.forEach(o => {
+    const b = document.createElement("button"); b.type = "button"; b.dataset.id = o.id;
+    b.innerHTML = o.name + (o.rec ? `<span class="rec">rec.</span>` : "");
+    b.addEventListener("click", () => { mark(); onPick(o); });
+    function mark() { [...host.children].forEach(c => c.setAttribute("aria-pressed", String(c.dataset.id === o.id))); }
+    host.appendChild(b);
+  });
+  const first = opts.find(o => o.id === initial) || opts[0];
+  [...host.children].forEach(c => c.setAttribute("aria-pressed", String(c.dataset.id === first.id)));
+  onPick(first);
+}
+
+// ---- Smoothing demo ----
+const cv = document.getElementById("scv"), ctx = cv.getContext("2d");
+const PATH = [[40, 50], [470, 50], [470, 170]];
+const SPEED = 150;                 // px per (slowed) second
+const DT = 1 / 5;                  // slowed tick
+const SEG = [430, 120], TOTAL = SEG[0] + SEG[1];
+const MOVE_T = TOTAL / SPEED, LOOP = MOVE_T + 1.6;
+function truePos(t) {
+  let d = Math.max(0, Math.min(t, MOVE_T)) * SPEED;
+  if (d <= SEG[0]) return [PATH[0][0] + d, PATH[0][1]];
+  d -= SEG[0]; return [PATH[1][0], PATH[1][1] + d];
+}
+const tickPos = k => truePos(k * DT);
+let mode = "interp", playing = !matchMedia("(prefers-reduced-motion: reduce)").matches, t0 = performance.now(), frozenAt = 1.9;
+const S_OPTS = [
+  { id: "raw", name: "Draw ticks directly", text: "The unit jumps from tick to tick. At real speed this is a constant 30 fps stutter, however fast the monitor is." },
+  { id: "interp", name: "Interpolate", rec: true, text: "Smooth, and it follows the real path exactly, including the corner and the stop. It trails the latest tick (hollow circle) by one tick." },
+  { id: "extra", name: "Extrapolate", text: "Smooth and up to date while moving straight, but it overshoots the corner and the stop, then snaps back when the next tick shows where the unit really went." }
+];
+tabs("s-tabs", S_OPTS, o => { mode = o.id; document.getElementById("s-text").textContent = o.text; if (!playing) draw(frozenAt); }, "interp");
+function draw(t) {
+  const w = cv.width, h = cv.height;
+  ctx.clearRect(0, 0, w, h);
+  ctx.strokeStyle = cssv("line"); ctx.lineWidth = 6; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.beginPath(); ctx.moveTo(...PATH[0]); ctx.lineTo(...PATH[1]); ctx.lineTo(...PATH[2]); ctx.stroke();
+  // tick marks
+  ctx.fillStyle = cssv("muted");
+  for (let k = 0; k * DT <= MOVE_T + DT; k++) { const [x, y] = tickPos(k); ctx.fillRect(x - 1, y - 1, 2, 2); }
+  const k = Math.floor(t / DT);
+  let p;
+  if (mode === "raw") p = tickPos(k);
+  else if (mode === "interp") {
+    const r = t - DT, kr = Math.floor(r / DT), a = (r - kr * DT) / DT;
+    const p0 = tickPos(Math.max(kr, 0)), p1 = tickPos(Math.max(kr + 1, 0));
+    p = r < 0 ? tickPos(0) : [p0[0] + (p1[0] - p0[0]) * a, p0[1] + (p1[1] - p0[1]) * a];
+  } else {
+    const pk = tickPos(k), pp = tickPos(Math.max(k - 1, 0)), a = t - k * DT;
+    p = [pk[0] + (pk[0] - pp[0]) / DT * a, pk[1] + (pk[1] - pp[1]) / DT * a];
+  }
+  const latest = tickPos(k);
+  ctx.strokeStyle = cssv("muted"); ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(latest[0], latest[1], 13, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = cssv("accent");
+  ctx.beginPath(); ctx.arc(p[0], p[1], 10, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = cssv("muted"); ctx.font = `600 12px ${cssv("f-mono")}`;
+  ctx.fillText(`tick ${k}`, 40, 205);
+  ctx.fillText("stop", 485, 174);
+}
+function loop(now) {
+  if (playing) draw(((now - t0) / 1000) % LOOP);
+  requestAnimationFrame(loop);
+}
+document.getElementById("s-play").textContent = playing ? "Pause" : "Play";
+document.getElementById("s-play").addEventListener("click", e => {
+  playing = !playing; e.target.textContent = playing ? "Pause" : "Play";
+  if (playing) t0 = performance.now() - frozenAt * 1000; else frozenAt = ((performance.now() - t0) / 1000) % LOOP;
+});
+draw(frozenAt);
+requestAnimationFrame(loop);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (!playing) draw(frozenAt); });
+
+// ---- Prediction timeline ----
+const TICKS = [100, 101, 102, 103, 104, 105, 106, 107, 108];
+const P_OPTS = [
+  { id: "walk", name: "Walk", lanes: [
+      ["Your input", ["input:press W", "", "", "", "", "", "", "", ""]],
+      ["You, no prediction", ["wait", "wait", "wait", "wait", "wait", "conf:moving", "conf:moving", "conf:moving", "conf:moving"]],
+      ["You, with prediction", ["pred:moving", "pred:moving", "pred:moving", "pred:moving", "conf:moving", "conf:moving", "conf:moving", "conf:moving", "conf:moving"]],
+      ["Your friend sees you", ["wait", "wait", "wait", "wait", "wait", "wait", "conf:moving", "conf:moving", "conf:moving"]]],
+    text: "With prediction your avatar starts moving on the frame you press the key. On tick 104 the simulation confirms the same position, so nothing changes. Your friend sees you move a little later, which is fine because they don't feel your input delay." },
+  { id: "pushed", name: "Walk, then shoved", lanes: [
+      ["Your input", ["input:press W", "", "", "", "", "", "", "", ""]],
+      ["You, with prediction", ["pred:moving", "pred:moving", "pred:moving", "pred:moving", "bad:spider shoved you", "fix:easing", "fix:easing", "conf:moving", "conf:moving"]],
+      ["Your friend sees you", ["wait", "wait", "wait", "wait", "wait", "wait", "conf:shoved", "conf:moving", "conf:moving"]]],
+    text: "The prediction didn't know the spider would push you. On tick 104 the confirmed position differs, so the view eases your avatar over a few frames instead of snapping. Nothing in the simulation changed, because the prediction was only ever drawn." },
+  { id: "cast", name: "Chain lightning", lanes: [
+      ["Your input", ["input:click targets", "", "", "", "", "", "", "", ""]],
+      ["You, no prediction", ["wait", "wait", "wait", "wait", "wait", "conf:arc + damage", "conf:deaths", "", ""]],
+      ["You, with prediction", ["pred:cast + arc", "pred:arc fades", "", "", "", "conf:damage numbers", "conf:deaths", "", ""]],
+      ["Your friend sees", ["wait", "wait", "wait", "wait", "wait", "conf:arc + damage", "conf:deaths", "", ""]]],
+    text: "The cast, the arc to the targets you picked, and the sound play instantly. Damage numbers and deaths wait for the confirmed tick. The gap feels like the lightning taking a moment to bite." },
+  { id: "build", name: "Place building (rejected)", lanes: [
+      ["Your input", ["input:place smelter", "", "", "", "", "", "", "", ""]],
+      ["You, with prediction", ["pred:ghost (pending)", "pred:ghost (pending)", "pred:ghost (pending)", "pred:ghost (pending)", "bad:spot taken", "bad:ghost fades", "", "", ""]],
+      ["Your friend", ["", "", "", "", "conf:their wall placed", "conf:wall", "conf:wall", "conf:wall", "conf:wall"]]],
+    text: "A teammate placed a wall on the same tiles, and their message came earlier in the apply order. Your placement is rejected on tick 104, so your pending ghost turns red and fades, with a short message saying the spot was taken. Nothing has to be undone, because the ghost was never real." }
+];
+tabs("p-tabs", P_OPTS, o => {
+  const tl = document.getElementById("p-timeline");
+  tl.style.gridTemplateColumns = `max-content repeat(${TICKS.length}, minmax(60px, 1fr))`;
+  let html = `<div class="lane"></div>` + TICKS.map(t => `<div class="tick">${t}${t === 104 ? " ✓" : ""}</div>`).join("");
+  for (const [name, cells] of o.lanes) {
+    html += `<div class="lane">${name}</div>`;
+    for (const c of cells) {
+      if (!c) { html += `<div class="cell" style="background:transparent"></div>`; continue; }
+      const [k, label] = c.includes(":") ? c.split(":") : [c, ""];
+      html += `<div class="cell s-${k}">${label}</div>`;
+    }
+  }
+  tl.innerHTML = html;
+  document.getElementById("p-text").textContent = o.text;
+}, "walk");
+
+// ---- Frame timing ----
+let where = "frame", cost = 9;
+const T_OPTS = [{ id: "frame", name: "In the Bevy frame", rec: true }, { id: "thread", name: "Own thread" }];
+const C_OPTS = [{ id: "4", name: "Tick 4 ms" }, { id: "9", name: "Tick 9 ms" }, { id: "14", name: "Tick 14 ms" }];
+function drawFrames() {
+  const host = document.getElementById("frames"), max = 26, render = 6, budget = 16.7;
+  let html = `<div class="budget" style="bottom:${budget / max * 100}%"><span>16.7 ms</span></div>`, missed = 0;
+  for (let f = 0; f < 12; f++) {
+    const sim = where === "frame" && f % 2 === 0 ? cost : 0;
+    const total = render + sim, miss = total > budget;
+    if (miss) missed++;
+    html += `<div class="bar ${miss ? "miss" : ""}" style="height:${total / max * 100}%" title="frame ${f + 1}: ${total} ms">` +
+      `<div class="r" style="flex:${render}"></div>${sim ? `<div class="s" style="flex:${sim}"></div>` : ""}</div>`;
+  }
+  host.innerHTML = html;
+  const v = document.getElementById("t-verdict");
+  if (where === "thread") { v.className = "verdict ok"; v.textContent = `Every frame takes 6 ms. The ${cost} ms tick runs on another core in parallel.`; }
+  else if (missed) { v.className = "verdict bad"; v.textContent = `Every other frame takes ${render + cost} ms and misses the budget: a steady 30 fps stutter.`; }
+  else { v.className = "verdict ok"; v.textContent = `Tick frames take ${render + cost} ms, which still fits. Nothing visible.`; }
+}
+tabs("t-tabs", T_OPTS, o => { where = o.id; drawFrames(); }, "frame");
+tabs("c-tabs", C_OPTS, o => { cost = +o.id; drawFrames(); }, "9");
+</script>
+
+</html>

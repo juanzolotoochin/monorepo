@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Desyncs and Host Loss</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,750&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: single reading column; each decision = explanation, live tick timeline, option comparison. */
+:root {
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --fg: #172029;
+  --muted: #5a6875;
+  --line: #d8dee4;
+  --accent: #1d5fa8;
+  --accent-soft: #e3edf8;
+  --ok: #2f8a57;
+  --ok-soft: #dcefe3;
+  --bad: #c2362f;
+  --bad-soft: #f8dedc;
+  --warn: #b7791f;
+  --warn-soft: #f6ead3;
+  --idle: #e7ebef;
+  --idle-fg: #8794a0;
+  --f-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --f-body: "Instrument Sans", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1318; --surface: #161c23; --fg: #e3e8ed; --muted: #95a3b0; --line: #2a333d;
+    --accent: #7fb2ec; --accent-soft: #1b2c40;
+    --ok: #5cc48a; --ok-soft: #173326; --bad: #f07a72; --bad-soft: #3d1c1a;
+    --warn: #e2ad57; --warn-soft: #3a2c14; --idle: #222a33; --idle-fg: #6c7a87;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1318; --surface: #161c23; --fg: #e3e8ed; --muted: #95a3b0; --line: #2a333d;
+  --accent: #7fb2ec; --accent-soft: #1b2c40;
+  --ok: #5cc48a; --ok-soft: #173326; --bad: #f07a72; --bad-soft: #3d1c1a;
+  --warn: #e2ad57; --warn-soft: #3a2c14; --idle: #222a33; --idle-fg: #6c7a87;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg);
+  font: 16px/1.6 var(--f-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 72px;
+}
+main { max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: 56px; }
+h1, h2, h3 { font-family: var(--f-display); text-wrap: balance; line-height: 1.15; margin: 0; }
+h1 { font-size: clamp(2rem, 5vw, 2.8rem); font-weight: 750; letter-spacing: -0.01em; }
+h2 { font-size: 1.7rem; font-weight: 750; }
+h3 { font-size: 1.15rem; font-weight: 600; }
+p { margin: 0; max-width: 68ch; }
+code, .mono { font-family: var(--f-mono); font-size: 0.88em; }
+.eyebrow { font: 600 0.75rem/1 var(--f-mono); text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent); }
+.stack { display: flex; flex-direction: column; gap: 16px; }
+.lead { color: var(--muted); font-size: 1.08rem; }
+section.decision { display: flex; flex-direction: column; gap: 24px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+ul, ol { margin: 0; padding-left: 1.3em; display: flex; flex-direction: column; gap: 6px; max-width: 68ch; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 640px) { .two { grid-template-columns: 1fr; } }
+
+/* Policy switcher */
+.tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+.tabs button {
+  font: 500 0.92rem var(--f-body); color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; cursor: pointer;
+}
+.tabs button:hover { border-color: var(--accent); }
+.tabs button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+.tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rec { font: 600 0.68rem var(--f-mono); letter-spacing: 0.06em; text-transform: uppercase; margin-left: 6px; opacity: 0.85; }
+
+/* Tick timeline */
+.timeline-wrap { overflow-x: auto; }
+.timeline { display: grid; gap: 3px; min-width: 620px; font-family: var(--f-mono); font-size: 0.72rem; }
+.timeline .lane { color: var(--muted); font-weight: 600; display: flex; align-items: center; padding-right: 8px; white-space: nowrap; font-family: var(--f-body); font-size: 0.82rem; }
+.timeline .tick { color: var(--idle-fg); text-align: center; padding-bottom: 2px; font-variant-numeric: tabular-nums; }
+.cell { height: 30px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 0.66rem; letter-spacing: 0.02em; }
+.s-ok { background: var(--ok-soft); color: var(--ok); }
+.s-diverged { background: var(--bad-soft); color: var(--bad); border: 1px dashed var(--bad); }
+.s-detect { background: var(--bad); color: var(--surface); }
+.s-halt { background: var(--warn); color: var(--surface); }
+.s-dump { background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn); }
+.s-load { background: var(--accent-soft); color: var(--accent); }
+.s-catchup { background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent); }
+.s-gone { background: transparent; color: var(--idle-fg); border: 1px dashed var(--line); }
+.s-stall { background: var(--warn-soft); color: var(--warn); }
+.s-ended { background: var(--idle); color: var(--idle-fg); }
+.s-elect { background: var(--accent); color: var(--surface); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 0.8rem; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 14px; height: 14px; border-radius: 3px; display: inline-block; }
+
+.outcome { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+@media (max-width: 640px) { .outcome { grid-template-columns: 1fr; } }
+.outcome div { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.outcome dt { font: 600 0.72rem var(--f-mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.outcome dd { margin: 0; font-size: 0.95rem; }
+
+/* Hash table */
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; min-width: 480px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+th { font: 600 0.72rem var(--f-mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+td.mono { font-variant-numeric: tabular-nums; }
+.pill { display: inline-block; font: 600 0.72rem var(--f-mono); padding: 2px 8px; border-radius: 999px; }
+.pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.bad { background: var(--bad-soft); color: var(--bad); }
+tr.hit td { background: var(--bad-soft); }
+
+.roles { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 640px) { .roles { grid-template-columns: 1fr; } }
+.role { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+.role.host { border-color: var(--accent); background: var(--accent-soft); }
+
+.ask { border-top: 2px solid var(--fg); padding-top: 24px; display: flex; flex-direction: column; gap: 16px; }
+.ask ol { gap: 12px; }
+.ask li strong { font-family: var(--f-display); font-weight: 600; }
+.callout { border-left: 3px solid var(--accent); padding: 4px 0 4px 14px; color: var(--fg); }
+@media (prefers-reduced-motion: no-preference) { .cell { transition: background-color .2s, color .2s; } }
+</style>
+
+<main>
+  <header class="stack">
+    <span class="eyebrow">Lockstep netcode · open decisions</span>
+    <h1>Desyncs and host loss</h1>
+    <p class="lead">Two networking decisions are still open: what happens when a client's simulation stops matching the host, and what happens when the host leaves. Pick a policy on each timeline to see how it plays out tick by tick at 30&nbsp;Hz.</p>
+  </header>
+
+  <!-- ========== DESYNC ========== -->
+  <section class="decision" aria-labelledby="d1">
+    <div class="stack">
+      <span class="eyebrow">Decision 1</span>
+      <h2 id="d1">What happens on a desync</h2>
+      <p>Every peer runs the same simulation from the same inputs, so every peer should hold identical state on every tick. A <strong>desync</strong> means one peer's state differs from the host's. After that point the peers are effectively playing different games, and the gap only grows.</p>
+    </div>
+
+    <div class="two">
+      <div class="panel">
+        <h3>Detecting it</h3>
+        <p>Each tick, every client hashes its state and sends the hash to the host with its inputs. The host compares it with its own hash for that tick. The hash arrives about one round trip later, so detection lags the divergence by a couple of ticks.</p>
+        <p>Hashing 100k entities is about 6&nbsp;MB of state and roughly 1&nbsp;ms per tick with a fast hash. If needed we can hash every Nth tick or keep the hash incremental.</p>
+      </div>
+      <div class="panel">
+        <h3>Localizing it</h3>
+        <p>A single hash only tells you that something differs. We keep separate hashes per subsystem and per chunk, so a mismatch names where to look:</p>
+        <p class="callout mono">desync @ tick 48213: depots, chunk (3,7)</p>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Example hash report for tick 48213</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Subsystem</th><th>Scope</th><th>Host</th><th>Client A</th><th></th></tr></thead>
+          <tbody>
+            <tr><td>units</td><td>all chunks</td><td class="mono">9c41e0a2</td><td class="mono">9c41e0a2</td><td><span class="pill ok">match</span></td></tr>
+            <tr><td>terrain</td><td>all chunks</td><td class="mono">17b0d3f9</td><td class="mono">17b0d3f9</td><td><span class="pill ok">match</span></td></tr>
+            <tr class="hit"><td>depots</td><td>chunk (3,7)</td><td class="mono">4e2a91c7</td><td class="mono">4e2a8f03</td><td><span class="pill bad">differs</span></td></tr>
+            <tr><td>depots</td><td>other chunks</td><td class="mono">a0f55e18</td><td class="mono">a0f55e18</td><td><span class="pill ok">match</span></td></tr>
+            <tr><td>rng</td><td>global</td><td class="mono">00b7c2e4</td><td class="mono">00b7c2e4</td><td><span class="pill ok">match</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="two">
+      <div class="panel">
+        <h3>Debugging it</h3>
+        <ol>
+          <li>Both sides write a <strong>state dump</strong> for the bad tick: full state as readable text, plus the input log since the last save.</li>
+          <li>A diff tool shows the first field that differs, for example <code>depot "smelter_in".items["iron"]: 12 vs 11</code>.</li>
+          <li>Because the input log replays exactly, you can re-run either side locally in a debugger and stop on that tick.</li>
+        </ol>
+      </div>
+      <div class="panel">
+        <h3>Usual causes</h3>
+        <ul>
+          <li>Iterating a <code>HashMap</code> or <code>HashSet</code></li>
+          <li>A stray <code>f32</code> or platform math function in the simulation</li>
+          <li>Reading wall-clock time</li>
+          <li>Stale data left in a reused slot</li>
+          <li>Simulation code reading something from the Bevy view</li>
+        </ul>
+        <p>Most of these are blocked by design. The rest is what the dumps are for.</p>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>What players experience</h3>
+      <div class="tabs" role="group" aria-label="Desync policy" id="desync-tabs"></div>
+      <div class="timeline-wrap"><div class="timeline" id="desync-timeline"></div></div>
+      <div class="legend" id="desync-legend"></div>
+      <dl class="outcome" id="desync-outcome"></dl>
+    </div>
+  </section>
+
+  <!-- ========== HOST LOSS ========== -->
+  <section class="decision" aria-labelledby="d2">
+    <div class="stack">
+      <span class="eyebrow">Decision 2</span>
+      <h2 id="d2">What happens when the host leaves</h2>
+      <p>Every peer holds the full game state, so the world itself survives the host leaving. What disappears is the role the host plays for everyone else.</p>
+    </div>
+
+    <div class="roles">
+      <div class="role host">
+        <h3>Only the host has</h3>
+        <ul>
+          <li><strong>Turn authority</strong>: decides which inputs run on which tick</li>
+          <li><strong>Hash referee</strong>: compares everyone's hashes</li>
+          <li><strong>Join server</strong>: sends the save to joining players</li>
+          <li>The platform lobby, later on (Steam or EOS)</li>
+        </ul>
+      </div>
+      <div class="role">
+        <h3>Every peer has</h3>
+        <ul>
+          <li>The complete simulation state</li>
+          <li>All confirmed turns up to its current tick</li>
+          <li>The input log since the last save</li>
+          <li>Everything needed to write an identical save</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>What players experience</h3>
+      <div class="tabs" role="group" aria-label="Host leave policy" id="host-tabs"></div>
+      <div class="timeline-wrap"><div class="timeline" id="host-timeline"></div></div>
+      <div class="legend" id="host-legend"></div>
+      <dl class="outcome" id="host-outcome"></dl>
+    </div>
+
+    <div class="two">
+      <div class="panel">
+        <h3>How migration works</h3>
+        <ol>
+          <li>Clients stop receiving turns. After a timeout of about 3 seconds, they declare the host gone.</li>
+          <li>The remaining peers agree on the <strong>last confirmed tick</strong>: the highest tick every one of them has.</li>
+          <li>A new host is picked by a fixed rule, such as the lowest player ID.</li>
+          <li>Everyone reconnects to the new host. Inputs that were sent but never confirmed are dropped and re-entered.</li>
+          <li>Turns resume from the agreed tick.</li>
+        </ol>
+      </div>
+      <div class="panel">
+        <h3>What makes it hard</h3>
+        <ul>
+          <li>Two peers both believing they are the new host, for example after a network split</li>
+          <li>A client that is missing the last turn the others have</li>
+          <li>A packet from the old host arriving after the switch</li>
+          <li>Moving the Steam or EOS lobby ownership along with it</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>What "design for migration" costs today</h3>
+      <p>We don't build migration yet. We just avoid code that would make it impossible later:</p>
+      <ul>
+        <li>The host is a role: an <code>authority: PeerId</code> field in the protocol, not an assumption that peer 0 is in charge.</li>
+        <li>Turn authority is its own module, separate from the host player's simulation and input.</li>
+        <li>Packets carry a session <strong>epoch</strong> number, so packets from an old host can be ignored.</li>
+        <li>Every peer keeps the last few confirmed turns, not just the host.</li>
+      </ul>
+      <p>That is a few fields and one module boundary, with no extra features to test.</p>
+    </div>
+  </section>
+
+  <!-- ========== QUESTIONS ========== -->
+  <section class="ask" aria-labelledby="q">
+    <span class="eyebrow">Your call</span>
+    <h2 id="q">The two questions</h2>
+    <ol>
+      <li><strong>Desync policy.</strong> Halt in dev and resync in release (recommended), always resync, or disconnect the desynced client.</li>
+      <li><strong>Host leaving.</strong> The session ends but the code is designed for migration (recommended), the session ends with no migration plans, or we build migration early.</li>
+    </ol>
+    <p class="lead">Answer in the terminal. The questions are asked there too.</p>
+  </section>
+</main>
+
+<script>
+const LABELS = {
+  ok: "ok", diverged: "differs", detect: "detect", halt: "halted", dump: "dump",
+  load: "loading", catchup: "catch up", gone: "", stall: "stall", ended: "ended", elect: "elect"
+};
+const LEGEND_TEXT = {
+  ok: "Simulating normally", diverged: "Diverged, not yet noticed", detect: "Mismatch detected",
+  halt: "Frozen for debugging", dump: "Writing state dump", load: "Receiving host save",
+  catchup: "Running extra ticks to catch up", gone: "Disconnected", stall: "Waiting for turns",
+  ended: "Session over, save offered", elect: "Electing new host"
+};
+
+const desync = {
+  start: 48210, count: 11,
+  policies: [
+    { id: "halt", name: "Halt", lanes: [
+        ["Host", "ok ok ok ok ok detect halt halt halt halt halt"],
+        ["Client A", "ok ok ok diverged diverged diverged halt halt halt halt halt"],
+        ["Client B", "ok ok ok ok ok ok halt halt halt halt halt"]],
+      out: ["Everyone freezes on the tick the mismatch is found. The game cannot continue.",
+            "Dumps from every peer at the same moment, so the evidence is complete.",
+            "The best tool for finding the bug. Unacceptable for players."] },
+    { id: "resync", name: "Resync", rec: true, lanes: [
+        ["Host", "ok ok ok ok ok detect ok ok ok ok ok"],
+        ["Client A", "ok ok ok diverged diverged dump load load load catchup ok"],
+        ["Client B", "ok ok ok ok ok ok ok ok ok ok ok"]],
+      out: ["Client A freezes for a few seconds while it reloads the host's save. Everyone else keeps playing.",
+            "Client A's dump plus the host's state. The game goes on, so state on other peers moves past the bad tick.",
+            "Reuses the join-in-progress path, so there is almost no extra code to write."] },
+    { id: "disconnect", name: "Disconnect", lanes: [
+        ["Host", "ok ok ok ok ok detect ok ok ok ok ok"],
+        ["Client A", "ok ok ok diverged diverged dump gone gone gone gone gone"],
+        ["Client B", "ok ok ok ok ok ok ok ok ok ok ok"]],
+      out: ["Client A gets kicked and has to rejoin by hand.",
+            "Client A's dump.",
+            "Simplest to build, but it punishes the player for our bug."] }
+  ],
+  recNote: "Recommended: halt in dev builds, resync in release builds"
+};
+
+const host = {
+  start: 9000, count: 11,
+  policies: [
+    { id: "ends", name: "Session ends", rec: true, lanes: [
+        ["Host", "ok ok ok ok gone gone gone gone gone gone gone"],
+        ["Client A", "ok ok ok ok stall stall stall ended ended ended ended"],
+        ["Client B", "ok ok ok ok stall stall stall ended ended ended ended"]],
+      out: ["The world freezes, then a message says the host left. Anyone can save and host it again later.",
+            "Nothing. Saves are identical on every peer, so whoever reloads continues the same world.",
+            "Almost free. Designing for migration adds a few protocol fields and one module boundary."] },
+    { id: "migrate", name: "Host migration", lanes: [
+        ["Host", "ok ok ok ok gone gone gone gone gone gone gone"],
+        ["Client A", "ok ok ok ok stall stall stall elect load ok ok"],
+        ["Client B → host", "ok ok ok ok stall stall stall elect ok ok ok"]],
+      out: ["A pause of a few seconds, then the game continues with B as host.",
+            "Inputs that were in flight when the host left. Players re-enter them.",
+            "Medium effort. The edge cases need their own network-simulator tests."] }
+  ]
+};
+
+function render(cfg, ids) {
+  const tabs = document.getElementById(ids.tabs);
+  const tl = document.getElementById(ids.timeline);
+  const legend = document.getElementById(ids.legend);
+  const outcome = document.getElementById(ids.outcome);
+  tl.style.gridTemplateColumns = `max-content repeat(${cfg.count}, minmax(44px, 1fr))`;
+
+  function show(policy) {
+    [...tabs.children].forEach(b => b.setAttribute("aria-pressed", String(b.dataset.id === policy.id)));
+    let html = `<div class="lane"></div>`;
+    for (let i = 0; i < cfg.count; i++) html += `<div class="tick">${cfg.start + i}</div>`;
+    const used = new Set();
+    for (const [name, states] of policy.lanes) {
+      html += `<div class="lane">${name}</div>`;
+      for (const s of states.split(" ")) {
+        used.add(s);
+        html += `<div class="cell s-${s}" title="${LEGEND_TEXT[s]}">${LABELS[s]}</div>`;
+      }
+    }
+    tl.innerHTML = html;
+    legend.innerHTML = Object.keys(LEGEND_TEXT).filter(s => used.has(s))
+      .map(s => `<span><i class="s-${s}"></i>${LEGEND_TEXT[s]}</span>`).join("");
+    const [player, evidence, cost] = policy.out;
+    outcome.innerHTML =
+      `<div><dt>Players see</dt><dd>${player}</dd></div>` +
+      `<div><dt>${ids.second}</dt><dd>${evidence}</dd></div>` +
+      `<div><dt>Cost to build</dt><dd>${cost}</dd></div>`;
+  }
+
+  for (const p of cfg.policies) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.dataset.id = p.id;
+    b.innerHTML = p.name + (p.rec ? `<span class="rec">rec.</span>` : "");
+    b.addEventListener("click", () => show(p));
+    tabs.appendChild(b);
+  }
+  show(cfg.policies.find(p => p.rec) || cfg.policies[0]);
+}
+
+render(desync, { tabs: "desync-tabs", timeline: "desync-timeline", legend: "desync-legend", outcome: "desync-outcome", second: "Debug evidence" });
+render(host, { tabs: "host-tabs", timeline: "host-timeline", legend: "host-legend", outcome: "host-outcome", second: "What is lost" });
+</script>
+
+</html>
