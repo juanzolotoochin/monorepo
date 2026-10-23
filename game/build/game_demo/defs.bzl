@@ -46,7 +46,7 @@ game_demo = rule(
         "game": attr.label(executable = True, cfg = "exec", mandatory = True),
         "assertions": attr.label(allow_single_file = [".json"]),
         "script": attr.label(allow_single_file = [".json"], mandatory = True),
-        "_runner": attr.label(default = "//tools/game_demo:runner", executable = True, cfg = "exec"),
+        "_runner": attr.label(default = "//game/tools/demo:runner", executable = True, cfg = "exec"),
         "_ffmpeg": attr.label(default = "@game_demo_tools//:ffmpeg", executable = True, allow_single_file = True, cfg = "exec"),
     },
 )
@@ -94,9 +94,9 @@ def game_simulation_test(name, game, script, assertions, **kwargs):
     game_simulation(name = capture, game = game, script = script)
     py_test(
         name = name,
-        srcs = ["//tools/game_demo:simulation_test.py"],
-        main = "//tools/game_demo:simulation_test.py",
-        deps = ["//tools/game_demo:trace_assertions"],
+        srcs = ["//game/tools/demo:simulation_test.py"],
+        main = "//game/tools/demo:simulation_test.py",
+        deps = ["//game/tools/demo:trace_assertions"],
         data = [":" + capture + ".state.json", ":" + capture + ".frames.jsonl", assertions],
         args = [
             "--report",

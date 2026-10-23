@@ -2,7 +2,7 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_python//python:defs.bzl", "py_test")
 load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
 load("@rules_rs//rs:rust_test.bzl", "rust_test")
-load("//bazel/game_demo:defs.bzl", "game_demo", "game_simulation_test")
+load("//game/build/game_demo:defs.bzl", "game_demo", "game_simulation_test")
 
 rust_binary(
     name = "demo",
@@ -23,16 +23,16 @@ rust_binary(
     rustc_env = {"CARGO_MANIFEST_DIR": "."},
     visibility = ["//visibility:public"],
     deps = [
-        "//examples/rust/bevy_isometric/assets:atlantis",
-        "//examples/rust/bevy_isometric/assets:boulder_lab",
-        "//examples/rust/bevy_isometric/assets:combat_arena",
-        "//examples/rust/bevy_isometric/assets:forest_outpost",
-        "//examples/rust/bevy_isometric/assets:jetpack_lab",
-        "//examples/rust/bevy_isometric/assets:mining_deck",
-        "//examples/rust/bevy_isometric/assets:pile_lab",
-        "//examples/rust/bevy_isometric/assets:surprise_lab",
-        "//tools/assetc/core:voxel_assets",
-        "//tools/gameplay/core:gameplay_core",
+        "//game/app/assets:atlantis",
+        "//game/app/assets:boulder_lab",
+        "//game/app/assets:combat_arena",
+        "//game/app/assets:forest_outpost",
+        "//game/app/assets:jetpack_lab",
+        "//game/app/assets:mining_deck",
+        "//game/app/assets:pile_lab",
+        "//game/app/assets:surprise_lab",
+        "//game/tools/assetc/core:voxel_assets",
+        "//game/core:gameplay_core",
         "@crates//:bevy",
         "@crates//:image",
         "@crates//:serde",

@@ -7,7 +7,7 @@ tree. The current generator supports boulders; more prefab kinds can be added
 to the same renderer-independent compiler.
 
 ```starlark
-load("//bazel/voxel_assets:defs.bzl", "boulder_prefab", "scene_assets")
+load("//game/build/voxel_assets:defs.bzl", "boulder_prefab", "scene_assets")
 
 boulder_prefab(
     name = "basalt",
@@ -31,7 +31,7 @@ scene_assets(
 ```
 
 The underlying `voxel_prefab` rule declares a `VoxelPrefab` action. It reads
-only the recipe and palette, and invokes `//tools/assetc:assetc` with `cfg =
+only the recipe and palette, and invokes `//game/tools/assetc:assetc` with `cfg =
 "exec"`. `VoxelPrefabInfo` carries its ID and compiled artifact. The
 `boulder_prefab` macro selects baked or runtime mode.
 
@@ -51,7 +51,7 @@ window, GPU, audio device, or network access.
 ## Authoring
 
 A recipe specifies parameters; all loops, hashing, voxelization and meshing
-live in `//tools/assetc/core:voxel_assets`:
+live in `//game/tools/assetc/core:voxel_assets`:
 
 ```ron
 Boulder(seed: 42, radius: 1.2, height: 1.6, voxel_size: 0.25)
@@ -98,8 +98,8 @@ Debris is decorative and excluded from body collision.
 ## Validation
 
 ```sh
-bazel test //tools/assetc:assetc_test //tools/assetc/core:core_test \
-  //examples/rust/bevy_isometric:movement_test
+bazel test //game/tools/assetc:assetc_test //game/tools/assetc/core:core_test \
+  //game/app:movement_test
 ```
 
 Tests cover deterministic output, face winding, face reduction, invalid recipes,
@@ -137,7 +137,7 @@ packs together with their consumers; version 1 packs are rejected explicitly.
 Scene pack version 3 adds optional `piles` logistics fixtures: a carrying
 capacity, typed mineral dispensers with output locations, and initial piles.
 The compiler validates capacities, quantities, finite coordinates, and deck
-bounds. See `examples/rust/bevy_isometric/assets/levels/pile_lab.ron` for an
+bounds. See `game/app/assets/levels/pile_lab.ron` for an
 example. Recipes and layouts without logistics fixtures remain valid source
 inputs and rebuild into the current pack version.
 

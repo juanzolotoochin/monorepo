@@ -5,7 +5,7 @@ records the real scene offscreen, and encodes an MP4 with the game's procedural 
 use the same commands and world snapshots as the renderer-free integration tests.
 
 ```starlark
-load("//bazel/game_demo:defs.bzl", "game_demo")
+load("//game/build/game_demo:defs.bzl", "game_demo")
 
 game_demo(
     name = "haul_four_demo",
@@ -17,10 +17,10 @@ game_demo(
 ```
 
 ```sh
-bazel build --config=full_local //examples/rust/bevy_isometric:haul_four_demo
+bazel build --config=full_local //game/app:haul_four_demo
 ```
 
-Outputs in `bazel-bin/examples/rust/bevy_isometric/`:
+Outputs in `bazel-bin/game/app/`:
 
 - `haul_four_demo.mp4`: H.264 video with synchronized AAC game audio, with the script's resolution and FPS.
 - `haul_four_demo.state.json`: action receipts, final world state, assertions,
@@ -38,7 +38,7 @@ Bazel reuses local outputs when inputs are unchanged. The game executable is bui
 
 ## Scripts
 
-See `examples/rust/bevy_isometric/demos/haul_four.json`. Script version 1 declares
+See `game/app/demos/haul_four.json`. Script version 1 declares
 `scene`, `fps`, `width`, `height`, `max_frames`, and sequential `steps`:
 
 ```json
@@ -71,9 +71,9 @@ no microphone or audio device. The state report includes the cue timeline.
 Run the same script quickly with no GPU or audio device:
 
 ```sh
-bazel run //examples/rust/bevy_isometric:demo -- \
+bazel run //game/app:demo -- \
   --simulation \
-  --demo-script "$PWD/examples/rust/bevy_isometric/demos/haul_four.json" \
+  --demo-script "$PWD/game/app/demos/haul_four.json" \
   --report /tmp/haul-state.json
 ```
 
@@ -83,16 +83,16 @@ Enable the local control endpoint in a normal game, or add `--simulation` for
 renderer-free automation:
 
 ```sh
-bazel run //examples/rust/bevy_isometric:demo -- \
+bazel run //game/app:demo -- \
   --scene pile-lab --control-port 7017
 ```
 
 ```sh
-bazel run //tools/game_demo:client -- --address 127.0.0.1:7017 \
+bazel run //game/tools/demo:client -- --address 127.0.0.1:7017 \
   '{"id":"status","command":{"op":"inspect"}}'
-bazel run //tools/game_demo:client -- --address 127.0.0.1:7017 \
+bazel run //game/tools/demo:client -- --address 127.0.0.1:7017 \
   '{"id":"add-ore","command":{"op":"add","dispenser":0,"units":8}}'
-bazel run //tools/game_demo:client -- --address 127.0.0.1:7017 \
+bazel run //game/tools/demo:client -- --address 127.0.0.1:7017 \
   '{"id":"grab-four","command":{"op":"grab","pile":0,"units":4}}'
 ```
 
@@ -155,7 +155,7 @@ nominal hover height. The jetpack demo exercises and asserts climb, gap crossing
 release over a chasm, and landing, and records turbine audio:
 
 ```sh
-bazel build --config=full_local //examples/rust/bevy_isometric:jetpack_demo
+bazel build --config=full_local //game/app:jetpack_demo
 ```
 
 ### Field trial 05
@@ -204,7 +204,7 @@ those files; repeated tests reuse the cached dump. A failed check reports the
 frame, timestamp, actor, measured value, and limit. For example:
 
 ```starlark
-load("//bazel/game_demo:defs.bzl", "game_demo", "game_simulation_test")
+load("//game/build/game_demo:defs.bzl", "game_demo", "game_simulation_test")
 
 game_simulation_test(
     name = "forest_motion_test",
@@ -215,12 +215,12 @@ game_simulation_test(
 ```
 
 ```sh
-bazel build --config=full_local //examples/rust/bevy_isometric:forest_motion_test_capture
-bazel test --config=full_local //examples/rust/bevy_isometric:forest_motion_test
-bazel build --config=full_local //examples/rust/bevy_isometric:forest_outpost_demo
-bazel run //tools/game_demo:assert_trace -- \
-  --trace bazel-bin/examples/rust/bevy_isometric/forest_outpost_demo.frames.jsonl \
-  --assertions examples/rust/bevy_isometric/demos/forest_motion.assertions.json
+bazel build --config=full_local //game/app:forest_motion_test_capture
+bazel test --config=full_local //game/app:forest_motion_test
+bazel build --config=full_local //game/app:forest_outpost_demo
+bazel run //game/tools/demo:assert_trace -- \
+  --trace bazel-bin/game/app/forest_outpost_demo.frames.jsonl \
+  --assertions game/app/demos/forest_motion.assertions.json
 ```
 
 The assertion format is version 1. `always` and `final` compare dot-separated

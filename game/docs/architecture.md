@@ -1,7 +1,7 @@
 # Game architecture
 
-This is the architecture for rewriting the game (today `tools/gameplay/core` and
-`examples/rust/bevy_isometric`) as a deterministic lockstep simulation with Bevy
+This is the architecture for rewriting the game (today `game/core` and
+`game/app`) as a deterministic lockstep simulation with Bevy
 as a view. The goal is the same gameplay as today, rebuilt to scale to about
 100k entities and 2–8 co-op players over the internet (more on LAN).
 
@@ -280,7 +280,7 @@ Details: [milestone plan](design/milestone-plan.html).
 2. Logistics
 3. Combat and player actions
 4. `game_demo` rebuilt on input logs, every scene reproduced, then
-   `tools/gameplay/core` and `examples/rust/bevy_isometric` deleted
+   `game/core` retired and the prototype implementation in `game/app` replaced
 
 ## Deferred
 

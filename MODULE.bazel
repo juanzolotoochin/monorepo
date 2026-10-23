@@ -509,6 +509,6 @@ http_archive(
 )
 
 # Opt-in local GPU video demos; encoder discovery is lazy until a demo is built.
-local_demo_tools = use_repo_rule("//bazel/game_demo:repositories.bzl", "local_demo_tools")
+local_demo_tools = use_repo_rule("//game/build/game_demo:repositories.bzl", "local_demo_tools")
 
 local_demo_tools(name = "game_demo_tools")

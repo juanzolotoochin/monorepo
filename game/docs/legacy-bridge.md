@@ -1,6 +1,6 @@
 # Legacy demo and deterministic-engine boundary
 
-`tools/gameplay/core` and `examples/rust/bevy_isometric` remain the playable
+`game/core` and `game/app` remain the playable
 prototype. The target architecture is [architecture.md](architecture.md): a
 30 Hz fixed-point simulation under `game/`, with Bevy consuming extracts and
 sending tick-stamped commands. The prototype is **not** a lockstep peer yet.

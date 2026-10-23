@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 
-from tools.game_demo.assertions import validate
+from game.tools.demo.assertions import validate
 
 
 def main():

@@ -1,6 +1,6 @@
 import math
 import unittest
-from tools.game_demo.assertions import TraceAssertions
+from game.tools.demo.assertions import TraceAssertions
 
 
 def checker(**limits):

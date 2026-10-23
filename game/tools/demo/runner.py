@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from tools.game_demo.assertions import validate
+from game.tools.demo.assertions import validate
 
 
 def main():
