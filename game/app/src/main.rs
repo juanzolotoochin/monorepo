@@ -252,6 +252,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
             scene::update_hud.run_if(control::rendered),
             preview::capture.run_if(control::interactive),
             lockstep::end_frame,
+            lockstep::end_session,
             (telemetry::end, control::end).chain(),
             control::capture_frame.run_if(control::rendered),
         )

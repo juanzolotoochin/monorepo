@@ -480,6 +480,9 @@ Networked games start on the flat `field` scene (also on key **0** when
 playing alone). `--scene` picks another one; every player must pass the same
 scene. Scene keys are disabled while networked. The HUD's top right shows the
 connection. Leaving and rejoining gives a new avatar; the old one stays put.
+If the host leaves (or crashes: after 5 seconds without hearing from it), or
+turns a player away, or falls out of sync with them, that player's game shows
+why and closes 4 seconds later; there's no host migration.
 
 To defend the Red Clearing together, both pass `--scene combat-arena`:
 

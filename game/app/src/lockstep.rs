@@ -73,6 +73,9 @@ pub struct Game {
     pub name: String,
     /// The name was sent for this session's avatar.
     named: bool,
+    /// Why a networked game ended for this player, if it did: the game
+    /// closes shortly after (see `end_session`).
+    pub ended: Option<String>,
 }
 
 impl Default for Game {
@@ -100,6 +103,7 @@ impl Default for Game {
             status: String::new(),
             name: String::new(),
             named: false,
+            ended: None,
         }
     }
 }
@@ -333,10 +337,22 @@ pub fn step(time: Res<Time>, hub: Option<Res<crate::control::Hub>>, mut game: Re
         game.tick = tick.saturating_sub(1);
     }
     game.alpha = session.alpha(clock);
+    let client = matches!(game.network, Some(Network::Join(_)));
     for event in session.events.drain(..) {
-        match event {
-            net::NetEvent::Desync { .. } | net::NetEvent::HostLost | net::NetEvent::Rejected { .. } => warn!("{event:?}"),
-            _ => info!("{event:?}"),
+        // Without its host a client's game is over: there's no migrating
+        // the host (yet), so it doesn't wait in a world that can't move.
+        let ended = match &event {
+            net::NetEvent::HostLost => Some("The host left the game.".to_string()),
+            net::NetEvent::Rejected { reason } => Some(format!("The host turned us away: {reason}.")),
+            net::NetEvent::Desync { tick, .. } if client => Some(format!("Out of sync with the host at tick {tick}.")),
+            _ => None,
+        };
+        match ended {
+            Some(reason) => {
+                warn!("{event:?}");
+                game.ended.get_or_insert(reason);
+            }
+            None => info!("{event:?}"),
         }
     }
     if let Some(world) = session.world() {
@@ -353,6 +369,61 @@ pub fn step(time: Res<Time>, hub: Option<Res<crate::control::Hub>>, mut game: Re
         let name = game.name.clone();
         game.command(CommandKind::Name { name });
         game.named = true;
+    }
+}
+
+/// How long the ending banner shows before the game closes.
+const CLOSING_SECONDS: f32 = 4.0;
+
+#[derive(Component)]
+pub struct EndBanner;
+
+/// A networked game ended for this player: says why, counts down, and closes.
+pub fn end_session(
+    mut commands: Commands,
+    time: Res<Time<Real>>,
+    game: Res<Game>,
+    mut banner: Query<&mut Text, With<EndBanner>>,
+    mut exit: MessageWriter<AppExit>,
+    mut left: Local<Option<f32>>,
+) {
+    let Some(reason) = &game.ended else { return };
+    let remaining = left.get_or_insert(CLOSING_SECONDS);
+    *remaining -= time.delta_secs();
+    if *remaining <= 0.0 {
+        exit.write(AppExit::Success);
+        return;
+    }
+    let text = format!("{}
+Closing in {}...", reason.to_uppercase(), remaining.ceil());
+    match banner.single_mut() {
+        Ok(mut current) => {
+            if current.0 != text {
+                current.0 = text;
+            }
+        }
+        Err(_) => {
+            commands
+                .spawn((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        width: percent(100.),
+                        height: percent(100.),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)),
+                    GlobalZIndex(100),
+                ))
+                .with_child((
+                    EndBanner,
+                    Text::new(text),
+                    TextFont { font_size: FontSize::Px(26.), ..default() },
+                    TextColor(Color::srgb(1.0, 0.55, 0.3)),
+                    TextLayout::justify(Justify::Center),
+                ));
+        }
     }
 }
 
