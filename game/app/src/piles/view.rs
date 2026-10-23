@@ -36,11 +36,11 @@ fn label(commands: &mut Commands, kind: CaptionKind, anchor: Vec3, text: &str) -
             Caption { kind, anchor },
             Text::new(text),
             TextFont {
-                font_size: 13.0,
+                font_size: FontSize::Px(13.0),
                 ..default()
             },
             TextColor(Color::srgb(0.7, 0.92, 1.0)),
-            TextLayout::new_with_justify(Justify::Center),
+            TextLayout::justify(Justify::Center),
             Node {
                 position_type: PositionType::Absolute,
                 width: px(220.0),
@@ -152,7 +152,10 @@ pub fn setup_scene(
             "",
         );
         commands.entity(caption).insert((
-            Button,
+            // Bevy 0.20 made the old `Button` marker private; spell out
+            // what it required so `Interaction` keeps updating as before.
+            Interaction::None,
+            bevy::ui::FocusPolicy::Block,
             SourceButton(index),
             BackgroundColor(Color::srgba(0.02, 0.06, 0.10, 0.94)),
             BorderColor::all(Color::srgb(0.15, 0.55, 0.65)),
@@ -197,12 +200,12 @@ pub fn setup_scene(
     label(&mut commands, CaptionKind::Cargo, Vec3::ZERO, "");
     commands.spawn((LabEntity,LabPanel,Interaction::None,Node { position_type: PositionType::Absolute, left: px(36.0), top: px(126.0), width: px(350.0), padding: UiRect::all(px(16.0)), flex_direction: FlexDirection::Column, row_gap: px(10.0), ..default() },BackgroundColor(Color::srgba(0.015,0.035,0.055,0.93))))
         .with_children(|p| {
-            p.spawn((Text::new("MINERAL LOGISTICS"),TextFont { font_size: 18.0, ..default() },TextColor(Color::srgb(0.25,0.9,1.0))));
-            p.spawn((LabStatus,Text::new(""),TextFont { font_size: 13.0, ..default() },TextColor(Color::srgb(0.7,0.84,0.9))));
+            p.spawn((Text::new("MINERAL LOGISTICS"),TextFont { font_size: FontSize::Px(18.0), ..default() },TextColor(Color::srgb(0.25,0.9,1.0))));
+            p.spawn((LabStatus,Text::new(""),TextFont { font_size: FontSize::Px(13.0), ..default() },TextColor(Color::srgb(0.7,0.84,0.9))));
             p.spawn(Node { column_gap: px(4.0), ..default() }).with_children(|row| {
                 for index in 0..layout.capacity { row.spawn((CapacityTick(index),Node { width: px(21.0), height: px(12.0), ..default() },BackgroundColor(Color::srgb(0.1,0.18,0.22)))); }
             });
-            p.spawn((Text::new("LMB dispenser: add 5 units\nLMB pile: walk over + collect\nCtrl+LMB pile: collect / top up\nCarrying? LMB ground / matching pile:\nwalk over + deposit\nRMB / WASD: cancel hauling\nOne chunk = one unit"),TextFont { font_size: 12.0, ..default() },TextColor(Color::srgb(0.45,0.65,0.72))));
+            p.spawn((Text::new("LMB dispenser: add 5 units\nLMB pile: walk over + collect\nCtrl+LMB pile: collect / top up\nCarrying? LMB ground / matching pile:\nwalk over + deposit\nRMB / WASD: cancel hauling\nOne chunk = one unit"),TextFont { font_size: FontSize::Px(12.0), ..default() },TextColor(Color::srgb(0.45,0.65,0.72))));
         });
     lab.notice = "Click a dispenser to add mineral, or collect an existing pile.".into();
 }

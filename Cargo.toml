@@ -7,7 +7,7 @@ version = "0.0.0"
 edition = "2021"
 
 [dependencies]
-bevy = { version = "=0.18.1", default-features = false, features = ["std", "async_executor", "multi_threaded", "bevy_asset", "bevy_log", "bevy_winit", "3d_bevy_render", "x11", "keyboard", "bevy_ui_render", "default_font"] }
+bevy = { version = "=0.20.0", default-features = false, features = ["std", "async_executor", "multi_threaded", "bevy_asset", "bevy_log", "bevy_winit", "3d_bevy_render", "x11", "keyboard", "bevy_ui_render", "default_font"] }
 ferris-says = "0.3.1"
 piston_window = "0.131.0"
 gpui = "0.2.2"

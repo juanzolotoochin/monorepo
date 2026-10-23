@@ -265,11 +265,11 @@ pub fn switch_scene(
                 SampleCaption(center + Vec3::Y * 2.1),
                 Text::new(label),
                 TextFont {
-                    font_size: 13.0,
+                    font_size: FontSize::Px(13.0),
                     ..default()
                 },
                 TextColor(Color::srgb(0.65, 0.9, 1.0)),
-                TextLayout::new_with_justify(Justify::Center),
+                TextLayout::justify(Justify::Center),
                 Node {
                     position_type: PositionType::Absolute,
                     width: px(200.0),

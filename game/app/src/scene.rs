@@ -9,7 +9,7 @@ use crate::{
 use bevy::{
     anti_alias::taa::TemporalAntiAliasing, camera::ScalingMode,
     core_pipeline::tonemapping::Tonemapping, pbr::ScreenSpaceAmbientOcclusion,
-    post_process::bloom::Bloom, prelude::*, render::view::Hdr,
+    post_process::bloom::Bloom, prelude::*, camera::Hdr,
 };
 
 fn material(
@@ -141,7 +141,7 @@ pub fn setup(
         DirectionalLight {
             color: Color::srgb(1.0, 0.79, 0.63),
             illuminance: 10500.0,
-            shadows_enabled: true,
+            shadow_maps_enabled: true,
             ..default()
         },
         Transform::from_xyz(-8.0, 12.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
@@ -862,7 +862,7 @@ pub fn hud(mut commands: Commands) {
             p.spawn((
                 Text::new("K E S T R E L   / /   0 7"),
                 TextFont {
-                    font_size: 27.0,
+                    font_size: FontSize::Px(27.0),
                     ..default()
                 },
                 TextColor(white),
@@ -871,7 +871,7 @@ pub fn hud(mut commands: Commands) {
                 SceneLabel,
                 Text::new("LOADING SCENE"),
                 TextFont {
-                    font_size: 11.0,
+                    font_size: FontSize::Px(11.0),
                     ..default()
                 },
                 TextColor(muted),
@@ -903,7 +903,7 @@ pub fn hud(mut commands: Commands) {
             p.spawn((
                 Text::new("[ LIVE ]   SURFACE LINK ESTABLISHED"),
                 TextFont {
-                    font_size: 11.0,
+                    font_size: FontSize::Px(11.0),
                     ..default()
                 },
                 TextColor(cyan),
@@ -912,7 +912,7 @@ pub fn hud(mut commands: Commands) {
                 ContactCount,
                 Text::new("CONTACTS   00"),
                 TextFont {
-                    font_size: 12.0,
+                    font_size: FontSize::Px(12.0),
                     ..default()
                 },
                 TextColor(muted),
@@ -940,7 +940,7 @@ pub fn hud(mut commands: Commands) {
                 crate::style::WeaponLabel,
                 Text::new("MK. IV  /  INDUSTRIAL CLEAVER"),
                 TextFont {
-                    font_size: 11.0,
+                    font_size: FontSize::Px(11.0),
                     ..default()
                 },
                 TextColor(muted),
@@ -949,7 +949,7 @@ pub fn hud(mut commands: Commands) {
                 Status,
                 Text::new("READY"),
                 TextFont {
-                    font_size: 20.0,
+                    font_size: FontSize::Px(20.0),
                     ..default()
                 },
                 TextColor(white),
@@ -989,7 +989,7 @@ pub fn hud(mut commands: Commands) {
                 ControlHelp,
                 Text::new("RMB   MOVE     /     SHIFT + LMB   STRIKE"),
                 TextFont {
-                    font_size: 13.0,
+                    font_size: FontSize::Px(13.0),
                     ..default()
                 },
                 TextColor(white),
@@ -999,7 +999,7 @@ pub fn hud(mut commands: Commands) {
                     "1 / 2 / 3 / 4 / 5 / 6 / 7 / 8  SCENES    SPACE  JETPACK    WASD  STEER    SHIFT  RUN    WHEEL  ZOOM    M  AUDIO",
                 ),
                 TextFont {
-                    font_size: 10.0,
+                    font_size: FontSize::Px(10.0),
                     ..default()
                 },
                 TextColor(muted),

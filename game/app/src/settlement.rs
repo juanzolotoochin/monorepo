@@ -174,7 +174,7 @@ pub fn setup(world: &mut World) {
                     BackgroundColor(Color::NONE),
                     Text::new(""),
                     TextFont {
-                        font_size: 12.,
+                        font_size: FontSize::Px(12.),
                         ..default()
                     },
                     TextColor(Color::srgb(0.96, 0.87, 0.6)),
@@ -209,7 +209,7 @@ pub fn setup(world: &mut World) {
                     BackgroundColor(Color::NONE),
                     Text::new(""),
                     TextFont {
-                        font_size: 14.,
+                        font_size: FontSize::Px(14.),
                         ..default()
                     },
                     TextColor(Color::srgb(0.96, 0.90, 0.76)),
@@ -227,7 +227,7 @@ pub fn setup(world: &mut World) {
                 .spawn((
                     Text::new(""),
                     TextFont {
-                        font_size: 14.,
+                        font_size: FontSize::Px(14.),
                         ..default()
                     },
                     TextColor(Color::srgb(0.9, 0.83, 0.63)),
@@ -972,7 +972,7 @@ pub fn captions(
         if text.0 != content {
             text.0 = content;
         }
-        font.font_size = if expanded { 14. } else { 10. };
+        font.font_size = FontSize::Px(if expanded { 14. } else { 10. });
         color.0 = if expanded {
             Color::srgb(0.95, 0.89, 0.72)
         } else {

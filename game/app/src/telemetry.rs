@@ -113,7 +113,7 @@ pub fn end(world: &mut World) {
                 .spawn((
                     Text::new(""),
                     TextFont {
-                        font_size: 12.,
+                        font_size: FontSize::Px(12.),
                         ..default()
                     },
                     TextColor(Color::srgb(0.7, 0.95, 0.75)),
