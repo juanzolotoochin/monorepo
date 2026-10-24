@@ -67,8 +67,11 @@ pub struct SessionService {
     /// The world the name was last sent in.
     named: u32,
     /// Why a networked game ended for this player, if it did: the game
-    /// closes shortly after (see `end_session`).
+    /// returns to the menu, or without one closes shortly after (see
+    /// `end_session`).
     pub ended: Option<String>,
+    /// `Flow` has been told the session ended.
+    left: bool,
     /// Where to write each world's tick-0 save and input log.
     record: Option<String>,
     start_save: Option<Vec<u8>>,
@@ -91,50 +94,23 @@ impl Service for SessionService {
     type Deps = (Flow,);
 
     fn init(world: &mut World) -> Self {
-        let launch = world.resource_mut::<Flow>().take_launch().expect("a session starts from a launch");
-        let content = Content::builtin();
-        let threads = std::thread::available_parallelism().map_or(2, |n| n.get().min(4));
-        // Single-player has nobody to wait for, so no input delay.
-        let input_delay = if launch.network.is_some() { NetConfig::default().input_delay } else { 0 };
-        let config = NetConfig { threads, input_delay, ..NetConfig::default() };
-        let scene_id = world.resource::<SceneLibrary>().scenes[launch.scene].scene.id.clone();
-        let mut start_save = None;
-        let mut replay_scene = None;
-        let mode = match (launch.replay, launch.network) {
-            (Some((bytes, log)), _) => {
-                let replayed = save::read(&bytes, &content).expect("the recording's save loads");
-                replay_scene = Some(scene_id);
-                session::Mode::Replay { world: replayed, log }
-            }
-            (None, Some(Network::Join(host))) => session::Mode::Join { host, stable_id: stable_id() },
-            (None, network) => {
-                let built = build_world(world, launch.scene, &content);
-                start_save = Some(save::write(&built, &content));
-                let listen = match network {
-                    Some(Network::Host(listen)) => Some(listen),
-                    _ => None,
-                };
-                session::Mode::Host { world: built, label: scene_id, listen }
-            }
-        };
-        let session = session::Session::start(mode, content.clone(), config).unwrap_or_else(|e| panic!("could not start the session: {e}"));
-        if let Some(addr) = session.local_addr() {
-            info!("hosting on {addr}");
-        }
+        let Opened { session, content, network, name, record, start_save, replay_scene } =
+            world.resource_mut::<Flow>().take_opened().expect("a session starts once Flow has opened it");
         SessionService {
             session,
             content,
-            network: launch.network,
+            network,
             clock: Duration::ZERO,
             paused: false,
             rate: 1.0,
             holding: false,
             started: false,
             status: String::new(),
-            name: launch.name,
+            name,
             named: 0,
             ended: None,
-            record: launch.record,
+            left: false,
+            record,
             start_save,
             replay_scene,
             request: None,
@@ -162,6 +138,54 @@ impl Service for SessionService {
             .add_service_systems::<Self, _>(Phase::Mirror, watch_world)
             .add_service_systems::<Self, _>(Phase::Present, end_session);
     }
+}
+
+/// A session that has started (bound, connecting or replaying) and the
+/// launch details the service keeps.
+pub struct Opened {
+    session: session::Session,
+    content: Content,
+    network: Option<Network>,
+    name: String,
+    record: Option<String>,
+    start_save: Option<Vec<u8>>,
+    replay_scene: Option<String>,
+}
+
+/// Starts a launch's session: builds the scene's world (or loads the
+/// replay's), then hosts it, joins, or replays. `Flow` calls this; an error
+/// says why the session couldn't start.
+pub fn open(world: &mut World, launch: crate::flow::Launch) -> Result<Opened, String> {
+    let content = Content::builtin();
+    let threads = std::thread::available_parallelism().map_or(2, |n| n.get().min(4));
+    // Single-player has nobody to wait for, so no input delay.
+    let input_delay = if launch.network.is_some() { NetConfig::default().input_delay } else { 0 };
+    let config = NetConfig { threads, input_delay, ..NetConfig::default() };
+    let scene_id = world.resource::<SceneLibrary>().scenes[launch.scene].scene.id.clone();
+    let mut start_save = None;
+    let mut replay_scene = None;
+    let mode = match (launch.replay, launch.network) {
+        (Some((bytes, log)), _) => {
+            let replayed = save::read(&bytes, &content).map_err(|e| format!("The recording's save doesn't load: {e}"))?;
+            replay_scene = Some(scene_id);
+            session::Mode::Replay { world: replayed, log }
+        }
+        (None, Some(Network::Join(host))) => session::Mode::Join { host, stable_id: stable_id() },
+        (None, network) => {
+            let built = build_world(world, launch.scene, &content);
+            start_save = Some(save::write(&built, &content));
+            let listen = match network {
+                Some(Network::Host(listen)) => Some(listen),
+                _ => None,
+            };
+            session::Mode::Host { world: built, label: scene_id, listen }
+        }
+    };
+    let session = session::Session::start(mode, content.clone(), config).map_err(|e| format!("Couldn't start the session: {e}"))?;
+    if let Some(addr) = session.local_addr() {
+        info!("hosting on {addr}");
+    }
+    Ok(Opened { session, content, network: launch.network, name: launch.name, record: launch.record, start_save, replay_scene })
 }
 
 impl SessionService {
@@ -470,12 +494,21 @@ pub struct EndBanner;
 fn end_session(
     mut commands: Commands,
     time: Res<Time<Real>>,
-    service: Res<SessionService>,
+    mut service: ResMut<SessionService>,
+    mut flow: ResMut<Flow>,
+    options: Res<crate::control::Options>,
     mut banner: Query<&mut Text, With<EndBanner>>,
     mut exit: MessageWriter<AppExit>,
     mut left: Local<Option<f32>>,
 ) {
-    let Some(reason) = &service.ended else { return };
+    let Some(reason) = service.ended.clone() else { return };
+    if options.menus() {
+        if !service.left {
+            service.left = true;
+            flow.leave(Some(reason));
+        }
+        return;
+    }
     let remaining = left.get_or_insert(CLOSING_SECONDS);
     *remaining -= time.delta_secs();
     if *remaining <= 0.0 {

@@ -204,7 +204,7 @@ fn spawn(mut commands: Commands, roots: Query<(), With<MenuRoot>>) {
                 field(Field::Address, 240.0),
             ]),
             (button(Action::Quit, 110.0, JustifyContent::Center), children![label("QUIT", 16.0, TEXT)]),
-            (Message, Text::new(""), font(14.0), TextColor(WARNING), Node { margin: UiRect::top(px(14)), ..default() }),
+            (Message, Text::new(""), font(14.0), TextColor(WARNING), Node { max_width: px(640), margin: UiRect::top(px(14)), ..default() }),
         ],
     ));
 }
@@ -274,6 +274,7 @@ fn type_text(
 /// pointer or has the keyboard.
 fn show(
     menu: Res<MainMenu>,
+    flow: Res<Flow>,
     library: Res<SceneLibrary>,
     mut texts: Query<(&mut Text, Option<&FieldText>, Has<SceneName>, Has<Message>)>,
     mut buttons: Query<(&Interaction, &Action, &mut BackgroundColor, &mut BorderColor)>,
@@ -285,7 +286,7 @@ fn show(
         } else if scene {
             library.scenes[menu.scene].scene.name.clone()
         } else if message {
-            menu.error.clone().unwrap_or_default()
+            menu.error.clone().or_else(|| flow.ended.clone()).unwrap_or_default()
         } else {
             continue;
         };

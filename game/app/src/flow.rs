@@ -1,6 +1,6 @@
 //! What the game does from launch (App layer): the main menu, or a session
 //! the command line asked for (hosting, joining, a replay, or single-player).
-//! `Flow` is the only code that starts sessions.
+//! `Flow` is the only code that starts and leaves sessions.
 
 use bevy::prelude::*;
 use save::InputLog;
@@ -54,8 +54,14 @@ pub struct Start {
 
 #[derive(Resource)]
 pub struct Flow {
-    /// The session to start, until the Session layer takes it.
+    /// The session to start at the next Input phase.
     launch: Option<Launch>,
+    /// The started session, until the Session layer takes it.
+    opened: Option<crate::lockstep::Opened>,
+    /// Leave the session at the next Input phase.
+    leaving: bool,
+    /// Why the last session ended or failed to start, for the menu.
+    pub ended: Option<String>,
     pub defaults: Defaults,
     /// A text field has the keyboard, so the app's keys don't apply.
     pub typing: bool,
@@ -67,11 +73,11 @@ impl Service for Flow {
 
     fn init(world: &mut World) -> Self {
         let Start { launch, defaults } = world.remove_resource::<Start>().expect("the game starts from a Start");
-        Flow { launch, defaults, typing: false }
+        Flow { launch, opened: None, leaving: false, ended: None, defaults, typing: false }
     }
 
     fn systems(app: &mut App) {
-        app.add_service_systems::<Self, _>(Phase::Input, (start_session, app_keys.run_if(crate::control::interactive)));
+        app.add_service_systems::<Self, _>(Phase::Input, (follow, app_keys.run_if(crate::control::interactive)));
     }
 }
 
@@ -79,11 +85,19 @@ impl Flow {
     /// Starts a session with this launch at the next Input phase.
     pub fn start(&mut self, launch: Launch) {
         self.launch = Some(launch);
+        self.ended = None;
     }
 
-    /// The launch, for the session starting now.
-    pub fn take_launch(&mut self) -> Option<Launch> {
-        self.launch.take()
+    /// Leaves the session at the next Input phase; `reason` says why, if it
+    /// ended on its own.
+    pub fn leave(&mut self, reason: Option<String>) {
+        self.leaving = true;
+        self.ended = reason;
+    }
+
+    /// The opened session, for the Session layer starting now.
+    pub fn take_opened(&mut self) -> Option<crate::lockstep::Opened> {
+        self.opened.take()
     }
 }
 
@@ -125,15 +139,86 @@ fn app_keys(
     }
 }
 
-/// Starts the launch's session once the App layer is up.
-fn start_session(
-    flow: Res<Flow>,
-    app: Res<State<AppState>>,
-    session: Option<Res<State<SessionState>>>,
-    next: Option<ResMut<NextState<SessionState>>>,
-) {
-    let (Some(session), Some(mut next)) = (session, next) else { return };
-    if *app.get() == AppState::Active && *session.get() == SessionState::Off && flow.launch.is_some() {
-        next.set(SessionState::Loading);
+/// Starts the launch's session once the App layer is up, and leaves a
+/// session when asked. A session that can't start leaves its reason for the
+/// menu, or without a menu ends the game.
+fn follow(world: &mut World) {
+    let app = *world.resource::<State<AppState>>().get();
+    let Some(session) = world.get_resource::<State<SessionState>>().map(|s| *s.get()) else { return };
+    if app != AppState::Active {
+        return;
+    }
+    let mut flow = world.resource_mut::<Flow>();
+    if std::mem::take(&mut flow.leaving) && session != SessionState::Off {
+        world.resource_mut::<NextState<SessionState>>().set(SessionState::Off);
+        return;
+    }
+    if session != SessionState::Off {
+        return;
+    }
+    let Some(launch) = flow.launch.take() else { return };
+    match crate::lockstep::open(world, launch) {
+        Ok(opened) => {
+            world.resource_mut::<Flow>().opened = Some(opened);
+            world.resource_mut::<NextState<SessionState>>().set(SessionState::Loading);
+        }
+        Err(reason) => {
+            if world.resource::<crate::control::Options>().menus() {
+                warn!("{reason}");
+                world.resource_mut::<Flow>().ended = Some(reason);
+            } else {
+                error!("{reason}");
+                world.write_message(AppExit::error());
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assets::SceneLibrary;
+    use service::WorldState;
+
+    fn state<S: States + Copy>(app: &App) -> Option<S> {
+        app.world().get_resource::<State<S>>().map(|s| *s.get())
+    }
+
+    #[test]
+    fn a_session_can_be_left_and_another_started() {
+        let options = crate::control::Options { simulation: true, ..default() };
+        let hub = crate::control::Hub::new(options.clone()).unwrap();
+        let mut app = crate::test_app(options, SceneLibrary::new(), hub, Launch::single_player(0));
+        crate::start_world(&mut app);
+        app.world_mut().resource_mut::<Flow>().leave(Some("The host left the game.".into()));
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(state::<SessionState>(&app), Some(SessionState::Off));
+        assert_eq!(state::<WorldState>(&app), None);
+        assert!(app.world().get_resource::<crate::lockstep::SessionService>().is_none());
+        assert_eq!(app.world().resource::<Flow>().ended.as_deref(), Some("The host left the game."));
+
+        app.world_mut().resource_mut::<Flow>().start(Launch::single_player(1));
+        crate::start_world(&mut app);
+        assert_eq!(app.world().resource::<crate::scene_view::SceneView>().index, 1);
+        assert_eq!(app.world().resource::<Flow>().ended, None);
+    }
+
+    #[test]
+    fn a_session_that_cannot_start_ends_the_run_without_a_menu() {
+        let options = crate::control::Options { simulation: true, ..default() };
+        let hub = crate::control::Hub::new(options.clone()).unwrap();
+        // Something else holds the port.
+        let taken = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+        let launch = Launch { network: Some(host(&taken.local_addr().unwrap().port().to_string()).unwrap()), ..Launch::single_player(0) };
+        let mut app = crate::test_app(options, SceneLibrary::new(), hub, launch);
+        let mut exit = None;
+        for _ in 0..5 {
+            app.update();
+            exit = exit.or(app.should_exit());
+        }
+        assert_eq!(state::<SessionState>(&app), Some(SessionState::Off));
+        assert!(exit.as_ref().is_some_and(AppExit::is_error), "{exit:?}");
     }
 }
