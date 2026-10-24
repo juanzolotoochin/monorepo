@@ -8,6 +8,7 @@ mod impact;
 mod jetpack;
 mod legacy;
 mod lockstep;
+mod menu;
 mod digging;
 mod nametags;
 mod navigation;
@@ -43,6 +44,7 @@ fn main() {
             std::process::exit(2)
         })
         .unwrap_or(0);
+    let value = |flag: &str| args.windows(2).find(|pair| pair[0] == flag).map(|pair| pair[1].clone());
     let network = network(&args).unwrap_or_else(|error| {
         eprintln!("{error}");
         std::process::exit(2)
@@ -53,8 +55,8 @@ fn main() {
         // scene the host's world is.
         scene = scenes.index("field").expect("the field scene exists");
     }
-    if let Some(pair) = args.windows(2).find(|pair| pair[0] == "--scene") {
-        scene = scenes.index(&pair[1]).unwrap_or_else(|error| {
+    if let Some(name) = value("--scene") {
+        scene = scenes.index(&name).unwrap_or_else(|error| {
             eprintln!("{error}");
             std::process::exit(2)
         });
@@ -63,67 +65,64 @@ fn main() {
         eprintln!("{e}");
         std::process::exit(2)
     });
-    let replay = args.windows(2).find(|pair| pair[0] == "--replay-input").map(|pair| {
+    let replay = value("--replay-input").map(|path| {
         let read = |path: &str| std::fs::read(path).unwrap_or_else(|e| {
             eprintln!("{path}: {e}");
             std::process::exit(2)
         });
-        let log = save::InputLog::from_bytes(&read(&pair[1])).unwrap_or_else(|e| {
-            eprintln!("{}: {e}", pair[1]);
+        let log = save::InputLog::from_bytes(&read(&path)).unwrap_or_else(|e| {
+            eprintln!("{path}: {e}");
             std::process::exit(2)
         });
-        (read(&format!("{}.gsav", pair[1])), log)
+        (read(&format!("{path}.gsav")), log)
     });
-    let launch = flow::Launch {
-        network,
-        scene,
+    let defaults = flow::Defaults {
         // `--name`, or who is logged in.
-        name: args
-            .windows(2)
-            .find(|pair| pair[0] == "--name")
-            .map(|pair| pair[1].clone())
+        name: value("--name")
             .or_else(|| std::env::var("USERNAME").or_else(|_| std::env::var("USER")).ok())
             .unwrap_or_default(),
-        record: args.windows(2).find(|pair| pair[0] == "--record-input").map(|pair| pair[1].clone()),
-        replay,
+        scene,
+        record: value("--record-input"),
+        port: value("--host").and_then(|port| port.parse().ok()).unwrap_or(flow::DEFAULT_PORT),
+        address: value("--join").unwrap_or_else(|| format!("127.0.0.1:{}", flow::DEFAULT_PORT)),
     };
-    let mut app = build_app(options, scenes, hub, launch);
+    // A player's run with no session flags opens the menu; anything else
+    // starts its session right away.
+    let asked = network.is_some() || value("--scene").is_some() || replay.is_some();
+    let launch = (asked || !options.menus()).then(|| flow::Launch {
+        network,
+        scene,
+        name: defaults.name.clone(),
+        record: defaults.record.clone(),
+        replay,
+    });
+    let mut app = build_app(options, scenes, hub, flow::Start { launch, defaults });
     app.run();
 }
 
 /// `--host <port>` hosts a networked game; `--join <host:port>` joins one
 /// (the host may be a name, such as a Tailscale machine name).
 fn network(args: &[String]) -> Result<Option<lockstep::Network>, String> {
-    use std::net::ToSocketAddrs;
     let value = |flag: &str| args.windows(2).find(|pair| pair[0] == flag).map(|pair| pair[1].as_str());
     match (value("--host"), value("--join")) {
         (Some(_), Some(_)) => Err("Pass --host or --join, not both".into()),
-        (Some(port), None) => {
-            let port: u16 = port.parse().map_err(|e| format!("Invalid --host port {port}: {e}"))?;
-            Ok(Some(lockstep::Network::Host(([0, 0, 0, 0], port).into())))
-        }
-        (None, Some(host)) => {
-            let addr = host
-                .to_socket_addrs()
-                .map_err(|e| format!("Cannot resolve --join {host}: {e}"))?
-                .find(|a| a.is_ipv4())
-                .ok_or_else(|| format!("No IPv4 address for --join {host}"))?;
-            Ok(Some(lockstep::Network::Join(addr)))
-        }
+        (Some(port), None) => flow::host(port).map(Some).map_err(|e| format!("--host: {e}")),
+        (None, Some(host)) => flow::join(host).map(Some).map_err(|e| format!("--join: {e}")),
         (None, None) => Ok(None),
     }
 }
 
-fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: control::Hub, launch: flow::Launch) -> App {
+fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: control::Hub, start: flow::Start) -> App {
     use bevy::{app::ScheduleRunnerPlugin, time::TimeUpdateStrategy};
     use std::time::Duration;
     let simulation = options.simulation;
     let offscreen = options.frames_dir.is_some();
     let fps = options.fps();
     let deterministic = simulation || options.script.is_some();
+    let menus = options.menus();
     let mut app = App::new();
     app.insert_resource(options)
-        .insert_resource(launch)
+        .insert_resource(start)
         .insert_resource(hub)
         .init_resource::<control::Video>()
         .insert_resource(ClearColor(Color::srgb(0.018, 0.025, 0.045)))
@@ -201,9 +200,11 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
     // The frame (see game/docs/proposals/service_layers.md): telemetry and
     // the control port wrap it; everything else belongs to a service, and
     // services tick by layer, then in the order registered here.
-    app.add_plugins(ServicesPlugin)
-        .add_service::<flow::Flow>()
-        .add_service::<lockstep::SessionService>()
+    app.add_plugins(ServicesPlugin).add_service::<flow::Flow>();
+    if menus {
+        app.add_service::<menu::MainMenu>();
+    }
+    app.add_service::<lockstep::SessionService>()
         .add_service::<lockstep::WorldMirror>()
         .add_service::<scene_view::SceneView>()
         .add_service::<settlement::Settlement>()
@@ -230,7 +231,8 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
 /// finishing the plugins attaches each service's systems to its layer.
 #[cfg(test)]
 fn test_app(options: control::Options, scenes: assets::SceneLibrary, hub: control::Hub, launch: flow::Launch) -> App {
-    let mut app = build_app(options, scenes, hub, launch);
+    let defaults = flow::Defaults { name: String::new(), scene: launch.scene, record: None, port: flow::DEFAULT_PORT, address: String::new() };
+    let mut app = build_app(options, scenes, hub, flow::Start { launch: Some(launch), defaults });
     app.finish();
     app.cleanup();
     app

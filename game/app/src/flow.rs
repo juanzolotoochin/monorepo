@@ -1,6 +1,6 @@
-//! What the game does from launch (App layer). Today that is one session,
-//! started from the command line: hosting, joining, a replay, or
-//! single-player. The main menu will take over choosing it.
+//! What the game does from launch (App layer): the main menu, or a session
+//! the command line asked for (hosting, joining, a replay, or single-player).
+//! `Flow` is the only code that starts sessions.
 
 use bevy::prelude::*;
 use save::InputLog;
@@ -8,7 +8,7 @@ use service::{AppLayer, AppServices, AppState, Phase, Service, SessionState};
 
 use crate::lockstep::Network;
 
-/// How the command line asked to play.
+/// How to start a session.
 #[derive(Resource)]
 pub struct Launch {
     pub network: Option<Network>,
@@ -31,10 +31,34 @@ impl Launch {
     }
 }
 
+/// What the menu's fields start with: the command line's choices, or defaults.
+#[derive(Clone)]
+pub struct Defaults {
+    pub name: String,
+    pub scene: usize,
+    pub record: Option<String>,
+    pub port: u16,
+    pub address: String,
+}
+
+/// The port the menu offers for hosting, unless `--host` named one.
+pub const DEFAULT_PORT: u16 = 7000;
+
+/// What the game does at launch: start a session, or show the main menu
+/// (no launch).
+#[derive(Resource)]
+pub struct Start {
+    pub launch: Option<Launch>,
+    pub defaults: Defaults,
+}
+
 #[derive(Resource)]
 pub struct Flow {
     /// The session to start, until the Session layer takes it.
     launch: Option<Launch>,
+    pub defaults: Defaults,
+    /// A text field has the keyboard, so the app's keys don't apply.
+    pub typing: bool,
 }
 
 impl Service for Flow {
@@ -42,7 +66,8 @@ impl Service for Flow {
     type Deps = ();
 
     fn init(world: &mut World) -> Self {
-        Flow { launch: world.remove_resource::<Launch>() }
+        let Start { launch, defaults } = world.remove_resource::<Start>().expect("the game starts from a Start");
+        Flow { launch, defaults, typing: false }
     }
 
     fn systems(app: &mut App) {
@@ -51,15 +76,48 @@ impl Service for Flow {
 }
 
 impl Flow {
+    /// Starts a session with this launch at the next Input phase.
+    pub fn start(&mut self, launch: Launch) {
+        self.launch = Some(launch);
+    }
+
     /// The launch, for the session starting now.
     pub fn take_launch(&mut self) -> Option<Launch> {
         self.launch.take()
     }
 }
 
-/// Escape quits; M mutes.
-fn app_keys(keys: Res<ButtonInput<KeyCode>>, mut exit: MessageWriter<AppExit>, mut sound: ResMut<crate::sound::Sound>) {
-    if keys.just_pressed(KeyCode::Escape) {
+/// `--host <port>`: hosts on every interface.
+pub fn host(port: &str) -> Result<Network, String> {
+    let port: u16 = port.trim().parse().map_err(|e| format!("Invalid port {port}: {e}"))?;
+    Ok(Network::Host(([0, 0, 0, 0], port).into()))
+}
+
+/// `--join <host:port>`: the host may be a name, such as a Tailscale machine
+/// name.
+pub fn join(address: &str) -> Result<Network, String> {
+    use std::net::ToSocketAddrs;
+    let address = address.trim();
+    let addr = address
+        .to_socket_addrs()
+        .map_err(|e| format!("Cannot resolve {address}: {e}"))?
+        .find(|a| a.is_ipv4())
+        .ok_or_else(|| format!("No IPv4 address for {address}"))?;
+    Ok(Network::Join(addr))
+}
+
+/// Escape quits (when there is no menu to go back to); M mutes.
+fn app_keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    flow: Res<Flow>,
+    options: Res<crate::control::Options>,
+    mut exit: MessageWriter<AppExit>,
+    mut sound: ResMut<crate::sound::Sound>,
+) {
+    if flow.typing {
+        return;
+    }
+    if keys.just_pressed(KeyCode::Escape) && !options.menus() {
         exit.write(AppExit::Success);
     }
     if keys.just_pressed(KeyCode::KeyM) {

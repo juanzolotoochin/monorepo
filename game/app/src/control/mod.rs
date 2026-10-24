@@ -77,6 +77,12 @@ impl Options {
     pub fn fps(&self) -> u32 {
         self.script.as_ref().map_or(60, |s| s.fps)
     }
+    /// A player's run: the main menu and the pause overlay show, and a
+    /// session that ends returns to the menu. Scripted, recorded and
+    /// remote-controlled runs start a session and exit when it ends.
+    pub fn menus(&self) -> bool {
+        !self.simulation && self.frames_dir.is_none() && self.script.is_none() && self.port.is_none()
+    }
     pub fn initial_scene(&self, scenes: &SceneLibrary) -> Result<Option<usize>, String> {
         self.script.as_ref().map(|s| scenes.index(&s.scene)).transpose()
     }
