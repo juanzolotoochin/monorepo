@@ -50,7 +50,6 @@ pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack) {
         .as_ref()
         .map_or(vec![], |s| s.weapons.clone());
     let fixture_lighting = environment.as_ref().is_some_and(|e| !e.lights.is_empty());
-    let hide_deck = environment.is_some() || scene.scene.terrain.is_some();
     let settlement = scene.scene.scenario.is_some();
     for mut visible in world
         .query_filtered::<&mut Visibility, Or<(
@@ -77,16 +76,6 @@ pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack) {
             "RMB MOVE / SHIFT+LMB STRIKE"
         }
         .into();
-    }
-    for mut visibility in world
-        .query_filtered::<&mut Visibility, With<crate::jetpack::Deck>>()
-        .iter_mut(world)
-    {
-        *visibility = if hide_deck {
-            Visibility::Hidden
-        } else {
-            Visibility::Inherited
-        };
     }
     if let Some(bindings) = world.get_resource::<MaterialBindings>() {
         let updates: Vec<_> = bindings

@@ -40,6 +40,14 @@ impl Service for SceneView {
         world.flush();
         crate::assets::spawn_scene(world, &pack);
         crate::style::apply(world, &pack);
+        // The built-in deck shows only where the scene brings no ground of
+        // its own: terrain, an environment, or ground to dig.
+        let own_ground = pack.scene.terrain.is_some()
+            || pack.environment.is_some()
+            || pack.scene.features.contains(&SceneFeature::Digging);
+        for mut visibility in world.query_filtered::<&mut Visibility, With<crate::jetpack::Deck>>().iter_mut(world) {
+            *visibility = if own_ground { Visibility::Hidden } else { Visibility::Inherited };
+        }
         info!("Showing scene {}", pack.scene.name);
         SceneView { index, pack }
     }

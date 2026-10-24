@@ -45,15 +45,9 @@ impl Service for Flight {
     type Layer = WorldLayer;
     type Deps = (WorldMirror, SceneView);
 
-    /// Raises the scene's platforms and shows the built-in deck only where
-    /// the scene brings no ground of its own, as `style::apply` decides too.
+    /// Raises the scene's platforms (`SceneView` hides the deck under them).
     fn init(world: &mut World) -> Self {
-        let scene = world.resource::<SceneView>();
-        let terrain = scene.scene().terrain.clone();
-        let own_ground = terrain.is_some() || scene.pack.environment.is_some();
-        for mut visibility in world.query_filtered::<&mut Visibility, With<Deck>>().iter_mut(world) {
-            *visibility = if own_ground { Visibility::Hidden } else { Visibility::Inherited };
-        }
+        let terrain = world.resource::<SceneView>().scene().terrain.clone();
         if let Some(terrain) = terrain {
             world.run_system_cached_with(raise_platforms, terrain).expect("raising the scene's platforms");
         }

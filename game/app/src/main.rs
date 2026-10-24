@@ -224,6 +224,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .add_service::<lockstep::WorldMirror>()
         .add_service::<scene_view::SceneView>()
         .add_service::<Views>()
+        .add_service::<digging::Digging>()
         .add_service::<jetpack::Flight>()
         .add_service::<palimpsest::Memory>()
         .add_service::<lockstep::PlayerControl>()
@@ -257,8 +258,6 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
                 piles::mirror,
                 lockstep::follow_avatar,
                 peers::update.run_if(control::rendered),
-                digging::update,
-                digging::follow_camera,
             )
                 .chain()
                 .run_if(active.clone()),

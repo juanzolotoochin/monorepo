@@ -20,8 +20,8 @@ use sim::terrain::{Terrain, LAYER, MAX_LAYERS};
 use crate::scene_view::SceneView;
 use crate::effects::{CameraRig, FxAssets};
 use crate::gameplay::Player;
-use crate::jetpack::Deck;
 use crate::lockstep::{SessionService, WorldMirror};
+use service::{AppServices, Phase, Service, WorldLayer, WorldScoped, WorldState};
 
 /// Tiles per chunk side.
 const CHUNK: i32 = 16;
@@ -44,15 +44,6 @@ pub struct DigBar {
 #[derive(Component)]
 pub struct DigFill;
 
-/// What the drawn ground was built from.
-#[derive(Default)]
-pub struct Drawn {
-    /// The scene and arena center it belongs to.
-    world: Option<(usize, IVec2)>,
-    pits: Vec<((i32, i32), u8)>,
-    material: Option<Handle<StandardMaterial>>,
-}
-
 /// The simulation's tile at the arena's center.
 fn center_tile(center: FxVec2) -> IVec2 {
     IVec2::new(center.x.round().floor_to_int() as i32, center.y.round().floor_to_int() as i32)
@@ -63,67 +54,90 @@ fn arena_tile(center: FxVec2, tile: (i32, i32)) -> IVec2 {
     IVec2::new(tile.0, tile.1) - center_tile(center)
 }
 
-/// Builds the ground for digging scenes, hides the deck there, and rebuilds
-/// chunks whose pits changed.
+/// The dug ground of a digging scene (World layer): built when the world
+/// starts, its chunks rebuilt as pits change.
+#[derive(Resource)]
+pub struct Digging {
+    /// The pits the drawn ground shows.
+    pits: Vec<((i32, i32), u8)>,
+}
+
+impl Service for Digging {
+    type Layer = WorldLayer;
+    type Deps = (WorldMirror, SceneView);
+
+    fn init(world: &mut World) -> Self {
+        if !world.resource::<SceneView>().has_feature(SceneFeature::Digging) {
+            return Digging { pits: Vec::new() };
+        }
+        let center = center_tile(world.resource::<WorldMirror>().center);
+        let terrain = world.resource::<SessionService>().world().map(|w| w.terrain().clone());
+        let Some(terrain) = terrain else { return Digging { pits: Vec::new() } };
+        let pits = terrain.pits.clone();
+        world.run_system_cached_with(build_ground, (terrain, center)).expect("building the dug ground");
+        Digging { pits }
+    }
+
+    fn systems(app: &mut App) {
+        app.add_service_systems::<Self, _>(Phase::Mirror, (update, follow_camera).chain().run_if(in_state(WorldState::Active)));
+    }
+}
+
+/// The ground's material, made once.
+#[derive(Resource)]
+struct GroundMaterial(Handle<StandardMaterial>);
+
+fn build_ground(
+    In((terrain, center)): In<(Terrain, IVec2)>,
+    mut commands: Commands,
+    ground: Option<Res<GroundMaterial>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let material = match ground {
+        Some(ground) => ground.0.clone(),
+        None => {
+            let material = materials.add(StandardMaterial { base_color: Color::WHITE, perceptual_roughness: 0.93, ..default() });
+            commands.insert_resource(GroundMaterial(material.clone()));
+            material
+        }
+    };
+    let extent = terrain.extent.round().floor_to_int() as i32;
+    let count = (2 * extent + 1 + CHUNK - 1) / CHUNK;
+    for y in 0..count {
+        for x in 0..count {
+            let key = IVec2::new(x, y);
+            let mesh = meshes.add(chunk_mesh(&terrain, center, extent, key));
+            commands.spawn((GroundChunk(key), WorldScoped::default(), Mesh3d(mesh), MeshMaterial3d(material.clone()), Transform::default()));
+        }
+    }
+}
+
+/// Rebuilds the chunks whose pits changed.
 pub fn update(
     mut commands: Commands,
     service: Res<SessionService>,
     mirror: Res<WorldMirror>,
-    scene: Res<SceneView>,
+    mut digging: ResMut<Digging>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut deck: Query<&mut Visibility, With<Deck>>,
     chunks: Query<(Entity, &GroundChunk)>,
-    mut drawn: Local<Drawn>,
 ) {
-    let terrain = service.world().map(sim::World::terrain).filter(|_| scene.has_feature(SceneFeature::Digging));
-    let Some(terrain) = terrain else {
-        if drawn.world.take().is_some() {
-            for (entity, _) in &chunks {
-                commands.entity(entity).despawn();
-            }
-        }
+    let Some(terrain) = service.world().map(sim::World::terrain) else { return };
+    if chunks.is_empty() || digging.pits == terrain.pits {
         return;
-    };
-    // Elsewhere the deck is the scene's (see `jetpack::scene_changed`).
-    for mut visibility in &mut deck {
-        visibility.set_if_neq(Visibility::Hidden);
     }
     let center = center_tile(mirror.center);
     let extent = terrain.extent.round().floor_to_int() as i32;
-    let material = drawn
-        .material
-        .get_or_insert_with(|| materials.add(StandardMaterial { base_color: Color::WHITE, perceptual_roughness: 0.93, ..default() }))
-        .clone();
-    let mut dirty = BTreeSet::new();
-    if drawn.world != Some((scene.index, center)) {
-        for (entity, _) in &chunks {
-            commands.entity(entity).despawn();
-        }
-        drawn.world = Some((scene.index, center));
-        drawn.pits = terrain.pits.clone();
-        let count = (2 * extent + 1 + CHUNK - 1) / CHUNK;
-        for y in 0..count {
-            for x in 0..count {
-                let key = IVec2::new(x, y);
-                let mesh = meshes.add(chunk_mesh(terrain, center, extent, key));
-                commands.spawn((GroundChunk(key), Mesh3d(mesh), MeshMaterial3d(material.clone()), Transform::default()));
-            }
-        }
-        return;
-    }
-    if drawn.pits == terrain.pits {
-        return;
-    }
     // A pit changes its own tile's top and its neighbors' walls.
-    let changed = drawn.pits.iter().chain(&terrain.pits).filter(|p| !(drawn.pits.contains(p) && terrain.pits.contains(p)));
+    let mut dirty = BTreeSet::new();
+    let changed = digging.pits.iter().chain(&terrain.pits).filter(|p| !(digging.pits.contains(p) && terrain.pits.contains(p)));
     for &(tile, _) in changed {
         let a = arena_tile(mirror.center, tile);
         for offset in [IVec2::ZERO, IVec2::X, IVec2::NEG_X, IVec2::Y, IVec2::NEG_Y] {
             dirty.insert(((a + offset + IVec2::splat(extent)).div_euclid(IVec2::splat(CHUNK))).to_array());
         }
     }
-    drawn.pits = terrain.pits.clone();
+    digging.pits = terrain.pits.clone();
     for (entity, chunk) in &chunks {
         if dirty.contains(&chunk.0.to_array()) {
             let mesh = meshes.add(chunk_mesh(terrain, center, extent, chunk.0));
