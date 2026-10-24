@@ -54,6 +54,7 @@ is a minimal binary over `game/view`, used to test sessions and networking.
 | `net` | yes | Turns, input delay, time sync, `Transport` and `Sessions` traits, loopback simulator, UDP |
 | `session` | yes | One running game for a front end: host, client or replay, with input-log recording |
 | `headless` | tool | Runs a save plus an input log, writes per-tick hashes, benchmarks |
+| `service` | no (Bevy) | Service layers for front ends: App, Session and World services, their states, and the frame phases ([proposal](proposals/service_layers.md)) |
 | `view` | no (Bevy) | Consumes the render extract: interpolation, prediction, overlays |
 | `play` | no (Bevy) | Minimal binary: single-player, host, join |
 | `app` | no (Bevy) | The game: every scene, scripted demos, inspection protocol |

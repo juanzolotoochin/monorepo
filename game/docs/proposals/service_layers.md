@@ -1,7 +1,8 @@
 # Service layers
 
-Status: design agreed on 2026-10-24, not built yet. The next feature, the main
-menu, is the first one to use it.
+Status: design agreed on 2026-10-24. The framework is built (`game/service`,
+migration step 1); nothing uses it yet. The next feature, the main menu, is
+the first one to use it.
 
 The game's front end needs one answer to "where does this flow or system
 live, and for how long?". This proposal groups front-end code into
@@ -116,18 +117,26 @@ pub trait Service: Resource + Sized {
     /// service in it is ready.
     fn ready(&self, world: &World) -> bool { true }
     /// Adds the service's systems, each in a phase.
-    fn systems(app: &mut App) {}
+    fn systems(app: &mut App) {
+        app.add_service_systems::<Self, _>(Phase::Mirror, mirror_piles);
+    }
 }
 
-app.add_service::<SettlementMirror>(); // World #1
-app.add_service::<PilesView>();        // World #2: starts after, ticks after, stops before
+app.add_plugins(DefaultPlugins)          // before ServicesPlugin, which adds
+    .add_service::<SettlementMirror>()  // Bevy's StatesPlugin only if missing
+    .add_service::<PilesView>();        // World #2: starts after, ticks after, stops before
 ```
 
-- **One state per layer.** `AppState`, `SessionState` and `WorldState` are
-  Bevy states, each with `Off`, `Loading` and `Active`. `WorldState` exists
-  only while the session is Active (a sub-state). `add_service` inserts the
-  resource on the layer's enter, removes it on exit, and gates its systems on
-  the layer. Entities that belong to a world are spawned with
+- **One state per layer.** `AppState` (`Loading`, `Active`) runs for the
+  whole process. `SessionState` and `WorldState` (`Off`, `Loading`,
+  `Active`) are sub-states: `SessionState` exists once the App is Active,
+  `WorldState` once the Session is Active, and `WorldState::Off` is the
+  lobby. A layer runs while its state is `Loading` or `Active`; front ends
+  change layers with `NextState`, and a layer moves from `Loading` to
+  `Active` by itself. A layer starts its services just before its own
+  `OnEnter` schedules and stops them just after its `OnExit` schedules, so a
+  service exists during its layer's enter and exit systems. Services' systems
+  run only while their layer runs. Entities that belong to a world are spawned with
   `DespawnOnExit(WorldState::Active)` (or `Loading`), so nothing is despawned
   by hand.
 - **Registration order is the order.** Within a layer, services start, tick
@@ -300,7 +309,5 @@ passing.
 
 ## Open questions
 
-- Bevy's order of exit schedules for nested states (the World must stop before
-  its Session) needs checking against Bevy 0.20 when step 1 is built.
 - When `game/play` moves over: with step 1, or once `app` has proved the
   framework.
