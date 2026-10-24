@@ -77,13 +77,43 @@ struct SceneName;
 #[derive(Component)]
 struct Message;
 
-const BACKDROP: Color = Color::srgb(0.018, 0.025, 0.045);
-const TEXT: Color = Color::srgb(0.83, 0.90, 0.93);
-const MUTED: Color = Color::srgb(0.42, 0.54, 0.62);
+pub(crate) const BACKDROP: Color = Color::srgb(0.018, 0.025, 0.045);
+pub(crate) const TEXT: Color = Color::srgb(0.83, 0.90, 0.93);
+pub(crate) const MUTED: Color = Color::srgb(0.42, 0.54, 0.62);
 const CYAN: Color = Color::srgb(0.27, 0.88, 0.95);
 const LINE: Color = Color::srgb(0.20, 0.27, 0.33);
 const HOVER: Color = Color::srgb(0.06, 0.13, 0.18);
 const WARNING: Color = Color::srgb(1.0, 0.55, 0.3);
+
+pub(crate) fn font(size: f32) -> TextFont {
+    TextFont { font_size: FontSize::Px(size), ..default() }
+}
+
+/// A clickable box in the menus' style; `kind` says what it does.
+pub(crate) fn button(kind: impl Component, width: f32, justify: JustifyContent) -> impl Bundle {
+    (
+        // What the old `Button` marker required, as in `piles::view`.
+        Interaction::None,
+        bevy::ui::FocusPolicy::Block,
+        kind,
+        Node {
+            width: px(width),
+            padding: UiRect::axes(px(12), px(7)),
+            border: UiRect::all(px(1)),
+            justify_content: justify,
+            ..default()
+        },
+        BorderColor::all(LINE),
+        BackgroundColor(BACKDROP),
+    )
+}
+
+/// Lights a button up under the pointer, or while it has the keyboard.
+pub(crate) fn highlight(interaction: Interaction, focused: bool, background: &mut Mut<BackgroundColor>, border: &mut Mut<BorderColor>) {
+    let hovered = interaction != Interaction::None;
+    background.set_if_neq(BackgroundColor(if hovered { HOVER } else { BACKDROP }));
+    border.set_if_neq(BorderColor::all(if focused || hovered { CYAN } else { LINE }));
+}
 
 impl MainMenu {
     /// The launch an action asks for, from the fields.
@@ -142,24 +172,6 @@ fn spawn(mut commands: Commands, roots: Query<(), With<MenuRoot>>) {
     if !roots.is_empty() {
         return;
     }
-    let font = |size: f32| TextFont { font_size: FontSize::Px(size), ..default() };
-    let button = |action: Action, width: f32, justify: JustifyContent| {
-        (
-            // What the old `Button` marker required, as in `piles::view`.
-            Interaction::None,
-            bevy::ui::FocusPolicy::Block,
-            action,
-            Node {
-                width: px(width),
-                padding: UiRect::axes(px(12), px(7)),
-                border: UiRect::all(px(1)),
-                justify_content: justify,
-                ..default()
-            },
-            BorderColor::all(LINE),
-            BackgroundColor(BACKDROP),
-        )
-    };
     let label = |text: &str, size: f32, color: Color| (Text::new(text), font(size), TextColor(color));
     let row = || Node { flex_direction: FlexDirection::Row, column_gap: px(10), align_items: AlignItems::Center, ..default() };
     let field = |field: Field, width: f32| {
@@ -296,9 +308,7 @@ fn show(
     }
     for (interaction, action, mut background, mut border) in &mut buttons {
         let focused = matches!(action, Action::Edit(field) if menu.focus == Some(*field));
-        let hovered = *interaction != Interaction::None;
-        background.set_if_neq(BackgroundColor(if hovered { HOVER } else { BACKDROP }));
-        border.set_if_neq(BorderColor::all(if focused || hovered { CYAN } else { LINE }));
+        highlight(*interaction, focused, &mut background, &mut border);
     }
 }
 

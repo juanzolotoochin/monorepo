@@ -14,6 +14,7 @@ mod nametags;
 mod navigation;
 mod obstacles;
 mod palimpsest;
+mod pause;
 mod peers;
 mod pile_model;
 mod piles;
@@ -202,7 +203,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
     // services tick by layer, then in the order registered here.
     app.add_plugins(ServicesPlugin).add_service::<flow::Flow>();
     if menus {
-        app.add_service::<menu::MainMenu>();
+        app.add_service::<menu::MainMenu>().add_service::<pause::Pause>();
     }
     app.add_service::<lockstep::SessionService>()
         .add_service::<lockstep::WorldMirror>()
