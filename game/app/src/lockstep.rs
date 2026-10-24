@@ -146,6 +146,11 @@ impl Game {
         Some(self.settlement()?.agents[self.player()? as usize].id.clone())
     }
 
+    /// The confirmed player position in view coordinates, for gameplay input.
+    pub fn player_view_position(&self) -> Option<Vec3> {
+        Some(self.to_view(self.settlement()?.agents[self.player()? as usize].position))
+    }
+
     /// Sends a command; it applies on the next host tick locally, or after
     /// the input delay when joining another host.
     pub fn command(&mut self, kind: CommandKind) {
@@ -672,7 +677,6 @@ pub fn attack_input(
     camera: Single<(&Camera, &GlobalTransform)>,
     window: Single<&Window>,
     library: Res<SceneLibrary>,
-    player: Single<&Transform, With<Player>>,
     mut controls: ResMut<Controls>,
     mut game: ResMut<Game>,
 ) {
@@ -690,7 +694,9 @@ pub fn attack_input(
         return;
     }
     if let Some(point) = crate::jetpack::cursor_surface(camera.0, camera.1, &window, &library, &game) {
-        strike(&mut game, &mut controls, &library, point - player.translation);
+        if let Some(origin) = game.player_view_position() {
+            strike(&mut game, &mut controls, &library, point - origin);
+        }
     }
 }
 
