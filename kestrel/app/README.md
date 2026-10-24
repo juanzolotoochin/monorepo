@@ -122,8 +122,12 @@ near the end of recovery to buffer the next strike. The HUD shows the actual
 weapon state and contact count. Rocks and props are solid, indestructible
 surfaces; there are no enemies, health or loot yet.
 
-Movement uses acceleration, braking, smoothed facing, animated legs and
-footsteps. Click routes use a half-unit A* grid with body clearance, diagonal
+Movement uses acceleration, braking, and footsteps. A render-only motion state
+blends speed and turn rate without changing simulation or combat timing. The
+shared pose drives the torso, head, arms, thighs, shins, and weapon for both
+the local player and network peers. Scene skins can replace those pivots through
+`ActorPart` recipes; older torso and leg skins still work. Click routes use a
+half-unit A* grid with body clearance, diagonal
 collision checks and line-of-sight smoothing. Local collision uses substeps
 and sliding. Attack collision sweeps the blade through angle space, so a fast
 cut cannot skip a rock between rendered frames. Impact particles and lights
@@ -138,12 +142,14 @@ Audio uses the repository's pinned miniaudio, without host development headers.
 For a repeatable approach-and-strike preview with rendered screenshots:
 
 ```sh
-bazel run //kestrel/app:demo -- \
+bazel run --config=full_local -c opt //kestrel/app:demo -- \
   --showcase --capture-dir /tmp/kestrel
 ```
 
-This writes `overview.png` and `impact.png`, then exits. `--showcase` alone
+This writes `overview.png`, a close `action.png`, and `impact.png` if the cut
+connects, then exits. `--showcase` alone
 plays the short sequence and leaves the window open for further interaction.
+[Action frame preview](../docs/character-action-preview.png).
 
 Code is split into `assets.rs` (compiled scenes and prefab caching),
 `scene.rs` (shared deck, character art and HUD), `gameplay.rs` (controls and

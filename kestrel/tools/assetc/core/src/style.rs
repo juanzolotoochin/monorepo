@@ -130,7 +130,7 @@ impl StyleProfile {
         {
             return Err("invalid style identity, density or palette size".into());
         }
-        if self.actor.len() > 8
+        if self.actor.len() > 16
             || self.weapon_name.trim().is_empty()
             || self.weapon_name.len() > 80
             || self
@@ -602,6 +602,10 @@ pub enum ActorPart {
     Head,
     WoundPlug,
     Armor,
+    LeftArm,
+    RightArm,
+    LeftShin,
+    RightShin,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

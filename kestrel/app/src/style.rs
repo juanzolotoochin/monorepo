@@ -218,22 +218,37 @@ pub fn apply(world: &mut World) {
         }
     }
     use voxel_assets::ActorPart;
-    let parts: HashMap<_, _> = world
+    let kinds: HashMap<_, _> = world
         .query::<(Entity, &crate::gameplay::Part)>()
         .iter(world)
-        .map(|(e, p)| {
-            let kind = match p.kind {
-                crate::gameplay::PartKind::Body => ActorPart::Body,
-                crate::gameplay::PartKind::Leg(side) => {
-                    if side < 0.0 {
+        .map(|(e, p)| (e, p.kind))
+        .collect();
+    let parts: HashMap<_, _> = kinds
+        .iter()
+        .filter_map(|(&e, kind)| {
+            let part = match kind {
+                crate::gameplay::PartKind::Body => Some(ActorPart::Body),
+                crate::gameplay::PartKind::Head => Some(ActorPart::Head),
+                crate::gameplay::PartKind::Leg(side) => Some({
+                    if *side < 0.0 {
                         ActorPart::LeftLeg
                     } else {
                         ActorPart::RightLeg
                     }
-                }
-                crate::gameplay::PartKind::Sword => ActorPart::Weapon,
+                }),
+                crate::gameplay::PartKind::Arm(side) => Some(if *side < 0.0 {
+                    ActorPart::LeftArm
+                } else {
+                    ActorPart::RightArm
+                }),
+                crate::gameplay::PartKind::Shin(side) => Some(if *side < 0.0 {
+                    ActorPart::LeftShin
+                } else {
+                    ActorPart::RightShin
+                }),
+                crate::gameplay::PartKind::Sword => Some(ActorPart::Weapon),
             };
-            (e, kind)
+            part.map(|part| (e, part))
         })
         .collect();
     let player = world
@@ -242,7 +257,20 @@ pub fn apply(world: &mut World) {
         .unwrap();
     world.get_mut::<Transform>(player).unwrap().scale = Vec3::splat(profile.actor_scale);
     for (parent,mut visibility,exhaust) in world.query_filtered::<(&ChildOf,&mut Visibility,Option<&crate::jetpack::Exhaust>),With<Mesh3d>>().iter_mut(world) {
-        let hide=parts.get(&parent.parent()).is_some_and(|part|actor.iter().any(|a|a.part==*part)) || (parent.parent()==player && exhaust.is_none() && actor.iter().any(|a|a.part==ActorPart::Body));
+        let overridden = kinds.get(&parent.parent()).is_some_and(|kind| {
+            let exact = parts.get(&parent.parent()).copied();
+            let fallback = match kind {
+                crate::gameplay::PartKind::Head | crate::gameplay::PartKind::Arm(_) => Some(ActorPart::Body),
+                crate::gameplay::PartKind::Shin(side) => Some(if *side < 0.0 {
+                    ActorPart::LeftLeg
+                } else {
+                    ActorPart::RightLeg
+                }),
+                _ => None,
+            };
+            actor.iter().any(|a| Some(a.part) == exact || Some(a.part) == fallback)
+        });
+        let hide=overridden || (parent.parent()==player && exhaust.is_none() && actor.iter().any(|a|a.part==ActorPart::Body));
         *visibility=if hide {Visibility::Hidden} else {Visibility::Inherited};
     }
     for a in &actor {

@@ -51,17 +51,33 @@ Style(
         (part: Body, pivot: Some((0.0, 0.94, 0.0)), shapes: [
             (kind: Box, position: (0.0, 0.03, 0.0), size: (0.52, 0.70, 0.36), material: "cloth"),
             (kind: Cone, position: (0.0, -0.25, 0.0), size: (0.85, 0.68, 0.76), material: "cloth"),
-            (kind: Box, position: (0.0, 0.56, 0.0), size: (0.38, 0.40, 0.35), material: "stone_light"),
-            (kind: Cone, position: (0.0, 0.81, 0.0), size: (0.70, 0.45, 0.65), material: "leaf_shadow"),
             (kind: Box, position: (0.0, 0.18, 0.19), size: (0.56, 0.09, 0.08), material: "gold"),
-            (kind: Box, position: (-0.34, 0.04, 0.0), size: (0.20, 0.65, 0.24), material: "cloth"),
-            (kind: Box, position: (0.34, 0.04, 0.0), size: (0.20, 0.65, 0.24), material: "cloth")
+        ]),
+        (part: Head, shapes: [
+            (kind: Box, position: (0.0, -0.08, 0.0), size: (0.38, 0.40, 0.35), material: "stone_light"),
+            (kind: Cone, position: (0.0, 0.17, 0.0), size: (0.70, 0.45, 0.65), material: "leaf_shadow")
+        ]),
+        (part: LeftArm, shapes: [
+            (kind: Box, position: (0.09, -0.29, 0.0), size: (0.20, 0.65, 0.24), material: "cloth"),
+            (kind: Box, position: (0.09, -0.58, 0.04), size: (0.23, 0.14, 0.27), material: "stone_light")
+        ]),
+        (part: RightArm, shapes: [
+            (kind: Box, position: (-0.09, -0.29, 0.0), size: (0.20, 0.65, 0.24), material: "cloth"),
+            (kind: Box, position: (-0.09, -0.58, 0.04), size: (0.23, 0.14, 0.27), material: "stone_light")
         ]),
         (part: LeftLeg, pivot: Some((-0.16, 0.58, 0.0)), shapes: [
-            (kind: Box, position: (0.0, -0.27, 0.0), size: (0.24, 0.56, 0.25), material: "shadow")
+            (kind: Box, position: (0.0, -0.13, 0.0), size: (0.24, 0.29, 0.25), material: "shadow")
         ]),
         (part: RightLeg, pivot: Some((0.16, 0.58, 0.0)), shapes: [
-            (kind: Box, position: (0.0, -0.27, 0.0), size: (0.24, 0.56, 0.25), material: "shadow")
+            (kind: Box, position: (0.0, -0.13, 0.0), size: (0.24, 0.29, 0.25), material: "shadow")
+        ]),
+        (part: LeftShin, shapes: [
+            (kind: Box, position: (0.0, -0.11, 0.0), size: (0.24, 0.27, 0.25), material: "shadow"),
+            (kind: Box, position: (0.0, -0.24, 0.07), size: (0.27, 0.15, 0.37), material: "leaf_shadow")
+        ]),
+        (part: RightShin, shapes: [
+            (kind: Box, position: (0.0, -0.11, 0.0), size: (0.24, 0.27, 0.25), material: "shadow"),
+            (kind: Box, position: (0.0, -0.24, 0.07), size: (0.27, 0.15, 0.37), material: "leaf_shadow")
         ]),
         (part: Weapon, pivot: Some((0.4, 0.9, 0.0)), shapes: [
             (kind: Box, position: (0.0, 0.0, 0.0), size: (0.13, 0.12, 0.38), material: "bark"),

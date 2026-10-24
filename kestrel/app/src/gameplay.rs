@@ -25,8 +25,36 @@ pub struct Part {
 #[derive(Clone, Copy)]
 pub enum PartKind {
     Body,
+    Head,
+    Arm(f32),
     Leg(f32),
+    Shin(f32),
     Sword,
+}
+
+/// Render-only inertia. Simulation position and hit timing stay authoritative.
+#[derive(Default)]
+pub struct MotionState {
+    speed: f32,
+    turn: f32,
+    heading: Option<f32>,
+}
+
+impl MotionState {
+    pub fn advance(&mut self, velocity: Vec3, heading: f32, dt: f32) -> (f32, f32) {
+        let dt = dt.clamp(0.0, 0.05);
+        let target = (velocity.length() / WALK_SPEED).min(1.5);
+        let response = if target > self.speed { 18.0 } else { 11.0 };
+        self.speed += (target - self.speed) * (1.0 - (-response * dt).exp());
+        let delta = self.heading.map_or(0.0, |previous| {
+            (heading - previous + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+                - std::f32::consts::PI
+        });
+        self.heading = Some(heading);
+        let target_turn = (delta / dt.max(1e-4) * 0.12).clamp(-0.65, 0.65);
+        self.turn += (target_turn - self.turn) * (1.0 - (-14.0 * dt).exp());
+        (self.speed, self.turn)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -365,7 +393,9 @@ pub fn animate_character(
     feedback: Res<Feedback>,
     flight: Option<Res<crate::jetpack::Flight>>,
     game: Res<crate::lockstep::Game>,
+    player: Single<&Transform, With<Player>>,
     mut parts: Query<(&Part, &mut Transform), Without<Player>>,
+    mut motion: Local<MotionState>,
 ) {
     if feedback.hit_stop > 0.0
         && !controls
@@ -375,16 +405,25 @@ pub fn animate_character(
         return;
     }
     let airborne = flight.as_ref().is_some_and(|f| f.airborne);
-    let speed = if airborne {
-        0.0
-    } else {
-        (controls.velocity.length() / WALK_SPEED).min(1.4)
-    };
+    let (speed, turn) = motion.advance(
+        if airborne {
+            Vec3::ZERO
+        } else {
+            controls.velocity
+        },
+        player.rotation.to_euler(EulerRot::YXZ).0,
+        time.delta_secs(),
+    );
     let breathe = (time.elapsed_secs() * 2.0).sin() * 0.012;
-    let dig = game.player().zip(game.current.as_ref()).and_then(|(i, s)| s.agents[i as usize].avatar.dig.as_ref()).map(|d| dig_age(&game, d));
+    let dig = game
+        .player()
+        .zip(game.current.as_ref())
+        .and_then(|(i, s)| s.agents[i as usize].avatar.dig.as_ref())
+        .map(|d| dig_age(&game, d));
     let pose = Pose {
         stride: controls.stride,
         speed,
+        turn,
         breathe,
         airborne,
         attack: controls.attack,
@@ -401,6 +440,8 @@ pub struct Pose {
     pub stride: f32,
     /// Walking speed relative to `WALK_SPEED`.
     pub speed: f32,
+    /// Smoothed angular response in radians, including a short follow-through.
+    pub turn: f32,
     pub breathe: f32,
     pub airborne: bool,
     pub attack: Option<Attack>,
@@ -441,10 +482,16 @@ impl Pose {
             return self.digging(kind, rest, age);
         }
         let mut transform = rest;
+        let travel = self.speed.clamp(0.0, 1.4);
+        let running = ((travel - 0.75) / 0.65).clamp(0.0, 1.0);
         match kind {
             PartKind::Body => {
-                transform.translation.y += self.breathe + self.stride.sin().abs() * 0.035 * self.speed;
-                transform.rotation = Quat::from_rotation_x(0.06 * self.speed);
+                transform.translation.y +=
+                    self.breathe + (self.stride * 2.0).cos().abs() * 0.045 * travel;
+                transform.translation.z -= 0.055 * travel;
+                transform.rotation = Quat::from_rotation_y(-self.turn * 0.28)
+                    * Quat::from_rotation_z(-self.turn * 0.22)
+                    * Quat::from_rotation_x(0.05 * travel + 0.13 * running);
                 if let Some(attack) = self.attack {
                     let twist = if attack.weapon == content::scenario::Weapon::Spear {
                         let (extension, _) = spear_pose(attack.age, attack.impact_angle.is_some());
@@ -460,13 +507,52 @@ impl Pose {
                     transform.translation.y -= (twist.abs() * 0.12).min(0.06);
                 }
             }
+            PartKind::Head => {
+                transform.translation.y += self.breathe * 0.6;
+                transform.rotation = Quat::from_rotation_y(self.turn * 0.15)
+                    * Quat::from_rotation_z(self.turn * 0.11)
+                    * Quat::from_rotation_x(-0.04 * travel);
+            }
+            PartKind::Arm(side) => {
+                let swing = self.stride.sin() * side * travel;
+                transform.rotation = Quat::from_rotation_z(-0.08 * side + self.turn * 0.12)
+                    * Quat::from_rotation_x(-swing * (0.36 + 0.17 * running));
+                if let Some(attack) = self.attack {
+                    let follow = if attack.weapon == content::scenario::Weapon::Spear {
+                        spear_pose(attack.age, attack.impact_angle.is_some()).0
+                    } else {
+                        attack.angle() - REST_ANGLE
+                    };
+                    if side > 0.0 {
+                        transform.rotation = Quat::from_rotation_y(follow * 0.35)
+                            * Quat::from_rotation_x(-0.42 - follow.abs() * 0.16);
+                        transform.translation.z += follow.max(0.0) * 0.08;
+                    } else {
+                        transform.rotation *= Quat::from_rotation_x(-0.25 + follow * 0.10);
+                    }
+                }
+            }
             PartKind::Leg(side) => {
+                let phase = self.stride.sin() * side;
                 transform.rotation =
-                    Quat::from_rotation_x(self.stride.sin() * 0.55 * self.speed * side);
+                    Quat::from_rotation_x(phase * (0.45 + 0.20 * running) * travel)
+                        * Quat::from_rotation_z(-self.turn * 0.12);
+                transform.translation.y += phase.max(0.0) * 0.045 * travel;
                 if self.airborne {
                     transform.rotation = Quat::from_rotation_x(-0.25);
                 } else if self.attack.is_some() {
-                    transform.rotation = Quat::from_rotation_x(-0.12 * side);
+                    transform.rotation =
+                        Quat::from_rotation_x(-0.18 * side) * Quat::from_rotation_z(0.08 * side);
+                }
+            }
+            PartKind::Shin(side) => {
+                let swing = (self.stride.sin() * side).max(0.0);
+                transform.rotation =
+                    Quat::from_rotation_x(-(0.09 + swing * (0.42 + 0.20 * running) * travel));
+                if self.airborne {
+                    transform.rotation = Quat::from_rotation_x(-0.55);
+                } else if self.attack.is_some() {
+                    transform.rotation = Quat::from_rotation_x(-0.18);
                 }
             }
             PartKind::Sword => {
@@ -512,8 +598,19 @@ impl Pose {
                 transform.translation.y += self.breathe - 0.09 - 0.05 * down;
                 transform.rotation = Quat::from_rotation_x(0.22 + 0.2 * down);
             }
+            PartKind::Head => {
+                transform.rotation = Quat::from_rotation_x(-0.18 - 0.1 * down);
+            }
+            PartKind::Arm(side) => {
+                transform.rotation =
+                    Quat::from_rotation_x(if side > 0.0 { pitch * 0.48 } else { -0.55 });
+            }
             PartKind::Leg(side) => {
-                transform.rotation = Quat::from_rotation_x(-0.3 * side) * Quat::from_rotation_z(0.12 * side);
+                transform.rotation =
+                    Quat::from_rotation_x(-0.3 * side) * Quat::from_rotation_z(0.12 * side);
+            }
+            PartKind::Shin(_) => {
+                transform.rotation = Quat::from_rotation_x(-0.28);
             }
             PartKind::Sword => {
                 transform.translation.x *= 0.4;
@@ -596,10 +693,7 @@ mod tests {
             .init_resource::<Assets<StandardMaterial>>()
             .insert_resource(fx)
             .insert_resource(Sound::silent())
-            .add_systems(
-                Update,
-                (combat, effects::update_effects).chain(),
-            );
+            .add_systems(Update, (combat, effects::update_effects).chain());
         let player = app.world_mut().spawn((Player, Transform::default())).id();
         app.world_mut().spawn((Obstacle(Disc {
             center: Vec3::new(0.3, 0.0, 1.65),
@@ -804,5 +898,44 @@ mod tests {
         assert!(spear_pose(0.25, true).0 < 0.3);
         assert!(spear_pose(0.58, false).0.abs() < 0.01);
     }
+    #[test]
+    fn motion_blends_quickly_and_turns_across_the_angle_wrap() {
+        let mut motion = MotionState::default();
+        motion.advance(Vec3::ZERO, std::f32::consts::PI - 0.04, 1.0 / 60.0);
+        let (speed, turn) = motion.advance(
+            Vec3::Z * WALK_SPEED,
+            -std::f32::consts::PI + 0.04,
+            1.0 / 60.0,
+        );
+        assert!(speed > 0.2 && speed < 1.0);
+        assert!(turn > 0.0 && turn < 0.5);
+        for _ in 0..30 {
+            motion.advance(Vec3::ZERO, -std::f32::consts::PI + 0.04, 1.0 / 60.0);
+        }
+        assert!(motion.speed < 0.01);
+        assert!(motion.turn.abs() < 0.01);
+    }
 
+    #[test]
+    fn articulated_run_and_attack_keep_symmetric_rest_pivots() {
+        let rest = Transform::from_xyz(0.42, 1.27, 0.0);
+        let mut pose = Pose {
+            stride: std::f32::consts::FRAC_PI_2,
+            speed: 1.2,
+            turn: 0.25,
+            breathe: 0.0,
+            airborne: false,
+            attack: None,
+            dig: None,
+        };
+        let left = pose.place(PartKind::Arm(-1.0), rest);
+        let right = pose.place(PartKind::Arm(1.0), rest);
+        assert_ne!(left.rotation, right.rotation);
+        assert_eq!(left.translation, rest.translation);
+        pose.attack = Some(Attack::new(Vec3::Z, content::scenario::Weapon::Sword));
+        let attacking = pose.place(PartKind::Arm(1.0), rest);
+        assert_ne!(attacking.rotation, right.rotation);
+        let knee = pose.place(PartKind::Shin(1.0), Transform::default());
+        assert_ne!(knee.rotation, Quat::IDENTITY);
+    }
 }

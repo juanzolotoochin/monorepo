@@ -17,6 +17,7 @@ pub struct Preview {
     elapsed: f32,
     started: bool,
     overview: bool,
+    action: bool,
     impact: bool,
     finished: bool,
 }
@@ -44,7 +45,7 @@ pub fn playback(
     }
     if preview.started && preview.elapsed > 5.0 && !preview.finished {
         preview.finished = true;
-        camera.zoom = 17.0;
+        camera.zoom = 4.5;
         let aim = Vec3::new(1.6, 0.0, -0.1) - player.translation;
         controls.strike(aim);
     }
@@ -80,6 +81,12 @@ pub fn capture(
     let name = if preview.elapsed > 4.5 && !preview.overview {
         preview.overview = true;
         Some("overview.png")
+    } else if controls.attack.is_some_and(|attack| {
+        attack.age >= crate::gameplay::WINDUP + 0.03
+            && attack.age < crate::gameplay::ACTIVE_END
+    }) && !preview.action {
+        preview.action = true;
+        Some("action.png")
     } else if controls.impacts > 0 && feedback.hit_stop <= 0.0 && !preview.impact {
         preview.impact = true;
         Some("impact.png")

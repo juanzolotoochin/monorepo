@@ -7,9 +7,9 @@ use crate::{
     sound::Sound,
 };
 use bevy::{
-    anti_alias::taa::TemporalAntiAliasing, camera::ScalingMode,
+    anti_alias::taa::TemporalAntiAliasing, camera::Hdr, camera::ScalingMode,
     core_pipeline::tonemapping::Tonemapping, pbr::ScreenSpaceAmbientOcclusion,
-    post_process::bloom::Bloom, prelude::*, camera::Hdr,
+    post_process::bloom::Bloom, prelude::*,
 };
 
 fn material(
@@ -534,7 +534,7 @@ pub fn setup(
         );
     }
 
-    // Voxel-built exosuit. The body, legs and sword each have their own animation pivot.
+    // Compact articulated exosuit. Each joint has a stable pivot shared by local and peer posing.
     commands
         .spawn((
             Player,
@@ -614,64 +614,6 @@ pub fn setup(
                 block(
                     b,
                     &cube,
-                    &ivory,
-                    Vec3::new(0.0, 0.68, 0.0),
-                    Vec3::new(0.56, 0.48, 0.49),
-                );
-                block(
-                    b,
-                    &cube,
-                    &frame,
-                    Vec3::new(0.0, 0.85, 0.0),
-                    Vec3::new(0.62, 0.13, 0.53),
-                );
-                block(
-                    b,
-                    &cube,
-                    &dark,
-                    Vec3::new(0.0, 0.68, 0.26),
-                    Vec3::new(0.51, 0.23, 0.04),
-                );
-                block(
-                    b,
-                    &cube,
-                    &cyan,
-                    Vec3::new(0.0, 0.71, 0.29),
-                    Vec3::new(0.43, 0.07, 0.025),
-                );
-                block(
-                    b,
-                    &cube,
-                    &cyan,
-                    Vec3::new(0.0, 0.64, 0.29),
-                    Vec3::new(0.08, 0.12, 0.025),
-                );
-                for side in [-1.0, 1.0] {
-                    block(
-                        b,
-                        &cube,
-                        if side > 0.0 { &orange } else { &ivory },
-                        Vec3::new(side * 0.44, 0.34, 0.0),
-                        Vec3::new(0.30, 0.29, 0.46),
-                    );
-                    block(
-                        b,
-                        &cube,
-                        &dark,
-                        Vec3::new(side * 0.43, 0.02, 0.04),
-                        Vec3::new(0.23, 0.39, 0.24),
-                    );
-                    block(
-                        b,
-                        &cube,
-                        &ivory,
-                        Vec3::new(side * 0.43, -0.05, 0.15),
-                        Vec3::new(0.26, 0.24, 0.26),
-                    );
-                }
-                block(
-                    b,
-                    &cube,
                     &frame,
                     Vec3::new(0.0, 0.17, -0.32),
                     Vec3::new(0.52, 0.58, 0.28),
@@ -684,6 +626,93 @@ pub fn setup(
                         Vec3::new(x, 0.22, -0.48),
                         Vec3::new(0.07, 0.27, 0.025),
                     );
+                }
+                let head = Transform::from_xyz(0.0, 0.64, 0.0);
+                b.spawn((
+                    Part {
+                        kind: PartKind::Head,
+                        rest: head,
+                    },
+                    head,
+                    Visibility::default(),
+                ))
+                .with_children(|h| {
+                    block(
+                        h,
+                        &cube,
+                        &dark,
+                        Vec3::new(0.0, -0.12, 0.0),
+                        Vec3::new(0.28, 0.17, 0.28),
+                    );
+                    block(
+                        h,
+                        &cube,
+                        &ivory,
+                        Vec3::new(0.0, 0.10, 0.0),
+                        Vec3::new(0.53, 0.43, 0.48),
+                    );
+                    block(
+                        h,
+                        &cube,
+                        &frame,
+                        Vec3::new(0.0, 0.31, 0.0),
+                        Vec3::new(0.58, 0.11, 0.52),
+                    );
+                    block(
+                        h,
+                        &cube,
+                        &dark,
+                        Vec3::new(0.0, 0.10, 0.25),
+                        Vec3::new(0.49, 0.22, 0.045),
+                    );
+                    block(
+                        h,
+                        &cube,
+                        &cyan,
+                        Vec3::new(0.0, 0.13, 0.28),
+                        Vec3::new(0.42, 0.06, 0.025),
+                    );
+                    block(
+                        h,
+                        &cube,
+                        &cyan,
+                        Vec3::new(0.0, 0.06, 0.28),
+                        Vec3::new(0.07, 0.10, 0.03),
+                    );
+                });
+                for side in [-1.0, 1.0] {
+                    let arm = Transform::from_xyz(side * 0.43, 0.33, 0.0);
+                    b.spawn((
+                        Part {
+                            kind: PartKind::Arm(side),
+                            rest: arm,
+                        },
+                        arm,
+                        Visibility::default(),
+                    ))
+                    .with_children(|a| {
+                        block(
+                            a,
+                            &cube,
+                            if side > 0.0 { &orange } else { &ivory },
+                            Vec3::new(side * 0.04, -0.09, 0.0),
+                            Vec3::new(0.27, 0.26, 0.38),
+                        );
+                        block(
+                            a,
+                            &cube,
+                            &dark,
+                            Vec3::new(side * 0.04, -0.33, 0.02),
+                            Vec3::new(0.19, 0.31, 0.23),
+                        );
+                        block(
+                            a,
+                            &cube,
+                            &ivory,
+                            Vec3::new(side * 0.04, -0.46, 0.11),
+                            Vec3::new(0.23, 0.15, 0.24),
+                        );
+                    });
                 }
             });
             for side in [-1.0, 1.0] {
@@ -704,27 +733,38 @@ pub fn setup(
                         Vec3::new(0.0, -0.10, 0.0),
                         Vec3::new(0.26, 0.39, 0.28),
                     );
-                    block(
-                        l,
-                        &cube,
-                        &ivory,
-                        Vec3::new(0.0, -0.32, 0.025),
-                        Vec3::new(0.28, 0.32, 0.32),
-                    );
-                    block(
-                        l,
-                        &cube,
-                        &orange,
-                        Vec3::new(0.0, -0.24, 0.20),
-                        Vec3::new(0.20, 0.13, 0.04),
-                    );
-                    block(
-                        l,
-                        &cube,
-                        &dark,
-                        Vec3::new(0.0, -0.49, 0.10),
-                        Vec3::new(0.32, 0.17, 0.48),
-                    );
+                    let shin = Transform::from_xyz(0.0, -0.27, 0.0);
+                    l.spawn((
+                        Part {
+                            kind: PartKind::Shin(side),
+                            rest: shin,
+                        },
+                        shin,
+                        Visibility::default(),
+                    ))
+                    .with_children(|s| {
+                        block(
+                            s,
+                            &cube,
+                            &ivory,
+                            Vec3::new(0.0, -0.07, 0.025),
+                            Vec3::new(0.27, 0.30, 0.31),
+                        );
+                        block(
+                            s,
+                            &cube,
+                            &orange,
+                            Vec3::new(0.0, 0.03, 0.20),
+                            Vec3::new(0.19, 0.12, 0.04),
+                        );
+                        block(
+                            s,
+                            &cube,
+                            &dark,
+                            Vec3::new(0.0, -0.22, 0.12),
+                            Vec3::new(0.32, 0.16, 0.47),
+                        );
+                    });
                 });
             }
             let weapon = Transform::from_xyz(0.38, 0.9, 0.0);
@@ -1075,10 +1115,17 @@ pub fn update_hud(
             crate::jetpack::HOVER
         )
     } else if library.has_feature(voxel_assets::SceneFeature::Digging) {
-        let net = if game.network.is_some() { format!(" / NET / {}", game.status.to_uppercase()) } else { String::new() };
+        let net = if game.network.is_some() {
+            format!(" / NET / {}", game.status.to_uppercase())
+        } else {
+            String::new()
+        };
         let tile = sim::terrain::Terrain::pit_tile(game.to_sim(player.translation));
         let pit = game.world().map_or(0, |w| w.terrain().pit(tile));
-        format!("PIT {pit}/{} / F TO DIG / HOLD SPACE TO FLY OUT{net}", sim::terrain::MAX_LAYERS)
+        format!(
+            "PIT {pit}/{} / F TO DIG / HOLD SPACE TO FLY OUT{net}",
+            sim::terrain::MAX_LAYERS
+        )
     } else if game.network.is_some() {
         format!("NET / {}", game.status.to_uppercase())
     } else {
