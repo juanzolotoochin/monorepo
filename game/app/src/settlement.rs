@@ -7,10 +7,11 @@ use crate::{
 };
 use bevy::prelude::*;
 use crate::legacy::{Endpoint, Inventory, Simulation, HZ};
+use service::{AppServices, Phase, Service, WorldLayer, WorldState};
 use std::collections::BTreeMap;
+/// The settlement's view (World layer).
 #[derive(Resource, Default)]
 pub struct Settlement {
-    current: Option<usize>,
     /// This frame's view of the simulated settlement.
     pub simulation: Option<Simulation>,
     /// The scene's scenario, as the view sees it.
@@ -76,39 +77,52 @@ impl View {
         }
     }
 }
-pub fn setup(world: &mut World) {
-    let index = world.resource::<crate::scene_view::SceneView>().index;
-    if world.resource::<Settlement>().current == Some(index) {
-        return;
+impl Service for Settlement {
+    type Layer = WorldLayer;
+    type Deps = (crate::lockstep::WorldMirror, crate::scene_view::SceneView);
+
+    fn init(world: &mut World) -> Self {
+        build(world)
     }
-    let mut state = world.remove_resource::<Settlement>().unwrap();
-    for (_, (_, rig)) in std::mem::take(&mut state.views) {
-        world.despawn(rig.root);
-    }
-    for (_, rigs) in std::mem::take(&mut state.pool) {
-        for rig in rigs {
+
+    /// Despawns the world's rigs, captions and HUD, and restores the
+    /// materials fading corpses borrowed.
+    fn shutdown(mut self, world: &mut World) {
+        for (_, (_, rig)) in std::mem::take(&mut self.views) {
             world.despawn(rig.root);
         }
+        for (_, rigs) in std::mem::take(&mut self.pool) {
+            for rig in rigs {
+                world.despawn(rig.root);
+            }
+        }
+        for corpse in self.dying.drain(..) {
+            corpse.fade.restore(world);
+            world.despawn(corpse.rig.root);
+        }
+        for (_, e) in std::mem::take(&mut self.labels) {
+            world.despawn(e);
+        }
+        if let Some(e) = self.hud.take() {
+            world.despawn(e);
+        }
+        for e in self.blockers.drain(..) {
+            world.despawn(e);
+        }
     }
-    for corpse in state.dying.drain(..) {
-        corpse.fade.restore(world);
-        world.despawn(corpse.rig.root);
+
+    fn systems(app: &mut App) {
+        let active = in_state(WorldState::Active);
+        app.add_service_systems::<Self, _>(Phase::Mirror, crate::lockstep::mirror_settlement.run_if(active.clone()))
+            .add_service_systems::<Self, _>(Phase::Present, tick.run_if(active));
     }
-    state.attached.clear();
-    state.hit_until.clear();
-    state.inspection = None;
-    state.last_sound = 0;
-    state.last_attack_serial = 0;
-    state.templates.clear();
-    for (_, e) in std::mem::take(&mut state.labels) {
-        world.despawn(e);
-    }
-    if let Some(e) = state.hud.take() {
-        world.despawn(e);
-    }
-    for e in state.blockers.drain(..) {
-        world.despawn(e);
-    }
+}
+
+/// The settlement's view for a world: rig templates for the scene's skins,
+/// and captions and a HUD for its scenario.
+fn build(world: &mut World) -> Settlement {
+    let index = world.resource::<crate::scene_view::SceneView>().index;
+    let mut state = Settlement::default();
     let has_weapons = world.resource::<SceneLibrary>().scenes[index]
         .scene
         .scenario
@@ -119,7 +133,6 @@ pub fn setup(world: &mut World) {
     } else {
         "LMB stock: take 4 / Ctrl+LMB: deposit cargo / E: toggle nearby machine".into()
     };
-    state.current = Some(index);
     let scenario = world.resource::<SceneLibrary>().scenes[index].scene.scenario.clone();
     if scenario.is_some() {
         let pack = &world.resource::<SceneLibrary>().scenes[index];
@@ -130,7 +143,6 @@ pub fn setup(world: &mut World) {
         }
     }
     state.config = scenario.as_ref().map(crate::legacy::Scenario::new);
-    state.simulation = None;
     if let Some(config) = state.config.clone() {
         for d in &config.depots {
             let e = world
@@ -210,7 +222,7 @@ pub fn setup(world: &mut World) {
                 .id(),
         );
     }
-    world.insert_resource(state);
+    state
 }
 /// An agent's definition. Players who joined copy the scenario's avatar.
 fn agent_config<'a>(sim: &'a Simulation, id: &str) -> &'a crate::legacy::Agent {
@@ -804,7 +816,7 @@ pub fn tick(world: &mut World) {
 }
 pub fn snapshot(world: &World) -> serde_json::Value {
     let fingerprint = world.get_resource::<crate::lockstep::WorldMirror>().map_or_else(String::new, |m| m.fingerprint());
-    world.resource::<Settlement>().simulation.as_ref().map_or(serde_json::Value::Null, |s| {
+    world.get_resource::<Settlement>().and_then(|state| state.simulation.as_ref()).map_or(serde_json::Value::Null, |s| {
         serde_json::json!({"simulation": s, "replay_fingerprint": fingerprint, "balances": s.balances(), "scenario": s.config(), "seconds": s.seconds()})
     })
 }

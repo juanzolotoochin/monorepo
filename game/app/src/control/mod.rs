@@ -221,7 +221,7 @@ fn shown(world: &World) -> Option<usize> {
 }
 /// The simulated settlement, or an error for scenes without one.
 fn settlement(world: &World) -> Result<&sim::settlement::Settlement, String> {
-    if world.resource::<crate::settlement::Settlement>().config.is_none() {
+    if world.get_resource::<crate::settlement::Settlement>().is_none_or(|state| state.config.is_none()) {
         return Err("No settlement loaded".into());
     }
     world.get_resource::<SessionService>().and_then(SessionService::settlement).ok_or_else(|| "No settlement loaded".to_string())

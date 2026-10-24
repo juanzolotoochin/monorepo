@@ -151,7 +151,6 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .init_resource::<Controls>()
         .init_resource::<style::ActiveStyle>()
         .init_resource::<telemetry::Telemetry>()
-        .init_resource::<settlement::Settlement>()
         .init_resource::<effects::Feedback>()
         .insert_resource(if simulation || offscreen {
             sound::Sound::recording()
@@ -222,6 +221,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .add_service::<lockstep::SessionService>()
         .add_service::<lockstep::WorldMirror>()
         .add_service::<scene_view::SceneView>()
+        .add_service::<settlement::Settlement>()
         .add_service::<piles::PileLab>()
         .add_service::<Views>()
         .add_service::<digging::Digging>()
@@ -234,10 +234,6 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
             ((telemetry::end, control::end).chain(), control::capture_frame.run_if(control::rendered))
                 .chain()
                 .before(service::StopOnExit),
-        )
-        .add_service_systems::<Views, _>(
-            Phase::Input,
-            settlement::setup.run_if(active.clone()),
         )
         .add_service_systems::<lockstep::PlayerControl, _>(
             Phase::Input,
@@ -254,7 +250,6 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .add_service_systems::<Views, _>(
             Phase::Mirror,
             (
-                lockstep::mirror_settlement,
                 lockstep::follow_avatar,
                 peers::update.run_if(control::rendered),
             )
@@ -264,7 +259,6 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .add_service_systems::<Views, _>(
             Phase::Present,
             (
-                settlement::tick,
                 (combat, animate_character, style::select_weapon).chain(),
                 effects::update_effects,
                 effects::camera_feedback.run_if(control::rendered),
