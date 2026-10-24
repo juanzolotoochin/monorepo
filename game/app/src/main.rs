@@ -23,6 +23,7 @@ mod style;
 mod telemetry;
 
 use bevy::{app::AppExit, prelude::*};
+use service::{Phase, ServicesPlugin};
 use gameplay::*;
 
 fn main() {
@@ -207,6 +208,12 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
     if offscreen {
         app.add_systems(Startup, control::setup_render.after(scene::setup));
     }
+    // The frame, in the service layers' phases (see
+    // game/docs/proposals/service_layers.md). The phases run in order, so this
+    // is still one chain. Scene setup runs at the start of Input until it
+    // becomes World service init; the camera and peers stay with the mirrors
+    // until they become their own services.
+    app.add_plugins(ServicesPlugin);
     app.add_systems(
         Update,
         (
@@ -225,18 +232,29 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
                 .run_if(control::interactive),
             lockstep::keyboard_input,
             preview::playback.run_if(control::interactive),
-            lockstep::step,
-            (
-                lockstep::mirror_settlement,
-                piles::mirror,
-                lockstep::follow_avatar,
-                peers::update.run_if(control::rendered),
-                digging::update,
-                digging::follow_camera,
-                jetpack::update,
-                palimpsest::tick,
-            )
-                .chain(),
+        )
+            .chain()
+            .in_set(Phase::Input),
+    )
+    .add_systems(Update, lockstep::step.in_set(Phase::Step))
+    .add_systems(
+        Update,
+        (
+            lockstep::mirror_settlement,
+            piles::mirror,
+            lockstep::follow_avatar,
+            peers::update.run_if(control::rendered),
+            digging::update,
+            digging::follow_camera,
+            jetpack::update,
+            palimpsest::tick,
+        )
+            .chain()
+            .in_set(Phase::Mirror),
+    )
+    .add_systems(
+        Update,
+        (
             settlement::tick,
             (
                 piles::spawn_tosses,
@@ -256,7 +274,8 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
             (telemetry::end, control::end).chain(),
             control::capture_frame.run_if(control::rendered),
         )
-            .chain(),
+            .chain()
+            .in_set(Phase::Present),
     );
     app.add_systems(Last, on_exit);
     if !simulation {

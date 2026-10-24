@@ -1,8 +1,8 @@
 # Service layers
 
-Status: design agreed on 2026-10-24. The framework is built (`game/service`,
-migration step 1); nothing uses it yet. The next feature, the main menu, is
-the first one to use it.
+Status: design agreed on 2026-10-24. Migration steps 1 (the framework,
+`game/service`) and 2 (`game/app`'s frame in phases) are done; no service
+exists yet. The next feature, the main menu, is the first one to add some.
 
 The game's front end needs one answer to "where does this flow or system
 live, and for how long?". This proposal groups front-end code into

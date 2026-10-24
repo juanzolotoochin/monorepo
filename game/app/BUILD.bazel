@@ -29,6 +29,7 @@ rust_binary(
         "//game/net",
         "//game/save",
         "//game/session",
+        "//game/service",
         "//game/sim",
         "//game/tools/assetc/core:voxel_assets",
         "@crates//:bevy",
