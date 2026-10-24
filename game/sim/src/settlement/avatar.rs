@@ -8,7 +8,8 @@
 //! the swing (or the rebound after a hit) ends. In digging scenes an avatar
 //! digs out the tile it stands on, standing still for the dig.
 
-use content::scenario::Weapon;
+use content::scenario::{ticks_from_60hz, Weapon};
+use content::{millis_to_ticks, per_tick, TICKS_PER_SECOND};
 use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
@@ -28,36 +29,44 @@ const WALK_SPEED: Fx = Fx::from_bits(16_320_875_725); // 3.8 m/s
 const RUN_SPEED: Fx = Fx::from_bits(24_051_816_858); // 5.6 m/s
 /// Velocity change per tick, in m/s: accelerating 26 m/s², braking 32 m/s²,
 /// stopping for an attack 35 m/s².
-const ACCELERATION: Fx = Fx::from_bits(3_722_304_990); // 26/30
-const BRAKING: Fx = Fx::from_bits(4_581_298_449); // 32/30
-const ATTACK_BRAKING: Fx = Fx::from_bits(5_010_795_179); // 35/30
-/// Fraction of the remaining turn taken per tick (1 - e^(-20/30)).
-const TURN_BLEND: Fx = Fx::from_bits(2_089_857_561); // 0.4866
-/// Turning toward the aim during the windup (1 - e^(-28/30)).
-const AIM_BLEND: Fx = Fx::from_bits(2_606_011_260); // 0.6068
-/// Ticks from an attack command to contact (13 ticks at 60 Hz).
-pub const WINDUP_TICKS: u64 = 7;
+const ACCELERATION: Fx = per_tick(Fx::from_int(26));
+const BRAKING: Fx = per_tick(Fx::from_int(32));
+const ATTACK_BRAKING: Fx = per_tick(Fx::from_int(35));
+/// Fraction of the remaining turn taken per tick (1 - e^(-20/TICKS_PER_SECOND)).
+const TURN_BLEND: Fx = match TICKS_PER_SECOND {
+    30 => Fx::from_bits(2_089_857_561), // 0.4866
+    60 => Fx::from_bits(1_217_488_751), // 0.2835
+    _ => panic!("add TURN_BLEND for this tick rate"),
+};
+/// Turning toward the aim during the windup (1 - e^(-28/TICKS_PER_SECOND)).
+const AIM_BLEND: Fx = match TICKS_PER_SECOND {
+    30 => Fx::from_bits(2_606_011_260), // 0.6068
+    60 => Fx::from_bits(1_601_640_183), // 0.3729
+    _ => panic!("add AIM_BLEND for this tick rate"),
+};
+/// Ticks from an attack command to contact (0.22 s).
+pub const WINDUP_TICKS: u64 = ticks_from_60hz(13);
 /// The visible windup, during which the avatar turns toward the aim (0.16 s).
-const AIM_TICKS: u64 = 5;
+const AIM_TICKS: u64 = ticks_from_60hz(10);
 /// A swing that hits nothing ends at 0.58 s; one that lands rebounds for 0.42 s.
-const SWING_TICKS: u64 = 18;
-const REBOUND_TICKS: u64 = 13;
+const SWING_TICKS: u64 = ticks_from_60hz(35);
+const REBOUND_TICKS: u64 = ticks_from_60hz(25);
 /// A click this close to the end of a swing is kept and played next (0.18 s).
-const BUFFER_TICKS: u64 = 6;
+const BUFFER_TICKS: u64 = ticks_from_60hz(11);
 /// Manual transfers start within this distance of the dock.
 const DOCK_REACH: Fx = Fx::from_bits(3_650_722_202); // 0.85
 /// Jetpack: hover height above the ground, and climb and sink speeds per tick
 /// (5.5 m/s and 3 m/s).
 const HOVER: Fx = Fx::from_bits(7_730_941_133); // 1.8
-const CLIMB_PER_TICK: Fx = Fx::from_bits(787_410_671); // 5.5/30
-const SINK_PER_TICK: Fx = Fx::from_bits(429_496_730); // 3/30
+const CLIMB_PER_TICK: Fx = per_tick(Fx::from_ratio(11, 2));
+const SINK_PER_TICK: Fx = per_tick(Fx::from_int(3));
 /// A dig takes 2 s, standing still.
-pub const DIG_TICKS: u64 = 60;
+pub const DIG_TICKS: u64 = millis_to_ticks(2000);
 /// Dug ore flies out of the pit for 0.6 s.
-const ORE_FLIGHT_TICKS: u64 = 18;
+const ORE_FLIGHT_TICKS: u64 = millis_to_ticks(600);
 /// While digging, the avatar steps to the middle of its tile (1.5 m/s), so
 /// it drops into the pit cleanly.
-const DIG_CENTERING: Fx = Fx::from_bits(214_748_365); // 1.5/30
+const DIG_CENTERING: Fx = per_tick(Fx::from_ratio(3, 2));
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Intent {

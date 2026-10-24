@@ -27,7 +27,7 @@ const CHUNK: i32 = 16;
 /// The arena's outer walls go down to here.
 const BOTTOM: f32 = -3.0;
 /// Dust flies off every this many ticks of a dig.
-const CHIP_TICKS: u64 = 15;
+const CHIP_TICKS: u64 = content::millis_to_ticks(500);
 /// The bar's offset above the head, in avatar heights (before style scale).
 const ABOVE: f32 = 2.15;
 

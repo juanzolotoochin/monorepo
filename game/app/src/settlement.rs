@@ -958,11 +958,12 @@ mod tests {
         let center = world.terrain().center;
         let mut game = sim::Simulation::from_world(world, 2);
         let config = crate::legacy::Scenario::new(&scenario);
-        for tick in 0..3000 {
+        let hz = content::TICKS_PER_SECOND as u64;
+        for tick in 0..100 * hz {
             game.step(&[]);
             let s = game.world().settlement().unwrap();
             s.validate().unwrap();
-            if tick == 1799 {
+            if tick == 60 * hz - 1 {
                 assert_eq!(s.health, 20, "first minute defense failed");
             }
             let a = s.agent("bramble");

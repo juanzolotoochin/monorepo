@@ -19,8 +19,24 @@ use fx::Fx;
 use serde::{Deserialize, Serialize};
 
 /// The simulation rate. Content is written in seconds and per-second rates and
-/// converted to ticks at load, so this is the only place the rate appears.
-pub const TICKS_PER_SECOND: i32 = 30;
+/// converted to ticks at load, and code constants go through [`millis_to_ticks`],
+/// [`per_tick`] or `scenario::ticks_from_60hz`, so this is the only place the
+/// rate appears.
+pub const TICKS_PER_SECOND: i32 = 60;
+
+/// Whole ticks in `ms` milliseconds, rounded to the nearest (at least 1 for a
+/// nonzero time).
+pub const fn millis_to_ticks(ms: u64) -> u64 {
+    let ticks = (ms * TICKS_PER_SECOND as u64 + 500) / 1000;
+    if ticks == 0 && ms > 0 { 1 } else { ticks }
+}
+
+/// A per-second rate as a per-tick one, rounded to the nearest.
+pub const fn per_tick(per_second: Fx) -> Fx {
+    let (bits, rate) = (per_second.to_bits(), TICKS_PER_SECOND as i64);
+    let half = if bits < 0 { -rate / 2 } else { rate / 2 };
+    Fx::from_bits((bits + half) / rate)
+}
 
 /// The largest body radius content may define, in tiles. Spatial queries
 /// widen their search by the largest radius in use, so this bounds their cost.
@@ -224,7 +240,7 @@ mod tests {
         assert_eq!(content.names.movers, ["mover/large", "mover/medium", "mover/small"]);
         let small = &content.rules.movers[2];
         assert_eq!(small.radius, Fx::HALF);
-        assert_eq!(small.max_speed, Fx::from_ratio(1, 4));
+        assert_eq!(small.max_speed, Fx::from_ratio(15, 2 * TICKS_PER_SECOND as i64)); // 7.5 tiles/s
         assert_eq!(content.names.mover_index("mover/small"), Some(2));
         assert_eq!(content.rules.max_body_radius(), Fx::from_int(2));
     }

@@ -351,7 +351,7 @@ fn recording_is_bounded_and_automatically_deploys_then_can_be_dismissed() {
     assert_eq!(memory["recording"], false);
     assert!(!memory["ghost_position"].is_null());
     assert!(memory["recorded_seconds"].as_f64().unwrap() <= 8.0);
-    assert!(memory["sample_count"].as_u64().unwrap() <= 243);
+    assert!(memory["sample_count"].as_u64().unwrap() <= 8 * content::TICKS_PER_SECOND as u64 + 3);
     assert_eq!(report["state"]["memory"]["ghost_position"], Value::Null);
     assert_eq!(report["state"]["memory"]["sample_count"], 0);
 }

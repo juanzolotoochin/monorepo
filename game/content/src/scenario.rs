@@ -255,7 +255,7 @@ pub struct WeaponTuning {
 }
 
 /// Converts the files' 60 Hz tick counts to simulation ticks, rounding up.
-pub fn ticks_from_60hz(ticks: u64) -> u64 {
+pub const fn ticks_from_60hz(ticks: u64) -> u64 {
     (ticks * TICKS_PER_SECOND as u64).div_ceil(60)
 }
 
@@ -514,9 +514,12 @@ impl Scenario {
     }
 }
 
-/// Seconds to simulation ticks, rounding up, at least one.
+/// Seconds to simulation ticks, rounding up, at least one. Decimal seconds
+/// aren't exact in fixed point (0.35 s is a hair over 21 ticks at 60 Hz), so
+/// anything within a millionth of a tick of a whole tick counts as that tick.
 pub fn ticks(seconds: Fx) -> u64 {
-    (seconds.mul_int(TICKS_PER_SECOND as i64)).ceil().floor_to_int().max(1) as u64
+    const SLACK: Fx = Fx::from_bits(1 << 12);
+    (seconds.mul_int(TICKS_PER_SECOND as i64) - SLACK).ceil().floor_to_int().max(1) as u64
 }
 
 #[cfg(test)]
@@ -533,8 +536,8 @@ mod tests {
         assert_eq!(forest.depots[3].position[0], "-4.485".parse().unwrap());
         let arena = Scenario::parse(ARENA).unwrap();
         let sword = arena.weapon_tuning(Weapon::Sword);
-        assert_eq!(sword.cooldown(), 19);
-        assert_eq!(arena.weapon_tuning(Weapon::Bow).cooldown(), 14);
+        assert_eq!(sword.cooldown(), ticks_from_60hz(38));
+        assert_eq!(arena.weapon_tuning(Weapon::Bow).cooldown(), ticks_from_60hz(28));
     }
 
     #[test]
@@ -549,9 +552,19 @@ mod tests {
 
     #[test]
     fn seconds_round_up_to_ticks() {
-        assert_eq!(ticks("0.35".parse().unwrap()), 11);
+        let hz = TICKS_PER_SECOND as u64;
+        assert_eq!(ticks("0.35".parse().unwrap()), (35 * hz).div_ceil(100));
         assert_eq!(ticks(Fx::ZERO), 1);
-        assert_eq!(ticks(Fx::ONE), 30);
-        assert_eq!(ticks_from_60hz(13), 7);
+        assert_eq!(ticks(Fx::ONE), hz);
+        assert_eq!(ticks_from_60hz(13), (13 * hz).div_ceil(60));
+    }
+
+    #[test]
+    fn code_constants_convert_at_the_tick_rate() {
+        let hz = TICKS_PER_SECOND as u64;
+        assert_eq!(crate::millis_to_ticks(2000), 2 * hz);
+        assert_eq!(crate::millis_to_ticks(1), 1);
+        assert_eq!(crate::millis_to_ticks(0), 0);
+        assert_eq!(crate::per_tick(Fx::from_int(TICKS_PER_SECOND)), Fx::ONE);
     }
 }

@@ -3,6 +3,7 @@
 //! once to charge a door; behind it is a core to collect. Ported from the
 //! original Bevy app (`palimpsest/`).
 
+use content::{millis_to_ticks, TICKS_PER_SECOND};
 use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
@@ -12,12 +13,12 @@ use crate::nav;
 use crate::terrain::{Disc, Terrain};
 
 /// Recordings stop at 8 seconds.
-pub const LIMIT_TICKS: u64 = 240;
+pub const LIMIT_TICKS: u64 = millis_to_ticks(8000);
 /// A recording must be at least 0.15 s long to deploy.
-const MIN_TICKS: u64 = 5;
+const MIN_TICKS: u64 = millis_to_ticks(150);
 /// Pads charge the door over 1.2 s and drain twice as fast.
-const CHARGE_PER_TICK: Fx = Fx::from_bits(119_304_647); // 1/36
-const DRAIN_PER_TICK: Fx = Fx::from_bits(286_331_153); // 1/15
+const CHARGE_PER_TICK: Fx = Fx::from_ratio(5, 6 * TICKS_PER_SECOND as i64); // 1 / 1.2 s
+const DRAIN_PER_TICK: Fx = Fx::from_ratio(5, 3 * TICKS_PER_SECOND as i64); // 1 / 0.6 s
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sample {

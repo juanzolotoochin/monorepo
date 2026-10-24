@@ -1,7 +1,9 @@
-//! Combat and avatar tests, ported from the original game at 30 Hz.
+//! Combat and avatar tests, ported from the original game. Durations are in
+//! milliseconds (`ms`), so they hold at any tick rate.
 
 use content::scenario::{
-    Agent, CargoLayout, Defender, Depot, HaulLink, Item, Producer, ProjectileKind, Scenario, Stack, Wave, Weapon, WeaponTuning,
+    ticks_from_60hz, Agent, CargoLayout, Defender, Depot, HaulLink, Item, Producer, ProjectileKind, Scenario, Stack, Wave, Weapon,
+    WeaponTuning,
 };
 use content::Content;
 use fx::{Fx, FxVec2};
@@ -12,6 +14,11 @@ use super::Settlement;
 use crate::messages::Strike;
 use crate::terrain::Disc;
 use crate::{Command, CommandKind, PlayerId, Simulation, World};
+
+/// Ticks in `n` milliseconds.
+fn ms(n: u64) -> u64 {
+    content::millis_to_ticks(n)
+}
 
 fn fx(v: f64) -> Fx {
     Fx::from_bits((v * 4294967296.0).round() as i64)
@@ -208,20 +215,20 @@ fn projectile(id: u64, from: FxVec2, to: FxVec2, target: Option<u64>, arrival: u
 #[test]
 fn melee_staggers_a_wounded_ghoul_then_it_resumes_advancing() {
     let mut arena = Arena::combat(&[]);
-    arena.s_mut().waves[0].speed = fx(1.0) / Fx::from_int(30);
+    arena.s_mut().waves[0].speed = content::per_tick(fx(1.0));
     // An ID whose sword roll isn't a critical on this tick.
     let id = (999..).find(|&id| combat_roll(arena.tick(), id, 0x53574f5244) % 4 != 0).unwrap();
     arena.threat(id, 0.0, 1.1, 3, 0);
     assert_eq!(arena.attack(Weapon::Sword), 1);
     assert_eq!(arena.hp(id), 1);
     assert_eq!(arena.s().combat.melee_hits, 1);
-    arena.step(3);
+    arena.step(ms(100));
     assert!(arena.s().threat(id).unwrap().heading.abs() < fx(0.01), "a recoiling ghoul keeps facing the attacker");
-    arena.step(30);
+    arena.step(ms(1000));
     let advanced = arena.y(id);
     assert!(arena.s().combat.knockback_meters > fx(0.3));
     assert!(advanced < fx(1.5), "the wounded ghoul resumes approaching: {advanced}");
-    arena.step(30);
+    arena.step(ms(1000));
     let limped = arena.y(id);
     assert!(((advanced - limped) - fx(0.55)).abs() < fx(0.03), "wounded ghouls walk at 55%: {}", advanced - limped);
     // Step in front of it and finish it.
@@ -270,7 +277,7 @@ fn bow_breaks_armor_spear_punctures_and_coil_chains() {
     arena.threat(100, 0.0, 1.8, 5, 2);
     arena.threat(101, 0.5, 2.0, 3, 0);
     assert_eq!(arena.attack(Weapon::Bow), 1);
-    arena.step(3);
+    arena.step(ms(100));
     assert_eq!(arena.hp(100), 5);
     assert_eq!(arena.s().threat(100).unwrap().armor, 1);
     assert_eq!(arena.s().combat.deflections, 1);
@@ -293,7 +300,7 @@ fn ranged_attacks_follow_the_aimed_line_instead_of_seeking_a_threat() {
     arena.threat(100, 0.0, 2.0, 3, 0);
     let aside = FxVec2::new(fx(0.6), fx(2.0)).normalize_or_zero();
     assert_eq!(arena.attack_toward(Weapon::Bow, aside), 1);
-    arena.step(12);
+    arena.step(ms(400));
     assert_eq!(arena.hp(100), 3);
     arena.ready();
     assert_eq!(arena.attack_toward(Weapon::ArcCoil, aside), 0);
@@ -360,7 +367,7 @@ fn authored_weapon_tuning_changes_reach_damage_and_cooldown() {
     assert_eq!(arena.attack(Weapon::Sword), 1);
     assert_eq!(arena.hp(100), 5);
     let tick = arena.tick();
-    assert_eq!(arena.s().agents[arena.player].attack_ready, tick + 45, "90 ticks at 60 Hz");
+    assert_eq!(arena.s().agents[arena.player].attack_ready, tick + ticks_from_60hz(90), "90 ticks at 60 Hz");
     assert_eq!(arena.attack(Weapon::Sword), 0);
 }
 
@@ -408,7 +415,7 @@ fn ballista_pierces_or_impales_from_stable_per_projectile_rolls() {
     assert_eq!(s.threats.iter().filter(|t| t.pierced && t.hp == 2).count(), 1);
     assert_eq!(s.spent.len(), 1);
     let mut landed = false;
-    for _ in 0..18 {
+    for _ in 0..ms(600) {
         arena.step(1);
         landed |= arena.s().events.iter().any(|e| matches!(e, Event::PinnedLanded { .. }));
     }
@@ -466,10 +473,10 @@ fn processing_reserves_output_space_and_defense_cannot_fire_free_ammunition() {
     });
     let mut arena = Arena::new(&config, &[]);
     arena.command(CommandKind::SetMachine { producer: 0, enabled: false });
-    arena.step(60);
+    arena.step(ms(2000));
     assert_eq!(arena.s().combat.shots, 0);
     arena.command(CommandKind::SetMachine { producer: 0, enabled: true });
-    arena.step(600);
+    arena.step(ms(20_000));
     let s = arena.s();
     assert!(s.combat.kills >= 6, "kills {}", s.combat.kills);
     assert!(s.health > 0);
@@ -499,11 +506,11 @@ fn controlled_transfers_share_reservations_and_cancellation_preserves_airborne_u
     assert_eq!(arena.s().depots[depot].out[item], remaining, "a second transfer is refused while one runs");
     assert!(arena.s().transfers.values().any(|t| t.to == super::Endpoint::Cargo(agent)));
     arena.command(CommandKind::CancelTransfer { agent });
-    arena.step(15);
+    arena.step(ms(500));
     let carried = arena.s().agents[player].cargo[item];
     assert!(carried >= 1 && carried < units, "airborne units land, the rest is released: {carried}");
     arena.command(take(carried, true));
-    arena.step(30);
+    arena.step(ms(1000));
     assert_eq!(arena.s().agents[player].cargo.iter().sum::<u32>(), 0);
 }
 
@@ -513,14 +520,14 @@ fn walking_accelerates_to_speed_and_slides_along_obstacles() {
     let agent = arena.player as u16;
     let start = arena.s().agents[arena.player].position;
     arena.command(CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: FxVec2::new(Fx::ZERO, Fx::ONE), run: false } });
-    arena.step(29);
+    arena.step(ms(1000) - 1);
     let walked = arena.s().agents[arena.player].position.y - start.y;
     // 3.8 m/s after about 0.15 s of acceleration.
     assert!(walked > fx(3.3) && walked < fx(3.8), "walked {walked} in one second");
     arena.command(CommandKind::MoveAvatar { agent, intent: Intent::Stop });
-    arena.step(10);
+    arena.step(ms(333));
     let stopped = arena.s().agents[arena.player].position;
-    arena.step(5);
+    arena.step(ms(167));
     assert_eq!(arena.s().agents[arena.player].position, stopped);
 
     // Walking into the rock slides around it instead of entering it.
@@ -528,7 +535,7 @@ fn walking_accelerates_to_speed_and_slides_along_obstacles() {
     let (player, start) = (arena.player, arena.at(0.0, -2.9));
     arena.s_mut().agents[player].position = start;
     arena.command(CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: FxVec2::new(Fx::ONE, Fx::ZERO), run: true } });
-    for _ in 0..60 {
+    for _ in 0..ms(2000) {
         arena.step(1);
         let d = crate::nav::distance(arena.s().agents[arena.player].position, rock);
         assert!(d >= fx(1.32), "inside the rock: {d}");
@@ -542,7 +549,7 @@ fn go_to_routes_around_obstacles_and_stops_on_the_point() {
     let agent = arena.player as u16;
     let goal = arena.at(0.0, -5.0);
     arena.command(CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target: goal, run: false } });
-    arena.step(150);
+    arena.step(ms(5000));
     let a = &arena.s().agents[arena.player];
     assert_eq!(a.position, goal);
     assert_eq!(a.avatar.velocity, FxVec2::ZERO);
@@ -558,7 +565,7 @@ fn combat_arena_plays_and_is_deterministic() {
     let run = |threads| {
         let world = World::new_settlement(9, Content::builtin().rules, &scenario, &[]).unwrap();
         let mut sim = Simulation::from_world(world, threads);
-        let hashes: Vec<u64> = (0..1800).map(|_| sim.step(&[]).total).collect();
+        let hashes: Vec<u64> = (0..ms(60_000)).map(|_| sim.step(&[]).total).collect();
         (hashes, sim)
     };
     let (one, sim) = run(1);
@@ -580,7 +587,7 @@ fn parity_probe() {
         let world = World::new_settlement(1, Content::builtin().rules, &scenario, &[]).unwrap();
         let mut sim = Simulation::from_world(world, 4);
         for second in 1..=120 {
-            for _ in 0..30 {
+            for _ in 0..ms(1000) {
                 sim.step(&[]);
             }
             if second % 30 == 0 {
@@ -612,13 +619,13 @@ fn two_players_defend_the_clearing() {
         fetch(CommandKind::MoveAvatar { agent: players[1].1, intent: Intent::GoTo { target: dock, run: true } }),
         fetch(CommandKind::Transfer { agent: players[1].1, depot: rack, item: bolt, units: 2, deposit: false }),
     ]);
-    for _ in 0..240 {
+    for _ in 0..ms(8000) {
         sim.step(&[]);
     }
     assert_eq!(sim.world().settlement().unwrap().agents[players[1].1 as usize].cargo[bolt as usize], 2, "the guest carries two bolts");
 
     let mut hits = [0u32; 2];
-    for _ in 0..1800 {
+    for _ in 0..ms(60_000) {
         let s = sim.world().settlement().unwrap();
         let tick = sim.world().tick();
         let mut turn = Vec::new();

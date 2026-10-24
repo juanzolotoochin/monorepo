@@ -273,7 +273,9 @@ fn players_keep_their_slot_when_they_return() {
 #[test]
 fn udp_smoke() {
     let content = Content::builtin();
-    let scenario = Scenario::small();
+    // Few movers: this checks the protocol over real sockets in real time, so
+    // the ticks must stay cheap even when other tests load the machine.
+    let scenario = Scenario { per_cluster: 20, ..Scenario::small() };
     let any: SocketAddr = "127.0.0.1:0".parse().unwrap();
     let host_socket = UdpTransport::bind(any).unwrap();
     let host_addr = host_socket.local_addr().unwrap();
@@ -296,5 +298,5 @@ fn udp_smoke() {
     for tick in log.start()..log.end() {
         assert_eq!(log.get(tick), host.history().get(tick));
     }
-    assert!(host.world().tick() as f64 >= 0.8 * 3.0 / TICK.as_secs_f64());
+    assert!(host.world().tick() as f64 >= 0.8 * 3.0 / TICK.as_secs_f64(), "host ran {} ticks", host.world().tick());
 }

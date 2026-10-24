@@ -27,8 +27,8 @@ pub const MAX_MINE_PILES: usize = 512;
 /// The collector's footprint.
 pub const COLLECTOR_RADIUS: Fx = Fx::from_bits(3_865_470_566); // 0.9
 /// A walk-and-toss job gives up after 30 s, and replans after 0.8 s without moving.
-const JOB_TIMEOUT_TICKS: u64 = 900;
-const STALL_TICKS: u64 = 24;
+const JOB_TIMEOUT_TICKS: u64 = content::millis_to_ticks(30_000);
+const STALL_TICKS: u64 = content::millis_to_ticks(800);
 /// Piles can only be dropped this far from the arena center (6.5 m).
 const DROP_LIMIT: Fx = Fx::from_bits(27_917_287_424);
 
@@ -697,7 +697,7 @@ impl Settlement {
                 }
             };
             // The unit flies for 0.85 × the pace, clamped to 0.3–1.0 s.
-            let flight = (job.pace.clamp(9, 30) * 85).div_ceil(100);
+            let flight = (job.pace.clamp(content::millis_to_ticks(300), content::millis_to_ticks(1000)) * 85).div_ceil(100);
             lab.hauler_mut(me).in_flight.push(tick + flight);
             tosses.push(Event::PileToss { material, from, to, ticks: flight });
             job.transferred += 1;

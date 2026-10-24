@@ -10,6 +10,11 @@ use super::{PileSetup, SceneSetup, Settlement};
 use crate::terrain::{Disc, Surface};
 use crate::{Command, CommandKind, PlayerId, Simulation, World};
 
+/// Ticks in `n` milliseconds.
+fn ms(n: u64) -> u64 {
+    content::millis_to_ticks(n)
+}
+
 fn fx(v: f64) -> Fx {
     Fx::from_bits((v * 4294967296.0).round() as i64)
 }
@@ -57,7 +62,7 @@ impl Scene {
         let (agent, target) = (self.agent(), self.at(x, y));
         self.command(CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target, run: false } });
         assert!(!self.avatar().route.is_empty(), "no route to ({x}, {y})");
-        for _ in 0..900 {
+        for _ in 0..ms(30_000) {
             if self.avatar().route.is_empty() {
                 return;
             }
@@ -124,21 +129,21 @@ fn jetpack_climbs_crosses_a_drop_hovers_and_lands() {
     let mut scene = Scene::new(jetpack_lab());
     let agent = scene.agent();
     let close = |a: Fx, b: f64| (a - fx(b)).abs() <= fx(0.05);
-    scene.wait(30);
+    scene.wait(ms(1000));
     scene.command(CommandKind::Jetpack { agent, enabled: true });
-    scene.wait(30);
+    scene.wait(ms(1000));
     scene.walk(0.0, 2.0);
-    scene.wait(30);
+    scene.wait(ms(1000));
     assert!(scene.avatar().avatar.flight.airborne && close(scene.altitude(), 3.8), "hovering at {}", scene.altitude());
     scene.walk(2.0, 2.0);
     scene.command(CommandKind::Jetpack { agent, enabled: false });
-    scene.wait(30);
+    scene.wait(ms(1000));
     assert!(scene.avatar().avatar.flight.airborne && close(scene.altitude(), 3.8), "kept aloft over the drop at {}", scene.altitude());
     scene.command(CommandKind::Jetpack { agent, enabled: true });
     scene.walk(5.0, 1.0);
-    scene.wait(30);
+    scene.wait(ms(1000));
     scene.command(CommandKind::Jetpack { agent, enabled: false });
-    scene.wait(40);
+    scene.wait(ms(1333));
     assert!(!scene.avatar().avatar.flight.airborne && close(scene.altitude(), 3.5), "landed at {}", scene.altitude());
 }
 
@@ -171,20 +176,20 @@ fn surprise_lab() -> SceneSetup {
 fn memory_trial_needs_a_ghost_to_open_the_door() {
     let mut scene = Scene::new(surprise_lab());
     let memory = |scene: &Scene| scene.s().memory.clone().unwrap();
-    scene.wait(40);
+    scene.wait(ms(1333));
     assert!(!memory(&scene).unlocked);
     scene.command(CommandKind::MemoryRecord);
     scene.walk(-4.0, -2.0);
-    scene.wait(20);
+    scene.wait(ms(667));
     scene.command(CommandKind::MemoryDeploy);
     assert_eq!(scene.avatar().position, scene.at(-5.0, 3.0), "deploying returns the player to the start");
-    scene.wait(20);
+    scene.wait(ms(667));
     scene.walk(-1.0, 3.0);
-    scene.wait(100);
+    scene.wait(ms(3333));
     let m = memory(&scene);
     assert!(m.unlocked && !m.collected, "{:?}", (m.pressed, m.charge));
     scene.walk(5.0, 0.0);
-    scene.wait(40);
+    scene.wait(ms(1333));
     assert!(memory(&scene).collected);
 }
 
@@ -193,7 +198,7 @@ fn the_trial_cannot_be_completed_alone() {
     let mut scene = Scene::new(surprise_lab());
     scene.walk(-4.0, -2.0);
     scene.walk(-1.0, 3.0);
-    scene.wait(60);
+    scene.wait(ms(2000));
     assert!(!scene.s().memory.as_ref().unwrap().unlocked);
     // The door blocks the way to the core.
     let (agent, target) = (scene.agent(), scene.at(5.0, 0.0));
@@ -206,7 +211,7 @@ fn the_trial_cannot_be_completed_alone() {
 fn recordings_stop_at_eight_seconds_and_deploy_themselves() {
     let mut scene = Scene::new(surprise_lab());
     scene.command(CommandKind::MemoryRecord);
-    scene.wait(260);
+    scene.wait(ms(8667));
     let m = scene.s().memory.clone().unwrap();
     assert!(!m.recording && m.ghost.is_some());
     assert_eq!(m.elapsed, super::memory::LIMIT_TICKS);
@@ -236,7 +241,7 @@ fn pile_lab_hauls_exactly_four_units() {
     let mut scene = Scene::new(pile_lab());
     let agent = scene.agent();
     let finish = |scene: &mut Scene| {
-        for _ in 0..900 {
+        for _ in 0..ms(30_000) {
             if scene.hauler().job.is_none() {
                 return;
             }
@@ -245,7 +250,7 @@ fn pile_lab_hauls_exactly_four_units() {
         panic!("the haul never finished");
     };
     scene.command(CommandKind::Dispense { dispenser: 0, units: 8 });
-    scene.wait(30);
+    scene.wait(ms(1000));
     scene.walk(-1.7, -3.4);
     let approach = Some(scene.at(-2.3, -2.8));
     scene.command(CommandKind::Pile { agent, action: PileAction::PickupAmount(0, 4), pace: fx(0.7), approach });
@@ -257,7 +262,7 @@ fn pile_lab_hauls_exactly_four_units() {
     assert_eq!(scene.lab().total(), 104);
     assert_eq!(scene.lab().piles[&0].units, 4);
     assert_ne!(scene.avatar().position, start, "walked before transferring");
-    scene.wait(30);
+    scene.wait(ms(1000));
     scene.walk(2.0, 1.0);
     let (drop, approach) = (scene.at(4.0, 4.5), Some(scene.at(2.9, 5.0)));
     scene.command(CommandKind::Pile { agent, action: PileAction::Drop(drop), pace: fx(0.7), approach });
@@ -288,7 +293,7 @@ fn blocked_drops_are_rejected_without_losing_cargo() {
     let mut scene = Scene::new(pile_lab());
     let agent = scene.agent();
     scene.command(CommandKind::Pile { agent, action: PileAction::Pickup(2), pace: Fx::ZERO, approach: None });
-    for _ in 0..600 {
+    for _ in 0..ms(20_000) {
         if scene.hauler().job.is_none() {
             break;
         }
@@ -316,9 +321,9 @@ fn scenes_are_deterministic_across_thread_counts() {
         hashes.push(sim.step(&[Command { player: PlayerId(0), kind: CommandKind::MemoryRecord }]).total);
         let target = sim.world().terrain().center + v(-4.0, -2.0);
         hashes.push(sim.step(&[Command { player: PlayerId(0), kind: CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target, run: true } } }]).total);
-        hashes.extend((0..120).map(|_| sim.step(&[]).total));
+        hashes.extend((0..ms(4000)).map(|_| sim.step(&[]).total));
         hashes.push(sim.step(&[Command { player: PlayerId(0), kind: CommandKind::MemoryDeploy }]).total);
-        hashes.extend((0..120).map(|_| sim.step(&[]).total));
+        hashes.extend((0..ms(4000)).map(|_| sim.step(&[]).total));
         hashes
     };
     assert_eq!(run(1), run(8));
@@ -349,7 +354,7 @@ fn joining_players_get_their_own_avatar() {
     let walk = |agent| CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: v(1.0, 0.0), run: false } };
     // The guest's command for the host's avatar is ignored.
     scene.sim.step(&[Command { player: guest, kind: walk(mine) }, Command { player: guest, kind: walk(host_avatar) }]);
-    scene.wait(30);
+    scene.wait(ms(1000));
     assert!(scene.s().agents[mine as usize].position.x > start.x + Fx::ONE, "the guest walked");
     assert_eq!(scene.avatar().position, host_start, "the host's avatar stayed put");
 }
@@ -409,7 +414,7 @@ fn avatars_dig_pits_and_fly_out() {
 
     // Walking off before it's done leaves the ground as it was.
     scene.command(CommandKind::DigDown { agent });
-    scene.wait(20);
+    scene.wait(ms(667));
     scene.command(walk(v(0.0, 1.0)));
     scene.command(walk(FxVec2::ZERO));
     assert_eq!(scene.avatar().avatar.dig, None);
@@ -425,10 +430,10 @@ fn avatars_dig_pits_and_fly_out() {
         scene.command(CommandKind::Attack { agent, weapon, aim: v(1.0, 0.0), muzzle: [Fx::ZERO; 3] });
         scene.wait(DIG_TICKS - 4);
         assert_eq!(pit(&scene), depth - 1, "still digging");
-        scene.wait(1);
+        scene.wait(ms(33));
         assert_eq!(pit(&scene), depth);
         assert_eq!(scene.avatar().position, Terrain::pit_center(tile), "dug in the middle of the tile");
-        scene.wait(30);
+        scene.wait(ms(1000));
         assert_eq!(scene.altitude(), -LAYER.mul_int(depth as i64), "dropped into the pit");
         assert!(!scene.avatar().avatar.flight.airborne);
     }
@@ -437,14 +442,14 @@ fn avatars_dig_pits_and_fly_out() {
 
     // On foot, the walls are too high to climb.
     scene.command(walk(v(1.0, 0.0)));
-    scene.wait(30);
+    scene.wait(ms(1000));
     assert_eq!(Terrain::pit_tile(scene.avatar().position), tile, "still in the pit");
     // The jetpack lifts the avatar out, and it lands on the ground beside.
     scene.command(CommandKind::Jetpack { agent, enabled: true });
-    scene.wait(45);
+    scene.wait(ms(1500));
     scene.command(CommandKind::Jetpack { agent, enabled: false });
     scene.command(walk(FxVec2::ZERO));
-    scene.wait(45);
+    scene.wait(ms(1500));
     assert_ne!(Terrain::pit_tile(scene.avatar().position), tile, "out of the pit");
     assert_eq!(scene.altitude(), Fx::ZERO);
     assert!(!scene.avatar().avatar.flight.airborne);
@@ -500,7 +505,7 @@ fn dug_ore_piles_up_and_goes_to_the_collector() {
     let pile_action = |action| CommandKind::Pile { agent, action, pace: Fx::ZERO, approach: None };
     let haul = |scene: &mut Scene, action| {
         scene.command(pile_action(action));
-        for _ in 0..900 {
+        for _ in 0..ms(30_000) {
             if scene.hauler().job.is_none() {
                 return;
             }
@@ -516,10 +521,10 @@ fn dug_ore_piles_up_and_goes_to_the_collector() {
     assert!(scene.hauler().last_error.is_some(), "no route out of the pit on foot");
     scene.command(CommandKind::Jetpack { agent, enabled: true });
     scene.command(CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: v(0.0, 1.0), run: false } });
-    scene.wait(20);
+    scene.wait(ms(667));
     scene.command(CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: FxVec2::ZERO, run: false } });
     scene.command(CommandKind::Jetpack { agent, enabled: false });
-    scene.wait(40);
+    scene.wait(ms(1333));
     assert!(!scene.avatar().avatar.flight.airborne);
     haul(&mut scene, PileAction::Deliver);
     let lab = scene.s().piles.as_ref().unwrap();
@@ -555,7 +560,7 @@ fn two_players_haul_their_own_loads() {
     let idle = |scene: &Scene, agent| scene.lab().hauler(agent).is_some_and(|h| h.job.is_none());
     let both = |scene: &mut Scene, first: CommandKind, second: CommandKind| {
         scene.sim.step(&[Command { player: host, kind: first }, Command { player: guest, kind: second }]);
-        for _ in 0..900 {
+        for _ in 0..ms(30_000) {
             if idle(scene, a) && idle(scene, b) {
                 return;
             }

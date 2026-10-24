@@ -60,9 +60,9 @@ pub struct NetConfig {
 impl Default for NetConfig {
     fn default() -> Self {
         NetConfig {
-            input_delay: 4,
+            input_delay: content::millis_to_ticks(133),
             desync: DesyncPolicy::Halt,
-            jitter_buffer: 2,
+            jitter_buffer: content::millis_to_ticks(67),
             timeout: Duration::from_secs(5),
             threads: 4,
         }

@@ -245,14 +245,23 @@ mod tests {
     use super::*;
     use fx::{Fx, FxVec2};
 
+    const HZ: f32 = content::TICKS_PER_SECOND as f32;
+    /// The swings start on tick 100 and resolve a sixth of a second later.
+    const RESOLVE: f32 = 1.0 / 6.0;
+
+    /// The tick `seconds` into the swing.
+    fn at(seconds: f32) -> f32 {
+        100.0 + seconds * HZ
+    }
+
     fn swing(hits: u32) -> Swing {
         Swing {
             weapon: Weapon::Sword,
             aim: FxVec2::new(Fx::ONE, Fx::ZERO),
             muzzle: [Fx::ZERO; 3],
             started: 100,
-            resolve_at: 105,
-            until: 117,
+            resolve_at: at(RESOLVE).round() as u64,
+            until: at(17.0 / 30.0).round() as u64,
             resolved: hits > 0,
             hits,
         }
@@ -262,19 +271,19 @@ mod tests {
     fn a_swing_plays_from_its_start_tick_and_ends() {
         let s = swing(0);
         assert_eq!(attack(&s, 100.0).unwrap().age, 0.0);
-        let mid = attack(&s, 106.0).unwrap();
+        let mid = attack(&s, at(0.2)).unwrap();
         assert!((mid.age - 0.2).abs() < 1e-4 && mid.impact_angle.is_none());
         assert!((mid.aim - Vec3::X).length() < 1e-4);
-        assert!(attack(&s, 100.0 + ATTACK_END * 30.0 + 0.1).is_none());
+        assert!(attack(&s, at(ATTACK_END) + 0.1).is_none());
     }
 
     #[test]
     fn a_hit_rebounds_from_where_the_blade_was() {
         let s = swing(1);
-        let at_hit = attack(&swing(0), 105.0).unwrap().angle();
-        let rebound = attack(&s, 106.5).unwrap();
+        let at_hit = attack(&swing(0), at(RESOLVE)).unwrap().angle();
+        let rebound = attack(&s, at(RESOLVE + 0.05)).unwrap();
         assert_eq!(rebound.impact_angle, Some(at_hit));
         assert!((rebound.age - 0.05).abs() < 1e-4);
-        assert!(attack(&s, 105.0 + REBOUND_END * 30.0 + 0.1).is_none());
+        assert!(attack(&s, at(RESOLVE + REBOUND_END) + 0.1).is_none());
     }
 }

@@ -21,7 +21,7 @@ type Socket = Box<dyn Transport<Addr = SocketAddr> + Send + Sync>;
 
 /// Every peer autosaves on the same ticks, so after losing the host anyone
 /// can re-host from a state everyone shares.
-pub const AUTOSAVE_TICKS: u64 = 30 * 60 * 5;
+pub const AUTOSAVE_TICKS: u64 = content::TICKS_PER_SECOND as u64 * 60 * 5;
 
 enum Peer {
     Host(Box<Host<Socket>>),

@@ -26,9 +26,13 @@ in a browser.
 - **No floating point in the simulation.** All simulation math uses `Fx`, a
   fixed-point type. f32 exists only in the view and in raw input before it is
   quantized into a command.
-- **30 Hz simulation.** Rendering interpolates. Content is written in seconds
-  and per-second rates, converted to ticks at load, so the tick rate is one
-  constant.
+- **60 Hz simulation** (as in Factorio; it was 30 Hz until October 2026).
+  Rendering interpolates. Content is written in seconds and per-second rates,
+  converted to ticks at load, and code constants go through
+  `content::millis_to_ticks`, `per_tick` and `ticks_from_60hz`, so the tick
+  rate is one constant (`content::TICKS_PER_SECOND`). The few per-tick
+  factors that need `exp` or `powf` (turn blends, knockback decay) list their
+  value for each supported rate and fail to compile for any other.
 - **Budget:** at most 10 ms per tick at 100k entities on a dev PC.
 
 ## Crates
@@ -204,13 +208,14 @@ criticals, spear punctures, arc-coil chains, stagger and knockback.
   hit. One follow-up click near the end of a swing is buffered.
 - Manual transfers are commands and use the same reservation counters as
   haulers. Cancelling releases unlaunched units; units in the air still land.
-- Tick-based tuning in scenario files (60 Hz) is converted to 30 Hz.
+- Tick-based tuning in scenario files is in 60 Hz ticks, the original
+  game's rate, and is converted to the simulation's rate.
 
 Compared with the original over the same two minutes (`parity_probe`), the
 forest outpost delivers 99 units versus 98 and kills 21 ghouls versus 23. The
 combat arena's ballista lands all 18 bolts in both; the pierce rolls fall
 differently (same formula, different tick numbers and IDs at 30 Hz), so 8
-ghouls die instead of 13.
+ghouls die instead of 13. (Measured at 30 Hz, before the move to 60 Hz.)
 
 ## Networking
 
@@ -350,7 +355,7 @@ Details: [milestone plan](design/milestone-plan.html).
 | 0.2 | `game/sim` core | Thread-count test passes |
 | 0.3 | `game/content`, `game/save` | Save-and-continue test passes |
 | 0.4 | `game/headless` | Determinism suite runs in CI; benchmark under 10 ms per tick |
-| 0.5 | Minimal `game/view` and `game/play` | Smooth 144 Hz view of the 30 Hz simulation, single-player through the turn path |
+| 0.5 | Minimal `game/view` and `game/play` | Smooth 144 Hz view of the simulation, single-player through the turn path |
 | 0.6 | `game/net` | 30 minutes over Tailscale with no desync, plus a working mid-game join |
 
 **Milestone 1, gameplay port:**

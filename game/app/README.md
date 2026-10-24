@@ -404,7 +404,7 @@ supplies changes how the settlement runs.
 
 The architecture is split into independent layers:
 
-- `//game/sim` owns the deterministic 30 Hz decisions, quantities,
+- `//game/sim` owns the deterministic 60 Hz decisions, quantities,
   reservations, processing, equipment, the player's movement, threats and
   defense. The app runs it through `//game/session` and only sends commands;
   see [the architecture](../docs/architecture.md).
@@ -446,7 +446,7 @@ bazel run --config=full_local //game/app:demo -- --scene combat-arena
 Right click to position the player, then Shift + left click toward an approaching
 ghoul. The faster longsword stops on contact. A short hit pause, camera jolt,
 growl, and voxel blood burst mark the hit; a surviving ghoul recoils before
-limping forward. The same 30 Hz simulation owns health, knockback, kills, and
+limping forward. The same 60 Hz simulation owns health, knockback, kills, and
 the melee metrics in the world-state dump.
 
 ```sh
@@ -500,7 +500,7 @@ like the base's health and the kill count), and respawn with **R**. Networked
 games can't pause or change speed.
 
 The host's world is the only real one: clients load it from the host and then
-run the same 30 Hz simulation on the same turns, so commands apply on every
+run the same 60 Hz simulation on the same turns, so commands apply on every
 machine after the input delay (4 ticks). `//game/session:session_test` runs
 two players over localhost UDP, on the field and fighting the arena's ghouls,
 and checks that both machines simulate the same world.

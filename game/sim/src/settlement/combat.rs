@@ -8,7 +8,8 @@
 //!   health, so two hits in one tick stack correctly in message order.
 //! - Waves spawn, spent arrows fade and pinned bodies land in housekeeping.
 
-use content::scenario::{ProjectileKind, Weapon, WeaponTuning};
+use content::scenario::{ticks_from_60hz, ProjectileKind, Weapon, WeaponTuning};
+use content::TICKS_PER_SECOND;
 use fx::{Fx, FxVec2};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -21,12 +22,16 @@ use crate::terrain::{segment_disc, Terrain};
 /// Collision radius of a threat, and of an armored one.
 const THREAT_RADIUS: Fx = Fx::from_bits(1_159_641_170); // 0.27
 const ARMORED_RADIUS: Fx = Fx::from_bits(1_632_087_572); // 0.38
-/// Knockback decays by 0.85 per original tick: 0.7225 per 30 Hz tick.
-const KNOCKBACK_DECAY: Fx = Fx::from_bits(3_103_113_871);
-const SPENT_TICKS: u64 = 6;
-const DEFLECTED_TICKS: u64 = 9;
-const PINNED_TICKS: u64 = 18;
-const STAGGER_ON_PIERCE: u64 = 21;
+/// Knockback decays by 0.85 per original (60 Hz) tick.
+const KNOCKBACK_DECAY: Fx = match TICKS_PER_SECOND {
+    30 => Fx::from_bits(3_103_113_871), // 0.85²
+    60 => Fx::from_bits(3_650_722_202), // 0.85
+    _ => panic!("add KNOCKBACK_DECAY for this tick rate"),
+};
+const SPENT_TICKS: u64 = ticks_from_60hz(12);
+const DEFLECTED_TICKS: u64 = ticks_from_60hz(18);
+const PINNED_TICKS: u64 = ticks_from_60hz(36);
+const STAGGER_ON_PIERCE: u64 = ticks_from_60hz(42);
 
 /// A stable counter-based roll, as in the original game: outcomes never
 /// depend on how many unrelated hits happened elsewhere.

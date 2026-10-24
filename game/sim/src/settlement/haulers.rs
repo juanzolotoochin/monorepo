@@ -3,7 +3,8 @@
 //! the parallel self update; decisions that touch depots, docks or stock are
 //! messages, handled in the apply phase.
 
-use content::scenario;
+use content::scenario::{self, ticks_from_60hz};
+use content::{millis_to_ticks, per_tick};
 use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
@@ -13,17 +14,17 @@ use crate::messages::Messages;
 use crate::nav::{self, angle_between, distance};
 use crate::terrain::{Disc, Terrain};
 
-/// Seconds-based constants of the original game, at 30 Hz.
-pub(super) const RETRY_TICKS: u64 = 8;
-const APPROACH_REPLAN_TICKS: u64 = 30;
-const TRAFFIC_REPLAN_TICKS: u64 = 120;
+/// Seconds-based constants of the original game.
+pub(super) const RETRY_TICKS: u64 = ticks_from_60hz(16);
+const APPROACH_REPLAN_TICKS: u64 = millis_to_ticks(1000);
+const TRAFFIC_REPLAN_TICKS: u64 = millis_to_ticks(4000);
 /// The longest an agent gives way before steering on its own.
-const YIELD_TICKS: u64 = 45;
-pub(super) const ATTACH_TICKS: u64 = 30;
+const YIELD_TICKS: u64 = millis_to_ticks(1500);
+pub(super) const ATTACH_TICKS: u64 = millis_to_ticks(1000);
 /// Facing turns at up to 3 rad/s.
-const TURN_PER_TICK: Fx = Fx::from_bits(429_496_730); // 0.1
-/// A larger change of travel direction costs a tick of turning in place.
-const TRAVEL_TURN_PER_TICK: Fx = Fx::HALF;
+const TURN_PER_TICK: Fx = per_tick(Fx::from_int(3));
+/// A larger change of travel direction turns in place, at up to 15 rad/s.
+const TRAVEL_TURN_PER_TICK: Fx = per_tick(Fx::from_int(15));
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Phase {
@@ -374,9 +375,12 @@ fn approach(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
     let goal = ctx.depots[dock as usize].position;
     let owner = ctx.dock_owner[dock as usize];
     let busy = owner.is_some_and(|o| o != me);
+    // Queue far enough out for the owner to get past: wider for a big
+    // animal, and clear of a cart's turning envelope.
     let queue_distance = match owner {
         Some(o) if ctx.bodies[o as usize].trailer.is_some() => Fx::from_int(3),
-        _ => Fx::from_ratio(3, 2),
+        Some(o) => Fx::from_ratio(3, 2) + ctx.bodies[o as usize].radius,
+        None => Fx::from_ratio(3, 2),
     };
     let to_goal = distance(a.position, goal);
     if a.route.is_empty() && to_goal > Fx::from_ratio(1, 10) && ctx.tick >= a.retries {

@@ -1,7 +1,7 @@
-//! Ported from the original game's tests (the retired `game/core`), at 30 Hz.
+//! Ported from the original game's tests (the retired `game/core`).
 
 use content::scenario::{Agent, CargoLayout, Depot, Equipment, HaulLink, Item, Producer, Scenario, Stack};
-use content::Content;
+use content::{Content, TICKS_PER_SECOND};
 use fx::{Fx, FxVec2};
 
 use super::{Phase, Settlement};
@@ -95,7 +95,7 @@ fn settlement(sim: &Simulation) -> &Settlement {
 
 /// Runs whole seconds, checking every invariant after every tick.
 fn run(sim: &mut Simulation, seconds: u64) {
-    for _ in 0..seconds * 30 {
+    for _ in 0..seconds * TICKS_PER_SECOND as u64 {
         sim.step(&[]);
         settlement(sim).validate().unwrap();
     }
@@ -108,7 +108,7 @@ fn reservations_and_in_flight_units_prevent_overbooking_and_preserve_every_item(
     config.links[0].target = 32;
     let mut sim = world(&config, &[]);
     let mut saw_flight = false;
-    for _ in 0..40 * 30 {
+    for _ in 0..40 * TICKS_PER_SECOND as u64 {
         sim.step(&[]);
         settlement(&sim).validate().unwrap();
         saw_flight |= !settlement(&sim).transfers.is_empty();
@@ -212,7 +212,7 @@ fn opposing_haulers_pass_without_body_overlap_and_clear_the_docks() {
         priority: 1,
     });
     let mut sim = world(&config, &[]);
-    for _ in 0..60 * 30 {
+    for _ in 0..60 * TICKS_PER_SECOND as u64 {
         sim.step(&[]);
         let s = settlement(&sim);
         let (a, b) = (s.agent("a"), s.agent("b"));
@@ -250,7 +250,7 @@ fn settlements_are_deterministic_across_thread_counts() {
     let run = |threads| {
         let world = World::new_settlement(3, Content::builtin().rules, &scenario, &[]).unwrap();
         let mut sim = Simulation::from_world(world, threads);
-        (0..900).map(|_| sim.step(&[]).total).collect::<Vec<_>>()
+        (0..30 * TICKS_PER_SECOND as u64).map(|_| sim.step(&[]).total).collect::<Vec<_>>()
     };
     assert_eq!(run(1), run(8));
 }

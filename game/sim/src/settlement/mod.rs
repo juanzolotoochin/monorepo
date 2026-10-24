@@ -40,7 +40,7 @@ pub type LinkIx = u16;
 pub type AgentIx = u16;
 
 /// Ticks an item spends in the air between a dock and a cargo bed (0.35 s).
-pub const TRANSFER_FLIGHT_TICKS: u64 = 11;
+pub const TRANSFER_FLIGHT_TICKS: u64 = content::millis_to_ticks(350);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DepotState {
