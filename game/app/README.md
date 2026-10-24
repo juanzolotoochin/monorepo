@@ -191,6 +191,15 @@ world inspection. Generate the four-unit hauling demonstration with:
 bazel build --config=full_local //game/app:haul_four_demo
 ```
 
+Any run can be recorded and replayed exactly. `--record-input run.glog` writes
+the input log on exit (and the starting save as `run.glog.gsav`);
+`--replay-input run.glog` plays it back in the same scene:
+
+```sh
+bazel run //game/app:demo -- --scene forest-outpost --record-input /tmp/run.glog
+bazel run //game/app:demo -- --scene forest-outpost --replay-input /tmp/run.glog
+```
+
 The output video, final-state report, and per-frame state trace are alongside
 `demo` in `bazel-bin/game/app/`.
 
@@ -244,6 +253,47 @@ Live/script commands `{"op":"jetpack","enabled":true}` and
 `airborne` and `altitude`, with an optional `tolerance` (default 0.05 meters).
 World inspection includes authored `terrain` and `player.jetpack` fields for
 requested flight, airborne status, support height, hover height, and clearance.
+
+## Dig lab
+
+Press **9** for the dig lab, or launch it directly:
+
+```sh
+bazel run --config=full_local //game/app:demo -- --scene dig-lab
+```
+
+The lab is an open-pit mine: 256 × 256 m of generated ground (`mine` in
+`assets/levels/dig_lab.ron`: its size and seed). Terraces rise a walkable
+quarter meter at a time, mesas a meter at once (fly up), and a round landing
+around the spawn is flat. The simulation generates the same ground on every
+machine from the seed (`game/sim/src/mine.rs`); only the seed and the pits are
+state. The camera follows you over it.
+
+Press **F** to dig out the tile you stand on (**X** picks the spear in combat
+scenes). A dig takes 2 seconds standing still, stepping to the middle of the
+tile, crouched and chopping into the ground with your tool (a strike every
+half second, with a puff of dust), with a bar over your head; walking off,
+attacking or the jetpack stops it. Each dig takes out one 0.5 m layer, down to 3 layers (1.5 m). Pit walls are
+too steep to walk into or out of, and routes go around pits: hold **Space** to
+fly out.
+
+Each layer may hold ore: **amber ore** and **blue crystal**, richer deeper
+down, and rarer **green malachite** below the top layer. Ore shows as a tint on
+the ground and in pit walls. Digging out an ore layer throws 3 to 6 units onto a
+pile beside the pit (or onto a pile of the same ore already there). Collect it
+as in the pile lab (left click a pile; you can reach it from the pit), fly out,
+and left click the **collector** by the landing to deliver; it takes every
+mineral and counts each. Up to 512 piles; no pile or machine can be dug under.
+
+The pits are part of the simulation, so in a networked game everyone digs the
+same ground (`--scene dig-lab` on every machine). Every player has their own
+carrier and haul (in the pile lab too): two players can collect and deliver at
+once, each sees the other's backpack fill, and tosses fly to and from whoever
+made them. The logistics panel shows your own load.
+
+The control port's `{"op":"dig"}` digs and `{"op":"deliver"}` delivers the
+cargo. Inspection's `digging` lists the pits by arena tile, whether the player
+is digging, the collector's counts by mineral, and the nearest ore within 8 m.
 
 ## Field trial 05
 
@@ -354,8 +404,10 @@ supplies changes how the settlement runs.
 
 The architecture is split into independent layers:
 
-- `//game/core` owns deterministic 60 Hz decisions, quantities,
-  reservations, processing, equipment, controlled actors, threats and defense.
+- `//game/sim` owns the deterministic 60 Hz decisions, quantities,
+  reservations, processing, equipment, the player's movement, threats and
+  defense. The app runs it through `//game/session` and only sends commands;
+  see [the architecture](../docs/architecture.md).
 - `assets/levels/forest_supply.ron` defines the supply chain and agent abilities.
   `scene_assets(scenario = ...)` validates and embeds it at build time.
 - `assets/styles/forest.ron` defines the palette, smaller actor scale, articulated
@@ -405,15 +457,71 @@ bazel build --config=full_local //game/app:combat_arena_demo
 The demo produces an MP4 with audio, a WAV, a final state report, and a per-frame
 trace. Its assertions check hits, a kill, and actual knockback displacement.
 
+## Multiplayer
+
+One machine hosts and others join over UDP. Each player who joins gets an
+avatar of their own beside the spawn point and drives it with the usual
+controls. Other players wear the same exosuit, dressed by the scene's style,
+and walk, idle, fly and swing with the same animation, holding the weapon
+they have picked, with their footsteps and swings audible.
+
+```sh
+# The host listens on a UDP port:
+bazel run --config=full_local //game/app:demo -- --host 7777
+# Others join by address or machine name (a Tailscale name works):
+bazel run --config=full_local //game/app:demo -- --join my-desktop:7777
+```
+
+A name tag floats over every player (yours in cyan): `--name Ada` sets
+yours, otherwise it's who is logged in to the computer. Names travel
+through the simulation, so everyone sees the same ones.
+
+Networked games start on the flat `field` scene (also on key **0** when
+playing alone). `--scene` picks another one; every player must pass the same
+scene. Scene keys are disabled while networked. The HUD's top right shows the
+connection. Leaving and rejoining gives a new avatar; the old one stays put.
+If the host leaves (or crashes: after 5 seconds without hearing from it), or
+turns a player away, or falls out of sync with them, that player's game shows
+why and closes 4 seconds later; there's no host migration.
+
+To defend the Red Clearing together, both pass `--scene combat-arena`:
+
+```sh
+bazel run --config=full_local //game/app:demo -- --host 7777 --scene combat-arena
+bazel run --config=full_local //game/app:demo -- --join my-desktop:7777 --scene combat-arena
+```
+
+Everything in the single-player arena works for both players: each picks
+their own weapon (Z/X/C/V) and fights the three ghoul lanes; blood, sounds,
+deflections, decapitations, bolts and arc chains show for everyone's hits,
+while the hit pause, rebound and camera shake are only for your own. Either
+player can carry bolts from the rack, switch the ballista off and on (shared,
+like the base's health and the kill count), and respawn with **R**. Networked
+games can't pause or change speed.
+
+The host's world is the only real one: clients load it from the host and then
+run the same 60 Hz simulation on the same turns, so commands apply on every
+machine after the input delay (4 ticks). `//game/session:session_test` runs
+two players over localhost UDP, on the field and fighting the arena's ghouls,
+and checks that both machines simulate the same world.
+
 ## Performance telemetry
 
-**F3** toggles a compact performance overlay. Live inspection, script receipts,
+The top right of the window shows frames per second. **F3** adds the
+breakdown: CPU time in Update against rendering and waiting, the session's
+update per frame and how many ticks it ran, and each world tick split into its
+stages (`commands`, `self update`, `read`, `merge`, `apply`, `housekeeping`,
+`hash`, from `sim::World::stage_times`) plus copying the settlement for the
+view. Each line is the mean / p95 in milliseconds over the last 240 samples.
+
+Live inspection, script receipts,
 and demo frame traces include a versioned `telemetry` object. Timing histories
 are bounded to 240 samples; counters and all-time maxima accumulate for the run.
 Timings expose last, mean, p50, p95, p99 and maximum milliseconds. CPU wall time
 is separate from game time: recorded frame pacing and GPU readback are included
-in `frame_wall`, while `settlement_simulation`, `settlement_projection`, and
-`settlement_sync` isolate simulation, presentation preparation, and ECS work.
+in `frame_wall`; `session_update` and the `tick_*` samples isolate the
+simulation, and `settlement_projection` and `settlement_sync` presentation
+preparation and ECS work.
 
 Gauges include entity/mesh/material counts, asset-cache entries, active and
 pooled rigs, and fixed steps per frame. Counters expose rig creation, reuse,
@@ -424,7 +532,7 @@ them, plus mesh-allocator slab sizes and allocations. These are observations,
 not portable pass/fail budgets; compare equivalent resolution, quality,
 backend, optimization mode and warm-up periods.
 
-The deterministic core also counts navigation requests/failures/waypoints,
+The simulation also counts navigation requests/failures/waypoints,
 assignment attempts and retries, dock waiting, loaded versus empty travel,
 per-agent phase ticks, and per-producer processing/starvation/output-blocking/
 disabled/completed ticks. These explain simulation waste separately from CPU

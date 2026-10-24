@@ -25,6 +25,9 @@ pub struct SceneLibrary {
     pub current: usize,
     pub initial: usize,
     pub requested: Option<usize>,
+    /// Networked games stay on their first scene: every peer builds the
+    /// scene's view, and only the host's world is real.
+    pub locked: bool,
 }
 impl SceneLibrary {
     pub fn new() -> Self {
@@ -41,6 +44,8 @@ impl SceneLibrary {
                 ScenePack::decode(atlantis::PACK_BYTES).expect("validated Atlantis asset pack"),
                 ScenePack::decode(forest_outpost::PACK_BYTES).expect("validated forest asset pack"),
                 ScenePack::decode(combat_arena::PACK_BYTES).expect("validated combat asset pack"),
+                ScenePack::decode(dig_lab::PACK_BYTES).expect("validated dig lab asset pack"),
+                ScenePack::decode(field::PACK_BYTES).expect("validated field asset pack"),
             ];
         let mut ids = std::collections::HashSet::new();
         for pack in &scenes {
@@ -51,6 +56,7 @@ impl SceneLibrary {
             current: usize::MAX,
             initial: 0,
             requested: None,
+            locked: false,
         }
     }
     pub fn index(&self, id: &str) -> Result<usize, String> {
@@ -61,10 +67,11 @@ impl SceneLibrary {
         self.scenes.get(self.current).is_some_and(|pack| pack.scene.features.contains(&feature))
     }
     pub fn extent(&self) -> f32 {
-        self.scenes
-            .get(self.current)
-            .and_then(|s| s.scene.scenario.as_ref())
-            .map_or(8., |s| s.extent)
+        let Some(scene) = self.scenes.get(self.current).map(|s| &s.scene) else { return 8. };
+        if let Some(mine) = &scene.mine {
+            return mine.extent;
+        }
+        scene.scenario.as_ref().map_or(8., |s| s.extent.to_f32())
     }
     pub fn title(&self) -> &str {
         self.scenes
@@ -134,6 +141,8 @@ pub fn switch_scene(
 ) {
     let requested = if let Some(index) = library.requested.take() {
         Some(index)
+    } else if library.locked && library.current != usize::MAX {
+        None
     } else if keys.just_pressed(KeyCode::Digit1) {
         Some(0)
     } else if keys.just_pressed(KeyCode::Digit2) {
@@ -142,6 +151,10 @@ pub fn switch_scene(
         Some(6)
     } else if keys.just_pressed(KeyCode::Digit8) {
         Some(7)
+    } else if keys.just_pressed(KeyCode::Digit9) {
+        Some(8)
+    } else if keys.just_pressed(KeyCode::Digit0) {
+        Some(9)
     } else if keys.just_pressed(KeyCode::Digit6) {
         Some(5)
     } else if keys.just_pressed(KeyCode::Digit5) {
@@ -265,11 +278,11 @@ pub fn switch_scene(
                 SampleCaption(center + Vec3::Y * 2.1),
                 Text::new(label),
                 TextFont {
-                    font_size: 13.0,
+                    font_size: FontSize::Px(13.0),
                     ..default()
                 },
                 TextColor(Color::srgb(0.65, 0.9, 1.0)),
-                TextLayout::new_with_justify(Justify::Center),
+                TextLayout::justify(Justify::Center),
                 Node {
                     position_type: PositionType::Absolute,
                     width: px(200.0),
@@ -390,6 +403,9 @@ mod tests {
         let lab = &library.scenes[1];
         assert_eq!(library.index("mining-deck"), Ok(0));
         assert_eq!(library.index("combat-arena"), Ok(7));
+        assert_eq!(library.index("dig-lab"), Ok(8));
+        assert_eq!(library.index("field"), Ok(9));
+        assert!(library.scenes[8].scene.features.contains(&SceneFeature::Digging));
         assert!(library.index("missing").is_err());
         assert!(library.scenes[4].scene.features.contains(&SceneFeature::MemoryTrial));
         assert!(library.scenes[3].scene.features.contains(&SceneFeature::FlightHud));

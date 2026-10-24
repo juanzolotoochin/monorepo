@@ -8,9 +8,12 @@ use crate::{
     assets::SceneLibrary,
     gameplay::{Controls, Obstacle, Player},
     impact::ImpactTarget,
+    lockstep::Game,
     navigation,
-    piles::{begin_job_with_options, Action, PileLab},
+    piles::PileLab,
 };
+use sim::settlement::piles::PileAction;
+use sim::CommandKind;
 use bevy::{app::AppExit, prelude::*};
 use protocol::{point, Command, Request, Script, VERSION};
 use serde_json::{json, Value};
@@ -86,6 +89,8 @@ pub fn interactive(options: Res<Options>) -> bool {
 
 enum Pending {
     Instant,
+    /// Done once the command has been simulated.
+    Applied,
     SettlementTransfer { scene: usize, expected: u32 },
     Walk(Vec3),
     Haul { expected_cargo: u32, serial: u64 },
@@ -194,34 +199,26 @@ fn player_position(world: &mut World) -> Vec3 {
         .expect("player")
         .translation
 }
-fn discs(world: &mut World) -> Vec<navigation::Disc> {
-    world
-        .query::<&Obstacle>()
-        .iter(world)
-        .map(|o| o.0)
-        .collect()
+/// The simulated settlement, or an error for scenes without one.
+fn settlement(world: &World) -> Result<&sim::settlement::Settlement, String> {
+    if world.resource::<crate::settlement::Settlement>().config.is_none() {
+        return Err("No settlement loaded".into());
+    }
+    world.resource::<Game>().settlement().ok_or_else(|| "No settlement loaded".to_string())
 }
-fn queue_haul(
-    world: &mut World,
-    action: Action,
-    pace: f32,
-    approach: Option<[f32; 2]>,
-) -> Result<(), String> {
-    let position = player_position(world);
-    let obstacles = discs(world);
+fn send(world: &mut World, kind: CommandKind) {
+    world.resource_mut::<Game>().command(kind);
+}
+/// Starts a haul toward a pile. The job serial lets the poll tell this job
+/// from a later one.
+fn queue_haul(world: &mut World, action: PileAction, pace: f32, approach: Option<[f32; 2]>) -> Result<u64, String> {
+    if !(0.0..=5.0).contains(&pace) {
+        return Err("Invalid transfer interval".into());
+    }
     let stand = approach.map(point).transpose()?;
-    world.resource_scope(|world, mut lab: Mut<PileLab>| {
-        begin_job_with_options(
-            &mut lab,
-            &mut world.resource_mut::<Controls>(),
-            position,
-            action,
-            &obstacles,
-            pace,
-            stand,
-        )
-        .map_err(str::to_string)
-    })
+    let serial = world.resource::<PileLab>().job_serial + 1;
+    crate::piles::haul(&mut world.resource_mut::<Game>(), action, pace, stand);
+    Ok(serial)
 }
 fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, String> {
     match command {
@@ -230,84 +227,87 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             crate::settlement::inspect_building(world, building.as_deref())?;
             Ok(Pending::Instant)
         }
-        Command::SettlementTransfer {
-            depot,
-            item,
-            units,
-            deposit,
-        } => {
-            let expected =
-                crate::settlement::player_transfer(world, depot, item, *units, *deposit)?;
-            Ok(Pending::SettlementTransfer {
-                scene: world.resource::<SceneLibrary>().current,
-                expected,
-            })
+        Command::SettlementTransfer { depot, item, units, deposit } => {
+            let expected = crate::settlement::player_transfer(world, depot, item, *units, *deposit)?;
+            Ok(Pending::SettlementTransfer { scene: world.resource::<SceneLibrary>().current, expected })
         }
         Command::SettlementCancel => {
-            crate::settlement::model(world)?.cancel_transfer("player")?;
+            settlement(world)?;
+            let agent = world.resource::<Game>().player().ok_or("No controlled actor")?;
+            send(world, CommandKind::CancelTransfer { agent });
             Ok(Pending::Instant)
         }
         Command::SettlementPause { paused } => {
-            crate::settlement::model(world)?.paused = *paused;
+            settlement(world)?;
+            if world.resource::<Game>().network.is_some() {
+                return Err("Networked games can't pause".into());
+            }
+            world.resource_mut::<Game>().paused = *paused;
             Ok(Pending::Instant)
         }
         Command::SettlementRate { rate } => {
-            crate::settlement::model(world)?.set_rate(*rate)?;
+            settlement(world)?;
+            if world.resource::<Game>().network.is_some() {
+                return Err("Networked games run at one speed".into());
+            }
+            if !rate.is_finite() || !(0.25..=4.0).contains(rate) {
+                return Err("simulation rate must be 0.25..4".into());
+            }
+            world.resource_mut::<Game>().rate = *rate;
             Ok(Pending::Instant)
         }
         Command::SettlementLink { id, enabled } => {
-            crate::settlement::model(world)?.set_link(id, *enabled)?;
+            let link = settlement(world)?.link_index(id).ok_or("unknown haul link")?;
+            send(world, CommandKind::SetLink { link, enabled: *enabled });
             Ok(Pending::Instant)
         }
         Command::SettlementMachine { id, enabled } => {
-            crate::settlement::model(world)?.set_machine(id, *enabled)?;
+            let producer = settlement(world)?.producer_index(id).ok_or("unknown producer")?;
+            send(world, CommandKind::SetMachine { producer, enabled: *enabled });
             Ok(Pending::Instant)
         }
         Command::SettlementDefender { id, enabled } => {
-            crate::settlement::model(world)?.set_defender(id, *enabled)?;
+            let s = settlement(world)?;
+            let defender = s.defenders.iter().position(|d| d.id == *id).ok_or("unknown defender")? as u16;
+            send(world, CommandKind::SetDefender { defender, enabled: *enabled });
             Ok(Pending::Instant)
         }
         Command::SettlementStock { depot, item, units } => {
-            crate::settlement::model(world)?.add_stock(depot, item, *units)?;
-            Ok(Pending::Instant)
+            let s = settlement(world)?;
+            let (Some(d), Some(i)) = (s.depot_index(depot), s.item_index(item)) else {
+                return Err("unknown depot/item or zero amount".into());
+            };
+            if *units == 0 {
+                return Err("unknown depot/item or zero amount".into());
+            }
+            if *units > s.depots[d as usize].free() {
+                return Err("stock does not fit unreserved destination capacity".into());
+            }
+            send(world, CommandKind::AddStock { depot: d, item: i, units: *units });
+            Ok(Pending::Applied)
         }
-        Command::AssertSettlement {
-            delivered,
-            cycles,
-            equipped,
-            kills,
-        } => {
-            let mut state = world.resource_mut::<crate::settlement::Settlement>();
-            let sim = state.simulation.as_mut().ok_or("No settlement loaded")?;
+        Command::AssertSettlement { delivered, cycles, equipped, kills } => {
+            let state = world.resource::<crate::settlement::Settlement>();
+            let sim = state.simulation.as_ref().ok_or("No settlement loaded")?;
             sim.validate_state()?;
-            if sim.metrics.delivered < *delivered
-                || sim.metrics.cycles < *cycles
-                || sim.metrics.equipped < *equipped
-                || sim.metrics.kills < *kills
-            {
-                return Err(format!(
-                    "Supply chain milestones not reached: {:?}",
-                    sim.metrics
-                ));
+            if sim.metrics.delivered < *delivered || sim.metrics.cycles < *cycles || sim.metrics.equipped < *equipped || sim.metrics.kills < *kills {
+                return Err(format!("Supply chain milestones not reached: {:?}", sim.metrics));
             }
             Ok(Pending::Instant)
         }
         Command::MemoryRecord => {
             crate::palimpsest::record(world)?;
-            Ok(Pending::Instant)
+            Ok(Pending::Applied)
         }
         Command::MemoryDeploy => {
             crate::palimpsest::deploy(world)?;
-            Ok(Pending::Instant)
+            Ok(Pending::Applied)
         }
         Command::MemoryClear => {
             crate::palimpsest::clear(world);
-            Ok(Pending::Instant)
+            Ok(Pending::Applied)
         }
-        Command::AssertTrial {
-            unlocked,
-            collected,
-        } => {
+        Command::AssertTrial { unlocked, collected } => {
             let memory = world.resource::<crate::palimpsest::Memory>();
             if memory.unlocked != *unlocked || memory.collected != *collected {
                 return Err("Field trial assertion failed".into());
@@ -315,25 +315,35 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             Ok(Pending::Instant)
         }
         Command::Jetpack { enabled } => {
-            world.resource_mut::<crate::jetpack::Flight>().requested = *enabled;
-            Ok(Pending::Instant)
+            let agent = world.resource::<Game>().player().ok_or("No player")?;
+            send(world, CommandKind::Jetpack { agent, enabled: *enabled });
+            Ok(Pending::Applied)
         }
-        Command::AssertFlight {
-            airborne,
-            altitude,
-            tolerance,
-        } => {
-            if !altitude.is_finite() || !tolerance.is_finite() || !(0.0..=1.0).contains(tolerance) {
-                return Err(
-                    "Flight assertion requires a finite altitude and tolerance in 0..1".into(),
-                );
+        Command::Deliver { seconds_per_unit } => {
+            let carried = world.resource::<PileLab>().stock.as_ref().ok_or("No logistics scene loaded")?.cargo.units;
+            if carried == 0 {
+                return Err("Carrier is empty".into());
             }
-            let actual = player_position(world).y;
-            let flying = world.resource::<crate::jetpack::Flight>().airborne;
+            let serial = queue_haul(world, PileAction::Deliver, *seconds_per_unit, None)?;
+            Ok(Pending::Haul { expected_cargo: 0, serial })
+        }
+        Command::Dig => {
+            let game = world.resource::<Game>();
+            if !game.world().is_some_and(|w| w.terrain().diggable) {
+                return Err("This scene has no diggable ground".into());
+            }
+            world.resource_mut::<Game>().dig();
+            Ok(Pending::Applied)
+        }
+        Command::AssertFlight { airborne, altitude, tolerance } => {
+            if !altitude.is_finite() || !tolerance.is_finite() || !(0.0..=1.0).contains(tolerance) {
+                return Err("Flight assertion requires a finite altitude and tolerance in 0..1".into());
+            }
+            let game = world.resource::<Game>();
+            let a = game.settlement().zip(game.player()).map(|(s, p)| &s.agents[p as usize]).ok_or("No player")?;
+            let (flying, actual) = (a.avatar.flight.airborne, a.avatar.height.to_f32());
             if flying != *airborne || (actual - altitude).abs() > *tolerance {
-                return Err(format!(
-                    "Flight assertion failed: airborne={flying}, altitude={actual:.3}"
-                ));
+                return Err(format!("Flight assertion failed: airborne={flying}, altitude={actual:.3}"));
             }
             Ok(Pending::Instant)
         }
@@ -344,148 +354,81 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
         }
         Command::Walk { position } => {
             let goal = point(*position)?;
-            let start = player_position(world);
-            let obstacles = discs(world);
-            let route = crate::jetpack::route(
-                world.resource::<SceneLibrary>(),
-                world.resource::<crate::jetpack::Flight>(),
-                start,
-                goal,
-                &obstacles,
-            );
-            if route.is_empty() {
-                return Err("Destination is blocked or unreachable".into());
-            }
-            world.resource_mut::<PileLab>().job = None;
             let mut controls = world.resource_mut::<Controls>();
-            controls.route = route;
             controls.attack = None;
             controls.queued = None;
+            world.resource_mut::<Game>().go_to(goal, false);
             Ok(Pending::Walk(goal))
         }
         Command::Add { dispenser, units } => {
-            let mut lab = world.resource_mut::<PileLab>();
-            let stock = lab.stock.as_mut().ok_or("No logistics scene loaded")?;
-            let pile = stock
-                .piles
-                .get(dispenser)
-                .filter(|p| p.source)
-                .ok_or("Unknown dispenser")?;
+            let lab = world.resource::<PileLab>();
+            let stock = lab.stock.as_ref().ok_or("No logistics scene loaded")?;
+            let pile = stock.piles.get(dispenser).filter(|p| p.source).ok_or("Unknown dispenser")?;
             if *units == 0 || *units > voxel_assets::PILE_CAPACITY - pile.units {
                 return Err("Requested amount does not fit the output pile".into());
             }
-            stock.add(*dispenser, *units).map_err(str::to_string)?;
-            lab.notice = format!("Program added {units} units.");
-            world
-                .resource::<crate::sound::Sound>()
-                .play(crate::sound::Cue::Dispense);
-            Ok(Pending::Instant)
+            send(world, CommandKind::Dispense { dispenser: *dispenser, units: *units });
+            world.resource_mut::<PileLab>().notice = format!("Program added {units} units.");
+            world.resource::<crate::sound::Sound>().play(crate::sound::Cue::Dispense);
+            Ok(Pending::Applied)
         }
-        Command::Grab {
-            pile,
-            units,
-            material,
-            seconds_per_unit,
-            approach,
-        } => {
+        Command::Grab { pile, units, material, seconds_per_unit, approach } => {
             let lab = world.resource::<PileLab>();
             let stock = lab.stock.as_ref().ok_or("No logistics scene loaded")?;
             let source = stock.piles.get(pile).ok_or("Unknown pile")?;
-            if material.is_some_and(|m| m != source.material)
-                || stock.cargo.material.is_some_and(|m| m != source.material)
-            {
+            if material.is_some_and(|m| m != source.material) || stock.cargo.material.is_some_and(|m| m != source.material) {
                 return Err("Material mismatch".into());
             }
-            if *units == 0
-                || *units > source.units
-                || *units > stock.cargo.capacity - stock.cargo.units
-            {
-                return Err(
-                    "Exact pickup quantity unavailable or exceeds carrying capacity".into(),
-                );
+            if *units == 0 || *units > source.units || *units > stock.cargo.capacity - stock.cargo.units {
+                return Err("Exact pickup quantity unavailable or exceeds carrying capacity".into());
             }
             let expected = stock.cargo.units + units;
-            queue_haul(
-                world,
-                Action::PickupAmount(*pile, *units),
-                *seconds_per_unit,
-                *approach,
-            )?;
-            Ok(Pending::Haul {
-                expected_cargo: expected,
-                serial: world.resource::<PileLab>().job_serial,
-            })
+            let serial = queue_haul(world, PileAction::PickupAmount(*pile, *units), *seconds_per_unit, *approach)?;
+            Ok(Pending::Haul { expected_cargo: expected, serial })
         }
-        Command::DropAll {
-            position,
-            seconds_per_unit,
-            approach,
-        } => {
-            if world
-                .resource::<PileLab>()
-                .stock
-                .as_ref()
-                .ok_or("No logistics scene loaded")?
-                .cargo
-                .units
-                == 0
-            {
+        Command::DropAll { position, seconds_per_unit, approach } => {
+            let carried = world.resource::<PileLab>().stock.as_ref().ok_or("No logistics scene loaded")?.cargo.units;
+            if carried == 0 {
                 return Err("Carrier is empty".into());
             }
-            queue_haul(
-                world,
-                Action::Drop(point(*position)?),
-                *seconds_per_unit,
-                *approach,
-            )?;
-            Ok(Pending::Haul {
-                expected_cargo: 0,
-                serial: world.resource::<PileLab>().job_serial,
-            })
+            let at = world.resource::<Game>().to_sim(point(*position)?);
+            let serial = queue_haul(world, PileAction::Drop(at), *seconds_per_unit, *approach)?;
+            Ok(Pending::Haul { expected_cargo: 0, serial })
         }
-        Command::DepositAll {
-            pile,
-            seconds_per_unit,
-            approach,
-        } => {
+        Command::DepositAll { pile, seconds_per_unit, approach } => {
             let lab = world.resource::<PileLab>();
             let stock = lab.stock.as_ref().ok_or("No logistics scene loaded")?;
             let target = stock.piles.get(pile).ok_or("Unknown pile")?;
-            if stock.cargo.units == 0
-                || stock.cargo.material != Some(target.material)
-                || stock.cargo.units > voxel_assets::PILE_CAPACITY - target.units
-            {
+            if stock.cargo.units == 0 || stock.cargo.material != Some(target.material) || stock.cargo.units > voxel_assets::PILE_CAPACITY - target.units {
                 return Err("Cargo is empty, incompatible, or does not fit destination".into());
             }
-            queue_haul(world, Action::Deposit(*pile), *seconds_per_unit, *approach)?;
-            Ok(Pending::Haul {
-                expected_cargo: 0,
-                serial: world.resource::<PileLab>().job_serial,
-            })
+            let serial = queue_haul(world, PileAction::Deposit(*pile), *seconds_per_unit, *approach)?;
+            Ok(Pending::Haul { expected_cargo: 0, serial })
         }
         Command::Strike { target } => {
             let aim = point(*target)? - player_position(world);
-            world.resource_mut::<PileLab>().job = None;
-            world.resource_mut::<Controls>().strike(aim);
+            world.resource_scope(|world, mut game: Mut<Game>| {
+                world.resource_scope(|world, mut controls: Mut<Controls>| {
+                    crate::lockstep::strike(&mut game, &mut controls, world.resource::<SceneLibrary>(), aim);
+                });
+            });
             Ok(Pending::Strike)
         }
         Command::EquipWeapon { weapon } => {
+            use content::scenario::Weapon;
             let selected = match weapon.as_str() {
-                "sword" => gameplay_core::Weapon::Sword,
-                "spear" => gameplay_core::Weapon::Spear,
-                "bow" => gameplay_core::Weapon::Bow,
-                "arc_coil" => gameplay_core::Weapon::ArcCoil,
+                "sword" => Weapon::Sword,
+                "spear" => Weapon::Spear,
+                "bow" => Weapon::Bow,
+                "arc_coil" => Weapon::ArcCoil,
                 _ => return Err("Unknown weapon".into()),
             };
-            let available = world
-                .resource::<crate::settlement::Settlement>()
-                .simulation
-                .as_ref()
-                .is_some_and(|sim| sim.config().weapons.contains(&selected));
+            let available = world.resource::<Game>().settlement().is_some_and(|s| s.weapons.contains(&selected));
             if !available {
                 return Err("Weapon is unavailable in this scenario".into());
             }
             world.resource_mut::<Controls>().weapon = selected;
+            world.resource_mut::<Game>().equip(selected);
             Ok(Pending::Instant)
         }
         Command::Wait { frames } => {
@@ -494,18 +437,11 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             }
             Ok(Pending::Wait(tick + u64::from(*frames)))
         }
-        Command::Assert {
-            cargo_units,
-            total_units,
-            piles,
-        } => {
+        Command::Assert { cargo_units, total_units, piles } => {
             let lab = world.resource::<PileLab>();
             let stock = lab.stock.as_ref().ok_or("No logistics scene loaded")?;
             if cargo_units.is_some_and(|n| n != stock.cargo.units) {
-                return Err(format!(
-                    "Cargo assertion failed: actual {}",
-                    stock.cargo.units
-                ));
+                return Err(format!("Cargo assertion failed: actual {}", stock.cargo.units));
             }
             if total_units.is_some_and(|n| n != stock.total()) {
                 return Err(format!("Total assertion failed: actual {}", stock.total()));
@@ -524,23 +460,24 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
     }
 }
 fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), String>> {
+    // Commands apply on the next simulated tick; until then there is nothing to check.
+    let applied = world.resource::<Game>().caught_up();
     match pending {
         Pending::Instant => Some(Ok(())),
+        Pending::Applied => applied.then_some(Ok(())),
         Pending::SettlementTransfer { scene, expected } => {
             if world.resource::<SceneLibrary>().current != *scene {
                 return Some(Err("Scene changed during transfer".into()));
             }
-            let state = world.resource::<crate::settlement::Settlement>();
-            let sim = state.simulation.as_ref()?;
-            if sim.manual_jobs.contains_key("player")
-                || sim.transfers.values().any(|t| {
-                    matches!(&t.from,gameplay_core::Endpoint::Cargo(id) if id=="player")
-                        || matches!(&t.to,gameplay_core::Endpoint::Cargo(id) if id=="player")
-                })
-            {
+            if !applied {
+                return None;
+            }
+            let game = world.resource::<Game>();
+            let a = &game.settlement()?.agents[game.player()? as usize];
+            if a.avatar.job.is_some() || a.pending_in > 0 || a.pending_out > 0 {
                 None
             } else {
-                Some(if sim.agents["player"].cargo.total() == *expected {
+                Some(if a.cargo.iter().sum::<u32>() == *expected {
                     Ok(())
                 } else {
                     Err("Transfer canceled before exact quantity completed".into())
@@ -549,34 +486,29 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
         }
         Pending::Failed(e) => Some(Err(e.clone())),
         Pending::Wait(until) => (tick >= *until).then_some(Ok(())),
-        Pending::Scene(index) => {
-            (world.resource::<SceneLibrary>().current == *index).then_some(Ok(()))
-        }
-        Pending::Strike => world
-            .resource::<Controls>()
-            .attack
-            .is_none()
-            .then_some(Ok(())),
+        Pending::Scene(index) => (world.resource::<SceneLibrary>().current == *index && applied_scene(world, *index)).then_some(Ok(())),
+        Pending::Strike => (applied && world.resource::<Controls>().attack.is_none()).then_some(Ok(())),
         Pending::Walk(goal) => {
-            if !world.resource::<Controls>().route.is_empty() {
+            if !applied {
+                return None;
+            }
+            let game = world.resource::<Game>();
+            let a = &game.settlement()?.agents[game.player()? as usize];
+            if !a.route.is_empty() {
                 None
+            } else if navigation::flat(game.to_view(a.position) - *goal).length() < 0.15 {
+                Some(Ok(()))
             } else {
-                Some(
-                    if navigation::flat(player_position(world) - *goal).length() < 0.15 {
-                        Ok(())
-                    } else {
-                        Err("Walk was interrupted".into())
-                    },
-                )
+                Some(Err("Destination is blocked or unreachable, or the walk was interrupted".into()))
             }
         }
-        Pending::Haul {
-            expected_cargo,
-            serial,
-        } => {
+        Pending::Haul { expected_cargo, serial } => {
+            if !applied {
+                return None;
+            }
             let lab = world.resource::<PileLab>();
             if lab.job_serial != *serial {
-                return Some(Err("Haul was superseded or its scene changed".into()));
+                return Some(Err(lab.last_error.clone().unwrap_or_else(|| "Haul was superseded or its scene changed".into())));
             }
             if lab.job.is_some() {
                 None
@@ -590,6 +522,11 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
             }
         }
     }
+}
+/// Whether the scene's world exists and has run a tick.
+fn applied_scene(world: &World, index: usize) -> bool {
+    let _ = index;
+    world.resource::<Game>().world().is_some_and(|w| w.tick() > 0)
 }
 
 pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
@@ -606,13 +543,14 @@ pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
         .scene
         .terrain;
     let terrain = json!(terrain);
+    let digging = crate::digging::snapshot(world.resource::<Game>());
     let controls = world.resource::<Controls>();
     let movement = json!({"route":controls.route.iter().map(|p|p.to_array()).collect::<Vec<_>>(),"velocity":controls.velocity.to_array(),"attacking":controls.attack.is_some(),"weapon":controls.weapon,"impacts":controls.impacts});
     let scene = world.resource::<SceneLibrary>().title().to_string();
     let lab = world.resource::<PileLab>();
     let airborne = lab.in_flight;
     let (piles, cargo, totals) = if let Some(stock) = &lab.stock {
-        (stock.piles.iter().map(|(&id,p)|json!({"id":id,"material":p.material,"position":[p.position[0],0.0,p.position[1]],"units":p.units,"source":p.source,"capacity":voxel_assets::PILE_CAPACITY})).collect::<Vec<_>>(),json!({"material":stock.cargo.material,"units":stock.cargo.units,"capacity":stock.cargo.capacity}),json!({"created":stock.created,"ground":stock.total()-u64::from(stock.cargo.units),"carried":stock.cargo.units,"conserved":stock.total()==stock.created}))
+        (stock.piles.iter().map(|(&id,p)|json!({"id":id,"material":p.material,"position":[p.position[0],0.0,p.position[1]],"units":p.units,"source":p.source,"capacity":voxel_assets::PILE_CAPACITY})).collect::<Vec<_>>(),json!({"material":stock.cargo.material,"units":stock.cargo.units,"capacity":stock.cargo.capacity}),json!({"created":stock.created,"ground":stock.ground(),"carried":stock.cargo.units,"conserved":stock.total()==stock.created}))
     } else {
         (vec![], Value::Null, Value::Null)
     };
@@ -628,8 +566,9 @@ pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
         .iter(world)
         .map(|(transform, transit)| {
             let destination = match transit.destination {
-                crate::piles::Destination::Cargo(slot) => json!({"cargo_slot":slot}),
+                crate::piles::Destination::Cargo(agent, slot) => json!({"agent":agent,"cargo_slot":slot}),
                 crate::piles::Destination::Pile(id, slot) => json!({"pile":id,"slot":slot}),
+                crate::piles::Destination::Collector(_) => json!({"collector":true}),
             };
             json!({"position":transform.translation.to_array(),"destination":destination})
         })
@@ -638,7 +577,10 @@ pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
         .query::<&crate::piles::MineralUnit>()
         .iter(world)
         .count();
-    let result = json!({"telemetry":telemetry,"settlement":settlement,"version":VERSION,"tick":hub.tick,"scene":scene,"player":{"position":position.to_array(),"movement":movement,"cargo":cargo,"jetpack":jetpack},"terrain":terrain,"memory":memory,"style":style,"piles":piles,"totals":totals,"visible_mineral_units":visible_units,"airborne_units":airborne,"airborne":flying,"targets":targets,"obstacles":obstacles,"active_command":hub.active.as_ref().map(|a|&a.envelope.request)});
+    let sim_tick = world.resource::<Game>().world().map(|w| w.tick());
+    let network = world.resource::<Game>().network.is_some().then(|| world.resource::<Game>().status.clone());
+    let peers = crate::peers::snapshot(world);
+    let result = json!({"telemetry":telemetry,"settlement":settlement,"version":VERSION,"tick":hub.tick,"sim_tick":sim_tick,"network":network,"peers":peers,"scene":scene,"player":{"position":position.to_array(),"movement":movement,"cargo":cargo,"jetpack":jetpack},"terrain":terrain,"digging":digging,"memory":memory,"style":style,"piles":piles,"totals":totals,"visible_mineral_units":visible_units,"airborne_units":airborne,"airborne":flying,"targets":targets,"obstacles":obstacles,"active_command":hub.active.as_ref().map(|a|&a.envelope.request)});
     crate::telemetry::elapsed(world, "inspection_snapshot", started);
     world
         .resource_mut::<crate::telemetry::Telemetry>()

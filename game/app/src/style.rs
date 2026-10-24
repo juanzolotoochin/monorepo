@@ -13,6 +13,13 @@ pub struct ActiveStyle {
     cache: HashMap<String, Vec<(Handle<Mesh>, Handle<StandardMaterial>)>>,
     palettes: HashMap<String, Vec<Handle<StandardMaterial>>>,
 }
+
+impl ActiveStyle {
+    /// The scene whose style the player wears.
+    pub fn current(&self) -> Option<usize> {
+        self.current
+    }
+}
 #[derive(Resource)]
 pub struct MaterialBindings(pub Vec<(Handle<StandardMaterial>, String, StandardMaterial)>);
 
@@ -21,7 +28,7 @@ struct Environment;
 #[derive(Component)]
 struct StyledActor;
 #[derive(Component)]
-pub struct WeaponVisual(pub gameplay_core::Weapon);
+pub struct WeaponVisual(pub content::scenario::Weapon);
 #[derive(Component)]
 pub struct WeaponLabel;
 #[derive(Component)]
@@ -123,7 +130,7 @@ pub fn apply(world: &mut World) {
             .collect();
         let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
         for (handle, material) in updates {
-            if let Some(target) = materials.get_mut(&handle) {
+            if let Some(mut target) = materials.get_mut(&handle) {
                 *target = material;
             }
         }
@@ -135,7 +142,7 @@ pub fn apply(world: &mut World) {
     for mut light in world.query::<&mut DirectionalLight>().iter_mut(world) {
         light.color = color(profile.sunlight);
         light.illuminance = profile.illuminance;
-        light.shadows_enabled = profile.sun_shadows;
+        light.shadow_maps_enabled = profile.sun_shadows;
     }
     // Authored key lights keep their positions and intensities; profiles supply their color roles.
     for (role, mut light) in world
@@ -258,7 +265,7 @@ pub fn apply(world: &mut World) {
                     if a.part == ActorPart::Weapon && !available_weapons.is_empty() {
                         world
                             .entity_mut(e)
-                            .insert(WeaponVisual(gameplay_core::Weapon::Sword));
+                            .insert(WeaponVisual(content::scenario::Weapon::Sword));
                     }
                     let material = world.get::<MeshMaterial3d<StandardMaterial>>(e).unwrap();
                     let emitting = world
@@ -329,7 +336,7 @@ pub fn apply(world: &mut World) {
             1.0 / profile.voxel_size
         )),
         TextFont {
-            font_size: 11.0,
+            font_size: FontSize::Px(11.0),
             ..default()
         },
         TextColor(color(profile.accents[0])),
@@ -373,7 +380,7 @@ fn spawn_light(
                     intensity: light.intensity,
                     range: light.range,
                     radius: light.radius,
-                    shadows_enabled: light.shadows,
+                    shadow_maps_enabled: light.shadows,
                     shadow_depth_bias: profile.shadow_depth_bias,
                     shadow_normal_bias: profile.shadow_normal_bias,
                     shadow_map_near_z: 0.05,
@@ -393,7 +400,7 @@ fn spawn_light(
                     intensity: light.intensity,
                     range: light.range,
                     radius: light.radius,
-                    shadows_enabled: light.shadows,
+                    shadow_maps_enabled: light.shadows,
                     shadow_depth_bias: profile.shadow_depth_bias,
                     shadow_normal_bias: profile.shadow_normal_bias,
                     shadow_map_near_z: 0.05,
@@ -475,7 +482,7 @@ pub fn snapshot(world: &mut World) -> serde_json::Value {
     let p = pack.scene.style.clone().unwrap_or_default();
     let mut info = serde_json::json!({"id":p.id,"voxel_size":p.voxel_size,"voxels_per_meter":1.0/p.voxel_size,"palette":p.materials.iter().map(|m| &m.name).collect::<Vec<_>>(),"environment_statistics":pack.environment.as_ref().map(|e|e.statistics),"baked":pack.environment.is_some(),"actor_voxel_size":p.actor_voxel_size,"actor_parts":pack.actor.iter().map(|a|a.part).collect::<Vec<_>>(),"weapon":p.weapon_name,"fixture_lights":pack.environment.as_ref().map(|e|&e.lights),"sun_shadows":p.sun_shadows,"exposure_ev100":p.exposure_ev100});
     let moving:Vec<_>=world.query_filtered::<Entity,With<StyledActor>>().iter(world).filter_map(|e| {
-        let (kind,intensity,range,shadows)=if let Some(l)=world.get::<PointLight>(e) {("point",l.intensity,l.range,l.shadows_enabled)} else if let Some(l)=world.get::<SpotLight>(e) {("spot",l.intensity,l.range,l.shadows_enabled)} else {return None;};
+        let (kind,intensity,range,shadows)=if let Some(l)=world.get::<PointLight>(e) {("point",l.intensity,l.range,l.shadow_maps_enabled)} else if let Some(l)=world.get::<SpotLight>(e) {("spot",l.intensity,l.range,l.shadow_maps_enabled)} else {return None;};
         Some(serde_json::json!({"kind":kind,"position":world_position(world,e).to_array(),"intensity":intensity,"range":range,"shadows":shadows}))
     }).collect();
     info["actor_lights"] = serde_json::json!(moving);
@@ -561,7 +568,7 @@ mod tests {
                     .unwrap();
                 assert_eq!(helmet["shadows"], true);
                 for light in world.query::<&SpotLight>().iter(world) {
-                    assert!(light.shadows_enabled);
+                    assert!(light.shadow_maps_enabled);
                     assert!((light.shadow_depth_bias - 0.008).abs() < 0.0001);
                 }
                 for part in &world.resource::<SceneLibrary>().scenes[index].actor {
@@ -594,7 +601,7 @@ mod tests {
                 );
                 for light in world.query::<&DirectionalLight>().iter(world) {
                     assert_eq!(light.illuminance, 0.0);
-                    assert!(!light.shadows_enabled);
+                    assert!(!light.shadow_maps_enabled);
                 }
                 for (_, light) in world.query::<(&AccentLight, &PointLight)>().iter(world) {
                     assert_eq!(light.intensity, 0.0);
@@ -631,7 +638,7 @@ mod tests {
                 assert_eq!(world.resource::<GlobalAmbientLight>().brightness, 180.0);
                 for light in world.query::<&DirectionalLight>().iter(world) {
                     assert_eq!(light.illuminance, 10500.0);
-                    assert!(light.shadows_enabled);
+                    assert!(light.shadow_maps_enabled);
                 }
             }
         }

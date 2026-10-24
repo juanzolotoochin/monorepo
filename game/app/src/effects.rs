@@ -352,7 +352,7 @@ pub fn update_effects(
         for slot in &mut rock.slots {
             let response = impact::response(slot.kind);
             slot.flash = (slot.flash - dt / response.flash_seconds).max(0.0);
-            if let Some(mat) = materials.get_mut(&slot.handle) {
+            if let Some(mut mat) = materials.get_mut(&slot.handle) {
                 // Add to, rather than overwrite, authored emission (e.g. crystal).
                 mat.emissive = LinearRgba {
                     red: slot.rest_emissive.red + response.color[0] * slot.flash * 3.0,

@@ -541,7 +541,7 @@ pub enum ActorPart {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WeaponSkin {
-    pub weapon: gameplay_core::Weapon,
+    pub weapon: content::scenario::Weapon,
     pub skin: String,
     #[serde(default)]
     pub muzzle: [f32; 3],

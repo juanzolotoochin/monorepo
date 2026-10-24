@@ -1,5 +1,14 @@
 load("//game/build/voxel_assets:defs.bzl", "boulder_prefab", "scene_assets")
 
+# Scenario files are also read by the new simulation (game/content::scenario).
+exports_files(
+    [
+        "levels/combat_arena_supply.ron",
+        "levels/forest_supply.ron",
+    ],
+    visibility = ["//game:__subpackages__"],
+)
+
 package(default_visibility = ["//game/app:__pkg__"])
 
 [
@@ -79,6 +88,20 @@ scene_assets(
 scene_assets(
     name = "surprise_lab",
     layout = "levels/surprise_lab.ron",
+    prefabs = [],
+)
+
+# A flat deck with nothing on it, for trying out multiplayer.
+scene_assets(
+    name = "field",
+    layout = "levels/field.ron",
+    prefabs = [],
+)
+
+# The flat deck, diggable: pits a layer at a time, out with the jetpack.
+scene_assets(
+    name = "dig_lab",
+    layout = "levels/dig_lab.ron",
     prefabs = [],
 )
 

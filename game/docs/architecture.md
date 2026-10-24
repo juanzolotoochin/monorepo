@@ -1,8 +1,8 @@
 # Game architecture
 
-This is the architecture for rewriting the game (today `game/core` and
-`game/app`) as a deterministic lockstep simulation with Bevy
-as a view. The goal is the same gameplay as today, rebuilt to scale to about
+This is the architecture of the game: a deterministic lockstep simulation
+with Bevy as a view. It replaced the original prototype (`game/core`, a
+60 Hz f32 simulation driven by `game/app`). The goal is the same gameplay as today, rebuilt to scale to about
 100k entities and 2–8 co-op players over the internet (more on LAN).
 
 The approach was validated in an earlier prototype:
@@ -16,6 +16,10 @@ The approach was validated in an earlier prototype:
 Interactive explainers for each decision live in [`design/`](design/). Open them
 in a browser.
 
+Dated snapshots of the architecture diagram (crates, the frame, the tick
+stages, where each feature lives) are in
+[`architecture-reviews/`](architecture-reviews/), one per review.
+
 ## Principles
 
 - **Deterministic lockstep.** Every peer simulates the whole world from the same
@@ -26,25 +30,33 @@ in a browser.
 - **No floating point in the simulation.** All simulation math uses `Fx`, a
   fixed-point type. f32 exists only in the view and in raw input before it is
   quantized into a command.
-- **30 Hz simulation.** Rendering interpolates. Content is written in seconds
-  and per-second rates, converted to ticks at load, so the tick rate is one
-  constant.
+- **60 Hz simulation** (as in Factorio; it was 30 Hz until October 2026).
+  Rendering interpolates. Content is written in seconds and per-second rates,
+  converted to ticks at load, and code constants go through
+  `content::millis_to_ticks`, `per_tick` and `ticks_from_60hz`, so the tick
+  rate is one constant (`content::TICKS_PER_SECOND`). The few per-tick
+  factors that need `exp` or `powf` (turn blends, knockback decay) list their
+  value for each supported rate and fail to compile for any other.
 - **Budget:** at most 10 ms per tick at 100k entities on a dev PC.
 
 ## Crates
 
-All under `game/`, built by Bazel with `rules_rs`.
+All under `game/`, built by Bazel with `rules_rs`. `game/app` is the full game
+(the prototype's scenes, now on `game/sim` through `game/session`); `game/play`
+is a minimal binary over `game/view`, used to test sessions and networking.
 
 | Crate | Deterministic | Purpose |
 |---|---|---|
-| `fx` | yes | `Fx` (i64, 32.32), vectors, table-based sqrt/sin/cos/atan2, decimal parsing |
+| `fx` | yes | `Fx` (i64, 32.32), vectors, integer sqrt, table-based sin/cos/atan2, decimal parsing |
 | `sim` | yes | Entity tables, chunks, the tick pipeline, message queues, RNG, timers, hashing |
 | `content` | yes | Definition files, sim/view split, name tables, rules hash |
 | `save` | yes | Sectioned save format, remapping on load, RON dumps, diff tool |
 | `net` | yes | Turns, input delay, time sync, `Transport` and `Sessions` traits, loopback simulator, UDP |
+| `session` | yes | One running game for a front end: host, client or replay, with input-log recording |
 | `headless` | tool | Runs a save plus an input log, writes per-tick hashes, benchmarks |
 | `view` | no (Bevy) | Consumes the render extract: interpolation, prediction, overlays |
-| `app` | no (Bevy) | The game binary: single-player, host, join |
+| `play` | no (Bevy) | Minimal binary: single-player, host, join |
+| `app` | no (Bevy) | The game: every scene, scripted demos, inspection protocol |
 
 Bazel visibility keeps `@crates//:bevy` out of the deterministic crates. `net`
 counts as deterministic because its decisions depend only on its inputs and a
@@ -58,9 +70,12 @@ Details: [message system](design/message-system.html),
 ### Fixed point
 
 `Fx` is our own newtype over `i64` in 32.32 format. Overflow checks are on in
-debug builds. Trig and sqrt come from our own tables, so results are bit-exact on
-every platform. Content files contain decimals (`speed: 1.5`), parsed into `Fx`
-once at load.
+debug builds. Sqrt is an exact integer square root. Sin, cos and atan2
+interpolate tables that are computed at compile time with integer math, so no
+platform's float library is involved and results are bit-exact everywhere.
+Content files contain decimals (`speed: 1.5`), parsed into `Fx` once at load
+with integer arithmetic. `game/fx/testdata/golden.txt` hashes every operation
+over fixed inputs; `bazel run //game/fx:update_golden` regenerates it.
 
 ### World and chunks
 
@@ -73,6 +88,12 @@ once at load.
   only during housekeeping.
 - The chunk is the unit for parallel work, message ordering, sleeping, spatial
   queries, hashing, and terrain and navigation rebuilds.
+- Each chunk has a **spatial index** of 8 × 8 cells (4 × 4 tiles each), rebuilt
+  in housekeeping for chunks that changed. During a tick it holds last tick's
+  positions, which is exactly the snapshot self update reads. Read-phase queries
+  widen their radius by the maximum speed and test current positions.
+- Only chunks that changed (**dirty** chunks) are reindexed and rehashed, so
+  sleeping chunks cost nothing per tick.
 
 ### The tick
 
@@ -129,11 +150,76 @@ Skipping work is the main performance lever.
   Per-type collision opt-outs (for example a spider walking over small units)
   can be added later.
 
+### Terrain (Milestone 1)
+
+Today's scenes are arenas: flat ground, raised walkable boxes, and disc-shaped
+obstacles (rocks, trees, machines). `game/sim::terrain` holds exactly that as
+simulation state, in world tiles (1 tile = 1 m), plus diggable rock columns.
+Digging is a command (later also a message) that changes the terrain and its
+hash. `game/sim::nav` is the original clearance-aware A* (half-tile grid,
+string pulling, a turning-circle planner for carts) in fixed point.
+
+Not built yet, because no current scene needs them: voxel chunks with
+multi-level walkable spans, flow fields and hierarchical A*. Each wave's
+enemies share one planned route, which is what a flow field per target would
+give at this scale.
+
 ### Logistics
 
 Items move only by haulers (no belts). Reservations use incremental counters on
 each depot, updated in the apply phase. Today's stock conservation ledger is
 kept as a debug and test invariant.
+
+As built in `game/sim::settlement` (Milestone 1):
+
+- Scenario files keep the original format (`game/content::scenario`), parsed
+  into `Fx`. A host turns a scenario plus the scene's obstacle discs into the
+  world at tick 0. View-only fields (labels, skins, cargo layouts) stay `f32`
+  and never reach the simulation.
+- Each depot counts `out` (promised stock) and `incoming` (units on their way)
+  per item. `Settlement::validate` recomputes both from scratch every tick in
+  tests, along with the conservation ledger.
+- Haulers move themselves in the parallel self update, avoiding last tick's
+  bodies. Taking a job (`Reserve`), loading, unloading, fetching and attaching
+  equipment are messages; a job that no longer fits when applied shrinks or is
+  rejected, and the hauler retries later.
+- Docks are claimed by message every tick and resolved per depot, independent
+  of message order: an agent using or leaving the dock keeps it, then the
+  previous owner if still approaching, then the nearest approaching agent. An
+  agent may only start loading once it owns the dock.
+- Settlement agents live in world-wide tables rather than per-chunk ones, since
+  scenes have at most 32 of them; their messages are still filed under the
+  chunk they stand in, so they join the shuffled chunk order.
+- Differences from the original game, on purpose: a newly attached trailer is
+  placed in the nearest clear direction behind the animal, and a cart that
+  can't find a turning circle takes the direct route instead of waiting
+  forever. The original could deadlock on both, depending on the arrival angle.
+
+### Combat and the player (Milestone 1)
+
+`game/sim::settlement::{combat, avatar}` port the original rules: waves,
+defenders, arrows and ballista bolts (deflect, pierce, impale), sword
+criticals, spear punctures, arc-coil chains, stagger and knockback.
+
+- Threats move themselves in parallel. The read phase decides projectile
+  collisions, breaches, defender shots and which threats a strike reaches;
+  the apply phase computes damage against current armor and health.
+- The player's avatar is a simulated body now, not a Bevy transform. Commands
+  set an intent (walk a direction, go to a point, stop); the original
+  controller's acceleration, braking, run speed, click routes and sliding
+  collision run each tick. Attacks are commands: contact resolves on the
+  windup tick, and movement stays locked for the swing or the rebound after a
+  hit. One follow-up click near the end of a swing is buffered.
+- Manual transfers are commands and use the same reservation counters as
+  haulers. Cancelling releases unlaunched units; units in the air still land.
+- Tick-based tuning in scenario files is in 60 Hz ticks, the original
+  game's rate, and is converted to the simulation's rate.
+
+Compared with the original over the same two minutes (`parity_probe`), the
+forest outpost delivers 99 units versus 98 and kills 23 ghouls, as the
+original does. The combat arena's ballista lands all 18 bolts in both; the
+pierce rolls fall differently (same formula, different IDs), so 10 ghouls die
+instead of 13.
 
 ## Networking
 
@@ -161,8 +247,10 @@ Details: [desyncs and host loss](design/desync-host-loss.html).
   ID, session epoch), and turn authority is its own module.
 - **Player identity:** a stable player ID (a local profile ID now, Steam or EOS
   ID later) maps returning players back to their avatars.
-- **Layers:** the lockstep protocol sits on a `Transport` trait (send bytes to a
-  peer, reliable or unreliable) and a `Sessions` trait (find, create, join).
+- **Layers:** the lockstep protocol sits on a `Transport` trait (send and
+  receive unreliable datagrams; the protocol repeats whatever isn't
+  acknowledged, so it needs nothing more) and, later, a `Sessions` trait (find,
+  create, join) for Steam and EOS lobbies. Direct IP needs no session layer.
   Implementations come in this order:
   1. Loopback simulator for tests
   2. UDP with direct IP, for LAN and Tailscale
@@ -271,7 +359,7 @@ Details: [milestone plan](design/milestone-plan.html).
 | 0.2 | `game/sim` core | Thread-count test passes |
 | 0.3 | `game/content`, `game/save` | Save-and-continue test passes |
 | 0.4 | `game/headless` | Determinism suite runs in CI; benchmark under 10 ms per tick |
-| 0.5 | Minimal `game/view` and `game/app` | Smooth 144 Hz view of the 30 Hz simulation, single-player through the turn path |
+| 0.5 | Minimal `game/view` and `game/play` | Smooth 144 Hz view of the simulation, single-player through the turn path |
 | 0.6 | `game/net` | 30 minutes over Tailscale with no desync, plus a working mid-game join |
 
 **Milestone 1, gameplay port:**
@@ -281,6 +369,7 @@ Details: [milestone plan](design/milestone-plan.html).
 3. Combat and player actions
 4. `game_demo` rebuilt on input logs, every scene reproduced, then
    `game/core` retired and the prototype implementation in `game/app` replaced
+   (done: each demo is a replay of its recorded input log)
 
 ## Deferred
 

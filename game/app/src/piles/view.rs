@@ -36,11 +36,11 @@ fn label(commands: &mut Commands, kind: CaptionKind, anchor: Vec3, text: &str) -
             Caption { kind, anchor },
             Text::new(text),
             TextFont {
-                font_size: 13.0,
+                font_size: FontSize::Px(13.0),
                 ..default()
             },
             TextColor(Color::srgb(0.7, 0.92, 1.0)),
-            TextLayout::new_with_justify(Justify::Center),
+            TextLayout::justify(Justify::Center),
             Node {
                 position_type: PositionType::Absolute,
                 width: px(220.0),
@@ -76,7 +76,7 @@ pub fn setup_scene(
         return;
     };
     if lab.assets.is_none() {
-        let mineral = [Mineral::AmberOre, Mineral::BlueCrystal].map(|m| {
+        let mineral = MINERALS.map(|m| {
             let c = mineral_color(m);
             materials.add(StandardMaterial {
                 base_color: Color::srgb(c[0], c[1], c[2]),
@@ -152,7 +152,10 @@ pub fn setup_scene(
             "",
         );
         commands.entity(caption).insert((
-            Button,
+            // Bevy 0.20 made the old `Button` marker private; spell out
+            // what it required so `Interaction` keeps updating as before.
+            Interaction::None,
+            bevy::ui::FocusPolicy::Block,
             SourceButton(index),
             BackgroundColor(Color::srgba(0.02, 0.06, 0.10, 0.94)),
             BorderColor::all(Color::srgb(0.15, 0.55, 0.65)),
@@ -165,27 +168,34 @@ pub fn setup_scene(
             },
         ));
     }
+    if let Some(at) = layout.collector {
+        spawn_collector(&mut commands, &assets, Vec3::from_array(at));
+    }
+    let mine = layout.dispensers.is_empty();
     // An empty destination bay suggests a place to start; mineral can be dropped elsewhere too.
-    commands
-        .spawn((
-            LabEntity,
-            Transform::from_xyz(4.0, 0.025, 4.5),
-            Visibility::default(),
-        ))
-        .with_children(|p| {
-            for (x, z) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-                chunk(
-                    p,
-                    &assets,
-                    &assets.trim,
-                    Vec3::new(x, 0.0, z),
-                    Vec3::new(0.35, 0.04, 0.35),
-                );
-            }
-        });
+    if !mine {
+        commands
+            .spawn((
+                LabEntity,
+                Transform::from_xyz(4.0, 0.025, 4.5),
+                Visibility::default(),
+            ))
+            .with_children(|p| {
+                for (x, z) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+                    chunk(
+                        p,
+                        &assets,
+                        &assets.trim,
+                        Vec3::new(x, 0.0, z),
+                        Vec3::new(0.35, 0.04, 0.35),
+                    );
+                }
+            });
+    }
     commands.spawn((
         LabEntity,
         CarryVisual {
+            agent: None,
             units: u32::MAX,
             material: None,
             hidden: 0,
@@ -197,14 +207,24 @@ pub fn setup_scene(
     label(&mut commands, CaptionKind::Cargo, Vec3::ZERO, "");
     commands.spawn((LabEntity,LabPanel,Interaction::None,Node { position_type: PositionType::Absolute, left: px(36.0), top: px(126.0), width: px(350.0), padding: UiRect::all(px(16.0)), flex_direction: FlexDirection::Column, row_gap: px(10.0), ..default() },BackgroundColor(Color::srgba(0.015,0.035,0.055,0.93))))
         .with_children(|p| {
-            p.spawn((Text::new("MINERAL LOGISTICS"),TextFont { font_size: 18.0, ..default() },TextColor(Color::srgb(0.25,0.9,1.0))));
-            p.spawn((LabStatus,Text::new(""),TextFont { font_size: 13.0, ..default() },TextColor(Color::srgb(0.7,0.84,0.9))));
+            p.spawn((Text::new("MINERAL LOGISTICS"),TextFont { font_size: FontSize::Px(18.0), ..default() },TextColor(Color::srgb(0.25,0.9,1.0))));
+            p.spawn((LabStatus,Text::new(""),TextFont { font_size: FontSize::Px(13.0), ..default() },TextColor(Color::srgb(0.7,0.84,0.9))));
             p.spawn(Node { column_gap: px(4.0), ..default() }).with_children(|row| {
                 for index in 0..layout.capacity { row.spawn((CapacityTick(index),Node { width: px(21.0), height: px(12.0), ..default() },BackgroundColor(Color::srgb(0.1,0.18,0.22)))); }
             });
-            p.spawn((Text::new("LMB dispenser: add 5 units\nLMB pile: walk over + collect\nCtrl+LMB pile: collect / top up\nCarrying? LMB ground / matching pile:\nwalk over + deposit\nRMB / WASD: cancel hauling\nOne chunk = one unit"),TextFont { font_size: 12.0, ..default() },TextColor(Color::srgb(0.45,0.65,0.72))));
+            let help = if mine {
+                "F: dig the tile underfoot (2 s)\nOre flies out onto a pile beside the pit\nLMB pile: walk over + collect\nCarrying? LMB collector: deliver\nSPACE: fly out of a pit\nRMB / WASD: cancel hauling\nOne chunk = one unit"
+            } else {
+                "LMB dispenser: add 5 units\nLMB pile: walk over + collect\nCtrl+LMB pile: collect / top up\nCarrying? LMB ground / matching pile:\nwalk over + deposit\nRMB / WASD: cancel hauling\nOne chunk = one unit"
+            };
+            p.spawn((Text::new(help),TextFont { font_size: FontSize::Px(12.0), ..default() },TextColor(Color::srgb(0.45,0.65,0.72))));
         });
-    lab.notice = "Click a dispenser to add mineral, or collect an existing pile.".into();
+    lab.notice = if mine {
+        "Dig for ore (F), then carry it to the collector."
+    } else {
+        "Click a dispenser to add mineral, or collect an existing pile."
+    }
+    .into();
 }
 
 pub fn render(
@@ -214,21 +234,24 @@ pub fn render(
     mut carriers: Query<(Entity, &mut CarryVisual)>,
     captions: Query<(Entity, &Caption)>,
     airborne: Query<&transfer::Transit>,
+    peers: Query<(Entity, &crate::peers::Peer)>,
 ) {
     let (Some(stock), Some(assets)) = (&lab.stock, &lab.assets) else {
         return;
     };
     let mut hidden_piles: std::collections::BTreeMap<PileId, std::collections::BTreeSet<u32>> =
         std::collections::BTreeMap::new();
-    let mut hidden_cargo = std::collections::BTreeSet::new();
+    let mut hidden_cargo: std::collections::BTreeMap<u16, std::collections::BTreeSet<u32>> =
+        std::collections::BTreeMap::new();
     for transit in &airborne {
         match transit.destination {
-            transfer::Destination::Cargo(index) => {
-                hidden_cargo.insert(index);
+            transfer::Destination::Cargo(agent, index) => {
+                hidden_cargo.entry(agent).or_default().insert(index);
             }
             transfer::Destination::Pile(id, index) => {
                 hidden_piles.entry(id).or_default().insert(index);
             }
+            transfer::Destination::Collector(_) => {}
         }
     }
     let empty = std::collections::BTreeSet::new();
@@ -246,6 +269,7 @@ pub fn render(
         visual.units = pile.units;
         visual.hidden = hidden.len() as u32;
         commands.entity(entity).despawn_children();
+        commands.entity(entity).insert(Transform::from_translation(place(pile)));
         if pile.units > 0 {
             commands.entity(entity).insert(Obstacle(Disc {
                 center: point(pile.position),
@@ -270,7 +294,7 @@ pub fn render(
                 units: pile.units,
                 hidden: hidden.len() as u32,
             },
-            Transform::from_translation(point(pile.position)),
+            Transform::from_translation(place(pile)),
             Visibility::default(),
         ));
         if pile.units > 0 {
@@ -283,7 +307,7 @@ pub fn render(
         label(
             &mut commands,
             CaptionKind::Pile(id),
-            point(pile.position),
+            place(pile),
             "",
         );
     }
@@ -294,16 +318,32 @@ pub fn render(
             }
         }
     }
+    // Other players carry backpacks too, on their copies of the suit.
+    let carried: Vec<Option<u16>> = carriers.iter().map(|(_, v)| v.agent).collect();
+    for (entity, peer) in &peers {
+        if !carried.contains(&Some(peer.agent())) {
+            commands.spawn((
+                LabEntity,
+                CarryVisual { agent: Some(peer.agent()), units: u32::MAX, material: None, hidden: 0 },
+                Transform::default(),
+                Visibility::default(),
+                ChildOf(entity),
+            ));
+        }
+    }
+    let nothing = crate::pile_model::Cargo { material: None, units: 0, capacity: 0 };
     for (entity, mut visual) in &mut carriers {
-        if visual.units == stock.cargo.units
-            && visual.material == stock.cargo.material
-            && visual.hidden == hidden_cargo.len() as u32
-        {
+        let cargo = match visual.agent {
+            None => &stock.cargo,
+            Some(agent) => lab.others.get(&agent).unwrap_or(&nothing),
+        };
+        let hidden = visual.agent.or(lab.me).and_then(|a| hidden_cargo.get(&a)).unwrap_or(&empty);
+        if visual.units == cargo.units && visual.material == cargo.material && visual.hidden == hidden.len() as u32 {
             continue;
         }
-        visual.units = stock.cargo.units;
-        visual.hidden = hidden_cargo.len() as u32;
-        visual.material = stock.cargo.material;
+        visual.units = cargo.units;
+        visual.hidden = hidden.len() as u32;
+        visual.material = cargo.material;
         commands.entity(entity).despawn_children();
         commands.entity(entity).with_children(|p| {
             chunk(
@@ -313,9 +353,9 @@ pub fn render(
                 Vec3::new(0.0, 0.95, -0.28),
                 Vec3::new(0.78, 0.65, 0.12),
             );
-            if let Some(material) = stock.cargo.material {
-                for i in 0..stock.cargo.units {
-                    if hidden_cargo.contains(&i) {
+            if let Some(material) = cargo.material {
+                for i in 0..cargo.units {
+                    if hidden.contains(&i) {
                         continue;
                     }
                     let position = transfer::backpack_slot(i);
@@ -331,6 +371,28 @@ pub fn render(
         });
     }
 }
+/// The collector: a hopper on legs over a squat bin, with a lamp for each
+/// mineral it takes.
+fn spawn_collector(commands: &mut Commands, assets: &LabAssets, position: Vec3) {
+    commands
+        .spawn((
+            LabEntity,
+            Transform::from_translation(position),
+            Visibility::default(),
+            Obstacle(Disc { center: position, radius: 0.9 }),
+        ))
+        .with_children(|p| {
+            chunk(p, assets, &assets.trim, Vec3::new(0.0, 0.1, 0.0), Vec3::new(1.7, 0.2, 1.7));
+            chunk(p, assets, &assets.dark, Vec3::new(0.0, 0.6, 0.0), Vec3::new(1.4, 0.8, 1.4));
+            chunk(p, assets, &assets.dark, Vec3::new(0.0, 1.25, 0.0), Vec3::new(1.0, 0.5, 1.0));
+            chunk(p, assets, &assets.trim, Vec3::new(0.0, 1.55, 0.0), Vec3::new(1.5, 0.12, 1.5));
+            for (i, material) in assets.mineral.iter().enumerate() {
+                chunk(p, assets, material, Vec3::new(-0.4 + i as f32 * 0.4, 0.75, 0.72), Vec3::new(0.24, 0.24, 0.06));
+            }
+        });
+    label(commands, CaptionKind::Collector, position + Vec3::Y * 3.0, "");
+}
+
 fn spawn_units(
     parent: &mut ChildSpawnerCommands,
     assets: &LabAssets,
@@ -395,8 +457,19 @@ pub fn update_display(
                     .take(p.units as usize)
                     .map(|p| p[1])
                     .fold(0.14, f32::max);
-                caption.anchor = point(p.position) + Vec3::Y * (top + 0.65);
+                caption.anchor = place(p) + Vec3::Y * (top + 0.65);
                 format!("{}  {} / 96", mineral_name(p.material), p.units)
+            }
+            CaptionKind::Collector => {
+                let Some(at) = lab.collector else {
+                    continue;
+                };
+                caption.anchor = at + Vec3::Y * 3.8;
+                let counts: Vec<String> = MINERALS
+                    .iter()
+                    .map(|&m| format!("{} {}", mineral_name(m), lab.collected.get(mineral_index(m)).copied().unwrap_or(0)))
+                    .collect();
+                format!("COLLECTOR\n{}", counts.join("\n"))
             }
             CaptionKind::Cargo => {
                 caption.anchor = player.translation + Vec3::Y * 1.5;
@@ -409,14 +482,26 @@ pub fn update_display(
     }
     let material = stock.cargo.material.map_or("EMPTY", mineral_name);
     for mut text in &mut status {
-        let value = format!(
-            "CARRY: {material}  {} / {}\nGROUND: {}   CREATED: {}\n\n{}",
-            stock.cargo.units,
-            stock.cargo.capacity,
-            stock.total() - u64::from(stock.cargo.units),
-            stock.created,
-            lab.notice
-        );
+        let collected: u32 = lab.collected.iter().sum();
+        let value = if lab.collector.is_some() {
+            format!(
+                "CARRY: {material}  {} / {}\nGROUND: {}   MINED: {}   COLLECTED: {collected}\n\n{}",
+                stock.cargo.units,
+                stock.cargo.capacity,
+                stock.ground(),
+                stock.created,
+                lab.notice
+            )
+        } else {
+            format!(
+                "CARRY: {material}  {} / {}\nGROUND: {}   CREATED: {}\n\n{}",
+                stock.cargo.units,
+                stock.cargo.capacity,
+                stock.ground(),
+                stock.created,
+                lab.notice
+            )
+        };
         if text.0 != value {
             text.0 = value;
         }

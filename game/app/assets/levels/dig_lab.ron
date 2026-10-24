@@ -1,0 +1,15 @@
+Scene(id: "dig-lab", features: [Digging],
+    name: "DIG LAB / OPEN-PIT MINE",
+    spawn: (0.0, 0.0, 2.0),
+    industrial: false,
+    instances: [],
+    // 256 x 256 m of generated terraces with ore underground.
+    mine: Some((extent: 128.0, seed: 7)),
+    // Dug ore lands in piles; carry it to the collector.
+    piles: Some((
+        capacity: 12,
+        dispensers: [],
+        piles: [],
+        collector: Some((3.5, 0.0, -2.5)),
+    )),
+)

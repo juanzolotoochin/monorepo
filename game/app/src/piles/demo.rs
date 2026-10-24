@@ -10,15 +10,13 @@ pub struct HaulPreview {
     stage: u32,
     directory: Option<String>,
 }
-/// Repeatable real navigation/pickup/drop QA, using the same jobs as mouse input.
+/// Repeatable real navigation, pickup and drop QA, through the same commands as mouse input.
 pub fn showcase(
     mut commands: Commands,
     time: Res<Time>,
     mut preview: Local<HaulPreview>,
-    mut lab: ResMut<PileLab>,
-    mut controls: ResMut<Controls>,
-    player: Single<&Transform, With<Player>>,
-    obstacles: Query<&Obstacle>,
+    lab: Res<PileLab>,
+    mut game: ResMut<Game>,
     mut exit: MessageWriter<bevy::app::AppExit>,
 ) {
     use bevy::render::view::screenshot::{save_to_disk, Screenshot};
@@ -26,10 +24,7 @@ pub fn showcase(
         preview.configured = true;
         let args: Vec<_> = std::env::args().collect();
         preview.enabled = args.iter().any(|arg| arg == "--haul-showcase");
-        preview.directory = args
-            .windows(2)
-            .find(|a| a[0] == "--capture-dir")
-            .map(|a| a[1].clone());
+        preview.directory = args.windows(2).find(|a| a[0] == "--capture-dir").map(|a| a[1].clone());
         if preview.enabled {
             if let Some(dir) = &preview.directory {
                 std::fs::create_dir_all(dir).expect("capture directory");
@@ -45,62 +40,43 @@ pub fn showcase(
     if preview.elapsed > 35.0 {
         panic!("Hauling showcase failed to finish: {}", lab.notice);
     }
-    if lab.stock.is_none() {
+    let Some(stock) = &lab.stock else {
         return;
-    }
-    let discs: Vec<_> = obstacles.iter().map(|o| o.0).collect();
+    };
     let capture = |commands: &mut Commands, name: &str, directory: &Option<String>| {
         if let Some(dir) = directory {
-            commands
-                .spawn(Screenshot::primary_window())
-                .observe(save_to_disk(format!("{dir}/{name}.png")));
+            commands.spawn(Screenshot::primary_window()).observe(save_to_disk(format!("{dir}/{name}.png")));
         }
     };
+    let idle = lab.job.is_none() && game.caught_up();
     match preview.stage {
         0 if preview.stage_age > 3.0 => {
-            lab.stock.as_mut().unwrap().add(0, 20).unwrap();
+            game.command(sim::CommandKind::Dispense { dispenser: 0, units: 20 });
             preview.stage = 1;
             preview.stage_age = 0.0;
         }
         1 if preview.stage_age > 1.0 => {
             capture(&mut commands, "overview", &preview.directory);
-            begin_job(
-                &mut lab,
-                &mut controls,
-                player.translation,
-                Action::Pickup(0),
-                &discs,
-            )
-            .expect("reachable source");
+            haul(&mut game, PileAction::Pickup(0), 0.18, None);
             preview.stage = 2;
             preview.stage_age = 0.0;
         }
-        2 if lab.job.is_none() && lab.stock.as_ref().unwrap().cargo.units == 12 => {
+        2 if idle && stock.cargo.units == 12 => {
             capture(&mut commands, "carrying", &preview.directory);
             preview.stage = 3;
             preview.stage_age = 0.0;
         }
         3 if preview.stage_age > 1.0 => {
-            begin_job(
-                &mut lab,
-                &mut controls,
-                player.translation,
-                Action::Drop(Vec3::new(4.0, 0.0, 4.5)),
-                &discs,
-            )
-            .expect("reachable drop");
+            let drop = game.to_sim(Vec3::new(4.0, 0.0, 4.5));
+            haul(&mut game, PileAction::Drop(drop), 0.18, None);
             preview.stage = 4;
             preview.stage_age = 0.0;
         }
-        4 if lab.job.is_none() && lab.stock.as_ref().unwrap().cargo.units == 0 => {
-            let stock = lab.stock.as_ref().unwrap();
+        4 if idle && stock.cargo.units == 0 => {
             assert_eq!(stock.piles[&5].units, 12);
             assert_eq!(stock.total(), stock.created);
             capture(&mut commands, "delivered", &preview.directory);
-            info!(
-                "Haul showcase complete: 12 units delivered; {} conserved units",
-                stock.total()
-            );
+            info!("Haul showcase complete: 12 units delivered; {} conserved units", stock.total());
             preview.stage = 5;
             preview.stage_age = 0.0;
         }

@@ -1,0 +1,11 @@
+(
+    sim: (
+        radius: 1,
+        max_hp: 20,
+        speed: 6,
+        spawn_weight: 3,
+    ),
+    view: (
+        color: (0.3, 0.6, 0.85),
+    ),
+)

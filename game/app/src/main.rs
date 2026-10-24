@@ -5,8 +5,13 @@ mod effects;
 mod gameplay;
 mod impact;
 mod jetpack;
+mod legacy;
+mod lockstep;
+mod digging;
+mod nametags;
 mod navigation;
 mod palimpsest;
+mod peers;
 mod pile_model;
 mod piles;
 mod preview;
@@ -33,6 +38,16 @@ fn main() {
     }) {
         scenes.initial = index;
     }
+    let network = network(&args).unwrap_or_else(|error| {
+        eprintln!("{error}");
+        std::process::exit(2)
+    });
+    if network.is_some() {
+        // Networked games start on the field unless asked otherwise, and
+        // every peer must pick the same scene.
+        scenes.initial = scenes.index("field").expect("the field scene exists");
+        scenes.locked = true;
+    }
     if let Some(pair) = args.windows(2).find(|pair| pair[0] == "--scene") {
         scenes.initial = scenes.index(&pair[1]).unwrap_or_else(|error| {
             eprintln!("{error}");
@@ -43,7 +58,65 @@ fn main() {
         eprintln!("{e}");
         std::process::exit(2)
     });
-    build_app(options, scenes, hub).run();
+    let mut game = lockstep::Game::default();
+    game.network = network;
+    // `--name`, or who is logged in.
+    game.name = args
+        .windows(2)
+        .find(|pair| pair[0] == "--name")
+        .map(|pair| pair[1].clone())
+        .or_else(|| std::env::var("USERNAME").or_else(|_| std::env::var("USER")).ok())
+        .unwrap_or_default();
+    if let Some(pair) = args.windows(2).find(|pair| pair[0] == "--record-input") {
+        game.record = Some(pair[1].clone());
+    }
+    if let Some(pair) = args.windows(2).find(|pair| pair[0] == "--replay-input") {
+        let read = |path: &str| std::fs::read(path).unwrap_or_else(|e| {
+            eprintln!("{path}: {e}");
+            std::process::exit(2)
+        });
+        let log = save::InputLog::from_bytes(&read(&pair[1])).unwrap_or_else(|e| {
+            eprintln!("{}: {e}", pair[1]);
+            std::process::exit(2)
+        });
+        game.replay = Some((read(&format!("{}.gsav", pair[1])), log));
+    }
+    let mut app = build_app(options, scenes, hub);
+    app.insert_resource(game);
+    app.run();
+}
+
+/// `--host <port>` hosts a networked game; `--join <host:port>` joins one
+/// (the host may be a name, such as a Tailscale machine name).
+fn network(args: &[String]) -> Result<Option<lockstep::Network>, String> {
+    use std::net::ToSocketAddrs;
+    let value = |flag: &str| args.windows(2).find(|pair| pair[0] == flag).map(|pair| pair[1].as_str());
+    match (value("--host"), value("--join")) {
+        (Some(_), Some(_)) => Err("Pass --host or --join, not both".into()),
+        (Some(port), None) => {
+            let port: u16 = port.parse().map_err(|e| format!("Invalid --host port {port}: {e}"))?;
+            Ok(Some(lockstep::Network::Host(([0, 0, 0, 0], port).into())))
+        }
+        (None, Some(host)) => {
+            let addr = host
+                .to_socket_addrs()
+                .map_err(|e| format!("Cannot resolve --join {host}: {e}"))?
+                .find(|a| a.is_ipv4())
+                .ok_or_else(|| format!("No IPv4 address for --join {host}"))?;
+            Ok(Some(lockstep::Network::Join(addr)))
+        }
+        (None, None) => Ok(None),
+    }
+}
+
+/// Writes the recording and leaves the session when the app exits.
+fn on_exit(mut exits: MessageReader<AppExit>, mut game: ResMut<lockstep::Game>) {
+    if exits.read().next().is_some() {
+        game.write_recording();
+        if let Some(session) = game.session.as_mut() {
+            session.shutdown();
+        }
+    }
 }
 
 fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: control::Hub) -> App {
@@ -54,7 +127,8 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
     let fps = options.fps();
     let deterministic = simulation || options.script.is_some();
     let mut app = App::new();
-    app.insert_resource(options)
+    app.init_resource::<lockstep::Game>()
+        .insert_resource(options)
         .insert_resource(hub)
         .init_resource::<control::Video>()
         .insert_resource(ClearColor(Color::srgb(0.018, 0.025, 0.045)))
@@ -144,29 +218,47 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
                 style::apply,
             )
                 .chain(),
-            (piles::setup_scene, settlement::setup).chain(),
-            (control::begin, settlement::tick).chain(),
-            (piles::input, settlement::input)
+            (piles::setup_scene, settlement::setup, lockstep::build_world).chain(),
+            control::begin,
+            (piles::input, settlement::input, lockstep::mouse_input, lockstep::attack_input)
                 .chain()
                 .run_if(control::interactive),
-            mouse_commands.run_if(control::interactive),
+            lockstep::keyboard_input,
             preview::playback.run_if(control::interactive),
-            (jetpack::update, move_player, palimpsest::tick).chain(),
-            piles::arrive,
-            piles::update_transit,
-            piles::render,
-            piles::update_display.run_if(control::rendered),
-            piles::showcase.run_if(control::interactive),
+            lockstep::step,
+            (
+                lockstep::mirror_settlement,
+                piles::mirror,
+                lockstep::follow_avatar,
+                peers::update.run_if(control::rendered),
+                digging::update,
+                digging::follow_camera,
+                jetpack::update,
+                palimpsest::tick,
+            )
+                .chain(),
+            settlement::tick,
+            (
+                piles::spawn_tosses,
+                piles::update_transit,
+                piles::render,
+                piles::update_display.run_if(control::rendered),
+                piles::showcase.run_if(control::interactive),
+            )
+                .chain(),
             (combat, animate_character, style::select_weapon).chain(),
             effects::update_effects,
             effects::camera_feedback.run_if(control::rendered),
             scene::update_hud.run_if(control::rendered),
             preview::capture.run_if(control::interactive),
+            lockstep::end_frame,
+            lockstep::end_session,
             (telemetry::end, control::end).chain(),
             control::capture_frame.run_if(control::rendered),
         )
             .chain(),
     );
+    app.add_systems(Last, on_exit);
     if !simulation {
         app.add_systems(
             Update,
@@ -178,6 +270,8 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
                 assets::update_captions,
                 piles::captions,
                 settlement::captions,
+                nametags::update,
+                digging::feedback,
             )
                 .after(bevy::transform::TransformSystems::Propagate),
         );

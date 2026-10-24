@@ -198,7 +198,7 @@ pub fn setup(world: &mut World) {
         Instructions,
         Text::new(""),
         TextFont {
-            font_size: 16.0,
+            font_size: FontSize::Px(16.0),
             ..default()
         },
         TextColor(Color::srgb(0.4, 0.9, 1.0)),

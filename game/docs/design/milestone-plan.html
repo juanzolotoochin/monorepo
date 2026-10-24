@@ -141,7 +141,7 @@ td:first-child { font-weight: 600; }
     <div class="stack">
       <span class="eyebrow">Layout</span>
       <h2 id="crates">Crates under <code>game/</code></h2>
-      <p>Each is a Bazel <code>rust_library</code> or <code>rust_binary</code> using <code>rules_rs</code>, like <code>game/core</code> today. The blue ones are deterministic and may never depend on Bevy, f32 math or wall-clock time. A Bazel visibility rule enforces that only <code>view</code> and <code>app</code> can see <code>@crates//:bevy</code>.</p>
+      <p>Each is a Bazel <code>rust_library</code> or <code>rust_binary</code> using <code>rules_rs</code>, like the rest of <code>game/</code>. The blue ones are deterministic and may never depend on Bevy, f32 math or wall-clock time. A Bazel visibility rule enforces that only <code>view</code> and <code>app</code> can see <code>@crates//:bevy</code>.</p>
     </div>
     <div class="panel">
       <div class="crates">
@@ -330,7 +330,7 @@ const STEPS = [
     done: "CI runs the determinism suite. The benchmark stays under the 10 ms per tick budget." },
   { id: "0.5", t: "game/view, minimal", s: "See the simulation in Bevy",
     items: ["Render extract consumer, interpolation, entities drawn as simple shapes", "Debug overlays: chunk grid, sleep state, message counts", "Local single-player: commands go through the same turn path with zero delay"],
-    done: "You can walk around and watch test entities move smoothly at 144 Hz from a 30 Hz simulation." },
+    done: "You can walk around and watch test entities move smoothly at 144 Hz from a 60 Hz simulation." },
   { id: "0.6", t: "game/net", s: "Lockstep over the network",
     items: ["Turns, fixed input delay, late-input rescheduling, time sync", "Loopback simulator with a virtual clock; scenario tests with latency, jitter, loss and spikes", "Join through save transfer, desync detection (halt in dev, resync in release), autosave and re-host", "UDP transport with direct IP; host and join from the command line", "Net graph overlay and own-avatar prediction in the view"],
     done: "You and your friend play over Tailscale for 30 minutes with no desync, and a mid-game join works." },

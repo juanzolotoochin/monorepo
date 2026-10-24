@@ -3,7 +3,7 @@ mod boulder;
 mod piles;
 mod style;
 pub use boulder::generate_boulder;
-pub use gameplay_core::Scenario;
+pub use content::scenario::Scenario;
 pub use piles::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -242,6 +242,16 @@ pub struct Terrain {
     pub platforms: Vec<TerrainPlatform>,
 }
 
+/// A generated mining ground: rolling terraces with ore underground, the
+/// same on every machine for a seed.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MineLayout {
+    /// Half-width of the square ground, in meters.
+    pub extent: f32,
+    pub seed: u64,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename = "Scene", deny_unknown_fields)]
 pub struct Scene {
@@ -255,6 +265,9 @@ pub struct Scene {
     pub instances: Vec<Instance>,
     #[serde(default)]
     pub piles: Option<PileLayout>,
+    /// Generated ground to dig and mine, instead of the deck.
+    #[serde(default)]
+    pub mine: Option<MineLayout>,
     #[serde(default)]
     pub terrain: Option<Terrain>,
     #[serde(default)]
@@ -268,6 +281,8 @@ pub struct Scene {
 pub enum SceneFeature {
     MemoryTrial,
     FlightHud,
+    /// Avatars dig pits into the deck.
+    Digging,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScenePack {
@@ -482,16 +497,18 @@ impl ScenePack {
         }
         if let Some(scenario) = &self.scene.scenario {
             scenario.validate()?;
-            let obstacles = self
+            // The scenario must build a world: no hauler inside an obstacle,
+            // every dock reachable.
+            let obstacles: Vec<_> = self
                 .environment
                 .iter()
                 .flat_map(|e| e.obstacles.iter())
-                .map(|(p, r)| gameplay_core::navigation::Disc {
-                    center: [p[0], p[2]],
-                    radius: *r,
+                .map(|(p, r)| sim::terrain::Disc {
+                    center: fx::FxVec2::new(fx::Fx::quantize(p[0]), fx::Fx::quantize(p[2])),
+                    radius: fx::Fx::quantize(*r),
                 })
                 .collect();
-            gameplay_core::Simulation::new(scenario.clone(), obstacles)?;
+            sim::World::new_settlement(0, content::Content::builtin().rules, scenario, &obstacles)?;
             let ids: std::collections::BTreeSet<_> =
                 self.skins.iter().map(|s| s.id.as_str()).collect();
             for id in scenario
@@ -553,6 +570,14 @@ impl ScenePack {
         }
         if let Some(piles) = &self.scene.piles {
             piles.validate()?;
+        }
+        if let Some(mine) = &self.scene.mine {
+            if !(8.0..=128.0).contains(&mine.extent) || mine.extent.fract() != 0.0 {
+                return Err("a mine's extent must be a whole number of meters from 8 to 128".into());
+            }
+            if !self.scene.features.contains(&SceneFeature::Digging) {
+                return Err("a mine needs the Digging feature".into());
+            }
         }
         let mut ids = BTreeSet::new();
         for prefab in &self.prefabs {
@@ -683,6 +708,7 @@ mod tests {
                 spawn: [0.0; 3],
                 industrial: true,
                 piles: None,
+                mine: None,
                 terrain: None,
                 style: None,
                 architecture: vec![],
@@ -727,6 +753,7 @@ mod tests {
                 industrial: false,
                 instances: vec![],
                 piles: None,
+                mine: None,
                 style: None,
                 architecture: vec![],
                 scenario: None,

@@ -1,15 +1,20 @@
-//! Bevy projection of the shared simulation. All stock and decisions belong to gameplay_core.
+//! Bevy projection of the settlement. All stock and decisions belong to the
+//! lockstep simulation; this module draws its mirror (`crate::legacy`) and
+//! turns clicks into commands.
 use crate::{
     assets::SceneLibrary,
     rig::{Fade, Rig, RigTemplate},
 };
 use bevy::prelude::*;
-use gameplay_core::{Endpoint, Inventory, Simulation};
+use crate::legacy::{Endpoint, Inventory, Simulation, HZ};
 use std::collections::BTreeMap;
 #[derive(Resource, Default)]
 pub struct Settlement {
     current: Option<usize>,
+    /// This frame's view of the simulated settlement.
     pub simulation: Option<Simulation>,
+    /// The scene's scenario, as the view sees it.
+    pub config: Option<crate::legacy::Scenario>,
     views: BTreeMap<String, (String, Rig)>,
     templates: BTreeMap<String, RigTemplate>,
     pool: BTreeMap<String, Vec<Rig>>,
@@ -115,54 +120,19 @@ pub fn setup(world: &mut World) {
         "LMB stock: take 4 / Ctrl+LMB: deposit cargo / E: toggle nearby machine".into()
     };
     state.current = Some(index);
-    let scenario = world.resource::<SceneLibrary>().scenes[index]
-        .scene
-        .scenario
-        .clone();
-    let obstacles = world
-        .query::<&crate::gameplay::Obstacle>()
-        .iter(world)
-        .map(|o| gameplay_core::navigation::Disc {
-            center: [o.0.center.x, o.0.center.z],
-            radius: o.0.radius,
-        })
-        .collect();
+    let scenario = world.resource::<SceneLibrary>().scenes[index].scene.scenario.clone();
     if scenario.is_some() {
         let pack = &world.resource::<SceneLibrary>().scenes[index];
         let skins = pack.skins.clone();
         let profile = pack.scene.style.clone().unwrap_or_default();
         for skin in &skins {
-            state
-                .templates
-                .insert(skin.id.clone(), RigTemplate::upload(world, skin, &profile));
+            state.templates.insert(skin.id.clone(), RigTemplate::upload(world, skin, &profile));
         }
     }
-    state.simulation = scenario.map(|s| Simulation::new(s, obstacles).expect("validated scenario"));
-    if let Some(sim) = &state.simulation {
-        for (p, r) in sim
-            .config()
-            .producers
-            .iter()
-            .map(|p| (p.position, p.radius))
-            .chain(
-                sim.config()
-                    .defenders
-                    .iter()
-                    .map(|p| (p.position, p.radius)),
-            )
-        {
-            if r > 0. {
-                state.blockers.push(
-                    world
-                        .spawn(crate::gameplay::Obstacle(crate::navigation::Disc {
-                            center: Vec3::new(p[0], 0., p[1]),
-                            radius: r,
-                        }))
-                        .id(),
-                );
-            }
-        }
-        for d in &sim.config().depots {
+    state.config = scenario.as_ref().map(crate::legacy::Scenario::new);
+    state.simulation = None;
+    if let Some(config) = state.config.clone() {
+        for d in &config.depots {
             let e = world
                 .spawn((
                     Caption {
@@ -174,7 +144,7 @@ pub fn setup(world: &mut World) {
                     BackgroundColor(Color::NONE),
                     Text::new(""),
                     TextFont {
-                        font_size: 12.,
+                        font_size: FontSize::Px(12.),
                         ..default()
                     },
                     TextColor(Color::srgb(0.96, 0.87, 0.6)),
@@ -186,13 +156,12 @@ pub fn setup(world: &mut World) {
                 .id();
             state.labels.insert(d.id.clone(), e);
         }
-        for (key, position) in sim
-            .config()
+        for (key, position) in config
             .producers
             .iter()
             .map(|p| (format!("producer/{}", p.id), p.position))
             .chain(
-                sim.config()
+                config
                     .defenders
                     .iter()
                     .map(|d| (format!("defender/{}", d.id), d.position)),
@@ -209,7 +178,7 @@ pub fn setup(world: &mut World) {
                     BackgroundColor(Color::NONE),
                     Text::new(""),
                     TextFont {
-                        font_size: 14.,
+                        font_size: FontSize::Px(14.),
                         ..default()
                     },
                     TextColor(Color::srgb(0.96, 0.90, 0.76)),
@@ -227,7 +196,7 @@ pub fn setup(world: &mut World) {
                 .spawn((
                     Text::new(""),
                     TextFont {
-                        font_size: 14.,
+                        font_size: FontSize::Px(14.),
                         ..default()
                     },
                     TextColor(Color::srgb(0.9, 0.83, 0.63)),
@@ -243,9 +212,14 @@ pub fn setup(world: &mut World) {
     }
     world.insert_resource(state);
 }
+/// An agent's definition. Players who joined copy the scenario's avatar.
+fn agent_config<'a>(sim: &'a Simulation, id: &str) -> &'a crate::legacy::Agent {
+    let agents = &sim.config().agents;
+    agents.iter().find(|c| c.id == id).or_else(|| agents.iter().find(|c| c.controlled)).expect("a scenario agent")
+}
 fn cargo_position(sim: &Simulation, id: &str) -> Vec3 {
     let a = &sim.agents[id];
-    let config = sim.config().agents.iter().find(|c| c.id == id).unwrap();
+    let config = agent_config(sim, id);
     let (p, h, anchor) = if let (Some(t), Some(e)) = (&a.trailer, &config.equipment) {
         (t.position, t.heading, e.cargo_anchor)
     } else {
@@ -269,7 +243,7 @@ fn inventory(
     stock: &Inventory,
     p: Vec3,
     heading: f32,
-    layout: &gameplay_core::CargoLayout,
+    layout: &content::scenario::CargoLayout,
 ) {
     let mut slot = 0;
     for (id, units) in &stock.items {
@@ -293,76 +267,35 @@ pub fn tick(world: &mut World) {
     {
         return;
     }
-    let dt = world.get_resource::<crate::control::Options>()
-        .and_then(|options| options.script.as_ref().map(|_| 1.0 / f64::from(options.fps())))
-        .unwrap_or_else(|| world.resource::<Time>().delta_secs_f64());
+    // Networked games can't pause: everyone shares one clock.
+    if world.resource::<ButtonInput<KeyCode>>().just_pressed(KeyCode::KeyP)
+        && world.resource::<crate::lockstep::Game>().network.is_none()
+    {
+        let mut game = world.resource_mut::<crate::lockstep::Game>();
+        game.paused = !game.paused;
+    }
     let mut state = world.remove_resource::<Settlement>().unwrap();
-    let Some(sim) = &mut state.simulation else {
+    let Some(sim) = &state.simulation else {
         world.insert_resource(state);
         return;
     };
-    // The live protocol, interactive UI, and scripted demos change this same model.
-    if world
-        .resource::<ButtonInput<KeyCode>>()
-        .just_pressed(KeyCode::KeyP)
-    {
-        sim.paused = !sim.paused;
-    }
-    let player = world
+    let sim = sim.clone();
+    let sim = &sim;
+    let pos = world
         .query_filtered::<&Transform, With<crate::gameplay::Player>>()
         .single(world)
-        .unwrap();
-    let pos = player.translation;
-    let heading = player.rotation.to_euler(EulerRot::YXZ).0;
-    let controlled: Vec<_> = sim
-        .config()
-        .agents
+        .unwrap()
+        .translation;
+    let me = world.resource::<crate::lockstep::Game>().player_id();
+    // Hit pause, rebound and camera shake are for this player's own hits.
+    let hits = sim
+        .events
         .iter()
-        .filter(|a| a.controlled)
-        .map(|a| a.id.clone())
-        .collect();
-    for id in controlled {
-        sim.set_controlled_pose(&id, [pos.x, pos.z], heading)
-            .unwrap();
-    }
-    if let Some(attack) = world.resource::<crate::gameplay::Controls>().attack {
-        if attack.serial > state.last_attack_serial {
-            if let Some(id) = sim.config().agents.iter().find(|a| a.controlled).map(|a| a.id.clone()) {
-                let library = world.resource::<SceneLibrary>();
-                let muzzle = library.scenes[library.current].scene.style.as_ref()
-                    .and_then(|style| style.weapon_skins.iter()
-                        .find(|skin| skin.weapon == attack.weapon)
-                        .map(|skin| skin.muzzle.map(|v| v * style.actor_scale)))
-                    .unwrap_or([0.0, 0.6, 0.25]);
-                sim.queue_attack_aim(&id, attack.weapon, muzzle, [attack.aim.x, attack.aim.z], 13)
-                    .expect("validated player attack");
-            }
-            state.last_attack_serial = attack.serial;
-        }
-    }
-    let simulation_start = std::time::Instant::now();
-    let tick_before = sim.tick;
-    sim.advance(dt.min(0.25)).expect("bounded frame duration");
-    crate::telemetry::elapsed(world, "settlement_simulation", simulation_start);
-    world
-        .resource_mut::<crate::telemetry::Telemetry>()
-        .count("simulation_steps", sim.tick - tick_before);
-    world.resource_mut::<crate::telemetry::Telemetry>().gauge(
-        "simulation_steps_this_frame",
-        (sim.tick - tick_before) as f64,
-    );
-    if dt > 0.25 {
-        world
-            .resource_mut::<crate::telemetry::Telemetry>()
-            .count("simulation_clamped_frames", 1);
-        world
-            .resource_mut::<crate::telemetry::Telemetry>()
-            .gauge("last_clamped_seconds", dt - 0.25);
-    }
+        .filter(|event| matches!(event, crate::legacy::Event::Hit { projectile: None, by, .. } if *by == me))
+        .count() as u32;
     let projection_start = std::time::Instant::now();
-    let hits = sim.events.iter().filter(|event| matches!(event, gameplay_core::Event::Hit { projectile: None, .. })).count() as u32;
     if hits > 0 && world.resource::<crate::gameplay::Controls>().attack
-        .is_some_and(|a| matches!(a.weapon, gameplay_core::Weapon::Sword | gameplay_core::Weapon::Spear)) {
+        .is_some_and(|a| matches!(a.weapon, content::scenario::Weapon::Sword | content::scenario::Weapon::Spear)) {
         let mut controls = world.resource_mut::<crate::gameplay::Controls>();
         if let Some(attack) = &mut controls.attack {
             attack.impact_angle = Some(attack.angle());
@@ -377,7 +310,7 @@ pub fn tick(world: &mut World) {
     let mut arc_source = pos + Vec3::Y * 0.75;
     let mut arc_fired = false;
     for event in &sim.events {
-        use gameplay_core::Event;
+        use crate::legacy::Event;
         if let Event::ArcFired { from, to } = event {
             arc_source = Vec3::new(from[0], 0.72, from[1]);
             crate::effects::arc(
@@ -390,22 +323,28 @@ pub fn tick(world: &mut World) {
         }
         if let Event::Hit {
             target,
+            by,
             projectile,
             killed,
             position,
             impact,
         } = event
         {
+            // Blood sprays away from whoever struck.
+            let from = by
+                .as_ref()
+                .and_then(|id| sim.agents.get(id))
+                .map_or(pos, |a| Vec3::new(a.position[0], 0.0, a.position[1]));
             let direction =
-                Vec3::new(position[0] - pos.x, 0.0, position[1] - pos.z).normalize_or(Vec3::Z);
-            if *impact == gameplay_core::Impact::Arc {
+                Vec3::new(position[0] - from.x, 0.0, position[1] - from.z).normalize_or(Vec3::Z);
+            if *impact == crate::legacy::Impact::Arc {
                 let end = Vec3::new(position[0], 0.72, position[1]);
                 if !arc_fired {
                     crate::effects::arc(world, arc_source, end, *target as u32);
                 }
                 arc_fired = false;
                 arc_source = end;
-            } else if *impact == gameplay_core::Impact::Deflect {
+            } else if *impact == crate::legacy::Impact::Deflect {
                 crate::effects::deflection(
                     world,
                     Vec3::new(position[0], 0.72, position[1]),
@@ -423,7 +362,7 @@ pub fn tick(world: &mut World) {
             if let (Some(projectile), Some((_, body))) = (projectile, state.views.get(&key)) {
                 if matches!(
                     impact,
-                    gameplay_core::Impact::Arrow | gameplay_core::Impact::BoltImpale
+                    crate::legacy::Impact::Arrow | crate::legacy::Impact::BoltImpale
                 ) {
                     let parent = body.root;
                     if let Some((_, arrow)) =
@@ -440,7 +379,7 @@ pub fn tick(world: &mut World) {
                     }
                 }
             }
-            if *impact == gameplay_core::Impact::Decapitate {
+            if *impact == crate::legacy::Impact::Decapitate {
                 if let Some((skin, rig)) = state.views.get(&key) {
                     if let (Some(template), Some(transform)) = (
                         state.templates.get(skin),
@@ -451,7 +390,7 @@ pub fn tick(world: &mut World) {
                     rig.show_part(world, voxel_assets::ActorPart::Head, false);
                 }
             }
-            if *killed && *impact != gameplay_core::Impact::BoltImpale {
+            if *killed && *impact != crate::legacy::Impact::BoltImpale {
                 if let Some((skin, rig)) = state.views.remove(&key) {
                     let rest = *world.get::<Transform>(rig.root).unwrap();
                     let fade = Fade::new(world, rig.root);
@@ -466,7 +405,7 @@ pub fn tick(world: &mut World) {
                 }
                 state.hit_until.remove(target);
             } else {
-                state.hit_until.insert(*target, sim.tick + 14);
+                state.hit_until.insert(*target, sim.tick + (0.23 * HZ) as u64);
             }
         }
         if let Event::PinnedLanded { target, .. } = event {
@@ -492,37 +431,35 @@ pub fn tick(world: &mut World) {
             );
         }
         let cue = match event {
-            Event::TransferStarted(_) => None,
-            Event::TransferArrived(_) => None,
             Event::Shot { defender } if defender == "player" => Some(crate::sound::Cue::Bow),
             Event::Shot { .. } => Some(crate::sound::Cue::Ballista),
             Event::ArcFired { .. } => Some(crate::sound::Cue::Arc),
             Event::Hit {
-                impact: gameplay_core::Impact::Arc,
+                impact: crate::legacy::Impact::Arc,
                 ..
             } => Some(crate::sound::Cue::GhoulHit),
             Event::Hit {
-                impact: gameplay_core::Impact::Deflect,
+                impact: crate::legacy::Impact::Deflect,
                 ..
             } => Some(crate::sound::Cue::Clang),
             Event::Hit {
-                impact: gameplay_core::Impact::Spear,
+                impact: crate::legacy::Impact::Spear,
                 ..
             } => Some(crate::sound::Cue::Spear),
             Event::Hit {
-                impact: gameplay_core::Impact::BoltPierce,
+                impact: crate::legacy::Impact::BoltPierce,
                 ..
             } => Some(crate::sound::Cue::Pierce),
             Event::Hit {
-                impact: gameplay_core::Impact::BoltImpale,
+                impact: crate::legacy::Impact::BoltImpale,
                 ..
             } => Some(crate::sound::Cue::Pierce),
             Event::Hit {
-                impact: gameplay_core::Impact::Decapitate,
+                impact: crate::legacy::Impact::Decapitate,
                 ..
             } => Some(crate::sound::Cue::Decapitate),
             Event::Hit {
-                impact: gameplay_core::Impact::Arrow,
+                impact: crate::legacy::Impact::Arrow,
                 ..
             } => Some(crate::sound::Cue::ArrowHit),
             Event::Hit {
@@ -543,7 +480,7 @@ pub fn tick(world: &mut World) {
                     | Event::PinnedLanded { .. }
                     | Event::BlockedShot { .. }
             );
-            if combat_event || sim.tick >= state.last_sound + 18 {
+            if combat_event || sim.tick >= state.last_sound + (0.3 * HZ) as u64 {
                 world.resource_mut::<crate::sound::Sound>().play(cue);
                 state.last_sound = sim.tick;
             } else {
@@ -554,8 +491,8 @@ pub fn tick(world: &mut World) {
         }
     }
     let mut desired = BTreeMap::new();
-    for config in &sim.config().agents {
-        let a = &sim.agents[&config.id];
+    for a in sim.agents.values() {
+        let config = agent_config(sim, &a.id);
         let mut view = View::new(&config.skin, a.position);
         view.heading = a.heading;
         view.travel = a.travelled;
@@ -587,7 +524,7 @@ pub fn tick(world: &mut World) {
         let mut v = View::new(&config.skin, config.position);
         v.activity = machine.cycles as f32
             + (if machine.remaining > 0 {
-                1. - machine.remaining as f32 / (config.seconds * 60.)
+                1. - machine.remaining as f32 / (config.seconds * HZ)
             } else {
                 0.
             });
@@ -599,7 +536,7 @@ pub fn tick(world: &mut World) {
         v.aim = d
             .aim
             .map(|p| (p[0] - config.position[0]).atan2(p[1] - config.position[1]));
-        v.activity = (1. - (sim.tick.saturating_sub(d.fired_at)) as f32 / 15.).max(0.);
+        v.activity = (1. - (sim.time() - d.fired_at as f32) / (0.25 * HZ)).max(0.);
         desired.insert(format!("defender/{}", config.id), v);
     }
     for t in sim.threats.values() {
@@ -611,7 +548,7 @@ pub fn tick(world: &mut World) {
             .hit_until
             .get(&t.id)
             .map_or(if wounded { 0.58 } else { 0.0 }, |until| {
-                (until.saturating_sub(sim.tick) as f32 / 14.).max(if wounded { 0.58 } else { 0.0 })
+                ((*until as f32 - sim.time()) / (0.23 * HZ)).max(if wounded { 0.58 } else { 0.0 })
             });
         if wounded {
             v.injury = 1.0;
@@ -630,7 +567,7 @@ pub fn tick(world: &mut World) {
     }
     for p in sim.pinned.values() {
         let mut v = View::new(&sim.config().waves[p.wave].skin, p.position);
-        let f = ((sim.tick - p.born) as f32 / (p.land - p.born) as f32).min(1.);
+        let f = ((sim.time() - p.born as f32) / (p.land - p.born) as f32).clamp(0., 1.);
         v.position.y = (std::f32::consts::PI * f).sin() * 0.8;
         v.heading = p.heading;
         v.roll = -f * 0.8;
@@ -649,7 +586,7 @@ pub fn tick(world: &mut World) {
     }
     for t in sim.transfers.values() {
         let item = sim.config().items.iter().find(|i| i.id == t.item).unwrap();
-        let f = (sim.tick - t.born) as f32 / (t.arrival - t.born) as f32;
+        let f = ((sim.time() - t.born as f32) / (t.arrival - t.born) as f32).clamp(0., 1.);
         let mut v = View::new(&item.skin, [0., 0.]);
         v.position = endpoint(sim, &t.from).lerp(endpoint(sim, &t.to), f)
             + Vec3::Y * (std::f32::consts::PI * f).sin() * 0.9;
@@ -659,7 +596,7 @@ pub fn tick(world: &mut World) {
     }
     for p in sim.projectiles.values() {
         let item = sim.config().items.iter().find(|i| i.id == p.item).unwrap();
-        let f = (sim.tick - p.born) as f32 / (p.arrival - p.born) as f32;
+        let f = ((sim.time() - p.born as f32) / (p.arrival - p.born) as f32).clamp(0., 1.);
         let mut v = View::new(&item.skin, [0., 0.]);
         v.position = Vec3::new(p.from[0], p.launch_height, p.from[1])
             .lerp(Vec3::new(p.to[0], 0.55, p.to[1]), f);
@@ -669,7 +606,7 @@ pub fn tick(world: &mut World) {
     }
     for p in sim.spent_projectiles.values() {
         let item = sim.config().items.iter().find(|i| i.id == p.item).unwrap();
-        let f = (sim.tick - p.born) as f32 / (p.arrival - p.born) as f32;
+        let f = ((sim.time() - p.born as f32) / (p.arrival - p.born) as f32).clamp(0., 1.);
         let mut v = View::new(&item.skin, [0., 0.]);
         v.position =
             Vec3::new(p.from[0], 0.55, p.from[1]).lerp(Vec3::new(p.to[0], 0.09, p.to[1]), f);
@@ -729,9 +666,8 @@ pub fn tick(world: &mut World) {
         }
     }
     if let Some(e) = state.hud {
-        let cargo = sim
-            .agents
-            .get("player")
+        let mine = me.as_ref().and_then(|id| sim.agents.get(id));
+        let cargo = mine
             .map(|a| {
                 a.cargo
                     .items
@@ -754,7 +690,7 @@ pub fn tick(world: &mut World) {
                 "BASE {}  /  {} GHOULS STOPPED  /  PACK {} /8 {}   [P] pause  [F3] metrics",
                 sim.health,
                 sim.metrics.kills,
-                sim.agents.get("player").map_or(0, |a| a.cargo.total()),
+                mine.map_or(0, |a| a.cargo.total()),
                 cargo
             )
         };
@@ -772,7 +708,7 @@ pub fn tick(world: &mut World) {
     let mut destroyed = 0;
     let mut surviving = vec![];
     for corpse in state.dying.drain(..) {
-        let age = (sim.tick - corpse.born) as f32 / 60.;
+        let age = (sim.time() - corpse.born as f32) / HZ;
         if age >= 3.0 {
             corpse.fade.restore(world);
             for arrow in corpse.arrows {
@@ -867,7 +803,10 @@ pub fn tick(world: &mut World) {
     world.insert_resource(state);
 }
 pub fn snapshot(world: &World) -> serde_json::Value {
-    world.resource::<Settlement>().simulation.as_ref().map_or(serde_json::Value::Null,|s|serde_json::json!({"simulation":s,"replay_fingerprint":s.replay_fingerprint(),"balances":s.balances(),"scenario":s.config(),"seconds":s.seconds()}))
+    let fingerprint = world.resource::<crate::lockstep::Game>().fingerprint();
+    world.resource::<Settlement>().simulation.as_ref().map_or(serde_json::Value::Null, |s| {
+        serde_json::json!({"simulation": s, "replay_fingerprint": fingerprint, "balances": s.balances(), "scenario": s.config(), "seconds": s.seconds()})
+    })
 }
 /// Pin the same hover card for deterministic capture or remote inspection.
 /// Passing None restores mouse-driven hover.
@@ -885,8 +824,8 @@ pub fn inspect_building(world: &mut World, id: Option<&str>) -> Result<(), Strin
     state.inspection = key;
     Ok(())
 }
-fn producer_description(sim: &Simulation, p: &gameplay_core::Producer) -> String {
-    let recipe = |stacks: &[gameplay_core::Stack]| {
+fn producer_description(sim: &Simulation, p: &crate::legacy::Producer) -> String {
+    let recipe = |stacks: &[crate::legacy::Stack]| {
         stacks
             .iter()
             .map(|s| format!("{} {}", s.units, s.item))
@@ -895,7 +834,7 @@ fn producer_description(sim: &Simulation, p: &gameplay_core::Producer) -> String
     };
     let state = &sim.producers[&p.id];
     let status = match sim.production_status(&p.id).unwrap() {
-        "processing" => format!("Working · {:.1}s remaining", state.remaining as f32 / 60.),
+        "processing" => format!("Working · {:.1}s remaining", state.remaining as f32 / HZ),
         "disabled" => "Disabled; current job will finish".into(),
         "commission_complete" => "Commission complete".into(),
         "output_blocked" => "Waiting for output space".into(),
@@ -972,7 +911,7 @@ pub fn captions(
         if text.0 != content {
             text.0 = content;
         }
-        font.font_size = if expanded { 14. } else { 10. };
+        font.font_size = FontSize::Px(if expanded { 14. } else { 10. });
         color.0 = if expanded {
             Color::srgb(0.95, 0.89, 0.72)
         } else {
@@ -995,132 +934,99 @@ pub fn captions(
     }
 }
 
-pub fn model(world: &mut World) -> Result<Mut<'_, Simulation>, String> {
-    let state = world.resource_mut::<Settlement>();
-    if state.simulation.is_none() {
-        return Err("No settlement loaded".into());
-    }
-    Ok(state.map_unchanged(|s| s.simulation.as_mut().unwrap()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fx::{Fx, FxVec2};
+
+    /// The forest outpost as the game builds it: its scenario plus the scene's
+    /// obstacles, run for 100 seconds.
     #[test]
     fn authored_supply_chain_builds_transport_and_defends_with_conserved_materials() {
         let library = SceneLibrary::new();
         let pack = &library.scenes[6];
-        let obstacles = pack
+        let obstacles: Vec<_> = pack
             .environment
             .as_ref()
             .unwrap()
             .obstacles
             .iter()
-            .map(|(p, r)| gameplay_core::navigation::Disc {
-                center: [p[0], p[2]],
-                radius: *r,
-            })
+            .map(|(p, r)| sim::terrain::Disc { center: FxVec2::new(Fx::quantize(p[0]), Fx::quantize(p[2])), radius: Fx::quantize(*r) })
             .collect();
-        let mut sim = Simulation::new(pack.scene.scenario.clone().unwrap(), obstacles).unwrap();
-        for frame in 0..3000 {
-            sim.advance(1. / 30.).unwrap();
-            sim.validate_state().unwrap();
-            if frame == 1799 {
-                assert_eq!(sim.health, 20, "first minute defense failed");
+        let scenario = pack.scene.scenario.clone().unwrap();
+        let world = sim::World::new_settlement(1, content::Content::builtin().rules, &scenario, &obstacles).unwrap();
+        let center = world.terrain().center;
+        let mut game = sim::Simulation::from_world(world, 2);
+        let config = crate::legacy::Scenario::new(&scenario);
+        let hz = content::TICKS_PER_SECOND as u64;
+        for tick in 0..100 * hz {
+            game.step(&[]);
+            let s = game.world().settlement().unwrap();
+            s.validate().unwrap();
+            if tick == 60 * hz - 1 {
+                assert_eq!(s.health, 20, "first minute defense failed");
             }
-            let a = &sim.agents["bramble"];
+            let a = s.agent("bramble");
             if let Some(t) = &a.trailer {
-                assert!(
-                    gameplay_core::navigation::distance(a.position, t.position) >= 1.45,
-                    "ox overlapped the cart at tick {}",
-                    sim.tick
-                );
+                assert!(sim::nav::distance(a.position, t.position) >= Fx::from_ratio(29, 20), "ox overlapped the cart at tick {tick}");
             }
         }
-        let p = &sim.config().producers[0];
-        let card = producer_description(&sim, p);
+        let s = game.world().settlement().unwrap();
+        let view = Simulation::new(&config, None, s, game.world().tick(), 0.0, center, &[]);
+        let p = &view.config().producers[0];
+        let card = producer_description(&view, p);
         assert!(card.contains(&p.description));
         assert!(card.contains("Consumes: 1 lumber + 1 iron"));
         assert!(card.contains("Produces: 4 arrow"));
         assert!(card.contains("Cycle: 4.0s"));
         assert!(
-            sim.metrics
-                .deliveries_by_agent
-                .get("bramble")
-                .copied()
-                .unwrap_or(0)
-                >= 12,
+            view.metrics.deliveries_by_agent.get("bramble").copied().unwrap_or(0) >= 12,
             "ox never completed a loaded cart trip: {:?}",
-            sim.metrics
+            view.metrics
         );
-        assert!(sim.metrics.delivered > 30, "{:?}", sim.metrics);
-        assert!(sim.metrics.cycles > 8);
-        assert_eq!(sim.metrics.equipped, 1);
-        assert!(sim.metrics.kills >= 7);
-        assert!(
-            sim.health > 0,
-            "settlement fell during the extended transport check"
-        );
-        assert_eq!(sim.agents["bramble"].cargo.capacity, 9);
-        assert!(sim.balances().values().all(|b| b.conserved));
+        assert!(view.metrics.delivered > 30, "{:?}", view.metrics);
+        assert!(view.metrics.cycles > 8);
+        assert_eq!(view.metrics.equipped, 1);
+        assert!(view.metrics.kills >= 7, "{:?}", view.metrics);
+        assert!(view.health > 0, "settlement fell during the extended transport check");
+        assert_eq!(view.agents["bramble"].cargo.capacity, 9);
+        assert!(view.balances().values().all(|b| b.conserved));
     }
 }
 
-/// Queue a precise shared-model transfer and walk to a reachable side of its dock.
-pub fn player_transfer(
-    world: &mut World,
-    depot: &str,
-    item: &str,
-    units: u32,
-    deposit: bool,
-) -> Result<u32, String> {
-    let start = world
-        .query_filtered::<&Transform, With<crate::gameplay::Player>>()
-        .single(world)
-        .unwrap()
-        .translation;
+/// Reserve an exact transfer and walk to the dock. Returns the cargo the
+/// player will carry once it completes.
+pub fn player_transfer(world: &mut World, depot: &str, item: &str, units: u32, deposit: bool) -> Result<u32, String> {
     let state = world.resource::<Settlement>();
     let sim = state.simulation.as_ref().ok_or("No settlement loaded")?;
-    let actor = sim
-        .config()
-        .agents
-        .iter()
-        .find(|a| a.controlled)
-        .ok_or("No controlled actor")?
-        .id
-        .clone();
-    let dock = sim
-        .config()
-        .depots
-        .iter()
-        .find(|d| d.id == depot)
-        .ok_or("Unknown depot")?
-        .position;
-    let goal = Vec3::new(dock[0], 0., dock[1]);
-    let obstacles: Vec<_> = world
-        .query::<&crate::gameplay::Obstacle>()
-        .iter(world)
-        .map(|o| o.0)
-        .collect();
-    let route = crate::navigation::path(start, goal, &obstacles);
-    if route.is_empty() {
-        return Err("Dock is unreachable".into());
-    }
-    let mut state = world.resource_mut::<Settlement>();
-    let sim = state.simulation.as_mut().unwrap();
+    let actor = world.resource::<crate::lockstep::Game>().player_id().ok_or("No controlled actor")?;
+    let dock = sim.config().depots.iter().find(|d| d.id == depot).ok_or("Unknown depot")?.position;
     let before = sim.agents[&actor].cargo.total();
-    sim.transfer(&actor, depot, item, units, deposit)?;
-    let expected = if deposit {
-        before - units
-    } else {
-        before + units
+    let game = world.resource::<crate::lockstep::Game>();
+    let current = game.settlement().ok_or("No settlement loaded")?;
+    let (Some(agent), Some(d), Some(i)) = (game.player(), current.depot_index(depot), current.item_index(item)) else {
+        return Err("Unknown depot or item".into());
     };
-    state.notice = format!(
+    if sim.manual_jobs.contains_key(&actor) {
+        return Err("actor already has a transfer in progress".into());
+    }
+    let limit = current.transfer_limit(agent as usize, d as usize, i as usize, deposit);
+    if units == 0 || limit < units {
+        return Err(if deposit {
+            "cargo or unreserved destination space is insufficient".into()
+        } else {
+            "unreserved stock or cargo space is insufficient".into()
+        });
+    }
+    let expected = if deposit { before - units } else { before + units };
+    let mut game = world.resource_mut::<crate::lockstep::Game>();
+    game.command(sim::CommandKind::Transfer { agent, depot: d, item: i, units, deposit });
+    game.go_to(Vec3::new(dock[0], 0., dock[1]), false);
+    world.resource_mut::<Settlement>().notice = format!(
         "{} {units} {item} {} {depot}",
         if deposit { "Delivering" } else { "Collecting" },
         if deposit { "to" } else { "from" }
     );
-    world.resource_mut::<crate::gameplay::Controls>().route = route;
     Ok(expected)
 }
 pub fn input(world: &mut World) {
@@ -1138,19 +1044,11 @@ pub fn input(world: &mut World) {
             .iter()
             .any(|k| keys.pressed(*k));
     if manual {
-        let mut state = world.resource_mut::<Settlement>();
-        let sim = state.simulation.as_mut().unwrap();
-        if let Some(id) = sim
-            .config()
-            .agents
-            .iter()
-            .find(|a| a.controlled)
-            .map(|a| a.id.clone())
-        {
-            if sim.manual_jobs.contains_key(&id) {
-                sim.cancel_transfer(&id).unwrap();
-                state.notice = "Transfer canceled; airborne items still arrive.".into();
-            }
+        let busy = world.resource::<Settlement>().simulation.as_ref().is_some_and(|s| !s.manual_jobs.is_empty());
+        let agent = world.resource::<crate::lockstep::Game>().player();
+        if let (true, Some(agent)) = (busy, agent) {
+            world.resource_mut::<crate::lockstep::Game>().command(sim::CommandKind::CancelTransfer { agent });
+            world.resource_mut::<Settlement>().notice = "Transfer canceled; airborne items still arrive.".into();
         }
     }
     if toggle {
@@ -1159,8 +1057,8 @@ pub fn input(world: &mut World) {
             .single(world)
             .unwrap()
             .translation;
-        let mut state = world.resource_mut::<Settlement>();
-        let sim = state.simulation.as_mut().unwrap();
+        let state = world.resource::<Settlement>();
+        let sim = state.simulation.as_ref().unwrap();
         let nearest = sim
             .config()
             .producers
@@ -1176,8 +1074,11 @@ pub fn input(world: &mut World) {
             .map(|m| m.id.clone());
         if let Some(id) = nearest {
             let enabled = !sim.producers[&id].enabled;
-            sim.set_machine(&id, enabled).unwrap();
-            state.notice = format!("{id} {}", if enabled { "enabled" } else { "paused" });
+            let producer = world.resource::<crate::lockstep::Game>().settlement().and_then(|s| s.producer_index(&id));
+            if let Some(producer) = producer {
+                world.resource_mut::<crate::lockstep::Game>().command(sim::CommandKind::SetMachine { producer, enabled });
+            }
+            world.resource_mut::<Settlement>().notice = format!("{id} {}", if enabled { "enabled" } else { "paused" });
         }
     }
     if shift
@@ -1200,7 +1101,7 @@ pub fn input(world: &mut World) {
     };
     let state = world.resource::<Settlement>();
     let sim = state.simulation.as_ref().unwrap();
-    let Some(actor) = sim.config().agents.iter().find(|a| a.controlled) else {
+    let Some(actor) = world.resource::<crate::lockstep::Game>().player_id() else {
         return;
     };
     let Some(depot) = sim
@@ -1217,21 +1118,22 @@ pub fn input(world: &mut World) {
         return;
     };
     let stock = if deposit {
-        &sim.agents[&actor.id].cargo
+        &sim.agents[&actor].cargo
     } else {
         &sim.depots[&depot.id]
     };
-    let Some(item) = stock
-        .items
-        .keys()
-        .find(|i| sim.transfer_limit(&actor.id, &depot.id, i, deposit) > 0)
-        .cloned()
-    else {
+    let game = world.resource::<crate::lockstep::Game>();
+    let Some(current) = game.settlement() else {
         return;
     };
-    let units = sim
-        .transfer_limit(&actor.id, &depot.id, &item, deposit)
-        .min(if deposit { 64 } else { 4 });
+    let (Some(agent), Some(d)) = (game.player(), current.depot_index(&depot.id)) else {
+        return;
+    };
+    let limit = |item: &str| current.item_index(item).map_or(0, |i| current.transfer_limit(agent as usize, d as usize, i as usize, deposit));
+    let Some(item) = stock.items.keys().find(|i| limit(i) > 0).cloned() else {
+        return;
+    };
+    let units = limit(&item).min(if deposit { 64 } else { 4 });
     let depot = depot.id.clone();
     if let Err(e) = player_transfer(world, &depot, &item, units, deposit) {
         world.resource_mut::<Settlement>().notice = e;
