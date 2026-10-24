@@ -303,7 +303,12 @@ pub fn build_world(world: &mut World) {
 }
 
 /// Runs every tick due by this frame's time and keeps the last two for interpolation.
-pub fn step(time: Res<Time>, hub: Option<Res<crate::control::Hub>>, mut game: ResMut<Game>) {
+pub fn step(
+    time: Res<Time>,
+    hub: Option<Res<crate::control::Hub>>,
+    mut game: ResMut<Game>,
+    mut telemetry: ResMut<crate::telemetry::Telemetry>,
+) {
     // Scripted runs warm up for different lengths with and without rendering;
     // holding the clock until then lines up ticks with script frames, so a
     // rendered replay of a headless recording matches it command for command.
@@ -326,10 +331,14 @@ pub fn step(time: Res<Time>, hub: Option<Res<crate::control::Hub>>, mut game: Re
     let clock = game.clock;
     let Some(mut session) = game.session.take() else { return };
     let mut ticks = Vec::new();
+    let started = std::time::Instant::now();
     session.update(clock, |world| {
-        ticks.push((world.tick(), world.settlement().cloned()));
+        let copying = std::time::Instant::now();
+        let settlement = world.settlement().cloned();
+        ticks.push((world.tick(), settlement, world.stage_times(), copying.elapsed()));
     });
-    for (tick, settlement) in ticks {
+    telemetry.session_frame(started.elapsed(), ticks.iter().map(|(_, _, times, copy)| (*times, *copy)));
+    for (tick, settlement, _, _) in ticks {
         if let Some(s) = &settlement {
             game.events.extend(s.events.iter().cloned());
         }

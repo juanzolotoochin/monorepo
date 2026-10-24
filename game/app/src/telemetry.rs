@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, VecDeque},
-    time::Instant,
+    time::{Duration, Instant},
 };
 const WINDOW: usize = 240;
 #[derive(Default)]
@@ -25,6 +25,16 @@ impl Samples {
             self.values.pop_front();
         }
         self.values.push_back(value);
+    }
+    /// The mean and 95th percentile over the window.
+    fn recent(&self) -> (f64, f64) {
+        if self.values.is_empty() {
+            return (0., 0.);
+        }
+        let mut v: Vec<_> = self.values.iter().copied().collect();
+        v.sort_by(f64::total_cmp);
+        let mean = v.iter().sum::<f64>() / v.len() as f64;
+        (mean, v[((v.len() - 1) as f64 * 0.95).round() as usize])
     }
     fn snapshot(&self) -> Value {
         let mut v: Vec<_> = self.values.iter().copied().collect();
@@ -57,6 +67,41 @@ impl Telemetry {
     pub fn gauge(&mut self, name: &'static str, value: f64) {
         self.gauges.insert(name, value);
     }
+    /// One frame's session update (network and every tick due), and each
+    /// tick's stages plus copying its settlement for the view.
+    pub fn session_frame(&mut self, update: Duration, ticks: impl Iterator<Item = (sim::StageTimes, Duration)>) {
+        let ms = |d: Duration| d.as_secs_f64() * 1000.;
+        self.sample("session_update", ms(update));
+        let mut count = 0;
+        for (times, copy) in ticks {
+            count += 1;
+            for (name, d) in TICK_STAGES.iter().map(|(name, _)| *name).zip(stages(&times)) {
+                self.sample(name, ms(d));
+            }
+            self.sample("tick_total", ms(times.total()));
+            self.sample("tick_copy", ms(copy));
+        }
+        self.gauge("ticks_last_frame", count as f64);
+        // A count, not ms: kept as a sample for its average.
+        self.sample("ticks_per_frame", count as f64);
+    }
+    /// A sample's mean and 95th percentile over the window, in ms.
+    fn recent(&self, name: &str) -> (f64, f64) {
+        self.samples.get(name).map_or((0., 0.), Samples::recent)
+    }
+}
+/// The world tick's stages: sample name and overlay label.
+const TICK_STAGES: [(&str, &str); 7] = [
+    ("tick_commands", "commands"),
+    ("tick_self_update", "self update"),
+    ("tick_read", "read"),
+    ("tick_merge", "merge"),
+    ("tick_apply", "apply"),
+    ("tick_housekeeping", "housekeeping"),
+    ("tick_hash", "hash"),
+];
+fn stages(t: &sim::StageTimes) -> [Duration; 7] {
+    [t.commands, t.self_update, t.read, t.merge, t.apply, t.housekeeping, t.hash]
 }
 pub fn elapsed(world: &mut World, name: &'static str, start: Instant) {
     world
@@ -107,7 +152,10 @@ pub fn end(world: &mut World) {
     t.gauge("material_assets", materials as f64);
     t.gauge("style_cache_entries", cache.0 as f64);
     t.gauge("style_palette_cache_entries", cache.1 as f64);
-    if t.enabled_overlay {
+    // Frames per second always show in a window; F3 adds the breakdown.
+    let options = world.resource::<crate::control::Options>();
+    let shown = !options.simulation && options.frames_dir.is_none();
+    if shown {
         let e = *t.overlay.get_or_insert_with(|| {
             world
                 .spawn((
@@ -126,23 +174,41 @@ pub fn end(world: &mut World) {
                 ))
                 .id()
         });
-        let line = |name: &str| {
-            t.samples
-                .get(name)
-                .map(|s| {
-                    format!(
-                        "{name} {:.2} ms p95",
-                        s.snapshot()["p95_ms"].as_f64().unwrap()
-                    )
-                })
-                .unwrap_or_default()
-        };
-        world.get_mut::<Text>(e).unwrap().0=format!("F3 / PERFORMANCE\n{}\n{}\n{}\n{entities} entities / {meshes} meshes\n{} active rigs / {} pooled",line("frame_wall"),line("update_cpu"),line("settlement_simulation"),t.gauges.get("active_rigs").unwrap_or(&0.),t.gauges.get("pooled_rigs").unwrap_or(&0.));
-        world.entity_mut(e).insert(Visibility::Inherited);
-    } else if let Some(e) = t.overlay {
-        world.entity_mut(e).insert(Visibility::Hidden);
+        let text = overlay_text(&t, entities, meshes);
+        let mut current = world.get_mut::<Text>(e).unwrap();
+        if current.0 != text {
+            current.0 = text;
+        }
     }
     world.insert_resource(t);
+}
+/// The FPS line, and with F3 the frame and world tick breakdown (mean and
+/// 95th percentile over the window).
+fn overlay_text(t: &Telemetry, entities: usize, meshes: usize) -> String {
+    let (frame, frame_p95) = t.recent("frame_wall");
+    let fps = if frame > 0. { 1000. / frame } else { 0. };
+    let mut text = format!("{fps:.0} FPS / {frame:.1} ms frame / p95 {frame_p95:.1}");
+    if !t.enabled_overlay {
+        return text + "  [F3]";
+    }
+    let (update, _) = t.recent("update_cpu");
+    let (session, session_p95) = t.recent("session_update");
+    let (ticks, _) = t.recent("ticks_per_frame");
+    let (total, total_p95) = t.recent("tick_total");
+    let render = (frame - update).max(0.);
+    text += &format!("\nCPU {update:.1} ms update / {render:.1} ms render and wait");
+    text += &format!("\nSESSION {session:.2} ms / p95 {session_p95:.2} / {ticks:.2} ticks per frame");
+    text += &format!("\n\nWORLD TICK {total:.2} ms / p95 {total_p95:.2}");
+    for (name, label) in TICK_STAGES.iter().chain(&[("tick_copy", "copy for view")]) {
+        let (mean, p95) = t.recent(name);
+        text += &format!("\n   {label}  {mean:.2} / {p95:.2}");
+    }
+    text += &format!(
+        "\n\n{entities} entities / {meshes} meshes\n{} active rigs / {} pooled",
+        t.gauges.get("active_rigs").unwrap_or(&0.),
+        t.gauges.get("pooled_rigs").unwrap_or(&0.)
+    );
+    text
 }
 pub fn snapshot(world: &World) -> Value {
     let t = world.resource::<Telemetry>();

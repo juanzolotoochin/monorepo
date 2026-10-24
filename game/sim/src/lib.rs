@@ -34,7 +34,7 @@ pub use id::Id;
 pub use mover::{Mover, MoverRow};
 pub use rng::Rng;
 pub use world::{
-    Chunk, ChunkState, Command, CommandKind, PlayerId, Simulation, World, WorldConfig, WorldState, CHUNK_TILES,
+    Chunk, ChunkState, Command, CommandKind, PlayerId, Simulation, StageTimes, World, WorldConfig, WorldState, CHUNK_TILES,
 };
 
 #[cfg(test)]

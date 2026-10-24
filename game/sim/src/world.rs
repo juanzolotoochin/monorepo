@@ -2,6 +2,7 @@ use content::{MoverDef, Rules};
 use fx::{Fx, FxVec2, FxVec3};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::time::{Duration, Instant};
 
 use crate::hash::{hash_of, StateHasher, TickHash};
 use crate::id::{Id, Ids, IdsState, Location};
@@ -192,6 +193,38 @@ pub struct World {
     /// Filled during apply, drained in housekeeping, in apply order.
     despawns: Vec<Id<Mover>>,
     spawns: Vec<MoverRow>,
+    /// How long the last tick's stages took.
+    times: StageTimes,
+}
+
+/// Wall time of each stage of a tick, for profiling. Not state: it never
+/// feeds back into the simulation, and it isn't saved or hashed.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StageTimes {
+    pub commands: Duration,
+    pub self_update: Duration,
+    pub read: Duration,
+    pub merge: Duration,
+    pub apply: Duration,
+    pub housekeeping: Duration,
+    pub hash: Duration,
+}
+
+impl StageTimes {
+    pub fn total(&self) -> Duration {
+        self.commands + self.self_update + self.read + self.merge + self.apply + self.housekeeping + self.hash
+    }
+}
+
+/// Times consecutive stages.
+struct Lap(Instant);
+
+impl Lap {
+    /// The time since the last lap.
+    fn next(&mut self) -> Duration {
+        let now = Instant::now();
+        now - std::mem::replace(&mut self.0, now)
+    }
 }
 
 impl World {
@@ -215,6 +248,7 @@ impl World {
             pending: Messages::default(),
             despawns: Vec::new(),
             spawns: Vec::new(),
+            times: StageTimes::default(),
             config,
         }
     }
@@ -304,12 +338,28 @@ impl World {
 
     /// Runs one tick with this turn's commands and returns the state hash.
     pub fn step(&mut self, turn: &[Command]) -> TickHash {
+        let mut lap = Lap(Instant::now());
         self.apply_commands(turn);
+        let commands = lap.next();
         self.self_update();
+        let self_update = lap.next();
         let outboxes = self.read_phase();
+        let read = lap.next();
         let messages = self.merge(outboxes);
+        let merge = lap.next();
         self.apply_messages(messages);
-        self.housekeeping()
+        let apply = lap.next();
+        self.housekeeping();
+        let housekeeping = lap.next();
+        let hash = self.hash();
+        self.tick += 1;
+        self.times = StageTimes { commands, self_update, read, merge, apply, housekeeping, hash: lap.next() };
+        hash
+    }
+
+    /// How long each stage of the last tick took.
+    pub fn stage_times(&self) -> StageTimes {
+        self.times
     }
 
     // Stage 1: apply inputs, in player order.
@@ -754,7 +804,7 @@ impl World {
     }
 
     // Stage 6: housekeeping.
-    fn housekeeping(&mut self) -> TickHash {
+    fn housekeeping(&mut self) {
         if let Some(settlement) = &mut self.settlement {
             settlement.combat_housekeeping(self.tick, &self.terrain);
             settlement.avatar_housekeeping(self.tick);
@@ -787,10 +837,6 @@ impl World {
                     chunk.dirty = false;
                 }
             });
-
-        let hash = self.hash();
-        self.tick += 1;
-        hash
     }
 
     fn despawn(&mut self) {

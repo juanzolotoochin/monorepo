@@ -507,13 +507,21 @@ and checks that both machines simulate the same world.
 
 ## Performance telemetry
 
-**F3** toggles a compact performance overlay. Live inspection, script receipts,
+The top right of the window shows frames per second. **F3** adds the
+breakdown: CPU time in Update against rendering and waiting, the session's
+update per frame and how many ticks it ran, and each world tick split into its
+stages (`commands`, `self update`, `read`, `merge`, `apply`, `housekeeping`,
+`hash`, from `sim::World::stage_times`) plus copying the settlement for the
+view. Each line is the mean / p95 in milliseconds over the last 240 samples.
+
+Live inspection, script receipts,
 and demo frame traces include a versioned `telemetry` object. Timing histories
 are bounded to 240 samples; counters and all-time maxima accumulate for the run.
 Timings expose last, mean, p50, p95, p99 and maximum milliseconds. CPU wall time
 is separate from game time: recorded frame pacing and GPU readback are included
-in `frame_wall`, while `settlement_simulation`, `settlement_projection`, and
-`settlement_sync` isolate simulation, presentation preparation, and ECS work.
+in `frame_wall`; `session_update` and the `tick_*` samples isolate the
+simulation, and `settlement_projection` and `settlement_sync` presentation
+preparation and ECS work.
 
 Gauges include entity/mesh/material counts, asset-cache entries, active and
 pooled rigs, and fixed steps per frame. Counters expose rig creation, reuse,
