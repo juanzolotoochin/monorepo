@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use bevy::prelude::*;
-use service::{Service, WorldLayer};
+use service::{Service, WorldLayer, WorldState};
 use voxel_assets::{Scene, SceneFeature, ScenePack};
 
 use crate::assets::SceneLibrary;
@@ -54,6 +54,16 @@ impl Service for SceneView {
 
     fn shutdown(self, world: &mut World) {
         crate::assets::release_scene(world);
+    }
+
+    fn systems(app: &mut App) {
+        app.add_systems(
+            PostUpdate,
+            crate::assets::update_captions
+                .after(bevy::transform::TransformSystems::Propagate)
+                .run_if(crate::control::rendered)
+                .run_if(in_state(WorldState::Active)),
+        );
     }
 }
 

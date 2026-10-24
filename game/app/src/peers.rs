@@ -69,6 +69,32 @@ fn attack(swing: &Swing, ticks: f32) -> Option<Attack> {
     }
 }
 
+/// Other players' avatars and name tags (World layer).
+#[derive(Resource)]
+pub struct Peers;
+
+impl service::Service for Peers {
+    type Layer = service::WorldLayer;
+    type Deps = (WorldMirror, crate::scene_view::SceneView);
+
+    fn init(_world: &mut World) -> Self {
+        Peers
+    }
+
+    fn systems(app: &mut App) {
+        use service::{AppServices, Phase, WorldState};
+        let active = in_state(WorldState::Active);
+        app.add_service_systems::<Self, _>(Phase::Mirror, update.run_if(crate::control::rendered).run_if(active.clone()))
+            .add_systems(
+                PostUpdate,
+                crate::nametags::update
+                    .after(bevy::transform::TransformSystems::Propagate)
+                    .run_if(crate::control::rendered)
+                    .run_if(active),
+            );
+    }
+}
+
 pub fn update(
     mut commands: Commands,
     mirror: Res<WorldMirror>,

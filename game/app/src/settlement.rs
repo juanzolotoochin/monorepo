@@ -113,8 +113,13 @@ impl Service for Settlement {
 
     fn systems(app: &mut App) {
         let active = in_state(WorldState::Active);
-        app.add_service_systems::<Self, _>(Phase::Mirror, crate::lockstep::mirror_settlement.run_if(active.clone()))
-            .add_service_systems::<Self, _>(Phase::Present, tick.run_if(active));
+        app.add_service_systems::<Self, _>(Phase::Input, input.run_if(crate::control::interactive).run_if(active.clone()))
+            .add_service_systems::<Self, _>(Phase::Mirror, crate::lockstep::mirror_settlement.run_if(active.clone()))
+            .add_service_systems::<Self, _>(Phase::Present, tick.run_if(active.clone()))
+            .add_systems(
+                PostUpdate,
+                captions.after(bevy::transform::TransformSystems::Propagate).run_if(crate::control::rendered).run_if(active),
+            );
     }
 }
 

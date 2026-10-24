@@ -102,7 +102,8 @@ impl Service for PileLab {
 
     fn systems(app: &mut App) {
         let active = in_state(WorldState::Active);
-        app.add_service_systems::<Self, _>(Phase::Mirror, mirror.run_if(active.clone()))
+        app.add_service_systems::<Self, _>(Phase::Input, input.run_if(crate::control::interactive).run_if(active.clone()))
+            .add_service_systems::<Self, _>(Phase::Mirror, mirror.run_if(active.clone()))
             .add_service_systems::<Self, _>(
                 Phase::Present,
                 (
@@ -113,7 +114,11 @@ impl Service for PileLab {
                     showcase.run_if(crate::control::interactive),
                 )
                     .chain()
-                    .run_if(active),
+                    .run_if(active.clone()),
+            )
+            .add_systems(
+                PostUpdate,
+                captions.after(bevy::transform::TransformSystems::Propagate).run_if(crate::control::rendered).run_if(active),
             );
     }
 }

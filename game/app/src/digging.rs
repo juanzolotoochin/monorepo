@@ -79,7 +79,12 @@ impl Service for Digging {
     }
 
     fn systems(app: &mut App) {
-        app.add_service_systems::<Self, _>(Phase::Mirror, (update, follow_camera).chain().run_if(in_state(WorldState::Active)));
+        let active = in_state(WorldState::Active);
+        app.add_service_systems::<Self, _>(Phase::Mirror, (update, follow_camera).chain().run_if(active.clone()))
+            .add_systems(
+                PostUpdate,
+                feedback.after(bevy::transform::TransformSystems::Propagate).run_if(crate::control::rendered).run_if(active),
+            );
     }
 }
 

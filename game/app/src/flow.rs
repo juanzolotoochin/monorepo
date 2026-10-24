@@ -46,7 +46,7 @@ impl Service for Flow {
     }
 
     fn systems(app: &mut App) {
-        app.add_service_systems::<Self, _>(Phase::Input, start_session);
+        app.add_service_systems::<Self, _>(Phase::Input, (start_session, app_keys.run_if(crate::control::interactive)));
     }
 }
 
@@ -54,6 +54,16 @@ impl Flow {
     /// The launch, for the session starting now.
     pub fn take_launch(&mut self) -> Option<Launch> {
         self.launch.take()
+    }
+}
+
+/// Escape quits; M mutes.
+fn app_keys(keys: Res<ButtonInput<KeyCode>>, mut exit: MessageWriter<AppExit>, mut sound: ResMut<crate::sound::Sound>) {
+    if keys.just_pressed(KeyCode::Escape) {
+        exit.write(AppExit::Success);
+    }
+    if keys.just_pressed(KeyCode::KeyM) {
+        sound.muted = !sound.muted;
     }
 }
 

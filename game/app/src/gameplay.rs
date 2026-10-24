@@ -214,6 +214,35 @@ fn blade_segment(origin: Vec3, facing: Quat, angle: f32, scale: f32) -> (Vec3, V
     (pivot + blade * 0.20 * scale, pivot + blade * 1.50 * scale)
 }
 
+/// The local player's body (World layer): placed where the simulation has
+/// the avatar, animated, and its swings and hits played.
+#[derive(Resource)]
+pub struct Avatar;
+
+impl service::Service for Avatar {
+    type Layer = service::WorldLayer;
+    type Deps = (crate::lockstep::WorldMirror, crate::scene_view::SceneView);
+
+    fn init(_world: &mut World) -> Self {
+        Avatar
+    }
+
+    fn systems(app: &mut App) {
+        use service::{AppServices, Phase, WorldState};
+        let active = in_state(WorldState::Active);
+        app.add_service_systems::<Self, _>(Phase::Mirror, crate::lockstep::follow_avatar.run_if(active.clone()))
+            .add_service_systems::<Self, _>(
+                Phase::Present,
+                (
+                    (combat, animate_character, crate::style::select_weapon).chain(),
+                    draw_navigation.run_if(crate::control::interactive),
+                )
+                    .chain()
+                    .run_if(active),
+            );
+    }
+}
+
 pub fn combat(
     mut commands: Commands,
     time: Res<Time>,

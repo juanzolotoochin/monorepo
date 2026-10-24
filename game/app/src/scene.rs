@@ -1023,6 +1023,33 @@ pub fn hud(mut commands: Commands) {
         });
 }
 
+/// The HUD's live readouts and the QA capture (World layer). The HUD's
+/// nodes are App-level (`hud`).
+#[derive(Resource)]
+pub struct Hud;
+
+impl service::Service for Hud {
+    type Layer = service::WorldLayer;
+    type Deps = (crate::lockstep::WorldMirror, crate::scene_view::SceneView);
+
+    fn init(_world: &mut World) -> Self {
+        Hud
+    }
+
+    fn systems(app: &mut App) {
+        use service::{AppServices, Phase, WorldState};
+        app.add_service_systems::<Self, _>(
+            Phase::Present,
+            (
+                update_hud.run_if(crate::control::rendered),
+                crate::preview::capture.run_if(crate::control::interactive),
+            )
+                .chain()
+                .run_if(in_state(WorldState::Active)),
+        );
+    }
+}
+
 pub fn update_hud(
     controls: Res<Controls>,
     sound: Res<Sound>,

@@ -642,10 +642,23 @@ pub struct PlayerControl {
 
 impl Service for PlayerControl {
     type Layer = WorldLayer;
-    type Deps = (SessionService, WorldMirror);
+    type Deps = (SessionService, WorldMirror, SceneView);
 
     fn init(_world: &mut World) -> Self {
         PlayerControl::default()
+    }
+
+    fn systems(app: &mut App) {
+        app.add_service_systems::<Self, _>(
+            Phase::Input,
+            (
+                (mouse_input, attack_input).chain().run_if(crate::control::interactive),
+                keyboard_input,
+                crate::preview::playback.run_if(crate::control::interactive),
+            )
+                .chain()
+                .run_if(in_state(WorldState::Active)),
+        );
     }
 }
 

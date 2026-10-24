@@ -25,8 +25,8 @@ mod sound;
 mod style;
 mod telemetry;
 
-use bevy::{app::AppExit, prelude::*};
-use service::{AppServices, Phase, Service, ServicesPlugin, WorldLayer, WorldState};
+use bevy::prelude::*;
+use service::{AppServices, ServicesPlugin};
 use gameplay::*;
 
 fn main() {
@@ -114,20 +114,6 @@ fn network(args: &[String]) -> Result<Option<lockstep::Network>, String> {
     }
 }
 
-/// The views that don't have services of their own yet: they live as long
-/// as a world, and run only while it is active.
-#[derive(Resource)]
-struct Views;
-
-impl Service for Views {
-    type Layer = WorldLayer;
-    type Deps = (lockstep::WorldMirror, scene_view::SceneView);
-
-    fn init(_world: &mut World) -> Self {
-        Views
-    }
-}
-
 fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: control::Hub, launch: flow::Launch) -> App {
     use bevy::{app::ScheduleRunnerPlugin, time::TimeUpdateStrategy};
     use std::time::Duration;
@@ -212,10 +198,9 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
     if offscreen {
         app.add_systems(Startup, control::setup_render.after(scene::setup));
     }
-    // The frame, in the service layers' phases (see
-    // game/docs/proposals/service_layers.md). Telemetry and the control port
-    // wrap the whole frame; everything else belongs to a service.
-    let active = in_state(WorldState::Active);
+    // The frame (see game/docs/proposals/service_layers.md): telemetry and
+    // the control port wrap it; everything else belongs to a service, and
+    // services tick by layer, then in the order registered here.
     app.add_plugins(ServicesPlugin)
         .add_service::<flow::Flow>()
         .add_service::<lockstep::SessionService>()
@@ -223,10 +208,13 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .add_service::<scene_view::SceneView>()
         .add_service::<settlement::Settlement>()
         .add_service::<piles::PileLab>()
-        .add_service::<Views>()
+        .add_service::<gameplay::Avatar>()
+        .add_service::<peers::Peers>()
         .add_service::<digging::Digging>()
         .add_service::<jetpack::Flight>()
         .add_service::<palimpsest::Memory>()
+        .add_service::<effects::Effects>()
+        .add_service::<scene::Hud>()
         .add_service::<lockstep::PlayerControl>()
         .add_systems(First, (telemetry::begin, control::begin).chain())
         .add_systems(
@@ -234,58 +222,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
             ((telemetry::end, control::end).chain(), control::capture_frame.run_if(control::rendered))
                 .chain()
                 .before(service::StopOnExit),
-        )
-        .add_service_systems::<lockstep::PlayerControl, _>(
-            Phase::Input,
-            (
-                (piles::input, settlement::input, lockstep::mouse_input, lockstep::attack_input)
-                    .chain()
-                    .run_if(control::interactive),
-                lockstep::keyboard_input,
-                preview::playback.run_if(control::interactive),
-            )
-                .chain()
-                .run_if(active.clone()),
-        )
-        .add_service_systems::<Views, _>(
-            Phase::Mirror,
-            (
-                lockstep::follow_avatar,
-                peers::update.run_if(control::rendered),
-            )
-                .chain()
-                .run_if(active.clone()),
-        )
-        .add_service_systems::<Views, _>(
-            Phase::Present,
-            (
-                (combat, animate_character, style::select_weapon).chain(),
-                effects::update_effects,
-                effects::camera_feedback.run_if(control::rendered),
-                scene::update_hud.run_if(control::rendered),
-                preview::capture.run_if(control::interactive),
-            )
-                .chain()
-                .run_if(active.clone()),
         );
-    if !simulation {
-        app.add_systems(
-            Update,
-            (draw_navigation.run_if(active.clone()), keyboard_actions).run_if(control::interactive),
-        )
-        .add_systems(
-            PostUpdate,
-            (
-                assets::update_captions,
-                piles::captions,
-                settlement::captions,
-                nametags::update,
-                digging::feedback,
-            )
-                .after(bevy::transform::TransformSystems::Propagate)
-                .run_if(active),
-        );
-    }
     app
 }
 
@@ -304,7 +241,7 @@ fn test_app(options: control::Options, scenes: assets::SceneLibrary, hub: contro
 fn start_world(app: &mut App) {
     for _ in 0..20 {
         app.update();
-        let active = app.world().get_resource::<State<WorldState>>().is_some_and(|s| *s.get() == WorldState::Active);
+        let active = app.world().get_resource::<State<service::WorldState>>().is_some_and(|s| *s.get() == service::WorldState::Active);
         if active {
             return;
         }
@@ -318,24 +255,11 @@ fn switch_world(app: &mut App, index: usize) {
     app.world_mut().resource_mut::<lockstep::SessionService>().request_scene(index);
     for _ in 0..20 {
         app.update();
-        let active = app.world().get_resource::<State<WorldState>>().is_some_and(|s| *s.get() == WorldState::Active);
+        let active = app.world().get_resource::<State<service::WorldState>>().is_some_and(|s| *s.get() == service::WorldState::Active);
         let shown = app.world().get_resource::<scene_view::SceneView>().map(|view| view.index);
         if active && shown == Some(index) {
             return;
         }
     }
     panic!("the world never switched to scene {index}");
-}
-
-fn keyboard_actions(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut exit: MessageWriter<AppExit>,
-    mut sound: ResMut<sound::Sound>,
-) {
-    if keys.just_pressed(KeyCode::Escape) {
-        exit.write(AppExit::Success);
-    }
-    if keys.just_pressed(KeyCode::KeyM) {
-        sound.muted = !sound.muted;
-    }
 }

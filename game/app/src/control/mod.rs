@@ -701,8 +701,10 @@ pub fn end(world: &mut World) {
             && hub.active.is_none());
     // Like commands, inspections wait for the first world.
     let inspecting = hub.ready.is_some() && !hub.inspect.is_empty();
-    let tracing = hub.options.trace.is_some() && hub.ready.is_some();
-    if tracing || inspecting || finishing {
+    // A rendered run's frames are traced from its warmup on (see
+    // `capture_frame`), so the snapshot is kept even before the first world;
+    // without one it says LOADING.
+    if hub.options.trace.is_some() || inspecting || finishing {
         hub.latest = snapshot(world, &hub);
     }
     // The trace starts with the first world, as scripts do.
