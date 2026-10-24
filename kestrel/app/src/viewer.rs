@@ -14,6 +14,11 @@ use bevy::{
 };
 use sim::settlement::avatar::SwordStroke;
 
+// Rig roots use y=0 as their standing surface. Keep the inspection floor and
+// root on the same plane so poses can be judged against actual foot contact.
+const STUDIO_FLOOR_Y: f32 = 20.0;
+const STUDIO_FLOOR_THICKNESS: f32 = 0.2;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Clip {
     Idle,
@@ -187,13 +192,13 @@ pub fn setup(
     }
     commands.spawn((
         Stage,
-        Mesh3d(meshes.add(Cuboid::new(4.0, 0.2, 4.0))),
+        Mesh3d(meshes.add(Cuboid::new(4.0, STUDIO_FLOOR_THICKNESS, 4.0))),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::srgb(0.09, 0.17, 0.21),
             perceptual_roughness: 0.95,
             ..default()
         })),
-        Transform::from_xyz(0.0, 19.75, 0.0),
+        Transform::from_xyz(0.0, STUDIO_FLOOR_Y - STUDIO_FLOOR_THICKNESS * 0.5, 0.0),
     ));
     commands
         .spawn((
@@ -349,7 +354,7 @@ pub fn drive(
         viewer.elapsed += time.delta_secs().min(0.05) * viewer.speed;
     }
     let t = viewer.phase();
-    let spawn = Vec3::new(0.0, 20.0, 0.0);
+    let spawn = Vec3::new(0.0, STUDIO_FLOOR_Y, 0.0);
     let (_, height) = viewer.jump();
     player.translation = spawn + Vec3::Y * height;
     player.rotation = Quat::from_rotation_y(if viewer.clip == Clip::Turn {
@@ -381,7 +386,7 @@ pub fn camera(
     if !viewer.active {
         return;
     }
-    let center = Vec3::new(0.0, 21.0, 0.0);
+    let center = Vec3::new(0.0, STUDIO_FLOOR_Y + 1.0, 0.0);
     let offset = match viewer.angle {
         ViewAngle::ThreeQuarter => Vec3::new(3.0, 2.2, 4.4),
         ViewAngle::Front => Vec3::new(0.0, 1.5, 5.4),
