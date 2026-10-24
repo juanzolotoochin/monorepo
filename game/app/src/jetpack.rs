@@ -1,14 +1,16 @@
 //! Terrain-aware hover flight. The same controller runs for keyboard and scripted demos.
+use crate::lockstep::WorldMirror;
 use crate::scene_view::SceneView;
 use bevy::prelude::*;
+use service::{AppServices, Phase, Service, WorldLayer, WorldScoped, WorldState};
 
 pub const HOVER: f32 = 1.8;
+/// The local player's hover flight, as the views see it (World layer).
 #[derive(Resource, Default)]
 pub struct Flight {
     pub requested: bool,
     pub airborne: bool,
     pub support: f32,
-    current: Option<usize>,
     sound_timer: f32,
 }
 #[derive(Component)]
@@ -39,65 +41,72 @@ pub fn height(pack: &voxel_assets::ScenePack, p: Vec3) -> Option<f32> {
             .max_by(f32::total_cmp),
     }
 }
-pub fn scene_changed(
+impl Service for Flight {
+    type Layer = WorldLayer;
+    type Deps = (WorldMirror, SceneView);
+
+    /// Raises the scene's platforms and shows the built-in deck only where
+    /// the scene brings no ground of its own, as `style::apply` decides too.
+    fn init(world: &mut World) -> Self {
+        let scene = world.resource::<SceneView>();
+        let terrain = scene.scene().terrain.clone();
+        let own_ground = terrain.is_some() || scene.pack.environment.is_some();
+        for mut visibility in world.query_filtered::<&mut Visibility, With<Deck>>().iter_mut(world) {
+            *visibility = if own_ground { Visibility::Hidden } else { Visibility::Inherited };
+        }
+        if let Some(terrain) = terrain {
+            world.run_system_cached_with(raise_platforms, terrain).expect("raising the scene's platforms");
+        }
+        Flight::default()
+    }
+
+    fn systems(app: &mut App) {
+        app.add_service_systems::<Self, _>(Phase::Mirror, update.run_if(in_state(WorldState::Active)));
+    }
+}
+
+/// The platforms' mesh and materials, uploaded once.
+#[derive(Resource)]
+struct PlatformArt(Handle<Mesh>, [Handle<StandardMaterial>; 3]);
+
+fn raise_platforms(
+    In(terrain): In<voxel_assets::Terrain>,
     mut commands: Commands,
-    scene: Res<SceneView>,
-    mut flight: ResMut<Flight>,
-    mut deck: Query<&mut Visibility, With<Deck>>,
-    old: Query<Entity, With<TerrainVisual>>,
+    art: Option<Res<PlatformArt>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut cache: Local<Option<(Handle<Mesh>, [Handle<StandardMaterial>; 3])>>,
 ) {
-    if flight.current == Some(scene.index) {
-        return;
-    }
-    *flight = Flight {
-        current: Some(scene.index),
-        ..default()
+    let PlatformArt(cube, [side, top, glow]) = match art {
+        Some(art) => PlatformArt(art.0.clone(), art.1.clone()),
+        None => {
+            let art = PlatformArt(
+                meshes.add(Cuboid::default()),
+                [
+                    materials.add(StandardMaterial {
+                        base_color: Color::srgb(0.09, 0.14, 0.21),
+                        metallic: 0.6,
+                        ..default()
+                    }),
+                    materials.add(StandardMaterial {
+                        base_color: Color::srgb(0.24, 0.32, 0.37),
+                        metallic: 0.35,
+                        ..default()
+                    }),
+                    materials.add(StandardMaterial {
+                        base_color: Color::srgb(0.05, 0.8, 1.0),
+                        emissive: LinearRgba::rgb(0.1, 3.0, 5.0),
+                        ..default()
+                    }),
+                ],
+            );
+            commands.insert_resource(PlatformArt(art.0.clone(), art.1.clone()));
+            art
+        }
     };
-    for e in &old {
-        commands.entity(e).despawn();
-    }
-    let terrain = &scene.scene().terrain;
-    // The built-in deck shows only where the scene brings no ground of its
-    // own, as `style::apply` decides too.
-    let own_ground = terrain.is_some() || scene.pack.environment.is_some();
-    for mut visibility in &mut deck {
-        *visibility = if own_ground {
-            Visibility::Hidden
-        } else {
-            Visibility::Inherited
-        };
-    }
-    let Some(terrain) = terrain else {
-        return;
-    };
-    let (cube, [side, top, glow]) = cache.get_or_insert_with(|| {
-        (
-            meshes.add(Cuboid::default()),
-            [
-                materials.add(StandardMaterial {
-                    base_color: Color::srgb(0.09, 0.14, 0.21),
-                    metallic: 0.6,
-                    ..default()
-                }),
-                materials.add(StandardMaterial {
-                    base_color: Color::srgb(0.24, 0.32, 0.37),
-                    metallic: 0.35,
-                    ..default()
-                }),
-                materials.add(StandardMaterial {
-                    base_color: Color::srgb(0.05, 0.8, 1.0),
-                    emissive: LinearRgba::rgb(0.1, 3.0, 5.0),
-                    ..default()
-                }),
-            ],
-        )
-    });
     let mut block = |pos: Vec3, size: Vec3, mat: &Handle<StandardMaterial>| {
         commands.spawn((
             TerrainVisual,
+            WorldScoped::default(),
             Mesh3d(cube.clone()),
             MeshMaterial3d(mat.clone()),
             Transform::from_translation(pos).with_scale(size),

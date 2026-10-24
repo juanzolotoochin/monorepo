@@ -153,7 +153,6 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .init_resource::<telemetry::Telemetry>()
         .init_resource::<settlement::Settlement>()
         .init_resource::<palimpsest::Memory>()
-        .init_resource::<jetpack::Flight>()
         .init_resource::<piles::PileLab>()
         .init_resource::<effects::Feedback>()
         .insert_resource(if simulation || offscreen {
@@ -226,6 +225,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .add_service::<lockstep::WorldMirror>()
         .add_service::<scene_view::SceneView>()
         .add_service::<Views>()
+        .add_service::<jetpack::Flight>()
         .add_service::<lockstep::PlayerControl>()
         .add_systems(First, (telemetry::begin, control::begin).chain())
         .add_systems(
@@ -237,7 +237,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .add_service_systems::<Views, _>(
             Phase::Input,
             (
-                (jetpack::scene_changed, palimpsest::setup).chain(),
+                palimpsest::setup,
                 (piles::setup_scene, settlement::setup).chain(),
             )
                 .chain()
@@ -264,7 +264,6 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
                 peers::update.run_if(control::rendered),
                 digging::update,
                 digging::follow_camera,
-                jetpack::update,
                 palimpsest::tick,
             )
                 .chain()

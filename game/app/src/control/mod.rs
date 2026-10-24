@@ -570,8 +570,9 @@ pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
     let style = crate::style::snapshot(world);
     let memory = crate::palimpsest::snapshot(world);
     let position = player_position(world);
-    let flight = world.resource::<crate::jetpack::Flight>();
-    let jetpack = json!({"requested":flight.requested,"airborne":flight.airborne,"support_height":flight.support,"hover_height":crate::jetpack::HOVER,"clearance":position.y-flight.support});
+    let jetpack = world.get_resource::<crate::jetpack::Flight>().map_or(Value::Null, |flight| {
+        json!({"requested":flight.requested,"airborne":flight.airborne,"support_height":flight.support,"hover_height":crate::jetpack::HOVER,"clearance":position.y-flight.support})
+    });
     let view = world.get_resource::<SceneView>();
     let terrain = json!(view.and_then(|view| view.scene().terrain.as_ref()));
     let digging = crate::digging::snapshot(world);
