@@ -280,6 +280,11 @@ Details: [desyncs and host loss](design/desync-host-loss.html).
 
 Details: [view layer](design/view-layer.html).
 
+`game/app` is organized as App, Session and World services
+([service layers](proposals/service_layers.md)): what lives for the whole
+process, for one session, and for one loaded world. A world's views start
+when it does and go with it.
+
 - **Data flow:**
   1. Bevy input becomes a command, quantized and tagged with tick t + D.
   2. The simulation runs.

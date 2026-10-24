@@ -1,9 +1,9 @@
 # Service layers
 
-Status: design agreed on 2026-10-24. Migration steps 1 (the framework,
-`game/service`), 2 (`game/app`'s frame in phases), 3 (obstacles from scene
-data) and 4 (the session's world slot) are done; no service exists yet. The
-next feature, the main menu, is the first one to add some.
+Status: design agreed on 2026-10-24; migration steps 1 to 5 are done, so
+`game/app` runs on services (see [As built](#as-built)). Still to come: the
+main menu and the lobby (step 6), `Bindings`, `ScriptDriver` and `Profile`,
+and `game/play`.
 
 The game's front end needs one answer to "where does this flow or system
 live, and for how long?". This proposal groups front-end code into
@@ -137,9 +137,15 @@ app.add_plugins(DefaultPlugins)          // before ServicesPlugin, which adds
   `Active` by itself. A layer starts its services just before its own
   `OnEnter` schedules and stops them just after its `OnExit` schedules, so a
   service exists during its layer's enter and exit systems. Services' systems
-  run only while their layer runs. Entities that belong to a world are spawned with
-  `DespawnOnExit(WorldState::Active)` (or `Loading`), so nothing is despawned
-  by hand.
+  run only while their layer runs. Entities that belong to a world carry
+  `WorldScoped` (or `SessionScoped`): the framework despawns them when the
+  layer stops, after its services, whether it was Loading or Active. A
+  marker that tags a feature's entities can require it
+  (`#[require(WorldScoped)]`).
+- **`SessionService` moves the World layer.** After the Step phase it sets
+  World Off for a frame when the session's world is replaced, and Loading
+  once a new one is in the slot; World services decide when it is Active.
+  `Flow` (App) starts the session. Nothing else sets a layer's state.
 - **Registration order is the order.** Within a layer, services start, tick
   and (in reverse) stop in the order they are registered. A dependency must be
   registered earlier, so there is nothing to sort and no cycle is possible.
@@ -259,37 +265,38 @@ Input runs before Step because a command is stamped with its tick when it's
 queued. Run after the step, a command misses any tick due that frame and lands
 one tick (16.7 ms) later, which happens on about 4 frames in 10 at 144 Hz.
 
-## Today's code, mapped
+## As built
 
-`lockstep::Game` splits by lifetime:
+Services in `game/app`, in registration order (which is also their tick
+order within a layer):
 
-| Field | Goes to |
-|---|---|
-| `content`, `name` | App: `Content`, `Profile` |
-| `record`, `replay` | App options; the Session writes the recording on shutdown |
-| `session`, `network`, `clock`, `paused`, `rate`, `warming_up`, `status`, `ended`, `start_save` | Session: `SessionService` |
-| `scene`, `previous`, `current`, `events`, `tick`, `alpha`, `center` | World: `WorldMirror` |
-| `walking`, `applies_at`, `named` | World: `PlayerControl` (the name is sent once per world, when the avatar exists) |
+| Layer | Service | File | What it owns |
+|---|---|---|---|
+| App | `Flow` | `flow.rs` | The launch from the command line; starts the session. Escape and mute keys |
+| Session | `SessionService` | `lockstep.rs` | The session, clock, scene requests (digit keys, control port), recordings, the ending banner; moves the World layer |
+| World | `WorldMirror` | `lockstep.rs` | The last two ticks for interpolation, and the world's scene from the session's label |
+| World | `SceneView` | `scene_view.rs` | The scene shown: player body, industrial props, boulders, style, the deck's visibility |
+| World | `Settlement` | `settlement.rs` | The settlement's rigs, captions and HUD |
+| World | `PileLab` | `piles/` | The pile lab's dispensers, piles, cargo and panel |
+| World | `Avatar` | `gameplay.rs` | The player's body: following the avatar, animation, swings and hits |
+| World | `Peers` | `peers.rs` | Other players' avatars and name tags |
+| World | `Digging` | `digging.rs` | The dug ground and the follow camera |
+| World | `Flight` | `jetpack.rs` | Raised platforms and the jetpack's view |
+| World | `Memory` | `palimpsest/` | The memory trial's view |
+| World | `Effects` | `effects.rs` | Particles, flashes, camera shake |
+| World | `Hud` | `scene.rs` | The HUD's live readouts |
+| World | `PlayerControl` | `lockstep.rs` | Movement, attack and keyboard input into commands |
 
-Other resources and systems:
+Still plain App resources: `SceneLibrary` (the packs), `ModelCache`,
+`SceneArt` (shared meshes and materials), `Telemetry`, `Sound`, the control
+port's `Hub`, and `Controls` and `Feedback`, which the player's input,
+combat and effects share and `SceneView` resets when a world starts.
+Telemetry and the control port wrap the frame in `First` and `Last`.
 
-| Layer | Service | From today |
-|---|---|---|
-| App | `ControlPort` | `control::Hub`, `control::Options`, `control::Video`, request parsing in `control::protocol` |
-| App | `Sound`, `Telemetry`, `ModelCache`, `SceneLibrary` | the resources of the same names |
-| App | `Bindings` | raw key and mouse reads, now spread over `lockstep::*_input`, `piles::input`, `settlement::input` |
-| App | `Flow` | `main.rs` flag handling (`--host`, `--join`, `--scene`); the main menu later |
-| Session | `SessionService` | `lockstep::step`, `on_exit`'s recording and shutdown |
-| Session | `SessionEnd` | `lockstep::end_session` and its banner |
-| Session | `Lobby` | new |
-| World | `WorldMirror` | `lockstep::mirror_settlement`, `settlement::Settlement` |
-| World | `SceneView` | `scene::setup`, the scene half of `assets::switch_scene`, `style::apply`, `ActiveStyle` |
-| World | `PlayerControl` | `Controls`, the command half of `lockstep::*_input`, `piles::input` and `settlement::input`, `strike`, `jetpack::cursor_surface`, `Game::{walk, go_to, dig, equip, command}` |
-| World | `ScriptDriver` | the request handling in `control::mod` (`Pending`, asserts, inspection) |
-| World | `FollowCamera` | `lockstep::follow_avatar`, `digging::follow_camera` |
-| World | `Piles`, `Digging`, `Flight`, `Memory` | `piles::*` and `PileLab`, `digging::*`, `jetpack::*` and `Flight`, `palimpsest::*` and `Memory` |
-| World | `Peers` | `peers::update`, `nametags::update` |
-| World | `Effects`, `Hud` | `effects::*` and `Feedback`, `scene::hud` and `update_hud` |
+The control port starts commands, answers inspections and writes its trace
+only while a world is up, and holds the session's clock until the first
+world, so a rendered replay of a headless recording still matches it
+command for command. Every scene renders as before.
 
 ## Migration
 
@@ -317,8 +324,11 @@ passing.
    switch scenes in networked games and clients follow the label. Each
    world gets its own recording: `<path>` for the first, `<path>.<n>` after.
    The host's slot is never empty yet: unloading comes with the lobby.
-5. Split `lockstep::Game` as above, then move the features into World services
-   one at a time, deleting each hand-made scene-change check.
+5. Split `lockstep::Game`, then move the features into World services one at
+   a time, deleting each hand-made scene-change check. Done: see
+   [As built](#as-built). Seven checks went (`game.scene`, `Settlement`,
+   `ActiveStyle`, `Flight`, `Memory`, `PileLab` and digging's `Local`), and
+   so did `SceneLibrary.current` and `switch_scene`.
 6. Build the main menu and the lobby on top.
 
 ## Open questions
