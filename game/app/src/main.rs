@@ -3,6 +3,7 @@ mod assets;
 mod control;
 mod effects;
 mod gameplay;
+mod atmosphere;
 mod impact;
 mod jetpack;
 mod legacy;
@@ -141,6 +142,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .init_resource::<assets::ModelCache>()
         .init_resource::<Controls>()
         .init_resource::<style::ActiveStyle>()
+        .init_resource::<atmosphere::AtmosphereVisuals>()
         .init_resource::<telemetry::Telemetry>()
         .init_resource::<settlement::Settlement>()
         .init_resource::<palimpsest::Memory>()
@@ -157,7 +159,9 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
             MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(Duration::from_millis(1))),
         )
         .init_resource::<Assets<Mesh>>()
+        .init_resource::<Assets<Image>>()
         .init_resource::<Assets<StandardMaterial>>()
+        .init_resource::<Assets<atmosphere::GrassMaterial>>()
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<ButtonInput<MouseButton>>();
     } else if offscreen {
@@ -191,6 +195,10 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
             }),
         );
     }
+    if !simulation {
+        app.add_plugins(bevy::pbr::MaterialPlugin::<atmosphere::GrassMaterial>::default());
+        atmosphere::register_shader(&mut app);
+    }
     app.add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default());
     if !simulation {
         app.add_plugins((
@@ -216,6 +224,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
                 jetpack::scene_changed,
                 palimpsest::setup,
                 style::apply,
+                atmosphere::sync,
             )
                 .chain(),
             (piles::setup_scene, settlement::setup, lockstep::build_world).chain(),
@@ -248,6 +257,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
                 .chain(),
             (combat, animate_character, style::select_weapon).chain(),
             effects::update_effects,
+            atmosphere::animate,
             effects::camera_feedback.run_if(control::rendered),
             scene::update_hud.run_if(control::rendered),
             preview::capture.run_if(control::interactive),

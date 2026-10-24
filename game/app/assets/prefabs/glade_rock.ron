@@ -1,0 +1,2 @@
+// Voxel prefab compilation supplies render meshes, collision layers and hit surfaces.
+Boulder(seed: 41, radius: 0.62, height: 0.72, voxel_size: 0.12, taper: 0.48, ore_every: 13, debris: 0)

@@ -8,7 +8,7 @@ rust_binary(
     name = "demo",
     srcs = glob(["src/**/*.rs"]),
     # Bevy's derive macros inspect Cargo.toml to locate the `bevy` re-exports.
-    compile_data = ["//:Cargo.toml"],
+    compile_data = ["//:Cargo.toml", "shaders/grass.wesl"],
     edition = "2021",
     link_deps = [":sound"],
     rustc_env = {"CARGO_MANIFEST_DIR": "."},
@@ -22,6 +22,7 @@ rust_binary(
         "//game/app/assets:forest_outpost",
         "//game/app/assets:jetpack_lab",
         "//game/app/assets:mining_deck",
+        "//game/app/assets:moonlit_glade",
         "//game/app/assets:pile_lab",
         "//game/app/assets:surprise_lab",
         "//game/content",

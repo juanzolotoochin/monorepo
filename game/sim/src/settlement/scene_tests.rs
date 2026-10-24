@@ -122,6 +122,29 @@ fn ground_routes_cannot_cross_walls_or_drops() {
     assert!(go(&mut scene, 5.0, 2.0), "flying, anything goes");
 }
 
+#[test]
+fn feet_rise_when_body_reaches_a_low_step() {
+    let mut scene = Scene::new(SceneSetup {
+        extent: Fx::from_int(8),
+        surfaces: vec![Surface { min: v(0.0, -1.0), max: v(1.0, 1.0), height: fx(0.24) }],
+        spawn: [fx(-1.0), Fx::ZERO, Fx::ZERO],
+        ..SceneSetup::default()
+    });
+    let agent = scene.agent();
+    scene.command(CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: v(1.0, 0.0), run: false } });
+    let mut stepped_at_edge = false;
+    for _ in 0..ms(2500) {
+        scene.sim.step(&[]);
+        let x = scene.avatar().position.x - scene.center.x;
+        if x > fx(-0.3) && x < Fx::ZERO {
+            stepped_at_edge = true;
+            assert_eq!(scene.altitude(), fx(0.24), "feet must rise when the body first overlaps the slab");
+            break;
+        }
+    }
+    assert!(stepped_at_edge, "avatar never reached the slab edge: x={} height={}", (scene.avatar().position.x - scene.center.x).to_f32(), scene.altitude().to_f32());
+}
+
 /// `demos/jetpack.json`: climb onto the 2 m platform, cross the drop, hover
 /// over it with the jetpack released, and land on the 3.5 m platform.
 #[test]

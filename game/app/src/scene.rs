@@ -996,7 +996,7 @@ pub fn hud(mut commands: Commands) {
             ));
             p.spawn((
                 Text::new(
-                    "1 - 9 / 0  SCENES    SPACE  JETPACK    WASD  STEER    SHIFT  RUN    WHEEL  ZOOM    M  AUDIO",
+                    "1 - 9 / 0  SCENES    F4  GLADE    SPACE  JETPACK    WASD  STEER    SHIFT  RUN    WHEEL  ZOOM    M  AUDIO",
                 ),
                 TextFont {
                     font_size: FontSize::Px(10.0),

@@ -46,6 +46,7 @@ impl SceneLibrary {
                 ScenePack::decode(combat_arena::PACK_BYTES).expect("validated combat asset pack"),
                 ScenePack::decode(dig_lab::PACK_BYTES).expect("validated dig lab asset pack"),
                 ScenePack::decode(field::PACK_BYTES).expect("validated field asset pack"),
+                ScenePack::decode(moonlit_glade::PACK_BYTES).expect("validated moonlit glade asset pack"),
             ];
         let mut ids = std::collections::HashSet::new();
         for pack in &scenes {
@@ -153,6 +154,8 @@ pub fn switch_scene(
         Some(0)
     } else if keys.just_pressed(KeyCode::Digit2) {
         Some(1)
+    } else if keys.just_pressed(KeyCode::F4) {
+        library.index("moonlit-glade").ok()
     } else if keys.just_pressed(KeyCode::Digit7) {
         Some(6)
     } else if keys.just_pressed(KeyCode::Digit8) {
@@ -411,10 +414,17 @@ mod tests {
         assert_eq!(library.index("combat-arena"), Ok(7));
         assert_eq!(library.index("dig-lab"), Ok(8));
         assert_eq!(library.index("field"), Ok(9));
+        assert_eq!(library.index("moonlit-glade"), Ok(10));
+        let glade = &library.scenes[10];
+        assert_eq!(glade.scene.instances.len(), 7);
+        assert!(glade.environment.as_ref().is_some_and(|environment| environment.walkable.len() >= 14));
+        let Geometry::Baked(rock) = &glade.prefabs[0].geometry else { panic!("glade rock should be baked"); };
+        assert!(rock.collision.radius > 0.5);
+        assert_eq!(glade.prefabs[0].palette.materials[3].impact, voxel_assets::ImpactResponse::Crystal);
         assert!(library.scenes[8].scene.features.contains(&SceneFeature::Digging));
         assert_eq!(
             library.index("missing"),
-            Err("Unknown scene missing. Available scenes: mining-deck, boulder-lab, pile-lab, jetpack-lab, surprise-lab, atlantis, forest-outpost, combat-arena, dig-lab, field".into())
+            Err("Unknown scene missing. Available scenes: mining-deck, boulder-lab, pile-lab, jetpack-lab, surprise-lab, atlantis, forest-outpost, combat-arena, dig-lab, field, moonlit-glade".into())
         );
         assert!(library.scenes[4].scene.features.contains(&SceneFeature::MemoryTrial));
         assert!(library.scenes[3].scene.features.contains(&SceneFeature::FlightHud));
