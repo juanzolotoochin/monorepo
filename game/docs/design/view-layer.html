@@ -136,7 +136,7 @@ td:first-child { font-weight: 600; white-space: nowrap; }
   <header class="stack">
     <span class="eyebrow">View layer · open decisions</span>
     <h1>The Bevy view layer</h1>
-    <p class="lead">The simulation ticks 30 times a second in fixed-point, on data Bevy never touches. The screen refreshes 60 to 144 times a second in f32. This page covers how one becomes the other: smooth motion, instant feedback despite input delay, effects and sound, and where the simulation runs.</p>
+    <p class="lead">The simulation ticks 60 times a second in fixed-point, on data Bevy never touches. The screen refreshes 60 to 144 times a second in f32. This page covers how one becomes the other: smooth motion, instant feedback despite input delay, effects and sound, and where the simulation runs.</p>
   </header>
 
   <section class="decision" aria-labelledby="flow">
@@ -151,7 +151,7 @@ td:first-child { font-weight: 600; white-space: nowrap; }
         <span class="arrow">→</span>
         <div class="node"><b>Command</b><small>quantized to Fx or tile, tagged with tick t+D</small></div>
         <span class="arrow">→</span>
-        <div class="node sim"><b>Simulation</b><small>turns from host, ticks at 30 Hz</small></div>
+        <div class="node sim"><b>Simulation</b><small>turns from host, ticks at 60 Hz</small></div>
         <span class="arrow">→</span>
         <div class="node view"><b>View</b><small>render state + events, drawn by Bevy</small></div>
       </div>
@@ -174,7 +174,7 @@ td:first-child { font-weight: 600; white-space: nowrap; }
     <div class="stack">
       <span class="eyebrow">Decision 1</span>
       <h2 id="q1">Smooth motion between ticks</h2>
-      <p>At 30 Hz, positions only change every 33 ms. Drawn directly, units visibly step on a 60 Hz or 144 Hz screen. The view needs to invent positions between ticks. It can blend between the last two ticks, or guess ahead from the last one.</p>
+      <p>At 60 Hz, positions only change every 17 ms. Drawn directly, units visibly step on a 144 Hz screen, and judder even on a 60 Hz one whenever the screen's clock and the simulation's drift apart. The view needs to invent positions between ticks. It can blend between the last two ticks, or guess ahead from the last one.</p>
     </div>
     <div class="panel">
       <div class="head">
@@ -188,7 +188,7 @@ td:first-child { font-weight: 600; white-space: nowrap; }
         <span><i style="background:var(--line)"></i>Path</span>
       </div>
       <p id="s-text"></p>
-      <p class="small muted">Slowed down 6×, so it looks like 5 ticks a second. At real speed the differences are smaller but still visible as stutter or jitter.</p>
+      <p class="small muted">Slowed down 12×, so it looks like 5 ticks a second. At real speed the differences are smaller but still visible as stutter or jitter.</p>
     </div>
     <div class="options">
       <div class="opt">
@@ -196,7 +196,7 @@ td:first-child { font-weight: 600; white-space: nowrap; }
         <h3>Draw ticks directly</h3>
         <ul>
           <li class="pro">No lag, nothing to build</li>
-          <li class="con">Motion steps every 33 ms. It looks like a 30 fps game on any monitor.</li>
+          <li class="con">Motion steps every 17 ms. It looks like a 60 fps game on any monitor, and judders when frames and ticks drift.</li>
         </ul>
       </div>
       <div class="opt recd">
@@ -205,7 +205,7 @@ td:first-child { font-weight: 600; white-space: nowrap; }
         <ul>
           <li class="pro">Always smooth, and always shows a position the simulation actually had</li>
           <li class="pro">Simple: keep the previous and current extract and blend</li>
-          <li class="con">Everything is shown one tick (33 ms) late</li>
+          <li class="con">Everything is shown one tick (17 ms) late</li>
           <li class="con">Spawns and teleports must be flagged so they don't slide in</li>
         </ul>
       </div>
@@ -226,7 +226,7 @@ td:first-child { font-weight: 600; white-space: nowrap; }
     <div class="stack">
       <span class="eyebrow">Decision 2</span>
       <h2 id="q2">Instant feedback despite input delay</h2>
-      <p>With an input delay of 4 ticks, a click on tick 100 only takes effect on tick 104, and interpolation shows it a tick later. That's about 170 ms, which feels sluggish for walking and casting. Visual-only prediction shows the start of the action right away, then lets the confirmed simulation take over. The prediction never touches the simulation.</p>
+      <p>With an input delay of 8 ticks (133 ms), a click on tick 100 only takes effect on tick 108, and interpolation shows it a tick later. That's about 150 ms, which feels sluggish for walking and casting. Visual-only prediction shows the start of the action right away, then lets the confirmed simulation take over. The prediction never touches the simulation.</p>
     </div>
     <div class="panel">
       <div class="tabs" role="group" aria-label="Action" id="p-tabs"></div>
@@ -288,7 +288,7 @@ td:first-child { font-weight: 600; white-space: nowrap; }
     <div class="stack">
       <span class="eyebrow">Decision 3</span>
       <h2 id="q3">Where the simulation runs</h2>
-      <p>At 60 fps a frame has 16.7 ms. A 30 Hz tick happens every other frame. If the tick runs inside the Bevy frame, those frames carry its whole cost. A heavy tick then makes every second frame late, which shows up as a steady stutter even though the average is fine.</p>
+      <p>At 60 fps a frame has 16.7 ms, and a 60 Hz tick happens in every frame. If the tick runs inside the Bevy frame, every frame carries its whole cost. A heavy tick then makes every frame late, and the whole game drops below 60 fps.</p>
     </div>
     <div class="panel">
       <div class="head">
@@ -309,9 +309,9 @@ td:first-child { font-weight: 600; white-space: nowrap; }
         <h3>In the frame first, behind the extract</h3>
         <ul>
           <li class="pro">Simplest to build and debug: one thread of control</li>
-          <li class="pro">Fine while ticks stay under about 8 ms, and your prototype ran 1M entities in 6 ms</li>
+          <li class="pro">Fine while ticks stay under about 10 ms, and your prototype ran 1M entities in 6 ms</li>
           <li class="pro">Bevy only reads the render extract, so moving the tick to its own thread later doesn't change view code</li>
-          <li class="con">If ticks grow, stutter appears and we have to do the move</li>
+          <li class="con">If ticks grow, the frame rate drops and we have to do the move</li>
         </ul>
       </div>
       <div class="opt">
@@ -384,7 +384,7 @@ function truePos(t) {
 const tickPos = k => truePos(k * DT);
 let mode = "interp", playing = !matchMedia("(prefers-reduced-motion: reduce)").matches, t0 = performance.now(), frozenAt = 1.9;
 const S_OPTS = [
-  { id: "raw", name: "Draw ticks directly", text: "The unit jumps from tick to tick. At real speed this is a constant 30 fps stutter, however fast the monitor is." },
+  { id: "raw", name: "Draw ticks directly", text: "The unit jumps from tick to tick. At real speed this is a constant 60 fps stutter, however fast the monitor is." },
   { id: "interp", name: "Interpolate", rec: true, text: "Smooth, and it follows the real path exactly, including the corner and the stop. It trails the latest tick (hollow circle) by one tick." },
   { id: "extra", name: "Extrapolate", text: "Smooth and up to date while moving straight, but it overshoots the corner and the stop, then snaps back when the next tick shows where the unit really went." }
 ];
@@ -431,19 +431,19 @@ requestAnimationFrame(loop);
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (!playing) draw(frozenAt); });
 
 // ---- Prediction timeline ----
-const TICKS = [100, 101, 102, 103, 104, 105, 106, 107, 108];
+const TICKS = [100, 102, 104, 106, 108, 110, 112, 114, 116]; // two ticks per column
 const P_OPTS = [
   { id: "walk", name: "Walk", lanes: [
       ["Your input", ["input:press W", "", "", "", "", "", "", "", ""]],
       ["You, no prediction", ["wait", "wait", "wait", "wait", "wait", "conf:moving", "conf:moving", "conf:moving", "conf:moving"]],
       ["You, with prediction", ["pred:moving", "pred:moving", "pred:moving", "pred:moving", "conf:moving", "conf:moving", "conf:moving", "conf:moving", "conf:moving"]],
       ["Your friend sees you", ["wait", "wait", "wait", "wait", "wait", "wait", "conf:moving", "conf:moving", "conf:moving"]]],
-    text: "With prediction your avatar starts moving on the frame you press the key. On tick 104 the simulation confirms the same position, so nothing changes. Your friend sees you move a little later, which is fine because they don't feel your input delay." },
+    text: "With prediction your avatar starts moving on the frame you press the key. On tick 108 the simulation confirms the same position, so nothing changes. Your friend sees you move a little later, which is fine because they don't feel your input delay." },
   { id: "pushed", name: "Walk, then shoved", lanes: [
       ["Your input", ["input:press W", "", "", "", "", "", "", "", ""]],
       ["You, with prediction", ["pred:moving", "pred:moving", "pred:moving", "pred:moving", "bad:spider shoved you", "fix:easing", "fix:easing", "conf:moving", "conf:moving"]],
       ["Your friend sees you", ["wait", "wait", "wait", "wait", "wait", "wait", "conf:shoved", "conf:moving", "conf:moving"]]],
-    text: "The prediction didn't know the spider would push you. On tick 104 the confirmed position differs, so the view eases your avatar over a few frames instead of snapping. Nothing in the simulation changed, because the prediction was only ever drawn." },
+    text: "The prediction didn't know the spider would push you. On tick 108 the confirmed position differs, so the view eases your avatar over a few frames instead of snapping. Nothing in the simulation changed, because the prediction was only ever drawn." },
   { id: "cast", name: "Chain lightning", lanes: [
       ["Your input", ["input:click targets", "", "", "", "", "", "", "", ""]],
       ["You, no prediction", ["wait", "wait", "wait", "wait", "wait", "conf:arc + damage", "conf:deaths", "", ""]],
@@ -454,12 +454,12 @@ const P_OPTS = [
       ["Your input", ["input:place smelter", "", "", "", "", "", "", "", ""]],
       ["You, with prediction", ["pred:ghost (pending)", "pred:ghost (pending)", "pred:ghost (pending)", "pred:ghost (pending)", "bad:spot taken", "bad:ghost fades", "", "", ""]],
       ["Your friend", ["", "", "", "", "conf:their wall placed", "conf:wall", "conf:wall", "conf:wall", "conf:wall"]]],
-    text: "A teammate placed a wall on the same tiles, and their message came earlier in the apply order. Your placement is rejected on tick 104, so your pending ghost turns red and fades, with a short message saying the spot was taken. Nothing has to be undone, because the ghost was never real." }
+    text: "A teammate placed a wall on the same tiles, and their message came earlier in the apply order. Your placement is rejected on tick 108, so your pending ghost turns red and fades, with a short message saying the spot was taken. Nothing has to be undone, because the ghost was never real." }
 ];
 tabs("p-tabs", P_OPTS, o => {
   const tl = document.getElementById("p-timeline");
   tl.style.gridTemplateColumns = `max-content repeat(${TICKS.length}, minmax(60px, 1fr))`;
-  let html = `<div class="lane"></div>` + TICKS.map(t => `<div class="tick">${t}${t === 104 ? " ✓" : ""}</div>`).join("");
+  let html = `<div class="lane"></div>` + TICKS.map(t => `<div class="tick">${t}${t === 108 ? " ✓" : ""}</div>`).join("");
   for (const [name, cells] of o.lanes) {
     html += `<div class="lane">${name}</div>`;
     for (const c of cells) {
@@ -480,7 +480,7 @@ function drawFrames() {
   const host = document.getElementById("frames"), max = 26, render = 6, budget = 16.7;
   let html = `<div class="budget" style="bottom:${budget / max * 100}%"><span>16.7 ms</span></div>`, missed = 0;
   for (let f = 0; f < 12; f++) {
-    const sim = where === "frame" && f % 2 === 0 ? cost : 0;
+    const sim = where === "frame" ? cost : 0;
     const total = render + sim, miss = total > budget;
     if (miss) missed++;
     html += `<div class="bar ${miss ? "miss" : ""}" style="height:${total / max * 100}%" title="frame ${f + 1}: ${total} ms">` +
@@ -489,8 +489,8 @@ function drawFrames() {
   host.innerHTML = html;
   const v = document.getElementById("t-verdict");
   if (where === "thread") { v.className = "verdict ok"; v.textContent = `Every frame takes 6 ms. The ${cost} ms tick runs on another core in parallel.`; }
-  else if (missed) { v.className = "verdict bad"; v.textContent = `Every other frame takes ${render + cost} ms and misses the budget: a steady 30 fps stutter.`; }
-  else { v.className = "verdict ok"; v.textContent = `Tick frames take ${render + cost} ms, which still fits. Nothing visible.`; }
+  else if (missed) { v.className = "verdict bad"; v.textContent = `Every frame takes ${render + cost} ms and misses the budget, so the game runs below 60 fps.`; }
+  else { v.className = "verdict ok"; v.textContent = `Every frame takes ${render + cost} ms, which still fits. Nothing visible.`; }
 }
 tabs("t-tabs", T_OPTS, o => { where = o.id; drawFrames(); }, "frame");
 tabs("c-tabs", C_OPTS, o => { cost = +o.id; drawFrames(); }, "9");

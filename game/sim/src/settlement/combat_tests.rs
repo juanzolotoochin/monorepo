@@ -592,7 +592,7 @@ fn parity_probe() {
             }
             if second % 30 == 0 {
                 let s = sim.world().settlement().unwrap();
-                println!("{name} t={second}s shots={} kills={} impales={} pierces={} breaches={} health={}", s.combat.shots, s.combat.kills, s.combat.bolt_impales, s.combat.bolt_pierces, s.combat.breaches, s.health);
+                println!("{name} t={second}s delivered={} shots={} kills={} impales={} pierces={} breaches={} health={}", s.metrics.delivered, s.combat.shots, s.combat.kills, s.combat.bolt_impales, s.combat.bolt_pierces, s.combat.breaches, s.health);
             }
         }
     }

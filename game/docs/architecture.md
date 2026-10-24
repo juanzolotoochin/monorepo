@@ -16,6 +16,10 @@ The approach was validated in an earlier prototype:
 Interactive explainers for each decision live in [`design/`](design/). Open them
 in a browser.
 
+Dated snapshots of the architecture diagram (crates, the frame, the tick
+stages, where each feature lives) are in
+[`architecture-reviews/`](architecture-reviews/), one per review.
+
 ## Principles
 
 - **Deterministic lockstep.** Every peer simulates the whole world from the same
@@ -212,10 +216,10 @@ criticals, spear punctures, arc-coil chains, stagger and knockback.
   game's rate, and is converted to the simulation's rate.
 
 Compared with the original over the same two minutes (`parity_probe`), the
-forest outpost delivers 99 units versus 98 and kills 21 ghouls versus 23. The
-combat arena's ballista lands all 18 bolts in both; the pierce rolls fall
-differently (same formula, different tick numbers and IDs at 30 Hz), so 8
-ghouls die instead of 13. (Measured at 30 Hz, before the move to 60 Hz.)
+forest outpost delivers 99 units versus 98 and kills 23 ghouls, as the
+original does. The combat arena's ballista lands all 18 bolts in both; the
+pierce rolls fall differently (same formula, different IDs), so 10 ghouls die
+instead of 13.
 
 ## Networking
 

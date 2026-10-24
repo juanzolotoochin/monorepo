@@ -139,7 +139,7 @@ td:first-child { font-weight: 600; white-space: nowrap; }
 
   <div class="answer">
     <span class="eyebrow">Short answer for Juan</span>
-    <p>Most of our network code is the lockstep protocol: turns, input delay, time sync, desync checks and joins. We'd need it on top of gRPC too. gRPC would only replace the bottom layer that moves bytes, and it does that over TCP. When one packet is lost, TCP holds back everything after it until the retransmit arrives, usually 150–300 ms later. In lockstep that freezes the game. Over UDP, the next packet 33 ms later already carries the lost data. On top of that, Steam and EOS relays are message-based, not TCP, so gRPC can't run over them without an adapter. gRPC is a good fit for services around the game: lobbies, accounts, uploading crash and desync reports.</p>
+    <p>Most of our network code is the lockstep protocol: turns, input delay, time sync, desync checks and joins. We'd need it on top of gRPC too. gRPC would only replace the bottom layer that moves bytes, and it does that over TCP. When one packet is lost, TCP holds back everything after it until the retransmit arrives, usually 150–300 ms later. In lockstep that freezes the game. Over UDP, the next packet 17 ms later already carries the lost data. On top of that, Steam and EOS relays are message-based, not TCP, so gRPC can't run over them without an adapter. gRPC is a good fit for services around the game: lobbies, accounts, uploading crash and desync reports.</p>
   </div>
 
   <section class="decision" aria-labelledby="layers">
@@ -163,9 +163,9 @@ td:first-child { font-weight: 600; white-space: nowrap; }
     <div class="stack">
       <span class="eyebrow">The main technical reason</span>
       <h2 id="loss">What happens when one packet is lost</h2>
-      <p>The host sends one turn packet per tick, 30 a second. Packet 105 gets lost on the way to the client. Lockstep needs every turn, so the question is how fast the missing data arrives.</p>
+      <p>The host sends one turn packet per tick, 60 a second. Packet 105 gets lost on the way to the client. Lockstep needs every turn, so the question is how fast the missing data arrives.</p>
       <p><strong>TCP (gRPC)</strong> guarantees order, so packets 106, 107 and later arrive but are held back by the operating system until 105 is retransmitted. That takes at least one round trip after the loss is noticed, and often a full retransmission timeout, around 200 ms or more. This is called <em>head-of-line blocking</em>.</p>
-      <p><strong>UDP with redundancy</strong>, our design, has each packet repeat every turn the client hasn't acknowledged. Packet 106 carries turns 105 and 106, so the gap is filled 33 ms later, inside the input-delay buffer.</p>
+      <p><strong>UDP with redundancy</strong>, our design, has each packet repeat every turn the client hasn't acknowledged. Packet 106 carries turns 105 and 106, so the gap is filled 17 ms later, inside the input-delay buffer.</p>
     </div>
     <div class="panel">
       <div class="tabs" role="group" aria-label="Transport" id="t-tabs"></div>
@@ -179,7 +179,7 @@ td:first-child { font-weight: 600; white-space: nowrap; }
         <span><i style="background:var(--bad)"></i>Client stalls</span>
       </div>
       <div class="verdict" id="t-verdict"></div>
-      <p class="small muted">Simplified: 40 ms one-way latency, input delay of 4 ticks, and a TCP retransmit about 200 ms after the loss. Real TCP sometimes recovers faster with fast retransmit, but never faster than a round trip.</p>
+      <p class="small muted">Simplified: 17 ms one-way latency, input delay of 8 ticks (133 ms), and a TCP retransmit about 200 ms after the loss. Real TCP sometimes recovers faster with fast retransmit, but never faster than a round trip.</p>
     </div>
 
     <div class="panel">
@@ -272,18 +272,18 @@ td:first-child { font-weight: 600; white-space: nowrap; }
 </main>
 
 <script>
-const TICKS = [104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114];
-// Each column is one tick (33 ms). Turn N is needed by the client at tick N + 4.
+const TICKS = [104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119];
+// Each column is one tick (17 ms). Turn N is needed by the client at tick N + 8.
 const T_OPTS = [
   { id: "tcp", name: "TCP (gRPC)", lanes: [
-      ["Host sends", ["sent:104", "lost:105", "sent:106", "sent:107", "sent:108", "sent:109", "sent:110 +105", "sent:111", "sent:112", "sent:113", "sent:114"]],
-      ["Arrives at client", ["none:", "got:104", "none:", "held:106", "held:107", "held:108", "held:109", "got:105–110", "got:111", "got:112", "got:113"]],
-      ["Client simulates", ["sim:100", "sim:101", "sim:102", "sim:103", "sim:104", "stall:stall", "stall:stall", "stall:stall", "sim:105–106", "sim:107", "sim:108"]]],
-    verdict: ["bad", "Turns 106–109 reached the client's machine on time, but TCP withheld them until 105 was retransmitted. The game froze for 3 ticks (about 100 ms) and then had to catch up."] },
+      ["Host sends", ["sent:104", "lost:105", "sent:106", "sent:107", "sent:108", "sent:109", "sent:110", "sent:111", "sent:112", "sent:113", "sent:114", "sent:115", "sent:116 +105", "sent:117", "sent:118", "sent:119"]],
+      ["Arrives at client", ["none:", "got:104", "none:", "held:106", "held:107", "held:108", "held:109", "held:110", "held:111", "held:112", "held:113", "held:114", "held:115", "got:105–116", "got:117", "got:118"]],
+      ["Client simulates", ["sim:96", "sim:97", "sim:98", "sim:99", "sim:100", "sim:101", "sim:102", "sim:103", "sim:104", "stall:stall", "stall:stall", "stall:stall", "stall:stall", "stall:stall", "sim:105–108", "sim:109–111"]]],
+    verdict: ["bad", "Turns 106–115 reached the client's machine on time, but TCP withheld them until 105 was retransmitted. The game froze for 5 ticks (about 83 ms) and then had to catch up."] },
   { id: "udp", name: "UDP with redundancy", rec: true, lanes: [
-      ["Host sends", ["sent:104", "lost:105", "sent:106 +105", "sent:107", "sent:108", "sent:109", "sent:110", "sent:111", "sent:112", "sent:113", "sent:114"]],
-      ["Arrives at client", ["none:", "got:104", "none:", "got:105 106", "got:107", "got:108", "got:109", "got:110", "got:111", "got:112", "got:113"]],
-      ["Client simulates", ["sim:100", "sim:101", "sim:102", "sim:103", "sim:104", "sim:105", "sim:106", "sim:107", "sim:108", "sim:109", "sim:110"]]],
+      ["Host sends", ["sent:104", "lost:105", "sent:106 +105", "sent:107", "sent:108", "sent:109", "sent:110", "sent:111", "sent:112", "sent:113", "sent:114", "sent:115", "sent:116", "sent:117", "sent:118", "sent:119"]],
+      ["Arrives at client", ["none:", "got:104", "none:", "got:105 106", "got:107", "got:108", "got:109", "got:110", "got:111", "got:112", "got:113", "got:114", "got:115", "got:116", "got:117", "got:118"]],
+      ["Client simulates", ["sim:96", "sim:97", "sim:98", "sim:99", "sim:100", "sim:101", "sim:102", "sim:103", "sim:104", "sim:105", "sim:106", "sim:107", "sim:108", "sim:109", "sim:110", "sim:111"]]],
     verdict: ["ok", "Packet 106 also carried turn 105, which arrived one tick late but well before the client needed it. Nobody noticed the loss."] }
 ];
 const host = document.getElementById("t-tabs");
@@ -306,21 +306,21 @@ function draw(o) {
 }
 draw(T_OPTS[0]);
 
-// Loss rate model: 30 turn packets per second to each client.
+// Loss rate model: 60 turn packets per second to each client.
 // TCP: every loss stalls (retransmit ~200 ms > 133 ms buffer).
-// UDP with redundancy: a stall needs 4+ consecutive losses (the input-delay buffer covers 3).
+// UDP with redundancy: a stall needs 8+ consecutive losses (the input-delay buffer covers 7).
 function updateLoss() {
   const p = +document.getElementById("loss-rate").value / 100;
   document.getElementById("loss-out").textContent = (p * 100).toFixed(1) + "%";
-  const perMin = 1800;
+  const perMin = 3600;
   const tcp = perMin * p;
-  const udp = perMin * Math.pow(p, 4);
+  const udp = perMin * Math.pow(p, 8);
   document.getElementById("tcp-stat").textContent = tcp.toFixed(0);
   document.getElementById("udp-stat").textContent = udp < 0.01 ? "≈ 0" : udp.toFixed(2);
   const secs = tcp > 0 ? (60 / tcp) : Infinity;
   document.getElementById("loss-note").textContent =
     `With ${(p * 100).toFixed(1)}% loss, a TCP client freezes for about 100–200 ms roughly every ${secs.toFixed(secs < 10 ? 1 : 0)} seconds. ` +
-    `With redundancy, a stall needs 4 lost packets in a row, which at this rate is about once every ${udp > 0 ? Math.round(1 / udp) : "∞"} minutes. ` +
+    `With redundancy, a stall needs 8 lost packets in a row, which at this rate ${1 / udp > 1e6 ? "never happens in practice" : `is about once every ${Math.round(1 / udp)} minutes`}. ` +
     `Home Wi-Fi commonly sees 0.5–2% loss.`;
 }
 document.getElementById("loss-rate").addEventListener("input", updateLoss);
