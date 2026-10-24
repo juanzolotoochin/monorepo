@@ -57,6 +57,8 @@ pub struct Game {
     pub center: FxVec2,
     /// The last movement intent sent, so held keys don't resend it every frame.
     walking: Option<(FxVec2, bool)>,
+    /// A local click target while the host has not applied its command yet.
+    visual_goal: Option<(Vec3, bool)>,
     /// The tick on which the newest command applies.
     pub applies_at: u64,
     /// Where to write the session's tick-0 save and input log on exit.
@@ -94,6 +96,7 @@ impl Default for Game {
             alpha: 0.0,
             center: FxVec2::ZERO,
             walking: None,
+            visual_goal: None,
             applies_at: 0,
             record: None,
             replay: None,
@@ -143,8 +146,8 @@ impl Game {
         Some(self.settlement()?.agents[self.player()? as usize].id.clone())
     }
 
-    /// Sends a command; it applies on the next tick in single-player, and
-    /// after the input delay in a networked game.
+    /// Sends a command; it applies on the next host tick locally, or after
+    /// the input delay when joining another host.
     pub fn command(&mut self, kind: CommandKind) {
         let Some(session) = self.session.as_mut() else { return };
         let tick = session.world().map_or(0, |w| w.tick());
@@ -177,6 +180,7 @@ impl Game {
     /// rotated into arena space); a zero direction stops it.
     pub fn walk(&mut self, direction: Vec2, run: bool) {
         let Some(agent) = self.player() else { return };
+        self.visual_goal = None;
         let direction = FxVec2::new(Fx::quantize(direction.x), Fx::quantize(direction.y)).normalize_or_zero();
         if self.walking == Some((direction, run)) {
             return;
@@ -190,6 +194,7 @@ impl Game {
     pub fn go_to(&mut self, target: Vec3, run: bool) {
         let Some(agent) = self.player() else { return };
         self.walking = None;
+        self.visual_goal = Some((target, run));
         let target = self.to_sim(target);
         self.command(CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target, run } });
     }
@@ -297,6 +302,7 @@ pub fn build_world(world: &mut World) {
     game.current = game.settlement().cloned();
     game.tick = 0;
     game.walking = None;
+    game.visual_goal = None;
     game.named = false;
     game.applies_at = 0;
     game.events.clear();
@@ -466,7 +472,8 @@ pub fn follow_avatar(
     let before = game.previous.as_ref().and_then(|p| p.agents.get(index as usize)).unwrap_or(a);
     // The local single-player avatar can use the newest confirmed pose.
     // Interpolating from the previous tick adds a full tick of visible lag.
-    let alpha = if game.network.is_none() && game.session.as_ref().is_some_and(|session| !session.is_replay()) {
+    let alpha = if !matches!(game.network, Some(Network::Join(_)))
+        && game.session.as_ref().is_some_and(|session| !session.is_replay()) {
         1.0
     } else {
         game.alpha
@@ -489,10 +496,20 @@ pub fn follow_avatar(
             preview.agent = Some(index);
             preview.scene = game.scene;
         }
-        if let Some((direction, run)) = game.walking.filter(|_| controls.attack.is_none() && a.avatar.dig.is_none()) {
+        let pending_goal = game.visual_goal.filter(|_| {
+            game.session.as_ref().is_some_and(|session| session.pending_inputs() > 0)
+        });
+        let movement = game.walking
+            .map(|(direction, run)| (Vec3::new(direction.x.to_f32(), 0.0, direction.y.to_f32()), run))
+            .or_else(|| pending_goal.map(|(goal, run)| {
+                let delta = crate::navigation::flat(goal - preview.position.unwrap());
+                (if delta.length() < 0.1 { Vec3::ZERO } else { delta.normalize() }, run)
+            }))
+            .filter(|_| controls.attack.is_none() && a.avatar.dig.is_none());
+        let moving_input = movement.is_some_and(|(direction, _)| direction != Vec3::ZERO);
+        if let Some((direction, run)) = movement {
             preview.active = true;
             let dt = time.delta_secs().min(0.05);
-            let direction = Vec3::new(direction.x.to_f32(), 0.0, direction.y.to_f32());
             let desired = direction * if run { 5.6 } else { WALK_SPEED };
             let acceleration = if desired == Vec3::ZERO { 32.0 } else { 26.0 };
             let change = (desired - preview.velocity).clamp_length_max(acceleration * dt);
@@ -521,7 +538,7 @@ pub fn follow_avatar(
             }
         }
         if preview.active
-            && game.walking.is_none_or(|(direction, _)| direction == FxVec2::ZERO)
+            && !moving_input
             && game.session.as_ref().is_some_and(|session| session.pending_inputs() == 0)
             && a.avatar.velocity == FxVec2::ZERO
         {
@@ -529,7 +546,7 @@ pub fn follow_avatar(
             preview.position = Some(preview.position.unwrap() + remaining.clamp_length_max(2.0 * time.delta_secs()));
         }
         if preview.active && preview.position.unwrap().distance(to) < 0.02
-            && game.walking.is_none_or(|(direction, _)| direction == FxVec2::ZERO)
+            && !moving_input
         {
             preview.active = false;
         }
@@ -690,6 +707,7 @@ pub fn strike(game: &mut Game, controls: &mut Controls, library: &SceneLibrary, 
         .unwrap_or([0.0, 0.6, 0.25]);
     let flat = crate::navigation::flat(aim).normalize_or(Vec3::Z);
     game.walking = None;
+    game.visual_goal = None;
     game.command(CommandKind::Attack {
         agent,
         weapon,
@@ -739,6 +757,38 @@ mod tests {
             break;
         }
         assert!(observed_movement, "movement never reached the simulation");
+    }
+
+    #[test]
+    fn host_avatar_responds_on_the_next_tick_and_shows_that_pose() {
+        let options = crate::control::Options { simulation: true, ..default() };
+        let hub = crate::control::Hub::new(options.clone()).unwrap();
+        let mut library = SceneLibrary::new();
+        library.initial = library.index("field").unwrap();
+        let mut app = crate::build_app(options, library, hub);
+        let mut game = Game::default();
+        game.network = Some(Network::Host("127.0.0.1:0".parse().unwrap()));
+        app.insert_resource(game);
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::from_secs_f64(1.0 / 120.0),
+        ));
+        app.update();
+        let start = player_position(&mut app);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyW);
+        for frame in 1..=4 {
+            app.update();
+            let game = app.world().resource::<Game>();
+            let index = game.player().unwrap() as usize;
+            let confirmed = game.to_view(game.current.as_ref().unwrap().agents[index].position);
+            if crate::navigation::flat(confirmed - start).length() > 0.001 {
+                let shown = player_position(&mut app);
+                assert!(crate::navigation::flat(shown - confirmed).length() < 0.001,
+                    "host avatar displayed an older tick after movement applied");
+                assert!(frame <= 2, "host movement waited {frame} frames");
+                return;
+            }
+        }
+        panic!("host input did not move the avatar by the next simulation tick");
     }
 
     #[test]
@@ -813,15 +863,37 @@ mod tests {
             "the local avatar did not settle on the host's confirmed pose");
         let goal = confirmed + Vec3::new(0.6, 0.0, 0.0);
         client.world_mut().resource_mut::<Game>().go_to(goal, false);
+        client.update();
+        host.update();
+        let route_preview = player_position(&mut client);
+        assert!(crate::navigation::flat(route_preview - last).length() > 0.001,
+            "click-to-move gave no immediate visual response");
+        let game = client.world().resource::<Game>();
+        let index = game.player().unwrap() as usize;
+        let still_confirmed = game.to_view(game.current.as_ref().unwrap().agents[index].position);
+        assert!(crate::navigation::flat(still_confirmed - confirmed).length() < 0.001,
+            "the click-to-move test did not observe prediction before confirmation");
         let mut followed_route = false;
-        for _ in 0..40 {
+        let mut previous_shown = route_preview;
+        for _ in 0..90 {
             client.update();
             host.update();
-            if crate::navigation::flat(player_position(&mut client) - last).length() > 0.05 {
+            let shown = player_position(&mut client);
+            assert!(crate::navigation::flat(shown - previous_shown).length() < 0.2,
+                "click-to-move preview jumped while reconciling with the host");
+            previous_shown = shown;
+            let game = client.world().resource::<Game>();
+            let index = game.player().unwrap() as usize;
+            let confirmed_route = game.to_view(game.current.as_ref().unwrap().agents[index].position);
+            if crate::navigation::flat(confirmed_route - confirmed).length() > 0.05 {
                 followed_route = true;
-                break;
             }
         }
         assert!(followed_route, "the joined avatar stopped following confirmed click-to-move motion");
+        let game = client.world().resource::<Game>();
+        let index = game.player().unwrap() as usize;
+        let confirmed_route = game.to_view(game.current.as_ref().unwrap().agents[index].position);
+        assert!(crate::navigation::flat(previous_shown - confirmed_route).length() < 0.1,
+            "click-to-move preview did not settle on the confirmed route");
     }
 }

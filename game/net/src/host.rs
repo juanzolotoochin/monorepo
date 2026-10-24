@@ -122,7 +122,8 @@ impl<T: Transport> Host<T> {
     }
 
     pub fn input_delay(&self) -> u64 {
-        self.config.input_delay
+        // The advertised delay still applies to remote clients.
+        0
     }
 
     pub fn players(&self) -> Vec<PlayerId> {
@@ -143,7 +144,7 @@ impl<T: Transport> Host<T> {
 
     /// Schedules a command from the host's own player.
     pub fn queue(&mut self, kind: CommandKind) {
-        let tick = self.sim.world().tick() + self.config.input_delay;
+        let tick = self.sim.world().tick();
         self.open.entry(tick).or_default().push(Command { player: HOST_PLAYER, kind });
     }
 
