@@ -8,6 +8,7 @@ mod impact;
 mod jetpack;
 mod legacy;
 mod lockstep;
+mod menu;
 mod digging;
 mod nametags;
 mod navigation;
@@ -28,7 +29,7 @@ use gameplay::*;
 
 fn main() {
     let args: Vec<_> = std::env::args().collect();
-    let options = control::Options::from_args(&args).unwrap_or_else(|error| {
+    let mut options = control::Options::from_args(&args).unwrap_or_else(|error| {
         eprintln!("{error}");
         std::process::exit(2)
     });
@@ -43,6 +44,12 @@ fn main() {
         eprintln!("{error}");
         std::process::exit(2)
     });
+    options.menu = !options.simulation
+        && options.script.is_none()
+        && options.port.is_none()
+        && options.frames_dir.is_none()
+        && network.is_none()
+        && !args.iter().any(|arg| matches!(arg.as_str(), "--scene" | "--record-input" | "--replay-input" | "--capture-dir"));
     if network.is_some() {
         // Networked games start on the field unless asked otherwise, and
         // every peer must pick the same scene.
@@ -127,11 +134,13 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
     let offscreen = options.frames_dir.is_some();
     let fps = options.fps();
     let deterministic = simulation || options.script.is_some();
+    let launch_menu = menu::LaunchMenu::new(options.menu, &scenes);
     let mut app = App::new();
     app.init_resource::<lockstep::Game>()
         .insert_resource(options)
         .insert_resource(hub)
         .init_resource::<control::Video>()
+        .insert_resource(launch_menu)
         .insert_resource(ClearColor(Color::srgb(0.018, 0.025, 0.045)))
         .insert_resource(GlobalAmbientLight {
             color: Color::srgb(0.57, 0.70, 1.0),
@@ -212,6 +221,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         )));
     }
     app.add_systems(Startup, (scene::setup, scene::hud).chain());
+    app.add_systems(Startup, menu::setup.after(scene::hud));
     if offscreen {
         app.add_systems(Startup, control::setup_render.after(scene::setup));
     }
@@ -266,14 +276,18 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
             (telemetry::end, control::end).chain(),
             control::capture_frame.run_if(control::rendered),
         )
-            .chain(),
+            .chain()
+            .run_if(menu::playing),
     );
+    app.add_systems(Update, menu::update.before(telemetry::begin).run_if(control::interactive));
+    app.add_systems(Update, menu::capture.after(menu::update).run_if(control::interactive));
     app.add_systems(Last, on_exit);
     if !simulation {
         app.add_systems(
             Update,
-            (draw_navigation, keyboard_actions).run_if(control::interactive),
+            keyboard_actions.run_if(control::interactive),
         )
+        .add_systems(Update, draw_navigation.run_if(control::interactive).run_if(menu::playing))
         .add_systems(
             PostUpdate,
             (
@@ -283,7 +297,8 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
                 nametags::update,
                 digging::feedback,
             )
-                .after(bevy::transform::TransformSystems::Propagate),
+                .after(bevy::transform::TransformSystems::Propagate)
+                .run_if(menu::playing),
         );
     }
     app
