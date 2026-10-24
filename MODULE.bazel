@@ -540,6 +540,6 @@ http_archive(
 )
 
 # Opt-in local GPU video demos; the pinned native encoder is fetched lazily.
-local_demo_tools = use_repo_rule("//game/build/game_demo:repositories.bzl", "local_demo_tools")
+local_demo_tools = use_repo_rule("//kestrel/build/game_demo:repositories.bzl", "local_demo_tools")
 
 local_demo_tools(name = "game_demo_tools")

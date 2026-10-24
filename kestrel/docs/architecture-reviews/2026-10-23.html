@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kestrel Architecture</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a single reading column; the crate map is a blueprint sheet with a detail panel beside it, then the tick pipeline and a lookup table. */
+:root {
+  --bg: #f3f5f7;
+  --sheet: #ffffff;
+  --fg: #172029;
+  --muted: #5b6875;
+  --line: #d3dae1;
+  --grid: #e8edf1;
+  --accent: #1f6fb2;          /* selection, links */
+  --det: #2f7d5b;             /* deterministic crates */
+  --det-bg: #e6f3ec;
+  --bevy: #b4561f;            /* Bevy / view crates */
+  --bevy-bg: #fbeee5;
+  --tool: #6a5aa8;            /* tools */
+  --tool-bg: #eeebf8;
+  --code-bg: #eef2f5;
+  --display: "Chakra Petch", "Segoe UI", system-ui, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1419; --sheet: #141c23; --fg: #dde5ec; --muted: #8e9ba7; --line: #2a3640; --grid: #1a242c;
+    --accent: #6cb2ee; --det: #6cc59a; --det-bg: #15291f; --bevy: #f0975f; --bevy-bg: #2d1c12;
+    --tool: #a99ae6; --tool-bg: #211d36; --code-bg: #1b252e; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1419; --sheet: #141c23; --fg: #dde5ec; --muted: #8e9ba7; --line: #2a3640; --grid: #1a242c;
+  --accent: #6cb2ee; --det: #6cc59a; --det-bg: #15291f; --bevy: #f0975f; --bevy-bg: #2d1c12;
+  --tool: #a99ae6; --tool-bg: #211d36; --code-bg: #1b252e; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 15px; line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 32px 64px;
+}
+main { max-width: 1180px; margin: 0 auto; display: grid; gap: 48px; }
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; letter-spacing: .01em; }
+h1 { font-size: clamp(28px, 4vw, 40px); font-weight: 700; }
+h2 { font-size: 24px; font-weight: 600; }
+h3 { font-size: 17px; font-weight: 600; }
+p { margin: 0; max-width: 72ch; }
+code, .mono { font-family: var(--mono); font-size: .88em; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+.eyebrow { font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); }
+header { display: grid; gap: 12px; }
+.rules { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-top: 8px; }
+.rule { border-left: 3px solid var(--det); padding: 4px 0 4px 12px; font-size: 14px; color: var(--muted); }
+.rule b { color: var(--fg); display: block; font-weight: 600; }
+section { display: grid; gap: 16px; }
+.section-head { display: grid; gap: 6px; }
+
+/* Crate map */
+.map { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
+@media (max-width: 900px) { .map { grid-template-columns: minmax(0, 1fr); } }
+.sheet { background: var(--sheet); border: 1px solid var(--line); border-radius: 8px; overflow-x: auto; }
+.sheet svg { display: block; width: 100%; min-width: 720px; height: auto; }
+.crate { cursor: pointer; }
+.crate rect.box { stroke-width: 1.5; transition: stroke-width .12s; }
+.crate:hover rect.box, .crate:focus-visible rect.box { stroke-width: 3; }
+.crate:focus { outline: none; }
+.crate.sel rect.box { stroke: var(--accent); stroke-width: 3; }
+.crate text { pointer-events: none; }
+.edge { fill: none; stroke: var(--line); stroke-width: 1.4; transition: stroke .12s, opacity .12s; }
+.edge.out { stroke: var(--accent); stroke-width: 2; }
+.edge.in { stroke: var(--muted); stroke-width: 1.8; stroke-dasharray: 5 4; }
+.edge.dim { opacity: .25; }
+.legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; color: var(--muted); padding: 10px 14px; border-top: 1px solid var(--line); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 12px; height: 12px; border-radius: 3px; border: 1.5px solid; display: inline-block; }
+.ln { width: 22px; height: 0; border-top: 2px solid var(--accent); display: inline-block; }
+.ln.dash { border-top: 2px dashed var(--muted); }
+
+.panel { background: var(--sheet); border: 1px solid var(--line); border-radius: 8px; padding: 18px; display: grid; gap: 12px; min-width: 0; }
+.panel .tag { justify-self: start; font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .1em; padding: 2px 8px; border-radius: 99px; border: 1px solid; }
+.panel ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.panel li { display: grid; gap: 1px; font-size: 13.5px; }
+.panel li code { justify-self: start; }
+.panel li span { color: var(--muted); }
+.panel .deps { font-size: 13px; color: var(--muted); }
+
+/* Tick pipeline */
+.flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0; background: var(--sheet); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.step { padding: 16px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); display: grid; gap: 6px; align-content: start; position: relative; min-width: 0; }
+.step .n { font-family: var(--display); font-size: 13px; font-weight: 600; color: var(--muted); }
+.step .where { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; justify-self: start; padding: 1px 7px; border-radius: 99px; }
+.where.bevy { color: var(--bevy); background: var(--bevy-bg); }
+.where.det { color: var(--det); background: var(--det-bg); }
+.step p { font-size: 13.5px; color: var(--muted); }
+.step code { font-size: 12px; }
+
+/* Stage table and lookup */
+.tablewrap { overflow-x: auto; background: var(--sheet); border: 1px solid var(--line); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; min-width: 760px; font-size: 13.5px; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+th { font-family: var(--mono); font-weight: 500; font-size: 11.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); background: var(--grid); }
+tr:last-child td { border-bottom: 0; }
+td:first-child { font-weight: 600; white-space: nowrap; }
+td code { font-size: 12px; white-space: nowrap; line-height: 1.9; }
+td .note { color: var(--muted); display: block; }
+.par { font-family: var(--mono); font-size: 11px; color: var(--det); }
+.filter { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.filter input { font: inherit; font-size: 14px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--sheet); color: var(--fg); width: min(320px, 100%); }
+.filter input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.filter small { color: var(--muted); }
+footer { color: var(--muted); font-size: 13px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<main>
+  <header>
+    <div class="eyebrow">kestrel/ · architecture review · 2026-10-23</div>
+    <h1>Kestrel architecture</h1>
+    <p>Where each piece of logic lives. The game is a deterministic simulation that every machine runs from the same inputs, with Bevy drawing it. Three rules decide where code goes:</p>
+    <div class="rules">
+      <div class="rule"><b>Gameplay rules live in <code>sim</code></b>Fixed-point math, no Bevy, no floats, no clocks. Same inputs give the same bits on every machine.</div>
+      <div class="rule"><b>Only commands go in</b>Keys and clicks become a <code>CommandKind</code>. The network carries commands, never state.</div>
+      <div class="rule"><b>The app only reads</b>After each tick the app copies the settlement into mirrors and draws them, interpolated between the last two ticks.</div>
+    </div>
+  </header>
+
+  <section>
+    <div class="section-head">
+      <div class="eyebrow">1 · Crates</div>
+      <h2>The crate map</h2>
+      <p>Arrows point from a crate to what it depends on. Click a crate to see its main files and highlight its links.</p>
+    </div>
+    <div class="map">
+      <div class="sheet">
+        <svg id="map" viewBox="0 0 1000 540" role="img" aria-label="Crate dependency map"></svg>
+        <div class="legend">
+          <span><i class="sw" style="background:var(--det-bg);border-color:var(--det)"></i>Deterministic</span>
+          <span><i class="sw" style="background:var(--bevy-bg);border-color:var(--bevy)"></i>Bevy (view)</span>
+          <span><i class="sw" style="background:var(--tool-bg);border-color:var(--tool)"></i>Tool</span>
+          <span><i class="ln"></i>Depends on</span>
+          <span><i class="ln dash"></i>Used by</span>
+        </div>
+      </div>
+      <aside class="panel" id="panel" aria-live="polite"></aside>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <div class="eyebrow">2 · One frame</div>
+      <h2>From a key press to the screen</h2>
+      <p>What happens when you press F to dig, in order. Steps 1 and 6–7 are Bevy systems in <code>app</code>, chained in <code>main.rs</code>; steps 2–5 are deterministic.</p>
+    </div>
+    <div class="flow">
+      <div class="step"><span class="n">1 · Input</span><span class="where bevy">app</span>
+        <p><code>lockstep::keyboard_input</code>, <code>mouse_input</code>, <code>piles::input</code> or a script through <code>control</code> call <code>Game::dig()</code>, which becomes <code>CommandKind::DigDown</code>.</p></div>
+      <div class="step"><span class="n">2 · Session</span><span class="where det">session</span>
+        <p><code>Session::queue</code> hands it to this machine's peer: a <code>Host</code>, a <code>Client</code> or a replay. <code>lockstep::step</code> calls <code>Session::update(clock)</code> every frame.</p></div>
+      <div class="step"><span class="n">3 · Turn</span><span class="where det">net</span>
+        <p>The host puts the command in the turn for tick T (input delay ahead) and sends turns to clients. A client runs tick T only once it has turn T.</p></div>
+      <div class="step"><span class="n">4 · Tick</span><span class="where det">sim</span>
+        <p><code>World::step(turn)</code> runs the six stages below, 60 times a second. The owner check drops commands for avatars you don't own.</p></div>
+      <div class="step"><span class="n">5 · Hash</span><span class="where det">sim · net</span>
+        <p>After housekeeping, <code>step</code> hashes the state. Clients report hashes, and the host compares them to catch a desync.</p></div>
+      <div class="step"><span class="n">6 · Mirror</span><span class="where bevy">app</span>
+        <p>After each tick <code>lockstep::step</code> keeps the last two settlements and the events in <code>Game</code>. <code>mirror_settlement</code>, <code>piles::mirror</code> and <code>digging::update</code> copy them into view state.</p></div>
+      <div class="step"><span class="n">7 · Draw</span><span class="where bevy">app</span>
+        <p>Views place things between the two ticks by <code>Game.alpha</code>. Events (tosses, hits, layers dug) start effects, sounds and flying units. <code>telemetry</code> times the session, each tick stage and the copy for the FPS overlay (F3).</p></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <div class="eyebrow">3 · One tick</div>
+      <h2>The six stages of <code>World::step</code></h2>
+      <p>In <code>sim/src/world.rs</code>, which times each stage (<code>World::stage_times</code>). The world is split into chunks; two stages run in parallel per chunk and can only change the entity itself. Anything touching something else is a message, applied in a fixed order.</p>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Stage</th><th>What it may do</th><th>Settlement code it runs</th></tr></thead>
+        <tbody>
+          <tr><td>1 · Apply commands</td><td>Commands in player order. A command for an avatar runs only for its owner.</td>
+            <td><code>move_avatar</code> <code>attack</code> <code>dig</code> <code>pile_action</code> <code>transfer</code> <code>jetpack</code> <code>equip_weapon</code> <code>dispense</code> <code>memory_*</code><span class="note">all in <code>settlement/mod.rs</code>, delegating to <code>avatar.rs</code>, <code>piles.rs</code>, <code>combat.rs</code></span></td></tr>
+          <tr><td>2 · Self update <span class="par">parallel</span></td><td>Each entity changes only itself, reading last tick's world.</td>
+            <td><code>settlement.self_update</code><span class="note">avatars walk, fly and center on a dig; haulers move; threats advance</span></td></tr>
+          <tr><td>3 · Read phase <span class="par">parallel</span></td><td>Read the world, write messages. No writes to state.</td>
+            <td><code>settlement.read</code><span class="note">hauler decisions, projectile collisions, which threats a strike reaches, route planning (<code>nav.rs</code>)</span></td></tr>
+          <tr><td>4 · Merge</td><td>Concatenate outboxes in a shuffled but seeded chunk order.</td>
+            <td><span class="note">generic, in <code>world.rs</code></span></td></tr>
+          <tr><td>5 · Apply messages</td><td>One queue per message type, applied in declaration order (<code>messages.rs</code>).</td>
+            <td><code>economy</code> <code>resolve_docks</code> <code>reserve</code> <code>attach</code> <code>load</code> <code>unload</code> <code>pile_step</code> <code>strike</code> <code>projectile_*</code> <code>breach</code> <code>fire</code><span class="note"><code>economy.rs</code>, <code>haulers.rs</code>, <code>piles.rs</code>, <code>combat.rs</code></span></td></tr>
+          <tr><td>6 · Housekeeping</td><td>Single-threaded bookkeeping and index rebuilds. The state hash follows.</td>
+            <td><code>combat_housekeeping</code> <code>avatar_housekeeping</code> <code>dig_housekeeping</code> <code>pile_housekeeping</code> <code>memory_housekeeping</code><span class="note">a finished dig deepens the pit and drops ore into piles here</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <div class="eyebrow">4 · Lookup</div>
+      <h2>Where does a feature live?</h2>
+      <p>Each feature has its rules in <code>sim</code> and its look and controls in <code>app</code>. Paths are under <code>kestrel/</code>.</p>
+    </div>
+    <div class="filter"><label for="q" class="eyebrow">Filter</label><input id="q" type="search" placeholder="dig, pile, host, weapon…" autocomplete="off"><small id="count"></small></div>
+    <div class="tablewrap">
+      <table id="lookup">
+        <thead><tr><th>Feature</th><th>Rules (deterministic)</th><th>View and input (app)</th><th>Data</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>Built from the source on 2026-10-23 (branch <code>sim-60hz</code>). Earlier and later reviews sit next to this file, so <code>git diff --no-index</code> between two of them shows what moved. The written design is in <code>kestrel/docs/architecture.md</code> and <code>kestrel/docs/design/</code>.</footer>
+</main>
+
+<script>
+const crates = {
+  app: { x: 40, y: 40, w: 420, kind: "bevy", label: "app", sub: "the game · demo.exe",
+    about: "The full game: every scene, input, rendering, sound, scripted demos and the control port. It builds each scene's world and steps it through a session, then draws mirrors of the result.",
+    deps: ["session", "net", "save", "sim", "content", "fx", "assetc"],
+    files: [
+      ["main.rs", "builds the Bevy app; the system order of every frame"],
+      ["lockstep.rs", "the bridge: Game resource, build_world, step, input → commands, end_session"],
+      ["telemetry.rs", "FPS overlay; F3 adds the per-stage tick breakdown"],
+      ["legacy.rs · settlement.rs", "settlement mirror in f32, and its drawing"],
+      ["piles/ · pile_model.rs", "pile lab view: piles, backpacks, flying units, collector"],
+      ["digging.rs", "ground chunks, pits, follow camera, dig progress"],
+      ["gameplay.rs", "player pose and animation, combat feedback"],
+      ["peers.rs · nametags.rs", "other players' avatars and names"],
+      ["jetpack.rs · palimpsest/", "flight view, memory trial view"],
+      ["assets.rs · style.rs · scene.rs", "scene library, styles, voxel art, HUD"],
+      ["control/", "JSON-lines control port for scripts and tests"],
+    ] },
+  play: { x: 480, y: 40, w: 110, kind: "bevy", label: "play", sub: "minimal binary",
+    about: "A small binary over the view crate, used to test sessions and networking with the throwaway mover entities. Hosts, joins, loads saves.",
+    deps: ["view", "session", "net", "save", "sim", "content", "fx"],
+    files: [["main.rs", "flags, Bevy setup, mover spawning"], ["session.rs", "drives the session each frame"]] },
+  view: { x: 610, y: 40, w: 110, kind: "bevy", label: "view", sub: "extract + draw",
+    about: "Generic Bevy view for play: turns a world into a render extract and interpolates between ticks. The app has its own views and does not use this crate.",
+    deps: ["sim"],
+    files: [["lib.rs", "SimView, camera, drawing"], ["extract.rs", "Extract and Interpolator"]] },
+  headless: { x: 740, y: 40, w: 110, kind: "tool", label: "headless", sub: "hash runner",
+    about: "Runs a save plus an input log without a window and writes one hash per tick. Every determinism test compares two hash files.",
+    deps: ["save", "sim", "content"],
+    files: [["lib.rs", "record and replay a scenario"], ["main.rs", "CLI, golden hashes"], ["bench_test.rs", "tick benchmarks"]] },
+  assetc: { x: 870, y: 40, w: 100, kind: "tool", label: "assetc", sub: "asset compiler",
+    about: "Build-time voxel asset compiler. Its core library also defines the scene format the app loads: scenes, features like Digging, piles, mines.",
+    deps: ["sim", "content", "fx"],
+    files: [["core/src/lib.rs", "Scene, SceneFeature, MineLayout, validation"], ["core/src/piles.rs", "PileLayout, minerals, collector"], ["core/src/style.rs", "style definitions"], ["core/src/boulder.rs", "boulder generator"]] },
+  session: { x: 40, y: 190, w: 260, kind: "det", label: "session", sub: "one running game",
+    about: "This machine's place in a game: a host, a client or a replay of an input log. Single-player is a host with no clients, so every game uses the same turn path. Also autosaves and records inputs.",
+    deps: ["net", "save", "sim", "content"],
+    files: [["lib.rs", "Session::start / queue / update / alpha / status / shutdown, autosave"]] },
+  net: { x: 340, y: 190, w: 260, kind: "det", label: "net", sub: "lockstep protocol",
+    about: "Turns, input delay, joining with a save, hash comparison and desync handling. Never reads a clock: callers pass the time, so tests run on a virtual network.",
+    deps: ["sim", "save", "content"],
+    files: [["host.rs", "closes a turn per tick, sends it, compares hashes, uploads saves to joiners"], ["client.rs", "buffers turns, catches up, detects host loss"], ["protocol.rs", "packets; repeated until acknowledged"], ["transport.rs", "UDP and null transports"], ["netsim.rs", "seeded loopback network for tests"]] },
+  save: { x: 640, y: 190, w: 200, kind: "det", label: "save", sub: "world at a tick",
+    about: "The save format. A new game, a load, a join and a resync all start from a save plus the inputs after it.",
+    deps: ["sim", "content"],
+    files: [["lib.rs", "write / read, sections per chunk, versioning"], ["inputs.rs", "InputLog: the turns after a save"]] },
+  sim: { x: 40, y: 340, w: 560, kind: "det", label: "sim", sub: "the deterministic simulation",
+    about: "All gameplay rules. Entities live in chunks; each tick runs six stages. The settlement module holds the game: avatars, haulers, combat, piles, digging, the memory trial.",
+    deps: ["content", "fx"],
+    files: [
+      ["world.rs", "World, CommandKind, World::step, its six stages and their timings"],
+      ["settlement/mod.rs", "Settlement state, SceneSetup, command handlers"],
+      ["settlement/avatar.rs", "player movement, jetpack, digging"],
+      ["settlement/piles.rs", "piles, each player's hauler, collector, mined ore"],
+      ["settlement/combat.rs", "waves, defenders, projectiles, weapons"],
+      ["settlement/haulers.rs · economy.rs", "logistics workers, depots, recipes"],
+      ["settlement/memory.rs", "the memory trial"],
+      ["terrain.rs · mine.rs", "ground heights, obstacles, pits, generated mine"],
+      ["nav.rs", "A* routes on a half-tile grid"],
+      ["messages.rs", "message types and apply order"],
+      ["hash.rs · rng.rs · timer.rs · spatial.rs", "state hash, keyed RNG, wake timers, neighbor index"],
+    ] },
+  content: { x: 640, y: 340, w: 150, kind: "det", label: "content", sub: "definitions",
+    about: "Definition files and scenarios. Only the rules part feeds the simulation and the rules hash; peers with different rules can't play together.",
+    deps: ["fx"],
+    files: [["lib.rs", "Content, Rules, TICKS_PER_SECOND = 60, millis_to_ticks, per_tick"], ["scenario.rs", "settlement scenarios, weapons, tuning"]] },
+  fx: { x: 820, y: 340, w: 150, kind: "det", label: "fx", sub: "fixed point",
+    about: "Fx, a 32.32 fixed-point number, plus vectors, sqrt and table trig. All integer math, so results match bit for bit everywhere.",
+    deps: [],
+    files: [["fx.rs", "Fx arithmetic"], ["vec.rs", "FxVec2, FxVec3"], ["trig.rs", "sin, cos, atan2 tables"], ["golden.rs", "golden value checks"]] },
+};
+const H = 76;
+const svg = document.getElementById("map");
+const NS = "http://www.w3.org/2000/svg";
+const el = (tag, attrs, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); (parent || svg).appendChild(e); return e; };
+
+// Bands
+const bands = [
+  [20, "FRONT ENDS", 22, 136],
+  [170, "LOCKSTEP AND SAVES", 22, 136],
+  [320, "SIMULATION CORE", 22, 136],
+];
+for (const [y, name] of bands) {
+  el("rect", { x: 20, y, width: 960, height: 136, rx: 6, fill: "var(--grid)" });
+  el("text", { x: 34, y: y + 14, "font-family": "var(--mono)", "font-size": 10.5, "letter-spacing": 1.4, fill: "var(--muted)" }).textContent = name;
+}
+el("line", { x1: 20, x2: 980, y1: 160, y2: 160, stroke: "var(--bevy)", "stroke-dasharray": "6 5", "stroke-width": 1.2 });
+el("text", { x: 980, y: 480, "text-anchor": "end", "font-family": "var(--body)", "font-size": 12, fill: "var(--muted)" }).textContent = "Bevy stays above the dashed line: nothing below it may depend on Bevy or floats.";
+el("text", { x: 980, y: 498, "text-anchor": "end", "font-family": "var(--body)", "font-size": 12, fill: "var(--muted)" }).textContent = "Bazel visibility enforces it.";
+
+// Edges, with ports spread along each box's bottom and top edges.
+const edgeLayer = el("g", {});
+const edges = [];
+for (const [from, c] of Object.entries(crates)) for (const to of c.deps) edges.push({ from, to });
+const cx = n => crates[n].x + crates[n].w / 2;
+for (const [name, c] of Object.entries(crates)) {
+  const outs = edges.filter(e => e.from === name).sort((a, b) => cx(a.to) - cx(b.to));
+  outs.forEach((e, i) => e.sx = c.x + c.w * (i + 1) / (outs.length + 1));
+  const ins = edges.filter(e => e.to === name).sort((a, b) => cx(a.from) - cx(b.from));
+  ins.forEach((e, i) => e.tx = c.x + c.w * (i + 1) / (ins.length + 1));
+}
+el("defs", {}).innerHTML = `
+  <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--line)"/></marker>
+  <marker id="ahs" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
+  <marker id="ahi" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker>`;
+for (const e of edges) {
+  const sy = crates[e.from].y + H, ty = crates[e.to].y;
+  const same = crates[e.from].y === crates[e.to].y;
+  let d;
+  if (same) {
+    // Same band: arc below the boxes.
+    const a = crates[e.from], b = crates[e.to];
+    const sx = a.x + (b.x > a.x ? a.w - 14 : 14), tx = b.x + (b.x > a.x ? 14 : b.w - 14);
+    d = `M${sx},${sy} C${sx},${sy + 30} ${tx},${sy + 30} ${tx},${sy + 2}`;
+  } else {
+    const dy = Math.max(30, (ty - sy) * 0.5);
+    d = `M${e.sx},${sy} C${e.sx},${sy + dy} ${e.tx},${ty - dy} ${e.tx},${ty - 2}`;
+  }
+  e.path = el("path", { d, class: "edge", "marker-end": "url(#ah)" }, edgeLayer);
+}
+
+// Boxes
+const nodes = {};
+for (const [name, c] of Object.entries(crates)) {
+  const g = el("g", { class: "crate", tabindex: 0, role: "button", "aria-label": `${c.label}: ${c.sub}` });
+  el("rect", { class: "box", x: c.x, y: c.y, width: c.w, height: H, rx: 6, fill: `var(--${c.kind}-bg)`, stroke: `var(--${c.kind})` }, g);
+  el("text", { x: c.x + 12, y: c.y + 30, "font-family": "var(--display)", "font-weight": 600, "font-size": 19, fill: "var(--fg)" }, g).textContent = c.label;
+  el("text", { x: c.x + 12, y: c.y + 52, "font-family": "var(--body)", "font-size": 12, fill: "var(--muted)" }, g).textContent = c.sub;
+  if (name === "sim") {
+    el("text", { x: c.x + c.w - 12, y: c.y + 30, "text-anchor": "end", "font-family": "var(--mono)", "font-size": 11, fill: "var(--det)" }, g).textContent = "settlement/ · terrain · nav · world";
+  }
+  g.addEventListener("click", () => select(name));
+  g.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); select(name); } });
+  nodes[name] = g;
+}
+
+const panel = document.getElementById("panel");
+const kindName = { det: "Deterministic", bevy: "Bevy", tool: "Tool" };
+function select(name) {
+  const c = crates[name];
+  for (const [n, g] of Object.entries(nodes)) g.classList.toggle("sel", n === name);
+  for (const e of edges) {
+    const out = e.from === name, inn = e.to === name;
+    e.path.setAttribute("class", "edge" + (out ? " out" : inn ? " in" : " dim"));
+    e.path.setAttribute("marker-end", out ? "url(#ahs)" : inn ? "url(#ahi)" : "url(#ah)");
+    if (out || inn) edgeLayer.appendChild(e.path);
+  }
+  const users = edges.filter(e => e.to === name).map(e => e.from);
+  panel.innerHTML = `
+    <span class="tag" style="color:var(--${c.kind});border-color:var(--${c.kind})">${kindName[c.kind]}</span>
+    <h3><code>kestrel/${name === "assetc" ? "tools/assetc" : name}</code></h3>
+    <p style="font-size:14px">${c.about}</p>
+    <ul>${c.files.map(([f, d]) => `<li><code>${f}</code><span>${d}</span></li>`).join("")}</ul>
+    <div class="deps">Depends on: ${c.deps.length ? c.deps.join(", ") : "nothing in kestrel/"}<br>Used by: ${users.length ? users.join(", ") : "nothing (a binary)"}</div>`;
+}
+select("sim");
+
+// Feature lookup
+const features = [
+  ["Moving, jetpack", "settlement/avatar.rs (Intent, flight, collision)", "lockstep.rs keyboard_input, follow_avatar · jetpack.rs · gameplay.rs animate_character", ""],
+  ["Digging", "settlement/avatar.rs (Dig, DIG_TICKS) · terrain.rs (pits, deepen) · dig_housekeeping", "lockstep.rs Game::dig (F key) · digging.rs · gameplay.rs Pose::digging", "levels/dig_lab.ron"],
+  ["Mine terrain and ore", "mine.rs (MineSpec, heights, veins) · terrain.rs generate_mine", "digging.rs (chunk meshes, ore colors)", "dig_lab.ron mine: seed, extent"],
+  ["Piles and hauling", "settlement/piles.rs (PileLab, Hauler per player, Collector, mined)", "piles/mod.rs (input, mirror) · piles/view.rs · piles/transfer.rs · pile_model.rs", "levels/pile_lab.ron · assetc core/piles.rs"],
+  ["Combat and weapons", "settlement/combat.rs", "lockstep.rs attack_input, strike · gameplay.rs combat · effects.rs · impact.rs · style.rs select_weapon", "content scenario.rs (Weapon, tuning)"],
+  ["Settlement logistics", "settlement/haulers.rs · economy.rs · mod.rs (depots, links, producers)", "settlement.rs (draws, clicks) · legacy.rs (f32 mirror)", "content scenario.rs · *_supply.ron"],
+  ["Memory trial", "settlement/memory.rs", "palimpsest/", "SceneFeature::MemoryTrial"],
+  ["Routes and collision", "nav.rs (A*, windowed on big maps) · terrain.rs walkable", "navigation.rs (view geometry only)", ""],
+  ["Other players", "settlement Agent.owner · Join and Name commands · owner check in world.rs", "peers.rs (copied suit, pose) · nametags.rs", ""],
+  ["Networking", "net host.rs, client.rs, protocol.rs, transport.rs · session lib.rs", "main.rs --host/--join · lockstep.rs build_world (mode), step (events)", ""],
+  ["Host lost, rejected, desync", "net client.rs (timeout → HostLost) · host.rs (hash compare)", "lockstep.rs step (sets Game.ended), end_session (banner, exit)", ""],
+  ["Saves and replays", "save lib.rs, inputs.rs · session autosave", "main.rs --record-input, --replay-input · Game::write_recording", ""],
+  ["Determinism checks", "hash.rs · headless · fx golden.rs", "", "testdata/ hashes"],
+  ["Scenes and assets", "settlement SceneSetup (what a scene asks the sim for)", "assets.rs SceneLibrary · lockstep.rs build_world (scene → SceneSetup) · style.rs · scene.rs", "app/assets/levels/*.ron · assetc core lib.rs"],
+  ["HUD", "", "scene.rs hud, update_hud · lockstep.rs status", ""],
+  ["Frame and tick timing", "world.rs StageTimes, stage_times", "telemetry.rs (FPS line, F3 breakdown) · lockstep.rs step (timing)", ""],
+  ["Tick rate", "content lib.rs TICKS_PER_SECOND, millis_to_ticks, per_tick · scenario.rs ticks_from_60hz", "", ""],
+  ["Scripts and tests", "sim scene_tests.rs, combat_tests.rs, tests.rs", "control/ (JSON-lines port, protocol) · piles/demo.rs", "tools/demo/ runner and assertions"],
+];
+const tbody = document.querySelector("#lookup tbody");
+const codeify = s => s ? s.split(" · ").map(p => {
+  const m = p.match(/^(\S+)(\s.*)?$/);
+  return `<code>${m[1]}</code>${m[2] ? `<span class="note" style="display:inline"> ${m[2].trim()}</span>` : ""}`;
+}).join("<br>") : `<span class="note">—</span>`;
+for (const [f, r, v, d] of features) {
+  const tr = document.createElement("tr");
+  tr.dataset.text = [f, r, v, d].join(" ").toLowerCase();
+  tr.innerHTML = `<td>${f}</td><td>${codeify(r)}</td><td>${codeify(v)}</td><td>${codeify(d)}</td>`;
+  tbody.appendChild(tr);
+}
+const q = document.getElementById("q"), count = document.getElementById("count");
+function filter() {
+  const t = q.value.trim().toLowerCase();
+  let n = 0;
+  for (const tr of tbody.rows) { const hit = !t || tr.dataset.text.includes(t); tr.hidden = !hit; n += hit; }
+  count.textContent = t ? `${n} of ${features.length}` : "";
+}
+q.addEventListener("input", filter);
+</script>
+</html>

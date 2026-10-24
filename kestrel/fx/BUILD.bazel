@@ -1,0 +1,27 @@
+load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
+load("@rules_rs//rs:rust_library.bzl", "rust_library")
+load("@rules_rs//rs:rust_test.bzl", "rust_test")
+
+rust_library(
+    name = "fx",
+    srcs = glob(["src/**/*.rs"]),
+    edition = "2021",
+    visibility = ["//kestrel:__subpackages__"],
+    deps = ["@crates//:serde"],
+)
+
+rust_test(
+    name = "fx_test",
+    size = "small",
+    compile_data = ["testdata/golden.txt"],
+    crate = ":fx",
+    edition = "2021",
+)
+
+# Rewrites testdata/golden.txt after an intended change to Fx results.
+rust_binary(
+    name = "update_golden",
+    srcs = ["update_golden.rs"],
+    edition = "2021",
+    deps = [":fx"],
+)

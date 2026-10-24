@@ -1,0 +1,39 @@
+load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
+load("@rules_rs//rs:rust_library.bzl", "rust_library")
+load("@rules_rs//rs:rust_test.bzl", "rust_test")
+
+rust_library(
+    name = "sim",
+    srcs = glob(["src/**/*.rs"]),
+    # The golden report replays the forest outpost's scenario.
+    compile_data = ["//kestrel/app/assets:levels/forest_supply.ron"],
+    edition = "2021",
+    visibility = ["//kestrel:__subpackages__"],
+    deps = [
+        "//kestrel/content",
+        "//kestrel/fx",
+        "@crates//:postcard",
+        "@crates//:rayon",
+        "@crates//:serde",
+    ],
+)
+
+rust_test(
+    name = "sim_test",
+    size = "small",
+    compile_data = [
+        "testdata/golden.txt",
+        "//kestrel/app/assets:levels/combat_arena_supply.ron",
+        "//kestrel/app/assets:levels/forest_supply.ron",
+    ],
+    crate = ":sim",
+    edition = "2021",
+)
+
+# Rewrites testdata/golden.txt after an intended change to simulation results.
+rust_binary(
+    name = "update_golden",
+    srcs = ["update_golden.rs"],
+    edition = "2021",
+    deps = [":sim"],
+)

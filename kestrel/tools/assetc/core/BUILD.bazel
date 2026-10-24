@@ -1,0 +1,23 @@
+load("@rules_rs//rs:rust_library.bzl", "rust_library")
+load("@rules_rs//rs:rust_test.bzl", "rust_test")
+
+rust_library(
+    name = "voxel_assets",
+    srcs = glob(["src/*.rs"]),
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//kestrel/content",
+        "//kestrel/fx",
+        "//kestrel/sim",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "core_test",
+    size = "small",
+    crate = ":voxel_assets",
+    edition = "2021",
+)

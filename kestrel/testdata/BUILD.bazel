@@ -1,0 +1,7 @@
+# Golden hash files for the determinism suite. Regenerate with
+# `bazel run //kestrel/headless -- golden` after an intended gameplay change.
+filegroup(
+    name = "hashes",
+    srcs = glob(["*.hashes"]),
+    visibility = ["//kestrel:__subpackages__"],
+)

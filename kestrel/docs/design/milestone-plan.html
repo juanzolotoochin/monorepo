@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lockstep Milestone Plan</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,750&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: single reading column; crate map, interactive roadmap, determinism test matrix, decisions. Same look as the other decision pages. */
+:root {
+  --bg: #f4f6f8; --surface: #ffffff; --fg: #172029; --muted: #5a6875; --line: #d8dee4;
+  --accent: #1d5fa8; --accent-soft: #e3edf8;
+  --ok: #2f8a57; --ok-soft: #dcefe3; --bad: #c2362f; --bad-soft: #f8dedc;
+  --warn: #b7791f; --warn-soft: #f6ead3; --idle: #e7ebef; --idle-fg: #8794a0;
+  --c1: #7a4fb5; --c1-soft: #ece4f6;
+  --f-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --f-body: "Instrument Sans", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1318; --surface: #161c23; --fg: #e3e8ed; --muted: #95a3b0; --line: #2a333d;
+    --accent: #7fb2ec; --accent-soft: #1b2c40;
+    --ok: #5cc48a; --ok-soft: #173326; --bad: #f07a72; --bad-soft: #3d1c1a;
+    --warn: #e2ad57; --warn-soft: #3a2c14; --idle: #222a33; --idle-fg: #6c7a87;
+    --c1: #b994ea; --c1-soft: #2b2140;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1318; --surface: #161c23; --fg: #e3e8ed; --muted: #95a3b0; --line: #2a333d;
+  --accent: #7fb2ec; --accent-soft: #1b2c40;
+  --ok: #5cc48a; --ok-soft: #173326; --bad: #f07a72; --bad-soft: #3d1c1a;
+  --warn: #e2ad57; --warn-soft: #3a2c14; --idle: #222a33; --idle-fg: #6c7a87;
+  --c1: #b994ea; --c1-soft: #2b2140;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); font: 16px/1.6 var(--f-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 72px;
+}
+main { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 56px; }
+h1, h2, h3 { font-family: var(--f-display); text-wrap: balance; line-height: 1.15; margin: 0; }
+h1 { font-size: clamp(2rem, 5vw, 2.8rem); font-weight: 750; letter-spacing: -0.01em; }
+h2 { font-size: 1.7rem; font-weight: 750; }
+h3 { font-size: 1.15rem; font-weight: 600; }
+p { margin: 0; max-width: 68ch; }
+code, .mono { font-family: var(--f-mono); font-size: 0.88em; }
+.eyebrow { font: 600 0.75rem/1 var(--f-mono); text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent); }
+.stack { display: flex; flex-direction: column; gap: 16px; }
+.lead { color: var(--muted); font-size: 1.08rem; }
+section.decision { display: flex; flex-direction: column; gap: 24px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+ul, ol { margin: 0; padding-left: 1.3em; display: flex; flex-direction: column; gap: 6px; max-width: 68ch; }
+.small { font-size: 0.88rem; }
+.muted { color: var(--muted); }
+.tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+.tabs button {
+  font: 500 0.92rem var(--f-body); color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; cursor: pointer;
+}
+.tabs button:hover { border-color: var(--accent); }
+.tabs button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rec { font: 600 0.68rem var(--f-mono); letter-spacing: 0.06em; text-transform: uppercase; margin-left: 6px; opacity: 0.85; }
+.callout { border-left: 3px solid var(--accent); padding: 4px 0 4px 14px; }
+.options { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.opt { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.opt.recd { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.opt .tag { font: 600 0.68rem var(--f-mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); }
+.opt ul { font-size: 0.92rem; gap: 4px; }
+.pro::marker { content: "+  "; color: var(--ok); font-weight: 700; }
+.con::marker { content: "−  "; color: var(--bad); font-weight: 700; }
+
+/* Crate map */
+.crates { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+@media (max-width: 680px) { .crates { grid-template-columns: 1fr 1fr; } }
+.crate { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 3px; min-width: 0; background: var(--bg); }
+.crate b { font-family: var(--f-mono); font-size: 0.85rem; }
+.crate small { color: var(--muted); font-size: 0.78rem; line-height: 1.35; }
+.crate .bevy { font: 600 0.62rem var(--f-mono); text-transform: uppercase; letter-spacing: 0.06em; }
+.crate.det { border-color: var(--accent); }
+.crate.det .bevy { color: var(--accent); }
+.crate.vw { border-color: var(--c1); }
+.crate.vw .bevy { color: var(--c1); }
+
+/* Roadmap */
+.road { display: flex; flex-direction: column; gap: 8px; }
+.step { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); overflow: hidden; }
+.step > button {
+  all: unset; box-sizing: border-box; width: 100%; cursor: pointer; display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 12px 14px;
+}
+.step > button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.step .id { font: 600 0.8rem var(--f-mono); color: var(--accent); }
+.step .t b { display: block; font-size: 1rem; }
+.step .t small { color: var(--muted); font-size: 0.84rem; }
+.step .chev { font-family: var(--f-mono); color: var(--muted); }
+.step .body { padding: 0 14px 14px 82px; display: none; flex-direction: column; gap: 10px; }
+@media (max-width: 680px) { .step .body { padding-left: 14px; } }
+.step.open .body { display: flex; }
+.step.open { border-color: var(--accent); }
+.step.later .id { color: var(--muted); }
+.step .done { border-top: 1px dashed var(--line); padding-top: 8px; font-size: 0.9rem; }
+.step .done b { font: 600 0.7rem var(--f-mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--ok); margin-right: 6px; }
+.phase { font: 600 0.72rem var(--f-mono); text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); padding: 12px 0 2px; }
+
+/* Matrix */
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; min-width: 620px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 600 0.72rem var(--f-mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+td:first-child { font-weight: 600; }
+.m { text-align: center; font: 600 0.75rem var(--f-mono); white-space: nowrap; }
+.m.y { color: var(--ok); } .m.l { color: var(--warn); } .m.n { color: var(--idle-fg); }
+
+.flowline { display: grid; grid-template-columns: repeat(5, auto); gap: 6px; align-items: center; overflow-x: auto; }
+.fnode { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--bg); font-size: 0.85rem; min-width: 120px; }
+.fnode b { display: block; font-size: 0.9rem; }
+.fnode small { color: var(--muted); }
+.arrow { color: var(--muted); font-family: var(--f-mono); }
+@media (max-width: 680px) { .flowline { grid-template-columns: 1fr; } .arrow { transform: rotate(90deg); justify-self: center; } }
+
+.ask { border-top: 2px solid var(--fg); padding-top: 24px; display: flex; flex-direction: column; gap: 16px; }
+.ask ol { gap: 12px; }
+.ask li strong { font-family: var(--f-display); font-weight: 600; }
+</style>
+
+<main>
+  <header class="stack">
+    <span class="eyebrow">Plan · open decisions</span>
+    <h1>Lockstep milestone plan</h1>
+    <p class="lead">Every architecture decision is now made. This page turns them into crates, an ordered roadmap and a determinism test plan for the monorepo's Bazel build. Three questions remain about order and verification.</p>
+  </header>
+
+  <section class="decision" aria-labelledby="crates">
+    <div class="stack">
+      <span class="eyebrow">Layout</span>
+      <h2 id="crates">Crates under <code>kestrel/</code></h2>
+      <p>Each is a Bazel <code>rust_library</code> or <code>rust_binary</code> using <code>rules_rs</code>, like the rest of <code>kestrel/</code>. The blue ones are deterministic and may never depend on Bevy, f32 math or wall-clock time. A Bazel visibility rule enforces that only <code>view</code> and <code>app</code> can see <code>@crates//:bevy</code>.</p>
+    </div>
+    <div class="panel">
+      <div class="crates">
+        <div class="crate det"><span class="bevy">deterministic</span><b>kestrel/fx</b><small>Fx type, vectors, trig and sqrt tables, decimal parsing</small></div>
+        <div class="crate det"><span class="bevy">deterministic</span><b>kestrel/sim</b><small>World tables, chunks, tick stages, queues, RNG, timers, hashing</small></div>
+        <div class="crate det"><span class="bevy">deterministic</span><b>kestrel/content</b><small>Definition loading, sim/view split, name tables, rules hash</small></div>
+        <div class="crate det"><span class="bevy">deterministic</span><b>kestrel/save</b><small>Sectioned format, remap on load, RON dump, diff tool</small></div>
+        <div class="crate det"><span class="bevy">deterministic</span><b>kestrel/net</b><small>Turns, input delay, time sync, Transport and Sessions traits, loopback simulator, UDP</small></div>
+        <div class="crate"><span class="bevy">tool</span><b>kestrel/headless</b><small>Runs save + input log, writes per-tick hashes, benchmarks</small></div>
+        <div class="crate vw"><span class="bevy">bevy</span><b>kestrel/view</b><small>Render extract consumer, interpolation, prediction, net graph</small></div>
+        <div class="crate vw"><span class="bevy">bevy</span><b>kestrel/app</b><small>The game binary: host, join, single-player</small></div>
+      </div>
+      <p class="small muted"><code>net</code> is deterministic in the sense that its decisions only depend on its inputs and a clock it is given. That is what lets the loopback simulator run it on a virtual clock.</p>
+    </div>
+  </section>
+
+  <section class="decision" aria-labelledby="road">
+    <div class="stack">
+      <span class="eyebrow">Roadmap</span>
+      <h2 id="road">Steps, in order</h2>
+      <p>Milestone 0 is the infrastructure you chose to build first, using throwaway test entities (movers, a shooter, a depot) only to exercise the machinery. Milestone 1 ports the real gameplay. Click a step to see what it delivers and how we know it's done.</p>
+    </div>
+    <div class="road" id="road-list"></div>
+  </section>
+
+  <section class="decision" aria-labelledby="det">
+    <div class="stack">
+      <span class="eyebrow">Verification</span>
+      <h2 id="det">How determinism is tested</h2>
+      <p>The headless runner takes a save and an input log and writes one hash per tick. Every determinism test is a comparison of two such hash files that should be identical.</p>
+    </div>
+    <div class="panel">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Test</th><th>Compares</th><th class="m">CI (Linux)</th><th class="m">Windows</th><th class="m">Steam Deck</th></tr></thead>
+          <tbody id="matrix"></tbody>
+        </table>
+      </div>
+      <p class="small muted"><span class="m y">✓</span> runs automatically. <span class="m l">local</span> runs when someone runs <code>bazel test</code> on that machine. <span class="m n">—</span> not needed there.</p>
+    </div>
+  </section>
+
+  <!-- Q1 -->
+  <section class="decision" aria-labelledby="q1">
+    <div class="stack">
+      <span class="eyebrow">Decision 1</span>
+      <h2 id="q1">Checking Windows against Linux</h2>
+      <p>The monorepo's CI (BuildBuddy) runs <code>bazel test //...</code> on Linux only. Windows builds happen on developer machines. A determinism check needs both platforms to produce the same hashes, but they never run in the same place.</p>
+    </div>
+    <div class="panel">
+      <div class="flowline">
+        <div class="fnode"><b>Golden hash files</b><small>checked into <code>kestrel/testdata/</code></small></div>
+        <span class="arrow">→</span>
+        <div class="fnode"><b>Linux CI</b><small>every push must match</small></div>
+        <span class="arrow">→</span>
+        <div class="fnode"><b>Windows dev machine</b><small>same test, same files, must match</small></div>
+      </div>
+      <p class="small">Goldens turn a two-platform comparison into two one-platform comparisons against the same file. Any machine that runs the test checks itself against every other platform. When a deliberate gameplay change alters hashes, a command regenerates the goldens, and the diff shows up in review.</p>
+    </div>
+    <div class="options">
+      <div class="opt recd">
+        <span class="tag">Option A · recommended</span>
+        <h3>Golden hashes, Linux CI, Windows locally</h3>
+        <ul>
+          <li class="pro">Works with today's CI unchanged</li>
+          <li class="pro">Any new platform (Steam Deck, a Mac) joins by just running the tests</li>
+          <li class="con">A Windows-only break is only caught when someone on Windows runs the tests</li>
+        </ul>
+      </div>
+      <div class="opt">
+        <span class="tag">Option B</span>
+        <h3>Add a Windows CI runner now</h3>
+        <ul>
+          <li class="pro">Windows checked on every push</li>
+          <li class="con">New CI infrastructure (a GitHub Actions Windows job or a self-hosted runner) and Bazel Windows caching to set up and maintain</li>
+          <li class="con">Work spent on CI before there is a game</li>
+        </ul>
+      </div>
+      <div class="opt">
+        <span class="tag">Option C</span>
+        <h3>Golden hashes now, Windows runner at milestone 1</h3>
+        <ul>
+          <li class="pro">Option A while the core is small, then automated once gameplay code is landing every day</li>
+          <li class="con">The same setup work, just later</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- Q2 -->
+  <section class="decision" aria-labelledby="q2">
+    <div class="stack">
+      <span class="eyebrow">Decision 2</span>
+      <h2 id="q2">When to upgrade Bevy</h2>
+      <p>The monorepo has one <code>Cargo.toml</code> for every crate, pinned to <code>bevy = "=0.18.1"</code>. The new view targets 0.20. Two Bevy versions in one build means renamed dependencies and two copies compiled. The old game has to keep working until the port reaches parity.</p>
+    </div>
+    <div class="options">
+      <div class="opt recd">
+        <span class="tag">Option A · recommended</span>
+        <h3>Upgrade first, as its own step</h3>
+        <ul>
+          <li class="pro">Old game moves to 0.20 in one focused change (0.18 → 0.19 → 0.20 migration guides)</li>
+          <li class="pro">The new view starts on the final version, and both games share one Bevy build</li>
+          <li class="pro">Doesn't block milestone 0: fx, sim, save and the harness don't touch Bevy</li>
+          <li class="con">Migration work on code that will be deleted</li>
+        </ul>
+      </div>
+      <div class="opt">
+        <span class="tag">Option B</span>
+        <h3>Build the new view on 0.18, upgrade at parity</h3>
+        <ul>
+          <li class="pro">Nothing old to migrate</li>
+          <li class="con">The new view is written against an old API, then migrated anyway</li>
+        </ul>
+      </div>
+      <div class="opt">
+        <span class="tag">Option C</span>
+        <h3>Two versions side by side</h3>
+        <ul>
+          <li class="pro">Each game on its own version</li>
+          <li class="con">Two Bevy builds, longer compile times, confusing dependency names</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- Q3 -->
+  <section class="decision" aria-labelledby="q3">
+    <div class="stack">
+      <span class="eyebrow">Decision 3</span>
+      <h2 id="q3">View before network, or network before view</h2>
+      <p>After the simulation core and harness, two steps remain in milestone 0: a minimal Bevy view and the netcode. Both are needed before you and your friend can play over Tailscale.</p>
+    </div>
+    <div class="options">
+      <div class="opt recd">
+        <span class="tag">Option A · recommended</span>
+        <h3>View first</h3>
+        <ul>
+          <li class="pro">Seeing the simulation (boxes on a plane, chunk overlay, sleep colors) makes every later bug easier to find</li>
+          <li class="pro">The net graph overlay needs somewhere to draw</li>
+          <li class="pro">The first network test with your friend is then something you can both watch</li>
+          <li class="con">Netcode, the riskiest part, comes a step later</li>
+        </ul>
+      </div>
+      <div class="opt">
+        <span class="tag">Option B</span>
+        <h3>Network first</h3>
+        <ul>
+          <li class="pro">Risk first; it can be fully tested headless with the loopback simulator</li>
+          <li class="con">Debugging by reading hash files and logs until the view exists</li>
+          <li class="con">Your prototype already proved the netcode approach works, so its risk is lower</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="ask" aria-labelledby="ask">
+    <span class="eyebrow">Your call</span>
+    <h2 id="ask">The three questions</h2>
+    <ol>
+      <li><strong>Windows checks.</strong> Golden hashes with Linux CI and Windows run locally (recommended), a Windows CI runner now, or goldens now and a runner at milestone 1.</li>
+      <li><strong>Bevy upgrade.</strong> Upgrade the monorepo first as its own step (recommended), build on 0.18 and upgrade at parity, or keep two versions.</li>
+      <li><strong>Order.</strong> Minimal view before netcode (recommended), or netcode first.</li>
+    </ol>
+    <p class="lead">Answer in the terminal.</p>
+  </section>
+</main>
+
+<script>
+const STEPS = [
+  { phase: "Milestone 0 · infrastructure" },
+  { id: "0.0", t: "Bevy upgrade", s: "Monorepo from 0.18.1 to 0.20, old game kept working",
+    items: ["Bump Cargo.toml and fix bevy_isometric through the 0.19 and 0.20 migration guides", "Can run in parallel with 0.1–0.4, which don't use Bevy"],
+    done: "The old game and its game_demo targets build and pass on Linux and Windows." },
+  { id: "0.1", t: "kestrel/fx", s: "Fixed-point math",
+    items: ["Fx newtype over i64 (32.32), with arithmetic and overflow checks in debug builds", "Vec2/Vec3, sqrt, sin/cos/atan2 from tables, all bit-exact", "Decimal parsing for content, serde, Display"],
+    done: "Accuracy tests against f64 pass, and a golden file of results is identical on Linux and Windows." },
+  { id: "0.2", t: "kestrel/sim core", s: "World, chunks and the six-stage tick",
+    items: ["Per-type SoA tables with generational IDs; 32 × 32 chunk grid", "Stages: apply inputs, self update, read, merge, apply, housekeeping", "Per-type message queues, seeded chunk shuffle, counter-based RNG, timer wheel, sleep", "Last-tick position snapshot; per-subsystem and per-chunk hashes", "Throwaway test entities: movers, a shooter, a depot with reservations"],
+    done: "Thread-count test passes (1 vs 16 threads give identical hashes)." },
+  { id: "0.3", t: "kestrel/content + kestrel/save", s: "Definitions, IDs, saves",
+    items: ["Definition files with sim and view sections, plus the rules hash", "Dense indices with name tables in saves", "Sectioned binary saves (postcard + zstd), RON dump, a diff tool"],
+    done: "Save at tick T, load, continue: hashes match an uninterrupted run." },
+  { id: "0.4", t: "kestrel/headless harness", s: "Determinism and performance checks",
+    items: ["Runner: save + input log in, per-tick hash file out", "Golden hash files in kestrel/testdata/ and a command to regenerate them", "Benchmark at 100k test entities, ms per tick tracked"],
+    done: "CI runs the determinism suite. The benchmark stays under the 10 ms per tick budget." },
+  { id: "0.5", t: "kestrel/view, minimal", s: "See the simulation in Bevy",
+    items: ["Render extract consumer, interpolation, entities drawn as simple shapes", "Debug overlays: chunk grid, sleep state, message counts", "Local single-player: commands go through the same turn path with zero delay"],
+    done: "You can walk around and watch test entities move smoothly at 144 Hz from a 60 Hz simulation." },
+  { id: "0.6", t: "kestrel/net", s: "Lockstep over the network",
+    items: ["Turns, fixed input delay, late-input rescheduling, time sync", "Loopback simulator with a virtual clock; scenario tests with latency, jitter, loss and spikes", "Join through save transfer, desync detection (halt in dev, resync in release), autosave and re-host", "UDP transport with direct IP; host and join from the command line", "Net graph overlay and own-avatar prediction in the view"],
+    done: "You and your friend play over Tailscale for 30 minutes with no desync, and a mid-game join works." },
+  { phase: "Milestone 1 · gameplay port" },
+  { id: "1.1", t: "Terrain and navigation", s: "Voxel chunks, walkable spans, digging", later: true,
+    items: ["32³ voxel chunks, multi-level walkable spans, digging as a message", "Clearance maps; flow fields for size classes 1/2/4; hierarchical A* with tick budgets"],
+    done: "Digging reshapes paths deterministically. Port of mining_deck and boulder_lab." },
+  { id: "1.2", t: "Logistics", s: "Depots, haulers, production, equipment", later: true,
+    items: ["Rebuild today's model on messages: reservations, in-flight ownership, recipes, carts", "Port the conservation ledger as a debug invariant check"],
+    done: "forest_supply plays the same as today, and its balances hold." },
+  { id: "1.3", t: "Combat and player", s: "Towers, enemies, waves, avatar actions", late: true, later: true,
+    items: ["Threat waves, defenders, projectiles, melee, chain lightning", "Player transfers and strikes as commands"],
+    done: "combat_arena and combat_arena_supply play the same as today." },
+  { id: "1.4", t: "Tooling and parity", s: "game_demo on input logs, retire the old game", later: true,
+    items: ["Scripts compile to input logs; headless assertions; game_demo renders a log to MP4", "Port the remaining scenes, then retire kestrel/core and replace the prototype in kestrel/app"],
+    done: "Every current scene and demo is reproduced in the new architecture." }
+];
+const list = document.getElementById("road-list");
+STEPS.forEach((s, i) => {
+  if (s.phase) { list.insertAdjacentHTML("beforeend", `<div class="phase">${s.phase}</div>`); return; }
+  const div = document.createElement("div");
+  div.className = "step" + (s.later ? " later" : "") + (s.id === "0.2" ? " open" : "");
+  div.innerHTML = `<button type="button" aria-expanded="${s.id === "0.2"}"><span class="id">${s.id}</span><span class="t"><b>${s.t}</b><small>${s.s}</small></span><span class="chev">${s.id === "0.2" ? "−" : "+"}</span></button>` +
+    `<div class="body"><ul>${s.items.map(x => `<li>${x}</li>`).join("")}</ul><div class="done"><b>Done when</b>${s.done}</div></div>`;
+  const btn = div.querySelector("button");
+  btn.addEventListener("click", () => {
+    const open = div.classList.toggle("open");
+    btn.setAttribute("aria-expanded", String(open));
+    div.querySelector(".chev").textContent = open ? "−" : "+";
+  });
+  list.appendChild(div);
+});
+
+const MATRIX = [
+  ["Golden hashes", "Per-tick hashes of fixed scenarios against files in the repo", "y", "l", "l"],
+  ["Thread count", "1 thread vs 16 threads on the same machine", "y", "l", "l"],
+  ["Save and continue", "Save at tick T, load, continue vs an uninterrupted run", "y", "l", "n"],
+  ["Replay", "Same save and input log run twice", "y", "l", "n"],
+  ["Content remap", "Old save loaded after adding content gives the same world", "y", "n", "n"],
+  ["Net scenarios", "Loopback with latency, jitter, loss and spikes: no desync, stall budget met", "y", "n", "n"],
+  ["Benchmark", "ms per tick at 100k test entities", "y", "l", "l"]
+];
+const sym = { y: "✓", l: "local", n: "—" };
+document.getElementById("matrix").innerHTML = MATRIX.map(([t, c, a, b, d]) =>
+  `<tr><td>${t}</td><td>${c}</td><td class="m ${a}">${sym[a]}</td><td class="m ${b}">${sym[b]}</td><td class="m ${d}">${sym[d]}</td></tr>`).join("");
+</script>
+
+</html>
