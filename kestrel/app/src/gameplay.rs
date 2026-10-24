@@ -4,18 +4,22 @@ use crate::{
     combat::Attack,
 };
 use bevy::prelude::*;
+use sim::settlement::avatar::SwordStroke;
 
 pub const WALK_SPEED: f32 = 3.8;
 
 #[derive(Resource, Default)]
 pub struct Controls {
+    pub swift_sword: bool,
     pub attack_serial: u64,
+    pub combo_next: SwordStroke,
+    pub combo_timer: f32,
     pub weapon: content::scenario::Weapon,
     pub route: Vec<Vec3>,
     pub velocity: Vec3,
     pub gait: GaitClock,
     pub attack: Option<Attack>,
-    pub queued: Option<(Vec3, f32)>,
+    pub queued: Option<Vec3>,
     pub repath: f32,
     pub impacts: u32,
     pub last_material: Option<voxel_assets::ImpactResponse>,
@@ -25,13 +29,47 @@ impl Controls {
         if self.attack.is_none() {
             self.attack_serial += 1;
             let mut attack = Attack::new(aim, self.weapon);
+            attack.swift = self.swift_sword;
+            if self.weapon == content::scenario::Weapon::Sword {
+                attack.stroke = if self.combo_timer > 0.0 {
+                    self.combo_next
+                } else {
+                    SwordStroke::Forehand
+                };
+                self.combo_next = attack.stroke.next();
+            } else {
+                self.combo_next = SwordStroke::Forehand;
+            }
+            self.combo_timer = 1.25;
             attack.serial = self.attack_serial;
             self.attack = Some(attack);
             self.route.clear();
         } else {
-            // A short recovery buffer accepts the next deliberate click, not a held button.
-            self.queued = Some((aim, 0.18));
+            // One deliberate press can queue the next cut during this one.
+            self.queued = Some(aim);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sword_inputs_cycle_within_window_and_reset_after_pause() {
+        let mut controls = Controls::default();
+        for stroke in [
+            SwordStroke::Forehand,
+            SwordStroke::Backhand,
+            SwordStroke::Overhead,
+        ] {
+            controls.strike(Vec3::Z);
+            assert_eq!(controls.attack.unwrap().stroke, stroke);
+            controls.attack = None;
+        }
+        controls.combo_timer = 0.0;
+        controls.strike(Vec3::Z);
+        assert_eq!(controls.attack.unwrap().stroke, SwordStroke::Forehand);
     }
 }
 
@@ -61,7 +99,7 @@ pub fn draw_navigation(
             Vec3::new(
                 p.x,
                 crate::jetpack::height(&library, p).unwrap_or(flight.support)
-                    + if flight.airborne {
+                    + if flight.airborne && !library.has_feature(voxel_assets::SceneFeature::Jump) {
                         crate::jetpack::HOVER
                     } else {
                         0.0

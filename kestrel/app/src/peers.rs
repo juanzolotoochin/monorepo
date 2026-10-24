@@ -9,7 +9,9 @@ use bevy::prelude::*;
 use content::scenario::Weapon;
 use sim::settlement::avatar::Swing;
 
-use crate::character::{blend_pose, dig_age, GaitClock, MotionState, Part, PartKind, Player, Pose};
+use crate::character::{
+    blend_pose, dig_age, jump_motion, GaitClock, MotionState, Part, PartKind, Player, Pose,
+};
 use crate::combat::{Attack, ATTACK_END, REBOUND_END};
 use crate::jetpack::Exhaust;
 use crate::lockstep::Game;
@@ -52,12 +54,14 @@ pub struct PeerWeapon(Weapon);
 /// The swing as the local player's animation sees it, `ticks` after the
 /// last simulated tick began: wind-up and cut from the swing's start, or a
 /// rebound from the tick its blade hit something.
-fn attack(swing: &Swing, ticks: f32) -> Option<Attack> {
+fn attack(swing: &Swing, ticks: f32, swift_sword: bool) -> Option<Attack> {
     let seconds = |from: u64| ((ticks - from as f32) / content::TICKS_PER_SECOND as f32).max(0.0);
     let mut attack = Attack::new(
         Vec3::new(swing.aim.x.to_f32(), 0.0, swing.aim.y.to_f32()),
         swing.weapon,
     );
+    attack.stroke = swing.stroke;
+    attack.swift = swift_sword;
     let rebound =
         swing.resolved && swing.hits > 0 && matches!(swing.weapon, Weapon::Sword | Weapon::Spear);
     if rebound {
@@ -161,7 +165,13 @@ pub fn update(
             peer.motion
                 .advance_with_profile(velocity, heading, time.delta_secs(), motion_profile);
         let swing = current.avatar.swing.as_ref();
-        let attack = swing.and_then(|s| attack(s, ticks));
+        let attack = swing.and_then(|s| {
+            attack(
+                s,
+                ticks,
+                library.has_feature(voxel_assets::SceneFeature::SwiftSword),
+            )
+        });
         if let (Some(swing), Some(_)) = (swing, attack) {
             if peer.heard != swing.started {
                 peer.heard = swing.started;
@@ -179,6 +189,12 @@ pub fn update(
                 turn,
                 breathe,
                 airborne,
+                jump: jump_motion(
+                    current.avatar.jump,
+                    ticks,
+                    current.avatar.height.to_f32(),
+                    current.avatar.flight.support.to_f32(),
+                ),
                 attack,
                 dig,
             },
@@ -200,7 +216,7 @@ pub fn update(
     }
     for (parent, mut visibility) in &mut exhausts {
         if let Some((.., pose)) = poses.iter().find(|(e, ..)| *e == parent.parent()) {
-            *visibility = if pose.airborne {
+            *visibility = if pose.airborne && pose.jump.is_none() {
                 Visibility::Inherited
             } else {
                 Visibility::Hidden
@@ -352,6 +368,7 @@ mod tests {
     fn swing(hits: u32) -> Swing {
         Swing {
             weapon: Weapon::Sword,
+            stroke: sim::settlement::avatar::SwordStroke::Forehand,
             aim: FxVec2::new(Fx::ONE, Fx::ZERO),
             muzzle: [Fx::ZERO; 3],
             started: 100,
@@ -365,20 +382,20 @@ mod tests {
     #[test]
     fn a_swing_plays_from_its_start_tick_and_ends() {
         let s = swing(0);
-        assert_eq!(attack(&s, 100.0).unwrap().age, 0.0);
-        let mid = attack(&s, at(0.2)).unwrap();
+        assert_eq!(attack(&s, 100.0, false).unwrap().age, 0.0);
+        let mid = attack(&s, at(0.2), false).unwrap();
         assert!((mid.age - 0.2).abs() < 1e-4 && mid.impact_angle.is_none());
         assert!((mid.aim - Vec3::X).length() < 1e-4);
-        assert!(attack(&s, at(ATTACK_END) + 0.1).is_none());
+        assert!(attack(&s, at(ATTACK_END) + 0.1, false).is_none());
     }
 
     #[test]
     fn a_hit_rebounds_from_where_the_blade_was() {
         let s = swing(1);
-        let at_hit = attack(&swing(0), at(RESOLVE)).unwrap().angle();
-        let rebound = attack(&s, at(RESOLVE + 0.05)).unwrap();
+        let at_hit = attack(&swing(0), at(RESOLVE), false).unwrap().angle();
+        let rebound = attack(&s, at(RESOLVE + 0.05), false).unwrap();
         assert_eq!(rebound.impact_angle, Some(at_hit));
         assert!((rebound.age - 0.05).abs() < 1e-4);
-        assert!(attack(&s, at(RESOLVE + REBOUND_END) + 0.1).is_none());
+        assert!(attack(&s, at(RESOLVE + REBOUND_END) + 0.1, false).is_none());
     }
 }

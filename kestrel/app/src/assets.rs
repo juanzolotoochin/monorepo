@@ -206,6 +206,7 @@ pub fn switch_scene(
     player.translation = Vec3::from_array(scene.scene.spawn);
     player.rotation = Quat::from_rotation_y(std::f32::consts::PI);
     *controls = Controls::default();
+    controls.swift_sword = scene.scene.features.contains(&SceneFeature::SwiftSword);
     *feedback = Feedback::default();
     for instance in &scene.scene.instances {
         let prefab = scene
@@ -416,6 +417,8 @@ mod tests {
         assert_eq!(library.index("field"), Ok(9));
         assert_eq!(library.index("moonlit-glade"), Ok(10));
         let glade = &library.scenes[10];
+        assert!(glade.scene.features.contains(&SceneFeature::Jump));
+        assert!(glade.scene.features.contains(&SceneFeature::SwiftSword));
         assert_eq!(glade.scene.instances.len(), 7);
         assert!(glade.environment.as_ref().is_some_and(|environment| environment.walkable.len() >= 14));
         let Geometry::Baked(rock) = &glade.prefabs[0].geometry else { panic!("glade rock should be baked"); };

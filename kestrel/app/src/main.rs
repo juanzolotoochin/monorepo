@@ -25,6 +25,7 @@ mod settlement;
 mod sound;
 mod style;
 mod telemetry;
+mod viewer;
 
 use bevy::{app::AppExit, prelude::*};
 use gameplay::*;
@@ -131,20 +132,47 @@ fn on_exit(mut exits: MessageReader<AppExit>, mut game: ResMut<lockstep::Game>) 
     }
 }
 
-fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: control::Hub) -> App {
+fn build_app(options: control::Options, mut scenes: assets::SceneLibrary, hub: control::Hub) -> App {
     use bevy::{app::ScheduleRunnerPlugin, time::TimeUpdateStrategy};
     use std::time::Duration;
     let simulation = options.simulation;
     let offscreen = options.frames_dir.is_some();
     let fps = options.fps();
     let deterministic = simulation || options.script.is_some();
-    let launch_menu = menu::LaunchMenu::new(options.menu, &scenes);
+    let studio = std::env::args().any(|arg| arg == "--character-studio");
+    let mut launch_menu = menu::LaunchMenu::new(options.menu, &scenes);
+    let mut viewer = viewer::Viewer::default();
+    if studio {
+        viewer.begin();
+        launch_menu.open = false;
+        scenes.initial = scenes.index("moonlit-glade").unwrap_or(scenes.initial);
+        let args: Vec<_> = std::env::args().collect();
+        if let Some(pair) = args.windows(2).find(|pair| pair[0] == "--studio-clip") {
+            viewer.clip = match pair[1].as_str() {
+                "idle" => viewer::Clip::Idle,
+                "turn" => viewer::Clip::Turn,
+                "jump" => viewer::Clip::Jump,
+                "forehand" => viewer::Clip::Forehand,
+                "backhand" => viewer::Clip::Backhand,
+                "overhead" => viewer::Clip::Overhead,
+                _ => viewer::Clip::Run,
+            };
+        }
+        if let Some(pair) = args.windows(2).find(|pair| pair[0] == "--studio-angle") {
+            viewer.angle = match pair[1].as_str() {
+                "front" => viewer::ViewAngle::Front,
+                "side" => viewer::ViewAngle::Side,
+                _ => viewer::ViewAngle::ThreeQuarter,
+            };
+        }
+    }
     let mut app = App::new();
     app.init_resource::<lockstep::Game>()
         .insert_resource(options)
         .insert_resource(hub)
         .init_resource::<control::Video>()
         .insert_resource(launch_menu)
+        .insert_resource(viewer)
         .insert_resource(ClearColor(Color::srgb(0.018, 0.025, 0.045)))
         .insert_resource(GlobalAmbientLight {
             color: Color::srgb(0.57, 0.70, 1.0),
@@ -245,9 +273,9 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
             control::begin,
             (piles::input, settlement::input, lockstep::mouse_input, lockstep::attack_input)
                 .chain()
-                .run_if(control::interactive),
-            lockstep::keyboard_input,
-            preview::playback.run_if(control::interactive),
+                .run_if(control::interactive).run_if(viewer::not_active),
+            lockstep::keyboard_input.run_if(viewer::not_active),
+            preview::playback.run_if(control::interactive).run_if(viewer::not_active),
             lockstep::step,
             (
                 lockstep::mirror_settlement,
@@ -269,7 +297,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
                 piles::showcase.run_if(control::interactive),
             )
                 .chain(),
-            (combat, animate_character, style::select_weapon).chain(),
+            (viewer::drive, combat.run_if(viewer::not_active), animate_character, style::select_weapon).chain(),
             (
                 preview::frame_character.run_if(control::interactive),
                 effects::update_effects,
@@ -286,18 +314,25 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
             .chain()
             .run_if(menu::playing),
     );
+    app.add_systems(Update, menu::setup.before(menu::update));
     app.add_systems(Update, menu::update.before(telemetry::begin).run_if(control::interactive));
+    app.add_systems(Update, viewer::setup.before(viewer::input));
+    app.add_systems(Update, viewer::input.before(telemetry::begin).run_if(control::interactive));
+    app.add_systems(Update, viewer::sync_hud.after(viewer::input));
+    app.add_systems(Update, viewer::camera.after(effects::camera_feedback).run_if(menu::playing));
+    app.add_systems(Update, viewer::capture.after(viewer::camera).run_if(control::interactive));
     app.add_systems(Update, menu::capture.after(menu::update).run_if(control::interactive));
     app.add_systems(Last, on_exit);
     if !simulation {
         app.add_systems(
             Update,
-            keyboard_actions.run_if(control::interactive),
+            keyboard_actions.run_if(control::interactive).run_if(viewer::not_active),
         )
-        .add_systems(Update, draw_navigation.run_if(control::interactive).run_if(menu::playing))
+        .add_systems(Update, draw_navigation.run_if(control::interactive).run_if(menu::playing).run_if(viewer::not_active))
         .add_systems(
             PostUpdate,
             (
+                effects::blade_trail,
                 assets::update_captions,
                 piles::captions,
                 settlement::captions,

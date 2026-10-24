@@ -164,6 +164,8 @@ pub struct Metrics {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settlement {
+    #[serde(default)]
+    pub swift_sword: bool,
     pub scenario: String,
     pub items: Vec<String>,
     pub depots: Vec<DepotState>,
@@ -220,6 +222,9 @@ pub struct SceneSetup {
     pub platforms_only: bool,
     /// Avatars can dig pits into the ground.
     pub diggable: bool,
+    /// Controlled avatars may jump instead of using the jetpack.
+    pub jump_enabled: bool,
+    pub swift_sword: bool,
     /// Generates the arena's ground as a mine from this seed.
     pub mine: Option<u64>,
     pub spawn: [Fx; 3],
@@ -378,6 +383,7 @@ impl Settlement {
             .collect();
         let tuning = [Weapon::Sword, Weapon::Spear, Weapon::Bow, Weapon::ArcCoil].map(|w| scenario.weapon_tuning(w)).to_vec();
         let settlement = Settlement {
+            swift_sword: false,
             base_health: scenario.base_health,
             health: scenario.base_health,
             weapons: scenario.weapons.clone(),
@@ -437,6 +443,8 @@ impl Settlement {
             .collect();
         terrain.platforms_only = setup.platforms_only;
         terrain.diggable = setup.diggable;
+        terrain.jump_enabled = setup.jump_enabled;
+        settlement.swift_sword = setup.swift_sword;
         if let Some(seed) = setup.mine {
             terrain.generate_mine(seed, at([setup.spawn[0], setup.spawn[2]]));
         }

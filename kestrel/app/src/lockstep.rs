@@ -269,6 +269,8 @@ pub fn build_world(world: &mut World) {
         }),
         memory_trial: library.has_feature(voxel_assets::SceneFeature::MemoryTrial),
         diggable: library.has_feature(voxel_assets::SceneFeature::Digging),
+        jump_enabled: library.has_feature(voxel_assets::SceneFeature::Jump),
+        swift_sword: library.has_feature(voxel_assets::SceneFeature::SwiftSword),
         mine: scene.mine.as_ref().map(|m| m.seed),
     };
     let scene_id = scene.id.clone();
@@ -614,7 +616,7 @@ pub fn end_frame(mut game: ResMut<Game>) {
 }
 
 /// Keyboard movement: camera-relative walking, the jetpack, digging, and respawning.
-pub fn keyboard_input(keys: Res<ButtonInput<KeyCode>>, mut controls: ResMut<Controls>, mut game: ResMut<Game>) {
+pub fn keyboard_input(keys: Res<ButtonInput<KeyCode>>, library: Res<SceneLibrary>, mut controls: ResMut<Controls>, mut game: ResMut<Game>) {
     let Some(agent) = game.player() else { return };
     if keys.just_pressed(KeyCode::KeyR) {
         game.command(CommandKind::Respawn { agent });
@@ -623,9 +625,13 @@ pub fn keyboard_input(keys: Res<ButtonInput<KeyCode>>, mut controls: ResMut<Cont
         return;
     }
     if keys.just_pressed(KeyCode::Space) {
-        game.command(CommandKind::Jetpack { agent, enabled: true });
+        if library.has_feature(voxel_assets::SceneFeature::Jump) {
+            game.command(CommandKind::Jump { agent });
+        } else {
+            game.command(CommandKind::Jetpack { agent, enabled: true });
+        }
     }
-    if keys.just_released(KeyCode::Space) {
+    if keys.just_released(KeyCode::Space) && !library.has_feature(voxel_assets::SceneFeature::Jump) {
         game.command(CommandKind::Jetpack { agent, enabled: false });
     }
     // X picks the spear in combat scenes, so digging is F.

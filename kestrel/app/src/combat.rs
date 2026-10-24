@@ -8,10 +8,14 @@ use crate::{
     sound::{Cue, Sound},
 };
 use bevy::prelude::*;
+use sim::settlement::avatar::SwordStroke;
 
 pub const WINDUP: f32 = 0.16;
 pub const ACTIVE_END: f32 = 0.29;
 pub const ATTACK_END: f32 = 0.58;
+pub const SWORD_WINDUP: f32 = 0.12;
+pub const SWORD_ACTIVE_END: f32 = 0.22;
+pub const SWORD_END: f32 = 0.44;
 pub const REBOUND_END: f32 = 0.42;
 pub const REST_ANGLE: f32 = 0.45;
 
@@ -32,8 +36,17 @@ pub struct Attack {
     pub impact_angle: Option<f32>,
     pub whooshed: bool,
     pub weapon: content::scenario::Weapon,
+    pub stroke: SwordStroke,
+    pub swift: bool,
 }
 impl Attack {
+    pub fn timing(&self) -> (f32, f32, f32) {
+        if self.weapon == content::scenario::Weapon::Sword && self.swift {
+            (SWORD_WINDUP, SWORD_ACTIVE_END, SWORD_END)
+        } else {
+            (WINDUP, ACTIVE_END, ATTACK_END)
+        }
+    }
     pub fn motion(&self) -> ActionMotion {
         match self.weapon {
             content::scenario::Weapon::Sword => ActionMotion::Sweep,
@@ -50,6 +63,8 @@ impl Attack {
             impact_angle: None,
             whooshed: false,
             weapon,
+            stroke: SwordStroke::Forehand,
+            swift: false,
         }
     }
     pub fn angle(&self) -> f32 {
@@ -57,18 +72,25 @@ impl Attack {
             return 0.05;
         }
         if let Some(angle) = self.impact_angle {
+            let recoil = if self.stroke == SwordStroke::Backhand {
+                0.9
+            } else {
+                -0.9
+            };
             if self.age < 0.15 {
-                lerp(angle, angle - 0.9, ease_out(self.age / 0.15))
+                lerp(angle, angle + recoil, ease_out(self.age / 0.15))
             } else {
                 lerp(
-                    angle - 0.9,
+                    angle + recoil,
                     REST_ANGLE,
                     smooth((self.age - 0.15) / (REBOUND_END - 0.15)),
                 )
             }
         } else {
             match self.weapon {
-                content::scenario::Weapon::Sword => swing_angle(self.age),
+                content::scenario::Weapon::Sword => {
+                    swing_angle_stroke_timed(self.age, self.stroke, self.swift)
+                }
                 content::scenario::Weapon::Spear => -0.15 + 0.25 * smooth(self.age / 0.22),
                 content::scenario::Weapon::Bow => -0.9 + 0.4 * smooth(self.age / 0.22),
                 content::scenario::Weapon::ArcCoil => -0.5 + 0.8 * smooth(self.age / 0.22),
@@ -80,7 +102,7 @@ impl Attack {
             >= if self.impact_angle.is_some() {
                 REBOUND_END
             } else {
-                ATTACK_END
+                self.timing().2
             }
     }
 }
@@ -97,19 +119,37 @@ pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
 }
 
 pub fn swing_angle(age: f32) -> f32 {
-    if age < WINDUP {
-        lerp(REST_ANGLE, -1.7, smooth(age / WINDUP))
-    } else if age < ACTIVE_END {
+    swing_angle_stroke(age, SwordStroke::Forehand)
+}
+
+pub fn swing_angle_stroke(age: f32, stroke: SwordStroke) -> f32 {
+    swing_angle_stroke_timed(age, stroke, true)
+}
+
+pub fn swing_angle_stroke_timed(age: f32, stroke: SwordStroke, swift: bool) -> f32 {
+    let (windup_time, active_end, attack_end) = if swift {
+        (SWORD_WINDUP, SWORD_ACTIVE_END, SWORD_END)
+    } else {
+        (WINDUP, ACTIVE_END, ATTACK_END)
+    };
+    let (windup, cut) = match stroke {
+        SwordStroke::Forehand => (-1.7, 1.4),
+        SwordStroke::Backhand => (1.6, -1.4),
+        SwordStroke::Overhead => (-0.62, 0.68),
+    };
+    if age < windup_time {
+        lerp(REST_ANGLE, windup, smooth(age / windup_time))
+    } else if age < active_end {
         lerp(
-            -1.7,
-            1.4,
-            ((age - WINDUP) / (ACTIVE_END - WINDUP)).powf(1.6),
+            windup,
+            cut,
+            ((age - windup_time) / (active_end - windup_time)).powf(if swift { 1.35 } else { 1.6 }),
         )
     } else {
         lerp(
-            1.4,
+            cut,
             REST_ANGLE,
-            smooth((age - ACTIVE_END) / (ATTACK_END - ACTIVE_END)),
+            smooth((age - active_end) / (attack_end - active_end)),
         )
     }
 }
@@ -191,12 +231,7 @@ pub fn combat(
     sound: Res<Sound>,
 ) {
     let dt = time.delta_secs().min(0.1);
-    if let Some((_, remaining)) = &mut controls.queued {
-        *remaining -= dt;
-        if *remaining <= 0.0 {
-            controls.queued = None;
-        }
-    }
+    controls.combo_timer = (controls.combo_timer - dt).max(0.0);
     if feedback.hit_stop > 0.0 {
         return;
     }
@@ -210,15 +245,23 @@ pub fn combat(
     attack.age += dt;
     if attack.weapon == content::scenario::Weapon::Sword
         && attack.impact_angle.is_none()
-        && attack.age >= WINDUP
-        && previous_age < ACTIVE_END
+        && attack.age >= attack.timing().0
+        && previous_age < attack.timing().1
     {
         if !attack.whooshed {
             sound.play(Cue::Swing);
             attack.whooshed = true;
         }
-        let from = swing_angle(previous_age.max(WINDUP));
-        let to = swing_angle(attack.age.min(ACTIVE_END));
+        let from = swing_angle_stroke_timed(
+            previous_age.max(attack.timing().0),
+            attack.stroke,
+            attack.swift,
+        );
+        let to = swing_angle_stroke_timed(
+            attack.age.min(attack.timing().1),
+            attack.stroke,
+            attack.swift,
+        );
         let discs: Vec<_> = obstacles
             .iter()
             .map(|(o, rock)| Disc {
@@ -300,24 +343,11 @@ pub fn combat(
                 voxel_assets::ImpactResponse::Crystal => Cue::Crystal,
                 voxel_assets::ImpactResponse::Polymer => Cue::Polymer,
             });
-        } else {
-            // Short-lived afterimages follow the actual blade sweep.
-            for fraction in [0.25, 0.65, 1.0] {
-                let angle = lerp(from, to, fraction);
-                effects::blade_echo(
-                    &mut commands,
-                    &assets,
-                    player.translation,
-                    player.rotation,
-                    angle,
-                    player.scale.x,
-                );
-            }
         }
     }
     if attack.finished() {
         controls.attack = None;
-        if let Some((aim, _)) = controls.queued.take() {
+        if let Some(aim) = controls.queued.take() {
             controls.strike(aim);
         }
     } else {
@@ -530,9 +560,9 @@ mod tests {
     #[test]
     fn heavy_cut_has_anticipation_rebound_and_recovery() {
         assert!((swing_angle(0.0) - REST_ANGLE).abs() < 1e-5);
-        assert!((swing_angle(WINDUP) + 1.7).abs() < 1e-5);
-        assert!((swing_angle(ACTIVE_END) - 1.4).abs() < 1e-5);
-        assert!((swing_angle(ATTACK_END) - REST_ANGLE).abs() < 1e-5);
+        assert!((swing_angle(SWORD_WINDUP) + 1.7).abs() < 1e-5);
+        assert!((swing_angle(SWORD_ACTIVE_END) - 1.4).abs() < 1e-5);
+        assert!((swing_angle(SWORD_END) - REST_ANGLE).abs() < 1e-5);
         let mut attack = Attack::new(Vec3::Z, content::scenario::Weapon::Sword);
         attack.impact_angle = Some(0.0);
         attack.age = 0.10;
@@ -540,6 +570,22 @@ mod tests {
         attack.age = REBOUND_END;
         assert!(attack.finished());
         assert!((attack.angle() - REST_ANGLE).abs() < 1e-5);
+    }
+
+    #[test]
+    fn sword_strokes_have_distinct_sweeps_and_share_recovery() {
+        let forehand = swing_angle_stroke(SWORD_ACTIVE_END, SwordStroke::Forehand);
+        let backhand = swing_angle_stroke(SWORD_ACTIVE_END, SwordStroke::Backhand);
+        let overhead = swing_angle_stroke(SWORD_ACTIVE_END, SwordStroke::Overhead);
+        assert!(forehand > 1.0 && backhand < -1.0 && overhead > 0.0);
+        for stroke in [
+            SwordStroke::Forehand,
+            SwordStroke::Backhand,
+            SwordStroke::Overhead,
+        ] {
+            assert!((swing_angle_stroke(0.0, stroke) - REST_ANGLE).abs() < 1e-5);
+            assert!((swing_angle_stroke(SWORD_END, stroke) - REST_ANGLE).abs() < 1e-5);
+        }
     }
     #[test]
     fn spear_draws_back_accelerates_forward_and_recovers_from_contact() {

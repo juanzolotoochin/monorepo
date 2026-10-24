@@ -1,5 +1,6 @@
 use crate::{
-    character::Player,
+    character::{LocalBlade, Player},
+    gameplay::Controls,
     impact::{self, ImpactTarget},
 };
 use bevy::{camera::ScalingMode, input::mouse::AccumulatedMouseScroll, prelude::*};
@@ -127,19 +128,10 @@ pub fn impact(
     }
 }
 
-pub fn blade_echo(
-    commands: &mut Commands,
-    assets: &FxAssets,
-    origin: Vec3,
-    facing: Quat,
-    angle: f32,
-    scale: f32,
-) {
-    let rotation = facing * Quat::from_rotation_y(angle);
-    let position = origin
-        + facing * Vec3::new(0.4, 0.90, 0.0) * scale
-        + rotation * Vec3::new(0.0, 0.0, 0.85 * scale);
-    let size = Vec3::new(0.07, 0.035, 1.30) * scale;
+pub fn blade_echo(commands: &mut Commands, assets: &FxAssets, blade: &GlobalTransform) {
+    let (scale, rotation, _) = blade.to_scale_rotation_translation();
+    let position = blade.transform_point(Vec3::new(-0.18, 0.015, 1.05));
+    let size = Vec3::new(0.035, 0.022, 0.95) * scale;
     commands.spawn((
         Mesh3d(assets.cube.clone()),
         MeshMaterial3d(assets.trail.clone()),
@@ -149,12 +141,35 @@ pub fn blade_echo(
         Particle {
             velocity: Vec3::ZERO,
             age: 0.0,
-            life: 0.09,
+            life: 0.055,
             size,
             gravity: 0.0,
             bounce: false,
         },
     ));
+}
+
+/// Emit from the posed weapon after transform propagation, so the streak
+/// follows the hand, elbow and torso through every kind of cut.
+pub fn blade_trail(
+    mut commands: Commands,
+    controls: Res<Controls>,
+    blades: Query<&GlobalTransform, With<LocalBlade>>,
+    assets: Res<FxAssets>,
+) {
+    let Some(attack) = controls.attack else {
+        return;
+    };
+    let (windup, active_end, _) = attack.timing();
+    if attack.weapon != content::scenario::Weapon::Sword
+        || attack.impact_angle.is_some()
+        || !(windup..active_end).contains(&attack.age)
+    {
+        return;
+    }
+    for blade in &blades {
+        blade_echo(&mut commands, &assets, blade);
+    }
 }
 
 /// Voxel droplets travel away from the cut, then bounce and fade on the ground.

@@ -53,6 +53,8 @@ pub struct Terrain {
     /// Avatars can dig pits here.
     #[serde(default)]
     pub diggable: bool,
+    #[serde(default)]
+    pub jump_enabled: bool,
     /// Dug pits by [`Terrain::pit_tile`], with how many layers deep, sorted.
     #[serde(default)]
     pub pits: Vec<((i32, i32), u8)>,
@@ -94,6 +96,7 @@ impl Terrain {
             platforms_only: false,
             rock: Vec::new(),
             diggable: false,
+            jump_enabled: false,
             pits: Vec::new(),
             mine: None,
             generated: Generated::default(),
@@ -304,6 +307,7 @@ impl StateHash for Terrain {
             h.write_u64((x as u32 as u64) << 32 | y as u32 as u64);
         }
         h.write(&self.diggable);
+        h.write(&self.jump_enabled);
         h.write_u64(self.pits.len() as u64);
         for &((x, y), depth) in &self.pits {
             h.write_u64((x as u32 as u64) << 32 | y as u32 as u64);

@@ -60,6 +60,10 @@ pub fn apply(world: &mut World) {
     let fixture_lighting = environment.as_ref().is_some_and(|e| !e.lights.is_empty());
     let hide_deck = environment.is_some() || scene.scene.terrain.is_some();
     let settlement = scene.scene.scenario.is_some();
+    let jumping = scene
+        .scene
+        .features
+        .contains(&voxel_assets::SceneFeature::Jump);
     for mut visible in world
         .query_filtered::<&mut Visibility, Or<(
             With<crate::scene::CombatPanel>,
@@ -77,12 +81,25 @@ pub fn apply(world: &mut World) {
         .query_filtered::<&mut Text, With<crate::scene::ControlHelp>>()
         .iter_mut(world)
     {
-        help.0 = if !available_weapons.is_empty() {
+        help.0 = if jumping {
+            "RMB MOVE / WASD RUN / SPACE JUMP / SHIFT+LMB ATTACK"
+        } else if !available_weapons.is_empty() {
             "RMB MOVE / SHIFT+LMB ATTACK / Z SWORD / X SPEAR / C BOW / V ARC"
         } else if settlement {
             "LMB STOCK / CTRL DEPOSIT / E MACHINE / SHIFT+LMB ATTACK"
         } else {
             "RMB MOVE / SHIFT+LMB STRIKE"
+        }
+        .into();
+    }
+    for mut help in world
+        .query_filtered::<&mut Text, With<crate::scene::SceneShortcutHelp>>()
+        .iter_mut(world)
+    {
+        help.0 = if jumping {
+            "1 - 9 / 0  SCENES    F4  GLADE    SPACE  JUMP    WASD  STEER    SHIFT  RUN    WHEEL  ZOOM    M  AUDIO"
+        } else {
+            "1 - 9 / 0  SCENES    F4  GLADE    SPACE  JETPACK    WASD  STEER    SHIFT  RUN    WHEEL  ZOOM    M  AUDIO"
         }
         .into();
     }

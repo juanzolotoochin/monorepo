@@ -85,7 +85,7 @@ fn run(args: &[String]) -> Result<(), String> {
             let workspace = std::env::var("BUILD_WORKSPACE_DIRECTORY")
                 .map_err(|_| "run this with `bazel run //kestrel/headless -- golden`".to_string())?;
             for golden in GOLDEN {
-                let path: PathBuf = [workspace.as_str(), "game", "testdata", &format!("{}.hashes", golden.name)].iter().collect();
+                let path: PathBuf = [workspace.as_str(), "kestrel", "testdata", &format!("{}.hashes", golden.name)].iter().collect();
                 write(&path.to_string_lossy(), golden_hashes(golden, threads, &content).as_bytes())?;
                 println!("wrote {}", path.display());
             }

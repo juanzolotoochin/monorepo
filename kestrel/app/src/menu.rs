@@ -2,6 +2,7 @@
 use crate::{
     assets::SceneLibrary,
     lockstep::{Game, Network},
+    viewer::Viewer,
 };
 use bevy::{
     app::AppExit,
@@ -29,6 +30,7 @@ pub(crate) enum Action {
     Mode(Mode),
     Field(Field),
     Start,
+    Viewer,
     Quit,
 }
 #[derive(Component)]
@@ -131,8 +133,13 @@ fn button(parent: &mut ChildSpawnerCommands, action: Action, text: &str) {
         .with_children(|p| label(p, text, 16.0, Color::srgb(0.81, 0.93, 0.91)));
 }
 
-pub fn setup(mut commands: Commands, menu: Res<LaunchMenu>, scenes: Res<SceneLibrary>) {
-    if !menu.open {
+pub fn setup(
+    mut commands: Commands,
+    menu: Res<LaunchMenu>,
+    scenes: Res<SceneLibrary>,
+    roots: Query<Entity, With<Root>>,
+) {
+    if !menu.open || !roots.is_empty() {
         return;
     }
     commands
@@ -259,6 +266,7 @@ pub fn setup(mut commands: Commands, menu: Res<LaunchMenu>, scenes: Res<SceneLib
                                     Color::srgb(0.55, 0.71, 0.75),
                                 );
                                 button(choices, Action::Start, "START GAME  >");
+                                button(choices, Action::Viewer, "CHARACTER STUDIO  >");
                                 button(choices, Action::Quit, "QUIT");
                                 choices.spawn((
                                     StatusText,
@@ -286,6 +294,7 @@ pub fn update(
     mut menu: ResMut<LaunchMenu>,
     mut scenes: ResMut<SceneLibrary>,
     mut game: ResMut<Game>,
+    mut viewer: ResMut<Viewer>,
     mut keys: MessageReader<KeyboardInput>,
     mut backgrounds: Query<(&Action, &Interaction, &mut BackgroundColor)>,
     mut fields: Query<(&FieldText, &mut Text)>,
@@ -321,6 +330,19 @@ pub fn update(
                 menu.error.clear();
             }
             Action::Start => start = true,
+            Action::Viewer => {
+                let index = scenes.index("moonlit-glade").unwrap_or(menu.selected_scene);
+                scenes.initial = index;
+                scenes.requested = Some(index);
+                scenes.locked = false;
+                game.network = None;
+                viewer.begin();
+                menu.open = false;
+                if let Ok(root) = root.single() {
+                    commands.entity(root).despawn();
+                }
+                return;
+            }
             Action::Quit => {
                 exit.write(AppExit::Success);
                 return;
@@ -392,6 +414,7 @@ pub fn update(
             Action::Scene(index) => menu.selected_scene == index,
             Action::Mode(mode) => menu.mode == mode,
             Action::Field(field) => menu.focus == Some(field),
+            Action::Viewer => false,
             _ => false,
         };
         background.0 = if selected {
@@ -492,6 +515,7 @@ mod tests {
             .insert_resource(LaunchMenu::new(true, &scenes))
             .insert_resource(scenes)
             .insert_resource(Game::default())
+            .init_resource::<Viewer>()
             .add_systems(Update, update);
         app.world_mut().spawn((
             Action::Start,
@@ -502,5 +526,32 @@ mod tests {
         assert!(!app.world().resource::<LaunchMenu>().open);
         assert_eq!(app.world().resource::<SceneLibrary>().initial, selected);
         assert!(app.world().resource::<Game>().network.is_none());
+    }
+
+    #[test]
+    fn studio_action_opens_the_glade_viewer() {
+        let scenes = SceneLibrary::new();
+        let glade = scenes.index("moonlit-glade").unwrap();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<KeyboardInput>()
+            .add_message::<AppExit>()
+            .insert_resource(LaunchMenu::new(true, &scenes))
+            .insert_resource(scenes)
+            .insert_resource(Game::default())
+            .init_resource::<Viewer>()
+            .add_systems(Update, update);
+        app.world_mut().spawn((
+            Action::Viewer,
+            Interaction::Pressed,
+            BackgroundColor::default(),
+        ));
+        app.update();
+        assert!(app.world().resource::<Viewer>().active);
+        assert!(!app.world().resource::<LaunchMenu>().open);
+        assert_eq!(
+            app.world().resource::<SceneLibrary>().requested,
+            Some(glade)
+        );
     }
 }

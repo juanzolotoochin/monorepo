@@ -792,6 +792,7 @@ pub fn setup(
                                     if side > 0.0 {
                                         let weapon = Transform::from_xyz(-0.04, 0.08, 0.05);
                                         h.spawn((
+                                            crate::character::LocalBlade,
                                             Part {
                                                 kind: PartKind::WeaponGrip,
                                                 rest: weapon,
@@ -974,6 +975,10 @@ pub struct ContactPanel;
 #[derive(Component)]
 pub struct ControlHelp;
 #[derive(Component)]
+pub struct SceneShortcutHelp;
+#[derive(Component)]
+pub struct HudRoot;
+#[derive(Component)]
 pub struct Status;
 #[derive(Component)]
 pub struct Gauge;
@@ -985,14 +990,17 @@ pub fn hud(mut commands: Commands) {
     let muted = Color::srgb(0.42, 0.54, 0.62);
     let cyan = Color::srgb(0.27, 0.88, 0.95);
     commands
-        .spawn((Node {
-            position_type: PositionType::Absolute,
-            left: px(36),
-            top: px(30),
-            flex_direction: FlexDirection::Column,
-            row_gap: px(7),
-            ..default()
-        },))
+        .spawn((
+            HudRoot,
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(36),
+                top: px(30),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(7),
+                ..default()
+            },
+        ))
         .with_children(|p| {
             p.spawn((
                 Text::new("K E S T R E L   / /   0 7"),
@@ -1033,6 +1041,7 @@ pub fn hud(mut commands: Commands) {
                 ..default()
             },
             ContactPanel,
+            HudRoot,
         ))
         .with_children(|p| {
             p.spawn((
@@ -1067,6 +1076,7 @@ pub fn hud(mut commands: Commands) {
                 ..default()
             },
             CombatPanel,
+            HudRoot,
             BackgroundColor(Color::srgba(0.025, 0.045, 0.07, 0.88)),
             BorderColor::all(cyan),
         ))
@@ -1110,7 +1120,7 @@ pub fn hud(mut commands: Commands) {
             });
         });
     commands
-        .spawn((Node {
+        .spawn((HudRoot, Node {
             position_type: PositionType::Absolute,
             bottom: px(38),
             right: px(36),
@@ -1130,6 +1140,7 @@ pub fn hud(mut commands: Commands) {
                 TextColor(white),
             ));
             p.spawn((
+                SceneShortcutHelp,
                 Text::new(
                     "1 - 9 / 0  SCENES    F4  GLADE    SPACE  JETPACK    WASD  STEER    SHIFT  RUN    WHEEL  ZOOM    M  AUDIO",
                 ),
@@ -1175,7 +1186,9 @@ pub fn update_hud(
         }
     } else if flight.airborne {
         (
-            if flight.requested {
+            if library.has_feature(voxel_assets::SceneFeature::Jump) {
+                "JUMP / AIRBORNE"
+            } else if flight.requested {
                 "JETPACK / HOVER"
             } else {
                 "JETPACK / SAFE LANDING"
@@ -1183,6 +1196,16 @@ pub fn update_hud(
             1.0,
             Color::srgb(0.34, 0.88, 0.93),
         )
+    } else if matches!(
+        flight.jump,
+        sim::settlement::avatar::JumpPhase::Preparing { .. }
+    ) {
+        ("JUMP / TAKEOFF", 1.0, Color::srgb(0.65, 0.94, 0.8))
+    } else if matches!(
+        flight.jump,
+        sim::settlement::avatar::JumpPhase::Landing { .. }
+    ) {
+        ("JUMP / LANDING", 1.0, Color::srgb(0.65, 0.94, 0.8))
     } else {
         ("READY", 1.0, Color::srgb(0.34, 0.88, 0.93))
     };

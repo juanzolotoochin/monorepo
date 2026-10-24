@@ -1,4 +1,4 @@
-//! Repeatable visual QA: `--showcase` or `--motion-showcase` with `--capture-dir`.
+//! Repeatable visual QA: `--showcase`, `--motion-showcase`, or `--jump-combo-showcase`.
 use crate::{
     character::Player,
     effects::{CameraRig, Feedback},
@@ -15,9 +15,13 @@ pub struct Preview {
     configured: bool,
     enabled: bool,
     motion: bool,
+    jump_combo: bool,
     directory: Option<String>,
     elapsed: f32,
     started: bool,
+    strikes: u8,
+    jump_frame: bool,
+    stroke_frames: [bool; 3],
     turned: bool,
     run_frame: bool,
     turn_frame: bool,
@@ -32,13 +36,16 @@ pub fn playback(
     mut preview: Local<Preview>,
     mut controls: ResMut<Controls>,
     mut game: ResMut<crate::lockstep::Game>,
+    library: Res<crate::assets::SceneLibrary>,
     mut player: Single<&mut Transform, With<Player>>,
     mut camera: Single<&mut CameraRig>,
 ) {
     if !preview.configured {
         preview.configured = true;
         preview.motion = std::env::args().any(|a| a == "--motion-showcase");
-        preview.enabled = preview.motion || std::env::args().any(|a| a == "--showcase");
+        preview.jump_combo = std::env::args().any(|a| a == "--jump-combo-showcase");
+        preview.enabled =
+            preview.motion || preview.jump_combo || std::env::args().any(|a| a == "--showcase");
     }
     if !preview.enabled {
         return;
@@ -50,6 +57,11 @@ pub fn playback(
         if preview.motion {
             camera.zoom = 3.0;
             game.go_to(Vec3::new(0.0, 0.0, -3.0), true);
+        } else if preview.jump_combo {
+            camera.zoom = 3.0;
+            if let Some(agent) = game.player() {
+                game.command(sim::CommandKind::Jump { agent });
+            }
         } else {
             player.translation = Vec3::new(0.1, 0.0, 2.5);
             controls.route = vec![Vec3::new(0.35, 0.0, 1.55)];
@@ -60,6 +72,21 @@ pub fn playback(
         game.go_to(Vec3::new(3.0, 0.0, -1.0), true);
     }
     if preview.motion {
+        return;
+    }
+    if preview.jump_combo {
+        let times = [4.12, 4.78, 5.44];
+        if let Some(&when) = times.get(preview.strikes as usize) {
+            if preview.elapsed >= when {
+                preview.strikes += 1;
+                crate::lockstep::strike(
+                    &mut game,
+                    &mut controls,
+                    &library,
+                    Vec3::new(0.9, 0.0, -1.0),
+                );
+            }
+        }
         return;
     }
     if preview.started && preview.elapsed > 5.0 && !preview.finished {
@@ -75,16 +102,17 @@ pub fn frame_character(
     controls: Res<Controls>,
     player: Single<&Transform, With<Player>>,
     mut camera: Single<&mut CameraRig>,
-    mut showcase: Local<Option<(bool, bool)>>,
+    mut showcase: Local<Option<(bool, bool, bool)>>,
 ) {
-    let (action, motion) = *showcase.get_or_insert_with(|| {
+    let (action, motion, jump_combo) = *showcase.get_or_insert_with(|| {
         let args: Vec<_> = std::env::args().collect();
         (
             args.iter().any(|a| a == "--showcase"),
             args.iter().any(|a| a == "--motion-showcase"),
+            args.iter().any(|a| a == "--jump-combo-showcase"),
         )
     });
-    if !motion && (!action || controls.attack.is_none()) {
+    if !motion && !jump_combo && (!action || controls.attack.is_none()) {
         return;
     }
     let target = player.translation + Vec3::Y * 0.8;
@@ -96,6 +124,8 @@ pub fn capture(
     mut commands: Commands,
     time: Res<Time>,
     controls: Res<Controls>,
+    flight: Res<crate::jetpack::Flight>,
+    player: Single<&Transform, With<Player>>,
     feedback: Res<Feedback>,
     mut preview: Local<Preview>,
     mut exit: MessageWriter<AppExit>,
@@ -105,6 +135,7 @@ pub fn capture(
         let args: Vec<_> = std::env::args().collect();
         preview.enabled = args.iter().any(|a| a == "--haul-showcase");
         preview.motion = args.iter().any(|a| a == "--motion-showcase");
+        preview.jump_combo = args.iter().any(|a| a == "--jump-combo-showcase");
         preview.directory = args
             .windows(2)
             .find(|pair| pair[0] == "--capture-dir")
@@ -120,7 +151,35 @@ pub fn capture(
         return;
     };
     preview.elapsed += time.delta_secs().min(0.1);
-    let name = if preview.motion && preview.elapsed > 3.45 && !preview.run_frame {
+    let name = if preview.jump_combo
+        && !preview.jump_frame
+        && matches!(
+            flight.jump,
+            sim::settlement::avatar::JumpPhase::Airborne { .. }
+        )
+        && player.translation.y - flight.support > 0.9
+    {
+        preview.jump_frame = true;
+        Some("jump.png")
+    } else if preview.jump_combo
+        && controls
+            .attack
+            .is_some_and(|a| a.age > a.timing().0 + 0.065 && a.age < a.timing().1)
+    {
+        let index = match controls.attack.unwrap().stroke {
+            sim::settlement::avatar::SwordStroke::Forehand => 0,
+            sim::settlement::avatar::SwordStroke::Backhand => 1,
+            sim::settlement::avatar::SwordStroke::Overhead => 2,
+        };
+        if preview.stroke_frames[index] {
+            None
+        } else {
+            preview.stroke_frames[index] = true;
+            Some(["forehand.png", "backhand.png", "overhead.png"][index])
+        }
+    } else if preview.jump_combo {
+        None
+    } else if preview.motion && preview.elapsed > 3.45 && !preview.run_frame {
         preview.run_frame = true;
         Some("run.png")
     } else if preview.motion && preview.elapsed > 3.95 && !preview.turn_frame {
@@ -132,7 +191,7 @@ pub fn capture(
         preview.overview = true;
         Some("overview.png")
     } else if controls.attack.is_some_and(|attack| {
-        attack.age >= crate::combat::WINDUP + 0.03 && attack.age < crate::combat::ACTIVE_END
+        attack.age >= attack.timing().0 + 0.065 && attack.age < attack.timing().1
     }) && !preview.action
     {
         preview.action = true;
@@ -148,7 +207,15 @@ pub fn capture(
             .spawn(Screenshot::primary_window())
             .observe(save_to_disk(format!("{directory}/{name}")));
     }
-    if preview.elapsed > if preview.motion { 5.5 } else { 8.0 } {
+    if preview.elapsed
+        > if preview.motion {
+            5.5
+        } else if preview.jump_combo {
+            7.0
+        } else {
+            8.0
+        }
+    {
         exit.write(AppExit::Success);
     }
 }
