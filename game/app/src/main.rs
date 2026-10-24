@@ -152,7 +152,6 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .init_resource::<style::ActiveStyle>()
         .init_resource::<telemetry::Telemetry>()
         .init_resource::<settlement::Settlement>()
-        .init_resource::<piles::PileLab>()
         .init_resource::<effects::Feedback>()
         .insert_resource(if simulation || offscreen {
             sound::Sound::recording()
@@ -223,6 +222,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .add_service::<lockstep::SessionService>()
         .add_service::<lockstep::WorldMirror>()
         .add_service::<scene_view::SceneView>()
+        .add_service::<piles::PileLab>()
         .add_service::<Views>()
         .add_service::<digging::Digging>()
         .add_service::<jetpack::Flight>()
@@ -237,7 +237,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         )
         .add_service_systems::<Views, _>(
             Phase::Input,
-            (piles::setup_scene, settlement::setup).chain().run_if(active.clone()),
+            settlement::setup.run_if(active.clone()),
         )
         .add_service_systems::<lockstep::PlayerControl, _>(
             Phase::Input,
@@ -255,7 +255,6 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
             Phase::Mirror,
             (
                 lockstep::mirror_settlement,
-                piles::mirror,
                 lockstep::follow_avatar,
                 peers::update.run_if(control::rendered),
             )
@@ -266,14 +265,6 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
             Phase::Present,
             (
                 settlement::tick,
-                (
-                    piles::spawn_tosses,
-                    piles::update_transit,
-                    piles::render,
-                    piles::update_display.run_if(control::rendered),
-                    piles::showcase.run_if(control::interactive),
-                )
-                    .chain(),
                 (combat, animate_character, style::select_weapon).chain(),
                 effects::update_effects,
                 effects::camera_feedback.run_if(control::rendered),

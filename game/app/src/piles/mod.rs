@@ -10,6 +10,7 @@ use crate::{
 use sim::settlement::piles::PileAction;
 use sim::CommandKind;
 use bevy::prelude::*;
+use service::{AppServices, Phase, Service, WorldLayer, WorldScoped, WorldState};
 use voxel_assets::{Mineral, PileLayout};
 
 fn mineral_name(m: Mineral) -> &'static str {
@@ -41,17 +42,17 @@ fn point(p: [f32; 2]) -> Vec3 {
 fn place(p: &Pile) -> Vec3 {
     Vec3::new(p.position[0], p.height, p.position[1])
 }
-#[derive(Clone)]
+/// The lab's mesh and materials, made once and shared by every world.
+#[derive(Resource, Clone)]
 struct LabAssets {
     cube: Handle<Mesh>,
     mineral: [Handle<StandardMaterial>; 3],
     dark: Handle<StandardMaterial>,
     trim: Handle<StandardMaterial>,
 }
-/// The view's copy of the simulated pile lab.
+/// The view's copy of the simulated pile lab (World layer).
 #[derive(Resource)]
 pub struct PileLab {
-    scene: usize,
     pub(crate) stock: Option<Stock>,
     layout: Option<PileLayout>,
     assets: Option<LabAssets>,
@@ -71,7 +72,6 @@ pub struct PileLab {
 impl Default for PileLab {
     fn default() -> Self {
         Self {
-            scene: usize::MAX,
             stock: None,
             layout: None,
             assets: None,
@@ -87,8 +87,36 @@ impl Default for PileLab {
         }
     }
 }
+/// A piece of the lab's view; it goes with the world.
 #[derive(Component)]
+#[require(WorldScoped)]
 pub struct LabEntity;
+
+impl Service for PileLab {
+    type Layer = WorldLayer;
+    type Deps = (WorldMirror, crate::scene_view::SceneView);
+
+    fn init(world: &mut World) -> Self {
+        world.run_system_cached_with(view::build, PileLab::default()).expect("building the pile lab's view")
+    }
+
+    fn systems(app: &mut App) {
+        let active = in_state(WorldState::Active);
+        app.add_service_systems::<Self, _>(Phase::Mirror, mirror.run_if(active.clone()))
+            .add_service_systems::<Self, _>(
+                Phase::Present,
+                (
+                    spawn_tosses,
+                    update_transit,
+                    render,
+                    update_display.run_if(crate::control::rendered),
+                    showcase.run_if(crate::control::interactive),
+                )
+                    .chain()
+                    .run_if(active),
+            );
+    }
+}
 #[derive(Component)]
 pub struct MineralUnit;
 #[derive(Component)]
@@ -132,7 +160,7 @@ mod view;
 pub use demo::showcase;
 pub use transfer::{spawn_tosses, update_transit};
 pub(crate) use transfer::{Destination, Transit};
-pub use view::{captions, render, setup_scene, update_display};
+pub use view::{captions, render, update_display};
 
 pub(crate) fn mineral(material: u8) -> Mineral {
     match material {

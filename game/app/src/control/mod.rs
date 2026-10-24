@@ -536,7 +536,9 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
             if !applied {
                 return None;
             }
-            let lab = world.resource::<PileLab>();
+            let Some(lab) = world.get_resource::<PileLab>() else {
+                return Some(Err("The world changed during the haul".into()));
+            };
             if lab.job_serial != *serial {
                 return Some(Err(lab.last_error.clone().unwrap_or_else(|| "Haul was superseded or its scene changed".into())));
             }
@@ -579,9 +581,9 @@ pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
     let controls = world.resource::<Controls>();
     let movement = json!({"route":controls.route.iter().map(|p|p.to_array()).collect::<Vec<_>>(),"velocity":controls.velocity.to_array(),"attacking":controls.attack.is_some(),"weapon":controls.weapon,"impacts":controls.impacts});
     let scene = world.get_resource::<SceneView>().map_or("LOADING", SceneView::title).to_string();
-    let lab = world.resource::<PileLab>();
-    let airborne = lab.in_flight;
-    let (piles, cargo, totals) = if let Some(stock) = &lab.stock {
+    let lab = world.get_resource::<PileLab>();
+    let airborne = lab.map_or(0, |lab| lab.in_flight);
+    let (piles, cargo, totals) = if let Some(stock) = lab.and_then(|lab| lab.stock.as_ref()) {
         (stock.piles.iter().map(|(&id,p)|json!({"id":id,"material":p.material,"position":[p.position[0],0.0,p.position[1]],"units":p.units,"source":p.source,"capacity":voxel_assets::PILE_CAPACITY})).collect::<Vec<_>>(),json!({"material":stock.cargo.material,"units":stock.cargo.units,"capacity":stock.cargo.capacity}),json!({"created":stock.created,"ground":stock.ground(),"carried":stock.cargo.units,"conserved":stock.total()==stock.created}))
     } else {
         (vec![], Value::Null, Value::Null)
@@ -645,7 +647,8 @@ pub fn begin(world: &mut World) {
     if hub.ready.is_none() && hub.tick > hub.warmup && world_active(world) {
         hub.ready = Some(hub.tick);
     }
-    if hub.ready.is_some() && hub.active.is_none() && hub.failed.is_none() {
+    // Commands start only while a world is up, not in the frames between two.
+    if hub.ready.is_some() && world_active(world) && hub.active.is_none() && hub.failed.is_none() {
         if let Some(envelope) = hub.queue.pop_front() {
             let pending =
                 start(world, &envelope.request.command, hub.tick).unwrap_or_else(Pending::Failed);
