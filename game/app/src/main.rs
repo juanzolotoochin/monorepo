@@ -152,7 +152,6 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .init_resource::<style::ActiveStyle>()
         .init_resource::<telemetry::Telemetry>()
         .init_resource::<settlement::Settlement>()
-        .init_resource::<palimpsest::Memory>()
         .init_resource::<piles::PileLab>()
         .init_resource::<effects::Feedback>()
         .insert_resource(if simulation || offscreen {
@@ -226,6 +225,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .add_service::<scene_view::SceneView>()
         .add_service::<Views>()
         .add_service::<jetpack::Flight>()
+        .add_service::<palimpsest::Memory>()
         .add_service::<lockstep::PlayerControl>()
         .add_systems(First, (telemetry::begin, control::begin).chain())
         .add_systems(
@@ -236,12 +236,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         )
         .add_service_systems::<Views, _>(
             Phase::Input,
-            (
-                palimpsest::setup,
-                (piles::setup_scene, settlement::setup).chain(),
-            )
-                .chain()
-                .run_if(active.clone()),
+            (piles::setup_scene, settlement::setup).chain().run_if(active.clone()),
         )
         .add_service_systems::<lockstep::PlayerControl, _>(
             Phase::Input,
@@ -264,7 +259,6 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
                 peers::update.run_if(control::rendered),
                 digging::update,
                 digging::follow_camera,
-                palimpsest::tick,
             )
                 .chain()
                 .run_if(active.clone()),

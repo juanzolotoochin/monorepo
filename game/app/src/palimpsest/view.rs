@@ -41,25 +41,22 @@ fn block(world: &mut World, pos: Vec3, size: Vec3, material: Handle<StandardMate
         ))
         .id()
 }
-pub fn setup(world: &mut World) {
-    let index = world.resource::<crate::scene_view::SceneView>().index;
-    let reset = world
-        .resource::<ButtonInput<KeyCode>>()
-        .just_pressed(KeyCode::KeyR);
-    if world.resource::<Memory>().current == Some(index) && !reset {
+/// R starts the trial over: its pieces are rebuilt and the view's copy of
+/// the recording dropped.
+pub(super) fn reset(world: &mut World) {
+    if !world.resource::<ButtonInput<KeyCode>>().just_pressed(KeyCode::KeyR) {
         return;
     }
-    let old: Vec<_> = world
-        .query_filtered::<Entity, With<Trial>>()
-        .iter(world)
-        .collect();
+    let old: Vec<_> = world.query_filtered::<Entity, With<Trial>>().iter(world).collect();
     for e in old {
         world.despawn(e);
     }
-    *world.resource_mut::<Memory>() = Memory {
-        current: Some(index),
-        ..default()
-    };
+    *world.resource_mut::<Memory>() = Memory::default();
+    spawn(world);
+}
+/// Builds the trial's view for a world: the recording's ghost everywhere,
+/// and in a trial scene the pads, cables, wall and core.
+pub(super) fn spawn(world: &mut World) {
     art(world);
     let a = world.resource::<Art>();
     let (cube, metal, dark, blue, green, gold, ghost) = (

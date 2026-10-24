@@ -4,9 +4,24 @@ use crate::{
     sound::{Cue, Sound},
 };
 use bevy::prelude::*;
+use service::{AppServices, Phase, Service, WorldLayer, WorldScoped, WorldState};
 use voxel_assets::SceneFeature;
 mod view;
-pub use view::setup;
+
+impl Service for Memory {
+    type Layer = WorldLayer;
+    type Deps = (crate::lockstep::WorldMirror, crate::scene_view::SceneView);
+
+    fn init(world: &mut World) -> Self {
+        view::spawn(world);
+        Memory::default()
+    }
+
+    fn systems(app: &mut App) {
+        app.add_service_systems::<Self, _>(Phase::Input, view::reset.run_if(in_state(WorldState::Active)))
+            .add_service_systems::<Self, _>(Phase::Mirror, tick.run_if(in_state(WorldState::Active)));
+    }
+}
 
 const PADS: [Vec3; 2] = [Vec3::new(-4.0, 0.0, -2.0), Vec3::new(-1.0, 0.0, 3.0)];
 const CORE: Vec3 = Vec3::new(5.0, 0.8, 0.0);
@@ -16,10 +31,9 @@ struct Sample {
     position: Vec3,
     rotation: Quat,
 }
-/// The view's copy of the simulated memory trial.
+/// The view's copy of the simulated memory trial (World layer).
 #[derive(Resource, Default)]
 pub struct Memory {
-    current: Option<usize>,
     sample_count: usize,
     recording: bool,
     elapsed: f32,
@@ -40,7 +54,9 @@ struct Art {
     gold: Handle<StandardMaterial>,
     ghost: Handle<StandardMaterial>,
 }
+/// A piece of the trial's view; it goes with the world.
 #[derive(Component)]
+#[require(WorldScoped)]
 struct Trial;
 #[derive(Component)]
 struct Ghost;
@@ -167,6 +183,6 @@ pub fn tick(world: &mut World) {
 }
 
 pub fn snapshot(world: &World) -> serde_json::Value {
-    let m = world.resource::<Memory>();
+    let Some(m) = world.get_resource::<Memory>() else { return serde_json::Value::Null };
     serde_json::json!({"recording":m.recording,"recorded_seconds":m.elapsed,"replay_seconds":m.replay,"sample_count":m.sample_count,"ghost_position":m.ghost.map(|g|g.position.to_array()),"plates":m.pads,"charge":m.charge,"unlocked":m.unlocked,"collected":m.collected})
 }

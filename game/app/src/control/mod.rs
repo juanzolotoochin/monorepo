@@ -698,7 +698,8 @@ pub fn end(world: &mut World) {
             && hub.active.is_none());
     // Like commands, inspections wait for the first world.
     let inspecting = hub.ready.is_some() && !hub.inspect.is_empty();
-    if hub.options.trace.is_some() || inspecting || finishing {
+    let tracing = hub.options.trace.is_some() && hub.ready.is_some();
+    if tracing || inspecting || finishing {
         hub.latest = snapshot(world, &hub);
     }
     // The trace starts with the first world, as scripts do.
