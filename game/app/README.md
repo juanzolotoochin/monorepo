@@ -16,6 +16,12 @@ bazel run //game/app:demo
 bazel test //game/app:movement_test
 ```
 
+Run without flags, the game opens on its main menu: type a name, then Play
+or Host on the scene shown (`<` and `>` pick another), or Join an address.
+Enter in the port or address field hosts or joins. `--host`, `--join`,
+`--scene` and `--replay-input` skip the menu and start that session at once;
+runs driven by a demo script or the control port never show it.
+
 To cross-compile a Windows x64 release from Linux or macOS, use the MSVC
 target platform. The compiler and build scripts run on the host; Rust and the
 native audio code target Windows through hermetic Clang/LLD, the Microsoft
@@ -68,7 +74,7 @@ startup sequence; run it on Windows with:
 | Mouse wheel | Smooth camera zoom |
 | R | Reset character position and actions |
 | M | Mute / unmute |
-| Esc | Quit |
+| Esc | Pause overlay: Resume, Leave to menu, Quit (the world keeps running). Quits in scripted runs |
 
 Move within about two world units of a rock and strike toward it. The blade
 has a deliberate wind-up, fast cut and long recovery. Contact stops the blade,
@@ -481,8 +487,10 @@ playing alone). `--scene` picks another one; every player must pass the same
 scene. Scene keys are disabled while networked. The HUD's top right shows the
 connection. Leaving and rejoining gives a new avatar; the old one stays put.
 If the host leaves (or crashes: after 5 seconds without hearing from it), or
-turns a player away, or falls out of sync with them, that player's game shows
-why and closes 4 seconds later; there's no host migration.
+turns a player away, or falls out of sync with them, that player goes back to
+the main menu, which says why; there's no host migration. Runs driven by a
+script or the control port show why and close 4 seconds later instead. The
+menu's Host and Join do the same as `--host` and `--join`.
 
 To defend the Red Clearing together, both pass `--scene combat-arena`:
 

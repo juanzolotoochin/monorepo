@@ -1,9 +1,9 @@
 # Service layers
 
-Status: design agreed on 2026-10-24; migration steps 1 to 5 are done, so
-`game/app` runs on services (see [As built](#as-built)). Still to come: the
-main menu and the lobby (step 6), `Bindings`, `ScriptDriver` and `Profile`,
-and `game/play`.
+Status: design agreed on 2026-10-24; migration steps 1 to 5 and the main
+menu (step 6a) are done, so `game/app` runs on services (see
+[As built](#as-built)). Still to come: the lobby (step 6b), `Bindings`,
+`ScriptDriver` and `Profile`, and `game/play`.
 
 The game's front end needs one answer to "where does this flow or system
 live, and for how long?". This proposal groups front-end code into
@@ -145,7 +145,8 @@ app.add_plugins(DefaultPlugins)          // before ServicesPlugin, which adds
 - **`SessionService` moves the World layer.** After the Step phase it sets
   World Off for a frame when the session's world is replaced, and Loading
   once a new one is in the slot; World services decide when it is Active.
-  `Flow` (App) starts the session. Nothing else sets a layer's state.
+  `Flow` (App) starts and leaves the session. Nothing else sets a layer's
+  state.
 - **Registration order is the order.** Within a layer, services start, tick
   and (in reverse) stop in the order they are registered. A dependency must be
   registered earlier, so there is nothing to sort and no cycle is possible.
@@ -272,7 +273,9 @@ order within a layer):
 
 | Layer | Service | File | What it owns |
 |---|---|---|---|
-| App | `Flow` | `flow.rs` | The launch from the command line; starts the session. Escape and mute keys |
+| App | `Flow` | `flow.rs` | Opens and leaves sessions (from the command line or the menu) and keeps why the last one ended. Escape (without menus) and mute keys |
+| App | `MainMenu` | `menu.rs` | The main menu, while Session is Off: name, Play or Host on a scene, Join, Quit. Players' runs only |
+| Session | `Pause` | `pause.rs` | The pause overlay (Escape): Resume, Leave to menu, Quit. Takes the session's input while open. Players' runs only |
 | Session | `SessionService` | `lockstep.rs` | The session, clock, scene requests (digit keys, control port), recordings, the ending banner; moves the World layer |
 | World | `WorldMirror` | `lockstep.rs` | The last two ticks for interpolation, and the world's scene from the session's label |
 | World | `SceneView` | `scene_view.rs` | The scene shown: player body, industrial props, boulders, style, the deck's visibility |
@@ -286,6 +289,14 @@ order within a layer):
 | World | `Effects` | `effects.rs` | Particles, flashes, camera shake |
 | World | `Hud` | `scene.rs` | The HUD's live readouts |
 | World | `PlayerControl` | `lockstep.rs` | Movement, attack and keyboard input into commands |
+
+**Players' runs and scripted runs.** `Options::menus` is true for a run with a
+window and no demo script, frame recording or control port. Those runs get
+`MainMenu` and `Pause`: with no session flags (`--host`, `--join`, `--scene`,
+`--replay-input`) the game opens on the menu, and a session that ends or
+can't start returns to it with the reason. Every other run starts its
+session from the flags, keeps the closing banner, and exits on a failed
+start, so demos, replays and render checks are unchanged.
 
 Still plain App resources: `SceneLibrary` (the packs), `ModelCache`,
 `SceneArt` (shared meshes and materials), `Telemetry`, `Sound`, the control
@@ -330,6 +341,14 @@ passing.
    `ActiveStyle`, `Flight`, `Memory`, `PileLab` and digging's `Local`), and
    so did `SceneLibrary.current` and `switch_scene`.
 6. Build the main menu and the lobby on top.
+   - 6a, the main menu. Done: `MainMenu`, `Pause`, and `Flow` opening
+     sessions itself (`lockstep::open`), so a failed bind is a message, not
+     a panic. Host and Join go straight into a world; the menu is bevy_ui
+     with a small hand-written text field (Bevy's `EditableText` needs the
+     `bevy_ui_widgets` feature, which the build leaves out). The menu's
+     default port is 7000. Nothing is remembered between runs until
+     `Profile`.
+   - 6b, the lobby: Host and Join land in it, the host's slot starts empty.
 
 ## Open questions
 
