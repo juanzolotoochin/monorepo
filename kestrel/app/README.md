@@ -125,8 +125,10 @@ surfaces; there are no enemies, health or loot yet.
 Movement uses acceleration, braking, and footsteps. A render-only motion state
 blends speed and turn rate without changing simulation or combat timing. The
 shared pose drives the torso, head, arms, thighs, shins, and weapon for both
-the local player and network peers. Scene skins can replace those pivots through
-`ActorPart` recipes; older torso and leg skins still work. Click routes use a
+the local player and network peers. The shoulder, elbow, wrist and weapon form
+one hierarchy, so the blade follows the hand through a cut. Scene skins can
+replace those pivots through `ActorPart` recipes using voxel shapes, smooth
+capsules and ellipsoids, or both; older torso and leg skins still work. Click routes use a
 half-unit A* grid with body clearance, diagonal
 collision checks and line-of-sight smoothing. Local collision uses substeps
 and sliding. Attack collision sweeps the blade through angle space, so a fast
@@ -150,6 +152,7 @@ This writes `overview.png`, a close `action.png`, and `impact.png` if the cut
 connects, then exits. `--showcase` alone
 plays the short sequence and leaves the window open for further interaction.
 [Action frame preview](../docs/character-action-preview.png).
+[Moonlit Glade articulated character](../docs/moonlit-character-action-preview.png).
 
 Code is split into `assets.rs` (compiled scenes and prefab caching),
 `scene.rs` (shared deck, character art and HUD), `gameplay.rs` (controls and

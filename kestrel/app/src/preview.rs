@@ -45,10 +45,26 @@ pub fn playback(
     }
     if preview.started && preview.elapsed > 5.0 && !preview.finished {
         preview.finished = true;
-        camera.zoom = 4.5;
+        camera.zoom = 3.0;
         let aim = Vec3::new(1.6, 0.0, -0.1) - player.translation;
         controls.strike(aim);
     }
+}
+
+/// Keep the moving character in frame for the close action capture.
+pub fn frame_character(
+    controls: Res<Controls>,
+    player: Single<&Transform, With<Player>>,
+    mut camera: Single<&mut CameraRig>,
+    mut showcase: Local<Option<bool>>,
+) {
+    let enabled = *showcase.get_or_insert_with(|| std::env::args().any(|a| a == "--showcase"));
+    if !enabled || controls.attack.is_none() {
+        return;
+    }
+    let target = player.translation + Vec3::Y * 0.8;
+    camera.target = target;
+    camera.base = target + Vec3::new(20.0, 20.0, 20.0);
 }
 
 pub fn capture(
@@ -82,9 +98,9 @@ pub fn capture(
         preview.overview = true;
         Some("overview.png")
     } else if controls.attack.is_some_and(|attack| {
-        attack.age >= crate::gameplay::WINDUP + 0.03
-            && attack.age < crate::gameplay::ACTIVE_END
-    }) && !preview.action {
+        attack.age >= crate::gameplay::WINDUP + 0.03 && attack.age < crate::gameplay::ACTIVE_END
+    }) && !preview.action
+    {
         preview.action = true;
         Some("action.png")
     } else if controls.impacts > 0 && feedback.hit_stop <= 0.0 && !preview.impact {

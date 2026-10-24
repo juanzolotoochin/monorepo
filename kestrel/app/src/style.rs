@@ -241,6 +241,16 @@ pub fn apply(world: &mut World) {
                 } else {
                     ActorPart::RightArm
                 }),
+                crate::gameplay::PartKind::Forearm(side) => Some(if *side < 0.0 {
+                    ActorPart::LeftForearm
+                } else {
+                    ActorPart::RightForearm
+                }),
+                crate::gameplay::PartKind::Hand(side) => Some(if *side < 0.0 {
+                    ActorPart::LeftHand
+                } else {
+                    ActorPart::RightHand
+                }),
                 crate::gameplay::PartKind::Shin(side) => Some(if *side < 0.0 {
                     ActorPart::LeftShin
                 } else {
@@ -261,6 +271,10 @@ pub fn apply(world: &mut World) {
             let exact = parts.get(&parent.parent()).copied();
             let fallback = match kind {
                 crate::gameplay::PartKind::Head | crate::gameplay::PartKind::Arm(_) => Some(ActorPart::Body),
+                crate::gameplay::PartKind::Forearm(side) | crate::gameplay::PartKind::Hand(side) => {
+                    let arm = if *side < 0.0 { ActorPart::LeftArm } else { ActorPart::RightArm };
+                    if actor.iter().any(|a| a.part == arm) { Some(arm) } else { Some(ActorPart::Body) }
+                }
                 crate::gameplay::PartKind::Shin(side) => Some(if *side < 0.0 {
                     ActorPart::LeftLeg
                 } else {

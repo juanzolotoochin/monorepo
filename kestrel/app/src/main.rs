@@ -266,7 +266,10 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
             )
                 .chain(),
             (combat, animate_character, style::select_weapon).chain(),
-            effects::update_effects,
+            (
+                preview::frame_character.run_if(control::interactive),
+                effects::update_effects,
+            ).chain(),
             atmosphere::animate,
             effects::camera_feedback.run_if(control::rendered),
             scene::update_hud.run_if(control::rendered),

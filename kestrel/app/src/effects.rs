@@ -372,7 +372,7 @@ pub fn camera_feedback(
     camera: Single<(&mut Transform, &mut Projection, &mut CameraRig), With<Camera>>,
 ) {
     let (mut transform, mut projection, mut rig) = camera.into_inner();
-    rig.zoom = (rig.zoom - scroll.delta.y * 0.8).clamp(4.5, 26.0);
+    rig.zoom = (rig.zoom - scroll.delta.y * 0.8).clamp(3.0, 26.0);
     if let Projection::Orthographic(p) = &mut *projection {
         if let ScalingMode::FixedVertical { viewport_height } = &mut p.scaling_mode {
             *viewport_height +=

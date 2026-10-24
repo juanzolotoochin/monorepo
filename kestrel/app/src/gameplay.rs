@@ -27,6 +27,8 @@ pub enum PartKind {
     Body,
     Head,
     Arm(f32),
+    Forearm(f32),
+    Hand(f32),
     Leg(f32),
     Shin(f32),
     Sword,
@@ -524,12 +526,40 @@ impl Pose {
                         attack.angle() - REST_ANGLE
                     };
                     if side > 0.0 {
-                        transform.rotation = Quat::from_rotation_y(follow * 0.35)
-                            * Quat::from_rotation_x(-0.42 - follow.abs() * 0.16);
-                        transform.translation.z += follow.max(0.0) * 0.08;
+                        let yaw = if attack.weapon == content::scenario::Weapon::Spear {
+                            0.0
+                        } else {
+                            follow * 0.65
+                        };
+                        transform.rotation = Quat::from_rotation_y(yaw)
+                            * Quat::from_rotation_x(-0.18 - follow.abs() * 0.16);
+                        transform.translation.z += follow.max(0.0) * 0.12;
                     } else {
                         transform.rotation *= Quat::from_rotation_x(-0.25 + follow * 0.10);
                     }
+                }
+            }
+            PartKind::Forearm(side) => {
+                let phase = (self.stride.sin() * side).max(0.0);
+                let bend = 0.32 + phase * 0.22 * travel + 0.13 * running;
+                transform.rotation = Quat::from_rotation_x(-bend);
+                if let Some(attack) = self.attack {
+                    let progress = smooth(attack.age / WINDUP);
+                    transform.rotation = Quat::from_rotation_x(if side > 0.0 {
+                        -0.52 - 0.36 * progress
+                    } else {
+                        -0.48
+                    });
+                }
+            }
+            PartKind::Hand(side) => {
+                transform.rotation = Quat::from_rotation_x(if side > 0.0 { 0.24 } else { 0.08 });
+                if let Some(attack) = self.attack {
+                    transform.rotation = Quat::from_rotation_x(if side > 0.0 {
+                        0.18 + 0.12 * smooth(attack.age / WINDUP)
+                    } else {
+                        -0.12
+                    });
                 }
             }
             PartKind::Leg(side) => {
@@ -572,14 +602,25 @@ impl Pose {
                         )
                     }
                 });
-                transform.rotation = Quat::from_rotation_y(angle) * Quat::from_rotation_x(tilt);
+                // The blade is a child of the right hand. Shoulder and torso
+                // carry most of the cut; the wrist supplies the remaining yaw.
+                let wrist_yaw = if self
+                    .attack
+                    .is_some_and(|a| a.weapon != content::scenario::Weapon::Spear)
+                {
+                    REST_ANGLE + (angle - REST_ANGLE) * 0.23
+                } else {
+                    angle
+                };
+                transform.rotation =
+                    Quat::from_rotation_y(wrist_yaw) * Quat::from_rotation_x(tilt + 0.35);
                 if let Some(attack) = self.attack {
                     if attack.weapon == content::scenario::Weapon::Spear {
                         let (extension, pitch) =
                             spear_pose(attack.age, attack.impact_angle.is_some());
                         transform.translation.z += extension;
                         transform.translation.y -= extension.max(0.0) * 0.04;
-                        transform.rotation = Quat::from_rotation_x(pitch);
+                        transform.rotation = Quat::from_rotation_x(pitch + 0.35);
                     }
                 }
                 transform.translation.y += self.breathe;
@@ -605,6 +646,16 @@ impl Pose {
                 transform.rotation =
                     Quat::from_rotation_x(if side > 0.0 { pitch * 0.48 } else { -0.55 });
             }
+            PartKind::Forearm(side) => {
+                transform.rotation = Quat::from_rotation_x(if side > 0.0 {
+                    -0.55 - 0.18 * down
+                } else {
+                    -0.38
+                });
+            }
+            PartKind::Hand(side) => {
+                transform.rotation = Quat::from_rotation_x(if side > 0.0 { 0.16 } else { 0.0 });
+            }
             PartKind::Leg(side) => {
                 transform.rotation =
                     Quat::from_rotation_x(-0.3 * side) * Quat::from_rotation_z(0.12 * side);
@@ -613,10 +664,9 @@ impl Pose {
                 transform.rotation = Quat::from_rotation_x(-0.28);
             }
             PartKind::Sword => {
-                transform.translation.x *= 0.4;
                 transform.translation.z += 0.18;
-                transform.translation.y -= 0.05 + 0.1 * down;
-                transform.rotation = Quat::from_rotation_x(pitch);
+                transform.translation.y -= 0.04 * down;
+                transform.rotation = Quat::from_rotation_x(pitch + 0.35);
             }
         }
         transform
@@ -930,12 +980,53 @@ mod tests {
         };
         let left = pose.place(PartKind::Arm(-1.0), rest);
         let right = pose.place(PartKind::Arm(1.0), rest);
+        let elbow_rest = Transform::from_xyz(0.0, -0.29, 0.015);
+        let idle_elbow = pose.place(PartKind::Forearm(1.0), elbow_rest);
         assert_ne!(left.rotation, right.rotation);
         assert_eq!(left.translation, rest.translation);
         pose.attack = Some(Attack::new(Vec3::Z, content::scenario::Weapon::Sword));
         let attacking = pose.place(PartKind::Arm(1.0), rest);
         assert_ne!(attacking.rotation, right.rotation);
+        let attack_elbow = pose.place(PartKind::Forearm(1.0), elbow_rest);
+        assert_ne!(attack_elbow.rotation, idle_elbow.rotation);
         let knee = pose.place(PartKind::Shin(1.0), Transform::default());
         assert_ne!(knee.rotation, Quat::IDENTITY);
+    }
+
+    #[test]
+    fn hand_held_blade_follows_the_swept_attack_direction() {
+        let mut pose = Pose {
+            stride: 0.0,
+            speed: 0.0,
+            turn: 0.0,
+            breathe: 0.0,
+            airborne: false,
+            attack: None,
+            dig: None,
+        };
+        for age in [0.0, WINDUP, 0.22, ACTIVE_END, ATTACK_END] {
+            let mut attack = Attack::new(Vec3::Z, content::scenario::Weapon::Sword);
+            attack.age = age;
+            pose.attack = Some(attack);
+            let joints = [
+                (PartKind::Body, Transform::from_xyz(0.0, 0.94, 0.0)),
+                (PartKind::Arm(1.0), Transform::from_xyz(0.43, 0.33, 0.0)),
+                (
+                    PartKind::Forearm(1.0),
+                    Transform::from_xyz(0.0, -0.29, 0.015),
+                ),
+                (PartKind::Hand(1.0), Transform::from_xyz(0.0, -0.28, 0.015)),
+                (PartKind::Sword, Transform::from_xyz(-0.04, 0.08, 0.05)),
+            ];
+            let blade = joints.iter().fold(Mat4::IDENTITY, |parent, (kind, rest)| {
+                parent * pose.place(*kind, *rest).to_matrix()
+            });
+            let forward = blade.transform_vector3(Vec3::Z).with_y(0.0).normalize();
+            let visual = forward.x.atan2(forward.z);
+            let error = (visual - attack.angle() + std::f32::consts::PI)
+                .rem_euclid(std::f32::consts::TAU)
+                - std::f32::consts::PI;
+            assert!(error.abs() < 0.35, "blade diverged at {age}: {error}");
+        }
     }
 }

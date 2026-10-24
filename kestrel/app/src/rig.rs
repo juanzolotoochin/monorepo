@@ -29,6 +29,10 @@ impl RigTemplate {
                     ActorPart::RightArm => [0.43, 1.27, 0.],
                     ActorPart::LeftShin => [-0.17, 0.31, 0.],
                     ActorPart::RightShin => [0.17, 0.31, 0.],
+                    ActorPart::LeftForearm => [-0.43, 1.01, 0.],
+                    ActorPart::RightForearm => [0.43, 1.01, 0.],
+                    ActorPart::LeftHand => [-0.43, 0.75, 0.],
+                    ActorPart::RightHand => [0.43, 0.75, 0.],
                     ActorPart::Weapon => [0.4, 0.9, 0.],
                     ActorPart::Head => [0., 1.49, 0.],
                     ActorPart::WoundPlug => [0., 0.94, 0.],
@@ -148,7 +152,11 @@ impl Rig {
             let mut t = *rest;
             let side = if matches!(
                 part,
-                ActorPart::LeftLeg | ActorPart::LeftArm | ActorPart::LeftShin
+                ActorPart::LeftLeg
+                    | ActorPart::LeftArm
+                    | ActorPart::LeftShin
+                    | ActorPart::LeftForearm
+                    | ActorPart::LeftHand
             ) {
                 -1.
             } else {
@@ -177,6 +185,12 @@ impl Rig {
                         let swing = (travel * (12.0 - injury * 3.0)).sin() * side;
                         t.rotation =
                             Quat::from_rotation_x(-swing * (0.36 - injury * 0.12) - activity * 0.1);
+                    }
+                    if matches!(part, ActorPart::LeftForearm | ActorPart::RightForearm) {
+                        t.rotation = Quat::from_rotation_x(-0.3 - activity * 0.12);
+                    }
+                    if matches!(part, ActorPart::LeftHand | ActorPart::RightHand) {
+                        t.rotation = Quat::from_rotation_x(activity * 0.08);
                     }
                     if matches!(
                         part,

@@ -691,27 +691,167 @@ pub fn setup(
                         Visibility::default(),
                     ))
                     .with_children(|a| {
+                        // A separate pauldron, upper arm, elbow, gauntlet and hand
+                        // let the cloth and armour move without stretching a slab.
                         block(
                             a,
                             &cube,
                             if side > 0.0 { &orange } else { &ivory },
-                            Vec3::new(side * 0.04, -0.09, 0.0),
-                            Vec3::new(0.27, 0.26, 0.38),
+                            Vec3::new(side * 0.015, -0.02, 0.0),
+                            Vec3::new(0.30, 0.19, 0.38),
                         );
                         block(
                             a,
                             &cube,
                             &dark,
-                            Vec3::new(side * 0.04, -0.33, 0.02),
-                            Vec3::new(0.19, 0.31, 0.23),
+                            Vec3::new(0.0, -0.17, 0.0),
+                            Vec3::new(0.15, 0.24, 0.18),
                         );
                         block(
                             a,
                             &cube,
-                            &ivory,
-                            Vec3::new(side * 0.04, -0.46, 0.11),
-                            Vec3::new(0.23, 0.15, 0.24),
+                            &gold,
+                            Vec3::new(side * 0.08, -0.05, 0.17),
+                            Vec3::new(0.045, 0.10, 0.035),
                         );
+                        let elbow = Transform::from_xyz(0.0, -0.29, 0.015);
+                        a.spawn((
+                            Part {
+                                kind: PartKind::Forearm(side),
+                                rest: elbow,
+                            },
+                            elbow,
+                            Visibility::default(),
+                        ))
+                        .with_children(|f| {
+                            block(f, &cube, &frame, Vec3::ZERO, Vec3::new(0.19, 0.15, 0.20));
+                            block(
+                                f,
+                                &cube,
+                                &dark,
+                                Vec3::new(0.0, -0.13, 0.01),
+                                Vec3::new(0.15, 0.26, 0.17),
+                            );
+                            block(
+                                f,
+                                &cube,
+                                &ivory,
+                                Vec3::new(0.0, -0.17, 0.10),
+                                Vec3::new(0.20, 0.20, 0.07),
+                            );
+                            block(
+                                f,
+                                &cube,
+                                &cyan,
+                                Vec3::new(0.0, -0.21, 0.145),
+                                Vec3::new(0.16, 0.035, 0.025),
+                            );
+                            let wrist = Transform::from_xyz(0.0, -0.28, 0.015);
+                            f.spawn((
+                                Part {
+                                    kind: PartKind::Hand(side),
+                                    rest: wrist,
+                                },
+                                wrist,
+                                Visibility::default(),
+                            ))
+                            .with_children(|h| {
+                                block(
+                                    h,
+                                    &cube,
+                                    &dark,
+                                    Vec3::new(0.0, -0.06, 0.035),
+                                    Vec3::new(0.17, 0.14, 0.19),
+                                );
+                                block(
+                                    h,
+                                    &cube,
+                                    &ivory,
+                                    Vec3::new(0.0, -0.065, 0.14),
+                                    Vec3::new(0.14, 0.09, 0.07),
+                                );
+                                if side > 0.0 {
+                                    let weapon = Transform::from_xyz(-0.04, 0.08, 0.05);
+                                    h.spawn((
+                                        Part {
+                                            kind: PartKind::Sword,
+                                            rest: weapon,
+                                        },
+                                        weapon,
+                                        Visibility::default(),
+                                    ))
+                                    .with_children(|s| {
+                                        block(
+                                            s,
+                                            &cube,
+                                            &dark,
+                                            Vec3::new(0.0, 0.0, 0.12),
+                                            Vec3::new(0.15, 0.18, 0.48),
+                                        );
+                                        for z in [0.0, 0.12, 0.24] {
+                                            block(
+                                                s,
+                                                &cube,
+                                                &gold,
+                                                Vec3::new(0.0, 0.0, z),
+                                                Vec3::new(0.17, 0.20, 0.04),
+                                            );
+                                        }
+                                        block(
+                                            s,
+                                            &cube,
+                                            &orange,
+                                            Vec3::new(0.0, 0.0, 0.38),
+                                            Vec3::new(0.55, 0.17, 0.16),
+                                        );
+                                        block(
+                                            s,
+                                            &cube,
+                                            &frame,
+                                            Vec3::new(0.0, 0.0, 1.08),
+                                            Vec3::new(0.32, 0.16, 1.35),
+                                        );
+                                        block(
+                                            s,
+                                            &cube,
+                                            &ivory,
+                                            Vec3::new(0.03, 0.10, 1.03),
+                                            Vec3::new(0.22, 0.07, 1.16),
+                                        );
+                                        block(
+                                            s,
+                                            &cube,
+                                            &dark,
+                                            Vec3::new(0.02, 0.14, 0.92),
+                                            Vec3::new(0.09, 0.03, 0.62),
+                                        );
+                                        block(
+                                            s,
+                                            &cube,
+                                            &cyan,
+                                            Vec3::new(-0.18, 0.015, 1.10),
+                                            Vec3::new(0.055, 0.09, 1.32),
+                                        );
+                                        block(
+                                            s,
+                                            &cube,
+                                            &white,
+                                            Vec3::new(-0.11, 0.0, 1.84),
+                                            Vec3::new(0.15, 0.12, 0.20),
+                                        );
+                                        for z in [0.65, 0.88, 1.11] {
+                                            block(
+                                                s,
+                                                &cube,
+                                                &orange,
+                                                Vec3::new(0.07, 0.15, z),
+                                                Vec3::new(0.12, 0.03, 0.06),
+                                            );
+                                        }
+                                    });
+                                }
+                            });
+                        });
                     });
                 }
             });
@@ -767,84 +907,6 @@ pub fn setup(
                     });
                 });
             }
-            let weapon = Transform::from_xyz(0.38, 0.9, 0.0);
-            p.spawn((
-                Part {
-                    kind: PartKind::Sword,
-                    rest: weapon,
-                },
-                weapon,
-                Visibility::default(),
-            ))
-            .with_children(|s| {
-                block(
-                    s,
-                    &cube,
-                    &dark,
-                    Vec3::new(0.0, 0.0, 0.12),
-                    Vec3::new(0.15, 0.18, 0.48),
-                );
-                for z in [0.0, 0.12, 0.24] {
-                    block(
-                        s,
-                        &cube,
-                        &gold,
-                        Vec3::new(0.0, 0.0, z),
-                        Vec3::new(0.17, 0.20, 0.04),
-                    );
-                }
-                block(
-                    s,
-                    &cube,
-                    &orange,
-                    Vec3::new(0.0, 0.0, 0.38),
-                    Vec3::new(0.55, 0.17, 0.16),
-                );
-                block(
-                    s,
-                    &cube,
-                    &frame,
-                    Vec3::new(0.0, 0.0, 1.08),
-                    Vec3::new(0.32, 0.16, 1.35),
-                );
-                block(
-                    s,
-                    &cube,
-                    &ivory,
-                    Vec3::new(0.03, 0.10, 1.03),
-                    Vec3::new(0.22, 0.07, 1.16),
-                );
-                block(
-                    s,
-                    &cube,
-                    &dark,
-                    Vec3::new(0.02, 0.14, 0.92),
-                    Vec3::new(0.09, 0.03, 0.62),
-                );
-                block(
-                    s,
-                    &cube,
-                    &cyan,
-                    Vec3::new(-0.18, 0.015, 1.10),
-                    Vec3::new(0.055, 0.09, 1.32),
-                );
-                block(
-                    s,
-                    &cube,
-                    &white,
-                    Vec3::new(-0.11, 0.0, 1.84),
-                    Vec3::new(0.15, 0.12, 0.20),
-                );
-                for z in [0.65, 0.88, 1.11] {
-                    block(
-                        s,
-                        &cube,
-                        &orange,
-                        Vec3::new(0.07, 0.15, z),
-                        Vec3::new(0.12, 0.03, 0.06),
-                    );
-                }
-            });
         });
     commands.insert_resource(FxAssets {
         cube,
@@ -1133,5 +1195,43 @@ pub fn update_hud(
     };
     if contacts.0 != text {
         contacts.0 = text;
+    }
+}
+
+#[cfg(test)]
+mod character_tests {
+    use super::*;
+
+    #[test]
+    fn weapon_is_descended_from_the_right_hand_and_elbow() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_systems(Startup, setup);
+        app.update();
+        let world = app.world_mut();
+        let sword = world
+            .query::<(Entity, &Part)>()
+            .iter(world)
+            .find_map(|(entity, part)| matches!(part.kind, PartKind::Sword).then_some(entity))
+            .unwrap();
+        let mut entity = sword;
+        for check in [
+            PartKind::Hand(1.0),
+            PartKind::Forearm(1.0),
+            PartKind::Arm(1.0),
+            PartKind::Body,
+        ] {
+            entity = world.get::<ChildOf>(entity).unwrap().parent();
+            let actual = world.get::<Part>(entity).unwrap().kind;
+            assert!(
+                matches!(
+                    (actual, check),
+                    (PartKind::Hand(a), PartKind::Hand(b))
+                        | (PartKind::Forearm(a), PartKind::Forearm(b))
+                        | (PartKind::Arm(a), PartKind::Arm(b)) if a == b
+                ) || matches!((actual, check), (PartKind::Body, PartKind::Body))
+            );
+        }
     }
 }

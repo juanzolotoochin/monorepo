@@ -64,8 +64,12 @@ pub struct LightningProfile {
     pub color: [f32; 3],
     pub period: f32,
 }
-fn default_grass_bend_radius() -> f32 { 0.48 }
-fn default_grass_recovery_seconds() -> f32 { 60.0 }
+fn default_grass_bend_radius() -> f32 {
+    0.48
+}
+fn default_grass_recovery_seconds() -> f32 {
+    60.0
+}
 impl Default for StyleProfile {
     fn default() -> Self {
         Self {
@@ -203,28 +207,66 @@ impl StyleProfile {
             return Err("invalid style lighting or camera settings".into());
         }
         if let Some(fx) = &self.atmosphere {
-            if !fx.grass_half_extent.is_finite() || !(2.0..=20.0).contains(&fx.grass_half_extent)
-                || !fx.grass_spacing.is_finite() || !(0.08..=1.2).contains(&fx.grass_spacing)
-                || !fx.grass_root_y.is_finite() || fx.grass_root_y.abs() > 4.0
-                || fx.grass_height[0] < 0.1 || fx.grass_height[1] > 1.5 || fx.grass_height[0] > fx.grass_height[1]
-                || fx.grass_width[0] < 0.005 || fx.grass_width[1] > 0.35 || fx.grass_width[0] > fx.grass_width[1]
-                || fx.grass_height.iter().chain(fx.grass_width.iter()).any(|v| !v.is_finite())
-                || !fx.grass_bend_radius.is_finite() || !(0.15..=2.0).contains(&fx.grass_bend_radius)
-                || !fx.grass_recovery_seconds.is_finite() || !(1.0..=300.0).contains(&fx.grass_recovery_seconds)
-                || fx.grass_clearings.len() > 32 || fx.fireflies > 64
-                || fx.firefly_emitters.len() > 8 || (fx.fireflies > 0 && fx.firefly_emitters.is_empty())
-                || fx.firefly_emitters.iter().any(|e| e.iter().any(|v| !v.is_finite() || v.abs() > 32.0) || e[3] <= 0.0)
-                || fx.grass_clearings.iter().flatten().any(|v| !v.is_finite() || v.abs() > 32.0)
-                || fx.grass_clearings.iter().any(|r| r[2] <= 0.0 || r[3] <= 0.0)
-                || fx.grass_base.iter().chain(fx.grass_tip.iter()).chain(fx.firefly_color.iter()).chain(fx.firefly_secondary_color.iter())
+            if !fx.grass_half_extent.is_finite()
+                || !(2.0..=20.0).contains(&fx.grass_half_extent)
+                || !fx.grass_spacing.is_finite()
+                || !(0.08..=1.2).contains(&fx.grass_spacing)
+                || !fx.grass_root_y.is_finite()
+                || fx.grass_root_y.abs() > 4.0
+                || fx.grass_height[0] < 0.1
+                || fx.grass_height[1] > 1.5
+                || fx.grass_height[0] > fx.grass_height[1]
+                || fx.grass_width[0] < 0.005
+                || fx.grass_width[1] > 0.35
+                || fx.grass_width[0] > fx.grass_width[1]
+                || fx
+                    .grass_height
+                    .iter()
+                    .chain(fx.grass_width.iter())
+                    .any(|v| !v.is_finite())
+                || !fx.grass_bend_radius.is_finite()
+                || !(0.15..=2.0).contains(&fx.grass_bend_radius)
+                || !fx.grass_recovery_seconds.is_finite()
+                || !(1.0..=300.0).contains(&fx.grass_recovery_seconds)
+                || fx.grass_clearings.len() > 32
+                || fx.fireflies > 64
+                || fx.firefly_emitters.len() > 8
+                || (fx.fireflies > 0 && fx.firefly_emitters.is_empty())
+                || fx
+                    .firefly_emitters
+                    .iter()
+                    .any(|e| e.iter().any(|v| !v.is_finite() || v.abs() > 32.0) || e[3] <= 0.0)
+                || fx
+                    .grass_clearings
+                    .iter()
+                    .flatten()
+                    .any(|v| !v.is_finite() || v.abs() > 32.0)
+                || fx
+                    .grass_clearings
+                    .iter()
+                    .any(|r| r[2] <= 0.0 || r[3] <= 0.0)
+                || fx
+                    .grass_base
+                    .iter()
+                    .chain(fx.grass_tip.iter())
+                    .chain(fx.firefly_color.iter())
+                    .chain(fx.firefly_secondary_color.iter())
                     .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
             {
                 return Err("invalid atmosphere settings".into());
             }
             if let Some(arc) = &fx.lightning {
-                if !arc.period.is_finite() || !(1.0..=30.0).contains(&arc.period)
-                    || arc.from.iter().chain(arc.to.iter()).any(|v| !v.is_finite() || v.abs() > 32.0)
-                    || arc.color.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+                if !arc.period.is_finite()
+                    || !(1.0..=30.0).contains(&arc.period)
+                    || arc
+                        .from
+                        .iter()
+                        .chain(arc.to.iter())
+                        .any(|v| !v.is_finite() || v.abs() > 32.0)
+                    || arc
+                        .color
+                        .iter()
+                        .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
                 {
                     return Err("invalid lightning settings".into());
                 }
@@ -606,6 +648,10 @@ pub enum ActorPart {
     RightArm,
     LeftShin,
     RightShin,
+    LeftForearm,
+    RightForearm,
+    LeftHand,
+    RightHand,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -621,7 +667,24 @@ pub struct ActorRecipe {
     pub part: ActorPart,
     #[serde(default)]
     pub pivot: Option<[f32; 3]>,
+    #[serde(default)]
     pub shapes: Vec<VoxelShape>,
+    /// Smooth authored geometry uses the same materials and rig as voxel parts.
+    #[serde(default)]
+    pub smooth: Vec<SurfaceShape>,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub enum SurfaceKind {
+    Ellipsoid,
+    Capsule,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SurfaceShape {
+    pub kind: SurfaceKind,
+    pub position: [f32; 3],
+    pub size: [f32; 3],
+    pub material: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ActorMesh {
@@ -631,6 +694,89 @@ pub struct ActorMesh {
     pub statistics: Statistics,
     pub lights: Vec<BakedLight>,
 }
+
+fn compile_surface(profile: &StyleProfile, shape: &SurfaceShape) -> Result<MeshData> {
+    let material = profile
+        .materials
+        .iter()
+        .position(|m| m.name == shape.material)
+        .ok_or_else(|| format!("unknown style material {}", shape.material))?;
+    if shape
+        .position
+        .iter()
+        .chain(shape.size.iter())
+        .any(|v| !v.is_finite())
+        || shape.position.iter().any(|v| v.abs() > 4.0)
+        || shape.size.iter().any(|&v| v <= 0.0 || v > 4.0)
+        || matches!(shape.kind, SurfaceKind::Capsule)
+            && shape.size[1] < shape.size[0].min(shape.size[2])
+    {
+        return Err("invalid smooth actor shape".into());
+    }
+    const SIDES: usize = 20;
+    const CAP_STEPS: usize = 6;
+    let [sx, sy, sz] = shape.size;
+    let (rx, ry, rz) = (sx * 0.5, sy * 0.5, sz * 0.5);
+    let cap_radius = rx.min(rz);
+    let straight = ry - cap_radius;
+    let mut rings = Vec::new();
+    match shape.kind {
+        SurfaceKind::Ellipsoid => {
+            for i in 0..=CAP_STEPS * 2 {
+                let theta = std::f32::consts::PI * i as f32 / (CAP_STEPS * 2) as f32;
+                rings.push((ry * theta.cos(), theta.sin(), theta.cos() / ry));
+            }
+        }
+        SurfaceKind::Capsule => {
+            for i in 0..=CAP_STEPS {
+                let theta = std::f32::consts::FRAC_PI_2 * i as f32 / CAP_STEPS as f32;
+                rings.push((
+                    straight + cap_radius * theta.cos(),
+                    theta.sin(),
+                    theta.cos() / cap_radius,
+                ));
+            }
+            rings.push((-straight, 1.0, 0.0));
+            for i in 1..=CAP_STEPS {
+                let theta = std::f32::consts::FRAC_PI_2
+                    + std::f32::consts::FRAC_PI_2 * i as f32 / CAP_STEPS as f32;
+                rings.push((
+                    -straight + cap_radius * theta.cos(),
+                    theta.sin(),
+                    theta.cos() / cap_radius,
+                ));
+            }
+        }
+    }
+    let mut mesh = MeshData {
+        material,
+        ..Default::default()
+    };
+    for (y, radius, ny) in &rings {
+        for side in 0..=SIDES {
+            let phi = std::f32::consts::TAU * side as f32 / SIDES as f32;
+            let (sin, cos) = phi.sin_cos();
+            mesh.positions.push([
+                shape.position[0] + rx * radius * cos,
+                shape.position[1] + y,
+                shape.position[2] + rz * radius * sin,
+            ]);
+            let n = [radius * cos / rx, *ny, radius * sin / rz];
+            let length = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            mesh.normals.push(n.map(|v| v / length));
+        }
+    }
+    for ring in 0..rings.len() - 1 {
+        for side in 0..SIDES {
+            let a = (ring * (SIDES + 1) + side) as u32;
+            let b = a + 1;
+            let c = a + (SIDES + 1) as u32;
+            mesh.indices.extend_from_slice(&[a, b, c, b, c + 1, c]);
+        }
+    }
+    Ok(mesh)
+}
+
 pub fn compile_actor(profile: &StyleProfile) -> Result<Vec<ActorMesh>> {
     profile.validate()?;
     let mut style = profile.clone();
@@ -640,14 +786,28 @@ pub fn compile_actor(profile: &StyleProfile) -> Result<Vec<ActorMesh>> {
         .actor
         .iter()
         .map(|recipe| {
-            let env = compile_environment(&style, &recipe.shapes)?;
-            if env.meshes.is_empty() || !env.obstacles.is_empty() || !env.walkable.is_empty() {
+            let env = if recipe.shapes.is_empty() {
+                EnvironmentMesh {
+                    meshes: vec![],
+                    statistics: Statistics::default(),
+                    obstacles: vec![],
+                    lights: vec![],
+                    walkable: vec![],
+                }
+            } else {
+                compile_environment(&style, &recipe.shapes)?
+            };
+            let mut meshes = env.meshes;
+            for shape in &recipe.smooth {
+                meshes.push(compile_surface(profile, shape)?);
+            }
+            if meshes.is_empty() || !env.obstacles.is_empty() || !env.walkable.is_empty() {
                 return Err("actor parts require visible geometry without world colliders".into());
             }
             Ok(ActorMesh {
                 part: recipe.part,
                 pivot: recipe.pivot,
-                meshes: env.meshes,
+                meshes,
                 statistics: env.statistics,
                 lights: env.lights,
             })
@@ -676,6 +836,7 @@ mod actor_tests {
                 part: ActorPart::Body,
                 pivot: None,
                 shapes: vec![shape],
+                smooth: vec![],
             }],
             actor_voxel_size: Some(0.05),
             ..Default::default()
@@ -689,6 +850,33 @@ mod actor_tests {
         profile.actor.pop();
         profile.actor[0].shapes.clear();
         assert!(compile_actor(&profile).is_err());
+    }
+
+    #[test]
+    fn smooth_and_voxel_actor_parts_share_materials_and_rig_slots() {
+        let profile = StyleProfile {
+            actor: vec![ActorRecipe {
+                part: ActorPart::RightForearm,
+                pivot: None,
+                shapes: vec![],
+                smooth: vec![SurfaceShape {
+                    kind: SurfaceKind::Capsule,
+                    position: [0.0, -0.12, 0.0],
+                    size: [0.16, 0.28, 0.16],
+                    material: "metal".into(),
+                }],
+            }],
+            ..Default::default()
+        };
+        let baked = compile_actor(&profile).unwrap();
+        let mesh = &baked[0].meshes[0];
+        assert_eq!(baked[0].part, ActorPart::RightForearm);
+        assert!(mesh.indices.len() > 500);
+        assert_eq!(mesh.positions.len(), mesh.normals.len());
+        assert!(mesh
+            .normals
+            .iter()
+            .all(|n| { ((n[0] * n[0] + n[1] * n[1] + n[2] * n[2]) - 1.0).abs() < 1e-4 }));
     }
 }
 
