@@ -12,6 +12,8 @@ pub struct StyleProfile {
     pub weapon_skins: Vec<WeaponSkin>,
     pub actor: Vec<ActorRecipe>,
     pub actor_scale: f32,
+    /// Shared pose tuning for local and replicated characters using this style.
+    pub character_motion: CharacterMotion,
     pub skins: Vec<SkinRecipe>,
     pub materials: Vec<Material>,
     pub background: [f32; 3],
@@ -31,6 +33,24 @@ pub struct StyleProfile {
     pub ao_thickness: f32,
     /// Optional scene atmosphere rendered at runtime, independent of baked architecture.
     pub atmosphere: Option<AtmosphereProfile>,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CharacterMotion {
+    pub arm_swing: f32,
+    pub leg_swing: f32,
+    pub torso_turn: f32,
+    pub pose_response: f32,
+}
+impl Default for CharacterMotion {
+    fn default() -> Self {
+        Self {
+            arm_swing: 0.23,
+            leg_swing: 0.48,
+            torso_turn: 0.42,
+            pose_response: 19.0,
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -80,6 +100,7 @@ impl Default for StyleProfile {
             weapon_skins: vec![],
             actor: vec![],
             actor_scale: 1.0,
+            character_motion: CharacterMotion::default(),
             skins: vec![],
             materials: vec![
                 material("stone", [0.17, 0.22, 0.28], 0.0, 0.3),
@@ -638,6 +659,7 @@ mod tests {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ActorPart {
     Body,
+    Chest,
     LeftLeg,
     RightLeg,
     Weapon,

@@ -1,7 +1,7 @@
 //! Repeatable visual QA: `--showcase --capture-dir /tmp/kestrel`.
 use crate::{
     effects::{CameraRig, Feedback},
-    gameplay::{Controls, Player},
+    character::Player, gameplay::Controls,
 };
 use bevy::{
     app::AppExit,
@@ -98,7 +98,7 @@ pub fn capture(
         preview.overview = true;
         Some("overview.png")
     } else if controls.attack.is_some_and(|attack| {
-        attack.age >= crate::gameplay::WINDUP + 0.03 && attack.age < crate::gameplay::ACTIVE_END
+        attack.age >= crate::combat::WINDUP + 0.03 && attack.age < crate::combat::ACTIVE_END
     }) && !preview.action
     {
         preview.action = true;

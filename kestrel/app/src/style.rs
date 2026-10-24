@@ -1,5 +1,5 @@
 //! Data-driven visual styles. Compiled geometry and material handles survive scene switches.
-use crate::{assets::SceneLibrary, gameplay::Obstacle, navigation::Disc};
+use crate::{assets::SceneLibrary, combat::Obstacle, navigation::Disc};
 use bevy::{
     pbr::{DistanceFog, FogFalloff},
     post_process::bloom::Bloom,
@@ -219,7 +219,7 @@ pub fn apply(world: &mut World) {
     }
     use voxel_assets::ActorPart;
     let kinds: HashMap<_, _> = world
-        .query::<(Entity, &crate::gameplay::Part)>()
+        .query::<(Entity, &crate::character::Part)>()
         .iter(world)
         .map(|(e, p)| (e, p.kind))
         .collect();
@@ -227,42 +227,43 @@ pub fn apply(world: &mut World) {
         .iter()
         .filter_map(|(&e, kind)| {
             let part = match kind {
-                crate::gameplay::PartKind::Body => Some(ActorPart::Body),
-                crate::gameplay::PartKind::Head => Some(ActorPart::Head),
-                crate::gameplay::PartKind::Leg(side) => Some({
+                crate::character::PartKind::Body => Some(ActorPart::Body),
+                crate::character::PartKind::Chest => Some(ActorPart::Chest),
+                crate::character::PartKind::Head => Some(ActorPart::Head),
+                crate::character::PartKind::Leg(side) => Some({
                     if *side < 0.0 {
                         ActorPart::LeftLeg
                     } else {
                         ActorPart::RightLeg
                     }
                 }),
-                crate::gameplay::PartKind::Arm(side) => Some(if *side < 0.0 {
+                crate::character::PartKind::Arm(side) => Some(if *side < 0.0 {
                     ActorPart::LeftArm
                 } else {
                     ActorPart::RightArm
                 }),
-                crate::gameplay::PartKind::Forearm(side) => Some(if *side < 0.0 {
+                crate::character::PartKind::Forearm(side) => Some(if *side < 0.0 {
                     ActorPart::LeftForearm
                 } else {
                     ActorPart::RightForearm
                 }),
-                crate::gameplay::PartKind::Hand(side) => Some(if *side < 0.0 {
+                crate::character::PartKind::Hand(side) => Some(if *side < 0.0 {
                     ActorPart::LeftHand
                 } else {
                     ActorPart::RightHand
                 }),
-                crate::gameplay::PartKind::Shin(side) => Some(if *side < 0.0 {
+                crate::character::PartKind::Shin(side) => Some(if *side < 0.0 {
                     ActorPart::LeftShin
                 } else {
                     ActorPart::RightShin
                 }),
-                crate::gameplay::PartKind::Sword => Some(ActorPart::Weapon),
+                crate::character::PartKind::WeaponGrip => Some(ActorPart::Weapon),
             };
             part.map(|part| (e, part))
         })
         .collect();
     let player = world
-        .query_filtered::<Entity, With<crate::gameplay::Player>>()
+        .query_filtered::<Entity, With<crate::character::Player>>()
         .single(world)
         .unwrap();
     world.get_mut::<Transform>(player).unwrap().scale = Vec3::splat(profile.actor_scale);
@@ -270,12 +271,13 @@ pub fn apply(world: &mut World) {
         let overridden = kinds.get(&parent.parent()).is_some_and(|kind| {
             let exact = parts.get(&parent.parent()).copied();
             let fallback = match kind {
-                crate::gameplay::PartKind::Head | crate::gameplay::PartKind::Arm(_) => Some(ActorPart::Body),
-                crate::gameplay::PartKind::Forearm(side) | crate::gameplay::PartKind::Hand(side) => {
+                crate::character::PartKind::Head | crate::character::PartKind::Arm(_) => Some(ActorPart::Body),
+                crate::character::PartKind::Chest => Some(ActorPart::Body),
+                crate::character::PartKind::Forearm(side) | crate::character::PartKind::Hand(side) => {
                     let arm = if *side < 0.0 { ActorPart::LeftArm } else { ActorPart::RightArm };
                     if actor.iter().any(|a| a.part == arm) { Some(arm) } else { Some(ActorPart::Body) }
                 }
-                crate::gameplay::PartKind::Shin(side) => Some(if *side < 0.0 {
+                crate::character::PartKind::Shin(side) => Some(if *side < 0.0 {
                     ActorPart::LeftLeg
                 } else {
                     ActorPart::RightLeg
@@ -650,7 +652,7 @@ mod tests {
                 }
                 let before = info["actor_lights"][0]["position"][0].as_f64().unwrap();
                 let player = world
-                    .query_filtered::<Entity, With<crate::gameplay::Player>>()
+                    .query_filtered::<Entity, With<crate::character::Player>>()
                     .single(world)
                     .unwrap();
                 world.get_mut::<Transform>(player).unwrap().translation.x += 1.0;

@@ -1,5 +1,7 @@
 //! Kestrel: an asset-free voxel action scene. See ../README.md.
 mod assets;
+mod character;
+mod combat;
 mod control;
 mod effects;
 mod gameplay;
@@ -26,6 +28,8 @@ mod telemetry;
 
 use bevy::{app::AppExit, prelude::*};
 use gameplay::*;
+use character::animate_character;
+use combat::combat;
 
 fn main() {
     let args: Vec<_> = std::env::args().collect();

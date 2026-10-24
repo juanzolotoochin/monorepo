@@ -9,7 +9,8 @@ use bevy::prelude::*;
 use content::scenario::Weapon;
 use sim::settlement::avatar::Swing;
 
-use crate::gameplay::{Attack, MotionState, Part, PartKind, Player, Pose, ATTACK_END, REBOUND_END};
+use crate::character::{blend_pose, dig_age, MotionState, Part, PartKind, Player, Pose};
+use crate::combat::{Attack, ATTACK_END, REBOUND_END};
 use crate::jetpack::Exhaust;
 use crate::lockstep::Game;
 use crate::style::{ActiveStyle, WeaponVisual};
@@ -79,6 +80,7 @@ pub fn update(
     mut commands: Commands,
     game: Res<Game>,
     style: Res<ActiveStyle>,
+    library: Res<crate::assets::SceneLibrary>,
     time: Res<Time>,
     sound: Res<crate::sound::Sound>,
     player: Single<Entity, With<Player>>,
@@ -161,15 +163,18 @@ pub fn update(
                 sound.play(crate::sound::Cue::Swing);
             }
         }
-        let dig = current
-            .avatar
-            .dig
-            .as_ref()
-            .map(|d| crate::gameplay::dig_age(&game, d));
+        let dig = current.avatar.dig.as_ref().map(|d| dig_age(&game, d));
         poses.push((
             entity,
             current.avatar.weapon,
             Pose {
+                motion: library.scenes[library.current]
+                    .scene
+                    .style
+                    .as_ref()
+                    .map_or_else(voxel_assets::CharacterMotion::default, |s| {
+                        s.character_motion
+                    }),
                 stride: peer.stride,
                 speed,
                 turn,
@@ -186,7 +191,12 @@ pub fn update(
             .iter_ancestors(entity)
             .find_map(|e| poses.iter().find(|(p, ..)| *p == e).map(|(.., pose)| pose));
         if let Some(pose) = pose {
-            *transform = pose.place(part.kind, part.rest);
+            blend_pose(
+                &mut transform,
+                pose.place(part.kind, part.rest),
+                time.delta_secs(),
+                pose.motion.pose_response,
+            );
         }
     }
     for (parent, mut visibility) in &mut exhausts {

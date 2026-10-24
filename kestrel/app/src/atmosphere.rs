@@ -1,5 +1,5 @@
 //! Optional, scene-scoped vegetation and ambient effects. Grass bends in a GPU vertex shader.
-use crate::{assets::SceneLibrary, gameplay::Player};
+use crate::{assets::SceneLibrary, character::Player};
 use voxel_assets::AtmosphereProfile;
 use bevy::{
     asset::RenderAssetUsages,

@@ -3,7 +3,7 @@
 //! module mirrors them and turns clicks into commands.
 use crate::{
     assets::SceneLibrary,
-    gameplay::{cursor_ground, Obstacle, Player},
+    character::Player, combat::Obstacle, gameplay::cursor_ground,
     navigation::Disc,
     lockstep::Game,
     pile_model::{pile_radius, unit_positions, Pile, PileId, Stock},

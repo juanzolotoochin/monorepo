@@ -21,7 +21,9 @@ use sim::settlement::{PileSetup, SceneSetup, Settlement as SimSettlement};
 use sim::{CommandKind, World as SimWorld};
 
 use crate::assets::SceneLibrary;
-use crate::gameplay::{Controls, Obstacle, Player, WALK_SPEED};
+use crate::character::Player;
+use crate::combat::Obstacle;
+use crate::gameplay::{Controls, WALK_SPEED};
 
 /// The world seed. Scenes don't use randomness outside combat rolls, which are
 /// keyed on ticks and IDs, so one seed serves every scene.

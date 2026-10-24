@@ -1,7 +1,7 @@
 //! Bevy adapter for baked prefabs and the shared runtime boulder generator.
 use crate::{
     effects::Feedback,
-    gameplay::{Controls, Obstacle, Player},
+    character::Player, combat::Obstacle, gameplay::Controls,
     impact::{self, ImpactSlot, ImpactTarget, Surface},
     navigation::Disc,
 };

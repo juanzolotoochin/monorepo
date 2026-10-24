@@ -1,5 +1,5 @@
 use crate::{
-    gameplay::Player,
+    character::Player,
     impact::{self, ImpactTarget},
 };
 use bevy::{camera::ScalingMode, input::mouse::AccumulatedMouseScroll, prelude::*};

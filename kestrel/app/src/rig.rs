@@ -23,6 +23,7 @@ impl RigTemplate {
             .map(|part| {
                 let default_pivot = match part.part {
                     ActorPart::Body => [0., 0.94, 0.],
+                    ActorPart::Chest => [0., 1.12, 0.],
                     ActorPart::LeftLeg => [-0.17, 0.58, 0.],
                     ActorPart::RightLeg => [0.17, 0.58, 0.],
                     ActorPart::LeftArm => [-0.43, 1.27, 0.],
@@ -194,7 +195,11 @@ impl Rig {
                     }
                     if matches!(
                         part,
-                        ActorPart::Body | ActorPart::Armor | ActorPart::WoundPlug | ActorPart::Head
+                        ActorPart::Body
+                            | ActorPart::Chest
+                            | ActorPart::Armor
+                            | ActorPart::WoundPlug
+                            | ActorPart::Head
                     ) {
                         t.translation.y += (travel * 24.).cos() * 0.018;
                         t.rotation =

@@ -282,7 +282,7 @@ pub fn tick(world: &mut World) {
     let sim = sim.clone();
     let sim = &sim;
     let pos = world
-        .query_filtered::<&Transform, With<crate::gameplay::Player>>()
+        .query_filtered::<&Transform, With<crate::character::Player>>()
         .single(world)
         .unwrap()
         .translation;
