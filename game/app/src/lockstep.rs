@@ -40,8 +40,10 @@ pub enum Network {
 pub struct Game {
     pub session: Option<session::Session>,
     content: Content,
-    /// The scene the session belongs to.
+    /// The scene the views show.
     scene: Option<usize>,
+    /// The session's world the mirrors below belong to.
+    world_number: u32,
     /// Simulation time: Bevy's time, minus pauses, times the rate.
     clock: Duration,
     pub paused: bool,
@@ -84,6 +86,7 @@ impl Default for Game {
             session: None,
             content: Content::builtin(),
             scene: None,
+            world_number: 0,
             clock: Duration::ZERO,
             paused: false,
             rate: 1.0,
@@ -194,15 +197,30 @@ impl Game {
         self.command(CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target, run } });
     }
 
-    /// Writes the recording, if asked to: `<path>.gsav` is the session's
-    /// tick-0 save and `<path>` its input log.
+    /// Forgets the mirrors and input state of the previous world.
+    fn reset_world(&mut self) {
+        self.previous = None;
+        self.current = self.settlement().cloned();
+        self.tick = 0;
+        self.walking = None;
+        self.named = false;
+        self.applies_at = 0;
+        self.events.clear();
+    }
+
+    /// Writes the current world's recording, if asked to: `<path>.gsav` is
+    /// its tick-0 save and `<path>` its input log. Later worlds in the same
+    /// session add their number: `<path>.2`, `<path>.2.gsav`, and so on.
     pub fn write_recording(&self) {
-        let (Some(path), Some(save), Some(log)) =
-            (&self.record, &self.start_save, self.session.as_ref().and_then(session::Session::input_log))
-        else {
+        let (Some(path), Some(save), Some(session)) = (&self.record, &self.start_save, &self.session) else {
             return;
         };
-        let written = std::fs::write(format!("{path}.gsav"), save).and_then(|()| std::fs::write(path, log.to_bytes()));
+        let Some(log) = session.input_log() else { return };
+        let path = match session.world_number() {
+            1 => path.clone(),
+            n => format!("{path}.{n}"),
+        };
+        let written = std::fs::write(format!("{path}.gsav"), save).and_then(|()| std::fs::write(&path, log.to_bytes()));
         if let Err(e) = written {
             error!("could not write the recording {path}: {e}");
         }
@@ -262,11 +280,13 @@ pub fn build_world(world: &mut World) {
     };
     let scene_id = scene.id.clone();
     let mut game = world.resource_mut::<Game>();
+    game.scene = Some(index);
+    if game.session.is_some() && matches!(game.network, Some(Network::Join(_))) {
+        // A client plays the host's world and follows the host's scene
+        // (see `step`); switching scenes only changes its views.
+        return;
+    }
     let content = game.content.clone();
-    let threads = std::thread::available_parallelism().map_or(2, |n| n.get().min(4));
-    // Single-player has nobody to wait for, so no input delay.
-    let input_delay = if game.network.is_some() { NetConfig::default().input_delay } else { 0 };
-    let config = NetConfig { threads, input_delay, ..NetConfig::default() };
     let built = SimWorld::new_scene(SEED, content.rules.clone(), &setup);
     let world_state = match built {
         Ok(world) => world,
@@ -275,32 +295,37 @@ pub fn build_world(world: &mut World) {
     game.center = world_state.terrain().center;
     let start = save::write(&world_state, &content);
     let fresh = || save::read(&start, &content).expect("a fresh save loads");
-    let mode = match (game.replay.take(), game.network) {
-        (Some((bytes, log)), _) => {
-            let replayed = save::read(&bytes, &content).expect("the recording's save loads");
-            session::Mode::Replay { world: replayed, log }
+    if game.session.as_ref().is_some_and(session::Session::is_host) {
+        // A new map in the same session. Each world gets its own recording.
+        game.write_recording();
+        let clock = game.clock;
+        game.session.as_mut().unwrap().load_world(fresh(), scene_id, clock);
+    } else {
+        let threads = std::thread::available_parallelism().map_or(2, |n| n.get().min(4));
+        // Single-player has nobody to wait for, so no input delay.
+        let input_delay = if game.network.is_some() { NetConfig::default().input_delay } else { 0 };
+        let config = NetConfig { threads, input_delay, ..NetConfig::default() };
+        let mode = match (game.replay.take(), game.network) {
+            (Some((bytes, log)), _) => {
+                let replayed = save::read(&bytes, &content).expect("the recording's save loads");
+                session::Mode::Replay { world: replayed, log }
+            }
+            // A client's world comes from the host; the scene built here is
+            // only for the view.
+            (None, Some(Network::Join(host))) => session::Mode::Join { host, stable_id: stable_id() },
+            (None, Some(Network::Host(listen))) => session::Mode::Host { world: fresh(), label: scene_id, listen: Some(listen) },
+            (None, None) => session::Mode::Host { world: fresh(), label: scene_id, listen: None },
+        };
+        let session = session::Session::start(mode, content, config).unwrap_or_else(|e| panic!("could not start the session: {e}"));
+        if let Some(addr) = session.local_addr() {
+            info!("hosting on {addr}");
         }
-        // A client's world comes from the host; the scene built here is
-        // only for the view.
-        (None, Some(Network::Join(host))) => session::Mode::Join { host, stable_id: stable_id() },
-        (None, Some(Network::Host(listen))) => session::Mode::Host { world: fresh(), listen: Some(listen) },
-        (None, None) => session::Mode::Host { world: fresh(), listen: None },
-    };
-    let session = session::Session::start(mode, content, config).unwrap_or_else(|e| panic!("could not start the session: {e}"));
-    if let Some(addr) = session.local_addr() {
-        info!("hosting on {addr}");
+        game.session = Some(session);
+        game.clock = Duration::ZERO;
     }
     game.start_save = Some(start);
-    game.session = Some(session);
-    game.scene = Some(index);
-    game.clock = Duration::ZERO;
-    game.previous = None;
-    game.current = game.settlement().cloned();
-    game.tick = 0;
-    game.walking = None;
-    game.named = false;
-    game.applies_at = 0;
-    game.events.clear();
+    game.world_number = game.session.as_ref().map_or(0, session::Session::world_number);
+    game.reset_world();
 }
 
 /// Runs every tick due by this frame's time and keeps the last two for interpolation.
@@ -308,6 +333,7 @@ pub fn step(
     time: Res<Time>,
     hub: Option<Res<crate::control::Hub>>,
     mut game: ResMut<Game>,
+    mut library: ResMut<SceneLibrary>,
     mut telemetry: ResMut<crate::telemetry::Telemetry>,
 ) {
     // Scripted runs warm up for different lengths with and without rendering;
@@ -339,6 +365,20 @@ pub fn step(
         ticks.push((world.tick(), settlement, world.stage_times(), copying.elapsed()));
     });
     telemetry.session_frame(started.elapsed(), ticks.iter().map(|(_, _, times, copy)| (*times, *copy)));
+    if session.world_number() != game.world_number {
+        // The host moved everyone to a new world: a client drops the old
+        // world's mirrors and shows the host's scene.
+        game.world_number = session.world_number();
+        game.reset_world();
+        if let Some(label) = session.world_label() {
+            let showing = library.scenes.get(library.current).is_some_and(|pack| pack.scene.id == label);
+            match library.index(label) {
+                Ok(index) if !showing => library.requested = Some(index),
+                Ok(_) => {}
+                Err(e) => warn!("the host's world: {e}"),
+            }
+        }
+    }
     for (tick, settlement, _, _) in ticks {
         if let Some(s) = &settlement {
             game.events.extend(s.events.iter().cloned());

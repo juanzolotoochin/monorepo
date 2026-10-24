@@ -242,6 +242,10 @@ Details: [desyncs and host loss](design/desync-host-loss.html).
   Release builds resync the client through the join path.
 - **Joining:** the joiner receives a save plus the inputs since that save.
   Chunks whose hash already matches can be skipped.
+- **Map changes:** one session goes through several worlds. The host sends
+  every client a save of the new world, as for a join, and its first tick
+  waits until all of them have loaded it. Ticks restart at 0 in each world,
+  so packets carry the world's number next to the session's epoch.
 - **Host leaving:** the session ends. All peers autosave on the same ticks and
   also save when the host is lost, so anyone can re-host manually. There is no
   automatic migration yet, but the protocol treats the host as a role (authority

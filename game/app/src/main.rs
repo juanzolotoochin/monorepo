@@ -45,10 +45,11 @@ fn main() {
         std::process::exit(2)
     });
     if network.is_some() {
-        // Networked games start on the field unless asked otherwise, and
-        // every peer must pick the same scene.
+        // Networked games start on the field unless asked otherwise. The host
+        // may switch scenes and everyone follows; a client shows whatever
+        // scene the host's world is.
         scenes.initial = scenes.index("field").expect("the field scene exists");
-        scenes.locked = true;
+        scenes.locked = matches!(network, Some(lockstep::Network::Join(_)));
     }
     if let Some(pair) = args.windows(2).find(|pair| pair[0] == "--scene") {
         scenes.initial = scenes.index(&pair[1]).unwrap_or_else(|error| {

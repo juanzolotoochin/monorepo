@@ -42,8 +42,9 @@ pub struct Session {
 }
 
 pub enum Mode {
-    /// Host a game. `listen` is `None` for single-player.
-    Host { world: World, listen: Option<SocketAddr> },
+    /// Host a game. `listen` is `None` for single-player. `label` is the
+    /// app's name for the world (its scene), passed on to clients.
+    Host { world: World, label: String, listen: Option<SocketAddr> },
     Join { host: SocketAddr, stable_id: StableId },
     /// Play back `log` from the save it starts at.
     Replay { world: World, log: InputLog },
@@ -53,7 +54,7 @@ impl Session {
     pub fn start(mode: Mode, content: Content, config: NetConfig) -> std::io::Result<Session> {
         let mut local_addr = None;
         let peer = match mode {
-            Mode::Host { world, listen } => {
+            Mode::Host { world, label, listen } => {
                 let socket: Socket = match listen {
                     Some(addr) => {
                         let udp = UdpTransport::bind(addr)?;
@@ -67,7 +68,7 @@ impl Session {
                 let epoch = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(1, |d| d.as_secs() as u32 | 1);
-                Peer::Host(Box::new(Host::new(socket, world, content.clone(), config, epoch, Duration::ZERO)))
+                Peer::Host(Box::new(Host::new(socket, world, label, content.clone(), config, epoch, Duration::ZERO)))
             }
             Mode::Join { host, stable_id } => {
                 let any: SocketAddr = if host.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" }.parse().unwrap();
@@ -90,6 +91,49 @@ impl Session {
             Peer::Host(host) => Some(host.world()),
             Peer::Client(client) => client.world(),
             Peer::Replay { sim, .. } => Some(sim.world()),
+        }
+    }
+
+    /// Replaces the host's world with a new one (a new map, at tick 0) that
+    /// the app calls `label`. Clients load it from a save, and it starts once
+    /// they all have it. Returns false, doing nothing, on a client or replay.
+    pub fn load_world(&mut self, world: World, label: String, now: Duration) -> bool {
+        match &mut self.peer {
+            Peer::Host(host) => {
+                host.load_world(world, label, now);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Counts the worlds this session has gone through, from 1; 0 for a
+    /// client before its first. It changes when the world is replaced by a
+    /// new one, not when a client resyncs.
+    pub fn world_number(&self) -> u32 {
+        match &self.peer {
+            Peer::Host(host) => host.world_number(),
+            Peer::Client(client) => client.world_number(),
+            Peer::Replay { .. } => 1,
+        }
+    }
+
+    /// The host app's name for the current world, once known.
+    pub fn world_label(&self) -> Option<&str> {
+        match &self.peer {
+            Peer::Host(host) => Some(host.label()),
+            Peer::Client(client) if client.world_number() > 0 => Some(client.label()),
+            _ => None,
+        }
+    }
+
+    /// Whether the world is still loading: a client fetching the host's save,
+    /// or a host waiting for its clients to load a new world.
+    pub fn world_loading(&self) -> bool {
+        match &self.peer {
+            Peer::Host(host) => host.starting(),
+            Peer::Client(client) => matches!(client.phase(), ClientPhase::Connecting | ClientPhase::Loading { .. }),
+            Peer::Replay { .. } => false,
         }
     }
 
@@ -220,7 +264,7 @@ impl Session {
         self.world().map(|world| save::write(world, &self.content))
     }
 
-    /// The host's turns so far, as an input log from the session's first tick.
+    /// The host's turns in the current world, as an input log from its first tick.
     pub fn input_log(&self) -> Option<InputLog> {
         match &self.peer {
             Peer::Host(host) => {
@@ -273,7 +317,7 @@ mod tests {
     fn single_player() -> Session {
         let content = Content::builtin();
         let world = World::new(sim::scenario::Scenario::small().config, content.rules.clone());
-        Session::start(Mode::Host { world, listen: None }, content, NetConfig { threads: 2, ..NetConfig::default() }).unwrap()
+        Session::start(Mode::Host { world, label: "small".into(), listen: None }, content, NetConfig { threads: 2, ..NetConfig::default() }).unwrap()
     }
 
     #[test]
@@ -325,7 +369,7 @@ mod tests {
         let world = World::new_scene(1, content.rules.clone(), &setup).unwrap();
         let config = NetConfig { threads: 2, ..NetConfig::default() };
         let listen = Some("127.0.0.1:0".parse().unwrap());
-        let mut host = Session::start(Mode::Host { world, listen }, content.clone(), config.clone()).unwrap();
+        let mut host = Session::start(Mode::Host { world, label: "first".into(), listen }, content.clone(), config.clone()).unwrap();
         let addr = host.local_addr().unwrap();
         let mut client = Session::start(Mode::Join { host: addr, stable_id: 42 }, content.clone(), config).unwrap();
 
@@ -368,6 +412,83 @@ mod tests {
         assert_eq!(host.save(), client.save(), "both machines have the same world");
     }
 
+    /// One single-player session through two worlds: the second starts at
+    /// tick 0, and the input log covers only the current world.
+    #[test]
+    fn a_session_goes_through_two_worlds() {
+        let content = Content::builtin();
+        let mut session = single_player();
+        let mut now = Duration::ZERO;
+        while now < Duration::from_secs(1) {
+            now += Duration::from_millis(10);
+            session.update(now, |_| {});
+        }
+        assert!(session.world().unwrap().tick() > 30);
+        let world = World::new(sim::scenario::Scenario::small().config, content.rules.clone());
+        assert!(session.load_world(world, "second".into(), now));
+        assert_eq!((session.world_number(), session.world_label()), (2, Some("second")));
+        assert_eq!(session.world().unwrap().tick(), 0);
+        // Nobody to wait for.
+        assert!(!session.world_loading());
+        let end = now + Duration::from_millis(500);
+        while now < end {
+            now += Duration::from_millis(10);
+            session.update(now, |_| {});
+        }
+        let tick = session.world().unwrap().tick();
+        assert!((25..=35).contains(&tick), "the second world ran {tick} ticks in half a second");
+        let log = session.input_log().unwrap();
+        assert_eq!((log.start_tick, log.turns.len() as u64), (0, tick));
+    }
+
+    /// A map change over UDP: the client loads the host's new world, learns
+    /// its label, gets an avatar in it, and ends with the host's state.
+    #[test]
+    fn a_client_follows_the_host_to_a_new_world() {
+        use sim::settlement::SceneSetup;
+        let content = Content::builtin();
+        let scene = |x: i32| {
+            let setup = SceneSetup { extent: Fx::from_int(8), spawn: [Fx::from_int(x), Fx::ZERO, Fx::from_int(2)], ..SceneSetup::default() };
+            World::new_scene(1, content.rules.clone(), &setup).unwrap()
+        };
+        let config = NetConfig { threads: 2, ..NetConfig::default() };
+        let listen = Some("127.0.0.1:0".parse().unwrap());
+        let mut host = Session::start(Mode::Host { world: scene(0), label: "first".into(), listen }, content.clone(), config.clone()).unwrap();
+        let addr = host.local_addr().unwrap();
+        let mut client = Session::start(Mode::Join { host: addr, stable_id: 42 }, content.clone(), config).unwrap();
+        let avatar = |session: &Session| session.world()?.settlement()?.avatar_of(session.player()?);
+
+        let start = std::time::Instant::now();
+        let run_until = |host: &mut Session, client: &mut Session, done: &dyn Fn(&Session, &Session) -> bool| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while !done(host, client) && std::time::Instant::now() < deadline {
+                let now = start.elapsed();
+                host.update(now, |_| {});
+                client.update(now, |_| {});
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        };
+        run_until(&mut host, &mut client, &|_, c| avatar(c).is_some());
+        assert_eq!(client.world_label(), Some("first"));
+
+        assert!(host.load_world(scene(3), "second".into(), start.elapsed()));
+        assert!(host.world_loading(), "the host waits for the client");
+        run_until(&mut host, &mut client, &|h, c| {
+            avatar(c).is_some() && c.world_number() == 2 && c.world().unwrap().tick() >= 120 && h.world().unwrap().tick() >= 120
+        });
+        assert_eq!((client.world_number(), client.world_label()), (2, Some("second")));
+        assert!(avatar(&client).is_some(), "the client has an avatar in the new world: {}", client.status());
+
+        // Every tick the client ran in the second world has the host's hash.
+        let (_, host_hashes) = host.desync_evidence();
+        let (_, client_hashes) = client.desync_evidence();
+        assert!(client_hashes.lines().count() >= 120);
+        assert!(client_hashes.starts_with("0 "), "the client's log starts at the new world's first tick");
+        for line in client_hashes.lines() {
+            assert!(host_hashes.lines().any(|h| h == line), "client tick and hash {line} differ from the host's");
+        }
+    }
+
     /// A bot for one player: walks at the nearest ghoul from its `lanes`
     /// (wave indices) and strikes it, deciding from this peer's own world
     /// every few ticks.
@@ -405,7 +526,7 @@ mod tests {
         let world = World::new_settlement(1, content.rules.clone(), &scenario, &[]).unwrap();
         let config = NetConfig { threads: 2, ..NetConfig::default() };
         let listen = Some("127.0.0.1:0".parse().unwrap());
-        let mut host = Session::start(Mode::Host { world, listen }, content.clone(), config.clone()).unwrap();
+        let mut host = Session::start(Mode::Host { world, label: "first".into(), listen }, content.clone(), config.clone()).unwrap();
         let addr = host.local_addr().unwrap();
         let mut client = Session::start(Mode::Join { host: addr, stable_id: 7 }, content.clone(), config).unwrap();
 

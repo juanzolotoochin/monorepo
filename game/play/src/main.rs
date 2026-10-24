@@ -106,7 +106,7 @@ fn main() {
     };
     let mode_and_opening = match options.join {
         Some(host) => Ok((Mode::Join { host, stable_id: local_stable_id() }, Vec::new())),
-        None => starting_world(&options, &content).map(|(world, opening)| (Mode::Host { world, listen: options.host }, opening)),
+        None => starting_world(&options, &content).map(|(world, opening)| (Mode::Host { world, label: "play".into(), listen: options.host }, opening)),
     };
     let (mode, opening) = mode_and_opening.unwrap_or_else(|e| fail(&e));
     let mut session = Session::start(mode, content.clone(), config).unwrap_or_else(|e| fail(&format!("network: {e}")));
