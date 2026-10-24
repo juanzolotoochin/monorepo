@@ -254,6 +254,11 @@ pub fn apply(world: &mut World) {
                         ActorPart::RightLeg
                     }
                 }),
+                crate::character::PartKind::Knee(side) => Some(if *side < 0.0 {
+                    ActorPart::LeftKnee
+                } else {
+                    ActorPart::RightKnee
+                }),
                 crate::character::PartKind::Arm(side) => Some(if *side < 0.0 {
                     ActorPart::LeftArm
                 } else {

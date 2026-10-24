@@ -906,6 +906,16 @@ pub fn setup(
                         Visibility::default(),
                     ))
                     .with_children(|s| {
+                        // The knee skin has its own slot at the hinge. It follows
+                        // the shin joint without merging into either limb mesh.
+                        s.spawn((
+                            Part {
+                                kind: PartKind::Knee(side),
+                                rest: Transform::IDENTITY,
+                            },
+                            Transform::IDENTITY,
+                            Visibility::default(),
+                        ));
                         block(
                             s,
                             &cube,
@@ -1291,6 +1301,35 @@ mod character_tests {
                     (actual, check),
                     (PartKind::Body, PartKind::Body) | (PartKind::Chest, PartKind::Chest)
                 )
+            );
+        }
+    }
+
+    #[test]
+    fn knee_skins_follow_the_shin_hinges() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_systems(Startup, setup);
+        app.update();
+        let world = app.world_mut();
+        let knees: Vec<_> = world
+            .query::<(Entity, &Part)>()
+            .iter(world)
+            .filter_map(|(entity, part)| match part.kind {
+                PartKind::Knee(side) => Some((entity, side)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(knees.len(), 2);
+        for (knee, side) in knees {
+            let shin = world.get::<ChildOf>(knee).unwrap().parent();
+            let thigh = world.get::<ChildOf>(shin).unwrap().parent();
+            assert!(
+                matches!(world.get::<Part>(shin).unwrap().kind, PartKind::Shin(s) if s == side)
+            );
+            assert!(
+                matches!(world.get::<Part>(thigh).unwrap().kind, PartKind::Leg(s) if s == side)
             );
         }
     }

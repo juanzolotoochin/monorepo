@@ -152,6 +152,7 @@ fn build_app(options: control::Options, mut scenes: assets::SceneLibrary, hub: c
                 "idle" => viewer::Clip::Idle,
                 "turn" => viewer::Clip::Turn,
                 "jump" => viewer::Clip::Jump,
+                "run-jump" => viewer::Clip::RunJump,
                 "forehand" => viewer::Clip::Forehand,
                 "backhand" => viewer::Clip::Backhand,
                 "overhead" => viewer::Clip::Overhead,

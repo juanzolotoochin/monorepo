@@ -26,6 +26,7 @@ pub enum Clip {
     Run,
     Turn,
     Jump,
+    RunJump,
     Forehand,
     Backhand,
     Overhead,
@@ -35,8 +36,9 @@ impl Clip {
         match self {
             Self::Idle => "IDLE",
             Self::Run => "RUN",
-            Self::Turn => "TURN",
+            Self::Turn => "RUN + DIRECTION CHANGE",
             Self::Jump => "JUMP",
+            Self::RunJump => "RUN + JUMP",
             Self::Forehand => "SWORD / FOREHAND",
             Self::Backhand => "SWORD / BACKHAND",
             Self::Overhead => "SWORD / OVERHEAD",
@@ -79,22 +81,53 @@ impl Viewer {
     fn phase(&self) -> f32 {
         let period = if self.clip.stroke().is_some() {
             1.10
+        } else if self.clip == Clip::Turn {
+            3.4
+        } else if self.clip == Clip::Jump {
+            1.3
+        } else if self.clip == Clip::RunJump {
+            2.2
         } else {
             1.5
         };
         self.elapsed.rem_euclid(period)
     }
+    fn turn_heading(&self) -> f32 {
+        let t = self.phase();
+        let blend = |start: f32, end: f32| crate::combat::smooth((t - start) / (end - start));
+        if t < 0.65 {
+            0.0
+        } else if t < 1.10 {
+            1.05 * blend(0.65, 1.10)
+        } else if t < 1.55 {
+            1.05
+        } else if t < 2.05 {
+            crate::combat::lerp(1.05, -0.75, blend(1.55, 2.05))
+        } else if t < 2.50 {
+            -0.75
+        } else if t < 3.05 {
+            -0.75 * (1.0 - blend(2.50, 3.05))
+        } else {
+            0.0
+        }
+    }
     pub fn jump(&self) -> (Option<JumpMotion>, f32) {
-        if self.clip != Clip::Jump {
+        if !matches!(self.clip, Clip::Jump | Clip::RunJump) {
             return (None, 0.0);
         }
-        let t = self.phase();
-        if t < 0.12 {
-            return (Some(JumpMotion::Preparing(t / 0.12)), 0.0);
+        let t = self.phase() - if self.clip == Clip::RunJump { 0.55 } else { 0.0 };
+        if t < 0.0 {
+            return (None, 0.0);
         }
-        if t < 0.84 {
-            let p = ((t - 0.12) / 0.72).clamp(0.0, 1.0);
-            let height = 1.3 * 4.0 * p * (1.0 - p);
+        if t < 0.07 {
+            return (Some(JumpMotion::Preparing(crate::combat::smooth(t / 0.07))), 0.0);
+        }
+        if t < 0.14 {
+            return (Some(JumpMotion::Pushing(crate::combat::smooth((t - 0.07) / 0.07))), 0.0);
+        }
+        if t < 0.72 {
+            let p = ((t - 0.14) / 0.58).clamp(0.0, 1.0);
+            let height = 0.56 * 4.0 * p * (1.0 - p);
             return (
                 Some(if p < 0.5 {
                     JumpMotion::Rising(p * 2.0)
@@ -104,8 +137,8 @@ impl Viewer {
                 height,
             );
         }
-        if t < 1.06 {
-            return (Some(JumpMotion::Landing((t - 0.84) / 0.22)), 0.0);
+        if t < 0.92 {
+            return (Some(JumpMotion::Landing((t - 0.72) / 0.20)), 0.0);
         }
         (None, 0.0)
     }
@@ -200,6 +233,21 @@ pub fn setup(
         })),
         Transform::from_xyz(0.0, STUDIO_FLOOR_Y - STUDIO_FLOOR_THICKNESS * 0.5, 0.0),
     ));
+    for (position, intensity) in [
+        (Vec3::new(2.5, STUDIO_FLOOR_Y + 3.5, 3.5), 1900.0),
+        (Vec3::new(-3.0, STUDIO_FLOOR_Y + 2.6, -1.0), 1100.0),
+    ] {
+        commands.spawn((
+            Stage,
+            PointLight {
+                intensity,
+                range: 9.0,
+                shadow_maps_enabled: false,
+                ..default()
+            },
+            Transform::from_translation(position),
+        ));
+    }
     commands
         .spawn((
             Root,
@@ -231,6 +279,7 @@ pub fn setup(
                 Clip::Run,
                 Clip::Turn,
                 Clip::Jump,
+                Clip::RunJump,
                 Clip::Forehand,
                 Clip::Backhand,
                 Clip::Overhead,
@@ -358,16 +407,21 @@ pub fn drive(
     let (_, height) = viewer.jump();
     player.translation = spawn + Vec3::Y * height;
     player.rotation = Quat::from_rotation_y(if viewer.clip == Clip::Turn {
-        (viewer.elapsed * 2.4).sin() * 0.9
+        viewer.turn_heading()
     } else {
         0.0
     });
-    controls.velocity = if matches!(viewer.clip, Clip::Run | Clip::Turn) {
-        Vec3::Z * 5.6
+    controls.velocity = if matches!(viewer.clip, Clip::Run | Clip::Turn | Clip::RunJump) {
+        player.rotation * Vec3::Z * 5.6
     } else {
         Vec3::ZERO
     };
-    controls.gait.phase = viewer.elapsed * if viewer.clip == Clip::Run { 12.0 } else { 9.0 };
+    controls.gait.phase = viewer.elapsed
+        * if matches!(viewer.clip, Clip::Run | Clip::RunJump) {
+            12.0
+        } else {
+            9.0
+        };
     controls.attack = viewer.clip.stroke().and_then(|stroke| {
         (t < 0.44).then(|| {
             let mut attack = Attack::new(Vec3::Z, content::scenario::Weapon::Sword);
@@ -434,8 +488,12 @@ pub fn capture(
     };
     state.elapsed += time.delta_secs().min(0.1);
     let phase = viewer.phase();
+    let pushing = std::env::args().any(|arg| arg == "--studio-capture-push");
     let key_pose = match viewer.clip {
-        Clip::Jump => (0.43..0.53).contains(&phase),
+        Clip::Jump if pushing => (0.10..0.13).contains(&phase),
+        Clip::RunJump if pushing => (0.65..0.68).contains(&phase),
+        Clip::Jump => (0.40..0.48).contains(&phase),
+        Clip::RunJump => (0.97..1.03).contains(&phase),
         Clip::Forehand | Clip::Backhand | Clip::Overhead => (0.17..0.21).contains(&phase),
         _ => true,
     };
@@ -459,9 +517,39 @@ mod tests {
         viewer.clip = Clip::Jump;
         viewer.elapsed = 0.06;
         assert!(matches!(viewer.jump().0, Some(JumpMotion::Preparing(_))));
-        viewer.elapsed = 0.48;
-        assert!(viewer.jump().1 > 1.2);
-        viewer.elapsed = 0.92;
+        viewer.elapsed = 0.11;
+        assert!(matches!(viewer.jump().0, Some(JumpMotion::Pushing(_))));
+        viewer.elapsed = 0.43;
+        assert!(viewer.jump().1 > 0.5);
+        viewer.elapsed = 0.82;
         assert!(matches!(viewer.jump().0, Some(JumpMotion::Landing(_))));
+    }
+
+    #[test]
+    fn running_jump_has_stride_before_takeoff_and_after_landing() {
+        let mut viewer = Viewer::default();
+        viewer.clip = Clip::RunJump;
+        viewer.elapsed = 0.4;
+        assert!(viewer.jump().0.is_none());
+        viewer.elapsed = 0.65;
+        assert!(matches!(viewer.jump().0, Some(JumpMotion::Pushing(_))));
+        viewer.elapsed = 0.98;
+        assert!(viewer.jump().1 > 0.5);
+        viewer.elapsed = 1.85;
+        assert!(viewer.jump().0.is_none());
+    }
+
+    #[test]
+    fn running_turn_loop_has_straights_and_two_direction_changes() {
+        let mut viewer = Viewer::default();
+        viewer.clip = Clip::Turn;
+        viewer.elapsed = 0.3;
+        assert_eq!(viewer.turn_heading(), 0.0);
+        viewer.elapsed = 1.25;
+        assert!(viewer.turn_heading() > 1.0);
+        viewer.elapsed = 2.25;
+        assert!(viewer.turn_heading() < -0.7);
+        viewer.elapsed = 3.25;
+        assert_eq!(viewer.turn_heading(), 0.0);
     }
 }

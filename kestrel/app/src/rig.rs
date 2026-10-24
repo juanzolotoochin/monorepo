@@ -30,6 +30,8 @@ impl RigTemplate {
                     ActorPart::RightArm => [0.43, 1.27, 0.],
                     ActorPart::LeftShin => [-0.17, 0.31, 0.],
                     ActorPart::RightShin => [0.17, 0.31, 0.],
+                    ActorPart::LeftKnee => [-0.17, 0.31, 0.],
+                    ActorPart::RightKnee => [0.17, 0.31, 0.],
                     ActorPart::LeftFoot => [-0.17, 0.1, 0.],
                     ActorPart::RightFoot => [0.17, 0.1, 0.],
                     ActorPart::LeftForearm => [-0.43, 1.01, 0.],
@@ -158,6 +160,7 @@ impl Rig {
                 ActorPart::LeftLeg
                     | ActorPart::LeftArm
                     | ActorPart::LeftShin
+                    | ActorPart::LeftKnee
                     | ActorPart::LeftFoot
                     | ActorPart::LeftForearm
                     | ActorPart::LeftHand
@@ -180,7 +183,7 @@ impl Rig {
                         };
                         t.rotation = Quat::from_rotation_x(stride + drag + recoil * 0.18);
                     }
-                    if matches!(part, ActorPart::LeftShin | ActorPart::RightShin) {
+                    if matches!(part, ActorPart::LeftShin | ActorPart::RightShin | ActorPart::LeftKnee | ActorPart::RightKnee) {
                         let phase = (travel * (12.0 - injury * 3.0)).sin() * side;
                         t.rotation =
                             Quat::from_rotation_x(-phase.max(0.0) * (0.42 - injury * 0.18));

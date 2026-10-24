@@ -116,7 +116,9 @@ fn jump_has_anticipation_arc_landing_and_no_air_restart() {
     assert!(matches!(scene.avatar().avatar.jump, JumpPhase::Preparing { .. }));
     scene.wait(ms(220));
     assert!(matches!(scene.avatar().avatar.jump, JumpPhase::Airborne { .. }));
-    assert!(scene.altitude() > ground + fx(0.5));
+    assert!(scene.altitude() > ground + fx(0.2));
+    scene.wait(ms(130));
+    assert!(scene.altitude() > ground + fx(0.4));
     scene.command(CommandKind::Jump { agent });
     assert!(matches!(scene.avatar().avatar.jump, JumpPhase::Airborne { .. }));
     scene.wait(ms(1300));

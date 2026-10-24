@@ -14,7 +14,7 @@
 #include <stdint.h>
 #include <string.h>
 
-typedef struct { int kind; unsigned int frame; int alive; float pitch; } voice;
+typedef struct { int kind; unsigned int frame; int alive; float pitch; float filtered_noise; } voice;
 static ma_device device;
 static ma_context context;
 static _Atomic unsigned int pending;
@@ -37,7 +37,7 @@ static void play_voice(audio_state *state, int kind) {
     for (int i=0;i<12;++i) if (!state->voices[i].alive) {slot=i;break;}
     state->noise_seed = state->noise_seed * 1664525u + 1013904223u;
     float pitch = 0.93f + (float)(state->noise_seed & 1023u) * (0.14f / 1023.0f);
-    state->voices[slot]=(voice){kind,0,1,pitch};
+    state->voices[slot]=(voice){kind,0,1,pitch,0.0f};
 }
 static float tone(float frequency, float t, float decay) {
     return sinf(6.2831853f * frequency * t) * expf(-decay * t);
@@ -84,10 +84,12 @@ static void synth_frames(audio_state *state, float *out, ma_uint32 frames) {
                 sample *= fminf(t*1500.0f,1.0f);
                 if (t > 0.24f) v->alive = 0;
             } else if (v->kind == 7) {
-                // Small mineral clink layered with a cushioned backpack/floor tap.
-                sample = 0.12f * tone(760.0f,t,22.0f) + 0.07f * tone(1817.0f,t,30.0f) + 0.10f * tone(125.0f,t,45.0f);
-                sample *= fminf(t*2500.0f,1.0f);
-                if (t > 0.3f) v->alive = 0;
+                // Soft ground contact: filtered grit and a brief low thud, with no pitched clink.
+                v->filtered_noise += 0.055f * (noise(state) - v->filtered_noise);
+                sample = 0.24f * v->filtered_noise * expf(-28.0f * t)
+                    + 0.11f * tone(82.0f - 95.0f * t, t, 32.0f);
+                sample *= fminf(t * 1600.0f, 1.0f);
+                if (t > 0.18f) v->alive = 0;
             } else if (v->kind == 8) {
                 sample = 0.09f * tone(660.0f,t,20.0f) + 0.06f * tone(990.0f,t,24.0f);
                 sample *= fminf(t*1500.0f,1.0f);

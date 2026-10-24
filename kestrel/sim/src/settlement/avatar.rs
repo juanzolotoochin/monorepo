@@ -61,9 +61,9 @@ const DOCK_REACH: Fx = Fx::from_bits(3_650_722_202); // 0.85
 const HOVER: Fx = Fx::from_bits(7_730_941_133); // 1.8
 const CLIMB_PER_TICK: Fx = per_tick(Fx::from_ratio(11, 2));
 const SINK_PER_TICK: Fx = per_tick(Fx::from_int(3));
-pub const JUMP_PREP_TICKS: u64 = ticks_from_60hz(7);
+pub const JUMP_PREP_TICKS: u64 = ticks_from_60hz(8);
 pub const JUMP_LAND_TICKS: u64 = ticks_from_60hz(10);
-const JUMP_VELOCITY: Fx = per_tick(Fx::from_int(6));
+const JUMP_VELOCITY: Fx = per_tick(Fx::from_int(4));
 const JUMP_GRAVITY: Fx = per_tick(per_tick(Fx::from_int(14)));
 /// A dig takes 2 s, standing still.
 pub const DIG_TICKS: u64 = millis_to_ticks(2000);

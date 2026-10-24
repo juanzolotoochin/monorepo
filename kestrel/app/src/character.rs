@@ -30,6 +30,7 @@ pub enum PartKind {
     Forearm(f32),
     Hand(f32),
     Leg(f32),
+    Knee(f32),
     Shin(f32),
     Foot(f32),
     WeaponGrip,
@@ -208,6 +209,7 @@ pub struct Pose {
 #[derive(Clone, Copy, Debug)]
 pub enum JumpMotion {
     Preparing(f32),
+    Pushing(f32),
     Rising(f32),
     Falling(f32),
     Landing(f32),
@@ -216,15 +218,20 @@ pub enum JumpMotion {
 pub fn jump_motion(phase: JumpPhase, ticks: f32, height: f32, support: f32) -> Option<JumpMotion> {
     match phase {
         JumpPhase::Grounded => None,
-        JumpPhase::Preparing { started } => Some(JumpMotion::Preparing(smooth(
-            (ticks - started as f32) / JUMP_PREP_TICKS as f32,
-        ))),
+        JumpPhase::Preparing { started } => {
+            let progress = ((ticks - started as f32) / JUMP_PREP_TICKS as f32).clamp(0.0, 1.0);
+            if progress < 0.5 {
+                Some(JumpMotion::Preparing(smooth(progress * 2.0)))
+            } else {
+                Some(JumpMotion::Pushing(smooth((progress - 0.5) * 2.0)))
+            }
+        }
         JumpPhase::Airborne { velocity, .. } if velocity > fx::Fx::ZERO => {
             let speed = velocity.to_f32() * content::TICKS_PER_SECOND as f32;
-            Some(JumpMotion::Rising((1.0 - speed / 6.0).clamp(0.0, 1.0)))
+            Some(JumpMotion::Rising((1.0 - speed / 4.0).clamp(0.0, 1.0)))
         }
         JumpPhase::Airborne { .. } => Some(JumpMotion::Falling(
-            (1.0 - (height - support) / 1.3).clamp(0.0, 1.0),
+            (1.0 - (height - support) / 0.6).clamp(0.0, 1.0),
         )),
         JumpPhase::Landing { started } => Some(JumpMotion::Landing(smooth(
             (ticks - started as f32) / JUMP_LAND_TICKS as f32,
@@ -232,49 +239,57 @@ pub fn jump_motion(phase: JumpPhase, ticks: f32, height: f32, support: f32) -> O
     }
 }
 
-/// A coordinated anticipation, extension, tuck, reach and landing overlay.
+/// A coordinated crouch, leg extension, shallow flight flex and landing overlay.
 /// The root height remains simulation owned; these offsets only pose joints.
 fn jump_pose(kind: PartKind, mut transform: Transform, phase: JumpMotion) -> Transform {
-    let (compress, tuck, reach) = match phase {
-        JumpMotion::Preparing(p) => (p, 0.0, 0.0),
-        JumpMotion::Rising(p) => (1.0 - p, smooth(p), 0.0),
-        JumpMotion::Falling(p) => (0.0, 1.0 - smooth(p), smooth(p)),
-        JumpMotion::Landing(p) => (1.0 - p, 0.0, 0.0),
+    let (compress, extension, float, reach, push) = match phase {
+        JumpMotion::Preparing(p) => (p, 0.0, 0.0, 0.0, 0.0),
+        JumpMotion::Pushing(p) => (1.0 - p, p, 0.0, 0.0, p),
+        JumpMotion::Rising(p) => (0.0, 1.0 - smooth(p), smooth(p), 0.0, 1.0 - smooth(p)),
+        JumpMotion::Falling(p) => (0.0, 0.0, 1.0 - smooth(p), smooth(p), 0.0),
+        JumpMotion::Landing(p) => (1.0 - p, 0.0, 0.0, 0.0, 0.0),
     };
     match kind {
         PartKind::Body => {
-            transform.translation.y -= 0.20 * compress;
-            transform.translation.z += 0.10 * tuck + 0.12 * reach;
+            transform.translation.y += -0.16 * compress + 0.06 * push;
+            transform.translation.z += 0.06 * float + 0.09 * reach;
             transform.rotation *=
-                Quat::from_rotation_x(0.32 * compress + 0.24 * tuck + 0.30 * reach);
+                Quat::from_rotation_x(0.30 * compress + 0.12 * float + 0.22 * reach);
         }
         PartKind::Chest => {
             transform.rotation *=
-                Quat::from_rotation_x(0.18 * compress + 0.16 * tuck + 0.15 * reach);
+                Quat::from_rotation_x(0.15 * compress + 0.08 * float + 0.13 * reach);
         }
         PartKind::Head => {
             transform.rotation *= Quat::from_rotation_x(-0.13 * compress + 0.08 * reach);
         }
         PartKind::Arm(side) => {
             transform.rotation *= Quat::from_rotation_x(
-                0.38 * compress - (0.60 + 0.10 * side) * tuck - (0.42 - 0.11 * side) * reach,
+                0.30 * compress
+                    - 0.28 * extension
+                    - (0.40 + 0.08 * side) * float
+                    - (0.35 - 0.08 * side) * reach,
             ) * Quat::from_rotation_z(side * 0.22 * reach);
         }
         PartKind::Forearm(_) => {
-            transform.rotation *= Quat::from_rotation_x(-0.23 * compress - 0.22 * tuck);
+            transform.rotation *= Quat::from_rotation_x(-0.15 * compress - 0.12 * float);
         }
         PartKind::Leg(side) => {
+            transform.translation.y += 0.05 * push;
             transform.rotation *= Quat::from_rotation_x(
-                -0.24 * compress - (0.32 + 0.10 * side) * tuck + 0.15 * reach,
+                -0.34 * compress + 0.10 * extension - (0.10 + 0.19 * side) * float - 0.18 * reach,
             );
         }
-        PartKind::Shin(_) => {
-            transform.rotation *=
-                Quat::from_rotation_x(-0.50 * compress - 0.65 * tuck - 0.16 * reach);
+        PartKind::Knee(_) => {}
+        PartKind::Shin(side) => {
+            transform.rotation *= Quat::from_rotation_x(
+                0.58 * compress - 0.08 * extension + (0.35 + 0.08 * side) * float + 0.18 * reach,
+            );
         }
-        PartKind::Foot(_) => {
-            transform.rotation *=
-                Quat::from_rotation_x(0.18 * compress - 0.35 * tuck + 0.20 * reach);
+        PartKind::Foot(side) => {
+            transform.rotation *= Quat::from_rotation_x(
+                0.12 * compress + 0.42 * push + (0.08 - 0.06 * side) * float + 0.06 * reach,
+            );
         }
         PartKind::Hand(_) | PartKind::WeaponGrip => {}
     }
@@ -328,6 +343,11 @@ impl Gait {
         let plant = drive.max(0.0);
         Self { drive, lift, plant }
     }
+}
+
+fn knee_angle(gait: &Gait, travel: f32, running: f32) -> f32 {
+    // The swing shin folds behind the thigh; stance straightens for contact.
+    0.06 + gait.lift * (0.42 + 0.10 * running) * travel - gait.plant * 0.06 * running
 }
 
 impl Pose {
@@ -433,7 +453,7 @@ impl Pose {
                 }
             }
             PartKind::Head => {
-                transform.translation.y += self.breathe * 0.6;
+                transform.translation.y += self.breathe * 0.6 - 0.06 * running;
                 transform.rotation = Quat::from_rotation_y(-self.turn * 0.34)
                     * Quat::from_rotation_z(-self.turn * 0.08)
                     * Quat::from_rotation_x(-0.04 * travel - 0.09 * running);
@@ -447,7 +467,7 @@ impl Pose {
                 let swing = gait.drive * travel;
                 transform.rotation = Quat::from_rotation_z(-0.08 * side + self.turn * 0.12)
                     * Quat::from_rotation_x(-swing * self.motion.arm_swing - 0.08 * travel);
-                transform.translation.z += swing * 0.035;
+                transform.translation.z += swing * 0.06;
                 if let Some(attack) = self.attack {
                     let follow = if attack.motion() == ActionMotion::Thrust {
                         spear_pose(attack.age, attack.impact_angle.is_some()).0
@@ -535,13 +555,10 @@ impl Pose {
                             * Quat::from_rotation_z(0.08 * side);
                 }
             }
+            PartKind::Knee(_) => {}
             PartKind::Shin(side) => {
                 let gait = if side > 0.0 { &right } else { &left };
-                transform.rotation = Quat::from_rotation_x(
-                    -(0.12
-                        + gait.lift * (0.52 + 0.23 * running) * travel
-                        + gait.plant * 0.08 * running),
-                );
+                transform.rotation = Quat::from_rotation_x(knee_angle(gait, travel, running));
                 if self.airborne && self.jump.is_none() {
                     transform.rotation = Quat::from_rotation_x(-0.55);
                 } else if self.attack.is_some() {
@@ -551,9 +568,7 @@ impl Pose {
             PartKind::Foot(side) => {
                 let gait = if side > 0.0 { &right } else { &left };
                 let thigh = gait.drive * (self.motion.leg_swing + 0.10 * running) * travel;
-                let knee = -(0.12
-                    + gait.lift * (0.52 + 0.23 * running) * travel
-                    + gait.plant * 0.08 * running);
+                let knee = knee_angle(gait, travel, running);
                 // Counter-rotate against the hip and knee while planted.
                 let planted = -(thigh + knee) + gait.plant * 0.13 * travel;
                 let swinging = -gait.lift * 0.24 * travel;
@@ -565,7 +580,7 @@ impl Pose {
             }
             PartKind::WeaponGrip => {
                 let angle = self.attack.map_or(REST_ANGLE, |a| a.angle());
-                let tilt = self.attack.map_or(-0.6 + running * 1.05, |a| {
+                let tilt = self.attack.map_or(-0.6 + running * 0.35, |a| {
                     if a.motion() == ActionMotion::Sweep && a.stroke == SwordStroke::Overhead {
                         if a.age < windup {
                             return lerp(-0.6, -1.05, smooth(a.age / windup));
@@ -658,6 +673,7 @@ impl Pose {
                 transform.rotation =
                     Quat::from_rotation_x(-0.3 * side) * Quat::from_rotation_z(0.12 * side);
             }
+            PartKind::Knee(_) => {}
             PartKind::Shin(_) => {
                 transform.rotation = Quat::from_rotation_x(-0.28);
             }
@@ -747,10 +763,13 @@ mod tests {
         assert!(forward_elbow.rotation.angle_between(back_elbow.rotation) > 0.3);
         let foot = pose.place(PartKind::Foot(1.0), Transform::default());
         assert!(foot.rotation.angle_between(Quat::IDENTITY) > 0.2);
+        pose.stride = 3.0 * std::f32::consts::FRAC_PI_2;
+        let lifted_knee = pose.place(PartKind::Shin(1.0), Transform::default());
+        assert!(lifted_knee.rotation.to_euler(EulerRot::XYZ).0 > 0.4);
     }
 
     #[test]
-    fn jump_poses_anticipate_tuck_reach_and_absorb_landing() {
+    fn jump_extends_then_uses_a_shallow_airborne_knee_flex() {
         let mut pose = Pose {
             motion: voxel_assets::CharacterMotion::default(),
             stride: 0.0,
@@ -766,11 +785,23 @@ mod tests {
         let idle = pose.place(PartKind::Body, body);
         pose.jump = Some(JumpMotion::Preparing(1.0));
         assert!(pose.place(PartKind::Body, body).translation.y < idle.translation.y - 0.1);
+        let crouch = pose.place(PartKind::Shin(1.0), Transform::default());
+        pose.jump = Some(JumpMotion::Pushing(0.8));
+        let pushing_foot = pose.place(PartKind::Foot(1.0), Transform::default());
+        assert!(pushing_foot.rotation.to_euler(EulerRot::XYZ).0 > 0.3);
+        pose.jump = Some(JumpMotion::Rising(0.0));
+        let launch = pose.place(PartKind::Shin(1.0), Transform::default());
         pose.jump = Some(JumpMotion::Rising(1.0));
-        let tucked = pose.place(PartKind::Shin(1.0), Transform::default());
+        let airborne = pose.place(PartKind::Shin(1.0), Transform::default());
+        let leading = pose.place(PartKind::Leg(1.0), Transform::default());
+        let trailing = pose.place(PartKind::Leg(-1.0), Transform::default());
+        assert!(leading.rotation.angle_between(trailing.rotation) > 0.30);
         pose.jump = Some(JumpMotion::Falling(1.0));
         let reaching = pose.place(PartKind::Shin(1.0), Transform::default());
-        assert!(tucked.rotation.angle_between(reaching.rotation) > 0.4);
+        assert!(launch.rotation.angle_between(Quat::IDENTITY) < 0.25);
+        assert!(airborne.rotation.angle_between(Quat::IDENTITY) > 0.35);
+        assert!(crouch.rotation.angle_between(airborne.rotation) > 0.10);
+        assert!(airborne.rotation.angle_between(reaching.rotation) < 0.30);
         pose.jump = Some(JumpMotion::Landing(0.0));
         assert!(pose.place(PartKind::Body, body).translation.y < idle.translation.y - 0.1);
     }
