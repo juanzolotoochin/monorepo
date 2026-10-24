@@ -4,7 +4,7 @@
 use bevy::prelude::*;
 
 use crate::gameplay::Player;
-use crate::lockstep::Game;
+use crate::lockstep::{SessionService, WorldMirror};
 use crate::peers::Peer;
 
 #[derive(Component)]
@@ -17,15 +17,16 @@ const ABOVE: f32 = 2.15;
 
 pub fn update(
     mut commands: Commands,
-    game: Res<Game>,
+    service: Res<SessionService>,
+    mirror: Res<WorldMirror>,
     camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>,
     player: Single<&GlobalTransform, With<Player>>,
     peers: Query<(&Peer, &GlobalTransform)>,
     mut tags: Query<(Entity, &NameTag, &mut Text, &mut TextColor, &mut Node, &mut Visibility, &ComputedNode)>,
 ) {
-    let me = game.player();
-    let players: Vec<(u16, String)> = match (&game.current, game.network) {
-        (Some(current), Some(_)) => current
+    let me = mirror.player();
+    let players: Vec<(u16, String)> = match (&mirror.current, service.networked()) {
+        (Some(current), true) => current
             .agents
             .iter()
             .enumerate()

@@ -226,6 +226,12 @@ impl ServiceSet {
     }
 }
 
+/// Stops every layer when the app exits, in `Last`. A system that writes
+/// `AppExit` in `Last` runs `.before(StopOnExit)` so the services still stop
+/// that frame.
+#[derive(SystemSet, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct StopOnExit;
+
 /// The systems that start and stop a layer's services.
 #[derive(SystemSet, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Lifecycle {
@@ -355,7 +361,7 @@ impl Plugin for ServicesPlugin {
             ),
         )
         .add_systems(Last, (promote::<AppLayer>, promote::<SessionLayer>, promote::<WorldLayer>))
-        .add_systems(Last, exiting.pipe(stop_all).after(promote::<WorldLayer>));
+        .add_systems(Last, exiting.pipe(stop_all).after(promote::<WorldLayer>).in_set(StopOnExit));
     }
 
     fn finish(&self, app: &mut App) {
@@ -416,8 +422,12 @@ fn lifecycle<L: Layer>(app: &mut App) {
     );
 }
 
-fn runs<L: Layer>(state: Option<Res<State<L::State>>>) -> bool {
-    state.is_some_and(|s| s.get().runs())
+/// Present once the app has exited and every service has stopped.
+#[derive(Resource)]
+struct Stopped;
+
+fn runs<L: Layer>(state: Option<Res<State<L::State>>>, stopped: Option<Res<Stopped>>) -> bool {
+    stopped.is_none() && state.is_some_and(|s| s.get().runs())
 }
 
 fn changes<S: LayerState>(transition: &StateTransitionEvent<S>) -> (bool, bool) {
@@ -471,4 +481,7 @@ fn stop_all(exiting: In<bool>, world: &mut World) {
             shutdown(world);
         }
     }
+    // An app driven by hand (a test) may run more frames: nothing of a
+    // service's runs in them.
+    world.insert_resource(Stopped);
 }

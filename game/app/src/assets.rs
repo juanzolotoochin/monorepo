@@ -23,12 +23,10 @@ pub struct IndustrialProp(pub Disc);
 #[derive(Resource)]
 pub struct SceneLibrary {
     pub scenes: Vec<ScenePack>,
+    /// The scene the views show.
     pub current: usize,
-    pub initial: usize,
+    /// The scene the views switch to next (the session's world's scene).
     pub requested: Option<usize>,
-    /// Networked games stay on their first scene: every peer builds the
-    /// scene's view, and only the host's world is real.
-    pub locked: bool,
 }
 impl SceneLibrary {
     pub fn new() -> Self {
@@ -55,9 +53,7 @@ impl SceneLibrary {
         Self {
             scenes,
             current: usize::MAX,
-            initial: 0,
             requested: None,
-            locked: false,
         }
     }
     pub fn index(&self, id: &str) -> Result<usize, String> {
@@ -67,8 +63,8 @@ impl SceneLibrary {
     pub fn has_feature(&self, feature: SceneFeature) -> bool {
         self.scenes.get(self.current).is_some_and(|pack| pack.scene.features.contains(&feature))
     }
-    pub fn extent(&self) -> f32 {
-        let Some(scene) = self.scenes.get(self.current).map(|s| &s.scene) else { return 8. };
+    pub fn extent_of(&self, index: usize) -> f32 {
+        let Some(scene) = self.scenes.get(index).map(|s| &s.scene) else { return 8. };
         if let Some(mine) = &scene.mine {
             return mine.extent;
         }
@@ -92,6 +88,25 @@ pub struct ModelCache {
     pub runtime_generations: usize,
 }
 impl ModelCache {
+    /// Generates or decodes, and uploads, every model a scene's instances use.
+    pub fn load(&mut self, pack: &ScenePack, meshes: &mut Assets<Mesh>) {
+        for instance in &pack.scene.instances {
+            let prefab = pack.prefabs.iter().find(|p| p.id == instance.prefab).expect("validated prefab reference");
+            let (key, recipe) = model_key(prefab, instance);
+            if self.models.contains_key(&key) {
+                continue;
+            }
+            let model = if let Some(recipe) = recipe {
+                self.runtime_generations += 1;
+                generate_boulder(&recipe).expect("validated runtime recipe")
+            } else if let Geometry::Baked(model) = &prefab.geometry {
+                model.clone()
+            } else {
+                unreachable!()
+            };
+            self.models.insert(key, upload(model, meshes));
+        }
+    }
     /// The collision radius of an instance's model, before scaling. The model
     /// is cached once `switch_scene` has loaded the scene.
     pub fn collision_radius(&self, pack: &ScenePack, instance: &Instance) -> f32 {
@@ -149,8 +164,11 @@ fn upload(model: Model, meshes: &mut Assets<Mesh>) -> CachedModel {
     }
 }
 
+/// Switches the views to the session's world's scene. The digit keys ask the
+/// session (a host's) to move everyone to another scene.
 pub fn switch_scene(
     keys: Res<ButtonInput<KeyCode>>,
+    service: Option<ResMut<crate::lockstep::SessionService>>,
     mut commands: Commands,
     mut library: ResMut<SceneLibrary>,
     mut cache: ResMut<ModelCache>,
@@ -163,11 +181,7 @@ pub fn switch_scene(
     mut controls: ResMut<Controls>,
     mut feedback: ResMut<Feedback>,
 ) {
-    let requested = if let Some(index) = library.requested.take() {
-        Some(index)
-    } else if library.locked && library.current != usize::MAX {
-        None
-    } else if keys.just_pressed(KeyCode::Digit1) {
+    let key = if keys.just_pressed(KeyCode::Digit1) {
         Some(0)
     } else if keys.just_pressed(KeyCode::Digit2) {
         Some(1)
@@ -187,12 +201,15 @@ pub fn switch_scene(
         Some(3)
     } else if keys.just_pressed(KeyCode::Digit3) {
         Some(2)
-    } else if library.current == usize::MAX {
-        Some(library.initial)
     } else {
         None
     };
-    let Some(index) = requested else {
+    if let (Some(index), Some(mut service)) = (key, service) {
+        if index != library.current {
+            service.request_scene(index);
+        }
+    }
+    let Some(index) = library.requested.take() else {
         return;
     };
     if index == library.current {
@@ -222,25 +239,14 @@ pub fn switch_scene(
     player.rotation = Quat::from_rotation_y(std::f32::consts::PI);
     *controls = Controls::default();
     *feedback = Feedback::default();
+    cache.load(scene, &mut meshes);
     for instance in &scene.scene.instances {
         let prefab = scene
             .prefabs
             .iter()
             .find(|p| p.id == instance.prefab)
             .expect("validated prefab reference");
-        let (key, recipe) = model_key(prefab, instance);
-        if !cache.models.contains_key(&key) {
-            let model = if let Some(recipe) = recipe {
-                cache.runtime_generations += 1;
-                generate_boulder(&recipe).expect("validated runtime recipe")
-            } else if let Geometry::Baked(model) = &prefab.geometry {
-                model.clone()
-            } else {
-                unreachable!()
-            };
-            cache.models.insert(key.clone(), upload(model, &mut meshes));
-        }
-        let model = cache.models[&key].clone();
+        let model = cache.models[&model_key(prefab, instance).0].clone();
         // Geometry is shared. Materials belong to each target so only the struck
         // slot flashes, including when another instance uses the same prefab.
         let slots: Vec<_> = prefab
@@ -353,6 +359,7 @@ mod tests {
             .world_mut()
             .spawn((IndustrialProp(disc), Obstacle(disc), Visibility::Inherited))
             .id();
+        app.world_mut().resource_mut::<SceneLibrary>().requested = Some(0);
         app.update();
         assert_eq!(app.world().resource::<SceneLibrary>().current, 0);
         assert_eq!(app.world().resource::<ModelCache>().runtime_generations, 0);
@@ -365,15 +372,8 @@ mod tests {
         );
         let baseline_materials = app.world().resource::<Assets<StandardMaterial>>().len();
         for index in [1, 0, 1] {
-            {
-                let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-                keys.reset_all();
-                keys.press(if index == 0 {
-                    KeyCode::Digit1
-                } else {
-                    KeyCode::Digit2
-                });
-            }
+            // As WorldMirror does when a world of that scene starts.
+            app.world_mut().resource_mut::<SceneLibrary>().requested = Some(index);
             app.world_mut().resource_mut::<Controls>().impacts = 5;
             app.world_mut().resource_mut::<Controls>().last_material =
                 Some(voxel_assets::ImpactResponse::Metal);

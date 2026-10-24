@@ -1,8 +1,16 @@
 //! The game's simulation: every scene runs on the deterministic lockstep
-//! simulation (`game/sim`) through a session (`game/session`). This module
-//! builds each scene's world, steps it on Bevy's clock, and turns input into
-//! commands. Views read the mirrors it fills (`legacy`, piles, memory,
-//! flight); nothing moves gameplay state except commands.
+//! simulation (`game/sim`) through a session (`game/session`). Three services
+//! (see game/docs/proposals/service_layers.md) split the work:
+//!
+//! - [`SessionService`] (Session layer) owns the session: it builds each
+//!   scene's world, steps it on Bevy's clock, and moves the World layer
+//!   through its states as worlds come and go.
+//! - [`WorldMirror`] (World layer) keeps the last two ticks of the world for
+//!   the views to interpolate.
+//! - [`PlayerControl`] (World layer) turns input into commands.
+//!
+//! Views read the mirrors (`legacy`, piles, memory, flight); nothing moves
+//! gameplay state except commands.
 //!
 //! With `--host` or `--join` the session is networked: the host builds the
 //! world and clients load it from the host, then each player drives their
@@ -15,12 +23,13 @@ use bevy::prelude::*;
 use content::Content;
 use fx::{Fx, FxVec2};
 use net::NetConfig;
-use save::InputLog;
+use service::{AppServices, Phase, Service, SessionLayer, WorldLayer, WorldState};
 use sim::settlement::avatar::Intent;
 use sim::settlement::{PileSetup, SceneSetup, Settlement as SimSettlement};
 use sim::{CommandKind, World as SimWorld};
 
 use crate::assets::SceneLibrary;
+use crate::flow::Flow;
 use crate::gameplay::{Controls, Player};
 
 /// The world seed. Scenes don't use randomness outside combat rolls, which are
@@ -36,94 +45,171 @@ pub enum Network {
     Join(SocketAddr),
 }
 
+/// The session and everything about it that outlives a world.
 #[derive(Resource)]
-pub struct Game {
-    pub session: Option<session::Session>,
+pub struct SessionService {
+    pub session: session::Session,
     content: Content,
-    /// The scene the views show.
-    scene: Option<usize>,
-    /// The session's world the mirrors below belong to.
-    world_number: u32,
+    network: Option<Network>,
     /// Simulation time: Bevy's time, minus pauses, times the rate.
     clock: Duration,
     pub paused: bool,
     pub rate: f32,
-    /// The last two ticks' settlements, for interpolation.
-    pub previous: Option<SimSettlement>,
-    pub current: Option<SimSettlement>,
-    /// Every event since the last frame.
-    pub events: Vec<sim::settlement::Event>,
-    pub tick: u64,
-    pub alpha: f32,
-    /// The arena center in world tiles; views work in arena coordinates.
-    pub center: FxVec2,
-    /// The last movement intent sent, so held keys don't resend it every frame.
-    walking: Option<(FxVec2, bool)>,
-    /// The tick on which the newest command applies.
-    pub applies_at: u64,
-    /// Where to write the session's tick-0 save and input log on exit.
-    pub record: Option<String>,
-    /// A recording to play back instead of live input.
-    pub replay: Option<(Vec<u8>, InputLog)>,
-    start_save: Option<Vec<u8>>,
-    /// The control hub held the clock last frame.
-    warming_up: bool,
-    pub network: Option<Network>,
+    /// The clock was held last frame (see `step`).
+    holding: bool,
+    /// The clock has run; it is never held again.
+    started: bool,
     /// The connection, for the HUD.
     pub status: String,
     /// What other players see over this player's avatar.
-    pub name: String,
-    /// The name was sent for this session's avatar.
-    named: bool,
+    name: String,
+    /// The world the name was last sent in.
+    named: u32,
     /// Why a networked game ended for this player, if it did: the game
     /// closes shortly after (see `end_session`).
     pub ended: Option<String>,
+    /// Where to write each world's tick-0 save and input log.
+    record: Option<String>,
+    start_save: Option<Vec<u8>>,
+    /// A replay has no label of its own: it shows the scene it was launched in.
+    replay_scene: Option<String>,
+    /// A scene the host asked to move everyone to.
+    request: Option<usize>,
+    /// The world the World layer was started for.
+    world_live: Option<u32>,
+    /// The tick on which the newest command applies.
+    applies_at: u64,
+    /// This frame's ticks of `frame_world`, for the mirror.
+    pub frame: Vec<(u64, Option<SimSettlement>)>,
+    pub frame_world: u32,
+    pub alpha: f32,
 }
 
-impl Default for Game {
-    fn default() -> Self {
-        Game {
-            session: None,
-            content: Content::builtin(),
-            scene: None,
-            world_number: 0,
+impl Service for SessionService {
+    type Layer = SessionLayer;
+    type Deps = (Flow,);
+
+    fn init(world: &mut World) -> Self {
+        let launch = world.resource_mut::<Flow>().take_launch().expect("a session starts from a launch");
+        let content = Content::builtin();
+        let threads = std::thread::available_parallelism().map_or(2, |n| n.get().min(4));
+        // Single-player has nobody to wait for, so no input delay.
+        let input_delay = if launch.network.is_some() { NetConfig::default().input_delay } else { 0 };
+        let config = NetConfig { threads, input_delay, ..NetConfig::default() };
+        let scene_id = world.resource::<SceneLibrary>().scenes[launch.scene].scene.id.clone();
+        let mut start_save = None;
+        let mut replay_scene = None;
+        let mode = match (launch.replay, launch.network) {
+            (Some((bytes, log)), _) => {
+                let replayed = save::read(&bytes, &content).expect("the recording's save loads");
+                replay_scene = Some(scene_id);
+                session::Mode::Replay { world: replayed, log }
+            }
+            (None, Some(Network::Join(host))) => session::Mode::Join { host, stable_id: stable_id() },
+            (None, network) => {
+                let built = build_world(world, launch.scene, &content);
+                start_save = Some(save::write(&built, &content));
+                let listen = match network {
+                    Some(Network::Host(listen)) => Some(listen),
+                    _ => None,
+                };
+                session::Mode::Host { world: built, label: scene_id, listen }
+            }
+        };
+        let session = session::Session::start(mode, content.clone(), config).unwrap_or_else(|e| panic!("could not start the session: {e}"));
+        if let Some(addr) = session.local_addr() {
+            info!("hosting on {addr}");
+        }
+        SessionService {
+            session,
+            content,
+            network: launch.network,
             clock: Duration::ZERO,
             paused: false,
             rate: 1.0,
-            previous: None,
-            current: None,
-            events: Vec::new(),
-            tick: 0,
-            alpha: 0.0,
-            center: FxVec2::ZERO,
-            walking: None,
-            applies_at: 0,
-            record: None,
-            replay: None,
-            start_save: None,
-            warming_up: false,
-            network: None,
+            holding: false,
+            started: false,
             status: String::new(),
-            name: String::new(),
-            named: false,
+            name: launch.name,
+            named: 0,
             ended: None,
+            record: launch.record,
+            start_save,
+            replay_scene,
+            request: None,
+            world_live: None,
+            applies_at: 0,
+            frame: Vec::new(),
+            frame_world: 0,
+            alpha: 0.0,
         }
+    }
+
+    fn shutdown(mut self, _world: &mut World) {
+        self.write_recording();
+        self.session.shutdown();
+    }
+
+    /// A client's session is ready once the host has welcomed it.
+    fn ready(&self, _world: &World) -> bool {
+        self.session.world_number() > 0 || self.ended.is_some()
+    }
+
+    fn systems(app: &mut App) {
+        app.add_service_systems::<Self, _>(Phase::Step, (load_requested, step).chain())
+            .add_service_systems::<Self, _>(Phase::Mirror, watch_world)
+            .add_service_systems::<Self, _>(Phase::Present, end_session);
     }
 }
 
-impl Game {
+impl SessionService {
     pub fn world(&self) -> Option<&SimWorld> {
-        self.session.as_ref().and_then(|s| s.world())
+        self.session.world()
     }
 
     pub fn settlement(&self) -> Option<&SimSettlement> {
         self.world().and_then(SimWorld::settlement)
     }
 
+    pub fn networked(&self) -> bool {
+        self.network.is_some()
+    }
+
+    pub fn is_client(&self) -> bool {
+        matches!(self.network, Some(Network::Join(_)))
+    }
+
+    /// The scene the current world belongs to: the session's label, or for a
+    /// replay the scene it was launched in.
+    pub fn scene_label(&self) -> Option<&str> {
+        self.session.world_label().or(self.replay_scene.as_deref())
+    }
+
+    /// Asks to move everyone to another scene. Only a host can; it takes
+    /// effect in the next Step.
+    pub fn request_scene(&mut self, index: usize) {
+        if self.session.is_host() {
+            self.request = Some(index);
+        }
+    }
+
     /// The local player's avatar index. Replays watch the host's.
     pub fn player(&self) -> Option<u16> {
-        let me = self.session.as_ref()?.player().unwrap_or(net::HOST_PLAYER);
+        let me = self.session.player().unwrap_or(net::HOST_PLAYER);
         self.settlement()?.avatar_of(me)
+    }
+
+    /// The local player's avatar ID, as views name agents.
+    pub fn player_id(&self) -> Option<String> {
+        Some(self.settlement()?.agents[self.player()? as usize].id.clone())
+    }
+
+    /// Sends a command; it applies on the next tick in single-player, and
+    /// after the input delay in a networked game.
+    pub fn command(&mut self, kind: CommandKind) {
+        let tick = self.world().map_or(0, |w| w.tick());
+        self.applies_at = tick + self.session.input_delay();
+        self.session.queue(kind);
     }
 
     /// Puts a weapon in the avatar's hand, for every peer to see; the local
@@ -141,82 +227,33 @@ impl Game {
         }
     }
 
-    /// The local player's avatar ID, as views name agents.
-    pub fn player_id(&self) -> Option<String> {
-        Some(self.settlement()?.agents[self.player()? as usize].id.clone())
-    }
-
-    /// Sends a command; it applies on the next tick in single-player, and
-    /// after the input delay in a networked game.
-    pub fn command(&mut self, kind: CommandKind) {
-        let Some(session) = self.session.as_mut() else { return };
-        let tick = session.world().map_or(0, |w| w.tick());
-        self.applies_at = tick + session.input_delay();
-        session.queue(kind);
-    }
-
-    /// A hash of the current state, to tell runs apart in traces.
-    pub fn fingerprint(&self) -> String {
-        self.current.as_ref().map_or_else(String::new, |s| format!("{:016x}", sim::hash::hash_of(s)))
-    }
-
     /// Whether every command sent so far has been applied.
     pub fn caught_up(&self) -> bool {
-        let pending = self.session.as_ref().map_or(0, session::Session::pending_inputs);
-        self.world().is_some_and(|w| w.tick() > self.applies_at) && pending == 0
+        self.world().is_some_and(|w| w.tick() > self.applies_at) && self.session.pending_inputs() == 0
+    }
+
+    /// The arena center in world tiles; views work in arena coordinates.
+    pub fn center(&self) -> FxVec2 {
+        self.world().map_or(FxVec2::ZERO, |w| w.terrain().center)
     }
 
     /// Arena coordinates (meters from the center, Bevy x/z) to world tiles.
     pub fn to_sim(&self, p: Vec3) -> FxVec2 {
-        FxVec2::new(self.center.x + Fx::quantize(p.x), self.center.y + Fx::quantize(p.z))
+        to_sim(self.center(), p)
     }
 
     /// World tiles to arena coordinates on the ground.
     pub fn to_view(&self, p: FxVec2) -> Vec3 {
-        Vec3::new((p.x - self.center.x).to_f32(), 0.0, (p.y - self.center.y).to_f32())
-    }
-
-    /// Asks the avatar to walk in a direction (camera-relative, already
-    /// rotated into arena space); a zero direction stops it.
-    pub fn walk(&mut self, direction: Vec2, run: bool) {
-        let Some(agent) = self.player() else { return };
-        let direction = FxVec2::new(Fx::quantize(direction.x), Fx::quantize(direction.y)).normalize_or_zero();
-        if self.walking == Some((direction, run)) {
-            return;
-        }
-        self.walking = Some((direction, run));
-        let intent = if direction == FxVec2::ZERO { Intent::Stop } else { Intent::Walk { direction, run } };
-        self.command(CommandKind::MoveAvatar { agent, intent });
-    }
-
-    /// Asks the avatar to walk to a point (arena coordinates).
-    pub fn go_to(&mut self, target: Vec3, run: bool) {
-        let Some(agent) = self.player() else { return };
-        self.walking = None;
-        let target = self.to_sim(target);
-        self.command(CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target, run } });
-    }
-
-    /// Forgets the mirrors and input state of the previous world.
-    fn reset_world(&mut self) {
-        self.previous = None;
-        self.current = self.settlement().cloned();
-        self.tick = 0;
-        self.walking = None;
-        self.named = false;
-        self.applies_at = 0;
-        self.events.clear();
+        to_view(self.center(), p)
     }
 
     /// Writes the current world's recording, if asked to: `<path>.gsav` is
     /// its tick-0 save and `<path>` its input log. Later worlds in the same
     /// session add their number: `<path>.2`, `<path>.2.gsav`, and so on.
-    pub fn write_recording(&self) {
-        let (Some(path), Some(save), Some(session)) = (&self.record, &self.start_save, &self.session) else {
-            return;
-        };
-        let Some(log) = session.input_log() else { return };
-        let path = match session.world_number() {
+    fn write_recording(&self) {
+        let (Some(path), Some(save)) = (&self.record, &self.start_save) else { return };
+        let Some(log) = self.session.input_log() else { return };
+        let path = match self.session.world_number() {
             1 => path.clone(),
             n => format!("{path}.{n}"),
         };
@@ -227,24 +264,37 @@ impl Game {
     }
 }
 
-/// Builds the scene's world from its data, once `assets::switch_scene` has
-/// loaded the scene's models (boulder radii come from them).
-pub fn build_world(world: &mut World) {
-    let index = world.resource::<SceneLibrary>().current;
-    if world.resource::<Game>().scene == Some(index) || index == usize::MAX {
-        return;
-    }
+fn to_sim(center: FxVec2, p: Vec3) -> FxVec2 {
+    FxVec2::new(center.x + Fx::quantize(p.x), center.y + Fx::quantize(p.z))
+}
+
+fn to_view(center: FxVec2, p: FxVec2) -> Vec3 {
+    Vec3::new((p.x - center.x).to_f32(), 0.0, (p.y - center.y).to_f32())
+}
+
+/// Builds a scene's world from its data. Loads the scene's models first:
+/// boulder radii come from them.
+fn build_world(world: &mut World, index: usize, content: &Content) -> SimWorld {
+    world.resource_scope(|world, library: Mut<SceneLibrary>| {
+        world.resource_scope(|world, mut cache: Mut<crate::assets::ModelCache>| {
+            let mut meshes = world.resource_mut::<Assets<Mesh>>();
+            cache.load(&library.scenes[index], &mut meshes);
+        });
+        let cache = world.resource::<crate::assets::ModelCache>();
+        let setup = scene_setup(&library, index, cache);
+        let id = &library.scenes[index].scene.id;
+        SimWorld::new_scene(SEED, content.rules.clone(), &setup).unwrap_or_else(|e| panic!("scene {id} does not build a world: {e}"))
+    })
+}
+
+fn scene_setup(library: &SceneLibrary, index: usize, cache: &crate::assets::ModelCache) -> SceneSetup {
     let disc = |d: &crate::navigation::Disc| sim::terrain::Disc {
         center: FxVec2::new(Fx::quantize(d.center.x), Fx::quantize(d.center.z)),
         radius: Fx::quantize(d.radius),
     };
-    let library = world.resource::<SceneLibrary>();
     let pack = &library.scenes[index];
     let scene = &pack.scene;
-    let cache = world.resource::<crate::assets::ModelCache>();
     let found = crate::obstacles::scene_obstacles(pack, |instance| cache.collision_radius(pack, instance));
-    let obstacle_discs: Vec<_> = found.discs.iter().map(disc).collect();
-    let door_discs: Vec<_> = found.doors.iter().map(disc).collect();
     let q = Fx::quantize;
     let surface = |min: [f32; 2], max: [f32; 2], height: f32| sim::terrain::Surface {
         min: FxVec2::new(q(min[0]), q(min[1])),
@@ -260,11 +310,11 @@ pub fn build_world(world: &mut World) {
         voxel_assets::Mineral::BlueCrystal => 1,
         voxel_assets::Mineral::GreenMalachite => 2,
     };
-    let setup = SceneSetup {
+    SceneSetup {
         scenario: scene.scenario.clone(),
-        extent: q(library.extent()),
-        obstacles: obstacle_discs,
-        doors: door_discs,
+        extent: q(library.extent_of(index)),
+        obstacles: found.discs.iter().map(disc).collect(),
+        doors: found.doors.iter().map(disc).collect(),
         surfaces,
         platforms_only,
         spawn: scene.spawn.map(q),
@@ -274,121 +324,73 @@ pub fn build_world(world: &mut World) {
             piles: p.piles.iter().map(|s| (material(s.material), [q(s.position[0]), q(s.position[2])], s.units)).collect(),
             collector: p.collector.map(|c| [q(c[0]), q(c[2])]),
         }),
-        memory_trial: library.has_feature(voxel_assets::SceneFeature::MemoryTrial),
-        diggable: library.has_feature(voxel_assets::SceneFeature::Digging),
+        memory_trial: scene.features.contains(&voxel_assets::SceneFeature::MemoryTrial),
+        diggable: scene.features.contains(&voxel_assets::SceneFeature::Digging),
         mine: scene.mine.as_ref().map(|m| m.seed),
-    };
-    let scene_id = scene.id.clone();
-    let mut game = world.resource_mut::<Game>();
-    game.scene = Some(index);
-    if game.session.is_some() && matches!(game.network, Some(Network::Join(_))) {
-        // A client plays the host's world and follows the host's scene
-        // (see `step`); switching scenes only changes its views.
-        return;
     }
-    let content = game.content.clone();
-    let built = SimWorld::new_scene(SEED, content.rules.clone(), &setup);
-    let world_state = match built {
-        Ok(world) => world,
-        Err(e) => panic!("scene {scene_id} does not build a world: {e}"),
-    };
-    game.center = world_state.terrain().center;
-    let start = save::write(&world_state, &content);
-    let fresh = || save::read(&start, &content).expect("a fresh save loads");
-    if game.session.as_ref().is_some_and(session::Session::is_host) {
-        // A new map in the same session. Each world gets its own recording.
-        game.write_recording();
-        let clock = game.clock;
-        game.session.as_mut().unwrap().load_world(fresh(), scene_id, clock);
-    } else {
-        let threads = std::thread::available_parallelism().map_or(2, |n| n.get().min(4));
-        // Single-player has nobody to wait for, so no input delay.
-        let input_delay = if game.network.is_some() { NetConfig::default().input_delay } else { 0 };
-        let config = NetConfig { threads, input_delay, ..NetConfig::default() };
-        let mode = match (game.replay.take(), game.network) {
-            (Some((bytes, log)), _) => {
-                let replayed = save::read(&bytes, &content).expect("the recording's save loads");
-                session::Mode::Replay { world: replayed, log }
-            }
-            // A client's world comes from the host; the scene built here is
-            // only for the view.
-            (None, Some(Network::Join(host))) => session::Mode::Join { host, stable_id: stable_id() },
-            (None, Some(Network::Host(listen))) => session::Mode::Host { world: fresh(), label: scene_id, listen: Some(listen) },
-            (None, None) => session::Mode::Host { world: fresh(), label: scene_id, listen: None },
-        };
-        let session = session::Session::start(mode, content, config).unwrap_or_else(|e| panic!("could not start the session: {e}"));
-        if let Some(addr) = session.local_addr() {
-            info!("hosting on {addr}");
-        }
-        game.session = Some(session);
-        game.clock = Duration::ZERO;
-    }
-    game.start_save = Some(start);
-    game.world_number = game.session.as_ref().map_or(0, session::Session::world_number);
-    game.reset_world();
 }
 
-/// Runs every tick due by this frame's time and keeps the last two for interpolation.
-pub fn step(
+/// Loads the scene the host asked for into the session: a new world for
+/// everyone. Each world gets its own recording.
+fn load_requested(world: &mut World) {
+    let Some(index) = world.resource_mut::<SessionService>().request.take() else { return };
+    let content = world.resource::<SessionService>().content.clone();
+    let built = build_world(world, index, &content);
+    let label = world.resource::<SceneLibrary>().scenes[index].scene.id.clone();
+    let mut service = world.resource_mut::<SessionService>();
+    service.write_recording();
+    service.start_save = Some(save::write(&built, &content));
+    let clock = service.clock;
+    service.session.load_world(built, label, clock);
+}
+
+/// Runs every tick due by this frame's time, keeping them for the mirror.
+fn step(
     time: Res<Time>,
     hub: Option<Res<crate::control::Hub>>,
-    mut game: ResMut<Game>,
-    mut library: ResMut<SceneLibrary>,
+    mut service: ResMut<SessionService>,
     mut telemetry: ResMut<crate::telemetry::Telemetry>,
 ) {
-    // Scripted runs warm up for different lengths with and without rendering;
-    // holding the clock until then lines up ticks with script frames, so a
-    // rendered replay of a headless recording matches it command for command.
-    if hub.is_some_and(|hub| hub.warming_up()) {
-        game.warming_up = true;
+    service.frame.clear();
+    // Scripted runs warm up for different lengths with and without rendering,
+    // and start once the first world is up; holding the clock until then
+    // lines up ticks with script frames, so a rendered replay of a headless
+    // recording matches it command for command. A client can't hold past the
+    // warmup: it has to connect to get a world at all.
+    let client = service.is_client();
+    let hold = !service.started && hub.is_some_and(|hub| hub.in_warmup() || (!client && hub.waiting_for_world()));
+    if hold {
+        service.holding = true;
         return;
     }
-    if std::mem::take(&mut game.warming_up) {
+    if std::mem::take(&mut service.holding) {
         // The first tick runs on the first frame after warmup, as it does
         // without one (Bevy's first frame has no delta).
-        game.clock = Duration::ZERO;
-    } else if game.network.is_some() {
+        service.clock = Duration::ZERO;
+    } else if service.networked() {
         // Everyone shares one clock: pausing or speeding up alone would
         // only fall behind or run out of turns.
-        game.clock += time.delta();
-    } else if !game.paused {
-        let rate = game.rate;
-        game.clock += time.delta().mul_f32(rate);
+        service.clock += time.delta();
+    } else if !service.paused {
+        let rate = service.rate;
+        service.clock += time.delta().mul_f32(rate);
     }
-    let clock = game.clock;
-    let Some(mut session) = game.session.take() else { return };
+    service.started = true;
+    let clock = service.clock;
+    let service = &mut *service;
     let mut ticks = Vec::new();
     let started = std::time::Instant::now();
-    session.update(clock, |world| {
+    service.session.update(clock, |world| {
         let copying = std::time::Instant::now();
         let settlement = world.settlement().cloned();
         ticks.push((world.tick(), settlement, world.stage_times(), copying.elapsed()));
     });
     telemetry.session_frame(started.elapsed(), ticks.iter().map(|(_, _, times, copy)| (*times, *copy)));
-    if session.world_number() != game.world_number {
-        // The host moved everyone to a new world: a client drops the old
-        // world's mirrors and shows the host's scene.
-        game.world_number = session.world_number();
-        game.reset_world();
-        if let Some(label) = session.world_label() {
-            let showing = library.scenes.get(library.current).is_some_and(|pack| pack.scene.id == label);
-            match library.index(label) {
-                Ok(index) if !showing => library.requested = Some(index),
-                Ok(_) => {}
-                Err(e) => warn!("the host's world: {e}"),
-            }
-        }
-    }
-    for (tick, settlement, _, _) in ticks {
-        if let Some(s) = &settlement {
-            game.events.extend(s.events.iter().cloned());
-        }
-        game.previous = std::mem::replace(&mut game.current, settlement);
-        game.tick = tick.saturating_sub(1);
-    }
-    game.alpha = session.alpha(clock);
-    let client = matches!(game.network, Some(Network::Join(_)));
-    for event in session.events.drain(..) {
+    service.frame = ticks.into_iter().map(|(tick, settlement, _, _)| (tick, settlement)).collect();
+    service.frame_world = service.session.world_number();
+    service.alpha = service.session.alpha(clock);
+    let client = service.is_client();
+    for event in service.session.events.drain(..) {
         // Without its host a client's game is over: there's no migrating
         // the host (yet), so it doesn't wait in a world that can't move.
         let ended = match &event {
@@ -400,25 +402,37 @@ pub fn step(
         match ended {
             Some(reason) => {
                 warn!("{event:?}");
-                game.ended.get_or_insert(reason);
+                service.ended.get_or_insert(reason);
             }
             None => info!("{event:?}"),
         }
     }
-    if let Some(world) = session.world() {
-        // A client learns where the arena is once the host's save loads.
-        game.center = world.terrain().center;
+    if service.networked() {
+        service.status = service.session.status();
     }
-    if game.network.is_some() {
-        game.status = session.status();
+    // Introduce ourselves once our avatar exists in this world (a client's
+    // appears after it joins).
+    let number = service.session.world_number();
+    if service.networked() && service.named != number && service.player().is_some() {
+        let name = service.name.clone();
+        service.command(CommandKind::Name { name });
+        service.named = number;
     }
-    game.session = Some(session);
-    // Introduce ourselves once our avatar exists (a client's appears after
-    // it joins).
-    if game.network.is_some() && !game.named && game.player().is_some() {
-        let name = game.name.clone();
-        game.command(CommandKind::Name { name });
-        game.named = true;
+}
+
+/// Moves the World layer with the session's world: off while a world is
+/// replaced (for a frame, so its services stop and its entities go), loading
+/// once a new one is in the slot. Its services decide when it is active.
+fn watch_world(mut service: ResMut<SessionService>, state: Option<Res<State<WorldState>>>, next: Option<ResMut<NextState<WorldState>>>) {
+    let (Some(state), Some(mut next)) = (state, next) else { return };
+    let number = service.session.world_number();
+    match state.get() {
+        WorldState::Off if number > 0 => {
+            service.world_live = Some(number);
+            next.set(WorldState::Loading);
+        }
+        WorldState::Loading | WorldState::Active if service.world_live != Some(number) => next.set(WorldState::Off),
+        _ => {}
     }
 }
 
@@ -429,15 +443,15 @@ const CLOSING_SECONDS: f32 = 4.0;
 pub struct EndBanner;
 
 /// A networked game ended for this player: says why, counts down, and closes.
-pub fn end_session(
+fn end_session(
     mut commands: Commands,
     time: Res<Time<Real>>,
-    game: Res<Game>,
+    service: Res<SessionService>,
     mut banner: Query<&mut Text, With<EndBanner>>,
     mut exit: MessageWriter<AppExit>,
     mut left: Local<Option<f32>>,
 ) {
-    let Some(reason) = &game.ended else { return };
+    let Some(reason) = &service.ended else { return };
     let remaining = left.get_or_insert(CLOSING_SECONDS);
     *remaining -= time.delta_secs();
     if *remaining <= 0.0 {
@@ -484,20 +498,194 @@ fn stable_id() -> net::StableId {
     nanos ^ (u64::from(std::process::id()) << 32)
 }
 
+/// One world's last two ticks, for the views to interpolate.
+#[derive(Resource)]
+pub struct WorldMirror {
+    /// The session's world these ticks come from.
+    world_number: u32,
+    /// The scene the views show (an index into the `SceneLibrary`).
+    pub scene: usize,
+    /// The last two ticks' settlements, for interpolation.
+    pub previous: Option<SimSettlement>,
+    pub current: Option<SimSettlement>,
+    /// Every event since the last frame.
+    pub events: Vec<sim::settlement::Event>,
+    pub tick: u64,
+    pub alpha: f32,
+    /// The arena center in world tiles; views work in arena coordinates.
+    pub center: FxVec2,
+    /// The local player (replays watch the host).
+    me: sim::PlayerId,
+}
+
+impl Service for WorldMirror {
+    type Layer = WorldLayer;
+    type Deps = (SessionService,);
+
+    fn init(world: &mut World) -> Self {
+        let service = world.resource::<SessionService>();
+        let label = service.scene_label().map(str::to_string);
+        let mirror = WorldMirror {
+            world_number: service.session.world_number(),
+            scene: usize::MAX,
+            previous: None,
+            current: service.settlement().cloned(),
+            events: Vec::new(),
+            tick: service.world().map_or(0, |w| w.tick().saturating_sub(1)),
+            alpha: 0.0,
+            center: service.center(),
+            me: service.session.player().unwrap_or(net::HOST_PLAYER),
+        };
+        // The views show the world's scene, on the host and on clients.
+        let mut library = world.resource_mut::<SceneLibrary>();
+        match label.as_deref().map(|label| library.index(label)) {
+            Some(Ok(index)) => {
+                library.requested = Some(index);
+                WorldMirror { scene: index, ..mirror }
+            }
+            Some(Err(e)) => {
+                warn!("the session's world: {e}");
+                mirror
+            }
+            None => mirror,
+        }
+    }
+
+    /// Ready once the world is in the slot and every peer has it.
+    fn ready(&self, world: &World) -> bool {
+        let session = &world.resource::<SessionService>().session;
+        session.world().is_some() && !session.world_loading()
+    }
+
+    fn systems(app: &mut App) {
+        app.add_service_systems::<Self, _>(Phase::Mirror, mirror);
+    }
+}
+
+impl WorldMirror {
+    /// Arena coordinates (meters from the center, Bevy x/z) to world tiles.
+    pub fn to_sim(&self, p: Vec3) -> FxVec2 {
+        to_sim(self.center, p)
+    }
+
+    /// World tiles to arena coordinates on the ground.
+    pub fn to_view(&self, p: FxVec2) -> Vec3 {
+        to_view(self.center, p)
+    }
+
+    /// The local player's avatar index in these ticks. Views use this one:
+    /// for a frame after a world is replaced, the session's world is already
+    /// the new one.
+    pub fn player(&self) -> Option<u16> {
+        self.current.as_ref()?.avatar_of(self.me)
+    }
+
+    /// The local player's avatar ID, as views name agents.
+    pub fn player_id(&self) -> Option<String> {
+        Some(self.current.as_ref()?.agents[self.player()? as usize].id.clone())
+    }
+
+    /// A hash of the current state, to tell runs apart in traces.
+    pub fn fingerprint(&self) -> String {
+        self.current.as_ref().map_or_else(String::new, |s| format!("{:016x}", sim::hash::hash_of(s)))
+    }
+}
+
+/// Takes this frame's ticks, keeping the last two for interpolation. Ticks of
+/// a newer world are left alone: this world is about to stop.
+fn mirror(service: Res<SessionService>, mut mirror: ResMut<WorldMirror>) {
+    if service.frame_world != mirror.world_number {
+        return;
+    }
+    mirror.events.clear();
+    for (tick, settlement) in &service.frame {
+        if let Some(s) = settlement {
+            mirror.events.extend(s.events.iter().cloned());
+        }
+        mirror.previous = std::mem::replace(&mut mirror.current, settlement.clone());
+        mirror.tick = tick.saturating_sub(1);
+    }
+    mirror.alpha = service.alpha;
+    // A client learns where the arena is, and who it is, once the host's
+    // save loads.
+    mirror.center = service.center();
+    mirror.me = service.session.player().unwrap_or(net::HOST_PLAYER);
+}
+
+/// Turns the local player's input into commands.
+#[derive(Resource, Default)]
+pub struct PlayerControl {
+    /// The last movement intent sent, so held keys don't resend it every frame.
+    walking: Option<(FxVec2, bool)>,
+}
+
+impl Service for PlayerControl {
+    type Layer = WorldLayer;
+    type Deps = (SessionService, WorldMirror);
+
+    fn init(_world: &mut World) -> Self {
+        PlayerControl::default()
+    }
+}
+
+impl PlayerControl {
+    /// Asks the avatar to walk in a direction (camera-relative, already
+    /// rotated into arena space); a zero direction stops it.
+    pub fn walk(&mut self, service: &mut SessionService, direction: Vec2, run: bool) {
+        let Some(agent) = service.player() else { return };
+        let direction = FxVec2::new(Fx::quantize(direction.x), Fx::quantize(direction.y)).normalize_or_zero();
+        if self.walking == Some((direction, run)) {
+            return;
+        }
+        self.walking = Some((direction, run));
+        let intent = if direction == FxVec2::ZERO { Intent::Stop } else { Intent::Walk { direction, run } };
+        service.command(CommandKind::MoveAvatar { agent, intent });
+    }
+
+    /// Asks the avatar to walk to a point (arena coordinates).
+    pub fn go_to(&mut self, service: &mut SessionService, target: Vec3, run: bool) {
+        let Some(agent) = service.player() else { return };
+        self.walking = None;
+        let target = service.to_sim(target);
+        service.command(CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target, run } });
+    }
+
+    /// Starts an attack: the swing animates now, and the simulation resolves
+    /// it on its windup tick.
+    pub fn strike(&mut self, service: &mut SessionService, controls: &mut Controls, scene: &voxel_assets::ScenePack, aim: Vec3) {
+        let Some(agent) = service.player() else { return };
+        let weapon = controls.weapon;
+        let muzzle = scene
+            .scene
+            .style
+            .as_ref()
+            .and_then(|style| style.weapon_skins.iter().find(|skin| skin.weapon == weapon).map(|skin| skin.muzzle.map(|v| v * style.actor_scale)))
+            .unwrap_or([0.0, 0.6, 0.25]);
+        let flat = crate::navigation::flat(aim).normalize_or(Vec3::Z);
+        self.walking = None;
+        service.command(CommandKind::Attack {
+            agent,
+            weapon,
+            aim: FxVec2::new(Fx::quantize(flat.x), Fx::quantize(flat.z)),
+            muzzle: muzzle.map(Fx::quantize),
+        });
+        controls.strike(aim);
+    }
+}
+
 /// Places the player where the simulation has the avatar, between ticks.
 pub fn follow_avatar(
-    game: Res<Game>,
-    time: Res<Time>,
+    mirror: Res<WorldMirror>,
     mut controls: ResMut<Controls>,
     mut player: Single<&mut Transform, With<Player>>,
     sound: Res<crate::sound::Sound>,
 ) {
-    let (Some(current), Some(index)) = (&game.current, game.player()) else { return };
+    let (Some(current), Some(index)) = (&mirror.current, mirror.player()) else { return };
     let a = &current.agents[index as usize];
-    let before = game.previous.as_ref().and_then(|p| p.agents.get(index as usize)).unwrap_or(a);
-    let alpha = game.alpha;
-    let from = game.to_view(before.position);
-    let to = game.to_view(a.position);
+    let before = mirror.previous.as_ref().and_then(|p| p.agents.get(index as usize)).unwrap_or(a);
+    let alpha = mirror.alpha;
+    let from = mirror.to_view(before.position);
+    let to = mirror.to_view(a.position);
     // A teleport (respawn, deploying a recording) snaps instead of sliding.
     let alpha = if from.distance(to) > 1.5 { 1.0 } else { alpha };
     let mut position = from.lerp(to, alpha);
@@ -507,7 +695,6 @@ pub fn follow_avatar(
     player.translation = position;
     let heading = before.heading.to_f32() + angle_between(before.heading.to_f32(), a.heading.to_f32()) * alpha;
     player.rotation = Quat::from_rotation_y(heading);
-    let dt = time.delta_secs().max(1e-4);
     let moved = if teleport { Vec3::ZERO } else { crate::navigation::flat(position - previous) };
     controls.velocity = Vec3::new(a.avatar.velocity.x.to_f32(), 0.0, a.avatar.velocity.y.to_f32());
     controls.stride += moved.length() * 8.5;
@@ -520,8 +707,7 @@ pub fn follow_avatar(
             sound.play(crate::sound::Cue::Step);
         }
     }
-    controls.route = a.route.iter().map(|&p| game.to_view(p)).collect();
-    let _ = dt;
+    controls.route = a.route.iter().map(|&p| mirror.to_view(p)).collect();
 }
 
 fn angle_between(from: f32, to: f32) -> f32 {
@@ -529,40 +715,45 @@ fn angle_between(from: f32, to: f32) -> f32 {
 }
 
 /// Fills the settlement view from the simulation.
-pub fn mirror_settlement(game: Res<Game>, library: Res<SceneLibrary>, mut settlement: ResMut<crate::settlement::Settlement>) {
-    let (Some(current), Some(scenario)) = (&game.current, library.scenes.get(library.current).and_then(|p| p.scene.scenario.as_ref())) else {
+pub fn mirror_settlement(
+    mirror: Res<WorldMirror>,
+    service: Res<SessionService>,
+    library: Res<SceneLibrary>,
+    mut settlement: ResMut<crate::settlement::Settlement>,
+) {
+    let (Some(current), Some(scenario)) = (&mirror.current, library.scenes.get(library.current).and_then(|p| p.scene.scenario.as_ref())) else {
         settlement.simulation = None;
         return;
     };
     let config = settlement.config.get_or_insert_with(|| crate::legacy::Scenario::new(scenario)).clone();
-    let mut view = crate::legacy::Simulation::new(&config, game.previous.as_ref(), current, game.tick, game.alpha, game.center, &game.events);
-    view.paused = game.paused;
+    let mut view = crate::legacy::Simulation::new(&config, mirror.previous.as_ref(), current, mirror.tick, mirror.alpha, mirror.center, &mirror.events);
+    view.paused = service.paused;
     settlement.simulation = Some(view);
 }
 
-/// Clears the frame's events once every view has seen them.
-pub fn end_frame(mut game: ResMut<Game>) {
-    game.events.clear();
-}
-
 /// Keyboard movement: camera-relative walking, the jetpack, digging, and respawning.
-pub fn keyboard_input(keys: Res<ButtonInput<KeyCode>>, mut controls: ResMut<Controls>, mut game: ResMut<Game>) {
-    let Some(agent) = game.player() else { return };
+pub fn keyboard_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut controls: ResMut<Controls>,
+    mut service: ResMut<SessionService>,
+    mut control: ResMut<PlayerControl>,
+) {
+    let Some(agent) = service.player() else { return };
     if keys.just_pressed(KeyCode::KeyR) {
-        game.command(CommandKind::Respawn { agent });
+        service.command(CommandKind::Respawn { agent });
         let attack_serial = controls.attack_serial;
         *controls = Controls { attack_serial, ..default() };
         return;
     }
     if keys.just_pressed(KeyCode::Space) {
-        game.command(CommandKind::Jetpack { agent, enabled: true });
+        service.command(CommandKind::Jetpack { agent, enabled: true });
     }
     if keys.just_released(KeyCode::Space) {
-        game.command(CommandKind::Jetpack { agent, enabled: false });
+        service.command(CommandKind::Jetpack { agent, enabled: false });
     }
     // X picks the spear in combat scenes, so digging is F.
     if keys.just_pressed(KeyCode::KeyF) {
-        game.dig();
+        service.dig();
     }
     let pressed = |a, b| if keys.pressed(a) || keys.pressed(b) { 1.0 } else { 0.0 };
     let right = Vec3::new(1.0, 0.0, -1.0).normalize();
@@ -574,8 +765,8 @@ pub fn keyboard_input(keys: Res<ButtonInput<KeyCode>>, mut controls: ResMut<Cont
     .normalize_or_zero();
     let run = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     let direction = right * input.x + up * input.y;
-    if input != Vec2::ZERO || game.walking.is_some_and(|(d, _)| d != FxVec2::ZERO) {
-        game.walk(Vec2::new(direction.x, direction.z), run);
+    if input != Vec2::ZERO || control.walking.is_some_and(|(d, _)| d != FxVec2::ZERO) {
+        control.walk(&mut service, Vec2::new(direction.x, direction.z), run);
     }
 }
 
@@ -588,15 +779,16 @@ pub fn mouse_input(
     window: Single<&Window>,
     library: Res<SceneLibrary>,
     mut controls: ResMut<Controls>,
-    mut game: ResMut<Game>,
+    mut service: ResMut<SessionService>,
+    mut control: ResMut<PlayerControl>,
 ) {
     let run = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     controls.repath -= time.delta_secs();
     if buttons.pressed(MouseButton::Right) && controls.attack.is_none() && controls.repath <= 0.0 {
         controls.repath = 0.12;
-        if let Some(point) = crate::jetpack::cursor_surface(camera.0, camera.1, &window, &library, &game) {
+        if let Some(point) = crate::jetpack::cursor_surface(camera.0, camera.1, &window, &library, &service) {
             if controls.route.last().is_none_or(|last| crate::navigation::flat(*last - point).length() > 0.25) {
-                game.go_to(point, run);
+                control.go_to(&mut service, point, run);
             }
         }
     }
@@ -611,14 +803,15 @@ pub fn attack_input(
     library: Res<SceneLibrary>,
     player: Single<&Transform, With<Player>>,
     mut controls: ResMut<Controls>,
-    mut game: ResMut<Game>,
+    mut service: ResMut<SessionService>,
+    mut control: ResMut<PlayerControl>,
 ) {
     use content::scenario::Weapon;
     if let Some(scenario) = library.scenes[library.current].scene.scenario.as_ref() {
         for (key, weapon) in [(KeyCode::KeyZ, Weapon::Sword), (KeyCode::KeyX, Weapon::Spear), (KeyCode::KeyC, Weapon::Bow), (KeyCode::KeyV, Weapon::ArcCoil)] {
             if keys.just_pressed(key) && scenario.weapons.contains(&weapon) {
                 controls.weapon = weapon;
-                game.equip(weapon);
+                service.equip(weapon);
             }
         }
     }
@@ -626,29 +819,7 @@ pub fn attack_input(
     if !(shift && buttons.just_pressed(MouseButton::Left)) {
         return;
     }
-    if let Some(point) = crate::jetpack::cursor_surface(camera.0, camera.1, &window, &library, &game) {
-        strike(&mut game, &mut controls, &library, point - player.translation);
+    if let Some(point) = crate::jetpack::cursor_surface(camera.0, camera.1, &window, &library, &service) {
+        control.strike(&mut service, &mut controls, &library.scenes[library.current], point - player.translation);
     }
-}
-
-/// Starts an attack: the swing animates now, and the simulation resolves it
-/// on its windup tick.
-pub fn strike(game: &mut Game, controls: &mut Controls, library: &SceneLibrary, aim: Vec3) {
-    let Some(agent) = game.player() else { return };
-    let weapon = controls.weapon;
-    let muzzle = library.scenes[library.current]
-        .scene
-        .style
-        .as_ref()
-        .and_then(|style| style.weapon_skins.iter().find(|skin| skin.weapon == weapon).map(|skin| skin.muzzle.map(|v| v * style.actor_scale)))
-        .unwrap_or([0.0, 0.6, 0.25]);
-    let flat = crate::navigation::flat(aim).normalize_or(Vec3::Z);
-    game.walking = None;
-    game.command(CommandKind::Attack {
-        agent,
-        weapon,
-        aim: FxVec2::new(Fx::quantize(flat.x), Fx::quantize(flat.z)),
-        muzzle: muzzle.map(Fx::quantize),
-    });
-    controls.strike(aim);
 }

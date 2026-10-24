@@ -11,7 +11,7 @@ use sim::settlement::avatar::Swing;
 
 use crate::gameplay::{Attack, Part, PartKind, Player, Pose, ATTACK_END, REBOUND_END, WALK_SPEED};
 use crate::jetpack::Exhaust;
-use crate::lockstep::Game;
+use crate::lockstep::WorldMirror;
 use crate::style::{ActiveStyle, WeaponVisual};
 
 #[derive(Component)]
@@ -71,7 +71,7 @@ fn attack(swing: &Swing, ticks: f32) -> Option<Attack> {
 
 pub fn update(
     mut commands: Commands,
-    game: Res<Game>,
+    mirror: Res<WorldMirror>,
     style: Res<ActiveStyle>,
     time: Res<Time>,
     sound: Res<crate::sound::Sound>,
@@ -82,14 +82,14 @@ pub fn update(
     mut exhausts: Query<(&ChildOf, &mut Visibility), (With<PeerExhaust>, Without<PeerWeapon>)>,
     mut weapons: Query<(Entity, &PeerWeapon, &mut Visibility), Without<PeerExhaust>>,
 ) {
-    let me = game.player();
-    let others: Vec<u16> = game.current.as_ref().map_or_else(Vec::new, |s| {
+    let me = mirror.player();
+    let others: Vec<u16> = mirror.current.as_ref().map_or_else(Vec::new, |s| {
         (0..s.agents.len() as u16).filter(|&i| s.agents[i as usize].controlled && Some(i) != me).collect()
     });
     let breathe = (time.elapsed_secs() * 2.0).sin() * 0.012;
     // Render time in ticks: views sit `alpha` of the way from the previous
     // tick's state to the current one's.
-    let ticks = game.tick as f32 - 1.0 + game.alpha;
+    let ticks = mirror.tick as f32 - 1.0 + mirror.alpha;
     let mut poses = Vec::new();
     let mut shown = Vec::new();
     for (entity, mut peer, mut transform) in &mut peers {
@@ -98,10 +98,10 @@ pub fn update(
             continue;
         }
         shown.push(peer.agent);
-        let current = &game.current.as_ref().unwrap().agents[peer.agent as usize];
-        let before = game.previous.as_ref().and_then(|p| p.agents.get(peer.agent as usize)).unwrap_or(current);
-        let (from, to) = (game.to_view(before.position), game.to_view(current.position));
-        let alpha = if from.distance(to) > 1.5 { 1.0 } else { game.alpha };
+        let current = &mirror.current.as_ref().unwrap().agents[peer.agent as usize];
+        let before = mirror.previous.as_ref().and_then(|p| p.agents.get(peer.agent as usize)).unwrap_or(current);
+        let (from, to) = (mirror.to_view(before.position), mirror.to_view(current.position));
+        let alpha = if from.distance(to) > 1.5 { 1.0 } else { mirror.alpha };
         let mut position = from.lerp(to, alpha);
         position.y = before.avatar.height.to_f32() + (current.avatar.height - before.avatar.height).to_f32() * alpha;
         let moved = position.with_y(0.0).distance(transform.translation.with_y(0.0)).min(1.0);
@@ -127,7 +127,7 @@ pub fn update(
                 sound.play(crate::sound::Cue::Swing);
             }
         }
-        let dig = current.avatar.dig.as_ref().map(|d| crate::gameplay::dig_age(&game, d));
+        let dig = current.avatar.dig.as_ref().map(|d| crate::gameplay::dig_age(&mirror, d));
         poses.push((entity, current.avatar.weapon, Pose { stride: peer.stride, speed, breathe, airborne, attack, dig }));
     }
     for (entity, part, mut transform) in &mut parts {

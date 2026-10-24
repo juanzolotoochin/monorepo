@@ -64,7 +64,7 @@ pub fn record(world: &mut World) -> Result<(), String> {
     if world.resource::<Memory>().recording {
         return Err("A recording is already in progress".into());
     }
-    world.resource_mut::<crate::lockstep::Game>().command(sim::CommandKind::MemoryRecord);
+    world.resource_mut::<crate::lockstep::SessionService>().command(sim::CommandKind::MemoryRecord);
     world.resource::<Sound>().play(Cue::Dispense);
     Ok(())
 }
@@ -74,13 +74,13 @@ pub fn deploy(world: &mut World) -> Result<(), String> {
     if !m.recording || m.elapsed < 0.15 {
         return Err("Record at least 0.15 seconds before deploying".into());
     }
-    world.resource_mut::<crate::lockstep::Game>().command(sim::CommandKind::MemoryDeploy);
+    world.resource_mut::<crate::lockstep::SessionService>().command(sim::CommandKind::MemoryDeploy);
     *world.resource_mut::<Controls>() = Controls { weapon: world.resource::<Controls>().weapon, ..Controls::default() };
     world.resource::<Sound>().play(Cue::Crystal);
     Ok(())
 }
 pub fn clear(world: &mut World) {
-    world.resource_mut::<crate::lockstep::Game>().command(sim::CommandKind::MemoryClear);
+    world.resource_mut::<crate::lockstep::SessionService>().command(sim::CommandKind::MemoryClear);
 }
 /// Mirrors the simulated trial for the view, and plays its feedback.
 pub fn tick(world: &mut World) {
@@ -105,9 +105,9 @@ pub fn tick(world: &mut World) {
     }
     let dt = world.resource::<Time>().delta_secs().min(0.1);
     let elapsed = world.resource::<Time>().elapsed_secs();
-    let game = world.resource::<crate::lockstep::Game>();
-    let mirror = game.current.as_ref().and_then(|s| s.memory.clone()).map(|sim| {
-        let center = game.center;
+    let mirror = world.resource::<crate::lockstep::WorldMirror>();
+    let mirror = mirror.current.as_ref().and_then(|s| s.memory.clone()).map(|sim| {
+        let center = mirror.center;
         let sample = |s: &sim::settlement::memory::Sample| Sample {
             time: 0.0,
             position: Vec3::new((s.position.x - center.x).to_f32(), s.height.to_f32(), (s.position.y - center.y).to_f32()),

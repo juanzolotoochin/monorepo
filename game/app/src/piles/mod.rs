@@ -5,7 +5,7 @@ use crate::{
     assets::SceneLibrary,
     gameplay::{cursor_ground, Obstacle, Player},
     navigation::Disc,
-    lockstep::Game,
+    lockstep::{SessionService, WorldMirror},
     pile_model::{pile_radius, unit_positions, Pile, PileId, Stock},
 };
 use sim::settlement::piles::PileAction;
@@ -156,12 +156,12 @@ fn ray_sphere(origin: Vec3, direction: Vec3, center: Vec3, radius: f32) -> Optio
 
 /// Fills the view's piles, carriers, and this player's job state from the
 /// simulation.
-pub fn mirror(game: Res<Game>, mut lab: ResMut<PileLab>) {
-    let Some(sim) = game.current.as_ref().and_then(|s| s.piles.as_ref()) else {
+pub fn mirror(service: Res<SessionService>, mirror: Res<WorldMirror>, mut lab: ResMut<PileLab>) {
+    let Some(sim) = mirror.current.as_ref().and_then(|s| s.piles.as_ref()) else {
         return;
     };
-    let local = |p: fx::FxVec2| [(p.x - game.center.x).to_f32(), (p.y - game.center.y).to_f32()];
-    let ground = |p: fx::FxVec2| game.world().map_or(0.0, |w| w.terrain().height(p).to_f32());
+    let local = |p: fx::FxVec2| [(p.x - mirror.center.x).to_f32(), (p.y - mirror.center.y).to_f32()];
+    let ground = |p: fx::FxVec2| service.world().map_or(0.0, |w| w.terrain().height(p).to_f32());
     let piles = sim
         .piles
         .iter()
@@ -170,10 +170,10 @@ pub fn mirror(game: Res<Game>, mut lab: ResMut<PileLab>) {
             (id, pile)
         })
         .collect();
-    lab.collector = sim.collector.as_ref().map(|c| game.to_view(c.position).with_y(ground(c.position)));
+    lab.collector = sim.collector.as_ref().map(|c| mirror.to_view(c.position).with_y(ground(c.position)));
     lab.collected = sim.collector.as_ref().map_or_else(Vec::new, |c| c.stored.clone());
     let view = |c: sim::settlement::piles::Cargo| crate::pile_model::Cargo { material: c.material.map(mineral), units: c.units, capacity: c.capacity };
-    let me = game.player();
+    let me = mirror.player();
     let mine = me.and_then(|m| sim.hauler(m));
     let cargo = view(me.map_or_else(|| sim.cargo(u16::MAX), |m| sim.cargo(m)));
     let others: u64 = sim.haulers.iter().filter(|(&a, _)| Some(a) != me).map(|(_, h)| u64::from(h.cargo.units)).sum();
@@ -192,10 +192,10 @@ pub fn mirror(game: Res<Game>, mut lab: ResMut<PileLab>) {
 
 /// Starts a haul: the player walks to the pile and transfers, `pace`
 /// seconds per unit (zero: all at once).
-pub(crate) fn haul(game: &mut Game, action: PileAction, pace: f32, approach: Option<Vec3>) {
-    let Some(agent) = game.player() else { return };
-    let approach = approach.map(|p| game.to_sim(p));
-    game.command(CommandKind::Pile { agent, action, pace: fx::Fx::quantize(pace), approach });
+pub(crate) fn haul(service: &mut SessionService, action: PileAction, pace: f32, approach: Option<Vec3>) {
+    let Some(agent) = service.player() else { return };
+    let approach = approach.map(|p| service.to_sim(p));
+    service.command(CommandKind::Pile { agent, action, pace: fx::Fx::quantize(pace), approach });
 }
 
 pub fn input(
@@ -207,7 +207,7 @@ pub fn input(
     source_buttons: Query<(&Interaction, &SourceButton)>,
     panels: Query<&Interaction, With<LabPanel>>,
     mut lab: ResMut<PileLab>,
-    mut game: ResMut<Game>,
+    mut service: ResMut<SessionService>,
 ) {
     if lab.stock.is_none() {
         return;
@@ -218,7 +218,7 @@ pub fn input(
     }
     let source_button = source_buttons.iter().find(|(i, _)| **i == Interaction::Pressed).map(|(_, b)| b.0);
     if let Some(index) = source_button {
-        game.command(CommandKind::Dispense { dispenser: index as u32, units: 5 });
+        service.command(CommandKind::Dispense { dispenser: index as u32, units: 5 });
         return;
     }
     let Some(cursor) = window.cursor_position() else {
@@ -241,14 +241,14 @@ pub fn input(
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map(|(_, index)| index);
     if let Some(index) = source {
-        game.command(CommandKind::Dispense { dispenser: index as u32, units: 5 });
+        service.command(CommandKind::Dispense { dispenser: index as u32, units: 5 });
         return;
     }
     if cursor.y < 110.0 || cursor.y > window.height() - 135.0 {
         return;
     }
     let ground = if library.has_feature(voxel_assets::SceneFeature::Digging) {
-        crate::digging::ground_hit(ray, &game)
+        crate::digging::ground_hit(ray, &service)
     } else {
         cursor_ground(camera.0, camera.1, &window)
     };
@@ -269,7 +269,7 @@ pub fn input(
     let collector = lab.collector.and_then(|c| ray_sphere(ray.origin, *ray.direction, c + Vec3::Y * 1.0, 1.1));
     if collector.is_some() && pile.is_none() {
         if carrying {
-            haul(&mut game, PileAction::Deliver, 0.18, None);
+            haul(&mut service, PileAction::Deliver, 0.18, None);
         } else {
             lab.notice = "Collect ore from a pile, then click the collector to deliver it.".into();
         }
@@ -292,10 +292,10 @@ pub fn input(
             PileAction::Deposit(id)
         }
     } else if carrying {
-        PileAction::Drop(game.to_sim(ground))
+        PileAction::Drop(service.to_sim(ground))
     } else {
         lab.notice = "Click a pile to collect it, or right click to move.".into();
         return;
     };
-    haul(&mut game, action, 0.18, None);
+    haul(&mut service, action, 0.18, None);
 }

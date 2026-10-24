@@ -478,7 +478,8 @@ fn world_position(world: &World, mut entity: Entity) -> Vec3 {
 }
 pub fn snapshot(world: &mut World) -> serde_json::Value {
     let library = world.resource::<SceneLibrary>();
-    let pack = &library.scenes[library.current];
+    // Nothing is shown before the first world starts.
+    let Some(pack) = library.scenes.get(library.current) else { return serde_json::Value::Null };
     let p = pack.scene.style.clone().unwrap_or_default();
     let mut info = serde_json::json!({"id":p.id,"voxel_size":p.voxel_size,"voxels_per_meter":1.0/p.voxel_size,"palette":p.materials.iter().map(|m| &m.name).collect::<Vec<_>>(),"environment_statistics":pack.environment.as_ref().map(|e|e.statistics),"baked":pack.environment.is_some(),"actor_voxel_size":p.actor_voxel_size,"actor_parts":pack.actor.iter().map(|a|a.part).collect::<Vec<_>>(),"weapon":p.weapon_name,"fixture_lights":pack.environment.as_ref().map(|e|&e.lights),"sun_shadows":p.sun_shadows,"exposure_ev100":p.exposure_ev100});
     let moving:Vec<_>=world.query_filtered::<Entity,With<StyledActor>>().iter(world).filter_map(|e| {
@@ -499,8 +500,8 @@ mod tests {
             ..default()
         };
         let hub = crate::control::Hub::new(options.clone()).unwrap();
-        let mut app = crate::build_app(options, SceneLibrary::new(), hub);
-        app.update();
+        let mut app = crate::test_app(options, SceneLibrary::new(), hub, crate::flow::Launch::single_player(0));
+        crate::start_world(&mut app);
         let originals: Vec<_> = app
             .world()
             .resource::<MaterialBindings>()

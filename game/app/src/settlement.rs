@@ -263,16 +263,16 @@ fn inventory(
 pub fn tick(world: &mut World) {
     if world
         .get_resource::<crate::control::Hub>()
-        .is_some_and(|hub| hub.warming_up())
+        .is_some_and(|hub| hub.in_warmup())
     {
         return;
     }
     // Networked games can't pause: everyone shares one clock.
     if world.resource::<ButtonInput<KeyCode>>().just_pressed(KeyCode::KeyP)
-        && world.resource::<crate::lockstep::Game>().network.is_none()
+        && !world.resource::<crate::lockstep::SessionService>().networked()
     {
-        let mut game = world.resource_mut::<crate::lockstep::Game>();
-        game.paused = !game.paused;
+        let mut service = world.resource_mut::<crate::lockstep::SessionService>();
+        service.paused = !service.paused;
     }
     let mut state = world.remove_resource::<Settlement>().unwrap();
     let Some(sim) = &state.simulation else {
@@ -286,7 +286,7 @@ pub fn tick(world: &mut World) {
         .single(world)
         .unwrap()
         .translation;
-    let me = world.resource::<crate::lockstep::Game>().player_id();
+    let me = world.resource::<crate::lockstep::WorldMirror>().player_id();
     // Hit pause, rebound and camera shake are for this player's own hits.
     let hits = sim
         .events
@@ -803,7 +803,7 @@ pub fn tick(world: &mut World) {
     world.insert_resource(state);
 }
 pub fn snapshot(world: &World) -> serde_json::Value {
-    let fingerprint = world.resource::<crate::lockstep::Game>().fingerprint();
+    let fingerprint = world.get_resource::<crate::lockstep::WorldMirror>().map_or_else(String::new, |m| m.fingerprint());
     world.resource::<Settlement>().simulation.as_ref().map_or(serde_json::Value::Null, |s| {
         serde_json::json!({"simulation": s, "replay_fingerprint": fingerprint, "balances": s.balances(), "scenario": s.config(), "seconds": s.seconds()})
     })
@@ -999,12 +999,12 @@ mod tests {
 pub fn player_transfer(world: &mut World, depot: &str, item: &str, units: u32, deposit: bool) -> Result<u32, String> {
     let state = world.resource::<Settlement>();
     let sim = state.simulation.as_ref().ok_or("No settlement loaded")?;
-    let actor = world.resource::<crate::lockstep::Game>().player_id().ok_or("No controlled actor")?;
+    let actor = world.resource::<crate::lockstep::WorldMirror>().player_id().ok_or("No controlled actor")?;
     let dock = sim.config().depots.iter().find(|d| d.id == depot).ok_or("Unknown depot")?.position;
     let before = sim.agents[&actor].cargo.total();
-    let game = world.resource::<crate::lockstep::Game>();
-    let current = game.settlement().ok_or("No settlement loaded")?;
-    let (Some(agent), Some(d), Some(i)) = (game.player(), current.depot_index(depot), current.item_index(item)) else {
+    let service = world.resource::<crate::lockstep::SessionService>();
+    let current = service.settlement().ok_or("No settlement loaded")?;
+    let (Some(agent), Some(d), Some(i)) = (service.player(), current.depot_index(depot), current.item_index(item)) else {
         return Err("Unknown depot or item".into());
     };
     if sim.manual_jobs.contains_key(&actor) {
@@ -1019,9 +1019,11 @@ pub fn player_transfer(world: &mut World, depot: &str, item: &str, units: u32, d
         });
     }
     let expected = if deposit { before - units } else { before + units };
-    let mut game = world.resource_mut::<crate::lockstep::Game>();
-    game.command(sim::CommandKind::Transfer { agent, depot: d, item: i, units, deposit });
-    game.go_to(Vec3::new(dock[0], 0., dock[1]), false);
+    world.resource_scope(|world, mut control: Mut<crate::lockstep::PlayerControl>| {
+        let mut service = world.resource_mut::<crate::lockstep::SessionService>();
+        service.command(sim::CommandKind::Transfer { agent, depot: d, item: i, units, deposit });
+        control.go_to(&mut service, Vec3::new(dock[0], 0., dock[1]), false);
+    });
     world.resource_mut::<Settlement>().notice = format!(
         "{} {units} {item} {} {depot}",
         if deposit { "Delivering" } else { "Collecting" },
@@ -1045,9 +1047,9 @@ pub fn input(world: &mut World) {
             .any(|k| keys.pressed(*k));
     if manual {
         let busy = world.resource::<Settlement>().simulation.as_ref().is_some_and(|s| !s.manual_jobs.is_empty());
-        let agent = world.resource::<crate::lockstep::Game>().player();
+        let agent = world.resource::<crate::lockstep::SessionService>().player();
         if let (true, Some(agent)) = (busy, agent) {
-            world.resource_mut::<crate::lockstep::Game>().command(sim::CommandKind::CancelTransfer { agent });
+            world.resource_mut::<crate::lockstep::SessionService>().command(sim::CommandKind::CancelTransfer { agent });
             world.resource_mut::<Settlement>().notice = "Transfer canceled; airborne items still arrive.".into();
         }
     }
@@ -1074,9 +1076,9 @@ pub fn input(world: &mut World) {
             .map(|m| m.id.clone());
         if let Some(id) = nearest {
             let enabled = !sim.producers[&id].enabled;
-            let producer = world.resource::<crate::lockstep::Game>().settlement().and_then(|s| s.producer_index(&id));
+            let producer = world.resource::<crate::lockstep::SessionService>().settlement().and_then(|s| s.producer_index(&id));
             if let Some(producer) = producer {
-                world.resource_mut::<crate::lockstep::Game>().command(sim::CommandKind::SetMachine { producer, enabled });
+                world.resource_mut::<crate::lockstep::SessionService>().command(sim::CommandKind::SetMachine { producer, enabled });
             }
             world.resource_mut::<Settlement>().notice = format!("{id} {}", if enabled { "enabled" } else { "paused" });
         }
@@ -1101,7 +1103,7 @@ pub fn input(world: &mut World) {
     };
     let state = world.resource::<Settlement>();
     let sim = state.simulation.as_ref().unwrap();
-    let Some(actor) = world.resource::<crate::lockstep::Game>().player_id() else {
+    let Some(actor) = world.resource::<crate::lockstep::WorldMirror>().player_id() else {
         return;
     };
     let Some(depot) = sim
@@ -1122,7 +1124,7 @@ pub fn input(world: &mut World) {
     } else {
         &sim.depots[&depot.id]
     };
-    let game = world.resource::<crate::lockstep::Game>();
+    let game = world.resource::<crate::lockstep::SessionService>();
     let Some(current) = game.settlement() else {
         return;
     };
@@ -1150,13 +1152,12 @@ mod lifecycle_tests {
             ..default()
         };
         let hub = crate::control::Hub::new(options.clone()).unwrap();
-        let mut library = SceneLibrary::new();
-        library.initial = 6;
-        let mut app = crate::build_app(options, library, hub);
+        let library = SceneLibrary::new();
+        let mut app = crate::test_app(options, library, hub, crate::flow::Launch::single_player(6));
         app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
             std::time::Duration::from_secs_f64(1. / 30.),
         ));
-        app.update();
+        crate::start_world(&mut app);
         let blends = |world: &World| {
             world
                 .resource::<Assets<StandardMaterial>>()

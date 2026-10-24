@@ -145,14 +145,14 @@ pub fn scene_changed(
 /// itself is simulated (`game/sim::settlement::avatar`).
 pub fn update(
     time: Res<Time>,
-    game: Res<crate::lockstep::Game>,
+    mirror: Res<crate::lockstep::WorldMirror>,
     mut flight: ResMut<Flight>,
     sound: Res<crate::sound::Sound>,
     mut exhaust: Query<(&mut Transform, &mut Visibility), With<Exhaust>>,
 ) {
-    let (Some(current), Some(index)) = (&game.current, game.player()) else { return };
+    let (Some(current), Some(index)) = (&mirror.current, mirror.player()) else { return };
     let avatar = &current.agents[index as usize].avatar;
-    let climbing = game
+    let climbing = mirror
         .previous
         .as_ref()
         .and_then(|p| p.agents.get(index as usize))
@@ -182,13 +182,13 @@ pub fn cursor_surface(
     transform: &GlobalTransform,
     window: &Window,
     library: &SceneLibrary,
-    game: &crate::lockstep::Game,
+    service: &crate::lockstep::SessionService,
 ) -> Option<Vec3> {
     let ray = camera
         .viewport_to_world(transform, window.cursor_position()?)
         .ok()?;
     if library.has_feature(voxel_assets::SceneFeature::Digging) {
-        return crate::digging::ground_hit(ray, game);
+        return crate::digging::ground_hit(ray, service);
     }
     let Some(terrain) = &library.scenes[library.current].scene.terrain else {
         return crate::gameplay::cursor_ground(camera, transform, window);

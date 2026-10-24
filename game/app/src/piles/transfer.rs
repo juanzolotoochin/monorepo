@@ -26,8 +26,8 @@ pub fn backpack_slot(index: u32) -> Vec3 {
 }
 
 /// Where an avatar's body is: this player's, or another player's copy.
-fn body<F: bevy::ecs::query::QueryFilter>(game: &Game, player: &Transform, peers: &Query<(&crate::peers::Peer, &Transform), F>, agent: u16) -> Option<Transform> {
-    if game.player() == Some(agent) {
+fn body<F: bevy::ecs::query::QueryFilter>(mirror: &WorldMirror, player: &Transform, peers: &Query<(&crate::peers::Peer, &Transform), F>, agent: u16) -> Option<Transform> {
+    if mirror.player() == Some(agent) {
         return Some(*player);
     }
     peers.iter().find(|(p, _)| p.agent() == agent).map(|(_, t)| *t)
@@ -36,7 +36,8 @@ fn body<F: bevy::ecs::query::QueryFilter>(game: &Game, player: &Transform, peers
 /// Spawns a flying unit for every toss the simulation made since last frame.
 pub fn spawn_tosses(
     mut commands: Commands,
-    game: Res<Game>,
+    service: Res<SessionService>,
+    mirror: Res<WorldMirror>,
     lab: Res<PileLab>,
     sound: Res<Sound>,
     player: Single<&Transform, With<Player>>,
@@ -45,12 +46,12 @@ pub fn spawn_tosses(
     let Some(assets) = lab.assets.clone() else {
         return;
     };
-    let body = |agent: u16| body(&game, &player, &peers, agent);
-    for event in &game.events {
+    let body = |agent: u16| body(&mirror, &player, &peers, agent);
+    for event in &mirror.events {
         let sim::settlement::Event::PileToss { material, from, to, ticks } = event else {
             continue;
         };
-        let ground = |p: fx::FxVec2| game.to_view(p).with_y(game.world().map_or(0.0, |w| w.terrain().height(p).to_f32()));
+        let ground = |p: fx::FxVec2| mirror.to_view(p).with_y(service.world().map_or(0.0, |w| w.terrain().height(p).to_f32()));
         let start = match *from {
             TossEnd::Pile { slot, position, .. } => ground(position) + Vec3::from_array(unit_positions()[slot as usize]),
             TossEnd::Cargo { agent, slot } => {
@@ -83,7 +84,7 @@ pub fn update_transit(
     time: Res<Time>,
     sound: Res<Sound>,
     lab: Res<PileLab>,
-    game: Res<Game>,
+    mirror: Res<WorldMirror>,
     player: Single<&Transform, (With<Player>, Without<Transit>)>,
     peers: Query<(&crate::peers::Peer, &Transform), (Without<Player>, Without<Transit>)>,
     mut transits: Query<(Entity, &mut Transit, &mut Transform), (Without<Player>, Without<crate::peers::Peer>)>,
@@ -96,7 +97,7 @@ pub fn update_transit(
         let t = (transit.age / transit.duration).min(1.0);
         let end = match transit.destination {
             Destination::Cargo(agent, slot) => {
-                let Some(body) = body(&game, &player, &peers, agent) else {
+                let Some(body) = body(&mirror, &player, &peers, agent) else {
                     commands.entity(entity).despawn();
                     continue;
                 };

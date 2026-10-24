@@ -989,7 +989,7 @@ pub fn update_hud(
     library: Res<SceneLibrary>,
     cache: Res<ModelCache>,
     flight: Res<crate::jetpack::Flight>,
-    game: Res<crate::lockstep::Game>,
+    service: Res<crate::lockstep::SessionService>,
     player: Single<&Transform, With<Player>>,
     mut scene_label: Single<&mut Text, (With<SceneLabel>, Without<Status>, Without<ContactCount>)>,
     mut status: Single<(&mut Text, &mut TextColor), With<Status>>,
@@ -1051,12 +1051,12 @@ pub fn update_hud(
             crate::jetpack::HOVER
         )
     } else if library.has_feature(voxel_assets::SceneFeature::Digging) {
-        let net = if game.network.is_some() { format!(" / NET / {}", game.status.to_uppercase()) } else { String::new() };
-        let tile = sim::terrain::Terrain::pit_tile(game.to_sim(player.translation));
-        let pit = game.world().map_or(0, |w| w.terrain().pit(tile));
+        let net = if service.networked() { format!(" / NET / {}", service.status.to_uppercase()) } else { String::new() };
+        let tile = sim::terrain::Terrain::pit_tile(service.to_sim(player.translation));
+        let pit = service.world().map_or(0, |w| w.terrain().pit(tile));
         format!("PIT {pit}/{} / F TO DIG / HOLD SPACE TO FLY OUT{net}", sim::terrain::MAX_LAYERS)
-    } else if game.network.is_some() {
-        format!("NET / {}", game.status.to_uppercase())
+    } else if service.networked() {
+        format!("NET / {}", service.status.to_uppercase())
     } else {
         text
     };

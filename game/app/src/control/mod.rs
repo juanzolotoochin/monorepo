@@ -8,7 +8,7 @@ use crate::{
     assets::SceneLibrary,
     gameplay::{Controls, Obstacle, Player},
     impact::ImpactTarget,
-    lockstep::Game,
+    lockstep::{PlayerControl, SessionService},
     navigation,
     piles::PileLab,
 };
@@ -119,12 +119,20 @@ pub struct Hub {
     pub receipts: Vec<Value>,
     pub audio_events: Vec<Value>,
     warmup: u64,
+    /// The first frame after warmup with the World layer up: commands start
+    /// from here.
+    ready: Option<u64>,
     quit: Option<u64>,
     trace: Option<std::fs::File>,
 }
 impl Hub {
-    pub fn warming_up(&self) -> bool {
+    /// Still in the frames a rendered run spends warming up.
+    pub fn in_warmup(&self) -> bool {
         self.tick <= self.warmup
+    }
+    /// A script or a control client is waiting for the first world.
+    pub fn waiting_for_world(&self) -> bool {
+        (self.options.script.is_some() || self._server.is_some()) && self.ready.is_none()
     }
     pub fn new(options: Options) -> Result<Self, String> {
         let (tx, rx) = mpsc::sync_channel(64);
@@ -176,6 +184,7 @@ impl Hub {
             receipts: vec![],
             audio_events: vec![],
             warmup,
+            ready: None,
             quit: None,
         })
     }
@@ -204,10 +213,14 @@ fn settlement(world: &World) -> Result<&sim::settlement::Settlement, String> {
     if world.resource::<crate::settlement::Settlement>().config.is_none() {
         return Err("No settlement loaded".into());
     }
-    world.resource::<Game>().settlement().ok_or_else(|| "No settlement loaded".to_string())
+    world.get_resource::<SessionService>().and_then(SessionService::settlement).ok_or_else(|| "No settlement loaded".to_string())
 }
 fn send(world: &mut World, kind: CommandKind) {
-    world.resource_mut::<Game>().command(kind);
+    world.resource_mut::<SessionService>().command(kind);
+}
+/// The local player's avatar index.
+fn player(world: &World) -> Option<u16> {
+    world.get_resource::<SessionService>()?.player()
 }
 /// Starts a haul toward a pile. The job serial lets the poll tell this job
 /// from a later one.
@@ -217,7 +230,7 @@ fn queue_haul(world: &mut World, action: PileAction, pace: f32, approach: Option
     }
     let stand = approach.map(point).transpose()?;
     let serial = world.resource::<PileLab>().job_serial + 1;
-    crate::piles::haul(&mut world.resource_mut::<Game>(), action, pace, stand);
+    crate::piles::haul(&mut world.resource_mut::<SessionService>(), action, pace, stand);
     Ok(serial)
 }
 fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, String> {
@@ -233,27 +246,27 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
         }
         Command::SettlementCancel => {
             settlement(world)?;
-            let agent = world.resource::<Game>().player().ok_or("No controlled actor")?;
+            let agent = player(world).ok_or("No controlled actor")?;
             send(world, CommandKind::CancelTransfer { agent });
             Ok(Pending::Instant)
         }
         Command::SettlementPause { paused } => {
             settlement(world)?;
-            if world.resource::<Game>().network.is_some() {
+            if world.resource::<SessionService>().networked() {
                 return Err("Networked games can't pause".into());
             }
-            world.resource_mut::<Game>().paused = *paused;
+            world.resource_mut::<SessionService>().paused = *paused;
             Ok(Pending::Instant)
         }
         Command::SettlementRate { rate } => {
             settlement(world)?;
-            if world.resource::<Game>().network.is_some() {
+            if world.resource::<SessionService>().networked() {
                 return Err("Networked games run at one speed".into());
             }
             if !rate.is_finite() || !(0.25..=4.0).contains(rate) {
                 return Err("simulation rate must be 0.25..4".into());
             }
-            world.resource_mut::<Game>().rate = *rate;
+            world.resource_mut::<SessionService>().rate = *rate;
             Ok(Pending::Instant)
         }
         Command::SettlementLink { id, enabled } => {
@@ -315,7 +328,7 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             Ok(Pending::Instant)
         }
         Command::Jetpack { enabled } => {
-            let agent = world.resource::<Game>().player().ok_or("No player")?;
+            let agent = player(world).ok_or("No player")?;
             send(world, CommandKind::Jetpack { agent, enabled: *enabled });
             Ok(Pending::Applied)
         }
@@ -328,19 +341,18 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             Ok(Pending::Haul { expected_cargo: 0, serial })
         }
         Command::Dig => {
-            let game = world.resource::<Game>();
-            if !game.world().is_some_and(|w| w.terrain().diggable) {
+            if !world.resource::<SessionService>().world().is_some_and(|w| w.terrain().diggable) {
                 return Err("This scene has no diggable ground".into());
             }
-            world.resource_mut::<Game>().dig();
+            world.resource_mut::<SessionService>().dig();
             Ok(Pending::Applied)
         }
         Command::AssertFlight { airborne, altitude, tolerance } => {
             if !altitude.is_finite() || !tolerance.is_finite() || !(0.0..=1.0).contains(tolerance) {
                 return Err("Flight assertion requires a finite altitude and tolerance in 0..1".into());
             }
-            let game = world.resource::<Game>();
-            let a = game.settlement().zip(game.player()).map(|(s, p)| &s.agents[p as usize]).ok_or("No player")?;
+            let service = world.resource::<SessionService>();
+            let a = service.settlement().zip(service.player()).map(|(s, p)| &s.agents[p as usize]).ok_or("No player")?;
             let (flying, actual) = (a.avatar.flight.airborne, a.avatar.height.to_f32());
             if flying != *airborne || (actual - altitude).abs() > *tolerance {
                 return Err(format!("Flight assertion failed: airborne={flying}, altitude={actual:.3}"));
@@ -348,8 +360,11 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             Ok(Pending::Instant)
         }
         Command::Scene { scene } => {
-            let index = world.resource::<SceneLibrary>().index(scene)?;
-            world.resource_mut::<SceneLibrary>().requested = Some(index);
+            let library = world.resource::<SceneLibrary>();
+            let index = library.index(scene)?;
+            if index != library.current {
+                world.resource_mut::<SessionService>().request_scene(index);
+            }
             Ok(Pending::Scene(index))
         }
         Command::Walk { position } => {
@@ -357,7 +372,9 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             let mut controls = world.resource_mut::<Controls>();
             controls.attack = None;
             controls.queued = None;
-            world.resource_mut::<Game>().go_to(goal, false);
+            world.resource_scope(|world, mut control: Mut<PlayerControl>| {
+                control.go_to(&mut world.resource_mut::<SessionService>(), goal, false);
+            });
             Ok(Pending::Walk(goal))
         }
         Command::Add { dispenser, units } => {
@@ -391,7 +408,7 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             if carried == 0 {
                 return Err("Carrier is empty".into());
             }
-            let at = world.resource::<Game>().to_sim(point(*position)?);
+            let at = world.resource::<SessionService>().to_sim(point(*position)?);
             let serial = queue_haul(world, PileAction::Drop(at), *seconds_per_unit, *approach)?;
             Ok(Pending::Haul { expected_cargo: 0, serial })
         }
@@ -407,9 +424,12 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
         }
         Command::Strike { target } => {
             let aim = point(*target)? - player_position(world);
-            world.resource_scope(|world, mut game: Mut<Game>| {
-                world.resource_scope(|world, mut controls: Mut<Controls>| {
-                    crate::lockstep::strike(&mut game, &mut controls, world.resource::<SceneLibrary>(), aim);
+            world.resource_scope(|world, mut control: Mut<PlayerControl>| {
+                world.resource_scope(|world, mut service: Mut<SessionService>| {
+                    world.resource_scope(|world, mut controls: Mut<Controls>| {
+                        let library = world.resource::<SceneLibrary>();
+                        control.strike(&mut service, &mut controls, &library.scenes[library.current], aim);
+                    });
                 });
             });
             Ok(Pending::Strike)
@@ -423,12 +443,12 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
                 "arc_coil" => Weapon::ArcCoil,
                 _ => return Err("Unknown weapon".into()),
             };
-            let available = world.resource::<Game>().settlement().is_some_and(|s| s.weapons.contains(&selected));
+            let available = world.resource::<SessionService>().settlement().is_some_and(|s| s.weapons.contains(&selected));
             if !available {
                 return Err("Weapon is unavailable in this scenario".into());
             }
             world.resource_mut::<Controls>().weapon = selected;
-            world.resource_mut::<Game>().equip(selected);
+            world.resource_mut::<SessionService>().equip(selected);
             Ok(Pending::Instant)
         }
         Command::Wait { frames } => {
@@ -461,7 +481,7 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
 }
 fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), String>> {
     // Commands apply on the next simulated tick; until then there is nothing to check.
-    let applied = world.resource::<Game>().caught_up();
+    let applied = world.get_resource::<SessionService>().is_some_and(SessionService::caught_up);
     match pending {
         Pending::Instant => Some(Ok(())),
         Pending::Applied => applied.then_some(Ok(())),
@@ -472,8 +492,8 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
             if !applied {
                 return None;
             }
-            let game = world.resource::<Game>();
-            let a = &game.settlement()?.agents[game.player()? as usize];
+            let service = world.get_resource::<SessionService>()?;
+            let a = &service.settlement()?.agents[service.player()? as usize];
             if a.avatar.job.is_some() || a.pending_in > 0 || a.pending_out > 0 {
                 None
             } else {
@@ -492,11 +512,11 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
             if !applied {
                 return None;
             }
-            let game = world.resource::<Game>();
-            let a = &game.settlement()?.agents[game.player()? as usize];
+            let service = world.get_resource::<SessionService>()?;
+            let a = &service.settlement()?.agents[service.player()? as usize];
             if !a.route.is_empty() {
                 None
-            } else if navigation::flat(game.to_view(a.position) - *goal).length() < 0.15 {
+            } else if navigation::flat(service.to_view(a.position) - *goal).length() < 0.15 {
                 Some(Ok(()))
             } else {
                 Some(Err("Destination is blocked or unreachable, or the walk was interrupted".into()))
@@ -523,10 +543,14 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
         }
     }
 }
-/// Whether the scene's world exists and has run a tick.
+/// Whether the scene's world is up and has run a tick.
 fn applied_scene(world: &World, index: usize) -> bool {
     let _ = index;
-    world.resource::<Game>().world().is_some_and(|w| w.tick() > 0)
+    world_active(world) && world.get_resource::<SessionService>().and_then(SessionService::world).is_some_and(|w| w.tick() > 0)
+}
+/// Whether the World layer is up: scripts run only then.
+fn world_active(world: &World) -> bool {
+    world.get_resource::<State<service::WorldState>>().is_some_and(|s| *s.get() == service::WorldState::Active)
 }
 
 pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
@@ -538,12 +562,9 @@ pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
     let position = player_position(world);
     let flight = world.resource::<crate::jetpack::Flight>();
     let jetpack = json!({"requested":flight.requested,"airborne":flight.airborne,"support_height":flight.support,"hover_height":crate::jetpack::HOVER,"clearance":position.y-flight.support});
-    let terrain = &world.resource::<SceneLibrary>().scenes
-        [world.resource::<SceneLibrary>().current]
-        .scene
-        .terrain;
-    let terrain = json!(terrain);
-    let digging = crate::digging::snapshot(world.resource::<Game>());
+    let library = world.resource::<SceneLibrary>();
+    let terrain = json!(library.scenes.get(library.current).and_then(|pack| pack.scene.terrain.as_ref()));
+    let digging = crate::digging::snapshot(world);
     let controls = world.resource::<Controls>();
     let movement = json!({"route":controls.route.iter().map(|p|p.to_array()).collect::<Vec<_>>(),"velocity":controls.velocity.to_array(),"attacking":controls.attack.is_some(),"weapon":controls.weapon,"impacts":controls.impacts});
     let scene = world.resource::<SceneLibrary>().title().to_string();
@@ -577,8 +598,9 @@ pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
         .query::<&crate::piles::MineralUnit>()
         .iter(world)
         .count();
-    let sim_tick = world.resource::<Game>().world().map(|w| w.tick());
-    let network = world.resource::<Game>().network.is_some().then(|| world.resource::<Game>().status.clone());
+    let service = world.get_resource::<SessionService>();
+    let sim_tick = service.and_then(SessionService::world).map(|w| w.tick());
+    let network = service.filter(|s| s.networked()).map(|s| s.status.clone());
     let peers = crate::peers::snapshot(world);
     let result = json!({"telemetry":telemetry,"settlement":settlement,"version":VERSION,"tick":hub.tick,"sim_tick":sim_tick,"network":network,"peers":peers,"scene":scene,"player":{"position":position.to_array(),"movement":movement,"cargo":cargo,"jetpack":jetpack},"terrain":terrain,"digging":digging,"memory":memory,"style":style,"piles":piles,"totals":totals,"visible_mineral_units":visible_units,"airborne_units":airborne,"airborne":flying,"targets":targets,"obstacles":obstacles,"active_command":hub.active.as_ref().map(|a|&a.envelope.request)});
     crate::telemetry::elapsed(world, "inspection_snapshot", started);
@@ -609,7 +631,10 @@ pub fn begin(world: &mut World) {
                 .send(json!({"id":envelope.request.id,"status":"failed","error":"Queue is full"}));
         }
     }
-    if hub.tick > hub.warmup && hub.active.is_none() && hub.failed.is_none() {
+    if hub.ready.is_none() && hub.tick > hub.warmup && world_active(world) {
+        hub.ready = Some(hub.tick);
+    }
+    if hub.ready.is_some() && hub.active.is_none() && hub.failed.is_none() {
         if let Some(envelope) = hub.queue.pop_front() {
             let pending =
                 start(world, &envelope.request.command, hub.tick).unwrap_or_else(Pending::Failed);
@@ -657,25 +682,29 @@ pub fn end(world: &mut World) {
     let finishing = hub.failed.is_some()
         || hub.quit.is_some_and(|tick| hub.tick >= tick)
         || (hub.options.script.is_some()
-            && hub.tick > hub.warmup
+            && hub.ready.is_some()
             && hub.queue.is_empty()
             && hub.active.is_none());
-    if hub.options.trace.is_some() || !hub.inspect.is_empty() || finishing {
+    // Like commands, inspections wait for the first world.
+    let inspecting = hub.ready.is_some() && !hub.inspect.is_empty();
+    if hub.options.trace.is_some() || inspecting || finishing {
         hub.latest = snapshot(world, &hub);
     }
-    if hub.trace.is_some() {
+    // The trace starts with the first world, as scripts do.
+    if hub.trace.is_some() && hub.ready.is_some() {
         use std::io::Write;
         let record = json!({"frame":hub.tick,"time":hub.tick as f64 / f64::from(hub.options.fps()),"state":hub.latest});
         // Unbuffered newline records can also be consumed through a named pipe.
         writeln!(hub.trace.as_mut().unwrap(), "{record}").expect("write world trace");
     }
-    for envelope in hub.inspect.drain(..) {
+    let answered = if hub.ready.is_some() { std::mem::take(&mut hub.inspect) } else { Vec::new() };
+    for envelope in answered {
         if let Some(reply) = envelope.reply {
             let _=reply.send(json!({"version":VERSION,"id":envelope.request.id,"status":"completed","state":hub.latest}));
         }
     }
     if hub.options.script.is_some()
-        && hub.tick > hub.warmup
+        && hub.ready.is_some()
         && hub.queue.is_empty()
         && hub.active.is_none()
         && hub.finished.is_none()

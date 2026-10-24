@@ -12,6 +12,7 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use voxel_assets::{ImpactResponse, SceneFeature};
 
+use fx::FxVec2;
 use sim::mine::STEP;
 use sim::settlement::avatar::Dig;
 use sim::terrain::{Terrain, LAYER, MAX_LAYERS};
@@ -20,7 +21,7 @@ use crate::assets::SceneLibrary;
 use crate::effects::{CameraRig, FxAssets};
 use crate::gameplay::Player;
 use crate::jetpack::Deck;
-use crate::lockstep::Game;
+use crate::lockstep::{SessionService, WorldMirror};
 
 /// Tiles per chunk side.
 const CHUNK: i32 = 16;
@@ -53,20 +54,21 @@ pub struct Drawn {
 }
 
 /// The simulation's tile at the arena's center.
-fn center_tile(game: &Game) -> IVec2 {
-    IVec2::new(game.center.x.round().floor_to_int() as i32, game.center.y.round().floor_to_int() as i32)
+fn center_tile(center: FxVec2) -> IVec2 {
+    IVec2::new(center.x.round().floor_to_int() as i32, center.y.round().floor_to_int() as i32)
 }
 
 /// Arena tile of a simulation tile.
-fn arena_tile(game: &Game, tile: (i32, i32)) -> IVec2 {
-    IVec2::new(tile.0, tile.1) - center_tile(game)
+fn arena_tile(center: FxVec2, tile: (i32, i32)) -> IVec2 {
+    IVec2::new(tile.0, tile.1) - center_tile(center)
 }
 
 /// Builds the ground for digging scenes, hides the deck there, and rebuilds
 /// chunks whose pits changed.
 pub fn update(
     mut commands: Commands,
-    game: Res<Game>,
+    service: Res<SessionService>,
+    mirror: Res<WorldMirror>,
     library: Res<SceneLibrary>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -74,7 +76,7 @@ pub fn update(
     chunks: Query<(Entity, &GroundChunk)>,
     mut drawn: Local<Drawn>,
 ) {
-    let terrain = game.world().map(sim::World::terrain).filter(|_| library.has_feature(SceneFeature::Digging));
+    let terrain = service.world().map(sim::World::terrain).filter(|_| library.has_feature(SceneFeature::Digging));
     let Some(terrain) = terrain else {
         if drawn.world.take().is_some() {
             for (entity, _) in &chunks {
@@ -87,7 +89,7 @@ pub fn update(
     for mut visibility in &mut deck {
         visibility.set_if_neq(Visibility::Hidden);
     }
-    let center = center_tile(&game);
+    let center = center_tile(mirror.center);
     let extent = terrain.extent.round().floor_to_int() as i32;
     let material = drawn
         .material
@@ -116,7 +118,7 @@ pub fn update(
     // A pit changes its own tile's top and its neighbors' walls.
     let changed = drawn.pits.iter().chain(&terrain.pits).filter(|p| !(drawn.pits.contains(p) && terrain.pits.contains(p)));
     for &(tile, _) in changed {
-        let a = arena_tile(&game, tile);
+        let a = arena_tile(mirror.center, tile);
         for offset in [IVec2::ZERO, IVec2::X, IVec2::NEG_X, IVec2::Y, IVec2::NEG_Y] {
             dirty.insert(((a + offset + IVec2::splat(extent)).div_euclid(IVec2::splat(CHUNK))).to_array());
         }
@@ -277,9 +279,9 @@ pub fn follow_camera(
 }
 
 /// Where a ray (from the camera, through the cursor) meets the ground.
-pub fn ground_hit(ray: Ray3d, game: &Game) -> Option<Vec3> {
-    let terrain = game.world()?.terrain();
-    let height = |p: Vec3| terrain.height(game.to_sim(p)).to_f32();
+pub fn ground_hit(ray: Ray3d, service: &SessionService) -> Option<Vec3> {
+    let terrain = service.world()?.terrain();
+    let height = |p: Vec3| terrain.height(service.to_sim(p)).to_f32();
     let plane = InfinitePlane3d::new(Vec3::Y);
     let (start, end) = (ray.intersect_plane(Vec3::Y * 6.0, plane)?, ray.intersect_plane(Vec3::Y * BOTTOM, plane)?);
     let steps = ((end - start) / 0.05).ceil().max(1.0) as usize;
@@ -310,7 +312,8 @@ pub fn ground_hit(ray: Ray3d, game: &Game) -> Option<Vec3> {
 /// when a layer comes out.
 pub fn feedback(
     mut commands: Commands,
-    game: Res<Game>,
+    service: Res<SessionService>,
+    mirror: Res<WorldMirror>,
     assets: Res<FxAssets>,
     sound: Res<crate::sound::Sound>,
     camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>,
@@ -320,13 +323,13 @@ pub fn feedback(
     mut chips: Local<HashMap<u16, u64>>,
     mut pits: Local<Vec<((i32, i32), u8)>>,
 ) {
-    let terrain = game.world().map(sim::World::terrain);
-    let now = game.tick as f32 - 1.0 + game.alpha;
-    let digs: Vec<(u16, Dig, Vec3)> = game.current.as_ref().map_or_else(Vec::new, |s| {
+    let terrain = service.world().map(sim::World::terrain);
+    let now = mirror.tick as f32 - 1.0 + mirror.alpha;
+    let digs: Vec<(u16, Dig, Vec3)> = mirror.current.as_ref().map_or_else(Vec::new, |s| {
         s.agents
             .iter()
             .enumerate()
-            .filter_map(|(i, a)| Some((i as u16, a.avatar.dig.clone()?, game.to_view(a.position).with_y(a.avatar.height.to_f32()))))
+            .filter_map(|(i, a)| Some((i as u16, a.avatar.dig.clone()?, mirror.to_view(a.position).with_y(a.avatar.height.to_f32()))))
             .collect()
     });
     let scale = player.compute_transform().scale.y;
@@ -343,7 +346,7 @@ pub fn feedback(
         if terrain.pits != *pits {
             for &(tile, depth) in &terrain.pits {
                 if pits.iter().find(|(t, _)| *t == tile).is_none_or(|&(_, d)| d < depth) {
-                    let center = arena_tile(&game, tile).as_vec2();
+                    let center = arena_tile(mirror.center, tile).as_vec2();
                     let floor = terrain.height(Terrain::pit_center(tile)).to_f32();
                     burst(&mut commands, &assets, Vec3::new(center.x, floor, center.y), depth as u32 * 977 + tile.0 as u32);
                     sound.play(crate::sound::Cue::Stone);
@@ -353,7 +356,7 @@ pub fn feedback(
         }
     }
     let progress = |dig: &Dig| ((now - dig.started as f32) / (dig.until - dig.started) as f32).clamp(0.0, 1.0);
-    let lift = if game.network.is_some() { 24.0 } else { 0.0 };
+    let lift = if service.networked() { 24.0 } else { 0.0 };
     let mut shown = Vec::new();
     for (entity, bar, mut node, mut visibility, computed) in &mut bars {
         let Some((_, dig, at)) = digs.iter().find(|(a, ..)| *a == bar.agent) else {
@@ -396,26 +399,29 @@ fn burst(commands: &mut Commands, assets: &FxAssets, at: Vec3, seed: u32) {
 /// For the control snapshot: dug pits by arena tile, whether the player is
 /// digging, what the collector holds by mineral, and the nearest tile
 /// (within 8 m of the player) whose next layer down holds ore.
-pub fn snapshot(game: &Game) -> serde_json::Value {
-    let Some(terrain) = game.world().map(sim::World::terrain) else { return serde_json::Value::Null };
+pub fn snapshot(world: &World) -> serde_json::Value {
+    let (Some(service), Some(mirror)) = (world.get_resource::<SessionService>(), world.get_resource::<WorldMirror>()) else {
+        return serde_json::Value::Null;
+    };
+    let Some(terrain) = service.world().map(sim::World::terrain) else { return serde_json::Value::Null };
     let pits: Vec<_> = terrain
         .pits
         .iter()
         .map(|&(tile, depth)| {
-            let t = arena_tile(game, tile);
+            let t = arena_tile(mirror.center, tile);
             serde_json::json!({"tile": [t.x, t.y], "depth": depth})
         })
         .collect();
-    let digging = game.player().zip(game.current.as_ref()).is_some_and(|(i, s)| s.agents[i as usize].avatar.dig.is_some());
-    let collected = game.current.as_ref().and_then(|s| s.piles.as_ref()?.collector.as_ref()).map(|c| c.stored.clone());
-    let me = game.player().zip(game.current.as_ref()).map(|(i, s)| Terrain::pit_tile(s.agents[i as usize].position));
+    let digging = mirror.player().zip(mirror.current.as_ref()).is_some_and(|(i, s)| s.agents[i as usize].avatar.dig.is_some());
+    let collected = mirror.current.as_ref().and_then(|s| s.piles.as_ref()?.collector.as_ref()).map(|c| c.stored.clone());
+    let me = mirror.player().zip(mirror.current.as_ref()).map(|(i, s)| Terrain::pit_tile(s.agents[i as usize].position));
     let nearest_ore = me.zip(terrain.mine()).and_then(|(me, mine)| {
         (-8..=8)
             .flat_map(|y| (-8..=8).map(move |x| (me.0 + x, me.1 + y)))
             .filter(|&t| terrain.pit(t) < MAX_LAYERS && mine.ore(t, terrain.pit(t)).is_some())
             .min_by_key(|&t| ((t.0 - me.0).pow(2) + (t.1 - me.1).pow(2), t))
             .map(|t| {
-                let a = arena_tile(game, t);
+                let a = arena_tile(mirror.center, t);
                 serde_json::json!({"tile": [a.x, a.y], "mineral": mine.ore(t, terrain.pit(t))})
             })
     });

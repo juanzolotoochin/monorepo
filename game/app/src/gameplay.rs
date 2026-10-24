@@ -364,7 +364,7 @@ pub fn animate_character(
     controls: Res<Controls>,
     feedback: Res<Feedback>,
     flight: Option<Res<crate::jetpack::Flight>>,
-    game: Res<crate::lockstep::Game>,
+    mirror: Res<crate::lockstep::WorldMirror>,
     mut parts: Query<(&Part, &mut Transform), Without<Player>>,
 ) {
     if feedback.hit_stop > 0.0
@@ -381,7 +381,7 @@ pub fn animate_character(
         (controls.velocity.length() / WALK_SPEED).min(1.4)
     };
     let breathe = (time.elapsed_secs() * 2.0).sin() * 0.012;
-    let dig = game.player().zip(game.current.as_ref()).and_then(|(i, s)| s.agents[i as usize].avatar.dig.as_ref()).map(|d| dig_age(&game, d));
+    let dig = mirror.player().zip(mirror.current.as_ref()).and_then(|(i, s)| s.agents[i as usize].avatar.dig.as_ref()).map(|d| dig_age(&mirror, d));
     let pose = Pose {
         stride: controls.stride,
         speed,
@@ -413,8 +413,8 @@ pub struct Pose {
 const CHOP: f32 = 0.5;
 
 /// Seconds into a dig, at render time.
-pub fn dig_age(game: &crate::lockstep::Game, dig: &sim::settlement::avatar::Dig) -> f32 {
-    let now = game.tick as f32 - 1.0 + game.alpha;
+pub fn dig_age(mirror: &crate::lockstep::WorldMirror, dig: &sim::settlement::avatar::Dig) -> f32 {
+    let now = mirror.tick as f32 - 1.0 + mirror.alpha;
     (now - dig.started as f32).max(0.0) / content::TICKS_PER_SECOND as f32
 }
 

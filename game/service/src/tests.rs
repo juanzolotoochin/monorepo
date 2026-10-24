@@ -198,6 +198,10 @@ fn every_layer_stops_when_the_app_exits() {
         take_life(&mut app),
         ["shutdown W2", "shutdown W1", "shutdown S1", "shutdown A2", "shutdown A1"]
     );
+    // Frames after the exit run no service systems (theirs would find no service).
+    take_ticks(&mut app);
+    app.update();
+    assert!(take_ticks(&mut app).is_empty());
 }
 
 #[test]

@@ -2,6 +2,7 @@
 mod assets;
 mod control;
 mod effects;
+mod flow;
 mod gameplay;
 mod impact;
 mod jetpack;
@@ -24,7 +25,7 @@ mod style;
 mod telemetry;
 
 use bevy::{app::AppExit, prelude::*};
-use service::{Phase, ServicesPlugin};
+use service::{AppServices, Phase, Service, ServicesPlugin, WorldLayer, WorldState};
 use gameplay::*;
 
 fn main() {
@@ -33,13 +34,14 @@ fn main() {
         eprintln!("{error}");
         std::process::exit(2)
     });
-    let mut scenes = assets::SceneLibrary::new();
-    if let Some(index) = options.initial_scene(&scenes).unwrap_or_else(|error| {
-        eprintln!("{error}");
-        std::process::exit(2)
-    }) {
-        scenes.initial = index;
-    }
+    let scenes = assets::SceneLibrary::new();
+    let mut scene = options
+        .initial_scene(&scenes)
+        .unwrap_or_else(|error| {
+            eprintln!("{error}");
+            std::process::exit(2)
+        })
+        .unwrap_or(0);
     let network = network(&args).unwrap_or_else(|error| {
         eprintln!("{error}");
         std::process::exit(2)
@@ -48,11 +50,10 @@ fn main() {
         // Networked games start on the field unless asked otherwise. The host
         // may switch scenes and everyone follows; a client shows whatever
         // scene the host's world is.
-        scenes.initial = scenes.index("field").expect("the field scene exists");
-        scenes.locked = matches!(network, Some(lockstep::Network::Join(_)));
+        scene = scenes.index("field").expect("the field scene exists");
     }
     if let Some(pair) = args.windows(2).find(|pair| pair[0] == "--scene") {
-        scenes.initial = scenes.index(&pair[1]).unwrap_or_else(|error| {
+        scene = scenes.index(&pair[1]).unwrap_or_else(|error| {
             eprintln!("{error}");
             std::process::exit(2)
         });
@@ -61,19 +62,7 @@ fn main() {
         eprintln!("{e}");
         std::process::exit(2)
     });
-    let mut game = lockstep::Game::default();
-    game.network = network;
-    // `--name`, or who is logged in.
-    game.name = args
-        .windows(2)
-        .find(|pair| pair[0] == "--name")
-        .map(|pair| pair[1].clone())
-        .or_else(|| std::env::var("USERNAME").or_else(|_| std::env::var("USER")).ok())
-        .unwrap_or_default();
-    if let Some(pair) = args.windows(2).find(|pair| pair[0] == "--record-input") {
-        game.record = Some(pair[1].clone());
-    }
-    if let Some(pair) = args.windows(2).find(|pair| pair[0] == "--replay-input") {
+    let replay = args.windows(2).find(|pair| pair[0] == "--replay-input").map(|pair| {
         let read = |path: &str| std::fs::read(path).unwrap_or_else(|e| {
             eprintln!("{path}: {e}");
             std::process::exit(2)
@@ -82,10 +71,22 @@ fn main() {
             eprintln!("{}: {e}", pair[1]);
             std::process::exit(2)
         });
-        game.replay = Some((read(&format!("{}.gsav", pair[1])), log));
-    }
-    let mut app = build_app(options, scenes, hub);
-    app.insert_resource(game);
+        (read(&format!("{}.gsav", pair[1])), log)
+    });
+    let launch = flow::Launch {
+        network,
+        scene,
+        // `--name`, or who is logged in.
+        name: args
+            .windows(2)
+            .find(|pair| pair[0] == "--name")
+            .map(|pair| pair[1].clone())
+            .or_else(|| std::env::var("USERNAME").or_else(|_| std::env::var("USER")).ok())
+            .unwrap_or_default(),
+        record: args.windows(2).find(|pair| pair[0] == "--record-input").map(|pair| pair[1].clone()),
+        replay,
+    };
+    let mut app = build_app(options, scenes, hub, launch);
     app.run();
 }
 
@@ -112,17 +113,21 @@ fn network(args: &[String]) -> Result<Option<lockstep::Network>, String> {
     }
 }
 
-/// Writes the recording and leaves the session when the app exits.
-fn on_exit(mut exits: MessageReader<AppExit>, mut game: ResMut<lockstep::Game>) {
-    if exits.read().next().is_some() {
-        game.write_recording();
-        if let Some(session) = game.session.as_mut() {
-            session.shutdown();
-        }
+/// The views that don't have services of their own yet: they live as long
+/// as a world, and run only while it is active.
+#[derive(Resource)]
+struct Views;
+
+impl Service for Views {
+    type Layer = WorldLayer;
+    type Deps = (lockstep::WorldMirror,);
+
+    fn init(_world: &mut World) -> Self {
+        Views
     }
 }
 
-fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: control::Hub) -> App {
+fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: control::Hub, launch: flow::Launch) -> App {
     use bevy::{app::ScheduleRunnerPlugin, time::TimeUpdateStrategy};
     use std::time::Duration;
     let simulation = options.simulation;
@@ -130,8 +135,8 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
     let fps = options.fps();
     let deterministic = simulation || options.script.is_some();
     let mut app = App::new();
-    app.init_resource::<lockstep::Game>()
-        .insert_resource(options)
+    app.insert_resource(options)
+        .insert_resource(launch)
         .insert_resource(hub)
         .init_resource::<control::Video>()
         .insert_resource(ClearColor(Color::srgb(0.018, 0.025, 0.045)))
@@ -211,79 +216,83 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         app.add_systems(Startup, control::setup_render.after(scene::setup));
     }
     // The frame, in the service layers' phases (see
-    // game/docs/proposals/service_layers.md). The phases run in order, so this
-    // is still one chain. Scene setup runs at the start of Input until it
-    // becomes World service init; the camera and peers stay with the mirrors
-    // until they become their own services.
-    app.add_plugins(ServicesPlugin);
-    app.add_systems(
-        Update,
-        (
-            (
-                telemetry::begin,
-                assets::switch_scene,
-                jetpack::scene_changed,
-                palimpsest::setup,
-                style::apply,
-            )
-                .chain(),
-            (piles::setup_scene, settlement::setup, lockstep::build_world).chain(),
-            control::begin,
-            (piles::input, settlement::input, lockstep::mouse_input, lockstep::attack_input)
+    // game/docs/proposals/service_layers.md). Telemetry and the control port
+    // wrap the whole frame; everything else belongs to a service.
+    let active = in_state(WorldState::Active);
+    app.add_plugins(ServicesPlugin)
+        .add_service::<flow::Flow>()
+        .add_service::<lockstep::SessionService>()
+        .add_service::<lockstep::WorldMirror>()
+        .add_service::<Views>()
+        .add_service::<lockstep::PlayerControl>()
+        .add_systems(First, (telemetry::begin, control::begin).chain())
+        .add_systems(
+            Last,
+            ((telemetry::end, control::end).chain(), control::capture_frame.run_if(control::rendered))
                 .chain()
-                .run_if(control::interactive),
-            lockstep::keyboard_input,
-            preview::playback.run_if(control::interactive),
+                .before(service::StopOnExit),
         )
-            .chain()
-            .in_set(Phase::Input),
-    )
-    .add_systems(Update, lockstep::step.in_set(Phase::Step))
-    .add_systems(
-        Update,
-        (
-            lockstep::mirror_settlement,
-            piles::mirror,
-            lockstep::follow_avatar,
-            peers::update.run_if(control::rendered),
-            digging::update,
-            digging::follow_camera,
-            jetpack::update,
-            palimpsest::tick,
-        )
-            .chain()
-            .in_set(Phase::Mirror),
-    )
-    .add_systems(
-        Update,
-        (
-            settlement::tick,
+        .add_service_systems::<Views, _>(
+            Phase::Input,
             (
-                piles::spawn_tosses,
-                piles::update_transit,
-                piles::render,
-                piles::update_display.run_if(control::rendered),
-                piles::showcase.run_if(control::interactive),
+                (assets::switch_scene, jetpack::scene_changed, palimpsest::setup, style::apply).chain(),
+                (piles::setup_scene, settlement::setup).chain(),
             )
-                .chain(),
-            (combat, animate_character, style::select_weapon).chain(),
-            effects::update_effects,
-            effects::camera_feedback.run_if(control::rendered),
-            scene::update_hud.run_if(control::rendered),
-            preview::capture.run_if(control::interactive),
-            lockstep::end_frame,
-            lockstep::end_session,
-            (telemetry::end, control::end).chain(),
-            control::capture_frame.run_if(control::rendered),
+                .chain()
+                .run_if(active.clone()),
         )
-            .chain()
-            .in_set(Phase::Present),
-    );
-    app.add_systems(Last, on_exit);
+        .add_service_systems::<lockstep::PlayerControl, _>(
+            Phase::Input,
+            (
+                (piles::input, settlement::input, lockstep::mouse_input, lockstep::attack_input)
+                    .chain()
+                    .run_if(control::interactive),
+                lockstep::keyboard_input,
+                preview::playback.run_if(control::interactive),
+            )
+                .chain()
+                .run_if(active.clone()),
+        )
+        .add_service_systems::<Views, _>(
+            Phase::Mirror,
+            (
+                lockstep::mirror_settlement,
+                piles::mirror,
+                lockstep::follow_avatar,
+                peers::update.run_if(control::rendered),
+                digging::update,
+                digging::follow_camera,
+                jetpack::update,
+                palimpsest::tick,
+            )
+                .chain()
+                .run_if(active.clone()),
+        )
+        .add_service_systems::<Views, _>(
+            Phase::Present,
+            (
+                settlement::tick,
+                (
+                    piles::spawn_tosses,
+                    piles::update_transit,
+                    piles::render,
+                    piles::update_display.run_if(control::rendered),
+                    piles::showcase.run_if(control::interactive),
+                )
+                    .chain(),
+                (combat, animate_character, style::select_weapon).chain(),
+                effects::update_effects,
+                effects::camera_feedback.run_if(control::rendered),
+                scene::update_hud.run_if(control::rendered),
+                preview::capture.run_if(control::interactive),
+            )
+                .chain()
+                .run_if(active.clone()),
+        );
     if !simulation {
         app.add_systems(
             Update,
-            (draw_navigation, keyboard_actions).run_if(control::interactive),
+            (draw_navigation.run_if(active.clone()), keyboard_actions).run_if(control::interactive),
         )
         .add_systems(
             PostUpdate,
@@ -294,10 +303,34 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
                 nametags::update,
                 digging::feedback,
             )
-                .after(bevy::transform::TransformSystems::Propagate),
+                .after(bevy::transform::TransformSystems::Propagate)
+                .run_if(active),
         );
     }
     app
+}
+
+/// Builds the app as `run` would, for tests that drive frames by hand:
+/// finishing the plugins attaches each service's systems to its layer.
+#[cfg(test)]
+fn test_app(options: control::Options, scenes: assets::SceneLibrary, hub: control::Hub, launch: flow::Launch) -> App {
+    let mut app = build_app(options, scenes, hub, launch);
+    app.finish();
+    app.cleanup();
+    app
+}
+
+/// Runs frames until the launch's world is up and its views are set up.
+#[cfg(test)]
+fn start_world(app: &mut App) {
+    for _ in 0..20 {
+        app.update();
+        let active = app.world().get_resource::<State<WorldState>>().is_some_and(|s| *s.get() == WorldState::Active);
+        if active && app.world().resource::<assets::SceneLibrary>().current != usize::MAX {
+            return;
+        }
+    }
+    panic!("the world never started");
 }
 
 fn keyboard_actions(

@@ -16,7 +16,7 @@ pub fn showcase(
     time: Res<Time>,
     mut preview: Local<HaulPreview>,
     lab: Res<PileLab>,
-    mut game: ResMut<Game>,
+    mut service: ResMut<SessionService>,
     mut exit: MessageWriter<bevy::app::AppExit>,
 ) {
     use bevy::render::view::screenshot::{save_to_disk, Screenshot};
@@ -48,16 +48,16 @@ pub fn showcase(
             commands.spawn(Screenshot::primary_window()).observe(save_to_disk(format!("{dir}/{name}.png")));
         }
     };
-    let idle = lab.job.is_none() && game.caught_up();
+    let idle = lab.job.is_none() && service.caught_up();
     match preview.stage {
         0 if preview.stage_age > 3.0 => {
-            game.command(sim::CommandKind::Dispense { dispenser: 0, units: 20 });
+            service.command(sim::CommandKind::Dispense { dispenser: 0, units: 20 });
             preview.stage = 1;
             preview.stage_age = 0.0;
         }
         1 if preview.stage_age > 1.0 => {
             capture(&mut commands, "overview", &preview.directory);
-            haul(&mut game, PileAction::Pickup(0), 0.18, None);
+            haul(&mut service, PileAction::Pickup(0), 0.18, None);
             preview.stage = 2;
             preview.stage_age = 0.0;
         }
@@ -67,8 +67,8 @@ pub fn showcase(
             preview.stage_age = 0.0;
         }
         3 if preview.stage_age > 1.0 => {
-            let drop = game.to_sim(Vec3::new(4.0, 0.0, 4.5));
-            haul(&mut game, PileAction::Drop(drop), 0.18, None);
+            let drop = service.to_sim(Vec3::new(4.0, 0.0, 4.5));
+            haul(&mut service, PileAction::Drop(drop), 0.18, None);
             preview.stage = 4;
             preview.stage_age = 0.0;
         }

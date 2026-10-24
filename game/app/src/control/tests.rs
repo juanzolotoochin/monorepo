@@ -18,10 +18,9 @@ fn run_at(steps: Vec<Command>, fps: u32) -> Value {
         script: Some(script),
         ..default()
     };
-    let mut scenes = SceneLibrary::new();
-    scenes.initial = 2;
+    let scenes = SceneLibrary::new();
     let hub = Hub::new(options.clone()).unwrap();
-    let mut app = crate::build_app(options, scenes, hub);
+    let mut app = crate::test_app(options, scenes, hub, crate::flow::Launch::single_player(2));
     for _ in 0..1300 {
         app.update();
         let world = app.world_mut();
@@ -188,11 +187,10 @@ fn space_lifts_and_releases_and_scene_switch_restores_deck() {
         simulation: true,
         ..default()
     };
-    let mut scenes = SceneLibrary::new();
-    scenes.initial = 3;
+    let scenes = SceneLibrary::new();
     let hub = Hub::new(options.clone()).unwrap();
-    let mut app = crate::build_app(options, scenes, hub);
-    app.update();
+    let mut app = crate::test_app(options, scenes, hub, crate::flow::Launch::single_player(3));
+    crate::start_world(&mut app);
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(KeyCode::Space);
