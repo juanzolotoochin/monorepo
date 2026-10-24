@@ -10,6 +10,7 @@ mod lockstep;
 mod digging;
 mod nametags;
 mod navigation;
+mod obstacles;
 mod palimpsest;
 mod peers;
 mod pile_model;

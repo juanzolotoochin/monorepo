@@ -132,19 +132,15 @@ pub fn setup(world: &mut World) {
             world.entity_mut(e).insert(Cable(i));
         }
     }
-    for n in -18..=18 {
-        let z = n as f32 * 0.45;
-        let door = z.abs() < 1.15;
+    for (disc, door) in crate::obstacles::memory_wall() {
+        let z = disc.center.z;
         let e = block(
             world,
             Vec3::new(2.0, if door { 1.1 } else { 0.45 }, z),
             Vec3::new(0.25, if door { 2.2 } else { 0.9 }, 0.44),
             if door { blue.clone() } else { metal.clone() },
         );
-        world.entity_mut(e).insert(Obstacle(Disc {
-            center: Vec3::new(2.0, 0.0, z),
-            radius: 0.24,
-        }));
+        world.entity_mut(e).insert(Obstacle(disc));
         if door {
             world.entity_mut(e).insert(Door);
         }

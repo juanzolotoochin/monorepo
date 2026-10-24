@@ -10,7 +10,8 @@ use bevy::{
 };
 use std::{collections::HashMap, sync::Arc};
 use voxel_assets::{
-    content_key, generate_boulder, Collision, Geometry, Material, MeshData, Model, SceneFeature, ScenePack,
+    content_key, generate_boulder, BoulderRecipe, Collision, Geometry, Instance, Material, MeshData, Model, Prefab,
+    SceneFeature, ScenePack,
 };
 
 #[derive(Component)]
@@ -89,6 +90,29 @@ struct CachedModel {
 pub struct ModelCache {
     models: HashMap<String, CachedModel>,
     pub runtime_generations: usize,
+}
+impl ModelCache {
+    /// The collision radius of an instance's model, before scaling. The model
+    /// is cached once `switch_scene` has loaded the scene.
+    pub fn collision_radius(&self, pack: &ScenePack, instance: &Instance) -> f32 {
+        let prefab = pack.prefabs.iter().find(|p| p.id == instance.prefab).expect("validated prefab reference");
+        self.models[&model_key(prefab, instance).0].collision.radius
+    }
+}
+/// The cache key of an instance's model, and the recipe to generate it if
+/// it is a runtime boulder.
+fn model_key(prefab: &Prefab, instance: &Instance) -> (String, Option<BoulderRecipe>) {
+    match &prefab.geometry {
+        Geometry::Baked(_) => (format!("baked:{}", prefab.geometry_key), None),
+        Geometry::Runtime(recipe) => {
+            let recipe = instance
+                .parameters
+                .as_ref()
+                .map_or_else(|| Ok(recipe.clone()), |p| p.apply(recipe))
+                .expect("validated runtime parameters");
+            (format!("runtime:{}", content_key(&recipe)), Some(recipe))
+        }
+    }
 }
 pub(crate) fn standard(material: &Material) -> StandardMaterial {
     StandardMaterial {
@@ -204,17 +228,7 @@ pub fn switch_scene(
             .iter()
             .find(|p| p.id == instance.prefab)
             .expect("validated prefab reference");
-        let (key, recipe) = match &prefab.geometry {
-            Geometry::Baked(_) => (format!("baked:{}", prefab.geometry_key), None),
-            Geometry::Runtime(recipe) => {
-                let recipe = instance
-                    .parameters
-                    .as_ref()
-                    .map_or_else(|| Ok(recipe.clone()), |p| p.apply(recipe))
-                    .expect("validated runtime parameters");
-                (format!("runtime:{}", content_key(&recipe)), Some(recipe))
-            }
-        };
+        let (key, recipe) = model_key(prefab, instance);
         if !cache.models.contains_key(&key) {
             let model = if let Some(recipe) = recipe {
                 cache.runtime_generations += 1;

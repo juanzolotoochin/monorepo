@@ -2,7 +2,6 @@
 use crate::{
     assets::SceneLibrary,
     gameplay::{Controls, Obstacle},
-    navigation::Disc,
     sound::{Cue, Sound},
 };
 use bevy::prelude::*;
