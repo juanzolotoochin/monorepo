@@ -25,10 +25,10 @@ fn run_at(steps: Vec<Command>, fps: u32) -> Value {
         app.update();
         let world = app.world_mut();
         let p = player_position(world);
-        let library = world.resource::<SceneLibrary>();
-        if library.current == 3 {
+        let view = world.get_resource::<crate::scene_view::SceneView>();
+        if let Some(view) = view.filter(|view| view.index == 3) {
             assert!(
-                crate::jetpack::height(library, p).is_none_or(|y| p.y >= y - 0.025),
+                crate::jetpack::height(&view.pack, p).is_none_or(|y| p.y >= y - 0.025),
                 "player entered terrain: {p:?}"
             );
         }
@@ -214,8 +214,7 @@ fn space_lifts_and_releases_and_scene_switch_restores_deck() {
     assert!(player_position(app.world_mut()).y.abs() < 0.01);
     assert!(!app.world().resource::<crate::jetpack::Flight>().airborne);
     for index in [0, 3, 1, 3, 2] {
-        app.world_mut().resource_mut::<SceneLibrary>().requested = Some(index);
-        app.update();
+        crate::switch_world(&mut app, index);
         let world = app.world_mut();
         assert!(!world.resource::<crate::jetpack::Flight>().requested);
         let count = world

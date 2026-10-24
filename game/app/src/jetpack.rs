@@ -1,5 +1,5 @@
 //! Terrain-aware hover flight. The same controller runs for keyboard and scripted demos.
-use crate::assets::SceneLibrary;
+use crate::scene_view::SceneView;
 use bevy::prelude::*;
 
 pub const HOVER: f32 = 1.8;
@@ -18,8 +18,9 @@ pub struct TerrainVisual;
 #[derive(Component)]
 pub struct Exhaust;
 
-pub fn height(library: &SceneLibrary, p: Vec3) -> Option<f32> {
-    let pack = library.scenes.get(library.current)?;
+/// The ground's height under `p` in a scene: walkable surfaces, or for a
+/// scene with terrain, its platforms.
+pub fn height(pack: &voxel_assets::ScenePack, p: Vec3) -> Option<f32> {
     let scene = &pack.scene;
     let surface = pack
         .environment
@@ -40,7 +41,7 @@ pub fn height(library: &SceneLibrary, p: Vec3) -> Option<f32> {
 }
 pub fn scene_changed(
     mut commands: Commands,
-    library: Res<SceneLibrary>,
+    scene: Res<SceneView>,
     mut flight: ResMut<Flight>,
     mut deck: Query<&mut Visibility, With<Deck>>,
     old: Query<Entity, With<TerrainVisual>>,
@@ -48,19 +49,22 @@ pub fn scene_changed(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut cache: Local<Option<(Handle<Mesh>, [Handle<StandardMaterial>; 3])>>,
 ) {
-    if flight.current == Some(library.current) {
+    if flight.current == Some(scene.index) {
         return;
     }
     *flight = Flight {
-        current: Some(library.current),
+        current: Some(scene.index),
         ..default()
     };
     for e in &old {
         commands.entity(e).despawn();
     }
-    let terrain = &library.scenes[library.current].scene.terrain;
+    let terrain = &scene.scene().terrain;
+    // The built-in deck shows only where the scene brings no ground of its
+    // own, as `style::apply` decides too.
+    let own_ground = terrain.is_some() || scene.pack.environment.is_some();
     for mut visibility in &mut deck {
-        *visibility = if terrain.is_some() {
+        *visibility = if own_ground {
             Visibility::Hidden
         } else {
             Visibility::Inherited
@@ -181,16 +185,16 @@ pub fn cursor_surface(
     camera: &Camera,
     transform: &GlobalTransform,
     window: &Window,
-    library: &SceneLibrary,
+    scene: &SceneView,
     service: &crate::lockstep::SessionService,
 ) -> Option<Vec3> {
     let ray = camera
         .viewport_to_world(transform, window.cursor_position()?)
         .ok()?;
-    if library.has_feature(voxel_assets::SceneFeature::Digging) {
+    if scene.has_feature(voxel_assets::SceneFeature::Digging) {
         return crate::digging::ground_hit(ray, service);
     }
-    let Some(terrain) = &library.scenes[library.current].scene.terrain else {
+    let Some(terrain) = &scene.scene().terrain else {
         return crate::gameplay::cursor_ground(camera, transform, window);
     };
     terrain

@@ -12,7 +12,7 @@ use sim::settlement::avatar::Swing;
 use crate::gameplay::{Attack, Part, PartKind, Player, Pose, ATTACK_END, REBOUND_END, WALK_SPEED};
 use crate::jetpack::Exhaust;
 use crate::lockstep::WorldMirror;
-use crate::style::{ActiveStyle, WeaponVisual};
+use crate::style::WeaponVisual;
 
 #[derive(Component)]
 pub struct Peer {
@@ -72,7 +72,7 @@ fn attack(swing: &Swing, ticks: f32) -> Option<Attack> {
 pub fn update(
     mut commands: Commands,
     mirror: Res<WorldMirror>,
-    style: Res<ActiveStyle>,
+    scene: Res<crate::scene_view::SceneView>,
     time: Res<Time>,
     sound: Res<crate::sound::Sound>,
     player: Single<Entity, With<Player>>,
@@ -93,7 +93,7 @@ pub fn update(
     let mut poses = Vec::new();
     let mut shown = Vec::new();
     for (entity, mut peer, mut transform) in &mut peers {
-        if !others.contains(&peer.agent) || peer.style != style.current() {
+        if !others.contains(&peer.agent) || peer.style != Some(scene.index) {
             commands.entity(entity).despawn();
             continue;
         }
@@ -148,15 +148,12 @@ pub fn update(
             *visibility = if weapon.0 == held { Visibility::Inherited } else { Visibility::Hidden };
         }
     }
-    // The player's suit is only complete once the scene's style dresses it.
-    if style.current().is_none() {
-        return;
-    }
-    let (player, style) = (*player, style.current());
+    // The world's scene dressed the player's suit when it started.
+    let (player, style) = (*player, Some(scene.index));
     for agent in others.into_iter().filter(|a| !shown.contains(a)) {
         commands.queue(move |world: &mut World| {
             let root = copy(world, player, None);
-            world.entity_mut(root).insert(Peer { agent, style, stride: 0.0, heard: 0, foot_distance: 0.0 });
+            world.entity_mut(root).insert((Peer { agent, style, stride: 0.0, heard: 0, foot_distance: 0.0 }, service::WorldScoped::default()));
         });
     }
 }

@@ -1,5 +1,6 @@
 //! Data-driven visual styles. Compiled geometry and material handles survive scene switches.
-use crate::{assets::SceneLibrary, gameplay::Obstacle, navigation::Disc};
+use crate::{gameplay::Obstacle, navigation::Disc};
+use service::WorldScoped;
 use bevy::{
     pbr::{DistanceFog, FogFalloff},
     post_process::bloom::Bloom,
@@ -7,18 +8,11 @@ use bevy::{
 };
 use std::collections::HashMap;
 use voxel_assets::content_key;
+/// Uploaded style geometry and palettes, kept across worlds.
 #[derive(Resource, Default)]
 pub struct ActiveStyle {
-    current: Option<usize>,
     cache: HashMap<String, Vec<(Handle<Mesh>, Handle<StandardMaterial>)>>,
     palettes: HashMap<String, Vec<Handle<StandardMaterial>>>,
-}
-
-impl ActiveStyle {
-    /// The scene whose style the player wears.
-    pub fn current(&self) -> Option<usize> {
-        self.current
-    }
 }
 #[derive(Resource)]
 pub struct MaterialBindings(pub Vec<(Handle<StandardMaterial>, String, StandardMaterial)>);
@@ -41,12 +35,10 @@ struct StyleLabel;
 fn color(c: [f32; 3]) -> Color {
     Color::srgb(c[0], c[1], c[2])
 }
-pub fn apply(world: &mut World) {
-    let index = world.resource::<SceneLibrary>().current;
-    if world.resource::<ActiveStyle>().current == Some(index) {
-        return;
-    }
-    let scene = &world.resource::<SceneLibrary>().scenes[index];
+/// Dresses a world in its scene's style: materials, lights, fog, the
+/// environment and the player's styled parts. Runs when the world starts
+/// (see `SceneView`), after the player's body exists.
+pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack) {
     let styled = scene.scene.style.is_some();
     let profile = scene.scene.style.clone().unwrap_or_default();
     let environment = scene.environment.clone();
@@ -85,20 +77,6 @@ pub fn apply(world: &mut World) {
             "RMB MOVE / SHIFT+LMB STRIKE"
         }
         .into();
-    }
-    let old_actors: Vec<_> = world
-        .query_filtered::<Entity, With<StyledActor>>()
-        .iter(world)
-        .collect();
-    for e in old_actors {
-        world.despawn(e);
-    }
-    let old: Vec<_> = world
-        .query_filtered::<Entity, With<Environment>>()
-        .iter(world)
-        .collect();
-    for e in old {
-        world.despawn(e);
     }
     for mut visibility in world
         .query_filtered::<&mut Visibility, With<crate::jetpack::Deck>>()
@@ -195,6 +173,7 @@ pub fn apply(world: &mut World) {
             let e = world
                 .spawn((
                     Environment,
+                    WorldScoped::default(),
                     Mesh3d(mesh),
                     MeshMaterial3d(material),
                     Transform::default(),
@@ -210,6 +189,7 @@ pub fn apply(world: &mut World) {
         for (position, radius) in environment.obstacles {
             world.spawn((
                 Environment,
+                WorldScoped::default(),
                 Obstacle(Disc {
                     center: Vec3::from_array(position),
                     radius,
@@ -321,15 +301,9 @@ pub fn apply(world: &mut World) {
     {
         label.0 = profile.weapon_name.clone();
     }
-    let labels: Vec<_> = world
-        .query_filtered::<Entity, With<StyleLabel>>()
-        .iter(world)
-        .collect();
-    for e in labels {
-        world.despawn(e);
-    }
     world.spawn((
         StyleLabel,
+        WorldScoped::default(),
         Text::new(format!(
             "STYLE {}  /  {:.0} VOXELS PER METER",
             profile.id.to_uppercase(),
@@ -347,7 +321,6 @@ pub fn apply(world: &mut World) {
             ..default()
         },
     ));
-    world.resource_mut::<ActiveStyle>().current = Some(index);
 }
 
 pub fn select_weapon(
@@ -416,7 +389,7 @@ fn spawn_light(
         world.entity_mut(e).insert(StyledActor);
         world.entity_mut(parent).add_child(e);
     } else {
-        world.entity_mut(e).insert(Environment);
+        world.entity_mut(e).insert((Environment, WorldScoped::default()));
     }
 }
 pub(crate) fn upload(
@@ -477,9 +450,10 @@ fn world_position(world: &World, mut entity: Entity) -> Vec3 {
     p
 }
 pub fn snapshot(world: &mut World) -> serde_json::Value {
-    let library = world.resource::<SceneLibrary>();
     // Nothing is shown before the first world starts.
-    let Some(pack) = library.scenes.get(library.current) else { return serde_json::Value::Null };
+    let Some(pack) = world.get_resource::<crate::scene_view::SceneView>().map(|view| view.pack.clone()) else {
+        return serde_json::Value::Null;
+    };
     let p = pack.scene.style.clone().unwrap_or_default();
     let mut info = serde_json::json!({"id":p.id,"voxel_size":p.voxel_size,"voxels_per_meter":1.0/p.voxel_size,"palette":p.materials.iter().map(|m| &m.name).collect::<Vec<_>>(),"environment_statistics":pack.environment.as_ref().map(|e|e.statistics),"baked":pack.environment.is_some(),"actor_voxel_size":p.actor_voxel_size,"actor_parts":pack.actor.iter().map(|a|a.part).collect::<Vec<_>>(),"weapon":p.weapon_name,"fixture_lights":pack.environment.as_ref().map(|e|&e.lights),"sun_shadows":p.sun_shadows,"exposure_ev100":p.exposure_ev100});
     let moving:Vec<_>=world.query_filtered::<Entity,With<StyledActor>>().iter(world).filter_map(|e| {
@@ -493,6 +467,7 @@ pub fn snapshot(world: &mut World) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assets::SceneLibrary;
     #[test]
     fn scene_styles_restore_materials_and_lights_and_reuse_uploaded_assets() {
         let options = crate::control::Options {
@@ -511,8 +486,7 @@ mod tests {
             .collect();
         let mut counts = None;
         for index in [5, 0, 5, 0, 5] {
-            app.world_mut().resource_mut::<SceneLibrary>().requested = Some(index);
-            app.update();
+            crate::switch_world(&mut app, index);
             let world = app.world_mut();
             let info = snapshot(world);
             assert_eq!(

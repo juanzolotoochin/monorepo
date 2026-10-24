@@ -31,6 +31,7 @@ use sim::{CommandKind, World as SimWorld};
 use crate::assets::SceneLibrary;
 use crate::flow::Flow;
 use crate::gameplay::{Controls, Player};
+use crate::scene_view::SceneView;
 
 /// The world seed. Scenes don't use randomness outside combat rolls, which are
 /// keyed on ticks and IDs, so one seed serves every scene.
@@ -156,7 +157,8 @@ impl Service for SessionService {
     }
 
     fn systems(app: &mut App) {
-        app.add_service_systems::<Self, _>(Phase::Step, (load_requested, step).chain())
+        app.add_service_systems::<Self, _>(Phase::Input, scene_keys)
+            .add_service_systems::<Self, _>(Phase::Step, (load_requested, step).chain())
             .add_service_systems::<Self, _>(Phase::Mirror, watch_world)
             .add_service_systems::<Self, _>(Phase::Present, end_session);
     }
@@ -312,7 +314,7 @@ fn scene_setup(library: &SceneLibrary, index: usize, cache: &crate::assets::Mode
     };
     SceneSetup {
         scenario: scene.scenario.clone(),
-        extent: q(library.extent_of(index)),
+        extent: q(crate::assets::extent(pack)),
         obstacles: found.discs.iter().map(disc).collect(),
         doors: found.doors.iter().map(disc).collect(),
         surfaces,
@@ -327,6 +329,28 @@ fn scene_setup(library: &SceneLibrary, index: usize, cache: &crate::assets::Mode
         memory_trial: scene.features.contains(&voxel_assets::SceneFeature::MemoryTrial),
         diggable: scene.features.contains(&voxel_assets::SceneFeature::Digging),
         mine: scene.mine.as_ref().map(|m| m.seed),
+    }
+}
+
+/// The digit keys ask to move everyone to a scene (a host's request; see
+/// `SessionService::request_scene`).
+fn scene_keys(keys: Res<ButtonInput<KeyCode>>, library: Res<SceneLibrary>, mut service: ResMut<SessionService>) {
+    const KEYS: [KeyCode; 10] = [
+        KeyCode::Digit1,
+        KeyCode::Digit2,
+        KeyCode::Digit3,
+        KeyCode::Digit4,
+        KeyCode::Digit5,
+        KeyCode::Digit6,
+        KeyCode::Digit7,
+        KeyCode::Digit8,
+        KeyCode::Digit9,
+        KeyCode::Digit0,
+    ];
+    let Some(index) = KEYS.iter().position(|&key| keys.just_pressed(key)) else { return };
+    let current = service.scene_label().and_then(|label| library.index(label).ok());
+    if current != Some(index) && index < library.scenes.len() {
+        service.request_scene(index);
     }
 }
 
@@ -503,7 +527,8 @@ fn stable_id() -> net::StableId {
 pub struct WorldMirror {
     /// The session's world these ticks come from.
     world_number: u32,
-    /// The scene the views show (an index into the `SceneLibrary`).
+    /// The world's scene (an index into the `SceneLibrary`), from the
+    /// session's label; `usize::MAX` if the label names no known scene.
     pub scene: usize,
     /// The last two ticks' settlements, for interpolation.
     pub previous: Option<SimSettlement>,
@@ -537,12 +562,8 @@ impl Service for WorldMirror {
             me: service.session.player().unwrap_or(net::HOST_PLAYER),
         };
         // The views show the world's scene, on the host and on clients.
-        let mut library = world.resource_mut::<SceneLibrary>();
-        match label.as_deref().map(|label| library.index(label)) {
-            Some(Ok(index)) => {
-                library.requested = Some(index);
-                WorldMirror { scene: index, ..mirror }
-            }
+        match label.as_deref().map(|label| world.resource::<SceneLibrary>().index(label)) {
+            Some(Ok(index)) => WorldMirror { scene: index, ..mirror },
             Some(Err(e)) => {
                 warn!("the session's world: {e}");
                 mirror
@@ -718,10 +739,10 @@ fn angle_between(from: f32, to: f32) -> f32 {
 pub fn mirror_settlement(
     mirror: Res<WorldMirror>,
     service: Res<SessionService>,
-    library: Res<SceneLibrary>,
+    scene: Res<SceneView>,
     mut settlement: ResMut<crate::settlement::Settlement>,
 ) {
-    let (Some(current), Some(scenario)) = (&mirror.current, library.scenes.get(library.current).and_then(|p| p.scene.scenario.as_ref())) else {
+    let (Some(current), Some(scenario)) = (&mirror.current, scene.scene().scenario.as_ref()) else {
         settlement.simulation = None;
         return;
     };
@@ -777,7 +798,7 @@ pub fn mouse_input(
     time: Res<Time>,
     camera: Single<(&Camera, &GlobalTransform)>,
     window: Single<&Window>,
-    library: Res<SceneLibrary>,
+    scene: Res<SceneView>,
     mut controls: ResMut<Controls>,
     mut service: ResMut<SessionService>,
     mut control: ResMut<PlayerControl>,
@@ -786,7 +807,7 @@ pub fn mouse_input(
     controls.repath -= time.delta_secs();
     if buttons.pressed(MouseButton::Right) && controls.attack.is_none() && controls.repath <= 0.0 {
         controls.repath = 0.12;
-        if let Some(point) = crate::jetpack::cursor_surface(camera.0, camera.1, &window, &library, &service) {
+        if let Some(point) = crate::jetpack::cursor_surface(camera.0, camera.1, &window, &scene, &service) {
             if controls.route.last().is_none_or(|last| crate::navigation::flat(*last - point).length() > 0.25) {
                 control.go_to(&mut service, point, run);
             }
@@ -800,14 +821,14 @@ pub fn attack_input(
     buttons: Res<ButtonInput<MouseButton>>,
     camera: Single<(&Camera, &GlobalTransform)>,
     window: Single<&Window>,
-    library: Res<SceneLibrary>,
+    scene: Res<SceneView>,
     player: Single<&Transform, With<Player>>,
     mut controls: ResMut<Controls>,
     mut service: ResMut<SessionService>,
     mut control: ResMut<PlayerControl>,
 ) {
     use content::scenario::Weapon;
-    if let Some(scenario) = library.scenes[library.current].scene.scenario.as_ref() {
+    if let Some(scenario) = scene.scene().scenario.as_ref() {
         for (key, weapon) in [(KeyCode::KeyZ, Weapon::Sword), (KeyCode::KeyX, Weapon::Spear), (KeyCode::KeyC, Weapon::Bow), (KeyCode::KeyV, Weapon::ArcCoil)] {
             if keys.just_pressed(key) && scenario.weapons.contains(&weapon) {
                 controls.weapon = weapon;
@@ -819,7 +840,7 @@ pub fn attack_input(
     if !(shift && buttons.just_pressed(MouseButton::Left)) {
         return;
     }
-    if let Some(point) = crate::jetpack::cursor_surface(camera.0, camera.1, &window, &library, &service) {
-        control.strike(&mut service, &mut controls, &library.scenes[library.current], point - player.translation);
+    if let Some(point) = crate::jetpack::cursor_surface(camera.0, camera.1, &window, &scene, &service) {
+        control.strike(&mut service, &mut controls, &scene.pack, point - player.translation);
     }
 }

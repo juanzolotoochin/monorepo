@@ -205,6 +205,29 @@ fn every_layer_stops_when_the_app_exits() {
 }
 
 #[test]
+fn scoped_entities_go_with_their_layer() {
+    let mut app = layered();
+    into_world(&mut app);
+    let world_entity = app.world_mut().spawn(WorldScoped::default()).id();
+    let session_entity = app.world_mut().spawn(SessionScoped::default()).id();
+    let loose = app.world_mut().spawn_empty().id();
+    // Back to the lobby: the world's entities go, the session's stay.
+    set(&mut app, WorldState::Off);
+    app.update();
+    assert!(app.world().get_entity(world_entity).is_err());
+    assert!(app.world().get_entity(session_entity).is_ok());
+    // A world that stops while still loading takes its entities too.
+    set(&mut app, WorldState::Loading);
+    app.update();
+    let loading = app.world_mut().spawn(WorldScoped::default()).id();
+    set(&mut app, SessionState::Off);
+    app.update();
+    assert!(app.world().get_entity(loading).is_err());
+    assert!(app.world().get_entity(session_entity).is_err());
+    assert!(app.world().get_entity(loose).is_ok());
+}
+
+#[test]
 #[should_panic(expected = "which is registered after it")]
 fn a_dependency_registered_later_panics() {
     let mut app = app();

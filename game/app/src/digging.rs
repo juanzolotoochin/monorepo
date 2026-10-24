@@ -17,7 +17,7 @@ use sim::mine::STEP;
 use sim::settlement::avatar::Dig;
 use sim::terrain::{Terrain, LAYER, MAX_LAYERS};
 
-use crate::assets::SceneLibrary;
+use crate::scene_view::SceneView;
 use crate::effects::{CameraRig, FxAssets};
 use crate::gameplay::Player;
 use crate::jetpack::Deck;
@@ -69,14 +69,14 @@ pub fn update(
     mut commands: Commands,
     service: Res<SessionService>,
     mirror: Res<WorldMirror>,
-    library: Res<SceneLibrary>,
+    scene: Res<SceneView>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut deck: Query<&mut Visibility, With<Deck>>,
     chunks: Query<(Entity, &GroundChunk)>,
     mut drawn: Local<Drawn>,
 ) {
-    let terrain = service.world().map(sim::World::terrain).filter(|_| library.has_feature(SceneFeature::Digging));
+    let terrain = service.world().map(sim::World::terrain).filter(|_| scene.has_feature(SceneFeature::Digging));
     let Some(terrain) = terrain else {
         if drawn.world.take().is_some() {
             for (entity, _) in &chunks {
@@ -96,11 +96,11 @@ pub fn update(
         .get_or_insert_with(|| materials.add(StandardMaterial { base_color: Color::WHITE, perceptual_roughness: 0.93, ..default() }))
         .clone();
     let mut dirty = BTreeSet::new();
-    if drawn.world != Some((library.current, center)) {
+    if drawn.world != Some((scene.index, center)) {
         for (entity, _) in &chunks {
             commands.entity(entity).despawn();
         }
-        drawn.world = Some((library.current, center));
+        drawn.world = Some((scene.index, center));
         drawn.pits = terrain.pits.clone();
         let count = (2 * extent + 1 + CHUNK - 1) / CHUNK;
         for y in 0..count {
@@ -259,13 +259,13 @@ impl MeshBuilder {
 /// elsewhere it stays where the scene put it.
 pub fn follow_camera(
     time: Res<Time>,
-    library: Res<SceneLibrary>,
+    scene: Res<SceneView>,
     player: Single<&Transform, With<Player>>,
     mut rig: Single<&mut CameraRig>,
     mut home: Local<Option<(Vec3, Vec3)>>,
 ) {
     let (base, target) = *home.get_or_insert((rig.base, rig.target));
-    if !library.has_feature(SceneFeature::Digging) {
+    if !scene.has_feature(SceneFeature::Digging) {
         if rig.base != base || rig.target != target {
             rig.base = base;
             rig.target = target;

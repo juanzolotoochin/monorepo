@@ -530,7 +530,7 @@ pub fn draw_navigation(
     controls: Res<Controls>,
     player: Single<&Transform, With<Player>>,
     mut gizmos: Gizmos,
-    library: Res<crate::assets::SceneLibrary>,
+    scene: Res<crate::scene_view::SceneView>,
     flight: Res<crate::jetpack::Flight>,
     time: Res<Time>,
 ) {
@@ -540,7 +540,7 @@ pub fn draw_navigation(
         let waypoint = |p: Vec3| {
             Vec3::new(
                 p.x,
-                crate::jetpack::height(&library, p).unwrap_or(flight.support)
+                crate::jetpack::height(&scene.pack, p).unwrap_or(flight.support)
                     + if flight.airborne {
                         crate::jetpack::HOVER
                     } else {

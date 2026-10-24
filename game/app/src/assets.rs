@@ -1,7 +1,7 @@
 //! Bevy adapter for baked prefabs and the shared runtime boulder generator.
 use crate::{
     effects::Feedback,
-    gameplay::{Controls, Obstacle, Player},
+    gameplay::{Controls, Obstacle},
     impact::{self, ImpactSlot, ImpactTarget, Surface},
     navigation::Disc,
 };
@@ -11,70 +11,53 @@ use bevy::{
 use std::{collections::HashMap, sync::Arc};
 use voxel_assets::{
     content_key, generate_boulder, BoulderRecipe, Collision, Geometry, Instance, Material, MeshData, Model, Prefab,
-    SceneFeature, ScenePack,
+    ScenePack,
 };
+use service::WorldScoped;
 
 #[derive(Component)]
 pub struct BoulderInstance;
 #[derive(Component)]
 pub struct SampleCaption(Vec3);
-#[derive(Component)]
-pub struct IndustrialProp(pub Disc);
+/// Every scene the game ships, decoded once.
 #[derive(Resource)]
 pub struct SceneLibrary {
-    pub scenes: Vec<ScenePack>,
-    /// The scene the views show.
-    pub current: usize,
-    /// The scene the views switch to next (the session's world's scene).
-    pub requested: Option<usize>,
+    pub scenes: Vec<Arc<ScenePack>>,
 }
 impl SceneLibrary {
     pub fn new() -> Self {
-        let scenes = vec![
-                ScenePack::decode(mining_deck::PACK_BYTES)
-                    .expect("validated mining deck asset pack"),
-                ScenePack::decode(boulder_lab::PACK_BYTES)
-                    .expect("validated boulder lab asset pack"),
-                ScenePack::decode(pile_lab::PACK_BYTES).expect("validated pile lab asset pack"),
-                ScenePack::decode(jetpack_lab::PACK_BYTES)
-                    .expect("validated jetpack lab asset pack"),
-                ScenePack::decode(surprise_lab::PACK_BYTES)
-                    .expect("validated field trial asset pack"),
-                ScenePack::decode(atlantis::PACK_BYTES).expect("validated Atlantis asset pack"),
-                ScenePack::decode(forest_outpost::PACK_BYTES).expect("validated forest asset pack"),
-                ScenePack::decode(combat_arena::PACK_BYTES).expect("validated combat asset pack"),
-                ScenePack::decode(dig_lab::PACK_BYTES).expect("validated dig lab asset pack"),
-                ScenePack::decode(field::PACK_BYTES).expect("validated field asset pack"),
-            ];
+        let scenes: Vec<_> = [
+            ScenePack::decode(mining_deck::PACK_BYTES).expect("validated mining deck asset pack"),
+            ScenePack::decode(boulder_lab::PACK_BYTES).expect("validated boulder lab asset pack"),
+            ScenePack::decode(pile_lab::PACK_BYTES).expect("validated pile lab asset pack"),
+            ScenePack::decode(jetpack_lab::PACK_BYTES).expect("validated jetpack lab asset pack"),
+            ScenePack::decode(surprise_lab::PACK_BYTES).expect("validated field trial asset pack"),
+            ScenePack::decode(atlantis::PACK_BYTES).expect("validated Atlantis asset pack"),
+            ScenePack::decode(forest_outpost::PACK_BYTES).expect("validated forest asset pack"),
+            ScenePack::decode(combat_arena::PACK_BYTES).expect("validated combat asset pack"),
+            ScenePack::decode(dig_lab::PACK_BYTES).expect("validated dig lab asset pack"),
+            ScenePack::decode(field::PACK_BYTES).expect("validated field asset pack"),
+        ]
+        .into_iter()
+        .map(Arc::new)
+        .collect();
         let mut ids = std::collections::HashSet::new();
         for pack in &scenes {
             assert!(ids.insert(pack.scene.id.as_str()), "duplicate scene id {}", pack.scene.id);
         }
-        Self {
-            scenes,
-            current: usize::MAX,
-            requested: None,
-        }
+        Self { scenes }
     }
     pub fn index(&self, id: &str) -> Result<usize, String> {
         self.scenes.iter().position(|pack| pack.scene.id == id)
             .ok_or_else(|| format!("Unknown scene {id}"))
     }
-    pub fn has_feature(&self, feature: SceneFeature) -> bool {
-        self.scenes.get(self.current).is_some_and(|pack| pack.scene.features.contains(&feature))
+}
+/// A scene's half-width in meters.
+pub fn extent(pack: &ScenePack) -> f32 {
+    if let Some(mine) = &pack.scene.mine {
+        return mine.extent;
     }
-    pub fn extent_of(&self, index: usize) -> f32 {
-        let Some(scene) = self.scenes.get(index).map(|s| &s.scene) else { return 8. };
-        if let Some(mine) = &scene.mine {
-            return mine.extent;
-        }
-        scene.scenario.as_ref().map_or(8., |s| s.extent.to_f32())
-    }
-    pub fn title(&self) -> &str {
-        self.scenes
-            .get(self.current)
-            .map_or("LOADING", |s| s.scene.name.as_str())
-    }
+    pack.scene.scenario.as_ref().map_or(8., |s| s.extent.to_f32())
 }
 #[derive(Clone)]
 struct CachedModel {
@@ -108,7 +91,7 @@ impl ModelCache {
         }
     }
     /// The collision radius of an instance's model, before scaling. The model
-    /// is cached once `switch_scene` has loaded the scene.
+    /// is cached once the scene has been loaded (`load`).
     pub fn collision_radius(&self, pack: &ScenePack, instance: &Instance) -> f32 {
         let prefab = pack.prefabs.iter().find(|p| p.id == instance.prefab).expect("validated prefab reference");
         self.models[&model_key(prefab, instance).0].collision.radius
@@ -164,82 +147,38 @@ fn upload(model: Model, meshes: &mut Assets<Mesh>) -> CachedModel {
     }
 }
 
-/// Switches the views to the session's world's scene. The digit keys ask the
-/// session (a host's) to move everyone to another scene.
-pub fn switch_scene(
-    keys: Res<ButtonInput<KeyCode>>,
-    service: Option<ResMut<crate::lockstep::SessionService>>,
+/// Spawns a scene's boulders and their captions for a world (see
+/// `SceneView`), and resets the player's controls and feedback.
+pub fn spawn_scene(world: &mut World, pack: &Arc<ScenePack>) {
+    world.run_system_cached_with(spawn_boulders, pack.clone()).expect("spawning a scene's boulders");
+}
+
+/// Frees the materials of the world's boulders, which have their own so only
+/// the struck one flashes. The boulders go with the world.
+pub fn release_scene(world: &mut World) {
+    let handles: Vec<_> = world
+        .query_filtered::<&ImpactTarget, With<BoulderInstance>>()
+        .iter(world)
+        .flat_map(|target| target.slots.iter().map(|slot| slot.handle.clone()))
+        .collect();
+    let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
+    for handle in handles {
+        materials.remove(&handle);
+    }
+}
+
+fn spawn_boulders(
+    In(scene): In<Arc<ScenePack>>,
     mut commands: Commands,
-    mut library: ResMut<SceneLibrary>,
     mut cache: ResMut<ModelCache>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    old: Query<(Entity, &ImpactTarget), With<BoulderInstance>>,
-    captions: Query<Entity, With<SampleCaption>>,
-    mut industrial: Query<(Entity, &IndustrialProp, &mut Visibility)>,
-    mut player: Single<&mut Transform, With<Player>>,
     mut controls: ResMut<Controls>,
     mut feedback: ResMut<Feedback>,
 ) {
-    let key = if keys.just_pressed(KeyCode::Digit1) {
-        Some(0)
-    } else if keys.just_pressed(KeyCode::Digit2) {
-        Some(1)
-    } else if keys.just_pressed(KeyCode::Digit7) {
-        Some(6)
-    } else if keys.just_pressed(KeyCode::Digit8) {
-        Some(7)
-    } else if keys.just_pressed(KeyCode::Digit9) {
-        Some(8)
-    } else if keys.just_pressed(KeyCode::Digit0) {
-        Some(9)
-    } else if keys.just_pressed(KeyCode::Digit6) {
-        Some(5)
-    } else if keys.just_pressed(KeyCode::Digit5) {
-        Some(4)
-    } else if keys.just_pressed(KeyCode::Digit4) {
-        Some(3)
-    } else if keys.just_pressed(KeyCode::Digit3) {
-        Some(2)
-    } else {
-        None
-    };
-    if let (Some(index), Some(mut service)) = (key, service) {
-        if index != library.current {
-            service.request_scene(index);
-        }
-    }
-    let Some(index) = library.requested.take() else {
-        return;
-    };
-    if index == library.current {
-        return;
-    }
-    for (entity, rock) in &old {
-        for slot in &rock.slots {
-            materials.remove(&slot.handle);
-        }
-        commands.entity(entity).despawn();
-    }
-    for caption in &captions {
-        commands.entity(caption).despawn();
-    }
-    library.current = index;
-    let scene = &library.scenes[index];
-    for (entity, prop, mut visibility) in &mut industrial {
-        if scene.scene.industrial {
-            *visibility = Visibility::Inherited;
-            commands.entity(entity).insert(Obstacle(prop.0));
-        } else {
-            *visibility = Visibility::Hidden;
-            commands.entity(entity).remove::<Obstacle>();
-        }
-    }
-    player.translation = Vec3::from_array(scene.scene.spawn);
-    player.rotation = Quat::from_rotation_y(std::f32::consts::PI);
     *controls = Controls::default();
     *feedback = Feedback::default();
-    cache.load(scene, &mut meshes);
+    cache.load(&scene, &mut meshes);
     for instance in &scene.scene.instances {
         let prefab = scene
             .prefabs
@@ -276,6 +215,7 @@ pub fn switch_scene(
         commands
             .spawn((
                 BoulderInstance,
+                WorldScoped::default(),
                 transform,
                 Visibility::default(),
                 Obstacle(Disc { center, radius }),
@@ -296,6 +236,7 @@ pub fn switch_scene(
         if let Some(label) = &instance.label {
             commands.spawn((
                 SampleCaption(center + Vec3::Y * 2.1),
+                WorldScoped::default(),
                 Text::new(label),
                 TextFont {
                     font_size: FontSize::Px(13.0),
@@ -339,75 +280,45 @@ pub fn update_captions(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use voxel_assets::SceneFeature;
     #[test]
     fn scene_switching_reuses_geometry_and_resets_gameplay() {
-        let mut app = App::new();
-        app.insert_resource(SceneLibrary::new())
-            .init_resource::<ModelCache>()
-            .init_resource::<Assets<Mesh>>()
-            .init_resource::<Assets<StandardMaterial>>()
-            .init_resource::<ButtonInput<KeyCode>>()
-            .init_resource::<Controls>()
-            .init_resource::<Feedback>()
-            .add_systems(Update, switch_scene);
-        app.world_mut().spawn((Player, Transform::default()));
-        let disc = Disc {
-            center: Vec3::new(-5.0, 0.0, -5.0),
-            radius: 1.0,
-        };
-        let prop = app
-            .world_mut()
-            .spawn((IndustrialProp(disc), Obstacle(disc), Visibility::Inherited))
-            .id();
-        app.world_mut().resource_mut::<SceneLibrary>().requested = Some(0);
-        app.update();
-        assert_eq!(app.world().resource::<SceneLibrary>().current, 0);
-        assert_eq!(app.world().resource::<ModelCache>().runtime_generations, 0);
-        assert_eq!(
-            app.world_mut()
-                .query::<&BoulderInstance>()
-                .iter(app.world())
-                .count(),
-            6
-        );
-        let baseline_materials = app.world().resource::<Assets<StandardMaterial>>().len();
-        for index in [1, 0, 1] {
-            // As WorldMirror does when a world of that scene starts.
-            app.world_mut().resource_mut::<SceneLibrary>().requested = Some(index);
-            app.world_mut().resource_mut::<Controls>().impacts = 5;
-            app.world_mut().resource_mut::<Controls>().last_material =
-                Some(voxel_assets::ImpactResponse::Metal);
-            app.world_mut().resource_mut::<Controls>().velocity = Vec3::X;
-            app.update();
-            assert_eq!(app.world().resource::<SceneLibrary>().current, index);
-            assert_eq!(app.world().resource::<ModelCache>().runtime_generations, 2);
-            assert_eq!(app.world().resource::<Controls>().impacts, 0);
-            assert!(app.world().resource::<Controls>().last_material.is_none());
-            assert_eq!(
-                app.world_mut()
-                    .query::<&SampleCaption>()
-                    .iter(app.world())
-                    .count(),
-                if index == 0 { 0 } else { 4 }
-            );
-            assert_eq!(app.world().resource::<Controls>().velocity, Vec3::ZERO);
-            assert_eq!(
-                app.world_mut()
-                    .query::<&BoulderInstance>()
-                    .iter(app.world())
-                    .count(),
-                if index == 0 { 6 } else { 10 }
-            );
-            assert_eq!(
-                app.world().resource::<Assets<StandardMaterial>>().len(),
-                baseline_materials + if index == 0 { 0 } else { 16 }
-            );
-            assert_eq!(app.world().get::<Obstacle>(prop).is_some(), index == 0);
+        let mut world = World::new();
+        world.insert_resource(SceneLibrary::new());
+        world.init_resource::<ModelCache>();
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<Assets<StandardMaterial>>();
+        world.init_resource::<Controls>();
+        world.init_resource::<Feedback>();
+        let baseline_materials = world.resource::<Assets<StandardMaterial>>().len();
+        // Materials each scene's boulders allocate, by scene.
+        let mut allocated = [None, None];
+        for (step, index) in [0, 1, 0, 1].into_iter().enumerate() {
+            world.resource_mut::<Controls>().impacts = 5;
+            world.resource_mut::<Controls>().last_material = Some(voxel_assets::ImpactResponse::Metal);
+            world.resource_mut::<Controls>().velocity = Vec3::X;
+            let pack = world.resource::<SceneLibrary>().scenes[index].clone();
+            spawn_scene(&mut world, &pack);
+            // The mining deck's boulders are baked; the boulder lab generates
+            // two models once and reuses them after.
+            let generations = if step == 0 { 0 } else { 2 };
+            assert_eq!(world.resource::<ModelCache>().runtime_generations, generations);
+            assert_eq!(world.resource::<Controls>().impacts, 0);
+            assert!(world.resource::<Controls>().last_material.is_none());
+            assert_eq!(world.resource::<Controls>().velocity, Vec3::ZERO);
+            assert_eq!(world.query::<&SampleCaption>().iter(&world).count(), if index == 0 { 0 } else { 4 });
+            assert_eq!(world.query::<&BoulderInstance>().iter(&world).count(), if index == 0 { 6 } else { 10 });
+            let added = world.resource::<Assets<StandardMaterial>>().len() - baseline_materials;
+            assert_eq!(*allocated[index].get_or_insert(added), added, "a revisit allocates the same");
+            // The world stops: its boulders' materials go, then its entities.
+            release_scene(&mut world);
+            let scoped: Vec<_> = world.query_filtered::<Entity, With<WorldScoped>>().iter(&world).collect();
+            for entity in scoped {
+                world.despawn(entity);
+            }
+            assert_eq!(world.resource::<Assets<StandardMaterial>>().len(), baseline_materials);
         }
-        assert_eq!(
-            *app.world().get::<Visibility>(prop).unwrap(),
-            Visibility::Hidden
-        );
+        assert_eq!(allocated[1].unwrap() - allocated[0].unwrap(), 16);
     }
 
     #[test]

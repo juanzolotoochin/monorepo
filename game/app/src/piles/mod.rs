@@ -2,7 +2,6 @@
 //! and walk-and-toss jobs are simulated (`game/sim::settlement::piles`); this
 //! module mirrors them and turns clicks into commands.
 use crate::{
-    assets::SceneLibrary,
     gameplay::{cursor_ground, Obstacle, Player},
     navigation::Disc,
     lockstep::{SessionService, WorldMirror},
@@ -203,7 +202,7 @@ pub fn input(
     keys: Res<ButtonInput<KeyCode>>,
     camera: Single<(&Camera, &GlobalTransform)>,
     window: Single<&Window>,
-    library: Res<SceneLibrary>,
+    scene: Res<crate::scene_view::SceneView>,
     source_buttons: Query<(&Interaction, &SourceButton)>,
     panels: Query<&Interaction, With<LabPanel>>,
     mut lab: ResMut<PileLab>,
@@ -247,7 +246,7 @@ pub fn input(
     if cursor.y < 110.0 || cursor.y > window.height() - 135.0 {
         return;
     }
-    let ground = if library.has_feature(voxel_assets::SceneFeature::Digging) {
+    let ground = if scene.has_feature(voxel_assets::SceneFeature::Digging) {
         crate::digging::ground_hit(ray, &service)
     } else {
         cursor_ground(camera.0, camera.1, &window)

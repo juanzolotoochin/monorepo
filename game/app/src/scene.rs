@@ -1,6 +1,6 @@
 //! Procedural voxel art: shared cuboid geometry, authored silhouettes and palette.
 use crate::{
-    assets::{IndustrialProp, ModelCache, SceneLibrary},
+    assets::ModelCache,
     effects::{CameraRig, FxAssets},
     gameplay::*,
     obstacles::{BULKHEADS, CRATES, REACTOR},
@@ -11,6 +11,7 @@ use bevy::{
     core_pipeline::tonemapping::Tonemapping, pbr::ScreenSpaceAmbientOcclusion,
     post_process::bloom::Bloom, prelude::*, camera::Hdr,
 };
+use service::WorldScoped;
 
 fn material(
     materials: &mut Assets<StandardMaterial>,
@@ -91,6 +92,18 @@ pub fn setup(
         material(&mut materials, [0.19, 0.24, 0.30], 0.25),
         material(&mut materials, [0.15, 0.20, 0.26], 0.25),
     ];
+    commands.insert_resource(SceneArt {
+        cube: cube.clone(),
+        dark: dark.clone(),
+        frame: frame.clone(),
+        panel: panel.clone(),
+        ivory: ivory.clone(),
+        orange: orange.clone(),
+        gold: gold.clone(),
+        cyan: cyan.clone(),
+        amber: amber.clone(),
+        white: white.clone(),
+    });
     commands.insert_resource(crate::style::MaterialBindings(
         [
             (&dark, "shadow"),
@@ -292,13 +305,81 @@ pub fn setup(
     // Boulders come from compiled scene packs (see assets.rs).
     let rock_dark = material(&mut materials, [0.14, 0.17, 0.23], 0.10);
 
+    for i in 0..6 {
+        object(
+            &mut commands,
+            &cube,
+            &frame,
+            Vec3::new(-5.0 + i as f32 * 0.46, 0.05, -7.1),
+            Vec3::new(0.38, 0.12, 0.32),
+        );
+    }
+
+    // A sparse constellation of distant cuboid asteroids, below the deck.
+    for i in 0..20 {
+        let h = hash(i, 87, 5);
+        let a = i as f32 * 2.399;
+        let r = 16.0 + (h % 13) as f32;
+        let p = Vec3::new(a.cos() * r, -4.0 - (h % 8) as f32, a.sin() * r);
+        object(
+            &mut commands,
+            &cube,
+            &rock_dark,
+            p,
+            Vec3::splat(0.4 + (h % 5) as f32 * 0.2),
+        );
+    }
+
+    commands.insert_resource(FxAssets {
+        cube,
+        spark: crate::impact::KINDS
+            .map(|kind| glow(&mut materials, crate::impact::response(kind).color, 12.0)),
+        debris: [
+            rock_dark,
+            material(&mut materials, [0.5, 0.57, 0.65], 0.9),
+            glow(&mut materials, [0.08, 0.5, 1.0], 1.5),
+            material(&mut materials, [0.12, 0.5, 0.23], 0.0),
+        ],
+        trail: materials.add(StandardMaterial {
+            base_color: Color::srgba(0.15, 0.75, 1.0, 0.16),
+            emissive: LinearRgba::rgb(0.1, 1.6, 2.5),
+            alpha_mode: AlphaMode::Blend,
+            unlit: true,
+            ..default()
+        }),
+        blood: [
+            material(&mut materials, [0.42, 0.025, 0.035], 0.55),
+            material(&mut materials, [0.73, 0.075, 0.055], 0.48),
+        ],
+    });
+}
+
+/// The meshes and materials the built-in art shares. `style::apply` recolors
+/// some of the materials per scene (`MaterialBindings`).
+#[derive(Resource, Clone)]
+pub struct SceneArt {
+    cube: Handle<Mesh>,
+    dark: Handle<StandardMaterial>,
+    frame: Handle<StandardMaterial>,
+    panel: Handle<StandardMaterial>,
+    ivory: Handle<StandardMaterial>,
+    orange: Handle<StandardMaterial>,
+    gold: Handle<StandardMaterial>,
+    cyan: Handle<StandardMaterial>,
+    amber: Handle<StandardMaterial>,
+    white: Handle<StandardMaterial>,
+}
+
+/// The industrial deck's props, for a world in an industrial scene.
+pub fn spawn_industrial(commands: &mut Commands, art: &SceneArt) {
+    let SceneArt { cube, dark, frame, panel, ivory, orange, cyan, amber, .. } = art;
     // Back-left coolant relay: chunky housing, fins, emissive core and conduits.
     commands
         .spawn((
             Transform::from_translation(REACTOR.center),
             Visibility::default(),
             Obstacle(REACTOR),
-            IndustrialProp(REACTOR),
+            WorldScoped::default(),
         ))
         .with_children(|p| {
             block(
@@ -371,16 +452,6 @@ pub fn setup(
                 Vec3::new(0.46, 0.12, 0.46),
             );
         });
-    for i in 0..6 {
-        object(
-            &mut commands,
-            &cube,
-            &frame,
-            Vec3::new(-5.0 + i as f32 * 0.46, 0.05, -7.1),
-            Vec3::new(0.38, 0.12, 0.32),
-        );
-    }
-
     // Industrial bulkhead: interrupted silhouette, antennas and warning lamps.
     for (bulkhead, height) in BULKHEADS.into_iter().zip([2.8, 1.55, 1.8, 3.4]) {
         commands
@@ -388,7 +459,7 @@ pub fn setup(
                 Transform::from_translation(bulkhead.center),
                 Visibility::default(),
                 Obstacle(bulkhead),
-                IndustrialProp(bulkhead),
+                WorldScoped::default(),
             ))
             .with_children(|p| {
                 block(
@@ -460,7 +531,7 @@ pub fn setup(
                 Transform::from_translation(crate_disc.center),
                 Visibility::default(),
                 Obstacle(crate_disc),
-                IndustrialProp(crate_disc),
+                WorldScoped::default(),
             ))
             .with_children(|p| {
                 block(
@@ -495,26 +566,17 @@ pub fn setup(
                 );
             });
     }
-    // A sparse constellation of distant cuboid asteroids, below the deck.
-    for i in 0..20 {
-        let h = hash(i, 87, 5);
-        let a = i as f32 * 2.399;
-        let r = 16.0 + (h % 13) as f32;
-        let p = Vec3::new(a.cos() * r, -4.0 - (h % 8) as f32, a.sin() * r);
-        object(
-            &mut commands,
-            &cube,
-            &rock_dark,
-            p,
-            Vec3::splat(0.4 + (h % 5) as f32 * 0.2),
-        );
-    }
+}
 
+/// The player's body, at the scene's spawn point, for a world.
+pub fn spawn_player(commands: &mut Commands, art: &SceneArt, scene: &voxel_assets::Scene) {
+    let SceneArt { cube, dark, frame, ivory, orange, gold, cyan, white, .. } = art;
     // Voxel-built exosuit. The body, legs and sword each have their own animation pivot.
     commands
         .spawn((
             Player,
-            Transform::from_xyz(0.0, 0.0, 2.0)
+            WorldScoped::default(),
+            Transform::from_translation(Vec3::from_array(scene.spawn))
                 .with_rotation(Quat::from_rotation_y(std::f32::consts::PI)),
             Visibility::default(),
         ))
@@ -782,28 +844,6 @@ pub fn setup(
                 }
             });
         });
-    commands.insert_resource(FxAssets {
-        cube,
-        spark: crate::impact::KINDS
-            .map(|kind| glow(&mut materials, crate::impact::response(kind).color, 12.0)),
-        debris: [
-            rock_dark,
-            material(&mut materials, [0.5, 0.57, 0.65], 0.9),
-            glow(&mut materials, [0.08, 0.5, 1.0], 1.5),
-            material(&mut materials, [0.12, 0.5, 0.23], 0.0),
-        ],
-        trail: materials.add(StandardMaterial {
-            base_color: Color::srgba(0.15, 0.75, 1.0, 0.16),
-            emissive: LinearRgba::rgb(0.1, 1.6, 2.5),
-            alpha_mode: AlphaMode::Blend,
-            unlit: true,
-            ..default()
-        }),
-        blood: [
-            material(&mut materials, [0.42, 0.025, 0.035], 0.55),
-            material(&mut materials, [0.73, 0.075, 0.055], 0.48),
-        ],
-    });
 }
 
 #[derive(Component)]
@@ -986,7 +1026,7 @@ pub fn hud(mut commands: Commands) {
 pub fn update_hud(
     controls: Res<Controls>,
     sound: Res<Sound>,
-    library: Res<SceneLibrary>,
+    scene: Res<crate::scene_view::SceneView>,
     cache: Res<ModelCache>,
     flight: Res<crate::jetpack::Flight>,
     service: Res<crate::lockstep::SessionService>,
@@ -1032,8 +1072,8 @@ pub fn update_hud(
     }
     status.1 .0 = color;
     gauge.width = percent(progress.clamp(0.0, 1.0) * 100.0);
-    if scene_label.0 != library.title() {
-        scene_label.0 = library.title().into();
+    if scene_label.0 != scene.title() {
+        scene_label.0 = scene.title().into();
     }
     let audio = if sound.muted { "  /  MUTED" } else { "" };
     let last = controls
@@ -1043,14 +1083,14 @@ pub fn update_hud(
         "CONTACTS {:02} / HIT {last} / DYNAMIC BUILDS {}{audio}",
         controls.impacts, cache.runtime_generations
     );
-    let text = if library.has_feature(voxel_assets::SceneFeature::FlightHud) {
+    let text = if scene.has_feature(voxel_assets::SceneFeature::FlightHud) {
         format!(
             "ALT {:.1}m / SUPPORT {:.1}m / HOVER {:.1}m / HOLD SPACE TO FLY",
             player.translation.y,
             flight.support,
             crate::jetpack::HOVER
         )
-    } else if library.has_feature(voxel_assets::SceneFeature::Digging) {
+    } else if scene.has_feature(voxel_assets::SceneFeature::Digging) {
         let net = if service.networked() { format!(" / NET / {}", service.status.to_uppercase()) } else { String::new() };
         let tile = sim::terrain::Terrain::pit_tile(service.to_sim(player.translation));
         let pit = service.world().map_or(0, |w| w.terrain().pit(tile));

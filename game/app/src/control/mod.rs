@@ -9,6 +9,7 @@ use crate::{
     gameplay::{Controls, Obstacle, Player},
     impact::ImpactTarget,
     lockstep::{PlayerControl, SessionService},
+    scene_view::SceneView,
     navigation,
     piles::PileLab,
 };
@@ -104,6 +105,9 @@ struct Active {
     pending: Pending,
     started: u64,
 }
+/// How long a quit waits for its reply to be written. Frames can be a
+/// millisecond apart without rendering.
+const QUIT_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
 #[derive(Resource)]
 pub struct Hub {
     options: Options,
@@ -122,7 +126,9 @@ pub struct Hub {
     /// The first frame after warmup with the World layer up: commands start
     /// from here.
     ready: Option<u64>,
-    quit: Option<u64>,
+    /// When a quit request may exit: a few frames and some wall time after
+    /// it, so its reply reaches the client before the process ends.
+    quit: Option<(u64, std::time::Instant)>,
     trace: Option<std::fs::File>,
 }
 impl Hub {
@@ -201,12 +207,17 @@ impl Hub {
         }
     }
 }
+/// Where the player's body is; the origin for the frame between worlds,
+/// when there is none.
 fn player_position(world: &mut World) -> Vec3 {
     world
         .query_filtered::<&Transform, With<Player>>()
         .single(world)
-        .expect("player")
-        .translation
+        .map_or(Vec3::ZERO, |transform| transform.translation)
+}
+/// The scene the world shows, once one is up.
+fn shown(world: &World) -> Option<usize> {
+    world.get_resource::<SceneView>().map(|view| view.index)
 }
 /// The simulated settlement, or an error for scenes without one.
 fn settlement(world: &World) -> Result<&sim::settlement::Settlement, String> {
@@ -242,7 +253,7 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
         }
         Command::SettlementTransfer { depot, item, units, deposit } => {
             let expected = crate::settlement::player_transfer(world, depot, item, *units, *deposit)?;
-            Ok(Pending::SettlementTransfer { scene: world.resource::<SceneLibrary>().current, expected })
+            Ok(Pending::SettlementTransfer { scene: shown(world).unwrap_or(usize::MAX), expected })
         }
         Command::SettlementCancel => {
             settlement(world)?;
@@ -360,9 +371,8 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             Ok(Pending::Instant)
         }
         Command::Scene { scene } => {
-            let library = world.resource::<SceneLibrary>();
-            let index = library.index(scene)?;
-            if index != library.current {
+            let index = world.resource::<SceneLibrary>().index(scene)?;
+            if shown(world) != Some(index) {
                 world.resource_mut::<SessionService>().request_scene(index);
             }
             Ok(Pending::Scene(index))
@@ -427,8 +437,8 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             world.resource_scope(|world, mut control: Mut<PlayerControl>| {
                 world.resource_scope(|world, mut service: Mut<SessionService>| {
                     world.resource_scope(|world, mut controls: Mut<Controls>| {
-                        let library = world.resource::<SceneLibrary>();
-                        control.strike(&mut service, &mut controls, &library.scenes[library.current], aim);
+                        let pack = world.resource::<SceneView>().pack.clone();
+                        control.strike(&mut service, &mut controls, &pack, aim);
                     });
                 });
             });
@@ -486,7 +496,7 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
         Pending::Instant => Some(Ok(())),
         Pending::Applied => applied.then_some(Ok(())),
         Pending::SettlementTransfer { scene, expected } => {
-            if world.resource::<SceneLibrary>().current != *scene {
+            if shown(world) != Some(*scene) {
                 return Some(Err("Scene changed during transfer".into()));
             }
             if !applied {
@@ -506,7 +516,7 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
         }
         Pending::Failed(e) => Some(Err(e.clone())),
         Pending::Wait(until) => (tick >= *until).then_some(Ok(())),
-        Pending::Scene(index) => (world.resource::<SceneLibrary>().current == *index && applied_scene(world, *index)).then_some(Ok(())),
+        Pending::Scene(index) => (shown(world) == Some(*index) && applied_scene(world, *index)).then_some(Ok(())),
         Pending::Strike => (applied && world.resource::<Controls>().attack.is_none()).then_some(Ok(())),
         Pending::Walk(goal) => {
             if !applied {
@@ -562,12 +572,12 @@ pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
     let position = player_position(world);
     let flight = world.resource::<crate::jetpack::Flight>();
     let jetpack = json!({"requested":flight.requested,"airborne":flight.airborne,"support_height":flight.support,"hover_height":crate::jetpack::HOVER,"clearance":position.y-flight.support});
-    let library = world.resource::<SceneLibrary>();
-    let terrain = json!(library.scenes.get(library.current).and_then(|pack| pack.scene.terrain.as_ref()));
+    let view = world.get_resource::<SceneView>();
+    let terrain = json!(view.and_then(|view| view.scene().terrain.as_ref()));
     let digging = crate::digging::snapshot(world);
     let controls = world.resource::<Controls>();
     let movement = json!({"route":controls.route.iter().map(|p|p.to_array()).collect::<Vec<_>>(),"velocity":controls.velocity.to_array(),"attacking":controls.attack.is_some(),"weapon":controls.weapon,"impacts":controls.impacts});
-    let scene = world.resource::<SceneLibrary>().title().to_string();
+    let scene = world.get_resource::<SceneView>().map_or("LOADING", SceneView::title).to_string();
     let lab = world.resource::<PileLab>();
     let airborne = lab.in_flight;
     let (piles, cargo, totals) = if let Some(stock) = &lab.stock {
@@ -670,7 +680,7 @@ pub fn end(world: &mut World) {
                 hub.queue.clear();
             }
             if matches!(active.envelope.request.command, Command::Quit) {
-                hub.quit = Some(hub.tick + 3);
+                hub.quit = Some((hub.tick + 3, std::time::Instant::now() + QUIT_GRACE));
             }
             hub.receipts.push(receipt);
         } else {
@@ -680,7 +690,7 @@ pub fn end(world: &mut World) {
     // Full inspection includes serialized inventories, world geometry, and
     // telemetry. Build it only for a trace, an inspection reply, or a report.
     let finishing = hub.failed.is_some()
-        || hub.quit.is_some_and(|tick| hub.tick >= tick)
+        || hub.quit.is_some_and(|(tick, at)| hub.tick >= tick && std::time::Instant::now() >= at)
         || (hub.options.script.is_some()
             && hub.ready.is_some()
             && hub.queue.is_empty()
@@ -717,7 +727,7 @@ pub fn end(world: &mut World) {
             hub.finished = Some(hub.tick);
         }
     }
-    let quit = hub.quit.is_some_and(|tick| hub.tick >= tick);
+    let quit = hub.quit.is_some_and(|(tick, at)| hub.tick >= tick && std::time::Instant::now() >= at);
     if hub.failed.is_some() || quit || (hub.finished.is_some() && hub.options.frames_dir.is_none())
     {
         hub.save_report(0);

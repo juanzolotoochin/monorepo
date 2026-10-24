@@ -77,7 +77,7 @@ impl View {
     }
 }
 pub fn setup(world: &mut World) {
-    let index = world.resource::<SceneLibrary>().current;
+    let index = world.resource::<crate::scene_view::SceneView>().index;
     if world.resource::<Settlement>().current == Some(index) {
         return;
     }
@@ -746,7 +746,7 @@ pub fn tick(world: &mut World) {
     }
     for (key, mut view) in desired {
         view.position.y +=
-            crate::jetpack::height(world.resource::<SceneLibrary>(), view.position).unwrap_or(0.);
+            crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, view.position).unwrap_or(0.);
         let template = &state.templates[&view.skin];
         if !state.views.contains_key(&key) {
             let rig = if let Some(rig) = state.pool.get_mut(&view.skin).and_then(|p| p.pop()) {
@@ -1191,8 +1191,7 @@ mod lifecycle_tests {
         assert!(corpse);
         inspect_building(app.world_mut(), Some("sawmill")).unwrap();
         assert!(inspect_building(app.world_mut(), Some("unknown")).is_err());
-        app.world_mut().resource_mut::<SceneLibrary>().requested = Some(0);
-        app.update();
+        crate::switch_world(&mut app, 0);
         let state = app.world().resource::<Settlement>();
         assert!(state.simulation.is_none());
         assert!(state.inspection.is_none());

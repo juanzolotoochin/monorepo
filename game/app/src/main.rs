@@ -19,6 +19,7 @@ mod piles;
 mod preview;
 mod rig;
 mod scene;
+mod scene_view;
 mod settlement;
 mod sound;
 mod style;
@@ -120,7 +121,7 @@ struct Views;
 
 impl Service for Views {
     type Layer = WorldLayer;
-    type Deps = (lockstep::WorldMirror,);
+    type Deps = (lockstep::WorldMirror, scene_view::SceneView);
 
     fn init(_world: &mut World) -> Self {
         Views
@@ -223,6 +224,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .add_service::<flow::Flow>()
         .add_service::<lockstep::SessionService>()
         .add_service::<lockstep::WorldMirror>()
+        .add_service::<scene_view::SceneView>()
         .add_service::<Views>()
         .add_service::<lockstep::PlayerControl>()
         .add_systems(First, (telemetry::begin, control::begin).chain())
@@ -235,7 +237,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .add_service_systems::<Views, _>(
             Phase::Input,
             (
-                (assets::switch_scene, jetpack::scene_changed, palimpsest::setup, style::apply).chain(),
+                (jetpack::scene_changed, palimpsest::setup).chain(),
                 (piles::setup_scene, settlement::setup).chain(),
             )
                 .chain()
@@ -326,11 +328,26 @@ fn start_world(app: &mut App) {
     for _ in 0..20 {
         app.update();
         let active = app.world().get_resource::<State<WorldState>>().is_some_and(|s| *s.get() == WorldState::Active);
-        if active && app.world().resource::<assets::SceneLibrary>().current != usize::MAX {
+        if active {
             return;
         }
     }
     panic!("the world never started");
+}
+
+/// Asks the session for another scene and runs frames until its world is up.
+#[cfg(test)]
+fn switch_world(app: &mut App, index: usize) {
+    app.world_mut().resource_mut::<lockstep::SessionService>().request_scene(index);
+    for _ in 0..20 {
+        app.update();
+        let active = app.world().get_resource::<State<WorldState>>().is_some_and(|s| *s.get() == WorldState::Active);
+        let shown = app.world().get_resource::<scene_view::SceneView>().map(|view| view.index);
+        if active && shown == Some(index) {
+            return;
+        }
+    }
+    panic!("the world never switched to scene {index}");
 }
 
 fn keyboard_actions(

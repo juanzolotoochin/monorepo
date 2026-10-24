@@ -17,6 +17,7 @@
 //! Bevy's `StatesPlugin` only if nothing else did.
 
 use std::any::{type_name, TypeId};
+use std::marker::PhantomData;
 
 use bevy::app::AppExit;
 use bevy::ecs::schedule::ScheduleConfigs;
@@ -121,6 +122,22 @@ impl AtOrBelow<SessionLayer> for SessionLayer {}
 impl AtOrBelow<WorldLayer> for AppLayer {}
 impl AtOrBelow<WorldLayer> for SessionLayer {}
 impl AtOrBelow<WorldLayer> for WorldLayer {}
+
+/// Marks an entity that lives as long as layer `L`: it is despawned when the
+/// layer stops, after the layer's services have.
+#[derive(Component)]
+pub struct Scoped<L: Layer>(PhantomData<L>);
+
+impl<L: Layer> Default for Scoped<L> {
+    fn default() -> Self {
+        Scoped(PhantomData)
+    }
+}
+
+/// An entity of the current world.
+pub type WorldScoped = Scoped<WorldLayer>;
+/// An entity of the current session.
+pub type SessionScoped = Scoped<SessionLayer>;
 
 /// A front-end service: one per type, living as long as its layer.
 pub trait Service: Resource + Sized {
@@ -446,8 +463,20 @@ fn start<L: Layer>(transition: In<Option<StateTransitionEvent<L::State>>>, world
 fn stop<L: Layer>(transition: In<Option<StateTransitionEvent<L::State>>>, world: &mut World) {
     let Some(transition) = transition.0 else { return };
     if let (true, false) = changes(&transition) {
-        for shutdown in world.resource::<Registry>().shutdowns(L::RANK) {
-            shutdown(world);
+        stop_layer::<L>(world);
+    }
+}
+
+/// Stops a layer's services, in reverse registration order, then despawns
+/// its scoped entities.
+fn stop_layer<L: Layer>(world: &mut World) {
+    for shutdown in world.resource::<Registry>().shutdowns(L::RANK) {
+        shutdown(world);
+    }
+    let scoped: Vec<_> = world.query_filtered::<Entity, With<Scoped<L>>>().iter(world).collect();
+    for entity in scoped {
+        if let Ok(entity) = world.get_entity_mut(entity) {
+            entity.despawn();
         }
     }
 }
@@ -476,11 +505,9 @@ fn stop_all(exiting: In<bool>, world: &mut World) {
     if !exiting.0 {
         return;
     }
-    for rank in [WorldLayer::RANK, SessionLayer::RANK, AppLayer::RANK] {
-        for shutdown in world.resource::<Registry>().shutdowns(rank) {
-            shutdown(world);
-        }
-    }
+    stop_layer::<WorldLayer>(world);
+    stop_layer::<SessionLayer>(world);
+    stop_layer::<AppLayer>(world);
     // An app driven by hand (a test) may run more frames: nothing of a
     // service's runs in them.
     world.insert_resource(Stopped);

@@ -1,6 +1,5 @@
 //! A motion recording projects a persistent partner without copying world state or inventory.
 use crate::{
-    assets::SceneLibrary,
     gameplay::{Controls, Obstacle},
     sound::{Cue, Sound},
 };
@@ -86,9 +85,9 @@ pub fn clear(world: &mut World) {
 pub fn tick(world: &mut World) {
     let options = world.resource::<crate::control::Options>();
     let interactive = !options.simulation && options.frames_dir.is_none();
-    let library = world.resource::<crate::assets::SceneLibrary>();
-    let reserved_e = library.scenes[library.current].scene.scenario.is_some();
-    let memory_trial = library.has_feature(SceneFeature::MemoryTrial);
+    let scene = world.resource::<crate::scene_view::SceneView>();
+    let reserved_e = scene.scene().scenario.is_some();
+    let memory_trial = scene.has_feature(SceneFeature::MemoryTrial);
     if interactive && !reserved_e {
         let keys = world.resource::<ButtonInput<KeyCode>>();
         let (e, q) = (keys.just_pressed(KeyCode::KeyE), keys.just_pressed(KeyCode::KeyQ));

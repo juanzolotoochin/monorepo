@@ -52,25 +52,25 @@ fn label(commands: &mut Commands, kind: CaptionKind, anchor: Vec3, text: &str) -
 
 pub fn setup_scene(
     mut commands: Commands,
-    library: Res<SceneLibrary>,
+    scene: Res<crate::scene_view::SceneView>,
     mut lab: ResMut<PileLab>,
     old: Query<Entity, With<LabEntity>>,
     player: Single<Entity, With<Player>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    if lab.scene == library.current {
+    if lab.scene == scene.index {
         return;
     }
     for entity in &old {
         commands.entity(entity).despawn();
     }
-    lab.scene = library.current;
+    lab.scene = scene.index;
     lab.job = None;
     lab.last_error = None;
     lab.in_flight = 0;
     lab.job_serial = lab.job_serial.wrapping_add(1);
-    lab.layout = library.scenes[library.current].scene.piles.clone();
+    lab.layout = scene.scene().piles.clone();
     lab.stock = lab.layout.as_ref().map(Stock::new);
     let Some(layout) = lab.layout.clone() else {
         return;
