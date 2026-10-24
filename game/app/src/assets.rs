@@ -61,7 +61,13 @@ impl SceneLibrary {
     }
     pub fn index(&self, id: &str) -> Result<usize, String> {
         self.scenes.iter().position(|pack| pack.scene.id == id)
-            .ok_or_else(|| format!("Unknown scene {id}"))
+            .ok_or_else(|| {
+                let available = self.scenes.iter()
+                    .map(|pack| pack.scene.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("Unknown scene {id}. Available scenes: {available}")
+            })
     }
     pub fn has_feature(&self, feature: SceneFeature) -> bool {
         self.scenes.get(self.current).is_some_and(|pack| pack.scene.features.contains(&feature))
@@ -406,7 +412,10 @@ mod tests {
         assert_eq!(library.index("dig-lab"), Ok(8));
         assert_eq!(library.index("field"), Ok(9));
         assert!(library.scenes[8].scene.features.contains(&SceneFeature::Digging));
-        assert!(library.index("missing").is_err());
+        assert_eq!(
+            library.index("missing"),
+            Err("Unknown scene missing. Available scenes: mining-deck, boulder-lab, pile-lab, jetpack-lab, surprise-lab, atlantis, forest-outpost, combat-arena, dig-lab, field".into())
+        );
         assert!(library.scenes[4].scene.features.contains(&SceneFeature::MemoryTrial));
         assert!(library.scenes[3].scene.features.contains(&SceneFeature::FlightHud));
         assert_ne!(mining.scene.name, lab.scene.name);

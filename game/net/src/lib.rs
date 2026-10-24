@@ -6,9 +6,9 @@
 //! turns cross the network. Nothing here reads a clock: callers pass `now`,
 //! so tests run on the virtual clock of [`netsim`].
 //!
-//! - An input made now is scheduled `input_delay` ticks ahead of the host. The
-//!   host never waits: an input that arrives after its tick closed moves to
-//!   the next open turn.
+//! - The host's own input enters its next open turn. Clients schedule inputs
+//!   `input_delay` ticks ahead of the host. The host never waits: an input
+//!   that arrives after its tick closed moves to the next open turn.
 //! - Clients keep a small buffer of turns and catch up by running extra ticks.
 //! - Clients report hashes; the host compares them with its own. On a
 //!   mismatch the session halts (dev) or the client is resynced through the

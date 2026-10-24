@@ -21,7 +21,7 @@ use sim::settlement::{PileSetup, SceneSetup, Settlement as SimSettlement};
 use sim::{CommandKind, World as SimWorld};
 
 use crate::assets::SceneLibrary;
-use crate::gameplay::{Controls, Obstacle, Player};
+use crate::gameplay::{Controls, Obstacle, Player, WALK_SPEED};
 
 /// The world seed. Scenes don't use randomness outside combat rolls, which are
 /// keyed on ticks and IDs, so one seed serves every scene.
@@ -57,6 +57,8 @@ pub struct Game {
     pub center: FxVec2,
     /// The last movement intent sent, so held keys don't resend it every frame.
     walking: Option<(FxVec2, bool)>,
+    /// A local click target while the host has not applied its command yet.
+    visual_goal: Option<(Vec3, bool)>,
     /// The tick on which the newest command applies.
     pub applies_at: u64,
     /// Where to write the session's tick-0 save and input log on exit.
@@ -94,6 +96,7 @@ impl Default for Game {
             alpha: 0.0,
             center: FxVec2::ZERO,
             walking: None,
+            visual_goal: None,
             applies_at: 0,
             record: None,
             replay: None,
@@ -143,8 +146,13 @@ impl Game {
         Some(self.settlement()?.agents[self.player()? as usize].id.clone())
     }
 
-    /// Sends a command; it applies on the next tick in single-player, and
-    /// after the input delay in a networked game.
+    /// The confirmed player position in view coordinates, for gameplay input.
+    pub fn player_view_position(&self) -> Option<Vec3> {
+        Some(self.to_view(self.settlement()?.agents[self.player()? as usize].position))
+    }
+
+    /// Sends a command; it applies on the next host tick locally, or after
+    /// the input delay when joining another host.
     pub fn command(&mut self, kind: CommandKind) {
         let Some(session) = self.session.as_mut() else { return };
         let tick = session.world().map_or(0, |w| w.tick());
@@ -177,6 +185,7 @@ impl Game {
     /// rotated into arena space); a zero direction stops it.
     pub fn walk(&mut self, direction: Vec2, run: bool) {
         let Some(agent) = self.player() else { return };
+        self.visual_goal = None;
         let direction = FxVec2::new(Fx::quantize(direction.x), Fx::quantize(direction.y)).normalize_or_zero();
         if self.walking == Some((direction, run)) {
             return;
@@ -190,6 +199,7 @@ impl Game {
     pub fn go_to(&mut self, target: Vec3, run: bool) {
         let Some(agent) = self.player() else { return };
         self.walking = None;
+        self.visual_goal = Some((target, run));
         let target = self.to_sim(target);
         self.command(CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target, run } });
     }
@@ -297,6 +307,7 @@ pub fn build_world(world: &mut World) {
     game.current = game.settlement().cloned();
     game.tick = 0;
     game.walking = None;
+    game.visual_goal = None;
     game.named = false;
     game.applies_at = 0;
     game.events.clear();
@@ -443,6 +454,15 @@ fn stable_id() -> net::StableId {
     nanos ^ (u64::from(std::process::id()) << 32)
 }
 
+#[derive(Default)]
+pub struct LocalAvatarPreview {
+    position: Option<Vec3>,
+    velocity: Vec3,
+    active: bool,
+    agent: Option<u16>,
+    scene: Option<usize>,
+}
+
 /// Places the player where the simulation has the avatar, between ticks.
 pub fn follow_avatar(
     game: Res<Game>,
@@ -450,25 +470,114 @@ pub fn follow_avatar(
     mut controls: ResMut<Controls>,
     mut player: Single<&mut Transform, With<Player>>,
     sound: Res<crate::sound::Sound>,
+    mut preview: Local<LocalAvatarPreview>,
 ) {
     let (Some(current), Some(index)) = (&game.current, game.player()) else { return };
     let a = &current.agents[index as usize];
     let before = game.previous.as_ref().and_then(|p| p.agents.get(index as usize)).unwrap_or(a);
-    let alpha = game.alpha;
+    // The local single-player avatar can use the newest confirmed pose.
+    // Interpolating from the previous tick adds a full tick of visible lag.
+    let alpha = if !matches!(game.network, Some(Network::Join(_)))
+        && game.session.as_ref().is_some_and(|session| !session.is_replay()) {
+        1.0
+    } else {
+        game.alpha
+    };
     let from = game.to_view(before.position);
     let to = game.to_view(a.position);
     // A teleport (respawn, deploying a recording) snaps instead of sliding.
     let alpha = if from.distance(to) > 1.5 { 1.0 } else { alpha };
     let mut position = from.lerp(to, alpha);
     position.y = before.avatar.height.to_f32() + (a.avatar.height - before.avatar.height).to_f32() * alpha;
+    let mut preview_velocity = None;
+    if matches!(game.network, Some(Network::Join(_))) {
+        let reset = preview.agent != Some(index)
+            || preview.scene != game.scene
+            || preview.position.is_none_or(|p| p.distance(to) > 1.5);
+        if reset {
+            preview.position = Some(to);
+            preview.velocity = Vec3::ZERO;
+            preview.active = false;
+            preview.agent = Some(index);
+            preview.scene = game.scene;
+        }
+        let pending_goal = game.visual_goal.filter(|_| {
+            game.session.as_ref().is_some_and(|session| session.pending_inputs() > 0)
+        });
+        let movement = game.walking
+            .map(|(direction, run)| (Vec3::new(direction.x.to_f32(), 0.0, direction.y.to_f32()), run))
+            .or_else(|| pending_goal.map(|(goal, run)| {
+                let delta = crate::navigation::flat(goal - preview.position.unwrap());
+                (if delta.length() < 0.1 { Vec3::ZERO } else { delta.normalize() }, run)
+            }))
+            .filter(|_| controls.attack.is_none() && a.avatar.dig.is_none());
+        let moving_input = movement.is_some_and(|(direction, _)| direction != Vec3::ZERO);
+        if let Some((direction, run)) = movement {
+            preview.active = true;
+            let dt = time.delta_secs().min(0.05);
+            let desired = direction * if run { 5.6 } else { WALK_SPEED };
+            let acceleration = if desired == Vec3::ZERO { 32.0 } else { 26.0 };
+            let change = (desired - preview.velocity).clamp_length_max(acceleration * dt);
+            preview.velocity += change;
+            let start = preview.position.unwrap();
+            let candidate = start + preview.velocity * dt;
+            let passable = game.world().is_some_and(|world| {
+                a.avatar.flight.airborne || world.terrain().walkable(
+                    game.to_sim(start), game.to_sim(candidate), Fx::quantize(0.32),
+                )
+            });
+            if passable {
+                // Limit how far the displayed avatar can get ahead while
+                // waiting for the host's confirmed turns.
+                preview.position = Some(to + (candidate - to).clamp_length_max(0.9));
+            } else {
+                preview.velocity = Vec3::ZERO;
+            }
+            preview_velocity = Some(preview.velocity);
+        } else {
+            preview.velocity = Vec3::ZERO;
+            preview_velocity = Some(Vec3::ZERO);
+            if preview.active {
+                let blend = 1.0 - (-8.0 * time.delta_secs()).exp();
+                preview.position = Some(preview.position.unwrap().lerp(to, blend));
+            }
+        }
+        if preview.active
+            && !moving_input
+            && game.session.as_ref().is_some_and(|session| session.pending_inputs() == 0)
+            && a.avatar.velocity == FxVec2::ZERO
+        {
+            let remaining = to - preview.position.unwrap();
+            preview.position = Some(preview.position.unwrap() + remaining.clamp_length_max(2.0 * time.delta_secs()));
+        }
+        if preview.active && preview.position.unwrap().distance(to) < 0.02
+            && !moving_input
+        {
+            preview.active = false;
+        }
+        if preview.active {
+            position.x = preview.position.unwrap().x;
+            position.z = preview.position.unwrap().z;
+        } else {
+            preview.position = Some(to);
+        }
+    } else {
+        *preview = LocalAvatarPreview::default();
+    }
     let previous = player.translation;
     let teleport = previous.distance(position) > 1.5;
     player.translation = position;
     let heading = before.heading.to_f32() + angle_between(before.heading.to_f32(), a.heading.to_f32()) * alpha;
     player.rotation = Quat::from_rotation_y(heading);
+    if let Some(velocity) = preview_velocity.filter(|v| v.length_squared() > 0.01) {
+        player.rotation = Quat::from_rotation_y(velocity.x.atan2(velocity.z));
+    }
     let dt = time.delta_secs().max(1e-4);
     let moved = if teleport { Vec3::ZERO } else { crate::navigation::flat(position - previous) };
     controls.velocity = Vec3::new(a.avatar.velocity.x.to_f32(), 0.0, a.avatar.velocity.y.to_f32());
+    if let Some(velocity) = preview_velocity {
+        controls.velocity = velocity;
+    }
     controls.stride += moved.length() * 8.5;
     if a.avatar.flight.airborne {
         controls.foot_distance = 0.0;
@@ -568,7 +677,6 @@ pub fn attack_input(
     camera: Single<(&Camera, &GlobalTransform)>,
     window: Single<&Window>,
     library: Res<SceneLibrary>,
-    player: Single<&Transform, With<Player>>,
     mut controls: ResMut<Controls>,
     mut game: ResMut<Game>,
 ) {
@@ -586,7 +694,9 @@ pub fn attack_input(
         return;
     }
     if let Some(point) = crate::jetpack::cursor_surface(camera.0, camera.1, &window, &library, &game) {
-        strike(&mut game, &mut controls, &library, point - player.translation);
+        if let Some(origin) = game.player_view_position() {
+            strike(&mut game, &mut controls, &library, point - origin);
+        }
     }
 }
 
@@ -603,6 +713,7 @@ pub fn strike(game: &mut Game, controls: &mut Controls, library: &SceneLibrary, 
         .unwrap_or([0.0, 0.6, 0.25]);
     let flat = crate::navigation::flat(aim).normalize_or(Vec3::Z);
     game.walking = None;
+    game.visual_goal = None;
     game.command(CommandKind::Attack {
         agent,
         weapon,
@@ -610,4 +721,185 @@ pub fn strike(game: &mut Game, controls: &mut Controls, library: &SceneLibrary, 
         muzzle: muzzle.map(Fx::quantize),
     });
     controls.strike(aim);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn player_position(app: &mut App) -> Vec3 {
+        let mut players = app.world_mut().query_filtered::<&Transform, With<Player>>();
+        players.single(app.world()).unwrap().translation
+    }
+
+    #[test]
+    fn solo_avatar_shows_the_latest_tick_on_the_frame_it_runs() {
+        let options = crate::control::Options { simulation: true, ..default() };
+        let hub = crate::control::Hub::new(options.clone()).unwrap();
+        let mut app = crate::build_app(options, SceneLibrary::new(), hub);
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::from_secs_f64(1.0 / 120.0),
+        ));
+        app.update();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyW);
+
+        let mut observed_movement = false;
+        for _ in 0..12 {
+            app.update();
+            let game = app.world().resource::<Game>();
+            let Some(index) = game.player() else { continue };
+            let current = game.current.as_ref().unwrap();
+            let current_position = game.to_view(current.agents[index as usize].position);
+            let previous_position = game.previous.as_ref()
+                .map(|previous| game.to_view(previous.agents[index as usize].position))
+                .unwrap_or(current_position);
+            if current_position.distance(previous_position) < 0.001 {
+                continue;
+            }
+            let shown = player_position(&mut app);
+            assert!(crate::navigation::flat(shown - current_position).length() < 0.001,
+                "local avatar lagged behind its latest simulated pose: {shown:?} vs {current_position:?}");
+            observed_movement = true;
+            break;
+        }
+        assert!(observed_movement, "movement never reached the simulation");
+    }
+
+    #[test]
+    fn host_avatar_responds_on_the_next_tick_and_shows_that_pose() {
+        let options = crate::control::Options { simulation: true, ..default() };
+        let hub = crate::control::Hub::new(options.clone()).unwrap();
+        let mut library = SceneLibrary::new();
+        library.initial = library.index("field").unwrap();
+        let mut app = crate::build_app(options, library, hub);
+        let mut game = Game::default();
+        game.network = Some(Network::Host("127.0.0.1:0".parse().unwrap()));
+        app.insert_resource(game);
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::from_secs_f64(1.0 / 120.0),
+        ));
+        app.update();
+        let start = player_position(&mut app);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyW);
+        for frame in 1..=4 {
+            app.update();
+            let game = app.world().resource::<Game>();
+            let index = game.player().unwrap() as usize;
+            let confirmed = game.to_view(game.current.as_ref().unwrap().agents[index].position);
+            if crate::navigation::flat(confirmed - start).length() > 0.001 {
+                let shown = player_position(&mut app);
+                assert!(crate::navigation::flat(shown - confirmed).length() < 0.001,
+                    "host avatar displayed an older tick after movement applied");
+                assert!(frame <= 2, "host movement waited {frame} frames");
+                return;
+            }
+        }
+        panic!("host input did not move the avatar by the next simulation tick");
+    }
+
+    #[test]
+    fn joined_player_movement_response_is_measured_in_frames() {
+        let make_app = |network| {
+            let options = crate::control::Options { simulation: true, ..default() };
+            let hub = crate::control::Hub::new(options.clone()).unwrap();
+            let mut library = SceneLibrary::new();
+            library.initial = library.index("field").unwrap();
+            let mut app = crate::build_app(options, library, hub);
+            let mut game = Game::default();
+            game.network = Some(network);
+            app.insert_resource(game);
+            app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                Duration::from_secs_f64(1.0 / 60.0),
+            ));
+            app
+        };
+        let mut host = make_app(Network::Host("127.0.0.1:0".parse().unwrap()));
+        host.update();
+        let address = host.world().resource::<Game>().session.as_ref().unwrap().local_addr().unwrap();
+        let mut client = make_app(Network::Join(address));
+        let mut joined = false;
+        for _ in 0..240 {
+            host.update();
+            client.update();
+            if client.world().resource::<Game>().player().is_some() {
+                joined = true;
+                break;
+            }
+        }
+        assert!(joined, "client never acquired an avatar");
+        host.update();
+        client.update();
+        let start = player_position(&mut client);
+        client.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyW);
+        let mut visible_after = None;
+        for frame in 1..=60 {
+            client.update();
+            host.update();
+            if crate::navigation::flat(player_position(&mut client) - start).length() > 0.001 {
+                let game = client.world().resource::<Game>();
+                let index = game.player().unwrap() as usize;
+                let confirmed = game.to_view(game.current.as_ref().unwrap().agents[index].position);
+                assert!(crate::navigation::flat(confirmed - start).length() < 0.001,
+                    "the test did not observe a visual preview before the confirmed move");
+                visible_after = Some(frame);
+                break;
+            }
+        }
+        let frames = visible_after.expect("joined player's input produced no visible movement");
+        println!("joined player's first visible movement: {frames} frames after key press");
+        assert!(frames <= 2, "joined player took {frames} frames to visibly respond");
+        for _ in 0..20 {
+            client.update();
+            host.update();
+        }
+        client.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::KeyW);
+        let mut last = player_position(&mut client);
+        for _ in 0..45 {
+            client.update();
+            host.update();
+            let shown = player_position(&mut client);
+            assert!(crate::navigation::flat(shown - last).length() < 0.2,
+                "the local avatar jumped while reconciling with the host");
+            last = shown;
+        }
+        let game = client.world().resource::<Game>();
+        let index = game.player().unwrap() as usize;
+        let confirmed = game.to_view(game.current.as_ref().unwrap().agents[index].position);
+        assert!(crate::navigation::flat(last - confirmed).length() < 0.1,
+            "the local avatar did not settle on the host's confirmed pose");
+        let goal = confirmed + Vec3::new(0.6, 0.0, 0.0);
+        client.world_mut().resource_mut::<Game>().go_to(goal, false);
+        client.update();
+        host.update();
+        let route_preview = player_position(&mut client);
+        assert!(crate::navigation::flat(route_preview - last).length() > 0.001,
+            "click-to-move gave no immediate visual response");
+        let game = client.world().resource::<Game>();
+        let index = game.player().unwrap() as usize;
+        let still_confirmed = game.to_view(game.current.as_ref().unwrap().agents[index].position);
+        assert!(crate::navigation::flat(still_confirmed - confirmed).length() < 0.001,
+            "the click-to-move test did not observe prediction before confirmation");
+        let mut followed_route = false;
+        let mut previous_shown = route_preview;
+        for _ in 0..90 {
+            client.update();
+            host.update();
+            let shown = player_position(&mut client);
+            assert!(crate::navigation::flat(shown - previous_shown).length() < 0.2,
+                "click-to-move preview jumped while reconciling with the host");
+            previous_shown = shown;
+            let game = client.world().resource::<Game>();
+            let index = game.player().unwrap() as usize;
+            let confirmed_route = game.to_view(game.current.as_ref().unwrap().agents[index].position);
+            if crate::navigation::flat(confirmed_route - confirmed).length() > 0.05 {
+                followed_route = true;
+            }
+        }
+        assert!(followed_route, "the joined avatar stopped following confirmed click-to-move motion");
+        let game = client.world().resource::<Game>();
+        let index = game.player().unwrap() as usize;
+        let confirmed_route = game.to_view(game.current.as_ref().unwrap().agents[index].position);
+        assert!(crate::navigation::flat(previous_shown - confirmed_route).length() < 0.1,
+            "click-to-move preview did not settle on the confirmed route");
+    }
 }
