@@ -1,7 +1,8 @@
-//! Repeatable visual QA: `--showcase --capture-dir /tmp/kestrel`.
+//! Repeatable visual QA: `--showcase` or `--motion-showcase` with `--capture-dir`.
 use crate::{
+    character::Player,
     effects::{CameraRig, Feedback},
-    character::Player, gameplay::Controls,
+    gameplay::Controls,
 };
 use bevy::{
     app::AppExit,
@@ -13,9 +14,13 @@ use bevy::{
 pub struct Preview {
     configured: bool,
     enabled: bool,
+    motion: bool,
     directory: Option<String>,
     elapsed: f32,
     started: bool,
+    turned: bool,
+    run_frame: bool,
+    turn_frame: bool,
     overview: bool,
     action: bool,
     impact: bool,
@@ -26,12 +31,14 @@ pub fn playback(
     time: Res<Time>,
     mut preview: Local<Preview>,
     mut controls: ResMut<Controls>,
+    mut game: ResMut<crate::lockstep::Game>,
     mut player: Single<&mut Transform, With<Player>>,
     mut camera: Single<&mut CameraRig>,
 ) {
     if !preview.configured {
         preview.configured = true;
-        preview.enabled = std::env::args().any(|a| a == "--showcase");
+        preview.motion = std::env::args().any(|a| a == "--motion-showcase");
+        preview.enabled = preview.motion || std::env::args().any(|a| a == "--showcase");
     }
     if !preview.enabled {
         return;
@@ -40,8 +47,20 @@ pub fn playback(
     // Wait for shader compilation before the scripted approach and cut.
     if preview.elapsed > 3.0 && !preview.started {
         preview.started = true;
-        player.translation = Vec3::new(0.1, 0.0, 2.5);
-        controls.route = vec![Vec3::new(0.35, 0.0, 1.55)];
+        if preview.motion {
+            camera.zoom = 3.0;
+            game.go_to(Vec3::new(0.0, 0.0, -3.0), true);
+        } else {
+            player.translation = Vec3::new(0.1, 0.0, 2.5);
+            controls.route = vec![Vec3::new(0.35, 0.0, 1.55)];
+        }
+    }
+    if preview.motion && preview.elapsed > 3.7 && !preview.turned {
+        preview.turned = true;
+        game.go_to(Vec3::new(3.0, 0.0, -1.0), true);
+    }
+    if preview.motion {
+        return;
     }
     if preview.started && preview.elapsed > 5.0 && !preview.finished {
         preview.finished = true;
@@ -56,10 +75,16 @@ pub fn frame_character(
     controls: Res<Controls>,
     player: Single<&Transform, With<Player>>,
     mut camera: Single<&mut CameraRig>,
-    mut showcase: Local<Option<bool>>,
+    mut showcase: Local<Option<(bool, bool)>>,
 ) {
-    let enabled = *showcase.get_or_insert_with(|| std::env::args().any(|a| a == "--showcase"));
-    if !enabled || controls.attack.is_none() {
+    let (action, motion) = *showcase.get_or_insert_with(|| {
+        let args: Vec<_> = std::env::args().collect();
+        (
+            args.iter().any(|a| a == "--showcase"),
+            args.iter().any(|a| a == "--motion-showcase"),
+        )
+    });
+    if !motion && (!action || controls.attack.is_none()) {
         return;
     }
     let target = player.translation + Vec3::Y * 0.8;
@@ -79,6 +104,7 @@ pub fn capture(
         preview.configured = true;
         let args: Vec<_> = std::env::args().collect();
         preview.enabled = args.iter().any(|a| a == "--haul-showcase");
+        preview.motion = args.iter().any(|a| a == "--motion-showcase");
         preview.directory = args
             .windows(2)
             .find(|pair| pair[0] == "--capture-dir")
@@ -94,7 +120,15 @@ pub fn capture(
         return;
     };
     preview.elapsed += time.delta_secs().min(0.1);
-    let name = if preview.elapsed > 4.5 && !preview.overview {
+    let name = if preview.motion && preview.elapsed > 3.45 && !preview.run_frame {
+        preview.run_frame = true;
+        Some("run.png")
+    } else if preview.motion && preview.elapsed > 3.95 && !preview.turn_frame {
+        preview.turn_frame = true;
+        Some("turn.png")
+    } else if preview.motion {
+        None
+    } else if preview.elapsed > 4.5 && !preview.overview {
         preview.overview = true;
         Some("overview.png")
     } else if controls.attack.is_some_and(|attack| {
@@ -114,7 +148,7 @@ pub fn capture(
             .spawn(Screenshot::primary_window())
             .observe(save_to_disk(format!("{directory}/{name}")));
     }
-    if preview.elapsed > 8.0 {
+    if preview.elapsed > if preview.motion { 5.5 } else { 8.0 } {
         exit.write(AppExit::Success);
     }
 }

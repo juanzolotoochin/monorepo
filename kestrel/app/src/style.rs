@@ -257,6 +257,11 @@ pub fn apply(world: &mut World) {
                 } else {
                     ActorPart::RightShin
                 }),
+                crate::character::PartKind::Foot(side) => Some(if *side < 0.0 {
+                    ActorPart::LeftFoot
+                } else {
+                    ActorPart::RightFoot
+                }),
                 crate::character::PartKind::WeaponGrip => Some(ActorPart::Weapon),
             };
             part.map(|part| (e, part))
@@ -281,6 +286,11 @@ pub fn apply(world: &mut World) {
                     ActorPart::LeftLeg
                 } else {
                     ActorPart::RightLeg
+                }),
+                crate::character::PartKind::Foot(side) => Some(if *side < 0.0 {
+                    ActorPart::LeftShin
+                } else {
+                    ActorPart::RightShin
                 }),
                 _ => None,
             };

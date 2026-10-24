@@ -919,13 +919,24 @@ pub fn setup(
                             Vec3::new(0.0, 0.03, 0.20),
                             Vec3::new(0.19, 0.12, 0.04),
                         );
-                        block(
-                            s,
-                            &cube,
-                            &dark,
-                            Vec3::new(0.0, -0.22, 0.12),
-                            Vec3::new(0.32, 0.16, 0.47),
-                        );
+                        let foot = Transform::from_xyz(0.0, -0.21, 0.0);
+                        s.spawn((
+                            Part {
+                                kind: PartKind::Foot(side),
+                                rest: foot,
+                            },
+                            foot,
+                            Visibility::default(),
+                        ))
+                        .with_children(|f| {
+                            block(
+                                f,
+                                &cube,
+                                &dark,
+                                Vec3::new(0.0, -0.01, 0.12),
+                                Vec3::new(0.32, 0.16, 0.47),
+                            );
+                        });
                     });
                 });
             }

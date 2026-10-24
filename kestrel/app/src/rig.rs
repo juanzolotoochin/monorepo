@@ -30,6 +30,8 @@ impl RigTemplate {
                     ActorPart::RightArm => [0.43, 1.27, 0.],
                     ActorPart::LeftShin => [-0.17, 0.31, 0.],
                     ActorPart::RightShin => [0.17, 0.31, 0.],
+                    ActorPart::LeftFoot => [-0.17, 0.1, 0.],
+                    ActorPart::RightFoot => [0.17, 0.1, 0.],
                     ActorPart::LeftForearm => [-0.43, 1.01, 0.],
                     ActorPart::RightForearm => [0.43, 1.01, 0.],
                     ActorPart::LeftHand => [-0.43, 0.75, 0.],
@@ -156,6 +158,7 @@ impl Rig {
                 ActorPart::LeftLeg
                     | ActorPart::LeftArm
                     | ActorPart::LeftShin
+                    | ActorPart::LeftFoot
                     | ActorPart::LeftForearm
                     | ActorPart::LeftHand
             ) {

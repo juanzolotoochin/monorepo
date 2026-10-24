@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use content::scenario::Weapon;
 use sim::settlement::avatar::Swing;
 
-use crate::character::{blend_pose, dig_age, MotionState, Part, PartKind, Player, Pose};
+use crate::character::{blend_pose, dig_age, GaitClock, MotionState, Part, PartKind, Player, Pose};
 use crate::combat::{Attack, ATTACK_END, REBOUND_END};
 use crate::jetpack::Exhaust;
 use crate::lockstep::Game;
@@ -20,12 +20,9 @@ pub struct Peer {
     agent: u16,
     /// The style the copy was made in; a restyle makes a new copy.
     style: Option<usize>,
-    /// Walk cycle phase, advanced by distance moved.
-    stride: f32,
+    gait: GaitClock,
     /// The start tick of the last swing heard, so each whooshes once.
     heard: u64,
-    /// Meters walked since the last footstep.
-    foot_distance: f32,
     motion: MotionState,
 }
 
@@ -100,6 +97,13 @@ pub fn update(
     // Render time in ticks: views sit `alpha` of the way from the previous
     // tick's state to the current one's.
     let ticks = game.tick as f32 - 1.0 + game.alpha;
+    let motion_profile = library.scenes[library.current]
+        .scene
+        .style
+        .as_ref()
+        .map_or_else(voxel_assets::CharacterMotion::default, |s| {
+            s.character_motion
+        });
     let mut poses = Vec::new();
     let mut shown = Vec::new();
     for (entity, mut peer, mut transform) in &mut peers {
@@ -130,13 +134,12 @@ pub fn update(
             .with_y(0.0)
             .distance(transform.translation.with_y(0.0))
             .min(1.0);
-        peer.stride += moved * 8.5;
-        if !current.avatar.flight.airborne {
-            peer.foot_distance += moved;
-            if peer.foot_distance > 0.72 {
-                peer.foot_distance -= 0.72;
-                sound.play(crate::sound::Cue::Step);
-            }
+        let step_distance = motion_profile.step_distance.clamp(0.2, 4.0);
+        let contacts = peer
+            .gait
+            .advance(moved, step_distance, !current.avatar.flight.airborne);
+        for _ in 0..contacts {
+            sound.play(crate::sound::Cue::Step);
         }
         transform.translation = position;
         let turn = (current.heading - before.heading).to_f32();
@@ -154,7 +157,9 @@ pub fn update(
                 current.avatar.velocity.y.to_f32(),
             )
         };
-        let (speed, turn) = peer.motion.advance(velocity, heading, time.delta_secs());
+        let (speed, turn) =
+            peer.motion
+                .advance_with_profile(velocity, heading, time.delta_secs(), motion_profile);
         let swing = current.avatar.swing.as_ref();
         let attack = swing.and_then(|s| attack(s, ticks));
         if let (Some(swing), Some(_)) = (swing, attack) {
@@ -168,14 +173,8 @@ pub fn update(
             entity,
             current.avatar.weapon,
             Pose {
-                motion: library.scenes[library.current]
-                    .scene
-                    .style
-                    .as_ref()
-                    .map_or_else(voxel_assets::CharacterMotion::default, |s| {
-                        s.character_motion
-                    }),
-                stride: peer.stride,
+                motion: motion_profile,
+                stride: peer.gait.phase,
                 speed,
                 turn,
                 breathe,
@@ -234,9 +233,8 @@ pub fn update(
             world.entity_mut(root).insert(Peer {
                 agent,
                 style,
-                stride: 0.0,
+                gait: GaitClock::default(),
                 heard: 0,
-                foot_distance: 0.0,
                 motion: MotionState::default(),
             });
         });

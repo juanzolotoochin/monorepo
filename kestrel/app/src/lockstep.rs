@@ -468,6 +468,7 @@ pub struct LocalAvatarPreview {
 /// Places the player where the simulation has the avatar, between ticks.
 pub fn follow_avatar(
     game: Res<Game>,
+    library: Res<SceneLibrary>,
     time: Res<Time>,
     mut controls: ResMut<Controls>,
     mut player: Single<&mut Transform, With<Player>>,
@@ -580,15 +581,12 @@ pub fn follow_avatar(
     if let Some(velocity) = preview_velocity {
         controls.velocity = velocity;
     }
-    controls.stride += moved.length() * 8.5;
-    if a.avatar.flight.airborne {
-        controls.foot_distance = 0.0;
-    } else {
-        controls.foot_distance += moved.length();
-        if controls.foot_distance > 0.72 {
-            controls.foot_distance -= 0.72;
-            sound.play(crate::sound::Cue::Step);
-        }
+    let step_distance = library.scenes[library.current].scene.style.as_ref()
+        .map_or_else(voxel_assets::CharacterMotion::default, |s| s.character_motion)
+        .step_distance.clamp(0.2, 4.0);
+    let contacts = controls.gait.advance(moved.length(), step_distance, !a.avatar.flight.airborne);
+    for _ in 0..contacts {
+        sound.play(crate::sound::Cue::Step);
     }
     controls.route = a.route.iter().map(|&p| game.to_view(p)).collect();
     let _ = dt;

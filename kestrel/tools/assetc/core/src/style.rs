@@ -41,6 +41,13 @@ pub struct CharacterMotion {
     pub leg_swing: f32,
     pub torso_turn: f32,
     pub pose_response: f32,
+    pub run_crouch: f32,
+    pub elbow_drive: f32,
+    pub step_lift: f32,
+    /// Distance between alternating foot contacts in world units.
+    pub step_distance: f32,
+    /// Angular spring frequency in radians per second. Lower values keep turning momentum longer.
+    pub turn_inertia: f32,
 }
 impl Default for CharacterMotion {
     fn default() -> Self {
@@ -49,6 +56,11 @@ impl Default for CharacterMotion {
             leg_swing: 0.48,
             torso_turn: 0.42,
             pose_response: 19.0,
+            run_crouch: 0.13,
+            elbow_drive: 0.38,
+            step_lift: 0.10,
+            step_distance: 1.25,
+            turn_inertia: 8.0,
         }
     }
 }
@@ -670,6 +682,8 @@ pub enum ActorPart {
     RightArm,
     LeftShin,
     RightShin,
+    LeftFoot,
+    RightFoot,
     LeftForearm,
     RightForearm,
     LeftHand,

@@ -1,5 +1,8 @@
 //! Movement controls, pointer targeting and route display.
-use crate::{character::Player, combat::Attack};
+use crate::{
+    character::{GaitClock, Player},
+    combat::Attack,
+};
 use bevy::prelude::*;
 
 pub const WALK_SPEED: f32 = 3.8;
@@ -10,8 +13,7 @@ pub struct Controls {
     pub weapon: content::scenario::Weapon,
     pub route: Vec<Vec3>,
     pub velocity: Vec3,
-    pub stride: f32,
-    pub foot_distance: f32,
+    pub gait: GaitClock,
     pub attack: Option<Attack>,
     pub queued: Option<(Vec3, f32)>,
     pub repath: f32,

@@ -97,12 +97,16 @@ Style(
             (kind: Box, position: (0.0, -0.13, 0.0), size: (0.24, 0.29, 0.25), material: "shadow")
         ]),
         (part: LeftShin, shapes: [
-            (kind: Box, position: (0.0, -0.11, 0.0), size: (0.24, 0.27, 0.25), material: "shadow"),
-            (kind: Box, position: (0.0, -0.24, 0.07), size: (0.27, 0.15, 0.37), material: "leaf_shadow")
+            (kind: Box, position: (0.0, -0.11, 0.0), size: (0.24, 0.27, 0.25), material: "shadow")
         ]),
         (part: RightShin, shapes: [
-            (kind: Box, position: (0.0, -0.11, 0.0), size: (0.24, 0.27, 0.25), material: "shadow"),
-            (kind: Box, position: (0.0, -0.24, 0.07), size: (0.27, 0.15, 0.37), material: "leaf_shadow")
+            (kind: Box, position: (0.0, -0.11, 0.0), size: (0.24, 0.27, 0.25), material: "shadow")
+        ]),
+        (part: LeftFoot, shapes: [
+            (kind: Box, position: (0.0, -0.03, 0.07), size: (0.27, 0.15, 0.37), material: "leaf_shadow")
+        ]),
+        (part: RightFoot, shapes: [
+            (kind: Box, position: (0.0, -0.03, 0.07), size: (0.27, 0.15, 0.37), material: "leaf_shadow")
         ]),
         (part: Weapon, pivot: Some((0.4, 0.9, 0.0)), shapes: [
             (kind: Box, position: (0.0, 0.0, 0.0), size: (0.13, 0.12, 0.38), material: "bark"),
