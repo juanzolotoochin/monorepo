@@ -1,1 +1,11 @@
+load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
+
 exports_files(["index.html", "wasm_bindgen.BUILD.bazel"])
+
+rust_binary(
+    name = "generate_audio",
+    srcs = ["generate_audio.rs"],
+    edition = "2021",
+    link_deps = ["//kestrel/app:sound"],
+    visibility = ["//kestrel/app:__pkg__"],
+)

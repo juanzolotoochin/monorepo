@@ -7,9 +7,9 @@ load("//kestrel/build/game_demo:defs.bzl", "game_demo", "game_simulation_test", 
 genrule(
     name = "web",
     srcs = [":demo", "//kestrel/app/web:index.html"],
-    outs = ["web_bundle/demo.js", "web_bundle/demo_bg.wasm", "web_bundle/index.html"],
-    tools = ["@kestrel_wasm_bindgen//:wasm-bindgen"],
-    cmd = "mkdir -p $(RULEDIR)/web_bundle && $(location @kestrel_wasm_bindgen//:wasm-bindgen) $(location :demo) --target web --no-typescript --out-dir $(RULEDIR)/web_bundle && cp $(location //kestrel/app/web:index.html) $(RULEDIR)/web_bundle/index.html",
+    outs = ["web_bundle/demo.js", "web_bundle/demo_bg.wasm", "web_bundle/index.html"] + ["web_bundle/cue_%d.wav" % i for i in range(20)],
+    tools = ["@kestrel_wasm_bindgen//:wasm-bindgen", "//kestrel/app/web:generate_audio"],
+    cmd = "mkdir -p $(RULEDIR)/web_bundle && $(location @kestrel_wasm_bindgen//:wasm-bindgen) $(location :demo) --target web --no-typescript --remove-name-section --out-dir $(RULEDIR)/web_bundle && cp $(location //kestrel/app/web:index.html) $(RULEDIR)/web_bundle/index.html && $(location //kestrel/app/web:generate_audio) $(RULEDIR)/web_bundle",
     visibility = ["//visibility:public"],
 )
 
@@ -57,6 +57,7 @@ rust_binary(
         "@crates//:serde",
         "@crates//:serde_json",
         "@crates//:web-time",
+        "@crates//:wasm-bindgen",
     ],
 )
 
@@ -91,6 +92,7 @@ cc_library(
     srcs = ["src/sound.c"],
     copts = ["-O2"],
     deps = ["@miniaudio//:headers"],
+    visibility = ["//kestrel/app/web:__pkg__"],
 )
 
 game_demo(

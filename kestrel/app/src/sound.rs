@@ -19,12 +19,20 @@ unsafe extern "C" {
     );
 }
 
-// Browser audio will use a web backend; the first wasm build runs silently.
-// Keep offline synthesis symbols available so the shared sound API compiles.
+// Browser playback uses the same synthesized cue bank, exported as short WAV
+// clips by the web bundle's build tool. The Web Audio context stays in JavaScript.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = window, js_name = kestrelWebAudioPlay)]
+    fn kestrel_web_audio_play(cue: i32);
+}
+
+// Offline synthesis is only used by native demo captures.
 #[cfg(target_arch = "wasm32")]
 unsafe fn kestrel_audio_start() -> i32 { -1 }
 #[cfg(target_arch = "wasm32")]
-unsafe fn kestrel_audio_play(_: i32) {}
+unsafe fn kestrel_audio_play(cue: i32) { kestrel_web_audio_play(cue); }
 #[cfg(target_arch = "wasm32")]
 unsafe fn kestrel_audio_stop() {}
 #[cfg(target_arch = "wasm32")]
@@ -153,7 +161,14 @@ impl Sound {
     }
     #[cfg(target_arch = "wasm32")]
     pub fn new() -> Self {
-        Self::silent()
+        Self {
+            muted: false,
+            active: true,
+            _worker: None,
+            recording: false,
+            tick: std::sync::atomic::AtomicU64::new(0),
+            cues: std::sync::Mutex::new(vec![]),
+        }
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new() -> Self {

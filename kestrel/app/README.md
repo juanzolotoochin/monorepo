@@ -2,7 +2,7 @@
 
 ## Browser build
 
-On Linux x86-64, build the WebAssembly version and serve its three generated
+On Linux x86-64, build the WebAssembly version and serve its generated
 files over HTTP:
 
 ```sh
@@ -12,8 +12,9 @@ python3 -m http.server 8000 --directory bazel-bin/kestrel/app/web_bundle
 
 Open `http://localhost:8000/` in a browser with WebGL2. The launch menu,
 Character Studio, and solo scenes use the same game executable as desktop;
-the canvas fits the browser window. The web bundle currently runs without
-audio, uses one simulation thread, and does not save menu preferences. Hosting
+the canvas fits the browser window. Audio uses the same procedural cues as the
+desktop game; click or press a key in the page to enable browser playback. The
+web build uses one simulation thread and does not save menu preferences. Hosting
 and joining still use the native UDP transport, so choose **Play Solo** in the
 browser. The pinned wasm-bindgen packaging tool is a Linux x86-64 executable;
 the generated web files can be served from any host.

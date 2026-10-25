@@ -16,6 +16,35 @@
     <div id="status">Loading Kestrel…</div>
     <script type="module">
       import init from './demo.js';
+      window.kestrelWebAudioPlay = () => {};
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (AudioContextClass) {
+        const audio = new AudioContextClass();
+        const cues = Array.from({ length: 20 }, (_, kind) =>
+          fetch(`./cue_${kind}.wav`)
+            .then(response => {
+              if (!response.ok) throw new Error(`cue ${kind}: HTTP ${response.status}`);
+              return response.arrayBuffer();
+            })
+            .then(bytes => audio.decodeAudioData(bytes))
+            .catch(error => {
+              console.warn('Could not load a sound cue:', error);
+              return null;
+            }));
+
+        const enableAudio = () => { void audio.resume().catch(console.warn); };
+        window.addEventListener('pointerdown', enableAudio, { passive: true });
+        window.addEventListener('keydown', enableAudio);
+        window.kestrelWebAudioPlay = async kind => {
+          if (!Number.isInteger(kind) || kind < 0 || kind >= cues.length) return;
+          const buffer = await cues[kind];
+          if (!buffer) return;
+          const source = audio.createBufferSource();
+          source.buffer = buffer;
+          source.connect(audio.destination);
+          source.start();
+        };
+      }
       init().then(() => document.getElementById('status').remove())
         .catch(error => {
           document.getElementById('status').textContent = `Kestrel could not start: ${error}`;
