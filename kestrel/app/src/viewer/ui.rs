@@ -238,8 +238,19 @@ pub fn setup(
         },
         BackgroundColor(Color::srgba(0.015, 0.035, 0.05, 0.94)),
     )).with_children(|panel| {
-        label(panel, "CHARACTERS");
-        for (index, character) in library.characters.iter().enumerate() {
+        label(panel, "PLAYER ACTORS");
+        for (index, character) in library.characters.iter().enumerate()
+            .filter(|(_, character)| !matches!(character.source, CharacterSource::Skin(_))) {
+            button(panel, Action::Character(index), &character.name);
+        }
+        label(panel, "SKINS");
+        let selected_scene = library.characters.get(viewer.character).map(|entry| entry.scene_index);
+        let mut skins: Vec<_> = library.characters.iter().enumerate()
+            .filter(|(_, entry)| matches!(entry.source, CharacterSource::Skin(_)))
+            .collect();
+        // Keep the selected scene's skins visible ahead of the full inventory.
+        skins.sort_by_key(|(_, entry)| (Some(entry.scene_index) != selected_scene, !entry.can_locomote));
+        for (index, character) in skins {
             button(panel, Action::Character(index), &character.name);
         }
         label(panel, "SCENE PREFABS");

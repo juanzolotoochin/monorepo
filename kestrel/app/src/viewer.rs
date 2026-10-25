@@ -1116,6 +1116,13 @@ mod tests {
     #[test]
     fn studio_discovers_clips_from_each_character_capability() {
         let library = SceneLibrary::new();
+        let static_skin = &library.characters[library.characters.index_for_id("skin:item_lumber").unwrap()];
+        assert!(!static_skin.can_locomote);
+        assert!(Clip::Idle.supports(static_skin));
+        assert!(!Clip::Run.supports(static_skin));
+        let vehicle = &library.characters[library.characters.index_for_id("skin:cart").unwrap()];
+        assert!(vehicle.can_locomote);
+        assert!(Clip::Run.supports(vehicle));
         for character in library.characters.iter() {
             assert!(Clip::Idle.supports(character));
             assert_eq!(Clip::Walk.supports(character), character.can_locomote);

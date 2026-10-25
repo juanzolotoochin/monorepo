@@ -1289,6 +1289,15 @@ pub enum Motion {
     #[default]
     Static,
 }
+impl Motion {
+    /// Whether advancing a rig's travel distance changes its pose.
+    pub fn uses_travel(&self) -> bool {
+        match self {
+            Self::Biped | Self::Quadruped | Self::CubeRoll { .. } | Self::Vehicle { .. } => true,
+            Self::Machine { .. } | Self::Turret | Self::Static => false,
+        }
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SkinRecipe {

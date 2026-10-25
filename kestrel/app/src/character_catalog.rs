@@ -1,6 +1,6 @@
 //! Discover inspectable characters and their capabilities from baked scene packs.
 use std::{collections::HashSet, ops::Deref};
-use voxel_assets::{ActorPart, Motion, ScenePack};
+use voxel_assets::{ActorPart, ScenePack};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CharacterSource {
@@ -61,8 +61,7 @@ impl CharacterCatalog {
                 });
             }
             for skin in &pack.skins {
-                if skin.parts.is_empty() || !matches!(skin.motion, Motion::Biped | Motion::Quadruped | Motion::CubeRoll { .. })
-                    || !ids.insert(format!("skin:{}", skin.id)) {
+                if skin.parts.is_empty() || !ids.insert(format!("skin:{}", skin.id)) {
                     continue;
                 }
                 entries.push(CharacterEntry {
@@ -70,7 +69,7 @@ impl CharacterCatalog {
                     source: CharacterSource::Skin(skin.id.clone()),
                     id: format!("skin:{}", skin.id),
                     name: skin.id.replace('_', " ").to_uppercase(),
-                    can_locomote: true,
+                    can_locomote: skin.motion.uses_travel(),
                     weapon: None,
                     can_jump: false,
                 });
@@ -80,7 +79,8 @@ impl CharacterCatalog {
     }
 
     pub fn for_scene(&self, scene_index: usize) -> Option<&CharacterEntry> {
-        self.iter().find(|character| character.scene_index == scene_index)
+        self.iter().find(|entry| entry.scene_index == scene_index
+            && (!matches!(entry.source, CharacterSource::Skin(_)) || entry.can_locomote))
     }
 
     pub fn built_in(&self) -> Option<&CharacterEntry> {

@@ -88,4 +88,4 @@ An animated skin is not automatically a gameplay character. A cart may use vehic
 
 ## Inspecting the result
 
-The launch menu's **Asset Studio** previews baked characters and their procedural animations, plus scene prefabs such as boulders. Select a prefab to see its geometry and material names. It is an inspection tool today; authoring happens in RON files and Bazel asset targets. `kestrel/build/voxel_assets/README.md` describes the compiler inputs and generated scene packs.
+The launch menu's **Asset Studio** previews player actors, baked skins, and scene prefabs such as boulders. A skin appears whenever it has baked geometry; its motion type determines which movement previews are available. Select a prefab to see its geometry and material names. The Studio is an inspection tool today; authoring happens in RON files and Bazel asset targets. `kestrel/build/voxel_assets/README.md` describes the compiler inputs and generated scene packs.
