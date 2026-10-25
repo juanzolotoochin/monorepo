@@ -1,7 +1,10 @@
 # Controller support: agreed design
 
-Status: architecture agreed on 25 October 2026; implementation has not started.
-The user explicitly requested design agreement before gameplay changes. The
+Status: architecture agreed on 25 October 2026. Implemented on 25 October 2026
+through step 4 of the sequence below, with synthetic (hardware-free) tests;
+physical USB validation (step 5) has not been done. See
+[Implementation](#implementation) for what was built, the routine decisions
+taken, and how it was validated. The
 [interactive review](design/controller-input.html) contains the source review
 and editable design alternatives. This document records the selected behavior.
 
@@ -264,4 +267,146 @@ Required automated scenarios include:
   preview convergence after movement and cancellation.
 
 No gameplay changes, dependency updates, or Bazel runs were made while recording
-this design. The next gameplay implementation requires a separate user request.
+this design. Implementation was then requested separately (below).
+
+## Implementation
+
+Built on 25 October 2026 on `controller_support_branch`, following steps 1–4.
+Step 5 (an Xbox-compatible controller over USB) is still to do. Until it is,
+the synthetic tests pass and physical integration is unverified.
+
+### Where things live
+
+| Piece | Code |
+|---|---|
+| Semantic release | `sim/src/settlement/avatar.rs` (`release_direct_control`); `CommandKind::ReleaseDirectControl` in `sim/src/world.rs` |
+| Snapshot, filters, edges, re-arming | `app/src/input/pad.rs` |
+| Tuning constants | `app/src/input/tuning.rs` |
+| Seat, ownership, contexts, bindings, history (App layer) | `app/src/input/mod.rs` (`InputService`) |
+| Synthetic source and timed scenarios | `app/src/input/synthetic.rs` |
+| Native reader (Bevy gamepads → snapshots) | `app/src/input/native.rs` |
+| Nearby targets | `app/src/input/targets.rs` |
+| Shared dispatcher (World layer) | `app/src/input/gameplay.rs` |
+| Prompts, target outline, drop preview, panels | `app/src/input/hud.rs` |
+| Pause navigation and suspension | `app/src/pause.rs` |
+| Main-menu navigation | `app/src/menu.rs` (`controller`) |
+| Tests | `app/src/input/tests.rs`, plus `pad.rs`, `synthetic.rs` and `native.rs`; release in `sim/src/settlement/scene_tests.rs` and `combat_tests.rs`; versions in `save/src/inputs.rs` and `net/src/tests.rs` |
+
+Order inside the Input phase: debug-UI routing (`GameInput`), then
+`InputService` (the first App service: it samples every device once, claims
+the seat, resolves ownership, and runs the utility panel and choosers), then
+`MainMenu`, then `Pause` (Session), then the feature pointer adapters (pile
+and depot clicks), then `PlayerControl`'s slot. That slot runs
+`input::gameplay::prepare` (suspension release, takeover release, weapon
+choice), then the cursor route and cursor attack adapters, then
+`input::gameplay::dispatch` (aim, attacks, lift, utility, logistics,
+movement). Keyboard and controller share `prepare` and `dispatch`. The old raw
+readers are gone: `keyboard_input`, the settlement's E and transfer-cancel
+reader, and the memory trial's E/Q reader, which ran in Mirror.
+
+### Routine decisions
+
+- **Release ownership.** A pile haul (`Hauler::job`) owns the route. So does an
+  accepted depot transfer (`AvatarState::job`) while the avatar's intent is
+  `GoTo`, because the app sends the dock walk together with the transfer. This
+  uses existing state only, so the save format and state hash are unchanged.
+  Release leaves a dig in progress alone: it stops travel and thrust only.
+- **Versions.** The new variant is appended last. Input logs are now version 2.
+  Version-1 logs still load (same bytes, checked against frozen v1 bytes), and
+  a version-1 log that holds the new command is refused. The network protocol
+  is version 3, and packets from version-2 peers are ignored like any other
+  version mismatch. The save format did not change.
+- **Deliberate input.** Keyboard: a fresh press of a gameplay key (movement,
+  Shift, Space, F, R, E, Q, Z/X/C/V, Ctrl). M, digits, F3 and `/` do not take
+  over. Mouse: a button press, or at least 8 px of movement in one frame.
+  Controller: a fresh press, or a stick leaving its dead zone. If both groups
+  are deliberate in the same frame, the current owner keeps gameplay. If
+  several controllers press Menu in the same frame, the lowest device identity
+  gets the seat.
+- **Keyboard bindings on the shared path.** R, F, E and Q produce the same
+  actions as the utility panel's Respawn, Dig, Record/Deploy and Clear
+  Recording. In scenes with a supply chain, E stays the nearest-machine toggle
+  within 2.5 m (it does not use the controller's selected target) and Q does
+  nothing, as before. Arrow keys now cancel a depot transfer, like WASD.
+- **Keyboard pause and focus loss.** Escape and focus loss now send the
+  release instead of relying on held keys' release edges. This is the agreed
+  behavior change: pausing no longer cancels an accepted haul.
+- **Re-arming.** A device already at rest when suspended has nothing to
+  re-arm. Otherwise everything reads as released until every button is up and
+  both sticks are centered.
+- **Panels.** Item choosers suspend direct control, like the utility panel.
+  Menu or View closes the utility panel. Keyboard Escape closes a panel without
+  also pausing. The utility panel lists Dig where digging is enabled, Record
+  and Clear Recording where there is no supply chain, Respawn, and Cancel
+  Logistics while a haul or transfer runs.
+- **Logistics.** X collects at a pile whether or not the player carries (when
+  carrying, it must be the same mineral). Cancel Logistics sends a deliberate
+  Stop, which ends a haul, plus `CancelTransfer`. B proposes a drop 1.4 m ahead
+  of the confirmed facing; the simulation validates it and reports a refusal.
+  Dispensers keep the click's lack of a range limit. Machines keep E's 2.5 m
+  and show "Move within 2.5 m" when farther.
+- **Targets.** Candidates are within 3 m of their interaction surface, within
+  0.75 m of the ground height under the avatar, and, for piles, the collector
+  and depots, reachable on foot by `sim::nav::path` (rechecked every 0.25 s).
+  Cycling follows the target key: piles, dispensers, the collector, depots,
+  machines, each by ID.
+- **Aim.** Starts from the confirmed avatar's aim if it has one, else its
+  heading. After a respawn it is taken again once a newer tick is mirrored.
+- **Menus.** Once seated, the controller navigates the launch menu: up/down
+  within a column, left/right between the scene list and the session column,
+  A acts like a click (on a text field it gives that field the keyboard), and
+  B leaves a field. B never quits. Pause: up/down, A confirms, B or Menu
+  resumes.
+- **Native backend.** `bevy_gilrs` 0.20.0 is a Windows-only dependency
+  (`[target.'cfg(windows)'.dependencies]` in `Cargo.toml`, and a `select` in
+  `kestrel/app/BUILD.bazel`). Bevy's `gamepad` feature provides the types on
+  every platform. Linux gets no backend: gilrs needs libudev there, which the
+  hermetic toolchain does not provide. The browser gets none because it is out
+  of scope. `Cargo.lock` gained only the new crates. While resolving, Cargo
+  also moved arboard and cpal to newer Windows crates; those two edges were
+  restored by hand, and `cargo metadata --locked` accepts the result.
+- **Tests and development only.** `Options::headless_menus` runs the menu and
+  pause overlay in simulation tests. `--gamepad-script <file.json>` replaces
+  native controllers with a synthetic scenario in any run, for visual QA.
+  `kestrel/app/demos/controller_field.gamepad.json` is a sample.
+
+### Validation
+
+Automated and hardware-free (`bazel test --config=full_local -c opt //kestrel/...`):
+
+- Simulation: release stops walking and click routes and switches thrust off.
+  It keeps accepted hauls and depot dock walks, with their routes. It judges a
+  haul accepted or rejected earlier in the same turn, conserves airborne
+  units, and is refused for another player's avatar. Deliberate movement still
+  cancels a haul.
+- Formats: input-log v2 round trip, frozen v1 bytes, a v1 log with the new
+  command refused, unknown versions refused; protocol 3 round trip, v2 refused.
+- Input service: seat claiming (the claim press is consumed, other devices are
+  ignored, simultaneous claims resolve stably), takeover in both directions,
+  the tie-break, dead-zone noise and mouse drift not taking over, neutral
+  non-owners contributing nothing, unit diagonals and direction coalescing,
+  trigger thresholds, disconnect and reconnect, focus loss and re-arming, the
+  utility panel, the chooser, UI consumption, navigation repeat,
+  scene-dependent keyboard bindings, and history.
+- Whole game, headless, with synthetic controllers: walking with the keyboard
+  idle and a single Stop; run; takeover releasing thrust and movement in both
+  directions; one attack per press at 15, 60 and 144 fps; aim from facing, aim
+  plus attack in one sample, and remembered aim; pause and focus loss
+  releasing once, with no surprise actions after resuming; disconnecting while
+  flying; several controllers; the utility panel and zoom not leaking into
+  gameplay; sticky and cycled pile targets with take, deposit and collect
+  more; incompatible cargo with no substitution; the drop proposal; an
+  accepted haul surviving pause; explicit Cancel Logistics; the multi-item
+  depot chooser and machine reach; arrow-key transfer cancellation; exact
+  replay of a controller session from its written input log; the same timed
+  scenario at 24, 60 and 120 fps; the menu and pause driven by a controller;
+  and a joined client's controller moving only its own avatar, with the
+  preview settling after a disconnect release.
+- Native mapping: a Bevy `Gamepad` with set buttons and axes maps to the
+  expected snapshot. This checks the mapping code, not a device.
+
+Not yet validated (step 5, needs an Xbox-compatible controller over USB):
+discovery on Windows through gilrs, whether physical buttons and axes match
+the mapping, disconnect and reconnect, focus loss, neutral re-arming, the
+prompts, and the physical feel of the dead zones and thresholds. Browser and
+Linux builds have no controller backend by design.

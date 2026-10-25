@@ -645,6 +645,27 @@ impl Settlement {
         a.avatar.intent = Some(intent);
     }
 
+    /// Commands: the player stopped driving the avatar directly (pause, focus
+    /// loss, a controller disconnecting). The jetpack always switches off.
+    /// Manual or click travel stops, unless an accepted logistics job owns
+    /// the route: a pile haul, or a depot transfer walking to its dock. Both
+    /// are judged on the state this tick, after any earlier command in the
+    /// same turn, so a haul accepted or rejected just before still decides.
+    /// Unlike `move_avatar(Stop)` this never cancels a pile job.
+    pub fn release_direct_control(&mut self, agent: usize) {
+        let hauling = self.piles.as_ref().is_some_and(|lab| lab.hauler(agent as AgentIx).is_some_and(|h| h.job.is_some()));
+        let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
+        a.avatar.flight.requested = false;
+        let docking = a.avatar.job.is_some() && matches!(a.avatar.intent, Some(Intent::GoTo { .. }));
+        if hauling || docking {
+            return;
+        }
+        if matches!(a.avatar.intent, Some(Intent::Walk { .. } | Intent::GoTo { .. })) {
+            a.route.clear();
+            a.avatar.intent = Some(Intent::Stop);
+        }
+    }
+
     /// Commands: starts an attack, or buffers one deliberate press during it.
     pub fn aim_avatar(&mut self, agent: usize, aim: FxVec2) {
         let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };

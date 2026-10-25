@@ -18,7 +18,7 @@
 </header>
 <nav aria-label="Review sections"><a href="#agreed">Agreed design</a><a href="#decisions">Selected options</a><a href="#current">Current path</a><a href="#map">Bindings</a><a href="#findings">Findings</a><a href="#proposal">Architecture</a><a href="#verification">Validation</a></nav>
 
-<section id="agreed"><h2>Agreed design · implementation not started</h2>
+<section id="agreed"><h2>Agreed design · implemented with synthetic tests; physical controller unverified</h2>
 <p>The user selected the baseline and all nine recommended behaviors on 25 October, then specified USB and hardware-free testing first. The consolidated specification is in <a href="../controller-support.md">controller-support.md</a>. The options below remain editable for revisions; they do not need another round of confirmation.</p>
 <div class="boundary"><strong>Small typed action/context layer.</strong> Windows native first; one controller for the local network player; keyboard/mouse coexistence; fixed bindings; gameplay, main menu, and pause navigation. No local split-screen or browser controller milestone.</div>
 <p><strong>First implementation milestone: synthetic controller input.</strong> The implementation machine may have no controller. A synthetic source must supply connection, buttons, triggers, and sticks to the same snapshot consumer used by the native source. This exercises bindings, dead zones, claiming, arbitration, contexts, targeting, and command dispatch without virtual-device drivers. Include automated timed scenarios and a developer-only rendered replay path. Physical validation later uses an Xbox-compatible USB controller; exact model is unspecified.</p>

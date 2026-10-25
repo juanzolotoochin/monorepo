@@ -81,6 +81,8 @@ pub struct GameInput {
     /// Interrupted gameplay holds since the start (release edges sent while
     /// the button was still physically down).
     cancellations: u64,
+    /// The window lost keyboard focus this frame.
+    focus_lost: bool,
 }
 
 impl GameInput {
@@ -125,6 +127,11 @@ impl GameInput {
         self.cancellations
     }
 
+    /// Whether the window lost keyboard focus this frame.
+    pub fn focus_lost(&self) -> bool {
+        self.focus_lost
+    }
+
     /// Takes a key for the debug UI this frame: its press (and everything up
     /// to its release) never reaches gameplay.
     pub fn claim(&mut self, key: KeyCode) {
@@ -146,6 +153,7 @@ impl GameInput {
     /// Routes one frame: called once per frame, before any gameplay input.
     pub fn route(&mut self, frame: Frame) {
         self.capture = frame.capture;
+        self.focus_lost = frame.focus_lost;
         let claims = std::mem::take(&mut self.claims);
         let keyboard_capture = frame.capture.keyboard;
         let (cancelled, game_keys) = route_device(

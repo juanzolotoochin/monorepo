@@ -107,6 +107,10 @@ pub enum CommandKind {
     Name { name: String },
     /// A player's avatar digs out a layer of the tile it stands on.
     DigDown { agent: u16 },
+    /// The player stopped driving their avatar directly (pause, focus loss,
+    /// a controller disconnecting): see `Settlement::release_direct_control`.
+    /// Appended last: variants are serialized by position.
+    ReleaseDirectControl { agent: u16 },
 }
 
 impl CommandKind {
@@ -123,6 +127,7 @@ impl CommandKind {
             | CommandKind::Equip { agent, .. }
             | CommandKind::Respawn { agent }
             | CommandKind::DigDown { agent }
+            | CommandKind::ReleaseDirectControl { agent }
             | CommandKind::Pile { agent, .. } => Some(agent),
             _ => None,
         }
@@ -459,6 +464,11 @@ impl World {
                 CommandKind::DigDown { agent } => {
                     if let Some(s) = &mut self.settlement {
                         s.dig(self.tick, agent as usize, &self.terrain);
+                    }
+                }
+                CommandKind::ReleaseDirectControl { agent } => {
+                    if let Some(s) = &mut self.settlement {
+                        s.release_direct_control(agent as usize);
                     }
                 }
                 CommandKind::Pile { agent, action, pace, approach } => {

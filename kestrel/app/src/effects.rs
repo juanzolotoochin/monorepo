@@ -556,10 +556,13 @@ pub fn camera_feedback(
     time: Res<Time>,
     feedback: Res<Feedback>,
     input: Res<debug_ui::GameInput>,
+    actions: Res<crate::input::InputService>,
     camera: Single<(&mut Transform, &mut Projection, &mut CameraRig), With<Camera>>,
 ) {
     let (mut transform, mut projection, mut rig) = camera.into_inner();
-    rig.zoom = (rig.zoom - input.scroll().y * 0.8).clamp(3.0, 26.0);
+    // The wheel, or the controller's D-pad: a view action only.
+    let pad = if actions.frame().blocked { 0.0 } else { actions.frame().gameplay.zoom };
+    rig.zoom = (rig.zoom - input.scroll().y * 0.8 + pad).clamp(3.0, 26.0);
     if let Projection::Orthographic(p) = &mut *projection {
         if let ScalingMode::FixedVertical { viewport_height } = &mut p.scaling_mode {
             *viewport_height +=

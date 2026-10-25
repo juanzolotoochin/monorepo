@@ -126,6 +126,8 @@ pub struct MainMenu {
     port: String,
     address: String,
     error: String,
+    /// The controller's focus, once a controller is seated.
+    pub(crate) pad_focus: Option<Action>,
 }
 
 impl Service for MainMenu {
@@ -142,6 +144,7 @@ impl Service for MainMenu {
             port: defaults.port.to_string(),
             address: defaults.address,
             error: String::new(),
+            pad_focus: None,
         };
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(settings) = Settings::read(&Settings::path()) {
@@ -154,13 +157,19 @@ impl Service for MainMenu {
         let open = in_state(Front::Menu);
         app.add_service_systems::<Self, _>(
             Phase::Input,
-            (setup, (update, persist).chain().run_if(crate::control::interactive)).chain().run_if(open.clone()),
+            (setup, controller, (update, persist).chain().run_if(crate::control::interactive)).chain().run_if(open.clone()),
         )
         .add_service_systems::<Self, _>(Phase::Present, capture.run_if(crate::control::interactive).run_if(open));
     }
 }
 
 impl MainMenu {
+    /// The scene the menu would start.
+    #[cfg(test)]
+    pub(crate) fn selected_scene(&self) -> usize {
+        self.selected_scene
+    }
+
     /// The session the chosen mode asks for, from the fields.
     fn launch(&self, defaults: &crate::flow::Defaults) -> Result<Launch, String> {
         let network = match self.mode {
@@ -360,7 +369,7 @@ pub fn setup(mut commands: Commands, scenes: Res<SceneLibrary>, roots: Query<(),
                                 choices.spawn((StatusText, Text::new(""), font(14.0), TextColor(WARNING)));
                             });
                     });
-                label(panel, "Click a field to edit / Enter to start / Esc to quit", 13.0, Color::srgb(0.42, 0.60, 0.65));
+                label(panel, "Click a field to edit / Enter to start / Esc to quit / Controller: press Menu, then D-pad and A", 13.0, Color::srgb(0.42, 0.60, 0.65));
             });
         });
 }
@@ -508,7 +517,7 @@ pub fn update(
             Action::Mode(mode) => menu.mode == mode,
             _ => false,
         };
-        let focused = matches!(*action, Action::Field(field) if menu.focus == Some(field));
+        let focused = matches!(*action, Action::Field(field) if menu.focus == Some(field)) || menu.pad_focus == Some(*action);
         highlight(*interaction, focused, &mut background, &mut border);
         if selected {
             background.set_if_neq(BackgroundColor(SELECTED));
@@ -526,6 +535,116 @@ pub fn update(
     for mut text in &mut status {
         if text.0 != message {
             text.0 = message.clone();
+        }
+    }
+}
+
+/// The menu's actions as the controller walks them: the scene list, and
+/// the session column.
+fn columns(scenes: usize) -> [Vec<Action>; 2] {
+    let scenes = (0..scenes).map(Action::Scene).collect();
+    #[cfg(not(target_arch = "wasm32"))]
+    let session = vec![
+        Action::Field(Field::Name),
+        Action::Mode(Mode::Solo),
+        Action::Mode(Mode::Host),
+        Action::Mode(Mode::Join),
+        Action::Field(Field::Port),
+        Action::Field(Field::Address),
+        Action::Start,
+        Action::Viewer,
+        Action::Quit,
+    ];
+    #[cfg(target_arch = "wasm32")]
+    let session = vec![Action::Field(Field::Name), Action::Mode(Mode::Solo), Action::Start, Action::Viewer, Action::Quit];
+    [scenes, session]
+}
+
+/// Controller navigation: D-pad or left stick moves the focus (up/down in a
+/// column, left/right between the scene list and the session column), A
+/// does what clicking would, B leaves a text field. Text itself is typed on
+/// the keyboard. Runs only once a controller is seated.
+#[allow(clippy::too_many_arguments)]
+fn controller(
+    mut input: ResMut<crate::input::InputService>,
+    mut menu: ResMut<MainMenu>,
+    mut flow: ResMut<Flow>,
+    mut viewer: ResMut<Viewer>,
+    scenes: Res<SceneLibrary>,
+    mut front: ResMut<NextState<Front>>,
+    mut text_focus: ResMut<debug_ui::TextFocus>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    use crate::input::Nav;
+    if input.seat().is_none() {
+        menu.pad_focus = None;
+        return;
+    }
+    let columns = columns(scenes.scenes.len());
+    let focus = *menu.pad_focus.get_or_insert(Action::Start);
+    let (column, row) = columns
+        .iter()
+        .enumerate()
+        .find_map(|(c, list)| list.iter().position(|a| *a == focus).map(|r| (c, r)))
+        .unwrap_or((1, 0));
+    let list = &columns[column];
+    menu.pad_focus = Some(match input.take_nav() {
+        Some(Nav::Up) => list[(row + list.len() - 1) % list.len()],
+        Some(Nav::Down) => list[(row + 1) % list.len()],
+        Some(Nav::Left) if column == 1 => Action::Scene(menu.selected_scene),
+        Some(Nav::Right) if column == 0 => Action::Start,
+        _ => focus,
+    });
+    if input.take_back() && menu.focus.is_some() {
+        menu.focus = None;
+        flow.typing = false;
+        text_focus.external = false;
+    }
+    if !input.take_confirm() {
+        return;
+    }
+    match menu.pad_focus.unwrap() {
+        Action::Scene(index) => {
+            menu.selected_scene = index;
+            menu.error.clear();
+        }
+        Action::Mode(mode) => {
+            menu.mode = mode;
+            menu.focus = None;
+            menu.error.clear();
+        }
+        Action::Field(field) => {
+            menu.focus = Some(field);
+            match field {
+                Field::Port => menu.mode = Mode::Host,
+                Field::Address => menu.mode = Mode::Join,
+                Field::Name => {}
+            }
+            flow.typing = true;
+            text_focus.external = true;
+            menu.error.clear();
+        }
+        Action::Start => match menu.launch(&flow.defaults) {
+            Ok(launch) => {
+                menu.error.clear();
+                menu.focus = None;
+                flow.typing = false;
+                text_focus.external = false;
+                flow.start(launch);
+            }
+            Err(error) => menu.error = error,
+        },
+        Action::Viewer => match viewer.open_for_scene(&scenes, menu.selected_scene) {
+            Some(character) => {
+                viewer.character = character;
+                menu.focus = None;
+                text_focus.external = false;
+                front.set(Front::Studio);
+            }
+            None => menu.error = "No playable characters are available.".into(),
+        },
+        Action::Quit => {
+            exit.write(AppExit::Success);
         }
     }
 }
@@ -602,6 +721,7 @@ mod tests {
             port: "4200".into(),
             address: defaults.address.clone(),
             error: String::new(),
+            pad_focus: None,
         };
         (menu, defaults)
     }

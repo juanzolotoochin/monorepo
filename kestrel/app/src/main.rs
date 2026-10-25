@@ -9,6 +9,7 @@ mod effects;
 mod flow;
 mod gameplay;
 mod impact;
+mod input;
 mod jetpack;
 mod legacy;
 mod lockstep;
@@ -131,6 +132,11 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
     let deterministic = simulation || options.script.is_some() || options.studio_frames.is_some();
     let menus = options.menus();
     let mut app = App::new();
+    // Development only: synthetic controllers replace native ones and play
+    // a timed scenario (`--gamepad-script`, see `input::synthetic`).
+    if let Some(script) = options.gamepad_script.clone() {
+        app.insert_resource(input::synthetic::SyntheticGamepads::default()).insert_resource(script);
+    }
     app.insert_resource(options)
         .insert_resource(start)
         .insert_resource(hub)
@@ -194,6 +200,10 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
             primary_window: Some(window),
             ..default()
         }));
+        // Native controllers: Windows only for now (see input/native.rs).
+        // A synthetic scenario (`--gamepad-script`) takes their place.
+        #[cfg(target_os = "windows")]
+        app.add_plugins(bevy_gilrs::GilrsPlugin);
     }
     if !simulation {
         app.add_plugins(bevy::pbr::MaterialPlugin::<atmosphere::GrassMaterial>::default());
@@ -228,6 +238,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
     // The debug menu manager comes first: it outlives its providers.
     app.add_plugins(ServicesPlugin)
         .add_service::<debug_ui::ImguiManager>()
+        .add_service::<input::InputService>()
         .add_service::<flow::Flow>()
         .add_service::<viewer::Viewer>()
         .add_service::<telemetry::TelemetryPanels>();
@@ -247,6 +258,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .add_service::<effects::Effects>()
         .add_service::<atmosphere::AtmosphereVisuals>()
         .add_service::<scene::Hud>()
+        .add_service::<input::gameplay::Dispatcher>()
         .add_service::<lockstep::PlayerControl>()
         .add_systems(First, (telemetry::begin, control::begin).chain())
         .add_systems(Update, telemetry::shortcut.in_set(debug_ui::DebugUiSystems::Shortcuts))

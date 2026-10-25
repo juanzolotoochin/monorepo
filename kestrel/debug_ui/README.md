@@ -125,6 +125,9 @@ its normal path ends the action (walking stops, the jetpack switches off),
 and the button stays off until it is released and pressed again. Hovering a
 window during a gameplay drag takes nothing over. Destinations, attacks and
 script or control-port commands already issued are not touched.
+`GameInput::focus_lost` says the window lost focus this frame; the game's
+input service uses it to pause and release the avatar (see
+[controller support](../docs/controller-support.md)).
 
 Clicks and hovers over the overlay don't reach Bevy UI buttons beneath it.
 

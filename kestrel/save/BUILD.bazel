@@ -8,6 +8,7 @@ rust_library(
     visibility = ["//kestrel:__subpackages__"],
     deps = [
         "//kestrel/content",
+        "//kestrel/fx",
         "//kestrel/sim",
         "@crates//:postcard",
         "@crates//:ron",

@@ -56,7 +56,11 @@ rust_binary(
         "@crates//:serde_json",
         "@crates//:web-time",
         "@crates//:wasm-bindgen",
-    ],
+    ] + select({
+        # The native controller backend (see input/native.rs): Windows only.
+        "@platforms//os:windows": ["@crates//:bevy_gilrs"],
+        "//conditions:default": [],
+    }),
 )
 
 studio_demo(
@@ -78,8 +82,9 @@ game_demo(
 
 rust_test(
     name = "movement_test",
-    size = "small",
-    compile_data = ["//:Cargo.toml"],
+    size = "medium",
+    # The controller tests read the sample synthetic scenario.
+    compile_data = ["//:Cargo.toml", "demos/controller_field.gamepad.json"],
     crate = ":demo",
     edition = "2021",
     rustc_env = {"CARGO_MANIFEST_DIR": "."},

@@ -22,7 +22,7 @@ use sim::{ChunkState, World, WorldConfig, WorldState};
 
 mod inputs;
 
-pub use inputs::{InputLog, INPUT_FORMAT_VERSION};
+pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 
 pub const FORMAT_VERSION: u32 = 2;
 pub const GAME_VERSION: &str = "0.0.0-dev";

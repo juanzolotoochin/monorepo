@@ -97,27 +97,19 @@ pub fn deploy(world: &mut World) -> Result<(), String> {
 pub fn clear(world: &mut World) {
     world.resource_mut::<crate::lockstep::SessionService>().command(sim::CommandKind::MemoryClear);
 }
-/// Mirrors the simulated trial for the view, and plays its feedback.
-pub fn tick(world: &mut World) {
-    let options = world.resource::<crate::control::Options>();
-    let interactive = !options.simulation && options.frames_dir.is_none();
-    let scene = world.resource::<crate::scene_view::SceneView>();
-    let reserved_e = scene.scene().scenario.is_some();
-    let memory_trial = scene.has_feature(SceneFeature::MemoryTrial);
-    if interactive && !reserved_e {
-        let keys = world.resource::<debug_ui::GameInput>().keys();
-        let (e, q) = (keys.just_pressed(KeyCode::KeyE), keys.just_pressed(KeyCode::KeyQ));
-        if q {
-            clear(world);
-        }
-        if e {
-            if world.resource::<Memory>().recording {
-                let _ = deploy(world);
-            } else {
-                let _ = record(world);
-            }
-        }
+impl Memory {
+    /// A recording is in progress (as of the latest mirrored tick).
+    pub fn recording(&self) -> bool {
+        self.recording
     }
+}
+
+/// Mirrors the simulated trial for the view, and plays its feedback. E/Q
+/// (and the controller's utility panel) record, deploy and clear through
+/// the shared Input path (`input::gameplay`).
+pub fn tick(world: &mut World) {
+    let scene = world.resource::<crate::scene_view::SceneView>();
+    let memory_trial = scene.has_feature(SceneFeature::MemoryTrial);
     let dt = world.resource::<Time>().delta_secs().min(0.1);
     let elapsed = world.resource::<Time>().elapsed_secs();
     let mirror = world.resource::<crate::lockstep::WorldMirror>();
