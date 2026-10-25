@@ -1,5 +1,7 @@
 Style(
     id: "atlantean-aetherworks",
+    actor_name: Some("AETHERWORKS EXPLORER"),
+    actor_weapon: Some(Spear),
     voxel_size: 0.10,
     materials: [
         (name: "stone", color: (0.18, 0.28, 0.28), emissive: (0.0, 0.0, 0.0), metallic: 0.12, roughness: 0.7, impact: Stone),

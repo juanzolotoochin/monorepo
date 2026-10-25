@@ -1,6 +1,7 @@
 //! Kestrel: an asset-free voxel action scene. See ../README.md.
 mod assets;
 mod character;
+mod character_catalog;
 mod combat;
 mod control;
 mod effects;
@@ -145,19 +146,24 @@ fn build_app(options: control::Options, mut scenes: assets::SceneLibrary, hub: c
     if studio {
         viewer.begin();
         launch_menu.open = false;
-        scenes.initial = scenes.index("moonlit-glade").unwrap_or(scenes.initial);
         let args: Vec<_> = std::env::args().collect();
+        let requested_character = args.windows(2)
+            .find(|pair| pair[0] == "--studio-character")
+            .map(|pair| pair[1].as_str());
+        viewer.character = requested_character
+            .map(|id| scenes.characters.index_for_id(id).unwrap_or_else(|error| panic!("{error}")))
+            .or_else(|| scenes.characters.iter().position(|entry| entry.scene_index == scenes.initial))
+            .or_else(|| (!scenes.characters.is_empty()).then_some(0))
+            .expect("Character Studio needs at least one baked actor");
+        scenes.initial = scenes.characters[viewer.character].scene_index;
         if let Some(pair) = args.windows(2).find(|pair| pair[0] == "--studio-clip") {
-            viewer.clip = match pair[1].as_str() {
-                "idle" => viewer::Clip::Idle,
-                "walk" => viewer::Clip::Walk,
-                "turn" => viewer::Clip::Turn,
-                "jump" => viewer::Clip::Jump,
-                "run-jump" => viewer::Clip::RunJump,
-                "forehand" => viewer::Clip::Forehand,
-                "backhand" => viewer::Clip::Backhand,
-                "overhead" => viewer::Clip::Overhead,
-                _ => viewer::Clip::Run,
+            viewer.clip = viewer::Clip::from_id(&pair[1]).unwrap_or(viewer::Clip::Run);
+        }
+        if !viewer.clip.supports(&scenes.characters[viewer.character]) {
+            viewer.clip = if viewer::Clip::Run.supports(&scenes.characters[viewer.character]) {
+                viewer::Clip::Run
+            } else {
+                viewer::Clip::Idle
             };
         }
         if let Some(pair) = args.windows(2).find(|pair| pair[0] == "--studio-angle") {
@@ -299,7 +305,7 @@ fn build_app(options: control::Options, mut scenes: assets::SceneLibrary, hub: c
                 piles::showcase.run_if(control::interactive),
             )
                 .chain(),
-            (viewer::drive, combat.run_if(viewer::not_active), animate_character, style::select_weapon).chain(),
+            (viewer::drive, combat.run_if(viewer::not_active), animate_character, style::select_weapon, viewer::pose_selected_rig).chain(),
             (
                 preview::frame_character.run_if(control::interactive),
                 effects::update_effects,

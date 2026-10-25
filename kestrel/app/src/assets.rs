@@ -1,5 +1,6 @@
 //! Bevy adapter for baked prefabs and the shared runtime boulder generator.
 use crate::{
+    character_catalog::{CharacterCatalog, CharacterEntry},
     effects::Feedback,
     character::Player, combat::Obstacle, gameplay::Controls,
     impact::{self, ImpactSlot, ImpactTarget, Surface},
@@ -22,6 +23,7 @@ pub struct IndustrialProp(pub Disc);
 #[derive(Resource)]
 pub struct SceneLibrary {
     pub scenes: Vec<ScenePack>,
+    pub characters: CharacterCatalog,
     pub current: usize,
     pub initial: usize,
     pub requested: Option<usize>,
@@ -52,8 +54,10 @@ impl SceneLibrary {
         for pack in &scenes {
             assert!(ids.insert(pack.scene.id.as_str()), "duplicate scene id {}", pack.scene.id);
         }
+        let characters = CharacterCatalog::discover(&scenes);
         Self {
             scenes,
+            characters,
             current: usize::MAX,
             initial: 0,
             requested: None,
@@ -69,6 +73,9 @@ impl SceneLibrary {
                     .join(", ");
                 format!("Unknown scene {id}. Available scenes: {available}")
             })
+    }
+    pub fn character(&self, scene_index: usize) -> Option<&CharacterEntry> {
+        self.characters.for_scene(scene_index)
     }
     pub fn has_feature(&self, feature: SceneFeature) -> bool {
         self.scenes.get(self.current).is_some_and(|pack| pack.scene.features.contains(&feature))
@@ -134,6 +141,7 @@ fn upload(model: Model, meshes: &mut Assets<Mesh>) -> CachedModel {
 
 pub fn switch_scene(
     keys: Res<ButtonInput<KeyCode>>,
+    viewer: Option<Res<crate::viewer::Viewer>>,
     mut commands: Commands,
     mut library: ResMut<SceneLibrary>,
     mut cache: ResMut<ModelCache>,
@@ -146,32 +154,24 @@ pub fn switch_scene(
     mut controls: ResMut<Controls>,
     mut feedback: ResMut<Feedback>,
 ) {
+    const SCENE_KEYS: [KeyCode; 10] = [
+        KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4,
+        KeyCode::Digit5, KeyCode::Digit6, KeyCode::Digit7, KeyCode::Digit8,
+        KeyCode::Digit9, KeyCode::Digit0,
+    ];
+    let key_scene = SCENE_KEYS.iter()
+        .position(|key| keys.just_pressed(*key))
+        .filter(|&index| index < library.scenes.len());
     let requested = if let Some(index) = library.requested.take() {
         Some(index)
+    } else if viewer.as_ref().is_some_and(|viewer| viewer.active) && library.current != usize::MAX {
+        None
     } else if library.locked && library.current != usize::MAX {
         None
-    } else if keys.just_pressed(KeyCode::Digit1) {
-        Some(0)
-    } else if keys.just_pressed(KeyCode::Digit2) {
-        Some(1)
+    } else if let Some(index) = key_scene {
+        Some(index)
     } else if keys.just_pressed(KeyCode::F4) {
-        library.index("moonlit-glade").ok()
-    } else if keys.just_pressed(KeyCode::Digit7) {
-        Some(6)
-    } else if keys.just_pressed(KeyCode::Digit8) {
-        Some(7)
-    } else if keys.just_pressed(KeyCode::Digit9) {
-        Some(8)
-    } else if keys.just_pressed(KeyCode::Digit0) {
-        Some(9)
-    } else if keys.just_pressed(KeyCode::Digit6) {
-        Some(5)
-    } else if keys.just_pressed(KeyCode::Digit5) {
-        Some(4)
-    } else if keys.just_pressed(KeyCode::Digit4) {
-        Some(3)
-    } else if keys.just_pressed(KeyCode::Digit3) {
-        Some(2)
+        Some((library.current.wrapping_add(1)) % library.scenes.len())
     } else if library.current == usize::MAX {
         Some(library.initial)
     } else {
@@ -409,6 +409,21 @@ mod tests {
     #[test]
     fn embedded_scenes_validate_and_demonstrate_shared_and_runtime_assets() {
         let library = SceneLibrary::new();
+        let discovered: Vec<_> = library.scenes.iter().enumerate()
+            .filter(|(_, pack)| pack.scene.style.is_some() && !pack.actor.is_empty())
+            .map(|(index, _)| index)
+            .collect();
+        assert!(!discovered.is_empty());
+        for entry in library.characters.iter() {
+            assert_eq!(library.characters.index_for_id(&entry.id).map(|index| library.characters[index].scene_index), Ok(entry.scene_index));
+        }
+        let distinct_styles: std::collections::HashSet<_> = discovered.iter()
+            .map(|&index| library.scenes[index].scene.style.as_ref().unwrap().id.as_str())
+            .collect();
+        assert!(library.characters.len() >= distinct_styles.len());
+        for id in ["skin:ox", "skin:ghoul", "skin:ghoul_brute"] {
+            assert!(library.characters.index_for_id(id).is_ok(), "missing {id}");
+        }
         let mining = &library.scenes[0];
         let lab = &library.scenes[1];
         assert_eq!(library.index("mining-deck"), Ok(0));

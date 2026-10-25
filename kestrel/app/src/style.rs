@@ -155,9 +155,9 @@ pub fn apply(world: &mut World) {
         .iter_mut(world)
     {
         help.0 = if jumping {
-            "1 - 9 / 0  SCENES    F4  GLADE    SPACE  JUMP    WASD  STEER    SHIFT  RUN    WHEEL  ZOOM    M  AUDIO"
+            "1 - 9 / 0  SCENES    F4  NEXT SCENE    SPACE  JUMP    WASD  STEER    SHIFT  RUN    WHEEL  ZOOM    M  AUDIO"
         } else {
-            "1 - 9 / 0  SCENES    F4  GLADE    SPACE  JETPACK    WASD  STEER    SHIFT  RUN    WHEEL  ZOOM    M  AUDIO"
+            "1 - 9 / 0  SCENES    F4  NEXT SCENE    SPACE  JETPACK    WASD  STEER    SHIFT  RUN    WHEEL  ZOOM    M  AUDIO"
         }
         .into();
     }
