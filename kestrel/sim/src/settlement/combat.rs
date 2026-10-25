@@ -45,6 +45,8 @@ pub fn combat_roll(tick: u64, entity: u64, stream: u64) -> u64 {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WaveState {
     pub id: String,
+    /// The enemy it sends.
+    pub character: content::character::CharacterIx,
     pub position: FxVec2,
     pub target: FxVec2,
     pub first: u64,

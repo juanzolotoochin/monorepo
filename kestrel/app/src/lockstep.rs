@@ -333,7 +333,7 @@ fn build_world(world: &mut World, index: usize, content: &Content) -> SimWorld {
         let cache = world.resource::<crate::assets::ModelCache>();
         let setup = scene_setup(&library, index, cache);
         let id = &library.scenes[index].scene.id;
-        SimWorld::new_scene(SEED, content.rules.clone(), &setup).unwrap_or_else(|e| panic!("scene {id} does not build a world: {e}"))
+        SimWorld::new_scene(SEED, content, &setup).unwrap_or_else(|e| panic!("scene {id} does not build a world: {e}"))
     })
 }
 
@@ -961,6 +961,13 @@ pub fn follow_avatar(
         sound.play(crate::sound::Cue::Step);
     }
     controls.route = a.route.iter().map(|&p| mirror.to_view(p)).collect();
+}
+
+/// The content every session plays with (see `open`), parsed once, for views
+/// that need definitions outside a session, such as Character Studio.
+pub fn builtin_content() -> &'static Content {
+    static CONTENT: std::sync::LazyLock<Content> = std::sync::LazyLock::new(Content::builtin);
+    &CONTENT
 }
 
 /// A simulation duration in view seconds, so view timings follow the sim's

@@ -238,7 +238,8 @@ fn desync_resyncs_the_client_in_release() {
 fn different_rules_are_rejected() {
     let mut h = Harness::new(LinkConditions::perfect(), config(), false);
     let mut sources = content::builtin_sources();
-    sources[0].1 = sources[0].1.replace("max_hp: 40", "max_hp: 41");
+    let large = sources.iter_mut().find(|(path, _)| path == "mover/large.ron").expect("the large mover");
+    large.1 = large.1.replace("max_hp: 40", "max_hp: 41");
     h.add_client_with(Content::from_sources(sources).unwrap());
     h.run_for(Duration::from_secs(1), 0);
     assert!(matches!(h.client_events[0][..], [NetEvent::Rejected { .. }]));

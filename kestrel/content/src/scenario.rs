@@ -221,14 +221,12 @@ pub struct Wave {
     pub position: Point,
     pub target: Point,
     pub skin: String,
+    /// The enemy this wave sends, by short name (`ghoul` for
+    /// `character/ghoul`): its speed, health, armor and breach damage.
+    pub character: String,
     /// Seconds until the first enemy.
     pub first: Fx,
     pub every: Fx,
-    pub speed: Fx,
-    pub hp: u32,
-    #[serde(default)]
-    pub armor: u32,
-    pub damage: u32,
     pub count: u32,
 }
 
@@ -509,10 +507,7 @@ impl Scenario {
                 || !ident(&w.skin)
                 || !within(w.first, Fx::ZERO, Fx::from_int(3600))
                 || !within(w.every, Fx::HALF, Fx::from_int(3600))
-                || !within(w.speed, f(1, 10), Fx::from_int(4))
-                || w.hp == 0
-                || w.armor > 8
-                || w.damage == 0
+                || !ident(&w.character)
                 || w.count > 256
             {
                 return Err("invalid wave".into());

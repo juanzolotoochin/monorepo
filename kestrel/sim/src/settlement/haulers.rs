@@ -71,6 +71,8 @@ pub struct AgentState {
     pub controlled: bool,
     /// The player whose commands drive this avatar.
     pub owner: Option<crate::PlayerId>,
+    /// The character it is, for avatars. Haulers get one in step 2.
+    pub character: Option<content::character::CharacterIx>,
     /// The name the owner goes by; empty until they give one.
     pub name: String,
     pub home: FxVec2,
@@ -137,6 +139,7 @@ impl AgentState {
             controlled: def.controlled,
             // A scenario's avatar belongs to the host.
             owner: def.controlled.then_some(crate::PlayerId(0)),
+            character: None,
             name: String::new(),
             home: position,
             speed: def.speed.div_int(content::TICKS_PER_SECOND as i64),

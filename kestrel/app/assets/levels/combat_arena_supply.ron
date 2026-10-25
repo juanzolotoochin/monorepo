@@ -9,7 +9,7 @@
  agents: [(id: "player", label: "YOU", skin: "worker", position: (0.0, -1.5), speed: 3.8, radius: 0.18, capacity: 8, links: [], transfer_seconds: 0.4, cargo_anchor: (0.0, 0.65, -0.19), equipment: None, controlled: true)],
  producers: [], defenders: [(id: "ballista", label: "FRONTIER BALLISTA", description: "Heavy crank bow. A bolt can carry a ghoul into the dirt or punch clean through its torso.", radius: 0.65, position: (3.9, -2.5), skin: "turret", depot: "bolt_rack", ammo: "bolt", range: 5.8, period: 2.8, damage: 8, projectile_speed: 18.0, projectile: Bolt)],
  waves: [
- (id: "center", position: (0.0, 5.8), target: (0.0, -6.5), skin: "ghoul", first: 0.5, every: 3.8, speed: 0.75, hp: 3, damage: 1, count: 12),
- (id: "west", position: (-2.3, 5.9), target: (-1.0, -6.5), skin: "ghoul_brute", first: 2.8, every: 5.0, speed: 0.59, hp: 5, armor: 2, damage: 1, count: 10),
- (id: "east", position: (2.3, 5.9), target: (1.0, -6.5), skin: "ghoul", first: 4.5, every: 5.2, speed: 0.72, hp: 3, damage: 1, count: 10)
+ (id: "center", position: (0.0, 5.8), target: (0.0, -6.5), skin: "ghoul", character: "ghoul", first: 0.5, every: 3.8, count: 12),
+ (id: "west", position: (-2.3, 5.9), target: (-1.0, -6.5), skin: "ghoul_brute", character: "ghoul_brute", first: 2.8, every: 5.0, count: 10),
+ (id: "east", position: (2.3, 5.9), target: (1.0, -6.5), skin: "ghoul", character: "ghoul_arena_east", first: 4.5, every: 5.2, count: 10)
  ], base_health: 30)

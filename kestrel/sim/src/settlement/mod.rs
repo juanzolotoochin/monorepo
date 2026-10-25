@@ -23,7 +23,9 @@ pub mod piles;
 
 use std::collections::BTreeMap;
 
+use content::character::{CharacterDef, CharacterIx, PLAYER_CHARACTER};
 use content::scenario::{self, Scenario, Weapon, WeaponTuning};
+use content::Content;
 use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
@@ -164,6 +166,10 @@ pub struct Metrics {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settlement {
+    /// The content's characters, indexed by `CharacterIx`. Rules, not state:
+    /// left out of saves and hashes and restored from content on load.
+    #[serde(skip)]
+    pub characters: Vec<CharacterDef>,
     #[serde(default)]
     pub swift_sword: bool,
     pub scenario: String,
@@ -248,8 +254,12 @@ pub struct PileSetup {
 impl Settlement {
     /// Builds the tick-0 settlement and adds its terrain: the arena bounds,
     /// `obstacles` from the scene, and machine and defender footprints.
-    pub fn from_scenario(scenario: &Scenario, obstacles: &[Disc], terrain: &mut Terrain) -> Result<Settlement, String> {
+    pub fn from_scenario(scenario: &Scenario, obstacles: &[Disc], terrain: &mut Terrain, content: &Content) -> Result<Settlement, String> {
         scenario.validate()?;
+        let character = |name: &str| -> Result<CharacterIx, String> {
+            content.names.character_index(name).ok_or_else(|| format!("unknown character {name:?}"))
+        };
+        let player_character = character(PLAYER_CHARACTER)?;
         let center = terrain.center;
         let at = |p: scenario::Point| FxVec2::new(center.x + p[0], center.y + p[1]);
         terrain.extent = scenario.extent;
@@ -339,6 +349,7 @@ impl Settlement {
             .map(|a| haulers::AgentState::new(a, at(a.position), &scenario.links, items.len(), &item, &depot))
             .collect::<Vec<_>>();
         for agent in agents.iter_mut().filter(|agent| agent.controlled) {
+            agent.character = Some(player_character);
             agent.avatar.health = scenario.player_health;
             agent.avatar.max_health = scenario.player_health;
             agent.avatar.weapon = scenario.weapons.first().copied().unwrap_or_default();
@@ -353,21 +364,27 @@ impl Settlement {
         let waves = scenario
             .waves
             .iter()
-            .map(|w| WaveState {
-                id: w.id.clone(),
-                position: at(w.position),
-                target: at(w.target),
-                first: (w.first * per_second).round().floor_to_int().max(1) as u64,
-                every: scenario::ticks(w.every),
-                speed: w.speed / per_second,
-                hp: w.hp,
-                armor: w.armor,
-                damage: w.damage,
-                count: w.count,
-                spawned: 0,
-                route: None,
+            .map(|w| {
+                let ix = character(&w.character)?;
+                let def = &content.rules.characters[ix as usize];
+                let health = def.health.as_ref().ok_or_else(|| format!("wave {} sends {:?}, which has no health", w.id, w.character))?;
+                Ok(WaveState {
+                    id: w.id.clone(),
+                    character: ix,
+                    position: at(w.position),
+                    target: at(w.target),
+                    first: (w.first * per_second).round().floor_to_int().max(1) as u64,
+                    every: scenario::ticks(w.every),
+                    speed: def.movement.walk / per_second,
+                    hp: health.hp,
+                    armor: health.armor.as_ref().map_or(0, |a| a.points),
+                    damage: health.breach_damage,
+                    count: w.count,
+                    spawned: 0,
+                    route: None,
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, String>>()?;
         let defenders = scenario
             .defenders
             .iter()
@@ -391,6 +408,7 @@ impl Settlement {
             .collect();
         let tuning = [Weapon::Sword, Weapon::Spear, Weapon::Bow, Weapon::ArcCoil, Weapon::Laser].map(|w| scenario.weapon_tuning(w)).to_vec();
         let settlement = Settlement {
+            characters: content.rules.characters.clone(),
             swift_sword: false,
             base_health: scenario.base_health,
             health: scenario.base_health,
@@ -432,17 +450,17 @@ impl Settlement {
 
     /// Builds the tick-0 settlement for a scene, with or without a supply
     /// scenario, and adds the scene to the terrain.
-    pub fn from_scene(setup: &SceneSetup, terrain: &mut Terrain) -> Result<Settlement, String> {
+    pub fn from_scene(setup: &SceneSetup, terrain: &mut Terrain, content: &Content) -> Result<Settlement, String> {
         let center = terrain.center;
         let at = |p: [Fx; 2]| FxVec2::new(center.x + p[0], center.y + p[1]);
         let place = |d: &Disc| Disc { center: FxVec2::new(center.x + d.center.x, center.y + d.center.y), radius: d.radius };
         let obstacles: Vec<Disc> = setup.obstacles.iter().chain(&setup.doors).map(place).collect();
         let mut settlement = match &setup.scenario {
-            Some(scenario) => Settlement::from_scenario(scenario, &obstacles, terrain)?,
+            Some(scenario) => Settlement::from_scenario(scenario, &obstacles, terrain, content)?,
             None => {
                 terrain.extent = setup.extent;
                 terrain.obstacles.extend_from_slice(&obstacles);
-                Settlement::from_scenario(&Self::player_only(setup.extent, [setup.spawn[0], setup.spawn[2]]), &[], terrain)?
+                Settlement::from_scenario(&Self::player_only(setup.extent, [setup.spawn[0], setup.spawn[2]]), &[], terrain, content)?
             }
         };
         terrain.surfaces = setup
@@ -662,6 +680,20 @@ impl Settlement {
 }
 
 impl Settlement {
+    /// Restores the character rules after loading, checking every saved
+    /// reference against them.
+    pub fn set_characters(&mut self, characters: &[CharacterDef]) -> Result<(), String> {
+        let known = |ix: CharacterIx| (ix as usize) < characters.len();
+        if let Some(a) = self.agents.iter().find(|a| a.character.is_some_and(|ix| !known(ix))) {
+            return Err(format!("agent {} has unknown character {:?}", a.id, a.character));
+        }
+        if let Some(w) = self.waves.iter().find(|w| !known(w.character)) {
+            return Err(format!("wave {} has unknown character {}", w.id, w.character));
+        }
+        self.characters = characters.to_vec();
+        Ok(())
+    }
+
     /// A hash of what the settlement does: where agents, threats and
     /// projectiles are, what they carry and how healthy they are, stock and
     /// metrics. It leaves out definition references and tuning copied into

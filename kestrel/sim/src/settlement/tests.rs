@@ -86,7 +86,7 @@ fn scenario() -> Scenario {
 }
 
 fn world(scenario: &Scenario, obstacles: &[Disc]) -> Simulation {
-    let world = World::new_settlement(1, Content::builtin().rules, scenario, obstacles).unwrap();
+    let world = World::new_settlement(1, &Content::builtin(), scenario, obstacles).unwrap();
     Simulation::from_world(world, 4)
 }
 
@@ -182,7 +182,7 @@ fn disabling_links_drains_committed_jobs() {
 fn blocked_docks_are_rejected_and_unreachable_jobs_never_reserve_stock() {
     let mut config = scenario();
     config.depots[1].position = p(8.0, 8.0);
-    let blocked = World::new_settlement(1, Content::builtin().rules, &config, &[Disc { center: FxVec2::new(fx(8.0), fx(8.0)), radius: fx(0.1) }]);
+    let blocked = World::new_settlement(1, &Content::builtin(), &config, &[Disc { center: FxVec2::new(fx(8.0), fx(8.0)), radius: fx(0.1) }]);
     assert!(blocked.is_err());
 
     // A wall between the forest and the mill (the yard moves off it).
@@ -249,7 +249,7 @@ fn forest_supply_runs_and_its_balances_hold() {
 fn settlements_are_deterministic_across_thread_counts() {
     let scenario = Scenario::parse(FOREST).unwrap();
     let run = |threads| {
-        let world = World::new_settlement(3, Content::builtin().rules, &scenario, &[]).unwrap();
+        let world = World::new_settlement(3, &Content::builtin(), &scenario, &[]).unwrap();
         let mut sim = Simulation::from_world(world, threads);
         (0..30 * TICKS_PER_SECOND as u64).map(|_| sim.step(&[]).total).collect::<Vec<_>>()
     };

@@ -28,6 +28,15 @@ fn p(x: f64, y: f64) -> [Fx; 2] {
     [fx(x), fx(y)]
 }
 
+/// The builtin content plus the original fixtures' slow ghouls.
+fn test_content() -> Content {
+    let ghoul = |hp: u32| format!("(base: \"ghoul\", sim: (movement: (walk: 0.5), health: (hp: {hp})), view: ())");
+    let mut sources = content::builtin_sources();
+    sources.push(("character/test_ghoul.ron".into(), ghoul(3)));
+    sources.push(("character/test_ghoul_frail.ron".into(), ghoul(2)));
+    Content::from_sources(sources).unwrap()
+}
+
 fn stack(item: &str, units: u32) -> Stack {
     Stack { item: item.into(), units }
 }
@@ -103,12 +112,9 @@ fn combat_scenario(tuning: Vec<WeaponTuning>) -> Scenario {
         position: p(0.0, 6.0),
         target: p(0.0, -6.0),
         skin: "ghoul".into(),
+        character: "test_ghoul".into(),
         first: Fx::from_int(3600),
         every: Fx::from_int(10),
-        speed: fx(0.5),
-        hp: 3,
-        armor: 0,
-        damage: 1,
         count: 1,
     });
     config
@@ -122,7 +128,7 @@ struct Arena {
 
 impl Arena {
     fn new(scenario: &Scenario, obstacles: &[Disc]) -> Arena {
-        let world = World::new_settlement(1, Content::builtin().rules, scenario, obstacles).unwrap();
+        let world = World::new_settlement(1, &test_content(), scenario, obstacles).unwrap();
         let center = world.terrain().center;
         let player = world.settlement().unwrap().agent_index("player").map_or(usize::MAX, |i| i as usize);
         Arena { sim: Simulation::from_world(world, 2), player, center }
@@ -464,12 +470,9 @@ fn processing_reserves_output_space_and_defense_cannot_fire_free_ammunition() {
         position: p(7.0, 2.0),
         target: p(0.0, 2.0),
         skin: "ghoul".into(),
+        character: "test_ghoul_frail".into(),
         first: Fx::ZERO,
         every: fx(1.5),
-        speed: fx(0.5),
-        hp: 2,
-        armor: 0,
-        damage: 1,
         count: 8,
     });
     let mut arena = Arena::new(&config, &[]);
@@ -564,7 +567,7 @@ const ARENA: &str = include_str!("../../../app/assets/levels/combat_arena_supply
 fn combat_arena_plays_and_is_deterministic() {
     let scenario = Scenario::parse(ARENA).unwrap();
     let run = |threads| {
-        let world = World::new_settlement(9, Content::builtin().rules, &scenario, &[]).unwrap();
+        let world = World::new_settlement(9, &test_content(), &scenario, &[]).unwrap();
         let mut sim = Simulation::from_world(world, threads);
         let hashes: Vec<u64> = (0..ms(60_000)).map(|_| sim.step(&[]).total).collect();
         (hashes, sim)
@@ -585,7 +588,7 @@ fn combat_arena_plays_and_is_deterministic() {
 fn parity_probe() {
     for (name, text) in [("forest", super::tests::FOREST), ("arena", ARENA)] {
         let scenario = Scenario::parse(text).unwrap();
-        let world = World::new_settlement(1, Content::builtin().rules, &scenario, &[]).unwrap();
+        let world = World::new_settlement(1, &test_content(), &scenario, &[]).unwrap();
         let mut sim = Simulation::from_world(world, 4);
         for second in 1..=120 {
             for _ in 0..ms(1000) {
@@ -605,7 +608,7 @@ fn parity_probe() {
 #[test]
 fn two_players_defend_the_clearing() {
     let scenario = Scenario::parse(ARENA).unwrap();
-    let world = World::new_settlement(9, Content::builtin().rules, &scenario, &[]).unwrap();
+    let world = World::new_settlement(9, &test_content(), &scenario, &[]).unwrap();
     let mut sim = Simulation::from_world(world, 2);
     let (host, guest) = (PlayerId(0), PlayerId(1));
     sim.step(&[Command { player: guest, kind: CommandKind::Join }]);
@@ -661,7 +664,7 @@ fn two_players_defend_the_clearing() {
 #[test]
 fn players_equip_their_own_weapons() {
     let scenario = Scenario::parse(ARENA).unwrap();
-    let world = World::new_settlement(9, Content::builtin().rules, &scenario, &[]).unwrap();
+    let world = World::new_settlement(9, &test_content(), &scenario, &[]).unwrap();
     let mut sim = Simulation::from_world(world, 2);
     let (host, guest) = (PlayerId(0), PlayerId(1));
     sim.step(&[Command { player: guest, kind: CommandKind::Join }]);
@@ -745,7 +748,7 @@ fn laser_hits_another_player_and_respawns_them() {
     config.links.clear();
     config.weapons = vec![Weapon::Laser];
     config.player_health = 2;
-    let world = World::new_settlement(9, Content::builtin().rules, &config, &[]).unwrap();
+    let world = World::new_settlement(9, &test_content(), &config, &[]).unwrap();
     let mut sim = Simulation::from_world(world, 2);
     let spawn = sim.world().settlement().unwrap().agents[0].position;
     sim.world_mut().settlement_mut().spawn = spawn;

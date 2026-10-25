@@ -10,8 +10,10 @@
 //! feed the rules hash. Peers with different rules hashes can't play together;
 //! changing a `view` section keeps them compatible.
 
+pub mod character;
 pub mod scenario;
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
 
@@ -64,9 +66,12 @@ pub struct MoverView {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Rules {
     pub movers: Vec<MoverDef>,
+    pub characters: Vec<character::CharacterDef>,
 }
 
 impl Rules {
+    // Body radius and speed bound the mover chunk queries. Characters live in
+    // the settlement's world-wide tables, so they are left out.
     pub fn max_body_radius(&self) -> Fx {
         self.movers.iter().map(|m| m.radius).max().unwrap_or(Fx::ZERO)
     }
@@ -80,17 +85,25 @@ impl Rules {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Names {
     pub movers: Vec<String>,
+    pub characters: Vec<String>,
 }
 
 impl Names {
     pub fn mover_index(&self, name: &str) -> Option<u16> {
         self.movers.binary_search_by(|n| n.as_str().cmp(name)).ok().map(|i| i as u16)
     }
+
+    /// A character by its short name, `ghoul` for `character/ghoul`.
+    pub fn character_index(&self, name: &str) -> Option<character::CharacterIx> {
+        let full = format!("character/{name}");
+        self.characters.binary_search_by(|n| n.as_str().cmp(&full)).ok().map(|i| i as character::CharacterIx)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Views {
     pub movers: Vec<MoverView>,
+    pub characters: Vec<character::CharacterView>,
 }
 
 #[derive(Clone, Debug)]
@@ -136,6 +149,11 @@ struct MoverSimFile {
 
 /// The content shipped with the game, compiled into the binary.
 const BUILTIN: &[(&str, &str)] = &[
+    ("character/exosuit.ron", include_str!("../data/character/exosuit.ron")),
+    ("character/ghoul.ron", include_str!("../data/character/ghoul.ron")),
+    ("character/ghoul_arena_east.ron", include_str!("../data/character/ghoul_arena_east.ron")),
+    ("character/ghoul_brute.ron", include_str!("../data/character/ghoul_brute.ron")),
+    ("character/ghoul_forest.ron", include_str!("../data/character/ghoul_forest.ron")),
     ("mover/large.ron", include_str!("../data/mover/large.ron")),
     ("mover/medium.ron", include_str!("../data/mover/medium.ron")),
     ("mover/small.ron", include_str!("../data/mover/small.ron")),
@@ -164,6 +182,7 @@ impl Content {
     /// Builds content from `(path, text)` pairs, such as `("mover/small.ron", "...")`.
     pub fn from_sources(sources: impl IntoIterator<Item = (String, String)>) -> Result<Content, ContentError> {
         let mut movers = Vec::new();
+        let mut character_files = BTreeMap::new();
         for (path, text) in sources {
             let error = |message: String| ContentError { file: path.clone(), message };
             let name = path.strip_suffix(".ron").ok_or_else(|| error("not a .ron file".into()))?.replace('\\', "/");
@@ -173,6 +192,13 @@ impl Content {
                     let def = mover_def(file.sim).map_err(error)?;
                     movers.push((name, def, file.view));
                 }
+                Some(("character", _)) => {
+                    let options = ron::Options::default().with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME);
+                    let file: character::CharacterFile = options.from_str(&text).map_err(|e| error(e.to_string()))?;
+                    if character_files.insert(name.clone(), file).is_some() {
+                        return Err(ContentError { file: name, message: "defined twice".into() });
+                    }
+                }
                 _ => return Err(error("unknown kind of definition; expected a path like mover/<name>.ron".into())),
             }
         }
@@ -180,13 +206,53 @@ impl Content {
         if let Some(pair) = movers.windows(2).find(|pair| pair[0].0 == pair[1].0) {
             return Err(ContentError { file: pair[0].0.clone(), message: "defined twice".into() });
         }
+        let mut characters = Vec::new();
+        for name in character_files.keys() {
+            let error = |message: String| ContentError { file: name.clone(), message };
+            let sim = resolve_character(&character_files, name, &mut Vec::new()).map_err(error)?;
+            let def = character::character_def(sim).map_err(error)?;
+            characters.push((name.clone(), def, character_files[name].view.clone()));
+        }
 
-        let names = Names { movers: movers.iter().map(|m| m.0.clone()).collect() };
-        let rules = Rules { movers: movers.iter().map(|m| m.1.clone()).collect() };
-        let views = Views { movers: movers.into_iter().map(|m| m.2).collect() };
+        let names = Names {
+            movers: movers.iter().map(|m| m.0.clone()).collect(),
+            characters: characters.iter().map(|c| c.0.clone()).collect(),
+        };
+        let rules = Rules {
+            movers: movers.iter().map(|m| m.1.clone()).collect(),
+            characters: characters.iter().map(|c| c.1.clone()).collect(),
+        };
+        let views = Views {
+            movers: movers.into_iter().map(|m| m.2).collect(),
+            characters: characters.into_iter().map(|c| c.2).collect(),
+        };
         let rules_hash = rules_hash(&names, &rules);
         Ok(Content { rules, names, views, rules_hash })
     }
+}
+
+/// A character's `sim` section with its `base` chain merged in. `chain`
+/// holds the characters being resolved, to catch cycles.
+fn resolve_character(
+    files: &BTreeMap<String, character::CharacterFile>,
+    name: &str,
+    chain: &mut Vec<String>,
+) -> Result<character::SimFile, String> {
+    use character::Merge;
+    if chain.iter().any(|n| n == name) {
+        chain.push(name.to_string());
+        return Err(format!("base cycle: {}", chain.join(" -> ")));
+    }
+    let file = &files[name];
+    let Some(base) = &file.base else { return Ok(file.sim.clone()) };
+    let base_name = format!("character/{base}");
+    if !files.contains_key(&base_name) {
+        return Err(format!("unknown base {base:?}"));
+    }
+    chain.push(name.to_string());
+    let base_sim = resolve_character(files, &base_name, chain)?;
+    chain.pop();
+    Ok(file.sim.clone().merge(base_sim))
 }
 
 fn mover_def(file: MoverSimFile) -> Result<MoverDef, String> {
@@ -270,5 +336,72 @@ mod tests {
     fn decimals_parse_exactly() {
         let content = Content::from_sources([source("mover/x.ron", &SMALL.replace("0.5", "0.1"))]).unwrap();
         assert_eq!(content.rules.movers[0].radius, "0.1".parse().unwrap());
+    }
+
+    const GHOUL: &str = "(sim: (brain: FollowRoute, body: (radius: 0.27), movement: (walk: 0.75), \
+        health: (hp: 3, breach_damage: 1)), view: ())";
+
+    fn characters(files: &[(&str, &str)]) -> Result<Content, ContentError> {
+        Content::from_sources(files.iter().map(|(path, text)| source(path, text)))
+    }
+
+    #[test]
+    fn builtin_characters_load_by_short_name() {
+        let content = Content::builtin();
+        let exosuit = content.names.character_index(character::PLAYER_CHARACTER).expect("the player character");
+        let def = &content.rules.characters[exosuit as usize];
+        assert_eq!(def.brain, character::Brain::Player);
+        assert!(def.avatar.is_some() && def.health.is_none());
+        let ghoul = content.names.character_index("ghoul").unwrap();
+        assert_eq!(content.names.characters[ghoul as usize], "character/ghoul");
+        assert_eq!(content.views.characters.len(), content.rules.characters.len());
+    }
+
+    #[test]
+    fn a_base_fills_what_a_variant_leaves_out() {
+        let brute = "(base: \"ghoul\", sim: (movement: (walk: 0.59), health: (hp: 5, armor: (points: 2, radius: 0.38))), view: ())";
+        let content = characters(&[("character/ghoul.ron", GHOUL), ("character/brute.ron", brute)]).unwrap();
+        let def = &content.rules.characters[content.names.character_index("brute").unwrap() as usize];
+        assert_eq!(def.brain, character::Brain::FollowRoute, "from the base");
+        assert_eq!(def.body.radius, "0.27".parse().unwrap(), "from the base");
+        assert_eq!(def.movement.walk, "0.59".parse().unwrap());
+        assert_eq!(def.movement.run, def.movement.walk, "run defaults to walk");
+        let health = def.health.as_ref().unwrap();
+        assert_eq!((health.hp, health.breach_damage), (5, 1), "hp overridden, breach damage merged in");
+        assert_eq!(health.armor.as_ref().map(|a| a.points), Some(2));
+    }
+
+    #[test]
+    fn bad_bases_name_the_file() {
+        let child = |base: &str| format!("(base: \"{base}\", sim: (), view: ())");
+        let missing = characters(&[("character/a.ron", &child("nobody"))]).unwrap_err();
+        assert_eq!(missing.file, "character/a");
+        assert!(missing.message.contains("unknown base"));
+        let cycle = characters(&[("character/a.ron", &child("b")), ("character/b.ron", &child("a"))]).unwrap_err();
+        assert!(cycle.message.contains("cycle"), "{}", cycle.message);
+        let own = characters(&[("character/a.ron", &child("a"))]).unwrap_err();
+        assert!(own.message.contains("cycle"));
+    }
+
+    #[test]
+    fn merged_characters_are_validated() {
+        let bad = |text: &str| characters(&[("character/x.ron", text)]).unwrap_err().message;
+        assert!(bad("(sim: (brain: FollowRoute), view: ())").contains("body"));
+        assert!(bad(&GHOUL.replace("0.27", "9")).contains("radius"));
+        assert!(bad(&GHOUL.replace("walk: 0.75", "walk: 0.75, run: 0.5")).contains("walk <= run"));
+        assert!(bad(&GHOUL.replace("FollowRoute", "Player")).contains("Player"));
+        assert!(bad(&GHOUL.replace("hp: 3", "hp: 3, armor: (points: 2, radius: 0.1)")).contains("armor"));
+        assert!(bad(&GHOUL.replace("view: ()", "view: (skin: \"x\")")).contains("skin"));
+        assert!(bad(&GHOUL.replace("radius: 0.27", "radius: 0.27, mass: 2")).contains("mass"));
+    }
+
+    #[test]
+    fn character_rules_hash_ignores_views_only() {
+        let hash = |files: &[(&str, &str)]| characters(files).unwrap().rules_hash;
+        let base = hash(&[("character/ghoul.ron", GHOUL)]);
+        assert_ne!(base, hash(&[("character/ghoul.ron", &GHOUL.replace("hp: 3", "hp: 4"))]));
+        assert_ne!(base, hash(&[("character/ghast.ron", GHOUL)]));
+        let comment = format!("// A comment.\n{GHOUL}");
+        assert_eq!(base, hash(&[("character/ghoul.ron", &comment)]));
     }
 }

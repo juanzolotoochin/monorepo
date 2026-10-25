@@ -111,7 +111,7 @@ pub fn golden_report() -> String {
     // cargo, metrics), so they stay put when state changes shape only.
     for (name, text, ticks) in [("forest", FOREST, 600), ("arena", ARENA, 1800)] {
         let scenario = content::scenario::Scenario::parse(text).expect("golden scenario");
-        let world = crate::World::new_settlement(11, Content::builtin().rules, &scenario, &[]).expect("golden world");
+        let world = crate::World::new_settlement(11, &Content::builtin(), &scenario, &[]).expect("golden world");
         let mut sim = Simulation::from_world(world, 1);
         for tick in 0..ticks {
             let hash = sim.step(&[]);

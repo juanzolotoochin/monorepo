@@ -75,7 +75,7 @@
 ], defenders: [
 (id: "watchtower", label: "WOODLAND BALLISTA", description: "An automatic border defense. Fires supplied arrows at approaching ghouls; without ammunition the camp is exposed.", position: (5.52, 2.3), skin: "turret", depot: "turret_ammo", ammo: "arrow", range: 3.8, period: 0.7, damage: 1, projectile_speed: 8.0, radius: 0.5)
 ], waves: [
-(id: "ghouls_0", position: (9.5, 10.4), target: (-1.0, 0.5), skin: "ghoul", first: 10.0, every: 9.0, speed: 0.6, hp: 2, damage: 1, count: 20),
-(id: "ghouls_1", position: (10.1, 9.9), target: (-1.0, 0.5), skin: "ghoul", first: 10.5, every: 9.0, speed: 0.6, hp: 2, damage: 1, count: 20),
-(id: "ghouls_2", position: (10.7, 9.4), target: (-1.0, 0.5), skin: "ghoul", first: 11.0, every: 9.0, speed: 0.6, hp: 2, damage: 1, count: 20)
+(id: "ghouls_0", position: (9.5, 10.4), target: (-1.0, 0.5), skin: "ghoul", character: "ghoul_forest", first: 10.0, every: 9.0, count: 20),
+(id: "ghouls_1", position: (10.1, 9.9), target: (-1.0, 0.5), skin: "ghoul", character: "ghoul_forest", first: 10.5, every: 9.0, count: 20),
+(id: "ghouls_2", position: (10.7, 9.4), target: (-1.0, 0.5), skin: "ghoul", character: "ghoul_forest", first: 11.0, every: 9.0, count: 20)
 ], base_health: 20, extent: 12.0)

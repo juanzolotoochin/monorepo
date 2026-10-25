@@ -210,7 +210,19 @@ impl Scenario {
                     projectile: d.projectile,
                 })
                 .collect(),
-            waves: scenario.waves.iter().map(|w| Wave { id: w.id.clone(), skin: w.skin.clone(), hp: w.hp }).collect(),
+            waves: scenario
+                .waves
+                .iter()
+                .map(|w| {
+                    let content = crate::lockstep::builtin_content();
+                    let hp = content
+                        .names
+                        .character_index(&w.character)
+                        .and_then(|ix| content.rules.characters[ix as usize].health.as_ref())
+                        .map_or(1, |health| health.hp);
+                    Wave { id: w.id.clone(), skin: w.skin.clone(), hp }
+                })
+                .collect(),
         }
     }
 }
