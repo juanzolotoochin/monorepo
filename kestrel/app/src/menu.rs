@@ -385,14 +385,14 @@ pub fn update(
     input: Res<debug_ui::GameInput>,
     mut text_focus: ResMut<debug_ui::TextFocus>,
     mut clipboard: ResMut<Clipboard>,
-    mut actions: Query<(&Action, &Interaction, &mut BackgroundColor, &mut BorderColor)>,
+    mut actions: Query<(&Action, Ref<Interaction>, &mut BackgroundColor, &mut BorderColor)>,
     mut fields: Query<(&FieldText, &mut Text)>,
     mut status: Query<&mut Text, (With<StatusText>, Without<FieldText>)>,
     mut exit: MessageWriter<AppExit>,
 ) {
     let mut start = false;
     for (action, interaction, _, _) in &mut actions {
-        if *interaction != Interaction::Pressed {
+        if !interaction.is_changed() || *interaction != Interaction::Pressed {
             continue;
         }
         match *action {
@@ -784,6 +784,16 @@ mod tests {
         assert_eq!(launch.scene, field);
         assert!(launch.network.is_none());
         assert_eq!(launch.name, "ana");
+    }
+
+    #[test]
+    fn holding_start_does_not_queue_another_session_after_leaving() {
+        let mut app = press(0, Action::Start);
+        app.world_mut().resource_mut::<Flow>().leave(None);
+        for _ in 0..3 {
+            app.update();
+            assert!(app.world().resource::<Flow>().starting().is_none());
+        }
     }
 
     #[test]

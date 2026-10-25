@@ -103,6 +103,7 @@ impl Flow {
     /// Leaves the session at the next Input phase; `reason` says why, if it
     /// ended on its own.
     pub fn leave(&mut self, reason: Option<String>) {
+        self.launch = None;
         self.leaving = true;
         self.ended = reason;
     }
@@ -209,11 +210,15 @@ mod tests {
         let hub = crate::control::Hub::new(options.clone()).unwrap();
         let mut app = crate::test_app(options, SceneLibrary::new(), hub, Launch::single_player(0));
         crate::start_world(&mut app);
+        // A launch queued while the menu was closing must not restart the
+        // session when the player leaves it.
+        app.world_mut().resource_mut::<Flow>().start(Launch::single_player(0));
         app.world_mut().resource_mut::<Flow>().leave(Some("The host left the game.".into()));
-        for _ in 0..3 {
+        for _ in 0..20 {
             app.update();
         }
         assert_eq!(state::<SessionState>(&app), Some(SessionState::Off));
+        assert_eq!(state::<Front>(&app), Some(Front::Menu));
         assert_eq!(state::<WorldState>(&app), None);
         assert!(app.world().get_resource::<crate::lockstep::SessionService>().is_none());
         assert_eq!(app.world().resource::<Flow>().ended.as_deref(), Some("The host left the game."));

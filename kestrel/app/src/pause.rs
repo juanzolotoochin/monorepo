@@ -176,3 +176,65 @@ fn swallow(pause: Res<Pause>, mut game: ResMut<GameInput>, mut input: ResMut<Inp
         input.block();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assets::SceneLibrary;
+    use crate::flow::{Front, Launch};
+    use crate::lockstep::{Network, SessionService};
+    use service::{SessionState, WorldState};
+    use std::time::Duration;
+
+    // Exercise the production menu, routed input and session services without a GPU.
+    fn menu_app(network: Network) -> App {
+        let scenes = SceneLibrary::new();
+        let scene = scenes.index("dig-lab").unwrap();
+        let options = crate::control::Options { simulation: true, headless_menus: true, ..default() };
+        let hub = crate::control::Hub::new(options.clone()).unwrap();
+        let launch = Launch { network: Some(network), ..Launch::single_player(scene) };
+        let mut app = crate::test_app(options, scenes, hub, launch);
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)));
+        app
+    }
+
+    #[test]
+    fn leaving_the_host_from_the_pause_menu_stops_both_players_and_shows_their_menus() {
+        let mut host = menu_app(Network::Host("127.0.0.1:0".parse().unwrap()));
+        crate::start_world(&mut host);
+        let address = host.world().resource::<SessionService>().session.local_addr().unwrap();
+        let mut client = menu_app(Network::Join(address));
+        for _ in 0..600 {
+            host.update();
+            client.update();
+            if client.world().get_resource::<SessionService>().is_some_and(|s| s.player().is_some()) { break; }
+        }
+        assert!(client.world().resource::<SessionService>().player().is_some());
+
+        host.world_mut().resource_mut::<Pause>().open = true;
+        host.update();
+        let leave = {
+            let world = host.world_mut();
+            world.query::<(Entity, &Choice)>().iter(world).find(|(_, choice)| **choice == Choice::Leave).unwrap().0
+        };
+        host.world_mut().entity_mut(leave).insert(Interaction::Pressed);
+        for _ in 0..30 {
+            host.update();
+            client.update();
+        }
+        for app in [&mut host, &mut client] {
+            assert_eq!(*app.world().resource::<State<SessionState>>().get(), SessionState::Off);
+            assert_eq!(*app.world().resource::<State<Front>>().get(), Front::Menu);
+            assert!(app.world().get_resource::<State<WorldState>>().is_none());
+            assert!(app.world().get_resource::<SessionService>().is_none());
+            assert!(app.world().get_resource::<Pause>().is_none());
+            let world = app.world_mut();
+            assert!(world.query::<&Text>().iter(world).any(|text| text.0 == "Choose a world and how to play."));
+            assert!(world.query_filtered::<Entity, With<service::WorldScoped>>().iter(world).next().is_none());
+            assert!(world.query_filtered::<Entity, With<service::SessionScoped>>().iter(world).next().is_none());
+        }
+        assert_eq!(client.world().resource::<Flow>().ended.as_deref(), Some("The host left the game."));
+        // The listening socket was released as well as the simulation.
+        assert!(std::net::UdpSocket::bind(address).is_ok());
+    }
+}
