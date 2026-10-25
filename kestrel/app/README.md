@@ -82,6 +82,29 @@ your OS, make the Linux one executable (`chmod +x kestrel-linux-*`), and run it
 on an x64 machine. The Windows build may require the Visual C++ x64
 Redistributable described below.
 
+## Run on a Steam Deck over the network
+
+Put the Deck in **Desktop Mode**, enable its SSH server, and configure key-based
+SSH login from this Linux x86-64 build machine. Then run:
+
+```sh
+STEAM_DECK_TARGET=deck@steamdeck.local bazel run -c opt //kestrel/app:steam_deck
+```
+
+Replace the host with the Deck's network name or IP address. The target builds
+the Linux game, copies it to `~/.local/opt/kestrel/` on the Deck, and starts it
+in the active desktop session. The game's scene assets and synthesized audio
+are embedded in the executable. To start a particular scene, append game
+arguments after `--`:
+
+```sh
+STEAM_DECK_TARGET=deck@steamdeck.local bazel run -c opt //kestrel/app:steam_deck -- --scene moonlit-glade
+```
+
+Use `-- --dry-run` to check the target and runfiles without connecting. The
+Deck writes startup output to `~/.local/opt/kestrel/last-run.log`. The launcher
+requires a running Desktop Mode session and does not start Steam Gaming Mode.
+
 ## Launch menu
 
 Run `bazel run --config=full_local -c opt //kestrel/app:demo` to open the launch

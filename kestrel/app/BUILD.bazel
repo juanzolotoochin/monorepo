@@ -2,6 +2,7 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_python//python:defs.bzl", "py_test")
 load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
 load("@rules_rs//rs:rust_test.bzl", "rust_test")
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("//kestrel/build/game_demo:defs.bzl", "game_demo", "game_simulation_test", "studio_demo")
 
 alias(
@@ -62,6 +63,20 @@ rust_binary(
         "@platforms//os:windows": ["@crates//:bevy_gilrs"],
         "//conditions:default": [],
     }),
+)
+
+sh_binary(
+    name = "steam_deck",
+    srcs = ["steam_deck.sh"],
+    args = [
+        "$(rlocationpath :demo)",
+        "$(rlocationpath deck_launch.sh)",
+    ],
+    data = [
+        ":demo",
+        "deck_launch.sh",
+    ],
+    visibility = ["//visibility:public"],
 )
 
 studio_demo(

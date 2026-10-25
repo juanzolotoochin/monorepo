@@ -16,6 +16,8 @@ The playable Kestrel prototype and its game-specific tooling live here:
 
 Run the game with `bazel run --config=full_local -c opt //kestrel/app:demo` and its tests with
 `bazel test --config=full_local -c opt //kestrel/...`.
+To build and launch it on a Steam Deck in Desktop Mode over SSH, use
+[`//kestrel/app:steam_deck`](app/README.md#run-on-a-steam-deck-over-the-network).
 
 Browse the design docs with `bazel run //kestrel/docs` and open the printed
 local URL.
