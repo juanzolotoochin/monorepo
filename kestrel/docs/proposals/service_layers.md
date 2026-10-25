@@ -1,9 +1,9 @@
 # Service layers
 
 Status: design agreed on 2026-10-24. Migration steps 1 (the framework,
-`kestrel/service`), 2 (`kestrel/app`'s frame in phases) and 3 (obstacles from scene
-data) are done; no service exists yet. The next feature, the main menu, is
-the first one to add some.
+`kestrel/service`), 2 (`kestrel/app`'s frame in phases), 3 (obstacles from scene
+data) and 4 (the session's world slot) are done; no service exists yet. The
+next feature, the main menu, is the first one to add some.
 
 The game's front end needs one answer to "where does this flow or system
 live, and for how long?". This proposal groups front-end code into
@@ -308,7 +308,15 @@ passing.
    the scene's models must be loaded first. The terrain hash changed once
    (order only); the discs matched today's in all 10 scenes.
 4. Give `session::Session` its world slot and world number, and change scenes
-   by reloading the slot instead of starting a new session.
+   by reloading the slot instead of starting a new session. Done:
+   `Session::load_world` (host) sends every client a save of the new world,
+   like a join, with the app's label (the scene id) in `Welcome`; the host
+   holds tick 0 until every client has loaded it. Packets carry the world
+   number next to the epoch (protocol version 2). The app starts its session
+   once, on the first scene, and loads later scenes into it; the host may
+   switch scenes in networked games and clients follow the label. Each
+   world gets its own recording: `<path>` for the first, `<path>.<n>` after.
+   The host's slot is never empty yet: unloading comes with the lobby.
 5. Split `lockstep::Game` as above, then move the features into World services
    one at a time, deleting each hand-made scene-change check.
 6. Build the main menu and the lobby on top.

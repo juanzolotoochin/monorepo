@@ -92,7 +92,7 @@ impl LaunchMenu {
     fn launch(&self, scenes: &mut SceneLibrary, game: &mut Game) -> Result<(), String> {
         let network = self.network()?;
         scenes.initial = self.selected_scene;
-        scenes.locked = network.is_some();
+        scenes.locked = matches!(network, Some(Network::Join(_)));
         game.network = network;
         Ok(())
     }
@@ -505,7 +505,7 @@ mod tests {
         menu.port = "4200".into();
         menu.launch(&mut scenes, &mut game).unwrap();
         assert_eq!(scenes.initial, scenes.index("field").unwrap());
-        assert!(scenes.locked);
+        assert!(!scenes.locked, "a host may switch scenes");
         assert!(matches!(game.network, Some(Network::Host(addr)) if addr.port() == 4200));
 
         menu.mode = Mode::Join;
