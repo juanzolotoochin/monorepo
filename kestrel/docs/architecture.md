@@ -285,6 +285,11 @@ device bindings through gameplay commands and presents controller-support
 design choices (25 October 2026). The selected behavior and synthetic-input-first
 implementation sequence are recorded in [controller support](controller-support.md).
 
+How characters are assembled today (data, sim, input, AI, rigs) is surveyed in
+[character architecture](character-architecture.md). The
+[character definition discussion](design/character-definition.html) proposes one
+`CharacterDef` per character and lists the open decisions (25 October 2026).
+
 `kestrel/app` is organized as App, Session and World services
 ([service layers](proposals/service_layers.md)): what lives for the whole
 process, for one session, and for one loaded world. A world's views start
