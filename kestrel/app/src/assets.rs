@@ -75,7 +75,11 @@ impl SceneLibrary {
             })
     }
     pub fn character(&self, scene_index: usize) -> Option<&CharacterEntry> {
-        self.characters.for_scene(scene_index)
+        self.characters.for_scene(scene_index).or_else(|| {
+            self.scenes.get(scene_index)
+                .filter(|pack| pack.scene.style.is_none() && pack.actor.is_empty())
+                .and_then(|_| self.characters.built_in())
+        })
     }
     pub fn has_feature(&self, feature: SceneFeature) -> bool {
         self.scenes.get(self.current).is_some_and(|pack| pack.scene.features.contains(&feature))
@@ -424,6 +428,11 @@ mod tests {
         for id in ["skin:ox", "skin:ghoul", "skin:ghoul_brute"] {
             assert!(library.characters.index_for_id(id).is_ok(), "missing {id}");
         }
+        let exosuit = library.characters.index_for_id("builtin:exosuit").unwrap();
+        let field = library.index("field").unwrap();
+        assert_eq!(library.character(field).unwrap().id, library.characters[exosuit].id);
+        assert!(library.characters[exosuit].can_locomote);
+        assert!(library.characters[exosuit].can_jump);
         let mining = &library.scenes[0];
         let lab = &library.scenes[1];
         assert_eq!(library.index("mining-deck"), Ok(0));

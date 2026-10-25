@@ -152,9 +152,10 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
             .map(|pair| pair[1].as_str());
         viewer.character = requested_character
             .map(|id| scenes.characters.index_for_id(id).unwrap_or_else(|error| panic!("{error}")))
-            .or_else(|| scenes.characters.iter().position(|entry| entry.scene_index == scenes.initial))
+            .or_else(|| scenes.character(scenes.initial)
+                .and_then(|character| scenes.characters.index_for_id(&character.id).ok()))
             .or_else(|| (!scenes.characters.is_empty()).then_some(0))
-            .expect("Character Studio needs at least one baked actor");
+            .expect("Character Studio needs at least one character");
         if let Some(pair) = args.windows(2).find(|pair| pair[0] == "--studio-clip") {
             viewer.clip = viewer::Clip::from_id(&pair[1]).unwrap_or(viewer::Clip::Run);
         }

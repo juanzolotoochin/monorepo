@@ -425,7 +425,7 @@ pub fn pose_selected_rig(world: &mut World) {
             let pack = &world.resource::<SceneLibrary>().scenes[scene_index];
             let skin = match &source {
                 CharacterSource::Skin(id) => pack.skins.iter().find(|skin| &skin.id == id).cloned(),
-                CharacterSource::Actor => None,
+                CharacterSource::BuiltIn | CharacterSource::Actor => None,
             };
             (pack.scene.style.clone(), skin)
         };
