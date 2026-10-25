@@ -6,12 +6,79 @@
 
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input::ButtonState;
+use bevy::clipboard::{Clipboard, ClipboardRead};
 use bevy::prelude::*;
 use bevy::state::state_scoped::DespawnOnExit;
 use service::{AppLayer, AppServices, Phase, Service, SessionState};
 
 use crate::assets::SceneLibrary;
 use crate::flow::{Flow, Launch};
+
+/// Disposable, per-user menu preferences. Scene IDs survive scene reordering.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct Settings {
+    name: String,
+    scene: String,
+    port: String,
+    address: String,
+}
+
+impl Settings {
+    fn path() -> std::path::PathBuf {
+        std::env::temp_dir().join("kestrel-menu-settings.json")
+    }
+
+    fn read(path: &std::path::Path) -> Option<Self> {
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(e) => {
+                warn!("Cannot read menu settings: {e}");
+                return None;
+            }
+        };
+        match serde_json::from_slice(&bytes) {
+            Ok(settings) => Some(settings),
+            Err(e) => {
+                warn!("Ignoring invalid menu settings: {e}");
+                None
+            }
+        }
+    }
+
+    fn write(&self, path: &std::path::Path) -> std::io::Result<()> {
+        std::fs::write(path, serde_json::to_vec_pretty(self)?)
+    }
+
+    fn apply(self, menu: &mut MainMenu, library: &SceneLibrary) {
+        menu.name = filtered(Field::Name, &self.name);
+        menu.port = filtered(Field::Port, &self.port);
+        menu.address = filtered(Field::Address, &self.address);
+        if let Ok(scene) = library.index(&self.scene) {
+            menu.scene = scene;
+        }
+    }
+}
+
+/// Use the same limits for typing, paste, and restored settings.
+fn append(value: &mut String, field: Field, text: &str) {
+    for c in text.chars().filter(|c| !c.is_control()) {
+        let fits = match field {
+            Field::Name => value.chars().count() < 24,
+            Field::Port => c.is_ascii_digit() && value.len() < 5,
+            Field::Address => !c.is_whitespace() && value.len() + c.len_utf8() <= 64,
+        };
+        if fits {
+            value.push(c);
+        }
+    }
+}
+
+fn filtered(field: Field, text: &str) -> String {
+    let mut value = String::new();
+    append(&mut value, field, text);
+    value
+}
 
 #[derive(Resource)]
 pub struct MainMenu {
@@ -31,19 +98,23 @@ impl Service for MainMenu {
 
     fn init(world: &mut World) -> Self {
         let defaults = world.resource::<Flow>().defaults.clone();
-        MainMenu {
+        let mut menu = MainMenu {
             name: defaults.name,
             scene: defaults.scene,
             port: defaults.port.to_string(),
             address: defaults.address,
             focus: None,
             error: None,
+        };
+        if let Some(settings) = Settings::read(&Settings::path()) {
+            settings.apply(&mut menu, world.resource::<SceneLibrary>());
         }
+        menu
     }
 
     fn systems(app: &mut App) {
         let off = in_state(SessionState::Off);
-        app.add_service_systems::<Self, _>(Phase::Input, (spawn, press, type_text).chain().run_if(off.clone()))
+        app.add_service_systems::<Self, _>(Phase::Input, (spawn, press, type_text, persist).chain().run_if(off.clone()))
             .add_service_systems::<Self, _>(Phase::Present, show.run_if(off));
     }
 }
@@ -215,6 +286,7 @@ fn spawn(mut commands: Commands, roots: Query<(), With<MenuRoot>>) {
                 (button(Action::Join, 110.0, JustifyContent::Center), children![label("JOIN", 16.0, TEXT)]),
                 field(Field::Address, 240.0),
             ]),
+            label("Click a field: Ctrl+C copies / Ctrl+V replaces (Cmd on macOS)", 11.0, MUTED),
             (button(Action::Quit, 110.0, JustifyContent::Center), children![label("QUIT", 16.0, TEXT)]),
             (Message, Text::new(""), font(14.0), TextColor(WARNING), Node { max_width: px(640), margin: UiRect::top(px(14)), ..default() }),
         ],
@@ -240,14 +312,37 @@ fn press(
 /// joins, on the name plays; Escape and Tab leave the field.
 fn type_text(
     mut keys: MessageReader<KeyboardInput>,
+    held: Res<ButtonInput<KeyCode>>,
+    mut clipboard: ResMut<Clipboard>,
     mut menu: ResMut<MainMenu>,
     mut flow: ResMut<Flow>,
     library: Res<SceneLibrary>,
     mut exit: MessageWriter<AppExit>,
 ) {
+    let shortcut = if cfg!(target_os = "macos") {
+        held.any_pressed([KeyCode::SuperLeft, KeyCode::SuperRight])
+    } else {
+        held.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight])
+    };
     for key in keys.read() {
         let Some(field) = menu.focus else { break };
         if key.state != ButtonState::Pressed {
+            continue;
+        }
+        if shortcut {
+            let result = match &key.logical_key {
+                Key::Character(c) if c.eq_ignore_ascii_case("c") => clipboard.set_text(menu.value(field).to_string()),
+                Key::Character(c) if c.eq_ignore_ascii_case("v") => match clipboard.fetch_text() {
+                    ClipboardRead::Ready(Ok(text)) => {
+                        *menu.value_mut(field) = filtered(field, text.trim());
+                        Ok(())
+                    }
+                    ClipboardRead::Ready(Err(e)) => Err(e),
+                    _ => continue,
+                },
+                _ => continue,
+            };
+            menu.error = result.err().map(|e| format!("Clipboard: {e}"));
             continue;
         }
         match &key.logical_key {
@@ -265,21 +360,29 @@ fn type_text(
             }
             _ => {
                 let Some(text) = &key.text else { continue };
-                let value = menu.value_mut(field);
-                for c in text.chars().filter(|c| !c.is_control()) {
-                    let fits = match field {
-                        Field::Name => value.chars().count() < 24,
-                        Field::Port => c.is_ascii_digit() && value.len() < 5,
-                        Field::Address => !c.is_whitespace() && value.len() < 64,
-                    };
-                    if fits {
-                        value.push(c);
-                    }
-                }
+                append(menu.value_mut(field), field, text);
             }
         }
     }
     flow.typing = menu.focus.is_some();
+}
+
+/// Save after edits, including the frame that launches or quits. Focus and
+/// connection errors aren't preferences and don't cause disk writes.
+fn persist(menu: Res<MainMenu>, library: Res<SceneLibrary>, mut last: Local<Option<Settings>>) {
+    let settings = Settings {
+        name: menu.name.clone(),
+        scene: library.scenes[menu.scene].scene.id.clone(),
+        port: menu.port.clone(),
+        address: menu.address.clone(),
+    };
+    if last.as_ref() == Some(&settings) {
+        return;
+    }
+    if let Err(e) = settings.write(&Settings::path()) {
+        warn!("Cannot save menu settings: {e}");
+    }
+    *last = Some(settings);
 }
 
 /// Shows the fields, the scene, the message and which button is under the
@@ -342,5 +445,53 @@ mod tests {
         assert!(menu.launch(Action::Host, &defaults).is_err());
         assert!(menu.launch(Action::Join, &defaults).is_err());
         assert!(menu.launch(Action::Quit, &defaults).is_err());
+    }
+
+    #[test]
+    fn pasted_text_replaces_defaults_and_respects_field_limits() {
+        let (mut menu, _) = menu();
+        *menu.value_mut(Field::Address) = filtered(Field::Address, "  my-desktop:7777\r\n".trim());
+        assert_eq!(menu.address, "my-desktop:7777");
+        assert_eq!(filtered(Field::Port, "7a12345\n"), "71234");
+        assert_eq!(filtered(Field::Name, &"é".repeat(30)).chars().count(), 24);
+        assert_eq!(filtered(Field::Address, &"é".repeat(40)).len(), 64);
+        assert_eq!(filtered(Field::Address, "a b\tc\nd:7000"), "abcd:7000");
+    }
+
+    #[test]
+    fn settings_round_trip_and_restore_the_last_address() {
+        let path = std::env::temp_dir().join(format!(
+            "kestrel-menu-test-{}-{}.json", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+        ));
+        assert!(Settings::read(&path).is_none());
+        let settings = Settings {
+            name: "Ada".into(), scene: "field".into(), port: "7777".into(), address: "my-desktop:7777".into(),
+        };
+        settings.write(&path).unwrap();
+        let restored = Settings::read(&path).unwrap();
+        assert_eq!(restored, settings);
+        let library = SceneLibrary::new();
+        let (mut menu, defaults) = menu();
+        restored.apply(&mut menu, &library);
+        assert_eq!(menu.address, "my-desktop:7777");
+        assert_eq!(menu.name, "Ada");
+        assert_eq!(menu.scene, library.index("field").unwrap());
+        assert!(matches!(menu.launch(Action::Host, &defaults).unwrap().network, Some(Network::Host(a)) if a.port() == 7777));
+        std::fs::write(&path, b"{unfinished").unwrap();
+        assert!(Settings::read(&path).is_none());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn removed_scene_keeps_the_default_and_restored_fields_are_bounded() {
+        let (mut menu, _) = menu();
+        Settings {
+            name: "n".repeat(100), scene: "removed-scene".into(), port: "7777777".into(), address: "x".repeat(100),
+        }.apply(&mut menu, &SceneLibrary::new());
+        assert_eq!(menu.scene, 3);
+        assert_eq!(menu.name.len(), 24);
+        assert_eq!(menu.port, "77777");
+        assert_eq!(menu.address.len(), 64);
     }
 }
