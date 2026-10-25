@@ -241,18 +241,18 @@ pub fn update(
                     parents.get(entity).ok().map(ChildOf::parent)));
             }
         }
-        let ground = crate::character::foot_ground_offsets(
+        let terrain = crate::character::foot_terrain(
             *peers.get(*root).unwrap().2,
             pose,
             |point| crate::jetpack::height(&library, point),
         );
-        for (entity, target) in grounded_foot_targets(&joints, *root, pose, ground) {
+        for (entity, target) in grounded_foot_targets(&joints, *root, pose, terrain) {
             if let Ok((_, _, mut transform)) = parts.get_mut(entity) {
                 *transform = target;
             }
         }
         if let Some(contacts) = contacts.as_ref() {
-            for (entity, target) in crate::character::actor_leg_targets(&joints, *root, pose, contacts, ground) {
+            for (entity, target) in crate::character::actor_leg_targets(&joints, *root, pose, contacts, terrain) {
                 if let Ok((_, _, mut transform)) = parts.get_mut(entity) {
                     *transform = target;
                 }

@@ -24,7 +24,7 @@ const STEP_HEIGHT: f32 = 0.24;
 pub(crate) const STUDIO_FPS: f32 = 60.0;
 
 fn step_span(step_distance: f32) -> (f32, f32) {
-    (step_distance * 0.88, step_distance * 2.92)
+    (step_distance * 1.40, step_distance * 3.20)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -76,7 +76,7 @@ impl Clip {
         match self {
             Self::Run => 30,
             Self::Walk => 33,
-            Self::Step => 180,
+            Self::Step => 120,
             Self::Turn => 200,
             Self::Jump => 80,
             Self::RunJump => 135,
@@ -291,9 +291,10 @@ fn step_surface(distance: f32, step_distance: f32) -> f32 {
 }
 
 fn studio_step_root_height(distance: f32, step_distance: f32) -> f32 {
-    let (start, end) = step_span(step_distance);
-    STEP_HEIGHT * crate::combat::smooth((distance - (start - step_distance * 0.24)) / (step_distance * 0.44))
-        * (1.0 - crate::combat::smooth((distance - (end - step_distance * 0.08)) / (step_distance * 0.44)))
+    // The first foot lands on top after one stride. Let it take the body's
+    // weight before rising; lower after the third contact reaches the floor.
+    STEP_HEIGHT * crate::combat::smooth((distance / step_distance - 1.0) / 0.4)
+        * (1.0 - crate::combat::smooth((distance / step_distance - 2.7) / 0.5))
 }
 
 pub(crate) fn studio_surface_height(viewer: &Viewer, local_z: f32) -> f32 {
@@ -688,13 +689,99 @@ mod tests {
     use super::*;
 
     #[test]
+    fn exosuit_step_keeps_stance_soles_planted_and_clears_the_block() {
+        use crate::character::{grounded_foot_targets, PartKind, Pose};
+        use std::collections::HashMap;
+
+        let library = SceneLibrary::new();
+        let exosuit = library.characters.index_for_id("builtin:exosuit").unwrap();
+        let motion = crate::character::motion_profile(&library.scenes[library.characters[exosuit].scene_index]);
+        assert!(motion.plant_feet);
+        let mut world = World::new();
+        let root_id = world.spawn_empty().id();
+        let body_id = world.spawn_empty().id();
+        let body_rest = Transform::from_xyz(0.0, 0.94, 0.0);
+        let mut legs = Vec::new();
+        for side in [-1.0_f32, 1.0] {
+            legs.push((side, world.spawn_empty().id(), world.spawn_empty().id(), world.spawn_empty().id()));
+        }
+        let mut previous: [Option<f32>; 2] = [None, None];
+        let mut previous_center: [Option<Vec3>; 2] = [None, None];
+        for frame in 0..Clip::Step.frame_count() {
+            let distance = 4.0 * motion.step_distance * frame as f32 / Clip::Step.frame_count() as f32;
+            let root = Transform::from_xyz(0.0, STUDIO_FLOOR_Y +
+                studio_step_root_height(distance, motion.step_distance), distance);
+            let mut pose = Pose {
+                stride: (distance * std::f32::consts::PI / motion.step_distance)
+                    .rem_euclid(std::f32::consts::TAU),
+                speed: (4.0 * motion.step_distance / 2.0) / motion.walk_speed,
+                turn: 0.0, breathe: 0.0, step_pitch: 0.0, airborne: false,
+                jump: None, attack: None, dig: None, motion,
+            };
+            let terrain = crate::character::foot_terrain(root, &pose,
+                |point| Some(STUDIO_FLOOR_Y + step_surface(point.z, motion.step_distance)));
+            pose.step_pitch = crate::character::step_body_pitch(&pose, terrain.ground);
+            let body = pose.place(PartKind::Body, body_rest);
+            let mut joints = HashMap::from([(body_id, (PartKind::Body, body_rest, body, Some(root_id)))]);
+            for &(side, leg_id, shin_id, foot_id) in &legs {
+                let leg_rest = Transform::from_xyz(side * 0.20, -0.36, 0.0);
+                let shin_rest = Transform::from_xyz(0.0, -0.27, 0.0);
+                let foot_rest = Transform::from_xyz(0.0, -0.21, 0.0);
+                joints.insert(leg_id, (PartKind::Leg(side), leg_rest,
+                    pose.place(PartKind::Leg(side), leg_rest), Some(body_id)));
+                joints.insert(shin_id, (PartKind::Shin(side), shin_rest,
+                    pose.place(PartKind::Shin(side), shin_rest), Some(leg_id)));
+                joints.insert(foot_id, (PartKind::Foot(side), foot_rest,
+                    pose.place(PartKind::Foot(side), foot_rest), Some(shin_id)));
+            }
+            for (entity, target) in grounded_foot_targets(&joints, root_id, &pose, terrain) {
+                joints.get_mut(&entity).unwrap().2 = target;
+            }
+            for (index, &(side, leg_id, shin_id, foot_id)) in legs.iter().enumerate() {
+                let sole = root.to_matrix() * body.to_matrix()
+                    * joints[&leg_id].2.to_matrix() * joints[&shin_id].2.to_matrix()
+                    * joints[&foot_id].2.to_matrix();
+                let center = sole.transform_point3(Vec3::new(0.0, -0.09, 0.12));
+                if let Some(last) = previous_center[index] {
+                    assert!(center.distance(last) < 0.12,
+                        "frame {frame} side {side} foot jumped {}m", center.distance(last));
+                }
+                previous_center[index] = Some(center);
+                let phase = (pose.stride + if side > 0.0 { 0.0 } else { std::f32::consts::PI })
+                    .rem_euclid(std::f32::consts::TAU);
+                let stance = phase < std::f32::consts::TAU * 0.55;
+                let surface = STUDIO_FLOOR_Y + step_surface(center.z, motion.step_distance);
+                for edge_z in [-0.115, 0.355] {
+                    let edge = sole.transform_point3(Vec3::new(0.0, -0.09, edge_z));
+                    let edge_surface = STUDIO_FLOOR_Y + step_surface(edge.z, motion.step_distance);
+                    assert!(edge.y >= edge_surface - 0.025,
+                        "frame {frame} side {side} boot edge {edge_z} z={} y={} entered surface={edge_surface}", edge.z, edge.y);
+                }
+                if stance {
+                    assert!((center.y - surface).abs() < 0.055,
+                        "frame {frame} side {side} planted sole y={} surface={surface}", center.y);
+                    if let Some(last) = previous[index] {
+                        assert!((center.z - last).abs() < 0.01,
+                            "frame {frame} side {side} stance sole slid from {last} to {}", center.z);
+                    }
+                    previous[index] = Some(center.z);
+                } else {
+                    assert!(center.y >= surface - 0.025,
+                        "frame {frame} side {side} swing sole y={} entered surface={surface}", center.y);
+                    previous[index] = None;
+                }
+            }
+        }
+    }
+
+    #[test]
     fn step_preview_places_leading_and_trailing_feet_on_different_levels() {
         let mut viewer = Viewer::default();
         viewer.clip = Clip::Step;
-        viewer.distance = 0.6;
-        viewer.step_distance = 1.25;
+        viewer.distance = 0.3;
+        viewer.step_distance = 0.50;
         let pose = crate::character::Pose {
-            motion: voxel_assets::CharacterMotion::default(),
+            motion: voxel_assets::CharacterMotion { step_distance: 0.50, ..default() },
             stride: 0.0,
             speed: 0.6,
             turn: 0.0,
@@ -718,7 +805,7 @@ mod tests {
     #[test]
     fn swinging_foot_changes_height_continuously_over_both_step_edges() {
         let mut motion = voxel_assets::CharacterMotion::default();
-        motion.step_distance = 0.44;
+        motion.step_distance = 0.50;
         let (start, end) = step_span(motion.step_distance);
         let mut pose = crate::character::Pose {
             motion,
@@ -748,7 +835,7 @@ mod tests {
             uphill.push(sample(first_swing_distance, &pose));
             downhill.push(sample(2.0 * motion.step_distance + first_swing_distance, &pose));
         }
-        assert!(start > motion.step_distance * 0.55 + 0.13);
+        assert!(start > motion.step_distance * 0.55 + 0.36);
         assert!(end > motion.step_distance * 2.55);
         assert!(end < motion.step_distance * 3.55);
         assert!(uphill.windows(2).all(|pair| pair[0] <= pair[1]));
