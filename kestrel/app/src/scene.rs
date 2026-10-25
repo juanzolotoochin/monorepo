@@ -565,6 +565,7 @@ pub fn setup(
             p.spawn((
                 Part {
                     kind: PartKind::Body,
+                    bind: body,
                     rest: body,
                 },
                 body,
@@ -582,6 +583,7 @@ pub fn setup(
                 hip.spawn((
                     Part {
                         kind: PartKind::Chest,
+                        bind: chest,
                         rest: chest,
                     },
                     chest,
@@ -650,6 +652,7 @@ pub fn setup(
                     b.spawn((
                         Part {
                             kind: PartKind::Head,
+                            bind: head,
                             rest: head,
                         },
                         head,
@@ -704,6 +707,7 @@ pub fn setup(
                         b.spawn((
                             Part {
                                 kind: PartKind::Arm(side),
+                                bind: arm,
                                 rest: arm,
                             },
                             arm,
@@ -737,6 +741,7 @@ pub fn setup(
                             a.spawn((
                                 Part {
                                     kind: PartKind::Forearm(side),
+                                    bind: elbow,
                                     rest: elbow,
                                 },
                                 elbow,
@@ -769,6 +774,7 @@ pub fn setup(
                                 f.spawn((
                                     Part {
                                         kind: PartKind::Hand(side),
+                                        bind: wrist,
                                         rest: wrist,
                                     },
                                     wrist,
@@ -795,6 +801,7 @@ pub fn setup(
                                             crate::character::LocalBlade,
                                             Part {
                                                 kind: PartKind::WeaponGrip,
+                                                bind: weapon,
                                                 rest: weapon,
                                             },
                                             weapon,
@@ -877,12 +884,12 @@ pub fn setup(
                         });
                     }
                 });
-            });
             for side in [-1.0, 1.0] {
-                let leg = Transform::from_xyz(side * 0.20, 0.58, 0.0);
-                p.spawn((
+                let leg = Transform::from_xyz(side * 0.20, -0.36, 0.0);
+                hip.spawn((
                     Part {
                         kind: PartKind::Leg(side),
+                        bind: leg,
                         rest: leg,
                     },
                     leg,
@@ -900,6 +907,7 @@ pub fn setup(
                     l.spawn((
                         Part {
                             kind: PartKind::Shin(side),
+                            bind: shin,
                             rest: shin,
                         },
                         shin,
@@ -911,6 +919,7 @@ pub fn setup(
                         s.spawn((
                             Part {
                                 kind: PartKind::Knee(side),
+                                bind: Transform::IDENTITY,
                                 rest: Transform::IDENTITY,
                             },
                             Transform::IDENTITY,
@@ -934,6 +943,7 @@ pub fn setup(
                         s.spawn((
                             Part {
                                 kind: PartKind::Foot(side),
+                                bind: foot,
                                 rest: foot,
                             },
                             foot,
@@ -951,6 +961,7 @@ pub fn setup(
                     });
                 });
             }
+            });
         });
     commands.insert_resource(FxAssets {
         cube,
@@ -1325,9 +1336,11 @@ mod character_tests {
         for (knee, side) in knees {
             let shin = world.get::<ChildOf>(knee).unwrap().parent();
             let thigh = world.get::<ChildOf>(shin).unwrap().parent();
+            let pelvis = world.get::<ChildOf>(thigh).unwrap().parent();
             assert!(
                 matches!(world.get::<Part>(shin).unwrap().kind, PartKind::Shin(s) if s == side)
             );
+            assert!(matches!(world.get::<Part>(pelvis).unwrap().kind, PartKind::Body));
             assert!(
                 matches!(world.get::<Part>(thigh).unwrap().kind, PartKind::Leg(s) if s == side)
             );

@@ -417,6 +417,16 @@ mod tests {
         assert_eq!(library.index("field"), Ok(9));
         assert_eq!(library.index("moonlit-glade"), Ok(10));
         let glade = &library.scenes[10];
+        let blade_tip = glade
+            .actor
+            .iter()
+            .find(|part| part.part == voxel_assets::ActorPart::Weapon)
+            .unwrap()
+            .meshes
+            .iter()
+            .flat_map(|mesh| mesh.positions.iter().map(|position| position[2]))
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!(blade_tip > 0.8, "voxel sword blade was lost during baking");
         assert!(glade.scene.features.contains(&SceneFeature::Jump));
         assert!(glade.scene.features.contains(&SceneFeature::SwiftSword));
         assert_eq!(glade.scene.instances.len(), 7);

@@ -402,6 +402,24 @@ fn field() -> SceneSetup {
     SceneSetup { extent: Fx::from_int(8), spawn: [Fx::ZERO, Fx::ZERO, fx(2.0)], ..SceneSetup::default() }
 }
 
+#[test]
+fn authored_locomotion_speeds_control_avatar_movement() {
+    let travel = |speed: f64| {
+        let mut scene = Scene::new(SceneSetup {
+            locomotion: Some(crate::terrain::Locomotion { walk: fx(speed), run: fx(speed + 0.5) }),
+            ..field()
+        });
+        let agent = scene.agent();
+        scene.command(CommandKind::MoveAvatar {
+            agent,
+            intent: Intent::Walk { direction: v(1.0, 0.0), run: false },
+        });
+        scene.wait(ms(600));
+        scene.avatar().position.x - scene.center.x
+    };
+    assert!(travel(2.0) > travel(1.0) + fx(0.4));
+}
+
 /// A player who joins gets an avatar of their own, drives only that one,
 /// and joining twice doesn't add a second.
 #[test]

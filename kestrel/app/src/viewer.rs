@@ -1,6 +1,7 @@
 //! Character studio: repeatable poses from the production rig, viewed in place.
 use crate::{
-    character::{JumpMotion, Player},
+    assets::SceneLibrary,
+    character::{JumpMotion, LocalBlade, Player},
     combat::Attack,
     gameplay::Controls,
     menu::LaunchMenu,
@@ -18,10 +19,14 @@ use sim::settlement::avatar::SwordStroke;
 // root on the same plane so poses can be judged against actual foot contact.
 const STUDIO_FLOOR_Y: f32 = 20.0;
 const STUDIO_FLOOR_THICKNESS: f32 = 0.2;
+const GRID_SPACING: f32 = 0.5;
+const GRID_PERIOD: f32 = 4.0;
+pub(crate) const STUDIO_FPS: f32 = 60.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Clip {
     Idle,
+    Walk,
     #[default]
     Run,
     Turn,
@@ -32,9 +37,21 @@ pub enum Clip {
     Overhead,
 }
 impl Clip {
+    pub(crate) fn frame_count(self) -> u64 {
+        match self {
+            Self::Run => 30,
+            Self::Walk => 33,
+            Self::Turn => 200,
+            Self::Jump => 80,
+            Self::RunJump => 135,
+            Self::Forehand | Self::Backhand | Self::Overhead => 66,
+            Self::Idle => 90,
+        }
+    }
     fn title(self) -> &'static str {
         match self {
             Self::Idle => "IDLE",
+            Self::Walk => "WALK / PLANTED FEET",
             Self::Run => "RUN",
             Self::Turn => "RUN + DIRECTION CHANGE",
             Self::Jump => "JUMP",
@@ -60,37 +77,60 @@ pub enum ViewAngle {
     Front,
     Side,
 }
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone, Copy)]
 pub struct Viewer {
     pub active: bool,
     pub clip: Clip,
     pub angle: ViewAngle,
     pub elapsed: f32,
+    pub frame: u64,
+    total_frame: u64,
     pub speed: f32,
     pub paused: bool,
+    frame_accumulator: f32,
+    motion_frame: u64,
+    ground_offset: Vec2,
+    distance: f32,
+    gait_distance: f32,
 }
 impl Viewer {
     pub fn begin(&mut self) {
         self.active = true;
         self.clip = Clip::Run;
         self.angle = ViewAngle::ThreeQuarter;
-        self.elapsed = 0.0;
+        self.reset_clock();
         self.speed = 1.0;
         self.paused = false;
     }
+    fn reset_clock(&mut self) {
+        self.seek_frame(0);
+    }
+    fn seek_frame(&mut self, frame: u64) {
+        self.frame = frame % self.clip.frame_count();
+        self.total_frame = self.frame;
+        self.frame_accumulator = 0.0;
+        self.elapsed = self.frame as f32 / STUDIO_FPS;
+        self.motion_frame = 0;
+        self.ground_offset = Vec2::ZERO;
+        self.distance = 0.0;
+        self.gait_distance = 0.0;
+    }
+    fn advance_clock(&mut self, dt: f32) {
+        self.frame_accumulator += dt.min(0.05).max(0.0) * self.speed * STUDIO_FPS;
+        let frames = self.frame_accumulator.floor() as u64;
+        self.frame_accumulator -= frames as f32;
+        self.total_frame += frames;
+        self.frame = self.total_frame % self.clip.frame_count();
+        self.elapsed = self.frame as f32 / STUDIO_FPS;
+    }
+    fn step_frame(&mut self) {
+        self.seek_frame(self.frame + 1);
+    }
+    fn step_back_frame(&mut self) {
+        self.seek_frame(self.frame + self.clip.frame_count() - 1);
+    }
     fn phase(&self) -> f32 {
-        let period = if self.clip.stroke().is_some() {
-            1.10
-        } else if self.clip == Clip::Turn {
-            3.4
-        } else if self.clip == Clip::Jump {
-            1.3
-        } else if self.clip == Clip::RunJump {
-            2.2
-        } else {
-            1.5
-        };
-        self.elapsed.rem_euclid(period)
+        self.elapsed
     }
     fn turn_heading(&self) -> f32 {
         let t = self.phase();
@@ -110,6 +150,15 @@ impl Viewer {
         } else {
             0.0
         }
+    }
+    pub(crate) fn turn_lean(&self) -> f32 {
+        if self.clip != Clip::Turn {
+            return 0.0;
+        }
+        let previous_frame = (self.frame + self.clip.frame_count() - 1) % self.clip.frame_count();
+        let previous = Self { frame: previous_frame, elapsed: previous_frame as f32 / STUDIO_FPS, ..*self };
+        ((self.turn_heading() - previous.turn_heading()) * 0.15 * STUDIO_FPS)
+            .clamp(-0.9, 0.9)
     }
     pub fn jump(&self) -> (Option<JumpMotion>, f32) {
         if !matches!(self.clip, Clip::Jump | Clip::RunJump) {
@@ -142,6 +191,17 @@ impl Viewer {
         }
         (None, 0.0)
     }
+
+    fn advance_ground(&mut self, dt: f32, velocity: Vec3, step_distance: f32, stepping: bool) -> f32 {
+        let displacement = velocity * dt.max(0.0);
+        self.ground_offset += Vec2::new(displacement.x, displacement.z);
+        self.distance += displacement.length();
+        if stepping {
+            self.gait_distance += displacement.length();
+        }
+        (self.gait_distance * std::f32::consts::PI / step_distance.clamp(0.2, 4.0))
+            .rem_euclid(std::f32::consts::TAU)
+    }
 }
 
 pub fn not_active(viewer: Res<Viewer>) -> bool {
@@ -162,6 +222,17 @@ pub fn sync_hud(viewer: Res<Viewer>, mut roots: Query<&mut Node, With<crate::sce
 pub(crate) struct Root;
 #[derive(Component)]
 pub(crate) struct Stage;
+#[derive(Component)]
+pub(crate) struct GroundMark {
+    axis: MarkAxis,
+    base: f32,
+}
+#[derive(Clone, Copy)]
+enum MarkAxis { X, Z }
+
+fn wrapped_mark(base: f32, offset: f32) -> f32 {
+    (base - offset + GRID_PERIOD * 0.5).rem_euclid(GRID_PERIOD) - GRID_PERIOD * 0.5
+}
 #[derive(Component, Clone, Copy)]
 pub(crate) enum Action {
     Clip(Clip),
@@ -169,11 +240,26 @@ pub(crate) enum Action {
     Speed,
     Pause,
     Step,
+    StepBack,
     Reset,
     Back,
 }
 #[derive(Component)]
 pub(crate) struct Status;
+#[derive(Component)]
+pub(crate) struct SwordMetrics;
+#[derive(Component)]
+pub(crate) struct SwordMetricsTitle;
+#[derive(Component)]
+pub(crate) struct SwordAngleText;
+#[derive(Component)]
+pub(crate) struct SwordPhaseText;
+#[derive(Default)]
+pub(crate) struct AngleLog {
+    initialized: bool,
+    enabled: bool,
+    previous: Option<(Clip, u64)>,
+}
 
 fn button(parent: &mut ChildSpawnerCommands, action: Action, title: &str) {
     parent
@@ -233,6 +319,33 @@ pub fn setup(
         })),
         Transform::from_xyz(0.0, STUDIO_FLOOR_Y - STUDIO_FLOOR_THICKNESS * 0.5, 0.0),
     ));
+    for index in -4..4 {
+        let base = index as f32 * GRID_SPACING;
+        let major = index % 2 == 0;
+        let material = materials.add(StandardMaterial {
+            base_color: if major { Color::srgb(0.32, 0.53, 0.57) } else { Color::srgb(0.19, 0.34, 0.38) },
+            perceptual_roughness: 0.92,
+            ..default()
+        });
+        let width = if major { 0.018 } else { 0.008 };
+        for axis in [MarkAxis::X, MarkAxis::Z] {
+            let size = match axis {
+                MarkAxis::X => Vec3::new(width, 0.004, GRID_PERIOD),
+                MarkAxis::Z => Vec3::new(GRID_PERIOD, 0.004, width),
+            };
+            commands.spawn((
+                Stage,
+                GroundMark { axis, base },
+                Mesh3d(meshes.add(Cuboid::from_size(size))),
+                MeshMaterial3d(material.clone()),
+                Transform::from_xyz(
+                    if matches!(axis, MarkAxis::X) { base } else { 0.0 },
+                    STUDIO_FLOOR_Y + 0.003,
+                    if matches!(axis, MarkAxis::Z) { base } else { 0.0 },
+                ),
+            ));
+        }
+    }
     for (position, intensity) in [
         (Vec3::new(2.5, STUDIO_FLOOR_Y + 3.5, 3.5), 1900.0),
         (Vec3::new(-3.0, STUDIO_FLOOR_Y + 2.6, -1.0), 1100.0),
@@ -274,8 +387,10 @@ pub fn setup(
                 TextColor(Color::srgb(0.42, 0.92, 0.95)),
             ));
             label(panel, "LOOPING ANIMATIONS");
+            label(panel, "MOVING FLOOR / 0.5 M GRID");
             for clip in [
                 Clip::Idle,
+                Clip::Walk,
                 Clip::Run,
                 Clip::Turn,
                 Clip::Jump,
@@ -296,7 +411,8 @@ pub fn setup(
             button(panel, Action::Angle(ViewAngle::Side), "SIDE");
             button(panel, Action::Speed, "CYCLE SPEED");
             button(panel, Action::Pause, "PAUSE / PLAY");
-            button(panel, Action::Step, "STEP ONE FRAME");
+            button(panel, Action::Step, "STEP +1 [RIGHT]");
+            button(panel, Action::StepBack, "STEP -1 [LEFT]");
             button(panel, Action::Reset, "RESET LOOP");
             button(panel, Action::Back, "BACK TO MENU");
             panel.spawn((
@@ -309,19 +425,65 @@ pub fn setup(
                 TextColor(Color::srgb(0.66, 0.87, 0.88)),
             ));
         });
+    commands
+        .spawn((
+            Root,
+            SwordMetrics,
+            GlobalZIndex(1002),
+            Node {
+                display: Display::Flex,
+                position_type: PositionType::Absolute,
+                right: px(20.0),
+                top: px(18.0),
+                width: px(315.0),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(6.0),
+                padding: UiRect::all(px(14.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.015, 0.035, 0.05, 0.94)),
+        ))
+        .with_children(|panel| {
+            panel.spawn((
+                SwordMetricsTitle,
+                Text::new(""),
+                TextFont { font_size: FontSize::Px(15.0), ..default() },
+                TextColor(Color::srgb(0.42, 0.92, 0.95)),
+            ));
+            panel.spawn((
+                SwordAngleText,
+                Text::new(""),
+                TextFont { font_size: FontSize::Px(19.0), ..default() },
+                TextColor(Color::srgb(0.85, 0.95, 0.94)),
+            ));
+            panel.spawn((
+                SwordPhaseText,
+                Text::new(""),
+                TextFont { font_size: FontSize::Px(13.0), ..default() },
+                TextColor(Color::srgb(0.66, 0.87, 0.88)),
+            ));
+        });
 }
 
 pub fn input(
     mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
     mut viewer: ResMut<Viewer>,
     mut menu: ResMut<LaunchMenu>,
     roots: Query<Entity, With<Root>>,
     stages: Query<Entity, With<Stage>>,
     mut actions: Query<(&Action, Ref<Interaction>, &mut BackgroundColor)>,
-    mut status: Query<&mut Text, With<Status>>,
 ) {
     if !viewer.active {
         return;
+    }
+    if keys.just_pressed(KeyCode::ArrowRight) {
+        viewer.paused = true;
+        viewer.step_frame();
+    }
+    if keys.just_pressed(KeyCode::ArrowLeft) {
+        viewer.paused = true;
+        viewer.step_back_frame();
     }
     for (action, interaction, _) in &mut actions {
         if !interaction.is_changed() || *interaction != Interaction::Pressed {
@@ -330,7 +492,7 @@ pub fn input(
         match *action {
             Action::Clip(clip) => {
                 viewer.clip = clip;
-                viewer.elapsed = 0.0;
+                viewer.reset_clock();
             }
             Action::Angle(angle) => viewer.angle = angle,
             Action::Speed => {
@@ -345,11 +507,15 @@ pub fn input(
             Action::Pause => viewer.paused = !viewer.paused,
             Action::Step => {
                 viewer.paused = true;
-                viewer.elapsed += 1.0 / 60.0;
+                viewer.step_frame();
+            }
+            Action::StepBack => {
+                viewer.paused = true;
+                viewer.step_back_frame();
             }
             Action::Reset => {
                 viewer.paused = true;
-                viewer.elapsed = 0.0;
+                viewer.reset_clock();
             }
             Action::Back => {
                 viewer.active = false;
@@ -378,50 +544,76 @@ pub fn input(
             Color::srgba(0.07, 0.16, 0.20, 0.92)
         };
     }
-    for mut text in &mut status {
-        text.0 = format!(
-            "{}   /   {:.1}x   /   {:.2}s{}",
-            viewer.clip.title(),
-            viewer.speed,
-            viewer.phase(),
-            if viewer.paused { "   PAUSED" } else { "" }
-        );
-    }
 }
 
 /// Set up in-place motion before the shared animation and trail systems.
 pub fn drive(
     time: Res<Time>,
+    library: Res<SceneLibrary>,
     mut viewer: ResMut<Viewer>,
     mut controls: ResMut<Controls>,
     mut player: Single<&mut Transform, With<Player>>,
+    mut marks: Query<(&GroundMark, &mut Transform), Without<Player>>,
+    mut status: Query<&mut Text, With<Status>>,
 ) {
     if !viewer.active {
         return;
     }
     if !viewer.paused {
-        viewer.elapsed += time.delta_secs().min(0.05) * viewer.speed;
+        viewer.advance_clock(time.delta_secs());
     }
     let t = viewer.phase();
     let spawn = Vec3::new(0.0, STUDIO_FLOOR_Y, 0.0);
-    let (_, height) = viewer.jump();
+    let (jump, height) = viewer.jump();
     player.translation = spawn + Vec3::Y * height;
     player.rotation = Quat::from_rotation_y(if viewer.clip == Clip::Turn {
         viewer.turn_heading()
     } else {
         0.0
     });
-    controls.velocity = if matches!(viewer.clip, Clip::Run | Clip::Turn | Clip::RunJump) {
-        player.rotation * Vec3::Z * 5.6
+    let motion = library.scenes[library.current].scene.style.as_ref()
+        .map_or_else(voxel_assets::CharacterMotion::default, |style| style.character_motion)
+        ;
+    let run_step = crate::character::step_distance_for_speed(motion.step_distance, 1.5);
+    let gait_step = if matches!(viewer.clip, Clip::Run | Clip::Turn | Clip::RunJump) {
+        run_step
     } else {
-        Vec3::ZERO
+        motion.step_distance
     };
-    controls.gait.phase = viewer.elapsed
-        * if matches!(viewer.clip, Clip::Run | Clip::RunJump) {
-            12.0
+    let studio_speed = match viewer.clip {
+        Clip::Walk => motion.step_distance * 2.0 * STUDIO_FPS / Clip::Walk.frame_count() as f32,
+        Clip::Run => {
+            run_step * 2.0 * STUDIO_FPS / Clip::Run.frame_count() as f32
+        }
+        Clip::Turn | Clip::RunJump => run_step * 2.0 * STUDIO_FPS / 20.0,
+        _ => 0.0,
+    };
+    controls.velocity = player.rotation * Vec3::Z * studio_speed;
+    // Apply every animation tick, even when a slow render skips several. This
+    // keeps jump contacts and turning travel identical at a given frame ID.
+    for tick in viewer.motion_frame + 1..=viewer.total_frame {
+        let frame = tick % viewer.clip.frame_count();
+        let sample = Viewer { frame, elapsed: frame as f32 / STUDIO_FPS, ..*viewer };
+        let sample_rotation = Quat::from_rotation_y(if viewer.clip == Clip::Turn {
+            sample.turn_heading()
         } else {
-            9.0
-        };
+            0.0
+        });
+        let sample_velocity = sample_rotation * Vec3::Z * studio_speed;
+        let stepping = !matches!(sample.jump().0, Some(JumpMotion::Rising(_) | JumpMotion::Falling(_)));
+        viewer.advance_ground(1.0 / STUDIO_FPS, sample_velocity, gait_step, stepping);
+        if frame == 0 {
+            viewer.gait_distance = 0.0;
+        }
+    }
+    viewer.motion_frame = viewer.total_frame;
+    controls.gait.phase = viewer.advance_ground(0.0, Vec3::ZERO, gait_step, false);
+    for (mark, mut transform) in &mut marks {
+        match mark.axis {
+            MarkAxis::X => transform.translation.x = wrapped_mark(mark.base, viewer.ground_offset.x),
+            MarkAxis::Z => transform.translation.z = wrapped_mark(mark.base, viewer.ground_offset.y),
+        }
+    }
     controls.attack = viewer.clip.stroke().and_then(|stroke| {
         (t < 0.44).then(|| {
             let mut attack = Attack::new(Vec3::Z, content::scenario::Weapon::Sword);
@@ -431,6 +623,16 @@ pub fn drive(
             attack
         })
     });
+    for mut text in &mut status {
+        text.0 = format!(
+            "{} / F{}/{} / {:.1}x{}",
+            viewer.clip.title(),
+            viewer.frame,
+            viewer.clip.frame_count(),
+            viewer.speed,
+            if viewer.paused { " PAUSED" } else { "" }
+        );
+    }
 }
 
 pub fn camera(
@@ -456,10 +658,94 @@ pub fn camera(
     }
 }
 
+fn side_blade_angle(direction: Vec3) -> Option<f32> {
+    let profile = Vec2::new(direction.z, direction.y);
+    (profile.length_squared() > 0.0025).then(|| direction.y.atan2(direction.z.abs()).to_degrees())
+}
+
+pub fn metrics(
+    viewer: Res<Viewer>,
+    controls: Res<Controls>,
+    sword: Query<&GlobalTransform, With<LocalBlade>>,
+    mut panels: Query<&mut Node, With<SwordMetrics>>,
+    mut titles: Query<&mut Text, (With<SwordMetricsTitle>, Without<SwordAngleText>, Without<SwordPhaseText>)>,
+    mut readouts: Query<&mut Text, With<SwordAngleText>>,
+    mut phase_texts: Query<&mut Text, (With<SwordPhaseText>, Without<SwordAngleText>)>,
+    mut log: Local<AngleLog>,
+) {
+    if !viewer.active {
+        return;
+    }
+    let Some(mut panel) = panels.iter_mut().next() else { return };
+    panel.display = Display::Flex;
+    if let Some(mut title) = titles.iter_mut().next() {
+        let clip = match viewer.clip {
+            Clip::Run => "RUN",
+            Clip::Turn => "RUN + TURN",
+            Clip::RunJump => "RUN + JUMP",
+            Clip::Walk => "WALK",
+            Clip::Idle => "IDLE",
+            Clip::Jump => "JUMP",
+            Clip::Forehand => "FOREHAND",
+            Clip::Backhand => "BACKHAND",
+            Clip::Overhead => "OVERHEAD",
+        };
+        title.0 = if viewer.angle == ViewAngle::Side {
+            format!("{clip} / SWORD ANGLE")
+        } else {
+            format!("{clip} / ANIMATION")
+        };
+    }
+    let Some(mut readout) = readouts.iter_mut().next() else { return };
+    if viewer.angle != ViewAngle::Side {
+        readout.0 = format!("FRAME {}/{}", viewer.frame, viewer.clip.frame_count());
+        if let Some(mut phase_text) = phase_texts.iter_mut().next() {
+            phase_text.0 = format!("TIME {:.3}s / 60 FPS", viewer.elapsed);
+        }
+        return;
+    }
+    let Some(sword) = sword.iter().next() else {
+        readout.0 = "SWORD UNAVAILABLE".into();
+        return;
+    };
+    let direction = sword.affine().transform_vector3(Vec3::Z).normalize_or_zero();
+    let angle_degrees = side_blade_angle(direction);
+    let angle = angle_degrees.map_or_else(
+        || "EDGE ON / NO SIDE ANGLE".to_string(),
+        |angle| {
+            let pitch = if angle > 1.0 { "UP" } else if angle < -1.0 { "DOWN" } else { "LEVEL" };
+            let heading = if direction.z > 0.05 { "FORWARD" } else if direction.z < -0.05 { "BACK" } else { "VERTICAL" };
+            format!("{angle:+.1} DEG {pitch} / {heading}")
+        },
+    );
+    readout.0 = angle;
+    if let Some(mut phase_text) = phase_texts.iter_mut().next() {
+        phase_text.0 = format!(
+            "FRAME {}/{}  /  GAIT {:.0}%",
+            viewer.frame,
+            viewer.clip.frame_count(),
+            controls.gait.phase / std::f32::consts::TAU * 100.0,
+        );
+    }
+    if !log.initialized {
+        log.initialized = true;
+        log.enabled = std::env::args().any(|arg| arg == "--studio-angle-log");
+    }
+    if log.enabled && log.previous != Some((viewer.clip, viewer.total_frame)) {
+        let phase = controls.gait.phase;
+        if let Some(degrees) = angle_degrees {
+            println!("ANGLE_FRAME,{:?},{},{},{:.6},{:.3},{:.3}", viewer.clip, viewer.frame, viewer.total_frame / viewer.clip.frame_count(), viewer.elapsed, phase / std::f32::consts::TAU * 100.0, degrees);
+        }
+        log.previous = Some((viewer.clip, viewer.total_frame));
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct Capture {
     initialized: bool,
     path: Option<String>,
+    gait_phase: Option<f32>,
+    pause_at: Option<f32>,
     elapsed: f32,
     saved: bool,
 }
@@ -468,7 +754,8 @@ pub(crate) struct Capture {
 pub fn capture(
     mut commands: Commands,
     time: Res<Time>,
-    viewer: Res<Viewer>,
+    mut viewer: ResMut<Viewer>,
+    controls: Res<Controls>,
     mut state: Local<Capture>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -482,10 +769,21 @@ pub fn capture(
             .windows(2)
             .find(|pair| pair[0] == "--capture-character-studio")
             .map(|pair| pair[1].clone());
+        state.gait_phase = args
+            .windows(2)
+            .find(|pair| pair[0] == "--studio-capture-gait")
+            .and_then(|pair| pair[1].parse::<f32>().ok());
+        state.pause_at = args
+            .windows(2)
+            .find(|pair| pair[0] == "--studio-pause-at")
+            .and_then(|pair| pair[1].parse::<f32>().ok());
     }
     let Some(path) = state.path.clone() else {
         return;
     };
+    if state.pause_at.is_some_and(|at| viewer.elapsed >= at) {
+        viewer.paused = true;
+    }
     state.elapsed += time.delta_secs().min(0.1);
     let phase = viewer.phase();
     let pushing = std::env::args().any(|arg| arg == "--studio-capture-push");
@@ -497,7 +795,11 @@ pub fn capture(
         Clip::Forehand | Clip::Backhand | Clip::Overhead => (0.17..0.21).contains(&phase),
         _ => true,
     };
-    if state.elapsed > 2.0 && key_pose && !state.saved {
+    let gait_pose = state.gait_phase.is_none_or(|target| {
+        let phase = controls.gait.phase / std::f32::consts::TAU;
+        (phase - target).abs() < 0.02
+    });
+    if state.elapsed > 2.0 && key_pose && gait_pose && !state.saved {
         state.saved = true;
         commands
             .spawn(Screenshot::primary_window())
@@ -511,6 +813,64 @@ pub fn capture(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn side_blade_angle_uses_the_ground_as_zero() {
+        assert_eq!(side_blade_angle(Vec3::Z), Some(0.0));
+        assert_eq!(side_blade_angle(Vec3::Y), Some(90.0));
+        assert_eq!(side_blade_angle(Vec3::NEG_Y), Some(-90.0));
+        assert!((side_blade_angle(Vec3::new(1.0, 1.0, -1.0)).unwrap() - 45.0).abs() < 1e-5);
+        assert_eq!(side_blade_angle(Vec3::X), None);
+    }
+
+    #[test]
+    fn studio_clock_uses_fixed_frames_independent_of_render_cadence() {
+        let mut twice = Viewer::default();
+        twice.speed = 1.0;
+        twice.advance_clock(1.0 / 120.0);
+        assert_eq!(twice.frame, 0);
+        twice.advance_clock(1.0 / 120.0);
+        let mut once = Viewer::default();
+        once.speed = 1.0;
+        once.advance_clock(1.0 / 60.0);
+        assert_eq!((twice.frame, twice.elapsed), (once.frame, once.elapsed));
+        twice.step_frame();
+        assert_eq!(twice.frame, 2);
+        assert!((twice.elapsed - 2.0 / STUDIO_FPS).abs() < 1e-6);
+        for _ in 0..28 {
+            twice.step_frame();
+        }
+        assert_eq!(twice.frame, 0);
+        assert_eq!(twice.elapsed, 0.0);
+        assert_eq!(twice.total_frame, 0);
+        twice.step_back_frame();
+        assert_eq!(twice.frame, 29);
+        twice.step_frame();
+        assert_eq!(twice.frame, 0);
+    }
+
+    #[test]
+    fn marked_floor_and_gait_use_the_same_travel_distance() {
+        let mut viewer = Viewer::default();
+        let phase = viewer.advance_ground(0.1, Vec3::Z * 5.6, 1.2, true);
+        assert!((viewer.ground_offset.y - 0.56).abs() < 0.001);
+        assert!((viewer.distance - 0.56).abs() < 0.001);
+        assert!((phase - 0.56 * std::f32::consts::PI / 1.2).abs() < 0.001);
+        assert!((wrapped_mark(0.5, viewer.ground_offset.y) + 0.06).abs() < 0.001);
+        let paused_phase = viewer.advance_ground(0.0, Vec3::Z * 5.6, 1.2, true);
+        assert_eq!(phase, paused_phase);
+        assert!((viewer.distance - 0.56).abs() < 0.001);
+    }
+
+    #[test]
+    fn run_jump_keeps_its_takeoff_gait_while_the_ground_moves_below() {
+        let mut viewer = Viewer::default();
+        let takeoff = viewer.advance_ground(0.1, Vec3::Z * 2.6, 0.44, true);
+        let in_air = viewer.advance_ground(0.2, Vec3::Z * 2.6, 0.44, false);
+        assert_eq!(in_air, takeoff);
+        assert!((viewer.ground_offset.y - 0.78).abs() < 0.001);
+        assert!((viewer.gait_distance - 0.26).abs() < 0.001);
+    }
+
     #[test]
     fn jump_loop_has_takeoff_apex_and_landing() {
         let mut viewer = Viewer::default();

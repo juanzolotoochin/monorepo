@@ -38,6 +38,13 @@ pub struct Surface {
     pub height: Fx,
 }
 
+/// Optional scene movement speeds. Absence preserves the original controller.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Locomotion {
+    pub walk: Fx,
+    pub run: Fx,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Terrain {
     /// The arena's center in world tiles.
@@ -55,6 +62,8 @@ pub struct Terrain {
     pub diggable: bool,
     #[serde(default)]
     pub jump_enabled: bool,
+    #[serde(default)]
+    pub locomotion: Option<Locomotion>,
     /// Dug pits by [`Terrain::pit_tile`], with how many layers deep, sorted.
     #[serde(default)]
     pub pits: Vec<((i32, i32), u8)>,
@@ -97,6 +106,7 @@ impl Terrain {
             rock: Vec::new(),
             diggable: false,
             jump_enabled: false,
+            locomotion: None,
             pits: Vec::new(),
             mine: None,
             generated: Generated::default(),
@@ -308,6 +318,10 @@ impl StateHash for Terrain {
         }
         h.write(&self.diggable);
         h.write(&self.jump_enabled);
+        if let Some(locomotion) = self.locomotion {
+            h.write(&locomotion.walk);
+            h.write(&locomotion.run);
+        }
         h.write_u64(self.pits.len() as u64);
         for &((x, y), depth) in &self.pits {
             h.write_u64((x as u32 as u64) << 32 | y as u32 as u64);

@@ -6,9 +6,10 @@ use crate::{
         REST_ANGLE, WINDUP,
     },
     effects::Feedback,
-    gameplay::{Controls, WALK_SPEED},
+    gameplay::Controls,
 };
 use bevy::prelude::*;
+use std::collections::HashMap;
 use sim::settlement::avatar::{JumpPhase, SwordStroke, JUMP_LAND_TICKS, JUMP_PREP_TICKS};
 
 #[derive(Component)]
@@ -19,6 +20,8 @@ pub struct LocalBlade;
 #[derive(Component)]
 pub struct Part {
     pub kind: PartKind,
+    /// Original local bind transform, restored when a style omits a pivot.
+    pub bind: Transform,
     pub rest: Transform,
 }
 #[derive(Clone, Copy)]
@@ -41,6 +44,11 @@ pub enum PartKind {
 pub struct GaitClock {
     pub phase: f32,
     contact_distance: f32,
+}
+
+pub(crate) fn step_distance_for_speed(base: f32, relative_speed: f32) -> f32 {
+    let running = ((relative_speed - 1.02) / 0.38).clamp(0.0, 1.0);
+    base * (1.0 + 0.20 * running)
 }
 
 impl GaitClock {
@@ -87,7 +95,7 @@ impl MotionState {
         profile: voxel_assets::CharacterMotion,
     ) -> (f32, f32) {
         let dt = dt.clamp(0.0, 0.05);
-        let target = (velocity.length() / WALK_SPEED).min(1.5);
+        let target = (velocity.length() / profile.walk_speed.max(0.1)).min(1.5);
         let response = if target > self.speed { 18.0 } else { 11.0 };
         self.speed += (target - self.speed) * (1.0 - (-response * dt).exp());
         let visual = self.visual_heading.get_or_insert(heading);
@@ -112,18 +120,23 @@ pub fn animate_character(
     game: Res<crate::lockstep::Game>,
     library: Res<SceneLibrary>,
     viewer: Res<crate::viewer::Viewer>,
-    player: Single<&Transform, With<Player>>,
-    mut parts: Query<(&Part, &mut Transform), Without<Player>>,
+    player: Single<(Entity, &Transform), With<Player>>,
+    mut parts: Query<(Entity, &Part, &mut Transform, Option<&ChildOf>), Without<Player>>,
     mut motion: Local<MotionState>,
 ) {
-    if feedback.hit_stop > 0.0
+    if !viewer.active && feedback.hit_stop > 0.0
         && !controls
             .attack
             .is_some_and(|a| a.impact_angle.is_some() && a.age == 0.0)
     {
         return;
     }
-    let airborne = flight.as_ref().is_some_and(|f| f.airborne);
+    let studio_jump = viewer.active.then(|| viewer.jump().0).flatten();
+    let airborne = if viewer.active {
+        studio_jump.is_some()
+    } else {
+        flight.as_ref().is_some_and(|f| f.airborne)
+    };
     let profile = library.scenes[library.current]
         .scene
         .style
@@ -131,17 +144,33 @@ pub fn animate_character(
         .map_or_else(voxel_assets::CharacterMotion::default, |s| {
             s.character_motion
         });
-    let (speed, turn) = motion.advance_with_profile(
-        if airborne {
-            Vec3::ZERO
+    let (speed, turn) = if viewer.active {
+        let velocity = if viewer.clip == crate::viewer::Clip::Run {
+            profile.run_speed
         } else {
-            controls.velocity
-        },
-        player.rotation.to_euler(EulerRot::YXZ).0,
-        time.delta_secs(),
-        profile,
-    );
-    let breathe = (time.elapsed_secs() * 2.0).sin() * 0.012;
+            controls.velocity.length()
+        };
+        ((velocity / profile.walk_speed.max(0.1)).min(1.5), viewer.turn_lean())
+    } else {
+        motion.advance_with_profile(
+            if airborne { Vec3::ZERO } else { controls.velocity },
+            player.1.rotation.to_euler(EulerRot::YXZ).0,
+            time.delta_secs(),
+            profile,
+        )
+    };
+    let breathe = if viewer.active {
+        if viewer.clip == crate::viewer::Clip::Idle {
+            (viewer.frame as f32 * std::f32::consts::TAU
+                / viewer.clip.frame_count() as f32)
+                .sin()
+                * 0.012
+        } else {
+            0.0
+        }
+    } else {
+        (time.elapsed_secs() * 2.0).sin() * 0.012
+    };
     let dig = game
         .player()
         .zip(game.current.as_ref())
@@ -156,7 +185,7 @@ pub fn animate_character(
         jump: jump_motion(
             flight.as_ref().map_or(JumpPhase::Grounded, |f| f.jump),
             game.tick as f32 - 1.0 + game.alpha,
-            player.translation.y,
+            player.1.translation.y,
             flight.as_ref().map_or(0.0, |f| f.support),
         ),
         attack: controls.attack,
@@ -164,20 +193,185 @@ pub fn animate_character(
         motion: profile,
     };
     if viewer.active {
-        let (jump, _) = viewer.jump();
-        pose.jump = jump;
-        pose.airborne = jump.is_some();
+        pose.jump = studio_jump;
+        pose.airborne = airborne;
         pose.attack = controls.attack;
         pose.dig = None;
     }
-    for (part, mut transform) in &mut parts {
-        blend_pose(
-            &mut transform,
-            pose.place(part.kind, part.rest),
-            time.delta_secs(),
-            pose.motion.pose_response,
+    let mut joints = HashMap::new();
+    for (entity, part, mut transform, parent) in &mut parts {
+        let target = pose.place(part.kind, part.rest);
+        if viewer.active || pose.motion.step_distance <= 0.65
+            && matches!(part.kind, PartKind::Body)
+            && pose.speed > 0.6
+            && pose.jump.is_none()
+            && pose.attack.is_none()
+            && pose.dig.is_none()
+        {
+            *transform = target;
+        } else {
+            blend_pose(
+                &mut transform,
+                target,
+                time.delta_secs(),
+                pose.motion.pose_response,
+            );
+        }
+        joints.insert(
+            entity,
+            (part.kind, part.rest, *transform, parent.map(ChildOf::parent)),
         );
     }
+    // The Moonlit Glade's short stride fits its leg reach. Solve the complete
+    // leg after body smoothing so a planted ankle stays fixed against the
+    // traveling ground instead of lagging behind the hip animation.
+    if pose.motion.step_distance <= 0.65
+        && pose.jump.is_none()
+        && !pose.airborne
+        && pose.attack.is_none()
+        && pose.dig.is_none()
+        && (!viewer.active
+            || matches!(viewer.clip, crate::viewer::Clip::Walk | crate::viewer::Clip::Run))
+    {
+        lock_grounded_feet(&mut parts, &joints, player.0, &pose);
+    }
+}
+
+type JointSnapshot = (PartKind, Transform, Transform, Option<Entity>);
+
+fn lock_grounded_feet(
+    parts: &mut Query<(Entity, &Part, &mut Transform, Option<&ChildOf>), Without<Player>>,
+    joints: &HashMap<Entity, JointSnapshot>,
+    player: Entity,
+    pose: &Pose,
+) {
+    let Some((&body_entity, &(_, _, body, _))) = joints
+        .iter()
+        .find(|(_, (kind, _, _, parent))| matches!(kind, PartKind::Body) && *parent == Some(player))
+    else {
+        return;
+    };
+    let running = ((pose.speed - 1.02) / 0.38).clamp(0.0, 1.0);
+    let stance = stance_fraction(running, true);
+    let step = step_distance_for_speed(pose.motion.step_distance, pose.speed).clamp(0.2, 4.0);
+    let weight = smooth(pose.speed / 0.6);
+    for (&foot_entity, &(kind, foot_rest, _, shin_entity)) in joints {
+        if !matches!(kind, PartKind::Foot(_)) {
+            continue;
+        }
+        let Some(shin_entity) = shin_entity else {
+            continue;
+        };
+        let Some(&(PartKind::Shin(side), shin_rest, _, Some(leg_entity))) = joints.get(&shin_entity)
+        else {
+            continue;
+        };
+        let Some(&(PartKind::Leg(leg_side), leg_rest, _, Some(parent))) = joints.get(&leg_entity)
+        else {
+            continue;
+        };
+        if parent != body_entity || side != leg_side {
+            continue;
+        }
+        let phase = (pose.stride + if side > 0.0 { 0.0 } else { std::f32::consts::PI })
+            .rem_euclid(std::f32::consts::TAU);
+        let (offset, lift) = foot_path(phase, step, stance, pose.motion.step_lift * (1.0 + 1.2 * running));
+        let foot_origin = body_rest_position(joints[&body_entity].1, leg_rest, shin_rest, foot_rest);
+        let target = foot_origin + Vec3::new(0.0, lift, offset);
+        let local_target =
+            body.rotation.inverse() * (target - body.translation) - leg_rest.translation;
+        let upper = shin_rest.translation.length();
+        let lower = foot_rest.translation.length();
+        let (thigh_angle, knee_angle) = solve_leg(local_target.y, local_target.z, upper, lower);
+        if let Ok((_, _, mut leg, _)) = parts.get_mut(leg_entity) {
+            leg.translation = leg.translation.lerp(leg_rest.translation, weight);
+            leg.rotation = leg.rotation.slerp(Quat::from_rotation_x(thigh_angle), weight);
+        }
+        if let Ok((_, _, mut shin, _)) = parts.get_mut(shin_entity) {
+            shin.translation = shin.translation.lerp(shin_rest.translation, weight);
+            shin.rotation = shin.rotation.slerp(Quat::from_rotation_x(knee_angle), weight);
+        }
+        if let Ok((_, _, mut foot, _)) = parts.get_mut(foot_entity) {
+            foot.translation = foot.translation.lerp(foot_rest.translation, weight);
+            foot.rotation = foot.rotation.slerp(
+                (body.rotation * Quat::from_rotation_x(thigh_angle + knee_angle)).inverse(),
+                weight,
+            );
+        }
+    }
+}
+
+fn body_rest_position(body: Transform, leg: Transform, shin: Transform, foot: Transform) -> Vec3 {
+    body.translation + leg.translation + shin.translation + foot.translation
+}
+
+fn stance_fraction(running: f32, short_stride: bool) -> f32 {
+    if short_stride {
+        0.55 - 0.21 * running
+    } else {
+        0.66 - 0.11 * running
+    }
+}
+
+fn support_pose(stride: f32, step: f32, running: f32) -> (f32, f32) {
+    // Stand tall as the support foot passes under the hip, then lower just
+    // enough to reach it near touchdown and toe-off. The Moonlit rig's two
+    // leg links total 0.48 m from hip to ankle.
+    const REACH: f32 = 0.48;
+    let stance = stance_fraction(running, true);
+    let mut foot_offsets = [0.0; 2];
+    let mut weights = [0.0; 2];
+    for (index, phase) in [stride, stride + std::f32::consts::PI].into_iter().enumerate() {
+        let phase = phase.rem_euclid(std::f32::consts::TAU);
+        let swing_progress = (phase / std::f32::consts::TAU - stance) / (1.0 - stance);
+        weights[index] = if phase < std::f32::consts::TAU * stance {
+            1.0
+        } else {
+            smooth((swing_progress - 0.65) / 0.30)
+        };
+        // A foot nearing touchdown already needs leg reach. Fade its support
+        // in near landing so the hip does not drop at the loop seam.
+        foot_offsets[index] = foot_path(phase, step, stance, 0.0).0;
+    }
+    // When both feet can support weight, center the hip between them. This
+    // preserves leg reach without forcing a deep knee bend before touchdown.
+    let center = (foot_offsets[0] + foot_offsets[1]) * 0.5 * weights[0] * weights[1];
+    let offset = foot_offsets
+        .into_iter()
+        .zip(weights)
+        .map(|(foot, weight)| (foot - center).abs() * weight)
+        .fold(0.0_f32, f32::max);
+    // Reserve a little reach for torso pitch and breathing.
+    let offset = (offset + 0.03).min(REACH - 0.01);
+    (REACH - (REACH * REACH - offset * offset).sqrt() + 0.008, center)
+}
+
+fn foot_path(phase: f32, step: f32, stance: f32, height: f32) -> (f32, f32) {
+    let span = step * stance;
+    if phase < std::f32::consts::TAU * stance {
+        (span - phase * step / std::f32::consts::PI, 0.0)
+    } else {
+        let progress = (phase / std::f32::consts::TAU - stance) / (1.0 - stance);
+        (
+            -span + 2.0 * span * smooth(progress),
+            height * (progress * std::f32::consts::PI).sin(),
+        )
+    }
+}
+
+fn solve_leg(y: f32, z: f32, upper: f32, lower: f32) -> (f32, f32) {
+    let reach = Vec2::new(-y, -z);
+    let length = reach
+        .length()
+        .clamp((upper - lower).abs() + 0.001, upper + lower - 0.001);
+    let direction = reach.y.atan2(reach.x);
+    let opening = ((length * length + upper * upper - lower * lower) / (2.0 * length * upper))
+        .clamp(-1.0, 1.0)
+        .acos();
+    let knee = ((length * length - upper * upper - lower * lower) / (2.0 * upper * lower))
+        .clamp(-1.0, 1.0)
+        .acos();
+    (direction - opening, knee)
 }
 
 /// Interpolate joint transforms in render time, independently of simulation timing.
@@ -194,7 +388,7 @@ pub struct Pose {
     pub motion: voxel_assets::CharacterMotion,
     /// Walk cycle phase.
     pub stride: f32,
-    /// Walking speed relative to `WALK_SPEED`.
+    /// Walking speed relative to the scene's authored walk speed.
     pub speed: f32,
     /// Smoothed angular response in radians, including a short follow-through.
     pub turn: f32,
@@ -331,16 +525,22 @@ struct Gait {
 }
 
 impl Gait {
-    fn sample(stride: f32, side: f32) -> Self {
-        let phase = stride
+    fn sample(stride: f32, side: f32, running: f32, short_stride: bool) -> Self {
+        let phase = (stride
             + if side > 0.0 {
                 0.0
             } else {
                 std::f32::consts::PI
-            };
-        let drive = phase.sin();
-        let lift = (-drive).max(0.0).powf(1.35);
-        let plant = drive.max(0.0);
+            }).rem_euclid(std::f32::consts::TAU);
+        let stance = std::f32::consts::TAU * stance_fraction(running, short_stride);
+        let (drive, lift, plant) = if phase < stance {
+            let progress = phase / stance;
+            let contact = smooth(progress / 0.08) * smooth((1.0 - progress) / 0.08);
+            (-((progress * std::f32::consts::PI).cos()), 0.0, contact)
+        } else {
+            let progress = (phase - stance) / (std::f32::consts::TAU - stance);
+            ((progress * std::f32::consts::PI).cos(), (progress * std::f32::consts::PI).sin(), 0.0)
+        };
         Self { drive, lift, plant }
     }
 }
@@ -348,6 +548,14 @@ impl Gait {
 fn knee_angle(gait: &Gait, travel: f32, running: f32) -> f32 {
     // The swing shin folds behind the thigh; stance straightens for contact.
     0.06 + gait.lift * (0.42 + 0.10 * running) * travel - gait.plant * 0.06 * running
+}
+
+fn arm_drive(stride: f32, side: f32) -> f32 {
+    // Shift the swing's center toward the back without changing its smooth
+    // extrema. The elbow stays behind the torso longer on each run cycle.
+    let phase = stride + if side > 0.0 { 0.0 } else { std::f32::consts::PI };
+    let cosine = -phase.cos();
+    (cosine - 0.2) / (1.0 - 0.2 * cosine)
 }
 
 impl Pose {
@@ -384,21 +592,46 @@ impl Pose {
         let (windup, active_end, attack_end) = self
             .attack
             .map_or((WINDUP, ACTIVE_END, ATTACK_END), |a| a.timing());
-        let travel = self.speed.clamp(0.0, 1.4);
-        let running = ((travel - 0.75) / 0.65).clamp(0.0, 1.0);
-        let left = Gait::sample(self.stride, -1.0);
-        let right = Gait::sample(self.stride, 1.0);
+        let travel = if matches!(self.jump, Some(JumpMotion::Rising(_) | JumpMotion::Falling(_))) {
+            0.0
+        } else {
+            self.speed.clamp(0.0, 1.4)
+        };
+        let running = ((travel - 1.02) / 0.38).clamp(0.0, 1.0);
+        let short_stride = self.motion.step_distance <= 0.65;
+        let left = Gait::sample(self.stride, -1.0, running, short_stride);
+        let right = Gait::sample(self.stride, 1.0, running, short_stride);
+        let shoulder_twist = if short_stride {
+            -arm_drive(self.stride, 1.0) * running * travel.min(1.0)
+        } else {
+            0.0
+        };
         match kind {
             PartKind::Body => {
-                transform.translation.y += self.breathe
-                    + (self.stride * 2.0).cos().abs() * 0.033 * travel
-                    - self.motion.run_crouch * running;
-                transform.translation.z -= 0.06 * travel;
-                transform.translation.x +=
-                    self.turn * 0.09 + (right.plant - left.plant) * 0.035 * travel;
+                if short_stride {
+                    let (crouch, center) = support_pose(
+                        self.stride,
+                        step_distance_for_speed(self.motion.step_distance, self.speed),
+                        running,
+                    );
+                    transform.translation.y += self.breathe * 0.3
+                        - crouch * travel.min(1.0);
+                    transform.translation.z += center * travel.min(1.0);
+                } else {
+                    transform.translation.y += self.breathe
+                        + (self.stride * 2.0).cos().abs() * 0.033 * travel
+                        - self.motion.run_crouch * running;
+                }
+                transform.translation.z -= (if short_stride { 0.005 } else { 0.06 }) * travel;
+                transform.translation.x += self.turn * 0.09
+                    + if short_stride {
+                        0.0
+                    } else {
+                        (right.plant - left.plant) * 0.035 * travel
+                    };
                 transform.rotation = Quat::from_rotation_y(-self.turn * 0.28)
                     * Quat::from_rotation_z(-self.turn * (0.24 + 0.25 * travel))
-                    * Quat::from_rotation_x(0.06 * travel + 0.18 * running);
+                    * Quat::from_rotation_x(if short_stride { 0.01 * travel + 0.04 * running } else { 0.06 * travel + 0.18 * running });
                 if let Some(attack) = self.attack {
                     if attack.motion() == ActionMotion::Sweep {
                         let drive = smooth((attack.age - windup) / (active_end - windup));
@@ -429,12 +662,16 @@ impl Pose {
                 }
             }
             PartKind::Chest => {
-                transform.rotation = Quat::from_rotation_y(self.turn * self.motion.torso_turn)
-                    * Quat::from_rotation_z(self.turn * 0.18)
+                transform.rotation = Quat::from_rotation_y(
+                    self.turn * self.motion.torso_turn + shoulder_twist * 0.12,
+                )
+                    * Quat::from_rotation_z(self.turn * 0.18 + shoulder_twist * 0.018)
                     * Quat::from_rotation_x(
                         -0.02 * travel + 0.08 * running + self.stride.sin() * 0.025 * travel,
                     );
-                transform.rotation *= Quat::from_rotation_y(-self.stride.sin() * 0.06 * travel);
+                if !short_stride {
+                    transform.rotation *= Quat::from_rotation_y(-self.stride.sin() * 0.06 * travel);
+                }
                 transform.translation.x -= self.turn * 0.025;
                 if let Some(attack) = self.attack {
                     let anticipation = smooth(attack.age / windup);
@@ -454,8 +691,8 @@ impl Pose {
             }
             PartKind::Head => {
                 transform.translation.y += self.breathe * 0.6 - 0.06 * running;
-                transform.rotation = Quat::from_rotation_y(-self.turn * 0.34)
-                    * Quat::from_rotation_z(-self.turn * 0.08)
+                transform.rotation = Quat::from_rotation_y(-self.turn * 0.34 - shoulder_twist * 0.045)
+                    * Quat::from_rotation_z(-self.turn * 0.08 - shoulder_twist * 0.01)
                     * Quat::from_rotation_x(-0.04 * travel - 0.09 * running);
                 if let Some(attack) = self.attack.filter(|a| a.motion() == ActionMotion::Sweep) {
                     transform.rotation *=
@@ -464,10 +701,22 @@ impl Pose {
             }
             PartKind::Arm(side) => {
                 let gait = if side > 0.0 { &right } else { &left };
-                let swing = gait.drive * travel;
+                let swing = if short_stride {
+                    lerp(gait.drive, arm_drive(self.stride, side), running) * travel
+                } else {
+                    gait.drive * travel
+                };
+                let arm_swing = self.motion.arm_swing
+                    * if short_stride {
+                        (1.0 + 0.9 * running)
+                            * (1.0 + 0.18 * running * smooth((-swing).clamp(0.0, 1.0)))
+                    } else {
+                        1.0
+                    };
                 transform.rotation = Quat::from_rotation_z(-0.08 * side + self.turn * 0.12)
-                    * Quat::from_rotation_x(-swing * self.motion.arm_swing - 0.08 * travel);
-                transform.translation.z += swing * 0.06;
+                    * Quat::from_rotation_x(-swing * arm_swing - 0.08 * travel);
+                transform.translation.z += swing
+                    * (0.06 + if short_stride { 0.02 * running * smooth((-swing).clamp(0.0, 1.0)) } else { 0.0 });
                 if let Some(attack) = self.attack {
                     let follow = if attack.motion() == ActionMotion::Thrust {
                         spear_pose(attack.age, attack.impact_angle.is_some()).0
@@ -496,8 +745,13 @@ impl Pose {
             }
             PartKind::Forearm(side) => {
                 let gait = if side > 0.0 { &right } else { &left };
+                let elbow_cycle = if short_stride {
+                    self.stride.sin().powi(2)
+                } else {
+                    gait.plant
+                };
                 let bend = 0.35
-                    + gait.plant * self.motion.elbow_drive * travel
+                    + elbow_cycle * self.motion.elbow_drive * travel
                     + gait.lift * 0.10 * travel
                     + 0.13 * running;
                 transform.rotation = Quat::from_rotation_x(-bend);
@@ -549,7 +803,7 @@ impl Pose {
                         1.0
                     };
                     transform.translation.z +=
-                        if side == lead { 0.17 } else { -0.05 } * drive * recover;
+                        if side == lead { 0.08 } else { -0.04 } * drive * recover;
                     transform.rotation =
                         Quat::from_rotation_x(-0.18 * side - 0.10 * drive * recover)
                             * Quat::from_rotation_z(0.08 * side);
@@ -580,10 +834,17 @@ impl Pose {
             }
             PartKind::WeaponGrip => {
                 let angle = self.attack.map_or(REST_ANGLE, |a| a.angle());
-                let tilt = self.attack.map_or(-0.6 + running * 0.35, |a| {
+                // The run swing carries the wrist through a downward-forward
+                // blade angle behind the body and an upward angle in front.
+                let carry = if short_stride {
+                    lerp(0.45, -0.10, running)
+                } else {
+                    -0.6 + running * 0.35
+                };
+                let tilt = self.attack.map_or(carry, |a| {
                     if a.motion() == ActionMotion::Sweep && a.stroke == SwordStroke::Overhead {
                         if a.age < windup {
-                            return lerp(-0.6, -1.05, smooth(a.age / windup));
+                            return lerp(carry, -1.05, smooth(a.age / windup));
                         }
                         if a.age < active_end {
                             return lerp(
@@ -594,36 +855,48 @@ impl Pose {
                         }
                         return lerp(
                             0.38,
-                            -0.6,
+                            carry,
                             smooth((a.age - active_end) / (attack_end - active_end)),
                         );
                     }
                     if a.impact_angle.is_some() {
                         -0.1 - 0.5 * smooth(a.age / REBOUND_END)
                     } else if a.age < windup {
-                        lerp(-0.6, -0.08, smooth(a.age / windup))
+                        lerp(carry, -0.08, smooth(a.age / windup))
                     } else if a.age < active_end {
                         -0.08
                     } else {
                         lerp(
                             -0.08,
-                            -0.6,
+                            carry,
                             smooth((a.age - active_end) / (attack_end - active_end)),
                         )
                     }
                 });
                 // The blade is a child of the right hand. Shoulder and torso
                 // carry most of the cut; the wrist supplies the remaining yaw.
+                let carry_yaw = if short_stride { 0.35 } else { REST_ANGLE };
                 let wrist_yaw = if self
                     .attack
                     .is_some_and(|a| a.motion() != ActionMotion::Thrust)
                 {
-                    REST_ANGLE + (angle - REST_ANGLE) * 0.23
+                    carry_yaw + (angle - REST_ANGLE) * 0.23
                 } else {
-                    angle
+                    carry_yaw + angle - REST_ANGLE
                 };
-                transform.rotation =
-                    Quat::from_rotation_y(wrist_yaw) * Quat::from_rotation_x(tilt + 0.35);
+                let back_carry = if short_stride {
+                    0.10 * running * smooth((-arm_drive(self.stride, 1.0)).clamp(0.0, 1.0))
+                } else {
+                    0.0
+                };
+                transform.rotation = Quat::from_rotation_y(wrist_yaw)
+                    * Quat::from_rotation_x(tilt + 0.35 - back_carry);
+                if short_stride {
+                    // Set the hilt into the palm; the generic rig's high mount
+                    // made this smaller character carry the sword by its guard.
+                    transform.translation.y -= 0.02;
+                    transform.translation.z -= 0.01;
+                }
                 if let Some(attack) = self.attack {
                     if attack.motion() == ActionMotion::Thrust {
                         let (extension, pitch) =
@@ -696,7 +969,252 @@ mod tests {
     use crate::combat::Attack;
 
     #[test]
+    fn moonlit_torso_stays_centered_through_walk_and_run() {
+        let mut pose = Pose {
+            motion: voxel_assets::CharacterMotion {
+                step_distance: 0.44,
+                ..default()
+            },
+            stride: 0.0,
+            speed: 1.0,
+            turn: 0.0,
+            breathe: 0.0,
+            airborne: false,
+            jump: None,
+            attack: None,
+            dig: None,
+        };
+        let body_rest = Transform::from_xyz(0.0, 0.94, 0.0);
+        let chest_rest = Transform::from_xyz(0.0, 0.34, 0.0);
+        for speed in [1.0, 1.4] {
+            pose.speed = speed;
+            for index in 0..=60 {
+                pose.stride = std::f32::consts::TAU * index as f32 / 60.0;
+                let body = pose.place(PartKind::Body, body_rest);
+                let chest = pose.place(PartKind::Chest, chest_rest);
+                assert!(body.translation.x.abs() < 1e-5, "body drift at phase {}", pose.stride);
+                assert!(chest.translation.x.abs() < 1e-5, "chest drift at phase {}", pose.stride);
+                assert!(body.rotation.y.abs() < 1e-5 && body.rotation.z.abs() < 1e-5);
+                assert!(chest.rotation.y.abs() < 0.07 && chest.rotation.z.abs() < 0.02);
+            }
+        }
+        pose.speed = 1.0;
+        pose.stride = std::f32::consts::TAU * 32.0 / 33.0;
+        let last_walk_height = pose.place(PartKind::Body, body_rest).translation.y;
+        pose.stride = 0.0;
+        let first_walk_height = pose.place(PartKind::Body, body_rest).translation.y;
+        assert!(
+            (first_walk_height - last_walk_height).abs() < 0.01,
+            "walk loop body height changed from {last_walk_height} to {first_walk_height}"
+        );
+    }
+
+    #[test]
+    fn moonlit_walk_sword_elbow_moves_smoothly_through_every_frame() {
+        let mut pose = Pose {
+            motion: voxel_assets::CharacterMotion {
+                step_distance: 0.44,
+                elbow_drive: 0.50,
+                ..default()
+            },
+            stride: 0.0,
+            speed: 1.0,
+            turn: 0.0,
+            breathe: 0.0,
+            airborne: false,
+            jump: None,
+            attack: None,
+            dig: None,
+        };
+        let rest = Transform::from_xyz(0.0, -0.29, 0.015);
+        for frame in 0..33 {
+            pose.stride = std::f32::consts::TAU * frame as f32 / 33.0;
+            let current = pose.place(PartKind::Forearm(1.0), rest).rotation;
+            pose.stride = std::f32::consts::TAU * ((frame + 1) % 33) as f32 / 33.0;
+            let next = pose.place(PartKind::Forearm(1.0), rest).rotation;
+            assert!(current.angle_between(next) < 0.15, "sword elbow jumped after walk frame {frame}");
+        }
+    }
+
+    #[test]
+    fn moonlit_run_sword_follows_the_arm_from_down_to_up() {
+        let mut pose = Pose {
+            motion: voxel_assets::CharacterMotion {
+                step_distance: 0.44,
+                arm_swing: 0.43,
+                ..default()
+            },
+            stride: 0.0,
+            speed: 1.4,
+            turn: 0.0,
+            breathe: 0.0,
+            airborne: false,
+            jump: None,
+            attack: None,
+            dig: None,
+        };
+        let sample = |pose: &Pose| {
+            let joints = [
+                (PartKind::Body, Transform::from_xyz(0.0, 0.94, 0.0)),
+                (PartKind::Chest, Transform::IDENTITY),
+                (PartKind::Arm(1.0), Transform::from_xyz(0.43, 0.33, 0.0)),
+                (PartKind::Forearm(1.0), Transform::from_xyz(0.0, -0.29, 0.015)),
+                (PartKind::Hand(1.0), Transform::from_xyz(0.0, -0.28, 0.015)),
+                (PartKind::WeaponGrip, Transform::from_xyz(-0.04, 0.08, 0.05)),
+            ];
+            let mut world = Mat4::IDENTITY;
+            let mut elbow_z = 0.0;
+            for (kind, rest) in joints {
+                world *= pose.place(kind, rest).to_matrix();
+                if matches!(kind, PartKind::Forearm(_)) {
+                    elbow_z = world.transform_point3(Vec3::ZERO).z;
+                }
+            }
+            (elbow_z, world.transform_vector3(Vec3::Z))
+        };
+        let (back_elbow, back_blade) = sample(&pose);
+        pose.stride = std::f32::consts::PI;
+        let (front_elbow, front_blade) = sample(&pose);
+        assert!(back_elbow < -0.25, "elbow does not reach behind the torso");
+        assert!(front_elbow > 0.2, "elbow does not reach in front of the torso");
+        assert!(back_blade.y < -0.5 && back_blade.z > 0.2, "back blade {back_blade:?}");
+        assert!(front_blade.y > 0.6 && front_blade.z > 0.2);
+
+        let mut back_frames = 0;
+        let mut front_frames = 0;
+        let mut previous: Option<f32> = None;
+        for frame in 0..60 {
+            pose.stride = std::f32::consts::TAU * frame as f32 / 60.0;
+            let (elbow, _) = sample(&pose);
+            back_frames += usize::from(elbow < -0.08);
+            front_frames += usize::from(elbow > 0.08);
+            if let Some(last) = previous {
+                assert!((elbow - last).abs() < 0.08, "arm jumped at frame {frame}");
+            }
+            previous = Some(elbow);
+        }
+        assert!(back_frames >= 24, "only {back_frames} frames place the elbow back");
+        assert!(front_frames >= 24, "only {front_frames} frames place the elbow forward");
+        assert!(back_frames > front_frames, "back {back_frames} frames, front {front_frames} frames");
+    }
+
+    #[test]
+    fn moonlit_run_has_a_flight_phase_with_both_feet_clear() {
+        let stance = stance_fraction(1.0, true);
+        assert!(stance < 0.5);
+        let phase = std::f32::consts::TAU * 0.45;
+        for foot_phase in [phase, phase + std::f32::consts::PI] {
+            let (_, lift) = foot_path(
+                foot_phase.rem_euclid(std::f32::consts::TAU),
+                0.44,
+                stance,
+                0.09 * 2.2,
+            );
+            assert!(lift > 0.04, "foot lift {lift}");
+        }
+    }
+
+    #[test]
+    fn planted_ankle_tracks_ground_through_the_full_walk_stance() {
+        let mut pose = Pose {
+            motion: voxel_assets::CharacterMotion {
+                step_distance: 0.44,
+                ..default()
+            },
+            stride: 0.0,
+            speed: 1.0,
+            turn: 0.0,
+            breathe: 0.0,
+            airborne: false,
+            jump: None,
+            attack: None,
+            dig: None,
+        };
+        let leg = Transform::from_xyz(0.14, -0.36, 0.0);
+        let shin = Transform::from_xyz(0.0, -0.27, 0.0);
+        let foot = Transform::from_xyz(0.0, -0.21, 0.0);
+        let rest_body = Transform::from_xyz(0.0, 0.94, 0.0);
+        let origin = body_rest_position(rest_body, leg, shin, foot);
+        let mut stationary: Option<f32> = None;
+        for index in 0..=20 {
+            pose.stride = std::f32::consts::TAU * stance_fraction(0.0, true) * index as f32 / 20.0;
+            let body = pose.place(PartKind::Body, rest_body);
+            let (offset, lift) = foot_path(
+                pose.stride,
+                pose.motion.step_distance,
+                stance_fraction(0.0, true),
+                pose.motion.step_lift,
+            );
+            assert_eq!(lift, 0.0);
+            let target = origin + Vec3::Z * offset;
+            let local = body.rotation.inverse() * (target - body.translation) - leg.translation;
+            let (thigh, knee) = solve_leg(local.y, local.z, 0.27, 0.21);
+            assert!(knee < 0.8, "walk phase {} bends knee too far", pose.stride);
+            let ankle = body.translation
+                + body.rotation
+                    * (leg.translation
+                        + Quat::from_rotation_x(thigh)
+                            * (shin.translation
+                                + Quat::from_rotation_x(knee) * foot.translation));
+            assert!((ankle.y - origin.y).abs() < 0.003);
+            let travel = pose.stride * pose.motion.step_distance / std::f32::consts::PI;
+            let ground_position = ankle.z + travel;
+            if let Some(first) = stationary {
+                assert!((ground_position - first).abs() < 0.003);
+            } else {
+                stationary = Some(ground_position);
+            }
+        }
+    }
+
+    #[test]
+    fn moonlit_run_keeps_the_boot_above_the_floor() {
+        let mut pose = Pose {
+            motion: voxel_assets::CharacterMotion {
+                step_distance: 0.44,
+                run_crouch: 0.08,
+                ..default()
+            },
+            stride: 0.0,
+            speed: 1.4,
+            turn: 0.0,
+            breathe: 0.0,
+            airborne: false,
+            jump: None,
+            attack: None,
+            dig: None,
+        };
+        let body_rest = Transform::from_xyz(0.0, 0.94, 0.0);
+        let leg = Transform::from_xyz(0.14, -0.36, 0.0);
+        let shin = Transform::from_xyz(0.0, -0.27, 0.0);
+        let foot = Transform::from_xyz(0.0, -0.21, 0.0);
+        let origin = body_rest_position(body_rest, leg, shin, foot);
+        for index in 0..=60 {
+            pose.stride = std::f32::consts::TAU * index as f32 / 60.0;
+            let body = pose.place(PartKind::Body, body_rest);
+            let (offset, lift) = foot_path(
+                pose.stride,
+                step_distance_for_speed(pose.motion.step_distance, pose.speed),
+                stance_fraction(1.0, true),
+                pose.motion.step_lift * 2.2,
+            );
+            let target = origin + Vec3::new(0.0, lift, offset);
+            let local = body.rotation.inverse() * (target - body.translation) - leg.translation;
+            let (thigh, knee) = solve_leg(local.y, local.z, 0.27, 0.21);
+            let ankle = body.translation
+                + body.rotation
+                    * (leg.translation
+                        + Quat::from_rotation_x(thigh)
+                            * (shin.translation
+                                + Quat::from_rotation_x(knee) * foot.translation));
+            // The authored boot extends 0.0875 m below its ankle origin.
+            assert!(ankle.y - 0.0875 >= -0.003, "run phase {} sank below floor", pose.stride);
+        }
+    }
+
+    #[test]
     fn gait_phase_and_contacts_share_step_distance() {
+        assert!((step_distance_for_speed(0.44, 1.4) - 0.528).abs() < 1e-6);
         let mut gait = GaitClock::default();
         assert_eq!(gait.advance(0.625, 1.25, true), 0);
         assert!((gait.phase - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
@@ -711,7 +1229,7 @@ mod tests {
         let mut motion = MotionState::default();
         motion.advance(Vec3::ZERO, std::f32::consts::PI - 0.04, 1.0 / 60.0);
         let (speed, turn) = motion.advance(
-            Vec3::Z * WALK_SPEED,
+            Vec3::Z * crate::gameplay::WALK_SPEED,
             -std::f32::consts::PI + 0.04,
             1.0 / 60.0,
         );
@@ -825,8 +1343,8 @@ mod tests {
         let elbow_rest = Transform::from_xyz(0.0, -0.29, 0.015);
         let idle_elbow = pose.place(PartKind::Forearm(1.0), elbow_rest);
         assert_ne!(left.rotation, right.rotation);
-        assert!(left.translation.z < rest.translation.z);
-        assert!(right.translation.z > rest.translation.z);
+        assert!(left.translation.z > rest.translation.z);
+        assert!(right.translation.z < rest.translation.z);
         let mut attack = Attack::new(Vec3::Z, content::scenario::Weapon::Sword);
         attack.swift = true;
         attack.age = crate::combat::SWORD_WINDUP;
