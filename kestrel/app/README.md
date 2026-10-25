@@ -134,6 +134,19 @@ bazel test --config=full_local -c opt //kestrel/app:movement_test
 Run without flags, the game opens on its launch menu (see above); runs driven
 by a demo script or the control port never show it.
 
+Click a menu field, then **Ctrl+C** to copy its value or **Ctrl+V** to replace
+it with clipboard text (**Cmd** on macOS). This works for the name, Host port,
+and Join address. Pasted text follows the same length and character limits as
+typed text.
+
+The menu automatically saves its name, selected scene, Host port, and Join
+address after edits to `kestrel-menu-settings.json` in the OS temporary
+directory (`%TEMP%` on Windows). The next run restores those settings, including
+the last IP or hostname. Delete that file to reset the menu; OS temporary-file
+cleanup may also reset it. Missing or malformed files use the defaults, and
+save failures are logged without preventing play. Command-line session launches
+continue to use their command-line settings.
+
 To cross-compile a Windows x64 release from Linux or macOS, use the MSVC
 target platform. The compiler and build scripts run on the host; Rust and the
 native audio code target Windows through hermetic Clang/LLD, the Microsoft
