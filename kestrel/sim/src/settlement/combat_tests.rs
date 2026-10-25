@@ -60,11 +60,8 @@ fn agent(id: &str) -> Agent {
         skin: "worker".into(),
         character: "test_hauler".into(),
         position: p(-2.0, 1.0),
-        speed: fx(2.0),
-        radius: Some(fx(0.18)),
         capacity: 3,
         links: vec!["wood".into()],
-        transfer_seconds: fx(0.1),
         cargo_anchor: [0.0, 0.5, -0.2],
         cargo_layout: CargoLayout::default(),
         equipment: None,
@@ -75,7 +72,6 @@ fn player() -> Agent {
     let mut player = agent("player");
     player.controlled = true;
     player.character = "test_player".into();
-    player.radius = None;
     player.links.clear();
     player.position = p(0.0, 0.0);
     player.capacity = 8;

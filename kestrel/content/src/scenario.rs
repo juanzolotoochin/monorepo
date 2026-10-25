@@ -145,19 +145,14 @@ pub struct Agent {
     pub label: String,
     pub skin: String,
     /// The character it is, by short name: a `Player` character for a
-    /// `controlled` avatar, a `Hauler` otherwise.
+    /// `controlled` avatar, a `Hauler` otherwise. Its speed, radius and
+    /// transfer time come from there.
     pub character: String,
     pub position: Point,
-    /// Meters per second. Unused for a `controlled` avatar, which moves at
-    /// its character's walk and run speeds.
-    pub speed: Fx,
-    /// Body radius of a hauler. A `controlled` avatar has none: its
-    /// character's body radius is used.
-    #[serde(default)]
-    pub radius: Option<Fx>,
+    /// Units it carries. Set here, not on the character: haulers of one
+    /// kind carry different loads by job.
     pub capacity: u32,
     pub links: Vec<String>,
-    pub transfer_seconds: Fx,
     pub cargo_anchor: [f32; 3],
     #[serde(default)]
     pub cargo_layout: CargoLayout,
@@ -448,19 +443,11 @@ impl Scenario {
             }
         }
         for a in &self.agents {
-            match (a.controlled, a.radius) {
-                (true, Some(_)) => return Err(format!("agent {} is controlled: its radius comes from its character, so remove `radius`", a.id)),
-                (false, None) => return Err(format!("agent {} needs a `radius`", a.id)),
-                _ => {}
-            }
             if !a.cargo_layout.valid()
                 || !point(a.position)
                 || !ident(&a.skin)
                 || !ident(&a.character)
-                || !within(a.speed, f(1, 10), Fx::from_int(8))
-                || a.radius.is_some_and(|r| !within(r, f(1, 20), Fx::ONE))
                 || !(1..=64).contains(&a.capacity)
-                || !within(a.transfer_seconds, f(1, 20), Fx::from_int(5))
                 || (!a.controlled && a.links.is_empty())
                 || (a.controlled && (!a.links.is_empty() || a.equipment.is_some()))
                 || a.links.iter().any(|l| !links.contains(l.as_str()))

@@ -39,26 +39,26 @@
 (id: "mill_iron", from: "ore", to: "mill_input", item: "iron", target: 8, priority: 1),
 (id: "ammunition", from: "mill_output", to: "turret_ammo", item: "arrow", target: 20, priority: 1)
 ], agents: [
-(id: "forester", label: "FORESTER", skin: "worker", character: "worker", position: (-6.67, -1.725), speed: 1.5, radius: 0.28, capacity: 2, links: [
+(id: "forester", label: "FORESTER", skin: "worker", character: "worker", position: (-6.67, -1.725), capacity: 2, links: [
 "factory_lumber",
 "gather_lumber"
-], transfer_seconds: 0.45, cargo_anchor: (0.0, 0.65, -0.19), equipment: None),
-(id: "lumberjack", label: "LUMBERJACK", skin: "worker", character: "worker", position: (-9.0, -2.0), speed: 1.5, radius: 0.28, capacity: 2, links: [
+], cargo_anchor: (0.0, 0.65, -0.19), equipment: None),
+(id: "lumberjack", label: "LUMBERJACK", skin: "worker", character: "worker", position: (-9.0, -2.0), capacity: 2, links: [
 "gather_lumber"
-], transfer_seconds: 0.45, cargo_anchor: (0.0, 0.65, -0.19), equipment: None),
-(id: "ironmonger", label: "IRONMONGER", skin: "worker", character: "worker", position: (-5.405, 3.45), speed: 1.5, radius: 0.28, capacity: 3, links: [
+], cargo_anchor: (0.0, 0.65, -0.19), equipment: None),
+(id: "ironmonger", label: "IRONMONGER", skin: "worker", character: "worker", position: (-5.405, 3.45), capacity: 3, links: [
 "factory_iron",
 "mill_iron"
-], transfer_seconds: 0.45, cargo_anchor: (0.0, 0.65, -0.19), equipment: None),
-(id: "runner", label: "RUNNER", skin: "worker", character: "runner", position: (1.15, -1.725), speed: 1.7, radius: 0.28, capacity: 5, links: [
+], cargo_anchor: (0.0, 0.65, -0.19), equipment: None),
+(id: "runner", label: "RUNNER", skin: "worker", character: "runner", position: (1.15, -1.725), capacity: 5, links: [
 "ammunition"
-], transfer_seconds: 0.45, cargo_anchor: (0.0, 0.65, -0.19), equipment: None),
-(id: "bramble", label: "BRAMBLE", skin: "ox", character: "ox", position: (-4.6, 0.0), speed: 1.1, radius: 0.75, capacity: 3, links: [
+], cargo_anchor: (0.0, 0.65, -0.19), equipment: None),
+(id: "bramble", label: "BRAMBLE", skin: "ox", character: "ox", position: (-4.6, 0.0), capacity: 3, links: [
 "mill_lumber"
-], transfer_seconds: 0.45, cargo_anchor: (0.0, 1.08, -0.15), cargo_layout: (columns: 2, rows: 2, spacing: (0.22, 0.10, 0.15), scale: 0.8, roll: 0.0), equipment: Some((depot: "cart_yard", item: "cart", skin: "cart", capacity: 9, speed_factor: 0.85, offset: (0.0, 0.0, -1.85), cargo_anchor: (0.0, 0.56, 0.0), cargo_layout: (columns: 2, rows: 3, spacing: (0.40, 0.12, 0.24), scale: 1.0, roll: 0.0)))),
-(id: "player", label: "YOU", skin: "worker", character: "exosuit", position: (1.15, -1.15), speed: 3.8, capacity: 8, links: [
+], cargo_anchor: (0.0, 1.08, -0.15), cargo_layout: (columns: 2, rows: 2, spacing: (0.22, 0.10, 0.15), scale: 0.8, roll: 0.0), equipment: Some((depot: "cart_yard", item: "cart", skin: "cart", capacity: 9, speed_factor: 0.85, offset: (0.0, 0.0, -1.85), cargo_anchor: (0.0, 0.56, 0.0), cargo_layout: (columns: 2, rows: 3, spacing: (0.40, 0.12, 0.24), scale: 1.0, roll: 0.0)))),
+(id: "player", label: "YOU", skin: "worker", character: "exosuit", position: (1.15, -1.15), capacity: 8, links: [
 
-], transfer_seconds: 0.4, cargo_anchor: (0.0, 0.65, -0.19), equipment: None, controlled: true)
+], cargo_anchor: (0.0, 0.65, -0.19), equipment: None, controlled: true)
 ], producers: [
 (id: "sawmill", description: "Cuts seasoned timber and fits iron arrowheads. Keeps the watch supplied while the forest crews gather more wood.", label: "FLETCHING MILL", position: (-1.84, -5.52), skin: "mill", input: "mill_input", output: "mill_output", ingredients: [
 (item: "lumber", units: 1),

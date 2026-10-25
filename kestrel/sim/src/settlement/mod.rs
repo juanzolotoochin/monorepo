@@ -347,17 +347,15 @@ impl Settlement {
             .iter()
             .map(|a| {
                 let ix = character(&a.character)?;
-                let brain = content.rules.characters[ix as usize].brain;
+                let def = &content.rules.characters[ix as usize];
                 let wanted = if a.controlled { Brain::Player } else { Brain::Hauler };
-                if brain != wanted {
-                    return Err(format!("agent {} is {:?}, a {brain:?} character; it needs a {wanted:?} one", a.id, a.character));
+                if def.brain != wanted {
+                    return Err(format!("agent {} is {:?}, a {:?} character; it needs a {wanted:?} one", a.id, a.character, def.brain));
                 }
-                Ok(haulers::AgentState::new(a, ix, at(a.position), &scenario.links, items.len(), &item, &depot))
+                Ok(haulers::AgentState::new(a, ix, def, at(a.position), &scenario.links, items.len(), &item, &depot))
             })
             .collect::<Result<Vec<_>, String>>()?;
         for agent in agents.iter_mut().filter(|agent| agent.controlled) {
-            // Haulers steer around the avatar at the size it collides with.
-            agent.base_radius = content.rules.characters[agent.character as usize].body.radius;
             agent.avatar.health = scenario.player_health;
             agent.avatar.max_health = scenario.player_health;
             agent.avatar.weapon = scenario.weapons.first().copied().unwrap_or_default();
@@ -535,12 +533,8 @@ impl Settlement {
                 skin: "worker".into(),
                 character: PLAYER_CHARACTER.into(),
                 position: spawn,
-                // Unused: the avatar moves at its character's speeds.
-                speed: Fx::from_ratio(19, 5),
-                radius: None,
                 capacity: 8,
                 links: Vec::new(),
-                transfer_seconds: Fx::from_ratio(2, 5),
                 cargo_anchor: [0.0, 0.65, -0.19],
                 cargo_layout: scenario::CargoLayout::default(),
                 equipment: None,

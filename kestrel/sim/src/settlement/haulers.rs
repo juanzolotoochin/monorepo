@@ -122,6 +122,7 @@ impl AgentState {
     pub(super) fn new(
         def: &scenario::Agent,
         character: content::character::CharacterIx,
+        rules: &content::character::CharacterDef,
         position: FxVec2,
         all_links: &[scenario::HaulLink],
         items: usize,
@@ -143,10 +144,11 @@ impl AgentState {
             character,
             name: String::new(),
             home: position,
-            speed: def.speed.div_int(content::TICKS_PER_SECOND as i64),
-            base_radius: def.radius.unwrap_or(Fx::ZERO),
+            // Copied from the character, like a wave's tuning.
+            speed: rules.movement.walk.div_int(content::TICKS_PER_SECOND as i64),
+            base_radius: rules.body.radius,
             links: links.into_iter().map(|(_, i)| i as LinkIx).collect(),
-            transfer_ticks: scenario::ticks(def.transfer_seconds),
+            transfer_ticks: rules.carry.as_ref().expect("players and haulers carry").transfer,
             equipment: def.equipment.as_ref().map(|e| EquipmentDef {
                 depot: depot(&e.depot),
                 item: item(&e.item),
