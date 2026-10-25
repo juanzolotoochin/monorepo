@@ -2,15 +2,14 @@
 
 ## Browser build
 
-On Linux x86-64, build the WebAssembly version and serve its generated
-files over HTTP:
+On Linux x86-64, build and serve the WebAssembly version with:
 
 ```sh
-bazel build --config=full_local --platforms=@rules_rs//rs/platforms:wasm32-unknown-unknown //kestrel/app:web
-python3 -m http.server 8000 --directory bazel-bin/kestrel/app/web_bundle
+bazel run //kestrel/app:web
 ```
 
-Open `http://localhost:8000/` in a browser with WebGL2. The launch menu,
+Open the printed URL (`http://127.0.0.1:8000/` by default) in a browser with
+WebGL2. Pass `-- --port 8080` to use another port. The launch menu,
 Character Studio, and solo scenes use the same game executable as desktop;
 the canvas fits the browser window. Audio uses the same procedural cues as the
 desktop game; click or press a key in the page to enable browser playback. The
