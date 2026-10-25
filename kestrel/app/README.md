@@ -11,7 +11,7 @@ Drive permissions.
 
 1. In Google Cloud Console, select a project and enable the **Google Drive API**.
    Create a service account and download a JSON key from its **Keys** tab.
-   Put the key outside the repository. Add the service account's email address
+   Save it as `.credentials/google-drive-service-account.json`. Add the service account's email address
    as a contributor to the destination **shared drive**, and share the build
    folder with the developers who should download the files. Service accounts
    cannot own files in a personal My Drive. If using My Drive, provide a
@@ -24,20 +24,25 @@ Drive permissions.
    `@username` as the chat ID. For a private group, send a command addressed to
    the bot in the group and read the numeric `message.chat.id` from its
    `getUpdates` response.
-4. Export the credentials in your shell, then run the target:
+4. Copy `.credentials/game-share.example.json` to
+   `.credentials/game-share.json` and fill in the folder ID, bot token, and chat
+   ID. Both local credential files are ignored by Git. Then run the target:
 
 ```sh
-export GOOGLE_APPLICATION_CREDENTIALS='/outside/repo/drive-publisher.json'
-export GOOGLE_DRIVE_FOLDER_ID='your-folder-id'
-export TELEGRAM_BOT_TOKEN='your-bot-token'
-export TELEGRAM_CHAT_ID='@your-dev-group'
 bazel run --config=full_local -c opt //kestrel/app:share_to_devs
 ```
 
+Environment variables `GOOGLE_APPLICATION_CREDENTIALS`,
+`GOOGLE_DRIVE_FOLDER_ID`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID` can
+override the local files. For personal My Drive, put a short-lived user OAuth
+token in `google_drive_access_token` in the config file or set
+`GOOGLE_DRIVE_ACCESS_TOKEN`.
+
 For a private group, you can inspect updates with
 `curl "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates"` after
-the bot has joined and received a group command. Keep the token and JSON
-key out of the repository. The publisher reads them only at runtime.
+the bot has joined and received a group command. If the token is only in the
+JSON file, temporarily export it to run this command. The publisher reads
+local credentials only at runtime.
 
 To build without uploading or posting, run
 `bazel run --config=full_local -c opt //kestrel/app:share_to_devs -- --dry-run`.

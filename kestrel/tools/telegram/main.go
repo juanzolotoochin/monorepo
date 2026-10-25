@@ -44,12 +44,6 @@ func run() error {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(flag.Args(), " "))
 	}
 
-	token := os.Getenv("TELEGRAM_BOT_TOKEN")
-	chatID := os.Getenv("TELEGRAM_CHAT_ID")
-	folderID := os.Getenv("GOOGLE_DRIVE_FOLDER_ID")
-	if !dryRun && (token == "" || chatID == "" || folderID == "") {
-		return errors.New("set TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, and GOOGLE_DRIVE_FOLDER_ID (or use --dry-run)")
-	}
 	workspace := os.Getenv("BUILD_WORKSPACE_DIRECTORY")
 	if workspace == "" {
 		var err error
@@ -60,6 +54,21 @@ func run() error {
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "MODULE.bazel")); err != nil {
 		return fmt.Errorf("run from the repository root or with bazel run: %w", err)
+	}
+	config, err := loadConfig(filepath.Join(workspace, ".credentials", "game-share.json"))
+	if err != nil {
+		return err
+	}
+	token := firstNonEmpty(os.Getenv("TELEGRAM_BOT_TOKEN"), config.TelegramBotToken)
+	chatID := firstNonEmpty(os.Getenv("TELEGRAM_CHAT_ID"), config.TelegramChatID)
+	folderID := firstNonEmpty(os.Getenv("GOOGLE_DRIVE_FOLDER_ID"), config.GoogleDriveFolderID)
+	accessToken := firstNonEmpty(os.Getenv("GOOGLE_DRIVE_ACCESS_TOKEN"), config.GoogleDriveAccessToken)
+	credentialsPath := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
+	if credentialsPath == "" {
+		credentialsPath = filepath.Join(workspace, ".credentials", "google-drive-service-account.json")
+	}
+	if !dryRun && (token == "" || chatID == "" || folderID == "") {
+		return errors.New("set Telegram bot token, chat ID, and Drive folder ID in .credentials/game-share.json (or environment variables)")
 	}
 	if err := build(context.Background(), workspace); err != nil {
 		return err
@@ -84,7 +93,7 @@ func run() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	accessToken, err := driveAccessToken(ctx, http.DefaultClient)
+	accessToken, err = driveAccessToken(ctx, http.DefaultClient, accessToken, credentialsPath)
 	if err != nil {
 		return err
 	}
@@ -100,6 +109,35 @@ func run() error {
 	return nil
 }
 
+type publishConfig struct {
+	GoogleDriveFolderID    string `json:"google_drive_folder_id"`
+	GoogleDriveAccessToken string `json:"google_drive_access_token"`
+	TelegramBotToken       string `json:"telegram_bot_token"`
+	TelegramChatID         string `json:"telegram_chat_id"`
+}
+
+func loadConfig(path string) (publishConfig, error) {
+	var config publishConfig
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return config, nil
+	}
+	if err != nil {
+		return config, fmt.Errorf("read publishing credentials: %w", err)
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return config, fmt.Errorf("parse publishing credentials %s: %w", path, err)
+	}
+	return config, nil
+}
+
+func firstNonEmpty(first, fallback string) string {
+	if first != "" {
+		return first
+	}
+	return fallback
+}
+
 func build(ctx context.Context, workspace string) error {
 	cmd := exec.CommandContext(ctx, "bazel", "build", "--config=full_local", "-c", "opt", "//kestrel/app:demo")
 	cmd.Dir = workspace
@@ -111,17 +149,13 @@ func build(ctx context.Context, workspace string) error {
 	return nil
 }
 
-func driveAccessToken(ctx context.Context, client *http.Client) (string, error) {
-	if token := os.Getenv("GOOGLE_DRIVE_ACCESS_TOKEN"); token != "" {
-		return token, nil
-	}
-	credentialsPath := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
-	if credentialsPath == "" {
-		return "", errors.New("set GOOGLE_APPLICATION_CREDENTIALS to a Drive-enabled service account JSON file, or GOOGLE_DRIVE_ACCESS_TOKEN")
+func driveAccessToken(ctx context.Context, client *http.Client, accessToken, credentialsPath string) (string, error) {
+	if accessToken != "" {
+		return accessToken, nil
 	}
 	data, err := os.ReadFile(credentialsPath)
 	if err != nil {
-		return "", fmt.Errorf("read Google credentials: %w", err)
+		return "", fmt.Errorf("read Google credentials %s: %w (place the key there or set GOOGLE_APPLICATION_CREDENTIALS)", credentialsPath, err)
 	}
 	var credentials struct {
 		Type        string `json:"type"`

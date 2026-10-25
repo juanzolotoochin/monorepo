@@ -1,0 +1,4 @@
+# Keep this directory in the checkout, but never track local credentials.
+*
+!.gitignore
+!game-share.example.json
