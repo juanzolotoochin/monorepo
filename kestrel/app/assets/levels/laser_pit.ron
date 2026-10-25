@@ -1,23 +1,21 @@
-Scene(id: "laser-pit", features: [],
+Scene(id: "laser-pit", features: [CameraFollow],
     name: "LASER PIT / COVER ARENA",
-    spawn: (0.0, 0.0, 5.0),
+    spawn: (0.0, 0.0, 11.5),
     industrial: false,
     instances: [],
     terrain: Some((platforms: [
-        (min: (-7.5, -7.5), max: (7.5, 7.5), height: 0.0),
+        (min: (-15.0, -15.0), max: (15.0, 15.0), height: 0.0),
     ])),
     architecture: [
         // Flat combat floor and a low rim; the authored colliders below match
         // the visible walls and cover, so both movement and lasers use them.
-        (kind: Box, position: (0.0, -0.18, 0.0), size: (15.0, 0.36, 15.0), material: "stone"),
-        (kind: Box, position: (0.0, -0.015, 0.0), size: (1.1, 0.03, 15.0), material: "shadow"),
-        (kind: Box, position: (0.0, -0.015, 0.0), size: (15.0, 0.03, 1.1), material: "shadow"),
-        (kind: Box, position: (-7.0, 1.2, -6.0), size: (0.85, 2.4, 1.05), repeat: (1, 1, 13), spacing: (0.0, 0.0, 1.0), material: "metal", solid_radius: Some(0.68)),
-        (kind: Box, position: (7.0, 1.2, -6.0), size: (0.85, 2.4, 1.05), repeat: (1, 1, 13), spacing: (0.0, 0.0, 1.0), material: "metal", solid_radius: Some(0.68)),
-        (kind: Box, position: (-6.0, 1.2, -7.0), size: (1.05, 2.4, 0.85), repeat: (13, 1, 1), spacing: (1.0, 0.0, 0.0), material: "metal", solid_radius: Some(0.68)),
+        (kind: Box, position: (0.0, -0.18, 0.0), size: (30.0, 0.36, 30.0), material: "stone"),
+        (kind: Box, position: (-14.5, 1.2, -13.0), size: (0.85, 2.4, 1.05), repeat: (1, 1, 27), spacing: (0.0, 0.0, 1.0), material: "metal", solid_radius: Some(0.68)),
+        (kind: Box, position: (14.5, 1.2, -13.0), size: (0.85, 2.4, 1.05), repeat: (1, 1, 27), spacing: (0.0, 0.0, 1.0), material: "metal", solid_radius: Some(0.68)),
+        (kind: Box, position: (-13.0, 1.2, -14.5), size: (1.05, 2.4, 0.85), repeat: (27, 1, 1), spacing: (1.0, 0.0, 0.0), material: "metal", solid_radius: Some(0.68)),
         // Keep the camera-facing rim low so it does not hide the fighters.
         // The terrain edge itself prevents movement beyond the arena.
-        (kind: Box, position: (0.0, 0.22, 7.0), size: (15.0, 0.44, 0.85), material: "metal"),
+        (kind: Box, position: (-14.0, 0.22, 14.5), size: (1.05, 0.44, 0.85), repeat: (29, 1, 1), spacing: (1.0, 0.0, 0.0), material: "metal", solid_radius: Some(0.68)),
         // A central barrier divides the main firing lane. Every bunker can be
         // flanked from either side; the gaps remain wide enough to navigate.
         (kind: Box, position: (0.0, 0.75, -0.4), size: (1.8, 1.5, 1.8), material: "shadow", solid_radius: Some(1.05)),
@@ -33,5 +31,14 @@ Scene(id: "laser-pit", features: [],
         // Offset side cover creates a useful route around the central block.
         (kind: Box, position: (-5.25, 0.68, -0.2), size: (1.1, 1.36, 1.55), material: "shadow", solid_radius: Some(0.80)),
         (kind: Box, position: (5.25, 0.68, 0.4), size: (1.1, 1.36, 1.55), material: "shadow", solid_radius: Some(0.80)),
+        // Cover reaches the new outer lanes while leaving room to flank.
+        (kind: Box, position: (-5.0, 0.66, 8.0), size: (1.45, 1.32, 1.25), material: "metal", solid_radius: Some(0.86)),
+        (kind: Box, position: (5.0, 0.66, 8.0), size: (1.45, 1.32, 1.25), material: "metal", solid_radius: Some(0.86)),
+        (kind: Box, position: (-9.0, 0.68, 4.0), size: (1.1, 1.36, 1.55), material: "shadow", solid_radius: Some(0.96)),
+        (kind: Box, position: (9.0, 0.68, 4.0), size: (1.1, 1.36, 1.55), material: "shadow", solid_radius: Some(0.96)),
+        (kind: Box, position: (-8.0, 0.66, -5.0), size: (1.45, 1.32, 1.25), material: "metal", solid_radius: Some(0.86)),
+        (kind: Box, position: (8.0, 0.66, -5.0), size: (1.45, 1.32, 1.25), material: "metal", solid_radius: Some(0.86)),
+        (kind: Box, position: (-5.0, 0.68, -10.0), size: (1.1, 1.36, 1.55), material: "shadow", solid_radius: Some(0.96)),
+        (kind: Box, position: (5.0, 0.68, -10.0), size: (1.1, 1.36, 1.55), material: "shadow", solid_radius: Some(0.96)),
     ],
 )

@@ -281,6 +281,8 @@ pub struct Scene {
 pub enum SceneFeature {
     MemoryTrial,
     FlightHud,
+    /// Track the player with the scene camera while preserving its authored offset.
+    CameraFollow,
     /// Avatars dig pits into the deck.
     Digging,
     /// Space triggers a grounded jump instead of held jetpack flight.
@@ -551,8 +553,8 @@ impl ScenePack {
                     || (0..2).any(|i| {
                         !p.min[i].is_finite()
                             || !p.max[i].is_finite()
-                            || p.min[i] < -8.0
-                            || p.max[i] > 8.0
+                            || p.min[i] < -16.0
+                            || p.max[i] > 16.0
                             || p.min[i] >= p.max[i]
                     })
                 {
@@ -780,6 +782,12 @@ mod tests {
         let t = pack.scene.terrain.as_mut().unwrap();
         t.platforms[0].height = 0.0;
         t.platforms[0].min[0] = 2.0;
+        assert!(pack.validate().is_err());
+        let t = pack.scene.terrain.as_mut().unwrap();
+        t.platforms[0].min = [-15.0, -15.0];
+        t.platforms[0].max = [15.0, 15.0];
+        assert!(pack.validate().is_ok());
+        pack.scene.terrain.as_mut().unwrap().platforms[0].max[0] = 17.0;
         assert!(pack.validate().is_err());
     }
 }

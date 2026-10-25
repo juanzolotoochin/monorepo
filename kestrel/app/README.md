@@ -437,7 +437,7 @@ is digging, the collector's counts by mineral, and the nearest ore within 8 m.
 
 ## Laser pit
 
-`laser-pit` is a bounded combat arena with waist-high cover and flanking routes.
+`laser-pit` is a 30 m combat arena with waist-high cover, flanking routes, and a camera that follows the player.
 Its walls and bunkers block both movement and laser fire. Start a host with:
 
 ```sh
