@@ -2,8 +2,8 @@
 const supportedRegexp =
     /\b(darwin|linux|aix|android|freebsd|netbsd|openbsd|sunos|win32)-(arm64|x64|arm|ia32|loong64|mips64el|powerpc64|ppc64|riscv64|s390x)(?:-(gnu|eabi|musl|msvc|gnueabihf)\b)?(@[0-9.]+)?/;
 
-const supportedPlatforms = new Set(['darwin-arm64', 'linux-x64', 'linux-arm64']);
-const supportedABIs = new Set(['gnu']);
+const supportedPlatforms = new Set(['darwin-arm64', 'linux-x64', 'linux-arm64', 'win32-x64']);
+const supportedABIs = new Set(['gnu', 'msvc']);
 
 /**
  * Returns true if the package is supported. Useful to omit unneeded packages

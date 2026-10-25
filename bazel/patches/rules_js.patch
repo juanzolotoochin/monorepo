@@ -11,3 +11,39 @@ index f0dcdef..2652273 100644
          if JsInfo in target:
              js_info = target[JsInfo]
  
+diff --git a/js/private/js_binary.bzl b/js/private/js_binary.bzl
+--- a/js/private/js_binary.bzl
++++ b/js/private/js_binary.bzl
+@@ -497,3 +497,11 @@ def _create_launcher(ctx, log_prefix_rule_set, log_prefix_rule, fixed_args = [], fix
+         files = launcher_files,
+         transitive_files = transitive_launcher_files,
+     ))
++    if is_windows:
++        shell_runfiles = getattr(
++            ctx.toolchains["@bazel_tools//tools/sh:toolchain_type"],
++            "runtime_runfiles",
++            None,
++        )
++        if shell_runfiles:
++            runfiles = runfiles.merge(shell_runfiles)
+diff --git a/js/private/devserver/js_run_devserver.mjs b/js/private/devserver/js_run_devserver.mjs
+--- a/js/private/devserver/js_run_devserver.mjs
++++ b/js/private/devserver/js_run_devserver.mjs
+@@ -427,6 +427,16 @@ async function syncSymlink(file, src, dst, sandbox, exists) {
+         // Intentionally synchronous; see comment on mkdirpSync
+         mkdirpSync(path.dirname(dst));
+     }
+-    await fs.promises.symlink(src, dst);
++    if (process.platform === 'win32') {
++        // Junctions do not require Developer Mode or symlink privileges.
++        // File links can be copied, as regular sandbox files already are.
++        if ((await fs.promises.stat(src)).isDirectory()) {
++            await fs.promises.symlink(path.resolve(src), dst, 'junction');
++        } else {
++            await fs.promises.copyFile(src, dst);
++        }
++    } else {
++        await fs.promises.symlink(src, dst);
++    }
+     return 1
+ }
