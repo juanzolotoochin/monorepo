@@ -64,6 +64,13 @@ static void synth_frames(audio_state *state, float *out, ma_uint32 frames) {
                        + 0.18f * noise(state) * expf(-100.0f * t);
                 sample *= fminf(t * 3000.0f, 1.0f);
                 if (t > 0.70f) v->alive = 0;
+            } else if (v->kind == 2) {
+                // Loose dirt: a low, brief scuff without a pitched impact.
+                float grit = noise(state);
+                v->filtered_noise += 0.045f * (grit - v->filtered_noise);
+                sample = (0.075f * v->filtered_noise + 0.003f * grit)
+                    * fminf(t * 250.0f, 1.0f) * expf(-24.0f * t);
+                if (t > 0.14f) v->alive = 0;
             } else if (v->kind == 3) {
                 // Dry stone fracture: coarse noise with a low body, little ring.
                 sample = 0.22f * noise(state) * expf(-40.0f * t) + 0.18f * tone(140.0f, t, 35.0f);
