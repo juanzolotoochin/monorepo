@@ -1,4 +1,5 @@
 {
+  "google_service_account_file": "google-drive-service-account.json",
   "google_drive_folder_id": "your-shared-drive-folder-id",
   "telegram_bot_token": "your-bot-token",
   "telegram_chat_id": "@your-dev-group"

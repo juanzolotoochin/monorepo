@@ -65,7 +65,12 @@ func run() error {
 	accessToken := firstNonEmpty(os.Getenv("GOOGLE_DRIVE_ACCESS_TOKEN"), config.GoogleDriveAccessToken)
 	credentialsPath := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
 	if credentialsPath == "" {
-		credentialsPath = filepath.Join(workspace, ".credentials", "google-drive-service-account.json")
+		credentialsFile := firstNonEmpty(config.GoogleServiceAccountFile, "google-drive-service-account.json")
+		if filepath.IsAbs(credentialsFile) {
+			credentialsPath = credentialsFile
+		} else {
+			credentialsPath = filepath.Join(workspace, ".credentials", credentialsFile)
+		}
 	}
 	if !dryRun && (token == "" || chatID == "" || folderID == "") {
 		return errors.New("set Telegram bot token, chat ID, and Drive folder ID in .credentials/game-share.json (or environment variables)")
@@ -110,10 +115,11 @@ func run() error {
 }
 
 type publishConfig struct {
-	GoogleDriveFolderID    string `json:"google_drive_folder_id"`
-	GoogleDriveAccessToken string `json:"google_drive_access_token"`
-	TelegramBotToken       string `json:"telegram_bot_token"`
-	TelegramChatID         string `json:"telegram_chat_id"`
+	GoogleServiceAccountFile string `json:"google_service_account_file"`
+	GoogleDriveFolderID      string `json:"google_drive_folder_id"`
+	GoogleDriveAccessToken   string `json:"google_drive_access_token"`
+	TelegramBotToken         string `json:"telegram_bot_token"`
+	TelegramChatID           string `json:"telegram_chat_id"`
 }
 
 func loadConfig(path string) (publishConfig, error) {

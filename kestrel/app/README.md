@@ -11,7 +11,8 @@ Drive permissions.
 
 1. In Google Cloud Console, select a project and enable the **Google Drive API**.
    Create a service account and download a JSON key from its **Keys** tab.
-   Save it as `.credentials/google-drive-service-account.json`. Add the service account's email address
+   Save it in `.credentials/` and set `google_service_account_file` in
+   `.credentials/game-share.json` to its filename. Add the service account's email address
    as a contributor to the destination **shared drive**, and share the build
    folder with the developers who should download the files. Service accounts
    cannot own files in a personal My Drive. If using My Drive, provide a

@@ -138,14 +138,14 @@ func TestServiceAccountToken(t *testing.T) {
 
 func TestLoadConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "game-share.json")
-	if err := os.WriteFile(path, []byte(`{"google_drive_folder_id":"folder","telegram_bot_token":"bot","telegram_chat_id":"-10042"}`), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"google_service_account_file":"kestrel-dev-bot.json","google_drive_folder_id":"folder","telegram_bot_token":"bot","telegram_chat_id":"-10042"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	config, err := loadConfig(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.GoogleDriveFolderID != "folder" || config.TelegramBotToken != "bot" || config.TelegramChatID != "-10042" {
+	if config.GoogleServiceAccountFile != "kestrel-dev-bot.json" || config.GoogleDriveFolderID != "folder" || config.TelegramBotToken != "bot" || config.TelegramChatID != "-10042" {
 		t.Fatalf("unexpected config: %+v", config)
 	}
 	if got := firstNonEmpty("env", config.TelegramBotToken); got != "env" {
