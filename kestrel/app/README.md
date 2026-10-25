@@ -2,10 +2,11 @@
 
 ## Browser build
 
-On Linux x86-64, build and serve the WebAssembly version with:
+Build and serve the WebAssembly version with remote Linux workers and a local
+server (including on Windows and macOS):
 
 ```sh
-bazel run //kestrel/app:web
+bazel run --config=remote //kestrel/app:web
 ```
 
 Open the printed URL (`http://127.0.0.1:8000/` by default) in a browser with

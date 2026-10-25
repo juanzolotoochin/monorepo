@@ -13,17 +13,16 @@ wasm_web_app(
 )
 ```
 
-The game binary is compiled for `wasm32-unknown-unknown` while the server and
-build tools run on the host. The rule packages the binary with `wasm-bindgen`,
-replaces `{{GAME_JS}}` in the HTML template with the generated module name, and
+The game binary is compiled for `wasm32-unknown-unknown` while the server runs
+on the client and build tools run on the selected execution platform. The rule
+packages the binary with `wasm-bindgen`, replaces `{{GAME_JS}}` in the HTML
+template with the generated module name, and
 places assets at the bundle root. Asset basenames must be unique. Run
 `bazel run //path/to/game:web` and open the printed URL. The server binds to
 localhost; pass `-- --port 8080` to use another port.
 
 The pinned `wasm-bindgen` CLI currently runs on Linux x86-64 and must match the
-`wasm-bindgen` Rust crate version in `Cargo.lock`. The bundle and server
-targets are therefore marked compatible with Linux x86-64 only, so
-`bazel build //...` and `bazel test //...` skip them on Windows and macOS
-instead of failing. The game binary itself still builds for wasm32 there:
-`bazel build --platforms=@rules_rs//rs/platforms:wasm32-unknown-unknown
-//path/to/game:game_binary`.
+`wasm-bindgen` Rust crate version in `Cargo.lock`. The packaging action requires
+a Linux x86-64 execution platform. On Windows and macOS, use
+`bazel run --config=remote //path/to/game:web` to package on BuildBuddy's Linux
+workers and launch the server locally. Local packaging requires Linux x86-64.
