@@ -36,6 +36,11 @@ pub struct Options {
     pub audio: Option<String>,
     pub port: Option<u16>,
     pub address_file: Option<String>,
+    /// Development only: synthetic controllers play this scenario instead of
+    /// reading real devices (`--gamepad-script <file.json>`).
+    pub gamepad_script: Option<crate::input::synthetic::GamepadScript>,
+    /// Tests: the main menu and pause overlay run in a simulation run too.
+    pub headless_menus: bool,
 }
 impl Options {
     pub fn from_args(args: &[String]) -> Result<Self, String> {
@@ -67,6 +72,10 @@ impl Options {
                 .transpose()
                 .map_err(|e| format!("Invalid port: {e}"))?,
             address_file: value("--control-address-file").map(str::to_string),
+            gamepad_script: value("--gamepad-script")
+                .map(|path| std::fs::read(path).map_err(|e| format!("{path}: {e}")).and_then(|bytes| crate::input::synthetic::GamepadScript::from_json(&bytes)))
+                .transpose()?,
+            headless_menus: false,
         };
         if options.frames_dir.is_some()
             && ((options.script.is_none() && options.studio_frames.is_none()) || options.simulation)
@@ -96,7 +105,7 @@ impl Options {
     /// session that ends returns to the menu. Scripted, recorded and
     /// remote-controlled runs start a session and exit when it ends.
     pub fn menus(&self) -> bool {
-        !self.simulation && self.frames_dir.is_none() && self.script.is_none() && self.port.is_none()
+        self.headless_menus || !self.simulation && self.frames_dir.is_none() && self.script.is_none() && self.port.is_none()
     }
     pub fn initial_scene(&self, scenes: &SceneLibrary) -> Result<Option<usize>, String> {
         self.script.as_ref().map(|s| scenes.index(&s.scene)).transpose()

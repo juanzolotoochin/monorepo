@@ -190,6 +190,18 @@ pub fn open(world: &mut World, launch: crate::flow::Launch) -> Result<Opened, St
 }
 
 impl SessionService {
+    /// The current world's tick-0 save, for replay tests.
+    #[cfg(test)]
+    pub fn start_save(&self) -> Option<&[u8]> {
+        self.start_save.as_deref()
+    }
+
+    /// The session's content, for replay tests.
+    #[cfg(test)]
+    pub fn content(&self) -> &Content {
+        &self.content
+    }
+
     pub fn world(&self) -> Option<&SimWorld> {
         self.session.world()
     }
@@ -710,12 +722,16 @@ impl Service for PlayerControl {
         PlayerControl::default()
     }
 
+    /// Actions from every device go through the shared dispatcher
+    /// (`input::gameplay`); the mouse's cursor targeting runs between its
+    /// two parts, only while keyboard/mouse drives gameplay.
     fn systems(app: &mut App) {
         app.add_service_systems::<Self, _>(
             Phase::Input,
             (
-                (mouse_input, attack_input).chain().run_if(crate::control::interactive),
-                keyboard_input,
+                crate::input::gameplay::prepare,
+                (mouse_input, attack_input).chain().run_if(crate::control::interactive).run_if(pointer_allowed),
+                crate::input::gameplay::dispatch,
                 crate::preview::playback.run_if(crate::control::interactive),
             )
                 .chain()
@@ -724,7 +740,26 @@ impl Service for PlayerControl {
     }
 }
 
+/// Mouse targeting runs while keyboard/mouse owns gameplay and no UI
+/// context has it.
+pub fn pointer_allowed(input: Option<Res<crate::input::InputService>>) -> bool {
+    // Conditions are checked even once services have stopped (on exit).
+    input.is_some_and(|input| crate::input::gameplay::pointer_allowed(&input))
+}
+
 impl PlayerControl {
+    /// Whether the last movement sent was a directional walk.
+    pub fn walking_direction(&self) -> bool {
+        self.walking.is_some_and(|(d, _)| d != FxVec2::ZERO)
+    }
+
+    /// Forgets the cached movement and click goal after direct control was
+    /// released, so the next deliberate movement is always sent.
+    pub fn forget_direct_input(&mut self) {
+        self.walking = None;
+        self.visual_goal = None;
+    }
+
     pub fn aim(&mut self, service: &mut SessionService, direction: Vec3) {
         let Some(agent) = service.player() else { return };
         let aim = FxVec2::new(Fx::quantize(direction.x), Fx::quantize(direction.z)).normalize_or_zero();
@@ -948,53 +983,6 @@ pub fn mirror_settlement(
     settlement.simulation = Some(view);
 }
 
-/// Keyboard movement: camera-relative walking, the jetpack, digging, and respawning.
-pub fn keyboard_input(
-    input: Res<debug_ui::GameInput>,
-    scene: Res<SceneView>,
-    mut controls: ResMut<Controls>,
-    mut service: ResMut<SessionService>,
-    mut control: ResMut<PlayerControl>,
-) {
-    let keys = input.keys();
-    let Some(agent) = service.player() else { return };
-    if keys.just_pressed(KeyCode::KeyR) {
-        service.command(CommandKind::Respawn { agent });
-        let attack_serial = controls.attack_serial;
-        *controls = Controls { attack_serial, ..default() };
-        return;
-    }
-    // Scenes with the Jump feature jump; the others fly the jetpack.
-    let jumping = scene.has_feature(voxel_assets::SceneFeature::Jump);
-    if keys.just_pressed(KeyCode::Space) {
-        if jumping {
-            service.command(CommandKind::Jump { agent });
-        } else {
-            service.command(CommandKind::Jetpack { agent, enabled: true });
-        }
-    }
-    if keys.just_released(KeyCode::Space) && !jumping {
-        service.command(CommandKind::Jetpack { agent, enabled: false });
-    }
-    // X picks the spear in combat scenes, so digging is F.
-    if keys.just_pressed(KeyCode::KeyF) {
-        service.dig();
-    }
-    let pressed = |a, b| if keys.pressed(a) || keys.pressed(b) { 1.0 } else { 0.0 };
-    let right = Vec3::new(1.0, 0.0, -1.0).normalize();
-    let up = Vec3::new(-1.0, 0.0, -1.0).normalize();
-    let input = Vec2::new(
-        pressed(KeyCode::KeyD, KeyCode::ArrowRight) - pressed(KeyCode::KeyA, KeyCode::ArrowLeft),
-        pressed(KeyCode::KeyW, KeyCode::ArrowUp) - pressed(KeyCode::KeyS, KeyCode::ArrowDown),
-    )
-    .normalize_or_zero();
-    let run = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-    let direction = right * input.x + up * input.y;
-    if input != Vec2::ZERO || control.walking.is_some_and(|(d, _)| d != FxVec2::ZERO) {
-        control.walk(&mut service, Vec2::new(direction.x, direction.z), run);
-    }
-}
-
 /// Right click (held) walks to the cursor.
 pub fn mouse_input(
     input: Res<debug_ui::GameInput>,
@@ -1022,7 +1010,8 @@ pub fn mouse_input(
     }
 }
 
-/// Shift + left click attacks toward the cursor; Z/X/C/V pick a weapon.
+/// Shift + left click attacks toward the cursor (Z/X/C/V pick a weapon in
+/// `input::gameplay::prepare`, which runs first).
 pub fn attack_input(
     input: Res<debug_ui::GameInput>,
     camera: Single<(&Camera, &GlobalTransform)>,
@@ -1034,14 +1023,6 @@ pub fn attack_input(
 ) {
     let (keys, buttons) = (input.keys(), input.mouse());
     use content::scenario::Weapon;
-    if let Some(scenario) = scene.scene().scenario.as_ref() {
-        for (key, weapon) in [(KeyCode::KeyZ, Weapon::Sword), (KeyCode::KeyX, Weapon::Spear), (KeyCode::KeyC, Weapon::Bow), (KeyCode::KeyV, Weapon::ArcCoil)] {
-            if keys.just_pressed(key) && scenario.weapons.contains(&weapon) {
-                controls.weapon = weapon;
-                service.equip(weapon);
-            }
-        }
-    }
     // Update on every input frame, including frames without a shot.
     let cursor_aim = crate::jetpack::cursor_surface(camera.0, camera.1, &window, &scene, &service)
         .zip(service.player_view_position())

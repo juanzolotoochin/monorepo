@@ -54,7 +54,7 @@ struct LabAssets {
 #[derive(Resource)]
 pub struct PileLab {
     pub(crate) stock: Option<Stock>,
-    layout: Option<PileLayout>,
+    pub(crate) layout: Option<PileLayout>,
     assets: Option<LabAssets>,
     /// The running job's serial, if a haul is in progress.
     pub(crate) job: Option<u64>,
@@ -102,7 +102,7 @@ impl Service for PileLab {
 
     fn systems(app: &mut App) {
         let active = in_state(WorldState::Active);
-        app.add_service_systems::<Self, _>(Phase::Input, input.run_if(crate::control::interactive).run_if(active.clone()))
+        app.add_service_systems::<Self, _>(Phase::Input, input.run_if(crate::control::interactive).run_if(crate::lockstep::pointer_allowed).run_if(active.clone()))
             .add_service_systems::<Self, _>(Phase::Mirror, mirror.run_if(active.clone()))
             .add_service_systems::<Self, _>(
                 Phase::Present,

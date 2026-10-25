@@ -666,3 +666,135 @@ fn two_players_haul_their_own_loads() {
     assert_eq!(lab.collector.as_ref().unwrap().stored, vec![10, 10, 0]);
     assert!(lab.conserved());
 }
+
+// Releasing direct control (pause, focus loss, a controller disconnecting).
+
+fn release(scene: &mut Scene) {
+    let agent = scene.agent();
+    scene.command(CommandKind::ReleaseDirectControl { agent });
+}
+
+#[test]
+fn releasing_stops_walking_and_switches_the_jetpack_off() {
+    let mut scene = Scene::new(jetpack_lab());
+    let agent = scene.agent();
+    scene.wait(ms(500));
+    scene.command(CommandKind::Jetpack { agent, enabled: true });
+    scene.command(CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: FxVec2::new(Fx::ZERO, -Fx::ONE), run: true } });
+    scene.wait(ms(300));
+    assert!(scene.avatar().avatar.flight.requested);
+    release(&mut scene);
+    assert!(!scene.avatar().avatar.flight.requested, "thrust is off");
+    assert_eq!(scene.avatar().avatar.intent, Some(Intent::Stop));
+    scene.wait(ms(1000));
+    let stopped = scene.avatar().position;
+    scene.wait(ms(500));
+    assert_eq!(scene.avatar().position, stopped, "no drift after release");
+}
+
+#[test]
+fn releasing_stops_a_click_route() {
+    let mut scene = Scene::new(pile_lab());
+    let (agent, target) = (scene.agent(), scene.at(3.0, -1.0));
+    scene.command(CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target, run: false } });
+    scene.wait(ms(200));
+    assert!(!scene.avatar().route.is_empty());
+    release(&mut scene);
+    assert!(scene.avatar().route.is_empty());
+    assert_eq!(scene.avatar().avatar.intent, Some(Intent::Stop));
+}
+
+#[test]
+fn releasing_keeps_an_accepted_haul_and_its_route() {
+    let mut scene = Scene::new(pile_lab());
+    let agent = scene.agent();
+    scene.command(CommandKind::Pile { agent, action: PileAction::Pickup(2), pace: Fx::ZERO, approach: None });
+    scene.wait(ms(200));
+    let route = scene.avatar().route.clone();
+    assert!(scene.hauler().job.is_some() && !route.is_empty());
+    release(&mut scene);
+    assert!(scene.hauler().job.is_some(), "the haul continues");
+    assert_eq!(scene.hauler().last_error, None);
+    assert_eq!(scene.avatar().route, route, "its route is untouched");
+    for _ in 0..ms(30_000) {
+        if scene.hauler().job.is_none() {
+            break;
+        }
+        scene.sim.step(&[]);
+    }
+    assert!(scene.hauler().job.is_none() && scene.hauler().last_error.is_none(), "the haul finished normally");
+    assert!(scene.hauler().cargo.units > 0);
+    assert!(scene.lab().conserved());
+}
+
+/// A haul and a release in one turn: the release sees the haul it follows.
+#[test]
+fn release_judges_a_haul_accepted_earlier_in_the_same_turn() {
+    let mut scene = Scene::new(pile_lab());
+    let agent = scene.agent();
+    let haul = CommandKind::Pile { agent, action: PileAction::Pickup(2), pace: Fx::ZERO, approach: None };
+    let commands = [haul, CommandKind::ReleaseDirectControl { agent }].map(|kind| Command { player: PlayerId(0), kind });
+    scene.sim.step(&commands);
+    assert!(scene.hauler().job.is_some());
+    assert!(!scene.avatar().route.is_empty(), "the accepted haul owns the route");
+}
+
+/// A haul the simulation rejected owns nothing: the release stops the walk.
+#[test]
+fn release_after_a_rejected_haul_stops_manual_travel() {
+    let mut scene = Scene::new(pile_lab());
+    let agent = scene.agent();
+    scene.command(CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: FxVec2::new(Fx::ONE, Fx::ZERO), run: false } });
+    // A drop with nothing carried is refused.
+    let refused = CommandKind::Pile { agent, action: PileAction::Deliver, pace: Fx::ZERO, approach: None };
+    let commands = [refused, CommandKind::ReleaseDirectControl { agent }].map(|kind| Command { player: PlayerId(0), kind });
+    scene.sim.step(&commands);
+    assert!(scene.hauler().job.is_none() && scene.hauler().last_error.is_some());
+    assert_eq!(scene.avatar().avatar.intent, Some(Intent::Stop));
+}
+
+/// Units already tossed land under the usual rules while the haul goes on.
+#[test]
+fn releasing_mid_transfer_conserves_airborne_units() {
+    let mut scene = Scene::new(pile_lab());
+    let agent = scene.agent();
+    scene.command(CommandKind::Pile { agent, action: PileAction::Pickup(2), pace: fx(0.2), approach: None });
+    let mut tossing = false;
+    for _ in 0..ms(30_000) {
+        scene.sim.step(&[]);
+        if !scene.hauler().in_flight.is_empty() {
+            tossing = true;
+            break;
+        }
+    }
+    assert!(tossing, "the haul never started tossing");
+    release(&mut scene);
+    assert!(scene.hauler().job.is_some());
+    assert!(scene.lab().conserved());
+    scene.wait(ms(10_000));
+    assert!(scene.hauler().job.is_none() && scene.hauler().in_flight.is_empty());
+    assert!(scene.lab().conserved());
+}
+
+/// Explicit cancellation stays a separate, deliberate action.
+#[test]
+fn deliberate_movement_after_release_still_cancels_the_haul() {
+    let mut scene = Scene::new(pile_lab());
+    let agent = scene.agent();
+    scene.command(CommandKind::Pile { agent, action: PileAction::Pickup(2), pace: Fx::ZERO, approach: None });
+    release(&mut scene);
+    assert!(scene.hauler().job.is_some());
+    scene.command(CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: FxVec2::new(Fx::ONE, Fx::ZERO), run: false } });
+    assert!(scene.hauler().job.is_none());
+    assert_eq!(scene.hauler().last_error.as_deref(), Some("Haul canceled by player input"));
+}
+
+/// Only the avatar's owner may release it.
+#[test]
+fn release_is_refused_for_another_players_avatar() {
+    let mut scene = Scene::new(jetpack_lab());
+    let agent = scene.agent();
+    scene.command(CommandKind::Jetpack { agent, enabled: true });
+    scene.sim.step(&[Command { player: PlayerId(7), kind: CommandKind::ReleaseDirectControl { agent } }]);
+    assert!(scene.avatar().avatar.flight.requested);
+}

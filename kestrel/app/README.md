@@ -222,6 +222,18 @@ startup sequence; run it on Windows with:
 | Esc | Pause overlay: Resume, Leave to menu, Quit (the world keeps running). Quits in scripted runs |
 | / | Show or hide the debug overlay (windowed runs): a menu bar of debug windows, such as Diagnostics → Frame timing. See [debug_ui](../debug_ui/README.md) |
 
+On Windows an Xbox-style controller also plays, once its Menu (Start) button
+claims it: left stick moves, right stick aims, LB runs, RB jumps or holds the
+jetpack, RT attacks, A uses the selected nearby target, X collects more, B
+drops cargo, Y cycles weapons, D-pad left/right cycles targets, D-pad up/down
+zooms, View opens the utility panel, and Menu pauses. The last device used
+deliberately drives the avatar. Menus and pause take D-pad or stick, A and B.
+The bindings and behavior are in
+[controller support](../docs/controller-support.md). This has been tested
+with synthetic controllers only. A physical controller has not been tried.
+`--gamepad-script <file.json>` (development) plays a synthetic controller
+scenario instead, for example `demos/controller_field.gamepad.json`.
+
 Move within about two world units of a rock and strike toward it. The blade
 has a deliberate wind-up, fast cut and long recovery. Contact stops the blade,
 briefly freezes the character, then kicks the sword back. Rock strikes create

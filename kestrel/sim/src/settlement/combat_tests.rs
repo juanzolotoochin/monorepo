@@ -771,3 +771,26 @@ fn laser_hits_another_player_and_respawns_them() {
     assert_eq!(settlement.agents[target as usize].avatar.health, 2);
     assert_eq!(settlement.agents[target as usize].position, settlement.agents[target as usize].home);
 }
+
+/// A depot transfer walking to its dock is an accepted job: releasing
+/// direct control keeps the walk and the transfer.
+#[test]
+fn releasing_keeps_a_depot_transfer_walking_to_its_dock() {
+    let mut config = scenario();
+    config.agents = vec![player()];
+    config.links.clear();
+    let mut arena = Arena::new(&config, &[]);
+    let s = arena.s();
+    let (depot, item) = (s.depot_index("forest").unwrap(), s.item_index("wood").unwrap());
+    let dock = s.depots[depot as usize].position;
+    let agent = arena.player as u16;
+    arena.command(CommandKind::Transfer { agent, depot, item, units: 2, deposit: false });
+    arena.command(CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target: dock, run: false } });
+    let route = arena.s().agents[arena.player].route.clone();
+    assert!(!route.is_empty());
+    arena.command(CommandKind::ReleaseDirectControl { agent });
+    assert!(arena.s().agents[arena.player].avatar.job.is_some());
+    assert!(!arena.s().agents[arena.player].route.is_empty(), "the dock walk continues");
+    arena.step(ms(6000));
+    assert_eq!(arena.s().agents[arena.player].cargo[item as usize], 2, "the transfer completed");
+}

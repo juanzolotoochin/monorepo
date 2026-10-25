@@ -280,6 +280,11 @@ Details: [desyncs and host loss](design/desync-host-loss.html).
 
 Details: [view layer](design/view-layer.html).
 
+The [input architecture review](design/controller-input.html) traces current
+device bindings through gameplay commands and presents controller-support
+design choices (25 October 2026). The selected behavior and synthetic-input-first
+implementation sequence are recorded in [controller support](controller-support.md).
+
 `kestrel/app` is organized as App, Session and World services
 ([service layers](proposals/service_layers.md)): what lives for the whole
 process, for one session, and for one loaded world. A world's views start

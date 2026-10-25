@@ -41,10 +41,12 @@ fn block(world: &mut World, pos: Vec3, size: Vec3, material: Handle<StandardMate
         ))
         .id()
 }
-/// R starts the trial over: its pieces are rebuilt and the view's copy of
+/// Respawning (R, or the utility panel) starts the trial over: its pieces are rebuilt and the view's copy of
 /// the recording dropped.
 pub(super) fn reset(world: &mut World) {
-    if !world.resource::<debug_ui::GameInput>().keys().just_pressed(KeyCode::KeyR) {
+    let frame = world.resource::<crate::input::InputService>().frame();
+    let respawn = !frame.blocked && frame.gameplay.edges.contains(&crate::input::Edge::Utility(crate::input::Utility::Respawn));
+    if !respawn {
         return;
     }
     let old: Vec<_> = world.query_filtered::<Entity, With<Trial>>().iter(world).collect();

@@ -1071,55 +1071,21 @@ pub fn player_transfer(world: &mut World, depot: &str, item: &str, units: u32, d
     );
     Ok(expected)
 }
+/// Clicking a depot collects from it (Ctrl: deposits). Keyboard E and
+/// cancelling a transfer by moving are shared actions
+/// (`input::gameplay`); this is the mouse's targeting only.
 pub fn input(world: &mut World) {
     if world.resource::<Settlement>().simulation.is_none() {
         return;
     }
+    if !crate::input::gameplay::pointer_allowed(world.resource::<crate::input::InputService>()) {
+        return;
+    }
     let input = world.resource::<debug_ui::GameInput>();
     let keys = input.keys();
-    let toggle = keys.just_pressed(KeyCode::KeyE);
     let deposit = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-    let manual = input.mouse().pressed(MouseButton::Right)
-        || [KeyCode::KeyW, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD]
-            .iter()
-            .any(|k| keys.pressed(*k));
-    if manual {
-        let busy = world.resource::<Settlement>().simulation.as_ref().is_some_and(|s| !s.manual_jobs.is_empty());
-        let agent = world.resource::<crate::lockstep::SessionService>().player();
-        if let (true, Some(agent)) = (busy, agent) {
-            world.resource_mut::<crate::lockstep::SessionService>().command(sim::CommandKind::CancelTransfer { agent });
-            world.resource_mut::<Settlement>().notice = "Transfer canceled; airborne items still arrive.".into();
-        }
-    }
-    if toggle {
-        let Some(p) = world.resource::<crate::lockstep::SessionService>().player_view_position() else { return };
-        let state = world.resource::<Settlement>();
-        let sim = state.simulation.as_ref().unwrap();
-        let nearest = sim
-            .config()
-            .producers
-            .iter()
-            .filter(|m| Vec2::new(m.position[0] - p.x, m.position[1] - p.z).length() < 2.5)
-            .min_by(|a, b| {
-                Vec2::new(a.position[0] - p.x, a.position[1] - p.z)
-                    .length_squared()
-                    .total_cmp(
-                        &Vec2::new(b.position[0] - p.x, b.position[1] - p.z).length_squared(),
-                    )
-            })
-            .map(|m| m.id.clone());
-        if let Some(id) = nearest {
-            let enabled = !sim.producers[&id].enabled;
-            let producer = world.resource::<crate::lockstep::SessionService>().settlement().and_then(|s| s.producer_index(&id));
-            if let Some(producer) = producer {
-                world.resource_mut::<crate::lockstep::SessionService>().command(sim::CommandKind::SetMachine { producer, enabled });
-            }
-            world.resource_mut::<Settlement>().notice = format!("{id} {}", if enabled { "enabled" } else { "paused" });
-        }
-    }
-    if shift || !world.resource::<debug_ui::GameInput>().mouse().just_pressed(MouseButton::Left)
-    {
+    if shift || !input.mouse().just_pressed(MouseButton::Left) {
         return;
     }
     let mut windows = world.query::<&Window>();
