@@ -88,17 +88,19 @@ Put the Deck in **Desktop Mode**, enable its SSH server, and configure key-based
 SSH login from this Linux x86-64 build machine. Then run:
 
 ```sh
-STEAM_DECK_TARGET=deck@steamdeck.local bazel run -c opt //kestrel/app:steam_deck
+bazel run -c opt //kestrel/app:steam_deck
 ```
 
-Replace the host with the Deck's network name or IP address. The target builds
+The target connects to `deck@steamdeck.local` by default. If the Deck has a
+different name or `steamdeck.local` does not resolve on your network, set
+`STEAM_DECK_TARGET=user@host` before the command. The target builds
 the Linux game, copies it to `~/.local/opt/kestrel/` on the Deck, and starts it
 in the active desktop session. The game's scene assets and synthesized audio
 are embedded in the executable. To start a particular scene, append game
 arguments after `--`:
 
 ```sh
-STEAM_DECK_TARGET=deck@steamdeck.local bazel run -c opt //kestrel/app:steam_deck -- --scene moonlit-glade
+bazel run -c opt //kestrel/app:steam_deck -- --scene moonlit-glade
 ```
 
 Use `-- --dry-run` to check the target and runfiles without connecting. The

@@ -13,9 +13,9 @@ launcher="$runfiles_dir/$launcher_path"
     exit 1
 }
 
-target="${STEAM_DECK_TARGET:-}"
+target="${STEAM_DECK_TARGET:-deck@steamdeck.local}"
 if [[ ! "$target" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*@[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]; then
-    echo "Set STEAM_DECK_TARGET to user@host, for example deck@steamdeck.local." >&2
+    echo "STEAM_DECK_TARGET must be user@host, for example deck@steamdeck.local." >&2
     exit 2
 fi
 
