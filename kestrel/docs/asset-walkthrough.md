@@ -151,7 +151,7 @@ sim: (
 view: (),
 ```
 
-This is an excerpt, not a complete character file; [character definitions](character-definition.md) gives the full schema. The scene chooses its actor style, while the character file chooses gameplay behavior. The `view` section is empty today, so a character kind does not directly name a skin. Giving a skin `motion: Biped` does not by itself make it controllable.
+This is an excerpt, not a complete character file; [character definitions](character-definition.md) gives the full schema. The scene chooses its actor style, while the character file chooses gameplay behavior and, in `view.motion`, how the rig poses. A player's `view` names no skin: the scene's actor draws it. Other characters, such as `ghoul`, name the skin that draws them with `view: (skin: "ghoul")`. Giving a skin `motion: Biped` does not by itself make it controllable.
 
 **CUBE KNIGHT** also shows a sword because the player rig supplies one when the style has no authored `Weapon` part. That sword is built from geometry in the player rig code; it is not a separate RON asset in this scene. Other styles can author a `Weapon` part, and a style can map weapon types to skin meshes, but there is no standalone sword asset that styles can reference across files yet. The body groups above are reusable within this style; weapon reuse across styles remains a gap in the asset system.
 
