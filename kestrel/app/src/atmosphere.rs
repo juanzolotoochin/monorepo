@@ -1,5 +1,5 @@
 //! Optional, scene-scoped vegetation and ambient effects. Grass bends in a GPU vertex shader.
-use crate::{assets::SceneLibrary, character::Player};
+use crate::character::Player;
 use voxel_assets::AtmosphereProfile;
 use bevy::{
     asset::RenderAssetUsages,
@@ -106,7 +106,7 @@ impl BendField {
 
 #[derive(Resource, Default)]
 pub struct AtmosphereVisuals {
-    scene: Option<usize>,
+
     profile: Option<AtmosphereProfile>,
     blades: Vec<Blade>,
     grass: Option<Handle<Mesh>>,
@@ -250,31 +250,47 @@ fn ground_cover(profile: &AtmosphereProfile) -> Mesh {
         .with_inserted_indices(Indices::U32(indices))
 }
 
-pub fn sync(world: &mut World) {
-    let current = world.resource::<SceneLibrary>().current;
-    let studio = world.get_resource::<crate::viewer::Viewer>().is_some_and(|viewer| viewer.active);
-    let profile = (!studio).then(|| world.resource::<SceneLibrary>().scenes
-        .get(current)
-        .and_then(|scene| scene.scene.style.as_ref())
-        .and_then(|style| style.atmosphere.clone())).flatten();
-    let wanted = profile.as_ref().map(|_| current);
-    if world.resource::<AtmosphereVisuals>().scene == wanted { return; }
-    let mut state = world.remove_resource::<AtmosphereVisuals>().unwrap_or_default();
-    for entity in state.entities.drain(..) { world.despawn(entity); }
-    if let Some(mesh) = state.grass.take() { world.resource_mut::<Assets<Mesh>>().remove(&mesh); }
-    if let Some(mesh) = state.cover.take() { world.resource_mut::<Assets<Mesh>>().remove(&mesh); }
-    if let Some(mesh) = state.firefly_mesh.take() { world.resource_mut::<Assets<Mesh>>().remove(&mesh); }
-    if let Some(mesh) = state.arc_mesh.take() { world.resource_mut::<Assets<Mesh>>().remove(&mesh); }
-    if let Some(image) = state.bend_map.take() { world.resource_mut::<Assets<Image>>().remove(&image); }
-    if let Some(material) = state.material.take() { world.resource_mut::<Assets<GrassMaterial>>().remove(&material); }
-    if let Some(material) = state.cover_material.take() { world.resource_mut::<Assets<StandardMaterial>>().remove(&material); }
-    if let Some(material) = state.firefly_material.take() { world.resource_mut::<Assets<StandardMaterial>>().remove(&material); }
-    if let Some(material) = state.firefly_secondary_material.take() { world.resource_mut::<Assets<StandardMaterial>>().remove(&material); }
-    if let Some(material) = state.arc_material.take() { world.resource_mut::<Assets<StandardMaterial>>().remove(&material); }
-    state.blades.clear();
-    state.bend_field = None;
-    state.scene = wanted;
-    state.profile = profile;
+/// A world's grass, fireflies and lightning (World layer), from its scene's
+/// style. Scenes without an atmosphere get an empty one.
+impl service::Service for AtmosphereVisuals {
+    type Layer = service::WorldLayer;
+    type Deps = (crate::scene_view::SceneView,);
+
+    fn init(world: &mut World) -> Self {
+        let profile = world
+            .resource::<crate::scene_view::SceneView>()
+            .scene()
+            .style
+            .as_ref()
+            .and_then(|style| style.atmosphere.clone());
+        build(world, profile)
+    }
+
+    fn shutdown(mut self, world: &mut World) {
+        for entity in self.entities.drain(..) {
+            world.despawn(entity);
+        }
+        if let Some(mesh) = self.grass.take() { world.resource_mut::<Assets<Mesh>>().remove(&mesh); }
+        if let Some(mesh) = self.cover.take() { world.resource_mut::<Assets<Mesh>>().remove(&mesh); }
+        if let Some(mesh) = self.firefly_mesh.take() { world.resource_mut::<Assets<Mesh>>().remove(&mesh); }
+        if let Some(mesh) = self.arc_mesh.take() { world.resource_mut::<Assets<Mesh>>().remove(&mesh); }
+        if let Some(image) = self.bend_map.take() { world.resource_mut::<Assets<Image>>().remove(&image); }
+        if let Some(material) = self.material.take() { world.resource_mut::<Assets<GrassMaterial>>().remove(&material); }
+        if let Some(material) = self.cover_material.take() { world.resource_mut::<Assets<StandardMaterial>>().remove(&material); }
+        if let Some(material) = self.firefly_material.take() { world.resource_mut::<Assets<StandardMaterial>>().remove(&material); }
+        if let Some(material) = self.firefly_secondary_material.take() { world.resource_mut::<Assets<StandardMaterial>>().remove(&material); }
+        if let Some(material) = self.arc_material.take() { world.resource_mut::<Assets<StandardMaterial>>().remove(&material); }
+    }
+
+    fn systems(app: &mut App) {
+        use service::{AppServices, Phase, WorldState};
+        app.add_service_systems::<Self, _>(Phase::Present, animate.run_if(in_state(WorldState::Active)));
+    }
+}
+
+/// Spawns an atmosphere's entities and uploads its meshes and materials.
+fn build(world: &mut World, profile: Option<AtmosphereProfile>) -> AtmosphereVisuals {
+    let mut state = AtmosphereVisuals { profile, ..default() };
     if let Some(profile) = state.profile.clone() {
         let cover = world.resource_mut::<Assets<Mesh>>().add(ground_cover(&profile));
         let cover_material = world.resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial {
@@ -398,7 +414,7 @@ pub fn sync(world: &mut World) {
             state.arc_material = Some(material);
         }
     }
-    world.insert_resource(state);
+    state
 }
 
 pub fn animate(
@@ -411,7 +427,7 @@ pub fn animate(
     mut segments: Query<(&ArcSegment, &mut Transform, &mut Visibility), (Without<Firefly>, Without<Player>)>,
     mut flashes: Query<&mut PointLight, (With<ArcFlash>, Without<Firefly>)>,
 ) {
-    if state.scene.is_none() { return; }
+    if state.profile.is_none() { return; }
     let t = time.elapsed_secs();
     let player = player.iter().next().map_or(Vec3::ZERO, |p| p.translation);
     if let Some(mut material) = state.material.as_ref().and_then(|handle| grass_materials.get_mut(handle)) {
@@ -472,22 +488,21 @@ mod tests {
 
     #[test]
     fn atmosphere_assets_and_particles_leave_with_the_scene() {
+        use service::Service;
         let mut world = World::new();
-        let mut scenes = SceneLibrary::new();
-        scenes.current = scenes.index("moonlit-glade").unwrap();
-        world.insert_resource(scenes);
+        let scenes = crate::assets::SceneLibrary::new();
+        let glade = scenes.scenes[scenes.index("moonlit-glade").unwrap()].clone();
         world.init_resource::<Assets<Mesh>>();
         world.init_resource::<Assets<Image>>();
         world.init_resource::<Assets<StandardMaterial>>();
         world.init_resource::<Assets<GrassMaterial>>();
-        world.init_resource::<AtmosphereVisuals>();
-        sync(&mut world);
-        assert!(world.resource::<AtmosphereVisuals>().blades.len() > 15_000);
+        let state = build(&mut world, glade.scene.style.as_ref().and_then(|style| style.atmosphere.clone()));
+        assert!(state.blades.len() > 15_000);
         let mut fireflies = world.query::<&Firefly>();
         assert_eq!(fireflies.iter(&world).count(), 54 * 3);
         assert!(world.resource::<Assets<Mesh>>().len() >= 3);
-        world.resource_mut::<SceneLibrary>().current = 0;
-        sync(&mut world);
+        // The world stops.
+        state.shutdown(&mut world);
         assert_eq!(fireflies.iter(&world).count(), 0);
         assert_eq!(world.resource::<Assets<Mesh>>().len(), 0);
         assert_eq!(world.resource::<Assets<Image>>().len(), 0);

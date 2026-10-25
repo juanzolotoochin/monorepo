@@ -50,32 +50,25 @@ fn label(commands: &mut Commands, kind: CaptionKind, anchor: Vec3, text: &str) -
         .id()
 }
 
-pub fn setup_scene(
+/// Builds a world's lab view from its scene's pile layout, if it has one:
+/// dispensers, the collector, the cargo display and the panel.
+pub(super) fn build(
+    In(mut lab): In<PileLab>,
     mut commands: Commands,
-    library: Res<SceneLibrary>,
-    mut lab: ResMut<PileLab>,
-    old: Query<Entity, With<LabEntity>>,
+    scene: Res<crate::scene_view::SceneView>,
+    shared: Option<Res<LabAssets>>,
     player: Single<Entity, With<Player>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    if lab.scene == library.current {
-        return;
-    }
-    for entity in &old {
-        commands.entity(entity).despawn();
-    }
-    lab.scene = library.current;
-    lab.job = None;
-    lab.last_error = None;
-    lab.in_flight = 0;
-    lab.job_serial = lab.job_serial.wrapping_add(1);
-    lab.layout = library.scenes[library.current].scene.piles.clone();
+) -> PileLab {
+    lab.layout = scene.scene().piles.clone();
     lab.stock = lab.layout.as_ref().map(Stock::new);
     let Some(layout) = lab.layout.clone() else {
-        return;
+        return lab;
     };
-    if lab.assets.is_none() {
+    if let Some(shared) = shared {
+        lab.assets = Some(shared.clone());
+    } else {
         let mineral = MINERALS.map(|m| {
             let c = mineral_color(m);
             materials.add(StandardMaterial {
@@ -100,6 +93,7 @@ pub fn setup_scene(
                 ..default()
             }),
         });
+        commands.insert_resource(lab.assets.clone().unwrap());
     }
     let assets = lab.assets.as_ref().unwrap().clone();
     for (index, dispenser) in layout.dispensers.iter().enumerate() {
@@ -112,7 +106,7 @@ pub fn setup_scene(
                 Visibility::default(),
                 Obstacle(Disc {
                     center: position,
-                    radius: 0.8,
+                    radius: crate::obstacles::DISPENSER_RADIUS,
                 }),
             ))
             .with_children(|p| {
@@ -205,7 +199,8 @@ pub fn setup_scene(
         ChildOf(*player),
     ));
     label(&mut commands, CaptionKind::Cargo, Vec3::ZERO, "");
-    commands.spawn((LabEntity,LabPanel,Interaction::None,Node { position_type: PositionType::Absolute, left: px(36.0), top: px(126.0), width: px(350.0), padding: UiRect::all(px(16.0)), flex_direction: FlexDirection::Column, row_gap: px(10.0), ..default() },BackgroundColor(Color::srgba(0.015,0.035,0.055,0.93))))
+    // The panel covers the captions of whatever lies behind it.
+    commands.spawn((LabEntity,LabPanel,ZIndex(1),Interaction::None,Node { position_type: PositionType::Absolute, left: px(36.0), top: px(126.0), width: px(350.0), padding: UiRect::all(px(16.0)), flex_direction: FlexDirection::Column, row_gap: px(10.0), ..default() },BackgroundColor(Color::srgba(0.015,0.035,0.055,0.93))))
         .with_children(|p| {
             p.spawn((Text::new("MINERAL LOGISTICS"),TextFont { font_size: FontSize::Px(18.0), ..default() },TextColor(Color::srgb(0.25,0.9,1.0))));
             p.spawn((LabStatus,Text::new(""),TextFont { font_size: FontSize::Px(13.0), ..default() },TextColor(Color::srgb(0.7,0.84,0.9))));
@@ -225,6 +220,7 @@ pub fn setup_scene(
         "Click a dispenser to add mineral, or collect an existing pile."
     }
     .into();
+    lab
 }
 
 pub fn render(
@@ -379,7 +375,7 @@ fn spawn_collector(commands: &mut Commands, assets: &LabAssets, position: Vec3) 
             LabEntity,
             Transform::from_translation(position),
             Visibility::default(),
-            Obstacle(Disc { center: position, radius: 0.9 }),
+            Obstacle(Disc { center: position, radius: crate::obstacles::COLLECTOR_RADIUS }),
         ))
         .with_children(|p| {
             chunk(p, assets, &assets.trim, Vec3::new(0.0, 0.1, 0.0), Vec3::new(1.7, 0.2, 1.7));

@@ -1,15 +1,17 @@
 //! Terrain-aware hover flight. The same controller runs for keyboard and scripted demos.
-use crate::assets::SceneLibrary;
+use crate::lockstep::WorldMirror;
+use crate::scene_view::SceneView;
 use bevy::prelude::*;
+use service::{AppServices, Phase, Service, WorldLayer, WorldScoped, WorldState};
 
 pub const HOVER: f32 = 1.8;
+/// The local player's hover flight, as the views see it (World layer).
 #[derive(Resource, Default)]
 pub struct Flight {
     pub requested: bool,
     pub airborne: bool,
     pub jump: sim::settlement::avatar::JumpPhase,
     pub support: f32,
-    current: Option<usize>,
     sound_timer: f32,
 }
 #[derive(Component)]
@@ -19,8 +21,9 @@ pub struct TerrainVisual;
 #[derive(Component)]
 pub struct Exhaust;
 
-pub fn height(library: &SceneLibrary, p: Vec3) -> Option<f32> {
-    let pack = library.scenes.get(library.current)?;
+/// The ground's height under `p` in a scene: walkable surfaces, or for a
+/// scene with terrain, its platforms.
+pub fn height(pack: &voxel_assets::ScenePack, p: Vec3) -> Option<f32> {
     let scene = &pack.scene;
     let surface = pack
         .environment
@@ -39,62 +42,66 @@ pub fn height(library: &SceneLibrary, p: Vec3) -> Option<f32> {
             .max_by(f32::total_cmp),
     }
 }
-pub fn scene_changed(
+impl Service for Flight {
+    type Layer = WorldLayer;
+    type Deps = (WorldMirror, SceneView);
+
+    /// Raises the scene's platforms (`SceneView` hides the deck under them).
+    fn init(world: &mut World) -> Self {
+        let terrain = world.resource::<SceneView>().scene().terrain.clone();
+        if let Some(terrain) = terrain {
+            world.run_system_cached_with(raise_platforms, terrain).expect("raising the scene's platforms");
+        }
+        Flight::default()
+    }
+
+    fn systems(app: &mut App) {
+        app.add_service_systems::<Self, _>(Phase::Mirror, update.run_if(in_state(WorldState::Active)));
+    }
+}
+
+/// The platforms' mesh and materials, uploaded once.
+#[derive(Resource)]
+struct PlatformArt(Handle<Mesh>, [Handle<StandardMaterial>; 3]);
+
+fn raise_platforms(
+    In(terrain): In<voxel_assets::Terrain>,
     mut commands: Commands,
-    library: Res<SceneLibrary>,
-    mut flight: ResMut<Flight>,
-    mut deck: Query<&mut Visibility, With<Deck>>,
-    old: Query<Entity, With<TerrainVisual>>,
+    art: Option<Res<PlatformArt>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut cache: Local<Option<(Handle<Mesh>, [Handle<StandardMaterial>; 3])>>,
 ) {
-    if flight.current == Some(library.current) {
-        return;
-    }
-    *flight = Flight {
-        current: Some(library.current),
-        ..default()
+    let PlatformArt(cube, [side, top, glow]) = match art {
+        Some(art) => PlatformArt(art.0.clone(), art.1.clone()),
+        None => {
+            let art = PlatformArt(
+                meshes.add(Cuboid::default()),
+                [
+                    materials.add(StandardMaterial {
+                        base_color: Color::srgb(0.09, 0.14, 0.21),
+                        metallic: 0.6,
+                        ..default()
+                    }),
+                    materials.add(StandardMaterial {
+                        base_color: Color::srgb(0.24, 0.32, 0.37),
+                        metallic: 0.35,
+                        ..default()
+                    }),
+                    materials.add(StandardMaterial {
+                        base_color: Color::srgb(0.05, 0.8, 1.0),
+                        emissive: LinearRgba::rgb(0.1, 3.0, 5.0),
+                        ..default()
+                    }),
+                ],
+            );
+            commands.insert_resource(PlatformArt(art.0.clone(), art.1.clone()));
+            art
+        }
     };
-    for e in &old {
-        commands.entity(e).despawn();
-    }
-    let terrain = &library.scenes[library.current].scene.terrain;
-    for mut visibility in &mut deck {
-        *visibility = if terrain.is_some() {
-            Visibility::Hidden
-        } else {
-            Visibility::Inherited
-        };
-    }
-    let Some(terrain) = terrain else {
-        return;
-    };
-    let (cube, [side, top, glow]) = cache.get_or_insert_with(|| {
-        (
-            meshes.add(Cuboid::default()),
-            [
-                materials.add(StandardMaterial {
-                    base_color: Color::srgb(0.09, 0.14, 0.21),
-                    metallic: 0.6,
-                    ..default()
-                }),
-                materials.add(StandardMaterial {
-                    base_color: Color::srgb(0.24, 0.32, 0.37),
-                    metallic: 0.35,
-                    ..default()
-                }),
-                materials.add(StandardMaterial {
-                    base_color: Color::srgb(0.05, 0.8, 1.0),
-                    emissive: LinearRgba::rgb(0.1, 3.0, 5.0),
-                    ..default()
-                }),
-            ],
-        )
-    });
     let mut block = |pos: Vec3, size: Vec3, mat: &Handle<StandardMaterial>| {
         commands.spawn((
             TerrainVisual,
+            WorldScoped::default(),
             Mesh3d(cube.clone()),
             MeshMaterial3d(mat.clone()),
             Transform::from_translation(pos).with_scale(size),
@@ -146,16 +153,14 @@ pub fn scene_changed(
 /// itself is simulated (`kestrel/sim::settlement::avatar`).
 pub fn update(
     time: Res<Time>,
-    game: Res<crate::lockstep::Game>,
+    mirror: Res<crate::lockstep::WorldMirror>,
     mut flight: ResMut<Flight>,
     sound: Res<crate::sound::Sound>,
     mut exhaust: Query<(&mut Transform, &mut Visibility), With<Exhaust>>,
 ) {
-    let (Some(current), Some(index)) = (&game.current, game.player()) else {
-        return;
-    };
+    let (Some(current), Some(index)) = (&mirror.current, mirror.player()) else { return };
     let avatar = &current.agents[index as usize].avatar;
-    let climbing = game
+    let climbing = mirror
         .previous
         .as_ref()
         .and_then(|p| p.agents.get(index as usize))
@@ -200,16 +205,16 @@ pub fn cursor_surface(
     camera: &Camera,
     transform: &GlobalTransform,
     window: &Window,
-    library: &SceneLibrary,
-    game: &crate::lockstep::Game,
+    scene: &SceneView,
+    service: &crate::lockstep::SessionService,
 ) -> Option<Vec3> {
     let ray = camera
         .viewport_to_world(transform, window.cursor_position()?)
         .ok()?;
-    if library.has_feature(voxel_assets::SceneFeature::Digging) {
-        return crate::digging::ground_hit(ray, game);
+    if scene.has_feature(voxel_assets::SceneFeature::Digging) {
+        return crate::digging::ground_hit(ray, service);
     }
-    let Some(terrain) = &library.scenes[library.current].scene.terrain else {
+    let Some(terrain) = &scene.scene().terrain else {
         return crate::gameplay::cursor_ground(camera, transform, window);
     };
     terrain

@@ -38,6 +38,10 @@ pub struct Client<T: Transport> {
     stable_id: StableId,
     state: State,
     epoch: u32,
+    /// The host's world this client is loading or playing; 0 before the first.
+    world: u32,
+    /// The host app's name for that world.
+    label: String,
     player: Option<PlayerId>,
     input_delay: u64,
     /// Official turns received and not simulated yet.
@@ -74,6 +78,8 @@ impl<T: Transport> Client<T> {
             stable_id,
             state: State::Connecting,
             epoch: 0,
+            world: 0,
+            label: String::new(),
             player: None,
             turns: BTreeMap::new(),
             next_seq: 1,
@@ -104,6 +110,16 @@ impl<T: Transport> Client<T> {
 
     pub fn player(&self) -> Option<PlayerId> {
         self.player
+    }
+
+    /// The host's world this client is loading or playing; 0 before the first.
+    pub fn world_number(&self) -> u32 {
+        self.world
+    }
+
+    /// The host app's name for that world, once welcomed.
+    pub fn label(&self) -> &str {
+        &self.label
     }
 
     pub fn phase(&self) -> ClientPhase {
@@ -242,16 +258,26 @@ impl<T: Transport> Client<T> {
                 self.events.push(NetEvent::Rejected { reason: reason.clone() });
                 self.stop(reason);
             }
-            Packet::Welcome { epoch, player, input_delay, save_tick, save_len } => {
+            Packet::Welcome { epoch, world, label, player, input_delay, save_tick, save_len } => {
                 let same_load = matches!(&self.state, State::Loading { tick, len, .. } if *tick == save_tick && *len == save_len as usize)
-                    && epoch == self.epoch;
-                if same_load {
-                    return; // A repeated welcome.
+                    && epoch == self.epoch
+                    && world == self.world;
+                if same_load || (epoch == self.epoch && world < self.world) {
+                    return; // A repeated welcome, or a late one for an earlier world.
+                }
+                if world == self.world && epoch == self.epoch {
+                    // A resync: the same world, later on.
+                    self.turns.retain(|&tick, _| tick >= save_tick);
+                } else {
+                    // A new world: its ticks start over.
+                    self.turns.clear();
+                    self.host_tick = 0;
                 }
                 self.epoch = epoch;
+                self.world = world;
+                self.label = label;
                 self.player = Some(player);
                 self.input_delay = input_delay;
-                self.turns.retain(|&tick, _| tick >= save_tick);
                 self.unacked.clear();
                 self.next_seq = 1;
                 // Inputs not in the new save are lost.
@@ -262,7 +288,7 @@ impl<T: Transport> Client<T> {
                 // Acknowledge the welcome right away so chunks start flowing.
                 self.send(now);
             }
-            Packet::SaveChunk { epoch, index, data } if epoch == self.epoch => {
+            Packet::SaveChunk { epoch, world, index, data } if epoch == self.epoch && world == self.world => {
                 if let State::Loading { chunks, .. } = &mut self.state {
                     if let Some(slot) = chunks.get_mut(index as usize) {
                         *slot = Some(data);
@@ -270,7 +296,9 @@ impl<T: Transport> Client<T> {
                 }
                 self.finish_loading(now);
             }
-            Packet::Turns { epoch, first, turns, host_tick, input_ack, pong, pong_held_ms } if epoch == self.epoch => {
+            Packet::Turns { epoch, world, first, turns, host_tick, input_ack, pong, pong_held_ms }
+                if epoch == self.epoch && world == self.world =>
+            {
                 let needed = self.needed_from();
                 for (i, turn) in turns.into_iter().enumerate() {
                     let tick = first + i as u64;
@@ -291,7 +319,7 @@ impl<T: Transport> Client<T> {
                     });
                 }
             }
-            Packet::Desync { epoch, tick } if epoch == self.epoch => {
+            Packet::Desync { epoch, world, tick } if epoch == self.epoch && world == self.world => {
                 self.events.push(NetEvent::Desync { player: None, tick });
                 self.stop(format!("desync at tick {tick}"));
             }
@@ -345,12 +373,13 @@ impl<T: Transport> Client<T> {
                 let received = (0..64)
                     .filter(|i| chunks.get(next + i).is_some_and(Option::is_some))
                     .fold(0u64, |bits, i| bits | 1 << i);
-                Packet::SaveAck { epoch: self.epoch, next: next as u32, received }
+                Packet::SaveAck { epoch: self.epoch, world: self.world, next: next as u32, received }
             }
             State::Playing(sim) => {
                 let tick = sim.world().tick();
                 Packet::Inputs {
                     epoch: self.epoch,
+                    world: self.world,
                     turn_ack: tick + ready_turns(&self.turns, tick),
                     inputs: self.unacked.iter().cloned().collect(),
                     hashes: self.reports.iter().copied().collect(),
