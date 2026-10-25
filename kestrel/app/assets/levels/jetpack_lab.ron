@@ -1,4 +1,4 @@
-Scene(id: "jetpack-lab", features: [FlightHud],
+Scene(id: "jetpack-lab", player: "exosuit", features: [FlightHud],
     name: "JETPACK LAB / ELEVATION & CHASMS",
     spawn: (-5.0, 0.0, 3.0),
     industrial: false,

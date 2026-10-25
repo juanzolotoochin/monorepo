@@ -108,7 +108,7 @@ pub fn prepare(world: &mut World) {
 fn publish_scene(world: &mut World) {
     let scene = world.resource::<SceneView>();
     let scenario = scene.scene().scenario.is_some();
-    let diggable = scene.has_feature(SceneFeature::Digging);
+    let diggable = scene.has_feature(SceneFeature::Digging) && scene.player().dig().is_some();
     let recording = world.get_resource::<crate::palimpsest::Memory>().is_some_and(|m| m.recording());
     let mut utility = Vec::new();
     if diggable {
@@ -168,7 +168,7 @@ pub fn dispatch(world: &mut World) {
     if pad {
         aim(world, frame.gameplay.aim);
     }
-    let jumping = world.resource::<SceneView>().has_feature(SceneFeature::Jump);
+    let jumping = world.resource::<SceneView>().player().jump().is_some();
     for &edge in &frame.gameplay.edges {
         match edge {
             Edge::Attack => attack(world),

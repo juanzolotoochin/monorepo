@@ -90,6 +90,17 @@ impl Scene {
     }
 }
 
+/// How long the exosuit takes to dig out a layer.
+fn dig_ticks() -> u64 {
+    let content = Content::builtin();
+    content.rules.characters[content.names.character_index("exosuit").unwrap() as usize].dig().unwrap().ticks
+}
+
+/// What every test scene shares: the builtin exosuit as the player.
+fn base() -> SceneSetup {
+    SceneSetup { player: "exosuit".into(), ..SceneSetup::default() }
+}
+
 /// The jetpack lab's platforms; everything else is a drop.
 fn jetpack_lab() -> SceneSetup {
     let platform = |min: (f64, f64), max: (f64, f64), height: f64| Surface { min: v(min.0, min.1), max: v(max.0, max.1), height: fx(height) };
@@ -103,13 +114,13 @@ fn jetpack_lab() -> SceneSetup {
         ],
         platforms_only: true,
         spawn: [fx(-5.0), Fx::ZERO, fx(3.0)],
-        ..SceneSetup::default()
+        ..base()
     }
 }
 
 #[test]
 fn jump_has_anticipation_arc_landing_and_no_air_restart() {
-    let mut scene = Scene::new(SceneSetup { jump_enabled: true, ..field() });
+    let mut scene = Scene::new(SceneSetup { player: "exosuit_moonlit".into(), ..field() });
     let agent = scene.agent();
     let ground = scene.altitude();
     scene.command(CommandKind::Jump { agent });
@@ -129,7 +140,7 @@ fn jump_has_anticipation_arc_landing_and_no_air_restart() {
 
 #[test]
 fn repeated_sword_attacks_cycle_then_reset() {
-    let mut scene = Scene::new(SceneSetup { swift_sword: true, ..field() });
+    let mut scene = Scene::new(SceneSetup { player: "exosuit_moonlit".into(), ..field() });
     let agent = scene.agent();
     let attack = |scene: &mut Scene| {
         scene.command(CommandKind::Attack {
@@ -173,7 +184,7 @@ fn feet_rise_when_body_reaches_a_low_step() {
         extent: Fx::from_int(8),
         surfaces: vec![Surface { min: v(0.0, -1.0), max: v(1.0, 1.0), height: fx(0.24) }],
         spawn: [fx(-1.0), Fx::ZERO, Fx::ZERO],
-        ..SceneSetup::default()
+        ..base()
     });
     let agent = scene.agent();
     scene.command(CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: v(1.0, 0.0), run: false } });
@@ -234,7 +245,7 @@ fn surprise_lab() -> SceneSetup {
         doors,
         spawn: [fx(-5.0), Fx::ZERO, fx(3.0)],
         memory_trial: true,
-        ..SceneSetup::default()
+        ..base()
     }
 }
 
@@ -316,7 +327,7 @@ fn pile_lab() -> SceneSetup {
             piles: vec![(0, p(-4.0, 3.4), 8), (1, p(0.2, 4.3), 24), (0, p(4.6, 1.0), 64)],
             collector: None,
         }),
-        ..SceneSetup::default()
+        ..base()
     }
 }
 
@@ -417,16 +428,13 @@ fn scenes_are_deterministic_across_thread_counts() {
 
 /// A flat field with nothing on it, like the app's `field` scene.
 fn field() -> SceneSetup {
-    SceneSetup { extent: Fx::from_int(8), spawn: [Fx::ZERO, Fx::ZERO, fx(2.0)], ..SceneSetup::default() }
+    SceneSetup { extent: Fx::from_int(8), spawn: [Fx::ZERO, Fx::ZERO, fx(2.0)], ..base() }
 }
 
 #[test]
-fn authored_locomotion_speeds_control_avatar_movement() {
-    let travel = |speed: f64| {
-        let mut scene = Scene::new(SceneSetup {
-            locomotion: Some(crate::terrain::Locomotion { walk: fx(speed), run: fx(speed + 0.5) }),
-            ..field()
-        });
+fn the_player_characters_speed_controls_avatar_movement() {
+    let travel = |player: &str| {
+        let mut scene = Scene::new(SceneSetup { player: player.into(), ..field() });
         let agent = scene.agent();
         scene.command(CommandKind::MoveAvatar {
             agent,
@@ -435,7 +443,8 @@ fn authored_locomotion_speeds_control_avatar_movement() {
         scene.wait(ms(600));
         scene.avatar().position.x - scene.center.x
     };
-    assert!(travel(2.0) > travel(1.0) + fx(0.4));
+    // 3.8 m/s against the glade exosuit's 1.6.
+    assert!(travel("exosuit") > travel("exosuit_moonlit") + fx(0.8));
 }
 
 /// A player who joins gets an avatar of their own, drives only that one,
@@ -503,7 +512,7 @@ fn dig_lab() -> SceneSetup {
 /// way out of a pit, and the jetpack lifts the avatar out.
 #[test]
 fn avatars_dig_pits_and_fly_out() {
-    use super::avatar::DIG_TICKS;
+    let dig_ticks = dig_ticks();
     use crate::terrain::{Terrain, LAYER};
     let mut scene = Scene::new(field());
     let agent = scene.agent();
@@ -522,7 +531,7 @@ fn avatars_dig_pits_and_fly_out() {
     scene.command(walk(v(0.0, 1.0)));
     scene.command(walk(FxVec2::ZERO));
     assert_eq!(scene.avatar().avatar.dig, None);
-    scene.wait(DIG_TICKS);
+    scene.wait(dig_ticks);
     assert_eq!(pit(&scene), 0);
     scene.walk(0.3, 1.8);
 
@@ -532,7 +541,7 @@ fn avatars_dig_pits_and_fly_out() {
         scene.command(walk(FxVec2::ZERO));
         let weapon = content::scenario::Weapon::Sword;
         scene.command(CommandKind::Attack { agent, weapon, aim: v(1.0, 0.0), muzzle: [Fx::ZERO; 3] });
-        scene.wait(DIG_TICKS - 4);
+        scene.wait(dig_ticks - 4);
         assert_eq!(pit(&scene), depth - 1, "still digging");
         scene.wait(ms(33));
         assert_eq!(pit(&scene), depth);
@@ -577,7 +586,7 @@ fn mine() -> SceneSetup {
 /// collector, and every unit is accounted for.
 #[test]
 fn dug_ore_piles_up_and_goes_to_the_collector() {
-    use super::avatar::DIG_TICKS;
+    let dig_ticks = dig_ticks();
     use crate::terrain::Terrain;
     let mut scene = Scene::new(mine());
     let agent = scene.agent();
@@ -599,7 +608,7 @@ fn dug_ore_piles_up_and_goes_to_the_collector() {
     let spot = Terrain::pit_center(tile) - scene.center;
     scene.walk(spot.x.to_f64(), spot.y.to_f64());
     scene.command(CommandKind::DigDown { agent });
-    scene.wait(DIG_TICKS);
+    scene.wait(dig_ticks);
     let lab = scene.s().piles.as_ref().unwrap();
     let (&pile, p) = lab.piles.iter().next().expect("the ore landed in a pile");
     assert_eq!((p.material, p.units), (material, units));
@@ -815,4 +824,24 @@ fn release_is_refused_for_another_players_avatar() {
     scene.command(CommandKind::Jetpack { agent, enabled: true });
     scene.sim.step(&[Command { player: PlayerId(7), kind: CommandKind::ReleaseDirectControl { agent } }]);
     assert!(scene.avatar().avatar.flight.requested);
+}
+
+/// Commands for abilities a character lacks do nothing: the exosuit can't
+/// jump, and the glade exosuit can neither fly nor dig, even where the
+/// ground can be dug.
+#[test]
+fn commands_need_the_characters_abilities() {
+    let mut scene = Scene::new(field());
+    let agent = scene.agent();
+    scene.command(CommandKind::Jump { agent });
+    assert_eq!(scene.avatar().avatar.jump, JumpPhase::Grounded);
+
+    let mut scene = Scene::new(SceneSetup { player: "exosuit_moonlit".into(), ..dig_lab() });
+    let (agent, ground) = (scene.agent(), scene.altitude());
+    scene.command(CommandKind::Jetpack { agent, enabled: true });
+    scene.wait(ms(500));
+    assert!(!scene.avatar().avatar.flight.requested && !scene.avatar().avatar.flight.airborne);
+    assert_eq!(scene.altitude(), ground);
+    scene.command(CommandKind::DigDown { agent });
+    assert!(scene.avatar().avatar.dig.is_none());
 }

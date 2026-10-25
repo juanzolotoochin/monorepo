@@ -4,7 +4,6 @@ use crate::scene_view::SceneView;
 use bevy::prelude::*;
 use service::{AppServices, Phase, Service, WorldLayer, WorldScoped, WorldState};
 
-pub const HOVER: f32 = crate::lockstep::view_f32(sim::settlement::avatar::HOVER);
 /// The local player's hover flight, as the views see it (World layer).
 #[derive(Resource, Default)]
 pub struct Flight {

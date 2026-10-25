@@ -8,9 +8,9 @@
 //! the swing (or the rebound after a hit) ends. In digging scenes an avatar
 //! digs out the tile it stands on, standing still for the dig.
 
-use content::character::{AttackTiming, AvatarDef, CharacterDef};
+use content::character::{AttackTiming, AvatarDef, CharacterDef, JetpackDef, JumpDef};
 use content::scenario::{ticks_from_60hz, Weapon};
-use content::{millis_to_ticks, per_tick, TICKS_PER_SECOND};
+use content::{millis_to_ticks, TICKS_PER_SECOND};
 use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
@@ -24,8 +24,8 @@ use crate::terrain::{Terrain, MAX_LAYERS};
 /// The longest player name, in characters.
 pub const NAME_CHARS: usize = 16;
 
-// Body radius, speeds, acceleration and swing timing come from the avatar's
-// character definition (`content::character`).
+// Body radius, speeds, acceleration, swing timing and the jump, jetpack and
+// dig tuning come from the avatar's character definition (`content::character`).
 /// Fraction of the remaining turn taken per tick (1 - e^(-20/TICKS_PER_SECOND)).
 const TURN_BLEND: Fx = match TICKS_PER_SECOND {
     30 => Fx::from_bits(2_089_857_561), // 0.4866
@@ -40,22 +40,8 @@ const AIM_BLEND: Fx = match TICKS_PER_SECOND {
 };
 /// Manual transfers start within this distance of the dock.
 const DOCK_REACH: Fx = Fx::from_bits(3_650_722_202); // 0.85
-/// Jetpack: hover height above the ground, and climb and sink speeds per tick
-/// (5.5 m/s and 3 m/s).
-pub const HOVER: Fx = Fx::from_bits(7_730_941_133); // 1.8
-const CLIMB_PER_TICK: Fx = per_tick(Fx::from_ratio(11, 2));
-const SINK_PER_TICK: Fx = per_tick(Fx::from_int(3));
-pub const JUMP_PREP_TICKS: u64 = ticks_from_60hz(8);
-pub const JUMP_LAND_TICKS: u64 = ticks_from_60hz(10);
-const JUMP_VELOCITY: Fx = per_tick(Fx::from_int(4));
-const JUMP_GRAVITY: Fx = per_tick(per_tick(Fx::from_int(14)));
-/// A dig takes 2 s, standing still.
-pub const DIG_TICKS: u64 = millis_to_ticks(2000);
 /// Dug ore flies out of the pit for 0.6 s.
 const ORE_FLIGHT_TICKS: u64 = millis_to_ticks(600);
-/// While digging, the avatar steps to the middle of its tile (1.5 m/s), so
-/// it drops into the pit cleanly.
-const DIG_CENTERING: Fx = per_tick(Fx::from_ratio(3, 2));
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Intent {
@@ -245,33 +231,39 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, tick: u64, terrain: &
         }
     }
     walk(a, tick, terrain, def);
-    if terrain.jump_enabled {
-        jump_step(a, tick, terrain, radius);
-    } else {
-        fly(a, terrain, radius);
+    match def.jetpack() {
+        Some(jetpack) => fly(a, terrain, radius, jetpack),
+        None => jump_step(a, tick, terrain, radius, def.jump()),
     }
 }
 
-fn jump_step(a: &mut AgentState, tick: u64, terrain: &Terrain, radius: Fx) {
+/// A grounded jump, or for a character with neither jump nor jetpack, just
+/// keeping to the ground.
+fn jump_step(a: &mut AgentState, tick: u64, terrain: &Terrain, radius: Fx, jump: Option<&JumpDef>) {
     let avatar = &mut a.avatar;
     let ground = terrain.footprint(a.position, radius);
     if let Some(y) = ground {
         avatar.flight.support = y;
     }
+    let Some(jump) = jump else {
+        avatar.flight.airborne = false;
+        if let Some(y) = ground { avatar.height = y; }
+        return;
+    };
     match avatar.jump {
         JumpPhase::Grounded => {
             avatar.flight.airborne = false;
             if let Some(y) = ground { avatar.height = y; }
         }
         JumpPhase::Preparing { started } => {
-            if tick >= started + JUMP_PREP_TICKS {
-                avatar.jump = JumpPhase::Airborne { started: tick, velocity: JUMP_VELOCITY };
+            if tick >= started + jump.prep {
+                avatar.jump = JumpPhase::Airborne { started: tick, velocity: jump.velocity };
                 avatar.flight.airborne = true;
-                avatar.height += JUMP_VELOCITY;
+                avatar.height += jump.velocity;
             }
         }
         JumpPhase::Airborne { started, velocity } => {
-            let next_velocity = velocity - JUMP_GRAVITY;
+            let next_velocity = velocity - jump.gravity;
             avatar.height += next_velocity;
             if next_velocity <= Fx::ZERO && ground.is_some_and(|y| avatar.height <= y) {
                 avatar.height = ground.unwrap();
@@ -283,7 +275,7 @@ fn jump_step(a: &mut AgentState, tick: u64, terrain: &Terrain, radius: Fx) {
         }
         JumpPhase::Landing { started } => {
             if let Some(y) = ground { avatar.height = y; }
-            if tick >= started + JUMP_LAND_TICKS {
+            if tick >= started + jump.land {
                 avatar.jump = JumpPhase::Grounded;
             }
         }
@@ -298,7 +290,8 @@ fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain, def: &CharacterDef) {
     if let Some(dig) = &avatar.dig {
         avatar.velocity = approach(avatar.velocity, FxVec2::ZERO, tuning.braking);
         let center = Terrain::pit_center(dig.tile);
-        a.position = slide(terrain, a.position, approach(a.position, center, DIG_CENTERING) - a.position, radius);
+        let centering = def.dig().map_or(Fx::ZERO, |d| d.centering);
+        a.position = slide(terrain, a.position, approach(a.position, center, centering) - a.position, radius);
         return;
     }
     if let Some(swing) = &avatar.swing {
@@ -314,10 +307,7 @@ fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain, def: &CharacterDef) {
             avatar.swing = None;
         }
     }
-    let speed = terrain.locomotion.map_or_else(
-        || if avatar.run { def.movement.run } else { def.movement.walk },
-        |profile| if avatar.run { profile.run } else { profile.walk },
-    );
+    let speed = if avatar.run { def.movement.run } else { def.movement.walk };
     let mut desired = FxVec2::ZERO;
     match &avatar.intent {
         Some(Intent::Walk { direction, .. }) => desired = *direction * speed,
@@ -377,7 +367,7 @@ fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain, def: &CharacterDef) {
 
 /// The jetpack: hover over the highest ground ahead while held, fall back to
 /// the ground when released, and keep flying over drops.
-fn fly(a: &mut AgentState, terrain: &Terrain, radius: Fx) {
+fn fly(a: &mut AgentState, terrain: &Terrain, radius: Fx, jetpack: &JetpackDef) {
     let flight = &mut a.avatar.flight;
     let ground = terrain.footprint(a.position, radius);
     let landing = ground;
@@ -402,9 +392,9 @@ fn fly(a: &mut AgentState, terrain: &Terrain, radius: Fx) {
                 }
             }
         }
-        target += HOVER;
+        target += jetpack.hover;
     }
-    let delta = (target - a.avatar.height).clamp(-SINK_PER_TICK, CLIMB_PER_TICK);
+    let delta = (target - a.avatar.height).clamp(-jetpack.sink, jetpack.climb);
     a.avatar.height += delta;
     flight.airborne = active || ground.is_none_or(|y| a.avatar.height > y + Fx::from_ratio(1, 100));
 }
@@ -490,9 +480,11 @@ impl Settlement {
         });
     }
 
-    /// Commands: holds the jetpack on or off. Flying off stops a dig.
+    /// Commands: holds the jetpack on or off, for characters that have one.
+    /// Flying off stops a dig.
     pub fn jetpack(&mut self, agent: usize, enabled: bool) {
-        if let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) {
+        let characters = &self.characters;
+        if let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled && character_of(characters, a).jetpack().is_some()) {
             a.avatar.flight.requested = enabled;
             if enabled {
                 a.avatar.dig = None;
@@ -500,9 +492,11 @@ impl Settlement {
         }
     }
 
-    /// Starts a jump with a short crouch before takeoff. Midair presses do nothing.
+    /// Commands: starts a jump with a short crouch before takeoff, for
+    /// characters that jump. Midair presses do nothing.
     pub fn jump(&mut self, agent: usize, tick: u64) {
-        if let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) {
+        let characters = &self.characters;
+        if let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled && character_of(characters, a).jump().is_some()) {
             if matches!(a.avatar.jump, JumpPhase::Grounded)
                 && !a.avatar.flight.airborne
                 && a.avatar.dig.is_none()
@@ -514,7 +508,8 @@ impl Settlement {
     }
 
     /// Commands: starts digging out the tile under the avatar, if the scene
-    /// allows digging, the avatar stands on the ground with its hands free,
+    /// allows digging, the character can dig, the avatar stands on the ground
+    /// with its hands free,
     /// the pit there isn't as deep as it goes, and no pile or machine sits
     /// on the tile.
     pub fn dig(&mut self, tick: u64, agent: usize, terrain: &Terrain) {
@@ -525,8 +520,10 @@ impl Settlement {
         if self.piles.as_ref().is_some_and(|lab| lab.blocks_dig(Terrain::pit_tile(position))) {
             return;
         }
+        let characters = &self.characters;
         let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
-        let busy = a.avatar.swing.as_ref().is_some_and(|s| tick < s.until) || a.avatar.job.is_some();
+        let Some(ticks) = character_of(characters, a).dig().map(|d| d.ticks) else { return };
+        let busy =a.avatar.swing.as_ref().is_some_and(|s| tick < s.until) || a.avatar.job.is_some();
         let flight = &a.avatar.flight;
         if busy || a.avatar.dig.is_some() || flight.requested || flight.airborne {
             return;
@@ -537,7 +534,7 @@ impl Settlement {
         }
         a.route.clear();
         a.avatar.intent = Some(Intent::Stop);
-        a.avatar.dig = Some(Dig { tile, started: tick, until: tick + DIG_TICKS });
+        a.avatar.dig = Some(Dig { tile, started: tick, until: tick + ticks });
     }
 
     /// Housekeeping: digs that are done take their layer out of the ground.
@@ -681,7 +678,6 @@ impl Settlement {
         if self.agents.get(agent).is_some_and(|a| a.controlled) {
             self.cancel_pile_job(agent);
         }
-        let swift_sword = self.swift_sword;
         let characters = &self.characters;
         let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled && (a.avatar.max_health == 0 || a.avatar.health > 0)) else { return };
         if a.avatar.dig.is_some() {
@@ -696,22 +692,21 @@ impl Settlement {
                 a.avatar.queued = Some((weapon, aim, muzzle));
             }
             _ => {
-                let timing = avatar_tuning(character_of(characters, a)).attack;
-                start_swing(a, tick, weapon, aim, muzzle, swift_sword, timing);
+                let def = character_of(characters, a);
+                start_swing(a, tick, weapon, aim, muzzle, def.swift_sword(), avatar_tuning(def).attack);
             }
         }
     }
 
     /// Housekeeping: a buffered attack starts once the swing ends.
     pub(crate) fn avatar_housekeeping(&mut self, tick: u64) {
-        let swift_sword = self.swift_sword;
         let characters = &self.characters;
         for a in self.agents.iter_mut().filter(|a| a.controlled && (a.avatar.max_health == 0 || a.avatar.health > 0)) {
             let finished = a.avatar.swing.as_ref().is_none_or(|s| tick + 1 >= s.until);
             if finished {
                 if let Some((weapon, aim, muzzle)) = a.avatar.queued.take() {
-                    let timing = avatar_tuning(character_of(characters, a)).attack;
-                    start_swing(a, tick + 1, weapon, aim, muzzle, swift_sword, timing);
+                    let def = character_of(characters, a);
+                    start_swing(a, tick + 1, weapon, aim, muzzle, def.swift_sword(), avatar_tuning(def).attack);
                 }
             }
         }

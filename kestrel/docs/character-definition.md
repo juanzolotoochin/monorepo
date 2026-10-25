@@ -48,10 +48,22 @@ The `sim` section has the same **shape** for every character kind, but `brain` d
 | `health` | `(hp: integer, breach_damage: integer, armor: (...))` | Required for `FollowRoute`; forbidden for `Player` and `Hauler`. `armor` is optional. |
 | `avatar` | `(acceleration: ..., braking: ..., attack_braking: ..., attack: (...))` | Required for `Player`; forbidden for `FollowRoute` and `Hauler`. |
 | `carry` | `(transfer: integer)` | Required for `Player` and `Hauler`; forbidden for `FollowRoute`. `transfer` is frames to load or unload one unit. |
+| `abilities` | List of abilities, such as `[Jetpack(...), Dig(...)]` | Optional, `Player` only. Each ability at most once, and never both `Jump` and `Jetpack`. A variant replaces the whole list. |
 
 `health.hp` is starting hit points. `health.breach_damage` is damage dealt on reaching the route's target. If supplied, `health.armor` must contain both `points` and `radius`; the armor absorbs hits and enlarges the collision radius until it breaks.
 
 `avatar.acceleration`, `braking`, and `attack_braking` are rates in meters per second squared. `avatar.attack` requires seven frame counts: `windup`, `aim`, `swing`, `sword_windup`, `sword_swing`, `rebound`, and `combo_window`. Durations, including `carry.transfer`, are written as whole frames at 60 Hz. The loader validates ranges and converts authored values to simulation units.
+
+Abilities are moves the engine implements; the file picks them by name and tunes them:
+
+| Ability | Fields | Meaning |
+| --- | --- | --- |
+| `Jump` | `prep`, `land` (frames), `velocity` (m/s), `gravity` (m/s²) | A grounded jump with a crouch before takeoff and a recovery after landing. |
+| `Jetpack` | `hover` (m), `climb`, `sink` (m/s) | Hold to hover over the ground ahead. |
+| `Dig` | `time` (frames), `centering` (m/s) | Dig out the tile underfoot, where the scene's ground can be dug (`Digging`). |
+| `SwiftSword` | none | Swing the sword with `sword_windup` and `sword_swing` instead of `windup` and `swing`. |
+
+Commands for an ability the character lacks do nothing. A player with neither `Jump` nor `Jetpack` stays on the ground.
 
 ## The other roles
 
@@ -64,6 +76,10 @@ The player uses the same outer file schema. Its `Player` brain requires `avatar`
         body: (radius: 0.32),
         movement: (walk: 3.8, run: 5.6),
         carry: (transfer: 24),
+        abilities: [
+            Jetpack(hover: 1.8, climb: 5.5, sink: 3),
+            Dig(time: 120, centering: 1.5),
+        ],
         avatar: (
             acceleration: 26, braking: 32, attack_braking: 35,
             attack: (
@@ -78,6 +94,8 @@ The player uses the same outer file schema. Its `Player` brain requires `avatar`
 ```
 
 This is the built-in `exosuit` definition. Player health is a scenario rule, so it does not appear here.
+
+Each scene names its player character with `player: "exosuit"`, and every player avatar in that scene uses it. A scenario's controlled agents must name the same character. The moonlit glade's player is `exosuit_moonlit`: it inherits `exosuit`, walks at 1.6 and runs at 2.6 m/s, and lists `[Jump(prep: 8, land: 10, velocity: 4, gravity: 14), SwiftSword]` instead of the jetpack and dig.
 
 A hauler uses `Hauler` and `carry`, without an `avatar` or `health` section:
 
@@ -116,9 +134,9 @@ It inherits `FollowRoute`, `body.radius`, and `health.breach_damage`. Nested sec
 
 | Object | Character definition | Visual selection |
 | --- | --- | --- |
-| Player avatar | `exosuit` | The scene's actor style dresses the player rig. |
+| Player avatar | The scene's `player`, such as `exosuit` | The scene's actor style dresses the player rig. |
 | Wave enemy | A kind such as `ghoul_forest` | The wave names a skin separately. |
 | Hauler | A kind such as `worker`, `runner`, or `ox` | The scenario agent names a skin separately. |
 | Defender, machine, cart, projectile | No character definition | Their own scene or simulation systems select visuals. |
 
-Each spawned character has its own position and other instance state. Scenario agents can also have different capacities and equipment while sharing a character definition. The empty `view` section does not yet connect a character kind to a skin; [visual assets and characters](asset-system.md) explains the current visual path. Jump, jetpack, and digging availability currently come from scene rules.
+Each spawned character has its own position and other instance state. Scenario agents can also have different capacities and equipment while sharing a character definition. The empty `view` section does not yet connect a character kind to a skin; [visual assets and characters](asset-system.md) explains the current visual path. What a player can do comes from its character's `abilities`; whether the ground can be dug is the scene's `Digging` feature. A style's `character_motion` speeds only pose the rig, and must match the scene player's `movement`.

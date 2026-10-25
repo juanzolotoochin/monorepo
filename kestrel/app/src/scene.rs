@@ -1256,7 +1256,7 @@ pub fn update_hud(
         }
     } else if flight.airborne {
         (
-            if scene.has_feature(voxel_assets::SceneFeature::Jump) {
+            if scene.player().jump().is_some() {
                 "JUMP / AIRBORNE"
             } else if flight.requested {
                 "JETPACK / HOVER"
@@ -1300,7 +1300,7 @@ pub fn update_hud(
             "ALT {:.1}m / SUPPORT {:.1}m / HOVER {:.1}m / HOLD SPACE TO FLY",
             player.translation.y,
             flight.support,
-            crate::jetpack::HOVER
+            scene.hover()
         )
     } else if scene.has_feature(voxel_assets::SceneFeature::Digging) {
         let net = if service.networked() { format!(" / NET / {}", service.status.to_uppercase()) } else { String::new() };

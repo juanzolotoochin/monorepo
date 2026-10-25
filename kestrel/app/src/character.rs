@@ -10,7 +10,7 @@ use crate::{
 };
 use bevy::prelude::*;
 use std::collections::HashMap;
-use sim::settlement::avatar::{JumpPhase, SwordStroke, JUMP_LAND_TICKS, JUMP_PREP_TICKS};
+use sim::settlement::avatar::{JumpPhase, SwordStroke};
 
 /// Resolve a usable gait from the baked rig instead of requiring every style
 /// to repeat the same planted-foot settings.
@@ -397,6 +397,7 @@ pub fn animate_character(
         airborne,
         jump: jump_motion(
             flight.as_ref().map_or(JumpPhase::Grounded, |f| f.jump),
+            scene.as_ref().and_then(|s| s.player().jump()),
             mirror.as_ref().map_or(0.0, |m| m.tick as f32 - 1.0 + m.alpha),
             player.1.translation.y,
             flight.as_ref().map_or(0.0, |f| f.support),
@@ -714,11 +715,20 @@ pub enum JumpMotion {
     Landing(f32),
 }
 
-pub fn jump_motion(phase: JumpPhase, ticks: f32, height: f32, support: f32) -> Option<JumpMotion> {
+/// `jump` is the character's jump tuning; without it the avatar never leaves
+/// the ground this way.
+pub fn jump_motion(
+    phase: JumpPhase,
+    jump: Option<&content::character::JumpDef>,
+    ticks: f32,
+    height: f32,
+    support: f32,
+) -> Option<JumpMotion> {
+    let jump = jump?;
     match phase {
         JumpPhase::Grounded => None,
         JumpPhase::Preparing { started } => {
-            let progress = ((ticks - started as f32) / JUMP_PREP_TICKS as f32).clamp(0.0, 1.0);
+            let progress = ((ticks - started as f32) / jump.prep as f32).clamp(0.0, 1.0);
             if progress < 0.5 {
                 Some(JumpMotion::Preparing(smooth(progress * 2.0)))
             } else {
@@ -733,7 +743,7 @@ pub fn jump_motion(phase: JumpPhase, ticks: f32, height: f32, support: f32) -> O
             (1.0 - (height - support) / 0.6).clamp(0.0, 1.0),
         )),
         JumpPhase::Landing { started } => Some(JumpMotion::Landing(smooth(
-            (ticks - started as f32) / JUMP_LAND_TICKS as f32,
+            (ticks - started as f32) / jump.land as f32,
         ))),
     }
 }
@@ -1703,7 +1713,7 @@ mod tests {
 
     fn exosuit() -> &'static content::character::CharacterDef {
         let content = crate::lockstep::builtin_content();
-        &content.rules.characters[content.names.character_index(content::character::PLAYER_CHARACTER).unwrap() as usize]
+        &content.rules.characters[content.names.character_index("exosuit").unwrap() as usize]
     }
 
     /// Styles that keep the default speeds leave the simulation on the player

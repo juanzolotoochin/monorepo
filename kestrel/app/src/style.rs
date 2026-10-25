@@ -112,10 +112,7 @@ pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack, studio: bool) {
     let fixture_lighting = environment.as_ref().is_some_and(|e| !e.lights.is_empty());
 
     let settlement = scene.scene.scenario.is_some();
-    let jumping = scene
-        .scene
-        .features
-        .contains(&voxel_assets::SceneFeature::Jump);
+    let jumping = crate::lockstep::builtin_character(&scene.scene.player).jump().is_some();
     world.insert_resource(crate::character::ActorFootContacts::from_actor(&actor));
     for mut visible in world
         .query_filtered::<&mut Visibility, Or<(

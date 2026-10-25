@@ -1,0 +1,16 @@
+// The moonlit glade's exosuit: slower, and it jumps instead of flying.
+(
+    base: "exosuit",
+    sim: (
+        // The glade style's 1.6 and 2.6 m/s, as the view quantized them
+        // (to 1/1024) when the style still set the speeds.
+        movement: (walk: 1.599609375, run: 2.599609375),
+        // Crouch 8 frames, take off at 4 m/s under 14 m/s² gravity, and
+        // recover 10 frames after landing.
+        abilities: [
+            Jump(prep: 8, land: 10, velocity: 4, gravity: 14),
+            SwiftSword,
+        ],
+    ),
+    view: (),
+)

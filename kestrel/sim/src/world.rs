@@ -460,10 +460,8 @@ impl World {
                     }
                 }
                 CommandKind::Jump { agent } => {
-                    if self.terrain.jump_enabled {
-                        if let Some(s) = &mut self.settlement {
-                            s.jump(agent as usize, self.tick);
-                        }
+                    if let Some(s) = &mut self.settlement {
+                        s.jump(agent as usize, self.tick);
                     }
                 }
                 CommandKind::Respawn { agent } => {

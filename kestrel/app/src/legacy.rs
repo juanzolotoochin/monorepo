@@ -1,3 +1,4 @@
+
 //! The original prototype's view of a settlement, rebuilt from the lockstep
 //! simulation each frame. Bevy code reads these plain `f32` structs (arena
 //! coordinates, names instead of indices), interpolated between the last two
@@ -152,7 +153,7 @@ impl Scenario {
                 .agents
                 .iter()
                 .map(|a| {
-                    let character = agent_character(&a.character);
+                    let character = crate::lockstep::builtin_character(&a.character);
                     let transfer = character.carry.as_ref().map_or(0, |c| c.transfer);
                     Agent {
                         controlled: a.controlled,

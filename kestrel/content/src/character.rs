@@ -15,9 +15,6 @@ use crate::{per_tick, MAX_BODY_RADIUS};
 /// Index into `Rules::characters`, in name order.
 pub type CharacterIx = u16;
 
-/// The character every controlled avatar uses until scenes name their own.
-pub const PLAYER_CHARACTER: &str = "exosuit";
-
 /// How a character decides what to do. The behaviours themselves are code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Brain {
@@ -41,6 +38,70 @@ pub struct CharacterDef {
     pub avatar: Option<AvatarDef>,
     /// Characters that carry goods: players and haulers.
     pub carry: Option<CarryDef>,
+    /// What a player character can do beyond walking and attacking. Empty
+    /// for everyone else.
+    pub abilities: Vec<Ability>,
+}
+
+/// A move a player character can make. The behaviour is code; the tuning
+/// is data.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Ability {
+    /// A grounded jump. Replaces the jetpack.
+    Jump(JumpDef),
+    /// Hold to hover over the ground ahead.
+    Jetpack(JetpackDef),
+    /// Dig out the tile underfoot, where the scene's ground can be dug.
+    Dig(DigDef),
+    /// Swing the sword with the short `sword_windup` and `sword_swing` timings.
+    SwiftSword,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JumpDef {
+    /// Ticks crouching before takeoff.
+    pub prep: u64,
+    /// Ticks recovering after touchdown.
+    pub land: u64,
+    /// Takeoff speed, meters per tick.
+    pub velocity: Fx,
+    /// Meters per tick, per tick.
+    pub gravity: Fx,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JetpackDef {
+    /// Height above the ground ahead, in meters.
+    pub hover: Fx,
+    /// Meters per tick.
+    pub climb: Fx,
+    pub sink: Fx,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DigDef {
+    /// Ticks to dig out one layer, standing still.
+    pub ticks: u64,
+    /// Meters per tick the digger steps toward the middle of its tile.
+    pub centering: Fx,
+}
+
+impl CharacterDef {
+    pub fn jump(&self) -> Option<&JumpDef> {
+        self.abilities.iter().find_map(|a| if let Ability::Jump(j) = a { Some(j) } else { None })
+    }
+
+    pub fn jetpack(&self) -> Option<&JetpackDef> {
+        self.abilities.iter().find_map(|a| if let Ability::Jetpack(j) = a { Some(j) } else { None })
+    }
+
+    pub fn dig(&self) -> Option<&DigDef> {
+        self.abilities.iter().find_map(|a| if let Ability::Dig(d) = a { Some(d) } else { None })
+    }
+
+    pub fn swift_sword(&self) -> bool {
+        self.abilities.contains(&Ability::SwiftSword)
+    }
 }
 
 /// How a character handles cargo. How much it carries is set where it is
@@ -133,6 +194,18 @@ pub(crate) struct SimFile {
     health: Option<HealthFile>,
     avatar: Option<AvatarFile>,
     carry: Option<CarryFile>,
+    /// Replaced as a whole, not merged.
+    abilities: Option<Vec<AbilityFile>>,
+}
+
+/// Frames, meters and per-second rates.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+enum AbilityFile {
+    Jump { prep: u64, land: u64, velocity: Fx, gravity: Fx },
+    Jetpack { hover: Fx, climb: Fx, sink: Fx },
+    Dig { time: u64, centering: Fx },
+    SwiftSword,
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -219,7 +292,7 @@ macro_rules! merge_fields {
     };
 }
 
-merge_fields!(SimFile { brain } { body, movement, health, avatar, carry });
+merge_fields!(SimFile { brain, abilities } { body, movement, health, avatar, carry });
 merge_fields!(CarryFile { transfer } {});
 merge_fields!(BodyFile { radius } {});
 merge_fields!(MovementFile { walk, run } {});
@@ -276,6 +349,17 @@ pub(crate) fn character_def(file: SimFile) -> Result<CharacterDef, String> {
             Ok(CarryDef { transfer: ticks_from_60hz(transfer) })
         })
         .transpose()?;
+    let abilities = file.abilities.unwrap_or_default().into_iter().map(ability_def).collect::<Result<Vec<_>, _>>()?;
+    let kind = |a: &Ability| std::mem::discriminant(a);
+    if abilities.iter().enumerate().any(|(i, a)| abilities[..i].iter().any(|b| kind(a) == kind(b))) {
+        return Err("abilities lists an ability twice".into());
+    }
+    if abilities.iter().any(|a| matches!(a, Ability::Jump(_))) && abilities.iter().any(|a| matches!(a, Ability::Jetpack(_))) {
+        return Err("a character can't have both Jump and Jetpack: both take the lift button".into());
+    }
+    if brain != Brain::Player && !abilities.is_empty() {
+        return Err("only Player characters have abilities".into());
+    }
     match brain {
         Brain::Player if avatar.is_none() || carry.is_none() || health.is_some() => {
             return Err("a Player character needs `avatar` and `carry`, and no `health` (player health is a scenario rule)".into())
@@ -288,7 +372,41 @@ pub(crate) fn character_def(file: SimFile) -> Result<CharacterDef, String> {
         }
         _ => {}
     }
-    Ok(CharacterDef { brain, body: BodyDef { radius }, movement: MovementDef { walk, run }, health, avatar, carry })
+    Ok(CharacterDef { brain, body: BodyDef { radius }, movement: MovementDef { walk, run }, health, avatar, carry, abilities })
+}
+
+fn ability_def(file: AbilityFile) -> Result<Ability, String> {
+    let frames = |value: u64, field: &str| -> Result<u64, String> {
+        if !(1..=600).contains(&value) {
+            return Err(format!("{field} must be 1..=600 frames"));
+        }
+        Ok(ticks_from_60hz(value))
+    };
+    // `tenths` is the lower bound in tenths, so 5 means 0.5.
+    let between = |value: Fx, tenths: i64, hi: i32, field: &str| -> Result<Fx, String> {
+        if !within(value, Fx::from_ratio(tenths, 10), Fx::from_int(hi)) {
+            return Err(format!("{field} must be in [{}.{}, {hi}]", tenths / 10, tenths % 10));
+        }
+        Ok(value)
+    };
+    Ok(match file {
+        AbilityFile::Jump { prep, land, velocity, gravity } => Ability::Jump(JumpDef {
+            prep: frames(prep, "Jump.prep")?,
+            land: frames(land, "Jump.land")?,
+            velocity: per_tick(between(velocity, 5, 20, "Jump.velocity (m/s)")?),
+            gravity: per_tick(per_tick(between(gravity, 10, 100, "Jump.gravity (m/s²)")?)),
+        }),
+        AbilityFile::Jetpack { hover, climb, sink } => Ability::Jetpack(JetpackDef {
+            hover: between(hover, 5, 5, "Jetpack.hover (m)")?,
+            climb: per_tick(between(climb, 5, 20, "Jetpack.climb (m/s)")?),
+            sink: per_tick(between(sink, 5, 20, "Jetpack.sink (m/s)")?),
+        }),
+        AbilityFile::Dig { time, centering } => Ability::Dig(DigDef {
+            ticks: frames(time, "Dig.time")?,
+            centering: per_tick(between(centering, 1, 15, "Dig.centering (m/s)")?),
+        }),
+        AbilityFile::SwiftSword => Ability::SwiftSword,
+    })
 }
 
 fn avatar_def(file: AvatarFile) -> Result<AvatarDef, String> {

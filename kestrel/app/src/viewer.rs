@@ -1150,7 +1150,7 @@ mod tests {
         assert!(Clip::Walk.supports(character));
         assert!(Clip::Run.supports(character));
         assert!(Clip::Step.supports(character));
-        assert!(Clip::Jump.supports(character));
+        assert!(!Clip::Jump.supports(character), "the laser pit's exosuit flies");
         assert!(Clip::Attack.supports(character));
         assert!(!Clip::Forehand.supports(character));
         let attack = Clip::Attack.preview_attack(character, 0.06).unwrap();

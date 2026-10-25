@@ -20,6 +20,11 @@ pub const ACTIVE_END: f32 = 0.29;
 pub const SWORD_ACTIVE_END: f32 = 0.22;
 pub const REST_ANGLE: f32 = 0.45;
 
+/// Every avatar's swing is posed with this character's timings, until
+/// characters carry their own view (step 4 in `docs/character-definition.md`).
+/// Its variants share them.
+const TIMING_CHARACTER: &str = "exosuit";
+
 /// The player character's swing phases in view seconds.
 struct SwingSeconds {
     windup: f32,
@@ -33,7 +38,7 @@ struct SwingSeconds {
 fn swing_seconds() -> &'static SwingSeconds {
     static SWING: std::sync::LazyLock<SwingSeconds> = std::sync::LazyLock::new(|| {
         let content = crate::lockstep::builtin_content();
-        let ix = content.names.character_index(content::character::PLAYER_CHARACTER).expect("the player character");
+        let ix = content.names.character_index(TIMING_CHARACTER).expect("the timing character");
         let avatar = content.rules.characters[ix as usize].avatar.as_ref().expect("player characters have avatar tuning");
         let attack = avatar.attack;
         SwingSeconds {

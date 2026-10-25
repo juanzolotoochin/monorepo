@@ -257,6 +257,8 @@ pub struct MineLayout {
 pub struct Scene {
     pub id: String,
     pub name: String,
+    /// The character every player avatar here is, such as `exosuit`.
+    pub player: String,
     #[serde(default)]
     pub features: Vec<SceneFeature>,
     pub spawn: [f32; 3],
@@ -285,12 +287,8 @@ pub enum SceneFeature {
     FlightHud,
     /// Track the player with the scene camera while preserving its authored offset.
     CameraFollow,
-    /// Avatars dig pits into the deck.
+    /// The ground can be dug, by player characters with the Dig ability.
     Digging,
-    /// Space triggers a grounded jump instead of held jetpack flight.
-    Jump,
-    /// Use the quick three stroke sword cadence.
-    SwiftSword,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScenePack {
@@ -503,8 +501,16 @@ impl ScenePack {
                 return Err("invalid compiled actor mesh".into());
             }
         }
+        let content = content::Content::builtin();
+        let player = content.names.character_index(&self.scene.player).map(|ix| &content.rules.characters[ix as usize]);
+        if player.is_none_or(|c| c.brain != content::character::Brain::Player) {
+            return Err(format!("the scene's player {:?} is not a builtin Player character", self.scene.player));
+        }
         if let Some(scenario) = &self.scene.scenario {
             scenario.validate()?;
+            if let Some(a) = scenario.agents.iter().find(|a| a.controlled && a.character != self.scene.player) {
+                return Err(format!("scenario agent {} is {:?}, but the scene's player is {:?}", a.id, a.character, self.scene.player));
+            }
             // The scenario must build a world: no hauler inside an obstacle,
             // every dock reachable.
             let obstacles: Vec<_> = self
@@ -516,7 +522,7 @@ impl ScenePack {
                     radius: fx::Fx::quantize(*r),
                 })
                 .collect();
-            sim::World::new_settlement(0, &content::Content::builtin(), scenario, &obstacles)?;
+            sim::World::new_settlement(0, &content, scenario, &obstacles)?;
             let ids: std::collections::BTreeSet<_> =
                 self.skins.iter().map(|s| s.id.as_str()).collect();
             for id in scenario
@@ -715,6 +721,7 @@ mod tests {
             scene: Scene {
                 id: "test".into(),
                 name: "test".into(),
+                player: "exosuit".into(),
                 features: vec![],
                 spawn: [0.0; 3],
                 industrial: true,
@@ -760,6 +767,7 @@ mod tests {
             scene: Scene {
                 id: "terrain".into(),
                 name: "terrain".into(),
+                player: "exosuit".into(),
                 features: vec![],
                 spawn: [0.0; 3],
                 industrial: false,

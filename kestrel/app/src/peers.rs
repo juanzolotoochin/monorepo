@@ -191,7 +191,7 @@ pub fn update(
             attack(
                 s,
                 ticks,
-                scene.has_feature(voxel_assets::SceneFeature::SwiftSword),
+                scene.player().swift_sword(),
             )
         });
         if let (Some(swing), Some(_)) = (swing, attack) {
@@ -217,6 +217,7 @@ pub fn update(
                 airborne,
                 jump: jump_motion(
                     current.avatar.jump,
+                    scene.player().jump(),
                     ticks,
                     current.avatar.height.to_f32(),
                     current.avatar.flight.support.to_f32(),

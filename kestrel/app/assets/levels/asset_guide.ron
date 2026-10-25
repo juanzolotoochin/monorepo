@@ -1,6 +1,7 @@
 Scene(
     id: "asset-guide",
     name: "ASSET GUIDE / CUBE TO CHARACTER",
+    player: "exosuit",
     spawn: (0.0, 0.0, -2.4),
     industrial: false,
     instances: [],

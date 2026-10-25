@@ -1,4 +1,4 @@
-Scene(id: "dig-lab", features: [Digging],
+Scene(id: "dig-lab", player: "exosuit", features: [Digging],
     name: "DIG LAB / OPEN-PIT MINE",
     spawn: (0.0, 0.0, 2.0),
     industrial: false,

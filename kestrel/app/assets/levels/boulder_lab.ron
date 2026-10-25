@@ -1,4 +1,4 @@
-Scene(id: "boulder-lab", features: [],
+Scene(id: "boulder-lab", player: "exosuit", features: [],
     name: "MATERIAL LAB / STONE + METAL + CRYSTAL + POLYMER",
     spawn: (0.0, 0.0, 2.0),
     industrial: false,

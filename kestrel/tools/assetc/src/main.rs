@@ -148,7 +148,7 @@ mod tests {
     use super::*;
     #[test]
     fn missing_prefab_reference_is_a_build_error() {
-        let scene:Scene = ron::from_str("Scene(id:\"bad\",name:\"bad\",spawn:(0.0,0.0,0.0),instances:[(prefab:\"missing\",position:(0.0,0.0,0.0))])").unwrap();
+        let scene:Scene = ron::from_str("Scene(id:\"bad\",name:\"bad\",player:\"exosuit\",spawn:(0.0,0.0,0.0),instances:[(prefab:\"missing\",position:(0.0,0.0,0.0))])").unwrap();
         assert!(assemble(scene, vec![])
             .unwrap_err()
             .contains("unknown prefab missing"));

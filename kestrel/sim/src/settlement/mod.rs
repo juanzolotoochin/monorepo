@@ -23,7 +23,7 @@ pub mod piles;
 
 use std::collections::BTreeMap;
 
-use content::character::{Brain, CharacterDef, CharacterIx, PLAYER_CHARACTER};
+use content::character::{Brain, CharacterDef, CharacterIx};
 use content::scenario::{self, Scenario, Weapon, WeaponTuning};
 use content::Content;
 use fx::{Fx, FxVec2};
@@ -170,8 +170,6 @@ pub struct Settlement {
     /// left out of saves and hashes and restored from content on load.
     #[serde(skip)]
     pub characters: Vec<CharacterDef>,
-    #[serde(default)]
-    pub swift_sword: bool,
     pub scenario: String,
     pub items: Vec<String>,
     pub depots: Vec<DepotState>,
@@ -221,6 +219,9 @@ pub struct SceneSetup {
     /// The settlement, if the scene has one. Without it the world holds just
     /// the player.
     pub scenario: Option<Scenario>,
+    /// The character of every player avatar. A scenario's controlled
+    /// agents must name the same one.
+    pub player: String,
     /// Half-width of the arena when there is no scenario.
     pub extent: Fx,
     pub obstacles: Vec<Disc>,
@@ -228,12 +229,8 @@ pub struct SceneSetup {
     pub doors: Vec<Disc>,
     pub surfaces: Vec<crate::terrain::Surface>,
     pub platforms_only: bool,
-    /// Avatars can dig pits into the ground.
+    /// The ground can be dug, by characters with the Dig ability.
     pub diggable: bool,
-    /// Controlled avatars may jump instead of using the jetpack.
-    pub jump_enabled: bool,
-    pub locomotion: Option<crate::terrain::Locomotion>,
-    pub swift_sword: bool,
     /// Generates the arena's ground as a mine from this seed.
     pub mine: Option<u64>,
     pub spawn: [Fx; 3],
@@ -415,7 +412,6 @@ impl Settlement {
         let tuning = [Weapon::Sword, Weapon::Spear, Weapon::Bow, Weapon::ArcCoil, Weapon::Laser].map(|w| scenario.weapon_tuning(w)).to_vec();
         let settlement = Settlement {
             characters: content.rules.characters.clone(),
-            swift_sword: false,
             base_health: scenario.base_health,
             health: scenario.base_health,
             player_health: scenario.player_health,
@@ -462,11 +458,16 @@ impl Settlement {
         let place = |d: &Disc| Disc { center: FxVec2::new(center.x + d.center.x, center.y + d.center.y), radius: d.radius };
         let obstacles: Vec<Disc> = setup.obstacles.iter().chain(&setup.doors).map(place).collect();
         let mut settlement = match &setup.scenario {
-            Some(scenario) => Settlement::from_scenario(scenario, &obstacles, terrain, content)?,
+            Some(scenario) => {
+                if let Some(a) = scenario.agents.iter().find(|a| a.controlled && a.character != setup.player) {
+                    return Err(format!("agent {} is {:?}, but the scene's player is {:?}", a.id, a.character, setup.player));
+                }
+                Settlement::from_scenario(scenario, &obstacles, terrain, content)?
+            }
             None => {
                 terrain.extent = setup.extent;
                 terrain.obstacles.extend_from_slice(&obstacles);
-                Settlement::from_scenario(&Self::player_only(setup.extent, [setup.spawn[0], setup.spawn[2]]), &[], terrain, content)?
+                Settlement::from_scenario(&Self::player_only(setup.extent, [setup.spawn[0], setup.spawn[2]], &setup.player), &[], terrain, content)?
             }
         };
         terrain.surfaces = setup
@@ -476,9 +477,6 @@ impl Settlement {
             .collect();
         terrain.platforms_only = setup.platforms_only;
         terrain.diggable = setup.diggable;
-        terrain.jump_enabled = setup.jump_enabled;
-        terrain.locomotion = setup.locomotion;
-        settlement.swift_sword = setup.swift_sword;
         if let Some(seed) = setup.mine {
             terrain.generate_mine(seed, at([setup.spawn[0], setup.spawn[2]]));
         }
@@ -516,7 +514,7 @@ impl Settlement {
     }
 
     /// The scenario of a scene without a settlement: just the player.
-    fn player_only(extent: Fx, spawn: [Fx; 2]) -> Scenario {
+    fn player_only(extent: Fx, spawn: [Fx; 2], player: &str) -> Scenario {
         Scenario {
             extent,
             id: "scene".into(),
@@ -531,7 +529,7 @@ impl Settlement {
                 id: "player".into(),
                 label: "YOU".into(),
                 skin: "worker".into(),
-                character: PLAYER_CHARACTER.into(),
+                character: player.into(),
                 position: spawn,
                 capacity: 8,
                 links: Vec::new(),

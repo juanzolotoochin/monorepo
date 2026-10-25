@@ -6,6 +6,12 @@
         movement: (walk: 3.8, run: 5.6),
         // Frames to pick up or put down one unit.
         carry: (transfer: 24),
+        // Hover 1.8 m over the ground ahead, climbing at 5.5 m/s and sinking
+        // at 3; digs take 120 frames, stepping to the tile middle at 1.5 m/s.
+        abilities: [
+            Jetpack(hover: 1.8, climb: 5.5, sink: 3),
+            Dig(time: 120, centering: 1.5),
+        ],
         avatar: (
             // m/s²: speeding up, slowing down, and stopping for a swing.
             acceleration: 26,

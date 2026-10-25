@@ -12,7 +12,7 @@ use bevy::{
 use std::{collections::HashMap, sync::Arc};
 use voxel_assets::{
     content_key, generate_boulder, BoulderRecipe, Collision, Geometry, Instance, Material, MeshData, Model, Prefab,
-    SceneFeature, ScenePack,
+    ScenePack,
 };
 use service::WorldScoped;
 
@@ -198,7 +198,7 @@ fn spawn_boulders(
 ) {
 
     *controls = Controls::default();
-    controls.swift_sword = scene.scene.features.contains(&SceneFeature::SwiftSword);
+    controls.swift_sword = crate::lockstep::builtin_character(&scene.scene.player).swift_sword();
     *feedback = Feedback::default();
     cache.load(&scene, &mut meshes);
     for instance in &scene.scene.instances {
@@ -365,7 +365,9 @@ mod tests {
         let field = library.index("field").unwrap();
         assert_eq!(library.character(field).unwrap().id, library.characters[exosuit].id);
         assert!(library.characters[exosuit].can_locomote);
-        assert!(library.characters[exosuit].can_jump);
+        assert!(!library.characters[exosuit].can_jump, "the exosuit flies");
+        let warden = library.characters.iter().find(|c| c.name == "STARWELL WARDEN").expect("the glade's actor");
+        assert!(warden.can_jump, "the glade exosuit jumps");
         let mining = &library.scenes[0];
         let lab = &library.scenes[1];
         assert_eq!(library.index("mining-deck"), Ok(0));
@@ -390,8 +392,17 @@ mod tests {
             .flat_map(|mesh| mesh.positions.iter().map(|position| position[2]))
             .fold(f32::NEG_INFINITY, f32::max);
         assert!(blade_tip > 0.8, "voxel sword blade was lost during baking");
-        assert!(glade.scene.features.contains(&SceneFeature::Jump));
-        assert!(glade.scene.features.contains(&SceneFeature::SwiftSword));
+        assert_eq!(glade.scene.player, "exosuit_moonlit");
+        for pack in &library.scenes {
+            let motion = pack.scene.style.as_ref().map(|s| s.character_motion).unwrap_or_default();
+            let player = crate::lockstep::builtin_character(&pack.scene.player);
+            let close = |view: f32, sim: fx::Fx| (view - crate::lockstep::view_f32(sim)).abs() < 1e-3;
+            assert!(
+                close(motion.walk_speed, player.movement.walk) && close(motion.run_speed, player.movement.run),
+                "{}: the style poses other speeds than its player moves at",
+                pack.scene.id
+            );
+        }
         assert_eq!(glade.scene.instances.len(), 7);
         assert!(glade.environment.as_ref().is_some_and(|environment| environment.walkable.len() >= 14));
         let Geometry::Baked(rock) = &glade.prefabs[0].geometry else { panic!("glade rock should be baked"); };

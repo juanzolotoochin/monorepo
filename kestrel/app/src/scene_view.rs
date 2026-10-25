@@ -85,6 +85,16 @@ impl SceneView {
         self.pack.scene.features.contains(&feature)
     }
 
+    /// The character every player avatar here is.
+    pub fn player(&self) -> &'static content::character::CharacterDef {
+        crate::lockstep::builtin_character(&self.pack.scene.player)
+    }
+
+    /// The player's jetpack hover height in meters, or 0 without a jetpack.
+    pub fn hover(&self) -> f32 {
+        self.player().jetpack().map_or(0.0, |j| crate::lockstep::view_f32(j.hover))
+    }
+
     pub fn title(&self) -> &str {
         &self.pack.scene.name
     }
