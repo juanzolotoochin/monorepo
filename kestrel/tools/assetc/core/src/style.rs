@@ -44,7 +44,8 @@ pub struct StyleProfile {
 #[serde(default, deny_unknown_fields)]
 pub struct CharacterMotion {
     pub motion_style: MotionStyle,
-    /// Ground speed in meters per second, shared by simulation and posing.
+    /// Ground speed in meters per second, for posing. The simulation moves
+    /// at the scene player character's speeds; keep the two equal.
     pub walk_speed: f32,
     pub run_speed: f32,
     pub arm_swing: f32,

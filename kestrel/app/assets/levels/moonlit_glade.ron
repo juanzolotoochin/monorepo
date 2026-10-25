@@ -1,5 +1,5 @@
 // An atmospheric art study that uses the same compiled architecture and style pipeline.
-Scene(id: "moonlit-glade", player: "exosuit_moonlit", features: [Jump, SwiftSword], name: "MOONLIT GLADE / THE STARWELL", spawn: (0.0, 0.0, 7.0), industrial: false, instances: [
+Scene(id: "moonlit-glade", player: "exosuit_moonlit", features: [], name: "MOONLIT GLADE / THE STARWELL", spawn: (0.0, 0.0, 7.0), industrial: false, instances: [
     (prefab: "glade_rock", position: (-7.0, 0.0, 6.0), scale: 0.85),
     (prefab: "glade_rock", position: (-6.0, 0.0, -2.0), scale: 1.10),
     (prefab: "glade_rock", position: (-8.0, 0.0, -6.0), scale: 0.90),

@@ -94,8 +94,8 @@ pub fn draw_navigation(
             Vec3::new(
                 p.x,
                 crate::jetpack::height(&scene.pack, p).unwrap_or(flight.support)
-                    + if flight.airborne && !scene.has_feature(voxel_assets::SceneFeature::Jump) {
-                        crate::jetpack::HOVER
+                    + if flight.airborne {
+                        scene.hover()
                     } else {
                         0.0
                     },

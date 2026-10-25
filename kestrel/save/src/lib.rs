@@ -26,7 +26,9 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 
 /// 3: settlements refer to character definitions by index.
 /// 4: every agent has a character, haulers included.
-pub const FORMAT_VERSION: u32 = 4;
+/// 5: the jump and swift sword flags and scene speeds leave the settlement
+///    and terrain for character abilities.
+pub const FORMAT_VERSION: u32 = 5;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

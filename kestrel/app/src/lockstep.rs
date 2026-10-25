@@ -387,17 +387,6 @@ fn scene_setup(library: &SceneLibrary, index: usize, cache: &crate::assets::Mode
         }),
         memory_trial: scene.features.contains(&voxel_assets::SceneFeature::MemoryTrial),
         diggable: scene.features.contains(&voxel_assets::SceneFeature::Digging),
-        jump_enabled: scene.features.contains(&voxel_assets::SceneFeature::Jump),
-        locomotion: scene.style.as_ref().and_then(|style| {
-            let motion = style.character_motion;
-            let defaults = voxel_assets::CharacterMotion::default();
-            (motion.walk_speed != defaults.walk_speed || motion.run_speed != defaults.run_speed)
-                .then_some(sim::terrain::Locomotion {
-                    walk: q(motion.walk_speed),
-                    run: q(motion.run_speed),
-                })
-        }),
-        swift_sword: scene.features.contains(&voxel_assets::SceneFeature::SwiftSword),
         mine: scene.mine.as_ref().map(|m| m.seed),
     }
 }
@@ -981,6 +970,13 @@ pub fn follow_avatar(
 pub fn builtin_content() -> &'static Content {
     static CONTENT: std::sync::LazyLock<Content> = std::sync::LazyLock::new(Content::builtin);
     &CONTENT
+}
+
+/// A character from the builtin content the sim also uses.
+pub fn builtin_character(name: &str) -> &'static content::character::CharacterDef {
+    let content = builtin_content();
+    let ix = content.names.character_index(name).unwrap_or_else(|| panic!("unknown character {name:?}"));
+    &content.rules.characters[ix as usize]
 }
 
 /// A simulation duration in view seconds, so view timings follow the sim's

@@ -201,7 +201,8 @@ fn space_lifts_and_releases_and_scene_switch_restores_deck() {
             .clear();
     }
     let p = player_position(app.world_mut());
-    assert!((p.y - crate::jetpack::HOVER).abs() < 0.01);
+    let hover = app.world().resource::<crate::scene_view::SceneView>().hover();
+    assert!(hover > 1.0 && (p.y - hover).abs() < 0.01);
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .release(KeyCode::Space);

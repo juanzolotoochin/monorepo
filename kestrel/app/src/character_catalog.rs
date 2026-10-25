@@ -1,4 +1,5 @@
-//! Discover inspectable characters and their capabilities from baked scene packs.
+//! Discover inspectable characters from baked scene packs. What a rig can do
+//! comes from the character definition of the scene's player.
 use std::{collections::HashSet, ops::Deref};
 use voxel_assets::{ActorPart, ScenePack};
 
@@ -30,6 +31,7 @@ impl CharacterCatalog {
         let mut ids = HashSet::new();
         let mut entries = Vec::new();
         for (scene_index, pack) in scenes.iter().enumerate() {
+            let can_jump = crate::lockstep::builtin_character(&pack.scene.player).jump().is_some();
             if pack.scene.style.is_none() && pack.actor.is_empty()
                 && ids.insert("builtin:exosuit".to_string()) {
                 entries.push(CharacterEntry {
@@ -39,7 +41,7 @@ impl CharacterCatalog {
                     name: "EXOSUIT".into(),
                     can_locomote: true,
                     weapon: Some(content::scenario::Weapon::Sword),
-                    can_jump: true,
+                    can_jump,
                 });
             }
             let Some(style) = pack.scene.style.as_ref() else { continue };
@@ -57,7 +59,7 @@ impl CharacterCatalog {
                     // mesh coverage does not determine motion capabilities.
                     can_locomote: true,
                     weapon: if has_weapon_mesh { style.actor_weapon } else { None },
-                    can_jump: true,
+                    can_jump,
                 });
             }
             for skin in &pack.skins {

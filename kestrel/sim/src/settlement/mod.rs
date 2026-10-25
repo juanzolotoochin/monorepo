@@ -170,8 +170,6 @@ pub struct Settlement {
     /// left out of saves and hashes and restored from content on load.
     #[serde(skip)]
     pub characters: Vec<CharacterDef>,
-    #[serde(default)]
-    pub swift_sword: bool,
     pub scenario: String,
     pub items: Vec<String>,
     pub depots: Vec<DepotState>,
@@ -231,12 +229,8 @@ pub struct SceneSetup {
     pub doors: Vec<Disc>,
     pub surfaces: Vec<crate::terrain::Surface>,
     pub platforms_only: bool,
-    /// Avatars can dig pits into the ground.
+    /// The ground can be dug, by characters with the Dig ability.
     pub diggable: bool,
-    /// Controlled avatars may jump instead of using the jetpack.
-    pub jump_enabled: bool,
-    pub locomotion: Option<crate::terrain::Locomotion>,
-    pub swift_sword: bool,
     /// Generates the arena's ground as a mine from this seed.
     pub mine: Option<u64>,
     pub spawn: [Fx; 3],
@@ -418,7 +412,6 @@ impl Settlement {
         let tuning = [Weapon::Sword, Weapon::Spear, Weapon::Bow, Weapon::ArcCoil, Weapon::Laser].map(|w| scenario.weapon_tuning(w)).to_vec();
         let settlement = Settlement {
             characters: content.rules.characters.clone(),
-            swift_sword: false,
             base_health: scenario.base_health,
             health: scenario.base_health,
             player_health: scenario.player_health,
@@ -484,9 +477,6 @@ impl Settlement {
             .collect();
         terrain.platforms_only = setup.platforms_only;
         terrain.diggable = setup.diggable;
-        terrain.jump_enabled = setup.jump_enabled;
-        terrain.locomotion = setup.locomotion;
-        settlement.swift_sword = setup.swift_sword;
         if let Some(seed) = setup.mine {
             terrain.generate_mine(seed, at([setup.spawn[0], setup.spawn[2]]));
         }

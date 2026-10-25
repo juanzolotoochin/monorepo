@@ -287,12 +287,8 @@ pub enum SceneFeature {
     FlightHud,
     /// Track the player with the scene camera while preserving its authored offset.
     CameraFollow,
-    /// Avatars dig pits into the deck.
+    /// The ground can be dug, by player characters with the Dig ability.
     Digging,
-    /// Space triggers a grounded jump instead of held jetpack flight.
-    Jump,
-    /// Use the quick three stroke sword cadence.
-    SwiftSword,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScenePack {
