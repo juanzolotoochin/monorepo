@@ -128,7 +128,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
     let simulation = options.simulation;
     let offscreen = options.frames_dir.is_some();
     let fps = options.fps();
-    let deterministic = simulation || options.script.is_some();
+    let deterministic = simulation || options.script.is_some() || options.studio_frames.is_some();
     let menus = options.menus();
     let mut app = App::new();
     app.insert_resource(options)

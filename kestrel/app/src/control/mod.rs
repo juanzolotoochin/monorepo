@@ -30,6 +30,7 @@ pub struct Options {
     pub simulation: bool,
     pub script: Option<Script>,
     pub frames_dir: Option<String>,
+    pub studio_frames: Option<usize>,
     pub report: Option<String>,
     pub trace: Option<String>,
     pub audio: Option<String>,
@@ -54,6 +55,10 @@ impl Options {
             simulation: args.iter().any(|a| a == "--simulation"),
             script,
             frames_dir: value("--frames-dir").map(str::to_string),
+            studio_frames: value("--studio-video-frames")
+                .map(str::parse)
+                .transpose()
+                .map_err(|e| format!("Invalid studio frame count: {e}"))?,
             report: value("--report").map(str::to_string),
             trace: value("--trace").map(str::to_string),
             audio: value("--audio-wav").map(str::to_string),
@@ -63,8 +68,18 @@ impl Options {
                 .map_err(|e| format!("Invalid port: {e}"))?,
             address_file: value("--control-address-file").map(str::to_string),
         };
-        if options.frames_dir.is_some() && (options.script.is_none() || options.simulation) {
-            return Err("Frame recording requires a demo script and GPU rendering".into());
+        if options.frames_dir.is_some()
+            && ((options.script.is_none() && options.studio_frames.is_none()) || options.simulation)
+        {
+            return Err("Frame recording requires a demo script or studio frame count and GPU rendering".into());
+        }
+        if options.studio_frames.is_some_and(|frames| frames == 0)
+            || (options.studio_frames.is_some()
+                && (options.script.is_some()
+                    || options.frames_dir.is_none()
+                    || !args.iter().any(|arg| arg == "--character-studio")))
+        {
+            return Err("Studio video requires --character-studio, --frames-dir and a positive frame count".into());
         }
         if options.simulation && options.script.is_none() && options.port.is_none() {
             return Err("Simulation mode needs a script or control port".into());
@@ -145,6 +160,9 @@ impl Hub {
     /// A script or a control client is waiting for the first world.
     pub fn waiting_for_world(&self) -> bool {
         (self.options.script.is_some() || self._server.is_some()) && self.ready.is_none()
+    }
+    pub fn first_capture_tick(&self) -> bool {
+        self.tick == self.warmup + 1
     }
     pub fn new(options: Options) -> Result<Self, String> {
         let (tx, rx) = mpsc::sync_channel(64);

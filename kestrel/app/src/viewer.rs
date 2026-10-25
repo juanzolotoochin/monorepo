@@ -521,6 +521,8 @@ pub use ui::{input, setup};
 pub fn drive(
     time: Res<Time>,
     studio: Option<Res<StudioPack>>,
+    options: Res<crate::control::Options>,
+    hub: Res<crate::control::Hub>,
     mut viewer: ResMut<Viewer>,
     mut controls: ResMut<Controls>,
     mut player: Single<&mut Transform, With<Player>>,
@@ -530,6 +532,17 @@ pub fn drive(
 ) {
     if !viewer.active {
         return;
+    }
+    if options.studio_frames.is_some() {
+        if hub.in_warmup() {
+            viewer.seek_frame(0);
+            viewer.paused = true;
+        } else if hub.first_capture_tick() {
+            viewer.seek_frame(0);
+            viewer.paused = true;
+        } else {
+            viewer.paused = false;
+        }
     }
     if !viewer.paused {
         viewer.advance_clock(time.delta_secs());

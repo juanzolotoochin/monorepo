@@ -1,5 +1,67 @@
 # Kestrel // 07
 
+## Share an optimized build with developers
+
+`//kestrel/app:share_to_devs` builds optimized Linux x64 and Windows x64
+executables, uploads both to a Google Drive folder, and posts both labeled
+links in one message to the developer Telegram group. Run the publisher on a
+Linux x64 machine; it cross-compiles the Windows executable with the configured
+MSVC toolchain. The publisher is written in Go. Folder permissions control who
+can download the builds; share the folder with the developers before
+publishing. The tool does not change Drive permissions.
+
+1. In Google Cloud Console, select a project and enable the **Google Drive API**.
+   For a folder in a personal **My Drive**, configure the OAuth consent screen,
+   add your Google account as a test user if the app is in Testing, then create
+   an OAuth client of type **Desktop app**. Save its downloaded JSON as
+   `.credentials/google-oauth-client.json`. Run
+   `bazel run --config=full_local -c opt //kestrel/app:share_to_devs -- --authorize-drive`
+   and open the URL it prints. Sign in with the account that owns the folder.
+   Enable the **Google Picker API** in the same project. The sign-in requests
+   the limited `drive.file` scope and asks you to select the configured folder
+   in the Picker. The app can access that selected folder and files it creates,
+   rather than all files in your Drive.
+   The callback saves a refreshable user token in the ignored
+   `.credentials/google-user-token.json`; later builds use it automatically.
+   For a Google Workspace **shared drive** instead, a service account may be
+   used: save its JSON key in `.credentials/`, set
+   `google_service_account_file` in `.credentials/game-share.json` to its
+   filename, and give the account write access to the shared drive.
+2. Copy the destination folder ID from its Drive URL, after `/folders/`.
+3. In Telegram, message [@BotFather](https://t.me/BotFather) with `/newbot` and
+   save the token it returns. Add that bot to the developer group or channel
+   and permit it to post messages. For a public channel or supergroup, use its
+   `@username` as the chat ID. For a private group, send a command addressed to
+   the bot in the group and read the numeric `message.chat.id` from its
+   `getUpdates` response.
+4. Copy `.credentials/game-share.example.json` to
+   `.credentials/game-share.json` and fill in the folder ID, bot token, and chat
+   ID. Both local credential files are ignored by Git. Then run the target:
+
+```sh
+bazel run --config=full_local -c opt //kestrel/app:share_to_devs
+```
+
+Environment variables `GOOGLE_APPLICATION_CREDENTIALS`,
+`GOOGLE_DRIVE_FOLDER_ID`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID` can
+override the local files. A short-lived user OAuth token in
+`GOOGLE_DRIVE_ACCESS_TOKEN` overrides the saved user token.
+
+For a private group, you can inspect updates with
+`curl "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates"` after
+the bot has joined and received a group command. If the token is only in the
+JSON file, temporarily export it to run this command. The publisher reads
+local credentials only at runtime.
+
+To build without uploading or posting, run
+`bazel run --config=full_local -c opt //kestrel/app:share_to_devs -- --dry-run`.
+To upload to Drive without posting to Telegram, run
+`bazel run --config=full_local -c opt //kestrel/app:share_to_devs -- --drive-only`.
+The game executable and assets are self-contained. Download the binary for
+your OS, make the Linux one executable (`chmod +x kestrel-linux-*`), and run it
+on an x64 machine. The Windows build may require the Visual C++ x64
+Redistributable described below.
+
 ## Launch menu
 
 Run `bazel run --config=full_local -c opt //kestrel/app:demo` to open the launch
