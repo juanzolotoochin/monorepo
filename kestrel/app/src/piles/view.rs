@@ -112,7 +112,7 @@ pub fn setup_scene(
                 Visibility::default(),
                 Obstacle(Disc {
                     center: position,
-                    radius: 0.8,
+                    radius: crate::obstacles::DISPENSER_RADIUS,
                 }),
             ))
             .with_children(|p| {
@@ -379,7 +379,7 @@ fn spawn_collector(commands: &mut Commands, assets: &LabAssets, position: Vec3) 
             LabEntity,
             Transform::from_translation(position),
             Visibility::default(),
-            Obstacle(Disc { center: position, radius: 0.9 }),
+            Obstacle(Disc { center: position, radius: crate::obstacles::COLLECTOR_RADIUS }),
         ))
         .with_children(|p| {
             chunk(p, assets, &assets.trim, Vec3::new(0.0, 0.1, 0.0), Vec3::new(1.7, 0.2, 1.7));

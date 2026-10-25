@@ -1,8 +1,9 @@
 # Service layers
 
 Status: design agreed on 2026-10-24. Migration steps 1 (the framework,
-`kestrel/service`) and 2 (`kestrel/app`'s frame in phases) are done; no service
-exists yet. The next feature, the main menu, is the first one to add some.
+`kestrel/service`), 2 (`kestrel/app`'s frame in phases) and 3 (obstacles from scene
+data) are done; no service exists yet. The next feature, the main menu, is
+the first one to add some.
 
 The game's front end needs one answer to "where does this flow or system
 live, and for how long?". This proposal groups front-end code into
@@ -300,7 +301,12 @@ passing.
    use.
 2. Put today's systems into the four phases, without changing their order.
 3. Build the world from scene data instead of from `Obstacle` entities, so a
-   World can start before its views exist.
+   World can start before its views exist. Done: `app/src/obstacles.rs` lists
+   each scene's discs in a fixed order (architecture, boulders, industrial
+   props, pile fixtures, memory wall) from the pack and constants the views
+   share. Boulder radii come from the generated models in `ModelCache`, so
+   the scene's models must be loaded first. The terrain hash changed once
+   (order only); the discs matched today's in all 10 scenes.
 4. Give `session::Session` its world slot and world number, and change scenes
    by reloading the slot instead of starting a new session.
 5. Split `lockstep::Game` as above, then move the features into World services

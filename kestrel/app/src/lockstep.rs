@@ -22,7 +22,6 @@ use sim::{CommandKind, World as SimWorld};
 
 use crate::assets::SceneLibrary;
 use crate::character::Player;
-use crate::combat::Obstacle;
 use crate::gameplay::Controls;
 
 /// The world seed. Scenes don't use randomness outside combat rolls, which are
@@ -221,23 +220,24 @@ impl Game {
     }
 }
 
-/// Builds the scene's world once its entities (and obstacles) exist.
+/// Builds the scene's world from its data, once `assets::switch_scene` has
+/// loaded the scene's models (boulder radii come from them).
 pub fn build_world(world: &mut World) {
     let index = world.resource::<SceneLibrary>().current;
     if world.resource::<Game>().scene == Some(index) || index == usize::MAX {
         return;
     }
-    let mut doors = world.query_filtered::<&Obstacle, With<crate::palimpsest::Door>>();
-    let door_discs: Vec<_> = doors.iter(world).map(|o| o.0).collect();
-    let mut obstacles = world.query_filtered::<&Obstacle, Without<crate::palimpsest::Door>>();
     let disc = |d: &crate::navigation::Disc| sim::terrain::Disc {
         center: FxVec2::new(Fx::quantize(d.center.x), Fx::quantize(d.center.z)),
         radius: Fx::quantize(d.radius),
     };
-    let obstacle_discs: Vec<_> = obstacles.iter(world).map(|o| disc(&o.0)).collect();
     let library = world.resource::<SceneLibrary>();
     let pack = &library.scenes[index];
     let scene = &pack.scene;
+    let cache = world.resource::<crate::assets::ModelCache>();
+    let found = crate::obstacles::scene_obstacles(pack, |instance| cache.collision_radius(pack, instance));
+    let obstacle_discs: Vec<_> = found.discs.iter().map(disc).collect();
+    let door_discs: Vec<_> = found.doors.iter().map(disc).collect();
     let q = Fx::quantize;
     let surface = |min: [f32; 2], max: [f32; 2], height: f32| sim::terrain::Surface {
         min: FxVec2::new(q(min[0]), q(min[1])),
@@ -257,7 +257,7 @@ pub fn build_world(world: &mut World) {
         scenario: scene.scenario.clone(),
         extent: q(library.extent()),
         obstacles: obstacle_discs,
-        doors: door_discs.iter().map(disc).collect(),
+        doors: door_discs,
         surfaces,
         platforms_only,
         spawn: scene.spawn.map(q),

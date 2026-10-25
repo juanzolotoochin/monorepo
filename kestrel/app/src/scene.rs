@@ -5,7 +5,7 @@ use crate::{
     combat::{Obstacle, ACTIVE_END, ATTACK_END, REBOUND_END, WINDUP},
     effects::{CameraRig, FxAssets},
     gameplay::Controls,
-    navigation::Disc,
+    obstacles::{BULKHEADS, CRATES, REACTOR},
     sound::Sound,
 };
 use bevy::{
@@ -237,19 +237,12 @@ pub fn ensure_environment(
     // Boulders come from compiled scene packs (see assets.rs).
 
     // Back-left coolant relay: chunky housing, fins, emissive core and conduits.
-    let reactor = Vec3::new(-5.0, 0.0, -5.3);
     commands
         .spawn((
-            Transform::from_translation(reactor),
+            Transform::from_translation(REACTOR.center),
             Visibility::default(),
-            Obstacle(Disc {
-                center: reactor,
-                radius: 1.45,
-            }),
-            IndustrialProp(Disc {
-                center: reactor,
-                radius: 1.45,
-            }),
+            Obstacle(REACTOR),
+            IndustrialProp(REACTOR),
         ))
         .with_children(|p| {
             block(
@@ -333,20 +326,13 @@ pub fn ensure_environment(
     }
 
     // Industrial bulkhead: interrupted silhouette, antennas and warning lamps.
-    for (x, height) in [(-7.7, 2.8), (-3.0, 1.55), (1.5, 1.8), (6.7, 3.4)] {
-        let center = Vec3::new(x, 0.0, -7.4);
+    for (bulkhead, height) in BULKHEADS.into_iter().zip([2.8, 1.55, 1.8, 3.4]) {
         commands
             .spawn((
-                Transform::from_translation(center),
+                Transform::from_translation(bulkhead.center),
                 Visibility::default(),
-                Obstacle(Disc {
-                    center,
-                    radius: 0.72,
-                }),
-                IndustrialProp(Disc {
-                    center,
-                    radius: 0.72,
-                }),
+                Obstacle(bulkhead),
+                IndustrialProp(bulkhead),
             ))
             .with_children(|p| {
                 block(
@@ -412,23 +398,13 @@ pub fn ensure_environment(
             });
     }
     // Low supply crates, not arbitrary decoration the character can walk through.
-    for center in [
-        Vec3::new(-6.7, 0.0, -0.9),
-        Vec3::new(6.5, 0.0, 0.3),
-        Vec3::new(-3.2, 0.0, 5.7),
-    ] {
+    for crate_disc in CRATES {
         commands
             .spawn((
-                Transform::from_translation(center),
+                Transform::from_translation(crate_disc.center),
                 Visibility::default(),
-                Obstacle(Disc {
-                    center,
-                    radius: 0.66,
-                }),
-                IndustrialProp(Disc {
-                    center,
-                    radius: 0.66,
-                }),
+                Obstacle(crate_disc),
+                IndustrialProp(crate_disc),
             ))
             .with_children(|p| {
                 block(
