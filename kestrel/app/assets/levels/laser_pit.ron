@@ -7,9 +7,13 @@ Scene(id: "laser-pit", features: [CameraFollow],
         (min: (-15.0, -15.0), max: (15.0, 15.0), height: 0.0),
     ])),
     architecture: [
-        // Flat combat floor and a low rim; the authored colliders below match
-        // the visible walls and cover, so both movement and lasers use them.
+        // The inlaid grid replaces floor voxels on the same baked mesh; it
+        // does not add coplanar faces over the walking surface.
         (kind: Box, walkable: true, position: (0.0, -0.18, 0.0), size: (30.0, 0.36, 30.0), material: "stone"),
+        (kind: Box, position: (0.0, -0.18, -13.35), size: (30.0, 0.36, 0.15), repeat: (1, 1, 10), spacing: (0.0, 0.0, 3.0), material: "floor_joint"),
+        (kind: Box, position: (-13.35, -0.18, 0.0), size: (0.15, 0.36, 30.0), repeat: (10, 1, 1), spacing: (3.0, 0.0, 0.0), material: "floor_joint"),
+        // The authored colliders below match the visible walls and cover, so
+        // both movement and lasers use them.
         (kind: Box, position: (-14.5, 1.2, -13.0), size: (0.85, 2.4, 1.05), repeat: (1, 1, 27), spacing: (0.0, 0.0, 1.0), material: "metal", solid_radius: Some(0.68)),
         (kind: Box, position: (14.5, 1.2, -13.0), size: (0.85, 2.4, 1.05), repeat: (1, 1, 27), spacing: (0.0, 0.0, 1.0), material: "metal", solid_radius: Some(0.68)),
         (kind: Box, position: (-13.0, 1.2, -14.5), size: (1.05, 2.4, 0.85), repeat: (27, 1, 1), spacing: (1.0, 0.0, 0.0), material: "metal", solid_radius: Some(0.68)),
