@@ -640,12 +640,34 @@ pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
     let sim_tick = service.and_then(SessionService::world).map(|w| w.tick());
     let network = service.filter(|s| s.networked()).map(|s| s.status.clone());
     let peers = crate::peers::snapshot(world);
-    let result = json!({"telemetry":telemetry,"settlement":settlement,"version":VERSION,"tick":hub.tick,"sim_tick":sim_tick,"network":network,"peers":peers,"scene":scene,"player":{"position":position.to_array(),"movement":movement,"cargo":cargo,"jetpack":jetpack},"terrain":terrain,"digging":digging,"memory":memory,"style":style,"piles":piles,"totals":totals,"visible_mineral_units":visible_units,"airborne_units":airborne,"airborne":flying,"targets":targets,"obstacles":obstacles,"active_command":hub.active.as_ref().map(|a|&a.envelope.request)});
+    let debug_ui = debug_ui_snapshot(world);
+    let result = json!({"debug_ui":debug_ui,"telemetry":telemetry,"settlement":settlement,"version":VERSION,"tick":hub.tick,"sim_tick":sim_tick,"network":network,"peers":peers,"scene":scene,"player":{"position":position.to_array(),"movement":movement,"cargo":cargo,"jetpack":jetpack},"terrain":terrain,"digging":digging,"memory":memory,"style":style,"piles":piles,"totals":totals,"visible_mineral_units":visible_units,"airborne_units":airborne,"airborne":flying,"targets":targets,"obstacles":obstacles,"active_command":hub.active.as_ref().map(|a|&a.envelope.request)});
     crate::telemetry::elapsed(world, "inspection_snapshot", started);
     world
         .resource_mut::<crate::telemetry::Telemetry>()
         .count("snapshot_calls", 1);
     result
+}
+
+/// The debug overlay and what gameplay input currently sees.
+fn debug_ui_snapshot(world: &World) -> Value {
+    let Some(state) = world.get_resource::<debug_ui::DebugUi>() else { return Value::Null };
+    let open: Vec<String> = world.get_resource::<debug_ui::ImguiManager>().map_or_else(Vec::new, |manager| {
+        manager
+            .categories()
+            .into_iter()
+            .flat_map(|category| {
+                category.entries.into_iter().filter(|(_, handle, id)| manager.is_open(*handle, id)).map(move |(name, ..)| format!("{}/{name}", category.name))
+            })
+            .collect()
+    });
+    let input = world.get_resource::<debug_ui::GameInput>();
+    let mut keys: Vec<String> = input.map_or_else(Vec::new, |i| i.keys().get_pressed().map(|k| format!("{k:?}")).collect());
+    let mut buttons: Vec<String> = input.map_or_else(Vec::new, |i| i.mouse().get_pressed().map(|b| format!("{b:?}")).collect());
+    keys.sort();
+    buttons.sort();
+    let capture = input.map(debug_ui::GameInput::capture).unwrap_or_default();
+    json!({"interactive":state.interactive(),"visible":state.visible(),"passes":state.passes(),"extra_passes":state.extra_passes(),"open":open,"capture":{"keyboard":capture.keyboard,"pointer":capture.pointer},"game_keys":keys,"game_buttons":buttons,"cancellations":input.map_or(0, debug_ui::GameInput::cancellations)})
 }
 
 pub fn begin(world: &mut World) {

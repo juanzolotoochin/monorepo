@@ -44,7 +44,7 @@ fn block(world: &mut World, pos: Vec3, size: Vec3, material: Handle<StandardMate
 /// R starts the trial over: its pieces are rebuilt and the view's copy of
 /// the recording dropped.
 pub(super) fn reset(world: &mut World) {
-    if !world.resource::<ButtonInput<KeyCode>>().just_pressed(KeyCode::KeyR) {
+    if !world.resource::<debug_ui::GameInput>().keys().just_pressed(KeyCode::KeyR) {
         return;
     }
     let old: Vec<_> = world.query_filtered::<Entity, With<Trial>>().iter(world).collect();

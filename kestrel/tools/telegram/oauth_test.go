@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -59,12 +60,16 @@ func TestUserDriveTokenRefresh(t *testing.T) {
 	if err := json.Unmarshal(data, &saved); err != nil || saved.AccessToken != "fresh-access" || saved.RefreshToken != "saved-refresh" {
 		t.Fatalf("saved refreshed token: %+v, %v", saved, err)
 	}
-	info, err := os.Stat(tokenPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0600 {
-		t.Fatalf("token file permissions: %v", info.Mode())
+	// Unix permission bits are checked on Linux only for now: Windows has
+	// none and reports every writable file as 0666.
+	if runtime.GOOS == "linux" {
+		info, err := os.Stat(tokenPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0600 {
+			t.Fatalf("token file permissions: %v", info.Mode())
+		}
 	}
 }
 

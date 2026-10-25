@@ -45,6 +45,9 @@ rust_binary(
 rust_test(
     name = "bench_test",
     size = "small",
+    # Wall-clock tick budget: fails when the machine is busy (81 ms vs a 10 ms
+    # budget during a parallel build). See kestrel/docs/flaky-tests.md.
+    flaky = True,
     srcs = ["bench_test.rs"],
     edition = "2021",
     deps = [

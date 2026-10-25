@@ -1098,7 +1098,7 @@ mod tests {
         viewer.character = ox;
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .insert_resource(ButtonInput::<KeyCode>::default())
+            .init_resource::<debug_ui::GameInput>()
             .init_resource::<NextState<Front>>()
             .insert_resource(library)
             .insert_resource(viewer)

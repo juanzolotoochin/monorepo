@@ -140,7 +140,7 @@ pub fn join(address: &str) -> Result<Network, String> {
 
 /// Escape quits (when there is no menu to go back to); M mutes.
 fn app_keys(
-    keys: Res<ButtonInput<KeyCode>>,
+    input: Res<debug_ui::GameInput>,
     flow: Res<Flow>,
     options: Res<crate::control::Options>,
     mut exit: MessageWriter<AppExit>,
@@ -149,6 +149,7 @@ fn app_keys(
     if flow.typing {
         return;
     }
+    let keys = input.keys();
     if keys.just_pressed(KeyCode::Escape) && !options.menus() {
         exit.write(AppExit::Success);
     }

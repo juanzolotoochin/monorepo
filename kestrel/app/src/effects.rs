@@ -6,7 +6,7 @@ use crate::{
     peers::Peer,
     style::WeaponMuzzle,
 };
-use bevy::{camera::ScalingMode, input::mouse::AccumulatedMouseScroll, prelude::*};
+use bevy::{camera::ScalingMode, prelude::*};
 use voxel_assets::ImpactResponse;
 
 /// Particles, flashes and camera shake (World layer).
@@ -555,11 +555,11 @@ pub fn update_effects(
 pub fn camera_feedback(
     time: Res<Time>,
     feedback: Res<Feedback>,
-    scroll: Res<AccumulatedMouseScroll>,
+    input: Res<debug_ui::GameInput>,
     camera: Single<(&mut Transform, &mut Projection, &mut CameraRig), With<Camera>>,
 ) {
     let (mut transform, mut projection, mut rig) = camera.into_inner();
-    rig.zoom = (rig.zoom - scroll.delta.y * 0.8).clamp(3.0, 26.0);
+    rig.zoom = (rig.zoom - input.scroll().y * 0.8).clamp(3.0, 26.0);
     if let Projection::Orthographic(p) = &mut *projection {
         if let ScalingMode::FixedVertical { viewport_height } = &mut p.scaling_mode {
             *viewport_height +=

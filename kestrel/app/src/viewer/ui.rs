@@ -241,7 +241,7 @@ pub fn setup(
 }
 
 pub fn input(
-    keys: Res<ButtonInput<KeyCode>>,
+    input: Res<debug_ui::GameInput>,
     mut viewer: ResMut<Viewer>,
     library: Res<SceneLibrary>,
     mut front: ResMut<NextState<Front>>,
@@ -251,6 +251,7 @@ pub fn input(
     if !viewer.active {
         return;
     }
+    let keys = input.keys();
     if keys.just_pressed(KeyCode::ArrowRight) {
         viewer.paused = true;
         viewer.step_frame();

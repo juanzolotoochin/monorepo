@@ -381,7 +381,8 @@ fn scene_setup(library: &SceneLibrary, index: usize, cache: &crate::assets::Mode
 
 /// The digit keys and F4 ask to move everyone to a scene (a host's request; see
 /// `SessionService::request_scene`).
-fn scene_keys(keys: Res<ButtonInput<KeyCode>>, library: Res<SceneLibrary>, mut service: ResMut<SessionService>) {
+fn scene_keys(input: Res<debug_ui::GameInput>, library: Res<SceneLibrary>, mut service: ResMut<SessionService>) {
+    let keys = input.keys();
     const KEYS: [KeyCode; 10] = [
         KeyCode::Digit1,
         KeyCode::Digit2,
@@ -949,12 +950,13 @@ pub fn mirror_settlement(
 
 /// Keyboard movement: camera-relative walking, the jetpack, digging, and respawning.
 pub fn keyboard_input(
-    keys: Res<ButtonInput<KeyCode>>,
+    input: Res<debug_ui::GameInput>,
     scene: Res<SceneView>,
     mut controls: ResMut<Controls>,
     mut service: ResMut<SessionService>,
     mut control: ResMut<PlayerControl>,
 ) {
+    let keys = input.keys();
     let Some(agent) = service.player() else { return };
     if keys.just_pressed(KeyCode::KeyR) {
         service.command(CommandKind::Respawn { agent });
@@ -995,8 +997,7 @@ pub fn keyboard_input(
 
 /// Right click (held) walks to the cursor.
 pub fn mouse_input(
-    keys: Res<ButtonInput<KeyCode>>,
-    buttons: Res<ButtonInput<MouseButton>>,
+    input: Res<debug_ui::GameInput>,
     time: Res<Time>,
     camera: Single<(&Camera, &GlobalTransform)>,
     window: Single<&Window>,
@@ -1005,6 +1006,7 @@ pub fn mouse_input(
     mut service: ResMut<SessionService>,
     mut control: ResMut<PlayerControl>,
 ) {
+    let (keys, buttons) = (input.keys(), input.mouse());
     let run = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     controls.repath -= time.delta_secs();
     if buttons.pressed(MouseButton::Right)
@@ -1022,8 +1024,7 @@ pub fn mouse_input(
 
 /// Shift + left click attacks toward the cursor; Z/X/C/V pick a weapon.
 pub fn attack_input(
-    keys: Res<ButtonInput<KeyCode>>,
-    buttons: Res<ButtonInput<MouseButton>>,
+    input: Res<debug_ui::GameInput>,
     camera: Single<(&Camera, &GlobalTransform)>,
     window: Single<&Window>,
     scene: Res<SceneView>,
@@ -1031,6 +1032,7 @@ pub fn attack_input(
     mut service: ResMut<SessionService>,
     mut control: ResMut<PlayerControl>,
 ) {
+    let (keys, buttons) = (input.keys(), input.mouse());
     use content::scenario::Weapon;
     if let Some(scenario) = scene.scene().scenario.as_ref() {
         for (key, weapon) in [(KeyCode::KeyZ, Weapon::Sword), (KeyCode::KeyX, Weapon::Spear), (KeyCode::KeyC, Weapon::Bow), (KeyCode::KeyV, Weapon::ArcCoil)] {
@@ -1045,8 +1047,10 @@ pub fn attack_input(
         .zip(service.player_view_position())
         .map(|(point, origin)| crate::navigation::flat(point - origin).normalize_or_zero())
         .filter(|aim| aim.length_squared() > 0.0);
+    // While the debug UI has the pointer, keep the last aim.
+    let pointer_free = !input.capture().pointer && !input.ui_owns_pointer();
     if controls.weapon == Weapon::Laser {
-        if let Some(aim) = cursor_aim {
+        if let Some(aim) = cursor_aim.filter(|_| pointer_free) {
             controls.aim = Some(aim);
             control.aim(&mut service, aim);
         }

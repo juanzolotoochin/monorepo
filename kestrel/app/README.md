@@ -220,6 +220,7 @@ startup sequence; run it on Windows with:
 | R | Reset character position and actions |
 | M | Mute / unmute |
 | Esc | Pause overlay: Resume, Leave to menu, Quit (the world keeps running). Quits in scripted runs |
+| / | Show or hide the debug overlay (windowed runs): a menu bar of debug windows, such as Diagnostics → Frame timing. See [debug_ui](../debug_ui/README.md) |
 
 Move within about two world units of a rock and strike toward it. The blade
 has a deliberate wind-up, fast cut and long recovery. Contact stops the blade,
@@ -691,6 +692,9 @@ update per frame and how many ticks it ran, and each world tick split into its
 stages (`commands`, `self update`, `read`, `merge`, `apply`, `housekeeping`,
 `hash`, from `sim::World::stage_times`) plus copying the settlement for the
 view. Each line is the mean / p95 in milliseconds over the last 240 samples.
+The same numbers, with a graph of recent frame times, are in the debug overlay
+(`/`) under **Diagnostics → Frame timing**, and every counter and gauge under
+**Diagnostics → Counters and gauges**.
 
 Live inspection, script receipts,
 and demo frame traces include a versioned `telemetry` object. Timing histories

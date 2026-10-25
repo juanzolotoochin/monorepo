@@ -18,6 +18,9 @@ rust_library(
 rust_test(
     name = "session_test",
     size = "small",
+    # The two UDP tests run for fixed real time and fail when the machine is
+    # busy. See kestrel/docs/flaky-tests.md.
+    flaky = True,
     compile_data = ["//kestrel/app/assets:levels/combat_arena_supply.ron"],
     crate = ":session",
     edition = "2021",

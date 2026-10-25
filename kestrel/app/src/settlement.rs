@@ -285,7 +285,7 @@ pub fn tick(world: &mut World) {
         return;
     }
     // Networked games can't pause: everyone shares one clock.
-    if world.resource::<ButtonInput<KeyCode>>().just_pressed(KeyCode::KeyP)
+    if world.resource::<debug_ui::GameInput>().keys().just_pressed(KeyCode::KeyP)
         && !world.resource::<crate::lockstep::SessionService>().networked()
     {
         let mut service = world.resource_mut::<crate::lockstep::SessionService>();
@@ -1075,13 +1075,12 @@ pub fn input(world: &mut World) {
     if world.resource::<Settlement>().simulation.is_none() {
         return;
     }
-    let keys = world.resource::<ButtonInput<KeyCode>>();
+    let input = world.resource::<debug_ui::GameInput>();
+    let keys = input.keys();
     let toggle = keys.just_pressed(KeyCode::KeyE);
     let deposit = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-    let manual = world
-        .resource::<ButtonInput<MouseButton>>()
-        .pressed(MouseButton::Right)
+    let manual = input.mouse().pressed(MouseButton::Right)
         || [KeyCode::KeyW, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD]
             .iter()
             .any(|k| keys.pressed(*k));
@@ -1119,10 +1118,7 @@ pub fn input(world: &mut World) {
             world.resource_mut::<Settlement>().notice = format!("{id} {}", if enabled { "enabled" } else { "paused" });
         }
     }
-    if shift
-        || !world
-            .resource::<ButtonInput<MouseButton>>()
-            .just_pressed(MouseButton::Left)
+    if shift || !world.resource::<debug_ui::GameInput>().mouse().just_pressed(MouseButton::Left)
     {
         return;
     }

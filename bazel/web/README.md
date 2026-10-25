@@ -21,4 +21,9 @@ places assets at the bundle root. Asset basenames must be unique. Run
 localhost; pass `-- --port 8080` to use another port.
 
 The pinned `wasm-bindgen` CLI currently runs on Linux x86-64 and must match the
-`wasm-bindgen` Rust crate version in `Cargo.lock`.
+`wasm-bindgen` Rust crate version in `Cargo.lock`. The bundle and server
+targets are therefore marked compatible with Linux x86-64 only, so
+`bazel build //...` and `bazel test //...` skip them on Windows and macOS
+instead of failing. The game binary itself still builds for wasm32 there:
+`bazel build --platforms=@rules_rs//rs/platforms:wasm32-unknown-unknown
+//path/to/game:game_binary`.

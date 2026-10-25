@@ -6,6 +6,7 @@ The playable Kestrel prototype and its game-specific tooling live here:
 |---|---|
 | [`app/`](app/README.md) | Bevy executable, scene recipes, assets, demo scripts and gameplay tests |
 | [`sim/`](sim/) | Deterministic gameplay simulation |
+| [`debug_ui/`](debug_ui/README.md) | Debug overlay (egui) and routed gameplay input |
 | [`net/`](net/) | Multiplayer transport and protocol |
 | [`tools/assetc/`](tools/assetc/) | Build-time voxel asset compiler |
 | [`tools/demo/`](tools/demo/) | Controlled demo runner, client and trace assertions |

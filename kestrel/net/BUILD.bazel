@@ -18,6 +18,9 @@ rust_library(
 rust_test(
     name = "net_test",
     size = "small",
+    # tests::udp_smoke counts ticks over 3 s of real time and fails when the
+    # machine is busy. See kestrel/docs/flaky-tests.md.
+    flaky = True,
     crate = ":net",
     edition = "2021",
     deps = ["//kestrel/fx"],
