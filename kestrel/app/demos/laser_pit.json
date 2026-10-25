@@ -7,9 +7,9 @@
   "max_frames": 180,
   "steps": [
     {"op": "wait", "frames": 45},
-    {"op": "strike", "target": [3.5, -2.5]},
+    {"op": "strike", "target": [3.4, 2.5]},
     {"op": "wait", "frames": 6},
-    {"op": "strike", "target": [3.5, -2.5]},
+    {"op": "strike", "target": [3.4, 2.5]},
     {"op": "wait", "frames": 35},
     {"op": "inspect"}
   ]

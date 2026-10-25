@@ -345,6 +345,7 @@ pub fn tick(world: &mut World) {
                 agent: *agent,
                 target: Vec3::new(to[0], height, to[1]),
                 hit_actor: *hit_actor,
+                seed: crate::effects::laser_impact_seed(sim.tick, *agent),
             });
         }
         if let Event::Hit {

@@ -1,13 +1,37 @@
-Scene(id: "laser-pit", features: [Digging],
-    name: "LASER PIT / OPEN-PIT DUEL",
-    spawn: (0.0, 0.0, 2.0),
+Scene(id: "laser-pit", features: [],
+    name: "LASER PIT / COVER ARENA",
+    spawn: (0.0, 0.0, 5.0),
     industrial: false,
     instances: [],
-    mine: Some((extent: 128.0, seed: 7)),
-    piles: Some((
-        capacity: 12,
-        dispensers: [],
-        piles: [],
-        collector: Some((3.5, 0.0, -2.5)),
-    )),
+    terrain: Some((platforms: [
+        (min: (-7.5, -7.5), max: (7.5, 7.5), height: 0.0),
+    ])),
+    architecture: [
+        // Flat combat floor and a low rim; the authored colliders below match
+        // the visible walls and cover, so both movement and lasers use them.
+        (kind: Box, position: (0.0, -0.18, 0.0), size: (15.0, 0.36, 15.0), material: "stone"),
+        (kind: Box, position: (0.0, -0.015, 0.0), size: (1.1, 0.03, 15.0), material: "shadow"),
+        (kind: Box, position: (0.0, -0.015, 0.0), size: (15.0, 0.03, 1.1), material: "shadow"),
+        (kind: Box, position: (-7.0, 1.2, -6.0), size: (0.85, 2.4, 1.05), repeat: (1, 1, 13), spacing: (0.0, 0.0, 1.0), material: "metal", solid_radius: Some(0.68)),
+        (kind: Box, position: (7.0, 1.2, -6.0), size: (0.85, 2.4, 1.05), repeat: (1, 1, 13), spacing: (0.0, 0.0, 1.0), material: "metal", solid_radius: Some(0.68)),
+        (kind: Box, position: (-6.0, 1.2, -7.0), size: (1.05, 2.4, 0.85), repeat: (13, 1, 1), spacing: (1.0, 0.0, 0.0), material: "metal", solid_radius: Some(0.68)),
+        // Keep the camera-facing rim low so it does not hide the fighters.
+        // The terrain edge itself prevents movement beyond the arena.
+        (kind: Box, position: (0.0, 0.22, 7.0), size: (15.0, 0.44, 0.85), material: "metal"),
+        // A central barrier divides the main firing lane. Every bunker can be
+        // flanked from either side; the gaps remain wide enough to navigate.
+        (kind: Box, position: (0.0, 0.75, -0.4), size: (1.8, 1.5, 1.8), material: "shadow", solid_radius: Some(1.05)),
+        (kind: Box, position: (0.0, 1.54, -0.4), size: (2.0, 0.12, 2.0), material: "trim"),
+        (kind: Box, position: (-3.4, 0.66, 2.5), size: (1.45, 1.32, 1.25), material: "metal", solid_radius: Some(0.86)),
+        (kind: Box, position: (-3.4, 1.38, 2.5), size: (1.6, 0.12, 1.4), material: "trim"),
+        (kind: Box, position: (3.4, 0.66, 2.5), size: (1.45, 1.32, 1.25), material: "metal", solid_radius: Some(0.86)),
+        (kind: Box, position: (3.4, 1.38, 2.5), size: (1.6, 0.12, 1.4), material: "trim"),
+        (kind: Box, position: (-3.3, 0.73, -3.5), size: (1.55, 1.46, 1.2), material: "metal", solid_radius: Some(0.90)),
+        (kind: Box, position: (-3.3, 1.52, -3.5), size: (1.7, 0.12, 1.35), material: "trim"),
+        (kind: Box, position: (3.3, 0.73, -3.5), size: (1.55, 1.46, 1.2), material: "metal", solid_radius: Some(0.90)),
+        (kind: Box, position: (3.3, 1.52, -3.5), size: (1.7, 0.12, 1.35), material: "trim"),
+        // Offset side cover creates a useful route around the central block.
+        (kind: Box, position: (-5.25, 0.68, -0.2), size: (1.1, 1.36, 1.55), material: "shadow", solid_radius: Some(0.80)),
+        (kind: Box, position: (5.25, 0.68, 0.4), size: (1.1, 1.36, 1.55), material: "shadow", solid_radius: Some(0.80)),
+    ],
 )

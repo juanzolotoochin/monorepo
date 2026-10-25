@@ -437,8 +437,8 @@ is digging, the collector's counts by mineral, and the nearest ore within 8 m.
 
 ## Laser pit
 
-`laser-pit` uses the dig lab's generated terraces and digging rules, with a
-voxel laser gun in place of the sword. Start a host with:
+`laser-pit` is a bounded combat arena with waist-high cover and flanking routes.
+Its walls and bunkers block both movement and laser fire. Start a host with:
 
 ```sh
 bazel run --config=full_local //kestrel/app:demo -- --scene laser-pit --host 7777
