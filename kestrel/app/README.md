@@ -1,5 +1,50 @@
 # Kestrel // 07
 
+## Share an optimized build with developers
+
+`//kestrel/app:share_to_devs` builds the host-platform game with `-c opt`,
+uploads the executable to a Google Drive folder, and posts its Drive link to
+the developer Telegram group. The publisher is
+written in Go. Folder permissions control who can download the build; share
+the folder with the developers before publishing. The tool does not change
+Drive permissions.
+
+1. In Google Cloud Console, select a project and enable the **Google Drive API**.
+   Create a service account and download a JSON key from its **Keys** tab.
+   Put the key outside the repository. Add the service account's email address
+   as a contributor to the destination **shared drive**, and share the build
+   folder with the developers who should download the files. Service accounts
+   cannot own files in a personal My Drive. If using My Drive, provide a
+   short-lived user OAuth token in `GOOGLE_DRIVE_ACCESS_TOKEN` instead; it
+   needs the `https://www.googleapis.com/auth/drive` scope.
+2. Copy the destination folder ID from its Drive URL, after `/folders/`.
+3. In Telegram, message [@BotFather](https://t.me/BotFather) with `/newbot` and
+   save the token it returns. Add that bot to the developer group or channel
+   and permit it to post messages. For a public channel or supergroup, use its
+   `@username` as the chat ID. For a private group, send a command addressed to
+   the bot in the group and read the numeric `message.chat.id` from its
+   `getUpdates` response.
+4. Export the credentials in your shell, then run the target:
+
+```sh
+export GOOGLE_APPLICATION_CREDENTIALS='/outside/repo/drive-publisher.json'
+export GOOGLE_DRIVE_FOLDER_ID='your-folder-id'
+export TELEGRAM_BOT_TOKEN='your-bot-token'
+export TELEGRAM_CHAT_ID='@your-dev-group'
+bazel run --config=full_local -c opt //kestrel/app:share_to_devs
+```
+
+For a private group, you can inspect updates with
+`curl "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates"` after
+the bot has joined and received a group command. Keep the token and JSON
+key out of the repository. The publisher reads them only at runtime.
+
+To build without uploading or posting, run
+`bazel run --config=full_local -c opt //kestrel/app:share_to_devs -- --dry-run`.
+The game executable and assets are self-contained; download the binary, make
+it executable on Unix (`chmod +x kestrel-*`), and run it on the same OS and CPU
+architecture as the publishing machine.
+
 ## Launch menu
 
 Run `bazel run --config=full_local -c opt //kestrel/app:demo` to open the launch
