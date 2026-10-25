@@ -21,9 +21,11 @@ const STUDIO_FLOOR_THICKNESS: f32 = 0.2;
 const GRID_SPACING: f32 = 0.5;
 const GRID_PERIOD: f32 = 4.0;
 const STEP_HEIGHT: f32 = 0.24;
-const STEP_START: f32 = 0.8;
-const STEP_END: f32 = 2.1;
 pub(crate) const STUDIO_FPS: f32 = 60.0;
+
+fn step_span(step_distance: f32) -> (f32, f32) {
+    (step_distance * 0.88, step_distance * 2.92)
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Clip {
@@ -74,7 +76,7 @@ impl Clip {
         match self {
             Self::Run => 30,
             Self::Walk => 33,
-            Self::Step => 120,
+            Self::Step => 180,
             Self::Turn => 200,
             Self::Jump => 80,
             Self::RunJump => 135,
@@ -128,6 +130,7 @@ pub struct Viewer {
     ground_offset: Vec2,
     distance: f32,
     gait_distance: f32,
+    step_distance: f32,
 }
 impl Viewer {
     pub fn begin(&mut self) {
@@ -282,18 +285,20 @@ fn wrapped_mark(base: f32, offset: f32) -> f32 {
     (base - offset + GRID_PERIOD * 0.5).rem_euclid(GRID_PERIOD) - GRID_PERIOD * 0.5
 }
 
-fn step_surface(distance: f32) -> f32 {
-    if (STEP_START..STEP_END).contains(&distance) { STEP_HEIGHT } else { 0.0 }
+fn step_surface(distance: f32, step_distance: f32) -> f32 {
+    let (start, end) = step_span(step_distance);
+    if (start..end).contains(&distance) { STEP_HEIGHT } else { 0.0 }
 }
 
-fn studio_step_root_height(distance: f32) -> f32 {
-    STEP_HEIGHT * crate::combat::smooth((distance - (STEP_START - 0.30)) / 0.55)
-        * (1.0 - crate::combat::smooth((distance - (STEP_END - 0.10)) / 0.55))
+fn studio_step_root_height(distance: f32, step_distance: f32) -> f32 {
+    let (start, end) = step_span(step_distance);
+    STEP_HEIGHT * crate::combat::smooth((distance - (start - step_distance * 0.24)) / (step_distance * 0.44))
+        * (1.0 - crate::combat::smooth((distance - (end - step_distance * 0.08)) / (step_distance * 0.44)))
 }
 
 pub(crate) fn studio_surface_height(viewer: &Viewer, local_z: f32) -> f32 {
     STUDIO_FLOOR_Y + if viewer.clip == Clip::Step {
-        step_surface(viewer.distance + local_z)
+        step_surface(viewer.distance + local_z, viewer.step_distance)
     } else {
         0.0
     }
@@ -373,9 +378,10 @@ pub fn drive(
     } else {
         motion.step_distance
     };
+    viewer.step_distance = gait_step;
     let studio_speed = match viewer.clip {
         Clip::Walk => motion.step_distance * 2.0 * STUDIO_FPS / Clip::Walk.frame_count() as f32,
-        Clip::Step => 3.2 * STUDIO_FPS / Clip::Step.frame_count() as f32,
+        Clip::Step => gait_step * 4.0 * STUDIO_FPS / Clip::Step.frame_count() as f32,
         Clip::Run => {
             run_step * 2.0 * STUDIO_FPS / Clip::Run.frame_count() as f32
         }
@@ -406,7 +412,7 @@ pub fn drive(
     }
     viewer.motion_frame = viewer.total_frame;
     if viewer.clip == Clip::Step {
-        player.translation.y += studio_step_root_height(viewer.distance);
+        player.translation.y += studio_step_root_height(viewer.distance, gait_step);
     }
     controls.gait.phase = viewer.advance_ground(0.0, Vec3::ZERO, gait_step, false);
     for (mark, mut transform) in &mut marks {
@@ -417,7 +423,9 @@ pub fn drive(
     }
     for (mut transform, mut visibility) in &mut step_platform {
         *visibility = if viewer.clip == Clip::Step { Visibility::Inherited } else { Visibility::Hidden };
-        transform.translation.z = (STEP_START + STEP_END) * 0.5 - viewer.distance;
+        let (start, end) = step_span(gait_step);
+        transform.translation.z = (start + end) * 0.5 - viewer.distance;
+        transform.scale.z = end - start;
     }
     controls.attack = viewer.clip.stroke().and_then(|stroke| {
         (t < 0.44).then(|| {
@@ -601,6 +609,7 @@ pub(crate) struct Capture {
     path: Option<String>,
     gait_phase: Option<f32>,
     pause_at: Option<f32>,
+    frame: Option<u64>,
     elapsed: f32,
     saved: bool,
 }
@@ -632,6 +641,14 @@ pub fn capture(
             .windows(2)
             .find(|pair| pair[0] == "--studio-pause-at")
             .and_then(|pair| pair[1].parse::<f32>().ok());
+        state.frame = args
+            .windows(2)
+            .find(|pair| pair[0] == "--studio-capture-frame")
+            .and_then(|pair| pair[1].parse::<u64>().ok());
+        if let Some(frame) = state.frame {
+            viewer.seek_frame(frame);
+            viewer.paused = true;
+        }
     }
     let Some(path) = state.path.clone() else {
         return;
@@ -654,7 +671,8 @@ pub fn capture(
         let phase = controls.gait.phase / std::f32::consts::TAU;
         (phase - target).abs() < 0.02
     });
-    if state.elapsed > 2.0 && key_pose && gait_pose && !state.saved {
+    if state.elapsed > 2.0 && key_pose && gait_pose
+        && state.pause_at.is_none_or(|at| viewer.elapsed >= at) && !state.saved {
         state.saved = true;
         commands
             .spawn(Screenshot::primary_window())
@@ -674,6 +692,7 @@ mod tests {
         let mut viewer = Viewer::default();
         viewer.clip = Clip::Step;
         viewer.distance = 0.6;
+        viewer.step_distance = 1.25;
         let pose = crate::character::Pose {
             motion: voxel_assets::CharacterMotion::default(),
             stride: 0.0,
@@ -691,9 +710,51 @@ mod tests {
             |point| Some(studio_surface_height(&viewer, point.z)));
         assert!(offsets[0] < -0.05, "trailing foot should stay on the lower surface");
         assert!(offsets[1] > 0.05, "leading foot should rise onto the step");
-        assert_eq!(step_surface(0.0), 0.0);
-        assert_eq!(step_surface(1.0), STEP_HEIGHT);
-        assert_eq!(step_surface(3.0), 0.0);
+        assert_eq!(step_surface(0.0, viewer.step_distance), 0.0);
+        assert_eq!(step_surface(1.2, viewer.step_distance), STEP_HEIGHT);
+        assert_eq!(step_surface(4.0, viewer.step_distance), 0.0);
+    }
+
+    #[test]
+    fn swinging_foot_changes_height_continuously_over_both_step_edges() {
+        let mut motion = voxel_assets::CharacterMotion::default();
+        motion.step_distance = 0.44;
+        let (start, end) = step_span(motion.step_distance);
+        let mut pose = crate::character::Pose {
+            motion,
+            stride: 0.0,
+            speed: 0.6,
+            turn: 0.0,
+            breathe: 0.0,
+            step_pitch: 0.0,
+            airborne: false,
+            jump: None,
+            attack: None,
+            dig: None,
+        };
+        let sample = |distance: f32, pose: &crate::character::Pose| {
+            let root = Transform::from_xyz(0.0, STUDIO_FLOOR_Y, distance);
+            crate::character::foot_ground_offsets(root, pose,
+                |point| Some(STUDIO_FLOOR_Y + step_surface(point.z, motion.step_distance)))[0]
+        };
+        let stance_end = std::f32::consts::TAU * 0.55;
+        let swing_length = std::f32::consts::TAU - stance_end;
+        let mut uphill = Vec::new();
+        let mut downhill = Vec::new();
+        for fraction in [0.0, 0.25, 0.5, 0.75, 0.999] {
+            let left_phase = stance_end + swing_length * fraction;
+            pose.stride = left_phase - std::f32::consts::PI;
+            let first_swing_distance = pose.stride * motion.step_distance / std::f32::consts::PI;
+            uphill.push(sample(first_swing_distance, &pose));
+            downhill.push(sample(2.0 * motion.step_distance + first_swing_distance, &pose));
+        }
+        assert!(start > motion.step_distance * 0.55 + 0.13);
+        assert!(end > motion.step_distance * 2.55);
+        assert!(end < motion.step_distance * 3.55);
+        assert!(uphill.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert!(downhill.windows(2).all(|pair| pair[0] >= pair[1]));
+        assert!(uphill[1] > 0.0 && uphill[3] < STEP_HEIGHT);
+        assert!(downhill[1] < STEP_HEIGHT && downhill[3] > 0.0);
     }
 
     #[test]

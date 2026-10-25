@@ -112,15 +112,34 @@ pub(crate) fn foot_ground_offsets(
         let phase = (pose.stride + if side > 0.0 { 0.0 } else { std::f32::consts::PI })
             .rem_euclid(std::f32::consts::TAU);
         let (forward, _) = foot_path(phase, step, stance, 0.0);
-        // Contact is the higher of toe and heel. The toe clears a rising
-        // ledge before the ankle reaches it; the heel stays on a descending
-        // ledge until it has actually left the top.
-        let heights = [-0.13, 0.13].into_iter().filter_map(|sole_z| {
-            let probe = root.translation
-                + root.rotation * (Vec3::new(side * 0.18, 0.0, forward + sole_z) * root.scale);
-            surface(probe)
-        });
-        heights.reduce(f32::max)
+        let mut support_at = |local_z: f32| {
+            // The higher of toe and heel supports a planted sole. During
+            // swing the same probes describe takeoff and landing surfaces.
+            [-0.13, 0.13].into_iter().filter_map(|sole_z| {
+                let probe = root.translation + root.rotation
+                    * (Vec3::new(side * 0.18, 0.0, local_z + sole_z) * root.scale);
+                surface(probe)
+            }).reduce(f32::max)
+        };
+        let stance_end = std::f32::consts::TAU * stance;
+        let height = if phase < stance_end {
+            support_at(forward)
+        } else {
+            // A discontinuous height sample at the moving ankle makes it pop
+            // when crossing a riser. The gait phase supplies stable takeoff
+            // and landing positions without storing scene-specific state.
+            let span = step * stance;
+            let takeoff_z = -span - (phase - stance_end) * step / std::f32::consts::PI;
+            let landing_z = span + (std::f32::consts::TAU - phase) * step / std::f32::consts::PI;
+            match (support_at(takeoff_z), support_at(landing_z)) {
+                (Some(from), Some(to)) => {
+                    let progress = (phase - stance_end) / (std::f32::consts::TAU - stance_end);
+                    Some(from + (to - from) * smooth(progress))
+                }
+                (from, to) => from.or(to),
+            }
+        };
+        height
             .map_or(0.0, |height| ((height - root.translation.y) / root.scale.y.max(0.1))
                 .clamp(-0.28, 0.28))
     })
