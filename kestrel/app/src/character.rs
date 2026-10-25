@@ -244,23 +244,27 @@ pub fn animate_character(
         && (!viewer.active
             || matches!(viewer.clip, crate::viewer::Clip::Walk | crate::viewer::Clip::Run))
     {
-        lock_grounded_feet(&mut parts, &joints, player.0, &pose);
+        for (entity, target) in grounded_foot_targets(&joints, player.0, &pose) {
+            if let Ok((_, _, mut transform, _)) = parts.get_mut(entity) {
+                *transform = target;
+            }
+        }
     }
 }
 
-type JointSnapshot = (PartKind, Transform, Transform, Option<Entity>);
+pub(crate) type JointSnapshot = (PartKind, Transform, Transform, Option<Entity>);
 
-fn lock_grounded_feet(
-    parts: &mut Query<(Entity, &Part, &mut Transform, Option<&ChildOf>), Without<Player>>,
+pub(crate) fn grounded_foot_targets(
     joints: &HashMap<Entity, JointSnapshot>,
     player: Entity,
     pose: &Pose,
-) {
+) -> Vec<(Entity, Transform)> {
+    let mut targets = Vec::new();
     let Some((&body_entity, &(_, _, body, _))) = joints
         .iter()
         .find(|(_, (kind, _, _, parent))| matches!(kind, PartKind::Body) && *parent == Some(player))
     else {
-        return;
+        return targets;
     };
     let running = ((pose.speed - 1.02) / 0.38).clamp(0.0, 1.0);
     let stance = stance_fraction(running, true);
@@ -294,22 +298,26 @@ fn lock_grounded_feet(
         let upper = shin_rest.translation.length();
         let lower = foot_rest.translation.length();
         let (thigh_angle, knee_angle) = solve_leg(local_target.y, local_target.z, upper, lower);
-        if let Ok((_, _, mut leg, _)) = parts.get_mut(leg_entity) {
+        if let Some(&(_, _, mut leg, _)) = joints.get(&leg_entity) {
             leg.translation = leg.translation.lerp(leg_rest.translation, weight);
             leg.rotation = leg.rotation.slerp(Quat::from_rotation_x(thigh_angle), weight);
+            targets.push((leg_entity, leg));
         }
-        if let Ok((_, _, mut shin, _)) = parts.get_mut(shin_entity) {
+        if let Some(&(_, _, mut shin, _)) = joints.get(&shin_entity) {
             shin.translation = shin.translation.lerp(shin_rest.translation, weight);
             shin.rotation = shin.rotation.slerp(Quat::from_rotation_x(knee_angle), weight);
+            targets.push((shin_entity, shin));
         }
-        if let Ok((_, _, mut foot, _)) = parts.get_mut(foot_entity) {
+        if let Some(&(_, _, mut foot, _)) = joints.get(&foot_entity) {
             foot.translation = foot.translation.lerp(foot_rest.translation, weight);
             foot.rotation = foot.rotation.slerp(
                 (body.rotation * Quat::from_rotation_x(thigh_angle + knee_angle)).inverse(),
                 weight,
             );
+            targets.push((foot_entity, foot));
         }
     }
+    targets
 }
 
 fn body_rest_position(body: Transform, leg: Transform, shin: Transform, foot: Transform) -> Vec3 {
@@ -1230,6 +1238,7 @@ mod tests {
         let shin = Transform::from_xyz(0.0, -0.27, 0.0);
         let foot = Transform::from_xyz(0.0, -0.21, 0.0);
         let origin = body_rest_position(body_rest, leg, shin, foot);
+        let mut first_contact = None;
         for index in 0..=60 {
             pose.stride = std::f32::consts::TAU * index as f32 / 60.0;
             let body = pose.place(PartKind::Body, body_rest);
@@ -1250,6 +1259,14 @@ mod tests {
                                 + Quat::from_rotation_x(knee) * foot.translation));
             // The authored boot extends 0.0875 m below its ankle origin.
             assert!(ankle.y - 0.0875 >= -0.003, "run phase {} sank below floor", pose.stride);
+            if pose.stride < std::f32::consts::TAU * stance_fraction(1.0, true) {
+                let root_travel = pose.stride * step_distance_for_speed(pose.motion.step_distance, pose.speed)
+                    / std::f32::consts::PI;
+                let planted_z = root_travel + ankle.z;
+                let first = *first_contact.get_or_insert(planted_z);
+                assert!((planted_z - first).abs() < 0.01,
+                    "running boot slides {}m during stance", (planted_z - first).abs());
+            }
         }
     }
 

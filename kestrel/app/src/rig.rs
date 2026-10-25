@@ -47,12 +47,27 @@ impl FootGeometry {
 
     fn place(self, rest: Transform, offset: f32, lift: f32) -> Transform {
         let mut posed = rest;
-        let angle = -offset.atan2(rest.translation.y.max(0.1));
+        let center = (self.near_z + self.far_z) * 0.5;
+        let target = center + offset;
+        // Rotate around the fixed hip while keeping the sole's center at its
+        // distance-driven ground position. The outside sole edge determines
+        // the leg stretch needed to avoid penetrating the floor.
+        let center_at = |angle: f32| {
+            let edge = if angle.sin() >= 0.0 { self.far_z } else { self.near_z };
+            let stretched_sole_y = (lift - rest.translation.y + edge * angle.sin()) / angle.cos();
+            stretched_sole_y * angle.sin() + center * angle.cos()
+        };
+        let (mut low, mut high) = (-1.2_f32, 1.2_f32);
+        for _ in 0..14 {
+            let middle = (low + high) * 0.5;
+            if center_at(middle) > target { low = middle; } else { high = middle; }
+        }
+        let angle = (low + high) * 0.5;
         let edge = if angle.sin() >= 0.0 { self.far_z } else { self.near_z };
         posed.rotation = Quat::from_rotation_x(angle);
         // Keep the lowest sole edge on the floor while the hip stays attached.
         posed.scale.y = ((rest.translation.y - edge * angle.sin() - lift)
-            / (-self.sole_y * angle.cos())).clamp(0.75, 1.2);
+            / (-self.sole_y * angle.cos())).max(0.01);
         posed
     }
 }
@@ -403,6 +418,36 @@ mod contact_tests {
             let world_foot = phase * step / std::f32::consts::PI + offset;
             if let Some(first) = planted { assert!((world_foot - first).abs() < 1e-5); }
             planted = Some(world_foot);
+        }
+    }
+
+    #[test]
+    fn baked_skin_contact_points_do_not_slide_through_stance() {
+        let library = SceneLibrary::new();
+        for id in ["worker", "ghoul", "ghoul_brute", "ox"] {
+            let skin = library.scenes.iter().flat_map(|pack| &pack.skins)
+                .find(|skin| skin.id == id).unwrap();
+            for part in skin.parts.iter().filter(|part| contact_phase(&skin.motion, part.part).is_some()) {
+                let geometry = FootGeometry::from_meshes(&part.meshes).unwrap();
+                let rest = Transform::from_translation(Vec3::from_array(part.pivot.unwrap()));
+                let step = (-geometry.sole_y * 0.55).clamp(0.16, 0.35);
+                let mut first = None;
+                let mut worst = 0.0_f32;
+                for frame in 0..=56 {
+                    let phase = frame as f32 / 100.0 * std::f32::consts::TAU;
+                    let (offset, lift) = contact_path(phase, step);
+                    assert_eq!(lift, 0.0);
+                    let posed = geometry.place(rest, offset, lift);
+                    let angle = posed.rotation.to_euler(EulerRot::XYZ).0;
+                    let center = (geometry.near_z + geometry.far_z) * 0.5;
+                    let root_travel = phase * step / std::f32::consts::PI;
+                    let contact_z = root_travel + posed.translation.z
+                        + posed.scale.y * geometry.sole_y * angle.sin() + center * angle.cos();
+                    let first = *first.get_or_insert(contact_z);
+                    worst = worst.max((contact_z - first).abs());
+                }
+                assert!(worst < 0.005, "{id} {:?} slides {worst:.3}m through stance", part.part);
+            }
         }
     }
 }

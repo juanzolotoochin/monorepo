@@ -5,12 +5,14 @@
 
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
+use std::collections::HashMap;
 
 use content::scenario::Weapon;
 use sim::settlement::avatar::Swing;
 
 use crate::character::{
-    blend_pose, dig_age, jump_motion, GaitClock, MotionState, Part, PartKind, Player, Pose,
+    blend_pose, dig_age, grounded_foot_targets, jump_motion, GaitClock, JointSnapshot,
+    MotionState, Part, PartKind, Player, Pose,
 };
 use crate::combat::{Attack, ATTACK_END, REBOUND_END};
 use crate::jetpack::Exhaust;
@@ -209,6 +211,24 @@ pub fn update(
                 time.delta_secs(),
                 pose.motion.pose_response,
             );
+        }
+    }
+    for (root, _, pose) in &poses {
+        if !pose.motion.plant_feet || pose.airborne || pose.jump.is_some()
+            || pose.attack.is_some() || pose.dig.is_some() {
+            continue;
+        }
+        let mut joints: HashMap<Entity, JointSnapshot> = HashMap::new();
+        for (entity, part, transform) in &mut parts {
+            if parents.iter_ancestors(entity).any(|ancestor| ancestor == *root) {
+                joints.insert(entity, (part.kind, part.rest, *transform,
+                    parents.get(entity).ok().map(ChildOf::parent)));
+            }
+        }
+        for (entity, target) in grounded_foot_targets(&joints, *root, pose) {
+            if let Ok((_, _, mut transform)) = parts.get_mut(entity) {
+                *transform = target;
+            }
         }
     }
     for (parent, mut visibility) in &mut exhausts {
