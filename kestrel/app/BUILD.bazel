@@ -29,6 +29,7 @@ rust_binary(
         "//kestrel/fx",
         "//kestrel/net",
         "//kestrel/save",
+        "//kestrel/service",
         "//kestrel/session",
         "//kestrel/sim",
         "//kestrel/tools/assetc/core:voxel_assets",

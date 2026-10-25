@@ -29,6 +29,7 @@ mod telemetry;
 mod viewer;
 
 use bevy::{app::AppExit, prelude::*};
+use service::{Phase, ServicesPlugin};
 use gameplay::*;
 use character::animate_character;
 use combat::combat;
@@ -266,6 +267,12 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
     if offscreen {
         app.add_systems(Startup, control::setup_render.after(scene::setup));
     }
+    // The frame, in the service layers' phases (see
+    // kestrel/docs/proposals/service_layers.md). The phases run in order, so
+    // this is still one chain. Scene setup runs at the start of Input until it
+    // becomes World service init; the camera and peers stay with the mirrors
+    // until they become their own services.
+    app.add_plugins(ServicesPlugin);
     app.add_systems(
         Update,
         (
@@ -288,18 +295,32 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
                 .run_if(control::interactive).run_if(viewer::not_active),
             lockstep::keyboard_input.run_if(viewer::not_active),
             preview::playback.run_if(control::interactive).run_if(viewer::not_active),
-            lockstep::step.run_if(viewer::not_active),
-            (
-                lockstep::mirror_settlement,
-                piles::mirror,
-                lockstep::follow_avatar,
-                peers::update.run_if(control::rendered),
-                digging::update,
-                digging::follow_camera,
-                jetpack::update,
-                palimpsest::tick,
-            )
-                .chain().run_if(viewer::not_active),
+        )
+            .chain()
+            .in_set(Phase::Input)
+            .run_if(menu::playing),
+    )
+    .add_systems(Update, lockstep::step.run_if(viewer::not_active).in_set(Phase::Step).run_if(menu::playing))
+    .add_systems(
+        Update,
+        (
+            lockstep::mirror_settlement,
+            piles::mirror,
+            lockstep::follow_avatar,
+            peers::update.run_if(control::rendered),
+            digging::update,
+            digging::follow_camera,
+            jetpack::update,
+            palimpsest::tick,
+        )
+            .chain()
+            .run_if(viewer::not_active)
+            .in_set(Phase::Mirror)
+            .run_if(menu::playing),
+    )
+    .add_systems(
+        Update,
+        (
             settlement::tick.run_if(viewer::not_active),
             (
                 piles::spawn_tosses,
@@ -324,6 +345,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
             control::capture_frame.run_if(control::rendered),
         )
             .chain()
+            .in_set(Phase::Present)
             .run_if(menu::playing),
     );
     app.add_systems(Update, menu::setup.before(menu::update));
