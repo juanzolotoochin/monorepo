@@ -2,11 +2,13 @@ load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_test")
 
 go_binary(
     name = "publish",
-    srcs = ["main.go"],
+    srcs = ["main.go", "oauth.go"],
     visibility = ["//visibility:public"],
+    deps = ["@org_golang_x_oauth2//:oauth2"],
 )
 
 go_test(
     name = "publish_test",
-    srcs = ["main.go", "main_test.go"],
+    srcs = ["main.go", "main_test.go", "oauth.go", "oauth_test.go"],
+    deps = ["@org_golang_x_oauth2//:oauth2"],
 )

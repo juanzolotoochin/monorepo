@@ -36,10 +36,11 @@ func main() {
 
 func run() error {
 	var caption string
-	var dryRun, driveOnly bool
+	var dryRun, driveOnly, authorizeDrive bool
 	flag.StringVar(&caption, "caption", "", "text to post with the Drive link")
 	flag.BoolVar(&dryRun, "dry-run", false, "build without uploading or posting")
 	flag.BoolVar(&driveOnly, "drive-only", false, "upload to Drive without posting to Telegram")
+	flag.BoolVar(&authorizeDrive, "authorize-drive", false, "sign in to personal Google Drive and save a refresh token")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(flag.Args(), " "))
@@ -59,6 +60,12 @@ func run() error {
 	config, err := loadConfig(filepath.Join(workspace, ".credentials", "game-share.json"))
 	if err != nil {
 		return err
+	}
+	credentialsDir := filepath.Join(workspace, ".credentials")
+	if authorizeDrive {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		return authorizeUserDrive(ctx, filepath.Join(credentialsDir, "google-oauth-client.json"), filepath.Join(credentialsDir, "google-user-token.json"))
 	}
 	token := firstNonEmpty(os.Getenv("TELEGRAM_BOT_TOKEN"), config.TelegramBotToken)
 	chatID := firstNonEmpty(os.Getenv("TELEGRAM_CHAT_ID"), config.TelegramChatID)
@@ -102,7 +109,20 @@ func run() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	accessToken, err = driveAccessToken(ctx, http.DefaultClient, accessToken, credentialsPath)
+	if accessToken == "" {
+		userTokenPath := filepath.Join(credentialsDir, "google-user-token.json")
+		if _, statErr := os.Stat(userTokenPath); statErr == nil {
+			accessToken, err = userDriveAccessToken(ctx, filepath.Join(credentialsDir, "google-oauth-client.json"), userTokenPath)
+			if err != nil {
+				return err
+			}
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return fmt.Errorf("check Google user token: %w", statErr)
+		}
+	}
+	if accessToken == "" {
+		accessToken, err = driveAccessToken(ctx, http.DefaultClient, "", credentialsPath)
+	}
 	if err != nil {
 		return err
 	}

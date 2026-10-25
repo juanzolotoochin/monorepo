@@ -10,14 +10,18 @@ the folder with the developers before publishing. The tool does not change
 Drive permissions.
 
 1. In Google Cloud Console, select a project and enable the **Google Drive API**.
-   Create a service account and download a JSON key from its **Keys** tab.
-   Save it in `.credentials/` and set `google_service_account_file` in
-   `.credentials/game-share.json` to its filename. Add the service account's email address
-   as a contributor to the destination **shared drive**, and share the build
-   folder with the developers who should download the files. Service accounts
-   cannot own files in a personal My Drive. If using My Drive, provide a
-   short-lived user OAuth token in `GOOGLE_DRIVE_ACCESS_TOKEN` instead; it
-   needs the `https://www.googleapis.com/auth/drive` scope.
+   For a folder in a personal **My Drive**, configure the OAuth consent screen,
+   add your Google account as a test user if the app is in Testing, then create
+   an OAuth client of type **Desktop app**. Save its downloaded JSON as
+   `.credentials/google-oauth-client.json`. Run
+   `bazel run --config=full_local -c opt //kestrel/app:share_to_devs -- --authorize-drive`
+   and open the URL it prints. Sign in with the account that owns the folder.
+   The callback saves a refreshable user token in the ignored
+   `.credentials/google-user-token.json`; later builds use it automatically.
+   For a Google Workspace **shared drive** instead, a service account may be
+   used: save its JSON key in `.credentials/`, set
+   `google_service_account_file` in `.credentials/game-share.json` to its
+   filename, and give the account write access to the shared drive.
 2. Copy the destination folder ID from its Drive URL, after `/folders/`.
 3. In Telegram, message [@BotFather](https://t.me/BotFather) with `/newbot` and
    save the token it returns. Add that bot to the developer group or channel
@@ -35,9 +39,8 @@ bazel run --config=full_local -c opt //kestrel/app:share_to_devs
 
 Environment variables `GOOGLE_APPLICATION_CREDENTIALS`,
 `GOOGLE_DRIVE_FOLDER_ID`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID` can
-override the local files. For personal My Drive, put a short-lived user OAuth
-token in `google_drive_access_token` in the config file or set
-`GOOGLE_DRIVE_ACCESS_TOKEN`.
+override the local files. A short-lived user OAuth token in
+`GOOGLE_DRIVE_ACCESS_TOKEN` overrides the saved user token.
 
 For a private group, you can inspect updates with
 `curl "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates"` after
