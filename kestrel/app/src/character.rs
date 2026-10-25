@@ -319,6 +319,7 @@ pub fn animate_character(
     controls: Res<Controls>,
     feedback: Res<Feedback>,
     flight: Option<Res<crate::jetpack::Flight>>,
+    service: Option<Res<crate::lockstep::SessionService>>,
     mirror: Option<Res<crate::lockstep::WorldMirror>>,
     scene: Option<Res<crate::scene_view::SceneView>>,
     studio: Option<Res<crate::viewer::StudioPack>>,
@@ -408,7 +409,7 @@ pub fn animate_character(
         if viewer.active {
             Some(crate::viewer::studio_surface_height(&viewer, point.z))
         } else {
-            crate::jetpack::height(pack, point)
+            service.as_ref().and_then(|service| service.ground_height(point))
         }
     });
     if pose.motion.plant_feet && pose.speed > 0.05 && !pose.airborne && pose.jump.is_none() {
