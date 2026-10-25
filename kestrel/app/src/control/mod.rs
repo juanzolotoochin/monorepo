@@ -6,7 +6,7 @@ mod transport;
 mod video;
 use crate::{
     assets::SceneLibrary,
-    gameplay::{Controls, Obstacle, Player},
+    character::Player, combat::Obstacle, gameplay::Controls,
     impact::ImpactTarget,
     lockstep::Game,
     navigation,

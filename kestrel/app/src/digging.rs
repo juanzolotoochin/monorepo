@@ -18,7 +18,7 @@ use sim::terrain::{Terrain, LAYER, MAX_LAYERS};
 
 use crate::assets::SceneLibrary;
 use crate::effects::{CameraRig, FxAssets};
-use crate::gameplay::Player;
+use crate::character::Player;
 use crate::jetpack::Deck;
 use crate::lockstep::Game;
 

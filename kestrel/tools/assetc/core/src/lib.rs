@@ -283,6 +283,10 @@ pub enum SceneFeature {
     FlightHud,
     /// Avatars dig pits into the deck.
     Digging,
+    /// Space triggers a grounded jump instead of held jetpack flight.
+    Jump,
+    /// Use the quick three stroke sword cadence.
+    SwiftSword,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScenePack {

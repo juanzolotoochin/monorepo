@@ -9,7 +9,10 @@ use bevy::prelude::*;
 use content::scenario::Weapon;
 use sim::settlement::avatar::Swing;
 
-use crate::gameplay::{Attack, Part, PartKind, Player, Pose, ATTACK_END, REBOUND_END, WALK_SPEED};
+use crate::character::{
+    blend_pose, dig_age, jump_motion, GaitClock, MotionState, Part, PartKind, Player, Pose,
+};
+use crate::combat::{Attack, ATTACK_END, REBOUND_END};
 use crate::jetpack::Exhaust;
 use crate::lockstep::Game;
 use crate::style::{ActiveStyle, WeaponVisual};
@@ -19,12 +22,10 @@ pub struct Peer {
     agent: u16,
     /// The style the copy was made in; a restyle makes a new copy.
     style: Option<usize>,
-    /// Walk cycle phase, advanced by distance moved.
-    stride: f32,
+    gait: GaitClock,
     /// The start tick of the last swing heard, so each whooshes once.
     heard: u64,
-    /// Meters walked since the last footstep.
-    foot_distance: f32,
+    motion: MotionState,
 }
 
 impl Peer {
@@ -53,13 +54,20 @@ pub struct PeerWeapon(Weapon);
 /// The swing as the local player's animation sees it, `ticks` after the
 /// last simulated tick began: wind-up and cut from the swing's start, or a
 /// rebound from the tick its blade hit something.
-fn attack(swing: &Swing, ticks: f32) -> Option<Attack> {
+fn attack(swing: &Swing, ticks: f32, swift_sword: bool) -> Option<Attack> {
     let seconds = |from: u64| ((ticks - from as f32) / content::TICKS_PER_SECOND as f32).max(0.0);
-    let mut attack = Attack::new(Vec3::new(swing.aim.x.to_f32(), 0.0, swing.aim.y.to_f32()), swing.weapon);
-    let rebound = swing.resolved && swing.hits > 0 && matches!(swing.weapon, Weapon::Sword | Weapon::Spear);
+    let mut attack = Attack::new(
+        Vec3::new(swing.aim.x.to_f32(), 0.0, swing.aim.y.to_f32()),
+        swing.weapon,
+    );
+    attack.stroke = swing.stroke;
+    attack.swift = swift_sword;
+    let rebound =
+        swing.resolved && swing.hits > 0 && matches!(swing.weapon, Weapon::Sword | Weapon::Spear);
     if rebound {
         // The blade stops where it was when the hit resolved.
-        attack.age = swing.resolve_at.saturating_sub(swing.started) as f32 / content::TICKS_PER_SECOND as f32;
+        attack.age = swing.resolve_at.saturating_sub(swing.started) as f32
+            / content::TICKS_PER_SECOND as f32;
         attack.impact_angle = Some(attack.angle());
         attack.age = seconds(swing.resolve_at);
         (attack.age < REBOUND_END).then_some(attack)
@@ -73,6 +81,7 @@ pub fn update(
     mut commands: Commands,
     game: Res<Game>,
     style: Res<ActiveStyle>,
+    library: Res<crate::assets::SceneLibrary>,
     time: Res<Time>,
     sound: Res<crate::sound::Sound>,
     player: Single<Entity, With<Player>>,
@@ -84,12 +93,21 @@ pub fn update(
 ) {
     let me = game.player();
     let others: Vec<u16> = game.current.as_ref().map_or_else(Vec::new, |s| {
-        (0..s.agents.len() as u16).filter(|&i| s.agents[i as usize].controlled && Some(i) != me).collect()
+        (0..s.agents.len() as u16)
+            .filter(|&i| s.agents[i as usize].controlled && Some(i) != me)
+            .collect()
     });
     let breathe = (time.elapsed_secs() * 2.0).sin() * 0.012;
     // Render time in ticks: views sit `alpha` of the way from the previous
     // tick's state to the current one's.
     let ticks = game.tick as f32 - 1.0 + game.alpha;
+    let motion_profile = library.scenes[library.current]
+        .scene
+        .style
+        .as_ref()
+        .map_or_else(voxel_assets::CharacterMotion::default, |s| {
+            s.character_motion
+        });
     let mut poses = Vec::new();
     let mut shown = Vec::new();
     for (entity, mut peer, mut transform) in &mut peers {
@@ -99,53 +117,125 @@ pub fn update(
         }
         shown.push(peer.agent);
         let current = &game.current.as_ref().unwrap().agents[peer.agent as usize];
-        let before = game.previous.as_ref().and_then(|p| p.agents.get(peer.agent as usize)).unwrap_or(current);
-        let (from, to) = (game.to_view(before.position), game.to_view(current.position));
-        let alpha = if from.distance(to) > 1.5 { 1.0 } else { game.alpha };
+        let before = game
+            .previous
+            .as_ref()
+            .and_then(|p| p.agents.get(peer.agent as usize))
+            .unwrap_or(current);
+        let (from, to) = (
+            game.to_view(before.position),
+            game.to_view(current.position),
+        );
+        let alpha = if from.distance(to) > 1.5 {
+            1.0
+        } else {
+            game.alpha
+        };
         let mut position = from.lerp(to, alpha);
-        position.y = before.avatar.height.to_f32() + (current.avatar.height - before.avatar.height).to_f32() * alpha;
-        let moved = position.with_y(0.0).distance(transform.translation.with_y(0.0)).min(1.0);
-        peer.stride += moved * 8.5;
-        if !current.avatar.flight.airborne {
-            peer.foot_distance += moved;
-            if peer.foot_distance > 0.72 {
-                peer.foot_distance -= 0.72;
-                sound.play(crate::sound::Cue::Step);
-            }
+        position.y = before.avatar.height.to_f32()
+            + (current.avatar.height - before.avatar.height).to_f32() * alpha;
+        let moved = position
+            .with_y(0.0)
+            .distance(transform.translation.with_y(0.0))
+            .min(1.0);
+        let step_distance = motion_profile.step_distance.clamp(0.2, 4.0);
+        let contacts = peer
+            .gait
+            .advance(moved, step_distance, !current.avatar.flight.airborne);
+        for _ in 0..contacts {
+            sound.play(crate::sound::Cue::Step);
         }
         transform.translation = position;
         let turn = (current.heading - before.heading).to_f32();
-        let turn = (turn + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-        transform.rotation = Quat::from_rotation_y(before.heading.to_f32() + turn * alpha);
+        let turn =
+            (turn + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+        let heading = before.heading.to_f32() + turn * alpha;
+        transform.rotation = Quat::from_rotation_y(heading);
         let airborne = current.avatar.flight.airborne;
-        let speed = if airborne { 0.0 } else { (current.avatar.velocity.length().to_f32() / WALK_SPEED).min(1.4) };
+        let velocity = if airborne {
+            Vec3::ZERO
+        } else {
+            Vec3::new(
+                current.avatar.velocity.x.to_f32(),
+                0.0,
+                current.avatar.velocity.y.to_f32(),
+            )
+        };
+        let (speed, turn) =
+            peer.motion
+                .advance_with_profile(velocity, heading, time.delta_secs(), motion_profile);
         let swing = current.avatar.swing.as_ref();
-        let attack = swing.and_then(|s| attack(s, ticks));
+        let attack = swing.and_then(|s| {
+            attack(
+                s,
+                ticks,
+                library.has_feature(voxel_assets::SceneFeature::SwiftSword),
+            )
+        });
         if let (Some(swing), Some(_)) = (swing, attack) {
             if peer.heard != swing.started {
                 peer.heard = swing.started;
                 sound.play(crate::sound::Cue::Swing);
             }
         }
-        let dig = current.avatar.dig.as_ref().map(|d| crate::gameplay::dig_age(&game, d));
-        poses.push((entity, current.avatar.weapon, Pose { stride: peer.stride, speed, breathe, airborne, attack, dig }));
+        let dig = current.avatar.dig.as_ref().map(|d| dig_age(&game, d));
+        poses.push((
+            entity,
+            current.avatar.weapon,
+            Pose {
+                motion: motion_profile,
+                stride: peer.gait.phase,
+                speed,
+                turn,
+                breathe,
+                airborne,
+                jump: jump_motion(
+                    current.avatar.jump,
+                    ticks,
+                    current.avatar.height.to_f32(),
+                    current.avatar.flight.support.to_f32(),
+                ),
+                attack,
+                dig,
+            },
+        ));
     }
     for (entity, part, mut transform) in &mut parts {
         // Part pivots hang off the root or the body: find the peer above.
-        let pose = parents.iter_ancestors(entity).find_map(|e| poses.iter().find(|(p, ..)| *p == e).map(|(.., pose)| pose));
+        let pose = parents
+            .iter_ancestors(entity)
+            .find_map(|e| poses.iter().find(|(p, ..)| *p == e).map(|(.., pose)| pose));
         if let Some(pose) = pose {
-            *transform = pose.place(part.kind, part.rest);
+            blend_pose(
+                &mut transform,
+                pose.place(part.kind, part.rest),
+                time.delta_secs(),
+                pose.motion.pose_response,
+            );
         }
     }
     for (parent, mut visibility) in &mut exhausts {
         if let Some((.., pose)) = poses.iter().find(|(e, ..)| *e == parent.parent()) {
-            *visibility = if pose.airborne { Visibility::Inherited } else { Visibility::Hidden };
+            *visibility = if pose.airborne && pose.jump.is_none() {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
         }
     }
     for (entity, weapon, mut visibility) in &mut weapons {
-        let held = parents.iter_ancestors(entity).find_map(|e| poses.iter().find(|(p, ..)| *p == e).map(|(_, held, _)| *held));
+        let held = parents.iter_ancestors(entity).find_map(|e| {
+            poses
+                .iter()
+                .find(|(p, ..)| *p == e)
+                .map(|(_, held, _)| *held)
+        });
         if let Some(held) = held {
-            *visibility = if weapon.0 == held { Visibility::Inherited } else { Visibility::Hidden };
+            *visibility = if weapon.0 == held {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
         }
     }
     // The player's suit is only complete once the scene's style dresses it.
@@ -156,7 +246,13 @@ pub fn update(
     for agent in others.into_iter().filter(|a| !shown.contains(a)) {
         commands.queue(move |world: &mut World| {
             let root = copy(world, player, None);
-            world.entity_mut(root).insert(Peer { agent, style, stride: 0.0, heard: 0, foot_distance: 0.0 });
+            world.entity_mut(root).insert(Peer {
+                agent,
+                style,
+                gait: GaitClock::default(),
+                heard: 0,
+                motion: MotionState::default(),
+            });
         });
     }
 }
@@ -179,12 +275,19 @@ pub fn snapshot(world: &mut World) -> Vec<serde_json::Value> {
         }
         None
     };
-    let held: Vec<(Entity, Weapon)> = shown.iter().filter_map(|&(e, w)| Some((owner(world, e)?, w))).collect();
+    let held: Vec<(Entity, Weapon)> = shown
+        .iter()
+        .filter_map(|&(e, w)| Some((owner(world, e)?, w)))
+        .collect();
     let mut peers = world.query_filtered::<(Entity, &Transform), With<Peer>>();
     peers
         .iter(world)
         .map(|(e, t)| {
-            let mut weapons: Vec<_> = held.iter().filter(|(p, _)| *p == e).map(|(_, w)| format!("{w:?}")).collect();
+            let mut weapons: Vec<_> = held
+                .iter()
+                .filter(|(p, _)| *p == e)
+                .map(|(_, w)| format!("{w:?}"))
+                .collect();
             weapons.dedup();
             serde_json::json!({"position": t.translation.to_array(), "weapons": weapons})
         })
@@ -200,11 +303,16 @@ fn copy(world: &mut World, source: Entity, parent: Option<Entity>) -> Entity {
     let visibility = e.get::<Visibility>().copied().unwrap_or_default();
     let mesh = e.get::<Mesh3d>().cloned();
     let material = e.get::<MeshMaterial3d<StandardMaterial>>().cloned();
-    let part = e.get::<Part>().map(|p| PeerPart { kind: p.kind, rest: p.rest });
+    let part = e.get::<Part>().map(|p| PeerPart {
+        kind: p.kind,
+        rest: p.rest,
+    });
     let exhaust = e.contains::<Exhaust>();
     let weapon = e.get::<WeaponVisual>().map(|w| PeerWeapon(w.0));
     let no_shadow = e.contains::<NotShadowCaster>();
-    let children: Vec<Entity> = e.get::<Children>().map_or_else(Vec::new, |c| c.iter().collect());
+    let children: Vec<Entity> = e
+        .get::<Children>()
+        .map_or_else(Vec::new, |c| c.iter().collect());
     let mut copied = world.spawn((transform, visibility));
     if let Some(mesh) = mesh {
         copied.insert(mesh);
@@ -232,7 +340,10 @@ fn copy(world: &mut World, source: Entity, parent: Option<Entity>) -> Entity {
         // Lights stay with the player; so does the backpack (each peer gets
         // its own, see `piles::render`).
         let child_ref = world.entity(child);
-        if child_ref.contains::<PointLight>() || child_ref.contains::<SpotLight>() || child_ref.contains::<crate::piles::CarryVisual>() {
+        if child_ref.contains::<PointLight>()
+            || child_ref.contains::<SpotLight>()
+            || child_ref.contains::<crate::piles::CarryVisual>()
+        {
             continue;
         }
         copy(world, child, Some(id));
@@ -257,6 +368,7 @@ mod tests {
     fn swing(hits: u32) -> Swing {
         Swing {
             weapon: Weapon::Sword,
+            stroke: sim::settlement::avatar::SwordStroke::Forehand,
             aim: FxVec2::new(Fx::ONE, Fx::ZERO),
             muzzle: [Fx::ZERO; 3],
             started: 100,
@@ -270,20 +382,20 @@ mod tests {
     #[test]
     fn a_swing_plays_from_its_start_tick_and_ends() {
         let s = swing(0);
-        assert_eq!(attack(&s, 100.0).unwrap().age, 0.0);
-        let mid = attack(&s, at(0.2)).unwrap();
+        assert_eq!(attack(&s, 100.0, false).unwrap().age, 0.0);
+        let mid = attack(&s, at(0.2), false).unwrap();
         assert!((mid.age - 0.2).abs() < 1e-4 && mid.impact_angle.is_none());
         assert!((mid.aim - Vec3::X).length() < 1e-4);
-        assert!(attack(&s, at(ATTACK_END) + 0.1).is_none());
+        assert!(attack(&s, at(ATTACK_END) + 0.1, false).is_none());
     }
 
     #[test]
     fn a_hit_rebounds_from_where_the_blade_was() {
         let s = swing(1);
-        let at_hit = attack(&swing(0), at(RESOLVE)).unwrap().angle();
-        let rebound = attack(&s, at(RESOLVE + 0.05)).unwrap();
+        let at_hit = attack(&swing(0), at(RESOLVE), false).unwrap().angle();
+        let rebound = attack(&s, at(RESOLVE + 0.05), false).unwrap();
         assert_eq!(rebound.impact_angle, Some(at_hit));
         assert!((rebound.age - 0.05).abs() < 1e-4);
-        assert!(attack(&s, at(RESOLVE + REBOUND_END) + 0.1).is_none());
+        assert!(attack(&s, at(RESOLVE + REBOUND_END) + 0.1, false).is_none());
     }
 }

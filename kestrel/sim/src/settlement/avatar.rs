@@ -50,9 +50,10 @@ pub const WINDUP_TICKS: u64 = ticks_from_60hz(13);
 const AIM_TICKS: u64 = ticks_from_60hz(10);
 /// A swing that hits nothing ends at 0.58 s; one that lands rebounds for 0.42 s.
 const SWING_TICKS: u64 = ticks_from_60hz(35);
+pub const SWORD_WINDUP_TICKS: u64 = ticks_from_60hz(7);
+const SWORD_SWING_TICKS: u64 = ticks_from_60hz(26);
 const REBOUND_TICKS: u64 = ticks_from_60hz(25);
-/// A click this close to the end of a swing is kept and played next (0.18 s).
-const BUFFER_TICKS: u64 = ticks_from_60hz(11);
+const COMBO_WINDOW_TICKS: u64 = ticks_from_60hz(75);
 /// Manual transfers start within this distance of the dock.
 const DOCK_REACH: Fx = Fx::from_bits(3_650_722_202); // 0.85
 /// Jetpack: hover height above the ground, and climb and sink speeds per tick
@@ -60,6 +61,10 @@ const DOCK_REACH: Fx = Fx::from_bits(3_650_722_202); // 0.85
 const HOVER: Fx = Fx::from_bits(7_730_941_133); // 1.8
 const CLIMB_PER_TICK: Fx = per_tick(Fx::from_ratio(11, 2));
 const SINK_PER_TICK: Fx = per_tick(Fx::from_int(3));
+pub const JUMP_PREP_TICKS: u64 = ticks_from_60hz(8);
+pub const JUMP_LAND_TICKS: u64 = ticks_from_60hz(10);
+const JUMP_VELOCITY: Fx = per_tick(Fx::from_int(4));
+const JUMP_GRAVITY: Fx = per_tick(per_tick(Fx::from_int(14)));
 /// A dig takes 2 s, standing still.
 pub const DIG_TICKS: u64 = millis_to_ticks(2000);
 /// Dug ore flies out of the pit for 0.6 s.
@@ -80,6 +85,8 @@ pub enum Intent {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Swing {
     pub weapon: Weapon,
+    #[serde(default)]
+    pub stroke: SwordStroke,
     /// Unit vector toward the aim.
     pub aim: FxVec2,
     pub muzzle: [Fx; 3],
@@ -90,6 +97,24 @@ pub struct Swing {
     /// Set once contact was resolved; then `hits` holds how many it hit.
     pub resolved: bool,
     pub hits: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SwordStroke {
+    #[default]
+    Forehand,
+    Backhand,
+    Overhead,
+}
+
+impl SwordStroke {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Forehand => Self::Backhand,
+            Self::Backhand => Self::Overhead,
+            Self::Overhead => Self::Forehand,
+        }
+    }
 }
 
 /// Digging out the tile under the avatar.
@@ -119,11 +144,23 @@ pub struct Flight {
     pub support: Fx,
 }
 
+/// A deterministic grounded jump. Vertical velocity is meters per tick.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum JumpPhase {
+    #[default]
+    Grounded,
+    Preparing { started: u64 },
+    Airborne { started: u64, velocity: Fx },
+    Landing { started: u64 },
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AvatarState {
     /// Height of the feet above the arena floor.
     pub height: Fx,
     pub flight: Flight,
+    #[serde(default)]
+    pub jump: JumpPhase,
     /// A pile job that failed while walking, for housekeeping to report.
     pub pile_failure: Option<String>,
     /// Meters per second.
@@ -131,6 +168,10 @@ pub struct AvatarState {
     pub intent: Option<Intent>,
     pub run: bool,
     pub swing: Option<Swing>,
+    #[serde(default)]
+    pub combo_next: SwordStroke,
+    #[serde(default)]
+    pub combo_until: u64,
     /// The weapon in hand, so every peer shows it.
     pub weapon: Weapon,
     /// A follow-up attack clicked during the end of a swing.
@@ -187,7 +228,49 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, tick: u64, terrain: &
         }
     }
     walk(a, tick, terrain);
-    fly(a, terrain);
+    if terrain.jump_enabled {
+        jump_step(a, tick, terrain);
+    } else {
+        fly(a, terrain);
+    }
+}
+
+fn jump_step(a: &mut AgentState, tick: u64, terrain: &Terrain) {
+    let avatar = &mut a.avatar;
+    let ground = terrain.footprint(a.position, BODY_RADIUS);
+    if let Some(y) = ground {
+        avatar.flight.support = y;
+    }
+    match avatar.jump {
+        JumpPhase::Grounded => {
+            avatar.flight.airborne = false;
+            if let Some(y) = ground { avatar.height = y; }
+        }
+        JumpPhase::Preparing { started } => {
+            if tick >= started + JUMP_PREP_TICKS {
+                avatar.jump = JumpPhase::Airborne { started: tick, velocity: JUMP_VELOCITY };
+                avatar.flight.airborne = true;
+                avatar.height += JUMP_VELOCITY;
+            }
+        }
+        JumpPhase::Airborne { started, velocity } => {
+            let next_velocity = velocity - JUMP_GRAVITY;
+            avatar.height += next_velocity;
+            if next_velocity <= Fx::ZERO && ground.is_some_and(|y| avatar.height <= y) {
+                avatar.height = ground.unwrap();
+                avatar.flight.airborne = false;
+                avatar.jump = JumpPhase::Landing { started: tick };
+            } else {
+                avatar.jump = JumpPhase::Airborne { started, velocity: next_velocity };
+            }
+        }
+        JumpPhase::Landing { started } => {
+            if let Some(y) = ground { avatar.height = y; }
+            if tick >= started + JUMP_LAND_TICKS {
+                avatar.jump = JumpPhase::Grounded;
+            }
+        }
+    }
 }
 
 fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain) {
@@ -386,6 +469,19 @@ impl Settlement {
         }
     }
 
+    /// Starts a jump with a short crouch before takeoff. Midair presses do nothing.
+    pub fn jump(&mut self, agent: usize, tick: u64) {
+        if let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) {
+            if matches!(a.avatar.jump, JumpPhase::Grounded)
+                && !a.avatar.flight.airborne
+                && a.avatar.dig.is_none()
+                && a.avatar.swing.is_none()
+            {
+                a.avatar.jump = JumpPhase::Preparing { started: tick };
+            }
+        }
+    }
+
     /// Commands: starts digging out the tile under the avatar, if the scene
     /// allows digging, the avatar stands on the ground with its hands free,
     /// the pit there isn't as deep as it goes, and no pile or machine sits
@@ -515,7 +611,7 @@ impl Settlement {
         a.avatar.intent = Some(intent);
     }
 
-    /// Commands: starts an attack, or buffers it near the end of the current one.
+    /// Commands: starts an attack, or buffers one deliberate press during it.
     pub fn attack(&mut self, tick: u64, agent: usize, weapon: Weapon, aim: FxVec2, muzzle: [Fx; 3]) {
         if !self.has_weapon(weapon) {
             return;
@@ -523,6 +619,7 @@ impl Settlement {
         if self.agents.get(agent).is_some_and(|a| a.controlled) {
             self.cancel_pile_job(agent);
         }
+        let swift_sword = self.swift_sword;
         let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
         if a.avatar.dig.is_some() {
             return;
@@ -533,21 +630,20 @@ impl Settlement {
         }
         match &a.avatar.swing {
             Some(swing) if tick < swing.until => {
-                if swing.until - tick <= BUFFER_TICKS {
-                    a.avatar.queued = Some((weapon, aim, muzzle));
-                }
+                a.avatar.queued = Some((weapon, aim, muzzle));
             }
-            _ => start_swing(a, tick, weapon, aim, muzzle),
+            _ => start_swing(a, tick, weapon, aim, muzzle, swift_sword),
         }
     }
 
     /// Housekeeping: a buffered attack starts once the swing ends.
     pub(crate) fn avatar_housekeeping(&mut self, tick: u64) {
+        let swift_sword = self.swift_sword;
         for a in self.agents.iter_mut().filter(|a| a.controlled) {
             let finished = a.avatar.swing.as_ref().is_none_or(|s| tick + 1 >= s.until);
             if finished {
                 if let Some((weapon, aim, muzzle)) = a.avatar.queued.take() {
-                    start_swing(a, tick + 1, weapon, aim, muzzle);
+                    start_swing(a, tick + 1, weapon, aim, muzzle, swift_sword);
                 }
             }
         }
@@ -646,17 +742,25 @@ impl Settlement {
     }
 }
 
-fn start_swing(a: &mut AgentState, tick: u64, weapon: Weapon, aim: FxVec2, muzzle: [Fx; 3]) {
+fn start_swing(a: &mut AgentState, tick: u64, weapon: Weapon, aim: FxVec2, muzzle: [Fx; 3], swift_sword: bool) {
+    let stroke = if weapon == Weapon::Sword {
+        if tick <= a.avatar.combo_until { a.avatar.combo_next } else { SwordStroke::Forehand }
+    } else {
+        SwordStroke::Forehand
+    };
+    a.avatar.combo_next = if weapon == Weapon::Sword { stroke.next() } else { SwordStroke::Forehand };
+    a.avatar.combo_until = tick + COMBO_WINDOW_TICKS;
     a.avatar.weapon = weapon;
     a.route.clear();
     a.avatar.intent = Some(Intent::Stop);
     a.avatar.swing = Some(Swing {
         weapon,
+        stroke,
         aim,
         muzzle,
         started: tick,
-        resolve_at: tick + WINDUP_TICKS,
-        until: tick + SWING_TICKS,
+        resolve_at: tick + if weapon == Weapon::Sword && swift_sword { SWORD_WINDUP_TICKS } else { WINDUP_TICKS },
+        until: tick + if weapon == Weapon::Sword && swift_sword { SWORD_SWING_TICKS } else { SWING_TICKS },
         resolved: false,
         hits: 0,
     });

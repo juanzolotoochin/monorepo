@@ -21,7 +21,9 @@ use sim::settlement::{PileSetup, SceneSetup, Settlement as SimSettlement};
 use sim::{CommandKind, World as SimWorld};
 
 use crate::assets::SceneLibrary;
-use crate::gameplay::{Controls, Obstacle, Player, WALK_SPEED};
+use crate::character::Player;
+use crate::combat::Obstacle;
+use crate::gameplay::{Controls, WALK_SPEED};
 
 /// The world seed. Scenes don't use randomness outside combat rolls, which are
 /// keyed on ticks and IDs, so one seed serves every scene.
@@ -267,6 +269,8 @@ pub fn build_world(world: &mut World) {
         }),
         memory_trial: library.has_feature(voxel_assets::SceneFeature::MemoryTrial),
         diggable: library.has_feature(voxel_assets::SceneFeature::Digging),
+        jump_enabled: library.has_feature(voxel_assets::SceneFeature::Jump),
+        swift_sword: library.has_feature(voxel_assets::SceneFeature::SwiftSword),
         mine: scene.mine.as_ref().map(|m| m.seed),
     };
     let scene_id = scene.id.clone();
@@ -466,6 +470,7 @@ pub struct LocalAvatarPreview {
 /// Places the player where the simulation has the avatar, between ticks.
 pub fn follow_avatar(
     game: Res<Game>,
+    library: Res<SceneLibrary>,
     time: Res<Time>,
     mut controls: ResMut<Controls>,
     mut player: Single<&mut Transform, With<Player>>,
@@ -578,15 +583,12 @@ pub fn follow_avatar(
     if let Some(velocity) = preview_velocity {
         controls.velocity = velocity;
     }
-    controls.stride += moved.length() * 8.5;
-    if a.avatar.flight.airborne {
-        controls.foot_distance = 0.0;
-    } else {
-        controls.foot_distance += moved.length();
-        if controls.foot_distance > 0.72 {
-            controls.foot_distance -= 0.72;
-            sound.play(crate::sound::Cue::Step);
-        }
+    let step_distance = library.scenes[library.current].scene.style.as_ref()
+        .map_or_else(voxel_assets::CharacterMotion::default, |s| s.character_motion)
+        .step_distance.clamp(0.2, 4.0);
+    let contacts = controls.gait.advance(moved.length(), step_distance, !a.avatar.flight.airborne);
+    for _ in 0..contacts {
+        sound.play(crate::sound::Cue::Step);
     }
     controls.route = a.route.iter().map(|&p| game.to_view(p)).collect();
     let _ = dt;
@@ -614,7 +616,7 @@ pub fn end_frame(mut game: ResMut<Game>) {
 }
 
 /// Keyboard movement: camera-relative walking, the jetpack, digging, and respawning.
-pub fn keyboard_input(keys: Res<ButtonInput<KeyCode>>, mut controls: ResMut<Controls>, mut game: ResMut<Game>) {
+pub fn keyboard_input(keys: Res<ButtonInput<KeyCode>>, library: Res<SceneLibrary>, mut controls: ResMut<Controls>, mut game: ResMut<Game>) {
     let Some(agent) = game.player() else { return };
     if keys.just_pressed(KeyCode::KeyR) {
         game.command(CommandKind::Respawn { agent });
@@ -623,9 +625,13 @@ pub fn keyboard_input(keys: Res<ButtonInput<KeyCode>>, mut controls: ResMut<Cont
         return;
     }
     if keys.just_pressed(KeyCode::Space) {
-        game.command(CommandKind::Jetpack { agent, enabled: true });
+        if library.has_feature(voxel_assets::SceneFeature::Jump) {
+            game.command(CommandKind::Jump { agent });
+        } else {
+            game.command(CommandKind::Jetpack { agent, enabled: true });
+        }
     }
-    if keys.just_released(KeyCode::Space) {
+    if keys.just_released(KeyCode::Space) && !library.has_feature(voxel_assets::SceneFeature::Jump) {
         game.command(CommandKind::Jetpack { agent, enabled: false });
     }
     // X picks the spear in combat scenes, so digging is F.

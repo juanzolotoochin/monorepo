@@ -84,6 +84,8 @@ pub enum CommandKind {
     Equip { agent: u16, weapon: content::scenario::Weapon },
     /// Holds a player's jetpack on or off.
     Jetpack { agent: u16, enabled: bool },
+    /// Begins a grounded jump in scenes that enable it.
+    Jump { agent: u16 },
     /// Puts a player back at the spawn point.
     Respawn { agent: u16 },
     /// Pile lab: walk to a pile and transfer, `pace` seconds per unit (0: all at once).
@@ -113,6 +115,7 @@ impl CommandKind {
             | CommandKind::Transfer { agent, .. }
             | CommandKind::CancelTransfer { agent }
             | CommandKind::Jetpack { agent, .. }
+            | CommandKind::Jump { agent }
             | CommandKind::Equip { agent, .. }
             | CommandKind::Respawn { agent }
             | CommandKind::DigDown { agent }
@@ -430,6 +433,13 @@ impl World {
                 CommandKind::Jetpack { agent, enabled } => {
                     if let Some(s) = &mut self.settlement {
                         s.jetpack(agent as usize, enabled);
+                    }
+                }
+                CommandKind::Jump { agent } => {
+                    if self.terrain.jump_enabled {
+                        if let Some(s) = &mut self.settlement {
+                            s.jump(agent as usize, self.tick);
+                        }
                     }
                 }
                 CommandKind::Respawn { agent } => {

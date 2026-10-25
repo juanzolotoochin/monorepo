@@ -5,6 +5,7 @@ use content::Content;
 use fx::{Fx, FxVec2};
 
 use super::avatar::Intent;
+use super::avatar::{JumpPhase, SwordStroke};
 use super::piles::PileAction;
 use super::{PileSetup, SceneSetup, Settlement};
 use crate::terrain::{Disc, Surface};
@@ -104,6 +105,50 @@ fn jetpack_lab() -> SceneSetup {
         spawn: [fx(-5.0), Fx::ZERO, fx(3.0)],
         ..SceneSetup::default()
     }
+}
+
+#[test]
+fn jump_has_anticipation_arc_landing_and_no_air_restart() {
+    let mut scene = Scene::new(SceneSetup { jump_enabled: true, ..field() });
+    let agent = scene.agent();
+    let ground = scene.altitude();
+    scene.command(CommandKind::Jump { agent });
+    assert!(matches!(scene.avatar().avatar.jump, JumpPhase::Preparing { .. }));
+    scene.wait(ms(220));
+    assert!(matches!(scene.avatar().avatar.jump, JumpPhase::Airborne { .. }));
+    assert!(scene.altitude() > ground + fx(0.2));
+    scene.wait(ms(130));
+    assert!(scene.altitude() > ground + fx(0.4));
+    scene.command(CommandKind::Jump { agent });
+    assert!(matches!(scene.avatar().avatar.jump, JumpPhase::Airborne { .. }));
+    scene.wait(ms(1300));
+    assert_eq!(scene.avatar().avatar.jump, JumpPhase::Grounded);
+    assert_eq!(scene.altitude(), ground);
+    assert!(!scene.avatar().avatar.flight.airborne);
+}
+
+#[test]
+fn repeated_sword_attacks_cycle_then_reset() {
+    let mut scene = Scene::new(SceneSetup { swift_sword: true, ..field() });
+    let agent = scene.agent();
+    let attack = |scene: &mut Scene| {
+        scene.command(CommandKind::Attack {
+            agent,
+            weapon: content::scenario::Weapon::Sword,
+            aim: v(1.0, 0.0),
+            muzzle: [Fx::ZERO; 3],
+        });
+        scene.avatar().avatar.swing.as_ref().unwrap().stroke
+    };
+    assert_eq!(attack(&mut scene), SwordStroke::Forehand);
+    let swing = scene.avatar().avatar.swing.as_ref().unwrap();
+    assert_eq!(swing.resolve_at - swing.started, super::avatar::SWORD_WINDUP_TICKS);
+    scene.wait(ms(600));
+    assert_eq!(attack(&mut scene), SwordStroke::Backhand);
+    scene.wait(ms(600));
+    assert_eq!(attack(&mut scene), SwordStroke::Overhead);
+    scene.wait(ms(1500));
+    assert_eq!(attack(&mut scene), SwordStroke::Forehand);
 }
 
 #[test]

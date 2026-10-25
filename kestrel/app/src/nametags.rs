@@ -3,7 +3,7 @@
 
 use bevy::prelude::*;
 
-use crate::gameplay::Player;
+use crate::character::Player;
 use crate::lockstep::Game;
 use crate::peers::Peer;
 

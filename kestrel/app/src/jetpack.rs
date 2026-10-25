@@ -7,6 +7,7 @@ pub const HOVER: f32 = 1.8;
 pub struct Flight {
     pub requested: bool,
     pub airborne: bool,
+    pub jump: sim::settlement::avatar::JumpPhase,
     pub support: f32,
     current: Option<usize>,
     sound_timer: f32,
@@ -150,7 +151,9 @@ pub fn update(
     sound: Res<crate::sound::Sound>,
     mut exhaust: Query<(&mut Transform, &mut Visibility), With<Exhaust>>,
 ) {
-    let (Some(current), Some(index)) = (&game.current, game.player()) else { return };
+    let (Some(current), Some(index)) = (&game.current, game.player()) else {
+        return;
+    };
     let avatar = &current.agents[index as usize].avatar;
     let climbing = game
         .previous
@@ -158,11 +161,22 @@ pub fn update(
         .and_then(|p| p.agents.get(index as usize))
         .is_some_and(|before| avatar.height > before.avatar.height);
     flight.requested = avatar.flight.requested;
+    let was_airborne = flight.airborne;
     flight.airborne = avatar.flight.airborne;
+    flight.jump = avatar.jump;
     flight.support = avatar.flight.support.to_f32();
     let dt = time.delta_secs().min(0.1);
     flight.sound_timer -= dt;
-    if flight.airborne && flight.sound_timer <= 0.0 {
+    let jumping = !matches!(flight.jump, sim::settlement::avatar::JumpPhase::Grounded);
+    if was_airborne
+        && matches!(
+            flight.jump,
+            sim::settlement::avatar::JumpPhase::Landing { .. }
+        )
+    {
+        sound.play(crate::sound::Cue::Land);
+    }
+    if flight.airborne && !jumping && flight.sound_timer <= 0.0 {
         sound.play(crate::sound::Cue::Jetpack);
         flight.sound_timer = 0.16;
     }
@@ -170,8 +184,13 @@ pub fn update(
         flight.sound_timer = 0.0;
     }
     for (mut transform, mut visibility) in &mut exhaust {
-        *visibility = if flight.airborne { Visibility::Inherited } else { Visibility::Hidden };
-        transform.scale.y = 0.4 + 0.1 * (time.elapsed_secs() * 35.0).sin() + if climbing { 0.25 } else { 0.0 };
+        *visibility = if flight.airborne && !jumping {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        transform.scale.y =
+            0.4 + 0.1 * (time.elapsed_secs() * 35.0).sin() + if climbing { 0.25 } else { 0.0 };
     }
 }
 

@@ -23,8 +23,21 @@ impl RigTemplate {
             .map(|part| {
                 let default_pivot = match part.part {
                     ActorPart::Body => [0., 0.94, 0.],
+                    ActorPart::Chest => [0., 1.12, 0.],
                     ActorPart::LeftLeg => [-0.17, 0.58, 0.],
                     ActorPart::RightLeg => [0.17, 0.58, 0.],
+                    ActorPart::LeftArm => [-0.43, 1.27, 0.],
+                    ActorPart::RightArm => [0.43, 1.27, 0.],
+                    ActorPart::LeftShin => [-0.17, 0.31, 0.],
+                    ActorPart::RightShin => [0.17, 0.31, 0.],
+                    ActorPart::LeftKnee => [-0.17, 0.31, 0.],
+                    ActorPart::RightKnee => [0.17, 0.31, 0.],
+                    ActorPart::LeftFoot => [-0.17, 0.1, 0.],
+                    ActorPart::RightFoot => [0.17, 0.1, 0.],
+                    ActorPart::LeftForearm => [-0.43, 1.01, 0.],
+                    ActorPart::RightForearm => [0.43, 1.01, 0.],
+                    ActorPart::LeftHand => [-0.43, 0.75, 0.],
+                    ActorPart::RightHand => [0.43, 0.75, 0.],
                     ActorPart::Weapon => [0.4, 0.9, 0.],
                     ActorPart::Head => [0., 1.49, 0.],
                     ActorPart::WoundPlug => [0., 0.94, 0.],
@@ -142,7 +155,20 @@ impl Rig {
         }
         for (entity, part, rest) in &self.bones {
             let mut t = *rest;
-            let side = if *part == ActorPart::LeftLeg { -1. } else { 1. };
+            let side = if matches!(
+                part,
+                ActorPart::LeftLeg
+                    | ActorPart::LeftArm
+                    | ActorPart::LeftShin
+                    | ActorPart::LeftKnee
+                    | ActorPart::LeftFoot
+                    | ActorPart::LeftForearm
+                    | ActorPart::LeftHand
+            ) {
+                -1.
+            } else {
+                1.
+            };
             match &self.motion {
                 Motion::Biped | Motion::Quadruped => {
                     if matches!(part, ActorPart::LeftLeg | ActorPart::RightLeg) {
@@ -157,9 +183,29 @@ impl Rig {
                         };
                         t.rotation = Quat::from_rotation_x(stride + drag + recoil * 0.18);
                     }
+                    if matches!(part, ActorPart::LeftShin | ActorPart::RightShin | ActorPart::LeftKnee | ActorPart::RightKnee) {
+                        let phase = (travel * (12.0 - injury * 3.0)).sin() * side;
+                        t.rotation =
+                            Quat::from_rotation_x(-phase.max(0.0) * (0.42 - injury * 0.18));
+                    }
+                    if matches!(part, ActorPart::LeftArm | ActorPart::RightArm) {
+                        let swing = (travel * (12.0 - injury * 3.0)).sin() * side;
+                        t.rotation =
+                            Quat::from_rotation_x(-swing * (0.36 - injury * 0.12) - activity * 0.1);
+                    }
+                    if matches!(part, ActorPart::LeftForearm | ActorPart::RightForearm) {
+                        t.rotation = Quat::from_rotation_x(-0.3 - activity * 0.12);
+                    }
+                    if matches!(part, ActorPart::LeftHand | ActorPart::RightHand) {
+                        t.rotation = Quat::from_rotation_x(activity * 0.08);
+                    }
                     if matches!(
                         part,
-                        ActorPart::Body | ActorPart::Armor | ActorPart::WoundPlug | ActorPart::Head
+                        ActorPart::Body
+                            | ActorPart::Chest
+                            | ActorPart::Armor
+                            | ActorPart::WoundPlug
+                            | ActorPart::Head
                     ) {
                         t.translation.y += (travel * 24.).cos() * 0.018;
                         t.rotation =
