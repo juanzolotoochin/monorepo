@@ -1,8 +1,8 @@
 # Character definitions
 
 Status, 25 October 2026:
-- **Step 1 is implemented.**
-- **Steps 2 to 5** are planned; see [Next steps](#next-steps).
+- **Steps 1 and 2 are implemented.**
+- **Steps 3 to 5** are planned; see [Next steps](#next-steps).
 
 Background:
 - The survey of how characters were assembled before this is
@@ -23,7 +23,10 @@ Background:
 | Ghoul speed | Every ghoul walks at 0.6 m/s, the forest speed. 0.75 was tried and dropped: the forest no longer held its first minute. |
 | Player health | Stays a scenario rule (`player_health`). |
 | Timing units | Whole 60 Hz frames, now a project-wide guideline (`architecture.md`). |
-| Player character | A fixed default (`exosuit`) until scenes name their player (step 3). |
+| Player character | Each scenario agent names its character; the player agents name `exosuit`. The view still assumes `exosuit` (`PLAYER_CHARACTER`) until scenes name their player (step 3). |
+| Hauler capacity | Stays on the scenario agent: haulers of one kind carry different loads by job. To revisit with better tooling. |
+| Transfer time | A character stat (`carry.transfer`), for haulers and the player. |
+| Carts | Stay in the scenario agent's `equipment`. |
 | Base-only files | Ordinary characters. A base may also be used on its own. |
 | Jump, jetpack, dig | Move with abilities in step 3. |
 | Spawn fallout | Allowed to move a spawn point. None needed to move. |
@@ -32,7 +35,7 @@ Background:
 ## The migration
 
 1. **Done:** character files, the player and enemies.
-2. Haulers become characters.
+2. **Done:** haulers become characters.
 3. Abilities move from scene flags to characters.
 4. A `view` section and one rig path.
 5. A shared brain and action vocabulary.
@@ -47,6 +50,9 @@ kestrel/content/data/character/
   ghoul.ron             hp 3, walk 0.6; the base for the others
   ghoul_forest.ron      base: ghoul; hp 2
   ghoul_brute.ron       base: ghoul; hp 5, walk 0.59, armor
+  worker.ron            hauler; walk 1.5, radius 0.28, transfer 27 frames
+  runner.ron            base: worker; walk 1.7
+  ox.ron                hauler; walk 1.1, radius 0.75, transfer 27 frames
 ```
 
 Files are named by path (`character/ghoul`). Scenarios and `base` use the short
@@ -72,8 +78,8 @@ name (`ghoul`). They are compiled into the binary through `content::BUILTIN`.
 
 All of these are in `content::character`.
 
-- `CharacterDef { brain, body, movement, health, avatar }`
-  - `brain`: `Player` or `FollowRoute`. `Hauler` arrives in step 2.
+- `CharacterDef { brain, body, movement, health, avatar, carry }`
+  - `brain`: `Player`, `FollowRoute` or `Hauler`.
   - `body.radius`: meters.
   - `movement`: `walk` and `run` in m/s. `run` defaults to `walk`.
   - `health`: enemies only. Holds `hp`, `breach_damage`, and optional
@@ -82,6 +88,8 @@ All of these are in `content::character`.
     - `acceleration`, `braking`, `attack_braking`: written in m/s², stored per tick.
     - `attack: AttackTiming`: windup, aim, swing, sword windup and swing,
       rebound and combo window. Written as frames, stored as ticks.
+  - `carry.transfer`: players and haulers only. Ticks to load or unload one unit,
+    written as frames. How much a character carries is set by the scenario.
 - `CharacterIx = u16`, indexing `Rules::characters` in name order.
 - `PLAYER_CHARACTER = "exosuit"`.
 
@@ -90,8 +98,8 @@ The loader works in four stages:
 2. It merges leaf fields: a variant's `movement: (walk: 0.59)` keeps its
    base's `run`. Armor is replaced whole.
 3. It validates the merged definition: required fields, ranges, `Player` with
-   `avatar` and no `health`, `FollowRoute` with `health` and no `avatar`, and
-   armor radius at least body radius.
+   `avatar` and `carry` and no `health`, `FollowRoute` with `health` only,
+   `Hauler` with `carry` only, and armor radius at least body radius.
 4. It converts units.
 
 `Rules`, `Names` and `Views` gain `characters`. `Rules::max_body_radius` and
@@ -104,25 +112,30 @@ The loader works in four stages:
 - **Rules on the settlement:** `Settlement::characters` holds the rules. It is
   `#[serde(skip)]`, so it is left out of saves and hashes, and
   `World::from_state` restores it with `set_characters`, which checks every index.
-- **Index fields:** `AgentState.character: Option<CharacterIx>` is set for avatars;
-  haulers get one in step 2. `WaveState.character` names each wave's enemy.
-- **Waves:** they still copy `hp`, `armor`, `speed` and breach `damage` into
-  `WaveState`, now from the definition.
+- **Index fields:** every `AgentState` has a `character: CharacterIx`, named by
+  the scenario agent's `character:`. Avatars must name a `Player` character and
+  haulers a `Hauler` one. `WaveState.character` names each wave's enemy.
+- **Copied tuning:** agents copy walk speed, body radius and transfer time into
+  `AgentState` (`speed`, `base_radius`, `transfer_ticks`). Waves copy `hp`,
+  `armor`, `speed` and breach `damage` into `WaveState`. Both copy from the definition.
+- **Scenario agents** keep `id`, `label`, `skin`, `position`, `capacity`, `links`,
+  `equipment` and the cargo view fields. Capacity and carts stay there.
 - **Avatars:**
   - Movement, piles routing and the laser's hit test read the avatar's character.
     The character table reaches them through `haulers::Ctx`.
   - A controlled agent's `base_radius` is its body radius, so haulers avoid the
     avatar at the size it collides with.
-  - A scenario `radius` on a controlled agent is an error.
 - **Threats:** `Settlement::threat_radius` gives the armor radius while
   plating is left and the body radius after.
 - **View:**
   - `SessionService::player_character()` serves prediction and route checks.
   - The swing phases come from the builtin exosuit, through `lockstep::builtin_content()`.
+  - The view's scenario copy (`legacy::Scenario`) takes agent speed, radius and
+    transfer time from the same builtin characters.
 
-Saves move to format 3. Character indices are remapped by name, and only the
-characters a save uses must exist. The rules hash covers characters. Input
-logs are unchanged.
+Saves are format 4: format 3 added character indices, and format 4 gives every
+agent one. Character indices are remapped by name, and only the characters a
+save uses must exist. The rules hash covers characters. Input logs are unchanged.
 
 ## How results were kept
 
@@ -133,9 +146,16 @@ logs are unchanged.
 | Code reads definitions | unchanged | unchanged |
 | One player radius | change | unchanged |
 | All ghouls at 0.6 m/s (gameplay change) | change | arena changes, forest unchanged |
+| Step 2: hauler characters, every agent indexed, save format 4 | change (encoding) | unchanged |
+| Step 2: agents read their characters | unchanged | unchanged |
 
 - `builtin_characters_keep_the_former_constants` pins every moved value to the
   bits of the constant it replaced.
+- `builtin_haulers_keep_the_former_scenario_values` does the same for the
+  forest haulers' speed and radius. It also checks that 27 and 24 frames give
+  the same ticks as the former 0.45 s and 0.4 s.
+- The sim's test fixtures keep their own values (2 m/s, 0.18 m, 6 frames)
+  through `test_hauler` and `test_player` characters.
 - The parity probe (two unattended minutes) is the same before and after the radius
   fix: forest 99 delivered and 23 kills, arena 10 kills and 22 breaches. In idle runs no hauler passes close to
   the player. The radius matters once the player walks among the haulers.
@@ -162,30 +182,17 @@ These are manual checks the tests can't make:
 - **Swing timing:** the view's swing phases follow the sim's frames since #86.
   They are under 10 ms off the old values, so check that swings still look right.
 
-### Step 2: haulers become characters
+### Step 2: haulers become characters (done)
 
-- **Brain and character index:** add `Brain::Hauler`. `AgentState.character` becomes required for every
-  agent, not just avatars.
-- **Hauler stats:** speed, radius, capacity and transfer time move from scenario agents into
-  character files. Today's forest haulers suggest these files:
+| Character | Walk | Radius | Transfer | Used by |
+|---|---|---|---|---|
+| `worker` | 1.5 | 0.28 | 27 frames | forester, lumberjack, ironmonger |
+| `runner` (base `worker`) | 1.7 | | | runner |
+| `ox` | 1.1 | 0.75 | 27 frames | bramble |
+| `exosuit` | | | 24 frames | the player |
 
-  | Character | Walk | Radius | Capacity | Transfer | Used by |
-  |---|---|---|---|---|---|
-  | `worker` | 1.5 | 0.28 | 2 | 27 frames | forester, lumberjack |
-  | `porter` (base `worker`) | | | 3 | | ironmonger |
-  | `runner` (base `worker`) | 1.7 | | 5 | | runner |
-  | `ox` | 1.1 | 0.75 | 3 | 27 frames | bramble |
-
-- **Scenario agents** keep `id`, `label`, `position`, `links`, `equipment` and the
-  cargo view fields, plus `character:`. The controlled agent names `exosuit`, and
-  its unused `speed` goes away.
-- **Frames:** per the guideline, `transfer_seconds` becomes transfer frames: 0.45 s is
-  27 frames and 0.4 s is 24. Converting the existing decimals must keep their tick
-  counts. Check it with a bit-equality test as in step 1.
-- **To decide:**
-  - Is capacity a character stat (it makes the `porter` file) or a property of
-    where an agent is placed?
-  - Do cart and trailer stats (`equipment`) stay in the scenario? The scope decision says carts are out.
+Capacity stays on the scenario agent, so no `porter` file was needed. Agent
+`skin` fields stay until step 4.
 
 ### Step 3: abilities move to characters
 
@@ -237,11 +244,12 @@ These are manual checks the tests can't make:
   through their wave.
 - **Shared code:** `AgentState` splits into a shared body (position, heading,
   velocity, radius, health) plus role data. Cargo has three models today (hauler
-  `cargo`, avatar `ManualJob`, pile jobs); they merge here or in step 2.
+  `cargo`, avatar `ManualJob`, pile jobs); they merge here.
 - **Out of scope:** possession. Defenders stay as they are.
 - **To decide:** do threats attack agents, so the player can be hurt by ghouls
   and not only by lasers? This is a gameplay change, so it gets its own commit.
 
 ## Open
 
-- `speed` on a controlled scenario agent is still required but unused. Step 2 removes it.
+- Hauler capacity is set per scenario agent. Revisit it once there is better
+  content tooling.

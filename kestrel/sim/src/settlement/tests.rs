@@ -38,12 +38,10 @@ fn agent(id: &str) -> Agent {
         id: id.into(),
         label: id.into(),
         skin: "worker".into(),
+        character: "test_hauler".into(),
         position: p(-2.0, 1.0),
-        speed: fx(2.0),
-        radius: Some(fx(0.18)),
         capacity: 3,
         links: vec!["wood".into()],
-        transfer_seconds: fx(0.1),
         cargo_anchor: [0.0, 0.5, -0.2],
         cargo_layout: CargoLayout::default(),
         equipment: None,
@@ -85,8 +83,15 @@ fn scenario() -> Scenario {
     }
 }
 
+/// The builtin content plus the original fixtures' haulers.
+fn test_content() -> Content {
+    let mut sources = content::builtin_sources();
+    sources.push(("character/test_hauler.ron".into(), super::combat_tests::TEST_HAULER.into()));
+    Content::from_sources(sources).unwrap()
+}
+
 fn world(scenario: &Scenario, obstacles: &[Disc]) -> Simulation {
-    let world = World::new_settlement(1, &Content::builtin(), scenario, obstacles).unwrap();
+    let world = World::new_settlement(1, &test_content(), scenario, obstacles).unwrap();
     Simulation::from_world(world, 4)
 }
 
@@ -182,7 +187,7 @@ fn disabling_links_drains_committed_jobs() {
 fn blocked_docks_are_rejected_and_unreachable_jobs_never_reserve_stock() {
     let mut config = scenario();
     config.depots[1].position = p(8.0, 8.0);
-    let blocked = World::new_settlement(1, &Content::builtin(), &config, &[Disc { center: FxVec2::new(fx(8.0), fx(8.0)), radius: fx(0.1) }]);
+    let blocked = World::new_settlement(1, &test_content(), &config, &[Disc { center: FxVec2::new(fx(8.0), fx(8.0)), radius: fx(0.1) }]);
     assert!(blocked.is_err());
 
     // A wall between the forest and the mill (the yard moves off it).

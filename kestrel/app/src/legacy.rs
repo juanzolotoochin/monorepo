@@ -151,27 +151,31 @@ impl Scenario {
             agents: scenario
                 .agents
                 .iter()
-                .map(|a| Agent {
-                    controlled: a.controlled,
-                    id: a.id.clone(),
-                    label: a.label.clone(),
-                    skin: a.skin.clone(),
-                    speed: a.speed.to_f32(),
-                    radius: a.radius.map_or_else(player_radius, Fx::to_f32),
-                    capacity: a.capacity,
-                    transfer_seconds: a.transfer_seconds.to_f32(),
-                    cargo_anchor: a.cargo_anchor,
-                    cargo_layout: a.cargo_layout.clone(),
-                    equipment: a.equipment.as_ref().map(|e| Equipment {
-                        depot: e.depot.clone(),
-                        item: e.item.clone(),
-                        skin: e.skin.clone(),
-                        capacity: e.capacity,
-                        radius: e.radius.to_f32(),
-                        offset: e.offset.map(Fx::to_f32),
-                        cargo_anchor: e.cargo_anchor,
-                        cargo_layout: e.cargo_layout.clone(),
-                    }),
+                .map(|a| {
+                    let character = agent_character(&a.character);
+                    let transfer = character.carry.as_ref().map_or(0, |c| c.transfer);
+                    Agent {
+                        controlled: a.controlled,
+                        id: a.id.clone(),
+                        label: a.label.clone(),
+                        skin: a.skin.clone(),
+                        speed: character.movement.walk.to_f32(),
+                        radius: character.body.radius.to_f32(),
+                        capacity: a.capacity,
+                        transfer_seconds: transfer as f32 / content::TICKS_PER_SECOND as f32,
+                        cargo_anchor: a.cargo_anchor,
+                        cargo_layout: a.cargo_layout.clone(),
+                        equipment: a.equipment.as_ref().map(|e| Equipment {
+                            depot: e.depot.clone(),
+                            item: e.item.clone(),
+                            skin: e.skin.clone(),
+                            capacity: e.capacity,
+                            radius: e.radius.to_f32(),
+                            offset: e.offset.map(Fx::to_f32),
+                            cargo_anchor: e.cargo_anchor,
+                            cargo_layout: e.cargo_layout.clone(),
+                        }),
+                    }
                 })
                 .collect(),
             producers: scenario
@@ -745,11 +749,9 @@ impl Simulation {
     }
 }
 
-/// A controlled avatar's radius, from the player character.
-fn player_radius() -> f32 {
+/// A scenario agent's character, from the builtin content the sim also uses.
+fn agent_character(name: &str) -> &'static content::character::CharacterDef {
     let content = crate::lockstep::builtin_content();
-    content
-        .names
-        .character_index(content::character::PLAYER_CHARACTER)
-        .map_or(0.0, |ix| content.rules.characters[ix as usize].body.radius.to_f32())
+    let ix = content.names.character_index(name).unwrap_or_else(|| panic!("unknown character {name:?}"));
+    &content.rules.characters[ix as usize]
 }

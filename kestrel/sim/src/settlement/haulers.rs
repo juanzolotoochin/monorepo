@@ -71,8 +71,8 @@ pub struct AgentState {
     pub controlled: bool,
     /// The player whose commands drive this avatar.
     pub owner: Option<crate::PlayerId>,
-    /// The character it is, for avatars. Haulers get one in step 2.
-    pub character: Option<content::character::CharacterIx>,
+    /// The character it is.
+    pub character: content::character::CharacterIx,
     /// The name the owner goes by; empty until they give one.
     pub name: String,
     pub home: FxVec2,
@@ -121,6 +121,8 @@ pub struct AgentState {
 impl AgentState {
     pub(super) fn new(
         def: &scenario::Agent,
+        character: content::character::CharacterIx,
+        rules: &content::character::CharacterDef,
         position: FxVec2,
         all_links: &[scenario::HaulLink],
         items: usize,
@@ -139,13 +141,14 @@ impl AgentState {
             controlled: def.controlled,
             // A scenario's avatar belongs to the host.
             owner: def.controlled.then_some(crate::PlayerId(0)),
-            character: None,
+            character,
             name: String::new(),
             home: position,
-            speed: def.speed.div_int(content::TICKS_PER_SECOND as i64),
-            base_radius: def.radius.unwrap_or(Fx::ZERO),
+            // Copied from the character, like a wave's tuning.
+            speed: rules.movement.walk.div_int(content::TICKS_PER_SECOND as i64),
+            base_radius: rules.body.radius,
             links: links.into_iter().map(|(_, i)| i as LinkIx).collect(),
-            transfer_ticks: scenario::ticks(def.transfer_seconds),
+            transfer_ticks: rules.carry.as_ref().expect("players and haulers carry").transfer,
             equipment: def.equipment.as_ref().map(|e| EquipmentDef {
                 depot: depot(&e.depot),
                 item: item(&e.item),

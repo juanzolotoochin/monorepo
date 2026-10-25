@@ -1,0 +1,8 @@
+// A worker who hauls at a faster walk.
+(
+    base: "worker",
+    sim: (
+        movement: (walk: 1.7),
+    ),
+    view: (),
+)
