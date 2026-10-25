@@ -2,12 +2,13 @@
 
 ## Share an optimized build with developers
 
-`//kestrel/app:share_to_devs` builds the host-platform game with `-c opt`,
-uploads the executable to a Google Drive folder, and posts its Drive link to
-the developer Telegram group. The publisher is
-written in Go. Folder permissions control who can download the build; share
-the folder with the developers before publishing. The tool does not change
-Drive permissions.
+`//kestrel/app:share_to_devs` builds optimized Linux x64 and Windows x64
+executables, uploads both to a Google Drive folder, and posts both labeled
+links in one message to the developer Telegram group. Run the publisher on a
+Linux x64 machine; it cross-compiles the Windows executable with the configured
+MSVC toolchain. The publisher is written in Go. Folder permissions control who
+can download the builds; share the folder with the developers before
+publishing. The tool does not change Drive permissions.
 
 1. In Google Cloud Console, select a project and enable the **Google Drive API**.
    For a folder in a personal **My Drive**, configure the OAuth consent screen,
@@ -56,9 +57,10 @@ To build without uploading or posting, run
 `bazel run --config=full_local -c opt //kestrel/app:share_to_devs -- --dry-run`.
 To upload to Drive without posting to Telegram, run
 `bazel run --config=full_local -c opt //kestrel/app:share_to_devs -- --drive-only`.
-The game executable and assets are self-contained; download the binary, make
-it executable on Unix (`chmod +x kestrel-*`), and run it on the same OS and CPU
-architecture as the publishing machine.
+The game executable and assets are self-contained. Download the binary for
+your OS, make the Linux one executable (`chmod +x kestrel-linux-*`), and run it
+on an x64 machine. The Windows build may require the Visual C++ x64
+Redistributable described below.
 
 ## Launch menu
 

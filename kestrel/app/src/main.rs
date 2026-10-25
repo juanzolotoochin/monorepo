@@ -139,7 +139,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
     let simulation = options.simulation;
     let offscreen = options.frames_dir.is_some();
     let fps = options.fps();
-    let deterministic = simulation || options.script.is_some();
+    let deterministic = simulation || options.script.is_some() || options.studio_frames.is_some();
     let studio = std::env::args().any(|arg| arg == "--character-studio");
     let mut launch_menu = menu::LaunchMenu::new(options.menu, &scenes);
     let mut viewer = viewer::Viewer::default();

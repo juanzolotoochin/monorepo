@@ -9,6 +9,13 @@ py_binary(
 )
 
 py_binary(
+    name = "studio_runner",
+    srcs = ["studio_runner.py"],
+    legacy_create_init = 0,
+    visibility = ["//visibility:public"],
+)
+
+py_binary(
     name = "client",
     srcs = ["client.py"],
     legacy_create_init = 0,

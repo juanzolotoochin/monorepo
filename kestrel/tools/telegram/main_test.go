@@ -97,6 +97,39 @@ func TestTelegramErrorRedactsToken(t *testing.T) {
 	}
 }
 
+func TestSendTelegramVideo(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "demo.mp4")
+	if err := os.WriteFile(path, []byte("mp4 content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/bottoken/sendVideo" || r.Method != http.MethodPost {
+			t.Errorf("unexpected Telegram request: %s %s", r.Method, r.URL)
+		}
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Error(err)
+		}
+		if r.FormValue("chat_id") != "@devgroup" || r.FormValue("caption") != "Demo capture" || r.FormValue("supports_streaming") != "true" {
+			t.Errorf("wrong video fields: %v", r.MultipartForm.Value)
+		}
+		video, _, err := r.FormFile("video")
+		if err != nil {
+			t.Error(err)
+		} else {
+			defer video.Close()
+			body, err := io.ReadAll(video)
+			if err != nil || string(body) != "mp4 content" {
+				t.Errorf("wrong video content: %q, %v", body, err)
+			}
+		}
+		io.WriteString(w, `{"ok":true}`)
+	}))
+	defer server.Close()
+	if err := sendTelegramVideo(context.Background(), server.Client(), server.URL, "token", "@devgroup", "Demo capture", path); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDriveResponseError(t *testing.T) {
 	resp := &http.Response{StatusCode: 403, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"Folder is not writable","errors":[{"reason":"insufficientFilePermissions"}]}}`))}
 	err := driveResponseError(resp)

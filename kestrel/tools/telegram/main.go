@@ -15,6 +15,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
@@ -35,15 +36,19 @@ func main() {
 }
 
 func run() error {
-	var caption string
+	var caption, videoPath string
 	var dryRun, driveOnly, authorizeDrive bool
 	flag.StringVar(&caption, "caption", "", "text to post with the Drive link")
+	flag.StringVar(&videoPath, "video", "", "send a demo MP4 directly to Telegram")
 	flag.BoolVar(&dryRun, "dry-run", false, "build without uploading or posting")
 	flag.BoolVar(&driveOnly, "drive-only", false, "upload to Drive without posting to Telegram")
 	flag.BoolVar(&authorizeDrive, "authorize-drive", false, "sign in to personal Google Drive and save a refresh token")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(flag.Args(), " "))
+	}
+	if videoPath != "" && (driveOnly || authorizeDrive) {
+		return errors.New("--video cannot be combined with Drive-only or Drive authorization")
 	}
 
 	workspace := os.Getenv("BUILD_WORKSPACE_DIRECTORY")
@@ -73,6 +78,29 @@ func run() error {
 	}
 	token := firstNonEmpty(os.Getenv("TELEGRAM_BOT_TOKEN"), config.TelegramBotToken)
 	chatID := firstNonEmpty(os.Getenv("TELEGRAM_CHAT_ID"), config.TelegramChatID)
+	if videoPath != "" {
+		info, err := os.Stat(videoPath)
+		if err != nil {
+			return fmt.Errorf("read demo video: %w", err)
+		}
+		fmt.Printf("Demo video: %s (%.1f MiB)\n", videoPath, float64(info.Size())/(1024*1024))
+		if dryRun {
+			return nil
+		}
+		if token == "" || chatID == "" {
+			return errors.New("set the Telegram bot token and chat ID in .credentials/game-share.json (or environment variables)")
+		}
+		if caption == "" {
+			caption = strings.TrimSuffix(filepath.Base(videoPath), filepath.Ext(videoPath))
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		if err := sendTelegramVideo(ctx, http.DefaultClient, "https://api.telegram.org", token, chatID, caption, videoPath); err != nil {
+			return err
+		}
+		fmt.Println("Sent demo video to Telegram channel", chatID)
+		return nil
+	}
 	folderID := firstNonEmpty(os.Getenv("GOOGLE_DRIVE_FOLDER_ID"), config.GoogleDriveFolderID)
 	accessToken := firstNonEmpty(os.Getenv("GOOGLE_DRIVE_ACCESS_TOKEN"), config.GoogleDriveAccessToken)
 	credentialsPath := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
@@ -90,26 +118,16 @@ func run() error {
 	if !dryRun && !driveOnly && (token == "" || chatID == "") {
 		return errors.New("set the Telegram bot token and chat ID in .credentials/game-share.json (or environment variables)")
 	}
-	if err := build(context.Background(), workspace); err != nil {
-		return err
-	}
-
-	extension := ""
-	if runtime.GOOS == "windows" {
-		extension = ".exe"
-	}
-	name := fmt.Sprintf("kestrel-%s-%s-%s%s", runtime.GOOS, runtime.GOARCH, time.Now().UTC().Format("20060102-150405"), extension)
-	binaryPath := filepath.Join(workspace, "bazel-bin", "kestrel", "app", "demo"+extension)
-	info, err := os.Stat(binaryPath)
+	builds, cleanup, err := buildReleases(context.Background(), workspace)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Built %s (%.1f MiB)\n", binaryPath, float64(info.Size())/(1024*1024))
+	defer cleanup()
 	if dryRun {
 		return nil
 	}
 	if caption == "" {
-		caption = fmt.Sprintf("Kestrel %s/%s optimized build", runtime.GOOS, runtime.GOARCH)
+		caption = "Kestrel optimized builds"
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
@@ -130,16 +148,20 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	link, err := uploadDrive(ctx, http.DefaultClient, "https://www.googleapis.com", accessToken, folderID, binaryPath, name)
-	if err != nil {
-		return err
+	links := make([]string, 0, len(builds))
+	for _, build := range builds {
+		link, err := uploadDrive(ctx, http.DefaultClient, "https://www.googleapis.com", accessToken, folderID, build.path, build.name)
+		if err != nil {
+			return fmt.Errorf("upload %s build: %w", build.platform, err)
+		}
+		fmt.Printf("Uploaded %s to Google Drive: %s\n", build.platform, link)
+		links = append(links, build.platform+": "+link)
 	}
-	fmt.Println("Uploaded to Google Drive:", link)
 	if driveOnly {
 		return nil
 	}
-	if err := sendTelegram(ctx, http.DefaultClient, "https://api.telegram.org", token, chatID, caption+"\n"+link); err != nil {
-		return fmt.Errorf("Drive upload succeeded but Telegram post failed: %w", err)
+	if err := sendTelegram(ctx, http.DefaultClient, "https://api.telegram.org", token, chatID, caption+"\n"+strings.Join(links, "\n")); err != nil {
+		return fmt.Errorf("Drive uploads succeeded but Telegram post failed: %w", err)
 	}
 	fmt.Println("Sent Drive link to Telegram channel", chatID)
 	return nil
@@ -175,8 +197,62 @@ func firstNonEmpty(first, fallback string) string {
 	return fallback
 }
 
-func build(ctx context.Context, workspace string) error {
-	cmd := exec.CommandContext(ctx, "bazel", "build", "--config=full_local", "-c", "opt", "//kestrel/app:demo")
+type releaseBuild struct {
+	platform string
+	name     string
+	path     string
+}
+
+func buildReleases(ctx context.Context, workspace string) ([]releaseBuild, func(), error) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		return nil, nil, errors.New("publishing Linux and Windows x64 builds currently requires a Linux x64 host")
+	}
+	stagingDir, err := os.MkdirTemp("", "kestrel-releases-*")
+	if err != nil {
+		return nil, nil, fmt.Errorf("create build staging directory: %w", err)
+	}
+	cleanup := func() { os.RemoveAll(stagingDir) }
+	timestamp := time.Now().UTC().Format("20060102-150405")
+	var builds []releaseBuild
+	for _, target := range []struct {
+		platform  string
+		os        string
+		extension string
+		flags     []string
+	}{
+		{platform: "Linux x64", os: "linux"},
+		{platform: "Windows x64", os: "windows", extension: ".exe", flags: []string{
+			"--platforms=//platforms:rust_windows_x86_64",
+			"--repo_env=BAZEL_MSVC_RUNTIME_VISUAL_STUDIO_EULA=1",
+			"--repo_env=BAZEL_WINDOWS_SDK_EULA=1",
+		}},
+	} {
+		if err := build(ctx, workspace, target.flags...); err != nil {
+			cleanup()
+			return nil, nil, fmt.Errorf("%s: %w", target.platform, err)
+		}
+		name := fmt.Sprintf("kestrel-%s-amd64-%s%s", target.os, timestamp, target.extension)
+		source := filepath.Join(workspace, "bazel-bin", "kestrel", "app", "demo"+target.extension)
+		path := filepath.Join(stagingDir, name)
+		if err := copyFile(path, source); err != nil {
+			cleanup()
+			return nil, nil, fmt.Errorf("stage %s build: %w", target.platform, err)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		fmt.Printf("Built %s (%.1f MiB)\n", name, float64(info.Size())/(1024*1024))
+		builds = append(builds, releaseBuild{platform: target.platform, name: name, path: path})
+	}
+	return builds, cleanup, nil
+}
+
+func build(ctx context.Context, workspace string, flags ...string) error {
+	args := append([]string{"build", "--config=full_local", "-c", "opt"}, flags...)
+	args = append(args, "//kestrel/app:demo")
+	cmd := exec.CommandContext(ctx, "bazel", args...)
 	cmd.Dir = workspace
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -184,6 +260,24 @@ func build(ctx context.Context, workspace string) error {
 		return fmt.Errorf("optimized game build failed: %w", err)
 	}
 	return nil
+}
+
+func copyFile(destination, source string) error {
+	in, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0755)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, in)
+	closeErr := out.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
 }
 
 func driveAccessToken(ctx context.Context, client *http.Client, accessToken, credentialsPath string) (string, error) {
@@ -348,6 +442,55 @@ func sendTelegram(ctx context.Context, client *http.Client, baseURL, token, chat
 		return fmt.Errorf("Telegram request failed: %v", strings.ReplaceAll(err.Error(), token, "[redacted]"))
 	}
 	defer resp.Body.Close()
+	return checkTelegramResponse(resp, token)
+}
+
+func sendTelegramVideo(ctx context.Context, client *http.Client, baseURL, token, chatID, caption, videoPath string) error {
+	video, err := os.Open(videoPath)
+	if err != nil {
+		return fmt.Errorf("open demo video: %w", err)
+	}
+	defer video.Close()
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	form := multipart.NewWriter(writer)
+	go func() {
+		var writeErr error
+		for key, value := range map[string]string{"chat_id": chatID, "caption": caption, "supports_streaming": "true"} {
+			writeErr = form.WriteField(key, value)
+			if writeErr != nil {
+				break
+			}
+		}
+		if writeErr == nil {
+			var part io.Writer
+			part, writeErr = form.CreateFormFile("video", filepath.Base(videoPath))
+			if writeErr == nil {
+				_, writeErr = io.Copy(part, video)
+			}
+		}
+		if writeErr == nil {
+			writeErr = form.Close()
+		}
+		writer.CloseWithError(writeErr)
+	}()
+	endpoint := strings.TrimRight(baseURL, "/") + "/bot" + token + "/sendVideo"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, reader)
+	if err != nil {
+		reader.Close()
+		return errors.New("invalid Telegram API URL")
+	}
+	req.Header.Set("Content-Type", form.FormDataContentType())
+	resp, err := client.Do(req)
+	if err != nil {
+		reader.Close()
+		return fmt.Errorf("Telegram video request failed: %v", strings.ReplaceAll(err.Error(), token, "[redacted]"))
+	}
+	defer resp.Body.Close()
+	return checkTelegramResponse(resp, token)
+}
+
+func checkTelegramResponse(resp *http.Response, token string) error {
 	var reply struct {
 		OK          bool   `json:"ok"`
 		Description string `json:"description"`

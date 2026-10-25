@@ -19,6 +19,18 @@ game_demo(
 bazel build --config=full_local //kestrel/app:haul_four_demo
 ```
 
+Each `game_demo` also creates a `<name>_share` target. It builds the MP4 and
+sends the video directly to the configured Telegram developer group:
+
+```sh
+bazel run --config=full_local //kestrel/app:haul_four_demo_share
+```
+
+Use `-- --caption "..."` to override the video caption, or `-- --dry-run` to
+render and inspect the MP4 without posting. Telegram credentials are read from
+the ignored `.credentials/game-share.json` (or `TELEGRAM_BOT_TOKEN` and
+`TELEGRAM_CHAT_ID`); Drive authorization is not needed for video sharing.
+
 Outputs in `bazel-bin/kestrel/app/`:
 
 - `haul_four_demo.mp4`: H.264 video with synchronized AAC game audio, with the script's resolution and FPS.
@@ -45,6 +57,12 @@ stay local and out of remote caches, and remain `manual` so ordinary recursive
 builds do not require a GPU. The rule checks that its execution tools match the
 client's native OS and CPU; omit `--config=remote` when building video demos.
 Bazel reuses local outputs when inputs are unchanged.
+
+Character Studio clips can use `studio_demo` from the same macro file. For
+example, `//kestrel/app:step_animation_demo` records the exosuit's fixed
+120-frame side view of its step up and step down animation at 60 FPS. Run
+`bazel run --config=full_local //kestrel/app:step_animation_demo_share` to
+send the rendered MP4 to Telegram.
 
 ## Scripts
 

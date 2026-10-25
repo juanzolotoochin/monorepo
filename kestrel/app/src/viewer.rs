@@ -349,6 +349,8 @@ pub use ui::{input, setup};
 /// Set up in-place motion before the shared animation and trail systems.
 pub fn drive(
     time: Res<Time>,
+    options: Res<crate::control::Options>,
+    hub: Res<crate::control::Hub>,
     library: Res<SceneLibrary>,
     mut viewer: ResMut<Viewer>,
     mut controls: ResMut<Controls>,
@@ -359,6 +361,17 @@ pub fn drive(
 ) {
     if !viewer.active {
         return;
+    }
+    if options.studio_frames.is_some() {
+        if hub.warming_up() {
+            viewer.seek_frame(0);
+            viewer.paused = true;
+        } else if hub.first_capture_tick() {
+            viewer.seek_frame(0);
+            viewer.paused = true;
+        } else {
+            viewer.paused = false;
+        }
     }
     if !viewer.paused {
         viewer.advance_clock(time.delta_secs());

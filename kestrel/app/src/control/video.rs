@@ -24,11 +24,12 @@ pub fn setup_render(
     if options.frames_dir.is_none() {
         return;
     }
-    let script = options.script.as_ref().unwrap();
+    let (width, height) = options.script.as_ref()
+        .map_or((1440, 960), |script| (script.width, script.height));
     std::fs::create_dir_all(options.frames_dir.as_ref().unwrap()).expect("frame directory");
     let mut image = Image::new_target_texture(
-        script.width,
-        script.height,
+        width,
+        height,
         TextureFormat::Bgra8UnormSrgb,
         None,
     );
@@ -61,8 +62,16 @@ pub fn capture_frame(
     if hub.tick <= hub.warmup || hub.failed.is_some() {
         return;
     }
+    if let Some(frames) = hub.options.studio_frames {
+        if video.submitted >= frames {
+            if video.completed == video.submitted {
+                exit.write(AppExit::Success);
+            }
+            return;
+        }
+    }
     let tail = u64::from(hub.options.fps());
-    if hub.finished.is_some_and(|tick| hub.tick >= tick + tail) {
+    if hub.options.studio_frames.is_none() && hub.finished.is_some_and(|tick| hub.tick >= tick + tail) {
         if video.completed == video.submitted {
             if let Some(path) = &hub.options.audio {
                 sound

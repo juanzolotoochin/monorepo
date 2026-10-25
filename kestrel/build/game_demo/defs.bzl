@@ -46,7 +46,7 @@ def _demo_impl(ctx):
         OutputGroupInfo(video = depset([video]), state = depset([report]), trace = depset([trace]), audio = depset([audio]), inputs = depset([inputs_log, inputs_save])),
     ]
 
-game_demo = rule(
+_game_demo = rule(
     implementation = _demo_impl,
     attrs = {
         "game": attr.label(executable = True, cfg = "exec", mandatory = True),
@@ -57,6 +57,102 @@ game_demo = rule(
         "_native_execution": attr.label(default = "//kestrel/build/game_demo:native_execution", cfg = "exec"),
     },
 )
+
+def _share_demo_impl(ctx):
+    video = ctx.attr.video[GameDemoInfo].video if GameDemoInfo in ctx.attr.video else ctx.attr.video[StudioDemoInfo].video
+    publisher = ctx.executable._publisher
+    launcher = ctx.actions.declare_file(ctx.label.name + ".sh")
+    ctx.actions.write(
+        output = launcher,
+        content = "\n".join([
+            "#!/bin/sh",
+            "set -eu",
+            'runfiles="${RUNFILES_DIR:-$0.runfiles}"',
+            'for root in "$runfiles"/*; do',
+            '  if [ -f "$root/%s" ] && [ -x "$root/%s" ]; then' % (video.short_path, publisher.short_path),
+            '    exec "$root/%s" --video "$root/%s" "$@"' % (publisher.short_path, video.short_path),
+            '  fi',
+            'done',
+            'echo "Demo video or publisher missing from runfiles" >&2',
+            'exit 1',
+            "",
+        ]),
+        is_executable = True,
+    )
+    runfiles = ctx.runfiles(files = [video, publisher]).merge(ctx.attr._publisher[DefaultInfo].default_runfiles)
+    return DefaultInfo(executable = launcher, runfiles = runfiles)
+
+_share_demo = rule(
+    implementation = _share_demo_impl,
+    executable = True,
+    attrs = {
+        "video": attr.label(mandatory = True),
+        "_publisher": attr.label(default = "//kestrel/tools/telegram:publish", executable = True, cfg = "target"),
+    },
+)
+
+def game_demo(name, **kwargs):
+    """Render a demo and create `<name>_share` to send its MP4 to Telegram."""
+    _game_demo(name = name, **kwargs)
+    _share_demo(
+        name = name + "_share",
+        video = ":" + name,
+        tags = kwargs.get("tags", []),
+        visibility = kwargs.get("visibility"),
+    )
+
+StudioDemoInfo = provider(fields = ["video"])
+
+def _studio_demo_impl(ctx):
+    if not ctx.attr._native_execution[NativeExecutionInfo].matches_host:
+        fail("Studio videos run locally and require native tools. Build without --config=remote.")
+    video = ctx.actions.declare_file(ctx.label.name + ".mp4")
+    args = ctx.actions.args()
+    args.add("--game", ctx.executable.game)
+    args.add("--ffmpeg", ctx.executable._ffmpeg)
+    args.add("--video", video)
+    args.add("--character", ctx.attr.character)
+    args.add("--clip", ctx.attr.clip)
+    args.add("--angle", ctx.attr.angle)
+    args.add("--frames", ctx.attr.frames)
+    ctx.actions.run(
+        executable = ctx.attr._runner[DefaultInfo].files_to_run,
+        arguments = [args],
+        tools = [ctx.attr.game[DefaultInfo].files_to_run, ctx.attr._ffmpeg[DefaultInfo].files_to_run],
+        outputs = [video],
+        mnemonic = "StudioDemo",
+        progress_message = "Rendering Character Studio demo %{label}",
+        execution_requirements = {"local": "1", "no-remote": "1", "no-sandbox": "1"},
+        use_default_shell_env = True,
+    )
+    return [DefaultInfo(files = depset([video])), StudioDemoInfo(video = video), OutputGroupInfo(video = depset([video]))]
+
+_studio_demo = rule(
+    implementation = _studio_demo_impl,
+    attrs = {
+        "game": attr.label(executable = True, cfg = "exec", mandatory = True),
+        "character": attr.string(mandatory = True),
+        "clip": attr.string(mandatory = True),
+        "angle": attr.string(default = "side"),
+        "frames": attr.int(default = 120),
+        "_runner": attr.label(default = "//kestrel/tools/demo:studio_runner", executable = True, cfg = "exec"),
+        "_ffmpeg": attr.label(default = "@game_demo_tools//:ffmpeg", executable = True, allow_single_file = True, cfg = "exec"),
+        "_native_execution": attr.label(default = "//kestrel/build/game_demo:native_execution", cfg = "exec"),
+    },
+)
+
+def studio_demo(name, game, character, clip, angle = "side", frames = 120, **kwargs):
+    """Record a studio clip and create `<name>_share` for Telegram."""
+    _studio_demo(
+        name = name, game = game, character = character,
+        clip = clip, angle = angle, frames = frames, **kwargs
+    )
+    _share_demo(
+        name = name + "_share",
+        video = ":" + name,
+        tags = kwargs.get("tags", []),
+        visibility = kwargs.get("visibility"),
+    )
 
 GameSimulationInfo = provider(fields = ["report", "trace", "inputs"])
 

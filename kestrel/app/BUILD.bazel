@@ -2,7 +2,7 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_python//python:defs.bzl", "py_test")
 load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
 load("@rules_rs//rs:rust_test.bzl", "rust_test")
-load("//kestrel/build/game_demo:defs.bzl", "game_demo", "game_simulation_test")
+load("//kestrel/build/game_demo:defs.bzl", "game_demo", "game_simulation_test", "studio_demo")
 
 alias(
     name = "share_to_devs",
@@ -43,6 +43,16 @@ rust_binary(
         "@crates//:serde",
         "@crates//:serde_json",
     ],
+)
+
+studio_demo(
+    name = "step_animation_demo",
+    game = ":demo",
+    character = "builtin:exosuit",
+    clip = "step",
+    angle = "side",
+    frames = 120,
+    tags = ["manual"],
 )
 
 rust_test(
