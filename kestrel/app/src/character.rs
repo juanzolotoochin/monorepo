@@ -1701,12 +1701,22 @@ mod tests {
         assert!(gait.phase < 1e-5);
     }
 
+    /// Styles that keep the default speeds leave the simulation on its own
+    /// constants (`lockstep::scene_setup`), so the two must agree.
+    #[test]
+    fn default_style_speeds_match_the_simulation() {
+        use sim::settlement::avatar::{RUN_SPEED, WALK_SPEED};
+        let motion = voxel_assets::CharacterMotion::default();
+        assert!((motion.walk_speed - crate::lockstep::view_f32(WALK_SPEED)).abs() < 1e-5);
+        assert!((motion.run_speed - crate::lockstep::view_f32(RUN_SPEED)).abs() < 1e-5);
+    }
+
     #[test]
     fn motion_blends_quickly_and_turns_across_the_angle_wrap() {
         let mut motion = MotionState::default();
         motion.advance(Vec3::ZERO, std::f32::consts::PI - 0.04, 1.0 / 60.0);
         let (speed, turn) = motion.advance(
-            Vec3::Z * crate::gameplay::WALK_SPEED,
+            Vec3::Z * crate::lockstep::view_f32(sim::settlement::avatar::WALK_SPEED),
             -std::f32::consts::PI + 0.04,
             1.0 / 60.0,
         );

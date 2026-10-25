@@ -25,12 +25,14 @@ pub const NAME_CHARS: usize = 16;
 
 /// The avatar's collision radius, as in the original controller.
 pub const BODY_RADIUS: Fx = Fx::from_bits(1_374_389_535); // 0.32
-const WALK_SPEED: Fx = Fx::from_bits(16_320_875_725); // 3.8 m/s
-const RUN_SPEED: Fx = Fx::from_bits(24_051_816_858); // 5.6 m/s
+pub const WALK_SPEED: Fx = Fx::from_bits(16_320_875_725); // 3.8 m/s
+pub const RUN_SPEED: Fx = Fx::from_bits(24_051_816_858); // 5.6 m/s
 /// Velocity change per tick, in m/s: accelerating 26 m/s², braking 32 m/s²,
 /// stopping for an attack 35 m/s².
-const ACCELERATION: Fx = per_tick(Fx::from_int(26));
-const BRAKING: Fx = per_tick(Fx::from_int(32));
+pub const ACCELERATION_RATE: Fx = Fx::from_int(26);
+pub const BRAKING_RATE: Fx = Fx::from_int(32);
+const ACCELERATION: Fx = per_tick(ACCELERATION_RATE);
+const BRAKING: Fx = per_tick(BRAKING_RATE);
 const ATTACK_BRAKING: Fx = per_tick(Fx::from_int(35));
 /// Fraction of the remaining turn taken per tick (1 - e^(-20/TICKS_PER_SECOND)).
 const TURN_BLEND: Fx = match TICKS_PER_SECOND {
@@ -47,18 +49,18 @@ const AIM_BLEND: Fx = match TICKS_PER_SECOND {
 /// Ticks from an attack command to contact (0.22 s).
 pub const WINDUP_TICKS: u64 = ticks_from_60hz(13);
 /// The visible windup, during which the avatar turns toward the aim (0.16 s).
-const AIM_TICKS: u64 = ticks_from_60hz(10);
+pub const AIM_TICKS: u64 = ticks_from_60hz(10);
 /// A swing that hits nothing ends at 0.58 s; one that lands rebounds for 0.42 s.
-const SWING_TICKS: u64 = ticks_from_60hz(35);
+pub const SWING_TICKS: u64 = ticks_from_60hz(35);
 pub const SWORD_WINDUP_TICKS: u64 = ticks_from_60hz(7);
-const SWORD_SWING_TICKS: u64 = ticks_from_60hz(26);
-const REBOUND_TICKS: u64 = ticks_from_60hz(25);
-const COMBO_WINDOW_TICKS: u64 = ticks_from_60hz(75);
+pub const SWORD_SWING_TICKS: u64 = ticks_from_60hz(26);
+pub const REBOUND_TICKS: u64 = ticks_from_60hz(25);
+pub const COMBO_WINDOW_TICKS: u64 = ticks_from_60hz(75);
 /// Manual transfers start within this distance of the dock.
 const DOCK_REACH: Fx = Fx::from_bits(3_650_722_202); // 0.85
 /// Jetpack: hover height above the ground, and climb and sink speeds per tick
 /// (5.5 m/s and 3 m/s).
-const HOVER: Fx = Fx::from_bits(7_730_941_133); // 1.8
+pub const HOVER: Fx = Fx::from_bits(7_730_941_133); // 1.8
 const CLIMB_PER_TICK: Fx = per_tick(Fx::from_ratio(11, 2));
 const SINK_PER_TICK: Fx = per_tick(Fx::from_int(3));
 pub const JUMP_PREP_TICKS: u64 = ticks_from_60hz(8);
@@ -114,6 +116,16 @@ impl SwordStroke {
             Self::Backhand => Self::Overhead,
             Self::Overhead => Self::Forehand,
         }
+    }
+
+    /// The stroke a new attack swings and the one queued after it. Swords
+    /// cycle while the combo window is open; other weapons reset it.
+    pub fn combo(weapon: Weapon, next: SwordStroke, in_window: bool) -> (SwordStroke, SwordStroke) {
+        if weapon != Weapon::Sword {
+            return (Self::Forehand, Self::Forehand);
+        }
+        let stroke = if in_window { next } else { Self::Forehand };
+        (stroke, stroke.next())
     }
 }
 
@@ -806,12 +818,8 @@ impl Settlement {
 }
 
 fn start_swing(a: &mut AgentState, tick: u64, weapon: Weapon, aim: FxVec2, muzzle: [Fx; 3], swift_sword: bool) {
-    let stroke = if weapon == Weapon::Sword {
-        if tick <= a.avatar.combo_until { a.avatar.combo_next } else { SwordStroke::Forehand }
-    } else {
-        SwordStroke::Forehand
-    };
-    a.avatar.combo_next = if weapon == Weapon::Sword { stroke.next() } else { SwordStroke::Forehand };
+    let (stroke, next) = SwordStroke::combo(weapon, a.avatar.combo_next, tick <= a.avatar.combo_until);
+    a.avatar.combo_next = next;
     a.avatar.combo_until = tick + COMBO_WINDOW_TICKS;
     a.avatar.weapon = weapon;
     if weapon == Weapon::Laser {

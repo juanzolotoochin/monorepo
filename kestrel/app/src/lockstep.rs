@@ -899,14 +899,15 @@ pub fn follow_avatar(
             preview.active = true;
             let dt = time.delta_secs().min(0.05);
             let desired = direction * if run { motion.run_speed } else { motion.walk_speed };
-            let acceleration = if desired == Vec3::ZERO { 32.0 } else { 26.0 };
+            use sim::settlement::avatar::{ACCELERATION_RATE, BRAKING_RATE};
+            let acceleration = view_f32(if desired == Vec3::ZERO { BRAKING_RATE } else { ACCELERATION_RATE });
             let change = (desired - preview.velocity).clamp_length_max(acceleration * dt);
             preview.velocity += change;
             let start = preview.position.unwrap();
             let candidate = start + preview.velocity * dt;
             let passable = service.world().is_some_and(|world| {
                 a.avatar.flight.airborne
-                    || world.terrain().walkable(service.to_sim(start), service.to_sim(candidate), Fx::quantize(0.32))
+                    || world.terrain().walkable(service.to_sim(start), service.to_sim(candidate), sim::settlement::avatar::BODY_RADIUS)
             });
             if passable {
                 // Limit how far the displayed avatar can get ahead while
@@ -960,6 +961,17 @@ pub fn follow_avatar(
         sound.play(crate::sound::Cue::Step);
     }
     controls.route = a.route.iter().map(|&p| mirror.to_view(p)).collect();
+}
+
+/// A simulation duration in view seconds, so view timings follow the sim's
+/// tick constants instead of copying them.
+pub const fn seconds(ticks: u64) -> f32 {
+    ticks as f32 / content::TICKS_PER_SECOND as f32
+}
+
+/// A simulation constant as a view `f32`, usable in `const` items.
+pub const fn view_f32(value: Fx) -> f32 {
+    value.to_bits() as f32 / 4_294_967_296.0
 }
 
 pub(crate) fn angle_between(from: f32, to: f32) -> f32 {

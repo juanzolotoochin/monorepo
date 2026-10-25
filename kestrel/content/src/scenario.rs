@@ -145,8 +145,10 @@ pub struct Agent {
     pub label: String,
     pub skin: String,
     pub position: Point,
-    /// Meters per second.
+    /// Meters per second. Unused for a `controlled` avatar, which moves at
+    /// the simulation's walk and run speeds.
     pub speed: Fx,
+    /// For a `controlled` avatar, only the size haulers steer around.
     pub radius: Fx,
     pub capacity: u32,
     pub links: Vec<String>,
