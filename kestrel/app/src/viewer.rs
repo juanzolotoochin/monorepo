@@ -30,12 +30,18 @@ const STUDIO_FLOOR_Y: f32 = 20.0;
 const STUDIO_FLOOR_THICKNESS: f32 = 0.2;
 const GRID_SPACING: f32 = 0.5;
 const GRID_PERIOD: f32 = 4.0;
+const STEP_HEIGHT: f32 = 0.24;
 pub(crate) const STUDIO_FPS: f32 = 60.0;
+
+fn step_span(step_distance: f32) -> (f32, f32) {
+    (step_distance * 1.40, step_distance * 3.20)
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Clip {
     Idle,
     Walk,
+    Step,
     #[default]
     Run,
     Turn,
@@ -46,13 +52,15 @@ pub enum Clip {
     Overhead,
 }
 impl Clip {
-    const ALL: [Self; 9] = [
-        Self::Idle, Self::Walk, Self::Run, Self::Turn, Self::Jump,
+    const ALL: [Self; 10] = [
+        Self::Idle, Self::Walk, Self::Step, Self::Run, Self::Turn, Self::Jump,
         Self::RunJump, Self::Forehand, Self::Backhand, Self::Overhead,
     ];
     pub(crate) fn supports(self, character: &CharacterEntry) -> bool {
         match self {
             Self::Walk | Self::Run | Self::Turn => character.can_locomote,
+            Self::Step => character.can_locomote
+                && !matches!(character.source, CharacterSource::Skin(_)),
             Self::Jump | Self::RunJump => character.can_jump,
             Self::Forehand | Self::Backhand | Self::Overhead =>
                 character.weapon == Some(content::scenario::Weapon::Sword),
@@ -63,6 +71,7 @@ impl Clip {
         Some(match id {
             "idle" => Self::Idle,
             "walk" => Self::Walk,
+            "step" => Self::Step,
             "run" => Self::Run,
             "turn" => Self::Turn,
             "jump" => Self::Jump,
@@ -77,6 +86,7 @@ impl Clip {
         match self {
             Self::Run => 30,
             Self::Walk => 33,
+            Self::Step => 120,
             Self::Turn => 200,
             Self::Jump => 80,
             Self::RunJump => 135,
@@ -88,6 +98,7 @@ impl Clip {
         match self {
             Self::Idle => "IDLE",
             Self::Walk => "WALK",
+            Self::Step => "WALK / STEP UP + DOWN",
             Self::Run => "RUN",
             Self::Turn => "RUN + DIRECTION CHANGE",
             Self::Jump => "JUMP",
@@ -132,6 +143,7 @@ pub struct Viewer {
     ground_offset: Vec2,
     distance: f32,
     gait_distance: f32,
+    step_distance: f32,
 }
 impl Viewer {
     pub fn begin(&mut self) {
@@ -374,6 +386,10 @@ fn enter(world: &mut World) {
 fn leave(world: &mut World) {
     world.resource_mut::<Viewer>().active = false;
     world.remove_resource::<StudioPack>();
+    let bodies: Vec<_> = world.query_filtered::<Entity, With<StudioBody>>().iter(world).collect();
+    for entity in bodies {
+        world.despawn(entity);
+    }
     if let Some(state) = world.remove_resource::<StudioRig>() {
         world.entity_mut(state.rig.root).despawn();
     }
@@ -427,6 +443,8 @@ pub(crate) struct Root;
 #[derive(Component)]
 pub(crate) struct Stage;
 #[derive(Component)]
+pub(crate) struct StepPlatform;
+#[derive(Component)]
 pub(crate) struct GroundMark {
     axis: MarkAxis,
     base: f32,
@@ -436,6 +454,26 @@ enum MarkAxis { X, Z }
 
 fn wrapped_mark(base: f32, offset: f32) -> f32 {
     (base - offset + GRID_PERIOD * 0.5).rem_euclid(GRID_PERIOD) - GRID_PERIOD * 0.5
+}
+
+fn step_surface(distance: f32, step_distance: f32) -> f32 {
+    let (start, end) = step_span(step_distance);
+    if (start..end).contains(&distance) { STEP_HEIGHT } else { 0.0 }
+}
+
+fn studio_step_root_height(distance: f32, step_distance: f32) -> f32 {
+    // The first foot lands on top after one stride. Let it take the body's
+    // weight before rising; lower after the third contact reaches the floor.
+    STEP_HEIGHT * crate::combat::smooth((distance / step_distance - 1.0) / 0.4)
+        * (1.0 - crate::combat::smooth((distance / step_distance - 2.7) / 0.5))
+}
+
+pub(crate) fn studio_surface_height(viewer: &Viewer, local_z: f32) -> f32 {
+    STUDIO_FLOOR_Y + if viewer.clip == Clip::Step {
+        step_surface(viewer.distance + local_z, viewer.step_distance)
+    } else {
+        0.0
+    }
 }
 #[derive(Component, Clone, Copy)]
 pub(crate) enum Action {
@@ -486,7 +524,8 @@ pub fn drive(
     mut viewer: ResMut<Viewer>,
     mut controls: ResMut<Controls>,
     mut player: Single<&mut Transform, With<Player>>,
-    mut marks: Query<(&GroundMark, &mut Transform), Without<Player>>,
+    mut marks: Query<(&GroundMark, &mut Transform), (Without<Player>, Without<StepPlatform>)>,
+    mut step_platform: Query<(&mut Transform, &mut Visibility), (With<StepPlatform>, Without<Player>, Without<GroundMark>)>,
     mut status: Query<&mut Text, With<Status>>,
 ) {
     if !viewer.active {
@@ -512,8 +551,10 @@ pub fn drive(
     } else {
         motion.step_distance
     };
+    viewer.step_distance = gait_step;
     let studio_speed = match viewer.clip {
         Clip::Walk => motion.step_distance * 2.0 * STUDIO_FPS / Clip::Walk.frame_count() as f32,
+        Clip::Step => gait_step * 4.0 * STUDIO_FPS / Clip::Step.frame_count() as f32,
         Clip::Run => {
             run_step * 2.0 * STUDIO_FPS / Clip::Run.frame_count() as f32
         }
@@ -536,15 +577,28 @@ pub fn drive(
         viewer.advance_ground(1.0 / STUDIO_FPS, sample_velocity, gait_step, stepping);
         if frame == 0 {
             viewer.gait_distance = 0.0;
+            if viewer.clip == Clip::Step {
+                viewer.distance = 0.0;
+                viewer.ground_offset = Vec2::ZERO;
+            }
         }
     }
     viewer.motion_frame = viewer.total_frame;
+    if viewer.clip == Clip::Step {
+        player.translation.y += studio_step_root_height(viewer.distance, gait_step);
+    }
     controls.gait.phase = viewer.advance_ground(0.0, Vec3::ZERO, gait_step, false);
     for (mark, mut transform) in &mut marks {
         match mark.axis {
             MarkAxis::X => transform.translation.x = wrapped_mark(mark.base, viewer.ground_offset.x),
             MarkAxis::Z => transform.translation.z = wrapped_mark(mark.base, viewer.ground_offset.y),
         }
+    }
+    for (mut transform, mut visibility) in &mut step_platform {
+        *visibility = if viewer.clip == Clip::Step { Visibility::Inherited } else { Visibility::Hidden };
+        let (start, end) = step_span(gait_step);
+        transform.translation.z = (start + end) * 0.5 - viewer.distance;
+        transform.scale.z = end - start;
     }
     controls.attack = viewer.clip.stroke().and_then(|stroke| {
         (t < 0.44).then(|| {
@@ -602,7 +656,7 @@ pub fn pose_selected_rig(world: &mut World) {
         let rig = template.spawn(world);
         world.insert_resource(StudioRig { character: viewer.character, scale: template.scale, rig });
     }
-    let moving = matches!(viewer.clip, Clip::Walk | Clip::Run | Clip::Turn);
+    let moving = matches!(viewer.clip, Clip::Walk | Clip::Step | Clip::Run | Clip::Turn);
     let cycle = viewer.frame as f32 / viewer.clip.frame_count() as f32;
     let heading = if viewer.clip == Clip::Turn { viewer.turn_heading() } else { 0.0 };
     world.resource_scope(|world, mut state: Mut<StudioRig>| {
@@ -665,6 +719,7 @@ pub fn metrics(
             Clip::Turn => "RUN + TURN",
             Clip::RunJump => "RUN + JUMP",
             Clip::Walk => "WALK",
+            Clip::Step => "STEP UP + DOWN",
             Clip::Idle => "IDLE",
             Clip::Jump => "JUMP",
             Clip::Forehand => "FOREHAND",
@@ -727,6 +782,7 @@ pub(crate) struct Capture {
     path: Option<String>,
     gait_phase: Option<f32>,
     pause_at: Option<f32>,
+    frame: Option<u64>,
     elapsed: f32,
     saved: bool,
 }
@@ -758,6 +814,14 @@ pub fn capture(
             .windows(2)
             .find(|pair| pair[0] == "--studio-pause-at")
             .and_then(|pair| pair[1].parse::<f32>().ok());
+        state.frame = args
+            .windows(2)
+            .find(|pair| pair[0] == "--studio-capture-frame")
+            .and_then(|pair| pair[1].parse::<u64>().ok());
+        if let Some(frame) = state.frame {
+            viewer.seek_frame(frame);
+            viewer.paused = true;
+        }
     }
     let Some(path) = state.path.clone() else {
         return;
@@ -780,7 +844,8 @@ pub fn capture(
         let phase = controls.gait.phase / std::f32::consts::TAU;
         (phase - target).abs() < 0.02
     });
-    if state.elapsed > 2.0 && key_pose && gait_pose && !state.saved {
+    if state.elapsed > 2.0 && key_pose && gait_pose
+        && state.pause_at.is_none_or(|at| viewer.elapsed >= at) && !state.saved {
         state.saved = true;
         commands
             .spawn(Screenshot::primary_window())
@@ -796,11 +861,169 @@ mod tests {
     use super::*;
 
     #[test]
+    fn exosuit_step_keeps_stance_soles_planted_and_clears_the_block() {
+        use crate::character::{grounded_foot_targets, PartKind, Pose};
+        use std::collections::HashMap;
+
+        let library = SceneLibrary::new();
+        let exosuit = library.characters.index_for_id("builtin:exosuit").unwrap();
+        let motion = crate::character::motion_profile(&library.scenes[library.characters[exosuit].scene_index]);
+        assert!(motion.plant_feet);
+        let mut world = World::new();
+        let root_id = world.spawn_empty().id();
+        let body_id = world.spawn_empty().id();
+        let body_rest = Transform::from_xyz(0.0, 0.94, 0.0);
+        let mut legs = Vec::new();
+        for side in [-1.0_f32, 1.0] {
+            legs.push((side, world.spawn_empty().id(), world.spawn_empty().id(), world.spawn_empty().id()));
+        }
+        let mut previous: [Option<f32>; 2] = [None, None];
+        let mut previous_center: [Option<Vec3>; 2] = [None, None];
+        for frame in 0..Clip::Step.frame_count() {
+            let distance = 4.0 * motion.step_distance * frame as f32 / Clip::Step.frame_count() as f32;
+            let root = Transform::from_xyz(0.0, STUDIO_FLOOR_Y +
+                studio_step_root_height(distance, motion.step_distance), distance);
+            let mut pose = Pose {
+                stride: (distance * std::f32::consts::PI / motion.step_distance)
+                    .rem_euclid(std::f32::consts::TAU),
+                speed: (4.0 * motion.step_distance / 2.0) / motion.walk_speed,
+                turn: 0.0, breathe: 0.0, step_pitch: 0.0, airborne: false,
+                jump: None, attack: None, dig: None, motion,
+            };
+            let terrain = crate::character::foot_terrain(root, &pose,
+                |point| Some(STUDIO_FLOOR_Y + step_surface(point.z, motion.step_distance)));
+            pose.step_pitch = crate::character::step_body_pitch(&pose, terrain.ground);
+            let body = pose.place(PartKind::Body, body_rest);
+            let mut joints = HashMap::from([(body_id, (PartKind::Body, body_rest, body, Some(root_id)))]);
+            for &(side, leg_id, shin_id, foot_id) in &legs {
+                let leg_rest = Transform::from_xyz(side * 0.20, -0.36, 0.0);
+                let shin_rest = Transform::from_xyz(0.0, -0.27, 0.0);
+                let foot_rest = Transform::from_xyz(0.0, -0.21, 0.0);
+                joints.insert(leg_id, (PartKind::Leg(side), leg_rest,
+                    pose.place(PartKind::Leg(side), leg_rest), Some(body_id)));
+                joints.insert(shin_id, (PartKind::Shin(side), shin_rest,
+                    pose.place(PartKind::Shin(side), shin_rest), Some(leg_id)));
+                joints.insert(foot_id, (PartKind::Foot(side), foot_rest,
+                    pose.place(PartKind::Foot(side), foot_rest), Some(shin_id)));
+            }
+            for (entity, target) in grounded_foot_targets(&joints, root_id, &pose, terrain) {
+                joints.get_mut(&entity).unwrap().2 = target;
+            }
+            for (index, &(side, leg_id, shin_id, foot_id)) in legs.iter().enumerate() {
+                let sole = root.to_matrix() * body.to_matrix()
+                    * joints[&leg_id].2.to_matrix() * joints[&shin_id].2.to_matrix()
+                    * joints[&foot_id].2.to_matrix();
+                let center = sole.transform_point3(Vec3::new(0.0, -0.09, 0.12));
+                if let Some(last) = previous_center[index] {
+                    assert!(center.distance(last) < 0.12,
+                        "frame {frame} side {side} foot jumped {}m", center.distance(last));
+                }
+                previous_center[index] = Some(center);
+                let phase = (pose.stride + if side > 0.0 { 0.0 } else { std::f32::consts::PI })
+                    .rem_euclid(std::f32::consts::TAU);
+                let stance = phase < std::f32::consts::TAU * 0.55;
+                let surface = STUDIO_FLOOR_Y + step_surface(center.z, motion.step_distance);
+                for edge_z in [-0.115, 0.355] {
+                    let edge = sole.transform_point3(Vec3::new(0.0, -0.09, edge_z));
+                    let edge_surface = STUDIO_FLOOR_Y + step_surface(edge.z, motion.step_distance);
+                    assert!(edge.y >= edge_surface - 0.025,
+                        "frame {frame} side {side} boot edge {edge_z} z={} y={} entered surface={edge_surface}", edge.z, edge.y);
+                }
+                if stance {
+                    assert!((center.y - surface).abs() < 0.055,
+                        "frame {frame} side {side} planted sole y={} surface={surface}", center.y);
+                    if let Some(last) = previous[index] {
+                        assert!((center.z - last).abs() < 0.01,
+                            "frame {frame} side {side} stance sole slid from {last} to {}", center.z);
+                    }
+                    previous[index] = Some(center.z);
+                } else {
+                    assert!(center.y >= surface - 0.025,
+                        "frame {frame} side {side} swing sole y={} entered surface={surface}", center.y);
+                    previous[index] = None;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn step_preview_places_leading_and_trailing_feet_on_different_levels() {
+        let mut viewer = Viewer::default();
+        viewer.clip = Clip::Step;
+        viewer.distance = 0.3;
+        viewer.step_distance = 0.50;
+        let pose = crate::character::Pose {
+            motion: voxel_assets::CharacterMotion { step_distance: 0.50, ..default() },
+            stride: 0.0,
+            speed: 0.6,
+            turn: 0.0,
+            breathe: 0.0,
+            step_pitch: 0.0,
+            airborne: false,
+            jump: None,
+            attack: None,
+            dig: None,
+        };
+        let root = Transform::from_xyz(0.0, STUDIO_FLOOR_Y + 0.12, 0.0);
+        let offsets = crate::character::foot_ground_offsets(root, &pose,
+            |point| Some(studio_surface_height(&viewer, point.z)));
+        assert!(offsets[0] < -0.05, "trailing foot should stay on the lower surface");
+        assert!(offsets[1] > 0.05, "leading foot should rise onto the step");
+        assert_eq!(step_surface(0.0, viewer.step_distance), 0.0);
+        assert_eq!(step_surface(1.2, viewer.step_distance), STEP_HEIGHT);
+        assert_eq!(step_surface(4.0, viewer.step_distance), 0.0);
+    }
+
+    #[test]
+    fn swinging_foot_changes_height_continuously_over_both_step_edges() {
+        let mut motion = voxel_assets::CharacterMotion::default();
+        motion.step_distance = 0.50;
+        let (start, end) = step_span(motion.step_distance);
+        let mut pose = crate::character::Pose {
+            motion,
+            stride: 0.0,
+            speed: 0.6,
+            turn: 0.0,
+            breathe: 0.0,
+            step_pitch: 0.0,
+            airborne: false,
+            jump: None,
+            attack: None,
+            dig: None,
+        };
+        let sample = |distance: f32, pose: &crate::character::Pose| {
+            let root = Transform::from_xyz(0.0, STUDIO_FLOOR_Y, distance);
+            crate::character::foot_ground_offsets(root, pose,
+                |point| Some(STUDIO_FLOOR_Y + step_surface(point.z, motion.step_distance)))[0]
+        };
+        let stance_end = std::f32::consts::TAU * 0.55;
+        let swing_length = std::f32::consts::TAU - stance_end;
+        let mut uphill = Vec::new();
+        let mut downhill = Vec::new();
+        for fraction in [0.0, 0.25, 0.5, 0.75, 0.999] {
+            let left_phase = stance_end + swing_length * fraction;
+            pose.stride = left_phase - std::f32::consts::PI;
+            let first_swing_distance = pose.stride * motion.step_distance / std::f32::consts::PI;
+            uphill.push(sample(first_swing_distance, &pose));
+            downhill.push(sample(2.0 * motion.step_distance + first_swing_distance, &pose));
+        }
+        assert!(start > motion.step_distance * 0.55 + 0.36);
+        assert!(end > motion.step_distance * 2.55);
+        assert!(end < motion.step_distance * 3.55);
+        assert!(uphill.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert!(downhill.windows(2).all(|pair| pair[0] >= pair[1]));
+        assert!(uphill[1] > 0.0 && uphill[3] < STEP_HEIGHT);
+        assert!(downhill[1] < STEP_HEIGHT && downhill[3] > 0.0);
+    }
+
+    #[test]
     fn studio_discovers_clips_from_each_character_capability() {
         let library = SceneLibrary::new();
         for character in library.characters.iter() {
             assert!(Clip::Idle.supports(character));
             assert_eq!(Clip::Walk.supports(character), character.can_locomote);
+            assert_eq!(Clip::Step.supports(character), character.can_locomote
+                && !matches!(character.source, CharacterSource::Skin(_)));
             assert_eq!(Clip::Run.supports(character), character.can_locomote);
             assert_eq!(Clip::Turn.supports(character), character.can_locomote);
             assert_eq!(Clip::Jump.supports(character), character.can_jump);

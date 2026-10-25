@@ -15,8 +15,23 @@ use sim::settlement::avatar::{JumpPhase, SwordStroke, JUMP_LAND_TICKS, JUMP_PREP
 /// Resolve a usable gait from the baked rig instead of requiring every style
 /// to repeat the same planted-foot settings.
 pub fn motion_profile(pack: &voxel_assets::ScenePack) -> voxel_assets::CharacterMotion {
-    let Some(style) = pack.scene.style.as_ref() else { return voxel_assets::CharacterMotion::default() };
+    let Some(style) = pack.scene.style.as_ref() else {
+        // The built-in exosuit is articulated even though it has no baked
+        // actor style. Give it the same planted-foot solver as styled actors.
+        return voxel_assets::CharacterMotion {
+            plant_feet: true,
+            step_distance: 0.50,
+            step_lift: 0.15,
+            ..default()
+        };
+    };
     let mut motion = style.character_motion;
+    if pack.actor.is_empty() {
+        motion.plant_feet = true;
+        motion.step_distance = 0.50 * style.actor_scale;
+        motion.step_lift = motion.step_lift.max(0.15);
+        return motion;
+    }
     let has_legs = [voxel_assets::ActorPart::LeftLeg, voxel_assets::ActorPart::RightLeg]
         .into_iter().all(|part| pack.actor.iter().any(|mesh| mesh.part == part));
     if has_legs && !motion.plant_feet {
@@ -95,6 +110,109 @@ pub struct GaitClock {
 pub(crate) fn step_distance_for_speed(base: f32, relative_speed: f32) -> f32 {
     let running = ((relative_speed - 1.02) / 0.38).clamp(0.0, 1.0);
     base * (1.0 + 0.20 * running)
+}
+
+/// Terrain under each foot, in local rig metres. Rise records the height
+/// change from the current swing's takeoff to its next landing.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct FootTerrain {
+    pub ground: [f32; 2],
+    pub rise: [f32; 2],
+}
+
+/// Sample the two soles independently of the root's support height.
+pub(crate) fn foot_terrain(
+    root: Transform,
+    pose: &Pose,
+    mut surface: impl FnMut(Vec3) -> Option<f32>,
+) -> FootTerrain {
+    let running = ((pose.speed - 1.02) / 0.38).clamp(0.0, 1.0);
+    let stance = stance_fraction(running, true);
+    let step = step_distance_for_speed(pose.motion.step_distance, pose.speed).clamp(0.2, 4.0);
+    let samples = [-1.0_f32, 1.0].map(|side| {
+        let phase = (pose.stride + if side > 0.0 { 0.0 } else { std::f32::consts::PI })
+            .rem_euclid(std::f32::consts::TAU);
+        let (forward, _) = foot_path(phase, step, stance, 0.0);
+        let mut support_at = |local_z: f32| {
+            // The higher of toe and heel supports a planted sole. During
+            // swing the same probes describe takeoff and landing surfaces.
+            [-0.13, 0.36].into_iter().filter_map(|sole_z| {
+                let probe = root.translation + root.rotation
+                    * (Vec3::new(side * 0.18, 0.0, local_z + sole_z) * root.scale);
+                surface(probe)
+            }).reduce(f32::max)
+        };
+        let stance_end = std::f32::consts::TAU * stance;
+        let (height, rise) = if phase < stance_end {
+            (support_at(forward), 0.0)
+        } else {
+            // A discontinuous height sample at the moving ankle makes it pop
+            // when crossing a riser. The gait phase supplies stable takeoff
+            // and landing positions without storing scene-specific state.
+            let span = step * stance;
+            let takeoff_z = -span - (phase - stance_end) * step / std::f32::consts::PI;
+            let landing_z = span + (std::f32::consts::TAU - phase) * step / std::f32::consts::PI;
+            match (support_at(takeoff_z), support_at(landing_z)) {
+                (Some(from), Some(to)) => {
+                    let progress = (phase - stance_end) / (std::f32::consts::TAU - stance_end);
+                    let height_progress = if to > from {
+                        // Lift onto the upper surface before the toe reaches
+                        // its riser, then settle onto it for touchdown.
+                        smooth(progress * 1.6)
+                    } else if to < from {
+                        // Keep the boot above the edge until it has cleared
+                        // the ledge, then lower it toward the next contact.
+                        smooth((progress - 0.75) / 0.25)
+                    } else {
+                        progress
+                    };
+                    (Some(from + (to - from) * height_progress),
+                        ((to - from) / root.scale.y.max(0.1)).clamp(-0.28, 0.28))
+                }
+                (from, to) => (from.or(to), 0.0),
+            }
+        };
+        (height
+            .map_or(0.0, |height| ((height - root.translation.y) / root.scale.y.max(0.1))
+                .clamp(-0.28, 0.28)), rise)
+    });
+    FootTerrain {
+        ground: samples.map(|sample| sample.0),
+        rise: samples.map(|sample| sample.1),
+    }
+}
+
+pub(crate) fn foot_ground_offsets(
+    root: Transform,
+    pose: &Pose,
+    surface: impl FnMut(Vec3) -> Option<f32>,
+) -> [f32; 2] {
+    foot_terrain(root, pose, surface).ground
+}
+
+/// Ease render height across walkable ledges; jumps and larger changes keep
+/// their simulation height. The returned value never feeds back into physics.
+pub(crate) fn visual_step_height(previous: Option<f32>, target: f32, dt: f32, grounded: bool) -> f32 {
+    let Some(previous) = previous else { return target; };
+    if !grounded || (target - previous).abs() > 0.28 {
+        return target;
+    }
+    previous + (target - previous) * (1.0 - (-12.0 * dt.clamp(0.0, 0.05)).exp())
+}
+
+pub(crate) fn step_body_pitch(pose: &Pose, ground: [f32; 2]) -> f32 {
+    let running = ((pose.speed - 1.02) / 0.38).clamp(0.0, 1.0);
+    let stance = stance_fraction(running, true);
+    let step = step_distance_for_speed(pose.motion.step_distance, pose.speed);
+    let foot_z = [-1.0_f32, 1.0].map(|side| {
+        let phase = (pose.stride + if side > 0.0 { 0.0 } else { std::f32::consts::PI })
+            .rem_euclid(std::f32::consts::TAU);
+        foot_path(phase, step, stance, 0.0).0
+    });
+    if (foot_z[1] - foot_z[0]).abs() < 0.05 { return 0.0; }
+    let difference = ground[1] - ground[0];
+    let slope = difference / (foot_z[1] - foot_z[0]);
+    (difference.abs() / 0.24).clamp(0.0, 1.0) * 0.08 * slope.signum()
 }
 
 impl GaitClock {
@@ -268,6 +386,7 @@ pub fn animate_character(
         speed,
         turn,
         breathe,
+        step_pitch: 0.0,
         airborne,
         jump: jump_motion(
             flight.as_ref().map_or(JumpPhase::Grounded, |f| f.jump),
@@ -284,6 +403,16 @@ pub fn animate_character(
         pose.airborne = airborne;
         pose.attack = controls.attack;
         pose.dig = None;
+    }
+    let terrain = foot_terrain(*player.1, &pose, |point| {
+        if viewer.active {
+            Some(crate::viewer::studio_surface_height(&viewer, point.z))
+        } else {
+            crate::jetpack::height(pack, point)
+        }
+    });
+    if pose.motion.plant_feet && pose.speed > 0.05 && !pose.airborne && pose.jump.is_none() {
+        pose.step_pitch = step_body_pitch(&pose, terrain.ground);
     }
     let mut joints = HashMap::new();
     for (entity, part, mut transform, parent) in &mut parts {
@@ -319,13 +448,13 @@ pub fn animate_character(
         && pose.attack.is_none()
         && pose.dig.is_none()
     {
-        for (entity, target) in grounded_foot_targets(&joints, player.0, &pose) {
+        for (entity, target) in grounded_foot_targets(&joints, player.0, &pose, terrain) {
             if let Ok((_, _, mut transform, _)) = parts.get_mut(entity) {
                 *transform = target;
             }
         }
         if let Some(contacts) = contacts {
-            for (entity, target) in actor_leg_targets(&joints, player.0, &pose, &contacts) {
+            for (entity, target) in actor_leg_targets(&joints, player.0, &pose, &contacts, terrain) {
                 if let Ok((_, _, mut transform, _)) = parts.get_mut(entity) {
                     *transform = target;
                 }
@@ -340,6 +469,7 @@ pub(crate) fn grounded_foot_targets(
     joints: &HashMap<Entity, JointSnapshot>,
     player: Entity,
     pose: &Pose,
+    terrain: FootTerrain,
 ) -> Vec<(Entity, Transform)> {
     let mut targets = Vec::new();
     let Some((&body_entity, &(_, _, body, _))) = joints
@@ -351,7 +481,9 @@ pub(crate) fn grounded_foot_targets(
     let running = ((pose.speed - 1.02) / 0.38).clamp(0.0, 1.0);
     let stance = stance_fraction(running, true);
     let step = step_distance_for_speed(pose.motion.step_distance, pose.speed).clamp(0.2, 4.0);
-    let weight = smooth(pose.speed / 0.6);
+    // Once locomotion activates the solver, every planted foot must reach its
+    // target. Blending by speed leaves slow walkers visibly sliding.
+    let weight = 1.0;
     for (&foot_entity, &(kind, foot_rest, _, shin_entity)) in joints {
         if !matches!(kind, PartKind::Foot(_)) {
             continue;
@@ -372,9 +504,11 @@ pub(crate) fn grounded_foot_targets(
         }
         let phase = (pose.stride + if side > 0.0 { 0.0 } else { std::f32::consts::PI })
             .rem_euclid(std::f32::consts::TAU);
-        let (offset, lift) = foot_path(phase, step, stance, pose.motion.step_lift * (1.0 + 1.2 * running));
+        let index = if side < 0.0 { 0 } else { 1 };
+        let (offset, lift) = terrain_foot_path(phase, step, stance,
+            pose.motion.step_lift * (1.0 + 1.2 * running), terrain.rise[index]);
         let foot_origin = body_rest_position(joints[&body_entity].1, leg_rest, shin_rest, foot_rest);
-        let target = foot_origin + Vec3::new(0.0, lift, offset);
+        let target = foot_origin + Vec3::new(0.0, terrain.ground[index] + lift, offset);
         let local_target =
             body.rotation.inverse() * (target - body.translation) - leg_rest.translation;
         let upper = shin_rest.translation.length();
@@ -407,6 +541,7 @@ pub(crate) fn actor_leg_targets(
     player: Entity,
     pose: &Pose,
     contacts: &ActorFootContacts,
+    terrain: FootTerrain,
 ) -> Vec<(Entity, Transform)> {
     let Some((&body_entity, &(_, body_rest, body, _))) = joints.iter()
         .find(|(_, (kind, _, _, parent))| matches!(kind, PartKind::Body) && *parent == Some(player))
@@ -422,7 +557,8 @@ pub(crate) fn actor_leg_targets(
         else { continue; };
         let phase = (pose.stride + if side > 0.0 { 0.0 } else { std::f32::consts::PI })
             .rem_euclid(std::f32::consts::TAU);
-        let (offset, lift) = foot_path(phase, step, stance, pose.motion.step_lift * (1.0 + 1.2 * running));
+        let (offset, lift) = terrain_foot_path(phase, step, stance,
+            pose.motion.step_lift * (1.0 + 1.2 * running), terrain.rise[index]);
         // A baked leg has no independent knee mesh. Limit swing clearance to
         // a fraction of its reach so lifting the boot does not visibly shrink
         // the entire leg.
@@ -431,7 +567,7 @@ pub(crate) fn actor_leg_targets(
         let desired_center_z = body_rest.translation.z + leg_rest.translation.z
             + geometry.center_z() + offset;
         let solved = geometry.place(Transform::from_translation(hip),
-            desired_center_z - hip.z - geometry.center_z(), lift);
+            desired_center_z - hip.z - geometry.center_z(), lift + terrain.ground[index]);
         let mut leg = leg_rest;
         leg.rotation = body.rotation.inverse() * solved.rotation;
         leg.scale.y = solved.scale.y;
@@ -497,6 +633,26 @@ fn foot_path(phase: f32, step: f32, stance: f32, height: f32) -> (f32, f32) {
     }
 }
 
+fn terrain_foot_path(phase: f32, step: f32, stance: f32, height: f32, rise: f32) -> (f32, f32) {
+    let (offset, lift) = foot_path(phase, step, stance, height);
+    let stance_end = std::f32::consts::TAU * stance;
+    if rise.abs() <= 0.05 || phase < stance_end {
+        return (offset, lift);
+    }
+    let progress = (phase - stance_end) / (std::f32::consts::TAU - stance_end);
+    let root_travel = progress * 2.0 * (1.0 - stance) * step;
+    let foot_advance = if rise > 0.0 {
+        // Lift clear of the riser before advancing onto the upper surface.
+        2.0 * step * smooth((progress - 0.35) / 0.65)
+    } else {
+        // Reach beyond the edge before the heel starts lowering, then hold
+        // the landing position during the last part of the swing.
+        2.0 * step * smooth(progress / 0.9)
+    };
+    // Both endpoints retain the flat-ground gait derivative.
+    (-step * stance - root_travel + foot_advance, lift)
+}
+
 fn solve_leg(y: f32, z: f32, upper: f32, lower: f32) -> (f32, f32) {
     let reach = Vec2::new(-y, -z);
     let length = reach
@@ -531,6 +687,8 @@ pub struct Pose {
     /// Smoothed angular response in radians, including a short follow-through.
     pub turn: f32,
     pub breathe: f32,
+    /// Forward balance while the feet occupy different surface heights.
+    pub step_pitch: f32,
     pub airborne: bool,
     pub jump: Option<JumpMotion>,
     pub attack: Option<Attack>,
@@ -746,16 +904,21 @@ impl Pose {
         };
         match kind {
             PartKind::Body => {
-                if natural {
+                if natural || self.motion.plant_feet {
                     let (crouch, center) = support_pose(
                         self.stride,
                         step_distance_for_speed(self.motion.step_distance, self.speed),
                         running,
                         self.motion.leg_reach,
                     );
+                    let support = if self.motion.plant_feet && travel > 0.05 {
+                        1.0
+                    } else {
+                        travel.min(1.0)
+                    };
                     transform.translation.y += self.breathe * 0.3
-                        - crouch * travel.min(1.0);
-                    transform.translation.z += center * travel.min(1.0);
+                        - crouch * support;
+                    transform.translation.z += center * support;
                 } else {
                     transform.translation.y += self.breathe
                         + (self.stride * 2.0).cos().abs() * 0.033 * travel
@@ -763,7 +926,7 @@ impl Pose {
                 }
                 transform.translation.z -= (if natural { 0.005 } else { 0.06 }) * travel;
                 transform.translation.x += self.turn * 0.09
-                    + if natural {
+                    + if natural || self.motion.plant_feet {
                         0.0
                     } else {
                         (right.plant - left.plant) * 0.035 * travel
@@ -774,7 +937,8 @@ impl Pose {
                     } else {
                         0.24 + 0.25 * travel
                     })
-                    * Quat::from_rotation_x(if natural { 0.01 * travel + 0.04 * running } else { 0.06 * travel + 0.18 * running });
+                    * Quat::from_rotation_x(if natural { 0.01 * travel + 0.04 * running } else { 0.06 * travel + 0.18 * running } + self.step_pitch);
+                transform.translation.y -= self.step_pitch * 0.25;
                 if let Some(attack) = self.attack {
                     if attack.motion() == ActionMotion::Sweep {
                         let drive = smooth((attack.age - windup) / (active_end - windup));
@@ -1112,6 +1276,15 @@ mod tests {
     use crate::combat::Attack;
 
     #[test]
+    fn visual_step_height_eases_walkable_ledge_and_snaps_jumps() {
+        let raised = visual_step_height(Some(0.0), 0.24, 1.0 / 60.0, true);
+        assert!(raised > 0.0 && raised < 0.24);
+        let lowered = visual_step_height(Some(0.24), 0.0, 1.0 / 60.0, true);
+        assert!(lowered > 0.0 && lowered < 0.24);
+        assert_eq!(visual_step_height(Some(0.0), 0.8, 1.0 / 60.0, false), 0.8);
+    }
+
+    #[test]
     fn baked_playable_rigs_use_planted_feet_and_world_steps() {
         let library = crate::assets::SceneLibrary::new();
         for pack in &library.scenes {
@@ -1164,7 +1337,7 @@ mod tests {
                                 ..motion
                             },
                             stride: std::f32::consts::TAU * frame as f32 / 60.0,
-                            speed, turn, breathe: 0.0, airborne: false,
+                            speed, turn, breathe: 0.0, step_pitch: 0.0, airborne: false,
                             jump: None, attack: None, dig: None,
                         };
                         let body = pose.place(PartKind::Body, body_rest);
@@ -1177,10 +1350,10 @@ mod tests {
                             (shin_id, (PartKind::Shin(side), shin_rest, shin, Some(leg_id))),
                             (foot_id, (PartKind::Foot(side), foot_rest, foot, Some(shin_id))),
                         ]);
-                        for (entity, target) in grounded_foot_targets(&joints, root, &pose) {
+                        for (entity, target) in grounded_foot_targets(&joints, root, &pose, FootTerrain::default()) {
                             joints.get_mut(&entity).unwrap().2 = target;
                         }
-                        for (entity, target) in actor_leg_targets(&joints, root, &pose, &contacts) {
+                        for (entity, target) in actor_leg_targets(&joints, root, &pose, &contacts, FootTerrain::default()) {
                             joints.get_mut(&entity).unwrap().2 = target;
                         }
                         let leg_scale = joints[&leg_id].2.scale.y;
@@ -1211,6 +1384,7 @@ mod tests {
             speed: 1.0,
             turn: 0.0,
             breathe: 0.0,
+            step_pitch: 0.0,
             airborne: false,
             jump: None,
             attack: None,
@@ -1255,6 +1429,7 @@ mod tests {
             speed: 1.0,
             turn: 0.0,
             breathe: 0.0,
+            step_pitch: 0.0,
             airborne: false,
             jump: None,
             attack: None,
@@ -1284,6 +1459,7 @@ mod tests {
             speed: 1.4,
             turn: 0.0,
             breathe: 0.0,
+            step_pitch: 0.0,
             airborne: false,
             jump: None,
             attack: None,
@@ -1363,6 +1539,7 @@ mod tests {
             speed: 1.0,
             turn: 0.0,
             breathe: 0.0,
+            step_pitch: 0.0,
             airborne: false,
             jump: None,
             attack: None,
@@ -1419,6 +1596,7 @@ mod tests {
             speed: 1.4,
             turn: 0.0,
             breathe: 0.0,
+            step_pitch: 0.0,
             airborne: false,
             jump: None,
             attack: None,
@@ -1515,6 +1693,7 @@ mod tests {
             speed: 0.5,
             turn: 0.0,
             breathe: 0.0,
+            step_pitch: 0.0,
             airborne: false,
             jump: None,
             attack: None,
@@ -1543,6 +1722,7 @@ mod tests {
             speed: 0.0,
             turn: 0.0,
             breathe: 0.0,
+            step_pitch: 0.0,
             airborne: false,
             jump: None,
             attack: None,
@@ -1582,6 +1762,7 @@ mod tests {
             speed: 1.2,
             turn: 0.25,
             breathe: 0.0,
+            step_pitch: 0.0,
             airborne: false,
             jump: None,
             attack: None,
@@ -1615,6 +1796,7 @@ mod tests {
             speed: 0.8,
             turn: 0.2,
             breathe: 0.0,
+            step_pitch: 0.0,
             airborne: false,
             jump: None,
             attack: None,
@@ -1644,6 +1826,7 @@ mod tests {
             speed: 0.0,
             turn: 0.0,
             breathe: 0.0,
+            step_pitch: 0.0,
             airborne: false,
             jump: None,
             attack: None,

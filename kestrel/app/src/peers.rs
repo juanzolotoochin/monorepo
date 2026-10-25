@@ -28,6 +28,7 @@ pub struct Peer {
     /// The start tick of the last swing heard, so each whooshes once.
     heard: u64,
     motion: MotionState,
+    visual_height: Option<f32>,
 }
 
 impl Peer {
@@ -146,6 +147,14 @@ pub fn update(
         let mut position = from.lerp(to, alpha);
         position.y = before.avatar.height.to_f32()
             + (current.avatar.height - before.avatar.height).to_f32() * alpha;
+        position.y = crate::character::visual_step_height(
+            if from.distance(to) > 1.5 { None } else { peer.visual_height },
+            position.y,
+            time.delta_secs(),
+            !current.avatar.flight.airborne
+                && matches!(current.avatar.jump, sim::settlement::avatar::JumpPhase::Grounded),
+        );
+        peer.visual_height = Some(position.y);
         let moved = position
             .with_y(0.0)
             .distance(transform.translation.with_y(0.0))
@@ -191,10 +200,7 @@ pub fn update(
             }
         }
         let dig = current.avatar.dig.as_ref().map(|d| dig_age(&mirror, d));
-        poses.push((
-            entity,
-            current.avatar.weapon,
-            Pose {
+        let mut pose = Pose {
                 motion: voxel_assets::CharacterMotion {
                     step_distance: motion_profile.step_distance / transform.scale.x.max(0.1),
                     ..motion_profile
@@ -203,6 +209,7 @@ pub fn update(
                 speed,
                 turn,
                 breathe,
+                step_pitch: 0.0,
                 airborne,
                 jump: jump_motion(
                     current.avatar.jump,
@@ -212,8 +219,13 @@ pub fn update(
                 ),
                 attack,
                 dig,
-            },
-        ));
+            };
+        if pose.motion.plant_feet && pose.speed > 0.05 && !pose.airborne && pose.jump.is_none() {
+            let ground = crate::character::foot_ground_offsets(*transform, &pose,
+                |point| crate::jetpack::height(&scene.pack, point));
+            pose.step_pitch = crate::character::step_body_pitch(&pose, ground);
+        }
+        poses.push((entity, current.avatar.weapon, pose));
     }
     for (entity, part, mut transform) in &mut parts {
         // Part pivots hang off the root or the body: find the peer above.
@@ -241,13 +253,18 @@ pub fn update(
                     parents.get(entity).ok().map(ChildOf::parent)));
             }
         }
-        for (entity, target) in grounded_foot_targets(&joints, *root, pose) {
+        let terrain = crate::character::foot_terrain(
+            *peers.get(*root).unwrap().2,
+            pose,
+            |point| crate::jetpack::height(&scene.pack, point),
+        );
+        for (entity, target) in grounded_foot_targets(&joints, *root, pose, terrain) {
             if let Ok((_, _, mut transform)) = parts.get_mut(entity) {
                 *transform = target;
             }
         }
         if let Some(contacts) = contacts.as_ref() {
-            for (entity, target) in crate::character::actor_leg_targets(&joints, *root, pose, contacts) {
+            for (entity, target) in crate::character::actor_leg_targets(&joints, *root, pose, contacts, terrain) {
                 if let Ok((_, _, mut transform)) = parts.get_mut(entity) {
                     *transform = target;
                 }
@@ -293,6 +310,7 @@ pub fn update(
                     gait: GaitClock::default(),
                     heard: 0,
                     motion: MotionState::default(),
+                    visual_height: None,
                 },
                 service::WorldScoped::default(),
             ));
