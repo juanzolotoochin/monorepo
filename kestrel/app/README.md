@@ -84,8 +84,26 @@ Redistributable described below.
 
 ## Run on a Steam Deck over the network
 
-Put the Deck in **Desktop Mode**, enable its SSH server, and configure key-based
-SSH login from this Linux x86-64 build machine. Then run:
+Put the Deck in **Desktop Mode** and open Konsole on the Deck. Set a password
+for the `deck` account, then start and enable SSH:
+
+```sh
+passwd
+sudo systemctl enable --now sshd
+systemctl is-active sshd
+```
+
+The last command should print `active`. On this Linux x86-64 build machine,
+authorize your SSH key and verify that noninteractive login works:
+
+```sh
+ssh-copy-id deck@steamdeck.local
+ssh -o BatchMode=yes deck@steamdeck.local true
+```
+
+`ssh-copy-id` asks for the Deck password once. The Bazel launcher uses
+noninteractive SSH, so the second command must succeed before running it. Then
+run:
 
 ```sh
 bazel run -c opt //kestrel/app:steam_deck
