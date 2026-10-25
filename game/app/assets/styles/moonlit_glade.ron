@@ -1,0 +1,73 @@
+// A limited blue-green / amber palette keeps the lit forms readable at a distance.
+Style(
+    id: "moonlit-glade",
+    voxel_size: 0.12,
+    actor_voxel_size: Some(0.06),
+    actor_scale: 0.68,
+    weapon_name: "GLADE / STARFORGED BLADE",
+    materials: [
+        (name: "earth", color: (0.09, 0.16, 0.19), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.95, impact: Stone),
+        (name: "grass", color: (0.15, 0.28, 0.19), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.96, impact: Stone),
+        (name: "grass_light", color: (0.28, 0.45, 0.37), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.93, impact: Stone),
+        (name: "path", color: (0.36, 0.38, 0.36), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.94, impact: Stone),
+        (name: "stone", color: (0.43, 0.52, 0.54), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.92, impact: Stone),
+        (name: "stone_light", color: (0.68, 0.75, 0.70), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.88, impact: Stone),
+        (name: "bark", color: (0.17, 0.17, 0.20), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.96, impact: Stone),
+        (name: "leaf_shadow", color: (0.06, 0.20, 0.23), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.96, impact: Stone),
+        (name: "leaf", color: (0.13, 0.34, 0.32), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.95, impact: Stone),
+        (name: "leaf_light", color: (0.29, 0.47, 0.39), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.95, impact: Stone),
+        (name: "water", color: (0.06, 0.28, 0.37), emissive: (0.0, 0.02, 0.03), metallic: 0.25, roughness: 0.29, impact: Polymer),
+        (name: "rune", color: (0.32, 0.81, 0.88), emissive: (0.8, 3.0, 3.3), metallic: 0.0, roughness: 0.35, impact: Crystal),
+        (name: "gold", color: (0.91, 0.65, 0.31), emissive: (0.48, 0.22, 0.04), metallic: 0.3, roughness: 0.42, impact: Metal),
+        (name: "cloth", color: (0.18, 0.34, 0.38), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.94, impact: Stone),
+        (name: "shadow", color: (0.045, 0.09, 0.13), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.95, impact: Stone),
+        (name: "metal", color: (0.43, 0.55, 0.57), emissive: (0.0, 0.0, 0.0), metallic: 0.48, roughness: 0.5, impact: Metal),
+        (name: "magic", color: (0.24, 0.72, 0.85), emissive: (0.2, 1.1, 1.5), metallic: 0.0, roughness: 0.5, impact: Crystal),
+        (name: "trim", color: (0.79, 0.58, 0.32), emissive: (0.0, 0.0, 0.0), metallic: 0.5, roughness: 0.5, impact: Metal)
+    ],
+    background: (0.025, 0.067, 0.10),
+    ambient: (0.60, 0.75, 0.91), ambient_brightness: 520.0,
+    sunlight: (0.77, 0.86, 1.0), illuminance: 11000.0, sun_shadows: true,
+    accents: ((0.18, 0.78, 0.95), (0.94, 0.52, 0.19), (0.21, 0.66, 0.61)),
+    bloom: 0.19, fog_density: 0.012, viewport_height: 25.0,
+    exposure_ev100: 9.55, shadow_depth_bias: 0.009, shadow_normal_bias: 0.14,
+    ao_thickness: 0.16,
+    atmosphere: Some((
+        grass_half_extent: 11.4, grass_spacing: 0.10, grass_root_y: 0.07,
+        grass_height: (0.16, 0.40), grass_width: (0.018, 0.040),
+        grass_bend_radius: 0.42, grass_recovery_seconds: 90.0,
+        grass_clearings: [
+            (-0.8, 3.0, 1.7, 5.6),
+            (0.1, -3.1, 1.9, 3.8),
+            (5.3, 1.2, 3.1, 2.4),
+            (0.55, -6.8, 2.6, 2.2)
+        ],
+        grass_base: (0.09, 0.20, 0.15), grass_tip: (0.23, 0.38, 0.23),
+        fireflies: 54, firefly_color: (1.0, 0.72, 0.32), firefly_secondary_color: (0.32, 0.82, 0.94),
+        firefly_emitters: [(-5.8, 1.4, 2.0, 3.2), (5.3, 1.2, 1.2, 2.6), (0.3, 1.8, -6.4, 2.4)],
+        lightning: Some((from: (-2.5, 6.0, -7.35), to: (0.55, 1.8, -7.30), color: (0.32, 0.86, 1.0), period: 5.5))
+    )),
+    actor: [
+        (part: Body, pivot: Some((0.0, 0.94, 0.0)), shapes: [
+            (kind: Box, position: (0.0, 0.03, 0.0), size: (0.52, 0.70, 0.36), material: "cloth"),
+            (kind: Cone, position: (0.0, -0.25, 0.0), size: (0.85, 0.68, 0.76), material: "cloth"),
+            (kind: Box, position: (0.0, 0.56, 0.0), size: (0.38, 0.40, 0.35), material: "stone_light"),
+            (kind: Cone, position: (0.0, 0.81, 0.0), size: (0.70, 0.45, 0.65), material: "leaf_shadow"),
+            (kind: Box, position: (0.0, 0.18, 0.19), size: (0.56, 0.09, 0.08), material: "gold"),
+            (kind: Box, position: (-0.34, 0.04, 0.0), size: (0.20, 0.65, 0.24), material: "cloth"),
+            (kind: Box, position: (0.34, 0.04, 0.0), size: (0.20, 0.65, 0.24), material: "cloth")
+        ]),
+        (part: LeftLeg, pivot: Some((-0.16, 0.58, 0.0)), shapes: [
+            (kind: Box, position: (0.0, -0.27, 0.0), size: (0.24, 0.56, 0.25), material: "shadow")
+        ]),
+        (part: RightLeg, pivot: Some((0.16, 0.58, 0.0)), shapes: [
+            (kind: Box, position: (0.0, -0.27, 0.0), size: (0.24, 0.56, 0.25), material: "shadow")
+        ]),
+        (part: Weapon, pivot: Some((0.4, 0.9, 0.0)), shapes: [
+            (kind: Box, position: (0.0, 0.0, 0.0), size: (0.13, 0.12, 0.38), material: "bark"),
+            (kind: Box, position: (0.0, 0.0, 0.26), size: (0.43, 0.09, 0.12), material: "gold"),
+            (kind: Box, position: (0.0, 0.0, 0.88), size: (0.14, 0.06, 1.05), material: "stone_light"),
+            (kind: Box, position: (0.0, 0.05, 0.88), size: (0.04, 0.03, 0.85), material: "rune")
+        ])
+    ]
+)

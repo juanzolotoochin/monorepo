@@ -133,3 +133,16 @@ scene_assets(
     scenario = "levels/combat_arena_supply.ron",
     style = "styles/combat.ron",
 )
+
+boulder_prefab(
+    name = "glade_rock",
+    src = "prefabs/glade_rock.ron",
+    palette = "glade_rock.ron",
+)
+
+scene_assets(
+    name = "moonlit_glade",
+    layout = "levels/moonlit_glade.ron",
+    prefabs = [":glade_rock"],
+    style = "styles/moonlit_glade.ron",
+)

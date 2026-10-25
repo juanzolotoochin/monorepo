@@ -1,6 +1,37 @@
 # Kestrel // 07
 
-A voxel sci-fi action prototype in Bevy 0.18.1, built with Bazel. An armored
+## Moonlit Glade art study
+
+Run `bazel run --config=full_local -c opt //game/app:demo -- --scene moonlit-glade` to
+explore the Starwell. The scene combines a compiled voxel shrine, layered trees,
+a reflecting pool, and a limited blue-green and amber palette. Grass bends in
+wind and parts near the player; drifting fireflies pulse with a few small moving
+lights; a short lightning arc periodically flashes across the shrine. **F4**
+switches to the glade while playing alone.
+
+The optional `atmosphere` block in `assets/styles/moonlit_glade.ron` controls
+grass density, size, clearings, colors, bend radius, recovery time, particle
+emitters, and lightning.
+`src/atmosphere.rs` builds fine, dense blades once, animates them in
+`shaders/grass.wesl`, and places a static ground-cover mesh under them. The
+cover blends the blade base and tip colors to fill visual gaps, while the
+blades use standard material lighting so tree shadows cross the whole field.
+The CPU updates a small world-space bend map as the player walks; the shader reads
+it so blades keep their bend and slowly recover after the player passes. Ambient
+particles share assets, and the atmosphere releases its meshes and materials
+on scene changes. The seven rocks use the normal
+voxel prefab pipeline: their mesh, collider, strike surfaces, and material
+reactions come from `assets/prefabs/glade_rock.ron` and its palette. The path
+and shrine steps are compiled walkable surfaces; movement uses the avatar's
+body footprint to raise its feet as it meets an edge. Other scenes can opt into
+the atmosphere settings without changing their simulation content.
+
+Preview: [Moonlit Glade still](../docs/moonlit-glade-preview.png).
+
+Capture a still with
+`bazel run --config=full_local -c opt //game/app:demo -- --scene moonlit-glade --capture-dir /tmp/kestrel-moonlit`.
+
+A voxel sci-fi action prototype in Bevy 0.20.0, built with Bazel. An armored
 salvager carries an industrial cleaver across a suspended mining deck. Cuboid
 geometry, materials, effects and sound are generated locally; no art downloads
 or runtime asset paths are required.

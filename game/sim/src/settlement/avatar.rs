@@ -253,7 +253,7 @@ fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain) {
     };
     if allowed {
         if !airborne {
-            if let Some(ground) = terrain.ground(candidate) {
+            if let Some(ground) = terrain.footprint(candidate, BODY_RADIUS) {
                 a.avatar.height = ground;
             }
         }
@@ -272,8 +272,8 @@ fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain) {
 /// the ground when released, and keep flying over drops.
 fn fly(a: &mut AgentState, terrain: &Terrain) {
     let flight = &mut a.avatar.flight;
-    let ground = terrain.ground(a.position);
-    let landing = terrain.footprint(a.position, BODY_RADIUS).filter(|y| ground.is_some_and(|g| (*y - g).abs() < Fx::from_ratio(1, 100)));
+    let ground = terrain.footprint(a.position, BODY_RADIUS);
+    let landing = ground;
     if let Some(y) = ground {
         flight.support = y;
     }

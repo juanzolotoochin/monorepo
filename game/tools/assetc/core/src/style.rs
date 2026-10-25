@@ -29,7 +29,43 @@ pub struct StyleProfile {
     pub shadow_normal_bias: f32,
     pub shadow_map_size: u32,
     pub ao_thickness: f32,
+    /// Optional scene atmosphere rendered at runtime, independent of baked architecture.
+    pub atmosphere: Option<AtmosphereProfile>,
 }
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AtmosphereProfile {
+    pub grass_half_extent: f32,
+    pub grass_spacing: f32,
+    pub grass_root_y: f32,
+    pub grass_height: [f32; 2],
+    pub grass_width: [f32; 2],
+    /// Radius of the character's influence and time for bent grass to recover.
+    #[serde(default = "default_grass_bend_radius")]
+    pub grass_bend_radius: f32,
+    #[serde(default = "default_grass_recovery_seconds")]
+    pub grass_recovery_seconds: f32,
+    /// Ellipses (center x, center z, radius x, radius z) kept clear for paths and props.
+    pub grass_clearings: Vec<[f32; 4]>,
+    pub grass_base: [f32; 3],
+    pub grass_tip: [f32; 3],
+    pub fireflies: u32,
+    pub firefly_color: [f32; 3],
+    pub firefly_secondary_color: [f32; 3],
+    /// World-space particle clusters (x, y, z, radius).
+    pub firefly_emitters: Vec<[f32; 4]>,
+    pub lightning: Option<LightningProfile>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LightningProfile {
+    pub from: [f32; 3],
+    pub to: [f32; 3],
+    pub color: [f32; 3],
+    pub period: f32,
+}
+fn default_grass_bend_radius() -> f32 { 0.48 }
+fn default_grass_recovery_seconds() -> f32 { 60.0 }
 impl Default for StyleProfile {
     fn default() -> Self {
         Self {
@@ -64,6 +100,7 @@ impl Default for StyleProfile {
             shadow_normal_bias: 0.6,
             shadow_map_size: 1024,
             ao_thickness: 0.25,
+            atmosphere: None,
         }
     }
 }
@@ -164,6 +201,34 @@ impl StyleProfile {
             .any(|&(v, min, max)| !v.is_finite() || v < min || v > max)
         {
             return Err("invalid style lighting or camera settings".into());
+        }
+        if let Some(fx) = &self.atmosphere {
+            if !fx.grass_half_extent.is_finite() || !(2.0..=20.0).contains(&fx.grass_half_extent)
+                || !fx.grass_spacing.is_finite() || !(0.08..=1.2).contains(&fx.grass_spacing)
+                || !fx.grass_root_y.is_finite() || fx.grass_root_y.abs() > 4.0
+                || fx.grass_height[0] < 0.1 || fx.grass_height[1] > 1.5 || fx.grass_height[0] > fx.grass_height[1]
+                || fx.grass_width[0] < 0.005 || fx.grass_width[1] > 0.35 || fx.grass_width[0] > fx.grass_width[1]
+                || fx.grass_height.iter().chain(fx.grass_width.iter()).any(|v| !v.is_finite())
+                || !fx.grass_bend_radius.is_finite() || !(0.15..=2.0).contains(&fx.grass_bend_radius)
+                || !fx.grass_recovery_seconds.is_finite() || !(1.0..=300.0).contains(&fx.grass_recovery_seconds)
+                || fx.grass_clearings.len() > 32 || fx.fireflies > 64
+                || fx.firefly_emitters.len() > 8 || (fx.fireflies > 0 && fx.firefly_emitters.is_empty())
+                || fx.firefly_emitters.iter().any(|e| e.iter().any(|v| !v.is_finite() || v.abs() > 32.0) || e[3] <= 0.0)
+                || fx.grass_clearings.iter().flatten().any(|v| !v.is_finite() || v.abs() > 32.0)
+                || fx.grass_clearings.iter().any(|r| r[2] <= 0.0 || r[3] <= 0.0)
+                || fx.grass_base.iter().chain(fx.grass_tip.iter()).chain(fx.firefly_color.iter()).chain(fx.firefly_secondary_color.iter())
+                    .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+            {
+                return Err("invalid atmosphere settings".into());
+            }
+            if let Some(arc) = &fx.lightning {
+                if !arc.period.is_finite() || !(1.0..=30.0).contains(&arc.period)
+                    || arc.from.iter().chain(arc.to.iter()).any(|v| !v.is_finite() || v.abs() > 32.0)
+                    || arc.color.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+                {
+                    return Err("invalid lightning settings".into());
+                }
+            }
         }
         Ok(())
     }

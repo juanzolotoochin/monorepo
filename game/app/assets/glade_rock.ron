@@ -1,0 +1,6 @@
+Palette(materials: [
+    (name: "moss_stone", color: (0.37, 0.50, 0.48), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.94, impact: Stone),
+    (name: "deep_stone", color: (0.21, 0.34, 0.37), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.93, impact: Stone),
+    (name: "lichen", color: (0.47, 0.59, 0.47), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.96, impact: Stone),
+    (name: "star_ore", color: (0.31, 0.77, 0.80), emissive: (0.18, 0.8, 0.95), metallic: 0.05, roughness: 0.47, impact: Crystal),
+])
