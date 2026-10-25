@@ -63,6 +63,13 @@ wasm_web_bundle = rule(
     },
 )
 
+# The pinned wasm-bindgen CLI (`wasm_bindgen_cli` in MODULE.bazel) is a Linux
+# x86-64 musl executable. On Windows the packaging action fails with
+# "CreateProcessW ... %1 is not a valid Win32 application (error 193)", so
+# wildcard builds skip these targets on other hosts. Remove this once the CLI
+# is fetched per host platform. The game's own wasm32 binary builds anywhere.
+_BINDGEN_HOSTS = ["@platforms//os:linux", "@platforms//cpu:x86_64"]
+
 def wasm_web_app(name, game, index_template, assets = [], visibility = None):
     """Expose a WASM bundle and `bazel run` devserver in the caller's package."""
     bundle = name + "_bundle"
@@ -73,6 +80,7 @@ def wasm_web_app(name, game, index_template, assets = [], visibility = None):
         game = game,
         index_template = index_template,
         assets = assets,
+        target_compatible_with = _BINDGEN_HOSTS,
         visibility = visibility,
     )
     py_binary(
@@ -82,5 +90,6 @@ def wasm_web_app(name, game, index_template, assets = [], visibility = None):
         data = [":" + bundle],
         deps = ["@rules_python//python/runfiles"],
         args = ["--bundle", bundle_path],
+        target_compatible_with = _BINDGEN_HOSTS,
         visibility = visibility,
     )
