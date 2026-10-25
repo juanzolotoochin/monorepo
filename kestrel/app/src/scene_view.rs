@@ -39,6 +39,11 @@ impl Service for SceneView {
         }
         world.flush();
         crate::assets::spawn_scene(world, &pack);
+        if let Some(weapon) = pack.scene.scenario.as_ref().and_then(|scenario| {
+            (scenario.weapons.len() == 1).then(|| scenario.weapons[0])
+        }) {
+            world.resource_mut::<crate::gameplay::Controls>().weapon = weapon;
+        }
         crate::style::apply(world, &pack, false);
         // The built-in deck shows only where the scene brings no ground of
         // its own: terrain, an environment, or ground to dig.

@@ -1,0 +1,25 @@
+Style(id: "laser-pit", actor_name: Some("LASER PIT FIGHTER"),
+    actor_weapon: Some(Laser), weapon_name: "PULSE LASER",
+    actor_voxel_size: Some(0.05),
+    character_motion: (motion_style: Natural, plant_feet: true),
+    materials: [
+        (name: "stone", color: (0.17, 0.22, 0.28), emissive: (0.0, 0.0, 0.0), metallic: 0.3, roughness: 0.65, impact: Stone),
+        (name: "shadow", color: (0.065, 0.095, 0.14), emissive: (0.0, 0.0, 0.0), metallic: 0.35, roughness: 0.65, impact: Stone),
+        (name: "metal", color: (0.31, 0.39, 0.43), emissive: (0.0, 0.0, 0.0), metallic: 0.7, roughness: 0.65, impact: Metal),
+        (name: "magic", color: (1.0, 0.025, 0.02), emissive: (8.0, 0.08, 0.05), metallic: 0.0, roughness: 0.4, impact: Crystal),
+        (name: "water", color: (0.05, 0.2, 0.3), emissive: (0.015, 0.06, 0.09), metallic: 0.5, roughness: 0.65, impact: Polymer),
+        (name: "trim", color: (0.93, 0.63, 0.2), emissive: (0.0, 0.0, 0.0), metallic: 0.5, roughness: 0.65, impact: Metal),
+    ],
+    actor: [(part: Weapon, pivot: Some((0.4, 0.9, 0.0)), muzzle: Some((0.0, 0.01, 0.68)), shapes: [
+        (kind: Box, position: (0.0, -0.10, 0.04), size: (0.12, 0.26, 0.18), material: "shadow"),
+        (kind: Box, position: (0.0, 0.01, 0.19), size: (0.22, 0.17, 0.48), material: "metal"),
+        (kind: Box, position: (0.0, 0.01, 0.51), size: (0.14, 0.12, 0.24), material: "trim"),
+        (kind: Box, position: (0.0, 0.01, 0.65), size: (0.09, 0.09, 0.06), material: "magic"),
+    ])],
+    skins: [
+        (id: "worker", scale: 1.0, motion: Biped, use_actor: true),
+        (id: "ore", scale: 0.2, motion: Static, voxel_size: Some(0.05), parts: [
+            (part: Body, shapes: [(kind: Box, position: (0.0, 0.0, 0.0), size: (0.25, 0.25, 0.25), material: "stone")])
+        ]),
+    ],
+)

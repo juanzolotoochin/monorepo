@@ -386,6 +386,12 @@ pub fn animate_character(
         stride: controls.gait.phase,
         speed,
         turn,
+        aim_yaw: if viewer.active { 0.0 } else {
+            controls.aim.map_or(0.0, |aim| {
+                let root = player.1.rotation.to_euler(EulerRot::YXZ).0;
+                crate::lockstep::angle_between(root, aim.x.atan2(aim.z))
+            })
+        },
         breathe,
         step_pitch: 0.0,
         airborne,
@@ -687,6 +693,8 @@ pub struct Pose {
     pub speed: f32,
     /// Smoothed angular response in radians, including a short follow-through.
     pub turn: f32,
+    /// Mouse aim relative to the travel heading, applied to chest, head and arms.
+    pub aim_yaw: f32,
     pub breathe: f32,
     /// Forward balance while the feet occupy different surface heights.
     pub step_pitch: f32,
@@ -971,7 +979,7 @@ impl Pose {
             }
             PartKind::Chest => {
                 transform.rotation = Quat::from_rotation_y(
-                    self.turn * self.motion.torso_turn + shoulder_twist * 0.12,
+                    self.aim_yaw + self.turn * self.motion.torso_turn + shoulder_twist * 0.12,
                 )
                     * Quat::from_rotation_z(self.turn * 0.18 + shoulder_twist * 0.018)
                     * Quat::from_rotation_x(
@@ -1306,6 +1314,33 @@ mod tests {
     }
 
     #[test]
+    fn planted_player_rigs_have_a_walk_stride_within_leg_reach() {
+        let library = crate::assets::SceneLibrary::new();
+        for pack in &library.scenes {
+            if pack.actor.is_empty() {
+                continue;
+            }
+            let motion = motion_profile(pack);
+            if !motion.plant_feet {
+                continue;
+            }
+            let scale = pack.scene.style.as_ref().unwrap().actor_scale;
+            let local_step = motion.step_distance / scale;
+            let crouch: Vec<f32> = (0..60)
+                .map(|frame| support_pose(
+                    frame as f32 * std::f32::consts::TAU / 60.0,
+                    local_step,
+                    0.0,
+                    motion.leg_reach,
+                ).0)
+                .collect();
+            let range = crouch.iter().copied().fold(f32::NEG_INFINITY, f32::max)
+                - crouch.iter().copied().fold(f32::INFINITY, f32::min);
+            assert!(range < 0.16, "{} walk lowers the hips by {range:.3}m", pack.scene.id);
+        }
+    }
+
+    #[test]
     fn baked_playable_boot_meshes_clear_the_floor() {
         let library = crate::assets::SceneLibrary::new();
         for pack in &library.scenes {
@@ -1338,7 +1373,7 @@ mod tests {
                                 ..motion
                             },
                             stride: std::f32::consts::TAU * frame as f32 / 60.0,
-                            speed, turn, breathe: 0.0, step_pitch: 0.0, airborne: false,
+                            speed, turn, aim_yaw: 0.0, breathe: 0.0, step_pitch: 0.0, airborne: false,
                             jump: None, attack: None, dig: None,
                         };
                         let body = pose.place(PartKind::Body, body_rest);
@@ -1383,6 +1418,7 @@ mod tests {
             },
             stride: 0.0,
             speed: 1.0,
+            aim_yaw: 0.0,
             turn: 0.0,
             breathe: 0.0,
             step_pitch: 0.0,
@@ -1428,6 +1464,7 @@ mod tests {
             },
             stride: 0.0,
             speed: 1.0,
+            aim_yaw: 0.0,
             turn: 0.0,
             breathe: 0.0,
             step_pitch: 0.0,
@@ -1458,6 +1495,7 @@ mod tests {
             },
             stride: 0.0,
             speed: 1.4,
+            aim_yaw: 0.0,
             turn: 0.0,
             breathe: 0.0,
             step_pitch: 0.0,
@@ -1538,6 +1576,7 @@ mod tests {
             },
             stride: 0.0,
             speed: 1.0,
+            aim_yaw: 0.0,
             turn: 0.0,
             breathe: 0.0,
             step_pitch: 0.0,
@@ -1595,6 +1634,7 @@ mod tests {
             },
             stride: 0.0,
             speed: 1.4,
+            aim_yaw: 0.0,
             turn: 0.0,
             breathe: 0.0,
             step_pitch: 0.0,
@@ -1686,12 +1726,31 @@ mod tests {
     }
 
     #[test]
+    fn aim_rotates_the_upper_body_without_reposing_the_legs() {
+        let mut pose = Pose {
+            motion: voxel_assets::CharacterMotion::default(),
+            stride: 0.8, speed: 0.7, turn: 0.0, aim_yaw: 0.0,
+            breathe: 0.0, step_pitch: 0.0, airborne: false,
+            jump: None, attack: None, dig: None,
+        };
+        let leg_rest = Transform::from_xyz(0.2, -0.3, 0.0);
+        let chest_rest = Transform::IDENTITY;
+        let leg = pose.place(PartKind::Leg(1.0), leg_rest);
+        pose.aim_yaw = std::f32::consts::FRAC_PI_2;
+        let aimed_leg = pose.place(PartKind::Leg(1.0), leg_rest);
+        let chest = pose.place(PartKind::Chest, chest_rest);
+        assert_eq!(aimed_leg, leg);
+        assert!((chest.rotation.to_euler(EulerRot::YXZ).0 - pose.aim_yaw).abs() < 0.05);
+    }
+
+    #[test]
     fn run_transfers_weight_through_torso_elbows_and_feet() {
         let rest_body = Transform::from_xyz(0.0, 0.94, 0.0);
         let mut pose = Pose {
             motion: voxel_assets::CharacterMotion::default(),
             stride: std::f32::consts::FRAC_PI_2,
             speed: 0.5,
+            aim_yaw: 0.0,
             turn: 0.0,
             breathe: 0.0,
             step_pitch: 0.0,
@@ -1721,6 +1780,7 @@ mod tests {
             motion: voxel_assets::CharacterMotion::default(),
             stride: 0.0,
             speed: 0.0,
+            aim_yaw: 0.0,
             turn: 0.0,
             breathe: 0.0,
             step_pitch: 0.0,
@@ -1761,6 +1821,7 @@ mod tests {
             motion: voxel_assets::CharacterMotion::default(),
             stride: std::f32::consts::FRAC_PI_2,
             speed: 1.2,
+            aim_yaw: 0.0,
             turn: 0.25,
             breathe: 0.0,
             step_pitch: 0.0,
@@ -1795,6 +1856,7 @@ mod tests {
             motion: voxel_assets::CharacterMotion::default(),
             stride: 0.6,
             speed: 0.8,
+            aim_yaw: 0.0,
             turn: 0.2,
             breathe: 0.0,
             step_pitch: 0.0,
@@ -1825,6 +1887,7 @@ mod tests {
             motion: voxel_assets::CharacterMotion::default(),
             stride: 0.0,
             speed: 0.0,
+            aim_yaw: 0.0,
             turn: 0.0,
             breathe: 0.0,
             step_pitch: 0.0,

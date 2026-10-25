@@ -27,6 +27,7 @@ rust_binary(
         "//kestrel/app/assets:field",
         "//kestrel/app/assets:forest_outpost",
         "//kestrel/app/assets:jetpack_lab",
+        "//kestrel/app/assets:laser_pit",
         "//kestrel/app/assets:mining_deck",
         "//kestrel/app/assets:moonlit_glade",
         "//kestrel/app/assets:pile_lab",
@@ -53,6 +54,13 @@ studio_demo(
     clip = "step",
     angle = "side",
     frames = 120,
+    tags = ["manual"],
+)
+
+game_demo(
+    name = "laser_pit_demo",
+    game = ":demo",
+    script = "demos/laser_pit.json",
     tags = ["manual"],
 )
 

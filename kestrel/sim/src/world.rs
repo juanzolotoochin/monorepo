@@ -74,6 +74,8 @@ pub enum CommandKind {
     SetDefender { defender: u16, enabled: bool },
     /// Sets how a player's avatar moves.
     MoveAvatar { agent: u16, intent: crate::settlement::avatar::Intent },
+    /// Sets the upper body's facing independently of travel.
+    AimAvatar { agent: u16, aim: FxVec2 },
     /// A player's avatar attacks toward `aim` (a direction on the ground).
     Attack { agent: u16, weapon: content::scenario::Weapon, aim: FxVec2, muzzle: [Fx; 3] },
     /// A player's avatar takes units from (or, with `deposit`, gives units to) a depot.
@@ -111,6 +113,7 @@ impl CommandKind {
     pub fn avatar(&self) -> Option<u16> {
         match *self {
             CommandKind::MoveAvatar { agent, .. }
+            | CommandKind::AimAvatar { agent, .. }
             | CommandKind::Attack { agent, .. }
             | CommandKind::Transfer { agent, .. }
             | CommandKind::CancelTransfer { agent }
@@ -408,6 +411,11 @@ impl World {
                 CommandKind::MoveAvatar { agent, ref intent } => {
                     if let Some(s) = &mut self.settlement {
                         s.move_avatar(agent as usize, intent.clone(), &self.terrain);
+                    }
+                }
+                CommandKind::AimAvatar { agent, aim } => {
+                    if let Some(s) = &mut self.settlement {
+                        s.aim_avatar(agent as usize, aim);
                     }
                 }
                 CommandKind::Attack { agent, weapon, aim, muzzle } => {

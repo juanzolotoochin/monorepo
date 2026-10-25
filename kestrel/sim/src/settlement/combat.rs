@@ -167,6 +167,7 @@ pub enum Impact {
     Arrow,
     Deflect,
     Arc,
+    Laser,
     BoltImpale,
     BoltPierce,
 }
@@ -180,6 +181,7 @@ pub enum Event {
     PinnedLanded { target: u64, position: FxVec2 },
     BlockedShot { position: FxVec2 },
     ArcFired { from: FxVec2, to: FxVec2 },
+    LaserFired { agent: AgentIx, from: FxVec2, to: FxVec2, hit_actor: bool },
     Breach { position: FxVec2 },
     Produced { producer: u16 },
     Equipped { agent: AgentIx },
@@ -218,6 +220,46 @@ pub struct CombatMetrics {
 }
 
 impl Settlement {
+    fn laser_clear_ground(terrain: &Terrain, from: FxVec2, from_height: Fx, to: FxVec2, to_height: Fx) -> bool {
+        let distance = (to - from).length();
+        let steps = (distance / Fx::from_ratio(1, 4)).ceil().floor_to_int().max(1);
+        for step in 1..steps {
+            let fraction = Fx::from_ratio(step, steps);
+            let point = from + (to - from) * fraction;
+            let beam = from_height + (to_height - from_height) * fraction + Fx::from_ratio(4, 5);
+            if terrain.ground(point).is_some_and(|ground| ground > beam) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn laser_ground_block(terrain: &Terrain, from: FxVec2, forward: FxVec2, reach: Fx, height: Fx) -> Fx {
+        let steps = (reach / Fx::from_ratio(1, 4)).ceil().floor_to_int().max(1);
+        for step in 1..=steps {
+            let fraction = Fx::from_ratio(step, steps);
+            if terrain.ground(from + forward * (reach * fraction))
+                .is_some_and(|ground| ground > height + Fx::from_ratio(4, 5)) {
+                return fraction;
+            }
+        }
+        Fx::ONE
+    }
+
+    fn laser_player(&self, shooter: usize, origin: FxVec2, forward: FxVec2, reach: Fx, terrain: &Terrain) -> Option<(Fx, usize)> {
+        let end = origin + forward * reach;
+        let from_height = self.agents.get(shooter).map_or(Fx::ZERO, |a| a.avatar.height);
+        self.agents.iter().enumerate().filter_map(|(index, agent)| {
+            if index == shooter || !agent.controlled || agent.avatar.health == 0 || agent.avatar.max_health == 0 {
+                return None;
+            }
+            let fraction = segment_disc(origin, end, agent.position, super::avatar::BODY_RADIUS)?;
+            (terrain.clear(origin, agent.position, Fx::from_ratio(1, 50))
+                && Self::laser_clear_ground(terrain, origin, from_height, agent.position, agent.avatar.height))
+                .then_some((fraction, index))
+        }).min_by_key(|(fraction, index)| (*fraction, *index))
+    }
+
     pub fn tuning(&self, weapon: Weapon) -> &WeaponTuning {
         &self.tuning[weapon as usize]
     }
@@ -350,7 +392,7 @@ impl Settlement {
     }
 
     /// The targets of a resolving strike, in the order they take damage.
-    pub(super) fn strike_targets(&self, origin: FxVec2, forward: FxVec2, weapon: Weapon, terrain: &Terrain) -> (Vec<u64>, Option<FxVec2>) {
+    pub(super) fn strike_targets(&self, shooter: AgentIx, origin: FxVec2, forward: FxVec2, weapon: Weapon, terrain: &Terrain) -> (Vec<u64>, Option<FxVec2>) {
         let tuning = self.tuning(weapon);
         let (reach, cone) = (tuning.reach, tuning.cone);
         let close = Fx::from_ratio(1, 5);
@@ -402,6 +444,28 @@ impl Settlement {
             }
             Weapon::Spear => targets.truncate(2),
             Weapon::Bow => targets.clear(),
+            Weapon::Laser => {
+                let end = origin + forward * reach;
+                let blocked = terrain.obstacles.iter()
+                    .filter_map(|o| segment_disc(origin, end, o.center, o.radius + Fx::from_ratio(1, 25)))
+                    .min().unwrap_or(Fx::ONE)
+                    .min(Self::laser_ground_block(terrain, origin, forward, reach, self.agents[shooter as usize].avatar.height));
+                let player = self.laser_player(shooter as usize, origin, forward, reach, terrain)
+                    .filter(|(fraction, _)| *fraction < blocked);
+                let threat = targets.iter().filter_map(|&(_, id)| {
+                    let position = self.threat(id)?.position;
+                    segment_disc(origin, end, position, Fx::from_ratio(3, 10))
+                        .filter(|fraction| *fraction < blocked && Self::laser_clear_ground(terrain, origin, self.agents[shooter as usize].avatar.height, position, terrain.ground(position).unwrap_or_default()))
+                        .map(|fraction| (fraction, id, position))
+                }).min_by_key(|(fraction, id, _)| (*fraction, *id));
+                if let Some((_, id, position)) = threat.filter(|(fraction, _, _)| player.is_none_or(|(p, _)| *fraction <= p)) {
+                    targets.retain(|&(_, target)| target == id);
+                    beam = Some(position);
+                } else {
+                    targets.clear();
+                    beam = Some(player.map_or(origin + forward * (reach * blocked), |(_, index)| self.agents[index].position));
+                }
+            }
             Weapon::Sword => {}
         }
         (targets.into_iter().map(|(_, id)| id).collect(), beam)
@@ -441,7 +505,30 @@ impl Settlement {
             return 1;
         }
         if let Some(to) = message.beam_end {
-            self.events.push(Event::ArcFired { from: origin, to });
+            self.events.push(if message.weapon == Weapon::Laser {
+                let hit_actor = !message.targets.is_empty() || self.agents.iter().enumerate().any(|(index, target)| {
+                    index != agent && target.controlled && target.avatar.health > 0 && target.position == to
+                });
+                Event::LaserFired { agent: message.agent, from: origin, to, hit_actor }
+            } else {
+                Event::ArcFired { from: origin, to }
+            });
+        }
+        if message.weapon == Weapon::Laser && message.targets.is_empty() && self.player_health > 0 {
+            if let Some(to) = message.beam_end {
+                if let Some((_, target)) = self.agents.iter_mut().enumerate().find(|(index, target)| {
+                    *index != agent && target.controlled && target.avatar.health > 0 && target.position == to
+                }) {
+                    target.avatar.health = target.avatar.health.saturating_sub(tuning.damage);
+                    if target.avatar.health == 0 {
+                        target.avatar.respawn_at = tick + ticks_from_60hz(120);
+                        target.avatar.swing = None;
+                        target.avatar.queued = None;
+                        target.avatar.velocity = FxVec2::ZERO;
+                    }
+                    return 1;
+                }
+            }
         }
         let mut hits = 0;
         for (index, target) in message.targets.into_iter().enumerate() {
@@ -451,6 +538,7 @@ impl Settlement {
             let mut impact = match message.weapon {
                 Weapon::Sword => Impact::Sword,
                 Weapon::Spear => Impact::Spear,
+                Weapon::Laser => Impact::Laser,
                 _ => Impact::Arc,
             };
             let damage = match message.weapon {

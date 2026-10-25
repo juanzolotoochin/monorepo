@@ -26,7 +26,8 @@ typedef struct {
 } audio_state;
 static audio_state playback;
 static int active;
-int kestrel_audio_cue_count(void) { return 18; }
+#define CUE_COUNT 20
+int kestrel_audio_cue_count(void) { return CUE_COUNT; }
 
 static float noise(audio_state *state) {
     state->noise_seed ^= state->noise_seed << 13; state->noise_seed ^= state->noise_seed >> 17; state->noise_seed ^= state->noise_seed << 5;
@@ -155,6 +156,18 @@ static void synth_frames(audio_state *state, float *out, ma_uint32 frames) {
                     + 0.25f*tone(91.0f,t,16.0f)
                     + 0.08f*tone(460.0f,t,23.0f);
                 if (t > 0.42f) v->alive = 0;
+            } else if (v->kind == 18) {
+                // A short descending pulse, separate from the arc coil crackle.
+                sample = 0.075f * sinf(6.2831853f * (900.0f * t - 2400.0f * t * t)) * expf(-26.0f * t)
+                    + 0.012f * noise(state) * expf(-85.0f * t);
+                sample *= fminf(t * 1800.0f, 1.0f);
+                if (t > 0.16f) v->alive = 0;
+            } else if (v->kind == 19) {
+                // Bolt contact: a bright snap followed by a short metallic ring.
+                sample = 0.36f * noise(state) * expf(-60.0f * t)
+                    + 0.22f * tone(1120.0f, t, 24.0f)
+                    + 0.12f * tone(420.0f, t, 19.0f);
+                if (t > 0.24f) v->alive = 0;
             } else {
                 sample = 0.055f * tone(76.0f, t, 55.0f) + 0.035f * noise(state) * expf(-90.0f * t);
                 if (t > 0.12f) v->alive = 0;
@@ -173,7 +186,7 @@ static void synth_frames(audio_state *state, float *out, ma_uint32 frames) {
 static void render(ma_device *d,void *output,const void *input,ma_uint32 frames) {
     (void)d;(void)input;
     unsigned int events=atomic_exchange_explicit(&pending,0,memory_order_relaxed);
-    for (int kind=0;kind<18;++kind) if (events & (1u<<kind)) play_voice(&playback,kind);
+    for (int kind=0;kind<CUE_COUNT;++kind) if (events & (1u<<kind)) play_voice(&playback,kind);
     synth_frames(&playback,output,frames);
 }
 typedef struct { uint64_t sample; int kind; } audio_event;
@@ -206,7 +219,7 @@ int kestrel_audio_start(void) {
     return 0;
 }
 void kestrel_audio_play(int cue) {
-    if (cue >= 0 && cue < 18) atomic_fetch_or_explicit(&pending, 1u << cue, memory_order_relaxed);
+    if (cue >= 0 && cue < CUE_COUNT) atomic_fetch_or_explicit(&pending, 1u << cue, memory_order_relaxed);
 }
 void kestrel_audio_stop(void) {
     if (!active) return;

@@ -4,6 +4,7 @@ load("//kestrel/build/voxel_assets:defs.bzl", "boulder_prefab", "scene_assets")
 exports_files(
     [
         "levels/combat_arena_supply.ron",
+        "levels/laser_pit_supply.ron",
         "levels/forest_supply.ron",
     ],
     visibility = ["//kestrel:__subpackages__"],
@@ -103,6 +104,14 @@ scene_assets(
     name = "dig_lab",
     layout = "levels/dig_lab.ron",
     prefabs = [],
+)
+
+scene_assets(
+    name = "laser_pit",
+    layout = "levels/laser_pit.ron",
+    prefabs = [],
+    scenario = "levels/laser_pit_supply.ron",
+    style = "styles/laser_pit.ron",
 )
 
 boulder_prefab(

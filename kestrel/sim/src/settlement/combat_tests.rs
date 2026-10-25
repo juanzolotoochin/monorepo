@@ -87,6 +87,7 @@ fn scenario() -> Scenario {
         defenders: vec![],
         waves: vec![],
         base_health: 10,
+        player_health: 0,
     }
 }
 
@@ -174,7 +175,7 @@ impl Arena {
         let tick = self.tick();
         let (origin, player) = (self.s().agents[self.player].position, self.player);
         let terrain = self.sim.world().terrain().clone();
-        let (targets, beam_end) = self.s().strike_targets(origin, aim, weapon, &terrain);
+        let (targets, beam_end) = self.s().strike_targets(player as u16, origin, aim, weapon, &terrain);
         let message = Strike { agent: player as u16, weapon, origin, forward: aim, muzzle: [Fx::ZERO, fx(0.6), fx(0.25)], targets, beam_end };
         self.s_mut().strike(tick, message)
     }
@@ -680,4 +681,93 @@ fn players_equip_their_own_weapons() {
     let aim = FxVec2::new(Fx::ZERO, Fx::ONE);
     sim.step(&[Command { player: host, kind: CommandKind::Attack { agent: mine, weapon: Weapon::Spear, aim, muzzle: [Fx::ZERO; 3] } }]);
     assert_eq!(weapon(&sim, mine), Weapon::Spear, "a swing puts its weapon in hand");
+}
+
+#[test]
+fn laser_stops_at_obstacle_before_its_full_range() {
+    let mut config = scenario();
+    config.agents.push(player());
+    config.weapons = vec![Weapon::Laser];
+    let obstacle = Disc { center: FxVec2::new(Fx::ZERO, Fx::from_int(4)), radius: Fx::ONE };
+    let arena = Arena::new(&config, &[obstacle]);
+    let origin = arena.s().agents[arena.player].position;
+    let terrain = arena.sim.world().terrain();
+    let (targets, end) = arena.s().strike_targets(arena.player as u16, origin, FxVec2::new(Fx::ZERO, Fx::ONE), Weapon::Laser, terrain);
+    assert!(targets.is_empty());
+    let end = end.unwrap();
+    let travel = end.y - origin.y;
+    assert!(travel > fx(2.8) && travel < fx(3.2), "laser should stop at the obstacle edge: {end:?}");
+}
+
+#[test]
+fn firing_laser_does_not_stop_movement() {
+    let mut config = scenario();
+    config.agents.push(player());
+    config.weapons = vec![Weapon::Laser];
+    let mut arena = Arena::new(&config, &[]);
+    let agent = arena.player as u16;
+    arena.command(CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: FxVec2::new(Fx::ZERO, Fx::ONE), run: true } });
+    let before = arena.s().agents[arena.player].position;
+    arena.command(CommandKind::Attack { agent, weapon: Weapon::Laser, aim: FxVec2::new(Fx::ONE, Fx::ZERO), muzzle: [Fx::ZERO; 3] });
+    arena.step(ms(100));
+    let avatar = &arena.s().agents[arena.player];
+    assert!(avatar.avatar.swing.is_some(), "shot should still be active");
+    assert!(avatar.position.y > before.y, "avatar should move while firing");
+}
+
+#[test]
+fn mouse_aim_changes_independently_of_travel_and_persists_without_firing() {
+    let mut config = scenario();
+    config.agents.push(player());
+    config.weapons = vec![Weapon::Laser];
+    let mut arena = Arena::new(&config, &[]);
+    let agent = arena.player as u16;
+    arena.command(CommandKind::MoveAvatar { agent, intent: Intent::Walk {
+        direction: FxVec2::new(Fx::ZERO, Fx::ONE), run: false,
+    } });
+    arena.step(ms(200));
+    let heading = arena.s().agents[arena.player].heading;
+    let aim = FxVec2::new(Fx::ONE, Fx::ZERO);
+    arena.command(CommandKind::AimAvatar { agent, aim });
+    arena.step(ms(200));
+    let avatar = &arena.s().agents[arena.player];
+    assert_eq!(avatar.avatar.aim, Some(aim));
+    assert_eq!(avatar.heading, heading);
+    assert!(avatar.avatar.swing.is_none());
+    assert!(avatar.avatar.velocity.y > Fx::ZERO);
+}
+
+#[test]
+fn laser_hits_another_player_and_respawns_them() {
+    let mut config = scenario();
+    config.agents = vec![player()];
+    config.depots.clear();
+    config.links.clear();
+    config.weapons = vec![Weapon::Laser];
+    config.player_health = 2;
+    let world = World::new_settlement(9, Content::builtin().rules, &config, &[]).unwrap();
+    let mut sim = Simulation::from_world(world, 2);
+    let spawn = sim.world().settlement().unwrap().agents[0].position;
+    sim.world_mut().settlement_mut().spawn = spawn;
+    let (host, guest) = (PlayerId(0), PlayerId(1));
+    sim.step(&[Command { player: guest, kind: CommandKind::Join }]);
+    let settlement = sim.world().settlement().unwrap();
+    let (shooter, target) = (settlement.avatar_of(host).unwrap(), settlement.avatar_of(guest).unwrap());
+    let start = settlement.agents[shooter as usize].position;
+    sim.world_mut().settlement_mut().agents[target as usize].position = start + FxVec2::new(Fx::ZERO, Fx::from_int(3));
+    let fire = || Command { player: host, kind: CommandKind::Attack {
+        agent: shooter, weapon: Weapon::Laser,
+        aim: FxVec2::new(Fx::ZERO, Fx::ONE), muzzle: [Fx::ZERO, fx(0.8), fx(0.25)],
+    } };
+    for remaining in [1, 0] {
+        sim.step(&[fire()]);
+        for _ in 0..ms(700) { sim.step(&[]); }
+        let settlement = sim.world().settlement().unwrap();
+        assert_eq!(settlement.agents[target as usize].avatar.health, remaining);
+        assert_eq!(settlement.agents[shooter as usize].avatar.health, 2);
+    }
+    for _ in 0..ms(2200) { sim.step(&[]); }
+    let settlement = sim.world().settlement().unwrap();
+    assert_eq!(settlement.agents[target as usize].avatar.health, 2);
+    assert_eq!(settlement.agents[target as usize].position, settlement.agents[target as usize].home);
 }

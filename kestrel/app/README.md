@@ -435,6 +435,22 @@ The control port's `{"op":"dig"}` digs and `{"op":"deliver"}` delivers the
 cargo. Inspection's `digging` lists the pits by arena tile, whether the player
 is digging, the collector's counts by mineral, and the nearest ore within 8 m.
 
+## Laser pit
+
+`laser-pit` uses the dig lab's generated terraces and digging rules, with a
+voxel laser gun in place of the sword. Start a host with:
+
+```sh
+bazel run --config=full_local //kestrel/app:demo -- --scene laser-pit --host 7777
+```
+
+Another player can join with `--scene laser-pit --join HOST:7777`. The upper body
+and gun track the pointer continuously while the legs follow WASD or right-click
+movement. Use **Shift + left click** to fire. A direct hit takes one of six
+health points; the bars over players show their current health. At zero health,
+the player returns to their spawn after two seconds. The host simulation
+resolves hits and health for all players.
+
 ## Field trial 05
 
 A new mechanic has a dedicated scene with instructions inside the game. Press

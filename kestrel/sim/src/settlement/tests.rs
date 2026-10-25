@@ -81,6 +81,7 @@ fn scenario() -> Scenario {
         defenders: vec![],
         waves: vec![],
         base_health: 10,
+        player_health: 0,
     }
 }
 

@@ -338,6 +338,15 @@ pub fn tick(world: &mut World) {
             );
             arc_fired = true;
         }
+        if let Event::LaserFired { agent, to, hit_actor } = event {
+            let height = world.resource::<crate::lockstep::SessionService>()
+                .ground_height(Vec3::new(to[0], 0.0, to[1])).unwrap_or(0.0) + 0.8;
+            world.resource_mut::<crate::effects::PendingLasers>().0.push(crate::effects::LaserShot {
+                agent: *agent,
+                target: Vec3::new(to[0], height, to[1]),
+                hit_actor: *hit_actor,
+            });
+        }
         if let Event::Hit {
             target,
             by,
@@ -451,6 +460,9 @@ pub fn tick(world: &mut World) {
             Event::Shot { defender } if defender == "player" => Some(crate::sound::Cue::Bow),
             Event::Shot { .. } => Some(crate::sound::Cue::Ballista),
             Event::ArcFired { .. } => Some(crate::sound::Cue::Arc),
+            // The visible bolt plays this cue when it reaches the actor.
+            Event::Hit { impact: crate::legacy::Impact::Laser, .. } => None,
+            Event::LaserFired { .. } => Some(crate::sound::Cue::Laser),
             Event::Hit {
                 impact: crate::legacy::Impact::Arc,
                 ..
@@ -493,6 +505,7 @@ pub fn tick(world: &mut World) {
                 event,
                 Event::Shot { .. }
                     | Event::ArcFired { .. }
+                    | Event::LaserFired { .. }
                     | Event::Hit { .. }
                     | Event::PinnedLanded { .. }
                     | Event::BlockedShot { .. }
@@ -694,10 +707,18 @@ pub fn tick(world: &mut World) {
                     .join(" / ")
             })
             .unwrap_or_default();
-        let line = if !sim.config().weapons.is_empty() {
+        let weapon = world.resource::<crate::gameplay::Controls>().weapon;
+        let line = if weapon == content::scenario::Weapon::Laser {
+            let mirror = world.resource::<crate::lockstep::WorldMirror>();
+            let health = mirror.player()
+                .and_then(|id| mirror.current.as_ref()?.agents.get(id as usize))
+                .map_or_else(|| "--".to_string(), |agent| format!("{}/{}", agent.avatar.health, agent.avatar.max_health));
+            let players = mirror.current.as_ref().map_or(0, |current| current.agents.iter().filter(|agent| agent.controlled).count());
+            format!("LASER  /  HEALTH {health}  /  {players} PLAYERS")
+        } else if !sim.config().weapons.is_empty() {
             format!(
-                "{:?}  /  {} SLAIN  /  {} SWORD HITS  /  {} APPROACHING",
-                world.resource::<crate::gameplay::Controls>().weapon,
+                "{:?}  /  {} SLAIN  /  {} MELEE HITS  /  {} APPROACHING",
+                weapon,
                 sim.metrics.kills,
                 sim.metrics.melee_hits,
                 sim.threats.len()
