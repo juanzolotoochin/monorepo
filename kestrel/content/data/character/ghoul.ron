@@ -1,0 +1,10 @@
+// Every ghoul walks at 0.6 m/s; variants change health and armor.
+(
+    sim: (
+        brain: FollowRoute,
+        body: (radius: 0.27),
+        movement: (walk: 0.6),
+        health: (hp: 3, breach_damage: 1),
+    ),
+    view: (),
+)

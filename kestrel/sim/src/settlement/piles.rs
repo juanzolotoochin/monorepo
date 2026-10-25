@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
-use super::avatar::{Intent, BODY_RADIUS};
+use super::avatar::{character_of, Intent};
 use super::combat::{Event, TossEnd};
 use super::haulers::AgentState;
 use super::{AgentIx, Settlement};
@@ -406,10 +406,11 @@ fn unload(cargo: &mut Cargo, amount: u32) {
 
 /// The best route to a standing spot within transfer reach of a pile, or
 /// an empty route if already there.
-fn approach_route(terrain: &Terrain, start: FxVec2, center: FxVec2, radius: Fx) -> Option<Vec<FxVec2>> {
-    let stand = radius + BODY_RADIUS + Fx::from_ratio(9, 50);
+/// `body` is the avatar's radius.
+fn approach_route(terrain: &Terrain, start: FxVec2, center: FxVec2, radius: Fx, body: Fx) -> Option<Vec<FxVec2>> {
+    let stand = radius + body + Fx::from_ratio(9, 50);
     let gap = nav::distance(start, center);
-    if gap >= radius + BODY_RADIUS + Fx::from_ratio(1, 25) && gap <= stand + Fx::from_ratio(1, 4) {
+    if gap >= radius + body + Fx::from_ratio(1, 25) && gap <= stand + Fx::from_ratio(1, 4) {
         return Some(Vec::new());
     }
     (0..24)
@@ -417,7 +418,7 @@ fn approach_route(terrain: &Terrain, start: FxVec2, center: FxVec2, radius: Fx) 
             let angle = Fx::TAU.mul_int(i).div_int(24);
             let (sin, cos) = angle.sin_cos();
             let goal = center + FxVec2::new(cos, sin) * stand;
-            let route = walk_path(terrain, start, goal);
+            let route = walk_path(terrain, start, goal, body);
             if route.is_empty() {
                 return None;
             }
@@ -434,14 +435,14 @@ fn approach_route(terrain: &Terrain, start: FxVec2, center: FxVec2, radius: Fx) 
 }
 
 /// A route on foot: around obstacles, pits and cliffs.
-fn walk_path(terrain: &Terrain, start: FxVec2, goal: FxVec2) -> Vec<FxVec2> {
-    nav::path_with(terrain, start, goal, BODY_RADIUS, &[], &|a, b| terrain.walkable(a, b, BODY_RADIUS))
+fn walk_path(terrain: &Terrain, start: FxVec2, goal: FxVec2, body: Fx) -> Vec<FxVec2> {
+    nav::path_with(terrain, start, goal, body, &[], &|a, b| terrain.walkable(a, b, body))
 }
 
 /// Whether the avatar stands within reach of the job's pile.
-fn in_reach(position: FxVec2, job: &PileJob) -> bool {
+fn in_reach(position: FxVec2, job: &PileJob, body: Fx) -> bool {
     let distance = nav::distance(position, job.center);
-    distance >= job.radius + BODY_RADIUS + Fx::from_ratio(1, 50) && distance <= job.radius + BODY_RADIUS + Fx::from_ratio(9, 20)
+    distance >= job.radius + body + Fx::from_ratio(1, 50) && distance <= job.radius + body + Fx::from_ratio(9, 20)
 }
 
 impl Settlement {
@@ -450,6 +451,7 @@ impl Settlement {
     pub fn pile_action(&mut self, tick: u64, terrain: &Terrain, agent: usize, action: PileAction, pace: Fx, approach: Option<FxVec2>) {
         let Some(lab) = self.piles.as_mut() else { return };
         let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
+        let body = character_of(&self.characters, a).body.radius;
         let me = agent as AgentIx;
         let carried = lab.cargo(me);
         let result = (|| {
@@ -476,16 +478,16 @@ impl Settlement {
             let route = match approach {
                 Some(stand) => {
                     let gap = nav::distance(stand, center);
-                    if gap < radius + BODY_RADIUS + Fx::from_ratio(1, 25) || gap > radius + BODY_RADIUS + Fx::from_ratio(9, 20) {
+                    if gap < radius + body + Fx::from_ratio(1, 25) || gap > radius + body + Fx::from_ratio(9, 20) {
                         return Err("Approach point must be within safe transfer reach");
                     }
-                    let path = walk_path(terrain, a.position, stand);
+                    let path = walk_path(terrain, a.position, stand, body);
                     if path.is_empty() {
                         return Err("Approach point is blocked");
                     }
                     path
                 }
-                None => approach_route(terrain, a.position, center, radius).ok_or("No clear route there on foot")?,
+                None => approach_route(terrain, a.position, center, radius, body).ok_or("No clear route there on foot")?,
             };
             let pace = if pace == Fx::ZERO { 0 } else { (pace * Fx::from_int(content::TICKS_PER_SECOND)).round().floor_to_int().max(1) as u64 };
             follow(a, route);
@@ -545,9 +547,9 @@ impl Settlement {
     }
 
     /// Stage 2, for an avatar: walk toward its pile, replanning when stuck.
-    pub(super) fn pile_job_self_update(lab: &PileLab, me: AgentIx, a: &mut AgentState, terrain: &Terrain) -> Option<&'static str> {
+    pub(super) fn pile_job_self_update(lab: &PileLab, me: AgentIx, a: &mut AgentState, terrain: &Terrain, body: Fx) -> Option<&'static str> {
         let job = lab.hauler(me)?.job.as_ref()?;
-        if job.remaining.is_some() || in_reach(a.position, job) {
+        if job.remaining.is_some() || in_reach(a.position, job, body) {
             a.route.clear();
             a.avatar.velocity = FxVec2::ZERO;
             return None;
@@ -556,7 +558,7 @@ impl Settlement {
             return Some("Haul timed out. Cargo retained; choose another approach.");
         }
         if a.route.is_empty() || job.stalled > STALL_TICKS {
-            match approach_route(terrain, a.position, job.center, job.radius) {
+            match approach_route(terrain, a.position, job.center, job.radius, body) {
                 Some(route) => follow(a, route),
                 None => return Some("Route blocked. Cargo retained."),
             }
@@ -593,7 +595,7 @@ impl Settlement {
     /// Stage 3: the avatar is in reach and a unit (or the whole amount) is due.
     pub(super) fn read_pile_job(&self, me: AgentIx, a: &AgentState, tick: u64) -> Option<PileStep> {
         let job = self.piles.as_ref()?.hauler(me)?.job.as_ref()?;
-        let due = job.remaining != Some(0) && tick >= job.next_toss && (job.remaining.is_some() || in_reach(a.position, job));
+        let due = job.remaining != Some(0) && tick >= job.next_toss && (job.remaining.is_some() || in_reach(a.position, job, character_of(&self.characters, a).body.radius));
         due.then_some(PileStep { agent: me })
     }
 

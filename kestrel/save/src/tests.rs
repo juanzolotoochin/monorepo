@@ -146,7 +146,7 @@ fn settlement_save_and_continue() {
     let content = Content::builtin();
     let text = include_str!("../../app/assets/levels/forest_supply.ron");
     let scenario = content::scenario::Scenario::parse(text).unwrap();
-    let start = || sim::World::new_settlement(5, content.rules.clone(), &scenario, &[]).unwrap();
+    let start = || sim::World::new_settlement(5, &content, &scenario, &[]).unwrap();
     let mut uninterrupted = Simulation::from_world(start(), 2);
     let expected: Vec<_> = (0..600).map(|_| uninterrupted.step(&[])).collect();
 
@@ -163,4 +163,33 @@ fn settlement_save_and_continue() {
             panic!("first difference at {difference}");
         }
     }
+}
+
+/// Character references are remapped by name, and a save that needs a
+/// character the content lacks is refused.
+#[test]
+fn settlement_characters_remap_by_name() {
+    let content = Content::builtin();
+    let text = include_str!("../../app/assets/levels/forest_supply.ron");
+    let scenario = content::scenario::Scenario::parse(text).unwrap();
+    let world = sim::World::new_settlement(5, &content, &scenario, &[]).unwrap();
+    let bytes = write(&world, &content);
+    let wave_names = |world: &sim::World, content: &Content| -> Vec<String> {
+        let s = world.settlement().unwrap();
+        s.waves.iter().map(|w| content.names.characters[w.character as usize].clone()).collect()
+    };
+    let saved = wave_names(&world, &content);
+
+    // A character sorting first shifts every index by one.
+    let mut sources = content::builtin_sources();
+    let first = "(base: \"ghoul\", sim: (), view: ())";
+    sources.push(("character/aaa.ron".to_string(), first.to_string()));
+    let shifted = Content::from_sources(sources).unwrap();
+    let loaded = read(&bytes, &shifted).unwrap();
+    assert_eq!(wave_names(&loaded, &shifted), saved);
+    assert_eq!(loaded.settlement().unwrap().characters, shifted.rules.characters, "rules restored on load");
+
+    let without: Vec<_> = content::builtin_sources().into_iter().filter(|(path, _)| path != "character/ghoul_forest.ron").collect();
+    let missing = Content::from_sources(without).unwrap();
+    assert!(matches!(read(&bytes, &missing), Err(LoadError::MissingContent { name }) if name == "character/ghoul_forest"));
 }

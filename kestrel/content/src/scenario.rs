@@ -146,10 +146,12 @@ pub struct Agent {
     pub skin: String,
     pub position: Point,
     /// Meters per second. Unused for a `controlled` avatar, which moves at
-    /// the simulation's walk and run speeds.
+    /// its character's walk and run speeds.
     pub speed: Fx,
-    /// For a `controlled` avatar, only the size haulers steer around.
-    pub radius: Fx,
+    /// Body radius of a hauler. A `controlled` avatar has none: its
+    /// character's body radius is used.
+    #[serde(default)]
+    pub radius: Option<Fx>,
     pub capacity: u32,
     pub links: Vec<String>,
     pub transfer_seconds: Fx,
@@ -221,14 +223,12 @@ pub struct Wave {
     pub position: Point,
     pub target: Point,
     pub skin: String,
+    /// The enemy this wave sends, by short name (`ghoul` for
+    /// `character/ghoul`): its speed, health, armor and breach damage.
+    pub character: String,
     /// Seconds until the first enemy.
     pub first: Fx,
     pub every: Fx,
-    pub speed: Fx,
-    pub hp: u32,
-    #[serde(default)]
-    pub armor: u32,
-    pub damage: u32,
     pub count: u32,
 }
 
@@ -350,9 +350,16 @@ fn ids<'a>(values: impl Iterator<Item = &'a str>) -> Result<BTreeSet<&'a str>, S
 
 impl Scenario {
     pub fn parse(text: &str) -> Result<Scenario, String> {
-        let scenario: Scenario = ron::from_str(text).map_err(|e| e.to_string())?;
+        let scenario = Scenario::from_ron(text)?;
         scenario.validate()?;
         Ok(scenario)
+    }
+
+    /// Reads a scenario file without validating it. Optional values may be
+    /// written bare (`radius: 0.28`) or as `Some(...)`.
+    pub fn from_ron(text: &str) -> Result<Scenario, String> {
+        let options = ron::Options::default().with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME);
+        options.from_str(text).map_err(|e| e.to_string())
     }
 
     pub fn weapon_tuning(&self, weapon: Weapon) -> WeaponTuning {
@@ -438,11 +445,16 @@ impl Scenario {
             }
         }
         for a in &self.agents {
+            match (a.controlled, a.radius) {
+                (true, Some(_)) => return Err(format!("agent {} is controlled: its radius comes from its character, so remove `radius`", a.id)),
+                (false, None) => return Err(format!("agent {} needs a `radius`", a.id)),
+                _ => {}
+            }
             if !a.cargo_layout.valid()
                 || !point(a.position)
                 || !ident(&a.skin)
                 || !within(a.speed, f(1, 10), Fx::from_int(8))
-                || !within(a.radius, f(1, 20), Fx::ONE)
+                || a.radius.is_some_and(|r| !within(r, f(1, 20), Fx::ONE))
                 || !(1..=64).contains(&a.capacity)
                 || !within(a.transfer_seconds, f(1, 20), Fx::from_int(5))
                 || (!a.controlled && a.links.is_empty())
@@ -509,10 +521,7 @@ impl Scenario {
                 || !ident(&w.skin)
                 || !within(w.first, Fx::ZERO, Fx::from_int(3600))
                 || !within(w.every, Fx::HALF, Fx::from_int(3600))
-                || !within(w.speed, f(1, 10), Fx::from_int(4))
-                || w.hp == 0
-                || w.armor > 8
-                || w.damage == 0
+                || !ident(&w.character)
                 || w.count > 256
             {
                 return Err("invalid wave".into());

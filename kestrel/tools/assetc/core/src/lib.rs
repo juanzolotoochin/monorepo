@@ -514,7 +514,7 @@ impl ScenePack {
                     radius: fx::Fx::quantize(*r),
                 })
                 .collect();
-            sim::World::new_settlement(0, content::Content::builtin().rules, scenario, &obstacles)?;
+            sim::World::new_settlement(0, &content::Content::builtin(), scenario, &obstacles)?;
             let ids: std::collections::BTreeSet<_> =
                 self.skins.iter().map(|s| s.id.as_str()).collect();
             for id in scenario

@@ -56,7 +56,7 @@
 (id: "bramble", label: "BRAMBLE", skin: "ox", position: (-4.6, 0.0), speed: 1.1, radius: 0.75, capacity: 3, links: [
 "mill_lumber"
 ], transfer_seconds: 0.45, cargo_anchor: (0.0, 1.08, -0.15), cargo_layout: (columns: 2, rows: 2, spacing: (0.22, 0.10, 0.15), scale: 0.8, roll: 0.0), equipment: Some((depot: "cart_yard", item: "cart", skin: "cart", capacity: 9, speed_factor: 0.85, offset: (0.0, 0.0, -1.85), cargo_anchor: (0.0, 0.56, 0.0), cargo_layout: (columns: 2, rows: 3, spacing: (0.40, 0.12, 0.24), scale: 1.0, roll: 0.0)))),
-(id: "player", label: "YOU", skin: "worker", position: (1.15, -1.15), speed: 3.8, radius: 0.18, capacity: 8, links: [
+(id: "player", label: "YOU", skin: "worker", position: (1.15, -1.15), speed: 3.8, capacity: 8, links: [
 
 ], transfer_seconds: 0.4, cargo_anchor: (0.0, 0.65, -0.19), equipment: None, controlled: true)
 ], producers: [
@@ -75,7 +75,7 @@
 ], defenders: [
 (id: "watchtower", label: "WOODLAND BALLISTA", description: "An automatic border defense. Fires supplied arrows at approaching ghouls; without ammunition the camp is exposed.", position: (5.52, 2.3), skin: "turret", depot: "turret_ammo", ammo: "arrow", range: 3.8, period: 0.7, damage: 1, projectile_speed: 8.0, radius: 0.5)
 ], waves: [
-(id: "ghouls_0", position: (9.5, 10.4), target: (-1.0, 0.5), skin: "ghoul", first: 10.0, every: 9.0, speed: 0.6, hp: 2, damage: 1, count: 20),
-(id: "ghouls_1", position: (10.1, 9.9), target: (-1.0, 0.5), skin: "ghoul", first: 10.5, every: 9.0, speed: 0.6, hp: 2, damage: 1, count: 20),
-(id: "ghouls_2", position: (10.7, 9.4), target: (-1.0, 0.5), skin: "ghoul", first: 11.0, every: 9.0, speed: 0.6, hp: 2, damage: 1, count: 20)
+(id: "ghouls_0", position: (9.5, 10.4), target: (-1.0, 0.5), skin: "ghoul", character: "ghoul_forest", first: 10.0, every: 9.0, count: 20),
+(id: "ghouls_1", position: (10.1, 9.9), target: (-1.0, 0.5), skin: "ghoul", character: "ghoul_forest", first: 10.5, every: 9.0, count: 20),
+(id: "ghouls_2", position: (10.7, 9.4), target: (-1.0, 0.5), skin: "ghoul", character: "ghoul_forest", first: 11.0, every: 9.0, count: 20)
 ], base_health: 20, extent: 12.0)

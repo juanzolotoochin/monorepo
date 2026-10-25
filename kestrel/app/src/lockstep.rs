@@ -238,6 +238,16 @@ impl SessionService {
         self.settlement()?.avatar_of(me)
     }
 
+    /// The local player's character definition.
+    pub fn player_character(&self) -> Option<&content::character::CharacterDef> {
+        self.settlement()?.character_of(self.player()? as usize)
+    }
+
+    /// The radius the local player's routes and reach checks use.
+    pub fn player_radius(&self) -> Option<Fx> {
+        Some(self.player_character()?.body.radius)
+    }
+
     /// The local player's avatar ID, as views name agents.
     pub fn player_id(&self) -> Option<String> {
         Some(self.settlement()?.agents[self.player()? as usize].id.clone())
@@ -333,7 +343,7 @@ fn build_world(world: &mut World, index: usize, content: &Content) -> SimWorld {
         let cache = world.resource::<crate::assets::ModelCache>();
         let setup = scene_setup(&library, index, cache);
         let id = &library.scenes[index].scene.id;
-        SimWorld::new_scene(SEED, content.rules.clone(), &setup).unwrap_or_else(|e| panic!("scene {id} does not build a world: {e}"))
+        SimWorld::new_scene(SEED, content, &setup).unwrap_or_else(|e| panic!("scene {id} does not build a world: {e}"))
     })
 }
 
@@ -899,15 +909,17 @@ pub fn follow_avatar(
             preview.active = true;
             let dt = time.delta_secs().min(0.05);
             let desired = direction * if run { motion.run_speed } else { motion.walk_speed };
-            use sim::settlement::avatar::{ACCELERATION_RATE, BRAKING_RATE};
-            let acceleration = view_f32(if desired == Vec3::ZERO { BRAKING_RATE } else { ACCELERATION_RATE });
+            // The definition stores per-tick changes; the preview runs per second.
+            let tuning = service.player_character().and_then(|c| c.avatar.as_ref());
+            let per_tick = tuning.map_or(Fx::ZERO, |t| if desired == Vec3::ZERO { t.braking } else { t.acceleration });
+            let acceleration = view_f32(per_tick) * content::TICKS_PER_SECOND as f32;
             let change = (desired - preview.velocity).clamp_length_max(acceleration * dt);
             preview.velocity += change;
             let start = preview.position.unwrap();
             let candidate = start + preview.velocity * dt;
             let passable = service.world().is_some_and(|world| {
                 a.avatar.flight.airborne
-                    || world.terrain().walkable(service.to_sim(start), service.to_sim(candidate), sim::settlement::avatar::BODY_RADIUS)
+                    || service.player_radius().is_some_and(|radius| world.terrain().walkable(service.to_sim(start), service.to_sim(candidate), radius))
             });
             if passable {
                 // Limit how far the displayed avatar can get ahead while
@@ -961,6 +973,13 @@ pub fn follow_avatar(
         sound.play(crate::sound::Cue::Step);
     }
     controls.route = a.route.iter().map(|&p| mirror.to_view(p)).collect();
+}
+
+/// The content every session plays with (see `open`), parsed once, for views
+/// that need definitions outside a session, such as Character Studio.
+pub fn builtin_content() -> &'static Content {
+    static CONTENT: std::sync::LazyLock<Content> = std::sync::LazyLock::new(Content::builtin);
+    &CONTENT
 }
 
 /// A simulation duration in view seconds, so view timings follow the sim's
@@ -1083,7 +1102,7 @@ mod tests {
                 let to = from + Vec3::X;
                 let (Some(low), Some(high)) = (service.ground_height(from), service.ground_height(to)) else { continue };
                 if (high - low).abs() == 0.25 && service.world().unwrap().terrain().walkable(
-                    service.to_sim(from), service.to_sim(to), sim::settlement::avatar::BODY_RADIUS,
+                    service.to_sim(from), service.to_sim(to), service.player_radius().unwrap(),
                 ) {
                     walkable_step = Some((from, low, high));
                     break;

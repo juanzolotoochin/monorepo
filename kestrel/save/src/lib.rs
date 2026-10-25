@@ -24,7 +24,8 @@ mod inputs;
 
 pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 
-pub const FORMAT_VERSION: u32 = 2;
+/// 3: settlements refer to character definitions by index.
+pub const FORMAT_VERSION: u32 = 3;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 
@@ -205,6 +206,26 @@ fn remap(saved: &Names, content: &Content, state: &mut WorldState) -> Result<(),
     }
     for spawn in &mut state.pending.spawn {
         spawn.kind = map(spawn.kind)?;
+    }
+    remap_characters(saved, content, state)
+}
+
+/// Characters are remapped where the settlement uses them, so content may
+/// drop a character no saved entity refers to.
+fn remap_characters(saved: &Names, content: &Content, state: &mut WorldState) -> Result<(), LoadError> {
+    let Some(settlement) = &mut state.settlement else { return Ok(()) };
+    let map = |ix: u16| {
+        let name = saved.characters.get(ix as usize).ok_or_else(|| LoadError::Invalid(format!("character {ix} out of range")))?;
+        let short = name.strip_prefix("character/").unwrap_or(name);
+        content.names.character_index(short).ok_or_else(|| LoadError::MissingContent { name: name.clone() })
+    };
+    for agent in &mut settlement.agents {
+        if let Some(ix) = agent.character {
+            agent.character = Some(map(ix)?);
+        }
+    }
+    for wave in &mut settlement.waves {
+        wave.character = map(wave.character)?;
     }
     Ok(())
 }

@@ -19,9 +19,6 @@ use crate::messages::{Breach, Fire, Messages, ProjectileBlocked, ProjectileExpir
 use crate::nav::{self, distance};
 use crate::terrain::{segment_disc, Terrain};
 
-/// Collision radius of a threat, and of an armored one.
-const THREAT_RADIUS: Fx = Fx::from_bits(1_159_641_170); // 0.27
-const ARMORED_RADIUS: Fx = Fx::from_bits(1_632_087_572); // 0.38
 /// Knockback decays by 0.85 per original (60 Hz) tick.
 const KNOCKBACK_DECAY: Fx = match TICKS_PER_SECOND {
     30 => Fx::from_bits(3_103_113_871), // 0.85²
@@ -45,6 +42,8 @@ pub fn combat_roll(tick: u64, entity: u64, stream: u64) -> u64 {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WaveState {
     pub id: String,
+    /// The enemy it sends.
+    pub character: content::character::CharacterIx,
     pub position: FxVec2,
     pub target: FxVec2,
     pub first: u64,
@@ -75,16 +74,6 @@ pub struct Threat {
     pub stagger_until: u64,
     /// Meters per second while staggered.
     pub knockback: FxVec2,
-}
-
-impl Threat {
-    fn radius(&self) -> Fx {
-        if self.armor > 0 {
-            ARMORED_RADIUS
-        } else {
-            THREAT_RADIUS
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -253,7 +242,8 @@ impl Settlement {
             if index == shooter || !agent.controlled || agent.avatar.health == 0 || agent.avatar.max_health == 0 {
                 return None;
             }
-            let fraction = segment_disc(origin, end, agent.position, super::avatar::BODY_RADIUS)?;
+            let radius = super::avatar::character_of(&self.characters, agent).body.radius;
+            let fraction = segment_disc(origin, end, agent.position, radius)?;
             (terrain.clear(origin, agent.position, Fx::from_ratio(1, 50))
                 && Self::laser_clear_ground(terrain, origin, from_height, agent.position, agent.avatar.height))
                 .then_some((fraction, index))
@@ -268,6 +258,16 @@ impl Settlement {
     /// allow the sword, as in the original game.
     pub fn has_weapon(&self, weapon: Weapon) -> bool {
         self.weapons.contains(&weapon) || (self.weapons.is_empty() && weapon == Weapon::Sword)
+    }
+
+    /// A threat's collision radius: its character's armor radius while
+    /// plating is left, its body radius once it breaks.
+    pub(super) fn threat_radius(&self, t: &Threat) -> Fx {
+        let def = &self.characters[self.waves[t.wave as usize].character as usize];
+        match def.health.as_ref().and_then(|h| h.armor.as_ref()) {
+            Some(armor) if t.armor > 0 => armor.radius,
+            _ => def.body.radius,
+        }
     }
 
     pub fn threat(&self, id: u64) -> Option<&Threat> {
@@ -360,7 +360,7 @@ impl Settlement {
         let threat = self
             .threats
             .iter()
-            .filter_map(|t| segment_disc(start, end, t.position, t.radius()).map(|f| (f, t.id)))
+            .filter_map(|t| segment_disc(start, end, t.position, self.threat_radius(t)).map(|f| (f, t.id)))
             .min();
         match (threat, obstacle) {
             (Some((f, target)), rock) if rock.is_none_or(|rock| f < rock) => {

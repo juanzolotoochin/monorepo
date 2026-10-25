@@ -370,7 +370,7 @@ mod tests {
         use sim::settlement::SceneSetup;
         let content = Content::builtin();
         let setup = SceneSetup { extent: Fx::from_int(8), spawn: [Fx::ZERO, Fx::ZERO, Fx::from_int(2)], ..SceneSetup::default() };
-        let world = World::new_scene(1, content.rules.clone(), &setup).unwrap();
+        let world = World::new_scene(1, &content, &setup).unwrap();
         let config = NetConfig { threads: 2, ..NetConfig::default() };
         let listen = Some("127.0.0.1:0".parse().unwrap());
         let mut host = Session::start(Mode::Host { world, label: "first".into(), listen }, content.clone(), config.clone()).unwrap();
@@ -453,7 +453,7 @@ mod tests {
         let content = Content::builtin();
         let scene = |x: i32| {
             let setup = SceneSetup { extent: Fx::from_int(8), spawn: [Fx::from_int(x), Fx::ZERO, Fx::from_int(2)], ..SceneSetup::default() };
-            World::new_scene(1, content.rules.clone(), &setup).unwrap()
+            World::new_scene(1, &content, &setup).unwrap()
         };
         let config = NetConfig { threads: 2, ..NetConfig::default() };
         let listen = Some("127.0.0.1:0".parse().unwrap());
@@ -527,7 +527,7 @@ mod tests {
         use sim::settlement::Event;
         let content = Content::builtin();
         let scenario = Scenario::parse(include_str!("../../app/assets/levels/combat_arena_supply.ron")).unwrap();
-        let world = World::new_settlement(1, content.rules.clone(), &scenario, &[]).unwrap();
+        let world = World::new_settlement(1, &content, &scenario, &[]).unwrap();
         let config = NetConfig { threads: 2, ..NetConfig::default() };
         let listen = Some("127.0.0.1:0".parse().unwrap());
         let mut host = Session::start(Mode::Host { world, label: "first".into(), listen }, content.clone(), config.clone()).unwrap();

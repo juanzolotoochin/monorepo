@@ -8,6 +8,7 @@
 //! the swing (or the rebound after a hit) ends. In digging scenes an avatar
 //! digs out the tile it stands on, standing still for the dig.
 
+use content::character::{AttackTiming, AvatarDef, CharacterDef};
 use content::scenario::{ticks_from_60hz, Weapon};
 use content::{millis_to_ticks, per_tick, TICKS_PER_SECOND};
 use fx::{Fx, FxVec2};
@@ -23,17 +24,8 @@ use crate::terrain::{Terrain, MAX_LAYERS};
 /// The longest player name, in characters.
 pub const NAME_CHARS: usize = 16;
 
-/// The avatar's collision radius, as in the original controller.
-pub const BODY_RADIUS: Fx = Fx::from_bits(1_374_389_535); // 0.32
-pub const WALK_SPEED: Fx = Fx::from_bits(16_320_875_725); // 3.8 m/s
-pub const RUN_SPEED: Fx = Fx::from_bits(24_051_816_858); // 5.6 m/s
-/// Velocity change per tick, in m/s: accelerating 26 m/s², braking 32 m/s²,
-/// stopping for an attack 35 m/s².
-pub const ACCELERATION_RATE: Fx = Fx::from_int(26);
-pub const BRAKING_RATE: Fx = Fx::from_int(32);
-const ACCELERATION: Fx = per_tick(ACCELERATION_RATE);
-const BRAKING: Fx = per_tick(BRAKING_RATE);
-const ATTACK_BRAKING: Fx = per_tick(Fx::from_int(35));
+// Body radius, speeds, acceleration and swing timing come from the avatar's
+// character definition (`content::character`).
 /// Fraction of the remaining turn taken per tick (1 - e^(-20/TICKS_PER_SECOND)).
 const TURN_BLEND: Fx = match TICKS_PER_SECOND {
     30 => Fx::from_bits(2_089_857_561), // 0.4866
@@ -46,16 +38,6 @@ const AIM_BLEND: Fx = match TICKS_PER_SECOND {
     60 => Fx::from_bits(1_601_640_183), // 0.3729
     _ => panic!("add AIM_BLEND for this tick rate"),
 };
-/// Ticks from an attack command to contact (0.22 s).
-pub const WINDUP_TICKS: u64 = ticks_from_60hz(13);
-/// The visible windup, during which the avatar turns toward the aim (0.16 s).
-pub const AIM_TICKS: u64 = ticks_from_60hz(10);
-/// A swing that hits nothing ends at 0.58 s; one that lands rebounds for 0.42 s.
-pub const SWING_TICKS: u64 = ticks_from_60hz(35);
-pub const SWORD_WINDUP_TICKS: u64 = ticks_from_60hz(7);
-pub const SWORD_SWING_TICKS: u64 = ticks_from_60hz(26);
-pub const REBOUND_TICKS: u64 = ticks_from_60hz(25);
-pub const COMBO_WINDOW_TICKS: u64 = ticks_from_60hz(75);
 /// Manual transfers start within this distance of the dock.
 const DOCK_REACH: Fx = Fx::from_bits(3_650_722_202); // 0.85
 /// Jetpack: hover height above the ground, and climb and sink speeds per tick
@@ -214,7 +196,7 @@ fn approach(current: FxVec2, target: FxVec2, max_change: Fx) -> FxVec2 {
 
 /// Moves `position` by `delta` in small steps, pushing out of obstacles and
 /// never leaving the arena, as the original controller did.
-fn slide(terrain: &Terrain, mut position: FxVec2, delta: FxVec2) -> FxVec2 {
+fn slide(terrain: &Terrain, mut position: FxVec2, delta: FxVec2, radius: Fx) -> FxVec2 {
     let step = Fx::from_ratio(3, 50);
     let steps = (delta.length() / step).ceil().floor_to_int().max(1);
     let (min, max) = (terrain.min(), terrain.max());
@@ -226,7 +208,7 @@ fn slide(terrain: &Terrain, mut position: FxVec2, delta: FxVec2) -> FxVec2 {
         for _ in 0..3 {
             for o in &terrain.obstacles {
                 let separation = position - o.center;
-                let clearance = o.radius + BODY_RADIUS + extra;
+                let clearance = o.radius + radius + extra;
                 if separation.length_squared() < clearance * clearance {
                     let length = separation.length();
                     let away = if length == Fx::ZERO { FxVec2::new(Fx::ONE, Fx::ZERO) } else { separation / length };
@@ -242,11 +224,12 @@ fn slide(terrain: &Terrain, mut position: FxVec2, delta: FxVec2) -> FxVec2 {
 }
 
 /// Stage 2 for one avatar.
-pub(super) fn self_update(a: &mut AgentState, me: AgentIx, tick: u64, terrain: &Terrain, piles: Option<&super::piles::PileLab>) {
+pub(super) fn self_update(a: &mut AgentState, me: AgentIx, tick: u64, terrain: &Terrain, piles: Option<&super::piles::PileLab>, def: &CharacterDef) {
+    let radius = def.body.radius;
     if a.avatar.max_health > 0 && a.avatar.health == 0 {
         if tick >= a.avatar.respawn_at {
             a.position = a.home;
-            a.avatar.height = terrain.footprint(a.home, BODY_RADIUS).unwrap_or_default();
+            a.avatar.height = terrain.footprint(a.home, radius).unwrap_or_default();
             a.avatar.health = a.avatar.max_health;
             a.avatar.respawn_at = 0;
             a.avatar.flight = Flight::default();
@@ -257,21 +240,21 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, tick: u64, terrain: &
         return;
     }
     if let Some(lab) = piles {
-        if let Some(error) = Settlement::pile_job_self_update(lab, me, a, terrain) {
+        if let Some(error) = Settlement::pile_job_self_update(lab, me, a, terrain, radius) {
             a.avatar.pile_failure = Some(error.to_string());
         }
     }
-    walk(a, tick, terrain);
+    walk(a, tick, terrain, def);
     if terrain.jump_enabled {
-        jump_step(a, tick, terrain);
+        jump_step(a, tick, terrain, radius);
     } else {
-        fly(a, terrain);
+        fly(a, terrain, radius);
     }
 }
 
-fn jump_step(a: &mut AgentState, tick: u64, terrain: &Terrain) {
+fn jump_step(a: &mut AgentState, tick: u64, terrain: &Terrain, radius: Fx) {
     let avatar = &mut a.avatar;
-    let ground = terrain.footprint(a.position, BODY_RADIUS);
+    let ground = terrain.footprint(a.position, radius);
     if let Some(y) = ground {
         avatar.flight.support = y;
     }
@@ -307,19 +290,21 @@ fn jump_step(a: &mut AgentState, tick: u64, terrain: &Terrain) {
     }
 }
 
-fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain) {
+fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain, def: &CharacterDef) {
+    let tuning = avatar_tuning(def);
+    let radius = def.body.radius;
     let per_tick = Fx::from_int(content::TICKS_PER_SECOND);
     let avatar = &mut a.avatar;
     if let Some(dig) = &avatar.dig {
-        avatar.velocity = approach(avatar.velocity, FxVec2::ZERO, BRAKING);
+        avatar.velocity = approach(avatar.velocity, FxVec2::ZERO, tuning.braking);
         let center = Terrain::pit_center(dig.tile);
-        a.position = slide(terrain, a.position, approach(a.position, center, DIG_CENTERING) - a.position);
+        a.position = slide(terrain, a.position, approach(a.position, center, DIG_CENTERING) - a.position, radius);
         return;
     }
     if let Some(swing) = &avatar.swing {
         if tick < swing.until && swing.weapon != Weapon::Laser {
-            avatar.velocity = approach(avatar.velocity, FxVec2::ZERO, ATTACK_BRAKING);
-            if tick < swing.started + AIM_TICKS {
+            avatar.velocity = approach(avatar.velocity, FxVec2::ZERO, tuning.attack_braking);
+            if tick < swing.started + tuning.attack.aim {
                 let target = nav::bearing(FxVec2::ZERO, swing.aim);
                 a.heading += angle_between(a.heading, target) * AIM_BLEND;
             }
@@ -330,7 +315,7 @@ fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain) {
         }
     }
     let speed = terrain.locomotion.map_or_else(
-        || if avatar.run { RUN_SPEED } else { WALK_SPEED },
+        || if avatar.run { def.movement.run } else { def.movement.walk },
         |profile| if avatar.run { profile.run } else { profile.walk },
     );
     let mut desired = FxVec2::ZERO;
@@ -355,7 +340,7 @@ fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain) {
         }
         _ => {}
     }
-    let change = if desired == FxVec2::ZERO { BRAKING } else { ACCELERATION };
+    let change = if desired == FxVec2::ZERO { tuning.braking } else { tuning.acceleration };
     avatar.velocity = approach(avatar.velocity, desired, change);
     let previous = a.position;
     let mut delta = avatar.velocity / per_tick;
@@ -366,16 +351,16 @@ fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain) {
             avatar.velocity = FxVec2::ZERO;
         }
     }
-    let candidate = slide(terrain, previous, delta);
+    let candidate = slide(terrain, previous, delta, radius);
     let airborne = a.avatar.flight.airborne;
     let allowed = if airborne {
-        terrain.flyable(previous, candidate, a.avatar.height, BODY_RADIUS)
+        terrain.flyable(previous, candidate, a.avatar.height, radius)
     } else {
-        terrain.walkable(previous, candidate, BODY_RADIUS)
+        terrain.walkable(previous, candidate, radius)
     };
     if allowed {
         if !airborne {
-            if let Some(ground) = terrain.footprint(candidate, BODY_RADIUS) {
+            if let Some(ground) = terrain.footprint(candidate, radius) {
                 a.avatar.height = ground;
             }
         }
@@ -392,9 +377,9 @@ fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain) {
 
 /// The jetpack: hover over the highest ground ahead while held, fall back to
 /// the ground when released, and keep flying over drops.
-fn fly(a: &mut AgentState, terrain: &Terrain) {
+fn fly(a: &mut AgentState, terrain: &Terrain, radius: Fx) {
     let flight = &mut a.avatar.flight;
-    let ground = terrain.footprint(a.position, BODY_RADIUS);
+    let ground = terrain.footprint(a.position, radius);
     let landing = ground;
     if let Some(y) = ground {
         flight.support = y;
@@ -407,7 +392,7 @@ fn fly(a: &mut AgentState, terrain: &Terrain) {
     let mut target = ground.unwrap_or(flight.support);
     if active {
         // Look far enough ahead to climb at walking and running speed.
-        let r = BODY_RADIUS;
+        let r = radius;
         let offsets = [(Fx::ZERO, Fx::ZERO), (r, Fx::ZERO), (-r, Fx::ZERO), (Fx::ZERO, r), (Fx::ZERO, -r)];
         for i in 0..=20 {
             let p = a.position + direction * Fx::from_ratio(i, 10);
@@ -633,6 +618,7 @@ impl Settlement {
         if self.agents.get(agent).is_some_and(|a| a.controlled) {
             self.cancel_pile_job(agent);
         }
+        let characters = &self.characters;
         let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled && (a.avatar.max_health == 0 || a.avatar.health > 0)) else { return };
         // Walking off stops a dig.
         let walking = match intent {
@@ -648,8 +634,9 @@ impl Settlement {
         if let Intent::GoTo { target, run } = intent {
             // On foot, routes avoid steps and drops; with the jetpack, anything goes.
             let flying = a.avatar.flight.requested || a.avatar.flight.airborne;
-            let walkable = |p: FxVec2, q: FxVec2| flying || terrain.walkable(p, q, BODY_RADIUS);
-            a.route = nav::path_with(terrain, a.position, target, BODY_RADIUS, &[], &walkable);
+            let radius = character_of(characters, a).body.radius;
+            let walkable = |p: FxVec2, q: FxVec2| flying || terrain.walkable(p, q, radius);
+            a.route = nav::path_with(terrain, a.position, target, radius, &[], &walkable);
             a.avatar.run = run;
         } else if let Intent::Walk { run, .. } = intent {
             a.avatar.run = run;
@@ -695,6 +682,7 @@ impl Settlement {
             self.cancel_pile_job(agent);
         }
         let swift_sword = self.swift_sword;
+        let characters = &self.characters;
         let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled && (a.avatar.max_health == 0 || a.avatar.health > 0)) else { return };
         if a.avatar.dig.is_some() {
             return;
@@ -707,18 +695,23 @@ impl Settlement {
             Some(swing) if tick < swing.until => {
                 a.avatar.queued = Some((weapon, aim, muzzle));
             }
-            _ => start_swing(a, tick, weapon, aim, muzzle, swift_sword),
+            _ => {
+                let timing = avatar_tuning(character_of(characters, a)).attack;
+                start_swing(a, tick, weapon, aim, muzzle, swift_sword, timing);
+            }
         }
     }
 
     /// Housekeeping: a buffered attack starts once the swing ends.
     pub(crate) fn avatar_housekeeping(&mut self, tick: u64) {
         let swift_sword = self.swift_sword;
+        let characters = &self.characters;
         for a in self.agents.iter_mut().filter(|a| a.controlled && (a.avatar.max_health == 0 || a.avatar.health > 0)) {
             let finished = a.avatar.swing.as_ref().is_none_or(|s| tick + 1 >= s.until);
             if finished {
                 if let Some((weapon, aim, muzzle)) = a.avatar.queued.take() {
-                    start_swing(a, tick + 1, weapon, aim, muzzle, swift_sword);
+                    let timing = avatar_tuning(character_of(characters, a)).attack;
+                    start_swing(a, tick + 1, weapon, aim, muzzle, swift_sword, timing);
                 }
             }
         }
@@ -727,11 +720,12 @@ impl Settlement {
     /// Records a resolved strike on the avatar: a hit shortens the swing to the rebound.
     pub(crate) fn swing_resolved(&mut self, agent: AgentIx, tick: u64, hits: u32) {
         let a = &mut self.agents[agent as usize];
+        let rebound = avatar_tuning(character_of(&self.characters, a)).attack.rebound;
         if let Some(swing) = &mut a.avatar.swing {
             swing.resolved = true;
             swing.hits = hits;
             if hits > 0 && matches!(swing.weapon, Weapon::Sword | Weapon::Spear) {
-                swing.until = tick + REBOUND_TICKS;
+                swing.until = tick + rebound;
             }
         }
     }
@@ -817,10 +811,10 @@ impl Settlement {
     }
 }
 
-fn start_swing(a: &mut AgentState, tick: u64, weapon: Weapon, aim: FxVec2, muzzle: [Fx; 3], swift_sword: bool) {
+fn start_swing(a: &mut AgentState, tick: u64, weapon: Weapon, aim: FxVec2, muzzle: [Fx; 3], swift_sword: bool, timing: AttackTiming) {
     let (stroke, next) = SwordStroke::combo(weapon, a.avatar.combo_next, tick <= a.avatar.combo_until);
     a.avatar.combo_next = next;
-    a.avatar.combo_until = tick + COMBO_WINDOW_TICKS;
+    a.avatar.combo_until = tick + timing.combo_window;
     a.avatar.weapon = weapon;
     if weapon == Weapon::Laser {
         a.avatar.aim = Some(aim);
@@ -835,9 +829,19 @@ fn start_swing(a: &mut AgentState, tick: u64, weapon: Weapon, aim: FxVec2, muzzl
         aim,
         muzzle,
         started: tick,
-        resolve_at: tick + if weapon == Weapon::Laser { ticks_from_60hz(2) } else if weapon == Weapon::Sword && swift_sword { SWORD_WINDUP_TICKS } else { WINDUP_TICKS },
-        until: tick + if weapon == Weapon::Laser { ticks_from_60hz(8) } else if weapon == Weapon::Sword && swift_sword { SWORD_SWING_TICKS } else { SWING_TICKS },
+        resolve_at: tick + if weapon == Weapon::Laser { ticks_from_60hz(2) } else if weapon == Weapon::Sword && swift_sword { timing.sword_windup } else { timing.windup },
+        until: tick + if weapon == Weapon::Laser { ticks_from_60hz(8) } else if weapon == Weapon::Sword && swift_sword { timing.sword_swing } else { timing.swing },
         resolved: false,
         hits: 0,
     });
+}
+
+/// An avatar's character definition.
+pub(crate) fn character_of<'a>(characters: &'a [CharacterDef], a: &AgentState) -> &'a CharacterDef {
+    &characters[a.character.expect("avatars have a character") as usize]
+}
+
+/// The tuning a player character carries; validated when the world is built.
+fn avatar_tuning(def: &CharacterDef) -> &AvatarDef {
+    def.avatar.as_ref().expect("player characters have avatar tuning")
 }

@@ -1,0 +1,8 @@
+// The forest outpost's ghouls fall to fewer hits.
+(
+    base: "ghoul",
+    sim: (
+        health: (hp: 2),
+    ),
+    view: (),
+)

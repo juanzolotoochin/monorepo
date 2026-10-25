@@ -117,7 +117,8 @@ fn reachable(service: &SessionService, origin: Vec3, target: &Target) -> bool {
     let Some(world) = service.world() else { return false };
     let away = crate::navigation::flat(origin - target.position).normalize_or(Vec3::Z);
     let stand = target.position + away * (target.surface + 0.5);
-    !sim::nav::path(world.terrain(), service.to_sim(origin), service.to_sim(stand), sim::settlement::avatar::BODY_RADIUS).is_empty()
+    let Some(radius) = service.player_radius() else { return false };
+    !sim::nav::path(world.terrain(), service.to_sim(origin), service.to_sim(stand), radius).is_empty()
 }
 
 pub(crate) fn mineral_label(m: Mineral) -> &'static str {

@@ -1,4 +1,4 @@
-use content::{MoverDef, Rules};
+use content::{Content, MoverDef, Rules};
 use fx::{Fx, FxVec2, FxVec3};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -278,13 +278,13 @@ impl World {
     }
 
     /// A new world for a scene, sized to fit its arena, at tick 0.
-    pub fn new_scene(seed: u64, rules: Rules, setup: &crate::settlement::SceneSetup) -> Result<World, String> {
+    pub fn new_scene(seed: u64, content: &Content, setup: &crate::settlement::SceneSetup) -> Result<World, String> {
         let extent = setup.scenario.as_ref().map_or(setup.extent, |s| s.extent);
         let span = (extent.mul_int(2) + Fx::from_int(2)).ceil().floor_to_int() as u32;
         let chunks = span.div_ceil(CHUNK_TILES as u32).max(1);
         let config = WorldConfig { seed, chunks_x: chunks, chunks_y: chunks, max_movers: 0 };
-        let mut world = World::new(config, rules);
-        let settlement = Settlement::from_scene(setup, &mut world.terrain)?;
+        let mut world = World::new(config, content.rules.clone());
+        let settlement = Settlement::from_scene(setup, &mut world.terrain, content)?;
         world.settlement = Some(Box::new(settlement));
         Ok(world)
     }
@@ -293,20 +293,20 @@ impl World {
     /// `obstacles` are the scene's blocking props, in arena coordinates.
     pub fn new_settlement(
         seed: u64,
-        rules: Rules,
+        content: &Content,
         scenario: &content::scenario::Scenario,
         obstacles: &[Disc],
     ) -> Result<World, String> {
         let span = (scenario.extent.mul_int(2) + Fx::from_int(2)).ceil().floor_to_int() as u32;
         let chunks = span.div_ceil(CHUNK_TILES as u32).max(1);
         let config = WorldConfig { seed, chunks_x: chunks, chunks_y: chunks, max_movers: 0 };
-        let mut world = World::new(config, rules);
+        let mut world = World::new(config, content.rules.clone());
         let center = world.terrain.center;
         let placed: Vec<Disc> = obstacles
             .iter()
             .map(|o| Disc { center: FxVec2::new(center.x + o.center.x, center.y + o.center.y), radius: o.radius })
             .collect();
-        let settlement = Settlement::from_scenario(scenario, &placed, &mut world.terrain)?;
+        let settlement = Settlement::from_scenario(scenario, &placed, &mut world.terrain, content)?;
         world.settlement = Some(Box::new(settlement));
         Ok(world)
     }
@@ -1021,6 +1021,9 @@ impl World {
         world.ids = Ids::from_state(&state.ids);
         world.terrain = state.terrain;
         world.settlement = state.settlement.map(Box::new);
+        if let Some(settlement) = &mut world.settlement {
+            settlement.set_characters(&world.rules.characters)?;
+        }
         world.timers = timers;
         world.pending = state.pending;
         for (index, saved) in state.chunks.into_iter().enumerate() {

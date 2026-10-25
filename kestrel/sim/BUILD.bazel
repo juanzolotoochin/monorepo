@@ -5,8 +5,11 @@ load("@rules_rs//rs:rust_test.bzl", "rust_test")
 rust_library(
     name = "sim",
     srcs = glob(["src/**/*.rs"]),
-    # The golden report replays the forest outpost's scenario.
-    compile_data = ["//kestrel/app/assets:levels/forest_supply.ron"],
+    # The golden report replays the forest outpost and combat arena scenarios.
+    compile_data = [
+        "//kestrel/app/assets:levels/combat_arena_supply.ron",
+        "//kestrel/app/assets:levels/forest_supply.ron",
+    ],
     edition = "2021",
     visibility = ["//kestrel:__subpackages__"],
     deps = [
