@@ -36,9 +36,10 @@ func main() {
 
 func run() error {
 	var caption string
-	var dryRun bool
+	var dryRun, driveOnly bool
 	flag.StringVar(&caption, "caption", "", "text to post with the Drive link")
 	flag.BoolVar(&dryRun, "dry-run", false, "build without uploading or posting")
+	flag.BoolVar(&driveOnly, "drive-only", false, "upload to Drive without posting to Telegram")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(flag.Args(), " "))
@@ -72,8 +73,11 @@ func run() error {
 			credentialsPath = filepath.Join(workspace, ".credentials", credentialsFile)
 		}
 	}
-	if !dryRun && (token == "" || chatID == "" || folderID == "") {
-		return errors.New("set Telegram bot token, chat ID, and Drive folder ID in .credentials/game-share.json (or environment variables)")
+	if !dryRun && folderID == "" {
+		return errors.New("set the Drive folder ID in .credentials/game-share.json (or GOOGLE_DRIVE_FOLDER_ID)")
+	}
+	if !dryRun && !driveOnly && (token == "" || chatID == "") {
+		return errors.New("set the Telegram bot token and chat ID in .credentials/game-share.json (or environment variables)")
 	}
 	if err := build(context.Background(), workspace); err != nil {
 		return err
@@ -107,6 +111,9 @@ func run() error {
 		return err
 	}
 	fmt.Println("Uploaded to Google Drive:", link)
+	if driveOnly {
+		return nil
+	}
 	if err := sendTelegram(ctx, http.DefaultClient, "https://api.telegram.org", token, chatID, caption+"\n"+link); err != nil {
 		return fmt.Errorf("Drive upload succeeded but Telegram post failed: %w", err)
 	}
@@ -247,9 +254,9 @@ func uploadDrive(ctx context.Context, client *http.Client, baseURL, accessToken,
 	if err != nil {
 		return "", fmt.Errorf("start Drive upload: %w", err)
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("start Drive upload: HTTP %d", resp.StatusCode)
+		return "", fmt.Errorf("start Drive upload: %w", driveResponseError(resp))
 	}
 	location := resp.Header.Get("Location")
 	if location == "" {
@@ -268,7 +275,7 @@ func uploadDrive(ctx context.Context, client *http.Client, baseURL, accessToken,
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("upload to Drive: HTTP %d", resp.StatusCode)
+		return "", fmt.Errorf("upload to Drive: %w", driveResponseError(resp))
 	}
 	var file struct {
 		ID          string `json:"id"`
@@ -284,6 +291,24 @@ func uploadDrive(ctx context.Context, client *http.Client, baseURL, accessToken,
 		return file.WebViewLink, nil
 	}
 	return "https://drive.google.com/file/d/" + url.PathEscape(file.ID) + "/view", nil
+}
+
+func driveResponseError(resp *http.Response) error {
+	var body struct {
+		Error struct {
+			Message string `json:"message"`
+			Errors  []struct {
+				Reason string `json:"reason"`
+			} `json:"errors"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 8192)).Decode(&body); err != nil || body.Error.Message == "" {
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	if len(body.Error.Errors) != 0 && body.Error.Errors[0].Reason != "" {
+		return fmt.Errorf("HTTP %d: %s (%s)", resp.StatusCode, body.Error.Message, body.Error.Errors[0].Reason)
+	}
+	return fmt.Errorf("HTTP %d: %s", resp.StatusCode, body.Error.Message)
 }
 
 func sendTelegram(ctx context.Context, client *http.Client, baseURL, token, chatID, message string) error {

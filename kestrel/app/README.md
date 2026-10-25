@@ -47,6 +47,8 @@ local credentials only at runtime.
 
 To build without uploading or posting, run
 `bazel run --config=full_local -c opt //kestrel/app:share_to_devs -- --dry-run`.
+To upload to Drive without posting to Telegram, run
+`bazel run --config=full_local -c opt //kestrel/app:share_to_devs -- --drive-only`.
 The game executable and assets are self-contained; download the binary, make
 it executable on Unix (`chmod +x kestrel-*`), and run it on the same OS and CPU
 architecture as the publishing machine.

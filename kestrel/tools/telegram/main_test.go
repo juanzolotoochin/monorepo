@@ -97,6 +97,14 @@ func TestTelegramErrorRedactsToken(t *testing.T) {
 	}
 }
 
+func TestDriveResponseError(t *testing.T) {
+	resp := &http.Response{StatusCode: 403, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"Folder is not writable","errors":[{"reason":"insufficientFilePermissions"}]}}`))}
+	err := driveResponseError(resp)
+	if !strings.Contains(err.Error(), "Folder is not writable") || !strings.Contains(err.Error(), "insufficientFilePermissions") {
+		t.Fatalf("unhelpful Drive error: %v", err)
+	}
+}
+
 func TestServiceAccountToken(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
