@@ -5,8 +5,8 @@
                   damage: 1, knockback: 0.0, stagger_ticks: 0,
                   projectile_speed: 0.0, critical_one_in: 0)],
  depots: [], sources: [], links: [],
- agents: [(id: "player", label: "YOU", skin: "worker", position: (0.0, 11.5),
-           speed: 3.8, capacity: 8, links: [],
-           transfer_seconds: 0.4, cargo_anchor: (0.0, 0.65, -0.19),
+ agents: [(id: "player", label: "YOU", skin: "worker", character: "exosuit", position: (0.0, 11.5),
+           capacity: 8, links: [],
+           cargo_anchor: (0.0, 0.65, -0.19),
            equipment: None, controlled: true)],
  producers: [], defenders: [], waves: [], base_health: 1, player_health: 6)

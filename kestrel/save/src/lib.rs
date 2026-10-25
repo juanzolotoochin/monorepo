@@ -25,7 +25,8 @@ mod inputs;
 pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 
 /// 3: settlements refer to character definitions by index.
-pub const FORMAT_VERSION: u32 = 3;
+/// 4: every agent has a character, haulers included.
+pub const FORMAT_VERSION: u32 = 4;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 
@@ -220,9 +221,7 @@ fn remap_characters(saved: &Names, content: &Content, state: &mut WorldState) ->
         content.names.character_index(short).ok_or_else(|| LoadError::MissingContent { name: name.clone() })
     };
     for agent in &mut settlement.agents {
-        if let Some(ix) = agent.character {
-            agent.character = Some(map(ix)?);
-        }
+        agent.character = map(agent.character)?;
     }
     for wave in &mut settlement.waves {
         wave.character = map(wave.character)?;

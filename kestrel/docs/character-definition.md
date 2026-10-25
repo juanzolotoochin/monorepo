@@ -25,7 +25,7 @@ This is the `ghoul` character definition:
 Read it from the outside in:
 
 1. The outer `(...)` is one **character file**. It has a required `sim` section, a required `view` section, and optionally `base`.
-2. `sim` holds the gameplay rules. Here the ghoul follows a route, has a collision radius of 0.27 meters, walks at 0.6 meters per second, and starts with 3 hit points.
+2. `sim` holds gameplay rules. This ghoul follows a route, has a collision radius of 0.27 meters, walks at 0.6 meters per second, and starts with 3 hit points.
 3. `view: ()` is required but currently has **no fields**. This file does not select a mesh, skin, rig, or animation. Those visuals come from scene style assets.
 
 The loader rejects unknown fields. A value left out of a standalone file is valid only when the schema gives it a default; a variant can also inherit it from `base`.
@@ -42,19 +42,20 @@ The `sim` section has the same **shape** for every character kind, but `brain` d
 
 | `sim` field | Shape | Rule |
 | --- | --- | --- |
-| `brain` | `Player` or `FollowRoute` | Required, unless inherited. Selects behavior implemented by the engine. |
+| `brain` | `Player`, `FollowRoute`, or `Hauler` | Required, unless inherited. Selects behavior implemented by the engine. |
 | `body` | `(radius: number)` | Required collision radius in meters. |
 | `movement` | `(walk: number, run: number)` | `walk` is required in meters per second. `run` is optional and defaults to `walk`. |
-| `health` | `(hp: integer, breach_damage: integer, armor: (...))` | Required for `FollowRoute`; forbidden for `Player`. `armor` is optional. |
-| `avatar` | `(acceleration: ..., braking: ..., attack_braking: ..., attack: (...))` | Required for `Player`; forbidden for `FollowRoute`. |
+| `health` | `(hp: integer, breach_damage: integer, armor: (...))` | Required for `FollowRoute`; forbidden for `Player` and `Hauler`. `armor` is optional. |
+| `avatar` | `(acceleration: ..., braking: ..., attack_braking: ..., attack: (...))` | Required for `Player`; forbidden for `FollowRoute` and `Hauler`. |
+| `carry` | `(transfer: integer)` | Required for `Player` and `Hauler`; forbidden for `FollowRoute`. `transfer` is frames to load or unload one unit. |
 
 `health.hp` is starting hit points. `health.breach_damage` is damage dealt on reaching the route's target. If supplied, `health.armor` must contain both `points` and `radius`; the armor absorbs hits and enlarges the collision radius until it breaks.
 
-`avatar.acceleration`, `braking`, and `attack_braking` are rates in meters per second squared. `avatar.attack` requires all seven frame counts: `windup`, `aim`, `swing`, `sword_windup`, `sword_swing`, `rebound`, and `combo_window`. Durations are written as whole frames at 60 Hz. The loader validates ranges and converts authored values to simulation units.
+`avatar.acceleration`, `braking`, and `attack_braking` are rates in meters per second squared. `avatar.attack` requires seven frame counts: `windup`, `aim`, `swing`, `sword_windup`, `sword_swing`, `rebound`, and `combo_window`. Durations, including `carry.transfer`, are written as whole frames at 60 Hz. The loader validates ranges and converts authored values to simulation units.
 
-## The other role: a player
+## The other roles
 
-The player uses the **same outer file schema**. Its `Player` brain requires `avatar` rather than `health`:
+The player uses the same outer file schema. Its `Player` brain requires `avatar` and `carry` rather than `health`:
 
 ```ron
 (
@@ -62,10 +63,9 @@ The player uses the **same outer file schema**. Its `Player` brain requires `ava
         brain: Player,
         body: (radius: 0.32),
         movement: (walk: 3.8, run: 5.6),
+        carry: (transfer: 24),
         avatar: (
-            acceleration: 26,
-            braking: 32,
-            attack_braking: 35,
+            acceleration: 26, braking: 32, attack_braking: 35,
             attack: (
                 windup: 13, aim: 10, swing: 35,
                 sword_windup: 7, sword_swing: 26,
@@ -77,7 +77,23 @@ The player uses the **same outer file schema**. Its `Player` brain requires `ava
 )
 ```
 
-This is the built-in `exosuit` file. Player health is a scenario rule, so it does not appear here.
+This is the built-in `exosuit` definition. Player health is a scenario rule, so it does not appear here.
+
+A hauler uses `Hauler` and `carry`, without an `avatar` or `health` section:
+
+```ron
+(
+    sim: (
+        brain: Hauler,
+        body: (radius: 0.28),
+        movement: (walk: 1.5),
+        carry: (transfer: 27),
+    ),
+    view: (),
+)
+```
+
+This is the `worker` definition. The scenario separately chooses each worker's position, visual skin, cargo capacity, links, and equipment. The `runner` variant inherits `worker` and changes its walk speed; the `ox` is another hauler kind.
 
 ## Variants reuse a definition
 
@@ -96,13 +112,13 @@ This is the built-in `exosuit` file. Player health is a scenario rule, so it doe
 
 It inherits `FollowRoute`, `body.radius`, and `health.breach_damage`. Nested sections merge field by field. An `armor` value replaces the entire inherited armor value. The base file remains a usable character kind. Missing required fields after inheritance, unknown bases, and inheritance cycles are errors.
 
-## Where this definition applies
+## Where definitions and visuals meet
 
-| Object | Character file? | Where its instance state lives |
+| Object | Character definition | Visual selection |
 | --- | --- | --- |
-| Player avatar | Yes: currently `exosuit` | The running world tracks its position and actions. |
-| Wave enemy | Yes: the wave names a kind such as `ghoul` | Each spawned enemy tracks its own position, health, and armor. |
-| Hauler | No | Scenario and simulation data currently supply its stats and behavior. |
-| Defender, machine, cart, projectile | No | Each uses its own game system. |
+| Player avatar | `exosuit` | The scene's actor style dresses the player rig. |
+| Wave enemy | A kind such as `ghoul_forest` | The wave names a skin separately. |
+| Hauler | A kind such as `worker`, `runner`, or `ox` | The scenario agent names a skin separately. |
+| Defender, machine, cart, projectile | No character definition | Their own scene or simulation systems select visuals. |
 
-A wave names the enemy kind it spawns; the player currently uses `exosuit`. Peers in a network game load matching simulation definitions. Jump, jetpack, and digging availability currently come from scene rules. The empty `view` section does not yet connect a character kind to a skin; [visual assets and characters](asset-system.md) explains the current visual path.
+Each spawned character has its own position and other instance state. Scenario agents can also have different capacities and equipment while sharing a character definition. The empty `view` section does not yet connect a character kind to a skin; [visual assets and characters](asset-system.md) explains the current visual path. Jump, jetpack, and digging availability currently come from scene rules.

@@ -25,6 +25,8 @@ pub enum Brain {
     Player,
     /// Walks its wave's route to the target and breaches.
     FollowRoute,
+    /// Carries goods along its haul links.
+    Hauler,
 }
 
 /// A character's simulation rules, in simulation units.
@@ -37,6 +39,16 @@ pub struct CharacterDef {
     pub health: Option<HealthDef>,
     /// Player characters only.
     pub avatar: Option<AvatarDef>,
+    /// Characters that carry goods: players and haulers.
+    pub carry: Option<CarryDef>,
+}
+
+/// How a character handles cargo. How much it carries is set where it is
+/// placed, in the scenario.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CarryDef {
+    /// Ticks to load or unload one unit.
+    pub transfer: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,6 +132,14 @@ pub(crate) struct SimFile {
     movement: Option<MovementFile>,
     health: Option<HealthFile>,
     avatar: Option<AvatarFile>,
+    carry: Option<CarryFile>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct CarryFile {
+    /// 60 Hz frames.
+    transfer: Option<u64>,
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -199,7 +219,8 @@ macro_rules! merge_fields {
     };
 }
 
-merge_fields!(SimFile { brain } { body, movement, health, avatar });
+merge_fields!(SimFile { brain } { body, movement, health, avatar, carry });
+merge_fields!(CarryFile { transfer } {});
 merge_fields!(BodyFile { radius } {});
 merge_fields!(MovementFile { walk, run } {});
 merge_fields!(HealthFile { hp, armor, breach_damage } {});
@@ -245,16 +266,29 @@ pub(crate) fn character_def(file: SimFile) -> Result<CharacterDef, String> {
         })
         .transpose()?;
     let avatar = file.avatar.map(avatar_def).transpose()?;
+    let carry = file
+        .carry
+        .map(|c| {
+            let transfer = need(c.transfer, "carry.transfer")?;
+            if !(3..=300).contains(&transfer) {
+                return Err("carry.transfer must be 3..=300 frames".to_string());
+            }
+            Ok(CarryDef { transfer: ticks_from_60hz(transfer) })
+        })
+        .transpose()?;
     match brain {
-        Brain::Player if avatar.is_none() || health.is_some() => {
-            return Err("a Player character needs `avatar` and no `health` (player health is a scenario rule)".into())
+        Brain::Player if avatar.is_none() || carry.is_none() || health.is_some() => {
+            return Err("a Player character needs `avatar` and `carry`, and no `health` (player health is a scenario rule)".into())
         }
-        Brain::FollowRoute if health.is_none() || avatar.is_some() => {
-            return Err("a FollowRoute character needs `health` and no `avatar`".into())
+        Brain::FollowRoute if health.is_none() || avatar.is_some() || carry.is_some() => {
+            return Err("a FollowRoute character needs `health`, and no `avatar` or `carry`".into())
+        }
+        Brain::Hauler if carry.is_none() || avatar.is_some() || health.is_some() => {
+            return Err("a Hauler character needs `carry`, and no `avatar` or `health`".into())
         }
         _ => {}
     }
-    Ok(CharacterDef { brain, body: BodyDef { radius }, movement: MovementDef { walk, run }, health, avatar })
+    Ok(CharacterDef { brain, body: BodyDef { radius }, movement: MovementDef { walk, run }, health, avatar, carry })
 }
 
 fn avatar_def(file: AvatarFile) -> Result<AvatarDef, String> {
