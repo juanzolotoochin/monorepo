@@ -114,6 +114,12 @@ single_version_override(
     patches = ["//bazel/patches:rules_js.patch"],
 )
 
+single_version_override(
+    module_name = "bazel_lib",
+    patch_strip = 1,
+    patches = ["//bazel/patches:bazel_lib_windows_shell.patch"],
+)
+
 npm = use_extension("@aspect_rules_js//npm:extensions.bzl", "npm", dev_dependency = True)
 npm.npm_translate_lock(
     name = "npm",

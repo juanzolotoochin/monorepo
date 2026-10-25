@@ -1,0 +1,29 @@
+diff --git a/lib/windows_utils.bzl b/lib/windows_utils.bzl
+--- a/lib/windows_utils.bzl
++++ b/lib/windows_utils.bzl
+@@ -91,7 +91,15 @@ def create_windows_native_launcher_script(ctx, shell_script):
+ set RUNFILES_MANIFEST_ONLY=1
+ {rlocation_function}
+ call :rlocation "{sh_script}" run_script
+-for %%a in ("{bash_bin}") do set "bash_bin_dir=%%~dpa"
++rem Shell toolchains may supply an absolute host path or a runfiles key.
++set "bash_bin={bash_bin}"
++if not exist "!bash_bin!" (
++  rem rlocation must not reuse the previous lookup's result on a miss.
++  set "abs_path="
++  call :rlocation "{bash_bin}" bash_bin
++  if errorlevel 1 exit /b 1
++)
++for %%a in ("!bash_bin!") do set "bash_bin_dir=%%~dpa"
+ set PATH=%bash_bin_dir%;%PATH%
+ set args=%*
+ rem Escape \ and * in args before passing it with double quote
+@@ -99,7 +107,7 @@ rem Escape \ and * in args before passing it with double quote
+   set args=!args:\=\\\\!
+   set args=!args:"=\"!
+ )
+-"{bash_bin}" -c "!run_script! !args!"
++"!bash_bin!" -c "!run_script! !args!"
+ """.format(
+             bash_bin = ctx.toolchains["@bazel_tools//tools/sh:toolchain_type"].path,
+             sh_script = paths.to_rlocation_path(ctx, shell_script),
