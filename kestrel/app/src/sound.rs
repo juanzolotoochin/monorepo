@@ -87,13 +87,15 @@ pub enum Cue {
     ArrowHit = 15,
     Decapitate = 16,
     Pierce = 17,
+    Laser = 18,
+    LaserImpact = 19,
 }
 impl Cue {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 20] = [
         Self::Swing, Self::Clang, Self::Step, Self::Stone, Self::Crystal,
         Self::Polymer, Self::Toss, Self::Land, Self::Dispense, Self::Jetpack,
         Self::GhoulHit, Self::Bow, Self::Spear, Self::Ballista, Self::Arc,
-        Self::ArrowHit, Self::Decapitate, Self::Pierce,
+        Self::ArrowHit, Self::Decapitate, Self::Pierce, Self::Laser, Self::LaserImpact,
     ];
     pub fn name(id: i32) -> String {
         let cue = Self::ALL.get(id as usize).expect("recorded cue id");
@@ -281,6 +283,16 @@ mod tests {
         assert!(first[4800..36000]
             .chunks_exact(2)
             .any(|channels| (channels[0] - channels[1]).abs() > 0.001));
+    }
+
+    #[test]
+    fn laser_contact_has_an_audible_transient() {
+        let event = [SynthEvent { sample: 0, kind: Cue::LaserImpact as i32 }];
+        let mut samples = vec![0.0; 48000 / 2];
+        unsafe { kestrel_audio_synthesize(event.as_ptr(), 1, samples.as_mut_ptr(), 12000); }
+        let peak = samples.iter().fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+        assert!(peak > 0.15, "laser impact peak {peak} is too quiet");
+        assert!(samples[18000..].iter().all(|sample| sample.abs() < 0.01));
     }
 
     #[test]

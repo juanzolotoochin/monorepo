@@ -156,6 +156,12 @@ pub enum JumpPhase {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AvatarState {
+    #[serde(default)]
+    pub health: u32,
+    #[serde(default)]
+    pub max_health: u32,
+    #[serde(default)]
+    pub respawn_at: u64,
     /// Height of the feet above the arena floor.
     pub height: Fx,
     pub flight: Flight,
@@ -174,6 +180,9 @@ pub struct AvatarState {
     pub combo_until: u64,
     /// The weapon in hand, so every peer shows it.
     pub weapon: Weapon,
+    /// Upper body facing; movement heading remains on the agent.
+    #[serde(default)]
+    pub aim: Option<FxVec2>,
     /// A follow-up attack clicked during the end of a swing.
     pub queued: Option<(Weapon, FxVec2, [Fx; 3])>,
     pub job: Option<ManualJob>,
@@ -222,6 +231,19 @@ fn slide(terrain: &Terrain, mut position: FxVec2, delta: FxVec2) -> FxVec2 {
 
 /// Stage 2 for one avatar.
 pub(super) fn self_update(a: &mut AgentState, me: AgentIx, tick: u64, terrain: &Terrain, piles: Option<&super::piles::PileLab>) {
+    if a.avatar.max_health > 0 && a.avatar.health == 0 {
+        if tick >= a.avatar.respawn_at {
+            a.position = a.home;
+            a.avatar.height = terrain.footprint(a.home, BODY_RADIUS).unwrap_or_default();
+            a.avatar.health = a.avatar.max_health;
+            a.avatar.respawn_at = 0;
+            a.avatar.flight = Flight::default();
+            a.avatar.jump = JumpPhase::Grounded;
+            a.avatar.velocity = FxVec2::ZERO;
+            a.avatar.intent = Some(Intent::Stop);
+        }
+        return;
+    }
     if let Some(lab) = piles {
         if let Some(error) = Settlement::pile_job_self_update(lab, me, a, terrain) {
             a.avatar.pile_failure = Some(error.to_string());
@@ -283,7 +305,7 @@ fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain) {
         return;
     }
     if let Some(swing) = &avatar.swing {
-        if tick < swing.until {
+        if tick < swing.until && swing.weapon != Weapon::Laser {
             avatar.velocity = approach(avatar.velocity, FxVec2::ZERO, ATTACK_BRAKING);
             if tick < swing.started + AIM_TICKS {
                 let target = nav::bearing(FxVec2::ZERO, swing.aim);
@@ -291,7 +313,9 @@ fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain) {
             }
             return;
         }
-        avatar.swing = None;
+        if tick >= swing.until {
+            avatar.swing = None;
+        }
     }
     let speed = terrain.locomotion.map_or_else(
         || if avatar.run { RUN_SPEED } else { WALK_SPEED },
@@ -451,7 +475,14 @@ impl Settlement {
             yielding: 0,
             pending_in: 0,
             pending_out: 0,
-            avatar: AvatarState { height: self.spawn_height, intent: Some(Intent::Stop), ..AvatarState::default() },
+            avatar: AvatarState {
+                height: self.spawn_height,
+                health: self.player_health,
+                max_health: self.player_health,
+                weapon: self.weapons.first().copied().unwrap_or_default(),
+                intent: Some(Intent::Stop),
+                ..AvatarState::default()
+            },
             attack_ready: 0,
             avoidance_steers: 0,
             dock_wait_ticks: 0,
@@ -563,7 +594,7 @@ impl Settlement {
     pub(super) fn read_avatar(&self, me: AgentIx, a: &AgentState, tick: u64, terrain: &Terrain, out: &mut Messages) {
         if let Some(swing) = &a.avatar.swing {
             if !swing.resolved && swing.resolve_at == tick && a.attack_ready <= tick {
-                let (targets, beam_end) = self.strike_targets(a.position, swing.aim, swing.weapon, terrain);
+                let (targets, beam_end) = self.strike_targets(me, a.position, swing.aim, swing.weapon, terrain);
                 out.strike.push(Strike {
                     agent: me,
                     weapon: swing.weapon,
@@ -590,7 +621,7 @@ impl Settlement {
         if self.agents.get(agent).is_some_and(|a| a.controlled) {
             self.cancel_pile_job(agent);
         }
-        let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
+        let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled && (a.avatar.max_health == 0 || a.avatar.health > 0)) else { return };
         // Walking off stops a dig.
         let walking = match intent {
             Intent::Stop => false,
@@ -615,6 +646,14 @@ impl Settlement {
     }
 
     /// Commands: starts an attack, or buffers one deliberate press during it.
+    pub fn aim_avatar(&mut self, agent: usize, aim: FxVec2) {
+        let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
+        let aim = aim.normalize_or_zero();
+        if aim != FxVec2::ZERO {
+            a.avatar.aim = Some(aim);
+        }
+    }
+
     pub fn attack(&mut self, tick: u64, agent: usize, weapon: Weapon, aim: FxVec2, muzzle: [Fx; 3]) {
         if !self.has_weapon(weapon) {
             return;
@@ -623,7 +662,7 @@ impl Settlement {
             self.cancel_pile_job(agent);
         }
         let swift_sword = self.swift_sword;
-        let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
+        let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled && (a.avatar.max_health == 0 || a.avatar.health > 0)) else { return };
         if a.avatar.dig.is_some() {
             return;
         }
@@ -642,7 +681,7 @@ impl Settlement {
     /// Housekeeping: a buffered attack starts once the swing ends.
     pub(crate) fn avatar_housekeeping(&mut self, tick: u64) {
         let swift_sword = self.swift_sword;
-        for a in self.agents.iter_mut().filter(|a| a.controlled) {
+        for a in self.agents.iter_mut().filter(|a| a.controlled && (a.avatar.max_health == 0 || a.avatar.health > 0)) {
             let finished = a.avatar.swing.as_ref().is_none_or(|s| tick + 1 >= s.until);
             if finished {
                 if let Some((weapon, aim, muzzle)) = a.avatar.queued.take() {
@@ -754,16 +793,21 @@ fn start_swing(a: &mut AgentState, tick: u64, weapon: Weapon, aim: FxVec2, muzzl
     a.avatar.combo_next = if weapon == Weapon::Sword { stroke.next() } else { SwordStroke::Forehand };
     a.avatar.combo_until = tick + COMBO_WINDOW_TICKS;
     a.avatar.weapon = weapon;
-    a.route.clear();
-    a.avatar.intent = Some(Intent::Stop);
+    if weapon == Weapon::Laser {
+        a.avatar.aim = Some(aim);
+    }
+    if weapon != Weapon::Laser {
+        a.route.clear();
+        a.avatar.intent = Some(Intent::Stop);
+    }
     a.avatar.swing = Some(Swing {
         weapon,
         stroke,
         aim,
         muzzle,
         started: tick,
-        resolve_at: tick + if weapon == Weapon::Sword && swift_sword { SWORD_WINDUP_TICKS } else { WINDUP_TICKS },
-        until: tick + if weapon == Weapon::Sword && swift_sword { SWORD_SWING_TICKS } else { SWING_TICKS },
+        resolve_at: tick + if weapon == Weapon::Laser { ticks_from_60hz(2) } else if weapon == Weapon::Sword && swift_sword { SWORD_WINDUP_TICKS } else { WINDUP_TICKS },
+        until: tick + if weapon == Weapon::Laser { ticks_from_60hz(8) } else if weapon == Weapon::Sword && swift_sword { SWORD_SWING_TICKS } else { SWING_TICKS },
         resolved: false,
         hits: 0,
     });

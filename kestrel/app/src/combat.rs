@@ -41,7 +41,9 @@ pub struct Attack {
 }
 impl Attack {
     pub fn timing(&self) -> (f32, f32, f32) {
-        if self.weapon == content::scenario::Weapon::Sword && self.swift {
+        if self.weapon == content::scenario::Weapon::Laser {
+            (0.03, 0.07, 0.13)
+        } else if self.weapon == content::scenario::Weapon::Sword && self.swift {
             (SWORD_WINDUP, SWORD_ACTIVE_END, SWORD_END)
         } else {
             (WINDUP, ACTIVE_END, ATTACK_END)
@@ -53,6 +55,7 @@ impl Attack {
             content::scenario::Weapon::Spear => ActionMotion::Thrust,
             content::scenario::Weapon::Bow => ActionMotion::Draw,
             content::scenario::Weapon::ArcCoil => ActionMotion::Cast,
+            content::scenario::Weapon::Laser => ActionMotion::Cast,
         }
     }
     pub fn new(aim: Vec3, weapon: content::scenario::Weapon) -> Self {
@@ -94,6 +97,7 @@ impl Attack {
                 content::scenario::Weapon::Spear => -0.15 + 0.25 * smooth(self.age / 0.22),
                 content::scenario::Weapon::Bow => -0.9 + 0.4 * smooth(self.age / 0.22),
                 content::scenario::Weapon::ArcCoil => -0.5 + 0.8 * smooth(self.age / 0.22),
+                content::scenario::Weapon::Laser => -0.15 + 0.25 * smooth(self.age / 0.22),
             }
         }
     }
@@ -238,7 +242,7 @@ pub fn combat(
     let Some(mut attack) = controls.attack else {
         return;
     };
-    if attack.age < 0.05 {
+    if attack.age < 0.05 && attack.weapon != content::scenario::Weapon::Laser {
         player.rotation = Quat::from_rotation_y(attack.aim.x.atan2(attack.aim.z));
     }
     let previous_age = attack.age;
@@ -366,6 +370,7 @@ mod tests {
             spark: std::array::from_fn(|_| default()),
             debris: std::array::from_fn(|_| default()),
             trail: default(),
+            laser: default(),
             blood: std::array::from_fn(|_| default()),
         };
         app.init_resource::<Time>()
@@ -446,6 +451,7 @@ mod tests {
                         spark: std::array::from_fn(|_| default()),
                         debris: std::array::from_fn(|_| default()),
                         trail: default(),
+                        laser: default(),
                         blood: std::array::from_fn(|_| default()),
                     })
                     .add_systems(Update, combat);

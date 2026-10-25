@@ -1,7 +1,10 @@
 use crate::{
     character::{LocalBlade, Player},
+    combat::Obstacle,
     gameplay::Controls,
     impact::{self, ImpactTarget},
+    peers::Peer,
+    style::WeaponMuzzle,
 };
 use bevy::{camera::ScalingMode, input::mouse::AccumulatedMouseScroll, prelude::*};
 use voxel_assets::ImpactResponse;
@@ -20,10 +23,17 @@ impl service::Service for Effects {
 
     fn systems(app: &mut App) {
         use service::{AppServices, Phase, WorldState};
-        app.add_service_systems::<Self, _>(
-            Phase::Present,
-            (update_effects, camera_feedback.run_if(crate::control::rendered)).run_if(in_state(WorldState::Active)),
-        );
+        app.init_resource::<PendingLasers>()
+            .add_service_systems::<Self, _>(
+                Phase::Present,
+                (update_effects, camera_feedback.run_if(crate::control::rendered)).run_if(in_state(WorldState::Active)),
+            )
+            .add_systems(
+                PostUpdate,
+                emit_lasers
+                    .after(bevy::transform::TransformSystems::Propagate)
+                    .run_if(in_state(WorldState::Active)),
+            );
     }
 }
 
@@ -47,8 +57,31 @@ pub struct FxAssets {
     pub spark: [Handle<StandardMaterial>; 4],
     pub debris: [Handle<StandardMaterial>; 4],
     pub trail: Handle<StandardMaterial>,
+    pub laser: Handle<StandardMaterial>,
     pub blood: [Handle<StandardMaterial>; 2],
 }
+#[derive(Resource, Default)]
+pub struct PendingLasers(pub Vec<LaserShot>);
+
+pub struct LaserShot {
+    pub agent: u16,
+    pub target: Vec3,
+    pub hit_actor: bool,
+}
+
+#[derive(Component)]
+pub(crate) struct LaserBolt {
+    from: Vec3,
+    direction: Vec3,
+    distance: f32,
+    age: f32,
+    impact: Option<(Vec3, Vec3)>,
+    hit_actor: bool,
+}
+
+const LASER_SPEED: f32 = 80.0;
+const LASER_LENGTH: f32 = 0.65;
+const LASER_WIDTH: f32 = 0.12;
 #[derive(Component)]
 pub struct Particle {
     pub velocity: Vec3,
@@ -307,6 +340,78 @@ pub fn arc(world: &mut World, from: Vec3, to: Vec3, seed: u32) {
     }
 }
 
+fn laser_segment(distance: f32, age: f32) -> Option<(f32, f32)> {
+    let travel = 0.18 + age * LASER_SPEED;
+    let front = travel.min(distance);
+    let tail = (travel - LASER_LENGTH).max(0.0);
+    (front > tail).then_some((tail, front))
+}
+
+fn laser_reached(distance: f32, age: f32) -> bool {
+    0.18 + age * LASER_SPEED >= distance
+}
+
+fn obstacle_impact(target: Vec3, obstacles: &[crate::navigation::Disc]) -> Option<(Vec3, Vec3)> {
+    obstacles.iter().find_map(|obstacle| {
+        let offset = Vec3::new(target.x - obstacle.center.x, 0.0, target.z - obstacle.center.z);
+        ((offset.length() - obstacle.radius).abs() <= 0.15)
+            .then(|| (target, offset.normalize_or(Vec3::Y)))
+    })
+}
+
+/// Spawn visual shots after pose propagation, using the actual weapon mesh's
+/// authored muzzle marker for both the local avatar and replicated peers.
+pub fn emit_lasers(world: &mut World) {
+    let shots = std::mem::take(&mut world.resource_mut::<PendingLasers>().0);
+    if shots.is_empty() {
+        return;
+    }
+    let me = world.resource::<crate::lockstep::WorldMirror>().player();
+    let mut markers = world.query::<(Entity, &WeaponMuzzle, &GlobalTransform)>();
+    let muzzles: Vec<_> = markers.iter(world).filter_map(|(entity, marker, transform)| {
+        if marker.0 != content::scenario::Weapon::Laser {
+            return None;
+        }
+        let mut ancestor = Some(entity);
+        let mut owner = None;
+        while let Some(current) = ancestor {
+            owner = if world.get::<Player>(current).is_some() {
+                me
+            } else {
+                world.get::<Peer>(current).map(Peer::agent)
+            };
+            if owner.is_some() { break; }
+            ancestor = world.get::<ChildOf>(current).map(ChildOf::parent);
+        }
+        let agent = owner?;
+        Some((agent, transform.translation()))
+    }).collect();
+    let mut obstacle_query = world.query::<&Obstacle>();
+    let obstacles: Vec<_> = obstacle_query.iter(world).map(|obstacle| obstacle.0).collect();
+    let assets = world.resource::<FxAssets>();
+    let (cube, red) = (assets.cube.clone(), assets.laser.clone());
+    for shot in shots {
+        let Some(&(_, from)) = muzzles.iter().find(|(agent, _)| *agent == shot.agent) else { continue };
+        let delta = shot.target - from;
+        let distance = delta.length();
+        if distance < 0.05 { continue; }
+        let direction = delta / distance;
+        let (_, front) = laser_segment(distance, 0.0).unwrap();
+        let transform = Transform::from_translation(from + direction * (front * 0.5))
+            .with_rotation(Quat::from_rotation_arc(Vec3::Z, direction))
+            .with_scale(Vec3::new(LASER_WIDTH, LASER_WIDTH, front));
+        let obstacle_hit = obstacle_impact(shot.target, &obstacles);
+        world.spawn((
+            Mesh3d(cube.clone()),
+            MeshMaterial3d(red.clone()),
+            transform,
+            GlobalTransform::from(transform),
+            bevy::light::NotShadowCaster,
+            LaserBolt { from, direction, distance, age: 0.0, impact: obstacle_hit, hit_actor: shot.hit_actor },
+        ));
+    }
+}
+
 pub fn deflection(world: &mut World, position: Vec3, seed: u32) {
     let assets = world.resource::<FxAssets>();
     let cube = assets.cube.clone();
@@ -341,10 +446,19 @@ pub fn update_effects(
     mut feedback: ResMut<Feedback>,
     mut particles: Query<
         (Entity, &mut Transform, &mut Particle, Option<&SeveredHead>),
-        (Without<ImpactTarget>, Without<Player>),
+        (Without<ImpactTarget>, Without<Player>, Without<LaserBolt>),
     >,
+    mut bolts: Query<
+        (Entity, &mut Transform, &mut LaserBolt),
+        (Without<Particle>, Without<ImpactTarget>),
+    >,
+    assets: Res<FxAssets>,
+    sound: Res<crate::sound::Sound>,
     mut flashes: Query<(Entity, &mut PointLight, &mut Flash)>,
-    mut rocks: Query<(&mut Transform, &mut ImpactTarget), (Without<Particle>, Without<Player>)>,
+    mut rocks: Query<
+        (&mut Transform, &mut ImpactTarget),
+        (Without<Particle>, Without<Player>, Without<LaserBolt>),
+    >,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let dt = time.delta_secs().min(0.1);
@@ -375,6 +489,32 @@ pub fn update_effects(
         }
         let fade = (1.0 - particle.age / particle.life).powf(0.65);
         transform.scale = particle.size * fade;
+    }
+    for (entity, mut transform, mut bolt) in &mut bolts {
+        bolt.age += dt;
+        if laser_reached(bolt.distance, bolt.age) {
+            if bolt.hit_actor {
+                sound.play(crate::sound::Cue::LaserImpact);
+                bolt.hit_actor = false;
+            }
+            if let Some((position, normal)) = bolt.impact.take() {
+                sound.play(crate::sound::Cue::LaserImpact);
+                impact(
+                    &mut commands,
+                    &assets,
+                    position,
+                    normal,
+                    position.x.to_bits() ^ position.z.to_bits(),
+                    ImpactResponse::Metal,
+                );
+            }
+        }
+        let Some((tail, front)) = laser_segment(bolt.distance, bolt.age) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        transform.translation = bolt.from + bolt.direction * ((tail + front) * 0.5);
+        transform.scale.z = front - tail;
     }
     for (entity, mut light, mut flash) in &mut flashes {
         flash.age += dt;
@@ -424,4 +564,34 @@ pub fn camera_feedback(
         Vec3::new((t * 97.0).sin(), (t * 121.0).cos() * 0.45, (t * 83.0).sin()) * amount * 0.32;
     *transform = Transform::from_translation(rig.base + offset)
         .looking_at(rig.target + offset * 0.3, Vec3::Y);
+}
+
+#[cfg(test)]
+mod laser_tests {
+    use super::*;
+
+    #[test]
+    fn bolt_is_short_and_crosses_twelve_meters_quickly() {
+        let distance = 12.0;
+        let first = laser_segment(distance, 0.0).unwrap();
+        assert_eq!(first.0, 0.0);
+        assert!(first.1 <= 0.2);
+        let middle = laser_segment(distance, 0.1).unwrap();
+        assert!(middle.1 - middle.0 <= LASER_LENGTH + 1e-5);
+        assert!(middle.0 > 4.0);
+        assert!(laser_segment(distance, 0.25).is_none());
+    }
+
+    #[test]
+    fn obstacle_impact_only_at_collision_boundary() {
+        let obstacles = [crate::navigation::Disc { center: Vec3::new(3.5, 0.0, -2.5), radius: 0.9 }];
+        assert!(obstacle_impact(Vec3::new(3.5, 0.8, -1.575), &obstacles).is_some());
+        assert!(obstacle_impact(Vec3::new(3.5, 0.8, 2.0), &obstacles).is_none());
+    }
+
+    #[test]
+    fn impact_still_triggers_when_a_frame_skips_past_the_endpoint() {
+        assert!(laser_segment(4.0, 2.0 / 30.0).is_none());
+        assert!(laser_reached(4.0, 2.0 / 30.0));
+    }
 }

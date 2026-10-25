@@ -698,6 +698,7 @@ pub struct PlayerControl {
     walking: Option<(FxVec2, bool)>,
     /// A local click target while the host has not applied its command yet.
     visual_goal: Option<(Vec3, bool)>,
+    last_aim: Option<FxVec2>,
 }
 
 impl Service for PlayerControl {
@@ -723,6 +724,16 @@ impl Service for PlayerControl {
 }
 
 impl PlayerControl {
+    pub fn aim(&mut self, service: &mut SessionService, direction: Vec3) {
+        let Some(agent) = service.player() else { return };
+        let aim = FxVec2::new(Fx::quantize(direction.x), Fx::quantize(direction.z)).normalize_or_zero();
+        if aim == FxVec2::ZERO || self.last_aim.is_some_and(|previous| (previous - aim).length() < Fx::from_ratio(1, 50)) {
+            return;
+        }
+        self.last_aim = Some(aim);
+        service.command(CommandKind::AimAvatar { agent, aim });
+    }
+
     /// Asks the avatar to walk in a direction (camera-relative, already
     /// rotated into arena space); a zero direction stops it.
     pub fn walk(&mut self, service: &mut SessionService, direction: Vec2, run: bool) {
@@ -758,8 +769,10 @@ impl PlayerControl {
             .and_then(|style| style.weapon_skins.iter().find(|skin| skin.weapon == weapon).map(|skin| skin.muzzle.map(|v| v * style.actor_scale)))
             .unwrap_or([0.0, 0.6, 0.25]);
         let flat = crate::navigation::flat(aim).normalize_or(Vec3::Z);
-        self.walking = None;
-        self.visual_goal = None;
+        if weapon != content::scenario::Weapon::Laser {
+            self.walking = None;
+            self.visual_goal = None;
+        }
         service.command(CommandKind::Attack {
             agent,
             weapon,
@@ -844,7 +857,7 @@ pub fn follow_avatar(
                     (if delta.length() < 0.1 { Vec3::ZERO } else { delta.normalize() }, run)
                 })
             })
-            .filter(|_| controls.attack.is_none() && a.avatar.dig.is_none());
+            .filter(|_| (controls.attack.is_none() || controls.weapon == content::scenario::Weapon::Laser) && a.avatar.dig.is_none());
         let moving_input = movement.is_some_and(|(direction, _)| direction != Vec3::ZERO);
         if let Some((direction, run)) = movement {
             preview.active = true;
@@ -913,7 +926,7 @@ pub fn follow_avatar(
     controls.route = a.route.iter().map(|&p| mirror.to_view(p)).collect();
 }
 
-fn angle_between(from: f32, to: f32) -> f32 {
+pub(crate) fn angle_between(from: f32, to: f32) -> f32 {
     (to - from + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
 }
 
@@ -994,7 +1007,10 @@ pub fn mouse_input(
 ) {
     let run = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     controls.repath -= time.delta_secs();
-    if buttons.pressed(MouseButton::Right) && controls.attack.is_none() && controls.repath <= 0.0 {
+    if buttons.pressed(MouseButton::Right)
+        && (controls.attack.is_none() || controls.weapon == content::scenario::Weapon::Laser)
+        && controls.repath <= 0.0
+    {
         controls.repath = 0.12;
         if let Some(point) = crate::jetpack::cursor_surface(camera.0, camera.1, &window, &scene, &service) {
             if controls.route.last().is_none_or(|last| crate::navigation::flat(*last - point).length() > 0.25) {
@@ -1024,16 +1040,27 @@ pub fn attack_input(
             }
         }
     }
+    // Update on every input frame, including frames without a shot.
+    let cursor_aim = crate::jetpack::cursor_surface(camera.0, camera.1, &window, &scene, &service)
+        .zip(service.player_view_position())
+        .map(|(point, origin)| crate::navigation::flat(point - origin).normalize_or_zero())
+        .filter(|aim| aim.length_squared() > 0.0);
+    if controls.weapon == Weapon::Laser {
+        if let Some(aim) = cursor_aim {
+            controls.aim = Some(aim);
+            control.aim(&mut service, aim);
+        }
+    } else {
+        controls.aim = None;
+    }
     let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     if !(shift && buttons.just_pressed(MouseButton::Left)) {
         return;
     }
     // Aim from the confirmed position: a joined player's preview must not
     // change gameplay commands.
-    if let Some(point) = crate::jetpack::cursor_surface(camera.0, camera.1, &window, &scene, &service) {
-        if let Some(origin) = service.player_view_position() {
-            control.strike(&mut service, &mut controls, &scene.pack, point - origin);
-        }
+    if let Some(aim) = cursor_aim {
+        control.strike(&mut service, &mut controls, &scene.pack, aim);
     }
 }
 

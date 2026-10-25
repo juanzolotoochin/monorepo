@@ -80,7 +80,7 @@ impl Default for CharacterMotion {
             run_crouch: 0.13,
             elbow_drive: 0.38,
             step_lift: 0.10,
-            step_distance: 1.25,
+            step_distance: 0.50,
             plant_feet: false,
             leg_reach: 0.48,
             turn_inertia: 8.0,
@@ -232,6 +232,10 @@ impl StyleProfile {
         let mut parts = BTreeSet::new();
         if self.actor.iter().any(|a| !parts.insert(a.part)) {
             return Err("duplicate styled actor part".into());
+        }
+        if self.actor.iter().any(|a| a.muzzle.is_some_and(|muzzle|
+            a.part != ActorPart::Weapon || muzzle.iter().any(|v| !v.is_finite() || v.abs() > 4.0))) {
+            return Err("invalid actor weapon muzzle".into());
         }
         if !self.shadow_map_size.is_power_of_two() || !(512..=4096).contains(&self.shadow_map_size)
         {
@@ -743,6 +747,9 @@ pub struct ActorRecipe {
     pub part: ActorPart,
     #[serde(default)]
     pub pivot: Option<[f32; 3]>,
+    /// Tip of a held weapon, in the weapon mesh's local coordinates.
+    #[serde(default)]
+    pub muzzle: Option<[f32; 3]>,
     #[serde(default)]
     pub shapes: Vec<VoxelShape>,
     /// Smooth authored geometry uses the same materials and rig as voxel parts.
@@ -911,6 +918,7 @@ mod actor_tests {
             actor: vec![ActorRecipe {
                 part: ActorPart::Body,
                 pivot: None,
+                muzzle: None,
                 shapes: vec![shape],
                 smooth: vec![],
             }],
@@ -934,6 +942,7 @@ mod actor_tests {
             actor: vec![ActorRecipe {
                 part: ActorPart::RightForearm,
                 pivot: None,
+                muzzle: None,
                 shapes: vec![],
                 smooth: vec![SurfaceShape {
                     kind: SurfaceKind::Capsule,

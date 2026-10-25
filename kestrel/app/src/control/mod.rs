@@ -475,6 +475,7 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
                 "spear" => Weapon::Spear,
                 "bow" => Weapon::Bow,
                 "arc_coil" => Weapon::ArcCoil,
+                "laser" => Weapon::Laser,
                 _ => return Err("Unknown weapon".into()),
             };
             let available = world.resource::<SessionService>().settlement().is_some_and(|s| s.weapons.contains(&selected));

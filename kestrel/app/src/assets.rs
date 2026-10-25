@@ -41,6 +41,7 @@ impl SceneLibrary {
             ScenePack::decode(dig_lab::PACK_BYTES).expect("validated dig lab asset pack"),
             ScenePack::decode(field::PACK_BYTES).expect("validated field asset pack"),
             ScenePack::decode(moonlit_glade::PACK_BYTES).expect("validated moonlit glade asset pack"),
+            ScenePack::decode(laser_pit::PACK_BYTES).expect("validated laser pit asset pack"),
         ]
         .into_iter()
         .map(Arc::new)
@@ -371,6 +372,11 @@ mod tests {
         assert_eq!(library.index("dig-lab"), Ok(8));
         assert_eq!(library.index("field"), Ok(9));
         assert_eq!(library.index("moonlit-glade"), Ok(10));
+        assert_eq!(library.index("laser-pit"), Ok(11));
+        let laser = &library.scenes[11];
+        assert_eq!(laser.scene.scenario.as_ref().unwrap().player_health, 6);
+        assert_eq!(laser.scene.scenario.as_ref().unwrap().weapons, [content::scenario::Weapon::Laser]);
+        assert!(laser.scene.mine.is_some());
         let glade = &library.scenes[10];
         let blade_tip = glade
             .actor
@@ -392,7 +398,7 @@ mod tests {
         assert!(library.scenes[8].scene.features.contains(&SceneFeature::Digging));
         assert_eq!(
             library.index("missing"),
-            Err("Unknown scene missing. Available scenes: mining-deck, boulder-lab, pile-lab, jetpack-lab, surprise-lab, atlantis, forest-outpost, combat-arena, dig-lab, field, moonlit-glade".into())
+            Err("Unknown scene missing. Available scenes: mining-deck, boulder-lab, pile-lab, jetpack-lab, surprise-lab, atlantis, forest-outpost, combat-arena, dig-lab, field, moonlit-glade, laser-pit".into())
         );
         assert!(library.scenes[4].scene.features.contains(&SceneFeature::MemoryTrial));
         assert!(library.scenes[3].scene.features.contains(&SceneFeature::FlightHud));
@@ -431,5 +437,22 @@ mod tests {
             .collect();
         assert_ne!(content_key(&recipes[0]), content_key(&recipes[1]));
         assert_eq!(content_key(&recipes[1]), content_key(&recipes[2]));
+    }
+
+    #[test]
+    fn laser_pit_starts_with_a_healthy_armed_player() {
+        let options = crate::control::Options { simulation: true, ..default() };
+        let hub = crate::control::Hub::new(options.clone()).unwrap();
+        let library = SceneLibrary::new();
+        let scene = library.index("laser-pit").unwrap();
+        let mut app = crate::test_app(options, library, hub, crate::flow::Launch::single_player(scene));
+        crate::start_world(&mut app);
+        let service = app.world().resource::<crate::lockstep::SessionService>();
+        let settlement = service.settlement().unwrap();
+        let player = &settlement.agents[settlement.player().unwrap() as usize];
+        assert_eq!(player.avatar.health, 6);
+        assert_eq!(player.avatar.weapon, content::scenario::Weapon::Laser);
+        assert_eq!(app.world().resource::<crate::gameplay::Controls>().weapon, content::scenario::Weapon::Laser);
+        assert!(service.world().unwrap().terrain().mine.is_some());
     }
 }

@@ -10,6 +10,8 @@ pub const WALK_SPEED: f32 = 3.8;
 
 #[derive(Resource, Default)]
 pub struct Controls {
+    /// Current world-space mouse aim, independent of movement and firing.
+    pub aim: Option<Vec3>,
     pub swift_sword: bool,
     pub attack_serial: u64,
     pub combo_next: SwordStroke,
@@ -43,7 +45,9 @@ impl Controls {
             self.combo_timer = 1.25;
             attack.serial = self.attack_serial;
             self.attack = Some(attack);
-            self.route.clear();
+            if self.weapon != content::scenario::Weapon::Laser {
+                self.route.clear();
+            }
         } else {
             // One deliberate press can queue the next cut during this one.
             self.queued = Some(aim);

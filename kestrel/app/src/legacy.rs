@@ -380,6 +380,7 @@ pub enum Impact {
     Arrow,
     Deflect,
     Arc,
+    Laser,
     BoltImpale,
     BoltPierce,
 }
@@ -395,6 +396,7 @@ pub enum Event {
     PinnedLanded { target: u64, position: Point },
     BlockedShot { position: Point },
     ArcFired { from: Point, to: Point },
+    LaserFired { agent: u16, to: Point, hit_actor: bool },
     Breach { position: Point },
 }
 
@@ -634,6 +636,7 @@ impl Simulation {
                             s::Impact::Arrow => Impact::Arrow,
                             s::Impact::Deflect => Impact::Deflect,
                             s::Impact::Arc => Impact::Arc,
+                            s::Impact::Laser => Impact::Laser,
                             s::Impact::BoltImpale => Impact::BoltImpale,
                             s::Impact::BoltPierce => Impact::BoltPierce,
                         },
@@ -641,6 +644,7 @@ impl Simulation {
                     s::Event::PinnedLanded { target, position } => Event::PinnedLanded { target: *target, position: p(*position) },
                     s::Event::BlockedShot { position } => Event::BlockedShot { position: p(*position) },
                     s::Event::ArcFired { from, to } => Event::ArcFired { from: p(*from), to: p(*to) },
+                    s::Event::LaserFired { agent, to, hit_actor, .. } => Event::LaserFired { agent: *agent, to: p(*to), hit_actor: *hit_actor },
                     s::Event::Breach { position } => Event::Breach { position: p(*position) },
                     s::Event::PileToss { .. } => return None,
                 })

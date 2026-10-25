@@ -207,6 +207,15 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<Time>()
             .init_resource::<crate::effects::Feedback>()
+            .insert_resource(crate::sound::Sound::silent())
+            .insert_resource(crate::effects::FxAssets {
+                cube: default(),
+                spark: std::array::from_fn(|_| default()),
+                debris: std::array::from_fn(|_| default()),
+                trail: default(),
+                laser: default(),
+                blood: std::array::from_fn(|_| default()),
+            })
             .init_resource::<Assets<StandardMaterial>>()
             .add_systems(Update, crate::effects::update_effects);
         let rest = LinearRgba::rgb(0.2, 0.4, 0.8);

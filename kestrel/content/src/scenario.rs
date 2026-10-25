@@ -237,6 +237,7 @@ pub enum Weapon {
     Spear,
     Bow,
     ArcCoil,
+    Laser,
 }
 
 /// Simulation-side weapon rules. Tick counts are 60 Hz, as authored.
@@ -267,6 +268,7 @@ impl WeaponTuning {
             Weapon::Spear => (42, f(12, 5), f(4, 5), 2, Fx::from_int(8), 24, Fx::ZERO, 0),
             Weapon::Bow => (28, Fx::from_int(9), f(91, 100), 1, Fx::ZERO, 0, Fx::from_int(28), 0),
             Weapon::ArcCoil => (65, Fx::from_int(4), f(55, 100), 1, Fx::ZERO, 45, Fx::ZERO, 0),
+            Weapon::Laser => (24, Fx::from_int(12), Fx::from_int(99).div_int(100), 1, Fx::ZERO, 0, Fx::ZERO, 0),
         };
         WeaponTuning { weapon, cooldown_ticks, reach, cone, damage, knockback, stagger_ticks, projectile_speed, critical_one_in }
     }
@@ -283,7 +285,7 @@ impl WeaponTuning {
 
     fn valid(&self) -> bool {
         (1..=600).contains(&self.cooldown_ticks)
-            && within(self.reach, f(1, 10), Fx::from_int(24))
+            && within(self.reach, f(1, 10), Fx::from_int(64))
             && within(self.cone, -Fx::ONE, Fx::ONE)
             && (1..=100).contains(&self.damage)
             && within(self.knockback, Fx::ZERO, Fx::from_int(40))
@@ -317,6 +319,9 @@ pub struct Scenario {
     pub defenders: Vec<Defender>,
     pub waves: Vec<Wave>,
     pub base_health: u32,
+    /// Hit points for player avatars; zero disables player combat.
+    #[serde(default)]
+    pub player_health: u32,
 }
 
 fn f(n: i64, d: i64) -> Fx {
@@ -372,6 +377,7 @@ impl Scenario {
             || self.waves.len() > 8
             || self.sources.len() > 32
             || self.base_health == 0
+            || self.player_health > 100
             || self.weapons.len() > 8
             || !unique_weapons
             || !unique_tuning

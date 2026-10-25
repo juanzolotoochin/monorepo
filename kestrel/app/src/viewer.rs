@@ -47,14 +47,15 @@ pub enum Clip {
     Turn,
     Jump,
     RunJump,
+    Attack,
     Forehand,
     Backhand,
     Overhead,
 }
 impl Clip {
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 11] = [
         Self::Idle, Self::Walk, Self::Step, Self::Run, Self::Turn, Self::Jump,
-        Self::RunJump, Self::Forehand, Self::Backhand, Self::Overhead,
+        Self::RunJump, Self::Attack, Self::Forehand, Self::Backhand, Self::Overhead,
     ];
     pub(crate) fn supports(self, character: &CharacterEntry) -> bool {
         match self {
@@ -62,6 +63,7 @@ impl Clip {
             Self::Step => character.can_locomote
                 && !matches!(character.source, CharacterSource::Skin(_)),
             Self::Jump | Self::RunJump => character.can_jump,
+            Self::Attack => character.weapon.is_some_and(|weapon| weapon != content::scenario::Weapon::Sword),
             Self::Forehand | Self::Backhand | Self::Overhead =>
                 character.weapon == Some(content::scenario::Weapon::Sword),
             _ => true,
@@ -76,6 +78,7 @@ impl Clip {
             "turn" => Self::Turn,
             "jump" => Self::Jump,
             "run-jump" => Self::RunJump,
+            "attack" => Self::Attack,
             "forehand" => Self::Forehand,
             "backhand" => Self::Backhand,
             "overhead" => Self::Overhead,
@@ -90,7 +93,7 @@ impl Clip {
             Self::Turn => 200,
             Self::Jump => 80,
             Self::RunJump => 135,
-            Self::Forehand | Self::Backhand | Self::Overhead => 66,
+            Self::Attack | Self::Forehand | Self::Backhand | Self::Overhead => 66,
             Self::Idle => 90,
         }
     }
@@ -103,6 +106,7 @@ impl Clip {
             Self::Turn => "RUN + DIRECTION CHANGE",
             Self::Jump => "JUMP",
             Self::RunJump => "RUN + JUMP",
+            Self::Attack => "WEAPON / ATTACK",
             Self::Forehand => "SWORD / FOREHAND",
             Self::Backhand => "SWORD / BACKHAND",
             Self::Overhead => "SWORD / OVERHEAD",
@@ -115,6 +119,24 @@ impl Clip {
             Self::Overhead => Some(SwordStroke::Overhead),
             _ => None,
         }
+    }
+    fn preview_attack(self, character: &CharacterEntry, age: f32) -> Option<Attack> {
+        if !self.supports(character) {
+            return None;
+        }
+        let weapon = character.weapon?;
+        let mut attack = Attack::new(Vec3::Z, weapon);
+        if let Some(stroke) = self.stroke() {
+            attack.stroke = stroke;
+            attack.swift = true;
+        } else if self != Self::Attack {
+            return None;
+        }
+        if age >= attack.timing().2 {
+            return None;
+        }
+        attack.age = age;
+        Some(attack)
     }
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -520,6 +542,7 @@ pub use ui::{input, setup};
 /// Set up in-place motion before the shared animation and trail systems.
 pub fn drive(
     time: Res<Time>,
+    library: Res<SceneLibrary>,
     studio: Option<Res<StudioPack>>,
     options: Res<crate::control::Options>,
     hub: Res<crate::control::Hub>,
@@ -613,15 +636,10 @@ pub fn drive(
         transform.translation.z = (start + end) * 0.5 - viewer.distance;
         transform.scale.z = end - start;
     }
-    controls.attack = viewer.clip.stroke().and_then(|stroke| {
-        (t < 0.44).then(|| {
-            let mut attack = Attack::new(Vec3::Z, content::scenario::Weapon::Sword);
-            attack.stroke = stroke;
-            attack.swift = true;
-            attack.age = t;
-            attack
-        })
-    });
+    if let Some(character) = library.characters.get(viewer.character) {
+        controls.weapon = character.weapon.unwrap_or(content::scenario::Weapon::Sword);
+        controls.attack = viewer.clip.preview_attack(character, t);
+    }
     for mut text in &mut status {
         text.0 = format!(
             "{} / F{}/{} / {:.1}x{}",
@@ -735,6 +753,7 @@ pub fn metrics(
             Clip::Step => "STEP UP + DOWN",
             Clip::Idle => "IDLE",
             Clip::Jump => "JUMP",
+            Clip::Attack => "ATTACK",
             Clip::Forehand => "FOREHAND",
             Clip::Backhand => "BACKHAND",
             Clip::Overhead => "OVERHEAD",
@@ -850,7 +869,7 @@ pub fn capture(
         Clip::RunJump if pushing => (0.65..0.68).contains(&phase),
         Clip::Jump => (0.40..0.48).contains(&phase),
         Clip::RunJump => (0.97..1.03).contains(&phase),
-        Clip::Forehand | Clip::Backhand | Clip::Overhead => (0.17..0.21).contains(&phase),
+        Clip::Attack | Clip::Forehand | Clip::Backhand | Clip::Overhead => (0.17..0.21).contains(&phase),
         _ => true,
     };
     let gait_pose = state.gait_phase.is_none_or(|target| {
@@ -900,7 +919,7 @@ mod tests {
                 stride: (distance * std::f32::consts::PI / motion.step_distance)
                     .rem_euclid(std::f32::consts::TAU),
                 speed: (4.0 * motion.step_distance / 2.0) / motion.walk_speed,
-                turn: 0.0, breathe: 0.0, step_pitch: 0.0, airborne: false,
+                turn: 0.0, aim_yaw: 0.0, breathe: 0.0, step_pitch: 0.0, airborne: false,
                 jump: None, attack: None, dig: None, motion,
             };
             let terrain = crate::character::foot_terrain(root, &pose,
@@ -970,6 +989,7 @@ mod tests {
             stride: 0.0,
             speed: 0.6,
             turn: 0.0,
+            aim_yaw: 0.0,
             breathe: 0.0,
             step_pitch: 0.0,
             airborne: false,
@@ -997,6 +1017,7 @@ mod tests {
             stride: 0.0,
             speed: 0.6,
             turn: 0.0,
+            aim_yaw: 0.0,
             breathe: 0.0,
             step_pitch: 0.0,
             airborne: false,
@@ -1041,11 +1062,28 @@ mod tests {
             assert_eq!(Clip::Turn.supports(character), character.can_locomote);
             assert_eq!(Clip::Jump.supports(character), character.can_jump);
             assert_eq!(Clip::RunJump.supports(character), character.can_jump);
+            assert_eq!(Clip::Attack.supports(character), character.weapon.is_some_and(|weapon| weapon != content::scenario::Weapon::Sword));
             let sword = character.weapon == Some(content::scenario::Weapon::Sword);
             assert_eq!(Clip::Forehand.supports(character), sword);
             assert_eq!(Clip::Backhand.supports(character), sword);
             assert_eq!(Clip::Overhead.supports(character), sword);
         }
+    }
+
+    #[test]
+    fn actor_with_partial_visual_style_uses_player_rig_and_weapon_action() {
+        let library = SceneLibrary::new();
+        let character = &library.characters[library.characters.index_for_id("laser-pit").unwrap()];
+        assert_eq!(character.source, CharacterSource::Actor);
+        assert!(Clip::Walk.supports(character));
+        assert!(Clip::Run.supports(character));
+        assert!(Clip::Step.supports(character));
+        assert!(Clip::Jump.supports(character));
+        assert!(Clip::Attack.supports(character));
+        assert!(!Clip::Forehand.supports(character));
+        let attack = Clip::Attack.preview_attack(character, 0.06).unwrap();
+        assert_eq!(attack.weapon, content::scenario::Weapon::Laser);
+        assert_eq!(attack.motion(), crate::combat::ActionMotion::Cast);
     }
 
     #[test]

@@ -17,7 +17,7 @@ use crate::character::{
 use crate::combat::{Attack, ATTACK_END, REBOUND_END};
 use crate::jetpack::Exhaust;
 use crate::lockstep::WorldMirror;
-use crate::style::WeaponVisual;
+use crate::style::{WeaponMuzzle, WeaponVisual};
 
 #[derive(Component)]
 pub struct Peer {
@@ -209,6 +209,9 @@ pub fn update(
                 stride: peer.gait.phase,
                 speed,
                 turn,
+                aim_yaw: current.avatar.aim.map_or(0.0, |aim| {
+                    crate::lockstep::angle_between(heading, aim.x.to_f32().atan2(aim.y.to_f32()))
+                }),
                 breathe,
                 step_pitch: 0.0,
                 airborne,
@@ -371,6 +374,7 @@ fn copy(world: &mut World, source: Entity, parent: Option<Entity>) -> Entity {
     });
     let exhaust = e.contains::<Exhaust>();
     let weapon = e.get::<WeaponVisual>().map(|w| PeerWeapon(w.0));
+    let muzzle = e.get::<WeaponMuzzle>().copied();
     let no_shadow = e.contains::<NotShadowCaster>();
     let children: Vec<Entity> = e
         .get::<Children>()
@@ -390,6 +394,9 @@ fn copy(world: &mut World, source: Entity, parent: Option<Entity>) -> Entity {
     }
     if let Some(weapon) = weapon {
         copied.insert(weapon);
+    }
+    if let Some(muzzle) = muzzle {
+        copied.insert(muzzle);
     }
     if no_shadow {
         copied.insert(NotShadowCaster);

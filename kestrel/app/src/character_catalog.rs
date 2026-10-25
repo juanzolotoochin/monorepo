@@ -47,16 +47,17 @@ impl CharacterCatalog {
                 let has_weapon_mesh = pack.actor.iter().any(|part| {
                     part.part == ActorPart::Weapon && !part.meshes.is_empty()
                 });
-                let can_locomote = [ActorPart::LeftLeg, ActorPart::RightLeg].into_iter()
-                    .all(|part| pack.actor.iter().any(|mesh| mesh.part == part && !mesh.meshes.is_empty()));
                 entries.push(CharacterEntry {
                     scene_index,
                     source: CharacterSource::Actor,
                     id: style.id.clone(),
                     name: style.actor_name.clone().unwrap_or_else(|| style.id.clone()),
-                    can_locomote,
+                    // Actor styles dress the complete player rig. Missing
+                    // authored meshes fall back to its procedural body, so
+                    // mesh coverage does not determine motion capabilities.
+                    can_locomote: true,
                     weapon: if has_weapon_mesh { style.actor_weapon } else { None },
-                    can_jump: can_locomote,
+                    can_jump: true,
                 });
             }
             for skin in &pack.skins {

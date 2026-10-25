@@ -183,6 +183,8 @@ pub struct Settlement {
 
     pub base_health: u32,
     pub health: u32,
+    #[serde(default)]
+    pub player_health: u32,
     pub weapons: Vec<Weapon>,
     /// By `Weapon as usize`: the scenario's tuning or the defaults.
     pub tuning: Vec<WeaponTuning>,
@@ -331,11 +333,16 @@ impl Settlement {
                 cycles: 0,
             })
             .collect();
-        let agents = scenario
+        let mut agents = scenario
             .agents
             .iter()
             .map(|a| haulers::AgentState::new(a, at(a.position), &scenario.links, items.len(), &item, &depot))
             .collect::<Vec<_>>();
+        for agent in agents.iter_mut().filter(|agent| agent.controlled) {
+            agent.avatar.health = scenario.player_health;
+            agent.avatar.max_health = scenario.player_health;
+            agent.avatar.weapon = scenario.weapons.first().copied().unwrap_or_default();
+        }
 
         for a in &agents {
             if nav::path(terrain, a.position, a.position, a.radius()).is_empty() {
@@ -382,11 +389,12 @@ impl Settlement {
                 fired_at: 0,
             })
             .collect();
-        let tuning = [Weapon::Sword, Weapon::Spear, Weapon::Bow, Weapon::ArcCoil].map(|w| scenario.weapon_tuning(w)).to_vec();
+        let tuning = [Weapon::Sword, Weapon::Spear, Weapon::Bow, Weapon::ArcCoil, Weapon::Laser].map(|w| scenario.weapon_tuning(w)).to_vec();
         let settlement = Settlement {
             swift_sword: false,
             base_health: scenario.base_health,
             health: scenario.base_health,
+            player_health: scenario.player_health,
             weapons: scenario.weapons.clone(),
             tuning,
             waves,
@@ -513,6 +521,7 @@ impl Settlement {
             defenders: Vec::new(),
             waves: Vec::new(),
             base_health: 1,
+            player_health: 0,
         }
     }
 

@@ -351,6 +351,12 @@ pub fn setup(
             unlit: true,
             ..default()
         }),
+        laser: materials.add(StandardMaterial {
+            base_color: Color::srgb(1.0, 0.025, 0.02),
+            emissive: LinearRgba::rgb(12.0, 0.08, 0.05),
+            unlit: true,
+            ..default()
+        }),
         blood: [
             material(&mut materials, [0.42, 0.025, 0.035], 0.55),
             material(&mut materials, [0.73, 0.075, 0.055], 0.48),

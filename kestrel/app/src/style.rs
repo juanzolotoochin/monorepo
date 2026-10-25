@@ -23,6 +23,8 @@ struct Environment;
 struct StyledActor;
 #[derive(Component)]
 pub struct WeaponVisual(pub content::scenario::Weapon);
+#[derive(Component, Clone, Copy)]
+pub struct WeaponMuzzle(pub content::scenario::Weapon);
 #[derive(Component)]
 pub struct WeaponLabel;
 #[derive(Component)]
@@ -132,7 +134,9 @@ pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack, studio: bool) {
         .query_filtered::<&mut Text, With<crate::scene::ControlHelp>>()
         .iter_mut(world)
     {
-        help.0 = if jumping {
+        help.0 = if available_weapons == [content::scenario::Weapon::Laser] {
+            "RMB MOVE / WASD RUN / SHIFT+LMB FIRE LASER"
+        } else if jumping {
             "RMB MOVE / WASD RUN / SPACE JUMP / SHIFT+LMB ATTACK"
         } else if !available_weapons.is_empty() {
             "RMB MOVE / SHIFT+LMB ATTACK / Z SWORD / X SPEAR / C BOW / V ARC"
@@ -367,6 +371,7 @@ pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack, studio: bool) {
         let handles = upload(world, key, &a.meshes, &profile);
         for (&parent, part) in &parts {
             if *part == a.part {
+                let mut mesh_root = None;
                 for light in &a.lights {
                     spawn_light(world, light, Some(parent), &profile);
                 }
@@ -376,13 +381,18 @@ pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack, studio: bool) {
                             StyledActor,
                             Mesh3d(mesh.clone()),
                             MeshMaterial3d(material.clone()),
-                            Transform::default(),
+                            if a.part == ActorPart::Weapon && profile.actor_weapon == Some(content::scenario::Weapon::Laser) {
+                                Transform::from_rotation(Quat::from_rotation_x(-0.75))
+                            } else {
+                                Transform::default()
+                            },
                         ))
                         .id();
+                    mesh_root.get_or_insert(e);
                     if a.part == ActorPart::Weapon && !available_weapons.is_empty() {
                         world
                             .entity_mut(e)
-                            .insert(WeaponVisual(content::scenario::Weapon::Sword));
+                            .insert(WeaponVisual(profile.actor_weapon.unwrap_or(content::scenario::Weapon::Sword)));
                     }
                     let material = world.get::<MeshMaterial3d<StandardMaterial>>(e).unwrap();
                     let emitting = world
@@ -393,6 +403,16 @@ pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack, studio: bool) {
                         world.entity_mut(e).insert(bevy::light::NotShadowCaster);
                     }
                     world.entity_mut(parent).add_child(e);
+                }
+                if a.part == ActorPart::Weapon {
+                    if let (Some(root), Some(weapon), Some(muzzle)) = (
+                        mesh_root,
+                        profile.actor_weapon,
+                        profile.actor.iter().find(|recipe| recipe.part == ActorPart::Weapon).and_then(|recipe| recipe.muzzle),
+                    ) {
+                        let marker = world.spawn((WeaponMuzzle(weapon), Transform::from_translation(Vec3::from_array(muzzle)))).id();
+                        world.entity_mut(root).add_child(marker);
+                    }
                 }
             }
         }
