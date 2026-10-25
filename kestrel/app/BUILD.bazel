@@ -3,13 +3,25 @@ load("@rules_python//python:defs.bzl", "py_test")
 load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
 load("@rules_rs//rs:rust_test.bzl", "rust_test")
 load("//kestrel/build/game_demo:defs.bzl", "game_demo", "game_simulation_test", "studio_demo")
+load("//kestrel/app/web:defs.bzl", "wasm_binary")
 
 genrule(
-    name = "web",
-    srcs = [":demo", "//kestrel/app/web:index.html"],
+    name = "web_bundle",
+    srcs = [":wasm_demo", "//kestrel/app/web:index.html"],
     outs = ["web_bundle/demo.js", "web_bundle/demo_bg.wasm", "web_bundle/index.html"] + ["web_bundle/cue_%d.wav" % i for i in range(20)],
     tools = ["@kestrel_wasm_bindgen//:wasm-bindgen", "//kestrel/app/web:generate_audio"],
-    cmd = "mkdir -p $(RULEDIR)/web_bundle && $(location @kestrel_wasm_bindgen//:wasm-bindgen) $(location :demo) --target web --no-typescript --remove-name-section --out-dir $(RULEDIR)/web_bundle && cp $(location //kestrel/app/web:index.html) $(RULEDIR)/web_bundle/index.html && $(location //kestrel/app/web:generate_audio) $(RULEDIR)/web_bundle",
+    cmd = "mkdir -p $(RULEDIR)/web_bundle && $(location @kestrel_wasm_bindgen//:wasm-bindgen) $(location :wasm_demo) --target web --no-typescript --remove-name-section --out-dir $(RULEDIR)/web_bundle && cp $(location //kestrel/app/web:index.html) $(RULEDIR)/web_bundle/index.html && $(location //kestrel/app/web:generate_audio) $(RULEDIR)/web_bundle",
+    visibility = ["//visibility:public"],
+)
+
+wasm_binary(
+    name = "wasm_demo",
+    binary = ":demo",
+)
+
+alias(
+    name = "web",
+    actual = "//kestrel/app/web:serve",
     visibility = ["//visibility:public"],
 )
 
