@@ -25,6 +25,7 @@ use crate::flow::{Flow, Front, Launch};
 use crate::viewer::Viewer;
 
 /// Disposable, per-user menu preferences. Scene IDs survive scene reordering.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct Settings {
     name: String,
@@ -33,6 +34,7 @@ struct Settings {
     address: String,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Settings {
     fn path() -> std::path::PathBuf {
         std::env::temp_dir().join("kestrel-menu-settings.json")
@@ -144,6 +146,7 @@ impl Service for MainMenu {
             address: defaults.address,
             error: String::new(),
         };
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(settings) = Settings::read(&Settings::path()) {
             settings.apply(&mut menu, world.resource::<SceneLibrary>());
         }
@@ -345,12 +348,15 @@ pub fn setup(mut commands: Commands, scenes: Res<SceneLibrary>, roots: Query<(),
                                 label(choices, "SESSION", 18.0, ACCENT);
                                 field(choices, Field::Name, "NAME");
                                 choice(choices, Action::Mode(Mode::Solo), "PLAY SOLO");
-                                choice(choices, Action::Mode(Mode::Host), "HOST MULTIPLAYER");
-                                choice(choices, Action::Mode(Mode::Join), "JOIN MULTIPLAYER");
-                                field(choices, Field::Port, "HOST PORT");
-                                field(choices, Field::Address, "JOIN ADDRESS");
-                                label(choices, "Ctrl+C copies / Ctrl+V replaces (Cmd on macOS)", 11.0, MUTED);
-                                label(choices, "Joining? The host picks the scene.", 13.0, MUTED);
+                                #[cfg(not(target_arch = "wasm32"))]
+                                {
+                                    choice(choices, Action::Mode(Mode::Host), "HOST MULTIPLAYER");
+                                    choice(choices, Action::Mode(Mode::Join), "JOIN MULTIPLAYER");
+                                    field(choices, Field::Port, "HOST PORT");
+                                    field(choices, Field::Address, "JOIN ADDRESS");
+                                    label(choices, "Ctrl+C copies / Ctrl+V replaces (Cmd on macOS)", 11.0, MUTED);
+                                    label(choices, "Joining? The host picks the scene.", 13.0, MUTED);
+                                }
                                 choice(choices, Action::Start, "START GAME  >");
                                 choice(choices, Action::Viewer, "CHARACTER STUDIO  >");
                                 choice(choices, Action::Quit, "QUIT");
@@ -459,11 +465,18 @@ pub fn update(
                 }
             }
             KeyCode::Tab => {
-                menu.focus = Some(match menu.focus {
-                    Some(Field::Name) => Field::Port,
-                    Some(Field::Port) => Field::Address,
-                    Some(Field::Address) | None => Field::Name,
-                })
+                #[cfg(target_arch = "wasm32")]
+                {
+                    menu.focus = Some(Field::Name);
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    menu.focus = Some(match menu.focus {
+                        Some(Field::Name) => Field::Port,
+                        Some(Field::Port) => Field::Address,
+                        Some(Field::Address) | None => Field::Name,
+                    });
+                }
             }
             _ => {
                 if let (Some(field), Some(text)) = (menu.focus, key.text.as_ref()) {
@@ -517,6 +530,7 @@ pub fn update(
 
 /// Save after edits, including the frame that launches or quits. Focus and
 /// connection errors aren't preferences and don't cause disk writes.
+#[cfg(not(target_arch = "wasm32"))]
 fn persist(menu: Res<MainMenu>, library: Res<SceneLibrary>, mut last: Local<Option<Settings>>) {
     let settings = Settings {
         name: menu.name.clone(),
@@ -532,6 +546,9 @@ fn persist(menu: Res<MainMenu>, library: Res<SceneLibrary>, mut last: Local<Opti
     }
     *last = Some(settings);
 }
+
+#[cfg(target_arch = "wasm32")]
+fn persist() {}
 
 #[derive(Default)]
 pub(crate) struct MenuCapture {

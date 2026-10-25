@@ -1,0 +1,25 @@
+load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
+load("//bazel/web:defs.bzl", "wasm_web_app")
+load(":audio.bzl", "web_audio")
+
+exports_files(["index.html.tpl"])
+
+rust_binary(
+    name = "generate_audio",
+    srcs = ["generate_audio.rs"],
+    edition = "2021",
+    link_deps = ["//kestrel/app:sound"],
+    visibility = ["//kestrel/app:__pkg__"],
+)
+
+web_audio(
+    name = "audio",
+)
+
+wasm_web_app(
+    name = "web",
+    game = "//kestrel/app:demo",
+    index_template = ":index.html.tpl",
+    assets = [":audio"],
+    visibility = ["//kestrel/app:__pkg__"],
+)

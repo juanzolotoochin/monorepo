@@ -452,9 +452,9 @@ fn step(
     let clock = service.clock;
     let service = &mut *service;
     let mut ticks = Vec::new();
-    let started = std::time::Instant::now();
+    let started = web_time::Instant::now();
     service.session.update(clock, |world| {
-        let copying = std::time::Instant::now();
+        let copying = web_time::Instant::now();
         let settlement = world.settlement().cloned();
         ticks.push((world.tick(), settlement, world.stage_times(), copying.elapsed()));
     });
@@ -576,7 +576,7 @@ Closing in {}...", reason.to_uppercase(), remaining.ceil());
 /// Tells this machine apart from others when joining. A random ID per run:
 /// a rejoining player gets a new avatar.
 fn stable_id() -> net::StableId {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64);
+    let nanos = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64);
     nanos ^ (u64::from(std::process::id()) << 32)
 }
 

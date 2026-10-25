@@ -149,7 +149,7 @@ pub struct Hub {
     ready: Option<u64>,
     /// When a quit request may exit: a few frames and some wall time after
     /// it, so its reply reaches the client before the process ends.
-    quit: Option<(u64, std::time::Instant)>,
+    quit: Option<(u64, web_time::Instant)>,
     trace: Option<std::fs::File>,
 }
 impl Hub {
@@ -591,7 +591,7 @@ fn world_active(world: &World) -> bool {
 }
 
 pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
-    let started = std::time::Instant::now();
+    let started = web_time::Instant::now();
     let telemetry = crate::telemetry::snapshot(world);
     let settlement = crate::settlement::snapshot(world);
     let style = crate::style::snapshot(world);
@@ -709,7 +709,7 @@ pub fn end(world: &mut World) {
                 hub.queue.clear();
             }
             if matches!(active.envelope.request.command, Command::Quit) {
-                hub.quit = Some((hub.tick + 3, std::time::Instant::now() + QUIT_GRACE));
+                hub.quit = Some((hub.tick + 3, web_time::Instant::now() + QUIT_GRACE));
             }
             hub.receipts.push(receipt);
         } else {
@@ -719,7 +719,7 @@ pub fn end(world: &mut World) {
     // Full inspection includes serialized inventories, world geometry, and
     // telemetry. Build it only for a trace, an inspection reply, or a report.
     let finishing = hub.failed.is_some()
-        || hub.quit.is_some_and(|(tick, at)| hub.tick >= tick && std::time::Instant::now() >= at)
+        || hub.quit.is_some_and(|(tick, at)| hub.tick >= tick && web_time::Instant::now() >= at)
         || (hub.options.script.is_some()
             && hub.ready.is_some()
             && hub.queue.is_empty()
@@ -759,7 +759,7 @@ pub fn end(world: &mut World) {
             hub.finished = Some(hub.tick);
         }
     }
-    let quit = hub.quit.is_some_and(|(tick, at)| hub.tick >= tick && std::time::Instant::now() >= at);
+    let quit = hub.quit.is_some_and(|(tick, at)| hub.tick >= tick && web_time::Instant::now() >= at);
     if hub.failed.is_some() || quit || (hub.finished.is_some() && hub.options.frames_dir.is_none())
     {
         hub.save_report(0);

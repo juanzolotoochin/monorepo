@@ -1,5 +1,25 @@
 # Kestrel // 07
 
+## Browser build
+
+On Linux x86-64, build and serve the WebAssembly version with:
+
+```sh
+bazel run //kestrel/app:web
+```
+
+Open the printed URL (`http://127.0.0.1:8000/` by default) in a browser with
+WebGL2. Pass `-- --port 8080` to use another port. The launch menu,
+Character Studio, and solo scenes use the same game executable as desktop;
+the canvas fits the browser window. Audio uses the same procedural cues as the
+desktop game; click or press a key in the page to enable browser playback. The
+web build uses one simulation thread and does not save menu preferences. Hosting
+and joining still use the native UDP transport, so choose **Play Solo** in the
+browser. The pinned wasm-bindgen packaging tool is a Linux x86-64 executable;
+the generated files in `bazel-bin/kestrel/app/web/web_bundle` can be served
+from any host. The reusable build and server rule is documented in
+`bazel/web/README.md`.
+
 ## Share an optimized build with developers
 
 `//kestrel/app:share_to_devs` builds optimized Linux x64 and Windows x64

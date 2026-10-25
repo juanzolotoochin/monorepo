@@ -180,18 +180,20 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
             1.0 / f64::from(fps),
         )));
     } else {
-        app.add_plugins(
-            DefaultPlugins.set(WindowPlugin {
-                primary_window: Some(Window {
-                    title:
-                        "KESTREL // 07 — Right click: move · Shift + left click: strike · M: sound"
-                            .into(),
-                    resolution: (1440, 960).into(),
-                    ..default()
-                }),
-                ..default()
-            }),
-        );
+        let mut window = Window {
+            title: "KESTREL // 07 — Right click: move · Shift + left click: strike · M: sound".into(),
+            resolution: (1440, 960).into(),
+            ..default()
+        };
+        #[cfg(target_arch = "wasm32")]
+        {
+            window.canvas = Some("#kestrel".into());
+            window.fit_canvas_to_parent = true;
+        }
+        app.add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(window),
+            ..default()
+        }));
     }
     if !simulation {
         app.add_plugins(bevy::pbr::MaterialPlugin::<atmosphere::GrassMaterial>::default());

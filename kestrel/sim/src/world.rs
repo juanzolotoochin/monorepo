@@ -2,7 +2,8 @@ use content::{MoverDef, Rules};
 use fx::{Fx, FxVec2, FxVec3};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 use crate::hash::{hash_of, StateHasher, TickHash};
 use crate::id::{Id, Ids, IdsState, Location};
@@ -1102,9 +1103,10 @@ fn clamp_to_world(pos: FxVec3, size: FxVec2) -> FxVec3 {
     FxVec3::new(pos.x.clamp(Fx::ZERO, max_x), pos.y.clamp(Fx::ZERO, max_y), pos.z)
 }
 
-/// A world plus the thread pool that runs its parallel stages.
+/// A world plus the native thread pool that runs its parallel stages.
 pub struct Simulation {
     world: World,
+    #[cfg(not(target_arch = "wasm32"))]
     pool: rayon::ThreadPool,
 }
 
@@ -1115,11 +1117,19 @@ impl Simulation {
 
     /// Wraps a world, for example one just loaded from a save.
     pub fn from_world(world: World, threads: usize) -> Simulation {
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(threads)
-            .build()
-            .expect("build simulation thread pool");
-        Simulation { world, pool }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = threads;
+            return Simulation { world };
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("build simulation thread pool");
+            Simulation { world, pool }
+        }
     }
 
     pub fn into_world(self) -> World {
@@ -1136,8 +1146,15 @@ impl Simulation {
     }
 
     pub fn step(&mut self, turn: &[Command]) -> TickHash {
-        let Simulation { world, pool } = self;
-        pool.install(|| world.step(turn))
+        #[cfg(target_arch = "wasm32")]
+        {
+            return self.world.step(turn);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let Simulation { world, pool } = self;
+            pool.install(|| world.step(turn))
+        }
     }
 }
 
