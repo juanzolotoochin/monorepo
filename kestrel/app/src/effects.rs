@@ -67,6 +67,7 @@ pub struct LaserShot {
     pub agent: u16,
     pub target: Vec3,
     pub hit_actor: bool,
+    pub seed: u32,
 }
 
 #[derive(Component)]
@@ -77,6 +78,7 @@ pub(crate) struct LaserBolt {
     age: f32,
     impact: Option<(Vec3, Vec3)>,
     hit_actor: bool,
+    seed: u32,
 }
 
 const LASER_SPEED: f32 = 80.0;
@@ -108,6 +110,13 @@ fn random(seed: &mut u32) -> f32 {
     *seed ^= *seed >> 17;
     *seed ^= *seed << 5;
     *seed as f32 / u32::MAX as f32
+}
+
+/// Stable per-shot variation, independent of render frame timing.
+pub fn laser_impact_seed(tick: u64, agent: u16) -> u32 {
+    (tick as u32).wrapping_mul(0x9e37_79b9)
+        ^ ((tick >> 32) as u32)
+        ^ (agent as u32).wrapping_mul(0x85eb_ca6b)
 }
 
 pub fn impact(
@@ -407,7 +416,7 @@ pub fn emit_lasers(world: &mut World) {
             transform,
             GlobalTransform::from(transform),
             bevy::light::NotShadowCaster,
-            LaserBolt { from, direction, distance, age: 0.0, impact: obstacle_hit, hit_actor: shot.hit_actor },
+            LaserBolt { from, direction, distance, age: 0.0, impact: obstacle_hit, hit_actor: shot.hit_actor, seed: shot.seed },
         ));
     }
 }
@@ -504,7 +513,7 @@ pub fn update_effects(
                     &assets,
                     position,
                     normal,
-                    position.x.to_bits() ^ position.z.to_bits(),
+                    bolt.seed ^ position.x.to_bits() ^ position.z.to_bits(),
                     ImpactResponse::Metal,
                 );
             }
@@ -593,5 +602,12 @@ mod laser_tests {
     fn impact_still_triggers_when_a_frame_skips_past_the_endpoint() {
         assert!(laser_segment(4.0, 2.0 / 30.0).is_none());
         assert!(laser_reached(4.0, 2.0 / 30.0));
+    }
+
+    #[test]
+    fn repeated_hits_at_one_cover_position_get_distinct_deterministic_bursts() {
+        assert_eq!(laser_impact_seed(42, 1), laser_impact_seed(42, 1));
+        assert_ne!(laser_impact_seed(42, 1), laser_impact_seed(43, 1));
+        assert_ne!(laser_impact_seed(42, 1), laser_impact_seed(42, 2));
     }
 }

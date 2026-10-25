@@ -274,8 +274,7 @@ impl MeshBuilder {
     }
 }
 
-/// In digging scenes the camera follows the player over the big ground;
-/// elsewhere it stays where the scene put it.
+/// Follow the player in scenes that request it, preserving the authored offset.
 pub fn follow_camera(
     time: Res<Time>,
     scene: Res<SceneView>,
@@ -284,7 +283,7 @@ pub fn follow_camera(
     mut home: Local<Option<(Vec3, Vec3)>>,
 ) {
     let (base, target) = *home.get_or_insert((rig.base, rig.target));
-    if !scene.has_feature(SceneFeature::Digging) {
+    if !scene.has_feature(SceneFeature::Digging) && !scene.has_feature(SceneFeature::CameraFollow) {
         if rig.base != base || rig.target != target {
             rig.base = base;
             rig.target = target;

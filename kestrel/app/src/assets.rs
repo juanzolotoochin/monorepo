@@ -376,7 +376,8 @@ mod tests {
         let laser = &library.scenes[11];
         assert_eq!(laser.scene.scenario.as_ref().unwrap().player_health, 6);
         assert_eq!(laser.scene.scenario.as_ref().unwrap().weapons, [content::scenario::Weapon::Laser]);
-        assert!(laser.scene.mine.is_some());
+        assert!(laser.scene.terrain.is_some());
+        assert!(laser.environment.as_ref().is_some_and(|env| env.obstacles.len() >= 7));
         let glade = &library.scenes[10];
         let blade_tip = glade
             .actor
@@ -447,12 +448,28 @@ mod tests {
         let scene = library.index("laser-pit").unwrap();
         let mut app = crate::test_app(options, library, hub, crate::flow::Launch::single_player(scene));
         crate::start_world(&mut app);
+        let platform_visuals = app.world_mut()
+            .query_filtered::<bevy::prelude::Entity, bevy::prelude::With<crate::jetpack::TerrainVisual>>()
+            .iter(app.world())
+            .count();
+        assert_eq!(platform_visuals, 5, "authored floor must replace terrain top tiles");
         let service = app.world().resource::<crate::lockstep::SessionService>();
         let settlement = service.settlement().unwrap();
         let player = &settlement.agents[settlement.player().unwrap() as usize];
         assert_eq!(player.avatar.health, 6);
         assert_eq!(player.avatar.weapon, content::scenario::Weapon::Laser);
         assert_eq!(app.world().resource::<crate::gameplay::Controls>().weapon, content::scenario::Weapon::Laser);
-        assert!(service.world().unwrap().terrain().mine.is_some());
+        let terrain = service.world().unwrap().terrain();
+        assert!(terrain.mine.is_none());
+        assert!(terrain.obstacles.len() >= 7, "arena cover must block movement and fire");
+        let at = |x, z| service.to_sim(Vec3::new(x, 0.0, z));
+        assert!(!terrain.clear(at(0.0, 11.5), at(0.0, -11.5), fx::Fx::from_ratio(1, 50)));
+        assert!(terrain.clear(at(2.3, 11.5), at(2.3, -11.5), fx::Fx::from_ratio(1, 50)));
+        assert!(!terrain.clear(at(0.0, 13.0), at(0.0, 14.8), fx::Fx::from_ratio(8, 25)),
+            "the low front rim must block movement");
+        assert!(!terrain.clear(at(-13.0, 10.0), at(-14.8, 10.0), fx::Fx::from_ratio(8, 25)),
+            "the side wall must block movement");
+        let route = sim::nav::path(terrain, at(0.0, 11.5), at(0.0, -11.5), fx::Fx::from_ratio(8, 25));
+        assert!(route.len() > 1, "fighters must be able to flank central cover");
     }
 }

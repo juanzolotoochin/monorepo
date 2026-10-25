@@ -452,7 +452,7 @@ pub fn animate_character(
         && pose.speed > 0.05
         && pose.jump.is_none()
         && !pose.airborne
-        && pose.attack.is_none()
+        && pose.attack.is_none_or(|attack| attack.weapon == content::scenario::Weapon::Laser)
         && pose.dig.is_none()
     {
         for (entity, target) in grounded_foot_targets(&joints, player.0, &pose, terrain) {
@@ -866,6 +866,15 @@ fn arm_drive(stride: f32, side: f32) -> f32 {
 impl Pose {
     /// A part's rest transform, posed.
     pub fn place(&self, kind: PartKind, rest: Transform) -> Transform {
+        // A laser shot is an upper-body action. Keep the body's support motion
+        // and every leg joint on the same locomotion pose through the shot.
+        if self.attack.is_some_and(|attack| attack.weapon == content::scenario::Weapon::Laser)
+            && matches!(kind, PartKind::Body | PartKind::Leg(_) | PartKind::Knee(_) | PartKind::Shin(_) | PartKind::Foot(_))
+        {
+            let mut locomotion = *self;
+            locomotion.attack = None;
+            return locomotion.place(kind, rest);
+        }
         let action = self.place_unblended(kind, rest);
         let posed = if let Some(attack) = self
             .attack
@@ -1741,6 +1750,29 @@ mod tests {
         let chest = pose.place(PartKind::Chest, chest_rest);
         assert_eq!(aimed_leg, leg);
         assert!((chest.rotation.to_euler(EulerRot::YXZ).0 - pose.aim_yaw).abs() < 0.05);
+    }
+
+    #[test]
+    fn firing_laser_preserves_the_walking_support_pose() {
+        let mut pose = Pose {
+            motion: voxel_assets::CharacterMotion::default(),
+            stride: 1.1, speed: 0.8, turn: 0.0, aim_yaw: 0.3,
+            breathe: 0.0, step_pitch: 0.0, airborne: false,
+            jump: None, attack: None, dig: None,
+        };
+        let rest = Transform::IDENTITY;
+        let lower = [PartKind::Body, PartKind::Leg(-1.0), PartKind::Leg(1.0),
+            PartKind::Shin(-1.0), PartKind::Shin(1.0),
+            PartKind::Foot(-1.0), PartKind::Foot(1.0)];
+        let walking: Vec<_> = lower.iter().map(|&part| pose.place(part, rest)).collect();
+        let walking_chest = pose.place(PartKind::Chest, rest);
+        let mut shot = Attack::new(Vec3::Z, content::scenario::Weapon::Laser);
+        shot.age = 0.05;
+        pose.attack = Some(shot);
+        for (part, expected) in lower.into_iter().zip(walking) {
+            assert_eq!(pose.place(part, rest), expected);
+        }
+        assert_ne!(pose.place(PartKind::Chest, rest), walking_chest);
     }
 
     #[test]
