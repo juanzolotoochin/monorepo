@@ -142,7 +142,7 @@ fn repeated_sword_attacks_cycle_then_reset() {
     };
     assert_eq!(attack(&mut scene), SwordStroke::Forehand);
     let swing = scene.avatar().avatar.swing.as_ref().unwrap();
-    assert_eq!(swing.resolve_at - swing.started, super::avatar::SWORD_WINDUP_TICKS);
+    assert_eq!(swing.resolve_at - swing.started, content::scenario::ticks_from_60hz(7), "the exosuit's swift sword windup");
     scene.wait(ms(600));
     assert_eq!(attack(&mut scene), SwordStroke::Backhand);
     scene.wait(ms(600));

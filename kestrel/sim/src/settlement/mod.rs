@@ -260,6 +260,9 @@ impl Settlement {
             content.names.character_index(name).ok_or_else(|| format!("unknown character {name:?}"))
         };
         let player_character = character(PLAYER_CHARACTER)?;
+        if content.rules.characters[player_character as usize].avatar.is_none() {
+            return Err(format!("the player character {PLAYER_CHARACTER:?} is not a Player character"));
+        }
         let center = terrain.center;
         let at = |p: scenario::Point| FxVec2::new(center.x + p[0], center.y + p[1]);
         terrain.extent = scenario.extent;
@@ -680,6 +683,12 @@ impl Settlement {
 }
 
 impl Settlement {
+    /// An agent's character definition, if it has one (avatars do).
+    pub fn character_of(&self, agent: usize) -> Option<&CharacterDef> {
+        let ix = self.agents.get(agent)?.character?;
+        self.characters.get(ix as usize)
+    }
+
     /// Restores the character rules after loading, checking every saved
     /// reference against them.
     pub fn set_characters(&mut self, characters: &[CharacterDef]) -> Result<(), String> {

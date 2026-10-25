@@ -357,6 +357,30 @@ mod tests {
         assert_eq!(content.views.characters.len(), content.rules.characters.len());
     }
 
+    /// The builtin characters hold exactly the values the simulation used
+    /// as code constants before they moved here, bit for bit. Change these
+    /// only together with an intended golden update.
+    #[test]
+    fn builtin_characters_keep_the_former_constants() {
+        use scenario::ticks_from_60hz;
+        let content = Content::builtin();
+        let get = |name: &str| &content.rules.characters[content.names.character_index(name).unwrap() as usize];
+        let exosuit = get("exosuit");
+        assert_eq!(exosuit.body.radius.to_bits(), 1_374_389_535); // BODY_RADIUS, 0.32
+        assert_eq!(exosuit.movement.walk.to_bits(), 16_320_875_725); // WALK_SPEED, 3.8
+        assert_eq!(exosuit.movement.run.to_bits(), 24_051_816_858); // RUN_SPEED, 5.6
+        let avatar = exosuit.avatar.as_ref().unwrap();
+        assert_eq!(avatar.acceleration, per_tick(Fx::from_int(26)));
+        assert_eq!(avatar.braking, per_tick(Fx::from_int(32)));
+        assert_eq!(avatar.attack_braking, per_tick(Fx::from_int(35)));
+        let attack = avatar.attack;
+        let frames = [attack.windup, attack.aim, attack.swing, attack.sword_windup, attack.sword_swing, attack.rebound, attack.combo_window];
+        assert_eq!(frames, [13, 10, 35, 7, 26, 25, 75].map(ticks_from_60hz));
+        assert_eq!(get("ghoul").body.radius.to_bits(), 1_159_641_170); // THREAT_RADIUS, 0.27
+        let brute = get("ghoul_brute").health.as_ref().unwrap();
+        assert_eq!(brute.armor.as_ref().unwrap().radius.to_bits(), 1_632_087_572); // ARMORED_RADIUS, 0.38
+    }
+
     #[test]
     fn a_base_fills_what_a_variant_leaves_out() {
         let brute = "(base: \"ghoul\", sim: (movement: (walk: 0.59), health: (hp: 5, armor: (points: 2, radius: 0.38))), view: ())";

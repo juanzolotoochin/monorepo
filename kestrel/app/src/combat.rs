@@ -13,18 +13,63 @@ use bevy::prelude::*;
 use sim::settlement::avatar::SwordStroke;
 
 use crate::lockstep::seconds;
-use sim::settlement::avatar as rules;
 
-// Swing phases in seconds. Windups and ends come from the simulation's tick
-// constants; the active ends are view-only blade timing.
-pub const WINDUP: f32 = seconds(rules::AIM_TICKS);
+// The active ends are view-only blade timing. The other swing phases come
+// from the player character's definition, below.
 pub const ACTIVE_END: f32 = 0.29;
-pub const ATTACK_END: f32 = seconds(rules::SWING_TICKS);
-pub const SWORD_WINDUP: f32 = seconds(rules::SWORD_WINDUP_TICKS);
 pub const SWORD_ACTIVE_END: f32 = 0.22;
-pub const SWORD_END: f32 = seconds(rules::SWORD_SWING_TICKS);
-pub const REBOUND_END: f32 = seconds(rules::REBOUND_TICKS);
 pub const REST_ANGLE: f32 = 0.45;
+
+/// The player character's swing phases in view seconds.
+struct SwingSeconds {
+    windup: f32,
+    attack_end: f32,
+    sword_windup: f32,
+    sword_end: f32,
+    rebound_end: f32,
+    combo_window: f32,
+}
+
+fn swing_seconds() -> &'static SwingSeconds {
+    static SWING: std::sync::LazyLock<SwingSeconds> = std::sync::LazyLock::new(|| {
+        let content = crate::lockstep::builtin_content();
+        let ix = content.names.character_index(content::character::PLAYER_CHARACTER).expect("the player character");
+        let avatar = content.rules.characters[ix as usize].avatar.as_ref().expect("player characters have avatar tuning");
+        let attack = avatar.attack;
+        SwingSeconds {
+            windup: seconds(attack.aim),
+            attack_end: seconds(attack.swing),
+            sword_windup: seconds(attack.sword_windup),
+            sword_end: seconds(attack.sword_swing),
+            rebound_end: seconds(attack.rebound),
+            combo_window: seconds(attack.combo_window),
+        }
+    });
+    &SWING
+}
+
+/// The visible windup, while the avatar turns toward the aim.
+pub fn windup() -> f32 {
+    swing_seconds().windup
+}
+/// A swing that hits nothing ends here.
+pub fn attack_end() -> f32 {
+    swing_seconds().attack_end
+}
+pub fn sword_windup() -> f32 {
+    swing_seconds().sword_windup
+}
+pub fn sword_end() -> f32 {
+    swing_seconds().sword_end
+}
+/// A swing that lands rebounds this long after contact.
+pub fn rebound_end() -> f32 {
+    swing_seconds().rebound_end
+}
+/// Another sword press within this continues the combo.
+pub fn combo_window() -> f32 {
+    swing_seconds().combo_window
+}
 
 /// Visual action family. Combat remains authoritative over hit timing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,9 +96,9 @@ impl Attack {
         if self.weapon == content::scenario::Weapon::Laser {
             (0.03, 0.07, 0.13)
         } else if self.weapon == content::scenario::Weapon::Sword && self.swift {
-            (SWORD_WINDUP, SWORD_ACTIVE_END, SWORD_END)
+            (sword_windup(), SWORD_ACTIVE_END, sword_end())
         } else {
-            (WINDUP, ACTIVE_END, ATTACK_END)
+            (windup(), ACTIVE_END, attack_end())
         }
     }
     pub fn motion(&self) -> ActionMotion {
@@ -93,7 +138,7 @@ impl Attack {
                 lerp(
                     angle + recoil,
                     REST_ANGLE,
-                    smooth((self.age - 0.15) / (REBOUND_END - 0.15)),
+                    smooth((self.age - 0.15) / (rebound_end() - 0.15)),
                 )
             }
         } else {
@@ -111,7 +156,7 @@ impl Attack {
     pub fn finished(&self) -> bool {
         self.age
             >= if self.impact_angle.is_some() {
-                REBOUND_END
+                rebound_end()
             } else {
                 self.timing().2
             }
@@ -139,9 +184,9 @@ pub fn swing_angle_stroke(age: f32, stroke: SwordStroke) -> f32 {
 
 pub fn swing_angle_stroke_timed(age: f32, stroke: SwordStroke, swift: bool) -> f32 {
     let (windup_time, active_end, attack_end) = if swift {
-        (SWORD_WINDUP, SWORD_ACTIVE_END, SWORD_END)
+        (sword_windup(), SWORD_ACTIVE_END, sword_end())
     } else {
-        (WINDUP, ACTIVE_END, ATTACK_END)
+        (windup(), ACTIVE_END, attack_end())
     };
     let (windup, cut) = match stroke {
         SwordStroke::Forehand => (-1.7, 1.4),
@@ -573,14 +618,14 @@ mod tests {
     #[test]
     fn heavy_cut_has_anticipation_rebound_and_recovery() {
         assert!((swing_angle(0.0) - REST_ANGLE).abs() < 1e-5);
-        assert!((swing_angle(SWORD_WINDUP) + 1.7).abs() < 1e-5);
+        assert!((swing_angle(sword_windup()) + 1.7).abs() < 1e-5);
         assert!((swing_angle(SWORD_ACTIVE_END) - 1.4).abs() < 1e-5);
-        assert!((swing_angle(SWORD_END) - REST_ANGLE).abs() < 1e-5);
+        assert!((swing_angle(sword_end()) - REST_ANGLE).abs() < 1e-5);
         let mut attack = Attack::new(Vec3::Z, content::scenario::Weapon::Sword);
         attack.impact_angle = Some(0.0);
         attack.age = 0.10;
         assert!(attack.angle() < -0.5);
-        attack.age = REBOUND_END;
+        attack.age = rebound_end();
         assert!(attack.finished());
         assert!((attack.angle() - REST_ANGLE).abs() < 1e-5);
     }
@@ -597,7 +642,7 @@ mod tests {
             SwordStroke::Overhead,
         ] {
             assert!((swing_angle_stroke(0.0, stroke) - REST_ANGLE).abs() < 1e-5);
-            assert!((swing_angle_stroke(SWORD_END, stroke) - REST_ANGLE).abs() < 1e-5);
+            assert!((swing_angle_stroke(sword_end(), stroke) - REST_ANGLE).abs() < 1e-5);
         }
     }
     #[test]

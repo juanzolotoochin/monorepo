@@ -14,7 +14,7 @@ use crate::character::{
     blend_pose, dig_age, grounded_foot_targets, jump_motion, GaitClock, JointSnapshot,
     MotionState, Part, PartKind, Player, Pose,
 };
-use crate::combat::{Attack, ATTACK_END, REBOUND_END};
+use crate::combat::{Attack, attack_end, rebound_end};
 use crate::jetpack::Exhaust;
 use crate::lockstep::WorldMirror;
 use crate::style::{WeaponMuzzle, WeaponVisual};
@@ -73,10 +73,10 @@ fn attack(swing: &Swing, ticks: f32, swift_sword: bool) -> Option<Attack> {
             / content::TICKS_PER_SECOND as f32;
         attack.impact_angle = Some(attack.angle());
         attack.age = seconds(swing.resolve_at);
-        (attack.age < REBOUND_END).then_some(attack)
+        (attack.age < rebound_end()).then_some(attack)
     } else {
         attack.age = seconds(swing.started);
-        (attack.age < ATTACK_END).then_some(attack)
+        (attack.age < attack_end()).then_some(attack)
     }
 }
 
@@ -455,7 +455,7 @@ mod tests {
         let mid = attack(&s, at(0.2), false).unwrap();
         assert!((mid.age - 0.2).abs() < 1e-4 && mid.impact_angle.is_none());
         assert!((mid.aim - Vec3::X).length() < 1e-4);
-        assert!(attack(&s, at(ATTACK_END) + 0.1, false).is_none());
+        assert!(attack(&s, at(attack_end()) + 0.1, false).is_none());
     }
 
     #[test]
@@ -465,6 +465,6 @@ mod tests {
         let rebound = attack(&s, at(RESOLVE + 0.05), false).unwrap();
         assert_eq!(rebound.impact_angle, Some(at_hit));
         assert!((rebound.age - 0.05).abs() < 1e-4);
-        assert!(attack(&s, at(RESOLVE + REBOUND_END) + 0.1, false).is_none());
+        assert!(attack(&s, at(RESOLVE + rebound_end()) + 0.1, false).is_none());
     }
 }

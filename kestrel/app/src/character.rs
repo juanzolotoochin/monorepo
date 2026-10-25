@@ -1,8 +1,8 @@
 //! Render-only character rig and continuous posing shared by local and peer avatars.
 use crate::{
     combat::{
-        lerp, smooth, spear_pose, ActionMotion, Attack, ACTIVE_END, ATTACK_END, REBOUND_END,
-        REST_ANGLE, WINDUP,
+        lerp, smooth, spear_pose, ActionMotion, Attack, ACTIVE_END, attack_end, rebound_end,
+        REST_ANGLE, windup,
     },
     effects::Feedback,
     gameplay::Controls,
@@ -905,7 +905,7 @@ impl Pose {
         let mut transform = rest;
         let (windup, active_end, attack_end) = self
             .attack
-            .map_or((WINDUP, ACTIVE_END, ATTACK_END), |a| a.timing());
+            .map_or((windup(), ACTIVE_END, attack_end()), |a| a.timing());
         let travel = if matches!(self.jump, Some(JumpMotion::Rising(_) | JumpMotion::Falling(_))) {
             0.0
         } else {
@@ -978,7 +978,7 @@ impl Pose {
                         transform.translation.z += extension.max(0.0) * 0.16;
                         -0.10 * extension
                     } else if attack.impact_angle.is_some() {
-                        -0.18 * (1.0 - smooth(attack.age / REBOUND_END))
+                        -0.18 * (1.0 - smooth(attack.age / rebound_end()))
                     } else {
                         (attack.angle() - REST_ANGLE) * 0.12
                     };
@@ -1185,7 +1185,7 @@ impl Pose {
                         );
                     }
                     if a.impact_angle.is_some() {
-                        -0.1 - 0.5 * smooth(a.age / REBOUND_END)
+                        -0.1 - 0.5 * smooth(a.age / rebound_end())
                     } else if a.age < windup {
                         lerp(carry, -0.08, smooth(a.age / windup))
                     } else if a.age < active_end {
@@ -1701,14 +1701,18 @@ mod tests {
         assert!(gait.phase < 1e-5);
     }
 
-    /// Styles that keep the default speeds leave the simulation on its own
-    /// constants (`lockstep::scene_setup`), so the two must agree.
+    fn exosuit() -> &'static content::character::CharacterDef {
+        let content = crate::lockstep::builtin_content();
+        &content.rules.characters[content.names.character_index(content::character::PLAYER_CHARACTER).unwrap() as usize]
+    }
+
+    /// Styles that keep the default speeds leave the simulation on the player
+    /// character's (`lockstep::scene_setup`), so the two must agree.
     #[test]
-    fn default_style_speeds_match_the_simulation() {
-        use sim::settlement::avatar::{RUN_SPEED, WALK_SPEED};
+    fn default_style_speeds_match_the_player_character() {
         let motion = voxel_assets::CharacterMotion::default();
-        assert!((motion.walk_speed - crate::lockstep::view_f32(WALK_SPEED)).abs() < 1e-5);
-        assert!((motion.run_speed - crate::lockstep::view_f32(RUN_SPEED)).abs() < 1e-5);
+        assert!((motion.walk_speed - crate::lockstep::view_f32(exosuit().movement.walk)).abs() < 1e-5);
+        assert!((motion.run_speed - crate::lockstep::view_f32(exosuit().movement.run)).abs() < 1e-5);
     }
 
     #[test]
@@ -1716,7 +1720,7 @@ mod tests {
         let mut motion = MotionState::default();
         motion.advance(Vec3::ZERO, std::f32::consts::PI - 0.04, 1.0 / 60.0);
         let (speed, turn) = motion.advance(
-            Vec3::Z * crate::lockstep::view_f32(sim::settlement::avatar::WALK_SPEED),
+            Vec3::Z * crate::lockstep::view_f32(exosuit().movement.walk),
             -std::f32::consts::PI + 0.04,
             1.0 / 60.0,
         );
@@ -1881,7 +1885,7 @@ mod tests {
         assert!(right.translation.z < rest.translation.z);
         let mut attack = Attack::new(Vec3::Z, content::scenario::Weapon::Sword);
         attack.swift = true;
-        attack.age = crate::combat::SWORD_WINDUP;
+        attack.age = crate::combat::sword_windup();
         pose.attack = Some(attack);
         let attacking = pose.place(PartKind::Arm(1.0), rest);
         assert_ne!(attacking.rotation, right.rotation);
@@ -1913,11 +1917,11 @@ mod tests {
         pose.attack = Some(attack);
         let beginning = pose.place(PartKind::Body, rest);
         assert!(beginning.rotation.angle_between(walking.rotation) < 1e-5);
-        attack.age = crate::combat::SWORD_WINDUP;
+        attack.age = crate::combat::sword_windup();
         pose.attack = Some(attack);
         let engaged = pose.place(PartKind::Body, rest);
         assert!(engaged.rotation.angle_between(walking.rotation) > 0.05);
-        attack.age = crate::combat::SWORD_END;
+        attack.age = crate::combat::sword_end();
         pose.attack = Some(attack);
         let ending = pose.place(PartKind::Body, rest);
         assert!(ending.rotation.angle_between(walking.rotation) < 1e-5);
@@ -1940,10 +1944,10 @@ mod tests {
         };
         for age in [
             0.0,
-            crate::combat::SWORD_WINDUP,
+            crate::combat::sword_windup(),
             0.18,
             crate::combat::SWORD_ACTIVE_END,
-            crate::combat::SWORD_END,
+            crate::combat::sword_end(),
         ] {
             let mut attack = Attack::new(Vec3::Z, content::scenario::Weapon::Sword);
             attack.swift = true;

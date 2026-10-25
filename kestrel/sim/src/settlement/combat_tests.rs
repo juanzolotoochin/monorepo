@@ -8,7 +8,7 @@ use content::scenario::{
 use content::Content;
 use fx::{Fx, FxVec2};
 
-use super::avatar::{Intent, WINDUP_TICKS};
+use super::avatar::Intent;
 use super::combat::{combat_roll, Event, Impact, Projectile, Threat};
 use super::Settlement;
 use crate::messages::Strike;
@@ -385,7 +385,7 @@ fn scheduled_attack_contacts_on_an_integer_simulation_tick() {
     arena.threat(100, 0.0, 1.0, 8, 0);
     let agent = arena.player as u16;
     arena.command(CommandKind::Attack { agent, weapon: Weapon::Sword, aim: FxVec2::new(Fx::ZERO, Fx::ONE), muzzle: [Fx::ZERO, fx(0.6), fx(0.25)] });
-    arena.step(WINDUP_TICKS - 1);
+    arena.step(ticks_from_60hz(13) - 1); // the exosuit's windup
     assert_eq!(arena.hp(100), 8);
     arena.step(1);
     assert!(arena.hp(100) < 8);
