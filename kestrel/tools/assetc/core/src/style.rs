@@ -37,6 +37,9 @@ pub struct StyleProfile {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CharacterMotion {
+    /// Ground speed in meters per second, shared by simulation and posing.
+    pub walk_speed: f32,
+    pub run_speed: f32,
     pub arm_swing: f32,
     pub leg_swing: f32,
     pub torso_turn: f32,
@@ -52,6 +55,8 @@ pub struct CharacterMotion {
 impl Default for CharacterMotion {
     fn default() -> Self {
         Self {
+            walk_speed: 3.8,
+            run_speed: 5.6,
             arm_swing: 0.23,
             leg_swing: 0.48,
             torso_turn: 0.42,
@@ -175,6 +180,13 @@ impl StyleProfile {
                 .is_some_and(|v| !v.is_finite() || !(0.05..=0.5).contains(&v))
         {
             return Err("invalid style actor density or weapon label".into());
+        }
+        if !self.character_motion.walk_speed.is_finite()
+            || !self.character_motion.run_speed.is_finite()
+            || !(0.5..=10.0).contains(&self.character_motion.walk_speed)
+            || !(self.character_motion.walk_speed..=15.0).contains(&self.character_motion.run_speed)
+        {
+            return Err("invalid character movement speeds".into());
         }
         if self.weapon_skins.len() > 8
             || self

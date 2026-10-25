@@ -150,6 +150,7 @@ fn build_app(options: control::Options, mut scenes: assets::SceneLibrary, hub: c
         if let Some(pair) = args.windows(2).find(|pair| pair[0] == "--studio-clip") {
             viewer.clip = match pair[1].as_str() {
                 "idle" => viewer::Clip::Idle,
+                "walk" => viewer::Clip::Walk,
                 "turn" => viewer::Clip::Turn,
                 "jump" => viewer::Clip::Jump,
                 "run-jump" => viewer::Clip::RunJump,
@@ -333,6 +334,7 @@ fn build_app(options: control::Options, mut scenes: assets::SceneLibrary, hub: c
         .add_systems(
             PostUpdate,
             (
+                viewer::metrics,
                 effects::blade_trail,
                 assets::update_captions,
                 piles::captions,

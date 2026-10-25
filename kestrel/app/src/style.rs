@@ -41,6 +41,64 @@ struct StyleLabel;
 fn color(c: [f32; 3]) -> Color {
     Color::srgb(c[0], c[1], c[2])
 }
+
+/// Resolve authored root-space joint origins into local bind transforms.
+/// Unspecified joints inherit their original offsets, so older skins retain
+/// the scene rig and descendants follow a moved shoulder or hip naturally.
+fn apply_actor_pivots(
+    world: &mut World,
+    parts: &HashMap<Entity, voxel_assets::ActorPart>,
+    actor: &[voxel_assets::ActorMesh],
+) {
+    fn position(
+        entity: Entity,
+        binds: &HashMap<Entity, (Vec3, Option<Entity>)>,
+        parts: &HashMap<Entity, voxel_assets::ActorPart>,
+        actor: &[voxel_assets::ActorMesh],
+        resolved: &mut HashMap<Entity, Vec3>,
+    ) -> Vec3 {
+        if let Some(value) = resolved.get(&entity) {
+            return *value;
+        }
+        let (bind, parent) = binds[&entity];
+        let parent_position = parent
+            .filter(|parent| binds.contains_key(parent))
+            .map_or(Vec3::ZERO, |parent| position(parent, binds, parts, actor, resolved));
+        // The weapon's authored pivot describes its model, while WeaponGrip
+        // must always remain attached to the hand.
+        let pivot = parts.get(&entity).filter(|part| **part != voxel_assets::ActorPart::Weapon)
+            .and_then(|part| actor.iter().find(|mesh| mesh.part == *part))
+            .and_then(|mesh| mesh.pivot)
+            .map(Vec3::from_array);
+        let value = pivot.unwrap_or(parent_position + bind);
+        resolved.insert(entity, value);
+        value
+    }
+
+    let binds: HashMap<_, _> = world
+        .query::<(Entity, &crate::character::Part, Option<&ChildOf>)>()
+        .iter(world)
+        .map(|(entity, part, parent)| {
+            (entity, (part.bind.translation, parent.map(ChildOf::parent)))
+        })
+        .collect();
+    let mut resolved = HashMap::new();
+    for &entity in binds.keys() {
+        position(entity, &binds, parts, actor, &mut resolved);
+    }
+    for (&entity, &global) in &resolved {
+        let parent = binds[&entity].1;
+        let parent_global = parent.and_then(|parent| resolved.get(&parent).copied()).unwrap_or(Vec3::ZERO);
+        let local = global - parent_global;
+        let rest = {
+            let mut part = world.get_mut::<crate::character::Part>(entity).unwrap();
+            part.rest = part.bind;
+            part.rest.translation = local;
+            part.rest
+        };
+        *world.get_mut::<Transform>(entity).unwrap() = rest;
+    }
+}
 pub fn apply(world: &mut World) {
     let index = world.resource::<SceneLibrary>().current;
     if world.resource::<ActiveStyle>().current == Some(index) {
@@ -289,6 +347,7 @@ pub fn apply(world: &mut World) {
             part.map(|part| (e, part))
         })
         .collect();
+    apply_actor_pivots(world, &parts, &actor);
     let player = world
         .query_filtered::<Entity, With<crate::character::Player>>()
         .single(world)
@@ -568,6 +627,35 @@ pub fn snapshot(world: &mut World) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn authored_joint_pivots_change_proportions_and_restore_on_scene_switch() {
+        let options = crate::control::Options {
+            simulation: true,
+            ..default()
+        };
+        let hub = crate::control::Hub::new(options.clone()).unwrap();
+        let scenes = SceneLibrary::new();
+        let moonlit = scenes.index("moonlit-glade").unwrap();
+        let mut app = crate::build_app(options, scenes, hub);
+        app.update();
+        app.world_mut().resource_mut::<SceneLibrary>().requested = Some(moonlit);
+        app.update();
+        let shoulder_x = |world: &mut World| {
+            world
+                .query::<&crate::character::Part>()
+                .iter(world)
+                .find(|part| matches!(part.kind, crate::character::PartKind::Arm(1.0)))
+                .unwrap()
+                .rest
+                .translation
+                .x
+        };
+        assert!((shoulder_x(app.world_mut()) - 0.28).abs() < 0.001);
+        app.world_mut().resource_mut::<SceneLibrary>().requested = Some(0);
+        app.update();
+        assert!((shoulder_x(app.world_mut()) - 0.43).abs() < 0.001);
+    }
+
     #[test]
     fn scene_styles_restore_materials_and_lights_and_reuse_uploaded_assets() {
         let options = crate::control::Options {

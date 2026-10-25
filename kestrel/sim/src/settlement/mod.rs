@@ -224,6 +224,7 @@ pub struct SceneSetup {
     pub diggable: bool,
     /// Controlled avatars may jump instead of using the jetpack.
     pub jump_enabled: bool,
+    pub locomotion: Option<crate::terrain::Locomotion>,
     pub swift_sword: bool,
     /// Generates the arena's ground as a mine from this seed.
     pub mine: Option<u64>,
@@ -444,6 +445,7 @@ impl Settlement {
         terrain.platforms_only = setup.platforms_only;
         terrain.diggable = setup.diggable;
         terrain.jump_enabled = setup.jump_enabled;
+        terrain.locomotion = setup.locomotion;
         settlement.swift_sword = setup.swift_sword;
         if let Some(seed) = setup.mine {
             terrain.generate_mine(seed, at([setup.spawn[0], setup.spawn[2]]));

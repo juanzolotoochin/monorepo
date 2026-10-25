@@ -293,7 +293,10 @@ fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain) {
         }
         avatar.swing = None;
     }
-    let speed = if avatar.run { RUN_SPEED } else { WALK_SPEED };
+    let speed = terrain.locomotion.map_or_else(
+        || if avatar.run { RUN_SPEED } else { WALK_SPEED },
+        |profile| if avatar.run { profile.run } else { profile.walk },
+    );
     let mut desired = FxVec2::ZERO;
     match &avatar.intent {
         Some(Intent::Walk { direction, .. }) => desired = *direction * speed,

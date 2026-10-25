@@ -5,9 +5,10 @@ Style(
     actor_voxel_size: Some(0.05),
     actor_scale: 0.68,
     character_motion: (
+        walk_speed: 1.6, run_speed: 2.6,
         arm_swing: 0.43, leg_swing: 0.44, torso_turn: 0.50,
-        pose_response: 21.0, run_crouch: 0.17, elbow_drive: 0.50,
-        step_lift: 0.09, step_distance: 1.20, turn_inertia: 7.0
+        pose_response: 21.0, run_crouch: 0.08, elbow_drive: 0.50,
+        step_lift: 0.09, step_distance: 0.44, turn_inertia: 7.0
     ),
     weapon_name: "GLADE / STARFORGED BLADE",
     materials: [
@@ -25,6 +26,7 @@ Style(
         (name: "rune", color: (0.32, 0.81, 0.88), emissive: (0.8, 3.0, 3.3), metallic: 0.0, roughness: 0.35, impact: Crystal),
         (name: "gold", color: (0.91, 0.65, 0.31), emissive: (0.48, 0.22, 0.04), metallic: 0.3, roughness: 0.42, impact: Metal),
         (name: "cloth", color: (0.18, 0.34, 0.38), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.94, impact: Stone),
+        (name: "skin", color: (0.62, 0.50, 0.40), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.96, impact: Polymer),
         (name: "shadow", color: (0.045, 0.09, 0.13), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.95, impact: Stone),
         (name: "metal", color: (0.43, 0.55, 0.57), emissive: (0.0, 0.0, 0.0), metallic: 0.48, roughness: 0.5, impact: Metal),
         (name: "magic", color: (0.24, 0.72, 0.85), emissive: (0.2, 1.1, 1.5), metallic: 0.0, roughness: 0.5, impact: Crystal),
@@ -54,86 +56,95 @@ Style(
     )),
     actor: [
         (part: Body, pivot: Some((0.0, 0.94, 0.0)), shapes: [
-            (kind: Ellipsoid, position: (0.0, -0.11, 0.0), size: (0.43, 0.24, 0.33), material: "cloth"),
-            (kind: Ellipsoid, position: (0.0, -0.23, 0.0), size: (0.40, 0.12, 0.31), material: "shadow"),
-            (kind: Box, position: (0.0, -0.055, 0.0), size: (0.48, 0.05, 0.35), material: "trim"),
-            (kind: Box, position: (0.0, -0.11, 0.18), size: (0.13, 0.12, 0.035), material: "gold"),
-            (kind: Box, position: (-0.21, -0.20, 0.0), size: (0.07, 0.11, 0.22), material: "metal"),
-            (kind: Box, position: (0.21, -0.20, 0.0), size: (0.07, 0.11, 0.22), material: "metal"),
+            (kind: Box, position: (0.0, -0.11, 0.145), size: (0.10, 0.06, 0.025), material: "trim"),
+            (kind: Box, position: (0.0, -0.18, 0.14), size: (0.075, 0.055, 0.02), material: "gold"),
+            (kind: Ellipsoid, position: (0.0, -0.13, 0.0), size: (0.34, 0.28, 0.27), material: "cloth"),
+            (kind: Ellipsoid, position: (0.0, -0.22, 0.0), size: (0.34, 0.14, 0.27), material: "shadow")
         ]),
         (part: Chest, shapes: [
-            (kind: Box, position: (0.0, 0.18, 0.19), size: (0.56, 0.09, 0.08), material: "gold"),
-            (kind: Ellipsoid, position: (0.0, 0.14, 0.0), size: (0.59, 0.48, 0.40), material: "cloth")
+            (kind: Box, position: (0.0, 0.14, 0.17), size: (0.025, 0.17, 0.02), material: "shadow"),
+            (kind: Box, position: (0.0, 0.28, 0.15), size: (0.065, 0.045, 0.025), material: "trim"),
+            (kind: Ellipsoid, position: (0.0, 0.13, 0.0), size: (0.43, 0.46, 0.31), material: "cloth"),
+            (kind: Ellipsoid, position: (0.0, -0.08, 0.0), size: (0.32, 0.23, 0.27), material: "cloth")
         ]),
         (part: Head, shapes: [
-            (kind: Box, position: (0.0, -0.08, 0.0), size: (0.38, 0.40, 0.35), material: "stone_light"),
-            (kind: Cone, position: (0.0, 0.17, 0.0), size: (0.70, 0.45, 0.65), material: "leaf_shadow")
+            (kind: Box, position: (-0.067, -0.035, 0.152), size: (0.026, 0.018, 0.018), material: "shadow"),
+            (kind: Box, position: (0.067, -0.035, 0.152), size: (0.026, 0.018, 0.018), material: "shadow"),
+            (kind: Box, position: (0.0, -0.13, 0.15), size: (0.065, 0.012, 0.018), material: "shadow"),
+            (kind: Ellipsoid, position: (0.0, -0.24, 0.0), size: (0.11, 0.14, 0.11), material: "skin"),
+            (kind: Ellipsoid, position: (0.0, -0.055, 0.0), size: (0.29, 0.34, 0.29), material: "skin"),
+            (kind: Ellipsoid, position: (0.0, -0.15, 0.075), size: (0.23, 0.14, 0.20), material: "skin"),
+            (kind: Ellipsoid, position: (0.0, -0.095, 0.151), size: (0.06, 0.09, 0.065), material: "skin"),
+            (kind: Ellipsoid, position: (-0.15, -0.075, 0.0), size: (0.055, 0.095, 0.06), material: "skin"),
+            (kind: Ellipsoid, position: (0.15, -0.075, 0.0), size: (0.055, 0.095, 0.06), material: "skin"),
+            (kind: Ellipsoid, position: (0.0, 0.125, -0.02), size: (0.35, 0.20, 0.32), material: "leaf_shadow"),
+            (kind: Ellipsoid, position: (-0.12, 0.02, -0.06), size: (0.09, 0.19, 0.20), material: "leaf_shadow"),
+            (kind: Ellipsoid, position: (0.12, 0.02, -0.06), size: (0.09, 0.19, 0.20), material: "leaf_shadow")
         ]),
-        (part: LeftArm, shapes: [
-            (kind: Box, position: (-0.02, -0.035, 0.11), size: (0.13, 0.055, 0.045), material: "gold"),
-            (kind: Ellipsoid, position: (0.0, -0.025, 0.0), size: (0.25, 0.20, 0.25), material: "stone_light"),
-            (kind: Ellipsoid, position: (0.0, -0.17, 0.0), size: (0.14, 0.27, 0.14), material: "cloth")
+        (part: LeftArm, pivot: Some((-0.28, 1.27, 0.0)), shapes: [
+            (kind: Box, position: (0.0, -0.25, 0.07), size: (0.07, 0.025, 0.025), material: "trim"),
+            (kind: Ellipsoid, position: (0.035, -0.035, 0.0), size: (0.23, 0.17, 0.18), material: "cloth"),
+            (kind: Ellipsoid, position: (0.0, -0.17, 0.0), size: (0.11, 0.28, 0.12), material: "cloth")
         ]),
-        (part: RightArm, shapes: [
-            (kind: Box, position: (0.02, -0.035, 0.11), size: (0.13, 0.055, 0.045), material: "gold"),
-            (kind: Ellipsoid, position: (0.0, -0.025, 0.0), size: (0.25, 0.20, 0.25), material: "stone_light"),
-            (kind: Ellipsoid, position: (0.0, -0.17, 0.0), size: (0.14, 0.27, 0.14), material: "cloth")
+        (part: RightArm, pivot: Some((0.28, 1.27, 0.0)), shapes: [
+            (kind: Box, position: (0.0, -0.25, 0.07), size: (0.07, 0.025, 0.025), material: "trim"),
+            (kind: Ellipsoid, position: (-0.035, -0.035, 0.0), size: (0.23, 0.17, 0.18), material: "cloth"),
+            (kind: Ellipsoid, position: (0.0, -0.17, 0.0), size: (0.11, 0.28, 0.12), material: "cloth")
         ]),
         (part: LeftForearm, shapes: [
-            (kind: Box, position: (0.0, -0.13, 0.095), size: (0.16, 0.16, 0.045), material: "metal"),
-            (kind: Box, position: (0.0, -0.245, 0.015), size: (0.16, 0.045, 0.17), material: "trim"),
-            (kind: Ellipsoid, position: (0.0, -0.13, 0.015), size: (0.13, 0.24, 0.13), material: "cloth")
+            (kind: Box, position: (0.0, -0.235, 0.065), size: (0.09, 0.022, 0.03), material: "trim"),
+            (kind: Ellipsoid, position: (0.0, -0.125, 0.01), size: (0.10, 0.25, 0.11), material: "cloth")
         ]),
         (part: RightForearm, shapes: [
-            (kind: Box, position: (0.0, -0.13, 0.095), size: (0.16, 0.16, 0.045), material: "metal"),
-            (kind: Box, position: (0.0, -0.245, 0.015), size: (0.16, 0.045, 0.17), material: "trim"),
-            (kind: Ellipsoid, position: (0.0, -0.13, 0.015), size: (0.13, 0.24, 0.13), material: "cloth")
+            (kind: Box, position: (0.0, -0.235, 0.065), size: (0.09, 0.022, 0.03), material: "trim"),
+            (kind: Ellipsoid, position: (0.0, -0.125, 0.01), size: (0.10, 0.25, 0.11), material: "cloth")
         ]),
         (part: LeftHand, shapes: [
-            (kind: Ellipsoid, position: (0.0, -0.05, 0.05), size: (0.12, 0.12, 0.15), material: "stone_light")
+            (kind: Ellipsoid, position: (0.0, -0.05, 0.04), size: (0.09, 0.12, 0.10), material: "skin")
         ]),
         (part: RightHand, shapes: [
-            (kind: Ellipsoid, position: (0.0, -0.05, 0.05), size: (0.12, 0.12, 0.15), material: "stone_light")
+            (kind: Ellipsoid, position: (0.0, -0.05, 0.04), size: (0.09, 0.12, 0.10), material: "skin")
         ]),
-        (part: LeftLeg, pivot: Some((-0.16, 0.58, 0.0)), shapes: [
-            (kind: Box, position: (0.0, -0.055, 0.02), size: (0.23, 0.11, 0.25), material: "shadow"),
-            (kind: Box, position: (0.0, -0.19, 0.105), size: (0.19, 0.16, 0.055), material: "metal"),
-            (kind: Ellipsoid, position: (0.0, -0.15, 0.0), size: (0.19, 0.29, 0.19), material: "cloth")
+        (part: LeftLeg, pivot: Some((-0.14, 0.58, 0.0)), shapes: [
+            (kind: Box, position: (0.0, -0.19, 0.07), size: (0.075, 0.075, 0.018), material: "shadow"),
+            (kind: Ellipsoid, position: (0.0, 0.0, 0.0), size: (0.16, 0.17, 0.16), material: "cloth"),
+            (kind: Ellipsoid, position: (0.0, -0.12, 0.0), size: (0.15, 0.33, 0.15), material: "cloth")
         ]),
-        (part: RightLeg, pivot: Some((0.16, 0.58, 0.0)), shapes: [
-            (kind: Box, position: (0.0, -0.055, 0.02), size: (0.23, 0.11, 0.25), material: "shadow"),
-            (kind: Box, position: (0.0, -0.19, 0.105), size: (0.19, 0.16, 0.055), material: "metal"),
-            (kind: Ellipsoid, position: (0.0, -0.15, 0.0), size: (0.19, 0.29, 0.19), material: "cloth")
+        (part: RightLeg, pivot: Some((0.14, 0.58, 0.0)), shapes: [
+            (kind: Box, position: (0.0, -0.19, 0.07), size: (0.075, 0.075, 0.018), material: "shadow"),
+            (kind: Ellipsoid, position: (0.0, 0.0, 0.0), size: (0.16, 0.17, 0.16), material: "cloth"),
+            (kind: Ellipsoid, position: (0.0, -0.12, 0.0), size: (0.15, 0.33, 0.15), material: "cloth")
         ]),
         (part: LeftKnee, shapes: [
-            (kind: Ellipsoid, position: (0.0, -0.01, 0.085), size: (0.21, 0.16, 0.15), material: "stone_light"),
-            (kind: Box, position: (0.0, -0.025, 0.17), size: (0.13, 0.045, 0.025), material: "trim")
+            (kind: Box, position: (0.0, -0.025, 0.105), size: (0.07, 0.025, 0.018), material: "trim"),
+            (kind: Ellipsoid, position: (0.0, -0.01, 0.04), size: (0.14, 0.13, 0.11), material: "cloth")
         ]),
         (part: RightKnee, shapes: [
-            (kind: Ellipsoid, position: (0.0, -0.01, 0.085), size: (0.21, 0.16, 0.15), material: "stone_light"),
-            (kind: Box, position: (0.0, -0.025, 0.17), size: (0.13, 0.045, 0.025), material: "trim")
+            (kind: Box, position: (0.0, -0.025, 0.105), size: (0.07, 0.025, 0.018), material: "trim"),
+            (kind: Ellipsoid, position: (0.0, -0.01, 0.04), size: (0.14, 0.13, 0.11), material: "cloth")
         ]),
         (part: LeftShin, shapes: [
-            (kind: Box, position: (0.0, -0.12, 0.105), size: (0.18, 0.20, 0.055), material: "metal"),
-            (kind: Box, position: (0.0, -0.23, 0.035), size: (0.21, 0.055, 0.23), material: "shadow"),
-            (kind: Ellipsoid, position: (0.0, -0.12, 0.0), size: (0.17, 0.25, 0.17), material: "shadow")
+            (kind: Box, position: (0.0, -0.23, 0.015), size: (0.12, 0.025, 0.12), material: "shadow"),
+            (kind: Ellipsoid, position: (0.0, -0.12, 0.0), size: (0.12, 0.26, 0.12), material: "shadow")
         ]),
         (part: RightShin, shapes: [
-            (kind: Box, position: (0.0, -0.12, 0.105), size: (0.18, 0.20, 0.055), material: "metal"),
-            (kind: Box, position: (0.0, -0.23, 0.035), size: (0.21, 0.055, 0.23), material: "shadow"),
-            (kind: Ellipsoid, position: (0.0, -0.12, 0.0), size: (0.17, 0.25, 0.17), material: "shadow")
+            (kind: Box, position: (0.0, -0.23, 0.015), size: (0.12, 0.025, 0.12), material: "shadow"),
+            (kind: Ellipsoid, position: (0.0, -0.12, 0.0), size: (0.12, 0.26, 0.12), material: "shadow")
         ]),
         (part: LeftFoot, shapes: [
-            (kind: Box, position: (0.0, -0.03, 0.07), size: (0.27, 0.15, 0.37), material: "leaf_shadow")
+            (kind: Ellipsoid, position: (0.0, -0.03, 0.055), size: (0.18, 0.115, 0.27), material: "leaf_shadow")
         ]),
         (part: RightFoot, shapes: [
-            (kind: Box, position: (0.0, -0.03, 0.07), size: (0.27, 0.15, 0.37), material: "leaf_shadow")
+            (kind: Ellipsoid, position: (0.0, -0.03, 0.055), size: (0.18, 0.115, 0.27), material: "leaf_shadow")
         ]),
         (part: Weapon, pivot: Some((0.4, 0.9, 0.0)), shapes: [
-            (kind: Box, position: (0.0, 0.0, 0.0), size: (0.13, 0.12, 0.38), material: "bark"),
-            (kind: Box, position: (0.0, 0.0, 0.26), size: (0.43, 0.09, 0.12), material: "gold"),
-            (kind: Box, position: (0.0, 0.0, 0.88), size: (0.14, 0.06, 1.05), material: "stone_light"),
-            (kind: Box, position: (0.0, 0.05, 0.88), size: (0.04, 0.03, 0.85), material: "rune")
+            (kind: Ellipsoid, position: (0.0, 0.0, -0.14), size: (0.105, 0.085, 0.10), material: "trim"),
+            (kind: Box, position: (0.0, 0.0, 0.035), size: (0.075, 0.075, 0.29), material: "bark"),
+            (kind: Box, position: (0.0, 0.0, 0.215), size: (0.28, 0.055, 0.065), material: "trim"),
+            (kind: Ellipsoid, position: (0.0, 0.03, 0.225), size: (0.06, 0.035, 0.055), material: "rune"),
+            (kind: Box, position: (0.0, 0.0, 0.53), size: (0.12, 0.10, 0.59), material: "stone_light"),
+            (kind: Octahedron, position: (0.0, 0.0, 0.86), size: (0.12, 0.10, 0.14), material: "stone_light"),
+            (kind: Box, position: (0.0, 0.075, 0.53), size: (0.05, 0.05, 0.40), material: "rune")
         ])
     ]
 )

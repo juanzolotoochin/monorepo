@@ -23,7 +23,7 @@ use sim::{CommandKind, World as SimWorld};
 use crate::assets::SceneLibrary;
 use crate::character::Player;
 use crate::combat::Obstacle;
-use crate::gameplay::{Controls, WALK_SPEED};
+use crate::gameplay::Controls;
 
 /// The world seed. Scenes don't use randomness outside combat rolls, which are
 /// keyed on ticks and IDs, so one seed serves every scene.
@@ -270,6 +270,15 @@ pub fn build_world(world: &mut World) {
         memory_trial: library.has_feature(voxel_assets::SceneFeature::MemoryTrial),
         diggable: library.has_feature(voxel_assets::SceneFeature::Digging),
         jump_enabled: library.has_feature(voxel_assets::SceneFeature::Jump),
+        locomotion: scene.style.as_ref().and_then(|style| {
+            let motion = style.character_motion;
+            let defaults = voxel_assets::CharacterMotion::default();
+            (motion.walk_speed != defaults.walk_speed || motion.run_speed != defaults.run_speed)
+                .then_some(sim::terrain::Locomotion {
+                    walk: q(motion.walk_speed),
+                    run: q(motion.run_speed),
+                })
+        }),
         swift_sword: library.has_feature(voxel_assets::SceneFeature::SwiftSword),
         mine: scene.mine.as_ref().map(|m| m.seed),
     };
@@ -520,7 +529,9 @@ pub fn follow_avatar(
         if let Some((direction, run)) = movement {
             preview.active = true;
             let dt = time.delta_secs().min(0.05);
-            let desired = direction * if run { 5.6 } else { WALK_SPEED };
+            let motion = library.scenes[library.current].scene.style.as_ref()
+                .map_or_else(voxel_assets::CharacterMotion::default, |style| style.character_motion);
+            let desired = direction * if run { motion.run_speed } else { motion.walk_speed };
             let acceleration = if desired == Vec3::ZERO { 32.0 } else { 26.0 };
             let change = (desired - preview.velocity).clamp_length_max(acceleration * dt);
             preview.velocity += change;
@@ -583,9 +594,16 @@ pub fn follow_avatar(
     if let Some(velocity) = preview_velocity {
         controls.velocity = velocity;
     }
-    let step_distance = library.scenes[library.current].scene.style.as_ref()
-        .map_or_else(voxel_assets::CharacterMotion::default, |s| s.character_motion)
-        .step_distance.clamp(0.2, 4.0);
+    let motion = library.scenes[library.current]
+        .scene
+        .style
+        .as_ref()
+        .map_or_else(voxel_assets::CharacterMotion::default, |s| s.character_motion);
+    let relative_speed = controls.velocity.length() / motion.walk_speed.max(0.1);
+    let step_distance = crate::character::step_distance_for_speed(
+        motion.step_distance,
+        relative_speed,
+    ).clamp(0.2, 4.0);
     let contacts = controls.gait.advance(moved.length(), step_distance, !a.avatar.flight.airborne);
     for _ in 0..contacts {
         sound.play(crate::sound::Cue::Step);
