@@ -9,10 +9,7 @@
 use bevy::{
     app::AppExit,
     clipboard::{Clipboard, ClipboardRead},
-    input::{
-        keyboard::{Key, KeyboardInput},
-        ButtonState,
-    },
+    input::{keyboard::Key, ButtonState},
     prelude::*,
     render::view::screenshot::{save_to_disk, Screenshot},
     state::state_scoped::DespawnOnExit,
@@ -376,8 +373,8 @@ pub fn update(
     mut viewer: ResMut<Viewer>,
     scenes: Res<SceneLibrary>,
     mut front: ResMut<NextState<Front>>,
-    mut keys: MessageReader<KeyboardInput>,
-    held: Res<ButtonInput<KeyCode>>,
+    input: Res<debug_ui::GameInput>,
+    mut text_focus: ResMut<debug_ui::TextFocus>,
     mut clipboard: ResMut<Clipboard>,
     mut actions: Query<(&Action, &Interaction, &mut BackgroundColor, &mut BorderColor)>,
     mut fields: Query<(&FieldText, &mut Text)>,
@@ -416,6 +413,7 @@ pub fn update(
                 };
                 viewer.character = character;
                 menu.focus = None;
+                text_focus.external = false;
                 front.set(Front::Studio);
                 return;
             }
@@ -426,11 +424,13 @@ pub fn update(
         }
     }
     let shortcut = if cfg!(target_os = "macos") {
-        held.any_pressed([KeyCode::SuperLeft, KeyCode::SuperRight])
+        input.keys().any_pressed([KeyCode::SuperLeft, KeyCode::SuperRight])
     } else {
-        held.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight])
+        input.keys().any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight])
     };
-    for key in keys.read() {
+    // Routed: keys the debug UI owns (its text fields, the `/` toggle) never
+    // edit these fields.
+    for key in input.keyboard() {
         if key.state != ButtonState::Pressed {
             continue;
         }
@@ -488,12 +488,14 @@ pub fn update(
     }
     // A field that has the keyboard keeps the app's keys (M mutes) quiet.
     flow.typing = menu.focus.is_some();
+    text_focus.external = flow.typing;
     if start {
         match menu.launch(&flow.defaults) {
             Ok(launch) => {
                 menu.error.clear();
                 menu.focus = None;
                 flow.typing = false;
+                text_focus.external = false;
                 flow.start(launch);
                 return;
             }
@@ -635,9 +637,9 @@ mod tests {
         let scenes = SceneLibrary::new();
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_message::<KeyboardInput>()
             .add_message::<AppExit>()
-            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<debug_ui::GameInput>()
+            .init_resource::<debug_ui::TextFocus>()
             .init_resource::<Clipboard>()
             .init_resource::<NextState<Front>>()
             .init_resource::<Viewer>()

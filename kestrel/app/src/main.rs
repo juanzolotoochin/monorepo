@@ -200,6 +200,9 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         atmosphere::register_shader(&mut app);
     }
     app.add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default());
+    // Routed input in every run; the egui debug overlay only in windowed
+    // runs a player drives (as `control::interactive`), whatever the menus.
+    app.add_plugins(debug_ui::DebugUiPlugin { interactive: !simulation && !offscreen });
     if !simulation {
         app.add_plugins((
             bevy::render::diagnostic::RenderDiagnosticsPlugin,
@@ -216,11 +219,18 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         app.add_systems(Startup, control::setup_render.after(scene::setup));
     }
     // The frame (see kestrel/docs/proposals/service_layers.md): telemetry and
-    // the control port wrap it; everything else belongs to a service, and
-    // services tick by layer, then in the order registered here.
+    // the control port wrap it; the debug UI's pass and input routing run
+    // before the Input phase (`debug_ui::DebugUiSystems`); everything else
+    // belongs to a service, and services tick by layer, then in the order
+    // registered here.
     // Character Studio poses the player's body outside a world, so its
     // playback state exists in every run; only players' runs can open it.
-    app.add_plugins(ServicesPlugin).add_service::<flow::Flow>().add_service::<viewer::Viewer>();
+    // The debug menu manager comes first: it outlives its providers.
+    app.add_plugins(ServicesPlugin)
+        .add_service::<debug_ui::ImguiManager>()
+        .add_service::<flow::Flow>()
+        .add_service::<viewer::Viewer>()
+        .add_service::<telemetry::TelemetryPanels>();
     if menus {
         app.add_service::<menu::MainMenu>().add_service::<pause::Pause>();
     }
@@ -239,6 +249,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .add_service::<scene::Hud>()
         .add_service::<lockstep::PlayerControl>()
         .add_systems(First, (telemetry::begin, control::begin).chain())
+        .add_systems(Update, telemetry::shortcut.in_set(debug_ui::DebugUiSystems::Shortcuts))
         .add_systems(
             Last,
             ((telemetry::end, control::end).chain(), control::capture_frame.run_if(control::rendered))

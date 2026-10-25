@@ -105,7 +105,7 @@ pub fn tick(world: &mut World) {
     let reserved_e = scene.scene().scenario.is_some();
     let memory_trial = scene.has_feature(SceneFeature::MemoryTrial);
     if interactive && !reserved_e {
-        let keys = world.resource::<ButtonInput<KeyCode>>();
+        let keys = world.resource::<debug_ui::GameInput>().keys();
         let (e, q) = (keys.just_pressed(KeyCode::KeyE), keys.just_pressed(KeyCode::KeyQ));
         if q {
             clear(world);

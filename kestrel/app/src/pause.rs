@@ -6,8 +6,8 @@
 // which the build leaves out.
 #![allow(deprecated)]
 
-use bevy::input::mouse::AccumulatedMouseScroll;
 use bevy::prelude::*;
+use debug_ui::GameInput;
 use service::{AppServices, Phase, Service, SessionLayer, SessionScoped};
 
 use crate::flow::Flow;
@@ -45,8 +45,8 @@ enum Choice {
 #[require(SessionScoped)]
 struct Overlay;
 
-fn toggle(keys: Res<ButtonInput<KeyCode>>, mut pause: ResMut<Pause>) {
-    if keys.just_pressed(KeyCode::Escape) {
+fn toggle(input: Res<GameInput>, mut pause: ResMut<Pause>) {
+    if input.keys().just_pressed(KeyCode::Escape) {
         pause.open = !pause.open;
     }
 }
@@ -125,16 +125,12 @@ fn show(
 }
 
 /// While open, nothing else in the session sees the keyboard, the mouse
-/// buttons or the wheel. Held keys count as released.
-fn swallow(
-    pause: Res<Pause>,
-    mut keys: ResMut<ButtonInput<KeyCode>>,
-    mut mouse: ResMut<ButtonInput<MouseButton>>,
-    mut scroll: ResMut<AccumulatedMouseScroll>,
-) {
+/// buttons or the wheel. Held keys count as released: gameplay sees each
+/// release once (a held jetpack switches off), and they stay off until
+/// pressed again after the overlay closes. Bevy's own input, which the
+/// overlay's buttons and the debug UI read, is left alone.
+fn swallow(pause: Res<Pause>, mut input: ResMut<GameInput>) {
     if pause.open {
-        keys.reset_all();
-        mouse.reset_all();
-        scroll.delta = Vec2::ZERO;
+        input.block();
     }
 }

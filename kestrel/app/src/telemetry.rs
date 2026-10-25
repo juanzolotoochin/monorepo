@@ -1,6 +1,8 @@
 //! Bounded performance samples. CPU wall time is kept separate from deterministic game time.
 use bevy::prelude::*;
+use debug_ui::{egui, GameInput, ImguiManager, ImguiMenu, MenuHandle, MenuId, MenuSpec};
 use serde_json::{json, Value};
+use service::{AppLayer, Service};
 use std::{
     collections::{BTreeMap, VecDeque},
     time::Duration,
@@ -109,15 +111,10 @@ pub fn elapsed(world: &mut World, name: &'static str, start: Instant) {
         .resource_mut::<Telemetry>()
         .sample(name, start.elapsed().as_secs_f64() * 1000.);
 }
+/// Times the frame from its start: runs first in `First`.
 pub fn begin(world: &mut World) {
     let now = Instant::now();
-    let toggle = world
-        .resource::<ButtonInput<KeyCode>>()
-        .just_pressed(KeyCode::F3);
     let mut t = world.resource_mut::<Telemetry>();
-    if toggle {
-        t.enabled_overlay = !t.enabled_overlay;
-    }
     if let Some(previous) = t.previous {
         let ms = now.duration_since(previous).as_secs_f64() * 1000.;
         t.sample("frame_wall", ms);
@@ -211,6 +208,134 @@ fn overlay_text(t: &Telemetry, entities: usize, meshes: usize) -> String {
     );
     text
 }
+/// F3 adds the breakdown to the HUD line, unless the debug UI has the key.
+pub fn shortcut(input: Res<GameInput>, mut telemetry: ResMut<Telemetry>) {
+    if input.keys().just_pressed(KeyCode::F3) {
+        telemetry.enabled_overlay = !telemetry.enabled_overlay;
+    }
+}
+
+/// The debug menu's Diagnostics windows, drawn from the live samples. They
+/// read what the last completed frames recorded.
+const MENUS: &[MenuSpec] = &[
+    MenuSpec::new("frame_timing", "Diagnostics", "Frame timing"),
+    MenuSpec::new("counters", "Diagnostics", "Counters and gauges"),
+];
+
+impl ImguiMenu for Telemetry {
+    fn menus() -> &'static [MenuSpec] {
+        MENUS
+    }
+
+    fn show_menu(&mut self, id: MenuId, root: &mut egui::Ui, open: &mut bool, _world: &mut World) {
+        let window = id.window().open(open);
+        match id.id() {
+            "frame_timing" => window.default_pos([16.0, 40.0]).default_width(330.0).show(root.ctx(), |ui| self.frame_timing(ui)),
+            _ => window.default_pos([360.0, 40.0]).default_width(280.0).show(root.ctx(), |ui| self.counters(ui)),
+        };
+    }
+}
+
+impl Telemetry {
+    fn frame_timing(&self, ui: &mut egui::Ui) {
+        let (frame, frame_p95) = self.recent("frame_wall");
+        let fps = if frame > 0. { 1000. / frame } else { 0. };
+        let (update, update_p95) = self.recent("update_cpu");
+        let (session, session_p95) = self.recent("session_update");
+        let (ticks, _) = self.recent("ticks_per_frame");
+        let (total, total_p95) = self.recent("tick_total");
+        ui.label(format!("{fps:.0} FPS, mean and p95 over the last {WINDOW} frames"));
+        self.frame_graph(ui);
+        egui::Grid::new("frame_timing_grid").num_columns(3).striped(true).show(ui, |ui| {
+            let mut row = |label: &str, mean: f64, p95: f64| {
+                ui.label(label);
+                ui.monospace(format!("{mean:7.2} ms"));
+                ui.monospace(format!("{p95:7.2} ms"));
+                ui.end_row();
+            };
+            row("Frame (wall)", frame, frame_p95);
+            row("CPU update", update, update_p95);
+            row("Render and wait", (frame - update).max(0.), (frame_p95 - update_p95).max(0.));
+            row("Session update", session, session_p95);
+            row("World tick", total, total_p95);
+            for (name, label) in TICK_STAGES.iter().chain(&[("tick_copy", "copy for view")]) {
+                let (mean, p95) = self.recent(name);
+                row(&format!("   {label}"), mean, p95);
+            }
+        });
+        ui.label(format!("{ticks:.2} ticks per frame"));
+        let over = |name| self.counters.get(name).copied().unwrap_or(0);
+        ui.label(format!("{} frames over 16.7 ms, {} over 33.3 ms", over("frames_over_16_7ms"), over("frames_over_33_3ms")));
+    }
+
+    /// The recent frame times as bars, with 60 and 30 FPS marks.
+    fn frame_graph(&self, ui: &mut egui::Ui) {
+        let Some(samples) = self.samples.get("frame_wall") else { return };
+        let width = ui.available_width().max(120.0);
+        let (response, painter) = ui.allocate_painter(egui::vec2(width, 64.0), egui::Sense::hover());
+        let rect = response.rect;
+        let ceiling = 50.0_f32;
+        let y = |ms: f32| rect.bottom() - (ms.min(ceiling) / ceiling) * rect.height();
+        painter.rect_filled(rect, 2.0, egui::Color32::from_black_alpha(90));
+        let step = rect.width() / WINDOW as f32;
+        for (i, &ms) in samples.values.iter().enumerate() {
+            let x = rect.left() + i as f32 * step;
+            let ms = ms as f32;
+            let color = if ms > 33.334 {
+                egui::Color32::from_rgb(235, 90, 70)
+            } else if ms > 16.667 {
+                egui::Color32::from_rgb(235, 175, 70)
+            } else {
+                egui::Color32::from_rgb(110, 200, 140)
+            };
+            painter.line_segment([egui::pos2(x, rect.bottom()), egui::pos2(x, y(ms))], egui::Stroke::new(step.max(1.0), color));
+        }
+        for (ms, label) in [(16.667, "60"), (33.334, "30")] {
+            let mark = y(ms);
+            painter.line_segment([egui::pos2(rect.left(), mark), egui::pos2(rect.right(), mark)], egui::Stroke::new(1.0, egui::Color32::from_white_alpha(60)));
+            painter.text(egui::pos2(rect.right() - 2.0, mark), egui::Align2::RIGHT_BOTTOM, label, egui::FontId::monospace(10.0), egui::Color32::from_white_alpha(140));
+        }
+    }
+
+    fn counters(&self, ui: &mut egui::Ui) {
+        egui::Grid::new("telemetry_counters").num_columns(2).striped(true).show(ui, |ui| {
+            for (name, value) in &self.counters {
+                ui.label(*name);
+                ui.monospace(value.to_string());
+                ui.end_row();
+            }
+            for (name, value) in &self.gauges {
+                ui.label(*name);
+                ui.monospace(format!("{value:.0}"));
+                ui.end_row();
+            }
+        });
+    }
+}
+
+/// Owns the telemetry windows' registration (App layer). `Telemetry` itself
+/// is an ordinary resource that lives for the whole run.
+#[derive(Resource)]
+pub struct TelemetryPanels {
+    menu: Option<MenuHandle>,
+}
+
+impl Service for TelemetryPanels {
+    type Layer = AppLayer;
+    type Deps = (ImguiManager,);
+
+    fn init(world: &mut World) -> Self {
+        let menu = ImguiManager::register::<Telemetry>(world).map_err(|e| warn!("{e}")).ok();
+        TelemetryPanels { menu }
+    }
+
+    fn shutdown(self, world: &mut World) {
+        if let Some(menu) = self.menu {
+            ImguiManager::unregister(world, menu);
+        }
+    }
+}
+
 pub fn snapshot(world: &World) -> Value {
     let t = world.resource::<Telemetry>();
     let timings: BTreeMap<_, _> = t.samples.iter().map(|(k, v)| (*k, v.snapshot())).collect();

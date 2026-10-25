@@ -231,8 +231,7 @@ pub(crate) fn haul(service: &mut SessionService, action: PileAction, pace: f32, 
 }
 
 pub fn input(
-    buttons: Res<ButtonInput<MouseButton>>,
-    keys: Res<ButtonInput<KeyCode>>,
+    input: Res<debug_ui::GameInput>,
     camera: Single<(&Camera, &GlobalTransform)>,
     window: Single<&Window>,
     scene: Res<crate::scene_view::SceneView>,
@@ -241,6 +240,7 @@ pub fn input(
     mut lab: ResMut<PileLab>,
     mut service: ResMut<SessionService>,
 ) {
+    let (keys, buttons) = (input.keys(), input.mouse());
     if lab.stock.is_none() {
         return;
     }
