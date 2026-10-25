@@ -262,7 +262,7 @@ impl Settlement {
 
     /// A threat's collision radius: its character's armor radius while
     /// plating is left, its body radius once it breaks.
-    fn threat_radius(&self, t: &Threat) -> Fx {
+    pub(super) fn threat_radius(&self, t: &Threat) -> Fx {
         let def = &self.characters[self.waves[t.wave as usize].character as usize];
         match def.health.as_ref().and_then(|h| h.armor.as_ref()) {
             Some(armor) if t.armor > 0 => armor.radius,

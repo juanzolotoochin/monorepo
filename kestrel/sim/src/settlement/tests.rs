@@ -40,7 +40,7 @@ fn agent(id: &str) -> Agent {
         skin: "worker".into(),
         position: p(-2.0, 1.0),
         speed: fx(2.0),
-        radius: fx(0.18),
+        radius: Some(fx(0.18)),
         capacity: 3,
         links: vec!["wood".into()],
         transfer_seconds: fx(0.1),

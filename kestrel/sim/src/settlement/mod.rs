@@ -353,6 +353,8 @@ impl Settlement {
             .collect::<Vec<_>>();
         for agent in agents.iter_mut().filter(|agent| agent.controlled) {
             agent.character = Some(player_character);
+            // Haulers steer around the avatar at the size it collides with.
+            agent.base_radius = content.rules.characters[player_character as usize].body.radius;
             agent.avatar.health = scenario.player_health;
             agent.avatar.max_health = scenario.player_health;
             agent.avatar.weapon = scenario.weapons.first().copied().unwrap_or_default();
@@ -529,11 +531,9 @@ impl Settlement {
                 label: "YOU".into(),
                 skin: "worker".into(),
                 position: spawn,
-                // Avatars move by `avatar::WALK_SPEED`/`RUN_SPEED`, so speed is
-                // unused. Radius is only what haulers steer around; the
-                // avatar itself collides with `BODY_RADIUS`.
+                // Unused: the avatar moves at its character's speeds.
                 speed: Fx::from_ratio(19, 5),
-                radius: Fx::from_ratio(9, 50),
+                radius: None,
                 capacity: 8,
                 links: Vec::new(),
                 transfer_seconds: Fx::from_ratio(2, 5),

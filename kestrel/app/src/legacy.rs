@@ -157,7 +157,7 @@ impl Scenario {
                     label: a.label.clone(),
                     skin: a.skin.clone(),
                     speed: a.speed.to_f32(),
-                    radius: a.radius.to_f32(),
+                    radius: a.radius.map_or_else(player_radius, Fx::to_f32),
                     capacity: a.capacity,
                     transfer_seconds: a.transfer_seconds.to_f32(),
                     cargo_anchor: a.cargo_anchor,
@@ -743,4 +743,13 @@ impl Simulation {
             valid: current.validate(),
         }
     }
+}
+
+/// A controlled avatar's radius, from the player character.
+fn player_radius() -> f32 {
+    let content = crate::lockstep::builtin_content();
+    content
+        .names
+        .character_index(content::character::PLAYER_CHARACTER)
+        .map_or(0.0, |ix| content.rules.characters[ix as usize].body.radius.to_f32())
 }

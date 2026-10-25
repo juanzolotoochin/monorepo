@@ -53,7 +53,7 @@ fn agent(id: &str) -> Agent {
         skin: "worker".into(),
         position: p(-2.0, 1.0),
         speed: fx(2.0),
-        radius: fx(0.18),
+        radius: Some(fx(0.18)),
         capacity: 3,
         links: vec!["wood".into()],
         transfer_seconds: fx(0.1),
@@ -66,6 +66,7 @@ fn agent(id: &str) -> Agent {
 fn player() -> Agent {
     let mut player = agent("player");
     player.controlled = true;
+    player.radius = None;
     player.links.clear();
     player.position = p(0.0, 0.0);
     player.capacity = 8;
@@ -796,4 +797,48 @@ fn releasing_keeps_a_depot_transfer_walking_to_its_dock() {
     assert!(!arena.s().agents[arena.player].route.is_empty(), "the dock walk continues");
     arena.step(ms(6000));
     assert_eq!(arena.s().agents[arena.player].cargo[item as usize], 2, "the transfer completed");
+}
+
+/// Haulers steer around the avatar at the radius it collides with: its
+/// character's body radius, not a scenario value.
+#[test]
+fn haulers_see_the_avatar_at_its_character_radius() {
+    let arena = Arena::combat(&[]);
+    let s = arena.s();
+    let player = &s.agents[arena.player];
+    let def = s.character_of(arena.player).expect("the avatar has a character");
+    assert_eq!(player.radius(), def.body.radius);
+    assert_eq!(super::haulers::body(player).radius, def.body.radius);
+}
+
+/// A brute is wide while its plating lasts and shrinks to its body once
+/// the armor breaks.
+#[test]
+fn brute_radius_follows_its_armor() {
+    let scenario = Scenario::parse(ARENA).unwrap();
+    let world = World::new_settlement(1, &test_content(), &scenario, &[]).unwrap();
+    let mut sim = Simulation::from_world(world, 1);
+    let brutes = sim.world().settlement().unwrap().waves.iter().position(|w| w.armor > 0).expect("the arena has a brute wave");
+    let mut arena = Arena { sim, player: 0, center: FxVec2::ZERO };
+    let s = arena.s_mut();
+    let mut brute = Threat {
+        id: 900,
+        wave: brutes as u16,
+        position: FxVec2::ZERO,
+        heading: Fx::ZERO,
+        travelled: Fx::ZERO,
+        hp: 5,
+        armor: 2,
+        pierced: false,
+        shocked_until: 0,
+        route: vec![],
+        stagger_until: 0,
+        knockback: FxVec2::ZERO,
+    };
+    let def = &s.characters[s.waves[brutes].character as usize];
+    let (body, plated) = (def.body.radius, def.health.as_ref().unwrap().armor.as_ref().unwrap().radius);
+    assert_eq!(s.threat_radius(&brute), plated);
+    brute.armor = 0;
+    assert_eq!(s.threat_radius(&brute), body);
+    assert!(body < plated);
 }

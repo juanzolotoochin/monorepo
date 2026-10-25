@@ -109,7 +109,8 @@ fn run(args: Vec<String>) -> Result<()> {
                 if paths.len() != 1 {
                     return Err("expected one scenario".into());
                 }
-                scene.scenario = Some(read_ron(&paths[0])?);
+                let text = fs::read_to_string(&paths[0]).map_err(|e| format!("{}: {e}", paths[0]))?;
+                scene.scenario = Some(voxel_assets::Scenario::from_ron(&text).map_err(|e| format!("{}: {e}", paths[0]))?);
             }
             let mut prefabs = vec![];
             for path in flags.get("--prefab").into_iter().flatten() {

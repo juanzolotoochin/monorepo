@@ -143,7 +143,7 @@ impl AgentState {
             name: String::new(),
             home: position,
             speed: def.speed.div_int(content::TICKS_PER_SECOND as i64),
-            base_radius: def.radius,
+            base_radius: def.radius.unwrap_or(Fx::ZERO),
             links: links.into_iter().map(|(_, i)| i as LinkIx).collect(),
             transfer_ticks: scenario::ticks(def.transfer_seconds),
             equipment: def.equipment.as_ref().map(|e| EquipmentDef {
