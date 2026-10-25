@@ -243,7 +243,10 @@ pub fn update(
         }
     }
     for (parent, mut visibility) in &mut exhausts {
-        if let Some((.., pose)) = poses.iter().find(|(e, ..)| *e == parent.parent()) {
+        let owner = std::iter::once(parent.parent())
+            .chain(parents.iter_ancestors(parent.parent()))
+            .find_map(|ancestor| poses.iter().find(|(entity, ..)| *entity == ancestor));
+        if let Some((.., pose)) = owner {
             *visibility = if pose.airborne && pose.jump.is_none() {
                 Visibility::Inherited
             } else {

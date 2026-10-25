@@ -393,7 +393,9 @@ pub fn apply(world: &mut World) {
             };
             actor.iter().any(|a| Some(a.part) == exact || Some(a.part) == fallback)
         });
-        let hide=overridden || (parent.parent()==player && exhaust.is_none() && actor.iter().any(|a|a.part==ActorPart::Body));
+        // Exhaust starts hidden and is revealed only by the flight system.
+        // Applying a style must not turn it on during ground movement.
+        let hide=exhaust.is_some() || overridden || (parent.parent()==player && actor.iter().any(|a|a.part==ActorPart::Body));
         *visibility=if hide {Visibility::Hidden} else {Visibility::Inherited};
     }
     for a in &actor {

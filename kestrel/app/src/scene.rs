@@ -608,22 +608,6 @@ pub fn setup(
             Visibility::default(),
         ))
         .with_children(|p| {
-            for x in [-0.32, 0.32] {
-                block(
-                    p,
-                    &cube,
-                    &frame,
-                    Vec3::new(x, 0.8, -0.22),
-                    Vec3::new(0.2, 0.4, 0.24),
-                );
-                p.spawn((
-                    crate::jetpack::Exhaust,
-                    Mesh3d(cube.clone()),
-                    MeshMaterial3d(cyan.clone()),
-                    Transform::from_xyz(x, 0.42, -0.22).with_scale(Vec3::new(0.12, 0.5, 0.12)),
-                    Visibility::Hidden,
-                ));
-            }
             let body = Transform::from_xyz(0.0, 0.94, 0.0);
             p.spawn((
                 Part {
@@ -635,6 +619,18 @@ pub fn setup(
                 Visibility::default(),
             ))
             .with_children(|hip| {
+                // The backpack is part of the chest below. Keep its exhaust
+                // on the animated body, so the effect follows torso motion.
+                for x in [-0.14, 0.14] {
+                    hip.spawn((
+                        crate::jetpack::Exhaust,
+                        Mesh3d(cube.clone()),
+                        MeshMaterial3d(cyan.clone()),
+                        Transform::from_xyz(x, -0.49, -0.48)
+                            .with_scale(Vec3::new(0.10, 0.5, 0.10)),
+                        Visibility::Hidden,
+                    ));
+                }
                 block(
                     hip,
                     &cube,
@@ -706,7 +702,7 @@ pub fn setup(
                         block(
                             b,
                             &cube,
-                            &cyan,
+                            &frame,
                             Vec3::new(x, 0.22, -0.48),
                             Vec3::new(0.07, 0.27, 0.025),
                         );
