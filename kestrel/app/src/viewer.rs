@@ -1,9 +1,15 @@
 //! Character studio: repeatable poses from the production rig, viewed in place.
+//!
+//! Studio is App flow, not a session (`flow::Front::Studio`): there is no
+//! simulation and no world. It dresses the player's body in the selected
+//! character's scene pack on a stage of its own, and everything it spawns
+//! goes when it closes.
 use crate::{
     assets::SceneLibrary,
     character_catalog::{CharacterEntry, CharacterSource},
     character::{JumpMotion, LocalBlade, Player},
     combat::Attack,
+    flow::Front,
     gameplay::Controls,
 };
 use bevy::{
@@ -11,8 +17,12 @@ use bevy::{
     camera::ScalingMode,
     prelude::*,
     render::view::screenshot::{save_to_disk, Screenshot},
+    state::state_scoped::DespawnOnExit,
 };
+use service::{AppLayer, AppServices, Phase, Service};
 use sim::settlement::avatar::SwordStroke;
+use std::sync::Arc;
+use voxel_assets::ScenePack;
 
 // Rig roots use y=0 as their standing surface. Keep the inspection floor and
 // root on the same plane so poses can be judged against actual foot contact.
@@ -114,9 +124,12 @@ pub enum ViewAngle {
     Front,
     Side,
 }
+/// Character Studio's playback (App layer). `active` while Studio is open.
 #[derive(Resource, Default, Clone, Copy)]
 pub struct Viewer {
     pub active: bool,
+    /// `--character-studio`: open Studio as soon as the front end is up.
+    open_on_start: bool,
     pub character: usize,
     pub clip: Clip,
     pub angle: ViewAngle,
@@ -243,27 +256,185 @@ impl Viewer {
     }
 }
 
-pub fn not_active(viewer: Res<Viewer>) -> bool {
-    !viewer.active
-}
+impl Service for Viewer {
+    type Layer = AppLayer;
+    type Deps = ();
 
-/// Studio selects only the pack containing the chosen rig. Gameplay scene
-/// setup and simulation remain independent of this asset selection.
-pub fn select_character_pack(viewer: Res<Viewer>, mut library: ResMut<SceneLibrary>) {
-    if !viewer.active { return; }
-    if let Some(entry) = library.characters.get(viewer.character) {
-        library.current = entry.scene_index;
-        library.requested = None;
+    fn init(world: &mut World) -> Self {
+        Viewer::from_args(world.resource::<SceneLibrary>(), &std::env::args().collect::<Vec<_>>())
+    }
+
+    fn systems(app: &mut App) {
+        let open = in_state(Front::Studio);
+        app.add_systems(OnEnter(Front::Studio), enter)
+            .add_systems(OnExit(Front::Studio), leave)
+            .add_service_systems::<Self, _>(
+                Phase::Input,
+                (
+                    open_on_start.run_if(in_state(Front::Menu)),
+                    (input.run_if(crate::control::interactive), refresh_stage).chain().run_if(open.clone()),
+                ),
+            )
+            .add_service_systems::<Self, _>(
+                Phase::Present,
+                (
+                    (drive, crate::character::animate_character, crate::style::select_weapon, pose_selected_rig).chain(),
+                    camera,
+                    capture.run_if(crate::control::interactive),
+                )
+                    .chain()
+                    .run_if(open.clone()),
+            )
+            .add_systems(
+                PostUpdate,
+                (metrics, crate::effects::blade_trail)
+                    .after(bevy::transform::TransformSystems::Propagate)
+                    .run_if(crate::control::rendered)
+                    .run_if(open),
+            );
     }
 }
 
-pub fn sync_hud(viewer: Res<Viewer>, mut roots: Query<&mut Node, With<crate::scene::HudRoot>>) {
-    for mut node in &mut roots {
-        node.display = if viewer.active {
-            Display::None
-        } else {
-            Display::Flex
-        };
+impl Viewer {
+    /// Studio as the command line asks for it: `--character-studio` opens
+    /// it, `--studio-character`, `--studio-clip` and `--studio-angle` pick
+    /// what it shows. `scenes.initial`'s character is the default.
+    pub fn from_args(scenes: &SceneLibrary, args: &[String]) -> Self {
+        let mut viewer = Viewer::default();
+        if !args.iter().any(|arg| arg == "--character-studio") {
+            return viewer;
+        }
+        let value = |flag: &str| args.windows(2).find(|pair| pair[0] == flag).map(|pair| pair[1].as_str());
+        let initial = value("--scene").and_then(|id| scenes.index(id).ok()).unwrap_or(0);
+        viewer.begin();
+        viewer.open_on_start = true;
+        viewer.character = value("--studio-character")
+            .map(|id| scenes.characters.index_for_id(id).unwrap_or_else(|error| panic!("{error}")))
+            .or_else(|| scenes.character(initial).and_then(|character| scenes.characters.index_for_id(&character.id).ok()))
+            .or_else(|| (!scenes.characters.is_empty()).then_some(0))
+            .expect("Character Studio needs at least one character");
+        if let Some(clip) = value("--studio-clip") {
+            viewer.clip = Clip::from_id(clip).unwrap_or(Clip::Run);
+        }
+        if !viewer.clip.supports(&scenes.characters[viewer.character]) {
+            viewer.clip = if Clip::Run.supports(&scenes.characters[viewer.character]) { Clip::Run } else { Clip::Idle };
+        }
+        if let Some(angle) = value("--studio-angle") {
+            viewer.angle = match angle {
+                "front" => ViewAngle::Front,
+                "side" => ViewAngle::Side,
+                _ => ViewAngle::ThreeQuarter,
+            };
+        }
+        viewer
+    }
+
+    /// Readies Studio for a scene's character, the menu's choice: its actor,
+    /// or any character it brings. Returns the character, if it has one.
+    pub fn open_for_scene(&mut self, scenes: &SceneLibrary, scene: usize) -> Option<usize> {
+        let index = scenes
+            .character(scene)
+            .map(|character| character.scene_index)
+            .or_else(|| scenes.characters.first().map(|character| character.scene_index))?;
+        let character = scenes
+            .characters
+            .iter()
+            .position(|entry| entry.scene_index == index && matches!(entry.source, CharacterSource::Actor))
+            .or_else(|| scenes.characters.iter().position(|entry| entry.scene_index == index))?;
+        self.begin();
+        self.character = character;
+        if !Clip::Run.supports(&scenes.characters[character]) {
+            self.clip = Clip::Idle;
+        }
+        Some(character)
+    }
+}
+
+/// The scene pack Studio dresses its character from, while open.
+#[derive(Resource)]
+pub struct StudioPack {
+    /// The pack's index in the `SceneLibrary`.
+    pub index: usize,
+    pub pack: Arc<ScenePack>,
+}
+
+/// The Studio's copy of the player's body.
+#[derive(Component)]
+struct StudioBody;
+
+/// `--character-studio` opens Studio once the menu is up.
+fn open_on_start(mut viewer: ResMut<Viewer>, mut front: ResMut<NextState<Front>>) {
+    if std::mem::take(&mut viewer.open_on_start) {
+        front.set(Front::Studio);
+    }
+}
+
+/// Opens Studio: the stage, its panels and the character. The HUD hides.
+fn enter(world: &mut World) {
+    world.resource_mut::<Viewer>().active = true;
+    *world.resource_mut::<Controls>() = Controls::default();
+    *world.resource_mut::<crate::effects::Feedback>() = default();
+    for mut node in world.query_filtered::<&mut Node, With<crate::scene::HudRoot>>().iter_mut(world) {
+        node.display = Display::None;
+    }
+    world.run_system_cached(setup).expect("Character Studio's stage");
+    build_stage(world);
+}
+
+/// Closes Studio. Its entities go with `Front::Studio`; the rig preview and
+/// the pack go here, and the HUD comes back for the next world.
+fn leave(world: &mut World) {
+    world.resource_mut::<Viewer>().active = false;
+    world.remove_resource::<StudioPack>();
+    let bodies: Vec<_> = world.query_filtered::<Entity, With<StudioBody>>().iter(world).collect();
+    for entity in bodies {
+        world.despawn(entity);
+    }
+    if let Some(state) = world.remove_resource::<StudioRig>() {
+        world.entity_mut(state.rig.root).despawn();
+    }
+    for mut node in world.query_filtered::<&mut Node, With<crate::scene::HudRoot>>().iter_mut(world) {
+        node.display = Display::Flex;
+    }
+}
+
+/// Dresses a fresh copy of the player's body in the selected character's
+/// pack, the way a world would, but scoped to Studio.
+fn build_stage(world: &mut World) {
+    let viewer = *world.resource::<Viewer>();
+    let Some(index) = world.resource::<SceneLibrary>().characters.get(viewer.character).map(|entry| entry.scene_index) else {
+        return;
+    };
+    let old: Vec<_> = world.query_filtered::<Entity, With<StudioBody>>().iter(world).collect();
+    for entity in old {
+        world.despawn(entity);
+    }
+    let pack = world.resource::<SceneLibrary>().scenes[index].clone();
+    let art = world.resource::<crate::scene::SceneArt>().clone();
+    {
+        let mut commands = world.commands();
+        crate::scene::spawn_player(&mut commands, &art, &pack.scene);
+    }
+    world.flush();
+    crate::style::apply(world, &pack, true);
+    // The body is built for a world; no world is running, so it moves to
+    // Studio's scope.
+    let bodies: Vec<_> = world.query_filtered::<Entity, (With<Player>, With<service::WorldScoped>)>().iter(world).collect();
+    for entity in bodies {
+        world
+            .entity_mut(entity)
+            .remove::<service::WorldScoped>()
+            .insert((StudioBody, DespawnOnExit(Front::Studio)));
+    }
+    world.insert_resource(StudioPack { index, pack });
+}
+
+/// Rebuilds the character when the selection moves to another pack.
+fn refresh_stage(world: &mut World) {
+    let viewer = *world.resource::<Viewer>();
+    let wanted = world.resource::<SceneLibrary>().characters.get(viewer.character).map(|entry| entry.scene_index);
+    if wanted.is_some() && wanted != world.get_resource::<StudioPack>().map(|studio| studio.index) {
+        build_stage(world);
     }
 }
 
@@ -349,7 +520,7 @@ pub use ui::{input, setup};
 /// Set up in-place motion before the shared animation and trail systems.
 pub fn drive(
     time: Res<Time>,
-    library: Res<SceneLibrary>,
+    studio: Option<Res<StudioPack>>,
     mut viewer: ResMut<Viewer>,
     mut controls: ResMut<Controls>,
     mut player: Single<&mut Transform, With<Player>>,
@@ -372,7 +543,8 @@ pub fn drive(
     } else {
         0.0
     });
-    let motion = crate::character::motion_profile(&library.scenes[library.current]);
+    let Some(studio) = studio else { return };
+    let motion = crate::character::motion_profile(&studio.pack);
     let run_step = crate::character::step_distance_for_speed(motion.step_distance, 1.5);
     let gait_step = if matches!(viewer.clip, Clip::Run | Clip::Turn | Clip::RunJump) {
         run_step
@@ -458,7 +630,7 @@ pub fn pose_selected_rig(world: &mut World) {
         let Some(entry) = library.characters.get(viewer.character) else { return };
         (entry.scene_index, entry.source.clone())
     };
-    let npc = viewer.active && scene_index == world.resource::<SceneLibrary>().current
+    let npc = viewer.active && Some(scene_index) == world.get_resource::<StudioPack>().map(|studio| studio.index)
         && matches!(source, CharacterSource::Skin(_));
     for mut visibility in world.query_filtered::<&mut Visibility, With<Player>>().iter_mut(world) {
         let desired = if npc { Visibility::Hidden } else { Visibility::Inherited };
@@ -865,30 +1037,75 @@ mod tests {
 
     #[test]
     fn studio_character_action_selects_a_specific_character() {
-        let mut library = SceneLibrary::new();
+        // The ox and the ghoul share a scene pack; picking one picks that rig.
+        let library = SceneLibrary::new();
         let ox = library.characters.index_for_id("skin:ox").unwrap();
         let ghoul = library.characters.index_for_id("skin:ghoul").unwrap();
-        library.current = library.characters[ox].scene_index;
-        let next = library.characters[ghoul].scene_index;
-        assert_eq!(library.current, next);
-        let menu = crate::menu::LaunchMenu::new(false, &library);
+        assert_eq!(library.characters[ox].scene_index, library.characters[ghoul].scene_index);
         let mut viewer = Viewer::default();
         viewer.begin();
         viewer.character = ox;
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .insert_resource(ButtonInput::<KeyCode>::default())
+            .init_resource::<NextState<Front>>()
             .insert_resource(library)
-            .insert_resource(menu)
             .insert_resource(viewer)
-            .add_systems(Update, (input, select_character_pack).chain());
+            .add_systems(Update, input);
         app.world_mut().spawn((Action::Character(ghoul), Interaction::Pressed,
             BackgroundColor::default(), Node::default()));
         app.update();
-        assert_eq!(app.world().resource::<SceneLibrary>().current, next);
-        assert_eq!(app.world().resource::<SceneLibrary>().requested, None);
         assert_eq!(app.world().resource::<Viewer>().character, ghoul);
+        assert!(matches!(app.world().resource::<NextState<Front>>(), NextState::Unchanged), "Studio stays open");
     }
+    #[test]
+    fn studio_builds_its_character_outside_a_session_and_leaves_nothing_behind() {
+        let options = crate::control::Options { simulation: true, ..default() };
+        let hub = crate::control::Hub::new(options.clone()).unwrap();
+        let library = SceneLibrary::new();
+        let ox = library.characters.index_for_id("skin:ox").unwrap();
+        let glade = library.index("moonlit-glade").unwrap();
+        let mut app = crate::test_front_app(options, library, hub, None);
+        for _ in 0..3 {
+            app.update();
+        }
+        let players = |app: &mut App| app.world_mut().query_filtered::<(), With<Player>>().iter(app.world()).count();
+        let hud_shown = |app: &mut App| {
+            app.world_mut()
+                .query_filtered::<&Node, With<crate::scene::HudRoot>>()
+                .iter(app.world())
+                .all(|node| node.display != Display::None)
+        };
+        assert_eq!(players(&mut app), 0, "no body without a world");
+
+        let opened = app.world_mut().resource_mut::<Viewer>().open_for_scene(&SceneLibrary::new(), glade);
+        assert!(opened.is_some());
+        app.world_mut().resource_mut::<NextState<Front>>().set(Front::Studio);
+        app.update();
+        assert!(app.world().resource::<Viewer>().active);
+        assert_eq!(players(&mut app), 1);
+        assert_eq!(app.world().resource::<StudioPack>().index, glade);
+        assert!(!hud_shown(&mut app));
+        assert_eq!(*app.world().resource::<State<service::SessionState>>().get(), service::SessionState::Off, "Studio is no session");
+
+        // Picking a character from another pack rebuilds the body.
+        app.world_mut().resource_mut::<Viewer>().character = ox;
+        app.update();
+        let ox_pack = SceneLibrary::new().characters[ox].scene_index;
+        assert_eq!(app.world().resource::<StudioPack>().index, ox_pack);
+        assert_eq!(players(&mut app), 1);
+        assert!(app.world().get_resource::<StudioRig>().is_some(), "the ox poses through its rig");
+
+        app.world_mut().resource_mut::<NextState<Front>>().set(Front::Menu);
+        app.update();
+        assert!(!app.world().resource::<Viewer>().active);
+        assert_eq!(players(&mut app), 0);
+        assert!(app.world().get_resource::<StudioPack>().is_none());
+        assert!(app.world().get_resource::<StudioRig>().is_none());
+        assert_eq!(app.world_mut().query_filtered::<(), Or<(With<Root>, With<Stage>)>>().iter(app.world()).count(), 0);
+        assert!(hud_shown(&mut app));
+    }
+
     #[test]
     fn side_blade_angle_uses_the_ground_as_zero() {
         assert_eq!(side_blade_angle(Vec3::Z), Some(0.0));

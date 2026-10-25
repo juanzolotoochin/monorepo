@@ -2,15 +2,15 @@
 //! and walk-and-toss jobs are simulated (`kestrel/sim::settlement::piles`); this
 //! module mirrors them and turns clicks into commands.
 use crate::{
-    assets::SceneLibrary,
     character::Player, combat::Obstacle, gameplay::cursor_ground,
     navigation::Disc,
-    lockstep::Game,
+    lockstep::{SessionService, WorldMirror},
     pile_model::{pile_radius, unit_positions, Pile, PileId, Stock},
 };
 use sim::settlement::piles::PileAction;
 use sim::CommandKind;
 use bevy::prelude::*;
+use service::{AppServices, Phase, Service, WorldLayer, WorldScoped, WorldState};
 use voxel_assets::{Mineral, PileLayout};
 
 fn mineral_name(m: Mineral) -> &'static str {
@@ -42,17 +42,17 @@ fn point(p: [f32; 2]) -> Vec3 {
 fn place(p: &Pile) -> Vec3 {
     Vec3::new(p.position[0], p.height, p.position[1])
 }
-#[derive(Clone)]
+/// The lab's mesh and materials, made once and shared by every world.
+#[derive(Resource, Clone)]
 struct LabAssets {
     cube: Handle<Mesh>,
     mineral: [Handle<StandardMaterial>; 3],
     dark: Handle<StandardMaterial>,
     trim: Handle<StandardMaterial>,
 }
-/// The view's copy of the simulated pile lab.
+/// The view's copy of the simulated pile lab (World layer).
 #[derive(Resource)]
 pub struct PileLab {
-    scene: usize,
     pub(crate) stock: Option<Stock>,
     layout: Option<PileLayout>,
     assets: Option<LabAssets>,
@@ -72,7 +72,6 @@ pub struct PileLab {
 impl Default for PileLab {
     fn default() -> Self {
         Self {
-            scene: usize::MAX,
             stock: None,
             layout: None,
             assets: None,
@@ -88,8 +87,41 @@ impl Default for PileLab {
         }
     }
 }
+/// A piece of the lab's view; it goes with the world.
 #[derive(Component)]
+#[require(WorldScoped)]
 pub struct LabEntity;
+
+impl Service for PileLab {
+    type Layer = WorldLayer;
+    type Deps = (WorldMirror, crate::scene_view::SceneView);
+
+    fn init(world: &mut World) -> Self {
+        world.run_system_cached_with(view::build, PileLab::default()).expect("building the pile lab's view")
+    }
+
+    fn systems(app: &mut App) {
+        let active = in_state(WorldState::Active);
+        app.add_service_systems::<Self, _>(Phase::Input, input.run_if(crate::control::interactive).run_if(active.clone()))
+            .add_service_systems::<Self, _>(Phase::Mirror, mirror.run_if(active.clone()))
+            .add_service_systems::<Self, _>(
+                Phase::Present,
+                (
+                    spawn_tosses,
+                    update_transit,
+                    render,
+                    update_display.run_if(crate::control::rendered),
+                    showcase.run_if(crate::control::interactive),
+                )
+                    .chain()
+                    .run_if(active.clone()),
+            )
+            .add_systems(
+                PostUpdate,
+                captions.after(bevy::transform::TransformSystems::Propagate).run_if(crate::control::rendered).run_if(active),
+            );
+    }
+}
 #[derive(Component)]
 pub struct MineralUnit;
 #[derive(Component)]
@@ -133,7 +165,7 @@ mod view;
 pub use demo::showcase;
 pub use transfer::{spawn_tosses, update_transit};
 pub(crate) use transfer::{Destination, Transit};
-pub use view::{captions, render, setup_scene, update_display};
+pub use view::{captions, render, update_display};
 
 pub(crate) fn mineral(material: u8) -> Mineral {
     match material {
@@ -156,12 +188,12 @@ fn ray_sphere(origin: Vec3, direction: Vec3, center: Vec3, radius: f32) -> Optio
 
 /// Fills the view's piles, carriers, and this player's job state from the
 /// simulation.
-pub fn mirror(game: Res<Game>, mut lab: ResMut<PileLab>) {
-    let Some(sim) = game.current.as_ref().and_then(|s| s.piles.as_ref()) else {
+pub fn mirror(service: Res<SessionService>, mirror: Res<WorldMirror>, mut lab: ResMut<PileLab>) {
+    let Some(sim) = mirror.current.as_ref().and_then(|s| s.piles.as_ref()) else {
         return;
     };
-    let local = |p: fx::FxVec2| [(p.x - game.center.x).to_f32(), (p.y - game.center.y).to_f32()];
-    let ground = |p: fx::FxVec2| game.world().map_or(0.0, |w| w.terrain().height(p).to_f32());
+    let local = |p: fx::FxVec2| [(p.x - mirror.center.x).to_f32(), (p.y - mirror.center.y).to_f32()];
+    let ground = |p: fx::FxVec2| service.world().map_or(0.0, |w| w.terrain().height(p).to_f32());
     let piles = sim
         .piles
         .iter()
@@ -170,10 +202,10 @@ pub fn mirror(game: Res<Game>, mut lab: ResMut<PileLab>) {
             (id, pile)
         })
         .collect();
-    lab.collector = sim.collector.as_ref().map(|c| game.to_view(c.position).with_y(ground(c.position)));
+    lab.collector = sim.collector.as_ref().map(|c| mirror.to_view(c.position).with_y(ground(c.position)));
     lab.collected = sim.collector.as_ref().map_or_else(Vec::new, |c| c.stored.clone());
     let view = |c: sim::settlement::piles::Cargo| crate::pile_model::Cargo { material: c.material.map(mineral), units: c.units, capacity: c.capacity };
-    let me = game.player();
+    let me = mirror.player();
     let mine = me.and_then(|m| sim.hauler(m));
     let cargo = view(me.map_or_else(|| sim.cargo(u16::MAX), |m| sim.cargo(m)));
     let others: u64 = sim.haulers.iter().filter(|(&a, _)| Some(a) != me).map(|(_, h)| u64::from(h.cargo.units)).sum();
@@ -192,10 +224,10 @@ pub fn mirror(game: Res<Game>, mut lab: ResMut<PileLab>) {
 
 /// Starts a haul: the player walks to the pile and transfers, `pace`
 /// seconds per unit (zero: all at once).
-pub(crate) fn haul(game: &mut Game, action: PileAction, pace: f32, approach: Option<Vec3>) {
-    let Some(agent) = game.player() else { return };
-    let approach = approach.map(|p| game.to_sim(p));
-    game.command(CommandKind::Pile { agent, action, pace: fx::Fx::quantize(pace), approach });
+pub(crate) fn haul(service: &mut SessionService, action: PileAction, pace: f32, approach: Option<Vec3>) {
+    let Some(agent) = service.player() else { return };
+    let approach = approach.map(|p| service.to_sim(p));
+    service.command(CommandKind::Pile { agent, action, pace: fx::Fx::quantize(pace), approach });
 }
 
 pub fn input(
@@ -203,11 +235,11 @@ pub fn input(
     keys: Res<ButtonInput<KeyCode>>,
     camera: Single<(&Camera, &GlobalTransform)>,
     window: Single<&Window>,
-    library: Res<SceneLibrary>,
+    scene: Res<crate::scene_view::SceneView>,
     source_buttons: Query<(&Interaction, &SourceButton)>,
     panels: Query<&Interaction, With<LabPanel>>,
     mut lab: ResMut<PileLab>,
-    mut game: ResMut<Game>,
+    mut service: ResMut<SessionService>,
 ) {
     if lab.stock.is_none() {
         return;
@@ -218,7 +250,7 @@ pub fn input(
     }
     let source_button = source_buttons.iter().find(|(i, _)| **i == Interaction::Pressed).map(|(_, b)| b.0);
     if let Some(index) = source_button {
-        game.command(CommandKind::Dispense { dispenser: index as u32, units: 5 });
+        service.command(CommandKind::Dispense { dispenser: index as u32, units: 5 });
         return;
     }
     let Some(cursor) = window.cursor_position() else {
@@ -241,14 +273,14 @@ pub fn input(
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map(|(_, index)| index);
     if let Some(index) = source {
-        game.command(CommandKind::Dispense { dispenser: index as u32, units: 5 });
+        service.command(CommandKind::Dispense { dispenser: index as u32, units: 5 });
         return;
     }
     if cursor.y < 110.0 || cursor.y > window.height() - 135.0 {
         return;
     }
-    let ground = if library.has_feature(voxel_assets::SceneFeature::Digging) {
-        crate::digging::ground_hit(ray, &game)
+    let ground = if scene.has_feature(voxel_assets::SceneFeature::Digging) {
+        crate::digging::ground_hit(ray, &service)
     } else {
         cursor_ground(camera.0, camera.1, &window)
     };
@@ -269,7 +301,7 @@ pub fn input(
     let collector = lab.collector.and_then(|c| ray_sphere(ray.origin, *ray.direction, c + Vec3::Y * 1.0, 1.1));
     if collector.is_some() && pile.is_none() {
         if carrying {
-            haul(&mut game, PileAction::Deliver, 0.18, None);
+            haul(&mut service, PileAction::Deliver, 0.18, None);
         } else {
             lab.notice = "Collect ore from a pile, then click the collector to deliver it.".into();
         }
@@ -292,10 +324,10 @@ pub fn input(
             PileAction::Deposit(id)
         }
     } else if carrying {
-        PileAction::Drop(game.to_sim(ground))
+        PileAction::Drop(service.to_sim(ground))
     } else {
         lab.notice = "Click a pile to collect it, or right click to move.".into();
         return;
     };
-    haul(&mut game, action, 0.18, None);
+    haul(&mut service, action, 0.18, None);
 }

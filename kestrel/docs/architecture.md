@@ -54,6 +54,7 @@ is a minimal binary over `kestrel/view`, used to test sessions and networking.
 | `net` | yes | Turns, input delay, time sync, `Transport` and `Sessions` traits, loopback simulator, UDP |
 | `session` | yes | One running game for a front end: host, client or replay, with input-log recording |
 | `headless` | tool | Runs a save plus an input log, writes per-tick hashes, benchmarks |
+| `service` | no (Bevy) | Service layers for front ends: App, Session and World services, their states, and the frame phases ([proposal](proposals/service_layers.md)) |
 | `view` | no (Bevy) | Consumes the render extract: interpolation, prediction, overlays |
 | `play` | no (Bevy) | Minimal binary: single-player, host, join |
 | `app` | no (Bevy) | The game: every scene, scripted demos, inspection protocol |
@@ -241,6 +242,10 @@ Details: [desyncs and host loss](design/desync-host-loss.html).
   Release builds resync the client through the join path.
 - **Joining:** the joiner receives a save plus the inputs since that save.
   Chunks whose hash already matches can be skipped.
+- **Map changes:** one session goes through several worlds. The host sends
+  every client a save of the new world, as for a join, and its first tick
+  waits until all of them have loaded it. Ticks restart at 0 in each world,
+  so packets carry the world's number next to the session's epoch.
 - **Host leaving:** the session ends. All peers autosave on the same ticks and
   also save when the host is lost, so anyone can re-host manually. There is no
   automatic migration yet, but the protocol treats the host as a role (authority
@@ -274,6 +279,11 @@ Details: [desyncs and host loss](design/desync-host-loss.html).
 ## View (Bevy)
 
 Details: [view layer](design/view-layer.html).
+
+`kestrel/app` is organized as App, Session and World services
+([service layers](proposals/service_layers.md)): what lives for the whole
+process, for one session, and for one loaded world. A world's views start
+when it does and go with it.
 
 - **Data flow:**
   1. Bevy input becomes a command, quantized and tagged with tick t + D.

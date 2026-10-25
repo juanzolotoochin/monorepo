@@ -1,6 +1,5 @@
 //! Render-only character rig and continuous posing shared by local and peer avatars.
 use crate::{
-    assets::SceneLibrary,
     combat::{
         lerp, smooth, spear_pose, ActionMotion, Attack, ACTIVE_END, ATTACK_END, REBOUND_END,
         REST_ANGLE, WINDUP,
@@ -277,13 +276,52 @@ impl MotionState {
     }
 }
 
+/// The local player's body (World layer): placed where the simulation has
+/// the avatar, animated, and its swings and hits played. Character Studio
+/// poses the same body outside a world (see `viewer`).
+#[derive(Resource)]
+pub struct Avatar;
+
+impl service::Service for Avatar {
+    type Layer = service::WorldLayer;
+    type Deps = (crate::lockstep::SessionService, crate::lockstep::WorldMirror, crate::scene_view::SceneView);
+
+    fn init(_world: &mut World) -> Self {
+        Avatar
+    }
+
+    fn systems(app: &mut App) {
+        use service::{AppServices, Phase, WorldState};
+        let active = in_state(WorldState::Active);
+        app.add_service_systems::<Self, _>(Phase::Mirror, crate::lockstep::follow_avatar.run_if(active.clone()))
+            .add_service_systems::<Self, _>(
+                Phase::Present,
+                (
+                    (crate::combat::combat, animate_character, crate::style::select_weapon).chain(),
+                    crate::preview::frame_character.run_if(crate::control::interactive),
+                    crate::gameplay::draw_navigation.run_if(crate::control::interactive).run_if(crate::control::rendered),
+                )
+                    .chain()
+                    .run_if(active.clone()),
+            )
+            .add_systems(
+                PostUpdate,
+                crate::effects::blade_trail
+                    .after(bevy::transform::TransformSystems::Propagate)
+                    .run_if(crate::control::rendered)
+                    .run_if(active),
+            );
+    }
+}
+
 pub fn animate_character(
     time: Res<Time>,
     controls: Res<Controls>,
     feedback: Res<Feedback>,
     flight: Option<Res<crate::jetpack::Flight>>,
-    game: Res<crate::lockstep::Game>,
-    library: Res<SceneLibrary>,
+    mirror: Option<Res<crate::lockstep::WorldMirror>>,
+    scene: Option<Res<crate::scene_view::SceneView>>,
+    studio: Option<Res<crate::viewer::StudioPack>>,
     contacts: Option<Res<ActorFootContacts>>,
     viewer: Res<crate::viewer::Viewer>,
     player: Single<(Entity, &Transform), With<Player>>,
@@ -303,7 +341,10 @@ pub fn animate_character(
     } else {
         flight.as_ref().is_some_and(|f| f.airborne)
     };
-    let mut profile = motion_profile(&library.scenes[library.current]);
+    // The world's scene, or in Character Studio the character's pack.
+    let pack = if viewer.active { studio.as_ref().map(|s| &s.pack) } else { scene.as_ref().map(|s| &s.pack) };
+    let Some(pack) = pack else { return };
+    let mut profile = motion_profile(pack);
     if let Some(contacts) = &contacts {
         profile = contacts.adapt_motion(profile);
     }
@@ -334,11 +375,10 @@ pub fn animate_character(
     } else {
         (time.elapsed_secs() * 2.0).sin() * 0.012
     };
-    let dig = game
-        .player()
-        .zip(game.current.as_ref())
-        .and_then(|(i, s)| s.agents[i as usize].avatar.dig.as_ref())
-        .map(|d| dig_age(&game, d));
+    let dig = mirror.as_ref().and_then(|mirror| {
+        let (i, s) = mirror.player().zip(mirror.current.as_ref())?;
+        s.agents[i as usize].avatar.dig.as_ref().map(|d| dig_age(mirror, d))
+    });
     let mut local_profile = profile;
     local_profile.step_distance /= player.1.scale.x.max(0.1);
     let mut pose = Pose {
@@ -350,7 +390,7 @@ pub fn animate_character(
         airborne,
         jump: jump_motion(
             flight.as_ref().map_or(JumpPhase::Grounded, |f| f.jump),
-            game.tick as f32 - 1.0 + game.alpha,
+            mirror.as_ref().map_or(0.0, |m| m.tick as f32 - 1.0 + m.alpha),
             player.1.translation.y,
             flight.as_ref().map_or(0.0, |f| f.support),
         ),
@@ -368,7 +408,7 @@ pub fn animate_character(
         if viewer.active {
             Some(crate::viewer::studio_surface_height(&viewer, point.z))
         } else {
-            crate::jetpack::height(&library, point)
+            crate::jetpack::height(pack, point)
         }
     });
     if pose.motion.plant_feet && pose.speed > 0.05 && !pose.airborne && pose.jump.is_none() {
@@ -751,8 +791,8 @@ fn jump_pose(kind: PartKind, mut transform: Transform, phase: JumpMotion) -> Tra
 const CHOP: f32 = 0.5;
 
 /// Seconds into a dig, at render time.
-pub fn dig_age(game: &crate::lockstep::Game, dig: &sim::settlement::avatar::Dig) -> f32 {
-    let now = game.tick as f32 - 1.0 + game.alpha;
+pub fn dig_age(mirror: &crate::lockstep::WorldMirror, dig: &sim::settlement::avatar::Dig) -> f32 {
+    let now = mirror.tick as f32 - 1.0 + mirror.alpha;
     (now - dig.started as f32).max(0.0) / content::TICKS_PER_SECOND as f32
 }
 
@@ -1246,7 +1286,7 @@ mod tests {
 
     #[test]
     fn baked_playable_rigs_use_planted_feet_and_world_steps() {
-        let library = SceneLibrary::new();
+        let library = crate::assets::SceneLibrary::new();
         for pack in &library.scenes {
             if !pack.actor.is_empty() {
                 let motion = motion_profile(pack);
@@ -1266,7 +1306,7 @@ mod tests {
 
     #[test]
     fn baked_playable_boot_meshes_clear_the_floor() {
-        let library = SceneLibrary::new();
+        let library = crate::assets::SceneLibrary::new();
         for pack in &library.scenes {
             let Some(body_mesh) = pack.actor.iter().find(|part| part.part == voxel_assets::ActorPart::Body) else { continue };
             let Some(body_pivot) = body_mesh.pivot else { continue };

@@ -6,6 +6,29 @@ use crate::{
 use bevy::{camera::ScalingMode, input::mouse::AccumulatedMouseScroll, prelude::*};
 use voxel_assets::ImpactResponse;
 
+/// Particles, flashes and camera shake (World layer).
+#[derive(Resource)]
+pub struct Effects;
+
+impl service::Service for Effects {
+    type Layer = service::WorldLayer;
+    type Deps = ();
+
+    fn init(_world: &mut World) -> Self {
+        Effects
+    }
+
+    fn systems(app: &mut App) {
+        use service::{AppServices, Phase, WorldState};
+        app.add_service_systems::<Self, _>(
+            Phase::Present,
+            (update_effects, camera_feedback.run_if(crate::control::rendered)).run_if(in_state(WorldState::Active)),
+        );
+    }
+}
+
+/// Hit stop, screen shake and flash: shared by the player's combat and the
+/// effects, and reset when a world starts.
 #[derive(Resource, Default)]
 pub struct Feedback {
     pub hit_stop: f32,

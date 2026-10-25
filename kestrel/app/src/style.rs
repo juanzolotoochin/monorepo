@@ -1,5 +1,6 @@
 //! Data-driven visual styles. Compiled geometry and material handles survive scene switches.
-use crate::{assets::SceneLibrary, combat::Obstacle, navigation::Disc};
+use crate::{combat::Obstacle, navigation::Disc};
+use service::WorldScoped;
 use bevy::{
     pbr::{DistanceFog, FogFalloff},
     post_process::bloom::Bloom,
@@ -7,19 +8,11 @@ use bevy::{
 };
 use std::collections::HashMap;
 use voxel_assets::content_key;
+/// Uploaded style geometry and palettes, kept across worlds.
 #[derive(Resource, Default)]
 pub struct ActiveStyle {
-    current: Option<usize>,
-    studio: bool,
     cache: HashMap<String, Vec<(Handle<Mesh>, Handle<StandardMaterial>)>>,
     palettes: HashMap<String, Vec<Handle<StandardMaterial>>>,
-}
-
-impl ActiveStyle {
-    /// The scene whose style the player wears.
-    pub fn current(&self) -> Option<usize> {
-        self.current
-    }
 }
 #[derive(Resource)]
 pub struct MaterialBindings(pub Vec<(Handle<StandardMaterial>, String, StandardMaterial)>);
@@ -42,7 +35,6 @@ struct StyleLabel;
 fn color(c: [f32; 3]) -> Color {
     Color::srgb(c[0], c[1], c[2])
 }
-
 /// Resolve authored root-space joint origins into local bind transforms.
 /// Unspecified joints inherit their original offsets, so older skins retain
 /// the scene rig and descendants follow a moved shoulder or hip naturally.
@@ -100,14 +92,11 @@ fn apply_actor_pivots(
         *world.get_mut::<Transform>(entity).unwrap() = rest;
     }
 }
-pub fn apply(world: &mut World) {
-    let index = world.resource::<SceneLibrary>().current;
-    let studio = world.get_resource::<crate::viewer::Viewer>().is_some_and(|viewer| viewer.active);
-    if world.resource::<ActiveStyle>().current == Some(index)
-        && world.resource::<ActiveStyle>().studio == studio {
-        return;
-    }
-    let scene = &world.resource::<SceneLibrary>().scenes[index];
+/// Dresses a world in its scene's style: materials, lights, fog, the
+/// environment and the player's styled parts. Runs when the world starts
+/// (see `SceneView`), after the player's body exists. Character Studio
+/// (`studio`) dresses only the character, on its own stage.
+pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack, studio: bool) {
     let styled = scene.scene.style.is_some();
     let profile = scene.scene.style.clone().unwrap_or_default();
     let environment = if studio { None } else { scene.environment.clone() };
@@ -119,7 +108,7 @@ pub fn apply(world: &mut World) {
         .as_ref()
         .map_or(vec![], |s| s.weapons.clone());
     let fixture_lighting = environment.as_ref().is_some_and(|e| !e.lights.is_empty());
-    let hide_deck = studio || environment.is_some() || scene.scene.terrain.is_some();
+
     let settlement = scene.scene.scenario.is_some();
     let jumping = scene
         .scene
@@ -165,37 +154,10 @@ pub fn apply(world: &mut World) {
         }
         .into();
     }
-    let old_actors: Vec<_> = world
-        .query_filtered::<Entity, With<StyledActor>>()
-        .iter(world)
-        .collect();
-    for e in old_actors {
-        world.despawn(e);
-    }
-    let old: Vec<_> = world
-        .query_filtered::<Entity, With<Environment>>()
-        .iter(world)
-        .collect();
-    for e in old {
-        world.despawn(e);
-    }
-    for mut visibility in world
-        .query_filtered::<&mut Visibility, With<crate::jetpack::Deck>>()
-        .iter_mut(world)
-    {
-        *visibility = if hide_deck {
-            Visibility::Hidden
-        } else {
-            Visibility::Inherited
-        };
-    }
     if studio {
+        // Character Studio has its own stage instead of the built-in deck.
         for mut visibility in world
-            .query_filtered::<&mut Visibility, Or<(
-                With<crate::assets::IndustrialProp>,
-                With<crate::assets::BoulderInstance>,
-                With<crate::assets::SampleCaption>,
-            )>>()
+            .query_filtered::<&mut Visibility, With<crate::jetpack::Deck>>()
             .iter_mut(world)
         {
             *visibility = Visibility::Hidden;
@@ -286,6 +248,7 @@ pub fn apply(world: &mut World) {
             let e = world
                 .spawn((
                     Environment,
+                    WorldScoped::default(),
                     Mesh3d(mesh),
                     MeshMaterial3d(material),
                     Transform::default(),
@@ -301,6 +264,7 @@ pub fn apply(world: &mut World) {
         for (position, radius) in environment.obstacles {
             world.spawn((
                 Environment,
+                WorldScoped::default(),
                 Obstacle(Disc {
                     center: Vec3::from_array(position),
                     radius,
@@ -474,35 +438,28 @@ pub fn apply(world: &mut World) {
     {
         label.0 = profile.weapon_name.clone();
     }
-    let labels: Vec<_> = world
-        .query_filtered::<Entity, With<StyleLabel>>()
-        .iter(world)
-        .collect();
-    for e in labels {
-        world.despawn(e);
+    if !studio {
+        world.spawn((
+            StyleLabel,
+            WorldScoped::default(),
+            Text::new(format!(
+                "STYLE {}  /  {:.0} VOXELS PER METER",
+                profile.id.to_uppercase(),
+                1.0 / profile.voxel_size
+            )),
+            TextFont {
+                font_size: FontSize::Px(11.0),
+                ..default()
+            },
+            TextColor(color(profile.accents[0])),
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(36),
+                top: px(112),
+                ..default()
+            },
+        ));
     }
-    if !studio { world.spawn((
-        StyleLabel,
-        Text::new(format!(
-            "STYLE {}  /  {:.0} VOXELS PER METER",
-            profile.id.to_uppercase(),
-            1.0 / profile.voxel_size
-        )),
-        TextFont {
-            font_size: FontSize::Px(11.0),
-            ..default()
-        },
-        TextColor(color(profile.accents[0])),
-        Node {
-            position_type: PositionType::Absolute,
-            left: px(36),
-            top: px(112),
-            ..default()
-        },
-    )); }
-    let mut active = world.resource_mut::<ActiveStyle>();
-    active.current = Some(index);
-    active.studio = studio;
 }
 
 pub fn select_weapon(
@@ -571,7 +528,7 @@ fn spawn_light(
         world.entity_mut(e).insert(StyledActor);
         world.entity_mut(parent).add_child(e);
     } else {
-        world.entity_mut(e).insert(Environment);
+        world.entity_mut(e).insert((Environment, WorldScoped::default()));
     }
 }
 pub(crate) fn upload(
@@ -632,8 +589,10 @@ fn world_position(world: &World, mut entity: Entity) -> Vec3 {
     p
 }
 pub fn snapshot(world: &mut World) -> serde_json::Value {
-    let library = world.resource::<SceneLibrary>();
-    let pack = &library.scenes[library.current];
+    // Nothing is shown before the first world starts.
+    let Some(pack) = world.get_resource::<crate::scene_view::SceneView>().map(|view| view.pack.clone()) else {
+        return serde_json::Value::Null;
+    };
     let p = pack.scene.style.clone().unwrap_or_default();
     let mut info = serde_json::json!({"id":p.id,"voxel_size":p.voxel_size,"voxels_per_meter":1.0/p.voxel_size,"palette":p.materials.iter().map(|m| &m.name).collect::<Vec<_>>(),"environment_statistics":pack.environment.as_ref().map(|e|e.statistics),"baked":pack.environment.is_some(),"actor_voxel_size":p.actor_voxel_size,"actor_parts":pack.actor.iter().map(|a|a.part).collect::<Vec<_>>(),"weapon":p.weapon_name,"fixture_lights":pack.environment.as_ref().map(|e|&e.lights),"sun_shadows":p.sun_shadows,"exposure_ev100":p.exposure_ev100});
     let moving:Vec<_>=world.query_filtered::<Entity,With<StyledActor>>().iter(world).filter_map(|e| {
@@ -647,6 +606,7 @@ pub fn snapshot(world: &mut World) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assets::SceneLibrary;
     #[test]
     fn authored_joint_pivots_change_proportions_and_restore_on_scene_switch() {
         let options = crate::control::Options {
@@ -656,10 +616,9 @@ mod tests {
         let hub = crate::control::Hub::new(options.clone()).unwrap();
         let scenes = SceneLibrary::new();
         let moonlit = scenes.index("moonlit-glade").unwrap();
-        let mut app = crate::build_app(options, scenes, hub);
-        app.update();
-        app.world_mut().resource_mut::<SceneLibrary>().requested = Some(moonlit);
-        app.update();
+        let mut app = crate::test_app(options, scenes, hub, crate::flow::Launch::single_player(0));
+        crate::start_world(&mut app);
+        crate::switch_world(&mut app, moonlit);
         let shoulder_x = |world: &mut World| {
             world
                 .query::<&crate::character::Part>()
@@ -671,8 +630,7 @@ mod tests {
                 .x
         };
         assert!((shoulder_x(app.world_mut()) - 0.28).abs() < 0.001);
-        app.world_mut().resource_mut::<SceneLibrary>().requested = Some(0);
-        app.update();
+        crate::switch_world(&mut app, 0);
         assert!((shoulder_x(app.world_mut()) - 0.43).abs() < 0.001);
     }
 
@@ -683,8 +641,8 @@ mod tests {
             ..default()
         };
         let hub = crate::control::Hub::new(options.clone()).unwrap();
-        let mut app = crate::build_app(options, SceneLibrary::new(), hub);
-        app.update();
+        let mut app = crate::test_app(options, SceneLibrary::new(), hub, crate::flow::Launch::single_player(0));
+        crate::start_world(&mut app);
         let originals: Vec<_> = app
             .world()
             .resource::<MaterialBindings>()
@@ -694,8 +652,7 @@ mod tests {
             .collect();
         let mut counts = None;
         for index in [5, 0, 5, 0, 5] {
-            app.world_mut().resource_mut::<SceneLibrary>().requested = Some(index);
-            app.update();
+            crate::switch_world(&mut app, index);
             let world = app.world_mut();
             let info = snapshot(world);
             assert_eq!(

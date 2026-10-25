@@ -3,10 +3,20 @@
 ## Launch menu
 
 Run `bazel run --config=full_local -c opt //kestrel/app:demo` to open the launch
-menu. Pick a scene, then play solo, host on a port, or join a host address. Joining
-players should select the same scene as the host. Click a network field to edit
-it; Enter starts the selected session. Explicit `--scene`, `--host`, `--join`,
-demo, and simulation flags still start directly for scripts and tests.
+menu. Type a name, pick a scene, then play solo, host on a port (7777 unless
+`--host` names one), or join a host address; joining players play whatever
+scene the host's world is. Click a field to edit it; Enter starts the selected
+session and Escape quits. **Character Studio** opens the selected scene's
+character on a stage of its own, outside any session.
+
+In a session, Escape opens the pause overlay: Resume, Leave to menu, or Quit.
+The world keeps running underneath, since lockstep can't stop the clock for one
+player. A session that ends on its own (the host left, or turned you away)
+also returns to the menu, which says why.
+
+Explicit `--scene`, `--host`, `--join`, `--record-input`, `--replay-input`,
+`--capture-dir`, demo and simulation flags still start a session directly for
+scripts and tests, and close the game when it ends.
 
 Capture the menu with
 `bazel run --config=full_local -c opt //kestrel/app:demo -- --capture-menu /tmp/kestrel-menu.png`.
@@ -58,6 +68,9 @@ not sound samples. The HUD uses Bevy's bundled default font.
 bazel run --config=full_local -c opt //kestrel/app:demo
 bazel test --config=full_local -c opt //kestrel/app:movement_test
 ```
+
+Run without flags, the game opens on its launch menu (see above); runs driven
+by a demo script or the control port never show it.
 
 To cross-compile a Windows x64 release from Linux or macOS, use the MSVC
 target platform. The compiler and build scripts run on the host; Rust and the
@@ -111,7 +124,7 @@ startup sequence; run it on Windows with:
 | Mouse wheel | Smooth camera zoom |
 | R | Reset character position and actions |
 | M | Mute / unmute |
-| Esc | Quit |
+| Esc | Pause overlay: Resume, Leave to menu, Quit (the world keeps running). Quits in scripted runs |
 
 Move within about two world units of a rock and strike toward it. The blade
 has a deliberate wind-up, fast cut and long recovery. Contact stops the blade,
@@ -529,18 +542,20 @@ yours, otherwise it's who is logged in to the computer. Names travel
 through the simulation, so everyone sees the same ones.
 
 Networked games start on the flat `field` scene (also on key **0** when
-playing alone). `--scene` picks another one; every player must pass the same
-scene. Scene keys are disabled while networked. The HUD's top right shows the
-connection. Leaving and rejoining gives a new avatar; the old one stays put.
+playing alone). The host's `--scene` picks another one, and its scene keys move
+everyone to a new world; joining players always show the host's scene. The
+HUD's top right shows the connection. Leaving and rejoining gives a new avatar; the old one stays put.
 If the host leaves (or crashes: after 5 seconds without hearing from it), or
-turns a player away, or falls out of sync with them, that player's game shows
-why and closes 4 seconds later; there's no host migration.
+turns a player away, or falls out of sync with them, that player goes back to
+the main menu, which says why; there's no host migration. Runs driven by a
+script or the control port show why and close 4 seconds later instead. The
+menu's Host and Join do the same as `--host` and `--join`.
 
-To defend the Red Clearing together, both pass `--scene combat-arena`:
+To defend the Red Clearing together, the host passes `--scene combat-arena`:
 
 ```sh
 bazel run --config=full_local //kestrel/app:demo -- --host 7777 --scene combat-arena
-bazel run --config=full_local //kestrel/app:demo -- --join my-desktop:7777 --scene combat-arena
+bazel run --config=full_local //kestrel/app:demo -- --join my-desktop:7777
 ```
 
 Everything in the single-player arena works for both players: each picks

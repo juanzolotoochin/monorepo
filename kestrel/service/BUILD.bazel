@@ -1,0 +1,22 @@
+load("@rules_rs//rs:rust_library.bzl", "rust_library")
+load("@rules_rs//rs:rust_test.bzl", "rust_test")
+
+rust_library(
+    name = "service",
+    srcs = glob(["src/**/*.rs"]),
+    # Bevy's derive macros inspect Cargo.toml to locate the `bevy` re-exports.
+    compile_data = ["//:Cargo.toml"],
+    edition = "2021",
+    rustc_env = {"CARGO_MANIFEST_DIR": "."},
+    visibility = ["//kestrel:__subpackages__"],
+    deps = ["@crates//:bevy"],
+)
+
+rust_test(
+    name = "service_test",
+    size = "small",
+    compile_data = ["//:Cargo.toml"],
+    crate = ":service",
+    edition = "2021",
+    rustc_env = {"CARGO_MANIFEST_DIR": "."},
+)
