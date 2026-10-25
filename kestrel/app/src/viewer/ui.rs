@@ -1,6 +1,5 @@
 //! Character Studio controls and layout. Playback stays in the parent module.
 use super::*;
-use crate::menu::LaunchMenu;
 use bevy::ui::FocusPolicy;
 
 fn button(parent: &mut ChildSpawnerCommands, action: Action, title: &str) {
@@ -54,6 +53,7 @@ pub fn setup(
     }
     commands.spawn((
         Stage,
+        DespawnOnExit(Front::Studio),
         Mesh3d(meshes.add(Cuboid::new(4.0, STUDIO_FLOOR_THICKNESS, 4.0))),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::srgb(0.09, 0.17, 0.21),
@@ -65,6 +65,7 @@ pub fn setup(
     commands.spawn((
         Stage,
         StepPlatform,
+        DespawnOnExit(Front::Studio),
         Mesh3d(meshes.add(Cuboid::new(1.5, STEP_HEIGHT, 1.0))),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::srgb(0.23, 0.37, 0.43),
@@ -90,6 +91,7 @@ pub fn setup(
             };
             commands.spawn((
                 Stage,
+                DespawnOnExit(Front::Studio),
                 GroundMark { axis, base },
                 Mesh3d(meshes.add(Cuboid::from_size(size))),
                 MeshMaterial3d(material.clone()),
@@ -107,6 +109,7 @@ pub fn setup(
     ] {
         commands.spawn((
             Stage,
+            DespawnOnExit(Front::Studio),
             PointLight {
                 intensity,
                 range: 9.0,
@@ -119,6 +122,7 @@ pub fn setup(
     commands
         .spawn((
             Root,
+            DespawnOnExit(Front::Studio),
             GlobalZIndex(1001),
             Node {
                 position_type: PositionType::Absolute,
@@ -174,6 +178,7 @@ pub fn setup(
     commands
         .spawn((
             Root,
+            DespawnOnExit(Front::Studio),
             SwordMetrics,
             GlobalZIndex(1002),
             Node {
@@ -211,6 +216,7 @@ pub fn setup(
         });
     commands.spawn((
         Root,
+        DespawnOnExit(Front::Studio),
         CharacterPicker,
         GlobalZIndex(1001),
         Node {
@@ -235,13 +241,10 @@ pub fn setup(
 }
 
 pub fn input(
-    mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
     mut viewer: ResMut<Viewer>,
-    mut library: ResMut<SceneLibrary>,
-    mut menu: ResMut<LaunchMenu>,
-    roots: Query<Entity, With<Root>>,
-    stages: Query<Entity, With<Stage>>,
+    library: Res<SceneLibrary>,
+    mut front: ResMut<NextState<Front>>,
     mut actions: Query<(&Action, Ref<Interaction>, &mut BackgroundColor, &mut Node)>,
     mut character_names: Query<&mut Text, With<CharacterName>>,
 ) {
@@ -300,19 +303,8 @@ pub fn input(
                 viewer.reset_clock();
             }
             Action::Back => {
-                viewer.active = false;
-                menu.open = true;
-                // The preview only selected a character asset pack. Force the
-                // next play session to build its actual scene, even when the
-                // menu selects the same pack that the preview used.
-                library.current = usize::MAX;
-                library.requested = None;
-                for root in &roots {
-                    commands.entity(root).despawn();
-                }
-                for stage in &stages {
-                    commands.entity(stage).despawn();
-                }
+                // Closing Studio despawns its stage, panels and character.
+                front.set(Front::Menu);
                 return;
             }
         }

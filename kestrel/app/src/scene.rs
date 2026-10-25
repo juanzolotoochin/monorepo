@@ -1,18 +1,19 @@
 //! Procedural voxel art: shared cuboid geometry, authored silhouettes and palette.
 use crate::{
-    assets::{IndustrialProp, ModelCache, SceneLibrary},
+    assets::ModelCache,
     character::{Part, PartKind, Player},
     combat::{Obstacle, ACTIVE_END, ATTACK_END, REBOUND_END, WINDUP},
     effects::{CameraRig, FxAssets},
     gameplay::Controls,
-    navigation::Disc,
+    obstacles::{BULKHEADS, CRATES, REACTOR},
     sound::Sound,
 };
 use bevy::{
-    anti_alias::taa::TemporalAntiAliasing, camera::Hdr, camera::ScalingMode,
+    anti_alias::taa::TemporalAntiAliasing, camera::ScalingMode,
     core_pipeline::tonemapping::Tonemapping, pbr::ScreenSpaceAmbientOcclusion,
-    post_process::bloom::Bloom, prelude::*,
+    post_process::bloom::Bloom, prelude::*, camera::Hdr,
 };
+use service::WorldScoped;
 
 fn material(
     materials: &mut Assets<StandardMaterial>,
@@ -62,6 +63,8 @@ fn object(
         Mesh3d(cube.clone()),
         MeshMaterial3d(mat.clone()),
         Transform::from_translation(pos).with_scale(size),
+        // Shown by a world whose scene uses it (see `SceneView`).
+        Visibility::Hidden,
     ));
 }
 fn hash(x: i32, y: i32, z: i32) -> u32 {
@@ -72,61 +75,130 @@ fn hash(x: i32, y: i32, z: i32) -> u32 {
     n ^ (n >> 16)
 }
 
-#[cfg(test)]
-mod scene_construction_tests {
-    use super::*;
-
-    #[test]
-    fn static_game_world_is_deferred_until_play() {
-        let mut app = App::new();
-        app.init_resource::<Assets<Mesh>>()
-            .init_resource::<Assets<StandardMaterial>>()
-            .init_resource::<SceneWorldBuilt>()
-            .add_systems(Startup, setup);
-        app.update();
-        assert!(!app.world().resource::<SceneWorldBuilt>().0);
-        let world = app.world_mut();
-        let mut decks = world.query_filtered::<Entity, With<crate::jetpack::Deck>>();
-        assert_eq!(decks.iter(world).count(), 0);
-        app.add_systems(Update, ensure_environment);
-        app.update();
-        assert!(app.world().resource::<SceneWorldBuilt>().0);
-        let world = app.world_mut();
-        let mut decks = world.query_filtered::<Entity, With<crate::jetpack::Deck>>();
-        assert!(decks.iter(world).count() > 0);
-    }
-}
-
-#[derive(Resource)]
-pub struct SceneWorldAssets {
-    cube: Handle<Mesh>,
-    dark: Handle<StandardMaterial>,
-    frame: Handle<StandardMaterial>,
-    panel: Handle<StandardMaterial>,
-    ivory: Handle<StandardMaterial>,
-    orange: Handle<StandardMaterial>,
-    gold: Handle<StandardMaterial>,
-    cyan: Handle<StandardMaterial>,
-    amber: Handle<StandardMaterial>,
-    dust: Handle<StandardMaterial>,
-    floors: [Handle<StandardMaterial>; 3],
-    rock_dark: Handle<StandardMaterial>,
-}
-
-#[derive(Resource, Default)]
-pub struct SceneWorldBuilt(bool);
-
-pub fn ensure_environment(
+pub fn setup(
     mut commands: Commands,
-    assets: Res<SceneWorldAssets>,
-    mut built: ResMut<SceneWorldBuilt>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    if built.0 { return; }
-    built.0 = true;
-    let SceneWorldAssets {
-        cube, dark, frame, panel, ivory, orange, gold, cyan,
-        amber, dust, floors, rock_dark,
-    } = &*assets;
+    let cube = meshes.add(Cuboid::default());
+    let dark = material(&mut materials, [0.065, 0.095, 0.14], 0.35);
+    let frame = material(&mut materials, [0.16, 0.22, 0.28], 0.5);
+    let panel = material(&mut materials, [0.31, 0.39, 0.43], 0.35);
+    let ivory = material(&mut materials, [0.72, 0.77, 0.73], 0.18);
+    let orange = material(&mut materials, [0.91, 0.33, 0.095], 0.20);
+    let gold = material(&mut materials, [0.93, 0.63, 0.20], 0.3);
+    let cyan = glow(&mut materials, [0.10, 0.78, 1.0], 5.5);
+    let amber = glow(&mut materials, [1.0, 0.28, 0.045], 4.0);
+    let white = glow(&mut materials, [0.65, 0.87, 1.0], 5.0);
+    let dust = material(&mut materials, [0.25, 0.22, 0.29], 0.0);
+    let floors = [
+        material(&mut materials, [0.17, 0.22, 0.28], 0.25),
+        material(&mut materials, [0.19, 0.24, 0.30], 0.25),
+        material(&mut materials, [0.15, 0.20, 0.26], 0.25),
+    ];
+    commands.insert_resource(SceneArt {
+        cube: cube.clone(),
+        dark: dark.clone(),
+        frame: frame.clone(),
+        panel: panel.clone(),
+        ivory: ivory.clone(),
+        orange: orange.clone(),
+        gold: gold.clone(),
+        cyan: cyan.clone(),
+        amber: amber.clone(),
+        white: white.clone(),
+    });
+    commands.insert_resource(crate::style::MaterialBindings(
+        [
+            (&dark, "shadow"),
+            (&frame, "metal"),
+            (&panel, "metal"),
+            (&ivory, "stone"),
+            (&orange, "metal"),
+            (&gold, "trim"),
+            (&cyan, "magic"),
+        ]
+        .into_iter()
+        .map(|(handle, role)| {
+            (
+                handle.clone(),
+                role.to_string(),
+                materials.get(handle).unwrap().clone(),
+            )
+        })
+        .collect(),
+    ));
+    let camera_base = Vec3::new(20.0, 20.0, 20.0);
+    let camera_target = Vec3::new(0.0, 0.0, -0.4);
+    commands.spawn((
+        Camera3d::default(),
+        Hdr,
+        Msaa::Off,
+        Projection::Orthographic(OrthographicProjection {
+            scaling_mode: ScalingMode::FixedVertical {
+                viewport_height: 21.5,
+            },
+            ..OrthographicProjection::default_3d()
+        }),
+        Tonemapping::TonyMcMapface,
+        Bloom {
+            intensity: 0.18,
+            ..Bloom::NATURAL
+        },
+        ScreenSpaceAmbientOcclusion::default(),
+        TemporalAntiAliasing::default(),
+        Transform::from_translation(camera_base).looking_at(camera_target, Vec3::Y),
+        CameraRig {
+            base: camera_base,
+            target: camera_target,
+            zoom: 21.5,
+        },
+    ));
+    commands.spawn((
+        DirectionalLight {
+            color: Color::srgb(1.0, 0.79, 0.63),
+            illuminance: 10500.0,
+            shadow_maps_enabled: true,
+            ..default()
+        },
+        Transform::from_xyz(-8.0, 12.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
+    ));
+    for (index, (p, color, intensity)) in [
+        (
+            Vec3::new(-4.8, 3.0, -4.8),
+            Color::srgb(0.05, 0.65, 1.0),
+            150000.0,
+        ),
+        (
+            Vec3::new(6.0, 3.5, -5.0),
+            Color::srgb(1.0, 0.30, 0.08),
+            110000.0,
+        ),
+        (
+            Vec3::new(2.0, 5.0, 5.0),
+            Color::srgb(0.32, 0.58, 1.0),
+            65000.0,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        commands.spawn((
+            crate::style::AccentLight {
+                role: index,
+                intensity,
+            },
+            PointLight {
+                color,
+                intensity,
+                radius: 0.8,
+                range: 12.0,
+                ..default()
+            },
+            Transform::from_translation(p),
+        ));
+    }
+
     // A heavy suspended deck with stepped strata and a luminous perimeter.
     object(
         &mut commands,
@@ -235,21 +307,83 @@ pub fn ensure_environment(
     }
 
     // Boulders come from compiled scene packs (see assets.rs).
+    let rock_dark = material(&mut materials, [0.14, 0.17, 0.23], 0.10);
 
+    for i in 0..6 {
+        object(
+            &mut commands,
+            &cube,
+            &frame,
+            Vec3::new(-5.0 + i as f32 * 0.46, 0.05, -7.1),
+            Vec3::new(0.38, 0.12, 0.32),
+        );
+    }
+
+    // A sparse constellation of distant cuboid asteroids, below the deck.
+    for i in 0..20 {
+        let h = hash(i, 87, 5);
+        let a = i as f32 * 2.399;
+        let r = 16.0 + (h % 13) as f32;
+        let p = Vec3::new(a.cos() * r, -4.0 - (h % 8) as f32, a.sin() * r);
+        object(
+            &mut commands,
+            &cube,
+            &rock_dark,
+            p,
+            Vec3::splat(0.4 + (h % 5) as f32 * 0.2),
+        );
+    }
+
+    commands.insert_resource(FxAssets {
+        cube,
+        spark: crate::impact::KINDS
+            .map(|kind| glow(&mut materials, crate::impact::response(kind).color, 12.0)),
+        debris: [
+            rock_dark,
+            material(&mut materials, [0.5, 0.57, 0.65], 0.9),
+            glow(&mut materials, [0.08, 0.5, 1.0], 1.5),
+            material(&mut materials, [0.12, 0.5, 0.23], 0.0),
+        ],
+        trail: materials.add(StandardMaterial {
+            base_color: Color::srgba(0.15, 0.75, 1.0, 0.16),
+            emissive: LinearRgba::rgb(0.1, 1.6, 2.5),
+            alpha_mode: AlphaMode::Blend,
+            unlit: true,
+            ..default()
+        }),
+        blood: [
+            material(&mut materials, [0.42, 0.025, 0.035], 0.55),
+            material(&mut materials, [0.73, 0.075, 0.055], 0.48),
+        ],
+    });
+}
+
+/// The meshes and materials the built-in art shares. `style::apply` recolors
+/// some of the materials per scene (`MaterialBindings`).
+#[derive(Resource, Clone)]
+pub struct SceneArt {
+    cube: Handle<Mesh>,
+    dark: Handle<StandardMaterial>,
+    frame: Handle<StandardMaterial>,
+    panel: Handle<StandardMaterial>,
+    ivory: Handle<StandardMaterial>,
+    orange: Handle<StandardMaterial>,
+    gold: Handle<StandardMaterial>,
+    cyan: Handle<StandardMaterial>,
+    amber: Handle<StandardMaterial>,
+    white: Handle<StandardMaterial>,
+}
+
+/// The industrial deck's props, for a world in an industrial scene.
+pub fn spawn_industrial(commands: &mut Commands, art: &SceneArt) {
+    let SceneArt { cube, dark, frame, panel, ivory, orange, cyan, amber, .. } = art;
     // Back-left coolant relay: chunky housing, fins, emissive core and conduits.
-    let reactor = Vec3::new(-5.0, 0.0, -5.3);
     commands
         .spawn((
-            Transform::from_translation(reactor),
+            Transform::from_translation(REACTOR.center),
             Visibility::default(),
-            Obstacle(Disc {
-                center: reactor,
-                radius: 1.45,
-            }),
-            IndustrialProp(Disc {
-                center: reactor,
-                radius: 1.45,
-            }),
+            Obstacle(REACTOR),
+            WorldScoped::default(),
         ))
         .with_children(|p| {
             block(
@@ -322,31 +456,14 @@ pub fn ensure_environment(
                 Vec3::new(0.46, 0.12, 0.46),
             );
         });
-    for i in 0..6 {
-        object(
-            &mut commands,
-            &cube,
-            &frame,
-            Vec3::new(-5.0 + i as f32 * 0.46, 0.05, -7.1),
-            Vec3::new(0.38, 0.12, 0.32),
-        );
-    }
-
     // Industrial bulkhead: interrupted silhouette, antennas and warning lamps.
-    for (x, height) in [(-7.7, 2.8), (-3.0, 1.55), (1.5, 1.8), (6.7, 3.4)] {
-        let center = Vec3::new(x, 0.0, -7.4);
+    for (bulkhead, height) in BULKHEADS.into_iter().zip([2.8, 1.55, 1.8, 3.4]) {
         commands
             .spawn((
-                Transform::from_translation(center),
+                Transform::from_translation(bulkhead.center),
                 Visibility::default(),
-                Obstacle(Disc {
-                    center,
-                    radius: 0.72,
-                }),
-                IndustrialProp(Disc {
-                    center,
-                    radius: 0.72,
-                }),
+                Obstacle(bulkhead),
+                WorldScoped::default(),
             ))
             .with_children(|p| {
                 block(
@@ -412,23 +529,13 @@ pub fn ensure_environment(
             });
     }
     // Low supply crates, not arbitrary decoration the character can walk through.
-    for center in [
-        Vec3::new(-6.7, 0.0, -0.9),
-        Vec3::new(6.5, 0.0, 0.3),
-        Vec3::new(-3.2, 0.0, 5.7),
-    ] {
+    for crate_disc in CRATES {
         commands
             .spawn((
-                Transform::from_translation(center),
+                Transform::from_translation(crate_disc.center),
                 Visibility::default(),
-                Obstacle(Disc {
-                    center,
-                    radius: 0.66,
-                }),
-                IndustrialProp(Disc {
-                    center,
-                    radius: 0.66,
-                }),
+                Obstacle(crate_disc),
+                WorldScoped::default(),
             ))
             .with_children(|p| {
                 block(
@@ -463,147 +570,17 @@ pub fn ensure_environment(
                 );
             });
     }
-    // A sparse constellation of distant cuboid asteroids, below the deck.
-    for i in 0..20 {
-        let h = hash(i, 87, 5);
-        let a = i as f32 * 2.399;
-        let r = 16.0 + (h % 13) as f32;
-        let p = Vec3::new(a.cos() * r, -4.0 - (h % 8) as f32, a.sin() * r);
-        object(
-            &mut commands,
-            &cube,
-            &rock_dark,
-            p,
-            Vec3::splat(0.4 + (h % 5) as f32 * 0.2),
-        );
-    }
 }
 
-pub fn setup(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    let cube = meshes.add(Cuboid::default());
-    let dark = material(&mut materials, [0.065, 0.095, 0.14], 0.35);
-    let frame = material(&mut materials, [0.16, 0.22, 0.28], 0.5);
-    let panel = material(&mut materials, [0.31, 0.39, 0.43], 0.35);
-    let ivory = material(&mut materials, [0.72, 0.77, 0.73], 0.18);
-    let orange = material(&mut materials, [0.91, 0.33, 0.095], 0.20);
-    let gold = material(&mut materials, [0.93, 0.63, 0.20], 0.3);
-    let cyan = glow(&mut materials, [0.10, 0.78, 1.0], 5.5);
-    let amber = glow(&mut materials, [1.0, 0.28, 0.045], 4.0);
-    let white = glow(&mut materials, [0.65, 0.87, 1.0], 5.0);
-    let dust = material(&mut materials, [0.25, 0.22, 0.29], 0.0);
-    let floors = [
-        material(&mut materials, [0.17, 0.22, 0.28], 0.25),
-        material(&mut materials, [0.19, 0.24, 0.30], 0.25),
-        material(&mut materials, [0.15, 0.20, 0.26], 0.25),
-    ];
-    commands.insert_resource(crate::style::MaterialBindings(
-        [
-            (&dark, "shadow"),
-            (&frame, "metal"),
-            (&panel, "metal"),
-            (&ivory, "stone"),
-            (&orange, "metal"),
-            (&gold, "trim"),
-            (&cyan, "magic"),
-        ]
-        .into_iter()
-        .map(|(handle, role)| {
-            (
-                handle.clone(),
-                role.to_string(),
-                materials.get(handle).unwrap().clone(),
-            )
-        })
-        .collect(),
-    ));
-    let camera_base = Vec3::new(20.0, 20.0, 20.0);
-    let camera_target = Vec3::new(0.0, 0.0, -0.4);
-    commands.spawn((
-        Camera3d::default(),
-        Hdr,
-        Msaa::Off,
-        Projection::Orthographic(OrthographicProjection {
-            scaling_mode: ScalingMode::FixedVertical {
-                viewport_height: 21.5,
-            },
-            ..OrthographicProjection::default_3d()
-        }),
-        Tonemapping::TonyMcMapface,
-        Bloom {
-            intensity: 0.18,
-            ..Bloom::NATURAL
-        },
-        ScreenSpaceAmbientOcclusion::default(),
-        TemporalAntiAliasing::default(),
-        Transform::from_translation(camera_base).looking_at(camera_target, Vec3::Y),
-        CameraRig {
-            base: camera_base,
-            target: camera_target,
-            zoom: 21.5,
-        },
-    ));
-    commands.spawn((
-        DirectionalLight {
-            color: Color::srgb(1.0, 0.79, 0.63),
-            illuminance: 10500.0,
-            shadow_maps_enabled: true,
-            ..default()
-        },
-        Transform::from_xyz(-8.0, 12.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
-    for (index, (p, color, intensity)) in [
-        (
-            Vec3::new(-4.8, 3.0, -4.8),
-            Color::srgb(0.05, 0.65, 1.0),
-            150000.0,
-        ),
-        (
-            Vec3::new(6.0, 3.5, -5.0),
-            Color::srgb(1.0, 0.30, 0.08),
-            110000.0,
-        ),
-        (
-            Vec3::new(2.0, 5.0, 5.0),
-            Color::srgb(0.32, 0.58, 1.0),
-            65000.0,
-        ),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        commands.spawn((
-            crate::style::AccentLight {
-                role: index,
-                intensity,
-            },
-            PointLight {
-                color,
-                intensity,
-                radius: 0.8,
-                range: 12.0,
-                ..default()
-            },
-            Transform::from_translation(p),
-        ));
-    }
-
-    let rock_dark = material(&mut materials, [0.14, 0.17, 0.23], 0.10);
-    commands.insert_resource(SceneWorldAssets {
-        cube: cube.clone(), dark: dark.clone(), frame: frame.clone(),
-        panel: panel.clone(), ivory: ivory.clone(), orange: orange.clone(),
-        gold: gold.clone(), cyan: cyan.clone(), amber: amber.clone(),
-        dust: dust.clone(), floors: floors.clone(), rock_dark: rock_dark.clone(),
-    });
-
+/// The player's body, at the scene's spawn point, for a world.
+pub fn spawn_player(commands: &mut Commands, art: &SceneArt, scene: &voxel_assets::Scene) {
+    let SceneArt { cube, dark, frame, ivory, orange, gold, cyan, white, .. } = art;
     // Compact articulated exosuit. Each joint has a stable pivot shared by local and peer posing.
     commands
         .spawn((
             Player,
-            Transform::from_xyz(0.0, 0.0, 2.0)
+            WorldScoped::default(),
+            Transform::from_translation(Vec3::from_array(scene.spawn))
                 .with_rotation(Quat::from_rotation_y(std::f32::consts::PI)),
             Visibility::default(),
         ))
@@ -1022,28 +999,6 @@ pub fn setup(
             }
             });
         });
-    commands.insert_resource(FxAssets {
-        cube,
-        spark: crate::impact::KINDS
-            .map(|kind| glow(&mut materials, crate::impact::response(kind).color, 12.0)),
-        debris: [
-            rock_dark,
-            material(&mut materials, [0.5, 0.57, 0.65], 0.9),
-            glow(&mut materials, [0.08, 0.5, 1.0], 1.5),
-            material(&mut materials, [0.12, 0.5, 0.23], 0.0),
-        ],
-        trail: materials.add(StandardMaterial {
-            base_color: Color::srgba(0.15, 0.75, 1.0, 0.16),
-            emissive: LinearRgba::rgb(0.1, 1.6, 2.5),
-            alpha_mode: AlphaMode::Blend,
-            unlit: true,
-            ..default()
-        }),
-        blood: [
-            material(&mut materials, [0.42, 0.025, 0.035], 0.55),
-            material(&mut materials, [0.73, 0.075, 0.055], 0.48),
-        ],
-    });
 }
 
 #[derive(Component)]
@@ -1233,13 +1188,40 @@ pub fn hud(mut commands: Commands) {
         });
 }
 
+/// The HUD's live readouts and the QA capture (World layer). The HUD's
+/// nodes are App-level (`hud`).
+#[derive(Resource)]
+pub struct Hud;
+
+impl service::Service for Hud {
+    type Layer = service::WorldLayer;
+    type Deps = (crate::lockstep::WorldMirror, crate::scene_view::SceneView);
+
+    fn init(_world: &mut World) -> Self {
+        Hud
+    }
+
+    fn systems(app: &mut App) {
+        use service::{AppServices, Phase, WorldState};
+        app.add_service_systems::<Self, _>(
+            Phase::Present,
+            (
+                update_hud.run_if(crate::control::rendered),
+                crate::preview::capture.run_if(crate::control::interactive),
+            )
+                .chain()
+                .run_if(in_state(WorldState::Active)),
+        );
+    }
+}
+
 pub fn update_hud(
     controls: Res<Controls>,
     sound: Res<Sound>,
-    library: Res<SceneLibrary>,
+    scene: Res<crate::scene_view::SceneView>,
     cache: Res<ModelCache>,
     flight: Res<crate::jetpack::Flight>,
-    game: Res<crate::lockstep::Game>,
+    service: Res<crate::lockstep::SessionService>,
     player: Single<&Transform, With<Player>>,
     mut scene_label: Single<&mut Text, (With<SceneLabel>, Without<Status>, Without<ContactCount>)>,
     mut status: Single<(&mut Text, &mut TextColor), With<Status>>,
@@ -1266,7 +1248,7 @@ pub fn update_hud(
         }
     } else if flight.airborne {
         (
-            if library.has_feature(voxel_assets::SceneFeature::Jump) {
+            if scene.has_feature(voxel_assets::SceneFeature::Jump) {
                 "JUMP / AIRBORNE"
             } else if flight.requested {
                 "JETPACK / HOVER"
@@ -1294,8 +1276,8 @@ pub fn update_hud(
     }
     status.1 .0 = color;
     gauge.width = percent(progress.clamp(0.0, 1.0) * 100.0);
-    if scene_label.0 != library.title() {
-        scene_label.0 = library.title().into();
+    if scene_label.0 != scene.title() {
+        scene_label.0 = scene.title().into();
     }
     let audio = if sound.muted { "  /  MUTED" } else { "" };
     let last = controls
@@ -1305,27 +1287,20 @@ pub fn update_hud(
         "CONTACTS {:02} / HIT {last} / DYNAMIC BUILDS {}{audio}",
         controls.impacts, cache.runtime_generations
     );
-    let text = if library.has_feature(voxel_assets::SceneFeature::FlightHud) {
+    let text = if scene.has_feature(voxel_assets::SceneFeature::FlightHud) {
         format!(
             "ALT {:.1}m / SUPPORT {:.1}m / HOVER {:.1}m / HOLD SPACE TO FLY",
             player.translation.y,
             flight.support,
             crate::jetpack::HOVER
         )
-    } else if library.has_feature(voxel_assets::SceneFeature::Digging) {
-        let net = if game.network.is_some() {
-            format!(" / NET / {}", game.status.to_uppercase())
-        } else {
-            String::new()
-        };
-        let tile = sim::terrain::Terrain::pit_tile(game.to_sim(player.translation));
-        let pit = game.world().map_or(0, |w| w.terrain().pit(tile));
-        format!(
-            "PIT {pit}/{} / F TO DIG / HOLD SPACE TO FLY OUT{net}",
-            sim::terrain::MAX_LAYERS
-        )
-    } else if game.network.is_some() {
-        format!("NET / {}", game.status.to_uppercase())
+    } else if scene.has_feature(voxel_assets::SceneFeature::Digging) {
+        let net = if service.networked() { format!(" / NET / {}", service.status.to_uppercase()) } else { String::new() };
+        let tile = sim::terrain::Terrain::pit_tile(service.to_sim(player.translation));
+        let pit = service.world().map_or(0, |w| w.terrain().pit(tile));
+        format!("PIT {pit}/{} / F TO DIG / HOLD SPACE TO FLY OUT{net}", sim::terrain::MAX_LAYERS)
+    } else if service.networked() {
+        format!("NET / {}", service.status.to_uppercase())
     } else {
         text
     };
@@ -1338,12 +1313,18 @@ pub fn update_hud(
 mod character_tests {
     use super::*;
 
+    /// The player's body for a world, in the first scene.
+    fn test_player(mut commands: Commands, art: Res<SceneArt>) {
+        let library = crate::assets::SceneLibrary::new();
+        spawn_player(&mut commands, &art, &library.scenes[0].scene);
+    }
+
     #[test]
     fn weapon_is_descended_from_the_right_hand_and_elbow() {
         let mut app = App::new();
         app.init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<StandardMaterial>>()
-            .add_systems(Startup, setup);
+            .add_systems(Startup, (setup, test_player).chain());
         app.update();
         let world = app.world_mut();
         let sword = world
@@ -1380,7 +1361,7 @@ mod character_tests {
         let mut app = App::new();
         app.init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<StandardMaterial>>()
-            .add_systems(Startup, setup);
+            .add_systems(Startup, (setup, test_player).chain());
         app.update();
         let world = app.world_mut();
         let knees: Vec<_> = world

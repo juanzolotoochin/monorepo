@@ -7,10 +7,11 @@ use crate::{
 };
 use bevy::prelude::*;
 use crate::legacy::{Endpoint, Inventory, Simulation, HZ};
+use service::{AppServices, Phase, Service, WorldLayer, WorldState};
 use std::collections::BTreeMap;
+/// The settlement's view (World layer).
 #[derive(Resource, Default)]
 pub struct Settlement {
-    current: Option<usize>,
     /// This frame's view of the simulated settlement.
     pub simulation: Option<Simulation>,
     /// The scene's scenario, as the view sees it.
@@ -76,39 +77,57 @@ impl View {
         }
     }
 }
-pub fn setup(world: &mut World) {
-    let index = world.resource::<SceneLibrary>().current;
-    if world.resource::<Settlement>().current == Some(index) {
-        return;
+impl Service for Settlement {
+    type Layer = WorldLayer;
+    type Deps = (crate::lockstep::WorldMirror, crate::scene_view::SceneView);
+
+    fn init(world: &mut World) -> Self {
+        build(world)
     }
-    let mut state = world.remove_resource::<Settlement>().unwrap();
-    for (_, (_, rig)) in std::mem::take(&mut state.views) {
-        world.despawn(rig.root);
-    }
-    for (_, rigs) in std::mem::take(&mut state.pool) {
-        for rig in rigs {
+
+    /// Despawns the world's rigs, captions and HUD, and restores the
+    /// materials fading corpses borrowed.
+    fn shutdown(mut self, world: &mut World) {
+        for (_, (_, rig)) in std::mem::take(&mut self.views) {
             world.despawn(rig.root);
         }
+        for (_, rigs) in std::mem::take(&mut self.pool) {
+            for rig in rigs {
+                world.despawn(rig.root);
+            }
+        }
+        for corpse in self.dying.drain(..) {
+            corpse.fade.restore(world);
+            world.despawn(corpse.rig.root);
+        }
+        for (_, e) in std::mem::take(&mut self.labels) {
+            world.despawn(e);
+        }
+        if let Some(e) = self.hud.take() {
+            world.despawn(e);
+        }
+        for e in self.blockers.drain(..) {
+            world.despawn(e);
+        }
     }
-    for corpse in state.dying.drain(..) {
-        corpse.fade.restore(world);
-        world.despawn(corpse.rig.root);
+
+    fn systems(app: &mut App) {
+        let active = in_state(WorldState::Active);
+        app.add_service_systems::<Self, _>(Phase::Input, input.run_if(crate::control::interactive).run_if(active.clone()))
+            .add_service_systems::<Self, _>(Phase::Mirror, crate::lockstep::mirror_settlement.run_if(active.clone()))
+            .add_service_systems::<Self, _>(Phase::Present, tick.run_if(active.clone()))
+            .add_systems(
+                PostUpdate,
+                captions.after(bevy::transform::TransformSystems::Propagate).run_if(crate::control::rendered).run_if(active),
+            );
     }
-    state.attached.clear();
-    state.hit_until.clear();
-    state.inspection = None;
-    state.last_sound = 0;
-    state.last_attack_serial = 0;
-    state.templates.clear();
-    for (_, e) in std::mem::take(&mut state.labels) {
-        world.despawn(e);
-    }
-    if let Some(e) = state.hud.take() {
-        world.despawn(e);
-    }
-    for e in state.blockers.drain(..) {
-        world.despawn(e);
-    }
+}
+
+/// The settlement's view for a world: rig templates for the scene's skins,
+/// and captions and a HUD for its scenario.
+fn build(world: &mut World) -> Settlement {
+    let index = world.resource::<crate::scene_view::SceneView>().index;
+    let mut state = Settlement::default();
     let has_weapons = world.resource::<SceneLibrary>().scenes[index]
         .scene
         .scenario
@@ -119,7 +138,6 @@ pub fn setup(world: &mut World) {
     } else {
         "LMB stock: take 4 / Ctrl+LMB: deposit cargo / E: toggle nearby machine".into()
     };
-    state.current = Some(index);
     let scenario = world.resource::<SceneLibrary>().scenes[index].scene.scenario.clone();
     if scenario.is_some() {
         let pack = &world.resource::<SceneLibrary>().scenes[index];
@@ -130,7 +148,6 @@ pub fn setup(world: &mut World) {
         }
     }
     state.config = scenario.as_ref().map(crate::legacy::Scenario::new);
-    state.simulation = None;
     if let Some(config) = state.config.clone() {
         for d in &config.depots {
             let e = world
@@ -210,7 +227,7 @@ pub fn setup(world: &mut World) {
                 .id(),
         );
     }
-    world.insert_resource(state);
+    state
 }
 /// An agent's definition. Players who joined copy the scenario's avatar.
 fn agent_config<'a>(sim: &'a Simulation, id: &str) -> &'a crate::legacy::Agent {
@@ -263,16 +280,16 @@ fn inventory(
 pub fn tick(world: &mut World) {
     if world
         .get_resource::<crate::control::Hub>()
-        .is_some_and(|hub| hub.warming_up())
+        .is_some_and(|hub| hub.in_warmup())
     {
         return;
     }
     // Networked games can't pause: everyone shares one clock.
     if world.resource::<ButtonInput<KeyCode>>().just_pressed(KeyCode::KeyP)
-        && world.resource::<crate::lockstep::Game>().network.is_none()
+        && !world.resource::<crate::lockstep::SessionService>().networked()
     {
-        let mut game = world.resource_mut::<crate::lockstep::Game>();
-        game.paused = !game.paused;
+        let mut service = world.resource_mut::<crate::lockstep::SessionService>();
+        service.paused = !service.paused;
     }
     let mut state = world.remove_resource::<Settlement>().unwrap();
     let Some(sim) = &state.simulation else {
@@ -286,7 +303,7 @@ pub fn tick(world: &mut World) {
         .single(world)
         .unwrap()
         .translation;
-    let me = world.resource::<crate::lockstep::Game>().player_id();
+    let me = world.resource::<crate::lockstep::WorldMirror>().player_id();
     // Hit pause, rebound and camera shake are for this player's own hits.
     let hits = sim
         .events
@@ -746,7 +763,7 @@ pub fn tick(world: &mut World) {
     }
     for (key, mut view) in desired {
         view.position.y +=
-            crate::jetpack::height(world.resource::<SceneLibrary>(), view.position).unwrap_or(0.);
+            crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, view.position).unwrap_or(0.);
         let template = &state.templates[&view.skin];
         if !state.views.contains_key(&key) {
             let rig = if let Some(rig) = state.pool.get_mut(&view.skin).and_then(|p| p.pop()) {
@@ -804,8 +821,8 @@ pub fn tick(world: &mut World) {
     world.insert_resource(state);
 }
 pub fn snapshot(world: &World) -> serde_json::Value {
-    let fingerprint = world.resource::<crate::lockstep::Game>().fingerprint();
-    world.resource::<Settlement>().simulation.as_ref().map_or(serde_json::Value::Null, |s| {
+    let fingerprint = world.get_resource::<crate::lockstep::WorldMirror>().map_or_else(String::new, |m| m.fingerprint());
+    world.get_resource::<Settlement>().and_then(|state| state.simulation.as_ref()).map_or(serde_json::Value::Null, |s| {
         serde_json::json!({"simulation": s, "replay_fingerprint": fingerprint, "balances": s.balances(), "scenario": s.config(), "seconds": s.seconds()})
     })
 }
@@ -1000,12 +1017,12 @@ mod tests {
 pub fn player_transfer(world: &mut World, depot: &str, item: &str, units: u32, deposit: bool) -> Result<u32, String> {
     let state = world.resource::<Settlement>();
     let sim = state.simulation.as_ref().ok_or("No settlement loaded")?;
-    let actor = world.resource::<crate::lockstep::Game>().player_id().ok_or("No controlled actor")?;
+    let actor = world.resource::<crate::lockstep::WorldMirror>().player_id().ok_or("No controlled actor")?;
     let dock = sim.config().depots.iter().find(|d| d.id == depot).ok_or("Unknown depot")?.position;
     let before = sim.agents[&actor].cargo.total();
-    let game = world.resource::<crate::lockstep::Game>();
-    let current = game.settlement().ok_or("No settlement loaded")?;
-    let (Some(agent), Some(d), Some(i)) = (game.player(), current.depot_index(depot), current.item_index(item)) else {
+    let service = world.resource::<crate::lockstep::SessionService>();
+    let current = service.settlement().ok_or("No settlement loaded")?;
+    let (Some(agent), Some(d), Some(i)) = (service.player(), current.depot_index(depot), current.item_index(item)) else {
         return Err("Unknown depot or item".into());
     };
     if sim.manual_jobs.contains_key(&actor) {
@@ -1020,9 +1037,11 @@ pub fn player_transfer(world: &mut World, depot: &str, item: &str, units: u32, d
         });
     }
     let expected = if deposit { before - units } else { before + units };
-    let mut game = world.resource_mut::<crate::lockstep::Game>();
-    game.command(sim::CommandKind::Transfer { agent, depot: d, item: i, units, deposit });
-    game.go_to(Vec3::new(dock[0], 0., dock[1]), false);
+    world.resource_scope(|world, mut control: Mut<crate::lockstep::PlayerControl>| {
+        let mut service = world.resource_mut::<crate::lockstep::SessionService>();
+        service.command(sim::CommandKind::Transfer { agent, depot: d, item: i, units, deposit });
+        control.go_to(&mut service, Vec3::new(dock[0], 0., dock[1]), false);
+    });
     world.resource_mut::<Settlement>().notice = format!(
         "{} {units} {item} {} {depot}",
         if deposit { "Delivering" } else { "Collecting" },
@@ -1046,14 +1065,14 @@ pub fn input(world: &mut World) {
             .any(|k| keys.pressed(*k));
     if manual {
         let busy = world.resource::<Settlement>().simulation.as_ref().is_some_and(|s| !s.manual_jobs.is_empty());
-        let agent = world.resource::<crate::lockstep::Game>().player();
+        let agent = world.resource::<crate::lockstep::SessionService>().player();
         if let (true, Some(agent)) = (busy, agent) {
-            world.resource_mut::<crate::lockstep::Game>().command(sim::CommandKind::CancelTransfer { agent });
+            world.resource_mut::<crate::lockstep::SessionService>().command(sim::CommandKind::CancelTransfer { agent });
             world.resource_mut::<Settlement>().notice = "Transfer canceled; airborne items still arrive.".into();
         }
     }
     if toggle {
-        let Some(p) = world.resource::<crate::lockstep::Game>().player_view_position() else { return };
+        let Some(p) = world.resource::<crate::lockstep::SessionService>().player_view_position() else { return };
         let state = world.resource::<Settlement>();
         let sim = state.simulation.as_ref().unwrap();
         let nearest = sim
@@ -1071,9 +1090,9 @@ pub fn input(world: &mut World) {
             .map(|m| m.id.clone());
         if let Some(id) = nearest {
             let enabled = !sim.producers[&id].enabled;
-            let producer = world.resource::<crate::lockstep::Game>().settlement().and_then(|s| s.producer_index(&id));
+            let producer = world.resource::<crate::lockstep::SessionService>().settlement().and_then(|s| s.producer_index(&id));
             if let Some(producer) = producer {
-                world.resource_mut::<crate::lockstep::Game>().command(sim::CommandKind::SetMachine { producer, enabled });
+                world.resource_mut::<crate::lockstep::SessionService>().command(sim::CommandKind::SetMachine { producer, enabled });
             }
             world.resource_mut::<Settlement>().notice = format!("{id} {}", if enabled { "enabled" } else { "paused" });
         }
@@ -1098,7 +1117,7 @@ pub fn input(world: &mut World) {
     };
     let state = world.resource::<Settlement>();
     let sim = state.simulation.as_ref().unwrap();
-    let Some(actor) = world.resource::<crate::lockstep::Game>().player_id() else {
+    let Some(actor) = world.resource::<crate::lockstep::WorldMirror>().player_id() else {
         return;
     };
     let Some(depot) = sim
@@ -1119,7 +1138,7 @@ pub fn input(world: &mut World) {
     } else {
         &sim.depots[&depot.id]
     };
-    let game = world.resource::<crate::lockstep::Game>();
+    let game = world.resource::<crate::lockstep::SessionService>();
     let Some(current) = game.settlement() else {
         return;
     };
@@ -1147,13 +1166,12 @@ mod lifecycle_tests {
             ..default()
         };
         let hub = crate::control::Hub::new(options.clone()).unwrap();
-        let mut library = SceneLibrary::new();
-        library.initial = 6;
-        let mut app = crate::build_app(options, library, hub);
+        let library = SceneLibrary::new();
+        let mut app = crate::test_app(options, library, hub, crate::flow::Launch::single_player(6));
         app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
             std::time::Duration::from_secs_f64(1. / 30.),
         ));
-        app.update();
+        crate::start_world(&mut app);
         let blends = |world: &World| {
             world
                 .resource::<Assets<StandardMaterial>>()
@@ -1187,8 +1205,7 @@ mod lifecycle_tests {
         assert!(corpse);
         inspect_building(app.world_mut(), Some("sawmill")).unwrap();
         assert!(inspect_building(app.world_mut(), Some("unknown")).is_err());
-        app.world_mut().resource_mut::<SceneLibrary>().requested = Some(0);
-        app.update();
+        crate::switch_world(&mut app, 0);
         let state = app.world().resource::<Settlement>();
         assert!(state.simulation.is_none());
         assert!(state.inspection.is_none());

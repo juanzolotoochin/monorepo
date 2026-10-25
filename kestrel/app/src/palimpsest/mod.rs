@@ -1,14 +1,27 @@
 //! A motion recording projects a persistent partner without copying world state or inventory.
 use crate::{
-    assets::SceneLibrary,
     combat::Obstacle, gameplay::Controls,
-    navigation::Disc,
     sound::{Cue, Sound},
 };
 use bevy::prelude::*;
+use service::{AppServices, Phase, Service, WorldLayer, WorldScoped, WorldState};
 use voxel_assets::SceneFeature;
 mod view;
-pub use view::setup;
+
+impl Service for Memory {
+    type Layer = WorldLayer;
+    type Deps = (crate::lockstep::WorldMirror, crate::scene_view::SceneView);
+
+    fn init(world: &mut World) -> Self {
+        view::spawn(world);
+        Memory::default()
+    }
+
+    fn systems(app: &mut App) {
+        app.add_service_systems::<Self, _>(Phase::Input, view::reset.run_if(in_state(WorldState::Active)))
+            .add_service_systems::<Self, _>(Phase::Mirror, tick.run_if(in_state(WorldState::Active)));
+    }
+}
 
 const PADS: [Vec3; 2] = [Vec3::new(-4.0, 0.0, -2.0), Vec3::new(-1.0, 0.0, 3.0)];
 const CORE: Vec3 = Vec3::new(5.0, 0.8, 0.0);
@@ -18,10 +31,9 @@ struct Sample {
     position: Vec3,
     rotation: Quat,
 }
-/// The view's copy of the simulated memory trial.
+/// The view's copy of the simulated memory trial (World layer).
 #[derive(Resource, Default)]
 pub struct Memory {
-    current: Option<usize>,
     sample_count: usize,
     recording: bool,
     elapsed: f32,
@@ -42,7 +54,9 @@ struct Art {
     gold: Handle<StandardMaterial>,
     ghost: Handle<StandardMaterial>,
 }
+/// A piece of the trial's view; it goes with the world.
 #[derive(Component)]
+#[require(WorldScoped)]
 struct Trial;
 #[derive(Component)]
 struct Ghost;
@@ -65,7 +79,7 @@ pub fn record(world: &mut World) -> Result<(), String> {
     if world.resource::<Memory>().recording {
         return Err("A recording is already in progress".into());
     }
-    world.resource_mut::<crate::lockstep::Game>().command(sim::CommandKind::MemoryRecord);
+    world.resource_mut::<crate::lockstep::SessionService>().command(sim::CommandKind::MemoryRecord);
     world.resource::<Sound>().play(Cue::Dispense);
     Ok(())
 }
@@ -75,21 +89,21 @@ pub fn deploy(world: &mut World) -> Result<(), String> {
     if !m.recording || m.elapsed < 0.15 {
         return Err("Record at least 0.15 seconds before deploying".into());
     }
-    world.resource_mut::<crate::lockstep::Game>().command(sim::CommandKind::MemoryDeploy);
+    world.resource_mut::<crate::lockstep::SessionService>().command(sim::CommandKind::MemoryDeploy);
     *world.resource_mut::<Controls>() = Controls { weapon: world.resource::<Controls>().weapon, ..Controls::default() };
     world.resource::<Sound>().play(Cue::Crystal);
     Ok(())
 }
 pub fn clear(world: &mut World) {
-    world.resource_mut::<crate::lockstep::Game>().command(sim::CommandKind::MemoryClear);
+    world.resource_mut::<crate::lockstep::SessionService>().command(sim::CommandKind::MemoryClear);
 }
 /// Mirrors the simulated trial for the view, and plays its feedback.
 pub fn tick(world: &mut World) {
     let options = world.resource::<crate::control::Options>();
     let interactive = !options.simulation && options.frames_dir.is_none();
-    let library = world.resource::<crate::assets::SceneLibrary>();
-    let reserved_e = library.scenes[library.current].scene.scenario.is_some();
-    let memory_trial = library.has_feature(SceneFeature::MemoryTrial);
+    let scene = world.resource::<crate::scene_view::SceneView>();
+    let reserved_e = scene.scene().scenario.is_some();
+    let memory_trial = scene.has_feature(SceneFeature::MemoryTrial);
     if interactive && !reserved_e {
         let keys = world.resource::<ButtonInput<KeyCode>>();
         let (e, q) = (keys.just_pressed(KeyCode::KeyE), keys.just_pressed(KeyCode::KeyQ));
@@ -106,9 +120,9 @@ pub fn tick(world: &mut World) {
     }
     let dt = world.resource::<Time>().delta_secs().min(0.1);
     let elapsed = world.resource::<Time>().elapsed_secs();
-    let game = world.resource::<crate::lockstep::Game>();
-    let mirror = game.current.as_ref().and_then(|s| s.memory.clone()).map(|sim| {
-        let center = game.center;
+    let mirror = world.resource::<crate::lockstep::WorldMirror>();
+    let mirror = mirror.current.as_ref().and_then(|s| s.memory.clone()).map(|sim| {
+        let center = mirror.center;
         let sample = |s: &sim::settlement::memory::Sample| Sample {
             time: 0.0,
             position: Vec3::new((s.position.x - center.x).to_f32(), s.height.to_f32(), (s.position.y - center.y).to_f32()),
@@ -169,6 +183,6 @@ pub fn tick(world: &mut World) {
 }
 
 pub fn snapshot(world: &World) -> serde_json::Value {
-    let m = world.resource::<Memory>();
+    let Some(m) = world.get_resource::<Memory>() else { return serde_json::Value::Null };
     serde_json::json!({"recording":m.recording,"recorded_seconds":m.elapsed,"replay_seconds":m.replay,"sample_count":m.sample_count,"ghost_position":m.ghost.map(|g|g.position.to_array()),"plates":m.pads,"charge":m.charge,"unlocked":m.unlocked,"collected":m.collected})
 }
