@@ -23,7 +23,7 @@ pub mod piles;
 
 use std::collections::BTreeMap;
 
-use content::character::{CharacterDef, CharacterIx, PLAYER_CHARACTER};
+use content::character::{Brain, CharacterDef, CharacterIx, PLAYER_CHARACTER};
 use content::scenario::{self, Scenario, Weapon, WeaponTuning};
 use content::Content;
 use fx::{Fx, FxVec2};
@@ -259,10 +259,6 @@ impl Settlement {
         let character = |name: &str| -> Result<CharacterIx, String> {
             content.names.character_index(name).ok_or_else(|| format!("unknown character {name:?}"))
         };
-        let player_character = character(PLAYER_CHARACTER)?;
-        if content.rules.characters[player_character as usize].avatar.is_none() {
-            return Err(format!("the player character {PLAYER_CHARACTER:?} is not a Player character"));
-        }
         let center = terrain.center;
         let at = |p: scenario::Point| FxVec2::new(center.x + p[0], center.y + p[1]);
         terrain.extent = scenario.extent;
@@ -349,12 +345,19 @@ impl Settlement {
         let mut agents = scenario
             .agents
             .iter()
-            .map(|a| haulers::AgentState::new(a, at(a.position), &scenario.links, items.len(), &item, &depot))
-            .collect::<Vec<_>>();
+            .map(|a| {
+                let ix = character(&a.character)?;
+                let brain = content.rules.characters[ix as usize].brain;
+                let wanted = if a.controlled { Brain::Player } else { Brain::Hauler };
+                if brain != wanted {
+                    return Err(format!("agent {} is {:?}, a {brain:?} character; it needs a {wanted:?} one", a.id, a.character));
+                }
+                Ok(haulers::AgentState::new(a, ix, at(a.position), &scenario.links, items.len(), &item, &depot))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
         for agent in agents.iter_mut().filter(|agent| agent.controlled) {
-            agent.character = Some(player_character);
             // Haulers steer around the avatar at the size it collides with.
-            agent.base_radius = content.rules.characters[player_character as usize].body.radius;
+            agent.base_radius = content.rules.characters[agent.character as usize].body.radius;
             agent.avatar.health = scenario.player_health;
             agent.avatar.max_health = scenario.player_health;
             agent.avatar.weapon = scenario.weapons.first().copied().unwrap_or_default();
@@ -530,6 +533,7 @@ impl Settlement {
                 id: "player".into(),
                 label: "YOU".into(),
                 skin: "worker".into(),
+                character: PLAYER_CHARACTER.into(),
                 position: spawn,
                 // Unused: the avatar moves at its character's speeds.
                 speed: Fx::from_ratio(19, 5),
@@ -683,9 +687,9 @@ impl Settlement {
 }
 
 impl Settlement {
-    /// An agent's character definition, if it has one (avatars do).
+    /// An agent's character definition.
     pub fn character_of(&self, agent: usize) -> Option<&CharacterDef> {
-        let ix = self.agents.get(agent)?.character?;
+        let ix = self.agents.get(agent)?.character;
         self.characters.get(ix as usize)
     }
 
@@ -693,8 +697,8 @@ impl Settlement {
     /// reference against them.
     pub fn set_characters(&mut self, characters: &[CharacterDef]) -> Result<(), String> {
         let known = |ix: CharacterIx| (ix as usize) < characters.len();
-        if let Some(a) = self.agents.iter().find(|a| a.character.is_some_and(|ix| !known(ix))) {
-            return Err(format!("agent {} has unknown character {:?}", a.id, a.character));
+        if let Some(a) = self.agents.iter().find(|a| !known(a.character)) {
+            return Err(format!("agent {} has unknown character {}", a.id, a.character));
         }
         if let Some(w) = self.waves.iter().find(|w| !known(w.character)) {
             return Err(format!("wave {} has unknown character {}", w.id, w.character));

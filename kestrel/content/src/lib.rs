@@ -153,6 +153,9 @@ const BUILTIN: &[(&str, &str)] = &[
     ("character/ghoul.ron", include_str!("../data/character/ghoul.ron")),
     ("character/ghoul_brute.ron", include_str!("../data/character/ghoul_brute.ron")),
     ("character/ghoul_forest.ron", include_str!("../data/character/ghoul_forest.ron")),
+    ("character/ox.ron", include_str!("../data/character/ox.ron")),
+    ("character/runner.ron", include_str!("../data/character/runner.ron")),
+    ("character/worker.ron", include_str!("../data/character/worker.ron")),
     ("mover/large.ron", include_str!("../data/mover/large.ron")),
     ("mover/medium.ron", include_str!("../data/mover/medium.ron")),
     ("mover/small.ron", include_str!("../data/mover/small.ron")),
@@ -380,6 +383,26 @@ mod tests {
         assert_eq!(brute.armor.as_ref().unwrap().radius.to_bits(), 1_632_087_572); // ARMORED_RADIUS, 0.38
     }
 
+    /// The hauler characters hold exactly what the forest scenario gave its
+    /// agents before they moved here, and frames keep the ticks of the former
+    /// `transfer_seconds`.
+    #[test]
+    fn builtin_haulers_keep_the_former_scenario_values() {
+        use scenario::ticks;
+        let content = Content::builtin();
+        let get = |name: &str| &content.rules.characters[content.names.character_index(name).unwrap() as usize];
+        let stats = |name: &str| {
+            let def = get(name);
+            assert_eq!(def.brain, character::Brain::Hauler);
+            (def.movement.walk.to_bits(), def.body.radius.to_bits(), def.carry.as_ref().unwrap().transfer)
+        };
+        let seconds = |text: &str| ticks(text.parse().unwrap());
+        assert_eq!(stats("worker"), (6_442_450_944, 1_202_590_843, seconds("0.45"))); // 1.5, 0.28
+        assert_eq!(stats("runner"), (7_301_444_403, 1_202_590_843, seconds("0.45"))); // 1.7
+        assert_eq!(stats("ox"), (4_724_464_026, 3_221_225_472, seconds("0.45"))); // 1.1, 0.75
+        assert_eq!(get("exosuit").carry.as_ref().unwrap().transfer, seconds("0.4"));
+    }
+
     #[test]
     fn a_base_fills_what_a_variant_leaves_out() {
         let brute = "(base: \"ghoul\", sim: (movement: (walk: 0.59), health: (hp: 5, armor: (points: 2, radius: 0.38))), view: ())";
@@ -413,6 +436,12 @@ mod tests {
         assert!(bad(&GHOUL.replace("0.27", "9")).contains("radius"));
         assert!(bad(&GHOUL.replace("walk: 0.75", "walk: 0.75, run: 0.5")).contains("walk <= run"));
         assert!(bad(&GHOUL.replace("FollowRoute", "Player")).contains("Player"));
+        assert!(bad(&GHOUL.replace("FollowRoute", "Hauler")).contains("Hauler"));
+        let hauler = "(sim: (brain: Hauler, body: (radius: 0.28), movement: (walk: 1.5), carry: (transfer: 27)), view: ())";
+        assert!(characters(&[("character/x.ron", hauler)]).is_ok());
+        assert!(bad(&hauler.replace("transfer: 27", "transfer: 1")).contains("carry.transfer"));
+        assert!(bad(&hauler.replace(", carry: (transfer: 27)", "")).contains("Hauler"));
+        assert!(bad(&GHOUL.replace("breach_damage: 1)", "breach_damage: 1), carry: (transfer: 27)")).contains("FollowRoute"));
         assert!(bad(&GHOUL.replace("hp: 3", "hp: 3, armor: (points: 2, radius: 0.1)")).contains("armor"));
         assert!(bad(&GHOUL.replace("view: ()", "view: (skin: \"x\")")).contains("skin"));
         assert!(bad(&GHOUL.replace("radius: 0.27", "radius: 0.27, mass: 2")).contains("mass"));

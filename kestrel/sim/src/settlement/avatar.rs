@@ -836,9 +836,9 @@ fn start_swing(a: &mut AgentState, tick: u64, weapon: Weapon, aim: FxVec2, muzzl
     });
 }
 
-/// An avatar's character definition.
+/// An agent's character definition.
 pub(crate) fn character_of<'a>(characters: &'a [CharacterDef], a: &AgentState) -> &'a CharacterDef {
-    &characters[a.character.expect("avatars have a character") as usize]
+    &characters[a.character as usize]
 }
 
 /// The tuning a player character carries; validated when the world is built.

@@ -28,12 +28,19 @@ fn p(x: f64, y: f64) -> [Fx; 2] {
     [fx(x), fx(y)]
 }
 
-/// The builtin content plus the original fixtures' slow ghouls.
+// The original fixtures' haulers and their quick transfers.
+pub(super) const TEST_HAULER: &str =
+    "(sim: (brain: Hauler, body: (radius: 0.18), movement: (walk: 2.0), carry: (transfer: 6)), view: ())";
+pub(super) const TEST_PLAYER: &str = "(base: \"exosuit\", sim: (carry: (transfer: 6)), view: ())";
+
+/// The builtin content plus the original fixtures' slow ghouls, haulers and player.
 fn test_content() -> Content {
     let ghoul = |hp: u32| format!("(base: \"ghoul\", sim: (movement: (walk: 0.5), health: (hp: {hp})), view: ())");
     let mut sources = content::builtin_sources();
     sources.push(("character/test_ghoul.ron".into(), ghoul(3)));
     sources.push(("character/test_ghoul_frail.ron".into(), ghoul(2)));
+    sources.push(("character/test_hauler.ron".into(), TEST_HAULER.into()));
+    sources.push(("character/test_player.ron".into(), TEST_PLAYER.into()));
     Content::from_sources(sources).unwrap()
 }
 
@@ -51,6 +58,7 @@ fn agent(id: &str) -> Agent {
         id: id.into(),
         label: id.into(),
         skin: "worker".into(),
+        character: "test_hauler".into(),
         position: p(-2.0, 1.0),
         speed: fx(2.0),
         radius: Some(fx(0.18)),
@@ -66,6 +74,7 @@ fn agent(id: &str) -> Agent {
 fn player() -> Agent {
     let mut player = agent("player");
     player.controlled = true;
+    player.character = "test_player".into();
     player.radius = None;
     player.links.clear();
     player.position = p(0.0, 0.0);

@@ -144,6 +144,9 @@ pub struct Agent {
     pub id: String,
     pub label: String,
     pub skin: String,
+    /// The character it is, by short name: a `Player` character for a
+    /// `controlled` avatar, a `Hauler` otherwise.
+    pub character: String,
     pub position: Point,
     /// Meters per second. Unused for a `controlled` avatar, which moves at
     /// its character's walk and run speeds.
@@ -453,6 +456,7 @@ impl Scenario {
             if !a.cargo_layout.valid()
                 || !point(a.position)
                 || !ident(&a.skin)
+                || !ident(&a.character)
                 || !within(a.speed, f(1, 10), Fx::from_int(8))
                 || a.radius.is_some_and(|r| !within(r, f(1, 20), Fx::ONE))
                 || !(1..=64).contains(&a.capacity)

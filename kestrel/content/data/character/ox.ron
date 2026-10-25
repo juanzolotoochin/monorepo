@@ -1,0 +1,10 @@
+// A draft animal. Its cart, and how much it carries, are set by the scenario.
+(
+    sim: (
+        brain: Hauler,
+        body: (radius: 0.75),
+        movement: (walk: 1.1),
+        carry: (transfer: 27),
+    ),
+    view: (),
+)

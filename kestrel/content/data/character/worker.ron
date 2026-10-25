@@ -1,0 +1,12 @@
+// A settlement worker who hauls goods between depots. How much a worker
+// carries is set where the scenario places it.
+(
+    sim: (
+        brain: Hauler,
+        body: (radius: 0.28),
+        movement: (walk: 1.5),
+        // Frames to load or unload one unit.
+        carry: (transfer: 27),
+    ),
+    view: (),
+)

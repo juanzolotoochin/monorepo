@@ -4,6 +4,8 @@
         brain: Player,
         body: (radius: 0.32),
         movement: (walk: 3.8, run: 5.6),
+        // Frames to pick up or put down one unit.
+        carry: (transfer: 24),
         avatar: (
             // m/s²: speeding up, slowing down, and stopping for a swing.
             acceleration: 26,
