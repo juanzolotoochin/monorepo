@@ -128,9 +128,10 @@ impl Service for SessionService {
         self.session.shutdown();
     }
 
-    /// A client's session is ready once the host has welcomed it.
+    /// A client's session is ready once the host's save has loaded. A
+    /// welcome names the world before any of its terrain is available.
     fn ready(&self, _world: &World) -> bool {
-        self.session.world_number() > 0 || self.ended.is_some()
+        self.world().is_some() || self.ended.is_some()
     }
 
     fn systems(app: &mut App) {
@@ -513,7 +514,7 @@ fn watch_world(mut service: ResMut<SessionService>, state: Option<Res<State<Worl
     let (Some(state), Some(mut next)) = (state, next) else { return };
     let number = service.session.world_number();
     match state.get() {
-        WorldState::Off if number > 0 => {
+        WorldState::Off if number > 0 && service.world().is_some() && service.ended.is_none() => {
             service.world_live = Some(number);
             next.set(WorldState::Loading);
         }
@@ -1138,6 +1139,76 @@ mod tests {
 
     fn world_active(app: &App) -> bool {
         app.world().get_resource::<State<WorldState>>().is_some_and(|s| *s.get() == WorldState::Active)
+    }
+
+    fn assert_ground_visible(app: &mut App) -> usize {
+        let world = app.world_mut();
+        let mut query = world.query_filtered::<(&Mesh3d, &MeshMaterial3d<StandardMaterial>, &Visibility), With<crate::digging::GroundChunk>>();
+        let mut count = 0;
+        for (mesh, material, visibility) in query.iter(world) {
+            assert_ne!(*visibility, Visibility::Hidden);
+            assert!(world.resource::<Assets<Mesh>>().get(&mesh.0).unwrap().count_vertices() > 0);
+            assert!(world.resource::<Assets<StandardMaterial>>().get(&material.0).is_some());
+            count += 1;
+        }
+        assert!(count > 0, "Dig Lab must draw terrain when its default deck is hidden");
+        count
+    }
+
+    #[test]
+    fn a_joined_mine_draws_terrain_after_the_save_arrives_and_on_world_changes() {
+        let mut host = field_app(Some(Network::Host("127.0.0.1:0".parse().unwrap())), 60.0);
+        // MinimalPlugins omits the renderer's VisibilityPlugin.
+        host.world_mut().register_required_components::<Mesh3d, Visibility>();
+        crate::start_world(&mut host);
+        let mine = host.world().resource::<SceneLibrary>().index("dig-lab").unwrap();
+        crate::switch_world(&mut host, mine);
+        let chunks = assert_ground_visible(&mut host);
+        let address = host.world().resource::<SessionService>().session.local_addr().unwrap();
+        let mut client = field_app(Some(Network::Join(address)), 60.0);
+        client.world_mut().register_required_components::<Mesh3d, Visibility>();
+
+        // Stop polling the host as soon as its welcome arrives. No save
+        // chunks can arrive until it processes the client's acknowledgement.
+        let mut welcomed = false;
+        for _ in 0..240 {
+            client.update();
+            if client.world().get_resource::<SessionService>().is_some_and(|s| s.session.world_number() > 0 && s.world().is_none()) {
+                welcomed = true;
+                break;
+            }
+            host.update();
+        }
+        assert!(welcomed, "the test must exercise the gap between welcome and save");
+        for _ in 0..5 {
+            client.update();
+            assert!(client.world().get_resource::<SceneView>().is_none(), "views started without the host's terrain");
+        }
+
+        for _ in 0..600 {
+            host.update();
+            client.update();
+            if world_active(&client) && client.world().resource::<WorldMirror>().player().is_some() { break; }
+        }
+        assert!(world_active(&client));
+        assert_eq!(client.world().resource::<SceneView>().index, mine);
+        assert_eq!(assert_ground_visible(&mut client), chunks);
+
+        // Returning to a mine must rebuild its ground, including on peers
+        // that have to download another save within an existing session.
+        for index in [0, mine] {
+            host.world_mut().resource_mut::<SessionService>().request_scene(index);
+            for _ in 0..600 {
+                host.update();
+                client.update();
+                if world_active(&host) && world_active(&client)
+                    && host.world().resource::<SceneView>().index == index
+                    && client.world().resource::<SceneView>().index == index { break; }
+            }
+            assert!(world_active(&client));
+            assert_eq!(client.world().resource::<SceneView>().index, index);
+        }
+        assert_eq!(assert_ground_visible(&mut client), chunks);
     }
 
     #[test]
