@@ -13,6 +13,7 @@ fn button(parent: &mut ChildSpawnerCommands, action: Action, title: &str) {
                 min_height: px(30.0),
                 padding: UiRect::axes(px(10.0), px(5.0)),
                 border: UiRect::all(px(1.0)),
+                overflow: Overflow::clip(),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.07, 0.16, 0.20, 0.92)),
@@ -21,6 +22,8 @@ fn button(parent: &mut ChildSpawnerCommands, action: Action, title: &str) {
         .with_children(|b| {
             b.spawn((
                 Text::new(title),
+                TextLayout::linebreak(LineBreak::WordOrCharacter),
+                Node { width: percent(100.0), min_width: px(0.0), ..default() },
                 TextFont {
                     font_size: FontSize::Px(14.0),
                     ..default()
@@ -138,16 +141,18 @@ pub fn setup(
         ))
         .with_children(|panel| {
             panel.spawn((
-                Text::new("CHARACTER STUDIO"),
+                Text::new("ASSET STUDIO"),
                 TextFont {
                     font_size: FontSize::Px(19.0),
                     ..default()
                 },
                 TextColor(Color::srgb(0.42, 0.92, 0.95)),
             ));
-            label(panel, "LOOPING ANIMATIONS");
+            label(panel, "CHARACTER ANIMATIONS");
             label(panel, "MOVING FLOOR / 0.5 M GRID");
-            panel.spawn((CharacterName, Text::new(""), TextFont { font_size: FontSize::Px(13.0), ..default() }, TextColor(Color::srgb(0.49, 0.82, 0.85))));
+            panel.spawn((CharacterName, Text::new(""), TextLayout::linebreak(LineBreak::WordOrCharacter),
+                Node { width: percent(100.0), min_width: px(0.0), ..default() },
+                TextFont { font_size: FontSize::Px(13.0), ..default() }, TextColor(Color::srgb(0.49, 0.82, 0.85))));
             for clip in Clip::ALL {
                 button(panel, Action::Clip(clip), clip.title());
             }
@@ -223,7 +228,7 @@ pub fn setup(
             position_type: PositionType::Absolute,
             right: px(20.0),
             top: px(145.0),
-            width: px(245.0),
+            width: px(350.0),
             max_height: percent(70.0),
             overflow: Overflow::scroll_y(),
             flex_direction: FlexDirection::Column,
@@ -233,9 +238,17 @@ pub fn setup(
         },
         BackgroundColor(Color::srgba(0.015, 0.035, 0.05, 0.94)),
     )).with_children(|panel| {
-        label(panel, "CHARACTERS / SELECT DIRECTLY");
+        label(panel, "CHARACTERS");
         for (index, character) in library.characters.iter().enumerate() {
             button(panel, Action::Character(index), &character.name);
+        }
+        label(panel, "SCENE PREFABS");
+        for (scene, pack) in library.scenes.iter().enumerate() {
+            if pack.prefabs.is_empty() { continue; }
+            label(panel, &pack.scene.id.to_uppercase().replace('-', " "));
+            for (index, prefab) in pack.prefabs.iter().enumerate() {
+                button(panel, Action::Prefab(scene, index), &prefab.id.replace('_', " "));
+            }
         }
     });
 }
@@ -267,12 +280,17 @@ pub fn input(
         match *action {
             Action::Character(index) => {
                 if let Some(character) = library.characters.get(index) {
+                    viewer.prefab = None;
                     if !viewer.clip.supports(character) {
                         viewer.clip = if Clip::Run.supports(character) { Clip::Run } else { Clip::Idle };
                     }
                     viewer.character = index;
                     viewer.reset_clock();
                 }
+            }
+            Action::Prefab(scene, index) => {
+                viewer.prefab = Some((scene, index));
+                viewer.paused = true;
             }
             Action::Clip(clip) => {
                 if library.characters.get(viewer.character).is_some_and(|character| clip.supports(character)) {
@@ -312,14 +330,25 @@ pub fn input(
     }
     let character = library.characters.get(viewer.character);
     for mut name in &mut character_names {
-        name.0 = character.map_or_else(|| "NO CHARACTER".to_string(), |entry| format!("CHARACTER / {}", entry.name));
+        name.0 = viewer.prefab.and_then(|(scene, index)| library.scenes.get(scene)
+            .and_then(|pack| pack.prefabs.get(index).map(|prefab| (pack, prefab))))
+            .map_or_else(
+                || character.map_or_else(|| "NO CHARACTER".to_string(), |entry| format!("CHARACTER / {}", entry.name)),
+                |(pack, prefab)| format!(
+                    "PREFAB / {}\nSCENE / {}\nMATERIALS / {}",
+                    prefab.id,
+                    pack.scene.id,
+                    prefab.palette.materials.iter().map(|material| material.name.as_str()).collect::<Vec<_>>().join(", "),
+                ),
+            );
     }
     for (action, interaction, mut background, mut node) in &mut actions {
         if let Action::Clip(clip) = action {
-            node.display = if character.is_some_and(|entry| clip.supports(entry)) { Display::Flex } else { Display::None };
+            node.display = if viewer.prefab.is_none() && character.is_some_and(|entry| clip.supports(entry)) { Display::Flex } else { Display::None };
         }
         let selected = match *action {
-            Action::Character(index) => viewer.character == index,
+            Action::Character(index) => viewer.prefab.is_none() && viewer.character == index,
+            Action::Prefab(scene, index) => viewer.prefab == Some((scene, index)),
             Action::Clip(clip) => viewer.clip == clip,
             Action::Angle(angle) => viewer.angle == angle,
             _ => false,

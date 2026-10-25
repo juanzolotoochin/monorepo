@@ -1,5 +1,5 @@
 //! Service layers for the game's front end. See
-//! `kestrel/docs/proposals/service_layers.md`.
+//! `kestrel/docs/service-layers.md`.
 //!
 //! A service is a singleton Bevy resource that belongs to one of three
 //! layers: App (the whole process), Session (from HOST, JOIN or PLAY until

@@ -1,6 +1,6 @@
 //! The game's simulation: every scene runs on the deterministic lockstep
 //! simulation (`kestrel/sim`) through a session (`kestrel/session`). Three services
-//! (see kestrel/docs/proposals/service_layers.md) split the work:
+//! (see kestrel/docs/service-layers.md) split the work:
 //!
 //! - [`SessionService`] (Session layer) owns the session: it builds each
 //!   scene's world, steps it on Bevy's clock, and moves the World layer

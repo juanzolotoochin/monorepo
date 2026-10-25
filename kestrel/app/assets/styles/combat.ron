@@ -53,6 +53,11 @@ Style(id: "brasswood-combat", actor_name: Some("ARENA FIGHTER"), actor_weapon: S
 (kind: Box, position: (0.0, 0.02, 1.47), size: (0.07, 0.05, 0.14), material: "arrow"),
 (kind: Box, position: (0.0, 0.05, 0.81), size: (0.035, 0.025, 1.04), material: "arrow")
 ])
+], shape_groups: [
+(id: "ghoul_leg", shapes: [
+(kind: Box, position: (0.0, -0.27, 0.0), size: (0.22, 0.55, 0.22), material: "shadow"),
+(kind: Box, position: (0.0, -0.52, 0.12), size: (0.23, 0.13, 0.4), material: "ghoul")
+])
 ], skins: [
 (id: "worker", scale: 0.55, motion: Biped, use_actor: true),
 (id: "ox", scale: 0.85, motion: Quadruped, voxel_size: Some(0.05), parts: [
@@ -259,14 +264,8 @@ Style(id: "brasswood-combat", actor_name: Some("ARENA FIGHTER"), actor_weapon: S
 (kind: Box, position: (-0.10, 0.07, 0.39), size: (0.05, 0.05, 0.04), material: "coil"),
 (kind: Box, position: (0.10, 0.07, 0.39), size: (0.05, 0.05, 0.04), material: "coil")
 ]),
-(part: LeftLeg, pivot: Some((-0.17, 0.58, 0.0)), shapes: [
-(kind: Box, position: (0.0, -0.27, 0.0), size: (0.22, 0.55, 0.22), material: "shadow"),
-(kind: Box, position: (0.0, -0.52, 0.12), size: (0.23, 0.13, 0.4), material: "ghoul")
-]),
-(part: RightLeg, pivot: Some((0.17, 0.58, 0.0)), shapes: [
-(kind: Box, position: (0.0, -0.27, 0.0), size: (0.22, 0.55, 0.22), material: "shadow"),
-(kind: Box, position: (0.0, -0.52, 0.12), size: (0.23, 0.13, 0.4), material: "ghoul")
-])
+(part: LeftLeg, pivot: Some((-0.17, 0.58, 0.0)), includes: ["ghoul_leg"]),
+(part: RightLeg, pivot: Some((0.17, 0.58, 0.0)), includes: ["ghoul_leg"])
 ]),
 (id: "ghoul_brute", scale: 0.68, motion: Biped, voxel_size: Some(0.05), parts: [
 (part: Body, pivot: Some((0.0, 0.94, 0.0)), shapes: [
@@ -296,13 +295,7 @@ Style(id: "brasswood-combat", actor_name: Some("ARENA FIGHTER"), actor_weapon: S
 (kind: Box, position: (-0.10, 0.07, 0.39), size: (0.05, 0.05, 0.04), material: "coil"),
 (kind: Box, position: (0.10, 0.07, 0.39), size: (0.05, 0.05, 0.04), material: "coil")
 ]),
-(part: LeftLeg, pivot: Some((-0.17, 0.58, 0.0)), shapes: [
-(kind: Box, position: (0.0, -0.27, 0.0), size: (0.22, 0.55, 0.22), material: "shadow"),
-(kind: Box, position: (0.0, -0.52, 0.12), size: (0.23, 0.13, 0.4), material: "ghoul")
-]),
-(part: RightLeg, pivot: Some((0.17, 0.58, 0.0)), shapes: [
-(kind: Box, position: (0.0, -0.27, 0.0), size: (0.22, 0.55, 0.22), material: "shadow"),
-(kind: Box, position: (0.0, -0.52, 0.12), size: (0.23, 0.13, 0.4), material: "ghoul")
-])
+(part: LeftLeg, pivot: Some((-0.17, 0.58, 0.0)), includes: ["ghoul_leg"]),
+(part: RightLeg, pivot: Some((0.17, 0.58, 0.0)), includes: ["ghoul_leg"])
 ])
 ])

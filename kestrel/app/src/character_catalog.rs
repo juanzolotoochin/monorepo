@@ -61,7 +61,7 @@ impl CharacterCatalog {
                 });
             }
             for skin in &pack.skins {
-                if skin.parts.is_empty() || !matches!(skin.motion, Motion::Biped | Motion::Quadruped)
+                if skin.parts.is_empty() || !matches!(skin.motion, Motion::Biped | Motion::Quadruped | Motion::CubeRoll { .. })
                     || !ids.insert(format!("skin:{}", skin.id)) {
                     continue;
                 }

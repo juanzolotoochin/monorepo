@@ -20,12 +20,17 @@ fn assemble(scene: Scene, mut prefabs: Vec<Prefab>) -> Result<ScenePack> {
     let required: BTreeSet<_> = scene.instances.iter().map(|i| i.prefab.as_str()).collect();
     prefabs.retain(|p| required.contains(p.id.as_str()));
     prefabs.sort_by(|a, b| a.id.cmp(&b.id));
-    let environment = if scene.architecture.is_empty() {
+    let shapes = voxel_assets::expand_scene_shapes(
+        scene.style.as_ref().unwrap_or(&Default::default()),
+        &scene.architecture,
+        &scene.shape_instances,
+    )?;
+    let environment = if shapes.is_empty() {
         None
     } else {
         Some(voxel_assets::compile_environment(
             scene.style.as_ref().unwrap_or(&Default::default()),
-            &scene.architecture,
+            &shapes,
         )?)
     };
     let actor = voxel_assets::compile_actor(scene.style.as_ref().unwrap_or(&Default::default()))?;

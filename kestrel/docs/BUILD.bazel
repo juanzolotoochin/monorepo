@@ -1,0 +1,33 @@
+load("@aspect_rules_js//js:defs.bzl", "js_run_binary", "js_run_devserver")
+
+_sources = glob([
+    "**/*.md",
+    "index.html",
+    "**/*.png",
+    "**/*.js",
+    "**/*.css",
+])
+
+_packages = [
+    "//:node_modules/marked",
+    "//:node_modules/mermaid",
+    "//:node_modules/vite",
+]
+
+js_run_devserver(
+    name = "docs",
+    data = _sources + _packages,
+    tool = "//:vite.bin",
+    args = ["--config", "kestrel/docs/vite.config.js"],
+    include_transitive_sources = True,
+    tags = ["ibazel_notify_changes"],
+)
+
+js_run_binary(
+    name = "site",
+    srcs = _sources + _packages,
+    tool = "//:vite.bin",
+    args = ["build", "--config", "kestrel/docs/vite.config.js"],
+    out_dirs = ["dist"],
+    include_transitive_sources = True,
+)

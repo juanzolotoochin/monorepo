@@ -96,6 +96,23 @@ fn contact_path(phase: f32, step: f32) -> (f32, f32) {
         (-span + 2.0 * span * eased, step * 0.28 * (progress * std::f32::consts::PI).sin())
     }
 }
+
+/// Roll a cube around its next floor edge as distance advances. The body pivot
+/// is at the cube center, `edge / 2` above the floor in its rest pose.
+fn cube_roll_pose(rest: Transform, travel: f32, edge: f32, scale: f32) -> Transform {
+    let angle = travel / (edge * scale.max(0.01)) * std::f32::consts::FRAC_PI_2;
+    let quarter = std::f32::consts::FRAC_PI_2;
+    let turn = (angle / quarter).floor();
+    let local = angle - turn * quarter;
+    let (sin, cos) = local.sin_cos();
+    let center = turn * edge + edge * 0.5 * (1.0 - cos + sin);
+    let mut posed = rest;
+    posed.rotation = Quat::from_rotation_x(angle);
+    posed.translation.y += edge * 0.5 * (sin + cos - 1.0);
+    posed.translation.z += center - travel / scale.max(0.01);
+    posed
+}
+
 impl RigTemplate {
     pub fn upload(world: &mut World, skin: &SkinMesh, profile: &StyleProfile) -> Self {
         let parts = skin
@@ -203,7 +220,10 @@ impl RigTemplate {
 }
 impl Rig {
     pub fn cycle_distance(&self, scale: f32) -> f32 {
-        2.0 * self.step_local * scale.max(0.01)
+        match self.motion {
+            Motion::CubeRoll { edge } => 4.0 * edge * scale.max(0.01),
+            _ => 2.0 * self.step_local * scale.max(0.01),
+        }
     }
     pub fn part_world_transform(&self, world: &World, part: ActorPart) -> Option<Transform> {
         let bone = self.bones.iter().find(|bone| bone.kind == part)?.entity;
@@ -333,6 +353,11 @@ impl Rig {
                         t.rotation = Quat::from_rotation_x(travel / wheel_radius);
                     }
                 }
+                Motion::CubeRoll { edge } => {
+                    if part == ActorPart::Body {
+                        t = cube_roll_pose(rest, travel, *edge, scale);
+                    }
+                }
                 Motion::Machine { axis } => {
                     if part == ActorPart::Weapon {
                         t.rotation = Quat::from_axis_angle(
@@ -381,6 +406,24 @@ pub struct Fade {
 mod contact_tests {
     use super::*;
     use crate::assets::SceneLibrary;
+
+    #[test]
+    fn cube_roll_keeps_its_corners_on_the_floor() {
+        let edge = 0.6;
+        let rest = Transform::from_xyz(0.0, edge * 0.5, 0.0);
+        for frame in -80..=80 {
+            let travel = frame as f32 * edge / 40.0;
+            let pose = cube_roll_pose(rest, travel, edge, 1.0);
+            let low = [-edge * 0.5, edge * 0.5].into_iter()
+                .flat_map(|y| [-edge * 0.5, edge * 0.5].map(|z| {
+                    (pose.rotation * Vec3::new(0.0, y, z)).y + pose.translation.y
+                }))
+                .fold(f32::INFINITY, f32::min);
+            assert!(low.abs() < 0.0001, "frame {frame}: cube bottom at {low}");
+        }
+        let quarter = cube_roll_pose(rest, edge, edge, 1.0);
+        assert!((quarter.rotation * Vec3::Y).distance(Vec3::Z) < 0.0001);
+    }
 
     #[test]
     fn baked_biped_and_quadruped_soles_stay_above_ground() {

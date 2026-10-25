@@ -1,0 +1,38 @@
+Style(
+    id: "asset-guide",
+    actor_name: Some("CUBE KNIGHT"),
+    voxel_size: 0.1,
+    actor_voxel_size: Some(0.05),
+    materials: [
+        (name: "stone", color: (0.35, 0.55, 0.65), emissive: (0.0, 0.0, 0.0), metallic: 0.1, roughness: 0.7, impact: Stone),
+        (name: "copper", color: (0.9, 0.42, 0.16), emissive: (0.0, 0.0, 0.0), metallic: 0.65, roughness: 0.35, impact: Metal),
+        (name: "glow", color: (0.1, 0.9, 0.8), emissive: (0.2, 2.0, 1.8), metallic: 0.0, roughness: 0.3, impact: Crystal),
+        (name: "floor", color: (0.13, 0.19, 0.22), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.9, impact: Stone),
+    ],
+    shape_groups: [
+        (id: "cube", shapes: [
+            (kind: Box, position: (0.0, 0.0, 0.0), size: (0.6, 0.6, 0.6), material: "stone"),
+        ]),
+        (id: "face", shapes: [
+            (kind: Box, position: (-0.15, 0.04, 0.31), size: (0.09, 0.09, 0.03), material: "glow"),
+            (kind: Box, position: (0.15, 0.04, 0.31), size: (0.09, 0.09, 0.03), material: "glow"),
+        ]),
+        (id: "character_body", includes: ["cube", "face"], shapes: [
+            (kind: Box, position: (0.0, -0.19, 0.0), size: (0.68, 0.08, 0.68), material: "copper"),
+        ]),
+        (id: "leg", shapes: [
+            (kind: Box, position: (0.0, -0.22, 0.0), size: (0.16, 0.44, 0.16), material: "copper"),
+        ]),
+    ],
+    actor: [
+        (part: Body, pivot: Some((0.0, 0.85, 0.0)), includes: ["character_body"]),
+        (part: LeftLeg, pivot: Some((-0.18, 0.48, 0.0)), includes: ["leg"]),
+        (part: RightLeg, pivot: Some((0.18, 0.48, 0.0)), includes: ["leg"]),
+    ],
+    skins: [
+        (id: "cube_walker", scale: 1.0, motion: Biped, use_actor: true),
+        (id: "cube_roller", scale: 1.0, motion: CubeRoll(edge: 0.6), parts: [
+            (part: Body, pivot: Some((0.0, 0.3, 0.0)), includes: ["cube", "face"]),
+        ]),
+    ],
+)

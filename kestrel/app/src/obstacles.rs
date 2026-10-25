@@ -104,6 +104,7 @@ mod tests {
         assert_eq!(
             counts,
             [
+                ("asset-guide", 0, 0),
                 ("atlantis", 21, 0),
                 ("boulder-lab", 10, 0),
                 ("combat-arena", 0, 0),

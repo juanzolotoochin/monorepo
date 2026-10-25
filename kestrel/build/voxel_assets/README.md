@@ -160,6 +160,37 @@ switching scenes. See `jetpack_lab.ron` for an elevated scene using the existing
 
 ## Style profiles and architectural baking
 
+Styles can also define reusable visual components with `shape_groups`. A group
+contains shapes and may include another group; actor and skin parts include
+groups in their own local coordinates. A scene can also place a group through
+`shape_instances`, supplying a position and uniform scale for each copy. This
+lets one authored component supply geometry to scenery and moving rigs:
+
+```ron
+shape_groups: [
+    (id: "boot", shapes: [
+        (kind: Box, position: (0.0, -0.52, 0.12),
+         size: (0.23, 0.13, 0.4), material: "leather"),
+    ]),
+    (id: "leg", includes: ["boot"], shapes: [
+        (kind: Box, position: (0.0, -0.27, 0.0),
+         size: (0.22, 0.55, 0.22), material: "cloth"),
+    ]),
+],
+skins: [
+    (id: "walker", scale: 0.55, motion: Biped, parts: [
+        (part: LeftLeg, includes: ["leg"]),
+        (part: RightLeg, includes: ["leg"]),
+    ]),
+],
+```
+
+The compiler expands groups before meshing and before a skin's material
+remapping. Unknown names, duplicate names, cycles, and oversized expansions
+are errors. `combat.ron` uses one `ghoul_leg` component for the ghoul and
+armored ghoul rigs. Simulation character definitions remain separate from
+these visual assets; their `view` section does not yet select a skin.
+
 Scene pack version 5 carries optional style profiles, baked architecture,
 articulated actor meshes, and explicit fixture lights. Existing layouts omit
 these fields and keep the industrial presentation.
@@ -263,7 +294,8 @@ A style's `skins` list supplies named rigs with a `scale`, `motion`, optional
 `voxel_size`, and articulated `parts` (each may specify a local `pivot`).
 `use_actor: true` reuses the profile's player recipe; `material_map` remaps its
 named materials. Supported motions are `Biped`, `Quadruped`,
-`Vehicle(wheel_radius: ...)`, `Machine(axis: ...)`, `Turret`, and `Static`.
+`CubeRoll(edge: ...)`, `Vehicle(wheel_radius: ...)`, `Machine(axis: ...)`,
+`Turret`, and `Static`.
 Shapes also support `Cone`, `CylinderX`, and `RingX` for trees and wheel geometry.
 The compiler bakes and validates each skin; the renderer uploads templates once
 and shares their mesh/material handles across instances.
