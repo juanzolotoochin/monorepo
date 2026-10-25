@@ -256,7 +256,6 @@ pub fn input(
                     }
                     viewer.character = index;
                     viewer.reset_clock();
-                    library.requested = Some(character.scene_index);
                 }
             }
             Action::Clip(clip) => {
@@ -291,6 +290,11 @@ pub fn input(
             Action::Back => {
                 viewer.active = false;
                 menu.open = true;
+                // The preview only selected a character asset pack. Force the
+                // next play session to build its actual scene, even when the
+                // menu selects the same pack that the preview used.
+                library.current = usize::MAX;
+                library.requested = None;
                 for root in &roots {
                     commands.entity(root).despawn();
                 }

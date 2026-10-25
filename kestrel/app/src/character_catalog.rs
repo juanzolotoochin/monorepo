@@ -4,6 +4,7 @@ use voxel_assets::{ActorPart, Motion, ScenePack};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CharacterSource {
+    BuiltIn,
     Actor,
     Skin(String),
 }
@@ -29,6 +30,18 @@ impl CharacterCatalog {
         let mut ids = HashSet::new();
         let mut entries = Vec::new();
         for (scene_index, pack) in scenes.iter().enumerate() {
+            if pack.scene.style.is_none() && pack.actor.is_empty()
+                && ids.insert("builtin:exosuit".to_string()) {
+                entries.push(CharacterEntry {
+                    scene_index,
+                    source: CharacterSource::BuiltIn,
+                    id: "builtin:exosuit".into(),
+                    name: "EXOSUIT".into(),
+                    can_locomote: true,
+                    weapon: Some(content::scenario::Weapon::Sword),
+                    can_jump: true,
+                });
+            }
             let Some(style) = pack.scene.style.as_ref() else { continue };
             if !pack.actor.is_empty() && ids.insert(style.id.clone()) {
                 let has_weapon_mesh = pack.actor.iter().any(|part| {
@@ -67,6 +80,10 @@ impl CharacterCatalog {
 
     pub fn for_scene(&self, scene_index: usize) -> Option<&CharacterEntry> {
         self.iter().find(|character| character.scene_index == scene_index)
+    }
+
+    pub fn built_in(&self) -> Option<&CharacterEntry> {
+        self.iter().find(|character| matches!(character.source, CharacterSource::BuiltIn))
     }
 
     pub fn index_for_id(&self, id: &str) -> Result<usize, String> {

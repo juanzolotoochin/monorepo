@@ -72,118 +72,61 @@ fn hash(x: i32, y: i32, z: i32) -> u32 {
     n ^ (n >> 16)
 }
 
-pub fn setup(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    let cube = meshes.add(Cuboid::default());
-    let dark = material(&mut materials, [0.065, 0.095, 0.14], 0.35);
-    let frame = material(&mut materials, [0.16, 0.22, 0.28], 0.5);
-    let panel = material(&mut materials, [0.31, 0.39, 0.43], 0.35);
-    let ivory = material(&mut materials, [0.72, 0.77, 0.73], 0.18);
-    let orange = material(&mut materials, [0.91, 0.33, 0.095], 0.20);
-    let gold = material(&mut materials, [0.93, 0.63, 0.20], 0.3);
-    let cyan = glow(&mut materials, [0.10, 0.78, 1.0], 5.5);
-    let amber = glow(&mut materials, [1.0, 0.28, 0.045], 4.0);
-    let white = glow(&mut materials, [0.65, 0.87, 1.0], 5.0);
-    let dust = material(&mut materials, [0.25, 0.22, 0.29], 0.0);
-    let floors = [
-        material(&mut materials, [0.17, 0.22, 0.28], 0.25),
-        material(&mut materials, [0.19, 0.24, 0.30], 0.25),
-        material(&mut materials, [0.15, 0.20, 0.26], 0.25),
-    ];
-    commands.insert_resource(crate::style::MaterialBindings(
-        [
-            (&dark, "shadow"),
-            (&frame, "metal"),
-            (&panel, "metal"),
-            (&ivory, "stone"),
-            (&orange, "metal"),
-            (&gold, "trim"),
-            (&cyan, "magic"),
-        ]
-        .into_iter()
-        .map(|(handle, role)| {
-            (
-                handle.clone(),
-                role.to_string(),
-                materials.get(handle).unwrap().clone(),
-            )
-        })
-        .collect(),
-    ));
-    let camera_base = Vec3::new(20.0, 20.0, 20.0);
-    let camera_target = Vec3::new(0.0, 0.0, -0.4);
-    commands.spawn((
-        Camera3d::default(),
-        Hdr,
-        Msaa::Off,
-        Projection::Orthographic(OrthographicProjection {
-            scaling_mode: ScalingMode::FixedVertical {
-                viewport_height: 21.5,
-            },
-            ..OrthographicProjection::default_3d()
-        }),
-        Tonemapping::TonyMcMapface,
-        Bloom {
-            intensity: 0.18,
-            ..Bloom::NATURAL
-        },
-        ScreenSpaceAmbientOcclusion::default(),
-        TemporalAntiAliasing::default(),
-        Transform::from_translation(camera_base).looking_at(camera_target, Vec3::Y),
-        CameraRig {
-            base: camera_base,
-            target: camera_target,
-            zoom: 21.5,
-        },
-    ));
-    commands.spawn((
-        DirectionalLight {
-            color: Color::srgb(1.0, 0.79, 0.63),
-            illuminance: 10500.0,
-            shadow_maps_enabled: true,
-            ..default()
-        },
-        Transform::from_xyz(-8.0, 12.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
-    for (index, (p, color, intensity)) in [
-        (
-            Vec3::new(-4.8, 3.0, -4.8),
-            Color::srgb(0.05, 0.65, 1.0),
-            150000.0,
-        ),
-        (
-            Vec3::new(6.0, 3.5, -5.0),
-            Color::srgb(1.0, 0.30, 0.08),
-            110000.0,
-        ),
-        (
-            Vec3::new(2.0, 5.0, 5.0),
-            Color::srgb(0.32, 0.58, 1.0),
-            65000.0,
-        ),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        commands.spawn((
-            crate::style::AccentLight {
-                role: index,
-                intensity,
-            },
-            PointLight {
-                color,
-                intensity,
-                radius: 0.8,
-                range: 12.0,
-                ..default()
-            },
-            Transform::from_translation(p),
-        ));
-    }
+#[cfg(test)]
+mod scene_construction_tests {
+    use super::*;
 
+    #[test]
+    fn static_game_world_is_deferred_until_play() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .init_resource::<SceneWorldBuilt>()
+            .add_systems(Startup, setup);
+        app.update();
+        assert!(!app.world().resource::<SceneWorldBuilt>().0);
+        let world = app.world_mut();
+        let mut decks = world.query_filtered::<Entity, With<crate::jetpack::Deck>>();
+        assert_eq!(decks.iter(world).count(), 0);
+        app.add_systems(Update, ensure_environment);
+        app.update();
+        assert!(app.world().resource::<SceneWorldBuilt>().0);
+        let world = app.world_mut();
+        let mut decks = world.query_filtered::<Entity, With<crate::jetpack::Deck>>();
+        assert!(decks.iter(world).count() > 0);
+    }
+}
+
+#[derive(Resource)]
+pub struct SceneWorldAssets {
+    cube: Handle<Mesh>,
+    dark: Handle<StandardMaterial>,
+    frame: Handle<StandardMaterial>,
+    panel: Handle<StandardMaterial>,
+    ivory: Handle<StandardMaterial>,
+    orange: Handle<StandardMaterial>,
+    gold: Handle<StandardMaterial>,
+    cyan: Handle<StandardMaterial>,
+    amber: Handle<StandardMaterial>,
+    dust: Handle<StandardMaterial>,
+    floors: [Handle<StandardMaterial>; 3],
+    rock_dark: Handle<StandardMaterial>,
+}
+
+#[derive(Resource, Default)]
+pub struct SceneWorldBuilt(bool);
+
+pub fn ensure_environment(
+    mut commands: Commands,
+    assets: Res<SceneWorldAssets>,
+    mut built: ResMut<SceneWorldBuilt>,
+) {
+    if built.0 { return; }
+    built.0 = true;
+    let SceneWorldAssets {
+        cube, dark, frame, panel, ivory, orange, gold, cyan,
+        amber, dust, floors, rock_dark,
+    } = &*assets;
     // A heavy suspended deck with stepped strata and a luminous perimeter.
     object(
         &mut commands,
@@ -292,7 +235,6 @@ pub fn setup(
     }
 
     // Boulders come from compiled scene packs (see assets.rs).
-    let rock_dark = material(&mut materials, [0.14, 0.17, 0.23], 0.10);
 
     // Back-left coolant relay: chunky housing, fins, emissive core and conduits.
     let reactor = Vec3::new(-5.0, 0.0, -5.3);
@@ -535,6 +477,127 @@ pub fn setup(
             Vec3::splat(0.4 + (h % 5) as f32 * 0.2),
         );
     }
+}
+
+pub fn setup(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let cube = meshes.add(Cuboid::default());
+    let dark = material(&mut materials, [0.065, 0.095, 0.14], 0.35);
+    let frame = material(&mut materials, [0.16, 0.22, 0.28], 0.5);
+    let panel = material(&mut materials, [0.31, 0.39, 0.43], 0.35);
+    let ivory = material(&mut materials, [0.72, 0.77, 0.73], 0.18);
+    let orange = material(&mut materials, [0.91, 0.33, 0.095], 0.20);
+    let gold = material(&mut materials, [0.93, 0.63, 0.20], 0.3);
+    let cyan = glow(&mut materials, [0.10, 0.78, 1.0], 5.5);
+    let amber = glow(&mut materials, [1.0, 0.28, 0.045], 4.0);
+    let white = glow(&mut materials, [0.65, 0.87, 1.0], 5.0);
+    let dust = material(&mut materials, [0.25, 0.22, 0.29], 0.0);
+    let floors = [
+        material(&mut materials, [0.17, 0.22, 0.28], 0.25),
+        material(&mut materials, [0.19, 0.24, 0.30], 0.25),
+        material(&mut materials, [0.15, 0.20, 0.26], 0.25),
+    ];
+    commands.insert_resource(crate::style::MaterialBindings(
+        [
+            (&dark, "shadow"),
+            (&frame, "metal"),
+            (&panel, "metal"),
+            (&ivory, "stone"),
+            (&orange, "metal"),
+            (&gold, "trim"),
+            (&cyan, "magic"),
+        ]
+        .into_iter()
+        .map(|(handle, role)| {
+            (
+                handle.clone(),
+                role.to_string(),
+                materials.get(handle).unwrap().clone(),
+            )
+        })
+        .collect(),
+    ));
+    let camera_base = Vec3::new(20.0, 20.0, 20.0);
+    let camera_target = Vec3::new(0.0, 0.0, -0.4);
+    commands.spawn((
+        Camera3d::default(),
+        Hdr,
+        Msaa::Off,
+        Projection::Orthographic(OrthographicProjection {
+            scaling_mode: ScalingMode::FixedVertical {
+                viewport_height: 21.5,
+            },
+            ..OrthographicProjection::default_3d()
+        }),
+        Tonemapping::TonyMcMapface,
+        Bloom {
+            intensity: 0.18,
+            ..Bloom::NATURAL
+        },
+        ScreenSpaceAmbientOcclusion::default(),
+        TemporalAntiAliasing::default(),
+        Transform::from_translation(camera_base).looking_at(camera_target, Vec3::Y),
+        CameraRig {
+            base: camera_base,
+            target: camera_target,
+            zoom: 21.5,
+        },
+    ));
+    commands.spawn((
+        DirectionalLight {
+            color: Color::srgb(1.0, 0.79, 0.63),
+            illuminance: 10500.0,
+            shadow_maps_enabled: true,
+            ..default()
+        },
+        Transform::from_xyz(-8.0, 12.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
+    ));
+    for (index, (p, color, intensity)) in [
+        (
+            Vec3::new(-4.8, 3.0, -4.8),
+            Color::srgb(0.05, 0.65, 1.0),
+            150000.0,
+        ),
+        (
+            Vec3::new(6.0, 3.5, -5.0),
+            Color::srgb(1.0, 0.30, 0.08),
+            110000.0,
+        ),
+        (
+            Vec3::new(2.0, 5.0, 5.0),
+            Color::srgb(0.32, 0.58, 1.0),
+            65000.0,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        commands.spawn((
+            crate::style::AccentLight {
+                role: index,
+                intensity,
+            },
+            PointLight {
+                color,
+                intensity,
+                radius: 0.8,
+                range: 12.0,
+                ..default()
+            },
+            Transform::from_translation(p),
+        ));
+    }
+
+    let rock_dark = material(&mut materials, [0.14, 0.17, 0.23], 0.10);
+    commands.insert_resource(SceneWorldAssets {
+        cube: cube.clone(), dark: dark.clone(), frame: frame.clone(),
+        panel: panel.clone(), ivory: ivory.clone(), orange: orange.clone(),
+        gold: gold.clone(), cyan: cyan.clone(), amber: amber.clone(),
+        dust: dust.clone(), floors: floors.clone(), rock_dark: rock_dark.clone(),
+    });
 
     // Compact articulated exosuit. Each joint has a stable pivot shared by local and peer posing.
     commands
@@ -545,22 +608,6 @@ pub fn setup(
             Visibility::default(),
         ))
         .with_children(|p| {
-            for x in [-0.32, 0.32] {
-                block(
-                    p,
-                    &cube,
-                    &frame,
-                    Vec3::new(x, 0.8, -0.22),
-                    Vec3::new(0.2, 0.4, 0.24),
-                );
-                p.spawn((
-                    crate::jetpack::Exhaust,
-                    Mesh3d(cube.clone()),
-                    MeshMaterial3d(cyan.clone()),
-                    Transform::from_xyz(x, 0.42, -0.22).with_scale(Vec3::new(0.12, 0.5, 0.12)),
-                    Visibility::Hidden,
-                ));
-            }
             let body = Transform::from_xyz(0.0, 0.94, 0.0);
             p.spawn((
                 Part {
@@ -572,6 +619,18 @@ pub fn setup(
                 Visibility::default(),
             ))
             .with_children(|hip| {
+                // The backpack is part of the chest below. Keep its exhaust
+                // on the animated body, so the effect follows torso motion.
+                for x in [-0.14, 0.14] {
+                    hip.spawn((
+                        crate::jetpack::Exhaust,
+                        Mesh3d(cube.clone()),
+                        MeshMaterial3d(cyan.clone()),
+                        Transform::from_xyz(x, -0.49, -0.48)
+                            .with_scale(Vec3::new(0.10, 0.5, 0.10)),
+                        Visibility::Hidden,
+                    ));
+                }
                 block(
                     hip,
                     &cube,
@@ -643,7 +702,7 @@ pub fn setup(
                         block(
                             b,
                             &cube,
-                            &cyan,
+                            &frame,
                             Vec3::new(x, 0.22, -0.48),
                             Vec3::new(0.07, 0.27, 0.025),
                         );

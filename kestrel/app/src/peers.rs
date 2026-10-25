@@ -5,12 +5,14 @@
 
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
+use std::collections::HashMap;
 
 use content::scenario::Weapon;
 use sim::settlement::avatar::Swing;
 
 use crate::character::{
-    blend_pose, dig_age, jump_motion, GaitClock, MotionState, Part, PartKind, Player, Pose,
+    blend_pose, dig_age, grounded_foot_targets, jump_motion, GaitClock, JointSnapshot,
+    MotionState, Part, PartKind, Player, Pose,
 };
 use crate::combat::{Attack, ATTACK_END, REBOUND_END};
 use crate::jetpack::Exhaust;
@@ -81,6 +83,7 @@ pub fn update(
     mut commands: Commands,
     game: Res<Game>,
     style: Res<ActiveStyle>,
+    contacts: Option<Res<crate::character::ActorFootContacts>>,
     library: Res<crate::assets::SceneLibrary>,
     time: Res<Time>,
     sound: Res<crate::sound::Sound>,
@@ -101,13 +104,10 @@ pub fn update(
     // Render time in ticks: views sit `alpha` of the way from the previous
     // tick's state to the current one's.
     let ticks = game.tick as f32 - 1.0 + game.alpha;
-    let motion_profile = library.scenes[library.current]
-        .scene
-        .style
-        .as_ref()
-        .map_or_else(voxel_assets::CharacterMotion::default, |s| {
-            s.character_motion
-        });
+    let mut motion_profile = crate::character::motion_profile(&library.scenes[library.current]);
+    if let Some(contacts) = &contacts {
+        motion_profile = contacts.adapt_motion(motion_profile);
+    }
     let mut poses = Vec::new();
     let mut shown = Vec::new();
     for (entity, mut peer, mut transform) in &mut peers {
@@ -183,7 +183,10 @@ pub fn update(
             entity,
             current.avatar.weapon,
             Pose {
-                motion: motion_profile,
+                motion: voxel_assets::CharacterMotion {
+                    step_distance: motion_profile.step_distance / transform.scale.x.max(0.1),
+                    ..motion_profile
+                },
                 stride: peer.gait.phase,
                 speed,
                 turn,
@@ -214,8 +217,36 @@ pub fn update(
             );
         }
     }
+    for (root, _, pose) in &poses {
+        if !pose.motion.plant_feet || pose.speed <= 0.05 || pose.airborne || pose.jump.is_some()
+            || pose.attack.is_some() || pose.dig.is_some() {
+            continue;
+        }
+        let mut joints: HashMap<Entity, JointSnapshot> = HashMap::new();
+        for (entity, part, transform) in &mut parts {
+            if parents.iter_ancestors(entity).any(|ancestor| ancestor == *root) {
+                joints.insert(entity, (part.kind, part.rest, *transform,
+                    parents.get(entity).ok().map(ChildOf::parent)));
+            }
+        }
+        for (entity, target) in grounded_foot_targets(&joints, *root, pose) {
+            if let Ok((_, _, mut transform)) = parts.get_mut(entity) {
+                *transform = target;
+            }
+        }
+        if let Some(contacts) = contacts.as_ref() {
+            for (entity, target) in crate::character::actor_leg_targets(&joints, *root, pose, contacts) {
+                if let Ok((_, _, mut transform)) = parts.get_mut(entity) {
+                    *transform = target;
+                }
+            }
+        }
+    }
     for (parent, mut visibility) in &mut exhausts {
-        if let Some((.., pose)) = poses.iter().find(|(e, ..)| *e == parent.parent()) {
+        let owner = std::iter::once(parent.parent())
+            .chain(parents.iter_ancestors(parent.parent()))
+            .find_map(|ancestor| poses.iter().find(|(entity, ..)| *entity == ancestor));
+        if let Some((.., pose)) = owner {
             *visibility = if pose.airborne && pose.jump.is_none() {
                 Visibility::Inherited
             } else {

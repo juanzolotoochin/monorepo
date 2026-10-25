@@ -67,13 +67,17 @@ Style(id: "brasswood-frontier", actor_name: Some("FRONTIER RANGER"), actor_weapo
 (kind: Box, position: (0.0, 0.9, 0.12), size: (0.9, 0.14, 0.2), material: "trim"),
 (kind: Box, position: (0.0, 0.9, -0.4), size: (0.9, 0.14, 0.2), material: "trim")
 ]),
-(part: LeftLeg, pivot: Some((-0.28, 0.5, 0.0)), shapes: [
-(kind: Box, position: (0.0, -0.25, -0.5), size: (0.19, 0.5, 0.22), material: "leather"),
-(kind: Box, position: (0.0, -0.25, 0.5), size: (0.19, 0.5, 0.22), material: "leather")
+(part: LeftLeg, pivot: Some((-0.28, 0.5, 0.5)), shapes: [
+(kind: Box, position: (0.0, -0.25, 0.0), size: (0.19, 0.5, 0.22), material: "leather")
 ]),
-(part: RightLeg, pivot: Some((0.28, 0.5, 0.0)), shapes: [
-(kind: Box, position: (0.0, -0.25, -0.5), size: (0.19, 0.5, 0.22), material: "leather"),
-(kind: Box, position: (0.0, -0.25, 0.5), size: (0.19, 0.5, 0.22), material: "leather")
+(part: RightLeg, pivot: Some((0.28, 0.5, 0.5)), shapes: [
+(kind: Box, position: (0.0, -0.25, 0.0), size: (0.19, 0.5, 0.22), material: "leather")
+]),
+(part: LeftShin, pivot: Some((-0.28, 0.5, -0.5)), shapes: [
+(kind: Box, position: (0.0, -0.25, 0.0), size: (0.19, 0.5, 0.22), material: "leather")
+]),
+(part: RightShin, pivot: Some((0.28, 0.5, -0.5)), shapes: [
+(kind: Box, position: (0.0, -0.25, 0.0), size: (0.19, 0.5, 0.22), material: "leather")
 ])
 ]),
 (id: "cart", scale: 1.0, motion: Vehicle(wheel_radius: 0.33), voxel_size: Some(0.05), parts: [

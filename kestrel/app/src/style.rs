@@ -10,6 +10,7 @@ use voxel_assets::content_key;
 #[derive(Resource, Default)]
 pub struct ActiveStyle {
     current: Option<usize>,
+    studio: bool,
     cache: HashMap<String, Vec<(Handle<Mesh>, Handle<StandardMaterial>)>>,
     palettes: HashMap<String, Vec<Handle<StandardMaterial>>>,
 }
@@ -101,13 +102,15 @@ fn apply_actor_pivots(
 }
 pub fn apply(world: &mut World) {
     let index = world.resource::<SceneLibrary>().current;
-    if world.resource::<ActiveStyle>().current == Some(index) {
+    let studio = world.get_resource::<crate::viewer::Viewer>().is_some_and(|viewer| viewer.active);
+    if world.resource::<ActiveStyle>().current == Some(index)
+        && world.resource::<ActiveStyle>().studio == studio {
         return;
     }
     let scene = &world.resource::<SceneLibrary>().scenes[index];
     let styled = scene.scene.style.is_some();
     let profile = scene.scene.style.clone().unwrap_or_default();
-    let environment = scene.environment.clone();
+    let environment = if studio { None } else { scene.environment.clone() };
     let actor = scene.actor.clone();
     let skins = scene.skins.clone();
     let available_weapons = scene
@@ -116,12 +119,13 @@ pub fn apply(world: &mut World) {
         .as_ref()
         .map_or(vec![], |s| s.weapons.clone());
     let fixture_lighting = environment.as_ref().is_some_and(|e| !e.lights.is_empty());
-    let hide_deck = environment.is_some() || scene.scene.terrain.is_some();
+    let hide_deck = studio || environment.is_some() || scene.scene.terrain.is_some();
     let settlement = scene.scene.scenario.is_some();
     let jumping = scene
         .scene
         .features
         .contains(&voxel_assets::SceneFeature::Jump);
+    world.insert_resource(crate::character::ActorFootContacts::from_actor(&actor));
     for mut visible in world
         .query_filtered::<&mut Visibility, Or<(
             With<crate::scene::CombatPanel>,
@@ -184,6 +188,18 @@ pub fn apply(world: &mut World) {
         } else {
             Visibility::Inherited
         };
+    }
+    if studio {
+        for mut visibility in world
+            .query_filtered::<&mut Visibility, Or<(
+                With<crate::assets::IndustrialProp>,
+                With<crate::assets::BoulderInstance>,
+                With<crate::assets::SampleCaption>,
+            )>>()
+            .iter_mut(world)
+        {
+            *visibility = Visibility::Hidden;
+        }
     }
     if let Some(bindings) = world.get_resource::<MaterialBindings>() {
         let updates: Vec<_> = bindings
@@ -377,7 +393,9 @@ pub fn apply(world: &mut World) {
             };
             actor.iter().any(|a| Some(a.part) == exact || Some(a.part) == fallback)
         });
-        let hide=overridden || (parent.parent()==player && exhaust.is_none() && actor.iter().any(|a|a.part==ActorPart::Body));
+        // Exhaust starts hidden and is revealed only by the flight system.
+        // Applying a style must not turn it on during ground movement.
+        let hide=exhaust.is_some() || overridden || (parent.parent()==player && actor.iter().any(|a|a.part==ActorPart::Body));
         *visibility=if hide {Visibility::Hidden} else {Visibility::Inherited};
     }
     for a in &actor {
@@ -463,7 +481,7 @@ pub fn apply(world: &mut World) {
     for e in labels {
         world.despawn(e);
     }
-    world.spawn((
+    if !studio { world.spawn((
         StyleLabel,
         Text::new(format!(
             "STYLE {}  /  {:.0} VOXELS PER METER",
@@ -481,8 +499,10 @@ pub fn apply(world: &mut World) {
             top: px(112),
             ..default()
         },
-    ));
-    world.resource_mut::<ActiveStyle>().current = Some(index);
+    )); }
+    let mut active = world.resource_mut::<ActiveStyle>();
+    active.current = Some(index);
+    active.studio = studio;
 }
 
 pub fn select_weapon(

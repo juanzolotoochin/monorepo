@@ -7,10 +7,57 @@ use crate::{
     },
     effects::Feedback,
     gameplay::Controls,
+    rig::FootGeometry,
 };
 use bevy::prelude::*;
 use std::collections::HashMap;
 use sim::settlement::avatar::{JumpPhase, SwordStroke, JUMP_LAND_TICKS, JUMP_PREP_TICKS};
+
+/// Resolve a usable gait from the baked rig instead of requiring every style
+/// to repeat the same planted-foot settings.
+pub fn motion_profile(pack: &voxel_assets::ScenePack) -> voxel_assets::CharacterMotion {
+    let Some(style) = pack.scene.style.as_ref() else { return voxel_assets::CharacterMotion::default() };
+    let mut motion = style.character_motion;
+    let has_legs = [voxel_assets::ActorPart::LeftLeg, voxel_assets::ActorPart::RightLeg]
+        .into_iter().all(|part| pack.actor.iter().any(|mesh| mesh.part == part));
+    if has_legs && !motion.plant_feet {
+        motion.plant_feet = true;
+        motion.motion_style = voxel_assets::MotionStyle::Natural;
+        motion.step_distance = 0.6 * style.actor_scale;
+    }
+    motion
+}
+
+/// Sole measurements for actor meshes whose boot is baked into the leg.
+/// They are cached when a style is applied, then shared by local and peer poses.
+#[derive(Resource, Default)]
+pub struct ActorFootContacts(pub(crate) [Option<FootGeometry>; 2]);
+
+impl ActorFootContacts {
+    pub(crate) fn from_actor(actor: &[voxel_assets::ActorMesh]) -> Self {
+        use voxel_assets::ActorPart;
+        Self([(ActorPart::LeftLeg, ActorPart::LeftShin, ActorPart::LeftFoot),
+            (ActorPart::RightLeg, ActorPart::RightShin, ActorPart::RightFoot)]
+            .map(|(leg, shin, foot)| {
+                if actor.iter().any(|mesh| mesh.part == shin || mesh.part == foot) {
+                    return None;
+                }
+                actor.iter().find(|mesh| mesh.part == leg).and_then(|mesh| {
+                    let geometry = FootGeometry::from_meshes(&mesh.meshes)?;
+                    // A thigh-only mesh still uses the default articulated
+                    // shin and foot; it has no baked sole to plant.
+                    (mesh.pivot?[1] - geometry.reach() <= 0.12).then_some(geometry)
+                })
+            }))
+    }
+
+    pub(crate) fn adapt_motion(&self, mut motion: voxel_assets::CharacterMotion) -> voxel_assets::CharacterMotion {
+        for geometry in self.0.into_iter().flatten() {
+            motion.leg_reach = motion.leg_reach.max(geometry.reach());
+        }
+        motion
+    }
+}
 
 #[derive(Component)]
 pub struct Player;
@@ -119,6 +166,7 @@ pub fn animate_character(
     flight: Option<Res<crate::jetpack::Flight>>,
     game: Res<crate::lockstep::Game>,
     library: Res<SceneLibrary>,
+    contacts: Option<Res<ActorFootContacts>>,
     viewer: Res<crate::viewer::Viewer>,
     player: Single<(Entity, &Transform), With<Player>>,
     mut parts: Query<(Entity, &Part, &mut Transform, Option<&ChildOf>), Without<Player>>,
@@ -137,13 +185,10 @@ pub fn animate_character(
     } else {
         flight.as_ref().is_some_and(|f| f.airborne)
     };
-    let profile = library.scenes[library.current]
-        .scene
-        .style
-        .as_ref()
-        .map_or_else(voxel_assets::CharacterMotion::default, |s| {
-            s.character_motion
-        });
+    let mut profile = motion_profile(&library.scenes[library.current]);
+    if let Some(contacts) = &contacts {
+        profile = contacts.adapt_motion(profile);
+    }
     let (speed, turn) = if viewer.active {
         let velocity = if viewer.clip == crate::viewer::Clip::Run {
             profile.run_speed
@@ -176,6 +221,8 @@ pub fn animate_character(
         .zip(game.current.as_ref())
         .and_then(|(i, s)| s.agents[i as usize].avatar.dig.as_ref())
         .map(|d| dig_age(&game, d));
+    let mut local_profile = profile;
+    local_profile.step_distance /= player.1.scale.x.max(0.1);
     let mut pose = Pose {
         stride: controls.gait.phase,
         speed,
@@ -190,7 +237,7 @@ pub fn animate_character(
         ),
         attack: controls.attack,
         dig,
-        motion: profile,
+        motion: local_profile,
     };
     if viewer.active {
         pose.jump = studio_jump;
@@ -226,30 +273,40 @@ pub fn animate_character(
     // smoothing so a planted ankle stays fixed against the
     // traveling ground instead of lagging behind the hip animation.
     if pose.motion.plant_feet
+        && pose.speed > 0.05
         && pose.jump.is_none()
         && !pose.airborne
         && pose.attack.is_none()
         && pose.dig.is_none()
-        && (!viewer.active
-            || matches!(viewer.clip, crate::viewer::Clip::Walk | crate::viewer::Clip::Run))
     {
-        lock_grounded_feet(&mut parts, &joints, player.0, &pose);
+        for (entity, target) in grounded_foot_targets(&joints, player.0, &pose) {
+            if let Ok((_, _, mut transform, _)) = parts.get_mut(entity) {
+                *transform = target;
+            }
+        }
+        if let Some(contacts) = contacts {
+            for (entity, target) in actor_leg_targets(&joints, player.0, &pose, &contacts) {
+                if let Ok((_, _, mut transform, _)) = parts.get_mut(entity) {
+                    *transform = target;
+                }
+            }
+        }
     }
 }
 
-type JointSnapshot = (PartKind, Transform, Transform, Option<Entity>);
+pub(crate) type JointSnapshot = (PartKind, Transform, Transform, Option<Entity>);
 
-fn lock_grounded_feet(
-    parts: &mut Query<(Entity, &Part, &mut Transform, Option<&ChildOf>), Without<Player>>,
+pub(crate) fn grounded_foot_targets(
     joints: &HashMap<Entity, JointSnapshot>,
     player: Entity,
     pose: &Pose,
-) {
+) -> Vec<(Entity, Transform)> {
+    let mut targets = Vec::new();
     let Some((&body_entity, &(_, _, body, _))) = joints
         .iter()
         .find(|(_, (kind, _, _, parent))| matches!(kind, PartKind::Body) && *parent == Some(player))
     else {
-        return;
+        return targets;
     };
     let running = ((pose.speed - 1.02) / 0.38).clamp(0.0, 1.0);
     let stance = stance_fraction(running, true);
@@ -283,22 +340,64 @@ fn lock_grounded_feet(
         let upper = shin_rest.translation.length();
         let lower = foot_rest.translation.length();
         let (thigh_angle, knee_angle) = solve_leg(local_target.y, local_target.z, upper, lower);
-        if let Ok((_, _, mut leg, _)) = parts.get_mut(leg_entity) {
+        if let Some(&(_, _, mut leg, _)) = joints.get(&leg_entity) {
             leg.translation = leg.translation.lerp(leg_rest.translation, weight);
             leg.rotation = leg.rotation.slerp(Quat::from_rotation_x(thigh_angle), weight);
+            targets.push((leg_entity, leg));
         }
-        if let Ok((_, _, mut shin, _)) = parts.get_mut(shin_entity) {
+        if let Some(&(_, _, mut shin, _)) = joints.get(&shin_entity) {
             shin.translation = shin.translation.lerp(shin_rest.translation, weight);
             shin.rotation = shin.rotation.slerp(Quat::from_rotation_x(knee_angle), weight);
+            targets.push((shin_entity, shin));
         }
-        if let Ok((_, _, mut foot, _)) = parts.get_mut(foot_entity) {
+        if let Some(&(_, _, mut foot, _)) = joints.get(&foot_entity) {
             foot.translation = foot.translation.lerp(foot_rest.translation, weight);
             foot.rotation = foot.rotation.slerp(
                 (body.rotation * Quat::from_rotation_x(thigh_angle + knee_angle)).inverse(),
                 weight,
             );
+            targets.push((foot_entity, foot));
         }
     }
+    targets
+}
+
+pub(crate) fn actor_leg_targets(
+    joints: &HashMap<Entity, JointSnapshot>,
+    player: Entity,
+    pose: &Pose,
+    contacts: &ActorFootContacts,
+) -> Vec<(Entity, Transform)> {
+    let Some((&body_entity, &(_, body_rest, body, _))) = joints.iter()
+        .find(|(_, (kind, _, _, parent))| matches!(kind, PartKind::Body) && *parent == Some(player))
+    else { return Vec::new(); };
+    let running = ((pose.speed - 1.02) / 0.38).clamp(0.0, 1.0);
+    let stance = stance_fraction(running, true);
+    let step = step_distance_for_speed(pose.motion.step_distance, pose.speed).clamp(0.2, 4.0);
+    let mut targets = Vec::new();
+    for (index, side) in [-1.0_f32, 1.0].into_iter().enumerate() {
+        let Some(geometry) = contacts.0[index] else { continue; };
+        let Some((&leg_entity, &(_, leg_rest, _, _))) = joints.iter().find(|(_, (kind, _, _, parent))|
+            matches!(kind, PartKind::Leg(value) if *value == side) && *parent == Some(body_entity))
+        else { continue; };
+        let phase = (pose.stride + if side > 0.0 { 0.0 } else { std::f32::consts::PI })
+            .rem_euclid(std::f32::consts::TAU);
+        let (offset, lift) = foot_path(phase, step, stance, pose.motion.step_lift * (1.0 + 1.2 * running));
+        // A baked leg has no independent knee mesh. Limit swing clearance to
+        // a fraction of its reach so lifting the boot does not visibly shrink
+        // the entire leg.
+        let lift = lift.min(geometry.reach() * 0.12);
+        let hip = body.translation + body.rotation * leg_rest.translation;
+        let desired_center_z = body_rest.translation.z + leg_rest.translation.z
+            + geometry.center_z() + offset;
+        let solved = geometry.place(Transform::from_translation(hip),
+            desired_center_z - hip.z - geometry.center_z(), lift);
+        let mut leg = leg_rest;
+        leg.rotation = body.rotation.inverse() * solved.rotation;
+        leg.scale.y = solved.scale.y;
+        targets.push((leg_entity, leg));
+    }
+    targets
 }
 
 fn body_rest_position(body: Transform, leg: Transform, shin: Transform, foot: Transform) -> Vec3 {
@@ -630,7 +729,11 @@ impl Pose {
                         (right.plant - left.plant) * 0.035 * travel
                     };
                 transform.rotation = Quat::from_rotation_y(-self.turn * 0.28)
-                    * Quat::from_rotation_z(-self.turn * (0.24 + 0.25 * travel))
+                    * Quat::from_rotation_z(-self.turn * if natural {
+                        0.10 + 0.04 * travel
+                    } else {
+                        0.24 + 0.25 * travel
+                    })
                     * Quat::from_rotation_x(if natural { 0.01 * travel + 0.04 * running } else { 0.06 * travel + 0.18 * running });
                 if let Some(attack) = self.attack {
                     if attack.motion() == ActionMotion::Sweep {
@@ -969,6 +1072,93 @@ mod tests {
     use crate::combat::Attack;
 
     #[test]
+    fn baked_playable_rigs_use_planted_feet_and_world_steps() {
+        let library = SceneLibrary::new();
+        for pack in &library.scenes {
+            if !pack.actor.is_empty() {
+                let motion = motion_profile(pack);
+                assert!(motion.plant_feet);
+                assert_eq!(motion.motion_style, voxel_assets::MotionStyle::Natural);
+                let scale = pack.scene.style.as_ref().unwrap().actor_scale;
+                let local_step = motion.step_distance / scale;
+                let stance = stance_fraction(0.0, true);
+                let phase = std::f32::consts::PI * stance;
+                let (first, _) = foot_path(0.0, local_step, stance, 0.0);
+                let (later, _) = foot_path(phase, local_step, stance, 0.0);
+                let root_travel = phase * motion.step_distance / std::f32::consts::PI;
+                assert!((first * scale - (root_travel + later * scale)).abs() < 1e-5);
+            }
+        }
+    }
+
+    #[test]
+    fn baked_playable_boot_meshes_clear_the_floor() {
+        let library = SceneLibrary::new();
+        for pack in &library.scenes {
+            let Some(body_mesh) = pack.actor.iter().find(|part| part.part == voxel_assets::ActorPart::Body) else { continue };
+            let Some(body_pivot) = body_mesh.pivot else { continue };
+            let body_rest = Transform::from_translation(Vec3::from_array(body_pivot));
+            let motion = motion_profile(pack);
+            let contacts = ActorFootContacts::from_actor(&pack.actor);
+            let motion = contacts.adapt_motion(motion);
+            if !motion.plant_feet { continue; }
+            for (side, part_kind) in [(-1.0, voxel_assets::ActorPart::LeftLeg), (1.0, voxel_assets::ActorPart::RightLeg)] {
+                let Some(mesh) = pack.actor.iter().find(|part| part.part == part_kind) else { continue };
+                let Some(pivot) = mesh.pivot else { continue };
+                let leg_rest = Transform::from_translation(Vec3::from_array(pivot) - body_rest.translation);
+                let shin_rest = Transform::from_xyz(0.0, -0.27, 0.0);
+                let foot_rest = Transform::from_xyz(0.0, -0.21, 0.0);
+                let mut world = World::new();
+                let root = world.spawn_empty().id();
+                let body_id = world.spawn_empty().id();
+                let leg_id = world.spawn_empty().id();
+                let shin_id = world.spawn_empty().id();
+                let foot_id = world.spawn_empty().id();
+                let mut worst = f32::INFINITY;
+                for turn in [-0.9, 0.0, 0.9] {
+                for speed in [1.0, 1.4] {
+                    for frame in 0..60 {
+                        let pose = Pose {
+                            motion: voxel_assets::CharacterMotion {
+                                step_distance: motion.step_distance / pack.scene.style.as_ref().unwrap().actor_scale,
+                                ..motion
+                            },
+                            stride: std::f32::consts::TAU * frame as f32 / 60.0,
+                            speed, turn, breathe: 0.0, airborne: false,
+                            jump: None, attack: None, dig: None,
+                        };
+                        let body = pose.place(PartKind::Body, body_rest);
+                        let leg = pose.place(PartKind::Leg(side), leg_rest);
+                        let shin = pose.place(PartKind::Shin(side), shin_rest);
+                        let foot = pose.place(PartKind::Foot(side), foot_rest);
+                        let mut joints = HashMap::from([
+                            (body_id, (PartKind::Body, body_rest, body, Some(root))),
+                            (leg_id, (PartKind::Leg(side), leg_rest, leg, Some(body_id))),
+                            (shin_id, (PartKind::Shin(side), shin_rest, shin, Some(leg_id))),
+                            (foot_id, (PartKind::Foot(side), foot_rest, foot, Some(shin_id))),
+                        ]);
+                        for (entity, target) in grounded_foot_targets(&joints, root, &pose) {
+                            joints.get_mut(&entity).unwrap().2 = target;
+                        }
+                        for (entity, target) in actor_leg_targets(&joints, root, &pose, &contacts) {
+                            joints.get_mut(&entity).unwrap().2 = target;
+                        }
+                        let leg_scale = joints[&leg_id].2.scale.y;
+                        assert!((0.55..=1.35).contains(&leg_scale),
+                            "{} {part_kind:?} stretches boot by {leg_scale:.2}x at speed {speed}, turn {turn}, frame {frame}", pack.scene.id);
+                        let leg_world = body.to_matrix() * joints[&leg_id].2.to_matrix();
+                        for vertex in mesh.meshes.iter().flat_map(|mesh| &mesh.positions) {
+                            worst = worst.min(leg_world.transform_point3(Vec3::from_array(*vertex)).y);
+                        }
+                    }
+                }
+                }
+                assert!(worst >= -0.01, "{} {part_kind:?} boot clips {worst:.3}m", pack.scene.id);
+            }
+        }
+    }
+
+    #[test]
     fn moonlit_torso_stays_centered_through_walk_and_run() {
         let mut pose = Pose {
             motion: voxel_assets::CharacterMotion {
@@ -1199,6 +1389,7 @@ mod tests {
         let shin = Transform::from_xyz(0.0, -0.27, 0.0);
         let foot = Transform::from_xyz(0.0, -0.21, 0.0);
         let origin = body_rest_position(body_rest, leg, shin, foot);
+        let mut first_contact = None;
         for index in 0..=60 {
             pose.stride = std::f32::consts::TAU * index as f32 / 60.0;
             let body = pose.place(PartKind::Body, body_rest);
@@ -1219,6 +1410,14 @@ mod tests {
                                 + Quat::from_rotation_x(knee) * foot.translation));
             // The authored boot extends 0.0875 m below its ankle origin.
             assert!(ankle.y - 0.0875 >= -0.003, "run phase {} sank below floor", pose.stride);
+            if pose.stride < std::f32::consts::TAU * stance_fraction(1.0, true) {
+                let root_travel = pose.stride * step_distance_for_speed(pose.motion.step_distance, pose.speed)
+                    / std::f32::consts::PI;
+                let planted_z = root_travel + ankle.z;
+                let first = *first_contact.get_or_insert(planted_z);
+                assert!((planted_z - first).abs() < 0.01,
+                    "running boot slides {}m during stance", (planted_z - first).abs());
+            }
         }
     }
 

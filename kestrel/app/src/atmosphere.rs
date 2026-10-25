@@ -252,10 +252,11 @@ fn ground_cover(profile: &AtmosphereProfile) -> Mesh {
 
 pub fn sync(world: &mut World) {
     let current = world.resource::<SceneLibrary>().current;
-    let profile = world.resource::<SceneLibrary>().scenes
+    let studio = world.get_resource::<crate::viewer::Viewer>().is_some_and(|viewer| viewer.active);
+    let profile = (!studio).then(|| world.resource::<SceneLibrary>().scenes
         .get(current)
         .and_then(|scene| scene.scene.style.as_ref())
-        .and_then(|style| style.atmosphere.clone());
+        .and_then(|style| style.atmosphere.clone())).flatten();
     let wanted = profile.as_ref().map(|_| current);
     if world.resource::<AtmosphereVisuals>().scene == wanted { return; }
     let mut state = world.remove_resource::<AtmosphereVisuals>().unwrap_or_default();
