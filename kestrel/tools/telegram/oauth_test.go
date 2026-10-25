@@ -34,6 +34,13 @@ func TestUserDriveTokenRefresh(t *testing.T) {
 	if err := os.WriteFile(clientPath, clientJSON, 0600); err != nil {
 		t.Fatal(err)
 	}
+	config, err := loadOAuthConfig(clientPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Scopes) != 1 || config.Scopes[0] != userDriveScope {
+		t.Fatalf("unexpected OAuth scopes: %v, %v", config, err)
+	}
 	tokenPath := filepath.Join(dir, "token.json")
 	if err := saveUserToken(tokenPath, &oauth2.Token{
 		AccessToken: "expired-access", RefreshToken: "saved-refresh", Expiry: time.Now().Add(-time.Hour),
@@ -58,5 +65,11 @@ func TestUserDriveTokenRefresh(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0600 {
 		t.Fatalf("token file permissions: %v", info.Mode())
+	}
+}
+
+func TestContainsID(t *testing.T) {
+	if !containsID("other, target ,third", "target") || containsID("other,targeted", "target") {
+		t.Fatal("folder selection must match the configured ID exactly")
 	}
 }

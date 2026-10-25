@@ -16,6 +16,10 @@ Drive permissions.
    `.credentials/google-oauth-client.json`. Run
    `bazel run --config=full_local -c opt //kestrel/app:share_to_devs -- --authorize-drive`
    and open the URL it prints. Sign in with the account that owns the folder.
+   Enable the **Google Picker API** in the same project. The sign-in requests
+   the limited `drive.file` scope and asks you to select the configured folder
+   in the Picker. The app can access that selected folder and files it creates,
+   rather than all files in your Drive.
    The callback saves a refreshable user token in the ignored
    `.credentials/google-user-token.json`; later builds use it automatically.
    For a Google Workspace **shared drive** instead, a service account may be

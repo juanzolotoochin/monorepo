@@ -63,9 +63,13 @@ func run() error {
 	}
 	credentialsDir := filepath.Join(workspace, ".credentials")
 	if authorizeDrive {
+		folderID := firstNonEmpty(os.Getenv("GOOGLE_DRIVE_FOLDER_ID"), config.GoogleDriveFolderID)
+		if folderID == "" {
+			return errors.New("set the Drive folder ID before authorizing")
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		return authorizeUserDrive(ctx, filepath.Join(credentialsDir, "google-oauth-client.json"), filepath.Join(credentialsDir, "google-user-token.json"))
+		return authorizeUserDrive(ctx, filepath.Join(credentialsDir, "google-oauth-client.json"), filepath.Join(credentialsDir, "google-user-token.json"), folderID)
 	}
 	token := firstNonEmpty(os.Getenv("TELEGRAM_BOT_TOKEN"), config.TelegramBotToken)
 	chatID := firstNonEmpty(os.Getenv("TELEGRAM_CHAT_ID"), config.TelegramChatID)
