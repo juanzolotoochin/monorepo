@@ -106,17 +106,23 @@ pub fn golden_report() -> String {
     for (name, hash) in &last.subsystems {
         writeln!(out, "{name} {hash:016x}").unwrap();
     }
-    // The forest outpost's settlement, 20 seconds in.
-    let forest = content::scenario::Scenario::parse(FOREST).expect("forest scenario");
-    let world = crate::World::new_settlement(11, Content::builtin().rules, &forest, &[]).expect("forest world");
-    let mut sim = Simulation::from_world(world, 1);
-    for tick in 0..600 {
-        let hash = sim.step(&[]);
-        if tick % 150 == 149 {
-            writeln!(out, "forest tick {} {:016x}", hash.tick, hash.total).unwrap();
+    // The forest outpost's settlement for 600 ticks, and the combat arena's
+    // waves for 1800. Behaviour lines hash only what happens (positions, health,
+    // cargo, metrics), so they stay put when state changes shape only.
+    for (name, text, ticks) in [("forest", FOREST, 600), ("arena", ARENA, 1800)] {
+        let scenario = content::scenario::Scenario::parse(text).expect("golden scenario");
+        let world = crate::World::new_settlement(11, Content::builtin().rules, &scenario, &[]).expect("golden world");
+        let mut sim = Simulation::from_world(world, 1);
+        for tick in 0..ticks {
+            let hash = sim.step(&[]);
+            if tick % 150 == 149 {
+                let behaviour = sim.world().settlement().expect("a settlement").behaviour_digest();
+                writeln!(out, "{name} tick {} {:016x} behaviour {behaviour:016x}", hash.tick, hash.total).unwrap();
+            }
         }
     }
     out
 }
 
 const FOREST: &str = include_str!("../../app/assets/levels/forest_supply.ron");
+const ARENA: &str = include_str!("../../app/assets/levels/combat_arena_supply.ron");

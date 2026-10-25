@@ -661,6 +661,48 @@ impl Settlement {
     }
 }
 
+impl Settlement {
+    /// A hash of what the settlement does: where agents, threats and
+    /// projectiles are, what they carry and how healthy they are, stock and
+    /// metrics. It leaves out definition references and tuning copied into
+    /// state, so moving definitions around keeps it while `hash_into` changes.
+    pub fn behaviour_digest(&self) -> u64 {
+        let agents: Vec<_> = self
+            .agents
+            .iter()
+            .map(|a| {
+                (&a.id, a.position, a.heading, a.travelled, a.phase, &a.route, &a.cargo, &a.trailer)
+            })
+            .collect();
+        let avatars: Vec<_> = self
+            .agents
+            .iter()
+            .map(|a| (a.avatar.velocity, a.avatar.height, a.avatar.health, &a.avatar.swing, &a.avatar.jump))
+            .collect();
+        let threats: Vec<_> = self
+            .threats
+            .iter()
+            .map(|t| (t.id, t.wave, t.position, t.heading, t.hp, t.armor, t.stagger_until, t.knockback))
+            .collect();
+        let spawned: Vec<_> = self.waves.iter().map(|w| w.spawned).collect();
+        let observed = (
+            agents,
+            avatars,
+            threats,
+            spawned,
+            &self.depots,
+            &self.projectiles,
+            &self.pinned,
+            &self.transfers,
+            &self.metrics,
+            &self.combat,
+            self.health,
+        );
+        let bytes = postcard::to_allocvec(&observed).expect("behaviour encodes");
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, &byte| (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3))
+    }
+}
+
 impl StateHash for Settlement {
     fn hash_into(&self, h: &mut StateHasher) {
         // Settlements are small; hashing their canonical encoding covers every field.
