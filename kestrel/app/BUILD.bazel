@@ -29,6 +29,7 @@ rust_binary(
     rustc_env = {"CARGO_MANIFEST_DIR": "."},
     visibility = ["//visibility:public"],
     deps = [
+        "//kestrel/app/assets:asset_guide",
         "//kestrel/app/assets:atlantis",
         "//kestrel/app/assets:boulder_lab",
         "//kestrel/app/assets:combat_arena",

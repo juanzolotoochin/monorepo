@@ -10,7 +10,7 @@ bazel run //kestrel/app:web
 
 Open the printed URL (`http://127.0.0.1:8000/` by default) in a browser with
 WebGL2. Pass `-- --port 8080` to use another port. The launch menu,
-Character Studio, and solo scenes use the same game executable as desktop;
+Asset Studio, and solo scenes use the same game executable as desktop;
 the canvas fits the browser window. Audio uses the same procedural cues as the
 desktop game; click or press a key in the page to enable browser playback. The
 web build uses one simulation thread and does not save menu preferences. Hosting
@@ -88,8 +88,9 @@ Run `bazel run --config=full_local -c opt //kestrel/app:demo` to open the launch
 menu. Type a name, pick a scene, then play solo, host on a port (7777 unless
 `--host` names one), or join a host address; joining players play whatever
 scene the host's world is. Click a field to edit it; Enter starts the selected
-session and Escape quits. **Character Studio** opens the selected scene's
-character on a stage of its own, outside any session.
+session and Escape quits. **Asset Studio** opens a stage outside any session.
+It previews baked characters and their animations, as well as scene prefabs
+such as boulders with their authored material palettes.
 
 In a session, Escape opens the pause overlay: Resume, Leave to menu, or Quit.
 The world keeps running underneath, since lockstep can't stop the clock for one

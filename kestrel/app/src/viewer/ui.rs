@@ -1,18 +1,20 @@
 //! Character Studio controls and layout. Playback stays in the parent module.
 use super::*;
-use bevy::ui::FocusPolicy;
+use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
+use bevy::ui::{FocusPolicy, RelativeCursorPosition};
 
-fn button(parent: &mut ChildSpawnerCommands, action: Action, title: &str) {
+fn button_sized(parent: &mut ChildSpawnerCommands, action: Action, title: &str, width: Val) {
     parent
         .spawn((
             action,
             Interaction::None,
             FocusPolicy::Block,
             Node {
-                width: percent(100.0),
+                width,
                 min_height: px(30.0),
                 padding: UiRect::axes(px(10.0), px(5.0)),
                 border: UiRect::all(px(1.0)),
+                overflow: Overflow::clip(),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.07, 0.16, 0.20, 0.92)),
@@ -21,6 +23,8 @@ fn button(parent: &mut ChildSpawnerCommands, action: Action, title: &str) {
         .with_children(|b| {
             b.spawn((
                 Text::new(title),
+                TextLayout::linebreak(LineBreak::WordOrCharacter),
+                Node { width: percent(100.0), min_width: px(0.0), ..default() },
                 TextFont {
                     font_size: FontSize::Px(14.0),
                     ..default()
@@ -28,6 +32,9 @@ fn button(parent: &mut ChildSpawnerCommands, action: Action, title: &str) {
                 TextColor(Color::srgb(0.85, 0.95, 0.94)),
             ));
         });
+}
+fn button(parent: &mut ChildSpawnerCommands, action: Action, title: &str) {
+    button_sized(parent, action, title, percent(100.0));
 }
 fn label(parent: &mut ChildSpawnerCommands, title: &str) {
     parent.spawn((
@@ -138,16 +145,18 @@ pub fn setup(
         ))
         .with_children(|panel| {
             panel.spawn((
-                Text::new("CHARACTER STUDIO"),
+                Text::new("ASSET STUDIO"),
                 TextFont {
                     font_size: FontSize::Px(19.0),
                     ..default()
                 },
                 TextColor(Color::srgb(0.42, 0.92, 0.95)),
             ));
-            label(panel, "LOOPING ANIMATIONS");
+            label(panel, "CHARACTER ANIMATIONS");
             label(panel, "MOVING FLOOR / 0.5 M GRID");
-            panel.spawn((CharacterName, Text::new(""), TextFont { font_size: FontSize::Px(13.0), ..default() }, TextColor(Color::srgb(0.49, 0.82, 0.85))));
+            panel.spawn((CharacterName, Text::new(""), TextLayout::linebreak(LineBreak::WordOrCharacter),
+                Node { width: percent(100.0), min_width: px(0.0), ..default() },
+                TextFont { font_size: FontSize::Px(13.0), ..default() }, TextColor(Color::srgb(0.49, 0.82, 0.85))));
             for clip in Clip::ALL {
                 button(panel, Action::Clip(clip), clip.title());
             }
@@ -217,14 +226,35 @@ pub fn setup(
     commands.spawn((
         Root,
         DespawnOnExit(Front::Studio),
-        CharacterPicker,
         GlobalZIndex(1001),
         Node {
             position_type: PositionType::Absolute,
             right: px(20.0),
             top: px(145.0),
-            width: px(245.0),
-            max_height: percent(70.0),
+            width: px(350.0),
+            flex_direction: FlexDirection::Row,
+            column_gap: px(6.0),
+            padding: UiRect::all(px(8.0)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.015, 0.035, 0.05, 0.94)),
+    )).with_children(|panel| {
+        button_sized(panel, Action::ScrollUp, "SCROLL UP", percent(49.0));
+        button_sized(panel, Action::ScrollDown, "SCROLL DOWN", percent(49.0));
+    });
+    commands.spawn((
+        Root,
+        DespawnOnExit(Front::Studio),
+        CharacterPicker,
+        RelativeCursorPosition::default(),
+        ScrollPosition::default(),
+        GlobalZIndex(1001),
+        Node {
+            position_type: PositionType::Absolute,
+            right: px(20.0),
+            top: px(189.0),
+            width: px(350.0),
+            max_height: percent(65.0),
             overflow: Overflow::scroll_y(),
             flex_direction: FlexDirection::Column,
             row_gap: px(5.0),
@@ -233,11 +263,56 @@ pub fn setup(
         },
         BackgroundColor(Color::srgba(0.015, 0.035, 0.05, 0.94)),
     )).with_children(|panel| {
-        label(panel, "CHARACTERS / SELECT DIRECTLY");
-        for (index, character) in library.characters.iter().enumerate() {
+        label(panel, "WHEEL OR PAGE UP / DOWN");
+        label(panel, "PLAYER ACTORS");
+        for (index, character) in library.characters.iter().enumerate()
+            .filter(|(_, character)| !matches!(character.source, CharacterSource::Skin(_))) {
             button(panel, Action::Character(index), &character.name);
         }
+        label(panel, "VISUAL RIGS / SKINS");
+        let selected_scene = library.characters.get(viewer.character).map(|entry| entry.scene_index);
+        let mut skins: Vec<_> = library.characters.iter().enumerate()
+            .filter(|(_, entry)| matches!(entry.source, CharacterSource::Skin(_)))
+            .collect();
+        // Keep the selected scene's skins visible ahead of the full inventory.
+        skins.sort_by_key(|(_, entry)| (Some(entry.scene_index) != selected_scene, !entry.can_locomote));
+        for (index, character) in skins {
+            button(panel, Action::Character(index), &character.name);
+        }
+        label(panel, "SCENE PREFABS");
+        for (scene, pack) in library.scenes.iter().enumerate() {
+            if pack.prefabs.is_empty() { continue; }
+            label(panel, &pack.scene.id.to_uppercase().replace('-', " "));
+            for (index, prefab) in pack.prefabs.iter().enumerate() {
+                button(panel, Action::Prefab(scene, index), &prefab.id.replace('_', " "));
+            }
+        }
     });
+}
+
+pub fn scroll_picker(
+    input: Res<debug_ui::GameInput>,
+    wheel: Option<Res<AccumulatedMouseScroll>>,
+    mut picker: Query<(&RelativeCursorPosition, &ComputedNode, &mut ScrollPosition), With<CharacterPicker>>,
+) {
+    let Ok((cursor, computed, mut position)) = picker.single_mut() else { return };
+    let viewport = computed.size().y * computed.inverse_scale_factor();
+    let max = ((computed.content_size().y - computed.size().y) * computed.inverse_scale_factor()).max(0.0);
+    let mut delta = 0.0;
+    if cursor.cursor_over() {
+        if let Some(wheel) = wheel {
+            delta -= wheel.delta.y * if wheel.unit == MouseScrollUnit::Line { 40.0 } else { 1.0 };
+        }
+    }
+    if input.keys().just_pressed(KeyCode::PageDown) {
+        delta += viewport * 0.8;
+    }
+    if input.keys().just_pressed(KeyCode::PageUp) {
+        delta -= viewport * 0.8;
+    }
+    if delta != 0.0 {
+        position.y = (position.y + delta).clamp(0.0, max);
+    }
 }
 
 pub fn input(
@@ -247,6 +322,7 @@ pub fn input(
     mut front: ResMut<NextState<Front>>,
     mut actions: Query<(&Action, Ref<Interaction>, &mut BackgroundColor, &mut Node)>,
     mut character_names: Query<&mut Text, With<CharacterName>>,
+    mut picker: Query<(&ComputedNode, &mut ScrollPosition), With<CharacterPicker>>,
 ) {
     if !viewer.active {
         return;
@@ -267,12 +343,17 @@ pub fn input(
         match *action {
             Action::Character(index) => {
                 if let Some(character) = library.characters.get(index) {
+                    viewer.prefab = None;
                     if !viewer.clip.supports(character) {
                         viewer.clip = if Clip::Run.supports(character) { Clip::Run } else { Clip::Idle };
                     }
                     viewer.character = index;
                     viewer.reset_clock();
                 }
+            }
+            Action::Prefab(scene, index) => {
+                viewer.prefab = Some((scene, index));
+                viewer.paused = true;
             }
             Action::Clip(clip) => {
                 if library.characters.get(viewer.character).is_some_and(|character| clip.supports(character)) {
@@ -303,6 +384,13 @@ pub fn input(
                 viewer.paused = true;
                 viewer.reset_clock();
             }
+            Action::ScrollUp | Action::ScrollDown => {
+                if let Ok((computed, mut position)) = picker.single_mut() {
+                    let page = computed.size().y * computed.inverse_scale_factor() * 0.8;
+                    let max = ((computed.content_size().y - computed.size().y) * computed.inverse_scale_factor()).max(0.0);
+                    position.y = (position.y + if matches!(*action, Action::ScrollDown) { page } else { -page }).clamp(0.0, max);
+                }
+            }
             Action::Back => {
                 // Closing Studio despawns its stage, panels and character.
                 front.set(Front::Menu);
@@ -312,14 +400,25 @@ pub fn input(
     }
     let character = library.characters.get(viewer.character);
     for mut name in &mut character_names {
-        name.0 = character.map_or_else(|| "NO CHARACTER".to_string(), |entry| format!("CHARACTER / {}", entry.name));
+        name.0 = viewer.prefab.and_then(|(scene, index)| library.scenes.get(scene)
+            .and_then(|pack| pack.prefabs.get(index).map(|prefab| (pack, prefab))))
+            .map_or_else(
+                || character.map_or_else(|| "NO CHARACTER".to_string(), |entry| format!("CHARACTER / {}", entry.name)),
+                |(pack, prefab)| format!(
+                    "PREFAB / {}\nSCENE / {}\nMATERIALS / {}",
+                    prefab.id,
+                    pack.scene.id,
+                    prefab.palette.materials.iter().map(|material| material.name.as_str()).collect::<Vec<_>>().join(", "),
+                ),
+            );
     }
     for (action, interaction, mut background, mut node) in &mut actions {
         if let Action::Clip(clip) = action {
-            node.display = if character.is_some_and(|entry| clip.supports(entry)) { Display::Flex } else { Display::None };
+            node.display = if viewer.prefab.is_none() && character.is_some_and(|entry| clip.supports(entry)) { Display::Flex } else { Display::None };
         }
         let selected = match *action {
-            Action::Character(index) => viewer.character == index,
+            Action::Character(index) => viewer.prefab.is_none() && viewer.character == index,
+            Action::Prefab(scene, index) => viewer.prefab == Some((scene, index)),
             Action::Clip(clip) => viewer.clip == clip,
             Action::Angle(angle) => viewer.angle == angle,
             _ => false,

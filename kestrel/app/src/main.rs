@@ -228,7 +228,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
     if offscreen {
         app.add_systems(Startup, control::setup_render.after(scene::setup));
     }
-    // The frame (see kestrel/docs/proposals/service_layers.md): telemetry and
+    // The frame (see kestrel/docs/service-layers.md): telemetry and
     // the control port wrap it; the debug UI's pass and input routing run
     // before the Input phase (`debug_ui::DebugUiSystems`); everything else
     // belongs to a service, and services tick by layer, then in the order

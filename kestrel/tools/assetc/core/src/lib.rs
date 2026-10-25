@@ -275,6 +275,8 @@ pub struct Scene {
     #[serde(default)]
     pub architecture: Vec<VoxelShape>,
     #[serde(default)]
+    pub shape_instances: Vec<ShapeInstance>,
+    #[serde(default)]
     pub scenario: Option<Scenario>,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -540,7 +542,10 @@ impl ScenePack {
         if let Some(style) = &self.scene.style {
             style.validate()?;
         }
-        if !self.scene.architecture.is_empty() && self.environment.is_none() {
+        expand_scene_shapes(self.scene.style.as_ref().unwrap_or(&StyleProfile::default()),
+            &self.scene.architecture, &self.scene.shape_instances)?;
+        if (!self.scene.architecture.is_empty() || !self.scene.shape_instances.is_empty())
+            && self.environment.is_none() {
             return Err("architecture must be compiled before packing".into());
         }
         if let Some(terrain) = &self.scene.terrain {
@@ -718,6 +723,7 @@ mod tests {
                 terrain: None,
                 style: None,
                 architecture: vec![],
+                shape_instances: vec![],
                 scenario: None,
                 instances: vec![Instance {
                     prefab: "rock".into(),
@@ -762,6 +768,7 @@ mod tests {
                 mine: None,
                 style: None,
                 architecture: vec![],
+                shape_instances: vec![],
                 scenario: None,
                 terrain: Some(Terrain {
                     platforms: vec![TerrainPlatform {

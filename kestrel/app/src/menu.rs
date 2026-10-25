@@ -364,7 +364,7 @@ pub fn setup(mut commands: Commands, scenes: Res<SceneLibrary>, roots: Query<(),
                                     label(choices, "Joining? The host picks the scene.", 13.0, MUTED);
                                 }
                                 choice(choices, Action::Start, "START GAME  >");
-                                choice(choices, Action::Viewer, "CHARACTER STUDIO  >");
+                                choice(choices, Action::Viewer, "ASSET STUDIO  >");
                                 choice(choices, Action::Quit, "QUIT");
                                 choices.spawn((StatusText, Text::new(""), font(14.0), TextColor(WARNING)));
                             });

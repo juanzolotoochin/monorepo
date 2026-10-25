@@ -1,0 +1,21 @@
+Scene(
+    id: "asset-guide",
+    name: "ASSET GUIDE / CUBE TO CHARACTER",
+    spawn: (0.0, 0.0, -2.4),
+    industrial: false,
+    instances: [],
+    architecture: [
+        (kind: Box, position: (0.0, -0.12, 0.0), size: (10.0, 0.24, 10.0), material: "floor", walkable: true),
+        // One shape, one material.
+        (kind: Box, position: (-2.4, 0.5, 1.0), size: (1.0, 1.0, 1.0), material: "stone"),
+        // Two materials on one composed object.
+        (kind: Box, position: (0.0, 0.5, 1.0), size: (1.0, 1.0, 1.0), material: "stone"),
+        (kind: Box, position: (0.0, 1.03, 1.0), size: (1.1, 0.12, 1.1), material: "copper"),
+    ],
+    // The last display object reuses the exact groups that dress the actor.
+    shape_instances: [
+        (group: "character_body", position: (2.4, 0.94, 1.0), scale: 1.4),
+        (group: "leg", position: (2.18, 0.56, 1.0), scale: 1.25),
+        (group: "leg", position: (2.62, 0.56, 1.0), scale: 1.25),
+    ],
+)

@@ -22,7 +22,7 @@ use bevy::{
 use service::{AppLayer, AppServices, Phase, Service};
 use sim::settlement::avatar::SwordStroke;
 use std::sync::Arc;
-use voxel_assets::ScenePack;
+use voxel_assets::{Geometry, ScenePack};
 
 // Rig roots use y=0 as their standing surface. Keep the inspection floor and
 // root on the same plane so poses can be judged against actual foot contact.
@@ -153,6 +153,8 @@ pub struct Viewer {
     /// `--character-studio`: open Studio as soon as the front end is up.
     open_on_start: bool,
     pub character: usize,
+    /// A scene prefab being inspected in place of the character.
+    pub prefab: Option<(usize, usize)>,
     pub clip: Clip,
     pub angle: ViewAngle,
     pub elapsed: f32,
@@ -170,6 +172,7 @@ pub struct Viewer {
 impl Viewer {
     pub fn begin(&mut self) {
         self.active = true;
+        self.prefab = None;
         self.clip = Clip::Run;
         self.angle = ViewAngle::ThreeQuarter;
         self.reset_clock();
@@ -294,7 +297,7 @@ impl Service for Viewer {
                 Phase::Input,
                 (
                     open_on_start.run_if(in_state(Front::Menu)),
-                    (input.run_if(crate::control::interactive), refresh_stage).chain().run_if(open.clone()),
+                    (input.run_if(crate::control::interactive), ui::scroll_picker, refresh_stage).chain().run_if(open.clone()),
                 ),
             )
             .add_service_systems::<Self, _>(
@@ -408,6 +411,7 @@ fn enter(world: &mut World) {
 fn leave(world: &mut World) {
     world.resource_mut::<Viewer>().active = false;
     world.remove_resource::<StudioPack>();
+    clear_prefab(world);
     let bodies: Vec<_> = world.query_filtered::<Entity, With<StudioBody>>().iter(world).collect();
     for entity in bodies {
         world.despawn(entity);
@@ -454,6 +458,14 @@ fn build_stage(world: &mut World) {
 /// Rebuilds the character when the selection moves to another pack.
 fn refresh_stage(world: &mut World) {
     let viewer = *world.resource::<Viewer>();
+    if let Some((scene, prefab)) = viewer.prefab {
+        let current = world.get_resource::<StudioPrefab>().map(|state| (state.scene, state.prefab));
+        if current != Some((scene, prefab)) {
+            show_prefab(world, scene, prefab);
+        }
+        return;
+    }
+    clear_prefab(world);
     let wanted = world.resource::<SceneLibrary>().characters.get(viewer.character).map(|entry| entry.scene_index);
     if wanted.is_some() && wanted != world.get_resource::<StudioPack>().map(|studio| studio.index) {
         build_stage(world);
@@ -500,6 +512,7 @@ pub(crate) fn studio_surface_height(viewer: &Viewer, local_z: f32) -> f32 {
 #[derive(Component, Clone, Copy)]
 pub(crate) enum Action {
     Character(usize),
+    Prefab(usize, usize),
     Clip(Clip),
     Angle(ViewAngle),
     Speed,
@@ -507,6 +520,8 @@ pub(crate) enum Action {
     Step,
     StepBack,
     Reset,
+    ScrollUp,
+    ScrollDown,
     Back,
 }
 #[derive(Component)]
@@ -520,6 +535,56 @@ struct StudioRig {
     character: usize,
     scale: f32,
     rig: crate::rig::Rig,
+}
+#[derive(Component)]
+struct PrefabPreview;
+#[derive(Resource)]
+struct StudioPrefab {
+    scene: usize,
+    prefab: usize,
+    meshes: Vec<Handle<Mesh>>,
+    materials: Vec<Handle<StandardMaterial>>,
+}
+
+fn clear_prefab(world: &mut World) {
+    if let Some(preview) = world.remove_resource::<StudioPrefab>() {
+        for entity in world.query_filtered::<Entity, With<PrefabPreview>>().iter(world).collect::<Vec<_>>() {
+            world.despawn(entity);
+        }
+        for handle in preview.meshes {
+            world.resource_mut::<Assets<Mesh>>().remove(&handle);
+        }
+        for handle in preview.materials {
+            world.resource_mut::<Assets<StandardMaterial>>().remove(&handle);
+        }
+    }
+}
+
+fn show_prefab(world: &mut World, scene: usize, index: usize) {
+    clear_prefab(world);
+    let Some(prefab) = world.resource::<SceneLibrary>().scenes.get(scene)
+        .and_then(|pack| pack.prefabs.get(index)).cloned() else { return };
+    let model = match &prefab.geometry {
+        Geometry::Baked(model) => model.clone(),
+        Geometry::Runtime(recipe) => voxel_assets::generate_boulder(recipe)
+            .expect("validated prefab recipe"),
+    };
+    let materials: Vec<_> = prefab.palette.materials.iter()
+        .map(|material| world.resource_mut::<Assets<StandardMaterial>>().add(crate::assets::standard(material)))
+        .collect();
+    let mut meshes = Vec::new();
+    for data in &model.meshes {
+        let mesh = world.resource_mut::<Assets<Mesh>>().add(crate::assets::mesh(data));
+        world.spawn((
+            PrefabPreview,
+            DespawnOnExit(Front::Studio),
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(materials[data.material].clone()),
+            Transform::from_xyz(0.0, STUDIO_FLOOR_Y, 0.0),
+        ));
+        meshes.push(mesh);
+    }
+    world.insert_resource(StudioPrefab { scene, prefab: index, meshes, materials });
 }
 #[derive(Component)]
 pub(crate) struct SwordMetrics;
@@ -661,10 +726,10 @@ pub fn pose_selected_rig(world: &mut World) {
         let Some(entry) = library.characters.get(viewer.character) else { return };
         (entry.scene_index, entry.source.clone())
     };
-    let npc = viewer.active && Some(scene_index) == world.get_resource::<StudioPack>().map(|studio| studio.index)
+    let npc = viewer.active && viewer.prefab.is_none() && Some(scene_index) == world.get_resource::<StudioPack>().map(|studio| studio.index)
         && matches!(source, CharacterSource::Skin(_));
     for mut visibility in world.query_filtered::<&mut Visibility, With<Player>>().iter_mut(world) {
-        let desired = if npc { Visibility::Hidden } else { Visibility::Inherited };
+        let desired = if npc || viewer.prefab.is_some() { Visibility::Hidden } else { Visibility::Inherited };
         if *visibility != desired { *visibility = desired; }
     }
     let old = world.get_resource::<StudioRig>().map(|state| state.character);
@@ -1053,6 +1118,13 @@ mod tests {
     #[test]
     fn studio_discovers_clips_from_each_character_capability() {
         let library = SceneLibrary::new();
+        let static_skin = &library.characters[library.characters.index_for_id("skin:item_lumber").unwrap()];
+        assert!(!static_skin.can_locomote);
+        assert!(Clip::Idle.supports(static_skin));
+        assert!(!Clip::Run.supports(static_skin));
+        let vehicle = &library.characters[library.characters.index_for_id("skin:cart").unwrap()];
+        assert!(vehicle.can_locomote);
+        assert!(Clip::Run.supports(vehicle));
         for character in library.characters.iter() {
             assert!(Clip::Idle.supports(character));
             assert_eq!(Clip::Walk.supports(character), character.can_locomote);
@@ -1109,6 +1181,34 @@ mod tests {
         assert_eq!(app.world().resource::<Viewer>().character, ghoul);
         assert!(matches!(app.world().resource::<NextState<Front>>(), NextState::Unchanged), "Studio stays open");
     }
+
+    #[test]
+    fn studio_picker_buttons_reach_entries_below_the_viewport() {
+        let mut viewer = Viewer::default();
+        viewer.begin();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<debug_ui::GameInput>()
+            .init_resource::<NextState<Front>>()
+            .insert_resource(SceneLibrary::new())
+            .insert_resource(viewer)
+            .add_systems(Update, input);
+        let picker = app.world_mut().spawn((
+            CharacterPicker,
+            ComputedNode {
+                size: Vec2::new(350.0, 600.0),
+                content_size: Vec2::new(350.0, 2000.0),
+                inverse_scale_factor: 1.0,
+                ..default()
+            },
+            ScrollPosition::default(),
+        )).id();
+        app.world_mut().spawn((Action::ScrollDown, Interaction::Pressed,
+            BackgroundColor::default(), Node::default()));
+        app.update();
+        assert_eq!(app.world().get::<ScrollPosition>(picker).unwrap().y, 480.0);
+    }
+
     #[test]
     fn studio_builds_its_character_outside_a_session_and_leaves_nothing_behind() {
         let options = crate::control::Options { simulation: true, ..default() };
@@ -1146,6 +1246,22 @@ mod tests {
         assert_eq!(app.world().resource::<StudioPack>().index, ox_pack);
         assert_eq!(players(&mut app), 1);
         assert!(app.world().get_resource::<StudioRig>().is_some(), "the ox poses through its rig");
+
+        let (prefab_scene, prefab_index) = app.world().resource::<SceneLibrary>().scenes.iter()
+            .enumerate()
+            .find_map(|(scene, pack)| pack.prefabs.iter().position(|prefab|
+                matches!(prefab.geometry, Geometry::Runtime(_))).map(|index| (scene, index)))
+            .expect("a runtime boulder is available for inspection");
+        app.world_mut().resource_mut::<Viewer>().prefab = Some((prefab_scene, prefab_index));
+        app.update();
+        assert!(app.world().get_resource::<StudioPrefab>().is_some());
+        assert!(app.world_mut().query_filtered::<(), With<PrefabPreview>>().iter(app.world()).count() > 0);
+        assert!(app.world_mut().query_filtered::<&Visibility, With<Player>>().iter(app.world())
+            .all(|visibility| *visibility == Visibility::Hidden));
+        app.world_mut().resource_mut::<Viewer>().prefab = None;
+        app.update();
+        assert!(app.world().get_resource::<StudioPrefab>().is_none());
+        assert_eq!(app.world_mut().query_filtered::<(), With<PrefabPreview>>().iter(app.world()).count(), 0);
 
         app.world_mut().resource_mut::<NextState<Front>>().set(Front::Menu);
         app.update();

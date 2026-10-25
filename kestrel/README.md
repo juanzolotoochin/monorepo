@@ -12,10 +12,13 @@ The playable Kestrel prototype and its game-specific tooling live here:
 | [`tools/demo/`](tools/demo/) | Controlled demo runner, client and trace assertions |
 | [`build/voxel_assets/`](build/voxel_assets/README.md) | Bazel voxel asset rules |
 | [`build/game_demo/`](build/game_demo/README.md) | Bazel video demo and simulation test rules |
-| [`docs/`](docs/architecture.md) | Planned deterministic game architecture |
+| [`docs/`](docs/README.md) | Current system documentation |
 
 Run the game with `bazel run --config=full_local -c opt //kestrel/app:demo` and its tests with
 `bazel test --config=full_local -c opt //kestrel/...`.
+
+Browse the design docs with `bazel run //kestrel/docs` and open the printed
+local URL.
 
 Build the Linux targets on remote workers from any client platform with
 `bazelisk build //kestrel/... --config=remote`. The remote configuration selects

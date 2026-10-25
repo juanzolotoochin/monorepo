@@ -18,6 +18,8 @@ pub struct StyleProfile {
     pub actor_scale: f32,
     /// Shared pose tuning for local and replicated characters using this style.
     pub character_motion: CharacterMotion,
+    /// Reusable local-space geometry shared by actor and skin parts.
+    pub shape_groups: Vec<ShapeGroup>,
     pub skins: Vec<SkinRecipe>,
     pub materials: Vec<Material>,
     pub background: [f32; 3],
@@ -138,6 +140,7 @@ impl Default for StyleProfile {
             actor_weapon: None,
             actor_scale: 1.0,
             character_motion: CharacterMotion::default(),
+            shape_groups: vec![],
             skins: vec![],
             materials: vec![
                 material("stone", [0.17, 0.22, 0.28], 0.0, 0.3),
@@ -202,6 +205,7 @@ impl StyleProfile {
         {
             return Err("invalid style actor density or weapon label".into());
         }
+        validate_shape_groups(self)?;
         if !self.character_motion.walk_speed.is_finite()
             || !self.character_motion.run_speed.is_finite()
             || !(0.5..=10.0).contains(&self.character_motion.walk_speed)
@@ -752,9 +756,143 @@ pub struct ActorRecipe {
     pub muzzle: Option<[f32; 3]>,
     #[serde(default)]
     pub shapes: Vec<VoxelShape>,
+    /// Named shape groups, expanded before this part is meshed.
+    #[serde(default)]
+    pub includes: Vec<String>,
     /// Smooth authored geometry uses the same materials and rig as voxel parts.
     #[serde(default)]
     pub smooth: Vec<SurfaceShape>,
+}
+/// A reusable visual component in a style's local coordinate system.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShapeGroup {
+    pub id: String,
+    #[serde(default)]
+    pub includes: Vec<String>,
+    #[serde(default)]
+    pub shapes: Vec<VoxelShape>,
+}
+/// Places a reusable shape group in scene space.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShapeInstance {
+    pub group: String,
+    pub position: [f32; 3],
+    #[serde(default = "unit_scale")]
+    pub scale: f32,
+}
+fn unit_scale() -> f32 { 1.0 }
+
+fn shape_group_map(profile: &StyleProfile) -> BTreeMap<&str, &ShapeGroup> {
+    profile.shape_groups.iter().map(|group| (group.id.as_str(), group)).collect()
+}
+
+fn append_group(
+    groups: &BTreeMap<&str, &ShapeGroup>,
+    id: &str,
+    stack: &mut Vec<String>,
+    shapes: &mut Vec<VoxelShape>,
+) -> Result<()> {
+    if stack.iter().any(|name| name == id) {
+        return Err(format!("shape group cycle: {} -> {id}", stack.join(" -> ")));
+    }
+    let group = groups.get(id).ok_or_else(|| format!("unknown shape group {id:?}"))?;
+    stack.push(id.to_owned());
+    for include in &group.includes {
+        append_group(groups, include, stack, shapes)?;
+    }
+    stack.pop();
+    shapes.extend(group.shapes.iter().cloned());
+    if shapes.len() > 256 {
+        return Err("actor part exceeds 256 expanded shapes".into());
+    }
+    Ok(())
+}
+
+fn expand_actor_shapes(profile: &StyleProfile, recipe: &ActorRecipe) -> Result<Vec<VoxelShape>> {
+    let groups = shape_group_map(profile);
+    let mut shapes = Vec::new();
+    for id in &recipe.includes {
+        append_group(&groups, id, &mut Vec::new(), &mut shapes)?;
+    }
+    shapes.extend(recipe.shapes.iter().cloned());
+    if shapes.len() > 256 {
+        return Err("actor part exceeds 256 expanded shapes".into());
+    }
+    Ok(shapes)
+}
+
+/// Expand scene placements through the same component definitions used by rigs.
+pub fn expand_scene_shapes(
+    profile: &StyleProfile,
+    architecture: &[VoxelShape],
+    instances: &[ShapeInstance],
+) -> Result<Vec<VoxelShape>> {
+    if instances.len() > 256 {
+        return Err("scene has more than 256 shape instances".into());
+    }
+    let groups = shape_group_map(profile);
+    let mut shapes = architecture.to_vec();
+    for instance in instances {
+        if instance.position.iter().any(|value| !value.is_finite() || value.abs() > 40.0)
+            || !instance.scale.is_finite()
+            || !(0.05..=8.0).contains(&instance.scale)
+        {
+            return Err("invalid shape instance transform".into());
+        }
+        let mut expanded = Vec::new();
+        append_group(&groups, &instance.group, &mut Vec::new(), &mut expanded)?;
+        for mut shape in expanded {
+            for axis in 0..3 {
+                shape.position[axis] = instance.position[axis] + shape.position[axis] * instance.scale;
+                shape.size[axis] *= instance.scale;
+                shape.spacing[axis] *= instance.scale;
+            }
+            shape.solid_radius = shape.solid_radius.map(|radius| radius * instance.scale);
+            if let Some(light) = &mut shape.light {
+                for axis in 0..3 {
+                    light.offset[axis] *= instance.scale;
+                }
+                light.range *= instance.scale;
+                light.radius *= instance.scale;
+            }
+            shapes.push(shape);
+        }
+        if shapes.len() > 4096 {
+            return Err("scene has more than 4096 expanded shapes".into());
+        }
+    }
+    Ok(shapes)
+}
+
+fn validate_shape_groups(profile: &StyleProfile) -> Result<()> {
+    if profile.shape_groups.len() > 64 {
+        return Err("style has more than 64 shape groups".into());
+    }
+    let mut ids = BTreeSet::new();
+    for group in &profile.shape_groups {
+        if group.id.is_empty()
+            || !group.id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            || !ids.insert(group.id.as_str())
+            || (group.includes.is_empty() && group.shapes.is_empty())
+        {
+            return Err("invalid or duplicate shape group".into());
+        }
+    }
+    let groups = shape_group_map(profile);
+    for id in ids {
+        append_group(&groups, id, &mut Vec::new(), &mut Vec::new())?;
+    }
+    for recipe in &profile.actor {
+        expand_actor_shapes(profile, recipe)?;
+    }
+    for skin in &profile.skins {
+        for recipe in &skin.parts {
+            expand_actor_shapes(profile, recipe)?;
+        }
+    }
+    Ok(())
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum SurfaceKind {
@@ -869,7 +1007,8 @@ pub fn compile_actor(profile: &StyleProfile) -> Result<Vec<ActorMesh>> {
         .actor
         .iter()
         .map(|recipe| {
-            let env = if recipe.shapes.is_empty() {
+            let shapes = expand_actor_shapes(profile, recipe)?;
+            let env = if shapes.is_empty() {
                 EnvironmentMesh {
                     meshes: vec![],
                     statistics: Statistics::default(),
@@ -878,7 +1017,7 @@ pub fn compile_actor(profile: &StyleProfile) -> Result<Vec<ActorMesh>> {
                     walkable: vec![],
                 }
             } else {
-                compile_environment(&style, &recipe.shapes)?
+                compile_environment(&style, &shapes)?
             };
             let mut meshes = env.meshes;
             for shape in &recipe.smooth {
@@ -902,6 +1041,77 @@ pub fn compile_actor(profile: &StyleProfile) -> Result<Vec<ActorMesh>> {
 mod actor_tests {
     use super::*;
     #[test]
+    fn scene_places_reusable_groups_with_independent_transforms() {
+        let shape = VoxelShape {
+            walkable: false, kind: ShapeKind::Box,
+            position: [0.1, 0.0, 0.0], size: [0.5; 3],
+            material: "stone".into(), repeat: [1; 3], spacing: [0.0; 3],
+            solid_radius: None, light: None,
+        };
+        let style = StyleProfile {
+            shape_groups: vec![ShapeGroup { id: "cube".into(), includes: vec![], shapes: vec![shape] }],
+            ..Default::default()
+        };
+        let placed = expand_scene_shapes(&style, &[], &[
+            ShapeInstance { group: "cube".into(), position: [2.0, 1.0, 0.0], scale: 2.0 },
+            ShapeInstance { group: "cube".into(), position: [-2.0, 0.5, 0.0], scale: 1.0 },
+        ]).unwrap();
+        assert_eq!(placed.len(), 2);
+        assert_eq!(placed[0].position, [2.2, 1.0, 0.0]);
+        assert_eq!(placed[0].size, [1.0; 3]);
+        assert_eq!(placed[1].position, [-1.9, 0.5, 0.0]);
+        assert!(expand_scene_shapes(&style, &[], &[
+            ShapeInstance { group: "missing".into(), position: [0.0; 3], scale: 1.0 },
+        ]).unwrap_err().contains("unknown shape group"));
+    }
+
+    #[test]
+    fn nested_shape_groups_bake_like_inline_geometry_and_reject_cycles() {
+        let body = VoxelShape {
+            walkable: false,
+            kind: ShapeKind::Box,
+            position: [0.0; 3],
+            size: [0.4; 3],
+            material: "metal".into(),
+            repeat: [1; 3],
+            spacing: [0.0; 3],
+            solid_radius: None,
+            light: None,
+        };
+        let trim = VoxelShape { position: [0.0, 0.3, 0.0], size: [0.2, 0.1, 0.2], ..body.clone() };
+        let mut composed = StyleProfile {
+            shape_groups: vec![
+                ShapeGroup { id: "body".into(), includes: vec![], shapes: vec![body.clone()] },
+                ShapeGroup { id: "dressed".into(), includes: vec!["body".into()], shapes: vec![trim.clone()] },
+            ],
+            actor: vec![ActorRecipe {
+                part: ActorPart::Body,
+                pivot: None,
+                muzzle: None,
+                shapes: vec![],
+                includes: vec!["dressed".into()],
+                smooth: vec![],
+            }],
+            ..Default::default()
+        };
+        let composed_mesh = compile_actor(&composed).unwrap();
+        let mut inline = composed.clone();
+        inline.shape_groups.clear();
+        inline.actor[0].includes.clear();
+        inline.actor[0].shapes = vec![body, trim];
+        assert_eq!(
+            serde_json::to_vec(&composed_mesh).unwrap(),
+            serde_json::to_vec(&compile_actor(&inline).unwrap()).unwrap()
+        );
+
+        composed.shape_groups[0].includes.push("dressed".into());
+        assert!(composed.validate().unwrap_err().contains("cycle"));
+        composed.shape_groups[0].includes.clear();
+        composed.actor[0].includes = vec!["missing".into()];
+        assert!(composed.validate().unwrap_err().contains("unknown shape group"));
+    }
+
+    #[test]
     fn actor_profiles_bake_finer_meshes_and_reject_missing_or_duplicate_parts() {
         let shape = VoxelShape {
             walkable: false,
@@ -920,6 +1130,7 @@ mod actor_tests {
                 pivot: None,
                 muzzle: None,
                 shapes: vec![shape],
+                includes: vec![],
                 smooth: vec![],
             }],
             actor_voxel_size: Some(0.05),
@@ -944,6 +1155,7 @@ mod actor_tests {
                 pivot: None,
                 muzzle: None,
                 shapes: vec![],
+                includes: vec![],
                 smooth: vec![SurfaceShape {
                     kind: SurfaceKind::Capsule,
                     position: [0.0, -0.12, 0.0],
@@ -1064,6 +1276,9 @@ pub enum LightKind {
 pub enum Motion {
     Biped,
     Quadruped,
+    CubeRoll {
+        edge: f32,
+    },
     Vehicle {
         wheel_radius: f32,
     },
@@ -1073,6 +1288,15 @@ pub enum Motion {
     Turret,
     #[default]
     Static,
+}
+impl Motion {
+    /// Whether advancing a rig's travel distance changes its pose.
+    pub fn uses_travel(&self) -> bool {
+        match self {
+            Self::Biped | Self::Quadruped | Self::CubeRoll { .. } | Self::Vehicle { .. } => true,
+            Self::Machine { .. } | Self::Turret | Self::Static => false,
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1112,6 +1336,9 @@ pub fn compile_skins(profile: &StyleProfile) -> Result<Vec<SkinMesh>> {
             return Err("invalid actor skin identity or scale".into());
         }
         match recipe.motion {
+            Motion::CubeRoll { edge } if !edge.is_finite() || edge <= 0.01 => {
+                return Err("invalid cube roll edge".into())
+            }
             Motion::Vehicle { wheel_radius }
                 if !wheel_radius.is_finite() || wheel_radius <= 0.01 =>
             {
@@ -1145,6 +1372,9 @@ pub fn compile_skins(profile: &StyleProfile) -> Result<Vec<SkinMesh>> {
             {
                 return Err("invalid rig pivot".into());
             }
+            // Expand shared geometry before remapping materials for this skin.
+            part.shapes = expand_actor_shapes(profile, part)?;
+            part.includes.clear();
             for shape in &mut part.shapes {
                 if let Some(material) = recipe.material_map.get(&shape.material) {
                     shape.material = material.clone();
