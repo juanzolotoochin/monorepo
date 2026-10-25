@@ -1,7 +1,7 @@
 # Character definitions
 
 Status, 25 October 2026:
-- **Step 1 is implemented**, except the ghoul speed change (see Open).
+- **Step 1 is implemented.**
 - **Steps 2 to 5** are planned.
 
 Background:
@@ -20,7 +20,7 @@ Background:
 | Player rig | The exosuit becomes an actor recipe on one rig path (step 4). |
 | Golden hashes | Simulation results stay identical while values move. Values change only in separate commits. |
 | Player radius | One radius: the character's body radius. |
-| Ghoul speed | Every plain ghoul walks at 0.75 m/s. This is parked: see Open. |
+| Ghoul speed | Every ghoul walks at 0.6 m/s, the forest speed. 0.75 was tried and dropped: the forest no longer held its first minute. |
 | Player health | Stays a scenario rule (`player_health`). |
 | Timing units | Whole 60 Hz frames, now a project-wide guideline (`architecture.md`). |
 | Player character | A fixed default (`exosuit`) until scenes name their player (step 3). |
@@ -43,9 +43,8 @@ Background:
 ```
 kestrel/content/data/character/
   exosuit.ron           the player avatar
-  ghoul.ron             the arena ghoul, and the base for the others
-  ghoul_forest.ron      base: ghoul; hp 2, walk 0.6
-  ghoul_arena_east.ron  base: ghoul; walk 0.72 (goes away with the speed change)
+  ghoul.ron             hp 3, walk 0.6; the base for the others
+  ghoul_forest.ron      base: ghoul; hp 2
   ghoul_brute.ron       base: ghoul; hp 5, walk 0.59, armor
 ```
 
@@ -132,19 +131,19 @@ logs are unchanged.
 | Definitions, wave references, index fields, save format 3 | change (encoding) | unchanged |
 | Code reads definitions | unchanged | unchanged |
 | One player radius | change | unchanged |
+| All ghouls at 0.6 m/s (gameplay change) | change | arena changes, forest unchanged |
 
 - `builtin_characters_keep_the_former_constants` pins every moved value to the
   bits of the constant it replaced.
 - The parity probe (two unattended minutes) is the same before and after the radius
   fix: forest 99 delivered and 23 kills, arena 10 kills and 22 breaches. In idle runs no hauler passes close to
   the player. The radius matters once the player walks among the haulers.
+- **Ghoul speed:** 0.75 m/s was tried first. The forest base then fell to 13 of 20 in
+  its first minute unattended, and kills dropped from 23 to 13 over two minutes.
+  At 0.6 the forest is unchanged. The arena gets easier: over two minutes,
+  kills rise from 10 to 14, breaches fall from 22 to 18, and base health ends at 12
+  instead of 8. The arena demo's strikes are retimed for the slower arrivals.
 
 ## Open
 
-- **Ghoul speed 0.75:** the change is ready on branch `kestrel-ghoul-speed`. At
-  0.75 the forest outpost no longer holds its first minute unattended. Its base health drops
-  to 13 of 20, where the app test `authored_supply_chain_builds_transport_and_defends_with_conserved_materials`
-  expects 20. Over two minutes kills fall from 23 to 13 and breaches rise from 7 to 20.
-  The arena's results don't change. This needs a call: retune the forest
-  (watchtower, arrows, wave spacing), keep the forest ghouls slower, or relax the test.
 - `speed` on a controlled scenario agent is still required but unused. Step 2 removes it.

@@ -1,8 +1,7 @@
-// The forest outpost's ghouls: slower and frailer.
+// The forest outpost's ghouls fall to fewer hits.
 (
     base: "ghoul",
     sim: (
-        movement: (walk: 0.6),
         health: (hp: 2),
     ),
     view: (),

@@ -1,8 +1,0 @@
-// The combat arena's east wave walks slightly slower.
-(
-    base: "ghoul",
-    sim: (
-        movement: (walk: 0.72),
-    ),
-    view: (),
-)

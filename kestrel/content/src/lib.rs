@@ -151,7 +151,6 @@ struct MoverSimFile {
 const BUILTIN: &[(&str, &str)] = &[
     ("character/exosuit.ron", include_str!("../data/character/exosuit.ron")),
     ("character/ghoul.ron", include_str!("../data/character/ghoul.ron")),
-    ("character/ghoul_arena_east.ron", include_str!("../data/character/ghoul_arena_east.ron")),
     ("character/ghoul_brute.ron", include_str!("../data/character/ghoul_brute.ron")),
     ("character/ghoul_forest.ron", include_str!("../data/character/ghoul_forest.ron")),
     ("mover/large.ron", include_str!("../data/mover/large.ron")),

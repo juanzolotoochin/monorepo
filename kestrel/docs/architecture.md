@@ -229,8 +229,9 @@ criticals, spear punctures, arc-coil chains, stagger and knockback.
 Compared with the original over the same two minutes (`parity_probe`), the
 forest outpost delivers 99 units versus 98 and kills 23 ghouls, as the
 original does. The combat arena's ballista lands all 18 bolts in both; the
-pierce rolls fall differently (same formula, different IDs), so 10 ghouls die
-instead of 13.
+pierce rolls fall differently (same formula, different IDs), so 10 ghouls died
+instead of 13. Since October 2026 every ghoul walks at 0.6 m/s (the arena's
+were 0.75 and 0.72), and 14 die there in the same two minutes.
 
 ## Networking
 
