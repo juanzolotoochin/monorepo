@@ -183,6 +183,12 @@ impl Game {
         Vec3::new((p.x - self.center.x).to_f32(), 0.0, (p.y - self.center.y).to_f32())
     }
 
+    /// Ground at a rendered position, including generated terraces and dug pits.
+    /// Character posing samples this; physics continues to use fixed-point terrain.
+    pub fn ground_height(&self, p: Vec3) -> Option<f32> {
+        self.world()?.terrain().ground(self.to_sim(p)).map(|height| height.to_f32())
+    }
+
     /// Asks the avatar to walk in a direction (camera-relative, already
     /// rotated into arena space); a zero direction stops it.
     pub fn walk(&mut self, direction: Vec2, run: bool) {
@@ -766,6 +772,36 @@ pub fn strike(game: &mut Game, controls: &mut Controls, library: &SceneLibrary, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rendered_feet_can_sample_walkable_mine_terraces() {
+        let options = crate::control::Options { simulation: true, ..default() };
+        let hub = crate::control::Hub::new(options.clone()).unwrap();
+        let mut library = SceneLibrary::new();
+        library.initial = library.index("dig-lab").unwrap();
+        let mut app = crate::build_app(options, library, hub);
+        app.update();
+        let game = app.world().resource::<Game>();
+        assert!(game.world().unwrap().terrain().mine.is_some());
+        let mut walkable_step = None;
+        for z in -30..30 {
+            for x in -30..30 {
+                let from = Vec3::new(x as f32, 0.0, z as f32);
+                let to = from + Vec3::X;
+                let (Some(low), Some(high)) = (game.ground_height(from), game.ground_height(to)) else { continue };
+                if (high - low).abs() == 0.25 && game.world().unwrap().terrain().walkable(
+                    game.to_sim(from), game.to_sim(to), sim::settlement::avatar::BODY_RADIUS,
+                ) {
+                    walkable_step = Some((from, low, high));
+                    break;
+                }
+            }
+            if walkable_step.is_some() { break; }
+        }
+        let (point, low, high) = walkable_step.expect("seeded mine should contain a quarter-meter terrace");
+        assert_eq!(game.ground_height(point), Some(low));
+        assert_eq!(game.ground_height(point + Vec3::X), Some(high));
+    }
 
     fn player_position(app: &mut App) -> Vec3 {
         let mut players = app.world_mut().query_filtered::<&Transform, With<Player>>();

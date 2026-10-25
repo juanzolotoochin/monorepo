@@ -210,7 +210,7 @@ pub fn update(
             };
         if pose.motion.plant_feet && pose.speed > 0.05 && !pose.airborne && pose.jump.is_none() {
             let ground = crate::character::foot_ground_offsets(*transform, &pose,
-                |point| crate::jetpack::height(&library, point));
+                |point| game.ground_height(point));
             pose.step_pitch = crate::character::step_body_pitch(&pose, ground);
         }
         poses.push((entity, current.avatar.weapon, pose));
@@ -244,7 +244,7 @@ pub fn update(
         let terrain = crate::character::foot_terrain(
             *peers.get(*root).unwrap().2,
             pose,
-            |point| crate::jetpack::height(&library, point),
+            |point| game.ground_height(point),
         );
         for (entity, target) in grounded_foot_targets(&joints, *root, pose, terrain) {
             if let Ok((_, _, mut transform)) = parts.get_mut(entity) {

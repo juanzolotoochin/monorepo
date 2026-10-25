@@ -368,7 +368,7 @@ pub fn animate_character(
         if viewer.active {
             Some(crate::viewer::studio_surface_height(&viewer, point.z))
         } else {
-            crate::jetpack::height(&library, point)
+            game.ground_height(point)
         }
     });
     if pose.motion.plant_feet && pose.speed > 0.05 && !pose.airborne && pose.jump.is_none() {
