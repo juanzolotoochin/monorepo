@@ -48,9 +48,11 @@ impl Service for Flight {
 
     /// Raises the scene's platforms (`SceneView` hides the deck under them).
     fn init(world: &mut World) -> Self {
-        let terrain = world.resource::<SceneView>().scene().terrain.clone();
+        let scene = world.resource::<SceneView>();
+        let terrain = scene.scene().terrain.clone();
+        let authored = scene.pack.environment.as_ref().map_or_else(Vec::new, |e| e.walkable.clone());
         if let Some(terrain) = terrain {
-            world.run_system_cached_with(raise_platforms, terrain).expect("raising the scene's platforms");
+            world.run_system_cached_with(raise_platforms, (terrain, authored)).expect("raising the scene's platforms");
         }
         Flight::default()
     }
@@ -65,7 +67,7 @@ impl Service for Flight {
 struct PlatformArt(Handle<Mesh>, [Handle<StandardMaterial>; 3]);
 
 fn raise_platforms(
-    In(terrain): In<voxel_assets::Terrain>,
+    In((terrain, authored)): In<(voxel_assets::Terrain, Vec<voxel_assets::WalkableSurface>)>,
     mut commands: Commands,
     art: Option<Res<PlatformArt>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -121,6 +123,17 @@ fn raise_platforms(
             for iz in 0..d.ceil() as u32 {
                 let tw = (w - ix as f32).min(1.0);
                 let td = (d - iz as f32).min(1.0);
+                let min = [p.min[0] + ix as f32, p.min[1] + iz as f32];
+                let max = [min[0] + tw, min[1] + td];
+                // Terrain supplies collision; an authored walkable surface
+                // at the same height supplies the visible top. Drawing both
+                // faces there causes depth fighting across the whole tile.
+                if authored.iter().any(|surface|
+                    (surface.height - p.height).abs() < 0.0001
+                        && (0..2).all(|axis| surface.min[axis] <= min[axis] + 0.0001
+                            && surface.max[axis] >= max[axis] - 0.0001)) {
+                    continue;
+                }
                 block(
                     Vec3::new(
                         p.min[0] + ix as f32 + tw * 0.5,

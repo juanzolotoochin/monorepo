@@ -9,7 +9,7 @@ Scene(id: "laser-pit", features: [CameraFollow],
     architecture: [
         // Flat combat floor and a low rim; the authored colliders below match
         // the visible walls and cover, so both movement and lasers use them.
-        (kind: Box, position: (0.0, -0.18, 0.0), size: (30.0, 0.36, 30.0), material: "stone"),
+        (kind: Box, walkable: true, position: (0.0, -0.18, 0.0), size: (30.0, 0.36, 30.0), material: "stone"),
         (kind: Box, position: (-14.5, 1.2, -13.0), size: (0.85, 2.4, 1.05), repeat: (1, 1, 27), spacing: (0.0, 0.0, 1.0), material: "metal", solid_radius: Some(0.68)),
         (kind: Box, position: (14.5, 1.2, -13.0), size: (0.85, 2.4, 1.05), repeat: (1, 1, 27), spacing: (0.0, 0.0, 1.0), material: "metal", solid_radius: Some(0.68)),
         (kind: Box, position: (-13.0, 1.2, -14.5), size: (1.05, 2.4, 0.85), repeat: (27, 1, 1), spacing: (1.0, 0.0, 0.0), material: "metal", solid_radius: Some(0.68)),

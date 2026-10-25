@@ -448,6 +448,11 @@ mod tests {
         let scene = library.index("laser-pit").unwrap();
         let mut app = crate::test_app(options, library, hub, crate::flow::Launch::single_player(scene));
         crate::start_world(&mut app);
+        let platform_visuals = app.world_mut()
+            .query_filtered::<bevy::prelude::Entity, bevy::prelude::With<crate::jetpack::TerrainVisual>>()
+            .iter(app.world())
+            .count();
+        assert_eq!(platform_visuals, 5, "authored floor must replace terrain top tiles");
         let service = app.world().resource::<crate::lockstep::SessionService>();
         let settlement = service.settlement().unwrap();
         let player = &settlement.agents[settlement.player().unwrap() as usize];
