@@ -20,10 +20,10 @@ use std::path::Path;
 use fx::Fx;
 use serde::{Deserialize, Serialize};
 
-/// The simulation rate. Content is written in seconds and per-second rates and
-/// converted to ticks at load, and code constants go through [`millis_to_ticks`],
-/// [`per_tick`] or `scenario::ticks_from_60hz`, so this is the only place the
-/// rate appears.
+/// The simulation rate. Durations are written as 60 Hz frames and converted
+/// with `scenario::ticks_from_60hz`; rates are per second and go through
+/// [`per_tick`]. Older content written in seconds uses [`millis_to_ticks`].
+/// This is the only place the rate appears (see `docs/architecture.md`).
 pub const TICKS_PER_SECOND: i32 = 60;
 
 /// Whole ticks in `ms` milliseconds, rounded to the nearest (at least 1 for a
