@@ -26,6 +26,8 @@ pub use video::{capture_frame, setup_render, Video};
 
 #[derive(Resource, Clone, Default)]
 pub struct Options {
+    /// Show the launch menu before starting an interactive session.
+    pub menu: bool,
     pub simulation: bool,
     pub script: Option<Script>,
     pub frames_dir: Option<String>,
@@ -50,6 +52,7 @@ impl Options {
             None
         };
         let options = Self {
+            menu: false,
             simulation: args.iter().any(|a| a == "--simulation"),
             script,
             frames_dir: value("--frames-dir").map(str::to_string),

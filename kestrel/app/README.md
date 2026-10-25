@@ -1,5 +1,17 @@
 # Kestrel // 07
 
+## Launch menu
+
+Run `bazel run --config=full_local -c opt //kestrel/app:demo` to open the launch
+menu. Pick a scene, then play solo, host on a port, or join a host address. Joining
+players should select the same scene as the host. Click a network field to edit
+it; Enter starts the selected session. Explicit `--scene`, `--host`, `--join`,
+demo, and simulation flags still start directly for scripts and tests.
+
+Capture the menu with
+`bazel run --config=full_local -c opt //kestrel/app:demo -- --capture-menu /tmp/kestrel-menu.png`.
+[Launch menu preview](../docs/launch-menu-preview.png).
+
 ## Moonlit Glade art study
 
 Run `bazel run --config=full_local -c opt //kestrel/app:demo -- --scene moonlit-glade` to
@@ -43,8 +55,8 @@ the swing, clang and footsteps are original procedural synthesis in `sound.c`
 not sound samples. The HUD uses Bevy's bundled default font.
 
 ```sh
-bazel run //kestrel/app:demo
-bazel test //kestrel/app:movement_test
+bazel run --config=full_local -c opt //kestrel/app:demo
+bazel test --config=full_local -c opt //kestrel/app:movement_test
 ```
 
 To cross-compile a Windows x64 release from Linux or macOS, use the MSVC
