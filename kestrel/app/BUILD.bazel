@@ -3,17 +3,10 @@ load("@rules_python//python:defs.bzl", "py_test")
 load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
 load("@rules_rs//rs:rust_test.bzl", "rust_test")
 load("//kestrel/build/game_demo:defs.bzl", "game_demo", "game_simulation_test", "studio_demo")
-load("//kestrel/app/web:defs.bzl", "web_bundle")
-
-web_bundle(
-    name = "web_bundle",
-    game = ":demo",
-    visibility = ["//visibility:public"],
-)
 
 alias(
     name = "web",
-    actual = "//kestrel/app/web:serve",
+    actual = "//kestrel/app/web:web",
     visibility = ["//visibility:public"],
 )
 

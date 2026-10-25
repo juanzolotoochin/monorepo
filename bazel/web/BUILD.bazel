@@ -1,0 +1,1 @@
+exports_files(["serve.py", "wasm_bindgen.BUILD.bazel"])

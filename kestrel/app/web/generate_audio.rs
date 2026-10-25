@@ -1,5 +1,9 @@
 //! Render the native procedural cue bank into browser-ready PCM clips.
-use std::{env, fs, io::{self, Write}, path::Path};
+use std::{
+    env, fs,
+    io::{self, Write},
+    path::Path,
+};
 
 #[repr(C)]
 struct SynthEvent {
@@ -9,7 +13,12 @@ struct SynthEvent {
 
 unsafe extern "C" {
     fn kestrel_audio_cue_count() -> i32;
-    fn kestrel_audio_synthesize(events: *const SynthEvent, count: u32, output: *mut f32, frames: u32);
+    fn kestrel_audio_synthesize(
+        events: *const SynthEvent,
+        count: u32,
+        output: *mut f32,
+        frames: u32,
+    );
 }
 
 const SAMPLE_RATE: u32 = 48_000;
@@ -41,13 +50,23 @@ fn write_cue(path: &Path, kind: i32) -> io::Result<()> {
 }
 
 fn main() -> io::Result<()> {
-    let directory = env::args_os().nth(1).expect("output directory");
+    let mut args = env::args_os().skip(1);
+    let directory = args.next().expect("output directory");
+    let expected_count: i32 = args
+        .next()
+        .expect("expected cue count")
+        .to_str()
+        .expect("UTF-8 cue count")
+        .parse()
+        .expect("numeric cue count");
     let directory = Path::new(&directory);
     fs::create_dir_all(directory)?;
     let cue_count = unsafe { kestrel_audio_cue_count() };
-    assert_eq!(cue_count, 20, "update the declared web cue outputs");
+    assert_eq!(cue_count, expected_count, "update the declared web cue outputs");
     for kind in 0..cue_count {
         write_cue(&directory.join(format!("cue_{kind}.wav")), kind)?;
     }
+    let names: Vec<_> = (0..cue_count).map(|kind| format!("\"cue_{kind}.wav\"")).collect();
+    fs::write(directory.join("cues.json"), format!("[{}]\n", names.join(",")))?;
     Ok(())
 }

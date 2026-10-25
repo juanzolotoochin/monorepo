@@ -1,7 +1,8 @@
 load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
-load("@rules_python//python:defs.bzl", "py_binary")
+load("//bazel/web:defs.bzl", "wasm_web_app")
+load(":audio.bzl", "web_audio")
 
-exports_files(["index.html.tpl", "wasm_bindgen.BUILD.bazel"])
+exports_files(["index.html.tpl"])
 
 rust_binary(
     name = "generate_audio",
@@ -11,9 +12,14 @@ rust_binary(
     visibility = ["//kestrel/app:__pkg__"],
 )
 
-py_binary(
-    name = "serve",
-    srcs = ["serve.py"],
-    data = ["//kestrel/app:web_bundle"],
+web_audio(
+    name = "audio",
+)
+
+wasm_web_app(
+    name = "web",
+    game = "//kestrel/app:demo",
+    index_template = ":index.html.tpl",
+    assets = [":audio"],
     visibility = ["//kestrel/app:__pkg__"],
 )

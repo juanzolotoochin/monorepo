@@ -16,7 +16,9 @@ desktop game; click or press a key in the page to enable browser playback. The
 web build uses one simulation thread and does not save menu preferences. Hosting
 and joining still use the native UDP transport, so choose **Play Solo** in the
 browser. The pinned wasm-bindgen packaging tool is a Linux x86-64 executable;
-the generated web files can be served from any host.
+the generated files in `bazel-bin/kestrel/app/web/web_bundle` can be served
+from any host. The reusable build and server rule is documented in
+`bazel/web/README.md`.
 
 ## Share an optimized build with developers
 

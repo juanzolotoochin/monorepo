@@ -72,8 +72,8 @@ windows_shell_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.
 # wasm executable into the JavaScript and wasm files a browser can load.
 wasm_bindgen_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 wasm_bindgen_archive(
-    name = "kestrel_wasm_bindgen",
-    build_file = "//kestrel/app/web:wasm_bindgen.BUILD.bazel",
+    name = "wasm_bindgen_cli",
+    build_file = "//bazel/web:wasm_bindgen.BUILD.bazel",
     sha256 = "82d12bb940e2d4e72e0d5605387fc1b8ca179044e012b620f0ce4e7440e8320e",
     strip_prefix = "wasm-bindgen-0.2.129-x86_64-unknown-linux-musl",
     urls = ["https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.129/wasm-bindgen-0.2.129-x86_64-unknown-linux-musl.tar.gz"],

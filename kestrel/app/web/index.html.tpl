@@ -20,24 +20,36 @@
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       if (AudioContextClass) {
         const audio = new AudioContextClass();
-        const cues = Array.from({ length: 20 }, (_, kind) =>
-          fetch(`./cue_${kind}.wav`)
-            .then(response => {
-              if (!response.ok) throw new Error(`cue ${kind}: HTTP ${response.status}`);
-              return response.arrayBuffer();
-            })
-            .then(bytes => audio.decodeAudioData(bytes))
-            .catch(error => {
-              console.warn('Could not load a sound cue:', error);
-              return null;
-            }));
+        async function loadCue(name, kind) {
+          try {
+            const response = await fetch(`./${name}`);
+            if (!response.ok) throw new Error(`cue ${kind}: HTTP ${response.status}`);
+            return await audio.decodeAudioData(await response.arrayBuffer());
+          } catch (error) {
+            console.warn('Could not load a sound cue:', error);
+            return null;
+          }
+        }
+        async function loadCues() {
+          try {
+            const response = await fetch('./cues.json');
+            if (!response.ok) throw new Error(`cues.json: HTTP ${response.status}`);
+            const names = await response.json();
+            return await Promise.all(names.map(loadCue));
+          } catch (error) {
+            console.warn('Could not load the sound bank:', error);
+            return [];
+          }
+        }
+        const cues = loadCues();
 
         const enableAudio = () => { void audio.resume().catch(console.warn); };
         window.addEventListener('pointerdown', enableAudio, { passive: true });
         window.addEventListener('keydown', enableAudio);
         window.kestrelWebAudioPlay = async kind => {
-          if (!Number.isInteger(kind) || kind < 0 || kind >= cues.length) return;
-          const buffer = await cues[kind];
+          const buffers = await cues;
+          if (!Number.isInteger(kind) || kind < 0 || kind >= buffers.length) return;
+          const buffer = buffers[kind];
           if (!buffer) return;
           const source = audio.createBufferSource();
           source.buffer = buffer;

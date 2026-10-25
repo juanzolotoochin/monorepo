@@ -1,5 +1,6 @@
 //! Small procedural sound bank backed by the repository's hermetic miniaudio.
 use bevy::prelude::*;
+#[cfg(not(target_arch = "wasm32"))]
 use std::{
     sync::mpsc::{self, SyncSender},
     thread::{self, JoinHandle},
@@ -28,26 +29,16 @@ extern "C" {
     fn kestrel_web_audio_play(cue: i32);
 }
 
-// Offline synthesis is only used by native demo captures.
-#[cfg(target_arch = "wasm32")]
-unsafe fn kestrel_audio_start() -> i32 { -1 }
-#[cfg(target_arch = "wasm32")]
-unsafe fn kestrel_audio_play(cue: i32) { kestrel_web_audio_play(cue); }
-#[cfg(target_arch = "wasm32")]
-unsafe fn kestrel_audio_stop() {}
-#[cfg(target_arch = "wasm32")]
-unsafe fn kestrel_audio_cue_count() -> i32 { Cue::ALL.len() as i32 }
-#[cfg(target_arch = "wasm32")]
-unsafe fn kestrel_audio_synthesize(_: *const SynthEvent, _: u32, _: *mut f32, _: u32) {}
-
 // Miniaudio initializes Windows COM as MTA. Winit needs STA on the window
 // thread, so both audio initialization and destruction must live elsewhere.
 // The C device has a separate real-time callback; cues remain lock-free.
+#[cfg(not(target_arch = "wasm32"))]
 struct AudioThread {
     stop: Option<SyncSender<()>>,
     handle: Option<JoinHandle<()>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl AudioThread {
     fn start(
         start: impl FnOnce() -> bool + Send + 'static,
@@ -79,6 +70,7 @@ impl AudioThread {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for AudioThread {
     fn drop(&mut self) {
         drop(self.stop.take());
@@ -130,6 +122,7 @@ impl Cue {
     }
 }
 #[repr(C)]
+#[cfg(not(target_arch = "wasm32"))]
 struct SynthEvent {
     sample: u64,
     kind: i32,
@@ -143,6 +136,7 @@ struct RecordedCue {
 pub struct Sound {
     pub muted: bool,
     active: bool,
+    #[cfg(not(target_arch = "wasm32"))]
     _worker: Option<AudioThread>,
     recording: bool,
     tick: std::sync::atomic::AtomicU64,
@@ -153,6 +147,7 @@ impl Sound {
         Self {
             muted: true,
             active: false,
+            #[cfg(not(target_arch = "wasm32"))]
             _worker: None,
             recording: false,
             tick: std::sync::atomic::AtomicU64::new(0),
@@ -164,10 +159,7 @@ impl Sound {
         Self {
             muted: false,
             active: true,
-            _worker: None,
-            recording: false,
-            tick: std::sync::atomic::AtomicU64::new(0),
-            cues: std::sync::Mutex::new(vec![]),
+            ..Self::silent()
         }
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -210,6 +202,7 @@ impl Sound {
             .map(|cue| (cue.tick, cue.kind))
             .collect()
     }
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn write_wav(
         &self,
         path: &str,
@@ -259,6 +252,10 @@ impl Sound {
         }
         file.flush()
     }
+    #[cfg(target_arch = "wasm32")]
+    pub fn write_wav(&self, _: &str, _: u32, _: u64, _: usize) -> std::io::Result<()> {
+        Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "browser builds cannot write WAV files"))
+    }
     pub fn play(&self, cue: Cue) {
         if self.recording {
             self.cues.lock().unwrap().push(RecordedCue {
@@ -267,6 +264,9 @@ impl Sound {
             });
         }
         if self.active && !self.muted {
+            #[cfg(target_arch = "wasm32")]
+            kestrel_web_audio_play(cue as i32);
+            #[cfg(not(target_arch = "wasm32"))]
             unsafe {
                 kestrel_audio_play(cue as i32);
             }
@@ -274,7 +274,7 @@ impl Sound {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
     #[test]
