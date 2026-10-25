@@ -1,0 +1,24 @@
+load("@rules_rs//rs:rust_library.bzl", "rust_library")
+load("@rules_rs//rs:rust_test.bzl", "rust_test")
+
+rust_library(
+    name = "session",
+    srcs = glob(["src/**/*.rs"]),
+    edition = "2021",
+    visibility = ["//kestrel:__subpackages__"],
+    deps = [
+        "//kestrel/content",
+        "//kestrel/net",
+        "//kestrel/save",
+        "//kestrel/sim",
+    ],
+)
+
+rust_test(
+    name = "session_test",
+    size = "small",
+    compile_data = ["//kestrel/app/assets:levels/combat_arena_supply.ron"],
+    crate = ":session",
+    edition = "2021",
+    deps = ["//kestrel/fx"],
+)

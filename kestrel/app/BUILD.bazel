@@ -1,0 +1,157 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_python//python:defs.bzl", "py_test")
+load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
+load("@rules_rs//rs:rust_test.bzl", "rust_test")
+load("//kestrel/build/game_demo:defs.bzl", "game_demo", "game_simulation_test")
+
+rust_binary(
+    name = "demo",
+    srcs = glob(["src/**/*.rs"]),
+    # Bevy's derive macros inspect Cargo.toml to locate the `bevy` re-exports.
+    compile_data = ["//:Cargo.toml", "shaders/grass.wesl"],
+    edition = "2021",
+    link_deps = [":sound"],
+    rustc_env = {"CARGO_MANIFEST_DIR": "."},
+    visibility = ["//visibility:public"],
+    deps = [
+        "//kestrel/app/assets:atlantis",
+        "//kestrel/app/assets:boulder_lab",
+        "//kestrel/app/assets:combat_arena",
+        "//kestrel/app/assets:dig_lab",
+        "//kestrel/app/assets:field",
+        "//kestrel/app/assets:forest_outpost",
+        "//kestrel/app/assets:jetpack_lab",
+        "//kestrel/app/assets:mining_deck",
+        "//kestrel/app/assets:moonlit_glade",
+        "//kestrel/app/assets:pile_lab",
+        "//kestrel/app/assets:surprise_lab",
+        "//kestrel/content",
+        "//kestrel/fx",
+        "//kestrel/net",
+        "//kestrel/save",
+        "//kestrel/session",
+        "//kestrel/sim",
+        "//kestrel/tools/assetc/core:voxel_assets",
+        "@crates//:bevy",
+        "@crates//:image",
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "movement_test",
+    size = "small",
+    compile_data = ["//:Cargo.toml"],
+    crate = ":demo",
+    edition = "2021",
+    rustc_env = {"CARGO_MANIFEST_DIR": "."},
+)
+
+cc_library(
+    name = "sound",
+    srcs = ["src/sound.c"],
+    copts = ["-O2"],
+    deps = ["@miniaudio//:headers"],
+)
+
+game_demo(
+    name = "haul_four_demo",
+    game = ":demo",
+    script = "demos/haul_four.json",
+    tags = ["manual"],
+)
+
+py_test(
+    name = "control_protocol_test",
+    size = "small",
+    srcs = ["tests/control_protocol_test.py"],
+    args = ["$(rootpath :demo)"],
+    data = [":demo"],
+    legacy_create_init = 0,
+)
+
+game_demo(
+    name = "jetpack_demo",
+    game = ":demo",
+    script = "demos/jetpack.json",
+    tags = ["manual"],
+)
+
+game_demo(
+    name = "surprise_demo",
+    game = ":demo",
+    script = "demos/surprise.json",
+    tags = ["manual"],
+)
+
+game_demo(
+    name = "atlantis_demo",
+    game = ":demo",
+    script = "demos/atlantis.json",
+    tags = ["manual"],
+)
+
+game_demo(
+    name = "forest_outpost_demo",
+    assertions = "demos/forest_motion.assertions.json",
+    game = ":demo",
+    script = "demos/forest_outpost.json",
+    tags = ["manual"],
+)
+
+game_simulation_test(
+    name = "forest_motion_test",
+    size = "medium",
+    assertions = "demos/forest_motion.assertions.json",
+    game = ":demo",
+    script = "demos/forest_outpost.json",
+)
+
+game_demo(
+    name = "combat_arena_demo",
+    assertions = "demos/combat_arena.assertions.json",
+    game = ":demo",
+    script = "demos/combat_arena.json",
+    tags = ["manual"],
+)
+
+game_simulation_test(
+    name = "combat_arena_test",
+    size = "medium",
+    assertions = "demos/combat_arena.assertions.json",
+    game = ":demo",
+    script = "demos/combat_arena.json",
+)
+
+game_demo(
+    name = "combat_weapons_demo",
+    assertions = "demos/combat_weapons.assertions.json",
+    game = ":demo",
+    script = "demos/combat_weapons.json",
+    tags = ["manual"],
+)
+
+game_simulation_test(
+    name = "combat_weapons_test",
+    size = "medium",
+    assertions = "demos/combat_weapons.assertions.json",
+    game = ":demo",
+    script = "demos/combat_weapons.json",
+)
+
+py_test(
+    name = "combat_replay_test",
+    size = "medium",
+    srcs = ["tests/replay_test.py"],
+    args = [
+        "$(rootpath :demo)",
+        "$(rootpath demos/combat_weapons.json)",
+    ],
+    data = [
+        "demos/combat_weapons.json",
+        ":demo",
+    ],
+    legacy_create_init = 0,
+    main = "tests/replay_test.py",
+)

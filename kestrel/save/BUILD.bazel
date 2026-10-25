@@ -1,0 +1,25 @@
+load("@rules_rs//rs:rust_library.bzl", "rust_library")
+load("@rules_rs//rs:rust_test.bzl", "rust_test")
+
+rust_library(
+    name = "save",
+    srcs = glob(["src/**/*.rs"]),
+    edition = "2021",
+    visibility = ["//kestrel:__subpackages__"],
+    deps = [
+        "//kestrel/content",
+        "//kestrel/sim",
+        "@crates//:postcard",
+        "@crates//:ron",
+        "@crates//:ruzstd",
+        "@crates//:serde",
+    ],
+)
+
+rust_test(
+    name = "save_test",
+    size = "small",
+    compile_data = ["//kestrel/app/assets:levels/forest_supply.ron"],
+    crate = ":save",
+    edition = "2021",
+)

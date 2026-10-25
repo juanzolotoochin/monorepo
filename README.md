@@ -11,8 +11,8 @@ cd monorepo
 bazel run //examples/python:version
 ```
 
-For a small Rust game scene, run the [Kestrel voxel sci-fi scene](game/app/README.md):
+For a small Rust game scene, run the [Kestrel voxel sci-fi scene](kestrel/app/README.md):
 
 ```sh
-bazel run //game/app:demo
+bazel run --config=full_local -c opt //kestrel/app:demo
 ```

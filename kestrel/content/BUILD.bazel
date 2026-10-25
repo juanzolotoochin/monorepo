@@ -1,0 +1,34 @@
+load("@rules_rs//rs:rust_library.bzl", "rust_library")
+load("@rules_rs//rs:rust_test.bzl", "rust_test")
+
+filegroup(
+    name = "data",
+    srcs = glob(["data/**/*.ron"]),
+    visibility = ["//kestrel:__subpackages__"],
+)
+
+rust_library(
+    name = "content",
+    srcs = glob(["src/**/*.rs"]),
+    compile_data = [":data"],
+    edition = "2021",
+    visibility = ["//kestrel:__subpackages__"],
+    deps = [
+        "//kestrel/fx",
+        "@crates//:postcard",
+        "@crates//:ron",
+        "@crates//:serde",
+    ],
+)
+
+rust_test(
+    name = "content_test",
+    size = "small",
+    # The original scene files, to check they still load.
+    compile_data = [
+        "//kestrel/app/assets:levels/combat_arena_supply.ron",
+        "//kestrel/app/assets:levels/forest_supply.ron",
+    ],
+    crate = ":content",
+    edition = "2021",
+)

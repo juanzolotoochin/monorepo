@@ -1,7 +1,0 @@
-# Golden hash files for the determinism suite. Regenerate with
-# `bazel run //game/headless -- golden` after an intended gameplay change.
-filegroup(
-    name = "hashes",
-    srcs = glob(["*.hashes"]),
-    visibility = ["//game:__subpackages__"],
-)
