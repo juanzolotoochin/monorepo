@@ -83,6 +83,7 @@ pub fn update(
     mut commands: Commands,
     game: Res<Game>,
     style: Res<ActiveStyle>,
+    contacts: Option<Res<crate::character::ActorFootContacts>>,
     library: Res<crate::assets::SceneLibrary>,
     time: Res<Time>,
     sound: Res<crate::sound::Sound>,
@@ -103,7 +104,10 @@ pub fn update(
     // Render time in ticks: views sit `alpha` of the way from the previous
     // tick's state to the current one's.
     let ticks = game.tick as f32 - 1.0 + game.alpha;
-    let motion_profile = crate::character::motion_profile(&library.scenes[library.current]);
+    let mut motion_profile = crate::character::motion_profile(&library.scenes[library.current]);
+    if let Some(contacts) = &contacts {
+        motion_profile = contacts.adapt_motion(motion_profile);
+    }
     let mut poses = Vec::new();
     let mut shown = Vec::new();
     for (entity, mut peer, mut transform) in &mut peers {
@@ -214,7 +218,7 @@ pub fn update(
         }
     }
     for (root, _, pose) in &poses {
-        if !pose.motion.plant_feet || pose.airborne || pose.jump.is_some()
+        if !pose.motion.plant_feet || pose.speed <= 0.05 || pose.airborne || pose.jump.is_some()
             || pose.attack.is_some() || pose.dig.is_some() {
             continue;
         }
@@ -228,6 +232,13 @@ pub fn update(
         for (entity, target) in grounded_foot_targets(&joints, *root, pose) {
             if let Ok((_, _, mut transform)) = parts.get_mut(entity) {
                 *transform = target;
+            }
+        }
+        if let Some(contacts) = contacts.as_ref() {
+            for (entity, target) in crate::character::actor_leg_targets(&joints, *root, pose, contacts) {
+                if let Ok((_, _, mut transform)) = parts.get_mut(entity) {
+                    *transform = target;
+                }
             }
         }
     }

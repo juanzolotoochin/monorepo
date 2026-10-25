@@ -125,6 +125,7 @@ pub fn apply(world: &mut World) {
         .scene
         .features
         .contains(&voxel_assets::SceneFeature::Jump);
+    world.insert_resource(crate::character::ActorFootContacts::from_actor(&actor));
     for mut visible in world
         .query_filtered::<&mut Visibility, Or<(
             With<crate::scene::CombatPanel>,

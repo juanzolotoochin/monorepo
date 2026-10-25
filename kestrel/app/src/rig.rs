@@ -28,13 +28,13 @@ struct RigBone {
     contact: Option<FootGeometry>,
 }
 #[derive(Clone, Copy)]
-struct FootGeometry {
+pub(crate) struct FootGeometry {
     sole_y: f32,
     near_z: f32,
     far_z: f32,
 }
 impl FootGeometry {
-    fn from_meshes(meshes: &[voxel_assets::MeshData]) -> Option<Self> {
+    pub(crate) fn from_meshes(meshes: &[voxel_assets::MeshData]) -> Option<Self> {
         let vertices: Vec<_> = meshes.iter().flat_map(|mesh| mesh.positions.iter()).collect();
         let sole_y = vertices.iter().map(|p| p[1]).reduce(f32::min)?;
         if sole_y >= -0.1 { return None; }
@@ -45,9 +45,12 @@ impl FootGeometry {
         (near_z.is_finite() && far_z.is_finite()).then_some(Self { sole_y, near_z, far_z })
     }
 
-    fn place(self, rest: Transform, offset: f32, lift: f32) -> Transform {
+    pub(crate) fn center_z(self) -> f32 { (self.near_z + self.far_z) * 0.5 }
+    pub(crate) fn reach(self) -> f32 { -self.sole_y }
+
+    pub(crate) fn place(self, rest: Transform, offset: f32, lift: f32) -> Transform {
         let mut posed = rest;
-        let center = (self.near_z + self.far_z) * 0.5;
+        let center = self.center_z();
         let target = center + offset;
         // Rotate around the fixed hip while keeping the sole's center at its
         // distance-driven ground position. The outside sole edge determines
@@ -402,6 +405,12 @@ mod contact_tests {
                     let lowest = posed.translation.y + posed.scale.y * geometry.sole_y * angle.cos()
                         - edge * angle.sin();
                     assert!((lowest - lift).abs() < 0.002, "{id} {:?} frame {frame}: {lowest} vs {lift}", part.part);
+                    let rendered_lowest = part.meshes.iter().flat_map(|mesh| &mesh.positions)
+                        .map(|vertex| posed.translation.y + posed.scale.y * vertex[1] * angle.cos()
+                            - vertex[2] * angle.sin())
+                        .fold(f32::INFINITY, f32::min);
+                    assert!(rendered_lowest >= lift - 0.01,
+                        "{id} {:?} frame {frame}: rendered sole clips {:.3}m", part.part, lift - rendered_lowest);
                 }
             }
         }
