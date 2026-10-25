@@ -1,6 +1,7 @@
 //! Kestrel: an asset-free voxel action scene. See ../README.md.
 mod assets;
 mod character;
+mod character_catalog;
 mod combat;
 mod control;
 mod effects;
@@ -145,19 +146,23 @@ fn build_app(options: control::Options, mut scenes: assets::SceneLibrary, hub: c
     if studio {
         viewer.begin();
         launch_menu.open = false;
-        scenes.initial = scenes.index("moonlit-glade").unwrap_or(scenes.initial);
         let args: Vec<_> = std::env::args().collect();
+        let requested_character = args.windows(2)
+            .find(|pair| pair[0] == "--studio-character")
+            .map(|pair| pair[1].as_str());
+        scenes.initial = requested_character
+            .map(|id| scenes.character_index(id).unwrap_or_else(|error| panic!("{error}")))
+            .or_else(|| scenes.character(scenes.initial).map(|character| character.scene_index))
+            .or_else(|| scenes.characters.first().map(|character| character.scene_index))
+            .expect("Character Studio needs at least one baked actor");
         if let Some(pair) = args.windows(2).find(|pair| pair[0] == "--studio-clip") {
-            viewer.clip = match pair[1].as_str() {
-                "idle" => viewer::Clip::Idle,
-                "walk" => viewer::Clip::Walk,
-                "turn" => viewer::Clip::Turn,
-                "jump" => viewer::Clip::Jump,
-                "run-jump" => viewer::Clip::RunJump,
-                "forehand" => viewer::Clip::Forehand,
-                "backhand" => viewer::Clip::Backhand,
-                "overhead" => viewer::Clip::Overhead,
-                _ => viewer::Clip::Run,
+            viewer.clip = viewer::Clip::from_id(&pair[1]).unwrap_or(viewer::Clip::Run);
+        }
+        if !viewer.clip.supports(scenes.character(scenes.initial).unwrap()) {
+            viewer.clip = if viewer::Clip::Run.supports(scenes.character(scenes.initial).unwrap()) {
+                viewer::Clip::Run
+            } else {
+                viewer::Clip::Idle
             };
         }
         if let Some(pair) = args.windows(2).find(|pair| pair[0] == "--studio-angle") {

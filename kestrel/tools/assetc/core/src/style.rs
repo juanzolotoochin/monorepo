@@ -11,6 +11,10 @@ pub struct StyleProfile {
     pub weapon_name: String,
     pub weapon_skins: Vec<WeaponSkin>,
     pub actor: Vec<ActorRecipe>,
+    /// Name shown by tools when this style provides a character actor.
+    pub actor_name: Option<String>,
+    /// Weapon carried by this actor's primary rig attachment, when present.
+    pub actor_weapon: Option<content::scenario::Weapon>,
     pub actor_scale: f32,
     /// Shared pose tuning for local and replicated characters using this style.
     pub character_motion: CharacterMotion,
@@ -37,6 +41,7 @@ pub struct StyleProfile {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CharacterMotion {
+    pub motion_style: MotionStyle,
     /// Ground speed in meters per second, shared by simulation and posing.
     pub walk_speed: f32,
     pub run_speed: f32,
@@ -49,12 +54,23 @@ pub struct CharacterMotion {
     pub step_lift: f32,
     /// Distance between alternating foot contacts in world units.
     pub step_distance: f32,
+    /// Use the planted-foot IK gait for a rig with articulated hips and ankles.
+    pub plant_feet: bool,
+    /// Hip-to-ankle reach for that gait, in unscaled actor units.
+    pub leg_reach: f32,
     /// Angular spring frequency in radians per second. Lower values keep turning momentum longer.
     pub turn_inertia: f32,
+}
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MotionStyle {
+    #[default]
+    Classic,
+    Natural,
 }
 impl Default for CharacterMotion {
     fn default() -> Self {
         Self {
+            motion_style: MotionStyle::Classic,
             walk_speed: 3.8,
             run_speed: 5.6,
             arm_swing: 0.23,
@@ -65,6 +81,8 @@ impl Default for CharacterMotion {
             elbow_drive: 0.38,
             step_lift: 0.10,
             step_distance: 1.25,
+            plant_feet: false,
+            leg_reach: 0.48,
             turn_inertia: 8.0,
         }
     }
@@ -116,6 +134,8 @@ impl Default for StyleProfile {
             weapon_name: "MK. IV / INDUSTRIAL CLEAVER".into(),
             weapon_skins: vec![],
             actor: vec![],
+            actor_name: None,
+            actor_weapon: None,
             actor_scale: 1.0,
             character_motion: CharacterMotion::default(),
             skins: vec![],
@@ -173,6 +193,7 @@ impl StyleProfile {
             return Err("invalid style identity, density or palette size".into());
         }
         if self.actor.len() > 24
+            || self.actor_name.as_ref().is_some_and(|name| name.trim().is_empty() || name.len() > 80)
             || self.weapon_name.trim().is_empty()
             || self.weapon_name.len() > 80
             || self
@@ -187,6 +208,11 @@ impl StyleProfile {
             || !(self.character_motion.walk_speed..=15.0).contains(&self.character_motion.run_speed)
         {
             return Err("invalid character movement speeds".into());
+        }
+        if !self.character_motion.leg_reach.is_finite()
+            || !(0.2..=2.0).contains(&self.character_motion.leg_reach)
+        {
+            return Err("invalid character leg reach".into());
         }
         if self.weapon_skins.len() > 8
             || self

@@ -1,17 +1,16 @@
 //! Character studio: repeatable poses from the production rig, viewed in place.
 use crate::{
     assets::SceneLibrary,
+    character_catalog::CharacterEntry,
     character::{JumpMotion, LocalBlade, Player},
     combat::Attack,
     gameplay::Controls,
-    menu::LaunchMenu,
 };
 use bevy::{
     app::AppExit,
     camera::ScalingMode,
     prelude::*,
     render::view::screenshot::{save_to_disk, Screenshot},
-    ui::FocusPolicy,
 };
 use sim::settlement::avatar::SwordStroke;
 
@@ -37,6 +36,33 @@ pub enum Clip {
     Overhead,
 }
 impl Clip {
+    const ALL: [Self; 9] = [
+        Self::Idle, Self::Walk, Self::Run, Self::Turn, Self::Jump,
+        Self::RunJump, Self::Forehand, Self::Backhand, Self::Overhead,
+    ];
+    pub(crate) fn supports(self, character: &CharacterEntry) -> bool {
+        match self {
+            Self::Walk | Self::Run | Self::Turn => character.can_locomote,
+            Self::Jump | Self::RunJump => character.can_jump,
+            Self::Forehand | Self::Backhand | Self::Overhead =>
+                character.weapon == Some(content::scenario::Weapon::Sword),
+            _ => true,
+        }
+    }
+    pub(crate) fn from_id(id: &str) -> Option<Self> {
+        Some(match id {
+            "idle" => Self::Idle,
+            "walk" => Self::Walk,
+            "run" => Self::Run,
+            "turn" => Self::Turn,
+            "jump" => Self::Jump,
+            "run-jump" => Self::RunJump,
+            "forehand" => Self::Forehand,
+            "backhand" => Self::Backhand,
+            "overhead" => Self::Overhead,
+            _ => return None,
+        })
+    }
     pub(crate) fn frame_count(self) -> u64 {
         match self {
             Self::Run => 30,
@@ -51,7 +77,7 @@ impl Clip {
     fn title(self) -> &'static str {
         match self {
             Self::Idle => "IDLE",
-            Self::Walk => "WALK / PLANTED FEET",
+            Self::Walk => "WALK",
             Self::Run => "RUN",
             Self::Turn => "RUN + DIRECTION CHANGE",
             Self::Jump => "JUMP",
@@ -235,6 +261,7 @@ fn wrapped_mark(base: f32, offset: f32) -> f32 {
 }
 #[derive(Component, Clone, Copy)]
 pub(crate) enum Action {
+    NextCharacter,
     Clip(Clip),
     Angle(ViewAngle),
     Speed,
@@ -246,6 +273,8 @@ pub(crate) enum Action {
 }
 #[derive(Component)]
 pub(crate) struct Status;
+#[derive(Component)]
+pub(crate) struct CharacterName;
 #[derive(Component)]
 pub(crate) struct SwordMetrics;
 #[derive(Component)]
@@ -261,290 +290,8 @@ pub(crate) struct AngleLog {
     previous: Option<(Clip, u64)>,
 }
 
-fn button(parent: &mut ChildSpawnerCommands, action: Action, title: &str) {
-    parent
-        .spawn((
-            action,
-            Interaction::None,
-            FocusPolicy::Block,
-            Node {
-                width: percent(100.0),
-                min_height: px(30.0),
-                padding: UiRect::axes(px(10.0), px(5.0)),
-                border: UiRect::all(px(1.0)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.07, 0.16, 0.20, 0.92)),
-            BorderColor::all(Color::srgb(0.18, 0.37, 0.42)),
-        ))
-        .with_children(|b| {
-            b.spawn((
-                Text::new(title),
-                TextFont {
-                    font_size: FontSize::Px(14.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(0.85, 0.95, 0.94)),
-            ));
-        });
-}
-fn label(parent: &mut ChildSpawnerCommands, title: &str) {
-    parent.spawn((
-        Text::new(title),
-        TextFont {
-            font_size: FontSize::Px(13.0),
-            ..default()
-        },
-        TextColor(Color::srgb(0.49, 0.82, 0.85)),
-    ));
-}
-
-pub fn setup(
-    mut commands: Commands,
-    viewer: Res<Viewer>,
-    roots: Query<Entity, With<Root>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    if !viewer.active || !roots.is_empty() {
-        return;
-    }
-    commands.spawn((
-        Stage,
-        Mesh3d(meshes.add(Cuboid::new(4.0, STUDIO_FLOOR_THICKNESS, 4.0))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.09, 0.17, 0.21),
-            perceptual_roughness: 0.95,
-            ..default()
-        })),
-        Transform::from_xyz(0.0, STUDIO_FLOOR_Y - STUDIO_FLOOR_THICKNESS * 0.5, 0.0),
-    ));
-    for index in -4..4 {
-        let base = index as f32 * GRID_SPACING;
-        let major = index % 2 == 0;
-        let material = materials.add(StandardMaterial {
-            base_color: if major { Color::srgb(0.32, 0.53, 0.57) } else { Color::srgb(0.19, 0.34, 0.38) },
-            perceptual_roughness: 0.92,
-            ..default()
-        });
-        let width = if major { 0.018 } else { 0.008 };
-        for axis in [MarkAxis::X, MarkAxis::Z] {
-            let size = match axis {
-                MarkAxis::X => Vec3::new(width, 0.004, GRID_PERIOD),
-                MarkAxis::Z => Vec3::new(GRID_PERIOD, 0.004, width),
-            };
-            commands.spawn((
-                Stage,
-                GroundMark { axis, base },
-                Mesh3d(meshes.add(Cuboid::from_size(size))),
-                MeshMaterial3d(material.clone()),
-                Transform::from_xyz(
-                    if matches!(axis, MarkAxis::X) { base } else { 0.0 },
-                    STUDIO_FLOOR_Y + 0.003,
-                    if matches!(axis, MarkAxis::Z) { base } else { 0.0 },
-                ),
-            ));
-        }
-    }
-    for (position, intensity) in [
-        (Vec3::new(2.5, STUDIO_FLOOR_Y + 3.5, 3.5), 1900.0),
-        (Vec3::new(-3.0, STUDIO_FLOOR_Y + 2.6, -1.0), 1100.0),
-    ] {
-        commands.spawn((
-            Stage,
-            PointLight {
-                intensity,
-                range: 9.0,
-                shadow_maps_enabled: false,
-                ..default()
-            },
-            Transform::from_translation(position),
-        ));
-    }
-    commands
-        .spawn((
-            Root,
-            GlobalZIndex(1001),
-            Node {
-                position_type: PositionType::Absolute,
-                left: px(20.0),
-                top: px(18.0),
-                width: px(245.0),
-                flex_direction: FlexDirection::Column,
-                row_gap: px(5.0),
-                padding: UiRect::all(px(15.0)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.015, 0.035, 0.05, 0.94)),
-        ))
-        .with_children(|panel| {
-            panel.spawn((
-                Text::new("CHARACTER STUDIO"),
-                TextFont {
-                    font_size: FontSize::Px(19.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(0.42, 0.92, 0.95)),
-            ));
-            label(panel, "LOOPING ANIMATIONS");
-            label(panel, "MOVING FLOOR / 0.5 M GRID");
-            for clip in [
-                Clip::Idle,
-                Clip::Walk,
-                Clip::Run,
-                Clip::Turn,
-                Clip::Jump,
-                Clip::RunJump,
-                Clip::Forehand,
-                Clip::Backhand,
-                Clip::Overhead,
-            ] {
-                button(panel, Action::Clip(clip), clip.title());
-            }
-            label(panel, "CAMERA");
-            button(
-                panel,
-                Action::Angle(ViewAngle::ThreeQuarter),
-                "THREE QUARTER",
-            );
-            button(panel, Action::Angle(ViewAngle::Front), "FRONT");
-            button(panel, Action::Angle(ViewAngle::Side), "SIDE");
-            button(panel, Action::Speed, "CYCLE SPEED");
-            button(panel, Action::Pause, "PAUSE / PLAY");
-            button(panel, Action::Step, "STEP +1 [RIGHT]");
-            button(panel, Action::StepBack, "STEP -1 [LEFT]");
-            button(panel, Action::Reset, "RESET LOOP");
-            button(panel, Action::Back, "BACK TO MENU");
-            panel.spawn((
-                Status,
-                Text::new(""),
-                TextFont {
-                    font_size: FontSize::Px(13.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(0.66, 0.87, 0.88)),
-            ));
-        });
-    commands
-        .spawn((
-            Root,
-            SwordMetrics,
-            GlobalZIndex(1002),
-            Node {
-                display: Display::Flex,
-                position_type: PositionType::Absolute,
-                right: px(20.0),
-                top: px(18.0),
-                width: px(315.0),
-                flex_direction: FlexDirection::Column,
-                row_gap: px(6.0),
-                padding: UiRect::all(px(14.0)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.015, 0.035, 0.05, 0.94)),
-        ))
-        .with_children(|panel| {
-            panel.spawn((
-                SwordMetricsTitle,
-                Text::new(""),
-                TextFont { font_size: FontSize::Px(15.0), ..default() },
-                TextColor(Color::srgb(0.42, 0.92, 0.95)),
-            ));
-            panel.spawn((
-                SwordAngleText,
-                Text::new(""),
-                TextFont { font_size: FontSize::Px(19.0), ..default() },
-                TextColor(Color::srgb(0.85, 0.95, 0.94)),
-            ));
-            panel.spawn((
-                SwordPhaseText,
-                Text::new(""),
-                TextFont { font_size: FontSize::Px(13.0), ..default() },
-                TextColor(Color::srgb(0.66, 0.87, 0.88)),
-            ));
-        });
-}
-
-pub fn input(
-    mut commands: Commands,
-    keys: Res<ButtonInput<KeyCode>>,
-    mut viewer: ResMut<Viewer>,
-    mut menu: ResMut<LaunchMenu>,
-    roots: Query<Entity, With<Root>>,
-    stages: Query<Entity, With<Stage>>,
-    mut actions: Query<(&Action, Ref<Interaction>, &mut BackgroundColor)>,
-) {
-    if !viewer.active {
-        return;
-    }
-    if keys.just_pressed(KeyCode::ArrowRight) {
-        viewer.paused = true;
-        viewer.step_frame();
-    }
-    if keys.just_pressed(KeyCode::ArrowLeft) {
-        viewer.paused = true;
-        viewer.step_back_frame();
-    }
-    for (action, interaction, _) in &mut actions {
-        if !interaction.is_changed() || *interaction != Interaction::Pressed {
-            continue;
-        }
-        match *action {
-            Action::Clip(clip) => {
-                viewer.clip = clip;
-                viewer.reset_clock();
-            }
-            Action::Angle(angle) => viewer.angle = angle,
-            Action::Speed => {
-                viewer.speed = if viewer.speed < 0.75 {
-                    1.0
-                } else if viewer.speed < 1.25 {
-                    1.5
-                } else {
-                    0.5
-                }
-            }
-            Action::Pause => viewer.paused = !viewer.paused,
-            Action::Step => {
-                viewer.paused = true;
-                viewer.step_frame();
-            }
-            Action::StepBack => {
-                viewer.paused = true;
-                viewer.step_back_frame();
-            }
-            Action::Reset => {
-                viewer.paused = true;
-                viewer.reset_clock();
-            }
-            Action::Back => {
-                viewer.active = false;
-                menu.open = true;
-                for root in &roots {
-                    commands.entity(root).despawn();
-                }
-                for stage in &stages {
-                    commands.entity(stage).despawn();
-                }
-                return;
-            }
-        }
-    }
-    for (action, interaction, mut background) in &mut actions {
-        let selected = match *action {
-            Action::Clip(clip) => viewer.clip == clip,
-            Action::Angle(angle) => viewer.angle == angle,
-            _ => false,
-        };
-        background.0 = if selected {
-            Color::srgba(0.09, 0.38, 0.43, 0.98)
-        } else if *interaction == Interaction::Hovered {
-            Color::srgba(0.12, 0.25, 0.29, 0.98)
-        } else {
-            Color::srgba(0.07, 0.16, 0.20, 0.92)
-        };
-    }
-}
+mod ui;
+pub use ui::{input, setup};
 
 /// Set up in-place motion before the shared animation and trail systems.
 pub fn drive(
@@ -665,6 +412,7 @@ fn side_blade_angle(direction: Vec3) -> Option<f32> {
 
 pub fn metrics(
     viewer: Res<Viewer>,
+    library: Res<SceneLibrary>,
     controls: Res<Controls>,
     sword: Query<&GlobalTransform, With<LocalBlade>>,
     mut panels: Query<&mut Node, With<SwordMetrics>>,
@@ -678,6 +426,8 @@ pub fn metrics(
     }
     let Some(mut panel) = panels.iter_mut().next() else { return };
     panel.display = Display::Flex;
+    let has_sword = library.character(library.current).is_some_and(|character|
+        character.weapon == Some(content::scenario::Weapon::Sword));
     if let Some(mut title) = titles.iter_mut().next() {
         let clip = match viewer.clip {
             Clip::Run => "RUN",
@@ -690,14 +440,14 @@ pub fn metrics(
             Clip::Backhand => "BACKHAND",
             Clip::Overhead => "OVERHEAD",
         };
-        title.0 = if viewer.angle == ViewAngle::Side {
+        title.0 = if viewer.angle == ViewAngle::Side && has_sword {
             format!("{clip} / SWORD ANGLE")
         } else {
             format!("{clip} / ANIMATION")
         };
     }
     let Some(mut readout) = readouts.iter_mut().next() else { return };
-    if viewer.angle != ViewAngle::Side {
+    if viewer.angle != ViewAngle::Side || !has_sword {
         readout.0 = format!("FRAME {}/{}", viewer.frame, viewer.clip.frame_count());
         if let Some(mut phase_text) = phase_texts.iter_mut().next() {
             phase_text.0 = format!("TIME {:.3}s / 60 FPS", viewer.elapsed);
@@ -813,6 +563,45 @@ pub fn capture(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn studio_discovers_clips_from_each_character_capability() {
+        let library = SceneLibrary::new();
+        for character in library.characters.iter() {
+            assert!(Clip::Idle.supports(character));
+            assert_eq!(Clip::Walk.supports(character), character.can_locomote);
+            assert_eq!(Clip::Run.supports(character), character.can_locomote);
+            assert_eq!(Clip::Turn.supports(character), character.can_locomote);
+            assert_eq!(Clip::Jump.supports(character), character.can_jump);
+            assert_eq!(Clip::RunJump.supports(character), character.can_jump);
+            let sword = character.weapon == Some(content::scenario::Weapon::Sword);
+            assert_eq!(Clip::Forehand.supports(character), sword);
+            assert_eq!(Clip::Backhand.supports(character), sword);
+            assert_eq!(Clip::Overhead.supports(character), sword);
+        }
+    }
+
+    #[test]
+    fn studio_character_action_selects_the_next_discovered_actor() {
+        let mut library = SceneLibrary::new();
+        assert!(library.characters.len() > 1);
+        library.current = library.characters[0].scene_index;
+        let next = library.characters[1].scene_index;
+        let menu = crate::menu::LaunchMenu::new(false, &library);
+        let mut viewer = Viewer::default();
+        viewer.begin();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(ButtonInput::<KeyCode>::default())
+            .insert_resource(library)
+            .insert_resource(menu)
+            .insert_resource(viewer)
+            .add_systems(Update, input);
+        app.world_mut().spawn((Action::NextCharacter, Interaction::Pressed,
+            BackgroundColor::default(), Node::default()));
+        app.update();
+        assert_eq!(app.world().resource::<SceneLibrary>().requested, Some(next));
+    }
     #[test]
     fn side_blade_angle_uses_the_ground_as_zero() {
         assert_eq!(side_blade_angle(Vec3::Z), Some(0.0));

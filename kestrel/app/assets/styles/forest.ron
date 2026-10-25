@@ -1,4 +1,4 @@
-Style(id: "brasswood-frontier", voxel_size: 0.15, actor_voxel_size: Some(0.05), actor_scale: 0.55, materials: [
+Style(id: "brasswood-frontier", actor_name: Some("FRONTIER RANGER"), actor_weapon: Some(Sword), voxel_size: 0.15, actor_voxel_size: Some(0.05), actor_scale: 0.55, materials: [
 (name: "stone", color: (0.32, 0.39, 0.4), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.9, impact: Stone),
 (name: "shadow", color: (0.055, 0.085, 0.1), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.9, impact: Stone),
 (name: "metal", color: (0.2, 0.26, 0.28), emissive: (0.0, 0.0, 0.0), metallic: 0.7, roughness: 0.4, impact: Metal),

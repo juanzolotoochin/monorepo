@@ -201,7 +201,7 @@ pub fn animate_character(
     let mut joints = HashMap::new();
     for (entity, part, mut transform, parent) in &mut parts {
         let target = pose.place(part.kind, part.rest);
-        if viewer.active || pose.motion.step_distance <= 0.65
+        if viewer.active || pose.motion.plant_feet
             && matches!(part.kind, PartKind::Body)
             && pose.speed > 0.6
             && pose.jump.is_none()
@@ -222,10 +222,10 @@ pub fn animate_character(
             (part.kind, part.rest, *transform, parent.map(ChildOf::parent)),
         );
     }
-    // The Moonlit Glade's short stride fits its leg reach. Solve the complete
-    // leg after body smoothing so a planted ankle stays fixed against the
+    // For rigs that opt into planted feet, solve the complete leg after body
+    // smoothing so a planted ankle stays fixed against the
     // traveling ground instead of lagging behind the hip animation.
-    if pose.motion.step_distance <= 0.65
+    if pose.motion.plant_feet
         && pose.jump.is_none()
         && !pose.airborne
         && pose.attack.is_none()
@@ -305,19 +305,18 @@ fn body_rest_position(body: Transform, leg: Transform, shin: Transform, foot: Tr
     body.translation + leg.translation + shin.translation + foot.translation
 }
 
-fn stance_fraction(running: f32, short_stride: bool) -> f32 {
-    if short_stride {
+fn stance_fraction(running: f32, natural: bool) -> f32 {
+    if natural {
         0.55 - 0.21 * running
     } else {
         0.66 - 0.11 * running
     }
 }
 
-fn support_pose(stride: f32, step: f32, running: f32) -> (f32, f32) {
+fn support_pose(stride: f32, step: f32, running: f32, reach: f32) -> (f32, f32) {
     // Stand tall as the support foot passes under the hip, then lower just
-    // enough to reach it near touchdown and toe-off. The Moonlit rig's two
-    // leg links total 0.48 m from hip to ankle.
-    const REACH: f32 = 0.48;
+    // enough to reach it near touchdown and toe-off. Reach comes from the
+    // authored character motion profile.
     let stance = stance_fraction(running, true);
     let mut foot_offsets = [0.0; 2];
     let mut weights = [0.0; 2];
@@ -342,8 +341,8 @@ fn support_pose(stride: f32, step: f32, running: f32) -> (f32, f32) {
         .map(|(foot, weight)| (foot - center).abs() * weight)
         .fold(0.0_f32, f32::max);
     // Reserve a little reach for torso pitch and breathing.
-    let offset = (offset + 0.03).min(REACH - 0.01);
-    (REACH - (REACH * REACH - offset * offset).sqrt() + 0.008, center)
+    let offset = (offset + 0.03).min(reach - 0.01);
+    (reach - (reach * reach - offset * offset).sqrt() + 0.008, center)
 }
 
 fn foot_path(phase: f32, step: f32, stance: f32, height: f32) -> (f32, f32) {
@@ -525,14 +524,14 @@ struct Gait {
 }
 
 impl Gait {
-    fn sample(stride: f32, side: f32, running: f32, short_stride: bool) -> Self {
+    fn sample(stride: f32, side: f32, running: f32, natural: bool) -> Self {
         let phase = (stride
             + if side > 0.0 {
                 0.0
             } else {
                 std::f32::consts::PI
             }).rem_euclid(std::f32::consts::TAU);
-        let stance = std::f32::consts::TAU * stance_fraction(running, short_stride);
+        let stance = std::f32::consts::TAU * stance_fraction(running, natural);
         let (drive, lift, plant) = if phase < stance {
             let progress = phase / stance;
             let contact = smooth(progress / 0.08) * smooth((1.0 - progress) / 0.08);
@@ -598,21 +597,22 @@ impl Pose {
             self.speed.clamp(0.0, 1.4)
         };
         let running = ((travel - 1.02) / 0.38).clamp(0.0, 1.0);
-        let short_stride = self.motion.step_distance <= 0.65;
-        let left = Gait::sample(self.stride, -1.0, running, short_stride);
-        let right = Gait::sample(self.stride, 1.0, running, short_stride);
-        let shoulder_twist = if short_stride {
+        let natural = self.motion.motion_style == voxel_assets::MotionStyle::Natural;
+        let left = Gait::sample(self.stride, -1.0, running, natural);
+        let right = Gait::sample(self.stride, 1.0, running, natural);
+        let shoulder_twist = if natural {
             -arm_drive(self.stride, 1.0) * running * travel.min(1.0)
         } else {
             0.0
         };
         match kind {
             PartKind::Body => {
-                if short_stride {
+                if natural {
                     let (crouch, center) = support_pose(
                         self.stride,
                         step_distance_for_speed(self.motion.step_distance, self.speed),
                         running,
+                        self.motion.leg_reach,
                     );
                     transform.translation.y += self.breathe * 0.3
                         - crouch * travel.min(1.0);
@@ -622,16 +622,16 @@ impl Pose {
                         + (self.stride * 2.0).cos().abs() * 0.033 * travel
                         - self.motion.run_crouch * running;
                 }
-                transform.translation.z -= (if short_stride { 0.005 } else { 0.06 }) * travel;
+                transform.translation.z -= (if natural { 0.005 } else { 0.06 }) * travel;
                 transform.translation.x += self.turn * 0.09
-                    + if short_stride {
+                    + if natural {
                         0.0
                     } else {
                         (right.plant - left.plant) * 0.035 * travel
                     };
                 transform.rotation = Quat::from_rotation_y(-self.turn * 0.28)
                     * Quat::from_rotation_z(-self.turn * (0.24 + 0.25 * travel))
-                    * Quat::from_rotation_x(if short_stride { 0.01 * travel + 0.04 * running } else { 0.06 * travel + 0.18 * running });
+                    * Quat::from_rotation_x(if natural { 0.01 * travel + 0.04 * running } else { 0.06 * travel + 0.18 * running });
                 if let Some(attack) = self.attack {
                     if attack.motion() == ActionMotion::Sweep {
                         let drive = smooth((attack.age - windup) / (active_end - windup));
@@ -669,7 +669,7 @@ impl Pose {
                     * Quat::from_rotation_x(
                         -0.02 * travel + 0.08 * running + self.stride.sin() * 0.025 * travel,
                     );
-                if !short_stride {
+                if !natural {
                     transform.rotation *= Quat::from_rotation_y(-self.stride.sin() * 0.06 * travel);
                 }
                 transform.translation.x -= self.turn * 0.025;
@@ -701,13 +701,13 @@ impl Pose {
             }
             PartKind::Arm(side) => {
                 let gait = if side > 0.0 { &right } else { &left };
-                let swing = if short_stride {
+                let swing = if natural {
                     lerp(gait.drive, arm_drive(self.stride, side), running) * travel
                 } else {
                     gait.drive * travel
                 };
                 let arm_swing = self.motion.arm_swing
-                    * if short_stride {
+                    * if natural {
                         (1.0 + 0.9 * running)
                             * (1.0 + 0.18 * running * smooth((-swing).clamp(0.0, 1.0)))
                     } else {
@@ -716,7 +716,7 @@ impl Pose {
                 transform.rotation = Quat::from_rotation_z(-0.08 * side + self.turn * 0.12)
                     * Quat::from_rotation_x(-swing * arm_swing - 0.08 * travel);
                 transform.translation.z += swing
-                    * (0.06 + if short_stride { 0.02 * running * smooth((-swing).clamp(0.0, 1.0)) } else { 0.0 });
+                    * (0.06 + if natural { 0.02 * running * smooth((-swing).clamp(0.0, 1.0)) } else { 0.0 });
                 if let Some(attack) = self.attack {
                     let follow = if attack.motion() == ActionMotion::Thrust {
                         spear_pose(attack.age, attack.impact_angle.is_some()).0
@@ -745,7 +745,7 @@ impl Pose {
             }
             PartKind::Forearm(side) => {
                 let gait = if side > 0.0 { &right } else { &left };
-                let elbow_cycle = if short_stride {
+                let elbow_cycle = if natural {
                     self.stride.sin().powi(2)
                 } else {
                     gait.plant
@@ -836,7 +836,7 @@ impl Pose {
                 let angle = self.attack.map_or(REST_ANGLE, |a| a.angle());
                 // The run swing carries the wrist through a downward-forward
                 // blade angle behind the body and an upward angle in front.
-                let carry = if short_stride {
+                let carry = if natural {
                     lerp(0.45, -0.10, running)
                 } else {
                     -0.6 + running * 0.35
@@ -875,7 +875,7 @@ impl Pose {
                 });
                 // The blade is a child of the right hand. Shoulder and torso
                 // carry most of the cut; the wrist supplies the remaining yaw.
-                let carry_yaw = if short_stride { 0.35 } else { REST_ANGLE };
+                let carry_yaw = if natural { 0.35 } else { REST_ANGLE };
                 let wrist_yaw = if self
                     .attack
                     .is_some_and(|a| a.motion() != ActionMotion::Thrust)
@@ -884,14 +884,14 @@ impl Pose {
                 } else {
                     carry_yaw + angle - REST_ANGLE
                 };
-                let back_carry = if short_stride {
+                let back_carry = if natural {
                     0.10 * running * smooth((-arm_drive(self.stride, 1.0)).clamp(0.0, 1.0))
                 } else {
                     0.0
                 };
                 transform.rotation = Quat::from_rotation_y(wrist_yaw)
                     * Quat::from_rotation_x(tilt + 0.35 - back_carry);
-                if short_stride {
+                if natural {
                     // Set the hilt into the palm; the generic rig's high mount
                     // made this smaller character carry the sword by its guard.
                     transform.translation.y -= 0.02;
@@ -973,6 +973,8 @@ mod tests {
         let mut pose = Pose {
             motion: voxel_assets::CharacterMotion {
                 step_distance: 0.44,
+                motion_style: voxel_assets::MotionStyle::Natural,
+                plant_feet: true,
                 ..default()
             },
             stride: 0.0,
@@ -1014,6 +1016,8 @@ mod tests {
         let mut pose = Pose {
             motion: voxel_assets::CharacterMotion {
                 step_distance: 0.44,
+                motion_style: voxel_assets::MotionStyle::Natural,
+                plant_feet: true,
                 elbow_drive: 0.50,
                 ..default()
             },
@@ -1041,6 +1045,8 @@ mod tests {
         let mut pose = Pose {
             motion: voxel_assets::CharacterMotion {
                 step_distance: 0.44,
+                motion_style: voxel_assets::MotionStyle::Natural,
+                plant_feet: true,
                 arm_swing: 0.43,
                 ..default()
             },
@@ -1119,6 +1125,8 @@ mod tests {
         let mut pose = Pose {
             motion: voxel_assets::CharacterMotion {
                 step_distance: 0.44,
+                motion_style: voxel_assets::MotionStyle::Natural,
+                plant_feet: true,
                 ..default()
             },
             stride: 0.0,
@@ -1172,6 +1180,8 @@ mod tests {
         let mut pose = Pose {
             motion: voxel_assets::CharacterMotion {
                 step_distance: 0.44,
+                motion_style: voxel_assets::MotionStyle::Natural,
+                plant_feet: true,
                 run_crouch: 0.08,
                 ..default()
             },

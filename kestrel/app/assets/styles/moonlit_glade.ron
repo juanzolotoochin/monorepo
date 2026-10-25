@@ -1,14 +1,17 @@
 // A limited blue-green / amber palette keeps the lit forms readable at a distance.
 Style(
     id: "moonlit-glade",
+    actor_name: Some("STARWELL WARDEN"),
+    actor_weapon: Some(Sword),
     voxel_size: 0.12,
     actor_voxel_size: Some(0.05),
     actor_scale: 0.68,
     character_motion: (
+        motion_style: Natural,
         walk_speed: 1.6, run_speed: 2.6,
         arm_swing: 0.43, leg_swing: 0.44, torso_turn: 0.50,
         pose_response: 21.0, run_crouch: 0.08, elbow_drive: 0.50,
-        step_lift: 0.09, step_distance: 0.44, turn_inertia: 7.0
+        step_lift: 0.09, step_distance: 0.44, plant_feet: true, leg_reach: 0.48, turn_inertia: 7.0
     ),
     weapon_name: "GLADE / STARFORGED BLADE",
     materials: [

@@ -55,7 +55,7 @@ impl LaunchMenu {
     pub fn new(open: bool, scenes: &SceneLibrary) -> Self {
         Self {
             open,
-            selected_scene: scenes.index("moonlit-glade").unwrap_or(scenes.initial),
+            selected_scene: scenes.initial,
             mode: Mode::Solo,
             focus: None,
             port: "4100".into(),
@@ -331,12 +331,21 @@ pub fn update(
             }
             Action::Start => start = true,
             Action::Viewer => {
-                let index = scenes.index("moonlit-glade").unwrap_or(menu.selected_scene);
+                let index = scenes.character(menu.selected_scene)
+                    .map(|character| character.scene_index)
+                    .or_else(|| scenes.characters.first().map(|character| character.scene_index));
+                let Some(index) = index else {
+                    menu.error = "No playable characters are available.".into();
+                    continue;
+                };
                 scenes.initial = index;
                 scenes.requested = Some(index);
                 scenes.locked = false;
                 game.network = None;
                 viewer.begin();
+                if !crate::viewer::Clip::Run.supports(scenes.character(index).unwrap()) {
+                    viewer.clip = crate::viewer::Clip::Idle;
+                }
                 menu.open = false;
                 if let Ok(root) = root.single() {
                     commands.entity(root).despawn();
@@ -507,7 +516,7 @@ mod tests {
     #[test]
     fn start_action_opens_the_selected_scene() {
         let scenes = SceneLibrary::new();
-        let selected = scenes.index("moonlit-glade").unwrap();
+        let selected = scenes.initial;
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_message::<KeyboardInput>()
@@ -529,9 +538,9 @@ mod tests {
     }
 
     #[test]
-    fn studio_action_opens_the_glade_viewer() {
+    fn studio_action_opens_the_first_available_character() {
         let scenes = SceneLibrary::new();
-        let glade = scenes.index("moonlit-glade").unwrap();
+        let character_scene = scenes.characters.first().unwrap().scene_index;
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_message::<KeyboardInput>()
@@ -551,7 +560,7 @@ mod tests {
         assert!(!app.world().resource::<LaunchMenu>().open);
         assert_eq!(
             app.world().resource::<SceneLibrary>().requested,
-            Some(glade)
+            Some(character_scene)
         );
     }
 }
