@@ -1,4 +1,4 @@
-Scene(id: "pile-lab", features: [],
+Scene(id: "pile-lab", player: "exosuit", features: [],
     name: "PILE LAB / MINERAL LOGISTICS",
     spawn: (0.0, 0.0, 1.0),
     industrial: false,

@@ -1703,7 +1703,7 @@ mod tests {
 
     fn exosuit() -> &'static content::character::CharacterDef {
         let content = crate::lockstep::builtin_content();
-        &content.rules.characters[content.names.character_index(content::character::PLAYER_CHARACTER).unwrap() as usize]
+        &content.rules.characters[content.names.character_index("exosuit").unwrap() as usize]
     }
 
     /// Styles that keep the default speeds leave the simulation on the player

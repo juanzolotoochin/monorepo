@@ -1,4 +1,4 @@
-Scene(id: "mining-deck", features: [],
+Scene(id: "mining-deck", player: "exosuit", features: [],
     name: "EXTRACTION DECK / NEREID BELT",
     spawn: (0.0, 0.0, 2.0),
     industrial: true,

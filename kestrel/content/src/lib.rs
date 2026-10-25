@@ -150,6 +150,7 @@ struct MoverSimFile {
 /// The content shipped with the game, compiled into the binary.
 const BUILTIN: &[(&str, &str)] = &[
     ("character/exosuit.ron", include_str!("../data/character/exosuit.ron")),
+    ("character/exosuit_moonlit.ron", include_str!("../data/character/exosuit_moonlit.ron")),
     ("character/ghoul.ron", include_str!("../data/character/ghoul.ron")),
     ("character/ghoul_brute.ron", include_str!("../data/character/ghoul_brute.ron")),
     ("character/ghoul_forest.ron", include_str!("../data/character/ghoul_forest.ron")),
@@ -350,7 +351,7 @@ mod tests {
     #[test]
     fn builtin_characters_load_by_short_name() {
         let content = Content::builtin();
-        let exosuit = content.names.character_index(character::PLAYER_CHARACTER).expect("the player character");
+        let exosuit = content.names.character_index("exosuit").expect("the player character");
         let def = &content.rules.characters[exosuit as usize];
         assert_eq!(def.brain, character::Brain::Player);
         assert!(def.avatar.is_some() && def.health.is_none());
@@ -403,6 +404,35 @@ mod tests {
         assert_eq!(get("exosuit").carry.as_ref().unwrap().transfer, seconds("0.4"));
     }
 
+    /// The abilities hold the jetpack, jump and dig constants the simulation
+    /// used before, and the glade exosuit the speeds the glade style gave it,
+    /// as the view quantized them. Change these only with a golden update.
+    #[test]
+    fn builtin_abilities_keep_the_former_constants() {
+        use scenario::ticks_from_60hz;
+        let content = Content::builtin();
+        let get = |name: &str| &content.rules.characters[content.names.character_index(name).unwrap() as usize];
+        let exosuit = get("exosuit");
+        let jetpack = exosuit.jetpack().unwrap();
+        assert_eq!(jetpack.hover.to_bits(), 7_730_941_133); // HOVER, 1.8
+        assert_eq!(jetpack.climb, per_tick(Fx::from_ratio(11, 2)));
+        assert_eq!(jetpack.sink, per_tick(Fx::from_int(3)));
+        let dig = exosuit.dig().unwrap();
+        assert_eq!(dig.ticks, millis_to_ticks(2000)); // DIG_TICKS
+        assert_eq!(dig.centering, per_tick(Fx::from_ratio(3, 2)));
+        assert!(exosuit.jump().is_none() && !exosuit.swift_sword());
+
+        let glade = get("exosuit_moonlit");
+        assert_eq!(glade.brain, character::Brain::Player);
+        assert_eq!((glade.movement.walk, glade.movement.run), (Fx::quantize(1.6), Fx::quantize(2.6)));
+        let jump = glade.jump().unwrap();
+        assert_eq!((jump.prep, jump.land), (ticks_from_60hz(8), ticks_from_60hz(10)));
+        assert_eq!(jump.velocity, per_tick(Fx::from_int(4)));
+        assert_eq!(jump.gravity, per_tick(per_tick(Fx::from_int(14))));
+        assert!(glade.swift_sword() && glade.jetpack().is_none() && glade.dig().is_none());
+        assert_eq!((&glade.body, &glade.avatar, &glade.carry), (&exosuit.body, &exosuit.avatar, &exosuit.carry), "from the base");
+    }
+
     #[test]
     fn a_base_fills_what_a_variant_leaves_out() {
         let brute = "(base: \"ghoul\", sim: (movement: (walk: 0.59), health: (hp: 5, armor: (points: 2, radius: 0.38))), view: ())";
@@ -445,6 +475,24 @@ mod tests {
         assert!(bad(&GHOUL.replace("hp: 3", "hp: 3, armor: (points: 2, radius: 0.1)")).contains("armor"));
         assert!(bad(&GHOUL.replace("view: ()", "view: (skin: \"x\")")).contains("skin"));
         assert!(bad(&GHOUL.replace("radius: 0.27", "radius: 0.27, mass: 2")).contains("mass"));
+    }
+
+    #[test]
+    fn abilities_are_validated() {
+        let exosuit = include_str!("../data/character/exosuit.ron");
+        let with = |abilities: &str| {
+            let variant = format!("(base: \"exosuit\", sim: (abilities: [{abilities}]), view: ())");
+            characters(&[("character/exosuit.ron", exosuit), ("character/x.ron", &variant)]).map_err(|e| e.message)
+        };
+        assert!(with("Jump(prep: 8, land: 10, velocity: 4, gravity: 14), SwiftSword").is_ok());
+        assert!(with("").is_ok(), "a player may only walk");
+        assert!(with("Jump(prep: 8, land: 10, velocity: 4, gravity: 14), Jetpack(hover: 1.8, climb: 5.5, sink: 3)").unwrap_err().contains("both Jump and Jetpack"));
+        assert!(with("SwiftSword, SwiftSword").unwrap_err().contains("twice"));
+        assert!(with("Dig(time: 0, centering: 1.5)").unwrap_err().contains("Dig.time"));
+        assert!(with("Jetpack(hover: 9, climb: 5.5, sink: 3)").unwrap_err().contains("Jetpack.hover"));
+        assert!(with("Fly").is_err());
+        let ghoul = GHOUL.replace("breach_damage: 1)", "breach_damage: 1), abilities: [SwiftSword]");
+        assert!(characters(&[("character/x.ron", &ghoul)]).unwrap_err().message.contains("only Player"));
     }
 
     #[test]

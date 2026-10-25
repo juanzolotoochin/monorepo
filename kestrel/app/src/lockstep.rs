@@ -372,6 +372,7 @@ fn scene_setup(library: &SceneLibrary, index: usize, cache: &crate::assets::Mode
     };
     SceneSetup {
         scenario: scene.scenario.clone(),
+        player: scene.player.clone(),
         extent: q(crate::assets::extent(pack)),
         obstacles: found.discs.iter().map(disc).collect(),
         doors: found.doors.iter().map(disc).collect(),

@@ -90,6 +90,11 @@ impl Scene {
     }
 }
 
+/// What every test scene shares: the builtin exosuit as the player.
+fn base() -> SceneSetup {
+    SceneSetup { player: "exosuit".into(), ..SceneSetup::default() }
+}
+
 /// The jetpack lab's platforms; everything else is a drop.
 fn jetpack_lab() -> SceneSetup {
     let platform = |min: (f64, f64), max: (f64, f64), height: f64| Surface { min: v(min.0, min.1), max: v(max.0, max.1), height: fx(height) };
@@ -103,7 +108,7 @@ fn jetpack_lab() -> SceneSetup {
         ],
         platforms_only: true,
         spawn: [fx(-5.0), Fx::ZERO, fx(3.0)],
-        ..SceneSetup::default()
+        ..base()
     }
 }
 
@@ -173,7 +178,7 @@ fn feet_rise_when_body_reaches_a_low_step() {
         extent: Fx::from_int(8),
         surfaces: vec![Surface { min: v(0.0, -1.0), max: v(1.0, 1.0), height: fx(0.24) }],
         spawn: [fx(-1.0), Fx::ZERO, Fx::ZERO],
-        ..SceneSetup::default()
+        ..base()
     });
     let agent = scene.agent();
     scene.command(CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: v(1.0, 0.0), run: false } });
@@ -234,7 +239,7 @@ fn surprise_lab() -> SceneSetup {
         doors,
         spawn: [fx(-5.0), Fx::ZERO, fx(3.0)],
         memory_trial: true,
-        ..SceneSetup::default()
+        ..base()
     }
 }
 
@@ -316,7 +321,7 @@ fn pile_lab() -> SceneSetup {
             piles: vec![(0, p(-4.0, 3.4), 8), (1, p(0.2, 4.3), 24), (0, p(4.6, 1.0), 64)],
             collector: None,
         }),
-        ..SceneSetup::default()
+        ..base()
     }
 }
 
@@ -417,7 +422,7 @@ fn scenes_are_deterministic_across_thread_counts() {
 
 /// A flat field with nothing on it, like the app's `field` scene.
 fn field() -> SceneSetup {
-    SceneSetup { extent: Fx::from_int(8), spawn: [Fx::ZERO, Fx::ZERO, fx(2.0)], ..SceneSetup::default() }
+    SceneSetup { extent: Fx::from_int(8), spawn: [Fx::ZERO, Fx::ZERO, fx(2.0)], ..base() }
 }
 
 #[test]

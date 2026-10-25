@@ -1,4 +1,4 @@
-Scene(id: "surprise-lab", features: [MemoryTrial],
+Scene(id: "surprise-lab", player: "exosuit", features: [MemoryTrial],
     name: "PROJECT PALIMPSEST / FIELD TRIAL 05",
     spawn: (-5.0, 0.0, 3.0),
     industrial: false,

@@ -23,7 +23,7 @@ pub mod piles;
 
 use std::collections::BTreeMap;
 
-use content::character::{Brain, CharacterDef, CharacterIx, PLAYER_CHARACTER};
+use content::character::{Brain, CharacterDef, CharacterIx};
 use content::scenario::{self, Scenario, Weapon, WeaponTuning};
 use content::Content;
 use fx::{Fx, FxVec2};
@@ -221,6 +221,9 @@ pub struct SceneSetup {
     /// The settlement, if the scene has one. Without it the world holds just
     /// the player.
     pub scenario: Option<Scenario>,
+    /// The character of every player avatar. A scenario's controlled
+    /// agents must name the same one.
+    pub player: String,
     /// Half-width of the arena when there is no scenario.
     pub extent: Fx,
     pub obstacles: Vec<Disc>,
@@ -462,11 +465,16 @@ impl Settlement {
         let place = |d: &Disc| Disc { center: FxVec2::new(center.x + d.center.x, center.y + d.center.y), radius: d.radius };
         let obstacles: Vec<Disc> = setup.obstacles.iter().chain(&setup.doors).map(place).collect();
         let mut settlement = match &setup.scenario {
-            Some(scenario) => Settlement::from_scenario(scenario, &obstacles, terrain, content)?,
+            Some(scenario) => {
+                if let Some(a) = scenario.agents.iter().find(|a| a.controlled && a.character != setup.player) {
+                    return Err(format!("agent {} is {:?}, but the scene's player is {:?}", a.id, a.character, setup.player));
+                }
+                Settlement::from_scenario(scenario, &obstacles, terrain, content)?
+            }
             None => {
                 terrain.extent = setup.extent;
                 terrain.obstacles.extend_from_slice(&obstacles);
-                Settlement::from_scenario(&Self::player_only(setup.extent, [setup.spawn[0], setup.spawn[2]]), &[], terrain, content)?
+                Settlement::from_scenario(&Self::player_only(setup.extent, [setup.spawn[0], setup.spawn[2]], &setup.player), &[], terrain, content)?
             }
         };
         terrain.surfaces = setup
@@ -516,7 +524,7 @@ impl Settlement {
     }
 
     /// The scenario of a scene without a settlement: just the player.
-    fn player_only(extent: Fx, spawn: [Fx; 2]) -> Scenario {
+    fn player_only(extent: Fx, spawn: [Fx; 2], player: &str) -> Scenario {
         Scenario {
             extent,
             id: "scene".into(),
@@ -531,7 +539,7 @@ impl Settlement {
                 id: "player".into(),
                 label: "YOU".into(),
                 skin: "worker".into(),
-                character: PLAYER_CHARACTER.into(),
+                character: player.into(),
                 position: spawn,
                 capacity: 8,
                 links: Vec::new(),
