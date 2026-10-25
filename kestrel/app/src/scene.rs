@@ -2,7 +2,7 @@
 use crate::{
     assets::ModelCache,
     character::{Part, PartKind, Player},
-    combat::{Obstacle, ACTIVE_END, ATTACK_END, REBOUND_END, WINDUP},
+    combat::{Obstacle, ACTIVE_END, attack_end, rebound_end, windup},
     effects::{CameraRig, FxAssets},
     gameplay::Controls,
     obstacles::{BULKHEADS, CRATES, REACTOR},
@@ -1240,17 +1240,17 @@ pub fn update_hud(
         if a.impact_angle.is_some() {
             (
                 "IMPACT / REBOUND",
-                1.0 - a.age / REBOUND_END,
+                1.0 - a.age / rebound_end(),
                 Color::srgb(1.0, 0.51, 0.17),
             )
-        } else if a.age < WINDUP {
-            ("WIND-UP", a.age / WINDUP, Color::srgb(0.93, 0.70, 0.30))
+        } else if a.age < windup() {
+            ("WIND-UP", a.age / windup(), Color::srgb(0.93, 0.70, 0.30))
         } else if a.age < ACTIVE_END {
             ("CUT", 1.0, Color::srgb(0.55, 0.97, 1.0))
         } else {
             (
                 "RECOVERING",
-                (a.age - ACTIVE_END) / (ATTACK_END - ACTIVE_END),
+                (a.age - ACTIVE_END) / (attack_end() - ACTIVE_END),
                 Color::srgb(0.42, 0.65, 0.72),
             )
         }

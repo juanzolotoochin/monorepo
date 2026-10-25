@@ -31,7 +31,7 @@ struct Scene {
 
 impl Scene {
     fn new(setup: SceneSetup) -> Scene {
-        let world = World::new_scene(1, Content::builtin().rules, &setup).unwrap();
+        let world = World::new_scene(1, &Content::builtin(), &setup).unwrap();
         let center = world.terrain().center;
         Scene { sim: Simulation::from_world(world, 2), center }
     }
@@ -142,7 +142,7 @@ fn repeated_sword_attacks_cycle_then_reset() {
     };
     assert_eq!(attack(&mut scene), SwordStroke::Forehand);
     let swing = scene.avatar().avatar.swing.as_ref().unwrap();
-    assert_eq!(swing.resolve_at - swing.started, super::avatar::SWORD_WINDUP_TICKS);
+    assert_eq!(swing.resolve_at - swing.started, content::scenario::ticks_from_60hz(7), "the exosuit's swift sword windup");
     scene.wait(ms(600));
     assert_eq!(attack(&mut scene), SwordStroke::Backhand);
     scene.wait(ms(600));
@@ -400,7 +400,7 @@ fn blocked_drops_are_rejected_without_losing_cargo() {
 #[test]
 fn scenes_are_deterministic_across_thread_counts() {
     let run = |threads| {
-        let world = World::new_scene(4, Content::builtin().rules, &surprise_lab()).unwrap();
+        let world = World::new_scene(4, &Content::builtin(), &surprise_lab()).unwrap();
         let mut sim = Simulation::from_world(world, threads);
         let agent = sim.world().settlement().unwrap().player().unwrap();
         let mut hashes = Vec::new();

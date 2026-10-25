@@ -31,10 +31,16 @@ stages, where each feature lives) are in
   fixed-point type. f32 exists only in the view and in raw input before it is
   quantized into a command.
 - **60 Hz simulation** (as in Factorio; it was 30 Hz until October 2026).
-  Rendering interpolates. Content is written in seconds and per-second rates,
-  converted to ticks at load, and code constants go through
-  `content::millis_to_ticks`, `per_tick` and `ticks_from_60hz`, so the tick
-  rate is one constant (`content::TICKS_PER_SECOND`). The few per-tick
+  Rendering interpolates. The tick rate is one constant
+  (`content::TICKS_PER_SECOND`); nothing else assumes it.
+- **Durations are whole 60 Hz frames.** Timings in content and code
+  constants are written as 60 Hz frame counts (`windup: 13`, `cooldown_ticks: 38`)
+  and converted with `scenario::ticks_from_60hz`, so they are exact at any
+  supported tick rate (13/60 s has no exact decimal). Rates stay per second
+  (`walk: 3.8` m/s, `acceleration: 26` m/s²) and go through `per_tick`.
+  Field or section docs say the unit. Older content still written in seconds
+  (scenario `first`, `every`, `transfer_seconds`) moves to frames when next
+  changed, and `millis_to_ticks` is only for those. The few per-tick
   factors that need `exp` or `powf` (turn blends, knockback decay) list their
   value for each supported rate and fail to compile for any other.
 - **Budget:** at most 10 ms per tick at 100k entities on a dev PC.
@@ -211,6 +217,10 @@ criticals, spear punctures, arc-coil chains, stagger and knockback.
   collision run each tick. Attacks are commands: contact resolves on the
   windup tick, and movement stays locked for the swing or the rebound after a
   hit. One follow-up click near the end of a swing is buffered.
+- Avatar and enemy tuning (body radius, speeds, acceleration, swing timing,
+  health and armor) is content: one `content/data/character/<name>.ron` per
+  character, which waves and avatars refer to
+  ([character definitions](character-definition.md)).
 - Manual transfers are commands and use the same reservation counters as
   haulers. Cancelling releases unlaunched units; units in the air still land.
 - Tick-based tuning in scenario files is in 60 Hz ticks, the original
@@ -219,8 +229,9 @@ criticals, spear punctures, arc-coil chains, stagger and knockback.
 Compared with the original over the same two minutes (`parity_probe`), the
 forest outpost delivers 99 units versus 98 and kills 23 ghouls, as the
 original does. The combat arena's ballista lands all 18 bolts in both; the
-pierce rolls fall differently (same formula, different IDs), so 10 ghouls die
-instead of 13.
+pierce rolls fall differently (same formula, different IDs), so 10 ghouls died
+instead of 13. Since October 2026 every ghoul walks at 0.6 m/s (the arena's
+were 0.75 and 0.72), and 14 die there in the same two minutes.
 
 ## Networking
 

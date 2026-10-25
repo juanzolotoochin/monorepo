@@ -8,7 +8,7 @@ use content::scenario::{
 use content::Content;
 use fx::{Fx, FxVec2};
 
-use super::avatar::{Intent, WINDUP_TICKS};
+use super::avatar::Intent;
 use super::combat::{combat_roll, Event, Impact, Projectile, Threat};
 use super::Settlement;
 use crate::messages::Strike;
@@ -28,6 +28,15 @@ fn p(x: f64, y: f64) -> [Fx; 2] {
     [fx(x), fx(y)]
 }
 
+/// The builtin content plus the original fixtures' slow ghouls.
+fn test_content() -> Content {
+    let ghoul = |hp: u32| format!("(base: \"ghoul\", sim: (movement: (walk: 0.5), health: (hp: {hp})), view: ())");
+    let mut sources = content::builtin_sources();
+    sources.push(("character/test_ghoul.ron".into(), ghoul(3)));
+    sources.push(("character/test_ghoul_frail.ron".into(), ghoul(2)));
+    Content::from_sources(sources).unwrap()
+}
+
 fn stack(item: &str, units: u32) -> Stack {
     Stack { item: item.into(), units }
 }
@@ -44,7 +53,7 @@ fn agent(id: &str) -> Agent {
         skin: "worker".into(),
         position: p(-2.0, 1.0),
         speed: fx(2.0),
-        radius: fx(0.18),
+        radius: Some(fx(0.18)),
         capacity: 3,
         links: vec!["wood".into()],
         transfer_seconds: fx(0.1),
@@ -57,6 +66,7 @@ fn agent(id: &str) -> Agent {
 fn player() -> Agent {
     let mut player = agent("player");
     player.controlled = true;
+    player.radius = None;
     player.links.clear();
     player.position = p(0.0, 0.0);
     player.capacity = 8;
@@ -103,12 +113,9 @@ fn combat_scenario(tuning: Vec<WeaponTuning>) -> Scenario {
         position: p(0.0, 6.0),
         target: p(0.0, -6.0),
         skin: "ghoul".into(),
+        character: "test_ghoul".into(),
         first: Fx::from_int(3600),
         every: Fx::from_int(10),
-        speed: fx(0.5),
-        hp: 3,
-        armor: 0,
-        damage: 1,
         count: 1,
     });
     config
@@ -122,7 +129,7 @@ struct Arena {
 
 impl Arena {
     fn new(scenario: &Scenario, obstacles: &[Disc]) -> Arena {
-        let world = World::new_settlement(1, Content::builtin().rules, scenario, obstacles).unwrap();
+        let world = World::new_settlement(1, &test_content(), scenario, obstacles).unwrap();
         let center = world.terrain().center;
         let player = world.settlement().unwrap().agent_index("player").map_or(usize::MAX, |i| i as usize);
         Arena { sim: Simulation::from_world(world, 2), player, center }
@@ -379,7 +386,7 @@ fn scheduled_attack_contacts_on_an_integer_simulation_tick() {
     arena.threat(100, 0.0, 1.0, 8, 0);
     let agent = arena.player as u16;
     arena.command(CommandKind::Attack { agent, weapon: Weapon::Sword, aim: FxVec2::new(Fx::ZERO, Fx::ONE), muzzle: [Fx::ZERO, fx(0.6), fx(0.25)] });
-    arena.step(WINDUP_TICKS - 1);
+    arena.step(ticks_from_60hz(13) - 1); // the exosuit's windup
     assert_eq!(arena.hp(100), 8);
     arena.step(1);
     assert!(arena.hp(100) < 8);
@@ -464,12 +471,9 @@ fn processing_reserves_output_space_and_defense_cannot_fire_free_ammunition() {
         position: p(7.0, 2.0),
         target: p(0.0, 2.0),
         skin: "ghoul".into(),
+        character: "test_ghoul_frail".into(),
         first: Fx::ZERO,
         every: fx(1.5),
-        speed: fx(0.5),
-        hp: 2,
-        armor: 0,
-        damage: 1,
         count: 8,
     });
     let mut arena = Arena::new(&config, &[]);
@@ -564,7 +568,7 @@ const ARENA: &str = include_str!("../../../app/assets/levels/combat_arena_supply
 fn combat_arena_plays_and_is_deterministic() {
     let scenario = Scenario::parse(ARENA).unwrap();
     let run = |threads| {
-        let world = World::new_settlement(9, Content::builtin().rules, &scenario, &[]).unwrap();
+        let world = World::new_settlement(9, &test_content(), &scenario, &[]).unwrap();
         let mut sim = Simulation::from_world(world, threads);
         let hashes: Vec<u64> = (0..ms(60_000)).map(|_| sim.step(&[]).total).collect();
         (hashes, sim)
@@ -585,7 +589,7 @@ fn combat_arena_plays_and_is_deterministic() {
 fn parity_probe() {
     for (name, text) in [("forest", super::tests::FOREST), ("arena", ARENA)] {
         let scenario = Scenario::parse(text).unwrap();
-        let world = World::new_settlement(1, Content::builtin().rules, &scenario, &[]).unwrap();
+        let world = World::new_settlement(1, &test_content(), &scenario, &[]).unwrap();
         let mut sim = Simulation::from_world(world, 4);
         for second in 1..=120 {
             for _ in 0..ms(1000) {
@@ -605,7 +609,7 @@ fn parity_probe() {
 #[test]
 fn two_players_defend_the_clearing() {
     let scenario = Scenario::parse(ARENA).unwrap();
-    let world = World::new_settlement(9, Content::builtin().rules, &scenario, &[]).unwrap();
+    let world = World::new_settlement(9, &test_content(), &scenario, &[]).unwrap();
     let mut sim = Simulation::from_world(world, 2);
     let (host, guest) = (PlayerId(0), PlayerId(1));
     sim.step(&[Command { player: guest, kind: CommandKind::Join }]);
@@ -661,7 +665,7 @@ fn two_players_defend_the_clearing() {
 #[test]
 fn players_equip_their_own_weapons() {
     let scenario = Scenario::parse(ARENA).unwrap();
-    let world = World::new_settlement(9, Content::builtin().rules, &scenario, &[]).unwrap();
+    let world = World::new_settlement(9, &test_content(), &scenario, &[]).unwrap();
     let mut sim = Simulation::from_world(world, 2);
     let (host, guest) = (PlayerId(0), PlayerId(1));
     sim.step(&[Command { player: guest, kind: CommandKind::Join }]);
@@ -745,7 +749,7 @@ fn laser_hits_another_player_and_respawns_them() {
     config.links.clear();
     config.weapons = vec![Weapon::Laser];
     config.player_health = 2;
-    let world = World::new_settlement(9, Content::builtin().rules, &config, &[]).unwrap();
+    let world = World::new_settlement(9, &test_content(), &config, &[]).unwrap();
     let mut sim = Simulation::from_world(world, 2);
     let spawn = sim.world().settlement().unwrap().agents[0].position;
     sim.world_mut().settlement_mut().spawn = spawn;
@@ -793,4 +797,48 @@ fn releasing_keeps_a_depot_transfer_walking_to_its_dock() {
     assert!(!arena.s().agents[arena.player].route.is_empty(), "the dock walk continues");
     arena.step(ms(6000));
     assert_eq!(arena.s().agents[arena.player].cargo[item as usize], 2, "the transfer completed");
+}
+
+/// Haulers steer around the avatar at the radius it collides with: its
+/// character's body radius, not a scenario value.
+#[test]
+fn haulers_see_the_avatar_at_its_character_radius() {
+    let arena = Arena::combat(&[]);
+    let s = arena.s();
+    let player = &s.agents[arena.player];
+    let def = s.character_of(arena.player).expect("the avatar has a character");
+    assert_eq!(player.radius(), def.body.radius);
+    assert_eq!(super::haulers::body(player).radius, def.body.radius);
+}
+
+/// A brute is wide while its plating lasts and shrinks to its body once
+/// the armor breaks.
+#[test]
+fn brute_radius_follows_its_armor() {
+    let scenario = Scenario::parse(ARENA).unwrap();
+    let world = World::new_settlement(1, &test_content(), &scenario, &[]).unwrap();
+    let mut sim = Simulation::from_world(world, 1);
+    let brutes = sim.world().settlement().unwrap().waves.iter().position(|w| w.armor > 0).expect("the arena has a brute wave");
+    let mut arena = Arena { sim, player: 0, center: FxVec2::ZERO };
+    let s = arena.s_mut();
+    let mut brute = Threat {
+        id: 900,
+        wave: brutes as u16,
+        position: FxVec2::ZERO,
+        heading: Fx::ZERO,
+        travelled: Fx::ZERO,
+        hp: 5,
+        armor: 2,
+        pierced: false,
+        shocked_until: 0,
+        route: vec![],
+        stagger_until: 0,
+        knockback: FxVec2::ZERO,
+    };
+    let def = &s.characters[s.waves[brutes].character as usize];
+    let (body, plated) = (def.body.radius, def.health.as_ref().unwrap().armor.as_ref().unwrap().radius);
+    assert_eq!(s.threat_radius(&brute), plated);
+    brute.armor = 0;
+    assert_eq!(s.threat_radius(&brute), body);
+    assert!(body < plated);
 }

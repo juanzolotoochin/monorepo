@@ -994,7 +994,7 @@ mod tests {
             .map(|(p, r)| sim::terrain::Disc { center: FxVec2::new(Fx::quantize(p[0]), Fx::quantize(p[2])), radius: Fx::quantize(*r) })
             .collect();
         let scenario = pack.scene.scenario.clone().unwrap();
-        let world = sim::World::new_settlement(1, content::Content::builtin().rules, &scenario, &obstacles).unwrap();
+        let world = sim::World::new_settlement(1, &content::Content::builtin(), &scenario, &obstacles).unwrap();
         let center = world.terrain().center;
         let mut game = sim::Simulation::from_world(world, 2);
         let config = crate::legacy::Scenario::new(&scenario);

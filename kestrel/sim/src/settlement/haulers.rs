@@ -71,6 +71,8 @@ pub struct AgentState {
     pub controlled: bool,
     /// The player whose commands drive this avatar.
     pub owner: Option<crate::PlayerId>,
+    /// The character it is, for avatars. Haulers get one in step 2.
+    pub character: Option<content::character::CharacterIx>,
     /// The name the owner goes by; empty until they give one.
     pub name: String,
     pub home: FxVec2,
@@ -137,10 +139,11 @@ impl AgentState {
             controlled: def.controlled,
             // A scenario's avatar belongs to the host.
             owner: def.controlled.then_some(crate::PlayerId(0)),
+            character: None,
             name: String::new(),
             home: position,
             speed: def.speed.div_int(content::TICKS_PER_SECOND as i64),
-            base_radius: def.radius,
+            base_radius: def.radius.unwrap_or(Fx::ZERO),
             links: links.into_iter().map(|(_, i)| i as LinkIx).collect(),
             transfer_ticks: scenario::ticks(def.transfer_seconds),
             equipment: def.equipment.as_ref().map(|e| EquipmentDef {
@@ -267,6 +270,7 @@ pub(super) struct Body {
 
 pub(super) struct Ctx<'a> {
     pub tick: u64,
+    pub characters: &'a [content::character::CharacterDef],
     pub terrain: &'a Terrain,
     pub piles: Option<&'a super::piles::PileLab>,
     pub bodies: &'a [Body],
@@ -308,7 +312,8 @@ pub(crate) fn move_route(position: &mut FxVec2, route: &mut Vec<FxVec2>, mut dis
 /// Stage 2 for one non-controlled agent.
 pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
     if a.controlled {
-        return super::avatar::self_update(a, me, ctx.tick, ctx.terrain, ctx.piles);
+        let def = super::avatar::character_of(ctx.characters, a);
+        return super::avatar::self_update(a, me, ctx.tick, ctx.terrain, ctx.piles, def);
     }
     if let Some(d) = a.departure_dock {
         let dock = ctx.depots[d as usize].position;

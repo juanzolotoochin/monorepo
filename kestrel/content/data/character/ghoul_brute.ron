@@ -1,0 +1,9 @@
+// An armored ghoul. Its plating widens the body until it breaks.
+(
+    base: "ghoul",
+    sim: (
+        movement: (walk: 0.59),
+        health: (hp: 5, armor: (points: 2, radius: 0.38)),
+    ),
+    view: (),
+)

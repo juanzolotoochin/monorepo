@@ -1,0 +1,24 @@
+// The player's articulated exosuit. Durations are 60 Hz frames.
+(
+    sim: (
+        brain: Player,
+        body: (radius: 0.32),
+        movement: (walk: 3.8, run: 5.6),
+        avatar: (
+            // m/s²: speeding up, slowing down, and stopping for a swing.
+            acceleration: 26,
+            braking: 32,
+            attack_braking: 35,
+            attack: (
+                windup: 13,
+                aim: 10,
+                swing: 35,
+                sword_windup: 7,
+                sword_swing: 26,
+                rebound: 25,
+                combo_window: 75,
+            ),
+        ),
+    ),
+    view: (),
+)
