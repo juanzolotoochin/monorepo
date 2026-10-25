@@ -381,8 +381,18 @@ impl World {
         for (n, i) in order.into_iter().enumerate() {
             let mut rng = Rng::new(self.config.seed, self.tick, n as u64, stream::COMMAND);
             // Players only drive their own avatar.
-            if let Some(agent) = turn[i].kind.avatar() {
-                let owner = self.settlement.as_ref().and_then(|s| s.agents.get(agent as usize)).and_then(|a| a.owner);
+            // The memory trial acts on the first avatar, so only its owner may
+            // record, deploy or clear.
+            let memory = matches!(turn[i].kind, CommandKind::MemoryRecord | CommandKind::MemoryDeploy | CommandKind::MemoryClear);
+            let driven = if memory {
+                Some(self.settlement.as_ref().and_then(|s| s.player()))
+            } else {
+                turn[i].kind.avatar().map(Some)
+            };
+            if let Some(agent) = driven {
+                let owner = agent
+                    .and_then(|agent| self.settlement.as_ref().and_then(|s| s.agents.get(agent as usize)))
+                    .and_then(|a| a.owner);
                 if owner != Some(turn[i].player) {
                     continue;
                 }

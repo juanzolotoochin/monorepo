@@ -6,7 +6,8 @@ use crate::{
 use bevy::prelude::*;
 use sim::settlement::avatar::SwordStroke;
 
-pub const WALK_SPEED: f32 = 3.8;
+/// How long a sword press keeps the combo going, as in the simulation.
+const COMBO_WINDOW: f32 = crate::lockstep::seconds(sim::settlement::avatar::COMBO_WINDOW_TICKS);
 
 #[derive(Resource, Default)]
 pub struct Controls {
@@ -32,17 +33,10 @@ impl Controls {
             self.attack_serial += 1;
             let mut attack = Attack::new(aim, self.weapon);
             attack.swift = self.swift_sword;
-            if self.weapon == content::scenario::Weapon::Sword {
-                attack.stroke = if self.combo_timer > 0.0 {
-                    self.combo_next
-                } else {
-                    SwordStroke::Forehand
-                };
-                self.combo_next = attack.stroke.next();
-            } else {
-                self.combo_next = SwordStroke::Forehand;
-            }
-            self.combo_timer = 1.25;
+            // Predicts the stroke the simulation will pick, with its rule.
+            (attack.stroke, self.combo_next) =
+                SwordStroke::combo(self.weapon, self.combo_next, self.combo_timer > 0.0);
+            self.combo_timer = COMBO_WINDOW;
             attack.serial = self.attack_serial;
             self.attack = Some(attack);
             if self.weapon != content::scenario::Weapon::Laser {

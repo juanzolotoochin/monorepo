@@ -508,6 +508,9 @@ impl Settlement {
                 label: "YOU".into(),
                 skin: "worker".into(),
                 position: spawn,
+                // Avatars move by `avatar::WALK_SPEED`/`RUN_SPEED`, so speed is
+                // unused. Radius is only what haulers steer around; the
+                // avatar itself collides with `BODY_RADIUS`.
                 speed: Fx::from_ratio(19, 5),
                 radius: Fx::from_ratio(9, 50),
                 capacity: 8,

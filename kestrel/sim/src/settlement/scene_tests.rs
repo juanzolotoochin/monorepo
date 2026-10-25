@@ -287,6 +287,24 @@ fn recordings_stop_at_eight_seconds_and_deploy_themselves() {
     assert!(scene.s().memory.as_ref().unwrap().ghost.is_none());
 }
 
+/// The trial records the first avatar, so only its owner drives the trial.
+#[test]
+fn only_the_trial_avatars_owner_records_and_deploys() {
+    let mut scene = Scene::new(surprise_lab());
+    let guest = PlayerId(1);
+    scene.sim.step(&[Command { player: guest, kind: CommandKind::Join }]);
+    scene.sim.step(&[Command { player: guest, kind: CommandKind::MemoryRecord }]);
+    assert!(!scene.s().memory.as_ref().unwrap().recording, "the guest cannot start a recording");
+    scene.command(CommandKind::MemoryRecord);
+    scene.walk(-4.0, -2.0);
+    scene.wait(ms(667));
+    scene.sim.step(&[Command { player: guest, kind: CommandKind::MemoryDeploy }]);
+    assert!(scene.s().memory.as_ref().unwrap().recording, "the guest cannot deploy the host's recording");
+    assert_ne!(scene.avatar().position, scene.at(-5.0, 3.0), "the host's avatar was not sent back");
+    scene.sim.step(&[Command { player: guest, kind: CommandKind::MemoryClear }]);
+    assert!(!scene.s().memory.as_ref().unwrap().samples.is_empty(), "the guest cannot clear it");
+}
+
 fn pile_lab() -> SceneSetup {
     let p = |x: f64, z: f64| [fx(x), fx(z)];
     SceneSetup {

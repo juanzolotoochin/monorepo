@@ -1,4 +1,6 @@
-//! Authoritative attack timing, swept collision and impact response.
+//! The local swing as the view plays it: predicted attack timing, swept blade
+//! contact for rebound and hit-stop, and impact response. The simulation
+//! decides hits and damage.
 use crate::{
     character::Player,
     effects::{self, Feedback, FxAssets},
@@ -10,13 +12,18 @@ use crate::{
 use bevy::prelude::*;
 use sim::settlement::avatar::SwordStroke;
 
-pub const WINDUP: f32 = 0.16;
+use crate::lockstep::seconds;
+use sim::settlement::avatar as rules;
+
+// Swing phases in seconds. Windups and ends come from the simulation's tick
+// constants; the active ends are view-only blade timing.
+pub const WINDUP: f32 = seconds(rules::AIM_TICKS);
 pub const ACTIVE_END: f32 = 0.29;
-pub const ATTACK_END: f32 = 0.58;
-pub const SWORD_WINDUP: f32 = 0.12;
+pub const ATTACK_END: f32 = seconds(rules::SWING_TICKS);
+pub const SWORD_WINDUP: f32 = seconds(rules::SWORD_WINDUP_TICKS);
 pub const SWORD_ACTIVE_END: f32 = 0.22;
-pub const SWORD_END: f32 = 0.44;
-pub const REBOUND_END: f32 = 0.42;
+pub const SWORD_END: f32 = seconds(rules::SWORD_SWING_TICKS);
+pub const REBOUND_END: f32 = seconds(rules::REBOUND_TICKS);
 pub const REST_ANGLE: f32 = 0.45;
 
 /// Visual action family. Combat remains authoritative over hit timing.
