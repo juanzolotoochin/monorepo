@@ -133,7 +133,7 @@ fn on_exit(mut exits: MessageReader<AppExit>, mut game: ResMut<lockstep::Game>) 
     }
 }
 
-fn build_app(options: control::Options, mut scenes: assets::SceneLibrary, hub: control::Hub) -> App {
+fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: control::Hub) -> App {
     use bevy::{app::ScheduleRunnerPlugin, time::TimeUpdateStrategy};
     use std::time::Duration;
     let simulation = options.simulation;
@@ -155,7 +155,6 @@ fn build_app(options: control::Options, mut scenes: assets::SceneLibrary, hub: c
             .or_else(|| scenes.characters.iter().position(|entry| entry.scene_index == scenes.initial))
             .or_else(|| (!scenes.characters.is_empty()).then_some(0))
             .expect("Character Studio needs at least one baked actor");
-        scenes.initial = scenes.characters[viewer.character].scene_index;
         if let Some(pair) = args.windows(2).find(|pair| pair[0] == "--studio-clip") {
             viewer.clip = viewer::Clip::from_id(&pair[1]).unwrap_or(viewer::Clip::Run);
         }
@@ -189,6 +188,7 @@ fn build_app(options: control::Options, mut scenes: assets::SceneLibrary, hub: c
         })
         .insert_resource(scenes)
         .init_resource::<assets::ModelCache>()
+        .init_resource::<scene::SceneWorldBuilt>()
         .init_resource::<Controls>()
         .init_resource::<style::ActiveStyle>()
         .init_resource::<atmosphere::AtmosphereVisuals>()
@@ -270,21 +270,24 @@ fn build_app(options: control::Options, mut scenes: assets::SceneLibrary, hub: c
         (
             (
                 telemetry::begin,
-                assets::switch_scene,
-                jetpack::scene_changed,
-                palimpsest::setup,
+                scene::ensure_environment.run_if(viewer::not_active),
+                assets::switch_scene.run_if(viewer::not_active),
+                viewer::select_character_pack,
+                jetpack::scene_changed.run_if(viewer::not_active),
+                palimpsest::setup.run_if(viewer::not_active),
                 style::apply,
                 atmosphere::sync,
             )
                 .chain(),
-            (piles::setup_scene, settlement::setup, lockstep::build_world).chain(),
+            (piles::setup_scene, settlement::setup, lockstep::build_world)
+                .chain().run_if(viewer::not_active),
             control::begin,
             (piles::input, settlement::input, lockstep::mouse_input, lockstep::attack_input)
                 .chain()
                 .run_if(control::interactive).run_if(viewer::not_active),
             lockstep::keyboard_input.run_if(viewer::not_active),
             preview::playback.run_if(control::interactive).run_if(viewer::not_active),
-            lockstep::step,
+            lockstep::step.run_if(viewer::not_active),
             (
                 lockstep::mirror_settlement,
                 piles::mirror,
@@ -295,8 +298,8 @@ fn build_app(options: control::Options, mut scenes: assets::SceneLibrary, hub: c
                 jetpack::update,
                 palimpsest::tick,
             )
-                .chain(),
-            settlement::tick,
+                .chain().run_if(viewer::not_active),
+            settlement::tick.run_if(viewer::not_active),
             (
                 piles::spawn_tosses,
                 piles::update_transit,
@@ -304,18 +307,18 @@ fn build_app(options: control::Options, mut scenes: assets::SceneLibrary, hub: c
                 piles::update_display.run_if(control::rendered),
                 piles::showcase.run_if(control::interactive),
             )
-                .chain(),
+                .chain().run_if(viewer::not_active),
             (viewer::drive, combat.run_if(viewer::not_active), animate_character, style::select_weapon, viewer::pose_selected_rig).chain(),
             (
                 preview::frame_character.run_if(control::interactive),
                 effects::update_effects,
-            ).chain(),
+            ).chain().run_if(viewer::not_active),
             atmosphere::animate,
-            effects::camera_feedback.run_if(control::rendered),
-            scene::update_hud.run_if(control::rendered),
-            preview::capture.run_if(control::interactive),
-            lockstep::end_frame,
-            lockstep::end_session,
+            effects::camera_feedback.run_if(control::rendered).run_if(viewer::not_active),
+            scene::update_hud.run_if(control::rendered).run_if(viewer::not_active),
+            preview::capture.run_if(control::interactive).run_if(viewer::not_active),
+            lockstep::end_frame.run_if(viewer::not_active),
+            lockstep::end_session.run_if(viewer::not_active),
             (telemetry::end, control::end).chain(),
             control::capture_frame.run_if(control::rendered),
         )

@@ -235,6 +235,16 @@ pub fn not_active(viewer: Res<Viewer>) -> bool {
     !viewer.active
 }
 
+/// Studio selects only the pack containing the chosen rig. Gameplay scene
+/// setup and simulation remain independent of this asset selection.
+pub fn select_character_pack(viewer: Res<Viewer>, mut library: ResMut<SceneLibrary>) {
+    if !viewer.active { return; }
+    if let Some(entry) = library.characters.get(viewer.character) {
+        library.current = entry.scene_index;
+        library.requested = None;
+    }
+}
+
 pub fn sync_hud(viewer: Res<Viewer>, mut roots: Query<&mut Node, With<crate::scene::HudRoot>>) {
     for mut node in &mut roots {
         node.display = if viewer.active {
@@ -327,9 +337,7 @@ pub fn drive(
     } else {
         0.0
     });
-    let motion = library.scenes[library.current].scene.style.as_ref()
-        .map_or_else(voxel_assets::CharacterMotion::default, |style| style.character_motion)
-        ;
+    let motion = crate::character::motion_profile(&library.scenes[library.current]);
     let run_step = crate::character::step_distance_for_speed(motion.step_distance, 1.5);
     let gait_step = if matches!(viewer.clip, Clip::Run | Clip::Turn | Clip::RunJump) {
         run_step
@@ -428,11 +436,12 @@ pub fn pose_selected_rig(world: &mut World) {
     }
     let moving = matches!(viewer.clip, Clip::Walk | Clip::Run | Clip::Turn);
     let cycle = viewer.frame as f32 / viewer.clip.frame_count() as f32;
-    let travel = if moving { cycle * std::f32::consts::TAU / 12.0 } else { 0.0 };
     let heading = if viewer.clip == Clip::Turn { viewer.turn_heading() } else { 0.0 };
-    world.resource_scope(|world, state: Mut<StudioRig>| {
+    world.resource_scope(|world, mut state: Mut<StudioRig>| {
+        let scale = state.scale;
+        let travel = if moving { cycle * state.rig.cycle_distance(scale) } else { 0.0 };
         state.rig.pose(world, Vec3::new(0.0, STUDIO_FLOOR_Y, 0.0), heading,
-            0.0, state.scale, travel, 0.0, 0.0, 0.0, None);
+            0.0, scale, travel, 0.0, 0.0, 0.0, None, Some(moving));
     });
 }
 
@@ -653,11 +662,12 @@ mod tests {
             .insert_resource(library)
             .insert_resource(menu)
             .insert_resource(viewer)
-            .add_systems(Update, input);
+            .add_systems(Update, (input, select_character_pack).chain());
         app.world_mut().spawn((Action::Character(ghoul), Interaction::Pressed,
             BackgroundColor::default(), Node::default()));
         app.update();
-        assert_eq!(app.world().resource::<SceneLibrary>().requested, Some(next));
+        assert_eq!(app.world().resource::<SceneLibrary>().current, next);
+        assert_eq!(app.world().resource::<SceneLibrary>().requested, None);
         assert_eq!(app.world().resource::<Viewer>().character, ghoul);
     }
     #[test]

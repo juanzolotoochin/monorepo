@@ -529,8 +529,7 @@ pub fn follow_avatar(
         if let Some((direction, run)) = movement {
             preview.active = true;
             let dt = time.delta_secs().min(0.05);
-            let motion = library.scenes[library.current].scene.style.as_ref()
-                .map_or_else(voxel_assets::CharacterMotion::default, |style| style.character_motion);
+            let motion = crate::character::motion_profile(&library.scenes[library.current]);
             let desired = direction * if run { motion.run_speed } else { motion.walk_speed };
             let acceleration = if desired == Vec3::ZERO { 32.0 } else { 26.0 };
             let change = (desired - preview.velocity).clamp_length_max(acceleration * dt);
@@ -594,11 +593,7 @@ pub fn follow_avatar(
     if let Some(velocity) = preview_velocity {
         controls.velocity = velocity;
     }
-    let motion = library.scenes[library.current]
-        .scene
-        .style
-        .as_ref()
-        .map_or_else(voxel_assets::CharacterMotion::default, |s| s.character_motion);
+    let motion = crate::character::motion_profile(&library.scenes[library.current]);
     let relative_speed = controls.velocity.length() / motion.walk_speed.max(0.1);
     let step_distance = crate::character::step_distance_for_speed(
         motion.step_distance,

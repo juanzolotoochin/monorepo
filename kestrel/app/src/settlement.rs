@@ -759,7 +759,7 @@ pub fn tick(world: &mut World) {
             };
             state.views.insert(key.clone(), (view.skin.clone(), rig));
         }
-        let (_, rig) = &state.views[&key];
+        let (_, rig) = state.views.get_mut(&key).unwrap();
         rig.show_part(world, voxel_assets::ActorPart::WoundPlug, !view.pierced);
         rig.show_part(world, voxel_assets::ActorPart::Armor, view.armored);
         rig.show_part(world, voxel_assets::ActorPart::Head, true);
@@ -774,6 +774,7 @@ pub fn tick(world: &mut World) {
             view.injury,
             view.recoil,
             view.aim,
+            None,
         );
         writes += changed;
         skipped += unchanged;

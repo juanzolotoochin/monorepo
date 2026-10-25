@@ -12,6 +12,21 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 use sim::settlement::avatar::{JumpPhase, SwordStroke, JUMP_LAND_TICKS, JUMP_PREP_TICKS};
 
+/// Resolve a usable gait from the baked rig instead of requiring every style
+/// to repeat the same planted-foot settings.
+pub fn motion_profile(pack: &voxel_assets::ScenePack) -> voxel_assets::CharacterMotion {
+    let Some(style) = pack.scene.style.as_ref() else { return voxel_assets::CharacterMotion::default() };
+    let mut motion = style.character_motion;
+    let has_legs = [voxel_assets::ActorPart::LeftLeg, voxel_assets::ActorPart::RightLeg]
+        .into_iter().all(|part| pack.actor.iter().any(|mesh| mesh.part == part));
+    if has_legs && !motion.plant_feet {
+        motion.plant_feet = true;
+        motion.motion_style = voxel_assets::MotionStyle::Natural;
+        motion.step_distance = 0.6 * style.actor_scale;
+    }
+    motion
+}
+
 #[derive(Component)]
 pub struct Player;
 #[derive(Component)]
@@ -137,13 +152,7 @@ pub fn animate_character(
     } else {
         flight.as_ref().is_some_and(|f| f.airborne)
     };
-    let profile = library.scenes[library.current]
-        .scene
-        .style
-        .as_ref()
-        .map_or_else(voxel_assets::CharacterMotion::default, |s| {
-            s.character_motion
-        });
+    let profile = motion_profile(&library.scenes[library.current]);
     let (speed, turn) = if viewer.active {
         let velocity = if viewer.clip == crate::viewer::Clip::Run {
             profile.run_speed
@@ -176,6 +185,8 @@ pub fn animate_character(
         .zip(game.current.as_ref())
         .and_then(|(i, s)| s.agents[i as usize].avatar.dig.as_ref())
         .map(|d| dig_age(&game, d));
+    let mut local_profile = profile;
+    local_profile.step_distance /= player.1.scale.x.max(0.1);
     let mut pose = Pose {
         stride: controls.gait.phase,
         speed,
@@ -190,7 +201,7 @@ pub fn animate_character(
         ),
         attack: controls.attack,
         dig,
-        motion: profile,
+        motion: local_profile,
     };
     if viewer.active {
         pose.jump = studio_jump;
@@ -967,6 +978,26 @@ impl Pose {
 mod tests {
     use super::*;
     use crate::combat::Attack;
+
+    #[test]
+    fn baked_playable_rigs_use_planted_feet_and_world_steps() {
+        let library = SceneLibrary::new();
+        for pack in &library.scenes {
+            if !pack.actor.is_empty() {
+                let motion = motion_profile(pack);
+                assert!(motion.plant_feet);
+                assert_eq!(motion.motion_style, voxel_assets::MotionStyle::Natural);
+                let scale = pack.scene.style.as_ref().unwrap().actor_scale;
+                let local_step = motion.step_distance / scale;
+                let stance = stance_fraction(0.0, true);
+                let phase = std::f32::consts::PI * stance;
+                let (first, _) = foot_path(0.0, local_step, stance, 0.0);
+                let (later, _) = foot_path(phase, local_step, stance, 0.0);
+                let root_travel = phase * motion.step_distance / std::f32::consts::PI;
+                assert!((first * scale - (root_travel + later * scale)).abs() < 1e-5);
+            }
+        }
+    }
 
     #[test]
     fn moonlit_torso_stays_centered_through_walk_and_run() {

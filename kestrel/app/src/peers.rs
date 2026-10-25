@@ -101,13 +101,7 @@ pub fn update(
     // Render time in ticks: views sit `alpha` of the way from the previous
     // tick's state to the current one's.
     let ticks = game.tick as f32 - 1.0 + game.alpha;
-    let motion_profile = library.scenes[library.current]
-        .scene
-        .style
-        .as_ref()
-        .map_or_else(voxel_assets::CharacterMotion::default, |s| {
-            s.character_motion
-        });
+    let motion_profile = crate::character::motion_profile(&library.scenes[library.current]);
     let mut poses = Vec::new();
     let mut shown = Vec::new();
     for (entity, mut peer, mut transform) in &mut peers {
@@ -183,7 +177,10 @@ pub fn update(
             entity,
             current.avatar.weapon,
             Pose {
-                motion: motion_profile,
+                motion: voxel_assets::CharacterMotion {
+                    step_distance: motion_profile.step_distance / transform.scale.x.max(0.1),
+                    ..motion_profile
+                },
                 stride: peer.gait.phase,
                 speed,
                 turn,
