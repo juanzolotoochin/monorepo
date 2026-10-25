@@ -169,10 +169,70 @@ pub struct AttackTiming {
     pub combo_window: u64,
 }
 
-/// What the renderer needs to draw a character. Empty until rigs move here.
+/// What the renderer needs to draw a character. View values are plain `f32`
+/// and never reach the simulation or the rules hash.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CharacterView {}
+pub struct CharacterView {
+    /// The style skin that draws it, by id. Every character but a Player has
+    /// one; a Player is drawn by the scene's actor.
+    pub skin: Option<String>,
+    /// How a Player's rig poses. Its walk and run speeds are the character's
+    /// `movement`, so the view can't pose other speeds than it moves at.
+    pub motion: CharacterMotion,
+}
+
+/// Pose tuning for a Player's rig. The rig a style bakes may adapt it further
+/// (planted feet for legged actors, longer reach for baked boots).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CharacterMotion {
+    pub motion_style: MotionStyle,
+    /// Ground speeds in meters per second, from the character's `movement`.
+    pub walk_speed: f32,
+    pub run_speed: f32,
+    pub arm_swing: f32,
+    pub leg_swing: f32,
+    pub torso_turn: f32,
+    pub pose_response: f32,
+    pub run_crouch: f32,
+    pub elbow_drive: f32,
+    pub step_lift: f32,
+    /// Distance between alternating foot contacts in world units.
+    pub step_distance: f32,
+    /// Use the planted-foot IK gait for a rig with articulated hips and ankles.
+    pub plant_feet: bool,
+    /// Hip-to-ankle reach for that gait, in unscaled actor units.
+    pub leg_reach: f32,
+    /// Angular spring frequency in radians per second. Lower values keep turning momentum longer.
+    pub turn_inertia: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MotionStyle {
+    #[default]
+    Classic,
+    Natural,
+}
+
+impl Default for CharacterMotion {
+    fn default() -> Self {
+        Self {
+            motion_style: MotionStyle::Classic,
+            walk_speed: 3.8,
+            run_speed: 5.6,
+            arm_swing: 0.23,
+            leg_swing: 0.48,
+            torso_turn: 0.42,
+            pose_response: 19.0,
+            run_crouch: 0.13,
+            elbow_drive: 0.38,
+            step_lift: 0.10,
+            step_distance: 0.50,
+            plant_feet: false,
+            leg_reach: 0.48,
+            turn_inertia: 8.0,
+        }
+    }
+}
 
 /// A character file as written: every field optional, so a `base` can fill
 /// what a variant leaves out.
@@ -182,7 +242,32 @@ pub(crate) struct CharacterFile {
     #[serde(default)]
     pub base: Option<String>,
     pub sim: SimFile,
-    pub view: CharacterView,
+    pub view: ViewFile,
+}
+
+#[derive(Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub(crate) struct ViewFile {
+    skin: Option<String>,
+    motion: Option<MotionFile>,
+}
+
+/// [`CharacterMotion`] without the speeds, which come from `movement`.
+#[derive(Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct MotionFile {
+    motion_style: Option<MotionStyle>,
+    arm_swing: Option<f32>,
+    leg_swing: Option<f32>,
+    torso_turn: Option<f32>,
+    pose_response: Option<f32>,
+    run_crouch: Option<f32>,
+    elbow_drive: Option<f32>,
+    step_lift: Option<f32>,
+    step_distance: Option<f32>,
+    plant_feet: Option<bool>,
+    leg_reach: Option<f32>,
+    turn_inertia: Option<f32>,
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -299,6 +384,11 @@ merge_fields!(MovementFile { walk, run } {});
 merge_fields!(HealthFile { hp, armor, breach_damage } {});
 merge_fields!(AvatarFile { acceleration, braking, attack_braking } { attack });
 merge_fields!(AttackFile { windup, aim, swing, sword_windup, sword_swing, rebound, combo_window } {});
+merge_fields!(ViewFile { skin } { motion });
+merge_fields!(MotionFile {
+    motion_style, arm_swing, leg_swing, torso_turn, pose_response, run_crouch,
+    elbow_drive, step_lift, step_distance, plant_feet, leg_reach, turn_inertia
+} {});
 
 fn need<T>(value: Option<T>, field: &str) -> Result<T, String> {
     value.ok_or_else(|| format!("missing {field} (here or in a base)"))
@@ -373,6 +463,49 @@ pub(crate) fn character_def(file: SimFile) -> Result<CharacterDef, String> {
         _ => {}
     }
     Ok(CharacterDef { brain, body: BodyDef { radius }, movement: MovementDef { walk, run }, health, avatar, carry, abilities })
+}
+
+/// Checks a merged view against its character's definition.
+pub(crate) fn character_view(file: ViewFile, def: &CharacterDef) -> Result<CharacterView, String> {
+    let player = def.brain == Brain::Player;
+    match &file.skin {
+        Some(_) if player => return Err("a Player character is drawn by the scene's actor, not view.skin".into()),
+        Some(skin) if !crate::scenario::ident(skin) => return Err("view.skin must be a skin id".into()),
+        None if !player => return Err("missing view.skin (here or in a base)".into()),
+        _ => {}
+    }
+    if file.motion.is_some() && !player {
+        return Err("only Player characters have view.motion".into());
+    }
+    let m = file.motion.unwrap_or_default();
+    let d = CharacterMotion::default();
+    let motion = CharacterMotion {
+        motion_style: m.motion_style.unwrap_or(d.motion_style),
+        walk_speed: def.movement.walk.to_f32(),
+        run_speed: def.movement.run.to_f32(),
+        arm_swing: m.arm_swing.unwrap_or(d.arm_swing),
+        leg_swing: m.leg_swing.unwrap_or(d.leg_swing),
+        torso_turn: m.torso_turn.unwrap_or(d.torso_turn),
+        pose_response: m.pose_response.unwrap_or(d.pose_response),
+        run_crouch: m.run_crouch.unwrap_or(d.run_crouch),
+        elbow_drive: m.elbow_drive.unwrap_or(d.elbow_drive),
+        step_lift: m.step_lift.unwrap_or(d.step_lift),
+        step_distance: m.step_distance.unwrap_or(d.step_distance),
+        plant_feet: m.plant_feet.unwrap_or(d.plant_feet),
+        leg_reach: m.leg_reach.unwrap_or(d.leg_reach),
+        turn_inertia: m.turn_inertia.unwrap_or(d.turn_inertia),
+    };
+    let tuning = [
+        motion.arm_swing, motion.leg_swing, motion.torso_turn, motion.pose_response, motion.run_crouch,
+        motion.elbow_drive, motion.step_lift, motion.step_distance, motion.turn_inertia,
+    ];
+    if tuning.iter().any(|v| !v.is_finite() || !(0.0..=100.0).contains(v)) {
+        return Err("view.motion values must be in [0, 100]".into());
+    }
+    if !(0.2..=2.0).contains(&motion.leg_reach) {
+        return Err("view.motion.leg_reach must be in [0.2, 2]".into());
+    }
+    Ok(CharacterView { skin: file.skin, motion })
 }
 
 fn ability_def(file: AbilityFile) -> Result<Ability, String> {

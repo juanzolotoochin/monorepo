@@ -28,5 +28,6 @@
             ),
         ),
     ),
+    // Drawn by the scene's actor, posed with the default motion.
     view: (),
 )

@@ -159,7 +159,8 @@ impl Scenario {
                         controlled: a.controlled,
                         id: a.id.clone(),
                         label: a.label.clone(),
-                        skin: a.skin.clone(),
+                        // The controlled player is drawn by the scene's actor, not a skin.
+                        skin: crate::lockstep::builtin_character_view(&a.character).skin.clone().unwrap_or_default(),
                         speed: character.movement.walk.to_f32(),
                         radius: character.body.radius.to_f32(),
                         capacity: a.capacity,
@@ -225,7 +226,8 @@ impl Scenario {
                         .character_index(&w.character)
                         .and_then(|ix| content.rules.characters[ix as usize].health.as_ref())
                         .map_or(1, |health| health.hp);
-                    Wave { id: w.id.clone(), skin: w.skin.clone(), hp }
+                    let skin = crate::lockstep::builtin_character_view(&w.character).skin.clone().unwrap_or_default();
+                    Wave { id: w.id.clone(), skin, hp }
                 })
                 .collect(),
         }
