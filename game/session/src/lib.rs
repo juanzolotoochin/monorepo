@@ -102,6 +102,10 @@ impl Session {
         }
     }
 
+    pub fn is_replay(&self) -> bool {
+        matches!(self.peer, Peer::Replay { .. })
+    }
+
     /// Queues a command from the local player. Replays ignore new input.
     pub fn queue(&mut self, kind: CommandKind) {
         match &mut self.peer {

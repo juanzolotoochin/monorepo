@@ -1052,11 +1052,7 @@ pub fn input(world: &mut World) {
         }
     }
     if toggle {
-        let p = world
-            .query_filtered::<&Transform, With<crate::gameplay::Player>>()
-            .single(world)
-            .unwrap()
-            .translation;
+        let Some(p) = world.resource::<crate::lockstep::Game>().player_view_position() else { return };
         let state = world.resource::<Settlement>();
         let sim = state.simulation.as_ref().unwrap();
         let nearest = sim
