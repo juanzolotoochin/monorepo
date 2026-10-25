@@ -16,8 +16,8 @@ use crate::character::{
 };
 use crate::combat::{Attack, ATTACK_END, REBOUND_END};
 use crate::jetpack::Exhaust;
-use crate::lockstep::Game;
-use crate::style::{ActiveStyle, WeaponVisual};
+use crate::lockstep::WorldMirror;
+use crate::style::WeaponVisual;
 
 #[derive(Component)]
 pub struct Peer {
@@ -79,12 +79,37 @@ fn attack(swing: &Swing, ticks: f32, swift_sword: bool) -> Option<Attack> {
     }
 }
 
+/// Other players' avatars and name tags (World layer).
+#[derive(Resource)]
+pub struct Peers;
+
+impl service::Service for Peers {
+    type Layer = service::WorldLayer;
+    type Deps = (WorldMirror, crate::scene_view::SceneView);
+
+    fn init(_world: &mut World) -> Self {
+        Peers
+    }
+
+    fn systems(app: &mut App) {
+        use service::{AppServices, Phase, WorldState};
+        let active = in_state(WorldState::Active);
+        app.add_service_systems::<Self, _>(Phase::Mirror, update.run_if(crate::control::rendered).run_if(active.clone()))
+            .add_systems(
+                PostUpdate,
+                crate::nametags::update
+                    .after(bevy::transform::TransformSystems::Propagate)
+                    .run_if(crate::control::rendered)
+                    .run_if(active),
+            );
+    }
+}
+
 pub fn update(
     mut commands: Commands,
-    game: Res<Game>,
-    style: Res<ActiveStyle>,
+    mirror: Res<WorldMirror>,
+    scene: Res<crate::scene_view::SceneView>,
     contacts: Option<Res<crate::character::ActorFootContacts>>,
-    library: Res<crate::assets::SceneLibrary>,
     time: Res<Time>,
     sound: Res<crate::sound::Sound>,
     player: Single<Entity, With<Player>>,
@@ -94,43 +119,30 @@ pub fn update(
     mut exhausts: Query<(&ChildOf, &mut Visibility), (With<PeerExhaust>, Without<PeerWeapon>)>,
     mut weapons: Query<(Entity, &PeerWeapon, &mut Visibility), Without<PeerExhaust>>,
 ) {
-    let me = game.player();
-    let others: Vec<u16> = game.current.as_ref().map_or_else(Vec::new, |s| {
-        (0..s.agents.len() as u16)
-            .filter(|&i| s.agents[i as usize].controlled && Some(i) != me)
-            .collect()
+    let me = mirror.player();
+    let others: Vec<u16> = mirror.current.as_ref().map_or_else(Vec::new, |s| {
+        (0..s.agents.len() as u16).filter(|&i| s.agents[i as usize].controlled && Some(i) != me).collect()
     });
     let breathe = (time.elapsed_secs() * 2.0).sin() * 0.012;
     // Render time in ticks: views sit `alpha` of the way from the previous
     // tick's state to the current one's.
-    let ticks = game.tick as f32 - 1.0 + game.alpha;
-    let mut motion_profile = crate::character::motion_profile(&library.scenes[library.current]);
+    let ticks = mirror.tick as f32 - 1.0 + mirror.alpha;
+    let mut motion_profile = crate::character::motion_profile(&scene.pack);
     if let Some(contacts) = &contacts {
         motion_profile = contacts.adapt_motion(motion_profile);
     }
     let mut poses = Vec::new();
     let mut shown = Vec::new();
     for (entity, mut peer, mut transform) in &mut peers {
-        if !others.contains(&peer.agent) || peer.style != style.current() {
+        if !others.contains(&peer.agent) || peer.style != Some(scene.index) {
             commands.entity(entity).despawn();
             continue;
         }
         shown.push(peer.agent);
-        let current = &game.current.as_ref().unwrap().agents[peer.agent as usize];
-        let before = game
-            .previous
-            .as_ref()
-            .and_then(|p| p.agents.get(peer.agent as usize))
-            .unwrap_or(current);
-        let (from, to) = (
-            game.to_view(before.position),
-            game.to_view(current.position),
-        );
-        let alpha = if from.distance(to) > 1.5 {
-            1.0
-        } else {
-            game.alpha
-        };
+        let current = &mirror.current.as_ref().unwrap().agents[peer.agent as usize];
+        let before = mirror.previous.as_ref().and_then(|p| p.agents.get(peer.agent as usize)).unwrap_or(current);
+        let (from, to) = (mirror.to_view(before.position), mirror.to_view(current.position));
+        let alpha = if from.distance(to) > 1.5 { 1.0 } else { mirror.alpha };
         let mut position = from.lerp(to, alpha);
         position.y = before.avatar.height.to_f32()
             + (current.avatar.height - before.avatar.height).to_f32() * alpha;
@@ -169,7 +181,7 @@ pub fn update(
             attack(
                 s,
                 ticks,
-                library.has_feature(voxel_assets::SceneFeature::SwiftSword),
+                scene.has_feature(voxel_assets::SceneFeature::SwiftSword),
             )
         });
         if let (Some(swing), Some(_)) = (swing, attack) {
@@ -178,7 +190,7 @@ pub fn update(
                 sound.play(crate::sound::Cue::Swing);
             }
         }
-        let dig = current.avatar.dig.as_ref().map(|d| dig_age(&game, d));
+        let dig = current.avatar.dig.as_ref().map(|d| dig_age(&mirror, d));
         poses.push((
             entity,
             current.avatar.weapon,
@@ -269,21 +281,21 @@ pub fn update(
             };
         }
     }
-    // The player's suit is only complete once the scene's style dresses it.
-    if style.current().is_none() {
-        return;
-    }
-    let (player, style) = (*player, style.current());
+    // The world's scene dressed the player's suit when it started.
+    let (player, style) = (*player, Some(scene.index));
     for agent in others.into_iter().filter(|a| !shown.contains(a)) {
         commands.queue(move |world: &mut World| {
             let root = copy(world, player, None);
-            world.entity_mut(root).insert(Peer {
-                agent,
-                style,
-                gait: GaitClock::default(),
-                heard: 0,
-                motion: MotionState::default(),
-            });
+            world.entity_mut(root).insert((
+                Peer {
+                    agent,
+                    style,
+                    gait: GaitClock::default(),
+                    heard: 0,
+                    motion: MotionState::default(),
+                },
+                service::WorldScoped::default(),
+            ));
         });
     }
 }

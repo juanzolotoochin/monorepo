@@ -33,7 +33,7 @@ impl Harness {
         let scenario = Scenario::small();
         let net = NetSim::new(99, link);
         let world = World::new(scenario.config.clone(), content.rules.clone());
-        let mut host = Host::new(SimSocket::new(&net, HOST), world, content, config.clone(), 1, Duration::ZERO);
+        let mut host = Host::new(SimSocket::new(&net, HOST), world, "small".into(), content, config.clone(), 1, Duration::ZERO);
         if populated {
             let probe = scenario.start(1);
             for command in scenario.turn(&probe) {
@@ -281,7 +281,7 @@ fn udp_smoke() {
     let host_addr = host_socket.local_addr().unwrap();
     let world = World::new(scenario.config.clone(), content.rules.clone());
     let start = Instant::now();
-    let mut host = Host::new(host_socket, world, content.clone(), config(), 7, Duration::ZERO);
+    let mut host = Host::new(host_socket, world, "small".into(), content.clone(), config(), 7, Duration::ZERO);
     for command in scenario.turn(&scenario.start(1)) {
         host.queue(command.kind);
     }
@@ -299,4 +299,73 @@ fn udp_smoke() {
         assert_eq!(log.get(tick), host.history().get(tick));
     }
     assert!(host.world().tick() as f64 >= 0.8 * 3.0 / TICK.as_secs_f64(), "host ran {} ticks", host.world().tick());
+}
+
+/// Runs the harness's host through a map change: a new world at tick 0.
+fn change_map(h: &mut Harness, label: &str) {
+    let content = Content::builtin();
+    let world = World::new(Scenario::small().config, content.rules.clone());
+    h.host.load_world(world, label.into(), h.now);
+}
+
+#[test]
+fn a_map_change_moves_everyone_to_the_new_world() {
+    let mut h = Harness::new(LinkConditions::internet(), config(), true);
+    h.add_client();
+    h.add_client();
+    h.run_for(Duration::from_secs(5), 20);
+    let old_tick = h.host.world().tick();
+    assert!(old_tick > 250);
+
+    change_map(&mut h, "second");
+    h.run_for(FRAME, 0);
+    // The new world waits at tick 0 until both clients have it.
+    assert!(h.host.starting());
+    assert_eq!(h.host.world().tick(), 0);
+    h.run_for(Duration::from_secs(8), 20);
+
+    assert!(!h.host.starting());
+    assert_eq!(h.desyncs(), 0);
+    assert_eq!(h.host.world_number(), 2);
+    assert_eq!(h.host.history().start(), 0);
+    for (i, client) in h.clients.iter().enumerate() {
+        assert_eq!(client.phase(), ClientPhase::Playing);
+        assert_eq!((client.world_number(), client.label()), (2, "second"));
+        assert_eq!(client.history().start(), 0, "client {i} started world 2 at its first tick");
+        let loads = h.client_events[i].iter().filter(|e| matches!(e, NetEvent::Loaded { .. })).count();
+        assert_eq!(loads, 2, "client {i}: {:?}", h.client_events[i]);
+    }
+    h.assert_in_sync();
+}
+
+#[test]
+fn packets_from_an_earlier_world_are_ignored() {
+    use crate::protocol::{encode, Packet};
+    use crate::transport::Transport;
+    let mut h = Harness::new(LinkConditions::perfect(), config(), true);
+    h.add_client();
+    h.run_for(Duration::from_secs(2), 0);
+    change_map(&mut h, "second");
+    h.run_for(Duration::from_secs(2), 0);
+    assert_eq!(h.clients[0].world_number(), 2);
+
+    // Stale world-1 packets "from the host": a welcome back to world 1, and
+    // turns for upcoming ticks that would spawn movers if they were taken.
+    let mut stale = SimSocket::new(&h.net, HOST);
+    let tick = h.clients[0].world().unwrap().tick();
+    let player = h.clients[0].player().unwrap();
+    let spawn = sim::Command { player, kind: CommandKind::SpawnMovers { center: FxVec2::new(Fx::from_int(9), Fx::from_int(9)), count: 3 } };
+    let packets = [
+        Packet::Welcome { epoch: 1, world: 1, label: "small".into(), player, input_delay: 0, save_tick: 0, save_len: 10 },
+        Packet::Turns { epoch: 1, world: 1, first: tick, turns: vec![vec![spawn]; 30], host_tick: tick + 30, input_ack: 0, pong: 0, pong_held_ms: 0 },
+    ];
+    for packet in &packets {
+        stale.send(&1, &encode(packet));
+    }
+    h.run_for(Duration::from_secs(2), 0);
+
+    assert_eq!(h.clients[0].phase(), ClientPhase::Playing);
+    assert_eq!((h.clients[0].world_number(), h.clients[0].label()), (2, "second"));
+    assert_eq!(h.desyncs(), 0);
+    h.assert_in_sync();
 }

@@ -14,6 +14,7 @@ const MAX_CATCH_UP: u64 = 8;
 const RESEND_SAVE_CHUNK: Duration = Duration::from_millis(250);
 const SAVE_CHUNKS_PER_UPDATE: usize = 48;
 
+#[derive(Clone)]
 struct Upload {
     bytes: Vec<u8>,
     tick: u64,
@@ -49,6 +50,8 @@ struct Remote<A> {
     input_ack: u64,
     /// Hashes for earlier ticks predate the client's current save and are ignored.
     hashes_from: u64,
+    /// The client is playing the current world.
+    loaded: bool,
     last_heard: Duration,
     ping: Option<(u32, Duration)>,
 }
@@ -59,6 +62,12 @@ pub struct Host<T: Transport> {
     content: Content,
     config: NetConfig,
     epoch: u32,
+    /// Counts the worlds loaded in this session, from 1.
+    world: u32,
+    /// The app's name for the current world, passed on to clients.
+    label: String,
+    /// A newly loaded world waits at its first tick until every client has it.
+    starting: bool,
     pacer: Pacer,
     /// Every closed turn, starting at `turns_start`.
     turns: Vec<Vec<Command>>,
@@ -78,9 +87,18 @@ pub struct Host<T: Transport> {
 }
 
 impl<T: Transport> Host<T> {
-    /// Hosts `world` (a new game is a world at tick 0). `epoch` tells this
-    /// hosting session apart from earlier ones, for example after a re-host.
-    pub fn new(transport: T, world: World, content: Content, config: NetConfig, epoch: u32, now: Duration) -> Host<T> {
+    /// Hosts `world` (a new game is a world at tick 0), which the app calls
+    /// `label`. `epoch` tells this hosting session apart from earlier ones,
+    /// for example after a re-host.
+    pub fn new(
+        transport: T,
+        world: World,
+        label: String,
+        content: Content,
+        config: NetConfig,
+        epoch: u32,
+        now: Duration,
+    ) -> Host<T> {
         let tick = world.tick();
         Host {
             transport,
@@ -88,6 +106,9 @@ impl<T: Transport> Host<T> {
             content,
             config,
             epoch,
+            world: 1,
+            label,
+            starting: false,
             pacer: Pacer::new(now),
             turns: Vec::new(),
             turns_start: tick,
@@ -106,6 +127,49 @@ impl<T: Transport> Host<T> {
 
     pub fn world(&self) -> &World {
         self.sim.world()
+    }
+
+    /// The current world's number in this session, from 1.
+    pub fn world_number(&self) -> u32 {
+        self.world
+    }
+
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    /// Whether the current world is waiting for clients to load it.
+    pub fn starting(&self) -> bool {
+        self.starting
+    }
+
+    /// Replaces the world with a new one (a new map, at tick 0). Every client
+    /// loads it from a save, and its first tick waits until they all have.
+    /// Commands queued for the old world are dropped.
+    pub fn load_world(&mut self, world: World, label: String, now: Duration) {
+        let tick = world.tick();
+        self.world += 1;
+        self.label = label;
+        self.sim = Simulation::from_world(world, self.config.threads);
+        self.turns.clear();
+        self.turns_start = tick;
+        self.open.clear();
+        self.history = HashLog::starting_at(tick);
+        self.early_reports.clear();
+        self.halted = None;
+        self.pacer.reset(now);
+        if self.remotes.is_empty() {
+            return;
+        }
+        let upload = self.upload();
+        for remote in &mut self.remotes {
+            remote.upload = Some(upload.clone());
+            remote.turn_ack = tick;
+            remote.input_ack = 0;
+            remote.hashes_from = tick;
+            remote.loaded = false;
+        }
+        self.starting = true;
     }
 
     pub fn history(&self) -> &HashLog {
@@ -158,7 +222,12 @@ impl<T: Transport> Host<T> {
     pub fn update(&mut self, now: Duration, mut on_step: impl FnMut(&World)) {
         self.receive(now);
         self.drop_silent_clients(now);
-        if self.halted.is_none() {
+        if self.starting && self.remotes.iter().all(|r| r.loaded) {
+            // Everyone has the new world (or left): start it together.
+            self.starting = false;
+            self.pacer.reset(now);
+        }
+        if self.halted.is_none() && !self.starting {
             let mut due = self.pacer.due(now);
             if due > MAX_CATCH_UP {
                 self.pacer.reset(now);
@@ -192,13 +261,19 @@ impl<T: Transport> Host<T> {
             let index = self.remotes.iter().position(|r| r.addr == from);
             match (packet, index) {
                 (Packet::Hello { stable_id, rules_hash }, index) => self.hello(from, stable_id, rules_hash, index, now),
-                (Packet::Inputs { epoch, turn_ack, inputs, hashes, ping }, Some(i)) if epoch == self.epoch => {
+                // A packet about an earlier world still shows the client is there.
+                (Packet::Inputs { epoch, world, turn_ack, inputs, hashes, ping }, Some(i)) if epoch == self.epoch => {
                     self.remotes[i].last_heard = now;
-                    self.inputs(i, turn_ack, inputs, hashes, ping, now);
+                    if world == self.world {
+                        self.inputs(i, turn_ack, inputs, hashes, ping, now);
+                    }
                 }
-                (Packet::SaveAck { epoch, next, received }, Some(i)) if epoch == self.epoch => {
+                (Packet::SaveAck { epoch, world, next, received }, Some(i)) if epoch == self.epoch => {
                     let remote = &mut self.remotes[i];
                     remote.last_heard = now;
+                    if world != self.world {
+                        continue;
+                    }
                     if let Some(upload) = &mut remote.upload {
                         upload.welcomed = true;
                         if next >= upload.next {
@@ -244,6 +319,7 @@ impl<T: Transport> Host<T> {
             turn_ack: tick,
             input_ack: 0,
             hashes_from: tick,
+            loaded: false,
             last_heard: now,
             ping: None,
         });
@@ -268,6 +344,8 @@ impl<T: Transport> Host<T> {
     fn inputs(&mut self, i: usize, turn_ack: u64, inputs: Vec<Input>, hashes: Vec<(u64, u64)>, ping: u32, now: Duration) {
         let open_tick = self.sim.world().tick();
         let remote = &mut self.remotes[i];
+        // Clients send inputs only once they are playing.
+        remote.loaded = true;
         remote.turn_ack = remote.turn_ack.max(turn_ack);
         remote.ping = Some((ping, now));
         let player = remote.player;
@@ -345,7 +423,7 @@ impl<T: Transport> Host<T> {
         for i in 0..self.remotes.len() {
             if let Some(tick) = self.halted {
                 let addr = self.remotes[i].addr.clone();
-                self.send_to(&addr, &Packet::Desync { epoch: self.epoch, tick });
+                self.send_to(&addr, &Packet::Desync { epoch: self.epoch, world: self.world, tick });
                 continue;
             }
             self.send_upload(i, now);
@@ -357,6 +435,7 @@ impl<T: Transport> Host<T> {
             };
             let mut packet = Packet::Turns {
                 epoch: self.epoch,
+                world: self.world,
                 first,
                 turns: Vec::new(),
                 host_tick,
@@ -383,7 +462,8 @@ impl<T: Transport> Host<T> {
     }
 
     fn send_upload(&mut self, i: usize, now: Duration) {
-        let epoch = self.epoch;
+        let (epoch, world) = (self.epoch, self.world);
+        let label = self.label.clone();
         let input_delay = self.config.input_delay;
         let player = self.remotes[i].player;
         let addr = self.remotes[i].addr.clone();
@@ -393,6 +473,8 @@ impl<T: Transport> Host<T> {
             upload.last_welcome = Some(now);
             packets.push(Packet::Welcome {
                 epoch,
+                world,
+                label,
                 player,
                 input_delay,
                 save_tick: upload.tick,
@@ -411,7 +493,7 @@ impl<T: Transport> Host<T> {
                 upload.sent_at[index as usize] = Some(now);
                 let start = index as usize * SAVE_CHUNK;
                 let data = upload.bytes[start..(start + SAVE_CHUNK).min(upload.bytes.len())].to_vec();
-                packets.push(Packet::SaveChunk { epoch, index, data });
+                packets.push(Packet::SaveChunk { epoch, world, index, data });
             }
         }
         for packet in packets {

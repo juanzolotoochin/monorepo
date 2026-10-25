@@ -26,7 +26,7 @@ pub struct CharacterEntry {
 pub struct CharacterCatalog(Vec<CharacterEntry>);
 
 impl CharacterCatalog {
-    pub fn discover(scenes: &[ScenePack]) -> Self {
+    pub fn discover(scenes: &[std::sync::Arc<ScenePack>]) -> Self {
         let mut ids = HashSet::new();
         let mut entries = Vec::new();
         for (scene_index, pack) in scenes.iter().enumerate() {
