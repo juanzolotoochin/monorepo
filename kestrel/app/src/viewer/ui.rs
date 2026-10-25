@@ -132,9 +132,6 @@ pub fn setup(
             label(panel, "LOOPING ANIMATIONS");
             label(panel, "MOVING FLOOR / 0.5 M GRID");
             panel.spawn((CharacterName, Text::new(""), TextFont { font_size: FontSize::Px(13.0), ..default() }, TextColor(Color::srgb(0.49, 0.82, 0.85))));
-            if library.characters.len() > 1 {
-                button(panel, Action::NextCharacter, "NEXT CHARACTER");
-            }
             for clip in Clip::ALL {
                 button(panel, Action::Clip(clip), clip.title());
             }
@@ -200,6 +197,29 @@ pub fn setup(
                 TextColor(Color::srgb(0.66, 0.87, 0.88)),
             ));
         });
+    commands.spawn((
+        Root,
+        CharacterPicker,
+        GlobalZIndex(1001),
+        Node {
+            position_type: PositionType::Absolute,
+            right: px(20.0),
+            top: px(145.0),
+            width: px(245.0),
+            max_height: percent(70.0),
+            overflow: Overflow::scroll_y(),
+            flex_direction: FlexDirection::Column,
+            row_gap: px(5.0),
+            padding: UiRect::all(px(12.0)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.015, 0.035, 0.05, 0.94)),
+    )).with_children(|panel| {
+        label(panel, "CHARACTERS / SELECT DIRECTLY");
+        for (index, character) in library.characters.iter().enumerate() {
+            button(panel, Action::Character(index), &character.name);
+        }
+    });
 }
 
 pub fn input(
@@ -229,19 +249,18 @@ pub fn input(
             continue;
         }
         match *action {
-            Action::NextCharacter => {
-                if let Some(position) = library.characters.iter().position(|entry| entry.scene_index == library.current) {
-                    let next = (position + 1) % library.characters.len();
-                    let character = &library.characters[next];
+            Action::Character(index) => {
+                if let Some(character) = library.characters.get(index) {
                     if !viewer.clip.supports(character) {
                         viewer.clip = if Clip::Run.supports(character) { Clip::Run } else { Clip::Idle };
                     }
+                    viewer.character = index;
                     viewer.reset_clock();
                     library.requested = Some(character.scene_index);
                 }
             }
             Action::Clip(clip) => {
-                if library.character(library.current).is_some_and(|character| clip.supports(character)) {
+                if library.characters.get(viewer.character).is_some_and(|character| clip.supports(character)) {
                     viewer.clip = clip;
                     viewer.reset_clock();
                 }
@@ -282,7 +301,7 @@ pub fn input(
             }
         }
     }
-    let character = library.character(library.requested.unwrap_or(library.current));
+    let character = library.characters.get(viewer.character);
     for mut name in &mut character_names {
         name.0 = character.map_or_else(|| "NO CHARACTER".to_string(), |entry| format!("CHARACTER / {}", entry.name));
     }
@@ -291,6 +310,7 @@ pub fn input(
             node.display = if character.is_some_and(|entry| clip.supports(entry)) { Display::Flex } else { Display::None };
         }
         let selected = match *action {
+            Action::Character(index) => viewer.character == index,
             Action::Clip(clip) => viewer.clip == clip,
             Action::Angle(angle) => viewer.angle == angle,
             _ => false,

@@ -77,9 +77,6 @@ impl SceneLibrary {
     pub fn character(&self, scene_index: usize) -> Option<&CharacterEntry> {
         self.characters.for_scene(scene_index)
     }
-    pub fn character_index(&self, id: &str) -> Result<usize, String> {
-        self.characters.scene_for_id(id)
-    }
     pub fn has_feature(&self, feature: SceneFeature) -> bool {
         self.scenes.get(self.current).is_some_and(|pack| pack.scene.features.contains(&feature))
     }
@@ -418,13 +415,15 @@ mod tests {
             .collect();
         assert!(!discovered.is_empty());
         for entry in library.characters.iter() {
-            assert!(discovered.contains(&entry.scene_index));
-            assert_eq!(library.character_index(&entry.id), Ok(entry.scene_index));
+            assert_eq!(library.characters.index_for_id(&entry.id).map(|index| library.characters[index].scene_index), Ok(entry.scene_index));
         }
         let distinct_styles: std::collections::HashSet<_> = discovered.iter()
             .map(|&index| library.scenes[index].scene.style.as_ref().unwrap().id.as_str())
             .collect();
-        assert_eq!(library.characters.len(), distinct_styles.len());
+        assert!(library.characters.len() >= distinct_styles.len());
+        for id in ["skin:ox", "skin:ghoul", "skin:ghoul_brute"] {
+            assert!(library.characters.index_for_id(id).is_ok(), "missing {id}");
+        }
         let mining = &library.scenes[0];
         let lab = &library.scenes[1];
         assert_eq!(library.index("mining-deck"), Ok(0));

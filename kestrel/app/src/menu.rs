@@ -343,7 +343,11 @@ pub fn update(
                 scenes.locked = false;
                 game.network = None;
                 viewer.begin();
-                if !crate::viewer::Clip::Run.supports(scenes.character(index).unwrap()) {
+                viewer.character = scenes.characters.iter()
+                    .position(|entry| entry.scene_index == index && matches!(entry.source, crate::character_catalog::CharacterSource::Actor))
+                    .or_else(|| scenes.characters.iter().position(|entry| entry.scene_index == index))
+                    .unwrap();
+                if !crate::viewer::Clip::Run.supports(&scenes.characters[viewer.character]) {
                     viewer.clip = crate::viewer::Clip::Idle;
                 }
                 menu.open = false;

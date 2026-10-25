@@ -1,7 +1,7 @@
 //! Character studio: repeatable poses from the production rig, viewed in place.
 use crate::{
     assets::SceneLibrary,
-    character_catalog::CharacterEntry,
+    character_catalog::{CharacterEntry, CharacterSource},
     character::{JumpMotion, LocalBlade, Player},
     combat::Attack,
     gameplay::Controls,
@@ -106,6 +106,7 @@ pub enum ViewAngle {
 #[derive(Resource, Default, Clone, Copy)]
 pub struct Viewer {
     pub active: bool,
+    pub character: usize,
     pub clip: Clip,
     pub angle: ViewAngle,
     pub elapsed: f32,
@@ -261,7 +262,7 @@ fn wrapped_mark(base: f32, offset: f32) -> f32 {
 }
 #[derive(Component, Clone, Copy)]
 pub(crate) enum Action {
-    NextCharacter,
+    Character(usize),
     Clip(Clip),
     Angle(ViewAngle),
     Speed,
@@ -275,6 +276,14 @@ pub(crate) enum Action {
 pub(crate) struct Status;
 #[derive(Component)]
 pub(crate) struct CharacterName;
+#[derive(Component)]
+pub(crate) struct CharacterPicker;
+#[derive(Resource)]
+struct StudioRig {
+    character: usize,
+    scale: f32,
+    rig: crate::rig::Rig,
+}
 #[derive(Component)]
 pub(crate) struct SwordMetrics;
 #[derive(Component)]
@@ -382,6 +391,51 @@ pub fn drive(
     }
 }
 
+/// Preview NPCs with the same rig and pose function used by settlement actors.
+pub fn pose_selected_rig(world: &mut World) {
+    let viewer = *world.resource::<Viewer>();
+    if !viewer.active && world.get_resource::<StudioRig>().is_none() { return; }
+    let (scene_index, source) = {
+        let library = world.resource::<SceneLibrary>();
+        let Some(entry) = library.characters.get(viewer.character) else { return };
+        (entry.scene_index, entry.source.clone())
+    };
+    let npc = viewer.active && scene_index == world.resource::<SceneLibrary>().current
+        && matches!(source, CharacterSource::Skin(_));
+    for mut visibility in world.query_filtered::<&mut Visibility, With<Player>>().iter_mut(world) {
+        let desired = if npc { Visibility::Hidden } else { Visibility::Inherited };
+        if *visibility != desired { *visibility = desired; }
+    }
+    let old = world.get_resource::<StudioRig>().map(|state| state.character);
+    if (!npc || old != Some(viewer.character)) && old.is_some() {
+        let state = world.remove_resource::<StudioRig>().unwrap();
+        world.entity_mut(state.rig.root).despawn();
+    }
+    if !npc { return; }
+    if world.get_resource::<StudioRig>().is_none() {
+        let (profile, skin) = {
+            let pack = &world.resource::<SceneLibrary>().scenes[scene_index];
+            let skin = match &source {
+                CharacterSource::Skin(id) => pack.skins.iter().find(|skin| &skin.id == id).cloned(),
+                CharacterSource::Actor => None,
+            };
+            (pack.scene.style.clone(), skin)
+        };
+        let (Some(profile), Some(skin)) = (profile, skin) else { return };
+        let template = crate::rig::RigTemplate::upload(world, &skin, &profile);
+        let rig = template.spawn(world);
+        world.insert_resource(StudioRig { character: viewer.character, scale: template.scale, rig });
+    }
+    let moving = matches!(viewer.clip, Clip::Walk | Clip::Run | Clip::Turn);
+    let cycle = viewer.frame as f32 / viewer.clip.frame_count() as f32;
+    let travel = if moving { cycle * std::f32::consts::TAU / 12.0 } else { 0.0 };
+    let heading = if viewer.clip == Clip::Turn { viewer.turn_heading() } else { 0.0 };
+    world.resource_scope(|world, state: Mut<StudioRig>| {
+        state.rig.pose(world, Vec3::new(0.0, STUDIO_FLOOR_Y, 0.0), heading,
+            0.0, state.scale, travel, 0.0, 0.0, 0.0, None);
+    });
+}
+
 pub fn camera(
     viewer: Res<Viewer>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera3d>>,
@@ -426,7 +480,7 @@ pub fn metrics(
     }
     let Some(mut panel) = panels.iter_mut().next() else { return };
     panel.display = Display::Flex;
-    let has_sword = library.character(library.current).is_some_and(|character|
+    let has_sword = library.characters.get(viewer.character).is_some_and(|character|
         character.weapon == Some(content::scenario::Weapon::Sword));
     if let Some(mut title) = titles.iter_mut().next() {
         let clip = match viewer.clip {
@@ -582,14 +636,17 @@ mod tests {
     }
 
     #[test]
-    fn studio_character_action_selects_the_next_discovered_actor() {
+    fn studio_character_action_selects_a_specific_character() {
         let mut library = SceneLibrary::new();
-        assert!(library.characters.len() > 1);
-        library.current = library.characters[0].scene_index;
-        let next = library.characters[1].scene_index;
+        let ox = library.characters.index_for_id("skin:ox").unwrap();
+        let ghoul = library.characters.index_for_id("skin:ghoul").unwrap();
+        library.current = library.characters[ox].scene_index;
+        let next = library.characters[ghoul].scene_index;
+        assert_eq!(library.current, next);
         let menu = crate::menu::LaunchMenu::new(false, &library);
         let mut viewer = Viewer::default();
         viewer.begin();
+        viewer.character = ox;
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .insert_resource(ButtonInput::<KeyCode>::default())
@@ -597,10 +654,11 @@ mod tests {
             .insert_resource(menu)
             .insert_resource(viewer)
             .add_systems(Update, input);
-        app.world_mut().spawn((Action::NextCharacter, Interaction::Pressed,
+        app.world_mut().spawn((Action::Character(ghoul), Interaction::Pressed,
             BackgroundColor::default(), Node::default()));
         app.update();
         assert_eq!(app.world().resource::<SceneLibrary>().requested, Some(next));
+        assert_eq!(app.world().resource::<Viewer>().character, ghoul);
     }
     #[test]
     fn side_blade_angle_uses_the_ground_as_zero() {
