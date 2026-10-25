@@ -19,6 +19,12 @@ flowchart TD
 
 The arrows show current build and runtime relationships, not a single universal asset-file schema. In particular, a character definition does not yet name its skin.
 
+## What is a skin?
+
+In Kestrel, a **skin** is a named visual rig defined in a `Style(...)` file. It says which meshes go on named parts such as `Body` and `LeftLeg`, where those parts pivot, how large the result is, and which procedural motion rule poses it. The asset compiler bakes those parts into the scene pack. `use_actor: true` copies a style's authored actor parts into a skin at build time; it does not make that skin the player.
+
+The name is broader than the usual meaning of a texture or outfit. A walking ghoul, a wheeled cart, a machine, and even a static ore model all use this same visual-rig schema. A skin has no health, inventory, input, or AI. Those rules belong to the simulation's character or scenario data. Asset Studio labels these entries **Visual rigs / skins** and lets you inspect each baked model; movement previews appear only when its motion rule uses travel distance.
+
 ## Which RON file describes which thing?
 
 Each row below is a **different schema**. A path is an example source file, not a field to put inside another RON file.

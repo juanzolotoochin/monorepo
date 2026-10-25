@@ -297,7 +297,7 @@ impl Service for Viewer {
                 Phase::Input,
                 (
                     open_on_start.run_if(in_state(Front::Menu)),
-                    (input.run_if(crate::control::interactive), refresh_stage).chain().run_if(open.clone()),
+                    (input.run_if(crate::control::interactive), ui::scroll_picker, refresh_stage).chain().run_if(open.clone()),
                 ),
             )
             .add_service_systems::<Self, _>(
@@ -520,6 +520,8 @@ pub(crate) enum Action {
     Step,
     StepBack,
     Reset,
+    ScrollUp,
+    ScrollDown,
     Back,
 }
 #[derive(Component)]
@@ -1179,6 +1181,34 @@ mod tests {
         assert_eq!(app.world().resource::<Viewer>().character, ghoul);
         assert!(matches!(app.world().resource::<NextState<Front>>(), NextState::Unchanged), "Studio stays open");
     }
+
+    #[test]
+    fn studio_picker_buttons_reach_entries_below_the_viewport() {
+        let mut viewer = Viewer::default();
+        viewer.begin();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<debug_ui::GameInput>()
+            .init_resource::<NextState<Front>>()
+            .insert_resource(SceneLibrary::new())
+            .insert_resource(viewer)
+            .add_systems(Update, input);
+        let picker = app.world_mut().spawn((
+            CharacterPicker,
+            ComputedNode {
+                size: Vec2::new(350.0, 600.0),
+                content_size: Vec2::new(350.0, 2000.0),
+                inverse_scale_factor: 1.0,
+                ..default()
+            },
+            ScrollPosition::default(),
+        )).id();
+        app.world_mut().spawn((Action::ScrollDown, Interaction::Pressed,
+            BackgroundColor::default(), Node::default()));
+        app.update();
+        assert_eq!(app.world().get::<ScrollPosition>(picker).unwrap().y, 480.0);
+    }
+
     #[test]
     fn studio_builds_its_character_outside_a_session_and_leaves_nothing_behind() {
         let options = crate::control::Options { simulation: true, ..default() };

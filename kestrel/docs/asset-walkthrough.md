@@ -93,7 +93,7 @@ The `leg` group is defined once and used twice. `pivot: Some(...)` gives each pa
 
 ## 5. Choose how the rig moves
 
-The same style also makes an inspectable skin from its actor parts:
+The same style also makes an inspectable **skin**, meaning a named visual rig, from its actor parts:
 
 ```ron
 skins: [
