@@ -35,8 +35,9 @@ pub fn playback(
     time: Res<Time>,
     mut preview: Local<Preview>,
     mut controls: ResMut<Controls>,
-    mut game: ResMut<crate::lockstep::Game>,
-    library: Res<crate::assets::SceneLibrary>,
+    mut service: ResMut<crate::lockstep::SessionService>,
+    mut control: ResMut<crate::lockstep::PlayerControl>,
+    scene: Res<crate::scene_view::SceneView>,
     mut player: Single<&mut Transform, With<Player>>,
     mut camera: Single<&mut CameraRig>,
 ) {
@@ -56,11 +57,11 @@ pub fn playback(
         preview.started = true;
         if preview.motion {
             camera.zoom = 3.0;
-            game.go_to(Vec3::new(0.0, 0.0, -3.0), true);
+            control.go_to(&mut service, Vec3::new(0.0, 0.0, -3.0), true);
         } else if preview.jump_combo {
             camera.zoom = 3.0;
-            if let Some(agent) = game.player() {
-                game.command(sim::CommandKind::Jump { agent });
+            if let Some(agent) = service.player() {
+                service.command(sim::CommandKind::Jump { agent });
             }
         } else {
             player.translation = Vec3::new(0.1, 0.0, 2.5);
@@ -69,7 +70,7 @@ pub fn playback(
     }
     if preview.motion && preview.elapsed > 3.7 && !preview.turned {
         preview.turned = true;
-        game.go_to(Vec3::new(3.0, 0.0, -1.0), true);
+        control.go_to(&mut service, Vec3::new(3.0, 0.0, -1.0), true);
     }
     if preview.motion {
         return;
@@ -79,12 +80,7 @@ pub fn playback(
         if let Some(&when) = times.get(preview.strikes as usize) {
             if preview.elapsed >= when {
                 preview.strikes += 1;
-                crate::lockstep::strike(
-                    &mut game,
-                    &mut controls,
-                    &library,
-                    Vec3::new(0.9, 0.0, -1.0),
-                );
+                control.strike(&mut service, &mut controls, &scene.pack, Vec3::new(0.9, 0.0, -1.0));
             }
         }
         return;

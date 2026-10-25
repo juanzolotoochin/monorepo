@@ -41,25 +41,22 @@ fn block(world: &mut World, pos: Vec3, size: Vec3, material: Handle<StandardMate
         ))
         .id()
 }
-pub fn setup(world: &mut World) {
-    let index = world.resource::<SceneLibrary>().current;
-    let reset = world
-        .resource::<ButtonInput<KeyCode>>()
-        .just_pressed(KeyCode::KeyR);
-    if world.resource::<Memory>().current == Some(index) && !reset {
+/// R starts the trial over: its pieces are rebuilt and the view's copy of
+/// the recording dropped.
+pub(super) fn reset(world: &mut World) {
+    if !world.resource::<ButtonInput<KeyCode>>().just_pressed(KeyCode::KeyR) {
         return;
     }
-    let old: Vec<_> = world
-        .query_filtered::<Entity, With<Trial>>()
-        .iter(world)
-        .collect();
+    let old: Vec<_> = world.query_filtered::<Entity, With<Trial>>().iter(world).collect();
     for e in old {
         world.despawn(e);
     }
-    *world.resource_mut::<Memory>() = Memory {
-        current: Some(index),
-        ..default()
-    };
+    *world.resource_mut::<Memory>() = Memory::default();
+    spawn(world);
+}
+/// Builds the trial's view for a world: the recording's ghost everywhere,
+/// and in a trial scene the pads, cables, wall and core.
+pub(super) fn spawn(world: &mut World) {
     art(world);
     let a = world.resource::<Art>();
     let (cube, metal, dark, blue, green, gold, ghost) = (
@@ -94,7 +91,7 @@ pub fn setup(world: &mut World) {
                 Transform::from_xyz(0.0, 1.66, 0.225).with_scale(Vec3::new(0.34, 0.08, 0.02)),
             ));
         });
-    if !world.resource::<SceneLibrary>().has_feature(voxel_assets::SceneFeature::MemoryTrial) {
+    if !world.resource::<crate::scene_view::SceneView>().has_feature(voxel_assets::SceneFeature::MemoryTrial) {
         return;
     }
     for (i, p) in PADS.iter().enumerate() {
@@ -220,7 +217,7 @@ pub(super) fn update(world: &mut World, m: &Memory, elapsed: f32, dt: f32) {
             *visibility = Visibility::Hidden;
         }
     }
-    if world.resource::<SceneLibrary>().has_feature(voxel_assets::SceneFeature::MemoryTrial) {
+    if world.resource::<crate::scene_view::SceneView>().has_feature(voxel_assets::SceneFeature::MemoryTrial) {
         let a = world.resource::<Art>();
         let (blue, green, dark) = (a.blue.clone(), a.green.clone(), a.dark.clone());
         for (pad, mut mat) in world

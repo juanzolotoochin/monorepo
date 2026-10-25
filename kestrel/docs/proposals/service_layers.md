@@ -1,9 +1,9 @@
 # Service layers
 
-Status: design agreed on 2026-10-24. Migration steps 1 (the framework,
-`kestrel/service`), 2 (`kestrel/app`'s frame in phases), 3 (obstacles from scene
-data) and 4 (the session's world slot) are done; no service exists yet. The
-next feature, the main menu, is the first one to add some.
+Status: design agreed on 2026-10-24; migration steps 1 to 5 and the main
+menu (step 6a) are done, so `kestrel/app` runs on services (see
+[As built](#as-built)). Still to come: the lobby (step 6b), `Bindings`,
+`ScriptDriver` and `Profile`, and `kestrel/play`.
 
 The game's front end needs one answer to "where does this flow or system
 live, and for how long?". This proposal groups front-end code into
@@ -137,9 +137,16 @@ app.add_plugins(DefaultPlugins)          // before ServicesPlugin, which adds
   `Active` by itself. A layer starts its services just before its own
   `OnEnter` schedules and stops them just after its `OnExit` schedules, so a
   service exists during its layer's enter and exit systems. Services' systems
-  run only while their layer runs. Entities that belong to a world are spawned with
-  `DespawnOnExit(WorldState::Active)` (or `Loading`), so nothing is despawned
-  by hand.
+  run only while their layer runs. Entities that belong to a world carry
+  `WorldScoped` (or `SessionScoped`): the framework despawns them when the
+  layer stops, after its services, whether it was Loading or Active. A
+  marker that tags a feature's entities can require it
+  (`#[require(WorldScoped)]`).
+- **`SessionService` moves the World layer.** After the Step phase it sets
+  World Off for a frame when the session's world is replaced, and Loading
+  once a new one is in the slot; World services decide when it is Active.
+  `Flow` (App) starts and leaves the session. Nothing else sets a layer's
+  state.
 - **Registration order is the order.** Within a layer, services start, tick
   and (in reverse) stop in the order they are registered. A dependency must be
   registered earlier, so there is nothing to sort and no cycle is possible.
@@ -259,37 +266,51 @@ Input runs before Step because a command is stamped with its tick when it's
 queued. Run after the step, a command misses any tick due that frame and lands
 one tick (16.7 ms) later, which happens on about 4 frames in 10 at 144 Hz.
 
-## Today's code, mapped
+## As built
 
-`lockstep::Game` splits by lifetime:
+Services in `kestrel/app`, in registration order (which is also their tick
+order within a layer):
 
-| Field | Goes to |
-|---|---|
-| `content`, `name` | App: `Content`, `Profile` |
-| `record`, `replay` | App options; the Session writes the recording on shutdown |
-| `session`, `network`, `clock`, `paused`, `rate`, `warming_up`, `status`, `ended`, `start_save` | Session: `SessionService` |
-| `scene`, `previous`, `current`, `events`, `tick`, `alpha`, `center` | World: `WorldMirror` |
-| `walking`, `applies_at`, `named` | World: `PlayerControl` (the name is sent once per world, when the avatar exists) |
+| Layer | Service | File | What it owns |
+|---|---|---|---|
+| App | `Flow` | `flow.rs` | Opens and leaves sessions (from the command line or the menu) and keeps why the last one ended. Escape (without menus) and mute keys |
+| App | `Viewer` | `viewer.rs` | Character Studio, while Session is Off and `Front` is `Studio`: poses the player's body (or an NPC's rig) in a character's pack on its own stage. No session, no world |
+| App | `MainMenu` | `menu.rs` | The launch menu, while Session is Off and `Front` is `Menu`: name, scene list, play solo, host, join, Character Studio, Quit. Players' runs only |
+| Session | `Pause` | `pause.rs` | The pause overlay (Escape): Resume, Leave to menu, Quit. Takes the session's input while open. Players' runs only |
+| Session | `SessionService` | `lockstep.rs` | The session, clock, scene requests (digit keys, control port), recordings, the ending banner; moves the World layer |
+| World | `WorldMirror` | `lockstep.rs` | The last two ticks for interpolation, and the world's scene from the session's label |
+| World | `SceneView` | `scene_view.rs` | The scene shown: player body, industrial props, boulders, style, the deck's visibility |
+| World | `Settlement` | `settlement.rs` | The settlement's rigs, captions and HUD |
+| World | `PileLab` | `piles/` | The pile lab's dispensers, piles, cargo and panel |
+| World | `Avatar` | `character.rs` | The player's body: following the avatar (with a joined player's local preview), animation, swings, hits and the blade trail |
+| World | `Peers` | `peers.rs` | Other players' avatars and name tags |
+| World | `Digging` | `digging.rs` | The dug ground and the follow camera |
+| World | `Flight` | `jetpack.rs` | Raised platforms and the jetpack's view |
+| World | `Memory` | `palimpsest/` | The memory trial's view |
+| World | `Effects` | `effects.rs` | Particles, flashes, camera shake |
+| World | `AtmosphereVisuals` | `atmosphere.rs` | Grass, fireflies and lightning from the scene's style |
+| World | `Hud` | `scene.rs` | The HUD's live readouts |
+| World | `PlayerControl` | `lockstep.rs` | Movement, attack and keyboard input into commands |
 
-Other resources and systems:
+**Players' runs and scripted runs.** `Options::menus` is true for a run with a
+window and no demo script, frame recording or control port. Those runs get
+`MainMenu` and `Pause`: with no session flags (`--host`, `--join`, `--scene`,
+`--record-input`, `--replay-input`, `--capture-dir`) the game opens on the
+menu (or with `--character-studio`, on Character Studio), and a session that ends or
+can't start returns to it with the reason. Every other run starts its
+session from the flags, keeps the closing banner, and exits on a failed
+start, so demos, replays and render checks are unchanged.
 
-| Layer | Service | From today |
-|---|---|---|
-| App | `ControlPort` | `control::Hub`, `control::Options`, `control::Video`, request parsing in `control::protocol` |
-| App | `Sound`, `Telemetry`, `ModelCache`, `SceneLibrary` | the resources of the same names |
-| App | `Bindings` | raw key and mouse reads, now spread over `lockstep::*_input`, `piles::input`, `settlement::input` |
-| App | `Flow` | `main.rs` flag handling (`--host`, `--join`, `--scene`); the main menu later |
-| Session | `SessionService` | `lockstep::step`, `on_exit`'s recording and shutdown |
-| Session | `SessionEnd` | `lockstep::end_session` and its banner |
-| Session | `Lobby` | new |
-| World | `WorldMirror` | `lockstep::mirror_settlement`, `settlement::Settlement` |
-| World | `SceneView` | `scene::setup`, the scene half of `assets::switch_scene`, `style::apply`, `ActiveStyle` |
-| World | `PlayerControl` | `Controls`, the command half of `lockstep::*_input`, `piles::input` and `settlement::input`, `strike`, `jetpack::cursor_surface`, `Game::{walk, go_to, dig, equip, command}` |
-| World | `ScriptDriver` | the request handling in `control::mod` (`Pending`, asserts, inspection) |
-| World | `FollowCamera` | `lockstep::follow_avatar`, `digging::follow_camera` |
-| World | `Piles`, `Digging`, `Flight`, `Memory` | `piles::*` and `PileLab`, `digging::*`, `jetpack::*` and `Flight`, `palimpsest::*` and `Memory` |
-| World | `Peers` | `peers::update`, `nametags::update` |
-| World | `Effects`, `Hud` | `effects::*` and `Feedback`, `scene::hud` and `update_hud` |
+Still plain App resources: `SceneLibrary` (the packs), `ModelCache`,
+`SceneArt` (shared meshes and materials), `Telemetry`, `Sound`, the control
+port's `Hub`, and `Controls` and `Feedback`, which the player's input,
+combat and effects share and `SceneView` resets when a world starts.
+Telemetry and the control port wrap the frame in `First` and `Last`.
+
+The control port starts commands, answers inspections and writes its trace
+only while a world is up, and holds the session's clock until the first
+world, so a rendered replay of a headless recording still matches it
+command for command. Every scene renders as before.
 
 ## Migration
 
@@ -306,7 +327,8 @@ passing.
    props, pile fixtures, memory wall) from the pack and constants the views
    share. Boulder radii come from the generated models in `ModelCache`, so
    the scene's models must be loaded first. The terrain hash changed once
-   (order only); the discs matched today's in all 10 scenes.
+   (order only); the discs matched today's in all 10 scenes. Moonlit Glade, added later,
+   uses only boulders and environment obstacles, which the same code lists.
 4. Give `session::Session` its world slot and world number, and change scenes
    by reloading the slot instead of starting a new session. Done:
    `Session::load_world` (host) sends every client a save of the new world,
@@ -317,9 +339,28 @@ passing.
    switch scenes in networked games and clients follow the label. Each
    world gets its own recording: `<path>` for the first, `<path>.<n>` after.
    The host's slot is never empty yet: unloading comes with the lobby.
-5. Split `lockstep::Game` as above, then move the features into World services
-   one at a time, deleting each hand-made scene-change check.
+5. Split `lockstep::Game`, then move the features into World services one at
+   a time, deleting each hand-made scene-change check. Done: see
+   [As built](#as-built). Seven checks went (`game.scene`, `Settlement`,
+   `ActiveStyle`, `Flight`, `Memory`, `PileLab` and digging's `Local`), and
+   so did `SceneLibrary.current` and `switch_scene`.
 6. Build the main menu and the lobby on top.
+   - 6a, the main menu. Done: `MainMenu`, `Pause`, and `Flow` opening
+     sessions itself (`lockstep::open`), so a failed bind is a message, not
+     a panic. Host and Join go straight into a world; the menu is bevy_ui
+     with a small hand-written text field (Bevy's `EditableText` needs the
+     `bevy_ui_widgets` feature, which the build leaves out). The menu's
+     default port is 7777. Nothing is remembered between runs until
+     `Profile`. The launch menu kept the look and choices of the one that
+     landed on master meanwhile (scene list, solo, host, join, Character
+     Studio), with the name field added.
+   - Character Studio is App flow too, not a session: `flow::Front` is a
+     sub-state of `SessionState::Off` (`Menu` or `Studio`). Studio builds
+     the player's body with the world's own helpers (`scene::spawn_player`,
+     `style::apply`) and rescopes it to `Front::Studio`, so nothing it
+     shows outlives it and no gameplay system needs a "studio is open"
+     check.
+   - 6b, the lobby: Host and Join land in it, the host's slot starts empty.
 
 ## Open questions
 
