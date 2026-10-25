@@ -1047,8 +1047,10 @@ pub fn attack_input(
         .zip(service.player_view_position())
         .map(|(point, origin)| crate::navigation::flat(point - origin).normalize_or_zero())
         .filter(|aim| aim.length_squared() > 0.0);
+    // While the debug UI has the pointer, keep the last aim.
+    let pointer_free = !input.capture().pointer && !input.ui_owns_pointer();
     if controls.weapon == Weapon::Laser {
-        if let Some(aim) = cursor_aim {
+        if let Some(aim) = cursor_aim.filter(|_| pointer_free) {
             controls.aim = Some(aim);
             control.aim(&mut service, aim);
         }
