@@ -3,8 +3,9 @@ use bevy::prelude::*;
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, VecDeque},
-    time::{Duration, Instant},
+    time::Duration,
 };
+use web_time::Instant;
 const WINDOW: usize = 240;
 #[derive(Default)]
 struct Samples {

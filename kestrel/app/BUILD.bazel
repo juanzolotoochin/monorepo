@@ -4,6 +4,15 @@ load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
 load("@rules_rs//rs:rust_test.bzl", "rust_test")
 load("//kestrel/build/game_demo:defs.bzl", "game_demo", "game_simulation_test", "studio_demo")
 
+genrule(
+    name = "web",
+    srcs = [":demo", "//kestrel/app/web:index.html"],
+    outs = ["web_bundle/demo.js", "web_bundle/demo_bg.wasm", "web_bundle/index.html"],
+    tools = ["@kestrel_wasm_bindgen//:wasm-bindgen"],
+    cmd = "mkdir -p $(RULEDIR)/web_bundle && $(location @kestrel_wasm_bindgen//:wasm-bindgen) $(location :demo) --target web --no-typescript --out-dir $(RULEDIR)/web_bundle && cp $(location //kestrel/app/web:index.html) $(RULEDIR)/web_bundle/index.html",
+    visibility = ["//visibility:public"],
+)
+
 alias(
     name = "share_to_devs",
     actual = "//kestrel/tools/telegram:publish",
@@ -16,7 +25,10 @@ rust_binary(
     # Bevy's derive macros inspect Cargo.toml to locate the `bevy` re-exports.
     compile_data = ["//:Cargo.toml", "shaders/grass.wesl"],
     edition = "2021",
-    link_deps = [":sound"],
+    link_deps = select({
+        "@platforms//cpu:wasm32": [],
+        "//conditions:default": [":sound"],
+    }),
     rustc_env = {"CARGO_MANIFEST_DIR": "."},
     visibility = ["//visibility:public"],
     deps = [
@@ -44,6 +56,7 @@ rust_binary(
         "@crates//:image",
         "@crates//:serde",
         "@crates//:serde_json",
+        "@crates//:web-time",
     ],
 )
 

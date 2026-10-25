@@ -9,10 +9,11 @@ use crate::{
     sound::Sound,
 };
 use bevy::{
-    anti_alias::taa::TemporalAntiAliasing, camera::ScalingMode,
-    core_pipeline::tonemapping::Tonemapping, pbr::ScreenSpaceAmbientOcclusion,
+    camera::ScalingMode, core_pipeline::tonemapping::Tonemapping,
     post_process::bloom::Bloom, prelude::*, camera::Hdr,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use bevy::{anti_alias::taa::TemporalAntiAliasing, pbr::ScreenSpaceAmbientOcclusion};
 use service::WorldScoped;
 
 fn material(
@@ -130,7 +131,7 @@ pub fn setup(
     ));
     let camera_base = Vec3::new(20.0, 20.0, 20.0);
     let camera_target = Vec3::new(0.0, 0.0, -0.4);
-    commands.spawn((
+    let mut camera = commands.spawn((
         Camera3d::default(),
         Hdr,
         Msaa::Off,
@@ -145,8 +146,6 @@ pub fn setup(
             intensity: 0.18,
             ..Bloom::NATURAL
         },
-        ScreenSpaceAmbientOcclusion::default(),
-        TemporalAntiAliasing::default(),
         Transform::from_translation(camera_base).looking_at(camera_target, Vec3::Y),
         CameraRig {
             base: camera_base,
@@ -154,6 +153,9 @@ pub fn setup(
             zoom: 21.5,
         },
     ));
+    // WebGL2 cannot compile the TAA shader's sampler combination.
+    #[cfg(not(target_arch = "wasm32"))]
+    camera.insert((ScreenSpaceAmbientOcclusion::default(), TemporalAntiAliasing::default()));
     commands.spawn((
         DirectionalLight {
             color: Color::srgb(1.0, 0.79, 0.63),

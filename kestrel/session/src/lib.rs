@@ -65,8 +65,8 @@ impl Session {
                 };
                 // A new epoch per hosting session, so stray packets from an
                 // earlier session are ignored.
-                let epoch = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
+                let epoch = web_time::SystemTime::now()
+                    .duration_since(web_time::UNIX_EPOCH)
                     .map_or(1, |d| d.as_secs() as u32 | 1);
                 Peer::Host(Box::new(Host::new(socket, world, label, content.clone(), config, epoch, Duration::ZERO)))
             }

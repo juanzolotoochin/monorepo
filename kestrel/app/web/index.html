@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Kestrel</title>
+    <style>
+      html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #07121b; color: #d8ecf0; font-family: sans-serif; }
+      #game { width: 100vw; height: 100vh; }
+      #status { position: absolute; top: 1rem; left: 1rem; }
+      canvas { display: block; }
+    </style>
+  </head>
+  <body>
+    <div id="game"><canvas id="kestrel"></canvas></div>
+    <div id="status">Loading Kestrel…</div>
+    <script type="module">
+      import init from './demo.js';
+      init().then(() => document.getElementById('status').remove())
+        .catch(error => {
+          document.getElementById('status').textContent = `Kestrel could not start: ${error}`;
+          console.error(error);
+        });
+    </script>
+  </body>
+</html>

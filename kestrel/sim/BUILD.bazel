@@ -15,6 +15,7 @@ rust_library(
         "@crates//:postcard",
         "@crates//:rayon",
         "@crates//:serde",
+        "@crates//:web-time",
     ],
 )
 

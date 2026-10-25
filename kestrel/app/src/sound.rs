@@ -5,6 +5,7 @@ use std::{
     thread::{self, JoinHandle},
 };
 
+#[cfg(not(target_arch = "wasm32"))]
 unsafe extern "C" {
     fn kestrel_audio_start() -> i32;
     fn kestrel_audio_play(cue: i32);
@@ -17,6 +18,19 @@ unsafe extern "C" {
         frames: u32,
     );
 }
+
+// Browser audio will use a web backend; the first wasm build runs silently.
+// Keep offline synthesis symbols available so the shared sound API compiles.
+#[cfg(target_arch = "wasm32")]
+unsafe fn kestrel_audio_start() -> i32 { -1 }
+#[cfg(target_arch = "wasm32")]
+unsafe fn kestrel_audio_play(_: i32) {}
+#[cfg(target_arch = "wasm32")]
+unsafe fn kestrel_audio_stop() {}
+#[cfg(target_arch = "wasm32")]
+unsafe fn kestrel_audio_cue_count() -> i32 { Cue::ALL.len() as i32 }
+#[cfg(target_arch = "wasm32")]
+unsafe fn kestrel_audio_synthesize(_: *const SynthEvent, _: u32, _: *mut f32, _: u32) {}
 
 // Miniaudio initializes Windows COM as MTA. Winit needs STA on the window
 // thread, so both audio initialization and destruction must live elsewhere.
@@ -137,6 +151,11 @@ impl Sound {
             cues: std::sync::Mutex::new(vec![]),
         }
     }
+    #[cfg(target_arch = "wasm32")]
+    pub fn new() -> Self {
+        Self::silent()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new() -> Self {
         assert_eq!(unsafe { kestrel_audio_cue_count() } as usize, Cue::ALL.len());
         // The worker owns the native context/device for their entire lifetime.

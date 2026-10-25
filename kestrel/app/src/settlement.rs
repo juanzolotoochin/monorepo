@@ -310,7 +310,7 @@ pub fn tick(world: &mut World) {
         .iter()
         .filter(|event| matches!(event, crate::legacy::Event::Hit { projectile: None, by, .. } if *by == me))
         .count() as u32;
-    let projection_start = std::time::Instant::now();
+    let projection_start = web_time::Instant::now();
     if hits > 0 && world.resource::<crate::gameplay::Controls>().attack
         .is_some_and(|a| matches!(a.weapon, content::scenario::Weapon::Sword | content::scenario::Weapon::Spear)) {
         let mut controls = world.resource_mut::<crate::gameplay::Controls>();
@@ -738,7 +738,7 @@ pub fn tick(world: &mut World) {
         }
     }
     crate::telemetry::elapsed(world, "settlement_projection", projection_start);
-    let sync_start = std::time::Instant::now();
+    let sync_start = web_time::Instant::now();
     let mut spawned = 0;
     let mut recycled = 0;
     let mut writes = 0;
