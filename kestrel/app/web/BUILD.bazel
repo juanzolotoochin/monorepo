@@ -1,7 +1,7 @@
 load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
 load("@rules_python//python:defs.bzl", "py_binary")
 
-exports_files(["index.html", "wasm_bindgen.BUILD.bazel"])
+exports_files(["index.html.tpl", "wasm_bindgen.BUILD.bazel"])
 
 rust_binary(
     name = "generate_audio",

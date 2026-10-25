@@ -15,7 +15,7 @@
     <div id="game"><canvas id="kestrel"></canvas></div>
     <div id="status">Loading Kestrel…</div>
     <script type="module">
-      import init from './demo.js';
+      import init from './{{GAME_JS}}';
       window.kestrelWebAudioPlay = () => {};
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       if (AudioContextClass) {

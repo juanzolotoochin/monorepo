@@ -8,7 +8,6 @@ load("//kestrel/app/web:defs.bzl", "web_bundle")
 web_bundle(
     name = "web_bundle",
     game = ":demo",
-    index = "//kestrel/app/web:index.html",
     visibility = ["//visibility:public"],
 )
 

@@ -37,14 +37,18 @@ def _web_bundle_impl(ctx):
         mnemonic = "KestrelWebAudio",
         progress_message = "Generating browser audio %{label}",
     )
-    ctx.actions.symlink(output = index, target_file = ctx.file.index)
+    ctx.actions.expand_template(
+        template = ctx.file._index_template,
+        output = index,
+        substitutions = {"{{GAME_JS}}": javascript.basename},
+    )
     return [DefaultInfo(files = depset([javascript, wasm, index] + cues))]
 
 web_bundle = rule(
     implementation = _web_bundle_impl,
     attrs = {
         "game": attr.label(allow_single_file = True, cfg = _wasm_platform, mandatory = True),
-        "index": attr.label(allow_single_file = [".html"], mandatory = True),
+        "_index_template": attr.label(default = "//kestrel/app/web:index.html.tpl", allow_single_file = True),
         "_bindgen": attr.label(default = "@kestrel_wasm_bindgen//:wasm-bindgen", allow_single_file = True, cfg = "exec"),
         "_generate_audio": attr.label(default = "//kestrel/app/web:generate_audio", executable = True, cfg = "exec"),
         "_allowlist_function_transition": attr.label(default = "@bazel_tools//tools/allowlists/function_transition_allowlist"),
