@@ -27,7 +27,7 @@ The native reader and synthetic test source both produce `GamepadSnapshot` value
 | Left stick | Camera-relative movement | Move focus |
 | Right stick | Independent aim | — |
 | LB | Hold run | — |
-| RB | Jump in Jump scenes; hold jetpack otherwise | — |
+| RB | Jump if the player character has `Jump`; hold jetpack otherwise | — |
 | RT | One attack per press | — |
 | A | Interact with selected target | Confirm |
 | X | Collect compatible material while carrying | — |
