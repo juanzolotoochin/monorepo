@@ -20,12 +20,16 @@ const STUDIO_FLOOR_Y: f32 = 20.0;
 const STUDIO_FLOOR_THICKNESS: f32 = 0.2;
 const GRID_SPACING: f32 = 0.5;
 const GRID_PERIOD: f32 = 4.0;
+const STEP_HEIGHT: f32 = 0.24;
+const STEP_START: f32 = 0.8;
+const STEP_END: f32 = 2.1;
 pub(crate) const STUDIO_FPS: f32 = 60.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Clip {
     Idle,
     Walk,
+    Step,
     #[default]
     Run,
     Turn,
@@ -36,13 +40,15 @@ pub enum Clip {
     Overhead,
 }
 impl Clip {
-    const ALL: [Self; 9] = [
-        Self::Idle, Self::Walk, Self::Run, Self::Turn, Self::Jump,
+    const ALL: [Self; 10] = [
+        Self::Idle, Self::Walk, Self::Step, Self::Run, Self::Turn, Self::Jump,
         Self::RunJump, Self::Forehand, Self::Backhand, Self::Overhead,
     ];
     pub(crate) fn supports(self, character: &CharacterEntry) -> bool {
         match self {
             Self::Walk | Self::Run | Self::Turn => character.can_locomote,
+            Self::Step => character.can_locomote
+                && !matches!(character.source, CharacterSource::Skin(_)),
             Self::Jump | Self::RunJump => character.can_jump,
             Self::Forehand | Self::Backhand | Self::Overhead =>
                 character.weapon == Some(content::scenario::Weapon::Sword),
@@ -53,6 +59,7 @@ impl Clip {
         Some(match id {
             "idle" => Self::Idle,
             "walk" => Self::Walk,
+            "step" => Self::Step,
             "run" => Self::Run,
             "turn" => Self::Turn,
             "jump" => Self::Jump,
@@ -67,6 +74,7 @@ impl Clip {
         match self {
             Self::Run => 30,
             Self::Walk => 33,
+            Self::Step => 120,
             Self::Turn => 200,
             Self::Jump => 80,
             Self::RunJump => 135,
@@ -78,6 +86,7 @@ impl Clip {
         match self {
             Self::Idle => "IDLE",
             Self::Walk => "WALK",
+            Self::Step => "WALK / STEP UP + DOWN",
             Self::Run => "RUN",
             Self::Turn => "RUN + DIRECTION CHANGE",
             Self::Jump => "JUMP",
@@ -260,6 +269,8 @@ pub(crate) struct Root;
 #[derive(Component)]
 pub(crate) struct Stage;
 #[derive(Component)]
+pub(crate) struct StepPlatform;
+#[derive(Component)]
 pub(crate) struct GroundMark {
     axis: MarkAxis,
     base: f32,
@@ -269,6 +280,23 @@ enum MarkAxis { X, Z }
 
 fn wrapped_mark(base: f32, offset: f32) -> f32 {
     (base - offset + GRID_PERIOD * 0.5).rem_euclid(GRID_PERIOD) - GRID_PERIOD * 0.5
+}
+
+fn step_surface(distance: f32) -> f32 {
+    if (STEP_START..STEP_END).contains(&distance) { STEP_HEIGHT } else { 0.0 }
+}
+
+fn studio_step_root_height(distance: f32) -> f32 {
+    STEP_HEIGHT * crate::combat::smooth((distance - (STEP_START - 0.30)) / 0.55)
+        * (1.0 - crate::combat::smooth((distance - (STEP_END - 0.10)) / 0.55))
+}
+
+pub(crate) fn studio_surface_height(viewer: &Viewer, local_z: f32) -> f32 {
+    STUDIO_FLOOR_Y + if viewer.clip == Clip::Step {
+        step_surface(viewer.distance + local_z)
+    } else {
+        0.0
+    }
 }
 #[derive(Component, Clone, Copy)]
 pub(crate) enum Action {
@@ -319,7 +347,8 @@ pub fn drive(
     mut viewer: ResMut<Viewer>,
     mut controls: ResMut<Controls>,
     mut player: Single<&mut Transform, With<Player>>,
-    mut marks: Query<(&GroundMark, &mut Transform), Without<Player>>,
+    mut marks: Query<(&GroundMark, &mut Transform), (Without<Player>, Without<StepPlatform>)>,
+    mut step_platform: Query<(&mut Transform, &mut Visibility), (With<StepPlatform>, Without<Player>, Without<GroundMark>)>,
     mut status: Query<&mut Text, With<Status>>,
 ) {
     if !viewer.active {
@@ -346,6 +375,7 @@ pub fn drive(
     };
     let studio_speed = match viewer.clip {
         Clip::Walk => motion.step_distance * 2.0 * STUDIO_FPS / Clip::Walk.frame_count() as f32,
+        Clip::Step => 3.2 * STUDIO_FPS / Clip::Step.frame_count() as f32,
         Clip::Run => {
             run_step * 2.0 * STUDIO_FPS / Clip::Run.frame_count() as f32
         }
@@ -368,15 +398,26 @@ pub fn drive(
         viewer.advance_ground(1.0 / STUDIO_FPS, sample_velocity, gait_step, stepping);
         if frame == 0 {
             viewer.gait_distance = 0.0;
+            if viewer.clip == Clip::Step {
+                viewer.distance = 0.0;
+                viewer.ground_offset = Vec2::ZERO;
+            }
         }
     }
     viewer.motion_frame = viewer.total_frame;
+    if viewer.clip == Clip::Step {
+        player.translation.y += studio_step_root_height(viewer.distance);
+    }
     controls.gait.phase = viewer.advance_ground(0.0, Vec3::ZERO, gait_step, false);
     for (mark, mut transform) in &mut marks {
         match mark.axis {
             MarkAxis::X => transform.translation.x = wrapped_mark(mark.base, viewer.ground_offset.x),
             MarkAxis::Z => transform.translation.z = wrapped_mark(mark.base, viewer.ground_offset.y),
         }
+    }
+    for (mut transform, mut visibility) in &mut step_platform {
+        *visibility = if viewer.clip == Clip::Step { Visibility::Inherited } else { Visibility::Hidden };
+        transform.translation.z = (STEP_START + STEP_END) * 0.5 - viewer.distance;
     }
     controls.attack = viewer.clip.stroke().and_then(|stroke| {
         (t < 0.44).then(|| {
@@ -434,7 +475,7 @@ pub fn pose_selected_rig(world: &mut World) {
         let rig = template.spawn(world);
         world.insert_resource(StudioRig { character: viewer.character, scale: template.scale, rig });
     }
-    let moving = matches!(viewer.clip, Clip::Walk | Clip::Run | Clip::Turn);
+    let moving = matches!(viewer.clip, Clip::Walk | Clip::Step | Clip::Run | Clip::Turn);
     let cycle = viewer.frame as f32 / viewer.clip.frame_count() as f32;
     let heading = if viewer.clip == Clip::Turn { viewer.turn_heading() } else { 0.0 };
     world.resource_scope(|world, mut state: Mut<StudioRig>| {
@@ -497,6 +538,7 @@ pub fn metrics(
             Clip::Turn => "RUN + TURN",
             Clip::RunJump => "RUN + JUMP",
             Clip::Walk => "WALK",
+            Clip::Step => "STEP UP + DOWN",
             Clip::Idle => "IDLE",
             Clip::Jump => "JUMP",
             Clip::Forehand => "FOREHAND",
@@ -628,11 +670,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn step_preview_places_leading_and_trailing_feet_on_different_levels() {
+        let mut viewer = Viewer::default();
+        viewer.clip = Clip::Step;
+        viewer.distance = 0.6;
+        let pose = crate::character::Pose {
+            motion: voxel_assets::CharacterMotion::default(),
+            stride: 0.0,
+            speed: 0.6,
+            turn: 0.0,
+            breathe: 0.0,
+            step_pitch: 0.0,
+            airborne: false,
+            jump: None,
+            attack: None,
+            dig: None,
+        };
+        let root = Transform::from_xyz(0.0, STUDIO_FLOOR_Y + 0.12, 0.0);
+        let offsets = crate::character::foot_ground_offsets(root, &pose,
+            |point| Some(studio_surface_height(&viewer, point.z)));
+        assert!(offsets[0] < -0.05, "trailing foot should stay on the lower surface");
+        assert!(offsets[1] > 0.05, "leading foot should rise onto the step");
+        assert_eq!(step_surface(0.0), 0.0);
+        assert_eq!(step_surface(1.0), STEP_HEIGHT);
+        assert_eq!(step_surface(3.0), 0.0);
+    }
+
+    #[test]
     fn studio_discovers_clips_from_each_character_capability() {
         let library = SceneLibrary::new();
         for character in library.characters.iter() {
             assert!(Clip::Idle.supports(character));
             assert_eq!(Clip::Walk.supports(character), character.can_locomote);
+            assert_eq!(Clip::Step.supports(character), character.can_locomote
+                && !matches!(character.source, CharacterSource::Skin(_)));
             assert_eq!(Clip::Run.supports(character), character.can_locomote);
             assert_eq!(Clip::Turn.supports(character), character.can_locomote);
             assert_eq!(Clip::Jump.supports(character), character.can_jump);

@@ -476,6 +476,13 @@ pub struct LocalAvatarPreview {
     scene: Option<usize>,
 }
 
+#[derive(Default)]
+pub struct VisualGroundStep {
+    height: Option<f32>,
+    agent: Option<u16>,
+    scene: Option<usize>,
+}
+
 /// Places the player where the simulation has the avatar, between ticks.
 pub fn follow_avatar(
     game: Res<Game>,
@@ -485,6 +492,7 @@ pub fn follow_avatar(
     mut player: Single<&mut Transform, With<Player>>,
     sound: Res<crate::sound::Sound>,
     mut preview: Local<LocalAvatarPreview>,
+    mut ground_step: Local<VisualGroundStep>,
 ) {
     let (Some(current), Some(index)) = (&game.current, game.player()) else { return };
     let a = &current.agents[index as usize];
@@ -503,6 +511,19 @@ pub fn follow_avatar(
     let alpha = if from.distance(to) > 1.5 { 1.0 } else { alpha };
     let mut position = from.lerp(to, alpha);
     position.y = before.avatar.height.to_f32() + (a.avatar.height - before.avatar.height).to_f32() * alpha;
+    let reset_step = ground_step.agent != Some(index)
+        || ground_step.scene != game.scene
+        || from.distance(to) > 1.5;
+    position.y = crate::character::visual_step_height(
+        if reset_step { None } else { ground_step.height },
+        position.y,
+        time.delta_secs(),
+        !a.avatar.flight.airborne
+            && matches!(a.avatar.jump, sim::settlement::avatar::JumpPhase::Grounded),
+    );
+    ground_step.height = Some(position.y);
+    ground_step.agent = Some(index);
+    ground_step.scene = game.scene;
     let mut preview_velocity = None;
     if matches!(game.network, Some(Network::Join(_))) {
         let reset = preview.agent != Some(index)

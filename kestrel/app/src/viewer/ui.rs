@@ -62,6 +62,19 @@ pub fn setup(
         })),
         Transform::from_xyz(0.0, STUDIO_FLOOR_Y - STUDIO_FLOOR_THICKNESS * 0.5, 0.0),
     ));
+    commands.spawn((
+        Stage,
+        StepPlatform,
+        Mesh3d(meshes.add(Cuboid::new(1.5, STEP_HEIGHT, STEP_END - STEP_START))),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::srgb(0.23, 0.37, 0.43),
+            perceptual_roughness: 0.9,
+            ..default()
+        })),
+        Transform::from_xyz(0.0, STUDIO_FLOOR_Y + STEP_HEIGHT * 0.5,
+            (STEP_START + STEP_END) * 0.5),
+        Visibility::Hidden,
+    ));
     for index in -4..4 {
         let base = index as f32 * GRID_SPACING;
         let major = index % 2 == 0;

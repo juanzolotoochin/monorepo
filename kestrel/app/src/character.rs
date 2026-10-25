@@ -98,6 +98,58 @@ pub(crate) fn step_distance_for_speed(base: f32, relative_speed: f32) -> f32 {
     base * (1.0 + 0.20 * running)
 }
 
+/// The two soles sample the surface where the gait places them, independently
+/// of the root's support height. Values are relative to the root, in metres.
+pub(crate) fn foot_ground_offsets(
+    root: Transform,
+    pose: &Pose,
+    mut surface: impl FnMut(Vec3) -> Option<f32>,
+) -> [f32; 2] {
+    let running = ((pose.speed - 1.02) / 0.38).clamp(0.0, 1.0);
+    let stance = stance_fraction(running, true);
+    let step = step_distance_for_speed(pose.motion.step_distance, pose.speed).clamp(0.2, 4.0);
+    [-1.0_f32, 1.0].map(|side| {
+        let phase = (pose.stride + if side > 0.0 { 0.0 } else { std::f32::consts::PI })
+            .rem_euclid(std::f32::consts::TAU);
+        let (forward, _) = foot_path(phase, step, stance, 0.0);
+        // Contact is the higher of toe and heel. The toe clears a rising
+        // ledge before the ankle reaches it; the heel stays on a descending
+        // ledge until it has actually left the top.
+        let heights = [-0.13, 0.13].into_iter().filter_map(|sole_z| {
+            let probe = root.translation
+                + root.rotation * (Vec3::new(side * 0.18, 0.0, forward + sole_z) * root.scale);
+            surface(probe)
+        });
+        heights.reduce(f32::max)
+            .map_or(0.0, |height| ((height - root.translation.y) / root.scale.y.max(0.1))
+                .clamp(-0.28, 0.28))
+    })
+}
+
+/// Ease render height across walkable ledges; jumps and larger changes keep
+/// their simulation height. The returned value never feeds back into physics.
+pub(crate) fn visual_step_height(previous: Option<f32>, target: f32, dt: f32, grounded: bool) -> f32 {
+    let Some(previous) = previous else { return target; };
+    if !grounded || (target - previous).abs() > 0.28 {
+        return target;
+    }
+    previous + (target - previous) * (1.0 - (-12.0 * dt.clamp(0.0, 0.05)).exp())
+}
+
+pub(crate) fn step_body_pitch(pose: &Pose, ground: [f32; 2]) -> f32 {
+    let running = ((pose.speed - 1.02) / 0.38).clamp(0.0, 1.0);
+    let stance = stance_fraction(running, true);
+    let step = step_distance_for_speed(pose.motion.step_distance, pose.speed);
+    let foot_z = [-1.0_f32, 1.0].map(|side| {
+        let phase = (pose.stride + if side > 0.0 { 0.0 } else { std::f32::consts::PI })
+            .rem_euclid(std::f32::consts::TAU);
+        foot_path(phase, step, stance, 0.0).0
+    });
+    if (foot_z[1] - foot_z[0]).abs() < 0.05 { return 0.0; }
+    let difference = (ground[1] - ground[0]).abs();
+    (difference / 0.24).clamp(0.0, 1.0) * 0.08
+}
+
 impl GaitClock {
     pub fn advance(&mut self, traveled: f32, step_distance: f32, grounded: bool) -> u32 {
         let step = step_distance.clamp(0.2, 4.0);
@@ -228,6 +280,7 @@ pub fn animate_character(
         speed,
         turn,
         breathe,
+        step_pitch: 0.0,
         airborne,
         jump: jump_motion(
             flight.as_ref().map_or(JumpPhase::Grounded, |f| f.jump),
@@ -244,6 +297,16 @@ pub fn animate_character(
         pose.airborne = airborne;
         pose.attack = controls.attack;
         pose.dig = None;
+    }
+    let ground = foot_ground_offsets(*player.1, &pose, |point| {
+        if viewer.active {
+            Some(crate::viewer::studio_surface_height(&viewer, point.z))
+        } else {
+            crate::jetpack::height(&library, point)
+        }
+    });
+    if pose.motion.plant_feet && pose.speed > 0.05 && !pose.airborne && pose.jump.is_none() {
+        pose.step_pitch = step_body_pitch(&pose, ground);
     }
     let mut joints = HashMap::new();
     for (entity, part, mut transform, parent) in &mut parts {
@@ -279,13 +342,13 @@ pub fn animate_character(
         && pose.attack.is_none()
         && pose.dig.is_none()
     {
-        for (entity, target) in grounded_foot_targets(&joints, player.0, &pose) {
+        for (entity, target) in grounded_foot_targets(&joints, player.0, &pose, ground) {
             if let Ok((_, _, mut transform, _)) = parts.get_mut(entity) {
                 *transform = target;
             }
         }
         if let Some(contacts) = contacts {
-            for (entity, target) in actor_leg_targets(&joints, player.0, &pose, &contacts) {
+            for (entity, target) in actor_leg_targets(&joints, player.0, &pose, &contacts, ground) {
                 if let Ok((_, _, mut transform, _)) = parts.get_mut(entity) {
                     *transform = target;
                 }
@@ -300,6 +363,7 @@ pub(crate) fn grounded_foot_targets(
     joints: &HashMap<Entity, JointSnapshot>,
     player: Entity,
     pose: &Pose,
+    ground: [f32; 2],
 ) -> Vec<(Entity, Transform)> {
     let mut targets = Vec::new();
     let Some((&body_entity, &(_, _, body, _))) = joints
@@ -334,7 +398,8 @@ pub(crate) fn grounded_foot_targets(
             .rem_euclid(std::f32::consts::TAU);
         let (offset, lift) = foot_path(phase, step, stance, pose.motion.step_lift * (1.0 + 1.2 * running));
         let foot_origin = body_rest_position(joints[&body_entity].1, leg_rest, shin_rest, foot_rest);
-        let target = foot_origin + Vec3::new(0.0, lift, offset);
+        let index = if side < 0.0 { 0 } else { 1 };
+        let target = foot_origin + Vec3::new(0.0, ground[index] + lift, offset);
         let local_target =
             body.rotation.inverse() * (target - body.translation) - leg_rest.translation;
         let upper = shin_rest.translation.length();
@@ -367,6 +432,7 @@ pub(crate) fn actor_leg_targets(
     player: Entity,
     pose: &Pose,
     contacts: &ActorFootContacts,
+    ground: [f32; 2],
 ) -> Vec<(Entity, Transform)> {
     let Some((&body_entity, &(_, body_rest, body, _))) = joints.iter()
         .find(|(_, (kind, _, _, parent))| matches!(kind, PartKind::Body) && *parent == Some(player))
@@ -391,7 +457,7 @@ pub(crate) fn actor_leg_targets(
         let desired_center_z = body_rest.translation.z + leg_rest.translation.z
             + geometry.center_z() + offset;
         let solved = geometry.place(Transform::from_translation(hip),
-            desired_center_z - hip.z - geometry.center_z(), lift);
+            desired_center_z - hip.z - geometry.center_z(), lift + ground[index]);
         let mut leg = leg_rest;
         leg.rotation = body.rotation.inverse() * solved.rotation;
         leg.scale.y = solved.scale.y;
@@ -491,6 +557,8 @@ pub struct Pose {
     /// Smoothed angular response in radians, including a short follow-through.
     pub turn: f32,
     pub breathe: f32,
+    /// Forward balance while the feet occupy different surface heights.
+    pub step_pitch: f32,
     pub airborne: bool,
     pub jump: Option<JumpMotion>,
     pub attack: Option<Attack>,
@@ -734,7 +802,8 @@ impl Pose {
                     } else {
                         0.24 + 0.25 * travel
                     })
-                    * Quat::from_rotation_x(if natural { 0.01 * travel + 0.04 * running } else { 0.06 * travel + 0.18 * running });
+                    * Quat::from_rotation_x(if natural { 0.01 * travel + 0.04 * running } else { 0.06 * travel + 0.18 * running } + self.step_pitch);
+                transform.translation.y -= self.step_pitch * 0.25;
                 if let Some(attack) = self.attack {
                     if attack.motion() == ActionMotion::Sweep {
                         let drive = smooth((attack.age - windup) / (active_end - windup));
@@ -1072,6 +1141,15 @@ mod tests {
     use crate::combat::Attack;
 
     #[test]
+    fn visual_step_height_eases_walkable_ledge_and_snaps_jumps() {
+        let raised = visual_step_height(Some(0.0), 0.24, 1.0 / 60.0, true);
+        assert!(raised > 0.0 && raised < 0.24);
+        let lowered = visual_step_height(Some(0.24), 0.0, 1.0 / 60.0, true);
+        assert!(lowered > 0.0 && lowered < 0.24);
+        assert_eq!(visual_step_height(Some(0.0), 0.8, 1.0 / 60.0, false), 0.8);
+    }
+
+    #[test]
     fn baked_playable_rigs_use_planted_feet_and_world_steps() {
         let library = SceneLibrary::new();
         for pack in &library.scenes {
@@ -1124,7 +1202,7 @@ mod tests {
                                 ..motion
                             },
                             stride: std::f32::consts::TAU * frame as f32 / 60.0,
-                            speed, turn, breathe: 0.0, airborne: false,
+                            speed, turn, breathe: 0.0, step_pitch: 0.0, airborne: false,
                             jump: None, attack: None, dig: None,
                         };
                         let body = pose.place(PartKind::Body, body_rest);
@@ -1137,10 +1215,10 @@ mod tests {
                             (shin_id, (PartKind::Shin(side), shin_rest, shin, Some(leg_id))),
                             (foot_id, (PartKind::Foot(side), foot_rest, foot, Some(shin_id))),
                         ]);
-                        for (entity, target) in grounded_foot_targets(&joints, root, &pose) {
+                        for (entity, target) in grounded_foot_targets(&joints, root, &pose, [0.0; 2]) {
                             joints.get_mut(&entity).unwrap().2 = target;
                         }
-                        for (entity, target) in actor_leg_targets(&joints, root, &pose, &contacts) {
+                        for (entity, target) in actor_leg_targets(&joints, root, &pose, &contacts, [0.0; 2]) {
                             joints.get_mut(&entity).unwrap().2 = target;
                         }
                         let leg_scale = joints[&leg_id].2.scale.y;
@@ -1171,6 +1249,7 @@ mod tests {
             speed: 1.0,
             turn: 0.0,
             breathe: 0.0,
+            step_pitch: 0.0,
             airborne: false,
             jump: None,
             attack: None,
@@ -1215,6 +1294,7 @@ mod tests {
             speed: 1.0,
             turn: 0.0,
             breathe: 0.0,
+            step_pitch: 0.0,
             airborne: false,
             jump: None,
             attack: None,
@@ -1244,6 +1324,7 @@ mod tests {
             speed: 1.4,
             turn: 0.0,
             breathe: 0.0,
+            step_pitch: 0.0,
             airborne: false,
             jump: None,
             attack: None,
@@ -1323,6 +1404,7 @@ mod tests {
             speed: 1.0,
             turn: 0.0,
             breathe: 0.0,
+            step_pitch: 0.0,
             airborne: false,
             jump: None,
             attack: None,
@@ -1379,6 +1461,7 @@ mod tests {
             speed: 1.4,
             turn: 0.0,
             breathe: 0.0,
+            step_pitch: 0.0,
             airborne: false,
             jump: None,
             attack: None,
@@ -1475,6 +1558,7 @@ mod tests {
             speed: 0.5,
             turn: 0.0,
             breathe: 0.0,
+            step_pitch: 0.0,
             airborne: false,
             jump: None,
             attack: None,
@@ -1503,6 +1587,7 @@ mod tests {
             speed: 0.0,
             turn: 0.0,
             breathe: 0.0,
+            step_pitch: 0.0,
             airborne: false,
             jump: None,
             attack: None,
@@ -1542,6 +1627,7 @@ mod tests {
             speed: 1.2,
             turn: 0.25,
             breathe: 0.0,
+            step_pitch: 0.0,
             airborne: false,
             jump: None,
             attack: None,
@@ -1575,6 +1661,7 @@ mod tests {
             speed: 0.8,
             turn: 0.2,
             breathe: 0.0,
+            step_pitch: 0.0,
             airborne: false,
             jump: None,
             attack: None,
@@ -1604,6 +1691,7 @@ mod tests {
             speed: 0.0,
             turn: 0.0,
             breathe: 0.0,
+            step_pitch: 0.0,
             airborne: false,
             jump: None,
             attack: None,
