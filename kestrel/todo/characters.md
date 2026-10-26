@@ -146,20 +146,6 @@
 - **Where:** `kestrel/app/src/hurt.rs`.
 - **Found in:** branch `kestrel-ghoul-followups`.
 
-## Keep a player's health over the Respawn action
-
-- **Status:** open
-- **Why:** the `Respawn` action resets the avatar to a fresh state, and that
-  has always included its health: `health` and `max_health` go to 0. A
-  player who respawns by command in a scene with `player_health` above 0
-  can't be hurt again. A death's respawn (`self_update`) restores health
-  instead. The shared body split kept this as it was.
-- **What to do:** have `respawn` restore `max_health` and fill `health`, as
-  the death respawn does. It is a gameplay change: test it, and check the
-  replay still predicts the command.
-- **Where:** `respawn` in `kestrel/sim/src/settlement/avatar.rs`.
-- **Found in:** branch `kestrel-shared-body`.
-
 ## Give the body a height
 
 - **Status:** open
@@ -190,6 +176,20 @@
 - **Found in:** branch `kestrel-shared-body`.
 
 ## Done
+
+### Keep a player's health over the Respawn action
+
+- **Status:** done (branch `kestrel-shared-body`)
+- **Why:** the `Respawn` action resets the avatar to a fresh state, and that
+  has always included its health: `health` and `max_health` go to 0. A
+  player who respawns by command in a scene with `player_health` above 0
+  can't be hurt again. A death's respawn (`self_update`) restores health
+  instead. The shared body split kept this as it was.
+- **What to do:** have `respawn` restore `max_health` and fill `health`, as
+  the death respawn does. It is a gameplay change: test it, and check the
+  replay still predicts the command.
+- **Where:** `respawn` in `kestrel/sim/src/settlement/avatar.rs`.
+- **Found in:** branch `kestrel-shared-body`.
 
 ### Flash the player's screen or body when it is hurt
 

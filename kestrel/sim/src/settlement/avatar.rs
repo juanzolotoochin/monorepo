@@ -984,17 +984,16 @@ fn drop_transfer(avatar: &mut AvatarState, me: AgentIx, out: &mut ActionMessages
 }
 
 /// Puts the avatar at the spawn point with a fresh state. The player's
-/// owner, name and weapon cooldown stay. So do the body's speed and radius,
-/// but its motion and health start over, as they always did: health and max
-/// health go to 0 (`todo/characters.md`).
+/// owner, name and weapon cooldown stay. So do the body's speed, radius and
+/// max health. Its motion starts over and its health refills, as after a
+/// death.
 fn respawn(body: &mut Body, avatar: &mut AvatarState, spawn: FxVec2, height: Fx) {
     body.position = spawn;
     body.heading = Fx::PI;
     body.route.clear();
     body.velocity = FxVec2::ZERO;
     body.push = FxVec2::ZERO;
-    body.health = 0;
-    body.max_health = 0;
+    body.health = body.max_health;
     *avatar = AvatarState {
         owner: avatar.owner,
         name: std::mem::take(&mut avatar.name),

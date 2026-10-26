@@ -988,6 +988,43 @@ fn dying_releases_a_transfer_reservation() {
     settlement.validate().unwrap();
 }
 
+/// The Respawn action refills health and keeps the player hurtable.
+#[test]
+fn respawning_refills_health_and_keeps_the_player_hurtable() {
+    let mut config = scenario();
+    config.agents = vec![player()];
+    config.links.clear();
+    config.weapons = vec![Weapon::Laser];
+    config.player_health = 2;
+    let world = World::new_settlement(9, &test_content(), &config, &[]).unwrap();
+    let mut sim = Simulation::from_world(world, 2);
+    let spawn = sim.world().settlement().unwrap().agents[0].body.position;
+    sim.world_mut().settlement_mut().spawn = spawn;
+    let (host, guest) = (PlayerId(0), PlayerId(1));
+    sim.step(&[Command { player: guest, kind: CommandKind::Join }]);
+    let settlement = sim.world().settlement().unwrap();
+    let (shooter, target) = (settlement.avatar_of(host).unwrap(), settlement.avatar_of(guest).unwrap());
+    let start = settlement.agents[shooter as usize].body.position;
+    let to = start + FxVec2::new(Fx::ZERO, Fx::from_int(3));
+    let shoot = |sim: &mut Simulation, target_at: FxVec2| {
+        sim.world_mut().settlement_mut().agents[target as usize].body.position = target_at;
+        sim.step(&[Command { player: host, kind: CommandKind::Attack {
+            agent: shooter, weapon: Weapon::Laser,
+            aim: FxVec2::new(Fx::ZERO, Fx::ONE), muzzle: [Fx::ZERO, fx(0.8), fx(0.25)],
+        } }]);
+        for _ in 0..ms(1500) { sim.step(&[]); }
+    };
+
+    shoot(&mut sim, to);
+    assert_eq!(sim.world().settlement().unwrap().agents[target as usize].body.health, 1, "hurt");
+    sim.step(&[Command { player: guest, kind: CommandKind::Respawn { agent: target } }]);
+    let body = &sim.world().settlement().unwrap().agents[target as usize].body;
+    assert_eq!((body.health, body.max_health), (2, 2), "the respawn refills health");
+
+    shoot(&mut sim, to);
+    assert_eq!(sim.world().settlement().unwrap().agents[target as usize].body.health, 1, "still hurtable");
+}
+
 /// A depot transfer walking to its dock is an accepted job: releasing
 /// direct control keeps the walk and the transfer.
 #[test]
