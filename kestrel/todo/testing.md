@@ -14,9 +14,34 @@
 - **Found in:** the full test run for PR #111
   (https://app.buildbuddy.io/invocation/b95f8bf3-e295-4ed7-91a4-b2f8bef0b839).
 
-## App builds from Windows fail on the libxcb1 genrule
+## Clean up after the Debian 12 libudev switch
 
 - **Status:** open
+- **Why:** the app tests now link and run against Debian 12's `libudev1`
+  (pinned `http_archive`s in `MODULE.bazel`), but `libudev1` is still in
+  the `debian13` apt package list, unused. Real gamepad input on Linux and
+  the Steam Deck wasn't checked after the change; it should still use the
+  system libudev, since the deploy ships the binary without runfiles.
+- **What to do:** remove `libudev1` from the `debian13` list and regenerate
+  the apt lock facts in `MODULE.bazel.lock`. Check a controller on the Deck.
+- **Where:** `MODULE.bazel`, `MODULE.bazel.lock`, `third_party/udev/BUILD.bazel`.
+- **Found in:** commit `be66db0` on branch `kestrel-ability-prediction`.
+
+## Done
+
+### App builds from Windows fail on the libxcb1 genrule
+
+- **Status:** done (branch `kestrel-remote-shell`). `.bazelrc` now has
+  `build:remote --shell_executable=/bin/bash`, and `tools/network-lab.ps1`
+  no longer passes the flag. Every `//kestrel/...` test passes from
+  Windows without it
+  (https://app.buildbuddy.io/invocation/d1b1250e-b14f-42fa-adec-d891da2f600e),
+  and so does the lab's `bazel run --script_path` build of the Windows game
+  (https://app.buildbuddy.io/invocation/ec37d623-d9e4-4981-ad27-82e9cadf3a29).
+  Most actions hit the cache, so the flag in `.bazelrc` gives the same
+  action keys the ad hoc one did. A genrule forced to run locally under
+  `--config=remote` on Windows would now get `/bin/bash` too; neither the
+  Kestrel tests nor the game build ran into one.
 - **Why:** with `--config=remote`, building any `//kestrel/app` target
   from Windows runs the `rules_distroless` genrule that unpacks Debian 13's
   `libxcb1` on a Linux worker, but with this machine's shell path, so it
@@ -36,21 +61,6 @@
   (`debian13` packages).
 - **Found in:** eight-player stage 1
   (https://app.buildbuddy.io/invocation/271ae3f0-9a83-4152-a6ab-52d188bb1a6f).
-
-## Clean up after the Debian 12 libudev switch
-
-- **Status:** open
-- **Why:** the app tests now link and run against Debian 12's `libudev1`
-  (pinned `http_archive`s in `MODULE.bazel`), but `libudev1` is still in
-  the `debian13` apt package list, unused. Real gamepad input on Linux and
-  the Steam Deck wasn't checked after the change; it should still use the
-  system libudev, since the deploy ships the binary without runfiles.
-- **What to do:** remove `libudev1` from the `debian13` list and regenerate
-  the apt lock facts in `MODULE.bazel.lock`. Check a controller on the Deck.
-- **Where:** `MODULE.bazel`, `MODULE.bazel.lock`, `third_party/udev/BUILD.bazel`.
-- **Found in:** commit `be66db0` on branch `kestrel-ability-prediction`.
-
-## Done
 
 ### `two_players_walk_around_together` sometimes ends a tick apart
 

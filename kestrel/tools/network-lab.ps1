@@ -89,13 +89,12 @@ if ($Build) {
     if ($GamePath) { Fail "Pass -Build or -GamePath, not both." }
     # `bazel run` builds for this machine (see .bazelrc); a plain remote
     # `bazel build` would produce a Linux binary. --script_path makes `run`
-    # build and stop without starting the game. --shell_executable=/bin/bash
-    # keeps Windows Bazel from handing MSYS bash to remote Linux genrules.
+    # build and stop without starting the game.
     $script = Join-Path ([IO.Path]::GetTempPath()) "kestrel-network-lab-build.bat"
     Write-Host "Building the game (no tests)..."
     Push-Location $RepoRoot
     try {
-        & bazel run --config=remote --shell_executable=/bin/bash "--script_path=$script" //kestrel/app:demo
+        & bazel run --config=remote "--script_path=$script" //kestrel/app:demo
         $code = $LASTEXITCODE
     } finally {
         Pop-Location
