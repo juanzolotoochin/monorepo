@@ -35,8 +35,8 @@ Scene(
         (kind: Box, position: (16.7, 1.9, -11.3), size: (0.72, 3.8, 0.72), repeat: (1, 1, 4), spacing: (0.0, 0.0, 7.5), material: "stone"),
         (kind: Box, position: (-16.8, 2.9, 0.0), size: (0.35, 0.15, 28.0), material: "trim"),
         (kind: Box, position: (16.8, 2.9, 0.0), size: (0.35, 0.15, 28.0), material: "trim"),
-        (kind: Box, position: (-8.25, 3.7, -7.8), size: (16.5, 0.22, 0.32), repeat: (1, 1, 3), spacing: (0.0, 0.0, 7.8), material: "metal"),
-        (kind: Box, position: (8.25, 3.7, -7.8), size: (16.5, 0.22, 0.32), repeat: (1, 1, 3), spacing: (0.0, 0.0, 7.8), material: "metal"),
+        (kind: Box, position: (-8.25, 3.7, 0.0), size: (16.5, 0.22, 0.32), repeat: (1, 1, 2), spacing: (0.0, 0.0, 7.8), material: "metal"),
+        (kind: Box, position: (8.25, 3.7, 0.0), size: (16.5, 0.22, 0.32), repeat: (1, 1, 2), spacing: (0.0, 0.0, 7.8), material: "metal"),
         (kind: Box, position: (-8.0, 3.45, -6.0), size: (0.58, 0.18, 0.58), repeat: (1, 1, 2), spacing: (0.0, 0.0, 12.0), material: "lamp",
             light: Some((intensity: 17000.0, range: 12.0, radius: 0.35, shadows: false))),
         (kind: Box, position: (8.0, 3.45, -6.0), size: (0.58, 0.18, 0.58), repeat: (1, 1, 2), spacing: (0.0, 0.0, 12.0), material: "lamp",
@@ -45,12 +45,27 @@ Scene(
         // The proscenium, backdrop and side service doors anchor the stage.
         (kind: Box, position: (-10.2, 1.9, -10.5), size: (0.85, 3.8, 0.85), material: "stone", solid_radius: Some(0.65)),
         (kind: Box, position: (10.2, 1.9, -10.5), size: (0.85, 3.8, 0.85), material: "stone", solid_radius: Some(0.65)),
-        (kind: Box, position: (0.0, 3.55, -10.5), size: (21.2, 0.62, 0.76), material: "trim"),
+        // Keep the crosspiece against the back wall: at the stage lip it
+        // obscured the piano from the fight camera.
+        (kind: Box, position: (0.0, 3.85, -14.8), size: (21.2, 0.40, 0.38), material: "trim"),
+        (kind: Box, position: (-3.2, 3.35, -14.65), size: (0.48, 0.18, 0.34), material: "lamp",
+            light: Some((intensity: 12000.0, range: 8.0, radius: 0.4, shadows: false))),
+        (kind: Box, position: (3.2, 3.35, -14.65), size: (0.48, 0.18, 0.34), material: "lamp",
+            light: Some((intensity: 12000.0, range: 8.0, radius: 0.4, shadows: false))),
         (kind: Box, position: (0.0, 1.75, -15.0), size: (20.0, 3.5, 0.18), material: "velvet"),
         (kind: Box, position: (-12.2, 1.65, -15.0), size: (2.2, 3.3, 0.22), material: "metal"),
         (kind: Box, position: (12.2, 1.65, -15.0), size: (2.2, 3.3, 0.22), material: "metal"),
         (kind: Box, position: (-12.2, 2.75, -14.8), size: (1.6, 0.07, 0.08), material: "arc"),
         (kind: Box, position: (12.2, 2.75, -14.8), size: (1.6, 0.07, 0.08), material: "arc"),
+
+        // Two permanent bronze acoustic sculptures identify the entrance.
+        // Their stone plinths block movement but do not take weapon damage.
+        (kind: Cylinder, position: (-10.8, 0.40, 9.0), size: (1.45, 0.80, 1.45), material: "stone", solid_radius: Some(0.78)),
+        (kind: Cylinder, position: (10.8, 0.40, 9.0), size: (1.45, 0.80, 1.45), material: "stone", solid_radius: Some(0.78)),
+        (kind: Cone, position: (-10.8, 1.68, 9.0), size: (1.05, 1.75, 1.05), material: "trim"),
+        (kind: Cone, position: (10.8, 1.68, 9.0), size: (1.05, 1.75, 1.05), material: "trim"),
+        (kind: RingFloor, position: (-10.8, 0.84, 9.0), size: (1.0, 0.10, 1.0), material: "lamp"),
+        (kind: RingFloor, position: (10.8, 0.84, 9.0), size: (1.0, 0.10, 1.0), material: "lamp"),
 
         // Brass floor markers lead down both flanking routes.
         (kind: Box, position: (-11.7, 0.05, -8.0), size: (0.12, 0.10, 1.4), repeat: (1, 1, 7), spacing: (0.0, 0.0, 3.5), material: "trim"),
@@ -61,12 +76,14 @@ Scene(
     // Health and piece counts give each family a different failure rhythm.
     destructibles: [
         (id: Some("mixing-desk"), position: (0.0, 0.65, -0.5), size: (3.4, 1.3, 1.45),
-            material: "metal", trim: Some("arc"), form: Console, pieces: (2, 1), health: 4, break_style: Topple),
+            material: "metal", trim: Some("arc"), form: Console, pieces: (2, 1), health: 4,
+            repairable: true, hazard_material: Some("arc"), break_style: Topple),
         (id: Some("west-entry-desk"), position: (-5.0, 0.64, 8.0), size: (2.6, 1.28, 1.3),
             material: "metal", trim: Some("trim"), form: Console, pieces: (2, 1), health: 2,
             repairable: true, hazard_material: Some("arc"), break_style: Topple),
         (id: Some("east-entry-desk"), position: (5.0, 0.64, 8.0), size: (2.6, 1.28, 1.3),
-            material: "metal", trim: Some("arc"), form: Console, pieces: (2, 1), health: 2, break_style: Shatter),
+            material: "metal", trim: Some("arc"), form: Console, pieces: (2, 1), health: 2,
+            repairable: true, hazard_material: Some("arc"), break_style: Shatter),
         (position: (-7.2, 0.55, 4.2), size: (3.6, 1.1, 1.3), material: "wood", trim: Some("velvet"), form: Bench, pieces: (3, 1), health: 2, break_style: Topple),
         (position: (7.2, 0.55, 4.2), size: (3.6, 1.1, 1.3), material: "wood", trim: Some("velvet"), form: Bench, pieces: (3, 1), health: 2, break_style: Topple),
         (position: (-7.2, 0.55, -1.6), size: (3.6, 1.1, 1.3), material: "wood", trim: Some("velvet"), form: Bench, pieces: (3, 1), health: 2, break_style: Topple),
@@ -86,7 +103,8 @@ Scene(
         (position: (14.4, 0.82, 3.0), size: (1.45, 1.64, 1.45), material: "metal", trim: Some("arc"),
             form: Capacitor, pieces: (1, 1), health: 3, break_style: Shatter, repairable: true, hazard_material: Some("arc")),
         (id: Some("stage-piano"), position: (0.0, 1.0, -12.75), size: (2.8, 2.0, 0.55),
-            material: "wood", trim: Some("trim"), form: Piano, pieces: (3, 1), health: 3, break_style: Topple),
+            material: "wood", trim: Some("trim"), form: Piano, pieces: (3, 1), health: 3,
+            repairable: true, break_style: Topple),
         (position: (-5.4, 0.55, -12.3), size: (2.2, 1.1, 1.3), material: "wood", trim: Some("velvet"),
             form: Bench, pieces: (2, 1), health: 2, break_style: Topple),
         (position: (5.4, 0.55, -12.3), size: (2.2, 1.1, 1.3), material: "wood", trim: Some("velvet"),

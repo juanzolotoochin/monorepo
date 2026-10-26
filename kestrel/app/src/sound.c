@@ -187,14 +187,19 @@ static void synth_frames(audio_state *state, float *out, ma_uint32 frames) {
             if (!v->alive) continue;
             float t=(float)v->frame++/48000.0f;
             float hz=440.0f*powf(2.0f,((float)v->note-69.0f)/12.0f);
-            hz *= 1.0f + (v->note & 1 ? 1.0f : -1.0f) * v->damage * 0.018f;
+            float wobble = v->damage * (0.008f*sinf(6.2831853f*7.0f*t)
+                + 0.003f*sinf(6.2831853f*11.3f*t));
+            hz *= 1.0f + (v->note & 1 ? 1.0f : -1.0f) * v->damage * 0.032f + wobble;
             float attack=fminf(1.0f,t*250.0f);
             float decay=0.55f*expf(-1.8f*t)+0.45f*expf(-7.0f*t);
             float string =
                 (0.16f*sinf(6.2831853f*hz*t)+0.058f*sinf(6.2831853f*2.0f*hz*t)
                 +0.019f*sinf(6.2831853f*3.0f*hz*t));
-            float crackle = v->damage * 0.012f * noise(state) * expf(-5.0f*t);
-            value+=v->velocity*v->release*attack*decay*(string + crackle);
+            // A loose, damaged string beats against its frame and a broken
+            // contact adds a sustained rasp. Both worsen with damage.
+            float rasp = v->damage * (0.035f*noise(state)
+                + 0.026f*sinf(6.2831853f*hz*1.37f*t)) * expf(-0.8f*t);
+            value+=v->velocity*v->release*attack*decay*(string + rasp);
             if (v->release<1.0f) v->release*=0.99975f;
             if (v->release<0.001f || t>5.0f) v->alive=0;
         }

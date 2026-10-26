@@ -112,6 +112,8 @@ pub enum CommandKind {
     ReleaseDirectControl { agent: u16 },
     /// Holds or releases repair on a nearby cover asset.
     RepairCover { agent: u16, asset: Option<u16> },
+    /// Press or release a piano key. Any input device can issue this action.
+    PlayPiano { agent: u16, piano: u16, pitch: u8, velocity: u8 },
 }
 
 impl CommandKind {
@@ -130,6 +132,7 @@ impl CommandKind {
             | CommandKind::DigDown { agent }
             | CommandKind::ReleaseDirectControl { agent }
             | CommandKind::RepairCover { agent, .. }
+            | CommandKind::PlayPiano { agent, .. }
             | CommandKind::Pile { agent, .. } => Some(agent),
             _ => None,
         }
@@ -487,6 +490,11 @@ impl World {
                             a.avatar.repair = asset.filter(|&asset| self.terrain.destructibles.iter()
                                 .any(|piece| piece.asset == asset && piece.repairable && piece.health < piece.max_health));
                         }
+                    }
+                }
+                CommandKind::PlayPiano { agent, piano, pitch, velocity } => {
+                    if let Some(s) = &mut self.settlement {
+                        s.play_piano(agent as usize, piano, pitch, velocity);
                     }
                 }
                 CommandKind::Pile { agent, action, pace, approach } => {

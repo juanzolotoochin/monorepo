@@ -653,6 +653,7 @@ impl Settlement {
     /// same turn, so a haul accepted or rejected just before still decides.
     /// Unlike `move_avatar(Stop)` this never cancels a pile job.
     pub fn release_direct_control(&mut self, agent: usize) {
+        self.piano_notes.retain(|note| note.agent as usize != agent);
         let hauling = self.piles.as_ref().is_some_and(|lab| lab.hauler(agent as AgentIx).is_some_and(|h| h.job.is_some()));
         let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
         a.avatar.flight.requested = false;

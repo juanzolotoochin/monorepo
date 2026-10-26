@@ -387,6 +387,7 @@ fn scene_setup(library: &SceneLibrary, index: usize, cache: &crate::assets::Mode
             repairable: piece.repairable,
             repair_progress: 0,
         }).collect(),
+        pianos: scene.pianos.iter().map(|piano| FxVec2::new(q(piano.position[0]), q(piano.position[2]))).collect(),
         doors: found.doors.iter().map(disc).collect(),
         surfaces,
         platforms_only,

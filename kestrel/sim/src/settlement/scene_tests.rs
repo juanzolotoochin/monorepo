@@ -101,6 +101,54 @@ fn base() -> SceneSetup {
     SceneSetup { player: "exosuit".into(), ..SceneSetup::default() }
 }
 
+#[test]
+fn piano_notes_follow_owned_commands_and_release_out_of_reach() {
+    let setup = SceneSetup {
+        extent: fx(8.0),
+        spawn: [Fx::ZERO; 3],
+        pianos: vec![FxVec2::ZERO],
+        ..base()
+    };
+    let mut scene = Scene::new(setup);
+    let agent = scene.agent();
+    let note = CommandKind::PlayPiano { agent, piano: 0, pitch: 60, velocity: 100 };
+    scene.sim.step(&[Command { player: PlayerId(1), kind: note.clone() }]);
+    assert!(scene.s().piano_notes.is_empty(), "other players cannot drive this avatar");
+    scene.command(note);
+    assert_eq!(scene.s().piano_notes.len(), 1);
+    assert_eq!(scene.s().piano_notes[0].pitch, 60);
+    let serial = scene.s().piano_notes[0].serial;
+    scene.command(CommandKind::PlayPiano { agent, piano: 0, pitch: 60, velocity: 90 });
+    assert!(scene.s().piano_notes[0].serial > serial, "repeat presses retrigger audio");
+    scene.command(CommandKind::PlayPiano { agent, piano: 0, pitch: 60, velocity: 0 });
+    assert!(scene.s().piano_notes.is_empty());
+    scene.command(CommandKind::PlayPiano { agent, piano: 0, pitch: 60, velocity: 100 });
+    scene.walk(4.0, 0.0);
+    assert!(scene.s().piano_notes.is_empty(), "walking away releases held notes for every peer");
+    scene.command(CommandKind::PlayPiano { agent, piano: 0, pitch: 60, velocity: 100 });
+    assert!(scene.s().piano_notes.is_empty(), "distant note commands are rejected");
+}
+
+#[test]
+fn two_players_piano_notes_share_one_world_state() {
+    let mut scene = Scene::new(SceneSetup {
+        extent: fx(8.0), spawn: [Fx::ZERO; 3], pianos: vec![FxVec2::ZERO], ..base()
+    });
+    let guest = PlayerId(1);
+    scene.sim.step(&[Command { player: guest, kind: CommandKind::Join }]);
+    let guest_agent = scene.s().avatar_of(guest).unwrap();
+    let host_agent = scene.agent();
+    scene.command(CommandKind::PlayPiano { agent: host_agent, piano: 0, pitch: 60, velocity: 100 });
+    scene.sim.step(&[Command { player: guest,
+        kind: CommandKind::PlayPiano { agent: guest_agent, piano: 0, pitch: 64, velocity: 90 } }]);
+    assert_eq!(scene.s().piano_notes.len(), 2);
+    assert!(scene.s().piano_notes.iter().any(|note| note.pitch == 60 && note.agent == host_agent));
+    assert!(scene.s().piano_notes.iter().any(|note| note.pitch == 64 && note.agent == guest_agent));
+    scene.command(CommandKind::ReleaseDirectControl { agent: host_agent });
+    assert_eq!(scene.s().piano_notes.len(), 1);
+    assert_eq!(scene.s().piano_notes[0].pitch, 64);
+}
+
 /// The jetpack lab's platforms; everything else is a drop.
 fn jetpack_lab() -> SceneSetup {
     let platform = |min: (f64, f64), max: (f64, f64), height: f64| Surface { min: v(min.0, min.1), max: v(max.0, max.1), height: fx(height) };

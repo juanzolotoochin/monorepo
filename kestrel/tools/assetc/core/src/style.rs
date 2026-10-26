@@ -659,22 +659,39 @@ pub fn compile_destructibles(style: &StyleProfile, covers: &[DestructibleCover])
                         ..body.clone()
                     };
                     let mut base_shapes = vec![base];
-                    for x in [-0.32, 0.32] {
-                        for z in [-0.32, 0.32] {
-                            base_shapes.push(VoxelShape { kind: ShapeKind::Cone,
-                                position: [center[0] + x * cell[0], ground + 0.25, center[2] + z * cell[2]],
-                                size: [cell[0] * 0.24, 0.30, cell[2] * 0.24],
-                                material: cover.material.clone(), ..body.clone() });
+                    if cover.form == CoverForm::Piano {
+                        // A wrecked instrument leaves its timber frame and
+                        // brass string pins, rather than electrical spikes.
+                        for x in [-0.42, 0.42] {
+                            base_shapes.push(VoxelShape { kind: ShapeKind::Box,
+                                position: [center[0] + x * cell[0], ground + 0.22, center[2]],
+                                size: [cell[0] * 0.10, 0.30, cell[2] * 0.90],
+                                ..body.clone() });
                         }
+                        for x in [-0.27, 0.0, 0.27] {
+                            base_shapes.push(VoxelShape { kind: ShapeKind::Box,
+                                position: [center[0] + x * cell[0], ground + 0.20, center[2] + cell[2] * 0.28],
+                                size: [cell[0] * 0.07, 0.12, cell[2] * 0.12],
+                                material: conductor.clone(), ..body.clone() });
+                        }
+                    } else {
+                        for x in [-0.32, 0.32] {
+                            for z in [-0.32, 0.32] {
+                                base_shapes.push(VoxelShape { kind: ShapeKind::Cone,
+                                    position: [center[0] + x * cell[0], ground + 0.25, center[2] + z * cell[2]],
+                                    size: [cell[0] * 0.24, 0.30, cell[2] * 0.24],
+                                    material: cover.material.clone(), ..body.clone() });
+                            }
+                        }
+                        base_shapes.push(VoxelShape { kind: ShapeKind::RingFloor,
+                            position: [center[0], ground + 0.20, center[2]],
+                            size: [cell[0] * 0.72, 0.055, cell[2] * 0.72],
+                            material: conductor.clone(), ..body.clone() });
+                        base_shapes.push(VoxelShape { kind: ShapeKind::Cylinder,
+                            position: [center[0], ground + 0.19, center[2]],
+                            size: [cell[0] * 0.22, 0.11, cell[2] * 0.22],
+                            material: conductor, ..body.clone() });
                     }
-                    base_shapes.push(VoxelShape { kind: ShapeKind::RingFloor,
-                        position: [center[0], ground + 0.20, center[2]],
-                        size: [cell[0] * 0.72, 0.055, cell[2] * 0.72],
-                        material: conductor.clone(), ..body.clone() });
-                    base_shapes.push(VoxelShape { kind: ShapeKind::Cylinder,
-                        position: [center[0], ground + 0.19, center[2]],
-                        size: [cell[0] * 0.22, 0.11, cell[2] * 0.22],
-                        material: conductor, ..body.clone() });
                     compile_environment(&fine, &base_shapes)?.meshes
                 } else { Vec::new() };
                 // The laser stops at this disc. Match the visible plinth or

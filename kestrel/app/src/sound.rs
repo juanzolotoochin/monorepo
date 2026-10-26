@@ -347,14 +347,21 @@ mod tests {
     #[test]
     fn damaged_piano_string_changes_timbre_and_remains_audible() {
         let mut healthy = vec![0.0_f32; 9600];
+        let mut worn = healthy.clone();
         let mut damaged = healthy.clone();
         unsafe {
             kestrel_audio_synthesize_piano(69, 100, 0, healthy.as_mut_ptr(), 4800);
+            kestrel_audio_synthesize_piano(69, 100, 1, worn.as_mut_ptr(), 4800);
             kestrel_audio_synthesize_piano(69, 100, 2, damaged.as_mut_ptr(), 4800);
         }
         assert!(healthy.iter().any(|s| s.abs() > 0.01));
         assert!(damaged.iter().any(|s| s.abs() > 0.01));
         assert_ne!(healthy, damaged);
+        let difference = |samples: &[f32]| healthy.iter().zip(samples)
+            .map(|(clean, sample)| (clean - sample).abs()).sum::<f32>();
+        assert!(difference(&worn) > 100.0, "a damaged string should sound clearly different");
+        assert!(difference(&damaged) > difference(&worn) * 1.1,
+            "further damage should audibly increase distortion");
         assert!(damaged.iter().all(|s| s.is_finite() && s.abs() < 1.0));
     }
 
