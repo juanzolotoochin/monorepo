@@ -1,0 +1,55 @@
+--- a/tools/rust_analyzer/bin/flycheck.rs
++++ b/tools/rust_analyzer/bin/flycheck.rs
+@@ -128,6 +128,7 @@
+         .arg("--@rules_rust//rust/settings:error_format=json")
+         .arg("--@rules_rust//rust/settings:rustc_output_diagnostics=true")
+         .arg(format!("--output_groups=+{}", bep::RUSTC_OUTPUT_GROUP))
+         .arg("--keep_going")
++        .arg("--nobuild_event_json_file_path_conversion")
+         .arg(format!("--build_event_json_file={bep_path}"));
+     if user.clippy {
+@@ -468,6 +469,7 @@
+ 
+     // Generate a label that preserves the package-relative file path.
+     let pattern = source_file_label(&package, file_rel)?;
++    let package = package.as_str().replace('\\', "/");
+     Ok(format!("attr(srcs, {pattern:?}, //{package}:*)"))
+ }
+ 
+@@ -503,6 +505,8 @@
+     let file_in_package = file_rel
+         .strip_prefix(package)
+         .with_context(|| format!("file {file_rel} is not under Bazel package //{package}"))?;
++    let package = package.as_str().replace('\\', "/");
++    let file_in_package = file_in_package.as_str().replace('\\', "/");
+     Ok(format!("//{package}:{file_in_package}"))
+ }
+ 
+@@ -574,6 +578,27 @@
+         assert_eq!(
+             query_string_for(&workspace, &workspace.join(&rust_src_path)).unwrap(),
+             r#"attr(srcs, "//example/library:src/main.rs", //example/library:*)"#
++        );
++    }
++
++
++    #[cfg(windows)]
++    #[test]
++    fn windows_module_query_uses_forward_slashes() {
++        let workspace = make_workspace(
++            "windows_module_query",
++            &[
++                ("MODULE.bazel", ""),
++                ("game/app/BUILD.bazel", "package()"),
++                ("game/app/src/flow.rs", ""),
++            ],
++        );
++        let saved_file = Utf8PathBuf::from(
++            workspace.join("game/app/src/flow.rs").as_str().replace('/', "\\"),
++        );
++        assert_eq!(
++            query_string_for(&workspace, &saved_file).unwrap(),
++            r#"attr(srcs, "//game/app:src/flow.rs", //game/app:*)"#
+         );
+     }
+ 

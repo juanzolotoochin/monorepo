@@ -1,0 +1,24 @@
+"""Read-only configured-target export for the personal Kestrel editor cache."""
+
+def format(target):
+    ps = providers(target) or {}
+    keys = [k for k in ps if k.endswith("%CrateInfo")]
+    if not keys:
+        return ""
+    c = ps[keys[0]]
+    return json.encode({
+        "label": str(target.label),
+        "owner": str(c.owner),
+        "name": c.name,
+        "root": c.root.path,
+        "type": c.type,
+        "edition": c.edition,
+        "is_test": c.is_test,
+        "cfgs": c.cfgs,
+        "env": c.rustc_env,
+        "srcs": [f.path for f in c.srcs.to_list()],
+        "compile_data": [f.path for f in c.compile_data.to_list()],
+        "aliases": {str(t.label): v for t, v in c.aliases.items()},
+        "deps": [str(d.crate_info.owner) for d in c.deps.to_list() if d.crate_info],
+        "proc_macro_deps": [str(d.crate_info.owner) for d in c.proc_macro_deps.to_list() if d.crate_info],
+    })
