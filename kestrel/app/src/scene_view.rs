@@ -69,6 +69,7 @@ impl Service for SceneView {
             world.resource_mut::<crate::gameplay::Controls>().weapon = weapon;
         }
         crate::style::apply(world, &pack, false);
+        crate::piano::spawn(world, &pack.scene);
         // The built-in deck shows only where the scene brings no ground of
         // its own: terrain, an environment, or ground to dig.
         let own_ground = pack.scene.terrain.is_some()
@@ -82,6 +83,7 @@ impl Service for SceneView {
     }
 
     fn shutdown(self, world: &mut World) {
+        crate::piano::release(world);
         world.resource_mut::<crate::effects::CoverContacts>().clear();
         crate::destruction::release_materials(world);
         crate::assets::release_scene(world);

@@ -18,8 +18,11 @@ typedef struct { int kind; unsigned int frame; int alive; float pitch; float fil
 static ma_device device;
 static ma_context context;
 static _Atomic unsigned int pending;
+static _Atomic unsigned char piano_keys[128];
+typedef struct { int note; int frame; float velocity; float release; int alive; } piano_voice;
 typedef struct {
     voice voices[12];
+    piano_voice piano[16];
     unsigned int noise_seed;
     float early_reflections[4096];
     unsigned int reflection_cursor;
@@ -42,6 +45,11 @@ static void play_voice(audio_state *state, int kind) {
 }
 static float tone(float frequency, float t, float decay) {
     return sinf(6.2831853f * frequency * t) * expf(-decay * t);
+}
+static void piano_on(audio_state *state, int note, unsigned char velocity) {
+    int slot = 0;
+    for (int i=0;i<16;++i) if (!state->piano[i].alive) {slot=i;break;}
+    state->piano[slot]=(piano_voice){note,0,(float)velocity/127.0f,1.0f,1};
 }
 static void synth_frames(audio_state *state, float *out, ma_uint32 frames) {
     for (ma_uint32 frame = 0; frame < frames; ++frame) {
@@ -174,6 +182,19 @@ static void synth_frames(audio_state *state, float *out, ma_uint32 frames) {
             }
             value += sample;
         }
+        for (int i=0;i<16;++i) {
+            piano_voice *v=&state->piano[i];
+            if (!v->alive) continue;
+            float t=(float)v->frame++/48000.0f;
+            float hz=440.0f*powf(2.0f,((float)v->note-69.0f)/12.0f);
+            float attack=fminf(1.0f,t*250.0f);
+            float decay=0.55f*expf(-1.8f*t)+0.45f*expf(-7.0f*t);
+            value+=v->velocity*v->release*attack*decay*
+                (0.16f*sinf(6.2831853f*hz*t)+0.058f*sinf(6.2831853f*2.0f*hz*t)
+                +0.019f*sinf(6.2831853f*3.0f*hz*t));
+            if (v->release<1.0f) v->release*=0.99975f;
+            if (v->release<0.001f || t>5.0f) v->alive=0;
+        }
         // Short asymmetric room reflections give impacts space without washing out attacks.
         unsigned int cursor = state->reflection_cursor++ & 4095u;
         float left = state->early_reflections[(cursor - 613u) & 4095u];
@@ -187,6 +208,14 @@ static void render(ma_device *d,void *output,const void *input,ma_uint32 frames)
     (void)d;(void)input;
     unsigned int events=atomic_exchange_explicit(&pending,0,memory_order_relaxed);
     for (int kind=0;kind<CUE_COUNT;++kind) if (events & (1u<<kind)) play_voice(&playback,kind);
+    for (int note=0;note<128;++note) {
+        unsigned char change=atomic_exchange_explicit(&piano_keys[note],0,memory_order_relaxed);
+        if (change==0) continue;
+        if (change==1) {
+            for (int i=0;i<16;++i) if (playback.piano[i].alive && playback.piano[i].note==note)
+                playback.piano[i].release=0.999f;
+        } else piano_on(&playback,note,change-1);
+    }
     synth_frames(&playback,output,frames);
 }
 typedef struct { uint64_t sample; int kind; } audio_event;
@@ -220,6 +249,10 @@ int kestrel_audio_start(void) {
 }
 void kestrel_audio_play(int cue) {
     if (cue >= 0 && cue < CUE_COUNT) atomic_fetch_or_explicit(&pending, 1u << cue, memory_order_relaxed);
+}
+void kestrel_audio_note(int note,int velocity) {
+    if (note>=0 && note<128 && velocity>=0 && velocity<=127)
+        atomic_store_explicit(&piano_keys[note],(unsigned char)(velocity+1),memory_order_relaxed);
 }
 void kestrel_audio_stop(void) {
     if (!active) return;

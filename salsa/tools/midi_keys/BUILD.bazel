@@ -144,6 +144,7 @@ cc_library(
     srcs = ["src/native.c"],
     target_compatible_with = ["@platforms//os:linux"],
     deps = ["//third_party/alsa"],
+    visibility = ["//kestrel/app:__pkg__"],
 )
 
 rust_test(
