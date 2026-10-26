@@ -730,13 +730,7 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
                 out.transfer_stock.push(TransferStock { agent: me, depot, item, units, deposit, change: StockChange::Reserve });
             }
         }
-        Action::CancelTransfer => {
-            // A cancelled job releases what it hadn't moved yet.
-            if let Some(job) = a.avatar.job.take() {
-                let ManualJob { depot, item, remaining, deposit, .. } = job;
-                out.transfer_stock.push(TransferStock { agent: me, depot, item, units: remaining, deposit, change: StockChange::Release });
-            }
-        }
+        Action::CancelTransfer => drop_transfer(a, me, out),
         Action::RepairCover(asset) => {
             a.avatar.repair = asset.filter(|&asset| {
                 view.terrain.destructibles.iter().any(|piece| piece.asset == asset && piece.repairable && piece.health < piece.max_health)
@@ -750,6 +744,8 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
         Action::Respawn => {
             // Respawning restarts the memory trial, closing its door again.
             out.restart_memory.push(RestartMemory { agent: me });
+            // The fresh avatar has no job, so the old one gives back its stock.
+            drop_transfer(a, me, out);
             respawn(a, view.spawn, view.spawn_height);
             drop_haul(a, view, out);
         }
@@ -937,6 +933,15 @@ fn dig(a: &mut AgentState, tick: u64, terrain: &Terrain, def: &CharacterDef) {
 /// Housekeeping: ends a dig that is done, returning it.
 pub(super) fn finish_dig(a: &mut AgentState, tick: u64) -> Option<Dig> {
     a.avatar.dig.take_if(|d| tick + 1 >= d.until)
+}
+
+/// Ends the agent's transfer job, if it has one: stage 5 releases the units
+/// it hadn't moved yet (`TransferStock`). Units already in the air still land.
+fn drop_transfer(a: &mut AgentState, me: AgentIx, out: &mut ActionMessages) {
+    if let Some(job) = a.avatar.job.take() {
+        let ManualJob { depot, item, remaining, deposit, .. } = job;
+        out.transfer_stock.push(TransferStock { agent: me, depot, item, units: remaining, deposit, change: StockChange::Release });
+    }
 }
 
 /// Puts the avatar at the spawn point with a fresh state.
