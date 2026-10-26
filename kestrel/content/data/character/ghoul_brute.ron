@@ -5,5 +5,5 @@
         movement: (walk: 0.59),
         health: (hp: 5, armor: (points: 2, radius: 0.38)),
     ),
-    view: (),
+    view: (skin: "ghoul_brute"),
 )

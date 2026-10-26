@@ -81,6 +81,7 @@ fn apply_actor_pivots(
     let binds: HashMap<_, _> = world
         .query::<(Entity, &crate::character::Part, Option<&ChildOf>)>()
         .iter(world)
+        .filter(|(entity, ..)| parts.contains_key(entity))
         .map(|(entity, part, parent)| {
             (entity, (part.bind.translation, parent.map(ChildOf::parent)))
         })
@@ -111,7 +112,6 @@ pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack, studio: bool) {
     let profile = scene.scene.style.clone().unwrap_or_default();
     let environment = if studio { None } else { scene.environment.clone() };
     let actor = scene.actor.clone();
-    let skins = scene.skins.clone();
     let available_weapons = scene
         .scene
         .scenario
@@ -309,10 +309,68 @@ pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack, studio: bool) {
             }
         }
     }
+    let player = world
+        .query_filtered::<Entity, With<crate::character::Player>>()
+        .single(world)
+        .unwrap();
+    dress_body(world, player, scene, true);
+    for mut label in world
+        .query_filtered::<&mut Text, With<WeaponLabel>>()
+        .iter_mut(world)
+    {
+        label.0 = profile.weapon_name.clone();
+    }
+    if !studio {
+        world.spawn((
+            StyleLabel,
+            WorldScoped::default(),
+            Text::new(format!(
+                "STYLE {}  /  {:.0} VOXELS PER METER",
+                profile.id.to_uppercase(),
+                1.0 / profile.voxel_size
+            )),
+            TextFont {
+                font_size: FontSize::Px(11.0),
+                ..default()
+            },
+            TextColor(color(profile.accents[0])),
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(36),
+                top: px(112),
+                ..default()
+            },
+        ));
+    }
+}
+
+/// Dresses one character body, the tree under `root`, in the scene's
+/// style: joint pivots from the style's actor meshes, the actor scale, the
+/// meshes that replace built-in blocks, and weapon models. Remote players'
+/// bodies leave out the style's `lights`, so each one doesn't add more.
+pub(crate) fn dress_body(world: &mut World, root: Entity, scene: &voxel_assets::ScenePack, lights: bool) {
+    let profile = scene.scene.style.clone().unwrap_or_default();
+    let actor = &scene.actor;
+    let skins = &scene.skins;
+    let available_weapons = scene
+        .scene
+        .scenario
+        .as_ref()
+        .map_or(vec![], |s| s.weapons.clone());
+    let mut body = Vec::new();
+    let mut pending = vec![root];
+    while let Some(entity) = pending.pop() {
+        body.push(entity);
+        if let Some(children) = world.get::<Children>(entity) {
+            pending.extend(children.iter());
+        }
+    }
+    let body: std::collections::HashSet<Entity> = body.into_iter().collect();
     use voxel_assets::ActorPart;
     let kinds: HashMap<_, _> = world
         .query::<(Entity, &crate::character::Part)>()
         .iter(world)
+        .filter(|(e, _)| body.contains(e))
         .map(|(e, p)| (e, p.kind))
         .collect();
     let parts: HashMap<_, _> = kinds
@@ -364,13 +422,12 @@ pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack, studio: bool) {
             part.map(|part| (e, part))
         })
         .collect();
-    apply_actor_pivots(world, &parts, &actor);
-    let player = world
-        .query_filtered::<Entity, With<crate::character::Player>>()
-        .single(world)
-        .unwrap();
-    world.get_mut::<Transform>(player).unwrap().scale = Vec3::splat(profile.actor_scale);
-    for (parent,mut visibility,exhaust) in world.query_filtered::<(&ChildOf,&mut Visibility,Option<&crate::jetpack::Exhaust>),With<Mesh3d>>().iter_mut(world) {
+    apply_actor_pivots(world, &parts, actor);
+    world.get_mut::<Transform>(root).unwrap().scale = Vec3::splat(profile.actor_scale);
+    for (entity,parent,mut visibility,exhaust) in world.query_filtered::<(Entity,&ChildOf,&mut Visibility,Option<&crate::jetpack::Exhaust>),With<Mesh3d>>().iter_mut(world) {
+        if !body.contains(&entity) {
+            continue;
+        }
         let overridden = kinds.get(&parent.parent()).is_some_and(|kind| {
             let exact = parts.get(&parent.parent()).copied();
             let fallback = match kind {
@@ -396,16 +453,16 @@ pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack, studio: bool) {
         });
         // Exhaust starts hidden and is revealed only by the flight system.
         // Applying a style must not turn it on during ground movement.
-        let hide=exhaust.is_some() || overridden || (parent.parent()==player && actor.iter().any(|a|a.part==ActorPart::Body));
+        let hide=exhaust.is_some() || overridden || (parent.parent()==root && actor.iter().any(|a|a.part==ActorPart::Body));
         *visibility=if hide {Visibility::Hidden} else {Visibility::Inherited};
     }
-    for a in &actor {
+    for a in actor {
         let key = content_key(&(&profile, a));
         let handles = upload(world, key, &a.meshes, &profile);
         for (&parent, part) in &parts {
             if *part == a.part {
                 let mut mesh_root = None;
-                for light in &a.lights {
+                for light in a.lights.iter().filter(|_| lights) {
                     spawn_light(world, light, Some(parent), &profile);
                 }
                 for (mesh, material) in &handles {
@@ -485,44 +542,24 @@ pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack, studio: bool) {
             }
         }
     }
-    for mut label in world
-        .query_filtered::<&mut Text, With<WeaponLabel>>()
-        .iter_mut(world)
-    {
-        label.0 = profile.weapon_name.clone();
-    }
-    if !studio {
-        world.spawn((
-            StyleLabel,
-            WorldScoped::default(),
-            Text::new(format!(
-                "STYLE {}  /  {:.0} VOXELS PER METER",
-                profile.id.to_uppercase(),
-                1.0 / profile.voxel_size
-            )),
-            TextFont {
-                font_size: FontSize::Px(11.0),
-                ..default()
-            },
-            TextColor(color(profile.accents[0])),
-            Node {
-                position_type: PositionType::Absolute,
-                left: px(36),
-                top: px(112),
-                ..default()
-            },
-        ));
-    }
 }
 
+/// Shows the local player's held weapon model. Remote players' models follow
+/// own avatars (`peers`).
 pub fn select_weapon(
     controls: Res<crate::gameplay::Controls>,
-    mut visuals: Query<(&WeaponVisual, &mut Visibility)>,
+    player: Option<Single<Entity, With<crate::character::Player>>>,
+    parents: Query<&ChildOf>,
+    mut visuals: Query<(Entity, &WeaponVisual, &mut Visibility)>,
 ) {
+    let Some(player) = player.map(|player| *player) else { return };
     if !controls.is_changed() {
         return;
     }
-    for (weapon, mut visible) in &mut visuals {
+    for (entity, weapon, mut visible) in &mut visuals {
+        if !parents.iter_ancestors(entity).any(|ancestor| ancestor == player) {
+            continue;
+        }
         *visible = if weapon.0 == controls.weapon {
             Visibility::Inherited
         } else {

@@ -929,7 +929,8 @@ pub fn capture(
     state.elapsed += time.delta_secs().min(0.1);
     let phase = viewer.phase();
     let pushing = std::env::args().any(|arg| arg == "--studio-capture-push");
-    let key_pose = match viewer.clip {
+    // A pinned frame is the pose asked for; otherwise wait for the clip's key pose.
+    let key_pose = state.frame.is_some() || match viewer.clip {
         Clip::Jump if pushing => (0.10..0.13).contains(&phase),
         Clip::RunJump if pushing => (0.65..0.68).contains(&phase),
         Clip::Jump => (0.40..0.48).contains(&phase),
@@ -1063,8 +1064,8 @@ mod tests {
             dig: None,
         };
         let root = Transform::from_xyz(0.0, STUDIO_FLOOR_Y + 0.12, 0.0);
-        let offsets = crate::character::foot_ground_offsets(root, &pose,
-            |point| Some(studio_surface_height(&viewer, point.z)));
+        let offsets = crate::character::foot_terrain(root, &pose,
+            |point| Some(studio_surface_height(&viewer, point.z))).ground;
         assert!(offsets[0] < -0.05, "trailing foot should stay on the lower surface");
         assert!(offsets[1] > 0.05, "leading foot should rise onto the step");
         assert_eq!(step_surface(0.0, viewer.step_distance), 0.0);
@@ -1092,8 +1093,8 @@ mod tests {
         };
         let sample = |distance: f32, pose: &crate::character::Pose| {
             let root = Transform::from_xyz(0.0, STUDIO_FLOOR_Y, distance);
-            crate::character::foot_ground_offsets(root, pose,
-                |point| Some(STUDIO_FLOOR_Y + step_surface(point.z, motion.step_distance)))[0]
+            crate::character::foot_terrain(root, pose,
+                |point| Some(STUDIO_FLOOR_Y + step_surface(point.z, motion.step_distance))).ground[0]
         };
         let stance_end = std::f32::consts::TAU * 0.55;
         let swing_length = std::f32::consts::TAU - stance_end;
