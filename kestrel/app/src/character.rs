@@ -181,14 +181,6 @@ pub(crate) fn foot_terrain(
     }
 }
 
-pub(crate) fn foot_ground_offsets(
-    root: Transform,
-    pose: &Pose,
-    surface: impl FnMut(Vec3) -> Option<f32>,
-) -> [f32; 2] {
-    foot_terrain(root, pose, surface).ground
-}
-
 /// Ease render height across walkable ledges; jumps and larger changes keep
 /// their simulation height. The returned value never feeds back into physics.
 pub(crate) fn visual_step_height(previous: Option<f32>, target: f32, dt: f32, grounded: bool) -> f32 {
@@ -325,8 +317,8 @@ pub fn animate_character(
     contacts: Option<Res<ActorFootContacts>>,
     viewer: Res<crate::viewer::Viewer>,
     player: Single<(Entity, &Transform), With<Player>>,
-    mut parts: Query<(Entity, &Part, &mut Transform, Option<&ChildOf>), Without<Player>>,
-    parents: Query<&ChildOf>,
+    mut joints: Joints,
+    children: Query<&Children>,
     mut motion: Local<MotionState>,
 ) {
     if !viewer.active && feedback.hit_stop > 0.0
@@ -412,24 +404,50 @@ pub fn animate_character(
         pose.attack = controls.attack;
         pose.dig = None;
     }
-    let terrain = foot_terrain(*player.1, &pose, |point| {
+    let ground = |point: Vec3| {
         if viewer.active {
             Some(crate::viewer::studio_surface_height(&viewer, point.z))
         } else {
             service.as_ref().and_then(|service| service.ground_height(point))
         }
-    });
+    };
+    // Studio shows each clip frame exactly, without smoothing.
+    pose_body(*player.1, pose, ground, viewer.active, time.delta_secs(), contacts.as_deref(),
+        children.iter_descendants(player.0), &mut joints);
+}
+
+/// The joints `pose_body` moves: every body's parts.
+pub(crate) type Joints<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static Part, &'static mut Transform, Option<&'static ChildOf>),
+    (Without<Player>, Without<crate::peers::Peer>),
+>;
+
+/// Poses one character body, the local player's, a remote player's or
+/// Studio's: its joints (`body`, from the root down) move toward `pose`,
+/// the body leans over uneven ground, and planted feet are solved against
+/// `ground`. `exact` places the joints without smoothing.
+pub(crate) fn pose_body(
+    root: Transform,
+    mut pose: Pose,
+    ground: impl FnMut(Vec3) -> Option<f32>,
+    exact: bool,
+    dt: f32,
+    contacts: Option<&ActorFootContacts>,
+    body: impl Iterator<Item = Entity>,
+    joints: &mut Joints,
+) {
+    let terrain = foot_terrain(root, &pose, ground);
     if pose.motion.plant_feet && pose.speed > 0.05 && !pose.airborne && pose.jump.is_none() {
         pose.step_pitch = step_body_pitch(&pose, terrain.ground);
     }
-    let mut joints = HashMap::new();
-    for (entity, part, mut transform, parent) in &mut parts {
-        // Remote players' bodies are posed by `peers`.
-        if !parents.iter_ancestors(entity).any(|ancestor| ancestor == player.0) {
-            continue;
-        }
+    let mut snapshot = HashMap::new();
+    let mut root_entity = None;
+    for entity in body {
+        let Ok((entity, part, mut transform, parent)) = joints.get_mut(entity) else { continue };
         let target = pose.place(part.kind, part.rest);
-        if viewer.active || pose.motion.plant_feet
+        if exact || pose.motion.plant_feet
             && matches!(part.kind, PartKind::Body)
             && pose.speed > 0.6
             && pose.jump.is_none()
@@ -438,21 +456,17 @@ pub fn animate_character(
         {
             *transform = target;
         } else {
-            blend_pose(
-                &mut transform,
-                target,
-                time.delta_secs(),
-                pose.motion.pose_response,
-            );
+            blend_pose(&mut transform, target, dt, pose.motion.pose_response);
         }
-        joints.insert(
-            entity,
-            (part.kind, part.rest, *transform, parent.map(ChildOf::parent)),
-        );
+        if matches!(part.kind, PartKind::Body) {
+            root_entity = parent.map(ChildOf::parent);
+        }
+        snapshot.insert(entity, (part.kind, part.rest, *transform, parent.map(ChildOf::parent)));
     }
     // For rigs that opt into planted feet, solve the complete leg after body
     // smoothing so a planted ankle stays fixed against the
     // traveling ground instead of lagging behind the hip animation.
+    let Some(root_entity) = root_entity else { return };
     if pose.motion.plant_feet
         && pose.speed > 0.05
         && pose.jump.is_none()
@@ -460,16 +474,13 @@ pub fn animate_character(
         && pose.attack.is_none_or(|attack| attack.weapon == content::scenario::Weapon::Laser)
         && pose.dig.is_none()
     {
-        for (entity, target) in grounded_foot_targets(&joints, player.0, &pose, terrain) {
-            if let Ok((_, _, mut transform, _)) = parts.get_mut(entity) {
-                *transform = target;
-            }
-        }
+        let mut targets = grounded_foot_targets(&snapshot, root_entity, &pose, terrain);
         if let Some(contacts) = contacts {
-            for (entity, target) in actor_leg_targets(&joints, player.0, &pose, &contacts, terrain) {
-                if let Ok((_, _, mut transform, _)) = parts.get_mut(entity) {
-                    *transform = target;
-                }
+            targets.extend(actor_leg_targets(&snapshot, root_entity, &pose, contacts, terrain));
+        }
+        for (entity, target) in targets {
+            if let Ok((_, _, mut transform, _)) = joints.get_mut(entity) {
+                *transform = target;
             }
         }
     }
@@ -681,7 +692,7 @@ fn solve_leg(y: f32, z: f32, upper: f32, lower: f32) -> (f32, f32) {
 }
 
 /// Interpolate joint transforms in render time, independently of simulation timing.
-pub fn blend_pose(current: &mut Transform, target: Transform, dt: f32, response: f32) {
+fn blend_pose(current: &mut Transform, target: Transform, dt: f32, response: f32) {
     let weight = 1.0 - (-response.max(0.0) * dt.clamp(0.0, 0.05)).exp();
     current.translation = current.translation.lerp(target.translation, weight);
     current.rotation = current.rotation.slerp(target.rotation, weight);
