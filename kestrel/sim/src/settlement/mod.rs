@@ -20,6 +20,7 @@ pub mod avatar;
 pub mod combat;
 mod economy;
 mod haulers;
+mod inventory;
 pub mod memory;
 pub mod piano;
 pub mod piles;
@@ -41,6 +42,7 @@ use crate::terrain::{Disc, Terrain};
 pub use combat::{CombatMetrics, DefenderState, Event, Impact, OnMiss, Pinned, Prediction, Projectile, SpentProjectile, Threat, TossEnd, WaveState};
 pub use agent::{AgentState, Body, Carry, Role};
 pub use haulers::{HaulerState, Phase};
+pub use inventory::{Inventory, Kinds};
 pub use prediction::AvatarReplay;
 
 pub type ItemIx = u16;

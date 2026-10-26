@@ -130,6 +130,12 @@ Step 5's order: digest, format, reading with the golden file unchanged,
 gameplay last.
 
 1. **`Inventory` type**, with methods and unit tests. Nothing uses it yet.
+   - Done in step 1: `settlement/inventory.rs`, exported as `settlement::{Inventory, Kinds}`.
+     - `take(item, units)` and `put(item, units)` move reserved units, and take a count, so a recipe's products land in one call.
+     - `add` and `remove` change counts with no reservation: a source's new units, used-up ingredients, a unit sent off at once. `add` refuses past `free()` and a second kind; `remove` expects the units to be available.
+     - `reserve_*` and `add` return `false` and change nothing when refused. Releases, `take` and `put` subtract plainly, like the code they replace.
+     - `kind()` is the item held or reserved; `accepts(item)` applies `OneKind`. Capacity 0 holds nothing; use `u32::MAX` for no limit (the collector).
+     - `validate()` returns a short reason (`overbooked`, `stock overbooked`, ...) for the caller to prefix with the holder.
 2. **Depots onto `Inventory`.** No behaviour change: golden behaviour unchanged, save format up.
 3. **Agent cargo onto `Inventory`.** No behaviour change.
 4. **`CarryJob`, `ReserveStock`, `drop_carry` for the player's depot transfer.**
