@@ -226,8 +226,8 @@ impl AvatarPrediction {
 /// The avatar's states from the confirmed tick through tick `end`, each
 /// pending command applied on its tick, and the strikes it resolved on the
 /// way. One the host already passed was moved later; the next tick is the
-/// best guess. `None` if the avatar can't be predicted (a pending GoTo walk:
-/// the dock walk, a pile job or a scripted walk).
+/// best guess. `None` if the avatar can't be predicted (a pending pile job).
+/// Walks to a point (the dock walk, scripted walks) are predicted.
 fn replay(c: &Confirmed, end: u64) -> Option<(Vec<AgentState>, Vec<ReplayedStrike>)> {
     let mut replay = c.settlement.replay_avatar(c.agent, c.tick, c.terrain)?;
     let mut states = vec![replay.state().clone()];

@@ -1,5 +1,25 @@
 # Characters
 
+## Move pile hauls and piano keys onto actions
+
+- **Status:** open
+- **Why:** the `Pile` and `PlayPiano` commands still bypass
+  `settlement::action`. `Settlement::pile_action` checks and writes pile lab
+  state (the hauler's job, serial and notice) around planning the avatar's
+  route, so its agent part can't be split off cleanly, and the replay keeps
+  returning false for it. A piano key changes only `piano_notes`, nothing on
+  the avatar.
+- **What to do:** once pile jobs are messages (handoff D3) or merge into
+  the shared body's cargo (step 5), make a pile haul an action (step 5's
+  "interact") whose agent part plans the walk, and let the replay predict
+  it. Decide whether a piano key is an "interact" action with no agent part
+  or stays a world command.
+- **Where:** `kestrel/sim/src/settlement/action.rs` (`Action::of`),
+  `piles.rs` (`pile_action`), `piano.rs` (`play_piano`),
+  `prediction.rs` (`AvatarReplay::apply`).
+- **Found in:** ability prediction task 2, the shared action path
+  (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D2).
+
 ## Done
 
 ### Remove the right-click movement leftovers

@@ -1430,9 +1430,9 @@ mod tests {
         });
         client.update();
         host.update();
-        // A GoTo walk (the dock walk, pile jobs, scripted walks) is not
-        // predicted: the avatar waits for the confirmed route, then follows
-        // it without jumps.
+        // A walk to a point (the dock walk, scripted walks) is predicted:
+        // the avatar follows the route the replay plans, then settles on the
+        // confirmed one without jumps.
         let route_preview = player_position(&mut client);
         let mut followed_route = false;
         let mut previous_shown = route_preview;

@@ -116,8 +116,12 @@ visual offset that halves every 50 ms (or snaps past 1.5 units), and is logged
 as a `mispredict` correction. The replay can't know about late inputs the host
 moved to a later tick, hits and knockback, damage, pile jobs, terrain changed
 by anyone (your own digs included), respawning after death, or scene changes,
-so those still correct. GoTo walks (the depot dock walk, pile jobs, scripted
-walks) aren't predicted: while one is pending, the confirmed avatar is drawn.
+so those still correct. Pending commands go through the same actions the
+simulation applies (`settlement::action`), so walks to a point (the depot
+dock walk, scripted walks) are predicted too: the route is planned from the
+confirmed terrain when the walk starts. The units it then moves at the dock are not.
+Pile jobs read pile lab state the replay doesn't run, so they aren't
+predicted: while one is pending, the confirmed avatar is drawn.
 
 ## Predicted laser shots
 
@@ -141,7 +145,7 @@ without firing (the swing didn't happen there, or the avatar died) is given
 up and logged the same way. So is one the replay stops firing once a later
 shot resolves: the replay's shots are told apart by their command's aim and
 muzzle, so a shot the host moved later stays the same shot. A confirmed shot with nothing drawn for it (fired
-while a GoTo walk was pending, for example) is drawn when it arrives.
+while a pile job was pending, for example) is drawn when it arrives.
 Other players' shots are drawn when confirmed.
 
 A shot fired from the predicted position ends where the confirmed one does

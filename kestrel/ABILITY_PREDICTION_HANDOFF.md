@@ -26,8 +26,8 @@ A prediction can be wrong for three reasons:
 - something outside the avatar changed it (hits, knockback, terrain,
   depot stock, other players);
 - the host moved a late input;
-- the command can't be predicted. `GoTo` and `Pile` make `apply` return
-  false, and the client then draws the confirmed avatar.
+- the command can't be predicted. `Pile` makes `apply` return false, and
+  the client then draws the confirmed avatar. (Before D2, `GoTo` did too.)
 
 ## Agreed decisions
 
@@ -171,7 +171,11 @@ runs, and leave the user's game windows alone.
 
 ## Open questions
 
-- **Predicting the dock walk.** `MoveAvatar { GoTo }` from a depot transfer
-  makes the replay fall back to the confirmed avatar. `set_intent` plans
-  the route from terrain alone, so the replay could probably run it. Decide
-  during D2. Pile commands still read pile lab state and stay unpredicted.
+- **Predicting the dock walk.** Decided in D2: predicted. `set_intent` plans
+  a `GoTo` route from the terrain and the avatar alone (`nav::path_with`,
+  flying or walkable for its radius), and the walk itself reads only the
+  terrain, so the replay plans it once when the action applies, from the
+  confirmed terrain. The `Transfer` sent with it is predicted too: it sets
+  the avatar's job from the confirmed depot stock; the units that then move
+  at the dock are stage 5 and correct like a hit. Pile commands still read
+  and write pile lab state and stay unpredicted (`todo/characters.md`).
