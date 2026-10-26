@@ -54,7 +54,7 @@
 
 ### `two_players_walk_around_together` sometimes ends a tick apart
 
-- **Status:** done (branch `kestrel-flaky-tests`). The host makes one last
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/118). The host makes one last
   update a tick after its loop, which always sends. The network tests
   (`udp_smoke` and both session UDP tests) now run until they reach a state,
   not for a fixed time. `bench_test` holds a budget only when
