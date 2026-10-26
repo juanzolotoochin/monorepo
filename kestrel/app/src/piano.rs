@@ -21,8 +21,6 @@ impl Default for PianoInput {
 
 #[derive(Component)]
 pub(crate) struct PianoKey { pitch: usize, rest: Vec3 }
-#[derive(Component)]
-pub(crate) struct PianoPrompt;
 
 fn visible_key(note: u8) -> usize {
     (i32::from(note) - FIRST).rem_euclid(KEYS as i32) as usize
@@ -89,14 +87,6 @@ pub fn spawn(world: &mut World, scene: &Scene) {
                 cube.clone(), ebony.clone(), Some(pitch));
         }
     }
-    world.spawn((PianoPrompt, WorldScoped::default(), Visibility::Hidden,
-        Node { position_type: PositionType::Absolute, bottom: px(105), left: percent(24),
-            width: percent(52), justify_content: JustifyContent::Center,
-            padding: UiRect::axes(px(18), px(10)), ..default() },
-        BackgroundColor(Color::srgba(0.025, 0.045, 0.07, 0.88))))
-        .with_children(|p| { p.spawn((Text::new("CONNECT A MIDI KEYBOARD TO PLAY"),
-            TextFont { font_size: FontSize::Px(16.0), ..default() },
-            TextColor(Color::srgb(0.95, 0.83, 0.57)))); });
 }
 
 pub fn release(world: &mut World) {
@@ -127,6 +117,12 @@ fn input_note(input: &mut PianoInput, sound: &Sound, note: u8, velocity: u8, can
 #[cfg(target_os = "linux")]
 mod midi {
     use std::ffi::{c_char, c_int, c_void};
+    pub(super) fn accepts(source: &mut Option<(i32, i32)>, address: (i32, i32), message: [u8; 3]) -> bool {
+        if source.is_none() && message[0] & 0xf0 == 0x90 && message[2] > 0 {
+            *source = Some(address);
+        }
+        *source == Some(address)
+    }
     unsafe extern "C" {
         fn mk_open(seq: *mut *mut c_void) -> c_int;
         fn mk_close(seq: *mut c_void);
@@ -136,22 +132,34 @@ mod midi {
         fn mk_event(seq: *mut c_void, message: *mut u8, client: *mut c_int, port: *mut c_int,
                     event_type: *mut c_int, raw: *mut *const u8, raw_size: *mut usize) -> c_int;
     }
-    pub struct Midi { seq: *mut c_void, source: Option<(i32, i32)> }
+    pub struct Midi {
+        seq: *mut c_void,
+        ports: Vec<(i32, i32)>,
+        source: Option<(i32, i32)>,
+    }
     // The Bevy system owns this handle exclusively; a scheduler may move the
     // system between threads, but never accesses the handle concurrently.
     unsafe impl Send for Midi {}
     impl Midi {
         pub fn open() -> Option<Self> {
             let mut seq = std::ptr::null_mut();
-            (unsafe { mk_open(&mut seq) } >= 0).then_some(Self { seq, source: None })
+            (unsafe { mk_open(&mut seq) } >= 0).then_some(Self { seq, ports: Vec::new(), source: None })
         }
         pub fn connect(&mut self) {
-            if self.source.is_some() { return; }
-            let (mut client, mut port) = (0, 0);
-            let mut name = [0 as c_char; 256];
-            if unsafe { mk_port(self.seq, 0, &mut client, &mut port, name.as_mut_ptr(), name.len()) } == 1
-                && unsafe { mk_connect(self.seq, client, port) } >= 0 {
-                self.source = Some((client, port));
+            // The first enumerated port is often MIDI Through, not the user's
+            // keyboard. Subscribe to every readable port and select the first
+            // one that actually sends a note, as midi_keys does.
+            for index in 0..128 {
+                let (mut client, mut port) = (0, 0);
+                let mut name = [0 as c_char; 256];
+                if unsafe { mk_port(self.seq, index, &mut client, &mut port, name.as_mut_ptr(), name.len()) } != 1 {
+                    break;
+                }
+                let address = (client, port);
+                if !self.ports.contains(&address)
+                    && unsafe { mk_connect(self.seq, client, port) } >= 0 {
+                    self.ports.push(address);
+                }
             }
         }
         pub fn connected(&self) -> bool { self.source.is_some() }
@@ -164,9 +172,15 @@ mod midi {
                 let result = unsafe { mk_event(self.seq, message.as_mut_ptr(), &mut client,
                     &mut port, &mut kind, &mut raw, &mut size) };
                 if result <= 0 { if result < 0 { self.source = None; } break; }
-                if result == 3 && self.source == Some((client, port)) { self.source = None; }
-                if result == 1 && self.source == Some((client, port)) {
-                    event(message[0], message[1], message[2]);
+                let address = (client, port);
+                if result == 3 {
+                    self.ports.retain(|port| *port != address);
+                    if self.source == Some(address) { self.source = None; }
+                }
+                if result == 1 && self.ports.contains(&address) {
+                    if accepts(&mut self.source, address, message) {
+                        event(message[0], message[1], message[2]);
+                    }
                 }
             }
         }
@@ -185,8 +199,6 @@ pub fn update(
     scene: Res<SceneView>, options: Res<Options>, session: Res<SessionService>, sound: Res<Sound>,
     mut input: ResMut<PianoInput>, mut poll: Local<MidiPoll>,
     mut keys: Query<(&PianoKey, &mut Transform)>,
-    mut prompts: Query<(&mut Visibility, &Children), With<PianoPrompt>>,
-    mut labels: Query<&mut Text>,
 ) {
     if scene.scene().pianos.is_empty() {
         for n in 0..128 {
@@ -234,17 +246,6 @@ pub fn update(
     for (key, mut transform) in &mut keys {
         transform.translation = key.rest - Vec3::Y * if pressed[key.pitch] { 0.035 } else { 0.0 };
     }
-    for (mut visibility, children) in &mut prompts {
-        *visibility = if can_play { Visibility::Inherited } else { Visibility::Hidden };
-        for child in children.iter() {
-            if let Ok(mut text) = labels.get_mut(child) {
-                let label = if input.connected { "PLAY THE PIANO WITH YOUR MIDI KEYBOARD" }
-                    else if cfg!(target_os = "linux") { "CONNECT A MIDI KEYBOARD TO PLAY" }
-                    else { "MIDI PIANO INPUT IS AVAILABLE ON LINUX" };
-                if text.0 != label { text.0 = label.into(); }
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -278,5 +279,17 @@ mod tests {
         assert!(input.held[61]);
         input_note(&mut input, &sound, 61, 0, false);
         assert!(!input.held[61]);
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn midi_selects_first_played_port_instead_of_first_listed_port() {
+        let through = (14, 0);
+        let keyboard = (32, 0);
+        let mut selected = None;
+        assert!(!midi::accepts(&mut selected, through, [0xb0, 64, 127]));
+        assert!(midi::accepts(&mut selected, keyboard, [0x90, 60, 100]));
+        assert_eq!(selected, Some(keyboard));
+        assert!(!midi::accepts(&mut selected, through, [0x90, 64, 100]));
+        assert!(midi::accepts(&mut selected, keyboard, [0x80, 60, 0]));
     }
 }
