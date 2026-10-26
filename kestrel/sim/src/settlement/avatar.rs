@@ -603,7 +603,8 @@ impl Settlement {
                 started: swing.pressed(),
             });
         }
-        if let Some(job) = &a.carry.job {
+        // A depot transfer's unit; a haul's are `read_pile_job`'s.
+        if let Some(job) = a.carry.job.as_ref().filter(|j| !j.other.in_pile_lab()) {
             if tick >= job.next_tick && distance(a.body.position, self.position_of(job.other)) <= DOCK_REACH {
                 out.player_carry.push(CarryUnit { agent: me });
             }
@@ -646,6 +647,10 @@ impl Settlement {
 pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &CharacterDef, out: &mut ActionMessages) {
     let AgentState { body, carry, role: Role::Avatar(avatar), .. } = a else { return };
     let me = view.me;
+    // A depot transfer. A pile haul is a carry job too, but its walk is the
+    // lab's, and these checks treat it as they did before it was one: it
+    // doesn't stop a dig, keep a released route or end on a cancel.
+    let transferring = carry.job.as_ref().is_some_and(|j| !j.other.in_pile_lab());
     match *action {
         Action::Move(ref intent) => {
             // Moving lets go of a pile haul, dead or alive.
@@ -672,10 +677,11 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
         Action::Jump => jump(avatar, view.tick, def),
         Action::DigDown => {
             if view.can_dig_at(body.position) {
-                dig(body, avatar, carry.job.is_some(), view.tick, view.terrain, def);
+                dig(body, avatar, transferring, view.tick, view.terrain, def);
             }
         }
         Action::Transfer { depot, item, units, deposit } => {
+            // One carry job at a time: a pile haul's too.
             let busy = carry.job.is_some() || carry.inventory.total_in() > 0 || view.leaving_cargo();
             if !busy && units > 0 && transfer_limit(carry, view.depots, view.items, depot as usize, item as usize, deposit) >= units {
                 let direction = if deposit { Direction::Deposit } else { Direction::Pickup };
@@ -688,7 +694,11 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
                 out.reserve_stock.push(ReserveStock { agent: me, job, change: StockChange::Reserve });
             }
         }
-        Action::CancelTransfer => out.reserve_stock.extend(carry.drop_carry(me)),
+        Action::CancelTransfer => {
+            if transferring {
+                out.reserve_stock.extend(carry.drop_carry(me));
+            }
+        }
         Action::RepairCover(asset) => {
             avatar.repair = asset.filter(|&asset| {
                 view.terrain.destructibles.iter().any(|piece| piece.asset == asset && piece.repairable && piece.health < piece.max_health)
@@ -697,12 +707,13 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
         Action::Release => {
             // Letting go releases held piano keys.
             out.drop_notes.push(DropNotes { agent: me, serial: view.piano_serial });
-            release(body, avatar, carry.job.is_some(), view.hauling() && !avatar.dropped_haul);
+            release(body, avatar, transferring, view.hauling() && !avatar.dropped_haul);
         }
         Action::Respawn => {
             // Respawning restarts the memory trial, closing its door again.
             out.restart_memory.push(RestartMemory { agent: me });
-            // The fresh avatar has no job, so the old one gives back its stock.
+            // The fresh avatar has no job, so the old one gives back its
+            // stock: a depot transfer's or a pile haul's.
             out.reserve_stock.extend(carry.drop_carry(me));
             respawn(body, avatar, view.spawn, view.spawn_height);
             drop_haul(avatar, view, out);

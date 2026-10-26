@@ -112,6 +112,13 @@ pub enum InventoryRef {
     Collector,
 }
 
+impl InventoryRef {
+    /// A pile or the collector: a haul's other side.
+    pub fn in_pile_lab(self) -> bool {
+        matches!(self, InventoryRef::Pile(_) | InventoryRef::Collector)
+    }
+}
+
 /// One unit in the air. It belongs to neither end until it arrives.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Transfer {
@@ -657,8 +664,7 @@ impl Settlement {
         match holder {
             InventoryRef::Depot(d) => &mut self.depots[d as usize].inventory,
             InventoryRef::Agent(a) => &mut self.agents[a as usize].carry.inventory,
-            InventoryRef::Pile(id) => &mut self.piles.as_mut().expect("a pile scene").piles.get_mut(&id).expect("a pile that exists").inventory,
-            InventoryRef::Collector => &mut self.piles.as_mut().and_then(|lab| lab.collector.as_mut()).expect("a collector").inventory,
+            InventoryRef::Pile(_) | InventoryRef::Collector => self.piles.as_mut().expect("a pile scene").holder_mut(holder),
         }
     }
 
@@ -789,9 +795,7 @@ impl Settlement {
 
     /// Checks the piles and the collector: each inventory on its own, and
     /// its reservations against the units flying there and the carry jobs
-    /// on it. Pile units move at once with no job yet, so these are empty
-    /// until pile jobs reserve and units fly (`INVENTORY_HANDOFF.md`, steps
-    /// 8 and 9).
+    /// (hauls) on it.
     fn validate_lab(&self, lab: &piles::PileLab) -> Result<(), String> {
         let items = self.items.len();
         let expected = |holder: InventoryRef| {

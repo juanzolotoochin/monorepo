@@ -11,6 +11,10 @@
 //! minerals sit in its own `Carry` beside its depot items, any mix within
 //! the cargo's one capacity.
 //!
+//! A haul is a carry job (`Carry::job`) with a pile or the collector, which
+//! holds its units on both sides from the command on (`INVENTORY_HANDOFF.md`),
+//! and the walk to it (`PileJob`), which stays in the lab.
+//!
 //! Every unit is conserved: `created` equals the units in piles, cargo and
 //! the collector, checked by [`PileLab::conserved`]. Positions are world tiles.
 
@@ -21,7 +25,7 @@ use serde::{Deserialize, Serialize};
 
 use super::avatar::{character_of, AvatarState, Intent};
 use super::combat::{Event, TossEnd};
-use super::{AgentState, Body, Inventory, ItemIx, Kinds, Role};
+use super::{AgentState, Body, CarryJob, Direction, Inventory, InventoryRef, ItemIx, Kinds, Role, Side};
 use super::{AgentIx, Settlement};
 use crate::messages::CarryUnit;
 use crate::mine::MINERALS;
@@ -89,6 +93,8 @@ impl Collector {
     }
 }
 
+/// The walk to a haul's pile and its pace. Its units are the agent's carry
+/// job (`Carry::job`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PileJob {
     pub action: PileAction,
@@ -99,13 +105,10 @@ pub struct PileJob {
     pub previous: FxVec2,
     /// Ticks between units; zero moves the whole amount at once on arrival.
     pub pace: u64,
-    pub next_toss: u64,
-    /// Units left once the transfer has started.
-    pub remaining: Option<u32>,
+    /// Units have started moving: the avatar stays where it is.
+    pub started: bool,
     pub transferred: u32,
     pub planned: u32,
-    /// A drop's new pile, once its first unit landed.
-    pub destination: Option<PileId>,
 }
 
 /// One avatar's haul. What it carries is in its `Carry`.
@@ -118,14 +121,6 @@ pub struct Hauler {
     pub in_flight: Vec<u64>,
     pub notice: String,
     pub last_error: Option<String>,
-}
-
-impl Hauler {
-    fn fail(&mut self, error: &str) {
-        self.job = None;
-        self.notice = error.to_string();
-        self.last_error = Some(error.to_string());
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -289,11 +284,12 @@ impl PileLab {
         self.total(cargo) == self.created
     }
 
-    /// A dispenser adds up to `requested` units to its output pile.
+    /// A dispenser adds up to `requested` units to its output pile, within
+    /// the room not held for units on their way.
     pub fn add(&mut self, id: PileId, requested: u32) -> Result<u32, &'static str> {
         let pile = self.piles.get_mut(&id).ok_or("Pile no longer exists")?;
         let item = pile.source.ok_or("Only dispensers create mineral")?;
-        let amount = requested.min(PILE_CAPACITY - pile.units());
+        let amount = requested.min(pile.inventory.free());
         if amount == 0 {
             return Err("Output pile is full (96 units)");
         }
@@ -303,107 +299,74 @@ impl PileLab {
         Ok(amount)
     }
 
-    /// Exact: a rejected request changes nothing. The cargo takes any mix,
-    /// within its one capacity.
-    pub fn pickup_amount(&mut self, cargo: &mut Inventory, id: PileId, amount: u32) -> Result<u32, &'static str> {
-        let pile = self.piles.get_mut(&id).ok_or("Pile no longer exists")?;
-        if amount == 0 {
-            return Err("No units available or carrier full");
+    /// What a haul moves: its other side (none for a drop, whose pile is
+    /// made when it starts), its mineral, its direction and its units.
+    /// Units promised to another haul don't count, so a second haul for
+    /// the same units gets what is left, or is refused. A cargo takes any
+    /// mix within its one capacity; a pile takes one mineral.
+    pub fn plan(&self, cargo: &Inventory, action: PileAction) -> Result<(Option<InventoryRef>, ItemIx, Direction, u32), &'static str> {
+        let pile = |id: PileId| self.piles.get(&id).ok_or("Pile no longer exists");
+        match action {
+            PileAction::Pickup(id) | PileAction::PickupAmount(id, _) => {
+                let p = pile(id)?;
+                let item = p.item().ok_or("No units available")?;
+                let (available, free) = (p.inventory.available(item), cargo.free());
+                let units = match action {
+                    PileAction::PickupAmount(_, 0) => return Err("No units available or carrier full"),
+                    PileAction::PickupAmount(_, n) if n > available => return Err("Requested quantity exceeds pile stock"),
+                    PileAction::PickupAmount(_, n) if n > free => return Err("Requested quantity exceeds free carrying capacity"),
+                    PileAction::PickupAmount(_, n) => n,
+                    _ if free == 0 => return Err("Carrier is full. Deposit before collecting more"),
+                    _ if available == 0 => return Err("No units available"),
+                    _ => available.min(free),
+                };
+                Ok((Some(InventoryRef::Pile(id)), item, Direction::Pickup, units))
+            }
+            PileAction::Deposit(id) => {
+                let p = pile(id)?;
+                if self.carried(cargo) == 0 {
+                    return Err("Carrier is empty");
+                }
+                let item = p.item().filter(|&i| cargo.available(i) > 0 && p.inventory.accepts(i)).ok_or("Different minerals stay in separate piles")?;
+                let units = cargo.available(item).min(p.inventory.free());
+                if units == 0 {
+                    return Err("Requested deposit does not fit cargo or pile capacity");
+                }
+                Ok((Some(InventoryRef::Pile(id)), item, Direction::Deposit, units))
+            }
+            PileAction::Drop(position) => {
+                let item = self.first_carried(cargo).ok_or("Carrier is empty")?;
+                let offset = position - self.center;
+                if offset.x.abs() > self.limit || offset.y.abs() > self.limit {
+                    return Err("Drop position must be on the deck");
+                }
+                if self.piles.len() >= self.max_piles {
+                    return Err("Pile limit reached; deposit into an existing pile");
+                }
+                Ok((None, item, Direction::Deposit, cargo.available(item)))
+            }
+            PileAction::Deliver => {
+                let item = self.first_carried(cargo).ok_or("Carrier is empty")?;
+                self.collector.as_ref().ok_or("There is no collector here")?;
+                Ok((Some(InventoryRef::Collector), item, Direction::Deposit, cargo.available(item)))
+            }
         }
-        if amount > pile.units() {
-            return Err("Requested quantity exceeds pile stock");
-        }
-        if amount > cargo.free() {
-            return Err("Requested quantity exceeds free carrying capacity");
-        }
-        let item = pile.item().expect("a pile with units holds a mineral");
-        pile.inventory.remove(item, amount);
-        let added = cargo.add(item, amount);
-        debug_assert!(added, "checked the cargo's room");
-        if pile.units() == 0 && pile.source.is_none() {
-            self.piles.remove(&id);
-        }
-        Ok(amount)
     }
 
-    pub fn pickup(&mut self, cargo: &mut Inventory, id: PileId) -> Result<u32, &'static str> {
-        let units = self.piles.get(&id).ok_or("Pile no longer exists")?.units();
-        self.pickup_amount(cargo, id, units.min(cargo.free()))
+    /// The inventory of a pile or the collector, which must exist.
+    pub(crate) fn holder_mut(&mut self, holder: InventoryRef) -> &mut Inventory {
+        match holder {
+            InventoryRef::Pile(id) => &mut self.piles.get_mut(&id).expect("a pile that exists").inventory,
+            InventoryRef::Collector => &mut self.collector.as_mut().expect("a collector").inventory,
+            InventoryRef::Depot(_) | InventoryRef::Agent(_) => unreachable!("not in the pile lab"),
+        }
     }
 
-    /// Puts `amount` units of the pile's mineral from the cargo on it.
-    pub fn deposit_amount(&mut self, cargo: &mut Inventory, id: PileId, amount: u32) -> Result<u32, &'static str> {
-        let any = self.carried(cargo) > 0;
-        let pile = self.piles.get_mut(&id).ok_or("Pile no longer exists")?;
-        if !any {
-            return Err("Carrier is empty");
-        }
-        let Some(item) = pile.item().filter(|&i| cargo.count(i) > 0) else {
-            return Err("Different minerals stay in separate piles");
-        };
-        let carried = cargo.count(item);
-        if amount == 0 || amount > carried || amount > PILE_CAPACITY - pile.units() {
-            return Err("Requested deposit does not fit cargo or pile capacity");
-        }
-        cargo.remove(item, amount);
-        let added = pile.inventory.add(item, amount);
-        debug_assert!(added, "checked the pile's mineral and room");
-        Ok(amount)
-    }
-
-    /// Puts the pile's mineral from the cargo on it, as much as fits.
-    pub fn deposit(&mut self, cargo: &mut Inventory, id: PileId) -> Result<u32, &'static str> {
-        let pile = self.piles.get(&id).ok_or("Pile no longer exists")?;
-        let carried = pile.item().map_or(0, |i| cargo.count(i));
-        self.deposit_amount(cargo, id, carried.min(PILE_CAPACITY - pile.units()))
-    }
-
-    /// Starts a pile of `amount` units of the first mineral carried.
-    pub fn drop_new_amount(&mut self, cargo: &mut Inventory, position: FxVec2, amount: u32) -> Result<PileId, &'static str> {
-        let item = self.first_carried(cargo).ok_or("Carrier is empty")?;
-        let carried = cargo.count(item);
-        let offset = position - self.center;
-        if offset.x.abs() > self.limit || offset.y.abs() > self.limit {
-            return Err("Drop position must be on the deck");
-        }
-        if self.piles.len() >= self.max_piles {
-            return Err("Pile limit reached; deposit into an existing pile");
-        }
-        if amount == 0 || amount > carried {
-            return Err("Requested quantity exceeds cargo");
-        }
-        let id = self.insert(item, position, amount, None);
-        cargo.remove(item, amount);
-        Ok(id)
-    }
-
-    /// Starts a pile of all the first mineral carried.
-    pub fn drop_new(&mut self, cargo: &mut Inventory, position: FxVec2) -> Result<PileId, &'static str> {
-        let units = self.drop_units(cargo);
-        self.drop_new_amount(cargo, position, units)
-    }
-
-    /// Exact: puts `amount` carried mineral units in the collector, any mix,
-    /// in mineral order.
-    pub fn deliver_amount(&mut self, cargo: &mut Inventory, amount: u32) -> Result<u32, &'static str> {
-        let carried = self.carried(cargo);
-        let minerals = self.minerals();
-        if carried == 0 {
-            return Err("Carrier is empty");
-        }
-        let collector = self.collector.as_mut().ok_or("There is no collector here")?;
-        if amount == 0 || amount > carried {
-            return Err("Requested delivery exceeds cargo");
-        }
-        let mut left = amount;
-        for item in minerals {
-            let units = cargo.count(item).min(left);
-            cargo.remove(item, units);
-            let added = collector.inventory.add(item, units);
-            debug_assert!(added, "the collector has no limit");
-            left -= units;
-        }
-        Ok(amount)
+    /// Removes piles left empty, but not a dispenser's, nor one a haul
+    /// still holds units in or out of, nor one with units in the air from
+    /// or to it (`busy`).
+    pub(crate) fn prune(&mut self, busy: &std::collections::BTreeSet<PileId>) {
+        self.piles.retain(|id, p| p.source.is_some() || p.inventory.kind().is_some() || busy.contains(id));
     }
 
     /// Dug ore: `units` of mineral `item` out of the pit at `tile`, onto a
@@ -415,7 +378,7 @@ impl PileLab {
         let beside = self
             .piles
             .iter()
-            .filter(|(_, p)| p.source.is_none() && p.item() == Some(item) && p.units() + units <= PILE_CAPACITY)
+            .filter(|(_, p)| p.source.is_none() && p.item() == Some(item) && p.inventory.free() >= units)
             .map(|(&id, p)| (nav::distance(p.position, pit), id))
             .filter(|&(d, _)| d < Fx::from_ratio(11, 5))
             .min();
@@ -519,83 +482,86 @@ fn in_reach(position: FxVec2, job: &PileJob, body: Fx) -> bool {
 
 impl Settlement {
     /// Commands: walk to a pile and transfer. `pace` is seconds per unit
-    /// (zero for all at once); `approach` picks the standing spot.
+    /// (zero for all at once); `approach` picks the standing spot. The haul
+    /// holds its units on both sides now, as a carry job: a second haul for
+    /// the same units gets what is left, or is refused here.
     pub fn pile_action(&mut self, tick: u64, terrain: &Terrain, agent: usize, action: PileAction, pace: Fx, approach: Option<FxVec2>) {
-        let Some(lab) = self.piles.as_mut() else { return };
-        let Some(a) = self.agents.get_mut(agent) else { return };
-        let body_radius = character_of(&self.characters, a).body.radius;
-        let AgentState { body, carry, role: Role::Avatar(avatar), .. } = a else { return };
-        let me = agent as AgentIx;
-        let cargo = &carry.inventory;
-        let result = (|| {
-            if pace < Fx::ZERO || pace > Fx::from_int(5) {
-                return Err("Invalid transfer interval");
-            }
-            let hauler = lab.hauler_mut(me);
-            if !hauler.in_flight.is_empty() {
-                return Err("Wait for airborne units to land before starting another transfer");
-            }
-            hauler.job_serial += 1;
-            hauler.job = None;
-            hauler.last_error = None;
-            let (center, radius) = lab.target(cargo, action)?;
-            if matches!(action, PileAction::Drop(_)) && !lab.free_drop(terrain, center, lab.drop_units(cargo)) {
-                return Err("Choose open floor away from piles, machines and the deck edge");
-            }
-            if matches!(action, PileAction::Pickup(_) | PileAction::PickupAmount(..)) && cargo.free() == 0 {
-                return Err("Carrier is full. Deposit before collecting more");
-            }
-            if action == PileAction::Deliver && lab.carried(cargo) == 0 {
-                return Err("Carrier is empty. Collect ore before delivering");
-            }
-            let route = match approach {
-                Some(stand) => {
-                    let gap = nav::distance(stand, center);
-                    if gap < radius + body_radius + Fx::from_ratio(1, 25) || gap > radius + body_radius + Fx::from_ratio(9, 20) {
-                        return Err("Approach point must be within safe transfer reach");
-                    }
-                    let path = walk_path(terrain, body.position, stand, body_radius);
-                    if path.is_empty() {
-                        return Err("Approach point is blocked");
-                    }
-                    path
-                }
-                None => approach_route(terrain, body.position, center, radius, body_radius).ok_or("No clear route there on foot")?,
-            };
-            let pace = if pace == Fx::ZERO { 0 } else { (pace * Fx::from_int(content::TICKS_PER_SECOND)).round().floor_to_int().max(1) as u64 };
-            follow(body, avatar, route);
-            // A haul let go of earlier this turn no longer holds this one back.
-            avatar.dropped_haul = false;
-            let hauler = lab.hauler_mut(me);
-            hauler.job = Some(PileJob {
-                action,
-                center,
-                radius,
-                age: 0,
-                stalled: 0,
-                previous: body.position,
-                pace,
-                next_toss: tick,
-                remaining: None,
-                transferred: 0,
-                planned: 0,
-                destination: None,
-            });
-            hauler.notice = if matches!(action, PileAction::Pickup(_) | PileAction::PickupAmount(..)) {
-                "Walking to collect mineral…"
-            } else if action == PileAction::Deliver {
-                "Walking to the collector…"
-            } else {
-                "Walking to deposit cargo…"
-            }
-            .into();
-            Ok(())
-        })();
-        if let Err(error) = result {
-            let hauler = lab.hauler_mut(me);
+        if self.piles.is_none() || !self.agents.get(agent).is_some_and(|a| a.avatar().is_some()) {
+            return;
+        }
+        if let Err(error) = self.start_pile_job(tick, terrain, agent, action, pace, approach) {
+            let hauler = self.piles.as_mut().expect("checked").hauler_mut(agent as AgentIx);
             hauler.notice = error.into();
             hauler.last_error = Some(error.into());
         }
+    }
+
+    fn start_pile_job(&mut self, tick: u64, terrain: &Terrain, agent: usize, action: PileAction, pace: Fx, approach: Option<FxVec2>) -> Result<(), &'static str> {
+        let me = agent as AgentIx;
+        if pace < Fx::ZERO || pace > Fx::from_int(5) {
+            return Err("Invalid transfer interval");
+        }
+        let hauler = self.piles.as_mut().expect("a pile scene").hauler_mut(me);
+        if !hauler.in_flight.is_empty() {
+            return Err("Wait for airborne units to land before starting another transfer");
+        }
+        hauler.job_serial += 1;
+        hauler.job = None;
+        hauler.last_error = None;
+        // A new haul replaces the one running, which gives back its units.
+        self.drop_pile_carry(agent);
+        if self.agents[agent].carry.job.is_some() {
+            return Err("Finish the depot transfer before hauling");
+        }
+        let Settlement { piles, agents, characters, .. } = self;
+        let lab = piles.as_mut().expect("a pile scene");
+        let a = &mut agents[agent];
+        let body_radius = character_of(characters, a).body.radius;
+        let AgentState { body, carry, role: Role::Avatar(avatar), .. } = a else { unreachable!("checked: an avatar") };
+        let cargo = &carry.inventory;
+        let (center, radius) = lab.target(cargo, action)?;
+        if matches!(action, PileAction::Drop(_)) && !lab.free_drop(terrain, center, lab.drop_units(cargo)) {
+            return Err("Choose open floor away from piles, machines and the deck edge");
+        }
+        if action == PileAction::Deliver && lab.carried(cargo) == 0 {
+            return Err("Carrier is empty. Collect ore before delivering");
+        }
+        let (other, item, direction, units) = lab.plan(cargo, action)?;
+        let route = match approach {
+            Some(stand) => {
+                let gap = nav::distance(stand, center);
+                if gap < radius + body_radius + Fx::from_ratio(1, 25) || gap > radius + body_radius + Fx::from_ratio(9, 20) {
+                    return Err("Approach point must be within safe transfer reach");
+                }
+                let path = walk_path(terrain, body.position, stand, body_radius);
+                if path.is_empty() {
+                    return Err("Approach point is blocked");
+                }
+                path
+            }
+            None => approach_route(terrain, body.position, center, radius, body_radius).ok_or("No clear route there on foot")?,
+        };
+        let pace = if pace == Fx::ZERO { 0 } else { (pace * Fx::from_int(content::TICKS_PER_SECOND)).round().floor_to_int().max(1) as u64 };
+        // A drop's pile is made now, empty, so the units can be held there.
+        let other = other.unwrap_or_else(|| InventoryRef::Pile(lab.insert(item, center, 0, None)));
+        let job = CarryJob { other, item, direction, remaining: units, next_tick: tick };
+        let held = job.reserve(&mut carry.inventory, Side::Own) && job.reserve(lab.holder_mut(other), Side::Other);
+        debug_assert!(held, "`plan` checked both sides");
+        carry.job = Some(job);
+        follow(body, avatar, route);
+        // A haul let go of earlier this turn no longer holds this one back.
+        avatar.dropped_haul = false;
+        let hauler = lab.hauler_mut(me);
+        hauler.job = Some(PileJob { action, center, radius, age: 0, stalled: 0, previous: body.position, pace, started: false, transferred: 0, planned: units });
+        hauler.notice = if matches!(action, PileAction::Pickup(_) | PileAction::PickupAmount(..)) {
+            "Walking to collect mineral…"
+        } else if action == PileAction::Deliver {
+            "Walking to the collector…"
+        } else {
+            "Walking to deposit cargo…"
+        }
+        .into();
+        Ok(())
     }
 
     /// Commands: a dispenser adds units to its output pile. Everyone hears
@@ -625,20 +591,32 @@ impl Settlement {
         }
     }
 
-    /// Stops the avatar's haul, if one runs, with this notice and error.
-    /// Its cargo stays.
+    /// Stops the avatar's haul, if one runs, with this notice and error: the
+    /// units it hasn't moved go back (`drop_carry`). Its cargo, and units in
+    /// the air, stay.
     pub(super) fn end_pile_job(&mut self, agent: usize, notice: &str, error: &str) {
         let Some(hauler) = self.piles.as_mut().and_then(|lab| lab.haulers.get_mut(&(agent as AgentIx))) else { return };
         if hauler.job.take().is_some() {
             hauler.notice = notice.into();
             hauler.last_error = Some(error.into());
         }
+        self.drop_pile_carry(agent);
+    }
+
+    /// Ends the avatar's carry job if it is a haul's, giving back what it
+    /// holds on both sides at once.
+    fn drop_pile_carry(&mut self, agent: usize) {
+        let carry = &mut self.agents[agent].carry;
+        if carry.job.as_ref().is_some_and(|j| j.other.in_pile_lab()) {
+            let releases = carry.drop_carry(agent as AgentIx);
+            self.reserve_stock(releases);
+        }
     }
 
     /// Stage 2, for an avatar: walk toward its pile, replanning when stuck.
     pub(super) fn pile_job_self_update(lab: &PileLab, me: AgentIx, body: &mut Body, avatar: &mut AvatarState, terrain: &Terrain, radius: Fx) -> Option<&'static str> {
         let job = lab.hauler(me)?.job.as_ref()?;
-        if job.remaining.is_some() || in_reach(body.position, job, radius) {
+        if job.started || in_reach(body.position, job, radius) {
             body.route.clear();
             body.velocity = FxVec2::ZERO;
             return None;
@@ -655,30 +633,42 @@ impl Settlement {
         None
     }
 
-    /// Housekeeping for every haul's clocks: age, stalls, landings, completion.
+    /// Housekeeping for every haul's clocks: failures, age, stalls,
+    /// landings, completion; then piles left empty go.
     pub(crate) fn pile_housekeeping(&mut self, tick: u64) {
-        let failures: Vec<(AgentIx, String)> = self
+        let failures: Vec<(usize, String)> = self
             .agents
             .iter_mut()
             .enumerate()
-            .filter_map(|(i, a)| Some((i as AgentIx, a.avatar_mut()?.pile_failure.take()?)))
+            .filter_map(|(i, a)| Some((i, a.avatar_mut()?.pile_failure.take()?)))
             .collect();
-        let Some(lab) = self.piles.as_mut() else { return };
         for (agent, error) in failures {
-            lab.hauler_mut(agent).fail(&error);
+            self.end_pile_job(agent, &error, &error);
         }
+        let Some(lab) = self.piles.as_mut() else { return };
         for (&agent, hauler) in lab.haulers.iter_mut() {
             hauler.in_flight.retain(|&landing| landing > tick);
             let Some(job) = hauler.job.as_mut() else { continue };
-            let position = self.agents[agent as usize].body.position;
+            let a = &self.agents[agent as usize];
+            let position = a.body.position;
             job.age += 1;
             job.stalled = if nav::distance(position, job.previous) < Fx::from_ratio(3, 1000) { job.stalled + 1 } else { 0 };
             job.previous = position;
-            if job.remaining == Some(0) && hauler.in_flight.is_empty() {
+            if job.started && a.carry.job.is_none() && hauler.in_flight.is_empty() {
                 hauler.notice = format!("Transferred {} units. All items landed.", job.transferred);
                 hauler.job = None;
             }
         }
+        let busy = self
+            .transfers
+            .values()
+            .flat_map(|t| [t.from, t.to])
+            .filter_map(|end| match end {
+                InventoryRef::Pile(id) => Some(id),
+                _ => None,
+            })
+            .collect();
+        lab.prune(&busy);
     }
 
     /// Stage 3: the avatar is in reach and a unit (or the whole amount) is due.
@@ -687,147 +677,122 @@ impl Settlement {
             return None;
         }
         let job = self.piles.as_ref()?.hauler(me)?.job.as_ref()?;
-        let due = job.remaining != Some(0) && tick >= job.next_toss && (job.remaining.is_some() || in_reach(a.body.position, job, character_of(&self.characters, a).body.radius));
+        let units = a.carry.job.as_ref().filter(|j| j.other.in_pile_lab())?;
+        let due = tick >= units.next_tick && (job.started || in_reach(a.body.position, job, character_of(&self.characters, a).body.radius));
         due.then_some(CarryUnit { agent: me })
     }
 
-    /// Moves one unit of an avatar's pile job (or all of it at pace zero),
-    /// between its cargo and a pile or the collector. The unit moves at once,
-    /// unreserved: its toss is only shown (`Hauler::in_flight`).
+    /// Moves the next unit of an avatar's haul (or all of it at pace zero),
+    /// between its cargo and a pile or the collector, out of what the carry
+    /// job holds on both sides. The unit moves at once: its toss is only
+    /// shown (`Hauler::in_flight`).
     pub(crate) fn pile_unit(&mut self, tick: u64, terrain: &Terrain, message: CarryUnit) {
-        let mut tosses = Vec::new();
-        self.pile_unit_inner(tick, terrain, message.agent, &mut tosses);
-        self.events.extend(tosses);
+        let (me, agent) = (message.agent, message.agent as usize);
+        let Some(mut job) = self.piles.as_ref().and_then(|lab| lab.hauler(me)).and_then(|h| h.job.clone()) else { return };
+        let Some(units) = self.agents[agent].carry.job.as_ref().filter(|j| j.other.in_pile_lab()) else { return };
+        if tick < units.next_tick {
+            return;
+        }
+        if let (false, PileAction::Drop(p)) = (job.started, job.action) {
+            let lab = self.piles.as_ref().expect("a pile scene");
+            if !lab.free_drop(terrain, p, units.remaining) {
+                let error = if job.pace == 0 { "Drop location is now blocked. Cargo retained." } else { "Drop location is blocked" };
+                return self.end_pile_job(agent, error, error);
+            }
+        }
+        job.started = true;
+        // The unit flies for 0.85 × the pace, clamped to 0.3–1.0 s.
+        let flight = (job.pace.clamp(content::millis_to_ticks(300), content::millis_to_ticks(1000)) * 85).div_ceil(100);
+        let mut moved = 0;
+        while let Some(units) = self.agents[agent].carry.job.clone().filter(|j| j.other.in_pile_lab()) {
+            let (from, to) = self.pile_unit_move(me, &units);
+            moved += 1;
+            if job.pace > 0 {
+                let lab = self.piles.as_mut().expect("a pile scene");
+                lab.hauler_mut(me).in_flight.push(tick + flight);
+                self.events.push(Event::PileToss { material: lab.mineral(units.item), from, to, ticks: flight });
+            }
+            let carry = &mut self.agents[agent].carry;
+            let current = carry.job.as_mut().expect("moving its units");
+            current.remaining -= 1;
+            current.next_tick = tick + job.pace;
+            if current.remaining == 0 {
+                carry.job = None;
+                // A delivery empties every mineral, one after another.
+                if job.action == PileAction::Deliver {
+                    job.planned += self.next_delivery(agent, tick + job.pace);
+                }
+            }
+            if job.pace > 0 {
+                break;
+            }
+        }
+        job.transferred += moved;
+        let lab = self.piles.as_mut().expect("a pile scene");
+        let cargo = &self.agents[agent].carry.inventory;
+        if job.pace > 0 {
+            let hauler = lab.hauler_mut(me);
+            hauler.notice = format!("Tossing {} / {} units...", job.transferred, job.planned);
+            hauler.job = Some(job);
+            return;
+        }
+        let n = job.transferred;
+        let notice = match job.action {
+            PileAction::Pickup(_) | PileAction::PickupAmount(..) => format!("Collected {n} units. Carrying {}/{}.", cargo.total(), cargo.capacity),
+            PileAction::Deposit(_) => format!("Deposited {n} units. {} still carried.", lab.carried(cargo)),
+            PileAction::Drop(_) => format!("Placed a new pile of {n} units."),
+            PileAction::Deliver => format!("Delivered {n} units to the collector."),
+        };
+        let hauler = lab.hauler_mut(me);
+        hauler.notice = notice;
+        hauler.last_error = None;
+        hauler.job = None;
     }
 
-    fn pile_unit_inner(&mut self, tick: u64, terrain: &Terrain, me: AgentIx, tosses: &mut Vec<Event>) {
-        let Settlement { piles, agents, .. } = self;
-        let (Some(lab), Some(a)) = (piles.as_mut(), agents.get_mut(me as usize)) else { return };
-        let cargo = &mut a.carry.inventory;
-        let Some(mut job) = lab.hauler(me).and_then(|h| h.job.clone()) else { return };
-        let result = (|| -> Result<Option<String>, &'static str> {
-            let (carried, room, dropped) = (lab.carried(cargo), cargo.free(), lab.drop_units(cargo));
-            if job.pace == 0 {
-                let carrying = |cargo: &Inventory| format!("Carrying {}/{}.", cargo.total(), cargo.capacity);
-                let message = match job.action {
-                    PileAction::Pickup(id) => lab.pickup(cargo, id).map(|n| format!("Collected {n} units. {}", carrying(cargo))),
-                    PileAction::PickupAmount(id, n) => lab.pickup_amount(cargo, id, n).map(|n| format!("Collected {n} units. {}", carrying(cargo))),
-                    PileAction::Deposit(id) => lab.deposit(cargo, id).map(|n| format!("Deposited {n} units. {} still carried.", lab.carried(cargo))),
-                    PileAction::Drop(p) => {
-                        if !lab.free_drop(terrain, p, dropped) {
-                            return Err("Drop location is now blocked. Cargo retained.");
-                        }
-                        lab.drop_new(cargo, p).map(|_| format!("Placed a new pile of {dropped} units."))
-                    }
-                    PileAction::Deliver => lab.deliver_amount(cargo, carried).map(|n| format!("Delivered {n} units to the collector.")),
-                }?;
-                return Ok(Some(message));
+    /// Moves one unit of a haul's carry job between the cargo and its pile
+    /// or the collector, out of what the job holds on both sides. Returns
+    /// where its toss starts and ends.
+    fn pile_unit_move(&mut self, me: AgentIx, job: &CarryJob) -> (TossEnd, TossEnd) {
+        let own = InventoryRef::Agent(me);
+        let (from, to) = match job.direction {
+            Direction::Pickup => (job.other, own),
+            Direction::Deposit => (own, job.other),
+        };
+        let ends = (self.toss_end(from, job.item, true), self.toss_end(to, job.item, false));
+        self.inventory_mut(from).take(job.item, 1);
+        self.inventory_mut(to).put(job.item, 1);
+        ends
+    }
+
+    /// Where a unit of `item` leaves (`leaving`) or arrives at `holder`.
+    fn toss_end(&self, holder: InventoryRef, item: ItemIx, leaving: bool) -> TossEnd {
+        let lab = self.piles.as_ref().expect("a pile scene");
+        match holder {
+            InventoryRef::Pile(id) => {
+                let pile = &lab.piles[&id];
+                TossEnd::Pile { id, slot: pile.units() - u32::from(leaving), position: pile.position }
             }
-            if job.remaining.is_none() {
-                let amount = match job.action {
-                    PileAction::Pickup(id) => {
-                        let pile = lab.piles.get(&id).ok_or("Pile disappeared")?;
-                        pile.units().min(room)
-                    }
-                    PileAction::PickupAmount(id, n) => {
-                        let pile = lab.piles.get(&id).ok_or("Pile disappeared")?;
-                        if pile.units() < n || room < n {
-                            return Err("Exact pickup quantity is no longer available");
-                        }
-                        n
-                    }
-                    PileAction::Deposit(id) => {
-                        let pile = lab.piles.get(&id).ok_or("Pile disappeared")?;
-                        pile.item().map_or(0, |i| cargo.count(i)).min(PILE_CAPACITY - pile.units())
-                    }
-                    PileAction::Drop(p) => {
-                        if !lab.free_drop(terrain, p, dropped) {
-                            return Err("Drop location is blocked");
-                        }
-                        dropped
-                    }
-                    PileAction::Deliver => carried,
-                };
-                if amount == 0 {
-                    return Err("Nothing can be transferred");
-                }
-                job.remaining = Some(amount);
-                job.planned = amount;
+            InventoryRef::Collector => TossEnd::Collector { position: self.position_of(holder) },
+            InventoryRef::Agent(agent) => {
+                let cargo = &self.agents[agent as usize].carry.inventory;
+                TossEnd::Cargo { agent, slot: lab.cargo_slot(cargo, item) - u32::from(leaving) }
             }
-            // The cargo's slots, before the unit moves: a unit of `item`
-            // comes in after its mineral's last one, and goes from there.
-            let into_cargo = |lab: &PileLab, cargo: &Inventory, item| TossEnd::Cargo { agent: me, slot: lab.cargo_slot(cargo, item) };
-            let out_of_cargo = |lab: &PileLab, cargo: &Inventory, item| TossEnd::Cargo { agent: me, slot: lab.cargo_slot(cargo, item).wrapping_sub(1) };
-            let (from, to, item) = match job.action {
-                PileAction::Pickup(id) | PileAction::PickupAmount(id, _) => {
-                    let pile = lab.piles.get(&id).ok_or("Pile disappeared")?;
-                    let (slot, position) = (pile.units().checked_sub(1).ok_or("Pile is empty")?, pile.position);
-                    let item = pile.item().expect("a pile with units holds a mineral");
-                    let to = into_cargo(lab, cargo, item);
-                    lab.pickup_amount(cargo, id, 1)?;
-                    (TossEnd::Pile { id, slot, position }, to, item)
-                }
-                PileAction::Deposit(id) => {
-                    let pile = lab.piles.get(&id).ok_or("Pile disappeared")?;
-                    let (slot, position) = (pile.units(), pile.position);
-                    let item = pile.item().filter(|&i| cargo.count(i) > 0).ok_or("Different minerals stay in separate piles")?;
-                    let from = out_of_cargo(lab, cargo, item);
-                    lab.deposit_amount(cargo, id, 1)?;
-                    (from, TossEnd::Pile { id, slot, position }, item)
-                }
-                PileAction::Drop(p) => {
-                    // The first mineral carried, then the new pile's.
-                    let item = match job.destination {
-                        Some(id) => lab.piles.get(&id).ok_or("Pile disappeared")?.item(),
-                        None => lab.first_carried(cargo),
-                    }
-                    .ok_or("Carrier is empty")?;
-                    let from = out_of_cargo(lab, cargo, item);
-                    let (id, slot) = match job.destination {
-                        Some(id) => {
-                            let slot = lab.piles.get(&id).ok_or("Pile disappeared")?.units();
-                            lab.deposit_amount(cargo, id, 1)?;
-                            (id, slot)
-                        }
-                        None => {
-                            let id = lab.drop_new_amount(cargo, p, 1)?;
-                            job.destination = Some(id);
-                            (id, 0)
-                        }
-                    };
-                    (from, TossEnd::Pile { id, slot, position: p }, item)
-                }
-                PileAction::Deliver => {
-                    // Mineral by mineral, as `deliver_amount` takes them.
-                    let item = lab.first_carried(cargo).ok_or("Carrier is empty")?;
-                    let from = out_of_cargo(lab, cargo, item);
-                    lab.deliver_amount(cargo, 1)?;
-                    let position = lab.collector.as_ref().expect("delivered").position;
-                    (from, TossEnd::Collector { position }, item)
-                }
-            };
-            // The unit flies for 0.85 × the pace, clamped to 0.3–1.0 s.
-            let flight = (job.pace.clamp(content::millis_to_ticks(300), content::millis_to_ticks(1000)) * 85).div_ceil(100);
-            lab.hauler_mut(me).in_flight.push(tick + flight);
-            tosses.push(Event::PileToss { material: lab.mineral(item), from, to, ticks: flight });
-            job.transferred += 1;
-            *job.remaining.as_mut().expect("set above") -= 1;
-            job.next_toss = tick + job.pace;
-            Ok(None)
-        })();
-        let hauler = lab.hauler_mut(me);
-        match result {
-            Ok(Some(message)) => {
-                hauler.notice = message;
-                hauler.last_error = None;
-                hauler.job = None;
-            }
-            Ok(None) => {
-                hauler.notice = format!("Tossing {} / {} units...", job.transferred, job.planned);
-                hauler.job = Some(job);
-            }
-            Err(error) => hauler.fail(error),
+            InventoryRef::Depot(_) => unreachable!("hauls don't reach depots"),
         }
+    }
+
+    /// Starts delivering the next mineral carried, if there is one, as the
+    /// avatar's carry job (due on `tick`). Returns its units.
+    fn next_delivery(&mut self, agent: usize, tick: u64) -> u32 {
+        let Settlement { piles, agents, .. } = self;
+        let (lab, carry) = (piles.as_mut().expect("a pile scene"), &mut agents[agent].carry);
+        let Some(item) = lab.first_carried(&carry.inventory) else { return 0 };
+        let remaining = carry.inventory.available(item);
+        let job = CarryJob { other: InventoryRef::Collector, item, direction: Direction::Deposit, remaining, next_tick: tick };
+        let held = job.reserve(&mut carry.inventory, Side::Own) && job.reserve(lab.holder_mut(job.other), Side::Other);
+        debug_assert!(held, "the units are carried and the collector has no limit");
+        carry.job = Some(job);
+        remaining
     }
 }
 
@@ -881,19 +846,53 @@ mod tests {
             self.lab.add(id, units)
         }
 
-        fn pickup(&mut self, agent: AgentIx, id: PileId) -> Result<u32, &'static str> {
+        /// Starts a haul as the command does: plans it and holds its units
+        /// on both sides. Returns its carry job.
+        fn start(&mut self, agent: AgentIx, action: PileAction) -> Result<CarryJob, &'static str> {
             let (lab, cargo) = self.parts(agent);
-            lab.pickup(cargo, id)
+            let (other, item, direction, remaining) = lab.plan(cargo, action)?;
+            let other = other.unwrap_or_else(|| match action {
+                PileAction::Drop(p) => InventoryRef::Pile(lab.insert(item, p, 0, None)),
+                _ => unreachable!("only a drop makes its pile"),
+            });
+            let job = CarryJob { other, item, direction, remaining, next_tick: 0 };
+            assert!(job.reserve(cargo, Side::Own) && job.reserve(lab.holder_mut(other), Side::Other));
+            Ok(job)
+        }
+
+        /// A whole haul at once: started, its units moved, and piles left
+        /// empty gone. Returns its other side and units.
+        fn haul(&mut self, agent: AgentIx, action: PileAction) -> Result<(InventoryRef, u32), &'static str> {
+            let job = self.start(agent, action)?;
+            let (lab, cargo) = self.parts(agent);
+            let (item, units) = (job.item, job.remaining);
+            match job.direction {
+                Direction::Pickup => {
+                    lab.holder_mut(job.other).take(item, units);
+                    cargo.put(item, units);
+                }
+                Direction::Deposit => {
+                    cargo.take(item, units);
+                    lab.holder_mut(job.other).put(item, units);
+                }
+            }
+            lab.prune(&std::collections::BTreeSet::new());
+            Ok((job.other, units))
+        }
+
+        fn pickup(&mut self, agent: AgentIx, id: PileId) -> Result<u32, &'static str> {
+            self.haul(agent, PileAction::Pickup(id)).map(|(_, n)| n)
         }
 
         fn deposit(&mut self, agent: AgentIx, id: PileId) -> Result<u32, &'static str> {
-            let (lab, cargo) = self.parts(agent);
-            lab.deposit(cargo, id)
+            self.haul(agent, PileAction::Deposit(id)).map(|(_, n)| n)
         }
 
         fn drop_new(&mut self, agent: AgentIx, position: FxVec2) -> Result<PileId, &'static str> {
-            let (lab, cargo) = self.parts(agent);
-            lab.drop_new(cargo, position)
+            match self.haul(agent, PileAction::Drop(position))?.0 {
+                InventoryRef::Pile(id) => Ok(id),
+                other => unreachable!("a drop makes a pile, not {other:?}"),
+            }
         }
 
         fn cargo(&self, agent: AgentIx) -> Carried {
@@ -976,7 +975,7 @@ mod tests {
         assert_eq!(s.pickup(A, 0), Ok(12));
         assert_eq!(s.pickup(B, 1), Ok(12));
         assert_eq!((s.cargo(A).minerals, s.cargo(B).minerals), (vec![12, 0, 0], vec![0, 12, 0]));
-        assert_eq!(s.pickup(B, 0), Err("No units available or carrier full"), "B is full");
+        assert_eq!(s.pickup(B, 0), Err("Carrier is full. Deposit before collecting more"));
         assert_eq!(s.deposit(A, 0), Ok(12));
         assert_eq!((s.cargo(A).units, s.cargo(B).units), (0, 12));
         assert!(s.conserved());
@@ -999,6 +998,40 @@ mod tests {
         assert_eq!((s.lab.pile_mineral(&s.piles[&id]), s.piles[&id].units()), (Some(0), 5));
         assert_eq!(s.cargo(A).units, 0);
         assert!(s.conserved());
+    }
+
+    /// A haul holds its units when it starts: a second haul for the same
+    /// units gets what is left, then nothing; giving a haul's units back
+    /// offers them again. A drop's new pile holds room for its units.
+    #[test]
+    fn hauls_hold_their_units_when_they_start() {
+        let mut s = lab();
+        const B: AgentIx = 1;
+        const C: AgentIx = 2;
+        // Pile 1: 24 units of blue crystal.
+        let a = s.start(A, PileAction::Pickup(1)).unwrap();
+        assert_eq!(a.remaining, 12);
+        assert_eq!(s.start(B, PileAction::PickupAmount(1, 13)), Err("Requested quantity exceeds pile stock"));
+        assert_eq!(s.start(B, PileAction::Pickup(1)).unwrap().remaining, 12);
+        assert_eq!(s.start(C, PileAction::Pickup(1)), Err("No units available"));
+        assert_eq!(s.piles[&1].inventory.reserved_out[1], 24);
+        let (l, cargo) = s.parts(A);
+        a.release(cargo, Side::Own);
+        a.release(l.holder_mut(a.other), Side::Other);
+        assert_eq!(s.start(C, PileAction::PickupAmount(1, 5)).unwrap().remaining, 5, "A's units are offered again");
+        for agent in [A, B, C] {
+            s.cargo.get(&agent).map(|c| c.validate().unwrap());
+        }
+        s.piles[&1].inventory.validate().unwrap();
+
+        // A drop's pile is made empty, holding room for the drop.
+        let mut s = lab();
+        s.pickup(A, 1).unwrap();
+        let drop = s.start(A, PileAction::Drop(FxVec2::new(Fx::ONE, Fx::from_int(2)))).unwrap();
+        let InventoryRef::Pile(id) = drop.other else { panic!("a drop makes a pile") };
+        assert_eq!((s.piles[&id].units(), s.piles[&id].inventory.reserved_in[1]), (0, 12));
+        s.lab.prune(&std::collections::BTreeSet::new());
+        assert!(s.piles.contains_key(&id), "a pile holding room stays");
     }
 
     #[test]

@@ -891,6 +891,81 @@ fn a_player_carries_wood_and_minerals_within_one_capacity() {
     assert!(scene.conserved());
 }
 
+/// Two players go for the same pile in one turn: the first command holds
+/// its units at once, so the second is refused there and then, or gets what
+/// is left, instead of failing at the pile. A cancel gives the units back.
+#[test]
+fn two_players_hold_pile_units_from_the_command() {
+    let p = |x: f64, y: f64| [fx(x), fx(y)];
+    let mut setup = mine();
+    setup.piles.as_mut().unwrap().piles = vec![(0, p(-3.0, 4.0), 10), (1, p(3.0, 5.0), 13)];
+    let mut scene = Scene::new(setup);
+    let (host, guest) = (PlayerId(0), PlayerId(1));
+    scene.sim.step(&[Command { player: guest, kind: CommandKind::Join }]);
+    let (a, b) = (scene.s().avatar_of(host).unwrap(), scene.s().avatar_of(guest).unwrap());
+    let haul = |agent, action| CommandKind::Pile { agent, action, pace: fx(0.2), approach: None };
+    let held = |scene: &Scene, agent: u16| scene.s().agents[agent as usize].carry.job.as_ref().map(|j| j.remaining);
+    let error = |scene: &Scene, agent| scene.lab().hauler(agent).and_then(|h| h.last_error.clone());
+    let idle = |scene: &Scene, agent| scene.lab().hauler(agent).is_some_and(|h| h.job.is_none());
+    let finish = |scene: &mut Scene| {
+        for _ in 0..ms(30_000) {
+            if idle(scene, a) && idle(scene, b) {
+                return;
+            }
+            scene.sim.step(&[]);
+        }
+        panic!("the hauls never finished");
+    };
+
+    // Both want all of pile 0: the host's command comes first.
+    scene.sim.step(&[Command { player: host, kind: haul(a, PileAction::Pickup(0)) }, Command { player: guest, kind: haul(b, PileAction::Pickup(0)) }]);
+    assert_eq!(held(&scene, a), Some(10));
+    assert_eq!((held(&scene, b), error(&scene, b).as_deref()), (None, Some("No units available")), "refused at once");
+    assert_eq!(scene.lab().piles[&0].inventory.reserved_out[scene.lab().item(0) as usize], 10);
+    assert!(scene.conserved());
+    // The host walks off: the units are free again, for the guest.
+    let walk = CommandKind::MoveAvatar { agent: a, intent: Intent::Walk { direction: v(1.0, 0.0), run: false } };
+    scene.sim.step(&[Command { player: host, kind: walk }]);
+    assert_eq!(held(&scene, a), None);
+    assert_eq!(scene.lab().piles[&0].inventory.reserved_out, vec![0; scene.s().items.len()]);
+    assert!(scene.conserved(), "the release leaves every inventory valid");
+    scene.sim.step(&[Command { player: guest, kind: haul(b, PileAction::Pickup(0)) }]);
+    assert_eq!(held(&scene, b), Some(10));
+    finish(&mut scene);
+    assert_eq!(scene.s().carried_minerals(b), vec![10, 0, 0]);
+
+    // Pile 1 has 13: the host takes 12, the guest (2 free) gets the 1 left.
+    scene.sim.step(&[Command { player: host, kind: haul(a, PileAction::Pickup(1)) }, Command { player: guest, kind: haul(b, PileAction::Pickup(1)) }]);
+    assert_eq!((held(&scene, a), held(&scene, b)), (Some(12), Some(1)));
+    assert!(scene.conserved());
+    finish(&mut scene);
+    assert_eq!(error(&scene, a), None);
+    assert_eq!(error(&scene, b), None);
+    assert_eq!(scene.s().carried_minerals(a), vec![0, 12, 0]);
+    assert_eq!(scene.s().carried_minerals(b), vec![10, 1, 0]);
+    assert!(scene.lab().piles.is_empty(), "both piles emptied and went");
+    assert!(scene.conserved());
+}
+
+/// A walk that times out gives its haul's units back.
+#[test]
+fn a_timed_out_haul_releases_its_units() {
+    let mut scene = Scene::new(pile_lab());
+    let agent = scene.agent();
+    scene.command(CommandKind::Pile { agent, action: PileAction::Pickup(4), pace: Fx::ZERO, approach: None });
+    assert!(scene.lab().piles[&4].inventory.reserved_out.iter().sum::<u32>() > 0);
+    // A walk that can't arrive gives up after 30 s.
+    let failure = "Haul timed out. Cargo retained; choose another approach.";
+    let stuck = scene.at(-7.0, -7.0);
+    scene.sim.world_mut().settlement_mut().agents[agent as usize].body.position = stuck;
+    scene.sim.world_mut().settlement_mut().piles.as_mut().unwrap().haulers.get_mut(&agent).unwrap().job.as_mut().unwrap().age = ms(30_000);
+    scene.wait(2);
+    assert_eq!(scene.hauler().last_error.as_deref(), Some(failure));
+    assert!(scene.avatar().carry.job.is_none());
+    assert_eq!(scene.lab().piles[&4].inventory.reserved_out.iter().sum::<u32>(), 0);
+    assert!(scene.conserved());
+}
+
 // Releasing direct control (pause, focus loss, a controller disconnecting).
 
 fn release(scene: &mut Scene) {
