@@ -20,6 +20,7 @@ mod nametags;
 mod navigation;
 mod obstacles;
 mod palimpsest;
+mod piano;
 mod pause;
 mod peers;
 mod pile_model;
@@ -154,6 +155,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .init_resource::<style::ActiveStyle>()
         .init_resource::<telemetry::Telemetry>()
         .init_resource::<effects::Feedback>()
+        .init_resource::<piano::PianoInput>()
         .insert_resource(if simulation || offscreen {
             sound::Sound::recording()
         } else {
@@ -249,6 +251,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
     app.add_service::<lockstep::SessionService>()
         .add_service::<lockstep::WorldMirror>()
         .add_service::<scene_view::SceneView>()
+        .add_systems(PostUpdate, piano::update.run_if(in_state(service::WorldState::Active)))
         .add_service::<settlement::Settlement>()
         .add_service::<piles::PileLab>()
         .add_service::<character::Avatar>()

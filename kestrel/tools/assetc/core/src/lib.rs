@@ -252,6 +252,15 @@ pub struct MineLayout {
     pub seed: u64,
 }
 
+/// A playable upright piano. The keyboard faces local +Z.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Piano {
+    pub position: [f32; 3],
+    #[serde(default)]
+    pub yaw: f32,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename = "Scene", deny_unknown_fields)]
 pub struct Scene {
@@ -265,6 +274,8 @@ pub struct Scene {
     #[serde(default = "industrial")]
     pub industrial: bool,
     pub instances: Vec<Instance>,
+    #[serde(default)]
+    pub pianos: Vec<Piano>,
     #[serde(default)]
     pub piles: Option<PileLayout>,
     /// Generated ground to dig and mine, instead of the deck.
@@ -372,7 +383,9 @@ impl ScenePack {
             || self.scene.name.trim().is_empty()
             || self.scene.features.iter().collect::<std::collections::BTreeSet<_>>().len() != self.scene.features.len()
             || self.scene.instances.len() > 512
+            || self.scene.pianos.len() > 32
             || !self.scene.spawn.iter().all(|v| v.is_finite())
+            || self.scene.pianos.iter().any(|p| !p.yaw.is_finite() || p.position.iter().any(|v| !v.is_finite()))
         {
             return Err("invalid scene header or instance count".into());
         }
@@ -750,6 +763,7 @@ mod tests {
                     parameters: None,
                     label: None,
                 }],
+                pianos: vec![],
             },
             prefabs: vec![prefab],
             environment: None,
@@ -784,6 +798,7 @@ mod tests {
                 spawn: [0.0; 3],
                 industrial: false,
                 instances: vec![],
+                pianos: vec![],
                 piles: None,
                 mine: None,
                 style: None,

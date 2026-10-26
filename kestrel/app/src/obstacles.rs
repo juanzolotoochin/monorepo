@@ -59,6 +59,9 @@ pub fn scene_obstacles(pack: &ScenePack, collision_radius: impl Fn(&Instance) ->
             radius: collision_radius(instance) * instance.scale,
         });
     }
+    for piano in &scene.pianos {
+        discs.push(Disc { center: Vec3::from_array(piano.position), radius: 1.15 });
+    }
     if scene.industrial {
         discs.push(REACTOR);
         discs.extend(BULKHEADS);
@@ -104,7 +107,7 @@ mod tests {
         assert_eq!(
             counts,
             [
-                ("asset-guide", 0, 0),
+                ("asset-guide", 1, 0),
                 ("atlantis", 21, 0),
                 ("boulder-lab", 10, 0),
                 ("combat-arena", 0, 0),

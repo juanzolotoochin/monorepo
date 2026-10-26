@@ -5,6 +5,7 @@ Scene(
     spawn: (0.0, 0.0, -2.4),
     industrial: false,
     instances: [],
+    pianos: [(position: (0.0, 0.0, -4.0))],
     architecture: [
         (kind: Box, position: (0.0, -0.12, 0.0), size: (10.0, 0.24, 10.0), material: "floor", walkable: true),
         // One shape, one material.

@@ -10,6 +10,7 @@ use std::{
 unsafe extern "C" {
     fn kestrel_audio_start() -> i32;
     fn kestrel_audio_play(cue: i32);
+    fn kestrel_audio_note(note: i32, velocity: i32);
     fn kestrel_audio_stop();
     fn kestrel_audio_cue_count() -> i32;
     fn kestrel_audio_synthesize(
@@ -270,6 +271,13 @@ impl Sound {
             unsafe {
                 kestrel_audio_play(cue as i32);
             }
+        }
+    }
+    /// Play or release a MIDI piano pitch. Velocity zero releases the key.
+    pub fn note(&self, note: u8, velocity: u8) {
+        if self.active && !self.muted {
+            #[cfg(not(target_arch = "wasm32"))]
+            unsafe { kestrel_audio_note(i32::from(note), i32::from(velocity)); }
         }
     }
 }

@@ -25,6 +25,7 @@ rust_binary(
     edition = "2021",
     link_deps = select({
         "@platforms//cpu:wasm32": [],
+        "@platforms//os:linux": [":sound", "//salsa/tools/midi_keys:native"],
         "//conditions:default": [":sound"],
     }),
     rustc_env = {"CARGO_MANIFEST_DIR": "."},
