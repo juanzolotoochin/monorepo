@@ -23,7 +23,16 @@ allows 8 players, so past 7 clients the rest are turned away as "full",
 which checks the cap.
 
 The launcher stays attached. Ctrl+C, or closing any game window, stops the
-processes it started and nothing else. Each run writes its parameters, process
+processes it started and nothing else. With -Rejoin, a client window that
+closes is started again a moment later with the same name and profile, which
+checks leaving and rejoining. Then only Ctrl+C or closing the host stops the
+run. The relay forgets a client 3 s after it goes silent, so the rejoin's new
+address gets a slot.
+
+-ControlPortBase gives each window a game control port (JSON lines on
+127.0.0.1): the host gets the base port and client n gets the base plus n.
+A script can then ask any window for its state, for example its network
+status and the other players it shows. Each run writes its parameters, process
 IDs, relay counters and logs to network_lab/runs/<time>/.
 
 It reuses the built game. Pass -Build to build it first (once, no tests), or
@@ -41,6 +50,9 @@ in flight. -CoarseTimers saves the core but adds 0-15 ms to each datagram.
 
 .EXAMPLE
 .\kestrel\tools\network-lab.ps1 -Clients 7
+
+.EXAMPLE
+.\kestrel\tools\network-lab.ps1 -Clients 7 -Rejoin -ControlPortBase 7800
 #>
 [CmdletBinding()]
 param(
@@ -53,6 +65,9 @@ param(
     # Unset: the client adapts its input margin to the network.
     [ValidateRange(0, 10000)] [Nullable[int]] $InputMarginMs,
     [ValidateRange(1, 15)] [int] $Clients = 1,
+    # 0: no control ports.
+    [ValidateRange(0, 65519)] [int] $ControlPortBase = 0,
+    [switch] $Rejoin,
     [switch] $Build,
     [switch] $CoarseTimers,
     [string] $GamePath
@@ -68,6 +83,10 @@ function Fail([string] $Message) {
 }
 
 if ($HostPort -eq $ProxyPort) { Fail "-HostPort and -ProxyPort must differ." }
+$ControlPorts = if ($ControlPortBase) { $ControlPortBase..($ControlPortBase + $Clients) } else { @() }
+if ($ControlPorts -contains $HostPort -or $ControlPorts -contains $ProxyPort) {
+    Fail "-ControlPortBase $ControlPortBase overlaps -HostPort or -ProxyPort."
+}
 if ($Scene -notmatch '^[a-z0-9-]+$') { Fail "-Scene must be a scene name such as laser-pit." }
 
 $Node = Get-Command node -ErrorAction SilentlyContinue
@@ -125,6 +144,11 @@ $Run = [ordered]@{
     # null: adaptive.
     input_margin_ms = $InputMarginMs
     clients = $Clients
+    rejoin = [bool] $Rejoin
+    # 0: none. Otherwise the host's; client n has this plus n.
+    control_port_base = $ControlPortBase
+    # Client restarts with -Rejoin, by name.
+    rejoins = [ordered]@{}
     coarse_timers = [bool] $CoarseTimers
     host_port = $HostPort
     proxy_port = $ProxyPort
@@ -144,6 +168,8 @@ function Start-Part([string] $Name, [string] $Path, [string[]] $Arguments) {
     $process = Start-Process -FilePath $Path -ArgumentList $quoted -NoNewWindow -PassThru `
         -RedirectStandardOutput (Join-Path $RunDir "$Name.out.log") `
         -RedirectStandardError (Join-Path $RunDir "$Name.err.log")
+    # Opening the handle now keeps the exit code readable after it exits.
+    $null = $process.Handle
     $Started[$Name] = $process.Id
     Save-Run
     $process
@@ -191,7 +217,9 @@ try {
         Start-Sleep -Milliseconds 100
     }
 
-    $processes.host = Start-Part "host" $Game @("--host", $HostPort, "--scene", $Scene, "--name", "Host")
+    $hostArgs = @("--host", $HostPort, "--scene", $Scene, "--name", "Host")
+    if ($ControlPortBase) { $hostArgs += @("--control-port", $ControlPortBase) }
+    $processes.host = Start-Part "host" $Game $hostArgs
     $deadline = (Get-Date).AddSeconds(60)
     while (-not (Get-NetUDPEndpoint -LocalPort $HostPort -OwningProcess $processes.host.Id -ErrorAction SilentlyContinue)) {
         if ($processes.host.HasExited) { Show-Log "host"; throw "The host exited during startup." }
@@ -199,27 +227,58 @@ try {
         Start-Sleep -Milliseconds 200
     }
 
+    $clientArgs = [ordered]@{}
+    # When each client was last started, as seen here.
+    $startedAt = @{}
     foreach ($n in 1..$Clients) {
         # One client keeps the old names; several are numbered.
         $name = if ($Clients -eq 1) { "client" } else { "client$n" }
         $label = if ($Clients -eq 1) { "Client" } else { "Client $n" }
-        $clientArgs = @("--join", "127.0.0.1:$ProxyPort", "--name", $label, "--profile", "networklab$n")
-        if ($null -ne $InputMarginMs) { $clientArgs += @("--input-margin-ms", $InputMarginMs) }
-        $processes[$name] = Start-Part $name $Game $clientArgs
+        $arguments = @("--join", "127.0.0.1:$ProxyPort", "--name", $label, "--profile", "networklab$n")
+        if ($null -ne $InputMarginMs) { $arguments += @("--input-margin-ms", $InputMarginMs) }
+        if ($ControlPortBase) { $arguments += @("--control-port", ($ControlPortBase + $n)) }
+        $clientArgs[$name] = $arguments
+        $processes[$name] = Start-Part $name $Game $arguments
+        $startedAt[$name] = Get-Date
     }
 
     $margin = if ($null -ne $InputMarginMs) { "pinned at $InputMarginMs ms" } else { "adaptive" }
     Write-Host ""
     Write-Host "Running: $DelayMs ms +/- $JitterMs ms each way (seed $Seed); added RTT ~$(2 * $DelayMs) ms before jitter and polling."
     Write-Host "Clients: $Clients. Client input margin: $margin."
+    if ($ControlPortBase) { Write-Host "Control ports: host $ControlPortBase, client n $ControlPortBase + n." }
+    if ($Rejoin) { Write-Host "Rejoin: a client window that closes starts again. Ctrl+C or close the host to stop." }
     Write-Host "In any window press / then Diagnostics -> Network."
     Write-Host "All windows share this machine's CPU/GPU: read frame time alongside the network graphs."
     Write-Host "Run directory: $RunDir"
-    Write-Host "Ctrl+C or close a game window to stop."
+    if (-not $Rejoin) { Write-Host "Ctrl+C or close a game window to stop." }
 
     $nextReport = (Get-Date).AddSeconds(15)
     while ($true) {
-        $ended = $processes.Keys | Where-Object { $processes[$_].HasExited }
+        $ended = @($processes.Keys | Where-Object { $processes[$_].HasExited })
+        if ($Rejoin) {
+            foreach ($name in @($ended | Where-Object { $clientArgs.Contains($_) })) {
+                $process = $processes[$name]
+                $code = $process.ExitCode
+                # One that closes soon after starting (it failed, or the game
+                # was full) would only do it again: leave it closed.
+                if (((Get-Date) - $startedAt[$name]).TotalSeconds -lt 15) {
+                    Write-Host "$name exited (code $code) within 15 s of starting; not starting it again."
+                    Show-Log $name
+                    $processes.Remove($name)
+                    continue
+                }
+                Write-Host "$name exited (code $code); starting it again."
+                if ($code -ne 0) { Show-Log $name }
+                # Keep each start's logs: the restart writes to "<name>-<k>".
+                $k = 1 + $(if ($Run.rejoins.Contains($name)) { $Run.rejoins[$name] } else { 0 })
+                $Run.rejoins[$name] = $k
+                Start-Sleep -Seconds 1
+                $processes[$name] = Start-Part "$name-$k" $Game $clientArgs[$name]
+                $startedAt[$name] = Get-Date
+            }
+            $ended = @($ended | Where-Object { -not $clientArgs.Contains($_) })
+        }
         if ($ended) {
             foreach ($name in $ended) {
                 Write-Host "$name exited (code $($processes[$name].ExitCode))."
