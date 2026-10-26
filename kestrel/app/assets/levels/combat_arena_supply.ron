@@ -12,4 +12,4 @@
  (id: "center", position: (0.0, 5.8), target: (0.0, -6.5), character: "ghoul", first: 0.5, every: 3.8, count: 12),
  (id: "west", position: (-2.3, 5.9), target: (-1.0, -6.5), character: "ghoul_brute", first: 2.8, every: 5.0, count: 10),
  (id: "east", position: (2.3, 5.9), target: (1.0, -6.5), character: "ghoul", first: 4.5, every: 5.2, count: 10)
- ], base_health: 30)
+ ], base_health: 30, player_health: 6)

@@ -152,22 +152,6 @@
 - **Found in:** task 1 of `kestrel/GHOUL_ATTACK_HANDOFF.md`
   (branch `kestrel-ghoul-attacks`).
 
-## Give a scene ghouls and hurtable players
-
-- **Status:** open
-- **Why:** ghouls hit players only when the scenario's `player_health` is
-  above 0, and no scene has both: the arena and forest have ghouls with
-  `player_health` 0, and the laser pit has health but no waves. So the
-  ghoul attack (task 3 of `kestrel/GHOUL_ATTACK_HANDOFF.md`) is reached
-  only by the sim tests, and nobody can see it in play.
-- **What to do:** decide which scene gets it: health in the combat arena,
-  or a wave in the laser pit, or a new scene. Changing a golden scene
-  (arena, forest) changes the golden file's behaviour lines, so explain
-  that in the commit.
-- **Where:** `kestrel/app/assets/levels/*.ron`, `sim/src/scenario.rs`
-  (`golden_report`).
-- **Found in:** task 3 of `kestrel/GHOUL_ATTACK_HANDOFF.md`.
-
 ## Decide whether a ghoul reaches a flying or busy player
 
 - **Status:** open
@@ -200,6 +184,23 @@
 - **Found in:** task 4 of `kestrel/GHOUL_ATTACK_HANDOFF.md`.
 
 ## Done
+
+### Give a scene ghouls and hurtable players
+
+- **Status:** done (branch `kestrel-ghoul-attacks`, PR #115)
+- **Why:** ghouls hit players only when the scenario's `player_health` is
+  above 0, and no scene has both: the arena and forest have ghouls with
+  `player_health` 0, and the laser pit has health but no waves. So the
+  ghoul attack (task 3 of `kestrel/GHOUL_ATTACK_HANDOFF.md`) is reached
+  only by the sim tests, and nobody can see it in play.
+- **What to do:** decide which scene gets it: health in the combat arena,
+  or a wave in the laser pit, or a new scene. Changing a golden scene
+  (arena, forest) changes the golden file's behaviour lines, so explain
+  that in the commit.
+- **Where:** `kestrel/app/assets/levels/*.ron`, `sim/src/scenario.rs`
+  (`golden_report`).
+- **Found in:** task 3 of `kestrel/GHOUL_ATTACK_HANDOFF.md`.
+
 
 ### Test a knockback that pushes the joined player
 
