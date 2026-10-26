@@ -261,6 +261,8 @@ options help check a crowd:
 - `-Rejoin` starts a client window again, with the same name and profile, when
   it closes, so closing one checks leaving and rejoining. The relay forgets a
   client 3 s after it goes silent, which frees its slot for the new address.
+  `-RejoinAfterSeconds 30` waits that long before starting it again, to tell
+  the effects of the leave and the rejoin apart.
 - `-ControlPortBase 7800` gives the host control port 7800 and client n port
   7800 + n. A script can ask any window for its state with
   `{"id":"x","command":{"op":"inspect"}}` (one JSON line). The reply includes
@@ -271,6 +273,16 @@ options help check a crowd:
 With eight windows on one machine, the relay's deliveries ran up to 19 ms late
 at p99 (0.1 ms with no delay), so the jitter players see is a little above
 `-JitterMs`. The relay reports this as `late p99`.
+
+The windows also share one GPU, so every one of them has slow frames: the
+host had about 14 frames over 16.7 ms and 1–2 over 33 ms every half second
+with eight windows. A slow host frame delays turns for every client, and a
+client's own slow frame counts toward its `starved_ms`. Before blaming the
+network for starved time, compare it with the window's
+`telemetry.counters.frames_over_33_3ms`. For networking bugs that aren't
+about what players see, peers without windows would avoid this; that mode
+doesn't exist yet ("Run lab peers headless in real time" in
+`kestrel/todo/networking.md`).
 
 ## First investigation
 

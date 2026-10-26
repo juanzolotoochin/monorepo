@@ -24,9 +24,10 @@ which checks the cap.
 
 The launcher stays attached. Ctrl+C, or closing any game window, stops the
 processes it started and nothing else. With -Rejoin, a client window that
-closes is started again a moment later with the same name and profile, which
-checks leaving and rejoining. Then only Ctrl+C or closing the host stops the
-run. The relay forgets a client 3 s after it goes silent, so the rejoin's new
+closes is started again with the same name and profile, which checks leaving
+and rejoining. Then only Ctrl+C or closing the host stops the run.
+-RejoinAfterSeconds (default 1) sets how long it waits first, for example 30
+to tell the effects of the leave and the rejoin apart. The relay forgets a client 3 s after it goes silent, so the rejoin's new
 address gets a slot.
 
 -ControlPortBase gives each window a game control port (JSON lines on
@@ -68,6 +69,7 @@ param(
     # 0: no control ports.
     [ValidateRange(0, 65519)] [int] $ControlPortBase = 0,
     [switch] $Rejoin,
+    [ValidateRange(1, 600)] [int] $RejoinAfterSeconds = 1,
     [switch] $Build,
     [switch] $CoarseTimers,
     [string] $GamePath
@@ -145,6 +147,7 @@ $Run = [ordered]@{
     input_margin_ms = $InputMarginMs
     clients = $Clients
     rejoin = [bool] $Rejoin
+    rejoin_after_s = $RejoinAfterSeconds
     # 0: none. Otherwise the host's; client n has this plus n.
     control_port_base = $ControlPortBase
     # Client restarts with -Rejoin, by name.
@@ -268,12 +271,13 @@ try {
                     $processes.Remove($name)
                     continue
                 }
-                Write-Host "$name exited (code $code); starting it again."
+                Write-Host "$name exited (code $code); starting it again in $RejoinAfterSeconds s."
                 if ($code -ne 0) { Show-Log $name }
                 # Keep each start's logs: the restart writes to "<name>-<k>".
                 $k = 1 + $(if ($Run.rejoins.Contains($name)) { $Run.rejoins[$name] } else { 0 })
                 $Run.rejoins[$name] = $k
-                Start-Sleep -Seconds 1
+                # The launcher only waits here; the windows keep running.
+                Start-Sleep -Seconds $RejoinAfterSeconds
                 $processes[$name] = Start-Part "$name-$k" $Game $clientArgs[$name]
                 $startedAt[$name] = Get-Date
             }
