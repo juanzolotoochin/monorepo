@@ -128,6 +128,34 @@ MSYS bash and fail. Print the BuildBuddy link as soon as it appears and again
 with the results (user rule). Record today's failing counts in the commit
 message or this document before starting step 2.
 
+### Baseline (leashed preview, before prediction)
+
+The test is `lockstep::tests::joined_player_movement_needs_no_corrections_under_latency`.
+Each case is a fresh host and client joined through the relay. Each scenario
+starts with a respawn and 1.5 s of idle, then clears the log. Kept
+corrections, as count (total distance, largest):
+
+| Case | Scenario | Kept | Under 0.05 u |
+|---|---|---|---|
+| no added delay | base running | clamp 3 (0.26, 0.13), ease 1 (0.87) | 5 (0.167 u) |
+| no added delay | base walking | none | 0 |
+| no added delay | quick taps | none | 0 |
+| no added delay | 90° turn | none | 3 (0.101 u) |
+| no added delay | zig-zag | none | 0 |
+| no added delay | speed change | none | 1 (0.033 u) |
+| 75 ± 20 ms | base running | clamp 6 (7.87, 1.59), ease 3 (1.22, 0.76) | 0 |
+| 75 ± 20 ms | base walking | clamp 6 (2.92, 0.73), ease 3 (0.81, 0.30) | 0 |
+| 75 ± 20 ms | quick taps | none | 1 (0.033 u) |
+| 75 ± 20 ms | 90° turn | clamp 3 (2.19, 1.10), ease 1 (0.90) | 0 |
+| 75 ± 20 ms | zig-zag | clamp 2 (5.42, 5.28), ease 1 (0.90) | 0 |
+| 75 ± 20 ms | speed change | clamp 2 (0.93, 0.87), ease 1 (0.90) | 0 |
+| 100 ± 20 ms | base running | clamp 6 (8.64, 1.74), ease 3 (1.17, 0.73) | 0 |
+| 100 ± 20 ms | base walking | clamp 6 (3.38, 0.85), ease 3 (0.92, 0.36) | 0 |
+| 100 ± 20 ms | quick taps | ease 1 (0.19) | 0 |
+| 100 ± 20 ms | 90° turn | clamp 3 (2.52, 1.23), ease 1 (0.90) | 0 |
+| 100 ± 20 ms | zig-zag | clamp 2 (5.43, 5.14), ease 1 (0.90) | 0 |
+| 100 ± 20 ms | speed change | clamp 1 (0.97), ease 1 (0.90) | 1 (0.033 u) |
+
 ## Step 2: prediction (agreed decisions)
 
 ### D1: draw at the input horizon, replaying in simulation ticks

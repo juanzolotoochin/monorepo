@@ -37,6 +37,8 @@ pub struct NetworkDiagnostics {
     corrections: VecDeque<PreviewCorrection>,
     /// The episode the latest preview frames belong to.
     open_correction: Option<PreviewCorrection>,
+    /// Episodes dropped for being under `MIN_CORRECTION`: count and distance.
+    small_corrections: (u32, f32),
     last_shown: Option<Vec3>,
     /// Draw recent corrections in the world. Kept across sessions.
     pub show_corrections: bool,
@@ -199,9 +201,12 @@ impl NetworkDiagnostics {
     }
 
     fn close_correction(&mut self) {
-        let Some(correction) = self.open_correction.take().filter(PreviewCorrection::kept) else {
+        let Some(correction) = self.open_correction.take() else { return };
+        if !correction.kept() {
+            self.small_corrections.0 += 1;
+            self.small_corrections.1 += correction.distance;
             return;
-        };
+        }
         if self.corrections.len() >= MAX_CORRECTIONS {
             self.corrections.pop_front();
         }
@@ -213,6 +218,20 @@ impl NetworkDiagnostics {
         self.corrections
             .iter()
             .chain(self.open_correction.iter().filter(|c| c.kept()))
+    }
+
+    /// Episodes too small to keep, as a count and their total distance.
+    #[cfg(test)]
+    pub fn small_corrections(&self) -> (u32, f32) {
+        self.small_corrections
+    }
+
+    /// Forgets every correction so far, kept or not.
+    #[cfg(test)]
+    pub fn clear_corrections(&mut self) {
+        self.corrections.clear();
+        self.open_correction = None;
+        self.small_corrections = (0, 0.0);
     }
 
     /// Boxes where the local avatar was drawn when each recent correction

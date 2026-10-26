@@ -1402,4 +1402,213 @@ mod tests {
             "routed movement preview did not settle on the confirmed route"
         );
     }
+
+    /// A UDP relay that holds every datagram for `delay ± jitter` of virtual
+    /// time, like `tools/network_lab/relay.mjs`. The client joins `listen`;
+    /// the relay talks to the host from `upstream` and answers the client
+    /// from `listen`, which the client checks.
+    struct DelayRelay {
+        listen: std::net::UdpSocket,
+        upstream: std::net::UdpSocket,
+        host: SocketAddr,
+        client: Option<SocketAddr>,
+        delay: f64,
+        jitter: f64,
+        rng: u64,
+        /// (due, sequence, to the host, bytes)
+        held: Vec<(f64, u64, bool, Vec<u8>)>,
+        sent: u64,
+    }
+
+    impl DelayRelay {
+        fn new(host: SocketAddr, delay_ms: f64, jitter_ms: f64, seed: u64) -> DelayRelay {
+            let bind = || {
+                let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+                socket.set_nonblocking(true).unwrap();
+                socket
+            };
+            DelayRelay {
+                listen: bind(),
+                upstream: bind(),
+                host,
+                client: None,
+                delay: delay_ms / 1000.0,
+                jitter: jitter_ms / 1000.0,
+                rng: seed | 1,
+                held: Vec::new(),
+                sent: 0,
+            }
+        }
+
+        fn address(&self) -> SocketAddr {
+            self.listen.local_addr().unwrap()
+        }
+
+        /// Uniform in [-1, 1), from a seeded xorshift so runs repeat.
+        fn noise(&mut self) -> f64 {
+            self.rng ^= self.rng << 13;
+            self.rng ^= self.rng >> 7;
+            self.rng ^= self.rng << 17;
+            (self.rng >> 11) as f64 / (1u64 << 52) as f64 - 1.0
+        }
+
+        fn hold(&mut self, now: f64, to_host: bool, bytes: Vec<u8>) {
+            let due = now + (self.delay + self.jitter * self.noise()).max(0.0);
+            self.held.push((due, self.sent, to_host, bytes));
+            self.sent += 1;
+        }
+
+        /// Takes what arrived and sends what is due at `now` (seconds).
+        fn pump(&mut self, now: f64) {
+            let mut buffer = [0u8; 65536];
+            while let Ok((len, from)) = self.listen.recv_from(&mut buffer) {
+                self.client = Some(from);
+                self.hold(now, true, buffer[..len].to_vec());
+            }
+            while let Ok((len, from)) = self.upstream.recv_from(&mut buffer) {
+                if from == self.host {
+                    self.hold(now, false, buffer[..len].to_vec());
+                }
+            }
+            self.held.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+            let due = self.held.iter().take_while(|(at, ..)| *at <= now).count();
+            for (_, _, to_host, bytes) in self.held.drain(..due) {
+                if to_host {
+                    let _ = self.upstream.send_to(&bytes, self.host);
+                } else if let Some(client) = self.client {
+                    let _ = self.listen.send_to(&bytes, client);
+                }
+            }
+        }
+    }
+
+    /// A host and a client joined through a `DelayRelay`, stepped together
+    /// on the 60 Hz virtual clock.
+    struct RelayedGame {
+        host: App,
+        client: App,
+        relay: DelayRelay,
+        frame: u64,
+    }
+
+    impl RelayedGame {
+        fn new(delay_ms: f64, jitter_ms: f64, seed: u64) -> RelayedGame {
+            let mut host = field_app(Some(Network::Host("127.0.0.1:0".parse().unwrap())), 60.0);
+            crate::start_world(&mut host);
+            let address = host.world().resource::<SessionService>().session.local_addr().unwrap();
+            let relay = DelayRelay::new(address, delay_ms, jitter_ms, seed);
+            let client = field_app(Some(Network::Join(relay.address())), 60.0);
+            let mut game = RelayedGame { host, client, relay, frame: 0 };
+            for _ in 0..1200 {
+                game.frame();
+                if world_active(&game.client) && game.client.world().resource::<WorldMirror>().player().is_some() {
+                    return game;
+                }
+            }
+            panic!("the client never acquired an avatar through the relay");
+        }
+
+        fn frame(&mut self) {
+            self.frame += 1;
+            let now = self.frame as f64 / 60.0;
+            self.client.update();
+            self.relay.pump(now);
+            self.host.update();
+            self.relay.pump(now);
+        }
+
+        /// Holds exactly `held` of the movement keys for `frames` frames.
+        fn hold(&mut self, held: &[KeyCode], frames: u32) {
+            {
+                let mut keys = self.client.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+                for key in [KeyCode::KeyW, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD, KeyCode::ShiftLeft] {
+                    if held.contains(&key) {
+                        if !keys.pressed(key) {
+                            keys.press(key);
+                        }
+                    } else if keys.pressed(key) {
+                        keys.release(key);
+                    }
+                }
+            }
+            for _ in 0..frames {
+                self.frame();
+            }
+        }
+
+        fn telemetry(&mut self) -> Mut<'_, crate::telemetry::Telemetry> {
+            self.client.world_mut().resource_mut::<crate::telemetry::Telemetry>()
+        }
+    }
+
+    /// One scenario's movement script: (keys held, frames) steps.
+    fn movement_scenarios() -> Vec<(&'static str, Vec<(Vec<KeyCode>, u32)>)> {
+        use KeyCode::{KeyA as Left, KeyD as Right, KeyW as Up, ShiftLeft as Run};
+        let reversals = |run: bool| {
+            let with = |key| if run { vec![key, Run] } else { vec![key] };
+            (0..3).flat_map(|_| [(with(Right), 60), (with(Left), 36), (vec![], 36)]).collect()
+        };
+        vec![
+            ("base running", reversals(true)),
+            ("base walking", reversals(false)),
+            ("quick taps", (0..10).flat_map(|_| [(vec![Right], 3), (vec![], 18)]).collect()),
+            ("90 degree turn", vec![(vec![Right, Run], 60), (vec![Up, Run], 60)]),
+            ("zig-zag", (0..14).map(|i| (vec![if i % 2 == 0 { Left } else { Right }], 9)).collect()),
+            ("speed change", (0..5).map(|i| (if i % 2 == 0 { vec![Right] } else { vec![Right, Run] }, 24)).collect()),
+        ]
+    }
+
+    #[derive(Default)]
+    struct KindTotal {
+        count: u32,
+        distance: f32,
+        largest: f32,
+    }
+
+    #[test]
+    #[ignore = "reproduces the joined player's movement corrections; enabled with client-side prediction"]
+    fn joined_player_movement_needs_no_corrections_under_latency() {
+        // (name, one-way delay ms, ± jitter ms)
+        let cases = [("no added delay", 0.0, 0.0), ("75 ± 20 ms", 75.0, 20.0), ("100 ± 20 ms", 100.0, 20.0)];
+        let mut kept_total = 0;
+        let mut report = String::new();
+        for (case, (name, delay, jitter)) in cases.into_iter().enumerate() {
+            let mut game = RelayedGame::new(delay, jitter, 0x5eed + case as u64);
+            for (scenario, script) in movement_scenarios() {
+                // Start each scenario at the spawn point, settled, with an empty log.
+                let agent = game.client.world().resource::<SessionService>().player().unwrap();
+                game.client.world_mut().resource_mut::<SessionService>().command(CommandKind::Respawn { agent });
+                game.hold(&[], 90);
+                game.telemetry().network.clear_corrections();
+                for (keys, frames) in script {
+                    game.hold(&keys, frames);
+                }
+                // Long enough for the confirmed avatar to stop, so a final pull shows.
+                game.hold(&[], 90);
+                let mut kinds = std::collections::BTreeMap::<String, KindTotal>::new();
+                let telemetry = game.telemetry();
+                let network = &telemetry.network;
+                for c in network.corrections() {
+                    let total = kinds.entry(format!("{:?}", c.kind)).or_default();
+                    total.count += 1;
+                    total.distance += c.distance;
+                    total.largest = total.largest.max(c.distance);
+                    kept_total += 1;
+                }
+                let (small, small_distance) = network.small_corrections();
+                let kept = if kinds.is_empty() {
+                    "none".to_string()
+                } else {
+                    kinds
+                        .iter()
+                        .map(|(kind, t)| format!("{kind} {} ({:.2} u, largest {:.2})", t.count, t.distance, t.largest))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                report += &format!("{name:>15} | {scenario:>15} | kept: {kept} | under 0.05: {small} ({small_distance:.3} u)\n");
+            }
+        }
+        println!("corrections per latency case and scenario:\n{report}");
+        assert_eq!(kept_total, 0, "the joined player's avatar was corrected:\n{report}");
+    }
 }
