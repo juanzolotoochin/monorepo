@@ -68,6 +68,21 @@ pub struct Swing {
     /// Set once contact was resolved; then `hits` holds how many it hit.
     pub resolved: bool,
     pub hits: u32,
+    /// The tick the `Attack` was pressed on when it waited in
+    /// `AvatarState::queued` first. It only keys predicted events (`pressed`),
+    /// so it isn't saved or hashed: a loaded swing counts as pressed when it
+    /// started.
+    #[serde(skip)]
+    pub queued_at: Option<u64>,
+}
+
+impl Swing {
+    /// The tick the `Attack` that started this swing applied on: the
+    /// player's command, which predicted events are matched by
+    /// (`ABILITY_PREDICTION_HANDOFF.md`, D7).
+    pub fn pressed(&self) -> u64 {
+        self.queued_at.unwrap_or(self.started)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,6 +181,10 @@ pub struct AvatarState {
     pub aim: Option<FxVec2>,
     /// A follow-up attack clicked during the end of a swing.
     pub queued: Option<(Weapon, FxVec2, [Fx; 3])>,
+    /// The tick `queued` was pressed on (see `Swing::queued_at`). Not saved
+    /// or hashed.
+    #[serde(skip)]
+    pub queued_at: Option<u64>,
     pub job: Option<ManualJob>,
     #[serde(default)]
     pub dig: Option<Dig>,
@@ -563,19 +582,23 @@ impl Settlement {
     }
 
     /// Stage 3 for one avatar: a strike resolving this tick, and manual
-    /// transfer units that are due.
+    /// transfer units and pile steps that are due. It reads the avatar from
+    /// `a`, never from `self`, so `AvatarReplay` runs it on its predicted
+    /// avatar against the confirmed settlement.
     pub(super) fn read_avatar(&self, me: AgentIx, a: &AgentState, tick: u64, terrain: &Terrain, out: &mut Messages) {
         if let Some(swing) = resolving(a, tick) {
-            let (targets, beam_end, cover) = self.strike_targets(me, a.position, swing.aim, swing.weapon, terrain);
+            let aimed = self.strike_targets(me, a.avatar.height, a.position, swing.aim, swing.weapon, terrain);
             out.strike.push(Strike {
                 agent: me,
                 weapon: swing.weapon,
                 origin: a.position,
                 forward: swing.aim,
                 muzzle: swing.muzzle,
-                targets,
-                beam_end,
-                cover,
+                targets: aimed.targets,
+                beam_end: aimed.beam_end,
+                cover: aimed.cover,
+                hit_player: aimed.hit_player,
+                started: swing.pressed(),
             });
         }
         if let Some(job) = &a.avatar.job {
@@ -776,6 +799,7 @@ fn attack(a: &mut AgentState, tick: u64, weapon: Weapon, aim: FxVec2, muzzle: [F
     match &a.avatar.swing {
         Some(swing) if tick < swing.until => {
             a.avatar.queued = Some((weapon, aim, muzzle));
+            a.avatar.queued_at = Some(tick);
         }
         _ => start_swing(a, tick, weapon, aim, muzzle, def.swift_sword(), avatar_tuning(def).attack),
     }
@@ -786,7 +810,11 @@ pub(super) fn start_queued(a: &mut AgentState, tick: u64, def: &CharacterDef) {
     let finished = a.avatar.swing.as_ref().is_none_or(|s| tick + 1 >= s.until);
     if finished {
         if let Some((weapon, aim, muzzle)) = a.avatar.queued.take() {
+            let pressed = a.avatar.queued_at.take();
             start_swing(a, tick + 1, weapon, aim, muzzle, def.swift_sword(), avatar_tuning(def).attack);
+            if let Some(swing) = &mut a.avatar.swing {
+                swing.queued_at = pressed;
+            }
         }
     }
 }
@@ -886,6 +914,7 @@ fn start_swing(a: &mut AgentState, tick: u64, weapon: Weapon, aim: FxVec2, muzzl
         until: tick + if weapon == Weapon::Laser { ticks_from_60hz(8) } else if weapon == Weapon::Sword && swift_sword { timing.sword_swing } else { timing.swing },
         resolved: false,
         hits: 0,
+        queued_at: None,
     });
 }
 

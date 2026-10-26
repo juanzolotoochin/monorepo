@@ -1019,8 +1019,8 @@ fn predict_lasers(
     }
     outcomes.extend(lasers.expire(world.tick()));
     let mut new = Vec::new();
-    if let (Some(drawn), Some(settlement)) = (drawn, world.settlement()) {
-        let predicted = lasers.predict(&drawn.strikes, now, |strike| settlement.predict_laser(agent, strike, world.terrain()));
+    if let Some(drawn) = drawn {
+        let predicted = lasers.predict(&drawn.events, now);
         outcomes.extend(predicted.dropped);
         new = predicted.new;
     }

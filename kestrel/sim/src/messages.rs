@@ -116,6 +116,11 @@ pub struct Strike {
     pub beam_end: Option<FxVec2>,
     /// Index of the destructible piece stopped by a laser, if any.
     pub cover: Option<u16>,
+    /// A laser beam stops at another live player, standing at `beam_end`.
+    pub hit_player: bool,
+    /// The tick the `Attack` that swung it applied on (`Swing::pressed`),
+    /// which keys the strike's predicted events.
+    pub started: u64,
 }
 
 /// A projectile reached a threat this tick.
@@ -184,6 +189,8 @@ impl StateHash for Strike {
             None => h.write_u64(u64::MAX),
         }
         h.write_u64(self.cover.map_or(u64::MAX, u64::from));
+        h.write(&self.hit_player);
+        h.write(&self.started);
     }
 }
 

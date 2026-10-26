@@ -319,6 +319,7 @@ mod tests {
             until: at(17.0 / 30.0).round() as u64,
             resolved: hits > 0,
             hits,
+            queued_at: None,
         }
     }
 

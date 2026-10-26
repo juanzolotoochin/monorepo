@@ -12,8 +12,8 @@
 use std::collections::VecDeque;
 
 use bevy::prelude::*;
-use fx::FxVec2;
-use sim::settlement::{AgentState, ReplayedStrike, Settlement};
+use fx::{Fx, FxVec2};
+use sim::settlement::{AgentState, Event, Settlement};
 use sim::terrain::Terrain;
 use sim::CommandKind;
 
@@ -73,10 +73,24 @@ pub struct Drawn {
     pub mispredicted: f32,
     /// The avatar was too far off and was put where it is predicted.
     pub snapped: bool,
-    /// The strikes the predicted avatar resolved from the confirmed tick
+    /// The events the predicted avatar showed from the confirmed tick
     /// through the drawn tick, oldest first: the ticks the drawn time
     /// reached that the confirmed world hasn't run yet.
-    pub strikes: Vec<ReplayedStrike>,
+    pub events: Vec<PredictedEvent>,
+}
+
+/// An event the replayed avatar showed (`AvatarReplay::events`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PredictedEvent {
+    /// The tick it is predicted on.
+    pub tick: u64,
+    pub event: Event,
+    /// The aim and muzzle of the swing that showed it, which tell one
+    /// `Attack` command's shot from another's in `LaserPrediction` until
+    /// predicted events are matched by their command (D7 in
+    /// `ABILITY_PREDICTION_HANDOFF.md`).
+    pub aim: FxVec2,
+    pub muzzle: [Fx; 3],
 }
 
 #[derive(Default)]
@@ -128,10 +142,10 @@ impl AvatarPrediction {
         };
         let current = &c.settlement.agents[c.agent as usize];
         let predicted = (base >= c.tick && base < c.tick + MAX_LEAD).then(|| replay(c, base + 1)).flatten();
-        let mut strikes = Vec::new();
+        let mut events = Vec::new();
         let (from, to, fraction, positions) = match predicted {
-            Some((states, struck)) => {
-                strikes = struck;
+            Some((states, shown)) => {
+                events = shown;
                 let positions: Vec<Vec3> = states.iter().map(view).collect();
                 let at = |tick: u64| states[(tick - c.tick) as usize].clone();
                 (at(base), at(base + 1), fraction, positions)
@@ -188,7 +202,7 @@ impl AvatarPrediction {
             fraction,
             mispredicted,
             snapped,
-            strikes,
+            events,
         }
     }
 
@@ -224,23 +238,26 @@ impl AvatarPrediction {
 }
 
 /// The avatar's states from the confirmed tick through tick `end`, each
-/// pending command applied on its tick, and the strikes it resolved on the
+/// pending command applied on its tick, and the events it showed on the
 /// way. One the host already passed was moved later; the next tick is the
 /// best guess. `None` if the avatar can't be predicted (a pending pile job).
 /// Walks to a point (the dock walk, scripted walks) are predicted.
-fn replay(c: &Confirmed, end: u64) -> Option<(Vec<AgentState>, Vec<ReplayedStrike>)> {
+fn replay(c: &Confirmed, end: u64) -> Option<(Vec<AgentState>, Vec<PredictedEvent>)> {
     let mut replay = c.settlement.replay_avatar(c.agent, c.tick, c.terrain)?;
     let mut states = vec![replay.state().clone()];
-    let mut strikes = Vec::new();
+    let mut events = Vec::new();
     for tick in c.tick..end {
         let due = c.pending.iter().filter(|(asked, _)| (*asked).max(c.tick) == tick).map(|(_, kind)| *kind);
         if !replay.step_with(due) {
             return None;
         }
+        // The swing that resolved on this tick showed them.
+        let swing = replay.state().avatar.swing.as_ref().filter(|swing| swing.resolve_at == tick);
+        let (aim, muzzle) = swing.map_or((FxVec2::ZERO, [Fx::ZERO; 3]), |swing| (swing.aim, swing.muzzle));
+        events.extend(replay.events().iter().map(|event| PredictedEvent { tick, event: event.clone(), aim, muzzle }));
         states.push(replay.state().clone());
-        strikes.extend(replay.struck().cloned());
     }
-    Some((states, strikes))
+    Some((states, events))
 }
 
 #[cfg(test)]
