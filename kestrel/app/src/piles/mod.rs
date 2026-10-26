@@ -244,8 +244,7 @@ pub fn input(
     if lab.stock.is_none() {
         return;
     }
-    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-    if !buttons.just_pressed(MouseButton::Left) || shift {
+    if !buttons.just_pressed(MouseButton::Left) {
         return;
     }
     let source_button = source_buttons.iter().find(|(i, _)| **i == Interaction::Pressed).map(|(_, b)| b.0);
@@ -326,7 +325,7 @@ pub fn input(
     } else if carrying {
         PileAction::Drop(service.to_sim(ground))
     } else {
-        lab.notice = "Click a pile to collect it, or right click to move.".into();
+        lab.notice = "Click a pile to collect it, or use WASD to move.".into();
         return;
     };
     haul(&mut service, action, 0.18, None);

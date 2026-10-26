@@ -205,7 +205,7 @@ pub fn dispatch(world: &mut World) {
             Edge::LiftRelease | Edge::SelectWeapon(_) | Edge::NextWeapon => {}
         }
     }
-    movement(world, &frame.gameplay, pad);
+    movement(world, &frame.gameplay);
 }
 
 /// The controller's aim: explicit stick input, else the remembered aim,
@@ -260,7 +260,7 @@ fn respawn(world: &mut World, agent: u16) {
 /// Movement from the owning device. Neutral input sends Stop only after
 /// this player's own directional walk; the other device's neutral never
 /// does. Manual movement also cancels a depot transfer, from any binding.
-fn movement(world: &mut World, gameplay: &super::Gameplay, pad: bool) {
+fn movement(world: &mut World, gameplay: &super::Gameplay) {
     let direction = camera_relative(gameplay.movement);
     let walking = world.resource::<PlayerControl>().walking_direction();
     if gameplay.movement != Vec2::ZERO || walking {
@@ -268,8 +268,7 @@ fn movement(world: &mut World, gameplay: &super::Gameplay, pad: bool) {
             control.walk(&mut world.resource_mut::<SessionService>(), Vec2::new(direction.x, direction.z), gameplay.run);
         });
     }
-    let steering = !pad && world.resource::<debug_ui::GameInput>().mouse().pressed(MouseButton::Right);
-    if gameplay.movement != Vec2::ZERO || steering {
+    if gameplay.movement != Vec2::ZERO {
         let me = world.resource::<WorldMirror>().player_id();
         let busy = world
             .get_resource::<crate::settlement::Settlement>()

@@ -20,7 +20,6 @@ pub struct Controls {
     pub gait: GaitClock,
     pub attack: Option<Attack>,
     pub queued: Option<Vec3>,
-    pub repath: f32,
     pub impacts: u32,
     pub last_material: Option<voxel_assets::ImpactResponse>,
 }

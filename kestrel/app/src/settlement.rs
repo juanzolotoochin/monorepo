@@ -134,7 +134,7 @@ fn build(world: &mut World) -> Settlement {
         .as_ref()
         .is_some_and(|s| !s.weapons.is_empty());
     state.notice = if has_weapons {
-        "RIGHT CLICK: MOVE  /  SHIFT+CLICK: ATTACK  /  Z SWORD  X SPEAR  C BOW  V ARC COIL".into()
+        "WASD: MOVE  /  SHIFT: RUN  /  LEFT CLICK: ATTACK  /  Z SWORD  X SPEAR  C BOW  V ARC COIL".into()
     } else {
         "LMB stock: take 4 / Ctrl+LMB: deposit cargo / E: toggle nearby machine".into()
     };
@@ -1076,6 +1076,16 @@ pub fn player_transfer(world: &mut World, depot: &str, item: &str, units: u32, d
 /// Clicking a depot collects from it (Ctrl: deposits). Keyboard E and
 /// cancelling a transfer by moving are shared actions
 /// (`input::gameplay`); this is the mouse's targeting only.
+pub(crate) fn depot_at<'a>(sim: &'a Simulation, p: Vec3) -> Option<&'a crate::legacy::Depot> {
+    sim.config().depots.iter()
+        .filter(|d| Vec2::new(d.position[0] - p.x, d.position[1] - p.z).length() < 0.9)
+        .min_by(|a, b| {
+            Vec2::new(a.position[0] - p.x, a.position[1] - p.z)
+                .length_squared()
+                .total_cmp(&Vec2::new(b.position[0] - p.x, b.position[1] - p.z).length_squared())
+        })
+}
+
 pub fn input(world: &mut World) {
     if world.resource::<Settlement>().simulation.is_none() {
         return;
@@ -1086,8 +1096,7 @@ pub fn input(world: &mut World) {
     let input = world.resource::<debug_ui::GameInput>();
     let keys = input.keys();
     let deposit = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
-    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-    if shift || !input.mouse().just_pressed(MouseButton::Left) {
+    if !input.mouse().just_pressed(MouseButton::Left) {
         return;
     }
     let mut windows = world.query::<&Window>();
@@ -1106,17 +1115,7 @@ pub fn input(world: &mut World) {
     let Some(actor) = world.resource::<crate::lockstep::WorldMirror>().player_id() else {
         return;
     };
-    let Some(depot) = sim
-        .config()
-        .depots
-        .iter()
-        .filter(|d| Vec2::new(d.position[0] - p.x, d.position[1] - p.z).length() < 0.9)
-        .min_by(|a, b| {
-            Vec2::new(a.position[0] - p.x, a.position[1] - p.z)
-                .length_squared()
-                .total_cmp(&Vec2::new(b.position[0] - p.x, b.position[1] - p.z).length_squared())
-        })
-    else {
+    let Some(depot) = depot_at(sim, p) else {
         return;
     };
     let stock = if deposit {

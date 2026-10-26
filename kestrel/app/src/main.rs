@@ -189,7 +189,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         )));
     } else {
         let mut window = Window {
-            title: "KESTREL // 07 — Right click: move · Shift + left click: strike · M: sound".into(),
+            title: "KESTREL // 07 — WASD: move · Shift: run · Left click: strike · M: sound".into(),
             resolution: (1440, 960).into(),
             ..default()
         };
