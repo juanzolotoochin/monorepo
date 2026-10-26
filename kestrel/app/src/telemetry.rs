@@ -204,6 +204,7 @@ fn overlay_text(t: &Telemetry, entities: usize, meshes: usize) -> String {
     let render = (frame - update).max(0.);
     text += &format!("\nCPU {update:.1} ms update / {render:.1} ms render and wait");
     text += &format!("\nSESSION {session:.2} ms / p95 {session_p95:.2} / {ticks:.2} ticks per frame");
+    text += &network_line(t, Instant::now());
     text += &format!("\n\nWORLD TICK {total:.2} ms / p95 {total_p95:.2}");
     for (name, label) in TICK_STAGES.iter().chain(&[("tick_copy", "copy for view")]) {
         let (mean, p95) = t.recent(name);
@@ -215,6 +216,18 @@ fn overlay_text(t: &Telemetry, entities: usize, meshes: usize) -> String {
         t.gauges.get("pooled_rigs").unwrap_or(&0.)
     );
     text
+}
+/// The round trip to the host, smoothed and latest, during a networked game.
+/// Only clients measure it.
+fn network_line(t: &Telemetry, now: Instant) -> String {
+    let Some(frame) = t.network.current(now) else {
+        return String::new();
+    };
+    let ms = |d: Option<Duration>| d.map_or("--".into(), |d| format!("{:.0}", d.as_secs_f64() * 1000.));
+    match frame.role {
+        "Client" => format!("\nNET RTT {} ms / last {}", ms(frame.stats.rtt), ms(frame.diagnostics.rtt_sample)),
+        _ => "\nNET host / RTT is measured by clients".into(),
+    }
 }
 /// F3 adds the breakdown to the HUD line, unless the debug UI has the key.
 pub fn shortcut(input: Res<GameInput>, mut telemetry: ResMut<Telemetry>) {
@@ -370,5 +383,29 @@ mod tests {
         assert_eq!(v["window"], 240);
         assert_eq!(v["max_ms"], 1000.);
         assert!(v["p95_ms"].as_f64().unwrap() > 980.);
+    }
+    #[test]
+    fn network_line_shows_client_rtt_only_while_the_session_records() {
+        let now = Instant::now();
+        let frame = |role| NetworkFrame {
+            at: now,
+            role,
+            status: "playing".into(),
+            world: 1,
+            tick: Some(12),
+            pending: 0,
+            stats: net::NetStats { rtt: Some(Duration::from_millis(152)), ..default() },
+            diagnostics: net::NetDiagnostics { rtt_sample: Some(Duration::from_millis(160)), ..default() },
+            update_ms: 1.,
+            tick_ms: None,
+            frame_ms: None,
+        };
+        let mut t = Telemetry::default();
+        assert_eq!(network_line(&t, now), "");
+        t.network.record(frame("Client"));
+        assert_eq!(network_line(&t, now), "\nNET RTT 152 ms / last 160");
+        assert_eq!(network_line(&t, now + Duration::from_secs(5)), "", "history after the session is not live");
+        t.network.record(frame("Host"));
+        assert_eq!(network_line(&t, now), "\nNET host / RTT is measured by clients");
     }
 }

@@ -58,6 +58,14 @@ impl NetworkDiagnostics {
         self.frames.push_back(frame);
     }
 
+    /// The latest sample while a session is recording them. History kept
+    /// after the session ended is not current.
+    pub fn current(&self, now: Instant) -> Option<&NetworkFrame> {
+        self.frames
+            .back()
+            .filter(|frame| now.saturating_duration_since(frame.at) <= Duration::from_secs(1))
+    }
+
     pub fn preview(&mut self, offset: f32, correction: f32, clamped: bool, snapped: bool) {
         self.preview = Some(PreviewSample {
             at: Instant::now(),
