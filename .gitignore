@@ -74,7 +74,11 @@ user.bazelrc
 yarn.lock
 
 auto.bazelrc
+/.rules_rust_analyzer/
 /.superpowers/
 
 # AI-generated design specs and implementation plans (kept locally, not tracked)
 docs/superpowers/
+
+# Local task scratch files, design artifacts, and PR preparation.
+/work/

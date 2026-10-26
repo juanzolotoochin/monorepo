@@ -413,7 +413,10 @@ bazel_dep(name = "rules_rs", version = "0.0.112")
 
 rules_rust = use_extension("@rules_rs//rs:rules_rust.bzl", "rules_rust")
 rules_rust.patch(
-    patches = ["//bazel/patches:rules_rust_msvc_linker.patch"],
+    patches = [
+        "//bazel/patches:rules_rust_msvc_linker.patch",
+        "//bazel/patches:rules_rust_flycheck_windows_paths.patch",
+    ],
     strip = 1,
 )
 use_repo(rules_rust, "rules_rust")
