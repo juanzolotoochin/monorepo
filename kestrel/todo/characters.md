@@ -132,26 +132,6 @@
 - **Found in:** task 6 of `kestrel/ABILITY_PREDICTION_HANDOFF.md`
   (branch `kestrel-ability-prediction`).
 
-## Decide what a player's death ends besides its transfer
-
-- **Status:** open
-- **Why:** a player killed in stage 5 (`Settlement::hurt_player`) now drops
-  its transfer job, but not the rest of what the `Respawn` action clears.
-  A pile haul keeps running: the dead avatar still loads units when in
-  reach (stage 3), and after the respawn at home the haul walks it back to
-  the pile. The memory trial doesn't restart. A dig in progress still
-  finishes while the player is dead.
-- **What to do:** decide which of these death should end. For the haul,
-  call `cancel_pile_job` from `hurt_player` with a notice that says the
-  player died (today's says "canceled by player input"). For the memory
-  trial, decide whether only the `Respawn` action restarts it. Clear `dig`
-  if a dead player shouldn't dig.
-- **Where:** `kestrel/sim/src/settlement/avatar.rs` (`hurt_player`,
-  `self_update`, `act`), `piles.rs` (`cancel_pile_job`), `memory.rs`
-  (`restart_memory`).
-- **Found in:** task 1 of `kestrel/GHOUL_ATTACK_HANDOFF.md`
-  (branch `kestrel-ghoul-attacks`).
-
 ## Decide whether a ghoul reaches a flying or busy player
 
 - **Status:** open
@@ -184,6 +164,33 @@
 - **Found in:** task 4 of `kestrel/GHOUL_ATTACK_HANDOFF.md`.
 
 ## Done
+
+### Decide what a player's death ends besides its transfer
+
+- **Status:** done (branch `kestrel-ghoul-followups`)
+- **Why:** a player killed in stage 5 (`Settlement::hurt_player`) now drops
+  its transfer job, but not the rest of what the `Respawn` action clears.
+  A pile haul keeps running: the dead avatar still loads units when in
+  reach (stage 3), and after the respawn at home the haul walks it back to
+  the pile. The memory trial doesn't restart. A dig in progress still
+  finishes while the player is dead.
+- **What to do:** decide which of these death should end. For the haul,
+  call `cancel_pile_job` from `hurt_player` with a notice that says the
+  player died (today's says "canceled by player input"). For the memory
+  trial, decide whether only the `Respawn` action restarts it. Clear `dig`
+  if a dead player shouldn't dig.
+- **Done:** death ends what a respawn ends. `hurt_player` clears the dig
+  and the route, ends the pile haul (`end_pile_job`, the core of
+  `cancel_pile_job`, with "You died. Haul canceled; cargo is retained.")
+  and restarts the memory trial at once (`restart_memory`, which
+  `RestartMemory` also calls). `strike` and `swing_lands` take the terrain
+  for the door. Tests: `dying_ends_a_haul`, `dying_stops_a_dig`,
+  `dying_restarts_the_memory_trial_and_closes_its_door`.
+- **Where:** `kestrel/sim/src/settlement/avatar.rs` (`hurt_player`,
+  `self_update`, `act`), `piles.rs` (`cancel_pile_job`), `memory.rs`
+  (`restart_memory`).
+- **Found in:** task 1 of `kestrel/GHOUL_ATTACK_HANDOFF.md`
+  (branch `kestrel-ghoul-attacks`).
 
 ### Give a scene ghouls and hurtable players
 

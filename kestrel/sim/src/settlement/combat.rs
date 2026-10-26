@@ -524,7 +524,7 @@ impl Settlement {
     /// (the laser's path, so a kill releases its transfer) and, if it
     /// lives, pushes it away from the threat: a velocity the avatar's own
     /// movement then brakes out (`walk`).
-    pub(crate) fn swing_lands(&mut self, tick: u64, message: SwingLands) {
+    pub(crate) fn swing_lands(&mut self, tick: u64, message: SwingLands, terrain: &mut Terrain) {
         let Some(i) = self.threat_index(message.threat) else { return };
         let Some(attack) = self.threat_attack(&self.threats[i]) else { return };
         let t = &mut self.threats[i];
@@ -538,7 +538,7 @@ impl Settlement {
         let agent = message.agent as usize;
         // A laser earlier in stage 5 may have killed the player.
         let hit = message.hit && self.player_health > 0 && self.agents[agent].avatar.health > 0;
-        let killed = hit && self.hurt_player(agent, attack.damage, tick);
+        let killed = hit && self.hurt_player(agent, attack.damage, tick, terrain);
         if hit && !killed {
             let a = &mut self.agents[agent];
             let mut away = (a.position - from).normalize_or_zero();
@@ -697,7 +697,7 @@ impl Settlement {
     }
 
     /// Applies a resolving strike. Returns how many threats it hit.
-    pub(crate) fn strike(&mut self, tick: u64, message: Strike) -> u32 {
+    pub(crate) fn strike(&mut self, tick: u64, message: Strike, terrain: &mut Terrain) -> u32 {
         let agent = message.agent as usize;
         if self.agents[agent].attack_ready > tick {
             return 0;
@@ -735,7 +735,7 @@ impl Settlement {
                     index != agent && target.controlled && target.avatar.health > 0 && target.position == to
                 });
                 if let Some(target) = hit {
-                    self.hurt_player(target, tuning.damage, tick);
+                    self.hurt_player(target, tuning.damage, tick, terrain);
                     return 1;
                 }
             }

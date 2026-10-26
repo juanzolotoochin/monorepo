@@ -201,7 +201,8 @@ impl Arena {
             hit_player: aimed.hit_player,
             started: tick,
         };
-        self.s_mut().strike(tick, message)
+        let (settlement, terrain) = self.sim.world_mut().settlement_and_terrain_mut();
+        settlement.strike(tick, message, terrain)
     }
 
     fn attack(&mut self, weapon: Weapon) -> u32 {

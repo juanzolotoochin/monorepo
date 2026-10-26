@@ -533,10 +533,12 @@ impl Settlement {
     }
 
     /// Stage 5: a hit takes `damage` from player `agent`'s health. At 0 the
-    /// player dies. It stops what it was doing, and its transfer job ends,
-    /// giving back the units it hadn't moved yet, as `drop_transfer` does.
-    /// It respawns at home later (`self_update`). Returns whether it died.
-    pub(super) fn hurt_player(&mut self, agent: usize, damage: u32, tick: u64) -> bool {
+    /// player dies and respawns at home later (`self_update`). Death ends
+    /// what the `Respawn` action ends: what the avatar was doing, its dig
+    /// and route, its transfer job (giving back the units it hadn't moved
+    /// yet, as `drop_transfer` does) and its pile haul. The memory trial
+    /// restarts at once, as `RestartMemory` does. Returns whether it died.
+    pub(super) fn hurt_player(&mut self, agent: usize, damage: u32, tick: u64, terrain: &mut Terrain) -> bool {
         let a = &mut self.agents[agent];
         a.avatar.health = a.avatar.health.saturating_sub(damage);
         if a.avatar.health > 0 {
@@ -547,11 +549,15 @@ impl Settlement {
         a.avatar.queued = None;
         a.avatar.queued_at = None;
         a.avatar.velocity = FxVec2::ZERO;
+        a.avatar.dig = None;
+        a.route.clear();
         if let Some(job) = a.avatar.job.take() {
             let ManualJob { depot, item, remaining, deposit, .. } = job;
             let release = TransferStock { agent: agent as AgentIx, depot, item, units: remaining, deposit, change: StockChange::Release };
             self.transfer_stock(vec![release]);
         }
+        self.end_pile_job(agent, "You died. Haul canceled; cargo is retained.", "Haul canceled because the player died");
+        self.restart_memory(terrain);
         true
     }
 

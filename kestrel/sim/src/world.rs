@@ -331,6 +331,11 @@ impl World {
         self.settlement.as_deref_mut().expect("a settlement world")
     }
 
+    #[cfg(test)]
+    pub(crate) fn settlement_and_terrain_mut(&mut self) -> (&mut Settlement, &mut Terrain) {
+        (self.settlement.as_deref_mut().expect("a settlement world"), &mut self.terrain)
+    }
+
     /// Replaces the terrain. For building a new world before tick 0; during
     /// play, terrain changes only through commands and messages.
     pub fn set_terrain(&mut self, terrain: Terrain) {
@@ -802,7 +807,7 @@ impl World {
             for message in messages.strike {
                 let agent = message.agent;
                 let cover = message.cover;
-                let hits = settlement.strike(tick, message);
+                let hits = settlement.strike(tick, message, &mut self.terrain);
                 if let Some(index) = cover {
                     self.terrain.damage_cover(index as usize, 1);
                 }
@@ -823,7 +828,7 @@ impl World {
             }
             settlement.start_swings(tick, messages.start_swing);
             for message in messages.swing_lands {
-                settlement.swing_lands(tick, message);
+                settlement.swing_lands(tick, message, &mut self.terrain);
             }
             for message in messages.breach {
                 settlement.breach(message);

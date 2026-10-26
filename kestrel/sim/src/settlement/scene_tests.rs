@@ -1015,3 +1015,95 @@ fn respawning_restarts_the_memory_trial_and_closes_its_door() {
     assert_eq!(scene.sim.world().terrain().obstacles.len(), obstacles + doors, "the door is shut");
     assert!(scene.sim.world().terrain().revision > revision);
 }
+
+/// Gives players one hit point and the laser, then has a guest standing
+/// three meters west of the host shoot it dead.
+fn shoot_the_host_dead(scene: &mut Scene) {
+    let host = scene.agent() as usize;
+    let s = scene.sim.world_mut().settlement_mut();
+    s.player_health = 1;
+    s.weapons = vec![content::scenario::Weapon::Laser];
+    s.agents[host].avatar.health = 1;
+    s.agents[host].avatar.max_health = 1;
+    let guest = PlayerId(1);
+    scene.sim.step(&[Command { player: guest, kind: CommandKind::Join }]);
+    let shooter = scene.s().avatar_of(guest).unwrap();
+    let to = scene.avatar().position - v(3.0, 0.0);
+    scene.sim.world_mut().settlement_mut().agents[shooter as usize].position = to;
+    let weapon = content::scenario::Weapon::Laser;
+    let fire = CommandKind::Attack { agent: shooter, weapon, aim: v(1.0, 0.0), muzzle: [Fx::ZERO, fx(0.8), fx(0.25)] };
+    scene.sim.step(&[Command { player: guest, kind: fire }]);
+    for _ in 0..ms(700) {
+        if scene.avatar().avatar.health == 0 {
+            return;
+        }
+        scene.sim.step(&[]);
+    }
+    panic!("the laser never killed the host");
+}
+
+/// Dying ends a haul, with a notice that says so, and the respawned
+/// avatar doesn't walk back to the pile.
+#[test]
+fn dying_ends_a_haul() {
+    let mut scene = Scene::new(pile_lab());
+    let agent = scene.agent();
+    scene.command(CommandKind::Pile { agent, action: PileAction::Pickup(2), pace: Fx::ZERO, approach: None });
+    scene.wait(ms(200));
+    assert!(scene.hauler().job.is_some());
+    shoot_the_host_dead(&mut scene);
+    let hauler = scene.hauler();
+    assert!(hauler.job.is_none());
+    assert_eq!(hauler.last_error.as_deref(), Some("Haul canceled because the player died"));
+    assert!(hauler.notice.contains("died"), "{}", hauler.notice);
+    assert!(scene.avatar().route.is_empty());
+    assert!(scene.lab().conserved());
+    scene.s().validate().unwrap();
+    scene.wait(ms(2500));
+    assert_eq!(scene.avatar().avatar.health, 1, "respawned");
+    assert_eq!(scene.avatar().position, scene.avatar().home, "it stays home: no haul steers it");
+    scene.s().validate().unwrap();
+}
+
+/// Dying stops a dig, so the ground stays as it was.
+#[test]
+fn dying_stops_a_dig() {
+    use crate::terrain::Terrain;
+    let mut scene = Scene::new(dig_lab());
+    let agent = scene.agent();
+    scene.walk(0.3, 1.8);
+    let tile = Terrain::pit_tile(scene.avatar().position);
+    scene.command(CommandKind::DigDown { agent });
+    assert!(scene.avatar().avatar.dig.is_some());
+    scene.wait(ms(300));
+    shoot_the_host_dead(&mut scene);
+    assert_eq!(scene.avatar().avatar.dig, None);
+    scene.s().validate().unwrap();
+    scene.wait(dig_ticks());
+    assert_eq!(scene.sim.world().terrain().pit(tile), 0, "the dead don't dig");
+    scene.s().validate().unwrap();
+}
+
+/// Dying restarts the memory trial and shuts its door, as a respawn does.
+#[test]
+fn dying_restarts_the_memory_trial_and_closes_its_door() {
+    let mut scene = Scene::new(surprise_lab());
+    let doors = scene.s().memory.as_ref().unwrap().doors.len();
+    scene.command(CommandKind::MemoryRecord);
+    scene.walk(-4.0, -2.0);
+    scene.wait(ms(667));
+    scene.command(CommandKind::MemoryDeploy);
+    scene.wait(ms(667));
+    scene.walk(-1.0, 3.0);
+    scene.wait(ms(3333));
+    assert!(scene.s().memory.as_ref().unwrap().unlocked);
+    let obstacles = scene.sim.world().terrain().obstacles.len();
+    shoot_the_host_dead(&mut scene);
+    let m = scene.s().memory.clone().unwrap();
+    assert!(!m.unlocked && m.ghost.is_none() && m.samples.is_empty(), "the trial starts over");
+    assert_eq!(scene.sim.world().terrain().obstacles.len(), obstacles + doors, "the door is shut");
+    scene.s().validate().unwrap();
+    scene.wait(ms(2500));
+    assert!(!scene.s().memory.as_ref().unwrap().unlocked, "it stays shut");
+    scene.s().validate().unwrap();
+}
