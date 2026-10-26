@@ -173,6 +173,44 @@ fn client_inputs_apply_everywhere() {
 }
 
 #[test]
+fn diagnostics_distinguish_receipt_from_local_application() {
+    let mut h = Harness::new(LinkConditions::perfect(), NetConfig { input_delay: 60, ..config() }, false);
+    h.add_client();
+    h.run_for(Duration::from_secs(3), 0);
+    h.clients[0].queue(CommandKind::SpawnMovers { center: FxVec2::new(Fx::from_int(50), Fx::from_int(50)), count: 7 });
+    h.run_for(Duration::from_millis(100), 0);
+    let d = h.clients[0].diagnostics(h.now);
+    assert_eq!(d.unacked_inputs, 0, "the host has received the command");
+    assert_eq!(h.clients[0].pending_inputs(), 1, "receipt is not local application");
+    assert!(d.inputs_queued > d.inputs_applied);
+    let host = h.host.diagnostics(h.now);
+    assert_eq!(host.peers[0].last_requested_tick, host.peers[0].last_assigned_tick);
+    assert_eq!(host.peers[0].last_requested_tick, d.last_requested_tick);
+    assert_eq!(Some(host.peers[0].input_ack), d.last_input_ack);
+    h.run_for(Duration::from_secs(2), 0);
+    assert_eq!(h.clients[0].pending_inputs(), 0);
+    h.assert_in_sync();
+}
+
+#[test]
+fn diagnostics_observe_starvation_and_catch_up_without_changing_turns() {
+    let mut h = Harness::new(LinkConditions::perfect(), config(), false);
+    h.add_client();
+    h.run_for(Duration::from_secs(3), 0);
+    h.net.borrow_mut().set_link(HOST, 1, LinkConditions { loss_permille: 1000, ..LinkConditions::perfect() });
+    h.run_for(Duration::from_secs(1), 0);
+    let waiting = h.clients[0].diagnostics(h.now);
+    assert!(waiting.starved_updates > 0);
+    assert!(waiting.starved_time > Duration::from_millis(500));
+    assert!(waiting.last_packet_age.unwrap() > Duration::from_millis(900));
+    h.net.borrow_mut().set_link(HOST, 1, LinkConditions::perfect());
+    h.run_for(Duration::from_secs(2), 0);
+    assert!(h.clients[0].diagnostics(h.now).catch_up_ticks > waiting.catch_up_ticks);
+    assert_eq!(h.desyncs(), 0);
+    h.assert_in_sync();
+}
+
+#[test]
 fn joining_mid_game() {
     let mut h = Harness::new(LinkConditions::internet(), config(), true);
     h.add_client();
@@ -198,6 +236,9 @@ fn late_inputs_move_to_the_next_open_turn() {
     h.net.borrow_mut().set_link(1, HOST, LinkConditions { spikes: vec![spike], ..LinkConditions::internet() });
     h.run_for(Duration::from_secs(12), 60);
     assert!(h.host.stats().late_inputs > 0);
+    let peers = h.host.diagnostics(h.now).peers;
+    assert!(peers[0].late_inputs > 0);
+    assert!(peers[0].shifted_ticks >= peers[0].late_inputs);
     assert!(h.host.world().tick() >= 355, "host waited: tick {}", h.host.world().tick());
     assert_eq!(h.desyncs(), 0);
     h.assert_in_sync();

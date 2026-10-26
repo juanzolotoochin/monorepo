@@ -1,4 +1,6 @@
 //! Bounded performance samples. CPU wall time is kept separate from deterministic game time.
+mod network;
+pub use network::NetworkFrame;
 use bevy::prelude::*;
 use debug_ui::{egui, GameInput, ImguiManager, ImguiMenu, MenuHandle, MenuId, MenuSpec};
 use serde_json::{json, Value};
@@ -52,6 +54,7 @@ impl Samples {
 }
 #[derive(Resource, Default)]
 pub struct Telemetry {
+    pub network: network::NetworkDiagnostics,
     samples: BTreeMap<&'static str, Samples>,
     pub counters: BTreeMap<&'static str, u64>,
     pub gauges: BTreeMap<&'static str, f64>,
@@ -61,6 +64,11 @@ pub struct Telemetry {
     overlay: Option<Entity>,
 }
 impl Telemetry {
+    pub fn network_frame(&mut self, mut frame: NetworkFrame) {
+        frame.frame_ms = self.samples.get("frame_wall").and_then(|samples| samples.values.back().copied());
+        self.network.record(frame);
+    }
+
     pub fn sample(&mut self, name: &'static str, ms: f64) {
         self.samples.entry(name).or_default().push(ms);
     }
@@ -220,6 +228,7 @@ pub fn shortcut(input: Res<GameInput>, mut telemetry: ResMut<Telemetry>) {
 const MENUS: &[MenuSpec] = &[
     MenuSpec::new("frame_timing", "Diagnostics", "Frame timing"),
     MenuSpec::new("counters", "Diagnostics", "Counters and gauges"),
+    MenuSpec::new("network", "Diagnostics", "Network"),
 ];
 
 impl ImguiMenu for Telemetry {
@@ -227,9 +236,13 @@ impl ImguiMenu for Telemetry {
         MENUS
     }
 
-    fn show_menu(&mut self, id: MenuId, root: &mut egui::Ui, open: &mut bool, _world: &mut World) {
+    fn show_menu(&mut self, id: MenuId, root: &mut egui::Ui, open: &mut bool, world: &mut World) {
         let window = id.window().open(open);
         match id.id() {
+            "network" => window.default_width(520.0).vscroll(true).show(root.ctx(), |ui| {
+                let active = world.get_resource::<crate::lockstep::SessionService>().is_some_and(|service| service.networked());
+                self.network.show(ui, active);
+            }),
             "frame_timing" => window.default_pos([16.0, 40.0]).default_width(330.0).show(root.ctx(), |ui| self.frame_timing(ui)),
             _ => window.default_pos([360.0, 40.0]).default_width(280.0).show(root.ctx(), |ui| self.counters(ui)),
         };
@@ -340,7 +353,7 @@ pub fn snapshot(world: &World) -> Value {
     let t = world.resource::<Telemetry>();
     let timings: BTreeMap<_, _> = t.samples.iter().map(|(k, v)| (*k, v.snapshot())).collect();
     let diagnostics:Vec<_>=world.get_resource::<bevy::diagnostic::DiagnosticsStore>().map(|d|d.iter().filter_map(|d|d.value().map(|v|json!({"path":d.path().to_string(),"value":v,"average":d.average(),"smoothed":d.smoothed(),"unit":d.suffix}))).collect()).unwrap_or_default();
-    json!({"version":1,"timings":timings,"counters":t.counters,"gauges":t.gauges,"render_diagnostics":diagnostics,"timing_scope":"CPU wall time; frame_wall includes rendering/pacing/readback. GPU durations only when reported by render diagnostics.","rolling_window":WINDOW})
+    json!({"version":1,"timings":timings,"counters":t.counters,"gauges":t.gauges,"network":t.network.snapshot(),"render_diagnostics":diagnostics,"timing_scope":"CPU wall time; frame_wall includes rendering/pacing/readback. GPU durations only when reported by render diagnostics.","rolling_window":WINDOW})
 }
 #[cfg(test)]
 mod tests {

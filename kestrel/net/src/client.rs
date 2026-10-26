@@ -6,7 +6,7 @@ use sim::{CommandKind, PlayerId, Simulation, World};
 
 use crate::protocol::{decode, encode, Input, Packet, StableId, SAVE_CHUNK};
 use crate::transport::Transport;
-use crate::{millis, HashLog, NetConfig, NetEvent, NetStats, Pacer, TICK};
+use crate::{millis, HashLog, NetConfig, NetDiagnostics, NetEvent, NetStats, Pacer, TICK};
 
 const HELLO_INTERVAL: Duration = Duration::from_millis(250);
 /// Extra ticks a client runs per update at most while catching up.
@@ -63,6 +63,9 @@ pub struct Client<T: Transport> {
     last_send: Option<Duration>,
     events: Vec<NetEvent>,
     stats: NetStats,
+    diagnostics: NetDiagnostics,
+    last_update: Option<Duration>,
+    waiting_for_turn: bool,
     /// Test hook: a command run locally on the next tick only.
     diverge: Option<sim::Command>,
 }
@@ -97,6 +100,9 @@ impl<T: Transport> Client<T> {
             last_send: None,
             events: Vec::new(),
             stats: NetStats::default(),
+            diagnostics: NetDiagnostics::default(),
+            last_update: None,
+            waiting_for_turn: false,
             diverge: None,
         }
     }
@@ -153,6 +159,18 @@ impl<T: Transport> Client<T> {
         stats
     }
 
+    pub fn diagnostics(&self, now: Duration) -> NetDiagnostics {
+        let mut diagnostics = self.diagnostics.clone();
+        diagnostics.host_tick = (self.world != 0 && self.host_tick != 0).then_some(self.host_tick);
+        diagnostics.input_delay = self.input_delay;
+        diagnostics.jitter_buffer = self.config.jitter_buffer;
+        diagnostics.last_packet_age = self.last_heard.map(|at| now.saturating_sub(at));
+        diagnostics.unacked_inputs = self.unacked.len() as u64;
+        diagnostics.inputs_queued = self.queued;
+        diagnostics.inputs_applied = self.applied;
+        diagnostics
+    }
+
     pub fn take_events(&mut self) -> Vec<NetEvent> {
         std::mem::take(&mut self.events)
     }
@@ -171,6 +189,7 @@ impl<T: Transport> Client<T> {
         // so this tick says little about when the command applies here;
         // `pending_inputs` does.
         let tick = self.host_tick + one_way + self.input_delay;
+        self.diagnostics.last_requested_tick = Some(tick);
         self.unacked.push_back(Input { seq: self.next_seq, tick, kind });
         self.next_seq += 1;
         self.queued += 1;
@@ -184,6 +203,14 @@ impl<T: Transport> Client<T> {
     /// Handles packets, runs every tick that is due and available (calling
     /// `on_step` after each), and sends inputs.
     pub fn update(&mut self, now: Duration, mut on_step: impl FnMut(&World)) {
+        if self.waiting_for_turn {
+            if let Some(previous) = self.last_update {
+                self.diagnostics.starved_time += now.saturating_sub(previous);
+            }
+        }
+        self.last_update = Some(now);
+        self.waiting_for_turn = false;
+        self.diagnostics.steps_last_update = 0;
         self.receive(now);
         if matches!(self.state, State::Stopped(..)) {
             return;
@@ -201,6 +228,8 @@ impl<T: Transport> Client<T> {
             // Run what is due, plus extra ticks when far behind the buffer target.
             let extra = ready.saturating_sub(self.config.jitter_buffer + due + 2).min(MAX_CATCH_UP);
             let steps = (due + extra).min(ready);
+            self.diagnostics.steps_last_update = steps;
+            self.diagnostics.catch_up_ticks += steps.saturating_sub(due);
             for _ in 0..steps {
                 let tick = sim.world().tick();
                 let mut turn = self.turns.remove(&tick).expect("ready turn");
@@ -215,6 +244,8 @@ impl<T: Transport> Client<T> {
                 on_step(sim.world());
             }
             if steps < due {
+                self.waiting_for_turn = true;
+                self.diagnostics.starved_updates += 1;
                 // Out of turns: wait for the host rather than owing ticks.
                 self.pacer.reset(now);
             } else {
@@ -247,6 +278,7 @@ impl<T: Transport> Client<T> {
             self.stats.packets_received += 1;
             self.stats.bytes_received += bytes.len() as u64;
             let Some(packet) = decode(&bytes) else { continue };
+            self.diagnostics.last_receive_interval = self.last_heard.map(|at| now.saturating_sub(at));
             self.last_heard = Some(now);
             self.handle(packet, now);
         }
@@ -282,6 +314,8 @@ impl<T: Transport> Client<T> {
                 self.next_seq = 1;
                 // Inputs not in the new save are lost.
                 (self.queued, self.applied) = (0, 0);
+                self.diagnostics = NetDiagnostics::default();
+                self.waiting_for_turn = false;
                 self.reports.clear();
                 let chunks = (save_len as usize).div_ceil(SAVE_CHUNK);
                 self.state = State::Loading { tick: save_tick, len: save_len as usize, chunks: vec![None; chunks] };
@@ -307,12 +341,14 @@ impl<T: Transport> Client<T> {
                     }
                 }
                 self.host_tick = self.host_tick.max(host_tick);
+                self.diagnostics.last_input_ack = Some(self.diagnostics.last_input_ack.unwrap_or(0).max(input_ack));
                 while self.unacked.front().is_some_and(|input| input.seq <= input_ack) {
                     self.unacked.pop_front();
                 }
                 if pong != 0 {
                     let elapsed = millis(now).wrapping_sub(pong).saturating_sub(pong_held_ms);
                     let sample = Duration::from_millis(elapsed as u64);
+                    self.diagnostics.rtt_sample = Some(sample);
                     self.rtt = Some(match self.rtt {
                         Some(rtt) => (rtt * 7 + sample) / 8,
                         None => sample,

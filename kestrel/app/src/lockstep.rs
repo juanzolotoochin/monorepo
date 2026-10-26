@@ -97,6 +97,9 @@ impl Service for SessionService {
     fn init(world: &mut World) -> Self {
         let Opened { session, content, network, name, record, start_save, replay_scene } =
             world.resource_mut::<Flow>().take_opened().expect("a session starts once Flow has opened it");
+        if network.is_some() {
+            world.resource_mut::<crate::telemetry::Telemetry>().network.begin();
+        }
         SessionService {
             session,
             content,
@@ -484,7 +487,23 @@ fn step(
         let settlement = world.settlement().cloned();
         ticks.push((world.tick(), settlement, world.stage_times(), copying.elapsed()));
     });
-    telemetry.session_frame(started.elapsed(), ticks.iter().map(|(_, _, times, copy)| (*times, *copy)));
+    let update_time = started.elapsed();
+    telemetry.session_frame(update_time, ticks.iter().map(|(_, _, times, copy)| (*times, *copy)));
+    if service.networked() {
+        telemetry.network_frame(crate::telemetry::NetworkFrame {
+            at: web_time::Instant::now(),
+            role: if service.is_client() { "Client" } else { "Host" },
+            status: service.session.status(),
+            world: service.session.world_number(),
+            tick: service.world().map(|world| world.tick()),
+            pending: service.session.pending_inputs(),
+            stats: service.session.stats(),
+            diagnostics: service.session.diagnostics(clock),
+            update_ms: update_time.as_secs_f64() * 1000.,
+            tick_ms: ticks.iter().map(|(_, _, times, _)| times.total().as_secs_f64() * 1000.).max_by(f64::total_cmp),
+            frame_ms: None,
+        });
+    }
     service.frame = ticks.into_iter().map(|(tick, settlement, _, _)| (tick, settlement)).collect();
     service.frame_world = service.session.world_number();
     service.alpha = service.session.alpha(clock);
@@ -862,6 +881,7 @@ pub fn follow_avatar(
     sound: Res<crate::sound::Sound>,
     mut preview: Local<LocalAvatarPreview>,
     mut ground_step: Local<VisualGroundStep>,
+    mut telemetry: ResMut<crate::telemetry::Telemetry>,
 ) {
     let (Some(current), Some(index)) = (&mirror.current, mirror.player()) else { return };
     let a = &current.agents[index as usize];
@@ -891,6 +911,9 @@ pub fn follow_avatar(
     let motion = crate::character::motion_profile(&scene.pack);
     let mut preview_velocity = None;
     if service.is_client() {
+        let snapped = preview.agent == Some(index) && preview.position.is_some_and(|p| p.distance(to) > 1.5);
+        let mut correction = 0.0;
+        let mut clamped = false;
         let reset = preview.agent != Some(index) || preview.position.is_none_or(|p| p.distance(to) > 1.5);
         if reset {
             *preview = LocalAvatarPreview { position: Some(to), agent: Some(index), ..default() };
@@ -924,6 +947,7 @@ pub fn follow_avatar(
                     || service.player_radius().is_some_and(|radius| world.terrain().walkable(service.to_sim(start), service.to_sim(candidate), radius))
             });
             if passable {
+                clamped = (candidate - to).length() > 0.9;
                 // Limit how far the displayed avatar can get ahead while
                 // waiting for the host's confirmed turns.
                 preview.position = Some(to + (candidate - to).clamp_length_max(0.9));
@@ -936,12 +960,16 @@ pub fn follow_avatar(
             preview_velocity = Some(Vec3::ZERO);
             if preview.active {
                 let blend = 1.0 - (-8.0 * time.delta_secs()).exp();
+                let before = preview.position.unwrap();
                 preview.position = Some(preview.position.unwrap().lerp(to, blend));
+                correction += crate::navigation::flat(preview.position.unwrap() - before).length();
             }
         }
         if preview.active && !moving_input && service.session.pending_inputs() == 0 && a.avatar.velocity == FxVec2::ZERO {
             let remaining = to - preview.position.unwrap();
+            let before = preview.position.unwrap();
             preview.position = Some(preview.position.unwrap() + remaining.clamp_length_max(2.0 * time.delta_secs()));
+            correction += crate::navigation::flat(preview.position.unwrap() - before).length();
         }
         if preview.active && preview.position.unwrap().distance(to) < 0.02 && !moving_input {
             preview.active = false;
@@ -952,6 +980,7 @@ pub fn follow_avatar(
         } else {
             preview.position = Some(to);
         }
+        telemetry.network.preview(crate::navigation::flat(position - to).length(), correction, clamped, snapped);
     } else {
         *preview = LocalAvatarPreview::default();
     }

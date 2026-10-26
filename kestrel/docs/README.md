@@ -13,6 +13,7 @@ This site explains how Kestrel works: its engine boundaries, character and input
 - [Character definitions](character-definition.md) — character files, loading, and simulation use.
 - [Character animation](character-animation.md) — rig and motion behavior.
 - [Service layers](service-layers.md) — front-end lifetimes and frame phases.
+- [Network diagnostics](network-diagnostics.md) — egui metrics for client latency, turn delivery, and movement preview corrections.
 - [Wall-clock-sensitive tests](flaky-tests.md) — known timing limits in test targets.
 
 ## Writing docs

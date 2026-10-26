@@ -100,6 +100,45 @@ pub struct NetStats {
     pub late_inputs: u64,
 }
 
+/// Observations only: never serialized or included in deterministic state.
+/// Tick counters name the next tick to simulate, not the last completed tick.
+#[derive(Clone, Debug, Default)]
+pub struct NetDiagnostics {
+    pub host_tick: Option<u64>,
+    pub input_delay: u64,
+    pub remote_input_delay: u64,
+    pub jitter_buffer: u64,
+    pub last_packet_age: Option<Duration>,
+    pub rtt_sample: Option<Duration>,
+    pub last_receive_interval: Option<Duration>,
+    pub unacked_inputs: u64,
+    pub inputs_queued: u64,
+    pub inputs_applied: u64,
+    pub last_requested_tick: Option<u64>,
+    pub last_input_ack: Option<u64>,
+    pub steps_last_update: u64,
+    pub catch_up_ticks: u64,
+    /// Updates when ticks were due but their official turns were unavailable.
+    pub starved_updates: u64,
+    /// Time observed between updates while the client was waiting for a turn.
+    pub starved_time: Duration,
+    pub peers: Vec<PeerDiagnostics>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PeerDiagnostics {
+    pub player: PlayerId,
+    pub loading: bool,
+    pub last_packet_age: Duration,
+    /// Receipt acknowledgement, not the remote simulation's current tick.
+    pub turn_ack: u64,
+    pub input_ack: u64,
+    pub late_inputs: u64,
+    pub shifted_ticks: u64,
+    pub last_requested_tick: Option<u64>,
+    pub last_assigned_tick: Option<u64>,
+}
+
 /// Every tick's total hash since the session started here.
 #[derive(Clone, Debug, Default)]
 pub struct HashLog {
