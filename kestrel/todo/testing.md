@@ -15,9 +15,30 @@
 - **Found in:** the full test run for PR #111
   (https://app.buildbuddy.io/invocation/b95f8bf3-e295-4ed7-91a4-b2f8bef0b839).
 
-## `movement_test` can't be built or run from Windows
+## Clean up after the Debian 12 libudev switch
 
 - **Status:** open
+- **Why:** the app tests now link and run against Debian 12's `libudev1`
+  (pinned `http_archive`s in `MODULE.bazel`), but `libudev1` is still in
+  the `debian13` apt package list, unused. Real gamepad input on Linux and
+  the Steam Deck wasn't checked after the change; it should still use the
+  system libudev, since the deploy ships the binary without runfiles.
+- **What to do:** remove `libudev1` from the `debian13` list and regenerate
+  the apt lock facts in `MODULE.bazel.lock`. Check a controller on the Deck.
+- **Where:** `MODULE.bazel`, `MODULE.bazel.lock`, `third_party/udev/BUILD.bazel`.
+- **Found in:** commit `be66db0` on branch `kestrel-ability-prediction`.
+
+## Done
+
+### `movement_test` can't be built or run from Windows
+
+- **Status:** done (branch `kestrel-ability-prediction`). The runfiles
+  had only `libudev.so` (the link name), but the loader looks up the SONAME
+  `libudev.so.1`, and the Debian 13 build needs glibc 2.38 while the remote
+  image (Debian 12) has 2.36. `third_party/udev` now imports Debian 12's
+  libudev as `libudev.so` to link and `libudev.so.1` to run, so tests find
+  it in the runfiles; the `local` tag is gone
+  (https://app.buildbuddy.io/invocation/e876e2d3-a82d-4ede-bd61-ca08fb8d7bfa).
 - **Why:** the Steam Deck commit (`b3e66f5`) added the Linux gamepad backend
   to the `demo` crate, which links `libudev.so.1`, and tagged
   `//kestrel/app:movement_test` `local` because remote workers lack that
@@ -26,7 +47,11 @@
   "%1 is not a valid Win32 application". Without the tag it compiles
   remotely but can't start there (`libudev.so.1: cannot open shared
   object`). So the movement, prediction and margin tests run nowhere from
-  Windows.
+  Windows. The same missing library breaks every app test that runs the
+  `demo` binary remotely: `control_protocol_test`, `forest_motion_test`,
+  `combat_arena_test`, `combat_weapons_test` and `combat_replay_test` all
+  fail with it (https://app.buildbuddy.io/invocation/12fae88b-1671-4d4a-a474-656eeb4ad1f8,
+  https://app.buildbuddy.io/invocation/02f89587-4116-4f62-84cd-9cac5ec7fc9d).
 - **What to do:** add `libudev` to the remote test image, or keep the
   gamepad backend out of the test binary (a feature or a separate test
   crate), or load libudev lazily so a missing library only disables
@@ -37,5 +62,3 @@
 - **Found in:** rebasing PR #111 onto master
   (https://app.buildbuddy.io/invocation/ee33f5f6-ab6c-4fcd-abbd-7b9aa1fcbf05 on
   master, https://app.buildbuddy.io/invocation/f344f7cf-8476-457c-a616-c2be2f35721f without the tag).
-
-## Done

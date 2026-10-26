@@ -49,7 +49,7 @@ A tick has six stages. The separation lets chunks of the world run in parallel w
 
 | Stage | What it does |
 | --- | --- |
-| 1. Apply inputs | Validate and apply the players' commands in player order. |
+| 1. Apply inputs | Validate and apply the players' commands in player order. A player's action changes only its own avatar; what it does to the world becomes a message that stage 5 applies first. |
 | 2. Update each entity | Move or advance an entity using data it owns; chunks can run in parallel. |
 | 3. Observe and emit | Detect interactions and write messages into each chunk's outbox. |
 | 4. Merge messages | Combine outboxes in a deterministic chunk order. |

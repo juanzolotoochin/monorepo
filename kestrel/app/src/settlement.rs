@@ -326,19 +326,21 @@ pub fn tick(world: &mut World) {
     }
     let mut arc_source = pos + Vec3::Y * 0.75;
     let mut arc_fired = false;
-    // This player's shots that prediction already drew, in order (see
-    // `laser_prediction`); other shots are drawn as they are confirmed.
+    // This player's events that prediction already presented, in order
+    // (see `event_prediction`); other events are presented as they are
+    // confirmed.
     let local = world.resource::<crate::lockstep::WorldMirror>().player();
-    let mut drawn_early = world
-        .get_resource_mut::<crate::laser_prediction::LaserPrediction>()
-        .map(|mut lasers| std::mem::take(&mut lasers.confirmed))
+    let mut presented_early = world
+        .get_resource_mut::<crate::event_prediction::EventPrediction>()
+        .map(|mut ledger| std::mem::take(&mut ledger.confirmed))
         .unwrap_or_default();
     for event in &sim.events {
         use crate::legacy::Event;
-        let drawn_shot = match event {
-            Event::LaserFired { agent, .. } if Some(*agent) == local => drawn_early.pop_front().flatten(),
+        let presented = match event {
+            Event::LaserFired { agent, .. } if Some(*agent) == local => presented_early.next("laser"),
             _ => None,
         };
+        let drawn_shot = presented.filter(|_| matches!(event, Event::LaserFired { .. }));
         if let Event::ArcFired { from, to } = event {
             arc_source = Vec3::new(from[0], 0.72, from[1]);
             crate::effects::arc(
@@ -477,13 +479,13 @@ pub fn tick(world: &mut World) {
             );
         }
         let cue = match event {
-            Event::Shot { defender } if defender == "player" => Some(crate::sound::Cue::Bow),
+            // Prediction played these when it presented the shot.
+            Event::LaserFired { .. } if presented.is_some() => None,
+            Event::BowFired { .. } => Some(crate::sound::Cue::Bow),
             Event::Shot { .. } => Some(crate::sound::Cue::Ballista),
             Event::ArcFired { .. } => Some(crate::sound::Cue::Arc),
             // The visible bolt plays this cue when it reaches the actor.
             Event::Hit { impact: crate::legacy::Impact::Laser, .. } => None,
-            // Prediction played it when it drew the shot.
-            Event::LaserFired { .. } if drawn_shot.is_some() => None,
             Event::LaserFired { .. } => Some(crate::sound::Cue::Laser),
             Event::Hit {
                 impact: crate::legacy::Impact::Arc,
@@ -526,6 +528,7 @@ pub fn tick(world: &mut World) {
             let combat_event = matches!(
                 event,
                 Event::Shot { .. }
+                    | Event::BowFired { .. }
                     | Event::ArcFired { .. }
                     | Event::LaserFired { .. }
                     | Event::Hit { .. }

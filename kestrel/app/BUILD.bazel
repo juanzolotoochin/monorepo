@@ -200,9 +200,8 @@ py_test(
 rust_test(
     name = "movement_test",
     size = "medium",
-    # The Linux gamepad backend loads libudev.so.1 at runtime, which the
-    # remote test workers do not provide.
-    tags = ["local"],
+    # Runs remotely: the Linux gamepad backend loads libudev.so.1 from the
+    # runfiles (see third_party/udev/BUILD.bazel).
     # The controller tests read the sample synthetic scenario.
     compile_data = ["//:Cargo.toml", "demos/controller_field.gamepad.json"],
     crate = ":demo",

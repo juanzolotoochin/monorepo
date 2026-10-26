@@ -203,7 +203,7 @@ fn pending_commands_stay_until_simulated_and_go_with_the_world() {
     h.run_for(Duration::from_millis(50), 0);
     h.clients[0].queue(spawn(2));
     let requested = h.clients[0].diagnostics(h.now).last_requested_tick.unwrap();
-    let pending: Vec<_> = h.clients[0].pending_commands().map(|(tick, kind)| (tick, kind.clone())).collect();
+    let pending: Vec<_> = h.clients[0].pending_commands().map(|p| (p.tick, p.kind.clone())).collect();
     assert_eq!(pending, vec![(horizon, spawn(1)), (requested, spawn(2))]);
     assert!(requested > horizon);
 
@@ -215,7 +215,7 @@ fn pending_commands_stay_until_simulated_and_go_with_the_world() {
     while h.clients[0].world().unwrap().tick() <= horizon {
         h.run_for(FRAME, 0);
     }
-    let left: Vec<_> = h.clients[0].pending_commands().map(|(tick, _)| tick).collect();
+    let left: Vec<_> = h.clients[0].pending_commands().map(|p| p.tick).collect();
     assert_eq!(left, vec![requested]);
     h.run_for(Duration::from_secs(2), 0);
     assert_eq!(h.clients[0].pending_commands().count(), 0);
@@ -227,6 +227,65 @@ fn pending_commands_stay_until_simulated_and_go_with_the_world() {
     h.run_for(Duration::from_millis(50), 0);
     assert_eq!(h.clients[0].pending_commands().count(), 0);
     assert_eq!(h.clients[0].pending_inputs(), 0);
+    assert_eq!(h.clients[0].applied_commands().count(), 0, "the drain record is per world");
+}
+
+#[test]
+fn the_drain_record_says_which_command_applied_on_which_tick() {
+    let mut h = Harness::new(steady(50), config(), false);
+    h.add_client();
+    h.run_for(Duration::from_secs(3), 0);
+    // A quarter second more on the uplink for a second: some inputs come in
+    // late and the host moves them later.
+    let spike = (h.now, h.now + Duration::from_secs(1), Duration::from_millis(250));
+    h.net.borrow_mut().set_link(1, HOST, LinkConditions { spikes: vec![spike], ..steady(50) });
+    let mut next = 0;
+    let mut ids = Vec::new();
+    let mut requested = Vec::new();
+    for frame in 0..200 {
+        if frame % 4 == 0 {
+            let client = &mut h.clients[0];
+            client.queue(CommandKind::Jump { agent: next });
+            next += 1;
+            let queued = client.pending_commands().last().unwrap();
+            ids.push(queued.id);
+            requested.push(queued.tick);
+        }
+        h.run_for(FRAME, 0);
+    }
+    h.run_for(Duration::from_secs(2), 0);
+    assert_eq!(h.clients[0].pending_inputs(), 0);
+    let distinct: std::collections::BTreeSet<_> = ids.iter().collect();
+    assert_eq!(distinct.len(), ids.len(), "every command has its own identity");
+
+    // The tick each jump applied on, from the host's turns.
+    let player = h.clients[0].player().unwrap();
+    let (first, turns) = h.host.turns();
+    let mut on_host = vec![None; ids.len()];
+    for (i, turn) in turns.iter().enumerate() {
+        for command in turn.iter().filter(|c| c.player == player) {
+            if let CommandKind::Jump { agent } = command.kind {
+                on_host[agent as usize] = Some(first + i as u64);
+            }
+        }
+    }
+    let record: std::collections::HashMap<_, _> = h.clients[0].applied_commands().map(|(tick, id)| (id, tick)).collect();
+    let mut moved = 0;
+    for (jump, id) in ids.iter().enumerate() {
+        assert_eq!(record.get(id).copied(), on_host[jump], "jump {jump}");
+        moved += usize::from(on_host[jump].unwrap() > requested[jump]);
+    }
+    assert!(moved > 0, "some inputs came in late");
+    let ticks: Vec<_> = h.clients[0].applied_commands().map(|(tick, _)| tick).collect();
+    assert!(ticks.is_sorted(), "oldest first");
+
+    // It forgets what applied more than `APPLIED_HISTORY` ticks ago.
+    h.run_for(TICK * (crate::APPLIED_HISTORY as u32 + 30), 0);
+    h.clients[0].queue(CommandKind::Jump { agent: 0 });
+    h.run_for(Duration::from_secs(1), 0);
+    let left: Vec<_> = h.clients[0].applied_commands().collect();
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert!(left[0].1 > *ids.last().unwrap());
 }
 
 #[test]

@@ -410,6 +410,8 @@ pub enum Event {
     Produced { producer: String },
     Equipped { agent: String },
     Shot { defender: String },
+    /// An avatar loosed an arrow.
+    BowFired,
     /// `by` is the avatar that struck, for melee and arc hits.
     Hit { target: u64, by: Option<String>, projectile: Option<u64>, position: Point, killed: bool, impact: Impact },
     PinnedLanded { target: u64, position: Point },
@@ -639,9 +641,8 @@ impl Simulation {
                 Some(match e {
                     s::Event::Produced { producer } => Event::Produced { producer: current.producers[*producer as usize].id.clone() },
                     s::Event::Equipped { agent } => Event::Equipped { agent: agent_name(*agent) },
-                    s::Event::Shot { defender } => Event::Shot {
-                        defender: defender.map_or_else(|| "player".to_string(), |d| current.defenders[d as usize].id.clone()),
-                    },
+                    s::Event::Shot { defender } => Event::Shot { defender: current.defenders[*defender as usize].id.clone() },
+                    s::Event::BowFired { .. } => Event::BowFired,
                     s::Event::Hit { target, agent, projectile, position, killed, impact } => Event::Hit {
                         target: *target,
                         by: agent.map(agent_name),
@@ -662,7 +663,7 @@ impl Simulation {
                     },
                     s::Event::PinnedLanded { target, position } => Event::PinnedLanded { target: *target, position: p(*position) },
                     s::Event::BlockedShot { position } => Event::BlockedShot { position: p(*position) },
-                    s::Event::ArcFired { from, to } => Event::ArcFired { from: p(*from), to: p(*to) },
+                    s::Event::ArcFired { from, to, .. } => Event::ArcFired { from: p(*from), to: p(*to) },
                     s::Event::LaserFired { agent, to, hit_actor, cover, .. } => Event::LaserFired { agent: *agent, to: p(*to), hit_actor: *hit_actor, cover: *cover },
                     s::Event::Breach { position } => Event::Breach { position: p(*position) },
                     s::Event::PileToss { .. } => return None,

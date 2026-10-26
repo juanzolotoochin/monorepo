@@ -2,10 +2,12 @@
 //! its owner's commands that haven't applied yet.
 
 use content::scenario::Weapon;
-use fx::{Fx, FxVec2};
 
-use super::avatar::{self, character_of, Intent};
+use super::action::Action;
+use super::avatar::{self, character_of};
+use super::combat::{strike_event, Event};
 use super::{AgentIx, AgentState, Settlement};
+use crate::messages::{ActionMessages, Messages};
 use crate::terrain::Terrain;
 use crate::CommandKind;
 
@@ -13,10 +15,13 @@ use crate::CommandKind;
 /// runs the simulation's own per-avatar code on a copy of the avatar and
 /// never changes the world.
 ///
-/// Only the avatar's own part of each tick runs. Pile jobs, hits and
-/// knockback, damage, terrain changes (its own digs too) and other players
-/// stay as confirmed, so a replay matches the simulation exactly while none
-/// of those touch the avatar.
+/// Only the avatar's own part of each tick runs: its step (stage 2) and its
+/// reading of the world (stage 3), whose messages become the tick's
+/// predicted events and are never applied. Pile jobs, transfer units moving
+/// at a dock, hits and knockback, damage, terrain changes (its own digs too)
+/// and other players stay as confirmed, so a replay matches the simulation
+/// exactly while none of those touch the avatar, and its events match while
+/// what its strikes read of the world didn't change.
 #[derive(Clone)]
 pub struct AvatarReplay<'a> {
     settlement: &'a Settlement,
@@ -24,31 +29,8 @@ pub struct AvatarReplay<'a> {
     me: AgentIx,
     state: AgentState,
     tick: u64,
-    /// The strike that resolved on the last tick run.
-    struck: Option<ReplayedStrike>,
-}
-
-/// A swing the replayed avatar resolved: what the simulation's targeting
-/// reads when the swing resolves (`read_avatar`).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ReplayedStrike {
-    /// The tick it resolved on.
-    pub tick: u64,
-    pub weapon: Weapon,
-    pub aim: FxVec2,
-    pub muzzle: [Fx; 3],
-    /// The avatar's position and height after its own step on `tick`.
-    pub origin: FxVec2,
-    pub height: Fx,
-}
-
-/// A laser shot as the simulation fires it: `Event::LaserFired`'s fields.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PredictedLaser {
-    pub from: FxVec2,
-    pub to: FxVec2,
-    pub hit_actor: bool,
-    pub cover: Option<u16>,
+    /// The events the last tick run showed.
+    events: Vec<Event>,
 }
 
 impl Settlement {
@@ -56,21 +38,7 @@ impl Settlement {
     /// `tick`. `None` unless `agent` is a player avatar.
     pub fn replay_avatar<'a>(&'a self, agent: AgentIx, tick: u64, terrain: &'a Terrain) -> Option<AvatarReplay<'a>> {
         let state = self.agents.get(agent as usize).filter(|a| a.controlled)?.clone();
-        Some(AvatarReplay { settlement: self, terrain, me: agent, state, tick, struck: None })
-    }
-
-    /// The laser shot `agent` would fire with `strike` against this
-    /// settlement: the simulation's own targeting (`strike_targets`) from
-    /// the strike's position and height, whatever this settlement says about
-    /// the avatar itself. `None` unless the strike is a laser's.
-    pub fn predict_laser(&self, agent: AgentIx, strike: &ReplayedStrike, terrain: &Terrain) -> Option<PredictedLaser> {
-        if strike.weapon != Weapon::Laser {
-            return None;
-        }
-        let (targets, beam_end, cover) = self.strike_targets_from(agent, strike.height, strike.origin, strike.aim, Weapon::Laser, terrain);
-        let to = beam_end?;
-        let hit_actor = self.laser_hits_actor(agent as usize, &targets, to);
-        Some(PredictedLaser { from: strike.origin, to, hit_actor, cover })
+        Some(AvatarReplay { settlement: self, terrain, me: agent, state, tick, events: Vec::new() })
     }
 }
 
@@ -94,81 +62,47 @@ impl<'a> AvatarReplay<'a> {
         self.terrain
     }
 
-    /// The strike that resolved on the last tick run, if any.
-    pub fn struck(&self) -> Option<&ReplayedStrike> {
-        self.struck.as_ref()
+    /// The events the last tick run predicted, in the order the simulation
+    /// shows them: those built from the avatar's stage 3 messages alone
+    /// (`Event::prediction` says `Predict` for exactly these). A strike reads
+    /// the confirmed settlement and terrain.
+    pub fn events(&self) -> &[Event] {
+        &self.events
     }
 
-    /// The laser shot the last tick run fired, aimed against the confirmed
-    /// settlement (see `Settlement::predict_laser`).
-    pub fn laser(&self) -> Option<PredictedLaser> {
-        self.settlement.predict_laser(self.me, self.struck.as_ref()?, self.terrain)
-    }
-
-    /// Applies one of the owner's commands on `tick`, as `World::step` does
-    /// for this avatar. Commands that don't drive it change nothing. Returns
-    /// false for commands that plan a route (click-to-move, pile hauls),
-    /// which the replay doesn't predict.
+    /// Applies one of the owner's commands on `tick`: its action's part on
+    /// the avatar (`avatar::act`), as `World::step` applies it. Commands that
+    /// don't drive this avatar change nothing. Returns false for a pile haul,
+    /// which plans its walk from pile lab state the replay doesn't run.
     pub fn apply(&mut self, command: &CommandKind) -> bool {
-        if command.avatar() != Some(self.me) {
-            return true;
-        }
-        let (s, terrain, tick) = (self.settlement, self.terrain, self.tick);
-        let a = &mut self.state;
-        let def = character_of(&s.characters, a);
-        match *command {
-            CommandKind::MoveAvatar { intent: Intent::GoTo { .. }, .. } | CommandKind::Pile { .. } => return false,
-            CommandKind::MoveAvatar { ref intent, .. } => {
-                if avatar::alive(a) {
-                    avatar::set_intent(a, intent.clone(), terrain, def);
-                }
-            }
-            CommandKind::AimAvatar { aim, .. } => avatar::aim_at(a, aim),
-            CommandKind::Attack { weapon, aim, muzzle, .. } => {
-                if s.has_weapon(weapon) && avatar::alive(a) {
-                    avatar::attack(a, tick, weapon, aim, muzzle, def);
-                }
-            }
-            CommandKind::Equip { weapon, .. } => {
-                if s.has_weapon(weapon) {
-                    a.avatar.weapon = weapon;
-                }
-            }
-            CommandKind::Jetpack { enabled, .. } => avatar::jetpack(a, enabled, def),
-            CommandKind::Jump { .. } => avatar::jump(a, tick, def),
-            CommandKind::DigDown { .. } => {
-                if s.can_dig_at(a.position, terrain) {
-                    avatar::dig(a, tick, terrain, def);
-                }
-            }
-            CommandKind::ReleaseDirectControl { .. } => {
-                let hauling = s.piles.as_ref().is_some_and(|lab| lab.hauler(self.me).is_some_and(|h| h.job.is_some()));
-                avatar::release(a, hauling);
-            }
-            CommandKind::Respawn { .. } => avatar::respawn(a, s.spawn, s.spawn_height),
-            _ => {}
+        let Some((agent, action)) = Action::of(command) else {
+            return !matches!(*command, CommandKind::Pile { agent, .. } if agent == self.me);
+        };
+        if agent == self.me {
+            let view = self.settlement.view(self.me, self.tick, self.terrain);
+            let def = character_of(&self.settlement.characters, &self.state);
+            // What the action does to the world is never applied (D1).
+            avatar::act(&mut self.state, &action, &view, def, &mut ActionMessages::default());
         }
         true
     }
 
-    /// Runs `tick`: the avatar's step (without a pile job), its swing
-    /// resolving, and its housekeeping.
+    /// Runs `tick`: the avatar's step (without a pile job), its reading of
+    /// the confirmed world and the events that gives, its swing resolving,
+    /// and its housekeeping.
     pub fn step(&mut self) {
         let (s, terrain, tick) = (self.settlement, self.terrain, self.tick);
+        let def = character_of(&s.characters, &self.state);
+        avatar::self_update(&mut self.state, self.me, tick, terrain, None, def);
+        let mut out = Messages::default();
+        s.read_avatar(self.me, &self.state, tick, terrain, &mut out);
+        // Manual transfer units and pile steps show nothing until stage 5
+        // moves them.
+        self.events = out.strike.iter().filter_map(strike_event).collect();
         let a = &mut self.state;
-        let def = character_of(&s.characters, a);
-        avatar::self_update(a, self.me, tick, terrain, None, def);
-        self.struck = avatar::resolving(a, tick).map(|swing| ReplayedStrike {
-            tick,
-            weapon: swing.weapon,
-            aim: swing.aim,
-            muzzle: swing.muzzle,
-            origin: a.position,
-            height: a.avatar.height,
-        });
         // As `Settlement::strike` would, assuming the swing hits nothing (a
         // bow shot always counts as one hit).
-        if let Some(weapon) = self.struck.as_ref().map(|strike| strike.weapon) {
+        if let Some(weapon) = out.strike.first().map(|strike| strike.weapon) {
             a.attack_ready = tick + s.tuning(weapon).cooldown();
             avatar::swing_resolved(a, tick, u32::from(weapon == Weapon::Bow), def);
         }
@@ -198,8 +132,8 @@ mod tests {
     use fx::{Fx, FxVec2};
 
     use super::super::avatar::Intent;
-    use super::super::{Event, SceneSetup, Settlement};
-    use super::PredictedLaser;
+    use super::super::piles::PileAction;
+    use super::super::{AgentState, Event, OnMiss, Prediction, SceneSetup, Settlement};
     use crate::terrain::{Destructible, Disc, Surface, Terrain};
     use crate::{Command, CommandKind, PlayerId, Simulation, World};
 
@@ -234,11 +168,12 @@ mod tests {
         Simulation::from_world(World::new_scene(1, &Content::builtin(), &setup).unwrap(), 1)
     }
 
-    /// Something the player might do on a tick, as the app sends it.
-    fn random_command(rng: &mut Rng, agent: u16) -> CommandKind {
+    /// Something the player might do on a tick, as the app sends it. Walks
+    /// to a point go somewhere within 4.5 u of `center`.
+    fn random_command(rng: &mut Rng, agent: u16, center: FxVec2) -> CommandKind {
         let weapons = [Weapon::Sword, Weapon::Laser, Weapon::Bow, Weapon::Spear];
         let muzzle = [Fx::ZERO, Fx::from_ratio(6, 10), Fx::from_ratio(1, 4)];
-        match rng.below(20) {
+        match rng.below(24) {
             0..=6 => CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: rng.direction(), run: rng.below(2) == 0 } },
             7..=8 => CommandKind::MoveAvatar { agent, intent: Intent::Stop },
             9..=10 => CommandKind::AimAvatar { agent, aim: rng.direction() },
@@ -248,66 +183,198 @@ mod tests {
             16 => CommandKind::Equip { agent, weapon: weapons[rng.below(4) as usize] },
             17 => CommandKind::ReleaseDirectControl { agent },
             18 => CommandKind::Respawn { agent },
+            19..=21 => {
+                let target = center + rng.direction() * Fx::from_ratio(rng.below(46) as i64, 10);
+                CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target, run: rng.below(2) == 0 } }
+            }
+            22 => CommandKind::RepairCover { agent, asset: Some(0) },
             _ => CommandKind::Join,
         }
     }
 
-    /// Runs the world on random commands and replays the avatar from many
-    /// confirmed ticks: at every tick of every replay, the replayed avatar
-    /// equals the simulated one.
-    fn replay_matches_simulation(player: &str, seed: u64) {
+    fn muzzle() -> [Fx; 3] {
+        [Fx::ZERO, Fx::from_ratio(6, 10), Fx::from_ratio(1, 4)]
+    }
+
+    /// The arena with what a laser stops at: rocks, cover with health to
+    /// spare, a ledge above the beam, every weapon, and a second player to
+    /// hit. The second player joined on tick 0.
+    fn range(player: &str) -> Simulation {
+        let mut scenario = Settlement::player_only(Fx::from_int(5), [Fx::ZERO, Fx::ZERO], player);
+        scenario.weapons = vec![Weapon::Laser, Weapon::Sword, Weapon::Bow, Weapon::Spear];
+        scenario.player_health = 6;
+        let tenths = |x: i64, y: i64| FxVec2::new(Fx::from_ratio(x, 10), Fx::from_ratio(y, 10));
+        let rock = |x: i64, y: i64, r: i64| Disc { center: tenths(x, y), radius: Fx::from_ratio(r, 10) };
+        let cover = |x: i64, y: i64, r: i64| Destructible {
+            asset: 0,
+            disc: rock(x, y, r),
+            health: 10_000,
+            max_health: 10_000,
+            repairable: false,
+            repair_progress: 0,
+        };
+        let setup = SceneSetup {
+            scenario: Some(scenario),
+            player: player.into(),
+            extent: Fx::from_int(5),
+            obstacles: vec![rock(20, 0, 5), rock(0, -25, 6)],
+            destructibles: vec![cover(-20, 10, 4), cover(15, 25, 3), cover(-5, -35, 5)],
+            surfaces: vec![Surface { min: tenths(-45, -15), max: tenths(-35, 15), height: Fx::from_ratio(3, 2) }],
+            ..SceneSetup::default()
+        };
+        let mut sim = Simulation::from_world(World::new_scene(1, &Content::builtin(), &setup).unwrap(), 1);
+        sim.step(&[Command { player: PlayerId(1), kind: CommandKind::Join }]);
+        sim
+    }
+
+    /// What a strike's targeting reads of everything but the striker: the
+    /// other players' positions and heights, who is alive, and which cover
+    /// stands.
+    fn targets(settlement: &Settlement, terrain: &Terrain, striker: u16) -> (Vec<(FxVec2, Fx)>, Vec<bool>, Vec<bool>) {
+        let others = || settlement.agents.iter().enumerate().filter(|&(i, a)| i != striker as usize && a.controlled).map(|(_, a)| a);
+        (
+            others().map(|a| (a.position, a.avatar.height)).collect(),
+            others().map(|a| a.avatar.health > 0).collect(),
+            terrain.destructibles.iter().map(|piece| piece.health > 0).collect(),
+        )
+    }
+
+    /// The events of `agent` that a replay predicts: those
+    /// `Event::prediction` says to.
+    fn predictable(settlement: &Settlement, agent: u16) -> Vec<Event> {
+        let mine = |event: &&Event| matches!(event.prediction(), Prediction::Predict { agent: a, .. } if a == agent);
+        settlement.events.iter().filter(mine).cloned().collect()
+    }
+
+    /// The avatar without its laser swing's hit count: the replay assumes a
+    /// swing hits nothing, and here a laser can hit the other player. The
+    /// count changes nothing else for a laser.
+    fn unhit(a: &AgentState) -> AgentState {
+        let mut a = a.clone();
+        if let Some(swing) = a.avatar.swing.as_mut().filter(|swing| swing.weapon == Weapon::Laser) {
+            swing.hits = 0;
+        }
+        a
+    }
+
+    /// Each event's kind and prediction key.
+    fn keys(events: &[Event]) -> Vec<(std::mem::Discriminant<Event>, Prediction)> {
+        events.iter().map(|event| (std::mem::discriminant(event), event.prediction())).collect()
+    }
+
+    /// Runs the world on random commands, the avatar often firing the laser
+    /// while the second player walks now and then, and replays the avatar
+    /// from many confirmed ticks. At every tick of every replay the replayed
+    /// avatar equals the simulated one, and its predicted events equal the
+    /// simulation's predictable events of that avatar: the same kinds and
+    /// keys always, and the same in full whenever what a strike reads of the
+    /// rest of the world didn't change in between. Returns how many compared
+    /// laser shots ended on cover, on the other player, and short of their
+    /// reach on a rock, the ledge or the wall, how many arrows were
+    /// compared, and how many laser shots a press queued during a swing.
+    fn replay_matches_simulation(player: &str, seed: u64) -> [usize; 5] {
         const TICKS: usize = 1500;
         const AHEAD: usize = 40;
-        let mut sim = arena(player, false);
-        let agent = sim.world().settlement().unwrap().player().unwrap();
+        let mut sim = range(player);
+        let (agent, other, center, first) = {
+            let s = sim.world().settlement().unwrap();
+            (s.player().unwrap(), s.avatar_of(PlayerId(1)).unwrap(), s.spawn, sim.world().tick())
+        };
         let mut rng = Rng(seed);
         let schedule: Vec<Vec<CommandKind>> = (0..TICKS + AHEAD)
             .map(|_| match rng.below(10) {
-                0 => vec![random_command(&mut rng, agent)],
-                1 => vec![random_command(&mut rng, agent), random_command(&mut rng, agent)],
+                0 => vec![random_command(&mut rng, agent, center)],
+                1 => vec![random_command(&mut rng, agent, center), random_command(&mut rng, agent, center)],
+                2 => vec![CommandKind::Attack { agent, weapon: Weapon::Laser, aim: rng.direction(), muzzle: muzzle() }],
                 _ => Vec::new(),
             })
             .collect();
+        // Index `i`: before tick `first + i` (`confirmed`, `states`), and
+        // during it (`events`).
         let mut confirmed: Vec<(Settlement, Terrain)> = Vec::new();
         let mut states = Vec::new();
-        for turn in &schedule {
+        let mut events = Vec::new();
+        for (i, turn) in schedule.iter().enumerate() {
             let world = sim.world();
             confirmed.push((world.settlement().unwrap().clone(), world.terrain().clone()));
             states.push(world.settlement().unwrap().agents[agent as usize].clone());
-            let turn: Vec<_> = turn.iter().map(|kind| Command { player: PlayerId(0), kind: kind.clone() }).collect();
+            let mut turn: Vec<_> = turn.iter().map(|kind| Command { player: PlayerId(0), kind: kind.clone() }).collect();
+            let walk = match i % 150 {
+                0 => Some(Intent::Walk { direction: rng.direction(), run: false }),
+                20 => Some(Intent::Stop),
+                _ => None,
+            };
+            if let Some(intent) = walk {
+                turn.push(Command { player: PlayerId(1), kind: CommandKind::MoveAvatar { agent: other, intent } });
+            }
             sim.step(&turn);
+            events.push(predictable(sim.world().settlement().unwrap(), agent));
         }
-        states.push(sim.world().settlement().unwrap().agents[agent as usize].clone());
-        let mut swings = 0;
-        for start in (0..TICKS).step_by(5) {
+        let world = sim.world();
+        confirmed.push((world.settlement().unwrap().clone(), world.terrain().clone()));
+        states.push(world.settlement().unwrap().agents[agent as usize].clone());
+        let reach = world.settlement().unwrap().tuning(Weapon::Laser).reach;
+        let (mut swings, mut routed, mut compared, mut skipped) = (0, 0, 0, 0);
+        let mut ends = [0; 5];
+        for start in (0..TICKS).step_by(3) {
             let (settlement, terrain) = &confirmed[start];
-            let mut replay = settlement.replay_avatar(agent, start as u64, terrain).unwrap();
-            for tick in start..start + AHEAD {
-                assert!(replay.step_with(&schedule[tick]));
-                assert_eq!(
-                    replay.state(),
-                    &states[tick + 1],
-                    "{player}, seed {seed}: replayed from tick {start}, differs after tick {tick} ({:?})",
-                    &schedule[start..=tick]
-                );
+            let mut replay = settlement.replay_avatar(agent, first + start as u64, terrain).unwrap();
+            for i in start..start + AHEAD {
+                let tick = first + i as u64;
+                let context = || format!("{player}, seed {seed}: replayed from tick {}, tick {tick}", first + start as u64);
+                assert!(replay.step_with(&schedule[i]));
+                assert_eq!(unhit(replay.state()), unhit(&states[i + 1]), "{}: the avatar differs ({:?})", context(), &schedule[start..=i]);
                 swings += usize::from(replay.state().avatar.swing.as_ref().is_some_and(|s| s.resolved));
+                routed += usize::from(matches!(replay.state().avatar.intent, Some(Intent::GoTo { .. })) && !replay.state().route.is_empty());
+                let (mine, real) = (replay.events(), events[i].as_slice());
+                assert_eq!(keys(mine), keys(real), "{}: predicted {mine:?}, simulated {real:?}", context());
+                let before = targets(settlement, terrain, agent);
+                let at = targets(&confirmed[i].0, &confirmed[i].1, agent);
+                let after = targets(&confirmed[i + 1].0, &confirmed[i + 1].1, agent);
+                if before != at || at.0 != after.0 {
+                    skipped += mine.len();
+                    continue;
+                }
+                assert_eq!(mine, real, "{}", context());
+                for event in mine {
+                    match *event {
+                        Event::LaserFired { from, to, hit_actor, cover, started, .. } => {
+                            compared += 1;
+                            ends[0] += usize::from(cover.is_some());
+                            ends[1] += usize::from(hit_actor);
+                            ends[2] += usize::from(cover.is_none() && !hit_actor && (to - from).length() < reach - Fx::from_ratio(1, 100));
+                            // A laser swing resolves 2 ticks after it starts.
+                            ends[4] += usize::from(started + 2 < tick);
+                        }
+                        Event::BowFired { .. } => ends[3] += 1,
+                        _ => {}
+                    }
+                }
             }
         }
+        println!("{player}, seed {seed}: {compared} laser shots compared, ends {ends:?} (cover, player, elsewhere, arrows, queued); {skipped} events skipped");
         assert!(swings > 0, "no swing resolved during a replay");
+        assert!(routed > 0, "no replay walked a planned route");
+        assert!(compared > 100, "{player}, seed {seed}: only {compared} laser shots compared");
+        ends
+    }
+
+    /// Runs three seeds; between them, shots end on cover, on the other
+    /// player, and short of their reach on a rock, the ledge or the wall,
+    /// arrows are loosed, and a queued press fires.
+    fn replay_matches_simulation_on_every_target(player: &str) {
+        let ends = (1..=3).map(|seed| replay_matches_simulation(player, seed)).fold([0; 5], |a, b| [0, 1, 2, 3, 4].map(|k| a[k] + b[k]));
+        assert!(ends.iter().all(|&n| n > 0), "{player}: compared shots ending on cover, a player, elsewhere, arrows, queued: {ends:?}");
     }
 
     #[test]
     fn replayed_avatar_matches_the_simulation_with_a_jetpack() {
-        for seed in 1..=3 {
-            replay_matches_simulation("exosuit", seed);
-        }
+        replay_matches_simulation_on_every_target("exosuit");
     }
 
     #[test]
     fn replayed_avatar_matches_the_simulation_with_jumps() {
-        for seed in 1..=3 {
-            replay_matches_simulation("exosuit_moonlit", seed);
-        }
+        replay_matches_simulation_on_every_target("exosuit_moonlit");
     }
 
     #[test]
@@ -342,187 +409,76 @@ mod tests {
     }
 
     #[test]
-    fn click_to_move_and_other_avatars_are_left_alone() {
+    fn pile_hauls_and_other_avatars_are_left_alone() {
         let sim = arena("exosuit", false);
         let world = sim.world();
         let settlement = world.settlement().unwrap();
         let agent = settlement.player().unwrap();
         let mut replay = settlement.replay_avatar(agent, world.tick(), world.terrain()).unwrap();
-        let goto = CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target: FxVec2::ZERO, run: false } };
-        assert!(!replay.apply(&goto), "click-to-move is not predicted");
+        let haul = CommandKind::Pile { agent, action: PileAction::Deliver, pace: Fx::ZERO, approach: None };
+        assert!(!replay.apply(&haul), "a pile haul is not predicted");
+        let goto = CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target: settlement.spawn + FxVec2::new(Fx::ONE, Fx::ZERO), run: false } };
+        assert!(replay.apply(&goto), "a GoTo walk is predicted");
+        assert!(!replay.state().route.is_empty());
+        let piano = CommandKind::PlayPiano { agent, piano: 0, pitch: 60, velocity: 100 };
+        assert!(replay.apply(&piano));
         let other = CommandKind::Jetpack { agent: agent + 1, enabled: true };
         assert!(replay.apply(&other));
         assert!(!replay.state().avatar.flight.requested);
         assert!(settlement.replay_avatar(agent + 1, 0, world.terrain()).is_none());
     }
 
-    /// The arena with what a laser stops at: rocks, cover with health to
-    /// spare, a ledge above the beam, and a second player to hit.
-    fn laser_range(player: &str) -> Simulation {
-        let mut scenario = Settlement::player_only(Fx::from_int(5), [Fx::ZERO, Fx::ZERO], player);
-        scenario.weapons = vec![Weapon::Laser, Weapon::Sword];
-        scenario.player_health = 6;
-        let tenths = |x: i64, y: i64| FxVec2::new(Fx::from_ratio(x, 10), Fx::from_ratio(y, 10));
-        let rock = |x: i64, y: i64, r: i64| Disc { center: tenths(x, y), radius: Fx::from_ratio(r, 10) };
-        let cover = |x: i64, y: i64, r: i64| Destructible {
-            asset: 0,
-            disc: rock(x, y, r),
-            health: 10_000,
-            max_health: 10_000,
-            repairable: false,
-            repair_progress: 0,
-        };
-        let setup = SceneSetup {
-            scenario: Some(scenario),
-            player: player.into(),
-            extent: Fx::from_int(5),
-            obstacles: vec![rock(20, 0, 5), rock(0, -25, 6)],
-            destructibles: vec![cover(-20, 10, 4), cover(15, 25, 3), cover(-5, -35, 5)],
-            surfaces: vec![Surface { min: tenths(-45, -15), max: tenths(-35, 15), height: Fx::from_ratio(3, 2) }],
-            ..SceneSetup::default()
-        };
-        let mut sim = Simulation::from_world(World::new_scene(1, &Content::builtin(), &setup).unwrap(), 1);
-        sim.step(&[Command { player: PlayerId(1), kind: CommandKind::Join }]);
-        sim
-    }
-
-    /// What the laser's targeting reads of everything but the shooter:
-    /// the other players' positions and heights, who is alive, and which
-    /// cover stands.
-    fn targets(settlement: &Settlement, terrain: &Terrain, shooter: u16) -> (Vec<(FxVec2, Fx)>, Vec<bool>, Vec<bool>) {
-        let others = || settlement.agents.iter().enumerate().filter(|&(i, a)| i != shooter as usize && a.controlled).map(|(_, a)| a);
-        (
-            others().map(|a| (a.position, a.avatar.height)).collect(),
-            others().map(|a| a.avatar.health > 0).collect(),
-            terrain.destructibles.iter().map(|piece| piece.health > 0).collect(),
-        )
-    }
-
-    /// The shooter fires the laser in random directions while walking,
-    /// jumping or flying; the second player walks a little now and then.
-    /// Every predicted shot (the replay's strike, aimed against the
-    /// settlement the replay started from) equals the simulation's
-    /// `LaserFired` whenever what the targeting reads of the rest of the
-    /// world didn't change in between.
-    fn predicted_laser_matches_simulation(player: &str, seed: u64) -> [usize; 3] {
-        const TICKS: usize = 1200;
-        const AHEAD: usize = 30;
-        let mut sim = laser_range(player);
-        let (shooter, other) = {
-            let s = sim.world().settlement().unwrap();
-            (s.player().unwrap(), s.avatar_of(PlayerId(1)).unwrap())
-        };
-        let mut rng = Rng(seed);
-        let muzzle = [Fx::ZERO, Fx::from_ratio(6, 10), Fx::from_ratio(1, 4)];
-        let mine: Vec<Vec<CommandKind>> = (0..TICKS + AHEAD)
-            .map(|_| match rng.below(24) {
-                0..=2 => vec![CommandKind::Attack { agent: shooter, weapon: Weapon::Laser, aim: rng.direction(), muzzle }],
-                3 => vec![CommandKind::MoveAvatar { agent: shooter, intent: Intent::Walk { direction: rng.direction(), run: rng.below(2) == 0 } }],
-                4 => vec![CommandKind::MoveAvatar { agent: shooter, intent: Intent::Stop }],
-                5 => vec![CommandKind::Jump { agent: shooter }],
-                6 => vec![CommandKind::Jetpack { agent: shooter, enabled: rng.below(2) == 0 }],
-                7 => vec![random_command(&mut rng, shooter)],
-                _ => Vec::new(),
-            })
-            .collect();
-        let mut confirmed: Vec<(Settlement, Terrain)> = Vec::new();
-        let mut fired = Vec::new();
-        for (tick, turn) in mine.iter().enumerate() {
-            let world = sim.world();
-            let start = world.tick() as usize;
-            assert_eq!(start, tick + 1, "the join took tick 0");
-            confirmed.push((world.settlement().unwrap().clone(), world.terrain().clone()));
-            let mut turn: Vec<_> = turn.iter().map(|kind| Command { player: PlayerId(0), kind: kind.clone() }).collect();
-            let walk = match tick % 150 {
-                0 => Some(Intent::Walk { direction: rng.direction(), run: false }),
-                20 => Some(Intent::Stop),
-                _ => None,
-            };
-            if let Some(intent) = walk {
-                turn.push(Command { player: PlayerId(1), kind: CommandKind::MoveAvatar { agent: other, intent } });
-            }
-            sim.step(&turn);
-            let shots: Vec<_> = sim.world().settlement().unwrap().events.iter().filter_map(|event| match *event {
-                Event::LaserFired { agent, from, to, hit_actor, cover } if agent == shooter => Some(PredictedLaser { from, to, hit_actor, cover }),
-                _ => None,
-            }).collect();
-            assert!(shots.len() <= 1);
-            fired.push(shots.first().copied());
-        }
-        let world = sim.world();
-        confirmed.push((world.settlement().unwrap().clone(), world.terrain().clone()));
-        // `confirmed[i]` and `fired[i]` are before and during tick `i + 1`.
-        let (mut compared, mut skipped, mut cover, mut actor, mut blocked) = (0, 0, 0, 0, 0);
-        let mut predicted = vec![false; TICKS];
-        let reach = sim.world().settlement().unwrap().tuning(Weapon::Laser).reach;
-        for start in (0..TICKS).step_by(3) {
-            let (settlement, terrain) = &confirmed[start];
-            let mut replay = settlement.replay_avatar(shooter, start as u64 + 1, terrain).unwrap();
-            for i in start..(start + AHEAD).min(TICKS) {
-                assert!(replay.step_with(&mine[i]));
-                let Some(shot) = replay.laser() else {
-                    assert_eq!(fired[i], None, "{player}, seed {seed}: tick {} fired, the replay from {} didn't", i + 1, start + 1);
-                    continue;
-                };
-                assert_eq!(replay.struck().unwrap().tick, i as u64 + 1);
-                let real = fired[i].unwrap_or_else(|| panic!("{player}, seed {seed}: the replay fired on tick {}, the simulation didn't", i + 1));
-                predicted[i] = true;
-                let before = targets(settlement, terrain, shooter);
-                let at = targets(&confirmed[i].0, &confirmed[i].1, shooter);
-                let after = targets(&confirmed[i + 1].0, &confirmed[i + 1].1, shooter);
-                if before != at || at.0 != after.0 {
-                    skipped += 1;
-                    continue;
-                }
-                assert_eq!(shot, real, "{player}, seed {seed}: shot on tick {} predicted from tick {}", i + 1, start + 1);
-                compared += 1;
-                cover += usize::from(shot.cover.is_some());
-                actor += usize::from(shot.hit_actor);
-                let strike = replay.struck().unwrap();
-                blocked += usize::from(shot.cover.is_none() && !shot.hit_actor && shot.to != strike.origin + strike.aim * reach);
-            }
-        }
-        let shots = fired[..TICKS].iter().flatten().count();
-        assert_eq!(predicted.iter().filter(|p| **p).count(), shots, "every shot was predicted");
-        println!("{player}, seed {seed}: {shots} shots, {compared} predictions compared ({cover} cover, {actor} player, {blocked} rock, ledge or wall), {skipped} skipped");
-        assert!(compared > 100, "{player}, seed {seed}: only {compared} predictions compared");
-        [cover, actor, blocked]
-    }
-
-    /// Runs three seeds; between them, shots end on cover, on the other
-    /// player, and short of their reach on a rock, the ledge or the wall.
-    fn predicted_laser_matches_simulation_on_every_target(player: &str) {
-        let ends = (1..=3).map(|seed| predicted_laser_matches_simulation(player, seed)).fold([0; 3], |a, b| [a[0] + b[0], a[1] + b[1], a[2] + b[2]]);
-        assert!(ends.iter().all(|&n| n > 0), "{player}: compared shots ending on cover, a player, elsewhere: {ends:?}");
-    }
-
     #[test]
-    fn predicted_laser_matches_the_simulation_with_a_jetpack() {
-        predicted_laser_matches_simulation_on_every_target("exosuit");
-    }
-
-    #[test]
-    fn predicted_laser_matches_the_simulation_with_jumps() {
-        predicted_laser_matches_simulation_on_every_target("exosuit_moonlit");
-    }
-
-    #[test]
-    fn only_a_laser_strike_predicts_a_shot() {
-        let sim = laser_range("exosuit");
+    fn a_sword_swing_predicts_no_event() {
+        let sim = range("exosuit");
         let agent = sim.world().settlement().unwrap().player().unwrap();
         let sword = CommandKind::Attack { agent, weapon: Weapon::Sword, aim: FxVec2::new(Fx::ONE, Fx::ZERO), muzzle: [Fx::ZERO; 3] };
         let world = sim.world();
-        let (settlement, terrain) = (world.settlement().unwrap().clone(), world.terrain().clone());
-        let mut replay = settlement.replay_avatar(agent, world.tick(), &terrain).unwrap();
+        let mut replay = world.settlement().unwrap().replay_avatar(agent, world.tick(), world.terrain()).unwrap();
         replay.step_with([&sword]);
-        let mut struck = None;
         for _ in 0..30 {
             replay.step();
-            struck = struck.or(replay.struck().cloned());
-            assert_eq!(replay.laser(), None);
+            assert_eq!(replay.events(), []);
         }
-        let struck = struck.expect("the sword swing resolved");
-        assert_eq!(struck.weapon, Weapon::Sword);
-        assert_eq!(settlement.predict_laser(agent, &struck, &terrain), None);
+        let swing = replay.state().avatar.swing.as_ref();
+        assert!(swing.is_some_and(|s| s.weapon == Weapon::Sword && s.resolved), "the sword swing resolved");
+    }
+
+    /// A press buffered during a swing starts its own swing later, but its
+    /// shot is keyed by the tick it was pressed on, in the simulation and in
+    /// the replay alike.
+    #[test]
+    fn a_queued_attack_is_keyed_by_its_press() {
+        let mut sim = range("exosuit");
+        let world = sim.world();
+        let agent = world.settlement().unwrap().player().unwrap();
+        let first = world.tick();
+        let (settlement, terrain) = (world.settlement().unwrap().clone(), world.terrain().clone());
+        let mut replay = settlement.replay_avatar(agent, first, &terrain).unwrap();
+        let laser = |y: i32| CommandKind::Attack { agent, weapon: Weapon::Laser, aim: FxVec2::new(Fx::ONE, Fx::from_int(y)), muzzle: muzzle() };
+        let mut shots = Vec::new();
+        // The first shot fires 2 ticks in; the laser is ready again 24
+        // ticks later. A press at 20 swings without firing, until 28; the
+        // press at 24 waits for that swing, swings from 28 and fires at 30.
+        for tick in first..first + 40 {
+            let turn = match tick - first {
+                0 => vec![laser(0)],
+                20 => vec![laser(1)],
+                24 => vec![laser(-1)],
+                _ => Vec::new(),
+            };
+            replay.step_with(&turn);
+            sim.step(&turn.iter().map(|kind| Command { player: PlayerId(0), kind: kind.clone() }).collect::<Vec<_>>());
+            let real = predictable(sim.world().settlement().unwrap(), agent);
+            assert_eq!(replay.events(), real, "tick {tick}");
+            shots.extend(real.iter().map(|event| (tick, event.prediction())));
+            if tick == first + 30 {
+                let swing = sim.world().settlement().unwrap().agents[agent as usize].avatar.swing.clone().unwrap();
+                assert_eq!((swing.started, swing.pressed()), (first + 28, first + 24));
+                assert_eq!(replay.state().avatar.swing, Some(swing));
+            }
+        }
+        let fired = |delay: u64, pressed: u64| (first + delay, Prediction::Predict { agent, started: first + pressed, on_miss: OnMiss::Keep });
+        assert_eq!(shots, [fired(2, 0), fired(30, 24)]);
     }
 }

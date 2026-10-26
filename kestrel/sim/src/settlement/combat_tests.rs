@@ -185,8 +185,20 @@ impl Arena {
         let tick = self.tick();
         let (origin, player) = (self.s().agents[self.player].position, self.player);
         let terrain = self.sim.world().terrain().clone();
-        let (targets, beam_end, cover) = self.s().strike_targets(player as u16, origin, aim, weapon, &terrain);
-        let message = Strike { agent: player as u16, weapon, origin, forward: aim, muzzle: [Fx::ZERO, fx(0.6), fx(0.25)], targets, beam_end, cover };
+        let height = self.s().agents[player].avatar.height;
+        let aimed = self.s().strike_targets(player as u16, height, origin, aim, weapon, &terrain);
+        let message = Strike {
+            agent: player as u16,
+            weapon,
+            origin,
+            forward: aim,
+            muzzle: [Fx::ZERO, fx(0.6), fx(0.25)],
+            targets: aimed.targets,
+            beam_end: aimed.beam_end,
+            cover: aimed.cover,
+            hit_player: aimed.hit_player,
+            started: tick,
+        };
         self.s_mut().strike(tick, message)
     }
 
@@ -521,6 +533,91 @@ fn controlled_transfers_share_reservations_and_cancellation_preserves_airborne_u
     assert_eq!(arena.s().agents[player].cargo.iter().sum::<u32>(), 0);
 }
 
+/// A transfer reserves its units at the depot, and a cancel releases them,
+/// on the tick the command applies (stage 5 of that tick).
+#[test]
+fn a_transfer_reserves_stock_and_a_cancel_releases_it_on_their_tick() {
+    let mut config = scenario();
+    config.agents = vec![player()];
+    config.links.clear();
+    let mut arena = Arena::new(&config, &[]);
+    let s = arena.s();
+    let (depot, item) = (s.depot_index("forest").unwrap(), s.item_index("wood").unwrap());
+    let (d, i) = (depot as usize, item as usize);
+    let agent = arena.player as u16;
+    // Far from the dock, so no unit moves.
+    assert!((s.agents[arena.player].position - s.depots[d].position).length() > fx(1.0));
+    let (out, incoming) = (s.depots[d].out[i], s.depots[d].incoming[i]);
+
+    arena.command(CommandKind::Transfer { agent, depot, item, units: 3, deposit: false });
+    assert_eq!(arena.s().depots[d].out[i], out + 3, "the pickup reserves its stock");
+    assert_eq!(arena.s().agents[arena.player].avatar.job.as_ref().unwrap().remaining, 3);
+    arena.command(CommandKind::CancelTransfer { agent });
+    assert_eq!(arena.s().depots[d].out[i], out, "the cancel releases it");
+    assert!(arena.s().agents[arena.player].avatar.job.is_none());
+
+    // Cargo to deposit, handed over outside the accounts (so no `validate`).
+    let player = arena.player;
+    arena.s_mut().agents[player].cargo[i] = 2;
+    arena.command(CommandKind::Transfer { agent, depot, item, units: 2, deposit: true });
+    assert_eq!(arena.s().depots[d].incoming[i], incoming + 2, "the deposit reserves room");
+    arena.command(CommandKind::CancelTransfer { agent });
+    assert_eq!(arena.s().depots[d].incoming[i], incoming);
+}
+
+/// Two players take the same depot's last units on one tick. Both actions
+/// see the stock as it was when the tick began, so both avatars take the
+/// job; stage 5 then reserves in command order (player order), and the
+/// second reservation, which no longer fits, is refused and its job rolls
+/// back. A cancel of the refused job in the same turn releases nothing.
+#[test]
+fn two_transfers_from_one_depot_on_one_tick_go_to_the_first_player() {
+    let mut config = scenario();
+    config.agents = vec![player()];
+    config.links.clear();
+    let mut arena = Arena::new(&config, &[]);
+    let (host, guest) = (PlayerId(0), PlayerId(1));
+    arena.sim.step(&[Command { player: guest, kind: CommandKind::Join }]);
+    let s = arena.s();
+    let (depot, item) = (s.depot_index("factory").unwrap(), s.item_index("wood").unwrap());
+    let (d, i) = (depot as usize, item as usize);
+    let (a, b) = (s.avatar_of(host).unwrap(), s.avatar_of(guest).unwrap());
+    assert_eq!(s.depots[d].available(item), 2);
+    for agent in [a, b] {
+        assert_eq!(s.transfer_limit(agent as usize, d, i, false), 2);
+        assert!((s.agents[agent as usize].position - s.depots[d].position).length() > fx(1.0), "no unit moves");
+    }
+    let take = |player, agent| Command { player, kind: CommandKind::Transfer { agent, depot, item, units: 2, deposit: false } };
+
+    // The guest's command comes first in the turn; the host still wins.
+    arena.sim.step(&[take(guest, b), take(host, a)]);
+    let s = arena.s();
+    assert_eq!(s.depots[d].out[i], 2, "reserved once");
+    assert_eq!(s.agents[a as usize].avatar.job.as_ref().map(|j| j.remaining), Some(2), "the host's transfer stands");
+    assert!(s.agents[b as usize].avatar.job.is_none(), "the guest's rolled back");
+    s.validate().unwrap();
+    arena.sim.step(&[Command { player: host, kind: CommandKind::CancelTransfer { agent: a } }]);
+    assert_eq!(arena.s().depots[d].out[i], 0);
+
+    // The refused transfer cancelled in the same turn releases nothing.
+    let cancel = Command { player: guest, kind: CommandKind::CancelTransfer { agent: b } };
+    arena.sim.step(&[take(host, a), take(guest, b), cancel]);
+    let s = arena.s();
+    assert_eq!(s.depots[d].out[i], 2);
+    assert!(s.agents[a as usize].avatar.job.is_some() && s.agents[b as usize].avatar.job.is_none());
+    s.validate().unwrap();
+
+    // A transfer cancelled in its own turn leaves the stock to the next.
+    let cancel = Command { player: host, kind: CommandKind::CancelTransfer { agent: a } };
+    arena.sim.step(&[cancel.clone()]);
+    arena.sim.step(&[take(host, a), cancel, take(guest, b)]);
+    let s = arena.s();
+    assert_eq!(s.depots[d].out[i], 2);
+    assert!(s.agents[a as usize].avatar.job.is_none());
+    assert_eq!(s.agents[b as usize].avatar.job.as_ref().map(|j| j.remaining), Some(2), "the guest takes it");
+    s.validate().unwrap();
+}
+
 #[test]
 fn walking_accelerates_to_speed_and_slides_along_obstacles() {
     let mut arena = Arena::combat(&[Disc { center: FxVec2::new(Fx::from_int(2), Fx::from_int(-3)), radius: Fx::ONE }]);
@@ -698,7 +795,8 @@ fn laser_stops_at_obstacle_before_its_full_range() {
     let arena = Arena::new(&config, &[obstacle]);
     let origin = arena.s().agents[arena.player].position;
     let terrain = arena.sim.world().terrain();
-    let (targets, end, cover) = arena.s().strike_targets(arena.player as u16, origin, FxVec2::new(Fx::ZERO, Fx::ONE), Weapon::Laser, terrain);
+    let aimed = arena.s().strike_targets(arena.player as u16, arena.s().agents[arena.player].avatar.height, origin, FxVec2::new(Fx::ZERO, Fx::ONE), Weapon::Laser, terrain);
+    let (targets, end, cover) = (aimed.targets, aimed.beam_end, aimed.cover);
     assert!(targets.is_empty());
     assert_eq!(cover, None);
     let end = end.unwrap();
@@ -722,16 +820,17 @@ fn laser_selects_the_struck_cover_piece_and_opens_it_incrementally() {
     let origin = arena.s().agents[arena.player].position;
     let left = FxVec2::new(fx(-0.125), Fx::ONE);
     let right = FxVec2::new(fx(0.125), Fx::ONE);
-    let (_, end, cover) = arena.s().strike_targets(arena.player as u16, origin, left, Weapon::Laser, &terrain);
+    let aimed = arena.s().strike_targets(arena.player as u16, arena.s().agents[arena.player].avatar.height, origin, left, Weapon::Laser, &terrain);
+    let (end, cover) = (aimed.beam_end, aimed.cover);
     assert_eq!(cover, Some(0));
     assert!(end.unwrap().y < arena.at(0.0, 4.0).y);
     assert!(terrain.damage_cover(0, 1));
     assert_eq!(terrain.destructibles[0].health, 1);
-    assert_eq!(arena.s().strike_targets(arena.player as u16, origin, left, Weapon::Laser, &terrain).2, Some(0));
+    assert_eq!(arena.s().strike_targets(arena.player as u16, arena.s().agents[arena.player].avatar.height, origin, left, Weapon::Laser, &terrain).cover, Some(0));
     assert!(terrain.damage_cover(0, 1));
     assert_eq!(terrain.destructibles[0].health, 0);
-    assert_eq!(arena.s().strike_targets(arena.player as u16, origin, left, Weapon::Laser, &terrain).2, None);
-    assert_eq!(arena.s().strike_targets(arena.player as u16, origin, right, Weapon::Laser, &terrain).2, Some(1));
+    assert_eq!(arena.s().strike_targets(arena.player as u16, arena.s().agents[arena.player].avatar.height, origin, left, Weapon::Laser, &terrain).cover, None);
+    assert_eq!(arena.s().strike_targets(arena.player as u16, arena.s().agents[arena.player].avatar.height, origin, right, Weapon::Laser, &terrain).cover, Some(1));
 }
 
 #[test]

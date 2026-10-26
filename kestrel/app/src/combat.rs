@@ -95,6 +95,11 @@ pub struct Attack {
     pub weapon: content::scenario::Weapon,
     pub stroke: SwordStroke,
     pub swift: bool,
+    /// The tick the local player's `Attack` command asked for; `None` for
+    /// a swing that isn't the local player's press (Studio, remote players).
+    pub asked: Option<u64>,
+    /// The drawn avatar swung for it (`follow_drawn_swing`).
+    pub bound: bool,
 }
 impl Attack {
     pub fn timing(&self) -> (f32, f32, f32) {
@@ -125,6 +130,8 @@ impl Attack {
             weapon,
             stroke: SwordStroke::Forehand,
             swift: false,
+            asked: None,
+            bound: false,
         }
     }
     pub fn angle(&self) -> f32 {
@@ -281,10 +288,47 @@ fn blade_segment(origin: Vec3, facing: Quat, angle: f32, scale: f32) -> (Vec3, V
     (pivot + blade * 0.20 * scale, pivot + blade * 1.50 * scale)
 }
 
+/// How many ticks past the tick its command asked for a local swing may
+/// wait for the drawn avatar to swing, or to hold the press for after its
+/// current swing. The command applies on that tick, or the replay applies
+/// it on the next one, so by then the drawn avatar shows it unless the
+/// simulation refused the attack (digging, dead, a weapon the scene doesn't
+/// offer).
+pub const UNSEEN_TICKS: f32 = 2.0;
+
+/// Keeps the local player's swing to the drawn avatar's (D5 in
+/// `ABILITY_PREDICTION_HANDOFF.md`). A press swings at once, before its
+/// command applies. Once the drawn avatar swings for it, the swing takes
+/// that swing's stroke and the combo follows the avatar's. If the drawn
+/// avatar shows no swing or waiting press for it by `UNSEEN_TICKS` past
+/// the tick it asked for, the simulation refused it, and it ends.
+pub fn follow_drawn_swing(controls: &mut Controls, drawn: &crate::prediction::DrawnState) {
+    let Some(attack) = controls.attack.as_mut() else { return };
+    let Some(asked) = attack.asked.filter(|_| !attack.bound) else { return };
+    let avatar = drawn.avatar();
+    if let Some(swing) = avatar.swing.as_ref().filter(|swing| swing.pressed() >= asked) {
+        attack.bound = true;
+        attack.stroke = swing.stroke;
+        controls.combo_next = avatar.combo_next;
+        controls.combo_timer = (avatar.combo_until as f32 + 1.0 - drawn.time).max(0.0) / content::TICKS_PER_SECOND as f32;
+        return;
+    }
+    let waiting = avatar.queued_at.is_some_and(|pressed| pressed >= asked);
+    if !waiting && drawn.time >= asked as f32 + UNSEEN_TICKS {
+        controls.attack = None;
+        if let Some(aim) = controls.queued.take() {
+            let asked = controls.queued_asked.take();
+            controls.strike_at(aim, asked);
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn combat(
     mut commands: Commands,
     time: Res<Time>,
     mut controls: ResMut<Controls>,
+    drawn: Option<Res<crate::prediction::DrawnAvatar>>,
     mut player: Single<&mut Transform, With<Player>>,
     mut obstacles: Query<(&Obstacle, Option<&mut ImpactTarget>)>,
     mut feedback: ResMut<Feedback>,
@@ -293,6 +337,9 @@ pub fn combat(
 ) {
     let dt = time.delta_secs().min(0.1);
     controls.combo_timer = (controls.combo_timer - dt).max(0.0);
+    if let Some(drawn) = drawn.as_ref().and_then(|drawn| drawn.0.as_ref()) {
+        follow_drawn_swing(&mut controls, drawn);
+    }
     if feedback.hit_stop > 0.0 {
         return;
     }
@@ -409,7 +456,8 @@ pub fn combat(
     if attack.finished() {
         controls.attack = None;
         if let Some(aim) = controls.queued.take() {
-            controls.strike(aim);
+            let asked = controls.queued_asked.take();
+            controls.strike_at(aim, asked);
         }
     } else {
         controls.attack = Some(attack);
@@ -659,5 +707,82 @@ mod tests {
         assert!((spear_pose(0.0, true).0 - 1.05).abs() < 0.01);
         assert!(spear_pose(0.25, true).0 < 0.3);
         assert!(spear_pose(0.58, false).0.abs() < 0.01);
+    }
+
+    #[test]
+    fn the_local_swing_follows_the_drawn_avatar() {
+        use content::scenario::Weapon;
+        use fx::{Fx, FxVec2};
+        use sim::settlement::avatar::Swing;
+        let setup = sim::settlement::SceneSetup { player: "exosuit".into(), extent: Fx::from_int(8), ..default() };
+        let world = sim::World::new_scene(1, crate::lockstep::builtin_content(), &setup).unwrap();
+        let settlement = world.settlement().unwrap();
+        let agent = settlement.player().unwrap();
+        let state = settlement.agents[agent as usize].clone();
+        // The drawn avatar at `time` (ticks), swinging `swing`, holding a
+        // press from `queued_at` for after it.
+        let drawn = |time: f32, swing: Option<Swing>, queued_at: Option<u64>| {
+            let mut to = state.clone();
+            to.avatar.swing = swing;
+            to.avatar.queued_at = queued_at;
+            to.avatar.combo_next = SwordStroke::Overhead;
+            to.avatar.combo_until = 140;
+            crate::prediction::DrawnState { agent, from: to.clone(), to, time }
+        };
+        let swing = |started: u64, stroke| Swing {
+            weapon: Weapon::Sword,
+            stroke,
+            aim: FxVec2::new(Fx::ONE, Fx::ZERO),
+            muzzle: [Fx::ZERO; 3],
+            started,
+            resolve_at: started + 13,
+            until: started + 35,
+            resolved: false,
+            hits: 0,
+            queued_at: None,
+        };
+
+        // A press whose command asked for tick 100 swings at once, with the
+        // stroke the view predicts.
+        let mut controls = Controls::default();
+        controls.strike_at(Vec3::Z, Some(100));
+        assert_eq!(controls.attack.unwrap().stroke, SwordStroke::Forehand);
+        // Until the drawn time reaches it, an older swing doesn't count.
+        follow_drawn_swing(&mut controls, &drawn(99.0, Some(swing(60, SwordStroke::Forehand)), None));
+        assert!(controls.attack.is_some_and(|a| !a.bound));
+        // The drawn avatar swings a backhand for it: so does the view, and
+        // the combo goes on as the avatar's.
+        follow_drawn_swing(&mut controls, &drawn(100.5, Some(swing(100, SwordStroke::Backhand)), None));
+        let attack = controls.attack.unwrap();
+        assert!(attack.bound);
+        assert_eq!(attack.stroke, SwordStroke::Backhand);
+        assert_eq!(controls.combo_next, SwordStroke::Overhead);
+        assert!((controls.combo_timer - 40.5 / 60.0).abs() < 1e-5, "{}", controls.combo_timer);
+        // Once matched, it plays out on its own clock.
+        follow_drawn_swing(&mut controls, &drawn(140.0, None, None));
+        assert!(controls.attack.is_some());
+
+        // A press the drawn avatar shows no swing for, while another press
+        // is queued behind it.
+        let mut controls = Controls::default();
+        controls.strike_at(Vec3::Z, Some(200));
+        controls.strike_at(Vec3::X, Some(201));
+        follow_drawn_swing(&mut controls, &drawn(201.5, Some(swing(150, SwordStroke::Forehand)), None));
+        assert!(controls.attack.is_some_and(|a| a.asked == Some(200)), "it may still apply");
+        // Past `UNSEEN_TICKS`, the simulation refused it: it ends, and the
+        // queued press swings in its place.
+        follow_drawn_swing(&mut controls, &drawn(200.0 + UNSEEN_TICKS, Some(swing(150, SwordStroke::Forehand)), None));
+        let attack = controls.attack.unwrap();
+        assert_eq!((attack.asked, attack.aim), (Some(201), Vec3::X));
+        assert!(controls.queued.is_none());
+        // A press the drawn avatar holds for after its current swing waits.
+        follow_drawn_swing(&mut controls, &drawn(230.0, Some(swing(190, SwordStroke::Forehand)), Some(201)));
+        assert!(controls.attack.is_some_and(|a| a.asked == Some(201) && !a.bound));
+
+        // A swing that isn't the local player's press is left alone.
+        let mut controls = Controls::default();
+        controls.strike(Vec3::Z);
+        follow_drawn_swing(&mut controls, &drawn(500.0, None, None));
+        assert!(controls.attack.is_some());
     }
 }

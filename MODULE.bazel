@@ -372,6 +372,25 @@ http_archive(
     urls = ["https://codeload.github.com/mrbumpy409/GeneralUser-GS/tar.gz/684543d5e5efaef08d02be50dcda8d552478fa60"],
 )
 
+# libudev from Debian 12 (bookworm), for the Linux gamepad backend (gilrs).
+# Debian 12 matches the remote test image's glibc 2.36; the Debian 13 build
+# needs glibc 2.38 and would not load there. See third_party/udev/BUILD.bazel.
+http_archive(
+    name = "libudev1_bookworm_amd64",
+    build_file_content = 'filegroup(name = "data", srcs = glob(["data.tar.*"]), visibility = ["//visibility:public"])',
+    sha256 = "6f7e08f11c4809d2e5998c775f7b423ab5ec2ce0309494b4a2615037052245e2",
+    type = "deb",
+    urls = ["https://snapshot-cloudflare.debian.org/archive/debian/20260901T000000Z/pool/main/s/systemd/libudev1_252.39-1~deb12u2_amd64.deb"],
+)
+
+http_archive(
+    name = "libudev1_bookworm_arm64",
+    build_file_content = 'filegroup(name = "data", srcs = glob(["data.tar.*"]), visibility = ["//visibility:public"])',
+    sha256 = "b76444b0259abfa416f8c1d9a652d208a24770667a1181aa52317b74d12a7a72",
+    type = "deb",
+    urls = ["https://snapshot-cloudflare.debian.org/archive/debian/20260901T000000Z/pool/main/s/systemd/libudev1_252.39-1~deb12u2_arm64.deb"],
+)
+
 http_archive(
     name = "libssh2",
     build_file = "//third_party/libssh2:BUILD.libssh2.bazel",

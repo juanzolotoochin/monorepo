@@ -181,7 +181,7 @@ pub fn update(
                 sound.play(crate::sound::Cue::Swing);
             }
         }
-        let dig = current.avatar.dig.as_ref().map(|d| dig_age(&mirror, d));
+        let dig = current.avatar.dig.as_ref().map(|d| dig_age(ticks, d));
         let pose = Pose {
                 motion: voxel_assets::CharacterMotion {
                     step_distance: motion_profile.step_distance / transform.scale.x.max(0.1),
@@ -319,6 +319,7 @@ mod tests {
             until: at(17.0 / 30.0).round() as u64,
             resolved: hits > 0,
             hits,
+            queued_at: None,
         }
     }
 

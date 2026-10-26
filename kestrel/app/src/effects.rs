@@ -98,7 +98,7 @@ pub struct LaserShot {
     pub hit_actor: bool,
     pub cover: Option<u16>,
     pub seed: u32,
-    /// A shot the local player's prediction drew (`laser_prediction`), by
+    /// A shot the local player's prediction drew (`event_prediction`), by
     /// its id. Its cover hit sparks but holds nothing: only the confirmed
     /// shot drives `CoverContacts` (see `hand_over_cover`).
     pub predicted: Option<u64>,

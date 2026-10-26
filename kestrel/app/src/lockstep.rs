@@ -88,6 +88,9 @@ pub struct SessionService {
     pub frame: Vec<(u64, Option<SimSettlement>)>,
     pub frame_world: u32,
     pub alpha: f32,
+    /// A client's confirmed ticks on which stage 5 changed its avatar, for
+    /// telling a knockback from a misprediction (see `prediction`).
+    pub stage_five: crate::prediction::StageFive,
 }
 
 impl Service for SessionService {
@@ -123,6 +126,7 @@ impl Service for SessionService {
             frame: Vec::new(),
             frame_world: 0,
             alpha: 0.0,
+            stage_five: crate::prediction::StageFive::default(),
         }
     }
 
@@ -482,15 +486,20 @@ fn step(
     service.started = true;
     let clock = service.clock;
     let service = &mut *service;
+    // A client's own commands, to tell which ones its confirmed ticks applied.
+    let pending: Vec<_> = service.session.pending_commands().map(|p| (p.id, p.kind.clone())).collect();
     let mut ticks = Vec::new();
     let started = web_time::Instant::now();
     service.session.update(clock, |world| {
         let copying = web_time::Instant::now();
         let settlement = world.settlement().cloned();
-        ticks.push((world.tick(), settlement, world.stage_times(), copying.elapsed()));
+        ticks.push((world.tick(), settlement, world.stage_times(), copying.elapsed(), world.terrain().revision));
     });
     let update_time = started.elapsed();
-    telemetry.session_frame(update_time, ticks.iter().map(|(_, _, times, copy)| (*times, *copy)));
+    telemetry.session_frame(update_time, ticks.iter().map(|(_, _, times, copy, _)| (*times, *copy)));
+    if service.is_client() {
+        observe_stage_five(service, ticks.iter().map(|(next, settlement, _, _, revision)| (*next, *revision, settlement.as_ref())), &pending);
+    }
     if service.networked() {
         telemetry.network_frame(crate::telemetry::NetworkFrame {
             at: web_time::Instant::now(),
@@ -502,11 +511,11 @@ fn step(
             stats: service.session.stats(),
             diagnostics: service.session.diagnostics(clock),
             update_ms: update_time.as_secs_f64() * 1000.,
-            tick_ms: ticks.iter().map(|(_, _, times, _)| times.total().as_secs_f64() * 1000.).max_by(f64::total_cmp),
+            tick_ms: ticks.iter().map(|(_, _, times, _, _)| times.total().as_secs_f64() * 1000.).max_by(f64::total_cmp),
             frame_ms: None,
         });
     }
-    service.frame = ticks.into_iter().map(|(tick, settlement, _, _)| (tick, settlement)).collect();
+    service.frame = ticks.into_iter().map(|(tick, settlement, _, _, _)| (tick, settlement)).collect();
     service.frame_world = service.session.world_number();
     service.alpha = service.session.alpha(clock);
     let client = service.is_client();
@@ -538,6 +547,31 @@ fn step(
         service.command(CommandKind::Name { name });
         service.named = number;
     }
+}
+
+/// Checks a client's confirmed ticks this frame (each settlement with the
+/// tick it runs next and the terrain revision then) for stage 5 changing
+/// its avatar (`prediction::StageFive`). `pending` are its commands that
+/// hadn't applied before the frame's ticks ran; the client's record of
+/// which applied on which tick says which a tick ran.
+fn observe_stage_five<'s>(
+    service: &mut SessionService,
+    ticks: impl Iterator<Item = (u64, u64, Option<&'s SimSettlement>)>,
+    pending: &[(net::CommandId, CommandKind)],
+) {
+    let Some(agent) = service.player() else { return };
+    let SessionService { session, stage_five, .. } = service;
+    let Some(world) = session.world() else { return };
+    let applied: Vec<(u64, net::CommandId)> = session.applied_commands().collect();
+    let applied_on = |tick: u64| {
+        applied
+            .iter()
+            .filter(|(at, _)| *at == tick)
+            .map(|(_, id)| pending.iter().find(|(pending, _)| pending == id).map(|(_, kind)| kind))
+            .collect::<Option<Vec<_>>>()
+    };
+    let ticks = ticks.filter_map(|(next, revision, settlement)| Some((next, revision, settlement?)));
+    stage_five.observe(session.world_number(), agent, ticks, world.terrain(), applied_on);
 }
 
 /// Moves the World layer with the session's world: off while a world is
@@ -836,13 +870,16 @@ impl PlayerControl {
         if weapon != content::scenario::Weapon::Laser {
             self.walking = None;
         }
+        // The tick the command asks for: a client's input horizon, or on a
+        // host the next tick.
+        let asked = service.session.input_horizon().or_else(|| service.world().map(sim::World::tick));
         service.command(CommandKind::Attack {
             agent,
             weapon,
             aim: FxVec2::new(Fx::quantize(flat.x), Fx::quantize(flat.z)),
             muzzle: muzzle.map(Fx::quantize),
         });
-        controls.strike(aim);
+        controls.strike_at(aim, asked);
     }
 }
 
@@ -867,21 +904,31 @@ pub fn follow_avatar(
     mut prediction: Local<crate::prediction::AvatarPrediction>,
     mut ground_step: Local<VisualGroundStep>,
     mut telemetry: ResMut<crate::telemetry::Telemetry>,
-    mut lasers: ResMut<crate::laser_prediction::LaserPrediction>,
+    mut ledger: ResMut<crate::event_prediction::EventPrediction>,
     mut pending_lasers: ResMut<crate::effects::PendingLasers>,
+    mut drawn_avatar: ResMut<crate::prediction::DrawnAvatar>,
 ) {
-    let (Some(current), Some(index)) = (&mirror.current, mirror.player()) else { return };
+    let (Some(current), Some(index)) = (&mirror.current, mirror.player()) else {
+        drawn_avatar.0 = None;
+        return;
+    };
     let a = &current.agents[index as usize];
     let before = mirror.previous.as_ref().and_then(|p| p.agents.get(index as usize)).unwrap_or(a);
     let predicted = if service.is_client() { predict(&mut prediction, &mirror, &service, before, time.delta_secs()) } else { None };
+    // What the avatar's lasting effects are drawn from (D5): the newest
+    // confirmed state at render time, unless it is predicted.
+    drawn_avatar.0 = Some(match &predicted {
+        Some(drawn) => crate::prediction::DrawnState { agent: index, from: drawn.from.clone(), to: drawn.to.clone(), time: drawn.time },
+        None => crate::prediction::DrawnState { agent: index, from: before.clone(), to: a.clone(), time: mirror.tick as f32 - 1.0 + mirror.alpha },
+    });
     if predicted.is_none() {
         prediction.reset();
     }
     if service.is_client() {
         let now = time.elapsed_secs_f64();
-        predict_lasers(&mut lasers, &mirror, &service, index, predicted.as_ref(), now, &mut pending_lasers, &sound, &mut telemetry);
+        predict_events(&mut ledger, &mirror, &service, index, predicted.as_ref(), now, &mut pending_lasers, &sound, &mut telemetry);
     } else {
-        lasers.reset();
+        ledger.reset();
     }
     let (from, to, alpha) = match &predicted {
         Some(drawn) => (&drawn.from, &drawn.to, drawn.fraction),
@@ -904,7 +951,7 @@ pub fn follow_avatar(
     let reset_step = ground_step.agent != Some(index)
         || ground_step.scene != Some(scene.index)
         || start.distance(end) > 1.5
-        || predicted.as_ref().is_some_and(|drawn| drawn.snapped);
+        || predicted.as_ref().is_some_and(|drawn| drawn.snapped || drawn.knockback_snapped);
     position.y = crate::character::visual_step_height(
         if reset_step { None } else { ground_step.height },
         position.y,
@@ -923,6 +970,8 @@ pub fn follow_avatar(
                 target: Vec3::new(drawn.target.x, position.y, drawn.target.z),
                 mispredicted: drawn.mispredicted,
                 snapped: drawn.snapped,
+                knockback: drawn.knockback,
+                knockback_snapped: drawn.knockback_snapped,
             },
         );
     }
@@ -949,7 +998,6 @@ pub fn follow_avatar(
     for _ in 0..contacts {
         sound.play(crate::sound::Cue::Step);
     }
-    controls.route = a.route.iter().map(|&p| mirror.to_view(p)).collect();
 }
 
 /// A joined player's avatar this frame, replayed from the session's
@@ -967,10 +1015,11 @@ fn predict(
     if number != mirror.world_number {
         return None;
     }
-    let pending: Vec<_> = service.session.pending_commands().collect();
+    let pending: Vec<_> = service.session.pending_commands().map(|p| (p.tick, p.kind)).collect();
+    let agent = service.player()?;
     let confirmed = crate::prediction::Confirmed {
         world: number,
-        agent: service.player()?,
+        agent,
         settlement: world.settlement()?,
         terrain: world.terrain(),
         tick: world.tick(),
@@ -979,17 +1028,19 @@ fn predict(
         pending: &pending,
         horizon: service.session.input_horizon()?,
         to_view: &|p| mirror.to_view(p),
+        touched: service.stage_five.touched(number, agent),
     };
     Some(prediction.update(&confirmed, dt))
 }
 
-/// A joined player's own laser shots (see `laser_prediction`): this
-/// frame's confirmed ones are matched to those already drawn, then the
-/// shots the drawn avatar fires are drawn, with their sound, from where it
-/// is drawn. Other players' shots are drawn as they are confirmed.
+/// A joined player's own predicted events (see `event_prediction`): this
+/// frame's confirmed ones are matched to those already presented, then the
+/// events the drawn avatar shows are presented: a laser shot drawn, with its
+/// sound, from where the avatar is drawn. Other players' events, and kinds
+/// not presented early, are presented as they are confirmed.
 #[allow(clippy::too_many_arguments)]
-fn predict_lasers(
-    lasers: &mut crate::laser_prediction::LaserPrediction,
+fn predict_events(
+    ledger: &mut crate::event_prediction::EventPrediction,
     mirror: &WorldMirror,
     service: &SessionService,
     agent: u16,
@@ -999,55 +1050,76 @@ fn predict_lasers(
     sound: &crate::sound::Sound,
     telemetry: &mut crate::telemetry::Telemetry,
 ) {
-    use crate::laser_prediction::Outcome;
+    use crate::event_prediction::{end_of, Outcome};
     let Some(world) = service.world().filter(|_| service.session.world_number() == mirror.world_number) else {
-        lasers.reset();
+        ledger.reset();
         return;
     };
-    lasers.begin(mirror.world_number, agent);
+    ledger.begin(mirror.world_number, agent);
+    // Which command applied on which tick: the drain record, then the
+    // pending commands where the replay applies them.
+    let tick = world.tick();
+    let applied: Vec<_> = service
+        .session
+        .applied_commands()
+        .chain(service.session.pending_commands().map(|p| (p.tick.max(tick), p.id)))
+        .collect();
     // Where a beam ending at `p` is drawn ending.
     let end = |p: FxVec2| {
         let at = mirror.to_view(p);
         Vec3::new(at.x, service.ground_height(at).unwrap_or(0.0) + 0.8, at.z)
     };
-    let mut outcomes = Vec::new();
-    for event in &mirror.events {
-        if let sim::settlement::Event::LaserFired { agent: shooter, to, .. } = event {
-            if *shooter == agent {
-                outcomes.extend(lasers.confirm(*to, now));
-            }
-        }
-    }
-    outcomes.extend(lasers.expire(world.tick()));
+    // An event without an end is marked where the avatar is drawn.
+    let avatar = drawn.map(|d| d.position).or_else(|| service.player_view_position()).unwrap_or(Vec3::ZERO);
+    let at = |event: &sim::settlement::Event| end_of(event).map_or(avatar, end);
+    let mut outcomes: Vec<Outcome> = mirror.events.iter().filter_map(|event| ledger.confirm(event, &applied, now)).collect();
+    outcomes.extend(ledger.expire(tick));
     let mut new = Vec::new();
-    if let (Some(drawn), Some(settlement)) = (drawn, world.settlement()) {
-        let predicted = lasers.predict(&drawn.strikes, now, |strike| settlement.predict_laser(agent, strike, world.terrain()));
+    if let Some(drawn) = drawn {
+        let predicted = ledger.predict(&drawn.events, &applied, now);
         outcomes.extend(predicted.dropped);
         new = predicted.new;
     }
-    let at = web_time::Instant::now();
+    let instant = web_time::Instant::now();
     for outcome in outcomes {
-        telemetry.network.laser_outcome(at, match outcome {
-            Outcome::Fired { predicted, confirmed, lead, exact } => crate::telemetry::LaserOutcome {
-                predicted: end(predicted),
-                confirmed: Some(end(confirmed)),
-                lead: Some(lead),
-                exact,
-            },
-            Outcome::NeverFired { predicted } => crate::telemetry::LaserOutcome { predicted: end(predicted), confirmed: None, lead: None, exact: false },
+        if outcome.cancel {
+            stop_presented(outcome.kind, outcome.id, pending);
+        }
+        telemetry.network.event_outcome(instant, crate::telemetry::EventOutcome {
+            kind: outcome.kind,
+            predicted: at(&outcome.predicted),
+            confirmed: outcome.confirmed.as_ref().map(at),
+            lead: outcome.lead,
+            exact: outcome.exact,
         });
     }
-    for shot in new {
-        pending.0.push(crate::effects::LaserShot {
-            agent,
-            target: end(shot.shot.to),
-            hit_actor: shot.shot.hit_actor,
-            cover: shot.shot.cover,
-            seed: crate::effects::laser_impact_seed(shot.tick, agent),
-            predicted: Some(shot.id),
-        });
-        sound.play(crate::sound::Cue::Laser);
-        telemetry.network.laser_drawn();
+    for presented in new {
+        match presented.event {
+            sim::settlement::Event::LaserFired { to, hit_actor, cover, .. } => {
+                pending.0.push(crate::effects::LaserShot {
+                    agent,
+                    target: end(to),
+                    hit_actor,
+                    cover,
+                    seed: crate::effects::laser_impact_seed(presented.tick, agent),
+                    predicted: Some(presented.id),
+                });
+                sound.play(crate::sound::Cue::Laser);
+            }
+            _ => continue,
+        }
+        telemetry.network.event_presented(presented.kind);
+    }
+}
+
+/// Stops what a presented event of `kind` started, when its kind's miss
+/// policy is `Cancel` and it missed. Events start only one-shots so far
+/// (D5 in `ABILITY_PREDICTION_HANDOFF.md`): a laser shot not drawn yet is
+/// dropped, and anything else has nothing left to stop. A kind that starts
+/// something lasting stops it here.
+fn stop_presented(kind: &str, id: u64, pending: &mut crate::effects::PendingLasers) {
+    if kind == "laser" {
+        pending.0.retain(|shot| shot.predicted != Some(id));
     }
 }
 
@@ -1150,7 +1222,7 @@ pub fn attack_input(
 
 /// Where the mouse aims from: where the avatar is `drawn`. A joined
 /// player's avatar is predicted about an input lead ahead of the confirmed
-/// one, and its shot fires from there (`laser_prediction`). Elsewhere the
+/// one, and its shot fires from there (`event_prediction`). Elsewhere the
 /// avatar is drawn where it is confirmed, so the confirmed position is used
 /// exactly, as before prediction.
 fn aim_origin(service: &SessionService, drawn: Option<Vec3>) -> Option<Vec3> {
@@ -1431,8 +1503,9 @@ mod tests {
         });
         client.update();
         host.update();
-        // Click-to-move is not predicted (it is going away): the avatar waits
-        // for the confirmed route, then follows it without jumps.
+        // A walk to a point (the dock walk, scripted walks) is predicted:
+        // the avatar follows the route the replay plans, then settles on the
+        // confirmed one without jumps.
         let route_preview = player_position(&mut client);
         let mut followed_route = false;
         let mut previous_shown = route_preview;
@@ -1585,15 +1658,7 @@ mod tests {
         /// The client fires its laser toward `direction` (arena space), as a
         /// click there would.
         fn fire(&mut self, direction: Vec3) {
-            let world = self.client.world_mut();
-            world.resource_mut::<Controls>().weapon = content::scenario::Weapon::Laser;
-            world.resource_scope(|world, mut service: Mut<SessionService>| {
-                world.resource_scope(|world, mut controls: Mut<Controls>| {
-                    world.resource_scope(|world, mut control: Mut<PlayerControl>| {
-                        control.strike(&mut service, &mut controls, &world.resource::<SceneView>().pack, direction);
-                    });
-                });
-            });
+            fire_laser(&mut self.client, direction);
         }
 
         fn telemetry(&mut self) -> Mut<'_, crate::telemetry::Telemetry> {
@@ -1624,6 +1689,20 @@ mod tests {
                 d.shifted_ticks
             )
         }
+    }
+
+    /// `app`'s player fires its laser toward `direction` (arena space), as a
+    /// click there would.
+    fn fire_laser(app: &mut App, direction: Vec3) {
+        let world = app.world_mut();
+        world.resource_mut::<Controls>().weapon = content::scenario::Weapon::Laser;
+        world.resource_scope(|world, mut service: Mut<SessionService>| {
+            world.resource_scope(|world, mut controls: Mut<Controls>| {
+                world.resource_scope(|world, mut control: Mut<PlayerControl>| {
+                    control.strike(&mut service, &mut controls, &world.resource::<SceneView>().pack, direction);
+                });
+            });
+        });
     }
 
     /// Holds exactly `held` of the movement keys.
@@ -1863,10 +1942,10 @@ mod tests {
                 }
                 let telemetry = game.telemetry();
                 let network = &telemetry.network;
-                let outcomes: Vec<_> = network.laser_outcomes().cloned().collect();
+                let outcomes: Vec<_> = network.event_outcomes("laser").cloned().collect();
                 let kinds: Vec<_> = network.corrections().map(|c| format!("{:?} {:.2}", c.kind, c.distance)).collect();
-                let laser_mispredictions = network.corrections().filter(|c| c.kind == crate::telemetry::CorrectionKind::LaserMispredict).count();
-                let drawn = network.lasers_drawn() as usize;
+                let laser_mispredictions = network.corrections().filter(|c| c.kind == crate::telemetry::CorrectionKind::EventMispredict { kind: "laser" }).count();
+                let drawn = network.events_presented("laser") as usize;
                 let sounds = sounds(&game) - sounds_before;
                 let predicted_beams = beams.values().filter(|p| **p).count();
                 let end_difference = outcomes.iter().map(|o| o.confirmed.map_or(f32::INFINITY, |c| c.distance(o.predicted))).fold(0.0, f32::max);
@@ -1904,5 +1983,238 @@ mod tests {
         }
         println!("laser shots per latency case and scenario:\n{report}");
         assert!(failures.is_empty(), "laser shots were not predicted exactly:\n{report}\n{}", failures.join("\n"));
+    }
+
+    /// Under 100 ± 20 ms, the host shoots the client's running avatar with
+    /// the laser in the laser pit until it dies. A hit is stage 5, which the
+    /// client's prediction never runs: one that doesn't move the avatar
+    /// changes nothing drawn, and the death, which stops it, is a
+    /// `Knockback`. Neither is a misprediction. The respawn that follows is
+    /// the avatar's own step, so it is predicted and corrects nothing.
+    #[test]
+    fn joined_player_hit_by_the_laser_is_knocked_back_not_mispredicted() {
+        use crate::telemetry::CorrectionKind;
+        use KeyCode::{KeyA as Left, KeyD as Right, ShiftLeft as Run};
+        let mut game = RelayedGame::in_scene("laser-pit", 100.0, 20.0, 0xb1a5);
+        let agent = game.client.world().resource::<SessionService>().player().unwrap();
+        let shooter = game.host.world().resource::<SessionService>().player().unwrap();
+        let touched = |game: &RelayedGame| {
+            let service = game.client.world().resource::<SessionService>();
+            service.stage_five.touched(service.session.world_number(), agent).to_vec()
+        };
+        // Away from the host's avatar at the spawn.
+        game.hold(&[Right, Run], 60);
+        assert_eq!(touched(&game), Vec::<u64>::new(), "running is no stage 5 touch");
+        game.telemetry().network.clear_corrections();
+        let health = |game: &RelayedGame| game.host.world().resource::<SessionService>().settlement().unwrap().agents[agent as usize].avatar.health;
+        let (mut shots, mut hits, mut died_at, mut touches) = (0, 0, None, 0);
+        for frame in 0..900u32 {
+            if died_at.is_none() {
+                press_only(&mut game.client, if frame % 70 < 40 { &[Right, Run] } else { &[Left, Run] });
+                if frame % 15 == 0 {
+                    // At the client's avatar where the host has it, a little ahead.
+                    let mirror = game.host.world().resource::<WorldMirror>();
+                    let agents = &mirror.current.as_ref().unwrap().agents;
+                    let (target, from) = (&agents[agent as usize], &agents[shooter as usize]);
+                    let velocity = Vec3::new(target.avatar.velocity.x.to_f32(), 0.0, target.avatar.velocity.y.to_f32());
+                    let aim = crate::navigation::flat(mirror.to_view(target.position) + velocity * 0.05 - mirror.to_view(from.position));
+                    fire_laser(&mut game.host, aim.normalize_or_zero());
+                    shots += 1;
+                }
+            } else {
+                press_only(&mut game.client, &[]);
+            }
+            game.frame();
+            for event in &game.host.world().resource::<WorldMirror>().events {
+                if let sim::settlement::Event::LaserFired { agent: by, hit_actor: true, .. } = event {
+                    hits += usize::from(*by == shooter);
+                }
+            }
+            touches = touches.max(touched(&game).len());
+            if died_at.is_none() && health(&game) == 0 {
+                died_at = Some(frame);
+            }
+            if died_at.is_some_and(|at| frame > at + 240) {
+                break;
+            }
+        }
+        let telemetry = game.telemetry();
+        let kinds: Vec<_> = telemetry.network.corrections().map(|c| format!("{:?} {:.2}{}", c.kind, c.distance, if c.snapped { " snapped" } else { "" })).collect();
+        let report = format!("{shots} shots, {hits} hits, died on frame {died_at:?}, up to {touches} touched ticks remembered, corrections {kinds:?}");
+        println!("{report}");
+        assert!(died_at.is_some() && hits >= 6, "the host never killed the client: {report}");
+        assert!(touches > 0, "no hit was seen as a stage 5 touch: {report}");
+        let knockbacks = telemetry.network.corrections().filter(|c| c.kind == CorrectionKind::Knockback).count();
+        assert!(knockbacks > 0, "the death stopped the running avatar, a knockback: {report}");
+        assert!(telemetry.network.corrections().all(|c| c.kind == CorrectionKind::Knockback && !c.snapped), "only knockbacks, smoothed: {report}");
+        let snapshot = telemetry.network.snapshot();
+        assert_eq!((snapshot["preview_corrections"].as_u64(), snapshot["preview_mispredicted_frames"].as_u64()), (Some(0), Some(0)), "{report}");
+    }
+
+    /// The client's avatar as drawn this frame.
+    fn drawn_avatar(app: &App) -> crate::prediction::DrawnState {
+        app.world().resource::<crate::prediction::DrawnAvatar>().0.clone().expect("the avatar is drawn")
+    }
+
+    /// The client's avatar in its newest confirmed tick.
+    fn confirmed_avatar(app: &App) -> sim::settlement::AgentState {
+        let mirror = app.world().resource::<WorldMirror>();
+        mirror.current.as_ref().unwrap().agents[mirror.player().unwrap() as usize].clone()
+    }
+
+    /// Queues a command the replay can't predict (a pile haul, which does
+    /// nothing outside the pile lab): once the drawn time reaches it, the
+    /// prediction is withdrawn and the confirmed avatar is drawn until it
+    /// applies.
+    fn withdraw_prediction(app: &mut App) {
+        let mut service = app.world_mut().resource_mut::<SessionService>();
+        let agent = service.player().unwrap();
+        service.command(CommandKind::Pile { agent, action: sim::settlement::piles::PileAction::Deliver, pace: Fx::ZERO, approach: None });
+    }
+
+    /// Lifts off in `scene` (the jetpack, or a jump), then once more and
+    /// withdraws the prediction while the drawn avatar is up but the
+    /// confirmed one isn't yet. The views' flight (`jetpack::Flight`: flame,
+    /// thrust sound, landing sound, jump crouch) is the drawn avatar's on
+    /// every frame, so it starts an input lead before the confirmed avatar
+    /// lifts off and ends on the frame the prediction is withdrawn.
+    fn assert_lift_follows_the_drawn_avatar(scene: &str, seed: u64) {
+        let lifted = |a: &sim::settlement::avatar::AvatarState| a.flight.airborne || a.jump != sim::settlement::avatar::JumpPhase::Grounded;
+        let mut game = RelayedGame::in_scene(scene, 100.0, 20.0, seed);
+        game.hold(&[], 60);
+        let thrust = |game: &RelayedGame| game.client.world().resource::<crate::sound::Sound>().recorded_events().iter().filter(|(_, cue)| *cue == crate::sound::Cue::Jetpack as i32).count();
+        let space = |game: &mut RelayedGame, down: bool| {
+            let mut keys = game.client.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            if down { keys.press(KeyCode::Space) } else { keys.release(KeyCode::Space) }
+        };
+        let jetpack = scene == "jetpack-lab";
+        let mut report = String::new();
+        for withdraw in [false, true] {
+            space(&mut game, true);
+            let (mut drawn_at, mut confirmed_at, mut withdrawn_at, mut thrust_early) = (None, None, None, 0);
+            let thrust_before = thrust(&game);
+            for frame in 0..90 {
+                game.frame();
+                // The test app has no input plugin to clear the press.
+                game.client.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+                let drawn = drawn_avatar(&game.client);
+                let flight = game.client.world().resource::<crate::jetpack::Flight>();
+                let shown = (flight.airborne, flight.jump, flight.requested);
+                let a = drawn.avatar();
+                assert_eq!(shown, (a.flight.airborne, a.jump, a.flight.requested), "{scene}, frame {frame}: the views' flight isn't the drawn avatar's");
+                let up = lifted(a);
+                let confirmed_up = lifted(&confirmed_avatar(&game.client).avatar);
+                if up && drawn_at.is_none() {
+                    drawn_at = Some(frame);
+                    if withdraw {
+                        withdraw_prediction(&mut game.client);
+                    }
+                }
+                if withdraw && drawn_at.is_some() && !up && !confirmed_up && withdrawn_at.is_none() {
+                    withdrawn_at = Some(frame);
+                }
+                if confirmed_up && confirmed_at.is_none() {
+                    confirmed_at = Some(frame);
+                    thrust_early = thrust(&game) - thrust_before;
+                }
+            }
+            report += &format!("{scene}{}: drawn up on frame {drawn_at:?}, confirmed on {confirmed_at:?}, withdrawn on {withdrawn_at:?}, thrust sounds before confirmed {thrust_early}\n", if withdraw { " (withdrawn)" } else { "" });
+            let (Some(drawn_at), Some(confirmed_at)) = (drawn_at, confirmed_at) else { panic!("never lifted off:\n{report}") };
+            assert!(confirmed_at >= drawn_at + 4, "the views lifted off with the confirmed avatar, not the drawn one:\n{report}");
+            if withdraw {
+                assert!(withdrawn_at.is_some_and(|at| at < confirmed_at), "the withdrawn lift went on being shown:\n{report}");
+            } else if jetpack {
+                assert!(thrust_early > 0, "the thrust sound waited for the confirmed avatar:\n{report}");
+            }
+            space(&mut game, false);
+            game.frame();
+            game.client.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+            game.hold(&[], 150);
+        }
+        println!("{report}");
+    }
+
+    #[test]
+    fn joined_player_jetpack_follows_the_drawn_avatar() {
+        assert_lift_follows_the_drawn_avatar("jetpack-lab", 0xf1a7);
+    }
+
+    #[test]
+    fn joined_player_jump_follows_the_drawn_avatar() {
+        assert_lift_follows_the_drawn_avatar("moonlit-glade", 0x7a3d);
+    }
+
+    /// Digs in the dig lab: the local dig's bar, dust and pose
+    /// (`digging::shown_digs`, `DrawnState::dig_age`) are the drawn
+    /// avatar's, an input lead before the confirmed avatar digs, and end on
+    /// the frame the prediction is withdrawn. A sword swing pressed while
+    /// the drawn avatar digs, which the simulation refuses, ends as soon as
+    /// the drawn avatar doesn't swing for it.
+    #[test]
+    fn joined_player_dig_follows_the_drawn_avatar() {
+        let mut game = RelayedGame::in_scene("dig-lab", 100.0, 20.0, 0xd16);
+        game.hold(&[], 60);
+        let mut report = String::new();
+        for withdraw in [false, true] {
+            game.client.world_mut().resource_mut::<SessionService>().dig();
+            let (mut drawn_at, mut confirmed_at, mut withdrawn_at) = (None, None, None);
+            for frame in 0..60 {
+                game.frame();
+                let drawn = drawn_avatar(&game.client);
+                let world = game.client.world_mut();
+                let player = world.query_filtered::<&Transform, With<Player>>().single(world).unwrap().translation;
+                let mirror = world.resource::<WorldMirror>();
+                let shown = crate::digging::shown_digs(mirror, Some(&drawn), player);
+                let mine: Vec<_> = shown.iter().filter(|d| d.agent == drawn.agent).collect();
+                assert!(mine.len() <= 1);
+                let digging = drawn.avatar().dig.clone();
+                assert_eq!(mine.first().map(|d| (d.dig.clone(), d.at, d.now)), digging.clone().map(|dig| (dig, player, drawn.time)), "frame {frame}: the shown dig isn't the drawn avatar's");
+                assert_eq!(drawn.dig_age().is_some(), digging.is_some());
+                let confirmed_digging = confirmed_avatar(&game.client).avatar.dig.is_some();
+                if digging.is_some() && drawn_at.is_none() {
+                    drawn_at = Some(frame);
+                    if withdraw {
+                        withdraw_prediction(&mut game.client);
+                    }
+                }
+                if withdraw && drawn_at.is_some() && digging.is_none() && !confirmed_digging && withdrawn_at.is_none() {
+                    withdrawn_at = Some(frame);
+                }
+                if confirmed_digging && confirmed_at.is_none() {
+                    confirmed_at = Some(frame);
+                }
+            }
+            report += &format!("dig{}: drawn on frame {drawn_at:?}, confirmed on {confirmed_at:?}, withdrawn on {withdrawn_at:?}\n", if withdraw { " (withdrawn)" } else { "" });
+            let (Some(drawn_at), Some(confirmed_at)) = (drawn_at, confirmed_at) else { panic!("never dug:\n{report}") };
+            assert!(confirmed_at >= drawn_at + 4, "the dig was shown with the confirmed avatar, not the drawn one:\n{report}");
+            if withdraw {
+                assert!(withdrawn_at.is_some_and(|at| at < confirmed_at), "the withdrawn dig went on being shown:\n{report}");
+            } else {
+                // Still digging: a sword swing is refused.
+                assert!(drawn_avatar(&game.client).avatar().dig.is_some());
+                let world = game.client.world_mut();
+                world.resource_mut::<Controls>().weapon = content::scenario::Weapon::Sword;
+                world.resource_scope(|world, mut service: Mut<SessionService>| {
+                    world.resource_scope(|world, mut controls: Mut<Controls>| {
+                        world.resource_scope(|world, mut control: Mut<PlayerControl>| {
+                            control.strike(&mut service, &mut controls, &world.resource::<SceneView>().pack, Vec3::X);
+                        });
+                    });
+                });
+                let mut ended = None;
+                for frame in 0..30 {
+                    game.frame();
+                    assert!(drawn_avatar(&game.client).avatar().swing.is_none(), "the simulation swung while digging");
+                    if game.client.world().resource::<Controls>().attack.is_none() {
+                        ended = Some(frame);
+                        break;
+                    }
+                }
+                report += &format!("refused swing ended after {ended:?} frames\n");
+                assert!(ended.is_some_and(|frames| (frames as f32) < crate::combat::attack_end() * 60.0 / 2.0), "the refused swing played on:\n{report}");
+            }
+            game.hold(&[], 150);
+        }
+        println!("{report}");
     }
 }

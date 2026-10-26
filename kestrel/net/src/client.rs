@@ -14,6 +14,25 @@ const HELLO_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_CATCH_UP: u64 = 8;
 /// Hashes repeated in every packet, so a lost packet doesn't lose a report.
 const REPORTED_HASHES: usize = 12;
+/// How long (ticks) `applied_commands` remembers a command after it applied.
+/// Predicted events are matched to their command well within this.
+pub const APPLIED_HISTORY: u64 = 600;
+
+/// A command this client queued, told apart from every other one it queued
+/// (`Client::queue`). Local to this client: not sent, and never reused, not
+/// even across worlds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CommandId(pub u64);
+
+/// One of this client's commands that hasn't been simulated here yet
+/// (`Client::pending_commands`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PendingCommand<'a> {
+    pub id: CommandId,
+    /// The tick it asked for. The host moves a late one to a later tick.
+    pub tick: u64,
+    pub kind: &'a CommandKind,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientPhase {
@@ -58,6 +77,12 @@ pub struct Client<T: Transport> {
     /// Inputs sent and not simulated here yet, oldest first. Unlike
     /// `unacked`, they stay until they apply.
     pending: VecDeque<Pending>,
+    /// The next `CommandId`.
+    next_command: u64,
+    /// This client's commands simulated here in the last `APPLIED_HISTORY`
+    /// ticks of this world, each with the tick it applied on, in the order
+    /// they applied.
+    applied_commands: VecDeque<(u64, CommandId)>,
     reports: VecDeque<(u64, u64)>,
     history: HashLog,
     pacer: Pacer,
@@ -85,6 +110,7 @@ pub struct Client<T: Transport> {
 
 /// An input sent and not simulated here yet.
 struct Pending {
+    id: CommandId,
     /// The tick it asked for.
     tick: u64,
     kind: CommandKind,
@@ -114,6 +140,8 @@ impl<T: Transport> Client<T> {
             applied: 0,
             unacked: VecDeque::new(),
             pending: VecDeque::new(),
+            next_command: 0,
+            applied_commands: VecDeque::new(),
             reports: VecDeque::new(),
             history: HashLog::default(),
             pacer: Pacer::new(now),
@@ -235,7 +263,9 @@ impl<T: Transport> Client<T> {
         self.last_requested = tick;
         self.diagnostics.last_requested_tick = Some(tick);
         let headroom = self.rtt.map(|_| tick.saturating_sub(self.host_present()));
-        self.pending.push_back(Pending { tick, kind: kind.clone(), headroom });
+        let id = CommandId(self.next_command);
+        self.next_command += 1;
+        self.pending.push_back(Pending { id, tick, kind: kind.clone(), headroom });
         self.unacked.push_back(Input { seq: self.next_seq, tick, kind });
         self.next_seq += 1;
         self.queued += 1;
@@ -248,8 +278,16 @@ impl<T: Transport> Client<T> {
 
     /// The commands `pending_inputs` counts, oldest first, each with the
     /// tick it asked for. The host moves a late one to a later tick.
-    pub fn pending_commands(&self) -> impl Iterator<Item = (u64, &CommandKind)> + '_ {
-        self.pending.iter().map(|p| (p.tick, &p.kind))
+    pub fn pending_commands(&self) -> impl Iterator<Item = PendingCommand<'_>> + '_ {
+        self.pending.iter().map(|p| PendingCommand { id: p.id, tick: p.tick, kind: &p.kind })
+    }
+
+    /// This client's commands simulated here in the last `APPLIED_HISTORY`
+    /// ticks of this world, oldest first, each with the tick it applied on:
+    /// the one it asked for, or a later one if it came in late. Commands
+    /// that applied on the same tick are in the order they were queued.
+    pub fn applied_commands(&self) -> impl Iterator<Item = (u64, CommandId)> + '_ {
+        self.applied_commands.iter().copied()
     }
 
     /// Handles packets, runs every tick that is due and available (calling
@@ -290,7 +328,11 @@ impl<T: Transport> Client<T> {
                 self.applied += mine as u64;
                 // The host keeps a player's commands in the order they were
                 // sent. One in a later turn than it asked for came in late.
+                while self.applied_commands.front().is_some_and(|&(at, _)| at + APPLIED_HISTORY < tick) {
+                    self.applied_commands.pop_front();
+                }
                 for input in self.pending.drain(..mine.min(self.pending.len())) {
+                    self.applied_commands.push_back((tick, input.id));
                     if tick > input.tick {
                         self.diagnostics.late_inputs += 1;
                         self.diagnostics.shifted_ticks += tick - input.tick;
@@ -378,6 +420,7 @@ impl<T: Transport> Client<T> {
                 self.last_requested = 0;
                 self.unacked.clear();
                 self.pending.clear();
+                self.applied_commands.clear();
                 self.next_seq = 1;
                 // Inputs not in the new save are lost.
                 (self.queued, self.applied) = (0, 0);

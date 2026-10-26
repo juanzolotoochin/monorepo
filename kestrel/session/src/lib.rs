@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use content::Content;
 use net::transport::Transport;
-use net::{Client, ClientPhase, Host, NetConfig, NetEvent, NetStats, NullTransport, StableId, UdpTransport};
+use net::{Client, ClientPhase, CommandId, Host, NetConfig, NetEvent, NetStats, NullTransport, PendingCommand, StableId, UdpTransport};
 use save::InputLog;
 use sim::{Command, CommandKind, PlayerId, Simulation, World};
 
@@ -223,11 +223,22 @@ impl Session {
     }
 
     /// A client's commands that haven't been simulated yet, oldest first,
-    /// each with the tick it asked for. A host's apply on its next tick and
-    /// a replay takes no input, so they have none.
-    pub fn pending_commands(&self) -> impl Iterator<Item = (u64, &CommandKind)> + '_ {
+    /// each with its identity and the tick it asked for. A host's apply on
+    /// its next tick and a replay takes no input, so they have none.
+    pub fn pending_commands(&self) -> impl Iterator<Item = PendingCommand<'_>> + '_ {
         let client = match &self.peer {
             Peer::Client(client) => Some(client.pending_commands()),
+            _ => None,
+        };
+        client.into_iter().flatten()
+    }
+
+    /// A client's commands simulated in its recent ticks, oldest first, each
+    /// with the tick it applied on (`net::Client::applied_commands`). A host
+    /// and a replay have none.
+    pub fn applied_commands(&self) -> impl Iterator<Item = (u64, CommandId)> + '_ {
+        let client = match &self.peer {
+            Peer::Client(client) => Some(client.applied_commands()),
             _ => None,
         };
         client.into_iter().flatten()

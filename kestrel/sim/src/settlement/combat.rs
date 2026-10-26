@@ -164,18 +164,94 @@ pub enum Impact {
 /// What happened this tick, for sounds and effects. Not part of the state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
-    Shot { defender: Option<u16> },
+    /// A defender fired.
+    Shot { defender: u16 },
+    /// An avatar loosed an arrow. `started` is the tick its `Attack`
+    /// applied on (`Swing::pressed`), as on the other strike events.
+    BowFired { agent: AgentIx, started: u64 },
     /// `agent` is the avatar that struck, for melee and arc hits.
     Hit { target: u64, agent: Option<AgentIx>, projectile: Option<u64>, position: FxVec2, killed: bool, impact: Impact },
     PinnedLanded { target: u64, position: FxVec2 },
     BlockedShot { position: FxVec2 },
-    ArcFired { from: FxVec2, to: FxVec2 },
-    LaserFired { agent: AgentIx, from: FxVec2, to: FxVec2, hit_actor: bool, cover: Option<u16> },
+    ArcFired { agent: AgentIx, from: FxVec2, to: FxVec2, started: u64 },
+    LaserFired { agent: AgentIx, from: FxVec2, to: FxVec2, hit_actor: bool, cover: Option<u16>, started: u64 },
     Breach { position: FxVec2 },
     Produced { producer: u16 },
     Equipped { agent: AgentIx },
     /// A pile-lab unit left `from` and lands at `to` after `ticks`.
     PileToss { material: u8, from: TossEnd, to: TossEnd, ticks: u64 },
+}
+
+/// What a strike reaches (`Settlement::strike_targets`), as its `Strike`
+/// message carries it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct StrikeTargets {
+    /// Threats, in the order they take damage.
+    pub targets: Vec<u64>,
+    /// Where an arc coil's or a laser's beam ends.
+    pub beam_end: Option<FxVec2>,
+    /// The cover piece a laser stops at.
+    pub cover: Option<u16>,
+    /// A laser stops at another live player, standing at `beam_end`.
+    pub hit_player: bool,
+}
+
+/// Whether a client may show an event before its world confirms it
+/// (`ABILITY_PREDICTION_HANDOFF.md`, D4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Prediction {
+    /// Shown when the confirmed world has it: it depends on stage 5 (damage,
+    /// deaths, cover breaking, stock moving) or isn't an avatar's.
+    Confirmed,
+    /// Built from a stage 3 message alone (`strike_event`), so an
+    /// `AvatarReplay` predicts it. `agent` and `started`, the tick its
+    /// action's command applied on, match it to the confirmed one (D7).
+    Predict { agent: AgentIx, started: u64, on_miss: OnMiss },
+}
+
+/// What a client does with a predicted event that never confirms, or
+/// confirms differently.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OnMiss {
+    /// A one-shot (a beam, a sound): leave it, apply what the confirmed
+    /// event says, and log it.
+    Keep,
+    /// It started something lasting: stop it.
+    Cancel,
+}
+
+impl Event {
+    /// This kind's prediction policy. Exactly the events `strike_event`
+    /// builds are predicted.
+    pub fn prediction(&self) -> Prediction {
+        match *self {
+            Event::BowFired { agent, started } | Event::ArcFired { agent, started, .. } | Event::LaserFired { agent, started, .. } => {
+                Prediction::Predict { agent, started, on_miss: OnMiss::Keep }
+            }
+            _ => Prediction::Confirmed,
+        }
+    }
+}
+
+/// The event a resolving strike shows, from the message alone: stage 5
+/// pushes it as it applies the strike, and `AvatarReplay` predicts it.
+/// Sword and spear strikes show nothing until stage 5 says what they hit
+/// (`Hit`).
+pub(super) fn strike_event(message: &Strike) -> Option<Event> {
+    let (agent, started, from) = (message.agent, message.started, message.origin);
+    match message.weapon {
+        Weapon::Bow => Some(Event::BowFired { agent, started }),
+        Weapon::ArcCoil => message.beam_end.map(|to| Event::ArcFired { agent, from, to, started }),
+        Weapon::Laser => message.beam_end.map(|to| Event::LaserFired {
+            agent,
+            from,
+            to,
+            hit_actor: !message.targets.is_empty() || message.hit_player,
+            cover: message.cover,
+            started,
+        }),
+        Weapon::Sword | Weapon::Spear => None,
+    }
 }
 
 /// One end of a pile-lab toss: a unit slot in a pile, or in the carrier.
@@ -256,7 +332,7 @@ impl Settlement {
     /// Whether the scenario offers this weapon. Scenes without weapons still
     /// allow the sword, as in the original game.
     pub fn has_weapon(&self, weapon: Weapon) -> bool {
-        self.weapons.contains(&weapon) || (self.weapons.is_empty() && weapon == Weapon::Sword)
+        offers_weapon(&self.weapons, weapon)
     }
 
     /// A threat's collision radius: its character's armor radius while
@@ -396,16 +472,11 @@ impl Settlement {
         }
     }
 
-    /// The targets of a resolving strike, in the order they take damage.
-    pub(super) fn strike_targets(&self, shooter: AgentIx, origin: FxVec2, forward: FxVec2, weapon: Weapon, terrain: &Terrain) -> (Vec<u64>, Option<FxVec2>, Option<u16>) {
-        let height = self.agents.get(shooter as usize).map_or(Fx::ZERO, |a| a.avatar.height);
-        self.strike_targets_from(shooter, height, origin, forward, weapon, terrain)
-    }
-
-    /// `strike_targets` for a shooter at `origin` and `height`, wherever
-    /// `self` has it: client prediction aims a predicted avatar against the
-    /// confirmed settlement.
-    pub(super) fn strike_targets_from(&self, shooter: AgentIx, height: Fx, origin: FxVec2, forward: FxVec2, weapon: Weapon, terrain: &Terrain) -> (Vec<u64>, Option<FxVec2>, Option<u16>) {
+    /// What a strike from a shooter at `origin` and `height` reaches. It
+    /// reads neither the shooter's own state nor where `self` has it, so
+    /// client prediction aims a predicted avatar against the confirmed
+    /// settlement with it (`read_avatar`).
+    pub(super) fn strike_targets(&self, shooter: AgentIx, height: Fx, origin: FxVec2, forward: FxVec2, weapon: Weapon, terrain: &Terrain) -> StrikeTargets {
         let tuning = self.tuning(weapon);
         let (reach, cone) = (tuning.reach, tuning.cone);
         let close = Fx::from_ratio(1, 5);
@@ -423,6 +494,7 @@ impl Settlement {
         targets.sort();
         let mut beam = None;
         let mut cover = None;
+        let mut hit_player = false;
         match weapon {
             Weapon::ArcCoil => {
                 let end = origin + forward * reach;
@@ -483,6 +555,7 @@ impl Settlement {
                 } else {
                     targets.clear();
                     beam = Some(player.map_or(origin + forward * (reach * blocked), |(_, index)| self.agents[index].position));
+                    hit_player = player.is_some();
                     if player.is_none() {
                         cover = cover_block.and_then(|(fraction, index)|
                             (fraction == blocked && fraction < static_block && fraction < ground_block).then_some(index as u16));
@@ -491,15 +564,7 @@ impl Settlement {
             }
             Weapon::Sword => {}
         }
-        (targets.into_iter().map(|(_, id)| id).collect(), beam, cover)
-    }
-
-    /// Whether a laser beam ending at `to` hits a threat or another live
-    /// player, as `Event::LaserFired` reports it.
-    pub(super) fn laser_hits_actor(&self, shooter: usize, targets: &[u64], to: FxVec2) -> bool {
-        !targets.is_empty() || self.agents.iter().enumerate().any(|(index, target)| {
-            index != shooter && target.controlled && target.avatar.health > 0 && target.position == to
-        })
+        StrikeTargets { targets: targets.into_iter().map(|(_, id)| id).collect(), beam_end: beam, cover, hit_player }
     }
 
     /// Applies a resolving strike. Returns how many threats it hit.
@@ -508,6 +573,7 @@ impl Settlement {
         if self.agents[agent].attack_ready > tick {
             return 0;
         }
+        self.events.extend(strike_event(&message));
         let tuning = self.tuning(message.weapon).clone();
         self.agents[agent].attack_ready = tick + tuning.cooldown();
         let origin = message.origin;
@@ -532,16 +598,7 @@ impl Settlement {
                 kind: ProjectileKind::Arrow,
             });
             self.combat.shots += 1;
-            self.events.push(Event::Shot { defender: None });
             return 1;
-        }
-        if let Some(to) = message.beam_end {
-            self.events.push(if message.weapon == Weapon::Laser {
-                let hit_actor = self.laser_hits_actor(agent, &message.targets, to);
-                Event::LaserFired { agent: message.agent, from: origin, to, hit_actor, cover: message.cover }
-            } else {
-                Event::ArcFired { from: origin, to }
-            });
         }
         if message.weapon == Weapon::Laser && message.targets.is_empty() && self.player_health > 0 {
             if let Some(to) = message.beam_end {
@@ -553,6 +610,7 @@ impl Settlement {
                         target.avatar.respawn_at = tick + ticks_from_60hz(120);
                         target.avatar.swing = None;
                         target.avatar.queued = None;
+                        target.avatar.queued_at = None;
                         target.avatar.velocity = FxVec2::ZERO;
                     }
                     return 1;
@@ -731,7 +789,7 @@ impl Settlement {
         d.aim = Some(message.to);
         d.ready_at = tick + period;
         d.fired_at = tick;
-        self.events.push(Event::Shot { defender: Some(message.defender) });
+        self.events.push(Event::Shot { defender: message.defender });
     }
 
     /// Housekeeping: fading arrows, landing bodies, new enemies.
@@ -791,4 +849,9 @@ impl Settlement {
 /// Ticks to cover `distance` at `speed` meters per second, at least one.
 fn flight_ticks(distance: Fx, speed: Fx) -> u64 {
     content::scenario::ticks(distance / speed)
+}
+
+/// See `Settlement::has_weapon`.
+pub(super) fn offers_weapon(weapons: &[Weapon], weapon: Weapon) -> bool {
+    weapons.contains(&weapon) || (weapons.is_empty() && weapon == Weapon::Sword)
 }

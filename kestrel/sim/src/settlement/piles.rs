@@ -491,6 +491,8 @@ impl Settlement {
             };
             let pace = if pace == Fx::ZERO { 0 } else { (pace * Fx::from_int(content::TICKS_PER_SECOND)).round().floor_to_int().max(1) as u64 };
             follow(a, route);
+            // A haul let go of earlier this turn no longer holds this one back.
+            a.avatar.dropped_haul = false;
             let hauler = lab.hauler_mut(me);
             hauler.job = Some(PileJob {
                 action,
@@ -537,10 +539,11 @@ impl Settlement {
         }
     }
 
-    /// The avatar moved or attacked: its haul stops, its cargo stays.
-    pub(super) fn cancel_pile_job(&mut self, agent: usize) {
+    /// The avatar moved, attacked or respawned (`DropHaul`): its haul stops,
+    /// its cargo stays. A haul started since (another `job_serial`) stays.
+    pub(super) fn cancel_pile_job(&mut self, agent: usize, serial: u64) {
         let Some(hauler) = self.piles.as_mut().and_then(|lab| lab.haulers.get_mut(&(agent as AgentIx))) else { return };
-        if hauler.job.take().is_some() {
+        if hauler.job_serial == serial && hauler.job.take().is_some() {
             hauler.notice = "Haul canceled. Cargo is retained.".into();
             hauler.last_error = Some("Haul canceled by player input".into());
         }
@@ -594,6 +597,9 @@ impl Settlement {
 
     /// Stage 3: the avatar is in reach and a unit (or the whole amount) is due.
     pub(super) fn read_pile_job(&self, me: AgentIx, a: &AgentState, tick: u64) -> Option<PileStep> {
+        if a.avatar.dropped_haul {
+            return None;
+        }
         let job = self.piles.as_ref()?.hauler(me)?.job.as_ref()?;
         let due = job.remaining != Some(0) && tick >= job.next_toss && (job.remaining.is_some() || in_reach(a.position, job, character_of(&self.characters, a).body.radius));
         due.then_some(PileStep { agent: me })
@@ -729,6 +735,7 @@ fn follow(a: &mut AgentState, route: Vec<FxVec2>) {
     a.route = route;
     a.avatar.swing = None;
     a.avatar.queued = None;
+    a.avatar.queued_at = None;
     a.avatar.intent = Some(Intent::GoTo { target, run: false });
 }
 

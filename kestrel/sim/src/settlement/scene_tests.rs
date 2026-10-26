@@ -928,3 +928,90 @@ fn commands_need_the_characters_abilities() {
     scene.command(CommandKind::DigDown { agent });
     assert!(scene.avatar().avatar.dig.is_none());
 }
+
+// What actions do to the world: applied on the command's own tick
+// (`settlement::action`, `Settlement::apply_actions`).
+
+/// An attack ends the haul on its tick, and the haul doesn't take the
+/// avatar back for that tick: the swing stands.
+#[test]
+fn an_attack_ends_a_haul_and_swings() {
+    let mut scene = Scene::new(pile_lab());
+    let agent = scene.agent();
+    scene.command(CommandKind::Pile { agent, action: PileAction::Pickup(2), pace: Fx::ZERO, approach: None });
+    scene.wait(ms(200));
+    assert!(scene.hauler().job.is_some() && !scene.avatar().route.is_empty());
+    scene.command(CommandKind::Attack { agent, weapon: content::scenario::Weapon::Sword, aim: v(1.0, 0.0), muzzle: [Fx::ZERO; 3] });
+    assert!(scene.hauler().job.is_none());
+    assert_eq!(scene.hauler().last_error.as_deref(), Some("Haul canceled by player input"));
+    assert!(scene.avatar().avatar.swing.is_some(), "the swing stands");
+    assert_eq!(scene.avatar().avatar.intent, Some(Intent::Stop));
+    assert!(scene.lab().conserved());
+}
+
+/// A move ends the haul it saw, not one started after it in the same turn.
+#[test]
+fn a_haul_started_after_a_move_in_the_same_turn_stays() {
+    let mut scene = Scene::new(pile_lab());
+    let agent = scene.agent();
+    let haul = CommandKind::Pile { agent, action: PileAction::Pickup(2), pace: Fx::ZERO, approach: None };
+    scene.command(haul.clone());
+    scene.wait(ms(200));
+    let walk = CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: FxVec2::new(Fx::ONE, Fx::ZERO), run: false } };
+    scene.sim.step(&[walk, haul].map(|kind| Command { player: PlayerId(0), kind }));
+    assert!(scene.hauler().job.is_some(), "the new haul runs");
+    assert_eq!(scene.hauler().last_error, None);
+    assert!(!scene.avatar().route.is_empty(), "and owns the route");
+}
+
+/// Respawning ends a haul too.
+#[test]
+fn respawning_ends_a_haul() {
+    let mut scene = Scene::new(pile_lab());
+    let agent = scene.agent();
+    scene.command(CommandKind::Pile { agent, action: PileAction::Pickup(2), pace: Fx::ZERO, approach: None });
+    scene.wait(ms(200));
+    scene.command(CommandKind::Respawn { agent });
+    assert!(scene.hauler().job.is_none());
+    assert!(scene.avatar().route.is_empty(), "the haul doesn't steer the respawned avatar");
+    assert!(scene.lab().conserved());
+}
+
+/// Letting go releases the keys the avatar held, but not one pressed after
+/// it in the same turn.
+#[test]
+fn releasing_lets_go_of_held_piano_keys() {
+    let mut scene = Scene::new(SceneSetup { extent: fx(8.0), spawn: [Fx::ZERO; 3], pianos: vec![FxVec2::ZERO], ..base() });
+    let agent = scene.agent();
+    let key = |pitch| CommandKind::PlayPiano { agent, piano: 0, pitch, velocity: 100 };
+    scene.command(key(60));
+    assert_eq!(scene.s().piano_notes.len(), 1);
+    scene.sim.step(&[CommandKind::ReleaseDirectControl { agent }, key(64)].map(|kind| Command { player: PlayerId(0), kind }));
+    let pitches: Vec<u8> = scene.s().piano_notes.iter().map(|note| note.pitch).collect();
+    assert_eq!(pitches, [64]);
+    release(&mut scene);
+    assert!(scene.s().piano_notes.is_empty());
+}
+
+/// Respawning restarts the memory trial and closes its open door.
+#[test]
+fn respawning_restarts_the_memory_trial_and_closes_its_door() {
+    let mut scene = Scene::new(surprise_lab());
+    let agent = scene.agent();
+    let doors = scene.s().memory.as_ref().unwrap().doors.len();
+    assert!(doors > 0);
+    scene.command(CommandKind::MemoryRecord);
+    scene.walk(-4.0, -2.0);
+    scene.wait(ms(667));
+    scene.command(CommandKind::MemoryDeploy);
+    scene.wait(ms(667));
+    scene.walk(-1.0, 3.0);
+    scene.wait(ms(3333));
+    assert!(scene.s().memory.as_ref().unwrap().unlocked);
+    let (obstacles, revision) = (scene.sim.world().terrain().obstacles.len(), scene.sim.world().terrain().revision);
+    scene.command(CommandKind::Respawn { agent });
+    let m = scene.s().memory.clone().unwrap();
+    assert!(!m.unlocked && m.ghost.is_none() && m.samples.is_empty(), "the trial starts over");
+    assert_eq!(scene.sim.world().terrain().obstacles.len(), obstacles + doors, "the door is shut");
+    assert!(scene.sim.world().terrain().revision > revision);
+}

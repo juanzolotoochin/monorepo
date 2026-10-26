@@ -7,10 +7,11 @@ use web_time::Instant;
 
 use crate::hash::{hash_of, StateHasher, TickHash};
 use crate::id::{Id, Ids, IdsState, Location};
-use crate::messages::{Damage, Eat, EatFailed, Killed, Messages, Spawn};
+use crate::messages::{ActionMessages, Damage, Eat, EatFailed, Killed, Messages, Spawn};
 use crate::mover::{Mover, MoverRow, Movers, HUNGRY_AT, REACH};
 use crate::rng::{stream, Rng};
 use crate::spatial::{for_each_near, SpatialIndex};
+use crate::settlement::action::Action;
 use crate::settlement::Settlement;
 use crate::terrain::{Disc, Terrain};
 use crate::timer::TimerWheel;
@@ -207,6 +208,10 @@ pub struct World {
     timers: TimerWheel<Id<Mover>>,
     /// Messages created during apply, handled next tick.
     pending: Messages,
+    /// What this tick's actions did to the world: filled in stage 1, handed
+    /// to stage 5 by stage 4. Empty between ticks, so neither saved nor
+    /// hashed.
+    actions: ActionMessages,
     /// Filled during apply, drained in housekeeping, in apply order.
     despawns: Vec<Id<Mover>>,
     spawns: Vec<MoverRow>,
@@ -263,6 +268,7 @@ impl World {
             settlement: None,
             timers: TimerWheel::default(),
             pending: Messages::default(),
+            actions: ActionMessages::default(),
             despawns: Vec::new(),
             spawns: Vec::new(),
             times: StageTimes::default(),
@@ -362,9 +368,9 @@ impl World {
         let self_update = lap.next();
         let outboxes = self.read_phase();
         let read = lap.next();
-        let messages = self.merge(outboxes);
+        let (messages, actions) = self.merge(outboxes);
         let merge = lap.next();
-        self.apply_messages(messages);
+        self.apply_messages(messages, actions);
         let apply = lap.next();
         self.housekeeping();
         let housekeeping = lap.next();
@@ -429,67 +435,21 @@ impl World {
                         s.set_defender(defender as usize, enabled);
                     }
                 }
-                CommandKind::MoveAvatar { agent, ref intent } => {
-                    if let Some(s) = &mut self.settlement {
-                        s.move_avatar(agent as usize, intent.clone(), &self.terrain);
-                    }
-                }
-                CommandKind::AimAvatar { agent, aim } => {
-                    if let Some(s) = &mut self.settlement {
-                        s.aim_avatar(agent as usize, aim);
-                    }
-                }
-                CommandKind::Attack { agent, weapon, aim, muzzle } => {
-                    if let Some(s) = &mut self.settlement {
-                        s.attack(self.tick, agent as usize, weapon, aim, muzzle);
-                    }
-                }
-                CommandKind::Transfer { agent, depot, item, units, deposit } => {
-                    if let Some(s) = &mut self.settlement {
-                        s.transfer(self.tick, agent as usize, depot as usize, item as usize, units, deposit);
-                    }
-                }
-                CommandKind::CancelTransfer { agent } => {
-                    if let Some(s) = &mut self.settlement {
-                        s.cancel_transfer(agent as usize);
-                    }
-                }
-                CommandKind::Equip { agent, weapon } => {
-                    if let Some(s) = &mut self.settlement {
-                        s.equip_weapon(agent as usize, weapon);
-                    }
-                }
-                CommandKind::Jetpack { agent, enabled } => {
-                    if let Some(s) = &mut self.settlement {
-                        s.jetpack(agent as usize, enabled);
-                    }
-                }
-                CommandKind::Jump { agent } => {
-                    if let Some(s) = &mut self.settlement {
-                        s.jump(agent as usize, self.tick);
-                    }
-                }
-                CommandKind::Respawn { agent } => {
-                    if let Some(s) = &mut self.settlement {
-                        s.respawn(agent as usize, &mut self.terrain);
-                    }
-                }
-                CommandKind::DigDown { agent } => {
-                    if let Some(s) = &mut self.settlement {
-                        s.dig(self.tick, agent as usize, &self.terrain);
-                    }
-                }
-                CommandKind::ReleaseDirectControl { agent } => {
-                    if let Some(s) = &mut self.settlement {
-                        s.release_direct_control(agent as usize);
-                    }
-                }
-                CommandKind::RepairCover { agent, asset } => {
-                    if let Some(s) = &mut self.settlement {
-                        if let Some(a) = s.agents.get_mut(agent as usize).filter(|a| a.controlled) {
-                            a.avatar.repair = asset.filter(|&asset| self.terrain.destructibles.iter()
-                                .any(|piece| piece.asset == asset && piece.repairable && piece.health < piece.max_health));
-                        }
+                // A player's actions: see `settlement::action`.
+                CommandKind::MoveAvatar { .. }
+                | CommandKind::AimAvatar { .. }
+                | CommandKind::Attack { .. }
+                | CommandKind::Transfer { .. }
+                | CommandKind::CancelTransfer { .. }
+                | CommandKind::Equip { .. }
+                | CommandKind::Jetpack { .. }
+                | CommandKind::Jump { .. }
+                | CommandKind::Respawn { .. }
+                | CommandKind::DigDown { .. }
+                | CommandKind::ReleaseDirectControl { .. }
+                | CommandKind::RepairCover { .. } => {
+                    if let (Some(s), Some((agent, action))) = (&mut self.settlement, Action::of(&turn[i].kind)) {
+                        s.act(self.tick, agent, &action, &self.terrain, &mut self.actions);
                     }
                 }
                 CommandKind::PlayPiano { agent, piano, pitch, velocity } => {
@@ -724,20 +684,23 @@ impl World {
     }
 
     // Stage 4: merge. Last tick's apply output first, then outboxes in a
-    // shuffled chunk order seeded by the tick.
-    fn merge(&mut self, mut outboxes: Vec<Messages>) -> Messages {
+    // shuffled chunk order seeded by the tick. Players' actions emitted
+    // their messages in stage 1, before there were outboxes, so they come
+    // separately, in command order.
+    fn merge(&mut self, mut outboxes: Vec<Messages>) -> (Messages, ActionMessages) {
         let mut order: Vec<u32> = (0..outboxes.len() as u32).collect();
         Rng::new(self.config.seed, self.tick, 0, stream::CHUNK_ORDER).shuffle(&mut order);
         let mut messages = std::mem::take(&mut self.pending);
         for chunk in order {
             messages.append(&mut outboxes[chunk as usize]);
         }
-        messages
+        (messages, std::mem::take(&mut self.actions))
     }
 
     // Stage 5: apply phase. Types in a fixed order; within a type, queue
-    // order. The earlier message wins a conflict.
-    fn apply_messages(&mut self, messages: Messages) {
+    // order. The earlier message wins a conflict. Players' actions apply
+    // first in the settlement's part (`Settlement::apply_actions`).
+    fn apply_messages(&mut self, messages: Messages, actions: ActionMessages) {
         for message in messages.damage {
             let Some((chunk, slot)) = self.locate(message.target) else { continue };
             if self.chunks[chunk].movers.hp[slot] <= 0 {
@@ -809,6 +772,7 @@ impl World {
 
         if let Some(settlement) = &mut self.settlement {
             let tick = self.tick;
+            settlement.apply_actions(actions, &mut self.terrain);
             settlement.economy(tick);
             settlement.resolve_docks(messages.claim_dock);
             for message in messages.retry {
@@ -1026,7 +990,7 @@ impl World {
     /// The complete state between ticks, for saves. Derived data (locations,
     /// awake counts, spatial indices, hashes) is left out and rebuilt on load.
     pub fn to_state(&self) -> WorldState {
-        debug_assert!(self.despawns.is_empty() && self.spawns.is_empty());
+        debug_assert!(self.despawns.is_empty() && self.spawns.is_empty() && self.actions.is_empty());
         WorldState {
             config: self.config.clone(),
             tick: self.tick,
