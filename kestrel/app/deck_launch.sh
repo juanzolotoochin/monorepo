@@ -4,31 +4,42 @@ set -euo pipefail
 directory="$HOME/.local/opt/kestrel"
 device_name="${KESTREL_DEVICE_NAME:-Steam Deck}"
 bazel_target="${KESTREL_BAZEL_TARGET:-steamdeck}"
-desktop_pid="$(pgrep -n -u "$(id -u)" -x plasmashell || true)"
-if [[ -z "$desktop_pid" || ! -r "/proc/$desktop_pid/environ" ]]; then
-    echo "Start $device_name Desktop Mode before launching Kestrel over SSH." >&2
-    exit 1
-fi
+if [[ "$device_name" == "Steam Frame" ]]; then
+    # Frame runs a nested Plasma desktop on :2. That window is not presented
+    # as a game in the headset; Steam's Gamescope game display is :1.
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+    export DISPLAY="$(systemctl --user show-environment | sed -n 's/^STEAM_GAME_DISPLAY_0=//p' | head -n 1)"
+    DISPLAY="${DISPLAY:-:1}"
+    export XDG_SESSION_TYPE=x11 ENABLE_GAMESCOPE_WSI=1
+    unset WAYLAND_DISPLAY XAUTHORITY
+else
+    desktop_pid="$(pgrep -n -u "$(id -u)" -x plasmashell || true)"
+    if [[ -z "$desktop_pid" || ! -r "/proc/$desktop_pid/environ" ]]; then
+        echo "Start $device_name Desktop Mode before launching Kestrel over SSH." >&2
+        exit 1
+    fi
 
-# The SSH session does not inherit the graphical session's display variables.
-# Read only the variables needed to connect to the active desktop and audio.
-while IFS= read -r -d '' entry; do
-    case "$entry" in
-        DISPLAY=*|WAYLAND_DISPLAY=*|XAUTHORITY=*|XDG_RUNTIME_DIR=*|DBUS_SESSION_BUS_ADDRESS=*|XDG_SESSION_TYPE=*)
-            export "$entry"
-            ;;
-    esac
-done < "/proc/$desktop_pid/environ"
+    # The SSH session does not inherit the graphical session's display variables.
+    # Read only the variables needed to connect to the active desktop and audio.
+    while IFS= read -r -d '' entry; do
+        case "$entry" in
+            DISPLAY=*|WAYLAND_DISPLAY=*|XAUTHORITY=*|XDG_RUNTIME_DIR=*|DBUS_SESSION_BUS_ADDRESS=*|XDG_SESSION_TYPE=*)
+                export "$entry"
+                ;;
+        esac
+    done < "/proc/$desktop_pid/environ"
 
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
-    echo "The $device_name desktop display was not found in the active session." >&2
-    exit 1
+    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+        echo "The $device_name desktop display was not found in the active session." >&2
+        exit 1
+    fi
 fi
 
 cd "$directory"
 environment=()
-for name in DISPLAY WAYLAND_DISPLAY XAUTHORITY XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS XDG_SESSION_TYPE; do
+for name in DISPLAY WAYLAND_DISPLAY XAUTHORITY XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS XDG_SESSION_TYPE ENABLE_GAMESCOPE_WSI; do
     if [[ -v "$name" ]]; then
         environment+=("--setenv=$name=${!name}")
     fi
