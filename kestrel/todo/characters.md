@@ -175,19 +175,6 @@
   in `haulers.rs`.
 - **Found in:** branch `kestrel-shared-body`.
 
-## Fix the flaky two-player session test
-
-- **Status:** open
-- **Why:** `session:session_test` `two_players_walk_around_together` failed
-  1 run in 4 on the remote executor: the client was one tick behind the host
-  (240 vs 239) when the test compared them. The client gets two wall-clock
-  seconds to catch up, which a busy executor can miss. It has nothing to do
-  with the state being tested.
-- **What to do:** wait for the client by ticks, not wall time, or give it a
-  bound in updates rather than seconds.
-- **Where:** `kestrel/session/src/lib.rs` (`two_players_walk_around_together`).
-- **Found in:** inventory step 3 (`kestrel/INVENTORY_HANDOFF.md`).
-
 ## Share the "busy carrying" rule between the sim and the app
 
 - **Status:** open
@@ -262,6 +249,22 @@
   and hide the minerals there or label them.
 - **Where:** `kestrel/app/src/legacy.rs` (`balances`), the settlement HUD.
 - **Found in:** inventory step 6 (`kestrel/INVENTORY_HANDOFF.md`).
+
+## Let a drop or a delivery name its mineral
+
+- **Status:** open
+- **Why:** a player's cargo mixes minerals since inventory step 7, but
+  `PileAction::Drop` and `Deliver` name no mineral (changing them would
+  change `CommandKind` and the input log), so a drop puts down the first
+  mineral carried, in mineral order, and a delivery takes all of them. A
+  player can't choose which ore to put down.
+- **What to do:** add a mineral to the drop (and maybe the delivery) as a
+  new append-only `CommandKind` variant or field, with the input format bumped,
+  and let the app pick it (the backpack's top unit, or a menu).
+- **Where:** `sim/src/settlement/piles.rs` (`PileLab::plan`),
+  `sim/src/world.rs` (`CommandKind::Pile`), `app/src/piles/mod.rs` (`input`),
+  `app/src/input/gameplay.rs`.
+- **Found in:** inventory step 7 (`kestrel/INVENTORY_HANDOFF.md`, Decisions).
 
 ## Done
 

@@ -97,8 +97,9 @@ pub struct Attach {
 
 /// An agent's carry job (`Carry::job`) moves its next unit: a hauler
 /// loading or unloading at its dock, or a player's depot transfer. In the
-/// `pile_carry` queue it moves the next unit of a player's pile job
-/// (`Hauler::job`), or all of it at pace zero.
+/// `pile_carry` queue it launches the next unit of a player's pile haul (a
+/// carry job with a pile or the collector, walked to by `Hauler::job`), or
+/// all of it at pace zero.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CarryUnit {
     pub agent: u16,
@@ -509,7 +510,7 @@ message_queues! {
     hauler_load: CarryUnit,
     hauler_unload: CarryUnit,
     player_carry: CarryUnit,
-    // Players' pile units, where `PileStep` was: moved at once by their own
+    // Players' pile units, where `PileStep` was: launched by their own
     // handler (`Settlement::pile_unit`), after depot units.
     pile_carry: CarryUnit,
     // Combat: strikes and projectile hits before breaches, so a killing

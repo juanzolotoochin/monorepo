@@ -18,9 +18,9 @@
 //! A unit flies between the cargo and the pile as a `Transfer`, like a depot
 //! unit, held as room on its target until it lands.
 //!
-//! Every unit is conserved: `created` equals the units in piles, cargo, the
-//! collector and the air, checked by [`PileLab::conserved`]. Positions are
-//! world tiles.
+//! Minerals are accounted like any item (`Settlement::balances`): units in
+//! piles, cargo, the collector and the air make up what was set up, dispensed
+//! and dug, and `Settlement::validate` checks it. Positions are world tiles.
 
 use std::collections::BTreeMap;
 
@@ -275,19 +275,6 @@ impl PileLab {
     /// An avatar's hauler, made empty on first use.
     pub fn hauler_mut(&mut self, agent: AgentIx) -> &mut Hauler {
         self.haulers.entry(agent).or_default()
-    }
-
-    /// Mineral units in piles, the collector, `cargo` (every agent's) and
-    /// the air (`transfers`).
-    pub fn total<'a>(&self, cargo: impl IntoIterator<Item = &'a Inventory>, transfers: &BTreeMap<u64, super::Transfer>) -> u64 {
-        let collected = self.collected().iter().map(|&n| n as u64).sum::<u64>();
-        let carried = cargo.into_iter().map(|c| self.carried(c) as u64).sum::<u64>();
-        let flying = transfers.values().filter(|t| self.is_mineral(t.item)).count() as u64;
-        self.piles.values().map(|p| p.units() as u64).sum::<u64>() + carried + collected + flying
-    }
-
-    pub fn conserved<'a>(&self, cargo: impl IntoIterator<Item = &'a Inventory>, transfers: &BTreeMap<u64, super::Transfer>) -> bool {
-        self.total(cargo, transfers) == self.created
     }
 
     /// A dispenser adds up to `requested` units to its output pile, within
@@ -912,12 +899,17 @@ mod tests {
             Carried { units: minerals.iter().sum(), minerals }
         }
 
+        /// Mineral units in piles, cargo and the collector (nothing flies
+        /// here).
         fn total(&self) -> u64 {
-            self.lab.total(self.cargo.values(), &BTreeMap::new())
+            let lab = &self.lab;
+            let carried = self.cargo.values().map(|c| lab.carried(c) as u64).sum::<u64>();
+            lab.piles.values().map(|p| p.units() as u64).sum::<u64>() + carried + lab.collected().iter().map(|&n| n as u64).sum::<u64>()
         }
 
+        /// Every unit set up or dispensed is somewhere.
         fn conserved(&self) -> bool {
-            self.lab.conserved(self.cargo.values(), &BTreeMap::new())
+            self.total() == self.lab.created
         }
     }
 

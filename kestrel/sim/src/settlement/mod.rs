@@ -820,9 +820,6 @@ impl Settlement {
                 return Err(format!("{name} holds an item that isn't a mineral"));
             }
         }
-        if !lab.conserved(self.agents.iter().map(|a| &a.carry.inventory), &self.transfers) {
-            return Err("pile lab units not conserved".into());
-        }
         Ok(())
     }
 }

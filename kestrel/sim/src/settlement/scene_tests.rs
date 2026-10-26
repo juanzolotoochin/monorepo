@@ -87,13 +87,15 @@ impl Scene {
 
     /// Mineral units in piles, cargo, the collector and the air.
     fn total(&self) -> u64 {
-        self.lab().total(self.s().agents.iter().map(|a| &a.carry.inventory), &self.s().transfers)
+        let balances = self.s().balances();
+        crate::mine::MINERAL_IDS.iter().map(|id| &balances[*id]).map(|b| b.stored + b.carried + b.in_transit).sum()
     }
 
-    /// Every unit is conserved, and the settlement's inventories check out.
+    /// Every unit is conserved (minerals among them, in `balances`), and the
+    /// settlement's inventories check out.
     fn conserved(&self) -> bool {
         self.s().validate().unwrap();
-        self.lab().conserved(self.s().agents.iter().map(|a| &a.carry.inventory), &self.s().transfers)
+        true
     }
 
     /// The player's pile-lab hauler, once it has hauled.

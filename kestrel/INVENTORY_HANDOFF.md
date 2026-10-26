@@ -1,6 +1,6 @@
 # Kestrel inventory (design)
 
-Status: decided, being built (branch `kestrel-inventory`). Part of character step 5
+Status: done (branch `kestrel-inventory`, steps 1–10). Part of character step 5
 (`docs/character-definition.md`, "Shared body"). It replaces the earlier
 cargo merge proposal.
 
@@ -211,6 +211,10 @@ gameplay last.
      - **App:** the pile view draws a pile or backpack from its counts, which leave out units in the air, and the toss (`Event::PileToss`, a `Transit` for `ticks`) draws the unit in the air; depot units stay drawn from `transfers` by the settlement view, which leaves pile and collector ends out (`legacy.rs`), so nothing is drawn twice. `render` hides a landing slot while its toss is still running, so a unit that has landed is not drawn in the pile and in the air at once; in a backpack, whose slots shift as minerals mix, a slot is hidden only while it holds the flying unit's mineral (`Transit::material`). `Stock::elsewhere` counts minerals in the air, so the control API's `conserved` holds mid-flight.
      - Tests: `pile_units_fly_to_the_cargo` (all units in the air at once, none in the cargo, room held, the emptied pile kept, `validate` and the totals clean mid-flight; then landed, pile gone, notice). The other pile tests wait for the haul to end and pass unchanged.
 10. **Remove what's left:** `piles::Cargo`, `PileStep`, `ManualUnit`, `PileLab::conserved`.
+   - Done in step 10: no behaviour change; save format stays 19 (nothing saved changed). The golden file is unchanged (`update_golden` rewrote it identically). `testdata/*.hashes` unchanged.
+     - `ManualUnit`, `piles::Cargo` and `PileStep` were already gone (steps 5 and 6). `PileLab::total` and `PileLab::conserved` went: `validate_lab` no longer checks them, since minerals are items accounted like any other (`balances`: piles and the collector `stored`, cargo `carried`, units in the air `in_transit`, against `initial`, `generated`), which `validate` checks first. `PileLab::created` stays: the pile view shows it ("CREATED", "MINED"). The scene tests' `total()` reads the minerals' balances; the lab unit tests count their own piles, cargo and collector.
+     - Stale comments on `CarryUnit` and the `pile_carry` queue ("moved at once") now describe the flight.
+     - Nothing else was left over: the lab's old transfer methods went in step 8 (`plan`), `depot_room` and the lab capacity in step 7, `Hauler::fail` in step 8.
 
 ## Decisions
 
