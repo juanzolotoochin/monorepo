@@ -1601,6 +1601,24 @@ mod tests {
             let diagnostics = self.host.world().resource::<SessionService>().session.diagnostics(Duration::ZERO);
             diagnostics.peers.iter().fold((0, 0), |(n, ticks), peer| (n + peer.late_inputs, ticks + peer.shifted_ticks))
         }
+
+        /// The client's account of the same, from the turns it ran, its
+        /// input margin (ticks) and round trip (ms). Panics if it disagrees
+        /// with the host's once every input has applied.
+        fn client_margin(&self) -> String {
+            let session = &self.client.world().resource::<SessionService>().session;
+            let d = session.diagnostics(Duration::ZERO);
+            assert_eq!(session.pending_inputs(), 0, "inputs still in flight");
+            assert_eq!((d.late_inputs, d.shifted_ticks), self.late_inputs(), "the client saw other late inputs than the host");
+            let rtt = session.stats().rtt.map_or(0.0, |rtt| rtt.as_secs_f64() * 1000.0);
+            format!(
+                "client RTT {rtt:.0} ms, input margin {} ticks ({:.0} ms), late inputs seen by the client {} ({} ticks)",
+                d.input_delay,
+                d.input_delay as f64 * net::TICK.as_secs_f64() * 1000.0,
+                d.late_inputs,
+                d.shifted_ticks
+            )
+        }
     }
 
     /// Holds exactly `held` of the movement keys.
@@ -1647,13 +1665,26 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "late inputs at 100±20 ms; enabled by adaptive input margin (LASER_PREDICTION_HANDOFF step 3)"]
     fn joined_player_movement_needs_no_corrections_at_100_ms() {
         assert_no_corrections(&[("100 ± 20 ms", 100.0, 20.0, 0x5eed + 2)]);
     }
 
     #[test]
-    #[ignore = "late inputs at 150±20 ms with the fixed 133 ms margin; enabled by adaptive input margin (LASER_PREDICTION_HANDOFF step 3)"]
+    fn joined_player_input_margin_settles_near_one_way_on_a_lan() {
+        let mut game = RelayedGame::new(0.0, 0.0, 0x1a7);
+        assert_eq!(game.client.world().resource::<SessionService>().session.input_delay(), NetConfig::default().input_delay, "the host's margin until measured");
+        game.hold(&[KeyCode::KeyD], 120);
+        game.hold(&[], 120);
+        let session = &game.client.world().resource::<SessionService>().session;
+        let rtt = session.stats().rtt.unwrap();
+        let one_way = (rtt / 2).as_nanos().div_ceil(net::TICK.as_nanos()) as u64;
+        let margin = session.input_delay();
+        let report = game.client_margin();
+        assert_eq!(margin, one_way + 1, "{report}");
+        assert!(net::TICK * margin as u32 <= Duration::from_millis(50), "{report}");
+    }
+
+    #[test]
     fn joined_player_movement_needs_no_corrections_at_150_ms() {
         assert_no_corrections(&[("150 ± 20 ms", 150.0, 20.0, 0x5eed + 3)]);
     }
@@ -1699,13 +1730,12 @@ mod tests {
                 };
                 let late = game.late_inputs();
                 let (late, shifted) = (late.0 - late_before.0, late.1 - late_before.1);
+                let margin = game.client.world().resource::<SessionService>().session.input_delay();
                 report += &format!(
-                    "{name:>15} | {scenario:>15} | kept: {kept} | under 0.05: {small} ({small_distance:.3} u) | late inputs: {late} ({shifted} ticks)\n"
+                    "{name:>15} | {scenario:>15} | kept: {kept} | under 0.05: {small} ({small_distance:.3} u) | late inputs: {late} ({shifted} ticks) | margin {margin} ticks\n"
                 );
             }
-            let session = &game.client.world().resource::<SessionService>().session;
-            let rtt = session.stats().rtt.map_or(0.0, |rtt| rtt.as_secs_f64() * 1000.0);
-            report += &format!("{name:>15} | client RTT {rtt:.0} ms, input margin {} ticks\n", session.input_delay());
+            report += &format!("{name:>15} | {}\n", game.client_margin());
         }
         println!("corrections per latency case and scenario:\n{report}");
         assert_eq!(kept_total, 0, "the joined player's avatar was corrected:\n{report}");
@@ -1755,13 +1785,11 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "late inputs at 100±20 ms; enabled by adaptive input margin (LASER_PREDICTION_HANDOFF step 3)"]
     fn joined_player_laser_shots_are_predicted_at_100_ms() {
         assert_lasers_predicted(&[("100 ± 20 ms", 100.0, 20.0, 0x1a5e + 2)]);
     }
 
     #[test]
-    #[ignore = "late inputs at 150±20 ms with the fixed 133 ms margin; enabled by adaptive input margin (LASER_PREDICTION_HANDOFF step 3)"]
     fn joined_player_laser_shots_are_predicted_at_150_ms() {
         assert_lasers_predicted(&[("150 ± 20 ms", 150.0, 20.0, 0x1a5e + 3)]);
     }
@@ -1842,13 +1870,14 @@ mod tests {
                 let late = game.late_inputs();
                 let (late, shifted) = (late.0 - late_before.0, late.1 - late_before.1);
                 let client_at = confirmed(&game.client);
+                let margin = game.client.world().resource::<SessionService>().session.input_delay();
                 report += &format!(
                     "{name:>15} | {scenario:>21} | ends at ({:.1}, {:.1}) |",
                     client_at.x,
                     client_at.z
                 );
                 report += &format!(
-                    " fired {fired}, confirmed {confirmed_shots} ({cover_hits} on cover), drawn early {drawn}, beams {} ({predicted_beams} predicted), laser sounds {sounds} | laser mispredictions {laser_mispredictions}, largest end difference {end_difference:.4} u | drawn {:.0}–{:.0} ms before confirmation | other corrections: {} | late inputs: {late} ({shifted} ticks)\n",
+                    " fired {fired}, confirmed {confirmed_shots} ({cover_hits} on cover), drawn early {drawn}, beams {} ({predicted_beams} predicted), laser sounds {sounds} | laser mispredictions {laser_mispredictions}, largest end difference {end_difference:.4} u | drawn {:.0}–{:.0} ms before confirmation | other corrections: {} | late inputs: {late} ({shifted} ticks) | margin {margin} ticks\n",
                     beams.len(),
                     lead_min * 1000.0,
                     lead_max * 1000.0,
@@ -1866,9 +1895,7 @@ mod tests {
                     failures.push(format!("{name} / {scenario}: corrections {kinds:?}, outcomes {outcomes:?}"));
                 }
             }
-            let session = &game.client.world().resource::<SessionService>().session;
-            let rtt = session.stats().rtt.map_or(0.0, |rtt| rtt.as_secs_f64() * 1000.0);
-            report += &format!("{name:>15} | client RTT {rtt:.0} ms, input margin {} ticks, host avatar at {host_at}\n", session.input_delay());
+            report += &format!("{name:>15} | {}, host avatar at {host_at}\n", game.client_margin());
         }
         println!("laser shots per latency case and scenario:\n{report}");
         assert!(failures.is_empty(), "laser shots were not predicted exactly:\n{report}\n{}", failures.join("\n"));
