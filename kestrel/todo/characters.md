@@ -202,6 +202,22 @@
   `threats_in_reach`, `swing_lands`), `avatar.rs` (`walk`).
 - **Found in:** task 3 of `kestrel/GHOUL_ATTACK_HANDOFF.md`.
 
+## Flash the player's screen or body when it is hurt
+
+- **Status:** open
+- **Why:** nothing shows the local player being hurt beyond its nametag's
+  health, a sound and (for a ghoul hit) blood and camera shake. A laser hit
+  on a player plays only `LaserImpact`. `effects::Feedback::flash` is set by
+  the player's own hits (`combat.rs`) and decayed (`effects.rs`), but
+  nothing draws it, so it can't be reused for a hurt flash.
+- **What to do:** draw a short hurt cue for the local player, for any
+  damage (laser or ghoul): a red screen-edge flash from `Feedback::flash`,
+  or an emissive flash on the actor's materials like `ImpactTarget` slots.
+  Drive it from the confirmed health drop so every damage source gets it.
+- **Where:** `kestrel/app/src/effects.rs` (`Feedback`), `settlement.rs`
+  (the `ThreatSwing` presentation), `combat.rs`.
+- **Found in:** task 4 of `kestrel/GHOUL_ATTACK_HANDOFF.md`.
+
 ## Done
 
 ### Release a transfer's reservation when its avatar respawns

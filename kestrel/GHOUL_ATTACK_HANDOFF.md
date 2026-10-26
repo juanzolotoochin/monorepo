@@ -147,6 +147,35 @@ Each task is its own commit on branch `kestrel-ghoul-attacks`, in order.
    can read it (a pose or tell on the ghoul's skin) and presents the hit on
    the player (sound, flash or similar, through the existing event path).
    Confirmed state only: the threat is not the local player's action.
+
+   Done in task 4:
+   - **Snapshot** (`app/src/legacy.rs`): `Threat.windup: Option<Windup {
+     agent, lands, ticks }>` (`ticks` is the character's `attack.windup`)
+     and `Threat.swung: Option<u64>`, the tick its last swing landed,
+     derived from `ready_at - 1 - cooldown` (no new sim state). Positions
+     are drawn between the previous tick and the last one, so a windup in
+     the previous tick that landed on the last one is carried; one a
+     stagger cancelled (landing later) isn't. `Simulation::drawn_time()`
+     is that drawn tick (`tick - 1 + alpha`). `ThreatWindup` still maps to
+     nothing (the state draws it, also for a client joining mid-windup);
+     `ThreatSwing` maps to `Event::ThreatSwing { threat, agent, from, hit,
+     killed }`.
+   - **Pose** (`app/src/rig.rs`): `Rig::pose` takes a `Strike { windup,
+     swing }`. A biped raises both arms overhead and leans back as the
+     windup builds (eased out, so it reads early), then on landing snaps
+     its arms down in front and lunges, drawn back over 0.3 s, hit or miss.
+     `settlement::threat_strike` computes it from `drawn_time`.
+   - **Hit and miss** (`app/src/settlement.rs`): a hit plays `GhoulHit`
+     and sprays blood off the player, away from the threat (at the drawn
+     local avatar for the local player); the local player also gets camera
+     shake (trauma 0.3, 0.45 on a kill). A miss plays `Swing`. No new
+     assets. No hurt flash exists yet: filed as "Flash the player's screen
+     or body when it is hurt" in `todo/characters.md`.
+   - **Tests** (`settlement.rs`):
+     `the_view_carries_a_threats_windup_until_its_drawn_tick_passes_it`,
+     `a_threats_swing_event_names_the_player_and_where_the_threat_stands`,
+     `a_threats_windup_builds_with_its_drawn_tick_then_its_swing_follows_through`.
+     Not checked visually: no scene has ghouls and hurtable players.
 5. **The knockback push test.** Do the todo "Test a knockback that pushes
    the joined player" (`todo/characters.md`) with a ghoul hit, then move it
    to Done.

@@ -296,6 +296,21 @@ pub struct Threat {
     pub shocked_until: u64,
     pub stagger_until: u64,
     pub knockback: Point,
+    /// The swing it is winding up, drawn until it lands.
+    pub windup: Option<Windup>,
+    /// The tick its last swing landed, hit or miss.
+    pub swung: Option<u64>,
+}
+
+/// A threat's swing being wound up (`sim::settlement::Windup`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Windup {
+    /// The player it swings at.
+    pub agent: String,
+    /// The tick the swing lands.
+    pub lands: u64,
+    /// The windup's length: it started on tick `lands - ticks`.
+    pub ticks: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -419,6 +434,9 @@ pub enum Event {
     ArcFired { from: Point, to: Point },
     LaserFired { agent: u16, to: Point, hit_actor: bool, cover: Option<u16> },
     Breach { position: Point },
+    /// A threat's swing landed on player `agent` (`hit`) or missed. `from`
+    /// is where the threat stands, if it still does.
+    ThreatSwing { threat: u64, agent: String, from: Option<Point>, hit: bool, killed: bool },
 }
 
 /// One frame's settlement, interpolated between the last two ticks.
@@ -462,6 +480,13 @@ impl Simulation {
     /// Render time in ticks: the last tick plus the interpolation fraction.
     pub fn time(&self) -> f32 {
         self.tick as f32 + self.alpha
+    }
+
+    /// The tick interpolated positions show, between the previous tick
+    /// (`alpha` 0) and the last one. Timing drawn on a moving entity, such
+    /// as a threat's windup, uses this so it keeps pace with the entity.
+    pub fn drawn_time(&self) -> f32 {
+        self.tick as f32 - 1.0 + self.alpha
     }
 
     pub fn seconds(&self) -> f64 {
@@ -555,6 +580,15 @@ impl Simulation {
             .iter()
             .map(|t| {
                 let before = previous.and_then(|p| p.threat(t.id));
+                let attack = current.characters[current.waves[t.wave as usize].character as usize].attack;
+                // Positions are drawn between the previous tick and this one,
+                // so a windup that landed this tick is still drawn finishing.
+                // One a stagger cancelled (landing later) just goes away.
+                let windup = t.windup.or_else(|| before.and_then(|b| b.windup).filter(|w| w.lands <= tick));
+                let windup = windup.zip(attack).map(|(w, a)| Windup { agent: agent_name(w.agent), lands: w.lands, ticks: a.windup });
+                // A landed swing sets `ready_at` to the tick after it plus the
+                // cooldown; it is 0 before the first one.
+                let swung = attack.and_then(|a| t.ready_at.checked_sub(1 + a.cooldown));
                 let threat = Threat {
                     id: t.id,
                     wave: t.wave as usize,
@@ -567,6 +601,8 @@ impl Simulation {
                     shocked_until: t.shocked_until,
                     stagger_until: t.stagger_until,
                     knockback: [t.knockback.x.to_f32(), t.knockback.y.to_f32()],
+                    windup,
+                    swung,
                 };
                 (t.id, threat)
             })
@@ -667,8 +703,16 @@ impl Simulation {
                     s::Event::LaserFired { agent, to, hit_actor, cover, .. } => Event::LaserFired { agent: *agent, to: p(*to), hit_actor: *hit_actor, cover: *cover },
                     s::Event::Breach { position } => Event::Breach { position: p(*position) },
                     s::Event::PileToss { .. } => return None,
-                    // Not presented yet (GHOUL_ATTACK_HANDOFF.md, task 4).
-                    s::Event::ThreatWindup { .. } | s::Event::ThreatSwing { .. } => return None,
+                    // Drawn from the threat's `windup` instead, which also
+                    // covers a client that joins mid-windup.
+                    s::Event::ThreatWindup { .. } => return None,
+                    s::Event::ThreatSwing { threat, agent, hit, killed, .. } => Event::ThreatSwing {
+                        threat: *threat,
+                        agent: agent_name(*agent),
+                        from: current.threat(*threat).map(|t| p(t.position)),
+                        hit: *hit,
+                        killed: *killed,
+                    },
                 })
             })
             .collect();

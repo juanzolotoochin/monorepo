@@ -759,7 +759,7 @@ pub fn pose_selected_rig(world: &mut World) {
         let scale = state.scale;
         let travel = if moving { cycle * state.rig.cycle_distance(scale) } else { 0.0 };
         state.rig.pose(world, Vec3::new(0.0, STUDIO_FLOOR_Y, 0.0), heading,
-            0.0, scale, travel, 0.0, 0.0, 0.0, None, Some(moving));
+            0.0, scale, travel, 0.0, 0.0, 0.0, crate::rig::Strike::default(), None, Some(moving));
     });
 }
 
