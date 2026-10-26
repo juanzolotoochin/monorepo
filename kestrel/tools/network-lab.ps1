@@ -1,0 +1,224 @@
+<#
+.SYNOPSIS
+Plays a Kestrel host and client on this machine through a delaying UDP relay.
+
+.DESCRIPTION
+Starts a localhost relay (network_lab/relay.mjs), a host window and a client
+window:
+
+    Client window <-> relay 127.0.0.1:<ProxyPort> <-> host 127.0.0.1:<HostPort>
+
+The relay holds each datagram, in both directions, for
+max(0, DelayMs + uniform(-JitterMs, +JitterMs)) ms. Datagrams may overtake one
+another. Added round trip is about 2 x DelayMs; the game's input margin still
+applies on top.
+
+The launcher stays attached. Ctrl+C, or closing either game window, stops the
+processes it started and nothing else. Each run writes its parameters, process
+IDs, relay counters and logs to network_lab/runs/<time>/.
+
+It reuses the built game. Pass -Build to build it first (once, no tests), or
+-GamePath for a game built elsewhere.
+
+The relay polls during the last ~17 ms before each delivery, because Windows
+timers wake in ~15.6 ms steps. That costs about one CPU core while packets are
+in flight. -CoarseTimers saves the core but adds 0-15 ms to each datagram.
+
+.EXAMPLE
+.\kestrel\tools\network-lab.ps1 -DelayMs 75 -JitterMs 20 -Seed 42
+#>
+[CmdletBinding()]
+param(
+    [string] $Scene = "laser-pit",
+    [ValidateRange(0, 10000)] [int] $DelayMs = 75,
+    [ValidateRange(0, 10000)] [int] $JitterMs = 20,
+    [ValidateRange(0, 4294967295)] [long] $Seed = 42,
+    [ValidateRange(1, 65535)] [int] $HostPort = 7777,
+    [ValidateRange(1, 65535)] [int] $ProxyPort = 7778,
+    [switch] $Build,
+    [switch] $CoarseTimers,
+    [string] $GamePath
+)
+
+$ErrorActionPreference = "Stop"
+$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
+$Relay = Join-Path $PSScriptRoot "network_lab/relay.mjs"
+
+function Fail([string] $Message) {
+    Write-Host "network-lab: $Message" -ForegroundColor Red
+    exit 1
+}
+
+if ($HostPort -eq $ProxyPort) { Fail "-HostPort and -ProxyPort must differ." }
+if ($Scene -notmatch '^[a-z0-9-]+$') { Fail "-Scene must be a scene name such as laser-pit." }
+
+$Node = Get-Command node -ErrorAction SilentlyContinue
+if (-not $Node) { Fail "Node.js is required for the relay and was not found on PATH." }
+
+foreach ($port in @($HostPort, $ProxyPort)) {
+    $taken = Get-NetUDPEndpoint -LocalPort $port -ErrorAction SilentlyContinue
+    if ($taken) {
+        $owners = ($taken | ForEach-Object { $_.OwningProcess } | Sort-Object -Unique | ForEach-Object {
+            $process = Get-Process -Id $_ -ErrorAction SilentlyContinue
+            if ($process) { "$($process.ProcessName) ($_)" } else { "PID $_" }
+        }) -join ", "
+        Fail "UDP port $port is in use by $owners. Close it or pass -HostPort/-ProxyPort."
+    }
+}
+
+$DefaultGame = Join-Path $RepoRoot "bazel-bin/kestrel/app/demo.exe"
+if ($Build) {
+    if ($GamePath) { Fail "Pass -Build or -GamePath, not both." }
+    # `bazel run` builds for this machine (see .bazelrc); a plain remote
+    # `bazel build` would produce a Linux binary. --script_path makes `run`
+    # build and stop without starting the game. --shell_executable=/bin/bash
+    # keeps Windows Bazel from handing MSYS bash to remote Linux genrules.
+    $script = Join-Path ([IO.Path]::GetTempPath()) "kestrel-network-lab-build.bat"
+    Write-Host "Building the game (no tests)..."
+    Push-Location $RepoRoot
+    try {
+        & bazel run --config=remote --shell_executable=/bin/bash "--script_path=$script" //kestrel/app:demo
+        $code = $LASTEXITCODE
+    } finally {
+        Pop-Location
+        Remove-Item $script -ErrorAction SilentlyContinue
+    }
+    if ($code -ne 0) { Fail "Build failed (bazel exited with $code)." }
+}
+
+$Game = if ($GamePath) { $GamePath } else { $DefaultGame }
+if (-not (Test-Path $Game -PathType Leaf)) {
+    Fail "No game at $Game. Build it once with -Build, or pass -GamePath <path to demo.exe>."
+}
+$Game = (Resolve-Path $Game).Path
+$GameBuilt = (Get-Item $Game).LastWriteTime
+Write-Host "Game:  $Game"
+Write-Host "Built: $($GameBuilt.ToString('yyyy-MM-dd HH:mm:ss'))"
+
+$RunDir = Join-Path $PSScriptRoot ("network_lab/runs/" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+New-Item -ItemType Directory -Force $RunDir | Out-Null
+
+$Started = [ordered]@{}
+$Run = [ordered]@{
+    started_at = (Get-Date).ToString("o")
+    scene = $Scene
+    delay_ms = $DelayMs
+    jitter_ms = $JitterMs
+    seed = $Seed
+    coarse_timers = [bool] $CoarseTimers
+    host_port = $HostPort
+    proxy_port = $ProxyPort
+    game = $Game
+    game_built_at = $GameBuilt.ToString("o")
+    pids = $Started
+}
+
+function Save-Run {
+    $Run | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $RunDir "run.json")
+}
+
+# Starts a process attached to this console (so no extra windows) with its
+# output in the run directory, and remembers it for cleanup.
+function Start-Part([string] $Name, [string] $Path, [string[]] $Arguments) {
+    $quoted = $Arguments | ForEach-Object { if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ } }
+    $process = Start-Process -FilePath $Path -ArgumentList $quoted -NoNewWindow -PassThru `
+        -RedirectStandardOutput (Join-Path $RunDir "$Name.out.log") `
+        -RedirectStandardError (Join-Path $RunDir "$Name.err.log")
+    $Started[$Name] = $process.Id
+    Save-Run
+    $process
+}
+
+function Show-Log([string] $Name) {
+    foreach ($stream in @("err", "out")) {
+        $log = Join-Path $RunDir "$Name.$stream.log"
+        if ((Test-Path $log) -and (Get-Item $log).Length -gt 0) {
+            Write-Host "--- $Name.$stream.log (last lines) ---"
+            Get-Content $log -Tail 15 | ForEach-Object { Write-Host $_ }
+        }
+    }
+}
+
+function Read-Stats {
+    $file = Join-Path $RunDir "stats.json"
+    if (-not (Test-Path $file)) { return $null }
+    try { Get-Content $file -Raw | ConvertFrom-Json } catch { $null }
+}
+
+function Format-Stats($stats) {
+    if (-not $stats) { return "no relay stats yet" }
+    $parts = foreach ($name in @("client_to_host", "host_to_client")) {
+        $d = $stats.$name
+        "{0}: {1} delivered, {2} queue-cap drops, {3} reordered, peak queue {4}, late p99 {5} ms" -f `
+            $name, $d.delivered, $d.queue_cap_drops, $d.reordered, $d.peak_queued_packets, $d.lateness_ms.p99
+    }
+    ($parts + "stranger drops: $($stats.stranger_drops)") -join "`n  "
+}
+
+$processes = [ordered]@{}
+$exitCode = 0
+try {
+    Save-Run
+    $processes.relay = Start-Part "relay" $Node.Source @(
+        $Relay, "--listen", $ProxyPort, "--host", $HostPort,
+        "--delay-ms", $DelayMs, "--jitter-ms", $JitterMs, "--seed", $Seed,
+        "--spin-ms", $(if ($CoarseTimers) { 0 } else { 17 }),
+        "--run-dir", $RunDir, "--parent-pid", $PID)
+    $deadline = (Get-Date).AddSeconds(10)
+    while (-not (Test-Path (Join-Path $RunDir "ready.json"))) {
+        if ($processes.relay.HasExited) { Show-Log "relay"; throw "The relay exited during startup." }
+        if ((Get-Date) -gt $deadline) { Show-Log "relay"; throw "The relay did not report ready within 10 s." }
+        Start-Sleep -Milliseconds 100
+    }
+
+    $processes.host = Start-Part "host" $Game @("--host", $HostPort, "--scene", $Scene, "--name", "Host")
+    $deadline = (Get-Date).AddSeconds(60)
+    while (-not (Get-NetUDPEndpoint -LocalPort $HostPort -OwningProcess $processes.host.Id -ErrorAction SilentlyContinue)) {
+        if ($processes.host.HasExited) { Show-Log "host"; throw "The host exited during startup." }
+        if ((Get-Date) -gt $deadline) { Show-Log "host"; throw "The host did not open UDP port $HostPort within 60 s." }
+        Start-Sleep -Milliseconds 200
+    }
+
+    $processes.client = Start-Part "client" $Game @("--join", "127.0.0.1:$ProxyPort", "--name", "Client")
+
+    Write-Host ""
+    Write-Host "Running: $DelayMs ms +/- $JitterMs ms each way (seed $Seed); added RTT ~$(2 * $DelayMs) ms before jitter and polling."
+    Write-Host "In either window press / then Diagnostics -> Network."
+    Write-Host "Both windows share this machine's CPU/GPU: read frame time alongside the network graphs."
+    Write-Host "Run directory: $RunDir"
+    Write-Host "Ctrl+C or close a game window to stop."
+
+    $nextReport = (Get-Date).AddSeconds(15)
+    while ($true) {
+        $ended = $processes.Keys | Where-Object { $processes[$_].HasExited }
+        if ($ended) {
+            foreach ($name in $ended) {
+                Write-Host "$name exited (code $($processes[$name].ExitCode))."
+                if ($processes[$name].ExitCode -ne 0) { Show-Log $name; $exitCode = 1 }
+            }
+            break
+        }
+        if ((Get-Date) -gt $nextReport) {
+            Write-Host ("relay  " + (Format-Stats (Read-Stats)))
+            $nextReport = (Get-Date).AddSeconds(15)
+        }
+        Start-Sleep -Milliseconds 500
+    }
+} catch {
+    Write-Host "network-lab: $($_.Exception.Message)" -ForegroundColor Red
+    $exitCode = 1
+} finally {
+    # Ask the relay to write its final stats, then stop whatever is left of
+    # what this launcher started.
+    New-Item -ItemType File -Force (Join-Path $RunDir "stop") | Out-Null
+    if ($processes.relay) { $processes.relay.WaitForExit(3000) | Out-Null }
+    foreach ($process in $processes.Values) {
+        if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+    }
+    $Run.ended_at = (Get-Date).ToString("o")
+    Save-Run
+    Write-Host "Stopped. Relay totals:"
+    Write-Host ("  " + (Format-Stats (Read-Stats)))
+    Write-Host "Logs and counters: $RunDir"
+}
+exit $exitCode

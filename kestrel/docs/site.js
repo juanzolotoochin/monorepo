@@ -9,7 +9,7 @@ const images = Object.fromEntries(Object.entries(imageFiles).map(([path, url]) =
 const groups = [
   ['Start here', ['README.md', 'architecture.md', 'asset-walkthrough.md', 'architecture-reference.md']],
   ['Systems', ['controller-support.md', 'asset-system.md', 'destructible-assets.md', 'character-definition.md', 'character-animation.md', 'service-layers.md']],
-  ['Operations', ['flaky-tests.md']],
+  ['Operations', ['network-diagnostics.md', 'flaky-tests.md']],
 ];
 
 const title = path => pages[path]?.match(/^#\s+(.+)$/m)?.[1] || path.split('/').pop().replace(/\.md$/, '').replaceAll('-', ' ');

@@ -6,7 +6,7 @@ use sim::{Command, CommandKind, PlayerId, Simulation, World};
 
 use crate::protocol::{decode, encode, encoded_len, Input, Packet, StableId, MAX_PACKET, SAVE_CHUNK};
 use crate::transport::Transport;
-use crate::{millis, DesyncPolicy, HashLog, NetConfig, NetEvent, NetStats, Pacer, HOST_PLAYER, TICK};
+use crate::{millis, DesyncPolicy, HashLog, NetConfig, NetDiagnostics, NetEvent, NetStats, Pacer, PeerDiagnostics, HOST_PLAYER, TICK};
 
 /// Ticks the host runs per update at most. After a longer stall it drops the
 /// missed time instead of bursting.
@@ -54,6 +54,10 @@ struct Remote<A> {
     loaded: bool,
     last_heard: Duration,
     ping: Option<(u32, Duration)>,
+    late_inputs: u64,
+    shifted_ticks: u64,
+    last_requested_tick: Option<u64>,
+    last_assigned_tick: Option<u64>,
 }
 
 pub struct Host<T: Transport> {
@@ -84,6 +88,7 @@ pub struct Host<T: Transport> {
     last_send: Option<Duration>,
     events: Vec<NetEvent>,
     stats: NetStats,
+    steps_last_update: u64,
 }
 
 impl<T: Transport> Host<T> {
@@ -122,6 +127,7 @@ impl<T: Transport> Host<T> {
             last_send: None,
             events: Vec::new(),
             stats: NetStats::default(),
+            steps_last_update: 0,
         }
     }
 
@@ -168,6 +174,10 @@ impl<T: Transport> Host<T> {
             remote.input_ack = 0;
             remote.hashes_from = tick;
             remote.loaded = false;
+            remote.late_inputs = 0;
+            remote.shifted_ticks = 0;
+            remote.last_requested_tick = None;
+            remote.last_assigned_tick = None;
         }
         self.starting = true;
     }
@@ -183,6 +193,27 @@ impl<T: Transport> Host<T> {
 
     pub fn stats(&self) -> &NetStats {
         &self.stats
+    }
+
+    pub fn diagnostics(&self, now: Duration) -> NetDiagnostics {
+        NetDiagnostics {
+            host_tick: Some(self.sim.world().tick()),
+            remote_input_delay: self.config.input_delay,
+            jitter_buffer: self.config.jitter_buffer,
+            steps_last_update: self.steps_last_update,
+            peers: self.remotes.iter().map(|remote| PeerDiagnostics {
+                player: remote.player,
+                loading: !remote.loaded,
+                last_packet_age: now.saturating_sub(remote.last_heard),
+                turn_ack: remote.turn_ack,
+                input_ack: remote.input_ack,
+                late_inputs: remote.late_inputs,
+                shifted_ticks: remote.shifted_ticks,
+                last_requested_tick: remote.last_requested_tick,
+                last_assigned_tick: remote.last_assigned_tick,
+            }).collect(),
+            ..NetDiagnostics::default()
+        }
     }
 
     pub fn input_delay(&self) -> u64 {
@@ -220,6 +251,7 @@ impl<T: Transport> Host<T> {
     /// Handles packets, runs every tick due by `now` (calling `on_step` after
     /// each), and sends turns.
     pub fn update(&mut self, now: Duration, mut on_step: impl FnMut(&World)) {
+        self.steps_last_update = 0;
         self.receive(now);
         self.drop_silent_clients(now);
         if self.starting && self.remotes.iter().all(|r| r.loaded) {
@@ -237,6 +269,7 @@ impl<T: Transport> Host<T> {
                 self.step();
                 on_step(self.sim.world());
             }
+            self.steps_last_update = due;
             self.pacer.advance(due);
             self.check_early_reports();
         }
@@ -322,6 +355,10 @@ impl<T: Transport> Host<T> {
             loaded: false,
             last_heard: now,
             ping: None,
+            late_inputs: 0,
+            shifted_ticks: 0,
+            last_requested_tick: None,
+            last_assigned_tick: None,
         });
         self.events.push(NetEvent::PlayerJoined { player });
     }
@@ -357,10 +394,14 @@ impl<T: Transport> Host<T> {
             remote.input_ack = input.seq;
             let tick = if input.tick < open_tick {
                 self.stats.late_inputs += 1;
+                remote.late_inputs += 1;
+                remote.shifted_ticks += open_tick - input.tick;
                 open_tick
             } else {
                 input.tick
             };
+            remote.last_requested_tick = Some(input.tick);
+            remote.last_assigned_tick = Some(tick);
             self.open.entry(tick).or_default().push(Command { player, kind: input.kind });
         }
         let hashes_from = remote.hashes_from;

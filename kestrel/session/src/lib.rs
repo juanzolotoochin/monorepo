@@ -238,6 +238,15 @@ impl Session {
         }
     }
 
+    /// Networking observations on this peer's caller-supplied clock.
+    pub fn diagnostics(&self, now: Duration) -> net::NetDiagnostics {
+        match &self.peer {
+            Peer::Host(host) => host.diagnostics(now),
+            Peer::Client(client) => client.diagnostics(now),
+            Peer::Replay { .. } => net::NetDiagnostics::default(),
+        }
+    }
+
     /// Whether a replay has run out of turns.
     pub fn finished(&self) -> bool {
         matches!(&self.peer, Peer::Replay { sim, log, .. } if sim.world().tick() >= log.end_tick())

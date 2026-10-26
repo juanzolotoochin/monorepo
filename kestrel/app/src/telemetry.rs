@@ -1,4 +1,6 @@
 //! Bounded performance samples. CPU wall time is kept separate from deterministic game time.
+mod network;
+pub use network::NetworkFrame;
 use bevy::prelude::*;
 use debug_ui::{egui, GameInput, ImguiManager, ImguiMenu, MenuHandle, MenuId, MenuSpec};
 use serde_json::{json, Value};
@@ -52,6 +54,7 @@ impl Samples {
 }
 #[derive(Resource, Default)]
 pub struct Telemetry {
+    pub network: network::NetworkDiagnostics,
     samples: BTreeMap<&'static str, Samples>,
     pub counters: BTreeMap<&'static str, u64>,
     pub gauges: BTreeMap<&'static str, f64>,
@@ -61,6 +64,11 @@ pub struct Telemetry {
     overlay: Option<Entity>,
 }
 impl Telemetry {
+    pub fn network_frame(&mut self, mut frame: NetworkFrame) {
+        frame.frame_ms = self.samples.get("frame_wall").and_then(|samples| samples.values.back().copied());
+        self.network.record(frame);
+    }
+
     pub fn sample(&mut self, name: &'static str, ms: f64) {
         self.samples.entry(name).or_default().push(ms);
     }
@@ -196,6 +204,7 @@ fn overlay_text(t: &Telemetry, entities: usize, meshes: usize) -> String {
     let render = (frame - update).max(0.);
     text += &format!("\nCPU {update:.1} ms update / {render:.1} ms render and wait");
     text += &format!("\nSESSION {session:.2} ms / p95 {session_p95:.2} / {ticks:.2} ticks per frame");
+    text += &network_line(t, Instant::now());
     text += &format!("\n\nWORLD TICK {total:.2} ms / p95 {total_p95:.2}");
     for (name, label) in TICK_STAGES.iter().chain(&[("tick_copy", "copy for view")]) {
         let (mean, p95) = t.recent(name);
@@ -207,6 +216,18 @@ fn overlay_text(t: &Telemetry, entities: usize, meshes: usize) -> String {
         t.gauges.get("pooled_rigs").unwrap_or(&0.)
     );
     text
+}
+/// The round trip to the host, smoothed and latest, during a networked game.
+/// Only clients measure it.
+fn network_line(t: &Telemetry, now: Instant) -> String {
+    let Some(frame) = t.network.current(now) else {
+        return String::new();
+    };
+    let ms = |d: Option<Duration>| d.map_or("--".into(), |d| format!("{:.0}", d.as_secs_f64() * 1000.));
+    match frame.role {
+        "Client" => format!("\nNET RTT {} ms / last {}", ms(frame.stats.rtt), ms(frame.diagnostics.rtt_sample)),
+        _ => "\nNET host / RTT is measured by clients".into(),
+    }
 }
 /// F3 adds the breakdown to the HUD line, unless the debug UI has the key.
 pub fn shortcut(input: Res<GameInput>, mut telemetry: ResMut<Telemetry>) {
@@ -220,6 +241,7 @@ pub fn shortcut(input: Res<GameInput>, mut telemetry: ResMut<Telemetry>) {
 const MENUS: &[MenuSpec] = &[
     MenuSpec::new("frame_timing", "Diagnostics", "Frame timing"),
     MenuSpec::new("counters", "Diagnostics", "Counters and gauges"),
+    MenuSpec::new("network", "Diagnostics", "Network"),
 ];
 
 impl ImguiMenu for Telemetry {
@@ -227,9 +249,13 @@ impl ImguiMenu for Telemetry {
         MENUS
     }
 
-    fn show_menu(&mut self, id: MenuId, root: &mut egui::Ui, open: &mut bool, _world: &mut World) {
+    fn show_menu(&mut self, id: MenuId, root: &mut egui::Ui, open: &mut bool, world: &mut World) {
         let window = id.window().open(open);
         match id.id() {
+            "network" => window.default_width(520.0).vscroll(true).show(root.ctx(), |ui| {
+                let active = world.get_resource::<crate::lockstep::SessionService>().is_some_and(|service| service.networked());
+                self.network.show(ui, active);
+            }),
             "frame_timing" => window.default_pos([16.0, 40.0]).default_width(330.0).show(root.ctx(), |ui| self.frame_timing(ui)),
             _ => window.default_pos([360.0, 40.0]).default_width(280.0).show(root.ctx(), |ui| self.counters(ui)),
         };
@@ -340,7 +366,7 @@ pub fn snapshot(world: &World) -> Value {
     let t = world.resource::<Telemetry>();
     let timings: BTreeMap<_, _> = t.samples.iter().map(|(k, v)| (*k, v.snapshot())).collect();
     let diagnostics:Vec<_>=world.get_resource::<bevy::diagnostic::DiagnosticsStore>().map(|d|d.iter().filter_map(|d|d.value().map(|v|json!({"path":d.path().to_string(),"value":v,"average":d.average(),"smoothed":d.smoothed(),"unit":d.suffix}))).collect()).unwrap_or_default();
-    json!({"version":1,"timings":timings,"counters":t.counters,"gauges":t.gauges,"render_diagnostics":diagnostics,"timing_scope":"CPU wall time; frame_wall includes rendering/pacing/readback. GPU durations only when reported by render diagnostics.","rolling_window":WINDOW})
+    json!({"version":1,"timings":timings,"counters":t.counters,"gauges":t.gauges,"network":t.network.snapshot(),"render_diagnostics":diagnostics,"timing_scope":"CPU wall time; frame_wall includes rendering/pacing/readback. GPU durations only when reported by render diagnostics.","rolling_window":WINDOW})
 }
 #[cfg(test)]
 mod tests {
@@ -357,5 +383,29 @@ mod tests {
         assert_eq!(v["window"], 240);
         assert_eq!(v["max_ms"], 1000.);
         assert!(v["p95_ms"].as_f64().unwrap() > 980.);
+    }
+    #[test]
+    fn network_line_shows_client_rtt_only_while_the_session_records() {
+        let now = Instant::now();
+        let frame = |role| NetworkFrame {
+            at: now,
+            role,
+            status: "playing".into(),
+            world: 1,
+            tick: Some(12),
+            pending: 0,
+            stats: net::NetStats { rtt: Some(Duration::from_millis(152)), ..default() },
+            diagnostics: net::NetDiagnostics { rtt_sample: Some(Duration::from_millis(160)), ..default() },
+            update_ms: 1.,
+            tick_ms: None,
+            frame_ms: None,
+        };
+        let mut t = Telemetry::default();
+        assert_eq!(network_line(&t, now), "");
+        t.network.record(frame("Client"));
+        assert_eq!(network_line(&t, now), "\nNET RTT 152 ms / last 160");
+        assert_eq!(network_line(&t, now + Duration::from_secs(5)), "", "history after the session is not live");
+        t.network.record(frame("Host"));
+        assert_eq!(network_line(&t, now), "\nNET host / RTT is measured by clients");
     }
 }
