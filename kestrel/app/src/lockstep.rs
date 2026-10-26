@@ -376,6 +376,13 @@ fn scene_setup(library: &SceneLibrary, index: usize, cache: &crate::assets::Mode
         player: scene.player.clone(),
         extent: q(crate::assets::extent(pack)),
         obstacles: found.discs.iter().map(disc).collect(),
+        destructibles: pack.destructibles.iter().map(|piece| sim::terrain::Destructible {
+            disc: sim::terrain::Disc {
+                center: FxVec2::new(q(piece.center[0]), q(piece.center[2])),
+                radius: q(piece.radius),
+            },
+            health: piece.health,
+        }).collect(),
         doors: found.doors.iter().map(disc).collect(),
         surfaces,
         platforms_only,

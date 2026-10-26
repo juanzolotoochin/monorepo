@@ -392,7 +392,7 @@ impl PileLab {
         let offset = center - self.center;
         offset.x.abs() <= self.limit
             && offset.y.abs() <= self.limit
-            && terrain.obstacles.iter().all(|o| nav::distance(o.center, center) > o.radius + radius + Fx::from_ratio(1, 5))
+            && terrain.blocking_obstacles().all(|o| nav::distance(o.center, center) > o.radius + radius + Fx::from_ratio(1, 5))
     }
 }
 

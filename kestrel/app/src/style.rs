@@ -20,6 +20,14 @@ pub struct MaterialBindings(pub Vec<(Handle<StandardMaterial>, String, StandardM
 #[derive(Component)]
 struct Environment;
 #[derive(Component)]
+pub struct DestructibleView {
+    pub index: usize,
+    pub last_health: u16,
+    pub max_health: u16,
+}
+#[derive(Component)]
+pub struct DamageMaterial(pub Color);
+#[derive(Component)]
 struct StyledActor;
 #[derive(Component)]
 pub struct WeaponVisual(pub content::scenario::Weapon);
@@ -271,6 +279,22 @@ pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack, studio: bool) {
                     radius,
                 }),
             ));
+        }
+    }
+    if !studio {
+        for (index, piece) in scene.destructibles.iter().enumerate() {
+            let root = world.spawn((Environment, WorldScoped::default(), DestructibleView {
+                index, last_health: piece.health, max_health: piece.health,
+            },
+                Obstacle(Disc { center: Vec3::from_array(piece.center), radius: piece.radius }),
+                Transform::default(), Visibility::Inherited)).id();
+            let key = content_key(&(&profile, &piece.meshes));
+            for (mesh, material) in upload(world, key, &piece.meshes, &profile) {
+                let original = world.resource::<Assets<StandardMaterial>>().get(&material).expect("uploaded material").clone();
+                let unique = world.resource_mut::<Assets<StandardMaterial>>().add(original.clone());
+                let child = world.spawn((Mesh3d(mesh), MeshMaterial3d(unique), DamageMaterial(original.base_color), Transform::default())).id();
+                world.entity_mut(root).add_child(child);
+            }
         }
     }
     use voxel_assets::ActorPart;

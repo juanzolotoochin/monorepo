@@ -112,7 +112,7 @@ mod tests {
                 ("field", 0, 0),
                 ("forest-outpost", 0, 0),
                 ("jetpack-lab", 0, 0),
-                ("laser-pit", 125, 0),
+                ("laser-pit", 110, 0),
                 ("mining-deck", 14, 0),
                 ("moonlit-glade", 24, 0),
                 ("pile-lab", 2, 0),

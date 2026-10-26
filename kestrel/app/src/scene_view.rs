@@ -73,6 +73,46 @@ impl Service for SceneView {
                 .run_if(crate::control::rendered)
                 .run_if(in_state(WorldState::Active)),
         );
+        app.add_systems(PostUpdate, update_destructibles.run_if(in_state(WorldState::Active)));
+    }
+}
+
+/// Project the authoritative cover state into both visuals and view hit tests.
+fn update_destructibles(world: &mut World) {
+    let Some(terrain) = world.resource::<crate::lockstep::SessionService>().world().map(|w| w.terrain()) else { return };
+    let health: Vec<u16> = terrain.destructibles.iter().map(|piece| piece.health).collect();
+    let mut query = world.query::<(Entity, &mut crate::style::DestructibleView, &mut Visibility, Option<&crate::combat::Obstacle>, &Children)>();
+    let mut changes = Vec::new();
+    let mut tint = Vec::new();
+    for (entity, mut view, mut visibility, obstacle, children) in query.iter_mut(world) {
+        let current = health.get(view.index).copied().unwrap_or(0);
+        let alive = current > 0;
+        *visibility = if alive { Visibility::Inherited } else { Visibility::Hidden };
+        if current != view.last_health {
+            let factor = 0.55 + 0.45 * f32::from(current) / f32::from(view.max_health);
+            tint.extend(children.iter().map(|child| (child, factor)));
+            view.last_health = current;
+        }
+        if alive != obstacle.is_some() { changes.push((entity, view.index, alive)); }
+    }
+    let updates: Vec<_> = tint.into_iter().filter_map(|(child, factor)| {
+        let handle = world.get::<MeshMaterial3d<StandardMaterial>>(child)?.0.clone();
+        let base = world.get::<crate::style::DamageMaterial>(child)?.0.to_srgba();
+        Some((handle, Color::srgba(base.red * factor, base.green * factor, base.blue * factor, base.alpha)))
+    }).collect();
+    for (handle, color) in updates {
+        if let Some(mut material) = world.resource_mut::<Assets<StandardMaterial>>().get_mut(&handle) {
+            material.base_color = color;
+        }
+    }
+    for (entity, index, alive) in changes {
+        if alive {
+            let piece = &world.resource::<SceneView>().pack.destructibles[index];
+            let disc = crate::navigation::Disc { center: Vec3::from_array(piece.center), radius: piece.radius };
+            world.entity_mut(entity).insert(crate::combat::Obstacle(disc));
+        } else {
+            world.entity_mut(entity).remove::<crate::combat::Obstacle>();
+        }
     }
 }
 

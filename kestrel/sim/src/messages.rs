@@ -114,6 +114,8 @@ pub struct Strike {
     pub targets: Vec<u64>,
     /// Where an arc coil's beam ends.
     pub beam_end: Option<FxVec2>,
+    /// Index of the destructible piece stopped by a laser, if any.
+    pub cover: Option<u16>,
 }
 
 /// A projectile reached a threat this tick.
@@ -128,6 +130,7 @@ pub struct ProjectileHit {
 pub struct ProjectileBlocked {
     pub projectile: u64,
     pub at: FxVec2,
+    pub cover: Option<u16>,
 }
 
 /// A projectile reached the end of its flight without hitting anything.
@@ -180,6 +183,7 @@ impl StateHash for Strike {
             Some(end) => h.write(end),
             None => h.write_u64(u64::MAX),
         }
+        h.write_u64(self.cover.map_or(u64::MAX, u64::from));
     }
 }
 
@@ -194,6 +198,7 @@ impl StateHash for ProjectileBlocked {
     fn hash_into(&self, h: &mut StateHasher) {
         h.write(&self.projectile);
         h.write(&self.at);
+        if let Some(index) = self.cover { h.write_u64(u64::from(index)); }
     }
 }
 

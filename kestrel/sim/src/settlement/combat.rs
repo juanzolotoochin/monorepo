@@ -351,23 +351,29 @@ impl Settlement {
         let (start, end) = p.segment(tick);
         let own = p.defender.map(|d| self.defenders[d as usize].position);
         let margin = Fx::from_ratio(1, 25);
-        let obstacle = terrain
-            .obstacles
-            .iter()
+        let static_obstacle = terrain
+            .obstacles.iter()
             .filter(|o| own != Some(o.center))
             .filter_map(|o| segment_disc(start, end, o.center, o.radius + margin))
             .min();
+        let cover = terrain.destructibles.iter().enumerate()
+            .filter(|(_, piece)| piece.health > 0 && own != Some(piece.disc.center))
+            .filter_map(|(index, piece)| segment_disc(start, end, piece.disc.center,
+                piece.disc.radius + margin).map(|fraction| (fraction, index as u16)))
+            .min();
+        let obstacle = static_obstacle.into_iter().map(|f| (f, None))
+            .chain(cover.map(|(f, index)| (f, Some(index)))).min();
         let threat = self
             .threats
             .iter()
             .filter_map(|t| segment_disc(start, end, t.position, self.threat_radius(t)).map(|f| (f, t.id)))
             .min();
         match (threat, obstacle) {
-            (Some((f, target)), rock) if rock.is_none_or(|rock| f < rock) => {
+            (Some((f, target)), rock) if rock.is_none_or(|rock| f < rock.0) => {
                 out.projectile_hit.push(ProjectileHit { projectile: p.id, target });
             }
-            (_, Some(f)) => {
-                out.projectile_blocked.push(ProjectileBlocked { projectile: p.id, at: start + (end - start) * f });
+            (_, Some((f, cover))) => {
+                out.projectile_blocked.push(ProjectileBlocked { projectile: p.id, at: start + (end - start) * f, cover });
             }
             _ if p.arrival <= tick => out.projectile_expired.push(ProjectileExpired { projectile: p.id }),
             _ => {}
@@ -392,7 +398,7 @@ impl Settlement {
     }
 
     /// The targets of a resolving strike, in the order they take damage.
-    pub(super) fn strike_targets(&self, shooter: AgentIx, origin: FxVec2, forward: FxVec2, weapon: Weapon, terrain: &Terrain) -> (Vec<u64>, Option<FxVec2>) {
+    pub(super) fn strike_targets(&self, shooter: AgentIx, origin: FxVec2, forward: FxVec2, weapon: Weapon, terrain: &Terrain) -> (Vec<u64>, Option<FxVec2>, Option<u16>) {
         let tuning = self.tuning(weapon);
         let (reach, cone) = (tuning.reach, tuning.cone);
         let close = Fx::from_ratio(1, 5);
@@ -409,12 +415,12 @@ impl Settlement {
             .collect();
         targets.sort();
         let mut beam = None;
+        let mut cover = None;
         match weapon {
             Weapon::ArcCoil => {
                 let end = origin + forward * reach;
                 let blocked = terrain
-                    .obstacles
-                    .iter()
+                    .blocking_obstacles()
                     .filter_map(|o| segment_disc(origin, end, o.center, o.radius + Fx::from_ratio(1, 25)))
                     .min()
                     .unwrap_or(Fx::ONE);
@@ -446,10 +452,16 @@ impl Settlement {
             Weapon::Bow => targets.clear(),
             Weapon::Laser => {
                 let end = origin + forward * reach;
-                let blocked = terrain.obstacles.iter()
+                let static_block = terrain.obstacles.iter()
                     .filter_map(|o| segment_disc(origin, end, o.center, o.radius + Fx::from_ratio(1, 25)))
-                    .min().unwrap_or(Fx::ONE)
-                    .min(Self::laser_ground_block(terrain, origin, forward, reach, self.agents[shooter as usize].avatar.height));
+                    .min().unwrap_or(Fx::ONE);
+                let cover_block = terrain.destructibles.iter().enumerate()
+                    .filter(|(_, piece)| piece.health > 0)
+                    .filter_map(|(index, piece)| segment_disc(origin, end, piece.disc.center,
+                        piece.disc.radius + Fx::from_ratio(1, 25)).map(|fraction| (fraction, index)))
+                    .min();
+                let ground_block = Self::laser_ground_block(terrain, origin, forward, reach, self.agents[shooter as usize].avatar.height);
+                let blocked = static_block.min(cover_block.map_or(Fx::ONE, |(fraction, _)| fraction)).min(ground_block);
                 let player = self.laser_player(shooter as usize, origin, forward, reach, terrain)
                     .filter(|(fraction, _)| *fraction < blocked);
                 let threat = targets.iter().filter_map(|&(_, id)| {
@@ -464,11 +476,15 @@ impl Settlement {
                 } else {
                     targets.clear();
                     beam = Some(player.map_or(origin + forward * (reach * blocked), |(_, index)| self.agents[index].position));
+                    if player.is_none() {
+                        cover = cover_block.and_then(|(fraction, index)|
+                            (fraction == blocked && fraction < static_block && fraction < ground_block).then_some(index as u16));
+                    }
                 }
             }
             Weapon::Sword => {}
         }
-        (targets.into_iter().map(|(_, id)| id).collect(), beam)
+        (targets.into_iter().map(|(_, id)| id).collect(), beam, cover)
     }
 
     /// Applies a resolving strike. Returns how many threats it hit.

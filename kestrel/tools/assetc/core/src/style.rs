@@ -404,6 +404,67 @@ pub struct EnvironmentMesh {
     #[serde(default)]
     pub walkable: Vec<WalkableSurface>,
 }
+
+/// A box of cover split into independently damaged pieces. The compiler bakes
+/// each piece separately so removing one exposes a real opening in the mesh.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DestructibleCover {
+    pub position: [f32; 3],
+    pub size: [f32; 3],
+    pub material: String,
+    #[serde(default)]
+    pub trim: Option<String>,
+    pub pieces: [u8; 2],
+    pub health: u16,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DestructiblePiece {
+    pub meshes: Vec<MeshData>,
+    pub center: [f32; 3],
+    pub radius: f32,
+    pub health: u16,
+}
+
+pub fn compile_destructibles(style: &StyleProfile, covers: &[DestructibleCover]) -> Result<Vec<DestructiblePiece>> {
+    let mut result = Vec::new();
+    for cover in covers {
+        if cover.position.iter().chain(cover.size.iter()).any(|v| !v.is_finite())
+            || cover.position.iter().any(|v| v.abs() > 32.0)
+            || cover.size.iter().any(|&v| v <= 0.0 || v > 8.0)
+            || cover.pieces.iter().any(|&n| n == 0 || n > 8)
+            || cover.health == 0
+        {
+            return Err("invalid destructible cover dimensions, pieces or health".into());
+        }
+        let cell = [cover.size[0] / f32::from(cover.pieces[0]), cover.size[1], cover.size[2] / f32::from(cover.pieces[1])];
+        if cell[0] < style.voxel_size || cell[2] < style.voxel_size {
+            return Err("destructible pieces must be at least one voxel wide".into());
+        }
+        for x in 0..cover.pieces[0] {
+            for z in 0..cover.pieces[1] {
+                let center = [
+                    cover.position[0] + (f32::from(x) + 0.5 - f32::from(cover.pieces[0]) * 0.5) * cell[0],
+                    cover.position[1],
+                    cover.position[2] + (f32::from(z) + 0.5 - f32::from(cover.pieces[1]) * 0.5) * cell[2],
+                ];
+                let body = VoxelShape { kind: ShapeKind::Box, walkable: false, position: center, size: cell,
+                    material: cover.material.clone(), repeat: [1; 3], spacing: [0.0; 3], solid_radius: None, light: None };
+                let mut shapes = vec![body];
+                if let Some(trim) = &cover.trim {
+                    shapes.push(VoxelShape { position: [center[0], cover.position[1] + cover.size[1] * 0.5 + 0.06, center[2]],
+                        size: [cell[0], 0.12, cell[2]], material: trim.clone(), ..shapes[0].clone() });
+                }
+                let mesh = compile_environment(style, &shapes)?;
+                result.push(DestructiblePiece { meshes: mesh.meshes, center,
+                    radius: (cell[0] * cell[0] + cell[2] * cell[2]).sqrt() * 0.48, health: cover.health });
+                if result.len() > 256 { return Err("scene exceeds 256 destructible pieces".into()); }
+            }
+        }
+    }
+    Ok(result)
+}
 fn inside(kind: ShapeKind, p: [f32; 3]) -> bool {
     match kind {
         ShapeKind::Box => true,
@@ -639,6 +700,19 @@ pub fn compile_environment(style: &StyleProfile, shapes: &[VoxelShape]) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cover_compiles_into_independent_hit_pieces() {
+        let style = StyleProfile::default();
+        let cover = DestructibleCover { position: [0.0, 0.7, 0.0], size: [1.8, 1.4, 1.8],
+            material: "metal".into(), trim: Some("trim".into()), pieces: [2, 2], health: 3 };
+        let pieces = compile_destructibles(&style, &[cover.clone()]).unwrap();
+        assert_eq!(pieces.len(), 4);
+        assert!(pieces.iter().all(|piece| !piece.meshes.is_empty() && piece.health == 3 && piece.radius > 0.0));
+        assert_ne!(pieces[0].center, pieces[1].center);
+        let mut invalid = cover;
+        invalid.health = 0;
+        assert!(compile_destructibles(&style, &[invalid]).is_err());
+    }
     fn shape() -> VoxelShape {
         VoxelShape {
             walkable: false,

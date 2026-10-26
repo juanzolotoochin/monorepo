@@ -225,6 +225,8 @@ pub struct SceneSetup {
     /// Half-width of the arena when there is no scenario.
     pub extent: Fx,
     pub obstacles: Vec<Disc>,
+    /// Independently damaged cover pieces, in stable scene order.
+    pub destructibles: Vec<crate::terrain::Destructible>,
     /// Obstacles that open when the memory trial's door unlocks.
     pub doors: Vec<Disc>,
     pub surfaces: Vec<crate::terrain::Surface>,
@@ -457,6 +459,9 @@ impl Settlement {
         let at = |p: [Fx; 2]| FxVec2::new(center.x + p[0], center.y + p[1]);
         let place = |d: &Disc| Disc { center: FxVec2::new(center.x + d.center.x, center.y + d.center.y), radius: d.radius };
         let obstacles: Vec<Disc> = setup.obstacles.iter().chain(&setup.doors).map(place).collect();
+        terrain.destructibles = setup.destructibles.iter().map(|piece| crate::terrain::Destructible {
+            disc: place(&piece.disc), health: piece.health,
+        }).collect();
         let mut settlement = match &setup.scenario {
             Some(scenario) => {
                 if let Some(a) = scenario.agents.iter().find(|a| a.controlled && a.character != setup.player) {
