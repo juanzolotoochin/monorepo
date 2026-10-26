@@ -58,6 +58,8 @@ delays every datagram:
 .\kestrel\tools\network-lab.ps1 -DelayMs 75 -JitterMs 20 -Seed 42
 ```
 
+From cmd, `kestrel\tools\network-lab.bat` takes the same arguments.
+
 Each datagram waits `max(0, DelayMs + uniform(-JitterMs, +JitterMs))` ms in
 each direction, so round trips grow by about `2 × DelayMs`. It reuses the built
 game; `-Build` builds it once first. Each run's parameters, relay counters and
