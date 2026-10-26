@@ -1,8 +1,10 @@
 # Characters
 
-## Remove the right-click movement leftovers
+## Done
 
-- **Status:** open
+### Remove the right-click movement leftovers
+
+- **Status:** done (branch `kestrel-ability-prediction`)
 - **Why:** right-click path movement was replaced by explicit WASD movement
   in `50cd1a3`, but its drawing and comments remain. GoTo itself stays: the
   depot transfer's walk to the dock, pile jobs, the automation `Walk`

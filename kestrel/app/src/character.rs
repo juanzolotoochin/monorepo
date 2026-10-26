@@ -292,7 +292,6 @@ impl service::Service for Avatar {
                 (
                     (crate::combat::combat, animate_character, crate::style::select_weapon).chain(),
                     crate::preview::frame_character.run_if(crate::control::interactive),
-                    crate::gameplay::draw_navigation.run_if(crate::control::interactive).run_if(crate::control::rendered),
                 )
                     .chain()
                     .run_if(active.clone()),

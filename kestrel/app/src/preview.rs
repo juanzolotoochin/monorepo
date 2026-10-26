@@ -65,7 +65,6 @@ pub fn playback(
             }
         } else {
             player.translation = Vec3::new(0.1, 0.0, 2.5);
-            controls.route = vec![Vec3::new(0.35, 0.0, 1.55)];
         }
     }
     if preview.motion && preview.elapsed > 3.7 && !preview.turned {

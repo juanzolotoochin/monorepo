@@ -949,7 +949,6 @@ pub fn follow_avatar(
     for _ in 0..contacts {
         sound.play(crate::sound::Cue::Step);
     }
-    controls.route = a.route.iter().map(|&p| mirror.to_view(p)).collect();
 }
 
 /// A joined player's avatar this frame, replayed from the session's
@@ -1431,8 +1430,9 @@ mod tests {
         });
         client.update();
         host.update();
-        // Click-to-move is not predicted (it is going away): the avatar waits
-        // for the confirmed route, then follows it without jumps.
+        // A GoTo walk (the dock walk, pile jobs, scripted walks) is not
+        // predicted: the avatar waits for the confirmed route, then follows
+        // it without jumps.
         let route_preview = player_position(&mut client);
         let mut followed_route = false;
         let mut previous_shown = route_preview;

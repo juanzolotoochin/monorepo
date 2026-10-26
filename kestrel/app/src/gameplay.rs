@@ -1,6 +1,6 @@
-//! Movement controls, pointer targeting and route display.
+//! Movement controls and pointer targeting.
 use crate::{
-    character::{GaitClock, Player},
+    character::GaitClock,
     combat::Attack,
 };
 use bevy::prelude::*;
@@ -15,7 +15,6 @@ pub struct Controls {
     pub combo_next: SwordStroke,
     pub combo_timer: f32,
     pub weapon: content::scenario::Weapon,
-    pub route: Vec<Vec3>,
     pub velocity: Vec3,
     pub gait: GaitClock,
     pub attack: Option<Attack>,
@@ -35,9 +34,6 @@ impl Controls {
             self.combo_timer = crate::combat::combo_window();
             attack.serial = self.attack_serial;
             self.attack = Some(attack);
-            if self.weapon != content::scenario::Weapon::Laser {
-                self.route.clear();
-            }
         } else {
             // One deliberate press can queue the next cut during this one.
             self.queued = Some(aim);
@@ -76,54 +72,4 @@ pub fn cursor_ground(
         .viewport_to_world(transform, window.cursor_position()?)
         .ok()?;
     Some(ray.get_point(ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y))?))
-}
-
-pub fn draw_navigation(
-    controls: Res<Controls>,
-    player: Single<&Transform, With<Player>>,
-    mut gizmos: Gizmos,
-    scene: Res<crate::scene_view::SceneView>,
-    flight: Res<crate::jetpack::Flight>,
-    time: Res<Time>,
-) {
-    if let Some(goal) = controls.route.last() {
-        let color = Color::srgba(0.25, 0.95, 1.0, 0.7);
-        let y = Vec3::Y * 0.035;
-        let waypoint = |p: Vec3| {
-            Vec3::new(
-                p.x,
-                crate::jetpack::height(&scene.pack, p).unwrap_or(flight.support)
-                    + if flight.airborne {
-                        scene.hover()
-                    } else {
-                        0.0
-                    },
-                p.z,
-            )
-        };
-        let r = 0.24 + 0.025 * (time.elapsed_secs() * 7.0).sin();
-        gizmos.circle(
-            Isometry3d::new(
-                waypoint(*goal) + y,
-                Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
-            ),
-            r,
-            color,
-        );
-        let mut previous = player.translation + y;
-        for point in &controls.route {
-            let end = waypoint(*point) + y;
-            let delta = end - previous;
-            let count = (delta.length() / 0.3) as usize;
-            for i in 0..count {
-                let a = previous + delta.normalize_or_zero() * i as f32 * 0.3;
-                gizmos.line(
-                    a,
-                    a + delta.normalize_or_zero() * 0.08,
-                    Color::srgba(0.22, 0.65, 0.72, 0.3),
-                );
-            }
-            previous = end;
-        }
-    }
 }

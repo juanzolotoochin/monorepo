@@ -107,7 +107,7 @@ impl<'a> AvatarReplay<'a> {
 
     /// Applies one of the owner's commands on `tick`, as `World::step` does
     /// for this avatar. Commands that don't drive it change nothing. Returns
-    /// false for commands that plan a route (click-to-move, pile hauls),
+    /// false for commands that plan a route (a GoTo walk, a pile haul),
     /// which the replay doesn't predict.
     pub fn apply(&mut self, command: &CommandKind) -> bool {
         if command.avatar() != Some(self.me) {
@@ -342,14 +342,14 @@ mod tests {
     }
 
     #[test]
-    fn click_to_move_and_other_avatars_are_left_alone() {
+    fn goto_and_other_avatars_are_left_alone() {
         let sim = arena("exosuit", false);
         let world = sim.world();
         let settlement = world.settlement().unwrap();
         let agent = settlement.player().unwrap();
         let mut replay = settlement.replay_avatar(agent, world.tick(), world.terrain()).unwrap();
         let goto = CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target: FxVec2::ZERO, run: false } };
-        assert!(!replay.apply(&goto), "click-to-move is not predicted");
+        assert!(!replay.apply(&goto), "a GoTo walk is not predicted");
         let other = CommandKind::Jetpack { agent: agent + 1, enabled: true };
         assert!(replay.apply(&other));
         assert!(!replay.state().avatar.flight.requested);

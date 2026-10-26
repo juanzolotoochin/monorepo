@@ -620,7 +620,7 @@ pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
     let terrain = json!(view.and_then(|view| view.scene().terrain.as_ref()));
     let digging = crate::digging::snapshot(world);
     let controls = world.resource::<Controls>();
-    let movement = json!({"route":controls.route.iter().map(|p|p.to_array()).collect::<Vec<_>>(),"velocity":controls.velocity.to_array(),"attacking":controls.attack.is_some(),"weapon":controls.weapon,"impacts":controls.impacts});
+    let movement = json!({"velocity":controls.velocity.to_array(),"attacking":controls.attack.is_some(),"weapon":controls.weapon,"impacts":controls.impacts});
     let scene = world.get_resource::<SceneView>().map_or("LOADING", SceneView::title).to_string();
     let lab = world.get_resource::<PileLab>();
     let airborne = lab.map_or(0, |lab| lab.in_flight);

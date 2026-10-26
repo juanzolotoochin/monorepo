@@ -26,7 +26,11 @@
   "%1 is not a valid Win32 application". Without the tag it compiles
   remotely but can't start there (`libudev.so.1: cannot open shared
   object`). So the movement, prediction and margin tests run nowhere from
-  Windows.
+  Windows. The same missing library breaks every app test that runs the
+  `demo` binary remotely: `control_protocol_test`, `forest_motion_test`,
+  `combat_arena_test`, `combat_weapons_test` and `combat_replay_test` all
+  fail with it (https://app.buildbuddy.io/invocation/12fae88b-1671-4d4a-a474-656eeb4ad1f8,
+  https://app.buildbuddy.io/invocation/02f89587-4116-4f62-84cd-9cac5ec7fc9d).
 - **What to do:** add `libudev` to the remote test image, or keep the
   gamepad backend out of the test binary (a feature or a separate test
   crate), or load libudev lazily so a missing library only disables

@@ -358,7 +358,7 @@ shared pose drives the torso, head, arms, thighs, shins, and weapon for both
 the local player and network peers. The shoulder, elbow, wrist and weapon form
 one hierarchy, so the blade follows the hand through a cut. Scene skins can
 replace those pivots through `ActorPart` recipes using voxel shapes, smooth
-capsules and ellipsoids, or both; older torso and leg skins still work. Click routes use a
+capsules and ellipsoids, or both; older torso and leg skins still work. GoTo walks use a
 half-unit A* grid with body clearance, diagonal
 collision checks and line-of-sight smoothing. Local collision uses substeps
 and sliding. Attack collision sweeps the blade through angle space, so a fast
