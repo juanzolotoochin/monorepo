@@ -237,12 +237,14 @@ pub fn render(
     };
     let mut hidden_piles: std::collections::BTreeMap<PileId, std::collections::BTreeSet<u32>> =
         std::collections::BTreeMap::new();
-    let mut hidden_cargo: std::collections::BTreeMap<u16, std::collections::BTreeSet<u32>> =
+    // A backpack's slots shift as minerals mix, so a slot is hidden only
+    // while it holds the flying unit's mineral: once that unit landed.
+    let mut hidden_cargo: std::collections::BTreeMap<u16, Vec<(u32, Mineral)>> =
         std::collections::BTreeMap::new();
     for transit in &airborne {
         match transit.destination {
             transfer::Destination::Cargo(agent, index) => {
-                hidden_cargo.entry(agent).or_default().insert(index);
+                hidden_cargo.entry(agent).or_default().push((index, transit.material));
             }
             transfer::Destination::Pile(id, index) => {
                 hidden_piles.entry(id).or_default().insert(index);
@@ -328,12 +330,13 @@ pub fn render(
         }
     }
     let nothing = crate::pile_model::Cargo::default();
+    let no_slots = Vec::new();
     for (entity, mut visual) in &mut carriers {
         let cargo = match visual.agent {
             None => &stock.cargo,
             Some(agent) => lab.others.get(&agent).unwrap_or(&nothing),
         };
-        let hidden = visual.agent.or(lab.me).and_then(|a| hidden_cargo.get(&a)).unwrap_or(&empty);
+        let hidden = visual.agent.or(lab.me).and_then(|a| hidden_cargo.get(&a)).unwrap_or(&no_slots);
         if visual.units == cargo.units && visual.minerals == cargo.minerals && visual.hidden == hidden.len() as u32 {
             continue;
         }
@@ -351,7 +354,7 @@ pub fn render(
             );
             for i in 0..cargo.units {
                 let Some(material) = cargo.material_at(i) else { continue };
-                if hidden.contains(&i) {
+                if hidden.contains(&(i, material)) {
                     continue;
                 }
                 let position = transfer::backpack_slot(i);

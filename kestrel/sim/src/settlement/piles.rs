@@ -15,8 +15,12 @@
 //! holds its units on both sides from the command on (`INVENTORY_HANDOFF.md`),
 //! and the walk to it (`PileJob`), which stays in the lab.
 //!
-//! Every unit is conserved: `created` equals the units in piles, cargo and
-//! the collector, checked by [`PileLab::conserved`]. Positions are world tiles.
+//! A unit flies between the cargo and the pile as a `Transfer`, like a depot
+//! unit, held as room on its target until it lands.
+//!
+//! Every unit is conserved: `created` equals the units in piles, cargo, the
+//! collector and the air, checked by [`PileLab::conserved`]. Positions are
+//! world tiles.
 
 use std::collections::BTreeMap;
 
@@ -26,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use super::avatar::{character_of, AvatarState, Intent};
 use super::combat::{Event, TossEnd};
 use super::{AgentState, Body, CarryJob, Direction, Inventory, InventoryRef, ItemIx, Kinds, Role, Side};
-use super::{AgentIx, Settlement};
+use super::{AgentIx, Settlement, TRANSFER_FLIGHT_TICKS};
 use crate::messages::CarryUnit;
 use crate::mine::MINERALS;
 use crate::nav;
@@ -273,15 +277,17 @@ impl PileLab {
         self.haulers.entry(agent).or_default()
     }
 
-    /// Mineral units in piles, the collector and `cargo` (every agent's).
-    pub fn total<'a>(&self, cargo: impl IntoIterator<Item = &'a Inventory>) -> u64 {
+    /// Mineral units in piles, the collector, `cargo` (every agent's) and
+    /// the air (`transfers`).
+    pub fn total<'a>(&self, cargo: impl IntoIterator<Item = &'a Inventory>, transfers: &BTreeMap<u64, super::Transfer>) -> u64 {
         let collected = self.collected().iter().map(|&n| n as u64).sum::<u64>();
         let carried = cargo.into_iter().map(|c| self.carried(c) as u64).sum::<u64>();
-        self.piles.values().map(|p| p.units() as u64).sum::<u64>() + carried + collected
+        let flying = transfers.values().filter(|t| self.is_mineral(t.item)).count() as u64;
+        self.piles.values().map(|p| p.units() as u64).sum::<u64>() + carried + collected + flying
     }
 
-    pub fn conserved<'a>(&self, cargo: impl IntoIterator<Item = &'a Inventory>) -> bool {
-        self.total(cargo) == self.created
+    pub fn conserved<'a>(&self, cargo: impl IntoIterator<Item = &'a Inventory>, transfers: &BTreeMap<u64, super::Transfer>) -> bool {
+        self.total(cargo, transfers) == self.created
     }
 
     /// A dispenser adds up to `requested` units to its output pile, within
@@ -646,6 +652,7 @@ impl Settlement {
             self.end_pile_job(agent, &error, &error);
         }
         let Some(lab) = self.piles.as_mut() else { return };
+        let first = lab.first_mineral;
         for (&agent, hauler) in lab.haulers.iter_mut() {
             hauler.in_flight.retain(|&landing| landing > tick);
             let Some(job) = hauler.job.as_mut() else { continue };
@@ -655,7 +662,7 @@ impl Settlement {
             job.stalled = if nav::distance(position, job.previous) < Fx::from_ratio(3, 1000) { job.stalled + 1 } else { 0 };
             job.previous = position;
             if job.started && a.carry.job.is_none() && hauler.in_flight.is_empty() {
-                hauler.notice = format!("Transferred {} units. All items landed.", job.transferred);
+                hauler.notice = done_notice(job, &a.carry.inventory, first);
                 hauler.job = None;
             }
         }
@@ -682,10 +689,12 @@ impl Settlement {
         due.then_some(CarryUnit { agent: me })
     }
 
-    /// Moves the next unit of an avatar's haul (or all of it at pace zero),
-    /// between its cargo and a pile or the collector, out of what the carry
-    /// job holds on both sides. The unit moves at once: its toss is only
-    /// shown (`Hauler::in_flight`).
+    /// Launches the next unit of an avatar's haul (or all of it at pace
+    /// zero), between its cargo and a pile or the collector, out of what the
+    /// carry job holds on both sides. It flies as a `Transfer`
+    /// (`TRANSFER_FLIGHT_TICKS`), its toss shown on the way
+    /// (`Event::PileToss`, `Hauler::in_flight`); the haul ends once every
+    /// unit landed (`pile_housekeeping`).
     pub(crate) fn pile_unit(&mut self, tick: u64, terrain: &Terrain, message: CarryUnit) {
         let (me, agent) = (message.agent, message.agent as usize);
         let Some(mut job) = self.piles.as_ref().and_then(|lab| lab.hauler(me)).and_then(|h| h.job.clone()) else { return };
@@ -701,17 +710,13 @@ impl Settlement {
             }
         }
         job.started = true;
-        // The unit flies for 0.85 × the pace, clamped to 0.3–1.0 s.
-        let flight = (job.pace.clamp(content::millis_to_ticks(300), content::millis_to_ticks(1000)) * 85).div_ceil(100);
         let mut moved = 0;
         while let Some(units) = self.agents[agent].carry.job.clone().filter(|j| j.other.in_pile_lab()) {
-            let (from, to) = self.pile_unit_move(me, &units);
+            let (from, to) = self.pile_unit_launch(tick, me, &units);
             moved += 1;
-            if job.pace > 0 {
-                let lab = self.piles.as_mut().expect("a pile scene");
-                lab.hauler_mut(me).in_flight.push(tick + flight);
-                self.events.push(Event::PileToss { material: lab.mineral(units.item), from, to, ticks: flight });
-            }
+            let lab = self.piles.as_mut().expect("a pile scene");
+            lab.hauler_mut(me).in_flight.push(tick + TRANSFER_FLIGHT_TICKS);
+            self.events.push(Event::PileToss { material: lab.mineral(units.item), from, to, ticks: TRANSFER_FLIGHT_TICKS });
             let carry = &mut self.agents[agent].carry;
             let current = carry.job.as_mut().expect("moving its units");
             current.remaining -= 1;
@@ -728,31 +733,19 @@ impl Settlement {
             }
         }
         job.transferred += moved;
-        let lab = self.piles.as_mut().expect("a pile scene");
-        let cargo = &self.agents[agent].carry.inventory;
+        let hauler = self.piles.as_mut().expect("a pile scene").hauler_mut(me);
         if job.pace > 0 {
-            let hauler = lab.hauler_mut(me);
             hauler.notice = format!("Tossing {} / {} units...", job.transferred, job.planned);
-            hauler.job = Some(job);
-            return;
         }
-        let n = job.transferred;
-        let notice = match job.action {
-            PileAction::Pickup(_) | PileAction::PickupAmount(..) => format!("Collected {n} units. Carrying {}/{}.", cargo.total(), cargo.capacity),
-            PileAction::Deposit(_) => format!("Deposited {n} units. {} still carried.", lab.carried(cargo)),
-            PileAction::Drop(_) => format!("Placed a new pile of {n} units."),
-            PileAction::Deliver => format!("Delivered {n} units to the collector."),
-        };
-        let hauler = lab.hauler_mut(me);
-        hauler.notice = notice;
-        hauler.last_error = None;
-        hauler.job = None;
+        hauler.job = Some(job);
     }
 
-    /// Moves one unit of a haul's carry job between the cargo and its pile
-    /// or the collector, out of what the job holds on both sides. Returns
-    /// where its toss starts and ends.
-    fn pile_unit_move(&mut self, me: AgentIx, job: &CarryJob) -> (TossEnd, TossEnd) {
+    /// Launches one unit of a haul's carry job between the cargo and its
+    /// pile or the collector, as `carry_unit` does a depot unit: it leaves
+    /// the source with its share of the job, and the job's room at the
+    /// target passes to it until it lands (`arrivals`). Returns where its
+    /// toss starts and ends.
+    fn pile_unit_launch(&mut self, tick: u64, me: AgentIx, job: &CarryJob) -> (TossEnd, TossEnd) {
         let own = InventoryRef::Agent(me);
         let (from, to) = match job.direction {
             Direction::Pickup => (job.other, own),
@@ -760,22 +753,25 @@ impl Settlement {
         };
         let ends = (self.toss_end(from, job.item, true), self.toss_end(to, job.item, false));
         self.inventory_mut(from).take(job.item, 1);
-        self.inventory_mut(to).put(job.item, 1);
+        let (start, end) = (self.position_of(from), self.position_of(to));
+        self.launch(tick, job.item, from, to, start, end);
         ends
     }
 
-    /// Where a unit of `item` leaves (`leaving`) or arrives at `holder`.
+    /// Where a unit of `item` leaves (`leaving`) `holder`, or will land in
+    /// it: after what it holds and the units of `item` already flying there.
     fn toss_end(&self, holder: InventoryRef, item: ItemIx, leaving: bool) -> TossEnd {
         let lab = self.piles.as_ref().expect("a pile scene");
+        let flying = if leaving { 0 } else { self.transfers.values().filter(|t| t.to == holder && t.item == item).count() as u32 };
         match holder {
             InventoryRef::Pile(id) => {
                 let pile = &lab.piles[&id];
-                TossEnd::Pile { id, slot: pile.units() - u32::from(leaving), position: pile.position }
+                TossEnd::Pile { id, slot: pile.units() + flying - u32::from(leaving), position: pile.position }
             }
             InventoryRef::Collector => TossEnd::Collector { position: self.position_of(holder) },
             InventoryRef::Agent(agent) => {
                 let cargo = &self.agents[agent as usize].carry.inventory;
-                TossEnd::Cargo { agent, slot: lab.cargo_slot(cargo, item) - u32::from(leaving) }
+                TossEnd::Cargo { agent, slot: lab.cargo_slot(cargo, item) + flying - u32::from(leaving) }
             }
             InventoryRef::Depot(_) => unreachable!("hauls don't reach depots"),
         }
@@ -793,6 +789,22 @@ impl Settlement {
         debug_assert!(held, "the units are carried and the collector has no limit");
         carry.job = Some(job);
         remaining
+    }
+}
+
+/// What a finished haul says, once every unit landed: at pace zero what it
+/// moved, otherwise that it is done. Minerals start at item `first`.
+fn done_notice(job: &PileJob, cargo: &Inventory, first: ItemIx) -> String {
+    let n = job.transferred;
+    let carried: u32 = (first..first + MINERALS as ItemIx).map(|i| cargo.count(i)).sum();
+    if job.pace > 0 {
+        return format!("Transferred {n} units. All items landed.");
+    }
+    match job.action {
+        PileAction::Pickup(_) | PileAction::PickupAmount(..) => format!("Collected {n} units. Carrying {}/{}.", cargo.total(), cargo.capacity),
+        PileAction::Deposit(_) => format!("Deposited {n} units. {carried} still carried."),
+        PileAction::Drop(_) => format!("Placed a new pile of {n} units."),
+        PileAction::Deliver => format!("Delivered {n} units to the collector."),
     }
 }
 
@@ -901,11 +913,11 @@ mod tests {
         }
 
         fn total(&self) -> u64 {
-            self.lab.total(self.cargo.values())
+            self.lab.total(self.cargo.values(), &BTreeMap::new())
         }
 
         fn conserved(&self) -> bool {
-            self.lab.conserved(self.cargo.values())
+            self.lab.conserved(self.cargo.values(), &BTreeMap::new())
         }
     }
 

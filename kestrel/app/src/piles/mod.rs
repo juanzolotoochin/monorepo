@@ -221,7 +221,9 @@ pub fn mirror(service: Res<SessionService>, mirror: Res<WorldMirror>, mut lab: R
     let cargo = view(me.unwrap_or(u16::MAX));
     let others: u64 = sim.haulers.keys().filter(|&&a| Some(a) != me).map(|&a| u64::from(view(a).units)).sum();
     let collected: u64 = sim.collected().iter().map(|&n| u64::from(n)).sum();
-    lab.stock = Some(Stock { piles, cargo, created: sim.created, elsewhere: others + collected });
+    // Pile units fly as transfers, in neither end until they land.
+    let airborne = settlement.transfers.values().filter(|t| sim.is_mineral(t.item)).count() as u64;
+    lab.stock = Some(Stock { piles, cargo, created: sim.created, elsewhere: others + collected + airborne });
     lab.me = me;
     lab.others = sim.haulers.keys().filter(|&&a| Some(a) != me).map(|&a| (a, view(a))).collect();
     lab.job = mine.and_then(|h| h.job.as_ref().map(|_| h.job_serial));

@@ -55,9 +55,9 @@ impl Settlement {
         }
     }
 
-    /// A unit arrives at its end: a depot's stock or an agent's cargo. A
-    /// unit leaving a cargo bed left its counts at launch, so landing is
-    /// all that changes at that end.
+    /// A unit arrives at its end: a depot, an agent's cargo, a pile or the
+    /// collector. A unit leaving a cargo bed left its counts at launch, so
+    /// landing is all that changes at that end.
     pub(super) fn land(&mut self, t: super::Transfer) {
         match t.to {
             InventoryRef::Depot(d) => {
@@ -72,8 +72,8 @@ impl Settlement {
             InventoryRef::Agent(a) => {
                 self.agents[a as usize].carry.inventory.put(t.item, 1);
             }
-            // Pile units move at once for now (`INVENTORY_HANDOFF.md`,
-            // step 9), so none land here yet.
+            // A pile haul's unit; its pile stays until nothing flies to
+            // or from it (`PileLab::prune`).
             InventoryRef::Pile(_) | InventoryRef::Collector => self.inventory_mut(t.to).put(t.item, 1),
         }
     }

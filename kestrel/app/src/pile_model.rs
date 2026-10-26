@@ -54,7 +54,7 @@ pub struct Stock {
     pub cargo: Cargo,
     pub created: u64,
     /// Units neither on the ground nor carried by this player: in other
-    /// players' backpacks, or delivered to a collector.
+    /// players' backpacks, delivered to a collector, or in the air.
     pub elsewhere: u64,
 }
 impl Stock {

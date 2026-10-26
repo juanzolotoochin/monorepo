@@ -85,15 +85,15 @@ impl Scene {
         self.s().carried_minerals(self.agent()).iter().sum()
     }
 
-    /// Mineral units in piles, cargo and the collector.
+    /// Mineral units in piles, cargo, the collector and the air.
     fn total(&self) -> u64 {
-        self.lab().total(self.s().agents.iter().map(|a| &a.carry.inventory))
+        self.lab().total(self.s().agents.iter().map(|a| &a.carry.inventory), &self.s().transfers)
     }
 
     /// Every unit is conserved, and the settlement's inventories check out.
     fn conserved(&self) -> bool {
         self.s().validate().unwrap();
-        self.lab().conserved(self.s().agents.iter().map(|a| &a.carry.inventory))
+        self.lab().conserved(self.s().agents.iter().map(|a| &a.carry.inventory), &self.s().transfers)
     }
 
     /// The player's pile-lab hauler, once it has hauled.
@@ -963,6 +963,39 @@ fn a_timed_out_haul_releases_its_units() {
     assert_eq!(scene.hauler().last_error.as_deref(), Some(failure));
     assert!(scene.avatar().carry.job.is_none());
     assert_eq!(scene.lab().piles[&4].inventory.reserved_out.iter().sum::<u32>(), 0);
+    assert!(scene.conserved());
+}
+
+/// Pile units fly like depot units: they leave the pile at launch, are in
+/// neither end for `TRANSFER_FLIGHT_TICKS`, and land in the cargo. The
+/// emptied pile stays until the last one lands, and the haul ends then.
+#[test]
+fn pile_units_fly_to_the_cargo() {
+    let mut scene = Scene::new(pile_lab());
+    let agent = scene.agent();
+    // Pile 2: 8 units of amber ore, all at once.
+    scene.command(CommandKind::Pile { agent, action: PileAction::Pickup(2), pace: Fx::ZERO, approach: None });
+    for _ in 0..ms(30_000) {
+        if !scene.s().transfers.is_empty() {
+            break;
+        }
+        scene.sim.step(&[]);
+    }
+    let s = scene.s();
+    assert_eq!(s.transfers.len(), 8, "every unit launched at once");
+    assert!(s.transfers.values().all(|t| t.to == super::InventoryRef::Agent(agent) && t.arrival - t.born == super::TRANSFER_FLIGHT_TICKS));
+    assert_eq!(scene.cargo(), 0, "none landed yet");
+    assert_eq!(scene.avatar().carry.inventory.reserved_in.iter().sum::<u32>(), 8, "room held for them");
+    assert_eq!(scene.lab().piles[&2].units(), 0, "the pile stays while its units fly");
+    assert!(scene.hauler().job.is_some());
+    assert_eq!(scene.total(), 96);
+    assert!(scene.conserved());
+    scene.wait(super::TRANSFER_FLIGHT_TICKS);
+    assert_eq!(scene.cargo(), 8);
+    assert!(scene.s().transfers.is_empty());
+    assert!(!scene.lab().piles.contains_key(&2), "the empty pile went once they landed");
+    assert!(scene.hauler().job.is_none());
+    assert_eq!(scene.hauler().notice, "Collected 8 units. Carrying 8/12.");
     assert!(scene.conserved());
 }
 
