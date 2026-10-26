@@ -28,6 +28,7 @@
             ),
         ),
     ),
-    // Drawn by the scene's actor, posed with the default motion.
-    view: (),
+    // Built from the exosuit actor (app/actors/exosuit.ron), posed with the
+    // default motion.
+    view: (actor: "exosuit"),
 )

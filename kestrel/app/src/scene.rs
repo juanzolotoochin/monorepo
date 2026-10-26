@@ -580,8 +580,42 @@ pub fn spawn_industrial(commands: &mut Commands, art: &SceneArt) {
     }
 }
 
-/// The player's body, at the scene's spawn point, for a world.
+/// The player's body, at the scene's spawn point, for a world: the scene
+/// player character's actor (`view.actor`), facing into the scene.
 pub fn spawn_player(commands: &mut Commands, art: &SceneArt, scene: &voxel_assets::Scene) {
+    let actor = crate::actor::for_player(&scene.player);
+    commands
+        .spawn((
+            Player,
+            WorldScoped::default(),
+            Transform::from_translation(Vec3::from_array(scene.spawn))
+                .with_rotation(Quat::from_rotation_y(std::f32::consts::PI)),
+            Visibility::default(),
+        ))
+        .with_children(|p| crate::actor::spawn_joint(p, art, &actor.root));
+}
+
+impl crate::actor::Art for SceneArt {
+    fn cube(&self) -> &Handle<Mesh> {
+        &self.cube
+    }
+    fn material(&self, material: crate::actor::ArtMaterial) -> &Handle<StandardMaterial> {
+        use crate::actor::ArtMaterial::*;
+        match material {
+            Dark => &self.dark,
+            Frame => &self.frame,
+            Ivory => &self.ivory,
+            Orange => &self.orange,
+            Gold => &self.gold,
+            Cyan => &self.cyan,
+            White => &self.white,
+        }
+    }
+}
+
+/// The exosuit as it was built by hand, to check the actor file against.
+#[cfg(test)]
+pub fn legacy_spawn_player(commands: &mut Commands, art: &SceneArt, scene: &voxel_assets::Scene) {
     let SceneArt { cube, dark, frame, ivory, orange, gold, cyan, white, .. } = art;
     // Compact articulated exosuit. Each joint has a stable pivot shared by local and peer posing.
     commands
@@ -1325,6 +1359,139 @@ mod character_tests {
     fn test_player(mut commands: Commands, art: Res<SceneArt>) {
         let library = crate::assets::SceneLibrary::new();
         spawn_player(&mut commands, &art, &library.scenes[0].scene);
+    }
+
+    fn legacy_player(mut commands: Commands, art: Res<SceneArt>) {
+        let library = crate::assets::SceneLibrary::new();
+        legacy_spawn_player(&mut commands, &art, &library.scenes[0].scene);
+    }
+
+    /// A world holding just the player's body, built by `spawn`.
+    fn player_world<M>(spawn: impl IntoScheduleConfigs<bevy::ecs::system::ScheduleSystem, M>) -> (App, Entity) {
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_systems(Startup, (setup, spawn).chain());
+        app.update();
+        let world = app.world_mut();
+        let player = world.query_filtered::<Entity, With<Player>>().single(world).unwrap();
+        (app, player)
+    }
+
+    fn joint_part(kind: PartKind) -> voxel_assets::ActorPart {
+        let parts = [
+            voxel_assets::ActorPart::Body, voxel_assets::ActorPart::Chest, voxel_assets::ActorPart::Head,
+            voxel_assets::ActorPart::LeftArm, voxel_assets::ActorPart::RightArm,
+            voxel_assets::ActorPart::LeftForearm, voxel_assets::ActorPart::RightForearm,
+            voxel_assets::ActorPart::LeftHand, voxel_assets::ActorPart::RightHand,
+            voxel_assets::ActorPart::LeftLeg, voxel_assets::ActorPart::RightLeg,
+            voxel_assets::ActorPart::LeftKnee, voxel_assets::ActorPart::RightKnee,
+            voxel_assets::ActorPart::LeftShin, voxel_assets::ActorPart::RightShin,
+            voxel_assets::ActorPart::LeftFoot, voxel_assets::ActorPart::RightFoot,
+            voxel_assets::ActorPart::Weapon,
+        ];
+        let same = |a: PartKind, b: PartKind| match (a, b) {
+            (PartKind::Arm(x), PartKind::Arm(y)) | (PartKind::Forearm(x), PartKind::Forearm(y))
+            | (PartKind::Hand(x), PartKind::Hand(y)) | (PartKind::Leg(x), PartKind::Leg(y))
+            | (PartKind::Knee(x), PartKind::Knee(y)) | (PartKind::Shin(x), PartKind::Shin(y))
+            | (PartKind::Foot(x), PartKind::Foot(y)) => x == y,
+            (PartKind::Body, PartKind::Body) | (PartKind::Chest, PartKind::Chest)
+            | (PartKind::Head, PartKind::Head) | (PartKind::WeaponGrip, PartKind::WeaponGrip) => true,
+            _ => false,
+        };
+        parts.into_iter().find(|p| same(crate::actor::kind(*p).unwrap(), kind)).unwrap()
+    }
+
+    fn art_material(art: &SceneArt, handle: &Handle<StandardMaterial>) -> crate::actor::ArtMaterial {
+        use crate::actor::{Art, ArtMaterial::*};
+        [Dark, Frame, Ivory, Orange, Gold, Cyan, White].into_iter().find(|m| art.material(*m) == handle).unwrap()
+    }
+
+    /// Everything about an entity and its descendants that drawing or posing
+    /// reads, with children in a stable order.
+    fn describe(world: &World, art: &SceneArt, entity: Entity) -> String {
+        let mut out = String::new();
+        if let Some(part) = world.get::<Part>(entity) {
+            out += &format!("joint {:?} bind {:?} rest {:?} ", joint_part(part.kind), part.bind, part.rest);
+        }
+        if let Some(material) = world.get::<MeshMaterial3d<StandardMaterial>>(entity) {
+            let cube = world.get::<Mesh3d>(entity).is_some_and(|m| m.0 == art.cube);
+            out += &format!("block cube={cube} {:?} ", art_material(art, &material.0));
+        }
+        out += &format!(
+            "{:?} {:?} player={} exhaust={} blade={} scoped={}",
+            world.get::<Transform>(entity),
+            world.get::<Visibility>(entity),
+            world.get::<Player>(entity).is_some(),
+            world.get::<crate::jetpack::Exhaust>(entity).is_some(),
+            world.get::<crate::character::LocalBlade>(entity).is_some(),
+            world.get::<WorldScoped>(entity).is_some(),
+        );
+        let mut children: Vec<_> = world
+            .get::<Children>(entity)
+            .map(|c| c.iter().map(|child| describe(world, art, child)).collect())
+            .unwrap_or_default();
+        children.sort();
+        for child in children {
+            out += &format!("\n  {}", child.replace('\n', "\n  "));
+        }
+        out
+    }
+
+    /// The actor file builds exactly the body the hand-written code built.
+    #[test]
+    fn exosuit_actor_matches_the_hand_built_exosuit() {
+        let (mut legacy, legacy_root) = player_world(legacy_player);
+        let (mut actor, actor_root) = player_world(test_player);
+        let legacy_art = legacy.world().resource::<SceneArt>().clone();
+        let actor_art = actor.world().resource::<SceneArt>().clone();
+        let old = describe(legacy.world_mut(), &legacy_art, legacy_root);
+        let new = describe(actor.world_mut(), &actor_art, actor_root);
+        assert_eq!(old.matches("joint ").count(), 18, "{old}");
+        assert_eq!(old, new);
+    }
+
+    /// Prints the hand-built exosuit as an actor file.
+    #[test]
+    #[ignore]
+    fn dump_legacy_exosuit() {
+        fn vector(v: Vec3) -> String {
+            format!("({}, {}, {})", v.x, v.y, v.z)
+        }
+        fn joint(world: &World, art: &SceneArt, entity: Entity, depth: usize) -> String {
+            let pad = "    ".repeat(depth);
+            let part = world.get::<Part>(entity).unwrap();
+            let mut out = format!("{pad}(\n{pad}    part: {:?},\n", joint_part(part.kind));
+            if part.bind.translation != Vec3::ZERO {
+                out += &format!("{pad}    at: {},\n", vector(part.bind.translation));
+            }
+            let children: Vec<_> = world.get::<Children>(entity).map(|c| c.iter().collect()).unwrap_or_default();
+            let blocks: Vec<_> = children.iter().filter(|c| world.get::<Part>(**c).is_none()).collect();
+            if !blocks.is_empty() {
+                out += &format!("{pad}    blocks: [\n");
+                for block in blocks {
+                    let t = world.get::<Transform>(*block).unwrap();
+                    let material = art_material(art, &world.get::<MeshMaterial3d<StandardMaterial>>(*block).unwrap().0);
+                    let exhaust = if world.get::<crate::jetpack::Exhaust>(*block).is_some() { ", exhaust: true" } else { "" };
+                    out += &format!("{pad}        (at: {}, size: {}, material: {material:?}{exhaust}),\n", vector(t.translation), vector(t.scale));
+                }
+                out += &format!("{pad}    ],\n");
+            }
+            let joints: Vec<_> = children.iter().filter(|c| world.get::<Part>(**c).is_some()).collect();
+            if !joints.is_empty() {
+                out += &format!("{pad}    joints: [\n");
+                for child in joints {
+                    out += &joint(world, art, *child, depth + 2);
+                }
+                out += &format!("{pad}    ],\n");
+            }
+            out + &format!("{pad}),\n")
+        }
+        let (mut app, root) = player_world(legacy_player);
+        let art = app.world().resource::<SceneArt>().clone();
+        let world = app.world_mut();
+        let body = world.get::<Children>(root).unwrap()[0];
+        println!("BEGIN\n(\n    root: {}END", joint(world, &art, body, 1).trim_start());
     }
 
     #[test]
