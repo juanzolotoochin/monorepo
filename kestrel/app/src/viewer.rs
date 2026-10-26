@@ -929,7 +929,8 @@ pub fn capture(
     state.elapsed += time.delta_secs().min(0.1);
     let phase = viewer.phase();
     let pushing = std::env::args().any(|arg| arg == "--studio-capture-push");
-    let key_pose = match viewer.clip {
+    // A pinned frame is the pose asked for; otherwise wait for the clip's key pose.
+    let key_pose = state.frame.is_some() || match viewer.clip {
         Clip::Jump if pushing => (0.10..0.13).contains(&phase),
         Clip::RunJump if pushing => (0.65..0.68).contains(&phase),
         Clip::Jump => (0.40..0.48).contains(&phase),
