@@ -32,6 +32,11 @@ const SPENT_TICKS: u64 = ticks_from_60hz(12);
 const DEFLECTED_TICKS: u64 = ticks_from_60hz(18);
 const PINNED_TICKS: u64 = ticks_from_60hz(36);
 const STAGGER_ON_PIERCE: u64 = ticks_from_60hz(42);
+/// A threat's swing reaches a player whose feet are at most this high
+/// above the ground under it, in meters. A jump (apex about 0.57 m) doesn't
+/// dodge it; the jetpack's hover (1.8 m) does. Every attacking character is
+/// a ghoul of one height, so it is a rule, not a character field.
+pub const SWING_HEIGHT: Fx = Fx::ONE;
 
 /// A stable counter-based roll, as in the original game: outcomes never
 /// depend on how many unrelated hits happened elsewhere.
@@ -341,13 +346,14 @@ impl Settlement {
     fn laser_player(&self, shooter: usize, from_height: Fx, origin: FxVec2, forward: FxVec2, reach: Fx, terrain: &Terrain) -> Option<(Fx, usize)> {
         let end = origin + forward * reach;
         self.agents.iter().enumerate().filter_map(|(index, agent)| {
-            if index == shooter || !agent.controlled || agent.avatar.health == 0 || agent.avatar.max_health == 0 {
+            let avatar = agent.avatar()?;
+            if index == shooter || agent.body.health == 0 || agent.body.max_health == 0 {
                 return None;
             }
             let radius = super::avatar::character_of(&self.characters, agent).body.radius;
-            let fraction = segment_disc(origin, end, agent.position, radius)?;
-            (terrain.clear(origin, agent.position, Fx::from_ratio(1, 50))
-                && Self::laser_clear_ground(terrain, origin, from_height, agent.position, agent.avatar.height))
+            let fraction = segment_disc(origin, end, agent.body.position, radius)?;
+            (terrain.clear(origin, agent.body.position, Fx::from_ratio(1, 50))
+                && Self::laser_clear_ground(terrain, origin, from_height, agent.body.position, avatar.height))
                 .then_some((fraction, index))
         }).min_by_key(|(fraction, index)| (*fraction, *index))
     }
@@ -437,17 +443,17 @@ impl Settlement {
             }
             if let Some(windup) = t.windup.filter(|w| w.lands <= tick) {
                 let mut out = Messages::default();
-                out.swing_lands.push(SwingLands { threat: t.id, agent: windup.agent, hit: self.swing_reaches(t, windup.agent) });
+                out.swing_lands.push(SwingLands { threat: t.id, agent: windup.agent, hit: self.swing_reaches(t, windup.agent, terrain) });
                 result.push((t.position, out));
             }
         }
         if self.player_health > 0 {
             for (i, a) in self.agents.iter().enumerate() {
-                if a.controlled && a.avatar.health > 0 {
+                if a.avatar().is_some() && a.body.health > 0 {
                     let mut out = Messages::default();
-                    self.threats_in_reach(i as AgentIx, a.position, tick, &mut out);
+                    self.threats_in_reach(i as AgentIx, a, tick, terrain, &mut out);
                     if !out.is_empty() {
-                        result.push((a.position, out));
+                        result.push((a.body.position, out));
                     }
                 }
             }
@@ -458,10 +464,10 @@ impl Settlement {
             result.push((d.position, out));
         }
         for (i, a) in self.agents.iter().enumerate() {
-            if a.controlled {
+            if a.avatar().is_some() {
                 let mut out = Messages::default();
                 self.read_avatar(i as AgentIx, a, tick, terrain, &mut out);
-                result.push((a.position, out));
+                result.push((a.body.position, out));
             }
         }
         result
@@ -472,17 +478,33 @@ impl Settlement {
         self.characters[self.waves[t.wave as usize].character as usize].attack
     }
 
-    /// Stage 3: whether a threat's swing landing now reaches `agent`, alive
-    /// and within the attack's reach of the threat.
-    fn swing_reaches(&self, t: &Threat, agent: AgentIx) -> bool {
+    /// Stage 3: whether a threat's swing landing now reaches `agent`, alive,
+    /// within the attack's reach of the threat and low enough
+    /// (`SWING_HEIGHT`). A player who lifted off during the windup is missed.
+    fn swing_reaches(&self, t: &Threat, agent: AgentIx, terrain: &Terrain) -> bool {
         let (Some(attack), Some(a)) = (self.threat_attack(t), self.agents.get(agent as usize)) else { return false };
-        a.controlled && a.avatar.health > 0 && distance(t.position, a.position) <= attack.reach
+        a.avatar().is_some() && a.body.health > 0 && distance(t.position, a.body.position) <= attack.reach && self.within_swing_height(a, terrain)
+    }
+
+    /// Whether a player's feet are low enough for a threat's swing: at most
+    /// `SWING_HEIGHT` above the ground under its body. Over a drop, the
+    /// ground it last stood on counts.
+    fn within_swing_height(&self, a: &super::AgentState, terrain: &Terrain) -> bool {
+        // Only avatars leave the ground.
+        let Some(avatar) = a.avatar() else { return true };
+        let radius = super::avatar::character_of(&self.characters, a).body.radius;
+        let ground = terrain.footprint(a.body.position, radius).unwrap_or(avatar.flight.support);
+        avatar.height - ground <= SWING_HEIGHT
     }
 
     /// Stage 3 for one hurtable player: every threat that could start a
     /// swing at it now. Stage 5 keeps the nearest player for each threat
-    /// (`start_swings`).
-    fn threats_in_reach(&self, agent: AgentIx, position: FxVec2, tick: u64, out: &mut Messages) {
+    /// (`start_swings`). A player too high (`SWING_HEIGHT`) starts none.
+    fn threats_in_reach(&self, agent: AgentIx, a: &super::AgentState, tick: u64, terrain: &Terrain, out: &mut Messages) {
+        if !self.within_swing_height(a, terrain) {
+            return;
+        }
+        let position = a.body.position;
         for t in &self.threats {
             let Some(attack) = self.threat_attack(t) else { continue };
             if !can_start_swing(t, tick) {
@@ -505,7 +527,7 @@ impl Settlement {
         for message in messages {
             let Some(i) = self.threat_index(message.threat) else { continue };
             let Some(attack) = self.threat_attack(&self.threats[i]) else { continue };
-            let Some(target) = self.agents.get(message.agent as usize).map(|a| a.position) else { continue };
+            let Some(target) = self.agents.get(message.agent as usize).map(|a| a.body.position) else { continue };
             let t = &mut self.threats[i];
             if !can_start_swing(t, tick) {
                 continue;
@@ -523,8 +545,9 @@ impl Settlement {
     /// starts, hit or miss. A hit hurts the player through `hurt_player`
     /// (the laser's path, so a kill releases its transfer) and, if it
     /// lives, pushes it away from the threat: a velocity the avatar's own
-    /// movement then brakes out (`walk`).
-    pub(crate) fn swing_lands(&mut self, tick: u64, message: SwingLands) {
+    /// movement then brakes out (`walk`). The push ends a dig. An avatar in
+    /// its own melee swing takes it as `push`, which moves it as far.
+    pub(crate) fn swing_lands(&mut self, tick: u64, message: SwingLands, terrain: &mut Terrain) {
         let Some(i) = self.threat_index(message.threat) else { return };
         let Some(attack) = self.threat_attack(&self.threats[i]) else { return };
         let t = &mut self.threats[i];
@@ -537,15 +560,21 @@ impl Settlement {
         let (threat, from, heading) = (t.id, t.position, t.heading);
         let agent = message.agent as usize;
         // A laser earlier in stage 5 may have killed the player.
-        let hit = message.hit && self.player_health > 0 && self.agents[agent].avatar.health > 0;
-        let killed = hit && self.hurt_player(agent, attack.damage, tick);
+        let hit = message.hit && self.player_health > 0 && self.agents[agent].body.health > 0;
+        let killed = hit && self.hurt_player(agent, attack.damage, tick, terrain);
         if hit && !killed {
-            let a = &mut self.agents[agent];
-            let mut away = (a.position - from).normalize_or_zero();
+            let super::AgentState { body, role: super::Role::Avatar(avatar), .. } = &mut self.agents[agent] else { unreachable!("threats hit only avatars") };
+            let mut away = (body.position - from).normalize_or_zero();
             if away == FxVec2::ZERO {
                 away = nav::heading_vector(heading);
             }
-            a.avatar.velocity += away * attack.knockback;
+            avatar.dig = None;
+            let swinging = avatar.swing.as_ref().is_some_and(|s| s.weapon != Weapon::Laser);
+            if swinging {
+                body.push += away * attack.knockback;
+            } else {
+                body.velocity += away * attack.knockback;
+            }
         }
         let damage = if hit { attack.damage } else { 0 };
         self.events.push(Event::ThreatSwing { threat, agent: message.agent, hit, damage, killed });
@@ -683,7 +712,7 @@ impl Settlement {
                     beam = Some(position);
                 } else {
                     targets.clear();
-                    beam = Some(player.map_or(origin + forward * (reach * blocked), |(_, index)| self.agents[index].position));
+                    beam = Some(player.map_or(origin + forward * (reach * blocked), |(_, index)| self.agents[index].body.position));
                     hit_player = player.is_some();
                     if player.is_none() {
                         cover = cover_block.and_then(|(fraction, index)|
@@ -697,14 +726,15 @@ impl Settlement {
     }
 
     /// Applies a resolving strike. Returns how many threats it hit.
-    pub(crate) fn strike(&mut self, tick: u64, message: Strike) -> u32 {
+    pub(crate) fn strike(&mut self, tick: u64, message: Strike, terrain: &mut Terrain) -> u32 {
         let agent = message.agent as usize;
-        if self.agents[agent].attack_ready > tick {
+        let tuning = self.tuning(message.weapon).clone();
+        let Some(avatar) = self.agents[agent].avatar_mut() else { return 0 };
+        if avatar.attack_ready > tick {
             return 0;
         }
+        avatar.attack_ready = tick + tuning.cooldown();
         self.events.extend(strike_event(&message));
-        let tuning = self.tuning(message.weapon).clone();
-        self.agents[agent].attack_ready = tick + tuning.cooldown();
         let origin = message.origin;
         let forward = message.forward;
         if message.weapon == Weapon::Bow {
@@ -732,10 +762,10 @@ impl Settlement {
         if message.weapon == Weapon::Laser && message.targets.is_empty() && self.player_health > 0 {
             if let Some(to) = message.beam_end {
                 let hit = self.agents.iter().enumerate().position(|(index, target)| {
-                    index != agent && target.controlled && target.avatar.health > 0 && target.position == to
+                    index != agent && target.avatar().is_some() && target.body.health > 0 && target.body.position == to
                 });
                 if let Some(target) = hit {
-                    self.hurt_player(target, tuning.damage, tick);
+                    self.hurt_player(target, tuning.damage, tick, terrain);
                     return 1;
                 }
             }

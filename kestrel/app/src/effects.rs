@@ -39,13 +39,12 @@ impl service::Service for Effects {
     }
 }
 
-/// Hit stop, screen shake and flash: shared by the player's combat and the
+/// Hit stop and screen shake: shared by the player's combat and the
 /// effects, and reset when a world starts.
 #[derive(Resource, Default)]
 pub struct Feedback {
     pub hit_stop: f32,
     pub trauma: f32,
-    pub flash: f32,
 }
 #[derive(Component)]
 pub struct CameraRig {
@@ -545,7 +544,6 @@ pub fn update_effects(
     let dt = time.delta_secs().min(0.1);
     feedback.hit_stop = (feedback.hit_stop - dt).max(0.0);
     feedback.trauma = (feedback.trauma - dt * 1.5).max(0.0);
-    feedback.flash = (feedback.flash - dt * 5.0).max(0.0);
     for (entity, mut transform, mut particle, head) in &mut particles {
         particle.age += dt;
         if particle.age >= particle.life {

@@ -168,7 +168,12 @@ Character definitions are moving in steps, each its own PR against `master`. Ste
 - **Actions:** one vocabulary (move, go to, attack, interact) that player commands and AI brains both produce. `CommandKind` variants stay append-only, so recorded input logs still replay. An action changes only its agent; what it does to the world is a message applied in stage 5 (done for player avatars, `sim/src/settlement/action.rs`).
 - **Haulers:** their `Phase` state machine emits actions instead of moving them directly.
 - **Threats:** they become characters with a `FollowRoute` brain. They keep their own table, for the 100k-entity budget, but each stores a `CharacterIx` instead of reaching its kind through its wave.
-- **Shared body:** `AgentState` splits into the body every agent has (position, heading, velocity, radius, health) plus data for each role. Cargo has three models today (hauler `cargo`, the avatar's `ManualJob`, pile jobs), and they merge here.
+- **Shared body:** done. An agent is `AgentState { id, character, body, carry, role }` (`sim/src/settlement/agent.rs`):
+  - `Body` is what every agent has: home, speed, radius, position, headings, route, velocity, the knockback `push`, and health.
+  - `Carry` is the cargo, since players and haulers both carry (a depot transfer lands in the player's cargo).
+  - `Role` is `Hauler(HaulerState)` or `Avatar(AvatarState)`. It is set when the agent is made and never changes, so `controlled` checks became matches. The avatar keeps the player's owner, name, weapon cooldown, respawn tick, height and abilities.
+  - A hauler's health is 0, so it can't be hurt, and its velocity stays 0, since it walks its route without one. Giving haulers health is a later step that changes the `Hauler` schema.
+  - Cargo still has three models (hauler jobs, the avatar's `ManualJob`, pile jobs). They merge next: [the cargo merge proposal](../CARGO_MERGE_HANDOFF.md) has the design, the commit order and the open questions.
 - **Prediction:** the sim and the client's replay apply actions through the same code. An ability's own state is always predicted. Its effects on the world are only shown early, as events built from its messages, and each event kind says whether to keep or cancel it when it never confirms. `kestrel/ABILITY_PREDICTION_HANDOFF.md` has the decisions and the order.
 - **Threats attacking agents:** ghouls hit players in passing (`kestrel/GHOUL_ATTACK_HANDOFF.md` has the order):
   - **Behaviour:** a ghoul never leaves its route. When a player is in reach, it stops, winds up, swings, and then walks on. Chasing a target would be a separate hunter brain, later.
@@ -176,6 +181,8 @@ Character definitions are moving in steps, each its own PR against `master`. Ste
   - **Latency:** the windup (about 400–500 ms) is longer than a typical input lead, and the ghoul shows it. Reach is checked when the swing lands, against where the player is then. A hit deals damage and a small knockback, smoothed on clients by the `Knockback` correction. It doesn't stun.
   - **Tuning:** an optional `attack` section on `FollowRoute` characters (`damage`, `reach`, `windup`, `cooldown`, `knockback`). A ghoul without it never attacks, as before.
   - **Targeting:** the nearest player in reach, with the lowest agent index on a tie. Each player scans the threats for ones in reach, as a projectile already does, so a threat with no player near costs one distance check.
+  - **Height:** a ghoul can't reach a player whose feet are more than 1 m above the ground under it (`SWING_HEIGHT` in `combat.rs`). This holds when the windup starts and when the swing lands, so a player who lifts off during the windup is missed. A jump (apex about 0.57 m) doesn't dodge; the jetpack's hover (1.8 m) does.
+  - **Push:** the push moves a busy player as far as an idle one, about 0.14 m at 3 m/s, braked at the walking rate and by the walking rules. It ends a dig. During the player's own melee swing it is kept apart from the avatar's velocity (`Body::push`), since the swing keeps that velocity from moving the avatar.
 - **Out of scope:** possession. Defenders stay as they are.
 
 ### Open questions

@@ -253,10 +253,10 @@ pub fn take_choices(service: &SessionService, depot: &str) -> Result<DepotChoice
 pub fn confirmed_facing(mirror: &WorldMirror) -> Option<Vec3> {
     let current = mirror.current.as_ref()?;
     let a = &current.agents[mirror.player()? as usize];
-    let direction = match a.avatar.aim {
+    let direction = match a.avatar()?.aim {
         Some(aim) => Vec3::new(aim.x.to_f32(), 0.0, aim.y.to_f32()),
         None => {
-            let h = sim::nav::heading_vector(a.heading);
+            let h = sim::nav::heading_vector(a.body.heading);
             Vec3::new(h.x.to_f32(), 0.0, h.y.to_f32())
         }
     };

@@ -402,8 +402,8 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
                 return Err("Flight assertion requires a finite altitude and tolerance in 0..1".into());
             }
             let service = world.resource::<SessionService>();
-            let a = service.settlement().zip(service.player()).map(|(s, p)| &s.agents[p as usize]).ok_or("No player")?;
-            let (flying, actual) = (a.avatar.flight.airborne, a.avatar.height.to_f32());
+            let a = service.settlement().zip(service.player()).and_then(|(s, p)| s.agents[p as usize].avatar()).ok_or("No player")?;
+            let (flying, actual) = (a.flight.airborne, a.height.to_f32());
             if flying != *airborne || (actual - altitude).abs() > *tolerance {
                 return Err(format!("Flight assertion failed: airborne={flying}, altitude={actual:.3}"));
             }
@@ -544,10 +544,10 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
             }
             let service = world.get_resource::<SessionService>()?;
             let a = &service.settlement()?.agents[service.player()? as usize];
-            if a.avatar.job.is_some() || a.pending_in > 0 || a.pending_out > 0 {
+            if a.avatar()?.job.is_some() || a.carry.pending_in > 0 || a.carry.pending_out > 0 {
                 None
             } else {
-                Some(if a.cargo.iter().sum::<u32>() == *expected {
+                Some(if a.carry.cargo.iter().sum::<u32>() == *expected {
                     Ok(())
                 } else {
                     Err("Transfer canceled before exact quantity completed".into())
@@ -564,9 +564,9 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
             }
             let service = world.get_resource::<SessionService>()?;
             let a = &service.settlement()?.agents[service.player()? as usize];
-            if !a.route.is_empty() {
+            if !a.body.route.is_empty() {
                 None
-            } else if navigation::flat(service.to_view(a.position) - *goal).length() < 0.15 {
+            } else if navigation::flat(service.to_view(a.body.position) - *goal).length() < 0.15 {
                 Some(Ok(()))
             } else {
                 Some(Err("Destination is blocked or unreachable, or the walk was interrupted".into()))

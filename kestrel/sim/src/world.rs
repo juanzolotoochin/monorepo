@@ -331,6 +331,11 @@ impl World {
         self.settlement.as_deref_mut().expect("a settlement world")
     }
 
+    #[cfg(test)]
+    pub(crate) fn settlement_and_terrain_mut(&mut self) -> (&mut Settlement, &mut Terrain) {
+        (self.settlement.as_deref_mut().expect("a settlement world"), &mut self.terrain)
+    }
+
     /// Replaces the terrain. For building a new world before tick 0; during
     /// play, terrain changes only through commands and messages.
     pub fn set_terrain(&mut self, terrain: Terrain) {
@@ -403,7 +408,7 @@ impl World {
             if let Some(agent) = driven {
                 let owner = agent
                     .and_then(|agent| self.settlement.as_ref().and_then(|s| s.agents.get(agent as usize)))
-                    .and_then(|a| a.owner);
+                    .and_then(|a| a.avatar()?.owner);
                 if owner != Some(turn[i].player) {
                     continue;
                 }
@@ -802,7 +807,7 @@ impl World {
             for message in messages.strike {
                 let agent = message.agent;
                 let cover = message.cover;
-                let hits = settlement.strike(tick, message);
+                let hits = settlement.strike(tick, message, &mut self.terrain);
                 if let Some(index) = cover {
                     self.terrain.damage_cover(index as usize, 1);
                 }
@@ -823,7 +828,7 @@ impl World {
             }
             settlement.start_swings(tick, messages.start_swing);
             for message in messages.swing_lands {
-                settlement.swing_lands(tick, message);
+                settlement.swing_lands(tick, message, &mut self.terrain);
             }
             for message in messages.breach {
                 settlement.breach(message);
@@ -839,10 +844,9 @@ impl World {
         let Some(settlement) = &self.settlement else { return };
         for index in 0..self.terrain.destructibles.len() {
             let piece = &self.terrain.destructibles[index];
-            let held = settlement.agents.iter().any(|agent| agent.controlled
-                && (agent.avatar.max_health == 0 || agent.avatar.health > 0)
-                && agent.avatar.repair == Some(piece.asset)
-                && self.terrain.asset_in_repair_reach(agent.position, piece.asset));
+            let held = settlement.agents.iter().any(|agent| agent.body.alive()
+                && agent.avatar().is_some_and(|avatar| avatar.repair == Some(piece.asset))
+                && self.terrain.asset_in_repair_reach(agent.body.position, piece.asset));
             self.terrain.repair_cover(index, held);
         }
     }

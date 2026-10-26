@@ -132,9 +132,115 @@
 - **Found in:** task 6 of `kestrel/ABILITY_PREDICTION_HANDOFF.md`
   (branch `kestrel-ability-prediction`).
 
-## Decide what a player's death ends besides its transfer
+## Look at the hurt flash in play
 
 - **Status:** open
+- **Why:** the red screen-edge flash (`app/src/hurt.rs`) is unit tested
+  for when it fires, but nobody has seen it drawn. Its strength (0.6
+  alpha at the corners), its clear middle (55%) and its fade (0.45 s) are
+  guesses.
+- **What to do:** get hit by another player's laser in the laser pit, and
+  by a ghoul in the forest or arena (player health 6), and tune the
+  constants. Check it stays under the HUD
+  text and doesn't show in captures where nobody is hurt.
+- **Where:** `kestrel/app/src/hurt.rs`.
+- **Found in:** branch `kestrel-ghoul-followups`.
+
+## Give the body a height
+
+- **Status:** open
+- **Why:** height lives on the avatar (`AvatarState::height`, with the
+  jump and jetpack), so a hauler has none. A threat's swing treats a hauler
+  as standing on the ground (`within_swing_height`), and the behaviour
+  digest hashes its height as 0. Haulers on raised ground would be wrong
+  once threats hit them.
+- **What to do:** when haulers become targets, move `height` (and the
+  ground it last stood on) into `Body`, and have haulers keep it on the
+  ground as they walk. Keep the digest's value for agents that don't move
+  vertically.
+- **Where:** `kestrel/sim/src/settlement/agent.rs`, `avatar.rs`,
+  `haulers.rs`, `within_swing_height` in `combat.rs`.
+- **Found in:** branch `kestrel-shared-body`.
+
+## Trim body fields one role ignores
+
+- **Status:** open
+- **Why:** `Body::speed` and `travel_heading` are used only by haulers: an
+  avatar moves at its character's `movement` speeds and has no travel
+  heading. They sit in the body so every agent has the same shape.
+- **What to do:** once actions drive haulers too (step 5, "Haulers"), read
+  the speed from the character for both roles, and decide whether the
+  travel heading belongs to the hauler. A save format change.
+- **Where:** `Body` in `kestrel/sim/src/settlement/agent.rs`, `speed_now`
+  in `haulers.rs`.
+- **Found in:** branch `kestrel-shared-body`.
+
+## Done
+
+### Keep a player's health over the Respawn action
+
+- **Status:** done (branch `kestrel-shared-body`)
+- **Why:** the `Respawn` action resets the avatar to a fresh state, and that
+  has always included its health: `health` and `max_health` go to 0. A
+  player who respawns by command in a scene with `player_health` above 0
+  can't be hurt again. A death's respawn (`self_update`) restores health
+  instead. The shared body split kept this as it was.
+- **What to do:** have `respawn` restore `max_health` and fill `health`, as
+  the death respawn does. It is a gameplay change: test it, and check the
+  replay still predicts the command.
+- **Where:** `respawn` in `kestrel/sim/src/settlement/avatar.rs`.
+- **Found in:** branch `kestrel-shared-body`.
+
+### Flash the player's screen or body when it is hurt
+
+- **Status:** done (branch `kestrel-ghoul-followups`)
+- **Why:** nothing shows the local player being hurt beyond its nametag's
+  health, a sound and (for a ghoul hit) blood and camera shake. A laser hit
+  on a player plays only `LaserImpact`. `effects::Feedback::flash` is set by
+  the player's own hits (`combat.rs`) and decayed (`effects.rs`), but
+  nothing draws it, so it can't be reused for a hurt flash.
+- **What to do:** draw a short hurt cue for the local player, for any
+  damage (laser or ghoul): a red screen-edge flash from `Feedback::flash`,
+  or an emissive flash on the actor's materials like `ImpactTarget` slots.
+  Drive it from the confirmed health drop so every damage source gets it.
+- **Done:** `app/src/hurt.rs` draws a red radial-gradient UI node over the
+  screen's edges, fading over 0.45 s, when the local avatar's confirmed
+  health (`WorldMirror::current`) drops. A respawn or a new avatar doesn't
+  flash (`hurt`, unit tested). `Feedback::flash` was dead since it was
+  added (set on the player's own sword contacts, never read), so it is
+  removed. Not checked on screen.
+- **Where:** `kestrel/app/src/effects.rs` (`Feedback`), `settlement.rs`
+  (the `ThreatSwing` presentation), `combat.rs`.
+- **Found in:** task 4 of `kestrel/GHOUL_ATTACK_HANDOFF.md`.
+
+### Decide whether a ghoul reaches a flying or busy player
+
+- **Status:** done (branch `kestrel-ghoul-followups`)
+- **Why:** a ghoul's reach is measured on the ground plane only, so it hits
+  a player hovering 1.8 m up on the jetpack. And a ghoul's push is a
+  velocity that `walk` brakes out; during the player's own non-laser swing
+  or a dig, `walk` doesn't move the avatar and brakes that velocity away,
+  so the hit lands with no push.
+- **What to do:** decide whether reach checks height (skip players whose
+  `avatar.height` is well above the ground under the threat) and whether a
+  push should move a swinging or digging avatar. Both are rules choices.
+- **Done:** a ghoul can't reach feet more than `SWING_HEIGHT` (1 m) above
+  the ground under the player, at the windup's start or the swing's
+  landing. A push ends a dig, and during the player's own melee swing it
+  goes to the new `AvatarState::push`, which `walk` brakes and moves by the
+  walking rules (save format 9). Tests in `combat_tests.rs`:
+  `a_ghoul_does_not_reach_a_hovering_player`,
+  `a_player_who_lifts_off_during_the_windup_is_missed`,
+  `a_jump_does_not_dodge_a_ghoul`,
+  `a_ghoul_pushes_a_swinging_player_as_far_as_an_idle_one`,
+  `a_ghoul_push_ends_a_dig_and_moves_the_player`.
+- **Where:** `kestrel/sim/src/settlement/combat.rs` (`swing_reaches`,
+  `threats_in_reach`, `swing_lands`), `avatar.rs` (`walk`).
+- **Found in:** task 3 of `kestrel/GHOUL_ATTACK_HANDOFF.md`.
+
+### Decide what a player's death ends besides its transfer
+
+- **Status:** done (branch `kestrel-ghoul-followups`)
 - **Why:** a player killed in stage 5 (`Settlement::hurt_player`) now drops
   its transfer job, but not the rest of what the `Respawn` action clears.
   A pile haul keeps running: the dead avatar still loads units when in
@@ -146,44 +252,18 @@
   player died (today's says "canceled by player input"). For the memory
   trial, decide whether only the `Respawn` action restarts it. Clear `dig`
   if a dead player shouldn't dig.
+- **Done:** death ends what a respawn ends. `hurt_player` clears the dig
+  and the route, ends the pile haul (`end_pile_job`, the core of
+  `cancel_pile_job`, with "You died. Haul canceled; cargo is retained.")
+  and restarts the memory trial at once (`restart_memory`, which
+  `RestartMemory` also calls). `strike` and `swing_lands` take the terrain
+  for the door. Tests: `dying_ends_a_haul`, `dying_stops_a_dig`,
+  `dying_restarts_the_memory_trial_and_closes_its_door`.
 - **Where:** `kestrel/sim/src/settlement/avatar.rs` (`hurt_player`,
   `self_update`, `act`), `piles.rs` (`cancel_pile_job`), `memory.rs`
   (`restart_memory`).
 - **Found in:** task 1 of `kestrel/GHOUL_ATTACK_HANDOFF.md`
   (branch `kestrel-ghoul-attacks`).
-
-## Decide whether a ghoul reaches a flying or busy player
-
-- **Status:** open
-- **Why:** a ghoul's reach is measured on the ground plane only, so it hits
-  a player hovering 1.8 m up on the jetpack. And a ghoul's push is a
-  velocity that `walk` brakes out; during the player's own non-laser swing
-  or a dig, `walk` doesn't move the avatar and brakes that velocity away,
-  so the hit lands with no push.
-- **What to do:** decide whether reach checks height (skip players whose
-  `avatar.height` is well above the ground under the threat) and whether a
-  push should move a swinging or digging avatar. Both are rules choices.
-- **Where:** `kestrel/sim/src/settlement/combat.rs` (`swing_reaches`,
-  `threats_in_reach`, `swing_lands`), `avatar.rs` (`walk`).
-- **Found in:** task 3 of `kestrel/GHOUL_ATTACK_HANDOFF.md`.
-
-## Flash the player's screen or body when it is hurt
-
-- **Status:** open
-- **Why:** nothing shows the local player being hurt beyond its nametag's
-  health, a sound and (for a ghoul hit) blood and camera shake. A laser hit
-  on a player plays only `LaserImpact`. `effects::Feedback::flash` is set by
-  the player's own hits (`combat.rs`) and decayed (`effects.rs`), but
-  nothing draws it, so it can't be reused for a hurt flash.
-- **What to do:** draw a short hurt cue for the local player, for any
-  damage (laser or ghoul): a red screen-edge flash from `Feedback::flash`,
-  or an emissive flash on the actor's materials like `ImpactTarget` slots.
-  Drive it from the confirmed health drop so every damage source gets it.
-- **Where:** `kestrel/app/src/effects.rs` (`Feedback`), `settlement.rs`
-  (the `ThreatSwing` presentation), `combat.rs`.
-- **Found in:** task 4 of `kestrel/GHOUL_ATTACK_HANDOFF.md`.
-
-## Done
 
 ### Give a scene ghouls and hurtable players
 

@@ -555,7 +555,7 @@ impl Simulation {
             .enumerate()
             .map(|(i, a)| {
                 let before = previous.and_then(|p| p.agents.get(i));
-                let trailer = match (&a.trailer, before.and_then(|b| b.trailer.as_ref())) {
+                let trailer = match (a.hauler().and_then(|h| h.trailer.as_ref()), before.and_then(|b| b.hauler()?.trailer.as_ref())) {
                     (Some(t), b) => Some(Trailer {
                         position: blend(b.map(|b| b.position), t.position),
                         heading: angle(b.map(|b| b.heading), t.heading),
@@ -565,11 +565,12 @@ impl Simulation {
                 };
                 let state = AgentState {
                     id: a.id.clone(),
-                    position: blend(before.map(|b| b.position), a.position),
-                    heading: angle(before.map(|b| b.heading), a.heading),
-                    travelled: a.travelled.to_f32(),
-                    phase: format!("{:?}", a.phase),
-                    cargo: inventory(&a.cargo, a.cargo_capacity),
+                    position: blend(before.map(|b| b.body.position), a.body.position),
+                    heading: angle(before.map(|b| b.body.heading), a.body.heading),
+                    travelled: a.body.travelled.to_f32(),
+                    // A player shows as an idle hauler.
+                    phase: format!("{:?}", a.hauler().map_or(s::Phase::Idle, |h| h.phase)),
+                    cargo: inventory(&a.carry.cargo, a.carry.capacity),
                     trailer,
                 };
                 (a.id.clone(), state)
@@ -781,7 +782,7 @@ impl Simulation {
                 .agents
                 .iter()
                 .filter_map(|a| {
-                    let job = a.avatar.job.as_ref()?;
+                    let job = a.avatar()?.job.as_ref()?;
                     let manual = ManualJob {
                         depot: current.depots[job.depot as usize].id.clone(),
                         item: item(job.item),

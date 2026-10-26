@@ -61,7 +61,8 @@ fn attack(swing: &Swing, ticks: f32, swift_sword: bool) -> Option<Attack> {
     }
 }
 
-/// Other players' avatars and name tags (World layer).
+/// Other players' avatars and name tags, and the local player's hurt
+/// flash (World layer).
 #[derive(Resource)]
 pub struct Peers;
 
@@ -77,6 +78,7 @@ impl service::Service for Peers {
         use service::{AppServices, Phase, WorldState};
         let active = in_state(WorldState::Active);
         app.add_service_systems::<Self, _>(Phase::Mirror, update.run_if(crate::control::rendered).run_if(active.clone()))
+            .add_service_systems::<Self, _>(Phase::Present, crate::hurt::update.run_if(crate::control::rendered).run_if(active.clone()))
             .add_systems(
                 PostUpdate,
                 crate::nametags::update
@@ -104,7 +106,7 @@ pub fn update(
 ) {
     let me = mirror.player();
     let others: Vec<u16> = mirror.current.as_ref().map_or_else(Vec::new, |s| {
-        (0..s.agents.len() as u16).filter(|&i| s.agents[i as usize].controlled && Some(i) != me).collect()
+        (0..s.agents.len() as u16).filter(|&i| s.agents[i as usize].avatar().is_some() && Some(i) != me).collect()
     });
     let breathe = (time.elapsed_secs() * 2.0).sin() * 0.012;
     // Render time in ticks: views sit `alpha` of the way from the previous
@@ -124,17 +126,18 @@ pub fn update(
         shown.push(peer.agent);
         let current = &mirror.current.as_ref().unwrap().agents[peer.agent as usize];
         let before = mirror.previous.as_ref().and_then(|p| p.agents.get(peer.agent as usize)).unwrap_or(current);
-        let (from, to) = (mirror.to_view(before.position), mirror.to_view(current.position));
+        let (Some(avatar), Some(before_avatar)) = (current.avatar(), before.avatar()) else { continue };
+        let (from, to) = (mirror.to_view(before.body.position), mirror.to_view(current.body.position));
         let alpha = if from.distance(to) > 1.5 { 1.0 } else { mirror.alpha };
         let mut position = from.lerp(to, alpha);
-        position.y = before.avatar.height.to_f32()
-            + (current.avatar.height - before.avatar.height).to_f32() * alpha;
+        position.y = before_avatar.height.to_f32()
+            + (avatar.height - before_avatar.height).to_f32() * alpha;
         position.y = crate::character::visual_step_height(
             if from.distance(to) > 1.5 { None } else { peer.visual_height },
             position.y,
             time.delta_secs(),
-            !current.avatar.flight.airborne
-                && matches!(current.avatar.jump, sim::settlement::avatar::JumpPhase::Grounded),
+            !avatar.flight.airborne
+                && matches!(avatar.jump, sim::settlement::avatar::JumpPhase::Grounded),
         );
         peer.visual_height = Some(position.y);
         let moved = position
@@ -144,30 +147,30 @@ pub fn update(
         let step_distance = motion_profile.step_distance.clamp(0.2, 4.0);
         let steps = peer
             .gait
-            .advance(moved, step_distance, !current.avatar.flight.airborne);
+            .advance(moved, step_distance, !avatar.flight.airborne);
         for _ in 0..steps {
             sound.play(crate::sound::Cue::Step);
         }
         transform.translation = position;
-        let turn = (current.heading - before.heading).to_f32();
+        let turn = (current.body.heading - before.body.heading).to_f32();
         let turn =
             (turn + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-        let heading = before.heading.to_f32() + turn * alpha;
+        let heading = before.body.heading.to_f32() + turn * alpha;
         transform.rotation = Quat::from_rotation_y(heading);
-        let airborne = current.avatar.flight.airborne;
+        let airborne = avatar.flight.airborne;
         let velocity = if airborne {
             Vec3::ZERO
         } else {
             Vec3::new(
-                current.avatar.velocity.x.to_f32(),
+                current.body.velocity.x.to_f32(),
                 0.0,
-                current.avatar.velocity.y.to_f32(),
+                current.body.velocity.y.to_f32(),
             )
         };
         let (speed, turn) =
             peer.motion
                 .advance_with_profile(velocity, heading, time.delta_secs(), motion_profile);
-        let swing = current.avatar.swing.as_ref();
+        let swing = avatar.swing.as_ref();
         let attack = swing.and_then(|s| {
             attack(
                 s,
@@ -181,7 +184,7 @@ pub fn update(
                 sound.play(crate::sound::Cue::Swing);
             }
         }
-        let dig = current.avatar.dig.as_ref().map(|d| dig_age(ticks, d));
+        let dig = avatar.dig.as_ref().map(|d| dig_age(ticks, d));
         let pose = Pose {
                 motion: voxel_assets::CharacterMotion {
                     step_distance: motion_profile.step_distance / transform.scale.x.max(0.1),
@@ -190,25 +193,25 @@ pub fn update(
                 stride: peer.gait.phase,
                 speed,
                 turn,
-                aim_yaw: current.avatar.aim.map_or(0.0, |aim| {
+                aim_yaw: avatar.aim.map_or(0.0, |aim| {
                     crate::lockstep::angle_between(heading, aim.x.to_f32().atan2(aim.y.to_f32()))
                 }),
                 breathe,
                 step_pitch: 0.0,
                 airborne,
                 jump: jump_motion(
-                    current.avatar.jump,
+                    avatar.jump,
                     scene.player().jump(),
                     ticks,
-                    current.avatar.height.to_f32(),
-                    current.avatar.flight.support.to_f32(),
+                    avatar.height.to_f32(),
+                    avatar.flight.support.to_f32(),
                 ),
                 attack,
                 dig,
             };
         crate::character::pose_body(*transform, pose, |point| service.ground_height(point), false,
             time.delta_secs(), contacts.as_deref(), children.iter_descendants(entity), &mut joints);
-        poses.push((entity, current.avatar.weapon, pose));
+        poses.push((entity, avatar.weapon, pose));
     }
     for (parent, mut visibility) in &mut exhausts {
         let owner = std::iter::once(parent.parent())
