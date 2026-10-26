@@ -116,25 +116,6 @@
 - **Found in:** task 5 of `kestrel/ABILITY_PREDICTION_HANDOFF.md`
   (branch `kestrel-ability-prediction`).
 
-## Test a knockback that pushes the joined player
-
-- **Status:** open
-- **Why:** nothing in the simulation pushes a player avatar yet: stage 5
-  only damages, kills and respawns one. So the knockback correction (D6)
-  is tested in the harness only with a death stopping a running avatar
-  (`joined_player_hit_by_the_laser_is_knocked_back_not_mispredicted`), and
-  with a push faked on the confirmed settlement in the prediction units.
-  The detection (`prediction::StageFive`) needs no change for real pushes.
-- **What to do:** once ghouls attack agents, or anything else knocks a
-  player back (the open question in `docs/character-definition.md`), add a
-  joined-client harness case under latency where the push moves the
-  running avatar: logged as `Knockback`, smoothed below 3 u, no
-  misprediction.
-- **Where:** `kestrel/app/src/lockstep.rs` tests (`RelayedGame`),
-  `kestrel/app/src/prediction.rs`.
-- **Found in:** task 6 of `kestrel/ABILITY_PREDICTION_HANDOFF.md`
-  (branch `kestrel-ability-prediction`).
-
 ## Reuse the mirror's settlement copy for stage-5 detection
 
 - **Status:** open
@@ -219,6 +200,30 @@
 - **Found in:** task 4 of `kestrel/GHOUL_ATTACK_HANDOFF.md`.
 
 ## Done
+
+### Test a knockback that pushes the joined player
+
+- **Status:** done (branch `kestrel-ghoul-attacks`)
+- **Why:** nothing in the simulation pushed a player avatar yet: stage 5
+  only damaged, killed and respawned one. So the knockback correction (D6)
+  was tested in the harness only with a death stopping a running avatar
+  (`joined_player_hit_by_the_laser_is_knocked_back_not_mispredicted`), and
+  with a push faked on the confirmed settlement in the prediction units.
+  The detection (`prediction::StageFive`) needs no change for real pushes.
+- **What to do:** once ghouls attack agents, or anything else knocks a
+  player back (the open question in `docs/character-definition.md`), add a
+  joined-client harness case under latency where the push moves the
+  running avatar: logged as `Knockback`, smoothed below 3 u, no
+  misprediction.
+- **Done:** `joined_player_pushed_by_a_ghoul_is_knocked_back_not_mispredicted`
+  gives the laser pit one `ghoul_forest` wave and has the client run back
+  and forth across the ghoul until a swing lands. No prediction change was
+  needed. The prediction units still fake their pushes: they need 2 and
+  4 u ones to cross the snap distances, far more than a ghoul's.
+- **Where:** `kestrel/app/src/lockstep.rs` tests (`RelayedGame`),
+  `kestrel/app/src/prediction.rs`.
+- **Found in:** task 6 of `kestrel/ABILITY_PREDICTION_HANDOFF.md`
+  (branch `kestrel-ability-prediction`).
 
 ### Release a transfer's reservation when its avatar respawns
 

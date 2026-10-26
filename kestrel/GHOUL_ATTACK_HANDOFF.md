@@ -180,6 +180,29 @@ Each task is its own commit on branch `kestrel-ghoul-attacks`, in order.
    the joined player" (`todo/characters.md`) with a ghoul hit, then move it
    to Done.
 
+   Done in task 5:
+   - **Test** (`app/src/lockstep.rs`):
+     `joined_player_pushed_by_a_ghoul_is_knocked_back_not_mispredicted`,
+     under 100 ± 20 ms. `RelayedGame::in_scene_with` (and
+     `scene_app_with`) edit a scene's pack on both machines first: the
+     laser pit (player health 6) gets one `ghoul_forest` wave walking from
+     beside the joiner toward the stage, and the forest's ghoul skin with
+     its materials. The pit's follow camera turns the keys, so the test
+     measures where D and W go, then runs (Shift held) back and forth
+     across the ghoul on both axes until a swing lands, and 60 frames on.
+   - **Asserts:** a hit while the avatar moves (> 1 m/s before the hit's
+     tick), only `Knockback` corrections, none snapped or 3 u or more,
+     their distance above 0.05 u, and no misprediction
+     (`preview_corrections` and `preview_mispredicted_frames` 0).
+   - **Measured** (same every run): the hit lands on frame 65 at
+     1.52 m/s, mid-turn; one knockback of 0.695 u over 1 frame. That is
+     more than the 0.14 m an idle player moves: the turning avatar
+     accelerates toward its new direction, so the push's sideways part
+     isn't braked out until it gets there.
+   - **No prediction change.** Only `StageFive`'s doc comment changed. The
+     prediction units still fake their pushes: they need 2 and 4 u ones
+     to cross the snap distances.
+
 ## Rules
 
 - Bazel: `bazel test --config=remote ...` (see `AGENTS.md`).
