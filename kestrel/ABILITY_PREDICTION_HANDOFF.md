@@ -189,9 +189,9 @@ ambiguous.
   would add hashed state only for client bookkeeping.
 - Done in task 3: `started` is `Swing::pressed()`, the tick the `Attack`
   applied on. A press queued during a swing keeps its press tick in
-  `AvatarState::queued_at` and then `Swing::queued_at`, which are not saved
-  or hashed, so a queued swing in flight across a save or a join keys by
-  its start tick instead. Until task 4, the app's `LaserPrediction` still
+  `AvatarState::queued_at` and then `Swing::queued_at`. (Done in task 7:
+  both are saved and hashed, save format 7, so a queued swing in flight
+  across a save or a join keeps its press tick.) Until task 4, the app's `LaserPrediction` still
   tells commands apart by the resolving swing's aim and muzzle
   (`PredictedEvent` in `app/src/prediction.rs`).
 - Done in task 4: each command a client queues gets a `net::CommandId`

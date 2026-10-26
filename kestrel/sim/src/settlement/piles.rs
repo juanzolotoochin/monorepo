@@ -730,6 +730,7 @@ fn follow(a: &mut AgentState, route: Vec<FxVec2>) {
     a.route = route;
     a.avatar.swing = None;
     a.avatar.queued = None;
+    a.avatar.queued_at = None;
     a.avatar.intent = Some(Intent::GoTo { target, run: false });
 }
 

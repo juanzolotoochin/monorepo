@@ -610,6 +610,7 @@ impl Settlement {
                         target.avatar.respawn_at = tick + ticks_from_60hz(120);
                         target.avatar.swing = None;
                         target.avatar.queued = None;
+                        target.avatar.queued_at = None;
                         target.avatar.velocity = FxVec2::ZERO;
                     }
                     return 1;

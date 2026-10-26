@@ -124,6 +124,7 @@ impl Settlement {
         a.avatar.intent = Some(Intent::Stop);
         a.avatar.swing = None;
         a.avatar.queued = None;
+        a.avatar.queued_at = None;
         if let Some(hauler) = self.piles.as_mut().and_then(|lab| lab.haulers.get_mut(&player)) {
             hauler.job = None;
         }

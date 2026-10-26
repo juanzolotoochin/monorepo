@@ -69,10 +69,8 @@ pub struct Swing {
     pub resolved: bool,
     pub hits: u32,
     /// The tick the `Attack` was pressed on when it waited in
-    /// `AvatarState::queued` first. It only keys predicted events (`pressed`),
-    /// so it isn't saved or hashed: a loaded swing counts as pressed when it
-    /// started.
-    #[serde(skip)]
+    /// `AvatarState::queued` first. It keys predicted events (`pressed`).
+    #[serde(default)]
     pub queued_at: Option<u64>,
 }
 
@@ -181,9 +179,9 @@ pub struct AvatarState {
     pub aim: Option<FxVec2>,
     /// A follow-up attack clicked during the end of a swing.
     pub queued: Option<(Weapon, FxVec2, [Fx; 3])>,
-    /// The tick `queued` was pressed on (see `Swing::queued_at`). Not saved
-    /// or hashed.
-    #[serde(skip)]
+    /// The tick `queued` was pressed on (see `Swing::queued_at`); set exactly
+    /// when `queued` is.
+    #[serde(default)]
     pub queued_at: Option<u64>,
     pub job: Option<ManualJob>,
     #[serde(default)]
