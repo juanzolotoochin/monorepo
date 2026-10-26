@@ -91,6 +91,58 @@ Each task is its own commit on branch `kestrel-ghoul-attacks`, in order.
    determinism. Give the ghoul content (`content/data/character/ghoul*.ron`)
    an `attack`. Update the golden file and hashes only where the change
    explains them, and say why in the commit.
+
+   Done in task 3:
+   - **State** (`sim/src/settlement/combat.rs`): `Threat.windup:
+     Option<Windup { agent: AgentIx, lands: u64 }>` and `Threat.ready_at:
+     u64`, the first tick a new windup may start (`lands + 1 + cooldown`,
+     set hit or miss). Save `FORMAT_VERSION` 8; no migration, as before.
+   - **Messages** (`sim/src/messages.rs`, after `projectile_expired` and
+     before `breach`): `StartSwing { threat, agent, distance }` from each
+     hurtable player's scan (`threats_in_reach`), and `SwingLands { threat,
+     agent, hit }` from the threat whose `windup.lands` is this tick
+     (`swing_reaches`: target alive and within `reach`). Stage 5
+     `start_swings` sorts by (threat, distance, agent) and keeps the first
+     per threat, so the queue order doesn't matter; it also turns the
+     threat to face its target. `swing_lands` clears the windup, starts the
+     cooldown, and on a hit calls `hurt_player`, then pushes a survivor.
+   - **Stagger rule:** a stagger or shock cancels the windup (`strike` and
+     the bolt pierce in `projectile_hit` clear `windup`). No swing lands
+     and no event says so: the windup just goes away. No windup starts
+     while staggered or shocked; after that it may start again at once
+     (the cooldown runs only from a landed swing).
+   - **Knockback:** `avatar.velocity += away * knockback` (m/s, away from
+     the threat). `walk` brakes it out at `braking`, so 3 m/s moves an idle
+     player about 0.14 m. A killed player isn't pushed. The client's
+     `prediction::StageFive` needs no change: the replay doesn't run threat
+     swings, so the confirmed tick with the new health and velocity differs
+     from the replay and is logged as touched (a `Knockback`).
+   - **Events** (`Event`, all `Prediction::Confirmed` through the default
+     arm): `ThreatWindup { threat, agent, lands }` when a windup starts,
+     and `ThreatSwing { threat, agent, hit, damage, killed }` when it
+     lands. The app's legacy mapping drops both for now (`legacy.rs`).
+   - **Tuning** (`content/data/character/ghoul.ron`, inherited by
+     `ghoul_brute` and `ghoul_forest`): damage 1, reach 0.9 m, windup 27
+     frames, cooldown 60, knockback 3 m/s. At 3.8 m/s a player next to a
+     ghoul (0.6 m apart) needs about 0.2 s to get past 0.9 m, so stepping
+     away works with a short input lead and gets hard near the 450 ms one.
+   - **Tests** (`combat_tests.rs`): the eight in the list above plus
+     `ghoul_attacks_are_deterministic` (1 vs 4 threads).
+   - **Golden and hashes:** no golden scene has both ghouls and
+     `player_health` above 0, so no ghoul attacks there; the behaviour
+     lines are unchanged. Totals change because the threat state is longer
+     (forest, arena) and the pending `Messages` hash has two more queues
+     (every scenario, the mover-only `small`/`large` hashes too).
+   - **For task 4:** the windup is in confirmed state
+     (`Settlement::threats[i].windup`, with `lands`; the windup lasts
+     `characters[waves[t.wave].character].attack.windup` ticks), and the
+     events are in `Settlement::events`. The app draws threats in
+     `app/src/settlement.rs` (the `sim.threats` loop building a `View` from
+     the wave's skin, with `activity`, `injury`, `recoil`) from the legacy
+     `Simulation` snapshot (`legacy.rs`, `Threat`), which doesn't carry the
+     windup yet. Sounds come from the legacy `Event` match in
+     `settlement.rs`. No scene shows it yet: see "Give a scene ghouls and
+     hurtable players" in `todo/characters.md`.
 4. **Show the windup.** The client draws the threat's windup so the player
    can read it (a pose or tell on the ghoul's skin) and presents the hit on
    the player (sound, flash or similar, through the existing event path).

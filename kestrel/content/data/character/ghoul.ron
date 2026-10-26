@@ -5,6 +5,10 @@
         body: (radius: 0.27),
         movement: (walk: 0.6),
         health: (hp: 3, breach_damage: 1),
+        // Hits a player within 0.9 m in passing: stops, winds up for 27
+        // frames (450 ms), swings for 1 health and a 3 m/s push, and can
+        // start again 60 frames later.
+        attack: (damage: 1, reach: 0.9, windup: 27, cooldown: 60, knockback: 3),
     ),
     view: (skin: "ghoul"),
 )

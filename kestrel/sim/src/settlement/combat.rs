@@ -6,8 +6,11 @@
 //!   and which threats a player's strike reaches. These become messages.
 //! - The apply phase applies damage against the threat's current armor and
 //!   health, so two hits in one tick stack correctly in message order.
+//! - Threats with an `attack` stop to swing at players in reach: stage 3
+//!   finds the swings that start or land, stage 5 hurts and pushes players.
 //! - Waves spawn, spent arrows fade and pinned bodies land in housekeeping.
 
+use content::character::AttackDef;
 use content::scenario::{ticks_from_60hz, ProjectileKind, Weapon, WeaponTuning};
 use content::TICKS_PER_SECOND;
 use fx::{Fx, FxVec2};
@@ -15,7 +18,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::{AgentIx, DepotIx, ItemIx, Settlement};
-use crate::messages::{Breach, Fire, Messages, ProjectileBlocked, ProjectileExpired, ProjectileHit, Strike};
+use crate::messages::{Breach, Fire, Messages, ProjectileBlocked, ProjectileExpired, ProjectileHit, StartSwing, Strike, SwingLands};
 use crate::nav::{self, distance};
 use crate::terrain::{segment_disc, Terrain};
 
@@ -74,6 +77,22 @@ pub struct Threat {
     pub stagger_until: u64,
     /// Meters per second while staggered.
     pub knockback: FxVec2,
+    /// A swing at a player being wound up (the character's `attack`). The
+    /// threat stands still meanwhile; a stagger or shock cancels it.
+    pub windup: Option<Windup>,
+    /// The first tick a new windup can start: the tick after its last swing
+    /// landed plus the attack's cooldown.
+    pub ready_at: u64,
+}
+
+/// A threat's swing on its way (`Threat::windup`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Windup {
+    /// The player it swings at.
+    pub agent: AgentIx,
+    /// The tick the swing lands: stage 3 checks reach then, against where
+    /// the player is on that tick.
+    pub lands: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -180,6 +199,14 @@ pub enum Event {
     Equipped { agent: AgentIx },
     /// A pile-lab unit left `from` and lands at `to` after `ticks`.
     PileToss { material: u8, from: TossEnd, to: TossEnd, ticks: u64 },
+    /// A threat started winding up a swing at player `agent`. It lands on
+    /// tick `lands` unless a stagger or shock cancels it first, which shows
+    /// as the threat's `windup` going away with no `ThreatSwing`.
+    ThreatWindup { threat: u64, agent: AgentIx, lands: u64 },
+    /// A threat's swing at player `agent` landed. A hit took `damage` health
+    /// (`killed` if that was the last) and pushed the player; a miss (`hit`
+    /// false, `damage` 0) means the player got out of reach or was dead.
+    ThreatSwing { threat: u64, agent: AgentIx, hit: bool, damage: u32, killed: bool },
 }
 
 /// What a strike reaches (`Settlement::strike_targets`), as its `Strike`
@@ -373,6 +400,8 @@ impl Settlement {
                         knocked = distance(previous, next);
                     }
                     t.knockback = t.knockback * KNOCKBACK_DECAY;
+                } else if t.windup.is_some() {
+                    // Planted for the swing; the route resumes after it lands.
                 } else {
                     let wounded = if t.hp < wave.hp { Fx::from_ratio(11, 20) } else { Fx::ONE };
                     super::haulers::move_route(&mut t.position, &mut t.route, wave.speed * wounded);
@@ -406,6 +435,22 @@ impl Settlement {
                 out.breach.push(Breach { threat: t.id });
                 result.push((t.position, out));
             }
+            if let Some(windup) = t.windup.filter(|w| w.lands <= tick) {
+                let mut out = Messages::default();
+                out.swing_lands.push(SwingLands { threat: t.id, agent: windup.agent, hit: self.swing_reaches(t, windup.agent) });
+                result.push((t.position, out));
+            }
+        }
+        if self.player_health > 0 {
+            for (i, a) in self.agents.iter().enumerate() {
+                if a.controlled && a.avatar.health > 0 {
+                    let mut out = Messages::default();
+                    self.threats_in_reach(i as AgentIx, a.position, tick, &mut out);
+                    if !out.is_empty() {
+                        result.push((a.position, out));
+                    }
+                }
+            }
         }
         for (i, d) in self.defenders.iter().enumerate() {
             let mut out = Messages::default();
@@ -420,6 +465,90 @@ impl Settlement {
             }
         }
         result
+    }
+
+    /// How a threat hits players, if its character does.
+    fn threat_attack(&self, t: &Threat) -> Option<AttackDef> {
+        self.characters[self.waves[t.wave as usize].character as usize].attack
+    }
+
+    /// Stage 3: whether a threat's swing landing now reaches `agent`, alive
+    /// and within the attack's reach of the threat.
+    fn swing_reaches(&self, t: &Threat, agent: AgentIx) -> bool {
+        let (Some(attack), Some(a)) = (self.threat_attack(t), self.agents.get(agent as usize)) else { return false };
+        a.controlled && a.avatar.health > 0 && distance(t.position, a.position) <= attack.reach
+    }
+
+    /// Stage 3 for one hurtable player: every threat that could start a
+    /// swing at it now. Stage 5 keeps the nearest player for each threat
+    /// (`start_swings`).
+    fn threats_in_reach(&self, agent: AgentIx, position: FxVec2, tick: u64, out: &mut Messages) {
+        for t in &self.threats {
+            let Some(attack) = self.threat_attack(t) else { continue };
+            if !can_start_swing(t, tick) {
+                continue;
+            }
+            let gap = distance(t.position, position);
+            if gap <= attack.reach {
+                out.start_swing.push(StartSwing { threat: t.id, agent, distance: gap });
+            }
+        }
+    }
+
+    /// Stage 5: threats start the swings stage 3 found. A threat named by
+    /// several takes the nearest player, the lowest agent index on a tie,
+    /// whatever order the messages came in. It checks again that nothing
+    /// earlier in stage 5 (a strike's stagger, a kill) stopped it.
+    pub(crate) fn start_swings(&mut self, tick: u64, mut messages: Vec<StartSwing>) {
+        messages.sort_by_key(|m| (m.threat, m.distance, m.agent));
+        messages.dedup_by_key(|m| m.threat);
+        for message in messages {
+            let Some(i) = self.threat_index(message.threat) else { continue };
+            let Some(attack) = self.threat_attack(&self.threats[i]) else { continue };
+            let Some(target) = self.agents.get(message.agent as usize).map(|a| a.position) else { continue };
+            let t = &mut self.threats[i];
+            if !can_start_swing(t, tick) {
+                continue;
+            }
+            let lands = tick + attack.windup;
+            t.windup = Some(Windup { agent: message.agent, lands });
+            if target != t.position {
+                t.heading = nav::bearing(t.position, target);
+            }
+            self.events.push(Event::ThreatWindup { threat: t.id, agent: message.agent, lands });
+        }
+    }
+
+    /// Stage 5: a threat's swing lands. Its windup ends and its cooldown
+    /// starts, hit or miss. A hit hurts the player through `hurt_player`
+    /// (the laser's path, so a kill releases its transfer) and, if it
+    /// lives, pushes it away from the threat: a velocity the avatar's own
+    /// movement then brakes out (`walk`).
+    pub(crate) fn swing_lands(&mut self, tick: u64, message: SwingLands) {
+        let Some(i) = self.threat_index(message.threat) else { return };
+        let Some(attack) = self.threat_attack(&self.threats[i]) else { return };
+        let t = &mut self.threats[i];
+        // A stagger or shock earlier in stage 5 cancelled it.
+        if t.windup.is_none_or(|w| w.agent != message.agent) {
+            return;
+        }
+        t.windup = None;
+        t.ready_at = tick + 1 + attack.cooldown;
+        let (threat, from, heading) = (t.id, t.position, t.heading);
+        let agent = message.agent as usize;
+        // A laser earlier in stage 5 may have killed the player.
+        let hit = message.hit && self.player_health > 0 && self.agents[agent].avatar.health > 0;
+        let killed = hit && self.hurt_player(agent, attack.damage, tick);
+        if hit && !killed {
+            let a = &mut self.agents[agent];
+            let mut away = (a.position - from).normalize_or_zero();
+            if away == FxVec2::ZERO {
+                away = nav::heading_vector(heading);
+            }
+            a.avatar.velocity += away * attack.knockback;
+        }
+        let damage = if hit { attack.damage } else { 0 };
+        self.events.push(Event::ThreatSwing { threat, agent: message.agent, hit, damage, killed });
     }
 
     fn fly(&self, p: &Projectile, tick: u64, terrain: &Terrain, out: &mut Messages) {
@@ -655,6 +784,8 @@ impl Settlement {
             let away = (t.position - origin).normalize_or_zero();
             t.knockback = away * tuning.knockback;
             t.stagger_until = tick + tuning.stagger();
+            // A stagger or shock cancels a windup.
+            t.windup = None;
             match message.weapon {
                 Weapon::ArcCoil => {
                     t.shocked_until = t.stagger_until;
@@ -700,6 +831,7 @@ impl Settlement {
                 t.hp = t.hp.saturating_sub(1).max(1);
                 t.pierced = true;
                 t.stagger_until = tick + STAGGER_ON_PIERCE;
+                t.windup = None;
                 self.combat.bolt_pierces += 1;
                 Impact::BoltPierce
             }
@@ -827,6 +959,8 @@ impl Settlement {
                 route,
                 stagger_until: 0,
                 knockback: FxVec2::ZERO,
+                windup: None,
+                ready_at: 0,
             });
             self.waves[w].spawned += 1;
         }
@@ -843,6 +977,12 @@ impl Settlement {
 /// Ticks to cover `distance` at `speed` meters per second, at least one.
 fn flight_ticks(distance: Fx, speed: Fx) -> u64 {
     content::scenario::ticks(distance / speed)
+}
+
+/// Whether a threat may start a swing on `tick`: not already winding up,
+/// its cooldown over, neither staggered nor shocked, and still on its route.
+fn can_start_swing(t: &Threat, tick: u64) -> bool {
+    t.windup.is_none() && tick >= t.ready_at && tick >= t.stagger_until && tick >= t.shocked_until && !t.route.is_empty()
 }
 
 /// See `Settlement::has_weapon`.

@@ -519,7 +519,12 @@ mod tests {
         assert_eq!((attack.damage, attack.reach), (2, "0.9".parse().unwrap()));
         assert_eq!((attack.windup, attack.cooldown), (ticks_from_60hz(27), ticks_from_60hz(60)));
         assert_eq!(attack.knockback, Fx::from_ratio(7, 2), "m/s, like a weapon's knockback");
-        assert!(Content::builtin().rules.characters.iter().all(|c| c.attack.is_none()), "no content attacks yet");
+        let builtin = Content::builtin();
+        let attack_of = |name: &str| builtin.rules.characters[builtin.names.character_index(name).unwrap() as usize].attack;
+        assert!(attack_of("ghoul").is_some(), "ghouls attack");
+        assert_eq!(attack_of("ghoul_brute"), attack_of("ghoul"), "variants inherit it");
+        assert_eq!(attack_of("ghoul_forest"), attack_of("ghoul"));
+        assert!(attack_of("exosuit").is_none());
     }
 
     #[test]

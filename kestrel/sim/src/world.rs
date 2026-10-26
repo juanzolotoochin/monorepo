@@ -821,6 +821,10 @@ impl World {
             for message in messages.projectile_expired {
                 settlement.projectile_expired(message);
             }
+            settlement.start_swings(tick, messages.start_swing);
+            for message in messages.swing_lands {
+                settlement.swing_lands(tick, message);
+            }
             for message in messages.breach {
                 settlement.breach(message);
             }

@@ -667,6 +667,8 @@ impl Simulation {
                     s::Event::LaserFired { agent, to, hit_actor, cover, .. } => Event::LaserFired { agent: *agent, to: p(*to), hit_actor: *hit_actor, cover: *cover },
                     s::Event::Breach { position } => Event::Breach { position: p(*position) },
                     s::Event::PileToss { .. } => return None,
+                    // Not presented yet (GHOUL_ATTACK_HANDOFF.md, task 4).
+                    s::Event::ThreatWindup { .. } | s::Event::ThreatSwing { .. } => return None,
                 })
             })
             .collect();

@@ -171,6 +171,37 @@
 - **Found in:** task 1 of `kestrel/GHOUL_ATTACK_HANDOFF.md`
   (branch `kestrel-ghoul-attacks`).
 
+## Give a scene ghouls and hurtable players
+
+- **Status:** open
+- **Why:** ghouls hit players only when the scenario's `player_health` is
+  above 0, and no scene has both: the arena and forest have ghouls with
+  `player_health` 0, and the laser pit has health but no waves. So the
+  ghoul attack (task 3 of `kestrel/GHOUL_ATTACK_HANDOFF.md`) is reached
+  only by the sim tests, and nobody can see it in play.
+- **What to do:** decide which scene gets it: health in the combat arena,
+  or a wave in the laser pit, or a new scene. Changing a golden scene
+  (arena, forest) changes the golden file's behaviour lines, so explain
+  that in the commit.
+- **Where:** `kestrel/app/assets/levels/*.ron`, `sim/src/scenario.rs`
+  (`golden_report`).
+- **Found in:** task 3 of `kestrel/GHOUL_ATTACK_HANDOFF.md`.
+
+## Decide whether a ghoul reaches a flying or busy player
+
+- **Status:** open
+- **Why:** a ghoul's reach is measured on the ground plane only, so it hits
+  a player hovering 1.8 m up on the jetpack. And a ghoul's push is a
+  velocity that `walk` brakes out; during the player's own non-laser swing
+  or a dig, `walk` doesn't move the avatar and brakes that velocity away,
+  so the hit lands with no push.
+- **What to do:** decide whether reach checks height (skip players whose
+  `avatar.height` is well above the ground under the threat) and whether a
+  push should move a swinging or digging avatar. Both are rules choices.
+- **Where:** `kestrel/sim/src/settlement/combat.rs` (`swing_reaches`,
+  `threats_in_reach`, `swing_lands`), `avatar.rs` (`walk`).
+- **Found in:** task 3 of `kestrel/GHOUL_ATTACK_HANDOFF.md`.
+
 ## Done
 
 ### Release a transfer's reservation when its avatar respawns
