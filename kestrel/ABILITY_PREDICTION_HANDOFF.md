@@ -135,6 +135,44 @@ mispredictions:
   hit applied to the avatar on that tick.
 - It is not counted in the mispredict totals.
 
+Done in task 6, app only (the sim, protocol and golden file are
+unchanged):
+
+- Detection: no event says stage 5 touched a player (a laser hit on one
+  shows none; `Event::Hit` is for threats), so a client checks each
+  confirmed tick against the replay (`prediction::StageFive`, fed from the
+  ticks `step` runs). Tick T touched the avatar if the confirmed avatar
+  after T differs from replaying T from the confirmed settlement before it,
+  with the client's commands that really applied on T (`applied_commands`
+  joined with the pending commands' kinds). So a late input is no touch,
+  and any future push (player knockback, ghouls hitting agents) is caught
+  with no code of its own. Left out: a swing's hit count (the replay
+  assumes it hits nothing), ticks run on terrain that changed since
+  (`Terrain::revision`; terrain changes stay mispredictions), ticks with a
+  command whose kind isn't known, and avatars on a pile job.
+- Classification (`AvatarPrediction::update`): a change of prediction on a
+  frame that confirmed a touched tick (since last frame's replay started) is
+  a knockback: a separate offset, `KNOCKBACK_HALF_LIFE` 100 ms and
+  `KNOCKBACK_SNAP_DISTANCE` 3 u. `Drawn::knockback` and `knockback_snapped`;
+  `mispredicted` and `snapped` stay mispredictions only. A late input
+  confirmed on the same frame counts as knockback.
+- Telemetry: `CorrectionKind::Knockback` ("knockback", blue), always kept,
+  closed by its snap with `snapped`; knockback frames counted apart;
+  `preview_corrections` in the report counts mispredictions only, with
+  `preview_knockbacks` and `preview_knockback_frames` beside it.
+- Death and respawn: a death (stage 5: health 0, velocity zeroed) stops the
+  avatar, a knockback. The respawn is the avatar's own stage 2 step once
+  `respawn_at` is confirmed, so the replay predicts the teleport on its
+  tick and nothing corrects. A `Respawn` command is predicted too; moved
+  late by the host, it is a snap, as before.
+- Tests: `a_push_from_stage_5_is_a_smoothed_knockback_not_a_misprediction`,
+  `stage_five_sees_what_the_replay_never_runs_and_not_late_inputs`,
+  `the_respawn_after_a_death_is_predicted`,
+  `knockbacks_are_kept_apart_from_mispredictions`, and the harness test
+  `joined_player_hit_by_the_laser_is_knocked_back_not_mispredicted` (laser
+  pit, 100 ± 20 ms: the host kills the running client; five hits change
+  nothing drawn, the death is one 0.73 u knockback, no misprediction).
+
 ### D7. Matching key: the command that caused the event (option A, client-side)
 
 Laser matching today goes by aim and muzzle, so two identical commands are
@@ -231,7 +269,9 @@ changes last.
 - App units for the ledger: matching by key, a moved input moving its
   event, a timeout logged once, `Keep` versus `Cancel`.
 - A knockback case once enemies can hit agents: smoothed, not snapped,
-  logged as `Knockback`, with no mispredict counted.
+  logged as `Knockback`, with no mispredict counted. (Task 6 covers a
+  player's laser killing the client; a push that moves the avatar waits
+  for gameplay that pushes agents, `todo/characters.md`.)
 
 ## Rules
 

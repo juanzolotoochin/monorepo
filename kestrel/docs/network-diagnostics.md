@@ -49,7 +49,7 @@ it is not a simulation replay or a desync capture.
 - **Movement preview:** a client predicts its own avatar (see below). The
   section shows the horizontal distance from the confirmed avatar (about one
   input lead while moving), the last frame's misprediction, and counts of
-  mispredicted frames and snaps. These are view observations, not
+  mispredicted frames, snaps and knockback frames. These are view observations, not
   deterministic state mismatches. A line per event kind (`laser`)
   counts the client's predicted events: drawn, confirmed, mispredicted, and
   how long before its confirmation the last one was drawn (about one input
@@ -63,6 +63,17 @@ it is not a simulation replay or a desync capture.
   line to where the new prediction pulls it. The copied report lists them
   under `preview_corrections`, with duration, distance, positions, local tick,
   pending inputs and RTT at the start.
+- **Knockbacks:** a change of prediction that something the replay never
+  runs explains (a hit, a death, a push: the simulation's stage 5; see
+  [movement prediction](#movement-prediction)) is a `knockback`, not a
+  misprediction. It slides back over a longer offset (halving every 100 ms,
+  snapping past 3 units) and is always kept, drawn in blue. It is left out
+  of the mispredicted frames, snaps, small corrections and the
+  corrections count; the window counts knockback frames and kept
+  knockbacks on their own. In the copied report it is listed under
+  `preview_corrections` with `kind: "knockback"` and `snapped`, and counted
+  in `preview_knockbacks` and `preview_knockback_frames`; the top-level
+  `preview_corrections` counts mispredictions only.
 - **Event mispredictions:** a correction named by an event kind (`laser`)
   is one predicted event (see below) that the confirmed one didn't
   match: it ended elsewhere, by any distance, or never confirmed. It is
@@ -119,9 +130,29 @@ ahead of them. See [the prediction](../app/src/prediction.rs).
 When the prediction for the drawn tick changes, the difference is kept as a
 visual offset that halves every 50 ms (or snaps past 1.5 units), and is logged
 as a `mispredict` correction. The replay can't know about late inputs the host
-moved to a later tick, hits and knockback, damage, pile jobs, terrain changed
-by anyone (your own digs included), respawning after death, or scene changes,
-so those still correct. Pending commands go through the same actions the
+moved to a later tick, hits and knockback, damage, deaths, pile jobs, terrain
+changed by anyone (your own digs included), or scene changes, so those still
+correct.
+
+Hits, deaths and pushes are the simulation's stage 5, which the replay never
+runs, so the correction they cause is expected: a `knockback`, not a
+misprediction. Its offset halves every 100 ms and snaps past 3 units. A
+client tells them apart by checking each confirmed tick against the replay
+([`StageFive`](../app/src/prediction.rs)): if the avatar after the tick isn't
+what replaying that tick from the confirmed world before it gives, with the
+commands that really applied on it, something the replay doesn't run touched
+it. A change of prediction on the frame such a tick is confirmed is a
+knockback; a late input confirmed on the same frame is counted with it. A
+late input alone is not a touch: the check uses the tick the host applied it
+on. A tick run on terrain that has changed since isn't checked, so terrain
+changes stay mispredictions. Today a laser hit from another player only
+lowers health, which moves nothing; a death stops the avatar where it was
+hit, which is a knockback. The respawn two seconds later is the avatar's own
+step, so the replay draws it on its tick, a teleport with no correction (a
+`Respawn` command is predicted the same way; if the host moves it later, that
+is a snap).
+
+Pending commands go through the same actions the
 simulation applies (`settlement::action`), so walks to a point (the depot
 dock walk, scripted walks) are predicted too: the route is planned from the
 confirmed terrain when the walk starts. The units it then moves at the dock are not.
