@@ -33,7 +33,8 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///    state and swing.
 /// 8: threats keep their windup and cooldown (`Threat::windup`,
 ///    `ready_at`), and pending messages have the threats' swing queues.
-pub const FORMAT_VERSION: u32 = 8;
+/// 9: avatars keep a threat's push while they swing (`AvatarState::push`).
+pub const FORMAT_VERSION: u32 = 9;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

@@ -165,6 +165,12 @@ pub struct AvatarState {
     pub pile_failure: Option<String>,
     /// Meters per second.
     pub velocity: FxVec2,
+    /// A threat's push on an avatar busy with a swing, in meters per
+    /// second. The swing keeps the avatar's own velocity from moving it,
+    /// so the push moves it on its own (`walk`), and what is left of it
+    /// joins `velocity` when the swing ends.
+    #[serde(default)]
+    pub push: FxVec2,
     pub intent: Option<Intent>,
     pub run: bool,
     pub swing: Option<Swing>,
@@ -248,6 +254,7 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, tick: u64, terrain: &
             a.avatar.flight = Flight::default();
             a.avatar.jump = JumpPhase::Grounded;
             a.avatar.velocity = FxVec2::ZERO;
+            a.avatar.push = FxVec2::ZERO;
             a.avatar.intent = Some(Intent::Stop);
         }
         return;
@@ -321,19 +328,28 @@ fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain, def: &CharacterDef) {
         a.position = slide(terrain, a.position, approach(a.position, center, centering) - a.position, radius);
         return;
     }
-    if let Some(swing) = &avatar.swing {
-        if tick < swing.until && swing.weapon != Weapon::Laser {
+    if let Some((started, until, weapon, aim)) = avatar.swing.as_ref().map(|s| (s.started, s.until, s.weapon, s.aim)) {
+        if tick < until && weapon != Weapon::Laser {
             avatar.velocity = approach(avatar.velocity, FxVec2::ZERO, tuning.attack_braking);
-            if tick < swing.started + tuning.attack.aim {
-                let target = nav::bearing(FxVec2::ZERO, swing.aim);
+            if avatar.push != FxVec2::ZERO {
+                // A threat's push moves the swinging avatar as it would an
+                // idle one: braked at the walking rate, by the walking rules.
+                avatar.push = approach(avatar.push, FxVec2::ZERO, tuning.braking);
+                let delta = avatar.push / per_tick;
+                step(a, terrain, delta, radius);
+            }
+            if tick < started + tuning.attack.aim {
+                let target = nav::bearing(FxVec2::ZERO, aim);
                 a.heading += angle_between(a.heading, target) * AIM_BLEND;
             }
             return;
         }
-        if tick >= swing.until {
+        if tick >= until {
             avatar.swing = None;
         }
     }
+    // What is left of a push from the swing moves the avatar from now on.
+    avatar.velocity += std::mem::take(&mut avatar.push);
     let speed = if avatar.run { def.movement.run } else { def.movement.walk };
     let mut desired = FxVec2::ZERO;
     match &avatar.intent {
@@ -368,6 +384,20 @@ fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain, def: &CharacterDef) {
             avatar.velocity = FxVec2::ZERO;
         }
     }
+    step(a, terrain, delta, radius);
+    let moved = a.position - previous;
+    let length = moved.length();
+    if length > Fx::from_ratio(1, 1000) {
+        let target = nav::bearing(FxVec2::ZERO, moved);
+        a.heading += angle_between(a.heading, target) * TURN_BLEND;
+    }
+}
+
+/// Moves the avatar by `delta`, sliding along obstacles, if the ground
+/// (or, in the air, the flight rules) allows it. On foot, it keeps to the
+/// ground it reaches.
+fn step(a: &mut AgentState, terrain: &Terrain, delta: FxVec2, radius: Fx) {
+    let previous = a.position;
     let candidate = slide(terrain, previous, delta, radius);
     let airborne = a.avatar.flight.airborne;
     let allowed = if airborne {
@@ -383,13 +413,7 @@ fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain, def: &CharacterDef) {
         }
         a.position = candidate;
     }
-    let moved = a.position - previous;
-    let length = moved.length();
-    a.travelled += length;
-    if length > Fx::from_ratio(1, 1000) {
-        let target = nav::bearing(FxVec2::ZERO, moved);
-        a.heading += angle_between(a.heading, target) * TURN_BLEND;
-    }
+    a.travelled += (a.position - previous).length();
 }
 
 /// The jetpack: hover over the highest ground ahead while held, fall back to
@@ -549,6 +573,7 @@ impl Settlement {
         a.avatar.queued = None;
         a.avatar.queued_at = None;
         a.avatar.velocity = FxVec2::ZERO;
+        a.avatar.push = FxVec2::ZERO;
         a.avatar.dig = None;
         a.route.clear();
         if let Some(job) = a.avatar.job.take() {

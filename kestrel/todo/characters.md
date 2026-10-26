@@ -132,21 +132,6 @@
 - **Found in:** task 6 of `kestrel/ABILITY_PREDICTION_HANDOFF.md`
   (branch `kestrel-ability-prediction`).
 
-## Decide whether a ghoul reaches a flying or busy player
-
-- **Status:** open
-- **Why:** a ghoul's reach is measured on the ground plane only, so it hits
-  a player hovering 1.8 m up on the jetpack. And a ghoul's push is a
-  velocity that `walk` brakes out; during the player's own non-laser swing
-  or a dig, `walk` doesn't move the avatar and brakes that velocity away,
-  so the hit lands with no push.
-- **What to do:** decide whether reach checks height (skip players whose
-  `avatar.height` is well above the ground under the threat) and whether a
-  push should move a swinging or digging avatar. Both are rules choices.
-- **Where:** `kestrel/sim/src/settlement/combat.rs` (`swing_reaches`,
-  `threats_in_reach`, `swing_lands`), `avatar.rs` (`walk`).
-- **Found in:** task 3 of `kestrel/GHOUL_ATTACK_HANDOFF.md`.
-
 ## Flash the player's screen or body when it is hurt
 
 - **Status:** open
@@ -164,6 +149,31 @@
 - **Found in:** task 4 of `kestrel/GHOUL_ATTACK_HANDOFF.md`.
 
 ## Done
+
+### Decide whether a ghoul reaches a flying or busy player
+
+- **Status:** done (branch `kestrel-ghoul-followups`)
+- **Why:** a ghoul's reach is measured on the ground plane only, so it hits
+  a player hovering 1.8 m up on the jetpack. And a ghoul's push is a
+  velocity that `walk` brakes out; during the player's own non-laser swing
+  or a dig, `walk` doesn't move the avatar and brakes that velocity away,
+  so the hit lands with no push.
+- **What to do:** decide whether reach checks height (skip players whose
+  `avatar.height` is well above the ground under the threat) and whether a
+  push should move a swinging or digging avatar. Both are rules choices.
+- **Done:** a ghoul can't reach feet more than `SWING_HEIGHT` (1 m) above
+  the ground under the player, at the windup's start or the swing's
+  landing. A push ends a dig, and during the player's own melee swing it
+  goes to the new `AvatarState::push`, which `walk` brakes and moves by the
+  walking rules (save format 9). Tests in `combat_tests.rs`:
+  `a_ghoul_does_not_reach_a_hovering_player`,
+  `a_player_who_lifts_off_during_the_windup_is_missed`,
+  `a_jump_does_not_dodge_a_ghoul`,
+  `a_ghoul_pushes_a_swinging_player_as_far_as_an_idle_one`,
+  `a_ghoul_push_ends_a_dig_and_moves_the_player`.
+- **Where:** `kestrel/sim/src/settlement/combat.rs` (`swing_reaches`,
+  `threats_in_reach`, `swing_lands`), `avatar.rs` (`walk`).
+- **Found in:** task 3 of `kestrel/GHOUL_ATTACK_HANDOFF.md`.
 
 ### Decide what a player's death ends besides its transfer
 

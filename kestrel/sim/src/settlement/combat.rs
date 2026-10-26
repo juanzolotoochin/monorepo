@@ -32,6 +32,11 @@ const SPENT_TICKS: u64 = ticks_from_60hz(12);
 const DEFLECTED_TICKS: u64 = ticks_from_60hz(18);
 const PINNED_TICKS: u64 = ticks_from_60hz(36);
 const STAGGER_ON_PIERCE: u64 = ticks_from_60hz(42);
+/// A threat's swing reaches a player whose feet are at most this high
+/// above the ground under it, in meters. A jump (apex about 0.57 m) doesn't
+/// dodge it; the jetpack's hover (1.8 m) does. Every attacking character is
+/// a ghoul of one height, so it is a rule, not a character field.
+pub const SWING_HEIGHT: Fx = Fx::ONE;
 
 /// A stable counter-based roll, as in the original game: outcomes never
 /// depend on how many unrelated hits happened elsewhere.
@@ -437,7 +442,7 @@ impl Settlement {
             }
             if let Some(windup) = t.windup.filter(|w| w.lands <= tick) {
                 let mut out = Messages::default();
-                out.swing_lands.push(SwingLands { threat: t.id, agent: windup.agent, hit: self.swing_reaches(t, windup.agent) });
+                out.swing_lands.push(SwingLands { threat: t.id, agent: windup.agent, hit: self.swing_reaches(t, windup.agent, terrain) });
                 result.push((t.position, out));
             }
         }
@@ -445,7 +450,7 @@ impl Settlement {
             for (i, a) in self.agents.iter().enumerate() {
                 if a.controlled && a.avatar.health > 0 {
                     let mut out = Messages::default();
-                    self.threats_in_reach(i as AgentIx, a.position, tick, &mut out);
+                    self.threats_in_reach(i as AgentIx, a, tick, terrain, &mut out);
                     if !out.is_empty() {
                         result.push((a.position, out));
                     }
@@ -472,17 +477,31 @@ impl Settlement {
         self.characters[self.waves[t.wave as usize].character as usize].attack
     }
 
-    /// Stage 3: whether a threat's swing landing now reaches `agent`, alive
-    /// and within the attack's reach of the threat.
-    fn swing_reaches(&self, t: &Threat, agent: AgentIx) -> bool {
+    /// Stage 3: whether a threat's swing landing now reaches `agent`, alive,
+    /// within the attack's reach of the threat and low enough
+    /// (`SWING_HEIGHT`). A player who lifted off during the windup is missed.
+    fn swing_reaches(&self, t: &Threat, agent: AgentIx, terrain: &Terrain) -> bool {
         let (Some(attack), Some(a)) = (self.threat_attack(t), self.agents.get(agent as usize)) else { return false };
-        a.controlled && a.avatar.health > 0 && distance(t.position, a.position) <= attack.reach
+        a.controlled && a.avatar.health > 0 && distance(t.position, a.position) <= attack.reach && self.within_swing_height(a, terrain)
+    }
+
+    /// Whether a player's feet are low enough for a threat's swing: at most
+    /// `SWING_HEIGHT` above the ground under its body. Over a drop, the
+    /// ground it last stood on counts.
+    fn within_swing_height(&self, a: &super::AgentState, terrain: &Terrain) -> bool {
+        let radius = super::avatar::character_of(&self.characters, a).body.radius;
+        let ground = terrain.footprint(a.position, radius).unwrap_or(a.avatar.flight.support);
+        a.avatar.height - ground <= SWING_HEIGHT
     }
 
     /// Stage 3 for one hurtable player: every threat that could start a
     /// swing at it now. Stage 5 keeps the nearest player for each threat
-    /// (`start_swings`).
-    fn threats_in_reach(&self, agent: AgentIx, position: FxVec2, tick: u64, out: &mut Messages) {
+    /// (`start_swings`). A player too high (`SWING_HEIGHT`) starts none.
+    fn threats_in_reach(&self, agent: AgentIx, a: &super::AgentState, tick: u64, terrain: &Terrain, out: &mut Messages) {
+        if !self.within_swing_height(a, terrain) {
+            return;
+        }
+        let position = a.position;
         for t in &self.threats {
             let Some(attack) = self.threat_attack(t) else { continue };
             if !can_start_swing(t, tick) {
@@ -523,7 +542,8 @@ impl Settlement {
     /// starts, hit or miss. A hit hurts the player through `hurt_player`
     /// (the laser's path, so a kill releases its transfer) and, if it
     /// lives, pushes it away from the threat: a velocity the avatar's own
-    /// movement then brakes out (`walk`).
+    /// movement then brakes out (`walk`). The push ends a dig. An avatar in
+    /// its own melee swing takes it as `push`, which moves it as far.
     pub(crate) fn swing_lands(&mut self, tick: u64, message: SwingLands, terrain: &mut Terrain) {
         let Some(i) = self.threat_index(message.threat) else { return };
         let Some(attack) = self.threat_attack(&self.threats[i]) else { return };
@@ -545,7 +565,13 @@ impl Settlement {
             if away == FxVec2::ZERO {
                 away = nav::heading_vector(heading);
             }
-            a.avatar.velocity += away * attack.knockback;
+            a.avatar.dig = None;
+            let swinging = a.avatar.swing.as_ref().is_some_and(|s| s.weapon != Weapon::Laser);
+            if swinging {
+                a.avatar.push += away * attack.knockback;
+            } else {
+                a.avatar.velocity += away * attack.knockback;
+            }
         }
         let damage = if hit { attack.damage } else { 0 };
         self.events.push(Event::ThreatSwing { threat, agent: message.agent, hit, damage, killed });

@@ -176,6 +176,8 @@ Character definitions are moving in steps, each its own PR against `master`. Ste
   - **Latency:** the windup (about 400–500 ms) is longer than a typical input lead, and the ghoul shows it. Reach is checked when the swing lands, against where the player is then. A hit deals damage and a small knockback, smoothed on clients by the `Knockback` correction. It doesn't stun.
   - **Tuning:** an optional `attack` section on `FollowRoute` characters (`damage`, `reach`, `windup`, `cooldown`, `knockback`). A ghoul without it never attacks, as before.
   - **Targeting:** the nearest player in reach, with the lowest agent index on a tie. Each player scans the threats for ones in reach, as a projectile already does, so a threat with no player near costs one distance check.
+  - **Height:** a ghoul can't reach a player whose feet are more than 1 m above the ground under it (`SWING_HEIGHT` in `combat.rs`). This holds when the windup starts and when the swing lands, so a player who lifts off during the windup is missed. A jump (apex about 0.57 m) doesn't dodge; the jetpack's hover (1.8 m) does.
+  - **Push:** the push moves a busy player as far as an idle one, about 0.14 m at 3 m/s, braked at the walking rate and by the walking rules. It ends a dig. During the player's own melee swing it is kept apart from the avatar's velocity (`AvatarState::push`), since the swing keeps that velocity from moving the avatar.
 - **Out of scope:** possession. Defenders stay as they are.
 
 ### Open questions

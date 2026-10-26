@@ -1321,3 +1321,116 @@ fn ghoul_attacks_are_deterministic() {
     assert!(hits > 0, "the ghouls hit someone");
     assert_eq!(one, run(4).0);
 }
+
+// How high a ghoul reaches, and how its push moves a busy player.
+
+/// A player hovering on the jetpack is too high for a ghoul to start a
+/// swing at.
+#[test]
+fn a_ghoul_does_not_reach_a_hovering_player() {
+    let mut arena = ghoul_arena(3);
+    let player = arena.player;
+    arena.place(player, 0.0, 0.0);
+    arena.command(CommandKind::Jetpack { agent: player as u16, enabled: true });
+    arena.step(ms(1000));
+    assert!(arena.s().agents[player].avatar.height > fx(1.7), "hovering: {}", arena.s().agents[player].avatar.height);
+    arena.threat(100, 0.0, 0.7, 3, 0);
+    for _ in 0..ms(1000) {
+        arena.step(1);
+        assert!(windups(&arena).is_empty(), "no windup at a hovering player");
+    }
+    assert_eq!(arena.health(player), 3);
+}
+
+/// Reach is checked again when the swing lands: a player who lifts off
+/// during the windup is missed.
+#[test]
+fn a_player_who_lifts_off_during_the_windup_is_missed() {
+    let mut arena = ghoul_arena(3);
+    let player = arena.player;
+    arena.place(player, 0.0, 0.0);
+    arena.threat(100, 0.0, 0.7, 3, 0);
+    arena.step(1);
+    assert_eq!(windups(&arena).len(), 1);
+    arena.command(CommandKind::Jetpack { agent: player as u16, enabled: true });
+    arena.until_swing(100);
+    assert!(arena.s().agents[player].avatar.height > super::combat::SWING_HEIGHT);
+    assert_eq!(swings(&arena), vec![(100, player as u16, false, 0, false)]);
+    assert_eq!(arena.health(player), 3);
+}
+
+/// A jump isn't high enough to dodge a swing.
+#[test]
+fn a_jump_does_not_dodge_a_ghoul() {
+    let mut config = combat_scenario(vec![]);
+    config.player_health = 3;
+    config.agents.last_mut().unwrap().character = "exosuit_moonlit".into();
+    let mut arena = Arena::new(&config, &[]);
+    let player = arena.player;
+    arena.place(player, 0.0, 0.0);
+    arena.threat(100, 0.0, 0.7, 3, 0);
+    arena.step(1);
+    assert_eq!(windups(&arena).len(), 1);
+    arena.command(CommandKind::Jump { agent: player as u16 });
+    let lands = arena.s().threat(100).unwrap().windup.unwrap().lands;
+    while arena.tick() < lands {
+        arena.step(1);
+    }
+    let height = arena.s().agents[player].avatar.height;
+    assert!(height > fx(0.4), "near the jump's apex as the swing lands: {height}");
+    arena.step(1);
+    assert_eq!(swings(&arena), vec![(100, player as u16, true, 1, false)]);
+}
+
+/// How far a ghoul's hit pushes the player in the half second after it.
+/// `busy` runs as the windup starts, with the tick it lands; it may step,
+/// but not past that tick.
+fn pushed(busy: impl FnOnce(&mut Arena, u64)) -> Fx {
+    let mut arena = ghoul_arena(3);
+    let player = arena.player;
+    arena.place(player, 0.0, 0.0);
+    arena.threat(100, 0.0, 0.7, 3, 0);
+    arena.step(1);
+    assert_eq!(windups(&arena).len(), 1);
+    let lands = arena.s().threat(100).unwrap().windup.unwrap().lands;
+    busy(&mut arena, lands);
+    while arena.tick() < lands {
+        arena.step(1);
+    }
+    let before = arena.s().agents[player].position;
+    arena.step(1);
+    assert_eq!(swings(&arena), vec![(100, player as u16, true, 1, false)]);
+    assert_eq!(arena.s().agents[player].avatar.dig, None, "a push ends a dig");
+    arena.step(ms(500));
+    let a = &arena.s().agents[player];
+    assert_eq!((a.avatar.velocity, a.avatar.push), (FxVec2::ZERO, FxVec2::ZERO), "braked out");
+    crate::nav::distance(before, a.position)
+}
+
+#[test]
+fn a_ghoul_pushes_a_swinging_player_as_far_as_an_idle_one() {
+    let idle = pushed(|_, _| {});
+    assert!(idle > fx(0.08) && idle < fx(0.16), "an idle player moves about 0.14 m: {idle}");
+    let swinging = pushed(|arena, lands| {
+        // A sword swing away from the ghoul, still going when it lands.
+        arena.step(lands - 2 - arena.tick());
+        let agent = arena.player as u16;
+        arena.command(CommandKind::Attack { agent, weapon: Weapon::Sword, aim: FxVec2::new(Fx::ZERO, -Fx::ONE), muzzle: [Fx::ZERO; 3] });
+        let swing = arena.s().agents[agent as usize].avatar.swing.clone().expect("swinging");
+        assert!(swing.until > lands + 1, "the swing outlasts the hit");
+    });
+    assert!((swinging - idle).abs() < fx(0.02), "swinging {swinging}, idle {idle}");
+}
+
+#[test]
+fn a_ghoul_push_ends_a_dig_and_moves_the_player() {
+    let idle = pushed(|_, _| {});
+    let digging = pushed(|arena, _| {
+        let (_, terrain) = arena.sim.world_mut().settlement_and_terrain_mut();
+        terrain.diggable = true;
+        let agent = arena.player as u16;
+        arena.command(CommandKind::DigDown { agent });
+        assert!(arena.s().agents[agent as usize].avatar.dig.is_some());
+    });
+    assert!((digging - idle).abs() < fx(0.02), "digging {digging}, idle {idle}");
+}
