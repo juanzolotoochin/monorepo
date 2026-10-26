@@ -4,6 +4,7 @@ use std::time::Duration;
 use content::Content;
 use sim::{CommandKind, PlayerId, Simulation, World};
 
+use crate::margin::{InputMargin, DEVIATION_GAIN, SAMPLES_TO_ADAPT};
 use crate::protocol::{decode, encode, Input, Packet, StableId, SAVE_CHUNK};
 use crate::transport::Transport;
 use crate::{millis, HashLog, NetConfig, NetDiagnostics, NetEvent, NetStats, Pacer, TICK};
@@ -43,7 +44,10 @@ pub struct Client<T: Transport> {
     /// The host app's name for that world.
     label: String,
     player: Option<PlayerId>,
-    input_delay: u64,
+    margin: InputMargin,
+    /// The last tick an input asked for. Later inputs never ask for less,
+    /// so the host applies them in the order they were sent.
+    last_requested: u64,
     /// Official turns received and not simulated yet.
     turns: BTreeMap<u64, Vec<sim::Command>>,
     next_seq: u64,
@@ -51,12 +55,21 @@ pub struct Client<T: Transport> {
     queued: u64,
     applied: u64,
     unacked: VecDeque<Input>,
+    /// Inputs sent and not simulated here yet, oldest first. Unlike
+    /// `unacked`, they stay until they apply.
+    pending: VecDeque<Pending>,
     reports: VecDeque<(u64, u64)>,
     history: HashLog,
     pacer: Pacer,
     /// The host's next tick, as of its last packet.
     host_tick: u64,
     rtt: Option<Duration>,
+    /// How much longer than `rtt` a sample takes, on average, a shorter one
+    /// counting as zero (like TCP's RTTVAR, but only the late side: an early
+    /// trip never makes an input late, and a link getting faster shouldn't
+    /// grow the margin). And the samples taken.
+    rtt_deviation: Duration,
+    rtt_samples: u32,
     started: Duration,
     last_heard: Option<Duration>,
     last_hello: Option<Duration>,
@@ -70,13 +83,24 @@ pub struct Client<T: Transport> {
     diverge: Option<sim::Command>,
 }
 
+/// An input sent and not simulated here yet.
+struct Pending {
+    /// The tick it asked for.
+    tick: u64,
+    kind: CommandKind,
+    /// How far past the host's estimated present that tick was; `None`
+    /// before the round trip was measured, when that estimate is a guess.
+    headroom: Option<u64>,
+}
+
 impl<T: Transport> Client<T> {
     pub fn new(transport: T, host: T::Addr, content: Content, config: NetConfig, stable_id: StableId, now: Duration) -> Client<T> {
         Client {
             transport,
             host,
             content,
-            input_delay: config.input_delay,
+            margin: InputMargin::new(config.input_delay, config.input_margin, now),
+            last_requested: 0,
             config,
             stable_id,
             state: State::Connecting,
@@ -89,11 +113,14 @@ impl<T: Transport> Client<T> {
             queued: 0,
             applied: 0,
             unacked: VecDeque::new(),
+            pending: VecDeque::new(),
             reports: VecDeque::new(),
             history: HashLog::default(),
             pacer: Pacer::new(now),
             host_tick: 0,
             rtt: None,
+            rtt_deviation: Duration::ZERO,
+            rtt_samples: 0,
             started: now,
             last_heard: None,
             last_hello: None,
@@ -144,8 +171,10 @@ impl<T: Transport> Client<T> {
         &self.history
     }
 
+    /// The input margin in ticks: adaptive (see `margin`), or pinned by
+    /// `NetConfig::input_margin`.
     pub fn input_delay(&self) -> u64 {
-        self.input_delay
+        self.margin.ticks()
     }
 
     pub fn stats(&self) -> NetStats {
@@ -162,7 +191,8 @@ impl<T: Transport> Client<T> {
     pub fn diagnostics(&self, now: Duration) -> NetDiagnostics {
         let mut diagnostics = self.diagnostics.clone();
         diagnostics.host_tick = (self.world != 0 && self.host_tick != 0).then_some(self.host_tick);
-        diagnostics.input_delay = self.input_delay;
+        diagnostics.input_delay = self.margin.ticks();
+        diagnostics.input_margin_pinned = self.margin.pinned();
         diagnostics.jitter_buffer = self.config.jitter_buffer;
         diagnostics.last_packet_age = self.last_heard.map(|at| now.saturating_sub(at));
         diagnostics.unacked_inputs = self.unacked.len() as u64;
@@ -179,17 +209,33 @@ impl<T: Transport> Client<T> {
         self.pacer.alpha(now)
     }
 
-    /// Schedules a command for `input_delay` ticks after the host's current tick.
+    /// The tick a command queued now asks for: the input margin after the
+    /// host's current tick, estimated from its last packet and half the
+    /// round trip, and never before the last command's tick.
+    pub fn input_horizon(&self) -> u64 {
+        (self.host_present() + self.margin.ticks()).max(self.last_requested)
+    }
+
+    /// The host's current tick, estimated from its last packet and half the
+    /// round trip.
+    pub(crate) fn host_present(&self) -> u64 {
+        let one_way = self.rtt.map_or(0, |rtt| (rtt / 2).as_nanos().div_ceil(TICK.as_nanos()) as u64);
+        self.host_tick + one_way
+    }
+
+    /// Schedules a command for the input margin after the host's current tick.
     pub fn queue(&mut self, kind: CommandKind) {
         if !matches!(self.state, State::Playing(_)) {
             return;
         }
-        let one_way = self.rtt.map_or(0, |rtt| (rtt / 2).as_nanos().div_ceil(TICK.as_nanos()) as u64);
         // `host_tick` runs ahead of this client's world (the jitter buffer),
         // so this tick says little about when the command applies here;
         // `pending_inputs` does.
-        let tick = self.host_tick + one_way + self.input_delay;
+        let tick = self.input_horizon();
+        self.last_requested = tick;
         self.diagnostics.last_requested_tick = Some(tick);
+        let headroom = self.rtt.map(|_| tick.saturating_sub(self.host_present()));
+        self.pending.push_back(Pending { tick, kind: kind.clone(), headroom });
         self.unacked.push_back(Input { seq: self.next_seq, tick, kind });
         self.next_seq += 1;
         self.queued += 1;
@@ -198,6 +244,12 @@ impl<T: Transport> Client<T> {
     /// Commands this client queued that haven't been simulated yet.
     pub fn pending_inputs(&self) -> u64 {
         self.queued.saturating_sub(self.applied)
+    }
+
+    /// The commands `pending_inputs` counts, oldest first, each with the
+    /// tick it asked for. The host moves a late one to a later tick.
+    pub fn pending_commands(&self) -> impl Iterator<Item = (u64, &CommandKind)> + '_ {
+        self.pending.iter().map(|p| (p.tick, &p.kind))
     }
 
     /// Handles packets, runs every tick that is due and available (calling
@@ -221,6 +273,7 @@ impl<T: Transport> Client<T> {
             self.events.push(NetEvent::HostLost);
             return;
         }
+        self.margin.update(now);
         if let State::Playing(sim) = &mut self.state {
             let tick = sim.world().tick();
             let ready = ready_turns(&self.turns, tick);
@@ -233,7 +286,19 @@ impl<T: Transport> Client<T> {
             for _ in 0..steps {
                 let tick = sim.world().tick();
                 let mut turn = self.turns.remove(&tick).expect("ready turn");
-                self.applied += turn.iter().filter(|c| Some(c.player) == self.player).count() as u64;
+                let mine = turn.iter().filter(|c| Some(c.player) == self.player).count();
+                self.applied += mine as u64;
+                // The host keeps a player's commands in the order they were
+                // sent. One in a later turn than it asked for came in late.
+                for input in self.pending.drain(..mine.min(self.pending.len())) {
+                    if tick > input.tick {
+                        self.diagnostics.late_inputs += 1;
+                        self.diagnostics.shifted_ticks += tick - input.tick;
+                        if let Some(headroom) = input.headroom {
+                            self.margin.late(headroom, tick - input.tick, now);
+                        }
+                    }
+                }
                 turn.extend(self.diverge.take());
                 let hash = sim.step(&turn);
                 self.history.push(tick, hash.total);
@@ -309,8 +374,10 @@ impl<T: Transport> Client<T> {
                 self.world = world;
                 self.label = label;
                 self.player = Some(player);
-                self.input_delay = input_delay;
+                self.margin.welcome(input_delay, now);
+                self.last_requested = 0;
                 self.unacked.clear();
+                self.pending.clear();
                 self.next_seq = 1;
                 // Inputs not in the new save are lost.
                 (self.queued, self.applied) = (0, 0);
@@ -349,10 +416,18 @@ impl<T: Transport> Client<T> {
                     let elapsed = millis(now).wrapping_sub(pong).saturating_sub(pong_held_ms);
                     let sample = Duration::from_millis(elapsed as u64);
                     self.diagnostics.rtt_sample = Some(sample);
-                    self.rtt = Some(match self.rtt {
+                    if let Some(rtt) = self.rtt {
+                        self.rtt_deviation = (self.rtt_deviation * (DEVIATION_GAIN - 1) + sample.saturating_sub(rtt)) / DEVIATION_GAIN;
+                    }
+                    let rtt = match self.rtt {
                         Some(rtt) => (rtt * 7 + sample) / 8,
                         None => sample,
-                    });
+                    };
+                    self.rtt = Some(rtt);
+                    self.rtt_samples = self.rtt_samples.saturating_add(1);
+                    if self.rtt_samples >= SAMPLES_TO_ADAPT {
+                        self.margin.measure(rtt, self.rtt_deviation, now);
+                    }
                 }
             }
             Packet::Desync { epoch, world, tick } if epoch == self.epoch && world == self.world => {

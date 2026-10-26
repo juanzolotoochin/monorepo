@@ -7,8 +7,9 @@
 //! so tests run on the virtual clock of [`netsim`].
 //!
 //! - The host's own input enters its next open turn. Clients schedule inputs
-//!   `input_delay` ticks ahead of the host. The host never waits: an input
-//!   that arrives after its tick closed moves to the next open turn.
+//!   an input margin ahead of the host, sized from the measured network
+//!   (`margin`). The host never waits: an input that arrives after its tick
+//!   closed moves to the next open turn.
 //! - Clients keep a small buffer of turns and catch up by running extra ticks.
 //! - Clients report hashes; the host compares them with its own. On a
 //!   mismatch the session halts (dev) or the client is resynced through the
@@ -18,6 +19,7 @@
 
 mod client;
 mod host;
+mod margin;
 pub mod netsim;
 pub mod protocol;
 pub mod transport;
@@ -46,8 +48,12 @@ pub enum DesyncPolicy {
 
 #[derive(Clone, Debug)]
 pub struct NetConfig {
-    /// Ticks between an input and the tick it applies on.
+    /// Ticks between an input and the tick it applies on. A host tells
+    /// clients this as their starting input margin.
     pub input_delay: u64,
+    /// Pins a client's input margin (ticks) instead of adapting it to the
+    /// measured network.
+    pub input_margin: Option<u64>,
     pub desync: DesyncPolicy,
     /// Turns a client tries to keep in hand to absorb jitter.
     pub jitter_buffer: u64,
@@ -61,6 +67,7 @@ impl Default for NetConfig {
     fn default() -> Self {
         NetConfig {
             input_delay: content::millis_to_ticks(133),
+            input_margin: None,
             desync: DesyncPolicy::Halt,
             jitter_buffer: content::millis_to_ticks(67),
             timeout: Duration::from_secs(5),
@@ -96,7 +103,8 @@ pub struct NetStats {
     pub packets_received: u64,
     pub bytes_sent: u64,
     pub bytes_received: u64,
-    /// Inputs that arrived after their tick and moved to a later turn (host only).
+    /// Inputs that arrived after their tick and moved to a later turn (host
+    /// only; a client counts its own in `NetDiagnostics::late_inputs`).
     pub late_inputs: u64,
 }
 
@@ -105,7 +113,13 @@ pub struct NetStats {
 #[derive(Clone, Debug, Default)]
 pub struct NetDiagnostics {
     pub host_tick: Option<u64>,
+    /// A client's input margin: adaptive, or pinned by `input_margin_pinned`.
     pub input_delay: u64,
+    pub input_margin_pinned: bool,
+    /// A client's inputs that applied later than they asked for, as it saw
+    /// them in the host's turns, and the ticks they moved in all.
+    pub late_inputs: u64,
+    pub shifted_ticks: u64,
     pub remote_input_delay: u64,
     pub jitter_buffer: u64,
     pub last_packet_age: Option<Duration>,

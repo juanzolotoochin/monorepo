@@ -21,13 +21,16 @@ pub struct Launch {
     pub record: Option<String>,
     /// A recording to play back instead of live input.
     pub replay: Option<(Vec<u8>, InputLog)>,
+    /// `--input-margin-ms`: pins a joining client's input margin instead of
+    /// adapting it to the network.
+    pub input_margin_ms: Option<u64>,
 }
 
 impl Launch {
     /// A single-player session in a scene, as tests start the game.
     #[cfg(test)]
     pub fn single_player(scene: usize) -> Launch {
-        Launch { network: None, scene, name: String::new(), record: None, replay: None }
+        Launch { network: None, scene, name: String::new(), record: None, replay: None, input_margin_ms: None }
     }
 }
 
@@ -39,6 +42,8 @@ pub struct Defaults {
     pub record: Option<String>,
     pub port: u16,
     pub address: String,
+    /// `--input-margin-ms`, for the games the menu starts too.
+    pub input_margin_ms: Option<u64>,
 }
 
 /// The port the menu offers for hosting, unless `--host` named one.

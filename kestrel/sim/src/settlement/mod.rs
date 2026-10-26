@@ -21,6 +21,7 @@ mod haulers;
 pub mod memory;
 pub mod piano;
 pub mod piles;
+pub mod prediction;
 
 use std::collections::BTreeMap;
 
@@ -36,6 +37,7 @@ use crate::terrain::{Disc, Terrain};
 
 pub use combat::{CombatMetrics, DefenderState, Event, Impact, Pinned, Projectile, SpentProjectile, Threat, TossEnd, WaveState};
 pub use haulers::{AgentState, Phase};
+pub use prediction::{AvatarReplay, PredictedLaser, ReplayedStrike};
 
 pub type ItemIx = u16;
 pub type DepotIx = u16;

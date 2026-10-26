@@ -487,11 +487,9 @@ impl Settlement {
     /// Flying off stops a dig.
     pub fn jetpack(&mut self, agent: usize, enabled: bool) {
         let characters = &self.characters;
-        if let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled && character_of(characters, a).jetpack().is_some()) {
-            a.avatar.flight.requested = enabled;
-            if enabled {
-                a.avatar.dig = None;
-            }
+        if let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) {
+            let def = character_of(characters, a);
+            jetpack(a, enabled, def);
         }
     }
 
@@ -499,14 +497,9 @@ impl Settlement {
     /// characters that jump. Midair presses do nothing.
     pub fn jump(&mut self, agent: usize, tick: u64) {
         let characters = &self.characters;
-        if let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled && character_of(characters, a).jump().is_some()) {
-            if matches!(a.avatar.jump, JumpPhase::Grounded)
-                && !a.avatar.flight.airborne
-                && a.avatar.dig.is_none()
-                && a.avatar.swing.is_none()
-            {
-                a.avatar.jump = JumpPhase::Preparing { started: tick };
-            }
+        if let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) {
+            let def = character_of(characters, a);
+            jump(a, tick, def);
         }
     }
 
@@ -516,28 +509,19 @@ impl Settlement {
     /// the pit there isn't as deep as it goes, and no pile or machine sits
     /// on the tile.
     pub fn dig(&mut self, tick: u64, agent: usize, terrain: &Terrain) {
-        if !terrain.diggable {
-            return;
-        }
         let Some(position) = self.agents.get(agent).map(|a| a.position) else { return };
-        if self.piles.as_ref().is_some_and(|lab| lab.blocks_dig(Terrain::pit_tile(position))) {
+        if !self.can_dig_at(position, terrain) {
             return;
         }
         let characters = &self.characters;
         let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
-        let Some(ticks) = character_of(characters, a).dig().map(|d| d.ticks) else { return };
-        let busy =a.avatar.swing.as_ref().is_some_and(|s| tick < s.until) || a.avatar.job.is_some();
-        let flight = &a.avatar.flight;
-        if busy || a.avatar.dig.is_some() || flight.requested || flight.airborne {
-            return;
-        }
-        let tile = Terrain::pit_tile(a.position);
-        if terrain.pit(tile) >= MAX_LAYERS || !terrain.inside(Terrain::pit_center(tile)) {
-            return;
-        }
-        a.route.clear();
-        a.avatar.intent = Some(Intent::Stop);
-        a.avatar.dig = Some(Dig { tile, started: tick, until: tick + ticks });
+        let def = character_of(characters, a);
+        dig(a, tick, terrain, def);
+    }
+
+    /// Whether the scene allows digging here: no pile or machine on the tile.
+    pub(super) fn can_dig_at(&self, position: FxVec2, terrain: &Terrain) -> bool {
+        terrain.diggable && !self.piles.as_ref().is_some_and(|lab| lab.blocks_dig(Terrain::pit_tile(position)))
     }
 
     /// Housekeeping: digs that are done take their layer out of the ground.
@@ -545,7 +529,7 @@ impl Settlement {
     pub(crate) fn dig_housekeeping(&mut self, tick: u64, terrain: &mut Terrain) {
         let mut dug = Vec::new();
         for a in self.agents.iter_mut().filter(|a| a.controlled) {
-            if let Some(dig) = a.avatar.dig.take_if(|d| tick + 1 >= d.until) {
+            if let Some(dig) = finish_dig(a, tick) {
                 if terrain.deepen(dig.tile) {
                     dug.push(dig.tile);
                 }
@@ -578,31 +562,25 @@ impl Settlement {
         }
         let (spawn, height) = (self.spawn, self.spawn_height);
         let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
-        a.position = spawn;
-        a.heading = Fx::PI;
-        a.route.clear();
-        a.avatar = AvatarState { height, ..AvatarState::default() };
-        a.avatar.intent = Some(Intent::Stop);
+        respawn(a, spawn, height);
         self.cancel_pile_job(agent);
     }
 
     /// Stage 3 for one avatar: a strike resolving this tick, and manual
     /// transfer units that are due.
     pub(super) fn read_avatar(&self, me: AgentIx, a: &AgentState, tick: u64, terrain: &Terrain, out: &mut Messages) {
-        if let Some(swing) = &a.avatar.swing {
-            if !swing.resolved && swing.resolve_at == tick && a.attack_ready <= tick {
-                let (targets, beam_end, cover) = self.strike_targets(me, a.position, swing.aim, swing.weapon, terrain);
-                out.strike.push(Strike {
-                    agent: me,
-                    weapon: swing.weapon,
-                    origin: a.position,
-                    forward: swing.aim,
-                    muzzle: swing.muzzle,
-                    targets,
-                    beam_end,
-                    cover,
-                });
-            }
+        if let Some(swing) = resolving(a, tick) {
+            let (targets, beam_end, cover) = self.strike_targets(me, a.position, swing.aim, swing.weapon, terrain);
+            out.strike.push(Strike {
+                agent: me,
+                weapon: swing.weapon,
+                origin: a.position,
+                forward: swing.aim,
+                muzzle: swing.muzzle,
+                targets,
+                beam_end,
+                cover,
+            });
         }
         if let Some(job) = &a.avatar.job {
             if tick >= job.next_tick && distance(a.position, self.depots[job.depot as usize].position) <= DOCK_REACH {
@@ -620,29 +598,9 @@ impl Settlement {
             self.cancel_pile_job(agent);
         }
         let characters = &self.characters;
-        let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled && (a.avatar.max_health == 0 || a.avatar.health > 0)) else { return };
-        // Walking off stops a dig.
-        let walking = match intent {
-            Intent::Stop => false,
-            Intent::Walk { direction, .. } => direction != FxVec2::ZERO,
-            Intent::GoTo { .. } => true,
-        };
-        if a.avatar.dig.is_some() && !walking {
-            return;
-        }
-        a.avatar.dig = None;
-        a.route.clear();
-        if let Intent::GoTo { target, run } = intent {
-            // On foot, routes avoid steps and drops; with the jetpack, anything goes.
-            let flying = a.avatar.flight.requested || a.avatar.flight.airborne;
-            let radius = character_of(characters, a).body.radius;
-            let walkable = |p: FxVec2, q: FxVec2| flying || terrain.walkable(p, q, radius);
-            a.route = nav::path_with(terrain, a.position, target, radius, &[], &walkable);
-            a.avatar.run = run;
-        } else if let Intent::Walk { run, .. } = intent {
-            a.avatar.run = run;
-        }
-        a.avatar.intent = Some(intent);
+        let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled && alive(a)) else { return };
+        let def = character_of(characters, a);
+        set_intent(a, intent, terrain, def);
     }
 
     /// Commands: the player stopped driving the avatar directly (pause, focus
@@ -656,25 +614,13 @@ impl Settlement {
         self.piano_notes.retain(|note| note.agent as usize != agent);
         let hauling = self.piles.as_ref().is_some_and(|lab| lab.hauler(agent as AgentIx).is_some_and(|h| h.job.is_some()));
         let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
-        a.avatar.flight.requested = false;
-        a.avatar.repair = None;
-        let docking = a.avatar.job.is_some() && matches!(a.avatar.intent, Some(Intent::GoTo { .. }));
-        if hauling || docking {
-            return;
-        }
-        if matches!(a.avatar.intent, Some(Intent::Walk { .. } | Intent::GoTo { .. })) {
-            a.route.clear();
-            a.avatar.intent = Some(Intent::Stop);
-        }
+        release(a, hauling);
     }
 
     /// Commands: starts an attack, or buffers one deliberate press during it.
     pub fn aim_avatar(&mut self, agent: usize, aim: FxVec2) {
         let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
-        let aim = aim.normalize_or_zero();
-        if aim != FxVec2::ZERO {
-            a.avatar.aim = Some(aim);
-        }
+        aim_at(a, aim);
     }
 
     pub fn attack(&mut self, tick: u64, agent: usize, weapon: Weapon, aim: FxVec2, muzzle: [Fx; 3]) {
@@ -685,50 +631,25 @@ impl Settlement {
             self.cancel_pile_job(agent);
         }
         let characters = &self.characters;
-        let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled && (a.avatar.max_health == 0 || a.avatar.health > 0)) else { return };
-        if a.avatar.dig.is_some() {
-            return;
-        }
-        let aim = aim.normalize_or_zero();
-        if aim == FxVec2::ZERO || muzzle.iter().any(|v| v.abs() > Fx::from_int(4)) {
-            return;
-        }
-        match &a.avatar.swing {
-            Some(swing) if tick < swing.until => {
-                a.avatar.queued = Some((weapon, aim, muzzle));
-            }
-            _ => {
-                let def = character_of(characters, a);
-                start_swing(a, tick, weapon, aim, muzzle, def.swift_sword(), avatar_tuning(def).attack);
-            }
-        }
+        let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled && alive(a)) else { return };
+        let def = character_of(characters, a);
+        attack(a, tick, weapon, aim, muzzle, def);
     }
 
     /// Housekeeping: a buffered attack starts once the swing ends.
     pub(crate) fn avatar_housekeeping(&mut self, tick: u64) {
         let characters = &self.characters;
-        for a in self.agents.iter_mut().filter(|a| a.controlled && (a.avatar.max_health == 0 || a.avatar.health > 0)) {
-            let finished = a.avatar.swing.as_ref().is_none_or(|s| tick + 1 >= s.until);
-            if finished {
-                if let Some((weapon, aim, muzzle)) = a.avatar.queued.take() {
-                    let def = character_of(characters, a);
-                    start_swing(a, tick + 1, weapon, aim, muzzle, def.swift_sword(), avatar_tuning(def).attack);
-                }
-            }
+        for a in self.agents.iter_mut().filter(|a| a.controlled && alive(a)) {
+            let def = character_of(characters, a);
+            start_queued(a, tick, def);
         }
     }
 
     /// Records a resolved strike on the avatar: a hit shortens the swing to the rebound.
     pub(crate) fn swing_resolved(&mut self, agent: AgentIx, tick: u64, hits: u32) {
         let a = &mut self.agents[agent as usize];
-        let rebound = avatar_tuning(character_of(&self.characters, a)).attack.rebound;
-        if let Some(swing) = &mut a.avatar.swing {
-            swing.resolved = true;
-            swing.hits = hits;
-            if hits > 0 && matches!(swing.weapon, Weapon::Sword | Weapon::Spear) {
-                swing.until = tick + rebound;
-            }
-        }
+        let def = character_of(&self.characters, a);
+        swing_resolved(a, tick, hits, def);
     }
 
     /// The most units `agent` could move between its cargo and `depot` now.
@@ -810,6 +731,165 @@ impl Settlement {
             a.avatar.job = None;
         }
     }
+}
+
+// The avatar's own part of each command and of housekeeping. `Settlement`
+// runs them on the world's agents and `AvatarReplay` on a copy, so client
+// prediction moves an avatar exactly as the simulation does.
+
+/// Alive, or without health at all.
+pub(super) fn alive(a: &AgentState) -> bool {
+    a.avatar.max_health == 0 || a.avatar.health > 0
+}
+
+/// Sets a live avatar's intent. Walking off stops a dig; a `GoTo` plans its
+/// route.
+pub(super) fn set_intent(a: &mut AgentState, intent: Intent, terrain: &Terrain, def: &CharacterDef) {
+    // Walking off stops a dig.
+    let walking = match intent {
+        Intent::Stop => false,
+        Intent::Walk { direction, .. } => direction != FxVec2::ZERO,
+        Intent::GoTo { .. } => true,
+    };
+    if a.avatar.dig.is_some() && !walking {
+        return;
+    }
+    a.avatar.dig = None;
+    a.route.clear();
+    if let Intent::GoTo { target, run } = intent {
+        // On foot, routes avoid steps and drops; with the jetpack, anything goes.
+        let flying = a.avatar.flight.requested || a.avatar.flight.airborne;
+        let radius = def.body.radius;
+        let walkable = |p: FxVec2, q: FxVec2| flying || terrain.walkable(p, q, radius);
+        a.route = nav::path_with(terrain, a.position, target, radius, &[], &walkable);
+        a.avatar.run = run;
+    } else if let Intent::Walk { run, .. } = intent {
+        a.avatar.run = run;
+    }
+    a.avatar.intent = Some(intent);
+}
+
+/// See `Settlement::release_direct_control`; `hauling` says a pile haul owns
+/// the route.
+pub(super) fn release(a: &mut AgentState, hauling: bool) {
+    a.avatar.flight.requested = false;
+    a.avatar.repair = None;
+    let docking = a.avatar.job.is_some() && matches!(a.avatar.intent, Some(Intent::GoTo { .. }));
+    if hauling || docking {
+        return;
+    }
+    if matches!(a.avatar.intent, Some(Intent::Walk { .. } | Intent::GoTo { .. })) {
+        a.route.clear();
+        a.avatar.intent = Some(Intent::Stop);
+    }
+}
+
+pub(super) fn aim_at(a: &mut AgentState, aim: FxVec2) {
+    let aim = aim.normalize_or_zero();
+    if aim != FxVec2::ZERO {
+        a.avatar.aim = Some(aim);
+    }
+}
+
+/// Starts a live avatar's attack with a weapon the scene offers, or buffers
+/// it during a swing.
+pub(super) fn attack(a: &mut AgentState, tick: u64, weapon: Weapon, aim: FxVec2, muzzle: [Fx; 3], def: &CharacterDef) {
+    if a.avatar.dig.is_some() {
+        return;
+    }
+    let aim = aim.normalize_or_zero();
+    if aim == FxVec2::ZERO || muzzle.iter().any(|v| v.abs() > Fx::from_int(4)) {
+        return;
+    }
+    match &a.avatar.swing {
+        Some(swing) if tick < swing.until => {
+            a.avatar.queued = Some((weapon, aim, muzzle));
+        }
+        _ => start_swing(a, tick, weapon, aim, muzzle, def.swift_sword(), avatar_tuning(def).attack),
+    }
+}
+
+/// Housekeeping for a live avatar: a buffered attack starts once the swing ends.
+pub(super) fn start_queued(a: &mut AgentState, tick: u64, def: &CharacterDef) {
+    let finished = a.avatar.swing.as_ref().is_none_or(|s| tick + 1 >= s.until);
+    if finished {
+        if let Some((weapon, aim, muzzle)) = a.avatar.queued.take() {
+            start_swing(a, tick + 1, weapon, aim, muzzle, def.swift_sword(), avatar_tuning(def).attack);
+        }
+    }
+}
+
+/// The swing that resolves on this tick, if the weapon is ready.
+pub(super) fn resolving(a: &AgentState, tick: u64) -> Option<&Swing> {
+    a.avatar.swing.as_ref().filter(|swing| !swing.resolved && swing.resolve_at == tick && a.attack_ready <= tick)
+}
+
+/// Records a resolved strike: a hit shortens the swing to the rebound.
+pub(super) fn swing_resolved(a: &mut AgentState, tick: u64, hits: u32, def: &CharacterDef) {
+    let rebound = avatar_tuning(def).attack.rebound;
+    if let Some(swing) = &mut a.avatar.swing {
+        swing.resolved = true;
+        swing.hits = hits;
+        if hits > 0 && matches!(swing.weapon, Weapon::Sword | Weapon::Spear) {
+            swing.until = tick + rebound;
+        }
+    }
+}
+
+pub(super) fn jetpack(a: &mut AgentState, enabled: bool, def: &CharacterDef) {
+    if def.jetpack().is_none() {
+        return;
+    }
+    a.avatar.flight.requested = enabled;
+    if enabled {
+        a.avatar.dig = None;
+    }
+}
+
+pub(super) fn jump(a: &mut AgentState, tick: u64, def: &CharacterDef) {
+    if def.jump().is_none() {
+        return;
+    }
+    if matches!(a.avatar.jump, JumpPhase::Grounded)
+        && !a.avatar.flight.airborne
+        && a.avatar.dig.is_none()
+        && a.avatar.swing.is_none()
+    {
+        a.avatar.jump = JumpPhase::Preparing { started: tick };
+    }
+}
+
+/// Starts digging where `Settlement::can_dig_at` allows it, if the character
+/// digs, stands on the ground with its hands free, and the pit isn't as deep
+/// as it goes.
+pub(super) fn dig(a: &mut AgentState, tick: u64, terrain: &Terrain, def: &CharacterDef) {
+    let Some(ticks) = def.dig().map(|d| d.ticks) else { return };
+    let busy = a.avatar.swing.as_ref().is_some_and(|s| tick < s.until) || a.avatar.job.is_some();
+    let flight = &a.avatar.flight;
+    if busy || a.avatar.dig.is_some() || flight.requested || flight.airborne {
+        return;
+    }
+    let tile = Terrain::pit_tile(a.position);
+    if terrain.pit(tile) >= MAX_LAYERS || !terrain.inside(Terrain::pit_center(tile)) {
+        return;
+    }
+    a.route.clear();
+    a.avatar.intent = Some(Intent::Stop);
+    a.avatar.dig = Some(Dig { tile, started: tick, until: tick + ticks });
+}
+
+/// Housekeeping: ends a dig that is done, returning it.
+pub(super) fn finish_dig(a: &mut AgentState, tick: u64) -> Option<Dig> {
+    a.avatar.dig.take_if(|d| tick + 1 >= d.until)
+}
+
+/// Puts the avatar at the spawn point with a fresh state.
+pub(super) fn respawn(a: &mut AgentState, spawn: FxVec2, height: Fx) {
+    a.position = spawn;
+    a.heading = Fx::PI;
+    a.route.clear();
+    a.avatar = AvatarState { height, ..AvatarState::default() };
+    a.avatar.intent = Some(Intent::Stop);
 }
 
 fn start_swing(a: &mut AgentState, tick: u64, weapon: Weapon, aim: FxVec2, muzzle: [Fx; 3], swift_sword: bool, timing: AttackTiming) {

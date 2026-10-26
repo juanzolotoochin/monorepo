@@ -235,9 +235,8 @@ impl Settlement {
         Fx::ONE
     }
 
-    fn laser_player(&self, shooter: usize, origin: FxVec2, forward: FxVec2, reach: Fx, terrain: &Terrain) -> Option<(Fx, usize)> {
+    fn laser_player(&self, shooter: usize, from_height: Fx, origin: FxVec2, forward: FxVec2, reach: Fx, terrain: &Terrain) -> Option<(Fx, usize)> {
         let end = origin + forward * reach;
-        let from_height = self.agents.get(shooter).map_or(Fx::ZERO, |a| a.avatar.height);
         self.agents.iter().enumerate().filter_map(|(index, agent)| {
             if index == shooter || !agent.controlled || agent.avatar.health == 0 || agent.avatar.max_health == 0 {
                 return None;
@@ -399,6 +398,14 @@ impl Settlement {
 
     /// The targets of a resolving strike, in the order they take damage.
     pub(super) fn strike_targets(&self, shooter: AgentIx, origin: FxVec2, forward: FxVec2, weapon: Weapon, terrain: &Terrain) -> (Vec<u64>, Option<FxVec2>, Option<u16>) {
+        let height = self.agents.get(shooter as usize).map_or(Fx::ZERO, |a| a.avatar.height);
+        self.strike_targets_from(shooter, height, origin, forward, weapon, terrain)
+    }
+
+    /// `strike_targets` for a shooter at `origin` and `height`, wherever
+    /// `self` has it: client prediction aims a predicted avatar against the
+    /// confirmed settlement.
+    pub(super) fn strike_targets_from(&self, shooter: AgentIx, height: Fx, origin: FxVec2, forward: FxVec2, weapon: Weapon, terrain: &Terrain) -> (Vec<u64>, Option<FxVec2>, Option<u16>) {
         let tuning = self.tuning(weapon);
         let (reach, cone) = (tuning.reach, tuning.cone);
         let close = Fx::from_ratio(1, 5);
@@ -460,14 +467,14 @@ impl Settlement {
                     .filter_map(|(index, piece)| segment_disc(origin, end, piece.disc.center,
                         piece.disc.radius + Fx::from_ratio(1, 25)).map(|fraction| (fraction, index)))
                     .min();
-                let ground_block = Self::laser_ground_block(terrain, origin, forward, reach, self.agents[shooter as usize].avatar.height);
+                let ground_block = Self::laser_ground_block(terrain, origin, forward, reach, height);
                 let blocked = static_block.min(cover_block.map_or(Fx::ONE, |(fraction, _)| fraction)).min(ground_block);
-                let player = self.laser_player(shooter as usize, origin, forward, reach, terrain)
+                let player = self.laser_player(shooter as usize, height, origin, forward, reach, terrain)
                     .filter(|(fraction, _)| *fraction < blocked);
                 let threat = targets.iter().filter_map(|&(_, id)| {
                     let position = self.threat(id)?.position;
                     segment_disc(origin, end, position, Fx::from_ratio(3, 10))
-                        .filter(|fraction| *fraction < blocked && Self::laser_clear_ground(terrain, origin, self.agents[shooter as usize].avatar.height, position, terrain.ground(position).unwrap_or_default()))
+                        .filter(|fraction| *fraction < blocked && Self::laser_clear_ground(terrain, origin, height, position, terrain.ground(position).unwrap_or_default()))
                         .map(|fraction| (fraction, id, position))
                 }).min_by_key(|(fraction, id, _)| (*fraction, *id));
                 if let Some((_, id, position)) = threat.filter(|(fraction, _, _)| player.is_none_or(|(p, _)| *fraction <= p)) {
@@ -485,6 +492,14 @@ impl Settlement {
             Weapon::Sword => {}
         }
         (targets.into_iter().map(|(_, id)| id).collect(), beam, cover)
+    }
+
+    /// Whether a laser beam ending at `to` hits a threat or another live
+    /// player, as `Event::LaserFired` reports it.
+    pub(super) fn laser_hits_actor(&self, shooter: usize, targets: &[u64], to: FxVec2) -> bool {
+        !targets.is_empty() || self.agents.iter().enumerate().any(|(index, target)| {
+            index != shooter && target.controlled && target.avatar.health > 0 && target.position == to
+        })
     }
 
     /// Applies a resolving strike. Returns how many threats it hit.
@@ -522,9 +537,7 @@ impl Settlement {
         }
         if let Some(to) = message.beam_end {
             self.events.push(if message.weapon == Weapon::Laser {
-                let hit_actor = !message.targets.is_empty() || self.agents.iter().enumerate().any(|(index, target)| {
-                    index != agent && target.controlled && target.avatar.health > 0 && target.position == to
-                });
+                let hit_actor = self.laser_hits_actor(agent, &message.targets, to);
                 Event::LaserFired { agent: message.agent, from: origin, to, hit_actor, cover: message.cover }
             } else {
                 Event::ArcFired { from: origin, to }

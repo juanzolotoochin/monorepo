@@ -165,7 +165,9 @@ pub fn open(world: &mut World, launch: crate::flow::Launch) -> Result<Opened, St
     let threads = std::thread::available_parallelism().map_or(2, |n| n.get().min(4));
     // Single-player has nobody to wait for, so no input delay.
     let input_delay = if launch.network.is_some() { NetConfig::default().input_delay } else { 0 };
-    let config = NetConfig { threads, input_delay, ..NetConfig::default() };
+    // A joining client adapts its input margin to the network unless pinned.
+    let input_margin = launch.input_margin_ms.map(content::millis_to_ticks);
+    let config = NetConfig { threads, input_delay, input_margin, ..NetConfig::default() };
     let scene_id = world.resource::<SceneLibrary>().scenes[launch.scene].scene.id.clone();
     let mut start_save = None;
     let mut replay_scene = None;
@@ -741,8 +743,6 @@ fn mirror(service: Res<SessionService>, mut mirror: ResMut<WorldMirror>) {
 pub struct PlayerControl {
     /// The last movement intent sent, so held keys don't resend it every frame.
     walking: Option<(FxVec2, bool)>,
-    /// A local click target while the host has not applied its command yet.
-    visual_goal: Option<(Vec3, bool)>,
     last_aim: Option<FxVec2>,
 }
 
@@ -784,11 +784,10 @@ impl PlayerControl {
         self.walking.is_some_and(|(d, _)| d != FxVec2::ZERO)
     }
 
-    /// Forgets the cached movement and click goal after direct control was
-    /// released, so the next deliberate movement is always sent.
+    /// Forgets the cached movement after direct control was released, so
+    /// the next deliberate movement is always sent.
     pub fn forget_direct_input(&mut self) {
         self.walking = None;
-        self.visual_goal = None;
     }
 
     pub fn aim(&mut self, service: &mut SessionService, direction: Vec3) {
@@ -805,7 +804,6 @@ impl PlayerControl {
     /// rotated into arena space); a zero direction stops it.
     pub fn walk(&mut self, service: &mut SessionService, direction: Vec2, run: bool) {
         let Some(agent) = service.player() else { return };
-        self.visual_goal = None;
         let direction = FxVec2::new(Fx::quantize(direction.x), Fx::quantize(direction.y)).normalize_or_zero();
         if self.walking == Some((direction, run)) {
             return;
@@ -819,7 +817,6 @@ impl PlayerControl {
     pub fn go_to(&mut self, service: &mut SessionService, target: Vec3, run: bool) {
         let Some(agent) = service.player() else { return };
         self.walking = None;
-        self.visual_goal = Some((target, run));
         let target = service.to_sim(target);
         service.command(CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target, run } });
     }
@@ -838,7 +835,6 @@ impl PlayerControl {
         let flat = crate::navigation::flat(aim).normalize_or(Vec3::Z);
         if weapon != content::scenario::Weapon::Laser {
             self.walking = None;
-            self.visual_goal = None;
         }
         service.command(CommandKind::Attack {
             agent,
@@ -850,16 +846,6 @@ impl PlayerControl {
     }
 }
 
-/// Where a joined player's avatar shows while the host hasn't confirmed its
-/// latest input: walked ahead locally, then eased back onto confirmed ticks.
-#[derive(Default)]
-pub struct LocalAvatarPreview {
-    position: Option<Vec3>,
-    velocity: Vec3,
-    active: bool,
-    agent: Option<u16>,
-}
-
 #[derive(Default)]
 pub struct VisualGroundStep {
     height: Option<f32>,
@@ -867,143 +853,202 @@ pub struct VisualGroundStep {
     scene: Option<usize>,
 }
 
-/// Places the player where the simulation has the avatar, between ticks.
-/// `PlayerControl` is a World service registered after this one's; its input
-/// state exists whenever the world is active.
+/// Places the player where the simulation has the avatar, between ticks. A
+/// joined player's own avatar is predicted ahead of the confirmed world (see
+/// `prediction`).
 pub fn follow_avatar(
     mirror: Res<WorldMirror>,
     service: Res<SessionService>,
-    control: Res<PlayerControl>,
     scene: Res<SceneView>,
     time: Res<Time>,
     mut controls: ResMut<Controls>,
     mut player: Single<&mut Transform, With<Player>>,
     sound: Res<crate::sound::Sound>,
-    mut preview: Local<LocalAvatarPreview>,
+    mut prediction: Local<crate::prediction::AvatarPrediction>,
     mut ground_step: Local<VisualGroundStep>,
     mut telemetry: ResMut<crate::telemetry::Telemetry>,
+    mut lasers: ResMut<crate::laser_prediction::LaserPrediction>,
+    mut pending_lasers: ResMut<crate::effects::PendingLasers>,
 ) {
     let (Some(current), Some(index)) = (&mirror.current, mirror.player()) else { return };
     let a = &current.agents[index as usize];
     let before = mirror.previous.as_ref().and_then(|p| p.agents.get(index as usize)).unwrap_or(a);
-    // The local single-player avatar can use the newest confirmed pose.
-    // Interpolating from the previous tick adds a full tick of visible lag.
-    let alpha = if !service.is_client() && !service.session.is_replay() { 1.0 } else { mirror.alpha };
-    let from = mirror.to_view(before.position);
-    let to = mirror.to_view(a.position);
-    // A teleport (respawn, deploying a recording) snaps instead of sliding.
-    let alpha = if from.distance(to) > 1.5 { 1.0 } else { alpha };
-    let mut position = from.lerp(to, alpha);
-    position.y = before.avatar.height.to_f32() + (a.avatar.height - before.avatar.height).to_f32() * alpha;
+    let predicted = if service.is_client() { predict(&mut prediction, &mirror, &service, before, time.delta_secs()) } else { None };
+    if predicted.is_none() {
+        prediction.reset();
+    }
+    if service.is_client() {
+        let now = time.elapsed_secs_f64();
+        predict_lasers(&mut lasers, &mirror, &service, index, predicted.as_ref(), now, &mut pending_lasers, &sound, &mut telemetry);
+    } else {
+        lasers.reset();
+    }
+    let (from, to, alpha) = match &predicted {
+        Some(drawn) => (&drawn.from, &drawn.to, drawn.fraction),
+        None => {
+            // The local single-player avatar can use the newest confirmed pose.
+            // Interpolating from the previous tick adds a full tick of visible lag.
+            let alpha = if !service.is_client() && !service.session.is_replay() { 1.0 } else { mirror.alpha };
+            // A teleport (respawn, deploying a recording) snaps instead of sliding.
+            let alpha = if mirror.to_view(before.position).distance(mirror.to_view(a.position)) > 1.5 { 1.0 } else { alpha };
+            (before, a, alpha)
+        }
+    };
+    let (start, end) = (mirror.to_view(from.position), mirror.to_view(to.position));
+    let mut position = start.lerp(end, alpha);
+    if let Some(drawn) = &predicted {
+        position.x = drawn.position.x;
+        position.z = drawn.position.z;
+    }
+    position.y = from.avatar.height.to_f32() + (to.avatar.height - from.avatar.height).to_f32() * alpha;
     let reset_step = ground_step.agent != Some(index)
         || ground_step.scene != Some(scene.index)
-        || from.distance(to) > 1.5;
+        || start.distance(end) > 1.5
+        || predicted.as_ref().is_some_and(|drawn| drawn.snapped);
     position.y = crate::character::visual_step_height(
         if reset_step { None } else { ground_step.height },
         position.y,
         time.delta_secs(),
-        !a.avatar.flight.airborne
-            && matches!(a.avatar.jump, sim::settlement::avatar::JumpPhase::Grounded),
+        !to.avatar.flight.airborne && matches!(to.avatar.jump, sim::settlement::avatar::JumpPhase::Grounded),
     );
     ground_step.height = Some(position.y);
     ground_step.agent = Some(index);
     ground_step.scene = Some(scene.index);
-    let motion = crate::character::motion_profile(&scene.pack);
-    let mut preview_velocity = None;
-    if service.is_client() {
-        let snapped = preview.agent == Some(index) && preview.position.is_some_and(|p| p.distance(to) > 1.5);
-        let mut correction = 0.0;
-        let mut clamped = false;
-        let reset = preview.agent != Some(index) || preview.position.is_none_or(|p| p.distance(to) > 1.5);
-        if reset {
-            *preview = LocalAvatarPreview { position: Some(to), agent: Some(index), ..default() };
-        }
-        let pending_goal = control.visual_goal.filter(|_| service.session.pending_inputs() > 0);
-        let movement = control
-            .walking
-            .map(|(direction, run)| (Vec3::new(direction.x.to_f32(), 0.0, direction.y.to_f32()), run))
-            .or_else(|| {
-                pending_goal.map(|(goal, run)| {
-                    let delta = crate::navigation::flat(goal - preview.position.unwrap());
-                    (if delta.length() < 0.1 { Vec3::ZERO } else { delta.normalize() }, run)
-                })
-            })
-            .filter(|_| (controls.attack.is_none() || controls.weapon == content::scenario::Weapon::Laser) && a.avatar.dig.is_none());
-        let moving_input = movement.is_some_and(|(direction, _)| direction != Vec3::ZERO);
-        if let Some((direction, run)) = movement {
-            preview.active = true;
-            let dt = time.delta_secs().min(0.05);
-            let desired = direction * if run { motion.run_speed } else { motion.walk_speed };
-            // The definition stores per-tick changes; the preview runs per second.
-            let tuning = service.player_character().and_then(|c| c.avatar.as_ref());
-            let per_tick = tuning.map_or(Fx::ZERO, |t| if desired == Vec3::ZERO { t.braking } else { t.acceleration });
-            let acceleration = view_f32(per_tick) * content::TICKS_PER_SECOND as f32;
-            let change = (desired - preview.velocity).clamp_length_max(acceleration * dt);
-            preview.velocity += change;
-            let start = preview.position.unwrap();
-            let candidate = start + preview.velocity * dt;
-            let passable = service.world().is_some_and(|world| {
-                a.avatar.flight.airborne
-                    || service.player_radius().is_some_and(|radius| world.terrain().walkable(service.to_sim(start), service.to_sim(candidate), radius))
-            });
-            if passable {
-                clamped = (candidate - to).length() > 0.9;
-                // Limit how far the displayed avatar can get ahead while
-                // waiting for the host's confirmed turns.
-                preview.position = Some(to + (candidate - to).clamp_length_max(0.9));
-            } else {
-                preview.velocity = Vec3::ZERO;
-            }
-            preview_velocity = Some(preview.velocity);
-        } else {
-            preview.velocity = Vec3::ZERO;
-            preview_velocity = Some(Vec3::ZERO);
-            if preview.active {
-                let blend = 1.0 - (-8.0 * time.delta_secs()).exp();
-                let before = preview.position.unwrap();
-                preview.position = Some(preview.position.unwrap().lerp(to, blend));
-                correction += crate::navigation::flat(preview.position.unwrap() - before).length();
-            }
-        }
-        if preview.active && !moving_input && service.session.pending_inputs() == 0 && a.avatar.velocity == FxVec2::ZERO {
-            let remaining = to - preview.position.unwrap();
-            let before = preview.position.unwrap();
-            preview.position = Some(preview.position.unwrap() + remaining.clamp_length_max(2.0 * time.delta_secs()));
-            correction += crate::navigation::flat(preview.position.unwrap() - before).length();
-        }
-        if preview.active && preview.position.unwrap().distance(to) < 0.02 && !moving_input {
-            preview.active = false;
-        }
-        if preview.active {
-            position.x = preview.position.unwrap().x;
-            position.z = preview.position.unwrap().z;
-        } else {
-            preview.position = Some(to);
-        }
-        telemetry.network.preview(crate::navigation::flat(position - to).length(), correction, clamped, snapped);
-    } else {
-        *preview = LocalAvatarPreview::default();
+    if let Some(drawn) = &predicted {
+        telemetry.network.preview(
+            web_time::Instant::now(),
+            crate::telemetry::PreviewUpdate {
+                shown: position,
+                confirmed: mirror.to_view(a.position),
+                target: Vec3::new(drawn.target.x, position.y, drawn.target.z),
+                mispredicted: drawn.mispredicted,
+                snapped: drawn.snapped,
+            },
+        );
     }
+    let motion = crate::character::motion_profile(&scene.pack);
     let previous = player.translation;
     let teleport = previous.distance(position) > 1.5;
     player.translation = position;
-    let heading = before.heading.to_f32() + angle_between(before.heading.to_f32(), a.heading.to_f32()) * alpha;
+    let heading = from.heading.to_f32() + angle_between(from.heading.to_f32(), to.heading.to_f32()) * alpha;
     player.rotation = Quat::from_rotation_y(heading);
-    if let Some(velocity) = preview_velocity.filter(|v| v.length_squared() > 0.01) {
-        player.rotation = Quat::from_rotation_y(velocity.x.atan2(velocity.z));
+    let velocity = |s: &sim::settlement::AgentState| Vec3::new(s.avatar.velocity.x.to_f32(), 0.0, s.avatar.velocity.y.to_f32());
+    controls.velocity = velocity(a);
+    if predicted.is_some() {
+        // A predicted avatar faces the way it is predicted to move.
+        let predicted_velocity = velocity(from).lerp(velocity(to), alpha);
+        if predicted_velocity.length_squared() > 0.01 {
+            player.rotation = Quat::from_rotation_y(predicted_velocity.x.atan2(predicted_velocity.z));
+        }
+        controls.velocity = predicted_velocity;
     }
     let moved = if teleport { Vec3::ZERO } else { crate::navigation::flat(position - previous) };
-    controls.velocity = Vec3::new(a.avatar.velocity.x.to_f32(), 0.0, a.avatar.velocity.y.to_f32());
-    if let Some(velocity) = preview_velocity {
-        controls.velocity = velocity;
-    }
     let relative_speed = controls.velocity.length() / motion.walk_speed.max(0.1);
     let step_distance = crate::character::step_distance_for_speed(motion.step_distance, relative_speed).clamp(0.2, 4.0);
-    let contacts = controls.gait.advance(moved.length(), step_distance, !a.avatar.flight.airborne);
+    let contacts = controls.gait.advance(moved.length(), step_distance, !to.avatar.flight.airborne);
     for _ in 0..contacts {
         sound.play(crate::sound::Cue::Step);
     }
     controls.route = a.route.iter().map(|&p| mirror.to_view(p)).collect();
+}
+
+/// A joined player's avatar this frame, replayed from the session's
+/// confirmed world (which the pending commands match). `None` while there is
+/// nothing to predict from, or for a frame while the world is replaced.
+fn predict(
+    prediction: &mut crate::prediction::AvatarPrediction,
+    mirror: &WorldMirror,
+    service: &SessionService,
+    previous: &sim::settlement::AgentState,
+    dt: f32,
+) -> Option<crate::prediction::Drawn> {
+    let world = service.world()?;
+    let number = service.session.world_number();
+    if number != mirror.world_number {
+        return None;
+    }
+    let pending: Vec<_> = service.session.pending_commands().collect();
+    let confirmed = crate::prediction::Confirmed {
+        world: number,
+        agent: service.player()?,
+        settlement: world.settlement()?,
+        terrain: world.terrain(),
+        tick: world.tick(),
+        previous,
+        alpha: mirror.alpha,
+        pending: &pending,
+        horizon: service.session.input_horizon()?,
+        to_view: &|p| mirror.to_view(p),
+    };
+    Some(prediction.update(&confirmed, dt))
+}
+
+/// A joined player's own laser shots (see `laser_prediction`): this
+/// frame's confirmed ones are matched to those already drawn, then the
+/// shots the drawn avatar fires are drawn, with their sound, from where it
+/// is drawn. Other players' shots are drawn as they are confirmed.
+#[allow(clippy::too_many_arguments)]
+fn predict_lasers(
+    lasers: &mut crate::laser_prediction::LaserPrediction,
+    mirror: &WorldMirror,
+    service: &SessionService,
+    agent: u16,
+    drawn: Option<&crate::prediction::Drawn>,
+    now: f64,
+    pending: &mut crate::effects::PendingLasers,
+    sound: &crate::sound::Sound,
+    telemetry: &mut crate::telemetry::Telemetry,
+) {
+    use crate::laser_prediction::Outcome;
+    let Some(world) = service.world().filter(|_| service.session.world_number() == mirror.world_number) else {
+        lasers.reset();
+        return;
+    };
+    lasers.begin(mirror.world_number, agent);
+    // Where a beam ending at `p` is drawn ending.
+    let end = |p: FxVec2| {
+        let at = mirror.to_view(p);
+        Vec3::new(at.x, service.ground_height(at).unwrap_or(0.0) + 0.8, at.z)
+    };
+    let mut outcomes = Vec::new();
+    for event in &mirror.events {
+        if let sim::settlement::Event::LaserFired { agent: shooter, to, .. } = event {
+            if *shooter == agent {
+                outcomes.extend(lasers.confirm(*to, now));
+            }
+        }
+    }
+    outcomes.extend(lasers.expire(world.tick()));
+    let mut new = Vec::new();
+    if let (Some(drawn), Some(settlement)) = (drawn, world.settlement()) {
+        let predicted = lasers.predict(&drawn.strikes, now, |strike| settlement.predict_laser(agent, strike, world.terrain()));
+        outcomes.extend(predicted.dropped);
+        new = predicted.new;
+    }
+    let at = web_time::Instant::now();
+    for outcome in outcomes {
+        telemetry.network.laser_outcome(at, match outcome {
+            Outcome::Fired { predicted, confirmed, lead, exact } => crate::telemetry::LaserOutcome {
+                predicted: end(predicted),
+                confirmed: Some(end(confirmed)),
+                lead: Some(lead),
+                exact,
+            },
+            Outcome::NeverFired { predicted } => crate::telemetry::LaserOutcome { predicted: end(predicted), confirmed: None, lead: None, exact: false },
+        });
+    }
+    for shot in new {
+        pending.0.push(crate::effects::LaserShot {
+            agent,
+            target: end(shot.shot.to),
+            hit_actor: shot.shot.hit_actor,
+            cover: shot.shot.cover,
+            seed: crate::effects::laser_impact_seed(shot.tick, agent),
+            predicted: Some(shot.id),
+        });
+        sound.play(crate::sound::Cue::Laser);
+        telemetry.network.laser_drawn();
+    }
 }
 
 /// The content every session plays with (see `open`), parsed once, for views
@@ -1071,12 +1116,14 @@ pub fn attack_input(
     mut controls: ResMut<Controls>,
     mut service: ResMut<SessionService>,
     mut control: ResMut<PlayerControl>,
+    player: Option<Single<&Transform, With<Player>>>,
 ) {
     let (keys, buttons) = (input.keys(), input.mouse());
     use content::scenario::Weapon;
+    let origin = aim_origin(&service, player.map(|player| player.translation));
     // Update on every input frame, including frames without a shot.
     let cursor_aim = crate::jetpack::cursor_surface(camera.0, camera.1, &window, &scene, &service)
-        .zip(service.player_view_position())
+        .zip(origin)
         .map(|(point, origin)| crate::navigation::flat(point - origin).normalize_or_zero())
         .filter(|aim| aim.length_squared() > 0.0);
     // While the debug UI has the pointer, keep the last aim.
@@ -1096,10 +1143,21 @@ pub fn attack_input(
         crate::gameplay::cursor_ground(camera.0, camera.1, &window)
             .is_some_and(|point| crate::settlement::depot_at(sim, point).is_some())
     }) { return; }
-    // Aim from the confirmed position: a joined player's preview must not
-    // change gameplay commands.
     if let Some(aim) = cursor_aim {
         control.strike(&mut service, &mut controls, &scene.pack, aim);
+    }
+}
+
+/// Where the mouse aims from: where the avatar is `drawn`. A joined
+/// player's avatar is predicted about an input lead ahead of the confirmed
+/// one, and its shot fires from there (`laser_prediction`). Elsewhere the
+/// avatar is drawn where it is confirmed, so the confirmed position is used
+/// exactly, as before prediction.
+fn aim_origin(service: &SessionService, drawn: Option<Vec3>) -> Option<Vec3> {
+    if service.is_client() {
+        drawn.or_else(|| service.player_view_position())
+    } else {
+        service.player_view_position()
     }
 }
 
@@ -1174,11 +1232,15 @@ mod tests {
     /// An app on the field at a fixed frame rate, launching straight into a
     /// session.
     fn field_app(network: Option<Network>, fps: f64) -> App {
+        scene_app("field", network, fps)
+    }
+
+    fn scene_app(scene: &str, network: Option<Network>, fps: f64) -> App {
         let options = crate::control::Options { simulation: true, ..default() };
         let hub = crate::control::Hub::new(options.clone()).unwrap();
         let library = SceneLibrary::new();
-        let field = library.index("field").unwrap();
-        let mut app = crate::test_app(options, library, hub, Launch { network, ..Launch::single_player(field) });
+        let index = library.index(scene).unwrap();
+        let mut app = crate::test_app(options, library, hub, Launch { network, ..Launch::single_player(index) });
         app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / fps)));
         app
     }
@@ -1369,15 +1431,9 @@ mod tests {
         });
         client.update();
         host.update();
+        // Click-to-move is not predicted (it is going away): the avatar waits
+        // for the confirmed route, then follows it without jumps.
         let route_preview = player_position(&mut client);
-        assert!(
-            crate::navigation::flat(route_preview - last).length() > 0.001,
-            "routed movement gave no immediate visual response"
-        );
-        assert!(
-            crate::navigation::flat(confirmed(&client) - settled).length() < 0.001,
-            "routed movement did not show prediction before confirmation"
-        );
         let mut followed_route = false;
         let mut previous_shown = route_preview;
         for _ in 0..90 {
@@ -1398,5 +1454,455 @@ mod tests {
             crate::navigation::flat(previous_shown - confirmed(&client)).length() < 0.1,
             "routed movement preview did not settle on the confirmed route"
         );
+    }
+
+    /// A UDP relay that holds every datagram for `delay ± jitter` of virtual
+    /// time, like `tools/network_lab/relay.mjs`. The client joins `listen`;
+    /// the relay talks to the host from `upstream` and answers the client
+    /// from `listen`, which the client checks.
+    struct DelayRelay {
+        listen: std::net::UdpSocket,
+        upstream: std::net::UdpSocket,
+        host: SocketAddr,
+        client: Option<SocketAddr>,
+        delay: f64,
+        jitter: f64,
+        rng: u64,
+        /// (due, sequence, to the host, bytes)
+        held: Vec<(f64, u64, bool, Vec<u8>)>,
+        sent: u64,
+    }
+
+    impl DelayRelay {
+        fn new(host: SocketAddr, delay_ms: f64, jitter_ms: f64, seed: u64) -> DelayRelay {
+            let bind = || {
+                let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+                socket.set_nonblocking(true).unwrap();
+                socket
+            };
+            DelayRelay {
+                listen: bind(),
+                upstream: bind(),
+                host,
+                client: None,
+                delay: delay_ms / 1000.0,
+                jitter: jitter_ms / 1000.0,
+                rng: seed | 1,
+                held: Vec::new(),
+                sent: 0,
+            }
+        }
+
+        fn address(&self) -> SocketAddr {
+            self.listen.local_addr().unwrap()
+        }
+
+        /// Uniform in [-1, 1), from a seeded xorshift so runs repeat.
+        fn noise(&mut self) -> f64 {
+            self.rng ^= self.rng << 13;
+            self.rng ^= self.rng >> 7;
+            self.rng ^= self.rng << 17;
+            (self.rng >> 11) as f64 / (1u64 << 52) as f64 - 1.0
+        }
+
+        fn hold(&mut self, now: f64, to_host: bool, bytes: Vec<u8>) {
+            let due = now + (self.delay + self.jitter * self.noise()).max(0.0);
+            self.held.push((due, self.sent, to_host, bytes));
+            self.sent += 1;
+        }
+
+        /// Takes what arrived and sends what is due at `now` (seconds).
+        fn pump(&mut self, now: f64) {
+            let mut buffer = [0u8; 65536];
+            while let Ok((len, from)) = self.listen.recv_from(&mut buffer) {
+                self.client = Some(from);
+                self.hold(now, true, buffer[..len].to_vec());
+            }
+            while let Ok((len, from)) = self.upstream.recv_from(&mut buffer) {
+                if from == self.host {
+                    self.hold(now, false, buffer[..len].to_vec());
+                }
+            }
+            self.held.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+            let due = self.held.iter().take_while(|(at, ..)| *at <= now).count();
+            for (_, _, to_host, bytes) in self.held.drain(..due) {
+                if to_host {
+                    let _ = self.upstream.send_to(&bytes, self.host);
+                } else if let Some(client) = self.client {
+                    let _ = self.listen.send_to(&bytes, client);
+                }
+            }
+        }
+    }
+
+    /// A host and a client joined through a `DelayRelay`, stepped together
+    /// on the 60 Hz virtual clock.
+    struct RelayedGame {
+        host: App,
+        client: App,
+        relay: DelayRelay,
+        frame: u64,
+    }
+
+    impl RelayedGame {
+        fn new(delay_ms: f64, jitter_ms: f64, seed: u64) -> RelayedGame {
+            RelayedGame::in_scene("field", delay_ms, jitter_ms, seed)
+        }
+
+        fn in_scene(scene: &str, delay_ms: f64, jitter_ms: f64, seed: u64) -> RelayedGame {
+            let mut host = scene_app(scene, Some(Network::Host("127.0.0.1:0".parse().unwrap())), 60.0);
+            crate::start_world(&mut host);
+            let address = host.world().resource::<SessionService>().session.local_addr().unwrap();
+            let relay = DelayRelay::new(address, delay_ms, jitter_ms, seed);
+            let client = scene_app(scene, Some(Network::Join(relay.address())), 60.0);
+            let mut game = RelayedGame { host, client, relay, frame: 0 };
+            for _ in 0..1200 {
+                game.frame();
+                if world_active(&game.client) && game.client.world().resource::<WorldMirror>().player().is_some() {
+                    return game;
+                }
+            }
+            panic!("the client never acquired an avatar through the relay");
+        }
+
+        fn frame(&mut self) {
+            self.frame += 1;
+            let now = self.frame as f64 / 60.0;
+            self.client.update();
+            self.relay.pump(now);
+            self.host.update();
+            self.relay.pump(now);
+        }
+
+        /// Holds exactly `held` of the movement keys for `frames` frames.
+        fn hold(&mut self, held: &[KeyCode], frames: u32) {
+            press_only(&mut self.client, held);
+            for _ in 0..frames {
+                self.frame();
+            }
+        }
+
+        /// The client fires its laser toward `direction` (arena space), as a
+        /// click there would.
+        fn fire(&mut self, direction: Vec3) {
+            let world = self.client.world_mut();
+            world.resource_mut::<Controls>().weapon = content::scenario::Weapon::Laser;
+            world.resource_scope(|world, mut service: Mut<SessionService>| {
+                world.resource_scope(|world, mut controls: Mut<Controls>| {
+                    world.resource_scope(|world, mut control: Mut<PlayerControl>| {
+                        control.strike(&mut service, &mut controls, &world.resource::<SceneView>().pack, direction);
+                    });
+                });
+            });
+        }
+
+        fn telemetry(&mut self) -> Mut<'_, crate::telemetry::Telemetry> {
+            self.client.world_mut().resource_mut::<crate::telemetry::Telemetry>()
+        }
+
+        /// Client inputs the host moved to a later tick so far, and the ticks
+        /// they moved in all.
+        fn late_inputs(&self) -> (u64, u64) {
+            let diagnostics = self.host.world().resource::<SessionService>().session.diagnostics(Duration::ZERO);
+            diagnostics.peers.iter().fold((0, 0), |(n, ticks), peer| (n + peer.late_inputs, ticks + peer.shifted_ticks))
+        }
+
+        /// The client's account of the same, from the turns it ran, its
+        /// input margin (ticks) and round trip (ms). Panics if it disagrees
+        /// with the host's once every input has applied.
+        fn client_margin(&self) -> String {
+            let session = &self.client.world().resource::<SessionService>().session;
+            let d = session.diagnostics(Duration::ZERO);
+            assert_eq!(session.pending_inputs(), 0, "inputs still in flight");
+            assert_eq!((d.late_inputs, d.shifted_ticks), self.late_inputs(), "the client saw other late inputs than the host");
+            let rtt = session.stats().rtt.map_or(0.0, |rtt| rtt.as_secs_f64() * 1000.0);
+            format!(
+                "client RTT {rtt:.0} ms, input margin {} ticks ({:.0} ms), late inputs seen by the client {} ({} ticks)",
+                d.input_delay,
+                d.input_delay as f64 * net::TICK.as_secs_f64() * 1000.0,
+                d.late_inputs,
+                d.shifted_ticks
+            )
+        }
+    }
+
+    /// Holds exactly `held` of the movement keys.
+    fn press_only(app: &mut App, held: &[KeyCode]) {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        for key in [KeyCode::KeyW, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD, KeyCode::ShiftLeft] {
+            if held.contains(&key) {
+                if !keys.pressed(key) {
+                    keys.press(key);
+                }
+            } else if keys.pressed(key) {
+                keys.release(key);
+            }
+        }
+    }
+
+    /// One scenario's movement script: (keys held, frames) steps.
+    fn movement_scenarios() -> Vec<(&'static str, Vec<(Vec<KeyCode>, u32)>)> {
+        use KeyCode::{KeyA as Left, KeyD as Right, KeyW as Up, ShiftLeft as Run};
+        let reversals = |run: bool| {
+            let with = |key| if run { vec![key, Run] } else { vec![key] };
+            (0..3).flat_map(|_| [(with(Right), 60), (with(Left), 36), (vec![], 36)]).collect()
+        };
+        vec![
+            ("base running", reversals(true)),
+            ("base walking", reversals(false)),
+            ("quick taps", (0..10).flat_map(|_| [(vec![Right], 3), (vec![], 18)]).collect()),
+            ("90 degree turn", vec![(vec![Right, Run], 60), (vec![Up, Run], 60)]),
+            ("zig-zag", (0..14).map(|i| (vec![if i % 2 == 0 { Left } else { Right }], 9)).collect()),
+            ("speed change", (0..5).map(|i| (if i % 2 == 0 { vec![Right] } else { vec![Right, Run] }, 24)).collect()),
+        ]
+    }
+
+    #[derive(Default)]
+    struct KindTotal {
+        count: u32,
+        distance: f32,
+        largest: f32,
+    }
+
+    #[test]
+    fn joined_player_movement_needs_no_corrections_under_latency() {
+        assert_no_corrections(&[("no added delay", 0.0, 0.0, 0x5eed), ("75 ± 20 ms", 75.0, 20.0, 0x5eed + 1)]);
+    }
+
+    #[test]
+    fn joined_player_movement_needs_no_corrections_at_100_ms() {
+        assert_no_corrections(&[("100 ± 20 ms", 100.0, 20.0, 0x5eed + 2)]);
+    }
+
+    #[test]
+    fn joined_player_input_margin_settles_near_one_way_on_a_lan() {
+        let mut game = RelayedGame::new(0.0, 0.0, 0x1a7);
+        assert_eq!(game.client.world().resource::<SessionService>().session.input_delay(), NetConfig::default().input_delay, "the host's margin until measured");
+        game.hold(&[KeyCode::KeyD], 120);
+        game.hold(&[], 120);
+        let session = &game.client.world().resource::<SessionService>().session;
+        let rtt = session.stats().rtt.unwrap();
+        let one_way = (rtt / 2).as_nanos().div_ceil(net::TICK.as_nanos()) as u64;
+        let margin = session.input_delay();
+        let report = game.client_margin();
+        assert_eq!(margin, one_way + 1, "{report}");
+        assert!(net::TICK * margin as u32 <= Duration::from_millis(50), "{report}");
+    }
+
+    #[test]
+    fn joined_player_movement_needs_no_corrections_at_150_ms() {
+        assert_no_corrections(&[("150 ± 20 ms", 150.0, 20.0, 0x5eed + 3)]);
+    }
+
+    /// Runs every movement scenario under each (name, one-way delay ms,
+    /// ± jitter ms, relay seed) case and fails on any kept correction.
+    fn assert_no_corrections(cases: &[(&str, f64, f64, u64)]) {
+        let mut kept_total = 0;
+        let mut report = String::new();
+        for &(name, delay, jitter, seed) in cases {
+            let mut game = RelayedGame::new(delay, jitter, seed);
+            for (scenario, script) in movement_scenarios() {
+                // Start each scenario at the spawn point, settled, with an empty log.
+                let agent = game.client.world().resource::<SessionService>().player().unwrap();
+                game.client.world_mut().resource_mut::<SessionService>().command(CommandKind::Respawn { agent });
+                game.hold(&[], 90);
+                game.telemetry().network.clear_corrections();
+                let late_before = game.late_inputs();
+                for (keys, frames) in script {
+                    game.hold(&keys, frames);
+                }
+                // Long enough for the confirmed avatar to stop, so a final pull shows.
+                game.hold(&[], 90);
+                let mut kinds = std::collections::BTreeMap::<String, KindTotal>::new();
+                let telemetry = game.telemetry();
+                let network = &telemetry.network;
+                for c in network.corrections() {
+                    let total = kinds.entry(format!("{:?}", c.kind)).or_default();
+                    total.count += 1;
+                    total.distance += c.distance;
+                    total.largest = total.largest.max(c.distance);
+                    kept_total += 1;
+                }
+                let (small, small_distance) = network.small_corrections();
+                let kept = if kinds.is_empty() {
+                    "none".to_string()
+                } else {
+                    kinds
+                        .iter()
+                        .map(|(kind, t)| format!("{kind} {} ({:.2} u, largest {:.2})", t.count, t.distance, t.largest))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                let late = game.late_inputs();
+                let (late, shifted) = (late.0 - late_before.0, late.1 - late_before.1);
+                let margin = game.client.world().resource::<SessionService>().session.input_delay();
+                report += &format!(
+                    "{name:>15} | {scenario:>15} | kept: {kept} | under 0.05: {small} ({small_distance:.3} u) | late inputs: {late} ({shifted} ticks) | margin {margin} ticks\n"
+                );
+            }
+            report += &format!("{name:>15} | {}\n", game.client_margin());
+        }
+        println!("corrections per latency case and scenario:\n{report}");
+        assert_eq!(kept_total, 0, "the joined player's avatar was corrected:\n{report}");
+    }
+
+    #[test]
+    fn mouse_aim_starts_at_the_drawn_avatar_only_when_it_is_predicted() {
+        let elsewhere = Some(Vec3::new(9.0, 0.0, 9.0));
+        let mut solo = field_app(None, 60.0);
+        crate::start_world(&mut solo);
+        let mut host = field_app(Some(Network::Host("127.0.0.1:0".parse().unwrap())), 60.0);
+        crate::start_world(&mut host);
+        for app in [&solo, &host] {
+            let service = app.world().resource::<SessionService>();
+            assert!(service.player_view_position().is_some());
+            assert_eq!(aim_origin(service, elsewhere), service.player_view_position(), "unpredicted avatars aim from the confirmed position");
+        }
+        let game = RelayedGame::new(0.0, 0.0, 1);
+        let service = game.client.world().resource::<SessionService>();
+        assert_eq!(aim_origin(service, elsewhere), elsewhere);
+        assert_eq!(aim_origin(service, None), service.player_view_position());
+    }
+
+    /// One laser scenario: (keys held, frames, fire toward this first) steps.
+    fn laser_scenarios() -> Vec<(&'static str, Vec<(Vec<KeyCode>, u32, Option<Vec3>)>)> {
+        use KeyCode::{KeyA as Left, KeyD as Right, ShiftLeft as Run};
+        // West toward the hall's far side wall, south toward the low front
+        // rail close behind the spawn, and north from the spawn toward the
+        // mixing desk (cover). The movement keys run diagonally on this
+        // scene's camera, away from the host's avatar.
+        let (west, south, north) = (Some(Vec3::NEG_X), Some(Vec3::Z), Some(Vec3::NEG_Z));
+        let run = |key| vec![key, Run];
+        vec![
+            ("standing still", vec![(vec![], 24, west), (vec![], 24, south), (vec![], 24, north), (vec![], 24, west), (vec![], 24, south)]),
+            (
+                "running",
+                vec![(run(Right), 20, None), (run(Right), 20, south), (run(Right), 20, west), (run(Right), 20, south), (run(Right), 20, west)],
+            ),
+            // The second shot is pressed during the first one's swing, so it waits for it.
+            ("right after reversing", (0..3).flat_map(|_| [(run(Right), 40, None), (run(Left), 6, south), (run(Left), 30, west)]).collect()),
+        ]
+    }
+
+    #[test]
+    fn joined_player_laser_shots_are_predicted_under_latency() {
+        assert_lasers_predicted(&[("no added delay", 0.0, 0.0, 0x1a5e), ("75 ± 20 ms", 75.0, 20.0, 0x1a5e + 1)]);
+    }
+
+    #[test]
+    fn joined_player_laser_shots_are_predicted_at_100_ms() {
+        assert_lasers_predicted(&[("100 ± 20 ms", 100.0, 20.0, 0x1a5e + 2)]);
+    }
+
+    #[test]
+    fn joined_player_laser_shots_are_predicted_at_150_ms() {
+        assert_lasers_predicted(&[("150 ± 20 ms", 150.0, 20.0, 0x1a5e + 3)]);
+    }
+
+    /// Runs every laser scenario in the laser pit under each (name, one-way
+    /// delay ms, ± jitter ms, relay seed) case. Each shot the client fires
+    /// is drawn once, with one laser sound, before the confirmed world
+    /// fires it, and the confirmed shot ends exactly where the drawn one
+    /// did. No correction of any kind is kept.
+    fn assert_lasers_predicted(cases: &[(&str, f64, f64, u64)]) {
+        let mut failures = Vec::new();
+        let mut report = String::new();
+        for &(name, delay, jitter, seed) in cases {
+            let mut game = RelayedGame::in_scene("laser-pit", delay, jitter, seed);
+            // The host's avatar shares the spawn point: move it off the
+            // client's lines of fire, into the southwest corner behind the client.
+            let spawn = confirmed(&game.client);
+            let walk = |game: &mut RelayedGame, intent| {
+                let service = &mut *game.host.world_mut().resource_mut::<SessionService>();
+                let agent = service.player().unwrap();
+                service.command(CommandKind::MoveAvatar { agent, intent });
+            };
+            let southwest = FxVec2::new(Fx::from_int(-1), Fx::ONE).normalize_or_zero();
+            walk(&mut game, Intent::Walk { direction: southwest, run: false });
+            game.hold(&[], 150);
+            walk(&mut game, Intent::Stop);
+            game.hold(&[], 30);
+            let host_at = confirmed(&game.host);
+            assert!(host_at.z > spawn.z + 1.5 && host_at.x < spawn.x - 3.0, "the host's avatar is in the way: {host_at} (spawn {spawn})");
+            let agent = game.client.world().resource::<SessionService>().player().unwrap();
+            for (scenario, script) in laser_scenarios() {
+                game.client.world_mut().resource_mut::<SessionService>().command(CommandKind::Respawn { agent });
+                game.hold(&[], 90);
+                game.telemetry().network.clear_corrections();
+                let sounds = |game: &RelayedGame| game.client.world().resource::<crate::sound::Sound>().recorded_events().iter().filter(|(_, cue)| *cue == crate::sound::Cue::Laser as i32).count();
+                let sounds_before = sounds(&game);
+                let late_before = game.late_inputs();
+                let (mut fired, mut confirmed_shots, mut cover_hits, mut player_hits) = (0, 0, 0, 0);
+                let mut beams = std::collections::HashMap::<Entity, bool>::new();
+                // Then long enough for every shot to be confirmed, or given up.
+                let settle = (Vec::new(), 90, None);
+                for (keys, frames, fire) in script.iter().chain([&settle]) {
+                    let (frames, fire) = (*frames, *fire);
+                    press_only(&mut game.client, keys);
+                    if let Some(direction) = fire {
+                        game.fire(direction);
+                        fired += 1;
+                    }
+                    for _ in 0..frames {
+                        game.frame();
+                        let world = game.client.world_mut();
+                        for event in &world.resource::<WorldMirror>().events {
+                            if let sim::settlement::Event::LaserFired { agent: shooter, hit_actor, cover, .. } = event {
+                                if *shooter == agent {
+                                    confirmed_shots += 1;
+                                    cover_hits += usize::from(cover.is_some());
+                                    player_hits += usize::from(*hit_actor);
+                                }
+                            }
+                        }
+                        let mut bolts = world.query::<(Entity, &crate::effects::LaserBolt)>();
+                        for (entity, bolt) in bolts.iter(world) {
+                            beams.entry(entity).or_insert(bolt.predicted());
+                        }
+                    }
+                }
+                let telemetry = game.telemetry();
+                let network = &telemetry.network;
+                let outcomes: Vec<_> = network.laser_outcomes().cloned().collect();
+                let kinds: Vec<_> = network.corrections().map(|c| format!("{:?} {:.2}", c.kind, c.distance)).collect();
+                let laser_mispredictions = network.corrections().filter(|c| c.kind == crate::telemetry::CorrectionKind::LaserMispredict).count();
+                let drawn = network.lasers_drawn() as usize;
+                let sounds = sounds(&game) - sounds_before;
+                let predicted_beams = beams.values().filter(|p| **p).count();
+                let end_difference = outcomes.iter().map(|o| o.confirmed.map_or(f32::INFINITY, |c| c.distance(o.predicted))).fold(0.0, f32::max);
+                let leads: Vec<f64> = outcomes.iter().filter_map(|o| o.lead).collect();
+                let (lead_min, lead_max) = leads.iter().fold((f64::INFINITY, 0.0f64), |(lo, hi), &l| (lo.min(l), hi.max(l)));
+                let late = game.late_inputs();
+                let (late, shifted) = (late.0 - late_before.0, late.1 - late_before.1);
+                let client_at = confirmed(&game.client);
+                let margin = game.client.world().resource::<SessionService>().session.input_delay();
+                report += &format!(
+                    "{name:>15} | {scenario:>21} | ends at ({:.1}, {:.1}) |",
+                    client_at.x,
+                    client_at.z
+                );
+                report += &format!(
+                    " fired {fired}, confirmed {confirmed_shots} ({cover_hits} on cover), drawn early {drawn}, beams {} ({predicted_beams} predicted), laser sounds {sounds} | laser mispredictions {laser_mispredictions}, largest end difference {end_difference:.4} u | drawn {:.0}–{:.0} ms before confirmation | other corrections: {} | late inputs: {late} ({shifted} ticks) | margin {margin} ticks\n",
+                    beams.len(),
+                    lead_min * 1000.0,
+                    lead_max * 1000.0,
+                    kinds.len() - laser_mispredictions,
+                );
+                let exact = outcomes.len() == fired && outcomes.iter().all(|o| o.exact && o.confirmed.is_some());
+                let early = leads.len() == fired && leads.iter().all(|&lead| lead > 0.0);
+                if player_hits > 0 {
+                    failures.push(format!("{name} / {scenario}: {player_hits} shots hit the host's avatar"));
+                }
+                if scenario == "standing still" && cover_hits == 0 {
+                    failures.push(format!("{name} / {scenario}: no shot hit the mixing desk"));
+                }
+                if !(confirmed_shots == fired && drawn == fired && exact && early && kinds.is_empty() && beams.len() == fired && predicted_beams == fired && sounds == fired) {
+                    failures.push(format!("{name} / {scenario}: corrections {kinds:?}, outcomes {outcomes:?}"));
+                }
+            }
+            report += &format!("{name:>15} | {}, host avatar at {host_at}\n", game.client_margin());
+        }
+        println!("laser shots per latency case and scenario:\n{report}");
+        assert!(failures.is_empty(), "laser shots were not predicted exactly:\n{report}\n{}", failures.join("\n"));
     }
 }
