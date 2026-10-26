@@ -35,6 +35,9 @@ build:remote --jobs=50
 # Windows clients otherwise send their MSYS/Windows PATH to Linux workers.
 build:remote --action_env=PATH=/usr/local/bin:/usr/bin:/bin
 build:remote --host_action_env=PATH=/usr/local/bin:/usr/bin:/bin
+# Remote workers are Linux. Windows clients otherwise hand genrules their
+# local bash path (C:/Program Files/Git/usr/bin/bash.exe).
+build:remote --shell_executable=/bin/bash
 
 
 test --test_output=errors
