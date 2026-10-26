@@ -41,7 +41,9 @@ it is not a simulation replay or a desync capture.
   section shows the horizontal distance from the confirmed avatar (about one
   input lead while moving), the last frame's misprediction, and counts of
   mispredicted frames and snaps. These are view observations, not
-  deterministic state mismatches.
+  deterministic state mismatches. A line counts the client's predicted laser
+  shots: drawn, confirmed, mispredicted, and how long before its confirmation
+  the last one was drawn (about one input lead).
 - **Preview corrections:** a misprediction moves the drawn avatar; consecutive
   mispredicted frames form one `mispredict` correction, whose distance is the
   sum of each frame's starting error. A `snap` is a correction over 1.5 units.
@@ -51,6 +53,14 @@ it is not a simulation replay or a desync capture.
   line to where the new prediction pulls it. The copied report lists them
   under `preview_corrections`, with duration, distance, positions, local tick,
   pending inputs and RTT at the start.
+- **Laser mispredictions:** a `laser` correction is one predicted laser shot
+  (see below) that the confirmed shot didn't match: it ended elsewhere, by any
+  distance, or never fired. It is always kept. In the world it is a red ball
+  where the drawn beam ended and a line to where the confirmed shot ended. In
+  the copied report `from` is the drawn end, `to` the confirmed end (the same
+  point when `never_fired` is true) and `distance` the gap between them. The
+  report's top level also has `laser_shots_drawn`, `laser_shots_confirmed`,
+  `laser_mispredictions` and `laser_last_lead_ms`.
 
 ## Movement prediction
 
@@ -75,11 +85,45 @@ by anyone (your own digs included), respawning after death, or scene changes,
 so those still correct. Click-to-move isn't predicted: while one is pending,
 the confirmed avatar is drawn.
 
+## Predicted laser shots
+
+A client also draws its own laser shots predicted. When the drawn time
+reaches the tick a laser swing resolves on in the replay, two ticks after the
+press, the shot is aimed with the simulation's own targeting
+(`Settlement::predict_laser`) from the predicted avatar against the confirmed
+world, and drawn at once: the beam from the drawn avatar's gun, the laser
+sound, and the impact spark and sound. The beam stops at walls, cover, the
+ground, and enemies and other players where they are drawn. Damage, flinches,
+deaths and cover breaking still wait for the confirmed shot, about an input
+lead after the drawn beam hit (if that beam is still in flight then, the
+cover waits for it to arrive). See
+[the shot matching](../app/src/laser_prediction.rs).
+
+The confirmed `LaserFired` events of your avatar are matched to the drawn
+shots in order and not drawn again. If one ends elsewhere, the drawn beam
+stays and the results apply where the confirmed shot hit; that is logged as a
+`laser` misprediction. A drawn shot the confirmed world is 10 ticks past
+without firing (the swing didn't happen there, or the avatar died) is given
+up and logged the same way. A confirmed shot with nothing drawn for it (fired
+while a click-to-move was pending, for example) is drawn when it arrives.
+Other players' shots are drawn when confirmed.
+
+A shot fired from the predicted position ends where the confirmed one does
+unless the replay was wrong: an input the host moved to a later tick shifts
+the shot a tick (about 0.07 units when running), and a target that moves or
+cover that breaks between the drawn tick and the shot also changes where it
+ends.
+
+On a joined client the mouse aims from the drawn avatar, where its shots fire
+from. The host and single player draw their avatar where it is confirmed and
+aim from that, as before. Only the aim in the `Attack` command changes; the
+protocol does not.
+
 Graphs use local monotonic wall time, with per-frame p95 values over the retained
 history. The slowest tick graph has no sample on frames without a tick.
 Traffic rates use up to one second of local observations. They are unavailable
 until two samples exist. Packet loss, remote assigned ticks on the client, and
-per-shot animation/fire/hit timelines are not measured in this first window.
+per-shot animation and hit timelines are not measured in this first window.
 
 ## Feeling a slower network
 
