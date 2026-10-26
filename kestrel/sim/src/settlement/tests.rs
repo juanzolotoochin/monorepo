@@ -296,12 +296,12 @@ fn forest_probe() {
                 println!("  producer {:<10} enabled={} remaining={} cycles={}", p.id, p.enabled, p.remaining, p.cycles);
             }
             for d in &s.depots {
-                println!("  depot {:<12} stock={:?} out={:?} in={:?} free={}", d.id, d.stock, d.out, d.incoming, d.free());
+                println!("  depot {:<12} stock={:?} out={:?} in={:?} free={}", d.id, d.inventory.counts, d.inventory.reserved_out, d.inventory.reserved_in, d.inventory.free());
             }
             for l in &s.links {
                 let to = &s.depots[l.to as usize];
-                let demand = l.target.saturating_sub(to.stock[l.item as usize] + to.incoming[l.item as usize]);
-                println!("  link {:<14} avail={} free={} demand={}", l.id, s.depots[l.from as usize].available(l.item), to.free(), demand);
+                let demand = l.target.saturating_sub(to.inventory.count(l.item) + to.inventory.reserved_in[l.item as usize]);
+                println!("  link {:<14} avail={} free={} demand={}", l.id, s.depots[l.from as usize].inventory.available(l.item), to.inventory.free(), demand);
             }
         }
     }

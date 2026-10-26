@@ -40,7 +40,8 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///     owner, name and weapon cooldown move into its `AvatarState`.
 /// 12: material accounts count units players carried off when they left
 ///     (`Accounting::abandoned`).
-pub const FORMAT_VERSION: u32 = 12;
+/// 13: a depot's stock, reservations and capacity are an `Inventory`.
+pub const FORMAT_VERSION: u32 = 13;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

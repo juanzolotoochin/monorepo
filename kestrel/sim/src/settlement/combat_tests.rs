@@ -525,7 +525,7 @@ fn controlled_transfers_share_reservations_and_cancellation_preserves_airborne_u
     assert!(arena.s().agents[player].avatar().unwrap().job.is_some());
     arena.command(take(1, false));
     let remaining = arena.s().agents[player].avatar().unwrap().job.as_ref().unwrap().remaining;
-    assert_eq!(arena.s().depots[depot].out[item], remaining, "a second transfer is refused while one runs");
+    assert_eq!(arena.s().depots[depot].inventory.reserved_out[item], remaining, "a second transfer is refused while one runs");
     assert!(arena.s().transfers.values().any(|t| t.to == super::Endpoint::Cargo(agent)));
     arena.command(CommandKind::CancelTransfer { agent });
     arena.step(ms(500));
@@ -550,22 +550,22 @@ fn a_transfer_reserves_stock_and_a_cancel_releases_it_on_their_tick() {
     let agent = arena.player as u16;
     // Far from the dock, so no unit moves.
     assert!((s.agents[arena.player].body.position - s.depots[d].position).length() > fx(1.0));
-    let (out, incoming) = (s.depots[d].out[i], s.depots[d].incoming[i]);
+    let (out, incoming) = (s.depots[d].inventory.reserved_out[i], s.depots[d].inventory.reserved_in[i]);
 
     arena.command(CommandKind::Transfer { agent, depot, item, units: 3, deposit: false });
-    assert_eq!(arena.s().depots[d].out[i], out + 3, "the pickup reserves its stock");
+    assert_eq!(arena.s().depots[d].inventory.reserved_out[i], out + 3, "the pickup reserves its stock");
     assert_eq!(arena.s().agents[arena.player].avatar().unwrap().job.as_ref().unwrap().remaining, 3);
     arena.command(CommandKind::CancelTransfer { agent });
-    assert_eq!(arena.s().depots[d].out[i], out, "the cancel releases it");
+    assert_eq!(arena.s().depots[d].inventory.reserved_out[i], out, "the cancel releases it");
     assert!(arena.s().agents[arena.player].avatar().unwrap().job.is_none());
 
     // Cargo to deposit, handed over outside the accounts (so no `validate`).
     let player = arena.player;
     arena.s_mut().agents[player].carry.cargo[i] = 2;
     arena.command(CommandKind::Transfer { agent, depot, item, units: 2, deposit: true });
-    assert_eq!(arena.s().depots[d].incoming[i], incoming + 2, "the deposit reserves room");
+    assert_eq!(arena.s().depots[d].inventory.reserved_in[i], incoming + 2, "the deposit reserves room");
     arena.command(CommandKind::CancelTransfer { agent });
-    assert_eq!(arena.s().depots[d].incoming[i], incoming);
+    assert_eq!(arena.s().depots[d].inventory.reserved_in[i], incoming);
 }
 
 /// Respawning drops a running transfer, and its reserved stock goes back to
@@ -583,20 +583,20 @@ fn respawning_releases_a_transfer_reservation() {
     let agent = arena.player as u16;
     // Far from the dock, so no unit moves.
     assert!((s.agents[arena.player].body.position - s.depots[d].position).length() > fx(1.0));
-    let out = s.depots[d].out[i];
+    let out = s.depots[d].inventory.reserved_out[i];
 
     arena.command(CommandKind::Transfer { agent, depot, item, units: 3, deposit: false });
-    assert_eq!(arena.s().depots[d].out[i], out + 3);
+    assert_eq!(arena.s().depots[d].inventory.reserved_out[i], out + 3);
     arena.command(CommandKind::Respawn { agent });
     assert!(arena.s().agents[arena.player].avatar().unwrap().job.is_none());
-    assert_eq!(arena.s().depots[d].out[i], out, "the respawn releases the reservation");
+    assert_eq!(arena.s().depots[d].inventory.reserved_out[i], out, "the respawn releases the reservation");
     arena.s().validate().unwrap();
 
     let player = PlayerId(0);
     let turn = [CommandKind::Transfer { agent, depot, item, units: 2, deposit: false }, CommandKind::Respawn { agent }];
     arena.sim.step(&turn.map(|kind| Command { player, kind }));
     assert!(arena.s().agents[arena.player].avatar().unwrap().job.is_none());
-    assert_eq!(arena.s().depots[d].out[i], out, "reserved and released in one tick");
+    assert_eq!(arena.s().depots[d].inventory.reserved_out[i], out, "reserved and released in one tick");
     arena.s().validate().unwrap();
 }
 
@@ -617,7 +617,7 @@ fn two_transfers_from_one_depot_on_one_tick_go_to_the_first_player() {
     let (depot, item) = (s.depot_index("factory").unwrap(), s.item_index("wood").unwrap());
     let (d, i) = (depot as usize, item as usize);
     let (a, b) = (s.avatar_of(host).unwrap(), s.avatar_of(guest).unwrap());
-    assert_eq!(s.depots[d].available(item), 2);
+    assert_eq!(s.depots[d].inventory.available(item), 2);
     for agent in [a, b] {
         assert_eq!(s.transfer_limit(agent as usize, d, i, false), 2);
         assert!((s.agents[agent as usize].body.position - s.depots[d].position).length() > fx(1.0), "no unit moves");
@@ -627,18 +627,18 @@ fn two_transfers_from_one_depot_on_one_tick_go_to_the_first_player() {
     // The guest's command comes first in the turn; the host still wins.
     arena.sim.step(&[take(guest, b), take(host, a)]);
     let s = arena.s();
-    assert_eq!(s.depots[d].out[i], 2, "reserved once");
+    assert_eq!(s.depots[d].inventory.reserved_out[i], 2, "reserved once");
     assert_eq!(s.agents[a as usize].avatar().unwrap().job.as_ref().map(|j| j.remaining), Some(2), "the host's transfer stands");
     assert!(s.agents[b as usize].avatar().unwrap().job.is_none(), "the guest's rolled back");
     s.validate().unwrap();
     arena.sim.step(&[Command { player: host, kind: CommandKind::CancelTransfer { agent: a } }]);
-    assert_eq!(arena.s().depots[d].out[i], 0);
+    assert_eq!(arena.s().depots[d].inventory.reserved_out[i], 0);
 
     // The refused transfer cancelled in the same turn releases nothing.
     let cancel = Command { player: guest, kind: CommandKind::CancelTransfer { agent: b } };
     arena.sim.step(&[take(host, a), take(guest, b), cancel]);
     let s = arena.s();
-    assert_eq!(s.depots[d].out[i], 2);
+    assert_eq!(s.depots[d].inventory.reserved_out[i], 2);
     assert!(s.agents[a as usize].avatar().unwrap().job.is_some() && s.agents[b as usize].avatar().unwrap().job.is_none());
     s.validate().unwrap();
 
@@ -647,7 +647,7 @@ fn two_transfers_from_one_depot_on_one_tick_go_to_the_first_player() {
     arena.sim.step(&[cancel.clone()]);
     arena.sim.step(&[take(host, a), cancel, take(guest, b)]);
     let s = arena.s();
-    assert_eq!(s.depots[d].out[i], 2);
+    assert_eq!(s.depots[d].inventory.reserved_out[i], 2);
     assert!(s.agents[a as usize].avatar().unwrap().job.is_none());
     assert_eq!(s.agents[b as usize].avatar().unwrap().job.as_ref().map(|j| j.remaining), Some(2), "the guest takes it");
     s.validate().unwrap();
@@ -961,7 +961,7 @@ fn dying_releases_a_transfer_reservation() {
     let (shooter, target) = (settlement.avatar_of(host).unwrap(), settlement.avatar_of(guest).unwrap());
     let (depot, item) = (settlement.depot_index("forest").unwrap(), settlement.item_index("wood").unwrap());
     let (d, i) = (depot as usize, item as usize);
-    let out = settlement.depots[d].out[i];
+    let out = settlement.depots[d].inventory.reserved_out[i];
     let dock = settlement.depots[d].position;
     let start = settlement.agents[shooter as usize].body.position;
     let to = start + FxVec2::new(Fx::ZERO, Fx::from_int(3));
@@ -970,7 +970,7 @@ fn dying_releases_a_transfer_reservation() {
     assert!((to - dock).length() > fx(1.0));
 
     sim.step(&[Command { player: guest, kind: CommandKind::Transfer { agent: target, depot, item, units: 3, deposit: false } }]);
-    assert_eq!(sim.world().settlement().unwrap().depots[d].out[i], out + 3);
+    assert_eq!(sim.world().settlement().unwrap().depots[d].inventory.reserved_out[i], out + 3);
     sim.step(&[Command { player: host, kind: CommandKind::Attack {
         agent: shooter, weapon: Weapon::Laser,
         aim: FxVec2::new(Fx::ZERO, Fx::ONE), muzzle: [Fx::ZERO, fx(0.8), fx(0.25)],
@@ -979,13 +979,13 @@ fn dying_releases_a_transfer_reservation() {
     let settlement = sim.world().settlement().unwrap();
     assert_eq!(settlement.agents[target as usize].body.health, 0, "the laser killed the target");
     assert!(settlement.agents[target as usize].avatar().unwrap().job.is_none());
-    assert_eq!(settlement.depots[d].out[i], out, "death releases the reservation");
+    assert_eq!(settlement.depots[d].inventory.reserved_out[i], out, "death releases the reservation");
     settlement.validate().unwrap();
 
     for _ in 0..ms(2200) { sim.step(&[]); }
     let settlement = sim.world().settlement().unwrap();
     assert_eq!(settlement.agents[target as usize].body.health, 1, "respawned");
-    assert_eq!(settlement.depots[d].out[i], out);
+    assert_eq!(settlement.depots[d].inventory.reserved_out[i], out);
     settlement.validate().unwrap();
 }
 
@@ -1282,10 +1282,10 @@ fn a_ghoul_hit_kills_through_the_laser_kill_path() {
     let s = arena.s();
     let (depot, item) = (s.depot_index("forest").unwrap(), s.item_index("wood").unwrap());
     let (d, i) = (depot as usize, item as usize);
-    let out = s.depots[d].out[i];
+    let out = s.depots[d].inventory.reserved_out[i];
     assert!(crate::nav::distance(at, s.depots[d].position) > fx(1.0), "far from the dock, so no unit moves");
     arena.command(CommandKind::Transfer { agent: player as u16, depot, item, units: 3, deposit: false });
-    assert_eq!(arena.s().depots[d].out[i], out + 3);
+    assert_eq!(arena.s().depots[d].inventory.reserved_out[i], out + 3);
     arena.threat(100, 0.0, 0.7, 3, 0);
     arena.step(1);
     let lands = arena.until_swing(100);
@@ -1295,7 +1295,7 @@ fn a_ghoul_hit_kills_through_the_laser_kill_path() {
     assert!(a.avatar().unwrap().respawn_at > lands);
     assert_eq!(a.body.velocity, FxVec2::ZERO, "the dead aren't pushed");
     assert!(a.avatar().unwrap().job.is_none());
-    assert_eq!(arena.s().depots[d].out[i], out, "death released the reservation");
+    assert_eq!(arena.s().depots[d].inventory.reserved_out[i], out, "death released the reservation");
     // No swings at the dead.
     for _ in 0..ms(1000) {
         arena.step(1);
@@ -1556,13 +1556,13 @@ fn leaving_moves_references_to_later_avatars_and_balances_material() {
     let (leaver, stayer) = (s.avatar_of(PlayerId(1)).unwrap(), s.avatar_of(PlayerId(2)).unwrap());
     let (depot, item) = (s.depot_index("forest").unwrap(), s.item_index("wood").unwrap());
     let (d, i) = (depot as usize, item as usize);
-    let out = s.depots[d].out[i];
+    let out = s.depots[d].inventory.reserved_out[i];
 
     // The leaver carries a unit and has another flying to it, with a unit
     // still reserved; a unit flies to the stayer too.
     let take = |player, agent, units| Command { player: PlayerId(player), kind: CommandKind::Transfer { agent, depot, item, units, deposit: false } };
     arena.sim.step(&[take(1, leaver, 3), take(2, stayer, 1)]);
-    assert_eq!(arena.s().depots[d].out[i], out + 4);
+    assert_eq!(arena.s().depots[d].inventory.reserved_out[i], out + 4);
     let tick = arena.tick();
     arena.s_mut().manual_unit(tick, ManualUnit { agent: leaver });
     arena.step(ms(1000));
@@ -1592,7 +1592,7 @@ fn leaving_moves_references_to_later_avatars_and_balances_material() {
     assert_eq!(s.threats[0].windup.map(|w| w.agent), Some(moved));
     let flying: Vec<_> = s.transfers.values().map(|t| t.to).collect();
     assert_eq!(flying, [super::Endpoint::Cargo(moved)], "the stayer's unit still flies to it");
-    assert_eq!(s.depots[d].out[i], out, "the leaver's reservation is released");
+    assert_eq!(s.depots[d].inventory.reserved_out[i], out, "the leaver's reservation is released");
     assert_eq!(s.accounts[i].abandoned, 2, "its carried unit and the one flying to it");
     s.validate().unwrap();
     arena.step(ms(1000));

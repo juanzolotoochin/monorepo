@@ -63,8 +63,7 @@ impl Settlement {
         match t.to {
             Endpoint::Depot(d) => {
                 let depot = &mut self.depots[d as usize];
-                depot.stock[t.item as usize] += 1;
-                depot.incoming[t.item as usize] -= 1;
+                depot.inventory.put(t.item, 1);
                 self.metrics.delivered += 1;
                 *self.metrics.delivered_items.entry(self.items[t.item as usize].clone()).or_default() += 1;
                 if let Endpoint::Cargo(a) = t.from {
@@ -87,10 +86,11 @@ impl Settlement {
             }
             let depot = &self.depots[s.depot as usize];
             let left = s.max_units.map_or(u32::MAX, |max| max.saturating_sub(s.total));
-            let units = s.units.min(depot.free()).min(left);
+            let units = s.units.min(depot.inventory.free()).min(left);
             if units > 0 {
                 let (d, item) = (s.depot as usize, s.item as usize);
-                self.depots[d].stock[item] += units;
+                let added = self.depots[d].inventory.add(s.item, units);
+                debug_assert!(added, "within the free space");
                 self.accounts[item].generated += units as u64;
                 self.sources[i].total += units;
             }
@@ -107,8 +107,7 @@ impl Settlement {
                     let (output, products) = (p.output as usize, p.products.clone());
                     for (item, units) in products {
                         let depot = &mut self.depots[output];
-                        depot.stock[item as usize] += units;
-                        depot.incoming[item as usize] -= units;
+                        depot.inventory.put(item, units);
                         self.accounts[item as usize].produced += units as u64;
                     }
                     self.metrics.cycles += 1;
@@ -123,18 +122,19 @@ impl Settlement {
             // Ingredients leaving the same depot make room for the products.
             let freed: u32 = if p.input == p.output { p.ingredients.iter().map(|s| s.1).sum() } else { 0 };
             let (input, output) = (p.input as usize, p.output as usize);
-            let fits = self.depots[output].free() + freed >= required;
-            let stocked = p.ingredients.iter().all(|&(item, units)| self.depots[input].available(item) >= units);
+            let fits = self.depots[output].inventory.free() + freed >= required;
+            let stocked = p.ingredients.iter().all(|&(item, units)| self.depots[input].inventory.available(item) >= units);
             if !(fits && stocked) {
                 continue;
             }
             let (ingredients, products, ticks) = (p.ingredients.clone(), p.products.clone(), p.ticks);
             for (item, units) in ingredients {
-                self.depots[input].stock[item as usize] -= units;
+                self.depots[input].inventory.remove(item, units);
                 self.accounts[item as usize].consumed += units as u64;
             }
             for (item, units) in products {
-                self.depots[output].incoming[item as usize] += units;
+                let reserved = self.depots[output].inventory.reserve_in(item, units);
+                debug_assert!(reserved, "checked that the products fit");
             }
             self.producers[i].remaining = ticks;
         }
@@ -194,10 +194,11 @@ impl Settlement {
         let h = self.hauler(message.agent);
         let e = h.equipment.as_ref().expect("equip comes from equippable agents");
         let (depot, item) = (e.depot as usize, e.item);
-        if !self.idle(message.agent) || h.equipped || self.depots[depot].available(item) == 0 {
+        if !self.idle(message.agent) || h.equipped || self.depots[depot].inventory.available(item) == 0 {
             return self.retry(tick, Retry { agent: message.agent });
         }
-        self.depots[depot].out[item as usize] += 1;
+        let reserved = self.depots[depot].inventory.reserve_out(item, 1);
+        debug_assert!(reserved, "checked that one is available");
         let (body, _, h) = self.hauler_parts(message.agent);
         h.phase = Phase::ToEquip;
         body.route = message.route;
@@ -215,9 +216,10 @@ impl Settlement {
         if units == 0 {
             return self.retry(tick, Retry { agent: message.agent });
         }
-        let (from, to, item) = (link.from as usize, link.to as usize, link.item as usize);
-        self.depots[from].out[item] += units;
-        self.depots[to].incoming[item] += units;
+        let (from, to, item) = (link.from as usize, link.to as usize, link.item);
+        // `job_size` checked both ends.
+        let reserved = self.depots[from].inventory.reserve_out(item, units) && self.depots[to].inventory.reserve_in(item, units);
+        debug_assert!(reserved, "the job fits both depots");
         self.metrics.assignments += 1;
         let (body, _, h) = self.hauler_parts(message.agent);
         h.assignment = Some(Assignment { link: message.link, units, loaded: 0, unloaded: 0 });
@@ -232,10 +234,9 @@ impl Settlement {
             return;
         }
         let e = h.equipment.as_ref().expect("attaching agents have equipment");
-        let (depot, item) = (e.depot as usize, e.item as usize);
+        let (depot, item) = (e.depot as usize, e.item);
         let (spot, heading) = h.trailer_spot(&a.body, terrain);
-        self.depots[depot].stock[item] -= 1;
-        self.depots[depot].out[item] -= 1;
+        self.depots[depot].inventory.take(item, 1);
         self.metrics.equipped += 1;
         self.events.push(super::Event::Equipped { agent: message.agent });
         let (body, _, h) = self.hauler_parts(message.agent);
@@ -254,8 +255,7 @@ impl Settlement {
         let link = &self.links[job.link as usize];
         let (from, item) = (link.from, link.item);
         let depot = &mut self.depots[from as usize];
-        depot.stock[item as usize] -= 1;
-        depot.out[item as usize] -= 1;
+        depot.inventory.take(item, 1);
         self.metrics.picked += 1;
         let start = depot.position;
         let (body, carry, h) = self.hauler_parts(message.agent);
@@ -293,10 +293,10 @@ impl Settlement {
     /// scripted demos and tests.
     pub fn add_stock(&mut self, depot: usize, item: usize, units: u32) {
         let (Some(d), true) = (self.depots.get_mut(depot), item < self.items.len()) else { return };
-        if units == 0 || units > d.free() {
+        // `add` refuses units that don't fit.
+        if units == 0 || !d.inventory.add(item as ItemIx, units) {
             return;
         }
-        d.stock[item] += units;
         self.accounts[item].generated += units as u64;
     }
 

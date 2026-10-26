@@ -661,9 +661,9 @@ impl Simulation {
                     "disabled"
                 } else if p.max_cycles.is_some_and(|limit| p.cycles >= limit) {
                     "commission_complete"
-                } else if current.depots[p.output as usize].free() < required {
+                } else if current.depots[p.output as usize].inventory.free() < required {
                     "output_blocked"
-                } else if p.ingredients.iter().any(|&(i, n)| current.depots[p.input as usize].available(i) < n) {
+                } else if p.ingredients.iter().any(|&(i, n)| current.depots[p.input as usize].inventory.available(i) < n) {
                     "input_starved"
                 } else {
                     "ready"
@@ -723,7 +723,7 @@ impl Simulation {
             alpha,
             paused: false,
             health: current.health,
-            depots: current.depots.iter().map(|d| (d.id.clone(), inventory(&d.stock, d.capacity))).collect(),
+            depots: current.depots.iter().map(|d| (d.id.clone(), inventory(&d.inventory.counts, d.inventory.capacity))).collect(),
             agents,
             producers: current
                 .producers

@@ -7,9 +7,9 @@
 //! - Agents (haulers and player avatars) move in the parallel self-update
 //!   stage, reading last tick's positions of everyone else. Anything that
 //!   touches a depot, a dock or another entity is a message.
-//! - Reservations are incremental counters on each depot (`out` per item,
-//!   `incoming` per item), so checking availability is O(1). A debug
-//!   invariant recomputes them from scratch.
+//! - Reservations are incremental counters in each depot's inventory
+//!   (`reserved_out` and `reserved_in` per item), so checking availability
+//!   is O(1). A debug invariant recomputes them from scratch.
 //!
 //! Positions are world tiles (1 tile = 1 m). Scenario files use arena
 //! coordinates; [`Settlement::from_scenario`] offsets them by the arena center.
@@ -57,29 +57,10 @@ pub const TRANSFER_FLIGHT_TICKS: u64 = content::millis_to_ticks(350);
 pub struct DepotState {
     pub id: String,
     pub position: FxVec2,
-    pub capacity: u32,
-    /// Units on hand, per item.
-    pub stock: Vec<u32>,
-    /// Units promised to haulers, recipes or the player, per item.
-    pub out: Vec<u32>,
-    /// Units on their way here (hauled, flying, being produced), per item.
-    pub incoming: Vec<u32>,
-}
-
-impl DepotState {
-    pub fn total(&self) -> u32 {
-        self.stock.iter().sum()
-    }
-
-    /// Space not taken by stock or incoming units.
-    pub fn free(&self) -> u32 {
-        self.capacity.saturating_sub(self.total() + self.incoming.iter().sum::<u32>())
-    }
-
-    /// Stock not promised to anyone.
-    pub fn available(&self, item: ItemIx) -> u32 {
-        self.stock[item as usize].saturating_sub(self.out[item as usize])
-    }
+    /// The stock. `reserved_out` is promised to haulers, recipes or the
+    /// player; `reserved_in` is on its way here (hauled, flying, being
+    /// produced).
+    pub inventory: Inventory,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -306,19 +287,13 @@ impl Settlement {
             .depots
             .iter()
             .map(|d| {
-                let mut stock = vec![0; items.len()];
+                let mut inventory = Inventory::new(items.len(), d.capacity, Kinds::AnyMix);
                 for s in &d.stock {
-                    stock[item(&s.item) as usize] += s.units;
+                    // Validated: the stock fits the capacity.
+                    inventory.counts[item(&s.item) as usize] += s.units;
                     accounts[item(&s.item) as usize].initial += s.units as u64;
                 }
-                DepotState {
-                    id: d.id.clone(),
-                    position: at(d.position),
-                    capacity: d.capacity,
-                    stock,
-                    out: vec![0; items.len()],
-                    incoming: vec![0; items.len()],
-                }
+                DepotState { id: d.id.clone(), position: at(d.position), inventory }
             })
             .collect();
         let sources = scenario
@@ -608,7 +583,7 @@ impl Settlement {
 
     /// Units of `item` at `depot`, by name.
     pub fn stock(&self, depot: &str, item: &str) -> u32 {
-        self.depot(depot).stock[self.item_index(item).expect("known item") as usize]
+        self.depot(depot).inventory.count(self.item_index(item).expect("known item"))
     }
 
     fn id(&mut self) -> u64 {
@@ -624,7 +599,7 @@ impl Settlement {
             .enumerate()
             .map(|(i, id)| {
                 let b = &self.accounts[i];
-                let stored = self.depots.iter().map(|d| d.stock[i] as u64).sum();
+                let stored = self.depots.iter().map(|d| d.inventory.counts[i] as u64).sum();
                 let carried = self.agents.iter().map(|a| a.carry.cargo[i] as u64).sum();
                 let in_transit = self.transfers.values().filter(|t| t.item as usize == i).count() as u64;
                 let equipped = self.agents.iter().filter(|a| a.equipped_item() == Some(i as ItemIx)).count() as u64;
@@ -689,18 +664,14 @@ impl Settlement {
             }
         }
         for (i, d) in self.depots.iter().enumerate() {
-            if d.out != out[i] {
-                return Err(format!("depot {} outgoing reservations drifted: {:?} vs {:?}", d.id, d.out, out[i]));
+            let inventory = &d.inventory;
+            if inventory.reserved_out != out[i] {
+                return Err(format!("depot {} outgoing reservations drifted: {:?} vs {:?}", d.id, inventory.reserved_out, out[i]));
             }
-            if d.incoming != incoming[i] {
-                return Err(format!("depot {} incoming reservations drifted: {:?} vs {:?}", d.id, d.incoming, incoming[i]));
+            if inventory.reserved_in != incoming[i] {
+                return Err(format!("depot {} incoming reservations drifted: {:?} vs {:?}", d.id, inventory.reserved_in, incoming[i]));
             }
-            if d.total() + d.incoming.iter().sum::<u32>() > d.capacity {
-                return Err(format!("depot {} overbooked", d.id));
-            }
-            if (0..items).any(|item| d.out[item] > d.stock[item]) {
-                return Err(format!("depot {} stock overbooked", d.id));
-            }
+            inventory.validate().map_err(|e| format!("depot {} {e}", d.id))?;
         }
         for a in &self.agents {
             let cargo: u32 = a.carry.cargo.iter().sum();
@@ -763,12 +734,22 @@ impl Settlement {
             .map(|t| (t.id, t.wave, t.position, t.heading, t.hp, t.armor, t.stagger_until, t.knockback))
             .collect();
         let spawned: Vec<_> = self.waves.iter().map(|w| w.spawned).collect();
+        // A depot as it hashed before its inventory: capacity, stock, out
+        // and incoming, without the kinds.
+        let depots: Vec<_> = self
+            .depots
+            .iter()
+            .map(|d| {
+                let i = &d.inventory;
+                (&d.id, d.position, i.capacity, &i.counts, &i.reserved_out, &i.reserved_in)
+            })
+            .collect();
         let observed = (
             agents,
             avatars,
             threats,
             spawned,
-            &self.depots,
+            depots,
             &self.projectiles,
             &self.pinned,
             &self.transfers,

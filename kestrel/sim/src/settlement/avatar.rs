@@ -559,11 +559,19 @@ impl Settlement {
                     message.units
                 }
             };
-            let depot = &mut self.depots[depot];
-            let stock = if message.deposit { &mut depot.incoming[item] } else { &mut depot.out[item] };
-            match message.change {
-                StockChange::Reserve => *stock += units,
-                StockChange::Release => *stock -= units,
+            let (inventory, item) = (&mut self.depots[depot].inventory, item as ItemIx);
+            match (message.change, message.deposit) {
+                // `transfer_limit` checked that they fit.
+                (StockChange::Reserve, true) => {
+                    let reserved = inventory.reserve_in(item, units);
+                    debug_assert!(reserved, "checked that the units fit");
+                }
+                (StockChange::Reserve, false) => {
+                    let reserved = inventory.reserve_out(item, units);
+                    debug_assert!(reserved, "checked that the units are available");
+                }
+                (StockChange::Release, true) => inventory.release_in(item, units),
+                (StockChange::Release, false) => inventory.release_out(item, units),
             }
         }
         for agent in refused {
@@ -666,8 +674,7 @@ impl Settlement {
             self.agents[agent].carry.pending_out += 1;
             self.launch(tick, item, Endpoint::Cargo(message.agent), Endpoint::Depot(job.depot), at, dock);
         } else {
-            self.depots[d].stock[item as usize] -= 1;
-            self.depots[d].out[item as usize] -= 1;
+            self.depots[d].inventory.take(item, 1);
             self.metrics.picked += 1;
             self.agents[agent].carry.pending_in += 1;
             self.launch(tick, item, Endpoint::Depot(job.depot), Endpoint::Cargo(message.agent), dock, at);
@@ -772,10 +779,10 @@ fn transfer_limit(carry: &Carry, depots: &[DepotState], items: usize, depot: usi
         return 0;
     }
     if deposit {
-        carry.cargo[item].min(d.free())
+        carry.cargo[item].min(d.inventory.free())
     } else {
         let carried: u32 = carry.cargo.iter().sum::<u32>() + carry.pending_in;
-        carry.capacity.saturating_sub(carried).min(d.available(item as ItemIx))
+        carry.capacity.saturating_sub(carried).min(d.inventory.available(item as ItemIx))
     }
 }
 

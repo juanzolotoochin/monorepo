@@ -137,6 +137,10 @@ gameplay last.
      - `kind()` is the item held or reserved; `accepts(item)` applies `OneKind`. Capacity 0 holds nothing; use `u32::MAX` for no limit (the collector).
      - `validate()` returns a short reason (`overbooked`, `stock overbooked`, ...) for the caller to prefix with the holder.
 2. **Depots onto `Inventory`.** No behaviour change: golden behaviour unchanged, save format up.
+   - Done in step 2: `DepotState { id, position, inventory }`; its `total`, `free` and `available` went too, so callers use the inventory's. Save format 13 (master took 12 for `Accounting::abandoned`).
+     - `behaviour_digest` hashes each depot in its old shape, `(id, position, capacity, counts, reserved_out, reserved_in)`, without `kinds`. That keeps every golden behaviour line; the tick totals moved, since `kinds` is in the state. Keep that projection when later steps change depots.
+     - Reservations that were checked first now go through `reserve_*` with a `debug_assert!` on the result (equip, haul `Reserve`, `TransferStock`, a recipe's products). Sources and `add_stock` use `add`; ingredients and ammunition use `remove`.
+     - `Settlement::validate` still recomputes the reservations, then calls `Inventory::validate` per depot. Its messages are the same as before.
 3. **Agent cargo onto `Inventory`.** No behaviour change.
 4. **`CarryJob`, `ReserveStock`, `drop_carry` for the player's depot transfer.**
    - `ManualJob` and `TransferStock` go.

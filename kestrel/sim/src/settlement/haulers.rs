@@ -551,7 +551,7 @@ fn decide(a: &AgentState, hauler: &HaulerState, me: AgentIx, s: &super::Settleme
     let body = &a.body;
     if !hauler.equipped {
         if let Some(e) = &hauler.equipment {
-            if s.depots[e.depot as usize].available(e.item) > 0 {
+            if s.depots[e.depot as usize].inventory.available(e.item) > 0 {
                 let route = hauler.plan(body, terrain, s.depots[e.depot as usize].position, &[]);
                 if !route.is_empty() {
                     out.equip.push(Equip { agent: me, route });
@@ -584,7 +584,7 @@ fn decide(a: &AgentState, hauler: &HaulerState, me: AgentIx, s: &super::Settleme
 /// How many units a link needs moved that this agent can take now.
 pub(super) fn job_size(a: &AgentState, link: &LinkState, depots: &[DepotState]) -> u32 {
     let to = &depots[link.to as usize];
-    let demand = link.target.saturating_sub(to.stock[link.item as usize] + to.incoming[link.item as usize]);
-    depots[link.from as usize].available(link.item).min(to.free()).min(demand).min(a.carry.capacity)
+    let demand = link.target.saturating_sub(to.inventory.count(link.item) + to.inventory.reserved_in[link.item as usize]);
+    depots[link.from as usize].inventory.available(link.item).min(to.inventory.free()).min(demand).min(a.carry.capacity)
 }
 

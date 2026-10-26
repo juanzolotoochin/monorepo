@@ -343,7 +343,7 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             if *units == 0 {
                 return Err("unknown depot/item or zero amount".into());
             }
-            if *units > s.depots[d as usize].free() {
+            if *units > s.depots[d as usize].inventory.free() {
                 return Err("stock does not fit unreserved destination capacity".into());
             }
             send(world, CommandKind::AddStock { depot: d, item: i, units: *units });
