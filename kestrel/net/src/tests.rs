@@ -174,7 +174,7 @@ fn client_inputs_apply_everywhere() {
 
 #[test]
 fn diagnostics_distinguish_receipt_from_local_application() {
-    let mut h = Harness::new(LinkConditions::perfect(), NetConfig { input_delay: 60, ..config() }, false);
+    let mut h = Harness::new(LinkConditions::perfect(), NetConfig { input_margin: Some(60), ..config() }, false);
     h.add_client();
     h.run_for(Duration::from_secs(3), 0);
     h.clients[0].queue(CommandKind::SpawnMovers { center: FxVec2::new(Fx::from_int(50), Fx::from_int(50)), count: 7 });
@@ -194,7 +194,7 @@ fn diagnostics_distinguish_receipt_from_local_application() {
 
 #[test]
 fn pending_commands_stay_until_simulated_and_go_with_the_world() {
-    let mut h = Harness::new(LinkConditions::perfect(), NetConfig { input_delay: 60, ..config() }, false);
+    let mut h = Harness::new(LinkConditions::perfect(), NetConfig { input_margin: Some(60), ..config() }, false);
     h.add_client();
     h.run_for(Duration::from_secs(3), 0);
     let spawn = |count| CommandKind::SpawnMovers { center: FxVec2::new(Fx::from_int(50), Fx::from_int(50)), count };
@@ -461,4 +461,140 @@ fn release_needs_protocol_three() {
     assert_eq!(decode(&bytes), Some(packet));
     bytes[4..6].copy_from_slice(&2u16.to_le_bytes());
     assert_eq!(decode(&bytes), None);
+}
+
+/// A steady link with no jitter or loss, `ms` each way.
+fn steady(ms: u64) -> LinkConditions {
+    LinkConditions { latency: Duration::from_millis(ms), ..LinkConditions::perfect() }
+}
+
+/// Runs `frames` frames, the client queueing a jump every `every` frames
+/// (numbered by agent, so the host's turns show their order). Returns the
+/// tick each asked for and how often it asked for more than the margin
+/// alone would have, so as not to go back before the previous input.
+fn queue_jumps(h: &mut Harness, frames: u32, every: u32, next: &mut u16) -> (Vec<u64>, usize) {
+    let (mut requested, mut clamped) = (Vec::new(), 0);
+    for frame in 0..frames {
+        if frame % every == 0 {
+            let client = &mut h.clients[0];
+            let unclamped = client.host_present() + client.input_delay();
+            client.queue(CommandKind::Jump { agent: *next });
+            *next += 1;
+            let tick = client.diagnostics(h.now).last_requested_tick.unwrap();
+            clamped += usize::from(tick > unclamped);
+            requested.push(tick);
+        }
+        h.run_for(FRAME, 0);
+    }
+    (requested, clamped)
+}
+
+/// The client's jumps in the order the host applied them.
+fn applied_jumps(h: &Harness) -> Vec<u16> {
+    let player = h.clients[0].player().unwrap();
+    let (_, turns) = h.host.turns();
+    turns.iter().flatten().filter(|c| c.player == player).filter_map(|c| match c.kind {
+        CommandKind::Jump { agent } => Some(agent),
+        _ => None,
+    }).collect()
+}
+
+#[test]
+fn the_margin_adapts_to_the_measured_network() {
+    // A LAN: one way rounds up to a tick, plus a tick of safety.
+    let mut h = Harness::new(LinkConditions::perfect(), config(), false);
+    h.add_client();
+    assert_eq!(h.clients[0].input_delay(), config().input_delay, "the host's margin until measured");
+    h.run_for(Duration::from_secs(3), 0);
+    assert!(h.clients[0].input_delay() <= 2, "LAN margin {}", h.clients[0].input_delay());
+
+    // 100 ms each way, up to 40 ms of jitter: more than one way and a tick.
+    let mut h = Harness::new(LinkConditions { loss_permille: 0, ..LinkConditions::internet() }, config(), false);
+    h.add_client();
+    h.run_for(Duration::from_secs(5), 0);
+    let rtt = h.clients[0].stats().rtt.unwrap();
+    let one_way = (rtt / 2).as_nanos().div_ceil(TICK.as_nanos()) as u64;
+    let margin = h.clients[0].input_delay();
+    assert!(margin > one_way + 1 && margin < one_way + 6, "margin {margin} ticks, one way {one_way}");
+    let d = h.clients[0].diagnostics(h.now);
+    assert_eq!((d.input_delay, d.input_margin_pinned), (margin, false));
+}
+
+#[test]
+fn a_pinned_margin_is_kept() {
+    let mut h = Harness::new(LinkConditions::internet(), NetConfig { input_margin: Some(3), ..config() }, false);
+    h.add_client();
+    h.run_for(Duration::from_secs(5), 0);
+    let mut next = 0;
+    queue_jumps(&mut h, 2000, 4, &mut next);
+    h.run_for(Duration::from_secs(2), 0);
+    let d = h.clients[0].diagnostics(h.now);
+    assert!(d.late_inputs > 0, "3 ticks is too short for 100 ms each way");
+    assert_eq!((d.input_delay, d.input_margin_pinned), (3, true));
+}
+
+#[test]
+fn a_client_sees_its_late_inputs_grows_its_margin_and_shrinks_it_when_quiet() {
+    let mut h = Harness::new(steady(50), config(), false);
+    h.add_client();
+    h.run_for(Duration::from_secs(3), 0);
+    let settled = h.clients[0].input_delay();
+    // A quarter second more on the uplink for a second.
+    let spike = (h.now, h.now + Duration::from_secs(1), Duration::from_millis(250));
+    h.net.borrow_mut().set_link(1, HOST, LinkConditions { spikes: vec![spike], ..steady(50) });
+    let mut next = 0;
+    queue_jumps(&mut h, 400, 4, &mut next);
+    h.run_for(Duration::from_millis(1500), 0);
+    assert_eq!(h.clients[0].pending_inputs(), 0);
+
+    // The client counts what the host counted, from the turns alone.
+    let d = h.clients[0].diagnostics(h.now);
+    let peer = h.host.diagnostics(h.now).peers[0].clone();
+    assert!(peer.late_inputs > 0);
+    assert_eq!((d.late_inputs, d.shifted_ticks), (peer.late_inputs, peer.shifted_ticks));
+    // Grown at once by about the spike.
+    let grown = h.clients[0].input_delay();
+    assert!(grown >= settled + 12, "margin {settled} → {grown} ticks");
+
+    // Then back down a tick at a time, once quiet: the spike is over.
+    let quiet = crate::margin::QUIET;
+    h.run_for(quiet - Duration::from_millis(500), 0);
+    assert!(h.clients[0].input_delay() >= grown - 1);
+    h.run_for(quiet * (grown - settled) as u32 + quiet, 0);
+    assert_eq!(h.clients[0].input_delay(), settled);
+    assert_eq!(h.desyncs(), 0);
+    h.assert_in_sync();
+}
+
+#[test]
+fn requested_ticks_never_go_backwards_while_the_margin_shrinks() {
+    // A lag spike grows the margin (its round trips are measured, no input
+    // is sent); after it the margin shrinks back a tick at a time while the
+    // client keeps sending. Shrinks land as new turns arrive, which also move
+    // the host's tick on; turns reordered on the way back (jitter over a
+    // tick) lower the round trip without that, so the margin alone would
+    // ask for an earlier tick than the last input did.
+    let mut h = Harness::new(LinkConditions { jitter: Duration::from_millis(40), ..steady(50) }, config(), false);
+    h.add_client();
+    h.run_for(Duration::from_secs(3), 0);
+    let settled = h.clients[0].input_delay();
+    let spike = (h.now, h.now + Duration::from_secs(1), Duration::from_millis(250));
+    h.net.borrow_mut().set_link(1, HOST, LinkConditions { spikes: vec![spike], ..steady(50) });
+    h.run_for(Duration::from_secs(2), 0);
+    let grown = h.clients[0].input_delay();
+    assert!(grown >= settled + 5, "margin {settled} → {grown} ticks");
+    let mut next = 0;
+    let per_tick = (crate::margin::QUIET.as_millis() / FRAME.as_millis()) as u32;
+    let (requested, clamped) = queue_jumps(&mut h, per_tick * (grown - settled + 1) as u32, 1, &mut next);
+    h.run_for(Duration::from_secs(1), 0);
+
+    let after = h.clients[0].input_delay();
+    assert!(after <= settled, "the margin went {settled} → {grown} → {after} ticks");
+    assert!(requested.windows(2).all(|w| w[0] <= w[1]), "a requested tick went backwards");
+    assert!(clamped > 0, "the margin never shrank under a sent input");
+    // So the host applied them in the order they were sent, none late.
+    assert_eq!(applied_jumps(&h), (0..next).collect::<Vec<_>>());
+    assert_eq!(h.host.diagnostics(h.now).peers[0].late_inputs, 0);
+    assert_eq!(h.clients[0].diagnostics(h.now).late_inputs, 0);
+    h.assert_in_sync();
 }
