@@ -219,15 +219,21 @@ fn overlay_text(t: &Telemetry, entities: usize, meshes: usize) -> String {
     );
     text
 }
-/// The round trip to the host, smoothed and latest, during a networked game.
-/// Only clients measure it.
+/// The round trip to the host, smoothed and latest, and the input margin
+/// during a networked game. Only clients measure them.
 fn network_line(t: &Telemetry, now: Instant) -> String {
     let Some(frame) = t.network.current(now) else {
         return String::new();
     };
     let ms = |d: Option<Duration>| d.map_or("--".into(), |d| format!("{:.0}", d.as_secs_f64() * 1000.));
+    let margin = net::TICK * frame.diagnostics.input_delay as u32;
     match frame.role {
-        "Client" => format!("\nNET RTT {} ms / last {}", ms(frame.stats.rtt), ms(frame.diagnostics.rtt_sample)),
+        "Client" => format!(
+            "\nNET RTT {} ms / last {} · margin {} ms",
+            ms(frame.stats.rtt),
+            ms(frame.diagnostics.rtt_sample),
+            ms(Some(margin))
+        ),
         _ => "\nNET host / RTT is measured by clients".into(),
     }
 }
@@ -392,7 +398,7 @@ mod tests {
         assert!(v["p95_ms"].as_f64().unwrap() > 980.);
     }
     #[test]
-    fn network_line_shows_client_rtt_only_while_the_session_records() {
+    fn network_line_shows_client_rtt_and_margin_only_while_the_session_records() {
         let now = Instant::now();
         let frame = |role| NetworkFrame {
             at: now,
@@ -402,7 +408,7 @@ mod tests {
             tick: Some(12),
             pending: 0,
             stats: net::NetStats { rtt: Some(Duration::from_millis(152)), ..default() },
-            diagnostics: net::NetDiagnostics { rtt_sample: Some(Duration::from_millis(160)), ..default() },
+            diagnostics: net::NetDiagnostics { rtt_sample: Some(Duration::from_millis(160)), input_delay: 7, ..default() },
             update_ms: 1.,
             tick_ms: None,
             frame_ms: None,
@@ -410,7 +416,7 @@ mod tests {
         let mut t = Telemetry::default();
         assert_eq!(network_line(&t, now), "");
         t.network.record(frame("Client"));
-        assert_eq!(network_line(&t, now), "\nNET RTT 152 ms / last 160");
+        assert_eq!(network_line(&t, now), "\nNET RTT 152 ms / last 160 · margin 117 ms");
         assert_eq!(network_line(&t, now + Duration::from_secs(5)), "", "history after the session is not live");
         t.network.record(frame("Host"));
         assert_eq!(network_line(&t, now), "\nNET host / RTT is measured by clients");

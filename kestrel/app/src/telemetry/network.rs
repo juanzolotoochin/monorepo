@@ -420,6 +420,7 @@ impl NetworkDiagnostics {
                 "history": self.frames.iter().map(|f| json!({
                     "age_ms": frame.at.duration_since(f.at).as_secs_f64() * 1000.,
                     "rtt_ms": f.stats.rtt.map(|v| v.as_secs_f64() * 1000.),
+                    "input_margin_ticks": f.diagnostics.input_delay,
                     "ready_turns": f.stats.turns_buffered,
                     "ticks_behind_last_host": f.stats.ticks_behind_host,
                     "pending_application": f.pending,
@@ -451,7 +452,16 @@ impl NetworkDiagnostics {
                         "Consecutive turns ready",
                         ticks(frame.stats.turns_buffered),
                     );
-                    row(ui, "Input scheduling margin", ticks(d.input_delay));
+                    row(
+                        ui,
+                        "Input scheduling margin",
+                        format!("{} · {}", ticks(d.input_delay), if d.input_margin_pinned { "pinned" } else { "adaptive" }),
+                    );
+                    row(
+                        ui,
+                        "Late inputs (detected locally)",
+                        format!("{} · {} shifted", d.late_inputs, ticks(d.shifted_ticks)),
+                    );
                     row(
                         ui,
                         "Jitter target (catch-up threshold)",
@@ -501,7 +511,7 @@ impl NetworkDiagnostics {
                 } else {
                     row(
                         ui,
-                        "Host / remote input margin",
+                        "Host / clients' starting input margin",
                         format!("{} / {}", ticks(0), ticks(d.remote_input_delay)),
                     );
                     row(ui, "Local pending commands", frame.pending.to_string());
@@ -727,7 +737,7 @@ impl NetworkDiagnostics {
         let connection = json!({
             "role": frame.role, "status": frame.status, "world": frame.world, "next_tick": frame.tick,
             "sample_age_ms": frame.at.elapsed().as_secs_f64() * 1000., "samples": self.frames.len(),
-            "host_next_tick": d.host_tick, "input_delay_ticks": d.input_delay,
+            "host_next_tick": d.host_tick, "input_delay_ticks": d.input_delay, "input_margin_pinned": d.input_margin_pinned,
             "remote_input_delay_ticks": d.remote_input_delay, "jitter_target_ticks": d.jitter_buffer,
             "rtt_ms": frame.stats.rtt.map(|v| v.as_secs_f64() * 1000.),
             "last_packet_age_ms": d.last_packet_age.map(|v| v.as_secs_f64() * 1000.),
@@ -739,6 +749,7 @@ impl NetworkDiagnostics {
             "last_receipt_ack": d.last_input_ack, "last_requested_tick": d.last_requested_tick,
             "starved_updates": d.starved_updates, "starved_ms": d.starved_time.as_secs_f64() * 1000.,
             "extra_catch_up_ticks": d.catch_up_ticks, "late_inputs": frame.stats.late_inputs,
+            "late_inputs_detected_locally": d.late_inputs, "late_input_shifted_ticks_detected_locally": d.shifted_ticks,
         });
         let view = json!({
             "packets_sent": frame.stats.packets_sent, "packets_received": frame.stats.packets_received,

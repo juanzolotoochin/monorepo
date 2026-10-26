@@ -31,9 +31,18 @@ it is not a simulation replay or a desync capture.
   excess turn backlog. Normal multi-tick frames are not counted as catch-up.
 - **Pending application:** queued local commands not simulated locally yet.
   This includes commands the host has already acknowledged receiving.
-- **Input margin:** the configured scheduling margin. A client also adds its
-  estimate of one-way latency to the last observed host tick. The four-tick
-  jitter target controls catch-up; it is not a mandatory fixed playback delay.
+- **Input margin:** how far past the host's present a client's inputs ask to
+  apply, `adaptive` or `pinned` (see [the input margin](#the-input-margin)). A
+  client also adds its estimate of one-way latency to the last observed host
+  tick. The four-tick jitter target controls catch-up; it is not a mandatory
+  fixed playback delay. The F3 overlay's `NET` line shows it too, as
+  `margin 117 ms`. On the host the row shows the margin clients start with.
+- **Late inputs (detected locally):** a client's own inputs that applied later
+  than they asked for, seen in the host's turns, and the ticks they moved in
+  all. They match the host's counts for that peer. The copied report has them
+  as `late_inputs_detected_locally` and
+  `late_input_shifted_ticks_detected_locally`, and the margin over time as
+  `input_margin_ticks` in the history.
 - **Host peers:** receipt acknowledgements, packet age, latest requested and
   assigned ticks, and per-world late-input counts and total ticks shifted.
   The host cannot infer a peer's current simulation tick from its receipt ack.
@@ -61,6 +70,31 @@ it is not a simulation replay or a desync capture.
   point when `never_fired` is true) and `distance` the gap between them. The
   report's top level also has `laser_shots_drawn`, `laser_shots_confirmed`,
   `laser_mispredictions` and `laser_last_lead_ms`.
+
+## The input margin
+
+A client asks for each input to apply on `host tick + one way + margin`: the
+last host tick it heard of, brought to the host's present with half the round
+trip, plus a margin that pays for the input's own trip to the host. An input
+that arrives after its tick is moved to the host's next open tick, and a
+predicting client then mispredicts. The margin
+([`net/src/margin.rs`](../net/src/margin.rs)) is sized from the network the
+client measures:
+
+- It starts at the host's margin (133 ms) until about 32 round trips have been
+  sampled, then becomes one way, plus a tick (an input waits up to a tick to
+  be sent), plus four times the round trip's late-side deviation (about twice
+  its mean deviation), at most 100 ms of that, rounded up to ticks. It is
+  never less than one way and a tick: 2 ticks (33 ms) on a LAN.
+- It grows at once when the measured network asks for more, or when one of
+  the client's inputs comes in late (to what that input would have needed).
+- It shrinks by one tick after 3 s without a late input or a change, down to
+  what the network asks for.
+- An input never asks for an earlier tick than the one before it, so a
+  shrinking margin can't reorder inputs.
+
+`--input-margin-ms <ms>` on a joining client pins the margin instead. The host
+and its own inputs are unaffected.
 
 ## Movement prediction
 
@@ -136,6 +170,9 @@ delays every datagram:
 ```
 
 From cmd, `kestrel\tools\network-lab.bat` takes the same arguments.
+`-InputMarginMs 133` pins the client's input margin (it passes
+`--input-margin-ms` to the client only), for comparing against the adaptive
+one; each run's `run.json` records it (`null` when adaptive).
 
 Each datagram waits `max(0, DelayMs + uniform(-JitterMs, +JitterMs))` ms in
 each direction, so round trips grow by about `2 × DelayMs`. It reuses the built
@@ -145,14 +182,14 @@ so read frame time next to the network graphs.
 
 ## First investigation
 
-1. On localhost, record the configured input margin and pending command count
+1. On localhost, record the input margin and pending command count
    during movement and firing. Observe whether visible hitches coincide with
    missing-turn waits or expensive frames/ticks.
 2. Repeat over LAN and the connection with poor feel. Compare ready turns, RTT,
    packet age, catch-up activity, and movement preview offsets.
-3. Inspect the host's peer section for late inputs and shifted ticks. These
-   distinguish inputs missing their requested turn from commands intentionally
-   scheduled ahead of time.
+3. Inspect the host's peer section, or the client's locally detected late
+   inputs, for late inputs and shifted ticks. These distinguish inputs missing
+   their requested turn from commands intentionally scheduled ahead of time.
 
 Use [NetSim](../net/src/netsim.rs) for repeatable outages, jitter, loss, and spikes.
 The [networking tests](../net/src/tests.rs) verify receipt versus application, starvation followed by catch-up,
