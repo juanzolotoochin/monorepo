@@ -532,6 +532,29 @@ impl Settlement {
         self.transfer_stock(messages.transfer_stock);
     }
 
+    /// Stage 5: a hit takes `damage` from player `agent`'s health. At 0 the
+    /// player dies. It stops what it was doing, and its transfer job ends,
+    /// giving back the units it hadn't moved yet, as `drop_transfer` does.
+    /// It respawns at home later (`self_update`). Returns whether it died.
+    pub(super) fn hurt_player(&mut self, agent: usize, damage: u32, tick: u64) -> bool {
+        let a = &mut self.agents[agent];
+        a.avatar.health = a.avatar.health.saturating_sub(damage);
+        if a.avatar.health > 0 {
+            return false;
+        }
+        a.avatar.respawn_at = tick + ticks_from_60hz(120);
+        a.avatar.swing = None;
+        a.avatar.queued = None;
+        a.avatar.queued_at = None;
+        a.avatar.velocity = FxVec2::ZERO;
+        if let Some(job) = a.avatar.job.take() {
+            let ManualJob { depot, item, remaining, deposit, .. } = job;
+            let release = TransferStock { agent: agent as AgentIx, depot, item, units: remaining, deposit, change: StockChange::Release };
+            self.transfer_stock(vec![release]);
+        }
+        true
+    }
+
     /// Reserves and releases manual transfers' depot stock, in command order.
     /// A reservation is checked again here (`transfer_limit`), since another
     /// one earlier in the order may have taken what the action saw: if the

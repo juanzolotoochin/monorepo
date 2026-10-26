@@ -602,17 +602,11 @@ impl Settlement {
         }
         if message.weapon == Weapon::Laser && message.targets.is_empty() && self.player_health > 0 {
             if let Some(to) = message.beam_end {
-                if let Some((_, target)) = self.agents.iter_mut().enumerate().find(|(index, target)| {
-                    *index != agent && target.controlled && target.avatar.health > 0 && target.position == to
-                }) {
-                    target.avatar.health = target.avatar.health.saturating_sub(tuning.damage);
-                    if target.avatar.health == 0 {
-                        target.avatar.respawn_at = tick + ticks_from_60hz(120);
-                        target.avatar.swing = None;
-                        target.avatar.queued = None;
-                        target.avatar.queued_at = None;
-                        target.avatar.velocity = FxVec2::ZERO;
-                    }
+                let hit = self.agents.iter().enumerate().position(|(index, target)| {
+                    index != agent && target.controlled && target.avatar.health > 0 && target.position == to
+                });
+                if let Some(target) = hit {
+                    self.hurt_player(target, tuning.damage, tick);
                     return 1;
                 }
             }

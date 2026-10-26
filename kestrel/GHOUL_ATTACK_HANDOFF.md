@@ -58,6 +58,16 @@ Each task is its own commit on branch `kestrel-ghoul-attacks`, in order.
    directly). Compare with what the `Respawn` action clears (pile haul,
    memory trial) and fix or file in `todo/characters.md` what death misses.
    Test with `Settlement::validate`. Gameplay fix, own commit.
+
+   Done in task 1: the kill code is `Settlement::hurt_player(&mut self,
+   agent: usize, damage: u32, tick: u64) -> bool` in
+   `sim/src/settlement/avatar.rs`. It takes the damage, and at 0 health it
+   kills the player and releases its job's remaining units through
+   `transfer_stock`. It returns whether the player died. The laser calls it;
+   the ghoul hit should too, then add its knockback. Test:
+   `dying_releases_a_transfer_reservation`. The pile haul, memory trial and
+   dig are filed in `todo/characters.md` ("Decide what a player's death
+   ends besides its transfer"). Golden file and hashes unchanged.
 2. **The `attack` format.** Add the optional `attack` section to
    `content/src/character.rs` (file, merge, validation, converted
    definition), its tests in `content/src/lib.rs`, the behaviour digest if

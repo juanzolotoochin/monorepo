@@ -938,6 +938,53 @@ fn laser_hits_another_player_and_respawns_them() {
     assert_eq!(settlement.agents[target as usize].position, settlement.agents[target as usize].home);
 }
 
+/// A player killed mid-transfer drops the job, and its reserved stock goes
+/// back to the depot on the tick it dies, as a respawn would.
+#[test]
+fn dying_releases_a_transfer_reservation() {
+    let mut config = scenario();
+    config.agents = vec![player()];
+    config.links.clear();
+    config.weapons = vec![Weapon::Laser];
+    config.player_health = 1;
+    let world = World::new_settlement(9, &test_content(), &config, &[]).unwrap();
+    let mut sim = Simulation::from_world(world, 2);
+    let spawn = sim.world().settlement().unwrap().agents[0].position;
+    sim.world_mut().settlement_mut().spawn = spawn;
+    let (host, guest) = (PlayerId(0), PlayerId(1));
+    sim.step(&[Command { player: guest, kind: CommandKind::Join }]);
+    let settlement = sim.world().settlement().unwrap();
+    let (shooter, target) = (settlement.avatar_of(host).unwrap(), settlement.avatar_of(guest).unwrap());
+    let (depot, item) = (settlement.depot_index("forest").unwrap(), settlement.item_index("wood").unwrap());
+    let (d, i) = (depot as usize, item as usize);
+    let out = settlement.depots[d].out[i];
+    let dock = settlement.depots[d].position;
+    let start = settlement.agents[shooter as usize].position;
+    let to = start + FxVec2::new(Fx::ZERO, Fx::from_int(3));
+    sim.world_mut().settlement_mut().agents[target as usize].position = to;
+    // Far from the dock, so no unit moves.
+    assert!((to - dock).length() > fx(1.0));
+
+    sim.step(&[Command { player: guest, kind: CommandKind::Transfer { agent: target, depot, item, units: 3, deposit: false } }]);
+    assert_eq!(sim.world().settlement().unwrap().depots[d].out[i], out + 3);
+    sim.step(&[Command { player: host, kind: CommandKind::Attack {
+        agent: shooter, weapon: Weapon::Laser,
+        aim: FxVec2::new(Fx::ZERO, Fx::ONE), muzzle: [Fx::ZERO, fx(0.8), fx(0.25)],
+    } }]);
+    for _ in 0..ms(700) { sim.step(&[]); }
+    let settlement = sim.world().settlement().unwrap();
+    assert_eq!(settlement.agents[target as usize].avatar.health, 0, "the laser killed the target");
+    assert!(settlement.agents[target as usize].avatar.job.is_none());
+    assert_eq!(settlement.depots[d].out[i], out, "death releases the reservation");
+    settlement.validate().unwrap();
+
+    for _ in 0..ms(2200) { sim.step(&[]); }
+    let settlement = sim.world().settlement().unwrap();
+    assert_eq!(settlement.agents[target as usize].avatar.health, 1, "respawned");
+    assert_eq!(settlement.depots[d].out[i], out);
+    settlement.validate().unwrap();
+}
+
 /// A depot transfer walking to its dock is an accepted job: releasing
 /// direct control keeps the walk and the transfer.
 #[test]
