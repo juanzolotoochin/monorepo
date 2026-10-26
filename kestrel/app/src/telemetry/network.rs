@@ -37,8 +37,35 @@ pub struct NetworkDiagnostics {
     /// Episodes dropped for being under `MIN_CORRECTION`: count and distance.
     small_corrections: (u32, f32),
     last_shown: Option<Vec3>,
+    lasers: LaserStats,
     /// Draw recent corrections in the world. Kept across sessions.
     pub show_corrections: bool,
+}
+
+/// The local avatar's predicted laser shots this session.
+#[derive(Default)]
+struct LaserStats {
+    drawn: u64,
+    confirmed: u64,
+    mispredicted: u64,
+    /// The latest confirmed shot's lead: how long before its confirmation
+    /// it was drawn, in seconds.
+    last_lead: Option<f64>,
+    /// Recent outcomes, oldest first.
+    recent: VecDeque<LaserOutcome>,
+}
+
+/// How a drawn laser shot turned out, in view space.
+#[derive(Clone, Debug)]
+pub struct LaserOutcome {
+    /// Where the drawn beam ended.
+    pub predicted: Vec3,
+    /// Where the confirmed shot ended; `None` if it never fired.
+    pub confirmed: Option<Vec3>,
+    /// Seconds from drawing the shot to its confirmation.
+    pub lead: Option<f64>,
+    /// It ended exactly where it was drawn ending.
+    pub exact: bool,
 }
 
 /// One frame of the client's predicted local avatar, in view space.
@@ -61,6 +88,9 @@ pub struct PreviewUpdate {
 pub enum CorrectionKind {
     Mispredict,
     Snap,
+    /// A predicted laser shot the confirmed one didn't match: it ended
+    /// elsewhere, or never fired.
+    LaserMispredict,
 }
 
 impl CorrectionKind {
@@ -68,6 +98,7 @@ impl CorrectionKind {
         match self {
             Self::Mispredict => "mispredict",
             Self::Snap => "snap",
+            Self::LaserMispredict => "laser",
         }
     }
 
@@ -75,33 +106,38 @@ impl CorrectionKind {
         match self {
             Self::Mispredict => Color::srgba(1.0, 0.55, 0.15, alpha),
             Self::Snap => Color::srgba(1.0, 0.2, 0.9, alpha),
+            Self::LaserMispredict => Color::srgba(1.0, 0.15, 0.15, alpha),
         }
     }
 }
 
 /// Consecutive frames whose prediction changed (or a snap): one correction
-/// as the player feels it.
+/// as the player feels it. A laser misprediction is one shot.
 #[derive(Clone, Debug)]
 pub struct PreviewCorrection {
     pub kind: CorrectionKind,
     pub started: Instant,
     pub ended: Instant,
-    /// Where the avatar was drawn just before the episode.
+    /// Where the avatar was drawn just before the episode; for a laser,
+    /// where the drawn beam ended.
     pub from: Vec3,
-    /// Where it was being pulled to on the episode's last frame.
+    /// Where it was being pulled to on the episode's last frame; for a
+    /// laser, where the confirmed shot ended (`from` if it never fired).
     pub to: Vec3,
     /// Total distance, summed over frames: each misprediction's starting
-    /// error, or a snap's jump.
+    /// error, or a snap's jump. For a laser, between the two ends.
     pub distance: f32,
     pub frames: u32,
     pub tick: Option<u64>,
     pub pending: Option<u64>,
     pub rtt: Option<Duration>,
+    /// A laser shot that was drawn but never fired.
+    pub never_fired: bool,
 }
 
 impl PreviewCorrection {
     fn kept(&self) -> bool {
-        self.kind == CorrectionKind::Snap || self.distance >= MIN_CORRECTION
+        matches!(self.kind, CorrectionKind::Snap | CorrectionKind::LaserMispredict) || self.distance >= MIN_CORRECTION
     }
 }
 
@@ -184,6 +220,7 @@ impl NetworkDiagnostics {
                 tick: latest.and_then(|f| f.tick),
                 pending: latest.map(|f| f.pending),
                 rtt: latest.and_then(|f| f.stats.rtt),
+                never_fired: false,
             });
             open.ended = now;
             open.to = update.target;
@@ -203,10 +240,66 @@ impl NetworkDiagnostics {
             self.small_corrections.1 += correction.distance;
             return;
         }
+        self.keep(correction);
+    }
+
+    fn keep(&mut self, correction: PreviewCorrection) {
         if self.corrections.len() >= MAX_CORRECTIONS {
             self.corrections.pop_front();
         }
         self.corrections.push_back(correction);
+    }
+
+    /// Prediction drew one of the local avatar's laser shots.
+    pub fn laser_drawn(&mut self) {
+        self.lasers.drawn += 1;
+    }
+
+    /// How a drawn laser shot turned out. One that didn't end where it was
+    /// drawn ending, or never fired, is a laser misprediction.
+    pub fn laser_outcome(&mut self, now: Instant, outcome: LaserOutcome) {
+        let lasers = &mut self.lasers;
+        if outcome.confirmed.is_some() {
+            lasers.confirmed += 1;
+            lasers.last_lead = outcome.lead;
+        }
+        if lasers.recent.len() >= MAX_CORRECTIONS {
+            lasers.recent.pop_front();
+        }
+        lasers.recent.push_back(outcome.clone());
+        if outcome.exact {
+            return;
+        }
+        lasers.mispredicted += 1;
+        let latest = self.frames.back();
+        let to = outcome.confirmed.unwrap_or(outcome.predicted);
+        let flat = |v: Vec3| Vec3::new(v.x, 0.0, v.z).length();
+        let correction = PreviewCorrection {
+            kind: CorrectionKind::LaserMispredict,
+            started: now,
+            ended: now,
+            from: outcome.predicted,
+            to,
+            distance: flat(to - outcome.predicted),
+            frames: 1,
+            tick: latest.and_then(|f| f.tick),
+            pending: latest.map(|f| f.pending),
+            rtt: latest.and_then(|f| f.stats.rtt),
+            never_fired: outcome.confirmed.is_none(),
+        };
+        self.keep(correction);
+    }
+
+    /// Recent drawn laser shots and how they turned out, oldest first.
+    #[cfg(test)]
+    pub fn laser_outcomes(&self) -> impl Iterator<Item = &LaserOutcome> {
+        self.lasers.recent.iter()
+    }
+
+    /// Laser shots drawn by prediction so far.
+    #[cfg(test)]
+    pub fn lasers_drawn(&self) -> u64 {
+        self.lasers.drawn
     }
 
     /// Kept corrections, including the one still in progress, oldest first.
@@ -228,6 +321,7 @@ impl NetworkDiagnostics {
         self.corrections.clear();
         self.open_correction = None;
         self.small_corrections = (0, 0.0);
+        self.lasers = LaserStats::default();
     }
 
     /// Boxes where the local avatar was drawn when each recent correction
@@ -242,6 +336,13 @@ impl NetworkDiagnostics {
                 continue;
             }
             let color = c.kind.color(1.0 - 0.7 * age.as_secs_f32() / CORRECTION_SHOWN.as_secs_f32());
+            if c.kind == CorrectionKind::LaserMispredict {
+                // Both ends are at beam height.
+                gizmos.sphere(Isometry3d::from_translation(c.from), 0.2, color);
+                gizmos.line(c.from, c.to, color);
+                gizmos.sphere(Isometry3d::from_translation(c.to), 0.12, color);
+                continue;
+            }
             let lift = Vec3::Y * 0.05;
             gizmos.cube(
                 Transform::from_translation(c.from + Vec3::Y * 0.9).with_scale(Vec3::new(0.7, 1.8, 0.7)),
@@ -253,7 +354,7 @@ impl NetworkDiagnostics {
     }
 
     fn correction_json(c: &PreviewCorrection, end: Instant) -> Value {
-        json!({
+        let mut value = json!({
             "kind": c.kind.name(),
             "age_ms": end.saturating_duration_since(c.started).as_secs_f64() * 1000.,
             "duration_ms": c.ended.saturating_duration_since(c.started).as_secs_f64() * 1000.,
@@ -264,7 +365,12 @@ impl NetworkDiagnostics {
             "local_next_tick": c.tick,
             "pending_application": c.pending,
             "rtt_ms": c.rtt.map(|v| v.as_secs_f64() * 1000.),
-        })
+        });
+        if c.kind == CorrectionKind::LaserMispredict {
+            // `from` is the drawn beam's end, `to` the confirmed one's.
+            value["never_fired"] = json!(c.never_fired);
+        }
+        value
     }
 
     /// Rates over up to one second; the first sample has no rate.
@@ -473,8 +579,16 @@ impl NetworkDiagnostics {
                 } else {
                     ui.label("Unknown: no local avatar prediction sample yet.");
                 }
+                let lasers = &self.lasers;
+                ui.label(format!(
+                    "Predicted laser shots: {} drawn · {} confirmed · {} mispredicted · last drawn {} before confirmation",
+                    lasers.drawn,
+                    lasers.confirmed,
+                    lasers.mispredicted,
+                    lasers.last_lead.map_or("Unknown".into(), |lead| format!("{:.0} ms", lead * 1000.))
+                ));
                 ui.checkbox(&mut self.show_corrections, "Show corrections in the world (2 s)");
-                ui.small("Box: where the avatar was drawn when the correction started. Line: where it was pulled to. Orange mispredict, magenta snap.");
+                ui.small("Box: where the avatar was drawn when the correction started. Line: where it was pulled to. Orange mispredict, magenta snap. Red laser: a ball where the drawn beam ended, a line to where the confirmed shot ended.");
                 let kept: Vec<_> = self.corrections().collect();
                 let (small, small_distance) = self.small_corrections;
                 ui.label(format!(
@@ -482,6 +596,11 @@ impl NetworkDiagnostics {
                     kept.len()
                 ));
                 for c in kept.iter().rev().take(8) {
+                    if c.kind == CorrectionKind::LaserMispredict {
+                        let what = if c.never_fired { "never fired".to_string() } else { format!("ended {:.2} units away", c.distance) };
+                        ui.monospace(format!("{:>10} {what} · {:.1} s ago", c.kind.name(), c.started.elapsed().as_secs_f64()));
+                        continue;
+                    }
                     ui.monospace(format!(
                         "{:>10} {:.2} units over {:.0} ms · {:.1} s ago",
                         c.kind.name(),
@@ -630,6 +749,9 @@ impl NetworkDiagnostics {
             "preview_corrections": self.corrections().count(),
             "preview_corrections_under_threshold": self.small_corrections.0,
             "preview_corrections_under_threshold_distance": self.small_corrections.1,
+            "laser_shots_drawn": self.lasers.drawn, "laser_shots_confirmed": self.lasers.confirmed,
+            "laser_mispredictions": self.lasers.mispredicted,
+            "laser_last_lead_ms": self.lasers.last_lead.map(|lead| lead * 1000.),
         });
         let peers = d.peers.iter().map(|peer| json!({
                 "player": peer.player.0, "loading": peer.loading, "turn_receipt_ack": peer.turn_ack,
@@ -802,5 +924,51 @@ mod tests {
         network.begin();
         assert_eq!(network.corrections().count(), 0);
         assert!(network.show_corrections, "the overlay toggle survives a new session");
+    }
+
+    #[test]
+    fn laser_mispredictions_are_kept_with_both_ends_and_reported() {
+        let start = Instant::now();
+        let mut network = NetworkDiagnostics::default();
+        network.record(frame(start, 1, 0));
+        let end = |x: f32| Vec3::new(x, 0.8, 2.0);
+        let outcome = |predicted: f32, confirmed: Option<f32>, exact: bool| LaserOutcome {
+            predicted: end(predicted),
+            confirmed: confirmed.map(end),
+            lead: confirmed.map(|_| 0.2),
+            exact,
+        };
+        for _ in 0..3 {
+            network.laser_drawn();
+        }
+        network.laser_outcome(start, outcome(4.0, Some(4.0), true));
+        // A shot the confirmed one ended elsewhere, however close.
+        network.laser_outcome(start, outcome(4.0, Some(4.01), false));
+        // One the confirmed world never fired.
+        network.laser_outcome(start, outcome(6.0, None, false));
+
+        let kept: Vec<_> = network.corrections().collect();
+        assert_eq!(kept.len(), 2, "an exact shot is no correction; a laser misprediction of any size is kept");
+        assert_eq!(kept[0].kind, CorrectionKind::LaserMispredict);
+        assert_eq!((kept[0].from, kept[0].to), (end(4.0), end(4.01)));
+        assert!((kept[0].distance - 0.01).abs() < 1e-4 && !kept[0].never_fired);
+        assert_eq!((kept[1].from, kept[1].to, kept[1].distance), (end(6.0), end(6.0), 0.0));
+        assert!(kept[1].never_fired);
+        assert_eq!(network.small_corrections(), (0, 0.0));
+        assert_eq!(network.laser_outcomes().count(), 3);
+        let snapshot = network.snapshot();
+        assert_eq!(snapshot["laser_shots_drawn"], 3);
+        assert_eq!(snapshot["laser_shots_confirmed"], 2);
+        assert_eq!(snapshot["laser_mispredictions"], 2);
+        assert!((snapshot["laser_last_lead_ms"].as_f64().unwrap() - 200.0).abs() < 1e-6);
+        let report = NetworkDiagnostics::correction_json(kept[1], start);
+        assert_eq!(report["kind"], "laser");
+        assert_eq!(report["never_fired"], true);
+
+        let context = egui::Context::default();
+        let output = context.run_ui(egui::RawInput::default(), |ui| network.show(ui, true));
+        output.drop_without_applying_deltas();
+        network.clear_corrections();
+        assert_eq!((network.corrections().count(), network.laser_outcomes().count()), (0, 0));
     }
 }

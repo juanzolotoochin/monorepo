@@ -865,6 +865,8 @@ pub fn follow_avatar(
     mut prediction: Local<crate::prediction::AvatarPrediction>,
     mut ground_step: Local<VisualGroundStep>,
     mut telemetry: ResMut<crate::telemetry::Telemetry>,
+    mut lasers: ResMut<crate::laser_prediction::LaserPrediction>,
+    mut pending_lasers: ResMut<crate::effects::PendingLasers>,
 ) {
     let (Some(current), Some(index)) = (&mirror.current, mirror.player()) else { return };
     let a = &current.agents[index as usize];
@@ -872,6 +874,12 @@ pub fn follow_avatar(
     let predicted = if service.is_client() { predict(&mut prediction, &mirror, &service, before, time.delta_secs()) } else { None };
     if predicted.is_none() {
         prediction.reset();
+    }
+    if service.is_client() {
+        let now = time.elapsed_secs_f64();
+        predict_lasers(&mut lasers, &mirror, &service, index, predicted.as_ref(), now, &mut pending_lasers, &sound, &mut telemetry);
+    } else {
+        lasers.reset();
     }
     let (from, to, alpha) = match &predicted {
         Some(drawn) => (&drawn.from, &drawn.to, drawn.fraction),
@@ -973,6 +981,69 @@ fn predict(
     Some(prediction.update(&confirmed, dt))
 }
 
+/// A joined player's own laser shots (see `laser_prediction`): this
+/// frame's confirmed ones are matched to those already drawn, then the
+/// shots the drawn avatar fires are drawn, with their sound, from where it
+/// is drawn. Other players' shots are drawn as they are confirmed.
+#[allow(clippy::too_many_arguments)]
+fn predict_lasers(
+    lasers: &mut crate::laser_prediction::LaserPrediction,
+    mirror: &WorldMirror,
+    service: &SessionService,
+    agent: u16,
+    drawn: Option<&crate::prediction::Drawn>,
+    now: f64,
+    pending: &mut crate::effects::PendingLasers,
+    sound: &crate::sound::Sound,
+    telemetry: &mut crate::telemetry::Telemetry,
+) {
+    use crate::laser_prediction::Outcome;
+    let Some(world) = service.world().filter(|_| service.session.world_number() == mirror.world_number) else {
+        lasers.reset();
+        return;
+    };
+    lasers.begin(mirror.world_number, agent);
+    // Where a beam ending at `p` is drawn ending.
+    let end = |p: FxVec2| {
+        let at = mirror.to_view(p);
+        Vec3::new(at.x, service.ground_height(at).unwrap_or(0.0) + 0.8, at.z)
+    };
+    let mut outcomes = Vec::new();
+    for event in &mirror.events {
+        if let sim::settlement::Event::LaserFired { agent: shooter, to, .. } = event {
+            if *shooter == agent {
+                outcomes.extend(lasers.confirm(*to, now));
+            }
+        }
+    }
+    outcomes.extend(lasers.expire(world.tick()));
+    let at = web_time::Instant::now();
+    for outcome in outcomes {
+        telemetry.network.laser_outcome(at, match outcome {
+            Outcome::Fired { predicted, confirmed, lead, exact } => crate::telemetry::LaserOutcome {
+                predicted: end(predicted),
+                confirmed: Some(end(confirmed)),
+                lead: Some(lead),
+                exact,
+            },
+            Outcome::NeverFired { predicted } => crate::telemetry::LaserOutcome { predicted: end(predicted), confirmed: None, lead: None, exact: false },
+        });
+    }
+    let (Some(drawn), Some(settlement)) = (drawn, world.settlement()) else { return };
+    for shot in lasers.predict(&drawn.strikes, now, |strike| settlement.predict_laser(agent, strike, world.terrain())) {
+        pending.0.push(crate::effects::LaserShot {
+            agent,
+            target: end(shot.shot.to),
+            hit_actor: shot.shot.hit_actor,
+            cover: shot.shot.cover,
+            seed: crate::effects::laser_impact_seed(shot.tick, agent),
+            predicted: Some(shot.id),
+        });
+        sound.play(crate::sound::Cue::Laser);
+        telemetry.network.laser_drawn();
+    }
+}
+
 /// The content every session plays with (see `open`), parsed once, for views
 /// that need definitions outside a session, such as Character Studio.
 pub fn builtin_content() -> &'static Content {
@@ -1038,12 +1109,14 @@ pub fn attack_input(
     mut controls: ResMut<Controls>,
     mut service: ResMut<SessionService>,
     mut control: ResMut<PlayerControl>,
+    player: Option<Single<&Transform, With<Player>>>,
 ) {
     let (keys, buttons) = (input.keys(), input.mouse());
     use content::scenario::Weapon;
+    let origin = aim_origin(&service, player.map(|player| player.translation));
     // Update on every input frame, including frames without a shot.
     let cursor_aim = crate::jetpack::cursor_surface(camera.0, camera.1, &window, &scene, &service)
-        .zip(service.player_view_position())
+        .zip(origin)
         .map(|(point, origin)| crate::navigation::flat(point - origin).normalize_or_zero())
         .filter(|aim| aim.length_squared() > 0.0);
     // While the debug UI has the pointer, keep the last aim.
@@ -1063,10 +1136,21 @@ pub fn attack_input(
         crate::gameplay::cursor_ground(camera.0, camera.1, &window)
             .is_some_and(|point| crate::settlement::depot_at(sim, point).is_some())
     }) { return; }
-    // Aim from the confirmed position: a joined player's preview must not
-    // change gameplay commands.
     if let Some(aim) = cursor_aim {
         control.strike(&mut service, &mut controls, &scene.pack, aim);
+    }
+}
+
+/// Where the mouse aims from: where the avatar is `drawn`. A joined
+/// player's avatar is predicted about an input lead ahead of the confirmed
+/// one, and its shot fires from there (`laser_prediction`). Elsewhere the
+/// avatar is drawn where it is confirmed, so the confirmed position is used
+/// exactly, as before prediction.
+fn aim_origin(service: &SessionService, drawn: Option<Vec3>) -> Option<Vec3> {
+    if service.is_client() {
+        drawn.or_else(|| service.player_view_position())
+    } else {
+        service.player_view_position()
     }
 }
 
@@ -1141,11 +1225,15 @@ mod tests {
     /// An app on the field at a fixed frame rate, launching straight into a
     /// session.
     fn field_app(network: Option<Network>, fps: f64) -> App {
+        scene_app("field", network, fps)
+    }
+
+    fn scene_app(scene: &str, network: Option<Network>, fps: f64) -> App {
         let options = crate::control::Options { simulation: true, ..default() };
         let hub = crate::control::Hub::new(options.clone()).unwrap();
         let library = SceneLibrary::new();
-        let field = library.index("field").unwrap();
-        let mut app = crate::test_app(options, library, hub, Launch { network, ..Launch::single_player(field) });
+        let index = library.index(scene).unwrap();
+        let mut app = crate::test_app(options, library, hub, Launch { network, ..Launch::single_player(index) });
         app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / fps)));
         app
     }
@@ -1451,11 +1539,15 @@ mod tests {
 
     impl RelayedGame {
         fn new(delay_ms: f64, jitter_ms: f64, seed: u64) -> RelayedGame {
-            let mut host = field_app(Some(Network::Host("127.0.0.1:0".parse().unwrap())), 60.0);
+            RelayedGame::in_scene("field", delay_ms, jitter_ms, seed)
+        }
+
+        fn in_scene(scene: &str, delay_ms: f64, jitter_ms: f64, seed: u64) -> RelayedGame {
+            let mut host = scene_app(scene, Some(Network::Host("127.0.0.1:0".parse().unwrap())), 60.0);
             crate::start_world(&mut host);
             let address = host.world().resource::<SessionService>().session.local_addr().unwrap();
             let relay = DelayRelay::new(address, delay_ms, jitter_ms, seed);
-            let client = field_app(Some(Network::Join(relay.address())), 60.0);
+            let client = scene_app(scene, Some(Network::Join(relay.address())), 60.0);
             let mut game = RelayedGame { host, client, relay, frame: 0 };
             for _ in 0..1200 {
                 game.frame();
@@ -1477,21 +1569,24 @@ mod tests {
 
         /// Holds exactly `held` of the movement keys for `frames` frames.
         fn hold(&mut self, held: &[KeyCode], frames: u32) {
-            {
-                let mut keys = self.client.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-                for key in [KeyCode::KeyW, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD, KeyCode::ShiftLeft] {
-                    if held.contains(&key) {
-                        if !keys.pressed(key) {
-                            keys.press(key);
-                        }
-                    } else if keys.pressed(key) {
-                        keys.release(key);
-                    }
-                }
-            }
+            press_only(&mut self.client, held);
             for _ in 0..frames {
                 self.frame();
             }
+        }
+
+        /// The client fires its laser toward `direction` (arena space), as a
+        /// click there would.
+        fn fire(&mut self, direction: Vec3) {
+            let world = self.client.world_mut();
+            world.resource_mut::<Controls>().weapon = content::scenario::Weapon::Laser;
+            world.resource_scope(|world, mut service: Mut<SessionService>| {
+                world.resource_scope(|world, mut controls: Mut<Controls>| {
+                    world.resource_scope(|world, mut control: Mut<PlayerControl>| {
+                        control.strike(&mut service, &mut controls, &world.resource::<SceneView>().pack, direction);
+                    });
+                });
+            });
         }
 
         fn telemetry(&mut self) -> Mut<'_, crate::telemetry::Telemetry> {
@@ -1503,6 +1598,20 @@ mod tests {
         fn late_inputs(&self) -> (u64, u64) {
             let diagnostics = self.host.world().resource::<SessionService>().session.diagnostics(Duration::ZERO);
             diagnostics.peers.iter().fold((0, 0), |(n, ticks), peer| (n + peer.late_inputs, ticks + peer.shifted_ticks))
+        }
+    }
+
+    /// Holds exactly `held` of the movement keys.
+    fn press_only(app: &mut App, held: &[KeyCode]) {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        for key in [KeyCode::KeyW, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD, KeyCode::ShiftLeft] {
+            if held.contains(&key) {
+                if !keys.pressed(key) {
+                    keys.press(key);
+                }
+            } else if keys.pressed(key) {
+                keys.release(key);
+            }
         }
     }
 
@@ -1592,5 +1701,162 @@ mod tests {
         }
         println!("corrections per latency case and scenario:\n{report}");
         assert_eq!(kept_total, 0, "the joined player's avatar was corrected:\n{report}");
+    }
+
+    #[test]
+    fn mouse_aim_starts_at_the_drawn_avatar_only_when_it_is_predicted() {
+        let elsewhere = Some(Vec3::new(9.0, 0.0, 9.0));
+        let mut solo = field_app(None, 60.0);
+        crate::start_world(&mut solo);
+        let mut host = field_app(Some(Network::Host("127.0.0.1:0".parse().unwrap())), 60.0);
+        crate::start_world(&mut host);
+        for app in [&solo, &host] {
+            let service = app.world().resource::<SessionService>();
+            assert!(service.player_view_position().is_some());
+            assert_eq!(aim_origin(service, elsewhere), service.player_view_position(), "unpredicted avatars aim from the confirmed position");
+        }
+        let game = RelayedGame::new(0.0, 0.0, 1);
+        let service = game.client.world().resource::<SessionService>();
+        assert_eq!(aim_origin(service, elsewhere), elsewhere);
+        assert_eq!(aim_origin(service, None), service.player_view_position());
+    }
+
+    /// One laser scenario: (keys held, frames, fire toward this first) steps.
+    fn laser_scenarios() -> Vec<(&'static str, Vec<(Vec<KeyCode>, u32, Option<Vec3>)>)> {
+        use KeyCode::{KeyA as Left, KeyD as Right, ShiftLeft as Run};
+        // West toward the hall's far side wall, south toward the low front
+        // rail close behind the spawn, and north from the spawn toward the
+        // mixing desk (cover). The movement keys run diagonally on this
+        // scene's camera, away from the host's avatar.
+        let (west, south, north) = (Some(Vec3::NEG_X), Some(Vec3::Z), Some(Vec3::NEG_Z));
+        let run = |key| vec![key, Run];
+        vec![
+            ("standing still", vec![(vec![], 24, west), (vec![], 24, south), (vec![], 24, north), (vec![], 24, west), (vec![], 24, south)]),
+            (
+                "running",
+                vec![(run(Right), 20, None), (run(Right), 20, south), (run(Right), 20, west), (run(Right), 20, south), (run(Right), 20, west)],
+            ),
+            // The second shot is pressed during the first one's swing, so it waits for it.
+            ("right after reversing", (0..3).flat_map(|_| [(run(Right), 40, None), (run(Left), 6, south), (run(Left), 30, west)]).collect()),
+        ]
+    }
+
+    #[test]
+    fn joined_player_laser_shots_are_predicted_under_latency() {
+        assert_lasers_predicted(&[("no added delay", 0.0, 0.0, 0x1a5e), ("75 ± 20 ms", 75.0, 20.0, 0x1a5e + 1)]);
+    }
+
+    #[test]
+    #[ignore = "late inputs at 100±20 ms; enabled by adaptive input margin (LASER_PREDICTION_HANDOFF step 3)"]
+    fn joined_player_laser_shots_are_predicted_at_100_ms() {
+        assert_lasers_predicted(&[("100 ± 20 ms", 100.0, 20.0, 0x1a5e + 2)]);
+    }
+
+    /// Runs every laser scenario in the laser pit under each (name, one-way
+    /// delay ms, ± jitter ms, relay seed) case. Each shot the client fires
+    /// is drawn once, with one laser sound, before the confirmed world
+    /// fires it, and the confirmed shot ends exactly where the drawn one
+    /// did. No correction of any kind is kept.
+    fn assert_lasers_predicted(cases: &[(&str, f64, f64, u64)]) {
+        let mut failures = Vec::new();
+        let mut report = String::new();
+        for &(name, delay, jitter, seed) in cases {
+            let mut game = RelayedGame::in_scene("laser-pit", delay, jitter, seed);
+            // The host's avatar shares the spawn point: move it off the
+            // client's lines of fire, into the southwest corner behind the client.
+            let spawn = confirmed(&game.client);
+            let walk = |game: &mut RelayedGame, intent| {
+                let service = &mut *game.host.world_mut().resource_mut::<SessionService>();
+                let agent = service.player().unwrap();
+                service.command(CommandKind::MoveAvatar { agent, intent });
+            };
+            let southwest = FxVec2::new(Fx::from_int(-1), Fx::ONE).normalize_or_zero();
+            walk(&mut game, Intent::Walk { direction: southwest, run: false });
+            game.hold(&[], 150);
+            walk(&mut game, Intent::Stop);
+            game.hold(&[], 30);
+            let host_at = confirmed(&game.host);
+            assert!(host_at.z > spawn.z + 1.5 && host_at.x < spawn.x - 3.0, "the host's avatar is in the way: {host_at} (spawn {spawn})");
+            let agent = game.client.world().resource::<SessionService>().player().unwrap();
+            for (scenario, script) in laser_scenarios() {
+                game.client.world_mut().resource_mut::<SessionService>().command(CommandKind::Respawn { agent });
+                game.hold(&[], 90);
+                game.telemetry().network.clear_corrections();
+                let sounds = |game: &RelayedGame| game.client.world().resource::<crate::sound::Sound>().recorded_events().iter().filter(|(_, cue)| *cue == crate::sound::Cue::Laser as i32).count();
+                let sounds_before = sounds(&game);
+                let late_before = game.late_inputs();
+                let (mut fired, mut confirmed_shots, mut cover_hits, mut player_hits) = (0, 0, 0, 0);
+                let mut beams = std::collections::HashMap::<Entity, bool>::new();
+                // Then long enough for every shot to be confirmed, or given up.
+                let settle = (Vec::new(), 90, None);
+                for (keys, frames, fire) in script.iter().chain([&settle]) {
+                    let (frames, fire) = (*frames, *fire);
+                    press_only(&mut game.client, keys);
+                    if let Some(direction) = fire {
+                        game.fire(direction);
+                        fired += 1;
+                    }
+                    for _ in 0..frames {
+                        game.frame();
+                        let world = game.client.world_mut();
+                        for event in &world.resource::<WorldMirror>().events {
+                            if let sim::settlement::Event::LaserFired { agent: shooter, hit_actor, cover, .. } = event {
+                                if *shooter == agent {
+                                    confirmed_shots += 1;
+                                    cover_hits += usize::from(cover.is_some());
+                                    player_hits += usize::from(*hit_actor);
+                                }
+                            }
+                        }
+                        let mut bolts = world.query::<(Entity, &crate::effects::LaserBolt)>();
+                        for (entity, bolt) in bolts.iter(world) {
+                            beams.entry(entity).or_insert(bolt.predicted());
+                        }
+                    }
+                }
+                let telemetry = game.telemetry();
+                let network = &telemetry.network;
+                let outcomes: Vec<_> = network.laser_outcomes().cloned().collect();
+                let kinds: Vec<_> = network.corrections().map(|c| format!("{:?} {:.2}", c.kind, c.distance)).collect();
+                let laser_mispredictions = network.corrections().filter(|c| c.kind == crate::telemetry::CorrectionKind::LaserMispredict).count();
+                let drawn = network.lasers_drawn() as usize;
+                let sounds = sounds(&game) - sounds_before;
+                let predicted_beams = beams.values().filter(|p| **p).count();
+                let end_difference = outcomes.iter().map(|o| o.confirmed.map_or(f32::INFINITY, |c| c.distance(o.predicted))).fold(0.0, f32::max);
+                let leads: Vec<f64> = outcomes.iter().filter_map(|o| o.lead).collect();
+                let (lead_min, lead_max) = leads.iter().fold((f64::INFINITY, 0.0f64), |(lo, hi), &l| (lo.min(l), hi.max(l)));
+                let late = game.late_inputs();
+                let (late, shifted) = (late.0 - late_before.0, late.1 - late_before.1);
+                let client_at = confirmed(&game.client);
+                report += &format!(
+                    "{name:>15} | {scenario:>21} | ends at ({:.1}, {:.1}) |",
+                    client_at.x,
+                    client_at.z
+                );
+                report += &format!(
+                    " fired {fired}, confirmed {confirmed_shots} ({cover_hits} on cover), drawn early {drawn}, beams {} ({predicted_beams} predicted), laser sounds {sounds} | laser mispredictions {laser_mispredictions}, largest end difference {end_difference:.4} u | drawn {:.0}–{:.0} ms before confirmation | other corrections: {} | late inputs: {late} ({shifted} ticks)\n",
+                    beams.len(),
+                    lead_min * 1000.0,
+                    lead_max * 1000.0,
+                    kinds.len() - laser_mispredictions,
+                );
+                let exact = outcomes.len() == fired && outcomes.iter().all(|o| o.exact && o.confirmed.is_some());
+                let early = leads.len() == fired && leads.iter().all(|&lead| lead > 0.0);
+                if player_hits > 0 {
+                    failures.push(format!("{name} / {scenario}: {player_hits} shots hit the host's avatar"));
+                }
+                if scenario == "standing still" && cover_hits == 0 {
+                    failures.push(format!("{name} / {scenario}: no shot hit the mixing desk"));
+                }
+                if !(confirmed_shots == fired && drawn == fired && exact && early && kinds.is_empty() && beams.len() == fired && predicted_beams == fired && sounds == fired) {
+                    failures.push(format!("{name} / {scenario}: corrections {kinds:?}, outcomes {outcomes:?}"));
+                }
+            }
+            let session = &game.client.world().resource::<SessionService>().session;
+            let rtt = session.stats().rtt.map_or(0.0, |rtt| rtt.as_secs_f64() * 1000.0);
+            report += &format!("{name:>15} | client RTT {rtt:.0} ms, input margin {} ticks, host avatar at {host_at}\n", session.input_delay());
+        }
+        println!("laser shots per latency case and scenario:\n{report}");
+        assert!(failures.is_empty(), "laser shots were not predicted exactly:\n{report}\n{}", failures.join("\n"));
     }
 }

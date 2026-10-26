@@ -98,6 +98,10 @@ pub struct LaserShot {
     pub hit_actor: bool,
     pub cover: Option<u16>,
     pub seed: u32,
+    /// A shot the local player's prediction drew (`laser_prediction`), by
+    /// its id. Its cover hit sparks but holds nothing: only the confirmed
+    /// shot drives `CoverContacts` (see `hand_over_cover`).
+    pub predicted: Option<u64>,
 }
 
 #[derive(Component)]
@@ -108,8 +112,35 @@ pub(crate) struct LaserBolt {
     age: f32,
     impact: Option<(Vec3, Vec3)>,
     hit_actor: bool,
+    /// The cover contact this bolt releases when it arrives.
     cover: Option<u16>,
     seed: u32,
+    predicted: Option<u64>,
+}
+
+#[cfg(test)]
+impl LaserBolt {
+    /// Whether prediction drew this beam.
+    pub fn predicted(&self) -> bool {
+        self.predicted.is_some()
+    }
+}
+
+/// A confirmed cover hit for a shot prediction already drew (`predicted`):
+/// keeps the cover intact until that beam arrives, as a confirmed beam
+/// would. Once it has arrived, the damage shows at once.
+pub fn hand_over_cover(world: &mut World, predicted: u64, index: u16) {
+    if let Some(shot) = world.resource_mut::<PendingLasers>().0.iter_mut().find(|shot| shot.predicted == Some(predicted)) {
+        // Not spawned yet: it spawns as the confirmed shot would.
+        shot.predicted = None;
+        shot.cover = Some(index);
+        world.resource_mut::<CoverContacts>().begin(index as usize);
+        return;
+    }
+    let mut bolts = world.query::<&mut LaserBolt>();
+    let Some(mut bolt) = bolts.iter_mut(world).find(|bolt| bolt.predicted == Some(predicted) && !laser_reached(bolt.distance, bolt.age)) else { return };
+    bolt.cover = Some(index);
+    world.resource_mut::<CoverContacts>().begin(index as usize);
 }
 
 const LASER_SPEED: f32 = 80.0;
@@ -431,14 +462,15 @@ pub fn emit_lasers(world: &mut World) {
     let assets = world.resource::<FxAssets>();
     let (cube, red) = (assets.cube.clone(), assets.laser.clone());
     for shot in shots {
+        let contact = shot.cover.filter(|_| shot.predicted.is_none());
         let Some(&(_, from)) = muzzles.iter().find(|(agent, _)| *agent == shot.agent) else {
-            if let Some(index) = shot.cover { world.resource_mut::<CoverContacts>().arrive(index as usize); }
+            if let Some(index) = contact { world.resource_mut::<CoverContacts>().arrive(index as usize); }
             continue;
         };
         let delta = shot.target - from;
         let distance = delta.length();
         if distance < 0.05 {
-            if let Some(index) = shot.cover { world.resource_mut::<CoverContacts>().arrive(index as usize); }
+            if let Some(index) = contact { world.resource_mut::<CoverContacts>().arrive(index as usize); }
             continue;
         }
         let direction = delta / distance;
@@ -455,7 +487,7 @@ pub fn emit_lasers(world: &mut World) {
             GlobalTransform::from(transform),
             bevy::light::NotShadowCaster,
             LaserBolt { from, direction, distance, age: 0.0, impact: obstacle_hit,
-                hit_actor: shot.hit_actor, cover: shot.cover, seed: shot.seed },
+                hit_actor: shot.hit_actor, cover: contact, seed: shot.seed, predicted: shot.predicted },
         ));
     }
 }
@@ -622,6 +654,35 @@ pub fn camera_feedback(
 #[cfg(test)]
 mod laser_tests {
     use super::*;
+
+    #[test]
+    fn a_confirmed_cover_hit_waits_for_the_predicted_beam_still_in_flight() {
+        let mut world = World::new();
+        world.init_resource::<PendingLasers>();
+        world.init_resource::<CoverContacts>();
+        let bolt = |predicted: u64, age: f32| LaserBolt {
+            from: Vec3::ZERO, direction: Vec3::X, distance: 12.0, age, impact: None,
+            hit_actor: false, cover: None, seed: 0, predicted: Some(predicted),
+        };
+        world.spawn(bolt(1, 0.0));
+        world.spawn(bolt(2, 1.0));
+        world.resource_mut::<PendingLasers>().0.push(LaserShot {
+            agent: 0, target: Vec3::X, hit_actor: false, cover: Some(5), seed: 0, predicted: Some(3),
+        });
+        // In flight: the cover waits, and the bolt releases it on arrival.
+        hand_over_cover(&mut world, 1, 4);
+        assert!(world.resource::<CoverContacts>().waiting(4));
+        let mut bolts = world.query::<&LaserBolt>();
+        assert!(bolts.iter(&world).any(|b| b.predicted == Some(1) && b.cover == Some(4)));
+        // Arrived: the damage shows at once.
+        hand_over_cover(&mut world, 2, 6);
+        assert!(!world.resource::<CoverContacts>().waiting(6));
+        // Not spawned yet: it spawns holding the cover, as a confirmed shot.
+        hand_over_cover(&mut world, 3, 5);
+        assert!(world.resource::<CoverContacts>().waiting(5));
+        let pending = &world.resource::<PendingLasers>().0[0];
+        assert_eq!((pending.predicted, pending.cover), (None, Some(5)));
+    }
 
     #[test]
     fn bolt_is_short_and_crosses_twelve_meters_quickly() {

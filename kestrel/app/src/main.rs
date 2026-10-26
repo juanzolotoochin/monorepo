@@ -13,6 +13,7 @@ mod gameplay;
 mod impact;
 mod input;
 mod jetpack;
+mod laser_prediction;
 mod legacy;
 mod lockstep;
 mod menu;

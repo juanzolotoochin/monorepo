@@ -326,8 +326,19 @@ pub fn tick(world: &mut World) {
     }
     let mut arc_source = pos + Vec3::Y * 0.75;
     let mut arc_fired = false;
+    // This player's shots that prediction already drew, in order (see
+    // `laser_prediction`); other shots are drawn as they are confirmed.
+    let local = world.resource::<crate::lockstep::WorldMirror>().player();
+    let mut drawn_early = world
+        .get_resource_mut::<crate::laser_prediction::LaserPrediction>()
+        .map(|mut lasers| std::mem::take(&mut lasers.confirmed))
+        .unwrap_or_default();
     for event in &sim.events {
         use crate::legacy::Event;
+        let drawn_shot = match event {
+            Event::LaserFired { agent, .. } if Some(*agent) == local => drawn_early.pop_front().flatten(),
+            _ => None,
+        };
         if let Event::ArcFired { from, to } = event {
             arc_source = Vec3::new(from[0], 0.72, from[1]);
             crate::effects::arc(
@@ -338,7 +349,12 @@ pub fn tick(world: &mut World) {
             );
             arc_fired = true;
         }
-        if let Event::LaserFired { agent, to, hit_actor, cover } = event {
+        if let (Event::LaserFired { cover, .. }, Some(drawn)) = (event, drawn_shot) {
+            // The drawn beam stays; its cover waits for it as it would for this one.
+            if let Some(index) = cover {
+                crate::effects::hand_over_cover(world, drawn, *index);
+            }
+        } else if let Event::LaserFired { agent, to, hit_actor, cover } = event {
             if let Some(index) = cover { world.resource_mut::<crate::effects::CoverContacts>().begin(*index as usize); }
             let height = world.resource::<crate::lockstep::SessionService>()
                 .ground_height(Vec3::new(to[0], 0.0, to[1])).unwrap_or(0.0) + 0.8;
@@ -348,6 +364,7 @@ pub fn tick(world: &mut World) {
                 hit_actor: *hit_actor,
                 cover: *cover,
                 seed: crate::effects::laser_impact_seed(sim.tick, *agent),
+                predicted: None,
             });
         }
         if let Event::Hit {
@@ -465,6 +482,8 @@ pub fn tick(world: &mut World) {
             Event::ArcFired { .. } => Some(crate::sound::Cue::Arc),
             // The visible bolt plays this cue when it reaches the actor.
             Event::Hit { impact: crate::legacy::Impact::Laser, .. } => None,
+            // Prediction played it when it drew the shot.
+            Event::LaserFired { .. } if drawn_shot.is_some() => None,
             Event::LaserFired { .. } => Some(crate::sound::Cue::Laser),
             Event::Hit {
                 impact: crate::legacy::Impact::Arc,

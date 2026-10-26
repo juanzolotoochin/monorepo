@@ -1,6 +1,8 @@
 //! Bounded performance samples. CPU wall time is kept separate from deterministic game time.
 mod network;
-pub use network::{NetworkFrame, PreviewUpdate};
+pub use network::{LaserOutcome, NetworkFrame, PreviewUpdate};
+#[cfg(test)]
+pub use network::CorrectionKind;
 use bevy::prelude::*;
 use debug_ui::{egui, GameInput, ImguiManager, ImguiMenu, MenuHandle, MenuId, MenuSpec};
 use serde_json::{json, Value};

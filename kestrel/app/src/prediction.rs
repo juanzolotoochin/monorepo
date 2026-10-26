@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 
 use bevy::prelude::*;
 use fx::FxVec2;
-use sim::settlement::{AgentState, Settlement};
+use sim::settlement::{AgentState, ReplayedStrike, Settlement};
 use sim::terrain::Terrain;
 use sim::CommandKind;
 
@@ -73,6 +73,10 @@ pub struct Drawn {
     pub mispredicted: f32,
     /// The avatar was too far off and was put where it is predicted.
     pub snapped: bool,
+    /// The strikes the predicted avatar resolved from the confirmed tick
+    /// through the drawn tick, oldest first: the ticks the drawn time
+    /// reached that the confirmed world hasn't run yet.
+    pub strikes: Vec<ReplayedStrike>,
 }
 
 #[derive(Default)]
@@ -124,8 +128,10 @@ impl AvatarPrediction {
         };
         let current = &c.settlement.agents[c.agent as usize];
         let predicted = (base >= c.tick && base < c.tick + MAX_LEAD).then(|| replay(c, base + 1)).flatten();
+        let mut strikes = Vec::new();
         let (from, to, fraction, positions) = match predicted {
-            Some(states) => {
+            Some((states, struck)) => {
+                strikes = struck;
                 let positions: Vec<Vec3> = states.iter().map(view).collect();
                 let at = |tick: u64| states[(tick - c.tick) as usize].clone();
                 (at(base), at(base + 1), fraction, positions)
@@ -182,6 +188,7 @@ impl AvatarPrediction {
             fraction,
             mispredicted,
             snapped,
+            strikes,
         }
     }
 
@@ -217,20 +224,23 @@ impl AvatarPrediction {
 }
 
 /// The avatar's states from the confirmed tick through tick `end`, each
-/// pending command applied on its tick. One the host already passed was
-/// moved later; the next tick is the best guess. `None` if the avatar can't
-/// be predicted (a pending click-to-move).
-fn replay(c: &Confirmed, end: u64) -> Option<Vec<AgentState>> {
+/// pending command applied on its tick, and the strikes it resolved on the
+/// way. One the host already passed was moved later; the next tick is the
+/// best guess. `None` if the avatar can't be predicted (a pending
+/// click-to-move).
+fn replay(c: &Confirmed, end: u64) -> Option<(Vec<AgentState>, Vec<ReplayedStrike>)> {
     let mut replay = c.settlement.replay_avatar(c.agent, c.tick, c.terrain)?;
     let mut states = vec![replay.state().clone()];
+    let mut strikes = Vec::new();
     for tick in c.tick..end {
         let due = c.pending.iter().filter(|(asked, _)| (*asked).max(c.tick) == tick).map(|(_, kind)| *kind);
         if !replay.step_with(due) {
             return None;
         }
         states.push(replay.state().clone());
+        strikes.extend(replay.struck().cloned());
     }
-    Some(states)
+    Some((states, strikes))
 }
 
 #[cfg(test)]
