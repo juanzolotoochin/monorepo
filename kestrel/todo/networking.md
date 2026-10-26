@@ -23,22 +23,45 @@
   (`open`), `kestrel/app/src/menu.rs`.
 - **Found in:** eight-player design session.
 
-## Find what stalls clients around a leave and rejoin at 75 ms
+## Run lab peers headless in real time
 
 - **Status:** open
-- **Why:** in the eight-player lab at 75 ± 20 ms, each client's time spent
-  waiting for turns (`starved_ms`) went from 8–90 ms to 270–515 ms between
-  one client closing and it rejoining 3 minutes later, then grew only
-  15–50 ms in the next 54 s. So every client stalled for 0.2–0.4 s in total
-  around the leave, the rejoin, or both. The rejoining client itself didn't.
-- **What to do:** rerun with `-Clients 7 -Rejoin -ControlPortBase 7800`,
-  read `telemetry.network.starved_ms` from every window just before and
-  after the close, and just before and after the rejoin, to tell which one
-  stalls them. Then look at what the host sends then: the save upload to
-  the joiner sharing the relay, or the turns that carry `Leave` and `Join`.
-- **Where:** `Host::send_upload` and `depart` in `kestrel/net/src/host.rs`;
-  the client's starved time in `kestrel/net/src/client.rs`.
-- **Found in:** the eight-player lab run (runs `20261026-182404`).
+- **Why:** for networking bugs that aren't about what players see (stalls,
+  pacing, late inputs, desyncs, joins under load), windowed peers get in
+  the way. Eight windows on one GPU give every window slow frames, and those
+  hitches buried the measurements when we chased a stall that turned out
+  not to exist (see Done). `--simulation` drops rendering, but it steps a
+  fixed 1/60 s per frame as fast as it can, so a networked peer in it
+  wouldn't run in real time.
+- **What to do:** a renderer-free mode that keeps Bevy's real clock, for
+  example `--simulation` with `--host` or `--join`, driven through the
+  control port. Then a lab option such as `-HeadlessClients <n>` that
+  starts that many clients without windows. Keep the host or one client
+  windowed when the question is about feel. Check with a rerun of the
+  eight-player stall measurement (6 headless clients and 1 windowed) that
+  the starvation bursts go away.
+- **Where:** `build_app` in `kestrel/app/src/main.rs` (the
+  `TimeUpdateStrategy::ManualDuration` for `deterministic`);
+  `kestrel/app/src/control/mod.rs` (`Options`);
+  `kestrel/tools/network-lab.ps1`.
+- **Found in:** investigating the stall around a leave and rejoin.
+
+## Count only time a client actually waits for turns as starved
+
+- **Status:** open (low priority)
+- **Why:** when an update runs out of turns, the client adds the whole gap
+  until its next update to `starved_time`. If that next update is late
+  because the client's own frame hitched, the hitch counts as waiting for
+  the host. In the eight-player lab, 69–75% of all starved time fell in the
+  half-second samples where that client had a frame over 33 ms: 3–21 ms of
+  starved time per sample with a slow frame, 0.4–1.4 ms without.
+- **What to do:** count the wait from when the client ran out of turns to
+  when the next turn arrived (`receive`), not to the next update. Or cap
+  each gap at a tick and count the rest as a frame hitch.
+- **Where:** `Client::update` and `receive` in `kestrel/net/src/client.rs`
+  (`waiting_for_turn`, `diagnostics.starved_time`).
+- **Found in:** investigating the stall around a leave and rejoin (see
+  Done).
 
 ## Spread name tags that overlap
 
@@ -179,6 +202,31 @@
 - **Found in:** stage 3 of PR #111.
 
 ## Done
+
+### Find what stalls clients around a leave and rejoin at 75 ms
+
+- **Status:** done (branch `kestrel-join-stall`): there is no such stall.
+  A second 75 ± 20 ms lab run sampled every window twice a second
+  (`telemetry.network.starved_ms`, frame counters, the host's tick) through
+  three leaves and rejoins, each rejoin 30 s after its leave
+  (`-RejoinAfterSeconds 30`, new for this):
+  - Starved time grows in small bursts every 10–20 s on all clients at
+    once, with or without a leave or join. Over 3 minutes these add up to
+    the 0.2–0.4 s first seen.
+  - A leave never stood out. One rejoin of three coincided with a burst;
+    the other two didn't, and starting a game window that doesn't join
+    didn't either.
+  - The bursts come from frame hitches. With 8 windows on one GPU, the host
+    has about 14 frames over 16.7 ms and 1–2 over 33 ms every half second.
+    Its worst stall (180 ms: 19 ticks in 0.5 s instead of 30) came 30 s
+    after a rejoin and starved every client. A client's own slow frame is
+    also counted as starved time (filed above). Without slow frames, clients
+    starved 0.4–1.4 ms per half second.
+- **Why:** in the first eight-player lab run, each client's starved time
+  went from 8–90 ms to 270–515 ms between one client closing and it
+  rejoining 3 minutes later.
+- **Found in:** the eight-player lab run (runs `20261026-182404`;
+  investigated in run `20261026-185459`).
 
 ### Play an eight-player network lab run
 
