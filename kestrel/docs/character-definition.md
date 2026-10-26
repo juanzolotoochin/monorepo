@@ -167,9 +167,14 @@ Character definitions are moving in steps, each its own PR against `master`. Ste
 - **Threats:** they become characters with a `FollowRoute` brain. They keep their own table, for the 100k-entity budget, but each stores a `CharacterIx` instead of reaching its kind through its wave.
 - **Shared body:** `AgentState` splits into the body every agent has (position, heading, velocity, radius, health) plus data for each role. Cargo has three models today (hauler `cargo`, the avatar's `ManualJob`, pile jobs), and they merge here.
 - **Prediction:** the sim and the client's replay apply actions through the same code. An ability's own state is always predicted. Its effects on the world are only shown early, as events built from its messages, and each event kind says whether to keep or cancel it when it never confirms. `kestrel/ABILITY_PREDICTION_HANDOFF.md` has the decisions and the order.
+- **Threats attacking agents:** ghouls hit players in passing (`kestrel/GHOUL_ATTACK_HANDOFF.md` has the order):
+  - **Behaviour:** a ghoul never leaves its route. When a player is in reach, it stops, winds up, swings, and then walks on. Chasing a target would be a separate hunter brain, later.
+  - **Targets:** players only. Haulers have no health, so making them targets is a separate step that changes the `Hauler` schema.
+  - **Latency:** the windup (about 400–500 ms) is longer than a typical input lead, and the ghoul shows it. Reach is checked when the swing lands, against where the player is then. A hit deals damage and a small knockback, smoothed on clients by the `Knockback` correction. It doesn't stun.
+  - **Tuning:** an optional `attack` section on `FollowRoute` characters (`damage`, `reach`, `windup`, `cooldown`, `knockback`). A ghoul without it never attacks, as before.
+  - **Targeting:** the nearest player in reach, with the lowest agent index on a tie. Each player scans the threats for ones in reach, as a projectile already does, so a threat with no player near costs one distance check.
 - **Out of scope:** possession. Defenders stay as they are.
 
 ### Open questions
 
-- **Threats attacking agents:** should ghouls attack agents, so the player can be hurt by them and not only by lasers? It is a gameplay change, so it gets its own commit.
 - **Where meshes live:** do styles stay the mesh and material libraries that a character's `view` refers to, or does each character carry its own meshes?
