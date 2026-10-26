@@ -84,6 +84,20 @@
 - **Found in:** ability prediction task 5, lasting effects from the drawn
   state (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D5).
 
+## Make the control snapshot read one avatar consistently
+
+- **Status:** open
+- **Why:** after task 5 of the ability prediction work, the automation
+  control snapshot's `jetpack` field reports the drawn (predicted) avatar,
+  while `digging` still reads the confirmed one. They agree on the host and
+  in single player, but differ on a joined client.
+- **What to do:** pick one (probably the drawn avatar, which is what the
+  player sees) and read every avatar field of the snapshot from it.
+- **Where:** `kestrel/app/src/control/mod.rs` (the snapshot), `DrawnAvatar`
+  in `kestrel/app/src/prediction.rs`.
+- **Found in:** task 5 of `kestrel/ABILITY_PREDICTION_HANDOFF.md`
+  (branch `kestrel-ability-prediction`).
+
 ## Done
 
 ### Remove the right-click movement leftovers
