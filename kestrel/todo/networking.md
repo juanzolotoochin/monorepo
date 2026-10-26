@@ -205,7 +205,7 @@
 
 ### Find what stalls clients around a leave and rejoin at 75 ms
 
-- **Status:** done (branch `kestrel-join-stall`): there is no such stall.
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/121): there is no such stall.
   A second 75 ± 20 ms lab run sampled every window twice a second
   (`telemetry.network.starved_ms`, frame counters, the host's tick) through
   three leaves and rejoins, each rejoin 30 s after its leave
