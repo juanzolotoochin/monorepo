@@ -127,9 +127,10 @@ predicted: while one is pending, the confirmed avatar is drawn.
 
 A client also draws its own laser shots predicted. When the drawn time
 reaches the tick a laser swing resolves on in the replay, two ticks after the
-press, the shot is aimed with the simulation's own targeting
-(`Settlement::predict_laser`) from the predicted avatar against the confirmed
-world, and drawn at once: the beam from the drawn avatar's gun, the laser
+press, the replay reads the confirmed world for the predicted avatar as the
+simulation's stage 3 does (`read_avatar`), and the resulting `Strike` message
+becomes a `LaserFired` through the same function the simulation applies it
+with (`strike_event`). That shot is drawn at once: the beam from the drawn avatar's gun, the laser
 sound, and the impact spark and sound. The beam stops at walls, cover, the
 ground, and enemies and other players where they are drawn. Damage, flinches,
 deaths and cover breaking still wait for the confirmed shot, about an input

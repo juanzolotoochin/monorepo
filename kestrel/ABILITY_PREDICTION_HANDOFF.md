@@ -70,6 +70,15 @@ own commit, last, with the golden file updated in that commit only.
   targets, beam end and cover, so it already qualifies.
 - Events that need stage 5 results (`Hit`, deaths, cover breaking, stock
   moving) are `Confirmed` by construction and never predicted.
+- Done in task 3: `strike_event` (`sim/src/settlement/combat.rs`) turns a
+  `Strike` into `LaserFired`, `ArcFired` or `BowFired` (the bow's former
+  `Shot { defender: None }`); sword and spear strikes show only `Hit`.
+  `ManualUnit` and `PileStep` show nothing until stage 5 moves units. A
+  laser's `hit_actor` now comes from stage 3 (`Strike::hit_player`), so a
+  player killed earlier in the same tick's stage 5 still counts as hit.
+  `Event::prediction` returns `Confirmed` or `Predict { agent, started,
+  on_miss }`; the three strike events are `Keep`. `AvatarReplay::events`
+  holds the last tick's predicted events.
 - `AvatarReplay::step` returns the events it predicted that tick.
 - Each predictable event kind has a miss policy:
   - `Keep`: a one-shot such as the laser beam, a swing sound or sparks. If
@@ -113,6 +122,13 @@ ambiguous.
   start tick → command → predicted event.
 - A sim-side per-player command counter (option B) was rejected because it
   would add hashed state only for client bookkeeping.
+- Done in task 3: `started` is `Swing::pressed()`, the tick the `Attack`
+  applied on. A press queued during a swing keeps its press tick in
+  `AvatarState::queued_at` and then `Swing::queued_at`, which are not saved
+  or hashed, so a queued swing in flight across a save or a join keys by
+  its start tick instead. Until task 4, the app's `LaserPrediction` still
+  tells commands apart by the resolving swing's aim and muzzle
+  (`PredictedEvent` in `app/src/prediction.rs`).
 
 ### D8. One generic predicted-events ledger in the app
 
@@ -157,7 +173,8 @@ changes last.
   compare events too: the replay's predicted events equal the sim's
   whenever what they read of the world didn't change. That gives every
   ability coverage once its commands are in `random_command`. The laser's
-  dedicated test becomes one case.
+  dedicated test becomes one case. (Done in task 3: it runs in the laser
+  range, with cover, a ledge and a second player.)
 - App units for the ledger: matching by key, a moved input moving its
   event, a timeout logged once, `Keep` versus `Cancel`.
 - A knockback case once enemies can hit agents: smoothed, not snapped,
