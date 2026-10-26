@@ -23,6 +23,7 @@ impl Service for SceneView {
     type Deps = (WorldMirror,);
 
     fn init(world: &mut World) -> Self {
+        world.resource_mut::<crate::effects::CoverContacts>().clear();
         // The world's scene: the session's label, on the host and on clients.
         let index = match world.resource::<WorldMirror>().scene {
             usize::MAX => 0,
@@ -58,6 +59,7 @@ impl Service for SceneView {
     }
 
     fn shutdown(self, world: &mut World) {
+        world.resource_mut::<crate::effects::CoverContacts>().clear();
         crate::destruction::release_materials(world);
         crate::assets::release_scene(world);
         // The built-in deck shows only in worlds, not behind the menus.
@@ -82,6 +84,8 @@ impl Service for SceneView {
 fn update_destructibles(world: &mut World) {
     let Some(terrain) = world.resource::<crate::lockstep::SessionService>().world().map(|w| w.terrain()) else { return };
     let health: Vec<u16> = terrain.destructibles.iter().map(|piece| piece.health).collect();
+    let waiting: Vec<bool> = (0..health.len()).map(|index|
+        world.resource::<crate::effects::CoverContacts>().waiting(index)).collect();
     let mut query = world.query::<(Entity, &mut crate::style::DestructibleView, &mut Visibility,
         Option<&crate::combat::Obstacle>, Option<&crate::destruction::CoverFragment>, &Children)>();
     let mut changes = Vec::new();
@@ -91,8 +95,9 @@ fn update_destructibles(world: &mut World) {
         if falling.is_some() { continue; }
         let current = health.get(view.index).copied().unwrap_or(0);
         let alive = current > 0;
+        let waiting = waiting.get(view.index).copied().unwrap_or(false);
         *visibility = if alive || view.last_health > 0 { Visibility::Inherited } else { Visibility::Hidden };
-        if current != view.last_health {
+        if current != view.last_health && !waiting {
             let factor = 0.55 + 0.45 * f32::from(current) / f32::from(view.max_health);
             tint.extend(children.iter().map(|child| (child, factor)));
             hits.push((entity, view.index, current));

@@ -338,13 +338,15 @@ pub fn tick(world: &mut World) {
             );
             arc_fired = true;
         }
-        if let Event::LaserFired { agent, to, hit_actor } = event {
+        if let Event::LaserFired { agent, to, hit_actor, cover } = event {
+            if let Some(index) = cover { world.resource_mut::<crate::effects::CoverContacts>().begin(*index as usize); }
             let height = world.resource::<crate::lockstep::SessionService>()
                 .ground_height(Vec3::new(to[0], 0.0, to[1])).unwrap_or(0.0) + 0.8;
             world.resource_mut::<crate::effects::PendingLasers>().0.push(crate::effects::LaserShot {
                 agent: *agent,
                 target: Vec3::new(to[0], height, to[1]),
                 hit_actor: *hit_actor,
+                cover: *cover,
                 seed: crate::effects::laser_impact_seed(sim.tick, *agent),
             });
         }

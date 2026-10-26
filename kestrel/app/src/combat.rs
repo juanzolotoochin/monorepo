@@ -434,6 +434,7 @@ mod tests {
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<Controls>()
             .init_resource::<Feedback>()
+            .init_resource::<effects::CoverContacts>()
             .init_resource::<Assets<StandardMaterial>>()
             .insert_resource(fx)
             .insert_resource(Sound::silent())

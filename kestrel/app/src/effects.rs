@@ -7,6 +7,7 @@ use crate::{
     style::WeaponMuzzle,
 };
 use bevy::{camera::ScalingMode, prelude::*};
+use std::collections::HashMap;
 use voxel_assets::ImpactResponse;
 
 /// Particles, flashes and camera shake (World layer).
@@ -24,6 +25,7 @@ impl service::Service for Effects {
     fn systems(app: &mut App) {
         use service::{AppServices, Phase, WorldState};
         app.init_resource::<PendingLasers>()
+            .init_resource::<CoverContacts>()
             .add_service_systems::<Self, _>(
                 Phase::Present,
                 (update_effects, camera_feedback.run_if(crate::control::rendered)).run_if(in_state(WorldState::Active)),
@@ -63,10 +65,38 @@ pub struct FxAssets {
 #[derive(Resource, Default)]
 pub struct PendingLasers(pub Vec<LaserShot>);
 
+/// Keeps the rendered cover intact while an authoritative laser hit is in flight.
+#[derive(Resource, Default)]
+pub struct CoverContacts {
+    in_flight: HashMap<usize, u32>,
+}
+
+impl CoverContacts {
+    pub fn begin(&mut self, index: usize) {
+        *self.in_flight.entry(index).or_default() += 1;
+    }
+
+    pub fn arrive(&mut self, index: usize) {
+        if let Some(count) = self.in_flight.get_mut(&index) {
+            *count -= 1;
+            if *count == 0 { self.in_flight.remove(&index); }
+        }
+    }
+
+    pub fn waiting(&self, index: usize) -> bool {
+        self.in_flight.contains_key(&index)
+    }
+
+    pub fn clear(&mut self) {
+        self.in_flight.clear();
+    }
+}
+
 pub struct LaserShot {
     pub agent: u16,
     pub target: Vec3,
     pub hit_actor: bool,
+    pub cover: Option<u16>,
     pub seed: u32,
 }
 
@@ -78,6 +108,7 @@ pub(crate) struct LaserBolt {
     age: f32,
     impact: Option<(Vec3, Vec3)>,
     hit_actor: bool,
+    cover: Option<u16>,
     seed: u32,
 }
 
@@ -400,23 +431,31 @@ pub fn emit_lasers(world: &mut World) {
     let assets = world.resource::<FxAssets>();
     let (cube, red) = (assets.cube.clone(), assets.laser.clone());
     for shot in shots {
-        let Some(&(_, from)) = muzzles.iter().find(|(agent, _)| *agent == shot.agent) else { continue };
+        let Some(&(_, from)) = muzzles.iter().find(|(agent, _)| *agent == shot.agent) else {
+            if let Some(index) = shot.cover { world.resource_mut::<CoverContacts>().arrive(index as usize); }
+            continue;
+        };
         let delta = shot.target - from;
         let distance = delta.length();
-        if distance < 0.05 { continue; }
+        if distance < 0.05 {
+            if let Some(index) = shot.cover { world.resource_mut::<CoverContacts>().arrive(index as usize); }
+            continue;
+        }
         let direction = delta / distance;
         let (_, front) = laser_segment(distance, 0.0).unwrap();
         let transform = Transform::from_translation(from + direction * (front * 0.5))
             .with_rotation(Quat::from_rotation_arc(Vec3::Z, direction))
             .with_scale(Vec3::new(LASER_WIDTH, LASER_WIDTH, front));
-        let obstacle_hit = obstacle_impact(shot.target, &obstacles);
+        let obstacle_hit = if shot.cover.is_some() { Some((shot.target, -direction)) }
+            else { obstacle_impact(shot.target, &obstacles) };
         world.spawn((
             Mesh3d(cube.clone()),
             MeshMaterial3d(red.clone()),
             transform,
             GlobalTransform::from(transform),
             bevy::light::NotShadowCaster,
-            LaserBolt { from, direction, distance, age: 0.0, impact: obstacle_hit, hit_actor: shot.hit_actor, seed: shot.seed },
+            LaserBolt { from, direction, distance, age: 0.0, impact: obstacle_hit,
+                hit_actor: shot.hit_actor, cover: shot.cover, seed: shot.seed },
         ));
     }
 }
@@ -469,6 +508,7 @@ pub fn update_effects(
         (Without<Particle>, Without<Player>, Without<LaserBolt>),
     >,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut cover_contacts: ResMut<CoverContacts>,
 ) {
     let dt = time.delta_secs().min(0.1);
     feedback.hit_stop = (feedback.hit_stop - dt).max(0.0);
@@ -502,6 +542,7 @@ pub fn update_effects(
     for (entity, mut transform, mut bolt) in &mut bolts {
         bolt.age += dt;
         if laser_reached(bolt.distance, bolt.age) {
+            if let Some(index) = bolt.cover.take() { cover_contacts.arrive(index as usize); }
             if bolt.hit_actor {
                 sound.play(crate::sound::Cue::LaserImpact);
                 bolt.hit_actor = false;

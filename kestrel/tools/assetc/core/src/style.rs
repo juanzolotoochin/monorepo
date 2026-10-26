@@ -523,8 +523,11 @@ pub fn compile_destructibles(style: &StyleProfile, covers: &[DestructibleCover])
                 let mut fine = style.clone();
                 fine.voxel_size = fine.voxel_size.min(0.10);
                 let mesh = compile_environment(&fine, &shapes)?;
+                // The laser stops at this disc. Match the visible plinth or
+                // shaft instead of the piece's bounding-box diagonal.
+                let outer = if cover.form == CoverForm::Stepped { 0.50 } else { 0.54 };
                 result.push(DestructiblePiece { meshes: mesh.meshes, center,
-                    radius: (cell[0] * cell[0] + cell[2] * cell[2]).sqrt() * 0.48,
+                    radius: cell[0].max(cell[2]) * outer,
                     health: cover.health, size: cell, asset_center: cover.position, break_style: cover.break_style });
                 if result.len() > 256 { return Err("scene exceeds 256 destructible pieces".into()); }
             }
@@ -776,6 +779,7 @@ mod tests {
         let pieces = compile_destructibles(&style, &[cover.clone()]).unwrap();
         assert_eq!(pieces.len(), 4);
         assert!(pieces.iter().all(|piece| !piece.meshes.is_empty() && piece.health == 3 && piece.radius > 0.0));
+        assert!((pieces[0].radius - 0.486).abs() < 0.001);
         assert_ne!(pieces[0].center, pieces[1].center);
         let mut stepped = cover.clone();
         stepped.form = CoverForm::Stepped;

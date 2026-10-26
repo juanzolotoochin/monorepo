@@ -170,7 +170,7 @@ pub enum Event {
     PinnedLanded { target: u64, position: FxVec2 },
     BlockedShot { position: FxVec2 },
     ArcFired { from: FxVec2, to: FxVec2 },
-    LaserFired { agent: AgentIx, from: FxVec2, to: FxVec2, hit_actor: bool },
+    LaserFired { agent: AgentIx, from: FxVec2, to: FxVec2, hit_actor: bool, cover: Option<u16> },
     Breach { position: FxVec2 },
     Produced { producer: u16 },
     Equipped { agent: AgentIx },
@@ -525,7 +525,7 @@ impl Settlement {
                 let hit_actor = !message.targets.is_empty() || self.agents.iter().enumerate().any(|(index, target)| {
                     index != agent && target.controlled && target.avatar.health > 0 && target.position == to
                 });
-                Event::LaserFired { agent: message.agent, from: origin, to, hit_actor }
+                Event::LaserFired { agent: message.agent, from: origin, to, hit_actor, cover: message.cover }
             } else {
                 Event::ArcFired { from: origin, to }
             });
