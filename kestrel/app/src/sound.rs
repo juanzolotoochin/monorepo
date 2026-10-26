@@ -10,7 +10,7 @@ use std::{
 unsafe extern "C" {
     fn kestrel_audio_start() -> i32;
     fn kestrel_audio_play(cue: i32);
-    fn kestrel_audio_note(note: i32, velocity: i32);
+    fn kestrel_audio_note(note: i32, velocity: i32, damage: i32);
     fn kestrel_audio_stop();
     fn kestrel_audio_cue_count() -> i32;
     fn kestrel_audio_synthesize(
@@ -19,6 +19,9 @@ unsafe extern "C" {
         output: *mut f32,
         frames: u32,
     );
+    #[cfg(test)]
+    fn kestrel_audio_synthesize_piano(note: i32, velocity: i32, damage: i32,
+        output: *mut f32, frames: u32);
 }
 
 // Browser playback uses the same synthesized cue bank, exported as short WAV
@@ -275,9 +278,13 @@ impl Sound {
     }
     /// Play or release a MIDI piano pitch. Velocity zero releases the key.
     pub fn note(&self, note: u8, velocity: u8) {
+        self.note_damaged(note, velocity, 0);
+    }
+    /// Damage alters the tuning and timbre of the struck string.
+    pub fn note_damaged(&self, note: u8, velocity: u8, damage: u8) {
         if self.active && !self.muted {
             #[cfg(not(target_arch = "wasm32"))]
-            unsafe { kestrel_audio_note(i32::from(note), i32::from(velocity)); }
+            unsafe { kestrel_audio_note(i32::from(note), i32::from(velocity), i32::from(damage)); }
         }
     }
 }
@@ -335,6 +342,27 @@ mod tests {
         let peak = samples.iter().fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
         assert!(peak > 0.15, "laser impact peak {peak} is too quiet");
         assert!(samples[18000..].iter().all(|sample| sample.abs() < 0.01));
+    }
+
+    #[test]
+    fn damaged_piano_string_changes_timbre_and_remains_audible() {
+        let mut healthy = vec![0.0_f32; 9600];
+        let mut worn = healthy.clone();
+        let mut damaged = healthy.clone();
+        unsafe {
+            kestrel_audio_synthesize_piano(69, 100, 0, healthy.as_mut_ptr(), 4800);
+            kestrel_audio_synthesize_piano(69, 100, 1, worn.as_mut_ptr(), 4800);
+            kestrel_audio_synthesize_piano(69, 100, 2, damaged.as_mut_ptr(), 4800);
+        }
+        assert!(healthy.iter().any(|s| s.abs() > 0.01));
+        assert!(damaged.iter().any(|s| s.abs() > 0.01));
+        assert_ne!(healthy, damaged);
+        let difference = |samples: &[f32]| healthy.iter().zip(samples)
+            .map(|(clean, sample)| (clean - sample).abs()).sum::<f32>();
+        assert!(difference(&worn) > 100.0, "a damaged string should sound clearly different");
+        assert!(difference(&damaged) > difference(&worn) * 1.1,
+            "further damage should audibly increase distortion");
+        assert!(damaged.iter().all(|s| s.is_finite() && s.abs() < 1.0));
     }
 
     #[test]

@@ -347,6 +347,9 @@ pub struct EnvironmentMesh {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DestructibleCover {
+    /// Stable scene-local name for interactive props attached to this cover.
+    #[serde(default)]
+    pub id: Option<String>,
     pub position: [f32; 3],
     pub size: [f32; 3],
     pub material: String,
@@ -391,6 +394,10 @@ pub enum CoverForm {
     Pylon,
     Capacitor,
     Relay,
+    Piano,
+    Console,
+    Speaker,
+    Bench,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -525,6 +532,55 @@ pub fn compile_destructibles(style: &StyleProfile, covers: &[DestructibleCover])
                         shapes.push(VoxelShape { size: [cell[0] * 0.78, cell[1] * 0.11, cell[2] * 0.17],
                             position: [center[0], center[1] + cell[1] * 0.20, center[2]], ..body.clone() });
                     }
+                    CoverForm::Piano => {
+                        // Each cabinet bay can break independently. The
+                        // interactive keyboard is positioned just in front.
+                        shapes.push(VoxelShape { size: [cell[0] * 0.98, cell[1] * 0.76, cell[2] * 0.75],
+                            position: [center[0], center[1] + cell[1] * 0.03, center[2] - cell[2] * 0.10], ..body.clone() });
+                        shapes.push(VoxelShape { size: [cell[0] * 1.02, cell[1] * 0.12, cell[2] * 1.20],
+                            position: [center[0], center[1] + cell[1] * 0.46, center[2]], ..body.clone() });
+                        shapes.push(VoxelShape { size: [cell[0] * 0.88, cell[1] * 0.09, cell[2] * 0.40],
+                            position: [center[0], center[1] + cell[1] * 0.18, center[2] + cell[2] * 0.37],
+                            material: cover.trim.clone().unwrap_or_else(|| cover.material.clone()), ..body.clone() });
+                    }
+                    CoverForm::Console => {
+                        // Freestanding control desk with a recessed face and
+                        // broad work surface, useful as waist-high cover.
+                        for side in [-0.38, 0.38] {
+                            shapes.push(VoxelShape { size: [cell[0] * 0.14, cell[1] * 0.70, cell[2] * 0.68],
+                                position: [center[0] + side * cell[0], center[1] - cell[1] * 0.15, center[2]], ..body.clone() });
+                        }
+                        shapes.push(VoxelShape { size: [cell[0], cell[1] * 0.17, cell[2]],
+                            position: [center[0], center[1] + cell[1] * 0.38, center[2]], ..body.clone() });
+                        shapes.push(VoxelShape { size: [cell[0] * 0.70, cell[1] * 0.12, cell[2] * 0.62],
+                            position: [center[0], center[1] + cell[1] * 0.48, center[2]],
+                            material: cover.trim.clone().unwrap_or_else(|| cover.material.clone()), ..body.clone() });
+                        shapes.push(VoxelShape { size: [cell[0] * 0.88, cell[1] * 0.20, cell[2] * 0.15],
+                            position: [center[0], center[1] - cell[1] * 0.20, center[2] + cell[2] * 0.39], ..body.clone() });
+                    }
+                    CoverForm::Speaker => {
+                        shapes.push(VoxelShape { size: [cell[0] * 0.95, cell[1] * 0.96, cell[2] * 0.88], ..body.clone() });
+                        // Two dark recessed drivers and a bright horn read as
+                        // sound equipment even from the fight camera.
+                        for rise in [-0.20, 0.19] {
+                            shapes.push(VoxelShape { size: [cell[0] * 0.72, cell[1] * 0.31, cell[2] * 0.06],
+                                position: [center[0], center[1] + cell[1] * rise, center[2] + cell[2] * 0.46],
+                                material: cover.trim.clone().unwrap_or_else(|| cover.material.clone()), ..body.clone() });
+                        }
+                        shapes.push(VoxelShape { size: [cell[0] * 1.04, cell[1] * 0.06, cell[2] * 1.02],
+                            position: [center[0], center[1] + cell[1] * 0.47, center[2]], ..body.clone() });
+                    }
+                    CoverForm::Bench => {
+                        for side in [-0.38, 0.38] {
+                            shapes.push(VoxelShape { size: [cell[0] * 0.13, cell[1] * 0.72, cell[2] * 0.72],
+                                position: [center[0] + side * cell[0], center[1] - cell[1] * 0.14, center[2]], ..body.clone() });
+                        }
+                        shapes.push(VoxelShape { size: [cell[0], cell[1] * 0.20, cell[2] * 0.85],
+                            position: [center[0], center[1] + cell[1] * 0.22, center[2] + cell[2] * 0.04],
+                            material: cover.trim.clone().unwrap_or_else(|| cover.material.clone()), ..body.clone() });
+                        shapes.push(VoxelShape { size: [cell[0], cell[1] * 0.45, cell[2] * 0.14],
+                            position: [center[0], center[1] + cell[1] * 0.24, center[2] - cell[2] * 0.37], ..body.clone() });
+                    }
                 }
                 let mut fine = style.clone();
                 fine.voxel_size = fine.voxel_size.min(0.10);
@@ -540,22 +596,39 @@ pub fn compile_destructibles(style: &StyleProfile, covers: &[DestructibleCover])
                         ..body.clone()
                     };
                     let mut base_shapes = vec![base];
-                    for x in [-0.32, 0.32] {
-                        for z in [-0.32, 0.32] {
-                            base_shapes.push(VoxelShape { kind: ShapeKind::Cone,
-                                position: [center[0] + x * cell[0], ground + 0.25, center[2] + z * cell[2]],
-                                size: [cell[0] * 0.24, 0.30, cell[2] * 0.24],
-                                material: cover.material.clone(), ..body.clone() });
+                    if cover.form == CoverForm::Piano {
+                        // A wrecked instrument leaves its timber frame and
+                        // brass string pins, rather than electrical spikes.
+                        for x in [-0.42, 0.42] {
+                            base_shapes.push(VoxelShape { kind: ShapeKind::Box,
+                                position: [center[0] + x * cell[0], ground + 0.22, center[2]],
+                                size: [cell[0] * 0.10, 0.30, cell[2] * 0.90],
+                                ..body.clone() });
                         }
+                        for x in [-0.27, 0.0, 0.27] {
+                            base_shapes.push(VoxelShape { kind: ShapeKind::Box,
+                                position: [center[0] + x * cell[0], ground + 0.20, center[2] + cell[2] * 0.28],
+                                size: [cell[0] * 0.07, 0.12, cell[2] * 0.12],
+                                material: conductor.clone(), ..body.clone() });
+                        }
+                    } else {
+                        for x in [-0.32, 0.32] {
+                            for z in [-0.32, 0.32] {
+                                base_shapes.push(VoxelShape { kind: ShapeKind::Cone,
+                                    position: [center[0] + x * cell[0], ground + 0.25, center[2] + z * cell[2]],
+                                    size: [cell[0] * 0.24, 0.30, cell[2] * 0.24],
+                                    material: cover.material.clone(), ..body.clone() });
+                            }
+                        }
+                        base_shapes.push(VoxelShape { kind: ShapeKind::RingFloor,
+                            position: [center[0], ground + 0.20, center[2]],
+                            size: [cell[0] * 0.72, 0.055, cell[2] * 0.72],
+                            material: conductor.clone(), ..body.clone() });
+                        base_shapes.push(VoxelShape { kind: ShapeKind::Cylinder,
+                            position: [center[0], ground + 0.19, center[2]],
+                            size: [cell[0] * 0.22, 0.11, cell[2] * 0.22],
+                            material: conductor, ..body.clone() });
                     }
-                    base_shapes.push(VoxelShape { kind: ShapeKind::RingFloor,
-                        position: [center[0], ground + 0.20, center[2]],
-                        size: [cell[0] * 0.72, 0.055, cell[2] * 0.72],
-                        material: conductor.clone(), ..body.clone() });
-                    base_shapes.push(VoxelShape { kind: ShapeKind::Cylinder,
-                        position: [center[0], ground + 0.19, center[2]],
-                        size: [cell[0] * 0.22, 0.11, cell[2] * 0.22],
-                        material: conductor, ..body.clone() });
                     compile_environment(&fine, &base_shapes)?.meshes
                 } else { Vec::new() };
                 // The laser stops at this disc. Match the visible plinth or
@@ -626,7 +699,7 @@ pub fn compile_environment(style: &StyleProfile, shapes: &[VoxelShape]) -> Resul
             .chain(shape.size.iter())
             .chain(shape.spacing.iter())
             .any(|x| !x.is_finite())
-            || shape.size.iter().any(|&x| x <= 0.0 || x > 32.0)
+            || shape.size.iter().any(|&x| x <= 0.0 || x > 40.0)
             || shape.position.iter().any(|x| x.abs() > 32.0)
             || shape.repeat.iter().any(|&r| r == 0 || r > 32)
             || shape
@@ -810,7 +883,7 @@ mod tests {
     #[test]
     fn cover_compiles_into_independent_hit_pieces() {
         let style = StyleProfile::default();
-        let cover = DestructibleCover { position: [0.0, 0.7, 0.0], size: [1.8, 1.4, 1.8],
+        let cover = DestructibleCover { id: None, position: [0.0, 0.7, 0.0], size: [1.8, 1.4, 1.8],
             material: "metal".into(), trim: Some("trim".into()), pieces: [2, 2], health: 3,
             form: CoverForm::Armored, break_style: BreakStyle::Topple, repairable: true,
             repair_animation: None, hazard_material: None };
@@ -829,7 +902,8 @@ mod tests {
         let mut pylon = cover.clone();
         pylon.form = CoverForm::Pylon;
         assert!(!compile_destructibles(&style, &[pylon]).unwrap()[0].meshes.is_empty());
-        for form in [CoverForm::Capacitor, CoverForm::Relay] {
+        for form in [CoverForm::Capacitor, CoverForm::Relay, CoverForm::Piano,
+            CoverForm::Console, CoverForm::Speaker, CoverForm::Bench] {
             let mut variant = cover.clone();
             variant.form = form;
             let built = compile_destructibles(&style, &[variant]).unwrap();

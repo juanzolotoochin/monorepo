@@ -19,6 +19,7 @@ pub mod combat;
 mod economy;
 mod haulers;
 pub mod memory;
+pub mod piano;
 pub mod piles;
 
 use std::collections::BTreeMap;
@@ -208,6 +209,14 @@ pub struct Settlement {
     /// Where the player starts and respawns.
     pub spawn: FxVec2,
     pub spawn_height: Fx,
+    /// Piano locations and held notes are saved and hashed with the world so
+    /// every peer renders and hears the same performance.
+    #[serde(default)]
+    pub pianos: Vec<FxVec2>,
+    #[serde(default)]
+    pub piano_notes: Vec<piano::PianoNote>,
+    #[serde(default)]
+    pub piano_serial: u64,
     pub piles: Option<piles::PileLab>,
     pub memory: Option<memory::Memory>,
 }
@@ -227,6 +236,8 @@ pub struct SceneSetup {
     pub obstacles: Vec<Disc>,
     /// Independently damaged cover pieces, in stable scene order.
     pub destructibles: Vec<crate::terrain::Destructible>,
+    /// Piano locations in scene coordinates, in the same order as the pack.
+    pub pianos: Vec<FxVec2>,
     /// Obstacles that open when the memory trial's door unlocks.
     pub doors: Vec<Disc>,
     pub surfaces: Vec<crate::terrain::Surface>,
@@ -429,6 +440,9 @@ impl Settlement {
             events: Vec::new(),
             spawn: FxVec2::ZERO,
             spawn_height: Fx::ZERO,
+            pianos: Vec::new(),
+            piano_notes: Vec::new(),
+            piano_serial: 0,
             piles: None,
             memory: None,
             scenario: scenario.id.clone(),
@@ -489,6 +503,7 @@ impl Settlement {
         terrain.revision += 1;
         settlement.spawn = at([setup.spawn[0], setup.spawn[2]]);
         settlement.spawn_height = setup.spawn[1];
+        settlement.pianos = setup.pianos.iter().map(|&position| at([position.x, position.y])).collect();
         if let Some(player) = settlement.player() {
             let a = &mut settlement.agents[player as usize];
             a.position = settlement.spawn;

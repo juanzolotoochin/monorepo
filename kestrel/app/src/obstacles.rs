@@ -60,7 +60,11 @@ pub fn scene_obstacles(pack: &ScenePack, collision_radius: impl Fn(&Instance) ->
         });
     }
     for piano in &scene.pianos {
-        discs.push(Disc { center: Vec3::from_array(piano.position), radius: 1.15 });
+        // A damage-linked piano gets its collision from the destructible
+        // cabinet pieces, so shots can actually strike and break it.
+        if piano.damage_asset.is_none() {
+            discs.push(Disc { center: Vec3::from_array(piano.position), radius: 1.15 });
+        }
     }
     if scene.industrial {
         discs.push(REACTOR);
@@ -115,7 +119,7 @@ mod tests {
                 ("field", 0, 0),
                 ("forest-outpost", 0, 0),
                 ("jetpack-lab", 0, 0),
-                ("laser-pit", 110, 0),
+                ("laser-pit", 134, 0),
                 ("mining-deck", 14, 0),
                 ("moonlit-glade", 24, 0),
                 ("pile-lab", 2, 0),

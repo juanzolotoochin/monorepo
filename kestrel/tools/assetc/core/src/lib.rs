@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 pub use style::*;
 
-pub const VERSION: u32 = 15;
+pub const VERSION: u32 = 16;
 pub type Result<T> = std::result::Result<T, String>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -259,6 +259,9 @@ pub struct Piano {
     pub position: [f32; 3],
     #[serde(default)]
     pub yaw: f32,
+    /// ID of the destructible cabinet that this keyboard belongs to.
+    #[serde(default)]
+    pub damage_asset: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -388,6 +391,28 @@ impl ScenePack {
             || self.scene.pianos.iter().any(|p| !p.yaw.is_finite() || p.position.iter().any(|v| !v.is_finite()))
         {
             return Err("invalid scene header or instance count".into());
+        }
+        let mut cover_ids = std::collections::BTreeSet::new();
+        for cover in &self.scene.destructibles {
+            if let Some(id) = &cover.id {
+                if id.is_empty() || !id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                    || !cover_ids.insert(id.as_str()) {
+                    return Err("duplicate or invalid destructible asset ID".into());
+                }
+            }
+        }
+        for piano in &self.scene.pianos {
+            if let Some(id) = &piano.damage_asset {
+                let Some(cover) = self.scene.destructibles.iter().find(|cover| cover.id.as_ref() == Some(id)) else {
+                    return Err(format!("piano references missing damage asset {id}"));
+                };
+                if cover.form != CoverForm::Piano || piano.yaw != 0.0
+                    || (cover.position[0] - piano.position[0]).abs() > 0.1
+                    || (cover.position[2] - piano.position[2]).abs() > 0.6
+                    || (cover.position[1] - cover.size[1] * 0.5 - piano.position[1]).abs() > 0.1 {
+                    return Err("piano damage asset must fit the unrotated piano cabinet".into());
+                }
+            }
         }
         if let Some(env) = &self.environment {
             if env.lights.len() > 64 {
@@ -595,8 +620,8 @@ impl ScenePack {
                     || (0..2).any(|i| {
                         !p.min[i].is_finite()
                             || !p.max[i].is_finite()
-                            || p.min[i] < -16.0
-                            || p.max[i] > 16.0
+                            || p.min[i] < -20.0
+                            || p.max[i] > 20.0
                             || p.min[i] >= p.max[i]
                     })
                 {
@@ -839,7 +864,9 @@ mod tests {
         t.platforms[0].min = [-15.0, -15.0];
         t.platforms[0].max = [15.0, 15.0];
         assert!(pack.validate().is_ok());
-        pack.scene.terrain.as_mut().unwrap().platforms[0].max[0] = 17.0;
+        pack.scene.terrain.as_mut().unwrap().platforms[0].max[0] = 18.0;
+        assert!(pack.validate().is_ok());
+        pack.scene.terrain.as_mut().unwrap().platforms[0].max[0] = 21.0;
         assert!(pack.validate().is_err());
     }
 }
