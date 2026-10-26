@@ -135,7 +135,7 @@ pub struct CarryVisual {
     /// Whose backpack: another player's avatar, or (none) this player's.
     agent: Option<u16>,
     units: u32,
-    material: Option<Mineral>,
+    minerals: Vec<(Mineral, u32)>,
     hidden: u32,
 }
 #[derive(Clone, Copy)]
@@ -209,10 +209,12 @@ pub fn mirror(service: Res<SessionService>, mirror: Res<WorldMirror>, mut lab: R
         .collect();
     lab.collector = sim.collector.as_ref().map(|c| mirror.to_view(c.position).with_y(ground(c.position)));
     lab.collected = sim.collected();
-    // An avatar's minerals, in its cargo beside any depot items.
+    // An avatar's minerals, in its cargo beside any depot items, within its
+    // one capacity.
     let view = |agent: u16| {
-        let (material, units) = settlement.carried_minerals(agent);
-        crate::pile_model::Cargo { material: material.map(mineral), units, capacity: sim.capacity }
+        let minerals = settlement.carried_minerals(agent).into_iter().enumerate().map(|(m, n)| (mineral(m as u8), n));
+        let capacity = settlement.agents.get(agent as usize).map_or(0, |a| a.carry.inventory.capacity);
+        crate::pile_model::Cargo::new(minerals, capacity)
     };
     let me = mirror.player();
     let mine = me.and_then(|m| sim.hauler(m));
@@ -315,14 +317,12 @@ pub fn input(
         }
         return;
     }
-    let collect = !carrying || keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     let action = if let Some(id) = pile {
         let p = &stock.piles[&id];
-        if carrying && stock.cargo.material != Some(p.material) {
-            lab.notice = "Different minerals stay separate. Drop your cargo first.".into();
-            return;
-        }
-        if !carrying && p.units == 0 {
+        // A pile of a mineral carried takes it back; any other is collected
+        // beside the cargo.
+        let collect = !stock.cargo.holds(p.material) || keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+        if collect && p.units == 0 {
             lab.notice = "Empty output. Click its dispenser to add ore.".into();
             return;
         }

@@ -515,16 +515,14 @@ impl Settlement {
         if let Some(p) = &setup.piles {
             // The mine's minerals become items, after the scenario's.
             let first_mineral = settlement.add_items(&crate::mine::MINERAL_IDS)?;
-            // Until a player has one capacity (`INVENTORY_HANDOFF.md`, step
-            // 7), its cargo holds depot items within the scenario's capacity
-            // and minerals within the lab's, beside each other: its capacity
-            // is the two added up, so it never refuses either.
+            // A player has one capacity, for depot items and minerals in any
+            // mix: the larger of the scenario's and the lab's.
             for a in settlement.agents.iter_mut().filter(|a| a.avatar().is_some()) {
-                a.carry.inventory.capacity = a.carry.inventory.capacity.saturating_add(p.capacity);
+                a.carry.inventory.capacity = a.carry.inventory.capacity.max(p.capacity);
             }
             let dispensers: Vec<(u8, FxVec2)> = p.dispensers.iter().map(|&(m, o)| (m, at(o))).collect();
             let piles: Vec<(u8, FxVec2, u32)> = p.piles.iter().map(|&(m, pos, units)| (m, at(pos), units)).collect();
-            let mut lab = piles::PileLab::new(center, p.capacity, settlement.items.len(), first_mineral, &dispensers, &piles);
+            let mut lab = piles::PileLab::new(center, settlement.items.len(), first_mineral, &dispensers, &piles);
             for &(mineral, _, units) in &piles {
                 settlement.accounts[lab.item(mineral) as usize].initial += units as u64;
             }
@@ -603,20 +601,17 @@ impl Settlement {
         self.piles.as_ref().map_or(self.items.len(), |lab| lab.first_mineral as usize)
     }
 
-    /// An agent's depot cargo: its units of depot items and their capacity,
-    /// leaving out a player's minerals and their room (see `from_scene`).
-    pub fn depot_cargo<'a>(&self, a: &'a AgentState) -> (&'a [u32], u32) {
-        let inventory = &a.carry.inventory;
-        let minerals = self.piles.as_ref().filter(|_| a.avatar().is_some()).map_or(0, |lab| lab.capacity);
-        (&inventory.counts[..self.depot_items()], inventory.capacity.saturating_sub(minerals))
+    /// An agent's depot items: its cargo's units of each, leaving out a
+    /// player's minerals, which the pile views show.
+    pub fn depot_cargo<'a>(&self, a: &'a AgentState) -> &'a [u32] {
+        &a.carry.inventory.counts[..self.depot_items()]
     }
 
-    /// The minerals `agent` carries: which one, by its mineral number, and
-    /// how many units.
-    pub fn carried_minerals(&self, agent: AgentIx) -> (Option<u8>, u32) {
-        let (Some(lab), Some(a)) = (self.piles.as_ref(), self.agents.get(agent as usize)) else { return (None, 0) };
-        let (item, units) = lab.carried(&a.carry.inventory);
-        (item.map(|i| lab.mineral(i)), units)
+    /// The minerals `agent` carries, units by mineral number (empty without
+    /// piles).
+    pub fn carried_minerals(&self, agent: AgentIx) -> Vec<u32> {
+        let (Some(lab), Some(a)) = (self.piles.as_ref(), self.agents.get(agent as usize)) else { return Vec::new() };
+        lab.carried_by_mineral(&a.carry.inventory)
     }
 
     pub fn item_index(&self, id: &str) -> Option<ItemIx> {
@@ -819,13 +814,6 @@ impl Settlement {
             }
             if (0..items as ItemIx).any(|i| inventory.count(i) > 0 && !lab.is_mineral(i)) {
                 return Err(format!("{name} holds an item that isn't a mineral"));
-            }
-        }
-        // The pile job's rules for a player's minerals, until step 7.
-        for a in &self.agents {
-            let minerals = (0..items as ItemIx).filter(|&i| lab.is_mineral(i) && a.carry.inventory.count(i) > 0).count();
-            if minerals > 1 || lab.carried(&a.carry.inventory).1 > lab.capacity {
-                return Err(format!("agent {} carries more minerals than the lab allows", a.id));
             }
         }
         if !lab.conserved(self.agents.iter().map(|a| &a.carry.inventory)) {

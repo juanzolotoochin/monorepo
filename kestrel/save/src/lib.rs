@@ -55,7 +55,9 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///     are in its `Carry` (the lab's `Hauler` has no cargo). `InventoryRef`
 ///     gains `Pile` and `Collector`; pending messages have a `pile_carry`
 ///     queue of `CarryUnit` for `PileStep`.
-pub const FORMAT_VERSION: u32 = 17;
+/// 18: a player's cargo has one capacity, the larger of the scenario's and
+///     the pile lab's, for any mix; the lab keeps no capacity of its own.
+pub const FORMAT_VERSION: u32 = 18;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

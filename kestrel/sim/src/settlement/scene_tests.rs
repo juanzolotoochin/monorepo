@@ -80,9 +80,9 @@ impl Scene {
         self.s().piles.as_ref().unwrap()
     }
 
-    /// The minerals the player carries: which one, and how many units.
-    fn cargo(&self) -> (Option<u8>, u32) {
-        self.s().carried_minerals(self.agent())
+    /// Mineral units the player carries, of every mineral.
+    fn cargo(&self) -> u32 {
+        self.s().carried_minerals(self.agent()).iter().sum()
     }
 
     /// Mineral units in piles, cargo and the collector.
@@ -419,7 +419,7 @@ fn pile_lab_hauls_exactly_four_units() {
     finish(&mut scene);
     let l = scene.hauler();
     assert_eq!(l.last_error, None);
-    assert_eq!(scene.cargo().1, 4);
+    assert_eq!(scene.cargo(), 4);
     assert_eq!(scene.total(), 104);
     assert_eq!(scene.lab().piles[&0].units(), 4);
     assert_ne!(scene.avatar().body.position, start, "walked before transferring");
@@ -430,7 +430,7 @@ fn pile_lab_hauls_exactly_four_units() {
     finish(&mut scene);
     let l = scene.hauler();
     assert_eq!(l.last_error, None);
-    assert_eq!(scene.cargo().1, 0);
+    assert_eq!(scene.cargo(), 0);
     assert_eq!(scene.total(), 104);
     assert_eq!(scene.lab().piles[&5].units(), 4);
     assert!(scene.conserved());
@@ -460,14 +460,14 @@ fn blocked_drops_are_rejected_without_losing_cargo() {
         }
         scene.sim.step(&[]);
     }
-    let carried = scene.cargo().1;
+    let carried = scene.cargo();
     assert_eq!(carried, 8);
     // Off the deck.
     let edge = scene.at(7.5, 7.5);
     scene.command(CommandKind::Pile { agent, action: PileAction::Drop(edge), pace: Fx::ZERO, approach: None });
     let l = scene.hauler();
     assert!(l.job.is_none() && l.last_error.is_some());
-    assert_eq!(scene.cargo().1, carried);
+    assert_eq!(scene.cargo(), carried);
     assert!(scene.conserved());
 }
 
@@ -727,7 +727,7 @@ fn dug_ore_piles_up_and_goes_to_the_collector() {
     };
     haul(&mut scene, PileAction::Pickup(pile));
     assert_eq!(scene.hauler().last_error, None, "the pile is in reach from the pit");
-    assert_eq!(scene.cargo().1, units);
+    assert_eq!(scene.cargo(), units);
     // There's no walking to the collector from the pit: fly out first.
     scene.command(pile_action(PileAction::Deliver));
     assert!(scene.hauler().last_error.is_some(), "no route out of the pit on foot");
@@ -741,7 +741,7 @@ fn dug_ore_piles_up_and_goes_to_the_collector() {
     haul(&mut scene, PileAction::Deliver);
     let lab = scene.s().piles.as_ref().unwrap();
     assert_eq!(scene.hauler().last_error, None);
-    assert_eq!(scene.cargo().1, 0);
+    assert_eq!(scene.cargo(), 0);
     assert_eq!(lab.collected()[material as usize], units);
     assert!(scene.conserved());
 }
@@ -782,14 +782,112 @@ fn two_players_haul_their_own_loads() {
     };
     both(&mut scene, haul(a, PileAction::Pickup(0)), haul(b, PileAction::Pickup(1)));
     let lab = scene.lab();
-    assert_eq!(scene.s().carried_minerals(a), (Some(0), 10));
-    assert_eq!(scene.s().carried_minerals(b), (Some(1), 10));
+    assert_eq!(scene.s().carried_minerals(a), vec![10, 0, 0]);
+    assert_eq!(scene.s().carried_minerals(b), vec![0, 10, 0]);
     assert!(lab.piles.is_empty());
     both(&mut scene, haul(a, PileAction::Deliver), haul(b, PileAction::Deliver));
     let lab = scene.lab();
     assert_eq!(lab.hauler(a).unwrap().last_error, None);
     assert_eq!(lab.hauler(b).unwrap().last_error, None);
     assert_eq!(lab.collected(), vec![10, 10, 0]);
+    assert!(scene.conserved());
+}
+
+/// A pile lab with a supply scenario: a wood depot beside the spawn, and a
+/// player whose scenario capacity (8) is below the lab's (12).
+fn supply_pile_lab() -> SceneSetup {
+    use content::scenario::{Agent, CargoLayout, Depot, Item, Scenario, Stack};
+    let p = |x: f64, y: f64| [fx(x), fx(y)];
+    let scenario = Scenario {
+        extent: Fx::from_int(8),
+        id: "supply-piles".into(),
+        weapons: vec![],
+        weapon_tuning: vec![],
+        items: vec![Item { id: "wood".into(), label: "WOOD".into(), skin: "wood".into(), scale: 0.2 }],
+        depots: vec![Depot {
+            id: "forest".into(),
+            label: "FOREST".into(),
+            position: p(0.5, 1.0),
+            capacity: 32,
+            stock: vec![Stack { item: "wood".into(), units: 10 }],
+            stock_anchor: [0.0, 0.08, -0.6],
+            stock_layout: CargoLayout::depot(),
+        }],
+        sources: vec![],
+        links: vec![],
+        agents: vec![Agent {
+            controlled: true,
+            id: "player".into(),
+            label: "YOU".into(),
+            character: "exosuit".into(),
+            position: p(0.0, 1.0),
+            capacity: 8,
+            links: vec![],
+            cargo_anchor: [0.0, 0.65, -0.19],
+            cargo_layout: CargoLayout::default(),
+            equipment: None,
+        }],
+        producers: vec![],
+        defenders: vec![],
+        waves: vec![],
+        base_health: 1,
+        player_health: 0,
+    };
+    SceneSetup { scenario: Some(scenario), ..pile_lab() }
+}
+
+/// A player's cargo has one capacity, the larger of the scenario's and the
+/// lab's, and holds wood and minerals in any mix: a pickup stops at the one
+/// total, and a second mineral goes in beside the first.
+#[test]
+fn a_player_carries_wood_and_minerals_within_one_capacity() {
+    let mut scene = Scene::new(supply_pile_lab());
+    let agent = scene.agent();
+    let s = scene.s();
+    let (depot, wood) = (s.depot_index("forest").unwrap(), s.item_index("wood").unwrap());
+    assert_eq!(scene.avatar().carry.inventory.capacity, 12, "max(8, 12)");
+    scene.command(CommandKind::Transfer { agent, depot, item: wood, units: 3, deposit: false });
+    for _ in 0..ms(10_000) {
+        let carry = &scene.avatar().carry;
+        if carry.job.is_none() && carry.inventory.total_in() == 0 {
+            break;
+        }
+        scene.sim.step(&[]);
+    }
+    assert_eq!(scene.avatar().carry.inventory.count(wood), 3, "took the wood at the dock");
+    assert!(scene.conserved());
+
+    let haul = |scene: &mut Scene, action| {
+        scene.command(CommandKind::Pile { agent, action, pace: Fx::ZERO, approach: None });
+        for _ in 0..ms(30_000) {
+            if scene.hauler().job.is_none() {
+                return;
+            }
+            scene.sim.step(&[]);
+        }
+        panic!("{action:?} never finished");
+    };
+    // Amber ore from the 8-unit pile, beside the wood.
+    haul(&mut scene, PileAction::PickupAmount(2, 5));
+    assert_eq!(scene.hauler().last_error, None);
+    assert_eq!(scene.s().carried_minerals(agent), vec![5, 0, 0]);
+    assert_eq!(scene.avatar().carry.inventory.count(wood), 3);
+    // Blue crystal beside the amber, up to the one total: 12 - 3 - 5.
+    haul(&mut scene, PileAction::Pickup(3));
+    assert_eq!(scene.hauler().last_error, None);
+    assert_eq!(scene.s().carried_minerals(agent), vec![5, 4, 0]);
+    assert_eq!(scene.lab().piles[&3].units(), 20);
+    assert_eq!(scene.avatar().carry.inventory.free(), 0);
+    assert!(scene.conserved());
+    // Full: no more minerals, and no more wood.
+    scene.command(CommandKind::Pile { agent, action: PileAction::Pickup(4), pace: Fx::ZERO, approach: None });
+    assert_eq!(scene.hauler().last_error.as_deref(), Some("Carrier is full. Deposit before collecting more"));
+    assert_eq!(scene.s().transfer_limit(agent as usize, depot as usize, wood as usize, false), 0);
+    // Each mineral goes back to a pile of its own.
+    haul(&mut scene, PileAction::Deposit(3));
+    assert_eq!(scene.hauler().last_error, None);
+    assert_eq!(scene.s().carried_minerals(agent), vec![5, 0, 0]);
+    assert_eq!(scene.s().transfer_limit(agent as usize, depot as usize, wood as usize, false), 4);
     assert!(scene.conserved());
 }
 
@@ -849,7 +947,7 @@ fn releasing_keeps_an_accepted_haul_and_its_route() {
         scene.sim.step(&[]);
     }
     assert!(scene.hauler().job.is_none() && scene.hauler().last_error.is_none(), "the haul finished normally");
-    assert!(scene.cargo().1 > 0);
+    assert!(scene.cargo() > 0);
     assert!(scene.conserved());
 }
 

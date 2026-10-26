@@ -17,7 +17,6 @@ use serde::{Deserialize, Serialize};
 use super::combat::{Event, TossEnd};
 use super::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
 use super::action::{Action, View};
-use super::piles::PileLab;
 use super::{AgentIx, DepotState, InventoryRef, ItemIx, Settlement};
 use crate::messages::{ActionMessages, CarryUnit, DropHaul, DropNotes, Messages, ReserveStock, RestartMemory, StockChange, Strike};
 use crate::nav::{self, angle_between, distance};
@@ -632,7 +631,7 @@ impl Settlement {
 
     /// The most units `agent` could move between its cargo and `depot` now.
     pub fn transfer_limit(&self, agent: usize, depot: usize, item: usize, deposit: bool) -> u32 {
-        self.agents.get(agent).map_or(0, |a| transfer_limit(&a.carry, &self.depots, self.piles.as_ref(), self.depot_items(), depot, item, deposit))
+        self.agents.get(agent).map_or(0, |a| transfer_limit(&a.carry, &self.depots, self.depot_items(), depot, item, deposit))
     }
 }
 
@@ -678,7 +677,7 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
         }
         Action::Transfer { depot, item, units, deposit } => {
             let busy = carry.job.is_some() || carry.inventory.total_in() > 0 || view.leaving_cargo();
-            if !busy && units > 0 && transfer_limit(carry, view.depots, view.piles, view.items, depot as usize, item as usize, deposit) >= units {
+            if !busy && units > 0 && transfer_limit(carry, view.depots, view.items, depot as usize, item as usize, deposit) >= units {
                 let direction = if deposit { Direction::Deposit } else { Direction::Pickup };
                 let job = CarryJob { other: InventoryRef::Depot(depot), item, direction, remaining: units, next_tick: view.tick };
                 // The job holds its units in the cargo now, and at the depot
@@ -725,8 +724,9 @@ fn drop_haul(avatar: &mut AvatarState, view: &View, out: &mut ActionMessages) {
 }
 
 /// See `Settlement::transfer_limit`. `items` are the depot items
-/// (`Settlement::depot_items`): minerals don't go to depots.
-fn transfer_limit(carry: &Carry, depots: &[DepotState], piles: Option<&PileLab>, items: usize, depot: usize, item: usize, deposit: bool) -> u32 {
+/// (`Settlement::depot_items`): minerals don't go to depots. The cargo's
+/// one capacity holds depot items and minerals in any mix.
+fn transfer_limit(carry: &Carry, depots: &[DepotState], items: usize, depot: usize, item: usize, deposit: bool) -> u32 {
     let Some(d) = depots.get(depot) else { return 0 };
     if item >= items {
         return 0;
@@ -736,19 +736,8 @@ fn transfer_limit(carry: &Carry, depots: &[DepotState], piles: Option<&PileLab>,
         carry.inventory.available(item as ItemIx).min(d.inventory.free())
     } else {
         // Space not taken by units carried, flying in or held by a job.
-        depot_room(&carry.inventory, piles, items).min(d.inventory.available(item as ItemIx))
+        carry.inventory.free().min(d.inventory.available(item as ItemIx))
     }
-}
-
-/// Room in a player's cargo for depot items. In a pile scene its minerals
-/// sit beside them, each within its own capacity, and its cargo's capacity
-/// is the two added up (`Settlement::from_scene`), so the lab's capacity
-/// and the minerals are left out here. Minerals are never reserved in a
-/// cargo, so `free()` is this without piles.
-fn depot_room(cargo: &Inventory, piles: Option<&PileLab>, items: usize) -> u32 {
-    let Some(lab) = piles else { return cargo.free() };
-    let used: u32 = (0..items).map(|i| cargo.counts[i] + cargo.reserved_in[i]).sum();
-    cargo.capacity.saturating_sub(lab.capacity).saturating_sub(used)
 }
 
 /// Sets a live avatar's intent. Walking off stops a dig; a `GoTo` plans its

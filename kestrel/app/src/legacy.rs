@@ -574,10 +574,7 @@ impl Simulation {
                     phase: format!("{:?}", a.hauler().map_or(s::Phase::Idle, |h| h.phase)),
                     // Depot items only: a player's minerals are drawn by the
                     // pile view.
-                    cargo: {
-                        let (units, capacity) = current.depot_cargo(a);
-                        inventory(units, capacity)
-                    },
+                    cargo: inventory(current.depot_cargo(a), a.carry.inventory.capacity),
                     trailer,
                 };
                 (a.id.clone(), state)

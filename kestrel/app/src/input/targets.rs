@@ -141,9 +141,7 @@ fn gather(world: &World) -> Vec<Target> {
             for (&id, pile) in &stock.piles {
                 let position = Vec3::new(pile.position[0], pile.height, pile.position[1]);
                 let surface = pile_radius(pile.units).max(0.55);
-                let verb = if cargo.units > 0 && cargo.material != Some(pile.material) {
-                    Err("Different minerals stay separate. Drop your cargo first.".into())
-                } else if cargo.units > 0 {
+                let verb = if cargo.holds(pile.material) {
                     Ok("DEPOSIT".into())
                 } else if pile.units == 0 {
                     Err("Empty output. Use its dispenser to add ore.".into())
