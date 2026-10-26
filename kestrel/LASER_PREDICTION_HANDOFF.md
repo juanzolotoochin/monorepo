@@ -24,6 +24,102 @@ authoritative where they differ.
 The deterministic simulation and the wire protocol stay unchanged. Work on the
 branch `network-lab-iteration`.
 
+## Notes from stage 1 (avatar prediction)
+
+Stage 1 landed on `kestrel-avatar-prediction`. See
+`AVATAR_PREDICTION_HANDOFF.md` for its results.
+
+### What exists
+
+- `Session::pending_commands()` (`session/src/lib.rs`) wraps
+  `Client::pending_commands()` (`net/src/client.rs`). It returns this
+  client's commands that haven't been simulated here yet, oldest first, as
+  `(requested_tick, &CommandKind)`. A host or replay returns none.
+- `Session::input_horizon()` wraps `Client::input_horizon()`: the tick a
+  command queued now asks for, `host_tick + one_way + input_delay`. `queue`
+  uses it too, so it is the one place to change the margin.
+- `Settlement::replay_avatar(agent, tick, terrain) -> Option<AvatarReplay>`
+  (`sim/src/settlement/prediction.rs`). The replay copies one player avatar
+  and never writes to the world. It provides:
+  - `apply(&CommandKind) -> bool`: the command's effect on this avatar only.
+    It returns false for GoTo and Pile commands, which it doesn't predict.
+  - `step()`: runs one tick.
+  - `step_with(commands)`: applies the commands, then runs the tick.
+  - `state()`, `tick()`, `settlement()` and `terrain()`.
+- The avatar's part of each command and of housekeeping is now in shared
+  `pub(super)` functions in `sim/src/settlement/avatar.rs`, used by both the
+  real sim and the replay:
+  - `set_intent`, `attack`, `start_queued`, `jump`, `jetpack`, `dig`,
+    `finish_dig`, `release`, `respawn`;
+  - `resolving(a, tick)`: the strike gate `read_avatar` uses (`!resolved`,
+    `resolve_at == tick`, `attack_ready <= tick`);
+  - `swing_resolved(a, tick, hits, def)`.
+- App: `prediction::AvatarPrediction` (`app/src/prediction.rs`) is a `Local`
+  of `follow_avatar` (`app/src/lockstep.rs`), which calls it through
+  `predict`. Every frame, `replay()` in `prediction.rs` replays the avatar
+  from the confirmed tick T to the drawn tick. Each pending command applies
+  on `max(requested, T)`.
+- Drawn time: the avatar is drawn between the predicted states at
+  `floor(drawn)` and `floor(drawn) + 1`. The drawn time follows the lowest
+  horizon of the last second on the frame clock, minus one frame and half a
+  tick, so a new command never changes a tick already drawn.
+- Corrections: a misprediction (the prediction for the drawn tick changed)
+  becomes a visual offset that halves every 50 ms and snaps past 1.5 u. It
+  is logged as `CorrectionKind::Mispredict` in `app/src/telemetry/network.rs`.
+  Add B3's laser misprediction kind next to it.
+
+### Hooking in the predicted shot (B)
+
+- `AvatarReplay::apply` already runs `Attack` through the sim's own
+  `avatar::attack` and `start_swing`, with the `has_weapon` and alive checks.
+  A press during a swing is queued, and `step()` starts it the same way
+  `avatar_housekeeping` does.
+- `step()` runs the avatar's own step, then the `resolving()` check. On a
+  resolving swing it sets `attack_ready = tick + cooldown` and marks the swing
+  resolved, with hits assumed 0 (a bow shot counts as 1). So attack gating is
+  already replicated.
+- To get the shot, have `step()` report what `resolving()` returned (the
+  swing) and the `AgentState` right after the avatar's own step, before it is
+  marked resolved. That is the state the real sim passes to
+  `strike_targets(me, a.position, swing.aim, swing.weapon, terrain)`.
+- Run `strike_targets` against `replay.settlement()` and `replay.terrain()`
+  with this player's agent replaced by that state, because `strike_targets`
+  reads the shooter's height from `agents[shooter]`. Either clone the
+  settlement once per shot or add a variant that takes the shooter's state.
+- The app's `replay()` replays the same ticks again every frame, so a
+  predicted shot is seen on many frames. Deduplicate by its tick, and emit it
+  once, when the drawn time first passes `resolve_at` (B4).
+- `attack_input` (`lockstep.rs`) still aims from the confirmed position
+  (`player_view_position`). The drawn avatar is about an input lead ahead, so
+  B4's "the beam comes out where the drawn avatar is" may need the aim taken
+  from the drawn position. That changes the gameplay command, so decide it
+  deliberately.
+- A pending click-to-move makes `apply` return false, and the app then draws
+  the confirmed avatar. A shot predicted during that time has nothing to
+  start from.
+
+### For C (adaptive input margin)
+
+- Detect late inputs at the drain in `Client::update` (`net/src/client.rs`,
+  `self.pending.drain(..mine…)`). Each drained entry's requested tick against
+  the tick whose turn contained it is exactly "applied later than requested".
+- The drain assumes a player's commands apply in send order, so requested
+  ticks must never go backwards. C3's clamp, at least the previous input's
+  tick, guarantees that. Today a drop in the one-way estimate between two
+  sends could break it (not observed in tests).
+- Change the margin in `Client::input_horizon` only. Prediction reads the
+  same value through `Session::input_horizon`, so the drawn tick follows
+  automatically.
+- The reproduction test is split in `app/src/lockstep.rs` tests:
+  `joined_player_movement_needs_no_corrections_under_latency` (no delay and
+  75 ± 20 ms) is enabled. `joined_player_movement_needs_no_corrections_at_100_ms`
+  is `#[ignore]`d only because the fixed 133 ms margin lets an occasional
+  input arrive one tick late at 100 ± 20 ms. On the seeded run, zig-zag has 1
+  late input and 1 kept 0.08 u mispredict. Once C lands, remove that ignore,
+  keeping the same pass condition and seed. The test already prints host late
+  inputs and client RTT per case. The planned 150 ± 20 ms and LAN cases fit
+  `assert_no_corrections`.
+
 ## How a laser shot works today
 
 1. `PlayerControl::strike` (`app/src/lockstep.rs`) queues
