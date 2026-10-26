@@ -132,9 +132,25 @@
 - **Found in:** task 6 of `kestrel/ABILITY_PREDICTION_HANDOFF.md`
   (branch `kestrel-ability-prediction`).
 
-## Flash the player's screen or body when it is hurt
+## Look at the hurt flash in play
 
 - **Status:** open
+- **Why:** the red screen-edge flash (`app/src/hurt.rs`) is unit tested
+  for when it fires, but nobody has seen it drawn. Its strength (0.6
+  alpha at the corners), its clear middle (55%) and its fade (0.45 s) are
+  guesses.
+- **What to do:** get hit by another player's laser in the laser pit, and
+  by a ghoul in the forest or arena (player health 6), and tune the
+  constants. Check it stays under the HUD
+  text and doesn't show in captures where nobody is hurt.
+- **Where:** `kestrel/app/src/hurt.rs`.
+- **Found in:** branch `kestrel-ghoul-followups`.
+
+## Done
+
+### Flash the player's screen or body when it is hurt
+
+- **Status:** done (branch `kestrel-ghoul-followups`)
 - **Why:** nothing shows the local player being hurt beyond its nametag's
   health, a sound and (for a ghoul hit) blood and camera shake. A laser hit
   on a player plays only `LaserImpact`. `effects::Feedback::flash` is set by
@@ -144,11 +160,15 @@
   damage (laser or ghoul): a red screen-edge flash from `Feedback::flash`,
   or an emissive flash on the actor's materials like `ImpactTarget` slots.
   Drive it from the confirmed health drop so every damage source gets it.
+- **Done:** `app/src/hurt.rs` draws a red radial-gradient UI node over the
+  screen's edges, fading over 0.45 s, when the local avatar's confirmed
+  health (`WorldMirror::current`) drops. A respawn or a new avatar doesn't
+  flash (`hurt`, unit tested). `Feedback::flash` was dead since it was
+  added (set on the player's own sword contacts, never read), so it is
+  removed. Not checked on screen.
 - **Where:** `kestrel/app/src/effects.rs` (`Feedback`), `settlement.rs`
   (the `ThreatSwing` presentation), `combat.rs`.
 - **Found in:** task 4 of `kestrel/GHOUL_ATTACK_HANDOFF.md`.
-
-## Done
 
 ### Decide whether a ghoul reaches a flying or busy player
 

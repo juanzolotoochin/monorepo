@@ -11,6 +11,7 @@ mod effects;
 mod event_prediction;
 mod flow;
 mod gameplay;
+mod hurt;
 mod impact;
 mod input;
 mod jetpack;

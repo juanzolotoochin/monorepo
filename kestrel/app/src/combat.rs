@@ -436,7 +436,6 @@ pub fn combat(
             controls.impacts += 1;
             feedback.hit_stop = response.hit_stop;
             feedback.trauma = response.trauma;
-            feedback.flash = 1.0;
             effects::impact(
                 &mut commands,
                 &assets,

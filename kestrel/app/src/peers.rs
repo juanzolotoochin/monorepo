@@ -61,7 +61,8 @@ fn attack(swing: &Swing, ticks: f32, swift_sword: bool) -> Option<Attack> {
     }
 }
 
-/// Other players' avatars and name tags (World layer).
+/// Other players' avatars and name tags, and the local player's hurt
+/// flash (World layer).
 #[derive(Resource)]
 pub struct Peers;
 
@@ -77,6 +78,7 @@ impl service::Service for Peers {
         use service::{AppServices, Phase, WorldState};
         let active = in_state(WorldState::Active);
         app.add_service_systems::<Self, _>(Phase::Mirror, update.run_if(crate::control::rendered).run_if(active.clone()))
+            .add_service_systems::<Self, _>(Phase::Present, crate::hurt::update.run_if(crate::control::rendered).run_if(active.clone()))
             .add_systems(
                 PostUpdate,
                 crate::nametags::update
