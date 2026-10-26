@@ -84,7 +84,7 @@ pub struct Part {
     pub bind: Transform,
     pub rest: Transform,
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum PartKind {
     Body,
     Chest,
@@ -326,6 +326,7 @@ pub fn animate_character(
     viewer: Res<crate::viewer::Viewer>,
     player: Single<(Entity, &Transform), With<Player>>,
     mut parts: Query<(Entity, &Part, &mut Transform, Option<&ChildOf>), Without<Player>>,
+    parents: Query<&ChildOf>,
     mut motion: Local<MotionState>,
 ) {
     if !viewer.active && feedback.hit_stop > 0.0
@@ -423,6 +424,10 @@ pub fn animate_character(
     }
     let mut joints = HashMap::new();
     for (entity, part, mut transform, parent) in &mut parts {
+        // Remote players' bodies are posed by `peers`.
+        if !parents.iter_ancestors(entity).any(|ancestor| ancestor == player.0) {
+            continue;
+        }
         let target = pose.place(part.kind, part.rest);
         if viewer.active || pose.motion.plant_feet
             && matches!(part.kind, PartKind::Body)

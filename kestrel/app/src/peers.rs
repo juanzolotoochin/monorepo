@@ -1,9 +1,8 @@
-//! Other players' avatars in a networked game: a copy of the local player's
-//! exosuit (as the scene's style dresses it) per avatar this machine doesn't
-//! control, placed where the simulation has it between ticks and posed like
-//! the local player, swings included.
+//! Other players' avatars in a networked game: a body per avatar this machine
+//! doesn't control, built and dressed like the local player's, placed where
+//! the simulation has it between ticks and posed like the local player,
+//! swings included.
 
-use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use std::collections::HashMap;
 
@@ -12,17 +11,17 @@ use sim::settlement::avatar::Swing;
 
 use crate::character::{
     blend_pose, dig_age, grounded_foot_targets, jump_motion, GaitClock, JointSnapshot,
-    MotionState, Part, PartKind, Player, Pose,
+    MotionState, Part, Player, Pose,
 };
 use crate::combat::{Attack, attack_end, rebound_end};
 use crate::jetpack::Exhaust;
 use crate::lockstep::WorldMirror;
-use crate::style::{WeaponMuzzle, WeaponVisual};
+use crate::style::WeaponVisual;
 
 #[derive(Component)]
 pub struct Peer {
     agent: u16,
-    /// The style the copy was made in; a restyle makes a new copy.
+    /// The style the body was dressed in; a restyle builds a new one.
     style: Option<usize>,
     gait: GaitClock,
     /// The start tick of the last swing heard, so each whooshes once.
@@ -32,27 +31,11 @@ pub struct Peer {
 }
 
 impl Peer {
-    /// The avatar this copy shows.
+    /// The avatar this body shows.
     pub fn agent(&self) -> u16 {
         self.agent
     }
 }
-
-/// A copied part pivot. Not a `Part`, so the local player's animation and
-/// styling leave it alone.
-#[derive(Component)]
-pub struct PeerPart {
-    kind: PartKind,
-    rest: Transform,
-}
-
-/// A copied jetpack exhaust, shown while that avatar flies.
-#[derive(Component)]
-pub struct PeerExhaust;
-
-/// A copied weapon model, shown while it's the weapon the avatar holds.
-#[derive(Component)]
-pub struct PeerWeapon(Weapon);
 
 /// The swing as the local player's animation sees it, `ticks` after the
 /// last simulated tick began: wind-up and cut from the swing's start, or a
@@ -114,12 +97,11 @@ pub fn update(
     contacts: Option<Res<crate::character::ActorFootContacts>>,
     time: Res<Time>,
     sound: Res<crate::sound::Sound>,
-    player: Single<Entity, With<Player>>,
-    mut peers: Query<(Entity, &mut Peer, &mut Transform), (Without<PeerPart>, Without<Player>)>,
-    mut parts: Query<(Entity, &PeerPart, &mut Transform), Without<Peer>>,
+    mut peers: Query<(Entity, &mut Peer, &mut Transform), (Without<Part>, Without<Player>)>,
+    mut parts: Query<(Entity, &Part, &mut Transform), Without<Peer>>,
     parents: Query<&ChildOf>,
-    mut exhausts: Query<(&ChildOf, &mut Visibility), (With<PeerExhaust>, Without<PeerWeapon>)>,
-    mut weapons: Query<(Entity, &PeerWeapon, &mut Visibility), Without<PeerExhaust>>,
+    mut exhausts: Query<(&ChildOf, &mut Visibility), (With<Exhaust>, Without<WeaponVisual>)>,
+    mut weapons: Query<(Entity, &WeaponVisual, &mut Visibility), Without<Exhaust>>,
 ) {
     let me = mirror.player();
     let others: Vec<u16> = mirror.current.as_ref().map_or_else(Vec::new, |s| {
@@ -303,12 +285,12 @@ pub fn update(
             };
         }
     }
-    // The world's scene dressed the player's suit when it started.
-    let (player, style) = (*player, Some(scene.index));
+    let style = Some(scene.index);
     for agent in others.into_iter().filter(|a| !shown.contains(a)) {
+        let pack = scene.pack.clone();
         commands.queue(move |world: &mut World| {
-            let root = copy(world, player, None);
-            world.entity_mut(root).insert((
+            let root = crate::scene::spawn_remote_player(world, &pack);
+            world.entity_mut(root).insert(
                 Peer {
                     agent,
                     style,
@@ -317,8 +299,7 @@ pub fn update(
                     motion: MotionState::default(),
                     visual_height: None,
                 },
-                service::WorldScoped::default(),
-            ));
+            );
         });
     }
 }
@@ -327,7 +308,7 @@ pub fn update(
 /// weapon models are showing.
 pub fn snapshot(world: &mut World) -> Vec<serde_json::Value> {
     let shown: Vec<(Entity, Weapon)> = world
-        .query::<(Entity, &PeerWeapon, &InheritedVisibility)>()
+        .query::<(Entity, &WeaponVisual, &InheritedVisibility)>()
         .iter(world)
         .filter(|(_, _, visible)| visible.get())
         .map(|(e, w, _)| (e, w.0))
@@ -360,65 +341,155 @@ pub fn snapshot(world: &mut World) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// Copies an entity and its children: their meshes, materials, transforms
-/// and visibility, with part pivots and exhausts as their peer versions.
-/// Lights are left out, so each peer doesn't add shadow-casting lights.
-fn copy(world: &mut World, source: Entity, parent: Option<Entity>) -> Entity {
-    let e = world.entity(source);
-    let transform = e.get::<Transform>().copied().unwrap_or_default();
-    let visibility = e.get::<Visibility>().copied().unwrap_or_default();
-    let mesh = e.get::<Mesh3d>().cloned();
-    let material = e.get::<MeshMaterial3d<StandardMaterial>>().cloned();
-    let part = e.get::<Part>().map(|p| PeerPart {
-        kind: p.kind,
-        rest: p.rest,
-    });
-    let exhaust = e.contains::<Exhaust>();
-    let weapon = e.get::<WeaponVisual>().map(|w| PeerWeapon(w.0));
-    let muzzle = e.get::<WeaponMuzzle>().copied();
-    let no_shadow = e.contains::<NotShadowCaster>();
-    let children: Vec<Entity> = e
-        .get::<Children>()
-        .map_or_else(Vec::new, |c| c.iter().collect());
-    let mut copied = world.spawn((transform, visibility));
-    if let Some(mesh) = mesh {
-        copied.insert(mesh);
+/// Remote players' bodies used to be copies of the dressed local player's.
+/// The copy is kept here to check that the bodies built from the actor match.
+#[cfg(test)]
+mod parity {
+    use super::*;
+    use bevy::light::NotShadowCaster;
+    use crate::character::PartKind;
+    use crate::style::WeaponMuzzle;
+
+    #[derive(Component)]
+    struct PeerPart {
+        kind: PartKind,
+        rest: Transform,
     }
-    if let Some(material) = material {
-        copied.insert(material);
-    }
-    if let Some(part) = part {
-        copied.insert(part);
-    }
-    if exhaust {
-        copied.insert(PeerExhaust);
-    }
-    if let Some(weapon) = weapon {
-        copied.insert(weapon);
-    }
-    if let Some(muzzle) = muzzle {
-        copied.insert(muzzle);
-    }
-    if no_shadow {
-        copied.insert(NotShadowCaster);
-    }
-    if let Some(parent) = parent {
-        copied.insert(ChildOf(parent));
-    }
-    let id = copied.id();
-    for child in children {
-        // Lights stay with the player; so does the backpack (each peer gets
-        // its own, see `piles::render`).
-        let child_ref = world.entity(child);
-        if child_ref.contains::<PointLight>()
-            || child_ref.contains::<SpotLight>()
-            || child_ref.contains::<crate::piles::CarryVisual>()
-        {
-            continue;
+
+    #[derive(Component)]
+    struct PeerExhaust;
+
+    #[derive(Component)]
+    struct PeerWeapon(Weapon);
+
+    /// Copies an entity and its children: their meshes, materials, transforms
+    /// and visibility, with part pivots and exhausts as their peer versions.
+    /// Lights are left out, so each peer doesn't add shadow-casting lights.
+    fn copy(world: &mut World, source: Entity, parent: Option<Entity>) -> Entity {
+        let e = world.entity(source);
+        let transform = e.get::<Transform>().copied().unwrap_or_default();
+        let visibility = e.get::<Visibility>().copied().unwrap_or_default();
+        let mesh = e.get::<Mesh3d>().cloned();
+        let material = e.get::<MeshMaterial3d<StandardMaterial>>().cloned();
+        let part = e.get::<Part>().map(|p| PeerPart {
+            kind: p.kind,
+            rest: p.rest,
+        });
+        let exhaust = e.contains::<Exhaust>();
+        let weapon = e.get::<WeaponVisual>().map(|w| PeerWeapon(w.0));
+        let muzzle = e.get::<WeaponMuzzle>().copied();
+        let no_shadow = e.contains::<NotShadowCaster>();
+        let children: Vec<Entity> = e
+            .get::<Children>()
+            .map_or_else(Vec::new, |c| c.iter().collect());
+        let mut copied = world.spawn((transform, visibility));
+        if let Some(mesh) = mesh {
+            copied.insert(mesh);
         }
-        copy(world, child, Some(id));
+        if let Some(material) = material {
+            copied.insert(material);
+        }
+        if let Some(part) = part {
+            copied.insert(part);
+        }
+        if exhaust {
+            copied.insert(PeerExhaust);
+        }
+        if let Some(weapon) = weapon {
+            copied.insert(weapon);
+        }
+        if let Some(muzzle) = muzzle {
+            copied.insert(muzzle);
+        }
+        if no_shadow {
+            copied.insert(NotShadowCaster);
+        }
+        if let Some(parent) = parent {
+            copied.insert(ChildOf(parent));
+        }
+        let id = copied.id();
+        for child in children {
+            // Lights stay with the player; so does the backpack (each peer gets
+            // its own, see `piles::render`).
+            let child_ref = world.entity(child);
+            if child_ref.contains::<PointLight>()
+                || child_ref.contains::<SpotLight>()
+                || child_ref.contains::<crate::piles::CarryVisual>()
+            {
+                continue;
+            }
+            copy(world, child, Some(id));
+        }
+        id
     }
-    id
+
+    /// One line per entity of a body, depth first: joints by kind and rest
+    /// pivot, everything else by transform, with meshes, materials,
+    /// visibility and markers.
+    fn describe(world: &World, entity: Entity, depth: usize, out: &mut Vec<String>) {
+        let e = world.entity(entity);
+        let part = e.get::<Part>().map(|p| (p.kind, p.rest)).or(e.get::<PeerPart>().map(|p| (p.kind, p.rest)));
+        let placed = match (depth, part) {
+            (0, _) => format!("root scale {:?}", e.get::<Transform>().unwrap().scale),
+            (_, Some((kind, rest))) => format!("{kind:?} rest {rest:?}"),
+            // The copy froze the exhaust plume's flicker (`jetpack::update`).
+            _ if e.contains::<Exhaust>() || e.contains::<PeerExhaust>() => format!("exhaust at {:?}", e.get::<Transform>().unwrap().translation),
+            _ => format!("{:?}", e.get::<Transform>().unwrap()),
+        };
+        out.push(format!(
+            "{depth} {placed} mesh {:?} material {:?} {:?} exhaust {} weapon {:?} muzzle {:?} no shadow {}",
+            e.get::<Mesh3d>().map(|m| m.0.id()),
+            e.get::<MeshMaterial3d<StandardMaterial>>().map(|m| m.0.id()),
+            // No visibility shows like the default, which the copy always added.
+            e.get::<Visibility>().copied().unwrap_or_default(),
+            e.contains::<Exhaust>() || e.contains::<PeerExhaust>(),
+            e.get::<WeaponVisual>().map(|w| w.0).or(e.get::<PeerWeapon>().map(|w| w.0)),
+            e.get::<WeaponMuzzle>().map(|m| m.0),
+            e.contains::<NotShadowCaster>(),
+        ));
+        for child in e.get::<Children>().map_or_else(Vec::new, |c| c.iter().collect()) {
+            let child_ref = world.entity(child);
+            if child_ref.contains::<PointLight>() || child_ref.contains::<SpotLight>() || child_ref.contains::<crate::piles::CarryVisual>() {
+                continue;
+            }
+            describe(world, child, depth + 1, out);
+        }
+    }
+
+    #[test]
+    fn built_bodies_match_copies_of_the_player() {
+        let options = crate::control::Options { simulation: true, ..default() };
+        let hub = crate::control::Hub::new(options.clone()).unwrap();
+        let scenes = crate::assets::SceneLibrary::new();
+        let count = scenes.scenes.len();
+        let mut app = crate::test_app(options, scenes, hub, crate::flow::Launch::single_player(0));
+        crate::start_world(&mut app);
+        let mut lines = Vec::new();
+        for index in 0..count {
+            if index > 0 {
+                crate::switch_world(&mut app, index);
+            }
+            let world = app.world_mut();
+            let player = world.query_filtered::<Entity, With<Player>>().single(world).unwrap();
+            let pack = world.resource::<crate::scene_view::SceneView>().pack.clone();
+            let copied = copy(world, player, None);
+            let built = crate::scene::spawn_remote_player(world, &pack);
+            let (mut expected, mut actual) = (Vec::new(), Vec::new());
+            describe(world, copied, 0, &mut expected);
+            describe(world, built, 0, &mut actual);
+            assert!(expected.len() > 30, "{}: {} entities", pack.scene.id, expected.len());
+            for (line, (expected, actual)) in expected.iter().zip(&actual).enumerate() {
+                assert_eq!(expected, actual, "{} line {line}", pack.scene.id);
+            }
+            assert_eq!(expected.len(), actual.len(), "{}", pack.scene.id);
+            lines.extend(actual);
+            world.entity_mut(copied).despawn();
+            world.entity_mut(built).despawn();
+        }
+        // Some scenes' styles replace the built-in blocks and add weapons.
+        assert!(lines.iter().any(|line| line.contains("muzzle Some(Laser)")));
+        assert!(lines.iter().any(|line| line.contains("weapon Some(Spear)")));
+    }
 }
 
 #[cfg(test)]
