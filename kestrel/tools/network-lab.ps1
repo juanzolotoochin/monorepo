@@ -13,6 +13,10 @@ max(0, DelayMs + uniform(-JitterMs, +JitterMs)) ms. Datagrams may overtake one
 another. Added round trip is about 2 x DelayMs; the game's input margin still
 applies on top.
 
+The client sizes its input margin from the round trip it measures. Pass
+-InputMarginMs to pin it instead (the client gets --input-margin-ms; the host
+is unaffected), for example 133 for the margin before it adapted.
+
 The launcher stays attached. Ctrl+C, or closing either game window, stops the
 processes it started and nothing else. Each run writes its parameters, process
 IDs, relay counters and logs to network_lab/runs/<time>/.
@@ -26,6 +30,9 @@ in flight. -CoarseTimers saves the core but adds 0-15 ms to each datagram.
 
 .EXAMPLE
 .\kestrel\tools\network-lab.ps1 -DelayMs 75 -JitterMs 20 -Seed 42
+
+.EXAMPLE
+.\kestrel\tools\network-lab.ps1 -DelayMs 150 -JitterMs 20 -InputMarginMs 133
 #>
 [CmdletBinding()]
 param(
@@ -35,6 +42,8 @@ param(
     [ValidateRange(0, 4294967295)] [long] $Seed = 42,
     [ValidateRange(1, 65535)] [int] $HostPort = 7777,
     [ValidateRange(1, 65535)] [int] $ProxyPort = 7778,
+    # Unset: the client adapts its input margin to the network.
+    [ValidateRange(0, 10000)] [Nullable[int]] $InputMarginMs,
     [switch] $Build,
     [switch] $CoarseTimers,
     [string] $GamePath
@@ -105,6 +114,8 @@ $Run = [ordered]@{
     delay_ms = $DelayMs
     jitter_ms = $JitterMs
     seed = $Seed
+    # null: adaptive.
+    input_margin_ms = $InputMarginMs
     coarse_timers = [bool] $CoarseTimers
     host_port = $HostPort
     proxy_port = $ProxyPort
@@ -179,10 +190,14 @@ try {
         Start-Sleep -Milliseconds 200
     }
 
-    $processes.client = Start-Part "client" $Game @("--join", "127.0.0.1:$ProxyPort", "--name", "Client")
+    $clientArgs = @("--join", "127.0.0.1:$ProxyPort", "--name", "Client")
+    if ($null -ne $InputMarginMs) { $clientArgs += @("--input-margin-ms", $InputMarginMs) }
+    $processes.client = Start-Part "client" $Game $clientArgs
 
+    $margin = if ($null -ne $InputMarginMs) { "pinned at $InputMarginMs ms" } else { "adaptive" }
     Write-Host ""
     Write-Host "Running: $DelayMs ms +/- $JitterMs ms each way (seed $Seed); added RTT ~$(2 * $DelayMs) ms before jitter and polling."
+    Write-Host "Client input margin: $margin."
     Write-Host "In either window press / then Diagnostics -> Network."
     Write-Host "Both windows share this machine's CPU/GPU: read frame time alongside the network graphs."
     Write-Host "Run directory: $RunDir"

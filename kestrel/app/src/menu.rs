@@ -191,6 +191,7 @@ impl MainMenu {
             name: self.name.trim().to_string(),
             record: defaults.record.clone(),
             replay: None,
+            input_margin_ms: defaults.input_margin_ms,
         })
     }
 
@@ -713,6 +714,7 @@ mod tests {
             record: Some("rec".into()),
             port: crate::flow::DEFAULT_PORT,
             address: "127.0.0.1:4200".into(),
+            input_margin_ms: None,
         };
         let menu = MainMenu {
             selected_scene: 3,

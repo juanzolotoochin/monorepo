@@ -165,7 +165,9 @@ pub fn open(world: &mut World, launch: crate::flow::Launch) -> Result<Opened, St
     let threads = std::thread::available_parallelism().map_or(2, |n| n.get().min(4));
     // Single-player has nobody to wait for, so no input delay.
     let input_delay = if launch.network.is_some() { NetConfig::default().input_delay } else { 0 };
-    let config = NetConfig { threads, input_delay, ..NetConfig::default() };
+    // A joining client adapts its input margin to the network unless pinned.
+    let input_margin = launch.input_margin_ms.map(content::millis_to_ticks);
+    let config = NetConfig { threads, input_delay, input_margin, ..NetConfig::default() };
     let scene_id = world.resource::<SceneLibrary>().scenes[launch.scene].scene.id.clone();
     let mut start_save = None;
     let mut replay_scene = None;

@@ -88,6 +88,14 @@ fn main() {
         });
         (read(&format!("{path}.gsav")), log)
     });
+    // `--input-margin-ms <ms>` pins a joining client's input margin, for
+    // network tests; by default it adapts to the measured network.
+    let input_margin_ms = value("--input-margin-ms").map(|ms| {
+        ms.trim().parse::<u64>().unwrap_or_else(|e| {
+            eprintln!("--input-margin-ms: invalid number {ms}: {e}");
+            std::process::exit(2)
+        })
+    });
     let defaults = flow::Defaults {
         // `--name`, or who is logged in.
         name: value("--name")
@@ -97,6 +105,7 @@ fn main() {
         record: value("--record-input"),
         port: value("--host").and_then(|port| port.parse().ok()).unwrap_or(flow::DEFAULT_PORT),
         address: value("--join").unwrap_or_else(|| format!("127.0.0.1:{}", flow::DEFAULT_PORT)),
+        input_margin_ms,
     };
     // A player's run with no session flags opens the menu (or, with
     // `--character-studio`, Character Studio); anything else starts its
@@ -111,6 +120,7 @@ fn main() {
         name: defaults.name.clone(),
         record: defaults.record.clone(),
         replay,
+        input_margin_ms,
     });
     let mut app = build_app(options, scenes, hub, flow::Start { launch, defaults });
     app.run();
@@ -301,7 +311,7 @@ fn test_app(options: control::Options, scenes: assets::SceneLibrary, hub: contro
 #[cfg(test)]
 fn test_front_app(options: control::Options, scenes: assets::SceneLibrary, hub: control::Hub, launch: Option<flow::Launch>) -> App {
     let scene = launch.as_ref().map_or(0, |launch| launch.scene);
-    let defaults = flow::Defaults { name: String::new(), scene, record: None, port: flow::DEFAULT_PORT, address: String::new() };
+    let defaults = flow::Defaults { name: String::new(), scene, record: None, port: flow::DEFAULT_PORT, address: String::new(), input_margin_ms: None };
     let mut app = build_app(options, scenes, hub, flow::Start { launch, defaults });
     app.finish();
     app.cleanup();
