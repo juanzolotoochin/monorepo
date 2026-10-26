@@ -275,8 +275,16 @@ fn mover_def(file: MoverSimFile) -> Result<MoverDef, String> {
 }
 
 /// FNV-1a over the binary encoding of the tick rate, names and rules.
+/// Character attacks are skipped in that encoding and appended only when a
+/// character has one, so content without attacks keeps its hash.
 fn rules_hash(names: &Names, rules: &Rules) -> u64 {
-    let bytes = postcard::to_allocvec(&(TICKS_PER_SECOND, names, rules)).expect("encode rules");
+    let attacks: Vec<_> = rules.characters.iter().map(|c| c.attack).collect();
+    let bytes = if attacks.iter().all(Option::is_none) {
+        postcard::to_allocvec(&(TICKS_PER_SECOND, names, rules))
+    } else {
+        postcard::to_allocvec(&(TICKS_PER_SECOND, names, rules, attacks))
+    }
+    .expect("encode rules");
     bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, &byte| (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3))
 }
 
@@ -495,6 +503,64 @@ mod tests {
         assert!(with("Fly").is_err());
         let ghoul = GHOUL.replace("breach_damage: 1)", "breach_damage: 1), abilities: [SwiftSword]");
         assert!(characters(&[("character/x.ron", &ghoul)]).unwrap_err().message.contains("only Player"));
+    }
+
+    const ATTACK: &str = "attack: (damage: 2, reach: 0.9, windup: 27, cooldown: 60, knockback: 3.5)";
+
+    fn with_attack(attack: &str) -> String {
+        GHOUL.replace("breach_damage: 1)", &format!("breach_damage: 1), {attack}"))
+    }
+
+    #[test]
+    fn attacks_parse_in_simulation_units() {
+        use scenario::ticks_from_60hz;
+        let content = characters(&[("character/x.ron", &with_attack(ATTACK))]).unwrap();
+        let attack = content.rules.characters[0].attack.unwrap();
+        assert_eq!((attack.damage, attack.reach), (2, "0.9".parse().unwrap()));
+        assert_eq!((attack.windup, attack.cooldown), (ticks_from_60hz(27), ticks_from_60hz(60)));
+        assert_eq!(attack.knockback, Fx::from_ratio(7, 2), "m/s, like a weapon's knockback");
+        assert!(Content::builtin().rules.characters.iter().all(|c| c.attack.is_none()), "no content attacks yet");
+    }
+
+    #[test]
+    fn a_variant_merges_its_attack_field_by_field() {
+        let variant = "(base: \"ghoul\", sim: (attack: (damage: 5, windup: 30)), view: ())";
+        let content = characters(&[("character/ghoul.ron", &with_attack(ATTACK)), ("character/brute.ron", variant)]).unwrap();
+        let get = |name: &str| content.rules.characters[content.names.character_index(name).unwrap() as usize].attack.unwrap();
+        let (ghoul, brute) = (get("ghoul"), get("brute"));
+        assert_eq!((brute.damage, brute.windup), (5, scenario::ticks_from_60hz(30)));
+        assert_eq!((brute.reach, brute.cooldown, brute.knockback), (ghoul.reach, ghoul.cooldown, ghoul.knockback), "from the base");
+        let partial = characters(&[("character/x.ron", &with_attack("attack: (damage: 2)"))]).unwrap_err();
+        assert!(partial.message.contains("attack.reach"), "{}", partial.message);
+    }
+
+    #[test]
+    fn attacks_are_validated() {
+        let bad = |text: &str| characters(&[("character/x.ron", text)]).unwrap_err().message;
+        let player = include_str!("../data/character/exosuit.ron").replacen("sim: (", &format!("sim: ({ATTACK}, "), 1);
+        assert!(bad(&player).contains("only FollowRoute"));
+        let hauler = format!("(sim: (brain: Hauler, body: (radius: 0.28), movement: (walk: 1.5), carry: (transfer: 27), {ATTACK}), view: (skin: \"worker\"))");
+        assert!(bad(&hauler).contains("only FollowRoute"));
+        let out_of_range = |from: &str, to: &str| bad(&with_attack(&ATTACK.replace(from, to)));
+        assert!(out_of_range("damage: 2", "damage: 0").contains("attack.damage"));
+        assert!(out_of_range("damage: 2", "damage: 1001").contains("attack.damage"));
+        assert!(out_of_range("reach: 0.9", "reach: 0").contains("attack.reach"));
+        assert!(out_of_range("reach: 0.9", "reach: 9").contains("attack.reach"));
+        assert!(out_of_range("windup: 27", "windup: 0").contains("attack.windup"));
+        assert!(out_of_range("cooldown: 60", "cooldown: 601").contains("attack.cooldown"));
+        assert!(out_of_range("knockback: 3.5", "knockback: -1").contains("attack.knockback"));
+        assert!(out_of_range("knockback: 3.5", "knockback: 3.5, stun: 1").contains("stun"));
+        assert!(characters(&[("character/x.ron", &with_attack(&ATTACK.replace("cooldown: 60", "cooldown: 0")))]).is_ok());
+    }
+
+    #[test]
+    fn attacks_feed_the_rules_hash() {
+        let hash = |text: &str| characters(&[("character/ghoul.ron", text)]).unwrap().rules_hash;
+        let none = hash(GHOUL);
+        let some = hash(&with_attack(ATTACK));
+        assert_ne!(none, some);
+        assert_ne!(some, hash(&with_attack(&ATTACK.replace("damage: 2", "damage: 3"))));
+        assert_ne!(some, hash(&with_attack(&ATTACK.replace("cooldown: 60", "cooldown: 61"))));
     }
 
     #[test]

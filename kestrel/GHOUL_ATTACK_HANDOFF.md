@@ -73,6 +73,17 @@ Each task is its own commit on branch `kestrel-ghoul-attacks`, in order.
    definition), its tests in `content/src/lib.rs`, the behaviour digest if
    the rules hash needs it, and the schema in `docs/character-definition.md`.
    No content file uses it yet, so the golden file and hashes stay unchanged.
+
+   Done in task 2: `CharacterDef.attack: Option<AttackDef>`, with
+   `AttackDef { damage: u32, reach: Fx (m), windup: u64 (ticks), cooldown:
+   u64 (ticks), knockback: Fx (m/s, not per tick, like a weapon's) }`.
+   Ranges: damage 1..=1000, reach [0.1, 8] m, windup 1..=600 frames,
+   cooldown 0..=600 frames, knockback [0, 40] m/s. Only `FollowRoute` may
+   have it. The field is `#[serde(skip)]`, and `rules_hash` appends every
+   character's attack only when one has it, so today's rules hash holds.
+   Tests: `attacks_parse_in_simulation_units`,
+   `a_variant_merges_its_attack_field_by_field`, `attacks_are_validated`,
+   `attacks_feed_the_rules_hash`.
 3. **Ghouls hit players.** The sim work in the table above, with tests in
    `sim/src/settlement/combat_tests.rs`: a windup then hit, a player who
    steps out of reach during the windup, the nearest-player tie-break,

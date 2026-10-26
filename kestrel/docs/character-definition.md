@@ -49,8 +49,11 @@ The `sim` section has the same **shape** for every character kind, but `brain` d
 | `avatar` | `(acceleration: ..., braking: ..., attack_braking: ..., attack: (...))` | Required for `Player`; forbidden for `FollowRoute` and `Hauler`. |
 | `carry` | `(transfer: integer)` | Required for `Player` and `Hauler`; forbidden for `FollowRoute`. `transfer` is frames to load or unload one unit. |
 | `abilities` | List of abilities, such as `[Jetpack(...), Dig(...)]` | Optional, `Player` only. Each ability at most once, and never both `Jump` and `Jetpack`. A variant replaces the whole list. |
+| `attack` | `(damage: integer, reach: number, windup: integer, cooldown: integer, knockback: number)` | Optional, `FollowRoute` only. How the character hits players in passing. |
 
 `health.hp` is starting hit points. `health.breach_damage` is damage dealt on reaching the route's target. If supplied, `health.armor` must contain both `points` and `radius`; the armor absorbs hits and enlarges the collision radius until it breaks.
+
+`attack` makes a threat hit players it passes. It stops, winds up for `windup` frames, then swings. The swing hits if the player is still within `reach` meters, measured center to center. A hit takes `damage` health and pushes the player away at `knockback` meters per second. The next swing can start `cooldown` frames after the hit. All five fields are required, after inheritance. A variant merges them field by field, like `health`. A character without `attack` never attacks.
 
 `avatar.acceleration`, `braking`, and `attack_braking` are rates in meters per second squared. `avatar.attack` requires seven frame counts: `windup`, `aim`, `swing`, `sword_windup`, `sword_swing`, `rebound`, and `combo_window`. Durations, including `carry.transfer`, are written as whole frames at 60 Hz. The loader validates ranges and converts authored values to simulation units.
 
