@@ -180,9 +180,12 @@ inputs and no corrections of any size. At 100 ± 20 ms: every misprediction,
 kept or not, is in a scenario where the host reported a late input. 3 of 5
 seeds have one kept correction (0.08 to 0.25 u).
 
-So the test stays `#[ignore]`d with the pass condition unchanged. The adaptive
-input margin (`LASER_PREDICTION_HANDOFF.md`, C) should make it pass and let
-the ignore go.
+So the test is split, with the same pass condition and seeds:
+`joined_player_movement_needs_no_corrections_under_latency` runs the
+no-delay and 75 ± 20 ms cases and is enabled.
+`joined_player_movement_needs_no_corrections_at_100_ms` runs the 100 ± 20 ms
+case and stays `#[ignore]`d until the adaptive input margin
+(`LASER_PREDICTION_HANDOFF.md`, step 3) lets it pass.
 
 ## Step 2: prediction (agreed decisions)
 

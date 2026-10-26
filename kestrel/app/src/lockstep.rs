@@ -1531,14 +1531,23 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "at 100 ± 20 ms the host moves an occasional late input, which prediction cannot know; see AVATAR_PREDICTION_HANDOFF.md"]
     fn joined_player_movement_needs_no_corrections_under_latency() {
-        // (name, one-way delay ms, ± jitter ms)
-        let cases = [("no added delay", 0.0, 0.0), ("75 ± 20 ms", 75.0, 20.0), ("100 ± 20 ms", 100.0, 20.0)];
+        assert_no_corrections(&[("no added delay", 0.0, 0.0, 0x5eed), ("75 ± 20 ms", 75.0, 20.0, 0x5eed + 1)]);
+    }
+
+    #[test]
+    #[ignore = "late inputs at 100±20 ms; enabled by adaptive input margin (LASER_PREDICTION_HANDOFF step 3)"]
+    fn joined_player_movement_needs_no_corrections_at_100_ms() {
+        assert_no_corrections(&[("100 ± 20 ms", 100.0, 20.0, 0x5eed + 2)]);
+    }
+
+    /// Runs every movement scenario under each (name, one-way delay ms,
+    /// ± jitter ms, relay seed) case and fails on any kept correction.
+    fn assert_no_corrections(cases: &[(&str, f64, f64, u64)]) {
         let mut kept_total = 0;
         let mut report = String::new();
-        for (case, (name, delay, jitter)) in cases.into_iter().enumerate() {
-            let mut game = RelayedGame::new(delay, jitter, 0x5eed + case as u64);
+        for &(name, delay, jitter, seed) in cases {
+            let mut game = RelayedGame::new(delay, jitter, seed);
             for (scenario, script) in movement_scenarios() {
                 // Start each scenario at the spawn point, settled, with an empty log.
                 let agent = game.client.world().resource::<SessionService>().player().unwrap();
