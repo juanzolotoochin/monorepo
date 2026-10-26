@@ -222,6 +222,26 @@ impl Session {
         }
     }
 
+    /// A client's commands that haven't been simulated yet, oldest first,
+    /// each with the tick it asked for. A host's apply on its next tick and
+    /// a replay takes no input, so they have none.
+    pub fn pending_commands(&self) -> impl Iterator<Item = (u64, &CommandKind)> + '_ {
+        let client = match &self.peer {
+            Peer::Client(client) => Some(client.pending_commands()),
+            _ => None,
+        };
+        client.into_iter().flatten()
+    }
+
+    /// The tick a client's command queued now asks for; `None` on a host or
+    /// replay.
+    pub fn input_horizon(&self) -> Option<u64> {
+        match &self.peer {
+            Peer::Client(client) => Some(client.input_horizon()),
+            _ => None,
+        }
+    }
+
     pub fn input_delay(&self) -> u64 {
         match &self.peer {
             Peer::Host(host) => host.input_delay(),

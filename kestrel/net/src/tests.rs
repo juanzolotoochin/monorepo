@@ -193,6 +193,43 @@ fn diagnostics_distinguish_receipt_from_local_application() {
 }
 
 #[test]
+fn pending_commands_stay_until_simulated_and_go_with_the_world() {
+    let mut h = Harness::new(LinkConditions::perfect(), NetConfig { input_delay: 60, ..config() }, false);
+    h.add_client();
+    h.run_for(Duration::from_secs(3), 0);
+    let spawn = |count| CommandKind::SpawnMovers { center: FxVec2::new(Fx::from_int(50), Fx::from_int(50)), count };
+    let horizon = h.clients[0].input_horizon();
+    h.clients[0].queue(spawn(1));
+    h.run_for(Duration::from_millis(50), 0);
+    h.clients[0].queue(spawn(2));
+    let requested = h.clients[0].diagnostics(h.now).last_requested_tick.unwrap();
+    let pending: Vec<_> = h.clients[0].pending_commands().map(|(tick, kind)| (tick, kind.clone())).collect();
+    assert_eq!(pending, vec![(horizon, spawn(1)), (requested, spawn(2))]);
+    assert!(requested > horizon);
+
+    // Received by the host, still not simulated here.
+    h.run_for(Duration::from_millis(100), 0);
+    assert_eq!(h.clients[0].diagnostics(h.now).unacked_inputs, 0);
+    assert_eq!(h.clients[0].pending_commands().count(), 2);
+    // Each leaves once its turn runs here.
+    while h.clients[0].world().unwrap().tick() <= horizon {
+        h.run_for(FRAME, 0);
+    }
+    let left: Vec<_> = h.clients[0].pending_commands().map(|(tick, _)| tick).collect();
+    assert_eq!(left, vec![requested]);
+    h.run_for(Duration::from_secs(2), 0);
+    assert_eq!(h.clients[0].pending_commands().count(), 0);
+    assert_eq!(h.clients[0].world().unwrap().mover_count(), 3);
+
+    // A new world drops what the old one never ran.
+    h.clients[0].queue(spawn(1));
+    change_map(&mut h, "second");
+    h.run_for(Duration::from_millis(50), 0);
+    assert_eq!(h.clients[0].pending_commands().count(), 0);
+    assert_eq!(h.clients[0].pending_inputs(), 0);
+}
+
+#[test]
 fn diagnostics_observe_starvation_and_catch_up_without_changing_turns() {
     let mut h = Harness::new(LinkConditions::perfect(), config(), false);
     h.add_client();

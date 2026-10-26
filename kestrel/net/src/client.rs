@@ -51,6 +51,9 @@ pub struct Client<T: Transport> {
     queued: u64,
     applied: u64,
     unacked: VecDeque<Input>,
+    /// Inputs sent and not simulated here yet, oldest first, with the tick
+    /// each asked for. Unlike `unacked`, they stay until they apply.
+    pending: VecDeque<(u64, CommandKind)>,
     reports: VecDeque<(u64, u64)>,
     history: HashLog,
     pacer: Pacer,
@@ -89,6 +92,7 @@ impl<T: Transport> Client<T> {
             queued: 0,
             applied: 0,
             unacked: VecDeque::new(),
+            pending: VecDeque::new(),
             reports: VecDeque::new(),
             history: HashLog::default(),
             pacer: Pacer::new(now),
@@ -179,17 +183,25 @@ impl<T: Transport> Client<T> {
         self.pacer.alpha(now)
     }
 
+    /// The tick a command queued now asks for: `input_delay` ticks after the
+    /// host's current tick, estimated from its last packet and half the
+    /// round trip.
+    pub fn input_horizon(&self) -> u64 {
+        let one_way = self.rtt.map_or(0, |rtt| (rtt / 2).as_nanos().div_ceil(TICK.as_nanos()) as u64);
+        self.host_tick + one_way + self.input_delay
+    }
+
     /// Schedules a command for `input_delay` ticks after the host's current tick.
     pub fn queue(&mut self, kind: CommandKind) {
         if !matches!(self.state, State::Playing(_)) {
             return;
         }
-        let one_way = self.rtt.map_or(0, |rtt| (rtt / 2).as_nanos().div_ceil(TICK.as_nanos()) as u64);
         // `host_tick` runs ahead of this client's world (the jitter buffer),
         // so this tick says little about when the command applies here;
         // `pending_inputs` does.
-        let tick = self.host_tick + one_way + self.input_delay;
+        let tick = self.input_horizon();
         self.diagnostics.last_requested_tick = Some(tick);
+        self.pending.push_back((tick, kind.clone()));
         self.unacked.push_back(Input { seq: self.next_seq, tick, kind });
         self.next_seq += 1;
         self.queued += 1;
@@ -198,6 +210,12 @@ impl<T: Transport> Client<T> {
     /// Commands this client queued that haven't been simulated yet.
     pub fn pending_inputs(&self) -> u64 {
         self.queued.saturating_sub(self.applied)
+    }
+
+    /// The commands `pending_inputs` counts, oldest first, each with the
+    /// tick it asked for. The host moves a late one to a later tick.
+    pub fn pending_commands(&self) -> impl Iterator<Item = (u64, &CommandKind)> + '_ {
+        self.pending.iter().map(|(tick, kind)| (*tick, kind))
     }
 
     /// Handles packets, runs every tick that is due and available (calling
@@ -233,7 +251,10 @@ impl<T: Transport> Client<T> {
             for _ in 0..steps {
                 let tick = sim.world().tick();
                 let mut turn = self.turns.remove(&tick).expect("ready turn");
-                self.applied += turn.iter().filter(|c| Some(c.player) == self.player).count() as u64;
+                let mine = turn.iter().filter(|c| Some(c.player) == self.player).count();
+                self.applied += mine as u64;
+                // The host keeps a player's commands in the order they were sent.
+                self.pending.drain(..mine.min(self.pending.len()));
                 turn.extend(self.diverge.take());
                 let hash = sim.step(&turn);
                 self.history.push(tick, hash.total);
@@ -311,6 +332,7 @@ impl<T: Transport> Client<T> {
                 self.player = Some(player);
                 self.input_delay = input_delay;
                 self.unacked.clear();
+                self.pending.clear();
                 self.next_seq = 1;
                 // Inputs not in the new save are lost.
                 (self.queued, self.applied) = (0, 0);
