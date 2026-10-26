@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "scene": "laser-pit",
+  "fps": 30,
+  "width": 1280,
+  "height": 720,
+  "max_frames": 240,
+  "steps": [
+    {"op": "wait", "frames": 35},
+    {"op": "strike", "target": [-5.0, 8.0]},
+    {"op": "wait", "frames": 6},
+    {"op": "strike", "target": [-5.0, 8.0]},
+    {"op": "wait", "frames": 24},
+    {"op": "walk", "position": [-5.0, 9.3]},
+    {"op": "wait", "frames": 36},
+    {"op": "inspect"}
+  ]
+}

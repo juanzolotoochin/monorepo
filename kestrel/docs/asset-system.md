@@ -59,7 +59,7 @@ A scene layout places instances by prefab ID, position, optional yaw, and option
 
 Prefabs currently do **not** contain other prefabs. Scene layouts compose a scene from multiple prefab instances, but there is no reusable nested prefab with child transforms yet.
 
-Scene assets can also carry **destruction behavior**. A destructible cover entry is divided into pieces with separate health and collision. Some pieces leave a permanent base when broken and can be rebuilt one stage at a time with an asset-authored repair animation. The [destructible cover guide](destructible-assets.md) shows its RON schema, break styles, repair tracks, and how collision behaves while destroyed.
+Scene assets can also carry **destruction behavior**. A destructible cover entry is divided into pieces with separate health and collision. Some pieces leave a spiked electronic base when broken and can be rebuilt one stage at a time with an asset-authored repair animation. The [destructible cover guide](destructible-assets.md) shows its RON schema, break styles, repair tracks, and how collision behaves while destroyed.
 
 ## 3. Reusable shapes become rig parts and skins
 

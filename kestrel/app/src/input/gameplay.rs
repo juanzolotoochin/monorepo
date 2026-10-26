@@ -223,20 +223,12 @@ fn repair(world: &mut World, agent: u16, held: bool) {
         let sim = world.resource::<SessionService>();
         let world = sim.world()?;
         let position = world.settlement()?.agents.get(agent as usize)?.position;
-        world.terrain().destructibles.iter().enumerate()
-            .filter(|(_, piece)| piece.repairable && piece.health < piece.max_health)
-            .filter_map(|(index, piece)| {
-                let distance = (position - piece.disc.center).length_squared();
-                let reach = piece.disc.radius + fx::Fx::from_ratio(11, 10);
-                (distance <= reach * reach).then_some((distance, index as u16))
-            })
-            .min_by_key(|&(distance, index)| (distance, index))
-            .map(|(_, index)| index)
+        world.terrain().repairable_asset_near(position)
     }).flatten();
     let mut dispatcher = world.resource_mut::<Dispatcher>();
     if dispatcher.repair_target != target {
         dispatcher.repair_target = target;
-        world.resource_mut::<SessionService>().command(CommandKind::RepairCover { agent, index: target });
+        world.resource_mut::<SessionService>().command(CommandKind::RepairCover { agent, asset: target });
     }
 }
 

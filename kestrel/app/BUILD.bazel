@@ -96,6 +96,54 @@ game_demo(
     tags = ["manual"],
 )
 
+filegroup(
+    name = "laser_pit_demo_video",
+    srcs = [":laser_pit_demo"],
+    output_group = "video",
+)
+
+game_demo(
+    name = "laser_repair_demo",
+    game = ":demo",
+    script = "demos/laser_repair.json",
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "laser_repair_demo_video",
+    srcs = [":laser_repair_demo"],
+    output_group = "video",
+)
+
+py_test(
+    name = "laser_repair_flicker_test",
+    srcs = ["//kestrel/tools/demo:flicker.py"],
+    main = "//kestrel/tools/demo:flicker.py",
+    data = [":laser_repair_demo_video", "@game_demo_tools//:ffmpeg"],
+    args = [
+        "--video", "$(rootpath :laser_repair_demo_video)",
+        "--ffmpeg", "$(rootpath @game_demo_tools//:ffmpeg)",
+        "--window", "150", "184",
+    ],
+    size = "large",
+    tags = ["manual", "local"],
+)
+
+py_test(
+    name = "laser_pit_flicker_test",
+    srcs = ["//kestrel/tools/demo:flicker.py"],
+    main = "//kestrel/tools/demo:flicker.py",
+    data = [":laser_pit_demo_video", "@game_demo_tools//:ffmpeg"],
+    args = [
+        "--video", "$(rootpath :laser_pit_demo_video)",
+        "--ffmpeg", "$(rootpath @game_demo_tools//:ffmpeg)",
+        "--window", "8", "36",
+        "--window", "105", "124",
+    ],
+    size = "large",
+    tags = ["manual", "local"],
+)
+
 rust_test(
     name = "movement_test",
     size = "medium",

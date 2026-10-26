@@ -1027,6 +1027,8 @@ pub struct Status;
 pub struct Gauge;
 #[derive(Component)]
 pub struct ContactCount;
+#[derive(Component)]
+pub struct RepairPrompt;
 
 pub fn hud(mut commands: Commands) {
     let white = Color::srgb(0.83, 0.90, 0.93);
@@ -1194,6 +1196,21 @@ pub fn hud(mut commands: Commands) {
                 TextColor(muted),
             ));
         });
+    commands.spawn((HudRoot, Node {
+        position_type: PositionType::Absolute,
+        bottom: px(105),
+        left: percent(30),
+        width: percent(40),
+        justify_content: JustifyContent::Center,
+        padding: UiRect::axes(px(18), px(10)),
+        ..default()
+    }, BackgroundColor(Color::srgba(0.025, 0.045, 0.07, 0.86)),
+        Visibility::Hidden))
+        .with_children(|p| {
+            p.spawn((RepairPrompt, Text::new("HOLD R TO REPAIR"),
+                TextFont { font_size: FontSize::Px(16.0), ..default() },
+                TextColor(cyan)));
+        });
 }
 
 /// The HUD's live readouts and the QA capture (World layer). The HUD's
@@ -1231,11 +1248,25 @@ pub fn update_hud(
     flight: Res<crate::jetpack::Flight>,
     service: Res<crate::lockstep::SessionService>,
     player: Single<&Transform, With<Player>>,
-    mut scene_label: Single<&mut Text, (With<SceneLabel>, Without<Status>, Without<ContactCount>)>,
-    mut status: Single<(&mut Text, &mut TextColor), With<Status>>,
+    mut scene_label: Single<&mut Text, (With<SceneLabel>, Without<Status>, Without<ContactCount>, Without<RepairPrompt>)>,
+    mut status: Single<(&mut Text, &mut TextColor), (With<Status>, Without<RepairPrompt>)>,
     mut gauge: Single<&mut Node, With<Gauge>>,
-    mut contacts: Single<&mut Text, (With<ContactCount>, Without<Status>)>,
+    mut contacts: Single<&mut Text, (With<ContactCount>, Without<Status>, Without<RepairPrompt>)>,
+    mut repair_prompt: Single<(&mut Text, &ChildOf), With<RepairPrompt>>,
+    mut prompt_visibility: Query<&mut Visibility>,
 ) {
+    let nearby = service.world().and_then(|world| world.terrain()
+        .repairable_asset_near(service.to_sim(player.translation)));
+    if let Ok(mut visibility) = prompt_visibility.get_mut(repair_prompt.1.parent()) {
+        *visibility = if nearby.is_some() { Visibility::Inherited } else { Visibility::Hidden };
+    }
+    if let Some(asset) = nearby {
+        let pieces = service.world().unwrap().terrain().destructibles.iter()
+            .filter(|piece| piece.asset == asset);
+        let missing: u32 = pieces.map(|piece| u32::from(piece.max_health - piece.health)).sum();
+        let label = format!("HOLD R TO REPAIR  /  {missing} STAGES REMAIN");
+        if repair_prompt.0.0 != label { repair_prompt.0.0 = label; }
+    }
     let (label, progress, color) = if let Some(a) = controls.attack {
         if a.impact_angle.is_some() {
             (

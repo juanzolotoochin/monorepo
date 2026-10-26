@@ -434,28 +434,36 @@ fn field() -> SceneSetup {
 #[test]
 fn repairable_cover_keeps_its_footprint_and_requires_a_held_nearby_player() {
     use crate::terrain::Destructible;
-    let piece = Destructible { disc: Disc { center: v(0.0, 0.0), radius: fx(0.5) },
+    let piece = Destructible { asset: 0, disc: Disc { center: v(0.0, 0.0), radius: fx(0.5) },
         health: 0, max_health: 2, repairable: true, repair_progress: 0 };
+    let mut other = piece;
+    other.disc.center = v(2.0, 0.0);
     let mut scene = Scene::new(SceneSetup { spawn: [Fx::ZERO, Fx::ZERO, fx(1.3)],
-        destructibles: vec![piece], ..field() });
+        destructibles: vec![piece, other], ..field() });
     let agent = scene.agent();
-    assert_eq!(scene.sim.world().terrain().blocking_obstacles().count(), 1);
-    scene.command(CommandKind::RepairCover { agent, index: Some(0) });
+    assert_eq!(scene.sim.world().terrain().blocking_obstacles().count(), 2);
+    let terrain = scene.sim.world().terrain();
+    assert_eq!(terrain.repairable_asset_near(terrain.center + v(-1.0, 0.0)), Some(0));
+    assert_eq!(terrain.repairable_asset_near(terrain.center + v(3.0, 0.0)), Some(0));
+    scene.command(CommandKind::RepairCover { agent, asset: Some(0) });
     scene.wait(content::TICKS_PER_SECOND as u64 / 2);
     assert_eq!(scene.sim.world().terrain().destructibles[0].health, 0);
     assert!(scene.sim.world().terrain().destructibles[0].repair_progress > 0);
-    scene.command(CommandKind::RepairCover { agent, index: None });
+    assert!(scene.sim.world().terrain().destructibles[1].repair_progress > 0);
+    scene.command(CommandKind::RepairCover { agent, asset: None });
     assert_eq!(scene.sim.world().terrain().destructibles[0].repair_progress, 0);
-    scene.command(CommandKind::RepairCover { agent, index: Some(0) });
+    scene.command(CommandKind::RepairCover { agent, asset: Some(0) });
     scene.wait(content::TICKS_PER_SECOND as u64);
     assert_eq!(scene.sim.world().terrain().destructibles[0].health, 1);
-    assert_eq!(scene.sim.world().terrain().blocking_obstacles().count(), 1);
-    scene.command(CommandKind::RepairCover { agent, index: None });
+    assert_eq!(scene.sim.world().terrain().destructibles[1].health, 1);
+    assert_eq!(scene.sim.world().terrain().blocking_obstacles().count(), 2);
+    scene.command(CommandKind::RepairCover { agent, asset: None });
     assert_eq!(scene.sim.world().terrain().destructibles[0].health, 1);
-    scene.command(CommandKind::RepairCover { agent, index: Some(0) });
+    scene.command(CommandKind::RepairCover { agent, asset: Some(0) });
     scene.wait(content::TICKS_PER_SECOND as u64);
     assert_eq!(scene.sim.world().terrain().destructibles[0].health, 2);
-    assert_eq!(scene.sim.world().terrain().blocking_obstacles().count(), 1);
+    assert_eq!(scene.sim.world().terrain().destructibles[1].health, 2);
+    assert_eq!(scene.sim.world().terrain().blocking_obstacles().count(), 2);
 }
 
 #[test]

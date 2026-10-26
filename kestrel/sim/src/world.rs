@@ -110,8 +110,8 @@ pub enum CommandKind {
     /// The player stopped driving their avatar directly (pause, focus loss,
     /// a controller disconnecting): see `Settlement::release_direct_control`.
     ReleaseDirectControl { agent: u16 },
-    /// Holds or releases repair on a nearby cover piece.
-    RepairCover { agent: u16, index: Option<u16> },
+    /// Holds or releases repair on a nearby cover asset.
+    RepairCover { agent: u16, asset: Option<u16> },
 }
 
 impl CommandKind {
@@ -481,11 +481,11 @@ impl World {
                         s.release_direct_control(agent as usize);
                     }
                 }
-                CommandKind::RepairCover { agent, index } => {
+                CommandKind::RepairCover { agent, asset } => {
                     if let Some(s) = &mut self.settlement {
                         if let Some(a) = s.agents.get_mut(agent as usize).filter(|a| a.controlled) {
-                            a.avatar.repair = index.filter(|&index| self.terrain.destructibles
-                                .get(index as usize).is_some_and(|piece| piece.repairable && piece.health < piece.max_health));
+                            a.avatar.repair = asset.filter(|&asset| self.terrain.destructibles.iter()
+                                .any(|piece| piece.asset == asset && piece.repairable && piece.health < piece.max_health));
                         }
                     }
                 }
@@ -863,11 +863,10 @@ impl World {
         let Some(settlement) = &self.settlement else { return };
         for index in 0..self.terrain.destructibles.len() {
             let piece = &self.terrain.destructibles[index];
-            let reach = piece.disc.radius + Fx::from_ratio(11, 10);
             let held = settlement.agents.iter().any(|agent| agent.controlled
                 && (agent.avatar.max_health == 0 || agent.avatar.health > 0)
-                && agent.avatar.repair == Some(index as u16)
-                && (agent.position - piece.disc.center).length_squared() <= reach * reach);
+                && agent.avatar.repair == Some(piece.asset)
+                && self.terrain.asset_in_repair_reach(agent.position, piece.asset));
             self.terrain.repair_cover(index, held);
         }
     }

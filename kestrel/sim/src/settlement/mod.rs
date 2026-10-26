@@ -460,7 +460,7 @@ impl Settlement {
         let place = |d: &Disc| Disc { center: FxVec2::new(center.x + d.center.x, center.y + d.center.y), radius: d.radius };
         let obstacles: Vec<Disc> = setup.obstacles.iter().chain(&setup.doors).map(place).collect();
         terrain.destructibles = setup.destructibles.iter().map(|piece| crate::terrain::Destructible {
-            disc: place(&piece.disc), health: piece.health, max_health: piece.max_health,
+            asset: piece.asset, disc: place(&piece.disc), health: piece.health, max_health: piece.max_health,
             repairable: piece.repairable, repair_progress: piece.repair_progress,
         }).collect();
         let mut settlement = match &setup.scenario {

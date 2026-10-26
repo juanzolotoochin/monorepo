@@ -99,7 +99,34 @@ impl Service for SceneView {
                 .run_if(crate::control::rendered)
                 .run_if(in_state(WorldState::Active)),
         );
-        app.add_systems(PostUpdate, (update_destructibles, crate::destruction::animate).chain().run_if(in_state(WorldState::Active)));
+        app.add_systems(PostUpdate, (update_destructibles, crate::destruction::animate,
+            draw_hazard_arcs.run_if(resource_exists::<bevy::gizmos::config::GizmoConfigStore>))
+            .chain().run_if(in_state(WorldState::Active)));
+    }
+}
+
+/// Electrical conductors bridge the spikes of broken repairable bases. The
+/// curve moves smoothly with simulation time rather than flashing per frame.
+fn draw_hazard_arcs(scene: Res<SceneView>, session: Res<crate::lockstep::SessionService>, mut gizmos: Gizmos) {
+    let Some(world) = session.world() else { return };
+    let phase = world.tick() as f32 * 0.075;
+    for (index, piece) in scene.pack.destructibles.iter().enumerate() {
+        if !piece.repairable || world.terrain().destructibles.get(index).is_none_or(|state| state.health > 0) {
+            continue;
+        }
+        let center = Vec3::from_array(piece.center);
+        let floor = center.y - piece.size[1] * 0.5;
+        let span = Vec3::new(piece.size[0] * 0.32, 0.0, piece.size[2] * 0.32);
+        for side in [-1.0_f32, 1.0] {
+            let axis = Vec3::new(span.x, 0.0, span.z * side);
+            let start = center - axis + Vec3::Y * (floor + 0.39 - center.y);
+            let end = center + axis + Vec3::Y * (floor + 0.39 - center.y);
+            let wiggle = (phase + index as f32 * 1.7 + side).sin();
+            let middle = (start + end) * 0.5 + Vec3::new(0.0, 0.07 + wiggle * 0.07, 0.05 * wiggle);
+            let color = Color::srgba(0.16, 0.78 + wiggle * 0.07, 1.0, 0.86);
+            gizmos.line(start, middle, color);
+            gizmos.line(middle, end, color);
+        }
     }
 }
 

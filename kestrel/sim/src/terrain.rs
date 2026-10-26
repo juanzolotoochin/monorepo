@@ -34,6 +34,7 @@ pub struct Disc {
 /// lifetime of the world, including saves and lockstep replay.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Destructible {
+    pub asset: u16,
     pub disc: Disc,
     pub health: u16,
     pub max_health: u16,
@@ -301,6 +302,25 @@ impl Terrain {
         self.obstacles.iter().chain(self.destructibles.iter().filter(|p| p.health > 0 || p.repairable).map(|p| &p.disc))
     }
 
+    pub fn asset_in_repair_reach(&self, position: FxVec2, asset: u16) -> bool {
+        self.destructibles.iter().filter(|piece| piece.asset == asset && piece.repairable)
+            .any(|piece| {
+                let reach = piece.disc.radius + Fx::from_ratio(11, 10);
+                (position - piece.disc.center).length_squared() <= reach * reach
+            })
+    }
+
+    /// Select a damaged cover asset from any side of its full footprint.
+    pub fn repairable_asset_near(&self, position: FxVec2) -> Option<u16> {
+        self.destructibles.iter()
+            .filter(|piece| piece.repairable && self.destructibles.iter()
+                .any(|other| other.asset == piece.asset && other.health < other.max_health))
+            .filter(|piece| self.asset_in_repair_reach(position, piece.asset))
+            .map(|piece| ((position - piece.disc.center).length_squared(), piece.asset))
+            .min()
+            .map(|(_, asset)| asset)
+    }
+
     /// Apply a weapon hit to a cover piece; crossing zero opens its footprint.
     pub fn damage_cover(&mut self, index: usize, damage: u16) -> bool {
         let Some(piece) = self.destructibles.get_mut(index) else { return false };
@@ -340,6 +360,7 @@ impl StateHash for Terrain {
             h.write_u64(self.destructibles.len() as u64);
             for piece in &self.destructibles {
                 h.write(&piece.disc.center);
+                h.write_u64(piece.asset as u64);
                 h.write(&piece.disc.radius);
                 h.write_u64(piece.health as u64);
                 h.write_u64(piece.max_health as u64);

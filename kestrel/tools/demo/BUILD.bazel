@@ -42,3 +42,11 @@ py_test(
     srcs = ["assertions_test.py"],
     deps = [":trace_assertions"],
 )
+
+py_test(
+    name = "flicker_test",
+    srcs = ["flicker.py", "flicker_test.py"],
+    main = "flicker_test.py",
+)
+
+exports_files(["flicker.py"])
