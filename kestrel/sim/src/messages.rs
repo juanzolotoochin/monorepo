@@ -96,7 +96,9 @@ pub struct Attach {
 }
 
 /// An agent's carry job (`Carry::job`) moves its next unit: a hauler
-/// loading or unloading at its dock, or a player's depot transfer.
+/// loading or unloading at its dock, or a player's depot transfer. In the
+/// `pile_carry` queue it moves the next unit of a player's pile job
+/// (`Hauler::job`), or all of it at pace zero.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CarryUnit {
     pub agent: u16,
@@ -192,18 +194,6 @@ pub struct Fire {
     pub to: FxVec2,
 }
 
-/// The player's pile job moves its next unit (or all of it).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PileStep {
-    pub agent: u16,
-}
-
-impl StateHash for PileStep {
-    fn hash_into(&self, h: &mut StateHasher) {
-        h.write(&self.agent);
-    }
-}
-
 /// A player's action let go of the avatar's pile haul (`Action::Move`, an
 /// `Attack` with an offered weapon, `Respawn`). Ends the haul if it is still
 /// the one the action saw: a `Pile` command later in the same turn starts a
@@ -278,12 +268,23 @@ impl StateHash for ReserveStock {
     fn hash_into(&self, h: &mut StateHasher) {
         let job = &self.job;
         h.write(&self.agent);
-        let (kind, index) = match job.other {
-            InventoryRef::Depot(d) => (0, d),
-            InventoryRef::Agent(a) => (1, a),
-        };
-        h.write_u64(kind);
-        h.write(&index);
+        // The holder's variant, then its index (a depot's and an agent's
+        // are `u16`, a pile's `u32`; the collector has none).
+        match job.other {
+            InventoryRef::Depot(d) => {
+                h.write_u64(0);
+                h.write(&d);
+            }
+            InventoryRef::Agent(a) => {
+                h.write_u64(1);
+                h.write(&a);
+            }
+            InventoryRef::Pile(id) => {
+                h.write_u64(2);
+                h.write(&id);
+            }
+            InventoryRef::Collector => h.write_u64(3),
+        }
         h.write(&job.item);
         h.write_u64(job.direction as u64);
         h.write(&job.remaining);
@@ -508,7 +509,9 @@ message_queues! {
     hauler_load: CarryUnit,
     hauler_unload: CarryUnit,
     player_carry: CarryUnit,
-    pile_step: PileStep,
+    // Players' pile units, where `PileStep` was: moved at once by their own
+    // handler (`Settlement::pile_unit`), after depot units.
+    pile_carry: CarryUnit,
     // Combat: strikes and projectile hits before breaches, so a killing
     // blow on the last tick saves the base; shots last. Threats' swings
     // after them too, so a kill or stagger on the tick a swing starts or

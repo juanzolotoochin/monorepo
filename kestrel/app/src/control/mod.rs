@@ -549,7 +549,8 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
             if a.carry.job.is_some() || a.carry.inventory.total_in() > 0 || settlement.leaving_cargo(player) {
                 None
             } else {
-                Some(if a.carry.inventory.total() == *expected {
+                // Depot items, as `player_transfer` counted them.
+                Some(if settlement.depot_cargo(a).0.iter().sum::<u32>() == *expected {
                     Ok(())
                 } else {
                     Err("Transfer canceled before exact quantity completed".into())

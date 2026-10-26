@@ -1,5 +1,5 @@
-//! Countable goods held in one place: a depot, an agent's cargo, and later a
-//! pile or the collector (`INVENTORY_HANDOFF.md`).
+//! Countable goods held in one place: a depot, an agent's cargo, a pile or
+//! the collector (`INVENTORY_HANDOFF.md`).
 //!
 //! An inventory counts units per item. It has one capacity, a total in units
 //! of any item. Reservations are per item:
@@ -43,6 +43,14 @@ impl Inventory {
     /// An empty inventory for `items` items.
     pub fn new(items: usize, capacity: u32, kinds: Kinds) -> Inventory {
         Inventory { counts: vec![0; items], capacity, reserved_out: vec![0; items], reserved_in: vec![0; items], kinds }
+    }
+
+    /// Makes room for `items` items, the new ones empty: items added after
+    /// the inventory was made (a scene's minerals).
+    pub fn resize(&mut self, items: usize) {
+        self.counts.resize(items, 0);
+        self.reserved_out.resize(items, 0);
+        self.reserved_in.resize(items, 0);
     }
 
     /// Units of `item` on hand.
@@ -261,6 +269,15 @@ mod tests {
         assert_eq!(inv.counts, vec![1, 2]);
         assert_eq!(inv.total(), 3);
         assert!(inv.holds_any());
+    }
+
+    #[test]
+    fn resize_adds_empty_items() {
+        let mut inv = stocked(&[2], 10, Kinds::AnyMix);
+        inv.resize(3);
+        assert_eq!((inv.counts.clone(), inv.reserved_out.clone(), inv.reserved_in.clone()), (vec![2, 0, 0], vec![0; 3], vec![0; 3]));
+        assert!(inv.add(2, 1));
+        assert_eq!(inv.validate(), Ok(()));
     }
 
     #[test]

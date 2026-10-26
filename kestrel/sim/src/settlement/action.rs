@@ -103,6 +103,7 @@ pub struct View<'a> {
     pub piles: Option<&'a PileLab>,
     pub depots: &'a [DepotState],
     pub transfers: &'a BTreeMap<u64, Transfer>,
+    /// The depot items (`Settlement::depot_items`): minerals are left out.
     pub items: usize,
     pub spawn: FxVec2,
     pub spawn_height: Fx,
@@ -121,7 +122,7 @@ impl Settlement {
             piles: self.piles.as_ref(),
             depots: &self.depots,
             transfers: &self.transfers,
-            items: self.items.len(),
+            items: self.depot_items(),
             spawn: self.spawn,
             spawn_height: self.spawn_height,
             piano_serial: self.piano_serial,

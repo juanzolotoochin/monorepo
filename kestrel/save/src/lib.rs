@@ -50,7 +50,12 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///     unload in `Carry::next`; its `Assignment` keeps only the link.
 ///     Pending messages have `ReserveHaul` and `CarryUnit` queues for
 ///     `Reserve`, `Load`, `Unload` and `ManualUnit`.
-pub const FORMAT_VERSION: u32 = 16;
+/// 17: a pile scene's minerals are settlement items, after the scenario's.
+///     Piles and the collector hold an `Inventory`, and a player's minerals
+///     are in its `Carry` (the lab's `Hauler` has no cargo). `InventoryRef`
+///     gains `Pile` and `Collector`; pending messages have a `pile_carry`
+///     queue of `CarryUnit` for `PileStep`.
+pub const FORMAT_VERSION: u32 = 17;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

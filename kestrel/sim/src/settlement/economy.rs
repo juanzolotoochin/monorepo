@@ -72,6 +72,9 @@ impl Settlement {
             InventoryRef::Agent(a) => {
                 self.agents[a as usize].carry.inventory.put(t.item, 1);
             }
+            // Pile units move at once for now (`INVENTORY_HANDOFF.md`,
+            // step 9), so none land here yet.
+            InventoryRef::Pile(_) | InventoryRef::Collector => self.inventory_mut(t.to).put(t.item, 1),
         }
     }
 
@@ -295,7 +298,9 @@ impl Settlement {
     /// Commands: adds stock to a depot, within its unreserved space. For
     /// scripted demos and tests.
     pub fn add_stock(&mut self, depot: usize, item: usize, units: u32) {
-        let (Some(d), true) = (self.depots.get_mut(depot), item < self.items.len()) else { return };
+        // Minerals go to piles, not depots.
+        let depot_items = self.depot_items();
+        let (Some(d), true) = (self.depots.get_mut(depot), item < depot_items) else { return };
         // `add` refuses units that don't fit.
         if units == 0 || !d.inventory.add(item as ItemIx, units) {
             return;

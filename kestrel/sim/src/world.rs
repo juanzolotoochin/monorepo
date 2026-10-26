@@ -833,8 +833,8 @@ impl World {
             for message in messages.hauler_load.into_iter().chain(messages.hauler_unload).chain(messages.player_carry) {
                 settlement.carry_unit(tick, message);
             }
-            for step in messages.pile_step {
-                settlement.pile_step(tick, &self.terrain, step.agent);
+            for message in messages.pile_carry {
+                settlement.pile_unit(tick, &self.terrain, message);
             }
             for message in messages.strike {
                 let agent = message.agent;

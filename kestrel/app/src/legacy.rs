@@ -541,9 +541,11 @@ impl Simulation {
         };
         let item = |i: s::ItemIx| current.items[i as usize].clone();
         let agent_name = |a: s::AgentIx| current.agents[a as usize].id.clone();
+        // Piles and the collector are drawn by the pile view, not here.
         let endpoint = |e: SimHolder| match e {
-            SimHolder::Depot(d) => Endpoint::Depot(current.depots[d as usize].id.clone()),
-            SimHolder::Agent(a) => Endpoint::Cargo(agent_name(a)),
+            SimHolder::Depot(d) => Some(Endpoint::Depot(current.depots[d as usize].id.clone())),
+            SimHolder::Agent(a) => Some(Endpoint::Cargo(agent_name(a))),
+            SimHolder::Pile(_) | SimHolder::Collector => None,
         };
         let inventory = |units: &[u32], capacity: u32| Inventory {
             capacity,
@@ -570,7 +572,12 @@ impl Simulation {
                     travelled: a.body.travelled.to_f32(),
                     // A player shows as an idle hauler.
                     phase: format!("{:?}", a.hauler().map_or(s::Phase::Idle, |h| h.phase)),
-                    cargo: inventory(&a.carry.inventory.counts, a.carry.inventory.capacity),
+                    // Depot items only: a player's minerals are drawn by the
+                    // pile view.
+                    cargo: {
+                        let (units, capacity) = current.depot_cargo(a);
+                        inventory(units, capacity)
+                    },
                     trailer,
                 };
                 (a.id.clone(), state)
@@ -739,9 +746,9 @@ impl Simulation {
             transfers: current
                 .transfers
                 .values()
-                .map(|t| {
-                    let transfer = Transfer { id: t.id, item: item(t.item), from: endpoint(t.from), to: endpoint(t.to), born: t.born, arrival: t.arrival };
-                    (t.id, transfer)
+                .filter_map(|t| {
+                    let transfer = Transfer { id: t.id, item: item(t.item), from: endpoint(t.from)?, to: endpoint(t.to)?, born: t.born, arrival: t.arrival };
+                    Some((t.id, transfer))
                 })
                 .collect(),
             threats,

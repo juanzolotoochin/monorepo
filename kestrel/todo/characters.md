@@ -237,6 +237,32 @@
   `mod.rs`.
 - **Found in:** inventory step 5 (`kestrel/INVENTORY_HANDOFF.md`).
 
+## Give a scene's empty starting pile a mineral
+
+- **Status:** open
+- **Why:** since inventory step 6 a pile's mineral is what its `OneKind`
+  inventory holds (or a dispenser's `source`). A non-dispenser pile set up
+  with 0 units therefore has no mineral: it takes a deposit of any mineral,
+  where it used to take only its own, and the app draws it as amber. No
+  scene does this today (`pile_lab.ron` starts every pile with units).
+- **What to do:** reject a 0-unit starting pile in `Settlement::from_scene`
+  (or the scene loader), or leave it out.
+- **Where:** `PileLab::new` in `kestrel/sim/src/settlement/piles.rs`;
+  `from_scene` in `mod.rs`; `app/src/lockstep.rs` (the `PileSetup`).
+- **Found in:** inventory step 6 (`kestrel/INVENTORY_HANDOFF.md`).
+
+## Decide whether minerals show in the settlement panel
+
+- **Status:** open
+- **Why:** since inventory step 6 a pile scene's minerals are settlement
+  items, so `Settlement::balances` (and the app's legacy view of it) lists
+  them, with piles and the collector as `stored`. The legacy agent cargo
+  leaves them out (`Settlement::depot_cargo`); the balances don't.
+- **What to do:** check how the debug panels read in the pile and dig labs,
+  and hide the minerals there or label them.
+- **Where:** `kestrel/app/src/legacy.rs` (`balances`), the settlement HUD.
+- **Found in:** inventory step 6 (`kestrel/INVENTORY_HANDOFF.md`).
+
 ## Done
 
 ### Keep a player's health over the Respawn action

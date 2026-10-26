@@ -100,13 +100,16 @@ pub struct ProducerState {
     pub cycles: u32,
 }
 
-/// Names a holder of goods: a depot's inventory or an agent's cargo. A
-/// flying unit's two ends are these, and so is a carry job's other side.
-/// Piles and the collector join it later (`INVENTORY_HANDOFF.md`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Names a holder of goods: a depot's inventory, an agent's cargo, a pile or
+/// the collector. A flying unit's two ends are these, and so is a carry
+/// job's other side. New variants go last: `behaviour_digest` hashes the
+/// variant index of every transfer's ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum InventoryRef {
     Depot(DepotIx),
     Agent(AgentIx),
+    Pile(piles::PileId),
+    Collector,
 }
 
 /// One unit in the air. It belongs to neither end until it arrives.
@@ -509,20 +512,32 @@ impl Settlement {
             body.heading = Fx::PI;
             avatar.height = settlement.spawn_height;
         }
-        settlement.piles = setup.piles.as_ref().map(|p| {
+        if let Some(p) = &setup.piles {
+            // The mine's minerals become items, after the scenario's.
+            let first_mineral = settlement.add_items(&crate::mine::MINERAL_IDS)?;
+            // Until a player has one capacity (`INVENTORY_HANDOFF.md`, step
+            // 7), its cargo holds depot items within the scenario's capacity
+            // and minerals within the lab's, beside each other: its capacity
+            // is the two added up, so it never refuses either.
+            for a in settlement.agents.iter_mut().filter(|a| a.avatar().is_some()) {
+                a.carry.inventory.capacity = a.carry.inventory.capacity.saturating_add(p.capacity);
+            }
             let dispensers: Vec<(u8, FxVec2)> = p.dispensers.iter().map(|&(m, o)| (m, at(o))).collect();
             let piles: Vec<(u8, FxVec2, u32)> = p.piles.iter().map(|&(m, pos, units)| (m, at(pos), units)).collect();
-            let mut lab = piles::PileLab::new(center, p.capacity, &dispensers, &piles);
+            let mut lab = piles::PileLab::new(center, p.capacity, settlement.items.len(), first_mineral, &dispensers, &piles);
+            for &(mineral, _, units) in &piles {
+                settlement.accounts[lab.item(mineral) as usize].initial += units as u64;
+            }
             if setup.mine.is_some() {
                 // Ore can be piled anywhere in a mine, and there's a lot of it.
                 lab.limit = terrain.extent - Fx::ONE;
                 lab.max_piles = piles::MAX_MINE_PILES;
             }
             if let Some(position) = p.collector {
-                lab.collector = Some(piles::Collector::new(at(position)));
+                lab.collector = Some(piles::Collector::new(at(position), settlement.items.len()));
             }
-            lab
-        });
+            settlement.piles = Some(lab);
+        }
         if let Some(c) = settlement.piles.as_ref().and_then(|lab| lab.collector.as_ref()) {
             terrain.obstacles.push(Disc { center: c.position, radius: piles::COLLECTOR_RADIUS });
             terrain.revision += 1;
@@ -561,6 +576,47 @@ impl Settlement {
             base_health: 1,
             player_health: 0,
         }
+    }
+
+    /// Adds items after the scenario's, with room for them in every
+    /// inventory. Returns the first one's index.
+    fn add_items(&mut self, ids: &[&str]) -> Result<ItemIx, String> {
+        if let Some(id) = ids.iter().find(|id| self.items.iter().any(|i| i == *id)) {
+            return Err(format!("the scenario has an item {id:?}, which is a mineral"));
+        }
+        let first = self.items.len() as ItemIx;
+        self.items.extend(ids.iter().map(|id| id.to_string()));
+        let items = self.items.len();
+        self.accounts.resize(items, Accounting::default());
+        for d in &mut self.depots {
+            d.inventory.resize(items);
+        }
+        for a in &mut self.agents {
+            a.carry.inventory.resize(items);
+        }
+        Ok(first)
+    }
+
+    /// The items depots and depot transfers take: the scenario's, without
+    /// a pile scene's minerals.
+    pub fn depot_items(&self) -> usize {
+        self.piles.as_ref().map_or(self.items.len(), |lab| lab.first_mineral as usize)
+    }
+
+    /// An agent's depot cargo: its units of depot items and their capacity,
+    /// leaving out a player's minerals and their room (see `from_scene`).
+    pub fn depot_cargo<'a>(&self, a: &'a AgentState) -> (&'a [u32], u32) {
+        let inventory = &a.carry.inventory;
+        let minerals = self.piles.as_ref().filter(|_| a.avatar().is_some()).map_or(0, |lab| lab.capacity);
+        (&inventory.counts[..self.depot_items()], inventory.capacity.saturating_sub(minerals))
+    }
+
+    /// The minerals `agent` carries: which one, by its mineral number, and
+    /// how many units.
+    pub fn carried_minerals(&self, agent: AgentIx) -> (Option<u8>, u32) {
+        let (Some(lab), Some(a)) = (self.piles.as_ref(), self.agents.get(agent as usize)) else { return (None, 0) };
+        let (item, units) = lab.carried(&a.carry.inventory);
+        (item.map(|i| lab.mineral(i)), units)
     }
 
     pub fn item_index(&self, id: &str) -> Option<ItemIx> {
@@ -606,14 +662,19 @@ impl Settlement {
         match holder {
             InventoryRef::Depot(d) => &mut self.depots[d as usize].inventory,
             InventoryRef::Agent(a) => &mut self.agents[a as usize].carry.inventory,
+            InventoryRef::Pile(id) => &mut self.piles.as_mut().expect("a pile scene").piles.get_mut(&id).expect("a pile that exists").inventory,
+            InventoryRef::Collector => &mut self.piles.as_mut().and_then(|lab| lab.collector.as_mut()).expect("a collector").inventory,
         }
     }
 
-    /// Where `holder` takes and gives units: a depot's dock, an agent's body.
+    /// Where `holder` takes and gives units: a depot's dock, an agent's
+    /// body, a pile, the collector.
     pub(crate) fn position_of(&self, holder: InventoryRef) -> FxVec2 {
         match holder {
             InventoryRef::Depot(d) => self.depots[d as usize].position,
             InventoryRef::Agent(a) => self.agents[a as usize].body.position,
+            InventoryRef::Pile(id) => self.piles.as_ref().expect("a pile scene").piles[&id].position,
+            InventoryRef::Collector => self.piles.as_ref().and_then(|lab| lab.collector.as_ref()).expect("a collector").position,
         }
     }
 
@@ -630,7 +691,9 @@ impl Settlement {
             .enumerate()
             .map(|(i, id)| {
                 let b = &self.accounts[i];
-                let stored = self.depots.iter().map(|d| d.inventory.counts[i] as u64).sum();
+                // Minerals are stored in piles and the collector.
+                let lab = self.piles.iter().flat_map(|lab| lab.piles.values().map(|p| &p.inventory).chain(lab.collector.as_ref().map(|c| &c.inventory)));
+                let stored = self.depots.iter().map(|d| &d.inventory).chain(lab).map(|inventory| inventory.counts[i] as u64).sum();
                 let carried = self.agents.iter().map(|a| a.carry.inventory.counts[i] as u64).sum();
                 let in_transit = self.transfers.values().filter(|t| t.item as usize == i).count() as u64;
                 let equipped = self.agents.iter().filter(|a| a.equipped_item() == Some(i as ItemIx)).count() as u64;
@@ -722,6 +785,51 @@ impl Settlement {
             if a.carry.inventory.reserved_in != cargo_in[i] || a.carry.inventory.reserved_out != cargo_out[i] {
                 return Err(format!("agent {} cargo reservations drifted", a.id));
             }
+        }
+        if let Some(lab) = &self.piles {
+            self.validate_lab(lab)?;
+        }
+        Ok(())
+    }
+
+    /// Checks the piles and the collector: each inventory on its own, and
+    /// its reservations against the units flying there and the carry jobs
+    /// on it. Pile units move at once with no job yet, so these are empty
+    /// until pile jobs reserve and units fly (`INVENTORY_HANDOFF.md`, steps
+    /// 8 and 9).
+    fn validate_lab(&self, lab: &piles::PileLab) -> Result<(), String> {
+        let items = self.items.len();
+        let expected = |holder: InventoryRef| {
+            let (mut out, mut incoming) = (vec![0u32; items], vec![0u32; items]);
+            for t in self.transfers.values().filter(|t| t.to == holder) {
+                incoming[t.item as usize] += 1;
+            }
+            for job in self.agents.iter().flat_map(|a| a.carry.job.iter().chain(&a.carry.next)).filter(|j| j.other == holder) {
+                let side = if job.gives(Side::Other) { &mut out } else { &mut incoming };
+                side[job.item as usize] += job.remaining;
+            }
+            (out, incoming)
+        };
+        let holders = lab.piles.iter().map(|(&id, p)| (InventoryRef::Pile(id), format!("pile {id}"), &p.inventory));
+        let collector = lab.collector.iter().map(|c| (InventoryRef::Collector, "collector".to_string(), &c.inventory));
+        for (holder, name, inventory) in holders.chain(collector) {
+            inventory.validate().map_err(|e| format!("{name} {e}"))?;
+            if (inventory.reserved_out.clone(), inventory.reserved_in.clone()) != expected(holder) {
+                return Err(format!("{name} reservations drifted"));
+            }
+            if (0..items as ItemIx).any(|i| inventory.count(i) > 0 && !lab.is_mineral(i)) {
+                return Err(format!("{name} holds an item that isn't a mineral"));
+            }
+        }
+        // The pile job's rules for a player's minerals, until step 7.
+        for a in &self.agents {
+            let minerals = (0..items as ItemIx).filter(|&i| lab.is_mineral(i) && a.carry.inventory.count(i) > 0).count();
+            if minerals > 1 || lab.carried(&a.carry.inventory).1 > lab.capacity {
+                return Err(format!("agent {} carries more minerals than the lab allows", a.id));
+            }
+        }
+        if !lab.conserved(self.agents.iter().map(|a| &a.carry.inventory)) {
+            return Err("pile lab units not conserved".into());
         }
         Ok(())
     }

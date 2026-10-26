@@ -80,6 +80,22 @@ impl Scene {
         self.s().piles.as_ref().unwrap()
     }
 
+    /// The minerals the player carries: which one, and how many units.
+    fn cargo(&self) -> (Option<u8>, u32) {
+        self.s().carried_minerals(self.agent())
+    }
+
+    /// Mineral units in piles, cargo and the collector.
+    fn total(&self) -> u64 {
+        self.lab().total(self.s().agents.iter().map(|a| &a.carry.inventory))
+    }
+
+    /// Every unit is conserved, and the settlement's inventories check out.
+    fn conserved(&self) -> bool {
+        self.s().validate().unwrap();
+        self.lab().conserved(self.s().agents.iter().map(|a| &a.carry.inventory))
+    }
+
     /// The player's pile-lab hauler, once it has hauled.
     fn hauler(&self) -> super::piles::Hauler {
         self.s().piles.as_ref().unwrap().hauler(self.agent()).cloned().expect("the player has hauled")
@@ -403,9 +419,9 @@ fn pile_lab_hauls_exactly_four_units() {
     finish(&mut scene);
     let l = scene.hauler();
     assert_eq!(l.last_error, None);
-    assert_eq!(l.cargo.units, 4);
-    assert_eq!(scene.lab().total(), 104);
-    assert_eq!(scene.lab().piles[&0].units, 4);
+    assert_eq!(scene.cargo().1, 4);
+    assert_eq!(scene.total(), 104);
+    assert_eq!(scene.lab().piles[&0].units(), 4);
     assert_ne!(scene.avatar().body.position, start, "walked before transferring");
     scene.wait(ms(1000));
     scene.walk(2.0, 1.0);
@@ -414,10 +430,10 @@ fn pile_lab_hauls_exactly_four_units() {
     finish(&mut scene);
     let l = scene.hauler();
     assert_eq!(l.last_error, None);
-    assert_eq!(l.cargo.units, 0);
-    assert_eq!(scene.lab().total(), 104);
-    assert_eq!(scene.lab().piles[&5].units, 4);
-    assert!(scene.lab().conserved());
+    assert_eq!(scene.cargo().1, 0);
+    assert_eq!(scene.total(), 104);
+    assert_eq!(scene.lab().piles[&5].units(), 4);
+    assert!(scene.conserved());
 }
 
 #[test]
@@ -430,7 +446,7 @@ fn moving_cancels_a_haul_and_keeps_the_cargo() {
     let l = scene.hauler();
     assert!(l.job.is_none());
     assert_eq!(l.last_error.as_deref(), Some("Haul canceled by player input"));
-    assert!(scene.lab().conserved());
+    assert!(scene.conserved());
 }
 
 #[test]
@@ -444,15 +460,15 @@ fn blocked_drops_are_rejected_without_losing_cargo() {
         }
         scene.sim.step(&[]);
     }
-    let carried = scene.hauler().cargo.units;
+    let carried = scene.cargo().1;
     assert_eq!(carried, 8);
     // Off the deck.
     let edge = scene.at(7.5, 7.5);
     scene.command(CommandKind::Pile { agent, action: PileAction::Drop(edge), pace: Fx::ZERO, approach: None });
     let l = scene.hauler();
     assert!(l.job.is_none() && l.last_error.is_some());
-    assert_eq!(l.cargo.units, carried);
-    assert!(scene.lab().conserved());
+    assert_eq!(scene.cargo().1, carried);
+    assert!(scene.conserved());
 }
 
 /// Scenes save and continue like any world: piles, ghosts and flight included.
@@ -694,9 +710,9 @@ fn dug_ore_piles_up_and_goes_to_the_collector() {
     scene.wait(dig_ticks);
     let lab = scene.s().piles.as_ref().unwrap();
     let (&pile, p) = lab.piles.iter().next().expect("the ore landed in a pile");
-    assert_eq!((p.material, p.units), (material, units));
+    assert_eq!((lab.pile_mineral(p), p.units()), (Some(material), units));
     assert!(crate::nav::distance(p.position, Terrain::pit_center(tile)) < fx(3.0), "beside the pit");
-    assert!(lab.conserved());
+    assert!(scene.conserved());
 
     let pile_action = |action| CommandKind::Pile { agent, action, pace: Fx::ZERO, approach: None };
     let haul = |scene: &mut Scene, action| {
@@ -711,7 +727,7 @@ fn dug_ore_piles_up_and_goes_to_the_collector() {
     };
     haul(&mut scene, PileAction::Pickup(pile));
     assert_eq!(scene.hauler().last_error, None, "the pile is in reach from the pit");
-    assert_eq!(scene.hauler().cargo.units, units);
+    assert_eq!(scene.cargo().1, units);
     // There's no walking to the collector from the pit: fly out first.
     scene.command(pile_action(PileAction::Deliver));
     assert!(scene.hauler().last_error.is_some(), "no route out of the pit on foot");
@@ -725,9 +741,9 @@ fn dug_ore_piles_up_and_goes_to_the_collector() {
     haul(&mut scene, PileAction::Deliver);
     let lab = scene.s().piles.as_ref().unwrap();
     assert_eq!(scene.hauler().last_error, None);
-    assert_eq!(scene.hauler().cargo.units, 0);
-    assert_eq!(lab.collector.as_ref().unwrap().stored[material as usize], units);
-    assert!(lab.conserved());
+    assert_eq!(scene.cargo().1, 0);
+    assert_eq!(lab.collected()[material as usize], units);
+    assert!(scene.conserved());
 }
 
 /// Routes across the big mine stay quick to plan: a long walk over the
@@ -766,15 +782,15 @@ fn two_players_haul_their_own_loads() {
     };
     both(&mut scene, haul(a, PileAction::Pickup(0)), haul(b, PileAction::Pickup(1)));
     let lab = scene.lab();
-    assert_eq!((lab.cargo(a).material, lab.cargo(a).units), (Some(0), 10));
-    assert_eq!((lab.cargo(b).material, lab.cargo(b).units), (Some(1), 10));
+    assert_eq!(scene.s().carried_minerals(a), (Some(0), 10));
+    assert_eq!(scene.s().carried_minerals(b), (Some(1), 10));
     assert!(lab.piles.is_empty());
     both(&mut scene, haul(a, PileAction::Deliver), haul(b, PileAction::Deliver));
     let lab = scene.lab();
     assert_eq!(lab.hauler(a).unwrap().last_error, None);
     assert_eq!(lab.hauler(b).unwrap().last_error, None);
-    assert_eq!(lab.collector.as_ref().unwrap().stored, vec![10, 10, 0]);
-    assert!(lab.conserved());
+    assert_eq!(lab.collected(), vec![10, 10, 0]);
+    assert!(scene.conserved());
 }
 
 // Releasing direct control (pause, focus loss, a controller disconnecting).
@@ -833,8 +849,8 @@ fn releasing_keeps_an_accepted_haul_and_its_route() {
         scene.sim.step(&[]);
     }
     assert!(scene.hauler().job.is_none() && scene.hauler().last_error.is_none(), "the haul finished normally");
-    assert!(scene.hauler().cargo.units > 0);
-    assert!(scene.lab().conserved());
+    assert!(scene.cargo().1 > 0);
+    assert!(scene.conserved());
 }
 
 /// A haul and a release in one turn: the release sees the haul it follows.
@@ -880,10 +896,10 @@ fn releasing_mid_transfer_conserves_airborne_units() {
     assert!(tossing, "the haul never started tossing");
     release(&mut scene);
     assert!(scene.hauler().job.is_some());
-    assert!(scene.lab().conserved());
+    assert!(scene.conserved());
     scene.wait(ms(10_000));
     assert!(scene.hauler().job.is_none() && scene.hauler().in_flight.is_empty());
-    assert!(scene.lab().conserved());
+    assert!(scene.conserved());
 }
 
 /// Explicit cancellation stays a separate, deliberate action.
@@ -946,7 +962,7 @@ fn an_attack_ends_a_haul_and_swings() {
     assert_eq!(scene.hauler().last_error.as_deref(), Some("Haul canceled by player input"));
     assert!(scene.avatar().avatar().unwrap().swing.is_some(), "the swing stands");
     assert_eq!(scene.avatar().avatar().unwrap().intent, Some(Intent::Stop));
-    assert!(scene.lab().conserved());
+    assert!(scene.conserved());
 }
 
 /// A move ends the haul it saw, not one started after it in the same turn.
@@ -974,7 +990,7 @@ fn respawning_ends_a_haul() {
     scene.command(CommandKind::Respawn { agent });
     assert!(scene.hauler().job.is_none());
     assert!(scene.avatar().body.route.is_empty(), "the haul doesn't steer the respawned avatar");
-    assert!(scene.lab().conserved());
+    assert!(scene.conserved());
 }
 
 /// Letting go releases the keys the avatar held, but not one pressed after
@@ -1057,7 +1073,7 @@ fn dying_ends_a_haul() {
     assert_eq!(hauler.last_error.as_deref(), Some("Haul canceled because the player died"));
     assert!(hauler.notice.contains("died"), "{}", hauler.notice);
     assert!(scene.avatar().body.route.is_empty());
-    assert!(scene.lab().conserved());
+    assert!(scene.conserved());
     scene.s().validate().unwrap();
     scene.wait(ms(2500));
     assert_eq!(scene.avatar().body.health, 1, "respawned");
