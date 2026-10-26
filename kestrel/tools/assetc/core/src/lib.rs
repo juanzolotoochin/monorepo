@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 pub use style::*;
 
-pub const VERSION: u32 = 10;
+pub const VERSION: u32 = 11;
 pub type Result<T> = std::result::Result<T, String>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

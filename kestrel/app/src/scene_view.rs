@@ -58,6 +58,7 @@ impl Service for SceneView {
     }
 
     fn shutdown(self, world: &mut World) {
+        crate::destruction::release_materials(world);
         crate::assets::release_scene(world);
         // The built-in deck shows only in worlds, not behind the menus.
         for mut visibility in world.query_filtered::<&mut Visibility, With<crate::jetpack::Deck>>().iter_mut(world) {
@@ -73,7 +74,7 @@ impl Service for SceneView {
                 .run_if(crate::control::rendered)
                 .run_if(in_state(WorldState::Active)),
         );
-        app.add_systems(PostUpdate, update_destructibles.run_if(in_state(WorldState::Active)));
+        app.add_systems(PostUpdate, (update_destructibles, crate::destruction::animate).chain().run_if(in_state(WorldState::Active)));
     }
 }
 
@@ -81,16 +82,20 @@ impl Service for SceneView {
 fn update_destructibles(world: &mut World) {
     let Some(terrain) = world.resource::<crate::lockstep::SessionService>().world().map(|w| w.terrain()) else { return };
     let health: Vec<u16> = terrain.destructibles.iter().map(|piece| piece.health).collect();
-    let mut query = world.query::<(Entity, &mut crate::style::DestructibleView, &mut Visibility, Option<&crate::combat::Obstacle>, &Children)>();
+    let mut query = world.query::<(Entity, &mut crate::style::DestructibleView, &mut Visibility,
+        Option<&crate::combat::Obstacle>, Option<&crate::destruction::CoverFragment>, &Children)>();
     let mut changes = Vec::new();
     let mut tint = Vec::new();
-    for (entity, mut view, mut visibility, obstacle, children) in query.iter_mut(world) {
+    let mut hits = Vec::new();
+    for (entity, mut view, mut visibility, obstacle, falling, children) in query.iter_mut(world) {
+        if falling.is_some() { continue; }
         let current = health.get(view.index).copied().unwrap_or(0);
         let alive = current > 0;
-        *visibility = if alive { Visibility::Inherited } else { Visibility::Hidden };
+        *visibility = if alive || view.last_health > 0 { Visibility::Inherited } else { Visibility::Hidden };
         if current != view.last_health {
             let factor = 0.55 + 0.45 * f32::from(current) / f32::from(view.max_health);
             tint.extend(children.iter().map(|child| (child, factor)));
+            hits.push((entity, view.index, current));
             view.last_health = current;
         }
         if alive != obstacle.is_some() { changes.push((entity, view.index, alive)); }
@@ -113,6 +118,11 @@ fn update_destructibles(world: &mut World) {
         } else {
             world.entity_mut(entity).remove::<crate::combat::Obstacle>();
         }
+    }
+    let tick = world.resource::<crate::lockstep::SessionService>().world().map_or(0, |w| w.tick());
+    for (entity, index, current) in hits {
+        let piece = world.resource::<SceneView>().pack.destructibles[index].clone();
+        crate::destruction::hit(world, entity, &piece, index, current, tick);
     }
 }
 
