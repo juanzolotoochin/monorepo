@@ -121,7 +121,8 @@ pub fn capture(
     time: Res<Time>,
     controls: Res<Controls>,
     flight: Res<crate::jetpack::Flight>,
-    player: Single<&Transform, With<Player>>,
+    // Runs only once the player exists.
+    _player: Single<&Transform, With<Player>>,
     feedback: Res<Feedback>,
     mut preview: Local<Preview>,
     mut exit: MessageWriter<AppExit>,
@@ -149,11 +150,11 @@ pub fn capture(
     preview.elapsed += time.delta_secs().min(0.1);
     let name = if preview.jump_combo
         && !preview.jump_frame
+        // The top of the arc: the first frame it falls, whatever the jump tuning.
         && matches!(
             flight.jump,
-            sim::settlement::avatar::JumpPhase::Airborne { .. }
+            sim::settlement::avatar::JumpPhase::Airborne { velocity, .. } if velocity <= fx::Fx::ZERO
         )
-        && player.translation.y - flight.support > 0.9
     {
         preview.jump_frame = true;
         Some("jump.png")

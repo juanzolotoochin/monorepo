@@ -990,6 +990,13 @@ pub fn builtin_character(name: &str) -> &'static content::character::CharacterDe
     &content.rules.characters[ix as usize]
 }
 
+/// How that character is drawn: its skin and motion tuning.
+pub fn builtin_character_view(name: &str) -> &'static content::character::CharacterView {
+    let content = builtin_content();
+    let ix = content.names.character_index(name).unwrap_or_else(|| panic!("unknown character {name:?}"));
+    &content.views.characters[ix as usize]
+}
+
 /// A simulation duration in view seconds, so view timings follow the sim's
 /// tick constants instead of copying them.
 pub const fn seconds(ticks: u64) -> f32 {

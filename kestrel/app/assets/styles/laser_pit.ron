@@ -1,7 +1,6 @@
 Style(id: "laser-pit", actor_name: Some("LASER PIT FIGHTER"),
     actor_weapon: Some(Laser), weapon_name: "PULSE LASER",
     actor_voxel_size: Some(0.05),
-    character_motion: (motion_style: Natural, plant_feet: true),
     materials: [
         (name: "stone", color: (0.17, 0.22, 0.28), emissive: (0.0, 0.0, 0.0), metallic: 0.3, roughness: 0.65, impact: Stone),
         (name: "floor_joint", color: (0.13, 0.18, 0.23), emissive: (0.0, 0.0, 0.0), metallic: 0.2, roughness: 0.8, impact: Stone),

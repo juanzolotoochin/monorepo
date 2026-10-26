@@ -37,7 +37,6 @@ fn agent(id: &str) -> Agent {
         controlled: false,
         id: id.into(),
         label: id.into(),
-        skin: "worker".into(),
         character: "test_hauler".into(),
         position: p(-2.0, 1.0),
         capacity: 3,

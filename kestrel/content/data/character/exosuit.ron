@@ -28,5 +28,7 @@
             ),
         ),
     ),
-    view: (),
+    // Built from the exosuit actor (app/actors/exosuit.ron), posed with the
+    // default motion.
+    view: (actor: "exosuit"),
 )

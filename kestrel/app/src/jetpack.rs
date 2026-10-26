@@ -168,7 +168,9 @@ pub fn update(
     mirror: Res<crate::lockstep::WorldMirror>,
     mut flight: ResMut<Flight>,
     sound: Res<crate::sound::Sound>,
-    mut exhaust: Query<(&mut Transform, &mut Visibility), With<Exhaust>>,
+    mut exhaust: Query<(Entity, &mut Transform, &mut Visibility), With<Exhaust>>,
+    player: Option<Single<Entity, With<crate::character::Player>>>,
+    parents: Query<&ChildOf>,
 ) {
     let (Some(current), Some(index)) = (&mirror.current, mirror.player()) else { return };
     let avatar = &current.agents[index as usize].avatar;
@@ -200,7 +202,12 @@ pub fn update(
     if !flight.airborne {
         flight.sound_timer = 0.0;
     }
-    for (mut transform, mut visibility) in &mut exhaust {
+    // Remote players' exhausts follow their own flight (`peers`).
+    let Some(player) = player.map(|player| *player) else { return };
+    for (entity, mut transform, mut visibility) in &mut exhaust {
+        if !parents.iter_ancestors(entity).any(|ancestor| ancestor == player) {
+            continue;
+        }
         *visibility = if flight.airborne && !jumping {
             Visibility::Inherited
         } else {
