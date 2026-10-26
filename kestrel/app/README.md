@@ -156,6 +156,45 @@ bazel run --config=remote -c opt //kestrel/app:steamdeck -- --steam
 The Steam shortcut remains valid across updates. Steam must be running in
 Desktop Mode for the remote launch.
 
+## Run natively on Steam Frame
+
+The `:steamframe` target cross-builds the Linux ARM64 game while keeping the
+Go SSH deploy tool runnable on this Linux x86-64 build machine. It uses the
+same compressed transfer and progress display as `:steamdeck`. Kestrel is a
+non-VR game; it opens as a flat game window in the headset's desktop session.
+
+On the Frame, enable **Developer Mode** in **Settings → System**. Switch to
+**Desktop Mode** before using the direct launch. From this machine, authorize
+your SSH key and verify access:
+
+```sh
+ssh-copy-id steamos@frame.local
+ssh -o BatchMode=yes steamos@frame.local true
+```
+
+Then build, transfer, and start Kestrel:
+
+```sh
+bazel run --config=remote -c opt //kestrel/app:steamframe
+```
+
+The default SSH target is `steamos@frame.local`. Set `STEAM_FRAME_TARGET=user@host`
+if the headset uses a different address. `-- --scene moonlit-glade`,
+`-- --install-only`, `-- --dry-run`, and `-- --stop` work as for the Deck.
+Startup logs are in `~/.local/opt/kestrel/last-run.log` on the Frame. The
+launcher requires `zstd` on the Frame for decompression and a running Plasma
+desktop session. It checks that the remote CPU reports `aarch64` before upload.
+
+To launch through Steam's gamepad layout after the one-time Steam shortcut
+setup, add `/home/steamos/.local/opt/kestrel/demo` as a Non-Steam Game in
+Desktop Mode. Set its Launch Options to `--fullscreen --auto-claim-gamepad`.
+Then `bazel run --config=remote -c opt //kestrel/app:steamframe -- --steam`
+updates the binary and asks Steam to start the shortcut. Valve's SteamOS
+Devkit Client is another way to install native ARM64 games into the headset's
+Steam library; [Valve's deployment guide](https://partner.steamgames.com/doc/steamhardware/steamframe/loadgames)
+specifies **Steam Linux Runtime 3.0 ARM64 (Sniper)** for that path. This target
+uses SSH and the active desktop session instead.
+
 ## Launch menu
 
 Run `bazel run --config=full_local -c opt //kestrel/app:demo` to open the launch
