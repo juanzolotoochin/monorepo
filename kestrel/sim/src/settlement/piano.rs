@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{AgentIx, Settlement};
 
-const REACH: Fx = Fx::from_ratio(14, 5);
+/// Reach from the piano's center includes its cabinet and room for a player
+/// to stand in front of the keyboard without overlapping the cover collision.
+pub const REACH: Fx = Fx::from_int(4);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PianoNote {

@@ -9,7 +9,6 @@ use sim::CommandKind;
 
 const FIRST: i32 = 60;
 const KEYS: usize = 24;
-const REACH: f32 = 2.8;
 
 #[derive(Resource)]
 pub struct PianoInput {
@@ -150,7 +149,7 @@ fn nearby(scene: &Scene, player: Vec3) -> Option<usize> {
     scene.pianos.iter().enumerate().filter_map(|(index, piano)| {
         let delta = Vec3::from_array(piano.position) - player;
         let distance = Vec2::new(delta.x, delta.z).length();
-        (distance < REACH).then_some((index, distance))
+        (distance < sim::settlement::piano::REACH.to_f32()).then_some((index, distance))
     }).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(index, _)| index)
 }
 

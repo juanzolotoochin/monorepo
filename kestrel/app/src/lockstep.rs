@@ -1183,6 +1183,51 @@ mod tests {
         app
     }
 
+    #[test]
+    fn hosted_hall_piano_accepts_a_joined_players_notes() {
+        let make_app = |network| {
+            let options = crate::control::Options { simulation: true, ..default() };
+            let hub = crate::control::Hub::new(options.clone()).unwrap();
+            let library = SceneLibrary::new();
+            let hall = library.index("laser-pit").unwrap();
+            let mut app = crate::test_app(options, library, hub, Launch { network, ..Launch::single_player(hall) });
+            app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)));
+            app
+        };
+        let mut host = make_app(Some(Network::Host("127.0.0.1:0".parse().unwrap())));
+        crate::start_world(&mut host);
+        let address = host.world().resource::<SessionService>().session.local_addr().unwrap();
+        let mut client = make_app(Some(Network::Join(address)));
+        for _ in 0..240 {
+            host.update();
+            client.update();
+            if world_active(&client) && client.world().resource::<SessionService>().player().is_some() { break; }
+        }
+        assert!(world_active(&client));
+        let player = client.world().resource::<SessionService>().player().unwrap();
+        let target = client.world().resource::<SessionService>().to_sim(Vec3::new(0.0, 0.0, -9.0));
+        client.world_mut().resource_mut::<SessionService>().command(CommandKind::MoveAvatar {
+            agent: player,
+            intent: Intent::GoTo { target, run: true },
+        });
+        for _ in 0..1200 {
+            client.update();
+            host.update();
+            let at = client.world().resource::<SessionService>().player_view_position().unwrap();
+            if (at.z + 12.4).abs() < 4.0 { break; }
+        }
+        let service = client.world().resource::<SessionService>();
+        let at = service.player_view_position().unwrap();
+        assert!((at.z + 12.4).abs() < 4.0, "joined player cannot reach hall piano: {at:?}");
+        client.world_mut().resource_mut::<SessionService>().command(CommandKind::PlayPiano { agent: player, piano: 0, pitch: 60, velocity: 100 });
+        for _ in 0..120 {
+            client.update();
+            host.update();
+            if host.world().resource::<SessionService>().settlement().is_some_and(|s| !s.piano_notes.is_empty()) { break; }
+        }
+        assert_eq!(host.world().resource::<SessionService>().settlement().unwrap().piano_notes.len(), 1);
+    }
+
     fn world_active(app: &App) -> bool {
         app.world().get_resource::<State<WorldState>>().is_some_and(|s| *s.get() == WorldState::Active)
     }

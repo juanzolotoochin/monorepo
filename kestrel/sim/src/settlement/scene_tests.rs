@@ -122,7 +122,9 @@ fn piano_notes_follow_owned_commands_and_release_out_of_reach() {
     assert!(scene.s().piano_notes[0].serial > serial, "repeat presses retrigger audio");
     scene.command(CommandKind::PlayPiano { agent, piano: 0, pitch: 60, velocity: 0 });
     assert!(scene.s().piano_notes.is_empty());
+    scene.walk(3.5, 0.0);
     scene.command(CommandKind::PlayPiano { agent, piano: 0, pitch: 60, velocity: 100 });
+    assert_eq!(scene.s().piano_notes.len(), 1, "the front of the cabinet is within playing reach");
     scene.walk(4.0, 0.0);
     assert!(scene.s().piano_notes.is_empty(), "walking away releases held notes for every peer");
     scene.command(CommandKind::PlayPiano { agent, piano: 0, pitch: 60, velocity: 100 });
