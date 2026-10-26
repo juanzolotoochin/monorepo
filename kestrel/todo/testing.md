@@ -15,6 +15,19 @@
 - **Found in:** the full test run for PR #111
   (https://app.buildbuddy.io/invocation/b95f8bf3-e295-4ed7-91a4-b2f8bef0b839).
 
+## Clean up after the Debian 12 libudev switch
+
+- **Status:** open
+- **Why:** the app tests now link and run against Debian 12's `libudev1`
+  (pinned `http_archive`s in `MODULE.bazel`), but `libudev1` is still in
+  the `debian13` apt package list, unused. Real gamepad input on Linux and
+  the Steam Deck wasn't checked after the change; it should still use the
+  system libudev, since the deploy ships the binary without runfiles.
+- **What to do:** remove `libudev1` from the `debian13` list and regenerate
+  the apt lock facts in `MODULE.bazel.lock`. Check a controller on the Deck.
+- **Where:** `MODULE.bazel`, `MODULE.bazel.lock`, `third_party/udev/BUILD.bazel`.
+- **Found in:** commit `be66db0` on branch `kestrel-ability-prediction`.
+
 ## Done
 
 ### `movement_test` can't be built or run from Windows
