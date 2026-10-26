@@ -189,6 +189,12 @@ pub struct AvatarState {
     /// Repairable cover selected while the player holds the repair control.
     #[serde(default)]
     pub repair: Option<u16>,
+    /// An action this tick let go of the pile haul (`drop_haul`). Until
+    /// stage 5 ends it, the haul neither steers the avatar nor moves units;
+    /// stage 5 clears this, so it is never set between ticks and isn't
+    /// saved or hashed. A replayed avatar keeps it.
+    #[serde(skip)]
+    pub dropped_haul: bool,
 }
 
 fn approach(current: FxVec2, target: FxVec2, max_change: Fx) -> FxVec2 {
@@ -246,7 +252,7 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, tick: u64, terrain: &
         }
         return;
     }
-    if let Some(lab) = piles {
+    if let Some(lab) = piles.filter(|_| !a.avatar.dropped_haul) {
         if let Some(error) = Settlement::pile_job_self_update(lab, me, a, terrain, radius) {
             a.avatar.pile_failure = Some(error.to_string());
         }
@@ -491,34 +497,34 @@ impl Settlement {
         });
     }
 
-    /// Commands: applies a player's action to their avatar (`act`), then
-    /// what it does to the world (`apply_actions`). For now that part still
-    /// applies right away, as the command always did; `AvatarReplay` never
-    /// applies it.
-    pub(crate) fn act(&mut self, tick: u64, me: AgentIx, action: &Action, terrain: &mut Terrain) {
+    /// Commands: applies a player's action to their avatar (`act`). What it
+    /// does to the world goes to `out`, which stage 5 applies
+    /// (`apply_actions`) and `AvatarReplay` never does.
+    pub(crate) fn act(&mut self, tick: u64, me: AgentIx, action: &Action, terrain: &Terrain, out: &mut ActionMessages) {
         let agent = me as usize;
         // Only owned avatars get commands, and those are controlled.
         if !self.agents.get(agent).is_some_and(|a| a.controlled) {
             return;
         }
-        let mut out = ActionMessages::default();
         // The view reads no agents, so the avatar can be written meanwhile.
         let mut agents = std::mem::take(&mut self.agents);
         let a = &mut agents[agent];
-        act(a, action, &self.view(me, tick, terrain), character_of(&self.characters, a), &mut out);
+        act(a, action, &self.view(me, tick, terrain), character_of(&self.characters, a), out);
         self.agents = agents;
-        self.apply_actions(out, terrain);
     }
 
-    /// What players' actions did to the world, by message type in a fixed
-    /// order (the resources they touch are separate) and in command order
-    /// within a type.
+    /// Stage 5, first in the settlement's part: what this tick's actions did
+    /// to the world, by message type in a fixed order (the resources they
+    /// touch are separate) and in command order within a type. They come
+    /// before everything else stage 5 applies, as the commands they come
+    /// from ran before everything else in the tick.
     pub(crate) fn apply_actions(&mut self, messages: ActionMessages, terrain: &mut Terrain) {
         for _ in messages.restart_memory {
             self.restart_memory(terrain);
         }
         for message in messages.drop_haul {
             self.cancel_pile_job(message.agent as usize, message.serial);
+            self.agents[message.agent as usize].avatar.dropped_haul = false;
         }
         for message in messages.drop_notes {
             self.piano_notes.retain(|note| note.agent != message.agent || note.serial > message.serial);
@@ -690,7 +696,7 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
     match *action {
         Action::Move(ref intent) => {
             // Moving lets go of a pile haul, dead or alive.
-            drop_haul(view, out);
+            drop_haul(a, view, out);
             if alive(a) {
                 set_intent(a, intent.clone(), view.terrain, def);
             }
@@ -698,7 +704,7 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
         Action::Aim(aim) => aim_at(a, aim),
         Action::Attack { weapon, aim, muzzle } => {
             if view.has_weapon(weapon) {
-                drop_haul(view, out);
+                drop_haul(a, view, out);
                 if alive(a) {
                     attack(a, view.tick, weapon, aim, muzzle, def);
                 }
@@ -739,20 +745,26 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
         Action::Release => {
             // Letting go releases held piano keys.
             out.drop_notes.push(DropNotes { agent: me, serial: view.piano_serial });
-            release(a, view.hauling());
+            release(a, view.hauling() && !a.avatar.dropped_haul);
         }
         Action::Respawn => {
             // Respawning restarts the memory trial, closing its door again.
             out.restart_memory.push(RestartMemory { agent: me });
             respawn(a, view.spawn, view.spawn_height);
-            drop_haul(view, out);
+            drop_haul(a, view, out);
         }
     }
 }
 
-/// Lets go of the agent's pile haul, if one runs.
-fn drop_haul(view: &View, out: &mut ActionMessages) {
+/// Lets go of the agent's pile haul, if one runs: `DropHaul` ends it in
+/// stage 5, and until then the haul neither steers the avatar (stage 2)
+/// nor moves units (stage 3).
+fn drop_haul(a: &mut AgentState, view: &View, out: &mut ActionMessages) {
+    if a.avatar.dropped_haul {
+        return;
+    }
     if let Some(serial) = view.haul() {
+        a.avatar.dropped_haul = true;
         out.drop_haul.push(DropHaul { agent: view.me, serial });
     }
 }

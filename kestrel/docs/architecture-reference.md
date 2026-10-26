@@ -51,7 +51,7 @@ flowchart LR
   Apply --> Housekeeping[Housekeeping]
 ```
 
-1. **Apply inputs:** validate player commands in player order.
+1. **Apply inputs:** validate player commands in player order. A player's action writes only its own avatar. Its effects on the world (depot stock, a pile haul, the memory trial, piano keys) are messages kept in command order apart from the outboxes, and stage 5 applies them before the settlement's other messages.
 2. **Self update:** each entity changes only its own state. Chunks may run on different threads.
 3. **Read and emit:** interactions with other entities or shared state become messages in a chunk-local outbox.
 4. **Merge:** combine outboxes in a deterministic order, independent of when threads finished.

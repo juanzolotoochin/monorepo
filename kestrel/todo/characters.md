@@ -9,7 +9,8 @@
   route, so its agent part can't be split off cleanly, and the replay keeps
   returning false for it. A piano key changes only `piano_notes`, nothing on
   the avatar.
-- **What to do:** once pile jobs are messages (handoff D3) or merge into
+- **What to do:** now that ending a haul is a message (`DropHaul`, handoff
+  D3, task 7), or once pile jobs merge into
   the shared body's cargo (step 5), make a pile haul an action (step 5's
   "interact") whose agent part plans the walk, and let the replay predict
   it. Decide whether a piano key is an "interact" action with no agent part
@@ -19,6 +20,38 @@
   `prediction.rs` (`AvatarReplay::apply`).
 - **Found in:** ability prediction task 2, the shared action path
   (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D2).
+
+## Release a transfer's reservation when its avatar respawns
+
+- **Status:** open
+- **Why:** `Respawn` resets the avatar's state, dropping a running manual
+  transfer job (`AvatarState::job`) without releasing the units it still
+  had reserved at its depot (`out` or `incoming`). Those units stay promised
+  to nobody, so the depot can never hand them out or take them in.
+- **What to do:** have `Respawn` emit a `TransferStock` release for the job
+  it drops, as `CancelTransfer` does, and check `Settlement::validate` with
+  a test that respawns mid-transfer. It changes gameplay, so it gets its own
+  commit.
+- **Where:** `kestrel/sim/src/settlement/avatar.rs` (`act`, `respawn`,
+  `Settlement::transfer_stock`).
+- **Found in:** ability prediction task 7 (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D3).
+
+## Turn the memory commands' world writes into messages
+
+- **Status:** open
+- **Why:** since task 7 a `Respawn` restarts the memory trial in stage 5,
+  but `MemoryRecord`, `MemoryDeploy` and `MemoryClear` (and `Pile` and
+  `PlayPiano`) still write the world when the command applies. In one turn,
+  a Respawn followed by `MemoryRecord` now loses the recording, which used
+  to start after the restart. `MemoryDeploy` also cancels the avatar's pile
+  haul and moves the avatar directly.
+- **What to do:** give the memory commands the same split as actions (the
+  avatar's part at once, the trial's part as a message applied in stage 5
+  in command order with `RestartMemory`), or decide they stay world
+  commands and order `RestartMemory` among them.
+- **Where:** `kestrel/sim/src/settlement/memory.rs`, `world.rs`
+  (`apply_commands`), `messages.rs` (`ActionMessages`).
+- **Found in:** ability prediction task 7 (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D3).
 
 ## Present the arc coil's shot early
 

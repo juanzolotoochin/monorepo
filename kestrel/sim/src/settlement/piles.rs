@@ -491,6 +491,8 @@ impl Settlement {
             };
             let pace = if pace == Fx::ZERO { 0 } else { (pace * Fx::from_int(content::TICKS_PER_SECOND)).round().floor_to_int().max(1) as u64 };
             follow(a, route);
+            // A haul let go of earlier this turn no longer holds this one back.
+            a.avatar.dropped_haul = false;
             let hauler = lab.hauler_mut(me);
             hauler.job = Some(PileJob {
                 action,
@@ -595,6 +597,9 @@ impl Settlement {
 
     /// Stage 3: the avatar is in reach and a unit (or the whole amount) is due.
     pub(super) fn read_pile_job(&self, me: AgentIx, a: &AgentState, tick: u64) -> Option<PileStep> {
+        if a.avatar.dropped_haul {
+            return None;
+        }
         let job = self.piles.as_ref()?.hauler(me)?.job.as_ref()?;
         let due = job.remaining != Some(0) && tick >= job.next_toss && (job.remaining.is_some() || in_reach(a.position, job, character_of(&self.characters, a).body.radius));
         due.then_some(PileStep { agent: me })

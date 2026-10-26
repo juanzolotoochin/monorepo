@@ -61,6 +61,44 @@ reservation message, which stage 5 applies. Check the other command
 handlers for the same pattern. This changes gameplay order, so it gets its
 own commit, last, with the golden file updated in that commit only.
 
+Done in task 7:
+
+- `avatar::act` takes an `ActionMessages` (`sim/src/messages.rs`) and
+  writes only its agent. Four message types: `DropHaul` (Move, an Attack
+  with an offered weapon, Respawn: end the pile haul), `DropNotes`
+  (Release: let go of held piano keys), `RestartMemory` (Respawn: restart
+  the trial, shut its door) and `TransferStock` (Transfer reserves,
+  CancelTransfer releases). `Settlement::act` no longer writes the world.
+- Commands run in stage 1, before chunks have outboxes, so the world keeps
+  the tick's action messages in their own list (`World::actions`, in
+  command order, empty between ticks so neither saved nor hashed). Stage 4
+  hands it over, and stage 5 applies it first in the settlement's part,
+  before the economy step (`Settlement::apply_actions`): the commands ran
+  before everything else in the tick, so everything else in stage 5 still
+  sees their effects as before. Within it: memory, hauls, piano keys, then
+  stock, in command order. The replay drops the messages (D1).
+- Contention: `act` checks a transfer against the depot as it was when the
+  tick began, so two players can both take a depot's last units. Stage 5
+  reserves in command order (player order) and checks each reservation
+  again (`transfer_limit`); one that no longer fits reserves nothing and
+  its job rolls back (`avatar.job = None`), together with a release of
+  that job later in the order. So the first player wins, as before. A
+  predicted job that rolls back corrects like any stage 5 change.
+- A haul let go of stays in the lab until stage 5, so the action marks the
+  avatar (`AvatarState::dropped_haul`, not saved or hashed, cleared by
+  `DropHaul`): the haul doesn't steer it in stage 2 (it would replace the
+  new intent and the swing) or toss in stage 3. `DropHaul` and `DropNotes`
+  carry the haul's and the last key's serial, so a haul or key started
+  later in the same turn stays.
+- Order changes, all within one turn: a cancel then a transfer from the
+  same depot sees the cancelled units still reserved; a Respawn then a
+  memory command loses that command's effect (the memory commands still
+  apply at once, `todo/characters.md`); stage 2 and 3 see the old stock,
+  trial and terrain for the tick. The golden scenarios send no commands,
+  so the golden file didn't change.
+- `queued_at` (D7) became saved and hashed state in its own commit, which
+  regenerated the golden file (save format 7).
+
 ### D4. Predicted events come only from stage 3 messages
 
 - Each message type gets one shared function that turns it into the
@@ -287,5 +325,6 @@ runs, and leave the user's game windows alone.
   terrain, so the replay plans it once when the action applies, from the
   confirmed terrain. The `Transfer` sent with it is predicted too: it sets
   the avatar's job from the confirmed depot stock; the units that then move
-  at the dock are stage 5 and correct like a hit. Pile commands still read
+  at the dock are stage 5 and correct like a hit, as does a job that stage
+  5 rolls back because another player reserved the stock first (task 7). Pile commands still read
   and write pile lab state and stay unpredicted (`todo/characters.md`).

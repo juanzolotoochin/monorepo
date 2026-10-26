@@ -162,7 +162,7 @@ Character definitions are moving in steps, each its own PR against `master`. Ste
 
 ### Step 5: one set of actions for players and AI
 
-- **Actions:** one vocabulary (move, go to, attack, interact) that player commands and AI brains both produce. `CommandKind` variants stay append-only, so recorded input logs still replay.
+- **Actions:** one vocabulary (move, go to, attack, interact) that player commands and AI brains both produce. `CommandKind` variants stay append-only, so recorded input logs still replay. An action changes only its agent; what it does to the world is a message applied in stage 5 (done for player avatars, `sim/src/settlement/action.rs`).
 - **Haulers:** their `Phase` state machine emits actions instead of moving them directly.
 - **Threats:** they become characters with a `FollowRoute` brain. They keep their own table, for the 100k-entity budget, but each stores a `CharacterIx` instead of reaching its kind through its wave.
 - **Shared body:** `AgentState` splits into the body every agent has (position, heading, velocity, radius, health) plus data for each role. Cargo has three models today (hauler `cargo`, the avatar's `ManualJob`, pile jobs), and they merge here.
