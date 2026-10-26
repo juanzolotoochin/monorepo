@@ -23,17 +23,47 @@
   (`open`), `kestrel/app/src/menu.rs`.
 - **Found in:** eight-player design session.
 
-## Play an eight-player network lab run
+## Find what stalls clients around a leave and rejoin at 75 ms
 
 - **Status:** open
-- **Why:** the multi-client relay was checked with fake peers and
-  `network-lab.ps1 -Clients` was only parse-checked; no run had 8 real game
-  windows.
-- **What to do:** run `network-lab.ps1 -Clients 7` at LAN and 75 ± 20 ms;
-  check joins, spawn spots, tags, a client closing and rejoining, and the
-  relay counters.
-- **Where:** `kestrel/tools/network-lab.ps1`, `kestrel/tools/network_lab/relay.mjs`.
-- **Found in:** eight-player stage 3.
+- **Why:** in the eight-player lab at 75 ± 20 ms, each client's time spent
+  waiting for turns (`starved_ms`) went from 8–90 ms to 270–515 ms between
+  one client closing and it rejoining 3 minutes later, then grew only
+  15–50 ms in the next 54 s. So every client stalled for 0.2–0.4 s in total
+  around the leave, the rejoin, or both. The rejoining client itself didn't.
+- **What to do:** rerun with `-Clients 7 -Rejoin -ControlPortBase 7800`,
+  read `telemetry.network.starved_ms` from every window just before and
+  after the close, and just before and after the rejoin, to tell which one
+  stalls them. Then look at what the host sends then: the save upload to
+  the joiner sharing the relay, or the turns that carry `Leave` and `Join`.
+- **Where:** `Host::send_upload` and `depart` in `kestrel/net/src/host.rs`;
+  the client's starved time in `kestrel/net/src/client.rs`.
+- **Found in:** the eight-player lab run (runs `20261026-182404`).
+
+## Spread name tags that overlap
+
+- **Status:** open (low priority)
+- **Why:** spawn spots are 1.2 m apart, so at spawn in a full game the eight
+  tags sit on top of each other and few names can be read. They separate
+  once players move. Client 5's orange tag also reads dimmer than the rest
+  on the dark backing.
+- **What to do:** nudge overlapping tags apart on screen (or stack them),
+  and check the orange slot color's contrast.
+- **Where:** `kestrel/app/src/nametags.rs` (`update`, `SLOT_COLORS`).
+- **Found in:** the eight-player lab run.
+
+## The network lab can't start Node through a mise shim
+
+- **Status:** open (low priority)
+- **Why:** on this machine `node` on PATH is a mise shim, and the repo has
+  no mise config that picks a version, so the shim fails ("cannot find
+  binary path") and the lab can't start its relay. The lab ran with an
+  installed Node put first on PATH.
+- **What to do:** pin Node for the repo (a `mise.toml` or `.tool-versions`
+  entry), or let `network-lab.ps1` take a `-Node` path and say so when the
+  `node` it finds can't run.
+- **Where:** `kestrel/tools/network-lab.ps1` (the `Get-Command node` check).
+- **Found in:** the eight-player lab run.
 
 ## Keep a client's movement prediction when its avatar's index moves
 
@@ -149,6 +179,35 @@
 - **Found in:** stage 3 of PR #111.
 
 ## Done
+
+### Play an eight-player network lab run
+
+- **Status:** done (branch `kestrel-eight-player-lab`). Ran
+  `network-lab.ps1 -Clients 7` at LAN and at 75 ± 20 ms, checking every
+  window over its control port and with screenshots:
+  - All 8 joined (slots 0–7, "hosting, 8 players"). Each spawned on its own
+    spot of the 1.2 m grid, and every window showed the same 7 others at
+    the same positions, also after each player walked to its own point.
+  - Name tags show for all 8 in slot colors, and each window borders its
+    own.
+  - A client closing its window left at once (the host went to 7 players
+    and its avatar disappeared everywhere), and it rejoined in its old
+    slot at a free spawn spot, at LAN and at 75 ms.
+  - A 9th player was turned away: "the game is full (8 players)".
+  - Relay at LAN: nothing dropped or reordered, late p99 0.1 ms. At 75 ms:
+    nothing dropped, reordering from the jitter, late p99 19 ms. Clients
+    measured 150–166 ms round trips with 8–10 tick margins and no late
+    inputs.
+  The lab needed three changes for this: `-ControlPortBase` (a control port
+  per window), `-Rejoin` (restart a client window that closes), and a relay
+  that forgets clients silent for 3 s so a rejoin's new address gets a
+  slot. Follow-ups: the stall around a leave and rejoin, overlapping tags,
+  and the Node shim, above.
+- **Why:** the multi-client relay was checked with fake peers and
+  `network-lab.ps1 -Clients` was only parse-checked; no run had 8 real game
+  windows.
+- **Where:** `kestrel/tools/network-lab.ps1`, `kestrel/tools/network_lab/relay.mjs`.
+- **Found in:** eight-player stage 3.
 
 ### Eight players: cap, slots, leaving, spawn spots, colors, upload, loading
 

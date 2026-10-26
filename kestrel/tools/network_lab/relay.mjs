@@ -6,8 +6,9 @@
 // Each client sends to the listen socket and hears replies from it, so its
 // host-address check holds. The relay forwards each client to the host from
 // a socket of its own, so the host sees every client as its own peer and
-// replies to that socket. Up to --max-clients addresses are served; anything
-// past them is dropped and counted.
+// replies to that socket. Up to --max-clients addresses are served at once;
+// anything past them is dropped and counted. A client silent for --idle-ms
+// (it closed) is forgotten, so one that rejoins from a new port gets its slot.
 //
 // Each datagram is held for max(0, delay + uniform(-jitter, +jitter)) ms, one
 // seeded random stream per client and direction. Datagrams may overtake one
@@ -42,6 +43,8 @@ const { values: args } = parseArgs({
     "max-packets": { type: "string", default: "4096" },
     "max-bytes": { type: "string", default: String(8 * 1024 * 1024) },
     "max-clients": { type: "string", default: "16" },
+    // Clients send every tick, so a few seconds of silence means it closed.
+    "idle-ms": { type: "string", default: "3000" },
     "run-dir": { type: "string" },
     "parent-pid": { type: "string" },
   },
@@ -70,6 +73,7 @@ const spinMs = integer("spin-ms", 0, 100);
 const maxPackets = integer("max-packets", 1, 1_000_000);
 const maxBytes = integer("max-bytes", 1, 1 << 30);
 const maxClients = integer("max-clients", 1, 64);
+const idleMs = integer("idle-ms", 0, 600000);
 const parentPid = args["parent-pid"] === undefined ? null : integer("parent-pid", 1, 0xffffffff);
 const runDir = args["run-dir"] ?? fail("--run-dir is required");
 if (listenPort === hostPort) fail("--listen and --host must differ");
@@ -120,21 +124,26 @@ let strangerDrops = 0;
 let stopping = false;
 
 const listen = dgram.createSocket("udp4");
-// By "address:port", in the order they first sent.
+// Clients being served, by "address:port", in the order they first sent.
 const clients = new Map();
+// Forgotten clients, kept for the totals.
+const retired = [];
+// Clients served so far, which numbers each one's delay streams.
+let served = 0;
 
 // A client's first datagram gives it a socket toward the host and a delay
-// stream each way. Null once --max-clients are served.
+// stream each way. Null while --max-clients are being served.
 function clientFor(from) {
   const key = `${from.address}:${from.port}`;
   const known = clients.get(key);
   if (known || clients.size >= maxClients) return known ?? null;
-  const n = clients.size;
+  const n = served++;
   const upstream = dgram.createSocket("udp4");
   const client = {
     address: from.address,
     port: from.port,
     upstream,
+    lastHeard: performance.now(),
     toHost: direction("client_to_host", (seed ^ 0x5eed0001 ^ Math.imul(n, 0x9e3779b9)) >>> 0, (bytes, done) =>
       upstream.send(bytes, hostPort, LOOPBACK, done),
     ),
@@ -236,6 +245,7 @@ listen.on("message", (bytes, from) => {
     strangerDrops += 1;
     return;
   }
+  client.lastHeard = performance.now();
   enqueue(client.toHost, bytes);
 });
 
@@ -285,9 +295,23 @@ function writeJson(file, value) {
   fs.renameSync(temp, target);
 }
 
+// Forgets clients that went silent. Their last datagrams to the host were
+// delivered long before, so the socket toward the host can close.
+function retireIdle() {
+  if (idleMs === 0) return;
+  const now = performance.now();
+  for (const [key, client] of clients) {
+    if (now - client.lastHeard < idleMs || client.toHost.queuedPackets > 0) continue;
+    client.upstream.close();
+    client.retiredAt = new Date().toISOString();
+    clients.delete(key);
+    retired.push(client);
+  }
+}
+
 // Every client's direction `name` as one, for the totals.
 function combined(name) {
-  const dirs = [...clients.values()].map((c) => (name === "client_to_host" ? c.toHost : c.toClient));
+  const dirs = [...retired, ...clients.values()].map((c) => (name === "client_to_host" ? c.toHost : c.toClient));
   const total = direction(name, 0, null);
   for (const dir of dirs) {
     for (const key of Object.keys(total)) {
@@ -310,9 +334,12 @@ function writeStats(state) {
     // Totals over every client; peaks are the largest single client's.
     client_to_host: combined("client_to_host"),
     host_to_client: combined("host_to_client"),
-    clients: [...clients.values()].map((c) => ({
+    active_clients: clients.size,
+    // Forgotten clients first, with when they were forgotten.
+    clients: [...retired, ...clients.values()].map((c) => ({
       address: c.address,
       port: c.port,
+      retired_at: c.retiredAt ?? null,
       client_to_host: summary(c.toHost),
       host_to_client: summary(c.toClient),
     })),
@@ -353,6 +380,7 @@ writeJson("ready.json", {
   listen: `${LOOPBACK}:${listenPort}`,
   host: `${LOOPBACK}:${hostPort}`,
   max_clients: maxClients,
+  idle_ms: idleMs,
   delay_ms: delayMs,
   jitter_ms: jitterMs,
   seed,
@@ -371,6 +399,7 @@ setInterval(() => {
       return stop(0);
     }
   }
+  retireIdle();
   writeStats("running");
 }, 1000);
 

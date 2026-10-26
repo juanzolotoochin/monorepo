@@ -255,6 +255,23 @@ game; `-Build` builds it once first. Each run's parameters, relay counters and
 logs land in `tools/network_lab/runs/`. The two windows share one CPU and GPU,
 so read frame time next to the network graphs.
 
+`-Clients 7` opens seven client windows, for a full game of eight. Two more
+options help check a crowd:
+
+- `-Rejoin` starts a client window again, with the same name and profile, when
+  it closes, so closing one checks leaving and rejoining. The relay forgets a
+  client 3 s after it goes silent, which frees its slot for the new address.
+- `-ControlPortBase 7800` gives the host control port 7800 and client n port
+  7800 + n. A script can ask any window for its state with
+  `{"id":"x","command":{"op":"inspect"}}` (one JSON line). The reply includes
+  `network` (the session status), `peers` (the other avatars this window
+  shows) and `telemetry.network` (round trip, input margin, late inputs).
+  A `walk` command moves that window's player.
+
+With eight windows on one machine, the relay's deliveries ran up to 19 ms late
+at p99 (0.1 ms with no delay), so the jitter players see is a little above
+`-JitterMs`. The relay reports this as `late p99`.
+
 ## First investigation
 
 1. On localhost, record the input margin and pending command count
