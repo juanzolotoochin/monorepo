@@ -1,21 +1,49 @@
+# libudev for gilrs, Bevy's Linux gamepad backend (linked through the
+# libudev-sys crate annotation in MODULE.bazel). The library comes from the
+# pinned Debian 12 package, whose glibc (2.36) matches the remote test image.
+#
+# It is imported twice under two names:
+# - libudev.so is the link-time library, so `-ludev` resolves.
+# - libudev.so.1 is the runtime library. Bazel puts it in the binary's runfiles
+#   and RUNPATH, under the file name the loader looks up (the SONAME). This lets
+#   `bazel test` run the game on workers without a system libudev.
+# A binary copied out on its own (the Steam Deck deploy) has no runfiles, so
+# the loader falls back to the system's libudev.so.1.
 load("@rules_cc//cc:cc_import.bzl", "cc_import")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//third_party/x11:extract_library.bzl", "extract_library")
 
 package(default_visibility = ["//visibility:public"])
 
+_ARCHIVE = select({
+    "@platforms//cpu:aarch64": "@libudev1_bookworm_arm64//:data",
+    "//conditions:default": "@libudev1_bookworm_amd64//:data",
+})
+
 extract_library(
     name = "libudev_so",
-    archive = "@debian13//libudev1:data",
+    archive = _ARCHIVE,
     library = "udev",
+    soname = "libudev.so.1",
+)
+
+extract_library(
+    name = "libudev_so_1",
+    archive = _ARCHIVE,
+    library = "udev",
+    out = "libudev.so.1",
     soname = "libudev.so.1",
 )
 
 cc_import(
     name = "udev_import",
-    shared_library = ":libudev_so",
+    interface_library = ":libudev_so",
+    shared_library = ":libudev_so_1",
 )
 
+# Debian 12 builds libudev against glibc 2.36, newer than the glibc 2.28 we
+# target, so lld would reject its references to newer glibc symbols. Allow
+# that, as for the X11 libraries.
 cc_library(
     name = "udev",
     linkopts = ["-Wl,--allow-shlib-undefined"],

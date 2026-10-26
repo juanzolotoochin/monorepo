@@ -15,9 +15,17 @@
 - **Found in:** the full test run for PR #111
   (https://app.buildbuddy.io/invocation/b95f8bf3-e295-4ed7-91a4-b2f8bef0b839).
 
-## `movement_test` can't be built or run from Windows
+## Done
 
-- **Status:** open
+### `movement_test` can't be built or run from Windows
+
+- **Status:** done (branch `kestrel-ability-prediction`). The runfiles
+  had only `libudev.so` (the link name), but the loader looks up the SONAME
+  `libudev.so.1`, and the Debian 13 build needs glibc 2.38 while the remote
+  image (Debian 12) has 2.36. `third_party/udev` now imports Debian 12's
+  libudev as `libudev.so` to link and `libudev.so.1` to run, so tests find
+  it in the runfiles; the `local` tag is gone
+  (https://app.buildbuddy.io/invocation/e876e2d3-a82d-4ede-bd61-ca08fb8d7bfa).
 - **Why:** the Steam Deck commit (`b3e66f5`) added the Linux gamepad backend
   to the `demo` crate, which links `libudev.so.1`, and tagged
   `//kestrel/app:movement_test` `local` because remote workers lack that
@@ -41,5 +49,3 @@
 - **Found in:** rebasing PR #111 onto master
   (https://app.buildbuddy.io/invocation/ee33f5f6-ab6c-4fcd-abbd-7b9aa1fcbf05 on
   master, https://app.buildbuddy.io/invocation/f344f7cf-8476-457c-a616-c2be2f35721f without the tag).
-
-## Done
