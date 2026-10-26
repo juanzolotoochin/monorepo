@@ -714,9 +714,11 @@ fn laser_selects_the_struck_cover_piece_and_opens_it_incrementally() {
     config.weapons = vec![Weapon::Laser];
     let arena = Arena::new(&config, &[]);
     let mut terrain = arena.sim.world().terrain().clone();
-    terrain.destructibles = [-0.5, 0.5].map(|x| Destructible {
+    terrain.destructibles = [-0.5, 0.5].into_iter().enumerate().map(|(asset, x)| Destructible {
+        asset: asset as u16,
         disc: Disc { center: arena.at(x, 4.0), radius: fx(0.4) }, health: 2,
-    }).to_vec();
+        max_health: 2, repairable: false, repair_progress: 0,
+    }).collect();
     let origin = arena.s().agents[arena.player].position;
     let left = FxVec2::new(fx(-0.125), Fx::ONE);
     let right = FxVec2::new(fx(0.125), Fx::ONE);

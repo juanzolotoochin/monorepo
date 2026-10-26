@@ -536,6 +536,19 @@ fn keyboard_shift_runs_while_wasd_moves() {
 }
 
 #[test]
+fn keyboard_r_is_a_held_repair_action() {
+    let mut rig = Rig::new();
+    rig.keys.press(KeyCode::KeyR);
+    let first = rig.frame();
+    assert!(first.gameplay.repair_held && first.gameplay.repair_pressed);
+    assert!(!first.gameplay.edges.contains(&Edge::Utility(Utility::Respawn)));
+    let held = rig.frame();
+    assert!(held.gameplay.repair_held && !held.gameplay.repair_pressed);
+    rig.keys.release(KeyCode::KeyR);
+    assert!(!rig.frame().gameplay.repair_held);
+}
+
+#[test]
 fn takeover_releases_outgoing_movement_and_thrust_in_both_directions() {
     let mut game = Game::new("jetpack-lab", 60.0);
     game.claim(1);

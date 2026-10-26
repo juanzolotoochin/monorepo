@@ -11,6 +11,29 @@ use voxel_assets::{Scene, SceneFeature, ScenePack};
 use crate::assets::SceneLibrary;
 use crate::lockstep::WorldMirror;
 
+/// Sample an asset-authored body track at the current repaired fraction.
+/// The fallback grows the body upward from its permanent floor base.
+pub(crate) fn repair_transform(piece: &voxel_assets::DestructiblePiece, fraction: f32) -> Transform {
+    let fraction = fraction.clamp(0.0, 1.0);
+    let (scale, offset) = if let Some(track) = &piece.repair_animation {
+        let upper = track.keyframes.partition_point(|key| key.at < fraction)
+            .min(track.keyframes.len() - 1);
+        let lower = upper.saturating_sub(1);
+        let a = &track.keyframes[lower];
+        let b = &track.keyframes[upper];
+        let t = if a.at == b.at { 0.0 } else { (fraction - a.at) / (b.at - a.at) };
+        (Vec3::from_array(a.scale).lerp(Vec3::from_array(b.scale), t),
+            Vec3::from_array(a.offset).lerp(Vec3::from_array(b.offset), t))
+    } else { (Vec3::new(1.0, fraction, 1.0), Vec3::ZERO) };
+    let center = Vec3::from_array(piece.center);
+    let floor = center.y - piece.size[1] * 0.5;
+    Transform::from_translation(Vec3::new(
+        -center.x + center.x * (1.0 - scale.x) + offset.x,
+        -center.y + floor * (1.0 - scale.y) + offset.y,
+        -center.z + center.z * (1.0 - scale.z) + offset.z,
+    )).with_scale(scale)
+}
+
 #[derive(Resource)]
 pub struct SceneView {
     /// The scene's index in the `SceneLibrary`.
@@ -76,7 +99,34 @@ impl Service for SceneView {
                 .run_if(crate::control::rendered)
                 .run_if(in_state(WorldState::Active)),
         );
-        app.add_systems(PostUpdate, (update_destructibles, crate::destruction::animate).chain().run_if(in_state(WorldState::Active)));
+        app.add_systems(PostUpdate, (update_destructibles, crate::destruction::animate,
+            draw_hazard_arcs.run_if(resource_exists::<bevy::gizmos::config::GizmoConfigStore>))
+            .chain().run_if(in_state(WorldState::Active)));
+    }
+}
+
+/// Electrical conductors bridge the spikes of broken repairable bases. The
+/// curve moves smoothly with simulation time rather than flashing per frame.
+fn draw_hazard_arcs(scene: Res<SceneView>, session: Res<crate::lockstep::SessionService>, mut gizmos: Gizmos) {
+    let Some(world) = session.world() else { return };
+    let phase = world.tick() as f32 * 0.075;
+    for (index, piece) in scene.pack.destructibles.iter().enumerate() {
+        if !piece.repairable || world.terrain().destructibles.get(index).is_none_or(|state| state.health > 0) {
+            continue;
+        }
+        let center = Vec3::from_array(piece.center);
+        let floor = center.y - piece.size[1] * 0.5;
+        let span = Vec3::new(piece.size[0] * 0.32, 0.0, piece.size[2] * 0.32);
+        for side in [-1.0_f32, 1.0] {
+            let axis = Vec3::new(span.x, 0.0, span.z * side);
+            let start = center - axis + Vec3::Y * (floor + 0.39 - center.y);
+            let end = center + axis + Vec3::Y * (floor + 0.39 - center.y);
+            let wiggle = (phase + index as f32 * 1.7 + side).sin();
+            let middle = (start + end) * 0.5 + Vec3::new(0.0, 0.07 + wiggle * 0.07, 0.05 * wiggle);
+            let color = Color::srgba(0.16, 0.78 + wiggle * 0.07, 1.0, 0.86);
+            gizmos.line(start, middle, color);
+            gizmos.line(middle, end, color);
+        }
     }
 }
 
@@ -84,6 +134,8 @@ impl Service for SceneView {
 fn update_destructibles(world: &mut World) {
     let Some(terrain) = world.resource::<crate::lockstep::SessionService>().world().map(|w| w.terrain()) else { return };
     let health: Vec<u16> = terrain.destructibles.iter().map(|piece| piece.health).collect();
+    let progress: Vec<u16> = terrain.destructibles.iter().map(|piece| piece.repair_progress).collect();
+    let repairable: Vec<bool> = world.resource::<SceneView>().pack.destructibles.iter().map(|piece| piece.repairable).collect();
     let waiting: Vec<bool> = (0..health.len()).map(|index|
         world.resource::<crate::effects::CoverContacts>().waiting(index)).collect();
     let mut query = world.query::<(Entity, &mut crate::style::DestructibleView, &mut Visibility,
@@ -91,19 +143,51 @@ fn update_destructibles(world: &mut World) {
     let mut changes = Vec::new();
     let mut tint = Vec::new();
     let mut hits = Vec::new();
+    let mut body_visibility = Vec::new();
+    let mut base_progress = Vec::new();
     for (entity, mut view, mut visibility, obstacle, falling, children) in query.iter_mut(world) {
         if falling.is_some() { continue; }
         let current = health.get(view.index).copied().unwrap_or(0);
         let alive = current > 0;
+        let permanent_base = repairable.get(view.index).copied().unwrap_or(false);
         let waiting = waiting.get(view.index).copied().unwrap_or(false);
-        *visibility = if alive || view.last_health > 0 { Visibility::Inherited } else { Visibility::Hidden };
+        *visibility = if alive || view.last_health > 0 || permanent_base { Visibility::Inherited } else { Visibility::Hidden };
         if current != view.last_health && !waiting {
             let factor = 0.55 + 0.45 * f32::from(current) / f32::from(view.max_health);
             tint.extend(children.iter().map(|child| (child, factor)));
-            hits.push((entity, view.index, current));
+            if current < view.last_health { hits.push((entity, view.index, current)); }
             view.last_health = current;
         }
-        if alive != obstacle.is_some() { changes.push((entity, view.index, alive)); }
+        let progress = progress.get(view.index).copied().unwrap_or(0);
+        let fraction = (f32::from(current) + f32::from(progress) / content::TICKS_PER_SECOND as f32)
+            / f32::from(view.max_health);
+        body_visibility.extend(children.iter().map(|child| (child, view.last_health > 0 || progress > 0,
+            permanent_base.then(|| (view.index, fraction)))));
+        base_progress.extend(children.iter().map(|child| (child, progress)));
+        let blocking = alive || permanent_base;
+        if blocking != obstacle.is_some() { changes.push((entity, view.index, blocking)); }
+    }
+    for (child, visible, repair) in body_visibility {
+        if world.get::<crate::style::CoverBody>(child).is_some() {
+            if let Some(mut state) = world.get_mut::<Visibility>(child) {
+                *state = if visible { Visibility::Inherited } else { Visibility::Hidden };
+            }
+            if let Some((index, fraction)) = repair {
+                let transform = repair_transform(&world.resource::<SceneView>().pack.destructibles[index], fraction);
+                *world.get_mut::<Transform>(child).unwrap() = transform;
+            }
+        }
+    }
+    let base_updates: Vec<_> = base_progress.into_iter().filter_map(|(child, progress)| {
+        let rest = world.get::<crate::style::RepairBaseMaterial>(child)?.0;
+        let handle = world.get::<MeshMaterial3d<StandardMaterial>>(child)?.0.clone();
+        Some((handle, rest, progress))
+    }).collect();
+    for (handle, rest, progress) in base_updates {
+        if let Some(mut material) = world.resource_mut::<Assets<StandardMaterial>>().get_mut(&handle) {
+            let glow = f32::from(progress) / content::TICKS_PER_SECOND as f32;
+            material.emissive = rest + LinearRgba::rgb(0.8 * glow, 0.42 * glow, 0.1 * glow);
+        }
     }
     let updates: Vec<_> = tint.into_iter().filter_map(|(child, factor)| {
         let handle = world.get::<MeshMaterial3d<StandardMaterial>>(child)?.0.clone();

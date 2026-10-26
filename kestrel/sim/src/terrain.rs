@@ -34,8 +34,12 @@ pub struct Disc {
 /// lifetime of the world, including saves and lockstep replay.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Destructible {
+    pub asset: u16,
     pub disc: Disc,
     pub health: u16,
+    pub max_health: u16,
+    pub repairable: bool,
+    pub repair_progress: u16,
 }
 
 /// A raised walkable box.
@@ -293,9 +297,28 @@ impl Terrain {
             })
     }
 
-    /// Every currently solid disc, including surviving cover pieces.
+    /// Every solid disc. Repairable cover leaves a blocking floor base.
     pub fn blocking_obstacles(&self) -> impl Iterator<Item = &Disc> {
-        self.obstacles.iter().chain(self.destructibles.iter().filter(|p| p.health > 0).map(|p| &p.disc))
+        self.obstacles.iter().chain(self.destructibles.iter().filter(|p| p.health > 0 || p.repairable).map(|p| &p.disc))
+    }
+
+    pub fn asset_in_repair_reach(&self, position: FxVec2, asset: u16) -> bool {
+        self.destructibles.iter().filter(|piece| piece.asset == asset && piece.repairable)
+            .any(|piece| {
+                let reach = piece.disc.radius + Fx::from_ratio(11, 10);
+                (position - piece.disc.center).length_squared() <= reach * reach
+            })
+    }
+
+    /// Select a damaged cover asset from any side of its full footprint.
+    pub fn repairable_asset_near(&self, position: FxVec2) -> Option<u16> {
+        self.destructibles.iter()
+            .filter(|piece| piece.repairable && self.destructibles.iter()
+                .any(|other| other.asset == piece.asset && other.health < other.max_health))
+            .filter(|piece| self.asset_in_repair_reach(position, piece.asset))
+            .map(|piece| ((position - piece.disc.center).length_squared(), piece.asset))
+            .min()
+            .map(|(_, asset)| asset)
     }
 
     /// Apply a weapon hit to a cover piece; crossing zero opens its footprint.
@@ -303,8 +326,24 @@ impl Terrain {
         let Some(piece) = self.destructibles.get_mut(index) else { return false };
         if piece.health == 0 { return false; }
         piece.health = piece.health.saturating_sub(damage);
-        if piece.health == 0 { self.revision += 1; }
+        piece.repair_progress = 0;
+        if piece.health == 0 && !piece.repairable { self.revision += 1; }
         true
+    }
+
+    /// Progress one tick of nearby held repair. Each second restores one
+    /// damage stage; releasing or leaving resets only the current stage.
+    pub fn repair_cover(&mut self, index: usize, held: bool) {
+        let Some(piece) = self.destructibles.get_mut(index) else { return };
+        if !piece.repairable || piece.health >= piece.max_health || !held {
+            piece.repair_progress = 0;
+            return;
+        }
+        piece.repair_progress += 1;
+        if piece.repair_progress >= content::TICKS_PER_SECOND as u16 {
+            piece.health += 1;
+            piece.repair_progress = 0;
+        }
     }
 }
 
@@ -321,8 +360,12 @@ impl StateHash for Terrain {
             h.write_u64(self.destructibles.len() as u64);
             for piece in &self.destructibles {
                 h.write(&piece.disc.center);
+                h.write_u64(piece.asset as u64);
                 h.write(&piece.disc.radius);
                 h.write_u64(piece.health as u64);
+                h.write_u64(piece.max_health as u64);
+                h.write_u64(piece.repairable as u64);
+                h.write_u64(piece.repair_progress as u64);
             }
         }
         h.write_u64(self.surfaces.len() as u64);

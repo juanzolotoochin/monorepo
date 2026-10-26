@@ -261,7 +261,7 @@ startup sequence; run it on Windows with:
 | Shift | Run |
 | Left click | Face the cursor and commit to one heavy sword strike |
 | Mouse wheel | Smooth camera zoom |
-| R | Reset character position and actions |
+| R | Hold near damaged repairable cover to rebuild it; press while dead to respawn |
 | M | Mute / unmute |
 | Esc | Pause overlay: Resume, Leave to menu, Quit (the world keeps running). Quits in scripted runs |
 | / | Show or hide the debug overlay (windowed runs): a menu bar of debug windows, such as Diagnostics → Frame timing. See [debug_ui](../debug_ui/README.md) |
@@ -526,7 +526,8 @@ and gun track the pointer continuously while the legs follow WASD movement.
 Use **left click** to fire and **Shift** to run. A direct hit takes one of six
 health points; the bars over players show their current health. At zero health,
 the player returns to their spawn after two seconds. The host simulation
-resolves hits and health for all players.
+resolves hits and health for all players. Some cover leaves a solid floor base
+when destroyed; move near it and hold **R** to restore one damage stage per second.
 
 ## Field trial 05
 

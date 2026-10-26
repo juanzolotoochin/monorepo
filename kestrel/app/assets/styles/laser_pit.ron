@@ -9,6 +9,7 @@ Style(id: "laser-pit", actor_name: Some("LASER PIT FIGHTER"),
         (name: "magic", color: (1.0, 0.025, 0.02), emissive: (8.0, 0.08, 0.05), metallic: 0.0, roughness: 0.4, impact: Crystal),
         (name: "water", color: (0.05, 0.2, 0.3), emissive: (0.015, 0.06, 0.09), metallic: 0.5, roughness: 0.65, impact: Polymer),
         (name: "trim", color: (0.93, 0.63, 0.2), emissive: (0.0, 0.0, 0.0), metallic: 0.5, roughness: 0.65, impact: Metal),
+        (name: "arc", color: (0.08, 0.72, 0.88), emissive: (0.2, 2.8, 3.8), metallic: 0.35, roughness: 0.22, impact: Crystal),
     ],
     actor: [(part: Weapon, pivot: Some((0.4, 0.9, 0.0)), muzzle: Some((0.0, 0.01, 0.68)), shapes: [
         (kind: Box, position: (0.0, -0.10, 0.04), size: (0.12, 0.26, 0.18), material: "shadow"),

@@ -358,6 +358,29 @@ pub struct DestructibleCover {
     pub form: CoverForm,
     #[serde(default)]
     pub break_style: BreakStyle,
+    #[serde(default)]
+    pub repairable: bool,
+    #[serde(default)]
+    pub repair_animation: Option<RepairAnimation>,
+    /// Emissive conductor material exposed on a destroyed repairable base.
+    #[serde(default)]
+    pub hazard_material: Option<String>,
+}
+
+/// Body transform at a fraction of the piece's repaired health. Positions
+/// are offsets in meters; scales pivot at the floor for Y and center for X/Z.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepairKeyframe {
+    pub at: f32,
+    pub scale: [f32; 3],
+    pub offset: [f32; 3],
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepairAnimation {
+    pub keyframes: Vec<RepairKeyframe>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -366,6 +389,8 @@ pub enum CoverForm {
     Armored,
     Stepped,
     Pylon,
+    Capacitor,
+    Relay,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -377,18 +402,22 @@ pub enum BreakStyle {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DestructiblePiece {
+    pub asset: u16,
     pub meshes: Vec<MeshData>,
+    pub base_meshes: Vec<MeshData>,
     pub center: [f32; 3],
     pub radius: f32,
     pub health: u16,
     pub size: [f32; 3],
     pub asset_center: [f32; 3],
     pub break_style: BreakStyle,
+    pub repairable: bool,
+    pub repair_animation: Option<RepairAnimation>,
 }
 
 pub fn compile_destructibles(style: &StyleProfile, covers: &[DestructibleCover]) -> Result<Vec<DestructiblePiece>> {
     let mut result = Vec::new();
-    for cover in covers {
+    for (asset, cover) in covers.iter().enumerate() {
         if cover.position.iter().chain(cover.size.iter()).any(|v| !v.is_finite())
             || cover.position.iter().any(|v| v.abs() > 32.0)
             || cover.size.iter().any(|&v| v <= 0.0 || v > 8.0)
@@ -396,6 +425,19 @@ pub fn compile_destructibles(style: &StyleProfile, covers: &[DestructibleCover])
             || cover.health == 0
         {
             return Err("invalid destructible cover dimensions, pieces or health".into());
+        }
+        if let Some(animation) = &cover.repair_animation {
+            if !cover.repairable || animation.keyframes.len() < 2
+                || animation.keyframes.first().is_none_or(|key| key.at != 0.0)
+                || animation.keyframes.last().is_none_or(|key| key.at != 1.0)
+                || animation.keyframes.windows(2).any(|pair| pair[0].at >= pair[1].at)
+                || animation.keyframes.last().is_none_or(|key| key.scale != [1.0; 3] || key.offset != [0.0; 3])
+                || animation.keyframes.iter().any(|key| !key.at.is_finite()
+                    || key.scale.iter().any(|v| !v.is_finite() || *v < 0.0 || *v > 2.0)
+                    || key.offset.iter().any(|v| !v.is_finite() || v.abs() > 2.0))
+            {
+                return Err("invalid repair animation keyframes".into());
+            }
         }
         let cell = [cover.size[0] / f32::from(cover.pieces[0]), cover.size[1], cover.size[2] / f32::from(cover.pieces[1])];
         if cell[0] < style.voxel_size || cell[2] < style.voxel_size {
@@ -456,16 +498,74 @@ pub fn compile_destructibles(style: &StyleProfile, covers: &[DestructibleCover])
                                 material: trim.clone(), ..body.clone() });
                         }
                     }
+                    CoverForm::Capacitor => {
+                        shapes.push(VoxelShape { kind: ShapeKind::Cylinder,
+                            size: [cell[0] * 0.84, cell[1] * 0.75, cell[2] * 0.84], ..body.clone() });
+                        for rise in [-0.31, -0.05, 0.21, 0.42] {
+                            shapes.push(VoxelShape { kind: ShapeKind::RingFloor,
+                                position: [center[0], center[1] + cell[1] * rise, center[2]],
+                                size: [cell[0] * 1.12, cell[1] * 0.09, cell[2] * 1.12],
+                                material: cover.trim.clone().unwrap_or_else(|| cover.material.clone()), ..body.clone() });
+                        }
+                        shapes.push(VoxelShape { kind: ShapeKind::Cylinder,
+                            position: [center[0], center[1] + cell[1] * 0.43, center[2]],
+                            size: [cell[0] * 0.42, cell[1] * 0.17, cell[2] * 0.42], ..body.clone() });
+                    }
+                    CoverForm::Relay => {
+                        shapes.push(VoxelShape { size: [cell[0] * 0.96, cell[1] * 0.22, cell[2] * 0.96],
+                            position: [center[0], center[1] - cell[1] * 0.39, center[2]], ..body.clone() });
+                        for side in [-1.0, 1.0] {
+                            shapes.push(VoxelShape { size: [cell[0] * 0.22, cell[1] * 0.83, cell[2] * 0.22],
+                                position: [center[0] + side * cell[0] * 0.31, center[1] + cell[1] * 0.04, center[2]], ..body.clone() });
+                            shapes.push(VoxelShape { kind: ShapeKind::Cone,
+                                size: [cell[0] * 0.27, cell[1] * 0.25, cell[2] * 0.27],
+                                position: [center[0] + side * cell[0] * 0.31, center[1] + cell[1] * 0.43, center[2]],
+                                material: cover.trim.clone().unwrap_or_else(|| cover.material.clone()), ..body.clone() });
+                        }
+                        shapes.push(VoxelShape { size: [cell[0] * 0.78, cell[1] * 0.11, cell[2] * 0.17],
+                            position: [center[0], center[1] + cell[1] * 0.20, center[2]], ..body.clone() });
+                    }
                 }
                 let mut fine = style.clone();
                 fine.voxel_size = fine.voxel_size.min(0.10);
                 let mesh = compile_environment(&fine, &shapes)?;
+                let base_meshes = if cover.repairable {
+                    let conductor = cover.hazard_material.clone().unwrap_or_else(|| cover.material.clone());
+                    let ground = cover.position[1] - cover.size[1] * 0.5;
+                    let base = VoxelShape {
+                        kind: if cover.form == CoverForm::Pylon { ShapeKind::Cylinder } else { ShapeKind::Box },
+                        position: [center[0], ground + 0.08, center[2]],
+                        size: [cell[0] * 1.10, 0.16, cell[2] * 1.10],
+                        material: cover.material.clone(),
+                        ..body.clone()
+                    };
+                    let mut base_shapes = vec![base];
+                    for x in [-0.32, 0.32] {
+                        for z in [-0.32, 0.32] {
+                            base_shapes.push(VoxelShape { kind: ShapeKind::Cone,
+                                position: [center[0] + x * cell[0], ground + 0.25, center[2] + z * cell[2]],
+                                size: [cell[0] * 0.24, 0.30, cell[2] * 0.24],
+                                material: cover.material.clone(), ..body.clone() });
+                        }
+                    }
+                    base_shapes.push(VoxelShape { kind: ShapeKind::RingFloor,
+                        position: [center[0], ground + 0.20, center[2]],
+                        size: [cell[0] * 0.72, 0.055, cell[2] * 0.72],
+                        material: conductor.clone(), ..body.clone() });
+                    base_shapes.push(VoxelShape { kind: ShapeKind::Cylinder,
+                        position: [center[0], ground + 0.19, center[2]],
+                        size: [cell[0] * 0.22, 0.11, cell[2] * 0.22],
+                        material: conductor, ..body.clone() });
+                    compile_environment(&fine, &base_shapes)?.meshes
+                } else { Vec::new() };
                 // The laser stops at this disc. Match the visible plinth or
                 // shaft instead of the piece's bounding-box diagonal.
                 let outer = if cover.form == CoverForm::Stepped { 0.50 } else { 0.54 };
-                result.push(DestructiblePiece { meshes: mesh.meshes, center,
+                result.push(DestructiblePiece { asset: asset as u16, meshes: mesh.meshes, base_meshes, center,
                     radius: cell[0].max(cell[2]) * outer,
-                    health: cover.health, size: cell, asset_center: cover.position, break_style: cover.break_style });
+                    health: cover.health, size: cell, asset_center: cover.position,
+                    break_style: cover.break_style, repairable: cover.repairable,
+                    repair_animation: cover.repair_animation.clone() });
                 if result.len() > 256 { return Err("scene exceeds 256 destructible pieces".into()); }
             }
         }
@@ -712,11 +812,13 @@ mod tests {
         let style = StyleProfile::default();
         let cover = DestructibleCover { position: [0.0, 0.7, 0.0], size: [1.8, 1.4, 1.8],
             material: "metal".into(), trim: Some("trim".into()), pieces: [2, 2], health: 3,
-            form: CoverForm::Armored, break_style: BreakStyle::Topple };
+            form: CoverForm::Armored, break_style: BreakStyle::Topple, repairable: true,
+            repair_animation: None, hazard_material: None };
         let pieces = compile_destructibles(&style, &[cover.clone()]).unwrap();
         assert_eq!(pieces.len(), 4);
         assert!(pieces.iter().all(|piece| !piece.meshes.is_empty() && piece.health == 3 && piece.radius > 0.0));
         assert!((pieces[0].radius - 0.486).abs() < 0.001);
+        assert!(!pieces[0].base_meshes.is_empty());
         assert_ne!(pieces[0].center, pieces[1].center);
         let mut stepped = cover.clone();
         stepped.form = CoverForm::Stepped;
@@ -727,6 +829,13 @@ mod tests {
         let mut pylon = cover.clone();
         pylon.form = CoverForm::Pylon;
         assert!(!compile_destructibles(&style, &[pylon]).unwrap()[0].meshes.is_empty());
+        for form in [CoverForm::Capacitor, CoverForm::Relay] {
+            let mut variant = cover.clone();
+            variant.form = form;
+            let built = compile_destructibles(&style, &[variant]).unwrap();
+            assert!(!built[0].meshes.is_empty() && !built[0].base_meshes.is_empty());
+            assert_ne!(built[0].meshes[0].positions, pieces[0].meshes[0].positions);
+        }
         let mut invalid = cover;
         invalid.health = 0;
         assert!(compile_destructibles(&style, &[invalid]).is_err());

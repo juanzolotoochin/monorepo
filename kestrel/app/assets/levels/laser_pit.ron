@@ -21,17 +21,22 @@ Scene(id: "laser-pit", player: "exosuit_laser_pit", features: [CameraFollow],
         // The terrain edge itself prevents movement beyond the arena.
         (kind: Box, position: (-14.0, 0.22, 14.5), size: (1.05, 0.44, 0.85), repeat: (29, 1, 1), spacing: (1.0, 0.0, 0.0), material: "metal", solid_radius: Some(0.68)),
     ],
-    // Each bunker has four independent pieces. A laser removes the struck
-    // quarter after repeated hits, opening an actual path through cover.
+    // Each bunker has four independent pieces. Some leave repairable bases;
+    // the others open a path when their struck piece breaks.
     destructibles: [
         (position: (0.0, 0.75, -0.4), size: (1.8, 1.5, 1.8), material: "shadow", form: Stepped, break_style: Shatter, trim: Some("trim"), pieces: (2, 2), health: 3),
-        (position: (-3.4, 0.66, 2.5), size: (1.45, 1.32, 1.25), material: "metal", form: Armored, break_style: Topple, trim: Some("trim"), pieces: (2, 2), health: 2),
-        (position: (3.4, 0.66, 2.5), size: (1.45, 1.32, 1.25), material: "metal", form: Pylon, break_style: Topple, trim: Some("trim"), pieces: (2, 2), health: 2),
+        (position: (-3.4, 0.66, 2.5), size: (1.45, 1.32, 1.25), material: "metal", form: Armored, break_style: Topple, trim: Some("trim"), pieces: (2, 2), health: 2, repairable: true, hazard_material: Some("arc")),
+        (position: (3.4, 0.66, 2.5), size: (1.45, 1.32, 1.25), material: "metal", form: Pylon, break_style: Topple, trim: Some("trim"), pieces: (2, 2), health: 2, repairable: true, hazard_material: Some("arc"),
+         repair_animation: Some((keyframes: [
+             (at: 0.0, scale: (0.15, 0.05, 0.15), offset: (0.0, 0.0, 0.0)),
+             (at: 0.5, scale: (0.55, 0.65, 0.55), offset: (0.0, 0.0, 0.0)),
+             (at: 1.0, scale: (1.0, 1.0, 1.0), offset: (0.0, 0.0, 0.0)),
+         ]))),
         (position: (-3.3, 0.73, -3.5), size: (1.55, 1.46, 1.2), material: "metal", form: Pylon, break_style: Topple, trim: Some("trim"), pieces: (2, 2), health: 2),
         (position: (3.3, 0.73, -3.5), size: (1.55, 1.46, 1.2), material: "metal", form: Armored, break_style: Topple, trim: Some("trim"), pieces: (2, 2), health: 2),
         (position: (-5.25, 0.68, -0.2), size: (1.1, 1.36, 1.55), material: "shadow", form: Stepped, break_style: Shatter, pieces: (2, 2), health: 3),
         (position: (5.25, 0.68, 0.4), size: (1.1, 1.36, 1.55), material: "shadow", form: Stepped, break_style: Shatter, pieces: (2, 2), health: 3),
-        (position: (-5.0, 0.66, 8.0), size: (1.45, 1.32, 1.25), material: "metal", trim: Some("trim"), form: Pylon, break_style: Topple, pieces: (2, 2), health: 2),
+        (position: (-5.0, 0.66, 8.0), size: (1.45, 1.32, 1.25), material: "metal", trim: Some("trim"), form: Pylon, break_style: Topple, pieces: (2, 2), health: 2, repairable: true, hazard_material: Some("arc")),
         (position: (5.0, 0.66, 8.0), size: (1.45, 1.32, 1.25), material: "metal", trim: Some("trim"), form: Pylon, break_style: Topple, pieces: (2, 2), health: 2),
         (position: (-9.0, 0.68, 4.0), size: (1.1, 1.36, 1.55), material: "shadow", form: Stepped, break_style: Shatter, pieces: (2, 2), health: 3),
         (position: (9.0, 0.68, 4.0), size: (1.1, 1.36, 1.55), material: "shadow", form: Stepped, break_style: Shatter, pieces: (2, 2), health: 3),
@@ -39,5 +44,14 @@ Scene(id: "laser-pit", player: "exosuit_laser_pit", features: [CameraFollow],
         (position: (8.0, 0.66, -5.0), size: (1.45, 1.32, 1.25), material: "metal", trim: Some("trim"), form: Pylon, break_style: Topple, pieces: (2, 2), health: 2),
         (position: (-5.0, 0.68, -10.0), size: (1.1, 1.36, 1.55), material: "shadow", form: Stepped, break_style: Shatter, pieces: (2, 2), health: 3),
         (position: (5.0, 0.68, -10.0), size: (1.1, 1.36, 1.55), material: "shadow", form: Stepped, break_style: Shatter, pieces: (2, 2), health: 3),
+        // Taller power hardware and low relay banks create new sight lines.
+        (position: (-10.8, 0.84, 10.5), size: (1.85, 1.68, 1.65), material: "metal", trim: Some("arc"), form: Capacitor, break_style: Shatter, pieces: (2, 2), health: 3, repairable: true, hazard_material: Some("arc")),
+        (position: (10.8, 0.84, 10.5), size: (1.85, 1.68, 1.65), material: "metal", trim: Some("arc"), form: Capacitor, break_style: Shatter, pieces: (2, 2), health: 3, repairable: true, hazard_material: Some("arc")),
+        (position: (-10.9, 0.60, -7.7), size: (1.9, 1.2, 1.5), material: "shadow", trim: Some("trim"), form: Relay, break_style: Topple, pieces: (2, 1), health: 2),
+        (position: (10.9, 0.60, -7.7), size: (1.9, 1.2, 1.5), material: "shadow", trim: Some("trim"), form: Relay, break_style: Topple, pieces: (2, 1), health: 2),
+        (position: (-3.3, 0.62, 6.5), size: (1.35, 1.24, 1.25), material: "metal", trim: Some("arc"), form: Relay, break_style: Topple, pieces: (1, 1), health: 3, repairable: true, hazard_material: Some("arc")),
+        (position: (3.3, 0.62, 6.5), size: (1.35, 1.24, 1.25), material: "metal", trim: Some("arc"), form: Relay, break_style: Topple, pieces: (1, 1), health: 3, repairable: true, hazard_material: Some("arc")),
+        (position: (-10.8, 0.72, -1.0), size: (1.55, 1.44, 1.5), material: "metal", trim: Some("arc"), form: Capacitor, break_style: Shatter, pieces: (1, 2), health: 3),
+        (position: (10.8, 0.72, -1.0), size: (1.55, 1.44, 1.5), material: "metal", trim: Some("arc"), form: Capacitor, break_style: Shatter, pieces: (1, 2), health: 3),
     ],
 )

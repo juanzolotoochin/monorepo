@@ -28,6 +28,12 @@ pub struct DestructibleView {
 #[derive(Component)]
 pub struct DamageMaterial(pub Color);
 #[derive(Component)]
+pub struct CoverBody;
+#[derive(Component)]
+pub struct CoverBase;
+#[derive(Component)]
+pub struct RepairBaseMaterial(pub LinearRgba);
+#[derive(Component)]
 struct StyledActor;
 #[derive(Component)]
 pub struct WeaponVisual(pub content::scenario::Weapon);
@@ -140,7 +146,7 @@ pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack, studio: bool) {
         .iter_mut(world)
     {
         help.0 = if available_weapons == [content::scenario::Weapon::Laser] {
-            "WASD MOVE / SHIFT RUN / LMB FIRE LASER"
+            "WASD MOVE / SHIFT RUN / LMB FIRE LASER / HOLD R NEAR BASE TO REPAIR"
         } else if jumping {
             "WASD MOVE / SHIFT RUN / SPACE JUMP / LMB ATTACK"
         } else if settlement && !available_weapons.is_empty() {
@@ -293,8 +299,8 @@ pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack, studio: bool) {
                 index, last_health: health, max_health: piece.health,
             },
                 Transform::from_translation(Vec3::from_array(piece.center)),
-                if health > 0 { Visibility::Inherited } else { Visibility::Hidden })).id();
-            if health > 0 {
+                if health > 0 || piece.repairable { Visibility::Inherited } else { Visibility::Hidden })).id();
+            if health > 0 || piece.repairable {
                 world.entity_mut(root).insert(Obstacle(Disc { center: Vec3::from_array(piece.center), radius: piece.radius }));
             }
             let key = content_key(&(&profile, &piece.meshes));
@@ -305,9 +311,24 @@ pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack, studio: bool) {
                 let factor = 0.55 + 0.45 * f32::from(health) / f32::from(piece.health);
                 appearance.base_color = Color::srgba(base.red * factor, base.green * factor, base.blue * factor, base.alpha);
                 let unique = world.resource_mut::<Assets<StandardMaterial>>().add(appearance);
-                let child = world.spawn((Mesh3d(mesh), MeshMaterial3d(unique), DamageMaterial(original.base_color),
-                    Transform::from_translation(-Vec3::from_array(piece.center)))).id();
+                let child = world.spawn((Mesh3d(mesh), MeshMaterial3d(unique), DamageMaterial(original.base_color), CoverBody,
+                    if piece.repairable { crate::scene_view::repair_transform(piece,
+                        f32::from(health) / f32::from(piece.health)) }
+                    else { Transform::from_translation(-Vec3::from_array(piece.center)) },
+                    if health > 0 { Visibility::Inherited } else { Visibility::Hidden })).id();
                 world.entity_mut(root).add_child(child);
+            }
+            if piece.repairable {
+                let key = content_key(&(&profile, &piece.base_meshes));
+                for (mesh, material) in upload(world, key, &piece.base_meshes, &profile) {
+                    let appearance = world.resource::<Assets<StandardMaterial>>().get(&material).expect("base material").clone();
+                    let rest_emissive = appearance.emissive;
+                    let unique = world.resource_mut::<Assets<StandardMaterial>>().add(appearance);
+                    let child = world.spawn((Mesh3d(mesh), MeshMaterial3d(unique), CoverBase,
+                        RepairBaseMaterial(rest_emissive),
+                        Transform::from_translation(-Vec3::from_array(piece.center)))).id();
+                    world.entity_mut(root).add_child(child);
+                }
             }
         }
     }

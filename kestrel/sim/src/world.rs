@@ -109,8 +109,9 @@ pub enum CommandKind {
     DigDown { agent: u16 },
     /// The player stopped driving their avatar directly (pause, focus loss,
     /// a controller disconnecting): see `Settlement::release_direct_control`.
-    /// Appended last: variants are serialized by position.
     ReleaseDirectControl { agent: u16 },
+    /// Holds or releases repair on a nearby cover asset.
+    RepairCover { agent: u16, asset: Option<u16> },
 }
 
 impl CommandKind {
@@ -128,6 +129,7 @@ impl CommandKind {
             | CommandKind::Respawn { agent }
             | CommandKind::DigDown { agent }
             | CommandKind::ReleaseDirectControl { agent }
+            | CommandKind::RepairCover { agent, .. }
             | CommandKind::Pile { agent, .. } => Some(agent),
             _ => None,
         }
@@ -477,6 +479,14 @@ impl World {
                 CommandKind::ReleaseDirectControl { agent } => {
                     if let Some(s) = &mut self.settlement {
                         s.release_direct_control(agent as usize);
+                    }
+                }
+                CommandKind::RepairCover { agent, asset } => {
+                    if let Some(s) = &mut self.settlement {
+                        if let Some(a) = s.agents.get_mut(agent as usize).filter(|a| a.controlled) {
+                            a.avatar.repair = asset.filter(|&asset| self.terrain.destructibles.iter()
+                                .any(|piece| piece.asset == asset && piece.repairable && piece.health < piece.max_health));
+                        }
                     }
                 }
                 CommandKind::Pile { agent, action, pace, approach } => {
@@ -845,6 +855,19 @@ impl World {
             for message in messages.fire {
                 settlement.fire(tick, message);
             }
+        }
+        self.apply_repairs();
+    }
+
+    fn apply_repairs(&mut self) {
+        let Some(settlement) = &self.settlement else { return };
+        for index in 0..self.terrain.destructibles.len() {
+            let piece = &self.terrain.destructibles[index];
+            let held = settlement.agents.iter().any(|agent| agent.controlled
+                && (agent.avatar.max_health == 0 || agent.avatar.health > 0)
+                && agent.avatar.repair == Some(piece.asset)
+                && self.terrain.asset_in_repair_reach(agent.position, piece.asset));
+            self.terrain.repair_cover(index, held);
         }
     }
 

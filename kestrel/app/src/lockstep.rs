@@ -377,11 +377,15 @@ fn scene_setup(library: &SceneLibrary, index: usize, cache: &crate::assets::Mode
         extent: q(crate::assets::extent(pack)),
         obstacles: found.discs.iter().map(disc).collect(),
         destructibles: pack.destructibles.iter().map(|piece| sim::terrain::Destructible {
+            asset: piece.asset,
             disc: sim::terrain::Disc {
                 center: FxVec2::new(q(piece.center[0]), q(piece.center[2])),
                 radius: q(piece.radius),
             },
             health: piece.health,
+            max_health: piece.health,
+            repairable: piece.repairable,
+            repair_progress: 0,
         }).collect(),
         doors: found.doors.iter().map(disc).collect(),
         surfaces,

@@ -58,6 +58,13 @@ builds do not require a GPU. The rule checks that its execution tools match the
 client's native OS and CPU; omit `--config=remote` when building video demos.
 Bazel reuses local outputs when inputs are unchanged.
 
+The laser arena has local pixel checks: `bazel test //kestrel/app:laser_pit_flicker_test //kestrel/app:laser_repair_flicker_test`.
+It decodes the rendered demo with the pinned FFmpeg and checks quiet frame
+windows for repeated A-B-A-B color reversals in small screen regions. This
+catches sustained z-fighting and flashing pixels while rejecting a single
+passing object. Simulation-only tests cannot inspect pixels, so this check
+uses the rendered demo and needs the same local GPU as the video target.
+
 Character Studio clips can use `studio_demo` from the same macro file. For
 example, `//kestrel/app:step_animation_demo` records the exosuit's fixed
 120-frame side view of its step up and step down animation at 60 FPS. Run

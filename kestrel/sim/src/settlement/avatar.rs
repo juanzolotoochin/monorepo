@@ -168,6 +168,9 @@ pub struct AvatarState {
     pub job: Option<ManualJob>,
     #[serde(default)]
     pub dig: Option<Dig>,
+    /// Repairable cover selected while the player holds the repair control.
+    #[serde(default)]
+    pub repair: Option<u16>,
 }
 
 fn approach(current: FxVec2, target: FxVec2, max_change: Fx) -> FxVec2 {
@@ -653,6 +656,7 @@ impl Settlement {
         let hauling = self.piles.as_ref().is_some_and(|lab| lab.hauler(agent as AgentIx).is_some_and(|h| h.job.is_some()));
         let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
         a.avatar.flight.requested = false;
+        a.avatar.repair = None;
         let docking = a.avatar.job.is_some() && matches!(a.avatar.intent, Some(Intent::GoTo { .. }));
         if hauling || docking {
             return;
