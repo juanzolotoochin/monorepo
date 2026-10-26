@@ -741,8 +741,6 @@ fn mirror(service: Res<SessionService>, mut mirror: ResMut<WorldMirror>) {
 pub struct PlayerControl {
     /// The last movement intent sent, so held keys don't resend it every frame.
     walking: Option<(FxVec2, bool)>,
-    /// A local click target while the host has not applied its command yet.
-    visual_goal: Option<(Vec3, bool)>,
     last_aim: Option<FxVec2>,
 }
 
@@ -784,11 +782,10 @@ impl PlayerControl {
         self.walking.is_some_and(|(d, _)| d != FxVec2::ZERO)
     }
 
-    /// Forgets the cached movement and click goal after direct control was
-    /// released, so the next deliberate movement is always sent.
+    /// Forgets the cached movement after direct control was released, so
+    /// the next deliberate movement is always sent.
     pub fn forget_direct_input(&mut self) {
         self.walking = None;
-        self.visual_goal = None;
     }
 
     pub fn aim(&mut self, service: &mut SessionService, direction: Vec3) {
@@ -805,7 +802,6 @@ impl PlayerControl {
     /// rotated into arena space); a zero direction stops it.
     pub fn walk(&mut self, service: &mut SessionService, direction: Vec2, run: bool) {
         let Some(agent) = service.player() else { return };
-        self.visual_goal = None;
         let direction = FxVec2::new(Fx::quantize(direction.x), Fx::quantize(direction.y)).normalize_or_zero();
         if self.walking == Some((direction, run)) {
             return;
@@ -819,7 +815,6 @@ impl PlayerControl {
     pub fn go_to(&mut self, service: &mut SessionService, target: Vec3, run: bool) {
         let Some(agent) = service.player() else { return };
         self.walking = None;
-        self.visual_goal = Some((target, run));
         let target = service.to_sim(target);
         service.command(CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target, run } });
     }
@@ -838,7 +833,6 @@ impl PlayerControl {
         let flat = crate::navigation::flat(aim).normalize_or(Vec3::Z);
         if weapon != content::scenario::Weapon::Laser {
             self.walking = None;
-            self.visual_goal = None;
         }
         service.command(CommandKind::Attack {
             agent,
@@ -850,16 +844,6 @@ impl PlayerControl {
     }
 }
 
-/// Where a joined player's avatar shows while the host hasn't confirmed its
-/// latest input: walked ahead locally, then eased back onto confirmed ticks.
-#[derive(Default)]
-pub struct LocalAvatarPreview {
-    position: Option<Vec3>,
-    velocity: Vec3,
-    active: bool,
-    agent: Option<u16>,
-}
-
 #[derive(Default)]
 pub struct VisualGroundStep {
     height: Option<f32>,
@@ -867,146 +851,126 @@ pub struct VisualGroundStep {
     scene: Option<usize>,
 }
 
-/// Places the player where the simulation has the avatar, between ticks.
-/// `PlayerControl` is a World service registered after this one's; its input
-/// state exists whenever the world is active.
+/// Places the player where the simulation has the avatar, between ticks. A
+/// joined player's own avatar is predicted ahead of the confirmed world (see
+/// `prediction`).
 pub fn follow_avatar(
     mirror: Res<WorldMirror>,
     service: Res<SessionService>,
-    control: Res<PlayerControl>,
     scene: Res<SceneView>,
     time: Res<Time>,
     mut controls: ResMut<Controls>,
     mut player: Single<&mut Transform, With<Player>>,
     sound: Res<crate::sound::Sound>,
-    mut preview: Local<LocalAvatarPreview>,
+    mut prediction: Local<crate::prediction::AvatarPrediction>,
     mut ground_step: Local<VisualGroundStep>,
     mut telemetry: ResMut<crate::telemetry::Telemetry>,
 ) {
     let (Some(current), Some(index)) = (&mirror.current, mirror.player()) else { return };
     let a = &current.agents[index as usize];
     let before = mirror.previous.as_ref().and_then(|p| p.agents.get(index as usize)).unwrap_or(a);
-    // The local single-player avatar can use the newest confirmed pose.
-    // Interpolating from the previous tick adds a full tick of visible lag.
-    let alpha = if !service.is_client() && !service.session.is_replay() { 1.0 } else { mirror.alpha };
-    let from = mirror.to_view(before.position);
-    let to = mirror.to_view(a.position);
-    // A teleport (respawn, deploying a recording) snaps instead of sliding.
-    let alpha = if from.distance(to) > 1.5 { 1.0 } else { alpha };
-    let mut position = from.lerp(to, alpha);
-    position.y = before.avatar.height.to_f32() + (a.avatar.height - before.avatar.height).to_f32() * alpha;
+    let predicted = if service.is_client() { predict(&mut prediction, &mirror, &service, before, time.delta_secs()) } else { None };
+    if predicted.is_none() {
+        prediction.reset();
+    }
+    let (from, to, alpha) = match &predicted {
+        Some(drawn) => (&drawn.from, &drawn.to, drawn.fraction),
+        None => {
+            // The local single-player avatar can use the newest confirmed pose.
+            // Interpolating from the previous tick adds a full tick of visible lag.
+            let alpha = if !service.is_client() && !service.session.is_replay() { 1.0 } else { mirror.alpha };
+            // A teleport (respawn, deploying a recording) snaps instead of sliding.
+            let alpha = if mirror.to_view(before.position).distance(mirror.to_view(a.position)) > 1.5 { 1.0 } else { alpha };
+            (before, a, alpha)
+        }
+    };
+    let (start, end) = (mirror.to_view(from.position), mirror.to_view(to.position));
+    let mut position = start.lerp(end, alpha);
+    if let Some(drawn) = &predicted {
+        position.x = drawn.position.x;
+        position.z = drawn.position.z;
+    }
+    position.y = from.avatar.height.to_f32() + (to.avatar.height - from.avatar.height).to_f32() * alpha;
     let reset_step = ground_step.agent != Some(index)
         || ground_step.scene != Some(scene.index)
-        || from.distance(to) > 1.5;
+        || start.distance(end) > 1.5
+        || predicted.as_ref().is_some_and(|drawn| drawn.snapped);
     position.y = crate::character::visual_step_height(
         if reset_step { None } else { ground_step.height },
         position.y,
         time.delta_secs(),
-        !a.avatar.flight.airborne
-            && matches!(a.avatar.jump, sim::settlement::avatar::JumpPhase::Grounded),
+        !to.avatar.flight.airborne && matches!(to.avatar.jump, sim::settlement::avatar::JumpPhase::Grounded),
     );
     ground_step.height = Some(position.y);
     ground_step.agent = Some(index);
     ground_step.scene = Some(scene.index);
-    let motion = crate::character::motion_profile(&scene.pack);
-    let mut preview_velocity = None;
-    if service.is_client() {
-        let snapped = preview.agent == Some(index) && preview.position.is_some_and(|p| p.distance(to) > 1.5);
-        let mut correction = 0.0;
-        let mut clamped = 0.0;
-        let reset = preview.agent != Some(index) || preview.position.is_none_or(|p| p.distance(to) > 1.5);
-        if reset {
-            *preview = LocalAvatarPreview { position: Some(to), agent: Some(index), ..default() };
-        }
-        let pending_goal = control.visual_goal.filter(|_| service.session.pending_inputs() > 0);
-        let movement = control
-            .walking
-            .map(|(direction, run)| (Vec3::new(direction.x.to_f32(), 0.0, direction.y.to_f32()), run))
-            .or_else(|| {
-                pending_goal.map(|(goal, run)| {
-                    let delta = crate::navigation::flat(goal - preview.position.unwrap());
-                    (if delta.length() < 0.1 { Vec3::ZERO } else { delta.normalize() }, run)
-                })
-            })
-            .filter(|_| (controls.attack.is_none() || controls.weapon == content::scenario::Weapon::Laser) && a.avatar.dig.is_none());
-        let moving_input = movement.is_some_and(|(direction, _)| direction != Vec3::ZERO);
-        if let Some((direction, run)) = movement {
-            preview.active = true;
-            let dt = time.delta_secs().min(0.05);
-            let desired = direction * if run { motion.run_speed } else { motion.walk_speed };
-            // The definition stores per-tick changes; the preview runs per second.
-            let tuning = service.player_character().and_then(|c| c.avatar.as_ref());
-            let per_tick = tuning.map_or(Fx::ZERO, |t| if desired == Vec3::ZERO { t.braking } else { t.acceleration });
-            let acceleration = view_f32(per_tick) * content::TICKS_PER_SECOND as f32;
-            let change = (desired - preview.velocity).clamp_length_max(acceleration * dt);
-            preview.velocity += change;
-            let start = preview.position.unwrap();
-            let candidate = start + preview.velocity * dt;
-            let passable = service.world().is_some_and(|world| {
-                a.avatar.flight.airborne
-                    || service.player_radius().is_some_and(|radius| world.terrain().walkable(service.to_sim(start), service.to_sim(candidate), radius))
-            });
-            if passable {
-                clamped = ((candidate - to).length() - 0.9).max(0.0);
-                // Limit how far the displayed avatar can get ahead while
-                // waiting for the host's confirmed turns.
-                preview.position = Some(to + (candidate - to).clamp_length_max(0.9));
-            } else {
-                preview.velocity = Vec3::ZERO;
-            }
-            preview_velocity = Some(preview.velocity);
-        } else {
-            preview.velocity = Vec3::ZERO;
-            preview_velocity = Some(Vec3::ZERO);
-            if preview.active {
-                let blend = 1.0 - (-8.0 * time.delta_secs()).exp();
-                let before = preview.position.unwrap();
-                preview.position = Some(preview.position.unwrap().lerp(to, blend));
-                correction += crate::navigation::flat(preview.position.unwrap() - before).length();
-            }
-        }
-        if preview.active && !moving_input && service.session.pending_inputs() == 0 && a.avatar.velocity == FxVec2::ZERO {
-            let remaining = to - preview.position.unwrap();
-            let before = preview.position.unwrap();
-            preview.position = Some(preview.position.unwrap() + remaining.clamp_length_max(2.0 * time.delta_secs()));
-            correction += crate::navigation::flat(preview.position.unwrap() - before).length();
-        }
-        if preview.active && preview.position.unwrap().distance(to) < 0.02 && !moving_input {
-            preview.active = false;
-        }
-        if preview.active {
-            position.x = preview.position.unwrap().x;
-            position.z = preview.position.unwrap().z;
-        } else {
-            preview.position = Some(to);
-        }
+    if let Some(drawn) = &predicted {
         telemetry.network.preview(
             web_time::Instant::now(),
-            crate::telemetry::PreviewUpdate { shown: position, confirmed: to, eased: correction, clamped, snapped },
+            crate::telemetry::PreviewUpdate {
+                shown: position,
+                confirmed: mirror.to_view(a.position),
+                target: Vec3::new(drawn.target.x, position.y, drawn.target.z),
+                mispredicted: drawn.mispredicted,
+                snapped: drawn.snapped,
+            },
         );
-    } else {
-        *preview = LocalAvatarPreview::default();
     }
+    let motion = crate::character::motion_profile(&scene.pack);
     let previous = player.translation;
     let teleport = previous.distance(position) > 1.5;
     player.translation = position;
-    let heading = before.heading.to_f32() + angle_between(before.heading.to_f32(), a.heading.to_f32()) * alpha;
+    let heading = from.heading.to_f32() + angle_between(from.heading.to_f32(), to.heading.to_f32()) * alpha;
     player.rotation = Quat::from_rotation_y(heading);
-    if let Some(velocity) = preview_velocity.filter(|v| v.length_squared() > 0.01) {
-        player.rotation = Quat::from_rotation_y(velocity.x.atan2(velocity.z));
+    let velocity = |s: &sim::settlement::AgentState| Vec3::new(s.avatar.velocity.x.to_f32(), 0.0, s.avatar.velocity.y.to_f32());
+    controls.velocity = velocity(a);
+    if predicted.is_some() {
+        // A predicted avatar faces the way it is predicted to move.
+        let predicted_velocity = velocity(from).lerp(velocity(to), alpha);
+        if predicted_velocity.length_squared() > 0.01 {
+            player.rotation = Quat::from_rotation_y(predicted_velocity.x.atan2(predicted_velocity.z));
+        }
+        controls.velocity = predicted_velocity;
     }
     let moved = if teleport { Vec3::ZERO } else { crate::navigation::flat(position - previous) };
-    controls.velocity = Vec3::new(a.avatar.velocity.x.to_f32(), 0.0, a.avatar.velocity.y.to_f32());
-    if let Some(velocity) = preview_velocity {
-        controls.velocity = velocity;
-    }
     let relative_speed = controls.velocity.length() / motion.walk_speed.max(0.1);
     let step_distance = crate::character::step_distance_for_speed(motion.step_distance, relative_speed).clamp(0.2, 4.0);
-    let contacts = controls.gait.advance(moved.length(), step_distance, !a.avatar.flight.airborne);
+    let contacts = controls.gait.advance(moved.length(), step_distance, !to.avatar.flight.airborne);
     for _ in 0..contacts {
         sound.play(crate::sound::Cue::Step);
     }
     controls.route = a.route.iter().map(|&p| mirror.to_view(p)).collect();
+}
+
+/// A joined player's avatar this frame, replayed from the session's
+/// confirmed world (which the pending commands match). `None` while there is
+/// nothing to predict from, or for a frame while the world is replaced.
+fn predict(
+    prediction: &mut crate::prediction::AvatarPrediction,
+    mirror: &WorldMirror,
+    service: &SessionService,
+    previous: &sim::settlement::AgentState,
+    dt: f32,
+) -> Option<crate::prediction::Drawn> {
+    let world = service.world()?;
+    let number = service.session.world_number();
+    if number != mirror.world_number {
+        return None;
+    }
+    let pending: Vec<_> = service.session.pending_commands().collect();
+    let confirmed = crate::prediction::Confirmed {
+        world: number,
+        agent: service.player()?,
+        settlement: world.settlement()?,
+        terrain: world.terrain(),
+        tick: world.tick(),
+        previous,
+        alpha: mirror.alpha,
+        pending: &pending,
+        horizon: service.session.input_horizon()?,
+        to_view: &|p| mirror.to_view(p),
+    };
+    Some(prediction.update(&confirmed, dt))
 }
 
 /// The content every session plays with (see `open`), parsed once, for views
@@ -1372,15 +1336,9 @@ mod tests {
         });
         client.update();
         host.update();
+        // Click-to-move is not predicted (it is going away): the avatar waits
+        // for the confirmed route, then follows it without jumps.
         let route_preview = player_position(&mut client);
-        assert!(
-            crate::navigation::flat(route_preview - last).length() > 0.001,
-            "routed movement gave no immediate visual response"
-        );
-        assert!(
-            crate::navigation::flat(confirmed(&client) - settled).length() < 0.001,
-            "routed movement did not show prediction before confirmation"
-        );
         let mut followed_route = false;
         let mut previous_shown = route_preview;
         for _ in 0..90 {
@@ -1539,6 +1497,13 @@ mod tests {
         fn telemetry(&mut self) -> Mut<'_, crate::telemetry::Telemetry> {
             self.client.world_mut().resource_mut::<crate::telemetry::Telemetry>()
         }
+
+        /// Client inputs the host moved to a later tick so far, and the ticks
+        /// they moved in all.
+        fn late_inputs(&self) -> (u64, u64) {
+            let diagnostics = self.host.world().resource::<SessionService>().session.diagnostics(Duration::ZERO);
+            diagnostics.peers.iter().fold((0, 0), |(n, ticks), peer| (n + peer.late_inputs, ticks + peer.shifted_ticks))
+        }
     }
 
     /// One scenario's movement script: (keys held, frames) steps.
@@ -1566,7 +1531,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "reproduces the joined player's movement corrections; enabled with client-side prediction"]
+    #[ignore = "at 100 ± 20 ms the host moves an occasional late input, which prediction cannot know; see AVATAR_PREDICTION_HANDOFF.md"]
     fn joined_player_movement_needs_no_corrections_under_latency() {
         // (name, one-way delay ms, ± jitter ms)
         let cases = [("no added delay", 0.0, 0.0), ("75 ± 20 ms", 75.0, 20.0), ("100 ± 20 ms", 100.0, 20.0)];
@@ -1580,6 +1545,7 @@ mod tests {
                 game.client.world_mut().resource_mut::<SessionService>().command(CommandKind::Respawn { agent });
                 game.hold(&[], 90);
                 game.telemetry().network.clear_corrections();
+                let late_before = game.late_inputs();
                 for (keys, frames) in script {
                     game.hold(&keys, frames);
                 }
@@ -1605,8 +1571,15 @@ mod tests {
                         .collect::<Vec<_>>()
                         .join(", ")
                 };
-                report += &format!("{name:>15} | {scenario:>15} | kept: {kept} | under 0.05: {small} ({small_distance:.3} u)\n");
+                let late = game.late_inputs();
+                let (late, shifted) = (late.0 - late_before.0, late.1 - late_before.1);
+                report += &format!(
+                    "{name:>15} | {scenario:>15} | kept: {kept} | under 0.05: {small} ({small_distance:.3} u) | late inputs: {late} ({shifted} ticks)\n"
+                );
             }
+            let session = &game.client.world().resource::<SessionService>().session;
+            let rtt = session.stats().rtt.map_or(0.0, |rtt| rtt.as_secs_f64() * 1000.0);
+            report += &format!("{name:>15} | client RTT {rtt:.0} ms, input margin {} ticks\n", session.input_delay());
         }
         println!("corrections per latency case and scenario:\n{report}");
         assert_eq!(kept_total, 0, "the joined player's avatar was corrected:\n{report}");

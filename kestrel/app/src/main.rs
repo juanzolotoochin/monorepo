@@ -25,6 +25,7 @@ mod piano;
 mod pause;
 mod peers;
 mod pile_model;
+mod prediction;
 mod piles;
 mod preview;
 mod rig;

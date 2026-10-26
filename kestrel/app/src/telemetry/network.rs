@@ -8,9 +8,6 @@ const MAX_SAMPLES: usize = 600;
 const CORRECTION_SHOWN: Duration = Duration::from_secs(2);
 /// Episodes that pull the avatar less than this (units) are not kept.
 const MIN_CORRECTION: f32 = 0.05;
-/// A frame pulling less than this does not count, so float noise at the
-/// leash's edge does not hold an episode open.
-const MIN_FRAME_CORRECTION: f32 = 0.001;
 const MAX_CORRECTIONS: usize = 256;
 
 pub struct NetworkFrame {
@@ -31,7 +28,7 @@ pub struct NetworkFrame {
 pub struct NetworkDiagnostics {
     frames: VecDeque<NetworkFrame>,
     preview: Option<PreviewSample>,
-    preview_clamps: u64,
+    preview_mispredictions: u64,
     preview_snaps: u64,
     /// Finished correction episodes this session, oldest first.
     corrections: VecDeque<PreviewCorrection>,
@@ -44,47 +41,46 @@ pub struct NetworkDiagnostics {
     pub show_corrections: bool,
 }
 
-/// One frame of the client's local avatar preview, in view space.
+/// One frame of the client's predicted local avatar, in view space.
 pub struct PreviewUpdate {
     /// Where the avatar is drawn this frame.
     pub shown: Vec3,
     /// Where the confirmed simulation has it.
     pub confirmed: Vec3,
-    /// Distance the preview eased toward the confirmed position.
-    pub eased: f32,
-    /// Distance the leash held the preview back from where it would have gone.
-    pub clamped: f32,
-    /// The preview was too far off and reset onto the confirmed position.
+    /// Where it is being pulled to: the prediction without the visual offset
+    /// a misprediction left.
+    pub target: Vec3,
+    /// How far this frame's change of prediction moved the avatar: the
+    /// difference between what was and is now predicted for the drawn tick.
+    pub mispredicted: f32,
+    /// The avatar was too far off and was put where it is predicted.
     pub snapped: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CorrectionKind {
-    Ease,
-    Clamp,
+    Mispredict,
     Snap,
 }
 
 impl CorrectionKind {
     fn name(self) -> &'static str {
         match self {
-            Self::Ease => "ease",
-            Self::Clamp => "clamp",
+            Self::Mispredict => "mispredict",
             Self::Snap => "snap",
         }
     }
 
     fn color(self, alpha: f32) -> Color {
         match self {
-            Self::Ease => Color::srgba(1.0, 0.85, 0.2, alpha),
-            Self::Clamp => Color::srgba(1.0, 0.35, 0.15, alpha),
+            Self::Mispredict => Color::srgba(1.0, 0.55, 0.15, alpha),
             Self::Snap => Color::srgba(1.0, 0.2, 0.9, alpha),
         }
     }
 }
 
-/// Consecutive preview frames pulled back the same way: one movement preview
-/// reconciliation as the player feels it.
+/// Consecutive frames whose prediction changed (or a snap): one correction
+/// as the player feels it.
 #[derive(Clone, Debug)]
 pub struct PreviewCorrection {
     pub kind: CorrectionKind,
@@ -92,9 +88,10 @@ pub struct PreviewCorrection {
     pub ended: Instant,
     /// Where the avatar was drawn just before the episode.
     pub from: Vec3,
-    /// Where it was drawn on the episode's last frame.
+    /// Where it was being pulled to on the episode's last frame.
     pub to: Vec3,
-    /// Total distance pulled, summed over frames.
+    /// Total distance, summed over frames: each misprediction's starting
+    /// error, or a snap's jump.
     pub distance: f32,
     pub frames: u32,
     pub tick: Option<u64>,
@@ -111,7 +108,7 @@ impl PreviewCorrection {
 struct PreviewSample {
     at: Instant,
     offset: f32,
-    correction: f32,
+    mispredicted: f32,
 }
 
 impl NetworkDiagnostics {
@@ -156,18 +153,17 @@ impl NetworkDiagnostics {
         self.preview = Some(PreviewSample {
             at: now,
             offset: flat(update.shown - update.confirmed),
-            correction: update.eased,
+            mispredicted: update.mispredicted,
         });
-        self.preview_clamps += u64::from(update.clamped > 0.0);
+        self.preview_mispredictions += u64::from(update.mispredicted > 0.0);
         self.preview_snaps += u64::from(update.snapped);
 
+        // Predictions are exact, so any change at all counts.
         let (kind, distance) = if update.snapped {
             let from = self.last_shown.unwrap_or(update.shown);
             (Some(CorrectionKind::Snap), flat(update.shown - from))
-        } else if update.clamped > MIN_FRAME_CORRECTION {
-            (Some(CorrectionKind::Clamp), update.clamped)
-        } else if update.eased > MIN_FRAME_CORRECTION {
-            (Some(CorrectionKind::Ease), update.eased)
+        } else if update.mispredicted > 0.0 {
+            (Some(CorrectionKind::Mispredict), update.mispredicted)
         } else {
             (None, 0.0)
         };
@@ -182,7 +178,7 @@ impl NetworkDiagnostics {
                 started: now,
                 ended: now,
                 from,
-                to: update.shown,
+                to: update.target,
                 distance: 0.0,
                 frames: 0,
                 tick: latest.and_then(|f| f.tick),
@@ -190,7 +186,7 @@ impl NetworkDiagnostics {
                 rtt: latest.and_then(|f| f.stats.rtt),
             });
             open.ended = now;
-            open.to = update.shown;
+            open.to = update.target;
             open.distance += distance;
             open.frames += 1;
             if kind == CorrectionKind::Snap {
@@ -465,25 +461,29 @@ impl NetworkDiagnostics {
                         preview.offset
                     ));
                     ui.label(format!(
-                        "Explicit reconciliation in last preview update: {:.3} units",
-                        preview.correction
+                        "Misprediction in the last update: {:.3} units",
+                        preview.mispredicted
                     ));
                     ui.label(format!(
-                        "{} clamped frames · {} distance-reset snaps · sample {:.1} s ago",
-                        self.preview_clamps,
+                        "{} mispredicted frames · {} snaps · sample {:.1} s ago",
+                        self.preview_mispredictions,
                         self.preview_snaps,
                         preview.at.elapsed().as_secs_f64()
                     ));
                 } else {
-                    ui.label("Unknown: no local avatar preview sample yet.");
+                    ui.label("Unknown: no local avatar prediction sample yet.");
                 }
                 ui.checkbox(&mut self.show_corrections, "Show corrections in the world (2 s)");
-                ui.small("Box: where the avatar was drawn when the correction started. Line: where it was pulled to. Yellow ease, orange clamp, magenta snap.");
+                ui.small("Box: where the avatar was drawn when the correction started. Line: where it was pulled to. Orange mispredict, magenta snap.");
                 let kept: Vec<_> = self.corrections().collect();
-                ui.label(format!("{} corrections of at least {MIN_CORRECTION} units kept", kept.len()));
+                let (small, small_distance) = self.small_corrections;
+                ui.label(format!(
+                    "{} corrections of at least {MIN_CORRECTION} units kept · {small} smaller ({small_distance:.3} units in all)",
+                    kept.len()
+                ));
                 for c in kept.iter().rev().take(8) {
                     ui.monospace(format!(
-                        "{:>5} {:.2} units over {:.0} ms · {:.1} s ago",
+                        "{:>10} {:.2} units over {:.0} ms · {:.1} s ago",
                         c.kind.name(),
                         c.distance,
                         c.ended.saturating_duration_since(c.started).as_secs_f64() * 1000.,
@@ -625,9 +625,11 @@ impl NetworkDiagnostics {
             "packets_sent": frame.stats.packets_sent, "packets_received": frame.stats.packets_received,
             "bytes_sent": frame.stats.bytes_sent, "bytes_received": frame.stats.bytes_received,
             "preview_offset": self.preview.as_ref().map(|p| p.offset),
-            "preview_correction": self.preview.as_ref().map(|p| p.correction),
-            "preview_clamped_frames": self.preview_clamps, "preview_distance_snaps": self.preview_snaps,
+            "preview_mispredicted": self.preview.as_ref().map(|p| p.mispredicted),
+            "preview_mispredicted_frames": self.preview_mispredictions, "preview_snaps": self.preview_snaps,
             "preview_corrections": self.corrections().count(),
+            "preview_corrections_under_threshold": self.small_corrections.0,
+            "preview_corrections_under_threshold_distance": self.small_corrections.1,
         });
         let peers = d.peers.iter().map(|peer| json!({
                 "player": peer.player.0, "loading": peer.loading, "turn_receipt_ack": peer.turn_ack,
@@ -711,7 +713,7 @@ mod tests {
             1,
             "old samples expire by time as well as count"
         );
-        network.preview(start, update(1.0, 0.1, 0.2, true));
+        network.preview(start, update(1.0, 0.9, 0.1, true));
         network.record(frame(start + Duration::from_secs(21), 2, 1002));
         assert_eq!(network.frames.len(), 1);
         assert!(network.preview.is_none());
@@ -750,12 +752,13 @@ mod tests {
         draw(&mut network);
     }
 
-    fn update(x: f32, eased: f32, clamped: f32, snapped: bool) -> PreviewUpdate {
+    /// A frame drawn at `x`, pulled toward `target` by `mispredicted`.
+    fn update(x: f32, target: f32, mispredicted: f32, snapped: bool) -> PreviewUpdate {
         PreviewUpdate {
             shown: Vec3::new(x, 0.0, 0.0),
             confirmed: Vec3::ZERO,
-            eased,
-            clamped,
+            target: Vec3::new(target, 0.0, 0.0),
+            mispredicted,
             snapped,
         }
     }
@@ -766,28 +769,34 @@ mod tests {
         let at = |i: u64| start + Duration::from_millis(16 * i);
         let mut network = NetworkDiagnostics::default();
         network.record(frame(start, 1, 0));
-        network.preview(at(0), update(1.0, 0.0, 0.0, false));
-        // Three leashed frames, then a change of kind to easing.
-        network.preview(at(1), update(1.1, 0.0, 0.03, false));
-        network.preview(at(2), update(1.2, 0.0, 0.03, false));
-        network.preview(at(3), update(1.3, 0.0, 0.03, false));
-        network.preview(at(4), update(1.2, 0.02, 0.0, false));
-        network.preview(at(5), update(1.1, 0.0, 0.0, false));
+        network.preview(at(0), update(1.0, 1.0, 0.0, false));
+        // Three mispredicted frames in a row are one correction.
+        network.preview(at(1), update(1.1, 1.0, 0.03, false));
+        network.preview(at(2), update(1.2, 1.1, 0.03, false));
+        network.preview(at(3), update(1.3, 1.2, 0.03, false));
+        network.preview(at(4), update(1.3, 1.3, 0.0, false));
+        // One too small to keep, but counted.
+        network.preview(at(5), update(1.4, 1.38, 0.02, false));
+        network.preview(at(6), update(1.5, 1.5, 0.0, false));
         // A snap is its own episode.
-        network.preview(at(6), update(4.0, 0.0, 0.0, true));
-        network.preview(at(7), update(4.0, 0.0, 0.0, false));
+        network.preview(at(7), update(4.0, 4.0, 0.0, true));
+        network.preview(at(8), update(4.0, 4.0, 0.0, false));
 
         let kept: Vec<_> = network.corrections().collect();
-        assert_eq!(kept.len(), 2, "the 0.02 unit ease is below the minimum");
-        assert_eq!(kept[0].kind, CorrectionKind::Clamp);
+        assert_eq!(kept.len(), 2, "the 0.02 unit misprediction is below the minimum");
+        assert_eq!(kept[0].kind, CorrectionKind::Mispredict);
         assert_eq!(kept[0].frames, 3);
         assert!((kept[0].distance - 0.09).abs() < 1e-5);
         assert_eq!(kept[0].from, Vec3::new(1.0, 0.0, 0.0), "the box marks where the avatar was before the pull");
-        assert_eq!(kept[0].to, Vec3::new(1.3, 0.0, 0.0));
+        assert_eq!(kept[0].to, Vec3::new(1.2, 0.0, 0.0), "the line ends where the prediction pulls it");
         assert_eq!(kept[0].tick, Some(12));
         assert_eq!(kept[1].kind, CorrectionKind::Snap);
-        assert!((kept[1].distance - 2.9).abs() < 1e-5);
+        assert!((kept[1].distance - 2.5).abs() < 1e-5);
+        let (small, small_distance) = network.small_corrections();
+        assert_eq!(small, 1);
+        assert!((small_distance - 0.02).abs() < 1e-6);
         assert_eq!(network.snapshot()["preview_corrections"], 2);
+        assert_eq!(network.snapshot()["preview_corrections_under_threshold"], 1);
 
         network.show_corrections = true;
         network.begin();
