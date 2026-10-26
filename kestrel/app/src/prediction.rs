@@ -69,6 +69,9 @@ pub struct Drawn {
     pub from: AgentState,
     pub to: AgentState,
     pub fraction: f32,
+    /// The drawn time in ticks: `from` is the state before tick
+    /// `floor(time)`. Confirmed, it is the views' render time.
+    pub time: f32,
     /// How far a change of prediction moved the drawn avatar this frame.
     pub mispredicted: f32,
     /// The avatar was too far off and was put where it is predicted.
@@ -85,6 +88,39 @@ pub struct PredictedEvent {
     /// The tick it is predicted on.
     pub tick: u64,
     pub event: Event,
+}
+
+/// The local player's avatar as it is drawn this frame (`follow_avatar`):
+/// predicted on a joined client, confirmed otherwise. Anything of the
+/// avatar's that lasts (jetpack flame and sound, jump crouch, dig pose and
+/// dust, the swing) is drawn from this, so a prediction that is withdrawn
+/// or corrected ends or changes it on the next frame with no code of its
+/// own (D5 in `ABILITY_PREDICTION_HANDOFF.md`). Remote players are drawn
+/// from the confirmed world.
+#[derive(Resource, Default)]
+pub struct DrawnAvatar(pub Option<DrawnState>);
+
+#[derive(Clone, Debug)]
+pub struct DrawnState {
+    pub agent: u16,
+    /// The states either side of the drawn time.
+    pub from: AgentState,
+    pub to: AgentState,
+    /// The drawn time in ticks, as `Drawn::time` (the render time for a
+    /// confirmed avatar), to time phases such as a dig's or a jump's.
+    pub time: f32,
+}
+
+impl DrawnState {
+    /// The drawn avatar's state: the newer one.
+    pub fn avatar(&self) -> &sim::settlement::avatar::AvatarState {
+        &self.to.avatar
+    }
+
+    /// How long (seconds) the drawn avatar has been digging, if it is.
+    pub fn dig_age(&self) -> Option<f32> {
+        self.avatar().dig.as_ref().map(|dig| crate::character::dig_age(self.time, dig))
+    }
 }
 
 #[derive(Default)]
@@ -137,17 +173,17 @@ impl AvatarPrediction {
         let current = &c.settlement.agents[c.agent as usize];
         let predicted = (base >= c.tick && base < c.tick + MAX_LEAD).then(|| replay(c, base + 1)).flatten();
         let mut events = Vec::new();
-        let (from, to, fraction, positions) = match predicted {
+        let (from, to, fraction, time, positions) = match predicted {
             Some((states, shown)) => {
                 events = shown;
                 let positions: Vec<Vec3> = states.iter().map(view).collect();
                 let at = |tick: u64| states[(tick - c.tick) as usize].clone();
-                (at(base), at(base + 1), fraction, positions)
+                (at(base), at(base + 1), fraction, drawn as f32, positions)
             }
             None => {
                 // A teleport snaps instead of sliding.
                 let alpha = if view(c.previous).distance(view(current)) > SNAP_DISTANCE { 1.0 } else { c.alpha };
-                (c.previous.clone(), current.clone(), alpha, Vec::new())
+                (c.previous.clone(), current.clone(), alpha, c.tick as f32 - 1.0 + c.alpha, Vec::new())
             }
         };
         let is_predicted = !positions.is_empty();
@@ -194,6 +230,7 @@ impl AvatarPrediction {
             from,
             to,
             fraction,
+            time,
             mispredicted,
             snapped,
             events,

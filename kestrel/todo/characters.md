@@ -63,6 +63,27 @@
 - **Found in:** ability prediction task 4, the predicted-events ledger
   (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D8).
 
+## Follow a matched swing to its end
+
+- **Status:** open
+- **Why:** the local swing starts on the press and, once the drawn avatar
+  swings for it, takes that swing's stroke; then it plays on the view's own
+  clock (`combat::follow_drawn_swing`). So a matched swing the prediction
+  later withdraws plays out, and a confirmed sword or spear hit, which
+  shortens the simulated swing to the rebound in stage 5, isn't reflected
+  in the pose (the view rebounds only off its own obstacles). Ending a
+  matched swing when the drawn one ends would cut its recovery short,
+  since the press starts the view's swing a few ticks before the drawn
+  avatar's.
+- **What to do:** time a matched swing from the drawn swing (`started`,
+  `until`, `resolved`) at the drawn time, keeping the press's head start
+  only until the drawn swing shows, and end it when the drawn avatar no
+  longer swings.
+- **Where:** `kestrel/app/src/combat.rs` (`follow_drawn_swing`, `combat`,
+  `Attack`), `kestrel/app/src/gameplay.rs` (`Controls`).
+- **Found in:** ability prediction task 5, lasting effects from the drawn
+  state (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D5).
+
 ## Done
 
 ### Remove the right-click movement leftovers

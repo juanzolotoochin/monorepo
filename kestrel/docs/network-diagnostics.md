@@ -128,6 +128,20 @@ confirmed terrain when the walk starts. The units it then moves at the dock are 
 Pile jobs read pile lab state the replay doesn't run, so they aren't
 predicted: while one is pending, the confirmed avatar is drawn.
 
+Everything about your avatar that lasts is drawn from the drawn avatar's
+state ([`DrawnAvatar`](../app/src/prediction.rs)), not from the confirmed
+world: the jetpack flame, thrust and landing sounds and the flight HUD, the
+jump crouch, the dig pose, bar, dust and chip sound, footsteps, and facing.
+So they start with the predicted avatar, about an input lead before the
+confirmed one, and when a prediction is withdrawn or corrected they end or
+change on the same frame. A swing starts on the press, before even the
+drawn avatar swings; once the drawn avatar swings for it, the swing takes
+that swing's stroke (the sword combo is the avatar's), and if the drawn
+avatar shows no swing for it two ticks after the tick it asked for (the
+simulation refused it: you were digging, dead, or the scene doesn't offer
+the weapon), it ends. On the host and in single player the drawn avatar is
+the confirmed one.
+
 ## Predicted events
 
 A client also presents some of its own avatar's events predicted: so far,
@@ -169,8 +183,8 @@ confirmed.
 Each kind has a miss policy. Laser shots are `Keep`: what was
 presented stays. An event that starts something lasting would be `Cancel`:
 the presenter stops it when it misses, and presents the confirmed one
-instead. No event is `Cancel` yet; lasting effects are drawn from the
-predicted avatar's state instead.
+instead. No event is `Cancel`: lasting effects are drawn from the drawn
+avatar's state instead (see above).
 
 A shot fired from the predicted position ends where the confirmed one does
 unless the replay was wrong: an input the host moved to a later tick shifts

@@ -64,7 +64,7 @@ pub struct Digging {
 
 impl Service for Digging {
     type Layer = WorldLayer;
-    type Deps = (WorldMirror, SceneView);
+    type Deps = (WorldMirror, SceneView, crate::character::Avatar);
 
     fn init(world: &mut World) -> Self {
         if !world.resource::<SceneView>().has_feature(SceneFeature::Digging) {
@@ -80,7 +80,8 @@ impl Service for Digging {
 
     fn systems(app: &mut App) {
         let active = in_state(WorldState::Active);
-        app.add_service_systems::<Self, _>(Phase::Mirror, (update, follow_camera).chain().run_if(active.clone()))
+        app.init_resource::<crate::prediction::DrawnAvatar>()
+            .add_service_systems::<Self, _>(Phase::Mirror, (update, follow_camera).chain().run_if(active.clone()))
             .add_systems(
                 PostUpdate,
                 feedback.after(bevy::transform::TransformSystems::Propagate).run_if(crate::control::rendered).run_if(active),
@@ -326,12 +327,46 @@ pub fn ground_hit(ray: Ray3d, service: &SessionService) -> Option<Vec3> {
     None
 }
 
+/// A dig to show: an avatar digging, where, and the render time (ticks)
+/// its progress is shown at.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShownDig {
+    pub agent: u16,
+    pub dig: Dig,
+    pub at: Vec3,
+    pub now: f32,
+}
+
+/// The digs to show: each avatar's in the confirmed world at render time,
+/// but the local player's as its avatar is drawn (D5), at `player`, where
+/// its body is drawn. On a joined client that one is predicted, so its bar
+/// and dust start and stop with the drawn avatar's dig.
+pub fn shown_digs(mirror: &WorldMirror, drawn: Option<&crate::prediction::DrawnState>, player: Vec3) -> Vec<ShownDig> {
+    let now = mirror.tick as f32 - 1.0 + mirror.alpha;
+    let me = mirror.player();
+    let drawn = drawn.filter(|drawn| Some(drawn.agent) == me);
+    let others = mirror.current.as_ref().map_or_else(Vec::new, |s| {
+        s.agents
+            .iter()
+            .enumerate()
+            .filter(|&(i, _)| Some(i as u16) != me || drawn.is_none())
+            .filter_map(|(i, a)| {
+                let at = mirror.to_view(a.position).with_y(a.avatar.height.to_f32());
+                Some(ShownDig { agent: i as u16, dig: a.avatar.dig.clone()?, at, now })
+            })
+            .collect()
+    });
+    let mine = drawn.and_then(|drawn| Some(ShownDig { agent: drawn.agent, dig: drawn.avatar().dig.clone()?, at: player, now: drawn.time }));
+    others.into_iter().chain(mine).collect()
+}
+
 /// Progress bars over digging avatars, dust while they dig, and a burst
 /// when a layer comes out.
 pub fn feedback(
     mut commands: Commands,
     service: Res<SessionService>,
     mirror: Res<WorldMirror>,
+    drawn: Res<crate::prediction::DrawnAvatar>,
     assets: Res<FxAssets>,
     sound: Res<crate::sound::Sound>,
     camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>,
@@ -342,23 +377,17 @@ pub fn feedback(
     mut pits: Local<Vec<((i32, i32), u8)>>,
 ) {
     let terrain = service.world().map(sim::World::terrain);
-    let now = mirror.tick as f32 - 1.0 + mirror.alpha;
-    let digs: Vec<(u16, Dig, Vec3)> = mirror.current.as_ref().map_or_else(Vec::new, |s| {
-        s.agents
-            .iter()
-            .enumerate()
-            .filter_map(|(i, a)| Some((i as u16, a.avatar.dig.clone()?, mirror.to_view(a.position).with_y(a.avatar.height.to_f32()))))
-            .collect()
-    });
+    let digs = shown_digs(&mirror, drawn.0.as_ref(), player.translation());
     let scale = player.compute_transform().scale.y;
-    for &(agent, ref dig, at) in &digs {
+    for ShownDig { agent, dig, at, now } in &digs {
+        let (agent, at) = (*agent, *at);
         let chip = (now.max(dig.started as f32) as u64 - dig.started) / CHIP_TICKS;
         if chips.insert(agent, chip) != Some(chip) && chip > 0 {
             burst(&mut commands, &assets, at, agent as u32 * 31 + chip as u32);
             sound.play(crate::sound::Cue::Step);
         }
     }
-    chips.retain(|agent, _| digs.iter().any(|(a, ..)| a == agent));
+    chips.retain(|agent, _| digs.iter().any(|d| d.agent == *agent));
     // A layer came out: a burst from the new floor.
     if let Some(terrain) = terrain {
         if terrain.pits != *pits {
@@ -373,11 +402,11 @@ pub fn feedback(
             *pits = terrain.pits.clone();
         }
     }
-    let progress = |dig: &Dig| ((now - dig.started as f32) / (dig.until - dig.started) as f32).clamp(0.0, 1.0);
+    let progress = |d: &ShownDig| ((d.now - d.dig.started as f32) / (d.dig.until - d.dig.started) as f32).clamp(0.0, 1.0);
     let lift = if service.networked() { 24.0 } else { 0.0 };
     let mut shown = Vec::new();
     for (entity, bar, mut node, mut visibility, computed) in &mut bars {
-        let Some((_, dig, at)) = digs.iter().find(|(a, ..)| *a == bar.agent) else {
+        let Some(dig) = digs.iter().find(|d| d.agent == bar.agent) else {
             commands.entity(entity).despawn();
             continue;
         };
@@ -387,7 +416,7 @@ pub fn feedback(
                 fill.width = percent(progress(dig) * 100.0);
             }
         }
-        let head = *at + Vec3::Y * ABOVE * scale;
+        let head = dig.at + Vec3::Y * ABOVE * scale;
         let Ok(v) = camera.0.world_to_viewport(camera.1, head) else {
             *visibility = Visibility::Hidden;
             continue;
@@ -397,10 +426,10 @@ pub fn feedback(
         node.top = px(v.y - size.y - lift);
         *visibility = if size.x > 0.0 { Visibility::Inherited } else { Visibility::Hidden };
     }
-    for (agent, ..) in digs.iter().filter(|(a, ..)| !shown.contains(a)) {
+    for agent in digs.iter().map(|d| d.agent).filter(|a| !shown.contains(a)) {
         commands
             .spawn((
-                DigBar { agent: *agent },
+                DigBar { agent },
                 Node { position_type: PositionType::Absolute, width: px(46.), height: px(7.), padding: UiRect::all(px(1.5)), ..default() },
                 BackgroundColor(Color::srgba(0.02, 0.03, 0.04, 0.75)),
                 Visibility::Hidden,

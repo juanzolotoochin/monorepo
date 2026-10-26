@@ -96,6 +96,33 @@ predicted and smoothed, so a misprediction ends the effect on the next frame
 with no extra code. Events are for one-shots. `Cancel` exists only for the
 rare lasting effect an event must start.
 
+Done in task 5: `follow_avatar` publishes the drawn avatar as
+`prediction::DrawnAvatar` (`from`, `to` and the drawn time in ticks;
+confirmed at render time on the host and in single player), and the views
+of the local avatar read it. No event needed `Cancel`. The audit, for the
+local player's avatar on a joined client:
+
+| Effect | Driven before | Driven now |
+|---|---|---|
+| Position, height, heading, footsteps and gait | drawn state (`follow_avatar`) | unchanged |
+| Jetpack flame, thrust sound, flight HUD, landing sound | confirmed state (`jetpack::update` read `mirror.current`) | drawn state (`Flight` mirrors `DrawnAvatar`) |
+| Jump crouch, airtime and landing pose; airborne pose | confirmed jump phase at the confirmed render time | drawn phase at the drawn time |
+| Dig pose | confirmed `dig` at the confirmed render time | drawn `dig` at the drawn time (`DrawnState::dig_age`) |
+| Dig bar, dust and chip sound | confirmed `dig` and position | drawn `dig` at the drawn time, over the drawn body (`digging::shown_digs`); others confirmed |
+| Layer-out burst and sound | confirmed terrain (stage 5) | unchanged: a world change |
+| Swing pose, whoosh, blade contact, swing HUD | the press (`Controls::strike`), the view's combo guess, and played even when the simulation refused the attack | still starts on the press; takes the drawn swing's stroke and combo once it shows; ends if the drawn avatar shows no swing or held press for it 2 ticks past its asked tick (`combat::follow_drawn_swing`) |
+| Weapon in hand | the selection (`Controls::weapon`) | unchanged: only offered weapons are selected and `Equip` is never refused |
+| Laser beam and sound | the ledger (`Keep`) | unchanged |
+| Bow sound | the ledger, early (task 4) | confirmed only, until a predicted arrow is drawn (`todo/characters.md`) |
+| Holding repair | no avatar visual; the cover rebuilds in stage 5; the prompt follows the drawn body | unchanged |
+| Carried units, units in flight, transfer job | pile lab state and tosses, stage 5 | unchanged (D1) |
+| Hits, flinches, hit stop on the avatar | confirmed `Hit` (stage 5) | unchanged |
+| Looping sounds | none: `sound.rs` cues are one-shots; the thrust repeats from `Flight` | covered by `Flight` |
+
+Remote players stay on confirmed, interpolated state (`peers`). A matched
+swing then plays on its own clock; see "Follow a matched swing to its end"
+in `todo/characters.md`.
+
 ### D6. Knockback has its own correction kind
 
 Knockback and other pushes from stage 5 are expected corrections, not

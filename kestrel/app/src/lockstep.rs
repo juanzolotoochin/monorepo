@@ -836,13 +836,16 @@ impl PlayerControl {
         if weapon != content::scenario::Weapon::Laser {
             self.walking = None;
         }
+        // The tick the command asks for: a client's input horizon, or on a
+        // host the next tick.
+        let asked = service.session.input_horizon().or_else(|| service.world().map(sim::World::tick));
         service.command(CommandKind::Attack {
             agent,
             weapon,
             aim: FxVec2::new(Fx::quantize(flat.x), Fx::quantize(flat.z)),
             muzzle: muzzle.map(Fx::quantize),
         });
-        controls.strike(aim);
+        controls.strike_at(aim, asked);
     }
 }
 
@@ -869,11 +872,21 @@ pub fn follow_avatar(
     mut telemetry: ResMut<crate::telemetry::Telemetry>,
     mut ledger: ResMut<crate::event_prediction::EventPrediction>,
     mut pending_lasers: ResMut<crate::effects::PendingLasers>,
+    mut drawn_avatar: ResMut<crate::prediction::DrawnAvatar>,
 ) {
-    let (Some(current), Some(index)) = (&mirror.current, mirror.player()) else { return };
+    let (Some(current), Some(index)) = (&mirror.current, mirror.player()) else {
+        drawn_avatar.0 = None;
+        return;
+    };
     let a = &current.agents[index as usize];
     let before = mirror.previous.as_ref().and_then(|p| p.agents.get(index as usize)).unwrap_or(a);
     let predicted = if service.is_client() { predict(&mut prediction, &mirror, &service, before, time.delta_secs()) } else { None };
+    // What the avatar's lasting effects are drawn from (D5): the newest
+    // confirmed state at render time, unless it is predicted.
+    drawn_avatar.0 = Some(match &predicted {
+        Some(drawn) => crate::prediction::DrawnState { agent: index, from: drawn.from.clone(), to: drawn.to.clone(), time: drawn.time },
+        None => crate::prediction::DrawnState { agent: index, from: before.clone(), to: a.clone(), time: mirror.tick as f32 - 1.0 + mirror.alpha },
+    });
     if predicted.is_none() {
         prediction.reset();
     }
@@ -1926,5 +1939,172 @@ mod tests {
         }
         println!("laser shots per latency case and scenario:\n{report}");
         assert!(failures.is_empty(), "laser shots were not predicted exactly:\n{report}\n{}", failures.join("\n"));
+    }
+
+    /// The client's avatar as drawn this frame.
+    fn drawn_avatar(app: &App) -> crate::prediction::DrawnState {
+        app.world().resource::<crate::prediction::DrawnAvatar>().0.clone().expect("the avatar is drawn")
+    }
+
+    /// The client's avatar in its newest confirmed tick.
+    fn confirmed_avatar(app: &App) -> sim::settlement::AgentState {
+        let mirror = app.world().resource::<WorldMirror>();
+        mirror.current.as_ref().unwrap().agents[mirror.player().unwrap() as usize].clone()
+    }
+
+    /// Queues a command the replay can't predict (a pile haul, which does
+    /// nothing outside the pile lab): once the drawn time reaches it, the
+    /// prediction is withdrawn and the confirmed avatar is drawn until it
+    /// applies.
+    fn withdraw_prediction(app: &mut App) {
+        let mut service = app.world_mut().resource_mut::<SessionService>();
+        let agent = service.player().unwrap();
+        service.command(CommandKind::Pile { agent, action: sim::settlement::piles::PileAction::Deliver, pace: Fx::ZERO, approach: None });
+    }
+
+    /// Lifts off in `scene` (the jetpack, or a jump), then once more and
+    /// withdraws the prediction while the drawn avatar is up but the
+    /// confirmed one isn't yet. The views' flight (`jetpack::Flight`: flame,
+    /// thrust sound, landing sound, jump crouch) is the drawn avatar's on
+    /// every frame, so it starts an input lead before the confirmed avatar
+    /// lifts off and ends on the frame the prediction is withdrawn.
+    fn assert_lift_follows_the_drawn_avatar(scene: &str, seed: u64) {
+        let lifted = |a: &sim::settlement::avatar::AvatarState| a.flight.airborne || a.jump != sim::settlement::avatar::JumpPhase::Grounded;
+        let mut game = RelayedGame::in_scene(scene, 100.0, 20.0, seed);
+        game.hold(&[], 60);
+        let thrust = |game: &RelayedGame| game.client.world().resource::<crate::sound::Sound>().recorded_events().iter().filter(|(_, cue)| *cue == crate::sound::Cue::Jetpack as i32).count();
+        let space = |game: &mut RelayedGame, down: bool| {
+            let mut keys = game.client.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            if down { keys.press(KeyCode::Space) } else { keys.release(KeyCode::Space) }
+        };
+        let jetpack = scene == "jetpack-lab";
+        let mut report = String::new();
+        for withdraw in [false, true] {
+            space(&mut game, true);
+            let (mut drawn_at, mut confirmed_at, mut withdrawn_at, mut thrust_early) = (None, None, None, 0);
+            let thrust_before = thrust(&game);
+            for frame in 0..90 {
+                game.frame();
+                // The test app has no input plugin to clear the press.
+                game.client.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+                let drawn = drawn_avatar(&game.client);
+                let flight = game.client.world().resource::<crate::jetpack::Flight>();
+                let shown = (flight.airborne, flight.jump, flight.requested);
+                let a = drawn.avatar();
+                assert_eq!(shown, (a.flight.airborne, a.jump, a.flight.requested), "{scene}, frame {frame}: the views' flight isn't the drawn avatar's");
+                let up = lifted(a);
+                let confirmed_up = lifted(&confirmed_avatar(&game.client).avatar);
+                if up && drawn_at.is_none() {
+                    drawn_at = Some(frame);
+                    if withdraw {
+                        withdraw_prediction(&mut game.client);
+                    }
+                }
+                if withdraw && drawn_at.is_some() && !up && !confirmed_up && withdrawn_at.is_none() {
+                    withdrawn_at = Some(frame);
+                }
+                if confirmed_up && confirmed_at.is_none() {
+                    confirmed_at = Some(frame);
+                    thrust_early = thrust(&game) - thrust_before;
+                }
+            }
+            report += &format!("{scene}{}: drawn up on frame {drawn_at:?}, confirmed on {confirmed_at:?}, withdrawn on {withdrawn_at:?}, thrust sounds before confirmed {thrust_early}\n", if withdraw { " (withdrawn)" } else { "" });
+            let (Some(drawn_at), Some(confirmed_at)) = (drawn_at, confirmed_at) else { panic!("never lifted off:\n{report}") };
+            assert!(confirmed_at >= drawn_at + 4, "the views lifted off with the confirmed avatar, not the drawn one:\n{report}");
+            if withdraw {
+                assert!(withdrawn_at.is_some_and(|at| at < confirmed_at), "the withdrawn lift went on being shown:\n{report}");
+            } else if jetpack {
+                assert!(thrust_early > 0, "the thrust sound waited for the confirmed avatar:\n{report}");
+            }
+            space(&mut game, false);
+            game.frame();
+            game.client.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+            game.hold(&[], 150);
+        }
+        println!("{report}");
+    }
+
+    #[test]
+    fn joined_player_jetpack_follows_the_drawn_avatar() {
+        assert_lift_follows_the_drawn_avatar("jetpack-lab", 0xf1a7);
+    }
+
+    #[test]
+    fn joined_player_jump_follows_the_drawn_avatar() {
+        assert_lift_follows_the_drawn_avatar("moonlit-glade", 0x7a3d);
+    }
+
+    /// Digs in the dig lab: the local dig's bar, dust and pose
+    /// (`digging::shown_digs`, `DrawnState::dig_age`) are the drawn
+    /// avatar's, an input lead before the confirmed avatar digs, and end on
+    /// the frame the prediction is withdrawn. A sword swing pressed while
+    /// the drawn avatar digs, which the simulation refuses, ends as soon as
+    /// the drawn avatar doesn't swing for it.
+    #[test]
+    fn joined_player_dig_follows_the_drawn_avatar() {
+        let mut game = RelayedGame::in_scene("dig-lab", 100.0, 20.0, 0xd16);
+        game.hold(&[], 60);
+        let mut report = String::new();
+        for withdraw in [false, true] {
+            game.client.world_mut().resource_mut::<SessionService>().dig();
+            let (mut drawn_at, mut confirmed_at, mut withdrawn_at) = (None, None, None);
+            for frame in 0..60 {
+                game.frame();
+                let drawn = drawn_avatar(&game.client);
+                let world = game.client.world_mut();
+                let player = world.query_filtered::<&Transform, With<Player>>().single(world).unwrap().translation;
+                let mirror = world.resource::<WorldMirror>();
+                let shown = crate::digging::shown_digs(mirror, Some(&drawn), player);
+                let mine: Vec<_> = shown.iter().filter(|d| d.agent == drawn.agent).collect();
+                assert!(mine.len() <= 1);
+                let digging = drawn.avatar().dig.clone();
+                assert_eq!(mine.first().map(|d| (d.dig.clone(), d.at, d.now)), digging.clone().map(|dig| (dig, player, drawn.time)), "frame {frame}: the shown dig isn't the drawn avatar's");
+                assert_eq!(drawn.dig_age().is_some(), digging.is_some());
+                let confirmed_digging = confirmed_avatar(&game.client).avatar.dig.is_some();
+                if digging.is_some() && drawn_at.is_none() {
+                    drawn_at = Some(frame);
+                    if withdraw {
+                        withdraw_prediction(&mut game.client);
+                    }
+                }
+                if withdraw && drawn_at.is_some() && digging.is_none() && !confirmed_digging && withdrawn_at.is_none() {
+                    withdrawn_at = Some(frame);
+                }
+                if confirmed_digging && confirmed_at.is_none() {
+                    confirmed_at = Some(frame);
+                }
+            }
+            report += &format!("dig{}: drawn on frame {drawn_at:?}, confirmed on {confirmed_at:?}, withdrawn on {withdrawn_at:?}\n", if withdraw { " (withdrawn)" } else { "" });
+            let (Some(drawn_at), Some(confirmed_at)) = (drawn_at, confirmed_at) else { panic!("never dug:\n{report}") };
+            assert!(confirmed_at >= drawn_at + 4, "the dig was shown with the confirmed avatar, not the drawn one:\n{report}");
+            if withdraw {
+                assert!(withdrawn_at.is_some_and(|at| at < confirmed_at), "the withdrawn dig went on being shown:\n{report}");
+            } else {
+                // Still digging: a sword swing is refused.
+                assert!(drawn_avatar(&game.client).avatar().dig.is_some());
+                let world = game.client.world_mut();
+                world.resource_mut::<Controls>().weapon = content::scenario::Weapon::Sword;
+                world.resource_scope(|world, mut service: Mut<SessionService>| {
+                    world.resource_scope(|world, mut controls: Mut<Controls>| {
+                        world.resource_scope(|world, mut control: Mut<PlayerControl>| {
+                            control.strike(&mut service, &mut controls, &world.resource::<SceneView>().pack, Vec3::X);
+                        });
+                    });
+                });
+                let mut ended = None;
+                for frame in 0..30 {
+                    game.frame();
+                    assert!(drawn_avatar(&game.client).avatar().swing.is_none(), "the simulation swung while digging");
+                    if game.client.world().resource::<Controls>().attack.is_none() {
+                        ended = Some(frame);
+                        break;
+                    }
+                }
+                report += &format!("refused swing ended after {ended:?} frames\n");
+                assert!(ended.is_some_and(|frames| (frames as f32) < crate::combat::attack_end() * 60.0 / 2.0), "the refused swing played on:\n{report}");
+            }
+            game.hold(&[], 150);
+        }
+        println!("{report}");
     }
 }

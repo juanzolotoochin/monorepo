@@ -43,7 +43,7 @@ pub fn height(pack: &voxel_assets::ScenePack, p: Vec3) -> Option<f32> {
 }
 impl Service for Flight {
     type Layer = WorldLayer;
-    type Deps = (WorldMirror, SceneView);
+    type Deps = (WorldMirror, SceneView, crate::character::Avatar);
 
     /// Raises the scene's platforms (`SceneView` hides the deck under them).
     fn init(world: &mut World) -> Self {
@@ -57,7 +57,9 @@ impl Service for Flight {
     }
 
     fn systems(app: &mut App) {
-        app.add_service_systems::<Self, _>(Phase::Mirror, update.run_if(in_state(WorldState::Active)));
+        // `follow_avatar` (the Avatar service, which ticks first) writes it.
+        app.init_resource::<crate::prediction::DrawnAvatar>()
+            .add_service_systems::<Self, _>(Phase::Mirror, update.run_if(in_state(WorldState::Active)));
     }
 }
 
@@ -161,24 +163,23 @@ fn raise_platforms(
     }
 }
 
-/// Mirrors the avatar's flight for the HUD, sound and exhaust. The flight
-/// itself is simulated (`kestrel/sim::settlement::avatar`).
+/// Mirrors the avatar's flight for the HUD, sound, exhaust and jump pose.
+/// The flight itself is simulated (`kestrel/sim::settlement::avatar`); this
+/// is the drawn avatar's (`prediction::DrawnAvatar`), so on a joined client
+/// the flame and thrust start and stop with the predicted avatar.
 pub fn update(
     time: Res<Time>,
     mirror: Res<crate::lockstep::WorldMirror>,
+    drawn: Res<crate::prediction::DrawnAvatar>,
     mut flight: ResMut<Flight>,
     sound: Res<crate::sound::Sound>,
     mut exhaust: Query<(Entity, &mut Transform, &mut Visibility), With<Exhaust>>,
     player: Option<Single<Entity, With<crate::character::Player>>>,
     parents: Query<&ChildOf>,
 ) {
-    let (Some(current), Some(index)) = (&mirror.current, mirror.player()) else { return };
-    let avatar = &current.agents[index as usize].avatar;
-    let climbing = mirror
-        .previous
-        .as_ref()
-        .and_then(|p| p.agents.get(index as usize))
-        .is_some_and(|before| avatar.height > before.avatar.height);
+    let Some(drawn) = drawn.0.as_ref().filter(|drawn| Some(drawn.agent) == mirror.player()) else { return };
+    let avatar = drawn.avatar();
+    let climbing = avatar.height > drawn.from.avatar.height;
     flight.requested = avatar.flight.requested;
     let was_airborne = flight.airborne;
     flight.airborne = avatar.flight.airborne;

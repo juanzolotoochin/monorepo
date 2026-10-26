@@ -19,24 +19,36 @@ pub struct Controls {
     pub gait: GaitClock,
     pub attack: Option<Attack>,
     pub queued: Option<Vec3>,
+    /// The tick the queued press's command asked for (`Attack::asked`).
+    pub queued_asked: Option<u64>,
     pub impacts: u32,
     pub last_material: Option<voxel_assets::ImpactResponse>,
 }
 impl Controls {
     pub fn strike(&mut self, aim: Vec3) {
+        self.strike_at(aim, None);
+    }
+
+    /// Swings now, or queues the press during a swing. `asked` is the tick
+    /// the local player's `Attack` command asked for, which lets the swing
+    /// follow the drawn avatar's (`combat::follow_drawn_swing`).
+    pub fn strike_at(&mut self, aim: Vec3, asked: Option<u64>) {
         if self.attack.is_none() {
             self.attack_serial += 1;
             let mut attack = Attack::new(aim, self.weapon);
             attack.swift = self.swift_sword;
-            // Predicts the stroke the simulation will pick, with its rule.
+            // Predicts the stroke the simulation will pick, with its rule,
+            // until the drawn avatar shows it.
             (attack.stroke, self.combo_next) =
                 SwordStroke::combo(self.weapon, self.combo_next, self.combo_timer > 0.0);
             self.combo_timer = crate::combat::combo_window();
             attack.serial = self.attack_serial;
+            attack.asked = asked;
             self.attack = Some(attack);
         } else {
             // One deliberate press can queue the next cut during this one.
             self.queued = Some(aim);
+            self.queued_asked = asked;
         }
     }
 }
