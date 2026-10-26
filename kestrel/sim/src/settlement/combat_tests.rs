@@ -565,6 +565,38 @@ fn a_transfer_reserves_stock_and_a_cancel_releases_it_on_their_tick() {
     assert_eq!(arena.s().depots[d].incoming[i], incoming);
 }
 
+/// Respawning drops a running transfer, and its reserved stock goes back to
+/// the depot on the same tick, as a cancel would. Also when the transfer and
+/// the respawn come in one turn.
+#[test]
+fn respawning_releases_a_transfer_reservation() {
+    let mut config = scenario();
+    config.agents = vec![player()];
+    config.links.clear();
+    let mut arena = Arena::new(&config, &[]);
+    let s = arena.s();
+    let (depot, item) = (s.depot_index("forest").unwrap(), s.item_index("wood").unwrap());
+    let (d, i) = (depot as usize, item as usize);
+    let agent = arena.player as u16;
+    // Far from the dock, so no unit moves.
+    assert!((s.agents[arena.player].position - s.depots[d].position).length() > fx(1.0));
+    let out = s.depots[d].out[i];
+
+    arena.command(CommandKind::Transfer { agent, depot, item, units: 3, deposit: false });
+    assert_eq!(arena.s().depots[d].out[i], out + 3);
+    arena.command(CommandKind::Respawn { agent });
+    assert!(arena.s().agents[arena.player].avatar.job.is_none());
+    assert_eq!(arena.s().depots[d].out[i], out, "the respawn releases the reservation");
+    arena.s().validate().unwrap();
+
+    let player = PlayerId(0);
+    let turn = [CommandKind::Transfer { agent, depot, item, units: 2, deposit: false }, CommandKind::Respawn { agent }];
+    arena.sim.step(&turn.map(|kind| Command { player, kind }));
+    assert!(arena.s().agents[arena.player].avatar.job.is_none());
+    assert_eq!(arena.s().depots[d].out[i], out, "reserved and released in one tick");
+    arena.s().validate().unwrap();
+}
+
 /// Two players take the same depot's last units on one tick. Both actions
 /// see the stock as it was when the tick began, so both avatars take the
 /// job; stage 5 then reserves in command order (player order), and the

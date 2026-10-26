@@ -21,21 +21,6 @@
 - **Found in:** ability prediction task 2, the shared action path
   (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D2).
 
-## Release a transfer's reservation when its avatar respawns
-
-- **Status:** open
-- **Why:** `Respawn` resets the avatar's state, dropping a running manual
-  transfer job (`AvatarState::job`) without releasing the units it still
-  had reserved at its depot (`out` or `incoming`). Those units stay promised
-  to nobody, so the depot can never hand them out or take them in.
-- **What to do:** have `Respawn` emit a `TransferStock` release for the job
-  it drops, as `CancelTransfer` does, and check `Settlement::validate` with
-  a test that respawns mid-transfer. It changes gameplay, so it gets its own
-  commit.
-- **Where:** `kestrel/sim/src/settlement/avatar.rs` (`act`, `respawn`,
-  `Settlement::transfer_stock`).
-- **Found in:** ability prediction task 7 (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D3).
-
 ## Turn the memory commands' world writes into messages
 
 - **Status:** open
@@ -167,6 +152,21 @@
   (branch `kestrel-ability-prediction`).
 
 ## Done
+
+### Release a transfer's reservation when its avatar respawns
+
+- **Status:** done (branch `kestrel-respawn-transfer`)
+- **Why:** `Respawn` resets the avatar's state, dropping a running manual
+  transfer job (`AvatarState::job`) without releasing the units it still
+  had reserved at its depot (`out` or `incoming`). Those units stay promised
+  to nobody, so the depot can never hand them out or take them in.
+- **What to do:** have `Respawn` emit a `TransferStock` release for the job
+  it drops, as `CancelTransfer` does, and check `Settlement::validate` with
+  a test that respawns mid-transfer. It changes gameplay, so it gets its own
+  commit.
+- **Where:** `kestrel/sim/src/settlement/avatar.rs` (`act`, `respawn`,
+  `Settlement::transfer_stock`).
+- **Found in:** ability prediction task 7 (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D3).
 
 ### Remove the right-click movement leftovers
 
