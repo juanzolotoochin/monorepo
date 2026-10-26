@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use content::scenario::{self as def, CargoLayout, ProjectileKind, Weapon};
 use fx::{Fx, FxVec2};
 use serde::Serialize;
-use sim::settlement::{self as s, Endpoint as SimEndpoint, Settlement as SimSettlement};
+use sim::settlement::{self as s, InventoryRef as SimHolder, Settlement as SimSettlement};
 
 pub type Point = [f32; 2];
 
@@ -541,9 +541,9 @@ impl Simulation {
         };
         let item = |i: s::ItemIx| current.items[i as usize].clone();
         let agent_name = |a: s::AgentIx| current.agents[a as usize].id.clone();
-        let endpoint = |e: SimEndpoint| match e {
-            SimEndpoint::Depot(d) => Endpoint::Depot(current.depots[d as usize].id.clone()),
-            SimEndpoint::Cargo(a) => Endpoint::Cargo(agent_name(a)),
+        let endpoint = |e: SimHolder| match e {
+            SimHolder::Depot(d) => Endpoint::Depot(current.depots[d as usize].id.clone()),
+            SimHolder::Agent(a) => Endpoint::Cargo(agent_name(a)),
         };
         let inventory = |units: &[u32], capacity: u32| Inventory {
             capacity,
@@ -782,12 +782,15 @@ impl Simulation {
                 .agents
                 .iter()
                 .filter_map(|a| {
-                    let job = a.avatar()?.job.as_ref()?;
+                    // A player's depot transfer.
+                    a.avatar()?;
+                    let job = a.carry.job.as_ref()?;
+                    let SimHolder::Depot(depot) = job.other else { return None };
                     let manual = ManualJob {
-                        depot: current.depots[job.depot as usize].id.clone(),
+                        depot: current.depots[depot as usize].id.clone(),
                         item: item(job.item),
                         remaining: job.remaining,
-                        deposit: job.deposit,
+                        deposit: job.direction == s::Direction::Deposit,
                     };
                     Some((a.id.clone(), manual))
                 })

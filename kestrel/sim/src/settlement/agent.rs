@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use super::avatar::AvatarState;
 use super::haulers::HaulerState;
-use super::{DepotIx, Inventory, ItemIx, Kinds};
+use super::{AgentIx, DepotIx, Inventory, InventoryRef, ItemIx, Kinds};
+use crate::messages::{ReserveStock, StockChange};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentState {
@@ -72,16 +73,91 @@ impl Body {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Carry {
     /// The units carried. `reserved_in` counts units flying into the cargo
-    /// bed. A unit flying out left `counts` when it launched, so only its
-    /// `Transfer` shows it (`Settlement::leaving_cargo`).
+    /// bed and room a pickup job holds; `reserved_out` the units a deposit
+    /// job holds. A unit flying out left `counts` when it launched, so only
+    /// its `Transfer` shows it (`Settlement::leaving_cargo`).
     pub inventory: Inventory,
     /// Ticks to load or unload one unit (the character's `carry.transfer`).
     pub transfer_ticks: u64,
+    /// Units still to move between this cargo and another inventory. Only a
+    /// player's depot transfer has one so far.
+    pub job: Option<CarryJob>,
 }
 
 impl Carry {
     pub fn carrying(&self) -> bool {
         self.inventory.holds_any()
+    }
+
+    /// Ends the job early, if there is one: the one way a job stops before
+    /// its last unit. It gives back what the job holds on this cargo now,
+    /// and returns the release of what it holds on the other side, for the
+    /// caller to apply (`Settlement::reserve_stock`): an action sends it to
+    /// stage 5, which can write the other side; stage 5 applies it at once.
+    /// Units already in the air still land.
+    pub(super) fn drop_carry(&mut self, agent: AgentIx) -> Option<ReserveStock> {
+        let job = self.job.take()?;
+        job.release(&mut self.inventory, Side::Own);
+        Some(ReserveStock { agent, job, change: StockChange::Release })
+    }
+}
+
+/// Which way a carry job moves its units.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Direction {
+    /// From the other inventory into the agent's cargo.
+    Pickup,
+    /// From the agent's cargo into the other inventory.
+    Deposit,
+}
+
+/// One side of a carry job.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    /// The agent's own cargo.
+    Own,
+    /// The inventory the job moves units to or from (`CarryJob::other`).
+    Other,
+}
+
+/// Moves `remaining` units of `item` between the agent's cargo and `other`,
+/// one every `Carry::transfer_ticks`, the next on `next_tick`. While it runs
+/// it holds the units it hasn't moved yet on both sides: out on the source,
+/// in on the target. Each unit moved takes its share of both; the unit in
+/// the air then holds only the target's (`INVENTORY_HANDOFF.md`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CarryJob {
+    pub other: InventoryRef,
+    pub item: ItemIx,
+    pub direction: Direction,
+    pub remaining: u32,
+    pub next_tick: u64,
+}
+
+impl CarryJob {
+    /// Whether `side` gives the units, so holds them out (else it takes
+    /// them, so holds room for them).
+    pub fn gives(&self, side: Side) -> bool {
+        (side == Side::Own) == (self.direction == Direction::Deposit)
+    }
+
+    /// Holds the `remaining` units on `side`, whose inventory is
+    /// `inventory`. Refuses (and changes nothing) when they don't fit.
+    pub fn reserve(&self, inventory: &mut Inventory, side: Side) -> bool {
+        if self.gives(side) {
+            inventory.reserve_out(self.item, self.remaining)
+        } else {
+            inventory.reserve_in(self.item, self.remaining)
+        }
+    }
+
+    /// Gives back what `reserve` held on `side`.
+    pub fn release(&self, inventory: &mut Inventory, side: Side) {
+        if self.gives(side) {
+            inventory.release_out(self.item, self.remaining);
+        } else {
+            inventory.release_in(self.item, self.remaining);
+        }
     }
 }
 
@@ -116,6 +192,7 @@ impl AgentState {
             carry: Carry {
                 inventory: Inventory::new(items, def.capacity, Kinds::AnyMix),
                 transfer_ticks: rules.carry.as_ref().expect("players and haulers carry").transfer,
+                job: None,
             },
             role,
         }

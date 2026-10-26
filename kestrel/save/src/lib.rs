@@ -43,7 +43,10 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 /// 13: a depot's stock, reservations and capacity are an `Inventory`.
 /// 14: an agent's cargo is an `Inventory` too. Units flying in are its
 ///     `reserved_in` per item; units flying out are only transfers.
-pub const FORMAT_VERSION: u32 = 14;
+/// 15: a player's depot transfer is a `CarryJob` on its `Carry`, not on its
+///     avatar, and holds its units in the cargo too. `Endpoint` is
+///     `InventoryRef`, its `Cargo` now `Agent`.
+pub const FORMAT_VERSION: u32 = 15;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

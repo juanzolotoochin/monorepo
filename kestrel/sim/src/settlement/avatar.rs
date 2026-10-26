@@ -15,10 +15,10 @@ use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
 use super::combat::{Event, TossEnd};
-use super::{AgentState, Body, Carry, Role};
+use super::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
 use super::action::{Action, View};
-use super::{AgentIx, DepotIx, DepotState, Endpoint, ItemIx, Settlement};
-use crate::messages::{ActionMessages, DropHaul, DropNotes, ManualUnit, Messages, RestartMemory, StockChange, Strike, TransferStock};
+use super::{AgentIx, DepotState, InventoryRef, ItemIx, Settlement};
+use crate::messages::{ActionMessages, DropHaul, DropNotes, ManualUnit, Messages, ReserveStock, RestartMemory, StockChange, Strike};
 use crate::nav::{self, angle_between, distance};
 use crate::terrain::{Terrain, MAX_LAYERS};
 
@@ -120,15 +120,6 @@ pub struct Dig {
     pub until: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ManualJob {
-    pub depot: DepotIx,
-    pub item: ItemIx,
-    pub remaining: u32,
-    pub deposit: bool,
-    pub next_tick: u64,
-}
-
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Flight {
     /// The jetpack is held on.
@@ -184,7 +175,6 @@ pub struct AvatarState {
     /// when `queued` is.
     #[serde(default)]
     pub queued_at: Option<u64>,
-    pub job: Option<ManualJob>,
     #[serde(default)]
     pub dig: Option<Dig>,
     /// Repairable cover selected while the player holds the repair control.
@@ -496,17 +486,17 @@ impl Settlement {
         for message in messages.drop_notes {
             self.piano_notes.retain(|note| note.agent != message.agent || note.serial > message.serial);
         }
-        self.transfer_stock(messages.transfer_stock);
+        self.reserve_stock(messages.reserve_stock);
     }
 
     /// Stage 5: a hit takes `damage` from player `agent`'s health. At 0 the
     /// player dies and respawns at home later (`self_update`). Death ends
     /// what the `Respawn` action ends: what the avatar was doing, its dig
-    /// and route, its transfer job (giving back the units it hadn't moved
-    /// yet, as `drop_transfer` does) and its pile haul. The memory trial
-    /// restarts at once, as `RestartMemory` does. Returns whether it died.
+    /// and route, its carry job (`drop_carry`, applied at once) and its pile
+    /// haul. The memory trial restarts at once, as `RestartMemory` does.
+    /// Returns whether it died.
     pub(super) fn hurt_player(&mut self, agent: usize, damage: u32, tick: u64, terrain: &mut Terrain) -> bool {
-        let AgentState { body, role: Role::Avatar(avatar), .. } = &mut self.agents[agent] else { return false };
+        let AgentState { body, carry, role: Role::Avatar(avatar), .. } = &mut self.agents[agent] else { return false };
         body.health = body.health.saturating_sub(damage);
         if body.health > 0 {
             return false;
@@ -519,65 +509,49 @@ impl Settlement {
         body.push = FxVec2::ZERO;
         avatar.dig = None;
         body.route.clear();
-        if let Some(job) = avatar.job.take() {
-            let ManualJob { depot, item, remaining, deposit, .. } = job;
-            let release = TransferStock { agent: agent as AgentIx, depot, item, units: remaining, deposit, change: StockChange::Release };
-            self.transfer_stock(vec![release]);
+        if let Some(release) = carry.drop_carry(agent as AgentIx) {
+            self.reserve_stock(vec![release]);
         }
         self.end_pile_job(agent, "You died. Haul canceled; cargo is retained.", "Haul canceled because the player died");
         self.restart_memory(terrain);
         true
     }
 
-    /// Reserves and releases manual transfers' depot stock, in command order.
-    /// A reservation is checked again here (`transfer_limit`), since another
-    /// one earlier in the order may have taken what the action saw: if the
-    /// depot can no longer cover it, nothing is reserved and the avatar's job
-    /// rolls back, so the first transfer in the order wins. The job that
-    /// rolls back is that reservation's: a release from the same avatar later
-    /// in the order (it cancelled that job) is dropped with it, and a later
-    /// reservation means the avatar took a new job, which stands on its own.
-    pub(super) fn transfer_stock(&mut self, messages: Vec<TransferStock>) {
-        // Avatars whose last reservation was refused, until their job goes.
+    /// Holds and gives back carry jobs' units on their other side, in
+    /// command order. The agent's own side was held when the job was set.
+    /// A reservation is checked again here, since another one earlier in the
+    /// order may have taken what the action saw: if the other side can no
+    /// longer cover it, nothing is reserved there and the agent's job rolls
+    /// back, so the first transfer in the order wins. The job that rolls back
+    /// is that reservation's: a release from the same agent later in the
+    /// order (it dropped that job, and its own side with it) is dropped with
+    /// it, and a later reservation means the agent took a new job, which
+    /// stands on its own.
+    pub(super) fn reserve_stock(&mut self, messages: Vec<ReserveStock>) {
+        // Agents whose last reservation was refused, until their job goes.
         let mut refused: Vec<AgentIx> = Vec::new();
         for message in messages {
-            let (agent, depot, item) = (message.agent as usize, message.depot as usize, message.item as usize);
-            let units = match message.change {
+            let ReserveStock { agent, job, change } = message;
+            let other = self.inventory_mut(job.other);
+            match change {
                 StockChange::Reserve => {
-                    refused.retain(|&a| a != message.agent);
-                    if self.transfer_limit(agent, depot, item, message.deposit) < message.units {
-                        refused.push(message.agent);
-                        continue;
+                    refused.retain(|&a| a != agent);
+                    if !job.reserve(other, Side::Other) {
+                        refused.push(agent);
                     }
-                    message.units
                 }
-                StockChange::Release => {
-                    if let Some(i) = refused.iter().position(|&a| a == message.agent) {
+                StockChange::Release => match refused.iter().position(|&a| a == agent) {
+                    Some(i) => {
                         refused.swap_remove(i);
-                        continue;
                     }
-                    message.units
-                }
-            };
-            let (inventory, item) = (&mut self.depots[depot].inventory, item as ItemIx);
-            match (message.change, message.deposit) {
-                // `transfer_limit` checked that they fit.
-                (StockChange::Reserve, true) => {
-                    let reserved = inventory.reserve_in(item, units);
-                    debug_assert!(reserved, "checked that the units fit");
-                }
-                (StockChange::Reserve, false) => {
-                    let reserved = inventory.reserve_out(item, units);
-                    debug_assert!(reserved, "checked that the units are available");
-                }
-                (StockChange::Release, true) => inventory.release_in(item, units),
-                (StockChange::Release, false) => inventory.release_out(item, units),
+                    None => job.release(other, Side::Other),
+                },
             }
         }
+        // Each still has the refused job: it ends, and its own side with it.
+        // The other side holds nothing, so its release goes nowhere.
         for agent in refused {
-            if let Some(avatar) = self.agents[agent as usize].avatar_mut() {
-                avatar.job = None;
-            }
+            self.agents[agent as usize].carry.drop_carry(agent);
         }
     }
 
@@ -628,8 +602,8 @@ impl Settlement {
                 started: swing.pressed(),
             });
         }
-        if let Some(job) = &avatar.job {
-            if tick >= job.next_tick && distance(a.body.position, self.depots[job.depot as usize].position) <= DOCK_REACH {
+        if let Some(job) = &a.carry.job {
+            if tick >= job.next_tick && distance(a.body.position, self.position_of(job.other)) <= DOCK_REACH {
                 out.manual_unit.push(ManualUnit { agent: me });
             }
         }
@@ -659,34 +633,34 @@ impl Settlement {
         self.agents.get(agent).map_or(0, |a| transfer_limit(&a.carry, &self.depots, self.items.len(), depot, item, deposit))
     }
 
-    /// Moves one unit of a manual transfer.
+    /// Moves one unit of an avatar's carry job. The unit leaves the source,
+    /// taking its share of what the job holds there; at the target the job's
+    /// room passes to the unit in the air, until it lands.
     pub(crate) fn manual_unit(&mut self, tick: u64, message: ManualUnit) {
         let agent = message.agent as usize;
-        let Some(job) = self.agents[agent].avatar().and_then(|avatar| avatar.job.clone()) else { return };
+        let Some(job) = self.agents[agent].carry.job.clone().filter(|_| self.agents[agent].avatar().is_some()) else { return };
         if tick < job.next_tick {
             return;
         }
-        let (d, item) = (job.depot as usize, job.item);
-        let dock = self.depots[d].position;
-        let at = self.agents[agent].body.position;
-        if job.deposit {
-            self.agents[agent].carry.inventory.remove(item, 1);
-            self.launch(tick, item, Endpoint::Cargo(message.agent), Endpoint::Depot(job.depot), at, dock);
-        } else {
-            self.depots[d].inventory.take(item, 1);
-            self.metrics.picked += 1;
-            // The job checked the space when it started, and nothing else
-            // fills an avatar's cargo meanwhile.
-            let reserved = self.agents[agent].carry.inventory.reserve_in(item, 1);
-            debug_assert!(reserved, "the unit fits the cargo");
-            self.launch(tick, item, Endpoint::Depot(job.depot), Endpoint::Cargo(message.agent), dock, at);
+        let (me, item) = (InventoryRef::Agent(message.agent), job.item);
+        let (dock, at) = (self.position_of(job.other), self.agents[agent].body.position);
+        match job.direction {
+            Direction::Deposit => {
+                self.agents[agent].carry.inventory.take(item, 1);
+                self.launch(tick, item, me, job.other, at, dock);
+            }
+            Direction::Pickup => {
+                self.inventory_mut(job.other).take(item, 1);
+                self.metrics.picked += 1;
+                self.launch(tick, item, job.other, me, dock, at);
+            }
         }
-        let AgentState { carry, role: Role::Avatar(avatar), .. } = &mut self.agents[agent] else { unreachable!("only avatars have jobs") };
-        let job = avatar.job.as_mut().expect("checked");
+        let carry = &mut self.agents[agent].carry;
+        let job = carry.job.as_mut().expect("checked");
         job.remaining -= 1;
         job.next_tick = tick + carry.transfer_ticks;
         if job.remaining == 0 {
-            avatar.job = None;
+            carry.job = None;
         }
     }
 }
@@ -728,18 +702,23 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
         Action::Jump => jump(avatar, view.tick, def),
         Action::DigDown => {
             if view.can_dig_at(body.position) {
-                dig(body, avatar, view.tick, view.terrain, def);
+                dig(body, avatar, carry.job.is_some(), view.tick, view.terrain, def);
             }
         }
         Action::Transfer { depot, item, units, deposit } => {
-            let busy = avatar.job.is_some() || carry.inventory.total_in() > 0 || view.leaving_cargo();
+            let busy = carry.job.is_some() || carry.inventory.total_in() > 0 || view.leaving_cargo();
             if !busy && units > 0 && transfer_limit(carry, view.depots, view.items, depot as usize, item as usize, deposit) >= units {
-                avatar.job = Some(ManualJob { depot, item, remaining: units, deposit, next_tick: view.tick });
-                // The job reserves its units at the depot.
-                out.transfer_stock.push(TransferStock { agent: me, depot, item, units, deposit, change: StockChange::Reserve });
+                let direction = if deposit { Direction::Deposit } else { Direction::Pickup };
+                let job = CarryJob { other: InventoryRef::Depot(depot), item, direction, remaining: units, next_tick: view.tick };
+                // The job holds its units in the cargo now, and at the depot
+                // in stage 5.
+                let reserved = job.reserve(&mut carry.inventory, Side::Own);
+                debug_assert!(reserved, "`transfer_limit` checked the cargo");
+                carry.job = Some(job.clone());
+                out.reserve_stock.push(ReserveStock { agent: me, job, change: StockChange::Reserve });
             }
         }
-        Action::CancelTransfer => drop_transfer(avatar, me, out),
+        Action::CancelTransfer => out.reserve_stock.extend(carry.drop_carry(me)),
         Action::RepairCover(asset) => {
             avatar.repair = asset.filter(|&asset| {
                 view.terrain.destructibles.iter().any(|piece| piece.asset == asset && piece.repairable && piece.health < piece.max_health)
@@ -748,13 +727,13 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
         Action::Release => {
             // Letting go releases held piano keys.
             out.drop_notes.push(DropNotes { agent: me, serial: view.piano_serial });
-            release(body, avatar, view.hauling() && !avatar.dropped_haul);
+            release(body, avatar, carry.job.is_some(), view.hauling() && !avatar.dropped_haul);
         }
         Action::Respawn => {
             // Respawning restarts the memory trial, closing its door again.
             out.restart_memory.push(RestartMemory { agent: me });
             // The fresh avatar has no job, so the old one gives back its stock.
-            drop_transfer(avatar, me, out);
+            out.reserve_stock.extend(carry.drop_carry(me));
             respawn(body, avatar, view.spawn, view.spawn_height);
             drop_haul(avatar, view, out);
         }
@@ -781,9 +760,10 @@ fn transfer_limit(carry: &Carry, depots: &[DepotState], items: usize, depot: usi
         return 0;
     }
     if deposit {
-        carry.inventory.counts[item].min(d.inventory.free())
+        // Units not held by a running job.
+        carry.inventory.available(item as ItemIx).min(d.inventory.free())
     } else {
-        // Space not taken by units carried or flying in.
+        // Space not taken by units carried, flying in or held by a job.
         carry.inventory.free().min(d.inventory.available(item as ItemIx))
     }
 }
@@ -822,10 +802,10 @@ fn set_intent(body: &mut Body, avatar: &mut AvatarState, intent: Intent, terrain
 /// judged on the state this tick, after any earlier command in the same
 /// turn, so a haul accepted or rejected just before still decides. Unlike
 /// `Action::Move(Stop)` this never cancels a pile job.
-fn release(body: &mut Body, avatar: &mut AvatarState, hauling: bool) {
+fn release(body: &mut Body, avatar: &mut AvatarState, carrying: bool, hauling: bool) {
     avatar.flight.requested = false;
     avatar.repair = None;
-    let docking = avatar.job.is_some() && matches!(avatar.intent, Some(Intent::GoTo { .. }));
+    let docking = carrying && matches!(avatar.intent, Some(Intent::GoTo { .. }));
     if hauling || docking {
         return;
     }
@@ -921,9 +901,9 @@ fn jump(avatar: &mut AvatarState, tick: u64, def: &CharacterDef) {
 /// Starts digging where `View::can_dig_at` allows it, if the character
 /// digs, stands on the ground with its hands free, and the pit isn't as deep
 /// as it goes.
-fn dig(body: &mut Body, avatar: &mut AvatarState, tick: u64, terrain: &Terrain, def: &CharacterDef) {
+fn dig(body: &mut Body, avatar: &mut AvatarState, carrying: bool, tick: u64, terrain: &Terrain, def: &CharacterDef) {
     let Some(ticks) = def.dig().map(|d| d.ticks) else { return };
-    let busy = avatar.swing.as_ref().is_some_and(|s| tick < s.until) || avatar.job.is_some();
+    let busy = avatar.swing.as_ref().is_some_and(|s| tick < s.until) || carrying;
     let flight = &avatar.flight;
     if busy || avatar.dig.is_some() || flight.requested || flight.airborne {
         return;
@@ -940,15 +920,6 @@ fn dig(body: &mut Body, avatar: &mut AvatarState, tick: u64, terrain: &Terrain, 
 /// Housekeeping: ends a dig that is done, returning it.
 pub(super) fn finish_dig(a: &mut AgentState, tick: u64) -> Option<Dig> {
     a.avatar_mut()?.dig.take_if(|d| tick + 1 >= d.until)
-}
-
-/// Ends the agent's transfer job, if it has one: stage 5 releases the units
-/// it hadn't moved yet (`TransferStock`). Units already in the air still land.
-fn drop_transfer(avatar: &mut AvatarState, me: AgentIx, out: &mut ActionMessages) {
-    if let Some(job) = avatar.job.take() {
-        let ManualJob { depot, item, remaining, deposit, .. } = job;
-        out.transfer_stock.push(TransferStock { agent: me, depot, item, units: remaining, deposit, change: StockChange::Release });
-    }
 }
 
 /// Puts the avatar at the spawn point with a fresh state. The player's

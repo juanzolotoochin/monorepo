@@ -40,7 +40,7 @@ use crate::nav;
 use crate::terrain::{Disc, Terrain};
 
 pub use combat::{CombatMetrics, DefenderState, Event, Impact, OnMiss, Pinned, Prediction, Projectile, SpentProjectile, Threat, TossEnd, WaveState};
-pub use agent::{AgentState, Body, Carry, Role};
+pub use agent::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
 pub use haulers::{HaulerState, Phase};
 pub use inventory::{Inventory, Kinds};
 pub use prediction::AvatarReplay;
@@ -100,10 +100,13 @@ pub struct ProducerState {
     pub cycles: u32,
 }
 
+/// Names a holder of goods: a depot's inventory or an agent's cargo. A
+/// flying unit's two ends are these, and so is a carry job's other side.
+/// Piles and the collector join it later (`INVENTORY_HANDOFF.md`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Endpoint {
+pub enum InventoryRef {
     Depot(DepotIx),
-    Cargo(AgentIx),
+    Agent(AgentIx),
 }
 
 /// One unit in the air. It belongs to neither end until it arrives.
@@ -111,8 +114,8 @@ pub enum Endpoint {
 pub struct Transfer {
     pub id: u64,
     pub item: ItemIx,
-    pub from: Endpoint,
-    pub to: Endpoint,
+    pub from: InventoryRef,
+    pub to: InventoryRef,
     pub start: FxVec2,
     pub end: FxVec2,
     pub born: u64,
@@ -123,7 +126,7 @@ pub struct Transfer {
 /// cargo's counts when it launched, so only its transfer shows it. It scans
 /// every transfer, so callers ask only when it matters.
 pub(crate) fn leaving_cargo(transfers: &BTreeMap<u64, Transfer>, agent: AgentIx) -> bool {
-    transfers.values().any(|t| t.from == Endpoint::Cargo(agent))
+    transfers.values().any(|t| t.from == InventoryRef::Agent(agent))
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -598,6 +601,22 @@ impl Settlement {
         leaving_cargo(&self.transfers, agent)
     }
 
+    /// The inventory `holder` names.
+    pub(crate) fn inventory_mut(&mut self, holder: InventoryRef) -> &mut Inventory {
+        match holder {
+            InventoryRef::Depot(d) => &mut self.depots[d as usize].inventory,
+            InventoryRef::Agent(a) => &mut self.agents[a as usize].carry.inventory,
+        }
+    }
+
+    /// Where `holder` takes and gives units: a depot's dock, an agent's body.
+    pub(crate) fn position_of(&self, holder: InventoryRef) -> FxVec2 {
+        match holder {
+            InventoryRef::Depot(d) => self.depots[d as usize].position,
+            InventoryRef::Agent(a) => self.agents[a as usize].body.position,
+        }
+    }
+
     fn id(&mut self) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
@@ -655,7 +674,7 @@ impl Settlement {
         // A hauled unit counts as incoming from assignment until arrival: first
         // as not yet unloaded, then as flying.
         for t in self.transfers.values() {
-            if let Endpoint::Depot(d) = t.to {
+            if let InventoryRef::Depot(d) = t.to {
                 incoming[d as usize][t.item as usize] += 1;
             }
         }
@@ -666,13 +685,11 @@ impl Settlement {
                 }
             }
         }
-        for avatar in self.agents.iter().filter_map(AgentState::avatar) {
-            if let Some(job) = &avatar.job {
-                if job.deposit {
-                    incoming[job.depot as usize][job.item as usize] += job.remaining;
-                } else {
-                    out[job.depot as usize][job.item as usize] += job.remaining;
-                }
+        // A carry job holds what it hasn't moved yet at its depot.
+        for job in self.agents.iter().filter_map(|a| a.carry.job.as_ref()) {
+            if let InventoryRef::Depot(d) = job.other {
+                let side = if job.gives(Side::Other) { &mut out } else { &mut incoming };
+                side[d as usize][job.item as usize] += job.remaining;
             }
         }
         for (i, d) in self.depots.iter().enumerate() {
@@ -688,15 +705,25 @@ impl Settlement {
         for a in &self.agents {
             a.carry.inventory.validate().map_err(|e| format!("agent {} cargo {e}", a.id))?;
         }
-        // A unit flying into a cargo bed is reserved there until it lands.
-        let mut flying_in = vec![vec![0u32; items]; self.agents.len()];
+        // A unit flying into a cargo bed is reserved there until it lands. A
+        // carry job holds its own side too: room for the units it will pick
+        // up, the units it will deposit. A unit flying out left the cargo
+        // when it launched, so it holds nothing there.
+        let mut cargo_in = vec![vec![0u32; items]; self.agents.len()];
+        let mut cargo_out = vec![vec![0u32; items]; self.agents.len()];
         for t in self.transfers.values() {
-            if let Endpoint::Cargo(a) = t.to {
-                flying_in[a as usize][t.item as usize] += 1;
+            if let InventoryRef::Agent(a) = t.to {
+                cargo_in[a as usize][t.item as usize] += 1;
             }
         }
-        for (a, flying) in self.agents.iter().zip(&flying_in) {
-            if a.carry.inventory.reserved_in != *flying || a.carry.inventory.reserved_out.iter().any(|&u| u > 0) {
+        for (i, a) in self.agents.iter().enumerate() {
+            if let Some(job) = &a.carry.job {
+                let side = if job.gives(Side::Own) { &mut cargo_out } else { &mut cargo_in };
+                side[i][job.item as usize] += job.remaining;
+            }
+        }
+        for (i, a) in self.agents.iter().enumerate() {
+            if a.carry.inventory.reserved_in != cargo_in[i] || a.carry.inventory.reserved_out != cargo_out[i] {
                 return Err(format!("agent {} cargo reservations drifted", a.id));
             }
         }

@@ -10,9 +10,8 @@
 
 use fx::{Fx, FxVec2};
 
-use super::avatar::{AvatarState, Intent, ManualJob};
-use super::{AgentIx, AgentState, Body, Carry, Endpoint, Inventory, Kinds, Role, Settlement};
-use crate::messages::{StockChange, TransferStock};
+use super::avatar::{AvatarState, Intent};
+use super::{AgentIx, AgentState, Body, Carry, Inventory, InventoryRef, Kinds, Role, Settlement};
 use crate::terrain::Terrain;
 use crate::PlayerId;
 
@@ -62,6 +61,7 @@ impl Settlement {
             carry: Carry {
                 inventory: Inventory::new(template.carry.inventory.counts.len(), template.carry.inventory.capacity, Kinds::AnyMix),
                 transfer_ticks: template.carry.transfer_ticks,
+                job: None,
             },
             role: Role::Avatar(AvatarState {
                 owner: Some(player),
@@ -100,7 +100,7 @@ impl Settlement {
     }
 
     /// Commands: `player` left the game. Their avatar goes, with what it
-    /// held: its manual job's reservations are released, units flying to
+    /// held: its carry job is dropped (`drop_carry`), units flying to
     /// or from it land at once, and what it carried is written off as
     /// `abandoned`. The scene's first avatar never leaves, since every
     /// joiner is a copy of it.
@@ -109,15 +109,13 @@ impl Settlement {
         if Some(gone) == self.player() {
             return;
         }
-        if let Some(job) = self.agents[gone as usize].avatar_mut().and_then(|avatar| avatar.job.take()) {
-            let ManualJob { depot, item, remaining, deposit, .. } = job;
-            let release = TransferStock { agent: gone, depot, item, units: remaining, deposit, change: StockChange::Release };
-            self.transfer_stock(vec![release]);
+        if let Some(release) = self.agents[gone as usize].carry.drop_carry(gone) {
+            self.reserve_stock(vec![release]);
         }
         let flying: Vec<u64> = self
             .transfers
             .values()
-            .filter(|t| t.from == Endpoint::Cargo(gone) || t.to == Endpoint::Cargo(gone))
+            .filter(|t| t.from == InventoryRef::Agent(gone) || t.to == InventoryRef::Agent(gone))
             .map(|t| t.id)
             .collect();
         for id in flying {
@@ -164,9 +162,14 @@ impl Settlement {
         }
         for t in self.transfers.values_mut() {
             for end in [&mut t.from, &mut t.to] {
-                if let Endpoint::Cargo(ix) = end {
+                if let InventoryRef::Agent(ix) = end {
                     shift(ix);
                 }
+            }
+        }
+        for job in self.agents.iter_mut().filter_map(|a| a.carry.job.as_mut()) {
+            if let InventoryRef::Agent(ix) = &mut job.other {
+                shift(ix);
             }
         }
         for windup in self.threats.iter_mut().filter_map(|t| t.windup.as_mut()) {

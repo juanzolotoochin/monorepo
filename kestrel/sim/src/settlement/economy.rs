@@ -7,7 +7,7 @@ use fx::{Fx, FxVec2};
 use rayon::prelude::*;
 
 use super::haulers::{self, footprint, job_size, Assignment, Ctx, HaulerState, Phase, Trailer, ATTACH_TICKS, RETRY_TICKS};
-use super::{AgentIx, AgentState, Body, Carry, DepotIx, Endpoint, ItemIx, Role, Settlement, Transfer, TRANSFER_FLIGHT_TICKS};
+use super::{AgentIx, AgentState, Body, Carry, DepotIx, InventoryRef, ItemIx, Role, Settlement, Transfer, TRANSFER_FLIGHT_TICKS};
 use crate::messages::{Attach, ClaimDock, DockClaim, Equip, Load, Messages, Reserve, Retry, Unload};
 use crate::terrain::Terrain;
 
@@ -60,16 +60,16 @@ impl Settlement {
     /// all that changes at that end.
     pub(super) fn land(&mut self, t: super::Transfer) {
         match t.to {
-            Endpoint::Depot(d) => {
+            InventoryRef::Depot(d) => {
                 let depot = &mut self.depots[d as usize];
                 depot.inventory.put(t.item, 1);
                 self.metrics.delivered += 1;
                 *self.metrics.delivered_items.entry(self.items[t.item as usize].clone()).or_default() += 1;
-                if let Endpoint::Cargo(a) = t.from {
+                if let InventoryRef::Agent(a) = t.from {
                     *self.metrics.deliveries_by_agent.entry(self.agents[a as usize].id.clone()).or_default() += 1;
                 }
             }
-            Endpoint::Cargo(a) => {
+            InventoryRef::Agent(a) => {
                 self.agents[a as usize].carry.inventory.put(t.item, 1);
             }
         }
@@ -262,7 +262,7 @@ impl Settlement {
         debug_assert!(reserved, "the unit fits the cargo");
         h.transfer_at = tick + carry.transfer_ticks;
         let end = body.position;
-        self.launch(tick, item, Endpoint::Depot(from), Endpoint::Cargo(message.agent), start, end);
+        self.launch(tick, item, InventoryRef::Depot(from), InventoryRef::Agent(message.agent), start, end);
     }
 
     pub(crate) fn unload(&mut self, tick: u64, message: Unload) {
@@ -279,10 +279,10 @@ impl Settlement {
         h.assignment.as_mut().expect("checked").unloaded += 1;
         h.transfer_at = tick + carry.transfer_ticks;
         let start = body.position;
-        self.launch(tick, item, Endpoint::Cargo(message.agent), Endpoint::Depot(to), start, end);
+        self.launch(tick, item, InventoryRef::Agent(message.agent), InventoryRef::Depot(to), start, end);
     }
 
-    pub(crate) fn launch(&mut self, tick: u64, item: ItemIx, from: Endpoint, to: Endpoint, start: FxVec2, end: FxVec2) {
+    pub(crate) fn launch(&mut self, tick: u64, item: ItemIx, from: InventoryRef, to: InventoryRef, start: FxVec2, end: FxVec2) {
         let id = self.id();
         self.transfers.insert(id, Transfer { id, item, from, to, start, end, born: tick, arrival: tick + TRANSFER_FLIGHT_TICKS });
     }

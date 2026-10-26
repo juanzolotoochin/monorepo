@@ -188,6 +188,20 @@
 - **Where:** `kestrel/session/src/lib.rs` (`two_players_walk_around_together`).
 - **Found in:** inventory step 3 (`kestrel/INVENTORY_HANDOFF.md`).
 
+## Share the "busy carrying" rule between the sim and the app
+
+- **Status:** open
+- **Why:** whether a player can start a depot transfer is decided twice: in
+  `act` (`carry.job`, `inventory.total_in() > 0`, `leaving_cargo`) and again
+  by hand in the app's control protocol, which waits for the same three to
+  clear. They can drift. Since inventory step 4 a pickup job holds its room
+  in `reserved_in`, so `total_in() > 0` already covers a running pickup.
+- **What to do:** one method (on `Settlement` or `View`, taking the agent)
+  that both call. Keep the result the same.
+- **Where:** `act` in `kestrel/sim/src/settlement/avatar.rs`; the transfer
+  wait in `kestrel/app/src/control/mod.rs`.
+- **Found in:** inventory step 4 (`kestrel/INVENTORY_HANDOFF.md`).
+
 ## Done
 
 ### Keep a player's health over the Respawn action

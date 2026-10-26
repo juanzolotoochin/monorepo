@@ -545,7 +545,8 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
             let service = world.get_resource::<SessionService>()?;
             let (settlement, player) = (service.settlement()?, service.player()?);
             let a = &settlement.agents[player as usize];
-            if a.avatar()?.job.is_some() || a.carry.inventory.total_in() > 0 || settlement.leaving_cargo(player) {
+            a.avatar()?;
+            if a.carry.job.is_some() || a.carry.inventory.total_in() > 0 || settlement.leaving_cargo(player) {
                 None
             } else {
                 Some(if a.carry.inventory.total() == *expected {
