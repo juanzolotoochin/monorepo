@@ -5,7 +5,7 @@
 //! (`prediction`). The replay shows the events its stage 3 messages give
 //! (`Event::prediction` says `Predict`). When the drawn time first reaches
 //! one of a kind the app presents early (`PRESENTED_EARLY`), it is presented
-//! at once: a laser's beam, sound and impact, a bow's sound. Damage,
+//! at once: a laser's beam, sound and impact. Damage,
 //! flinches and cover breaking wait for the confirmed event, which is
 //! matched to the presented one and not presented again.
 //!
@@ -40,8 +40,10 @@ pub const TIMEOUT_TICKS: u64 = 10;
 /// The predictable kinds a client presents before they are confirmed, each
 /// by `lockstep::predict_events` (and `stop_presented` for a `Cancel` kind).
 /// The arc coil's `ArcFired` is still presented only once confirmed: its
-/// arc chains into the `Hit`s that follow it (`todo/characters.md`).
-pub const PRESENTED_EARLY: &[&str] = &["laser", "bow"];
+/// arc chains into the `Hit`s that follow it. So is the bow's `BowFired`:
+/// its arrow is a projectile in the confirmed world, and its sound an input
+/// lead before the arrow appears feels worse than late (`todo/characters.md`).
+pub const PRESENTED_EARLY: &[&str] = &["laser"];
 
 /// A predictable event's kind, as telemetry names it.
 pub fn kind_of(event: &Event) -> Option<&'static str> {
@@ -343,19 +345,19 @@ mod tests {
     fn an_event_is_presented_once_and_its_confirmation_matched() {
         let mut ledger = ledger();
         let applied = [(2, command(0)), (12, command(1)), (20, command(2))];
-        // Only kinds presented early: the arc coil's isn't.
+        // Only kinds presented early: neither the arc coil's nor the bow's.
         let arc = PredictedEvent { tick: 13, event: Event::ArcFired { agent: AGENT, from: FxVec2::ZERO, to: at(1), started: 12 } };
         // The replay runs the same ticks every frame; the shot is new once.
         let first = ledger.predict(&[arrow(12), arc.clone(), laser(14, 5)], &applied, 1.0);
-        assert_eq!(first.new.iter().map(|e| (e.kind, e.tick)).collect::<Vec<_>>(), [("bow", 12), ("laser", 14)]);
+        assert_eq!(first.new.iter().map(|e| (e.kind, e.tick)).collect::<Vec<_>>(), [("laser", 14)]);
         assert!(ledger.predict(&[arrow(12), arc, laser(14, 5)], &applied, 1.1).new.is_empty());
         // A second press, then the first shot is confirmed as presented.
         assert_eq!(ledger.predict(&[laser(14, 5), laser(22, 6)], &applied, 1.2).new.len(), 1);
         ledger.begin(1, AGENT);
         let fired = ledger.confirm(&laser_event(12, 5), &applied, 1.25).unwrap();
         assert!(fired.exact && !fired.cancel && (fired.lead.unwrap() - 0.25).abs() < 1e-9);
-        assert_eq!((fired.kind, fired.id), ("laser", 1));
-        assert_eq!(ledger.confirmed.ids(), [Some(1)]);
+        assert_eq!((fired.kind, fired.id), ("laser", 0));
+        assert_eq!(ledger.confirmed.ids(), [Some(0)]);
         assert!(ledger.predict(&[laser(22, 6)], &applied, 1.3).new.is_empty(), "the second shot is still presented");
         // It ends elsewhere: a misprediction, still presented once.
         let fired = ledger.confirm(&laser_event(20, 4), &applied, 1.4).unwrap();
@@ -364,12 +366,13 @@ mod tests {
         // A confirmed shot nobody predicted is presented as it arrives.
         assert_eq!(ledger.confirm(&laser_event(40, 0), &applied, 1.5), None);
         // Another agent's isn't the ledger's.
-        assert_eq!(ledger.confirm(&Event::BowFired { agent: 1, started: 2 }, &applied, 1.5), None);
-        // The arrow is confirmed.
-        assert!(ledger.confirm(&arrow(12).event, &applied, 1.6).unwrap().exact);
-        assert_eq!(ledger.confirmed.ids(), [Some(1), Some(2), None, Some(0)]);
-        assert_eq!(ledger.confirmed.next("bow"), Some(0));
-        assert_eq!(ledger.confirmed.next("laser"), Some(1));
+        let theirs = Event::LaserFired { agent: 1, from: FxVec2::ZERO, to: at(5), hit_actor: false, cover: None, started: 12 };
+        assert_eq!(ledger.confirm(&theirs, &applied, 1.5), None);
+        // The arrow isn't presented early: it is presented as it is confirmed.
+        assert_eq!(ledger.confirm(&arrow(12).event, &applied, 1.6), None);
+        assert_eq!(ledger.confirmed.ids(), [Some(0), Some(1), None]);
+        assert_eq!(ledger.confirmed.next("bow"), None);
+        assert_eq!(ledger.confirmed.next("laser"), Some(0));
         ledger.begin(1, AGENT);
         assert_eq!(ledger.confirmed, Confirmations::default());
     }
@@ -493,10 +496,13 @@ mod tests {
         assert!(ledger.confirm(&laser_event(28, 5), &[], 0.1).unwrap().exact);
     }
 
-    /// The test policy: a laser shot starts something lasting.
+    /// The test policy: every predictable kind is presented early, and a
+    /// laser shot starts something lasting.
     fn lasting_lasers(event: &Event, agent: u16) -> Option<Policy> {
-        let Policy { kind, started, on_miss } = policy(event, agent)?;
-        Some(Policy { kind, started, on_miss: if kind == "laser" { OnMiss::Cancel } else { on_miss } })
+        let Prediction::Predict { agent: owner, started, on_miss } = event.prediction() else { return None };
+        let kind = kind_of(event)?;
+        let on_miss = if kind == "laser" { OnMiss::Cancel } else { on_miss };
+        (owner == agent).then_some(Policy { kind, started, on_miss })
     }
 
     #[test]

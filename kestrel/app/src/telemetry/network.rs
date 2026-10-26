@@ -60,7 +60,7 @@ struct EventStats {
 /// How a presented event turned out, in view space.
 #[derive(Clone, Debug)]
 pub struct EventOutcome {
-    /// Its kind (`event_prediction::kind_of`): "laser", "bow".
+    /// Its kind (`event_prediction::kind_of`): "laser".
     pub kind: &'static str,
     /// Where the presented event ended: a beam's end, or for an event
     /// without one, where the avatar was drawn.
@@ -93,7 +93,7 @@ pub struct PreviewUpdate {
 pub enum CorrectionKind {
     Mispredict,
     Snap,
-    /// A predicted event of `kind` ("laser", "bow") the confirmed one didn't
+    /// A predicted event of `kind` ("laser") the confirmed one didn't
     /// match: it ended elsewhere, or never confirmed.
     EventMispredict { kind: &'static str },
 }

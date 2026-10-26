@@ -42,15 +42,23 @@
 ## Draw a predicted arrow in flight
 
 - **Status:** open
-- **Why:** a client plays its own bow shot's sound when the drawn avatar
-  looses it, but the arrow is a projectile in the confirmed world, so it
-  appears about an input lead later, from where the confirmed avatar is.
+- **Why:** a client's own bow shot is presented only once confirmed, about
+  an input lead after the drawn avatar looses it, because the arrow is a
+  projectile in the confirmed world. Task 4 played the bow's sound early,
+  but sound an input lead before the arrow appears felt worse than late, so
+  task 5 made the bow confirmed-only again (`BowFired` is not in
+  `PRESENTED_EARLY`).
 - **What to do:** decide whether to draw a predicted arrow from `BowFired`
   (it has no aim or speed yet) that hands over to the confirmed projectile,
-  or accept the gap. Ghouls hitting agents (step 5) may change what a bow
-  shot needs.
-- **Where:** `kestrel/app/src/lockstep.rs` (`predict_events`), projectile
-  views in `kestrel/app/src/settlement.rs`, `strike_event` in
+  or accept the gap. If it is drawn, add `"bow"` to `PRESENTED_EARLY`,
+  present the arrow with its `Cue::Bow` in `predict_events`, give the legacy
+  `BowFired` its agent back, and skip the matched confirmed shot's arrow and
+  sound in `settlement.rs` (`presented_early.next("bow")`). Ghouls hitting agents
+  (step 5) may change what a bow shot needs.
+- **Where:** `kestrel/app/src/event_prediction.rs` (`PRESENTED_EARLY`),
+  `kestrel/app/src/lockstep.rs` (`predict_events`), projectile
+  views in `kestrel/app/src/settlement.rs`, `kestrel/app/src/legacy.rs`,
+  `strike_event` in
   `kestrel/sim/src/settlement/combat.rs`.
 - **Found in:** ability prediction task 4, the predicted-events ledger
   (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D8).

@@ -158,9 +158,11 @@ current results (0 mispredictions in the latency tests).
 Done in task 4: `app/src/event_prediction.rs` (`EventPrediction`) replaced
 `LaserPrediction`. Each frame `predict_events` (`lockstep.rs`) confirms the
 frame's confirmed events, expires (`TIMEOUT_TICKS`, 10), then presents the
-replay's new events: a laser shot as before, a bow shot's `Cue::Bow`. The
-app presents `PRESENTED_EARLY` (laser, bow); the arc coil's stays
-confirmed-only (`todo/characters.md`). A matched confirmed event is skipped
+replay's new events: a laser shot as before. The
+app presents `PRESENTED_EARLY` (laser). The arc coil's and the bow's stay
+confirmed-only (`todo/characters.md`): task 4 presented the bow's sound
+early, but the arrow is confirmed world state, so the sound came an input
+lead before the arrow; task 5 took it back out. A matched confirmed event is skipped
 (`Confirmations`, read by `settlement.rs`); an event is exact if it equals
 the confirmed one but for `started`. On a miss, `Cancel` asks
 `stop_presented` to stop it, and a `Cancel` event that confirmed

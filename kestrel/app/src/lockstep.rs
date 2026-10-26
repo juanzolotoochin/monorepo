@@ -985,8 +985,8 @@ fn predict(
 /// A joined player's own predicted events (see `event_prediction`): this
 /// frame's confirmed ones are matched to those already presented, then the
 /// events the drawn avatar shows are presented: a laser shot drawn, with its
-/// sound, from where the avatar is drawn, a bow shot's sound. Other
-/// players' events are presented as they are confirmed.
+/// sound, from where the avatar is drawn. Other players' events, and kinds
+/// not presented early, are presented as they are confirmed.
 #[allow(clippy::too_many_arguments)]
 fn predict_events(
     ledger: &mut crate::event_prediction::EventPrediction,
@@ -1055,7 +1055,6 @@ fn predict_events(
                 });
                 sound.play(crate::sound::Cue::Laser);
             }
-            sim::settlement::Event::BowFired { .. } => sound.play(crate::sound::Cue::Bow),
             _ => continue,
         }
         telemetry.network.event_presented(presented.kind);

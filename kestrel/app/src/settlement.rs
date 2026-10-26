@@ -338,7 +338,6 @@ pub fn tick(world: &mut World) {
         use crate::legacy::Event;
         let presented = match event {
             Event::LaserFired { agent, .. } if Some(*agent) == local => presented_early.next("laser"),
-            Event::BowFired { agent } if Some(*agent) == local => presented_early.next("bow"),
             _ => None,
         };
         let drawn_shot = presented.filter(|_| matches!(event, Event::LaserFired { .. }));
@@ -481,7 +480,7 @@ pub fn tick(world: &mut World) {
         }
         let cue = match event {
             // Prediction played these when it presented the shot.
-            Event::BowFired { .. } | Event::LaserFired { .. } if presented.is_some() => None,
+            Event::LaserFired { .. } if presented.is_some() => None,
             Event::BowFired { .. } => Some(crate::sound::Cue::Bow),
             Event::Shot { .. } => Some(crate::sound::Cue::Ballista),
             Event::ArcFired { .. } => Some(crate::sound::Cue::Arc),
