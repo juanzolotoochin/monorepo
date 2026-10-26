@@ -4,7 +4,8 @@
 use content::scenario::Weapon;
 use fx::{Fx, FxVec2};
 
-use super::avatar::{self, character_of, Intent};
+use super::action::Action;
+use super::avatar::{self, character_of};
 use super::{AgentIx, AgentState, Settlement};
 use crate::terrain::Terrain;
 use crate::CommandKind;
@@ -13,10 +14,10 @@ use crate::CommandKind;
 /// runs the simulation's own per-avatar code on a copy of the avatar and
 /// never changes the world.
 ///
-/// Only the avatar's own part of each tick runs. Pile jobs, hits and
-/// knockback, damage, terrain changes (its own digs too) and other players
-/// stay as confirmed, so a replay matches the simulation exactly while none
-/// of those touch the avatar.
+/// Only the avatar's own part of each tick runs. Pile jobs, transfer units
+/// moving at a dock, hits and knockback, damage, terrain changes (its own
+/// digs too) and other players stay as confirmed, so a replay matches the
+/// simulation exactly while none of those touch the avatar.
 #[derive(Clone)]
 pub struct AvatarReplay<'a> {
     settlement: &'a Settlement,
@@ -105,48 +106,18 @@ impl<'a> AvatarReplay<'a> {
         self.settlement.predict_laser(self.me, self.struck.as_ref()?, self.terrain)
     }
 
-    /// Applies one of the owner's commands on `tick`, as `World::step` does
-    /// for this avatar. Commands that don't drive it change nothing. Returns
-    /// false for commands that plan a route (a GoTo walk, a pile haul),
-    /// which the replay doesn't predict.
+    /// Applies one of the owner's commands on `tick`: its action's part on
+    /// the avatar (`avatar::act`), as `World::step` applies it. Commands that
+    /// don't drive this avatar change nothing. Returns false for a pile haul,
+    /// which plans its walk from pile lab state the replay doesn't run.
     pub fn apply(&mut self, command: &CommandKind) -> bool {
-        if command.avatar() != Some(self.me) {
-            return true;
-        }
-        let (s, terrain, tick) = (self.settlement, self.terrain, self.tick);
-        let a = &mut self.state;
-        let def = character_of(&s.characters, a);
-        match *command {
-            CommandKind::MoveAvatar { intent: Intent::GoTo { .. }, .. } | CommandKind::Pile { .. } => return false,
-            CommandKind::MoveAvatar { ref intent, .. } => {
-                if avatar::alive(a) {
-                    avatar::set_intent(a, intent.clone(), terrain, def);
-                }
-            }
-            CommandKind::AimAvatar { aim, .. } => avatar::aim_at(a, aim),
-            CommandKind::Attack { weapon, aim, muzzle, .. } => {
-                if s.has_weapon(weapon) && avatar::alive(a) {
-                    avatar::attack(a, tick, weapon, aim, muzzle, def);
-                }
-            }
-            CommandKind::Equip { weapon, .. } => {
-                if s.has_weapon(weapon) {
-                    a.avatar.weapon = weapon;
-                }
-            }
-            CommandKind::Jetpack { enabled, .. } => avatar::jetpack(a, enabled, def),
-            CommandKind::Jump { .. } => avatar::jump(a, tick, def),
-            CommandKind::DigDown { .. } => {
-                if s.can_dig_at(a.position, terrain) {
-                    avatar::dig(a, tick, terrain, def);
-                }
-            }
-            CommandKind::ReleaseDirectControl { .. } => {
-                let hauling = s.piles.as_ref().is_some_and(|lab| lab.hauler(self.me).is_some_and(|h| h.job.is_some()));
-                avatar::release(a, hauling);
-            }
-            CommandKind::Respawn { .. } => avatar::respawn(a, s.spawn, s.spawn_height),
-            _ => {}
+        let Some((agent, action)) = Action::of(command) else {
+            return !matches!(*command, CommandKind::Pile { agent, .. } if agent == self.me);
+        };
+        if agent == self.me {
+            let view = self.settlement.view(self.me, self.tick, self.terrain);
+            let def = character_of(&self.settlement.characters, &self.state);
+            avatar::act(&mut self.state, &action, &view, def);
         }
         true
     }
@@ -198,6 +169,7 @@ mod tests {
     use fx::{Fx, FxVec2};
 
     use super::super::avatar::Intent;
+    use super::super::piles::PileAction;
     use super::super::{Event, SceneSetup, Settlement};
     use super::PredictedLaser;
     use crate::terrain::{Destructible, Disc, Surface, Terrain};
@@ -234,11 +206,12 @@ mod tests {
         Simulation::from_world(World::new_scene(1, &Content::builtin(), &setup).unwrap(), 1)
     }
 
-    /// Something the player might do on a tick, as the app sends it.
-    fn random_command(rng: &mut Rng, agent: u16) -> CommandKind {
+    /// Something the player might do on a tick, as the app sends it. Walks
+    /// to a point go somewhere within 4.5 u of `center`.
+    fn random_command(rng: &mut Rng, agent: u16, center: FxVec2) -> CommandKind {
         let weapons = [Weapon::Sword, Weapon::Laser, Weapon::Bow, Weapon::Spear];
         let muzzle = [Fx::ZERO, Fx::from_ratio(6, 10), Fx::from_ratio(1, 4)];
-        match rng.below(20) {
+        match rng.below(24) {
             0..=6 => CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: rng.direction(), run: rng.below(2) == 0 } },
             7..=8 => CommandKind::MoveAvatar { agent, intent: Intent::Stop },
             9..=10 => CommandKind::AimAvatar { agent, aim: rng.direction() },
@@ -248,6 +221,11 @@ mod tests {
             16 => CommandKind::Equip { agent, weapon: weapons[rng.below(4) as usize] },
             17 => CommandKind::ReleaseDirectControl { agent },
             18 => CommandKind::Respawn { agent },
+            19..=21 => {
+                let target = center + rng.direction() * Fx::from_ratio(rng.below(46) as i64, 10);
+                CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target, run: rng.below(2) == 0 } }
+            }
+            22 => CommandKind::RepairCover { agent, asset: Some(0) },
             _ => CommandKind::Join,
         }
     }
@@ -259,12 +237,15 @@ mod tests {
         const TICKS: usize = 1500;
         const AHEAD: usize = 40;
         let mut sim = arena(player, false);
-        let agent = sim.world().settlement().unwrap().player().unwrap();
+        let (agent, center) = {
+            let s = sim.world().settlement().unwrap();
+            (s.player().unwrap(), s.spawn)
+        };
         let mut rng = Rng(seed);
         let schedule: Vec<Vec<CommandKind>> = (0..TICKS + AHEAD)
             .map(|_| match rng.below(10) {
-                0 => vec![random_command(&mut rng, agent)],
-                1 => vec![random_command(&mut rng, agent), random_command(&mut rng, agent)],
+                0 => vec![random_command(&mut rng, agent, center)],
+                1 => vec![random_command(&mut rng, agent, center), random_command(&mut rng, agent, center)],
                 _ => Vec::new(),
             })
             .collect();
@@ -278,7 +259,7 @@ mod tests {
             sim.step(&turn);
         }
         states.push(sim.world().settlement().unwrap().agents[agent as usize].clone());
-        let mut swings = 0;
+        let (mut swings, mut routed) = (0, 0);
         for start in (0..TICKS).step_by(5) {
             let (settlement, terrain) = &confirmed[start];
             let mut replay = settlement.replay_avatar(agent, start as u64, terrain).unwrap();
@@ -291,9 +272,11 @@ mod tests {
                     &schedule[start..=tick]
                 );
                 swings += usize::from(replay.state().avatar.swing.as_ref().is_some_and(|s| s.resolved));
+                routed += usize::from(matches!(replay.state().avatar.intent, Some(Intent::GoTo { .. })) && !replay.state().route.is_empty());
             }
         }
         assert!(swings > 0, "no swing resolved during a replay");
+        assert!(routed > 0, "no replay walked a planned route");
     }
 
     #[test]
@@ -342,14 +325,19 @@ mod tests {
     }
 
     #[test]
-    fn goto_and_other_avatars_are_left_alone() {
+    fn pile_hauls_and_other_avatars_are_left_alone() {
         let sim = arena("exosuit", false);
         let world = sim.world();
         let settlement = world.settlement().unwrap();
         let agent = settlement.player().unwrap();
         let mut replay = settlement.replay_avatar(agent, world.tick(), world.terrain()).unwrap();
-        let goto = CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target: FxVec2::ZERO, run: false } };
-        assert!(!replay.apply(&goto), "a GoTo walk is not predicted");
+        let haul = CommandKind::Pile { agent, action: PileAction::Deliver, pace: Fx::ZERO, approach: None };
+        assert!(!replay.apply(&haul), "a pile haul is not predicted");
+        let goto = CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target: settlement.spawn + FxVec2::new(Fx::ONE, Fx::ZERO), run: false } };
+        assert!(replay.apply(&goto), "a GoTo walk is predicted");
+        assert!(!replay.state().route.is_empty());
+        let piano = CommandKind::PlayPiano { agent, piano: 0, pitch: 60, velocity: 100 };
+        assert!(replay.apply(&piano));
         let other = CommandKind::Jetpack { agent: agent + 1, enabled: true };
         assert!(replay.apply(&other));
         assert!(!replay.state().avatar.flight.requested);
@@ -408,9 +396,9 @@ mod tests {
         const TICKS: usize = 1200;
         const AHEAD: usize = 30;
         let mut sim = laser_range(player);
-        let (shooter, other) = {
+        let (shooter, other, center) = {
             let s = sim.world().settlement().unwrap();
-            (s.player().unwrap(), s.avatar_of(PlayerId(1)).unwrap())
+            (s.player().unwrap(), s.avatar_of(PlayerId(1)).unwrap(), s.spawn)
         };
         let mut rng = Rng(seed);
         let muzzle = [Fx::ZERO, Fx::from_ratio(6, 10), Fx::from_ratio(1, 4)];
@@ -421,7 +409,7 @@ mod tests {
                 4 => vec![CommandKind::MoveAvatar { agent: shooter, intent: Intent::Stop }],
                 5 => vec![CommandKind::Jump { agent: shooter }],
                 6 => vec![CommandKind::Jetpack { agent: shooter, enabled: rng.below(2) == 0 }],
-                7 => vec![random_command(&mut rng, shooter)],
+                7 => vec![random_command(&mut rng, shooter, center)],
                 _ => Vec::new(),
             })
             .collect();

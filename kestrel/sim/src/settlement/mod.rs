@@ -14,6 +14,7 @@
 //! Positions are world tiles (1 tile = 1 m). Scenario files use arena
 //! coordinates; [`Settlement::from_scenario`] offsets them by the arena center.
 
+pub mod action;
 pub mod avatar;
 pub mod combat;
 mod economy;

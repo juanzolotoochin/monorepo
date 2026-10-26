@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize};
 
 use super::combat::{Event, TossEnd};
 use super::haulers::AgentState;
-use super::{AgentIx, DepotIx, Endpoint, ItemIx, Settlement};
+use super::action::{Action, View};
+use super::{AgentIx, DepotIx, DepotState, Endpoint, ItemIx, Settlement};
 use crate::messages::{ManualUnit, Messages, Strike};
 use crate::nav::{self, angle_between, distance};
 use crate::terrain::{Terrain, MAX_LAYERS};
@@ -416,16 +417,6 @@ impl Settlement {
         self.agents[agent as usize].name = name.trim().to_string();
     }
 
-    /// Commands: puts a weapon the scenario offers in the avatar's hand.
-    pub fn equip_weapon(&mut self, agent: usize, weapon: Weapon) {
-        if !self.has_weapon(weapon) {
-            return;
-        }
-        if let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) {
-            a.avatar.weapon = weapon;
-        }
-    }
-
     /// The avatar `player` controls.
     pub fn avatar_of(&self, player: crate::PlayerId) -> Option<AgentIx> {
         self.agents.iter().position(|a| a.owner == Some(player)).map(|i| i as AgentIx)
@@ -483,45 +474,66 @@ impl Settlement {
         });
     }
 
-    /// Commands: holds the jetpack on or off, for characters that have one.
-    /// Flying off stops a dig.
-    pub fn jetpack(&mut self, agent: usize, enabled: bool) {
-        let characters = &self.characters;
-        if let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) {
-            let def = character_of(characters, a);
-            jetpack(a, enabled, def);
+    /// Commands: applies a player's action to their avatar (`act`), and the
+    /// part of the command that writes the rest of the world, in the order
+    /// the command always ran it. That part becomes a message in a later
+    /// step (`ABILITY_PREDICTION_HANDOFF.md`, D3); `AvatarReplay` never runs it.
+    pub(crate) fn act(&mut self, tick: u64, me: AgentIx, action: &Action, terrain: &mut Terrain) {
+        let agent = me as usize;
+        let controlled = self.agents.get(agent).is_some_and(|a| a.controlled);
+        // The world, before the avatar.
+        match *action {
+            // Moving or attacking cancels a pile haul.
+            Action::Move(_) if controlled => self.cancel_pile_job(agent),
+            Action::Attack { weapon, .. } if controlled && self.has_weapon(weapon) => self.cancel_pile_job(agent),
+            // Letting go releases held piano keys.
+            Action::Release => self.piano_notes.retain(|note| note.agent != me),
+            // Respawning restarts the memory trial, closing its door again.
+            Action::Respawn => {
+                if let Some(m) = self.memory.as_mut() {
+                    if m.unlocked {
+                        terrain.obstacles.extend_from_slice(&m.doors);
+                        terrain.revision += 1;
+                    }
+                    *m = super::memory::Memory::new(m.trial, m.center, std::mem::take(&mut m.doors));
+                }
+            }
+            _ => {}
         }
-    }
-
-    /// Commands: starts a jump with a short crouch before takeoff, for
-    /// characters that jump. Midair presses do nothing.
-    pub fn jump(&mut self, agent: usize, tick: u64) {
-        let characters = &self.characters;
-        if let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) {
-            let def = character_of(characters, a);
-            jump(a, tick, def);
-        }
-    }
-
-    /// Commands: starts digging out the tile under the avatar, if the scene
-    /// allows digging, the character can dig, the avatar stands on the ground
-    /// with its hands free,
-    /// the pit there isn't as deep as it goes, and no pile or machine sits
-    /// on the tile.
-    pub fn dig(&mut self, tick: u64, agent: usize, terrain: &Terrain) {
-        let Some(position) = self.agents.get(agent).map(|a| a.position) else { return };
-        if !self.can_dig_at(position, terrain) {
+        if !controlled {
             return;
         }
-        let characters = &self.characters;
-        let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
-        let def = character_of(characters, a);
-        dig(a, tick, terrain, def);
-    }
-
-    /// Whether the scene allows digging here: no pile or machine on the tile.
-    pub(super) fn can_dig_at(&self, position: FxVec2, terrain: &Terrain) -> bool {
-        terrain.diggable && !self.piles.as_ref().is_some_and(|lab| lab.blocks_dig(Terrain::pit_tile(position)))
+        let job = self.agents[agent].avatar.job.clone();
+        // The view reads no agents, so the avatar can be written meanwhile.
+        let mut agents = std::mem::take(&mut self.agents);
+        let a = &mut agents[agent];
+        act(a, action, &self.view(me, tick, terrain), character_of(&self.characters, a));
+        self.agents = agents;
+        // The world, after the avatar.
+        match *action {
+            Action::Respawn => self.cancel_pile_job(agent),
+            // A transfer the avatar took on reserves its units at the depot.
+            Action::Transfer { depot, item, units, deposit } if job.is_none() && self.agents[agent].avatar.job.is_some() => {
+                let depot = &mut self.depots[depot as usize];
+                if deposit {
+                    depot.incoming[item as usize] += units;
+                } else {
+                    depot.out[item as usize] += units;
+                }
+            }
+            // A cancelled one releases what it hadn't moved yet.
+            Action::CancelTransfer => {
+                if let Some(job) = job {
+                    let depot = &mut self.depots[job.depot as usize];
+                    if job.deposit {
+                        depot.incoming[job.item as usize] -= job.remaining;
+                    } else {
+                        depot.out[job.item as usize] -= job.remaining;
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Housekeeping: digs that are done take their layer out of the ground.
@@ -550,22 +562,6 @@ impl Settlement {
         }
     }
 
-    /// Commands: puts the avatar back at the scene's spawn point, and
-    /// restarts the memory trial (closing its door again).
-    pub fn respawn(&mut self, agent: usize, terrain: &mut Terrain) {
-        if let Some(m) = self.memory.as_mut() {
-            if m.unlocked {
-                terrain.obstacles.extend_from_slice(&m.doors);
-                terrain.revision += 1;
-            }
-            *m = super::memory::Memory::new(m.trial, m.center, std::mem::take(&mut m.doors));
-        }
-        let (spawn, height) = (self.spawn, self.spawn_height);
-        let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
-        respawn(a, spawn, height);
-        self.cancel_pile_job(agent);
-    }
-
     /// Stage 3 for one avatar: a strike resolving this tick, and manual
     /// transfer units that are due.
     pub(super) fn read_avatar(&self, me: AgentIx, a: &AgentState, tick: u64, terrain: &Terrain, out: &mut Messages) {
@@ -592,50 +588,6 @@ impl Settlement {
         }
     }
 
-    /// Commands: sets an avatar's movement intent.
-    pub fn move_avatar(&mut self, agent: usize, intent: Intent, terrain: &Terrain) {
-        if self.agents.get(agent).is_some_and(|a| a.controlled) {
-            self.cancel_pile_job(agent);
-        }
-        let characters = &self.characters;
-        let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled && alive(a)) else { return };
-        let def = character_of(characters, a);
-        set_intent(a, intent, terrain, def);
-    }
-
-    /// Commands: the player stopped driving the avatar directly (pause, focus
-    /// loss, a controller disconnecting). The jetpack always switches off.
-    /// Manual or click travel stops, unless an accepted logistics job owns
-    /// the route: a pile haul, or a depot transfer walking to its dock. Both
-    /// are judged on the state this tick, after any earlier command in the
-    /// same turn, so a haul accepted or rejected just before still decides.
-    /// Unlike `move_avatar(Stop)` this never cancels a pile job.
-    pub fn release_direct_control(&mut self, agent: usize) {
-        self.piano_notes.retain(|note| note.agent as usize != agent);
-        let hauling = self.piles.as_ref().is_some_and(|lab| lab.hauler(agent as AgentIx).is_some_and(|h| h.job.is_some()));
-        let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
-        release(a, hauling);
-    }
-
-    /// Commands: starts an attack, or buffers one deliberate press during it.
-    pub fn aim_avatar(&mut self, agent: usize, aim: FxVec2) {
-        let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
-        aim_at(a, aim);
-    }
-
-    pub fn attack(&mut self, tick: u64, agent: usize, weapon: Weapon, aim: FxVec2, muzzle: [Fx; 3]) {
-        if !self.has_weapon(weapon) {
-            return;
-        }
-        if self.agents.get(agent).is_some_and(|a| a.controlled) {
-            self.cancel_pile_job(agent);
-        }
-        let characters = &self.characters;
-        let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled && alive(a)) else { return };
-        let def = character_of(characters, a);
-        attack(a, tick, weapon, aim, muzzle, def);
-    }
-
     /// Housekeeping: a buffered attack starts once the swing ends.
     pub(crate) fn avatar_housekeeping(&mut self, tick: u64) {
         let characters = &self.characters;
@@ -654,51 +606,7 @@ impl Settlement {
 
     /// The most units `agent` could move between its cargo and `depot` now.
     pub fn transfer_limit(&self, agent: usize, depot: usize, item: usize, deposit: bool) -> u32 {
-        let (Some(a), Some(d)) = (self.agents.get(agent), self.depots.get(depot)) else { return 0 };
-        if item >= self.items.len() {
-            return 0;
-        }
-        if deposit {
-            a.cargo[item].min(d.free())
-        } else {
-            let carried: u32 = a.cargo.iter().sum::<u32>() + a.pending_in;
-            a.cargo_capacity.saturating_sub(carried).min(d.available(item as ItemIx))
-        }
-    }
-
-    /// Commands: reserves an exact transfer; units move once the avatar is at the dock.
-    pub fn transfer(&mut self, tick: u64, agent: usize, depot: usize, item: usize, units: u32, deposit: bool) {
-        let Some(a) = self.agents.get(agent).filter(|a| a.controlled) else { return };
-        if a.avatar.job.is_some() || a.pending_in > 0 || a.pending_out > 0 || units == 0 {
-            return;
-        }
-        if self.transfer_limit(agent, depot, item, deposit) < units {
-            return;
-        }
-        if deposit {
-            self.depots[depot].incoming[item] += units;
-        } else {
-            self.depots[depot].out[item] += units;
-        }
-        self.agents[agent].avatar.job = Some(ManualJob {
-            depot: depot as DepotIx,
-            item: item as ItemIx,
-            remaining: units,
-            deposit,
-            next_tick: tick,
-        });
-    }
-
-    /// Commands: releases the unlaunched part of a transfer. Units in the air
-    /// finish their flight.
-    pub fn cancel_transfer(&mut self, agent: usize) {
-        let Some(job) = self.agents.get_mut(agent).and_then(|a| a.avatar.job.take()) else { return };
-        let depot = &mut self.depots[job.depot as usize];
-        if job.deposit {
-            depot.incoming[job.item as usize] -= job.remaining;
-        } else {
-            depot.out[job.item as usize] -= job.remaining;
-        }
+        self.agents.get(agent).map_or(0, |a| transfer_limit(a, &self.depots, self.items.len(), depot, item, deposit))
     }
 
     /// Moves one unit of a manual transfer.
@@ -733,9 +641,68 @@ impl Settlement {
     }
 }
 
-// The avatar's own part of each command and of housekeeping. `Settlement`
+// The avatar's own part of each action and of housekeeping. `Settlement`
 // runs them on the world's agents and `AvatarReplay` on a copy, so client
 // prediction moves an avatar exactly as the simulation does.
+
+/// Applies an action to a player avatar: its own part only, reading the rest
+/// of the world through `view` (see `action`). Checks run in the order the
+/// command handlers always ran them.
+pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &CharacterDef) {
+    match *action {
+        Action::Move(ref intent) => {
+            if alive(a) {
+                set_intent(a, intent.clone(), view.terrain, def);
+            }
+        }
+        Action::Aim(aim) => aim_at(a, aim),
+        Action::Attack { weapon, aim, muzzle } => {
+            if view.has_weapon(weapon) && alive(a) {
+                attack(a, view.tick, weapon, aim, muzzle, def);
+            }
+        }
+        Action::Equip(weapon) => {
+            if view.has_weapon(weapon) {
+                a.avatar.weapon = weapon;
+            }
+        }
+        Action::Jetpack(enabled) => jetpack(a, enabled, def),
+        Action::Jump => jump(a, view.tick, def),
+        Action::DigDown => {
+            if view.can_dig_at(a.position) {
+                dig(a, view.tick, view.terrain, def);
+            }
+        }
+        Action::Transfer { depot, item, units, deposit } => {
+            let busy = a.avatar.job.is_some() || a.pending_in > 0 || a.pending_out > 0;
+            if !busy && units > 0 && transfer_limit(a, view.depots, view.items, depot as usize, item as usize, deposit) >= units {
+                a.avatar.job = Some(ManualJob { depot, item, remaining: units, deposit, next_tick: view.tick });
+            }
+        }
+        Action::CancelTransfer => a.avatar.job = None,
+        Action::RepairCover(asset) => {
+            a.avatar.repair = asset.filter(|&asset| {
+                view.terrain.destructibles.iter().any(|piece| piece.asset == asset && piece.repairable && piece.health < piece.max_health)
+            });
+        }
+        Action::Release => release(a, view.hauling()),
+        Action::Respawn => respawn(a, view.spawn, view.spawn_height),
+    }
+}
+
+/// See `Settlement::transfer_limit`.
+fn transfer_limit(a: &AgentState, depots: &[DepotState], items: usize, depot: usize, item: usize, deposit: bool) -> u32 {
+    let Some(d) = depots.get(depot) else { return 0 };
+    if item >= items {
+        return 0;
+    }
+    if deposit {
+        a.cargo[item].min(d.free())
+    } else {
+        let carried: u32 = a.cargo.iter().sum::<u32>() + a.pending_in;
+        a.cargo_capacity.saturating_sub(carried).min(d.available(item as ItemIx))
+    }
+}
 
 /// Alive, or without health at all.
 pub(super) fn alive(a: &AgentState) -> bool {
@@ -744,7 +711,7 @@ pub(super) fn alive(a: &AgentState) -> bool {
 
 /// Sets a live avatar's intent. Walking off stops a dig; a `GoTo` plans its
 /// route.
-pub(super) fn set_intent(a: &mut AgentState, intent: Intent, terrain: &Terrain, def: &CharacterDef) {
+fn set_intent(a: &mut AgentState, intent: Intent, terrain: &Terrain, def: &CharacterDef) {
     // Walking off stops a dig.
     let walking = match intent {
         Intent::Stop => false,
@@ -769,9 +736,14 @@ pub(super) fn set_intent(a: &mut AgentState, intent: Intent, terrain: &Terrain, 
     a.avatar.intent = Some(intent);
 }
 
-/// See `Settlement::release_direct_control`; `hauling` says a pile haul owns
-/// the route.
-pub(super) fn release(a: &mut AgentState, hauling: bool) {
+/// The player stopped driving the avatar directly (pause, focus loss, a
+/// controller disconnecting). The jetpack always switches off. Manual or
+/// click travel stops, unless an accepted logistics job owns the route: a
+/// pile haul (`hauling`), or a depot transfer walking to its dock. Both are
+/// judged on the state this tick, after any earlier command in the same
+/// turn, so a haul accepted or rejected just before still decides. Unlike
+/// `Action::Move(Stop)` this never cancels a pile job.
+fn release(a: &mut AgentState, hauling: bool) {
     a.avatar.flight.requested = false;
     a.avatar.repair = None;
     let docking = a.avatar.job.is_some() && matches!(a.avatar.intent, Some(Intent::GoTo { .. }));
@@ -784,7 +756,7 @@ pub(super) fn release(a: &mut AgentState, hauling: bool) {
     }
 }
 
-pub(super) fn aim_at(a: &mut AgentState, aim: FxVec2) {
+fn aim_at(a: &mut AgentState, aim: FxVec2) {
     let aim = aim.normalize_or_zero();
     if aim != FxVec2::ZERO {
         a.avatar.aim = Some(aim);
@@ -793,7 +765,7 @@ pub(super) fn aim_at(a: &mut AgentState, aim: FxVec2) {
 
 /// Starts a live avatar's attack with a weapon the scene offers, or buffers
 /// it during a swing.
-pub(super) fn attack(a: &mut AgentState, tick: u64, weapon: Weapon, aim: FxVec2, muzzle: [Fx; 3], def: &CharacterDef) {
+fn attack(a: &mut AgentState, tick: u64, weapon: Weapon, aim: FxVec2, muzzle: [Fx; 3], def: &CharacterDef) {
     if a.avatar.dig.is_some() {
         return;
     }
@@ -836,7 +808,7 @@ pub(super) fn swing_resolved(a: &mut AgentState, tick: u64, hits: u32, def: &Cha
     }
 }
 
-pub(super) fn jetpack(a: &mut AgentState, enabled: bool, def: &CharacterDef) {
+fn jetpack(a: &mut AgentState, enabled: bool, def: &CharacterDef) {
     if def.jetpack().is_none() {
         return;
     }
@@ -846,7 +818,7 @@ pub(super) fn jetpack(a: &mut AgentState, enabled: bool, def: &CharacterDef) {
     }
 }
 
-pub(super) fn jump(a: &mut AgentState, tick: u64, def: &CharacterDef) {
+fn jump(a: &mut AgentState, tick: u64, def: &CharacterDef) {
     if def.jump().is_none() {
         return;
     }
@@ -859,10 +831,10 @@ pub(super) fn jump(a: &mut AgentState, tick: u64, def: &CharacterDef) {
     }
 }
 
-/// Starts digging where `Settlement::can_dig_at` allows it, if the character
+/// Starts digging where `View::can_dig_at` allows it, if the character
 /// digs, stands on the ground with its hands free, and the pit isn't as deep
 /// as it goes.
-pub(super) fn dig(a: &mut AgentState, tick: u64, terrain: &Terrain, def: &CharacterDef) {
+fn dig(a: &mut AgentState, tick: u64, terrain: &Terrain, def: &CharacterDef) {
     let Some(ticks) = def.dig().map(|d| d.ticks) else { return };
     let busy = a.avatar.swing.as_ref().is_some_and(|s| tick < s.until) || a.avatar.job.is_some();
     let flight = &a.avatar.flight;
@@ -884,7 +856,7 @@ pub(super) fn finish_dig(a: &mut AgentState, tick: u64) -> Option<Dig> {
 }
 
 /// Puts the avatar at the spawn point with a fresh state.
-pub(super) fn respawn(a: &mut AgentState, spawn: FxVec2, height: Fx) {
+fn respawn(a: &mut AgentState, spawn: FxVec2, height: Fx) {
     a.position = spawn;
     a.heading = Fx::PI;
     a.route.clear();

@@ -256,7 +256,7 @@ impl Settlement {
     /// Whether the scenario offers this weapon. Scenes without weapons still
     /// allow the sword, as in the original game.
     pub fn has_weapon(&self, weapon: Weapon) -> bool {
-        self.weapons.contains(&weapon) || (self.weapons.is_empty() && weapon == Weapon::Sword)
+        offers_weapon(&self.weapons, weapon)
     }
 
     /// A threat's collision radius: its character's armor radius while
@@ -791,4 +791,9 @@ impl Settlement {
 /// Ticks to cover `distance` at `speed` meters per second, at least one.
 fn flight_ticks(distance: Fx, speed: Fx) -> u64 {
     content::scenario::ticks(distance / speed)
+}
+
+/// See `Settlement::has_weapon`.
+pub(super) fn offers_weapon(weapons: &[Weapon], weapon: Weapon) -> bool {
+    weapons.contains(&weapon) || (weapons.is_empty() && weapon == Weapon::Sword)
 }

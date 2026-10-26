@@ -11,6 +11,7 @@ use crate::messages::{Damage, Eat, EatFailed, Killed, Messages, Spawn};
 use crate::mover::{Mover, MoverRow, Movers, HUNGRY_AT, REACH};
 use crate::rng::{stream, Rng};
 use crate::spatial::{for_each_near, SpatialIndex};
+use crate::settlement::action::Action;
 use crate::settlement::Settlement;
 use crate::terrain::{Disc, Terrain};
 use crate::timer::TimerWheel;
@@ -429,67 +430,21 @@ impl World {
                         s.set_defender(defender as usize, enabled);
                     }
                 }
-                CommandKind::MoveAvatar { agent, ref intent } => {
-                    if let Some(s) = &mut self.settlement {
-                        s.move_avatar(agent as usize, intent.clone(), &self.terrain);
-                    }
-                }
-                CommandKind::AimAvatar { agent, aim } => {
-                    if let Some(s) = &mut self.settlement {
-                        s.aim_avatar(agent as usize, aim);
-                    }
-                }
-                CommandKind::Attack { agent, weapon, aim, muzzle } => {
-                    if let Some(s) = &mut self.settlement {
-                        s.attack(self.tick, agent as usize, weapon, aim, muzzle);
-                    }
-                }
-                CommandKind::Transfer { agent, depot, item, units, deposit } => {
-                    if let Some(s) = &mut self.settlement {
-                        s.transfer(self.tick, agent as usize, depot as usize, item as usize, units, deposit);
-                    }
-                }
-                CommandKind::CancelTransfer { agent } => {
-                    if let Some(s) = &mut self.settlement {
-                        s.cancel_transfer(agent as usize);
-                    }
-                }
-                CommandKind::Equip { agent, weapon } => {
-                    if let Some(s) = &mut self.settlement {
-                        s.equip_weapon(agent as usize, weapon);
-                    }
-                }
-                CommandKind::Jetpack { agent, enabled } => {
-                    if let Some(s) = &mut self.settlement {
-                        s.jetpack(agent as usize, enabled);
-                    }
-                }
-                CommandKind::Jump { agent } => {
-                    if let Some(s) = &mut self.settlement {
-                        s.jump(agent as usize, self.tick);
-                    }
-                }
-                CommandKind::Respawn { agent } => {
-                    if let Some(s) = &mut self.settlement {
-                        s.respawn(agent as usize, &mut self.terrain);
-                    }
-                }
-                CommandKind::DigDown { agent } => {
-                    if let Some(s) = &mut self.settlement {
-                        s.dig(self.tick, agent as usize, &self.terrain);
-                    }
-                }
-                CommandKind::ReleaseDirectControl { agent } => {
-                    if let Some(s) = &mut self.settlement {
-                        s.release_direct_control(agent as usize);
-                    }
-                }
-                CommandKind::RepairCover { agent, asset } => {
-                    if let Some(s) = &mut self.settlement {
-                        if let Some(a) = s.agents.get_mut(agent as usize).filter(|a| a.controlled) {
-                            a.avatar.repair = asset.filter(|&asset| self.terrain.destructibles.iter()
-                                .any(|piece| piece.asset == asset && piece.repairable && piece.health < piece.max_health));
-                        }
+                // A player's actions: see `settlement::action`.
+                CommandKind::MoveAvatar { .. }
+                | CommandKind::AimAvatar { .. }
+                | CommandKind::Attack { .. }
+                | CommandKind::Transfer { .. }
+                | CommandKind::CancelTransfer { .. }
+                | CommandKind::Equip { .. }
+                | CommandKind::Jetpack { .. }
+                | CommandKind::Jump { .. }
+                | CommandKind::Respawn { .. }
+                | CommandKind::DigDown { .. }
+                | CommandKind::ReleaseDirectControl { .. }
+                | CommandKind::RepairCover { .. } => {
+                    if let (Some(s), Some((agent, action))) = (&mut self.settlement, Action::of(&turn[i].kind)) {
+                        s.act(self.tick, agent, &action, &mut self.terrain);
                     }
                 }
                 CommandKind::PlayPiano { agent, piano, pitch, velocity } => {
