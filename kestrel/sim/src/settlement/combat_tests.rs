@@ -175,6 +175,8 @@ impl Arena {
             route: vec![goal],
             stagger_until: 0,
             knockback: FxVec2::ZERO,
+            windup: None,
+            ready_at: 0,
         });
         s.threats.sort_by_key(|t| t.id);
         s.next_id = s.next_id.max(id + 1);
@@ -938,6 +940,53 @@ fn laser_hits_another_player_and_respawns_them() {
     assert_eq!(settlement.agents[target as usize].position, settlement.agents[target as usize].home);
 }
 
+/// A player killed mid-transfer drops the job, and its reserved stock goes
+/// back to the depot on the tick it dies, as a respawn would.
+#[test]
+fn dying_releases_a_transfer_reservation() {
+    let mut config = scenario();
+    config.agents = vec![player()];
+    config.links.clear();
+    config.weapons = vec![Weapon::Laser];
+    config.player_health = 1;
+    let world = World::new_settlement(9, &test_content(), &config, &[]).unwrap();
+    let mut sim = Simulation::from_world(world, 2);
+    let spawn = sim.world().settlement().unwrap().agents[0].position;
+    sim.world_mut().settlement_mut().spawn = spawn;
+    let (host, guest) = (PlayerId(0), PlayerId(1));
+    sim.step(&[Command { player: guest, kind: CommandKind::Join }]);
+    let settlement = sim.world().settlement().unwrap();
+    let (shooter, target) = (settlement.avatar_of(host).unwrap(), settlement.avatar_of(guest).unwrap());
+    let (depot, item) = (settlement.depot_index("forest").unwrap(), settlement.item_index("wood").unwrap());
+    let (d, i) = (depot as usize, item as usize);
+    let out = settlement.depots[d].out[i];
+    let dock = settlement.depots[d].position;
+    let start = settlement.agents[shooter as usize].position;
+    let to = start + FxVec2::new(Fx::ZERO, Fx::from_int(3));
+    sim.world_mut().settlement_mut().agents[target as usize].position = to;
+    // Far from the dock, so no unit moves.
+    assert!((to - dock).length() > fx(1.0));
+
+    sim.step(&[Command { player: guest, kind: CommandKind::Transfer { agent: target, depot, item, units: 3, deposit: false } }]);
+    assert_eq!(sim.world().settlement().unwrap().depots[d].out[i], out + 3);
+    sim.step(&[Command { player: host, kind: CommandKind::Attack {
+        agent: shooter, weapon: Weapon::Laser,
+        aim: FxVec2::new(Fx::ZERO, Fx::ONE), muzzle: [Fx::ZERO, fx(0.8), fx(0.25)],
+    } }]);
+    for _ in 0..ms(700) { sim.step(&[]); }
+    let settlement = sim.world().settlement().unwrap();
+    assert_eq!(settlement.agents[target as usize].avatar.health, 0, "the laser killed the target");
+    assert!(settlement.agents[target as usize].avatar.job.is_none());
+    assert_eq!(settlement.depots[d].out[i], out, "death releases the reservation");
+    settlement.validate().unwrap();
+
+    for _ in 0..ms(2200) { sim.step(&[]); }
+    let settlement = sim.world().settlement().unwrap();
+    assert_eq!(settlement.agents[target as usize].avatar.health, 1, "respawned");
+    assert_eq!(settlement.depots[d].out[i], out);
+    settlement.validate().unwrap();
+}
+
 /// A depot transfer walking to its dock is an accepted job: releasing
 /// direct control keeps the walk and the transfer.
 #[test]
@@ -996,6 +1045,8 @@ fn brute_radius_follows_its_armor() {
         route: vec![],
         stagger_until: 0,
         knockback: FxVec2::ZERO,
+        windup: None,
+        ready_at: 0,
     };
     let def = &s.characters[s.waves[brutes].character as usize];
     let (body, plated) = (def.body.radius, def.health.as_ref().unwrap().armor.as_ref().unwrap().radius);
@@ -1003,4 +1054,269 @@ fn brute_radius_follows_its_armor() {
     brute.armor = 0;
     assert_eq!(s.threat_radius(&brute), body);
     assert!(body < plated);
+}
+
+// Ghouls hitting players in passing (GHOUL_ATTACK_HANDOFF.md, task 3). The
+// test ghouls inherit the base ghoul's `attack`.
+
+/// The combat fixture with hurtable players.
+fn ghoul_arena(player_health: u32) -> Arena {
+    let mut config = combat_scenario(vec![]);
+    config.player_health = player_health;
+    Arena::new(&config, &[])
+}
+
+fn ghoul_attack(arena: &Arena) -> content::character::AttackDef {
+    let s = arena.s();
+    s.characters[s.waves[0].character as usize].attack.expect("ghouls attack")
+}
+
+/// This tick's windups: (threat, agent, landing tick).
+fn windups(arena: &Arena) -> Vec<(u64, u16, u64)> {
+    arena.s().events.iter().filter_map(|e| match *e {
+        Event::ThreatWindup { threat, agent, lands } => Some((threat, agent, lands)),
+        _ => None,
+    }).collect()
+}
+
+/// This tick's swings: (threat, agent, hit, damage, killed).
+fn swings(arena: &Arena) -> Vec<(u64, u16, bool, u32, bool)> {
+    arena.s().events.iter().filter_map(|e| match *e {
+        Event::ThreatSwing { threat, agent, hit, damage, killed } => Some((threat, agent, hit, damage, killed)),
+        _ => None,
+    }).collect()
+}
+
+impl Arena {
+    fn place(&mut self, agent: usize, x: f64, y: f64) -> FxVec2 {
+        let at = self.at(x, y);
+        self.s_mut().agents[agent].position = at;
+        at
+    }
+
+    fn health(&self, agent: usize) -> u32 {
+        self.s().agents[agent].avatar.health
+    }
+
+    /// Steps until the threat's windup has landed, checking it stands
+    /// still meanwhile. Returns the landing tick.
+    fn until_swing(&mut self, id: u64) -> u64 {
+        let lands = self.s().threat(id).unwrap().windup.expect("winding up").lands;
+        let planted = self.s().threat(id).unwrap().position;
+        while self.tick() < lands {
+            self.step(1);
+            assert_eq!(self.s().threat(id).unwrap().position, planted, "a threat winding up stands still");
+            assert!(swings(self).is_empty());
+        }
+        self.step(1);
+        lands
+    }
+}
+
+#[test]
+fn a_ghoul_winds_up_then_hits_and_pushes_a_player_in_reach() {
+    let mut arena = ghoul_arena(3);
+    let attack = ghoul_attack(&arena);
+    let player = arena.player;
+    let at = arena.place(player, 0.0, 0.0);
+    arena.threat(100, 0.0, 0.7, 3, 0);
+    arena.step(1);
+    let start = arena.tick() - 1;
+    assert_eq!(windups(&arena), vec![(100, player as u16, start + attack.windup)]);
+    let lands = arena.until_swing(100);
+    assert_eq!(lands, start + attack.windup);
+    assert_eq!(swings(&arena), vec![(100, player as u16, true, attack.damage, false)]);
+    let (velocity, health) = (arena.s().agents[player].avatar.velocity, arena.health(player));
+    assert_eq!(health, 3 - attack.damage);
+    assert!(velocity.y < fx(0.01) - attack.knockback && velocity.x.abs() < fx(0.01), "pushed away from the ghoul: {velocity:?}");
+    let t = arena.s().threat(100).unwrap();
+    assert!(t.windup.is_none());
+    assert_eq!(t.ready_at, lands + 1 + attack.cooldown);
+    arena.step(ms(300));
+    let a = &arena.s().agents[player];
+    assert!(a.position.y < at.y - fx(0.05), "the push moved the player: {:?}", a.position - at);
+    assert_eq!(a.avatar.velocity, FxVec2::ZERO, "its own braking stopped the push");
+}
+
+#[test]
+fn a_player_who_steps_out_of_reach_during_the_windup_is_not_hit() {
+    let mut arena = ghoul_arena(3);
+    let attack = ghoul_attack(&arena);
+    let player = arena.player;
+    arena.place(player, 0.0, 0.0);
+    arena.threat(100, 0.0, 0.7, 3, 0);
+    arena.step(1);
+    assert_eq!(windups(&arena).len(), 1);
+    let agent = player as u16;
+    arena.command(CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: FxVec2::new(Fx::ZERO, -Fx::ONE), run: false } });
+    let lands = arena.until_swing(100);
+    let gap = crate::nav::distance(arena.s().agents[player].position, arena.s().threat(100).unwrap().position);
+    assert!(gap > attack.reach, "walked out of reach: {gap}");
+    assert_eq!(swings(&arena), vec![(100, agent, false, 0, false)], "the swing lands and misses");
+    assert_eq!(arena.health(player), 3);
+    assert_eq!(arena.s().threat(100).unwrap().ready_at, lands + 1 + attack.cooldown, "a miss starts the cooldown too");
+}
+
+#[test]
+fn a_ghoul_swings_at_the_nearest_player_and_the_lowest_index_on_a_tie() {
+    let mut arena = ghoul_arena(3);
+    arena.sim.step(&[Command { player: PlayerId(1), kind: CommandKind::Join }]);
+    let (host, guest) = (arena.player, arena.s().avatar_of(PlayerId(1)).unwrap() as usize);
+    assert!(host < guest);
+    // Equally far, on either side of the ghoul's straight route.
+    arena.place(host, -0.5, 0.0);
+    arena.place(guest, 0.5, 0.0);
+    arena.threat(100, 0.0, 0.3, 3, 0);
+    arena.step(1);
+    let tie = arena.s().threat(100).unwrap().windup.unwrap().agent;
+    assert_eq!(tie, host as u16, "the lowest agent index wins a tie");
+    assert_eq!(windups(&arena).len(), 1, "one windup per threat");
+
+    arena.s_mut().threats.clear();
+    arena.place(host, -0.6, 0.0);
+    arena.place(guest, 0.3, 0.0);
+    arena.threat(101, 0.0, 0.3, 3, 0);
+    arena.step(1);
+    assert_eq!(arena.s().threat(101).unwrap().windup.unwrap().agent, guest as u16, "the nearer player");
+}
+
+#[test]
+fn a_ghoul_waits_out_its_cooldown_before_the_next_windup() {
+    let mut arena = ghoul_arena(10);
+    let attack = ghoul_attack(&arena);
+    let player = arena.player;
+    arena.place(player, 0.5, 0.0);
+    arena.threat(100, 0.0, 0.25, 3, 0);
+    arena.step(1);
+    let lands = arena.until_swing(100);
+    assert_eq!(swings(&arena).len(), 1);
+    let next = lands + 1 + attack.cooldown;
+    while arena.tick() < next {
+        arena.step(1);
+        assert!(windups(&arena).is_empty() && arena.s().threat(100).unwrap().windup.is_none(), "cooling down");
+    }
+    arena.step(1);
+    assert_eq!(windups(&arena), vec![(100, player as u16, next + attack.windup)], "the next windup starts as the cooldown ends");
+}
+
+#[test]
+fn ghouls_never_attack_players_without_health() {
+    let mut arena = ghoul_arena(0);
+    let player = arena.player;
+    arena.place(player, 0.3, 0.0);
+    arena.threat(100, 0.0, 0.7, 3, 0);
+    for _ in 0..ms(1500) {
+        arena.step(1);
+        assert!(windups(&arena).is_empty() && swings(&arena).is_empty());
+        assert!(arena.s().threat(100).unwrap().windup.is_none());
+    }
+    assert!(arena.y(100) < fx(0.0), "it walked past: {}", arena.y(100));
+}
+
+#[test]
+fn a_ghoul_walks_on_along_its_route_after_the_swing() {
+    let mut arena = ghoul_arena(10);
+    let player = arena.player;
+    arena.place(player, 0.6, 0.0);
+    arena.threat(100, 0.0, 0.5, 3, 0);
+    arena.step(1);
+    arena.until_swing(100);
+    let landed = arena.y(100);
+    arena.step(ms(500));
+    let walked = landed - arena.y(100);
+    assert!(walked > fx(0.2), "walked {walked} in half a second after the swing");
+    assert!((arena.s().threat(100).unwrap().position.x - arena.center.x).abs() < fx(0.01), "still on its route");
+}
+
+/// A killing hit goes through `hurt_player`: the player dies with no push,
+/// and its transfer gives its reservation back.
+#[test]
+fn a_ghoul_hit_kills_through_the_laser_kill_path() {
+    // No haulers, so only the transfer moves the forest's reservations.
+    let mut config = combat_scenario(vec![]);
+    config.player_health = 1;
+    config.agents.retain(|a| a.controlled);
+    config.links.clear();
+    let mut arena = Arena::new(&config, &[]);
+    let player = arena.player;
+    let at = arena.place(player, 0.0, 0.0);
+    let s = arena.s();
+    let (depot, item) = (s.depot_index("forest").unwrap(), s.item_index("wood").unwrap());
+    let (d, i) = (depot as usize, item as usize);
+    let out = s.depots[d].out[i];
+    assert!(crate::nav::distance(at, s.depots[d].position) > fx(1.0), "far from the dock, so no unit moves");
+    arena.command(CommandKind::Transfer { agent: player as u16, depot, item, units: 3, deposit: false });
+    assert_eq!(arena.s().depots[d].out[i], out + 3);
+    arena.threat(100, 0.0, 0.7, 3, 0);
+    arena.step(1);
+    let lands = arena.until_swing(100);
+    assert_eq!(swings(&arena), vec![(100, player as u16, true, 1, true)]);
+    let a = &arena.s().agents[player];
+    assert_eq!(a.avatar.health, 0);
+    assert!(a.avatar.respawn_at > lands);
+    assert_eq!(a.avatar.velocity, FxVec2::ZERO, "the dead aren't pushed");
+    assert!(a.avatar.job.is_none());
+    assert_eq!(arena.s().depots[d].out[i], out, "death released the reservation");
+    // No swings at the dead.
+    for _ in 0..ms(1000) {
+        arena.step(1);
+        assert!(windups(&arena).is_empty());
+    }
+}
+
+#[test]
+fn a_stagger_during_the_windup_cancels_the_swing() {
+    let mut arena = ghoul_arena(3);
+    let player = arena.player;
+    arena.place(player, 0.0, 0.0);
+    // An ID whose sword roll isn't a critical on the tick it is struck.
+    let struck = arena.tick() + 1;
+    let id = (999..).find(|&id| combat_roll(struck, id, 0x53574f5244) % 4 != 0).unwrap();
+    arena.threat(id, 0.0, 0.7, 3, 0);
+    arena.step(1);
+    let lands = arena.s().threat(id).unwrap().windup.unwrap().lands;
+    assert_eq!(arena.tick(), struck);
+    arena.ready();
+    assert_eq!(arena.attack(Weapon::Sword), 1);
+    let t = arena.s().threat(id).unwrap();
+    assert!(t.windup.is_none(), "the stagger cancelled the windup");
+    assert!(t.stagger_until > struck);
+    while arena.tick() <= lands {
+        arena.step(1);
+        assert!(swings(&arena).is_empty());
+        if arena.tick() < arena.s().threat(id).unwrap().stagger_until {
+            assert!(windups(&arena).is_empty(), "no windup while staggered");
+        }
+    }
+    assert_eq!(arena.health(player), 3);
+}
+
+/// Swings resolve the same on any thread count.
+#[test]
+fn ghoul_attacks_are_deterministic() {
+    let run = |threads: usize| {
+        let mut config = combat_scenario(vec![]);
+        config.player_health = 4;
+        let world = World::new_settlement(5, &test_content(), &config, &[]).unwrap();
+        let center = world.terrain().center;
+        let player = world.settlement().unwrap().agent_index("player").unwrap() as usize;
+        let mut arena = Arena { sim: Simulation::from_world(world, threads), player, center };
+        arena.sim.step(&[Command { player: PlayerId(1), kind: CommandKind::Join }]);
+        let guest = arena.s().avatar_of(PlayerId(1)).unwrap() as usize;
+        arena.place(player, -0.4, 0.0);
+        arena.place(guest, 0.4, 0.0);
+        for (id, x) in [(100, -0.6), (101, 0.0), (102, 0.6)] {
+            arena.threat(id, x, 1.2, 3, 0);
+        }
+        let mut hashes = Vec::new();
+        let mut hits = 0;
+        for _ in 0..ms(4000) {
+            hashes.push(arena.sim.step(&[]).total);
+            hits += swings(&arena).iter().filter(|s| s.2).count();
+        }
+        (hashes, hits)
+    };
+    let (one, hits) = run(1);
+    assert!(hits > 0, "the ghouls hit someone");
+    assert_eq!(one, run(4).0);
 }

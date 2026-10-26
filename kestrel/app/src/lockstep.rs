@@ -1308,10 +1308,22 @@ mod tests {
     }
 
     fn scene_app(scene: &str, network: Option<Network>, fps: f64) -> App {
+        scene_app_with(scene, network, fps, &|_, _| {})
+    }
+
+    /// Changes a scene's pack before a test app loads it; it may read the
+    /// other scenes.
+    type EditScene = dyn Fn(&SceneLibrary, &mut voxel_assets::ScenePack);
+
+    /// `scene_app` with the scene's pack changed by `edit` first.
+    fn scene_app_with(scene: &str, network: Option<Network>, fps: f64, edit: &EditScene) -> App {
         let options = crate::control::Options { simulation: true, ..default() };
         let hub = crate::control::Hub::new(options.clone()).unwrap();
-        let library = SceneLibrary::new();
+        let mut library = SceneLibrary::new();
         let index = library.index(scene).unwrap();
+        let mut pack = (*library.scenes[index]).clone();
+        edit(&library, &mut pack);
+        library.scenes[index] = std::sync::Arc::new(pack);
         let mut app = crate::test_app(options, library, hub, Launch { network, ..Launch::single_player(index) });
         app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / fps)));
         app
@@ -1623,11 +1635,17 @@ mod tests {
         }
 
         fn in_scene(scene: &str, delay_ms: f64, jitter_ms: f64, seed: u64) -> RelayedGame {
-            let mut host = scene_app(scene, Some(Network::Host("127.0.0.1:0".parse().unwrap())), 60.0);
+            RelayedGame::in_scene_with(scene, delay_ms, jitter_ms, seed, &|_, _| {})
+        }
+
+        /// `in_scene` with the scene's pack changed by `edit` on both
+        /// machines (the client draws threats from its own copy).
+        fn in_scene_with(scene: &str, delay_ms: f64, jitter_ms: f64, seed: u64, edit: &EditScene) -> RelayedGame {
+            let mut host = scene_app_with(scene, Some(Network::Host("127.0.0.1:0".parse().unwrap())), 60.0, edit);
             crate::start_world(&mut host);
             let address = host.world().resource::<SessionService>().session.local_addr().unwrap();
             let relay = DelayRelay::new(address, delay_ms, jitter_ms, seed);
-            let client = scene_app(scene, Some(Network::Join(relay.address())), 60.0);
+            let client = scene_app_with(scene, Some(Network::Join(relay.address())), 60.0, edit);
             let mut game = RelayedGame { host, client, relay, frame: 0 };
             for _ in 0..1200 {
                 game.frame();
@@ -2047,6 +2065,108 @@ mod tests {
         let knockbacks = telemetry.network.corrections().filter(|c| c.kind == CorrectionKind::Knockback).count();
         assert!(knockbacks > 0, "the death stopped the running avatar, a knockback: {report}");
         assert!(telemetry.network.corrections().all(|c| c.kind == CorrectionKind::Knockback && !c.snapped), "only knockbacks, smoothed: {report}");
+        let snapshot = telemetry.network.snapshot();
+        assert_eq!((snapshot["preview_corrections"].as_u64(), snapshot["preview_mispredicted_frames"].as_u64()), (Some(0), Some(0)), "{report}");
+    }
+
+    /// Under 100 ± 20 ms, a ghoul walking across the laser pit (given one
+    /// wave; the pit has player health) hits the client's avatar while it
+    /// runs back and forth across the ghoul. The swing is stage 5, which the
+    /// replay never runs, so its push is a `Knockback`: smoothed (below the
+    /// 3 u knockback snap), and nothing is a misprediction.
+    #[test]
+    fn joined_player_pushed_by_a_ghoul_is_knocked_back_not_mispredicted() {
+        use crate::telemetry::CorrectionKind;
+        use KeyCode::{KeyA as Left, KeyD as Right, KeyS as Down, KeyW as Up, ShiftLeft as Run};
+        let mut game = RelayedGame::in_scene_with("laser-pit", 100.0, 20.0, 0x6001, &|library, pack| {
+            // The ghoul's skin comes from the forest, which has ghouls, with
+            // the forest's materials after the pit's.
+            let forest = &library.scenes[library.index("forest-outpost").unwrap()];
+            let style = pack.scene.style.as_mut().unwrap();
+            let base = style.materials.len();
+            style.materials.extend(forest.scene.style.as_ref().unwrap().materials.iter().cloned());
+            let mut skin = forest.skins.iter().find(|skin| skin.id == "ghoul").unwrap().clone();
+            skin.parts.iter_mut().flat_map(|part| &mut part.meshes).for_each(|mesh| mesh.material += base);
+            pack.skins.push(skin);
+            // From beside the joiner (at the spawn's z, 0.9 m along x:
+            // `Settlement::join`) toward the stage, clear of the cover.
+            let q = Fx::quantize;
+            pack.scene.scenario.as_mut().unwrap().waves = vec![content::scenario::Wave {
+                id: "ghoul".into(),
+                position: [q(2.5), q(11.5)],
+                target: [q(2.5), q(-4.0)],
+                character: "ghoul_forest".into(),
+                first: q(1.0),
+                every: q(60.0),
+                count: 1,
+            }];
+        });
+        let agent = game.client.world().resource::<SessionService>().player().unwrap();
+        assert!(game.host.world().resource::<SessionService>().settlement().unwrap().player_health > 0, "players can be hurt");
+        let ghoul = |game: &RelayedGame| {
+            let mirror = game.client.world().resource::<WorldMirror>();
+            mirror.current.as_ref().unwrap().threats.first().map(|t| mirror.to_view(t.position))
+        };
+        let drawn = |game: &RelayedGame| {
+            let mirror = game.client.world().resource::<WorldMirror>();
+            crate::navigation::flat(mirror.to_view(drawn_avatar(&game.client).to.position))
+        };
+        // The pit's follow camera turns the keys: find where D and W go.
+        let axis = |game: &mut RelayedGame, key: KeyCode| {
+            game.hold(&[], 30);
+            let from = drawn(game);
+            game.hold(&[key], 10);
+            (drawn(game) - from).normalize()
+        };
+        let (along, across) = (axis(&mut game, Right), axis(&mut game, Up));
+        game.hold(&[], 30);
+        game.telemetry().network.clear_corrections();
+        // Runs at the ghoul and across it diagonally, turning on each axis
+        // once 0.15 m past it.
+        let (mut ahead, mut hit_at, mut speed, mut swings) = ([true, true], None, 0.0f32, 0);
+        for frame in 0..1200u32 {
+            let ghoul = ghoul(&game).expect("the ghoul walks");
+            let to = ghoul - drawn(&game);
+            for (ahead, d) in ahead.iter_mut().zip([to.dot(along), to.dot(across)]) {
+                if *ahead && d < -0.15 {
+                    *ahead = false;
+                } else if !*ahead && d > 0.15 {
+                    *ahead = true;
+                }
+            }
+            press_only(&mut game.client, &[if ahead[0] { Right } else { Left }, if ahead[1] { Up } else { Down }, Run]);
+            game.frame();
+            let mirror = game.client.world().resource::<WorldMirror>();
+            for event in &mirror.events {
+                if let sim::settlement::Event::ThreatSwing { agent: target, hit, .. } = *event {
+                    if target == agent {
+                        swings += 1;
+                        if hit && hit_at.is_none() {
+                            hit_at = Some(frame);
+                            // Before the hit's tick (the push is in the newest).
+                            let v = mirror.previous.as_ref().unwrap().agents[agent as usize].avatar.velocity;
+                            speed = Vec2::new(v.x.to_f32(), v.y.to_f32()).length();
+                        }
+                    }
+                }
+            }
+            if hit_at.is_some_and(|at| frame > at + 60) {
+                break;
+            }
+        }
+        let health = game.host.world().resource::<SessionService>().settlement().unwrap().agents[agent as usize].avatar.health;
+        let telemetry = game.telemetry();
+        let kinds: Vec<_> = telemetry.network.corrections().map(|c| format!("{:?} {:.3} u over {} frames{}", c.kind, c.distance, c.frames, if c.snapped { " snapped" } else { "" })).collect();
+        let report = format!("{swings} swings at the client, first hit on frame {hit_at:?} at {speed:.2} m/s, health now {health}, corrections {kinds:?}");
+        println!("{report}");
+        assert!(hit_at.is_some(), "the ghoul never hit the client: {report}");
+        assert!(speed > 1.0, "the avatar was running when hit: {report}");
+        // How far the push moved the drawn (predicted) avatar from where it
+        // was predicted without it: the knockback's distance. The offset it
+        // leaves starts there and decays, so under 3 u it never snaps.
+        let pushed: f32 = telemetry.network.corrections().filter(|c| c.kind == CorrectionKind::Knockback).map(|c| c.distance).sum();
+        assert!(pushed > 0.05, "the push moved the running avatar measurably: {report}");
+        assert!(telemetry.network.corrections().all(|c| c.kind == CorrectionKind::Knockback && !c.snapped && c.distance < 3.0), "only knockbacks, smoothed: {report}");
         let snapshot = telemetry.network.snapshot();
         assert_eq!((snapshot["preview_corrections"].as_u64(), snapshot["preview_mispredicted_frames"].as_u64()), (Some(0), Some(0)), "{report}");
     }

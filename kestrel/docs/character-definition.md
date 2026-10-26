@@ -49,8 +49,11 @@ The `sim` section has the same **shape** for every character kind, but `brain` d
 | `avatar` | `(acceleration: ..., braking: ..., attack_braking: ..., attack: (...))` | Required for `Player`; forbidden for `FollowRoute` and `Hauler`. |
 | `carry` | `(transfer: integer)` | Required for `Player` and `Hauler`; forbidden for `FollowRoute`. `transfer` is frames to load or unload one unit. |
 | `abilities` | List of abilities, such as `[Jetpack(...), Dig(...)]` | Optional, `Player` only. Each ability at most once, and never both `Jump` and `Jetpack`. A variant replaces the whole list. |
+| `attack` | `(damage: integer, reach: number, windup: integer, cooldown: integer, knockback: number)` | Optional, `FollowRoute` only. How the character hits players in passing. |
 
 `health.hp` is starting hit points. `health.breach_damage` is damage dealt on reaching the route's target. If supplied, `health.armor` must contain both `points` and `radius`; the armor absorbs hits and enlarges the collision radius until it breaks.
+
+`attack` makes a threat hit players it passes, only in scenarios where players have health (`player_health` above 0). It stops beside the nearest one in reach, winds up for `windup` frames, then swings. A stagger or shock during the windup cancels the swing. The swing hits if the player is still within `reach` meters, measured center to center. A hit takes `damage` health and pushes the player away at `knockback` meters per second. The next swing can start `cooldown` frames after the hit. All five fields are required, after inheritance. A variant merges them field by field, like `health`. A character without `attack` never attacks.
 
 `avatar.acceleration`, `braking`, and `attack_braking` are rates in meters per second squared. `avatar.attack` requires seven frame counts: `windup`, `aim`, `swing`, `sword_windup`, `sword_swing`, `rebound`, and `combo_window`. Durations, including `carry.transfer`, are written as whole frames at 60 Hz. The loader validates ranges and converts authored values to simulation units.
 
@@ -167,9 +170,14 @@ Character definitions are moving in steps, each its own PR against `master`. Ste
 - **Threats:** they become characters with a `FollowRoute` brain. They keep their own table, for the 100k-entity budget, but each stores a `CharacterIx` instead of reaching its kind through its wave.
 - **Shared body:** `AgentState` splits into the body every agent has (position, heading, velocity, radius, health) plus data for each role. Cargo has three models today (hauler `cargo`, the avatar's `ManualJob`, pile jobs), and they merge here.
 - **Prediction:** the sim and the client's replay apply actions through the same code. An ability's own state is always predicted. Its effects on the world are only shown early, as events built from its messages, and each event kind says whether to keep or cancel it when it never confirms. `kestrel/ABILITY_PREDICTION_HANDOFF.md` has the decisions and the order.
+- **Threats attacking agents:** ghouls hit players in passing (`kestrel/GHOUL_ATTACK_HANDOFF.md` has the order):
+  - **Behaviour:** a ghoul never leaves its route. When a player is in reach, it stops, winds up, swings, and then walks on. Chasing a target would be a separate hunter brain, later.
+  - **Targets:** players only. Haulers have no health, so making them targets is a separate step that changes the `Hauler` schema.
+  - **Latency:** the windup (about 400–500 ms) is longer than a typical input lead, and the ghoul shows it. Reach is checked when the swing lands, against where the player is then. A hit deals damage and a small knockback, smoothed on clients by the `Knockback` correction. It doesn't stun.
+  - **Tuning:** an optional `attack` section on `FollowRoute` characters (`damage`, `reach`, `windup`, `cooldown`, `knockback`). A ghoul without it never attacks, as before.
+  - **Targeting:** the nearest player in reach, with the lowest agent index on a tie. Each player scans the threats for ones in reach, as a projectile already does, so a threat with no player near costs one distance check.
 - **Out of scope:** possession. Defenders stay as they are.
 
 ### Open questions
 
-- **Threats attacking agents:** should ghouls attack agents, so the player can be hurt by them and not only by lasers? It is a gameplay change, so it gets its own commit.
 - **Where meshes live:** do styles stay the mesh and material libraries that a character's `view` refers to, or does each character carry its own meshes?

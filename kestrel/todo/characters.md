@@ -116,25 +116,6 @@
 - **Found in:** task 5 of `kestrel/ABILITY_PREDICTION_HANDOFF.md`
   (branch `kestrel-ability-prediction`).
 
-## Test a knockback that pushes the joined player
-
-- **Status:** open
-- **Why:** nothing in the simulation pushes a player avatar yet: stage 5
-  only damages, kills and respawns one. So the knockback correction (D6)
-  is tested in the harness only with a death stopping a running avatar
-  (`joined_player_hit_by_the_laser_is_knocked_back_not_mispredicted`), and
-  with a push faked on the confirmed settlement in the prediction units.
-  The detection (`prediction::StageFive`) needs no change for real pushes.
-- **What to do:** once ghouls attack agents, or anything else knocks a
-  player back (the open question in `docs/character-definition.md`), add a
-  joined-client harness case under latency where the push moves the
-  running avatar: logged as `Knockback`, smoothed below 3 u, no
-  misprediction.
-- **Where:** `kestrel/app/src/lockstep.rs` tests (`RelayedGame`),
-  `kestrel/app/src/prediction.rs`.
-- **Found in:** task 6 of `kestrel/ABILITY_PREDICTION_HANDOFF.md`
-  (branch `kestrel-ability-prediction`).
-
 ## Reuse the mirror's settlement copy for stage-5 detection
 
 - **Status:** open
@@ -151,7 +132,99 @@
 - **Found in:** task 6 of `kestrel/ABILITY_PREDICTION_HANDOFF.md`
   (branch `kestrel-ability-prediction`).
 
+## Decide what a player's death ends besides its transfer
+
+- **Status:** open
+- **Why:** a player killed in stage 5 (`Settlement::hurt_player`) now drops
+  its transfer job, but not the rest of what the `Respawn` action clears.
+  A pile haul keeps running: the dead avatar still loads units when in
+  reach (stage 3), and after the respawn at home the haul walks it back to
+  the pile. The memory trial doesn't restart. A dig in progress still
+  finishes while the player is dead.
+- **What to do:** decide which of these death should end. For the haul,
+  call `cancel_pile_job` from `hurt_player` with a notice that says the
+  player died (today's says "canceled by player input"). For the memory
+  trial, decide whether only the `Respawn` action restarts it. Clear `dig`
+  if a dead player shouldn't dig.
+- **Where:** `kestrel/sim/src/settlement/avatar.rs` (`hurt_player`,
+  `self_update`, `act`), `piles.rs` (`cancel_pile_job`), `memory.rs`
+  (`restart_memory`).
+- **Found in:** task 1 of `kestrel/GHOUL_ATTACK_HANDOFF.md`
+  (branch `kestrel-ghoul-attacks`).
+
+## Decide whether a ghoul reaches a flying or busy player
+
+- **Status:** open
+- **Why:** a ghoul's reach is measured on the ground plane only, so it hits
+  a player hovering 1.8 m up on the jetpack. And a ghoul's push is a
+  velocity that `walk` brakes out; during the player's own non-laser swing
+  or a dig, `walk` doesn't move the avatar and brakes that velocity away,
+  so the hit lands with no push.
+- **What to do:** decide whether reach checks height (skip players whose
+  `avatar.height` is well above the ground under the threat) and whether a
+  push should move a swinging or digging avatar. Both are rules choices.
+- **Where:** `kestrel/sim/src/settlement/combat.rs` (`swing_reaches`,
+  `threats_in_reach`, `swing_lands`), `avatar.rs` (`walk`).
+- **Found in:** task 3 of `kestrel/GHOUL_ATTACK_HANDOFF.md`.
+
+## Flash the player's screen or body when it is hurt
+
+- **Status:** open
+- **Why:** nothing shows the local player being hurt beyond its nametag's
+  health, a sound and (for a ghoul hit) blood and camera shake. A laser hit
+  on a player plays only `LaserImpact`. `effects::Feedback::flash` is set by
+  the player's own hits (`combat.rs`) and decayed (`effects.rs`), but
+  nothing draws it, so it can't be reused for a hurt flash.
+- **What to do:** draw a short hurt cue for the local player, for any
+  damage (laser or ghoul): a red screen-edge flash from `Feedback::flash`,
+  or an emissive flash on the actor's materials like `ImpactTarget` slots.
+  Drive it from the confirmed health drop so every damage source gets it.
+- **Where:** `kestrel/app/src/effects.rs` (`Feedback`), `settlement.rs`
+  (the `ThreatSwing` presentation), `combat.rs`.
+- **Found in:** task 4 of `kestrel/GHOUL_ATTACK_HANDOFF.md`.
+
 ## Done
+
+### Give a scene ghouls and hurtable players
+
+- **Status:** done (branch `kestrel-ghoul-attacks`, PR #115)
+- **Why:** ghouls hit players only when the scenario's `player_health` is
+  above 0, and no scene has both: the arena and forest have ghouls with
+  `player_health` 0, and the laser pit has health but no waves. So the
+  ghoul attack (task 3 of `kestrel/GHOUL_ATTACK_HANDOFF.md`) is reached
+  only by the sim tests, and nobody can see it in play.
+- **What to do:** decide which scene gets it: health in the combat arena,
+  or a wave in the laser pit, or a new scene. Changing a golden scene
+  (arena, forest) changes the golden file's behaviour lines, so explain
+  that in the commit.
+- **Where:** `kestrel/app/assets/levels/*.ron`, `sim/src/scenario.rs`
+  (`golden_report`).
+- **Found in:** task 3 of `kestrel/GHOUL_ATTACK_HANDOFF.md`.
+
+
+### Test a knockback that pushes the joined player
+
+- **Status:** done (branch `kestrel-ghoul-attacks`)
+- **Why:** nothing in the simulation pushed a player avatar yet: stage 5
+  only damaged, killed and respawned one. So the knockback correction (D6)
+  was tested in the harness only with a death stopping a running avatar
+  (`joined_player_hit_by_the_laser_is_knocked_back_not_mispredicted`), and
+  with a push faked on the confirmed settlement in the prediction units.
+  The detection (`prediction::StageFive`) needs no change for real pushes.
+- **What to do:** once ghouls attack agents, or anything else knocks a
+  player back (the open question in `docs/character-definition.md`), add a
+  joined-client harness case under latency where the push moves the
+  running avatar: logged as `Knockback`, smoothed below 3 u, no
+  misprediction.
+- **Done:** `joined_player_pushed_by_a_ghoul_is_knocked_back_not_mispredicted`
+  gives the laser pit one `ghoul_forest` wave and has the client run back
+  and forth across the ghoul until a swing lands. No prediction change was
+  needed. The prediction units still fake their pushes: they need 2 and
+  4 u ones to cross the snap distances, far more than a ghoul's.
+- **Where:** `kestrel/app/src/lockstep.rs` tests (`RelayedGame`),
+  `kestrel/app/src/prediction.rs`.
+- **Found in:** task 6 of `kestrel/ABILITY_PREDICTION_HANDOFF.md`
+  (branch `kestrel-ability-prediction`).
 
 ### Release a transfer's reservation when its avatar respawns
 

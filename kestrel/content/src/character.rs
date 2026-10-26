@@ -41,6 +41,26 @@ pub struct CharacterDef {
     /// What a player character can do beyond walking and attacking. Empty
     /// for everyone else.
     pub abilities: Vec<Ability>,
+    /// How a FollowRoute character hits players in passing. Without it, it
+    /// never attacks. Left out of the encoding so characters without one keep
+    /// their rules hash; `rules_hash` adds it when any character has one.
+    #[serde(skip)]
+    pub attack: Option<AttackDef>,
+}
+
+/// A threat's swing at a player, in simulation units.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttackDef {
+    /// Player health lost per hit.
+    pub damage: u32,
+    /// Meters from the threat's center to the player's center.
+    pub reach: Fx,
+    /// Ticks from starting the swing to the hit.
+    pub windup: u64,
+    /// Ticks after a swing lands before the next can start.
+    pub cooldown: u64,
+    /// Speed the hit gives the player away from the threat, in m/s.
+    pub knockback: Fx,
 }
 
 /// A move a player character can make. The behaviour is code; the tuning
@@ -286,6 +306,18 @@ pub(crate) struct SimFile {
     carry: Option<CarryFile>,
     /// Replaced as a whole, not merged.
     abilities: Option<Vec<AbilityFile>>,
+    attack: Option<ThreatAttackFile>,
+}
+
+/// A FollowRoute character's `attack`: damage, meters, 60 Hz frames and m/s.
+#[derive(Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct ThreatAttackFile {
+    damage: Option<u32>,
+    reach: Option<Fx>,
+    windup: Option<u64>,
+    cooldown: Option<u64>,
+    knockback: Option<Fx>,
 }
 
 /// Frames, meters and per-second rates.
@@ -382,7 +414,8 @@ macro_rules! merge_fields {
     };
 }
 
-merge_fields!(SimFile { brain, abilities } { body, movement, health, avatar, carry });
+merge_fields!(SimFile { brain, abilities } { body, movement, health, avatar, carry, attack });
+merge_fields!(ThreatAttackFile { damage, reach, windup, cooldown, knockback } {});
 merge_fields!(CarryFile { transfer } {});
 merge_fields!(BodyFile { radius } {});
 merge_fields!(MovementFile { walk, run } {});
@@ -467,7 +500,35 @@ pub(crate) fn character_def(file: SimFile) -> Result<CharacterDef, String> {
         }
         _ => {}
     }
-    Ok(CharacterDef { brain, body: BodyDef { radius }, movement: MovementDef { walk, run }, health, avatar, carry, abilities })
+    let attack = file.attack.map(attack_def).transpose()?;
+    if attack.is_some() && brain != Brain::FollowRoute {
+        return Err("only FollowRoute characters have `attack`".into());
+    }
+    Ok(CharacterDef { brain, body: BodyDef { radius }, movement: MovementDef { walk, run }, health, avatar, carry, abilities, attack })
+}
+
+fn attack_def(file: ThreatAttackFile) -> Result<AttackDef, String> {
+    let damage = need(file.damage, "attack.damage")?;
+    if !(1..=1000).contains(&damage) {
+        return Err("attack.damage must be in 1..=1000".into());
+    }
+    let reach = need(file.reach, "attack.reach")?;
+    if !within(reach, Fx::from_ratio(1, 10), Fx::from_int(8)) {
+        return Err("attack.reach must be in [0.1, 8] m".into());
+    }
+    let windup = need(file.windup, "attack.windup")?;
+    if !(1..=600).contains(&windup) {
+        return Err("attack.windup must be 1..=600 frames".into());
+    }
+    let cooldown = need(file.cooldown, "attack.cooldown")?;
+    if cooldown > 600 {
+        return Err("attack.cooldown must be 0..=600 frames".into());
+    }
+    let knockback = need(file.knockback, "attack.knockback")?;
+    if !within(knockback, Fx::ZERO, Fx::from_int(40)) {
+        return Err("attack.knockback must be in [0, 40] m/s".into());
+    }
+    Ok(AttackDef { damage, reach, windup: ticks_from_60hz(windup), cooldown: ticks_from_60hz(cooldown), knockback })
 }
 
 /// Checks a merged view against its character's definition.

@@ -31,7 +31,9 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 /// 6: settlements persist piano positions and each player's held notes.
 /// 7: avatars keep the press tick of a queued attack (`queued_at`) in their
 ///    state and swing.
-pub const FORMAT_VERSION: u32 = 7;
+/// 8: threats keep their windup and cooldown (`Threat::windup`,
+///    `ready_at`), and pending messages have the threats' swing queues.
+pub const FORMAT_VERSION: u32 = 8;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

@@ -27,6 +27,14 @@ struct RigBone {
     rest: Transform,
     contact: Option<FootGeometry>,
 }
+/// A biped's unarmed swing (a threat's attack): `windup` builds from 0 to 1
+/// with the arms raised and the body leaning back, then `swing` drops from 1
+/// to 0 as the arms come down in front and the body lunges.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Strike {
+    pub windup: f32,
+    pub swing: f32,
+}
 #[derive(Clone, Copy)]
 pub(crate) struct FootGeometry {
     sole_y: f32,
@@ -256,9 +264,13 @@ impl Rig {
         activity: f32,
         injury: f32,
         recoil: f32,
+        strike: Strike,
         aim: Option<f32>,
         studio_moving: Option<bool>,
     ) -> (u64, u64) {
+        // Arms come up early in the windup, so it reads from the start.
+        let raise = 1.0 - (1.0 - strike.windup.clamp(0.0, 1.0)).powi(2);
+        let lunge = strike.swing.clamp(0.0, 1.0);
         let mut writes = 0;
         let mut skips = 0;
         let root = Transform::from_translation(position)
@@ -325,10 +337,11 @@ impl Rig {
                     if matches!(part, ActorPart::LeftArm | ActorPart::RightArm) {
                         let swing = (travel * (12.0 - injury * 3.0)).sin() * side;
                         t.rotation =
-                            Quat::from_rotation_x(-swing * (0.36 - injury * 0.12) - activity * 0.1);
+                            Quat::from_rotation_x(-swing * (0.36 - injury * 0.12) - activity * 0.1
+                                - raise * 2.6 - lunge * 1.3);
                     }
                     if matches!(part, ActorPart::LeftForearm | ActorPart::RightForearm) {
-                        t.rotation = Quat::from_rotation_x(-0.3 - activity * 0.12);
+                        t.rotation = Quat::from_rotation_x(-0.3 - activity * 0.12 - raise * 0.5 + lunge * 0.2);
                     }
                     if matches!(part, ActorPart::LeftHand | ActorPart::RightHand) {
                         t.rotation = Quat::from_rotation_x(activity * 0.08);
@@ -342,10 +355,11 @@ impl Rig {
                             | ActorPart::Head
                     ) {
                         t.rotation =
-                            Quat::from_rotation_x(-activity * 0.25 - injury * 0.26 + recoil * 0.28)
+                            Quat::from_rotation_x(-activity * 0.25 - injury * 0.26 + recoil * 0.28
+                                - raise * 0.22 + lunge * 0.38)
                                 * Quat::from_rotation_z(injury * 0.16);
                         t.translation.y -= injury * 0.06;
-                        t.translation.z -= activity * 0.1 + injury * 0.08;
+                        t.translation.z -= activity * 0.1 + injury * 0.08 + raise * 0.06 - lunge * 0.14;
                     }
                 }
                 Motion::Vehicle { wheel_radius } => {

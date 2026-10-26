@@ -315,11 +315,12 @@ const TOUCH_HISTORY: u64 = 2 * MAX_LEAD;
 /// is a knockback, not a misprediction (D6 in
 /// `ABILITY_PREDICTION_HANDOFF.md`).
 ///
-/// No event says so (a hit on a player shows none), so each confirmed tick
-/// is checked against the replay itself (`touched`): whatever stage 5 comes
-/// to do to an avatar, such as knockback once enemies hit agents, is caught
-/// with no code of its own. It reads the confirmed ticks the session ran
-/// and never changes the world.
+/// No event says so for every case (a laser hit on a player shows none), so
+/// each confirmed tick is checked against the replay itself (`touched`):
+/// whatever stage 5 comes to do to an avatar, such as a ghoul's push, is
+/// caught with no code of its own (see the lockstep test
+/// `joined_player_pushed_by_a_ghoul_is_knocked_back_not_mispredicted`). It
+/// reads the confirmed ticks the session ran and never changes the world.
 #[derive(Default)]
 pub struct StageFive {
     /// The (world, agent) watched; anything else starts over.

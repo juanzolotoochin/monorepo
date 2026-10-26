@@ -55,6 +55,7 @@ struct View {
     activity: f32,
     injury: f32,
     recoil: f32,
+    strike: crate::rig::Strike,
     aim: Option<f32>,
     pierced: bool,
     armored: bool,
@@ -71,6 +72,7 @@ impl View {
             activity: 0.,
             injury: 0.,
             recoil: 0.,
+            strike: crate::rig::Strike::default(),
             aim: None,
             pierced: false,
             armored: true,
@@ -228,6 +230,27 @@ fn build(world: &mut World) -> Settlement {
         );
     }
     state
+}
+/// Ticks a threat's swing takes to follow through after it lands.
+const SWING_TICKS: f32 = 0.3 * HZ;
+/// How far a threat's swing is drawn at `drawn` (`Simulation::drawn_time`,
+/// the tick its position is drawn at): the windup builds from 0 when it
+/// starts to 1 when it lands, then the swing follows through, from 1 back
+/// to 0 over `SWING_TICKS`, hit or miss.
+fn threat_strike(t: &crate::legacy::Threat, drawn: f32) -> crate::rig::Strike {
+    let swing = t.swung.map_or(0.0, |landed| {
+        let age = (drawn - landed as f32) / SWING_TICKS;
+        // Held out, then drawn back.
+        if (0.0..1.0).contains(&age) { 1.0 - age * age } else { 0.0 }
+    });
+    let windup = match &t.windup {
+        Some(w) if swing == 0.0 => {
+            let start = w.lands.saturating_sub(w.ticks) as f32;
+            ((drawn - start) / w.ticks.max(1) as f32).clamp(0.0, 1.0)
+        }
+        _ => 0.0,
+    };
+    crate::rig::Strike { windup, swing }
 }
 /// An agent's definition. Players who joined copy the scenario's avatar.
 fn agent_config<'a>(sim: &'a Simulation, id: &str) -> &'a crate::legacy::Agent {
@@ -478,6 +501,32 @@ pub fn tick(world: &mut World) {
                 sim.tick as u32,
             );
         }
+        if let Event::ThreatSwing { threat, agent, from, hit: true, killed } = event {
+            // Blood off the player, away from the threat, where the player is
+            // drawn: the local avatar is ahead of the confirmed world.
+            let mine = me.as_deref() == Some(agent.as_str());
+            let at = match sim.agents.get(agent) {
+                Some(a) if !mine => {
+                    let p = Vec3::new(a.position[0], 0.0, a.position[1]);
+                    p + Vec3::Y
+                        * crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, p)
+                            .unwrap_or(0.0)
+                }
+                _ => pos,
+            };
+            let from = from.map_or(at, |p| Vec3::new(p[0], at.y, p[1]));
+            let direction = (at - from).with_y(0.0).normalize_or(Vec3::Z);
+            crate::effects::blood(
+                world,
+                at + Vec3::Y * 0.9,
+                direction,
+                (*threat as u32).wrapping_add(sim.tick as u32),
+            );
+            if mine {
+                let mut feedback = world.resource_mut::<crate::effects::Feedback>();
+                feedback.trauma = feedback.trauma.max(if *killed { 0.45 } else { 0.3 });
+            }
+        }
         let cue = match event {
             // Prediction played these when it presented the shot.
             Event::LaserFired { .. } if presented.is_some() => None,
@@ -521,6 +570,8 @@ pub fn tick(world: &mut World) {
             Event::Hit { .. } => Some(crate::sound::Cue::Stone),
             Event::PinnedLanded { .. } => Some(crate::sound::Cue::GhoulHit),
             Event::BlockedShot { .. } => Some(crate::sound::Cue::Stone),
+            Event::ThreatSwing { hit: true, .. } => Some(crate::sound::Cue::GhoulHit),
+            Event::ThreatSwing { hit: false, .. } => Some(crate::sound::Cue::Swing),
             Event::Produced { .. } | Event::Equipped { .. } => Some(crate::sound::Cue::Clang),
             _ => None,
         };
@@ -534,6 +585,7 @@ pub fn tick(world: &mut World) {
                     | Event::Hit { .. }
                     | Event::PinnedLanded { .. }
                     | Event::BlockedShot { .. }
+                    | Event::ThreatSwing { .. }
             );
             if combat_event || sim.tick >= state.last_sound + (0.3 * HZ) as u64 {
                 world.resource_mut::<crate::sound::Sound>().play(cue);
@@ -618,6 +670,7 @@ pub fn tick(world: &mut World) {
         } else {
             0.0
         };
+        v.strike = threat_strike(t, sim.drawn_time());
         desired.insert(format!("threat/{}", t.id), v);
     }
     for p in sim.pinned.values() {
@@ -836,6 +889,7 @@ pub fn tick(world: &mut World) {
             view.activity,
             view.injury,
             view.recoil,
+            view.strike,
             view.aim,
             None,
         );
@@ -1055,6 +1109,118 @@ mod tests {
         assert!(view.health > 0, "settlement fell during the extended transport check");
         assert_eq!(view.agents["bramble"].cargo.capacity, 9);
         assert!(view.balances().values().all(|b| b.conserved));
+    }
+
+    /// The forest outpost before its first tick, with one ghoul of its first
+    /// wave beside the first agent.
+    fn forest_with_a_ghoul() -> (crate::legacy::Scenario, sim::settlement::Settlement, FxVec2) {
+        let library = SceneLibrary::new();
+        let scenario = library.scenes[6].scene.scenario.clone().unwrap();
+        let world = sim::World::new_settlement(1, &content::Content::builtin(), &scenario, &[]).unwrap();
+        let center = world.terrain().center;
+        let mut s = world.settlement().unwrap().clone();
+        let position = s.agents[0].position + FxVec2::new(Fx::from_ratio(1, 2), Fx::ZERO);
+        s.threats.push(sim::settlement::Threat {
+            id: 7,
+            wave: 0,
+            position,
+            heading: Fx::ZERO,
+            travelled: Fx::ZERO,
+            hp: 3,
+            armor: 0,
+            pierced: false,
+            shocked_until: 0,
+            route: vec![position],
+            stagger_until: 0,
+            knockback: FxVec2::ZERO,
+            windup: None,
+            ready_at: 0,
+        });
+        (crate::legacy::Scenario::new(&scenario), s, center)
+    }
+
+    #[test]
+    fn the_view_carries_a_threats_windup_until_its_drawn_tick_passes_it() {
+        let (config, idle, center) = forest_with_a_ghoul();
+        let attack = idle.characters[idle.waves[0].character as usize].attack.expect("forest ghouls attack");
+        let agent = idle.agents[0].id.clone();
+        let with = |windup: Option<u64>, ready_at: u64| {
+            let mut s = idle.clone();
+            s.threats[0].windup = windup.map(|lands| sim::settlement::combat::Windup { agent: 0, lands });
+            s.threats[0].ready_at = ready_at;
+            s
+        };
+        let view = |previous: &sim::settlement::Settlement, current: &sim::settlement::Settlement| {
+            Simulation::new(&config, Some(previous), current, 100, 0.5, center, &[]).threats[&7].clone()
+        };
+        assert_eq!(Simulation::new(&config, None, &idle, 100, 0.5, center, &[]).drawn_time(), 99.5);
+        let fresh = view(&idle, &idle);
+        assert_eq!((fresh.windup, fresh.swung), (None, None), "no windup, no swing yet");
+        let winding = view(&with(Some(110), 0), &with(Some(110), 0));
+        let expected = crate::legacy::Windup { agent: agent.clone(), lands: 110, ticks: attack.windup };
+        assert_eq!(winding.windup, Some(expected));
+        // Drawn between ticks 99 and 100, a swing that landed on 100 still
+        // shows its windup finishing, and the landed tick is known.
+        let landed = view(&with(Some(100), 0), &with(None, 101 + attack.cooldown));
+        assert_eq!(landed.windup.map(|w| w.lands), Some(100));
+        assert_eq!(landed.swung, Some(100));
+        // A stagger cancelled this one before it landed: it just goes away.
+        let cancelled = view(&with(Some(105), 0), &with(None, 0));
+        assert_eq!((cancelled.windup, cancelled.swung), (None, None));
+    }
+
+    #[test]
+    fn a_threats_swing_event_names_the_player_and_where_the_threat_stands() {
+        let (config, s, center) = forest_with_a_ghoul();
+        let events = [
+            sim::settlement::Event::ThreatWindup { threat: 7, agent: 0, lands: 127 },
+            sim::settlement::Event::ThreatSwing { threat: 7, agent: 0, hit: true, damage: 1, killed: false },
+        ];
+        let view = Simulation::new(&config, None, &s, 100, 0.0, center, &events);
+        let [crate::legacy::Event::ThreatSwing { threat, agent, from, hit, killed }] = view.events.as_slice() else {
+            panic!("expected one swing, got {:?}", view.events);
+        };
+        assert_eq!((*threat, agent.as_str(), *hit, *killed), (7, s.agents[0].id.as_str(), true, false));
+        assert_eq!(*from, Some(view.threats[&7].position));
+    }
+
+    fn drawn_threat(windup: Option<(u64, u64)>, swung: Option<u64>) -> crate::legacy::Threat {
+        crate::legacy::Threat {
+            id: 7,
+            wave: 0,
+            position: [0.0, 0.0],
+            heading: 0.0,
+            travelled: 0.0,
+            hp: 3,
+            armor: 0,
+            pierced: false,
+            shocked_until: 0,
+            stagger_until: 0,
+            knockback: [0.0, 0.0],
+            windup: windup.map(|(lands, ticks)| crate::legacy::Windup { agent: "player".into(), lands, ticks }),
+            swung,
+        }
+    }
+
+    #[test]
+    fn a_threats_windup_builds_with_its_drawn_tick_then_its_swing_follows_through() {
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-4;
+        let winding = drawn_threat(Some((127, 27)), None);
+        for (drawn, expected) in [(90.0, 0.0), (100.0, 0.0), (113.5, 0.5), (126.0, 26.0 / 27.0)] {
+            let strike = threat_strike(&winding, drawn);
+            assert!(close(strike.windup, expected) && strike.swing == 0.0, "at {drawn}: {strike:?}");
+        }
+        // The landing frame: the windup (carried from the previous tick)
+        // finishes, and the swing starts once the drawn tick reaches it.
+        let landing = drawn_threat(Some((127, 27)), Some(127));
+        assert!(close(threat_strike(&landing, 126.5).windup, 26.5 / 27.0));
+        assert_eq!(threat_strike(&landing, 126.5).swing, 0.0);
+        assert_eq!(threat_strike(&landing, 127.0), crate::rig::Strike { windup: 0.0, swing: 1.0 });
+        let swung = drawn_threat(None, Some(127));
+        let half = threat_strike(&swung, 127.0 + SWING_TICKS / 2.0);
+        assert!(close(half.swing, 0.75) && half.windup == 0.0, "{half:?}");
+        assert_eq!(threat_strike(&swung, 127.0 + SWING_TICKS), crate::rig::Strike::default());
+        assert_eq!(threat_strike(&swung, 400.0), crate::rig::Strike::default());
     }
 }
 

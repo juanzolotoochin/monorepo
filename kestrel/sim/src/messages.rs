@@ -150,6 +150,41 @@ pub struct Breach {
     pub threat: u64,
 }
 
+/// A threat with an `attack` can start a swing at a hurtable player in its
+/// reach, `distance` meters away. Stage 5 keeps the nearest player for each
+/// threat, the lowest agent index on a tie.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartSwing {
+    pub threat: u64,
+    pub agent: u16,
+    pub distance: Fx,
+}
+
+/// A threat's windup ends this tick. `hit` if its player was alive and in
+/// reach then.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwingLands {
+    pub threat: u64,
+    pub agent: u16,
+    pub hit: bool,
+}
+
+impl StateHash for StartSwing {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.threat);
+        h.write(&self.agent);
+        h.write(&self.distance);
+    }
+}
+
+impl StateHash for SwingLands {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.threat);
+        h.write(&self.agent);
+        h.write(&self.hit);
+    }
+}
+
 /// A defender shoots at a threat's current position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fire {
@@ -482,11 +517,15 @@ message_queues! {
     manual_unit: ManualUnit,
     pile_step: PileStep,
     // Combat: strikes and projectile hits before breaches, so a killing
-    // blow on the last tick saves the base; shots last.
+    // blow on the last tick saves the base; shots last. Threats' swings
+    // after them too, so a kill or stagger on the tick a swing starts or
+    // lands stops it.
     strike: Strike,
     projectile_hit: ProjectileHit,
     projectile_blocked: ProjectileBlocked,
     projectile_expired: ProjectileExpired,
+    start_swing: StartSwing,
+    swing_lands: SwingLands,
     breach: Breach,
     fire: Fire,
 }
