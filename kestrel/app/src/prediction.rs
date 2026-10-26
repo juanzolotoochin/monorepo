@@ -12,7 +12,7 @@
 use std::collections::VecDeque;
 
 use bevy::prelude::*;
-use fx::{Fx, FxVec2};
+use fx::FxVec2;
 use sim::settlement::{AgentState, Event, Settlement};
 use sim::terrain::Terrain;
 use sim::CommandKind;
@@ -85,12 +85,6 @@ pub struct PredictedEvent {
     /// The tick it is predicted on.
     pub tick: u64,
     pub event: Event,
-    /// The aim and muzzle of the swing that showed it, which tell one
-    /// `Attack` command's shot from another's in `LaserPrediction` until
-    /// predicted events are matched by their command (D7 in
-    /// `ABILITY_PREDICTION_HANDOFF.md`).
-    pub aim: FxVec2,
-    pub muzzle: [Fx; 3],
 }
 
 #[derive(Default)]
@@ -251,10 +245,7 @@ fn replay(c: &Confirmed, end: u64) -> Option<(Vec<AgentState>, Vec<PredictedEven
         if !replay.step_with(due) {
             return None;
         }
-        // The swing that resolved on this tick showed them.
-        let swing = replay.state().avatar.swing.as_ref().filter(|swing| swing.resolve_at == tick);
-        let (aim, muzzle) = swing.map_or((FxVec2::ZERO, [Fx::ZERO; 3]), |swing| (swing.aim, swing.muzzle));
-        events.extend(replay.events().iter().map(|event| PredictedEvent { tick, event: event.clone(), aim, muzzle }));
+        events.extend(replay.events().iter().map(|event| PredictedEvent { tick, event: event.clone() }));
         states.push(replay.state().clone());
     }
     Some((states, events))

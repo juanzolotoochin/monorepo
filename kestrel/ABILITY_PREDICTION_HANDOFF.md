@@ -129,6 +129,16 @@ ambiguous.
   its start tick instead. Until task 4, the app's `LaserPrediction` still
   tells commands apart by the resolving swing's aim and muzzle
   (`PredictedEvent` in `app/src/prediction.rs`).
+- Done in task 4: each command a client queues gets a `net::CommandId`
+  (client-local, never reused, not sent). `Client::applied_commands`
+  (through `Session`) is the drain record: which of the client's commands
+  applied on which tick, for the last `APPLIED_HISTORY` (600) ticks. The app
+  joins it with the pending commands on the ticks the replay applies them
+  on (`max(asked, confirmed tick)`), so a predicted event's `started` and a
+  confirmed one's map to the same command. The `nth` event of a kind
+  started on a tick is the `nth` command applied on it, so commands on one
+  tick are told apart in order. With no command on record (a swing loaded
+  with the world), the start tick itself is the key.
 
 ### D8. One generic predicted-events ledger in the app
 
@@ -144,6 +154,20 @@ It replaces `LaserPrediction`:
 Telemetry uses one `Mispredict { kind }` per event kind instead of a
 dedicated kind per ability. The laser is the first user and must keep its
 current results (0 mispredictions in the latency tests).
+
+Done in task 4: `app/src/event_prediction.rs` (`EventPrediction`) replaced
+`LaserPrediction`. Each frame `predict_events` (`lockstep.rs`) confirms the
+frame's confirmed events, expires (`TIMEOUT_TICKS`, 10), then presents the
+replay's new events: a laser shot as before, a bow shot's `Cue::Bow`. The
+app presents `PRESENTED_EARLY` (laser, bow); the arc coil's stays
+confirmed-only (`todo/characters.md`). A matched confirmed event is skipped
+(`Confirmations`, read by `settlement.rs`); an event is exact if it equals
+the confirmed one but for `started`. On a miss, `Cancel` asks
+`stop_presented` to stop it, and a `Cancel` event that confirmed
+differently is presented again from the confirmed one. Telemetry:
+`CorrectionKind::EventMispredict { kind }`, named by its kind ("laser"),
+per-kind counts in the window and in `predicted_events`, and the old
+`laser_*` report fields.
 
 ## Order
 

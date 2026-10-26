@@ -309,6 +309,12 @@ Margins: 75: 9–10, 100: 10–12, 150: 13–15 ticks.
   `a_shot_that_drops_out_of_the_replay_does_not_take_the_next_ones_place`.
 - Two commands with exactly the same aim and muzzle still can't be told
   apart (the old behaviour).
+- Superseded: `LaserPrediction` and `laser_prediction.rs` were replaced by
+  the generic predicted-events ledger (`app/src/event_prediction.rs`),
+  which matches by the command that caused the shot, so identical presses
+  are told apart. Telemetry is `CorrectionKind::EventMispredict { kind:
+  "laser" }`; the report fields above are unchanged. See D7 and D8 in
+  `ABILITY_PREDICTION_HANDOFF.md`.
 
 ### Open issues
 

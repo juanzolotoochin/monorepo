@@ -410,6 +410,8 @@ pub enum Event {
     Produced { producer: String },
     Equipped { agent: String },
     Shot { defender: String },
+    /// An avatar loosed an arrow.
+    BowFired { agent: u16 },
     /// `by` is the avatar that struck, for melee and arc hits.
     Hit { target: u64, by: Option<String>, projectile: Option<u64>, position: Point, killed: bool, impact: Impact },
     PinnedLanded { target: u64, position: Point },
@@ -640,7 +642,7 @@ impl Simulation {
                     s::Event::Produced { producer } => Event::Produced { producer: current.producers[*producer as usize].id.clone() },
                     s::Event::Equipped { agent } => Event::Equipped { agent: agent_name(*agent) },
                     s::Event::Shot { defender } => Event::Shot { defender: current.defenders[*defender as usize].id.clone() },
-                    s::Event::BowFired { .. } => Event::Shot { defender: "player".to_string() },
+                    s::Event::BowFired { agent, .. } => Event::BowFired { agent: *agent },
                     s::Event::Hit { target, agent, projectile, position, killed, impact } => Event::Hit {
                         target: *target,
                         by: agent.map(agent_name),

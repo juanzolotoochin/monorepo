@@ -284,7 +284,7 @@ impl service::Service for Avatar {
     fn systems(app: &mut App) {
         use service::{AppServices, Phase, WorldState};
         let active = in_state(WorldState::Active);
-        app.init_resource::<crate::laser_prediction::LaserPrediction>()
+        app.init_resource::<crate::event_prediction::EventPrediction>()
             .init_resource::<crate::effects::PendingLasers>()
             .add_service_systems::<Self, _>(Phase::Mirror, crate::lockstep::follow_avatar.run_if(active.clone()))
             .add_service_systems::<Self, _>(

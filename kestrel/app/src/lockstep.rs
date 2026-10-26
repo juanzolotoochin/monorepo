@@ -867,7 +867,7 @@ pub fn follow_avatar(
     mut prediction: Local<crate::prediction::AvatarPrediction>,
     mut ground_step: Local<VisualGroundStep>,
     mut telemetry: ResMut<crate::telemetry::Telemetry>,
-    mut lasers: ResMut<crate::laser_prediction::LaserPrediction>,
+    mut ledger: ResMut<crate::event_prediction::EventPrediction>,
     mut pending_lasers: ResMut<crate::effects::PendingLasers>,
 ) {
     let (Some(current), Some(index)) = (&mirror.current, mirror.player()) else { return };
@@ -879,9 +879,9 @@ pub fn follow_avatar(
     }
     if service.is_client() {
         let now = time.elapsed_secs_f64();
-        predict_lasers(&mut lasers, &mirror, &service, index, predicted.as_ref(), now, &mut pending_lasers, &sound, &mut telemetry);
+        predict_events(&mut ledger, &mirror, &service, index, predicted.as_ref(), now, &mut pending_lasers, &sound, &mut telemetry);
     } else {
-        lasers.reset();
+        ledger.reset();
     }
     let (from, to, alpha) = match &predicted {
         Some(drawn) => (&drawn.from, &drawn.to, drawn.fraction),
@@ -982,13 +982,14 @@ fn predict(
     Some(prediction.update(&confirmed, dt))
 }
 
-/// A joined player's own laser shots (see `laser_prediction`): this
-/// frame's confirmed ones are matched to those already drawn, then the
-/// shots the drawn avatar fires are drawn, with their sound, from where it
-/// is drawn. Other players' shots are drawn as they are confirmed.
+/// A joined player's own predicted events (see `event_prediction`): this
+/// frame's confirmed ones are matched to those already presented, then the
+/// events the drawn avatar shows are presented: a laser shot drawn, with its
+/// sound, from where the avatar is drawn, a bow shot's sound. Other
+/// players' events are presented as they are confirmed.
 #[allow(clippy::too_many_arguments)]
-fn predict_lasers(
-    lasers: &mut crate::laser_prediction::LaserPrediction,
+fn predict_events(
+    ledger: &mut crate::event_prediction::EventPrediction,
     mirror: &WorldMirror,
     service: &SessionService,
     agent: u16,
@@ -998,55 +999,77 @@ fn predict_lasers(
     sound: &crate::sound::Sound,
     telemetry: &mut crate::telemetry::Telemetry,
 ) {
-    use crate::laser_prediction::Outcome;
+    use crate::event_prediction::{end_of, Outcome};
     let Some(world) = service.world().filter(|_| service.session.world_number() == mirror.world_number) else {
-        lasers.reset();
+        ledger.reset();
         return;
     };
-    lasers.begin(mirror.world_number, agent);
+    ledger.begin(mirror.world_number, agent);
+    // Which command applied on which tick: the drain record, then the
+    // pending commands where the replay applies them.
+    let tick = world.tick();
+    let applied: Vec<_> = service
+        .session
+        .applied_commands()
+        .chain(service.session.pending_commands().map(|p| (p.tick.max(tick), p.id)))
+        .collect();
     // Where a beam ending at `p` is drawn ending.
     let end = |p: FxVec2| {
         let at = mirror.to_view(p);
         Vec3::new(at.x, service.ground_height(at).unwrap_or(0.0) + 0.8, at.z)
     };
-    let mut outcomes = Vec::new();
-    for event in &mirror.events {
-        if let sim::settlement::Event::LaserFired { agent: shooter, to, .. } = event {
-            if *shooter == agent {
-                outcomes.extend(lasers.confirm(*to, now));
-            }
-        }
-    }
-    outcomes.extend(lasers.expire(world.tick()));
+    // An event without an end is marked where the avatar is drawn.
+    let avatar = drawn.map(|d| d.position).or_else(|| service.player_view_position()).unwrap_or(Vec3::ZERO);
+    let at = |event: &sim::settlement::Event| end_of(event).map_or(avatar, end);
+    let mut outcomes: Vec<Outcome> = mirror.events.iter().filter_map(|event| ledger.confirm(event, &applied, now)).collect();
+    outcomes.extend(ledger.expire(tick));
     let mut new = Vec::new();
     if let Some(drawn) = drawn {
-        let predicted = lasers.predict(&drawn.events, now);
+        let predicted = ledger.predict(&drawn.events, &applied, now);
         outcomes.extend(predicted.dropped);
         new = predicted.new;
     }
-    let at = web_time::Instant::now();
+    let instant = web_time::Instant::now();
     for outcome in outcomes {
-        telemetry.network.laser_outcome(at, match outcome {
-            Outcome::Fired { predicted, confirmed, lead, exact } => crate::telemetry::LaserOutcome {
-                predicted: end(predicted),
-                confirmed: Some(end(confirmed)),
-                lead: Some(lead),
-                exact,
-            },
-            Outcome::NeverFired { predicted } => crate::telemetry::LaserOutcome { predicted: end(predicted), confirmed: None, lead: None, exact: false },
+        if outcome.cancel {
+            stop_presented(outcome.kind, outcome.id, pending);
+        }
+        telemetry.network.event_outcome(instant, crate::telemetry::EventOutcome {
+            kind: outcome.kind,
+            predicted: at(&outcome.predicted),
+            confirmed: outcome.confirmed.as_ref().map(at),
+            lead: outcome.lead,
+            exact: outcome.exact,
         });
     }
-    for shot in new {
-        pending.0.push(crate::effects::LaserShot {
-            agent,
-            target: end(shot.shot.to),
-            hit_actor: shot.shot.hit_actor,
-            cover: shot.shot.cover,
-            seed: crate::effects::laser_impact_seed(shot.tick, agent),
-            predicted: Some(shot.id),
-        });
-        sound.play(crate::sound::Cue::Laser);
-        telemetry.network.laser_drawn();
+    for presented in new {
+        match presented.event {
+            sim::settlement::Event::LaserFired { to, hit_actor, cover, .. } => {
+                pending.0.push(crate::effects::LaserShot {
+                    agent,
+                    target: end(to),
+                    hit_actor,
+                    cover,
+                    seed: crate::effects::laser_impact_seed(presented.tick, agent),
+                    predicted: Some(presented.id),
+                });
+                sound.play(crate::sound::Cue::Laser);
+            }
+            sim::settlement::Event::BowFired { .. } => sound.play(crate::sound::Cue::Bow),
+            _ => continue,
+        }
+        telemetry.network.event_presented(presented.kind);
+    }
+}
+
+/// Stops what a presented event of `kind` started, when its kind's miss
+/// policy is `Cancel` and it missed. Events start only one-shots so far
+/// (D5 in `ABILITY_PREDICTION_HANDOFF.md`): a laser shot not drawn yet is
+/// dropped, and anything else has nothing left to stop. A kind that starts
+/// something lasting stops it here.
+fn stop_presented(kind: &str, id: u64, pending: &mut crate::effects::PendingLasers) {
+    if kind == "laser" {
+        pending.0.retain(|shot| shot.predicted != Some(id));
     }
 }
 
@@ -1149,7 +1172,7 @@ pub fn attack_input(
 
 /// Where the mouse aims from: where the avatar is `drawn`. A joined
 /// player's avatar is predicted about an input lead ahead of the confirmed
-/// one, and its shot fires from there (`laser_prediction`). Elsewhere the
+/// one, and its shot fires from there (`event_prediction`). Elsewhere the
 /// avatar is drawn where it is confirmed, so the confirmed position is used
 /// exactly, as before prediction.
 fn aim_origin(service: &SessionService, drawn: Option<Vec3>) -> Option<Vec3> {
@@ -1863,10 +1886,10 @@ mod tests {
                 }
                 let telemetry = game.telemetry();
                 let network = &telemetry.network;
-                let outcomes: Vec<_> = network.laser_outcomes().cloned().collect();
+                let outcomes: Vec<_> = network.event_outcomes("laser").cloned().collect();
                 let kinds: Vec<_> = network.corrections().map(|c| format!("{:?} {:.2}", c.kind, c.distance)).collect();
-                let laser_mispredictions = network.corrections().filter(|c| c.kind == crate::telemetry::CorrectionKind::LaserMispredict).count();
-                let drawn = network.lasers_drawn() as usize;
+                let laser_mispredictions = network.corrections().filter(|c| c.kind == crate::telemetry::CorrectionKind::EventMispredict { kind: "laser" }).count();
+                let drawn = network.events_presented("laser") as usize;
                 let sounds = sounds(&game) - sounds_before;
                 let predicted_beams = beams.values().filter(|p| **p).count();
                 let end_difference = outcomes.iter().map(|o| o.confirmed.map_or(f32::INFINITY, |c| c.distance(o.predicted))).fold(0.0, f32::max);

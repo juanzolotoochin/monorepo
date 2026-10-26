@@ -1,5 +1,6 @@
 //! A read-only network view. Samples survive the Session layer's teardown.
 use super::{egui, json, Duration, Instant, Value, VecDeque};
+use std::collections::BTreeMap;
 use bevy::prelude::{Color, Gizmos, Isometry3d, Transform, Vec3};
 
 const HISTORY: Duration = Duration::from_secs(10);
@@ -37,34 +38,38 @@ pub struct NetworkDiagnostics {
     /// Episodes dropped for being under `MIN_CORRECTION`: count and distance.
     small_corrections: (u32, f32),
     last_shown: Option<Vec3>,
-    lasers: LaserStats,
+    /// The local avatar's predicted events this session, by kind.
+    events: BTreeMap<&'static str, EventStats>,
+    /// Recent outcomes of every kind, oldest first.
+    recent_events: VecDeque<EventOutcome>,
     /// Draw recent corrections in the world. Kept across sessions.
     pub show_corrections: bool,
 }
 
-/// The local avatar's predicted laser shots this session.
-#[derive(Default)]
-struct LaserStats {
-    drawn: u64,
+/// The local avatar's predicted events of one kind this session.
+#[derive(Clone, Copy, Default)]
+struct EventStats {
+    presented: u64,
     confirmed: u64,
     mispredicted: u64,
-    /// The latest confirmed shot's lead: how long before its confirmation
-    /// it was drawn, in seconds.
+    /// The latest confirmed event's lead: how long before its confirmation
+    /// it was presented, in seconds.
     last_lead: Option<f64>,
-    /// Recent outcomes, oldest first.
-    recent: VecDeque<LaserOutcome>,
 }
 
-/// How a drawn laser shot turned out, in view space.
+/// How a presented event turned out, in view space.
 #[derive(Clone, Debug)]
-pub struct LaserOutcome {
-    /// Where the drawn beam ended.
+pub struct EventOutcome {
+    /// Its kind (`event_prediction::kind_of`): "laser", "bow".
+    pub kind: &'static str,
+    /// Where the presented event ended: a beam's end, or for an event
+    /// without one, where the avatar was drawn.
     pub predicted: Vec3,
-    /// Where the confirmed shot ended; `None` if it never fired.
+    /// Where the confirmed one ended; `None` if it never confirmed.
     pub confirmed: Option<Vec3>,
-    /// Seconds from drawing the shot to its confirmation.
+    /// Seconds from presenting it to its confirmation.
     pub lead: Option<f64>,
-    /// It ended exactly where it was drawn ending.
+    /// It confirmed exactly as presented.
     pub exact: bool,
 }
 
@@ -88,17 +93,18 @@ pub struct PreviewUpdate {
 pub enum CorrectionKind {
     Mispredict,
     Snap,
-    /// A predicted laser shot the confirmed one didn't match: it ended
-    /// elsewhere, or never fired.
-    LaserMispredict,
+    /// A predicted event of `kind` ("laser", "bow") the confirmed one didn't
+    /// match: it ended elsewhere, or never confirmed.
+    EventMispredict { kind: &'static str },
 }
 
 impl CorrectionKind {
+    /// An event misprediction is named by its kind.
     fn name(self) -> &'static str {
         match self {
             Self::Mispredict => "mispredict",
             Self::Snap => "snap",
-            Self::LaserMispredict => "laser",
+            Self::EventMispredict { kind } => kind,
         }
     }
 
@@ -106,38 +112,42 @@ impl CorrectionKind {
         match self {
             Self::Mispredict => Color::srgba(1.0, 0.55, 0.15, alpha),
             Self::Snap => Color::srgba(1.0, 0.2, 0.9, alpha),
-            Self::LaserMispredict => Color::srgba(1.0, 0.15, 0.15, alpha),
+            Self::EventMispredict { .. } => Color::srgba(1.0, 0.15, 0.15, alpha),
         }
     }
 }
 
 /// Consecutive frames whose prediction changed (or a snap): one correction
-/// as the player feels it. A laser misprediction is one shot.
+/// as the player feels it. An event misprediction is one event.
 #[derive(Clone, Debug)]
 pub struct PreviewCorrection {
     pub kind: CorrectionKind,
     pub started: Instant,
     pub ended: Instant,
-    /// Where the avatar was drawn just before the episode; for a laser,
-    /// where the drawn beam ended.
+    /// Where the avatar was drawn just before the episode; for an event,
+    /// where the presented one ended (`EventOutcome::predicted`).
     pub from: Vec3,
-    /// Where it was being pulled to on the episode's last frame; for a
-    /// laser, where the confirmed shot ended (`from` if it never fired).
+    /// Where it was being pulled to on the episode's last frame; for an
+    /// event, where the confirmed one ended (`from` if it never confirmed).
     pub to: Vec3,
     /// Total distance, summed over frames: each misprediction's starting
-    /// error, or a snap's jump. For a laser, between the two ends.
+    /// error, or a snap's jump. For an event, between the two ends.
     pub distance: f32,
     pub frames: u32,
     pub tick: Option<u64>,
     pub pending: Option<u64>,
     pub rtt: Option<Duration>,
-    /// A laser shot that was drawn but never fired.
+    /// An event that was presented but never confirmed.
     pub never_fired: bool,
 }
 
 impl PreviewCorrection {
     fn kept(&self) -> bool {
-        matches!(self.kind, CorrectionKind::Snap | CorrectionKind::LaserMispredict) || self.distance >= MIN_CORRECTION
+        matches!(self.kind, CorrectionKind::Snap | CorrectionKind::EventMispredict { .. }) || self.distance >= MIN_CORRECTION
+    }
+
+    fn is_event(&self) -> bool {
+        matches!(self.kind, CorrectionKind::EventMispredict { .. })
     }
 }
 
@@ -250,32 +260,34 @@ impl NetworkDiagnostics {
         self.corrections.push_back(correction);
     }
 
-    /// Prediction drew one of the local avatar's laser shots.
-    pub fn laser_drawn(&mut self) {
-        self.lasers.drawn += 1;
+    /// Prediction presented one of the local avatar's events of `kind`.
+    pub fn event_presented(&mut self, kind: &'static str) {
+        self.events.entry(kind).or_default().presented += 1;
     }
 
-    /// How a drawn laser shot turned out. One that didn't end where it was
-    /// drawn ending, or never fired, is a laser misprediction.
-    pub fn laser_outcome(&mut self, now: Instant, outcome: LaserOutcome) {
-        let lasers = &mut self.lasers;
+    /// How a presented event turned out. One that didn't confirm exactly as
+    /// presented, or never confirmed, is an event misprediction.
+    pub fn event_outcome(&mut self, now: Instant, outcome: EventOutcome) {
+        let stats = self.events.entry(outcome.kind).or_default();
         if outcome.confirmed.is_some() {
-            lasers.confirmed += 1;
-            lasers.last_lead = outcome.lead;
+            stats.confirmed += 1;
+            stats.last_lead = outcome.lead;
         }
-        if lasers.recent.len() >= MAX_CORRECTIONS {
-            lasers.recent.pop_front();
+        if !outcome.exact {
+            stats.mispredicted += 1;
         }
-        lasers.recent.push_back(outcome.clone());
+        if self.recent_events.len() >= MAX_CORRECTIONS {
+            self.recent_events.pop_front();
+        }
+        self.recent_events.push_back(outcome.clone());
         if outcome.exact {
             return;
         }
-        lasers.mispredicted += 1;
         let latest = self.frames.back();
         let to = outcome.confirmed.unwrap_or(outcome.predicted);
         let flat = |v: Vec3| Vec3::new(v.x, 0.0, v.z).length();
         let correction = PreviewCorrection {
-            kind: CorrectionKind::LaserMispredict,
+            kind: CorrectionKind::EventMispredict { kind: outcome.kind },
             started: now,
             ended: now,
             from: outcome.predicted,
@@ -290,16 +302,16 @@ impl NetworkDiagnostics {
         self.keep(correction);
     }
 
-    /// Recent drawn laser shots and how they turned out, oldest first.
+    /// Recent presented events of `kind` and how they turned out, oldest first.
     #[cfg(test)]
-    pub fn laser_outcomes(&self) -> impl Iterator<Item = &LaserOutcome> {
-        self.lasers.recent.iter()
+    pub fn event_outcomes<'a>(&'a self, kind: &'a str) -> impl Iterator<Item = &'a EventOutcome> + 'a {
+        self.recent_events.iter().filter(move |o| o.kind == kind)
     }
 
-    /// Laser shots drawn by prediction so far.
+    /// Events of `kind` presented by prediction so far.
     #[cfg(test)]
-    pub fn lasers_drawn(&self) -> u64 {
-        self.lasers.drawn
+    pub fn events_presented(&self, kind: &str) -> u64 {
+        self.events.get(kind).map_or(0, |stats| stats.presented)
     }
 
     /// Kept corrections, including the one still in progress, oldest first.
@@ -321,7 +333,8 @@ impl NetworkDiagnostics {
         self.corrections.clear();
         self.open_correction = None;
         self.small_corrections = (0, 0.0);
-        self.lasers = LaserStats::default();
+        self.events.clear();
+        self.recent_events.clear();
     }
 
     /// Boxes where the local avatar was drawn when each recent correction
@@ -336,8 +349,8 @@ impl NetworkDiagnostics {
                 continue;
             }
             let color = c.kind.color(1.0 - 0.7 * age.as_secs_f32() / CORRECTION_SHOWN.as_secs_f32());
-            if c.kind == CorrectionKind::LaserMispredict {
-                // Both ends are at beam height.
+            if c.is_event() {
+                // Both ends are at beam height, or where the avatar was drawn.
                 gizmos.sphere(Isometry3d::from_translation(c.from), 0.2, color);
                 gizmos.line(c.from, c.to, color);
                 gizmos.sphere(Isometry3d::from_translation(c.to), 0.12, color);
@@ -366,8 +379,9 @@ impl NetworkDiagnostics {
             "pending_application": c.pending,
             "rtt_ms": c.rtt.map(|v| v.as_secs_f64() * 1000.),
         });
-        if c.kind == CorrectionKind::LaserMispredict {
-            // `from` is the drawn beam's end, `to` the confirmed one's.
+        if c.is_event() {
+            // `from` is the presented event's end, `to` the confirmed one's.
+            value["event_mispredict"] = json!(true);
             value["never_fired"] = json!(c.never_fired);
         }
         value
@@ -589,16 +603,20 @@ impl NetworkDiagnostics {
                 } else {
                     ui.label("Unknown: no local avatar prediction sample yet.");
                 }
-                let lasers = &self.lasers;
-                ui.label(format!(
-                    "Predicted laser shots: {} drawn · {} confirmed · {} mispredicted · last drawn {} before confirmation",
-                    lasers.drawn,
-                    lasers.confirmed,
-                    lasers.mispredicted,
-                    lasers.last_lead.map_or("Unknown".into(), |lead| format!("{:.0} ms", lead * 1000.))
-                ));
+                if self.events.is_empty() {
+                    ui.label("Predicted events: none presented yet.");
+                }
+                for (kind, stats) in &self.events {
+                    ui.label(format!(
+                        "Predicted {kind} events: {} drawn · {} confirmed · {} mispredicted · last drawn {} before confirmation",
+                        stats.presented,
+                        stats.confirmed,
+                        stats.mispredicted,
+                        stats.last_lead.map_or("Unknown".into(), |lead| format!("{:.0} ms", lead * 1000.))
+                    ));
+                }
                 ui.checkbox(&mut self.show_corrections, "Show corrections in the world (2 s)");
-                ui.small("Box: where the avatar was drawn when the correction started. Line: where it was pulled to. Orange mispredict, magenta snap. Red laser: a ball where the drawn beam ended, a line to where the confirmed shot ended.");
+                ui.small("Box: where the avatar was drawn when the correction started. Line: where it was pulled to. Orange mispredict, magenta snap. Red event (laser, bow): a ball where the presented event ended (a beam's end, else the avatar), a line to where the confirmed one ended.");
                 let kept: Vec<_> = self.corrections().collect();
                 let (small, small_distance) = self.small_corrections;
                 ui.label(format!(
@@ -606,7 +624,7 @@ impl NetworkDiagnostics {
                     kept.len()
                 ));
                 for c in kept.iter().rev().take(8) {
-                    if c.kind == CorrectionKind::LaserMispredict {
+                    if c.is_event() {
                         let what = if c.never_fired { "never fired".to_string() } else { format!("ended {:.2} units away", c.distance) };
                         ui.monospace(format!("{:>10} {what} · {:.1} s ago", c.kind.name(), c.started.elapsed().as_secs_f64()));
                         continue;
@@ -751,6 +769,7 @@ impl NetworkDiagnostics {
             "extra_catch_up_ticks": d.catch_up_ticks, "late_inputs": frame.stats.late_inputs,
             "late_inputs_detected_locally": d.late_inputs, "late_input_shifted_ticks_detected_locally": d.shifted_ticks,
         });
+        let laser = self.events.get("laser").copied().unwrap_or_default();
         let view = json!({
             "packets_sent": frame.stats.packets_sent, "packets_received": frame.stats.packets_received,
             "bytes_sent": frame.stats.bytes_sent, "bytes_received": frame.stats.bytes_received,
@@ -760,9 +779,13 @@ impl NetworkDiagnostics {
             "preview_corrections": self.corrections().count(),
             "preview_corrections_under_threshold": self.small_corrections.0,
             "preview_corrections_under_threshold_distance": self.small_corrections.1,
-            "laser_shots_drawn": self.lasers.drawn, "laser_shots_confirmed": self.lasers.confirmed,
-            "laser_mispredictions": self.lasers.mispredicted,
-            "laser_last_lead_ms": self.lasers.last_lead.map(|lead| lead * 1000.),
+            "laser_shots_drawn": laser.presented, "laser_shots_confirmed": laser.confirmed,
+            "laser_mispredictions": laser.mispredicted,
+            "laser_last_lead_ms": laser.last_lead.map(|lead| lead * 1000.),
+            "predicted_events": self.events.iter().map(|(kind, stats)| (kind.to_string(), json!({
+                "presented": stats.presented, "confirmed": stats.confirmed, "mispredicted": stats.mispredicted,
+                "last_lead_ms": stats.last_lead.map(|lead| lead * 1000.),
+            }))).collect::<serde_json::Map<_, _>>(),
         });
         let peers = d.peers.iter().map(|peer| json!({
                 "player": peer.player.0, "loading": peer.loading, "turn_receipt_ack": peer.turn_ack,
@@ -938,48 +961,60 @@ mod tests {
     }
 
     #[test]
-    fn laser_mispredictions_are_kept_with_both_ends_and_reported() {
+    fn event_mispredictions_are_kept_per_kind_with_both_ends_and_reported() {
         let start = Instant::now();
         let mut network = NetworkDiagnostics::default();
         network.record(frame(start, 1, 0));
         let end = |x: f32| Vec3::new(x, 0.8, 2.0);
-        let outcome = |predicted: f32, confirmed: Option<f32>, exact: bool| LaserOutcome {
+        let outcome = |kind, predicted: f32, confirmed: Option<f32>, exact: bool| EventOutcome {
+            kind,
             predicted: end(predicted),
             confirmed: confirmed.map(end),
             lead: confirmed.map(|_| 0.2),
             exact,
         };
         for _ in 0..3 {
-            network.laser_drawn();
+            network.event_presented("laser");
         }
-        network.laser_outcome(start, outcome(4.0, Some(4.0), true));
+        network.event_presented("bow");
+        network.event_outcome(start, outcome("laser", 4.0, Some(4.0), true));
         // A shot the confirmed one ended elsewhere, however close.
-        network.laser_outcome(start, outcome(4.0, Some(4.01), false));
+        network.event_outcome(start, outcome("laser", 4.0, Some(4.01), false));
         // One the confirmed world never fired.
-        network.laser_outcome(start, outcome(6.0, None, false));
+        network.event_outcome(start, outcome("laser", 6.0, None, false));
+        // An arrow that never confirmed, marked where the avatar was drawn.
+        network.event_outcome(start, outcome("bow", 1.0, None, false));
 
         let kept: Vec<_> = network.corrections().collect();
-        assert_eq!(kept.len(), 2, "an exact shot is no correction; a laser misprediction of any size is kept");
-        assert_eq!(kept[0].kind, CorrectionKind::LaserMispredict);
+        assert_eq!(kept.len(), 3, "an exact shot is no correction; an event misprediction of any size is kept");
+        assert_eq!(kept[0].kind, CorrectionKind::EventMispredict { kind: "laser" });
         assert_eq!((kept[0].from, kept[0].to), (end(4.0), end(4.01)));
         assert!((kept[0].distance - 0.01).abs() < 1e-4 && !kept[0].never_fired);
         assert_eq!((kept[1].from, kept[1].to, kept[1].distance), (end(6.0), end(6.0), 0.0));
         assert!(kept[1].never_fired);
+        assert_eq!(kept[2].kind, CorrectionKind::EventMispredict { kind: "bow" });
         assert_eq!(network.small_corrections(), (0, 0.0));
-        assert_eq!(network.laser_outcomes().count(), 3);
+        assert_eq!((network.event_outcomes("laser").count(), network.event_outcomes("bow").count()), (3, 1));
+        assert_eq!((network.events_presented("laser"), network.events_presented("bow")), (3, 1));
         let snapshot = network.snapshot();
         assert_eq!(snapshot["laser_shots_drawn"], 3);
         assert_eq!(snapshot["laser_shots_confirmed"], 2);
         assert_eq!(snapshot["laser_mispredictions"], 2);
         assert!((snapshot["laser_last_lead_ms"].as_f64().unwrap() - 200.0).abs() < 1e-6);
+        let bow = &snapshot["predicted_events"]["bow"];
+        assert_eq!((bow["presented"].as_u64(), bow["confirmed"].as_u64(), bow["mispredicted"].as_u64()), (Some(1), Some(0), Some(1)));
+        assert!(bow["last_lead_ms"].is_null());
+        assert_eq!(snapshot["predicted_events"]["laser"]["mispredicted"], 2);
         let report = NetworkDiagnostics::correction_json(kept[1], start);
         assert_eq!(report["kind"], "laser");
         assert_eq!(report["never_fired"], true);
+        assert_eq!(NetworkDiagnostics::correction_json(kept[2], start)["kind"], "bow");
 
         let context = egui::Context::default();
         let output = context.run_ui(egui::RawInput::default(), |ui| network.show(ui, true));
         output.drop_without_applying_deltas();
         network.clear_corrections();
-        assert_eq!((network.corrections().count(), network.laser_outcomes().count()), (0, 0));
+        assert_eq!((network.corrections().count(), network.event_outcomes("laser").count()), (0, 0));
+        assert!(network.snapshot()["predicted_events"].as_object().unwrap().is_empty());
     }
 }

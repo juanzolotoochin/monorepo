@@ -20,6 +20,41 @@
 - **Found in:** ability prediction task 2, the shared action path
   (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D2).
 
+## Present the arc coil's shot early
+
+- **Status:** open
+- **Why:** `ArcFired` is predicted (`Event::prediction` says `Keep`), but a
+  client still draws it only once confirmed. Its arc chains into the
+  `Hit { impact: Arc }` events that follow it in the same tick
+  (`arc_source` and `arc_fired` in `app/src/settlement.rs`): skipping a
+  confirmed `ArcFired` already drawn would make the next hit draw an extra
+  arc from the player. The legacy `ArcFired` also doesn't carry the agent.
+- **What to do:** give the legacy event its agent, draw the predicted arc
+  and its `Cue::Arc` from the ledger, and let a matched confirmed
+  `ArcFired` still set the chain's start for the hits without drawing again.
+  Then add `"arc"` to `PRESENTED_EARLY`.
+- **Where:** `kestrel/app/src/event_prediction.rs` (`PRESENTED_EARLY`),
+  `kestrel/app/src/lockstep.rs` (`predict_events`),
+  `kestrel/app/src/settlement.rs`, `kestrel/app/src/legacy.rs`.
+- **Found in:** ability prediction task 4, the predicted-events ledger
+  (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D8).
+
+## Draw a predicted arrow in flight
+
+- **Status:** open
+- **Why:** a client plays its own bow shot's sound when the drawn avatar
+  looses it, but the arrow is a projectile in the confirmed world, so it
+  appears about an input lead later, from where the confirmed avatar is.
+- **What to do:** decide whether to draw a predicted arrow from `BowFired`
+  (it has no aim or speed yet) that hands over to the confirmed projectile,
+  or accept the gap. Ghouls hitting agents (step 5) may change what a bow
+  shot needs.
+- **Where:** `kestrel/app/src/lockstep.rs` (`predict_events`), projectile
+  views in `kestrel/app/src/settlement.rs`, `strike_event` in
+  `kestrel/sim/src/settlement/combat.rs`.
+- **Found in:** ability prediction task 4, the predicted-events ledger
+  (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D8).
+
 ## Done
 
 ### Remove the right-click movement leftovers

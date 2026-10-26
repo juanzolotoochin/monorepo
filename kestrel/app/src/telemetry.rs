@@ -1,6 +1,6 @@
 //! Bounded performance samples. CPU wall time is kept separate from deterministic game time.
 mod network;
-pub use network::{LaserOutcome, NetworkFrame, PreviewUpdate};
+pub use network::{EventOutcome, NetworkFrame, PreviewUpdate};
 #[cfg(test)]
 pub use network::CorrectionKind;
 use bevy::prelude::*;

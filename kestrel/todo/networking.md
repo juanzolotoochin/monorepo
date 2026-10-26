@@ -75,7 +75,7 @@
   shot. Measure how often a laser mispredict is logged and how far apart the
   ends are; decide whether that is acceptable.
 - **Where:** laser scenarios in the `kestrel/app/src/lockstep.rs` tests;
-  `kestrel/app/src/laser_prediction.rs`.
+  `kestrel/app/src/event_prediction.rs`.
 - **Found in:** stage 2 of PR #111.
 
 ## The `Join` command is always late on a delayed link

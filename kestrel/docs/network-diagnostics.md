@@ -50,9 +50,10 @@ it is not a simulation replay or a desync capture.
   section shows the horizontal distance from the confirmed avatar (about one
   input lead while moving), the last frame's misprediction, and counts of
   mispredicted frames and snaps. These are view observations, not
-  deterministic state mismatches. A line counts the client's predicted laser
-  shots: drawn, confirmed, mispredicted, and how long before its confirmation
-  the last one was drawn (about one input lead).
+  deterministic state mismatches. A line per event kind (`laser`, `bow`)
+  counts the client's predicted events: drawn, confirmed, mispredicted, and
+  how long before its confirmation the last one was drawn (about one input
+  lead).
 - **Preview corrections:** a misprediction moves the drawn avatar; consecutive
   mispredicted frames form one `mispredict` correction, whose distance is the
   sum of each frame's starting error. A `snap` is a correction over 1.5 units.
@@ -62,14 +63,18 @@ it is not a simulation replay or a desync capture.
   line to where the new prediction pulls it. The copied report lists them
   under `preview_corrections`, with duration, distance, positions, local tick,
   pending inputs and RTT at the start.
-- **Laser mispredictions:** a `laser` correction is one predicted laser shot
-  (see below) that the confirmed shot didn't match: it ended elsewhere, by any
-  distance, or never fired. It is always kept. In the world it is a red ball
-  where the drawn beam ended and a line to where the confirmed shot ended. In
-  the copied report `from` is the drawn end, `to` the confirmed end (the same
-  point when `never_fired` is true) and `distance` the gap between them. The
-  report's top level also has `laser_shots_drawn`, `laser_shots_confirmed`,
-  `laser_mispredictions` and `laser_last_lead_ms`.
+- **Event mispredictions:** a correction named by an event kind (`laser`,
+  `bow`) is one predicted event (see below) that the confirmed one didn't
+  match: it ended elsewhere, by any distance, or never confirmed. It is
+  always kept. In the world it is a red ball where the presented event ended
+  (a laser beam's end; for an event without an end, where the avatar was
+  drawn) and a line to where the confirmed one ended. In the copied report
+  it has `event_mispredict: true`, `from` is the presented end, `to` the
+  confirmed end (the same point when `never_fired` is true) and `distance`
+  the gap between them. The report's top level has, per kind,
+  `predicted_events.<kind>` with `presented`, `confirmed`, `mispredicted` and
+  `last_lead_ms`, and for the laser also `laser_shots_drawn`,
+  `laser_shots_confirmed`, `laser_mispredictions` and `laser_last_lead_ms`.
 
 ## The input margin
 
@@ -123,31 +128,47 @@ confirmed terrain when the walk starts. The units it then moves at the dock are 
 Pile jobs read pile lab state the replay doesn't run, so they aren't
 predicted: while one is pending, the confirmed avatar is drawn.
 
-## Predicted laser shots
+## Predicted events
 
-A client also draws its own laser shots predicted. When the drawn time
-reaches the tick a laser swing resolves on in the replay, two ticks after the
-press, the replay reads the confirmed world for the predicted avatar as the
-simulation's stage 3 does (`read_avatar`), and the resulting `Strike` message
-becomes a `LaserFired` through the same function the simulation applies it
-with (`strike_event`). That shot is drawn at once: the beam from the drawn avatar's gun, the laser
-sound, and the impact spark and sound. The beam stops at walls, cover, the
-ground, and enemies and other players where they are drawn. Damage, flinches,
-deaths and cover breaking still wait for the confirmed shot, about an input
-lead after the drawn beam hit (if that beam is still in flight then, the
-cover waits for it to arrive). See
-[the shot matching](../app/src/laser_prediction.rs).
+A client also presents some of its own avatar's events predicted: laser shots
+and bow shots. The replay reads the confirmed world for the predicted avatar
+as the simulation's stage 3 does (`read_avatar`), and the resulting messages
+become events through the same function the simulation applies them with
+(`strike_event`). When the drawn time first reaches one, it is presented at
+once. A laser shot, two ticks after the press, is drawn from the drawn
+avatar's gun with the laser sound, and the impact spark and sound. The beam
+stops at walls, cover, the ground, and enemies and other players where they
+are drawn. A bow shot plays its sound; the arrow itself is drawn from the
+confirmed world, as before. Damage, flinches, deaths and cover breaking
+still wait for the confirmed event, about an input lead after (if a drawn
+beam is still in flight then, the cover waits for it to arrive). The arc
+coil's arc is still drawn only once confirmed. See
+[the predicted-events ledger](../app/src/event_prediction.rs).
 
-The confirmed `LaserFired` events of your avatar are matched to the drawn
-shots in order and not drawn again. If one ends elsewhere, the drawn beam
-stays and the results apply where the confirmed shot hit; that is logged as a
-`laser` misprediction. A drawn shot the confirmed world is 10 ticks past
-without firing (the swing didn't happen there, or the avatar died) is given
-up and logged the same way. So is one the replay stops firing once a later
-shot resolves: the replay's shots are told apart by their command's aim and
-muzzle, so a shot the host moved later stays the same shot. A confirmed shot with nothing drawn for it (fired
-while a pile job was pending, for example) is drawn when it arrives.
-Other players' shots are drawn when confirmed.
+Each predicted event is told apart by the command that caused it and its
+kind. Its start tick is the tick its command applied on: in the replay, for
+a command still pending, and in the confirmed world, from the client's
+record of which of its commands applied on which tick
+(`net::Client::applied_commands`). So a shot the host moved later stays the
+same shot, and two presses with the same aim are still two shots. Several
+commands applied on one tick are told apart in order.
+
+The confirmed events of your avatar are matched to the presented ones and
+not presented again. If one ends elsewhere, the drawn beam stays and the
+results apply where the confirmed shot hit; that is logged as a misprediction
+of its kind (a `laser` correction). An event the confirmed world is 10 ticks
+past without confirming (the swing didn't happen there, or the avatar died)
+is given up and logged the same way. So is one the replay stops showing once
+a later command's event of its kind shows. A confirmed event with nothing
+presented for it (fired while a pile job was pending, for example) is
+presented when it arrives. Other players' events are presented when
+confirmed.
+
+Each kind has a miss policy. Laser and bow shots are `Keep`: what was
+presented stays. An event that starts something lasting would be `Cancel`:
+the presenter stops it when it misses, and presents the confirmed one
+instead. No event is `Cancel` yet; lasting effects are drawn from the
+predicted avatar's state instead.
 
 A shot fired from the predicted position ends where the confirmed one does
 unless the replay was wrong: an input the host moved to a later tick shifts
