@@ -150,3 +150,25 @@ It inherits `FollowRoute`, `body.radius`, and `health.breach_damage`, and draws 
 | Defender, machine, cart, item | No character definition | The scenario names a skin directly. |
 
 Each spawned character has its own position and other instance state. Scenario agents can also have different capacities and equipment while sharing a character definition. The character names a skin and the style supplies it, so one character can look different in each scene's style; [visual assets and characters](asset-system.md) explains the visual path. What a player can do comes from its character's `abilities`; whether the ground can be dug is the scene's `Digging` feature.
+
+## Next steps
+
+Character definitions are moving in steps, each its own PR against `master`. Steps 1 to 4 are done: characters carry their gameplay, haulers and abilities moved into them, and the `view` section builds and poses every player body through one path. Each step follows the same commit order:
+
+1. Extend the behaviour digest if the step needs it.
+2. Change the format.
+3. Read the definitions, with the golden file unchanged and bit-equality tests.
+4. Make gameplay changes last, each in its own commit.
+
+### Step 5: one set of actions for players and AI
+
+- **Actions:** one vocabulary (move, go to, attack, interact) that player commands and AI brains both produce. `CommandKind` variants stay append-only, so recorded input logs still replay.
+- **Haulers:** their `Phase` state machine emits actions instead of moving them directly.
+- **Threats:** they become characters with a `FollowRoute` brain. They keep their own table, for the 100k-entity budget, but each stores a `CharacterIx` instead of reaching its kind through its wave.
+- **Shared body:** `AgentState` splits into the body every agent has (position, heading, velocity, radius, health) plus data for each role. Cargo has three models today (hauler `cargo`, the avatar's `ManualJob`, pile jobs), and they merge here.
+- **Out of scope:** possession. Defenders stay as they are.
+
+### Open questions
+
+- **Threats attacking agents:** should ghouls attack agents, so the player can be hurt by them and not only by lasers? It is a gameplay change, so it gets its own commit.
+- **Where meshes live:** do styles stay the mesh and material libraries that a character's `view` refers to, or does each character carry its own meshes?
