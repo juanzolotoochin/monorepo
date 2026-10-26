@@ -1650,6 +1650,12 @@ mod tests {
         assert_no_corrections(&[("100 ± 20 ms", 100.0, 20.0, 0x5eed + 2)]);
     }
 
+    #[test]
+    #[ignore = "late inputs at 150±20 ms with the fixed 133 ms margin; enabled by adaptive input margin (LASER_PREDICTION_HANDOFF step 3)"]
+    fn joined_player_movement_needs_no_corrections_at_150_ms() {
+        assert_no_corrections(&[("150 ± 20 ms", 150.0, 20.0, 0x5eed + 3)]);
+    }
+
     /// Runs every movement scenario under each (name, one-way delay ms,
     /// ± jitter ms, relay seed) case and fails on any kept correction.
     fn assert_no_corrections(cases: &[(&str, f64, f64, u64)]) {
@@ -1750,6 +1756,12 @@ mod tests {
     #[ignore = "late inputs at 100±20 ms; enabled by adaptive input margin (LASER_PREDICTION_HANDOFF step 3)"]
     fn joined_player_laser_shots_are_predicted_at_100_ms() {
         assert_lasers_predicted(&[("100 ± 20 ms", 100.0, 20.0, 0x1a5e + 2)]);
+    }
+
+    #[test]
+    #[ignore = "late inputs at 150±20 ms with the fixed 133 ms margin; enabled by adaptive input margin (LASER_PREDICTION_HANDOFF step 3)"]
+    fn joined_player_laser_shots_are_predicted_at_150_ms() {
+        assert_lasers_predicted(&[("150 ± 20 ms", 150.0, 20.0, 0x1a5e + 3)]);
     }
 
     /// Runs every laser scenario in the laser pit under each (name, one-way
