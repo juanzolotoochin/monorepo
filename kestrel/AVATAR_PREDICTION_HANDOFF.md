@@ -156,6 +156,34 @@ corrections, as count (total distance, largest):
 | 100 ± 20 ms | zig-zag | clamp 2 (5.43, 5.14), ease 1 (0.90) | 0 |
 | 100 ± 20 ms | speed change | clamp 1 (0.97), ease 1 (0.90) | 1 (0.033 u) |
 
+### Result with prediction
+
+17 of 18 runs have no correction of any size, kept or not. The one kept
+correction is a late input:
+
+| Case | Scenario | Kept | Under 0.05 u | Late inputs (host) |
+|---|---|---|---|---|
+| no added delay (RTT 17 ms) | all six | none | 0 | 0 |
+| 75 ± 20 ms (RTT 175 ms) | all six | none | 0 | 0 |
+| 100 ± 20 ms (RTT 232 ms) | zig-zag | mispredict 1 (0.08) | 0 | 1 (1 tick) |
+| 100 ± 20 ms | the other five | none | 0 | 0 |
+
+At 100 ± 20 ms the fixed 133 ms margin is not always enough. The client asks
+for `host_tick + one_way + 8`. The input then needs a full one-way trip
+(80–120 ms), plus up to a frame waiting to be sent and a frame of polling on
+each side, before the host's tick passes it. When both directions are near
++20 ms at once, the host moves the input one tick later. The replay can't
+know that (D3), so it is a misprediction.
+
+Four more seeds per case, not committed, agree. At 75 ± 20 ms: no late
+inputs and no corrections of any size. At 100 ± 20 ms: every misprediction,
+kept or not, is in a scenario where the host reported a late input. 3 of 5
+seeds have one kept correction (0.08 to 0.25 u).
+
+So the test stays `#[ignore]`d with the pass condition unchanged. The adaptive
+input margin (`LASER_PREDICTION_HANDOFF.md`, C) should make it pass and let
+the ignore go.
+
 ## Step 2: prediction (agreed decisions)
 
 ### D1: draw at the input horizon, replaying in simulation ticks

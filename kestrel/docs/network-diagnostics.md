@@ -37,17 +37,43 @@ it is not a simulation replay or a desync capture.
 - **Host peers:** receipt acknowledgements, packet age, latest requested and
   assigned ticks, and per-world late-input counts and total ticks shifted.
   The host cannot infer a peer's current simulation tick from its receipt ack.
-- **Movement preview:** horizontal distance from the confirmed avatar, explicit
-  easing corrections, clamped frames, and distance-reset snaps. These are
-  view observations, not deterministic state mismatches. Initial avatar setup
-  does not count as a distance snap.
-- **Preview corrections:** consecutive frames pulled back the same way
-  (ease, clamp, or snap) form one correction. Corrections under 0.05 units are
-  dropped, except snaps. **Show corrections in the world** draws, for two
+- **Movement preview:** a client predicts its own avatar (see below). The
+  section shows the horizontal distance from the confirmed avatar (about one
+  input lead while moving), the last frame's misprediction, and counts of
+  mispredicted frames and snaps. These are view observations, not
+  deterministic state mismatches.
+- **Preview corrections:** a misprediction moves the drawn avatar; consecutive
+  mispredicted frames form one `mispredict` correction, whose distance is the
+  sum of each frame's starting error. A `snap` is a correction over 1.5 units.
+  Corrections under 0.05 units are dropped, except snaps, but their count and
+  total distance are shown. **Show corrections in the world** draws, for two
   seconds, a box where the avatar was drawn when the correction started and a
-  line to where it was pulled. The copied report lists them under
-  `preview_corrections`, with duration, distance, positions, local tick,
+  line to where the new prediction pulls it. The copied report lists them
+  under `preview_corrections`, with duration, distance, positions, local tick,
   pending inputs and RTT at the start.
+
+## Movement prediction
+
+A client's confirmed world runs about an input lead behind its input: the
+input margin, the round trip, and the jitter buffer, roughly 250 ms at 160 ms
+RTT. So the client draws its own avatar predicted. Every frame it replays the
+avatar from the confirmed world through the commands it sent that haven't
+applied yet, each on the tick it asked for, using the simulation's own
+per-avatar step ([`AvatarReplay`](../sim/src/settlement/prediction.rs)). The
+avatar is drawn at the input horizon, the tick a command sent now would apply
+on, so a key press shows within a frame or two. The drawn time follows the
+lowest recent horizon on the frame clock, so uneven packets don't move the
+avatar and new input never changes a tick already drawn. Remote players and
+everything else stay interpolated, so your avatar is drawn about an input lead
+ahead of them. See [the prediction](../app/src/prediction.rs).
+
+When the prediction for the drawn tick changes, the difference is kept as a
+visual offset that halves every 50 ms (or snaps past 1.5 units), and is logged
+as a `mispredict` correction. The replay can't know about late inputs the host
+moved to a later tick, hits and knockback, damage, pile jobs, terrain changed
+by anyone (your own digs included), respawning after death, or scene changes,
+so those still correct. Click-to-move isn't predicted: while one is pending,
+the confirmed avatar is drawn.
 
 Graphs use local monotonic wall time, with per-frame p95 values over the retained
 history. The slowest tick graph has no sample on frames without a tick.
