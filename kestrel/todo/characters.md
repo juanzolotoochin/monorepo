@@ -117,6 +117,22 @@
 - **Found in:** task 6 of `kestrel/ABILITY_PREDICTION_HANDOFF.md`
   (branch `kestrel-ability-prediction`).
 
+## Reuse the mirror's settlement copy for stage-5 detection
+
+- **Status:** open
+- **Why:** `prediction::StageFive` keeps the last confirmed settlement by
+  cloning it once per frame on clients, on top of the per-tick copies
+  `lockstep.rs` already takes for the mirror. In a large world that is a
+  second full settlement copy per frame.
+- **What to do:** hand `StageFive` the copy already taken (move it, or share
+  it behind an `Arc`) instead of cloning again; measure the client frame
+  time in a large scene before and after.
+- **Where:** `StageFive::observe` in `kestrel/app/src/prediction.rs`;
+  `observe_stage_five` and the session update closure in
+  `kestrel/app/src/lockstep.rs`.
+- **Found in:** task 6 of `kestrel/ABILITY_PREDICTION_HANDOFF.md`
+  (branch `kestrel-ability-prediction`).
+
 ## Done
 
 ### Remove the right-click movement leftovers
