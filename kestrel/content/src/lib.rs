@@ -516,6 +516,9 @@ mod tests {
         assert_eq!(view("ghoul_brute").skin.as_deref(), Some("ghoul_brute"));
         assert_eq!(view("runner").skin.as_deref(), Some("worker"));
         assert_eq!(view("exosuit").skin, None);
+        assert_eq!(view("exosuit").actor.as_deref(), Some("exosuit"));
+        assert_eq!(view("exosuit_moonlit").actor.as_deref(), Some("exosuit"), "actor merged in from the base");
+        assert_eq!(view("ghoul").actor, None);
         assert_eq!(view("exosuit").motion, character::CharacterMotion::default());
         let pit = view("exosuit_laser_pit").motion;
         assert!(pit.plant_feet && pit.motion_style == character::MotionStyle::Natural);
@@ -533,7 +536,9 @@ mod tests {
             let variant = format!("(base: \"exosuit\", sim: (), view: {view})");
             characters(&[("character/exosuit.ron", exosuit), ("character/x.ron", &variant)]).map_err(|e| e.message)
         };
-        assert!(variant("(skin: \"worker\")").unwrap_err().contains("scene's actor"));
+        assert!(variant("(skin: \"worker\")").unwrap_err().contains("view.actor, not view.skin"));
+        assert!(variant("(actor: \"no spaces\")").unwrap_err().contains("actor name"));
+        assert!(bad(&GHOUL.replace("\"ghoul\")", "\"ghoul\", actor: \"exosuit\")")).contains("only Player"));
         assert!(variant("(motion: (leg_reach: 5))").unwrap_err().contains("leg_reach"));
         assert!(variant("(motion: (arm_swing: -1))").unwrap_err().contains("view.motion"));
         assert!(variant("(motion: (walk_speed: 2))").unwrap_err().contains("walk_speed"), "speeds come from movement");

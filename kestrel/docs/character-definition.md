@@ -65,11 +65,12 @@ Abilities are moves the engine implements; the file picks them by name and tunes
 
 Commands for an ability the character lacks do nothing. A player with neither `Jump` nor `Jetpack` stays on the ground.
 
-The `view` section has two optional fields:
+The `view` section has three fields, each required or forbidden by role:
 
 | `view` field | Shape | Rule |
 | --- | --- | --- |
-| `skin` | Skin ID string, such as `"ghoul"` | Required for `FollowRoute` and `Hauler`; forbidden for `Player`, which the scene's actor draws. Every scene that spawns the character must have a style with that skin. |
+| `skin` | Skin ID string, such as `"ghoul"` | Required for `FollowRoute` and `Hauler`; forbidden for `Player`, which its `actor` draws. Every scene that spawns the character must have a style with that skin. |
+| `actor` | Actor name string, such as `"exosuit"` | Required for `Player`; forbidden otherwise. Names the articulated body the player is built from, a file in `kestrel/app/actors/`. |
 | `motion` | `(motion_style: Natural, arm_swing: 0.43, ...)` | Optional, `Player` only. Tunes how the rig poses; omitted fields keep their defaults. |
 
 `motion` holds `motion_style` (`Classic` or `Natural`), `arm_swing`, `leg_swing`, `torso_turn`, `pose_response`, `run_crouch`, `elbow_drive`, `step_lift`, `step_distance`, `plant_feet`, `leg_reach`, and `turn_inertia`; the [animation guide](character-animation.md) explains them. It has no speeds: the rig poses at the character's `movement` speeds, so what you see always matches how fast the simulation moves it. The rig a style bakes can still adapt the tuning, for example planting the feet of a legged actor.
@@ -98,11 +99,11 @@ The player uses the same outer file schema. Its `Player` brain requires `avatar`
             ),
         ),
     ),
-    view: (),
+    view: (actor: "exosuit"),
 )
 ```
 
-This is the built-in `exosuit` definition. Player health is a scenario rule, so it does not appear here.
+This is the built-in `exosuit` definition. Player health is a scenario rule, so it does not appear here. Its body is the `exosuit` actor, `kestrel/app/actors/exosuit.ron`: a tree of joints, each with a pivot relative to its parent and the boxes drawn on it. The player is posed by joint kind (`Body`, `LeftArm`, `RightHand`, `Weapon`, and so on), and a scene's style may replace any joint's boxes with its own baked meshes.
 
 Each scene names its player character with `player: "exosuit"`, and every player avatar in that scene uses it. A scenario's controlled agents must name the same character. The moonlit glade's player is `exosuit_moonlit`: it inherits `exosuit`, walks at 1.6 and runs at 2.6 m/s, lists `[Jump(prep: 8, land: 10, velocity: 4, gravity: 14), SwiftSword]` instead of the jetpack and dig, and sets its own `view.motion`. The laser pit's `exosuit_laser_pit` changes only `view.motion`, for a planted-foot gait: a scene that wants a different feel uses a character variant.
 
@@ -143,7 +144,7 @@ It inherits `FollowRoute`, `body.radius`, and `health.breach_damage`, and draws 
 
 | Object | Character definition | Visual selection |
 | --- | --- | --- |
-| Player avatar | The scene's `player`, such as `exosuit` | The scene's actor style dresses the player rig; the character's `view.motion` tunes its pose. |
+| Player avatar | The scene's `player`, such as `exosuit` | The character's `view.actor` builds the body, the scene's style may re-dress its joints, and `view.motion` tunes its pose. |
 | Wave enemy | A kind such as `ghoul_forest` | The character's `view.skin`, from the scene's style. |
 | Hauler | A kind such as `worker`, `runner`, or `ox` | The character's `view.skin`, from the scene's style. |
 | Defender, machine, cart, item | No character definition | The scenario names a skin directly. |

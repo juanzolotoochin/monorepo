@@ -174,8 +174,12 @@ pub struct AttackTiming {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CharacterView {
     /// The style skin that draws it, by id. Every character but a Player has
-    /// one; a Player is drawn by the scene's actor.
+    /// one; a Player is drawn by its `actor`.
     pub skin: Option<String>,
+    /// The articulated body a Player is built from, by name (an actor file
+    /// in the app, such as `actors/exosuit.ron`). Styles may re-dress its
+    /// joints. Players only.
+    pub actor: Option<String>,
     /// How a Player's rig poses. Its walk and run speeds are the character's
     /// `movement`, so the view can't pose other speeds than it moves at.
     pub motion: CharacterMotion,
@@ -249,6 +253,7 @@ pub(crate) struct CharacterFile {
 #[serde(deny_unknown_fields, default)]
 pub(crate) struct ViewFile {
     skin: Option<String>,
+    actor: Option<String>,
     motion: Option<MotionFile>,
 }
 
@@ -384,7 +389,7 @@ merge_fields!(MovementFile { walk, run } {});
 merge_fields!(HealthFile { hp, armor, breach_damage } {});
 merge_fields!(AvatarFile { acceleration, braking, attack_braking } { attack });
 merge_fields!(AttackFile { windup, aim, swing, sword_windup, sword_swing, rebound, combo_window } {});
-merge_fields!(ViewFile { skin } { motion });
+merge_fields!(ViewFile { skin, actor } { motion });
 merge_fields!(MotionFile {
     motion_style, arm_swing, leg_swing, torso_turn, pose_response, run_crouch,
     elbow_drive, step_lift, step_distance, plant_feet, leg_reach, turn_inertia
@@ -469,9 +474,15 @@ pub(crate) fn character_def(file: SimFile) -> Result<CharacterDef, String> {
 pub(crate) fn character_view(file: ViewFile, def: &CharacterDef) -> Result<CharacterView, String> {
     let player = def.brain == Brain::Player;
     match &file.skin {
-        Some(_) if player => return Err("a Player character is drawn by the scene's actor, not view.skin".into()),
+        Some(_) if player => return Err("a Player character is drawn by its view.actor, not view.skin".into()),
         Some(skin) if !crate::scenario::ident(skin) => return Err("view.skin must be a skin id".into()),
         None if !player => return Err("missing view.skin (here or in a base)".into()),
+        _ => {}
+    }
+    match &file.actor {
+        Some(_) if !player => return Err("only Player characters have view.actor".into()),
+        Some(actor) if !crate::scenario::ident(actor) => return Err("view.actor must be an actor name".into()),
+        None if player => return Err("missing view.actor (here or in a base)".into()),
         _ => {}
     }
     if file.motion.is_some() && !player {
@@ -505,7 +516,7 @@ pub(crate) fn character_view(file: ViewFile, def: &CharacterDef) -> Result<Chara
     if !(0.2..=2.0).contains(&motion.leg_reach) {
         return Err("view.motion.leg_reach must be in [0.2, 2]".into());
     }
-    Ok(CharacterView { skin: file.skin, motion })
+    Ok(CharacterView { skin: file.skin, actor: file.actor, motion })
 }
 
 fn ability_def(file: AbilityFile) -> Result<Ability, String> {
