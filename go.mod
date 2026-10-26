@@ -8,8 +8,10 @@ require (
 	github.com/bazelbuild/rules_go v0.63.0
 	github.com/docker/docker v25.0.2+incompatible
 	github.com/google/go-github/v38 v38.1.0
+	github.com/klauspost/compress v1.18.5
 	github.com/spf13/cobra v1.7.0
 	github.com/stretchr/testify v1.11.1
+	golang.org/x/crypto v0.44.0
 	golang.org/x/image v0.18.0
 	golang.org/x/oauth2 v0.32.0
 )
@@ -53,7 +55,6 @@ require (
 	go.opentelemetry.io/otel/metric v1.39.0 // indirect
 	go.opentelemetry.io/otel/sdk v1.39.0 // indirect
 	go.opentelemetry.io/otel/trace v1.39.0 // indirect
-	golang.org/x/crypto v0.44.0 // indirect
 	golang.org/x/mod v0.29.0 // indirect
 	golang.org/x/sync v0.18.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect

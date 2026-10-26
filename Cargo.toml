@@ -29,8 +29,7 @@ bevy_egui = { version = "=0.43.1", default-features = false, features = ["render
 [lib]
 path = "bazel/cargo_manifest_lib.rs"
 
-# Kestrel's native controller backend, on Windows only for the first
-# controller milestone (kestrel/docs/controller-support.md). Linux would
-# also need libudev, which the hermetic toolchain doesn't provide.
-[target.'cfg(windows)'.dependencies]
+# Kestrel's native controller backend on Windows and Linux. Bazel supplies
+# libudev to the Linux build through a pinned shared library.
+[target.'cfg(any(windows, target_os = "linux"))'.dependencies]
 bevy_gilrs = "=0.20.0"

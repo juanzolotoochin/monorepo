@@ -1,6 +1,6 @@
 # Controller support
 
-The front end turns controller input into the same simulation commands used by keyboard and mouse. Device identities, analog values, dead zones, and UI navigation stay outside the deterministic simulation. The current native gamepad backend is available on Windows; synthetic input supports automated tests without a physical controller. Physical USB-controller behavior has not been validated.
+The front end turns controller input into the same simulation commands used by keyboard and mouse. Device identities, analog values, dead zones, and UI navigation stay outside the deterministic simulation. The native gamepad backend is available on Windows and Linux; synthetic input supports automated tests without a physical controller. Physical controller behavior still needs validation on each device.
 
 ## Input path
 
@@ -64,7 +64,7 @@ A interacts with the selected pile, depot, collector, dispenser, or machine acco
 
 ## Platform and verification boundaries
 
-The Windows native reader maps Bevy gamepad buttons and axes to snapshots. Linux and browser builds have no native controller backend. Synthetic scenarios exercise claiming, takeover, dead zones, aim, attack edges, menus, logistics, pause, disconnect, replay, and different render rates without hardware. Native mapping has a code-level test; physical discovery, button feel, and disconnect behavior on a USB controller remain unverified.
+The Windows and Linux native reader maps Bevy gamepad buttons and axes to snapshots. Browser builds have no native controller backend. Synthetic scenarios exercise claiming, takeover, dead zones, aim, attack edges, menus, logistics, pause, disconnect, replay, and different render rates without hardware. Native mapping has a code-level test; physical button feel and disconnect behavior remain to be verified.
 
 | Concern | Source |
 | --- | --- |

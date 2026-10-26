@@ -44,8 +44,16 @@ pub(super) fn snapshot(entity: Entity, gamepad: &Gamepad) -> GamepadSnapshot {
 
 /// Bevy keeps a `Gamepad` entity per connected controller; a disconnected
 /// one loses the component, and so drops out of the snapshots.
-pub(super) fn read(gamepads: Query<(Entity, &Gamepad)>, mut snapshots: ResMut<GamepadSnapshots>) {
+pub(super) fn read(
+    gamepads: Query<(Entity, &Gamepad)>,
+    mut snapshots: ResMut<GamepadSnapshots>,
+    mut previous_count: Local<usize>,
+) {
     snapshots.0 = gamepads.iter().map(|(entity, gamepad)| snapshot(entity, gamepad)).collect();
+    if snapshots.0.len() != *previous_count {
+        info!("Native gamepads detected: {}", snapshots.0.len());
+        *previous_count = snapshots.0.len();
+    }
 }
 
 #[cfg(test)]

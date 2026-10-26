@@ -1,0 +1,23 @@
+load("@rules_cc//cc:cc_import.bzl", "cc_import")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("//third_party/x11:extract_library.bzl", "extract_library")
+
+package(default_visibility = ["//visibility:public"])
+
+extract_library(
+    name = "libudev_so",
+    archive = "@debian13//libudev1:data",
+    library = "udev",
+    soname = "libudev.so.1",
+)
+
+cc_import(
+    name = "udev_import",
+    shared_library = ":libudev_so",
+)
+
+cc_library(
+    name = "udev",
+    linkopts = ["-Wl,--allow-shlib-undefined"],
+    deps = [":udev_import"],
+)

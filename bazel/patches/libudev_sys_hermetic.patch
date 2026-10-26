@@ -1,0 +1,14 @@
+--- a/build.rs
++++ b/build.rs
+@@ -38,1 +38,1 @@
+-    pkg_config::find_library("libudev").unwrap();
++    println!("cargo:rustc-link-lib=udev");
+@@ -40,7 +40,1 @@
+-    if check_func("udev_hwdb_new") {
+-        println!("cargo:rustc-cfg=hwdb");
+-        println!("cargo:hwdb=true");
+-    }
+-    else {
+-        println!("cargo:hwdb=false");
+-    }
++    println!("cargo:hwdb=false");

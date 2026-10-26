@@ -1,8 +1,8 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_test")
 load("@rules_python//python:defs.bzl", "py_test")
 load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
 load("@rules_rs//rs:rust_test.bzl", "rust_test")
-load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("//kestrel/build/game_demo:defs.bzl", "game_demo", "game_simulation_test", "studio_demo")
 
 alias(
@@ -61,15 +61,16 @@ rust_binary(
         "@crates//:web-time",
         "@crates//:wasm-bindgen",
     ] + select({
-        # The native controller backend (see input/native.rs): Windows only.
+        # The native controller backend (see input/native.rs).
         "@platforms//os:windows": ["@crates//:bevy_gilrs"],
+        "@platforms//os:linux": ["@crates//:bevy_gilrs"],
         "//conditions:default": [],
     }),
 )
 
-sh_binary(
-    name = "steam_deck",
-    srcs = ["steam_deck.sh"],
+go_binary(
+    name = "steamdeck",
+    srcs = ["steamdeck.go"],
     args = [
         "$(rlocationpath :demo)",
         "$(rlocationpath deck_launch.sh)",
@@ -78,6 +79,29 @@ sh_binary(
         ":demo",
         "deck_launch.sh",
     ],
+    deps = [
+        "@com_github_klauspost_compress//zstd",
+        "@org_golang_x_crypto//ssh",
+        "@org_golang_x_crypto//ssh/agent",
+        "@org_golang_x_crypto//ssh/knownhosts",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "steamdeck_test",
+    srcs = ["steamdeck.go", "steamdeck_test.go"],
+    deps = [
+        "@com_github_klauspost_compress//zstd",
+        "@org_golang_x_crypto//ssh",
+        "@org_golang_x_crypto//ssh/agent",
+        "@org_golang_x_crypto//ssh/knownhosts",
+    ],
+)
+
+alias(
+    name = "steam_deck",
+    actual = ":steamdeck",
     visibility = ["//visibility:public"],
 )
 
@@ -149,6 +173,9 @@ py_test(
 rust_test(
     name = "movement_test",
     size = "medium",
+    # The Linux gamepad backend loads libudev.so.1 at runtime, which the
+    # remote test workers do not provide.
+    tags = ["local"],
     # The controller tests read the sample synthetic scenario.
     compile_data = ["//:Cargo.toml", "demos/controller_field.gamepad.json"],
     crate = ":demo",
