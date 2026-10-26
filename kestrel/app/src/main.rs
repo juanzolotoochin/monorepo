@@ -130,6 +130,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
     use bevy::{app::ScheduleRunnerPlugin, time::TimeUpdateStrategy};
     use std::time::Duration;
     let simulation = options.simulation;
+    let fullscreen = options.fullscreen;
     let offscreen = options.frames_dir.is_some();
     let fps = options.fps();
     let deterministic = simulation || options.script.is_some() || options.studio_frames.is_some();
@@ -190,9 +191,15 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
             1.0 / f64::from(fps),
         )));
     } else {
+        #[allow(unused_mut)] // The wasm canvas configuration below mutates it.
         let mut window = Window {
             title: "KESTREL // 07 — WASD: move · Shift: run · Left click: strike · M: sound".into(),
             resolution: (1440, 960).into(),
+            mode: if fullscreen {
+                bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary)
+            } else {
+                bevy::window::WindowMode::Windowed
+            },
             ..default()
         };
         #[cfg(target_arch = "wasm32")]
@@ -204,9 +211,9 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
             primary_window: Some(window),
             ..default()
         }));
-        // Native controllers: Windows only for now (see input/native.rs).
+        // Native controllers on Linux and Windows (see input/native.rs).
         // A synthetic scenario (`--gamepad-script`) takes their place.
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         app.add_plugins(bevy_gilrs::GilrsPlugin);
     }
     if !simulation {

@@ -102,12 +102,14 @@ ssh-copy-id deck@steamdeck.local
 ssh -o BatchMode=yes deck@steamdeck.local true
 ```
 
-`ssh-copy-id` asks for the Deck password once. The Bazel launcher uses
-noninteractive SSH, so the second command must succeed before running it. Then
+`ssh-copy-id` asks for the Deck password once. The Go launcher uses your SSH
+agent or a default private key (`~/.ssh/id_ed25519`, `id_ecdsa`, or `id_rsa`)
+and verifies the Deck against `~/.ssh/known_hosts`. The second command must
+succeed before running it. Then
 run:
 
 ```sh
-bazel run -c opt //kestrel/app:steam_deck
+bazel run --config=remote -c opt //kestrel/app:steamdeck
 ```
 
 The target connects to `deck@steamdeck.local` by default. If the Deck has a
@@ -115,16 +117,44 @@ different name or `steamdeck.local` does not resolve on your network, set
 `STEAM_DECK_TARGET=user@host` before the command. The target builds
 the Linux game, copies it to `~/.local/opt/kestrel/` on the Deck, and starts it
 in the active desktop session. The game's scene assets and synthesized audio
-are embedded in the executable. To start a particular scene, append game
+are embedded in the executable. The game binary is compressed during the SSH
+transfer with zstd (installed on the Deck), which shows bytes processed,
+percentage, compressed bytes sent, and SSH payload speed in the terminal.
+The direct Desktop Mode launch accepts the Deck's arrow-key and Enter mappings
+for menu navigation as well as native gamepad input. No Steam shortcut is
+needed for this launch.
+To start a particular scene, append game
 arguments after `--`:
 
 ```sh
-bazel run -c opt //kestrel/app:steam_deck -- --scene moonlit-glade
+bazel run --config=remote -c opt //kestrel/app:steamdeck -- --scene moonlit-glade
 ```
 
 Use `-- --dry-run` to check the target and runfiles without connecting. The
+running game can be stopped from this machine with
+`bazel run --config=remote -c opt //kestrel/app:steamdeck -- --stop`.
 Deck writes startup output to `~/.local/opt/kestrel/last-run.log`. The launcher
 requires a running Desktop Mode session and does not start Steam Gaming Mode.
+
+For a per-game Steam Input layout, upload without launching:
+
+```sh
+bazel run --config=remote -c opt //kestrel/app:steamdeck -- --install-only
+```
+
+On the Deck, open Steam in Desktop Mode and choose **Games → Add a Non-Steam
+Game to My Library**. Browse to `/home/deck/.local/opt/kestrel/demo`. In that
+shortcut's Properties, set Launch Options to `--fullscreen --auto-claim-gamepad`.
+Launch Kestrel from Steam and choose a Gamepad controller layout for that
+shortcut. Once it appears in Steam, this command updates the same executable
+and asks Steam to launch its shortcut from this computer:
+
+```sh
+bazel run --config=remote -c opt //kestrel/app:steamdeck -- --steam
+```
+
+The Steam shortcut remains valid across updates. Steam must be running in
+Desktop Mode for the remote launch.
 
 ## Launch menu
 

@@ -461,7 +461,8 @@ pub fn update(
             continue;
         }
         match key.key_code {
-            KeyCode::Enter | KeyCode::NumpadEnter => start = true,
+            KeyCode::Enter | KeyCode::NumpadEnter if menu.pad_focus.is_none() || menu.focus.is_some() => start = true,
+            KeyCode::Enter | KeyCode::NumpadEnter => {}
             KeyCode::Escape if menu.focus.is_some() => menu.focus = None,
             KeyCode::Escape => {
                 exit.write(AppExit::Success);

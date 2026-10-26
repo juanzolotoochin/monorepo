@@ -25,12 +25,34 @@ if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
 fi
 
 cd "$directory"
-nohup ./demo "$@" >last-run.log 2>&1 </dev/null &
-game_pid=$!
+environment=()
+for name in DISPLAY WAYLAND_DISPLAY XAUTHORITY XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS XDG_SESSION_TYPE; do
+    if [[ -v "$name" ]]; then
+        environment+=("--setenv=$name=${!name}")
+    fi
+done
+if [[ "${1:-}" == "--steam" ]]; then
+    game_id="${2:?missing Steam shortcut ID}"
+    [[ "$game_id" =~ ^[0-9]+$ ]] || { echo "Invalid Steam shortcut ID." >&2; exit 1; }
+    systemd-run --user --unit="kestrel-steam-launch-$(date +%s)-$$" --collect \
+        "${environment[@]}" -- /usr/bin/steam "steam://rungameid/$game_id"
+    echo "Sent Kestrel launch request to Steam (shortcut $game_id)."
+    exit 0
+fi
+: >last-run.log
+unit="kestrel-game"
+systemctl --user stop "$unit.service" 2>/dev/null || true
+systemd-run --user --unit="$unit" --collect \
+    --property="WorkingDirectory=$directory" \
+    --property="StandardOutput=append:$directory/last-run.log" \
+    --property="StandardError=append:$directory/last-run.log" \
+    "${environment[@]}" -- "$directory/demo" --fullscreen --auto-claim-gamepad "$@"
 sleep 1
-if ! kill -0 "$game_pid" 2>/dev/null; then
+if ! systemctl --user is-active --quiet "$unit.service"; then
     echo "Kestrel exited during startup; see $directory/last-run.log on the Deck." >&2
     tail -n 20 last-run.log >&2
     exit 1
 fi
-echo "Kestrel started on the Deck (PID $game_pid; log: $directory/last-run.log)."
+game_pid="$(systemctl --user show --value -p MainPID "$unit.service")"
+echo "Kestrel started on the Deck (PID $game_pid; unit: $unit.service; log: $directory/last-run.log)."
+echo "Stop it with: bazel run --config=remote -c opt //kestrel/app:steamdeck -- --stop"

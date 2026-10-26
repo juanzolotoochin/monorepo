@@ -1143,8 +1143,39 @@ fn cancel_logistics_is_explicit_and_separate_from_release() {
     assert_eq!(game.count(|c| matches!(c, CommandKind::CancelTransfer { .. })), 1);
 }
 
-/// The launch menu and the pause overlay with only a controller: claim,
-/// pick a scene, start, pause, and leave.
+/// The Deck's single controller can navigate the launch menu immediately.
+#[test]
+fn sole_gamepad_navigates_the_deck_menu_without_a_claim_press() {
+    let mut options = Game::options(true);
+    options.auto_claim_gamepad = true;
+    let hub = crate::control::Hub::new(options.clone()).unwrap();
+    let library = crate::assets::SceneLibrary::new();
+    let mut app = crate::test_front_app(options, library, hub, None);
+    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f64(1.0 / 60.0)));
+    app.insert_resource(SyntheticGamepads::default());
+    let mut game = Game { app, fps: 60.0 };
+    game.pads().connect(1);
+    game.frames(3);
+    assert_eq!(game.app.world().resource::<InputService>().seat(), Some(1));
+    assert_eq!(game.app.world().resource::<crate::menu::MainMenu>().pad_focus, Some(crate::menu::Action::Start));
+    game.pads().left_stick(1, Vec2::NEG_Y);
+    game.frames(1);
+    assert_eq!(game.app.world().resource::<crate::menu::MainMenu>().pad_focus, Some(crate::menu::Action::Viewer));
+    // Steam's Desktop layout may send arrows and Enter instead of gamepad
+    // events. They navigate the same focused menu without launching Start.
+    game.pads().left_stick(1, Vec2::ZERO);
+    game.frames(1);
+    game.app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::ArrowDown);
+    game.frames(1);
+    assert_eq!(game.app.world().resource::<crate::menu::MainMenu>().pad_focus, Some(crate::menu::Action::Quit));
+    let scene = (game.app.world().resource::<crate::menu::MainMenu>().selected_scene() + 1)
+        % game.app.world().resource::<crate::assets::SceneLibrary>().scenes.len();
+    game.app.world_mut().resource_mut::<crate::menu::MainMenu>().pad_focus = Some(crate::menu::Action::Scene(scene));
+    game.app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
+    game.frames(1);
+    assert_eq!(game.app.world().resource::<crate::menu::MainMenu>().selected_scene(), scene);
+}
+
 #[test]
 fn the_menu_and_pause_work_with_a_controller() {
     let options = Game::options(true);

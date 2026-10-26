@@ -41,6 +41,10 @@ pub struct Options {
     pub gamepad_script: Option<crate::input::synthetic::GamepadScript>,
     /// Tests: the main menu and pause overlay run in a simulation run too.
     pub headless_menus: bool,
+    /// Open the interactive game on the primary monitor without window borders.
+    pub fullscreen: bool,
+    /// Use the sole connected controller without a separate Menu claim press.
+    pub auto_claim_gamepad: bool,
 }
 impl Options {
     pub fn from_args(args: &[String]) -> Result<Self, String> {
@@ -76,6 +80,8 @@ impl Options {
                 .map(|path| std::fs::read(path).map_err(|e| format!("{path}: {e}")).and_then(|bytes| crate::input::synthetic::GamepadScript::from_json(&bytes)))
                 .transpose()?,
             headless_menus: false,
+            fullscreen: args.iter().any(|arg| arg == "--fullscreen"),
+            auto_claim_gamepad: args.iter().any(|arg| arg == "--auto-claim-gamepad"),
         };
         if options.frames_dir.is_some()
             && ((options.script.is_none() && options.studio_frames.is_none()) || options.simulation)

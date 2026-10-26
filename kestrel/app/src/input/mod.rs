@@ -278,8 +278,32 @@ impl Service for InputService {
     }
 }
 
-fn sample(time: Res<Time>, snapshots: Res<GamepadSnapshots>, mut game: ResMut<GameInput>, mut input: ResMut<InputService>) {
+fn sample(
+    time: Res<Time>,
+    snapshots: Res<GamepadSnapshots>,
+    options: Res<crate::control::Options>,
+    mut game: ResMut<GameInput>,
+    mut input: ResMut<InputService>,
+) {
+    if options.auto_claim_gamepad && input.seat.is_none() && snapshots.0.len() == 1 && snapshots.0[0].connected {
+        input.seat = Some(snapshots.0[0].device);
+    }
     input.sample(&game, &snapshots.0, time.delta_secs());
+    // Steam's Desktop layout can send D-pad and left-stick directions as
+    // keyboard arrows instead of virtual gamepad events when launched over SSH.
+    if options.auto_claim_gamepad {
+        let keys = game.keys();
+        input.frame.ui.nav = [
+            (KeyCode::ArrowUp, Nav::Up),
+            (KeyCode::ArrowDown, Nav::Down),
+            (KeyCode::ArrowLeft, Nav::Left),
+            (KeyCode::ArrowRight, Nav::Right),
+        ]
+        .into_iter()
+        .find_map(|(key, nav)| keys.just_pressed(key).then_some(nav))
+        .or(input.frame.ui.nav);
+        input.frame.ui.confirm |= keys.any_just_pressed([KeyCode::Enter, KeyCode::NumpadEnter]);
+    }
     if input.panel.is_some() {
         // A panel has gameplay: held keys end once, like under pause.
         game.block();
