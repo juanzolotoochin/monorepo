@@ -2,7 +2,7 @@
 //! MIDI input is local presentation: it never changes lockstep game state.
 use bevy::prelude::*;
 use service::WorldScoped;
-use voxel_assets::Scene;
+use voxel_assets::{Scene, ScenePack};
 
 use crate::{control::Options, lockstep::SessionService, scene_view::SceneView, sound::Sound};
 
@@ -14,13 +14,49 @@ const REACH: f32 = 2.8;
 pub struct PianoInput {
     held: [bool; 128],
     connected: bool,
+    active: Option<usize>,
 }
 impl Default for PianoInput {
-    fn default() -> Self { Self { held: [false; 128], connected: false } }
+    fn default() -> Self { Self { held: [false; 128], connected: false, active: None } }
 }
 
 #[derive(Component)]
-pub(crate) struct PianoKey { pitch: usize, rest: Vec3 }
+pub(crate) struct PianoKey { piano: usize, pitch: usize, rest: Vec3, yaw: Quat, scale: Vec3 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Condition { health: [u16; 3], max: [u16; 3] }
+impl Default for Condition {
+    fn default() -> Self { Self { health: [1; 3], max: [1; 3] } }
+}
+impl Condition {
+    fn segment(pitch: usize) -> usize { pitch * 3 / KEYS }
+    fn tone(self, pitch: usize) -> Option<u8> {
+        let segment = Self::segment(pitch);
+        let (health, max) = (self.health[segment], self.max[segment]);
+        if health == 0 || (u32::from(health) * 3 <= u32::from(max) && pitch % 3 == 0) { None }
+        else if health == max { Some(0) }
+        else if u32::from(health) * 3 <= u32::from(max) { Some(2) }
+        else { Some(1) }
+    }
+}
+
+fn condition(pack: &ScenePack, terrain: Option<&sim::terrain::Terrain>, piano: usize) -> Condition {
+    let Some(id) = pack.scene.pianos[piano].damage_asset.as_ref() else { return Condition::default(); };
+    let Some(asset) = pack.scene.destructibles.iter().position(|cover| cover.id.as_ref() == Some(id)) else {
+        return Condition::default();
+    };
+    let mut pieces: Vec<_> = pack.destructibles.iter().enumerate()
+        .filter(|(_, piece)| usize::from(piece.asset) == asset)
+        .collect();
+    pieces.sort_by(|a, b| a.1.center[0].total_cmp(&b.1.center[0]));
+    let mut state = Condition::default();
+    for (segment, (index, piece)) in pieces.into_iter().take(3).enumerate() {
+        state.max[segment] = piece.health;
+        state.health[segment] = terrain.and_then(|t| t.destructibles.get(index))
+            .map_or(piece.health, |state| state.health);
+    }
+    state
+}
 
 fn visible_key(note: u8) -> usize {
     (i32::from(note) - FIRST).rem_euclid(KEYS as i32) as usize
@@ -29,13 +65,16 @@ fn visible_key(note: u8) -> usize {
 fn black(pitch: i32) -> bool { matches!(pitch % 12, 1 | 3 | 6 | 8 | 10) }
 
 fn box_part(world: &mut World, at: Vec3, yaw: Quat, offset: Vec3, size: Vec3,
-            mesh: Handle<Mesh>, material: Handle<StandardMaterial>, key: Option<usize>) {
+            mesh: Handle<Mesh>, material: Handle<StandardMaterial>, key: Option<(usize, usize)>) {
     let mut entity = world.spawn((
         Mesh3d(mesh), MeshMaterial3d(material),
         Transform::from_translation(at + yaw * offset).with_rotation(yaw).with_scale(size),
+        Visibility::Inherited,
         WorldScoped::default(),
     ));
-    if let Some(pitch) = key { entity.insert(PianoKey { pitch, rest: at + yaw * offset }); }
+    if let Some((piano, pitch)) = key {
+        entity.insert(PianoKey { piano, pitch, rest: at + yaw * offset, yaw, scale: size });
+    }
 }
 
 pub fn spawn(world: &mut World, scene: &Scene) {
@@ -48,18 +87,24 @@ pub fn spawn(world: &mut World, scene: &Scene) {
     let ebony = mats.add(Color::srgb(0.055, 0.065, 0.085));
     let brass = mats.add(Color::srgb(0.73, 0.54, 0.20));
     let felt = mats.add(Color::srgb(0.34, 0.055, 0.095));
-    for piano in &scene.pianos {
+    for (piano_index, piano) in scene.pianos.iter().enumerate() {
         let at = Vec3::from_array(piano.position);
         let yaw = Quat::from_rotation_y(piano.yaw);
         let mut part = |offset: Vec3, size: Vec3, material: Handle<StandardMaterial>| {
             box_part(world, at, yaw, offset, size, cube.clone(), material, None);
         };
-        // Upright cabinet, full-width music desk, two front legs and pedals.
-        part(Vec3::new(0.0, 1.14, -0.46), Vec3::new(2.75, 1.95, 0.32), lacquer.clone());
-        part(Vec3::new(0.0, 1.99, -0.30), Vec3::new(2.85, 0.12, 0.63), rim.clone());
-        part(Vec3::new(0.0, 1.08, -0.16), Vec3::new(2.78, 0.60, 0.50), lacquer.clone());
-        part(Vec3::new(0.0, 0.87, 0.16), Vec3::new(2.78, 0.12, 0.87), rim.clone());
-        part(Vec3::new(0.0, 1.48, -0.24), Vec3::new(1.15, 0.07, 0.25), brass.clone());
+        // Damaged pianos get their cabinet from destructible scene geometry;
+        // the chassis, pedals and interactive keys remain in this adapter.
+        if piano.damage_asset.is_none() {
+            part(Vec3::new(0.0, 1.14, -0.46), Vec3::new(2.75, 1.95, 0.32), lacquer.clone());
+            part(Vec3::new(0.0, 1.99, -0.30), Vec3::new(2.85, 0.12, 0.63), rim.clone());
+            part(Vec3::new(0.0, 1.08, -0.16), Vec3::new(2.78, 0.60, 0.50), lacquer.clone());
+            part(Vec3::new(0.0, 0.87, 0.16), Vec3::new(2.78, 0.12, 0.87), rim.clone());
+            part(Vec3::new(0.0, 1.48, -0.24), Vec3::new(1.15, 0.07, 0.25), brass.clone());
+        } else {
+            part(Vec3::new(0.0, 0.17, -0.36), Vec3::new(2.78, 0.22, 0.42), lacquer.clone());
+            part(Vec3::new(0.0, 0.87, 0.16), Vec3::new(2.78, 0.12, 0.87), rim.clone());
+        }
         for side in [-1.0_f32, 1.0] {
             part(Vec3::new(side * 1.20, 0.38, 0.15), Vec3::new(0.20, 0.76, 0.26), lacquer.clone());
         }
@@ -75,7 +120,7 @@ pub fn spawn(world: &mut World, scene: &Scene) {
             let x = -1.21 + (white_before as f32 + 0.5) * white_width;
             let offset = Vec3::new(x, 0.96, 0.22);
             box_part(world, at, yaw, offset, Vec3::new(white_width - 0.009, 0.09, 0.53),
-                cube.clone(), ivory.clone(), Some(pitch));
+                cube.clone(), ivory.clone(), Some((piano_index, pitch)));
             white_before += 1;
         }
         let mut white_before = 0;
@@ -84,7 +129,7 @@ pub fn spawn(world: &mut World, scene: &Scene) {
             let x = -1.21 + white_before as f32 * white_width;
             let offset = Vec3::new(x, 1.04, 0.08);
             box_part(world, at, yaw, offset, Vec3::new(white_width * 0.58, 0.14, 0.30),
-                cube.clone(), ebony.clone(), Some(pitch));
+                cube.clone(), ebony.clone(), Some((piano_index, pitch)));
         }
     }
 }
@@ -93,24 +138,27 @@ pub fn release(world: &mut World) {
     let held: Vec<u8> = world.resource::<PianoInput>().held.iter().enumerate()
         .filter_map(|(note, held)| held.then_some(note as u8)).collect();
     for note in held { world.resource::<Sound>().note(note, 0); }
-    world.resource_mut::<PianoInput>().held.fill(false);
+    let mut input = world.resource_mut::<PianoInput>();
+    input.held.fill(false);
+    input.active = None;
 }
 
-fn nearby(scene: &Scene, player: Vec3) -> bool {
-    scene.pianos.iter().any(|piano| {
+fn nearby(scene: &Scene, player: Vec3) -> Option<usize> {
+    scene.pianos.iter().enumerate().filter_map(|(index, piano)| {
         let delta = Vec3::from_array(piano.position) - player;
-        Vec2::new(delta.x, delta.z).length() < REACH
-    })
+        let distance = Vec2::new(delta.x, delta.z).length();
+        (distance < REACH).then_some((index, distance))
+    }).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(index, _)| index)
 }
 
-fn input_note(input: &mut PianoInput, sound: &Sound, note: u8, velocity: u8, can_play: bool) {
+fn input_note(input: &mut PianoInput, sound: &Sound, note: u8, velocity: u8, tone: Option<u8>, can_play: bool) {
     let index = usize::from(note);
     if velocity == 0 {
         if input.held[index] { sound.note(note, 0); }
         input.held[index] = false;
     } else if can_play {
         input.held[index] = true;
-        sound.note(note, velocity);
+        if let Some(damage) = tone { sound.note_damaged(note, velocity, damage); }
     }
 }
 
@@ -198,15 +246,26 @@ pub struct MidiPoll {
 pub fn update(
     scene: Res<SceneView>, options: Res<Options>, session: Res<SessionService>, sound: Res<Sound>,
     mut input: ResMut<PianoInput>, mut poll: Local<MidiPoll>,
-    mut keys: Query<(&PianoKey, &mut Transform)>,
+    mut keys: Query<(&PianoKey, &mut Transform, &mut Visibility)>,
 ) {
     if scene.scene().pianos.is_empty() {
         for n in 0..128 {
-            if input.held[n] { input_note(&mut input, &sound, n as u8, 0, false); }
+            if input.held[n] { input_note(&mut input, &sound, n as u8, 0, None, false); }
         }
+        input.active = None;
         return;
     }
-    let can_play = session.player_view_position().is_some_and(|at| nearby(scene.scene(), at));
+    let active = session.player_view_position().and_then(|at| nearby(scene.scene(), at));
+    if active != input.active {
+        for n in 0..128 {
+            if input.held[n] { input_note(&mut input, &sound, n as u8, 0, None, false); }
+        }
+        input.active = active;
+    }
+    let conditions: Vec<_> = (0..scene.scene().pianos.len())
+        .map(|index| condition(&scene.pack, session.world().map(|world| world.terrain()), index))
+        .collect();
+    let can_play = active.is_some();
     #[cfg(target_os = "linux")]
     if !options.simulation && options.frames_dir.is_none() {
         poll.frame = poll.frame.wrapping_add(1);
@@ -217,14 +276,15 @@ pub fn update(
         if let Some(midi) = &mut poll.midi {
             midi.drain(|status, note, velocity| {
                 match status & 0xf0 {
-                    0x80 => input_note(&mut input, &sound, note, 0, can_play),
-                    0x90 => input_note(&mut input, &sound, note, velocity, can_play),
+                    0x80 => input_note(&mut input, &sound, note, 0, None, can_play),
+                    0x90 => input_note(&mut input, &sound, note, velocity,
+                        active.and_then(|index| conditions[index].tone(visible_key(note))), can_play),
                     // All notes off / all sound off.
                     0xb0 if note == 120 || note == 123 => {
-                        for n in 0..128 { input_note(&mut input, &sound, n, 0, can_play); }
+                        for n in 0..128 { input_note(&mut input, &sound, n, 0, None, can_play); }
                     }
                     0xf0 if status == 0xff => {
-                        for n in 0..128 { input_note(&mut input, &sound, n, 0, can_play); }
+                        for n in 0..128 { input_note(&mut input, &sound, n, 0, None, can_play); }
                     }
                     _ => {}
                 }
@@ -236,15 +296,23 @@ pub fn update(
     { let _ = (&options, &mut poll); }
     if !can_play || !input.connected {
         for n in 0..128 {
-            if input.held[n] { input_note(&mut input, &sound, n as u8, 0, false); }
+            if input.held[n] { input_note(&mut input, &sound, n as u8, 0, None, false); }
         }
     }
     let mut pressed = [false; KEYS];
     for (note, held) in input.held.iter().enumerate() {
         if *held { pressed[visible_key(note as u8)] = true; }
     }
-    for (key, mut transform) in &mut keys {
-        transform.translation = key.rest - Vec3::Y * if pressed[key.pitch] { 0.035 } else { 0.0 };
+    for (key, mut transform, mut visibility) in &mut keys {
+        let condition = conditions[key.piano];
+        let segment = Condition::segment(key.pitch);
+        let health = condition.health[segment];
+        let damaged = health < condition.max[segment];
+        *visibility = if health == 0 { Visibility::Hidden } else { Visibility::Inherited };
+        let played = active == Some(key.piano) && pressed[key.pitch];
+        transform.translation = key.rest - Vec3::Y * if played { 0.035 } else { 0.0 };
+        transform.rotation = key.yaw * Quat::from_rotation_x(if damaged { 0.12 } else { 0.0 });
+        transform.scale = key.scale * if damaged { Vec3::new(1.0, 0.88, 0.94) } else { Vec3::ONE };
     }
 }
 
@@ -264,21 +332,67 @@ mod tests {
     fn piano_plays_only_within_reach() {
         let mut scene = crate::assets::SceneLibrary::new().scenes[12].scene.clone();
         assert_eq!(scene.pianos.len(), 1);
-        assert!(nearby(&scene, Vec3::new(0.0, 0.0, -2.4)));
-        assert!(!nearby(&scene, Vec3::new(0.0, 0.0, 1.0)));
+        assert_eq!(nearby(&scene, Vec3::new(0.0, 0.0, -2.4)), Some(0));
+        assert_eq!(nearby(&scene, Vec3::new(0.0, 0.0, 1.0)), None);
         scene.pianos.clear();
-        assert!(!nearby(&scene, Vec3::new(0.0, 0.0, -4.0)));
+        assert_eq!(nearby(&scene, Vec3::new(0.0, 0.0, -4.0)), None);
     }
     #[test]
     fn midi_press_requires_proximity_and_release_always_clears() {
         let mut input = PianoInput::default();
         let sound = Sound::silent();
-        input_note(&mut input, &sound, 61, 100, false);
+        input_note(&mut input, &sound, 61, 100, Some(0), false);
         assert!(!input.held[61]);
-        input_note(&mut input, &sound, 61, 100, true);
+        input_note(&mut input, &sound, 61, 100, Some(0), true);
         assert!(input.held[61]);
-        input_note(&mut input, &sound, 61, 0, false);
+        input_note(&mut input, &sound, 61, 0, None, false);
         assert!(!input.held[61]);
+    }
+    #[test]
+    fn cabinet_damage_detunes_some_notes_and_mutes_broken_sections() {
+        let mut condition = Condition { health: [3; 3], max: [3; 3] };
+        assert_eq!(condition.tone(0), Some(0));
+        assert_eq!(condition.tone(12), Some(0));
+        condition.health[1] = 2;
+        assert_eq!(condition.tone(10), Some(1));
+        condition.health[1] = 1;
+        assert_eq!(condition.tone(9), None);
+        assert_eq!(condition.tone(10), Some(2));
+        condition.health[1] = 0;
+        assert_eq!(condition.tone(10), None);
+        assert_eq!(condition.tone(0), Some(0));
+    }
+    #[test]
+    fn stage_piano_tracks_the_same_damage_as_cover_and_its_keys() {
+        use fx::{Fx, FxVec2};
+        use sim::terrain::{Destructible, Disc, Terrain};
+
+        let library = crate::assets::SceneLibrary::new();
+        let pack = &library.scenes[library.index("laser-pit").unwrap()];
+        let mut terrain = Terrain::flat(FxVec2::ZERO, Fx::from_int(20));
+        for piece in &pack.destructibles {
+            terrain.destructibles.push(Destructible {
+                asset: piece.asset,
+                disc: Disc { center: FxVec2::ZERO, radius: Fx::ONE },
+                health: piece.health,
+                max_health: piece.health,
+                repairable: piece.repairable,
+                repair_progress: 0,
+            });
+        }
+        let piano_asset = pack.scene.destructibles.iter()
+            .position(|asset| asset.id.as_deref() == Some("stage-piano")).unwrap();
+        let mut pieces: Vec<_> = pack.destructibles.iter().enumerate()
+            .filter(|(_, piece)| usize::from(piece.asset) == piano_asset).collect();
+        pieces.sort_by(|a, b| a.1.center[0].total_cmp(&b.1.center[0]));
+        assert_eq!(pieces.len(), 3);
+        assert_eq!(condition(pack, Some(&terrain), 0).tone(10), Some(0));
+        assert!(terrain.damage_cover(pieces[1].0, 2));
+        assert_eq!(condition(pack, Some(&terrain), 0).tone(9), None);
+        assert_eq!(condition(pack, Some(&terrain), 0).tone(10), Some(2));
+        assert!(terrain.damage_cover(pieces[1].0, 1));
+        assert_eq!(condition(pack, Some(&terrain), 0).tone(10), None);
+        assert_eq!(condition(pack, Some(&terrain), 0).tone(0), Some(0));
     }
     #[cfg(target_os = "linux")]
     #[test]

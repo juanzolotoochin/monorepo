@@ -18,8 +18,8 @@ typedef struct { int kind; unsigned int frame; int alive; float pitch; float fil
 static ma_device device;
 static ma_context context;
 static _Atomic unsigned int pending;
-static _Atomic unsigned char piano_keys[128];
-typedef struct { int note; int frame; float velocity; float release; int alive; } piano_voice;
+static _Atomic unsigned short piano_keys[128];
+typedef struct { int note; int frame; float velocity; float release; int alive; int damage; } piano_voice;
 typedef struct {
     voice voices[12];
     piano_voice piano[16];
@@ -46,10 +46,10 @@ static void play_voice(audio_state *state, int kind) {
 static float tone(float frequency, float t, float decay) {
     return sinf(6.2831853f * frequency * t) * expf(-decay * t);
 }
-static void piano_on(audio_state *state, int note, unsigned char velocity) {
+static void piano_on(audio_state *state, int note, unsigned char velocity, int damage) {
     int slot = 0;
     for (int i=0;i<16;++i) if (!state->piano[i].alive) {slot=i;break;}
-    state->piano[slot]=(piano_voice){note,0,(float)velocity/127.0f,1.0f,1};
+    state->piano[slot]=(piano_voice){note,0,(float)velocity/127.0f,1.0f,1,damage};
 }
 static void synth_frames(audio_state *state, float *out, ma_uint32 frames) {
     for (ma_uint32 frame = 0; frame < frames; ++frame) {
@@ -187,11 +187,14 @@ static void synth_frames(audio_state *state, float *out, ma_uint32 frames) {
             if (!v->alive) continue;
             float t=(float)v->frame++/48000.0f;
             float hz=440.0f*powf(2.0f,((float)v->note-69.0f)/12.0f);
+            hz *= 1.0f + (v->note & 1 ? 1.0f : -1.0f) * v->damage * 0.018f;
             float attack=fminf(1.0f,t*250.0f);
             float decay=0.55f*expf(-1.8f*t)+0.45f*expf(-7.0f*t);
-            value+=v->velocity*v->release*attack*decay*
+            float string =
                 (0.16f*sinf(6.2831853f*hz*t)+0.058f*sinf(6.2831853f*2.0f*hz*t)
                 +0.019f*sinf(6.2831853f*3.0f*hz*t));
+            float crackle = v->damage * 0.012f * noise(state) * expf(-5.0f*t);
+            value+=v->velocity*v->release*attack*decay*(string + crackle);
             if (v->release<1.0f) v->release*=0.99975f;
             if (v->release<0.001f || t>5.0f) v->alive=0;
         }
@@ -209,12 +212,12 @@ static void render(ma_device *d,void *output,const void *input,ma_uint32 frames)
     unsigned int events=atomic_exchange_explicit(&pending,0,memory_order_relaxed);
     for (int kind=0;kind<CUE_COUNT;++kind) if (events & (1u<<kind)) play_voice(&playback,kind);
     for (int note=0;note<128;++note) {
-        unsigned char change=atomic_exchange_explicit(&piano_keys[note],0,memory_order_relaxed);
+        unsigned short change=atomic_exchange_explicit(&piano_keys[note],0,memory_order_relaxed);
         if (change==0) continue;
         if (change==1) {
             for (int i=0;i<16;++i) if (playback.piano[i].alive && playback.piano[i].note==note)
                 playback.piano[i].release=0.999f;
-        } else piano_on(&playback,note,change-1);
+        } else piano_on(&playback,note,(unsigned char)((change & 255u)-1u),(change >> 8) & 3u);
     }
     synth_frames(&playback,output,frames);
 }
@@ -229,6 +232,11 @@ void kestrel_audio_synthesize(const audio_event *events,unsigned int count,float
         if (event<count && events[event].sample<frames) end=(unsigned int)events[event].sample;
         synth_frames(&state,output+cursor*2,end-cursor);cursor=end;
     }
+}
+void kestrel_audio_synthesize_piano(int note,int velocity,int damage,float *output,unsigned int frames) {
+    audio_state state={0};state.noise_seed=19349663;
+    piano_on(&state,note,(unsigned char)velocity,damage);
+    synth_frames(&state,output,frames);
 }
 int kestrel_audio_start(void) {
     if (active) return 0;
@@ -250,9 +258,9 @@ int kestrel_audio_start(void) {
 void kestrel_audio_play(int cue) {
     if (cue >= 0 && cue < CUE_COUNT) atomic_fetch_or_explicit(&pending, 1u << cue, memory_order_relaxed);
 }
-void kestrel_audio_note(int note,int velocity) {
-    if (note>=0 && note<128 && velocity>=0 && velocity<=127)
-        atomic_store_explicit(&piano_keys[note],(unsigned char)(velocity+1),memory_order_relaxed);
+void kestrel_audio_note(int note,int velocity,int damage) {
+    if (note>=0 && note<128 && velocity>=0 && velocity<=127 && damage>=0 && damage<=2)
+        atomic_store_explicit(&piano_keys[note],(unsigned short)((velocity+1)|(damage<<8)),memory_order_relaxed);
 }
 void kestrel_audio_stop(void) {
     if (!active) return;

@@ -4,13 +4,20 @@
   "fps": 30,
   "width": 1280,
   "height": 720,
-  "max_frames": 180,
+  "max_frames": 310,
   "steps": [
-    {"op": "wait", "frames": 45},
+    {"op": "wait", "frames": 35},
     {"op": "strike", "target": [5.0, 8.0]},
     {"op": "wait", "frames": 6},
     {"op": "strike", "target": [5.0, 8.0]},
-    {"op": "wait", "frames": 35},
+    {"op": "walk", "position": [0.0, -8.4]},
+    {"op": "wait", "frames": 18},
+    {"op": "strike", "target": [0.0, -12.75]},
+    {"op": "wait", "frames": 6},
+    {"op": "strike", "target": [0.0, -12.75]},
+    {"op": "wait", "frames": 6},
+    {"op": "strike", "target": [0.0, -12.75]},
+    {"op": "wait", "frames": 25},
     {"op": "inspect"}
   ]
 }

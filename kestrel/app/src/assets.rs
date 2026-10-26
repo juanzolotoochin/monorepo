@@ -477,9 +477,9 @@ mod tests {
         let at = |x, z| service.to_sim(Vec3::new(x, 0.0, z));
         assert!(!terrain.clear(at(0.0, 11.5), at(0.0, -11.5), fx::Fx::from_ratio(1, 50)));
         assert!(terrain.clear(at(2.3, 11.5), at(2.3, -11.5), fx::Fx::from_ratio(1, 50)));
-        assert!(!terrain.clear(at(0.0, 13.0), at(0.0, 14.8), fx::Fx::from_ratio(8, 25)),
+        assert!(!terrain.clear(at(0.0, 14.0), at(0.0, 16.0), fx::Fx::from_ratio(8, 25)),
             "the low front rim must block movement");
-        assert!(!terrain.clear(at(-13.0, 10.0), at(-14.8, 10.0), fx::Fx::from_ratio(8, 25)),
+        assert!(!terrain.clear(at(-16.0, 10.0), at(-18.0, 10.0), fx::Fx::from_ratio(8, 25)),
             "the side wall must block movement");
         let route = sim::nav::path(terrain, at(0.0, 11.5), at(0.0, -11.5), fx::Fx::from_ratio(8, 25));
         assert!(route.len() > 1, "fighters must be able to flank central cover");
