@@ -525,11 +525,21 @@ impl ScenePack {
             sim::World::new_settlement(0, &content, scenario, &obstacles)?;
             let ids: std::collections::BTreeSet<_> =
                 self.skins.iter().map(|s| s.id.as_str()).collect();
+            // Agents and waves are drawn by their character's skin; the
+            // controlled player by the scene's actor.
+            let character_skin = |name: &str| {
+                content
+                    .names
+                    .character_index(name)
+                    .and_then(|ix| content.views.characters[ix as usize].skin.as_deref())
+                    .unwrap_or("")
+            };
             for id in scenario
                 .items
                 .iter()
                 .map(|s| s.skin.as_str())
-                .chain(scenario.agents.iter().map(|s| s.skin.as_str()))
+                .chain(scenario.agents.iter().filter(|a| !a.controlled).map(|a| character_skin(&a.character)))
+                .chain(scenario.waves.iter().map(|w| character_skin(&w.character)))
                 .chain(
                     scenario
                         .agents
@@ -538,7 +548,6 @@ impl ScenePack {
                 )
                 .chain(scenario.producers.iter().map(|s| s.skin.as_str()))
                 .chain(scenario.defenders.iter().map(|s| s.skin.as_str()))
-                .chain(scenario.waves.iter().map(|s| s.skin.as_str()))
             {
                 if !ids.contains(id) {
                     return Err(format!("scenario references unknown skin {id}"));

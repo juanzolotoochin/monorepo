@@ -150,6 +150,7 @@ struct MoverSimFile {
 /// The content shipped with the game, compiled into the binary.
 const BUILTIN: &[(&str, &str)] = &[
     ("character/exosuit.ron", include_str!("../data/character/exosuit.ron")),
+    ("character/exosuit_laser_pit.ron", include_str!("../data/character/exosuit_laser_pit.ron")),
     ("character/exosuit_moonlit.ron", include_str!("../data/character/exosuit_moonlit.ron")),
     ("character/ghoul.ron", include_str!("../data/character/ghoul.ron")),
     ("character/ghoul_brute.ron", include_str!("../data/character/ghoul_brute.ron")),
@@ -212,9 +213,10 @@ impl Content {
         let mut characters = Vec::new();
         for name in character_files.keys() {
             let error = |message: String| ContentError { file: name.clone(), message };
-            let sim = resolve_character(&character_files, name, &mut Vec::new()).map_err(error)?;
+            let (sim, view) = resolve_character(&character_files, name, &mut Vec::new()).map_err(error)?;
             let def = character::character_def(sim).map_err(error)?;
-            characters.push((name.clone(), def, character_files[name].view.clone()));
+            let view = character::character_view(view, &def).map_err(error)?;
+            characters.push((name.clone(), def, view));
         }
 
         let names = Names {
@@ -234,28 +236,28 @@ impl Content {
     }
 }
 
-/// A character's `sim` section with its `base` chain merged in. `chain`
-/// holds the characters being resolved, to catch cycles.
+/// A character's `sim` and `view` sections with its `base` chain merged in.
+/// `chain` holds the characters being resolved, to catch cycles.
 fn resolve_character(
     files: &BTreeMap<String, character::CharacterFile>,
     name: &str,
     chain: &mut Vec<String>,
-) -> Result<character::SimFile, String> {
+) -> Result<(character::SimFile, character::ViewFile), String> {
     use character::Merge;
     if chain.iter().any(|n| n == name) {
         chain.push(name.to_string());
         return Err(format!("base cycle: {}", chain.join(" -> ")));
     }
     let file = &files[name];
-    let Some(base) = &file.base else { return Ok(file.sim.clone()) };
+    let Some(base) = &file.base else { return Ok((file.sim.clone(), file.view.clone())) };
     let base_name = format!("character/{base}");
     if !files.contains_key(&base_name) {
         return Err(format!("unknown base {base:?}"));
     }
     chain.push(name.to_string());
-    let base_sim = resolve_character(files, &base_name, chain)?;
+    let (base_sim, base_view) = resolve_character(files, &base_name, chain)?;
     chain.pop();
-    Ok(file.sim.clone().merge(base_sim))
+    Ok((file.sim.clone().merge(base_sim), file.view.clone().merge(base_view)))
 }
 
 fn mover_def(file: MoverSimFile) -> Result<MoverDef, String> {
@@ -342,7 +344,7 @@ mod tests {
     }
 
     const GHOUL: &str = "(sim: (brain: FollowRoute, body: (radius: 0.27), movement: (walk: 0.75), \
-        health: (hp: 3, breach_damage: 1)), view: ())";
+        health: (hp: 3, breach_damage: 1)), view: (skin: \"ghoul\"))";
 
     fn characters(files: &[(&str, &str)]) -> Result<Content, ContentError> {
         Content::from_sources(files.iter().map(|(path, text)| source(path, text)))
@@ -467,13 +469,13 @@ mod tests {
         assert!(bad(&GHOUL.replace("walk: 0.75", "walk: 0.75, run: 0.5")).contains("walk <= run"));
         assert!(bad(&GHOUL.replace("FollowRoute", "Player")).contains("Player"));
         assert!(bad(&GHOUL.replace("FollowRoute", "Hauler")).contains("Hauler"));
-        let hauler = "(sim: (brain: Hauler, body: (radius: 0.28), movement: (walk: 1.5), carry: (transfer: 27)), view: ())";
+        let hauler = "(sim: (brain: Hauler, body: (radius: 0.28), movement: (walk: 1.5), carry: (transfer: 27)), view: (skin: \"worker\"))";
         assert!(characters(&[("character/x.ron", hauler)]).is_ok());
         assert!(bad(&hauler.replace("transfer: 27", "transfer: 1")).contains("carry.transfer"));
         assert!(bad(&hauler.replace(", carry: (transfer: 27)", "")).contains("Hauler"));
         assert!(bad(&GHOUL.replace("breach_damage: 1)", "breach_damage: 1), carry: (transfer: 27)")).contains("FollowRoute"));
         assert!(bad(&GHOUL.replace("hp: 3", "hp: 3, armor: (points: 2, radius: 0.1)")).contains("armor"));
-        assert!(bad(&GHOUL.replace("view: ()", "view: (skin: \"x\")")).contains("skin"));
+        assert!(bad(&GHOUL.replace("view: (skin: \"ghoul\")", "view: (skin: \"ghoul\", color: 1)")).contains("color"));
         assert!(bad(&GHOUL.replace("radius: 0.27", "radius: 0.27, mass: 2")).contains("mass"));
     }
 
@@ -503,5 +505,37 @@ mod tests {
         assert_ne!(base, hash(&[("character/ghast.ron", GHOUL)]));
         let comment = format!("// A comment.\n{GHOUL}");
         assert_eq!(base, hash(&[("character/ghoul.ron", &comment)]));
+        assert_eq!(base, hash(&[("character/ghoul.ron", &GHOUL.replace("\"ghoul\"", "\"ghast\""))]));
+    }
+
+    #[test]
+    fn views_merge_from_the_base_and_are_validated() {
+        let content = Content::builtin();
+        let view = |name: &str| &content.views.characters[content.names.character_index(name).unwrap() as usize];
+        assert_eq!(view("ghoul_forest").skin.as_deref(), Some("ghoul"), "skin merged in from the base");
+        assert_eq!(view("ghoul_brute").skin.as_deref(), Some("ghoul_brute"));
+        assert_eq!(view("runner").skin.as_deref(), Some("worker"));
+        assert_eq!(view("exosuit").skin, None);
+        assert_eq!(view("exosuit").motion, character::CharacterMotion::default());
+        let pit = view("exosuit_laser_pit").motion;
+        assert!(pit.plant_feet && pit.motion_style == character::MotionStyle::Natural);
+        assert_eq!(pit.arm_swing, character::CharacterMotion::default().arm_swing, "unset fields keep the default");
+        let glade = view("exosuit_moonlit").motion;
+        assert_eq!((glade.walk_speed, glade.run_speed), (1.599609375, 2.599609375), "speeds come from movement");
+        assert_eq!((glade.arm_swing, glade.step_distance), (0.43, 0.44));
+
+        let bad = |text: &str| characters(&[("character/x.ron", text)]).unwrap_err().message;
+        assert!(bad(&GHOUL.replace("view: (skin: \"ghoul\")", "view: ()")).contains("view.skin"));
+        assert!(bad(&GHOUL.replace("\"ghoul\"", "\"no spaces\"")).contains("skin id"));
+        assert!(bad(&GHOUL.replace("\"ghoul\")", "\"ghoul\", motion: (arm_swing: 1))")).contains("only Player"));
+        let exosuit = include_str!("../data/character/exosuit.ron");
+        let variant = |view: &str| {
+            let variant = format!("(base: \"exosuit\", sim: (), view: {view})");
+            characters(&[("character/exosuit.ron", exosuit), ("character/x.ron", &variant)]).map_err(|e| e.message)
+        };
+        assert!(variant("(skin: \"worker\")").unwrap_err().contains("scene's actor"));
+        assert!(variant("(motion: (leg_reach: 5))").unwrap_err().contains("leg_reach"));
+        assert!(variant("(motion: (arm_swing: -1))").unwrap_err().contains("view.motion"));
+        assert!(variant("(motion: (walk_speed: 2))").unwrap_err().contains("walk_speed"), "speeds come from movement");
     }
 }

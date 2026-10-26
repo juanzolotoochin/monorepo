@@ -16,8 +16,6 @@ pub struct StyleProfile {
     /// Weapon carried by this actor's primary rig attachment, when present.
     pub actor_weapon: Option<content::scenario::Weapon>,
     pub actor_scale: f32,
-    /// Shared pose tuning for local and replicated characters using this style.
-    pub character_motion: CharacterMotion,
     /// Reusable local-space geometry shared by actor and skin parts.
     pub shape_groups: Vec<ShapeGroup>,
     pub skins: Vec<SkinRecipe>,
@@ -40,56 +38,8 @@ pub struct StyleProfile {
     /// Optional scene atmosphere rendered at runtime, independent of baked architecture.
     pub atmosphere: Option<AtmosphereProfile>,
 }
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct CharacterMotion {
-    pub motion_style: MotionStyle,
-    /// Ground speed in meters per second, for posing. The simulation moves
-    /// at the scene player character's speeds; keep the two equal.
-    pub walk_speed: f32,
-    pub run_speed: f32,
-    pub arm_swing: f32,
-    pub leg_swing: f32,
-    pub torso_turn: f32,
-    pub pose_response: f32,
-    pub run_crouch: f32,
-    pub elbow_drive: f32,
-    pub step_lift: f32,
-    /// Distance between alternating foot contacts in world units.
-    pub step_distance: f32,
-    /// Use the planted-foot IK gait for a rig with articulated hips and ankles.
-    pub plant_feet: bool,
-    /// Hip-to-ankle reach for that gait, in unscaled actor units.
-    pub leg_reach: f32,
-    /// Angular spring frequency in radians per second. Lower values keep turning momentum longer.
-    pub turn_inertia: f32,
-}
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub enum MotionStyle {
-    #[default]
-    Classic,
-    Natural,
-}
-impl Default for CharacterMotion {
-    fn default() -> Self {
-        Self {
-            motion_style: MotionStyle::Classic,
-            walk_speed: 3.8,
-            run_speed: 5.6,
-            arm_swing: 0.23,
-            leg_swing: 0.48,
-            torso_turn: 0.42,
-            pose_response: 19.0,
-            run_crouch: 0.13,
-            elbow_drive: 0.38,
-            step_lift: 0.10,
-            step_distance: 0.50,
-            plant_feet: false,
-            leg_reach: 0.48,
-            turn_inertia: 8.0,
-        }
-    }
-}
+/// Character pose tuning lives on characters (`view.motion`); see the content crate.
+pub use content::character::{CharacterMotion, MotionStyle};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AtmosphereProfile {
@@ -140,7 +90,6 @@ impl Default for StyleProfile {
             actor_name: None,
             actor_weapon: None,
             actor_scale: 1.0,
-            character_motion: CharacterMotion::default(),
             shape_groups: vec![],
             skins: vec![],
             materials: vec![
@@ -207,18 +156,6 @@ impl StyleProfile {
             return Err("invalid style actor density or weapon label".into());
         }
         validate_shape_groups(self)?;
-        if !self.character_motion.walk_speed.is_finite()
-            || !self.character_motion.run_speed.is_finite()
-            || !(0.5..=10.0).contains(&self.character_motion.walk_speed)
-            || !(self.character_motion.walk_speed..=15.0).contains(&self.character_motion.run_speed)
-        {
-            return Err("invalid character movement speeds".into());
-        }
-        if !self.character_motion.leg_reach.is_finite()
-            || !(0.2..=2.0).contains(&self.character_motion.leg_reach)
-        {
-            return Err("invalid character leg reach".into());
-        }
         if self.weapon_skins.len() > 8
             || self
                 .weapon_skins

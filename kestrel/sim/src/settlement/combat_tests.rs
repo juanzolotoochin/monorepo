@@ -30,7 +30,7 @@ fn p(x: f64, y: f64) -> [Fx; 2] {
 
 // The original fixtures' haulers and their quick transfers.
 pub(super) const TEST_HAULER: &str =
-    "(sim: (brain: Hauler, body: (radius: 0.18), movement: (walk: 2.0), carry: (transfer: 6)), view: ())";
+    "(sim: (brain: Hauler, body: (radius: 0.18), movement: (walk: 2.0), carry: (transfer: 6)), view: (skin: \"worker\"))";
 pub(super) const TEST_PLAYER: &str = "(base: \"exosuit\", sim: (carry: (transfer: 6)), view: ())";
 
 /// The builtin content plus the original fixtures' slow ghouls, haulers and player.
@@ -57,7 +57,6 @@ fn agent(id: &str) -> Agent {
         controlled: false,
         id: id.into(),
         label: id.into(),
-        skin: "worker".into(),
         character: "test_hauler".into(),
         position: p(-2.0, 1.0),
         capacity: 3,
@@ -117,7 +116,6 @@ fn combat_scenario(tuning: Vec<WeaponTuning>) -> Scenario {
         id: "standard".into(),
         position: p(0.0, 6.0),
         target: p(0.0, -6.0),
-        skin: "ghoul".into(),
         character: "test_ghoul".into(),
         first: Fx::from_int(3600),
         every: Fx::from_int(10),
@@ -475,7 +473,6 @@ fn processing_reserves_output_space_and_defense_cannot_fire_free_ammunition() {
         id: "ghouls".into(),
         position: p(7.0, 2.0),
         target: p(0.0, 2.0),
-        skin: "ghoul".into(),
         character: "test_ghoul_frail".into(),
         first: Fx::ZERO,
         every: fx(1.5),

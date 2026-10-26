@@ -12,20 +12,19 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 use sim::settlement::avatar::{JumpPhase, SwordStroke};
 
-/// Resolve a usable gait from the baked rig instead of requiring every style
-/// to repeat the same planted-foot settings.
+/// The scene player's motion tuning (its character's `view.motion`), adapted
+/// to the rig the scene's style bakes, so every style needn't repeat the same
+/// planted-foot settings.
 pub fn motion_profile(pack: &voxel_assets::ScenePack) -> voxel_assets::CharacterMotion {
+    let mut motion = crate::lockstep::builtin_character_view(&pack.scene.player).motion;
     let Some(style) = pack.scene.style.as_ref() else {
         // The built-in exosuit is articulated even though it has no baked
         // actor style. Give it the same planted-foot solver as styled actors.
-        return voxel_assets::CharacterMotion {
-            plant_feet: true,
-            step_distance: 0.50,
-            step_lift: 0.15,
-            ..default()
-        };
+        motion.plant_feet = true;
+        motion.step_distance = 0.50;
+        motion.step_lift = 0.15;
+        return motion;
     };
-    let mut motion = style.character_motion;
     if pack.actor.is_empty() {
         motion.plant_feet = true;
         motion.step_distance = 0.50 * style.actor_scale;
@@ -1716,13 +1715,14 @@ mod tests {
         &content.rules.characters[content.names.character_index("exosuit").unwrap() as usize]
     }
 
-    /// Styles that keep the default speeds leave the simulation on the player
-    /// character's (`lockstep::scene_setup`), so the two must agree.
+    /// Poses run at the speeds the simulation moves each player character.
     #[test]
-    fn default_style_speeds_match_the_player_character() {
-        let motion = voxel_assets::CharacterMotion::default();
-        assert!((motion.walk_speed - crate::lockstep::view_f32(exosuit().movement.walk)).abs() < 1e-5);
-        assert!((motion.run_speed - crate::lockstep::view_f32(exosuit().movement.run)).abs() < 1e-5);
+    fn player_motion_poses_the_characters_speeds() {
+        let content = crate::lockstep::builtin_content();
+        for (def, view) in content.rules.characters.iter().zip(&content.views.characters) {
+            assert!((view.motion.walk_speed - crate::lockstep::view_f32(def.movement.walk)).abs() < 1e-5);
+            assert!((view.motion.run_speed - crate::lockstep::view_f32(def.movement.run)).abs() < 1e-5);
+        }
     }
 
     #[test]
