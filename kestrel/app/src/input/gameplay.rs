@@ -168,7 +168,7 @@ pub fn dispatch(world: &mut World) {
     }
     if frame.gameplay.repair_pressed && world.resource::<SessionService>().settlement()
         .and_then(|settlement| settlement.agents.get(agent as usize))
-        .is_some_and(|avatar| avatar.avatar.max_health > 0 && avatar.avatar.health == 0)
+        .is_some_and(|avatar| avatar.body.max_health > 0 && avatar.body.health == 0)
     {
         respawn(world, agent);
         return;
@@ -222,7 +222,7 @@ fn repair(world: &mut World, agent: u16, held: bool) {
     let target = held.then(|| {
         let sim = world.resource::<SessionService>();
         let world = sim.world()?;
-        let position = world.settlement()?.agents.get(agent as usize)?.position;
+        let position = world.settlement()?.agents.get(agent as usize)?.body.position;
         world.terrain().repairable_asset_near(position)
     }).flatten();
     let mut dispatcher = world.resource_mut::<Dispatcher>();

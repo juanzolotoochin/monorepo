@@ -62,9 +62,9 @@ impl Scene {
     fn walk(&mut self, x: f64, y: f64) {
         let (agent, target) = (self.agent(), self.at(x, y));
         self.command(CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target, run: false } });
-        assert!(!self.avatar().route.is_empty(), "no route to ({x}, {y})");
+        assert!(!self.avatar().body.route.is_empty(), "no route to ({x}, {y})");
         for _ in 0..ms(30_000) {
-            if self.avatar().route.is_empty() {
+            if self.avatar().body.route.is_empty() {
                 return;
             }
             self.sim.step(&[]);
@@ -217,7 +217,7 @@ fn ground_routes_cannot_cross_walls_or_drops() {
     let go = |scene: &mut Scene, x: f64, y: f64| {
         let target = scene.at(x, y);
         scene.command(CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target, run: false } });
-        !scene.avatar().route.is_empty()
+        !scene.avatar().body.route.is_empty()
     };
     assert!(go(&mut scene, -4.0, 0.0));
     assert!(!go(&mut scene, 0.0, 2.0), "a 2 m wall");
@@ -239,14 +239,14 @@ fn feet_rise_when_body_reaches_a_low_step() {
     let mut stepped_at_edge = false;
     for _ in 0..ms(2500) {
         scene.sim.step(&[]);
-        let x = scene.avatar().position.x - scene.center.x;
+        let x = scene.avatar().body.position.x - scene.center.x;
         if x > fx(-0.3) && x < Fx::ZERO {
             stepped_at_edge = true;
             assert_eq!(scene.altitude(), fx(0.24), "feet must rise when the body first overlaps the slab");
             break;
         }
     }
-    assert!(stepped_at_edge, "avatar never reached the slab edge: x={} height={}", (scene.avatar().position.x - scene.center.x).to_f32(), scene.altitude().to_f32());
+    assert!(stepped_at_edge, "avatar never reached the slab edge: x={} height={}", (scene.avatar().body.position.x - scene.center.x).to_f32(), scene.altitude().to_f32());
 }
 
 /// `demos/jetpack.json`: climb onto the 2 m platform, cross the drop, hover
@@ -309,7 +309,7 @@ fn memory_trial_needs_a_ghost_to_open_the_door() {
     scene.walk(-4.0, -2.0);
     scene.wait(ms(667));
     scene.command(CommandKind::MemoryDeploy);
-    assert_eq!(scene.avatar().position, scene.at(-5.0, 3.0), "deploying returns the player to the start");
+    assert_eq!(scene.avatar().body.position, scene.at(-5.0, 3.0), "deploying returns the player to the start");
     scene.wait(ms(667));
     scene.walk(-1.0, 3.0);
     scene.wait(ms(3333));
@@ -330,8 +330,8 @@ fn the_trial_cannot_be_completed_alone() {
     // The door blocks the way to the core.
     let (agent, target) = (scene.agent(), scene.at(5.0, 0.0));
     scene.command(CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target, run: false } });
-    let reached = scene.avatar().route.last() == Some(&target);
-    assert!(!reached || scene.avatar().route.len() > 1, "only around the wall, if at all");
+    let reached = scene.avatar().body.route.last() == Some(&target);
+    assert!(!reached || scene.avatar().body.route.len() > 1, "only around the wall, if at all");
 }
 
 #[test]
@@ -359,7 +359,7 @@ fn only_the_trial_avatars_owner_records_and_deploys() {
     scene.wait(ms(667));
     scene.sim.step(&[Command { player: guest, kind: CommandKind::MemoryDeploy }]);
     assert!(scene.s().memory.as_ref().unwrap().recording, "the guest cannot deploy the host's recording");
-    assert_ne!(scene.avatar().position, scene.at(-5.0, 3.0), "the host's avatar was not sent back");
+    assert_ne!(scene.avatar().body.position, scene.at(-5.0, 3.0), "the host's avatar was not sent back");
     scene.sim.step(&[Command { player: guest, kind: CommandKind::MemoryClear }]);
     assert!(!scene.s().memory.as_ref().unwrap().samples.is_empty(), "the guest cannot clear it");
 }
@@ -399,14 +399,14 @@ fn pile_lab_hauls_exactly_four_units() {
     scene.walk(-1.7, -3.4);
     let approach = Some(scene.at(-2.3, -2.8));
     scene.command(CommandKind::Pile { agent, action: PileAction::PickupAmount(0, 4), pace: fx(0.7), approach });
-    let start = scene.avatar().position;
+    let start = scene.avatar().body.position;
     finish(&mut scene);
     let l = scene.hauler();
     assert_eq!(l.last_error, None);
     assert_eq!(l.cargo.units, 4);
     assert_eq!(scene.lab().total(), 104);
     assert_eq!(scene.lab().piles[&0].units, 4);
-    assert_ne!(scene.avatar().position, start, "walked before transferring");
+    assert_ne!(scene.avatar().body.position, start, "walked before transferring");
     scene.wait(ms(1000));
     scene.walk(2.0, 1.0);
     let (drop, approach) = (scene.at(4.0, 4.5), Some(scene.at(2.9, 5.0)));
@@ -524,7 +524,7 @@ fn the_player_characters_speed_controls_avatar_movement() {
             intent: Intent::Walk { direction: v(1.0, 0.0), run: false },
         });
         scene.wait(ms(600));
-        scene.avatar().position.x - scene.center.x
+        scene.avatar().body.position.x - scene.center.x
     };
     // 3.8 m/s against the glade exosuit's 1.6.
     assert!(travel("exosuit") > travel("exosuit_moonlit") + fx(0.8));
@@ -545,14 +545,14 @@ fn joining_players_get_their_own_avatar() {
     assert_ne!(mine, host_avatar);
     assert_eq!(scene.s().agents.iter().filter(|a| a.controlled).count(), 2);
 
-    let start = scene.s().agents[mine as usize].position;
-    let host_start = scene.avatar().position;
+    let start = scene.s().agents[mine as usize].body.position;
+    let host_start = scene.avatar().body.position;
     let walk = |agent| CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: v(1.0, 0.0), run: false } };
     // The guest's command for the host's avatar is ignored.
     scene.sim.step(&[Command { player: guest, kind: walk(mine) }, Command { player: guest, kind: walk(host_avatar) }]);
     scene.wait(ms(1000));
-    assert!(scene.s().agents[mine as usize].position.x > start.x + Fx::ONE, "the guest walked");
-    assert_eq!(scene.avatar().position, host_start, "the host's avatar stayed put");
+    assert!(scene.s().agents[mine as usize].body.position.x > start.x + Fx::ONE, "the guest walked");
+    assert_eq!(scene.avatar().body.position, host_start, "the host's avatar stayed put");
 }
 
 /// Scenes without weapons only offer the sword.
@@ -604,7 +604,7 @@ fn avatars_dig_pits_and_fly_out() {
 
     let mut scene = Scene::new(dig_lab());
     scene.walk(0.3, 1.8);
-    let tile = Terrain::pit_tile(scene.avatar().position);
+    let tile = Terrain::pit_tile(scene.avatar().body.position);
     let pit = |scene: &Scene| scene.sim.world().terrain().pit(tile);
     let walk = |direction| CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction, run: false } };
 
@@ -628,7 +628,7 @@ fn avatars_dig_pits_and_fly_out() {
         assert_eq!(pit(&scene), depth - 1, "still digging");
         scene.wait(ms(33));
         assert_eq!(pit(&scene), depth);
-        assert_eq!(scene.avatar().position, Terrain::pit_center(tile), "dug in the middle of the tile");
+        assert_eq!(scene.avatar().body.position, Terrain::pit_center(tile), "dug in the middle of the tile");
         scene.wait(ms(1000));
         assert_eq!(scene.altitude(), -LAYER.mul_int(depth as i64), "dropped into the pit");
         assert!(!scene.avatar().avatar.flight.airborne);
@@ -639,14 +639,14 @@ fn avatars_dig_pits_and_fly_out() {
     // On foot, the walls are too high to climb.
     scene.command(walk(v(1.0, 0.0)));
     scene.wait(ms(1000));
-    assert_eq!(Terrain::pit_tile(scene.avatar().position), tile, "still in the pit");
+    assert_eq!(Terrain::pit_tile(scene.avatar().body.position), tile, "still in the pit");
     // The jetpack lifts the avatar out, and it lands on the ground beside.
     scene.command(CommandKind::Jetpack { agent, enabled: true });
     scene.wait(ms(1500));
     scene.command(CommandKind::Jetpack { agent, enabled: false });
     scene.command(walk(FxVec2::ZERO));
     scene.wait(ms(1500));
-    assert_ne!(Terrain::pit_tile(scene.avatar().position), tile, "out of the pit");
+    assert_ne!(Terrain::pit_tile(scene.avatar().body.position), tile, "out of the pit");
     assert_eq!(scene.altitude(), Fx::ZERO);
     assert!(!scene.avatar().avatar.flight.airborne);
 }
@@ -737,7 +737,7 @@ fn routes_cross_the_mine() {
     let mut scene = Scene::new(mine());
     let started = std::time::Instant::now();
     scene.walk(30.0, 25.0);
-    assert!(crate::nav::distance(scene.avatar().position, scene.at(30.0, 25.0)) < fx(0.1));
+    assert!(crate::nav::distance(scene.avatar().body.position, scene.at(30.0, 25.0)) < fx(0.1));
     assert!(started.elapsed().as_secs() < 20, "took {:?}", started.elapsed());
 }
 
@@ -797,9 +797,9 @@ fn releasing_stops_walking_and_switches_the_jetpack_off() {
     assert!(!scene.avatar().avatar.flight.requested, "thrust is off");
     assert_eq!(scene.avatar().avatar.intent, Some(Intent::Stop));
     scene.wait(ms(1000));
-    let stopped = scene.avatar().position;
+    let stopped = scene.avatar().body.position;
     scene.wait(ms(500));
-    assert_eq!(scene.avatar().position, stopped, "no drift after release");
+    assert_eq!(scene.avatar().body.position, stopped, "no drift after release");
 }
 
 #[test]
@@ -808,9 +808,9 @@ fn releasing_stops_a_click_route() {
     let (agent, target) = (scene.agent(), scene.at(3.0, -1.0));
     scene.command(CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target, run: false } });
     scene.wait(ms(200));
-    assert!(!scene.avatar().route.is_empty());
+    assert!(!scene.avatar().body.route.is_empty());
     release(&mut scene);
-    assert!(scene.avatar().route.is_empty());
+    assert!(scene.avatar().body.route.is_empty());
     assert_eq!(scene.avatar().avatar.intent, Some(Intent::Stop));
 }
 
@@ -820,12 +820,12 @@ fn releasing_keeps_an_accepted_haul_and_its_route() {
     let agent = scene.agent();
     scene.command(CommandKind::Pile { agent, action: PileAction::Pickup(2), pace: Fx::ZERO, approach: None });
     scene.wait(ms(200));
-    let route = scene.avatar().route.clone();
+    let route = scene.avatar().body.route.clone();
     assert!(scene.hauler().job.is_some() && !route.is_empty());
     release(&mut scene);
     assert!(scene.hauler().job.is_some(), "the haul continues");
     assert_eq!(scene.hauler().last_error, None);
-    assert_eq!(scene.avatar().route, route, "its route is untouched");
+    assert_eq!(scene.avatar().body.route, route, "its route is untouched");
     for _ in 0..ms(30_000) {
         if scene.hauler().job.is_none() {
             break;
@@ -846,7 +846,7 @@ fn release_judges_a_haul_accepted_earlier_in_the_same_turn() {
     let commands = [haul, CommandKind::ReleaseDirectControl { agent }].map(|kind| Command { player: PlayerId(0), kind });
     scene.sim.step(&commands);
     assert!(scene.hauler().job.is_some());
-    assert!(!scene.avatar().route.is_empty(), "the accepted haul owns the route");
+    assert!(!scene.avatar().body.route.is_empty(), "the accepted haul owns the route");
 }
 
 /// A haul the simulation rejected owns nothing: the release stops the walk.
@@ -940,7 +940,7 @@ fn an_attack_ends_a_haul_and_swings() {
     let agent = scene.agent();
     scene.command(CommandKind::Pile { agent, action: PileAction::Pickup(2), pace: Fx::ZERO, approach: None });
     scene.wait(ms(200));
-    assert!(scene.hauler().job.is_some() && !scene.avatar().route.is_empty());
+    assert!(scene.hauler().job.is_some() && !scene.avatar().body.route.is_empty());
     scene.command(CommandKind::Attack { agent, weapon: content::scenario::Weapon::Sword, aim: v(1.0, 0.0), muzzle: [Fx::ZERO; 3] });
     assert!(scene.hauler().job.is_none());
     assert_eq!(scene.hauler().last_error.as_deref(), Some("Haul canceled by player input"));
@@ -961,7 +961,7 @@ fn a_haul_started_after_a_move_in_the_same_turn_stays() {
     scene.sim.step(&[walk, haul].map(|kind| Command { player: PlayerId(0), kind }));
     assert!(scene.hauler().job.is_some(), "the new haul runs");
     assert_eq!(scene.hauler().last_error, None);
-    assert!(!scene.avatar().route.is_empty(), "and owns the route");
+    assert!(!scene.avatar().body.route.is_empty(), "and owns the route");
 }
 
 /// Respawning ends a haul too.
@@ -973,7 +973,7 @@ fn respawning_ends_a_haul() {
     scene.wait(ms(200));
     scene.command(CommandKind::Respawn { agent });
     assert!(scene.hauler().job.is_none());
-    assert!(scene.avatar().route.is_empty(), "the haul doesn't steer the respawned avatar");
+    assert!(scene.avatar().body.route.is_empty(), "the haul doesn't steer the respawned avatar");
     assert!(scene.lab().conserved());
 }
 
@@ -1023,18 +1023,18 @@ fn shoot_the_host_dead(scene: &mut Scene) {
     let s = scene.sim.world_mut().settlement_mut();
     s.player_health = 1;
     s.weapons = vec![content::scenario::Weapon::Laser];
-    s.agents[host].avatar.health = 1;
-    s.agents[host].avatar.max_health = 1;
+    s.agents[host].body.health = 1;
+    s.agents[host].body.max_health = 1;
     let guest = PlayerId(1);
     scene.sim.step(&[Command { player: guest, kind: CommandKind::Join }]);
     let shooter = scene.s().avatar_of(guest).unwrap();
-    let to = scene.avatar().position - v(3.0, 0.0);
-    scene.sim.world_mut().settlement_mut().agents[shooter as usize].position = to;
+    let to = scene.avatar().body.position - v(3.0, 0.0);
+    scene.sim.world_mut().settlement_mut().agents[shooter as usize].body.position = to;
     let weapon = content::scenario::Weapon::Laser;
     let fire = CommandKind::Attack { agent: shooter, weapon, aim: v(1.0, 0.0), muzzle: [Fx::ZERO, fx(0.8), fx(0.25)] };
     scene.sim.step(&[Command { player: guest, kind: fire }]);
     for _ in 0..ms(700) {
-        if scene.avatar().avatar.health == 0 {
+        if scene.avatar().body.health == 0 {
             return;
         }
         scene.sim.step(&[]);
@@ -1056,12 +1056,12 @@ fn dying_ends_a_haul() {
     assert!(hauler.job.is_none());
     assert_eq!(hauler.last_error.as_deref(), Some("Haul canceled because the player died"));
     assert!(hauler.notice.contains("died"), "{}", hauler.notice);
-    assert!(scene.avatar().route.is_empty());
+    assert!(scene.avatar().body.route.is_empty());
     assert!(scene.lab().conserved());
     scene.s().validate().unwrap();
     scene.wait(ms(2500));
-    assert_eq!(scene.avatar().avatar.health, 1, "respawned");
-    assert_eq!(scene.avatar().position, scene.avatar().home, "it stays home: no haul steers it");
+    assert_eq!(scene.avatar().body.health, 1, "respawned");
+    assert_eq!(scene.avatar().body.position, scene.avatar().body.home, "it stays home: no haul steers it");
     scene.s().validate().unwrap();
 }
 
@@ -1072,7 +1072,7 @@ fn dying_stops_a_dig() {
     let mut scene = Scene::new(dig_lab());
     let agent = scene.agent();
     scene.walk(0.3, 1.8);
-    let tile = Terrain::pit_tile(scene.avatar().position);
+    let tile = Terrain::pit_tile(scene.avatar().body.position);
     scene.command(CommandKind::DigDown { agent });
     assert!(scene.avatar().avatar.dig.is_some());
     scene.wait(ms(300));

@@ -86,7 +86,7 @@ impl Settlement {
 
     fn avatar_sample(&self) -> Option<Sample> {
         let a = &self.agents[self.player()? as usize];
-        Some(Sample { position: a.position, height: a.avatar.height, heading: a.heading })
+        Some(Sample { position: a.body.position, height: a.avatar.height, heading: a.body.heading })
     }
 
     /// Commands: starts recording the player's movement.
@@ -116,11 +116,11 @@ impl Settlement {
         m.replay = 0;
         m.ghost = Some(anchor);
         let a = &mut self.agents[player as usize];
-        a.position = anchor.position;
+        a.body.position = anchor.position;
         a.avatar.height = anchor.height;
-        a.heading = anchor.heading;
-        a.route.clear();
-        a.avatar.velocity = FxVec2::ZERO;
+        a.body.heading = anchor.heading;
+        a.body.route.clear();
+        a.body.velocity = FxVec2::ZERO;
         a.avatar.intent = Some(Intent::Stop);
         a.avatar.swing = None;
         a.avatar.queued = None;

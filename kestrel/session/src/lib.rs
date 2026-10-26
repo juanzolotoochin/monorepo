@@ -418,7 +418,7 @@ mod tests {
         let mut client = Session::start(Mode::Join { host: addr, stable_id: 42 }, content.clone(), config).unwrap();
 
         let avatar = |session: &Session| session.world()?.settlement()?.avatar_of(session.player()?);
-        let position = |session: &Session, agent: u16| session.world().unwrap().settlement().unwrap().agents[agent as usize].position;
+        let position = |session: &Session, agent: u16| session.world().unwrap().settlement().unwrap().agents[agent as usize].body.position;
         let walk = |agent: u16, x: i32| CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: FxVec2::new(Fx::from_int(x), Fx::ZERO), run: false } };
         let start = std::time::Instant::now();
         let (mut walking, mut now) = (false, Duration::ZERO);
@@ -548,8 +548,8 @@ mod tests {
         *last = tick;
         let a = &s.agents[agent as usize];
         let mine = s.threats.iter().filter(|t| lanes.contains(&t.wave));
-        let Some(t) = mine.min_by_key(|t| (t.position - a.position).length()) else { return };
-        let to = t.position - a.position;
+        let Some(t) = mine.min_by_key(|t| (t.position - a.body.position).length()) else { return };
+        let to = t.position - a.body.position;
         let kind = if to.length() > Fx::ONE {
             CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: to.normalize_or_zero(), run: true } }
         } else {

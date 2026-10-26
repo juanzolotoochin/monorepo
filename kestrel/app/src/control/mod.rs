@@ -544,10 +544,10 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
             }
             let service = world.get_resource::<SessionService>()?;
             let a = &service.settlement()?.agents[service.player()? as usize];
-            if a.avatar.job.is_some() || a.pending_in > 0 || a.pending_out > 0 {
+            if a.avatar.job.is_some() || a.carry.pending_in > 0 || a.carry.pending_out > 0 {
                 None
             } else {
-                Some(if a.cargo.iter().sum::<u32>() == *expected {
+                Some(if a.carry.cargo.iter().sum::<u32>() == *expected {
                     Ok(())
                 } else {
                     Err("Transfer canceled before exact quantity completed".into())
@@ -564,9 +564,9 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
             }
             let service = world.get_resource::<SessionService>()?;
             let a = &service.settlement()?.agents[service.player()? as usize];
-            if !a.route.is_empty() {
+            if !a.body.route.is_empty() {
                 None
-            } else if navigation::flat(service.to_view(a.position) - *goal).length() < 0.15 {
+            } else if navigation::flat(service.to_view(a.body.position) - *goal).length() < 0.15 {
                 Some(Ok(()))
             } else {
                 Some(Err("Destination is blocked or unreachable, or the walk was interrupted".into()))

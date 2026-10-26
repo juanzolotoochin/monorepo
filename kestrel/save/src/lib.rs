@@ -34,7 +34,9 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 /// 8: threats keep their windup and cooldown (`Threat::windup`,
 ///    `ready_at`), and pending messages have the threats' swing queues.
 /// 9: avatars keep a threat's push while they swing (`AvatarState::push`).
-pub const FORMAT_VERSION: u32 = 9;
+/// 10: every agent has a `Body` (position, route, velocity, push, health)
+///     and a `Carry` (cargo), apart from its hauler and avatar state.
+pub const FORMAT_VERSION: u32 = 10;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

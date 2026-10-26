@@ -29,8 +29,8 @@ impl Settlement {
             self.piano_notes.retain(|note| (note.agent, note.piano, note.pitch) != key);
             return;
         }
-        if player.avatar.max_health > 0 && player.avatar.health == 0
-            || (player.position - self.pianos[usize::from(piano)]).length_squared() >= REACH * REACH {
+        if player.body.max_health > 0 && player.body.health == 0
+            || (player.body.position - self.pianos[usize::from(piano)]).length_squared() >= REACH * REACH {
             return;
         }
         self.piano_serial = self.piano_serial.wrapping_add(1);
@@ -42,9 +42,9 @@ impl Settlement {
         self.piano_notes.retain(|note| {
             self.agents.get(note.agent as usize).is_some_and(|agent| {
                 agent.controlled
-                    && (agent.avatar.max_health == 0 || agent.avatar.health > 0)
+                    && (agent.body.max_health == 0 || agent.body.health > 0)
                     && self.pianos.get(usize::from(note.piano)).is_some_and(|&position|
-                        (agent.position - position).length_squared() < REACH * REACH)
+                        (agent.body.position - position).length_squared() < REACH * REACH)
             })
         });
     }

@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::avatar::{character_of, Intent};
 use super::combat::{Event, TossEnd};
-use super::haulers::AgentState;
+use super::AgentState;
 use super::{AgentIx, Settlement};
 use crate::messages::PileStep;
 use crate::nav;
@@ -481,13 +481,13 @@ impl Settlement {
                     if gap < radius + body + Fx::from_ratio(1, 25) || gap > radius + body + Fx::from_ratio(9, 20) {
                         return Err("Approach point must be within safe transfer reach");
                     }
-                    let path = walk_path(terrain, a.position, stand, body);
+                    let path = walk_path(terrain, a.body.position, stand, body);
                     if path.is_empty() {
                         return Err("Approach point is blocked");
                     }
                     path
                 }
-                None => approach_route(terrain, a.position, center, radius, body).ok_or("No clear route there on foot")?,
+                None => approach_route(terrain, a.body.position, center, radius, body).ok_or("No clear route there on foot")?,
             };
             let pace = if pace == Fx::ZERO { 0 } else { (pace * Fx::from_int(content::TICKS_PER_SECOND)).round().floor_to_int().max(1) as u64 };
             follow(a, route);
@@ -500,7 +500,7 @@ impl Settlement {
                 radius,
                 age: 0,
                 stalled: 0,
-                previous: a.position,
+                previous: a.body.position,
                 pace,
                 next_toss: tick,
                 remaining: None,
@@ -561,16 +561,16 @@ impl Settlement {
     /// Stage 2, for an avatar: walk toward its pile, replanning when stuck.
     pub(super) fn pile_job_self_update(lab: &PileLab, me: AgentIx, a: &mut AgentState, terrain: &Terrain, body: Fx) -> Option<&'static str> {
         let job = lab.hauler(me)?.job.as_ref()?;
-        if job.remaining.is_some() || in_reach(a.position, job, body) {
-            a.route.clear();
-            a.avatar.velocity = FxVec2::ZERO;
+        if job.remaining.is_some() || in_reach(a.body.position, job, body) {
+            a.body.route.clear();
+            a.body.velocity = FxVec2::ZERO;
             return None;
         }
         if job.age > JOB_TIMEOUT_TICKS {
             return Some("Haul timed out. Cargo retained; choose another approach.");
         }
-        if a.route.is_empty() || job.stalled > STALL_TICKS {
-            match approach_route(terrain, a.position, job.center, job.radius, body) {
+        if a.body.route.is_empty() || job.stalled > STALL_TICKS {
+            match approach_route(terrain, a.body.position, job.center, job.radius, body) {
                 Some(route) => follow(a, route),
                 None => return Some("Route blocked. Cargo retained."),
             }
@@ -593,7 +593,7 @@ impl Settlement {
         for (&agent, hauler) in lab.haulers.iter_mut() {
             hauler.in_flight.retain(|&landing| landing > tick);
             let Some(job) = hauler.job.as_mut() else { continue };
-            let position = self.agents[agent as usize].position;
+            let position = self.agents[agent as usize].body.position;
             job.age += 1;
             job.stalled = if nav::distance(position, job.previous) < Fx::from_ratio(3, 1000) { job.stalled + 1 } else { 0 };
             job.previous = position;
@@ -610,7 +610,7 @@ impl Settlement {
             return None;
         }
         let job = self.piles.as_ref()?.hauler(me)?.job.as_ref()?;
-        let due = job.remaining != Some(0) && tick >= job.next_toss && (job.remaining.is_some() || in_reach(a.position, job, character_of(&self.characters, a).body.radius));
+        let due = job.remaining != Some(0) && tick >= job.next_toss && (job.remaining.is_some() || in_reach(a.body.position, job, character_of(&self.characters, a).body.radius));
         due.then_some(PileStep { agent: me })
     }
 
@@ -740,8 +740,8 @@ impl Settlement {
 
 /// Points the avatar along a route.
 fn follow(a: &mut AgentState, route: Vec<FxVec2>) {
-    let target = route.last().copied().unwrap_or(a.position);
-    a.route = route;
+    let target = route.last().copied().unwrap_or(a.body.position);
+    a.body.route = route;
     a.avatar.swing = None;
     a.avatar.queued = None;
     a.avatar.queued_at = None;

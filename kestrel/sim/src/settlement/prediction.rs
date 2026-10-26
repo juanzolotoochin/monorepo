@@ -233,8 +233,8 @@ mod tests {
     fn targets(settlement: &Settlement, terrain: &Terrain, striker: u16) -> (Vec<(FxVec2, Fx)>, Vec<bool>, Vec<bool>) {
         let others = || settlement.agents.iter().enumerate().filter(|&(i, a)| i != striker as usize && a.controlled).map(|(_, a)| a);
         (
-            others().map(|a| (a.position, a.avatar.height)).collect(),
-            others().map(|a| a.avatar.health > 0).collect(),
+            others().map(|a| (a.body.position, a.avatar.height)).collect(),
+            others().map(|a| a.body.health > 0).collect(),
             terrain.destructibles.iter().map(|piece| piece.health > 0).collect(),
         )
     }
@@ -325,7 +325,7 @@ mod tests {
                 assert!(replay.step_with(&schedule[i]));
                 assert_eq!(unhit(replay.state()), unhit(&states[i + 1]), "{}: the avatar differs ({:?})", context(), &schedule[start..=i]);
                 swings += usize::from(replay.state().avatar.swing.as_ref().is_some_and(|s| s.resolved));
-                routed += usize::from(matches!(replay.state().avatar.intent, Some(Intent::GoTo { .. })) && !replay.state().route.is_empty());
+                routed += usize::from(matches!(replay.state().avatar.intent, Some(Intent::GoTo { .. })) && !replay.state().body.route.is_empty());
                 let (mine, real) = (replay.events(), events[i].as_slice());
                 assert_eq!(keys(mine), keys(real), "{}: predicted {mine:?}, simulated {real:?}", context());
                 let before = targets(settlement, terrain, agent);
@@ -404,7 +404,7 @@ mod tests {
         // avatar into the pit; the replay never changes the ground.
         step(&mut sim, &mut replay);
         let real = &sim.world().settlement().unwrap().agents[agent as usize];
-        assert_eq!(replay.state().position, real.position);
+        assert_eq!(replay.state().body.position, real.body.position);
         assert!(real.avatar.height < replay.state().avatar.height);
     }
 
@@ -419,7 +419,7 @@ mod tests {
         assert!(!replay.apply(&haul), "a pile haul is not predicted");
         let goto = CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target: settlement.spawn + FxVec2::new(Fx::ONE, Fx::ZERO), run: false } };
         assert!(replay.apply(&goto), "a GoTo walk is predicted");
-        assert!(!replay.state().route.is_empty());
+        assert!(!replay.state().body.route.is_empty());
         let piano = CommandKind::PlayPiano { agent, piano: 0, pitch: 60, velocity: 100 };
         assert!(replay.apply(&piano));
         let other = CommandKind::Jetpack { agent: agent + 1, enabled: true };

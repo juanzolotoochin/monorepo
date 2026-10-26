@@ -45,7 +45,7 @@ pub(crate) fn update(
         ));
         return;
     };
-    let now = mirror.player().and_then(|agent| Some((agent, mirror.current.as_ref()?.agents.get(agent as usize)?.avatar.health)));
+    let now = mirror.player().and_then(|agent| Some((agent, mirror.current.as_ref()?.agents.get(agent as usize)?.body.health)));
     if hurt(state.seen, now) {
         state.strength = 1.0;
     }

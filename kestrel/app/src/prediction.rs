@@ -186,7 +186,7 @@ impl AvatarPrediction {
         let base = drawn.floor() as u64;
         let fraction = (drawn - base as f64) as f32;
         let view = |a: &AgentState| {
-            let p = (c.to_view)(a.position);
+            let p = (c.to_view)(a.body.position);
             Vec3::new(p.x, a.avatar.height.to_f32(), p.z)
         };
         let current = &c.settlement.agents[c.agent as usize];
@@ -475,7 +475,7 @@ mod tests {
                 assert!(time < asked as f64, "frame {frame}: drawn at {time}, a command now asks for {asked}");
                 assert!((0.75..=1.25).contains(&(time - last)), "frame {frame}: drawn time moved {}", time - last);
             }
-            moved = moved.max((drawn.position.x - to_view(a.position).x).abs());
+            moved = moved.max((drawn.position.x - to_view(a.body.position).x).abs());
             last_horizon = Some(horizon);
             last_time = Some(time);
         }
@@ -508,10 +508,10 @@ mod tests {
         world.step(&[sim::Command { player: sim::PlayerId(0), kind: walk.clone() }]);
         let late = draw(&world, &[], 40);
         assert!(late.mispredicted > 0.0 && !late.snapped);
-        let shown = late.position.x - (to_view(late.from.position).x).lerp(to_view(late.to.position).x, late.fraction);
+        let shown = late.position.x - (to_view(late.from.body.position).x).lerp(to_view(late.to.body.position).x, late.fraction);
         assert!(shown > 0.01, "the old prediction is still drawn: offset {shown}");
         let next = draw(&world, &[], 41);
-        let decayed = next.position.x - (to_view(next.from.position).x).lerp(to_view(next.to.position).x, next.fraction);
+        let decayed = next.position.x - (to_view(next.from.body.position).x).lerp(to_view(next.to.body.position).x, next.fraction);
         assert_eq!(next.mispredicted, 0.0);
         assert!((decayed - shown * 0.5f32.powf(dt / OFFSET_HALF_LIFE)).abs() < 1e-4, "{decayed} after {shown}");
     }
@@ -537,7 +537,7 @@ mod tests {
         }
         world.step(&[]);
         let mut settlement = world.settlement().unwrap().clone();
-        settlement.agents[agent as usize].position.x += Fx::from_int(push);
+        settlement.agents[agent as usize].body.position.x += Fx::from_int(push);
         let touched = if seen { vec![world.tick() - 1] } else { Vec::new() };
         let hit = draw(&settlement, world.terrain(), world.tick(), &touched, 36);
         let next = draw(&settlement, world.terrain(), world.tick(), &touched, 37);
@@ -598,13 +598,13 @@ mod tests {
         // A hit, as stage 5 applies one.
         world.step(&[]);
         let mut hit = world.settlement().unwrap().clone();
-        hit.agents[agent as usize].avatar.health += 1;
+        hit.agents[agent as usize].body.health += 1;
         assert_eq!(observe(&mut stage_five, &world, &hit, None), [world.tick() - 1]);
         assert!(stage_five.touched(2, agent).is_empty(), "another world's");
         // The next tick starts from the hit settlement.
         world.step(&[]);
         let mut walked = world.settlement().unwrap().clone();
-        walked.agents[agent as usize].avatar.health += 1;
+        walked.agents[agent as usize].body.health += 1;
         assert_eq!(observe(&mut stage_five, &world, &walked, None), [world.tick() - 2], "only the hit tick");
 
         // A tick run on terrain that changed since isn't checked: the replay
@@ -614,14 +614,14 @@ mod tests {
         stage_five.observe(1, agent, [(world.tick(), world.terrain().revision, &before)], world.terrain(), |_| Some(Vec::new()));
         world.step(&[]);
         let mut moved = world.settlement().unwrap().clone();
-        moved.agents[agent as usize].position.y += Fx::ONE;
+        moved.agents[agent as usize].body.position.y += Fx::ONE;
         let mut terrain = world.terrain().clone();
         terrain.revision += 1;
         stage_five.observe(1, agent, [(world.tick(), terrain.revision, &moved)], &terrain, |_| Some(Vec::new()));
         assert!(stage_five.touched(1, agent).is_empty());
         // Nor is one whose commands aren't all known.
         world.step(&[]);
-        let moved = { let mut s = world.settlement().unwrap().clone(); s.agents[agent as usize].position.y += Fx::from_int(3); s };
+        let moved = { let mut s = world.settlement().unwrap().clone(); s.agents[agent as usize].body.position.y += Fx::from_int(3); s };
         stage_five.observe(1, agent, [(world.tick(), terrain.revision, &moved)], &terrain, |_| None);
         assert!(stage_five.touched(1, agent).is_empty());
     }
@@ -635,9 +635,9 @@ mod tests {
         let agent = world.settlement().unwrap().player().unwrap();
         let mut dead = world.settlement().unwrap().clone();
         let a = &mut dead.agents[agent as usize];
-        let home = a.home;
-        a.position = home + FxVec2::new(Fx::from_int(4), Fx::ZERO);
-        (a.avatar.max_health, a.avatar.health, a.avatar.respawn_at) = (6, 0, world.tick() + 12);
+        let home = a.body.home;
+        a.body.position = home + FxVec2::new(Fx::from_int(4), Fx::ZERO);
+        (a.body.max_health, a.body.health, a.avatar.respawn_at) = (6, 0, world.tick() + 12);
         let mut prediction = AvatarPrediction::default();
         let mut respawned = None;
         for horizon in 6..30u64 {
@@ -647,7 +647,7 @@ mod tests {
             };
             let drawn = prediction.update(&confirmed, 1.0 / 60.0);
             assert_eq!((drawn.mispredicted, drawn.snapped, drawn.knockback, drawn.knockback_snapped), (0.0, false, 0.0, false), "horizon {horizon}");
-            if drawn.to.position == home && respawned.is_none() {
+            if drawn.to.body.position == home && respawned.is_none() {
                 respawned = Some(horizon);
             }
         }

@@ -265,7 +265,7 @@ impl SessionService {
 
     /// The confirmed player position in view coordinates, for gameplay input.
     pub fn player_view_position(&self) -> Option<Vec3> {
-        Some(self.to_view(self.settlement()?.agents[self.player()? as usize].position))
+        Some(self.to_view(self.settlement()?.agents[self.player()? as usize].body.position))
     }
 
     /// Sends a command; it applies on the next host tick locally, or after
@@ -937,11 +937,11 @@ pub fn follow_avatar(
             // Interpolating from the previous tick adds a full tick of visible lag.
             let alpha = if !service.is_client() && !service.session.is_replay() { 1.0 } else { mirror.alpha };
             // A teleport (respawn, deploying a recording) snaps instead of sliding.
-            let alpha = if mirror.to_view(before.position).distance(mirror.to_view(a.position)) > 1.5 { 1.0 } else { alpha };
+            let alpha = if mirror.to_view(before.body.position).distance(mirror.to_view(a.body.position)) > 1.5 { 1.0 } else { alpha };
             (before, a, alpha)
         }
     };
-    let (start, end) = (mirror.to_view(from.position), mirror.to_view(to.position));
+    let (start, end) = (mirror.to_view(from.body.position), mirror.to_view(to.body.position));
     let mut position = start.lerp(end, alpha);
     if let Some(drawn) = &predicted {
         position.x = drawn.position.x;
@@ -966,7 +966,7 @@ pub fn follow_avatar(
             web_time::Instant::now(),
             crate::telemetry::PreviewUpdate {
                 shown: position,
-                confirmed: mirror.to_view(a.position),
+                confirmed: mirror.to_view(a.body.position),
                 target: Vec3::new(drawn.target.x, position.y, drawn.target.z),
                 mispredicted: drawn.mispredicted,
                 snapped: drawn.snapped,
@@ -979,9 +979,9 @@ pub fn follow_avatar(
     let previous = player.translation;
     let teleport = previous.distance(position) > 1.5;
     player.translation = position;
-    let heading = from.heading.to_f32() + angle_between(from.heading.to_f32(), to.heading.to_f32()) * alpha;
+    let heading = from.body.heading.to_f32() + angle_between(from.body.heading.to_f32(), to.body.heading.to_f32()) * alpha;
     player.rotation = Quat::from_rotation_y(heading);
-    let velocity = |s: &sim::settlement::AgentState| Vec3::new(s.avatar.velocity.x.to_f32(), 0.0, s.avatar.velocity.y.to_f32());
+    let velocity = |s: &sim::settlement::AgentState| Vec3::new(s.body.velocity.x.to_f32(), 0.0, s.body.velocity.y.to_f32());
     controls.velocity = velocity(a);
     if predicted.is_some() {
         // A predicted avatar faces the way it is predicted to move.
@@ -1298,7 +1298,7 @@ mod tests {
     fn confirmed(app: &App) -> Vec3 {
         let mirror = app.world().resource::<WorldMirror>();
         let index = mirror.player().unwrap() as usize;
-        mirror.to_view(mirror.current.as_ref().unwrap().agents[index].position)
+        mirror.to_view(mirror.current.as_ref().unwrap().agents[index].body.position)
     }
 
     /// An app on the field at a fixed frame rate, launching straight into a
@@ -1417,7 +1417,7 @@ mod tests {
             let previous_position = mirror
                 .previous
                 .as_ref()
-                .map(|previous| mirror.to_view(previous.agents[index as usize].position))
+                .map(|previous| mirror.to_view(previous.agents[index as usize].body.position))
                 .unwrap_or(current_position);
             if current_position.distance(previous_position) < 0.001 {
                 continue;
@@ -2024,7 +2024,7 @@ mod tests {
         game.hold(&[Right, Run], 60);
         assert_eq!(touched(&game), Vec::<u64>::new(), "running is no stage 5 touch");
         game.telemetry().network.clear_corrections();
-        let health = |game: &RelayedGame| game.host.world().resource::<SessionService>().settlement().unwrap().agents[agent as usize].avatar.health;
+        let health = |game: &RelayedGame| game.host.world().resource::<SessionService>().settlement().unwrap().agents[agent as usize].body.health;
         let (mut shots, mut hits, mut died_at, mut touches) = (0, 0, None, 0);
         for frame in 0..900u32 {
             if died_at.is_none() {
@@ -2034,8 +2034,8 @@ mod tests {
                     let mirror = game.host.world().resource::<WorldMirror>();
                     let agents = &mirror.current.as_ref().unwrap().agents;
                     let (target, from) = (&agents[agent as usize], &agents[shooter as usize]);
-                    let velocity = Vec3::new(target.avatar.velocity.x.to_f32(), 0.0, target.avatar.velocity.y.to_f32());
-                    let aim = crate::navigation::flat(mirror.to_view(target.position) + velocity * 0.05 - mirror.to_view(from.position));
+                    let velocity = Vec3::new(target.body.velocity.x.to_f32(), 0.0, target.body.velocity.y.to_f32());
+                    let aim = crate::navigation::flat(mirror.to_view(target.body.position) + velocity * 0.05 - mirror.to_view(from.body.position));
                     fire_laser(&mut game.host, aim.normalize_or_zero());
                     shots += 1;
                 }
@@ -2109,7 +2109,7 @@ mod tests {
         };
         let drawn = |game: &RelayedGame| {
             let mirror = game.client.world().resource::<WorldMirror>();
-            crate::navigation::flat(mirror.to_view(drawn_avatar(&game.client).to.position))
+            crate::navigation::flat(mirror.to_view(drawn_avatar(&game.client).to.body.position))
         };
         // The pit's follow camera turns the keys: find where D and W go.
         let axis = |game: &mut RelayedGame, key: KeyCode| {
@@ -2144,7 +2144,7 @@ mod tests {
                         if hit && hit_at.is_none() {
                             hit_at = Some(frame);
                             // Before the hit's tick (the push is in the newest).
-                            let v = mirror.previous.as_ref().unwrap().agents[agent as usize].avatar.velocity;
+                            let v = mirror.previous.as_ref().unwrap().agents[agent as usize].body.velocity;
                             speed = Vec2::new(v.x.to_f32(), v.y.to_f32()).length();
                         }
                     }
@@ -2154,7 +2154,7 @@ mod tests {
                 break;
             }
         }
-        let health = game.host.world().resource::<SessionService>().settlement().unwrap().agents[agent as usize].avatar.health;
+        let health = game.host.world().resource::<SessionService>().settlement().unwrap().agents[agent as usize].body.health;
         let telemetry = game.telemetry();
         let kinds: Vec<_> = telemetry.network.corrections().map(|c| format!("{:?} {:.3} u over {} frames{}", c.kind, c.distance, c.frames, if c.snapped { " snapped" } else { "" })).collect();
         let report = format!("{swings} swings at the client, first hit on frame {hit_at:?} at {speed:.2} m/s, health now {health}, corrections {kinds:?}");

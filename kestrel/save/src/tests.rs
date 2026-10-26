@@ -154,7 +154,7 @@ fn settlement_save_and_continue() {
     for _ in 0..317 {
         first.step(&[]);
     }
-    assert!(!first.world().settlement().unwrap().transfers.is_empty() || first.world().settlement().unwrap().agents.iter().any(|a| a.assignment.is_some()));
+    assert!(!first.world().settlement().unwrap().transfers.is_empty() || first.world().settlement().unwrap().agents.iter().any(|a| a.hauler.assignment.is_some()));
     let bytes = write(first.world(), &content);
     let mut resumed = Simulation::from_world(read(&bytes, &content).unwrap(), 2);
     for expected in &expected[317..] {

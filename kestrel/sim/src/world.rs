@@ -845,9 +845,9 @@ impl World {
         for index in 0..self.terrain.destructibles.len() {
             let piece = &self.terrain.destructibles[index];
             let held = settlement.agents.iter().any(|agent| agent.controlled
-                && (agent.avatar.max_health == 0 || agent.avatar.health > 0)
+                && (agent.body.max_health == 0 || agent.body.health > 0)
                 && agent.avatar.repair == Some(piece.asset)
-                && self.terrain.asset_in_repair_reach(agent.position, piece.asset));
+                && self.terrain.asset_in_repair_reach(agent.body.position, piece.asset));
             self.terrain.repair_cover(index, held);
         }
     }

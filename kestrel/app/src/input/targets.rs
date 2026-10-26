@@ -256,7 +256,7 @@ pub fn confirmed_facing(mirror: &WorldMirror) -> Option<Vec3> {
     let direction = match a.avatar.aim {
         Some(aim) => Vec3::new(aim.x.to_f32(), 0.0, aim.y.to_f32()),
         None => {
-            let h = sim::nav::heading_vector(a.heading);
+            let h = sim::nav::heading_vector(a.body.heading);
             Vec3::new(h.x.to_f32(), 0.0, h.y.to_f32())
         }
     };

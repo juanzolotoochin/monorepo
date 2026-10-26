@@ -126,7 +126,7 @@ pub fn update(
         shown.push(peer.agent);
         let current = &mirror.current.as_ref().unwrap().agents[peer.agent as usize];
         let before = mirror.previous.as_ref().and_then(|p| p.agents.get(peer.agent as usize)).unwrap_or(current);
-        let (from, to) = (mirror.to_view(before.position), mirror.to_view(current.position));
+        let (from, to) = (mirror.to_view(before.body.position), mirror.to_view(current.body.position));
         let alpha = if from.distance(to) > 1.5 { 1.0 } else { mirror.alpha };
         let mut position = from.lerp(to, alpha);
         position.y = before.avatar.height.to_f32()
@@ -151,19 +151,19 @@ pub fn update(
             sound.play(crate::sound::Cue::Step);
         }
         transform.translation = position;
-        let turn = (current.heading - before.heading).to_f32();
+        let turn = (current.body.heading - before.body.heading).to_f32();
         let turn =
             (turn + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-        let heading = before.heading.to_f32() + turn * alpha;
+        let heading = before.body.heading.to_f32() + turn * alpha;
         transform.rotation = Quat::from_rotation_y(heading);
         let airborne = current.avatar.flight.airborne;
         let velocity = if airborne {
             Vec3::ZERO
         } else {
             Vec3::new(
-                current.avatar.velocity.x.to_f32(),
+                current.body.velocity.x.to_f32(),
                 0.0,
-                current.avatar.velocity.y.to_f32(),
+                current.body.velocity.y.to_f32(),
             )
         };
         let (speed, turn) =

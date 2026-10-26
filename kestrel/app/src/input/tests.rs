@@ -436,7 +436,7 @@ impl Game {
 
     fn position(&self) -> Vec3 {
         let mirror = self.app.world().resource::<WorldMirror>();
-        mirror.to_view(self.avatar().position)
+        mirror.to_view(self.avatar().body.position)
     }
 
     fn paused(&self) -> bool {
@@ -455,7 +455,7 @@ impl Game {
         });
         for _ in 0..(20.0 * self.fps) as usize {
             self.frames(1);
-            if self.avatar().route.is_empty() && self.app.world().resource::<SessionService>().caught_up() {
+            if self.avatar().body.route.is_empty() && self.app.world().resource::<SessionService>().caught_up() {
                 return;
             }
         }

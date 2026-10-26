@@ -351,7 +351,7 @@ pub fn shown_digs(mirror: &WorldMirror, drawn: Option<&crate::prediction::DrawnS
             .enumerate()
             .filter(|&(i, _)| Some(i as u16) != me || drawn.is_none())
             .filter_map(|(i, a)| {
-                let at = mirror.to_view(a.position).with_y(a.avatar.height.to_f32());
+                let at = mirror.to_view(a.body.position).with_y(a.avatar.height.to_f32());
                 Some(ShownDig { agent: i as u16, dig: a.avatar.dig.clone()?, at, now })
             })
             .collect()
@@ -461,7 +461,7 @@ pub fn snapshot(world: &World) -> serde_json::Value {
         .collect();
     let digging = mirror.player().zip(mirror.current.as_ref()).is_some_and(|(i, s)| s.agents[i as usize].avatar.dig.is_some());
     let collected = mirror.current.as_ref().and_then(|s| s.piles.as_ref()?.collector.as_ref()).map(|c| c.stored.clone());
-    let me = mirror.player().zip(mirror.current.as_ref()).map(|(i, s)| Terrain::pit_tile(s.agents[i as usize].position));
+    let me = mirror.player().zip(mirror.current.as_ref()).map(|(i, s)| Terrain::pit_tile(s.agents[i as usize].body.position));
     let nearest_ore = me.zip(terrain.mine()).and_then(|(me, mine)| {
         (-8..=8)
             .flat_map(|y| (-8..=8).map(move |x| (me.0 + x, me.1 + y)))

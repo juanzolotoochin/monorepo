@@ -15,6 +15,7 @@
 //! coordinates; [`Settlement::from_scenario`] offsets them by the arena center.
 
 pub mod action;
+mod agent;
 pub mod avatar;
 pub mod combat;
 mod economy;
@@ -37,7 +38,8 @@ use crate::nav;
 use crate::terrain::{Disc, Terrain};
 
 pub use combat::{CombatMetrics, DefenderState, Event, Impact, OnMiss, Pinned, Prediction, Projectile, SpentProjectile, Threat, TossEnd, WaveState};
-pub use haulers::{AgentState, Phase};
+pub use agent::{AgentState, Body, Carry};
+pub use haulers::{HaulerState, Phase};
 pub use prediction::AvatarReplay;
 
 pub type ItemIx = u16;
@@ -180,7 +182,7 @@ pub struct Settlement {
     pub sources: Vec<SourceState>,
     pub links: Vec<LinkState>,
     pub producers: Vec<ProducerState>,
-    pub agents: Vec<haulers::AgentState>,
+    pub agents: Vec<AgentState>,
     /// In flight, by ID.
     pub transfers: BTreeMap<u64, Transfer>,
     /// The agent allowed to use each depot's dock, as resolved last tick.
@@ -365,17 +367,17 @@ impl Settlement {
                 if def.brain != wanted {
                     return Err(format!("agent {} is {:?}, a {:?} character; it needs a {wanted:?} one", a.id, a.character, def.brain));
                 }
-                Ok(haulers::AgentState::new(a, ix, def, at(a.position), &scenario.links, items.len(), &item, &depot))
+                Ok(AgentState::new(a, ix, def, at(a.position), &scenario.links, items.len(), &item, &depot))
             })
             .collect::<Result<Vec<_>, String>>()?;
         for agent in agents.iter_mut().filter(|agent| agent.controlled) {
-            agent.avatar.health = scenario.player_health;
-            agent.avatar.max_health = scenario.player_health;
+            agent.body.health = scenario.player_health;
+            agent.body.max_health = scenario.player_health;
             agent.avatar.weapon = scenario.weapons.first().copied().unwrap_or_default();
         }
 
         for a in &agents {
-            if nav::path(terrain, a.position, a.position, a.radius()).is_empty() {
+            if nav::path(terrain, a.body.position, a.body.position, a.radius()).is_empty() {
                 return Err(format!("agent {} spawns inside an obstacle", a.id));
             }
         }
@@ -509,9 +511,9 @@ impl Settlement {
         settlement.pianos = setup.pianos.iter().map(|&position| at([position.x, position.y])).collect();
         if let Some(player) = settlement.player() {
             let a = &mut settlement.agents[player as usize];
-            a.position = settlement.spawn;
-            a.home = settlement.spawn;
-            a.heading = Fx::PI;
+            a.body.position = settlement.spawn;
+            a.body.home = settlement.spawn;
+            a.body.heading = Fx::PI;
             a.avatar.height = settlement.spawn_height;
         }
         settlement.piles = setup.piles.as_ref().map(|p| {
@@ -592,7 +594,7 @@ impl Settlement {
         &self.depots[self.depot_index(id).expect("known depot") as usize]
     }
 
-    pub fn agent(&self, id: &str) -> &haulers::AgentState {
+    pub fn agent(&self, id: &str) -> &AgentState {
         &self.agents[self.agent_index(id).expect("known agent") as usize]
     }
 
@@ -615,7 +617,7 @@ impl Settlement {
             .map(|(i, id)| {
                 let b = &self.accounts[i];
                 let stored = self.depots.iter().map(|d| d.stock[i] as u64).sum();
-                let carried = self.agents.iter().map(|a| a.cargo[i] as u64).sum();
+                let carried = self.agents.iter().map(|a| a.carry.cargo[i] as u64).sum();
                 let in_transit = self.transfers.values().filter(|t| t.item as usize == i).count() as u64;
                 let equipped = self.agents.iter().filter(|a| a.equipped_item() == Some(i as ItemIx)).count() as u64;
                 let supplied = b.initial + b.generated + b.produced;
@@ -644,13 +646,13 @@ impl Settlement {
         let mut out = vec![vec![0u32; items]; self.depots.len()];
         let mut incoming = vec![vec![0u32; items]; self.depots.len()];
         for a in &self.agents {
-            if let Some(job) = &a.assignment {
+            if let Some(job) = &a.hauler.assignment {
                 let link = &self.links[job.link as usize];
                 out[link.from as usize][link.item as usize] += job.units - job.loaded;
                 incoming[link.to as usize][link.item as usize] += job.units - job.unloaded;
             }
-            if a.phase == Phase::ToEquip {
-                let e = a.equipment.as_ref().expect("equipping agents have equipment");
+            if a.hauler.phase == Phase::ToEquip {
+                let e = a.hauler.equipment.as_ref().expect("equipping agents have equipment");
                 out[e.depot as usize][e.item as usize] += 1;
             }
         }
@@ -692,8 +694,8 @@ impl Settlement {
             }
         }
         for a in &self.agents {
-            let cargo: u32 = a.cargo.iter().sum();
-            if cargo + a.pending_in > a.cargo_capacity {
+            let cargo: u32 = a.carry.cargo.iter().sum();
+            if cargo + a.carry.pending_in > a.carry.capacity {
                 return Err(format!("agent {} capacity exceeded", a.id));
             }
         }
@@ -731,13 +733,13 @@ impl Settlement {
             .agents
             .iter()
             .map(|a| {
-                (&a.id, a.position, a.heading, a.travelled, a.phase, &a.route, &a.cargo, &a.trailer)
+                (&a.id, a.body.position, a.body.heading, a.body.travelled, a.hauler.phase, &a.body.route, &a.carry.cargo, &a.hauler.trailer)
             })
             .collect();
         let avatars: Vec<_> = self
             .agents
             .iter()
-            .map(|a| (a.avatar.velocity, a.avatar.height, a.avatar.health, &a.avatar.swing, &a.avatar.jump))
+            .map(|a| (a.body.velocity, a.avatar.height, a.body.health, &a.avatar.swing, &a.avatar.jump))
             .collect();
         let threats: Vec<_> = self
             .threats

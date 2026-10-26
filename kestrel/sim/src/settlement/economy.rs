@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use fx::{Fx, FxVec2};
 use rayon::prelude::*;
 
-use super::haulers::{self, body, job_size, Assignment, Ctx, Phase, Trailer, ATTACH_TICKS, RETRY_TICKS};
+use super::haulers::{self, footprint, job_size, Assignment, Ctx, Phase, Trailer, ATTACH_TICKS, RETRY_TICKS};
 use super::{AgentIx, DepotIx, Endpoint, ItemIx, Settlement, Transfer, TRANSFER_FLIGHT_TICKS};
 use crate::messages::{Attach, ClaimDock, DockClaim, Equip, Load, Messages, Reserve, Retry, Unload};
 use crate::terrain::Terrain;
@@ -16,9 +16,9 @@ impl Settlement {
     pub(crate) fn self_update(&mut self, tick: u64, terrain: &Terrain) {
         self.events.clear();
         self.threats_self_update(tick, terrain);
-        let bodies: Vec<_> = self.agents.iter().map(body).collect();
+        let footprints: Vec<_> = self.agents.iter().map(footprint).collect();
         let Settlement { agents, characters, dock_owner, depots, links, piles, .. } = self;
-        let ctx = Ctx { tick, characters, terrain, piles: piles.as_ref(), bodies: &bodies, dock_owner, depots, links };
+        let ctx = Ctx { tick, characters, terrain, piles: piles.as_ref(), footprints: &footprints, dock_owner, depots, links };
         agents.par_iter_mut().enumerate().for_each(|(i, a)| haulers::self_update(a, i as AgentIx, &ctx));
         self.release_distant_piano_notes();
     }
@@ -33,7 +33,7 @@ impl Settlement {
             .map(|(i, a)| {
                 let mut out = Messages::default();
                 haulers::read(a, i as AgentIx, tick, self, terrain, &mut out);
-                (a.position, out)
+                (a.body.position, out)
             })
             .collect();
         result.extend(self.read_combat(tick, terrain));
@@ -52,7 +52,7 @@ impl Settlement {
         for id in landed {
             let t = self.transfers.remove(&id).expect("listed transfer");
             if let Endpoint::Cargo(a) = t.from {
-                self.agents[a as usize].pending_out -= 1;
+                self.agents[a as usize].carry.pending_out -= 1;
             }
             match t.to {
                 Endpoint::Depot(d) => {
@@ -67,8 +67,8 @@ impl Settlement {
                 }
                 Endpoint::Cargo(a) => {
                     let agent = &mut self.agents[a as usize];
-                    agent.cargo[t.item as usize] += 1;
-                    agent.pending_in -= 1;
+                    agent.carry.cargo[t.item as usize] += 1;
+                    agent.carry.pending_in -= 1;
                 }
             }
         }
@@ -160,25 +160,25 @@ impl Settlement {
     }
 
     pub(crate) fn retry(&mut self, tick: u64, message: Retry) {
-        self.agents[message.agent as usize].retries = tick + RETRY_TICKS;
+        self.agents[message.agent as usize].hauler.retries = tick + RETRY_TICKS;
         self.metrics.assignment_retries += 1;
     }
 
     fn idle(&self, agent: AgentIx) -> bool {
-        matches!(self.agents[agent as usize].phase, Phase::Idle | Phase::Returning)
+        matches!(self.agents[agent as usize].hauler.phase, Phase::Idle | Phase::Returning)
     }
 
     pub(crate) fn equip(&mut self, tick: u64, message: Equip) {
         let a = &self.agents[message.agent as usize];
-        let e = a.equipment.as_ref().expect("equip comes from equippable agents");
+        let e = a.hauler.equipment.as_ref().expect("equip comes from equippable agents");
         let (depot, item) = (e.depot as usize, e.item);
-        if !self.idle(message.agent) || a.equipped || self.depots[depot].available(item) == 0 {
+        if !self.idle(message.agent) || a.hauler.equipped || self.depots[depot].available(item) == 0 {
             return self.retry(tick, Retry { agent: message.agent });
         }
         self.depots[depot].out[item as usize] += 1;
         let a = &mut self.agents[message.agent as usize];
-        a.phase = Phase::ToEquip;
-        a.route = message.route;
+        a.hauler.phase = Phase::ToEquip;
+        a.body.route = message.route;
     }
 
     /// Accepts a haul job if it still fits, possibly smaller than asked.
@@ -198,17 +198,17 @@ impl Settlement {
         self.depots[to].incoming[item] += units;
         self.metrics.assignments += 1;
         let a = &mut self.agents[message.agent as usize];
-        a.assignment = Some(Assignment { link: message.link, units, loaded: 0, unloaded: 0 });
-        a.phase = Phase::ToPickup;
-        a.route = message.route;
+        a.hauler.assignment = Some(Assignment { link: message.link, units, loaded: 0, unloaded: 0 });
+        a.hauler.phase = Phase::ToPickup;
+        a.body.route = message.route;
     }
 
     pub(crate) fn attach(&mut self, tick: u64, terrain: &Terrain, message: Attach) {
         let a = &self.agents[message.agent as usize];
-        if a.phase != Phase::Attaching || a.equipped {
+        if a.hauler.phase != Phase::Attaching || a.hauler.equipped {
             return;
         }
-        let e = a.equipment.as_ref().expect("attaching agents have equipment");
+        let e = a.hauler.equipment.as_ref().expect("attaching agents have equipment");
         let (depot, item) = (e.depot as usize, e.item as usize);
         let (spot, heading) = a.trailer_spot(terrain);
         self.depots[depot].stock[item] -= 1;
@@ -216,16 +216,16 @@ impl Settlement {
         self.metrics.equipped += 1;
         self.events.push(super::Event::Equipped { agent: message.agent });
         let a = &mut self.agents[message.agent as usize];
-        a.equipped = true;
-        a.travel_heading = heading;
-        a.trailer = Some(Trailer { position: spot, heading, travelled: Fx::ZERO });
-        a.transfer_at = tick + ATTACH_TICKS;
+        a.hauler.equipped = true;
+        a.body.travel_heading = heading;
+        a.hauler.trailer = Some(Trailer { position: spot, heading, travelled: Fx::ZERO });
+        a.hauler.transfer_at = tick + ATTACH_TICKS;
     }
 
     pub(crate) fn load(&mut self, tick: u64, message: Load) {
         let a = &self.agents[message.agent as usize];
-        let Some(job) = &a.assignment else { return };
-        if a.phase != Phase::Loading || job.loaded >= job.units {
+        let Some(job) = &a.hauler.assignment else { return };
+        if a.hauler.phase != Phase::Loading || job.loaded >= job.units {
             return;
         }
         let link = &self.links[job.link as usize];
@@ -236,28 +236,28 @@ impl Settlement {
         self.metrics.picked += 1;
         let start = depot.position;
         let a = &mut self.agents[message.agent as usize];
-        a.assignment.as_mut().expect("checked").loaded += 1;
-        a.pending_in += 1;
-        a.transfer_at = tick + a.transfer_ticks;
-        let end = a.position;
+        a.hauler.assignment.as_mut().expect("checked").loaded += 1;
+        a.carry.pending_in += 1;
+        a.hauler.transfer_at = tick + a.carry.transfer_ticks;
+        let end = a.body.position;
         self.launch(tick, item, Endpoint::Depot(from), Endpoint::Cargo(message.agent), start, end);
     }
 
     pub(crate) fn unload(&mut self, tick: u64, message: Unload) {
         let a = &self.agents[message.agent as usize];
-        let Some(job) = &a.assignment else { return };
-        if a.phase != Phase::Unloading || job.unloaded >= job.units {
+        let Some(job) = &a.hauler.assignment else { return };
+        if a.hauler.phase != Phase::Unloading || job.unloaded >= job.units {
             return;
         }
         let link = &self.links[job.link as usize];
         let (to, item) = (link.to, link.item);
         let end = self.depots[to as usize].position;
         let a = &mut self.agents[message.agent as usize];
-        a.cargo[item as usize] -= 1;
-        a.assignment.as_mut().expect("checked").unloaded += 1;
-        a.pending_out += 1;
-        a.transfer_at = tick + a.transfer_ticks;
-        let start = a.position;
+        a.carry.cargo[item as usize] -= 1;
+        a.hauler.assignment.as_mut().expect("checked").unloaded += 1;
+        a.carry.pending_out += 1;
+        a.hauler.transfer_at = tick + a.carry.transfer_ticks;
+        let start = a.body.position;
         self.launch(tick, item, Endpoint::Cargo(message.agent), Endpoint::Depot(to), start, end);
     }
 

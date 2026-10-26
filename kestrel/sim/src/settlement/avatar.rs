@@ -15,7 +15,7 @@ use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
 use super::combat::{Event, TossEnd};
-use super::haulers::AgentState;
+use super::{AgentState, Body, Carry, HaulerState};
 use super::action::{Action, View};
 use super::{AgentIx, DepotIx, DepotState, Endpoint, ItemIx, Settlement};
 use crate::messages::{ActionMessages, DropHaul, DropNotes, ManualUnit, Messages, RestartMemory, StockChange, Strike, TransferStock};
@@ -151,10 +151,6 @@ pub enum JumpPhase {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AvatarState {
     #[serde(default)]
-    pub health: u32,
-    #[serde(default)]
-    pub max_health: u32,
-    #[serde(default)]
     pub respawn_at: u64,
     /// Height of the feet above the arena floor.
     pub height: Fx,
@@ -163,14 +159,6 @@ pub struct AvatarState {
     pub jump: JumpPhase,
     /// A pile job that failed while walking, for housekeeping to report.
     pub pile_failure: Option<String>,
-    /// Meters per second.
-    pub velocity: FxVec2,
-    /// A threat's push on an avatar busy with a swing, in meters per
-    /// second. The swing keeps the avatar's own velocity from moving it,
-    /// so the push moves it on its own (`walk`), and what is left of it
-    /// joins `velocity` when the swing ends.
-    #[serde(default)]
-    pub push: FxVec2,
     pub intent: Option<Intent>,
     pub run: bool,
     pub swing: Option<Swing>,
@@ -245,16 +233,16 @@ fn slide(terrain: &Terrain, mut position: FxVec2, delta: FxVec2, radius: Fx) -> 
 /// Stage 2 for one avatar.
 pub(super) fn self_update(a: &mut AgentState, me: AgentIx, tick: u64, terrain: &Terrain, piles: Option<&super::piles::PileLab>, def: &CharacterDef) {
     let radius = def.body.radius;
-    if a.avatar.max_health > 0 && a.avatar.health == 0 {
+    if a.body.max_health > 0 && a.body.health == 0 {
         if tick >= a.avatar.respawn_at {
-            a.position = a.home;
-            a.avatar.height = terrain.footprint(a.home, radius).unwrap_or_default();
-            a.avatar.health = a.avatar.max_health;
+            a.body.position = a.body.home;
+            a.avatar.height = terrain.footprint(a.body.home, radius).unwrap_or_default();
+            a.body.health = a.body.max_health;
             a.avatar.respawn_at = 0;
             a.avatar.flight = Flight::default();
             a.avatar.jump = JumpPhase::Grounded;
-            a.avatar.velocity = FxVec2::ZERO;
-            a.avatar.push = FxVec2::ZERO;
+            a.body.velocity = FxVec2::ZERO;
+            a.body.push = FxVec2::ZERO;
             a.avatar.intent = Some(Intent::Stop);
         }
         return;
@@ -275,7 +263,7 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, tick: u64, terrain: &
 /// keeping to the ground.
 fn jump_step(a: &mut AgentState, tick: u64, terrain: &Terrain, radius: Fx, jump: Option<&JumpDef>) {
     let avatar = &mut a.avatar;
-    let ground = terrain.footprint(a.position, radius);
+    let ground = terrain.footprint(a.body.position, radius);
     if let Some(y) = ground {
         avatar.flight.support = y;
     }
@@ -322,25 +310,25 @@ fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain, def: &CharacterDef) {
     let per_tick = Fx::from_int(content::TICKS_PER_SECOND);
     let avatar = &mut a.avatar;
     if let Some(dig) = &avatar.dig {
-        avatar.velocity = approach(avatar.velocity, FxVec2::ZERO, tuning.braking);
+        a.body.velocity = approach(a.body.velocity, FxVec2::ZERO, tuning.braking);
         let center = Terrain::pit_center(dig.tile);
         let centering = def.dig().map_or(Fx::ZERO, |d| d.centering);
-        a.position = slide(terrain, a.position, approach(a.position, center, centering) - a.position, radius);
+        a.body.position = slide(terrain, a.body.position, approach(a.body.position, center, centering) - a.body.position, radius);
         return;
     }
     if let Some((started, until, weapon, aim)) = avatar.swing.as_ref().map(|s| (s.started, s.until, s.weapon, s.aim)) {
         if tick < until && weapon != Weapon::Laser {
-            avatar.velocity = approach(avatar.velocity, FxVec2::ZERO, tuning.attack_braking);
-            if avatar.push != FxVec2::ZERO {
+            a.body.velocity = approach(a.body.velocity, FxVec2::ZERO, tuning.attack_braking);
+            if a.body.push != FxVec2::ZERO {
                 // A threat's push moves the swinging avatar as it would an
                 // idle one: braked at the walking rate, by the walking rules.
-                avatar.push = approach(avatar.push, FxVec2::ZERO, tuning.braking);
-                let delta = avatar.push / per_tick;
+                a.body.push = approach(a.body.push, FxVec2::ZERO, tuning.braking);
+                let delta = a.body.push / per_tick;
                 step(a, terrain, delta, radius);
             }
             if tick < started + tuning.attack.aim {
                 let target = nav::bearing(FxVec2::ZERO, aim);
-                a.heading += angle_between(a.heading, target) * AIM_BLEND;
+                a.body.heading += angle_between(a.body.heading, target) * AIM_BLEND;
             }
             return;
         }
@@ -349,24 +337,24 @@ fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain, def: &CharacterDef) {
         }
     }
     // What is left of a push from the swing moves the avatar from now on.
-    avatar.velocity += std::mem::take(&mut avatar.push);
+    a.body.velocity += std::mem::take(&mut a.body.push);
     let speed = if avatar.run { def.movement.run } else { def.movement.walk };
     let mut desired = FxVec2::ZERO;
     match &avatar.intent {
         Some(Intent::Walk { direction, .. }) => desired = *direction * speed,
-        Some(Intent::GoTo { .. }) if !a.route.is_empty() => {
+        Some(Intent::GoTo { .. }) if !a.body.route.is_empty() => {
             let near = Fx::from_ratio(9, 50);
-            while a.route.len() > 1 && distance(a.route[0], a.position) < near {
-                a.route.remove(0);
+            while a.body.route.len() > 1 && distance(a.body.route[0], a.body.position) < near {
+                a.body.route.remove(0);
             }
-            let delta = a.route[0] - a.position;
+            let delta = a.body.route[0] - a.body.position;
             let remaining = delta.length();
-            let braking = if a.route.len() == 1 { (Fx::from_int(56) * remaining).sqrt() } else { speed };
+            let braking = if a.body.route.len() == 1 { (Fx::from_int(56) * remaining).sqrt() } else { speed };
             desired = delta.normalize_or_zero() * speed.min(braking);
             if remaining < Fx::from_ratio(11, 200) {
-                a.position = a.route[0];
-                avatar.velocity = FxVec2::ZERO;
-                a.route.clear();
+                a.body.position = a.body.route[0];
+                a.body.velocity = FxVec2::ZERO;
+                a.body.route.clear();
                 avatar.intent = Some(Intent::Stop);
                 desired = FxVec2::ZERO;
             }
@@ -374,22 +362,22 @@ fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain, def: &CharacterDef) {
         _ => {}
     }
     let change = if desired == FxVec2::ZERO { tuning.braking } else { tuning.acceleration };
-    avatar.velocity = approach(avatar.velocity, desired, change);
-    let previous = a.position;
-    let mut delta = avatar.velocity / per_tick;
-    if a.route.len() == 1 {
-        let remaining = a.route[0] - previous;
+    a.body.velocity = approach(a.body.velocity, desired, change);
+    let previous = a.body.position;
+    let mut delta = a.body.velocity / per_tick;
+    if a.body.route.len() == 1 {
+        let remaining = a.body.route[0] - previous;
         if delta.length() > remaining.length() {
             delta = remaining;
-            avatar.velocity = FxVec2::ZERO;
+            a.body.velocity = FxVec2::ZERO;
         }
     }
     step(a, terrain, delta, radius);
-    let moved = a.position - previous;
+    let moved = a.body.position - previous;
     let length = moved.length();
     if length > Fx::from_ratio(1, 1000) {
         let target = nav::bearing(FxVec2::ZERO, moved);
-        a.heading += angle_between(a.heading, target) * TURN_BLEND;
+        a.body.heading += angle_between(a.body.heading, target) * TURN_BLEND;
     }
 }
 
@@ -397,7 +385,7 @@ fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain, def: &CharacterDef) {
 /// (or, in the air, the flight rules) allows it. On foot, it keeps to the
 /// ground it reaches.
 fn step(a: &mut AgentState, terrain: &Terrain, delta: FxVec2, radius: Fx) {
-    let previous = a.position;
+    let previous = a.body.position;
     let candidate = slide(terrain, previous, delta, radius);
     let airborne = a.avatar.flight.airborne;
     let allowed = if airborne {
@@ -411,24 +399,24 @@ fn step(a: &mut AgentState, terrain: &Terrain, delta: FxVec2, radius: Fx) {
                 a.avatar.height = ground;
             }
         }
-        a.position = candidate;
+        a.body.position = candidate;
     }
-    a.travelled += (a.position - previous).length();
+    a.body.travelled += (a.body.position - previous).length();
 }
 
 /// The jetpack: hover over the highest ground ahead while held, fall back to
 /// the ground when released, and keep flying over drops.
 fn fly(a: &mut AgentState, terrain: &Terrain, radius: Fx, jetpack: &JetpackDef) {
     let flight = &mut a.avatar.flight;
-    let ground = terrain.footprint(a.position, radius);
+    let ground = terrain.footprint(a.body.position, radius);
     let landing = ground;
     if let Some(y) = ground {
         flight.support = y;
     }
     let active = flight.requested || (flight.airborne && landing.is_none());
-    let direction = match a.route.first() {
-        Some(&next) => (next - a.position).normalize_or_zero(),
-        None => a.avatar.velocity.normalize_or_zero(),
+    let direction = match a.body.route.first() {
+        Some(&next) => (next - a.body.position).normalize_or_zero(),
+        None => a.body.velocity.normalize_or_zero(),
     };
     let mut target = ground.unwrap_or(flight.support);
     if active {
@@ -436,7 +424,7 @@ fn fly(a: &mut AgentState, terrain: &Terrain, radius: Fx, jetpack: &JetpackDef) 
         let r = radius;
         let offsets = [(Fx::ZERO, Fx::ZERO), (r, Fx::ZERO), (-r, Fx::ZERO), (Fx::ZERO, r), (Fx::ZERO, -r)];
         for i in 0..=20 {
-            let p = a.position + direction * Fx::from_ratio(i, 10);
+            let p = a.body.position + direction * Fx::from_ratio(i, 10);
             for &(dx, dy) in &offsets {
                 if let Some(y) = terrain.ground(FxVec2::new(p.x + dx, p.y + dy)) {
                     target = target.max(y);
@@ -485,38 +473,30 @@ impl Settlement {
             id: format!("player-{}", player.0),
             owner: Some(player),
             name: String::new(),
-            home: position,
-            position,
-            heading: Fx::PI,
-            travel_heading: Fx::ZERO,
-            travelled: Fx::ZERO,
-            phase: super::haulers::Phase::Idle,
-            route: Vec::new(),
-            cargo: vec![0; template.cargo.len()],
-            assignment: None,
-            equipped: false,
-            trailer: None,
-            transfer_at: 0,
-            retries: 0,
-            departure_dock: None,
-            traffic_replan_at: 0,
-            yielding: 0,
-            pending_in: 0,
-            pending_out: 0,
-            avatar: AvatarState {
-                height: self.spawn_height,
+            body: Body {
+                home: position,
+                position,
+                heading: Fx::PI,
                 health: self.player_health,
                 max_health: self.player_health,
+                speed: template.body.speed,
+                base_radius: template.body.base_radius,
+                ..Body::default()
+            },
+            carry: Carry {
+                cargo: vec![0; template.carry.cargo.len()],
+                capacity: template.carry.capacity,
+                transfer_ticks: template.carry.transfer_ticks,
+                ..Carry::default()
+            },
+            hauler: HaulerState { links: template.hauler.links.clone(), equipment: template.hauler.equipment.clone(), ..HaulerState::default() },
+            avatar: AvatarState {
+                height: self.spawn_height,
                 weapon: self.weapons.first().copied().unwrap_or_default(),
                 intent: Some(Intent::Stop),
                 ..AvatarState::default()
             },
             attack_ready: 0,
-            avoidance_steers: 0,
-            dock_wait_ticks: 0,
-            traffic_wait_ticks: 0,
-            loaded_travel: Fx::ZERO,
-            empty_travel: Fx::ZERO,
             ..template
         });
     }
@@ -564,18 +544,18 @@ impl Settlement {
     /// restarts at once, as `RestartMemory` does. Returns whether it died.
     pub(super) fn hurt_player(&mut self, agent: usize, damage: u32, tick: u64, terrain: &mut Terrain) -> bool {
         let a = &mut self.agents[agent];
-        a.avatar.health = a.avatar.health.saturating_sub(damage);
-        if a.avatar.health > 0 {
+        a.body.health = a.body.health.saturating_sub(damage);
+        if a.body.health > 0 {
             return false;
         }
         a.avatar.respawn_at = tick + ticks_from_60hz(120);
         a.avatar.swing = None;
         a.avatar.queued = None;
         a.avatar.queued_at = None;
-        a.avatar.velocity = FxVec2::ZERO;
-        a.avatar.push = FxVec2::ZERO;
+        a.body.velocity = FxVec2::ZERO;
+        a.body.push = FxVec2::ZERO;
         a.avatar.dig = None;
-        a.route.clear();
+        a.body.route.clear();
         if let Some(job) = a.avatar.job.take() {
             let ManualJob { depot, item, remaining, deposit, .. } = job;
             let release = TransferStock { agent: agent as AgentIx, depot, item, units: remaining, deposit, change: StockChange::Release };
@@ -660,11 +640,11 @@ impl Settlement {
     /// avatar against the confirmed settlement.
     pub(super) fn read_avatar(&self, me: AgentIx, a: &AgentState, tick: u64, terrain: &Terrain, out: &mut Messages) {
         if let Some(swing) = resolving(a, tick) {
-            let aimed = self.strike_targets(me, a.avatar.height, a.position, swing.aim, swing.weapon, terrain);
+            let aimed = self.strike_targets(me, a.avatar.height, a.body.position, swing.aim, swing.weapon, terrain);
             out.strike.push(Strike {
                 agent: me,
                 weapon: swing.weapon,
-                origin: a.position,
+                origin: a.body.position,
                 forward: swing.aim,
                 muzzle: swing.muzzle,
                 targets: aimed.targets,
@@ -675,7 +655,7 @@ impl Settlement {
             });
         }
         if let Some(job) = &a.avatar.job {
-            if tick >= job.next_tick && distance(a.position, self.depots[job.depot as usize].position) <= DOCK_REACH {
+            if tick >= job.next_tick && distance(a.body.position, self.depots[job.depot as usize].position) <= DOCK_REACH {
                 out.manual_unit.push(ManualUnit { agent: me });
             }
         }
@@ -714,20 +694,20 @@ impl Settlement {
         }
         let (d, item) = (job.depot as usize, job.item);
         let dock = self.depots[d].position;
-        let at = self.agents[agent].position;
+        let at = self.agents[agent].body.position;
         if job.deposit {
-            self.agents[agent].cargo[item as usize] -= 1;
-            self.agents[agent].pending_out += 1;
+            self.agents[agent].carry.cargo[item as usize] -= 1;
+            self.agents[agent].carry.pending_out += 1;
             self.launch(tick, item, Endpoint::Cargo(message.agent), Endpoint::Depot(job.depot), at, dock);
         } else {
             self.depots[d].stock[item as usize] -= 1;
             self.depots[d].out[item as usize] -= 1;
             self.metrics.picked += 1;
-            self.agents[agent].pending_in += 1;
+            self.agents[agent].carry.pending_in += 1;
             self.launch(tick, item, Endpoint::Depot(job.depot), Endpoint::Cargo(message.agent), dock, at);
         }
         let a = &mut self.agents[agent];
-        let next = tick + a.transfer_ticks;
+        let next = tick + a.carry.transfer_ticks;
         let job = a.avatar.job.as_mut().expect("checked");
         job.remaining -= 1;
         job.next_tick = next;
@@ -772,12 +752,12 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
         Action::Jetpack(enabled) => jetpack(a, enabled, def),
         Action::Jump => jump(a, view.tick, def),
         Action::DigDown => {
-            if view.can_dig_at(a.position) {
+            if view.can_dig_at(a.body.position) {
                 dig(a, view.tick, view.terrain, def);
             }
         }
         Action::Transfer { depot, item, units, deposit } => {
-            let busy = a.avatar.job.is_some() || a.pending_in > 0 || a.pending_out > 0;
+            let busy = a.avatar.job.is_some() || a.carry.pending_in > 0 || a.carry.pending_out > 0;
             if !busy && units > 0 && transfer_limit(a, view.depots, view.items, depot as usize, item as usize, deposit) >= units {
                 a.avatar.job = Some(ManualJob { depot, item, remaining: units, deposit, next_tick: view.tick });
                 // The job reserves its units at the depot.
@@ -826,16 +806,16 @@ fn transfer_limit(a: &AgentState, depots: &[DepotState], items: usize, depot: us
         return 0;
     }
     if deposit {
-        a.cargo[item].min(d.free())
+        a.carry.cargo[item].min(d.free())
     } else {
-        let carried: u32 = a.cargo.iter().sum::<u32>() + a.pending_in;
-        a.cargo_capacity.saturating_sub(carried).min(d.available(item as ItemIx))
+        let carried: u32 = a.carry.cargo.iter().sum::<u32>() + a.carry.pending_in;
+        a.carry.capacity.saturating_sub(carried).min(d.available(item as ItemIx))
     }
 }
 
 /// Alive, or without health at all.
 pub(super) fn alive(a: &AgentState) -> bool {
-    a.avatar.max_health == 0 || a.avatar.health > 0
+    a.body.max_health == 0 || a.body.health > 0
 }
 
 /// Sets a live avatar's intent. Walking off stops a dig; a `GoTo` plans its
@@ -851,13 +831,13 @@ fn set_intent(a: &mut AgentState, intent: Intent, terrain: &Terrain, def: &Chara
         return;
     }
     a.avatar.dig = None;
-    a.route.clear();
+    a.body.route.clear();
     if let Intent::GoTo { target, run } = intent {
         // On foot, routes avoid steps and drops; with the jetpack, anything goes.
         let flying = a.avatar.flight.requested || a.avatar.flight.airborne;
         let radius = def.body.radius;
         let walkable = |p: FxVec2, q: FxVec2| flying || terrain.walkable(p, q, radius);
-        a.route = nav::path_with(terrain, a.position, target, radius, &[], &walkable);
+        a.body.route = nav::path_with(terrain, a.body.position, target, radius, &[], &walkable);
         a.avatar.run = run;
     } else if let Intent::Walk { run, .. } = intent {
         a.avatar.run = run;
@@ -880,7 +860,7 @@ fn release(a: &mut AgentState, hauling: bool) {
         return;
     }
     if matches!(a.avatar.intent, Some(Intent::Walk { .. } | Intent::GoTo { .. })) {
-        a.route.clear();
+        a.body.route.clear();
         a.avatar.intent = Some(Intent::Stop);
     }
 }
@@ -975,11 +955,11 @@ fn dig(a: &mut AgentState, tick: u64, terrain: &Terrain, def: &CharacterDef) {
     if busy || a.avatar.dig.is_some() || flight.requested || flight.airborne {
         return;
     }
-    let tile = Terrain::pit_tile(a.position);
+    let tile = Terrain::pit_tile(a.body.position);
     if terrain.pit(tile) >= MAX_LAYERS || !terrain.inside(Terrain::pit_center(tile)) {
         return;
     }
-    a.route.clear();
+    a.body.route.clear();
     a.avatar.intent = Some(Intent::Stop);
     a.avatar.dig = Some(Dig { tile, started: tick, until: tick + ticks });
 }
@@ -1000,9 +980,15 @@ fn drop_transfer(a: &mut AgentState, me: AgentIx, out: &mut ActionMessages) {
 
 /// Puts the avatar at the spawn point with a fresh state.
 fn respawn(a: &mut AgentState, spawn: FxVec2, height: Fx) {
-    a.position = spawn;
-    a.heading = Fx::PI;
-    a.route.clear();
+    a.body.position = spawn;
+    a.body.heading = Fx::PI;
+    a.body.route.clear();
+    // The fresh state starts the body's motion and health over too, as it
+    // always did: health and max health go to 0.
+    a.body.velocity = FxVec2::ZERO;
+    a.body.push = FxVec2::ZERO;
+    a.body.health = 0;
+    a.body.max_health = 0;
     a.avatar = AvatarState { height, ..AvatarState::default() };
     a.avatar.intent = Some(Intent::Stop);
 }
@@ -1016,7 +1002,7 @@ fn start_swing(a: &mut AgentState, tick: u64, weapon: Weapon, aim: FxVec2, muzzl
         a.avatar.aim = Some(aim);
     }
     if weapon != Weapon::Laser {
-        a.route.clear();
+        a.body.route.clear();
         a.avatar.intent = Some(Intent::Stop);
     }
     a.avatar.swing = Some(Swing {
