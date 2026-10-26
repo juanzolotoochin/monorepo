@@ -16,7 +16,7 @@ use sim::{Command, CommandKind};
 
 use crate::LoadError;
 
-pub const INPUT_FORMAT_VERSION: u32 = 2;
+pub const INPUT_FORMAT_VERSION: u32 = 3;
 /// The oldest input log this build reads.
 pub const OLDEST_INPUT_FORMAT_VERSION: u32 = 1;
 const MAGIC: &[u8; 4] = b"GLOG";
@@ -95,7 +95,7 @@ mod tests {
     fn release_round_trips_in_the_current_version() {
         let written = log(vec![CommandKind::ReleaseDirectControl { agent: 2 }]);
         let bytes = written.to_bytes();
-        assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 2);
+        assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), INPUT_FORMAT_VERSION);
         assert_eq!(InputLog::from_bytes(&bytes).unwrap(), written);
     }
 
@@ -133,7 +133,7 @@ mod tests {
     #[test]
     fn newer_and_unknown_versions_are_refused() {
         let bytes = log(vec![]).to_bytes();
-        for version in [0, 3] {
+        for version in [0, INPUT_FORMAT_VERSION + 1] {
             assert_eq!(
                 InputLog::from_bytes(&with_version(bytes.clone(), version)).unwrap_err(),
                 LoadError::FormatVersion { found: version, expected: INPUT_FORMAT_VERSION }

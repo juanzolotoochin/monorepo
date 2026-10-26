@@ -29,7 +29,7 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 /// 5: the jump and swift sword flags and scene speeds leave the settlement
 ///    and terrain for character abilities.
 /// 6: settlements persist piano positions and each player's held notes.
-pub const FORMAT_VERSION: u32 = 6;
+pub const FORMAT_VERSION: u32 = 7;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 pub use style::*;
 
-pub const VERSION: u32 = 16;
+pub const VERSION: u32 = 17;
 pub type Result<T> = std::result::Result<T, String>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -264,6 +264,20 @@ pub struct Piano {
     pub damage_asset: Option<String>,
 }
 
+/// A scene-authored vehicle. A parked mech faces local +Z.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Vehicle {
+    pub id: String,
+    pub kind: VehicleKind,
+    pub position: [f32; 3],
+    #[serde(default)]
+    pub yaw: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VehicleKind { Mech }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename = "Scene", deny_unknown_fields)]
 pub struct Scene {
@@ -279,6 +293,8 @@ pub struct Scene {
     pub instances: Vec<Instance>,
     #[serde(default)]
     pub pianos: Vec<Piano>,
+    #[serde(default)]
+    pub vehicles: Vec<Vehicle>,
     #[serde(default)]
     pub piles: Option<PileLayout>,
     /// Generated ground to dig and mine, instead of the deck.
@@ -387,10 +403,20 @@ impl ScenePack {
             || self.scene.features.iter().collect::<std::collections::BTreeSet<_>>().len() != self.scene.features.len()
             || self.scene.instances.len() > 512
             || self.scene.pianos.len() > 32
+            || self.scene.vehicles.len() > 32
             || !self.scene.spawn.iter().all(|v| v.is_finite())
             || self.scene.pianos.iter().any(|p| !p.yaw.is_finite() || p.position.iter().any(|v| !v.is_finite()))
+            || self.scene.vehicles.iter().any(|v| !v.yaw.is_finite() || v.position.iter().any(|x| !x.is_finite()))
         {
             return Err("invalid scene header or instance count".into());
+        }
+        let mut vehicle_ids = std::collections::BTreeSet::new();
+        for vehicle in &self.scene.vehicles {
+            if vehicle.id.is_empty()
+                || !vehicle.id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                || !vehicle_ids.insert(vehicle.id.as_str()) {
+                return Err("duplicate or invalid vehicle ID".into());
+            }
         }
         let mut cover_ids = std::collections::BTreeSet::new();
         for cover in &self.scene.destructibles {
@@ -798,6 +824,7 @@ mod tests {
                     label: None,
                 }],
                 pianos: vec![],
+                vehicles: vec![],
             },
             prefabs: vec![prefab],
             environment: None,
@@ -833,6 +860,7 @@ mod tests {
                 industrial: false,
                 instances: vec![],
                 pianos: vec![],
+                vehicles: vec![],
                 piles: None,
                 mine: None,
                 style: None,

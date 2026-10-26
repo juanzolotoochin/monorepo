@@ -185,7 +185,7 @@ fn approach(current: FxVec2, target: FxVec2, max_change: Fx) -> FxVec2 {
 
 /// Moves `position` by `delta` in small steps, pushing out of obstacles and
 /// never leaving the arena, as the original controller did.
-fn slide(terrain: &Terrain, mut position: FxVec2, delta: FxVec2, radius: Fx) -> FxVec2 {
+fn slide(terrain: &Terrain, vehicles: &[super::vehicle::VehicleState], mut position: FxVec2, delta: FxVec2, radius: Fx) -> FxVec2 {
     let step = Fx::from_ratio(3, 50);
     let steps = (delta.length() / step).ceil().floor_to_int().max(1);
     let (min, max) = (terrain.min(), terrain.max());
@@ -195,9 +195,11 @@ fn slide(terrain: &Terrain, mut position: FxVec2, delta: FxVec2, radius: Fx) -> 
         let previous = position;
         position = clamp(position + delta.div_int(steps));
         for _ in 0..3 {
-            for o in terrain.blocking_obstacles() {
-                let separation = position - o.center;
-                let clearance = o.radius + radius + extra;
+            for (center, obstacle_radius) in terrain.blocking_obstacles().map(|o| (o.center, o.radius))
+                .chain(vehicles.iter().filter(|v| matches!(v.phase, super::vehicle::VehiclePhase::Parked))
+                    .map(|v| (v.position, super::vehicle::MECH_RADIUS))) {
+                let separation = position - center;
+                let clearance = obstacle_radius + radius + extra;
                 if separation.length_squared() < clearance * clearance {
                     let length = separation.length();
                     let away = if length == Fx::ZERO { FxVec2::new(Fx::ONE, Fx::ZERO) } else { separation / length };
@@ -213,8 +215,14 @@ fn slide(terrain: &Terrain, mut position: FxVec2, delta: FxVec2, radius: Fx) -> 
 }
 
 /// Stage 2 for one avatar.
-pub(super) fn self_update(a: &mut AgentState, me: AgentIx, tick: u64, terrain: &Terrain, piles: Option<&super::piles::PileLab>, def: &CharacterDef) {
-    let radius = def.body.radius;
+pub(super) fn self_update(a: &mut AgentState, me: AgentIx, tick: u64, terrain: &Terrain, piles: Option<&super::piles::PileLab>, def: &CharacterDef,
+    vehicle: Option<&super::vehicle::VehiclePhase>, vehicles: &[super::vehicle::VehicleState]) {
+    let driving = vehicle.is_some_and(|phase| phase.driving(me));
+    if vehicle.is_some_and(|phase| phase.transitioning(me)) {
+        a.avatar.velocity = FxVec2::ZERO;
+        return;
+    }
+    let radius = if driving { super::vehicle::MECH_RADIUS } else { def.body.radius };
     if a.avatar.max_health > 0 && a.avatar.health == 0 {
         if tick >= a.avatar.respawn_at {
             a.position = a.home;
@@ -233,7 +241,11 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, tick: u64, terrain: &
             a.avatar.pile_failure = Some(error.to_string());
         }
     }
-    walk(a, tick, terrain, def);
+    walk(a, tick, terrain, vehicles, def, driving);
+    if driving {
+        jump_step(a, tick, terrain, radius, None);
+        return;
+    }
     match def.jetpack() {
         Some(jetpack) => fly(a, terrain, radius, jetpack),
         None => jump_step(a, tick, terrain, radius, def.jump()),
@@ -285,16 +297,16 @@ fn jump_step(a: &mut AgentState, tick: u64, terrain: &Terrain, radius: Fx, jump:
     }
 }
 
-fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain, def: &CharacterDef) {
+fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain, vehicles: &[super::vehicle::VehicleState], def: &CharacterDef, driving: bool) {
     let tuning = avatar_tuning(def);
-    let radius = def.body.radius;
+    let radius = if driving { super::vehicle::MECH_RADIUS } else { def.body.radius };
     let per_tick = Fx::from_int(content::TICKS_PER_SECOND);
     let avatar = &mut a.avatar;
     if let Some(dig) = &avatar.dig {
         avatar.velocity = approach(avatar.velocity, FxVec2::ZERO, tuning.braking);
         let center = Terrain::pit_center(dig.tile);
         let centering = def.dig().map_or(Fx::ZERO, |d| d.centering);
-        a.position = slide(terrain, a.position, approach(a.position, center, centering) - a.position, radius);
+        a.position = slide(terrain, vehicles, a.position, approach(a.position, center, centering) - a.position, radius);
         return;
     }
     if let Some(swing) = &avatar.swing {
@@ -310,7 +322,9 @@ fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain, def: &CharacterDef) {
             avatar.swing = None;
         }
     }
-    let speed = if avatar.run { def.movement.run } else { def.movement.walk };
+    let speed = if driving {
+        if avatar.run { super::vehicle::MECH_RUN } else { super::vehicle::MECH_WALK }
+    } else if avatar.run { def.movement.run } else { def.movement.walk };
     let mut desired = FxVec2::ZERO;
     match &avatar.intent {
         Some(Intent::Walk { direction, .. }) => desired = *direction * speed,
@@ -344,7 +358,7 @@ fn walk(a: &mut AgentState, tick: u64, terrain: &Terrain, def: &CharacterDef) {
             avatar.velocity = FxVec2::ZERO;
         }
     }
-    let candidate = slide(terrain, previous, delta, radius);
+    let candidate = slide(terrain, vehicles, previous, delta, radius);
     let airborne = a.avatar.flight.airborne;
     let allowed = if airborne {
         terrain.flyable(previous, candidate, a.avatar.height, radius)
@@ -616,6 +630,8 @@ impl Settlement {
 
     /// Commands: sets an avatar's movement intent.
     pub fn move_avatar(&mut self, agent: usize, intent: Intent, terrain: &Terrain) {
+        if self.vehicle_of(agent as AgentIx).is_some_and(|(_, vehicle)| vehicle.phase.transitioning(agent as AgentIx)) { return; }
+        let driving = self.vehicle_of(agent as AgentIx).is_some_and(|(_, vehicle)| vehicle.phase.driving(agent as AgentIx));
         if self.agents.get(agent).is_some_and(|a| a.controlled) {
             self.cancel_pile_job(agent);
         }
@@ -635,7 +651,7 @@ impl Settlement {
         if let Intent::GoTo { target, run } = intent {
             // On foot, routes avoid steps and drops; with the jetpack, anything goes.
             let flying = a.avatar.flight.requested || a.avatar.flight.airborne;
-            let radius = character_of(characters, a).body.radius;
+            let radius = if driving { super::vehicle::MECH_RADIUS } else { character_of(characters, a).body.radius };
             let walkable = |p: FxVec2, q: FxVec2| flying || terrain.walkable(p, q, radius);
             a.route = nav::path_with(terrain, a.position, target, radius, &[], &walkable);
             a.avatar.run = run;
@@ -678,6 +694,9 @@ impl Settlement {
     }
 
     pub fn attack(&mut self, tick: u64, agent: usize, weapon: Weapon, aim: FxVec2, muzzle: [Fx; 3]) {
+        if let Some((_, vehicle)) = self.vehicle_of(agent as AgentIx) {
+            if !vehicle.phase.driving(agent as AgentIx) || weapon != Weapon::Laser { return; }
+        }
         if !self.has_weapon(weapon) {
             return;
         }

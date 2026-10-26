@@ -249,6 +249,9 @@ impl SessionService {
 
     /// The radius the local player's routes and reach checks use.
     pub fn player_radius(&self) -> Option<Fx> {
+        if self.settlement()?.vehicle_of(self.player()?).is_some_and(|(_, vehicle)| vehicle.phase.driving(self.player().unwrap())) {
+            return Some(sim::settlement::vehicle::MECH_RADIUS);
+        }
         Some(self.player_character()?.body.radius)
     }
 
@@ -391,6 +394,10 @@ fn scene_setup(library: &SceneLibrary, index: usize, cache: &crate::assets::Mode
             repair_progress: 0,
         }).collect(),
         pianos: scene.pianos.iter().map(|piano| FxVec2::new(q(piano.position[0]), q(piano.position[2]))).collect(),
+        vehicles: scene.vehicles.iter().map(|vehicle| {
+            let kind = match vehicle.kind { voxel_assets::VehicleKind::Mech => sim::settlement::vehicle::VehicleKind::Mech };
+            (kind, FxVec2::new(q(vehicle.position[0]), q(vehicle.position[2])), q(vehicle.yaw))
+        }).collect(),
         doors: found.doors.iter().map(disc).collect(),
         surfaces,
         platforms_only,
@@ -908,9 +915,19 @@ pub fn follow_avatar(
     ground_step.height = Some(position.y);
     ground_step.agent = Some(index);
     ground_step.scene = Some(scene.index);
-    let motion = crate::character::motion_profile(&scene.pack);
+    let driving = service.settlement().and_then(|s| s.vehicle_of(index)).is_some_and(|(_, v)| v.phase.driving(index));
+    let transitioning = service.settlement().and_then(|s| s.vehicle_of(index)).is_some_and(|(_, v)| v.phase.transitioning(index));
+    let mut motion = crate::character::motion_profile(&scene.pack);
+    if driving {
+        motion.walk_speed = sim::settlement::vehicle::MECH_WALK.to_f32();
+        motion.run_speed = sim::settlement::vehicle::MECH_RUN.to_f32();
+        motion.step_distance = 1.2;
+    }
     let mut preview_velocity = None;
     if service.is_client() {
+        if transitioning {
+            *preview = LocalAvatarPreview { position: Some(to), agent: Some(index), ..default() };
+        }
         let snapped = preview.agent == Some(index) && preview.position.is_some_and(|p| p.distance(to) > 1.5);
         let mut correction = 0.0;
         let mut clamped = false;
@@ -928,7 +945,7 @@ pub fn follow_avatar(
                     (if delta.length() < 0.1 { Vec3::ZERO } else { delta.normalize() }, run)
                 })
             })
-            .filter(|_| (controls.attack.is_none() || controls.weapon == content::scenario::Weapon::Laser) && a.avatar.dig.is_none());
+            .filter(|_| !transitioning && (controls.attack.is_none() || controls.weapon == content::scenario::Weapon::Laser) && a.avatar.dig.is_none());
         let moving_input = movement.is_some_and(|(direction, _)| direction != Vec3::ZERO);
         if let Some((direction, run)) = movement {
             preview.active = true;

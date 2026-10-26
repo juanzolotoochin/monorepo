@@ -280,6 +280,7 @@ pub(super) struct Ctx<'a> {
     pub dock_owner: &'a [Option<AgentIx>],
     pub depots: &'a [DepotState],
     pub links: &'a [LinkState],
+    pub vehicles: &'a [super::vehicle::VehicleState],
 }
 
 pub(super) fn body(a: &AgentState) -> Body {
@@ -316,7 +317,8 @@ pub(crate) fn move_route(position: &mut FxVec2, route: &mut Vec<FxVec2>, mut dis
 pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
     if a.controlled {
         let def = super::avatar::character_of(ctx.characters, a);
-        return super::avatar::self_update(a, me, ctx.tick, ctx.terrain, ctx.piles, def);
+        let phase = ctx.vehicles.iter().find(|v| v.phase.agent() == Some(me)).map(|v| &v.phase);
+        return super::avatar::self_update(a, me, ctx.tick, ctx.terrain, ctx.piles, def, phase, ctx.vehicles);
     }
     if let Some(d) = a.departure_dock {
         let dock = ctx.depots[d as usize].position;
@@ -656,4 +658,3 @@ pub(super) fn job_size(a: &AgentState, link: &LinkState, depots: &[DepotState]) 
     let demand = link.target.saturating_sub(to.stock[link.item as usize] + to.incoming[link.item as usize]);
     depots[link.from as usize].available(link.item).min(to.free()).min(demand).min(a.cargo_capacity)
 }
-

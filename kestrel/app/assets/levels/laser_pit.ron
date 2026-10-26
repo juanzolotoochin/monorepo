@@ -8,6 +8,7 @@ Scene(
     instances: [],
     // The stage piano is an interactive prop tied to a three-bay cabinet.
     pianos: [(position: (0.0, 0.0, -12.4), damage_asset: Some("stage-piano"))],
+    vehicles: [(id: "guardian-mech", kind: Mech, position: (-3.5, 0.0, 10.4), yaw: 0.0)],
     terrain: Some((platforms: [
         (min: (-18.0, -16.0), max: (18.0, 16.0), height: 0.0),
     ])),

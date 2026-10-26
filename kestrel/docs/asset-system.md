@@ -61,6 +61,8 @@ Prefabs currently do **not** contain other prefabs. Scene layouts compose a scen
 
 Scene assets can also carry **destruction behavior**. A destructible cover entry is divided into pieces with separate health and collision. Some pieces leave a spiked electronic base when broken and can be rebuilt one stage at a time with an asset-authored repair animation. The [destructible cover guide](destructible-assets.md) shows its RON schema, break styles, repair tracks, and how collision behaves while destroyed.
 
+Scenes can also place [vehicles](vehicles.md). A vehicle has shared occupancy and movement state, so it is separate from static prefab instances and visual skins.
+
 ## 3. Reusable shapes become rig parts and skins
 
 A style's `shape_groups` are named collections of voxel shapes in local coordinates. A group may include other groups. Actor and skin **parts** include groups and can add their own shapes. The compiler expands the groups before meshing and validates names, cycles, and size limits. The combat style, for example, uses one `ghoul_leg` group for both legs of the ghoul and armored ghoul.

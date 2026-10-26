@@ -114,6 +114,8 @@ pub enum CommandKind {
     RepairCover { agent: u16, asset: Option<u16> },
     /// Press or release a piano key. Any input device can issue this action.
     PlayPiano { agent: u16, piano: u16, pitch: u8, velocity: u8 },
+    /// Enter a parked vehicle or exit the vehicle currently driven.
+    ToggleVehicle { agent: u16, vehicle: u16 },
 }
 
 impl CommandKind {
@@ -133,6 +135,7 @@ impl CommandKind {
             | CommandKind::ReleaseDirectControl { agent }
             | CommandKind::RepairCover { agent, .. }
             | CommandKind::PlayPiano { agent, .. }
+            | CommandKind::ToggleVehicle { agent, .. }
             | CommandKind::Pile { agent, .. } => Some(agent),
             _ => None,
         }
@@ -497,6 +500,11 @@ impl World {
                         s.play_piano(agent as usize, piano, pitch, velocity);
                     }
                 }
+                CommandKind::ToggleVehicle { agent, vehicle } => {
+                    if let Some(s) = &mut self.settlement {
+                        s.toggle_vehicle(self.tick, agent as usize, vehicle, &self.terrain);
+                    }
+                }
                 CommandKind::Pile { agent, action, pace, approach } => {
                     if let Some(s) = &mut self.settlement {
                         s.pile_action(self.tick, &self.terrain, agent as usize, action, pace, approach);
@@ -838,9 +846,11 @@ impl World {
             for message in messages.strike {
                 let agent = message.agent;
                 let cover = message.cover;
+                let cover_damage = if message.weapon == content::scenario::Weapon::Laser
+                    && settlement.vehicle_of(agent).is_some_and(|(_, vehicle)| vehicle.phase.driving(agent)) { 2 } else { 1 };
                 let hits = settlement.strike(tick, message);
                 if let Some(index) = cover {
-                    self.terrain.damage_cover(index as usize, 1);
+                    self.terrain.damage_cover(index as usize, cover_damage);
                 }
                 settlement.swing_resolved(agent, tick, hits);
             }

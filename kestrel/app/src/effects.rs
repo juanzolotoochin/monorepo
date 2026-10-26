@@ -408,7 +408,7 @@ pub fn emit_lasers(world: &mut World) {
     }
     let me = world.resource::<crate::lockstep::WorldMirror>().player();
     let mut markers = world.query::<(Entity, &WeaponMuzzle, &GlobalTransform)>();
-    let muzzles: Vec<_> = markers.iter(world).filter_map(|(entity, marker, transform)| {
+    let mut muzzles: Vec<_> = markers.iter(world).filter_map(|(entity, marker, transform)| {
         if marker.0 != content::scenario::Weapon::Laser {
             return None;
         }
@@ -424,14 +424,23 @@ pub fn emit_lasers(world: &mut World) {
             ancestor = world.get::<ChildOf>(current).map(ChildOf::parent);
         }
         let agent = owner?;
-        Some((agent, transform.translation()))
+        Some((agent, transform.translation(), false))
     }).collect();
+    let drivers: Vec<_> = world.resource::<crate::lockstep::SessionService>().settlement()
+        .map(|settlement| settlement.vehicles.iter().map(|vehicle| {
+            vehicle.phase.agent().filter(|&agent| vehicle.phase.driving(agent))
+        }).collect()).unwrap_or_default();
+    let mut markers = world.query::<(&crate::vehicle::MechMuzzle, &GlobalTransform)>();
+    let mech_muzzles: Vec<_> = markers.iter(world).filter_map(|(marker, transform)| {
+        Some((drivers.get(marker.0).copied().flatten()?, transform.translation(), true))
+    }).collect();
+    muzzles.extend(mech_muzzles);
     let mut obstacle_query = world.query::<&Obstacle>();
     let obstacles: Vec<_> = obstacle_query.iter(world).map(|obstacle| obstacle.0).collect();
     let assets = world.resource::<FxAssets>();
     let (cube, red) = (assets.cube.clone(), assets.laser.clone());
     for shot in shots {
-        let Some(&(_, from)) = muzzles.iter().find(|(agent, _)| *agent == shot.agent) else {
+        let Some(&(_, from, mech)) = muzzles.iter().rev().find(|(agent, _, _)| *agent == shot.agent) else {
             if let Some(index) = shot.cover { world.resource_mut::<CoverContacts>().arrive(index as usize); }
             continue;
         };
@@ -443,9 +452,10 @@ pub fn emit_lasers(world: &mut World) {
         }
         let direction = delta / distance;
         let (_, front) = laser_segment(distance, 0.0).unwrap();
+        let width = if mech { LASER_WIDTH * 2.2 } else { LASER_WIDTH };
         let transform = Transform::from_translation(from + direction * (front * 0.5))
             .with_rotation(Quat::from_rotation_arc(Vec3::Z, direction))
-            .with_scale(Vec3::new(LASER_WIDTH, LASER_WIDTH, front));
+            .with_scale(Vec3::new(width, width, front));
         let obstacle_hit = if shot.cover.is_some() { Some((shot.target, -direction)) }
             else { obstacle_impact(shot.target, &obstacles) };
         world.spawn((

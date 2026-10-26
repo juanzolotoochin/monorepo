@@ -70,6 +70,7 @@ impl Service for SceneView {
         }
         crate::style::apply(world, &pack, false);
         crate::piano::spawn(world, &pack.scene);
+        crate::vehicle::spawn(world, &pack.scene);
         // The built-in deck shows only where the scene brings no ground of
         // its own: terrain, an environment, or ground to dig.
         let own_ground = pack.scene.terrain.is_some()

@@ -877,10 +877,29 @@ pub fn update_hud(
 ) {
     let nearby = service.world().and_then(|world| world.terrain()
         .repairable_asset_near(service.to_sim(player.translation)));
+    let vehicle_prompt = service.player().and_then(|agent| {
+        let settlement = service.settlement()?;
+        if let Some((_, vehicle)) = settlement.vehicle_of(agent) {
+            return Some(match vehicle.phase {
+                sim::settlement::vehicle::VehiclePhase::Boarding { .. } => "BOARDING MECH",
+                sim::settlement::vehicle::VehiclePhase::Driving { .. } => "E / A TO EXIT MECH",
+                sim::settlement::vehicle::VehiclePhase::Exiting { .. } => "EXITING MECH",
+                sim::settlement::vehicle::VehiclePhase::Parked => return None,
+            });
+        }
+        let position = settlement.agents.get(agent as usize)?.position;
+        settlement.vehicles.iter().any(|vehicle| matches!(vehicle.phase,
+            sim::settlement::vehicle::VehiclePhase::Parked)
+            && (position - vehicle.position).length_squared()
+                < sim::settlement::vehicle::BOARD_REACH * sim::settlement::vehicle::BOARD_REACH)
+            .then_some("E / A TO BOARD MECH")
+    });
     if let Ok(mut visibility) = prompt_visibility.get_mut(repair_prompt.1.parent()) {
-        *visibility = if nearby.is_some() { Visibility::Inherited } else { Visibility::Hidden };
+        *visibility = if nearby.is_some() || vehicle_prompt.is_some() { Visibility::Inherited } else { Visibility::Hidden };
     }
-    if let Some(asset) = nearby {
+    if let Some(label) = vehicle_prompt {
+        if repair_prompt.0.0 != label { repair_prompt.0.0 = label.into(); }
+    } else if let Some(asset) = nearby {
         let pieces = service.world().unwrap().terrain().destructibles.iter()
             .filter(|piece| piece.asset == asset);
         let missing: u32 = pieces.map(|piece| u32::from(piece.max_health - piece.health)).sum();

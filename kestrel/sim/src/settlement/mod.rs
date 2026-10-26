@@ -20,6 +20,7 @@ mod economy;
 mod haulers;
 pub mod memory;
 pub mod piano;
+pub mod vehicle;
 pub mod piles;
 
 use std::collections::BTreeMap;
@@ -217,6 +218,8 @@ pub struct Settlement {
     pub piano_notes: Vec<piano::PianoNote>,
     #[serde(default)]
     pub piano_serial: u64,
+    #[serde(default)]
+    pub vehicles: Vec<vehicle::VehicleState>,
     pub piles: Option<piles::PileLab>,
     pub memory: Option<memory::Memory>,
 }
@@ -238,6 +241,7 @@ pub struct SceneSetup {
     pub destructibles: Vec<crate::terrain::Destructible>,
     /// Piano locations in scene coordinates, in the same order as the pack.
     pub pianos: Vec<FxVec2>,
+    pub vehicles: Vec<(vehicle::VehicleKind, FxVec2, Fx)>,
     /// Obstacles that open when the memory trial's door unlocks.
     pub doors: Vec<Disc>,
     pub surfaces: Vec<crate::terrain::Surface>,
@@ -443,6 +447,7 @@ impl Settlement {
             pianos: Vec::new(),
             piano_notes: Vec::new(),
             piano_serial: 0,
+            vehicles: Vec::new(),
             piles: None,
             memory: None,
             scenario: scenario.id.clone(),
@@ -504,6 +509,9 @@ impl Settlement {
         settlement.spawn = at([setup.spawn[0], setup.spawn[2]]);
         settlement.spawn_height = setup.spawn[1];
         settlement.pianos = setup.pianos.iter().map(|&position| at([position.x, position.y])).collect();
+        settlement.vehicles = setup.vehicles.iter().map(|&(kind, position, heading)| vehicle::VehicleState {
+            kind, position: at([position.x, position.y]), heading, phase: vehicle::VehiclePhase::Parked,
+        }).collect();
         if let Some(player) = settlement.player() {
             let a = &mut settlement.agents[player as usize];
             a.position = settlement.spawn;

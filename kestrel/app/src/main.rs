@@ -22,6 +22,7 @@ mod navigation;
 mod obstacles;
 mod palimpsest;
 mod piano;
+mod vehicle;
 mod pause;
 mod peers;
 mod pile_model;
@@ -253,6 +254,8 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .add_service::<lockstep::WorldMirror>()
         .add_service::<scene_view::SceneView>()
         .add_systems(PostUpdate, piano::update.run_if(in_state(service::WorldState::Active)))
+        .add_systems(PostUpdate, vehicle::update.before(bevy::transform::TransformSystems::Propagate)
+            .run_if(in_state(service::WorldState::Active)))
         .add_service::<settlement::Settlement>()
         .add_service::<piles::PileLab>()
         .add_service::<character::Avatar>()

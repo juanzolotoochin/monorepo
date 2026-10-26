@@ -204,8 +204,8 @@ pub fn dispatch(world: &mut World) {
             }
             Edge::Utility(Utility::ClearRecording) => crate::palimpsest::clear(world),
             Edge::Utility(Utility::CancelLogistics) => cancel_logistics(world, agent),
-            Edge::MachineToggle => toggle_nearest_machine(world),
-            Edge::Interact => interact(world, false),
+            Edge::MachineToggle => if !toggle_near_vehicle(world, agent) { toggle_nearest_machine(world); },
+            Edge::Interact => if !toggle_near_vehicle(world, agent) { interact(world, false); },
             Edge::Collect => interact(world, true),
             Edge::Drop => drop_cargo(world),
             Edge::TargetPrevious => world.resource_mut::<Dispatcher>().targets.cycle(-1),
@@ -308,6 +308,27 @@ fn movement(world: &mut World, gameplay: &super::Gameplay) {
             }
         }
     }
+}
+
+/// An interaction with a nearby parked vehicle, or an exit from the one driven.
+fn toggle_near_vehicle(world: &mut World, agent: u16) -> bool {
+    let service = world.resource::<SessionService>();
+    let Some(settlement) = service.settlement() else { return false };
+    let vehicle = settlement.vehicle_of(agent).map(|(index, _)| index).or_else(|| {
+        let position = settlement.agents.get(agent as usize)?.position;
+        settlement.vehicles.iter().enumerate()
+            .filter(|(_, vehicle)| matches!(vehicle.phase, sim::settlement::vehicle::VehiclePhase::Parked))
+            .filter_map(|(index, vehicle)| {
+                let distance = (position - vehicle.position).length_squared();
+                (distance < sim::settlement::vehicle::BOARD_REACH * sim::settlement::vehicle::BOARD_REACH)
+                    .then_some((index, distance))
+            })
+            .min_by_key(|(_, distance)| *distance)
+            .map(|(index, _)| index)
+    });
+    let Some(vehicle) = vehicle else { return false };
+    world.resource_mut::<SessionService>().command(CommandKind::ToggleVehicle { agent, vehicle: vehicle as u16 });
+    true
 }
 
 /// Keyboard E with a supply chain: the nearest machine within reach.

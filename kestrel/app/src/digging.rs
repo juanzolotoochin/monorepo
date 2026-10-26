@@ -278,6 +278,7 @@ impl MeshBuilder {
 pub fn follow_camera(
     time: Res<Time>,
     scene: Res<SceneView>,
+    session: Res<SessionService>,
     player: Single<&Transform, With<Player>>,
     mut rig: Single<&mut CameraRig>,
     mut home: Local<Option<(Vec3, Vec3)>>,
@@ -290,7 +291,9 @@ pub fn follow_camera(
         }
         return;
     }
-    let focus = player.translation;
+    let riding = session.player().and_then(|agent| session.settlement()?.vehicle_of(agent))
+        .is_some_and(|(_, vehicle)| vehicle.phase.driving(session.player().unwrap()));
+    let focus = player.translation + Vec3::Y * if riding { 1.25 } else { 0.0 };
     let blend = 1.0 - (-8.0 * time.delta_secs()).exp();
     rig.base = rig.base.lerp(base + focus, blend);
     rig.target = rig.target.lerp(target + focus, blend);

@@ -149,6 +149,41 @@ fn two_players_piano_notes_share_one_world_state() {
     assert_eq!(scene.s().piano_notes[0].pitch, 64);
 }
 
+#[test]
+fn mech_boarding_is_owned_and_exit_leaves_a_parked_vehicle() {
+    use super::vehicle::{VehicleKind, VehiclePhase, BOARD_TICKS, EXIT_TICKS, MECH_RADIUS};
+    let mut scene = Scene::new(SceneSetup {
+        extent: fx(12.0), spawn: [Fx::ZERO; 3],
+        vehicles: vec![(VehicleKind::Mech, v(1.0, 0.0), Fx::ZERO)], ..base()
+    });
+    let agent = scene.agent();
+    let enter = CommandKind::ToggleVehicle { agent, vehicle: 0 };
+    scene.sim.step(&[Command { player: PlayerId(1), kind: enter.clone() }]);
+    assert!(matches!(scene.s().vehicles[0].phase, VehiclePhase::Parked));
+    scene.command(enter);
+    assert!(matches!(scene.s().vehicles[0].phase, VehiclePhase::Boarding { .. }));
+    scene.wait(BOARD_TICKS / 2);
+    let midway = &scene.s().agents[agent as usize];
+    assert!(midway.avatar.height > fx(0.5) && midway.avatar.height < fx(1.5), "the pilot climbs into the cockpit");
+    scene.wait(BOARD_TICKS / 2 + 1);
+    assert!(matches!(scene.s().vehicles[0].phase, VehiclePhase::Driving { agent: driver } if driver == agent));
+    assert_eq!(scene.s().agents[agent as usize].base_radius, MECH_RADIUS);
+    scene.command(CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: v(1.0, 0.0), run: true } });
+    scene.wait(ms(1_000));
+    let driven = scene.s().agents[agent as usize].position;
+    assert!(driven.x > scene.at(3.0, 0.0).x, "the mech should run faster than the unmounted avatar");
+    assert_eq!(scene.s().vehicles[0].position, driven);
+    scene.command(CommandKind::ToggleVehicle { agent, vehicle: 0 });
+    assert!(matches!(scene.s().vehicles[0].phase, VehiclePhase::Exiting { .. }));
+    scene.wait(EXIT_TICKS / 2);
+    let midway = &scene.s().agents[agent as usize];
+    assert!(midway.avatar.height > fx(0.2) && midway.avatar.height < fx(1.3), "the pilot climbs down");
+    scene.wait(EXIT_TICKS / 2 + 1);
+    assert!(matches!(scene.s().vehicles[0].phase, VehiclePhase::Parked));
+    assert_ne!(scene.s().agents[agent as usize].position, scene.s().vehicles[0].position);
+    assert_ne!(scene.s().agents[agent as usize].base_radius, MECH_RADIUS);
+}
+
 /// The jetpack lab's platforms; everything else is a drop.
 fn jetpack_lab() -> SceneSetup {
     let platform = |min: (f64, f64), max: (f64, f64), height: f64| Surface { min: v(min.0, min.1), max: v(max.0, max.1), height: fx(height) };

@@ -493,7 +493,10 @@ impl Settlement {
         if self.agents[agent].attack_ready > tick {
             return 0;
         }
-        let tuning = self.tuning(message.weapon).clone();
+        let mut tuning = self.tuning(message.weapon).clone();
+        if message.weapon == Weapon::Laser && self.vehicle_of(message.agent).is_some_and(|(_, vehicle)| vehicle.phase.driving(message.agent)) {
+            tuning.damage = tuning.damage.saturating_mul(2);
+        }
         self.agents[agent].attack_ready = tick + tuning.cooldown();
         let origin = message.origin;
         let forward = message.forward;
