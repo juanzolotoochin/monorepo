@@ -966,7 +966,7 @@ fn predict(
     if number != mirror.world_number {
         return None;
     }
-    let pending: Vec<_> = service.session.pending_commands().collect();
+    let pending: Vec<_> = service.session.pending_commands().map(|p| (p.tick, p.kind)).collect();
     let confirmed = crate::prediction::Confirmed {
         world: number,
         agent: service.player()?,

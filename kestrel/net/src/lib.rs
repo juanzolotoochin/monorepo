@@ -26,7 +26,7 @@ pub mod transport;
 
 use std::time::Duration;
 
-pub use client::{Client, ClientPhase};
+pub use client::{Client, ClientPhase, CommandId, PendingCommand, APPLIED_HISTORY};
 pub use host::Host;
 pub use protocol::StableId;
 pub use transport::{NullTransport, Transport, UdpTransport};
