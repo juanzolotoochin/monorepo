@@ -1,4 +1,5 @@
 //! Kestrel: an asset-free voxel action scene. See ../README.md.
+mod actor;
 mod assets;
 mod atmosphere;
 mod character;

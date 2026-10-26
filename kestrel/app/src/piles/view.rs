@@ -314,7 +314,7 @@ pub fn render(
             }
         }
     }
-    // Other players carry backpacks too, on their copies of the suit.
+    // Other players carry backpacks too, on their own bodies.
     let carried: Vec<Option<u16>> = carriers.iter().map(|(_, v)| v.agent).collect();
     for (entity, peer) in &peers {
         if !carried.contains(&Some(peer.agent())) {

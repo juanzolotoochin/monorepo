@@ -6,5 +6,5 @@
         movement: (walk: 0.6),
         health: (hp: 3, breach_damage: 1),
     ),
-    view: (),
+    view: (skin: "ghoul"),
 )
