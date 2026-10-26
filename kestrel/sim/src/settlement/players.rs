@@ -11,7 +11,7 @@
 use fx::{Fx, FxVec2};
 
 use super::avatar::{AvatarState, Intent, ManualJob};
-use super::{AgentIx, AgentState, Body, Carry, Endpoint, Role, Settlement};
+use super::{AgentIx, AgentState, Body, Carry, Endpoint, Inventory, Kinds, Role, Settlement};
 use crate::messages::{StockChange, TransferStock};
 use crate::terrain::Terrain;
 use crate::PlayerId;
@@ -60,10 +60,8 @@ impl Settlement {
                 ..Body::default()
             },
             carry: Carry {
-                cargo: vec![0; template.carry.cargo.len()],
-                capacity: template.carry.capacity,
+                inventory: Inventory::new(template.carry.inventory.counts.len(), template.carry.inventory.capacity, Kinds::AnyMix),
                 transfer_ticks: template.carry.transfer_ticks,
-                ..Carry::default()
             },
             role: Role::Avatar(AvatarState {
                 owner: Some(player),
@@ -127,7 +125,7 @@ impl Settlement {
             self.land(t);
         }
         let a = &self.agents[gone as usize];
-        let mut abandoned = a.carry.cargo.clone();
+        let mut abandoned = a.carry.inventory.counts.clone();
         if let Some(item) = a.equipped_item() {
             abandoned[item as usize] += 1;
         }

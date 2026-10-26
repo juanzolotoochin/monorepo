@@ -570,7 +570,7 @@ impl Simulation {
                     travelled: a.body.travelled.to_f32(),
                     // A player shows as an idle hauler.
                     phase: format!("{:?}", a.hauler().map_or(s::Phase::Idle, |h| h.phase)),
-                    cargo: inventory(&a.carry.cargo, a.carry.capacity),
+                    cargo: inventory(&a.carry.inventory.counts, a.carry.inventory.capacity),
                     trailer,
                 };
                 (a.id.clone(), state)

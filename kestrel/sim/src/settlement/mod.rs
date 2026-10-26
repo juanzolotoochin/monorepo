@@ -119,6 +119,13 @@ pub struct Transfer {
     pub arrival: u64,
 }
 
+/// Whether a unit that left `agent`'s cargo is still in the air. It left the
+/// cargo's counts when it launched, so only its transfer shows it. It scans
+/// every transfer, so callers ask only when it matters.
+pub(crate) fn leaving_cargo(transfers: &BTreeMap<u64, Transfer>, agent: AgentIx) -> bool {
+    transfers.values().any(|t| t.from == Endpoint::Cargo(agent))
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Accounting {
     pub initial: u64,
@@ -586,6 +593,11 @@ impl Settlement {
         self.depot(depot).inventory.count(self.item_index(item).expect("known item"))
     }
 
+    /// Whether a unit that left `agent`'s cargo is still in the air.
+    pub fn leaving_cargo(&self, agent: AgentIx) -> bool {
+        leaving_cargo(&self.transfers, agent)
+    }
+
     fn id(&mut self) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
@@ -600,7 +612,7 @@ impl Settlement {
             .map(|(i, id)| {
                 let b = &self.accounts[i];
                 let stored = self.depots.iter().map(|d| d.inventory.counts[i] as u64).sum();
-                let carried = self.agents.iter().map(|a| a.carry.cargo[i] as u64).sum();
+                let carried = self.agents.iter().map(|a| a.carry.inventory.counts[i] as u64).sum();
                 let in_transit = self.transfers.values().filter(|t| t.item as usize == i).count() as u64;
                 let equipped = self.agents.iter().filter(|a| a.equipped_item() == Some(i as ItemIx)).count() as u64;
                 let supplied = b.initial + b.generated + b.produced;
@@ -674,9 +686,18 @@ impl Settlement {
             inventory.validate().map_err(|e| format!("depot {} {e}", d.id))?;
         }
         for a in &self.agents {
-            let cargo: u32 = a.carry.cargo.iter().sum();
-            if cargo + a.carry.pending_in > a.carry.capacity {
-                return Err(format!("agent {} capacity exceeded", a.id));
+            a.carry.inventory.validate().map_err(|e| format!("agent {} cargo {e}", a.id))?;
+        }
+        // A unit flying into a cargo bed is reserved there until it lands.
+        let mut flying_in = vec![vec![0u32; items]; self.agents.len()];
+        for t in self.transfers.values() {
+            if let Endpoint::Cargo(a) = t.to {
+                flying_in[a as usize][t.item as usize] += 1;
+            }
+        }
+        for (a, flying) in self.agents.iter().zip(&flying_in) {
+            if a.carry.inventory.reserved_in != *flying || a.carry.inventory.reserved_out.iter().any(|&u| u > 0) {
+                return Err(format!("agent {} cargo reservations drifted", a.id));
             }
         }
         Ok(())
@@ -716,7 +737,7 @@ impl Settlement {
                 // An avatar as it hashed when it had a hauler's fields: idle,
                 // with no trailer.
                 let (phase, trailer) = a.hauler().map_or((Phase::Idle, None), |h| (h.phase, h.trailer.as_ref()));
-                (&a.id, a.body.position, a.body.heading, a.body.travelled, phase, &a.body.route, &a.carry.cargo, trailer)
+                (&a.id, a.body.position, a.body.heading, a.body.travelled, phase, &a.body.route, &a.carry.inventory.counts, trailer)
             })
             .collect();
         let avatars: Vec<_> = self

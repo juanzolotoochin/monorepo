@@ -543,11 +543,12 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
                 return None;
             }
             let service = world.get_resource::<SessionService>()?;
-            let a = &service.settlement()?.agents[service.player()? as usize];
-            if a.avatar()?.job.is_some() || a.carry.pending_in > 0 || a.carry.pending_out > 0 {
+            let (settlement, player) = (service.settlement()?, service.player()?);
+            let a = &settlement.agents[player as usize];
+            if a.avatar()?.job.is_some() || a.carry.inventory.total_in() > 0 || settlement.leaving_cargo(player) {
                 None
             } else {
-                Some(if a.carry.cargo.iter().sum::<u32>() == *expected {
+                Some(if a.carry.inventory.total() == *expected {
                     Ok(())
                 } else {
                     Err("Transfer canceled before exact quantity completed".into())

@@ -3,12 +3,14 @@
 //! the parallel self update; decisions that touch depots, docks or stock are
 //! messages, handled in the apply phase.
 
+use std::collections::BTreeMap;
+
 use content::scenario::{self, ticks_from_60hz};
 use content::{millis_to_ticks, per_tick};
 use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
-use super::{AgentIx, AgentState, Body, Carry, DepotIx, DepotState, ItemIx, LinkIx, LinkState, Role};
+use super::{AgentIx, AgentState, Body, Carry, DepotIx, DepotState, ItemIx, LinkIx, LinkState, Role, Transfer};
 use crate::messages::{Attach, ClaimDock, DockClaim, Equip, Load, Reserve, Retry, Unload};
 use crate::messages::Messages;
 use crate::nav::{self, angle_between, distance};
@@ -209,6 +211,7 @@ pub(super) struct Ctx<'a> {
     pub dock_owner: &'a [Option<AgentIx>],
     pub depots: &'a [DepotState],
     pub links: &'a [LinkState],
+    pub transfers: &'a BTreeMap<u64, Transfer>,
 }
 
 pub(super) fn footprint(a: &AgentState) -> Footprint {
@@ -273,7 +276,7 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
         Phase::ToPickup | Phase::ToDrop | Phase::ToEquip => approach(body, hauler, carry, me, ctx),
         Phase::Loading => {
             let job = hauler.assignment.as_ref().expect("loading agents have a job");
-            if job.loaded == job.units && carry.pending_in == 0 {
+            if job.loaded == job.units && carry.inventory.total_in() == 0 {
                 let link = &ctx.links[job.link as usize];
                 hauler.departure_dock = Some(link.from);
                 body.route = hauler.plan(body, ctx.terrain, ctx.depots[link.to as usize].position, &[]);
@@ -282,7 +285,7 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
         }
         Phase::Unloading => {
             let job = hauler.assignment.as_ref().expect("unloading agents have a job");
-            if job.unloaded == job.units && carry.pending_out == 0 {
+            if job.unloaded == job.units && !super::leaving_cargo(ctx.transfers, me) {
                 hauler.departure_dock = Some(ctx.links[job.link as usize].to);
                 hauler.assignment = None;
                 hauler.phase = Phase::Idle;
@@ -292,7 +295,7 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
             if hauler.equipped && ctx.tick >= hauler.transfer_at {
                 let e = hauler.equipment.as_ref().expect("attaching agents have equipment");
                 hauler.departure_dock = Some(e.depot);
-                carry.capacity = e.capacity;
+                carry.inventory.capacity = e.capacity;
                 hauler.phase = Phase::Idle;
             }
         }
@@ -585,6 +588,6 @@ fn decide(a: &AgentState, hauler: &HaulerState, me: AgentIx, s: &super::Settleme
 pub(super) fn job_size(a: &AgentState, link: &LinkState, depots: &[DepotState]) -> u32 {
     let to = &depots[link.to as usize];
     let demand = link.target.saturating_sub(to.inventory.count(link.item) + to.inventory.reserved_in[link.item as usize]);
-    depots[link.from as usize].inventory.available(link.item).min(to.inventory.free()).min(demand).min(a.carry.capacity)
+    depots[link.from as usize].inventory.available(link.item).min(to.inventory.free()).min(demand).min(a.carry.inventory.capacity)
 }
 

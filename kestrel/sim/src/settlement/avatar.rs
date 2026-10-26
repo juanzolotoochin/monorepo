@@ -670,13 +670,15 @@ impl Settlement {
         let dock = self.depots[d].position;
         let at = self.agents[agent].body.position;
         if job.deposit {
-            self.agents[agent].carry.cargo[item as usize] -= 1;
-            self.agents[agent].carry.pending_out += 1;
+            self.agents[agent].carry.inventory.remove(item, 1);
             self.launch(tick, item, Endpoint::Cargo(message.agent), Endpoint::Depot(job.depot), at, dock);
         } else {
             self.depots[d].inventory.take(item, 1);
             self.metrics.picked += 1;
-            self.agents[agent].carry.pending_in += 1;
+            // The job checked the space when it started, and nothing else
+            // fills an avatar's cargo meanwhile.
+            let reserved = self.agents[agent].carry.inventory.reserve_in(item, 1);
+            debug_assert!(reserved, "the unit fits the cargo");
             self.launch(tick, item, Endpoint::Depot(job.depot), Endpoint::Cargo(message.agent), dock, at);
         }
         let AgentState { carry, role: Role::Avatar(avatar), .. } = &mut self.agents[agent] else { unreachable!("only avatars have jobs") };
@@ -730,7 +732,7 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
             }
         }
         Action::Transfer { depot, item, units, deposit } => {
-            let busy = avatar.job.is_some() || carry.pending_in > 0 || carry.pending_out > 0;
+            let busy = avatar.job.is_some() || carry.inventory.total_in() > 0 || view.leaving_cargo();
             if !busy && units > 0 && transfer_limit(carry, view.depots, view.items, depot as usize, item as usize, deposit) >= units {
                 avatar.job = Some(ManualJob { depot, item, remaining: units, deposit, next_tick: view.tick });
                 // The job reserves its units at the depot.
@@ -779,10 +781,10 @@ fn transfer_limit(carry: &Carry, depots: &[DepotState], items: usize, depot: usi
         return 0;
     }
     if deposit {
-        carry.cargo[item].min(d.inventory.free())
+        carry.inventory.counts[item].min(d.inventory.free())
     } else {
-        let carried: u32 = carry.cargo.iter().sum::<u32>() + carry.pending_in;
-        carry.capacity.saturating_sub(carried).min(d.inventory.available(item as ItemIx))
+        // Space not taken by units carried or flying in.
+        carry.inventory.free().min(d.inventory.available(item as ItemIx))
     }
 }
 

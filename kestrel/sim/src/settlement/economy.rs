@@ -17,8 +17,8 @@ impl Settlement {
         self.events.clear();
         self.threats_self_update(tick, terrain);
         let footprints: Vec<_> = self.agents.iter().map(footprint).collect();
-        let Settlement { agents, characters, dock_owner, depots, links, piles, .. } = self;
-        let ctx = Ctx { tick, characters, terrain, piles: piles.as_ref(), footprints: &footprints, dock_owner, depots, links };
+        let Settlement { agents, characters, dock_owner, depots, links, piles, transfers, .. } = self;
+        let ctx = Ctx { tick, characters, terrain, piles: piles.as_ref(), footprints: &footprints, dock_owner, depots, links, transfers };
         agents.par_iter_mut().enumerate().for_each(|(i, a)| haulers::self_update(a, i as AgentIx, &ctx));
         self.release_distant_piano_notes();
     }
@@ -55,11 +55,10 @@ impl Settlement {
         }
     }
 
-    /// A unit arrives at its end: a depot's stock or an agent's cargo.
+    /// A unit arrives at its end: a depot's stock or an agent's cargo. A
+    /// unit leaving a cargo bed left its counts at launch, so landing is
+    /// all that changes at that end.
     pub(super) fn land(&mut self, t: super::Transfer) {
-        if let Endpoint::Cargo(a) = t.from {
-            self.agents[a as usize].carry.pending_out -= 1;
-        }
         match t.to {
             Endpoint::Depot(d) => {
                 let depot = &mut self.depots[d as usize];
@@ -71,9 +70,7 @@ impl Settlement {
                 }
             }
             Endpoint::Cargo(a) => {
-                let agent = &mut self.agents[a as usize];
-                agent.carry.cargo[t.item as usize] += 1;
-                agent.carry.pending_in -= 1;
+                self.agents[a as usize].carry.inventory.put(t.item, 1);
             }
         }
     }
@@ -260,7 +257,9 @@ impl Settlement {
         let start = depot.position;
         let (body, carry, h) = self.hauler_parts(message.agent);
         h.assignment.as_mut().expect("checked").loaded += 1;
-        carry.pending_in += 1;
+        // The job fit the cargo when it was reserved.
+        let reserved = carry.inventory.reserve_in(item, 1);
+        debug_assert!(reserved, "the unit fits the cargo");
         h.transfer_at = tick + carry.transfer_ticks;
         let end = body.position;
         self.launch(tick, item, Endpoint::Depot(from), Endpoint::Cargo(message.agent), start, end);
@@ -276,9 +275,8 @@ impl Settlement {
         let (to, item) = (link.to, link.item);
         let end = self.depots[to as usize].position;
         let (body, carry, h) = self.hauler_parts(message.agent);
-        carry.cargo[item as usize] -= 1;
+        carry.inventory.remove(item, 1);
         h.assignment.as_mut().expect("checked").unloaded += 1;
-        carry.pending_out += 1;
         h.transfer_at = tick + carry.transfer_ticks;
         let start = body.position;
         self.launch(tick, item, Endpoint::Cargo(message.agent), Endpoint::Depot(to), start, end);

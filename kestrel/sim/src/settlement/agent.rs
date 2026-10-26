@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::avatar::AvatarState;
 use super::haulers::HaulerState;
-use super::{DepotIx, ItemIx};
+use super::{DepotIx, Inventory, ItemIx, Kinds};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentState {
@@ -71,19 +71,17 @@ impl Body {
 /// moved by hand to or from a depot.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Carry {
-    /// Units carried, per item.
-    pub cargo: Vec<u32>,
-    pub capacity: u32,
-    /// Units flying into / out of the cargo bed.
-    pub pending_in: u32,
-    pub pending_out: u32,
+    /// The units carried. `reserved_in` counts units flying into the cargo
+    /// bed. A unit flying out left `counts` when it launched, so only its
+    /// `Transfer` shows it (`Settlement::leaving_cargo`).
+    pub inventory: Inventory,
     /// Ticks to load or unload one unit (the character's `carry.transfer`).
     pub transfer_ticks: u64,
 }
 
 impl Carry {
     pub fn carrying(&self) -> bool {
-        self.cargo.iter().any(|&u| u > 0)
+        self.inventory.holds_any()
     }
 }
 
@@ -116,10 +114,8 @@ impl AgentState {
                 ..Body::default()
             },
             carry: Carry {
-                cargo: vec![0; items],
-                capacity: def.capacity,
+                inventory: Inventory::new(items, def.capacity, Kinds::AnyMix),
                 transfer_ticks: rules.carry.as_ref().expect("players and haulers carry").transfer,
-                ..Carry::default()
             },
             role,
         }

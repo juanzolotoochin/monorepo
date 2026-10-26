@@ -160,7 +160,7 @@ fn recipes_and_equipment_produce_a_cart_then_upgrade_real_transport_capacity() {
     assert_eq!(s.metrics.equipped, 1);
     assert_eq!(s.producers[0].cycles, 1);
     let a = s.agent("a");
-    assert_eq!(a.carry.capacity, 8);
+    assert_eq!(a.carry.inventory.capacity, 8);
     assert!(a.hauler().unwrap().trailer.is_some());
     assert!(s.metrics.delivered > 10, "delivered {}", s.metrics.delivered);
     assert_eq!(s.balances()["cart"].equipped, 1);
@@ -245,7 +245,7 @@ fn forest_supply_runs_and_its_balances_hold() {
     assert_eq!(s.producers[s.producer_index("cartworks").unwrap() as usize].cycles, 1);
     assert!(s.producers[s.producer_index("sawmill").unwrap() as usize].cycles > 3);
     let bramble = s.agent("bramble");
-    assert!(bramble.hauler().unwrap().equipped && bramble.carry.capacity == 9);
+    assert!(bramble.hauler().unwrap().equipped && bramble.carry.inventory.capacity == 9);
     assert!(s.agents.iter().filter_map(|a| a.hauler()).all(|h| h.phase != Phase::Attaching));
 }
 

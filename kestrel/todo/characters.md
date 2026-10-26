@@ -175,6 +175,19 @@
   in `haulers.rs`.
 - **Found in:** branch `kestrel-shared-body`.
 
+## Fix the flaky two-player session test
+
+- **Status:** open
+- **Why:** `session:session_test` `two_players_walk_around_together` failed
+  1 run in 4 on the remote executor: the client was one tick behind the host
+  (240 vs 239) when the test compared them. The client gets two wall-clock
+  seconds to catch up, which a busy executor can miss. It has nothing to do
+  with the state being tested.
+- **What to do:** wait for the client by ticks, not wall time, or give it a
+  bound in updates rather than seconds.
+- **Where:** `kestrel/session/src/lib.rs` (`two_players_walk_around_together`).
+- **Found in:** inventory step 3 (`kestrel/INVENTORY_HANDOFF.md`).
+
 ## Done
 
 ### Keep a player's health over the Respawn action

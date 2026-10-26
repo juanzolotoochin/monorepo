@@ -529,11 +529,11 @@ fn controlled_transfers_share_reservations_and_cancellation_preserves_airborne_u
     assert!(arena.s().transfers.values().any(|t| t.to == super::Endpoint::Cargo(agent)));
     arena.command(CommandKind::CancelTransfer { agent });
     arena.step(ms(500));
-    let carried = arena.s().agents[player].carry.cargo[item];
+    let carried = arena.s().agents[player].carry.inventory.counts[item];
     assert!(carried >= 1 && carried < units, "airborne units land, the rest is released: {carried}");
     arena.command(take(carried, true));
     arena.step(ms(1000));
-    assert_eq!(arena.s().agents[player].carry.cargo.iter().sum::<u32>(), 0);
+    assert_eq!(arena.s().agents[player].carry.inventory.counts.iter().sum::<u32>(), 0);
 }
 
 /// A transfer reserves its units at the depot, and a cancel releases them,
@@ -561,7 +561,7 @@ fn a_transfer_reserves_stock_and_a_cancel_releases_it_on_their_tick() {
 
     // Cargo to deposit, handed over outside the accounts (so no `validate`).
     let player = arena.player;
-    arena.s_mut().agents[player].carry.cargo[i] = 2;
+    arena.s_mut().agents[player].carry.inventory.counts[i] = 2;
     arena.command(CommandKind::Transfer { agent, depot, item, units: 2, deposit: true });
     assert_eq!(arena.s().depots[d].inventory.reserved_in[i], incoming + 2, "the deposit reserves room");
     arena.command(CommandKind::CancelTransfer { agent });
@@ -761,7 +761,7 @@ fn two_players_defend_the_clearing() {
     for _ in 0..ms(8000) {
         sim.step(&[]);
     }
-    assert_eq!(sim.world().settlement().unwrap().agents[players[1].1 as usize].carry.cargo[bolt as usize], 2, "the guest carries two bolts");
+    assert_eq!(sim.world().settlement().unwrap().agents[players[1].1 as usize].carry.inventory.counts[bolt as usize], 2, "the guest carries two bolts");
 
     let mut hits = [0u32; 2];
     for _ in 0..ms(60_000) {
@@ -1046,7 +1046,7 @@ fn releasing_keeps_a_depot_transfer_walking_to_its_dock() {
     assert!(arena.s().agents[arena.player].avatar().unwrap().job.is_some());
     assert!(!arena.s().agents[arena.player].body.route.is_empty(), "the dock walk continues");
     arena.step(ms(6000));
-    assert_eq!(arena.s().agents[arena.player].carry.cargo[item as usize], 2, "the transfer completed");
+    assert_eq!(arena.s().agents[arena.player].carry.inventory.counts[item as usize], 2, "the transfer completed");
 }
 
 /// Haulers steer around the avatar at the radius it collides with: its
@@ -1566,7 +1566,7 @@ fn leaving_moves_references_to_later_avatars_and_balances_material() {
     let tick = arena.tick();
     arena.s_mut().manual_unit(tick, ManualUnit { agent: leaver });
     arena.step(ms(1000));
-    assert_eq!(arena.s().agents[leaver as usize].carry.cargo[i], 1);
+    assert_eq!(arena.s().agents[leaver as usize].carry.inventory.counts[i], 1);
     let tick = arena.tick();
     for agent in [leaver, stayer] {
         arena.s_mut().manual_unit(tick, ManualUnit { agent });
@@ -1596,7 +1596,7 @@ fn leaving_moves_references_to_later_avatars_and_balances_material() {
     assert_eq!(s.accounts[i].abandoned, 2, "its carried unit and the one flying to it");
     s.validate().unwrap();
     arena.step(ms(1000));
-    assert_eq!(arena.s().agents[moved as usize].carry.cargo[i], 1, "the stayer's unit landed");
+    assert_eq!(arena.s().agents[moved as usize].carry.inventory.counts[i], 1, "the stayer's unit landed");
 }
 
 /// Eight players walking, aiming and fighting ghouls, with one leaving and

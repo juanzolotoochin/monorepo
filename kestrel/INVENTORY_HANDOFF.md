@@ -142,6 +142,11 @@ gameplay last.
      - Reservations that were checked first now go through `reserve_*` with a `debug_assert!` on the result (equip, haul `Reserve`, `TransferStock`, a recipe's products). Sources and `add_stock` use `add`; ingredients and ammunition use `remove`.
      - `Settlement::validate` still recomputes the reservations, then calls `Inventory::validate` per depot. Its messages are the same as before.
 3. **Agent cargo onto `Inventory`.** No behaviour change.
+   - Done in step 3: `Carry { inventory, transfer_ticks }`. Save format 14. Golden behaviour lines unchanged (`behaviour_digest` hashes `inventory.counts` where it hashed `cargo`); tick totals moved.
+     - `pending_in` maps one to one onto `reserved_in` per item: a unit is reserved in its item when it launches (`reserve_in`, with a `debug_assert!`) and `put` when it lands. Checks of `pending_in == 0` read `total_in() == 0`.
+     - `pending_out` has no slot. A unit leaving a cargo bed leaves `counts` at launch (`remove`), so it is not `reserved_out` (that would break `available` and `validate`). Its `Transfer` (`from: Endpoint::Cargo(agent)`) is the only record, so `leaving_cargo` scans the transfers: `Settlement::leaving_cargo`, `View::leaving_cargo` and `Ctx::transfers` for the hauler's unloading check. A replay reads the confirmed settlement's transfers, as it read its cloned avatar's `pending_out` before; both are from the confirmed tick. Step 4's `CarryJob` reserves out on the cargo before the unit launches, and the unit stays a transfer in the air.
+     - `Settlement::validate` now also recomputes each cargo's `reserved_in` from the transfers and checks it has no `reserved_out`.
+     - For step 4: a player's cargo can't fill up mid-transfer today. Only its own depot job fills it, one job at a time, and the job checks the space when it starts. So reserving the agent's side is not a rule change.
 4. **`CarryJob`, `ReserveStock`, `drop_carry` for the player's depot transfer.**
    - `ManualJob` and `TransferStock` go.
    - The hand-written releases in cancel, respawn and `hurt_player` become `drop_carry`.
