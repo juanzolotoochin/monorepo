@@ -77,9 +77,12 @@ pub struct Equip {
     pub route: Vec<FxVec2>,
 }
 
-/// An agent asks for a haul job: up to `units` along `link`.
+/// A hauler asks for a haul job: up to `units` along `link`, walking
+/// `route` to the source. Stage 5 sizes it again and, if any units are
+/// left, holds both ends at once (`Settlement::reserve_haul`): a load at
+/// the source, then an unload at the target, as two carry jobs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Reserve {
+pub struct ReserveHaul {
     pub agent: u16,
     pub link: u16,
     pub units: u32,
@@ -92,15 +95,10 @@ pub struct Attach {
     pub agent: u16,
 }
 
-/// An agent at its pickup dock loads one unit.
+/// An agent's carry job (`Carry::job`) moves its next unit: a hauler
+/// loading or unloading at its dock, or a player's depot transfer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Load {
-    pub agent: u16,
-}
-
-/// An agent at its drop dock unloads one unit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Unload {
+pub struct CarryUnit {
     pub agent: u16,
 }
 
@@ -206,12 +204,6 @@ impl StateHash for PileStep {
     }
 }
 
-/// A player's carry job (`Carry::job`) moves its next unit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ManualUnit {
-    pub agent: u16,
-}
-
 /// A player's action let go of the avatar's pile haul (`Action::Move`, an
 /// `Attack` with an offered weapon, `Respawn`). Ends the haul if it is still
 /// the one the action saw: a `Pile` command later in the same turn starts a
@@ -253,6 +245,8 @@ pub enum StockChange {
 /// job is set or dropped, since that is the agent's own state. Contested: a
 /// reservation the other side can no longer cover when it applies is
 /// refused, and the agent's job rolls back (`Settlement::reserve_stock`).
+/// Players' actions send it, applied first in stage 5; a hauler's haul is
+/// held by `ReserveHaul` instead, later in stage 5.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReserveStock {
     pub agent: u16,
@@ -379,12 +373,6 @@ impl StateHash for Fire {
     }
 }
 
-impl StateHash for ManualUnit {
-    fn hash_into(&self, h: &mut StateHasher) {
-        h.write(&self.agent);
-    }
-}
-
 impl StateHash for ClaimDock {
     fn hash_into(&self, h: &mut StateHasher) {
         h.write(&self.depot);
@@ -412,7 +400,7 @@ impl StateHash for Equip {
     }
 }
 
-impl StateHash for Reserve {
+impl StateHash for ReserveHaul {
     fn hash_into(&self, h: &mut StateHasher) {
         h.write(&self.agent);
         h.write(&self.link);
@@ -427,13 +415,7 @@ impl StateHash for Attach {
     }
 }
 
-impl StateHash for Load {
-    fn hash_into(&self, h: &mut StateHasher) {
-        h.write(&self.agent);
-    }
-}
-
-impl StateHash for Unload {
+impl StateHash for CarryUnit {
     fn hash_into(&self, h: &mut StateHasher) {
         h.write(&self.agent);
     }
@@ -517,11 +499,15 @@ message_queues! {
     claim_dock: ClaimDock,
     retry: Retry,
     equip: Equip,
-    reserve: Reserve,
+    reserve_haul: ReserveHaul,
     attach: Attach,
-    load: Load,
-    unload: Unload,
-    manual_unit: ManualUnit,
+    // Carry units: one type and one handler, in three queues. Each unit
+    // launched takes the next transfer ID, so they keep the order they had
+    // as `Load`, `Unload` and `ManualUnit`: haulers' loads, then their
+    // unloads, then players' units.
+    hauler_load: CarryUnit,
+    hauler_unload: CarryUnit,
+    player_carry: CarryUnit,
     pile_step: PileStep,
     // Combat: strikes and projectile hits before breaches, so a killing
     // blow on the last tick saves the base; shots last. Threats' swings

@@ -46,7 +46,11 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 /// 15: a player's depot transfer is a `CarryJob` on its `Carry`, not on its
 ///     avatar, and holds its units in the cargo too. `Endpoint` is
 ///     `InventoryRef`, its `Cargo` now `Agent`.
-pub const FORMAT_VERSION: u32 = 15;
+/// 16: a hauler's haul is two carry jobs, its load in `Carry::job` and its
+///     unload in `Carry::next`; its `Assignment` keeps only the link.
+///     Pending messages have `ReserveHaul` and `CarryUnit` queues for
+///     `Reserve`, `Load`, `Unload` and `ManualUnit`.
+pub const FORMAT_VERSION: u32 = 16;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

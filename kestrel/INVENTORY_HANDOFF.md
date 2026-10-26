@@ -93,7 +93,7 @@ pub struct Inventory {
 - `CarryJob { other, item, direction, remaining, next_tick }` is "move `remaining` units of `item` between my inventory and `other`". A job reserves on both sides when it starts: out on the source, in on the target.
 - A hauler's assignment is two jobs: a load at the source, then an unload at the target. The unload is reserved when the assignment starts, as today. The hauler keeps its link and phase machine.
 - Messages:
-  - `ReserveStock { agent, job }` replaces `Reserve`, `TransferStock` and the reserving half of `Equip`. Stage 5 checks it again and rolls the job back if it no longer fits.
+  - `ReserveStock { agent, job }` replaces `Reserve`, `TransferStock` and the reserving half of `Equip`. Stage 5 checks it again and rolls the job back if it no longer fits. (Built differently: a hauler's `Reserve` became `ReserveHaul`, and `Equip` stayed; see step 5's note.)
   - `CarryUnit { agent }` replaces `Load`, `Unload`, `ManualUnit` and `PileStep`. It moves one unit of the agent's job and launches it.
 - `drop_carry(agent)` is the one way a job ends early. It releases what the job still holds reserved on both sides and clears it. Cancel, the `Respawn` action, a death, a timed-out pile walk and any future case call it. Units in the air still land.
 
@@ -164,6 +164,13 @@ gameplay last.
 5. **Hauler load and unload onto carry jobs and `CarryUnit`.**
    - `Reserve`, `Load` and `Unload` go.
    - Golden behaviour unchanged; totals move.
+   - Done in step 5: save format 16. All 16 golden behaviour lines unchanged (diffed); the tick totals moved. `testdata/*.hashes` unchanged.
+     - **Two jobs:** `Carry` gained `next: Option<CarryJob>`. `Settlement::reserve_haul` sets the load as `carry.job` (held on both sides: out at the source, room in the cargo) and the unload as `carry.next` (held at the target only, `reserved_in`). The unload's own side (`reserved_out` in the cargo) can't be held yet, since its units aren't in the cargo; `Carry::start_next` holds it when loading ends (stage 2, the `Loading` branch: no job and `total_in() == 0`, the old `loaded == units` check). Keeping the pending job on `Carry`, not in `Assignment`, keeps `validate` generic: it counts every agent's `job` on both sides and its `next` on the other side, with no hauler term. `Assignment` keeps only `link` (for the docks); `units`, `loaded` and `unloaded` went, as did the hauler's per-unit `transfer_at` (now only the end of attaching; units use `CarryJob::next_tick`).
+     - **`ReserveHaul`, not `ReserveStock`:** the hauler's request (`ReserveHaul { agent, link, units, route }`, at `Reserve`'s queue position) carries the route and the link, is sized again by `job_size` in stage 5 and may shrink, as before. A player's `ReserveStock` carries a fixed job, already held on its own side, refused whole. So `reserve_haul` is its own function that builds both jobs and holds every side through `CarryJob::reserve`. See "Apply order" in Decisions.
+     - **`CarryUnit { agent }`** replaces `Load`, `Unload` and `ManualUnit`; `Settlement::carry_unit` (`economy.rs`) is `manual_unit`'s body without the avatar check. It has three queues, `hauler_load`, `hauler_unload` and `player_carry`, applied in that order where the three old ones were: each unit launched takes the next transfer ID, which `behaviour_digest` hashes, so one merged queue would renumber units. The hauler picks its queue by the job's direction. Per unit it does what `Load` and `Unload` did; the one difference is that the load's cargo room is held for the whole job at assignment instead of per unit at launch (`reserved_in` isn't in `behaviour_digest`).
+     - `drop_carry` returns a `Vec<ReserveStock>`: the job's release and, if there is one, `next`'s (its other side only). Nothing calls it on a hauler yet (`todo/characters.md`, "Let a hauler's haul end early").
+     - **Equipment stays as it was.** `Equip` reserves one unit out at the equipment depot and `Attach` takes it: the unit becomes a trailer, not cargo, and doesn't fly, so a pickup job would need a job with no own side and no flight, and making it fly would change the golden file. Equipment is out of this work's scope ("Scope"); `todo/characters.md`, "Move hauler equipment onto the carry path". `validate` keeps its `ToEquip` term.
+     - **For step 6:** `CarryUnit` is the one unit path; give pile steps a `CarryUnit` queue of their own at `PileStep`'s position (after `player_carry`), so they keep their order against depot units. `InventoryRef` gets `Pile` and `Collector`: extend `inventory_mut`, `position_of`, `ReserveStock`'s `hash_into` and `arrivals`. `carry_unit` calls `metrics.picked += 1` on every pickup; decide whether pile pickups count. `validate`'s job loop counts only `InventoryRef::Depot` on the other side; piles will need their own `out`/`incoming` arrays there.
 6. **Minerals into the item list; piles, pile cargo and the collector onto `Inventory`.**
    - Pile steps go through `CarryUnit`, still instant and unreserved.
    - The player keeps the lab's capacity and the one-mineral rule for minerals, checked in the pile job for now.
@@ -179,10 +186,10 @@ gameplay last.
 - **Capacity:** one total per inventory. A player's is the larger of the scenario's cargo capacity and the pile lab's.
 - **Mixing:** a player's cargo holds any mix. Only piles are `OneKind`.
 - **Hauler reservations:** both ends when the job starts, as today.
+- **Apply order (step 5):** two messages in two queues, not one type applied at two points. A player's `ReserveStock` stays in `ActionMessages::reserve_stock`, applied first in stage 5 (`apply_actions`), and holds only the other side (the action held the cargo). A hauler's `ReserveHaul` is in `Messages::reserve_haul`, at the old `Reserve` position (after `retry` and `equip`), and holds every side of both its jobs. They are different types because the hauler's carries a route and a link and is sized again when it applies; both use `CarryJob::reserve`. Each keeps the queue position and apply order of the message it replaced, so the golden file holds. Likewise `CarryUnit` is one type in three queues (`hauler_load`, `hauler_unload`, `player_carry`), so units keep their transfer IDs.
 
 ## Open questions
 
-- **Apply order:** one message type applied at two points in stage 5 keeps the golden file, but it's easy to break. Two queues of the same type may be clearer. Decide while building commit 5.
 - **Prediction:** a pile haul isn't predicted. Once it's an action (`todo/characters.md`, "Move pile hauls and piano keys onto actions"), its walk could be predicted like a depot `GoTo`. That's out of scope here.
 - **Notices:** pile notices and errors are UI text in sim state. Keep them in the lab for now.
 

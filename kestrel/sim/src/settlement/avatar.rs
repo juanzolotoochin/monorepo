@@ -18,7 +18,7 @@ use super::combat::{Event, TossEnd};
 use super::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
 use super::action::{Action, View};
 use super::{AgentIx, DepotState, InventoryRef, ItemIx, Settlement};
-use crate::messages::{ActionMessages, DropHaul, DropNotes, ManualUnit, Messages, ReserveStock, RestartMemory, StockChange, Strike};
+use crate::messages::{ActionMessages, CarryUnit, DropHaul, DropNotes, Messages, ReserveStock, RestartMemory, StockChange, Strike};
 use crate::nav::{self, angle_between, distance};
 use crate::terrain::{Terrain, MAX_LAYERS};
 
@@ -509,9 +509,8 @@ impl Settlement {
         body.push = FxVec2::ZERO;
         avatar.dig = None;
         body.route.clear();
-        if let Some(release) = carry.drop_carry(agent as AgentIx) {
-            self.reserve_stock(vec![release]);
-        }
+        let releases = carry.drop_carry(agent as AgentIx);
+        self.reserve_stock(releases);
         self.end_pile_job(agent, "You died. Haul canceled; cargo is retained.", "Haul canceled because the player died");
         self.restart_memory(terrain);
         true
@@ -604,7 +603,7 @@ impl Settlement {
         }
         if let Some(job) = &a.carry.job {
             if tick >= job.next_tick && distance(a.body.position, self.position_of(job.other)) <= DOCK_REACH {
-                out.manual_unit.push(ManualUnit { agent: me });
+                out.player_carry.push(CarryUnit { agent: me });
             }
         }
         if let Some(step) = self.read_pile_job(me, a, tick) {
@@ -631,37 +630,6 @@ impl Settlement {
     /// The most units `agent` could move between its cargo and `depot` now.
     pub fn transfer_limit(&self, agent: usize, depot: usize, item: usize, deposit: bool) -> u32 {
         self.agents.get(agent).map_or(0, |a| transfer_limit(&a.carry, &self.depots, self.items.len(), depot, item, deposit))
-    }
-
-    /// Moves one unit of an avatar's carry job. The unit leaves the source,
-    /// taking its share of what the job holds there; at the target the job's
-    /// room passes to the unit in the air, until it lands.
-    pub(crate) fn manual_unit(&mut self, tick: u64, message: ManualUnit) {
-        let agent = message.agent as usize;
-        let Some(job) = self.agents[agent].carry.job.clone().filter(|_| self.agents[agent].avatar().is_some()) else { return };
-        if tick < job.next_tick {
-            return;
-        }
-        let (me, item) = (InventoryRef::Agent(message.agent), job.item);
-        let (dock, at) = (self.position_of(job.other), self.agents[agent].body.position);
-        match job.direction {
-            Direction::Deposit => {
-                self.agents[agent].carry.inventory.take(item, 1);
-                self.launch(tick, item, me, job.other, at, dock);
-            }
-            Direction::Pickup => {
-                self.inventory_mut(job.other).take(item, 1);
-                self.metrics.picked += 1;
-                self.launch(tick, item, job.other, me, dock, at);
-            }
-        }
-        let carry = &mut self.agents[agent].carry;
-        let job = carry.job.as_mut().expect("checked");
-        job.remaining -= 1;
-        job.next_tick = tick + carry.transfer_ticks;
-        if job.remaining == 0 {
-            carry.job = None;
-        }
     }
 }
 

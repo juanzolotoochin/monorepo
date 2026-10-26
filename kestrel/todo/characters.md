@@ -202,6 +202,41 @@
   wait in `kestrel/app/src/control/mod.rs`.
 - **Found in:** inventory step 4 (`kestrel/INVENTORY_HANDOFF.md`).
 
+## Let a hauler's haul end early
+
+- **Status:** open
+- **Why:** a hauler can't die or cancel, so nothing ends its haul early.
+  Since inventory step 5 its haul is two carry jobs (`Carry::job` and
+  `Carry::next`), and `drop_carry` already releases both. But the hauler's
+  `Assignment` and phase would stay, and its cargo may hold loaded units
+  with nowhere to go.
+- **What to do:** when haulers can be hurt, or a link switched off mid-haul
+  should stop it, add one hauler-side "end the haul" that calls
+  `drop_carry`, clears the assignment and decides what happens to units in
+  the cargo (keep them for the next haul, or return them to the source).
+  A rule change.
+- **Where:** `Carry::drop_carry` in `kestrel/sim/src/settlement/agent.rs`;
+  `haulers.rs` (`self_update`, `Phase`); `Settlement::reserve_stock` in
+  `avatar.rs` for applying the releases.
+- **Found in:** inventory step 5 (`kestrel/INVENTORY_HANDOFF.md`).
+
+## Move hauler equipment onto the carry path
+
+- **Status:** open
+- **Why:** `Equip` reserves one equipment unit at its depot and `Attach`
+  takes it at once. It stays outside carry jobs: equipment isn't stock (the
+  inventory work's scope), the unit goes onto the hauler as a trailer, not
+  into its cargo, and it doesn't fly. Folding it in now would need a job
+  with no own side and no flight, or change the golden file.
+- **What to do:** if equipment joins `Inventory` (handoff "Scope"), make
+  fetching it a one-unit pickup job and drop the `ToEquip` term in
+  `Settlement::validate`. `HaulerState::transfer_at` is now only the end of
+  attaching; rename it then (`attached_at`). A save format change.
+- **Where:** `Settlement::equip` and `attach` in
+  `kestrel/sim/src/settlement/economy.rs`; `haulers.rs`; `validate` in
+  `mod.rs`.
+- **Found in:** inventory step 5 (`kestrel/INVENTORY_HANDOFF.md`).
+
 ## Done
 
 ### Keep a player's health over the Respawn action

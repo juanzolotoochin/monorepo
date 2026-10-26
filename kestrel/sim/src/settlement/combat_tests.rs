@@ -11,7 +11,7 @@ use fx::{Fx, FxVec2};
 use super::avatar::Intent;
 use super::combat::{combat_roll, Event, Impact, Projectile, Threat};
 use super::Settlement;
-use crate::messages::{ManualUnit, Strike};
+use crate::messages::{CarryUnit, Strike};
 use crate::terrain::Disc;
 use crate::{Command, CommandKind, PlayerId, Simulation, World};
 
@@ -1613,12 +1613,12 @@ fn leaving_moves_references_to_later_avatars_and_balances_material() {
     arena.sim.step(&[take(1, leaver, 3), take(2, stayer, 1)]);
     assert_eq!(arena.s().depots[d].inventory.reserved_out[i], out + 4);
     let tick = arena.tick();
-    arena.s_mut().manual_unit(tick, ManualUnit { agent: leaver });
+    arena.s_mut().carry_unit(tick, CarryUnit { agent: leaver });
     arena.step(ms(1000));
     assert_eq!(arena.s().agents[leaver as usize].carry.inventory.counts[i], 1);
     let tick = arena.tick();
     for agent in [leaver, stayer] {
-        arena.s_mut().manual_unit(tick, ManualUnit { agent });
+        arena.s_mut().carry_unit(tick, CarryUnit { agent });
     }
     assert_eq!(arena.s().transfers.len(), 2);
     let s = arena.s_mut();

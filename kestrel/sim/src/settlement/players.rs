@@ -62,6 +62,7 @@ impl Settlement {
                 inventory: Inventory::new(template.carry.inventory.counts.len(), template.carry.inventory.capacity, Kinds::AnyMix),
                 transfer_ticks: template.carry.transfer_ticks,
                 job: None,
+                next: None,
             },
             role: Role::Avatar(AvatarState {
                 owner: Some(player),
@@ -109,9 +110,8 @@ impl Settlement {
         if Some(gone) == self.player() {
             return;
         }
-        if let Some(release) = self.agents[gone as usize].carry.drop_carry(gone) {
-            self.reserve_stock(vec![release]);
-        }
+        let releases = self.agents[gone as usize].carry.drop_carry(gone);
+        self.reserve_stock(releases);
         let flying: Vec<u64> = self
             .transfers
             .values()
@@ -167,7 +167,7 @@ impl Settlement {
                 }
             }
         }
-        for job in self.agents.iter_mut().filter_map(|a| a.carry.job.as_mut()) {
+        for job in self.agents.iter_mut().flat_map(|a| [a.carry.job.as_mut(), a.carry.next.as_mut()]).flatten() {
             if let InventoryRef::Agent(ix) = &mut job.other {
                 shift(ix);
             }

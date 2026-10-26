@@ -277,7 +277,7 @@ fn forest_probe() {
             for (a, h) in s.agents.iter().filter_map(|a| Some((a, a.hauler()?))) {
                 println!(
                     "  {:<12} {:?} pos=({:.2},{:.2}) route={} job={:?} waits={} traffic={} steers={} dock={:?}",
-                    a.id, h.phase, a.body.position.x.to_f64(), a.body.position.y.to_f64(), a.body.route.len(), h.assignment.as_ref().map(|j| (j.link, j.units, j.loaded, j.unloaded)),
+                    a.id, h.phase, a.body.position.x.to_f64(), a.body.position.y.to_f64(), a.body.route.len(), h.assignment.as_ref().map(|j| (j.link, a.carry.job.as_ref().map(|c| (c.direction, c.remaining)))),
                     h.dock_wait_ticks, h.traffic_wait_ticks, h.avoidance_steers, h.departure_dock
                 );
             }

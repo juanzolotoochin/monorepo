@@ -661,18 +661,12 @@ impl Settlement {
         let mut out = vec![vec![0u32; items]; self.depots.len()];
         let mut incoming = vec![vec![0u32; items]; self.depots.len()];
         for h in self.agents.iter().filter_map(AgentState::hauler) {
-            if let Some(job) = &h.assignment {
-                let link = &self.links[job.link as usize];
-                out[link.from as usize][link.item as usize] += job.units - job.loaded;
-                incoming[link.to as usize][link.item as usize] += job.units - job.unloaded;
-            }
             if h.phase == Phase::ToEquip {
                 let e = h.equipment.as_ref().expect("equipping agents have equipment");
                 out[e.depot as usize][e.item as usize] += 1;
             }
         }
-        // A hauled unit counts as incoming from assignment until arrival: first
-        // as not yet unloaded, then as flying.
+        // A unit flying to a depot is incoming until it lands.
         for t in self.transfers.values() {
             if let InventoryRef::Depot(d) = t.to {
                 incoming[d as usize][t.item as usize] += 1;
@@ -685,8 +679,9 @@ impl Settlement {
                 }
             }
         }
-        // A carry job holds what it hasn't moved yet at its depot.
-        for job in self.agents.iter().filter_map(|a| a.carry.job.as_ref()) {
+        // A carry job holds what it hasn't moved yet at its depot, and so
+        // does the job after it (a hauler's unload, while it loads).
+        for job in self.agents.iter().flat_map(|a| a.carry.job.iter().chain(&a.carry.next)) {
             if let InventoryRef::Depot(d) = job.other {
                 let side = if job.gives(Side::Other) { &mut out } else { &mut incoming };
                 side[d as usize][job.item as usize] += job.remaining;
@@ -707,8 +702,9 @@ impl Settlement {
         }
         // A unit flying into a cargo bed is reserved there until it lands. A
         // carry job holds its own side too: room for the units it will pick
-        // up, the units it will deposit. A unit flying out left the cargo
-        // when it launched, so it holds nothing there.
+        // up, the units it will deposit; the job after it holds nothing here
+        // until it starts. A unit flying out left the cargo when it
+        // launched, so it holds nothing there.
         let mut cargo_in = vec![vec![0u32; items]; self.agents.len()];
         let mut cargo_out = vec![vec![0u32; items]; self.agents.len()];
         for t in self.transfers.values() {

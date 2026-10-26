@@ -10,8 +10,8 @@ use content::{millis_to_ticks, per_tick};
 use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
-use super::{AgentIx, AgentState, Body, Carry, DepotIx, DepotState, ItemIx, LinkIx, LinkState, Role, Transfer};
-use crate::messages::{Attach, ClaimDock, DockClaim, Equip, Load, Reserve, Retry, Unload};
+use super::{AgentIx, AgentState, Body, Carry, DepotIx, DepotState, Direction, ItemIx, LinkIx, LinkState, Role, Transfer};
+use crate::messages::{Attach, CarryUnit, ClaimDock, DockClaim, Equip, ReserveHaul, Retry};
 use crate::messages::Messages;
 use crate::nav::{self, angle_between, distance};
 use crate::terrain::{Disc, Terrain};
@@ -41,12 +41,12 @@ pub enum Phase {
     Attaching,
 }
 
+/// The haul a hauler is on: the link whose docks it uses. The units are in
+/// its carry jobs: the load is `Carry::job` until it is done, and the unload
+/// waits in `Carry::next` until the loaded units have landed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Assignment {
     pub link: LinkIx,
-    pub units: u32,
-    pub loaded: u32,
-    pub unloaded: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,6 +78,8 @@ pub struct HaulerState {
     pub assignment: Option<Assignment>,
     pub equipped: bool,
     pub trailer: Option<Trailer>,
+    /// While attaching, when the equipment is on. Loading and unloading
+    /// time their units with the carry job (`CarryJob::next_tick`).
     pub transfer_at: u64,
     pub retries: u64,
     pub departure_dock: Option<DepotIx>,
@@ -276,7 +278,10 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
         Phase::ToPickup | Phase::ToDrop | Phase::ToEquip => approach(body, hauler, carry, me, ctx),
         Phase::Loading => {
             let job = hauler.assignment.as_ref().expect("loading agents have a job");
-            if job.loaded == job.units && carry.inventory.total_in() == 0 {
+            // Loaded once the load job is done and its units have landed:
+            // the unload starts, holding them in the cargo.
+            if carry.job.is_none() && carry.inventory.total_in() == 0 {
+                carry.start_next(ctx.tick);
                 let link = &ctx.links[job.link as usize];
                 hauler.departure_dock = Some(link.from);
                 body.route = hauler.plan(body, ctx.terrain, ctx.depots[link.to as usize].position, &[]);
@@ -285,7 +290,7 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
         }
         Phase::Unloading => {
             let job = hauler.assignment.as_ref().expect("unloading agents have a job");
-            if job.unloaded == job.units && !super::leaving_cargo(ctx.transfers, me) {
+            if carry.job.is_none() && !super::leaving_cargo(ctx.transfers, me) {
                 hauler.departure_dock = Some(ctx.links[job.link as usize].to);
                 hauler.assignment = None;
                 hauler.phase = Phase::Idle;
@@ -352,7 +357,6 @@ fn approach(body: &mut Body, hauler: &mut HaulerState, carry: &Carry, me: AgentI
     let speed = hauler.speed_now(body);
     travel(body, hauler, carry, me, ctx, speed);
     if body.route.is_empty() && !busy && owner == Some(me) && distance(body.position, goal) <= Fx::from_ratio(1, 10) {
-        hauler.transfer_at = ctx.tick;
         hauler.phase = match hauler.phase {
             Phase::ToPickup => Phase::Loading,
             Phase::ToDrop => Phase::Unloading,
@@ -532,16 +536,14 @@ pub(super) fn read(a: &AgentState, me: AgentIx, tick: u64, settlement: &super::S
     }
     match hauler.phase {
         Phase::Idle | Phase::Returning if tick >= hauler.retries => decide(a, hauler, me, settlement, terrain, out),
-        Phase::Loading => {
-            let job = hauler.assignment.as_ref().expect("loading agents have a job");
-            if job.loaded < job.units && tick >= hauler.transfer_at {
-                out.load.push(Load { agent: me });
-            }
-        }
-        Phase::Unloading => {
-            let job = hauler.assignment.as_ref().expect("unloading agents have a job");
-            if job.unloaded < job.units && tick >= hauler.transfer_at {
-                out.unload.push(Unload { agent: me });
+        Phase::Loading | Phase::Unloading => {
+            // Docked: the job's next unit, when it is due.
+            if let Some(job) = a.carry.job.as_ref().filter(|job| tick >= job.next_tick) {
+                let queue = match job.direction {
+                    Direction::Pickup => &mut out.hauler_load,
+                    Direction::Deposit => &mut out.hauler_unload,
+                };
+                queue.push(CarryUnit { agent: me });
             }
         }
         Phase::Attaching if !hauler.equipped => out.attach.push(Attach { agent: me }),
@@ -578,7 +580,7 @@ fn decide(a: &AgentState, hauler: &HaulerState, me: AgentIx, s: &super::Settleme
         if route.is_empty() || nav::path(terrain, from, to, hauler.radius(body)).is_empty() {
             continue;
         }
-        out.reserve.push(Reserve { agent: me, link: l, units, route });
+        out.reserve_haul.push(ReserveHaul { agent: me, link: l, units, route });
         return;
     }
     out.retry.push(Retry { agent: me });
