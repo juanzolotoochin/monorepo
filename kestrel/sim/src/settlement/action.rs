@@ -83,6 +83,7 @@ impl Action {
             | CommandKind::MemoryDeploy
             | CommandKind::MemoryClear
             | CommandKind::Join
+            | CommandKind::Leave
             | CommandKind::Name { .. } => return None,
         };
         Some((agent, action))

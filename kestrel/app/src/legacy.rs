@@ -554,7 +554,7 @@ impl Simulation {
             .iter()
             .enumerate()
             .map(|(i, a)| {
-                let before = previous.and_then(|p| p.agents.get(i));
+                let before = previous.and_then(|p| current.same_agent_in(i as s::AgentIx, p));
                 let trailer = match (a.hauler().and_then(|h| h.trailer.as_ref()), before.and_then(|b| b.hauler()?.trailer.as_ref())) {
                     (Some(t), b) => Some(Trailer {
                         position: blend(b.map(|b| b.position), t.position),

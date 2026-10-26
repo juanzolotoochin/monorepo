@@ -11,7 +11,7 @@ use fx::{Fx, FxVec2};
 use super::avatar::Intent;
 use super::combat::{combat_roll, Event, Impact, Projectile, Threat};
 use super::Settlement;
-use crate::messages::Strike;
+use crate::messages::{ManualUnit, Strike};
 use crate::terrain::Disc;
 use crate::{Command, CommandKind, PlayerId, Simulation, World};
 
@@ -795,7 +795,8 @@ fn two_players_defend_the_clearing() {
 
 /// The weapon in hand is shared state, so every peer can show it: players
 /// equip their own avatar only, with weapons the scenario offers, and a
-/// swing puts its weapon in hand too.
+/// swing puts its weapon in hand too. A command naming another player's
+/// avatar drives the sender's own (`World::apply_commands`).
 #[test]
 fn players_equip_their_own_weapons() {
     let scenario = Scenario::parse(ARENA).unwrap();
@@ -810,11 +811,11 @@ fn players_equip_their_own_weapons() {
 
     sim.step(&[
         Command { player: guest, kind: CommandKind::Equip { agent: theirs, weapon: Weapon::Bow } },
-        // Not the host's avatar to arm.
+        // Not the host's avatar to arm: the host arms their own.
         Command { player: host, kind: CommandKind::Equip { agent: theirs, weapon: Weapon::ArcCoil } },
     ]);
     assert_eq!(weapon(&sim, theirs), Weapon::Bow);
-    assert_eq!(weapon(&sim, mine), Weapon::Sword);
+    assert_eq!(weapon(&sim, mine), Weapon::ArcCoil);
 
     let aim = FxVec2::new(Fx::ZERO, Fx::ONE);
     sim.step(&[Command { player: host, kind: CommandKind::Attack { agent: mine, weapon: Weapon::Spear, aim, muzzle: [Fx::ZERO; 3] } }]);
@@ -1470,4 +1471,184 @@ fn a_ghoul_push_ends_a_dig_and_moves_the_player() {
         assert!(arena.s().agents[agent as usize].avatar().unwrap().dig.is_some());
     });
     assert!((digging - idle).abs() < fx(0.02), "digging {digging}, idle {idle}");
+}
+
+/// Joiners each get a spot of their own around the spawn, by slot, skipping
+/// spots blocked by cover, so eight players never stand inside each other
+/// or a wall.
+#[test]
+fn joiners_spawn_apart_and_clear_of_cover() {
+    let probe = Arena::combat(&[]);
+    let spawn = probe.s().agents[probe.player].body.home - probe.center;
+    // Cover on the first joiner's preferred spot, 1.2 m to +x.
+    let rock = Disc { center: FxVec2::new(spawn.x + fx(1.2), spawn.y), radius: fx(0.5) };
+    let mut arena = Arena::combat(&[rock]);
+    for slot in 1..8 {
+        arena.sim.step(&[Command { player: PlayerId(slot), kind: CommandKind::Join }]);
+    }
+    let s = arena.s();
+    let terrain = arena.sim.world().terrain();
+    let homes: Vec<FxVec2> = (0..8).map(|slot| s.agents[s.avatar_of(PlayerId(slot)).unwrap() as usize].body.home).collect();
+    for (i, &a) in homes.iter().enumerate() {
+        let agent = &s.agents[s.avatar_of(PlayerId(i as u32)).unwrap() as usize];
+        assert_eq!(agent.body.position, a, "player {i} starts at home");
+        assert!(terrain.clear(a, a, agent.radius()), "player {i} spawns inside cover");
+        for (j, &b) in homes.iter().enumerate().skip(i + 1) {
+            assert!((a - b).length() >= fx(1.0), "players {i} and {j} spawn {} m apart", (a - b).length());
+        }
+    }
+    s.validate().unwrap();
+}
+
+/// A player who leaves takes their avatar with them. The avatars after it
+/// move down an index, keep their owners, and still take their players'
+/// commands, even ones that name the old index.
+#[test]
+fn leaving_removes_the_avatar_and_later_avatars_keep_their_players() {
+    let mut arena = Arena::combat(&[]);
+    for slot in 1..4 {
+        arena.sim.step(&[Command { player: PlayerId(slot), kind: CommandKind::Join }]);
+    }
+    let s = arena.s();
+    let agents = s.agents.len();
+    let old = s.avatar_of(PlayerId(3)).unwrap();
+    let home = s.agents[old as usize].body.home;
+
+    arena.sim.step(&[Command { player: PlayerId(2), kind: CommandKind::Leave }]);
+    let s = arena.s();
+    assert_eq!(s.agents.len(), agents - 1);
+    assert_eq!(s.avatar_of(PlayerId(2)), None);
+    let now = s.avatar_of(PlayerId(3)).unwrap();
+    assert_eq!(now, old - 1);
+    assert_eq!(s.agents[now as usize].id, "player-3");
+    assert_eq!(s.agents[now as usize].body.home, home);
+    s.validate().unwrap();
+
+    // Sent before the leave, so it names the old index.
+    let intent = Intent::Walk { direction: FxVec2::new(Fx::ONE, Fx::ZERO), run: false };
+    arena.sim.step(&[Command { player: PlayerId(3), kind: CommandKind::MoveAvatar { agent: old, intent: intent.clone() } }]);
+    assert_eq!(arena.s().agents[now as usize].avatar().unwrap().intent, Some(intent));
+
+    // The host's avatar is every joiner's template and never leaves.
+    arena.sim.step(&[Command { player: PlayerId(0), kind: CommandKind::Leave }]);
+    assert!(arena.s().avatar_of(PlayerId(0)).is_some());
+    // Coming back gives a fresh avatar at the same spot.
+    arena.sim.step(&[Command { player: PlayerId(2), kind: CommandKind::Join }]);
+    let s = arena.s();
+    let back = s.avatar_of(PlayerId(2)).unwrap();
+    assert_eq!(s.agents[back as usize].id, "player-2");
+    s.validate().unwrap();
+}
+
+/// What pointed at the avatars after a leaving one moves with them; what
+/// pointed at the leaving one goes. Units flying to or from the leaver land
+/// at once, and what it carried is written off, so material still balances.
+#[test]
+fn leaving_moves_references_to_later_avatars_and_balances_material() {
+    let mut config = combat_scenario(vec![]);
+    config.agents = vec![player()];
+    config.links.clear();
+    let mut arena = Arena::new(&config, &[]);
+    for slot in 1..3 {
+        arena.sim.step(&[Command { player: PlayerId(slot), kind: CommandKind::Join }]);
+    }
+    let s = arena.s();
+    let (leaver, stayer) = (s.avatar_of(PlayerId(1)).unwrap(), s.avatar_of(PlayerId(2)).unwrap());
+    let (depot, item) = (s.depot_index("forest").unwrap(), s.item_index("wood").unwrap());
+    let (d, i) = (depot as usize, item as usize);
+    let out = s.depots[d].out[i];
+
+    // The leaver carries a unit and has another flying to it, with a unit
+    // still reserved; a unit flies to the stayer too.
+    let take = |player, agent, units| Command { player: PlayerId(player), kind: CommandKind::Transfer { agent, depot, item, units, deposit: false } };
+    arena.sim.step(&[take(1, leaver, 3), take(2, stayer, 1)]);
+    assert_eq!(arena.s().depots[d].out[i], out + 4);
+    let tick = arena.tick();
+    arena.s_mut().manual_unit(tick, ManualUnit { agent: leaver });
+    arena.step(ms(1000));
+    assert_eq!(arena.s().agents[leaver as usize].carry.cargo[i], 1);
+    let tick = arena.tick();
+    for agent in [leaver, stayer] {
+        arena.s_mut().manual_unit(tick, ManualUnit { agent });
+    }
+    assert_eq!(arena.s().transfers.len(), 2);
+    let s = arena.s_mut();
+    s.dock_owner[d] = Some(stayer);
+    s.piano_notes.push(super::piano::PianoNote { agent: stayer, piano: 0, pitch: 60, velocity: 90, serial: 1 });
+    s.piano_notes.push(super::piano::PianoNote { agent: leaver, piano: 0, pitch: 62, velocity: 90, serial: 2 });
+    arena.threat(900, 0.0, 3.0, 10, 0);
+    let s = arena.s_mut();
+    s.threats[0].windup = Some(super::combat::Windup { agent: stayer, lands: tick + 100 });
+    s.validate().unwrap();
+
+    // Directly, so this tick's stages don't redo what the test checks
+    // (docks are resolved every tick).
+    arena.s_mut().leave(PlayerId(1));
+    let s = arena.s();
+    let moved = s.avatar_of(PlayerId(2)).unwrap();
+    assert_eq!(moved, stayer - 1);
+    assert_eq!(s.dock_owner[d], Some(moved));
+    assert_eq!(s.piano_notes.iter().map(|n| n.agent).collect::<Vec<_>>(), [moved]);
+    assert_eq!(s.threats[0].windup.map(|w| w.agent), Some(moved));
+    let flying: Vec<_> = s.transfers.values().map(|t| t.to).collect();
+    assert_eq!(flying, [super::Endpoint::Cargo(moved)], "the stayer's unit still flies to it");
+    assert_eq!(s.depots[d].out[i], out, "the leaver's reservation is released");
+    assert_eq!(s.accounts[i].abandoned, 2, "its carried unit and the one flying to it");
+    s.validate().unwrap();
+    arena.step(ms(1000));
+    assert_eq!(arena.s().agents[moved as usize].carry.cargo[i], 1, "the stayer's unit landed");
+}
+
+/// Eight players walking, aiming and fighting ghouls, with one leaving and
+/// another joining partway: the same on any thread count, material still
+/// balances, and the tick time is printed for the eight-player handoff.
+#[test]
+fn eight_players_fight_and_come_and_go_deterministically() {
+    let run = |threads: usize| {
+        let mut config = combat_scenario(vec![]);
+        config.player_health = 6;
+        let world = World::new_settlement(7, &test_content(), &config, &[]).unwrap();
+        let center = world.terrain().center;
+        let player = world.settlement().unwrap().agent_index("player").unwrap() as usize;
+        let mut arena = Arena { sim: Simulation::from_world(world, threads), player, center };
+        for slot in 1..8 {
+            arena.sim.step(&[Command { player: PlayerId(slot), kind: CommandKind::Join }]);
+        }
+        for id in 0..12 {
+            arena.threat(100 + id, (id % 6) as f64 - 2.5, 3.0 + (id / 6) as f64, 3, 0);
+        }
+        let mut hashes = Vec::new();
+        let started = std::time::Instant::now();
+        let ticks = ms(5000);
+        for tick in 0..ticks {
+            let mut turn = Vec::new();
+            for slot in 0..8u32 {
+                let player = PlayerId(slot);
+                let Some(agent) = arena.s().avatar_of(player) else { continue };
+                let phase = (tick + slot as u64 * 13) % 90;
+                let direction = FxVec2::new(fx(if phase < 45 { 0.6 } else { -0.6 }), fx(0.8));
+                if phase % 30 == 0 {
+                    turn.push(Command { player, kind: CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction, run: false } } });
+                }
+                turn.push(Command { player, kind: CommandKind::AimAvatar { agent, aim: direction.normalize_or_zero() } });
+                if phase == 10 {
+                    let weapon = [Weapon::Sword, Weapon::Spear, Weapon::Bow, Weapon::ArcCoil][slot as usize % 4];
+                    turn.push(Command { player, kind: CommandKind::Attack { agent, weapon, aim: direction.normalize_or_zero(), muzzle: [Fx::ZERO, fx(0.6), fx(0.25)] } });
+                }
+            }
+            if tick == ticks / 3 {
+                turn.push(Command { player: PlayerId(3), kind: CommandKind::Leave });
+            }
+            if tick == ticks * 2 / 3 {
+                turn.push(Command { player: PlayerId(3), kind: CommandKind::Join });
+            }
+            hashes.push(arena.sim.step(&turn).total);
+            arena.s().validate().unwrap();
+        }
+        let per_tick = started.elapsed().as_secs_f64() * 1000.0 / ticks as f64;
+        eprintln!("8 players, {threads} threads: {per_tick:.3} ms a tick (validation included)");
+        assert_eq!(arena.s().agents.iter().filter(|a| a.avatar().is_some()).count(), 8);
+        hashes
+    };
+    assert_eq!(run(1), run(4));
 }

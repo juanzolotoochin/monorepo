@@ -13,6 +13,17 @@ use crate::{millis, DesyncPolicy, HashLog, NetConfig, NetDiagnostics, NetEvent, 
 const MAX_CATCH_UP: u64 = 8;
 const RESEND_SAVE_CHUNK: Duration = Duration::from_millis(250);
 const SAVE_CHUNKS_PER_UPDATE: usize = 48;
+/// The most a turn may take encoded, so it always fits in a `Turns` packet
+/// with that packet's own fields.
+const TURN_BUDGET: usize = MAX_PACKET - 64;
+/// Packets in a row each turn goes in, so a lost packet or two loses nothing.
+const TURN_REPEATS: u8 = 3;
+/// A turn still unacknowledged this long after it was last sent goes again.
+/// Longer than most round trips, so turns that arrived are rarely resent.
+const TURN_RESEND: Duration = Duration::from_millis(300);
+/// A connection heard from this recently is alive: a join with its stable
+/// ID from elsewhere is refused rather than replacing it.
+const DUPLICATE_WINDOW: Duration = Duration::from_secs(1);
 
 #[derive(Clone)]
 struct Upload {
@@ -44,8 +55,12 @@ struct Remote<A> {
     stable_id: StableId,
     /// While the client is loading a save.
     upload: Option<Upload>,
+    /// When it was given the save it is loading or last loaded.
+    load_started: Duration,
     /// The next turn the client needs.
     turn_ack: u64,
+    /// Turns from `turn_ack` on that went out: how many times, and when last.
+    turn_sends: BTreeMap<u64, (u8, Duration)>,
     /// The last input sequence number accepted from the client.
     input_ack: u64,
     /// Hashes for earlier ticks predate the client's current save and are ignored.
@@ -78,9 +93,17 @@ pub struct Host<T: Transport> {
     turns_start: u64,
     /// Commands for turns not closed yet, by tick.
     open: BTreeMap<u64, Vec<Command>>,
+    /// The last save written for joiners, and the world it is of (`upload`).
+    saved: Option<(u32, Upload)>,
+    /// The tick the host's own last command went in, so a full turn
+    /// doesn't put its commands out of order.
+    host_filed: u64,
     remotes: Vec<Remote<T::Addr>>,
+    /// Every player's slot: those playing and those who left, whose slot is
+    /// kept for when they return.
     players: BTreeMap<StableId, PlayerId>,
-    next_player: u32,
+    /// Players who left and still hold a slot, oldest departure first.
+    departures: Vec<StableId>,
     history: HashLog,
     /// Client hashes for ticks the host hasn't run yet.
     early_reports: Vec<(PlayerId, u64, u64)>,
@@ -118,9 +141,11 @@ impl<T: Transport> Host<T> {
             turns: Vec::new(),
             turns_start: tick,
             open: BTreeMap::new(),
+            host_filed: tick,
+            saved: None,
             remotes: Vec::new(),
             players: BTreeMap::new(),
-            next_player: HOST_PLAYER.0 + 1,
+            departures: Vec::new(),
             history: HashLog::starting_at(tick),
             early_reports: Vec::new(),
             halted: None,
@@ -160,6 +185,7 @@ impl<T: Transport> Host<T> {
         self.turns.clear();
         self.turns_start = tick;
         self.open.clear();
+        self.host_filed = tick;
         self.history = HashLog::starting_at(tick);
         self.early_reports.clear();
         self.halted = None;
@@ -170,7 +196,9 @@ impl<T: Transport> Host<T> {
         let upload = self.upload();
         for remote in &mut self.remotes {
             remote.upload = Some(upload.clone());
+            remote.load_started = now;
             remote.turn_ack = tick;
+            remote.turn_sends.clear();
             remote.input_ack = 0;
             remote.hashes_from = tick;
             remote.loaded = false;
@@ -239,8 +267,8 @@ impl<T: Transport> Host<T> {
 
     /// Schedules a command from the host's own player.
     pub fn queue(&mut self, kind: CommandKind) {
-        let tick = self.sim.world().tick();
-        self.open.entry(tick).or_default().push(Command { player: HOST_PLAYER, kind });
+        let tick = self.sim.world().tick().max(self.host_filed);
+        self.host_filed = file(&mut self.open, tick, Command { player: HOST_PLAYER, kind });
     }
 
     /// Commands the host queued that haven't been simulated yet.
@@ -254,6 +282,9 @@ impl<T: Transport> Host<T> {
         self.steps_last_update = 0;
         self.receive(now);
         self.drop_silent_clients(now);
+        if self.starting {
+            self.drop_slow_loaders(now);
+        }
         if self.starting && self.remotes.iter().all(|r| r.loaded) {
             // Everyone has the new world (or left): start it together.
             self.starting = false;
@@ -320,7 +351,7 @@ impl<T: Transport> Host<T> {
                 }
                 (Packet::Bye { epoch }, Some(i)) if epoch == self.epoch => {
                     let remote = self.remotes.remove(i);
-                    self.events.push(NetEvent::PlayerLeft { player: remote.player });
+                    self.depart(remote);
                 }
                 _ => {}
             }
@@ -336,20 +367,38 @@ impl<T: Transport> Host<T> {
         if index.is_some() {
             return; // Already joining or playing; the welcome is resent until acknowledged.
         }
+        // The same player from a second address while the first is still
+        // talking is a second copy of the game, not a reconnect.
+        if self.remotes.iter().any(|r| r.stable_id == stable_id && now < r.last_heard + DUPLICATE_WINDOW) {
+            let reason = "this player is already in the game (start a second copy with --profile <name>)".to_string();
+            self.send_to(&from, &Packet::Reject { reason });
+            return;
+        }
         // A returning player gets their old slot; a stale connection for it is dropped.
-        let player = *self.players.entry(stable_id).or_insert_with(|| {
-            let player = PlayerId(self.next_player);
-            self.next_player += 1;
-            player
-        });
+        let player = match self.players.get(&stable_id) {
+            Some(&player) => player,
+            None => match self.new_slot() {
+                Some(player) => player,
+                None => {
+                    let reason = format!("the game is full ({} players)", self.config.max_players);
+                    self.send_to(&from, &Packet::Reject { reason });
+                    return;
+                }
+            },
+        };
+        self.players.insert(stable_id, player);
+        self.departures.retain(|&id| id != stable_id);
         self.remotes.retain(|r| r.stable_id != stable_id);
         let tick = self.sim.world().tick();
+        let upload = self.upload();
         self.remotes.push(Remote {
             addr: from,
             player,
             stable_id,
-            upload: Some(self.upload()),
+            upload: Some(upload),
+            load_started: now,
             turn_ack: tick,
+            turn_sends: BTreeMap::new(),
             input_ack: 0,
             hashes_from: tick,
             loaded: false,
@@ -363,19 +412,54 @@ impl<T: Transport> Host<T> {
         self.events.push(NetEvent::PlayerJoined { player });
     }
 
+    /// A slot for a player who has none, if the game isn't full: the lowest
+    /// one nobody holds, or else the slot of the player who left longest ago.
+    fn new_slot(&mut self) -> Option<PlayerId> {
+        let playing = 1 + self.remotes.len() as u32;
+        if playing >= self.config.max_players {
+            return None;
+        }
+        let held = |player: PlayerId| self.players.values().any(|&p| p == player);
+        if let Some(free) = (HOST_PLAYER.0 + 1..self.config.max_players).map(PlayerId).find(|&p| !held(p)) {
+            return Some(free);
+        }
+        let oldest = self.departures.first().copied()?;
+        self.departures.remove(0);
+        self.players.remove(&oldest)
+    }
+
+    /// A remote is gone: its avatar goes on the next tick, for everyone, and
+    /// its player keeps their slot until it is needed.
+    fn depart(&mut self, remote: Remote<T::Addr>) {
+        let tick = self.sim.world().tick();
+        file(&mut self.open, tick, Command { player: remote.player, kind: CommandKind::Leave });
+        self.departures.push(remote.stable_id);
+        self.events.push(NetEvent::PlayerLeft { player: remote.player });
+    }
+
     /// A save of the current tick, ready to send.
-    fn upload(&self) -> Upload {
+    /// Players joining on the same tick share it, so a save is written once
+    /// however many ask.
+    fn upload(&mut self) -> Upload {
+        let tick = self.sim.world().tick();
+        if let Some((world, upload)) = &self.saved {
+            if *world == self.world && upload.tick == tick {
+                return upload.clone();
+            }
+        }
         let bytes = save::write(self.sim.world(), &self.content);
         let chunks = bytes.len().div_ceil(SAVE_CHUNK);
-        Upload {
+        let upload = Upload {
             bytes,
-            tick: self.sim.world().tick(),
+            tick,
             next: 0,
             received: 0,
             sent_at: vec![None; chunks],
             welcomed: false,
             last_welcome: None,
-        }
+        };
+        self.saved = Some((self.world, upload.clone()));
+        upload
     }
 
     fn inputs(&mut self, i: usize, turn_ack: u64, inputs: Vec<Input>, hashes: Vec<(u64, u64)>, ping: u32, now: Duration) {
@@ -400,9 +484,11 @@ impl<T: Transport> Host<T> {
             } else {
                 input.tick
             };
+            // Never before an earlier input from the same client, which a full
+            // turn may have moved later.
+            let tick = tick.max(remote.last_assigned_tick.unwrap_or(0));
             remote.last_requested_tick = Some(input.tick);
-            remote.last_assigned_tick = Some(tick);
-            self.open.entry(tick).or_default().push(Command { player, kind: input.kind });
+            remote.last_assigned_tick = Some(file(&mut self.open, tick, Command { player, kind: input.kind }));
         }
         let hashes_from = remote.hashes_from;
         for (tick, hash) in hashes {
@@ -442,10 +528,25 @@ impl<T: Transport> Host<T> {
                 if let Some(remote) = self.remotes.iter_mut().find(|r| r.player == player) {
                     remote.upload = Some(upload);
                     remote.turn_ack = now_tick;
+                    remote.turn_sends.clear();
                     remote.input_ack = 0;
                     remote.hashes_from = now_tick;
                 }
             }
+        }
+    }
+
+    /// A new world waits at its first tick for every client, but not for
+    /// longer than `NetConfig::load_timeout`: a client still loading then is
+    /// told why and dropped, and can join again mid-game.
+    fn drop_slow_loaders(&mut self, now: Duration) {
+        let limit = self.config.load_timeout;
+        let (slow, kept): (Vec<_>, Vec<_>) = self.remotes.drain(..).partition(|r| !r.loaded && now > r.load_started + limit);
+        self.remotes = kept;
+        for remote in slow {
+            let reason = format!("loading the new world took over {} s", limit.as_secs());
+            self.send_to(&remote.addr, &Packet::Reject { reason });
+            self.depart(remote);
         }
     }
 
@@ -454,7 +555,7 @@ impl<T: Transport> Host<T> {
         let (gone, kept): (Vec<_>, Vec<_>) = self.remotes.drain(..).partition(|r| now > r.last_heard + timeout);
         self.remotes = kept;
         for remote in gone {
-            self.events.push(NetEvent::PlayerLeft { player: remote.player });
+            self.depart(remote);
         }
     }
 
@@ -468,8 +569,17 @@ impl<T: Transport> Host<T> {
                 continue;
             }
             self.send_upload(i, now);
-            let remote = &self.remotes[i];
-            let first = remote.turn_ack.max(self.turns_start);
+            let remote = &mut self.remotes[i];
+            // Each turn goes in a few packets in a row, then again only if it
+            // is still unacknowledged a while later. Repeating every
+            // unacknowledged turn in every packet would send each about a
+            // round trip's worth of times. Packets carry consecutive turns,
+            // so they start at the oldest one due.
+            let needed = remote.turn_ack.max(self.turns_start);
+            remote.turn_sends = remote.turn_sends.split_off(&needed);
+            let sends = &remote.turn_sends;
+            let due = |tick: u64| sends.get(&tick).is_none_or(|&(count, at)| count < TURN_REPEATS || now >= at + TURN_RESEND);
+            let first = (needed..host_tick).find(|&tick| due(tick)).unwrap_or(host_tick);
             let (pong, pong_held_ms) = match remote.ping {
                 Some((ping, at)) => (ping, millis(now.saturating_sub(at))),
                 None => (0, 0),
@@ -484,7 +594,7 @@ impl<T: Transport> Host<T> {
                 pong,
                 pong_held_ms,
             };
-            // Pack as many unacknowledged turns as fit.
+            // Pack as many turns from there as fit.
             let mut size = encoded_len(&packet) + 8;
             if let Packet::Turns { turns, .. } = &mut packet {
                 for tick in first..host_tick {
@@ -495,6 +605,8 @@ impl<T: Transport> Host<T> {
                     }
                     size += len;
                     turns.push(turn.clone());
+                    let sent = remote.turn_sends.entry(tick).or_insert((0, now));
+                    *sent = (sent.0.saturating_add(1), now);
                 }
             }
             let addr = remote.addr.clone();
@@ -555,5 +667,20 @@ impl<T: Transport> Host<T> {
             let addr = self.remotes[i].addr.clone();
             self.send_to(&addr, &Packet::Bye { epoch: self.epoch });
         }
+    }
+}
+
+/// Puts `command` in the open turn for `tick`, or the first later one with
+/// room: a turn must fit in one packet, or it could never be sent and every
+/// client would wait for it forever. Returns the tick it went in.
+fn file(open: &mut BTreeMap<u64, Vec<Command>>, mut tick: u64, command: Command) -> u64 {
+    let len = encoded_len(&command);
+    loop {
+        let turn = open.entry(tick).or_default();
+        if turn.is_empty() || encoded_len(turn) + len <= TURN_BUDGET {
+            turn.push(command);
+            return tick;
+        }
+        tick += 1;
     }
 }

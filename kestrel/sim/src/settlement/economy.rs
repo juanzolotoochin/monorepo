@@ -51,25 +51,30 @@ impl Settlement {
         let landed: Vec<u64> = self.transfers.values().filter(|t| t.arrival <= tick).map(|t| t.id).collect();
         for id in landed {
             let t = self.transfers.remove(&id).expect("listed transfer");
-            if let Endpoint::Cargo(a) = t.from {
-                self.agents[a as usize].carry.pending_out -= 1;
+            self.land(t);
+        }
+    }
+
+    /// A unit arrives at its end: a depot's stock or an agent's cargo.
+    pub(super) fn land(&mut self, t: super::Transfer) {
+        if let Endpoint::Cargo(a) = t.from {
+            self.agents[a as usize].carry.pending_out -= 1;
+        }
+        match t.to {
+            Endpoint::Depot(d) => {
+                let depot = &mut self.depots[d as usize];
+                depot.stock[t.item as usize] += 1;
+                depot.incoming[t.item as usize] -= 1;
+                self.metrics.delivered += 1;
+                *self.metrics.delivered_items.entry(self.items[t.item as usize].clone()).or_default() += 1;
+                if let Endpoint::Cargo(a) = t.from {
+                    *self.metrics.deliveries_by_agent.entry(self.agents[a as usize].id.clone()).or_default() += 1;
+                }
             }
-            match t.to {
-                Endpoint::Depot(d) => {
-                    let depot = &mut self.depots[d as usize];
-                    depot.stock[t.item as usize] += 1;
-                    depot.incoming[t.item as usize] -= 1;
-                    self.metrics.delivered += 1;
-                    *self.metrics.delivered_items.entry(self.items[t.item as usize].clone()).or_default() += 1;
-                    if let Endpoint::Cargo(a) = t.from {
-                        *self.metrics.deliveries_by_agent.entry(self.agents[a as usize].id.clone()).or_default() += 1;
-                    }
-                }
-                Endpoint::Cargo(a) => {
-                    let agent = &mut self.agents[a as usize];
-                    agent.carry.cargo[t.item as usize] += 1;
-                    agent.carry.pending_in -= 1;
-                }
+            Endpoint::Cargo(a) => {
+                let agent = &mut self.agents[a as usize];
+                agent.carry.cargo[t.item as usize] += 1;
+                agent.carry.pending_in -= 1;
             }
         }
     }

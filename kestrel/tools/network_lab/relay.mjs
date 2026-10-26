@@ -1,15 +1,17 @@
 // A localhost UDP relay that delays each datagram, for feeling Kestrel over a
 // worse network on one machine. Started by ../network-lab.ps1; see there.
 //
-//   client <-> 127.0.0.1:<listen> (this relay) <-> 127.0.0.1:<host>
+//   clients <-> 127.0.0.1:<listen> (this relay) <-> 127.0.0.1:<host>
 //
-// The client sends to the listen socket and hears replies from it, so its
-// host-address check holds. The relay forwards to the host from a second
-// socket, so the host sees one client and replies to the relay. Only the
-// first client address is served; anything else is dropped and counted.
+// Each client sends to the listen socket and hears replies from it, so its
+// host-address check holds. The relay forwards each client to the host from
+// a socket of its own, so the host sees every client as its own peer and
+// replies to that socket. Up to --max-clients addresses are served; anything
+// past them is dropped and counted.
 //
 // Each datagram is held for max(0, delay + uniform(-jitter, +jitter)) ms, one
-// seeded random stream per direction. Datagrams may overtake one another.
+// seeded random stream per client and direction. Datagrams may overtake one
+// another.
 //
 // Windows timers wake in ~15.6 ms steps, which alone would add ~7 ms of
 // delay. The relay sleeps on a timer until a delivery is close, then polls
@@ -39,6 +41,7 @@ const { values: args } = parseArgs({
     "spin-ms": { type: "string", default: "17" },
     "max-packets": { type: "string", default: "4096" },
     "max-bytes": { type: "string", default: String(8 * 1024 * 1024) },
+    "max-clients": { type: "string", default: "16" },
     "run-dir": { type: "string" },
     "parent-pid": { type: "string" },
   },
@@ -66,6 +69,7 @@ const seed = integer("seed", 0, 0xffffffff);
 const spinMs = integer("spin-ms", 0, 100);
 const maxPackets = integer("max-packets", 1, 1_000_000);
 const maxBytes = integer("max-bytes", 1, 1 << 30);
+const maxClients = integer("max-clients", 1, 64);
 const parentPid = args["parent-pid"] === undefined ? null : integer("parent-pid", 1, 0xffffffff);
 const runDir = args["run-dir"] ?? fail("--run-dir is required");
 if (listenPort === hostPort) fail("--listen and --host must differ");
@@ -112,19 +116,44 @@ const startedAt = new Date().toISOString();
 const queue = [];
 let timer = null;
 let polling = false;
-let client = null;
 let strangerDrops = 0;
 let stopping = false;
 
 const listen = dgram.createSocket("udp4");
-const upstream = dgram.createSocket("udp4");
+// By "address:port", in the order they first sent.
+const clients = new Map();
 
-const toHost = direction("client_to_host", seed ^ 0x5eed0001, (bytes, done) =>
-  upstream.send(bytes, hostPort, LOOPBACK, done),
-);
-const toClient = direction("host_to_client", seed ^ 0x5eed0002, (bytes, done) =>
-  listen.send(bytes, client.port, client.address, done),
-);
+// A client's first datagram gives it a socket toward the host and a delay
+// stream each way. Null once --max-clients are served.
+function clientFor(from) {
+  const key = `${from.address}:${from.port}`;
+  const known = clients.get(key);
+  if (known || clients.size >= maxClients) return known ?? null;
+  const n = clients.size;
+  const upstream = dgram.createSocket("udp4");
+  const client = {
+    address: from.address,
+    port: from.port,
+    upstream,
+    toHost: direction("client_to_host", (seed ^ 0x5eed0001 ^ Math.imul(n, 0x9e3779b9)) >>> 0, (bytes, done) =>
+      upstream.send(bytes, hostPort, LOOPBACK, done),
+    ),
+    toClient: direction("host_to_client", (seed ^ 0x5eed0002 ^ Math.imul(n, 0x9e3779b9)) >>> 0, (bytes, done) =>
+      listen.send(bytes, from.port, from.address, done),
+    ),
+  };
+  upstream.on("message", (bytes, source) => {
+    if (source.address !== LOOPBACK || source.port !== hostPort) {
+      strangerDrops += 1;
+      return;
+    }
+    enqueue(client.toClient, bytes);
+  });
+  watchErrors(upstream);
+  upstream.bind({ port: 0, address: LOOPBACK });
+  clients.set(key, client);
+  return client;
+}
 
 function enqueue(dir, bytes) {
   dir.received += 1;
@@ -202,31 +231,24 @@ function poll() {
 }
 
 listen.on("message", (bytes, from) => {
-  if (client === null) client = { address: from.address, port: from.port };
-  if (from.address !== client.address || from.port !== client.port) {
+  const client = clientFor(from);
+  if (client === null) {
     strangerDrops += 1;
     return;
   }
-  enqueue(toHost, bytes);
-});
-
-upstream.on("message", (bytes, from) => {
-  if (from.address !== LOOPBACK || from.port !== hostPort || client === null) {
-    strangerDrops += 1;
-    return;
-  }
-  enqueue(toClient, bytes);
+  enqueue(client.toHost, bytes);
 });
 
 // Windows reports an earlier send's ICMP "port unreachable" (the host not
 // up yet) as a socket error; it is packet loss, not a reason to stop.
-for (const socket of [listen, upstream]) {
+function watchErrors(socket) {
   socket.on("error", (error) => {
     if (error.code === "ECONNRESET") return;
     console.error(`relay: socket error: ${error.message}`);
     stop(1);
   });
 }
+watchErrors(listen);
 
 function percentile(sorted, p) {
   if (sorted.length === 0) return null;
@@ -263,15 +285,37 @@ function writeJson(file, value) {
   fs.renameSync(temp, target);
 }
 
+// Every client's direction `name` as one, for the totals.
+function combined(name) {
+  const dirs = [...clients.values()].map((c) => (name === "client_to_host" ? c.toHost : c.toClient));
+  const total = direction(name, 0, null);
+  for (const dir of dirs) {
+    for (const key of Object.keys(total)) {
+      const summed = !["sequence", "lastDeliveredSequence", "peakPackets", "peakBytes"].includes(key);
+      if (typeof total[key] === "number" && summed) total[key] += dir[key];
+    }
+    total.lateness.push(...dir.lateness);
+    total.peakPackets = Math.max(total.peakPackets, dir.peakPackets);
+    total.peakBytes = Math.max(total.peakBytes, dir.peakBytes);
+  }
+  return summary(total);
+}
+
 function writeStats(state) {
   writeJson("stats.json", {
     state,
     started_at: startedAt,
     uptime_s: Math.round((performance.now() - started) / 100) / 10,
-    client,
     stranger_drops: strangerDrops,
-    client_to_host: summary(toHost),
-    host_to_client: summary(toClient),
+    // Totals over every client; peaks are the largest single client's.
+    client_to_host: combined("client_to_host"),
+    host_to_client: combined("host_to_client"),
+    clients: [...clients.values()].map((c) => ({
+      address: c.address,
+      port: c.port,
+      client_to_host: summary(c.toHost),
+      host_to_client: summary(c.toClient),
+    })),
   });
 }
 
@@ -284,7 +328,7 @@ function stop(code) {
     console.error(`relay: cannot write stats: ${error.message}`);
   }
   listen.close();
-  upstream.close();
+  for (const client of clients.values()) client.upstream.close();
   process.exit(code);
 }
 
@@ -300,7 +344,6 @@ function bind(socket, port) {
 
 try {
   await bind(listen, listenPort);
-  await bind(upstream, 0);
 } catch (error) {
   fail(`cannot bind: ${error.message}`);
 }
@@ -308,8 +351,8 @@ try {
 writeJson("ready.json", {
   pid: process.pid,
   listen: `${LOOPBACK}:${listenPort}`,
-  upstream: `${LOOPBACK}:${upstream.address().port}`,
   host: `${LOOPBACK}:${hostPort}`,
+  max_clients: maxClients,
   delay_ms: delayMs,
   jitter_ms: jitterMs,
   seed,

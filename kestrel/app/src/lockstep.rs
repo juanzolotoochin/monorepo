@@ -181,7 +181,7 @@ pub fn open(world: &mut World, launch: crate::flow::Launch) -> Result<Opened, St
             replay_scene = Some(scene_id);
             session::Mode::Replay { world: replayed, log }
         }
-        (None, Some(Network::Join(host))) => session::Mode::Join { host, stable_id: stable_id() },
+        (None, Some(Network::Join(host))) => session::Mode::Join { host, stable_id: stable_id(launch.profile.as_deref()) },
         (None, network) => {
             let built = build_world(world, launch.scene, &content);
             start_save = Some(save::write(&built, &content));
@@ -654,11 +654,33 @@ Closing in {}...", reason.to_uppercase(), remaining.ceil());
     }
 }
 
-/// Tells this machine apart from others when joining. A random ID per run:
-/// a rejoining player gets a new avatar.
-fn stable_id() -> net::StableId {
+/// Tells this player apart from others when joining, so a player who comes
+/// back gets their old slot. Kept in a profile file (one per `--profile`
+/// name) where menu settings live; a fresh random ID if it can't be read
+/// or written, or on the web.
+fn stable_id(profile: Option<&str>) -> net::StableId {
     let nanos = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64);
-    nanos ^ (u64::from(std::process::id()) << 32)
+    let fresh = nanos ^ (u64::from(std::process::id()) << 32);
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = profile;
+        fresh
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let name = match profile {
+            Some(name) => format!("kestrel-profile-{}.id", name.chars().filter(char::is_ascii_alphanumeric).collect::<String>()),
+            None => "kestrel-profile.id".to_string(),
+        };
+        let path = std::env::temp_dir().join(name);
+        if let Some(id) = std::fs::read_to_string(&path).ok().and_then(|s| s.trim().parse().ok()) {
+            return id;
+        }
+        if let Err(e) = std::fs::write(&path, fresh.to_string()) {
+            warn!("Cannot save the player ID to {}: {e}", path.display());
+        }
+        fresh
+    }
 }
 
 /// One world's last two ticks, for the views to interpolate.
@@ -913,7 +935,7 @@ pub fn follow_avatar(
         return;
     };
     let a = &current.agents[index as usize];
-    let before = mirror.previous.as_ref().and_then(|p| p.agents.get(index as usize)).unwrap_or(a);
+    let before = mirror.previous.as_ref().and_then(|p| current.same_agent_in(index, p)).unwrap_or(a);
     let predicted = if service.is_client() { predict(&mut prediction, &mirror, &service, before, time.delta_secs()) } else { None };
     // What the avatar's lasting effects are drawn from (D5): the newest
     // confirmed state at render time, unless it is predicted.

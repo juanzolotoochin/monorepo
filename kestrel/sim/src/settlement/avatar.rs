@@ -462,47 +462,6 @@ impl Settlement {
         self.agents.iter().position(|a| a.avatar().is_some_and(|avatar| avatar.owner == Some(player))).map(|i| i as AgentIx)
     }
 
-    /// Commands: gives a player who joined an avatar of their own, a copy
-    /// of the scene's first avatar beside the spawn point. Players who
-    /// already have one keep it.
-    pub fn join(&mut self, player: crate::PlayerId) {
-        if self.avatar_of(player).is_some() {
-            return;
-        }
-        let Some(template) = self.player().map(|i| self.agents[i as usize].clone()) else { return };
-        // Joiners stand in a row beside the spawn, so they don't overlap.
-        let slot = self.agents.iter().filter(|a| a.avatar().is_some()).count() as i64;
-        let position = FxVec2::new(self.spawn.x + Fx::from_ratio(slot * 9, 10), self.spawn.y);
-        // Only the definition carries over; the state starts fresh.
-        self.agents.push(AgentState {
-            id: format!("player-{}", player.0),
-            character: template.character,
-            body: Body {
-                home: position,
-                position,
-                heading: Fx::PI,
-                health: self.player_health,
-                max_health: self.player_health,
-                speed: template.body.speed,
-                base_radius: template.body.base_radius,
-                ..Body::default()
-            },
-            carry: Carry {
-                cargo: vec![0; template.carry.cargo.len()],
-                capacity: template.carry.capacity,
-                transfer_ticks: template.carry.transfer_ticks,
-                ..Carry::default()
-            },
-            role: Role::Avatar(AvatarState {
-                owner: Some(player),
-                height: self.spawn_height,
-                weapon: self.weapons.first().copied().unwrap_or_default(),
-                intent: Some(Intent::Stop),
-                ..AvatarState::default()
-            }),
-        });
-    }
-
     /// Commands: applies a player's action to their avatar (`act`). What it
     /// does to the world goes to `out`, which stage 5 applies
     /// (`apply_actions`) and `AvatarReplay` never does.
@@ -578,7 +537,7 @@ impl Settlement {
     /// rolls back is that reservation's: a release from the same avatar later
     /// in the order (it cancelled that job) is dropped with it, and a later
     /// reservation means the avatar took a new job, which stands on its own.
-    fn transfer_stock(&mut self, messages: Vec<TransferStock>) {
+    pub(super) fn transfer_stock(&mut self, messages: Vec<TransferStock>) {
         // Avatars whose last reservation was refused, until their job goes.
         let mut refused: Vec<AgentIx> = Vec::new();
         for message in messages {

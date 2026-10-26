@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use content::Content;
 use fx::{Fx, FxVec2};
 use sim::scenario::Scenario;
-use sim::{CommandKind, World};
+use sim::{Command, CommandKind, PlayerId, World};
 
 use crate::netsim::{LinkConditions, NetSim, SimAddr, SimSocket};
 use crate::{Client, ClientPhase, DesyncPolicy, Host, NetConfig, NetEvent, UdpTransport, TICK};
@@ -25,6 +25,9 @@ struct Harness {
     rng: u64,
     config: NetConfig,
     host_paused: bool,
+    /// Clients that stop updating: alive to the host until its timeout, but
+    /// doing nothing.
+    frozen: Vec<bool>,
 }
 
 impl Harness {
@@ -50,6 +53,7 @@ impl Harness {
             rng: 1,
             config,
             host_paused: false,
+            frozen: Vec::new(),
         }
     }
 
@@ -63,6 +67,7 @@ impl Harness {
         let socket = SimSocket::new(&self.net, addr);
         self.clients.push(Client::new(socket, HOST, content, self.config.clone(), 1000 + index as u64, self.now));
         self.client_events.push(Vec::new());
+        self.frozen.push(false);
         index
     }
 
@@ -83,6 +88,9 @@ impl Harness {
                 self.host_events.extend(self.host.take_events());
             }
             for i in 0..self.clients.len() {
+                if self.frozen[i] {
+                    continue;
+                }
                 self.clients[i].update(self.now, |_| {});
                 let events = self.clients[i].take_events();
                 self.client_events[i].extend(events);
@@ -392,6 +400,124 @@ fn host_loss_is_detected() {
     assert!(h.client_events[0].contains(&NetEvent::HostLost));
 }
 
+/// The host's upload with `players` (host included) once they all play,
+/// every player sending an aim change every tick, as a mouse does, and a
+/// move about every half second. Bits per second.
+fn host_upload(players: u32, link: LinkConditions) -> f64 {
+    let mut h = Harness::new(link, NetConfig { max_players: players, ..config() }, false);
+    for _ in 1..players {
+        h.add_client();
+    }
+    h.run_for(Duration::from_secs(3), 0);
+    assert!(h.clients.iter().all(|c| c.phase() == ClientPhase::Playing));
+    let mut frame = 0u64;
+    let mut busy = |h: &mut Harness, duration: Duration| {
+        let end = h.now + duration;
+        while h.now < end {
+            h.run_for(FRAME, 0);
+            frame += 1;
+            // About once a tick (16.7 ms is 3.3 frames of 5 ms).
+            if frame % 3 != 0 {
+                continue;
+            }
+            for player in 0..players as usize {
+                let turn = Fx::from_ratio(((frame + player as u64 * 7) % 100) as i64, 100);
+                let aim = CommandKind::AimAvatar { agent: player as u16 + 3, aim: FxVec2::new(turn, Fx::ONE - turn) };
+                let mut kinds = vec![aim];
+                if (frame / 3 + player as u64 * 5) % 30 == 0 {
+                    let intent = sim::settlement::avatar::Intent::Walk { direction: FxVec2::new(Fx::ONE - turn, turn), run: true };
+                    kinds.push(CommandKind::MoveAvatar { agent: player as u16 + 3, intent });
+                }
+                for kind in kinds {
+                    match player {
+                        0 => h.host.queue(kind),
+                        p => h.clients[p - 1].queue(kind),
+                    }
+                }
+            }
+        }
+    };
+    busy(&mut h, Duration::from_secs(2));
+    let before = h.host.stats().bytes_sent;
+    let measured = Duration::from_secs(10);
+    busy(&mut h, measured);
+    assert_eq!(h.desyncs(), 0);
+    h.assert_in_sync();
+    let host_tick = h.host.world().tick();
+    for (i, client) in h.clients.iter().enumerate() {
+        assert!(client.history().end() + 30 > host_tick, "client {i} fell behind: {} of {host_tick}", client.history().end());
+    }
+    let bits = (h.host.stats().bytes_sent - before) as f64 * 8.0 / measured.as_secs_f64();
+    let (_, turns) = h.host.turns();
+    let commands = turns.iter().rev().take(600).map(Vec::len).sum::<usize>() as f64 / 600.0;
+    eprintln!("{players} players: host sends {:.2} Mbit/s, {commands:.1} commands a turn", bits / 1e6);
+    bits
+}
+
+/// Eight players over the internet stay well inside a home upload; sixteen
+/// on a LAN, where the limit may go later, are measured too.
+#[test]
+fn the_host_upload_fits_eight_players_online_and_sixteen_on_a_lan() {
+    let online = host_upload(8, LinkConditions::internet());
+    assert!(online < 2.5e6, "8 players online: {:.2} Mbit/s", online / 1e6);
+    let lan = LinkConditions { latency: Duration::from_millis(1), jitter: Duration::from_millis(1), loss_permille: 0, spikes: Vec::new() };
+    let local = host_upload(16, lan);
+    assert!(local < 10e6, "16 players on a LAN: {:.2} Mbit/s", local / 1e6);
+}
+
+/// More commands for one tick than fit in a packet spill into the next
+/// turns, in order, instead of making a turn no packet can carry, which
+/// every client would wait for forever.
+#[test]
+fn a_burst_of_inputs_spills_into_later_turns_in_order() {
+    let mut h = Harness::new(LinkConditions::perfect(), NetConfig { input_margin: Some(10), ..config() }, false);
+    h.add_client();
+    h.add_client();
+    h.run_for(Duration::from_secs(1), 0);
+    let aim = |n: u16| CommandKind::AimAvatar { agent: n, aim: FxVec2::new(Fx::from_ratio(n as i64, 1000), Fx::ONE) };
+    for n in 0..400 {
+        h.clients[0].queue(aim(n));
+        h.clients[1].queue(aim(n));
+        h.host.queue(aim(n));
+    }
+    h.run_for(Duration::from_secs(2), 0);
+    let (_, turns) = h.host.turns();
+    assert!(turns.iter().all(|turn| crate::protocol::encoded_len(turn) <= crate::protocol::MAX_PACKET - 64));
+    for player in 0..3 {
+        let sent: Vec<CommandKind> = turns.iter().flatten().filter(|c| c.player == PlayerId(player)).map(|c| c.kind.clone()).collect();
+        assert_eq!(sent, (0..400).map(aim).collect::<Vec<_>>(), "player {player}'s commands, in order");
+    }
+    h.assert_in_sync();
+    let host_tick = h.host.world().tick();
+    assert!(h.clients.iter().all(|c| c.history().end() + 30 > host_tick), "the clients keep up");
+}
+
+/// A player who leaves gets a `Leave` in the turns, so every peer removes
+/// their avatar on the same tick, and the rest play on in sync.
+#[test]
+fn a_departure_reaches_everyone_as_a_leave_command() {
+    let mut h = Harness::new(LinkConditions::internet(), config(), true);
+    for _ in 0..3 {
+        h.add_client();
+    }
+    h.run_for(Duration::from_secs(3), 20);
+    let gone = h.clients[1].player().unwrap();
+    h.clients[1].shutdown();
+    h.run_for(Duration::from_secs(3), 20);
+    let (start, turns) = h.host.turns();
+    let leaves: Vec<u64> = (start..)
+        .zip(turns)
+        .filter(|(_, turn)| turn.contains(&Command { player: gone, kind: CommandKind::Leave }))
+        .map(|(tick, _)| tick)
+        .collect();
+    assert_eq!(leaves.len(), 1, "one leave, on ticks {leaves:?}");
+    assert_eq!(h.desyncs(), 0);
+    h.assert_in_sync();
+    for i in [0, 2] {
+        assert!(h.clients[i].history().end() > leaves[0], "client {i} ran past the leave");
+    }
+}
+
 #[test]
 fn players_keep_their_slot_when_they_return() {
     let mut h = Harness::new(LinkConditions::perfect(), config(), false);
@@ -405,6 +531,85 @@ fn players_keep_their_slot_when_they_return() {
     h.clients[0] = Client::new(socket, HOST, Content::builtin(), config(), 1000, h.now);
     h.run_for(Duration::from_secs(1), 0);
     assert_eq!(h.clients[0].player(), first);
+}
+
+#[test]
+fn a_full_game_turns_new_players_away() {
+    let mut h = Harness::new(LinkConditions::perfect(), config(), false);
+    for _ in 1..crate::DEFAULT_MAX_PLAYERS {
+        h.add_client();
+    }
+    h.run_for(Duration::from_secs(2), 0);
+    let slots: Vec<_> = h.clients.iter().map(|c| c.player().unwrap().0).collect();
+    assert_eq!(slots, (1..crate::DEFAULT_MAX_PLAYERS).collect::<Vec<_>>());
+    assert!(h.clients.iter().all(|c| c.phase() == ClientPhase::Playing));
+
+    let ninth = h.add_client();
+    h.run_for(Duration::from_secs(1), 0);
+    let ClientPhase::Stopped { reason } = h.clients[ninth].phase() else { panic!("the ninth player joined") };
+    assert!(reason.contains("full"), "{reason}");
+    assert_eq!(h.host.players().len() as u32, crate::DEFAULT_MAX_PLAYERS);
+}
+
+#[test]
+fn a_new_player_takes_a_free_slot_before_a_departed_one() {
+    let mut h = Harness::new(LinkConditions::perfect(), NetConfig { max_players: 4, ..config() }, false);
+    h.add_client();
+    h.add_client();
+    h.run_for(Duration::from_secs(1), 0);
+    h.clients[0].shutdown();
+    h.run_for(Duration::from_millis(100), 0);
+    // Slot 1 is kept for the player who left; slot 3 is free.
+    let third = h.add_client();
+    h.run_for(Duration::from_secs(1), 0);
+    assert_eq!(h.clients[third].player(), Some(PlayerId(3)));
+    // The first player comes back to slot 1.
+    let socket = SimSocket::new(&h.net, 9);
+    h.clients[0] = Client::new(socket, HOST, Content::builtin(), config(), 1000, h.now);
+    h.run_for(Duration::from_secs(1), 0);
+    assert_eq!(h.clients[0].player(), Some(PlayerId(1)));
+}
+
+#[test]
+fn when_every_slot_is_held_a_new_player_takes_the_oldest_departed_one() {
+    let mut h = Harness::new(LinkConditions::perfect(), NetConfig { max_players: 3, ..config() }, false);
+    h.add_client();
+    h.add_client();
+    h.run_for(Duration::from_secs(1), 0);
+    h.clients[1].shutdown();
+    h.run_for(Duration::from_millis(100), 0);
+    h.clients[0].shutdown();
+    h.run_for(Duration::from_millis(100), 0);
+    // Slot 2 left first, so it goes first.
+    let third = h.add_client();
+    h.run_for(Duration::from_secs(1), 0);
+    assert_eq!(h.clients[third].player(), Some(PlayerId(2)));
+    // Its old player now gets the other departed slot.
+    let socket = SimSocket::new(&h.net, 9);
+    h.clients[1] = Client::new(socket, HOST, Content::builtin(), config(), 1001, h.now);
+    h.run_for(Duration::from_secs(1), 0);
+    assert_eq!(h.clients[1].player(), Some(PlayerId(1)));
+    // And with both slots playing again, the game is full.
+    let fourth = h.add_client();
+    h.run_for(Duration::from_secs(1), 0);
+    assert!(matches!(h.clients[fourth].phase(), ClientPhase::Stopped { .. }));
+}
+
+#[test]
+fn a_second_copy_with_the_same_id_is_refused() {
+    let mut h = Harness::new(LinkConditions::perfect(), config(), false);
+    h.add_client();
+    h.run_for(Duration::from_secs(1), 0);
+    // Same stable ID, another address, while the first is still playing.
+    let socket = SimSocket::new(&h.net, 9);
+    h.clients.push(Client::new(socket, HOST, Content::builtin(), config(), 1000, h.now));
+    h.client_events.push(Vec::new());
+    h.frozen.push(false);
+    h.run_for(Duration::from_secs(1), 0);
+    let ClientPhase::Stopped { reason } = h.clients[1].phase() else { panic!("the copy joined") };
+    assert!(reason.contains("--profile"), "{reason}");
+    assert_eq!(h.clients[0].phase(), ClientPhase::Playing);
+    assert_eq!(h.clients[0].player(), Some(PlayerId(1)));
 }
 
 /// The same protocol over real UDP sockets on localhost.
@@ -444,6 +649,31 @@ fn change_map(h: &mut Harness, label: &str) {
     let content = Content::builtin();
     let world = World::new(Scenario::small().config, content.rules.clone());
     h.host.load_world(world, label.into(), h.now);
+}
+
+/// A client that doesn't load a new world in time doesn't hold it at its
+/// first tick for everyone: it is told why and dropped, and the rest start.
+#[test]
+fn a_new_world_starts_without_a_client_too_slow_to_load_it() {
+    let config = NetConfig { timeout: Duration::from_secs(60), load_timeout: Duration::from_secs(2), ..config() };
+    let mut h = Harness::new(LinkConditions::perfect(), config, false);
+    h.add_client();
+    h.add_client();
+    h.run_for(Duration::from_secs(1), 0);
+    h.frozen[1] = true;
+    change_map(&mut h, "next");
+    h.run_for(Duration::from_secs(1), 0);
+    assert!(h.host.starting(), "still waiting for the slow client");
+    h.run_for(Duration::from_secs(2), 0);
+    assert!(!h.host.starting(), "started without it");
+    assert_eq!(h.host.players().len(), 2);
+    assert!(h.host.world().tick() > 30, "the new world runs");
+    assert_eq!(h.clients[0].world_number(), 2);
+    assert_eq!(h.clients[0].phase(), ClientPhase::Playing);
+    h.frozen[1] = false;
+    h.run_for(Duration::from_secs(1), 0);
+    let ClientPhase::Stopped { reason } = h.clients[1].phase() else { panic!("the slow client plays on") };
+    assert!(reason.contains("loading"), "{reason}");
 }
 
 #[test]
@@ -508,17 +738,17 @@ fn packets_from_an_earlier_world_are_ignored() {
     h.assert_in_sync();
 }
 
-/// Release is new in protocol 3: it round-trips, and a peer speaking 2
+/// Leave is new in protocol 4: it round-trips, and a peer speaking 3
 /// (which cannot decode it) is ignored rather than misread.
 #[test]
-fn release_needs_protocol_three() {
+fn leave_needs_protocol_four() {
     use crate::protocol::{decode, encode, Input, Packet, PROTOCOL_VERSION};
-    let inputs = vec![Input { seq: 1, tick: 4, kind: sim::CommandKind::ReleaseDirectControl { agent: 0 } }];
+    let inputs = vec![Input { seq: 1, tick: 4, kind: sim::CommandKind::Leave }];
     let packet = Packet::Inputs { epoch: 1, world: 1, turn_ack: 0, inputs, hashes: vec![], ping: 0 };
     let mut bytes = encode(&packet);
-    assert_eq!(PROTOCOL_VERSION, 3);
+    assert_eq!(PROTOCOL_VERSION, 4);
     assert_eq!(decode(&bytes), Some(packet));
-    bytes[4..6].copy_from_slice(&2u16.to_le_bytes());
+    bytes[4..6].copy_from_slice(&3u16.to_le_bytes());
     assert_eq!(decode(&bytes), None);
 }
 

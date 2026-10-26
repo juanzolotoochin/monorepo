@@ -24,13 +24,16 @@ pub struct Launch {
     /// `--input-margin-ms`: pins a joining client's input margin instead of
     /// adapting it to the network.
     pub input_margin_ms: Option<u64>,
+    /// `--profile <name>`: which saved player ID to join with, so several
+    /// copies of the game on one machine count as different players.
+    pub profile: Option<String>,
 }
 
 impl Launch {
     /// A single-player session in a scene, as tests start the game.
     #[cfg(test)]
     pub fn single_player(scene: usize) -> Launch {
-        Launch { network: None, scene, name: String::new(), record: None, replay: None, input_margin_ms: None }
+        Launch { network: None, scene, name: String::new(), record: None, replay: None, input_margin_ms: None, profile: None }
     }
 }
 
@@ -44,6 +47,8 @@ pub struct Defaults {
     pub address: String,
     /// `--input-margin-ms`, for the games the menu starts too.
     pub input_margin_ms: Option<u64>,
+    /// `--profile`, for the games the menu starts too.
+    pub profile: Option<String>,
 }
 
 /// The port the menu offers for hosting, unless `--host` named one.

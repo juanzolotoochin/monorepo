@@ -1,5 +1,62 @@
 # Networking
 
+## Tint each player's suit with their slot color
+
+- **Status:** open
+- **Why:** name tags have slot colors, but every avatar wears the same suit,
+  so in a crowd you still read tags to tell players apart.
+- **What to do:** give an accent part of the suit (for example the chest or
+  shoulder pieces) the player's `slot_color`, for peers and your own avatar,
+  in a way that fits each scene's style profile.
+- **Where:** `slot_color` in `kestrel/app/src/nametags.rs`; `dress_body` in
+  `kestrel/app/src/style.rs`; `kestrel/app/src/peers.rs`.
+- **Found in:** eight-player stage 4 (D5 in `kestrel/EIGHT_PLAYER_HANDOFF.md`).
+
+## Let a LAN host allow 16 players
+
+- **Status:** open
+- **Why:** the cap is `NetConfig::max_players` (8) with no way to change it
+  from the game. 16 players on a LAN measured 2.1 Mbit/s up from the host.
+- **What to do:** a `--max-players <n>` flag (and a menu field) for the
+  host, limited to 16; check the network lab with `-Clients 15`.
+- **Where:** `kestrel/app/src/main.rs`, `kestrel/app/src/lockstep.rs`
+  (`open`), `kestrel/app/src/menu.rs`.
+- **Found in:** eight-player design session.
+
+## Play an eight-player network lab run
+
+- **Status:** open
+- **Why:** the multi-client relay was checked with fake peers and
+  `network-lab.ps1 -Clients` was only parse-checked; no run had 8 real game
+  windows.
+- **What to do:** run `network-lab.ps1 -Clients 7` at LAN and 75 ± 20 ms;
+  check joins, spawn spots, tags, a client closing and rejoining, and the
+  relay counters.
+- **Where:** `kestrel/tools/network-lab.ps1`, `kestrel/tools/network_lab/relay.mjs`.
+- **Found in:** eight-player stage 3.
+
+## Keep a client's movement prediction when its avatar's index moves
+
+- **Status:** open (low priority)
+- **Why:** when a player before you leaves, your avatar's index drops by
+  one, and the prediction, which notes the index, starts over for a frame.
+- **What to do:** check in the network lab whether it shows; if it does,
+  key the prediction by player rather than index.
+- **Where:** `kestrel/app/src/prediction.rs` (`Confirmed::agent`),
+  `kestrel/app/src/lockstep.rs`.
+- **Found in:** eight-player stage 2.
+
+## Adapt the turn resend time to the round trip
+
+- **Status:** open (low priority)
+- **Why:** a turn still unacknowledged 300 ms after it was last sent goes
+  again (`TURN_RESEND`). On round trips over 300 ms, turns that arrived are
+  sent once more, which costs upload for nothing.
+- **What to do:** the host measures each client's round trip from its pings
+  and resends after that plus a margin.
+- **Where:** `TURN_RESEND` and `Host::send` in `kestrel/net/src/host.rs`.
+- **Found in:** eight-player stage 3.
+
 ## Cap how far ahead a client may request a tick
 
 - **Status:** open
@@ -92,3 +149,15 @@
 - **Found in:** stage 3 of PR #111.
 
 ## Done
+
+### Eight players: cap, slots, leaving, spawn spots, colors, upload, loading
+
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/117; stages 1–5 of
+  `kestrel/EIGHT_PLAYER_HANDOFF.md`). A host allows 8 players with
+  reusable slots and saved player IDs (`--profile`), leaving removes the
+  avatar for everyone (`CommandKind::Leave`, protocol 4, save format 12),
+  joiners spawn at their own clear spots, name tags have slot colors, the
+  host sends each turn 3 times instead of every packet (8 players online:
+  3.3 → 1.4 Mbit/s), a turn never outgrows a packet (which could stall every
+  client), joiners share a save, and a slow loader no longer holds a new
+  world. The network lab relays several clients (`-Clients N`).

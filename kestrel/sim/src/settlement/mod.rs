@@ -23,6 +23,7 @@ mod haulers;
 pub mod memory;
 pub mod piano;
 pub mod piles;
+mod players;
 pub mod prediction;
 
 use std::collections::BTreeMap;
@@ -142,6 +143,8 @@ pub struct Accounting {
     pub produced: u64,
     pub consumed: u64,
     pub spent: u64,
+    /// Carried off by players who left (`Settlement::leave`).
+    pub abandoned: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -153,6 +156,7 @@ pub struct Balance {
     pub equipped: u64,
     pub consumed: u64,
     pub spent: u64,
+    pub abandoned: u64,
     pub conserved: bool,
 }
 
@@ -631,7 +635,8 @@ impl Settlement {
                     equipped,
                     consumed: b.consumed,
                     spent: b.spent,
-                    conserved: supplied == stored + carried + in_transit + equipped + b.consumed + b.spent,
+                    abandoned: b.abandoned,
+                    conserved: supplied == stored + carried + in_transit + equipped + b.consumed + b.spent + b.abandoned,
                 };
                 (id.clone(), balance)
             })
