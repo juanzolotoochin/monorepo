@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -45,26 +46,45 @@ func run(args []string) error {
 		return err
 	}
 	gameArgs := args[2:]
+	device := "Steam Deck"
+	targetEnv := "STEAM_DECK_TARGET"
+	defaultTarget := "deck@steamdeck.local"
+	if len(gameArgs) > 0 && gameArgs[0] == "--device=frame" {
+		device = "Steam Frame"
+		targetEnv = "STEAM_FRAME_TARGET"
+		defaultTarget = "steamos@frame.local"
+		gameArgs = gameArgs[1:]
+	}
 	dryRun := len(gameArgs) > 0 && gameArgs[0] == "--dry-run"
 	stop := len(gameArgs) > 0 && gameArgs[0] == "--stop"
 	installOnly := len(gameArgs) > 0 && gameArgs[0] == "--install-only"
-	steamLaunch := len(gameArgs) > 0 && gameArgs[0] == "--steam"
+	steamLaunch := device == "Steam Frame" || (len(gameArgs) > 0 && gameArgs[0] == "--steam")
 	if dryRun {
 		gameArgs = gameArgs[1:]
 	}
-	target := os.Getenv("STEAM_DECK_TARGET")
+	if steamLaunch && len(gameArgs) > 0 && gameArgs[0] == "--steam" {
+		gameArgs = gameArgs[1:]
+	}
+	if steamLaunch && !dryRun && !stop && !installOnly && len(gameArgs) > 0 {
+		return errors.New("Steam shortcut launch does not accept game arguments; set them in the shortcut's Steam launch options")
+	}
+	target := os.Getenv(targetEnv)
 	if target == "" {
-		target = "deck@steamdeck.local"
+		target = defaultTarget
 	}
 	if !targetPattern.MatchString(target) {
-		return errors.New("STEAM_DECK_TARGET must be user@host, for example deck@steamdeck.local")
+		return fmt.Errorf("%s must be user@host, for example %s", targetEnv, defaultTarget)
 	}
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		return errors.New("the Steam Deck target needs a Linux x86-64 Bazel build host")
+		return fmt.Errorf("the %s target needs a Linux x86-64 Bazel build host", device)
 	}
 	if dryRun {
 		fmt.Printf("Would copy the Bazel-built game and launcher to %s:.local/opt/kestrel/\n", target)
-		fmt.Printf("Would start Kestrel in the Deck's Desktop Mode session with arguments: %q\n", gameArgs)
+		if steamLaunch {
+			fmt.Printf("Would launch Kestrel through its Steam shortcut on the %s.\n", device)
+		} else {
+			fmt.Printf("Would start Kestrel in the %s desktop session with arguments: %q\n", device, gameArgs)
+		}
 		return nil
 	}
 
@@ -77,7 +97,7 @@ func run(args []string) error {
 	fmt.Printf("Connecting to %s...\n", target)
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, "22"), 10*time.Second)
 	if err != nil {
-		return fmt.Errorf("connect to Deck: %w", err)
+		return fmt.Errorf("connect to %s: %w", device, err)
 	}
 	if err := conn.SetDeadline(time.Now().Add(15 * time.Second)); err != nil {
 		conn.Close()
@@ -86,7 +106,7 @@ func run(args []string) error {
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, net.JoinHostPort(host, "22"), config)
 	if err != nil {
 		conn.Close()
-		return fmt.Errorf("authenticate with Deck: %w", err)
+		return fmt.Errorf("authenticate with %s: %w", device, err)
 	}
 	if err := conn.SetDeadline(time.Time{}); err != nil {
 		sshConn.Close()
@@ -95,19 +115,24 @@ func run(args []string) error {
 	client := ssh.NewClient(sshConn, chans, reqs)
 	defer client.Close()
 	if stop {
-		fmt.Println("Stopping Kestrel on the Deck...")
-		return remoteRun(client, "systemctl --user stop kestrel-game.service 2>/dev/null || true")
+		fmt.Printf("Stopping Kestrel on the %s...\n", device)
+		command := "systemctl --user stop kestrel-game.service 2>/dev/null || true"
+		if device == "Steam Frame" {
+			command += `; pkill -u "$(id -u)" -x demo 2>/dev/null || true`
+		}
+		return remoteRun(client, command)
 	}
-	var steamID uint64
-	if steamLaunch {
-		steamID, err = steamShortcutID(client)
+	if device == "Steam Frame" {
+		arch, err := remoteOutput(client, "uname -m")
 		if err != nil {
-			return err
+			return fmt.Errorf("check Frame architecture: %w", err)
+		}
+		if strings.TrimSpace(arch) != "aarch64" {
+			return fmt.Errorf("Steam Frame target requires aarch64, remote device reports %q", strings.TrimSpace(arch))
 		}
 	}
-
 	if err := remoteRun(client, `mkdir -p "`+remoteDir+`"`); err != nil {
-		return fmt.Errorf("create Deck directory: %w", err)
+		return fmt.Errorf("create %s directory: %w", device, err)
 	}
 	if err := upload(client, game, remoteDir+"/demo.next", "game", true); err != nil {
 		return err
@@ -115,27 +140,45 @@ func run(args []string) error {
 	if err := upload(client, launcher, remoteDir+"/launch.sh.next", "launcher", false); err != nil {
 		return err
 	}
-	fmt.Println("Installing game on the Deck...")
+	fmt.Printf("Installing game on the %s...\n", device)
 	if err := remoteRun(client, `mv "`+remoteDir+`/demo.next" "`+remoteDir+`/demo" && mv "`+remoteDir+`/launch.sh.next" "`+remoteDir+`/launch.sh" && chmod +x "`+remoteDir+`/demo"`); err != nil {
 		return fmt.Errorf("install game: %w", err)
 	}
 	if installOnly {
-		fmt.Println("Installed Kestrel on the Deck at ~/.local/opt/kestrel/demo.")
+		fmt.Printf("Installed Kestrel on the %s at ~/.local/opt/kestrel/demo.\n", device)
 		return nil
 	}
 	if steamLaunch {
+		steamID, err := steamShortcutID(client)
+		if errors.Is(err, errSteamShortcutMissing) && device == "Steam Frame" {
+			fmt.Println("Registering Kestrel with the Frame Steam client...")
+			if err := registerFrameShortcut(client); err != nil {
+				return err
+			}
+			steamID, err = steamShortcutID(client)
+		}
+		if err != nil {
+			return err
+		}
 		fmt.Println("Launching Kestrel through its Steam shortcut...")
-		return remoteRun(client, `bash "`+remoteDir+`/launch.sh" --steam `+strconv.FormatUint(steamID, 10))
+		return remoteRun(client, launchCommand(device)+`bash "`+remoteDir+`/launch.sh" --steam `+strconv.FormatUint(steamID, 10))
 	}
-	command := `bash "` + remoteDir + `/launch.sh"`
+	command := launchCommand(device) + `bash "` + remoteDir + `/launch.sh"`
 	for _, arg := range gameArgs {
 		command += " " + shellQuote(arg)
 	}
-	fmt.Println("Starting Kestrel in the Deck's Desktop Mode session...")
+	fmt.Printf("Starting Kestrel in the %s desktop session...\n", device)
 	if err := remoteRun(client, command); err != nil {
 		return fmt.Errorf("launch game: %w", err)
 	}
 	return nil
+}
+
+func launchCommand(device string) string {
+	if device == "Steam Frame" {
+		return "KESTREL_DEVICE_NAME='Steam Frame' KESTREL_BAZEL_TARGET=steamframe "
+	}
+	return ""
 }
 
 func runfile(path string) (string, error) {
@@ -203,6 +246,59 @@ func remoteRun(client *ssh.Client, command string) error {
 	return session.Run(command)
 }
 
+func remoteOutput(client *ssh.Client, command string) (string, error) {
+	session, err := client.NewSession()
+	if err != nil {
+		return "", err
+	}
+	defer session.Close()
+	output, err := session.Output(command)
+	return string(output), err
+}
+
+var errSteamShortcutMissing = errors.New("Kestrel is not in Steam yet")
+
+func registerFrameShortcut(client *ssh.Client) error {
+	const setup = `test -f "$HOME/devkit-utils/steam-client-create-shortcut" || { echo "Pair the Frame with SteamOS Devkit Client on this computer first." >&2; exit 1; }; ` +
+		`mkdir -p "$HOME/devkit-game"; ` +
+		`if [ ! -e "$HOME/devkit-game/kestrel" ]; then ln -s "$HOME/.local/opt/kestrel" "$HOME/devkit-game/kestrel"; fi; ` +
+		`test "$(realpath "$HOME/devkit-game/kestrel")" = "$(realpath "$HOME/.local/opt/kestrel")" || { echo "Existing Frame devkit game path is not Kestrel." >&2; exit 1; }`
+	if err := remoteRun(client, setup); err != nil {
+		return fmt.Errorf("prepare Frame Steam shortcut: %w", err)
+	}
+	home, err := remoteOutput(client, `printf %s "$HOME"`)
+	if err != nil {
+		return fmt.Errorf("find Frame home directory: %w", err)
+	}
+	parameters, err := json.Marshal(map[string]any{
+		"gameid":      "kestrel",
+		"directory":   home + "/devkit-game/kestrel",
+		"argv":        []string{"./demo --fullscreen --auto-claim-gamepad"},
+		"env":         map[string]string{},
+		"settings":    map[string]string{"steam_play": "0", "compat_tool": "SteamLinuxRuntime_4-arm64"},
+		"force_appid": "",
+		"lepton_args": "",
+	})
+	if err != nil {
+		return err
+	}
+	response, err := remoteOutput(client, `python3 "$HOME/devkit-utils/steam-client-create-shortcut" --parms `+shellQuote(string(parameters)))
+	if err != nil {
+		return fmt.Errorf("register Frame Steam shortcut: %w", err)
+	}
+	var result struct {
+		Error   string `json:"error"`
+		Success string `json:"success"`
+	}
+	if err := json.Unmarshal([]byte(response), &result); err != nil {
+		return fmt.Errorf("read Frame Steam registration response: %w", err)
+	}
+	if result.Error != "" {
+		return fmt.Errorf("register Frame Steam shortcut: %s", result.Error)
+	}
+	return nil
+}
+
 func steamShortcutID(client *ssh.Client) (uint64, error) {
 	session, err := client.NewSession()
 	if err != nil {
@@ -218,11 +314,11 @@ func steamShortcutID(client *ssh.Client) (uint64, error) {
 		return 0, fmt.Errorf("parse Steam shortcuts: %w", err)
 	}
 	for _, shortcut := range shortcuts {
-		if strings.Contains(shortcut.exe, "/.local/opt/kestrel/demo") {
+		if strings.Contains(shortcut.exe, "/.local/opt/kestrel/demo") || strings.Contains(shortcut.exe, "/devkit-game/kestrel/./demo") {
 			return uint64(shortcut.appID)<<32 | 0x02000000, nil
 		}
 	}
-	return 0, errors.New("Kestrel is not in Steam yet; add ~/.local/opt/kestrel/demo as a Non-Steam Game on the Deck, then retry --steam")
+	return 0, fmt.Errorf("%w; add ~/.local/opt/kestrel/demo as a Non-Steam Game on the Deck, or pair the Frame with SteamOS Devkit Client", errSteamShortcutMissing)
 }
 
 type steamShortcut struct {
@@ -361,7 +457,7 @@ func upload(client *ssh.Client, path, destination, label string, compress bool) 
 		return fmt.Errorf("finish %s copy: %w", label, closeErr)
 	}
 	if waitErr != nil {
-		return fmt.Errorf("save %s on Deck: %w", label, waitErr)
+		return fmt.Errorf("save %s on device: %w", label, waitErr)
 	}
 	return nil
 }

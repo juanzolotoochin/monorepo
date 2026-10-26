@@ -42,7 +42,7 @@ func TestShellQuote(t *testing.T) {
 }
 
 func TestTargetPattern(t *testing.T) {
-	for _, target := range []string{"deck@steamdeck.local", "deck@192.168.1.10"} {
+	for _, target := range []string{"deck@steamdeck.local", "deck@192.168.1.10", "steamos@frame.local"} {
 		if !targetPattern.MatchString(target) {
 			t.Errorf("rejected valid target %q", target)
 		}
@@ -51,6 +51,15 @@ func TestTargetPattern(t *testing.T) {
 		if targetPattern.MatchString(target) {
 			t.Errorf("accepted invalid target %q", target)
 		}
+	}
+}
+
+func TestFrameLaunchEnvironment(t *testing.T) {
+	if got := launchCommand("Steam Frame"); got != "KESTREL_DEVICE_NAME='Steam Frame' KESTREL_BAZEL_TARGET=steamframe " {
+		t.Fatalf("Frame launch prefix = %q", got)
+	}
+	if got := launchCommand("Steam Deck"); got != "" {
+		t.Fatalf("Deck launch prefix = %q", got)
 	}
 }
 

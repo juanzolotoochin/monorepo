@@ -156,6 +156,41 @@ bazel run --config=remote -c opt //kestrel/app:steamdeck -- --steam
 The Steam shortcut remains valid across updates. Steam must be running in
 Desktop Mode for the remote launch.
 
+## Run natively on Steam Frame
+
+The `:steamframe` target cross-builds the Linux ARM64 game while keeping the
+Go SSH deploy tool runnable on this Linux x86-64 build machine. It uses the
+same compressed transfer and progress display as `:steamdeck`. Kestrel is a
+non-VR game; Steam presents it as a flat game in the headset.
+
+On the Frame, enable **Developer Mode** in **Settings → System**. From this
+machine, authorize your SSH key and verify access:
+
+```sh
+ssh-copy-id steamos@frame.local
+ssh -o BatchMode=yes steamos@frame.local true
+```
+
+For first-time setup, install Valve's **SteamOS Devkit Client** on this
+computer. On the Frame, choose **Settings → Developer → Pair new host**;
+in the Devkit Client's **Devkits** tab, register the Frame and confirm pairing
+in the headset. The `:steamframe` target then creates its Steam library entry
+through Valve's devkit helper on the first run, with the ARM64 runtime,
+fullscreen, and gamepad options. Future runs update the same executable and
+launch it through Steam without opening the Frame's desktop. Build, transfer,
+and launch Kestrel with:
+
+```sh
+bazel run --config=remote -c opt //kestrel/app:steamframe
+```
+
+The default SSH target is `steamos@frame.local`. Set `STEAM_FRAME_TARGET=user@host`
+if the headset uses a different address. `-- --dry-run` and `-- --stop` are
+also available. Set game arguments such as `--scene moonlit-glade` in the
+Steam shortcut's Launch Options. The launcher checks that the remote CPU
+reports `aarch64` before upload. Valve's [Steam Frame deployment guide](https://partner.steamgames.com/doc/steamhardware/steamframe/loadgames)
+describes the pairing and ARM64 runtime setup.
+
 ## Launch menu
 
 Run `bazel run --config=full_local -c opt //kestrel/app:demo` to open the launch

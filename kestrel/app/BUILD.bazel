@@ -4,6 +4,7 @@ load("@rules_python//python:defs.bzl", "py_test")
 load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
 load("@rules_rs//rs:rust_test.bzl", "rust_test")
 load("//kestrel/build/game_demo:defs.bzl", "game_demo", "game_simulation_test", "studio_demo")
+load(":frame_arm64.bzl", "arm64_game")
 
 alias(
     name = "web",
@@ -77,6 +78,32 @@ go_binary(
     ],
     data = [
         ":demo",
+        "deck_launch.sh",
+    ],
+    deps = [
+        "@com_github_klauspost_compress//zstd",
+        "@org_golang_x_crypto//ssh",
+        "@org_golang_x_crypto//ssh/agent",
+        "@org_golang_x_crypto//ssh/knownhosts",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+arm64_game(
+    name = "frame_demo",
+    game = ":demo",
+)
+
+go_binary(
+    name = "steamframe",
+    srcs = ["steamdeck.go"],
+    args = [
+        "$(rlocationpath :frame_demo)",
+        "$(rlocationpath deck_launch.sh)",
+        "--device=frame",
+    ],
+    data = [
+        ":frame_demo",
         "deck_launch.sh",
     ],
     deps = [
