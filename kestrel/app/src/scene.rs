@@ -592,7 +592,23 @@ pub fn spawn_player(commands: &mut Commands, art: &SceneArt, scene: &voxel_asset
                 .with_rotation(Quat::from_rotation_y(std::f32::consts::PI)),
             Visibility::default(),
         ))
-        .with_children(|p| crate::actor::spawn_joint(p, art, &actor.root));
+        .with_children(|p| crate::actor::spawn_joint(p, art, &actor.root, true));
+}
+
+/// Another player's body for a world: the same actor as the local player's,
+/// dressed in the scene's style without its lights. `peers` places and
+/// poses it.
+pub fn spawn_remote_player(world: &mut World, pack: &voxel_assets::ScenePack) -> Entity {
+    let art = world.resource::<SceneArt>().clone();
+    let actor = crate::actor::for_player(&pack.scene.player);
+    let root = world
+        .commands()
+        .spawn((WorldScoped::default(), Transform::default(), Visibility::default()))
+        .with_children(|p| crate::actor::spawn_joint(p, &art, &actor.root, false))
+        .id();
+    world.flush();
+    crate::style::dress_body(world, root, pack, false);
+    root
 }
 
 impl crate::actor::Art for SceneArt {

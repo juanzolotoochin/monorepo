@@ -124,12 +124,13 @@ pub(crate) trait Art {
     fn material(&self, material: ArtMaterial) -> &Handle<StandardMaterial>;
 }
 
-/// Spawns `joint` and its descendants under `parent`.
-pub(crate) fn spawn_joint(parent: &mut ChildSpawnerCommands, art: &impl Art, joint: &Joint) {
+/// Spawns `joint` and its descendants under `parent`. The local player's
+/// weapon joint is its `LocalBlade`; remote players' bodies have none.
+pub(crate) fn spawn_joint(parent: &mut ChildSpawnerCommands, art: &impl Art, joint: &Joint, local: bool) {
     let pivot = Transform::from_translation(Vec3::from_array(joint.at));
     let kind = kind(joint.part).expect("validated joint");
     let mut entity = parent.spawn((Part { kind, bind: pivot, rest: pivot }, pivot, Visibility::default()));
-    if joint.part == ActorPart::Weapon {
+    if local && joint.part == ActorPart::Weapon {
         entity.insert(crate::character::LocalBlade);
     }
     entity.with_children(|children| {
@@ -141,7 +142,7 @@ pub(crate) fn spawn_joint(parent: &mut ChildSpawnerCommands, art: &impl Art, joi
             }
         }
         for child in &joint.joints {
-            spawn_joint(children, art, child);
+            spawn_joint(children, art, child, local);
         }
     });
 }

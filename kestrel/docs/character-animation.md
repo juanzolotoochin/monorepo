@@ -6,6 +6,8 @@
 
 A character has a root transform and optional `Part` joints. Joints store their rest transform and a `PartKind`. The player rig uses Body -> Chest -> Head/Arm -> Forearm -> Hand -> WeaponGrip, with legs, knee skins, shins, and feet below the root. Feet counter-rotate during stance to keep contact readable. A skin can supply voxel or smooth meshes to any joint. Missing skin parts use procedural geometry. Weapons attach under `WeaponGrip`, so motion at every ancestor carries them.
 
+Every player body is built the same way: the local player's, each remote player's in a network game, and Studio's. Each is built from the character's actor (`view.actor`) and dressed by the scene's style; remote bodies leave out the style's lights. One function, `pose_body`, poses them all from a `Pose`, the frame's walk phase, speed, aim, jump, attack and dig. Only where the pose comes from differs. The local player's comes from its input, a remote player's from that avatar's mirrored simulation state, and Studio's from its clip clock, which Studio also shows without smoothing.
+
 `ActorPart::Body` and `ActorPart::Chest` are separate skin slots. Existing skins that only provide Body still load. A skin may add Chest when it needs a deforming upper torso.
 
 ## Independent upper and lower motion
