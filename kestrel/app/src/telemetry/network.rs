@@ -31,6 +31,9 @@ pub struct NetworkDiagnostics {
     preview: Option<PreviewSample>,
     preview_mispredictions: u64,
     preview_snaps: u64,
+    /// Frames a knockback moved the drawn avatar (snaps included). Not
+    /// mispredictions.
+    preview_knockbacks: u64,
     /// Finished correction episodes this session, oldest first.
     corrections: VecDeque<PreviewCorrection>,
     /// The episode the latest preview frames belong to.
@@ -87,12 +90,22 @@ pub struct PreviewUpdate {
     pub mispredicted: f32,
     /// The avatar was too far off and was put where it is predicted.
     pub snapped: bool,
+    /// How far this frame's change of prediction moved the avatar when
+    /// stage 5 touched it (a hit, a death, a push): an expected correction,
+    /// not a misprediction.
+    pub knockback: f32,
+    /// A knockback put the avatar where it is predicted.
+    pub knockback_snapped: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CorrectionKind {
     Mispredict,
     Snap,
+    /// A change of prediction stage 5 explains: something the replay never
+    /// runs (a hit, a death, a push) changed the avatar. Expected, so not a
+    /// misprediction: it is kept and shown, but counted on its own.
+    Knockback,
     /// A predicted event of `kind` ("laser") the confirmed one didn't
     /// match: it ended elsewhere, or never confirmed.
     EventMispredict { kind: &'static str },
@@ -104,14 +117,21 @@ impl CorrectionKind {
         match self {
             Self::Mispredict => "mispredict",
             Self::Snap => "snap",
+            Self::Knockback => "knockback",
             Self::EventMispredict { kind } => kind,
         }
+    }
+
+    /// Everything but a knockback.
+    pub fn is_misprediction(self) -> bool {
+        self != Self::Knockback
     }
 
     fn color(self, alpha: f32) -> Color {
         match self {
             Self::Mispredict => Color::srgba(1.0, 0.55, 0.15, alpha),
             Self::Snap => Color::srgba(1.0, 0.2, 0.9, alpha),
+            Self::Knockback => Color::srgba(0.2, 0.65, 1.0, alpha),
             Self::EventMispredict { .. } => Color::srgba(1.0, 0.15, 0.15, alpha),
         }
     }
@@ -139,11 +159,17 @@ pub struct PreviewCorrection {
     pub rtt: Option<Duration>,
     /// An event that was presented but never confirmed.
     pub never_fired: bool,
+    /// A knockback that ended past its snap distance, so the avatar was put
+    /// where it is predicted.
+    pub snapped: bool,
 }
 
 impl PreviewCorrection {
+    /// Snaps, event mispredictions and knockbacks are kept at any distance;
+    /// a knockback never adds to the small mispredictions' count.
     fn kept(&self) -> bool {
-        matches!(self.kind, CorrectionKind::Snap | CorrectionKind::EventMispredict { .. }) || self.distance >= MIN_CORRECTION
+        matches!(self.kind, CorrectionKind::Snap | CorrectionKind::Knockback | CorrectionKind::EventMispredict { .. })
+            || self.distance >= MIN_CORRECTION
     }
 
     fn is_event(&self) -> bool {
@@ -203,13 +229,19 @@ impl NetworkDiagnostics {
         });
         self.preview_mispredictions += u64::from(update.mispredicted > 0.0);
         self.preview_snaps += u64::from(update.snapped);
+        self.preview_knockbacks += u64::from(update.knockback > 0.0 || update.knockback_snapped);
 
-        // Predictions are exact, so any change at all counts.
+        // Predictions are exact, so any change at all counts. A frame that
+        // both mispredicted and was knocked back is a misprediction.
+        let jump = || flat(update.shown - self.last_shown.unwrap_or(update.shown));
         let (kind, distance) = if update.snapped {
-            let from = self.last_shown.unwrap_or(update.shown);
-            (Some(CorrectionKind::Snap), flat(update.shown - from))
+            (Some(CorrectionKind::Snap), jump())
         } else if update.mispredicted > 0.0 {
             (Some(CorrectionKind::Mispredict), update.mispredicted)
+        } else if update.knockback_snapped {
+            (Some(CorrectionKind::Knockback), jump())
+        } else if update.knockback > 0.0 {
+            (Some(CorrectionKind::Knockback), update.knockback)
         } else {
             (None, 0.0)
         };
@@ -231,12 +263,15 @@ impl NetworkDiagnostics {
                 pending: latest.map(|f| f.pending),
                 rtt: latest.and_then(|f| f.stats.rtt),
                 never_fired: false,
+                snapped: false,
             });
             open.ended = now;
             open.to = update.target;
             open.distance += distance;
             open.frames += 1;
-            if kind == CorrectionKind::Snap {
+            let knockback_snapped = kind == CorrectionKind::Knockback && update.knockback_snapped;
+            open.snapped |= knockback_snapped;
+            if kind == CorrectionKind::Snap || knockback_snapped {
                 self.close_correction();
             }
         }
@@ -298,6 +333,7 @@ impl NetworkDiagnostics {
             pending: latest.map(|f| f.pending),
             rtt: latest.and_then(|f| f.stats.rtt),
             never_fired: outcome.confirmed.is_none(),
+            snapped: false,
         };
         self.keep(correction);
     }
@@ -330,6 +366,7 @@ impl NetworkDiagnostics {
     /// Forgets every correction so far, kept or not.
     #[cfg(test)]
     pub fn clear_corrections(&mut self) {
+        (self.preview_mispredictions, self.preview_snaps, self.preview_knockbacks) = (0, 0, 0);
         self.corrections.clear();
         self.open_correction = None;
         self.small_corrections = (0, 0.0);
@@ -383,6 +420,9 @@ impl NetworkDiagnostics {
             // `from` is the presented event's end, `to` the confirmed one's.
             value["event_mispredict"] = json!(true);
             value["never_fired"] = json!(c.never_fired);
+        }
+        if c.kind == CorrectionKind::Knockback {
+            value["snapped"] = json!(c.snapped);
         }
         value
     }
@@ -595,9 +635,10 @@ impl NetworkDiagnostics {
                         preview.mispredicted
                     ));
                     ui.label(format!(
-                        "{} mispredicted frames · {} snaps · sample {:.1} s ago",
+                        "{} mispredicted frames · {} snaps · {} knockback frames (expected) · sample {:.1} s ago",
                         self.preview_mispredictions,
                         self.preview_snaps,
+                        self.preview_knockbacks,
                         preview.at.elapsed().as_secs_f64()
                     ));
                 } else {
@@ -616,12 +657,13 @@ impl NetworkDiagnostics {
                     ));
                 }
                 ui.checkbox(&mut self.show_corrections, "Show corrections in the world (2 s)");
-                ui.small("Box: where the avatar was drawn when the correction started. Line: where it was pulled to. Orange mispredict, magenta snap. Red event (laser, bow): a ball where the presented event ended (a beam's end, else the avatar), a line to where the confirmed one ended.");
+                ui.small("Box: where the avatar was drawn when the correction started. Line: where it was pulled to. Orange mispredict, magenta snap, blue knockback (a hit, death or push the prediction couldn't foresee; not a misprediction). Red event (laser, bow): a ball where the presented event ended (a beam's end, else the avatar), a line to where the confirmed one ended.");
                 let kept: Vec<_> = self.corrections().collect();
                 let (small, small_distance) = self.small_corrections;
+                let knockbacks = kept.iter().filter(|c| !c.kind.is_misprediction()).count();
                 ui.label(format!(
-                    "{} corrections of at least {MIN_CORRECTION} units kept · {small} smaller ({small_distance:.3} units in all)",
-                    kept.len()
+                    "{} corrections of at least {MIN_CORRECTION} units kept · {small} smaller ({small_distance:.3} units in all) · {knockbacks} knockbacks",
+                    kept.len() - knockbacks
                 ));
                 for c in kept.iter().rev().take(8) {
                     if c.is_event() {
@@ -630,10 +672,11 @@ impl NetworkDiagnostics {
                         continue;
                     }
                     ui.monospace(format!(
-                        "{:>10} {:.2} units over {:.0} ms · {:.1} s ago",
+                        "{:>10} {:.2} units over {:.0} ms{} · {:.1} s ago",
                         c.kind.name(),
                         c.distance,
                         c.ended.saturating_duration_since(c.started).as_secs_f64() * 1000.,
+                        if c.snapped { ", snapped" } else { "" },
                         c.started.elapsed().as_secs_f64()
                     ));
                 }
@@ -776,7 +819,10 @@ impl NetworkDiagnostics {
             "preview_offset": self.preview.as_ref().map(|p| p.offset),
             "preview_mispredicted": self.preview.as_ref().map(|p| p.mispredicted),
             "preview_mispredicted_frames": self.preview_mispredictions, "preview_snaps": self.preview_snaps,
-            "preview_corrections": self.corrections().count(),
+            // Mispredictions only; knockbacks are expected and counted apart.
+            "preview_corrections": self.corrections().filter(|c| c.kind.is_misprediction()).count(),
+            "preview_knockbacks": self.corrections().filter(|c| !c.kind.is_misprediction()).count(),
+            "preview_knockback_frames": self.preview_knockbacks,
             "preview_corrections_under_threshold": self.small_corrections.0,
             "preview_corrections_under_threshold_distance": self.small_corrections.1,
             "laser_shots_drawn": laser.presented, "laser_shots_confirmed": laser.confirmed,
@@ -916,7 +962,54 @@ mod tests {
             target: Vec3::new(target, 0.0, 0.0),
             mispredicted,
             snapped,
+            knockback: 0.0,
+            knockback_snapped: false,
         }
+    }
+
+    /// A frame drawn at `x`, pulled toward `target` by a knockback.
+    fn knocked(x: f32, target: f32, knockback: f32, snapped: bool) -> PreviewUpdate {
+        PreviewUpdate { knockback, knockback_snapped: snapped, ..update(x, target, 0.0, false) }
+    }
+
+    #[test]
+    fn knockbacks_are_kept_apart_from_mispredictions() {
+        let start = Instant::now();
+        let at = |i: u64| start + Duration::from_millis(16 * i);
+        let mut network = NetworkDiagnostics::default();
+        network.record(frame(start, 1, 0));
+        network.preview(at(0), update(1.0, 1.0, 0.0, false));
+        // A knockback of any size is kept, and never counted as a small misprediction.
+        network.preview(at(1), knocked(1.0, 1.01, 0.01, false));
+        network.preview(at(2), update(1.0, 1.0, 0.0, false));
+        // A misprediction right after one is its own episode.
+        network.preview(at(3), knocked(1.0, 1.5, 0.5, false));
+        network.preview(at(4), update(1.2, 1.4, 0.2, false));
+        // One past the knockback snap distance is put in place.
+        network.preview(at(5), knocked(5.0, 5.0, 0.0, true));
+        network.preview(at(6), update(5.0, 5.0, 0.0, false));
+
+        let kept: Vec<_> = network.corrections().collect();
+        let kinds: Vec<_> = kept.iter().map(|c| c.kind).collect();
+        use CorrectionKind::{Knockback, Mispredict};
+        assert_eq!(kinds, [Knockback, Knockback, Mispredict, Knockback]);
+        assert!((kept[0].distance - 0.01).abs() < 1e-6 && !kept[0].snapped);
+        assert!((kept[1].distance - 0.5).abs() < 1e-6);
+        assert!((kept[3].distance - 3.8).abs() < 1e-5 && kept[3].snapped, "a snap's distance is its jump: {}", kept[3].distance);
+        assert_eq!(network.small_corrections(), (0, 0.0));
+        let snapshot = network.snapshot();
+        assert_eq!(snapshot["preview_corrections"], 1, "knockbacks aren't mispredictions");
+        assert_eq!(snapshot["preview_knockbacks"], 3);
+        assert_eq!(snapshot["preview_knockback_frames"], 3);
+        assert_eq!(snapshot["preview_mispredicted_frames"], 1);
+        assert_eq!(snapshot["preview_snaps"], 0);
+        let report = NetworkDiagnostics::correction_json(kept[3], start);
+        assert_eq!((report["kind"].as_str(), report["snapped"].as_bool()), (Some("knockback"), Some(true)));
+        assert!(NetworkDiagnostics::correction_json(kept[2], start).get("snapped").is_none());
+
+        let context = egui::Context::default();
+        let output = context.run_ui(egui::RawInput::default(), |ui| network.show(ui, true));
+        output.drop_without_applying_deltas();
     }
 
     #[test]

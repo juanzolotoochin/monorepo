@@ -88,6 +88,9 @@ pub struct SessionService {
     pub frame: Vec<(u64, Option<SimSettlement>)>,
     pub frame_world: u32,
     pub alpha: f32,
+    /// A client's confirmed ticks on which stage 5 changed its avatar, for
+    /// telling a knockback from a misprediction (see `prediction`).
+    pub stage_five: crate::prediction::StageFive,
 }
 
 impl Service for SessionService {
@@ -123,6 +126,7 @@ impl Service for SessionService {
             frame: Vec::new(),
             frame_world: 0,
             alpha: 0.0,
+            stage_five: crate::prediction::StageFive::default(),
         }
     }
 
@@ -482,15 +486,20 @@ fn step(
     service.started = true;
     let clock = service.clock;
     let service = &mut *service;
+    // A client's own commands, to tell which ones its confirmed ticks applied.
+    let pending: Vec<_> = service.session.pending_commands().map(|p| (p.id, p.kind.clone())).collect();
     let mut ticks = Vec::new();
     let started = web_time::Instant::now();
     service.session.update(clock, |world| {
         let copying = web_time::Instant::now();
         let settlement = world.settlement().cloned();
-        ticks.push((world.tick(), settlement, world.stage_times(), copying.elapsed()));
+        ticks.push((world.tick(), settlement, world.stage_times(), copying.elapsed(), world.terrain().revision));
     });
     let update_time = started.elapsed();
-    telemetry.session_frame(update_time, ticks.iter().map(|(_, _, times, copy)| (*times, *copy)));
+    telemetry.session_frame(update_time, ticks.iter().map(|(_, _, times, copy, _)| (*times, *copy)));
+    if service.is_client() {
+        observe_stage_five(service, ticks.iter().map(|(next, settlement, _, _, revision)| (*next, *revision, settlement.as_ref())), &pending);
+    }
     if service.networked() {
         telemetry.network_frame(crate::telemetry::NetworkFrame {
             at: web_time::Instant::now(),
@@ -502,11 +511,11 @@ fn step(
             stats: service.session.stats(),
             diagnostics: service.session.diagnostics(clock),
             update_ms: update_time.as_secs_f64() * 1000.,
-            tick_ms: ticks.iter().map(|(_, _, times, _)| times.total().as_secs_f64() * 1000.).max_by(f64::total_cmp),
+            tick_ms: ticks.iter().map(|(_, _, times, _, _)| times.total().as_secs_f64() * 1000.).max_by(f64::total_cmp),
             frame_ms: None,
         });
     }
-    service.frame = ticks.into_iter().map(|(tick, settlement, _, _)| (tick, settlement)).collect();
+    service.frame = ticks.into_iter().map(|(tick, settlement, _, _, _)| (tick, settlement)).collect();
     service.frame_world = service.session.world_number();
     service.alpha = service.session.alpha(clock);
     let client = service.is_client();
@@ -538,6 +547,31 @@ fn step(
         service.command(CommandKind::Name { name });
         service.named = number;
     }
+}
+
+/// Checks a client's confirmed ticks this frame (each settlement with the
+/// tick it runs next and the terrain revision then) for stage 5 changing
+/// its avatar (`prediction::StageFive`). `pending` are its commands that
+/// hadn't applied before the frame's ticks ran; the client's record of
+/// which applied on which tick says which a tick ran.
+fn observe_stage_five<'s>(
+    service: &mut SessionService,
+    ticks: impl Iterator<Item = (u64, u64, Option<&'s SimSettlement>)>,
+    pending: &[(net::CommandId, CommandKind)],
+) {
+    let Some(agent) = service.player() else { return };
+    let SessionService { session, stage_five, .. } = service;
+    let Some(world) = session.world() else { return };
+    let applied: Vec<(u64, net::CommandId)> = session.applied_commands().collect();
+    let applied_on = |tick: u64| {
+        applied
+            .iter()
+            .filter(|(at, _)| *at == tick)
+            .map(|(_, id)| pending.iter().find(|(pending, _)| pending == id).map(|(_, kind)| kind))
+            .collect::<Option<Vec<_>>>()
+    };
+    let ticks = ticks.filter_map(|(next, revision, settlement)| Some((next, revision, settlement?)));
+    stage_five.observe(session.world_number(), agent, ticks, world.terrain(), applied_on);
 }
 
 /// Moves the World layer with the session's world: off while a world is
@@ -917,7 +951,7 @@ pub fn follow_avatar(
     let reset_step = ground_step.agent != Some(index)
         || ground_step.scene != Some(scene.index)
         || start.distance(end) > 1.5
-        || predicted.as_ref().is_some_and(|drawn| drawn.snapped);
+        || predicted.as_ref().is_some_and(|drawn| drawn.snapped || drawn.knockback_snapped);
     position.y = crate::character::visual_step_height(
         if reset_step { None } else { ground_step.height },
         position.y,
@@ -936,6 +970,8 @@ pub fn follow_avatar(
                 target: Vec3::new(drawn.target.x, position.y, drawn.target.z),
                 mispredicted: drawn.mispredicted,
                 snapped: drawn.snapped,
+                knockback: drawn.knockback,
+                knockback_snapped: drawn.knockback_snapped,
             },
         );
     }
@@ -980,9 +1016,10 @@ fn predict(
         return None;
     }
     let pending: Vec<_> = service.session.pending_commands().map(|p| (p.tick, p.kind)).collect();
+    let agent = service.player()?;
     let confirmed = crate::prediction::Confirmed {
         world: number,
-        agent: service.player()?,
+        agent,
         settlement: world.settlement()?,
         terrain: world.terrain(),
         tick: world.tick(),
@@ -991,6 +1028,7 @@ fn predict(
         pending: &pending,
         horizon: service.session.input_horizon()?,
         to_view: &|p| mirror.to_view(p),
+        touched: service.stage_five.touched(number, agent),
     };
     Some(prediction.update(&confirmed, dt))
 }
@@ -1620,15 +1658,7 @@ mod tests {
         /// The client fires its laser toward `direction` (arena space), as a
         /// click there would.
         fn fire(&mut self, direction: Vec3) {
-            let world = self.client.world_mut();
-            world.resource_mut::<Controls>().weapon = content::scenario::Weapon::Laser;
-            world.resource_scope(|world, mut service: Mut<SessionService>| {
-                world.resource_scope(|world, mut controls: Mut<Controls>| {
-                    world.resource_scope(|world, mut control: Mut<PlayerControl>| {
-                        control.strike(&mut service, &mut controls, &world.resource::<SceneView>().pack, direction);
-                    });
-                });
-            });
+            fire_laser(&mut self.client, direction);
         }
 
         fn telemetry(&mut self) -> Mut<'_, crate::telemetry::Telemetry> {
@@ -1659,6 +1689,20 @@ mod tests {
                 d.shifted_ticks
             )
         }
+    }
+
+    /// `app`'s player fires its laser toward `direction` (arena space), as a
+    /// click there would.
+    fn fire_laser(app: &mut App, direction: Vec3) {
+        let world = app.world_mut();
+        world.resource_mut::<Controls>().weapon = content::scenario::Weapon::Laser;
+        world.resource_scope(|world, mut service: Mut<SessionService>| {
+            world.resource_scope(|world, mut controls: Mut<Controls>| {
+                world.resource_scope(|world, mut control: Mut<PlayerControl>| {
+                    control.strike(&mut service, &mut controls, &world.resource::<SceneView>().pack, direction);
+                });
+            });
+        });
     }
 
     /// Holds exactly `held` of the movement keys.
@@ -1939,6 +1983,72 @@ mod tests {
         }
         println!("laser shots per latency case and scenario:\n{report}");
         assert!(failures.is_empty(), "laser shots were not predicted exactly:\n{report}\n{}", failures.join("\n"));
+    }
+
+    /// Under 100 ± 20 ms, the host shoots the client's running avatar with
+    /// the laser in the laser pit until it dies. A hit is stage 5, which the
+    /// client's prediction never runs: one that doesn't move the avatar
+    /// changes nothing drawn, and the death, which stops it, is a
+    /// `Knockback`. Neither is a misprediction. The respawn that follows is
+    /// the avatar's own step, so it is predicted and corrects nothing.
+    #[test]
+    fn joined_player_hit_by_the_laser_is_knocked_back_not_mispredicted() {
+        use crate::telemetry::CorrectionKind;
+        use KeyCode::{KeyA as Left, KeyD as Right, ShiftLeft as Run};
+        let mut game = RelayedGame::in_scene("laser-pit", 100.0, 20.0, 0xb1a5);
+        let agent = game.client.world().resource::<SessionService>().player().unwrap();
+        let shooter = game.host.world().resource::<SessionService>().player().unwrap();
+        let touched = |game: &RelayedGame| {
+            let service = game.client.world().resource::<SessionService>();
+            service.stage_five.touched(service.session.world_number(), agent).to_vec()
+        };
+        // Away from the host's avatar at the spawn.
+        game.hold(&[Right, Run], 60);
+        assert_eq!(touched(&game), Vec::<u64>::new(), "running is no stage 5 touch");
+        game.telemetry().network.clear_corrections();
+        let health = |game: &RelayedGame| game.host.world().resource::<SessionService>().settlement().unwrap().agents[agent as usize].avatar.health;
+        let (mut shots, mut hits, mut died_at, mut touches) = (0, 0, None, 0);
+        for frame in 0..900u32 {
+            if died_at.is_none() {
+                press_only(&mut game.client, if frame % 70 < 40 { &[Right, Run] } else { &[Left, Run] });
+                if frame % 15 == 0 {
+                    // At the client's avatar where the host has it, a little ahead.
+                    let mirror = game.host.world().resource::<WorldMirror>();
+                    let agents = &mirror.current.as_ref().unwrap().agents;
+                    let (target, from) = (&agents[agent as usize], &agents[shooter as usize]);
+                    let velocity = Vec3::new(target.avatar.velocity.x.to_f32(), 0.0, target.avatar.velocity.y.to_f32());
+                    let aim = crate::navigation::flat(mirror.to_view(target.position) + velocity * 0.05 - mirror.to_view(from.position));
+                    fire_laser(&mut game.host, aim.normalize_or_zero());
+                    shots += 1;
+                }
+            } else {
+                press_only(&mut game.client, &[]);
+            }
+            game.frame();
+            for event in &game.host.world().resource::<WorldMirror>().events {
+                if let sim::settlement::Event::LaserFired { agent: by, hit_actor: true, .. } = event {
+                    hits += usize::from(*by == shooter);
+                }
+            }
+            touches = touches.max(touched(&game).len());
+            if died_at.is_none() && health(&game) == 0 {
+                died_at = Some(frame);
+            }
+            if died_at.is_some_and(|at| frame > at + 240) {
+                break;
+            }
+        }
+        let telemetry = game.telemetry();
+        let kinds: Vec<_> = telemetry.network.corrections().map(|c| format!("{:?} {:.2}{}", c.kind, c.distance, if c.snapped { " snapped" } else { "" })).collect();
+        let report = format!("{shots} shots, {hits} hits, died on frame {died_at:?}, up to {touches} touched ticks remembered, corrections {kinds:?}");
+        println!("{report}");
+        assert!(died_at.is_some() && hits >= 6, "the host never killed the client: {report}");
+        assert!(touches > 0, "no hit was seen as a stage 5 touch: {report}");
+        let knockbacks = telemetry.network.corrections().filter(|c| c.kind == CorrectionKind::Knockback).count();
+        assert!(knockbacks > 0, "the death stopped the running avatar, a knockback: {report}");
+        assert!(telemetry.network.corrections().all(|c| c.kind == CorrectionKind::Knockback && !c.snapped), "only knockbacks, smoothed: {report}");
+        let snapshot = telemetry.network.snapshot();
+        assert_eq!((snapshot["preview_corrections"].as_u64(), snapshot["preview_mispredicted_frames"].as_u64()), (Some(0), Some(0)), "{report}");
     }
 
     /// The client's avatar as drawn this frame.
