@@ -4,10 +4,10 @@
 //! both go through `act`, so a command moves an avatar the same way in both.
 //!
 //! An action writes only its own agent, reading the rest of the settlement
-//! through a `View`. What a command also does to the world (cancelling a
-//! pile job, reserving depot stock, the memory trial, piano notes) stays in
-//! `Settlement::act` until it becomes a message
-//! (`ABILITY_PREDICTION_HANDOFF.md`, D3).
+//! through a `View`. What it does to the world (ending a pile haul, reserving
+//! or releasing depot stock, restarting the memory trial, releasing piano
+//! keys) it emits as messages (`ActionMessages`), which the simulation
+//! applies and the replay drops (`ABILITY_PREDICTION_HANDOFF.md`, D3).
 //!
 //! Only player avatars act for now. Step 5 has haulers and AI brains produce
 //! the same vocabulary (`docs/character-definition.md`).
@@ -102,6 +102,8 @@ pub struct View<'a> {
     pub items: usize,
     pub spawn: FxVec2,
     pub spawn_height: Fx,
+    /// The last piano key press's serial (`Settlement::piano_serial`).
+    pub piano_serial: u64,
 }
 
 impl Settlement {
@@ -117,6 +119,7 @@ impl Settlement {
             items: self.items.len(),
             spawn: self.spawn,
             spawn_height: self.spawn_height,
+            piano_serial: self.piano_serial,
         }
     }
 }
@@ -134,6 +137,12 @@ impl View<'_> {
 
     /// Whether a pile haul owns the agent's route.
     pub fn hauling(&self) -> bool {
-        self.piles.is_some_and(|lab| lab.hauler(self.me).is_some_and(|h| h.job.is_some()))
+        self.haul().is_some()
+    }
+
+    /// The agent's pile haul, by its `Hauler::job_serial`, if one runs.
+    pub fn haul(&self) -> Option<u64> {
+        let hauler = self.piles?.hauler(self.me)?;
+        hauler.job.as_ref().map(|_| hauler.job_serial)
     }
 }

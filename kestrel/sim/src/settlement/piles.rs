@@ -537,10 +537,11 @@ impl Settlement {
         }
     }
 
-    /// The avatar moved or attacked: its haul stops, its cargo stays.
-    pub(super) fn cancel_pile_job(&mut self, agent: usize) {
+    /// The avatar moved, attacked or respawned (`DropHaul`): its haul stops,
+    /// its cargo stays. A haul started since (another `job_serial`) stays.
+    pub(super) fn cancel_pile_job(&mut self, agent: usize, serial: u64) {
         let Some(hauler) = self.piles.as_mut().and_then(|lab| lab.haulers.get_mut(&(agent as AgentIx))) else { return };
-        if hauler.job.take().is_some() {
+        if hauler.job_serial == serial && hauler.job.take().is_some() {
             hauler.notice = "Haul canceled. Cargo is retained.".into();
             hauler.last_error = Some("Haul canceled by player input".into());
         }

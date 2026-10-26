@@ -18,7 +18,7 @@ use super::combat::{Event, TossEnd};
 use super::haulers::AgentState;
 use super::action::{Action, View};
 use super::{AgentIx, DepotIx, DepotState, Endpoint, ItemIx, Settlement};
-use crate::messages::{ManualUnit, Messages, Strike};
+use crate::messages::{ActionMessages, DropHaul, DropNotes, ManualUnit, Messages, RestartMemory, StockChange, Strike, TransferStock};
 use crate::nav::{self, angle_between, distance};
 use crate::terrain::{Terrain, MAX_LAYERS};
 
@@ -493,65 +493,80 @@ impl Settlement {
         });
     }
 
-    /// Commands: applies a player's action to their avatar (`act`), and the
-    /// part of the command that writes the rest of the world, in the order
-    /// the command always ran it. That part becomes a message in a later
-    /// step (`ABILITY_PREDICTION_HANDOFF.md`, D3); `AvatarReplay` never runs it.
+    /// Commands: applies a player's action to their avatar (`act`), then
+    /// what it does to the world (`apply_actions`). For now that part still
+    /// applies right away, as the command always did; `AvatarReplay` never
+    /// applies it.
     pub(crate) fn act(&mut self, tick: u64, me: AgentIx, action: &Action, terrain: &mut Terrain) {
         let agent = me as usize;
-        let controlled = self.agents.get(agent).is_some_and(|a| a.controlled);
-        // The world, before the avatar.
-        match *action {
-            // Moving or attacking cancels a pile haul.
-            Action::Move(_) if controlled => self.cancel_pile_job(agent),
-            Action::Attack { weapon, .. } if controlled && self.has_weapon(weapon) => self.cancel_pile_job(agent),
-            // Letting go releases held piano keys.
-            Action::Release => self.piano_notes.retain(|note| note.agent != me),
-            // Respawning restarts the memory trial, closing its door again.
-            Action::Respawn => {
-                if let Some(m) = self.memory.as_mut() {
-                    if m.unlocked {
-                        terrain.obstacles.extend_from_slice(&m.doors);
-                        terrain.revision += 1;
-                    }
-                    *m = super::memory::Memory::new(m.trial, m.center, std::mem::take(&mut m.doors));
-                }
-            }
-            _ => {}
-        }
-        if !controlled {
+        // Only owned avatars get commands, and those are controlled.
+        if !self.agents.get(agent).is_some_and(|a| a.controlled) {
             return;
         }
-        let job = self.agents[agent].avatar.job.clone();
+        let mut out = ActionMessages::default();
         // The view reads no agents, so the avatar can be written meanwhile.
         let mut agents = std::mem::take(&mut self.agents);
         let a = &mut agents[agent];
-        act(a, action, &self.view(me, tick, terrain), character_of(&self.characters, a));
+        act(a, action, &self.view(me, tick, terrain), character_of(&self.characters, a), &mut out);
         self.agents = agents;
-        // The world, after the avatar.
-        match *action {
-            Action::Respawn => self.cancel_pile_job(agent),
-            // A transfer the avatar took on reserves its units at the depot.
-            Action::Transfer { depot, item, units, deposit } if job.is_none() && self.agents[agent].avatar.job.is_some() => {
-                let depot = &mut self.depots[depot as usize];
-                if deposit {
-                    depot.incoming[item as usize] += units;
-                } else {
-                    depot.out[item as usize] += units;
-                }
-            }
-            // A cancelled one releases what it hadn't moved yet.
-            Action::CancelTransfer => {
-                if let Some(job) = job {
-                    let depot = &mut self.depots[job.depot as usize];
-                    if job.deposit {
-                        depot.incoming[job.item as usize] -= job.remaining;
-                    } else {
-                        depot.out[job.item as usize] -= job.remaining;
+        self.apply_actions(out, terrain);
+    }
+
+    /// What players' actions did to the world, by message type in a fixed
+    /// order (the resources they touch are separate) and in command order
+    /// within a type.
+    pub(crate) fn apply_actions(&mut self, messages: ActionMessages, terrain: &mut Terrain) {
+        for _ in messages.restart_memory {
+            self.restart_memory(terrain);
+        }
+        for message in messages.drop_haul {
+            self.cancel_pile_job(message.agent as usize, message.serial);
+        }
+        for message in messages.drop_notes {
+            self.piano_notes.retain(|note| note.agent != message.agent || note.serial > message.serial);
+        }
+        self.transfer_stock(messages.transfer_stock);
+    }
+
+    /// Reserves and releases manual transfers' depot stock, in command order.
+    /// A reservation is checked again here (`transfer_limit`), since another
+    /// one earlier in the order may have taken what the action saw: if the
+    /// depot can no longer cover it, nothing is reserved and the avatar's job
+    /// rolls back, so the first transfer in the order wins. The job that
+    /// rolls back is that reservation's: a release from the same avatar later
+    /// in the order (it cancelled that job) is dropped with it, and a later
+    /// reservation means the avatar took a new job, which stands on its own.
+    fn transfer_stock(&mut self, messages: Vec<TransferStock>) {
+        // Avatars whose last reservation was refused, until their job goes.
+        let mut refused: Vec<AgentIx> = Vec::new();
+        for message in messages {
+            let (agent, depot, item) = (message.agent as usize, message.depot as usize, message.item as usize);
+            let units = match message.change {
+                StockChange::Reserve => {
+                    refused.retain(|&a| a != message.agent);
+                    if self.transfer_limit(agent, depot, item, message.deposit) < message.units {
+                        refused.push(message.agent);
+                        continue;
                     }
+                    message.units
                 }
+                StockChange::Release => {
+                    if let Some(i) = refused.iter().position(|&a| a == message.agent) {
+                        refused.swap_remove(i);
+                        continue;
+                    }
+                    message.units
+                }
+            };
+            let depot = &mut self.depots[depot];
+            let stock = if message.deposit { &mut depot.incoming[item] } else { &mut depot.out[item] };
+            match message.change {
+                StockChange::Reserve => *stock += units,
+                StockChange::Release => *stock -= units,
             }
-            _ => {}
+        }
+        for agent in refused {
+            self.agents[agent as usize].avatar.job = None;
         }
     }
 
@@ -668,20 +683,27 @@ impl Settlement {
 // runs them on the world's agents and `AvatarReplay` on a copy, so client
 // prediction moves an avatar exactly as the simulation does.
 
-/// Applies an action to a player avatar: its own part only, reading the rest
-/// of the world through `view` (see `action`). Checks run in the order the
-/// command handlers always ran them.
-pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &CharacterDef) {
+/// Applies an action to a player avatar: its own part, reading the rest of
+/// the world through `view` (see `action`), and what it does to the world as
+/// messages in `out`. Checks run in the order the command handlers always ran
+/// them.
+pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &CharacterDef, out: &mut ActionMessages) {
+    let me = view.me;
     match *action {
         Action::Move(ref intent) => {
+            // Moving lets go of a pile haul, dead or alive.
+            drop_haul(view, out);
             if alive(a) {
                 set_intent(a, intent.clone(), view.terrain, def);
             }
         }
         Action::Aim(aim) => aim_at(a, aim),
         Action::Attack { weapon, aim, muzzle } => {
-            if view.has_weapon(weapon) && alive(a) {
-                attack(a, view.tick, weapon, aim, muzzle, def);
+            if view.has_weapon(weapon) {
+                drop_haul(view, out);
+                if alive(a) {
+                    attack(a, view.tick, weapon, aim, muzzle, def);
+                }
             }
         }
         Action::Equip(weapon) => {
@@ -700,16 +722,40 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
             let busy = a.avatar.job.is_some() || a.pending_in > 0 || a.pending_out > 0;
             if !busy && units > 0 && transfer_limit(a, view.depots, view.items, depot as usize, item as usize, deposit) >= units {
                 a.avatar.job = Some(ManualJob { depot, item, remaining: units, deposit, next_tick: view.tick });
+                // The job reserves its units at the depot.
+                out.transfer_stock.push(TransferStock { agent: me, depot, item, units, deposit, change: StockChange::Reserve });
             }
         }
-        Action::CancelTransfer => a.avatar.job = None,
+        Action::CancelTransfer => {
+            // A cancelled job releases what it hadn't moved yet.
+            if let Some(job) = a.avatar.job.take() {
+                let ManualJob { depot, item, remaining, deposit, .. } = job;
+                out.transfer_stock.push(TransferStock { agent: me, depot, item, units: remaining, deposit, change: StockChange::Release });
+            }
+        }
         Action::RepairCover(asset) => {
             a.avatar.repair = asset.filter(|&asset| {
                 view.terrain.destructibles.iter().any(|piece| piece.asset == asset && piece.repairable && piece.health < piece.max_health)
             });
         }
-        Action::Release => release(a, view.hauling()),
-        Action::Respawn => respawn(a, view.spawn, view.spawn_height),
+        Action::Release => {
+            // Letting go releases held piano keys.
+            out.drop_notes.push(DropNotes { agent: me, serial: view.piano_serial });
+            release(a, view.hauling());
+        }
+        Action::Respawn => {
+            // Respawning restarts the memory trial, closing its door again.
+            out.restart_memory.push(RestartMemory { agent: me });
+            respawn(a, view.spawn, view.spawn_height);
+            drop_haul(view, out);
+        }
+    }
+}
+
+/// Lets go of the agent's pile haul, if one runs.
+fn drop_haul(view: &View, out: &mut ActionMessages) {
+    if let Some(serial) = view.haul() {
+        out.drop_haul.push(DropHaul { agent: view.me, serial });
     }
 }
 

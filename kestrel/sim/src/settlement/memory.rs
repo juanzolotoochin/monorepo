@@ -72,6 +72,18 @@ impl Memory {
 }
 
 impl Settlement {
+    /// A player respawned (`RestartMemory`): the trial starts over, closing
+    /// its door again if it was open.
+    pub(super) fn restart_memory(&mut self, terrain: &mut Terrain) {
+        if let Some(m) = self.memory.as_mut() {
+            if m.unlocked {
+                terrain.obstacles.extend_from_slice(&m.doors);
+                terrain.revision += 1;
+            }
+            *m = Memory::new(m.trial, m.center, std::mem::take(&mut m.doors));
+        }
+    }
+
     fn avatar_sample(&self) -> Option<Sample> {
         let a = &self.agents[self.player()? as usize];
         Some(Sample { position: a.position, height: a.avatar.height, heading: a.heading })

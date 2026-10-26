@@ -176,6 +176,114 @@ pub struct ManualUnit {
     pub agent: u16,
 }
 
+/// A player's action let go of the avatar's pile haul (`Action::Move`, an
+/// `Attack` with an offered weapon, `Respawn`). Ends the haul if it is still
+/// the one the action saw: a `Pile` command later in the same turn starts a
+/// new one (`Hauler::job_serial`), which stays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DropHaul {
+    pub agent: u16,
+    pub serial: u64,
+}
+
+/// A player let go of direct control (`Action::Release`): the piano keys
+/// their avatar held, up to `serial` (`Settlement::piano_serial` when the
+/// action applied), are released. A key pressed later in the same turn stays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DropNotes {
+    pub agent: u16,
+    pub serial: u64,
+}
+
+/// A player respawned (`Action::Respawn`): the memory trial starts over and
+/// its door closes again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RestartMemory {
+    pub agent: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StockChange {
+    /// A transfer the avatar took on (`Action::Transfer`) promises its units:
+    /// stock out of the depot, or room in it for a deposit.
+    Reserve,
+    /// A cancelled transfer (`Action::CancelTransfer`) gives back what it
+    /// hadn't moved yet.
+    Release,
+}
+
+/// A player's manual transfer reserves or releases depot stock. Contested:
+/// a reservation the depot can no longer cover when it applies is refused,
+/// and the avatar's job rolls back (`Settlement::transfer_stock`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransferStock {
+    pub agent: u16,
+    pub depot: u16,
+    pub item: u16,
+    pub units: u32,
+    pub deposit: bool,
+    pub change: StockChange,
+}
+
+impl StateHash for DropHaul {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+        h.write(&self.serial);
+    }
+}
+
+impl StateHash for DropNotes {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+        h.write(&self.serial);
+    }
+}
+
+impl StateHash for RestartMemory {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+    }
+}
+
+impl StateHash for TransferStock {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+        h.write(&self.depot);
+        h.write(&self.item);
+        h.write(&self.units);
+        h.write(&self.deposit);
+        h.write_u64(self.change as u64);
+    }
+}
+
+/// What players' actions do to the world (`settlement::action`): one queue
+/// per message type, in apply order. Actions apply in stage 1, before the
+/// chunks have outboxes, so their messages wait here rather than in
+/// `Messages`, and stage 5 applies them first in the settlement's part, in
+/// command order. Always empty between ticks, so neither saved nor hashed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ActionMessages {
+    pub restart_memory: Vec<RestartMemory>,
+    pub drop_haul: Vec<DropHaul>,
+    pub drop_notes: Vec<DropNotes>,
+    pub transfer_stock: Vec<TransferStock>,
+}
+
+impl ActionMessages {
+    pub fn is_empty(&self) -> bool {
+        self.restart_memory.is_empty() && self.drop_haul.is_empty() && self.drop_notes.is_empty() && self.transfer_stock.is_empty()
+    }
+}
+
+impl StateHash for ActionMessages {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.restart_memory);
+        h.write(&self.drop_haul);
+        h.write(&self.drop_notes);
+        h.write(&self.transfer_stock);
+    }
+}
+
 impl StateHash for Strike {
     fn hash_into(&self, h: &mut StateHasher) {
         h.write(&self.agent);

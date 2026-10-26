@@ -7,7 +7,7 @@ use super::action::Action;
 use super::avatar::{self, character_of};
 use super::combat::{strike_event, Event};
 use super::{AgentIx, AgentState, Settlement};
-use crate::messages::Messages;
+use crate::messages::{ActionMessages, Messages};
 use crate::terrain::Terrain;
 use crate::CommandKind;
 
@@ -81,7 +81,8 @@ impl<'a> AvatarReplay<'a> {
         if agent == self.me {
             let view = self.settlement.view(self.me, self.tick, self.terrain);
             let def = character_of(&self.settlement.characters, &self.state);
-            avatar::act(&mut self.state, &action, &view, def);
+            // What the action does to the world is never applied (D1).
+            avatar::act(&mut self.state, &action, &view, def, &mut ActionMessages::default());
         }
         true
     }
