@@ -152,7 +152,7 @@
 
 ### Eight players: cap, slots, leaving, spawn spots, colors, upload, loading
 
-- **Status:** done (branch `kestrel-eight-players`; stages 1–5 of
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/117; stages 1–5 of
   `kestrel/EIGHT_PLAYER_HANDOFF.md`). A host allows 8 players with
   reusable slots and saved player IDs (`--profile`), leaving removes the
   avatar for everyone (`CommandKind::Leave`, protocol 4, save format 12),
