@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Plays a Kestrel host and client on this machine through a delaying UDP relay.
+Plays a Kestrel host and clients on this machine through a delaying UDP relay.
 
 .DESCRIPTION
 Starts a localhost relay (network_lab/relay.mjs), a host window and a client
@@ -17,7 +17,12 @@ The client sizes its input margin from the round trip it measures. Pass
 -InputMarginMs to pin it instead (the client gets --input-margin-ms; the host
 is unaffected), for example 133 for the margin before it adapted.
 
-The launcher stays attached. Ctrl+C, or closing either game window, stops the
+-Clients starts that many client windows, up to 15. Each joins through the
+relay with its own --profile, so the host sees separate players. A host
+allows 8 players, so past 7 clients the rest are turned away as "full",
+which checks the cap.
+
+The launcher stays attached. Ctrl+C, or closing any game window, stops the
 processes it started and nothing else. Each run writes its parameters, process
 IDs, relay counters and logs to network_lab/runs/<time>/.
 
@@ -33,6 +38,9 @@ in flight. -CoarseTimers saves the core but adds 0-15 ms to each datagram.
 
 .EXAMPLE
 .\kestrel\tools\network-lab.ps1 -DelayMs 150 -JitterMs 20 -InputMarginMs 133
+
+.EXAMPLE
+.\kestrel\tools\network-lab.ps1 -Clients 7
 #>
 [CmdletBinding()]
 param(
@@ -44,6 +52,7 @@ param(
     [ValidateRange(1, 65535)] [int] $ProxyPort = 7778,
     # Unset: the client adapts its input margin to the network.
     [ValidateRange(0, 10000)] [Nullable[int]] $InputMarginMs,
+    [ValidateRange(1, 15)] [int] $Clients = 1,
     [switch] $Build,
     [switch] $CoarseTimers,
     [string] $GamePath
@@ -116,6 +125,7 @@ $Run = [ordered]@{
     seed = $Seed
     # null: adaptive.
     input_margin_ms = $InputMarginMs
+    clients = $Clients
     coarse_timers = [bool] $CoarseTimers
     host_port = $HostPort
     proxy_port = $ProxyPort
@@ -173,7 +183,7 @@ try {
     $processes.relay = Start-Part "relay" $Node.Source @(
         $Relay, "--listen", $ProxyPort, "--host", $HostPort,
         "--delay-ms", $DelayMs, "--jitter-ms", $JitterMs, "--seed", $Seed,
-        "--spin-ms", $(if ($CoarseTimers) { 0 } else { 17 }),
+        "--spin-ms", $(if ($CoarseTimers) { 0 } else { 17 }), "--max-clients", $Clients,
         "--run-dir", $RunDir, "--parent-pid", $PID)
     $deadline = (Get-Date).AddSeconds(10)
     while (-not (Test-Path (Join-Path $RunDir "ready.json"))) {
@@ -190,16 +200,21 @@ try {
         Start-Sleep -Milliseconds 200
     }
 
-    $clientArgs = @("--join", "127.0.0.1:$ProxyPort", "--name", "Client")
-    if ($null -ne $InputMarginMs) { $clientArgs += @("--input-margin-ms", $InputMarginMs) }
-    $processes.client = Start-Part "client" $Game $clientArgs
+    foreach ($n in 1..$Clients) {
+        # One client keeps the old names; several are numbered.
+        $name = if ($Clients -eq 1) { "client" } else { "client$n" }
+        $label = if ($Clients -eq 1) { "Client" } else { "Client $n" }
+        $clientArgs = @("--join", "127.0.0.1:$ProxyPort", "--name", $label, "--profile", "networklab$n")
+        if ($null -ne $InputMarginMs) { $clientArgs += @("--input-margin-ms", $InputMarginMs) }
+        $processes[$name] = Start-Part $name $Game $clientArgs
+    }
 
     $margin = if ($null -ne $InputMarginMs) { "pinned at $InputMarginMs ms" } else { "adaptive" }
     Write-Host ""
     Write-Host "Running: $DelayMs ms +/- $JitterMs ms each way (seed $Seed); added RTT ~$(2 * $DelayMs) ms before jitter and polling."
-    Write-Host "Client input margin: $margin."
-    Write-Host "In either window press / then Diagnostics -> Network."
-    Write-Host "Both windows share this machine's CPU/GPU: read frame time alongside the network graphs."
+    Write-Host "Clients: $Clients. Client input margin: $margin."
+    Write-Host "In any window press / then Diagnostics -> Network."
+    Write-Host "All windows share this machine's CPU/GPU: read frame time alongside the network graphs."
     Write-Host "Run directory: $RunDir"
     Write-Host "Ctrl+C or close a game window to stop."
 

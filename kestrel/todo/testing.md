@@ -15,6 +15,46 @@
 - **Found in:** the full test run for PR #111
   (https://app.buildbuddy.io/invocation/b95f8bf3-e295-4ed7-91a4-b2f8bef0b839).
 
+## App builds from Windows fail on the libxcb1 genrule
+
+- **Status:** open
+- **Why:** with `--config=remote`, building any `//kestrel/app` target
+  from Windows runs the `rules_distroless` genrule that unpacks Debian 13's
+  `libxcb1` on a Linux worker, but with this machine's shell path, so it
+  fails with "`/buildbuddy-execroot/C:/Program Files/Git/usr/bin/bash.exe`
+  not found". It worked while the action was in the remote cache. The action
+  doesn't depend on Kestrel code, so `master` is affected the same way.
+  Running it locally fails too (the Linux `zstd`).
+  Adding `--shell_executable=/bin/bash` makes it build and the tests pass
+  (https://app.buildbuddy.io/invocation/1ebd6404-c4fb-494c-ad36-a7d614489f4f),
+  but it changes every shell action's key. `tools/network-lab.ps1 -Build`
+  already passes it for this reason.
+- **What to do:** put `build:remote --shell_executable=/bin/bash` in
+  `.bazelrc` (remote workers are always Linux), check local Windows
+  genrules aren't affected (`build:remote` only), and drop the flag from
+  ad hoc commands.
+- **Where:** `.bazelrc`; `third_party/x11/BUILD.bazel`; `MODULE.bazel`
+  (`debian13` packages).
+- **Found in:** eight-player stage 1
+  (https://app.buildbuddy.io/invocation/271ae3f0-9a83-4152-a6ab-52d188bb1a6f).
+
+## `two_players_walk_around_together` sometimes ends a tick apart
+
+- **Status:** open
+- **Why:** the session test fails about 1 run in 30, on `master` too:
+  after the host stops, the client is still a tick behind 2 s later
+  (`left: 240, right: 239` at `session/src/lib.rs:455`). Bazel retries it,
+  so it shows as flaky rather than red. The test runs on wall-clock time
+  over real UDP, so the last turn the host closed before stopping may
+  never have been sent, or may have been lost with nothing left to resend
+  it.
+- **What to do:** have the host make one last `update` after its loop (or
+  compare against the client's last confirmed tick instead of the host's),
+  and check with `--runs_per_test=30` that it no longer fails.
+- **Where:** `two_players_walk_around_together` in `kestrel/session/src/lib.rs`.
+- **Found in:** rebasing the eight-player branch onto `4e240d3` (2 of 32
+  runs failed there, 1 of 31 on `master`).
+
 ## Clean up after the Debian 12 libudev switch
 
 - **Status:** open

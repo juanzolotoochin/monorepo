@@ -758,9 +758,10 @@ trace. Its assertions check hits, a kill, and actual knockback displacement.
 
 ## Multiplayer
 
-One machine hosts and others join over UDP. Each player who joins gets an
-avatar of their own beside the spawn point and drives it with the usual
-controls. Other players wear the same exosuit, dressed by the scene's style,
+One machine hosts and up to seven others join over UDP; the host turns away
+a ninth player as "full". Each player who joins gets an avatar of their own
+at a spot of their own around the spawn point, clear of cover, and drives it
+with the usual controls. Other players wear the same exosuit, dressed by the scene's style,
 and walk, idle, fly and swing with the same animation, holding the weapon
 they have picked, with their footsteps and swings audible.
 
@@ -771,14 +772,24 @@ bazel run --config=full_local //kestrel/app:demo -- --host 7777
 bazel run --config=full_local //kestrel/app:demo -- --join my-desktop:7777
 ```
 
-A name tag floats over every player (yours in cyan): `--name Ada` sets
-yours, otherwise it's who is logged in to the computer. Names travel
-through the simulation, so everyone sees the same ones.
+A name tag floats over every player in their player number's color (yours
+has a border too): `--name Ada` sets yours, otherwise it's who is logged in
+to the computer. Names travel through the simulation, so everyone sees the
+same ones.
+
+The game remembers who you are (a player ID in the temp folder), so after
+leaving or a dropped connection you come back as the same player number.
+To run several copies on one machine, give each its own `--profile`, for
+example `--profile second`; a second copy without one is turned away, since
+the host would take it for you.
 
 Networked games start on the flat `field` scene (also on key **0** when
 playing alone). The host's `--scene` picks another one, and its scene keys move
 everyone to a new world; joining players always show the host's scene. The
-HUD's top right shows the connection. Leaving and rejoining gives a new avatar; the old one stays put.
+HUD's top right shows the connection. A player who leaves takes their avatar
+with them, and what it carried; coming back gives a fresh one at the same spot.
+A player who takes more than 20 seconds to load the host's new scene is
+dropped so the others can start, and can join again.
 If the host leaves (or crashes: after 5 seconds without hearing from it), or
 turns a player away, or falls out of sync with them, that player goes back to
 the main menu, which says why; there's no host migration. Runs driven by a

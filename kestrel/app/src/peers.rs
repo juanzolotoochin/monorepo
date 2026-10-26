@@ -18,6 +18,10 @@ use crate::style::WeaponVisual;
 
 #[derive(Component)]
 pub struct Peer {
+    /// The player this body shows. Their avatar's index moves when a
+    /// player before them leaves; the body stays theirs.
+    player: sim::PlayerId,
+    /// Their avatar's index on the current tick.
     agent: u16,
     /// The style the body was dressed in; a restyle builds a new one.
     style: Option<usize>,
@@ -105,8 +109,11 @@ pub fn update(
     mut weapons: Query<(Entity, &WeaponVisual, &mut Visibility), Without<Exhaust>>,
 ) {
     let me = mirror.player();
-    let others: Vec<u16> = mirror.current.as_ref().map_or_else(Vec::new, |s| {
-        (0..s.agents.len() as u16).filter(|&i| s.agents[i as usize].avatar().is_some() && Some(i) != me).collect()
+    let others: Vec<(sim::PlayerId, u16)> = mirror.current.as_ref().map_or_else(Vec::new, |s| {
+        (0..s.agents.len() as u16)
+            .filter(|&i| Some(i) != me)
+            .filter_map(|i| Some((s.agents[i as usize].avatar()?.owner?, i)))
+            .collect()
     });
     let breathe = (time.elapsed_secs() * 2.0).sin() * 0.012;
     // Render time in ticks: views sit `alpha` of the way from the previous
@@ -119,13 +126,15 @@ pub fn update(
     let mut poses = Vec::new();
     let mut shown = Vec::new();
     for (entity, mut peer, mut transform) in &mut peers {
-        if !others.contains(&peer.agent) || peer.style != Some(scene.index) {
+        let Some(&(_, agent)) = others.iter().find(|(player, _)| *player == peer.player).filter(|_| peer.style == Some(scene.index)) else {
             commands.entity(entity).despawn();
             continue;
-        }
-        shown.push(peer.agent);
-        let current = &mirror.current.as_ref().unwrap().agents[peer.agent as usize];
-        let before = mirror.previous.as_ref().and_then(|p| p.agents.get(peer.agent as usize)).unwrap_or(current);
+        };
+        peer.agent = agent;
+        shown.push(peer.player);
+        let settlement = mirror.current.as_ref().unwrap();
+        let current = &settlement.agents[agent as usize];
+        let before = mirror.previous.as_ref().and_then(|p| settlement.same_agent_in(agent, p)).unwrap_or(current);
         let (Some(avatar), Some(before_avatar)) = (current.avatar(), before.avatar()) else { continue };
         let (from, to) = (mirror.to_view(before.body.position), mirror.to_view(current.body.position));
         let alpha = if from.distance(to) > 1.5 { 1.0 } else { mirror.alpha };
@@ -241,12 +250,13 @@ pub fn update(
         }
     }
     let style = Some(scene.index);
-    for agent in others.into_iter().filter(|a| !shown.contains(a)) {
+    for (player, agent) in others.into_iter().filter(|(player, _)| !shown.contains(player)) {
         let pack = scene.pack.clone();
         commands.queue(move |world: &mut World| {
             let root = crate::scene::spawn_remote_player(world, &pack);
             world.entity_mut(root).insert(
                 Peer {
+                    player,
                     agent,
                     style,
                     gait: GaitClock::default(),

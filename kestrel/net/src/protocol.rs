@@ -12,7 +12,8 @@ use sim::{Command, CommandKind, PlayerId};
 
 const MAGIC: &[u8; 4] = b"LSTP";
 /// 3: adds `CommandKind::ReleaseDirectControl`; peers on 2 cannot decode it.
-pub const PROTOCOL_VERSION: u16 = 3;
+/// 4: adds `CommandKind::Leave`, and saves (format 12) count abandoned units.
+pub const PROTOCOL_VERSION: u16 = 4;
 /// Stay under typical path MTUs (and Steam's unreliable message limit).
 pub const MAX_PACKET: usize = 1200;
 pub const SAVE_CHUNK: usize = 1000;

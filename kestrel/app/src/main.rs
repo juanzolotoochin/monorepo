@@ -97,6 +97,9 @@ fn main() {
             std::process::exit(2)
         })
     });
+    // `--profile <name>` joins with that profile's saved player ID instead
+    // of the default one, to run several players on one machine.
+    let profile = value("--profile");
     let defaults = flow::Defaults {
         // `--name`, or who is logged in.
         name: value("--name")
@@ -107,6 +110,7 @@ fn main() {
         port: value("--host").and_then(|port| port.parse().ok()).unwrap_or(flow::DEFAULT_PORT),
         address: value("--join").unwrap_or_else(|| format!("127.0.0.1:{}", flow::DEFAULT_PORT)),
         input_margin_ms,
+        profile: profile.clone(),
     };
     // A player's run with no session flags opens the menu (or, with
     // `--character-studio`, Character Studio); anything else starts its
@@ -122,6 +126,7 @@ fn main() {
         record: defaults.record.clone(),
         replay,
         input_margin_ms,
+        profile,
     });
     let mut app = build_app(options, scenes, hub, flow::Start { launch, defaults });
     app.run();
@@ -312,7 +317,7 @@ fn test_app(options: control::Options, scenes: assets::SceneLibrary, hub: contro
 #[cfg(test)]
 fn test_front_app(options: control::Options, scenes: assets::SceneLibrary, hub: control::Hub, launch: Option<flow::Launch>) -> App {
     let scene = launch.as_ref().map_or(0, |launch| launch.scene);
-    let defaults = flow::Defaults { name: String::new(), scene, record: None, port: flow::DEFAULT_PORT, address: String::new(), input_margin_ms: None };
+    let defaults = flow::Defaults { name: String::new(), scene, record: None, port: flow::DEFAULT_PORT, address: String::new(), input_margin_ms: None, profile: None };
     let mut app = build_app(options, scenes, hub, flow::Start { launch, defaults });
     app.finish();
     app.cleanup();

@@ -192,6 +192,7 @@ impl MainMenu {
             record: defaults.record.clone(),
             replay: None,
             input_margin_ms: defaults.input_margin_ms,
+            profile: defaults.profile.clone(),
         })
     }
 
@@ -715,6 +716,7 @@ mod tests {
             port: crate::flow::DEFAULT_PORT,
             address: "127.0.0.1:4200".into(),
             input_margin_ms: None,
+            profile: None,
         };
         let menu = MainMenu {
             selected_scene: 3,

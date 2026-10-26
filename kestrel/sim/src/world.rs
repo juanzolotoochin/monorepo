@@ -115,9 +115,34 @@ pub enum CommandKind {
     RepairCover { agent: u16, asset: Option<u16> },
     /// Press or release a piano key. Any input device can issue this action.
     PlayPiano { agent: u16, piano: u16, pitch: u8, velocity: u8 },
+    /// The player left: their avatar goes (`Settlement::leave`). The host
+    /// queues it for a player it dropped; it applies before the tick's other
+    /// commands. Last, so input logs from before it still decode.
+    Leave,
 }
 
 impl CommandKind {
+    /// Points a command that drives an avatar at `agent`.
+    fn set_avatar(&mut self, to: u16) {
+        match self {
+            CommandKind::MoveAvatar { agent, .. }
+            | CommandKind::AimAvatar { agent, .. }
+            | CommandKind::Attack { agent, .. }
+            | CommandKind::Transfer { agent, .. }
+            | CommandKind::CancelTransfer { agent }
+            | CommandKind::Jetpack { agent, .. }
+            | CommandKind::Jump { agent }
+            | CommandKind::Equip { agent, .. }
+            | CommandKind::Respawn { agent }
+            | CommandKind::DigDown { agent }
+            | CommandKind::ReleaseDirectControl { agent }
+            | CommandKind::RepairCover { agent, .. }
+            | CommandKind::PlayPiano { agent, .. }
+            | CommandKind::Pile { agent, .. } => *agent = to,
+            _ => {}
+        }
+    }
+
     /// The avatar a command drives, if it drives one.
     pub fn avatar(&self) -> Option<u16> {
         match *self {
@@ -393,27 +418,35 @@ impl World {
     // Stage 1: apply inputs, in player order.
     fn apply_commands(&mut self, turn: &[Command]) {
         let mut order: Vec<usize> = (0..turn.len()).collect();
-        order.sort_by_key(|&i| turn[i].player);
+        // Players who left go first, so the tick's other commands, and its
+        // events, already see the agents without them.
+        order.sort_by_key(|&i| (turn[i].kind != CommandKind::Leave, turn[i].player));
         for (n, i) in order.into_iter().enumerate() {
             let mut rng = Rng::new(self.config.seed, self.tick, n as u64, stream::COMMAND);
-            // Players only drive their own avatar.
             // The memory trial acts on the first avatar, so only its owner may
             // record, deploy or clear.
             let memory = matches!(turn[i].kind, CommandKind::MemoryRecord | CommandKind::MemoryDeploy | CommandKind::MemoryClear);
-            let driven = if memory {
-                Some(self.settlement.as_ref().and_then(|s| s.player()))
-            } else {
-                turn[i].kind.avatar().map(Some)
-            };
-            if let Some(agent) = driven {
-                let owner = agent
-                    .and_then(|agent| self.settlement.as_ref().and_then(|s| s.agents.get(agent as usize)))
-                    .and_then(|a| a.avatar()?.owner);
-                if owner != Some(turn[i].player) {
+            if memory {
+                let first = self.settlement.as_ref().and_then(|s| s.player().and_then(|agent| s.agents[agent as usize].avatar()?.owner));
+                if first != Some(turn[i].player) {
                     continue;
                 }
             }
-            match turn[i].kind {
+            // Players only drive their own avatar, whatever index the command
+            // names: a player who left shifts the avatars after theirs, and a
+            // command sent before that names the old index.
+            let resolved;
+            let kind = match turn[i].kind.avatar() {
+                Some(_) => {
+                    let Some(own) = self.settlement.as_ref().and_then(|s| s.avatar_of(turn[i].player)) else { continue };
+                    let mut kind = turn[i].kind.clone();
+                    kind.set_avatar(own);
+                    resolved = kind;
+                    &resolved
+                }
+                None => &turn[i].kind,
+            };
+            match *kind {
                 CommandKind::SpawnMovers { center, count } => self.spawn_movers(center, count, &mut rng),
                 CommandKind::Impulse { mover, velocity } => {
                     let Some(location) = self.ids.get(mover) else { continue };
@@ -453,7 +486,7 @@ impl World {
                 | CommandKind::DigDown { .. }
                 | CommandKind::ReleaseDirectControl { .. }
                 | CommandKind::RepairCover { .. } => {
-                    if let (Some(s), Some((agent, action))) = (&mut self.settlement, Action::of(&turn[i].kind)) {
+                    if let (Some(s), Some((agent, action))) = (&mut self.settlement, Action::of(kind)) {
                         s.act(self.tick, agent, &action, &self.terrain, &mut self.actions);
                     }
                 }
@@ -499,7 +532,12 @@ impl World {
                 }
                 CommandKind::Join => {
                     if let Some(s) = &mut self.settlement {
-                        s.join(turn[i].player);
+                        s.join(turn[i].player, &self.terrain);
+                    }
+                }
+                CommandKind::Leave => {
+                    if let Some(s) = &mut self.settlement {
+                        s.leave(turn[i].player);
                     }
                 }
             }

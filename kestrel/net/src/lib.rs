@@ -37,6 +37,8 @@ use sim::PlayerId;
 pub const TICK: Duration = Duration::from_nanos(1_000_000_000 / content::TICKS_PER_SECOND as u64);
 /// The host's own player.
 pub const HOST_PLAYER: PlayerId = PlayerId(0);
+/// `NetConfig::max_players` unless set.
+pub const DEFAULT_MAX_PLAYERS: u32 = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DesyncPolicy {
@@ -59,8 +61,14 @@ pub struct NetConfig {
     pub jitter_buffer: u64,
     /// Silence after which a peer counts as gone.
     pub timeout: Duration,
+    /// How long a new world waits at its first tick for a client to load it
+    /// before dropping that client.
+    pub load_timeout: Duration,
     /// Simulation threads.
     pub threads: usize,
+    /// Players in a game at most, the host included. A host refuses anyone
+    /// past it. 8 for now; LAN games may allow 16 later.
+    pub max_players: u32,
 }
 
 impl Default for NetConfig {
@@ -71,7 +79,9 @@ impl Default for NetConfig {
             desync: DesyncPolicy::Halt,
             jitter_buffer: content::millis_to_ticks(67),
             timeout: Duration::from_secs(5),
+            load_timeout: Duration::from_secs(20),
             threads: 4,
+            max_players: DEFAULT_MAX_PLAYERS,
         }
     }
 }
