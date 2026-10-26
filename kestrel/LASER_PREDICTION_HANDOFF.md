@@ -120,6 +120,91 @@ Stage 1 landed on `kestrel-avatar-prediction`. See
   inputs and client RTT per case. The planned 150 ± 20 ms and LAN cases fit
   `assert_no_corrections`.
 
+## Notes from stage 2 (laser prediction)
+
+Stage 2 (B) landed on `kestrel-laser-prediction`, stacked on stage 1.
+
+### What landed
+
+- **Sim** (`sim/src/settlement/prediction.rs`): `AvatarReplay::step` records
+  the strike that resolved on the tick (`struck() -> Option<&ReplayedStrike>`:
+  tick, weapon, aim, muzzle, and the position and height after the avatar's
+  own step, which is what `read_avatar` reads).
+  `Settlement::predict_laser(agent, &ReplayedStrike, terrain) ->
+  Option<PredictedLaser>` returns `LaserFired`'s `from`, `to`, `hit_actor`
+  and `cover`. No settlement clone: `strike_targets` and `laser_player` now
+  take the shooter's height (`strike_targets_from`, `combat.rs`), and the
+  `hit_actor` check is shared (`laser_hits_actor`). Golden tests unchanged.
+- **App**: `prediction::Drawn::strikes` lists the strikes the replay resolved
+  through the drawn tick. `laser_prediction::LaserPrediction` (a resource)
+  keeps the drawn shots not yet confirmed, in order. Each client frame,
+  `predict_lasers` in `lockstep.rs` (called from `follow_avatar`):
+  1. matches this frame's confirmed `LaserFired` of the local avatar to the
+     oldest drawn shot (exact `FxVec2` compare of the ends);
+  2. gives up drawn shots the confirmed tick is `TIMEOUT_TICKS` (10) past;
+  3. maps the replay's laser strikes, in order, onto the outstanding drawn
+     shots (an input the host moved later moves its shot's tick instead of
+     drawing another), and draws the rest: a `LaserShot` with
+     `predicted: Some(id)`, `Cue::Laser`, `laser_drawn()`.
+  `settlement.rs` skips the beam and sound of a matched confirmed shot. A
+  predicted bolt sparks on cover but holds no `CoverContacts`; a matched
+  confirmed cover hit goes through `effects::hand_over_cover`, which holds
+  the cover only while the drawn bolt is still flying.
+- **Telemetry**: `CorrectionKind::LaserMispredict` ("laser"), always kept,
+  `from` = drawn end, `to` = confirmed end, `never_fired`. Window line with
+  drawn / confirmed / mispredicted counts and the last lead; report fields
+  `laser_shots_drawn`, `laser_shots_confirmed`, `laser_mispredictions`,
+  `laser_last_lead_ms`.
+- **Aim** (arbiter decision): `attack_input` aims from the drawn avatar on a
+  client (`aim_origin`); host and single player still use
+  `player_view_position()` exactly. Wire format unchanged.
+
+### Tests
+
+- Sim: `predicted_laser_matches_the_simulation_with_a_jetpack` and
+  `..._with_jumps` fire the laser at random through rocks, cover, a ledge and
+  a second player for 3 seeds each and assert every replayed shot equals
+  `LaserFired` (compared when the rest of the world the targeting reads
+  didn't change, about 300 per seed); `only_a_laser_strike_predicts_a_shot`.
+- App units: `laser_prediction::tests` (matching, dedup across frames, a late
+  input moving a shot, the timeout logged once, reset),
+  `laser_mispredictions_are_kept_with_both_ends_and_reported`,
+  `a_confirmed_cover_hit_waits_for_the_predicted_beam_still_in_flight`,
+  `mouse_aim_starts_at_the_drawn_avatar_only_when_it_is_predicted`.
+- Harness (`lockstep.rs`): `joined_player_laser_shots_are_predicted_under_latency`
+  (no delay, 75 ± 20 ms; enabled) and
+  `joined_player_laser_shots_are_predicted_at_100_ms` (`#[ignore]`d), in the
+  laser pit (`field` offers no laser): standing still (5 shots, one on the
+  mixing desk), running (4), right after reversing (6, the second of each pair
+  queued during the first swing). The host's avatar is walked into the
+  southwest corner first. Pass: every shot confirmed, drawn early, exactly one
+  beam and one `Cue::Laser` per shot, all beams predicted, ends equal exactly
+  (tolerance 0: same fixed-point code), lead > 0, no correction of any kind.
+
+| Case | Laser mispredictions | End difference | Drawn before confirmation |
+|---|---|---|---|
+| no added delay (RTT 17 ms) | 0 / 15 shots | 0 | 150 ms |
+| 75 ± 20 ms (RTT 174 ms) | 0 / 15 | 0 | 283 ms |
+| 100 ± 20 ms (RTT 241 ms), committed seed | 0 / 15 | 0 | 283–300 ms |
+
+Six more seeds per delayed case, not committed: 75 ± 20 ms has no late input
+and no misprediction. At 100 ± 20 ms, 2 of 6 seeds have one laser
+misprediction (0.03 u and 0.07 u, running), each in a scenario where the host
+reported a late input; standing still, a late input changes nothing. So the
+100 ms test stays ignored with the same reason as stage 1's.
+
+### For stage 3 (C)
+
+- Remove the ignore on `joined_player_laser_shots_are_predicted_at_100_ms`
+  once C lands, keeping its seed and pass condition. A 150 ± 20 ms case fits
+  `assert_lasers_predicted` too.
+- Nothing in B reads the margin; shots follow the drawn time, which follows
+  `input_horizon`. The lead in the window (`laser_last_lead_ms`) should drop
+  on LAN as the margin shrinks.
+- B1's moving-target and breaking-cover cases are not covered by the tests
+  (`field`/laser pit have no enemies). They mispredict by design and are
+  logged.
+
 ## How a laser shot works today
 
 1. `PlayerControl::strike` (`app/src/lockstep.rs`) queues
