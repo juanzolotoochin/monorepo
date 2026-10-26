@@ -5,7 +5,9 @@
 //! The file format is the original game's, so existing scene files load
 //! unchanged. Simulation values parse into `Fx`; view-only values (labels,
 //! skins, cargo layouts and anchors) stay `f32` and never reach the
-//! simulation. Positions are arena coordinates: meters from the arena center.
+//! simulation. Agents and waves name a character instead of a skin; the
+//! character's `view.skin` draws them. Positions are arena coordinates:
+//! meters from the arena center.
 //! Weapon tuning in files counts 60 Hz ticks, as the original game did; use
 //! [`WeaponTuning::cooldown`] and friends for simulation ticks.
 
@@ -143,7 +145,6 @@ pub struct Agent {
     pub controlled: bool,
     pub id: String,
     pub label: String,
-    pub skin: String,
     /// The character it is, by short name: a `Player` character for a
     /// `controlled` avatar, a `Hauler` otherwise. Its speed, radius and
     /// transfer time come from there.
@@ -220,7 +221,6 @@ pub struct Wave {
     pub id: String,
     pub position: Point,
     pub target: Point,
-    pub skin: String,
     /// The enemy this wave sends, by short name (`ghoul` for
     /// `character/ghoul`): its speed, health, armor and breach damage.
     pub character: String,
@@ -332,7 +332,7 @@ fn within(v: Fx, min: Fx, max: Fx) -> bool {
     v >= min && v <= max
 }
 
-fn ident(id: &str) -> bool {
+pub(crate) fn ident(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
@@ -445,7 +445,6 @@ impl Scenario {
         for a in &self.agents {
             if !a.cargo_layout.valid()
                 || !point(a.position)
-                || !ident(&a.skin)
                 || !ident(&a.character)
                 || !(1..=64).contains(&a.capacity)
                 || (!a.controlled && a.links.is_empty())
@@ -509,7 +508,6 @@ impl Scenario {
         for w in &self.waves {
             if !point(w.position)
                 || !point(w.target)
-                || !ident(&w.skin)
                 || !within(w.first, Fx::ZERO, Fx::from_int(3600))
                 || !within(w.every, Fx::HALF, Fx::from_int(3600))
                 || !ident(&w.character)

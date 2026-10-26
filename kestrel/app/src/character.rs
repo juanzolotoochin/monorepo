@@ -12,20 +12,19 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 use sim::settlement::avatar::{JumpPhase, SwordStroke};
 
-/// Resolve a usable gait from the baked rig instead of requiring every style
-/// to repeat the same planted-foot settings.
+/// The scene player's motion tuning (its character's `view.motion`), adapted
+/// to the rig the scene's style bakes, so every style needn't repeat the same
+/// planted-foot settings.
 pub fn motion_profile(pack: &voxel_assets::ScenePack) -> voxel_assets::CharacterMotion {
+    let mut motion = crate::lockstep::builtin_character_view(&pack.scene.player).motion;
     let Some(style) = pack.scene.style.as_ref() else {
         // The built-in exosuit is articulated even though it has no baked
         // actor style. Give it the same planted-foot solver as styled actors.
-        return voxel_assets::CharacterMotion {
-            plant_feet: true,
-            step_distance: 0.50,
-            step_lift: 0.15,
-            ..default()
-        };
+        motion.plant_feet = true;
+        motion.step_distance = 0.50;
+        motion.step_lift = 0.15;
+        return motion;
     };
-    let mut motion = style.character_motion;
     if pack.actor.is_empty() {
         motion.plant_feet = true;
         motion.step_distance = 0.50 * style.actor_scale;
@@ -85,7 +84,7 @@ pub struct Part {
     pub bind: Transform,
     pub rest: Transform,
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum PartKind {
     Body,
     Chest,
@@ -180,14 +179,6 @@ pub(crate) fn foot_terrain(
         ground: samples.map(|sample| sample.0),
         rise: samples.map(|sample| sample.1),
     }
-}
-
-pub(crate) fn foot_ground_offsets(
-    root: Transform,
-    pose: &Pose,
-    surface: impl FnMut(Vec3) -> Option<f32>,
-) -> [f32; 2] {
-    foot_terrain(root, pose, surface).ground
 }
 
 /// Ease render height across walkable ledges; jumps and larger changes keep
@@ -326,7 +317,8 @@ pub fn animate_character(
     contacts: Option<Res<ActorFootContacts>>,
     viewer: Res<crate::viewer::Viewer>,
     player: Single<(Entity, &Transform), With<Player>>,
-    mut parts: Query<(Entity, &Part, &mut Transform, Option<&ChildOf>), Without<Player>>,
+    mut joints: Joints,
+    children: Query<&Children>,
     mut motion: Local<MotionState>,
 ) {
     if !viewer.active && feedback.hit_stop > 0.0
@@ -412,20 +404,50 @@ pub fn animate_character(
         pose.attack = controls.attack;
         pose.dig = None;
     }
-    let terrain = foot_terrain(*player.1, &pose, |point| {
+    let ground = |point: Vec3| {
         if viewer.active {
             Some(crate::viewer::studio_surface_height(&viewer, point.z))
         } else {
             service.as_ref().and_then(|service| service.ground_height(point))
         }
-    });
+    };
+    // Studio shows each clip frame exactly, without smoothing.
+    pose_body(*player.1, pose, ground, viewer.active, time.delta_secs(), contacts.as_deref(),
+        children.iter_descendants(player.0), &mut joints);
+}
+
+/// The joints `pose_body` moves: every body's parts.
+pub(crate) type Joints<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static Part, &'static mut Transform, Option<&'static ChildOf>),
+    (Without<Player>, Without<crate::peers::Peer>),
+>;
+
+/// Poses one character body, the local player's, a remote player's or
+/// Studio's: its joints (`body`, from the root down) move toward `pose`,
+/// the body leans over uneven ground, and planted feet are solved against
+/// `ground`. `exact` places the joints without smoothing.
+pub(crate) fn pose_body(
+    root: Transform,
+    mut pose: Pose,
+    ground: impl FnMut(Vec3) -> Option<f32>,
+    exact: bool,
+    dt: f32,
+    contacts: Option<&ActorFootContacts>,
+    body: impl Iterator<Item = Entity>,
+    joints: &mut Joints,
+) {
+    let terrain = foot_terrain(root, &pose, ground);
     if pose.motion.plant_feet && pose.speed > 0.05 && !pose.airborne && pose.jump.is_none() {
         pose.step_pitch = step_body_pitch(&pose, terrain.ground);
     }
-    let mut joints = HashMap::new();
-    for (entity, part, mut transform, parent) in &mut parts {
+    let mut snapshot = HashMap::new();
+    let mut root_entity = None;
+    for entity in body {
+        let Ok((entity, part, mut transform, parent)) = joints.get_mut(entity) else { continue };
         let target = pose.place(part.kind, part.rest);
-        if viewer.active || pose.motion.plant_feet
+        if exact || pose.motion.plant_feet
             && matches!(part.kind, PartKind::Body)
             && pose.speed > 0.6
             && pose.jump.is_none()
@@ -434,21 +456,17 @@ pub fn animate_character(
         {
             *transform = target;
         } else {
-            blend_pose(
-                &mut transform,
-                target,
-                time.delta_secs(),
-                pose.motion.pose_response,
-            );
+            blend_pose(&mut transform, target, dt, pose.motion.pose_response);
         }
-        joints.insert(
-            entity,
-            (part.kind, part.rest, *transform, parent.map(ChildOf::parent)),
-        );
+        if matches!(part.kind, PartKind::Body) {
+            root_entity = parent.map(ChildOf::parent);
+        }
+        snapshot.insert(entity, (part.kind, part.rest, *transform, parent.map(ChildOf::parent)));
     }
     // For rigs that opt into planted feet, solve the complete leg after body
     // smoothing so a planted ankle stays fixed against the
     // traveling ground instead of lagging behind the hip animation.
+    let Some(root_entity) = root_entity else { return };
     if pose.motion.plant_feet
         && pose.speed > 0.05
         && pose.jump.is_none()
@@ -456,16 +474,13 @@ pub fn animate_character(
         && pose.attack.is_none_or(|attack| attack.weapon == content::scenario::Weapon::Laser)
         && pose.dig.is_none()
     {
-        for (entity, target) in grounded_foot_targets(&joints, player.0, &pose, terrain) {
-            if let Ok((_, _, mut transform, _)) = parts.get_mut(entity) {
-                *transform = target;
-            }
-        }
+        let mut targets = grounded_foot_targets(&snapshot, root_entity, &pose, terrain);
         if let Some(contacts) = contacts {
-            for (entity, target) in actor_leg_targets(&joints, player.0, &pose, &contacts, terrain) {
-                if let Ok((_, _, mut transform, _)) = parts.get_mut(entity) {
-                    *transform = target;
-                }
+            targets.extend(actor_leg_targets(&snapshot, root_entity, &pose, contacts, terrain));
+        }
+        for (entity, target) in targets {
+            if let Ok((_, _, mut transform, _)) = joints.get_mut(entity) {
+                *transform = target;
             }
         }
     }
@@ -677,7 +692,7 @@ fn solve_leg(y: f32, z: f32, upper: f32, lower: f32) -> (f32, f32) {
 }
 
 /// Interpolate joint transforms in render time, independently of simulation timing.
-pub fn blend_pose(current: &mut Transform, target: Transform, dt: f32, response: f32) {
+fn blend_pose(current: &mut Transform, target: Transform, dt: f32, response: f32) {
     let weight = 1.0 - (-response.max(0.0) * dt.clamp(0.0, 0.05)).exp();
     current.translation = current.translation.lerp(target.translation, weight);
     current.rotation = current.rotation.slerp(target.rotation, weight);
@@ -1716,13 +1731,14 @@ mod tests {
         &content.rules.characters[content.names.character_index("exosuit").unwrap() as usize]
     }
 
-    /// Styles that keep the default speeds leave the simulation on the player
-    /// character's (`lockstep::scene_setup`), so the two must agree.
+    /// Poses run at the speeds the simulation moves each player character.
     #[test]
-    fn default_style_speeds_match_the_player_character() {
-        let motion = voxel_assets::CharacterMotion::default();
-        assert!((motion.walk_speed - crate::lockstep::view_f32(exosuit().movement.walk)).abs() < 1e-5);
-        assert!((motion.run_speed - crate::lockstep::view_f32(exosuit().movement.run)).abs() < 1e-5);
+    fn player_motion_poses_the_characters_speeds() {
+        let content = crate::lockstep::builtin_content();
+        for (def, view) in content.rules.characters.iter().zip(&content.views.characters) {
+            assert!((view.motion.walk_speed - crate::lockstep::view_f32(def.movement.walk)).abs() < 1e-5);
+            assert!((view.motion.run_speed - crate::lockstep::view_f32(def.movement.run)).abs() < 1e-5);
+        }
     }
 
     #[test]

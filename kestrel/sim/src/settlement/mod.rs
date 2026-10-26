@@ -534,7 +534,6 @@ impl Settlement {
                 controlled: true,
                 id: "player".into(),
                 label: "YOU".into(),
-                skin: "worker".into(),
                 character: player.into(),
                 position: spawn,
                 capacity: 8,
