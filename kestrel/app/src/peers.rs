@@ -1,28 +1,25 @@
-//! Other players' avatars in a networked game: a copy of the local player's
-//! exosuit (as the scene's style dresses it) per avatar this machine doesn't
-//! control, placed where the simulation has it between ticks and posed like
-//! the local player, swings included.
+//! Other players' avatars in a networked game: a body per avatar this machine
+//! doesn't control, built and dressed like the local player's, placed where
+//! the simulation has it between ticks and posed like the local player,
+//! swings included.
 
-use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
-use std::collections::HashMap;
 
 use content::scenario::Weapon;
 use sim::settlement::avatar::Swing;
 
 use crate::character::{
-    blend_pose, dig_age, grounded_foot_targets, jump_motion, GaitClock, JointSnapshot,
-    MotionState, Part, PartKind, Player, Pose,
+    dig_age, jump_motion, GaitClock, MotionState, Part, Player, Pose,
 };
 use crate::combat::{Attack, attack_end, rebound_end};
 use crate::jetpack::Exhaust;
 use crate::lockstep::WorldMirror;
-use crate::style::{WeaponMuzzle, WeaponVisual};
+use crate::style::WeaponVisual;
 
 #[derive(Component)]
 pub struct Peer {
     agent: u16,
-    /// The style the copy was made in; a restyle makes a new copy.
+    /// The style the body was dressed in; a restyle builds a new one.
     style: Option<usize>,
     gait: GaitClock,
     /// The start tick of the last swing heard, so each whooshes once.
@@ -32,27 +29,11 @@ pub struct Peer {
 }
 
 impl Peer {
-    /// The avatar this copy shows.
+    /// The avatar this body shows.
     pub fn agent(&self) -> u16 {
         self.agent
     }
 }
-
-/// A copied part pivot. Not a `Part`, so the local player's animation and
-/// styling leave it alone.
-#[derive(Component)]
-pub struct PeerPart {
-    kind: PartKind,
-    rest: Transform,
-}
-
-/// A copied jetpack exhaust, shown while that avatar flies.
-#[derive(Component)]
-pub struct PeerExhaust;
-
-/// A copied weapon model, shown while it's the weapon the avatar holds.
-#[derive(Component)]
-pub struct PeerWeapon(Weapon);
 
 /// The swing as the local player's animation sees it, `ticks` after the
 /// last simulated tick began: wind-up and cut from the swing's start, or a
@@ -114,12 +95,12 @@ pub fn update(
     contacts: Option<Res<crate::character::ActorFootContacts>>,
     time: Res<Time>,
     sound: Res<crate::sound::Sound>,
-    player: Single<Entity, With<Player>>,
-    mut peers: Query<(Entity, &mut Peer, &mut Transform), (Without<PeerPart>, Without<Player>)>,
-    mut parts: Query<(Entity, &PeerPart, &mut Transform), Without<Peer>>,
+    mut peers: Query<(Entity, &mut Peer, &mut Transform), (Without<Part>, Without<Player>)>,
+    mut joints: crate::character::Joints,
+    children: Query<&Children>,
     parents: Query<&ChildOf>,
-    mut exhausts: Query<(&ChildOf, &mut Visibility), (With<PeerExhaust>, Without<PeerWeapon>)>,
-    mut weapons: Query<(Entity, &PeerWeapon, &mut Visibility), Without<PeerExhaust>>,
+    mut exhausts: Query<(&ChildOf, &mut Visibility), (With<Exhaust>, Without<WeaponVisual>)>,
+    mut weapons: Query<(Entity, &WeaponVisual, &mut Visibility), Without<Exhaust>>,
 ) {
     let me = mirror.player();
     let others: Vec<u16> = mirror.current.as_ref().map_or_else(Vec::new, |s| {
@@ -161,10 +142,10 @@ pub fn update(
             .distance(transform.translation.with_y(0.0))
             .min(1.0);
         let step_distance = motion_profile.step_distance.clamp(0.2, 4.0);
-        let contacts = peer
+        let steps = peer
             .gait
             .advance(moved, step_distance, !current.avatar.flight.airborne);
-        for _ in 0..contacts {
+        for _ in 0..steps {
             sound.play(crate::sound::Cue::Step);
         }
         transform.translation = position;
@@ -201,7 +182,7 @@ pub fn update(
             }
         }
         let dig = current.avatar.dig.as_ref().map(|d| dig_age(&mirror, d));
-        let mut pose = Pose {
+        let pose = Pose {
                 motion: voxel_assets::CharacterMotion {
                     step_distance: motion_profile.step_distance / transform.scale.x.max(0.1),
                     ..motion_profile
@@ -225,56 +206,9 @@ pub fn update(
                 attack,
                 dig,
             };
-        if pose.motion.plant_feet && pose.speed > 0.05 && !pose.airborne && pose.jump.is_none() {
-            let ground = crate::character::foot_ground_offsets(*transform, &pose,
-                |point| service.ground_height(point));
-            pose.step_pitch = crate::character::step_body_pitch(&pose, ground);
-        }
+        crate::character::pose_body(*transform, pose, |point| service.ground_height(point), false,
+            time.delta_secs(), contacts.as_deref(), children.iter_descendants(entity), &mut joints);
         poses.push((entity, current.avatar.weapon, pose));
-    }
-    for (entity, part, mut transform) in &mut parts {
-        // Part pivots hang off the root or the body: find the peer above.
-        let pose = parents
-            .iter_ancestors(entity)
-            .find_map(|e| poses.iter().find(|(p, ..)| *p == e).map(|(.., pose)| pose));
-        if let Some(pose) = pose {
-            blend_pose(
-                &mut transform,
-                pose.place(part.kind, part.rest),
-                time.delta_secs(),
-                pose.motion.pose_response,
-            );
-        }
-    }
-    for (root, _, pose) in &poses {
-        if !pose.motion.plant_feet || pose.speed <= 0.05 || pose.airborne || pose.jump.is_some()
-            || pose.attack.is_some() || pose.dig.is_some() {
-            continue;
-        }
-        let mut joints: HashMap<Entity, JointSnapshot> = HashMap::new();
-        for (entity, part, transform) in &mut parts {
-            if parents.iter_ancestors(entity).any(|ancestor| ancestor == *root) {
-                joints.insert(entity, (part.kind, part.rest, *transform,
-                    parents.get(entity).ok().map(ChildOf::parent)));
-            }
-        }
-        let terrain = crate::character::foot_terrain(
-            *peers.get(*root).unwrap().2,
-            pose,
-            |point| service.ground_height(point),
-        );
-        for (entity, target) in grounded_foot_targets(&joints, *root, pose, terrain) {
-            if let Ok((_, _, mut transform)) = parts.get_mut(entity) {
-                *transform = target;
-            }
-        }
-        if let Some(contacts) = contacts.as_ref() {
-            for (entity, target) in crate::character::actor_leg_targets(&joints, *root, pose, contacts, terrain) {
-                if let Ok((_, _, mut transform)) = parts.get_mut(entity) {
-                    *transform = target;
-                }
-            }
-        }
     }
     for (parent, mut visibility) in &mut exhausts {
         let owner = std::iter::once(parent.parent())
@@ -303,12 +237,12 @@ pub fn update(
             };
         }
     }
-    // The world's scene dressed the player's suit when it started.
-    let (player, style) = (*player, Some(scene.index));
+    let style = Some(scene.index);
     for agent in others.into_iter().filter(|a| !shown.contains(a)) {
+        let pack = scene.pack.clone();
         commands.queue(move |world: &mut World| {
-            let root = copy(world, player, None);
-            world.entity_mut(root).insert((
+            let root = crate::scene::spawn_remote_player(world, &pack);
+            world.entity_mut(root).insert(
                 Peer {
                     agent,
                     style,
@@ -317,8 +251,7 @@ pub fn update(
                     motion: MotionState::default(),
                     visual_height: None,
                 },
-                service::WorldScoped::default(),
-            ));
+            );
         });
     }
 }
@@ -327,7 +260,7 @@ pub fn update(
 /// weapon models are showing.
 pub fn snapshot(world: &mut World) -> Vec<serde_json::Value> {
     let shown: Vec<(Entity, Weapon)> = world
-        .query::<(Entity, &PeerWeapon, &InheritedVisibility)>()
+        .query::<(Entity, &WeaponVisual, &InheritedVisibility)>()
         .iter(world)
         .filter(|(_, _, visible)| visible.get())
         .map(|(e, w, _)| (e, w.0))
@@ -360,66 +293,6 @@ pub fn snapshot(world: &mut World) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// Copies an entity and its children: their meshes, materials, transforms
-/// and visibility, with part pivots and exhausts as their peer versions.
-/// Lights are left out, so each peer doesn't add shadow-casting lights.
-fn copy(world: &mut World, source: Entity, parent: Option<Entity>) -> Entity {
-    let e = world.entity(source);
-    let transform = e.get::<Transform>().copied().unwrap_or_default();
-    let visibility = e.get::<Visibility>().copied().unwrap_or_default();
-    let mesh = e.get::<Mesh3d>().cloned();
-    let material = e.get::<MeshMaterial3d<StandardMaterial>>().cloned();
-    let part = e.get::<Part>().map(|p| PeerPart {
-        kind: p.kind,
-        rest: p.rest,
-    });
-    let exhaust = e.contains::<Exhaust>();
-    let weapon = e.get::<WeaponVisual>().map(|w| PeerWeapon(w.0));
-    let muzzle = e.get::<WeaponMuzzle>().copied();
-    let no_shadow = e.contains::<NotShadowCaster>();
-    let children: Vec<Entity> = e
-        .get::<Children>()
-        .map_or_else(Vec::new, |c| c.iter().collect());
-    let mut copied = world.spawn((transform, visibility));
-    if let Some(mesh) = mesh {
-        copied.insert(mesh);
-    }
-    if let Some(material) = material {
-        copied.insert(material);
-    }
-    if let Some(part) = part {
-        copied.insert(part);
-    }
-    if exhaust {
-        copied.insert(PeerExhaust);
-    }
-    if let Some(weapon) = weapon {
-        copied.insert(weapon);
-    }
-    if let Some(muzzle) = muzzle {
-        copied.insert(muzzle);
-    }
-    if no_shadow {
-        copied.insert(NotShadowCaster);
-    }
-    if let Some(parent) = parent {
-        copied.insert(ChildOf(parent));
-    }
-    let id = copied.id();
-    for child in children {
-        // Lights stay with the player; so does the backpack (each peer gets
-        // its own, see `piles::render`).
-        let child_ref = world.entity(child);
-        if child_ref.contains::<PointLight>()
-            || child_ref.contains::<SpotLight>()
-            || child_ref.contains::<crate::piles::CarryVisual>()
-        {
-            continue;
-        }
-        copy(world, child, Some(id));
-    }
-    id
-}
 
 #[cfg(test)]
 mod tests {
@@ -467,5 +340,64 @@ mod tests {
         assert_eq!(rebound.impact_angle, Some(at_hit));
         assert!((rebound.age - 0.05).abs() < 1e-4);
         assert!(attack(&s, at(RESOLVE + rebound_end()) + 0.1, false).is_none());
+    }
+
+    /// Each joint of a body, depth first, by kind and transform.
+    fn joints(world: &World, entity: Entity, out: &mut Vec<String>) {
+        if let Some(part) = world.get::<Part>(entity) {
+            out.push(format!("{:?} {:?}", part.kind, world.get::<Transform>(entity).unwrap()));
+        }
+        for child in world.get::<Children>(entity).map_or_else(Vec::new, |c| c.iter().collect()) {
+            joints(world, child, out);
+        }
+    }
+
+    #[test]
+    fn remote_bodies_pose_like_the_local_player() {
+        let options = crate::control::Options { simulation: true, ..default() };
+        let hub = crate::control::Hub::new(options.clone()).unwrap();
+        let scenes = crate::assets::SceneLibrary::new();
+        let mut app = crate::test_app(options, scenes, hub, crate::flow::Launch::single_player(0));
+        crate::start_world(&mut app);
+        let world = app.world_mut();
+        let player = world.query_filtered::<Entity, With<Player>>().single(world).unwrap();
+        let pack = world.resource::<crate::scene_view::SceneView>().pack.clone();
+        let remote = crate::scene::spawn_remote_player(world, &pack);
+        let root = *world.get::<Transform>(player).unwrap();
+        *world.get_mut::<Transform>(remote).unwrap() = root;
+        // Both bodies start at rest: the local one has run a few frames.
+        let parts: Vec<_> = world.query::<(Entity, &Part)>().iter(world).map(|(e, p)| (e, p.rest)).collect();
+        for (entity, rest) in parts {
+            *world.get_mut::<Transform>(entity).unwrap() = rest;
+        }
+        let mut rest = Vec::new();
+        joints(world, player, &mut rest);
+        // Mid-stride at a run, so the planted-foot solver runs too.
+        let pose = Pose {
+            motion: crate::character::motion_profile(&pack),
+            stride: 1.3,
+            speed: 1.2,
+            turn: 0.2,
+            aim_yaw: 0.3,
+            breathe: 0.01,
+            step_pitch: 0.0,
+            airborne: false,
+            jump: None,
+            attack: None,
+            dig: None,
+        };
+        assert!(pose.motion.plant_feet);
+        let mut state = bevy::ecs::system::SystemState::<(crate::character::Joints, Query<&Children>)>::new(world);
+        let (mut parts, children) = state.get_mut(world).unwrap();
+        for body in [player, remote] {
+            crate::character::pose_body(root, pose, |_| Some(root.translation.y), false, 1.0 / 60.0, None,
+                children.iter_descendants(body), &mut parts);
+        }
+        let (mut local, mut other) = (Vec::new(), Vec::new());
+        joints(world, player, &mut local);
+        joints(world, remote, &mut other);
+        assert_eq!(local.len(), 18);
+        assert_eq!(local, other);
+        assert_ne!(local, rest);
     }
 }

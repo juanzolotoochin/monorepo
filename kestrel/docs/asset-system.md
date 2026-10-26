@@ -35,7 +35,7 @@ Each row below is a **different schema**. A path is an example source file, not 
 | `assets/prefabs/ore_small.ron` | `Boulder(...)` | One generator recipe: shape parameters, not placement. |
 | `assets/levels/boulder_lab.ron` | `Scene(..., instances: [...])` | Placement of prefab IDs in a scene. |
 | `assets/styles/combat.ron` | `Style(..., materials: [...], shape_groups: [...], skins: [...])` | A scene's named materials, reusable shapes, actor parts, and skins. |
-| `content/data/character/ghoul.ron` | `(sim: (...), view: ())` | Rules for one character kind; see its [complete schema](character-definition.md). |
+| `content/data/character/ghoul.ron` | `(sim: (...), view: (skin: "ghoul"))` | Rules for one character kind; see its [complete schema](character-definition.md). |
 
 The `assets/` paths above are under `kestrel/app/`. Bazel connects the recipe and palette into a prefab, then connects prefabs, a scene layout, and an optional style into a scene pack. A RON file does not import another one by itself.
 
@@ -92,7 +92,7 @@ These groups are reusable **within one style**. They have no independent file of
 
 A skin assigns meshes to named rig parts and declares a motion family: `Biped`, `Quadruped`, `CubeRoll`, `Vehicle`, `Machine`, `Turret`, or `Static`. The runtime rig poses those parts using the selected family's procedural motion. `Biped` expects left and right leg parts and uses their pivots and mesh bounds for gait and foot contact; `CubeRoll(edge: ...)` expects a body centered half an edge above the floor. Walk, run, jump, and attack previews sample pose functions; skins do not contain authored keyframe clips. The [cube walkthrough](asset-walkthrough.md#what-biped-expects) shows both motion contracts; the [animation guide](character-animation.md) explains how poses and gameplay actions meet.
 
-An animated skin is not automatically a gameplay character. A cart may use vehicle motion, for example, without using the character-definition schema. Conversely, a character's gameplay definition specifies movement, health, and behavior but currently has an empty `view` section. See [character definitions](character-definition.md) for that schema and its limits.
+An animated skin is not automatically a gameplay character. A cart may use vehicle motion, for example, without using the character-definition schema. Conversely, a character definition specifies movement, health, and behavior, and its `view` names the skin that draws it; each scene's style supplies that skin. See [character definitions](character-definition.md) for that schema and its limits.
 
 ## Inspecting the result
 

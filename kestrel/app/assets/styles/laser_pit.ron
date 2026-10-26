@@ -1,7 +1,6 @@
 Style(id: "laser-pit", actor_name: Some("BLACKOUT HALL FIGHTER"),
     actor_weapon: Some(Laser), weapon_name: "PULSE LASER",
     actor_voxel_size: Some(0.05),
-    character_motion: (motion_style: Natural, plant_feet: true),
     materials: [
         (name: "stone", color: (0.18, 0.20, 0.22), emissive: (0.0, 0.0, 0.0), metallic: 0.06, roughness: 0.82, impact: Stone),
         (name: "floor_joint", color: (0.11, 0.12, 0.15), emissive: (0.0, 0.0, 0.0), metallic: 0.06, roughness: 0.9, impact: Stone),

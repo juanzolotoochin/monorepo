@@ -148,12 +148,12 @@ sim: (
     movement: (walk: 3.8, run: 5.6),
     // avatar contains acceleration and attack timing.
 ),
-view: (),
+view: (actor: "exosuit"),
 ```
 
-This is an excerpt, not a complete character file; [character definitions](character-definition.md) gives the full schema. The scene chooses its actor style, while the character file chooses gameplay behavior. The `view` section is empty today, so a character kind does not directly name a skin. Giving a skin `motion: Biped` does not by itself make it controllable.
+This is an excerpt, not a complete character file; [character definitions](character-definition.md) gives the full schema. The scene chooses its actor style, while the character file chooses gameplay behavior and, in `view.motion`, how the rig poses. A player's `view` names no skin; it names the actor its body is built from, `view: (actor: "exosuit")`, and this scene's style re-dresses that body's joints. Other characters, such as `ghoul`, name the skin that draws them with `view: (skin: "ghoul")`. Giving a skin `motion: Biped` does not by itself make it controllable.
 
-**CUBE KNIGHT** also shows a sword because the player rig supplies one when the style has no authored `Weapon` part. That sword is built from geometry in the player rig code; it is not a separate RON asset in this scene. Other styles can author a `Weapon` part, and a style can map weapon types to skin meshes, but there is no standalone sword asset that styles can reference across files yet. The body groups above are reusable within this style; weapon reuse across styles remains a gap in the asset system.
+**CUBE KNIGHT** also shows a sword because the player rig supplies one when the style has no authored `Weapon` part. That sword is the `Weapon` joint of the built-in exosuit actor (`kestrel/app/actors/exosuit.ron`), not an asset of this scene. Other styles can author a `Weapon` part, and a style can map weapon types to skin meshes, but there is no standalone sword asset that styles can reference across files yet. The body groups above are reusable within this style; weapon reuse across styles remains a gap in the asset system.
 
 ![Cube Knight playable actor with the built-in sword](asset-guide-player.png)
 

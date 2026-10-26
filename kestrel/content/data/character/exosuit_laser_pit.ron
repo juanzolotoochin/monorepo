@@ -1,0 +1,8 @@
+// The laser pit's exosuit: the same suit, with a planted-foot gait.
+(
+    base: "exosuit",
+    sim: (),
+    view: (
+        motion: (motion_style: Natural, plant_feet: true),
+    ),
+)

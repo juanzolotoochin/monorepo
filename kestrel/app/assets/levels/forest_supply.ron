@@ -39,24 +39,24 @@
 (id: "mill_iron", from: "ore", to: "mill_input", item: "iron", target: 8, priority: 1),
 (id: "ammunition", from: "mill_output", to: "turret_ammo", item: "arrow", target: 20, priority: 1)
 ], agents: [
-(id: "forester", label: "FORESTER", skin: "worker", character: "worker", position: (-6.67, -1.725), capacity: 2, links: [
+(id: "forester", label: "FORESTER", character: "worker", position: (-6.67, -1.725), capacity: 2, links: [
 "factory_lumber",
 "gather_lumber"
 ], cargo_anchor: (0.0, 0.65, -0.19), equipment: None),
-(id: "lumberjack", label: "LUMBERJACK", skin: "worker", character: "worker", position: (-9.0, -2.0), capacity: 2, links: [
+(id: "lumberjack", label: "LUMBERJACK", character: "worker", position: (-9.0, -2.0), capacity: 2, links: [
 "gather_lumber"
 ], cargo_anchor: (0.0, 0.65, -0.19), equipment: None),
-(id: "ironmonger", label: "IRONMONGER", skin: "worker", character: "worker", position: (-5.405, 3.45), capacity: 3, links: [
+(id: "ironmonger", label: "IRONMONGER", character: "worker", position: (-5.405, 3.45), capacity: 3, links: [
 "factory_iron",
 "mill_iron"
 ], cargo_anchor: (0.0, 0.65, -0.19), equipment: None),
-(id: "runner", label: "RUNNER", skin: "worker", character: "runner", position: (1.15, -1.725), capacity: 5, links: [
+(id: "runner", label: "RUNNER", character: "runner", position: (1.15, -1.725), capacity: 5, links: [
 "ammunition"
 ], cargo_anchor: (0.0, 0.65, -0.19), equipment: None),
-(id: "bramble", label: "BRAMBLE", skin: "ox", character: "ox", position: (-4.6, 0.0), capacity: 3, links: [
+(id: "bramble", label: "BRAMBLE", character: "ox", position: (-4.6, 0.0), capacity: 3, links: [
 "mill_lumber"
 ], cargo_anchor: (0.0, 1.08, -0.15), cargo_layout: (columns: 2, rows: 2, spacing: (0.22, 0.10, 0.15), scale: 0.8, roll: 0.0), equipment: Some((depot: "cart_yard", item: "cart", skin: "cart", capacity: 9, speed_factor: 0.85, offset: (0.0, 0.0, -1.85), cargo_anchor: (0.0, 0.56, 0.0), cargo_layout: (columns: 2, rows: 3, spacing: (0.40, 0.12, 0.24), scale: 1.0, roll: 0.0)))),
-(id: "player", label: "YOU", skin: "worker", character: "exosuit", position: (1.15, -1.15), capacity: 8, links: [
+(id: "player", label: "YOU", character: "exosuit", position: (1.15, -1.15), capacity: 8, links: [
 
 ], cargo_anchor: (0.0, 0.65, -0.19), equipment: None, controlled: true)
 ], producers: [
@@ -75,7 +75,7 @@
 ], defenders: [
 (id: "watchtower", label: "WOODLAND BALLISTA", description: "An automatic border defense. Fires supplied arrows at approaching ghouls; without ammunition the camp is exposed.", position: (5.52, 2.3), skin: "turret", depot: "turret_ammo", ammo: "arrow", range: 3.8, period: 0.7, damage: 1, projectile_speed: 8.0, radius: 0.5)
 ], waves: [
-(id: "ghouls_0", position: (9.5, 10.4), target: (-1.0, 0.5), skin: "ghoul", character: "ghoul_forest", first: 10.0, every: 9.0, count: 20),
-(id: "ghouls_1", position: (10.1, 9.9), target: (-1.0, 0.5), skin: "ghoul", character: "ghoul_forest", first: 10.5, every: 9.0, count: 20),
-(id: "ghouls_2", position: (10.7, 9.4), target: (-1.0, 0.5), skin: "ghoul", character: "ghoul_forest", first: 11.0, every: 9.0, count: 20)
+(id: "ghouls_0", position: (9.5, 10.4), target: (-1.0, 0.5), character: "ghoul_forest", first: 10.0, every: 9.0, count: 20),
+(id: "ghouls_1", position: (10.1, 9.9), target: (-1.0, 0.5), character: "ghoul_forest", first: 10.5, every: 9.0, count: 20),
+(id: "ghouls_2", position: (10.7, 9.4), target: (-1.0, 0.5), character: "ghoul_forest", first: 11.0, every: 9.0, count: 20)
 ], base_health: 20, extent: 12.0)

@@ -393,16 +393,6 @@ mod tests {
             .fold(f32::NEG_INFINITY, f32::max);
         assert!(blade_tip > 0.8, "voxel sword blade was lost during baking");
         assert_eq!(glade.scene.player, "exosuit_moonlit");
-        for pack in &library.scenes {
-            let motion = pack.scene.style.as_ref().map(|s| s.character_motion).unwrap_or_default();
-            let player = crate::lockstep::builtin_character(&pack.scene.player);
-            let close = |view: f32, sim: fx::Fx| (view - crate::lockstep::view_f32(sim)).abs() < 1e-3;
-            assert!(
-                close(motion.walk_speed, player.movement.walk) && close(motion.run_speed, player.movement.run),
-                "{}: the style poses other speeds than its player moves at",
-                pack.scene.id
-            );
-        }
         assert_eq!(glade.scene.instances.len(), 7);
         assert!(glade.environment.as_ref().is_some_and(|environment| environment.walkable.len() >= 14));
         let Geometry::Baked(rock) = &glade.prefabs[0].geometry else { panic!("glade rock should be baked"); };

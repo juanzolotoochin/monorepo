@@ -1,7 +1,7 @@
 Scene(
     id: "laser-pit",
     name: "BLACKOUT HALL / PERFORMANCE FLOOR",
-    player: "exosuit",
+    player: "exosuit_laser_pit",
     features: [CameraFollow],
     spawn: (0.0, 0.0, 11.5),
     industrial: false,
