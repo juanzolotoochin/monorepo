@@ -12,7 +12,7 @@
 use std::collections::VecDeque;
 
 use bevy::prelude::Resource;
-use fx::FxVec2;
+use fx::{Fx, FxVec2};
 use sim::settlement::{PredictedLaser, ReplayedStrike};
 
 /// A drawn shot the confirmed world is this many ticks past without firing
@@ -40,6 +40,25 @@ struct Drawn {
     shot: PredictedLaser,
     /// Frame time it was drawn at, in seconds.
     at: f64,
+    /// The `Attack` command's aim and muzzle, which tell its strike apart
+    /// from another command's.
+    aim: FxVec2,
+    muzzle: [Fx; 3],
+}
+
+impl Drawn {
+    fn from_same_command(&self, strike: &ReplayedStrike) -> bool {
+        (self.aim, self.muzzle) == (strike.aim, strike.muzzle)
+    }
+}
+
+/// What a frame's replay changed.
+#[derive(Debug, Default, PartialEq)]
+pub struct Predicted {
+    /// Shots to draw now.
+    pub new: Vec<NewShot>,
+    /// Drawn shots the replay no longer resolves.
+    pub dropped: Vec<Outcome>,
 }
 
 /// A shot to draw now.
@@ -98,25 +117,38 @@ impl LaserPrediction {
     }
 
     /// The strikes the replay resolved between the confirmed tick and the
-    /// drawn one, oldest first. None of them has been confirmed, so the
-    /// first laser ones are the drawn shots still outstanding, in order (an
-    /// input the host moved later moves its shot's tick); the rest are new
-    /// and drawn now, aimed by `aim`.
-    pub fn predict(&mut self, strikes: &[ReplayedStrike], now: f64, aim: impl Fn(&ReplayedStrike) -> Option<PredictedLaser>) -> Vec<NewShot> {
-        let mut new = Vec::new();
+    /// drawn one, oldest first. None of them has been confirmed, so a laser
+    /// one is the next drawn shot still outstanding from the same command,
+    /// if any (an input the host moved later moves its shot's tick); the
+    /// rest are new and drawn now, aimed by `aim`. Drawn shots a strike
+    /// passes over no longer fire in the replay (its gating changed): inputs
+    /// apply in the order they were sent, so an older command's shot can't
+    /// come after. They are given up. Two commands with exactly the same aim
+    /// and muzzle can't be told apart; the older shot is taken.
+    pub fn predict(&mut self, strikes: &[ReplayedStrike], now: f64, aim: impl Fn(&ReplayedStrike) -> Option<PredictedLaser>) -> Predicted {
+        let mut predicted = Predicted::default();
+        // Outstanding shots before this are the strikes' so far.
+        let mut matched = 0;
         let lasers = strikes.iter().filter(|strike| strike.weapon == content::scenario::Weapon::Laser);
-        for (index, strike) in lasers.enumerate() {
-            if let Some(drawn) = self.outstanding.get_mut(index) {
-                drawn.tick = strike.tick;
+        for strike in lasers {
+            let same = self.outstanding.iter().skip(matched).position(|drawn| drawn.from_same_command(strike));
+            let passed = same.unwrap_or(self.outstanding.len() - matched);
+            for drawn in self.outstanding.drain(matched..matched + passed) {
+                predicted.dropped.push(Outcome::NeverFired { predicted: drawn.shot.to });
+            }
+            if same.is_some() {
+                self.outstanding[matched].tick = strike.tick;
+                matched += 1;
                 continue;
             }
             let Some(shot) = aim(strike) else { continue };
             let id = self.next_id;
             self.next_id += 1;
-            self.outstanding.push_back(Drawn { id, tick: strike.tick, shot, at: now });
-            new.push(NewShot { id, tick: strike.tick, shot });
+            self.outstanding.push_back(Drawn { id, tick: strike.tick, shot, at: now, aim: strike.aim, muzzle: strike.muzzle });
+            matched += 1;
+            predicted.new.push(NewShot { id, tick: strike.tick, shot });
         }
-        new
+        predicted
     }
 }
 
@@ -124,7 +156,6 @@ impl LaserPrediction {
 mod tests {
     use super::*;
     use content::scenario::Weapon;
-    use fx::Fx;
 
     fn strike(tick: u64, weapon: Weapon) -> ReplayedStrike {
         ReplayedStrike { tick, weapon, aim: FxVec2::new(Fx::ONE, Fx::ZERO), muzzle: [Fx::ZERO; 3], origin: FxVec2::ZERO, height: Fx::ZERO }
@@ -142,16 +173,16 @@ mod tests {
         let sword = strike(12, Weapon::Sword);
         // The replay runs the same ticks every frame; the shot is new once.
         let first = lasers.predict(&[sword.clone(), strike(14, Weapon::Laser)], 1.0, ending_at(5));
-        assert_eq!(first.len(), 1);
-        assert_eq!(first[0].tick, 14);
-        assert!(lasers.predict(&[sword, strike(14, Weapon::Laser)], 1.1, ending_at(5)).is_empty());
+        assert_eq!(first.new.len(), 1);
+        assert_eq!(first.new[0].tick, 14);
+        assert!(lasers.predict(&[sword, strike(14, Weapon::Laser)], 1.1, ending_at(5)).new.is_empty());
         // A second press, then the first one is confirmed where it was drawn.
-        assert_eq!(lasers.predict(&[strike(14, Weapon::Laser), strike(22, Weapon::Laser)], 1.2, ending_at(6)).len(), 1);
+        assert_eq!(lasers.predict(&[strike(14, Weapon::Laser), strike(22, Weapon::Laser)], 1.2, ending_at(6)).new.len(), 1);
         lasers.begin(1, 0);
         let fired = lasers.confirm(FxVec2::new(Fx::from_int(5), Fx::ZERO), 1.25).unwrap();
         assert!(matches!(fired, Outcome::Fired { exact: true, lead, .. } if (lead - 0.25).abs() < 1e-9));
         assert_eq!(lasers.confirmed, [Some(0)]);
-        assert!(lasers.predict(&[strike(22, Weapon::Laser)], 1.3, ending_at(6)).is_empty(), "the second shot is still drawn");
+        assert!(lasers.predict(&[strike(22, Weapon::Laser)], 1.3, ending_at(6)).new.is_empty(), "the second shot is still drawn");
         // It ends elsewhere: a misprediction, still drawn once.
         let fired = lasers.confirm(FxVec2::new(Fx::from_int(4), Fx::ZERO), 1.4).unwrap();
         assert!(matches!(fired, Outcome::Fired { exact: false, .. }));
@@ -166,11 +197,11 @@ mod tests {
     fn a_late_input_moves_the_drawn_shot_instead_of_drawing_another() {
         let mut lasers = LaserPrediction::default();
         lasers.begin(1, 0);
-        assert_eq!(lasers.predict(&[strike(30, Weapon::Laser)], 0.0, ending_at(5)).len(), 1);
+        assert_eq!(lasers.predict(&[strike(30, Weapon::Laser)], 0.0, ending_at(5)).new.len(), 1);
         // The confirmed world passed tick 30 without the input: the replay
         // applies it on each next tick, so the shot keeps moving.
         for tick in 31..60 {
-            assert!(lasers.predict(&[strike(tick + 2, Weapon::Laser)], 0.0, ending_at(5)).is_empty());
+            assert!(lasers.predict(&[strike(tick + 2, Weapon::Laser)], 0.0, ending_at(5)).new.is_empty());
             assert!(lasers.expire(tick).is_empty(), "tick {tick}");
         }
         assert!(matches!(lasers.confirm(FxVec2::new(Fx::from_int(5), Fx::ZERO), 1.0), Some(Outcome::Fired { exact: true, .. })));
@@ -181,16 +212,16 @@ mod tests {
         let mut lasers = LaserPrediction::default();
         lasers.begin(1, 0);
         let drawn = lasers.predict(&[strike(30, Weapon::Laser)], 0.0, ending_at(5));
-        assert_eq!(drawn.len(), 1);
+        assert_eq!(drawn.new.len(), 1);
         // The confirmed world never fires it; the replay stops showing it.
         for tick in 25..=30 + TIMEOUT_TICKS {
-            assert!(lasers.predict(&[], 0.0, ending_at(5)).is_empty());
+            assert!(lasers.predict(&[], 0.0, ending_at(5)).new.is_empty());
             assert!(lasers.expire(tick).is_empty(), "given up early, on tick {tick}");
         }
         assert_eq!(lasers.expire(31 + TIMEOUT_TICKS), [Outcome::NeverFired { predicted: FxVec2::new(Fx::from_int(5), Fx::ZERO) }]);
         assert!(lasers.expire(200).is_empty(), "logged once");
         // The next shot is drawn and matched as usual.
-        assert_eq!(lasers.predict(&[strike(50, Weapon::Laser)], 2.0, ending_at(7)).len(), 1);
+        assert_eq!(lasers.predict(&[strike(50, Weapon::Laser)], 2.0, ending_at(7)).new.len(), 1);
         assert!(matches!(lasers.confirm(FxVec2::new(Fx::from_int(7), Fx::ZERO), 2.2), Some(Outcome::Fired { exact: true, .. })));
     }
 
@@ -198,11 +229,43 @@ mod tests {
     fn another_world_or_avatar_starts_over() {
         let mut lasers = LaserPrediction::default();
         lasers.begin(1, 0);
-        assert_eq!(lasers.predict(&[strike(30, Weapon::Laser)], 0.0, ending_at(5)).len(), 1);
+        assert_eq!(lasers.predict(&[strike(30, Weapon::Laser)], 0.0, ending_at(5)).new.len(), 1);
         lasers.begin(2, 0);
         assert_eq!(lasers.confirm(FxVec2::ZERO, 1.0), None);
-        assert_eq!(lasers.predict(&[strike(40, Weapon::Laser)], 0.0, ending_at(5)).len(), 1);
+        assert_eq!(lasers.predict(&[strike(40, Weapon::Laser)], 0.0, ending_at(5)).new.len(), 1);
         lasers.begin(2, 1);
         assert!(lasers.expire(1000).is_empty());
+    }
+
+    #[test]
+    fn a_shot_that_drops_out_of_the_replay_does_not_take_the_next_ones_place() {
+        let mut lasers = LaserPrediction::default();
+        lasers.begin(1, 0);
+        let aimed = |tick, y| ReplayedStrike { aim: FxVec2::new(Fx::ONE, Fx::from_int(y)), ..strike(tick, Weapon::Laser) };
+        assert_eq!(lasers.predict(&[aimed(30, 0)], 0.0, ending_at(5)).new.len(), 1);
+        // The replay no longer fires it (its gating changed), and the next
+        // press resolves before it would time out: that one is drawn, and
+        // the first given up.
+        let predicted = lasers.predict(&[aimed(35, 1)], 0.1, ending_at(7));
+        assert_eq!(predicted.new, [NewShot { id: 1, tick: 35, shot: ending_at(7)(&aimed(35, 1)).unwrap() }]);
+        assert_eq!(predicted.dropped, [Outcome::NeverFired { predicted: FxVec2::new(Fx::from_int(5), Fx::ZERO) }]);
+        assert_eq!(lasers.predict(&[aimed(35, 1)], 0.2, ending_at(7)), Predicted::default());
+        // Its confirmation is matched to it, not to the first.
+        assert!(matches!(lasers.confirm(FxVec2::new(Fx::from_int(7), Fx::ZERO), 0.3), Some(Outcome::Fired { exact: true, .. })));
+        assert_eq!(lasers.confirmed, [Some(1)]);
+        assert!(lasers.expire(100).is_empty(), "given up once");
+
+        // A shot the host moved later keeps its command's aim: still one shot.
+        assert_eq!(lasers.predict(&[aimed(50, 2), aimed(60, 3)], 1.0, ending_at(5)).new.len(), 2);
+        let moved = lasers.predict(&[aimed(52, 2), aimed(62, 3)], 1.1, ending_at(5));
+        assert_eq!(moved, Predicted::default());
+        // The first of two drops out: only it is given up.
+        let predicted = lasers.predict(&[aimed(62, 3)], 1.2, ending_at(5));
+        assert!(predicted.new.is_empty());
+        assert_eq!(predicted.dropped.len(), 1);
+        assert!(lasers.expire(70).is_empty());
+        lasers.begin(1, 0);
+        assert!(matches!(lasers.confirm(FxVec2::new(Fx::from_int(5), Fx::ZERO), 1.3), Some(Outcome::Fired { exact: true, .. })));
+        assert_eq!(lasers.confirmed, [Some(3)]);
     }
 }

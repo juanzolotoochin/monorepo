@@ -1019,6 +1019,12 @@ fn predict_lasers(
         }
     }
     outcomes.extend(lasers.expire(world.tick()));
+    let mut new = Vec::new();
+    if let (Some(drawn), Some(settlement)) = (drawn, world.settlement()) {
+        let predicted = lasers.predict(&drawn.strikes, now, |strike| settlement.predict_laser(agent, strike, world.terrain()));
+        outcomes.extend(predicted.dropped);
+        new = predicted.new;
+    }
     let at = web_time::Instant::now();
     for outcome in outcomes {
         telemetry.network.laser_outcome(at, match outcome {
@@ -1031,8 +1037,7 @@ fn predict_lasers(
             Outcome::NeverFired { predicted } => crate::telemetry::LaserOutcome { predicted: end(predicted), confirmed: None, lead: None, exact: false },
         });
     }
-    let (Some(drawn), Some(settlement)) = (drawn, world.settlement()) else { return };
-    for shot in lasers.predict(&drawn.strikes, now, |strike| settlement.predict_laser(agent, strike, world.terrain())) {
+    for shot in new {
         pending.0.push(crate::effects::LaserShot {
             agent,
             target: end(shot.shot.to),

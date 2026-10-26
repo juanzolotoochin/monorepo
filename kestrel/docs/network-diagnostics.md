@@ -138,7 +138,9 @@ shots in order and not drawn again. If one ends elsewhere, the drawn beam
 stays and the results apply where the confirmed shot hit; that is logged as a
 `laser` misprediction. A drawn shot the confirmed world is 10 ticks past
 without firing (the swing didn't happen there, or the avatar died) is given
-up and logged the same way. A confirmed shot with nothing drawn for it (fired
+up and logged the same way. So is one the replay stops firing once a later
+shot resolves: the replay's shots are told apart by their command's aim and
+muzzle, so a shot the host moved later stays the same shot. A confirmed shot with nothing drawn for it (fired
 while a click-to-move was pending, for example) is drawn when it arrives.
 Other players' shots are drawn when confirmed.
 
