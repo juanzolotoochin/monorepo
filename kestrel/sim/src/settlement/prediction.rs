@@ -6,7 +6,7 @@ use content::scenario::Weapon;
 use super::action::Action;
 use super::avatar::{self, character_of};
 use super::combat::{strike_event, Event};
-use super::{AgentIx, AgentState, Settlement};
+use super::{AgentIx, AgentState, Role, Settlement};
 use crate::messages::{ActionMessages, Messages};
 use crate::terrain::Terrain;
 use crate::CommandKind;
@@ -37,7 +37,7 @@ impl Settlement {
     /// Starts replaying `agent` from this settlement, whose next tick is
     /// `tick`. `None` unless `agent` is a player avatar.
     pub fn replay_avatar<'a>(&'a self, agent: AgentIx, tick: u64, terrain: &'a Terrain) -> Option<AvatarReplay<'a>> {
-        let state = self.agents.get(agent as usize).filter(|a| a.controlled)?.clone();
+        let state = self.agents.get(agent as usize).filter(|a| a.avatar().is_some())?.clone();
         Some(AvatarReplay { settlement: self, terrain, me: agent, state, tick, events: Vec::new() })
     }
 }
@@ -93,7 +93,8 @@ impl<'a> AvatarReplay<'a> {
     pub fn step(&mut self) {
         let (s, terrain, tick) = (self.settlement, self.terrain, self.tick);
         let def = character_of(&s.characters, &self.state);
-        avatar::self_update(&mut self.state, self.me, tick, terrain, None, def);
+        let AgentState { body, role: Role::Avatar(state), .. } = &mut self.state else { unreachable!("replays start from avatars") };
+        avatar::self_update(body, state, self.me, tick, terrain, None, def);
         let mut out = Messages::default();
         s.read_avatar(self.me, &self.state, tick, terrain, &mut out);
         // Manual transfer units and pile steps show nothing until stage 5
@@ -103,10 +104,12 @@ impl<'a> AvatarReplay<'a> {
         // As `Settlement::strike` would, assuming the swing hits nothing (a
         // bow shot always counts as one hit).
         if let Some(weapon) = out.strike.first().map(|strike| strike.weapon) {
-            a.attack_ready = tick + s.tuning(weapon).cooldown();
+            if let Some(state) = a.avatar_mut() {
+                state.attack_ready = tick + s.tuning(weapon).cooldown();
+            }
             avatar::swing_resolved(a, tick, u32::from(weapon == Weapon::Bow), def);
         }
-        if avatar::alive(a) {
+        if a.body.alive() {
             avatar::start_queued(a, tick, def);
         }
         avatar::finish_dig(a, tick);
@@ -231,9 +234,9 @@ mod tests {
     /// other players' positions and heights, who is alive, and which cover
     /// stands.
     fn targets(settlement: &Settlement, terrain: &Terrain, striker: u16) -> (Vec<(FxVec2, Fx)>, Vec<bool>, Vec<bool>) {
-        let others = || settlement.agents.iter().enumerate().filter(|&(i, a)| i != striker as usize && a.controlled).map(|(_, a)| a);
+        let others = || settlement.agents.iter().enumerate().filter(|&(i, a)| i != striker as usize && a.avatar().is_some()).map(|(_, a)| a);
         (
-            others().map(|a| (a.body.position, a.avatar.height)).collect(),
+            others().map(|a| (a.body.position, a.avatar().unwrap().height)).collect(),
             others().map(|a| a.body.health > 0).collect(),
             terrain.destructibles.iter().map(|piece| piece.health > 0).collect(),
         )
@@ -251,7 +254,7 @@ mod tests {
     /// count changes nothing else for a laser.
     fn unhit(a: &AgentState) -> AgentState {
         let mut a = a.clone();
-        if let Some(swing) = a.avatar.swing.as_mut().filter(|swing| swing.weapon == Weapon::Laser) {
+        if let Some(swing) = a.avatar_mut().and_then(|avatar| avatar.swing.as_mut()).filter(|swing| swing.weapon == Weapon::Laser) {
             swing.hits = 0;
         }
         a
@@ -324,8 +327,8 @@ mod tests {
                 let context = || format!("{player}, seed {seed}: replayed from tick {}, tick {tick}", first + start as u64);
                 assert!(replay.step_with(&schedule[i]));
                 assert_eq!(unhit(replay.state()), unhit(&states[i + 1]), "{}: the avatar differs ({:?})", context(), &schedule[start..=i]);
-                swings += usize::from(replay.state().avatar.swing.as_ref().is_some_and(|s| s.resolved));
-                routed += usize::from(matches!(replay.state().avatar.intent, Some(Intent::GoTo { .. })) && !replay.state().body.route.is_empty());
+                swings += usize::from(replay.state().avatar().unwrap().swing.as_ref().is_some_and(|s| s.resolved));
+                routed += usize::from(matches!(replay.state().avatar().unwrap().intent, Some(Intent::GoTo { .. })) && !replay.state().body.route.is_empty());
                 let (mine, real) = (replay.events(), events[i].as_slice());
                 assert_eq!(keys(mine), keys(real), "{}: predicted {mine:?}, simulated {real:?}", context());
                 let before = targets(settlement, terrain, agent);
@@ -394,18 +397,18 @@ mod tests {
         loop {
             step(&mut sim, &mut replay);
             let real = &sim.world().settlement().unwrap().agents[agent as usize];
-            if real.avatar.dig.is_none() {
+            if real.avatar().unwrap().dig.is_none() {
                 break;
             }
             assert_eq!(replay.state(), real, "tick {}: a stop or an attack doesn't end a dig", sim.world().tick() - 1);
         }
-        assert!(sim.world().tick() > 3 && replay.state().avatar.dig.is_none());
+        assert!(sim.world().tick() > 3 && replay.state().avatar().unwrap().dig.is_none());
         // The layer came out: on the next tick the simulation lowers the
         // avatar into the pit; the replay never changes the ground.
         step(&mut sim, &mut replay);
         let real = &sim.world().settlement().unwrap().agents[agent as usize];
         assert_eq!(replay.state().body.position, real.body.position);
-        assert!(real.avatar.height < replay.state().avatar.height);
+        assert!(real.avatar().unwrap().height < replay.state().avatar().unwrap().height);
     }
 
     #[test]
@@ -424,7 +427,7 @@ mod tests {
         assert!(replay.apply(&piano));
         let other = CommandKind::Jetpack { agent: agent + 1, enabled: true };
         assert!(replay.apply(&other));
-        assert!(!replay.state().avatar.flight.requested);
+        assert!(!replay.state().avatar().unwrap().flight.requested);
         assert!(settlement.replay_avatar(agent + 1, 0, world.terrain()).is_none());
     }
 
@@ -440,7 +443,7 @@ mod tests {
             replay.step();
             assert_eq!(replay.events(), []);
         }
-        let swing = replay.state().avatar.swing.as_ref();
+        let swing = replay.state().avatar().unwrap().swing.as_ref();
         assert!(swing.is_some_and(|s| s.weapon == Weapon::Sword && s.resolved), "the sword swing resolved");
     }
 
@@ -473,9 +476,9 @@ mod tests {
             assert_eq!(replay.events(), real, "tick {tick}");
             shots.extend(real.iter().map(|event| (tick, event.prediction())));
             if tick == first + 30 {
-                let swing = sim.world().settlement().unwrap().agents[agent as usize].avatar.swing.clone().unwrap();
+                let swing = sim.world().settlement().unwrap().agents[agent as usize].avatar().unwrap().swing.clone().unwrap();
                 assert_eq!((swing.started, swing.pressed()), (first + 28, first + 24));
-                assert_eq!(replay.state().avatar.swing, Some(swing));
+                assert_eq!(replay.state().avatar().unwrap().swing, Some(swing));
             }
         }
         let fired = |delay: u64, pressed: u64| (first + delay, Prediction::Predict { agent, started: first + pressed, on_miss: OnMiss::Keep });

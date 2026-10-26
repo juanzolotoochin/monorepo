@@ -346,13 +346,14 @@ impl Settlement {
     fn laser_player(&self, shooter: usize, from_height: Fx, origin: FxVec2, forward: FxVec2, reach: Fx, terrain: &Terrain) -> Option<(Fx, usize)> {
         let end = origin + forward * reach;
         self.agents.iter().enumerate().filter_map(|(index, agent)| {
-            if index == shooter || !agent.controlled || agent.body.health == 0 || agent.body.max_health == 0 {
+            let avatar = agent.avatar()?;
+            if index == shooter || agent.body.health == 0 || agent.body.max_health == 0 {
                 return None;
             }
             let radius = super::avatar::character_of(&self.characters, agent).body.radius;
             let fraction = segment_disc(origin, end, agent.body.position, radius)?;
             (terrain.clear(origin, agent.body.position, Fx::from_ratio(1, 50))
-                && Self::laser_clear_ground(terrain, origin, from_height, agent.body.position, agent.avatar.height))
+                && Self::laser_clear_ground(terrain, origin, from_height, agent.body.position, avatar.height))
                 .then_some((fraction, index))
         }).min_by_key(|(fraction, index)| (*fraction, *index))
     }
@@ -448,7 +449,7 @@ impl Settlement {
         }
         if self.player_health > 0 {
             for (i, a) in self.agents.iter().enumerate() {
-                if a.controlled && a.body.health > 0 {
+                if a.avatar().is_some() && a.body.health > 0 {
                     let mut out = Messages::default();
                     self.threats_in_reach(i as AgentIx, a, tick, terrain, &mut out);
                     if !out.is_empty() {
@@ -463,7 +464,7 @@ impl Settlement {
             result.push((d.position, out));
         }
         for (i, a) in self.agents.iter().enumerate() {
-            if a.controlled {
+            if a.avatar().is_some() {
                 let mut out = Messages::default();
                 self.read_avatar(i as AgentIx, a, tick, terrain, &mut out);
                 result.push((a.body.position, out));
@@ -482,16 +483,18 @@ impl Settlement {
     /// (`SWING_HEIGHT`). A player who lifted off during the windup is missed.
     fn swing_reaches(&self, t: &Threat, agent: AgentIx, terrain: &Terrain) -> bool {
         let (Some(attack), Some(a)) = (self.threat_attack(t), self.agents.get(agent as usize)) else { return false };
-        a.controlled && a.body.health > 0 && distance(t.position, a.body.position) <= attack.reach && self.within_swing_height(a, terrain)
+        a.avatar().is_some() && a.body.health > 0 && distance(t.position, a.body.position) <= attack.reach && self.within_swing_height(a, terrain)
     }
 
     /// Whether a player's feet are low enough for a threat's swing: at most
     /// `SWING_HEIGHT` above the ground under its body. Over a drop, the
     /// ground it last stood on counts.
     fn within_swing_height(&self, a: &super::AgentState, terrain: &Terrain) -> bool {
+        // Only avatars leave the ground.
+        let Some(avatar) = a.avatar() else { return true };
         let radius = super::avatar::character_of(&self.characters, a).body.radius;
-        let ground = terrain.footprint(a.body.position, radius).unwrap_or(a.avatar.flight.support);
-        a.avatar.height - ground <= SWING_HEIGHT
+        let ground = terrain.footprint(a.body.position, radius).unwrap_or(avatar.flight.support);
+        avatar.height - ground <= SWING_HEIGHT
     }
 
     /// Stage 3 for one hurtable player: every threat that could start a
@@ -560,17 +563,17 @@ impl Settlement {
         let hit = message.hit && self.player_health > 0 && self.agents[agent].body.health > 0;
         let killed = hit && self.hurt_player(agent, attack.damage, tick, terrain);
         if hit && !killed {
-            let a = &mut self.agents[agent];
-            let mut away = (a.body.position - from).normalize_or_zero();
+            let super::AgentState { body, role: super::Role::Avatar(avatar), .. } = &mut self.agents[agent] else { unreachable!("threats hit only avatars") };
+            let mut away = (body.position - from).normalize_or_zero();
             if away == FxVec2::ZERO {
                 away = nav::heading_vector(heading);
             }
-            a.avatar.dig = None;
-            let swinging = a.avatar.swing.as_ref().is_some_and(|s| s.weapon != Weapon::Laser);
+            avatar.dig = None;
+            let swinging = avatar.swing.as_ref().is_some_and(|s| s.weapon != Weapon::Laser);
             if swinging {
-                a.body.push += away * attack.knockback;
+                body.push += away * attack.knockback;
             } else {
-                a.body.velocity += away * attack.knockback;
+                body.velocity += away * attack.knockback;
             }
         }
         let damage = if hit { attack.damage } else { 0 };
@@ -725,12 +728,13 @@ impl Settlement {
     /// Applies a resolving strike. Returns how many threats it hit.
     pub(crate) fn strike(&mut self, tick: u64, message: Strike, terrain: &mut Terrain) -> u32 {
         let agent = message.agent as usize;
-        if self.agents[agent].attack_ready > tick {
+        let tuning = self.tuning(message.weapon).clone();
+        let Some(avatar) = self.agents[agent].avatar_mut() else { return 0 };
+        if avatar.attack_ready > tick {
             return 0;
         }
+        avatar.attack_ready = tick + tuning.cooldown();
         self.events.extend(strike_event(&message));
-        let tuning = self.tuning(message.weapon).clone();
-        self.agents[agent].attack_ready = tick + tuning.cooldown();
         let origin = message.origin;
         let forward = message.forward;
         if message.weapon == Weapon::Bow {
@@ -758,7 +762,7 @@ impl Settlement {
         if message.weapon == Weapon::Laser && message.targets.is_empty() && self.player_health > 0 {
             if let Some(to) = message.beam_end {
                 let hit = self.agents.iter().enumerate().position(|(index, target)| {
-                    index != agent && target.controlled && target.body.health > 0 && target.body.position == to
+                    index != agent && target.avatar().is_some() && target.body.health > 0 && target.body.position == to
                 });
                 if let Some(target) = hit {
                     self.hurt_player(target, tuning.damage, tick, terrain);

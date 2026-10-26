@@ -555,7 +555,7 @@ fn takeover_releases_outgoing_movement_and_thrust_in_both_directions() {
     // The controller flies and walks.
     game.pads().press(1, Button::RightBumper).left_stick(1, Vec2::Y);
     game.seconds(0.5);
-    assert!(game.avatar().avatar.flight.requested);
+    assert!(game.avatar().avatar().unwrap().flight.requested);
     // A key press takes over: the jetpack goes off before the keyboard's
     // walk applies, though RB is still held.
     let keys_before = game.commands().len();
@@ -566,7 +566,7 @@ fn takeover_releases_outgoing_movement_and_thrust_in_both_directions() {
     let walk = after.iter().position(is_move);
     assert!(off.is_some() && walk.is_some() && off < walk, "{after:?}");
     game.seconds(0.3);
-    assert!(!game.avatar().avatar.flight.requested, "no latched thrust after takeover");
+    assert!(!game.avatar().avatar().unwrap().flight.requested, "no latched thrust after takeover");
     // The held stick and RB are not deliberate: the keyboard keeps it.
     assert_eq!(game.input().owner(), Device::KeyboardMouse);
     // Back to the controller: the keyboard's walk stops (outgoing movement
@@ -643,7 +643,7 @@ fn pause_releases_direct_control_and_nothing_resumes_by_itself() {
     game.claim(1);
     game.pads().press(1, Button::RightBumper).left_stick(1, Vec2::Y);
     game.seconds(0.5);
-    assert!(game.avatar().avatar.flight.requested);
+    assert!(game.avatar().avatar().unwrap().flight.requested);
     // Pause while flying, walking and squeezing the trigger.
     game.pads().right_trigger(1, 1.0);
     game.pads().press(1, Button::Menu);
@@ -653,8 +653,8 @@ fn pause_releases_direct_control_and_nothing_resumes_by_itself() {
     let attacks = game.count(is_attack);
     game.seconds(0.5);
     assert_eq!(game.count(is_release), 1);
-    assert!(!game.avatar().avatar.flight.requested, "thrust is off");
-    assert_eq!(game.avatar().avatar.intent, Some(sim::settlement::avatar::Intent::Stop));
+    assert!(!game.avatar().avatar().unwrap().flight.requested, "thrust is off");
+    assert_eq!(game.avatar().avatar().unwrap().intent, Some(sim::settlement::avatar::Intent::Stop));
     // Everything still held. Let go of the trigger and RB, keep the stick:
     // the controller is not at rest, so the pause menu doesn't move either.
     game.pads().right_trigger(1, 0.0).release(1, Button::RightBumper);
@@ -715,14 +715,14 @@ fn disconnecting_while_flying_releases_pauses_and_needs_a_fresh_claim() {
     game.claim(1);
     game.pads().press(1, Button::RightBumper);
     game.seconds(1.0);
-    assert!(game.avatar().avatar.flight.airborne);
+    assert!(game.avatar().avatar().unwrap().flight.airborne);
     game.pads().disconnect(1);
     game.frames(1);
     assert!(game.paused());
     assert_eq!(game.input().seat(), None);
     game.seconds(0.5);
     assert_eq!(game.count(is_release), 1);
-    assert!(!game.avatar().avatar.flight.requested);
+    assert!(!game.avatar().avatar().unwrap().flight.requested);
     // Reconnected and held: nothing, and Menu claims (only claims).
     game.pads().connect(1);
     game.frames(1);
@@ -1102,7 +1102,7 @@ fn a_joined_controller_moves_its_own_avatar_and_converges_after_release() {
     step(&mut host, &mut client, 60);
     let mirror = client.app.world().resource::<WorldMirror>();
     let me = mirror.player().unwrap() as usize;
-    assert_eq!(mirror.current.as_ref().unwrap().agents[me].avatar.intent, Some(sim::settlement::avatar::Intent::Stop));
+    assert_eq!(mirror.current.as_ref().unwrap().agents[me].avatar().unwrap().intent, Some(sim::settlement::avatar::Intent::Stop));
     let shown = {
         let world = client.app.world_mut();
         world.query_filtered::<&Transform, With<crate::character::Player>>().single(world).unwrap().translation

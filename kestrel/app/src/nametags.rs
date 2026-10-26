@@ -36,11 +36,11 @@ pub fn update(
             .agents
             .iter()
             .enumerate()
-            .filter(|(_, a)| a.controlled)
-            .map(|(i, a)| {
-                let number = a.owner.map_or(1, |p| p.0 + 1);
-                let name = if a.name.is_empty() { format!("PLAYER {number}") } else { a.name.clone() };
-                (i as u16, name, a.body.health, a.body.max_health)
+            .filter_map(|(i, a)| {
+                let avatar = a.avatar()?;
+                let number = avatar.owner.map_or(1, |p| p.0 + 1);
+                let name = if avatar.name.is_empty() { format!("PLAYER {number}") } else { avatar.name.clone() };
+                Some((i as u16, name, a.body.health, a.body.max_health))
             })
             .collect(),
         _ => Vec::new(),

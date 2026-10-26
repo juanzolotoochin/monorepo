@@ -179,7 +179,7 @@ pub fn update(
 ) {
     let Some(drawn) = drawn.0.as_ref().filter(|drawn| Some(drawn.agent) == mirror.player()) else { return };
     let avatar = drawn.avatar();
-    let climbing = avatar.height > drawn.from.avatar.height;
+    let climbing = drawn.from.avatar().is_some_and(|from| avatar.height > from.height);
     flight.requested = avatar.flight.requested;
     let was_airborne = flight.airborne;
     flight.airborne = avatar.flight.airborne;

@@ -86,7 +86,7 @@ impl Scene {
     }
 
     fn altitude(&self) -> Fx {
-        self.avatar().avatar.height
+        self.avatar().avatar().unwrap().height
     }
 }
 
@@ -172,18 +172,18 @@ fn jump_has_anticipation_arc_landing_and_no_air_restart() {
     let agent = scene.agent();
     let ground = scene.altitude();
     scene.command(CommandKind::Jump { agent });
-    assert!(matches!(scene.avatar().avatar.jump, JumpPhase::Preparing { .. }));
+    assert!(matches!(scene.avatar().avatar().unwrap().jump, JumpPhase::Preparing { .. }));
     scene.wait(ms(220));
-    assert!(matches!(scene.avatar().avatar.jump, JumpPhase::Airborne { .. }));
+    assert!(matches!(scene.avatar().avatar().unwrap().jump, JumpPhase::Airborne { .. }));
     assert!(scene.altitude() > ground + fx(0.2));
     scene.wait(ms(130));
     assert!(scene.altitude() > ground + fx(0.4));
     scene.command(CommandKind::Jump { agent });
-    assert!(matches!(scene.avatar().avatar.jump, JumpPhase::Airborne { .. }));
+    assert!(matches!(scene.avatar().avatar().unwrap().jump, JumpPhase::Airborne { .. }));
     scene.wait(ms(1300));
-    assert_eq!(scene.avatar().avatar.jump, JumpPhase::Grounded);
+    assert_eq!(scene.avatar().avatar().unwrap().jump, JumpPhase::Grounded);
     assert_eq!(scene.altitude(), ground);
-    assert!(!scene.avatar().avatar.flight.airborne);
+    assert!(!scene.avatar().avatar().unwrap().flight.airborne);
 }
 
 #[test]
@@ -197,10 +197,10 @@ fn repeated_sword_attacks_cycle_then_reset() {
             aim: v(1.0, 0.0),
             muzzle: [Fx::ZERO; 3],
         });
-        scene.avatar().avatar.swing.as_ref().unwrap().stroke
+        scene.avatar().avatar().unwrap().swing.as_ref().unwrap().stroke
     };
     assert_eq!(attack(&mut scene), SwordStroke::Forehand);
-    let swing = scene.avatar().avatar.swing.as_ref().unwrap();
+    let swing = scene.avatar().avatar().unwrap().swing.as_ref().unwrap();
     assert_eq!(swing.resolve_at - swing.started, content::scenario::ticks_from_60hz(7), "the exosuit's swift sword windup");
     scene.wait(ms(600));
     assert_eq!(attack(&mut scene), SwordStroke::Backhand);
@@ -261,17 +261,17 @@ fn jetpack_climbs_crosses_a_drop_hovers_and_lands() {
     scene.wait(ms(1000));
     scene.walk(0.0, 2.0);
     scene.wait(ms(1000));
-    assert!(scene.avatar().avatar.flight.airborne && close(scene.altitude(), 3.8), "hovering at {}", scene.altitude());
+    assert!(scene.avatar().avatar().unwrap().flight.airborne && close(scene.altitude(), 3.8), "hovering at {}", scene.altitude());
     scene.walk(2.0, 2.0);
     scene.command(CommandKind::Jetpack { agent, enabled: false });
     scene.wait(ms(1000));
-    assert!(scene.avatar().avatar.flight.airborne && close(scene.altitude(), 3.8), "kept aloft over the drop at {}", scene.altitude());
+    assert!(scene.avatar().avatar().unwrap().flight.airborne && close(scene.altitude(), 3.8), "kept aloft over the drop at {}", scene.altitude());
     scene.command(CommandKind::Jetpack { agent, enabled: true });
     scene.walk(5.0, 1.0);
     scene.wait(ms(1000));
     scene.command(CommandKind::Jetpack { agent, enabled: false });
     scene.wait(ms(1333));
-    assert!(!scene.avatar().avatar.flight.airborne && close(scene.altitude(), 3.5), "landed at {}", scene.altitude());
+    assert!(!scene.avatar().avatar().unwrap().flight.airborne && close(scene.altitude(), 3.5), "landed at {}", scene.altitude());
 }
 
 /// The surprise lab: a wall at x = 2 with a door in the middle, two pads and
@@ -543,7 +543,7 @@ fn joining_players_get_their_own_avatar() {
     scene.sim.step(&[Command { player: guest, kind: CommandKind::Join }]);
     let mine = scene.s().avatar_of(guest).expect("the guest has an avatar");
     assert_ne!(mine, host_avatar);
-    assert_eq!(scene.s().agents.iter().filter(|a| a.controlled).count(), 2);
+    assert_eq!(scene.s().agents.iter().filter(|a| a.avatar().is_some()).count(), 2);
 
     let start = scene.s().agents[mine as usize].body.position;
     let host_start = scene.avatar().body.position;
@@ -561,7 +561,7 @@ fn unavailable_weapons_cannot_be_equipped() {
     let mut scene = Scene::new(field());
     let agent = scene.agent();
     scene.command(CommandKind::Equip { agent, weapon: content::scenario::Weapon::Spear });
-    assert_eq!(scene.avatar().avatar.weapon, content::scenario::Weapon::Sword);
+    assert_eq!(scene.avatar().avatar().unwrap().weapon, content::scenario::Weapon::Sword);
 }
 
 /// Players name their own avatar; names are trimmed, lose control
@@ -577,12 +577,12 @@ fn players_name_their_own_avatar() {
         Command { player: guest, kind: name("a very long name that keeps going") },
     ]);
     let s = scene.s();
-    assert_eq!(s.agents[s.avatar_of(PlayerId(0)).unwrap() as usize].name, "Ada");
-    let guest_name = &s.agents[s.avatar_of(guest).unwrap() as usize].name;
+    assert_eq!(s.agents[s.avatar_of(PlayerId(0)).unwrap() as usize].avatar().unwrap().name, "Ada");
+    let guest_name = &s.agents[s.avatar_of(guest).unwrap() as usize].avatar().unwrap().name;
     assert_eq!(guest_name.chars().count(), super::avatar::NAME_CHARS);
     let agent = scene.agent();
     scene.command(CommandKind::Respawn { agent });
-    assert_eq!(scene.avatar().name, "Ada");
+    assert_eq!(scene.avatar().avatar().unwrap().name, "Ada");
 }
 
 /// The field with diggable ground.
@@ -600,7 +600,7 @@ fn avatars_dig_pits_and_fly_out() {
     let mut scene = Scene::new(field());
     let agent = scene.agent();
     scene.command(CommandKind::DigDown { agent });
-    assert_eq!(scene.avatar().avatar.dig, None, "the field isn't diggable");
+    assert_eq!(scene.avatar().avatar().unwrap().dig, None, "the field isn't diggable");
 
     let mut scene = Scene::new(dig_lab());
     scene.walk(0.3, 1.8);
@@ -613,7 +613,7 @@ fn avatars_dig_pits_and_fly_out() {
     scene.wait(ms(667));
     scene.command(walk(v(0.0, 1.0)));
     scene.command(walk(FxVec2::ZERO));
-    assert_eq!(scene.avatar().avatar.dig, None);
+    assert_eq!(scene.avatar().avatar().unwrap().dig, None);
     scene.wait(dig_ticks);
     assert_eq!(pit(&scene), 0);
     scene.walk(0.3, 1.8);
@@ -631,10 +631,10 @@ fn avatars_dig_pits_and_fly_out() {
         assert_eq!(scene.avatar().body.position, Terrain::pit_center(tile), "dug in the middle of the tile");
         scene.wait(ms(1000));
         assert_eq!(scene.altitude(), -LAYER.mul_int(depth as i64), "dropped into the pit");
-        assert!(!scene.avatar().avatar.flight.airborne);
+        assert!(!scene.avatar().avatar().unwrap().flight.airborne);
     }
     scene.command(CommandKind::DigDown { agent });
-    assert_eq!(scene.avatar().avatar.dig, None, "three layers is as deep as it goes");
+    assert_eq!(scene.avatar().avatar().unwrap().dig, None, "three layers is as deep as it goes");
 
     // On foot, the walls are too high to climb.
     scene.command(walk(v(1.0, 0.0)));
@@ -648,7 +648,7 @@ fn avatars_dig_pits_and_fly_out() {
     scene.wait(ms(1500));
     assert_ne!(Terrain::pit_tile(scene.avatar().body.position), tile, "out of the pit");
     assert_eq!(scene.altitude(), Fx::ZERO);
-    assert!(!scene.avatar().avatar.flight.airborne);
+    assert!(!scene.avatar().avatar().unwrap().flight.airborne);
 }
 
 /// The dig lab's mine: 256 x 256 m of generated ground with a collector by
@@ -721,7 +721,7 @@ fn dug_ore_piles_up_and_goes_to_the_collector() {
     scene.command(CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: FxVec2::ZERO, run: false } });
     scene.command(CommandKind::Jetpack { agent, enabled: false });
     scene.wait(ms(1333));
-    assert!(!scene.avatar().avatar.flight.airborne);
+    assert!(!scene.avatar().avatar().unwrap().flight.airborne);
     haul(&mut scene, PileAction::Deliver);
     let lab = scene.s().piles.as_ref().unwrap();
     assert_eq!(scene.hauler().last_error, None);
@@ -792,10 +792,10 @@ fn releasing_stops_walking_and_switches_the_jetpack_off() {
     scene.command(CommandKind::Jetpack { agent, enabled: true });
     scene.command(CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: FxVec2::new(Fx::ZERO, -Fx::ONE), run: true } });
     scene.wait(ms(300));
-    assert!(scene.avatar().avatar.flight.requested);
+    assert!(scene.avatar().avatar().unwrap().flight.requested);
     release(&mut scene);
-    assert!(!scene.avatar().avatar.flight.requested, "thrust is off");
-    assert_eq!(scene.avatar().avatar.intent, Some(Intent::Stop));
+    assert!(!scene.avatar().avatar().unwrap().flight.requested, "thrust is off");
+    assert_eq!(scene.avatar().avatar().unwrap().intent, Some(Intent::Stop));
     scene.wait(ms(1000));
     let stopped = scene.avatar().body.position;
     scene.wait(ms(500));
@@ -811,7 +811,7 @@ fn releasing_stops_a_click_route() {
     assert!(!scene.avatar().body.route.is_empty());
     release(&mut scene);
     assert!(scene.avatar().body.route.is_empty());
-    assert_eq!(scene.avatar().avatar.intent, Some(Intent::Stop));
+    assert_eq!(scene.avatar().avatar().unwrap().intent, Some(Intent::Stop));
 }
 
 #[test]
@@ -860,7 +860,7 @@ fn release_after_a_rejected_haul_stops_manual_travel() {
     let commands = [refused, CommandKind::ReleaseDirectControl { agent }].map(|kind| Command { player: PlayerId(0), kind });
     scene.sim.step(&commands);
     assert!(scene.hauler().job.is_none() && scene.hauler().last_error.is_some());
-    assert_eq!(scene.avatar().avatar.intent, Some(Intent::Stop));
+    assert_eq!(scene.avatar().avatar().unwrap().intent, Some(Intent::Stop));
 }
 
 /// Units already tossed land under the usual rules while the haul goes on.
@@ -906,7 +906,7 @@ fn release_is_refused_for_another_players_avatar() {
     let agent = scene.agent();
     scene.command(CommandKind::Jetpack { agent, enabled: true });
     scene.sim.step(&[Command { player: PlayerId(7), kind: CommandKind::ReleaseDirectControl { agent } }]);
-    assert!(scene.avatar().avatar.flight.requested);
+    assert!(scene.avatar().avatar().unwrap().flight.requested);
 }
 
 /// Commands for abilities a character lacks do nothing: the exosuit can't
@@ -917,16 +917,16 @@ fn commands_need_the_characters_abilities() {
     let mut scene = Scene::new(field());
     let agent = scene.agent();
     scene.command(CommandKind::Jump { agent });
-    assert_eq!(scene.avatar().avatar.jump, JumpPhase::Grounded);
+    assert_eq!(scene.avatar().avatar().unwrap().jump, JumpPhase::Grounded);
 
     let mut scene = Scene::new(SceneSetup { player: "exosuit_moonlit".into(), ..dig_lab() });
     let (agent, ground) = (scene.agent(), scene.altitude());
     scene.command(CommandKind::Jetpack { agent, enabled: true });
     scene.wait(ms(500));
-    assert!(!scene.avatar().avatar.flight.requested && !scene.avatar().avatar.flight.airborne);
+    assert!(!scene.avatar().avatar().unwrap().flight.requested && !scene.avatar().avatar().unwrap().flight.airborne);
     assert_eq!(scene.altitude(), ground);
     scene.command(CommandKind::DigDown { agent });
-    assert!(scene.avatar().avatar.dig.is_none());
+    assert!(scene.avatar().avatar().unwrap().dig.is_none());
 }
 
 // What actions do to the world: applied on the command's own tick
@@ -944,8 +944,8 @@ fn an_attack_ends_a_haul_and_swings() {
     scene.command(CommandKind::Attack { agent, weapon: content::scenario::Weapon::Sword, aim: v(1.0, 0.0), muzzle: [Fx::ZERO; 3] });
     assert!(scene.hauler().job.is_none());
     assert_eq!(scene.hauler().last_error.as_deref(), Some("Haul canceled by player input"));
-    assert!(scene.avatar().avatar.swing.is_some(), "the swing stands");
-    assert_eq!(scene.avatar().avatar.intent, Some(Intent::Stop));
+    assert!(scene.avatar().avatar().unwrap().swing.is_some(), "the swing stands");
+    assert_eq!(scene.avatar().avatar().unwrap().intent, Some(Intent::Stop));
     assert!(scene.lab().conserved());
 }
 
@@ -1074,10 +1074,10 @@ fn dying_stops_a_dig() {
     scene.walk(0.3, 1.8);
     let tile = Terrain::pit_tile(scene.avatar().body.position);
     scene.command(CommandKind::DigDown { agent });
-    assert!(scene.avatar().avatar.dig.is_some());
+    assert!(scene.avatar().avatar().unwrap().dig.is_some());
     scene.wait(ms(300));
     shoot_the_host_dead(&mut scene);
-    assert_eq!(scene.avatar().avatar.dig, None);
+    assert_eq!(scene.avatar().avatar().unwrap().dig, None);
     scene.s().validate().unwrap();
     scene.wait(dig_ticks());
     assert_eq!(scene.sim.world().terrain().pit(tile), 0, "the dead don't dig");

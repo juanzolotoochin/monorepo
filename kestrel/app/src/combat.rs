@@ -722,10 +722,11 @@ mod tests {
         // press from `queued_at` for after it.
         let drawn = |time: f32, swing: Option<Swing>, queued_at: Option<u64>| {
             let mut to = state.clone();
-            to.avatar.swing = swing;
-            to.avatar.queued_at = queued_at;
-            to.avatar.combo_next = SwordStroke::Overhead;
-            to.avatar.combo_until = 140;
+            let avatar = to.avatar_mut().unwrap();
+            avatar.swing = swing;
+            avatar.queued_at = queued_at;
+            avatar.combo_next = SwordStroke::Overhead;
+            avatar.combo_until = 140;
             crate::prediction::DrawnState { agent, from: to.clone(), to, time }
         };
         let swing = |started: u64, stroke| Swing {

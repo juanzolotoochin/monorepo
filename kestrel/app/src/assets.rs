@@ -459,7 +459,7 @@ mod tests {
         let settlement = service.settlement().unwrap();
         let player = &settlement.agents[settlement.player().unwrap() as usize];
         assert_eq!(player.body.health, 6);
-        assert_eq!(player.avatar.weapon, content::scenario::Weapon::Laser);
+        assert_eq!(player.avatar().unwrap().weapon, content::scenario::Weapon::Laser);
         assert_eq!(app.world().resource::<crate::gameplay::Controls>().weapon, content::scenario::Weapon::Laser);
         let terrain = service.world().unwrap().terrain();
         assert!(terrain.mine.is_none());

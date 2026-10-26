@@ -161,11 +161,11 @@ fn recipes_and_equipment_produce_a_cart_then_upgrade_real_transport_capacity() {
     assert_eq!(s.producers[0].cycles, 1);
     let a = s.agent("a");
     assert_eq!(a.carry.capacity, 8);
-    assert!(a.hauler.trailer.is_some());
+    assert!(a.hauler().unwrap().trailer.is_some());
     assert!(s.metrics.delivered > 10, "delivered {}", s.metrics.delivered);
     assert_eq!(s.balances()["cart"].equipped, 1);
     assert_eq!(s.balances()["wood"].consumed, 2);
-    let hitch = crate::nav::distance(a.body.position, a.hauler.trailer.as_ref().unwrap().position);
+    let hitch = crate::nav::distance(a.body.position, a.hauler().unwrap().trailer.as_ref().unwrap().position);
     assert!((hitch - fx(1.1)).abs() < fx(0.15), "trailer at {hitch}");
 }
 
@@ -175,7 +175,7 @@ fn disabling_links_drains_committed_jobs() {
     run(&mut sim, 1);
     sim.step(&[Command { player: PlayerId(0), kind: CommandKind::SetLink { link: 0, enabled: false } }]);
     run(&mut sim, 20);
-    assert!(settlement(&sim).agents.iter().all(|a| a.hauler.assignment.is_none()));
+    assert!(settlement(&sim).agents.iter().all(|a| a.hauler().unwrap().assignment.is_none()));
     let delivered = settlement(&sim).metrics.delivered;
     assert!(delivered > 0);
     run(&mut sim, 5);
@@ -197,7 +197,7 @@ fn blocked_docks_are_rejected_and_unreachable_jobs_never_reserve_stock() {
     run(&mut sim, 3);
     let s = settlement(&sim);
     assert_eq!(s.metrics.picked, 0);
-    assert!(s.agents.iter().all(|a| a.hauler.assignment.is_none()));
+    assert!(s.agents.iter().all(|a| a.hauler().unwrap().assignment.is_none()));
 }
 
 #[test]
@@ -227,7 +227,7 @@ fn opposing_haulers_pass_without_body_overlap_and_clear_the_docks() {
     let s = settlement(&sim);
     assert!(s.stock("forest", "iron") >= 9, "forest iron {}", s.stock("forest", "iron"));
     assert!(s.stock("mill", "wood") >= 9, "mill wood {}", s.stock("mill", "wood"));
-    assert!(s.agents.iter().map(|a| a.hauler.avoidance_steers).sum::<u64>() > 0);
+    assert!(s.agents.iter().map(|a| a.hauler().unwrap().avoidance_steers).sum::<u64>() > 0);
 }
 
 pub(super) const FOREST: &str = include_str!("../../../app/assets/levels/forest_supply.ron");
@@ -245,8 +245,8 @@ fn forest_supply_runs_and_its_balances_hold() {
     assert_eq!(s.producers[s.producer_index("cartworks").unwrap() as usize].cycles, 1);
     assert!(s.producers[s.producer_index("sawmill").unwrap() as usize].cycles > 3);
     let bramble = s.agent("bramble");
-    assert!(bramble.hauler.equipped && bramble.carry.capacity == 9);
-    assert!(s.agents.iter().filter(|a| !a.controlled).all(|a| a.hauler.phase != Phase::Attaching));
+    assert!(bramble.hauler().unwrap().equipped && bramble.carry.capacity == 9);
+    assert!(s.agents.iter().filter_map(|a| a.hauler()).all(|h| h.phase != Phase::Attaching));
 }
 
 #[test]
@@ -274,22 +274,22 @@ fn forest_probe() {
                 "t={second}s delivered={} picked={} cycles={} equipped={} assignments={} retries={}",
                 s.metrics.delivered, s.metrics.picked, s.metrics.cycles, s.metrics.equipped, s.metrics.assignments, s.metrics.assignment_retries
             );
-            for a in &s.agents {
+            for (a, h) in s.agents.iter().filter_map(|a| Some((a, a.hauler()?))) {
                 println!(
                     "  {:<12} {:?} pos=({:.2},{:.2}) route={} job={:?} waits={} traffic={} steers={} dock={:?}",
-                    a.id, a.hauler.phase, a.body.position.x.to_f64(), a.body.position.y.to_f64(), a.body.route.len(), a.hauler.assignment.as_ref().map(|j| (j.link, j.units, j.loaded, j.unloaded)),
-                    a.hauler.dock_wait_ticks, a.hauler.traffic_wait_ticks, a.hauler.avoidance_steers, a.hauler.departure_dock
+                    a.id, h.phase, a.body.position.x.to_f64(), a.body.position.y.to_f64(), a.body.route.len(), h.assignment.as_ref().map(|j| (j.link, j.units, j.loaded, j.unloaded)),
+                    h.dock_wait_ticks, h.traffic_wait_ticks, h.avoidance_steers, h.departure_dock
                 );
             }
             println!("  owners {:?}", s.dock_owner);
             let terrain = sim.world().terrain();
-            for a in s.agents.iter().filter(|a| !a.controlled) {
-                for &l in &a.hauler.links {
+            for (a, h) in s.agents.iter().filter_map(|a| Some((a, a.hauler()?))) {
+                for &l in &h.links {
                     let link = &s.links[l as usize];
                     let size = super::haulers::job_size(a, link, &s.depots);
-                    let to_from = a.plan(terrain, s.depots[link.from as usize].position, &[]).len();
+                    let to_from = h.plan(&a.body, terrain, s.depots[link.from as usize].position, &[]).len();
                     let haul = crate::nav::path(terrain, s.depots[link.from as usize].position, s.depots[link.to as usize].position, a.radius()).len();
-                    println!("  plan {:<12} {:<14} size={size} to_from={to_from} haul={haul} retries_at={}", a.id, link.id, a.hauler.retries);
+                    println!("  plan {:<12} {:<14} size={size} to_from={to_from} haul={haul} retries_at={}", a.id, link.id, h.retries);
                 }
             }
             for p in &s.producers {

@@ -791,7 +791,7 @@ pub fn tick(world: &mut World) {
             let health = mirror.player()
                 .and_then(|id| mirror.current.as_ref()?.agents.get(id as usize))
                 .map_or_else(|| "--".to_string(), |agent| format!("{}/{}", agent.body.health, agent.body.max_health));
-            let players = mirror.current.as_ref().map_or(0, |current| current.agents.iter().filter(|agent| agent.controlled).count());
+            let players = mirror.current.as_ref().map_or(0, |current| current.agents.iter().filter(|agent| agent.avatar().is_some()).count());
             format!("LASER  /  HEALTH {health}  /  {players} PLAYERS")
         } else if !sim.config().weapons.is_empty() {
             format!(
@@ -1085,7 +1085,7 @@ mod tests {
                 assert_eq!(s.health, 20, "first minute defense failed");
             }
             let a = s.agent("bramble");
-            if let Some(t) = &a.hauler.trailer {
+            if let Some(t) = &a.hauler().unwrap().trailer {
                 assert!(sim::nav::distance(a.body.position, t.position) >= Fx::from_ratio(29, 20), "ox overlapped the cart at tick {tick}");
             }
         }

@@ -1,5 +1,7 @@
 //! Agents: player avatars and haulers. Every agent has a body and a cargo
-//! hold; what drives it is its role.
+//! hold; what drives it is its role, fixed when the agent is made: a
+//! scenario's controlled agents and joining players are avatars, the rest
+//! haulers.
 
 use content::character::{CharacterDef, CharacterIx};
 use content::scenario;
@@ -13,22 +15,20 @@ use super::{DepotIx, ItemIx};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentState {
     pub id: String,
-    /// Player avatars: driven by commands, never by haul links.
-    pub controlled: bool,
-    /// The player whose commands drive this avatar.
-    pub owner: Option<crate::PlayerId>,
     /// The character it is.
     pub character: CharacterIx,
-    /// The name the owner goes by; empty until they give one.
-    pub name: String,
     pub body: Body,
     pub carry: Carry,
-    /// Haulers only.
-    pub hauler: HaulerState,
-    /// Player avatars only.
-    pub avatar: AvatarState,
-    /// Weapons are ready again on this tick.
-    pub attack_ready: u64,
+    pub role: Role,
+}
+
+/// What drives an agent.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Role {
+    /// Haul links and the hauler state machine (`haulers`).
+    Hauler(HaulerState),
+    /// A player's commands (`avatar`), never haul links.
+    Avatar(AvatarState),
 }
 
 /// What every agent has, whatever drives it: where it is, how it moves and
@@ -58,6 +58,13 @@ pub struct Body {
     pub health: u32,
     /// 0: it can't be hurt. Haulers have no health yet.
     pub max_health: u32,
+}
+
+impl Body {
+    /// Alive, or without health at all.
+    pub fn alive(&self) -> bool {
+        self.max_health == 0 || self.health > 0
+    }
 }
 
 /// The cargo an agent carries: a hauler's load, or the units a player
@@ -91,13 +98,15 @@ impl AgentState {
         item: &impl Fn(&str) -> ItemIx,
         depot: &impl Fn(&str) -> DepotIx,
     ) -> AgentState {
+        let role = if def.controlled {
+            // A scenario's avatar belongs to the host.
+            Role::Avatar(AvatarState { owner: Some(crate::PlayerId(0)), ..AvatarState::default() })
+        } else {
+            Role::Hauler(HaulerState::new(def, all_links, item, depot))
+        };
         AgentState {
             id: def.id.clone(),
-            controlled: def.controlled,
-            // A scenario's avatar belongs to the host.
-            owner: def.controlled.then_some(crate::PlayerId(0)),
             character,
-            name: String::new(),
             body: Body {
                 home: position,
                 // Copied from the character, like a wave's tuning.
@@ -112,22 +121,49 @@ impl AgentState {
                 transfer_ticks: rules.carry.as_ref().expect("players and haulers carry").transfer,
                 ..Carry::default()
             },
-            hauler: HaulerState::new(def, all_links, item, depot),
-            avatar: Default::default(),
-            attack_ready: 0,
+            role,
+        }
+    }
+
+    /// A player's avatar; `None` for a hauler.
+    pub fn avatar(&self) -> Option<&AvatarState> {
+        match &self.role {
+            Role::Avatar(avatar) => Some(avatar),
+            Role::Hauler(_) => None,
+        }
+    }
+
+    pub fn avatar_mut(&mut self) -> Option<&mut AvatarState> {
+        match &mut self.role {
+            Role::Avatar(avatar) => Some(avatar),
+            Role::Hauler(_) => None,
+        }
+    }
+
+    /// A hauler's state; `None` for a player's avatar.
+    pub fn hauler(&self) -> Option<&HaulerState> {
+        match &self.role {
+            Role::Hauler(hauler) => Some(hauler),
+            Role::Avatar(_) => None,
+        }
+    }
+
+    pub fn hauler_mut(&mut self) -> Option<&mut HaulerState> {
+        match &mut self.role {
+            Role::Hauler(hauler) => Some(hauler),
+            Role::Avatar(_) => None,
         }
     }
 
     /// The body radius; a hitched animal stands wider.
     pub fn radius(&self) -> Fx {
-        if self.hauler.equipped {
-            self.body.base_radius.max(Fx::from_ratio(7, 20))
-        } else {
-            self.body.base_radius
+        match self.hauler() {
+            Some(hauler) => hauler.radius(&self.body),
+            None => self.body.base_radius,
         }
     }
 
     pub fn equipped_item(&self) -> Option<ItemIx> {
-        self.hauler.equipment.as_ref().filter(|_| self.hauler.equipped).map(|e| e.item)
+        self.hauler()?.equipped_item()
     }
 }

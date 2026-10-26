@@ -38,7 +38,7 @@ use crate::nav;
 use crate::terrain::{Disc, Terrain};
 
 pub use combat::{CombatMetrics, DefenderState, Event, Impact, OnMiss, Pinned, Prediction, Projectile, SpentProjectile, Threat, TossEnd, WaveState};
-pub use agent::{AgentState, Body, Carry};
+pub use agent::{AgentState, Body, Carry, Role};
 pub use haulers::{HaulerState, Phase};
 pub use prediction::AvatarReplay;
 
@@ -370,10 +370,12 @@ impl Settlement {
                 Ok(AgentState::new(a, ix, def, at(a.position), &scenario.links, items.len(), &item, &depot))
             })
             .collect::<Result<Vec<_>, String>>()?;
-        for agent in agents.iter_mut().filter(|agent| agent.controlled) {
-            agent.body.health = scenario.player_health;
-            agent.body.max_health = scenario.player_health;
-            agent.avatar.weapon = scenario.weapons.first().copied().unwrap_or_default();
+        for agent in &mut agents {
+            if let AgentState { body, role: Role::Avatar(avatar), .. } = agent {
+                body.health = scenario.player_health;
+                body.max_health = scenario.player_health;
+                avatar.weapon = scenario.weapons.first().copied().unwrap_or_default();
+            }
         }
 
         for a in &agents {
@@ -510,11 +512,11 @@ impl Settlement {
         settlement.spawn_height = setup.spawn[1];
         settlement.pianos = setup.pianos.iter().map(|&position| at([position.x, position.y])).collect();
         if let Some(player) = settlement.player() {
-            let a = &mut settlement.agents[player as usize];
-            a.body.position = settlement.spawn;
-            a.body.home = settlement.spawn;
-            a.body.heading = Fx::PI;
-            a.avatar.height = settlement.spawn_height;
+            let AgentState { body, role: Role::Avatar(avatar), .. } = &mut settlement.agents[player as usize] else { unreachable!("the player is an avatar") };
+            body.position = settlement.spawn;
+            body.home = settlement.spawn;
+            body.heading = Fx::PI;
+            avatar.height = settlement.spawn_height;
         }
         settlement.piles = setup.piles.as_ref().map(|p| {
             let dispensers: Vec<(u8, FxVec2)> = p.dispensers.iter().map(|&(m, o)| (m, at(o))).collect();
@@ -645,14 +647,14 @@ impl Settlement {
         let items = self.items.len();
         let mut out = vec![vec![0u32; items]; self.depots.len()];
         let mut incoming = vec![vec![0u32; items]; self.depots.len()];
-        for a in &self.agents {
-            if let Some(job) = &a.hauler.assignment {
+        for h in self.agents.iter().filter_map(AgentState::hauler) {
+            if let Some(job) = &h.assignment {
                 let link = &self.links[job.link as usize];
                 out[link.from as usize][link.item as usize] += job.units - job.loaded;
                 incoming[link.to as usize][link.item as usize] += job.units - job.unloaded;
             }
-            if a.hauler.phase == Phase::ToEquip {
-                let e = a.hauler.equipment.as_ref().expect("equipping agents have equipment");
+            if h.phase == Phase::ToEquip {
+                let e = h.equipment.as_ref().expect("equipping agents have equipment");
                 out[e.depot as usize][e.item as usize] += 1;
             }
         }
@@ -670,8 +672,8 @@ impl Settlement {
                 }
             }
         }
-        for a in &self.agents {
-            if let Some(job) = &a.avatar.job {
+        for avatar in self.agents.iter().filter_map(AgentState::avatar) {
+            if let Some(job) = &avatar.job {
                 if job.deposit {
                     incoming[job.depot as usize][job.item as usize] += job.remaining;
                 } else {
@@ -733,13 +735,20 @@ impl Settlement {
             .agents
             .iter()
             .map(|a| {
-                (&a.id, a.body.position, a.body.heading, a.body.travelled, a.hauler.phase, &a.body.route, &a.carry.cargo, &a.hauler.trailer)
+                // An avatar as it hashed when it had a hauler's fields: idle,
+                // with no trailer.
+                let (phase, trailer) = a.hauler().map_or((Phase::Idle, None), |h| (h.phase, h.trailer.as_ref()));
+                (&a.id, a.body.position, a.body.heading, a.body.travelled, phase, &a.body.route, &a.carry.cargo, trailer)
             })
             .collect();
         let avatars: Vec<_> = self
             .agents
             .iter()
-            .map(|a| (a.body.velocity, a.avatar.height, a.body.health, &a.avatar.swing, &a.avatar.jump))
+            .map(|a| {
+                // And a hauler as it hashed with an avatar's fields: grounded.
+                let (height, swing, jump) = a.avatar().map_or((Fx::ZERO, None, avatar::JumpPhase::Grounded), |p| (p.height, p.swing.as_ref(), p.jump));
+                (a.body.velocity, height, a.body.health, swing, jump)
+            })
             .collect();
         let threats: Vec<_> = self
             .threats

@@ -187,7 +187,7 @@ impl Arena {
         let tick = self.tick();
         let (origin, player) = (self.s().agents[self.player].body.position, self.player);
         let terrain = self.sim.world().terrain().clone();
-        let height = self.s().agents[player].avatar.height;
+        let height = self.s().agents[player].avatar().unwrap().height;
         let aimed = self.s().strike_targets(player as u16, height, origin, aim, weapon, &terrain);
         let message = Strike {
             agent: player as u16,
@@ -211,7 +211,7 @@ impl Arena {
 
     fn ready(&mut self) {
         let player = self.player;
-        self.s_mut().agents[player].attack_ready = 0;
+        self.s_mut().agents[player].avatar_mut().unwrap().attack_ready = 0;
     }
 
     fn step(&mut self, ticks: u64) {
@@ -393,7 +393,7 @@ fn authored_weapon_tuning_changes_reach_damage_and_cooldown() {
     assert_eq!(arena.attack(Weapon::Sword), 1);
     assert_eq!(arena.hp(100), 5);
     let tick = arena.tick();
-    assert_eq!(arena.s().agents[arena.player].attack_ready, tick + ticks_from_60hz(90), "90 ticks at 60 Hz");
+    assert_eq!(arena.s().agents[arena.player].avatar().unwrap().attack_ready, tick + ticks_from_60hz(90), "90 ticks at 60 Hz");
     assert_eq!(arena.attack(Weapon::Sword), 0);
 }
 
@@ -408,7 +408,7 @@ fn scheduled_attack_contacts_on_an_integer_simulation_tick() {
     assert_eq!(arena.hp(100), 8);
     arena.step(1);
     assert!(arena.hp(100) < 8);
-    let swing = arena.s().agents[arena.player].avatar.swing.clone().unwrap();
+    let swing = arena.s().agents[arena.player].avatar().unwrap().swing.clone().unwrap();
     assert!(swing.resolved && swing.hits == 1);
 }
 
@@ -522,9 +522,9 @@ fn controlled_transfers_share_reservations_and_cancellation_preserves_airborne_u
     let agent = player as u16;
     let take = |units, deposit| CommandKind::Transfer { agent, depot: depot as u16, item: item as u16, units, deposit };
     arena.command(take(units, false));
-    assert!(arena.s().agents[player].avatar.job.is_some());
+    assert!(arena.s().agents[player].avatar().unwrap().job.is_some());
     arena.command(take(1, false));
-    let remaining = arena.s().agents[player].avatar.job.as_ref().unwrap().remaining;
+    let remaining = arena.s().agents[player].avatar().unwrap().job.as_ref().unwrap().remaining;
     assert_eq!(arena.s().depots[depot].out[item], remaining, "a second transfer is refused while one runs");
     assert!(arena.s().transfers.values().any(|t| t.to == super::Endpoint::Cargo(agent)));
     arena.command(CommandKind::CancelTransfer { agent });
@@ -554,10 +554,10 @@ fn a_transfer_reserves_stock_and_a_cancel_releases_it_on_their_tick() {
 
     arena.command(CommandKind::Transfer { agent, depot, item, units: 3, deposit: false });
     assert_eq!(arena.s().depots[d].out[i], out + 3, "the pickup reserves its stock");
-    assert_eq!(arena.s().agents[arena.player].avatar.job.as_ref().unwrap().remaining, 3);
+    assert_eq!(arena.s().agents[arena.player].avatar().unwrap().job.as_ref().unwrap().remaining, 3);
     arena.command(CommandKind::CancelTransfer { agent });
     assert_eq!(arena.s().depots[d].out[i], out, "the cancel releases it");
-    assert!(arena.s().agents[arena.player].avatar.job.is_none());
+    assert!(arena.s().agents[arena.player].avatar().unwrap().job.is_none());
 
     // Cargo to deposit, handed over outside the accounts (so no `validate`).
     let player = arena.player;
@@ -588,14 +588,14 @@ fn respawning_releases_a_transfer_reservation() {
     arena.command(CommandKind::Transfer { agent, depot, item, units: 3, deposit: false });
     assert_eq!(arena.s().depots[d].out[i], out + 3);
     arena.command(CommandKind::Respawn { agent });
-    assert!(arena.s().agents[arena.player].avatar.job.is_none());
+    assert!(arena.s().agents[arena.player].avatar().unwrap().job.is_none());
     assert_eq!(arena.s().depots[d].out[i], out, "the respawn releases the reservation");
     arena.s().validate().unwrap();
 
     let player = PlayerId(0);
     let turn = [CommandKind::Transfer { agent, depot, item, units: 2, deposit: false }, CommandKind::Respawn { agent }];
     arena.sim.step(&turn.map(|kind| Command { player, kind }));
-    assert!(arena.s().agents[arena.player].avatar.job.is_none());
+    assert!(arena.s().agents[arena.player].avatar().unwrap().job.is_none());
     assert_eq!(arena.s().depots[d].out[i], out, "reserved and released in one tick");
     arena.s().validate().unwrap();
 }
@@ -628,8 +628,8 @@ fn two_transfers_from_one_depot_on_one_tick_go_to_the_first_player() {
     arena.sim.step(&[take(guest, b), take(host, a)]);
     let s = arena.s();
     assert_eq!(s.depots[d].out[i], 2, "reserved once");
-    assert_eq!(s.agents[a as usize].avatar.job.as_ref().map(|j| j.remaining), Some(2), "the host's transfer stands");
-    assert!(s.agents[b as usize].avatar.job.is_none(), "the guest's rolled back");
+    assert_eq!(s.agents[a as usize].avatar().unwrap().job.as_ref().map(|j| j.remaining), Some(2), "the host's transfer stands");
+    assert!(s.agents[b as usize].avatar().unwrap().job.is_none(), "the guest's rolled back");
     s.validate().unwrap();
     arena.sim.step(&[Command { player: host, kind: CommandKind::CancelTransfer { agent: a } }]);
     assert_eq!(arena.s().depots[d].out[i], 0);
@@ -639,7 +639,7 @@ fn two_transfers_from_one_depot_on_one_tick_go_to_the_first_player() {
     arena.sim.step(&[take(host, a), take(guest, b), cancel]);
     let s = arena.s();
     assert_eq!(s.depots[d].out[i], 2);
-    assert!(s.agents[a as usize].avatar.job.is_some() && s.agents[b as usize].avatar.job.is_none());
+    assert!(s.agents[a as usize].avatar().unwrap().job.is_some() && s.agents[b as usize].avatar().unwrap().job.is_none());
     s.validate().unwrap();
 
     // A transfer cancelled in its own turn leaves the stock to the next.
@@ -648,8 +648,8 @@ fn two_transfers_from_one_depot_on_one_tick_go_to_the_first_player() {
     arena.sim.step(&[take(host, a), cancel, take(guest, b)]);
     let s = arena.s();
     assert_eq!(s.depots[d].out[i], 2);
-    assert!(s.agents[a as usize].avatar.job.is_none());
-    assert_eq!(s.agents[b as usize].avatar.job.as_ref().map(|j| j.remaining), Some(2), "the guest takes it");
+    assert!(s.agents[a as usize].avatar().unwrap().job.is_none());
+    assert_eq!(s.agents[b as usize].avatar().unwrap().job.as_ref().map(|j| j.remaining), Some(2), "the guest takes it");
     s.validate().unwrap();
 }
 
@@ -774,7 +774,7 @@ fn two_players_defend_the_clearing() {
             let to = t.position - a.body.position;
             let kind = if to.length() > fx(1.0) {
                 CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: to.normalize_or_zero(), run: true } }
-            } else if tick >= a.attack_ready && a.avatar.swing.as_ref().is_none_or(|s| tick >= s.until) {
+            } else if tick >= a.avatar().unwrap().attack_ready && a.avatar().unwrap().swing.as_ref().is_none_or(|s| tick >= s.until) {
                 CommandKind::Attack { agent, weapon, aim: to, muzzle: [Fx::ZERO, fx(0.6), fx(0.25)] }
             } else {
                 continue;
@@ -805,7 +805,7 @@ fn players_equip_their_own_weapons() {
     sim.step(&[Command { player: guest, kind: CommandKind::Join }]);
     let s = sim.world().settlement().unwrap();
     let (mine, theirs) = (s.avatar_of(host).unwrap(), s.avatar_of(guest).unwrap());
-    let weapon = |sim: &Simulation, agent: u16| sim.world().settlement().unwrap().agents[agent as usize].avatar.weapon;
+    let weapon = |sim: &Simulation, agent: u16| sim.world().settlement().unwrap().agents[agent as usize].avatar().unwrap().weapon;
     assert_eq!(weapon(&sim, theirs), Weapon::Sword);
 
     sim.step(&[
@@ -830,7 +830,7 @@ fn laser_stops_at_obstacle_before_its_full_range() {
     let arena = Arena::new(&config, &[obstacle]);
     let origin = arena.s().agents[arena.player].body.position;
     let terrain = arena.sim.world().terrain();
-    let aimed = arena.s().strike_targets(arena.player as u16, arena.s().agents[arena.player].avatar.height, origin, FxVec2::new(Fx::ZERO, Fx::ONE), Weapon::Laser, terrain);
+    let aimed = arena.s().strike_targets(arena.player as u16, arena.s().agents[arena.player].avatar().unwrap().height, origin, FxVec2::new(Fx::ZERO, Fx::ONE), Weapon::Laser, terrain);
     let (targets, end, cover) = (aimed.targets, aimed.beam_end, aimed.cover);
     assert!(targets.is_empty());
     assert_eq!(cover, None);
@@ -855,17 +855,17 @@ fn laser_selects_the_struck_cover_piece_and_opens_it_incrementally() {
     let origin = arena.s().agents[arena.player].body.position;
     let left = FxVec2::new(fx(-0.125), Fx::ONE);
     let right = FxVec2::new(fx(0.125), Fx::ONE);
-    let aimed = arena.s().strike_targets(arena.player as u16, arena.s().agents[arena.player].avatar.height, origin, left, Weapon::Laser, &terrain);
+    let aimed = arena.s().strike_targets(arena.player as u16, arena.s().agents[arena.player].avatar().unwrap().height, origin, left, Weapon::Laser, &terrain);
     let (end, cover) = (aimed.beam_end, aimed.cover);
     assert_eq!(cover, Some(0));
     assert!(end.unwrap().y < arena.at(0.0, 4.0).y);
     assert!(terrain.damage_cover(0, 1));
     assert_eq!(terrain.destructibles[0].health, 1);
-    assert_eq!(arena.s().strike_targets(arena.player as u16, arena.s().agents[arena.player].avatar.height, origin, left, Weapon::Laser, &terrain).cover, Some(0));
+    assert_eq!(arena.s().strike_targets(arena.player as u16, arena.s().agents[arena.player].avatar().unwrap().height, origin, left, Weapon::Laser, &terrain).cover, Some(0));
     assert!(terrain.damage_cover(0, 1));
     assert_eq!(terrain.destructibles[0].health, 0);
-    assert_eq!(arena.s().strike_targets(arena.player as u16, arena.s().agents[arena.player].avatar.height, origin, left, Weapon::Laser, &terrain).cover, None);
-    assert_eq!(arena.s().strike_targets(arena.player as u16, arena.s().agents[arena.player].avatar.height, origin, right, Weapon::Laser, &terrain).cover, Some(1));
+    assert_eq!(arena.s().strike_targets(arena.player as u16, arena.s().agents[arena.player].avatar().unwrap().height, origin, left, Weapon::Laser, &terrain).cover, None);
+    assert_eq!(arena.s().strike_targets(arena.player as u16, arena.s().agents[arena.player].avatar().unwrap().height, origin, right, Weapon::Laser, &terrain).cover, Some(1));
 }
 
 #[test]
@@ -880,7 +880,7 @@ fn firing_laser_does_not_stop_movement() {
     arena.command(CommandKind::Attack { agent, weapon: Weapon::Laser, aim: FxVec2::new(Fx::ONE, Fx::ZERO), muzzle: [Fx::ZERO; 3] });
     arena.step(ms(100));
     let avatar = &arena.s().agents[arena.player];
-    assert!(avatar.avatar.swing.is_some(), "shot should still be active");
+    assert!(avatar.avatar().unwrap().swing.is_some(), "shot should still be active");
     assert!(avatar.body.position.y > before.y, "avatar should move while firing");
 }
 
@@ -900,9 +900,9 @@ fn mouse_aim_changes_independently_of_travel_and_persists_without_firing() {
     arena.command(CommandKind::AimAvatar { agent, aim });
     arena.step(ms(200));
     let avatar = &arena.s().agents[arena.player];
-    assert_eq!(avatar.avatar.aim, Some(aim));
+    assert_eq!(avatar.avatar().unwrap().aim, Some(aim));
     assert_eq!(avatar.body.heading, heading);
-    assert!(avatar.avatar.swing.is_none());
+    assert!(avatar.avatar().unwrap().swing.is_none());
     assert!(avatar.body.velocity.y > Fx::ZERO);
 }
 
@@ -977,7 +977,7 @@ fn dying_releases_a_transfer_reservation() {
     for _ in 0..ms(700) { sim.step(&[]); }
     let settlement = sim.world().settlement().unwrap();
     assert_eq!(settlement.agents[target as usize].body.health, 0, "the laser killed the target");
-    assert!(settlement.agents[target as usize].avatar.job.is_none());
+    assert!(settlement.agents[target as usize].avatar().unwrap().job.is_none());
     assert_eq!(settlement.depots[d].out[i], out, "death releases the reservation");
     settlement.validate().unwrap();
 
@@ -1005,7 +1005,7 @@ fn releasing_keeps_a_depot_transfer_walking_to_its_dock() {
     let route = arena.s().agents[arena.player].body.route.clone();
     assert!(!route.is_empty());
     arena.command(CommandKind::ReleaseDirectControl { agent });
-    assert!(arena.s().agents[arena.player].avatar.job.is_some());
+    assert!(arena.s().agents[arena.player].avatar().unwrap().job.is_some());
     assert!(!arena.s().agents[arena.player].body.route.is_empty(), "the dock walk continues");
     arena.step(ms(6000));
     assert_eq!(arena.s().agents[arena.player].carry.cargo[item as usize], 2, "the transfer completed");
@@ -1254,9 +1254,9 @@ fn a_ghoul_hit_kills_through_the_laser_kill_path() {
     assert_eq!(swings(&arena), vec![(100, player as u16, true, 1, true)]);
     let a = &arena.s().agents[player];
     assert_eq!(a.body.health, 0);
-    assert!(a.avatar.respawn_at > lands);
+    assert!(a.avatar().unwrap().respawn_at > lands);
     assert_eq!(a.body.velocity, FxVec2::ZERO, "the dead aren't pushed");
-    assert!(a.avatar.job.is_none());
+    assert!(a.avatar().unwrap().job.is_none());
     assert_eq!(arena.s().depots[d].out[i], out, "death released the reservation");
     // No swings at the dead.
     for _ in 0..ms(1000) {
@@ -1333,7 +1333,7 @@ fn a_ghoul_does_not_reach_a_hovering_player() {
     arena.place(player, 0.0, 0.0);
     arena.command(CommandKind::Jetpack { agent: player as u16, enabled: true });
     arena.step(ms(1000));
-    assert!(arena.s().agents[player].avatar.height > fx(1.7), "hovering: {}", arena.s().agents[player].avatar.height);
+    assert!(arena.s().agents[player].avatar().unwrap().height > fx(1.7), "hovering: {}", arena.s().agents[player].avatar().unwrap().height);
     arena.threat(100, 0.0, 0.7, 3, 0);
     for _ in 0..ms(1000) {
         arena.step(1);
@@ -1354,7 +1354,7 @@ fn a_player_who_lifts_off_during_the_windup_is_missed() {
     assert_eq!(windups(&arena).len(), 1);
     arena.command(CommandKind::Jetpack { agent: player as u16, enabled: true });
     arena.until_swing(100);
-    assert!(arena.s().agents[player].avatar.height > super::combat::SWING_HEIGHT);
+    assert!(arena.s().agents[player].avatar().unwrap().height > super::combat::SWING_HEIGHT);
     assert_eq!(swings(&arena), vec![(100, player as u16, false, 0, false)]);
     assert_eq!(arena.health(player), 3);
 }
@@ -1376,7 +1376,7 @@ fn a_jump_does_not_dodge_a_ghoul() {
     while arena.tick() < lands {
         arena.step(1);
     }
-    let height = arena.s().agents[player].avatar.height;
+    let height = arena.s().agents[player].avatar().unwrap().height;
     assert!(height > fx(0.4), "near the jump's apex as the swing lands: {height}");
     arena.step(1);
     assert_eq!(swings(&arena), vec![(100, player as u16, true, 1, false)]);
@@ -1400,7 +1400,7 @@ fn pushed(busy: impl FnOnce(&mut Arena, u64)) -> Fx {
     let before = arena.s().agents[player].body.position;
     arena.step(1);
     assert_eq!(swings(&arena), vec![(100, player as u16, true, 1, false)]);
-    assert_eq!(arena.s().agents[player].avatar.dig, None, "a push ends a dig");
+    assert_eq!(arena.s().agents[player].avatar().unwrap().dig, None, "a push ends a dig");
     arena.step(ms(500));
     let a = &arena.s().agents[player];
     assert_eq!((a.body.velocity, a.body.push), (FxVec2::ZERO, FxVec2::ZERO), "braked out");
@@ -1416,7 +1416,7 @@ fn a_ghoul_pushes_a_swinging_player_as_far_as_an_idle_one() {
         arena.step(lands - 2 - arena.tick());
         let agent = arena.player as u16;
         arena.command(CommandKind::Attack { agent, weapon: Weapon::Sword, aim: FxVec2::new(Fx::ZERO, -Fx::ONE), muzzle: [Fx::ZERO; 3] });
-        let swing = arena.s().agents[agent as usize].avatar.swing.clone().expect("swinging");
+        let swing = arena.s().agents[agent as usize].avatar().unwrap().swing.clone().expect("swinging");
         assert!(swing.until > lands + 1, "the swing outlasts the hit");
     });
     assert!((swinging - idle).abs() < fx(0.02), "swinging {swinging}, idle {idle}");
@@ -1430,7 +1430,7 @@ fn a_ghoul_push_ends_a_dig_and_moves_the_player() {
         terrain.diggable = true;
         let agent = arena.player as u16;
         arena.command(CommandKind::DigDown { agent });
-        assert!(arena.s().agents[agent as usize].avatar.dig.is_some());
+        assert!(arena.s().agents[agent as usize].avatar().unwrap().dig.is_some());
     });
     assert!((digging - idle).abs() < fx(0.02), "digging {digging}, idle {idle}");
 }

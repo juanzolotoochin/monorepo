@@ -12,9 +12,9 @@ use std::collections::BTreeMap;
 use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
-use super::avatar::{character_of, Intent};
+use super::avatar::{character_of, AvatarState, Intent};
 use super::combat::{Event, TossEnd};
-use super::AgentState;
+use super::{AgentState, Body, Role};
 use super::{AgentIx, Settlement};
 use crate::messages::PileStep;
 use crate::nav;
@@ -450,8 +450,9 @@ impl Settlement {
     /// (zero for all at once); `approach` picks the standing spot.
     pub fn pile_action(&mut self, tick: u64, terrain: &Terrain, agent: usize, action: PileAction, pace: Fx, approach: Option<FxVec2>) {
         let Some(lab) = self.piles.as_mut() else { return };
-        let Some(a) = self.agents.get_mut(agent).filter(|a| a.controlled) else { return };
-        let body = character_of(&self.characters, a).body.radius;
+        let Some(a) = self.agents.get_mut(agent) else { return };
+        let body_radius = character_of(&self.characters, a).body.radius;
+        let AgentState { body, role: Role::Avatar(avatar), .. } = a else { return };
         let me = agent as AgentIx;
         let carried = lab.cargo(me);
         let result = (|| {
@@ -478,21 +479,21 @@ impl Settlement {
             let route = match approach {
                 Some(stand) => {
                     let gap = nav::distance(stand, center);
-                    if gap < radius + body + Fx::from_ratio(1, 25) || gap > radius + body + Fx::from_ratio(9, 20) {
+                    if gap < radius + body_radius + Fx::from_ratio(1, 25) || gap > radius + body_radius + Fx::from_ratio(9, 20) {
                         return Err("Approach point must be within safe transfer reach");
                     }
-                    let path = walk_path(terrain, a.body.position, stand, body);
+                    let path = walk_path(terrain, body.position, stand, body_radius);
                     if path.is_empty() {
                         return Err("Approach point is blocked");
                     }
                     path
                 }
-                None => approach_route(terrain, a.body.position, center, radius, body).ok_or("No clear route there on foot")?,
+                None => approach_route(terrain, body.position, center, radius, body_radius).ok_or("No clear route there on foot")?,
             };
             let pace = if pace == Fx::ZERO { 0 } else { (pace * Fx::from_int(content::TICKS_PER_SECOND)).round().floor_to_int().max(1) as u64 };
-            follow(a, route);
+            follow(body, avatar, route);
             // A haul let go of earlier this turn no longer holds this one back.
-            a.avatar.dropped_haul = false;
+            avatar.dropped_haul = false;
             let hauler = lab.hauler_mut(me);
             hauler.job = Some(PileJob {
                 action,
@@ -500,7 +501,7 @@ impl Settlement {
                 radius,
                 age: 0,
                 stalled: 0,
-                previous: a.body.position,
+                previous: body.position,
                 pace,
                 next_toss: tick,
                 remaining: None,
@@ -528,7 +529,7 @@ impl Settlement {
     /// Commands: a dispenser adds units to its output pile. Everyone hears
     /// about it.
     pub fn dispense(&mut self, dispenser: PileId, units: u32) {
-        let players: Vec<AgentIx> = (0..self.agents.len() as AgentIx).filter(|&i| self.agents[i as usize].controlled).collect();
+        let players: Vec<AgentIx> = (0..self.agents.len() as AgentIx).filter(|&i| self.agents[i as usize].avatar().is_some()).collect();
         let Some(lab) = self.piles.as_mut() else { return };
         let notice = match lab.add(dispenser, units) {
             Ok(n) => format!("Dispenser added {n} units to its output pile."),
@@ -559,19 +560,19 @@ impl Settlement {
     }
 
     /// Stage 2, for an avatar: walk toward its pile, replanning when stuck.
-    pub(super) fn pile_job_self_update(lab: &PileLab, me: AgentIx, a: &mut AgentState, terrain: &Terrain, body: Fx) -> Option<&'static str> {
+    pub(super) fn pile_job_self_update(lab: &PileLab, me: AgentIx, body: &mut Body, avatar: &mut AvatarState, terrain: &Terrain, radius: Fx) -> Option<&'static str> {
         let job = lab.hauler(me)?.job.as_ref()?;
-        if job.remaining.is_some() || in_reach(a.body.position, job, body) {
-            a.body.route.clear();
-            a.body.velocity = FxVec2::ZERO;
+        if job.remaining.is_some() || in_reach(body.position, job, radius) {
+            body.route.clear();
+            body.velocity = FxVec2::ZERO;
             return None;
         }
         if job.age > JOB_TIMEOUT_TICKS {
             return Some("Haul timed out. Cargo retained; choose another approach.");
         }
-        if a.body.route.is_empty() || job.stalled > STALL_TICKS {
-            match approach_route(terrain, a.body.position, job.center, job.radius, body) {
-                Some(route) => follow(a, route),
+        if body.route.is_empty() || job.stalled > STALL_TICKS {
+            match approach_route(terrain, body.position, job.center, job.radius, radius) {
+                Some(route) => follow(body, avatar, route),
                 None => return Some("Route blocked. Cargo retained."),
             }
         }
@@ -584,7 +585,7 @@ impl Settlement {
             .agents
             .iter_mut()
             .enumerate()
-            .filter_map(|(i, a)| Some((i as AgentIx, a.avatar.pile_failure.take()?)))
+            .filter_map(|(i, a)| Some((i as AgentIx, a.avatar_mut()?.pile_failure.take()?)))
             .collect();
         let Some(lab) = self.piles.as_mut() else { return };
         for (agent, error) in failures {
@@ -606,7 +607,7 @@ impl Settlement {
 
     /// Stage 3: the avatar is in reach and a unit (or the whole amount) is due.
     pub(super) fn read_pile_job(&self, me: AgentIx, a: &AgentState, tick: u64) -> Option<PileStep> {
-        if a.avatar.dropped_haul {
+        if a.avatar()?.dropped_haul {
             return None;
         }
         let job = self.piles.as_ref()?.hauler(me)?.job.as_ref()?;
@@ -739,13 +740,13 @@ impl Settlement {
 }
 
 /// Points the avatar along a route.
-fn follow(a: &mut AgentState, route: Vec<FxVec2>) {
-    let target = route.last().copied().unwrap_or(a.body.position);
-    a.body.route = route;
-    a.avatar.swing = None;
-    a.avatar.queued = None;
-    a.avatar.queued_at = None;
-    a.avatar.intent = Some(Intent::GoTo { target, run: false });
+fn follow(body: &mut Body, avatar: &mut AvatarState, route: Vec<FxVec2>) {
+    let target = route.last().copied().unwrap_or(body.position);
+    body.route = route;
+    avatar.swing = None;
+    avatar.queued = None;
+    avatar.queued_at = None;
+    avatar.intent = Some(Intent::GoTo { target, run: false });
 }
 
 #[cfg(test)]

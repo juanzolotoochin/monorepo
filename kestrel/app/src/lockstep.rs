@@ -941,13 +941,14 @@ pub fn follow_avatar(
             (before, a, alpha)
         }
     };
+    let (Some(from_avatar), Some(to_avatar)) = (from.avatar(), to.avatar()) else { return };
     let (start, end) = (mirror.to_view(from.body.position), mirror.to_view(to.body.position));
     let mut position = start.lerp(end, alpha);
     if let Some(drawn) = &predicted {
         position.x = drawn.position.x;
         position.z = drawn.position.z;
     }
-    position.y = from.avatar.height.to_f32() + (to.avatar.height - from.avatar.height).to_f32() * alpha;
+    position.y = from_avatar.height.to_f32() + (to_avatar.height - from_avatar.height).to_f32() * alpha;
     let reset_step = ground_step.agent != Some(index)
         || ground_step.scene != Some(scene.index)
         || start.distance(end) > 1.5
@@ -956,7 +957,7 @@ pub fn follow_avatar(
         if reset_step { None } else { ground_step.height },
         position.y,
         time.delta_secs(),
-        !to.avatar.flight.airborne && matches!(to.avatar.jump, sim::settlement::avatar::JumpPhase::Grounded),
+        !to_avatar.flight.airborne && matches!(to_avatar.jump, sim::settlement::avatar::JumpPhase::Grounded),
     );
     ground_step.height = Some(position.y);
     ground_step.agent = Some(index);
@@ -994,7 +995,7 @@ pub fn follow_avatar(
     let moved = if teleport { Vec3::ZERO } else { crate::navigation::flat(position - previous) };
     let relative_speed = controls.velocity.length() / motion.walk_speed.max(0.1);
     let step_distance = crate::character::step_distance_for_speed(motion.step_distance, relative_speed).clamp(0.2, 4.0);
-    let contacts = controls.gait.advance(moved.length(), step_distance, !to.avatar.flight.airborne);
+    let contacts = controls.gait.advance(moved.length(), step_distance, !to_avatar.flight.airborne);
     for _ in 0..contacts {
         sound.play(crate::sound::Cue::Step);
     }
@@ -2223,7 +2224,7 @@ mod tests {
                 let a = drawn.avatar();
                 assert_eq!(shown, (a.flight.airborne, a.jump, a.flight.requested), "{scene}, frame {frame}: the views' flight isn't the drawn avatar's");
                 let up = lifted(a);
-                let confirmed_up = lifted(&confirmed_avatar(&game.client).avatar);
+                let confirmed_up = lifted(&confirmed_avatar(&game.client).avatar().unwrap());
                 if up && drawn_at.is_none() {
                     drawn_at = Some(frame);
                     if withdraw {
@@ -2290,7 +2291,7 @@ mod tests {
                 let digging = drawn.avatar().dig.clone();
                 assert_eq!(mine.first().map(|d| (d.dig.clone(), d.at, d.now)), digging.clone().map(|dig| (dig, player, drawn.time)), "frame {frame}: the shown dig isn't the drawn avatar's");
                 assert_eq!(drawn.dig_age().is_some(), digging.is_some());
-                let confirmed_digging = confirmed_avatar(&game.client).avatar.dig.is_some();
+                let confirmed_digging = confirmed_avatar(&game.client).avatar().unwrap().dig.is_some();
                 if digging.is_some() && drawn_at.is_none() {
                     drawn_at = Some(frame);
                     if withdraw {

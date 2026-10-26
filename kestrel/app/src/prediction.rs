@@ -131,7 +131,7 @@ pub struct DrawnState {
 impl DrawnState {
     /// The drawn avatar's state: the newer one.
     pub fn avatar(&self) -> &sim::settlement::avatar::AvatarState {
-        &self.to.avatar
+        self.to.avatar().expect("only avatars are drawn as the local avatar")
     }
 
     /// How long (seconds) the drawn avatar has been digging, if it is.
@@ -187,7 +187,7 @@ impl AvatarPrediction {
         let fraction = (drawn - base as f64) as f32;
         let view = |a: &AgentState| {
             let p = (c.to_view)(a.body.position);
-            Vec3::new(p.x, a.avatar.height.to_f32(), p.z)
+            Vec3::new(p.x, a.avatar().map_or(0.0, |avatar| avatar.height.to_f32()), p.z)
         };
         let current = &c.settlement.agents[c.agent as usize];
         let predicted = (base >= c.tick && base < c.tick + MAX_LEAD).then(|| replay(c, base + 1)).flatten();
@@ -396,7 +396,7 @@ pub fn touched(before: &Settlement, after: &Settlement, agent: u16, tick: u64, t
     }
     let unhit = |a: &AgentState| {
         let mut a = a.clone();
-        if let Some(swing) = a.avatar.swing.as_mut() {
+        if let Some(swing) = a.avatar_mut().and_then(|avatar| avatar.swing.as_mut()) {
             swing.hits = 0;
         }
         a
@@ -637,7 +637,8 @@ mod tests {
         let a = &mut dead.agents[agent as usize];
         let home = a.body.home;
         a.body.position = home + FxVec2::new(Fx::from_int(4), Fx::ZERO);
-        (a.body.max_health, a.body.health, a.avatar.respawn_at) = (6, 0, world.tick() + 12);
+        (a.body.max_health, a.body.health) = (6, 0);
+        a.avatar_mut().unwrap().respawn_at = world.tick() + 12;
         let mut prediction = AvatarPrediction::default();
         let mut respawned = None;
         for horizon in 6..30u64 {

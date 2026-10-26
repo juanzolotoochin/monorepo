@@ -408,7 +408,7 @@ impl World {
             if let Some(agent) = driven {
                 let owner = agent
                     .and_then(|agent| self.settlement.as_ref().and_then(|s| s.agents.get(agent as usize)))
-                    .and_then(|a| a.owner);
+                    .and_then(|a| a.avatar()?.owner);
                 if owner != Some(turn[i].player) {
                     continue;
                 }
@@ -844,9 +844,8 @@ impl World {
         let Some(settlement) = &self.settlement else { return };
         for index in 0..self.terrain.destructibles.len() {
             let piece = &self.terrain.destructibles[index];
-            let held = settlement.agents.iter().any(|agent| agent.controlled
-                && (agent.body.max_health == 0 || agent.body.health > 0)
-                && agent.avatar.repair == Some(piece.asset)
+            let held = settlement.agents.iter().any(|agent| agent.body.alive()
+                && agent.avatar().is_some_and(|avatar| avatar.repair == Some(piece.asset))
                 && self.terrain.asset_in_repair_reach(agent.body.position, piece.asset));
             self.terrain.repair_cover(index, held);
         }
