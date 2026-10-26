@@ -1,11 +1,23 @@
 # Wall-clock-sensitive tests
 
-Three Bazel test targets use real elapsed time. Their assertions can fail when a build or other workload competes for CPU. They are marked `flaky = True` in their `BUILD.bazel` files, so a passing retry does not prove the timing issue is fixed.
+Three Bazel test targets use real elapsed time. None of them is marked `flaky = True`: each is written so that a busy machine only makes it slower, not red. Keep it that way, because Bazel's retries hide a test that fails for a real reason.
 
 | Target | Timing dependency | Relevant test |
 | --- | --- | --- |
-| `//kestrel/headless:bench_test` | Compares mean simulation tick time with a 10 ms budget while using the machine's worker threads. | `large_world_fits_the_tick_budget` |
-| `//kestrel/net:net_test` | Counts host ticks during a fixed interval of real time over local UDP. | `tests::udp_smoke` |
-| `//kestrel/session:session_test` | Runs two-player UDP scenarios and catch-up within real-time deadlines. | `two_players_walk_around_together`, `two_players_fight_ghouls_over_udp` |
+| `//kestrel/headless:bench_test` | Measures the mean simulation tick time while using the machine's worker threads. It holds a budget only when `KESTREL_TICK_BUDGET_MS` is set. | `large_world_fits_the_tick_budget` |
+| `//kestrel/net:net_test` | Runs a host and a client over local UDP in real time. | `tests::udp_smoke` |
+| `//kestrel/session:session_test` | Runs two-player UDP scenarios in real time. | `two_players_walk_around_together`, `two_players_fight_ghouls_over_udp` |
 
-The headless benchmark measures performance, while the network tests primarily need to establish protocol progress and agreement. When investigating a failure, inspect the elapsed-time assumptions and run the target alone as well as under CPU load. A durable fix should make protocol assertions depend on simulated progress or confirmed ticks where possible, and measure performance on a controlled machine. Remove `flaky = True` only after the revised test passes reliably under the workloads it is expected to tolerate.
+The network tests check that the protocol makes progress and that the machines agree, not how fast they go:
+
+- They run until the game reaches a state (the client has played 60 ticks, both players walked 2 m, both hit ghouls), with a deadline far above the usual time (30 s), rather than for a fixed time.
+- They compare ticks and hashes the peers both ran. Before comparing final states, the host makes one last update a tick later. It sends once per tick of time, so its last update in the loop may have run a tick it never sent.
+- Pacing (ticks per second) is tested on the simulated network in `kestrel/net/src/tests.rs`, where time is simulated too.
+
+The benchmark's 10 ms budget only means something on a known machine with nothing else running, and remote test machines are neither. To check it:
+
+```text
+bazel test -c opt --test_env=KESTREL_TICK_BUDGET_MS=10 //kestrel/headless:bench_test
+```
+
+To check a change to one of these tests, run it many times, for example with `--runs_per_test=100`.

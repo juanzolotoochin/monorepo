@@ -629,19 +629,22 @@ fn udp_smoke() {
         host.queue(command.kind);
     }
     let mut client = Client::new(UdpTransport::bind(any).unwrap(), host_addr, content, config(), 5, Duration::ZERO);
-    while start.elapsed() < Duration::from_secs(3) {
+    // Run until the client has played a while, not for a fixed time: a busy
+    // machine runs fewer ticks per second, which only slows the test. The
+    // pacing itself is tested on the simulated network.
+    let ran = |client: &Client<UdpTransport>| client.history().end() - client.history().start();
+    while ran(&client) <= 60 && start.elapsed() < Duration::from_secs(30) {
         let now = start.elapsed();
         host.update(now, |_| {});
         client.update(now, |_| {});
         std::thread::sleep(Duration::from_millis(2));
     }
     assert_eq!(client.phase(), ClientPhase::Playing);
+    assert!(ran(&client) > 60, "client ran {} ticks in 30 s", ran(&client));
     let log = client.history();
-    assert!(log.end() - log.start() > 30, "client ran {} ticks", log.end() - log.start());
     for tick in log.start()..log.end() {
         assert_eq!(log.get(tick), host.history().get(tick));
     }
-    assert!(host.world().tick() as f64 >= 0.8 * 3.0 / TICK.as_secs_f64(), "host ran {} ticks", host.world().tick());
 }
 
 /// Runs the harness's host through a map change: a new world at tick 0.

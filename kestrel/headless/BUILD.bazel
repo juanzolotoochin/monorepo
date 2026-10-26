@@ -39,15 +39,11 @@ rust_binary(
     ],
 )
 
-# The 10 ms budget only means something in an optimized build:
-#   bazel test -c opt //kestrel/headless:bench_test
-# In other builds it only checks that the benchmark runs.
+# Runs the tick benchmark. It holds a budget only when asked to
+# (KESTREL_TICK_BUDGET_MS); see bench_test.rs.
 rust_test(
     name = "bench_test",
     size = "small",
-    # Wall-clock tick budget: fails when the machine is busy (81 ms vs a 10 ms
-    # budget during a parallel build). See kestrel/docs/flaky-tests.md.
-    flaky = True,
     srcs = ["bench_test.rs"],
     edition = "2021",
     deps = [

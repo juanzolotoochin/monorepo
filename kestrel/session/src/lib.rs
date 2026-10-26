@@ -420,26 +420,42 @@ mod tests {
         let avatar = |session: &Session| session.world()?.settlement()?.avatar_of(session.player()?);
         let position = |session: &Session, agent: u16| session.world().unwrap().settlement().unwrap().agents[agent as usize].body.position;
         let walk = |agent: u16, x: i32| CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: FxVec2::new(Fx::from_int(x), Fx::ZERO), run: false } };
+        let spawn = host.world().unwrap().settlement().unwrap().spawn;
+        // Both have walked far enough, as the host sees it. The test waits for
+        // that rather than for a fixed time, so a busy machine only slows it.
+        let walked = |host: &Session, mine: u16, theirs: u16| {
+            position(host, mine).x > spawn.x + Fx::from_int(2) && position(host, theirs).x < spawn.x - Fx::from_int(2)
+        };
         let start = std::time::Instant::now();
-        let (mut walking, mut now) = (false, Duration::ZERO);
-        while start.elapsed() < Duration::from_secs(4) {
+        let (mut walking, mut now) = (None, Duration::ZERO);
+        while start.elapsed() < Duration::from_secs(30) {
             now = start.elapsed();
             host.update(now, |_| {});
             client.update(now, |_| {});
-            if !walking {
-                if let (Some(mine), Some(theirs)) = (avatar(&client), avatar(&host)) {
-                    host.queue(walk(theirs, -1));
-                    client.queue(walk(mine, 1));
-                    walking = true;
+            match walking {
+                None => {
+                    if let (Some(mine), Some(theirs)) = (avatar(&client), avatar(&host)) {
+                        host.queue(walk(theirs, -1));
+                        client.queue(walk(mine, 1));
+                        walking = Some((mine, theirs));
+                    }
                 }
+                Some((mine, theirs)) if walked(&host, mine, theirs) => break,
+                Some(_) => {}
             }
             std::thread::sleep(Duration::from_millis(2));
         }
-        assert!(walking, "the client never got an avatar: {}", client.status());
+        let Some((mine, theirs)) = walking else { panic!("the client never got an avatar: {}", client.status()) };
+        assert!(walked(&host, mine, theirs), "the players didn't get far in 30 s");
         assert_eq!(host.status(), "hosting, 2 players");
 
-        // Stop the host and let the client run (a tick at most per update)
-        // until it reaches the host's tick.
+        // The host only sends once per tick of time, so its last update may
+        // have run a tick without sending its turn. One more update a tick
+        // later always sends, and every turn the client hasn't acknowledged
+        // goes with it. Then the host stops and the client runs until it
+        // reaches the host's tick.
+        now += net::TICK;
+        host.update(now, |_| {});
         let target = host.world().unwrap().tick();
         let wait = std::time::Instant::now();
         while client.world().unwrap().tick() < target && wait.elapsed() < Duration::from_secs(2) {
@@ -447,11 +463,7 @@ mod tests {
             client.update(now, |_| {});
             std::thread::sleep(Duration::from_millis(1));
         }
-        let (mine, theirs) = (avatar(&client).unwrap(), avatar(&host).unwrap());
         assert_ne!(mine, theirs);
-        let spawn = host.world().unwrap().settlement().unwrap().spawn;
-        assert!(position(&host, mine).x > spawn.x + Fx::from_int(2), "the guest walked right");
-        assert!(position(&host, theirs).x < spawn.x - Fx::from_int(2), "the host walked left");
         assert_eq!(host.world().unwrap().tick(), client.world().unwrap().tick());
         assert_eq!(host.save(), client.save(), "both machines have the same world");
     }
@@ -577,8 +589,18 @@ mod tests {
         // Hits by each avatar, counted on the host.
         let mut hits = std::collections::BTreeMap::<u16, u32>::new();
         let (mut host_last, mut client_last) = (0, 0);
+        // Fight until both players have hit ghouls with both weapons and the
+        // client has run enough ticks to compare, not for a fixed time, so a
+        // busy machine only slows the test down.
+        let done = |host: &Session, client: &Session, hits: &std::collections::BTreeMap<u16, u32>| {
+            let s = host.world().unwrap().settlement().unwrap();
+            let both = [Some(net::HOST_PLAYER), client.player()].into_iter().all(|p| {
+                p.and_then(|p| s.avatar_of(p)).is_some_and(|agent| hits.get(&agent).is_some_and(|&n| n > 0))
+            });
+            both && s.combat.spear_hits > 0 && s.combat.melee_hits > 0 && client.world().is_some_and(|w| w.tick() > 200)
+        };
         let start = std::time::Instant::now();
-        while start.elapsed() < Duration::from_secs(9) {
+        while !done(&host, &client, &hits) && start.elapsed() < Duration::from_secs(30) {
             let now = start.elapsed();
             host.update(now, |world| {
                 for event in &world.settlement().unwrap().events {

@@ -1,17 +1,16 @@
 # Testing
 
-## `headless:bench_test` fails on remote executors
+## Check the tick budget on a known machine
 
 - **Status:** open
-- **Why:** `large_world_fits_the_tick_budget` measures 26–33 ms per tick on
-  BuildBuddy's remote machines against a 10 ms budget, so it fails on
-  `master` and makes `bazel test //kestrel/...` red for everyone.
-- **What to do:** decide whether the budget applies to a known machine
-  (then tag the test `manual` or `local`, or run it only where the hardware
-  is known) or whether the sim got slower (then profile it). Check which
-  commit it started failing on.
-- **Where:** `kestrel/headless/bench_test.rs`; its target in
-  `kestrel/headless/BUILD.bazel`.
+- **Why:** remote machines measured 26–33 ms per tick for the large world
+  against the 10 ms budget. The bench test no longer enforces the budget
+  there, so a slowdown in the sim wouldn't show up anywhere.
+- **What to do:** run
+  `bazel test -c opt --test_env=KESTREL_TICK_BUDGET_MS=10 //kestrel/headless:bench_test`
+  on a known machine. If it misses, find the commit it started on and
+  profile it.
+- **Where:** `kestrel/headless/bench_test.rs`.
 - **Found in:** the full test run for PR #111
   (https://app.buildbuddy.io/invocation/b95f8bf3-e295-4ed7-91a4-b2f8bef0b839).
 
@@ -38,23 +37,6 @@
 - **Found in:** eight-player stage 1
   (https://app.buildbuddy.io/invocation/271ae3f0-9a83-4152-a6ab-52d188bb1a6f).
 
-## `two_players_walk_around_together` sometimes ends a tick apart
-
-- **Status:** open
-- **Why:** the session test fails about 1 run in 30, on `master` too:
-  after the host stops, the client is still a tick behind 2 s later
-  (`left: 240, right: 239` at `session/src/lib.rs:455`). Bazel retries it,
-  so it shows as flaky rather than red. The test runs on wall-clock time
-  over real UDP, so the last turn the host closed before stopping may
-  never have been sent, or may have been lost with nothing left to resend
-  it.
-- **What to do:** have the host make one last `update` after its loop (or
-  compare against the client's last confirmed tick instead of the host's),
-  and check with `--runs_per_test=30` that it no longer fails.
-- **Where:** `two_players_walk_around_together` in `kestrel/session/src/lib.rs`.
-- **Found in:** rebasing the eight-player branch onto `4e240d3` (2 of 32
-  runs failed there, 1 of 31 on `master`).
-
 ## Clean up after the Debian 12 libudev switch
 
 - **Status:** open
@@ -69,6 +51,31 @@
 - **Found in:** commit `be66db0` on branch `kestrel-ability-prediction`.
 
 ## Done
+
+### `two_players_walk_around_together` sometimes ends a tick apart
+
+- **Status:** done (branch `kestrel-flaky-tests`). The host makes one last
+  update a tick after its loop, which always sends. The network tests
+  (`udp_smoke` and both session UDP tests) now run until they reach a state,
+  not for a fixed time. `bench_test` holds a budget only when
+  `KESTREL_TICK_BUDGET_MS` is set. None of the three targets is `flaky`
+  any more. The session test passed 100 of 100 runs
+  (https://app.buildbuddy.io/invocation/0ed4ca1e-c657-4b2b-b074-ee3778d4efbb),
+  and net passed 30 of 30
+  (https://app.buildbuddy.io/invocation/e021e5a4-2e4c-442d-ac29-e0d77c94934d).
+- **Why:** the session test fails about 1 run in 30, on `master` too:
+  after the host stops, the client is still a tick behind 2 s later
+  (`left: 240, right: 239` at `session/src/lib.rs:455`). Bazel retries it,
+  so it shows as flaky rather than red. The test runs on wall-clock time
+  over real UDP, so the last turn the host closed before stopping may
+  never have been sent, or may have been lost with nothing left to resend
+  it.
+- **What to do:** have the host make one last `update` after its loop (or
+  compare against the client's last confirmed tick instead of the host's),
+  and check with `--runs_per_test=30` that it no longer fails.
+- **Where:** `two_players_walk_around_together` in `kestrel/session/src/lib.rs`.
+- **Found in:** rebasing the eight-player branch onto `4e240d3` (2 of 32
+  runs failed there, 1 of 31 on `master`).
 
 ### `movement_test` can't be built or run from Windows
 
