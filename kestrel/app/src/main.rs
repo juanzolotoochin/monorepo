@@ -268,6 +268,10 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .add_systems(First, (telemetry::begin, control::begin).chain())
         .add_systems(Update, telemetry::shortcut.in_set(debug_ui::DebugUiSystems::Shortcuts))
         .add_systems(
+            PostUpdate,
+            telemetry::draw_preview_corrections.run_if(resource_exists::<bevy::gizmos::config::GizmoConfigStore>),
+        )
+        .add_systems(
             Last,
             ((telemetry::end, control::end).chain(), control::capture_frame.run_if(control::rendered))
                 .chain()

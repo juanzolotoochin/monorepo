@@ -41,6 +41,13 @@ it is not a simulation replay or a desync capture.
   easing corrections, clamped frames, and distance-reset snaps. These are
   view observations, not deterministic state mismatches. Initial avatar setup
   does not count as a distance snap.
+- **Preview corrections:** consecutive frames pulled back the same way
+  (ease, clamp, or snap) form one correction. Corrections under 0.05 units are
+  dropped, except snaps. **Show corrections in the world** draws, for two
+  seconds, a box where the avatar was drawn when the correction started and a
+  line to where it was pulled. The copied report lists them under
+  `preview_corrections`, with duration, distance, positions, local tick,
+  pending inputs and RTT at the start.
 
 Graphs use local monotonic wall time, with per-frame p95 values over the retained
 history. The slowest tick graph has no sample on frames without a tick.

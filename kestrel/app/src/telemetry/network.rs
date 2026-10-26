@@ -1,8 +1,17 @@
 //! A read-only network view. Samples survive the Session layer's teardown.
 use super::{egui, json, Duration, Instant, Value, VecDeque};
+use bevy::prelude::{Color, Gizmos, Isometry3d, Transform, Vec3};
 
 const HISTORY: Duration = Duration::from_secs(10);
 const MAX_SAMPLES: usize = 600;
+/// How long a correction stays drawn in the world after it ends.
+const CORRECTION_SHOWN: Duration = Duration::from_secs(2);
+/// Episodes that pull the avatar less than this (units) are not kept.
+const MIN_CORRECTION: f32 = 0.05;
+/// A frame pulling less than this does not count, so float noise at the
+/// leash's edge does not hold an episode open.
+const MIN_FRAME_CORRECTION: f32 = 0.001;
+const MAX_CORRECTIONS: usize = 256;
 
 pub struct NetworkFrame {
     pub at: Instant,
@@ -24,6 +33,77 @@ pub struct NetworkDiagnostics {
     preview: Option<PreviewSample>,
     preview_clamps: u64,
     preview_snaps: u64,
+    /// Finished correction episodes this session, oldest first.
+    corrections: VecDeque<PreviewCorrection>,
+    /// The episode the latest preview frames belong to.
+    open_correction: Option<PreviewCorrection>,
+    last_shown: Option<Vec3>,
+    /// Draw recent corrections in the world. Kept across sessions.
+    pub show_corrections: bool,
+}
+
+/// One frame of the client's local avatar preview, in view space.
+pub struct PreviewUpdate {
+    /// Where the avatar is drawn this frame.
+    pub shown: Vec3,
+    /// Where the confirmed simulation has it.
+    pub confirmed: Vec3,
+    /// Distance the preview eased toward the confirmed position.
+    pub eased: f32,
+    /// Distance the leash held the preview back from where it would have gone.
+    pub clamped: f32,
+    /// The preview was too far off and reset onto the confirmed position.
+    pub snapped: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CorrectionKind {
+    Ease,
+    Clamp,
+    Snap,
+}
+
+impl CorrectionKind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Ease => "ease",
+            Self::Clamp => "clamp",
+            Self::Snap => "snap",
+        }
+    }
+
+    fn color(self, alpha: f32) -> Color {
+        match self {
+            Self::Ease => Color::srgba(1.0, 0.85, 0.2, alpha),
+            Self::Clamp => Color::srgba(1.0, 0.35, 0.15, alpha),
+            Self::Snap => Color::srgba(1.0, 0.2, 0.9, alpha),
+        }
+    }
+}
+
+/// Consecutive preview frames pulled back the same way: one movement preview
+/// reconciliation as the player feels it.
+#[derive(Clone, Debug)]
+pub struct PreviewCorrection {
+    pub kind: CorrectionKind,
+    pub started: Instant,
+    pub ended: Instant,
+    /// Where the avatar was drawn just before the episode.
+    pub from: Vec3,
+    /// Where it was drawn on the episode's last frame.
+    pub to: Vec3,
+    /// Total distance pulled, summed over frames.
+    pub distance: f32,
+    pub frames: u32,
+    pub tick: Option<u64>,
+    pub pending: Option<u64>,
+    pub rtt: Option<Duration>,
+}
+
+impl PreviewCorrection {
+    fn kept(&self) -> bool {
+        self.kind == CorrectionKind::Snap || self.distance >= MIN_CORRECTION
+    }
 }
 
 struct PreviewSample {
@@ -34,7 +114,10 @@ struct PreviewSample {
 
 impl NetworkDiagnostics {
     pub fn begin(&mut self) {
-        *self = Self::default();
+        *self = Self {
+            show_corrections: self.show_corrections,
+            ..Self::default()
+        };
     }
 
     pub fn record(&mut self, frame: NetworkFrame) {
@@ -66,14 +149,107 @@ impl NetworkDiagnostics {
             .filter(|frame| now.saturating_duration_since(frame.at) <= Duration::from_secs(1))
     }
 
-    pub fn preview(&mut self, offset: f32, correction: f32, clamped: bool, snapped: bool) {
+    pub fn preview(&mut self, now: Instant, update: PreviewUpdate) {
+        let flat = |v: Vec3| Vec3::new(v.x, 0.0, v.z).length();
         self.preview = Some(PreviewSample {
-            at: Instant::now(),
-            offset,
-            correction,
+            at: now,
+            offset: flat(update.shown - update.confirmed),
+            correction: update.eased,
         });
-        self.preview_clamps += u64::from(clamped);
-        self.preview_snaps += u64::from(snapped);
+        self.preview_clamps += u64::from(update.clamped > 0.0);
+        self.preview_snaps += u64::from(update.snapped);
+
+        let (kind, distance) = if update.snapped {
+            let from = self.last_shown.unwrap_or(update.shown);
+            (Some(CorrectionKind::Snap), flat(update.shown - from))
+        } else if update.clamped > MIN_FRAME_CORRECTION {
+            (Some(CorrectionKind::Clamp), update.clamped)
+        } else if update.eased > MIN_FRAME_CORRECTION {
+            (Some(CorrectionKind::Ease), update.eased)
+        } else {
+            (None, 0.0)
+        };
+        if self.open_correction.as_ref().is_some_and(|open| Some(open.kind) != kind) {
+            self.close_correction();
+        }
+        if let Some(kind) = kind {
+            let from = self.last_shown.unwrap_or(update.shown);
+            let latest = self.frames.back();
+            let open = self.open_correction.get_or_insert_with(|| PreviewCorrection {
+                kind,
+                started: now,
+                ended: now,
+                from,
+                to: update.shown,
+                distance: 0.0,
+                frames: 0,
+                tick: latest.and_then(|f| f.tick),
+                pending: latest.map(|f| f.pending),
+                rtt: latest.and_then(|f| f.stats.rtt),
+            });
+            open.ended = now;
+            open.to = update.shown;
+            open.distance += distance;
+            open.frames += 1;
+            if kind == CorrectionKind::Snap {
+                self.close_correction();
+            }
+        }
+        self.last_shown = Some(update.shown);
+    }
+
+    fn close_correction(&mut self) {
+        let Some(correction) = self.open_correction.take().filter(PreviewCorrection::kept) else {
+            return;
+        };
+        if self.corrections.len() >= MAX_CORRECTIONS {
+            self.corrections.pop_front();
+        }
+        self.corrections.push_back(correction);
+    }
+
+    /// Kept corrections, including the one still in progress, oldest first.
+    pub fn corrections(&self) -> impl Iterator<Item = &PreviewCorrection> {
+        self.corrections
+            .iter()
+            .chain(self.open_correction.iter().filter(|c| c.kept()))
+    }
+
+    /// Boxes where the local avatar was drawn when each recent correction
+    /// started, with a line to where it was pulled, fading over two seconds.
+    pub fn draw_corrections(&self, now: Instant, gizmos: &mut Gizmos) {
+        if !self.show_corrections {
+            return;
+        }
+        for c in self.corrections() {
+            let age = now.saturating_duration_since(c.ended);
+            if age > CORRECTION_SHOWN {
+                continue;
+            }
+            let color = c.kind.color(1.0 - 0.7 * age.as_secs_f32() / CORRECTION_SHOWN.as_secs_f32());
+            let lift = Vec3::Y * 0.05;
+            gizmos.cube(
+                Transform::from_translation(c.from + Vec3::Y * 0.9).with_scale(Vec3::new(0.7, 1.8, 0.7)),
+                color,
+            );
+            gizmos.line(c.from + lift, c.to + lift, color);
+            gizmos.sphere(Isometry3d::from_translation(c.to + lift), 0.12, color);
+        }
+    }
+
+    fn correction_json(c: &PreviewCorrection, end: Instant) -> Value {
+        json!({
+            "kind": c.kind.name(),
+            "age_ms": end.saturating_duration_since(c.started).as_secs_f64() * 1000.,
+            "duration_ms": c.ended.saturating_duration_since(c.started).as_secs_f64() * 1000.,
+            "frames": c.frames,
+            "distance": c.distance,
+            "from": [c.from.x, c.from.y, c.from.z],
+            "to": [c.to.x, c.to.y, c.to.z],
+            "local_next_tick": c.tick,
+            "pending_application": c.pending,
+            "rtt_ms": c.rtt.map(|v| v.as_secs_f64() * 1000.),
+        })
     }
 
     /// Rates over up to one second; the first sample has no rate.
@@ -98,7 +274,7 @@ impl NetworkDiagnostics {
         ))
     }
 
-    pub fn show(&self, ui: &mut egui::Ui, active: bool) {
+    pub fn show(&mut self, ui: &mut egui::Ui, active: bool) {
         let Some(frame) = self.frames.back() else {
             ui.label("Host or join a network game to collect diagnostics.");
             return;
@@ -131,7 +307,8 @@ impl NetworkDiagnostics {
                     "frame_ms": f.frame_ms, "session_update_ms": f.update_ms, "slowest_tick_ms": f.tick_ms,
                     "packets_sent": f.stats.packets_sent, "packets_received": f.stats.packets_received,
                     "bytes_sent": f.stats.bytes_sent, "bytes_received": f.stats.bytes_received
-                })).collect::<Vec<_>>()
+                })).collect::<Vec<_>>(),
+                "preview_corrections": self.corrections().map(|c| Self::correction_json(c, frame.at)).collect::<Vec<_>>()
             });
             ui.ctx()
                 .copy_text(serde_json::to_string_pretty(&report).unwrap());
@@ -281,6 +458,19 @@ impl NetworkDiagnostics {
                 } else {
                     ui.label("Unknown: no local avatar preview sample yet.");
                 }
+                ui.checkbox(&mut self.show_corrections, "Show corrections in the world (2 s)");
+                ui.small("Box: where the avatar was drawn when the correction started. Line: where it was pulled to. Yellow ease, orange clamp, magenta snap.");
+                let kept: Vec<_> = self.corrections().collect();
+                ui.label(format!("{} corrections of at least {MIN_CORRECTION} units kept", kept.len()));
+                for c in kept.iter().rev().take(8) {
+                    ui.monospace(format!(
+                        "{:>5} {:.2} units over {:.0} ms · {:.1} s ago",
+                        c.kind.name(),
+                        c.distance,
+                        c.ended.saturating_duration_since(c.started).as_secs_f64() * 1000.,
+                        c.started.elapsed().as_secs_f64()
+                    ));
+                }
             });
         } else {
             ui.collapsing("Host peers", |ui| {
@@ -418,6 +608,7 @@ impl NetworkDiagnostics {
             "preview_offset": self.preview.as_ref().map(|p| p.offset),
             "preview_correction": self.preview.as_ref().map(|p| p.correction),
             "preview_clamped_frames": self.preview_clamps, "preview_distance_snaps": self.preview_snaps,
+            "preview_corrections": self.corrections().count(),
         });
         let peers = d.peers.iter().map(|peer| json!({
                 "player": peer.player.0, "loading": peer.loading, "turn_receipt_ack": peer.turn_ack,
@@ -501,7 +692,7 @@ mod tests {
             1,
             "old samples expire by time as well as count"
         );
-        network.preview(0.5, 0.1, true, true);
+        network.preview(start, update(1.0, 0.1, 0.2, true));
         network.record(frame(start + Duration::from_secs(21), 2, 1002));
         assert_eq!(network.frames.len(), 1);
         assert!(network.preview.is_none());
@@ -512,17 +703,17 @@ mod tests {
     fn window_draws_missing_measurements_and_retained_client_and_host_history() {
         let mut network = NetworkDiagnostics::default();
         let context = egui::Context::default();
-        let draw = |network: &NetworkDiagnostics| {
+        let draw = |network: &mut NetworkDiagnostics| {
             let output = context.run_ui(egui::RawInput::default(), |ui| {
                 network.show(ui, false);
             });
             assert!(!output.shapes.is_empty());
             output.drop_without_applying_deltas();
         };
-        draw(&network);
+        draw(&mut network);
         let now = Instant::now();
         network.record(frame(now, 1, 0));
-        draw(&network);
+        draw(&mut network);
         let mut host = frame(now + Duration::from_millis(20), 1, 1);
         host.role = "Host";
         host.diagnostics.peers.push(net::PeerDiagnostics {
@@ -537,6 +728,51 @@ mod tests {
             last_assigned_tick: Some(10),
         });
         network.record(host);
-        draw(&network);
+        draw(&mut network);
+    }
+
+    fn update(x: f32, eased: f32, clamped: f32, snapped: bool) -> PreviewUpdate {
+        PreviewUpdate {
+            shown: Vec3::new(x, 0.0, 0.0),
+            confirmed: Vec3::ZERO,
+            eased,
+            clamped,
+            snapped,
+        }
+    }
+
+    #[test]
+    fn preview_corrections_merge_consecutive_frames_and_drop_small_ones() {
+        let start = Instant::now();
+        let at = |i: u64| start + Duration::from_millis(16 * i);
+        let mut network = NetworkDiagnostics::default();
+        network.record(frame(start, 1, 0));
+        network.preview(at(0), update(1.0, 0.0, 0.0, false));
+        // Three leashed frames, then a change of kind to easing.
+        network.preview(at(1), update(1.1, 0.0, 0.03, false));
+        network.preview(at(2), update(1.2, 0.0, 0.03, false));
+        network.preview(at(3), update(1.3, 0.0, 0.03, false));
+        network.preview(at(4), update(1.2, 0.02, 0.0, false));
+        network.preview(at(5), update(1.1, 0.0, 0.0, false));
+        // A snap is its own episode.
+        network.preview(at(6), update(4.0, 0.0, 0.0, true));
+        network.preview(at(7), update(4.0, 0.0, 0.0, false));
+
+        let kept: Vec<_> = network.corrections().collect();
+        assert_eq!(kept.len(), 2, "the 0.02 unit ease is below the minimum");
+        assert_eq!(kept[0].kind, CorrectionKind::Clamp);
+        assert_eq!(kept[0].frames, 3);
+        assert!((kept[0].distance - 0.09).abs() < 1e-5);
+        assert_eq!(kept[0].from, Vec3::new(1.0, 0.0, 0.0), "the box marks where the avatar was before the pull");
+        assert_eq!(kept[0].to, Vec3::new(1.3, 0.0, 0.0));
+        assert_eq!(kept[0].tick, Some(12));
+        assert_eq!(kept[1].kind, CorrectionKind::Snap);
+        assert!((kept[1].distance - 2.9).abs() < 1e-5);
+        assert_eq!(network.snapshot()["preview_corrections"], 2);
+
+        network.show_corrections = true;
+        network.begin();
+        assert_eq!(network.corrections().count(), 0);
+        assert!(network.show_corrections, "the overlay toggle survives a new session");
     }
 }

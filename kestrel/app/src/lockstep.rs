@@ -913,7 +913,7 @@ pub fn follow_avatar(
     if service.is_client() {
         let snapped = preview.agent == Some(index) && preview.position.is_some_and(|p| p.distance(to) > 1.5);
         let mut correction = 0.0;
-        let mut clamped = false;
+        let mut clamped = 0.0;
         let reset = preview.agent != Some(index) || preview.position.is_none_or(|p| p.distance(to) > 1.5);
         if reset {
             *preview = LocalAvatarPreview { position: Some(to), agent: Some(index), ..default() };
@@ -947,7 +947,7 @@ pub fn follow_avatar(
                     || service.player_radius().is_some_and(|radius| world.terrain().walkable(service.to_sim(start), service.to_sim(candidate), radius))
             });
             if passable {
-                clamped = (candidate - to).length() > 0.9;
+                clamped = ((candidate - to).length() - 0.9).max(0.0);
                 // Limit how far the displayed avatar can get ahead while
                 // waiting for the host's confirmed turns.
                 preview.position = Some(to + (candidate - to).clamp_length_max(0.9));
@@ -980,7 +980,10 @@ pub fn follow_avatar(
         } else {
             preview.position = Some(to);
         }
-        telemetry.network.preview(crate::navigation::flat(position - to).length(), correction, clamped, snapped);
+        telemetry.network.preview(
+            web_time::Instant::now(),
+            crate::telemetry::PreviewUpdate { shown: position, confirmed: to, eased: correction, clamped, snapped },
+        );
     } else {
         *preview = LocalAvatarPreview::default();
     }

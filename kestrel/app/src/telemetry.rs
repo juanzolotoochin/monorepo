@@ -1,6 +1,6 @@
 //! Bounded performance samples. CPU wall time is kept separate from deterministic game time.
 mod network;
-pub use network::NetworkFrame;
+pub use network::{NetworkFrame, PreviewUpdate};
 use bevy::prelude::*;
 use debug_ui::{egui, GameInput, ImguiManager, ImguiMenu, MenuHandle, MenuId, MenuSpec};
 use serde_json::{json, Value};
@@ -234,6 +234,11 @@ pub fn shortcut(input: Res<GameInput>, mut telemetry: ResMut<Telemetry>) {
     if input.keys().just_pressed(KeyCode::F3) {
         telemetry.enabled_overlay = !telemetry.enabled_overlay;
     }
+}
+
+/// Recent movement preview corrections, when Diagnostics → Network asks for them.
+pub fn draw_preview_corrections(telemetry: Res<Telemetry>, mut gizmos: Gizmos) {
+    telemetry.network.draw_corrections(Instant::now(), &mut gizmos);
 }
 
 /// The debug menu's Diagnostics windows, drawn from the live samples. They
