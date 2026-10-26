@@ -205,6 +205,133 @@ reported a late input; standing still, a late input changes nothing. So the
   (`field`/laser pit have no enemies). They mispredict by design and are
   logged.
 
+## Notes from stage 3 (adaptive input margin)
+
+Stage 3 (C) landed on `kestrel-input-margin`, stacked on stage 2.
+
+### What landed
+
+- **`net/src/margin.rs`** (`InputMargin`, client only). Margin = one way +
+  safety, rounded up to ticks. The safety is one tick (`SEND_WAIT`: an input
+  waits up to a tick to be sent, which the round trip doesn't see) plus 4×
+  the round trip's late-side deviation, at most 100 ms of that. So the
+  margin is never below one way + 1 tick. It starts at the host's
+  `input_delay` (133 ms) until 32 samples, then:
+  - it grows at once when the estimate rises, or on a late input, to that
+    input's headroom plus its lateness;
+  - it shrinks one tick after 3 s (`QUIET`) without a late input or a
+    change, down to the estimate;
+  - `NetConfig::input_margin` pins it.
+- **`client.rs`**:
+  - Late inputs are found at the drain: a pending command drained from a
+    turn later than its requested tick was late. They are counted in
+    `NetDiagnostics::{late_inputs, shifted_ticks}`, and the app tests assert
+    the counts equal the host's.
+  - An input sent before any RTT sample has no headroom and doesn't grow
+    the margin (that is the `Join`).
+  - `input_horizon` = `max(host_tick + one_way + margin, last requested)`,
+    so requested ticks never go backwards.
+  - The deviation tracks only samples above the smoothed RTT (gain 1/16
+    per sample), next to `rtt`.
+- **App**: `--input-margin-ms` (`main.rs` → `flow::Launch`/`Defaults` →
+  `NetConfig`). The Network window gets margin `adaptive`/`pinned` and a
+  "Late inputs (detected locally)" row. The F3 line reads
+  `NET RTT … · margin 117 ms`. The report gets `input_margin_pinned`,
+  `late_inputs_detected_locally`, `late_input_shifted_ticks_detected_locally`,
+  and `input_margin_ticks` in the history.
+- **network-lab**: `-InputMarginMs` (client only, in `run.json`, printed).
+- The protocol, the deterministic simulation, the host and C4's jitter
+  buffer are unchanged.
+
+### Results (committed seeds, in the scenarios)
+
+| Case | Late inputs | Corrections | Laser mispredicts | Margin |
+|---|---|---|---|---|
+| no delay (RTT 17 ms) | 0 (before: 0) | 0 (0) | 0/15 (0/15) | 2 ticks, 33 ms (133) |
+| 75 ± 20 ms (RTT 175) | 0 (0) | 0 (0) | 0/15 (0/15) | 9–10 (8) |
+| 100 ± 20 ms (RTT 232–241) | 0 (1) | 0 (1) | 0/15 (0/15) | 10–12 (8) |
+| 150 ± 20 ms (RTT 336) | 0 (76) | 0 (53) | 0/15 (10/15) | 14–15 (8) |
+
+- The predicted-shot lead on a LAN fell from 150 ms to 50 ms.
+- The 100 ms tests are no longer ignored, and the 150 ms cases are added,
+  with the same pass conditions and seeds.
+- Outside the scenarios, each delayed case still has the `Join` late
+  (5–13 ticks), plus 1–2 inputs right after joining at 150 ms.
+
+**Extra seeds** (6 per case, movement and lasers, 36 runs): no late input
+and no correction at 75, 100 or 150 ± 20 ms, at the final constants.
+Margins: 75: 9–10, 100: 10–12, 150: 13–15 ticks.
+
+### Why these constants
+
+- **Where late inputs start**, swept the same way:
+  - With the send tick: K = 0 gives late inputs in 5 of 36 runs, 3 of them
+    with 2–4 kept corrections; K = 1 gives one late input; K = 2 is clean in the
+    app but has a late input in the net test with all jitter on one leg; K = 3
+    and 4 are clean everywhere.
+  - Without the send tick (safety = max(tick, K·dev)), K = 4 had one late
+    input per ~6400 inputs at the floor in that net test.
+- K = 4 is about the design's "twice the mean deviation" for symmetric
+  jitter. K = 3 would cost about half a tick less.
+- **Late-side, gain 1/16.** With TCP's mean deviation, a link getting faster
+  reads as jitter and grew the margin from 11 to 14 ticks. With gain 1/4,
+  the max-held margin sat 1–2 ticks higher from estimator noise alone.
+- **100 ms cap.** A 250 ms lag spike read as ~140 ms of deviation, and the
+  margin went to 40 ticks. Capped, it goes to ~17–18, about what late inputs
+  ask for anyway.
+- **Quiet period 3 s.** 2 s and 4 s gave the same late counts (none), so 3 s
+  sits between them. It shrinks one tick per period, so after a 250 ms spike
+  the margin takes about 40 s to come back down.
+
+### Prediction stability
+
+- I stepped the relay delay up mid-run at 75 ± 20 ms (2 seeds each):
+  - **+60 ms each way:** the margin grows 9–10 → 15–17 ticks with no late
+    input and no correction, both idle-then-moving and while running.
+  - **+150 ms:** it grows → 21–22 ticks with no correction while running.
+    Idle-then-moving had 1 late input (4 ticks) and 1–2 kept mispredicts
+    (0.37 u; 0.28 + 0.09 u). That input left before any slower RTT sample
+    could arrive, so the network changed, not the grow.
+- So a grow by several ticks causes no misprediction itself: drawn time
+  follows the lowest horizon of the last second, then jumps or eases.
+- Shrinks are covered by the net test: no late input, the requested ticks
+  are monotonic, and the order is kept.
+- One 0.007 u under-threshold correction showed at 100 ms (quick taps),
+  dropped as usual.
+
+### Laser matching fix (stage 2 edge case)
+
+- `LaserPrediction::predict` now matches a replay strike to the next
+  outstanding drawn shot from the same command (the `Attack`'s aim and
+  muzzle, which a moved shot keeps), instead of by position.
+- Drawn shots a strike passes over are given up at once (`never fired`).
+- Unit test:
+  `a_shot_that_drops_out_of_the_replay_does_not_take_the_next_ones_place`.
+- Two commands with exactly the same aim and muzzle still can't be told
+  apart (the old behaviour).
+
+### Open issues
+
+- **More input delay at 75–100 ms.** The margin is 1–4 ticks above the old
+  fixed 8, so confirmed results arrive 17–67 ms later there. The drawn
+  avatar and shots are predicted, so mostly hits and damage feel it. In
+  exchange, no input is late.
+- **The `Join` is always late on a delayed link.** It is sent before any
+  RTT sample; harmless.
+- **Slow recovery after a lag spike** (above): this is the agreed "shrink
+  slowly".
+- **A link that suddenly gets much faster:** samples still in flight on
+  the old path read as late and grow the margin (capped at 100 ms of
+  safety). This was seen with a 150 → 10 ms step in a net test, which was
+  dropped as unrealistic.
+- **The monotonic clamp rarely acts.** Shrinks land as turns arrive, which
+  advance `host_tick`. The net test needs reordered turns (40 ms jitter) to
+  exercise it.
+- **C4 (jitter buffer) was not re-measured.**
+- **Real-network check pending:** all numbers come from the 60 Hz
+  virtual-clock relay. Next is a network-lab playtest with and without
+  `-InputMarginMs 133`.
+
 ## How a laser shot works today
 
 1. `PlayerControl::strike` (`app/src/lockstep.rs`) queues
