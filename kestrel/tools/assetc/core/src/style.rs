@@ -421,6 +421,26 @@ pub struct DestructibleCover {
     pub form: CoverForm,
     #[serde(default)]
     pub break_style: BreakStyle,
+    #[serde(default)]
+    pub repairable: bool,
+    #[serde(default)]
+    pub repair_animation: Option<RepairAnimation>,
+}
+
+/// Body transform at a fraction of the piece's repaired health. Positions
+/// are offsets in meters; scales pivot at the floor for Y and center for X/Z.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepairKeyframe {
+    pub at: f32,
+    pub scale: [f32; 3],
+    pub offset: [f32; 3],
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepairAnimation {
+    pub keyframes: Vec<RepairKeyframe>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -441,12 +461,15 @@ pub enum BreakStyle {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DestructiblePiece {
     pub meshes: Vec<MeshData>,
+    pub base_meshes: Vec<MeshData>,
     pub center: [f32; 3],
     pub radius: f32,
     pub health: u16,
     pub size: [f32; 3],
     pub asset_center: [f32; 3],
     pub break_style: BreakStyle,
+    pub repairable: bool,
+    pub repair_animation: Option<RepairAnimation>,
 }
 
 pub fn compile_destructibles(style: &StyleProfile, covers: &[DestructibleCover]) -> Result<Vec<DestructiblePiece>> {
@@ -459,6 +482,19 @@ pub fn compile_destructibles(style: &StyleProfile, covers: &[DestructibleCover])
             || cover.health == 0
         {
             return Err("invalid destructible cover dimensions, pieces or health".into());
+        }
+        if let Some(animation) = &cover.repair_animation {
+            if !cover.repairable || animation.keyframes.len() < 2
+                || animation.keyframes.first().is_none_or(|key| key.at != 0.0)
+                || animation.keyframes.last().is_none_or(|key| key.at != 1.0)
+                || animation.keyframes.windows(2).any(|pair| pair[0].at >= pair[1].at)
+                || animation.keyframes.last().is_none_or(|key| key.scale != [1.0; 3] || key.offset != [0.0; 3])
+                || animation.keyframes.iter().any(|key| !key.at.is_finite()
+                    || key.scale.iter().any(|v| !v.is_finite() || *v < 0.0 || *v > 2.0)
+                    || key.offset.iter().any(|v| !v.is_finite() || v.abs() > 2.0))
+            {
+                return Err("invalid repair animation keyframes".into());
+            }
         }
         let cell = [cover.size[0] / f32::from(cover.pieces[0]), cover.size[1], cover.size[2] / f32::from(cover.pieces[1])];
         if cell[0] < style.voxel_size || cell[2] < style.voxel_size {
@@ -523,12 +559,24 @@ pub fn compile_destructibles(style: &StyleProfile, covers: &[DestructibleCover])
                 let mut fine = style.clone();
                 fine.voxel_size = fine.voxel_size.min(0.10);
                 let mesh = compile_environment(&fine, &shapes)?;
+                let base_meshes = if cover.repairable {
+                    let base = VoxelShape {
+                        kind: if cover.form == CoverForm::Pylon { ShapeKind::Cylinder } else { ShapeKind::Box },
+                        position: [center[0], cover.position[1] - cover.size[1] * 0.5 + 0.10, center[2]],
+                        size: [cell[0] * 1.10, 0.20, cell[2] * 1.10],
+                        material: cover.trim.clone().unwrap_or_else(|| cover.material.clone()),
+                        ..body.clone()
+                    };
+                    compile_environment(&fine, &[base])?.meshes
+                } else { Vec::new() };
                 // The laser stops at this disc. Match the visible plinth or
                 // shaft instead of the piece's bounding-box diagonal.
                 let outer = if cover.form == CoverForm::Stepped { 0.50 } else { 0.54 };
-                result.push(DestructiblePiece { meshes: mesh.meshes, center,
+                result.push(DestructiblePiece { meshes: mesh.meshes, base_meshes, center,
                     radius: cell[0].max(cell[2]) * outer,
-                    health: cover.health, size: cell, asset_center: cover.position, break_style: cover.break_style });
+                    health: cover.health, size: cell, asset_center: cover.position,
+                    break_style: cover.break_style, repairable: cover.repairable,
+                    repair_animation: cover.repair_animation.clone() });
                 if result.len() > 256 { return Err("scene exceeds 256 destructible pieces".into()); }
             }
         }
@@ -775,11 +823,13 @@ mod tests {
         let style = StyleProfile::default();
         let cover = DestructibleCover { position: [0.0, 0.7, 0.0], size: [1.8, 1.4, 1.8],
             material: "metal".into(), trim: Some("trim".into()), pieces: [2, 2], health: 3,
-            form: CoverForm::Armored, break_style: BreakStyle::Topple };
+            form: CoverForm::Armored, break_style: BreakStyle::Topple, repairable: true,
+            repair_animation: None };
         let pieces = compile_destructibles(&style, &[cover.clone()]).unwrap();
         assert_eq!(pieces.len(), 4);
         assert!(pieces.iter().all(|piece| !piece.meshes.is_empty() && piece.health == 3 && piece.radius > 0.0));
         assert!((pieces[0].radius - 0.486).abs() < 0.001);
+        assert!(!pieces[0].base_meshes.is_empty());
         assert_ne!(pieces[0].center, pieces[1].center);
         let mut stepped = cover.clone();
         stepped.form = CoverForm::Stepped;

@@ -88,7 +88,7 @@ fn floor(world: &World, at: Vec3) -> f32 {
 }
 
 fn material(world: &World, root: Entity) -> Option<Handle<StandardMaterial>> {
-    let child = world.get::<Children>(root)?.iter().next()?;
+    let child = world.get::<Children>(root)?.iter().find(|&child| world.get::<crate::style::CoverBody>(child).is_some())?;
     Some(world.get::<MeshMaterial3d<StandardMaterial>>(child)?.0.clone())
 }
 
@@ -139,11 +139,33 @@ pub fn hit(world: &mut World, root: Entity, piece: &DestructiblePiece, index: us
             bevy::light::NotShadowCaster,
             Transform::from_translation(Vec3::new(center.x, ground + 0.035, center.z)),
             DustRing { age: 0.0, material: dust_material }));
-        let materials = world.get::<Children>(root).into_iter().flat_map(|children| children.iter())
-            .filter_map(|child| world.get::<MeshMaterial3d<StandardMaterial>>(child).map(|handle| handle.0.clone()))
-            .collect();
+        let (fragment_root, materials) = if piece.repairable {
+            // The authored body tumbles away; the original root and its floor
+            // base remain in place so the same body can be restored later.
+            let parts: Vec<_> = world.get::<Children>(root).into_iter().flat_map(|children| children.iter())
+                .filter(|&child| world.get::<crate::style::CoverBody>(child).is_some())
+                .filter_map(|child| Some((world.get::<Mesh3d>(child)?.0.clone(),
+                    world.get::<MeshMaterial3d<StandardMaterial>>(child)?.0.clone(),
+                    *world.get::<Transform>(child)?)))
+                .collect();
+            let detached = world.spawn((WorldScoped::default(), Transform::from_translation(center))).id();
+            let mut materials = Vec::new();
+            for (mesh, source, transform) in parts {
+                let appearance = world.resource::<Assets<StandardMaterial>>().get(&source).expect("cover material").clone();
+                let unique = world.resource_mut::<Assets<StandardMaterial>>().add(appearance);
+                let child = world.spawn((Mesh3d(mesh), MeshMaterial3d(unique.clone()), transform)).id();
+                world.entity_mut(detached).add_child(child);
+                materials.push(unique);
+            }
+            (detached, materials)
+        } else {
+            let materials = world.get::<Children>(root).into_iter().flat_map(|children| children.iter())
+                .filter_map(|child| world.get::<MeshMaterial3d<StandardMaterial>>(child).map(|handle| handle.0.clone()))
+                .collect();
+            (root, materials)
+        };
         let impulse = outward * 2.0 + Vec3::new(random(&mut seed) - 0.5, 0.0, random(&mut seed) - 0.5);
-        world.entity_mut(root).insert(CoverFragment {
+        world.entity_mut(fragment_root).insert(CoverFragment {
             velocity: impulse + Vec3::Y * if piece.break_style == BreakStyle::Shatter { 3.8 } else { 2.8 },
             spin: Vec3::new(2.5 + random(&mut seed) * 3.0, 2.0 + random(&mut seed) * 4.0, 2.5 + random(&mut seed) * 3.0),
             floor: ground + piece.size[1] * 0.35,
@@ -223,6 +245,8 @@ pub fn release_materials(world: &mut World) {
     let mut handles = HashSet::new();
     let mut cover = world.query_filtered::<&MeshMaterial3d<StandardMaterial>, With<crate::style::DamageMaterial>>();
     handles.extend(cover.iter(world).map(|material| material.0.clone()));
+    let mut bases = world.query_filtered::<&MeshMaterial3d<StandardMaterial>, With<crate::style::RepairBaseMaterial>>();
+    handles.extend(bases.iter(world).map(|material| material.0.clone()));
     let mut debris = world.query::<&CoverFragment>();
     for fragment in debris.iter(world) { handles.extend(fragment.materials.iter().cloned()); }
     let mut rings = world.query::<&DustRing>();

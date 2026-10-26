@@ -1,10 +1,10 @@
 //! Resolved actions become gameplay commands (World layer). One path for
 //! keyboard and controller: the shared handlers here, with mouse targeting
-//! (cursor routes, cursor attacks, clicks on logistics) as pointer adapters
+//! (cursor attacks, clicks on logistics) as pointer adapters
 //! that run only while keyboard/mouse owns gameplay.
 //!
 //! The dispatcher runs in `PlayerControl`'s Input slot, in two parts around
-//! the pointer adapters, so that keyboard/mouse keep their old order:
+//! the pointer adapters, so that keyboard/mouse keep their action order:
 //! [`prepare`] (suspension, takeover release, weapon choice) runs before
 //! them, [`dispatch`] (everything else) after.
 
@@ -41,6 +41,7 @@ struct PendingChoice {
 pub struct Dispatcher {
     /// The jetpack is on because of a held lift.
     thrust: bool,
+    repair_target: Option<u16>,
     /// The controller's world aim (flat unit vector), kept while the aim
     /// stick is neutral.
     pub aim: Option<Vec3>,
@@ -147,6 +148,7 @@ fn release(world: &mut World, agent: u16) {
     world.resource_mut::<Controls>().queued = None;
     let mut dispatcher = world.resource_mut::<Dispatcher>();
     dispatcher.thrust = false;
+    dispatcher.repair_target = None;
     dispatcher.releases += 1;
 }
 
@@ -162,6 +164,13 @@ pub fn dispatch(world: &mut World) {
     }
     update_drop_preview(world);
     if frame.blocked {
+        return;
+    }
+    if frame.gameplay.repair_pressed && world.resource::<SessionService>().settlement()
+        .and_then(|settlement| settlement.agents.get(agent as usize))
+        .is_some_and(|avatar| avatar.avatar.max_health > 0 && avatar.avatar.health == 0)
+    {
+        respawn(world, agent);
         return;
     }
     let pad = frame.owner == Device::Gamepad;
@@ -206,6 +215,29 @@ pub fn dispatch(world: &mut World) {
         }
     }
     movement(world, &frame.gameplay);
+    repair(world, agent, frame.gameplay.repair_held);
+}
+
+fn repair(world: &mut World, agent: u16, held: bool) {
+    let target = held.then(|| {
+        let sim = world.resource::<SessionService>();
+        let world = sim.world()?;
+        let position = world.settlement()?.agents.get(agent as usize)?.position;
+        world.terrain().destructibles.iter().enumerate()
+            .filter(|(_, piece)| piece.repairable && piece.health < piece.max_health)
+            .filter_map(|(index, piece)| {
+                let distance = (position - piece.disc.center).length_squared();
+                let reach = piece.disc.radius + fx::Fx::from_ratio(11, 10);
+                (distance <= reach * reach).then_some((distance, index as u16))
+            })
+            .min_by_key(|&(distance, index)| (distance, index))
+            .map(|(_, index)| index)
+    }).flatten();
+    let mut dispatcher = world.resource_mut::<Dispatcher>();
+    if dispatcher.repair_target != target {
+        dispatcher.repair_target = target;
+        world.resource_mut::<SessionService>().command(CommandKind::RepairCover { agent, index: target });
+    }
 }
 
 /// The controller's aim: explicit stick input, else the remembered aim,
@@ -255,6 +287,7 @@ fn respawn(world: &mut World, agent: u16) {
     dispatcher.aim = None;
     dispatcher.aim_after = Some(tick);
     dispatcher.thrust = false;
+    dispatcher.repair_target = None;
 }
 
 /// Movement from the owning device. Neutral input sends Stop only after

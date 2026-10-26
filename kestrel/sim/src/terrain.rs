@@ -36,6 +36,9 @@ pub struct Disc {
 pub struct Destructible {
     pub disc: Disc,
     pub health: u16,
+    pub max_health: u16,
+    pub repairable: bool,
+    pub repair_progress: u16,
 }
 
 /// A raised walkable box.
@@ -293,9 +296,9 @@ impl Terrain {
             })
     }
 
-    /// Every currently solid disc, including surviving cover pieces.
+    /// Every solid disc. Repairable cover leaves a blocking floor base.
     pub fn blocking_obstacles(&self) -> impl Iterator<Item = &Disc> {
-        self.obstacles.iter().chain(self.destructibles.iter().filter(|p| p.health > 0).map(|p| &p.disc))
+        self.obstacles.iter().chain(self.destructibles.iter().filter(|p| p.health > 0 || p.repairable).map(|p| &p.disc))
     }
 
     /// Apply a weapon hit to a cover piece; crossing zero opens its footprint.
@@ -303,8 +306,24 @@ impl Terrain {
         let Some(piece) = self.destructibles.get_mut(index) else { return false };
         if piece.health == 0 { return false; }
         piece.health = piece.health.saturating_sub(damage);
-        if piece.health == 0 { self.revision += 1; }
+        piece.repair_progress = 0;
+        if piece.health == 0 && !piece.repairable { self.revision += 1; }
         true
+    }
+
+    /// Progress one tick of nearby held repair. Each second restores one
+    /// damage stage; releasing or leaving resets only the current stage.
+    pub fn repair_cover(&mut self, index: usize, held: bool) {
+        let Some(piece) = self.destructibles.get_mut(index) else { return };
+        if !piece.repairable || piece.health >= piece.max_health || !held {
+            piece.repair_progress = 0;
+            return;
+        }
+        piece.repair_progress += 1;
+        if piece.repair_progress >= content::TICKS_PER_SECOND as u16 {
+            piece.health += 1;
+            piece.repair_progress = 0;
+        }
     }
 }
 
@@ -323,6 +342,9 @@ impl StateHash for Terrain {
                 h.write(&piece.disc.center);
                 h.write(&piece.disc.radius);
                 h.write_u64(piece.health as u64);
+                h.write_u64(piece.max_health as u64);
+                h.write_u64(piece.repairable as u64);
+                h.write_u64(piece.repair_progress as u64);
             }
         }
         h.write_u64(self.surfaces.len() as u64);

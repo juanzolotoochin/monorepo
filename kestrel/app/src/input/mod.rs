@@ -143,6 +143,9 @@ pub struct Gameplay {
     /// Input-space direction (x right, y up): unit length or zero.
     pub movement: Vec2,
     pub run: bool,
+    /// R held near a repairable cover base; a fresh press respawns if dead.
+    pub repair_held: bool,
+    pub repair_pressed: bool,
     /// The lift (Space / RB) is held.
     pub lift_held: bool,
     /// An explicit input-space aim direction from the aim stick.
@@ -581,9 +584,6 @@ impl InputService {
                 edges.push(Edge::SelectWeapon(weapon));
             }
         }
-        if keys.just_pressed(KeyCode::KeyR) {
-            edges.push(Edge::Utility(Utility::Respawn));
-        }
         if keys.just_pressed(KeyCode::Space) {
             edges.push(Edge::Lift);
         }
@@ -610,6 +610,8 @@ impl InputService {
         Gameplay {
             movement,
             run: keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),
+            repair_held: keys.pressed(KeyCode::KeyR),
+            repair_pressed: keys.just_pressed(KeyCode::KeyR),
             lift_held: keys.pressed(KeyCode::Space),
             aim: None,
             edges,
@@ -646,6 +648,8 @@ impl InputService {
         Gameplay {
             movement,
             run: pad.held(Button::LeftBumper),
+            repair_held: false,
+            repair_pressed: false,
             lift_held: pad.held(Button::RightBumper),
             aim: pad.aim,
             edges,
