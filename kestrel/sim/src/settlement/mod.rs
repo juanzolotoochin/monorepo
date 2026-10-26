@@ -37,7 +37,7 @@ use crate::terrain::{Disc, Terrain};
 
 pub use combat::{CombatMetrics, DefenderState, Event, Impact, Pinned, Projectile, SpentProjectile, Threat, TossEnd, WaveState};
 pub use haulers::{AgentState, Phase};
-pub use prediction::AvatarReplay;
+pub use prediction::{AvatarReplay, PredictedLaser, ReplayedStrike};
 
 pub type ItemIx = u16;
 pub type DepotIx = u16;
