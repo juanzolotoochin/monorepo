@@ -31,7 +31,7 @@
 
 ### App builds from Windows fail on the libxcb1 genrule
 
-- **Status:** done (branch `kestrel-remote-shell`). `.bazelrc` now has
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/119). `.bazelrc` now has
   `build:remote --shell_executable=/bin/bash`, and `tools/network-lab.ps1`
   no longer passes the flag. Every `//kestrel/...` test passes from
   Windows without it
