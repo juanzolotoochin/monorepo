@@ -146,6 +146,49 @@
 - **Where:** `kestrel/app/src/hurt.rs`.
 - **Found in:** branch `kestrel-ghoul-followups`.
 
+## Keep a player's health over the Respawn action
+
+- **Status:** open
+- **Why:** the `Respawn` action resets the avatar to a fresh state, and that
+  has always included its health: `health` and `max_health` go to 0. A
+  player who respawns by command in a scene with `player_health` above 0
+  can't be hurt again. A death's respawn (`self_update`) restores health
+  instead. The shared body split kept this as it was.
+- **What to do:** have `respawn` restore `max_health` and fill `health`, as
+  the death respawn does. It is a gameplay change: test it, and check the
+  replay still predicts the command.
+- **Where:** `respawn` in `kestrel/sim/src/settlement/avatar.rs`.
+- **Found in:** branch `kestrel-shared-body`.
+
+## Give the body a height
+
+- **Status:** open
+- **Why:** height lives on the avatar (`AvatarState::height`, with the
+  jump and jetpack), so a hauler has none. A threat's swing treats a hauler
+  as standing on the ground (`within_swing_height`), and the behaviour
+  digest hashes its height as 0. Haulers on raised ground would be wrong
+  once threats hit them.
+- **What to do:** when haulers become targets, move `height` (and the
+  ground it last stood on) into `Body`, and have haulers keep it on the
+  ground as they walk. Keep the digest's value for agents that don't move
+  vertically.
+- **Where:** `kestrel/sim/src/settlement/agent.rs`, `avatar.rs`,
+  `haulers.rs`, `within_swing_height` in `combat.rs`.
+- **Found in:** branch `kestrel-shared-body`.
+
+## Trim body fields one role ignores
+
+- **Status:** open
+- **Why:** `Body::speed` and `travel_heading` are used only by haulers: an
+  avatar moves at its character's `movement` speeds and has no travel
+  heading. They sit in the body so every agent has the same shape.
+- **What to do:** once actions drive haulers too (step 5, "Haulers"), read
+  the speed from the character for both roles, and decide whether the
+  travel heading belongs to the hauler. A save format change.
+- **Where:** `Body` in `kestrel/sim/src/settlement/agent.rs`, `speed_now`
+  in `haulers.rs`.
+- **Found in:** branch `kestrel-shared-body`.
+
 ## Done
 
 ### Flash the player's screen or body when it is hurt

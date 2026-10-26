@@ -168,7 +168,12 @@ Character definitions are moving in steps, each its own PR against `master`. Ste
 - **Actions:** one vocabulary (move, go to, attack, interact) that player commands and AI brains both produce. `CommandKind` variants stay append-only, so recorded input logs still replay. An action changes only its agent; what it does to the world is a message applied in stage 5 (done for player avatars, `sim/src/settlement/action.rs`).
 - **Haulers:** their `Phase` state machine emits actions instead of moving them directly.
 - **Threats:** they become characters with a `FollowRoute` brain. They keep their own table, for the 100k-entity budget, but each stores a `CharacterIx` instead of reaching its kind through its wave.
-- **Shared body:** `AgentState` splits into the body every agent has (position, heading, velocity, radius, health) plus data for each role. Cargo has three models today (hauler `cargo`, the avatar's `ManualJob`, pile jobs), and they merge here.
+- **Shared body:** done. An agent is `AgentState { id, character, body, carry, role }` (`sim/src/settlement/agent.rs`):
+  - `Body` is what every agent has: home, speed, radius, position, headings, route, velocity, the knockback `push`, and health.
+  - `Carry` is the cargo, since players and haulers both carry (a depot transfer lands in the player's cargo).
+  - `Role` is `Hauler(HaulerState)` or `Avatar(AvatarState)`. It is set when the agent is made and never changes, so `controlled` checks became matches. The avatar keeps the player's owner, name, weapon cooldown, respawn tick, height and abilities.
+  - A hauler's health is 0, so it can't be hurt, and its velocity stays 0, since it walks its route without one. Giving haulers health is a later step that changes the `Hauler` schema.
+  - Cargo still has three models (hauler jobs, the avatar's `ManualJob`, pile jobs). They merge next.
 - **Prediction:** the sim and the client's replay apply actions through the same code. An ability's own state is always predicted. Its effects on the world are only shown early, as events built from its messages, and each event kind says whether to keep or cancel it when it never confirms. `kestrel/ABILITY_PREDICTION_HANDOFF.md` has the decisions and the order.
 - **Threats attacking agents:** ghouls hit players in passing (`kestrel/GHOUL_ATTACK_HANDOFF.md` has the order):
   - **Behaviour:** a ghoul never leaves its route. When a player is in reach, it stops, winds up, swings, and then walks on. Chasing a target would be a separate hunter brain, later.
