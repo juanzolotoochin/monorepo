@@ -182,7 +182,7 @@
 
 ### Play an eight-player network lab run
 
-- **Status:** done (branch `kestrel-eight-player-lab`). Ran
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/120). Ran
   `network-lab.ps1 -Clients 7` at LAN and at 75 ± 20 ms, checking every
   window over its control port and with screenshots:
   - All 8 joined (slots 0–7, "hosting, 8 players"). Each spawned on its own
