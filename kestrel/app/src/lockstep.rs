@@ -731,14 +731,13 @@ impl Service for PlayerControl {
     }
 
     /// Actions from every device go through the shared dispatcher
-    /// (`input::gameplay`); the mouse's cursor targeting runs between its
-    /// two parts, only while keyboard/mouse drives gameplay.
+    /// (`input::gameplay`); mouse aiming runs between its two parts.
     fn systems(app: &mut App) {
         app.add_service_systems::<Self, _>(
             Phase::Input,
             (
                 crate::input::gameplay::prepare,
-                (mouse_input, attack_input).chain().run_if(crate::control::interactive).run_if(pointer_allowed),
+                attack_input.run_if(crate::control::interactive).run_if(pointer_allowed),
                 crate::input::gameplay::dispatch,
                 crate::preview::playback.run_if(crate::control::interactive),
             )
@@ -1019,40 +1018,15 @@ pub fn mirror_settlement(
     settlement.simulation = Some(view);
 }
 
-/// Right click (held) walks to the cursor.
-pub fn mouse_input(
-    input: Res<debug_ui::GameInput>,
-    time: Res<Time>,
-    camera: Single<(&Camera, &GlobalTransform)>,
-    window: Single<&Window>,
-    scene: Res<SceneView>,
-    mut controls: ResMut<Controls>,
-    mut service: ResMut<SessionService>,
-    mut control: ResMut<PlayerControl>,
-) {
-    let (keys, buttons) = (input.keys(), input.mouse());
-    let run = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-    controls.repath -= time.delta_secs();
-    if buttons.pressed(MouseButton::Right)
-        && (controls.attack.is_none() || controls.weapon == content::scenario::Weapon::Laser)
-        && controls.repath <= 0.0
-    {
-        controls.repath = 0.12;
-        if let Some(point) = crate::jetpack::cursor_surface(camera.0, camera.1, &window, &scene, &service) {
-            if controls.route.last().is_none_or(|last| crate::navigation::flat(*last - point).length() > 0.25) {
-                control.go_to(&mut service, point, run);
-            }
-        }
-    }
-}
-
-/// Shift + left click attacks toward the cursor (Z/X/C/V pick a weapon in
+/// Left click attacks toward the cursor (Z/X/C/V pick a weapon in
 /// `input::gameplay::prepare`, which runs first).
 pub fn attack_input(
     input: Res<debug_ui::GameInput>,
     camera: Single<(&Camera, &GlobalTransform)>,
     window: Single<&Window>,
     scene: Res<SceneView>,
+    settlement: Option<Res<crate::settlement::Settlement>>,
+    piles: Option<Res<crate::piles::PileLab>>,
     mut controls: ResMut<Controls>,
     mut service: ResMut<SessionService>,
     mut control: ResMut<PlayerControl>,
@@ -1074,10 +1048,13 @@ pub fn attack_input(
     } else {
         controls.aim = None;
     }
-    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-    if !(shift && buttons.just_pressed(MouseButton::Left)) {
+    if !attack_click(keys, buttons, pointer_free, piles.as_ref().is_some_and(|lab| lab.stock.is_some())) {
         return;
     }
+    if settlement.as_ref().and_then(|s| s.simulation.as_ref()).is_some_and(|sim| {
+        crate::gameplay::cursor_ground(camera.0, camera.1, &window)
+            .is_some_and(|point| crate::settlement::depot_at(sim, point).is_some())
+    }) { return; }
     // Aim from the confirmed position: a joined player's preview must not
     // change gameplay commands.
     if let Some(aim) = cursor_aim {
@@ -1085,10 +1062,31 @@ pub fn attack_input(
     }
 }
 
+fn attack_click(keys: &ButtonInput<KeyCode>, buttons: &ButtonInput<MouseButton>, pointer_free: bool, pile_active: bool) -> bool {
+    buttons.just_pressed(MouseButton::Left) && pointer_free && !pile_active
+        && !keys.pressed(KeyCode::ControlLeft) && !keys.pressed(KeyCode::ControlRight)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::flow::Launch;
+
+    #[test]
+    fn plain_left_click_attacks_and_shift_does_not_gate_it() {
+        let mut keys = ButtonInput::<KeyCode>::default();
+        let mut buttons = ButtonInput::<MouseButton>::default();
+        buttons.press(MouseButton::Right);
+        assert!(!attack_click(&keys, &buttons, true, false));
+        buttons.press(MouseButton::Left);
+        assert!(attack_click(&keys, &buttons, true, false));
+        keys.press(KeyCode::ShiftLeft);
+        assert!(attack_click(&keys, &buttons, true, false));
+        assert!(!attack_click(&keys, &buttons, false, false));
+        assert!(!attack_click(&keys, &buttons, true, true));
+        keys.press(KeyCode::ControlLeft);
+        assert!(!attack_click(&keys, &buttons, true, false));
+    }
 
     #[test]
     fn rendered_feet_can_sample_walkable_mine_terraces() {
@@ -1333,11 +1331,11 @@ mod tests {
         let route_preview = player_position(&mut client);
         assert!(
             crate::navigation::flat(route_preview - last).length() > 0.001,
-            "click-to-move gave no immediate visual response"
+            "routed movement gave no immediate visual response"
         );
         assert!(
             crate::navigation::flat(confirmed(&client) - settled).length() < 0.001,
-            "the click-to-move test did not observe prediction before confirmation"
+            "routed movement did not show prediction before confirmation"
         );
         let mut followed_route = false;
         let mut previous_shown = route_preview;
@@ -1347,17 +1345,17 @@ mod tests {
             let shown = player_position(&mut client);
             assert!(
                 crate::navigation::flat(shown - previous_shown).length() < 0.2,
-                "click-to-move preview jumped while reconciling with the host"
+                "routed movement preview jumped while reconciling with the host"
             );
             previous_shown = shown;
             if crate::navigation::flat(confirmed(&client) - settled).length() > 0.05 {
                 followed_route = true;
             }
         }
-        assert!(followed_route, "the joined avatar stopped following confirmed click-to-move motion");
+        assert!(followed_route, "the joined avatar stopped following confirmed routed movement");
         assert!(
             crate::navigation::flat(previous_shown - confirmed(&client)).length() < 0.1,
-            "click-to-move preview did not settle on the confirmed route"
+            "routed movement preview did not settle on the confirmed route"
         );
     }
 }

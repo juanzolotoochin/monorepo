@@ -447,8 +447,8 @@ impl Game {
         self.app.world().resource::<gameplay::Dispatcher>()
     }
 
-    /// Walks the avatar to a point through the game's own click-to-move
-    /// helper (test setup, not the behavior under test), until it arrives.
+    /// Walks the avatar to a point through the routed-movement helper
+    /// (test setup, not the behavior under test), until it arrives.
     fn walk_to(&mut self, point: Vec3) {
         self.app.world_mut().resource_scope(|world, mut service: Mut<SessionService>| {
             world.resource_mut::<crate::lockstep::PlayerControl>().go_to(&mut service, point, true);
@@ -521,6 +521,18 @@ fn run_is_a_separate_held_action() {
         })
         .collect();
     assert_eq!(runs, vec![true, false]);
+}
+
+#[test]
+fn keyboard_shift_runs_while_wasd_moves() {
+    let mut rig = Rig::new();
+    rig.keys.press(KeyCode::ShiftLeft);
+    rig.keys.press(KeyCode::KeyW);
+    let frame = rig.frame();
+    assert!(frame.gameplay.run);
+    assert_eq!(frame.gameplay.movement, Vec2::Y);
+    rig.keys.release(KeyCode::ShiftLeft);
+    assert!(!rig.frame().gameplay.run);
 }
 
 #[test]

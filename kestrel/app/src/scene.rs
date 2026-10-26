@@ -1175,7 +1175,7 @@ pub fn hud(mut commands: Commands) {
         .with_children(|p| {
             p.spawn((
                 ControlHelp,
-                Text::new("RMB   MOVE     /     SHIFT + LMB   STRIKE"),
+                Text::new("WASD   MOVE     /     SHIFT   RUN     /     LMB   STRIKE"),
                 TextFont {
                     font_size: FontSize::Px(13.0),
                     ..default()

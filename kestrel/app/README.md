@@ -257,10 +257,9 @@ startup sequence; run it on Windows with:
 | Control | Action |
 | --- | --- |
 | 1 / 2 | Load the mining deck / boulder lab |
-| Right click / hold | Move / steer toward the cursor; find a route around obstacles |
-| WASD / arrows | Camera-relative movement; cancel the click route |
+| WASD / arrows | Camera-relative movement |
 | Shift | Run |
-| Shift + left click | Face the cursor and commit to one heavy sword strike |
+| Left click | Face the cursor and commit to one heavy sword strike |
 | Mouse wheel | Smooth camera zoom |
 | R | Reset character position and actions |
 | M | Mute / unmute |
@@ -377,8 +376,8 @@ world dispenser or its button to create 5 units in its output pile. Left click
 a pile to walk over and collect up to **12 units**. While carrying, left click
 open floor to walk there and create a pile, or a matching pile to deposit into
 it. **Ctrl + left click** collects more into a partial load. Different minerals
-stay separate; full destinations leave excess cargo on the player. Right click,
-WASD, or a sword strike cancels a hauling job without losing carried material.
+stay separate; full destinations leave excess cargo on the player. WASD or a
+sword strike cancels a hauling job without losing carried material.
 
 Every mineral chunk represents **one unit**, both on the ground and in the
 player's backpack. Labels give exact pile counts, and the logistics HUD shows
@@ -523,8 +522,8 @@ bazel run --config=full_local //kestrel/app:demo -- --scene laser-pit --host 777
 ```
 
 Another player can join with `--scene laser-pit --join HOST:7777`. The upper body
-and gun track the pointer continuously while the legs follow WASD or right-click
-movement. Use **Shift + left click** to fire. A direct hit takes one of six
+and gun track the pointer continuously while the legs follow WASD movement.
+Use **left click** to fire and **Shift** to run. A direct hit takes one of six
 health points; the bars over players show their current health. At zero health,
 the player returns to their spawn after two seconds. The host simulation
 resolves hits and health for all players.
@@ -628,10 +627,10 @@ The cartworks consumes two lumber and one iron to build a cart. Bramble the ox
 collects and attaches it, increasing carrying capacity from three to nine units.
 Every ground item, carried item, and airborne transfer represents one real unit.
 
-The player remains active in this scene. **RMB / WASD** moves, **LMB** on stock
+The player remains active in this scene. **WASD** moves, **Shift** runs, **LMB** on stock
 queues collection of up to four units, and **Ctrl+LMB** on a depot deposits the
 first carried material. **E** toggles a nearby machine, **P** pauses automation,
-and **Shift+LMB** attacks ghouls with the longsword. Manual movement cancels pending
+and **LMB** elsewhere attacks ghouls with the longsword. Manual movement cancels pending
 player transfers; already airborne items still arrive. The player shares stock,
 capacity reservations, and production inputs with the workers, so diverting
 supplies changes how the settlement runs.
@@ -677,7 +676,7 @@ Press **8** or start the focused forest combat scene directly:
 bazel run --config=full_local //kestrel/app:demo -- --scene combat-arena
 ```
 
-Right click to position the player, then Shift + left click toward an approaching
+Use WASD to position the player, then left click toward an approaching
 ghoul. The faster longsword stops on contact. A short hit pause, camera jolt,
 growl, and voxel blood burst mark the hit; a surviving ghoul recoils before
 limping forward. The same 60 Hz simulation owns health, knockback, kills, and

@@ -140,15 +140,17 @@ pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack, studio: bool) {
         .iter_mut(world)
     {
         help.0 = if available_weapons == [content::scenario::Weapon::Laser] {
-            "RMB MOVE / WASD RUN / SHIFT+LMB FIRE LASER"
+            "WASD MOVE / SHIFT RUN / LMB FIRE LASER"
         } else if jumping {
-            "RMB MOVE / WASD RUN / SPACE JUMP / SHIFT+LMB ATTACK"
+            "WASD MOVE / SHIFT RUN / SPACE JUMP / LMB ATTACK"
+        } else if settlement && !available_weapons.is_empty() {
+            "WASD MOVE / SHIFT RUN / LMB STOCK OR ATTACK / CTRL+LMB DEPOSIT / E MACHINE"
         } else if !available_weapons.is_empty() {
-            "RMB MOVE / SHIFT+LMB ATTACK / Z SWORD / X SPEAR / C BOW / V ARC"
+            "WASD MOVE / SHIFT RUN / LMB ATTACK / Z SWORD / X SPEAR / C BOW / V ARC"
         } else if settlement {
-            "LMB STOCK / CTRL DEPOSIT / E MACHINE / SHIFT+LMB ATTACK"
+            "WASD MOVE / SHIFT RUN / LMB STOCK / CTRL+LMB DEPOSIT / E MACHINE"
         } else {
-            "RMB MOVE / SHIFT+LMB STRIKE"
+            "WASD MOVE / SHIFT RUN / LMB STRIKE"
         }
         .into();
     }
