@@ -2,10 +2,14 @@
 
 ## Current instruction and scope
 
-The user asked to stop implementation, write this handoff, and commit the
-current code on a branch. Another model will implement the launcher. **No
-launcher or relay has been implemented.** Do not mistake the proposed commands
-below for existing tools.
+**Update:** the launcher and relay below are now implemented:
+`kestrel/tools/network-lab.ps1` and `kestrel/tools/network_lab/relay.mjs`.
+A live 75 ms ± 20 ms run joined laser-pit through the relay and cleaned up on
+exit. On Windows, Node timers wake in ~15.6 ms steps, so the relay polls for the
+last ~17 ms before each delivery (lateness p99 < 0.1 ms, about one CPU core
+while traffic flows). `-CoarseTimers` turns polling off and adds 0–15 ms.
+`-Build` runs `bazel run --script_path=...` so it builds the native exe without
+starting it.
 
 The reported problem is poor client feel, particularly shooting latency and
 movement responsiveness. The user clarified that they have **not** experienced

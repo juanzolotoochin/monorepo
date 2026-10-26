@@ -48,6 +48,22 @@ Traffic rates use up to one second of local observations. They are unavailable
 until two samples exist. Packet loss, remote assigned ticks on the client, and
 per-shot animation/fire/hit timelines are not measured in this first window.
 
+## Feeling a slower network
+
+On Windows, [`tools/network-lab.ps1`](../tools/network-lab.ps1) opens a host
+and a client window on one machine, with a localhost relay between them that
+delays every datagram:
+
+```powershell
+.\kestrel\tools\network-lab.ps1 -DelayMs 75 -JitterMs 20 -Seed 42
+```
+
+Each datagram waits `max(0, DelayMs + uniform(-JitterMs, +JitterMs))` ms in
+each direction, so round trips grow by about `2 × DelayMs`. It reuses the built
+game; `-Build` builds it once first. Each run's parameters, relay counters and
+logs land in `tools/network_lab/runs/`. The two windows share one CPU and GPU,
+so read frame time next to the network graphs.
+
 ## First investigation
 
 1. On localhost, record the configured input margin and pending command count
