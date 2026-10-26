@@ -6,6 +6,7 @@ mod character;
 mod character_catalog;
 mod combat;
 mod control;
+mod destruction;
 mod effects;
 mod flow;
 mod gameplay;

@@ -20,6 +20,14 @@ pub struct MaterialBindings(pub Vec<(Handle<StandardMaterial>, String, StandardM
 #[derive(Component)]
 struct Environment;
 #[derive(Component)]
+pub struct DestructibleView {
+    pub index: usize,
+    pub last_health: u16,
+    pub max_health: u16,
+}
+#[derive(Component)]
+pub struct DamageMaterial(pub Color);
+#[derive(Component)]
 struct StyledActor;
 #[derive(Component)]
 pub struct WeaponVisual(pub content::scenario::Weapon);
@@ -271,6 +279,34 @@ pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack, studio: bool) {
                     radius,
                 }),
             ));
+        }
+    }
+    if !studio {
+        let initial_health: Vec<u16> = world.resource::<crate::lockstep::SessionService>().world()
+            .map(|sim| sim.terrain().destructibles.iter().map(|piece| piece.health).collect())
+            .unwrap_or_default();
+        for (index, piece) in scene.destructibles.iter().enumerate() {
+            let health = initial_health.get(index).copied().unwrap_or(piece.health);
+            let root = world.spawn((Environment, WorldScoped::default(), DestructibleView {
+                index, last_health: health, max_health: piece.health,
+            },
+                Transform::from_translation(Vec3::from_array(piece.center)),
+                if health > 0 { Visibility::Inherited } else { Visibility::Hidden })).id();
+            if health > 0 {
+                world.entity_mut(root).insert(Obstacle(Disc { center: Vec3::from_array(piece.center), radius: piece.radius }));
+            }
+            let key = content_key(&(&profile, &piece.meshes));
+            for (mesh, material) in upload(world, key, &piece.meshes, &profile) {
+                let original = world.resource::<Assets<StandardMaterial>>().get(&material).expect("uploaded material").clone();
+                let mut appearance = original.clone();
+                let base = original.base_color.to_srgba();
+                let factor = 0.55 + 0.45 * f32::from(health) / f32::from(piece.health);
+                appearance.base_color = Color::srgba(base.red * factor, base.green * factor, base.blue * factor, base.alpha);
+                let unique = world.resource_mut::<Assets<StandardMaterial>>().add(appearance);
+                let child = world.spawn((Mesh3d(mesh), MeshMaterial3d(unique), DamageMaterial(original.base_color),
+                    Transform::from_translation(-Vec3::from_array(piece.center)))).id();
+                world.entity_mut(root).add_child(child);
+            }
         }
     }
     let player = world

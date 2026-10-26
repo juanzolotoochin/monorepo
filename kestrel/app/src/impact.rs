@@ -207,6 +207,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<Time>()
             .init_resource::<crate::effects::Feedback>()
+            .init_resource::<crate::effects::CoverContacts>()
             .insert_resource(crate::sound::Sound::silent())
             .insert_resource(crate::effects::FxAssets {
                 cube: default(),

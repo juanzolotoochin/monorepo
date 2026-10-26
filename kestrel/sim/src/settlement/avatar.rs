@@ -192,7 +192,7 @@ fn slide(terrain: &Terrain, mut position: FxVec2, delta: FxVec2, radius: Fx) -> 
         let previous = position;
         position = clamp(position + delta.div_int(steps));
         for _ in 0..3 {
-            for o in &terrain.obstacles {
+            for o in terrain.blocking_obstacles() {
                 let separation = position - o.center;
                 let clearance = o.radius + radius + extra;
                 if separation.length_squared() < clearance * clearance {
@@ -588,7 +588,7 @@ impl Settlement {
     pub(super) fn read_avatar(&self, me: AgentIx, a: &AgentState, tick: u64, terrain: &Terrain, out: &mut Messages) {
         if let Some(swing) = &a.avatar.swing {
             if !swing.resolved && swing.resolve_at == tick && a.attack_ready <= tick {
-                let (targets, beam_end) = self.strike_targets(me, a.position, swing.aim, swing.weapon, terrain);
+                let (targets, beam_end, cover) = self.strike_targets(me, a.position, swing.aim, swing.weapon, terrain);
                 out.strike.push(Strike {
                     agent: me,
                     weapon: swing.weapon,
@@ -597,6 +597,7 @@ impl Settlement {
                     muzzle: swing.muzzle,
                     targets,
                     beam_end,
+                    cover,
                 });
             }
         }

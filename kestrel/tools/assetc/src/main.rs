@@ -33,12 +33,16 @@ fn assemble(scene: Scene, mut prefabs: Vec<Prefab>) -> Result<ScenePack> {
             &shapes,
         )?)
     };
+    let destructibles = voxel_assets::compile_destructibles(
+        scene.style.as_ref().unwrap_or(&Default::default()), &scene.destructibles,
+    )?;
     let actor = voxel_assets::compile_actor(scene.style.as_ref().unwrap_or(&Default::default()))?;
     let skins = voxel_assets::compile_skins(scene.style.as_ref().unwrap_or(&Default::default()))?;
     let pack = ScenePack {
         skins,
         actor,
         environment,
+        destructibles,
         version: VERSION,
         scene,
         prefabs,

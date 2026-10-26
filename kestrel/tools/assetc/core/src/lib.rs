@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 pub use style::*;
 
-pub const VERSION: u32 = 9;
+pub const VERSION: u32 = 11;
 pub type Result<T> = std::result::Result<T, String>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -276,6 +276,9 @@ pub struct Scene {
     pub style: Option<StyleProfile>,
     #[serde(default)]
     pub architecture: Vec<VoxelShape>,
+    /// Cover whose independently baked pieces can be damaged by weapon hits.
+    #[serde(default)]
+    pub destructibles: Vec<DestructibleCover>,
     #[serde(default)]
     pub shape_instances: Vec<ShapeInstance>,
     #[serde(default)]
@@ -297,6 +300,8 @@ pub struct ScenePack {
     pub prefabs: Vec<Prefab>,
     #[serde(default)]
     pub environment: Option<EnvironmentMesh>,
+    #[serde(default)]
+    pub destructibles: Vec<DestructiblePiece>,
     #[serde(default)]
     pub actor: Vec<ActorMesh>,
     #[serde(default)]
@@ -559,6 +564,10 @@ impl ScenePack {
         }
         expand_scene_shapes(self.scene.style.as_ref().unwrap_or(&StyleProfile::default()),
             &self.scene.architecture, &self.scene.shape_instances)?;
+        let expected = compile_destructibles(self.scene.style.as_ref().unwrap_or(&StyleProfile::default()), &self.scene.destructibles)?;
+        if expected.len() != self.destructibles.len() {
+            return Err("destructible cover must be compiled before packing".into());
+        }
         if (!self.scene.architecture.is_empty() || !self.scene.shape_instances.is_empty())
             && self.environment.is_none() {
             return Err("architecture must be compiled before packing".into());
@@ -739,6 +748,7 @@ mod tests {
                 terrain: None,
                 style: None,
                 architecture: vec![],
+                destructibles: vec![],
                 shape_instances: vec![],
                 scenario: None,
                 instances: vec![Instance {
@@ -752,6 +762,7 @@ mod tests {
             },
             prefabs: vec![prefab],
             environment: None,
+            destructibles: vec![],
             actor: vec![],
             skins: vec![],
         };
@@ -771,6 +782,7 @@ mod tests {
             version: VERSION,
             prefabs: vec![],
             environment: None,
+            destructibles: vec![],
             actor: vec![],
             skins: vec![],
             scene: Scene {
@@ -785,6 +797,7 @@ mod tests {
                 mine: None,
                 style: None,
                 architecture: vec![],
+                destructibles: vec![],
                 shape_instances: vec![],
                 scenario: None,
                 terrain: Some(Terrain {

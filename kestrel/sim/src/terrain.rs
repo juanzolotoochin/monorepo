@@ -30,6 +30,14 @@ pub struct Disc {
     pub radius: Fx,
 }
 
+/// An individually removable piece of cover. Its index is stable for the
+/// lifetime of the world, including saves and lockstep replay.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Destructible {
+    pub disc: Disc,
+    pub health: u16,
+}
+
 /// A raised walkable box.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Surface {
@@ -45,6 +53,8 @@ pub struct Terrain {
     /// Half-width of the square arena.
     pub extent: Fx,
     pub obstacles: Vec<Disc>,
+    #[serde(default)]
+    pub destructibles: Vec<Destructible>,
     pub surfaces: Vec<Surface>,
     /// Platform scenes: only the surfaces are ground; elsewhere is a drop.
     pub platforms_only: bool,
@@ -90,6 +100,7 @@ impl Terrain {
             center,
             extent,
             obstacles: Vec::new(),
+            destructibles: Vec::new(),
             surfaces: Vec::new(),
             platforms_only: false,
             rock: Vec::new(),
@@ -259,7 +270,7 @@ impl Terrain {
             let reach = o.radius + radius + CLEARANCE_MARGIN;
             segment_distance_squared(o.center, a, b) <= reach * reach
         };
-        if self.obstacles.iter().chain(extra).any(blocked) {
+        if self.blocking_obstacles().chain(extra.iter()).any(blocked) {
             return false;
         }
         if self.rock.is_empty() {
@@ -281,6 +292,20 @@ impl Terrain {
                 segment_distance_squared(center, a, b) > reach * reach
             })
     }
+
+    /// Every currently solid disc, including surviving cover pieces.
+    pub fn blocking_obstacles(&self) -> impl Iterator<Item = &Disc> {
+        self.obstacles.iter().chain(self.destructibles.iter().filter(|p| p.health > 0).map(|p| &p.disc))
+    }
+
+    /// Apply a weapon hit to a cover piece; crossing zero opens its footprint.
+    pub fn damage_cover(&mut self, index: usize, damage: u16) -> bool {
+        let Some(piece) = self.destructibles.get_mut(index) else { return false };
+        if piece.health == 0 { return false; }
+        piece.health = piece.health.saturating_sub(damage);
+        if piece.health == 0 { self.revision += 1; }
+        true
+    }
 }
 
 impl StateHash for Terrain {
@@ -291,6 +316,14 @@ impl StateHash for Terrain {
         for o in &self.obstacles {
             h.write(&o.center);
             h.write(&o.radius);
+        }
+        if !self.destructibles.is_empty() {
+            h.write_u64(self.destructibles.len() as u64);
+            for piece in &self.destructibles {
+                h.write(&piece.disc.center);
+                h.write(&piece.disc.radius);
+                h.write_u64(piece.health as u64);
+            }
         }
         h.write_u64(self.surfaces.len() as u64);
         for s in &self.surfaces {

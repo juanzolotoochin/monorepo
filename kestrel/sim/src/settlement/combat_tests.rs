@@ -185,8 +185,8 @@ impl Arena {
         let tick = self.tick();
         let (origin, player) = (self.s().agents[self.player].position, self.player);
         let terrain = self.sim.world().terrain().clone();
-        let (targets, beam_end) = self.s().strike_targets(player as u16, origin, aim, weapon, &terrain);
-        let message = Strike { agent: player as u16, weapon, origin, forward: aim, muzzle: [Fx::ZERO, fx(0.6), fx(0.25)], targets, beam_end };
+        let (targets, beam_end, cover) = self.s().strike_targets(player as u16, origin, aim, weapon, &terrain);
+        let message = Strike { agent: player as u16, weapon, origin, forward: aim, muzzle: [Fx::ZERO, fx(0.6), fx(0.25)], targets, beam_end, cover };
         self.s_mut().strike(tick, message)
     }
 
@@ -698,11 +698,38 @@ fn laser_stops_at_obstacle_before_its_full_range() {
     let arena = Arena::new(&config, &[obstacle]);
     let origin = arena.s().agents[arena.player].position;
     let terrain = arena.sim.world().terrain();
-    let (targets, end) = arena.s().strike_targets(arena.player as u16, origin, FxVec2::new(Fx::ZERO, Fx::ONE), Weapon::Laser, terrain);
+    let (targets, end, cover) = arena.s().strike_targets(arena.player as u16, origin, FxVec2::new(Fx::ZERO, Fx::ONE), Weapon::Laser, terrain);
     assert!(targets.is_empty());
+    assert_eq!(cover, None);
     let end = end.unwrap();
     let travel = end.y - origin.y;
     assert!(travel > fx(2.8) && travel < fx(3.2), "laser should stop at the obstacle edge: {end:?}");
+}
+
+#[test]
+fn laser_selects_the_struck_cover_piece_and_opens_it_incrementally() {
+    use crate::terrain::Destructible;
+    let mut config = scenario();
+    config.agents.push(player());
+    config.weapons = vec![Weapon::Laser];
+    let arena = Arena::new(&config, &[]);
+    let mut terrain = arena.sim.world().terrain().clone();
+    terrain.destructibles = [-0.5, 0.5].map(|x| Destructible {
+        disc: Disc { center: arena.at(x, 4.0), radius: fx(0.4) }, health: 2,
+    }).to_vec();
+    let origin = arena.s().agents[arena.player].position;
+    let left = FxVec2::new(fx(-0.125), Fx::ONE);
+    let right = FxVec2::new(fx(0.125), Fx::ONE);
+    let (_, end, cover) = arena.s().strike_targets(arena.player as u16, origin, left, Weapon::Laser, &terrain);
+    assert_eq!(cover, Some(0));
+    assert!(end.unwrap().y < arena.at(0.0, 4.0).y);
+    assert!(terrain.damage_cover(0, 1));
+    assert_eq!(terrain.destructibles[0].health, 1);
+    assert_eq!(arena.s().strike_targets(arena.player as u16, origin, left, Weapon::Laser, &terrain).2, Some(0));
+    assert!(terrain.damage_cover(0, 1));
+    assert_eq!(terrain.destructibles[0].health, 0);
+    assert_eq!(arena.s().strike_targets(arena.player as u16, origin, left, Weapon::Laser, &terrain).2, None);
+    assert_eq!(arena.s().strike_targets(arena.player as u16, origin, right, Weapon::Laser, &terrain).2, Some(1));
 }
 
 #[test]

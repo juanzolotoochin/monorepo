@@ -819,14 +819,22 @@ impl World {
             }
             for message in messages.strike {
                 let agent = message.agent;
+                let cover = message.cover;
                 let hits = settlement.strike(tick, message);
+                if let Some(index) = cover {
+                    self.terrain.damage_cover(index as usize, 1);
+                }
                 settlement.swing_resolved(agent, tick, hits);
             }
             for message in messages.projectile_hit {
                 settlement.projectile_hit(tick, message);
             }
             for message in messages.projectile_blocked {
+                let cover = message.cover;
                 settlement.projectile_blocked(tick, message);
+                if let Some(index) = cover {
+                    self.terrain.damage_cover(index as usize, 1);
+                }
             }
             for message in messages.projectile_expired {
                 settlement.projectile_expired(message);

@@ -341,6 +341,137 @@ pub struct EnvironmentMesh {
     #[serde(default)]
     pub walkable: Vec<WalkableSurface>,
 }
+
+/// A box of cover split into independently damaged pieces. The compiler bakes
+/// each piece separately so removing one exposes a real opening in the mesh.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DestructibleCover {
+    pub position: [f32; 3],
+    pub size: [f32; 3],
+    pub material: String,
+    #[serde(default)]
+    pub trim: Option<String>,
+    pub pieces: [u8; 2],
+    pub health: u16,
+    #[serde(default)]
+    pub form: CoverForm,
+    #[serde(default)]
+    pub break_style: BreakStyle,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CoverForm {
+    #[default]
+    Armored,
+    Stepped,
+    Pylon,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum BreakStyle {
+    #[default]
+    Topple,
+    Shatter,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DestructiblePiece {
+    pub meshes: Vec<MeshData>,
+    pub center: [f32; 3],
+    pub radius: f32,
+    pub health: u16,
+    pub size: [f32; 3],
+    pub asset_center: [f32; 3],
+    pub break_style: BreakStyle,
+}
+
+pub fn compile_destructibles(style: &StyleProfile, covers: &[DestructibleCover]) -> Result<Vec<DestructiblePiece>> {
+    let mut result = Vec::new();
+    for cover in covers {
+        if cover.position.iter().chain(cover.size.iter()).any(|v| !v.is_finite())
+            || cover.position.iter().any(|v| v.abs() > 32.0)
+            || cover.size.iter().any(|&v| v <= 0.0 || v > 8.0)
+            || cover.pieces.iter().any(|&n| n == 0 || n > 8)
+            || cover.health == 0
+        {
+            return Err("invalid destructible cover dimensions, pieces or health".into());
+        }
+        let cell = [cover.size[0] / f32::from(cover.pieces[0]), cover.size[1], cover.size[2] / f32::from(cover.pieces[1])];
+        if cell[0] < style.voxel_size || cell[2] < style.voxel_size {
+            return Err("destructible pieces must be at least one voxel wide".into());
+        }
+        for x in 0..cover.pieces[0] {
+            for z in 0..cover.pieces[1] {
+                let center = [
+                    cover.position[0] + (f32::from(x) + 0.5 - f32::from(cover.pieces[0]) * 0.5) * cell[0],
+                    cover.position[1],
+                    cover.position[2] + (f32::from(z) + 0.5 - f32::from(cover.pieces[1]) * 0.5) * cell[2],
+                ];
+                let body = VoxelShape { kind: ShapeKind::Box, walkable: false, position: center, size: cell,
+                    material: cover.material.clone(), repeat: [1; 3], spacing: [0.0; 3], solid_radius: None, light: None };
+                let mut shapes = Vec::new();
+                match cover.form {
+                    CoverForm::Armored => {
+                        // Overhanging plinth and lid frame a narrower armor
+                        // shell; even an unpainted bunker has a silhouette.
+                        shapes.push(VoxelShape { position: [center[0], center[1] - cell[1] * 0.42, center[2]],
+                            size: [cell[0] * 1.08, cell[1] * 0.16, cell[2] * 1.08], ..body.clone() });
+                        shapes.push(VoxelShape { size: [cell[0] * 0.88, cell[1] * 0.86, cell[2] * 0.88], ..body.clone() });
+                        shapes.push(VoxelShape { position: [center[0], center[1] + cell[1] * 0.44, center[2]],
+                            size: [cell[0] * 1.04, cell[1] * 0.13, cell[2] * 1.04], ..body.clone() });
+                        if let Some(trim) = &cover.trim {
+                            // A narrow band reads as reinforcement without
+                            // turning the entire top into a bright tile.
+                            shapes.push(VoxelShape { position: [center[0], center[1] - cell[1] * 0.16, center[2] + cell[2] * 0.47],
+                                size: [cell[0] * 0.72, cell[1] * 0.10, cell[2] * 0.12], material: trim.clone(), ..body.clone() });
+                            shapes.push(VoxelShape { position: [center[0] + cell[0] * 0.47, center[1] - cell[1] * 0.16, center[2]],
+                                size: [cell[0] * 0.12, cell[1] * 0.10, cell[2] * 0.72], material: trim.clone(), ..body.clone() });
+                        }
+                    }
+                    CoverForm::Stepped => {
+                        shapes.push(VoxelShape { position: [center[0], center[1] - cell[1] * 0.20, center[2]],
+                            size: [cell[0], cell[1] * 0.60, cell[2]], ..body.clone() });
+                        shapes.push(VoxelShape { position: [center[0], center[1] + cell[1] * 0.28, center[2]],
+                            size: [cell[0] * 0.78, cell[1] * 0.45, cell[2] * 0.78], ..body.clone() });
+                        if let Some(trim) = &cover.trim {
+                            shapes.push(VoxelShape { position: [center[0], center[1] + cell[1] * 0.06, center[2]],
+                                size: [cell[0] * 0.95, cell[1] * 0.10, cell[2] * 0.95], material: trim.clone(), ..body.clone() });
+                        }
+                    }
+                    CoverForm::Pylon => {
+                        shapes.push(VoxelShape { kind: ShapeKind::Cylinder,
+                            position: [center[0], center[1] - cell[1] * 0.40, center[2]],
+                            size: [cell[0] * 1.08, cell[1] * 0.18, cell[2] * 1.08], ..body.clone() });
+                        shapes.push(VoxelShape { kind: ShapeKind::Cylinder,
+                            position: [center[0], center[1] - cell[1] * 0.12, center[2]],
+                            size: [cell[0] * 0.82, cell[1] * 0.66, cell[2] * 0.82], ..body.clone() });
+                        shapes.push(VoxelShape { kind: ShapeKind::Cone,
+                            position: [center[0], center[1] + cell[1] * 0.34, center[2]],
+                            size: [cell[0] * 1.04, cell[1] * 0.34, cell[2] * 1.04], ..body.clone() });
+                        if let Some(trim) = &cover.trim {
+                            shapes.push(VoxelShape { kind: ShapeKind::RingFloor,
+                                position: [center[0], center[1] - cell[1] * 0.20, center[2]],
+                                size: [cell[0] * 1.10, cell[1] * 0.10, cell[2] * 1.10],
+                                material: trim.clone(), ..body.clone() });
+                        }
+                    }
+                }
+                let mut fine = style.clone();
+                fine.voxel_size = fine.voxel_size.min(0.10);
+                let mesh = compile_environment(&fine, &shapes)?;
+                // The laser stops at this disc. Match the visible plinth or
+                // shaft instead of the piece's bounding-box diagonal.
+                let outer = if cover.form == CoverForm::Stepped { 0.50 } else { 0.54 };
+                result.push(DestructiblePiece { meshes: mesh.meshes, center,
+                    radius: cell[0].max(cell[2]) * outer,
+                    health: cover.health, size: cell, asset_center: cover.position, break_style: cover.break_style });
+                if result.len() > 256 { return Err("scene exceeds 256 destructible pieces".into()); }
+            }
+        }
+    }
+    Ok(result)
+}
 fn inside(kind: ShapeKind, p: [f32; 3]) -> bool {
     match kind {
         ShapeKind::Box => true,
@@ -576,6 +707,30 @@ pub fn compile_environment(style: &StyleProfile, shapes: &[VoxelShape]) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cover_compiles_into_independent_hit_pieces() {
+        let style = StyleProfile::default();
+        let cover = DestructibleCover { position: [0.0, 0.7, 0.0], size: [1.8, 1.4, 1.8],
+            material: "metal".into(), trim: Some("trim".into()), pieces: [2, 2], health: 3,
+            form: CoverForm::Armored, break_style: BreakStyle::Topple };
+        let pieces = compile_destructibles(&style, &[cover.clone()]).unwrap();
+        assert_eq!(pieces.len(), 4);
+        assert!(pieces.iter().all(|piece| !piece.meshes.is_empty() && piece.health == 3 && piece.radius > 0.0));
+        assert!((pieces[0].radius - 0.486).abs() < 0.001);
+        assert_ne!(pieces[0].center, pieces[1].center);
+        let mut stepped = cover.clone();
+        stepped.form = CoverForm::Stepped;
+        stepped.break_style = BreakStyle::Shatter;
+        let other = compile_destructibles(&style, &[stepped]).unwrap();
+        assert_eq!(other[0].break_style, BreakStyle::Shatter);
+        assert_ne!(pieces[0].meshes[0].positions, other[0].meshes[0].positions);
+        let mut pylon = cover.clone();
+        pylon.form = CoverForm::Pylon;
+        assert!(!compile_destructibles(&style, &[pylon]).unwrap()[0].meshes.is_empty());
+        let mut invalid = cover;
+        invalid.health = 0;
+        assert!(compile_destructibles(&style, &[invalid]).is_err());
+    }
     fn shape() -> VoxelShape {
         VoxelShape {
             walkable: false,
