@@ -1,5 +1,5 @@
 //! Actions: what an agent can be told to do. A player's commands map onto
-//! them (`Action::of`), and `avatar::act` applies one to its agent. The
+//! them (`Action::of`), and `act` applies one to its agent. The
 //! simulation (`Settlement::act`) and client prediction (`AvatarReplay`)
 //! both go through `act`, so a command moves an avatar the same way in both.
 //!
@@ -9,8 +9,11 @@
 //! keys) it emits as messages (`ActionMessages`), which the simulation
 //! applies and the replay drops (`ABILITY_PREDICTION_HANDOFF.md`, D3).
 //!
-//! Only player avatars act for now. Step 5 has haulers and AI brains produce
-//! the same vocabulary (`docs/character-definition.md`).
+//! Avatars act on their players' commands; haulers act on their brain's
+//! picks (stage 2) and on the jobs stage 5 accepts, through the same `act`,
+//! which dispatches by role (`HAULER_ACTIONS_HANDOFF.md`). Commands still
+//! drive only avatars (`Settlement::act`). AI brains are to produce the same
+//! vocabulary (`docs/character-definition.md`).
 
 use std::collections::BTreeMap;
 

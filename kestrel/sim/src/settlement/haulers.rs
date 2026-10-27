@@ -2,6 +2,13 @@
 //! stages. Movement and phase changes that only touch the hauler itself run in
 //! the parallel self update; decisions that touch depots, docks or stock are
 //! messages, handled in the apply phase.
+//!
+//! The state machine is the hauler's brain (`think`): it keeps its phase and
+//! picks actions from the vocabulary players use (`Action`), which apply
+//! through the one `action::act` as an avatar's do (`HAULER_ACTIONS_HANDOFF.md`).
+//! It goes to points (`Move(GoTo)`); a job stage 5 accepts follows the route
+//! stage 3 planned (`Follow`). How to walk (the traffic detour, queuing at a
+//! busy dock) stays in `walk`.
 
 use std::collections::BTreeMap;
 
@@ -282,7 +289,7 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
 
 /// The hauler brain: the phase changes that come before walking, and the
 /// action to take. It writes the hauler's own state, never its route.
-fn think(a: &mut AgentState, me: AgentIx, ctx: &Ctx) -> Option<Action> {
+pub(super) fn think(a: &mut AgentState, me: AgentIx, ctx: &Ctx) -> Option<Action> {
     let AgentState { body, carry, role: Role::Hauler(hauler), .. } = a else { unreachable!("haulers think") };
     if let Some(d) = hauler.departure_dock {
         let dock = ctx.depots[d as usize].position;

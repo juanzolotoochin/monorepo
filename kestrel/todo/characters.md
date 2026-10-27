@@ -171,6 +171,9 @@
 - **What to do:** once actions drive haulers too (step 5, "Haulers"), read
   the speed from the character for both roles, and decide whether the
   travel heading belongs to the hauler. A save format change.
+- **Unblocked:** actions drive haulers since branch
+  `kestrel-hauler-actions` (`kestrel/HAULER_ACTIONS_HANDOFF.md`). Do it as
+  its own change, since it changes the save format.
 - **Where:** `Body` in `kestrel/sim/src/settlement/agent.rs`, `speed_now`
   in `haulers.rs`.
 - **Found in:** branch `kestrel-shared-body`.
@@ -202,8 +205,14 @@
   `drop_carry`, clears the assignment and decides what happens to units in
   the cargo (keep them for the next haul, or return them to the source).
   A rule change.
+- **Note (hauler actions):** ending a haul is an action with world effects
+  (`drop_carry`'s releases), and stage 2, where the hauler brain (`think`)
+  picks its actions, has no outbox. So it needs per-agent `ActionMessages`
+  from stage 2 merged in agent order (and a place in stage 5 to apply
+  them), or the brain asks for it in stage 3
+  (`kestrel/HAULER_ACTIONS_HANDOFF.md`, "Todos").
 - **Where:** `Carry::drop_carry` in `kestrel/sim/src/settlement/agent.rs`;
-  `haulers.rs` (`self_update`, `Phase`); `Settlement::reserve_stock` in
+  `haulers.rs` (`think`, `Phase`); `Settlement::reserve_stock` in
   `avatar.rs` for applying the releases.
 - **Found in:** inventory step 5 (`kestrel/INVENTORY_HANDOFF.md`).
 

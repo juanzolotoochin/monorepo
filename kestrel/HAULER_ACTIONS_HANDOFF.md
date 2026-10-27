@@ -1,6 +1,6 @@
 # Kestrel hauler actions (design)
 
-Status: planned (branch `kestrel-hauler-actions`). Part of character step 5 ([character definitions](docs/character-definition.md)).
+Status: done (branch `kestrel-hauler-actions`, steps 1–4). Part of character step 5 ([character definitions](docs/character-definition.md)).
 
 ## Goal
 
@@ -208,6 +208,15 @@ on `kestrel-hauler-actions`.
    "Haulers" bullet in `docs/character-definition.md` (done, link here),
    the todos above, and "Done in step N" notes here. Run the full suite
    once. Add the `docs/test-time.md` row.
+   - Done in step 4: three tests in `settlement/tests.rs`
+     (`hauler_brain_picks_actions_without_moving`,
+     `haulers_act_on_go_to_and_follow`, `commands_never_drive_haulers`);
+     `haulers::think` became `pub(super)` for the first, and the test
+     content gained `test_player` for the avatar. The guard test also
+     checks that `act_agent` past the guard would have changed the route,
+     so it isn't vacuous. Full suite: 24 test targets pass (one rerun of
+     `sim_test` after fixing a test that used scenario coordinates as world
+     ones); golden and hash files unchanged.
 
 ## Tests
 

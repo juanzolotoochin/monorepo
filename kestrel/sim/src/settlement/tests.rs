@@ -4,7 +4,11 @@ use content::scenario::{Agent, CargoLayout, Depot, Equipment, HaulLink, Item, Pr
 use content::{Content, TICKS_PER_SECOND};
 use fx::{Fx, FxVec2};
 
-use super::{Phase, Settlement};
+use super::action::{self, Action};
+use super::avatar::{character_of, Intent};
+use super::haulers::{self, EquipmentDef, Trailer};
+use super::{AgentIx, AgentState, Phase, Settlement};
+use crate::messages::ActionMessages;
 use crate::terrain::Disc;
 use crate::{Command, CommandKind, PlayerId, Simulation, World};
 
@@ -47,6 +51,11 @@ fn agent(id: &str) -> Agent {
     }
 }
 
+/// A player's avatar, at the center.
+fn player() -> Agent {
+    Agent { controlled: true, character: "test_player".into(), position: p(0.0, -2.0), capacity: 8, links: vec![], ..agent("player") }
+}
+
 fn scenario() -> Scenario {
     Scenario {
         extent: Fx::from_int(8),
@@ -86,6 +95,7 @@ fn scenario() -> Scenario {
 fn test_content() -> Content {
     let mut sources = content::builtin_sources();
     sources.push(("character/test_hauler.ron".into(), super::combat_tests::TEST_HAULER.into()));
+    sources.push(("character/test_player.ron".into(), super::combat_tests::TEST_PLAYER.into()));
     Content::from_sources(sources).unwrap()
 }
 
@@ -228,6 +238,141 @@ fn opposing_haulers_pass_without_body_overlap_and_clear_the_docks() {
     assert!(s.stock("forest", "iron") >= 9, "forest iron {}", s.stock("forest", "iron"));
     assert!(s.stock("mill", "wood") >= 9, "mill wood {}", s.stock("mill", "wood"));
     assert!(s.agents.iter().map(|a| a.hauler().unwrap().avoidance_steers).sum::<u64>() > 0);
+}
+
+/// Runs a hauler's brain (`haulers::think`) on `a` as stage 2 would on the
+/// next tick, reading the settlement as it is now.
+fn think(sim: &Simulation, a: &mut AgentState, me: AgentIx) -> Option<Action> {
+    let (s, terrain, tick) = (settlement(sim), sim.world().terrain(), sim.world().tick());
+    let footprints: Vec<_> = s.agents.iter().map(haulers::footprint).collect();
+    let ctx = haulers::Ctx {
+        tick,
+        characters: &s.characters,
+        terrain,
+        piles: s.piles.as_ref(),
+        footprints: &footprints,
+        dock_owner: &s.dock_owner,
+        depots: &s.depots,
+        links: &s.links,
+        transfers: &s.transfers,
+        view: s.view(me, tick, terrain),
+    };
+    haulers::think(a, me, &ctx)
+}
+
+fn go_to(target: FxVec2) -> Option<Action> {
+    Some(Action::Move(Intent::GoTo { target, run: false }))
+}
+
+/// The brain picks an action and changes its phase, but leaves the route to
+/// `act`.
+#[test]
+fn hauler_brain_picks_actions_without_moving() {
+    let mut sim = world(&scenario(), &[]);
+    let me = settlement(&sim).agent_index("a").unwrap();
+
+    // Idle at home: nothing to do. Away from home: go back.
+    let mut a = settlement(&sim).agents[me as usize].clone();
+    a.hauler_mut().unwrap().phase = Phase::Idle;
+    assert_eq!(think(&sim, &mut a, me), None);
+    assert_eq!(a.hauler().unwrap().phase, Phase::Idle);
+    a.body.position = a.body.home + FxVec2::new(Fx::ONE, Fx::ZERO);
+    let route = a.body.route.clone();
+    assert_eq!(think(&sim, &mut a, me), go_to(a.body.home));
+    assert_eq!(a.hauler().unwrap().phase, Phase::Returning);
+    assert_eq!(a.body.route, route);
+
+    // A hauler whose load has landed sets off for the drop dock.
+    let mill = settlement(&sim).depots[settlement(&sim).depot_index("mill").unwrap() as usize].position;
+    for _ in 0..30 * TICKS_PER_SECOND as u64 {
+        sim.step(&[]);
+        let s = settlement(&sim);
+        let Some(me) = s.agents.iter().position(|a| {
+            a.hauler().is_some_and(|h| h.phase == Phase::Loading) && a.carry.job.is_none() && a.carry.inventory.total_in() == 0
+        }) else {
+            continue;
+        };
+        let mut a = s.agents[me].clone();
+        let route = a.body.route.clone();
+        assert_eq!(think(&sim, &mut a, me as AgentIx), go_to(mill));
+        assert_eq!(a.hauler().unwrap().phase, Phase::ToDrop);
+        assert_eq!(a.body.route, route, "think leaves the route to act");
+        return;
+    }
+    panic!("no hauler finished loading");
+}
+
+/// `GoTo` plans as the hauler always has (around its trailer when towing),
+/// `Follow` takes the route as given, and an avatar ignores `Follow`.
+#[test]
+fn haulers_act_on_go_to_and_follow() {
+    let mut config = scenario();
+    config.agents.push(player());
+    let sim = world(&config, &[Disc { center: FxVec2::ZERO, radius: fx(0.7) }]);
+    let (s, terrain) = (settlement(&sim), sim.world().terrain());
+    let me = s.agent_index("a").unwrap();
+    let view = s.view(me, sim.world().tick(), terrain);
+    let mill = s.depots[s.depot_index("mill").unwrap() as usize].position;
+    let go = Action::Move(Intent::GoTo { target: mill, run: false });
+
+    let a = s.agents[me as usize].clone();
+    let mut hauler = a.hauler().unwrap().clone();
+    let mut body = a.body.clone();
+    haulers::act(&mut body, &hauler, &go, &view);
+    assert!(!body.route.is_empty());
+    assert_eq!(body.route, hauler.plan(&a.body, terrain, mill, &[]));
+
+    // Towing a cart.
+    hauler.equipment = Some(EquipmentDef { depot: 3, item: 3, capacity: 8, speed_factor: fx(0.9), radius: fx(0.7), hitch: fx(1.1) });
+    hauler.equipped = true;
+    let (position, heading) = hauler.trailer_spot(&a.body, terrain);
+    hauler.trailer = Some(Trailer { position, heading, travelled: Fx::ZERO });
+    let mut body = a.body.clone();
+    body.travel_heading = heading;
+    let towed = hauler.plan(&body, terrain, mill, &[]);
+    haulers::act(&mut body, &hauler, &go, &view);
+    assert!(!body.route.is_empty());
+    assert_eq!(body.route, towed);
+
+    let route = vec![a.body.position + FxVec2::new(fx(1.0), fx(1.0)), mill];
+    haulers::act(&mut body, &hauler, &Action::Follow(route.clone()), &view);
+    assert_eq!(body.route, route);
+
+    let player = s.agent_index("player").unwrap();
+    let mut a = s.agents[player as usize].clone();
+    assert!(a.avatar().is_some());
+    let before = a.clone();
+    let mut out = ActionMessages::default();
+    let def = character_of(&s.characters, &before);
+    action::act(&mut a, &Action::Follow(route), &s.view(player, sim.world().tick(), terrain), def, &mut out);
+    assert_eq!(a, before);
+    assert!(out.is_empty());
+}
+
+/// A command naming a hauler changes nothing: commands drive only avatars.
+#[test]
+fn commands_never_drive_haulers() {
+    let hashes = |command: bool| {
+        let mut sim = world(&scenario(), &[]);
+        run(&mut sim, 1);
+        if command {
+            let terrain = sim.world().terrain().clone();
+            let tick = sim.world().tick();
+            let s = sim.world_mut().settlement_mut();
+            let hauler = s.agent_index("a").unwrap();
+            let goal = s.depots[s.depot_index("yard").unwrap() as usize].position;
+            let (agent, action) = Action::of(&CommandKind::MoveAvatar { agent: hauler, intent: Intent::GoTo { target: goal, run: false } }).unwrap();
+            // Past the guard, the action would send the hauler elsewhere.
+            let mut unguarded = s.clone();
+            let mut out = ActionMessages::default();
+            unguarded.act_agent(tick, agent, &action, &terrain, &mut out);
+            assert_ne!(unguarded.agents[hauler as usize].body.route, s.agents[hauler as usize].body.route);
+            s.act(tick, agent, &action, &terrain, &mut out);
+            assert!(out.is_empty());
+        }
+        (0..5 * TICKS_PER_SECOND as u64).map(|_| sim.step(&[]).total).collect::<Vec<_>>()
+    };
+    assert_eq!(hashes(true), hashes(false));
 }
 
 pub(super) const FOREST: &str = include_str!("../../../app/assets/levels/forest_supply.ron");
