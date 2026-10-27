@@ -1605,9 +1605,9 @@ mod tests {
     }
 
     /// A UDP relay that holds every datagram for `delay ± jitter` of virtual
-    /// time, like `tools/network_lab/relay.mjs`. The client joins `listen`;
-    /// the relay talks to the host from `upstream` and answers the client
-    /// from `listen`, which the client checks.
+    /// time, like the network lab's relay (`tools/network_lab`). The client
+    /// joins `listen`; the relay talks to the host from `upstream` and
+    /// answers the client from `listen`, which the client checks.
     struct DelayRelay {
         listen: std::net::UdpSocket,
         upstream: std::net::UdpSocket,

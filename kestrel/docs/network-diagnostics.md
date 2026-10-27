@@ -250,9 +250,12 @@ From cmd, `kestrel\tools\network-lab.bat` takes the same arguments.
 one; each run's `run.json` records it (`null` when adaptive).
 
 Each datagram waits `max(0, DelayMs + uniform(-JitterMs, +JitterMs))` ms in
-each direction, so round trips grow by about `2 × DelayMs`. It reuses the built
-game; `-Build` builds it once first. Each run's parameters, relay counters and
-logs land in `tools/network_lab/runs/`. The two windows share one CPU and GPU,
+each direction, so round trips grow by about `2 × DelayMs`. The relay is a
+Rust program, `//kestrel/tools/network_lab:relay`, so the lab needs nothing
+installed beyond Bazel. It reuses the built game and relay from `bazel-bin`;
+`-Build` builds both once first (`-GamePath` and `-RelayPath` point at ones
+built elsewhere). Each run's parameters, relay counters and logs land in
+`tools/network_lab/runs/`. The two windows share one CPU and GPU,
 so read frame time next to the network graphs.
 
 `-Clients 7` opens seven client windows, for a full game of eight. Two more
