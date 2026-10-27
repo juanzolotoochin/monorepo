@@ -167,6 +167,12 @@ step is one commit on `kestrel-threat-characters`.
    bit-equality proof, and `golden.txt` must match step 1's byte for byte.
    - Where: `combat.rs` (`threat_radius`, `threat_attack`, `breach`,
      `threats_self_update`), `app/src/legacy.rs` (threats).
+   - Done in step 2: `threat_def`, the per-character `(speed, full hp)`
+     table and `follow_route` as planned; `sim_test` passes and
+     `golden.txt` is byte-equal to step 1's. Deviation: the
+     `melee_staggers_...` test's switch from the wave's `speed` to the
+     character's `movement.walk` moved here from step 3, since stage 2
+     no longer reads the wave and the test would fail `sim_test`.
 3. **Waves stop copying tuning.** Drop `speed`, `hp`, `armor`, `damage`
    from `WaveState`; spawn reads the character (D3). The loader checks
    `Brain::FollowRoute`. Tests that used wave fields read the character:

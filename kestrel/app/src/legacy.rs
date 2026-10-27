@@ -585,7 +585,7 @@ impl Simulation {
             .iter()
             .map(|t| {
                 let before = previous.and_then(|p| p.threat(t.id));
-                let attack = current.characters[current.waves[t.wave as usize].character as usize].attack;
+                let attack = current.characters[t.character as usize].attack;
                 // Positions are drawn between the previous tick and this one,
                 // so a windup that landed this tick is still drawn finishing.
                 // One a stagger cancelled (landing later) just goes away.

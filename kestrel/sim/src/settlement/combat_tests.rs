@@ -243,7 +243,9 @@ fn projectile(id: u64, from: FxVec2, to: FxVec2, target: Option<u64>, arrival: u
 #[test]
 fn melee_staggers_a_wounded_ghoul_then_it_resumes_advancing() {
     let mut arena = Arena::combat(&[]);
-    arena.s_mut().waves[0].speed = content::per_tick(fx(1.0));
+    let s = arena.s_mut();
+    let ghoul = s.waves[0].character as usize;
+    s.characters[ghoul].movement.walk = fx(1.0);
     // An ID whose sword roll isn't a critical on this tick.
     let id = (999..).find(|&id| combat_roll(arena.tick(), id, 0x53574f5244) % 4 != 0).unwrap();
     arena.threat(id, 0.0, 1.1, 3, 0);
