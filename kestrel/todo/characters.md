@@ -17,25 +17,6 @@
   (`apply_commands`), `messages.rs` (`ActionMessages`).
 - **Found in:** ability prediction task 7 (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D3).
 
-## Present the arc coil's shot early
-
-- **Status:** open
-- **Why:** `ArcFired` is predicted (`Event::prediction` says `Keep`), but a
-  client still draws it only once confirmed. Its arc chains into the
-  `Hit { impact: Arc }` events that follow it in the same tick
-  (`arc_source` and `arc_fired` in `app/src/settlement.rs`): skipping a
-  confirmed `ArcFired` already drawn would make the next hit draw an extra
-  arc from the player. The legacy `ArcFired` also doesn't carry the agent.
-- **What to do:** give the legacy event its agent, draw the predicted arc
-  and its `Cue::Arc` from the ledger, and let a matched confirmed
-  `ArcFired` still set the chain's start for the hits without drawing again.
-  Then add `"arc"` to `PRESENTED_EARLY`.
-- **Where:** `kestrel/app/src/event_prediction.rs` (`PRESENTED_EARLY`),
-  `kestrel/app/src/lockstep.rs` (`predict_events`),
-  `kestrel/app/src/settlement.rs`, `kestrel/app/src/legacy.rs`.
-- **Found in:** ability prediction task 4, the predicted-events ledger
-  (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D8).
-
 ## Draw a predicted arrow in flight
 
 - **Status:** open
@@ -222,6 +203,41 @@
 - **Found in:** threat characters (`kestrel/THREAT_CHARACTERS_HANDOFF.md`, D4).
 
 ## Done
+
+### Present the arc coil's shot early
+
+- **Status:** done (branch `kestrel-character-todos`)
+- **Why:** `ArcFired` is predicted (`Event::prediction` says `Keep`), but a
+  client still drew it only once confirmed. Its arc chains into the
+  `Hit { impact: Arc }` events that follow it in the same tick
+  (`arc_source` and `arc_fired` in `app/src/settlement.rs`): skipping a
+  confirmed `ArcFired` already drawn would make the next hit draw an extra
+  arc from the player. The legacy `ArcFired` also didn't carry the agent.
+- **What to do:** give the legacy event its agent, draw the predicted arc
+  and its `Cue::Arc` from the ledger, and let a matched confirmed
+  `ArcFired` still set the chain's start for the hits without drawing again.
+  Then add `"arc"` to `PRESENTED_EARLY`.
+- **Where:** `kestrel/app/src/event_prediction.rs` (`PRESENTED_EARLY`),
+  `kestrel/app/src/lockstep.rs` (`predict_events`),
+  `kestrel/app/src/settlement.rs`, `kestrel/app/src/legacy.rs`.
+- **Found in:** ability prediction task 4, the predicted-events ledger
+  (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D8).
+- **Done:** `PRESENTED_EARLY` is laser and arc. The legacy `ArcFired`
+  carries its `agent`. `predict_events` presents a predicted shot as its
+  arc from `from` to `to` (to the first target) through
+  `effects::PendingArcs`, drawn by `effects::emit_arcs`, and plays
+  `Cue::Arc`. `settlement.rs` keeps the chain in `ArcChain`: a matched
+  confirmed shot (`presented_early.next("arc")`) draws nothing and plays no
+  sound, but still starts the chain, so its first hit draws nothing and
+  later hits arc on from it. Unmatched shots (withdrawn, never presented,
+  or already given up) are drawn as confirmed; one that confirms ending
+  elsewhere stays as drawn (`Keep`). Tests: the ledger
+  (`an_arc_shot_is_presented_once_and_kept_however_it_confirms`), the chain
+  (`an_arc_shot_drawn_early_still_starts_its_chain`) and a relayed client
+  in the combat arena (`joined_player_arc_shots_are_presented_early_once`).
+  Not yet looked at in play: the early arc is drawn from the shot's
+  predicted `from` at a fixed height, not the arc coil's muzzle, and to
+  where the replay had the first ghoul.
 
 ### Move pile hauls and piano keys onto actions
 

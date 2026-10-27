@@ -431,7 +431,8 @@ pub enum Event {
     Hit { target: u64, by: Option<String>, projectile: Option<u64>, position: Point, killed: bool, impact: Impact },
     PinnedLanded { target: u64, position: Point },
     BlockedShot { position: Point },
-    ArcFired { from: Point, to: Point },
+    /// Player `agent` fired the arc coil from `from`; its arc reaches `to`.
+    ArcFired { agent: u16, from: Point, to: Point },
     LaserFired { agent: u16, to: Point, hit_actor: bool, cover: Option<u16> },
     Breach { position: Point },
     /// A threat's swing landed on player `agent` (`hit`) or missed. `from`
@@ -704,7 +705,7 @@ impl Simulation {
                     },
                     s::Event::PinnedLanded { target, position } => Event::PinnedLanded { target: *target, position: p(*position) },
                     s::Event::BlockedShot { position } => Event::BlockedShot { position: p(*position) },
-                    s::Event::ArcFired { from, to, .. } => Event::ArcFired { from: p(*from), to: p(*to) },
+                    s::Event::ArcFired { agent, from, to, .. } => Event::ArcFired { agent: *agent, from: p(*from), to: p(*to) },
                     s::Event::LaserFired { agent, to, hit_actor, cover, .. } => Event::LaserFired { agent: *agent, to: p(*to), hit_actor: *hit_actor, cover: *cover },
                     s::Event::Breach { position } => Event::Breach { position: p(*position) },
                     s::Event::PileToss { .. } => return None,

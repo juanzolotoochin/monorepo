@@ -264,7 +264,9 @@ Done in task 4: `app/src/event_prediction.rs` (`EventPrediction`) replaced
 `LaserPrediction`. Each frame `predict_events` (`lockstep.rs`) confirms the
 frame's confirmed events, expires (`TIMEOUT_TICKS`, 10), then presents the
 replay's new events: a laser shot as before. The
-app presents `PRESENTED_EARLY` (laser). The arc coil's and the bow's stay
+app presents `PRESENTED_EARLY` (laser, and since `kestrel-character-todos` the
+arc coil: a matched confirmed shot still starts its hits' chain, `ArcChain` in
+`settlement.rs`). The bow's stays
 confirmed-only (`todo/characters.md`): task 4 presented the bow's sound
 early, but the arrow is confirmed world state, so the sound came an input
 lead before the arrow; task 5 took it back out. A matched confirmed event is skipped

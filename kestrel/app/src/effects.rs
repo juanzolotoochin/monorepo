@@ -25,6 +25,7 @@ impl service::Service for Effects {
     fn systems(app: &mut App) {
         use service::{AppServices, Phase, WorldState};
         app.init_resource::<PendingLasers>()
+            .init_resource::<PendingArcs>()
             .init_resource::<CoverContacts>()
             .add_service_systems::<Self, _>(
                 Phase::Present,
@@ -32,7 +33,7 @@ impl service::Service for Effects {
             )
             .add_systems(
                 PostUpdate,
-                emit_lasers
+                (emit_lasers, emit_arcs)
                     .after(bevy::transform::TransformSystems::Propagate)
                     // An effect-file bolt (`vfx.rs`) still draws this frame.
                     .before(bevy_sprinkles::SprinklesLateSetup)
@@ -65,6 +66,19 @@ pub struct FxAssets {
 }
 #[derive(Resource, Default)]
 pub struct PendingLasers(pub Vec<LaserShot>);
+
+/// Arc coil arcs a system without world access asked for: the local
+/// player's shots prediction presents (`lockstep::predict_events`), as
+/// (from, to, seed). `emit_arcs` draws them.
+#[derive(Resource, Default)]
+pub struct PendingArcs(pub Vec<(Vec3, Vec3, u32)>);
+
+/// Draws the pending arcs.
+pub fn emit_arcs(world: &mut World) {
+    for (from, to, seed) in std::mem::take(&mut world.resource_mut::<PendingArcs>().0) {
+        arc(world, from, to, seed);
+    }
+}
 
 /// Keeps the rendered cover intact while an authoritative laser hit is in flight.
 #[derive(Resource, Default)]
