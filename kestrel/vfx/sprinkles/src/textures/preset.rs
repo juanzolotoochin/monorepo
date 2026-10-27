@@ -142,6 +142,7 @@ preset_textures!(
 
 /// A reference to a texture that can be loaded at runtime.
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect, Hash, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub enum TextureRef {
     /// A built-in preset texture. Only available with the `preset-textures` feature.
     #[cfg(feature = "preset-textures")]

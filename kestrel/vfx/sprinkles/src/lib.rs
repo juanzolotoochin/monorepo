@@ -1,61 +1,21 @@
 #![deny(missing_docs)]
-#![doc(
-    html_logo_url = "https://raw.githubusercontent.com/doceazedo/sprinkles/refs/heads/main/assets/icon.svg"
-)]
 //! **Sprinkles** is a GPU-accelerated particle system for the
 //! [Bevy game engine](https://bevyengine.org/), inspired by
 //! [Godot's particle system](https://docs.godotengine.org/en/stable/tutorials/3d/particles/index.html).
 //!
-//! # Getting started
+//! This is Kestrel's fork, vendored from upstream (see `UPSTREAM.md` next to
+//! this crate). Kestrel parses effect files itself with
+//! [`asset::versions::migrate_str`], so the fork registers no asset loader,
+//! and the `preset-textures` feature is never enabled.
 //!
-//! ## Add the dependency
-//!
-//! First, add `bevy_sprinkles` to the dependencies in your `Cargo.toml`:
-//!
-//! ```toml
-//! [dependencies]
-//! bevy_sprinkles = "0.4"
-//! ```
-//!
-//! ## Add the plugin
-//!
-//! Add [`SprinklesPlugin`] to your Bevy app:
-//!
-//! ```no_run
-//! use bevy::prelude::*;
-//! use bevy_sprinkles::prelude::*;
-//!
-//! fn main() {
-//!     App::new()
-//!         .add_plugins((DefaultPlugins, SprinklesPlugin))
-//!         // ...your other plugins, systems and resources
-//!         .run();
-//! }
-//! ```
-//!
-//! Now you can use all of Sprinkles' components and resources to build particle effects!
-//!
-//! ## Spawning a particle system
+//! # Spawning a particle system
 //!
 //! A particle system is defined by a [`ParticlesAsset`] containing one or more
 //! [`EmitterData`] entries. Spawn a [`Particles3d`] component to render the effect.
 //!
-//! ### Loading from a file
+//! ## Building in code
 //!
-//! Particle systems can be loaded from RON asset files:
-//!
-//! ```
-//! use bevy::prelude::*;
-//! use bevy_sprinkles::prelude::*;
-//!
-//! fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
-//!     commands.spawn(Particles3d(asset_server.load("my_effect.ron")));
-//! }
-//! ```
-//!
-//! ### Building in code
-//!
-//! You can also build a [`ParticlesAsset`] directly:
+//! Build a [`ParticlesAsset`] directly:
 //!
 //! ```
 //! use bevy::prelude::*;
@@ -87,10 +47,6 @@
 //! }
 //! ```
 //!
-//! # Feature flags
-//!
-//! - `preset-textures` - Bundles a library of built-in particle
-//!   textures, see [`PresetTexture`] (enabled by default)
 //!
 //! # Table of contents
 //!
@@ -151,7 +107,6 @@
 //!
 //! - [Gradient textures](asset::Gradient): color ramps baked into 1D images
 //! - [Curve textures](asset::CurveTexture): value curves baked into 1D images
-//! - [Preset textures](PresetTexture): built-in particle textures bundled with the crate
 //!
 //! See the [`textures::baked`] module for more details about texture baking and caching.
 
@@ -167,6 +122,10 @@ pub mod prelude;
 /// Runtime components and state for active particle systems.
 pub mod runtime;
 mod sort;
+/// Kestrel: per-frame cost counters for profiling.
+pub mod stats;
+/// Kestrel: pooled bursts, one draw per (asset, emitter).
+pub mod pool;
 mod spawning;
 /// Texture baking and caching for gradients and curves.
 pub mod textures;
@@ -179,7 +138,7 @@ use bevy::{
     shader::load_shader_library,
 };
 
-use asset::{ParticlesAsset, ParticlesAssetLoader};
+use asset::ParticlesAsset;
 use compute::ParticleComputePlugin;
 use extract::{extract_colliders, extract_particle_systems};
 use mesh::ParticleMeshCache;
@@ -197,9 +156,15 @@ use textures::{
 
 /// Plugin that adds GPU particle system support to a Bevy app.
 ///
-/// Registers asset loaders, compute pipelines, material plugins, texture caches,
+/// Registers the asset type, compute pipelines, material plugins, texture caches,
 /// and all the systems needed to simulate and render particles.
 pub struct SprinklesPlugin;
+
+/// Kestrel: in `PostUpdate` after transform propagation, sets up particle
+/// systems spawned since the first setup and writes every emitter's uniforms.
+/// A system spawned by a system ordered before this set draws that frame.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SprinklesLateSetup;
 
 impl Plugin for SprinklesPlugin {
     fn build(&self, app: &mut App) {
@@ -211,8 +176,7 @@ impl Plugin for SprinklesPlugin {
         #[cfg(feature = "preset-textures")]
         textures::preset::register_preset_textures(app);
 
-        app.init_asset::<ParticlesAsset>()
-            .init_asset_loader::<ParticlesAssetLoader>();
+        app.init_asset::<ParticlesAsset>();
 
         app.init_resource::<GradientTextureCache>()
             .add_systems(Startup, create_fallback_gradient_texture)
@@ -224,23 +188,57 @@ impl Plugin for SprinklesPlugin {
 
         app.init_resource::<ParticleMeshCache>();
 
+        // Kestrel: pooled bursts (`pool.rs`). Slots freed this frame are
+        // zeroed before this frame's simulation, so this runs last.
+        app.init_resource::<pool::ParticlePools>()
+            .add_systems(Last, pool::maintain_pools);
+
         app.add_plugins(MaterialPlugin::<runtime::ParticleMaterial>::default());
 
+        // Kestrel: in PostUpdate, before transforms propagate, so a system
+        // spawned anywhere in Update is set up, simulated and drawn that same
+        // frame (upstream ran these in Update, unordered, which drew bursts
+        // one to two frames late). The emitter uniforms need the propagated
+        // transforms.
         app.add_systems(
-            Update,
+            PostUpdate,
             (
-                setup_particle_systems,
-                sync_particle_buffers.after(setup_particle_systems),
+                setup_particle_systems::<false>,
+                sync_particle_buffers.after(setup_particle_systems::<false>),
                 sync_particle_mesh.after(sync_particle_buffers),
                 sync_particle_material,
                 sync_collider_data,
-                update_particle_time,
+                update_particle_time.after(setup_particle_systems::<false>),
                 check_particle_system_finished.after(update_particle_time),
                 cleanup_particle_entities,
-            ),
+            )
+                .before(bevy::transform::TransformSystems::Propagate),
         );
 
-        app.add_systems(PostUpdate, write_emitter_uniforms);
+        // Kestrel: systems spawned after propagation (at a posed weapon's
+        // muzzle, say) are set up and stepped here, so they also draw that
+        // frame. Spawn them `.before(SprinklesLateSetup)`.
+        // Before the asset events flush and visibility propagates, or a late
+        // emitter's buffers and material reach the GPU, and the emitter
+        // becomes visible, a frame later, after its one burst step has been
+        // spent: nothing would spawn.
+        app.configure_sets(
+            PostUpdate,
+            SprinklesLateSetup
+                .after(bevy::transform::TransformSystems::Propagate)
+                .before(bevy::asset::AssetEventSystems)
+                .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
+        );
+        app.add_systems(
+            PostUpdate,
+            (
+                setup_particle_systems::<true>,
+                spawning::update_late_particle_time,
+                write_emitter_uniforms,
+            )
+                .chain()
+                .in_set(SprinklesLateSetup),
+        );
 
         app.add_plugins((
             ParticleComputePlugin,
@@ -268,8 +266,8 @@ pub use asset::{
 pub use material::ParticleMaterialExtension;
 pub use runtime::{
     ColliderEntity, EmitterEntity, EmitterRuntime, Finished, ParticleBufferHandle, ParticleData,
-    ParticleMaterial, ParticleMaterialHandle, ParticleSystemRuntime, Particles2d, Particles3d,
-    ParticlesCollider3D,
+    ParticleMaterial, ParticleMaterialHandle, ParticleSystemRuntime, ParticleTrigger, Particles2d,
+    Particles3d, ParticlesCollider3D,
 };
 #[cfg(feature = "preset-textures")]
 pub use textures::preset::PresetTexture;

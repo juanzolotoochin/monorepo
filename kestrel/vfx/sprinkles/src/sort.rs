@@ -3,9 +3,10 @@ use bevy::{
     prelude::*,
     render::{
         Render, RenderApp, RenderStartup, RenderSystems,
+        diagnostic::RecordDiagnostics,
         render_asset::RenderAssets,
         render_resource::{
-            BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, Buffer,
+            BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, Buffer, BufferId,
             CachedComputePipelineId, CachedPipelineState, ComputePassDescriptor,
             ComputePipelineDescriptor, DynamicUniformBuffer, PipelineCache, ShaderStages,
             ShaderType,
@@ -108,6 +109,18 @@ pub struct ParticleSortBindGroups {
     copy_dispatches: Vec<SortDispatch>,
 }
 
+/// Kestrel: the sort passes' uniform buffer and bind groups, kept from frame
+/// to frame. Upstream made a new uniform buffer and a bind group per emitter
+/// every frame; now the buffer is rewritten in place (it only grows) and an
+/// emitter's bind group is rebuilt only when a buffer it binds changes.
+#[derive(Resource, Default)]
+pub struct ParticleSortCache {
+    uniforms: DynamicUniformBuffer<SortParams>,
+    /// Per emitter: the ids of the uniform, particle, indices and sorted
+    /// buffers, and the bind group binding them.
+    bind_groups: std::collections::HashMap<Entity, ([BufferId; 4], BindGroup)>,
+}
+
 pub fn prepare_particle_sort_bind_groups(
     mut commands: Commands,
     pipeline: Res<ParticleSortPipeline>,
@@ -116,12 +129,24 @@ pub fn prepare_particle_sort_bind_groups(
     render_queue: Res<RenderQueue>,
     extracted_systems: Res<ExtractedParticleSystem>,
     gpu_storage_buffers: Res<RenderAssets<GpuShaderBuffer>>,
+    mut cache: ResMut<ParticleSortCache>,
 ) {
+    let _timer = crate::stats::PREPARE_SORT_NS.time();
+    let reuse = crate::stats::reuse_gpu_resources();
+    let cache = &mut *cache;
+    if !reuse {
+        *cache = ParticleSortCache::default();
+    }
     let mut result = ParticleSortBindGroups::default();
-    let mut dynamic_uniform = DynamicUniformBuffer::<SortParams>::default();
-    let mut emitter_buffers: Vec<(Buffer, Buffer, Buffer)> = Vec::new();
+    let dynamic_uniform = &mut cache.uniforms;
+    dynamic_uniform.clear();
+    let mut emitter_buffers: Vec<(Entity, Buffer, Buffer, Buffer)> = Vec::new();
 
-    for (_entity, emitter_data) in &extracted_systems.emitters {
+    for (entity, emitter_data) in &extracted_systems.emitters {
+        // Kestrel: pooled bursts are sorted by their pool's entry.
+        if !emitter_data.sort {
+            continue;
+        }
         let Some(particle_buf) = gpu_storage_buffers.get(&emitter_data.particle_buffer_handle)
         else {
             continue;
@@ -143,6 +168,7 @@ pub fn prepare_particle_sort_bind_groups(
         let total_workgroups = (total_slots + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
 
         emitter_buffers.push((
+            *entity,
             particle_buf.buffer.clone(),
             indices_buf.buffer.clone(),
             sorted_buf.buffer.clone(),
@@ -207,24 +233,41 @@ pub fn prepare_particle_sort_bind_groups(
         });
     }
 
+    let had_buffer = dynamic_uniform.buffer().map(|b| b.id());
     dynamic_uniform.write_buffer(&render_device, &render_queue);
+    if dynamic_uniform.buffer().map(|b| b.id()) != had_buffer {
+        crate::stats::BUFFERS_CREATED.add(1);
+    }
 
-    if let Some(uniform_binding) = dynamic_uniform.binding() {
+    if let (Some(uniform_binding), Some(uniform_id)) =
+        (dynamic_uniform.binding(), dynamic_uniform.buffer().map(|b| b.id()))
+    {
         let bind_group_layout = pipeline_cache.get_bind_group_layout(&pipeline.bind_group_layout);
 
-        for (particle_buf, indices_buf, sorted_buf) in &emitter_buffers {
-            let bind_group = render_device.create_bind_group(
-                Some("particle_sort_bind_group"),
-                &bind_group_layout,
-                &BindGroupEntries::sequential((
-                    uniform_binding.clone(),
-                    particle_buf.as_entire_binding(),
-                    indices_buf.as_entire_binding(),
-                    sorted_buf.as_entire_binding(),
-                )),
-            );
-            result.bind_groups.push(bind_group);
+        let mut bind_groups = std::collections::HashMap::with_capacity(emitter_buffers.len());
+        for (entity, particle_buf, indices_buf, sorted_buf) in &emitter_buffers {
+            let key = [uniform_id, particle_buf.id(), indices_buf.id(), sorted_buf.id()];
+            let bind_group = match cache.bind_groups.remove(entity) {
+                Some((cached_key, group)) if cached_key == key => group,
+                _ => {
+                    crate::stats::BIND_GROUPS_CREATED.add(1);
+                    render_device.create_bind_group(
+                        Some("particle_sort_bind_group"),
+                        &bind_group_layout,
+                        &BindGroupEntries::sequential((
+                            uniform_binding.clone(),
+                            particle_buf.as_entire_binding(),
+                            indices_buf.as_entire_binding(),
+                            sorted_buf.as_entire_binding(),
+                        )),
+                    )
+                }
+            };
+            result.bind_groups.push(bind_group.clone());
+            bind_groups.insert(*entity, (key, bind_group));
         }
+        // Emitters that are gone drop their bind groups here.
+        cache.bind_groups = bind_groups;
     }
 
     commands.insert_resource(result);
@@ -266,6 +309,11 @@ pub fn run_particle_sort_node(
         return;
     }
 
+    // Kestrel: `render/particle_sort/*` timings, as in `compute.rs`.
+    let diagnostics = ctx.diagnostic_recorder();
+    let diagnostics = diagnostics.as_deref();
+    let time_span = diagnostics.time_span(ctx.command_encoder(), "particle_sort");
+
     let mut run_pass = |label, pipeline, dispatches: &[SortDispatch]| {
         let mut pass = ctx
             .command_encoder()
@@ -299,6 +347,7 @@ pub fn run_particle_sort_node(
         copy_pipeline,
         &sort_bind_groups.copy_dispatches,
     );
+    time_span.end(ctx.command_encoder());
 }
 
 pub struct ParticleSortPlugin;
@@ -311,6 +360,7 @@ impl Plugin for ParticleSortPlugin {
 
         render_app
             .init_resource::<ParticleSortBindGroups>()
+            .init_resource::<ParticleSortCache>()
             .add_systems(RenderStartup, init_particle_sort_pipeline)
             .add_systems(
                 Render,

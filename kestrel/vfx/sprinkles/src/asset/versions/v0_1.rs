@@ -268,6 +268,7 @@ impl From<EmitterVelocities> for CurrentEmitterVelocities {
             directional_velocity: old.directional_velocity.into(),
             pivot: old.pivot,
             inherit_ratio: old.inherit_ratio,
+            world_bias: Vec3::ZERO,
         }
     }
 }

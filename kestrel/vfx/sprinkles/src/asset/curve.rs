@@ -7,6 +7,7 @@ use super::Range;
 
 /// Interpolation mode between two [`CurvePoint`]s.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default, Reflect)]
+#[serde(deny_unknown_fields)]
 pub enum CurveMode {
     /// A single easing function applied across the entire segment.
     SingleCurve,
@@ -39,6 +40,7 @@ impl FromStr for CurveMode {
 
 /// The easing function used when interpolating between curve points.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default, Reflect)]
+#[serde(deny_unknown_fields)]
 pub enum CurveEasing {
     /// Power-based easing. The exponent is derived from the tension parameter.
     #[default]
@@ -70,6 +72,7 @@ fn default_tension() -> f64 {
 
 /// A single control point in a [`CurveTexture`].
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Reflect)]
+#[serde(deny_unknown_fields)]
 pub struct CurvePoint {
     /// Horizontal position along the curve, from `0.0` (start) to `1.0` (end).
     pub position: f32,
@@ -124,6 +127,7 @@ fn is_empty_string(s: &Option<String>) -> bool {
 
 /// A single channel of a [`CurveTexture`], pairing control points with an output range.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Reflect)]
+#[serde(deny_unknown_fields)]
 pub struct Curve {
     /// The control points that define this channel's shape.
     pub points: Vec<CurvePoint>,
@@ -168,6 +172,7 @@ impl Curve {
 /// single `CurveTexture` to represent both scalar curves and per-axis curves without a
 /// separate type.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Reflect)]
+#[serde(deny_unknown_fields)]
 pub struct CurveTexture {
     /// Optional display name for this curve (e.g., "Constant", "Fade Out").
     #[serde(default, skip_serializing_if = "is_empty_string")]

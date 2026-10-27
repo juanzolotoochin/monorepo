@@ -10,7 +10,8 @@ use crate::{
         ColliderEntity, CurrentMaterialConfig, CurrentMeshConfig, EditorMode, EmitterEntity,
         EmitterRuntime, ParticleBufferHandle, ParticleData, ParticleMaterial,
         ParticleMaterialHandle, ParticleMeshHandle, ParticleSystemRuntime, Particles3d,
-        ParticlesCollider3D, SimulationStep, SubEmitterBufferHandle, TrailHistoryEntry,
+        ParticleTrigger, ParticlesCollider3D, SimulationStep, SubEmitterBufferHandle,
+        TrailHistoryEntry,
     },
 };
 
@@ -77,13 +78,43 @@ fn get_editor_assets_folders<'a>(
         .unwrap_or(&[])
 }
 
+/// Kestrel: marks emitters set up after transform propagation this frame, so
+/// only they get the late time step (see `lib.rs`).
+#[derive(Component)]
+pub(crate) struct SetUpLate;
+
+/// Kestrel: the late pass's time step, for emitters [`SetUpLate`] only.
+pub(crate) fn update_late_particle_time(
+    mut commands: Commands,
+    time: Res<Time>,
+    assets: Res<Assets<ParticlesAsset>>,
+    system_query: Query<(&Particles3d, &ParticleSystemRuntime)>,
+    mut emitter_query: Query<(Entity, &EmitterEntity, &mut EmitterRuntime), With<SetUpLate>>,
+) {
+    let _timer = crate::stats::UPDATE_NS.time();
+    for (entity, ..) in &emitter_query {
+        commands.entity(entity).remove::<SetUpLate>();
+    }
+    step_particle_time(&time, &assets, &system_query, emitter_query.iter_mut().map(|(_, e, r)| (e, r)));
+}
+
 pub fn update_particle_time(
     time: Res<Time>,
     assets: Res<Assets<ParticlesAsset>>,
     system_query: Query<(&Particles3d, &ParticleSystemRuntime)>,
     mut emitter_query: Query<(&EmitterEntity, &mut EmitterRuntime)>,
 ) {
-    for (emitter, mut runtime) in emitter_query.iter_mut() {
+    let _timer = crate::stats::UPDATE_NS.time();
+    step_particle_time(&time, &assets, &system_query, emitter_query.iter_mut());
+}
+
+fn step_particle_time<'a>(
+    time: &Time,
+    assets: &Assets<ParticlesAsset>,
+    system_query: &Query<(&Particles3d, &ParticleSystemRuntime)>,
+    emitters: impl Iterator<Item = (&'a EmitterEntity, Mut<'a, EmitterRuntime>)>,
+) {
+    for (emitter, mut runtime) in emitters {
         let Ok((particle_system, system_runtime)) = system_query.get(emitter.parent_system) else {
             continue;
         };
@@ -95,6 +126,8 @@ pub fn update_particle_time(
         let Some(emitter_data) = asset.emitters.get(runtime.emitter_index) else {
             continue;
         };
+        // Kestrel: the trigger may set the cycle length.
+        let emitter_time = runtime.time(&emitter_data.time);
 
         runtime.simulation_steps.clear();
 
@@ -116,8 +149,8 @@ pub fn update_particle_time(
             continue;
         }
 
-        let fixed_fps = emitter_data.time.fixed_fps;
-        let total_duration = emitter_data.time.total_duration();
+        let fixed_fps = emitter_time.fixed_fps;
+        let total_duration = emitter_time.total_duration();
 
         if fixed_fps > 0 {
             let fixed_delta = 1.0 / fixed_fps as f32;
@@ -179,14 +212,21 @@ pub fn update_particle_time(
             runtime.simulation_steps.push(step);
         }
 
-        if emitter_data.time.one_shot && runtime.cycle > 0 && !runtime.one_shot_completed {
-            runtime.set_emitting(false);
-            runtime.one_shot_completed = true;
+        if emitter_time.one_shot && runtime.cycle > 0 && !runtime.one_shot_completed {
+            // Kestrel: stop emitting when the cycle ends, but finish (and
+            // despawn) a frame later. Particles spawn at age 0 at the end of
+            // their first step, so they still have this frame to live;
+            // upstream cut every one-shot burst's last frame.
+            if runtime.emitting {
+                runtime.set_emitting(false);
+            } else {
+                runtime.one_shot_completed = true;
+            }
         }
 
         if !runtime.emitting {
             runtime.inactive_time += time.delta_secs();
-            let grace = emitter_data.time.lifetime * INACTIVE_GRACE_FACTOR;
+            let grace = emitter_time.lifetime * INACTIVE_GRACE_FACTOR;
             if runtime.inactive_time > grace {
                 runtime.inactive = true;
             }
@@ -241,17 +281,124 @@ fn bake_thickness_curve(trail: &EmitterTrail) -> [f32; TRAIL_THICKNESS_CURVE_SAM
     samples
 }
 
-pub fn setup_particle_systems(
+/// Kestrel: what a trigger sets for one emitter at setup.
+struct TriggeredEmitter {
+    seed: Option<u32>,
+    spawn_count: Option<u32>,
+    lifetime: Option<f32>,
+}
+
+fn triggered_emitter(
+    emitter: &EmitterData,
+    index: usize,
+    trigger: Option<&ParticleTrigger>,
+    world: &GlobalTransform,
+) -> TriggeredEmitter {
+    let seed = trigger.and_then(|t| t.emitter_seed(index)).or(emitter.time.fixed_seed);
+    let distance = trigger.and_then(|t| t.target).map(|target| target.distance(world.translation()));
+    let spawn_count = emitter.emission.particles_per_meter.zip(distance).map(|(rate, distance)| {
+        ((distance * rate).ceil() as u32).clamp(1, emitter.emission.particles_amount.max(1))
+    });
+    // Speeds scale with the system, as in `build_base_uniforms`.
+    let (scale, _, _) = world.to_scale_rotation_translation();
+    let slowest = emitter.velocities.initial_velocity.min * scale.element_product().abs().cbrt();
+    let lifetime = distance
+        .filter(|_| emitter.time.lifetime_to_target && slowest > 0.0)
+        .map(|distance| (distance / slowest).clamp(1e-3, emitter.time.lifetime));
+    TriggeredEmitter { seed, spawn_count, lifetime }
+}
+
+/// Kestrel: a pool of `capacity` bursts of `emitter` (`pool.rs`): buffers for
+/// every slot, one material and one entity that draws them all.
+#[allow(clippy::too_many_arguments)]
+fn create_pool(
+    commands: &mut Commands,
+    emitter: &EmitterData,
+    capacity: u32,
+    meshes: &mut Assets<Mesh>,
+    mesh_cache: &mut ParticleMeshCache,
+    buffers: &mut Assets<ShaderBuffer>,
+    materials: &mut Assets<ParticleMaterial>,
+    asset_server: &AssetServer,
+) -> crate::pool::Pool {
+    let total = emitter.emission.particles_amount * capacity;
+    let particles = vec![ParticleData::default(); total as usize];
+    let mut particle_buffer = ShaderBuffer::from(particles.clone());
+    particle_buffer.buffer_usage |= bevy::render::render_resource::BufferUsages::COPY_SRC;
+    let particle_buffer = buffers.add(particle_buffer);
+    let indices_buffer = buffers.add(ShaderBuffer::from((0..total).collect::<Vec<u32>>()));
+    let sorted_particles_buffer = buffers.add(ShaderBuffer::from(particles));
+    let uniforms = ParticleEmitterUniforms {
+        emitter_transform: Mat4::IDENTITY,
+        max_particles: total,
+        particle_flags: emitter.particle_flags.bits(),
+        trail_size: 1,
+        transform_align: transform_align_to_u32(emitter.draw_pass.transform_align),
+        pooled: 1,
+        ..default()
+    };
+    let emitter_uniforms_buffer = buffers.add(ShaderBuffer::from(vec![uniforms]));
+    let mesh = mesh_cache.get_or_create(&emitter.draw_pass.mesh, total, meshes);
+    let material = materials.add(create_particle_material_from_config(
+        &emitter.draw_pass.material,
+        sorted_particles_buffer.clone(),
+        emitter_uniforms_buffer.clone(),
+        asset_server,
+        &[],
+    ));
+    let mut entity = commands.spawn((
+        Name::new("particle pool"),
+        crate::pool::ParticlePoolDraw,
+        Mesh3d(mesh),
+        MeshMaterial3d(material),
+        Transform::IDENTITY,
+        GlobalTransform::IDENTITY,
+        Visibility::Inherited,
+        // Bursts anywhere in the world share this draw.
+        bevy::camera::visibility::NoFrustumCulling,
+    ));
+    if !emitter.draw_pass.shadow_caster {
+        entity.insert(NotShadowCaster);
+    }
+    let draw_order = match emitter.draw_pass.draw_order {
+        crate::asset::DrawOrder::Index => 0,
+        crate::asset::DrawOrder::Lifetime => 1,
+        crate::asset::DrawOrder::ReverseLifetime => 2,
+        crate::asset::DrawOrder::ViewDepth => 3,
+    };
+    let handle = ParticleBufferHandle {
+        particle_buffer,
+        indices_buffer,
+        sorted_particles_buffer,
+        emitter_uniforms_buffer,
+        max_particles: total,
+        amount: total,
+        trail_size: 1,
+        trail_history_buffer: None,
+        trail_history_frames: 0,
+    };
+    crate::pool::Pool::new(entity.id(), capacity, emitter, draw_order, handle, uniforms)
+}
+
+/// Sets up newly spawned systems. Kestrel: runs twice, before transform
+/// propagation and again after it (`LATE`) for systems spawned in between,
+/// such as at a posed weapon's muzzle; see `lib.rs`.
+pub fn setup_particle_systems<const LATE: bool>(
     mut commands: Commands,
-    query: Query<(Entity, &Particles3d, Has<EditorMode>), Without<ParticleSystemRuntime>>,
+    query: Query<
+        (Entity, &Particles3d, Has<EditorMode>, Option<&Transform>, Option<&ParticleTrigger>),
+        Without<ParticleSystemRuntime>,
+    >,
     assets: Res<Assets<ParticlesAsset>>,
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mesh_cache: ResMut<ParticleMeshCache>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     mut materials: ResMut<Assets<ParticleMaterial>>,
+    mut pools: ResMut<crate::pool::ParticlePools>,
 ) {
-    for (system_entity, particle_system, is_editor) in query.iter() {
+    let _timer = crate::stats::SETUP_NS.time();
+    for (system_entity, particle_system, is_editor, transform, trigger) in query.iter() {
         let Some(asset) = assets.get(particle_system) else {
             continue;
         };
@@ -267,6 +414,9 @@ pub fn setup_particle_systems(
         };
 
         let initial_transform = asset.initial_transform.to_transform();
+        // Kestrel: where the system is before transforms propagate. Assumes a
+        // root entity (no parent), as Kestrel spawns them.
+        let system_world = GlobalTransform::from(transform.copied().unwrap_or(initial_transform));
 
         commands
             .entity(system_entity)
@@ -279,6 +429,46 @@ pub fn setup_particle_systems(
         let mut emitter_entities: Vec<Entity> = Vec::new();
 
         for (emitter_index, emitter) in asset.emitters.iter().enumerate() {
+            // Kestrel: a burst of a poolable emitter takes a slot in its pool
+            // (`pool.rs`) instead of buffers, a material and a draw of its own.
+            if crate::pool::eligible(asset, emitter_index, is_editor) {
+                let key = crate::pool::PoolKey { asset: particle_system.id(), emitter: emitter_index };
+                let slot = pools.claim(key, |capacity| {
+                    create_pool(&mut commands, emitter, capacity, &mut meshes, &mut mesh_cache, &mut buffers, &mut materials, &asset_server)
+                });
+                let pool = pools.pools[&key].iter().find(|p| p.entity == slot.pool).unwrap();
+                let mut handle = pool.buffers.clone();
+                handle.max_particles = pool.amount;
+                handle.amount = pool.amount;
+                // An empty pool is hidden; show it before visibility is computed.
+                commands.entity(slot.pool).insert(Visibility::Inherited);
+                let local = emitter.initial_transform.to_transform();
+                let emitter_world = system_world.mul_transform(local);
+                let triggered = triggered_emitter(emitter, emitter_index, trigger, &emitter_world);
+                let mut runtime = EmitterRuntime::new(emitter_index, triggered.seed);
+                runtime.spawn_count = triggered.spawn_count;
+                runtime.lifetime = triggered.lifetime;
+                let mut emitter_cmds = commands.spawn((
+                    EmitterEntity { parent_system: system_entity },
+                    runtime,
+                    handle,
+                    slot,
+                    local,
+                    emitter_world,
+                ));
+                if LATE {
+                    emitter_cmds.insert(SetUpLate);
+                }
+                let emitter_entity = emitter_cmds.id();
+                emitter_entities.push(emitter_entity);
+                commands
+                    .entity(system_entity)
+                    .queue_silenced(move |mut entity: EntityWorldMut| {
+                        entity.add_child(emitter_entity);
+                    });
+                continue;
+            }
+
             let amount = emitter.emission.particles_amount;
             let trail_size = emitter.trail_size();
             let total_slots = amount * trail_size;
@@ -324,8 +514,13 @@ pub fn setup_particle_systems(
                 assets_folders,
             ));
 
-            let mut runtime = EmitterRuntime::new(emitter_index, emitter.time.fixed_seed);
+            let local = emitter.initial_transform.to_transform();
+            let emitter_world = system_world.mul_transform(local);
+            let triggered = triggered_emitter(emitter, emitter_index, trigger, &emitter_world);
+            let mut runtime = EmitterRuntime::new(emitter_index, triggered.seed);
             runtime.trail_history_frames = trail_history_frames;
+            runtime.spawn_count = triggered.spawn_count;
+            runtime.lifetime = triggered.lifetime;
 
             let mut emitter_cmds = commands.spawn((
                 EmitterEntity {
@@ -349,13 +544,27 @@ pub fn setup_particle_systems(
                 CurrentMaterialConfig(current_material),
                 ParticleMeshHandle(particle_mesh_handle),
                 ParticleMaterialHandle(material_handle),
-                emitter.initial_transform.to_transform(),
+                local,
+                // Kestrel: already right for a late setup, which draws before
+                // the next propagation.
+                emitter_world,
                 Visibility::default(),
             ));
 
             if !shadow_caster {
                 emitter_cmds.insert(NotShadowCaster);
             }
+            if LATE {
+                emitter_cmds.insert(SetUpLate);
+            }
+            // Kestrel: cull by the authored box, around the emitter. Upstream
+            // never applied it, so Bevy culled by one particle mesh at the
+            // emitter and a far-flying particle vanished with its emitter offscreen.
+            let aabb = emitter.draw_pass.visibility_aabb;
+            emitter_cmds.insert((
+                bevy::camera::primitives::Aabb { center: aabb.center, half_extents: aabb.half_extents },
+                bevy::camera::visibility::NoAutoAabb,
+            ));
 
             let emitter_entity = emitter_cmds.id();
 
@@ -617,15 +826,15 @@ pub(crate) fn sync_particle_buffers(
 
 pub fn write_emitter_uniforms(
     particle_systems: Query<&Particles3d>,
-    emitter_query: Query<(
-        &EmitterEntity,
-        &EmitterRuntime,
-        &ParticleBufferHandle,
-        &GlobalTransform,
-    )>,
+    // Kestrel: pooled bursts share their pool's uniforms (`pool.rs`).
+    emitter_query: Query<
+        (&EmitterEntity, &EmitterRuntime, &ParticleBufferHandle, &GlobalTransform),
+        Without<crate::pool::PoolSlot>,
+    >,
     assets: Res<Assets<ParticlesAsset>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
+    let _timer = crate::stats::UPDATE_NS.time();
     for (emitter, runtime, buffer_handle, global_transform) in emitter_query.iter() {
         let Some(emitter_data) = get_emitter_data(
             emitter.parent_system,
@@ -647,6 +856,8 @@ pub fn write_emitter_uniforms(
             trail_size,
             transform_align: transform_align_to_u32(emitter_data.draw_pass.transform_align),
             trail_thickness_curve,
+            // How far the simulation moved this frame: zero when paused.
+            delta_time: runtime.simulation_steps.iter().map(|step| step.delta_time).sum(),
             ..default()
         };
 
@@ -719,5 +930,51 @@ pub fn sync_particle_material(
             current_config.0 = new_material;
             material_handle.0 = new_material_handle;
         }
+    }
+}
+
+#[cfg(test)]
+mod trigger_tests {
+    use super::*;
+
+    fn emitter() -> EmitterData {
+        let mut emitter = EmitterData::default();
+        emitter.emission.particles_amount = 100;
+        emitter.velocities.initial_velocity = crate::asset::Range::new(80.0, 80.0);
+        emitter.time.lifetime = 1.0;
+        emitter
+    }
+
+    #[test]
+    fn a_target_sets_the_count_and_the_trip_time() {
+        let mut emitter = emitter();
+        emitter.emission.particles_per_meter = Some(9.0);
+        emitter.time.lifetime_to_target = true;
+        let trigger = ParticleTrigger { target: Some(Vec3::new(4.0, 0.0, 0.0)), seed: Some(7) };
+        let at = GlobalTransform::IDENTITY;
+        let triggered = triggered_emitter(&emitter, 0, Some(&trigger), &at);
+        assert_eq!(triggered.spawn_count, Some(36));
+        assert!((triggered.lifetime.unwrap() - 4.0 / 80.0).abs() < 1e-6);
+        // Far away: capped by the amount and the lifetime.
+        let far = ParticleTrigger { target: Some(Vec3::new(400.0, 0.0, 0.0)), ..trigger };
+        let triggered = triggered_emitter(&emitter, 0, Some(&far), &at);
+        assert_eq!((triggered.spawn_count, triggered.lifetime), (Some(100), Some(1.0)));
+        // No target: the asset's values.
+        let triggered = triggered_emitter(&emitter, 0, None, &at);
+        assert_eq!((triggered.spawn_count, triggered.lifetime), (None, None));
+    }
+
+    #[test]
+    fn a_trigger_seed_is_stable_and_differs_per_emitter() {
+        let mut emitter = emitter();
+        emitter.time.fixed_seed = Some(3);
+        let trigger = ParticleTrigger { target: None, seed: Some(42) };
+        let at = GlobalTransform::IDENTITY;
+        let seed = |index| triggered_emitter(&emitter, index, Some(&trigger), &at).seed;
+        assert_eq!(seed(0), seed(0));
+        assert_ne!(seed(0), seed(1));
+        assert_ne!(seed(0), Some(3));
+        // Without a trigger seed, the asset's fixed seed.
+        assert_eq!(triggered_emitter(&emitter, 0, None, &at).seed, Some(3));
     }
 }

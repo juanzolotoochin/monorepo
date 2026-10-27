@@ -12,7 +12,7 @@ use crate::{
     },
     runtime::{
         EmitterEntity, EmitterRuntime, ParticleBufferHandle, ParticleSystemRuntime, Particles3d,
-        ParticlesCollider3D, SubEmitterBufferHandle, compute_phase, is_past_delay,
+        ParticleTrigger, ParticlesCollider3D, SubEmitterBufferHandle, compute_phase, is_past_delay,
     },
     textures::{CurveTextureCache, GradientTextureCache},
 };
@@ -22,6 +22,8 @@ pub const EMISSION_SHAPE_SPHERE: u32 = 1;
 pub const EMISSION_SHAPE_SPHERE_SURFACE: u32 = 2;
 pub const EMISSION_SHAPE_BOX: u32 = 3;
 pub const EMISSION_SHAPE_RING: u32 = 4;
+/// Kestrel: `EmissionShape::Segment`.
+pub const EMISSION_SHAPE_SEGMENT: u32 = 5;
 
 pub const COLLIDER_TYPE_SPHERE: u32 = 0;
 pub const COLLIDER_TYPE_BOX: u32 = 1;
@@ -223,7 +225,32 @@ pub struct EmitterUniforms {
     pub trail_effective_fps: f32,
     pub _trail_pad0: u32,
     pub _trail_pad1: u32,
+
+    // Kestrel: per-trigger parameters (`ParticleTrigger`).
+    /// The trigger's target in emitter-local space (before `emitter_transform`).
+    pub trigger_target: [f32; 3],
+    /// `TRIGGER_FLAG_*`.
+    pub trigger_flags: u32,
+    /// `EmitterVelocities::world_bias` in spawn space.
+    pub world_bias: [f32; 3],
+    /// Particles a cycle spawns (`particles_per_meter`); `amount` otherwise.
+    pub spawn_count: u32,
+    /// Kestrel: where this burst's particles start in a pooled buffer
+    /// (`pool.rs`); 0 for an emitter with its own buffer.
+    pub slot_offset: u32,
+    pub _slot_pad0: u32,
+    pub _slot_pad1: u32,
+    pub _slot_pad2: u32,
 }
+
+/// Kestrel: the trigger has a target (`trigger_target` is set).
+pub const TRIGGER_FLAG_TARGET: u32 = 1;
+/// Kestrel: `EmitterTime::lifetime_to_target`.
+pub const TRIGGER_FLAG_LIFETIME_TO_TARGET: u32 = 2;
+/// Kestrel: a pooled burst whose particles aren't velocity-aligned; each
+/// particle keeps the emitter's rotation (`ref_up`, as a quaternion), since
+/// the pool is drawn without the emitter's transform.
+pub const TRIGGER_FLAG_KEEP_ROTATION: u32 = 4;
 
 #[derive(Resource, Default)]
 pub struct ExtractedColliders {
@@ -233,6 +260,9 @@ pub struct ExtractedColliders {
 #[derive(Resource, Default)]
 pub struct ExtractedParticleSystem {
     pub emitters: Vec<(Entity, ExtractedEmitterData)>,
+    /// Kestrel: particle buffer byte ranges to zero before the simulation
+    /// (pool slots freed this frame, `pool.rs`).
+    pub pool_clears: Vec<(Handle<ShaderBuffer>, u64, u64)>,
 }
 
 pub struct ExtractedEmitterData {
@@ -261,6 +291,43 @@ pub struct ExtractedEmitterData {
     pub source_buffer_handle: Option<Handle<ShaderBuffer>>,
     pub trail_size: u32,
     pub trail_history_buffer_handle: Option<Handle<ShaderBuffer>>,
+    /// Kestrel: whether the sort passes run for this entry. False for pooled
+    /// bursts: their pool has an entry of its own that only sorts.
+    pub sort: bool,
+}
+
+impl ExtractedEmitterData {
+    /// Kestrel: a pool's sort over all its slots; nothing to simulate.
+    fn pool_sort(pool: &crate::pool::Pool, camera_position: Vec3, camera_forward: Vec3) -> Self {
+        ExtractedEmitterData {
+            uniform_steps: Vec::new(),
+            particle_buffer_handle: pool.buffers.particle_buffer.clone(),
+            indices_buffer_handle: pool.buffers.indices_buffer.clone(),
+            sorted_particles_buffer_handle: pool.buffers.sorted_particles_buffer.clone(),
+            amount: pool.buffers.amount,
+            draw_order: pool.draw_order,
+            camera_position: camera_position.into(),
+            camera_forward: camera_forward.into(),
+            emitter_transform: Mat4::IDENTITY,
+            gradient_texture_handle: None,
+            color_over_lifetime_texture_handle: None,
+            scale_over_lifetime_texture_handle: None,
+            alpha_over_lifetime_texture_handle: None,
+            emission_over_lifetime_texture_handle: None,
+            turbulence_influence_over_lifetime_texture_handle: None,
+            radial_velocity_curve_texture_handle: None,
+            angle_over_lifetime_texture_handle: None,
+            angular_velocity_curve_texture_handle: None,
+            orbit_velocity_curve_texture_handle: None,
+            directional_velocity_curve_texture_handle: None,
+            is_sub_emitter_target: false,
+            emission_buffer_handle: None,
+            source_buffer_handle: None,
+            trail_size: 1,
+            trail_history_buffer_handle: None,
+            sort: true,
+        }
+    }
 }
 
 fn curve_uniform_from(curve: &Option<CurveTexture>) -> CurveUniform {
@@ -378,6 +445,16 @@ fn emission_shape_uniforms_from(shape: &EmissionShape) -> EmissionShapeUniforms 
             ring_radius: radius,
             ring_inner_radius: inner_radius,
         },
+        // The jitter rides in the box extents.
+        EmissionShape::Segment { jitter } => EmissionShapeUniforms {
+            shape: EMISSION_SHAPE_SEGMENT,
+            sphere_radius: 0.0,
+            box_extents: jitter,
+            ring_axis: Vec3::Z,
+            ring_height: 0.0,
+            ring_radius: 0.0,
+            ring_inner_radius: 0.0,
+        },
     }
 }
 
@@ -419,7 +496,8 @@ fn build_base_uniforms(
         cycle: 0,
 
         amount: emitter.emission.particles_amount,
-        lifetime: emitter.time.lifetime,
+        // Kestrel: the trigger may set the cycle length.
+        lifetime: runtime.time(&emitter.time).lifetime,
         lifetime_randomness: emitter.time.lifetime_randomness,
         emitting: 0,
 
@@ -461,8 +539,10 @@ fn build_base_uniforms(
 
         draw_order,
         clear_particles: 0,
-        scale_min: emitter.scale.range.min,
-        scale_max: emitter.scale.range.max,
+        // Kestrel: particle sizes scale with the system, like everything else
+        // (upstream scaled positions and speeds but not sizes).
+        scale_min: emitter.scale.range.min * transform_scale,
+        scale_max: emitter.scale.range.max * transform_scale,
 
         scale_over_lifetime: curve_uniform_from(&emitter.scale.scale_over_lifetime),
 
@@ -549,6 +629,15 @@ fn build_base_uniforms(
         trail_effective_fps: 60.0,
         _trail_pad0: 0,
         _trail_pad1: 0,
+
+        trigger_target: [0.0; 3],
+        trigger_flags: 0,
+        world_bias: [0.0; 3],
+        spawn_count: runtime.spawn_count.unwrap_or(emitter.emission.particles_amount),
+        slot_offset: 0,
+        _slot_pad0: 0,
+        _slot_pad1: 0,
+        _slot_pad2: 0,
     }
 }
 
@@ -562,14 +651,17 @@ pub fn extract_particle_systems(
             &ParticleBufferHandle,
             &GlobalTransform,
             Option<&SubEmitterBufferHandle>,
+            Option<&crate::pool::PoolSlot>,
         )>,
     >,
-    system_query: Extract<Query<(&Particles3d, &ParticleSystemRuntime)>>,
+    pools: Extract<Res<crate::pool::ParticlePools>>,
+    system_query: Extract<Query<(&Particles3d, &ParticleSystemRuntime, Option<&ParticleTrigger>)>>,
     camera_query: Extract<Query<&GlobalTransform, With<Camera3d>>>,
     assets: Extract<Res<Assets<ParticlesAsset>>>,
     gradient_cache: Extract<Res<GradientTextureCache>>,
     curve_cache: Extract<Res<CurveTextureCache>>,
 ) {
+    let _timer = crate::stats::EXTRACT_NS.time();
     let mut extracted = ExtractedParticleSystem::default();
 
     let (camera_position, camera_forward) = camera_query
@@ -580,13 +672,13 @@ pub fn extract_particle_systems(
 
     let mut emission_buffer_map: std::collections::HashMap<(Entity, usize), Handle<ShaderBuffer>> =
         std::collections::HashMap::new();
-    for (_entity, emitter_entity, runtime, _buffer_handle, _global_transform, sub_emitter_buf) in
+    for (_entity, emitter_entity, runtime, _buffer_handle, _global_transform, sub_emitter_buf, _) in
         emitter_query.iter()
     {
         let Some(sub_buf) = sub_emitter_buf else {
             continue;
         };
-        let Ok((particle_system, _)) = system_query.get(emitter_entity.parent_system) else {
+        let Ok((particle_system, _, _)) = system_query.get(emitter_entity.parent_system) else {
             continue;
         };
         let Some(asset) = assets.get(particle_system) else {
@@ -604,10 +696,10 @@ pub fn extract_particle_systems(
         );
     }
 
-    for (entity, emitter_entity, runtime, buffer_handle, global_transform, sub_emitter_buf) in
+    for (entity, emitter_entity, runtime, buffer_handle, global_transform, sub_emitter_buf, pool_slot) in
         emitter_query.iter()
     {
-        let Ok((particle_system, _system_runtime)) = system_query.get(emitter_entity.parent_system)
+        let Ok((particle_system, _system_runtime, trigger)) = system_query.get(emitter_entity.parent_system)
         else {
             continue;
         };
@@ -691,6 +783,33 @@ pub fn extract_particle_systems(
         base_uniforms.trail_stretch_time = trail_stretch_time;
         base_uniforms.trail_history_size = trail_history_frames;
         base_uniforms.trail_effective_fps = effective_fps;
+        // Kestrel: a pooled burst simulates its slot of the pool's buffer
+        // (`pool.rs`) and keeps its rotation per particle.
+        if let Some(slot) = pool_slot {
+            base_uniforms.slot_offset = slot.offset;
+            if emitter.draw_pass.transform_align.is_none() {
+                base_uniforms.trigger_flags |= TRIGGER_FLAG_KEEP_ROTATION;
+            }
+        }
+
+        // Kestrel: the trigger's target in emitter-local space, and the world
+        // bias in spawn space.
+        let world_affine = global_transform.affine();
+        if let Some(target) = trigger.and_then(|t| t.target) {
+            base_uniforms.trigger_target = world_affine.inverse().transform_point3(target).into();
+            base_uniforms.trigger_flags |= TRIGGER_FLAG_TARGET;
+            if emitter.time.lifetime_to_target {
+                base_uniforms.trigger_flags |= TRIGGER_FLAG_LIFETIME_TO_TARGET;
+            }
+        }
+        let bias = emitter.velocities.world_bias;
+        base_uniforms.world_bias = if use_local_coords {
+            world_affine.inverse().transform_vector3(bias).normalize_or_zero() * bias.length()
+        } else {
+            bias
+        }
+        .into();
+        let emitter_time = runtime.time(&emitter.time);
 
         let is_sub_emitter_target = emission_buffer_map
             .contains_key(&(emitter_entity.parent_system, runtime.emitter_index));
@@ -702,12 +821,12 @@ pub fn extract_particle_systems(
                 let should_emit = if is_sub_emitter_target {
                     false
                 } else {
-                    runtime.emitting && is_past_delay(step.system_time, &emitter.time)
+                    runtime.emitting && is_past_delay(step.system_time, &emitter_time)
                 };
                 let head_uniforms = EmitterUniforms {
                     delta_time: step.delta_time,
-                    system_phase: compute_phase(step.system_time, &emitter.time),
-                    prev_system_phase: compute_phase(step.prev_system_time, &emitter.time),
+                    system_phase: compute_phase(step.system_time, &emitter_time),
+                    prev_system_phase: compute_phase(step.prev_system_time, &emitter_time),
                     cycle: step.cycle,
                     emitting: if should_emit { 1 } else { 0 },
                     clear_particles: if step.clear_requested { 1 } else { 0 },
@@ -799,9 +918,18 @@ pub fn extract_particle_systems(
                 source_buffer_handle,
                 trail_size,
                 trail_history_buffer_handle: buffer_handle.trail_history_buffer.clone(),
+                // Kestrel: a pool is sorted once, not per burst (below).
+                sort: pool_slot.is_none(),
             },
         ));
     }
+
+    // Kestrel: one sort per pool in use, over all its slots, and the byte
+    // ranges of slots freed this frame, zeroed before the simulation.
+    for pool in pools.pools.values().flatten().filter(|p| p.used > 0 || p.freed_this_frame) {
+        extracted.emitters.push((pool.entity, ExtractedEmitterData::pool_sort(pool, camera_position, camera_forward)));
+    }
+    extracted.pool_clears = pools.clears.clone();
 
     commands.insert_resource(extracted);
 }
@@ -810,6 +938,7 @@ pub fn extract_colliders(
     mut commands: Commands,
     colliders_query: Extract<Query<(&GlobalTransform, &ParticlesCollider3D)>>,
 ) {
+    let _timer = crate::stats::EXTRACT_NS.time();
     let mut colliders = Vec::new();
 
     for (global_transform, collider) in colliders_query.iter() {

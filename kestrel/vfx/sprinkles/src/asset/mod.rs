@@ -11,65 +11,12 @@ pub use particle_material::{
     DrawPassMaterial, SerializableAlphaMode, SerializableFace, StandardParticleMaterial,
 };
 
-use bevy::{
-    asset::{AssetLoader, LoadContext, io::Reader},
-    math::Vec3A,
-    prelude::*,
-};
+use bevy::{math::Vec3A, prelude::*};
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
 use serde_helpers::*;
 use versions::current_format_version;
-
-/// Asset loader for [`ParticlesAsset`] files in RON format.
-#[derive(Default, TypePath)]
-pub struct ParticlesAssetLoader;
-
-/// Errors that can occur when loading a [`ParticlesAsset`].
-#[non_exhaustive]
-#[derive(Debug, Error)]
-pub enum ParticlesAssetLoaderError {
-    /// An I/O error occurred while reading the asset file.
-    #[error("Could not load asset: {0}")]
-    Io(#[from] std::io::Error),
-    /// The asset file could not be parsed or migrated.
-    #[error("{0}")]
-    Migration(#[from] versions::MigrationError),
-}
-
-impl AssetLoader for ParticlesAssetLoader {
-    type Asset = ParticlesAsset;
-    type Settings = ();
-    type Error = ParticlesAssetLoaderError;
-
-    async fn load(
-        &self,
-        reader: &mut dyn Reader,
-        _settings: &(),
-        load_context: &mut LoadContext<'_>,
-    ) -> Result<Self::Asset, Self::Error> {
-        let mut bytes = Vec::new();
-        reader.read_to_end(&mut bytes).await?;
-
-        let result = versions::migrate(&bytes)?;
-
-        if result.was_migrated {
-            let path = load_context.path();
-            warn!(
-                "{path:?}: migrated asset to sprinkles_version \"{}\"",
-                current_format_version()
-            );
-        }
-
-        Ok(result.asset)
-    }
-
-    fn extensions(&self) -> &[&str] {
-        &["ron"]
-    }
-}
 
 bitflags! {
     /// Bitflags that control per-particle behavior.
@@ -89,6 +36,7 @@ bitflags! {
 
 /// Whether the particle system operates in 3D or 2D space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, Reflect)]
+#[serde(deny_unknown_fields)]
 pub enum ParticlesDimension {
     /// 3D particle system.
     #[default]
@@ -103,6 +51,7 @@ pub enum ParticlesDimension {
 /// [`DrawOrder::Index`] is the only option that supports motion vectors for
 /// effects like TAA, making it the best choice for opaque particles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, Reflect)]
+#[serde(deny_unknown_fields)]
 pub enum DrawOrder {
     /// Particles are drawn in the order they were emitted.
     #[default]
@@ -123,6 +72,7 @@ impl DrawOrder {
 
 /// Timing and lifecycle configuration for an emitter.
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct EmitterTime {
     /// The amount of time each particle will exist, in seconds.
@@ -173,6 +123,15 @@ pub struct EmitterTime {
     /// replays, which is useful for cinematics or testing. Defaults to `None`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fixed_seed: Option<u32>,
+    /// Kestrel: each particle lives until it has traveled from where it
+    /// spawned to the trigger's target at its initial speed
+    /// ([`ParticleTrigger::target`](crate::runtime::ParticleTrigger)), so a
+    /// bolt dies on arrival. [`lifetime`](Self::lifetime) is the cap. The
+    /// emission cycle lasts as long as the trip from the emitter to the target
+    /// at the slowest initial speed. Without a target, the plain lifetime.
+    /// Defaults to `false`.
+    #[serde(skip_serializing_if = "is_false")]
+    pub lifetime_to_target: bool,
 }
 
 impl Default for EmitterTime {
@@ -186,6 +145,7 @@ impl Default for EmitterTime {
             spawn_time_randomness: 0.0,
             fixed_fps: 0,
             fixed_seed: None,
+            lifetime_to_target: false,
         }
     }
 }
@@ -201,6 +161,7 @@ impl EmitterTime {
 ///
 /// Used only during spawning if no [`Transform`] component is already present on the entity. To change the transform at runtime, modify the entity's [`Transform`] directly.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct InitialTransform {
     /// Position of the entity.
@@ -250,6 +211,7 @@ impl InitialTransform {
 /// particles are spawned, as well as their visual properties and physical behavior
 /// over their lifetime.
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct EmitterData {
     /// Display name for this emitter.
@@ -346,6 +308,7 @@ impl EmitterData {
 
 /// Controls how each particle's transform is aligned relative to the camera or its velocity.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, Reflect)]
+#[serde(deny_unknown_fields)]
 pub enum TransformAlign {
     /// Particles always face the camera (Z-billboard).
     #[default]
@@ -360,6 +323,7 @@ pub enum TransformAlign {
 
 /// Configuration for how particles are rendered in a single draw pass.
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct EmitterDrawPass {
     /// The order in which particles are drawn. Defaults to [`DrawOrder::Index`].
@@ -406,6 +370,7 @@ impl Default for EmitterDrawPass {
 
 /// An axis-aligned bounding box, copied from Bevy's [`Aabb`](bevy::camera::primitives::Aabb).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct VisibilityAabb {
     /// The center of the box.
@@ -431,6 +396,7 @@ impl VisibilityAabb {
 
 /// The axis a quad particle mesh faces by default.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq, Hash, Reflect)]
+#[serde(deny_unknown_fields)]
 pub enum QuadOrientation {
     /// The quad faces along the X axis.
     FaceX,
@@ -443,6 +409,7 @@ pub enum QuadOrientation {
 
 /// The mesh shape used to render each particle.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Reflect)]
+#[serde(deny_unknown_fields)]
 pub enum ParticleMesh {
     /// A flat quadrilateral. Commonly used for billboard particles like sparks and smoke.
     Quad {
@@ -742,6 +709,7 @@ impl ParticleMesh {
 /// When a particle is spawned, a random value between [`min`](Self::min) and
 /// [`max`](Self::max) is selected. Defaults to `0.0..1.0`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Reflect)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct Range {
     /// Lower bound of the range. Defaults to `0.0`.
@@ -779,6 +747,7 @@ impl Range {
 
 /// The region in which particles are spawned.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Reflect)]
+#[serde(deny_unknown_fields)]
 pub enum EmissionShape {
     /// All particles are emitted from a single point.
     #[default]
@@ -810,6 +779,15 @@ pub enum EmissionShape {
         radius: f32,
         /// The inner radius of the ring. A value of `0.0` fills the entire disc.
         inner_radius: f32,
+    },
+    /// Kestrel: particles spread evenly along the line from the emitter to
+    /// the trigger's target, particle `i` of `n` at `(i + 0.5) / n` of the
+    /// way, each moved by a random offset within `jitter` (half-extents, local
+    /// space). Ignores the emission offset and scale. Without a target, a
+    /// point.
+    Segment {
+        /// Half-extents of the random offset box around each point on the line.
+        jitter: Vec3,
     },
 }
 
@@ -846,6 +824,7 @@ impl EmissionShape {
 
 /// Emission configuration: shape, offset, scale, and particle count.
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct EmitterEmission {
     /// Position offset of the emission shape in local space. Defaults to [`Vec3::ZERO`].
@@ -861,6 +840,11 @@ pub struct EmitterEmission {
     ///
     /// Higher values will increase GPU load. Defaults to `8`.
     pub particles_amount: u32,
+    /// Kestrel: with a trigger target, emit `ceil(distance × this)` particles
+    /// (at least one, at most [`particles_amount`](Self::particles_amount)),
+    /// for example a chain of segments along a line. Defaults to `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub particles_per_meter: Option<f32>,
 }
 
 impl Default for EmitterEmission {
@@ -870,12 +854,14 @@ impl Default for EmitterEmission {
             scale: Vec3::ONE,
             shape: EmissionShape::default(),
             particles_amount: 8,
+            particles_per_meter: None,
         }
     }
 }
 
 /// Particle scale configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct EmitterScale {
     /// The initial scale range applied to each particle.
@@ -901,6 +887,7 @@ impl Default for EmitterScale {
 
 /// Color and alpha configuration for particles.
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct EmitterColors {
     /// Each particle's initial color. Can be a solid color or a gradient from which a random
@@ -932,6 +919,7 @@ impl Default for EmitterColors {
 
 /// A velocity value with an optional curve for animation over a particle's lifetime.
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct AnimatedVelocity {
     /// The initial velocity range. A random value between `min` and `max` is
@@ -957,6 +945,7 @@ impl Default for AnimatedVelocity {
 /// Only applied when [`ParticleFlags::DISABLE_Z`] or [`ParticleFlags::ROTATE_Y`] are set,
 /// or when using billboard rendering.
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct EmitterAngle {
     /// The initial rotation angle range in degrees. A random value between `min` and
@@ -985,6 +974,7 @@ impl EmitterAngle {
 
 /// Velocity settings for particles, including direction, spread, and animated velocities.
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct EmitterVelocities {
     /// Unit vector specifying the base emission direction. Defaults to `Vec3::X`.
@@ -1030,6 +1020,12 @@ pub struct EmitterVelocities {
     /// Defaults to `0.0`.
     #[serde(skip_serializing_if = "is_zero_f32")]
     pub inherit_ratio: f32,
+    /// Kestrel: a world-space vector added to each particle's unit spawn
+    /// direction, which is then normalized again (the speed is unchanged).
+    /// For example `(0.0, 0.5, 0.0)` makes a spray arc upward whichever way
+    /// the effect faces. Defaults to [`Vec3::ZERO`].
+    #[serde(skip_serializing_if = "is_zero_vec3")]
+    pub world_bias: Vec3,
 }
 
 impl Default for EmitterVelocities {
@@ -1045,12 +1041,14 @@ impl Default for EmitterVelocities {
             directional_velocity: AnimatedVelocity::default(),
             pivot: Vec3::ZERO,
             inherit_ratio: 0.0,
+            world_bias: Vec3::ZERO,
         }
     }
 }
 
 /// Acceleration forces applied to every particle.
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct EmitterAccelerations {
     /// Gravity vector applied to every particle, in units per second squared.
@@ -1073,6 +1071,7 @@ impl Default for EmitterAccelerations {
 /// wind-like motion. Enabling turbulence has a significant performance cost on
 /// the GPU.
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct EmitterTurbulence {
     /// Whether turbulence is enabled. Defaults to `false`.
@@ -1139,6 +1138,7 @@ impl EmitterTurbulence {
 
 /// How particles behave when they collide with a [`ParticlesCollider3D`](crate::ParticlesCollider3D).
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 pub enum EmitterCollisionMode {
     /// Rigid-body style collision. Particles bounce off surfaces.
     Rigid {
@@ -1165,6 +1165,7 @@ impl Default for EmitterCollisionMode {
 
 /// Particle collision configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct EmitterCollision {
     /// The collision mode. When `None`, collision is disabled and particles pass
@@ -1195,6 +1196,7 @@ impl Default for EmitterCollision {
 
 /// When a sub-emitter spawns its particles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 pub enum SubEmitterMode {
     /// Continuously emit from each parent particle at a fixed frequency.
     Constant,
@@ -1211,6 +1213,7 @@ pub enum SubEmitterMode {
 /// Sub-emitters can be used to achieve effects such as fireworks, sparks on collision,
 /// or bubbles popping into water drops.
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct SubEmitterConfig {
     /// When the sub-emitter triggers.
@@ -1244,6 +1247,7 @@ impl Default for SubEmitterConfig {
 
 /// The 3D shape of a particle collider.
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 pub enum ParticlesColliderShape3D {
     /// An axis-aligned box collider.
     Box {
@@ -1277,6 +1281,7 @@ impl ParticlesColliderShape3D {
 
 /// Serializable data for a particle collider.
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct ColliderData {
     /// Display name for this collider.
@@ -1309,6 +1314,7 @@ impl Default for ColliderData {
 ///
 /// When enabled, each particle leaves a visible trail behind it as it moves.
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 #[serde(default)]
 pub struct EmitterTrail {
     /// Whether trails are enabled. Defaults to `false`.
@@ -1345,6 +1351,7 @@ impl EmitterTrail {
 
 /// The shape of a ribbon trail mesh cross-section.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq, Hash, Reflect)]
+#[serde(deny_unknown_fields)]
 pub enum RibbonTrailShape {
     /// A single flat quad strip.
     #[default]
@@ -1355,6 +1362,7 @@ pub enum RibbonTrailShape {
 
 /// Editor-specific metadata.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 pub struct SprinklesEditorData {
     /// Known asset folder paths for resolving [`TextureRef::Asset`](crate::TextureRef::Asset) references.
     ///
@@ -1374,6 +1382,7 @@ impl SprinklesEditorData {
 
 /// Attribution information for a particle system.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 pub struct ParticlesAuthors {
     /// The original creator this effect was inspired by.
     #[serde(default, skip_serializing_if = "is_empty_string")]
@@ -1396,6 +1405,7 @@ impl ParticlesAuthors {
 /// particle effect. Load this asset and reference it from a [`Particles3d`](crate::Particles3d)
 /// or [`Particles2d`](crate::Particles2d) component to render the effect.
 #[derive(Asset, Debug, Clone, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 pub struct ParticlesAsset {
     sprinkles_version: String,
     /// Display name for this particle system.
@@ -1448,5 +1458,12 @@ impl ParticlesAsset {
             authors,
             sprinkles_editor: SprinklesEditorData::default(),
         }
+    }
+
+    /// The format version this asset was written in (`sprinkles_version`).
+    /// Kestrel embeds assets in its own effect files and checks this itself
+    /// instead of going through [`versions::migrate`].
+    pub fn sprinkles_version(&self) -> &str {
+        &self.sprinkles_version
     }
 }

@@ -41,7 +41,14 @@ pub struct ParticleEmitterUniforms {
     pub transform_align: u32,
     /// Baked trail thickness curve samples.
     pub trail_thickness_curve: [f32; TRAIL_THICKNESS_CURVE_SAMPLES],
-    pub(crate) _pad: [u32; 3],
+    /// Seconds since the last frame, so the vertex shader can tell where each
+    /// particle was a frame ago for motion vectors (Kestrel: TAA).
+    pub delta_time: f32,
+    /// Kestrel: 1 when this material draws a pool of bursts (`pool.rs`): a
+    /// particle that isn't velocity-aligned takes its rotation from its own
+    /// `ref_up` instead of the (identity) draw transform.
+    pub pooled: u32,
+    pub(crate) _pad: [u32; 1],
 }
 
 impl Default for ParticleEmitterUniforms {
@@ -54,7 +61,9 @@ impl Default for ParticleEmitterUniforms {
             trail_size: 1,
             transform_align: 0,
             trail_thickness_curve: [1.0; TRAIL_THICKNESS_CURVE_SAMPLES],
-            _pad: [0; 3],
+            delta_time: 0.0,
+            pooled: 0,
+            _pad: [0; 1],
         }
     }
 }

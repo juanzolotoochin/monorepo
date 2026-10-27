@@ -4,6 +4,7 @@ use std::hash::{Hash, Hasher};
 
 /// Interpolation mode for sampling between gradient stops.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq, Hash, Reflect)]
+#[serde(deny_unknown_fields)]
 pub enum GradientInterpolation {
     /// No interpolation. Holds the left stop's color until the next stop.
     Steps,
@@ -22,6 +23,7 @@ impl GradientInterpolation {
 
 /// A single color stop within a [`Gradient`].
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 pub struct GradientStop {
     /// The color at this stop, as linear RGBA values in `[0.0, 1.0]`.
     pub color: [f32; 4],
@@ -35,6 +37,7 @@ pub struct GradientStop {
 /// [`interpolation`](Self::interpolation) mode controls how colors are blended
 /// between stops.
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 pub struct Gradient {
     /// The ordered list of color stops that define this gradient.
     pub stops: Vec<GradientStop>,
@@ -99,6 +102,7 @@ impl Gradient {
 /// to every particle, while [`Gradient`](Self::Gradient) samples a random position along
 /// the gradient for each particle.
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 #[reflect(Clone)]
 pub enum SolidOrGradientColor {
     /// A single solid color, as linear RGBA values in `[0.0, 1.0]`.

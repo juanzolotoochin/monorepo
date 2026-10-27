@@ -7,6 +7,7 @@ use crate::textures::preset::TextureRef;
 
 /// Sets how a material's base color alpha channel is used for transparency, copied from Bevy's [`AlphaMode`](bevy::material::AlphaMode).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Reflect)]
+#[serde(deny_unknown_fields)]
 pub enum SerializableAlphaMode {
     /// Base color alpha values are overridden to be fully opaque (1.0).
     Opaque,
@@ -88,6 +89,7 @@ impl From<AlphaMode> for SerializableAlphaMode {
 
 /// Serializable face culling mode, copied from wgpu's [`Face`].
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Reflect)]
+#[serde(deny_unknown_fields)]
 pub enum SerializableFace {
     /// Front face.
     Front,
@@ -167,6 +169,7 @@ fn color_to_array(c: LinearRgba) -> [f32; 4] {
 
 /// A serializable PBR material for particles, copied from Bevy's [`StandardMaterial`](bevy::pbr::StandardMaterial).
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 #[reflect(Clone)]
 pub struct StandardParticleMaterial {
     /// The color of the surface of the material before lighting.
@@ -614,6 +617,7 @@ impl StandardParticleMaterial {
 
 /// The material used for a draw pass, either a standard PBR material or custom shaders.
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
+#[serde(deny_unknown_fields)]
 pub enum DrawPassMaterial {
     /// A standard PBR material for particles.
     Standard(StandardParticleMaterial),

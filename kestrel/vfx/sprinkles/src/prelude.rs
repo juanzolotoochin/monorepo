@@ -1,4 +1,4 @@
-pub use crate::SprinklesPlugin;
+pub use crate::{SprinklesLateSetup, SprinklesPlugin};
 
 pub use crate::asset::{
     AnimatedVelocity, ColliderData, Curve, CurveEasing, CurveMode, CurvePoint, CurveTexture,
@@ -17,6 +17,7 @@ pub use crate::textures::preset::TextureRef;
 
 pub use crate::runtime::{
     ColliderEntity, EditorMode, EmitterEntity, EmitterRuntime, Finished, ParticleMaterial,
-    ParticleMaterialHandle, ParticleSystemRuntime, Particles2d, Particles3d, ParticlesCollider3D,
+    ParticleMaterialHandle, ParticleSystemRuntime, ParticleTrigger, Particles2d, Particles3d,
+    ParticlesCollider3D,
     SubEmitterBufferHandle,
 };

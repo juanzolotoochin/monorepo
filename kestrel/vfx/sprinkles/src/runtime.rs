@@ -111,6 +111,40 @@ pub struct Finished(pub Entity);
 #[derive(Component)]
 pub struct EditorMode;
 
+/// Kestrel: values given when an effect is triggered, for every emitter of
+/// the system. Insert it with [`Particles3d`]; it is read when the system is
+/// set up (seed, particle count, cycle length) and every frame (target).
+///
+/// The effect's size is the system's `Transform` scale: positions, speeds,
+/// gravity and particle sizes all scale with it.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct ParticleTrigger {
+    /// World-space point the effect reaches for: the end of a
+    /// [`Segment`](crate::asset::EmissionShape::Segment) shape, the distance
+    /// behind [`particles_per_meter`](crate::EmitterEmission::particles_per_meter)
+    /// and [`lifetime_to_target`](crate::EmitterTime::lifetime_to_target).
+    pub target: Option<Vec3>,
+    /// Seed for every random choice, so the same trigger always looks the
+    /// same. Each emitter mixes in its index. `None`: the asset's
+    /// `fixed_seed`, else random.
+    pub seed: Option<u32>,
+}
+
+impl ParticleTrigger {
+    /// The seed of emitter `index`.
+    pub(crate) fn emitter_seed(&self, index: usize) -> Option<u32> {
+        self.seed.map(|seed| {
+            // A cheap integer hash (lowbias32), so neighboring emitters differ.
+            let mut x = seed ^ (index as u32).wrapping_mul(0x9e37_79b9);
+            x ^= x >> 16;
+            x = x.wrapping_mul(0x21f0_aaad);
+            x ^= x >> 15;
+            x = x.wrapping_mul(0x735a_2d97);
+            x ^ (x >> 15)
+        })
+    }
+}
+
 /// Runtime state for a particle system entity, controlling playback.
 #[derive(Component)]
 pub struct ParticleSystemRuntime {
@@ -199,9 +233,25 @@ pub struct EmitterRuntime {
     pub trail_history_write_index: u32,
     /// Ring buffer size per particle for trail history.
     pub trail_history_frames: u32,
+    /// Kestrel: how many particles a cycle spawns, from the trigger
+    /// ([`EmitterEmission::particles_per_meter`](crate::EmitterEmission)).
+    /// `None`: all of them.
+    pub spawn_count: Option<u32>,
+    /// Kestrel: the cycle length from the trigger
+    /// ([`EmitterTime::lifetime_to_target`](crate::EmitterTime)). `None`: the
+    /// asset's lifetime.
+    pub lifetime: Option<f32>,
 }
 
 impl EmitterRuntime {
+    /// Kestrel: the emitter's timing with this trigger's cycle length.
+    pub fn time(&self, asset: &crate::asset::EmitterTime) -> crate::asset::EmitterTime {
+        match self.lifetime {
+            Some(lifetime) => crate::asset::EmitterTime { lifetime, ..asset.clone() },
+            None => asset.clone(),
+        }
+    }
+
     /// Creates a new emitter runtime for the emitter at the given index.
     ///
     /// If `fixed_seed` is provided, it is used for deterministic behavior;
@@ -223,6 +273,8 @@ impl EmitterRuntime {
             simulation_steps: Vec::new(),
             trail_history_write_index: 0,
             trail_history_frames: 0,
+            spawn_count: None,
+            lifetime: None,
         }
     }
 
@@ -351,7 +403,7 @@ fn rand_seed() -> u32 {
 }
 
 /// Handles to the GPU storage buffers for an emitter's particle data.
-#[derive(Component)]
+#[derive(Component, Clone)]
 pub struct ParticleBufferHandle {
     /// The main particle data buffer.
     pub particle_buffer: Handle<ShaderBuffer>,

@@ -7,7 +7,7 @@ version = "0.0.0"
 edition = "2021"
 
 [dependencies]
-bevy = { version = "=0.20.0", default-features = false, features = ["std", "async_executor", "multi_threaded", "bevy_asset", "bevy_log", "bevy_state", "bevy_winit", "3d_bevy_render", "x11", "keyboard", "gamepad", "bevy_ui_render", "default_font", "system_clipboard", "custom_cursor", "web", "webgl2"] }
+bevy = { version = "=0.20.0", default-features = false, features = ["std", "async_executor", "multi_threaded", "bevy_asset", "bevy_log", "bevy_state", "bevy_winit", "3d_bevy_render", "x11", "keyboard", "gamepad", "bevy_ui_render", "default_font", "system_clipboard", "custom_cursor", "web", "webgpu"] }
 web-time = "1.1.0"
 wasm-bindgen = "0.2.129"
 ferris-says = "0.3.1"
@@ -24,6 +24,11 @@ rayon = "1.12"
 postcard = { version = "1.1", default-features = false, features = ["alloc"] }
 ruzstd = "0.8.3"
 ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm", "layout-cache"] }
+# The vendored particle system (kestrel/vfx/sprinkles).
+bytemuck = { version = "1.14", features = ["derive"] }
+bitflags = { version = "2", features = ["serde"] }
+paste = "1"
+thiserror = "2"
 bevy_egui = { version = "=0.43.1", default-features = false, features = ["render", "bevy_ui", "default_fonts"] }
 
 [lib]

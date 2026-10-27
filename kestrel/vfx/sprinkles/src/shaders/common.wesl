@@ -18,6 +18,9 @@ struct ParticleEmitterUniforms {
     trail_size: u32,
     transform_align: u32,
     trail_thickness_curve: array<f32, 16>,
+    delta_time: f32,
+    // Kestrel: drawing a pool of bursts (`pool.rs`).
+    pooled: u32,
 }
 
 struct CurveUniform {

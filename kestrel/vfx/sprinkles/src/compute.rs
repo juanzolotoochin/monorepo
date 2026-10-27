@@ -3,9 +3,11 @@ use bevy::{
     prelude::*,
     render::{
         Render, RenderApp, RenderStartup, RenderSystems,
+        diagnostic::RecordDiagnostics,
         render_asset::RenderAssets,
         render_resource::{
             BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, Buffer,
+            BindingResource, BufferBinding,
             BufferUsages, CachedComputePipelineId, CachedPipelineState, ComputePassDescriptor,
             ComputePipelineDescriptor, PipelineCache, SamplerBindingType, SamplerDescriptor,
             ShaderStages, TextureSampleType,
@@ -60,7 +62,9 @@ pub fn init_particle_compute_pipeline(
         &BindGroupLayoutEntries::sequential(
             ShaderStages::COMPUTE,
             (
-                uniform_buffer::<EmitterUniforms>(false),
+                // Kestrel: one buffer holds every emitter's uniforms, one
+                // slot per step, selected with a dynamic offset.
+                uniform_buffer::<EmitterUniforms>(true),
                 storage_buffer::<ParticleData>(false),
                 texture_2d(TextureSampleType::Float { filterable: true }),
                 sampler(SamplerBindingType::Filtering),
@@ -177,11 +181,33 @@ pub(crate) struct FallbackTrailHistoryBuffer(pub(crate) Buffer);
 #[derive(Resource, Default)]
 pub struct EmissionBufferClearList {
     pub buffers: Vec<Buffer>,
+    /// Kestrel: particle buffer byte ranges (freed pool slots) to zero before
+    /// this frame's simulation.
+    pub ranges: Vec<(Buffer, u64, u64)>,
 }
 
+/// Per emitter: its bind group and, per simulation step this frame, the
+/// dynamic offset of that step's uniforms (Kestrel; upstream had a bind
+/// group per step).
 #[derive(Resource, Default)]
 pub struct ParticleComputeBindGroups {
-    pub bind_groups: Vec<(Entity, Vec<BindGroup>)>,
+    pub bind_groups: Vec<(Entity, BindGroup, Vec<u32>)>,
+}
+
+/// Kestrel: the compute pass's GPU objects, kept from frame to frame.
+/// Upstream created, every frame, the colliders buffer and a uniform buffer
+/// and bind group per emitter per step. Now every emitter's uniforms go into
+/// one shared buffer with a single write per frame (it only grows), and an
+/// emitter's bind group lives as long as it does, rebuilt only when
+/// something it binds changes.
+#[derive(Resource, Default)]
+pub struct ParticleComputeCache {
+    colliders: Option<Buffer>,
+    uniforms: Option<Buffer>,
+    scratch: Vec<u8>,
+    /// Per emitter: a hash of the ids of everything its bind group binds, and
+    /// the bind group.
+    emitters: std::collections::HashMap<Entity, (u64, BindGroup)>,
 }
 
 pub fn prepare_particle_compute_bind_groups(
@@ -189,7 +215,8 @@ pub fn prepare_particle_compute_bind_groups(
     pipeline: Res<ParticleComputePipeline>,
     pipeline_cache: Res<PipelineCache>,
     render_device: Res<RenderDevice>,
-    _render_queue: Res<RenderQueue>,
+    render_queue: Res<RenderQueue>,
+    mut cache: ResMut<ParticleComputeCache>,
     extracted_systems: Res<ExtractedParticleSystem>,
     extracted_colliders: Option<Res<ExtractedColliders>>,
     gpu_storage_buffers: Res<RenderAssets<GpuShaderBuffer>>,
@@ -201,6 +228,9 @@ pub fn prepare_particle_compute_bind_groups(
     gradient_sampler: Res<GradientSampler>,
     curve_sampler: Res<CurveSampler>,
 ) {
+    let _timer = crate::stats::PREPARE_COMPUTE_NS.time();
+    let reuse = crate::stats::reuse_gpu_resources();
+    let cache = &mut *cache;
     let mut bind_groups = Vec::new();
 
     let fallback_gradient_gpu_image = fallback_gradient_texture
@@ -224,17 +254,56 @@ pub fn prepare_particle_compute_bind_groups(
         0
     };
 
-    let colliders_buffer = render_device.create_buffer_with_data(
-        &bevy::render::render_resource::BufferInitDescriptor {
-            label: Some("colliders_buffer"),
-            contents: bytemuck::bytes_of(&collider_array),
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-        },
-    );
+    // Kestrel: one colliders buffer (it has a fixed size), rewritten each frame.
+    let colliders_buffer = match cache.colliders.as_ref().filter(|_| reuse) {
+        Some(buffer) => {
+            render_queue.write_buffer(buffer, 0, bytemuck::bytes_of(&collider_array));
+            buffer.clone()
+        }
+        None => {
+            crate::stats::BUFFERS_CREATED.add(1);
+            let buffer = render_device.create_buffer_with_data(
+                &bevy::render::render_resource::BufferInitDescriptor {
+                    label: Some("colliders_buffer"),
+                    contents: bytemuck::bytes_of(&collider_array),
+                    usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                },
+            );
+            cache.colliders = Some(buffer.clone());
+            buffer
+        }
+    };
+
+    // Kestrel: room for every step's uniforms, one aligned slot each.
+    let uniform_size = std::mem::size_of::<EmitterUniforms>() as u64;
+    let alignment = u64::from(render_device.limits().min_uniform_buffer_offset_alignment);
+    let stride = uniform_size.div_ceil(alignment) * alignment;
+    let total_steps: usize = extracted_systems.emitters.iter().map(|(_, e)| e.uniform_steps.len()).sum();
+    let needed = stride * total_steps.max(1) as u64;
+    if !reuse || cache.uniforms.as_ref().is_none_or(|b| b.size() < needed) {
+        crate::stats::BUFFERS_CREATED.add(1);
+        cache.uniforms = Some(render_device.create_buffer(&bevy::render::render_resource::BufferDescriptor {
+            label: Some("emitter_uniform_buffer"),
+            size: if reuse { needed.next_power_of_two() } else { needed },
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+    }
+    let uniforms_buffer = cache.uniforms.clone().unwrap();
+    let mut scratch = std::mem::take(&mut cache.scratch);
+    scratch.clear();
+    if !reuse {
+        cache.emitters.clear();
+    }
 
     let mut emission_clear_list = Vec::new();
+    let mut live = std::collections::HashSet::new();
 
     for (entity, emitter_data) in &extracted_systems.emitters {
+        // Kestrel: a pool's entry only sorts (`pool.rs`).
+        if emitter_data.uniform_steps.is_empty() {
+            continue;
+        }
         let Some(gpu_buffer) = gpu_storage_buffers.get(&emitter_data.particle_buffer_handle) else {
             continue;
         };
@@ -354,26 +423,46 @@ pub fn prepare_particle_compute_bind_groups(
             emission_clear_list.push(buf.clone());
         }
 
-        let step_bind_groups: Vec<BindGroup> = emitter_data
-            .uniform_steps
-            .iter()
-            .map(|step_uniforms| {
-                let mut uniforms = *step_uniforms;
-                uniforms.collider_count = collider_count;
-
-                let uniform_buffer = render_device.create_buffer_with_data(
-                    &bevy::render::render_resource::BufferInitDescriptor {
-                        label: Some("emitter_uniform_buffer"),
-                        contents: bytemuck::bytes_of(&uniforms),
-                        usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-                    },
-                );
-
-                render_device.create_bind_group(
+        // Kestrel: reuse the emitter's bind group unless something it binds
+        // has changed (including the shared uniform buffer growing).
+        let key = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            gpu_buffer.buffer.id().hash(&mut hasher);
+            for image in [
+                gradient_image,
+                scale_over_lifetime_image,
+                alpha_over_lifetime_image,
+                emission_over_lifetime_image,
+                turbulence_influence_over_lifetime_image,
+                radial_velocity_curve_image,
+                angle_over_lifetime_image,
+                angular_velocity_curve_image,
+                color_over_lifetime_image,
+                orbit_velocity_curve_image,
+                directional_velocity_curve_image,
+            ] {
+                image.texture_view.id().hash(&mut hasher);
+            }
+            for buffer in [&uniforms_buffer, &colliders_buffer, dst_binding, src_binding, trail_history_binding] {
+                buffer.id().hash(&mut hasher);
+            }
+            hasher.finish()
+        };
+        live.insert(*entity);
+        let bind_group = match cache.emitters.get(entity) {
+            Some((cached_key, group)) if *cached_key == key => group.clone(),
+            _ => {
+                crate::stats::BIND_GROUPS_CREATED.add(1);
+                let group = render_device.create_bind_group(
                     Some("particle_compute_bind_group"),
                     &bind_group_layout,
                     &BindGroupEntries::sequential((
-                        uniform_buffer.as_entire_binding(),
+                        BindingResource::Buffer(BufferBinding {
+                            buffer: &uniforms_buffer,
+                            offset: 0,
+                            size: std::num::NonZeroU64::new(uniform_size),
+                        }),
                         gpu_buffer.buffer.as_entire_binding(),
                         &gradient_image.texture_view,
                         &gradient_sampler.0,
@@ -402,12 +491,28 @@ pub fn prepare_particle_compute_bind_groups(
                         src_binding.as_entire_binding(),
                         trail_history_binding.as_entire_binding(),
                     )),
-                )
-            })
-            .collect();
+                );
+                cache.emitters.insert(*entity, (key, group.clone()));
+                group
+            }
+        };
 
-        bind_groups.push((*entity, step_bind_groups));
+        // Each step's uniforms in the next free slot of the shared buffer.
+        let mut offsets = Vec::with_capacity(emitter_data.uniform_steps.len());
+        for step_uniforms in &emitter_data.uniform_steps {
+            let mut uniforms = *step_uniforms;
+            uniforms.collider_count = collider_count;
+            offsets.push(scratch.len() as u32);
+            scratch.extend_from_slice(bytemuck::bytes_of(&uniforms));
+            scratch.resize(scratch.len().next_multiple_of(stride as usize), 0);
+        }
+        bind_groups.push((*entity, bind_group, offsets));
     }
+    cache.emitters.retain(|entity, _| live.contains(entity));
+    if !scratch.is_empty() {
+        render_queue.write_buffer(&uniforms_buffer, 0, &scratch);
+    }
+    cache.scratch = scratch;
 
     let mut unique_buffers: Vec<Buffer> = Vec::new();
     for buf in emission_clear_list {
@@ -417,8 +522,14 @@ pub fn prepare_particle_compute_bind_groups(
     }
 
     commands.insert_resource(ParticleComputeBindGroups { bind_groups });
+    let ranges = extracted_systems
+        .pool_clears
+        .iter()
+        .filter_map(|(handle, offset, size)| Some((gpu_storage_buffers.get(handle)?.buffer.clone(), *offset, *size)))
+        .collect();
     commands.insert_resource(EmissionBufferClearList {
         buffers: unique_buffers,
+        ranges,
     });
 }
 
@@ -449,7 +560,7 @@ pub fn run_particle_compute_node(
     let max_steps = bind_groups
         .bind_groups
         .iter()
-        .map(|(_, steps)| steps.len())
+        .map(|(_, _, offsets)| offsets.len())
         .max()
         .unwrap_or(0);
 
@@ -459,12 +570,24 @@ pub fn run_particle_compute_node(
         .map(|(e, data)| (*e, data))
         .collect();
 
+    // Kestrel: GPU and CPU time for every simulation dispatch this frame, as
+    // `render/particle_compute/*` (needs `RenderDiagnosticsPlugin`).
+    let diagnostics = ctx.diagnostic_recorder();
+    let diagnostics = diagnostics.as_deref();
+    let time_span = diagnostics.time_span(ctx.command_encoder(), "particle_compute");
+
     let has_sub_emitter_targets = emitter_map.values().any(|data| data.is_sub_emitter_target);
     let pass_labels: &[&str] = if has_sub_emitter_targets {
         &["particle_compute_pass", "particle_sub_emitter_pass"]
     } else {
         &["particle_compute_pass"]
     };
+
+    // Kestrel: zero the slots pools freed this frame, so nothing a finished
+    // burst left behind is drawn.
+    for (buffer, offset, size) in &emission_clear_list.ranges {
+        ctx.command_encoder().clear_buffer(buffer, *offset, Some(*size));
+    }
 
     for step_index in 0..max_steps {
         for buf in &emission_clear_list.buffers {
@@ -483,8 +606,8 @@ pub fn run_particle_compute_node(
 
             pass.set_pipeline(compute_pipeline);
 
-            for (entity, step_bind_groups) in &bind_groups.bind_groups {
-                let Some(bind_group) = step_bind_groups.get(step_index) else {
+            for (entity, bind_group, offsets) in &bind_groups.bind_groups {
+                let Some(&offset) = offsets.get(step_index) else {
                     continue;
                 };
 
@@ -506,11 +629,12 @@ pub fn run_particle_compute_node(
                     emitter_data.amount
                 };
                 let workgroups = (thread_count + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
-                pass.set_bind_group(0, bind_group, &[]);
+                pass.set_bind_group(0, bind_group, &[offset]);
                 pass.dispatch_workgroups(workgroups, 1, 1);
             }
         }
     }
+    time_span.end(ctx.command_encoder());
 }
 
 pub struct ParticleComputePlugin;
@@ -523,6 +647,7 @@ impl Plugin for ParticleComputePlugin {
 
         render_app
             .init_resource::<ParticleComputeBindGroups>()
+            .init_resource::<ParticleComputeCache>()
             .init_resource::<EmissionBufferClearList>()
             .add_systems(RenderStartup, init_particle_compute_pipeline)
             .add_systems(

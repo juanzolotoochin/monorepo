@@ -152,7 +152,28 @@ struct EmitterParams {
     trail_effective_fps: f32,
     _trail_pad0: u32,
     _trail_pad1: u32,
+
+    // Kestrel: per-trigger parameters (`ParticleTrigger`, extract.rs).
+    // The target in emitter-local space, before `emitter_transform`.
+    trigger_target: vec3<f32>,
+    trigger_flags: u32,
+    // `world_bias`, in spawn space.
+    world_bias: vec3<f32>,
+    // Particles a cycle spawns; the rest of `amount` stay idle.
+    spawn_count: u32,
+    // Kestrel: where this burst's particles start in a pooled buffer
+    // (`pool.rs`). Particle indices (and so seeds) stay local to the burst.
+    slot_offset: u32,
+    _slot_pad0: u32,
+    _slot_pad1: u32,
+    _slot_pad2: u32,
 }
+
+const TRIGGER_FLAG_TARGET: u32 = 1u;
+const TRIGGER_FLAG_LIFETIME_TO_TARGET: u32 = 2u;
+// Kestrel: a pooled burst; particles that aren't velocity-aligned keep the
+// emitter's rotation in `ref_up`, as a quaternion.
+const TRIGGER_FLAG_KEEP_ROTATION: u32 = 4u;
 
 struct Collider {
     transform: mat4x4<f32>,
@@ -170,6 +191,7 @@ const EMISSION_SHAPE_SPHERE: u32 = 1u;
 const EMISSION_SHAPE_SPHERE_SURFACE: u32 = 2u;
 const EMISSION_SHAPE_BOX: u32 = 3u;
 const EMISSION_SHAPE_RING: u32 = 4u;
+const EMISSION_SHAPE_SEGMENT: u32 = 5u;
 
 const DRAW_ORDER_INDEX: u32 = 0u;
 
@@ -322,7 +344,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
 
-    var p = particles[idx];
+    var p = particles[params.slot_offset + idx];
 
     // fully reset particle data, then continue to emission/update
     // (clear does not skip the rest of the step)
@@ -336,7 +358,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // when delta is zero (paused), write cleared data and stop
     if (params.delta_time <= 0.0) {
-        particles[idx] = p;
+        particles[params.slot_offset + idx] = p;
         return;
     }
 
@@ -389,14 +411,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
         }
 
-        if (should_restart) {
+        // Kestrel: a trigger may spawn fewer than `amount` (`spawn_count`).
+        if (should_restart && particle_idx < params.spawn_count) {
             p = spawn_particle(particle_idx);
         } else if (is_active) {
             p = update_particle(p);
         }
     }
 
-    particles[idx] = p;
+    particles[params.slot_offset + idx] = p;
 
     // write position history for trail readback
     if (params.trail_history_size > 0u) {
@@ -484,8 +507,26 @@ fn transport_ref_up(ref_up: vec3<f32>, old_dir: vec3<f32>, new_dir: vec3<f32>) -
     return ref_up;
 }
 
-fn get_emission_offset(seed: u32) -> vec3<f32> {
+fn get_emission_offset(seed: u32, idx: u32) -> vec3<f32> {
     var pos = vec3(0.0);
+
+    // Kestrel: evenly along the line to the trigger's target, jittered; the
+    // jitter rides in `emission_box_extents`. No offset or scale.
+    if (params.emission_shape == EMISSION_SHAPE_SEGMENT) {
+        if ((params.trigger_flags & TRIGGER_FLAG_TARGET) == 0u) {
+            return vec3(0.0);
+        }
+        let f = (f32(idx) + 0.5) / f32(max(params.spawn_count, 1u));
+        let jitter = vec3(
+            hash_to_float(seed) * 2.0 - 1.0,
+            hash_to_float(seed + 1u) * 2.0 - 1.0,
+            hash_to_float(seed + 2u) * 2.0 - 1.0,
+        ) * params.emission_box_extents;
+        return zero_z_if(
+            params.trigger_target * f + jitter,
+            (params.particle_flags & EMITTER_FLAG_DISABLE_Z) != 0u,
+        );
+    }
 
     switch params.emission_shape {
         case EMISSION_SHAPE_POINT: {
@@ -618,6 +659,24 @@ fn get_emission_velocity(seed: u32) -> vec3<f32> {
     let result = zero_z_if(dir * speed, (params.particle_flags & EMITTER_FLAG_DISABLE_Z) != 0u);
 
     return result;
+}
+
+// Kestrel: the spawn velocity in spawn space, with `world_bias` added to its
+// direction. Used at spawn and to rebuild the emission direction later.
+fn get_spawn_velocity(seed: u32) -> vec3<f32> {
+    let vel = transform_direction(get_emission_velocity(seed));
+    let speed = length(vel);
+    if (speed < 0.0001 || dot(params.world_bias, params.world_bias) == 0.0) {
+        return vel;
+    }
+    let biased = vel / speed + params.world_bias;
+    if (dot(biased, biased) < 1e-8) {
+        return vel;
+    }
+    return zero_z_if(
+        normalize(biased) * speed,
+        (params.particle_flags & EMITTER_FLAG_DISABLE_Z) != 0u,
+    );
 }
 
 fn get_initial_scale(seed: u32) -> f32 {
@@ -1271,23 +1330,45 @@ fn emit_sub_particles(position: vec3<f32>, scale: f32, velocity: vec3<f32>) {
     }
 }
 
+// Kestrel: the rotation of an orthonormal basis, as a quaternion (xyz, w).
+fn quat_from_basis(x: vec3<f32>, y: vec3<f32>, z: vec3<f32>) -> vec4<f32> {
+    let trace = x.x + y.y + z.z;
+    if (trace > 0.0) {
+        let s = sqrt(trace + 1.0) * 2.0;
+        return vec4((y.z - z.y) / s, (z.x - x.z) / s, (x.y - y.x) / s, 0.25 * s);
+    }
+    if (x.x > y.y && x.x > z.z) {
+        let s = sqrt(1.0 + x.x - y.y - z.z) * 2.0;
+        return vec4(0.25 * s, (y.x + x.y) / s, (z.x + x.z) / s, (y.z - z.y) / s);
+    }
+    if (y.y > z.z) {
+        let s = sqrt(1.0 + y.y - x.x - z.z) * 2.0;
+        return vec4((y.x + x.y) / s, 0.25 * s, (z.y + y.z) / s, (z.x - x.z) / s);
+    }
+    let s = sqrt(1.0 + z.z - x.x - y.y) * 2.0;
+    return vec4((z.x + x.z) / s, (z.y + y.z) / s, 0.25 * s, (x.y - y.x) / s);
+}
+
 fn spawn_particle(idx: u32) -> Particle {
     var p: Particle;
     // per-particle seed: base_seed + 1 + index + (cycle * amount)
     let seed = hash(params.random_seed + 1u + idx + params.cycle * params.amount);
 
-    let local_emission_pos = get_emission_offset(seed);
+    let local_emission_pos = get_emission_offset(seed, idx);
     let initial_scale = get_initial_scale(seed + 20u);
     // for constant curve, use initial scale directly; for curves, start at eased t=0
     let scale = get_scale_at_lifetime(initial_scale, 0.0, 1.0);
 
-    var local_vel = get_emission_velocity(seed + 10u);
-
     let emission_pos = transform_point(local_emission_pos);
-    var vel = transform_direction(local_vel);
+    var vel = get_spawn_velocity(seed + 10u);
 
     p.position = vec4(emission_pos, scale);
-    let lifetime = params.lifetime * (1.0 - hash_to_float(seed + 4u) * params.lifetime_randomness);
+    var lifetime = params.lifetime * (1.0 - hash_to_float(seed + 4u) * params.lifetime_randomness);
+    // Kestrel: live until the trip to the target is done (capped by the lifetime).
+    if ((params.trigger_flags & TRIGGER_FLAG_LIFETIME_TO_TARGET) != 0u && length(vel) > 0.0001) {
+        let trip = distance(emission_pos, transform_point(params.trigger_target));
+        lifetime = min(trip / length(vel), params.lifetime);
+    }
 
     // include radial velocity at spawn for correct initial alignment
     let initial_radial_velocity = get_initial_radial_velocity(seed + 60u);
@@ -1361,6 +1442,17 @@ fn spawn_particle(idx: u32) -> Particle {
         p.ref_up = vec4(0.0, 0.0, 1.0, 0.0);
     }
 
+    // Kestrel: a pooled burst is drawn without its emitter's transform; keep
+    // the emitter's rotation for the vertex shader (`ref_up` is unused when
+    // particles aren't velocity-aligned).
+    if ((params.trigger_flags & TRIGGER_FLAG_KEEP_ROTATION) != 0u) {
+        p.ref_up = quat_from_basis(
+            normalize(params.emitter_transform[0].xyz),
+            normalize(params.emitter_transform[1].xyz),
+            normalize(params.emitter_transform[2].xyz),
+        );
+    }
+
     // sub emitter: at start trigger
     if (params.sub_emitter_mode == SUB_EMITTER_MODE_AT_START) {
         emit_sub_particles(p.position.xyz, p.position.w, vel);
@@ -1411,8 +1503,7 @@ fn update_particle(p_in: Particle) -> Particle {
     let disable_z = (params.particle_flags & EMITTER_FLAG_DISABLE_Z) != 0u;
 
     // reconstruct emission direction from seed for directional velocity
-    let local_emission_vel = get_emission_velocity(seed + 10u);
-    let emission_vel = transform_direction(local_emission_vel);
+    let emission_vel = get_spawn_velocity(seed + 10u);
     let emission_dir = select(normalize(emission_vel), vec3(0.0), length(emission_vel) < 0.0001);
 
     // stored velocity includes previous controlled displacements, extract pure physics velocity
@@ -1505,7 +1596,10 @@ fn update_particle(p_in: Particle) -> Particle {
     if length(effective_velocity) > 0.0 {
         let new_dir = normalize(effective_velocity);
         let old_dir = normalize(p.alignment_dir.xyz);
-        p.ref_up = vec4(transport_ref_up(p.ref_up.xyz, old_dir, new_dir), 0.0);
+        // Kestrel: unless it holds a pooled burst's rotation (spawn_particle).
+        if ((params.trigger_flags & TRIGGER_FLAG_KEEP_ROTATION) == 0u) {
+            p.ref_up = vec4(transport_ref_up(p.ref_up.xyz, old_dir, new_dir), 0.0);
+        }
         p.alignment_dir = vec4(new_dir, 0.0);
     }
 

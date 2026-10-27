@@ -2,6 +2,7 @@ import super::common::{
     Particle,
     ParticleEmitterUniforms,
     PARTICLE_FLAG_ACTIVE,
+    TRANSFORM_ALIGN_DISABLED,
     TRANSFORM_ALIGN_BILLBOARD,
     TRANSFORM_ALIGN_Y_TO_VELOCITY,
     TRANSFORM_ALIGN_BILLBOARD_Y_TO_VELOCITY,
@@ -102,6 +103,16 @@ fn rot_z(a: f32) -> mat3x3<f32> {
 }
 
 @if(!PREPASS_PIPELINE || PREPASS_FRAGMENT || MAY_DISCARD)
+// Kestrel: a rotation quaternion (xyz, w) as a matrix (pooled bursts).
+fn quat_to_mat3(q: vec4<f32>) -> mat3x3<f32> {
+    let x = q.x; let y = q.y; let z = q.z; let w = q.w;
+    return mat3x3(
+        vec3(1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y + w * z), 2.0 * (x * z - w * y)),
+        vec3(2.0 * (x * y - w * z), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z + w * x)),
+        vec3(2.0 * (x * z + w * y), 2.0 * (y * z - w * x), 1.0 - 2.0 * (x * x + y * y)),
+    );
+}
+
 fn get_head_particle(particle_index: u32) -> Particle {
     let trail_size = emitter_uniforms.trail_size;
     let head_slot = particle_index * max(trail_size, 1u);
@@ -243,6 +254,10 @@ fn particle_vertex_impl(vertex: Vertex) -> VertexOutput {
             out.color = vertex.color * mix(color_lo, color_hi, seg_t);
         }
 
+        // Kestrel: trails get no motion (see the particle case below).
+        @if(PREPASS_PIPELINE && MOTION_VECTOR_PREPASS) {
+            out.previous_world_position = out.world_position;
+        }
         return out;
     }
 
@@ -396,11 +411,22 @@ fn particle_vertex_impl(vertex: Vertex) -> VertexOutput {
             }
         }
     } else {
-        let emitter_rotation = mat3x3(
+        var emitter_rotation = mat3x3(
             normalize(world_from_local[0].xyz),
             normalize(world_from_local[1].xyz),
             normalize(world_from_local[2].xyz)
         );
+        // Kestrel: in world space a velocity-aligned particle is already
+        // turned by its world-space velocity; upstream rotated it by the
+        // emitter as well, so a turned effect's sparks pointed off their flight.
+        if (!is_local && transform_align == TRANSFORM_ALIGN_Y_TO_VELOCITY) {
+            emitter_rotation = mat3x3(vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0));
+        }
+        // Kestrel: a pool of bursts is drawn with an identity transform; each
+        // particle carries its burst's rotation (`particle_simulate.wesl`).
+        if (emitter_uniforms.pooled != 0u && !is_local && transform_align == TRANSFORM_ALIGN_DISABLED) {
+            emitter_rotation = quat_to_mat3(particle.ref_up);
+        }
 
         if is_local {
             let offset = rotated_position * particle_scale;
@@ -431,6 +457,17 @@ fn particle_vertex_impl(vertex: Vertex) -> VertexOutput {
 
     @if(VERTEX_COLORS) {
         out.color = vertex.color * particle.color;
+    }
+
+    // Kestrel: where this vertex was a frame ago, for motion vectors (TAA).
+    // Without it the prepass reads an unset position and TAA smears every
+    // particle. The particle moved by its velocity over the last step.
+    @if(PREPASS_PIPELINE && MOTION_VECTOR_PREPASS) {
+        var moved = particle.velocity.xyz * emitter_uniforms.delta_time;
+        if is_local {
+            moved = (world_from_local * vec4(moved, 0.0)).xyz;
+        }
+        out.previous_world_position = vec4(out.world_position.xyz - moved, 1.0);
     }
 
     return out;
