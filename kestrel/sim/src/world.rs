@@ -117,8 +117,12 @@ pub enum CommandKind {
     PlayPiano { agent: u16, piano: u16, pitch: u8, velocity: u8 },
     /// The player left: their avatar goes (`Settlement::leave`). The host
     /// queues it for a player it dropped; it applies before the tick's other
-    /// commands. Last, so input logs from before it still decode.
+    /// commands. After the older variants, so input logs from before it
+    /// still decode.
     Leave,
+    /// A player's avatar climbs into the nearest free vehicle in reach, or
+    /// out of the one it drives. New variants go after this one.
+    Board { agent: u16 },
 }
 
 impl CommandKind {
@@ -138,6 +142,7 @@ impl CommandKind {
             | CommandKind::ReleaseDirectControl { agent }
             | CommandKind::RepairCover { agent, .. }
             | CommandKind::PlayPiano { agent, .. }
+            | CommandKind::Board { agent }
             | CommandKind::Pile { agent, .. } => *agent = to,
             _ => {}
         }
@@ -159,6 +164,7 @@ impl CommandKind {
             | CommandKind::ReleaseDirectControl { agent }
             | CommandKind::RepairCover { agent, .. }
             | CommandKind::PlayPiano { agent, .. }
+            | CommandKind::Board { agent }
             | CommandKind::Pile { agent, .. } => Some(agent),
             _ => None,
         }
@@ -486,7 +492,8 @@ impl World {
                 | CommandKind::DigDown { .. }
                 | CommandKind::ReleaseDirectControl { .. }
                 | CommandKind::RepairCover { .. }
-                | CommandKind::Pile { .. } => {
+                | CommandKind::Pile { .. }
+                | CommandKind::Board { .. } => {
                     if let (Some(s), Some((agent, action))) = (&mut self.settlement, Action::of(kind)) {
                         s.act(self.tick, agent, &action, &self.terrain, &mut self.actions);
                     }
@@ -885,6 +892,7 @@ impl World {
         if let Some(settlement) = &mut self.settlement {
             settlement.combat_housekeeping(self.tick, &self.terrain);
             settlement.avatar_housekeeping(self.tick);
+            settlement.vehicle_housekeeping();
             settlement.dig_housekeeping(self.tick, &mut self.terrain);
             settlement.pile_housekeeping(self.tick);
             settlement.memory_housekeeping(&mut self.terrain);

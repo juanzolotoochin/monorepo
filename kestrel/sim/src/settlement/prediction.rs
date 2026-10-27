@@ -9,6 +9,7 @@ use super::action::{self, Action};
 use super::avatar::{self, character_of};
 use super::combat::{strike_event, Event};
 use super::piles::{self, PileLab};
+use super::vehicle::{self, VehicleIx, VehicleState};
 use super::{AgentIx, AgentState, Role, Settlement, Side};
 use crate::messages::{ActionMessages, Messages, StartHaul, StockChange};
 use crate::terrain::Terrain;
@@ -34,6 +35,9 @@ pub struct AvatarReplay<'a> {
     terrain: &'a Terrain,
     me: AgentIx,
     state: AgentState,
+    /// The vehicle the avatar drove when the replay started, run alongside
+    /// it: the driver's movement steers it, so it is the driver's to predict.
+    vehicle: Option<(VehicleIx, VehicleState)>,
     tick: u64,
     /// The events the last tick run showed.
     events: Vec<Event>,
@@ -50,8 +54,9 @@ impl Settlement {
     /// `tick`. `None` unless `agent` is a player avatar.
     pub fn replay_avatar<'a>(&'a self, agent: AgentIx, tick: u64, terrain: &'a Terrain) -> Option<AvatarReplay<'a>> {
         let state = self.agents.get(agent as usize).filter(|a| a.avatar().is_some())?.clone();
+        let vehicle = self.driving(agent as usize).map(|ix| (ix, self.vehicles[ix as usize].clone()));
         let piles = self.piles.as_ref().map(Cow::Borrowed);
-        Some(AvatarReplay { settlement: self, terrain, me: agent, state, tick, events: Vec::new(), piles, actions: ActionMessages::default() })
+        Some(AvatarReplay { settlement: self, terrain, me: agent, state, vehicle, tick, events: Vec::new(), piles, actions: ActionMessages::default() })
     }
 }
 
@@ -64,6 +69,14 @@ impl<'a> AvatarReplay<'a> {
     /// The avatar as of `tick`, before that tick runs.
     pub fn state(&self) -> &AgentState {
         &self.state
+    }
+
+    /// The vehicle the avatar drives as of `tick`, and its index, while it
+    /// still drives it. Climbing in waits for stage 5, so it is never
+    /// predicted; climbing out is.
+    pub fn vehicle(&self) -> Option<(VehicleIx, &VehicleState)> {
+        let (ix, v) = self.vehicle.as_ref()?;
+        (self.state.avatar()?.driving == Some(*ix)).then_some((*ix, v))
     }
 
     /// The confirmed settlement and terrain the replay started from.
@@ -84,14 +97,21 @@ impl<'a> AvatarReplay<'a> {
     }
 
     /// Applies one of the owner's commands on `tick`: its action's part on
-    /// the avatar (`action::act`), as `World::step` applies it. A pile
-    /// haul's lab part applies at once too, on the replay's copy of the lab,
-    /// as the simulation applies it. Commands that don't drive this avatar,
-    /// a piano key among them, change nothing.
+    /// the avatar (`action::act`), as `World::step` applies it. A driver's
+    /// movement steers the replay's copy of its vehicle (`vehicle::drive`). A
+    /// pile haul's lab part applies at once too, on the replay's copy of the
+    /// lab, as the simulation applies it. Commands that don't drive this
+    /// avatar, a piano key among them, change nothing.
     pub fn apply(&mut self, command: &CommandKind) {
         let Some((agent, action)) = Action::of(command) else { return };
         if agent != self.me {
             return;
+        }
+        let driving = self.state.avatar().and_then(|a| a.driving);
+        if let Some((ix, v)) = self.vehicle.as_mut() {
+            if driving == Some(*ix) && vehicle::drive(v, &action) {
+                return;
+            }
         }
         let mut view = self.settlement.view(self.me, self.tick, self.terrain);
         view.piles = self.piles.as_deref();
@@ -115,6 +135,12 @@ impl<'a> AvatarReplay<'a> {
         let def = character_of(&s.characters, &self.state);
         let AgentState { body, role: Role::Avatar(state), .. } = &mut self.state else { unreachable!("replays start from avatars") };
         avatar::self_update(body, state, self.me, tick, terrain, self.piles.as_deref(), def);
+        if let Some((_, v)) = self.vehicle.as_mut().filter(|(ix, _)| state.driving == Some(*ix)) {
+            // As stage 2 drives it and housekeeping seats its driver.
+            let vehicle_def = &s.characters[v.character as usize];
+            vehicle::self_update(v, terrain, vehicle_def);
+            vehicle::seat(body, state, v, vehicle_def);
+        }
         let mut out = Messages::default();
         s.read_avatar(self.me, &self.state, tick, terrain, &mut out);
         // Manual transfer units and pile steps show nothing until stage 5

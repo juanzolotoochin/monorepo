@@ -72,6 +72,9 @@ pub enum Action {
     /// drop spot) and move units there, one every `pace` seconds (zero for
     /// all at once), standing at `approach` if given (`piles::haul`).
     Haul { action: PileAction, pace: Fx, approach: Option<FxVec2> },
+    /// Climb into the nearest free vehicle in reach, or out of the one
+    /// driven (`vehicle`).
+    Board,
 }
 
 impl Action {
@@ -93,6 +96,7 @@ impl Action {
             CommandKind::RepairCover { agent, asset } => (agent, Action::RepairCover(asset)),
             CommandKind::Respawn { agent } => (agent, Action::Respawn),
             CommandKind::Pile { agent, action, pace, approach } => (agent, Action::Haul { action, pace, approach }),
+            CommandKind::Board { agent } => (agent, Action::Board),
             CommandKind::PlayPiano { .. }
             | CommandKind::SpawnMovers { .. }
             | CommandKind::Impulse { .. }
@@ -141,6 +145,10 @@ pub struct View<'a> {
     pub spawn_height: Fx,
     /// The last piano key press's serial (`Settlement::piano_serial`).
     pub piano_serial: u64,
+    /// The vehicles, and the characters they are: a driver climbs out
+    /// beside theirs.
+    pub vehicles: &'a [super::VehicleState],
+    pub characters: &'a [CharacterDef],
 }
 
 impl Settlement {
@@ -158,6 +166,8 @@ impl Settlement {
             spawn: self.spawn,
             spawn_height: self.spawn_height,
             piano_serial: self.piano_serial,
+            vehicles: &self.vehicles,
+            characters: &self.characters,
         }
     }
 }

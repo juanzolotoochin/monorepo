@@ -5,6 +5,9 @@ Scene(id: "dig-lab", player: "exosuit", features: [Digging],
     instances: [],
     // 256 x 256 m of generated terraces with ore underground.
     mine: Some((extent: 128.0, seed: 7)),
+    // A rover beside the spawn: walk up and press G (or click the left
+    // stick) to drive it over the terraces.
+    vehicles: [(character: "rover", position: (1.2, 0.0, 3.4), heading: 0.0)],
     // Dug ore lands in piles; carry it to the collector.
     piles: Some((
         capacity: 12,

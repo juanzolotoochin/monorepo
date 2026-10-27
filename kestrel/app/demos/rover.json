@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "scene": "dig-lab",
+  "fps": 30,
+  "width": 1280,
+  "height": 720,
+  "max_frames": 600,
+  "steps": [
+    { "op": "wait", "frames": 30 },
+    { "op": "board" },
+    { "op": "wait", "frames": 15 },
+    { "op": "drive", "direction": [0, 1], "run": true },
+    { "op": "wait", "frames": 150 },
+    { "op": "drive", "direction": [0.7, 0.7] },
+    { "op": "wait", "frames": 90 },
+    { "op": "drive", "direction": [-1, 0] },
+    { "op": "wait", "frames": 45 },
+    { "op": "drive", "direction": [0, 0] },
+    { "op": "wait", "frames": 30 },
+    { "op": "board" },
+    { "op": "wait", "frames": 30 }
+  ]
+}

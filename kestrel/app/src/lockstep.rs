@@ -410,6 +410,11 @@ fn scene_setup(library: &SceneLibrary, index: usize, cache: &crate::assets::Mode
         memory_trial: scene.features.contains(&voxel_assets::SceneFeature::MemoryTrial),
         diggable: scene.features.contains(&voxel_assets::SceneFeature::Digging),
         mine: scene.mine.as_ref().map(|m| m.seed),
+        vehicles: scene.vehicles.iter().map(|v| sim::settlement::VehicleSetup {
+            character: v.character.clone(),
+            position: [q(v.position[0]), q(v.position[2])],
+            heading: q(v.heading.to_radians()),
+        }).collect(),
     }
 }
 
@@ -1019,7 +1024,12 @@ pub fn follow_avatar(
         }
         controls.velocity = predicted_velocity;
     }
-    let moved = if teleport { Vec3::ZERO } else { crate::navigation::flat(position - previous) };
+    // Sitting in a vehicle, the avatar rides rather than walks.
+    if to_avatar.driving.is_some() {
+        controls.velocity = Vec3::ZERO;
+    }
+    let riding = to_avatar.driving.is_some();
+    let moved = if teleport || riding { Vec3::ZERO } else { crate::navigation::flat(position - previous) };
     let relative_speed = controls.velocity.length() / motion.walk_speed.max(0.1);
     let step_distance = crate::character::step_distance_for_speed(motion.step_distance, relative_speed).clamp(0.2, 4.0);
     let contacts = controls.gait.advance(moved.length(), step_distance, !to_avatar.flight.airborne);

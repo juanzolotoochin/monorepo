@@ -123,6 +123,8 @@ pub enum Edge {
     Utility(Utility),
     /// An item chooser's pick.
     Choose(usize),
+    /// Climb into the nearest vehicle, or out of the one driven.
+    Board,
 }
 
 /// Navigation, confirm, back, and the menu buttons, from the seated
@@ -206,7 +208,7 @@ const HISTORY: usize = 240;
 pub struct GamepadSnapshots(pub Vec<GamepadSnapshot>);
 
 /// Keys that drive gameplay: only these take ownership from a controller.
-const GAMEPLAY_KEYS: [KeyCode; 20] = [
+const GAMEPLAY_KEYS: [KeyCode; 21] = [
     KeyCode::KeyW,
     KeyCode::KeyA,
     KeyCode::KeyS,
@@ -227,6 +229,7 @@ const GAMEPLAY_KEYS: [KeyCode; 20] = [
     KeyCode::KeyC,
     KeyCode::KeyV,
     KeyCode::ControlLeft,
+    KeyCode::KeyG,
 ];
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -614,6 +617,9 @@ impl InputService {
         if keys.just_released(KeyCode::Space) {
             edges.push(Edge::LiftRelease);
         }
+        if keys.just_pressed(KeyCode::KeyG) {
+            edges.push(Edge::Board);
+        }
         if keys.just_pressed(KeyCode::KeyF) {
             edges.push(Edge::Utility(Utility::Dig));
         }
@@ -659,6 +665,7 @@ impl InputService {
         press(Control::Button(Button::North), Edge::NextWeapon);
         press(Control::Button(Button::DPadLeft), Edge::TargetPrevious);
         press(Control::Button(Button::DPadRight), Edge::TargetNext);
+        press(Control::Button(Button::LeftStick), Edge::Board);
         if pad.released(Button::RightBumper) {
             edges.push(Edge::LiftRelease);
         }

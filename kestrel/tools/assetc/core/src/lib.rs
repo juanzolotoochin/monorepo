@@ -252,6 +252,18 @@ pub struct MineLayout {
     pub seed: u64,
 }
 
+/// A vehicle parked in a scene: a `Vehicle` character, where it stands
+/// (scene meters; `y` is ignored, it rests on the ground) and which way it
+/// faces, in degrees clockwise from +Z.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VehicleLayout {
+    pub character: String,
+    pub position: [f32; 3],
+    #[serde(default)]
+    pub heading: f32,
+}
+
 /// A playable upright piano. The keyboard faces local +Z.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -284,6 +296,9 @@ pub struct Scene {
     /// Generated ground to dig and mine, instead of the deck.
     #[serde(default)]
     pub mine: Option<MineLayout>,
+    /// Vehicles parked in the scene, for players to climb into.
+    #[serde(default)]
+    pub vehicles: Vec<VehicleLayout>,
     #[serde(default)]
     pub terrain: Option<Terrain>,
     #[serde(default)]
@@ -783,6 +798,7 @@ mod tests {
                 industrial: true,
                 piles: None,
                 mine: None,
+                vehicles: Vec::new(),
                 terrain: None,
                 style: None,
                 architecture: vec![],
@@ -835,6 +851,7 @@ mod tests {
                 pianos: vec![],
                 piles: None,
                 mine: None,
+                vehicles: Vec::new(),
                 style: None,
                 architecture: vec![],
                 destructibles: vec![],

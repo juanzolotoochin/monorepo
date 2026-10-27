@@ -398,6 +398,20 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             let serial = queue_haul(world, PileAction::Deliver, *seconds_per_unit, None)?;
             Ok(Pending::Haul { expected_cargo: 0, serial })
         }
+        Command::Board => {
+            let agent = player(world).ok_or("No player")?;
+            send(world, CommandKind::Board { agent });
+            Ok(Pending::Applied)
+        }
+        Command::Drive { direction, run } => {
+            if direction.iter().any(|v| !v.is_finite()) || direction[0].hypot(direction[1]) > 1.001 {
+                return Err("Drive needs a finite direction of length at most 1".into());
+            }
+            let agent = player(world).ok_or("No player")?;
+            let direction = fx::FxVec2::new(fx::Fx::quantize(direction[0]), fx::Fx::quantize(direction[1]));
+            send(world, CommandKind::MoveAvatar { agent, intent: sim::settlement::avatar::Intent::Walk { direction, run: *run } });
+            Ok(Pending::Applied)
+        }
         Command::Dig => {
             if !world.resource::<SessionService>().world().is_some_and(|w| w.terrain().diggable) {
                 return Err("This scene has no diggable ground".into());

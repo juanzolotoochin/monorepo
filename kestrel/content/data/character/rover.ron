@@ -1,0 +1,18 @@
+// A four-wheeled mining rover. A player climbs in and drives it with the
+// movement controls; run boosts it to its top speed. Its wheels roll up the
+// mine's terrace steps and out of a one-layer pit, but not up a mesa's cliff.
+(
+    sim: (
+        brain: Vehicle,
+        body: (radius: 0.95),
+        movement: (walk: 6.5, run: 9.5),
+        vehicle: (
+            acceleration: 7, braking: 14, reverse: 3.5,
+            turn: 110,
+            wheelbase: 1.5, track: 1.3,
+            climb: 0.55, lift: 3.5, gravity: 14,
+            seat: 0.6,
+        ),
+    ),
+    view: (skin: "rover"),
+)
