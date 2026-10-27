@@ -122,6 +122,12 @@ our own code, and move the remaining burst effects onto it. Keep rewriting
 parts of it where Kestrel needs it, as pooling already did, but don't
 rewrite it up front. Don't build our own.
 
+**For now the sprinkles backend is experimental.** It stays off by
+default (`--vfx legacy`), and new effects can still be written in the
+legacy backend (`app/src/effects.rs`) until sprinkles is up to par: the
+remaining ports, the catalog with hot reload, and the pool costs in
+"After the spike". New legacy effects join the port list then.
+
 Reasons:
 
 - It does the job today. Three effects of different shapes (a spray with

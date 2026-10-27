@@ -93,7 +93,12 @@ used slots" come after the blood port.
 ## Remove the legacy effect path
 
 - **Status:** open
-- **Why:** two paths for every ported effect double the upkeep.
+- **Why:** two paths for every ported effect double the upkeep. Until
+  this is done, sprinkles is experimental: legacy stays the default and
+  new effects may still be written in `effects.rs` (they join the port
+  list). Sprinkles is up to par when every effect is ported with parity,
+  the catalog has hot reload, and the pool tasks bring the Deck's
+  stress numbers near legacy's.
 - **What to do:** once each ported effect has parity: remove the
   `VfxBackend` toggle (`--vfx`, the debug menu entry), the legacy
   functions and unused `FxAssets` materials. `update_effects` keeps

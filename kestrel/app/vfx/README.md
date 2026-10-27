@@ -5,6 +5,12 @@ One RON file per visual effect, drawn by our fork of sprinkles
 VFX spike (`kestrel/VFX_SPIKE_HANDOFF.md`); three effects use it so far
 (see "Files"). The loader is `app/src/vfx.rs`.
 
+**Experimental.** The sprinkles backend is off by default (`--vfx legacy`)
+and isn't yet up to par with the legacy effects in `app/src/effects.rs`.
+Until it is, new effects can still be written in the legacy backend; port
+them here later along with the others (`kestrel/todo/vfx.md`). The bar for
+"up to par" is the "Remove the legacy effect path" task.
+
 ## Where and why here
 
 The files live with the app, not in `kestrel/content/data/`: `content` is
