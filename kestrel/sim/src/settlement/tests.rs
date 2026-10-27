@@ -328,7 +328,7 @@ fn haulers_act_on_go_to_and_follow() {
     let (position, heading) = hauler.trailer_spot(&a.body, terrain);
     hauler.trailer = Some(Trailer { position, heading, travelled: Fx::ZERO });
     let mut body = a.body.clone();
-    body.travel_heading = heading;
+    hauler.travel_heading = heading;
     let towed = hauler.plan(&body, terrain, mill, &[]);
     haulers::act(&mut body, &hauler, &go, &view);
     assert!(!body.route.is_empty());

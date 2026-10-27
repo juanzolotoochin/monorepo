@@ -220,8 +220,12 @@ pub enum Event {
     /// A defender fired.
     Shot { defender: u16 },
     /// An avatar loosed an arrow. `started` is the tick its `Attack`
-    /// applied on (`Swing::pressed`), as on the other strike events.
-    BowFired { agent: AgentIx, started: u64 },
+    /// applied on (`Swing::pressed`), as on the other strike events. Its
+    /// arrow leaves `from`, `height` above the ground, and comes down at
+    /// `to` `flight` ticks after this one, as the projectile it adds flies
+    /// unless it hits something first: a client draws its own shot's arrow
+    /// from this before the projectile is confirmed.
+    BowFired { agent: AgentIx, from: FxVec2, to: FxVec2, height: Fx, flight: u64, started: u64 },
     /// `agent` is the avatar that struck, for melee and arc hits.
     Hit { target: u64, agent: Option<AgentIx>, projectile: Option<u64>, position: FxVec2, killed: bool, impact: Impact },
     PinnedLanded { target: u64, position: FxVec2 },
@@ -286,7 +290,7 @@ impl Event {
     /// builds are predicted.
     pub fn prediction(&self) -> Prediction {
         match *self {
-            Event::BowFired { agent, started } | Event::ArcFired { agent, started, .. } | Event::LaserFired { agent, started, .. } => {
+            Event::BowFired { agent, started, .. } | Event::ArcFired { agent, started, .. } | Event::LaserFired { agent, started, .. } => {
                 Prediction::Predict { agent, started, on_miss: OnMiss::Keep }
             }
             _ => Prediction::Confirmed,
@@ -297,11 +301,14 @@ impl Event {
 /// The event a resolving strike shows, from the message alone: stage 5
 /// pushes it as it applies the strike, and `AvatarReplay` predicts it.
 /// Sword and spear strikes show nothing until stage 5 says what they hit
-/// (`Hit`).
-pub(super) fn strike_event(message: &Strike) -> Option<Event> {
+/// (`Hit`). `tuning` is the strike's weapon's.
+pub(super) fn strike_event(message: &Strike, tuning: &WeaponTuning) -> Option<Event> {
     let (agent, started, from) = (message.agent, message.started, message.origin);
     match message.weapon {
-        Weapon::Bow => Some(Event::BowFired { agent, started }),
+        Weapon::Bow => {
+            let ArrowFlight { from, to, height, flight } = arrow_flight(message, tuning);
+            Some(Event::BowFired { agent, from, to, height, flight, started })
+        }
         Weapon::ArcCoil => message.beam_end.map(|to| Event::ArcFired { agent, from, to, started }),
         Weapon::Laser => message.beam_end.map(|to| Event::LaserFired {
             agent,
@@ -313,6 +320,23 @@ pub(super) fn strike_event(message: &Strike) -> Option<Event> {
         }),
         Weapon::Sword | Weapon::Spear => None,
     }
+}
+
+/// Where a bow strike's arrow flies: from the bow's muzzle, `height` above
+/// the ground, `reach` along the shot to `to`, over `flight` ticks.
+struct ArrowFlight {
+    from: FxVec2,
+    to: FxVec2,
+    height: Fx,
+    flight: u64,
+}
+
+fn arrow_flight(message: &Strike, tuning: &WeaponTuning) -> ArrowFlight {
+    let (origin, forward) = (message.origin, message.forward);
+    let right = FxVec2::new(forward.y, -forward.x);
+    let from = origin + right * message.muzzle[0] + forward * message.muzzle[2];
+    let to = from + forward * tuning.reach;
+    ArrowFlight { from, to, height: message.muzzle[1], flight: flight_ticks(tuning.reach, tuning.projectile_speed) }
 }
 
 /// One end of a pile-lab toss: a unit slot in a pile, or in the carrier.
@@ -754,25 +778,21 @@ impl Settlement {
             return 0;
         }
         avatar.attack_ready = tick + tuning.cooldown();
-        self.events.extend(strike_event(&message));
+        self.events.extend(strike_event(&message, &tuning));
         let origin = message.origin;
-        let forward = message.forward;
         if message.weapon == Weapon::Bow {
-            let right = FxVec2::new(forward.y, -forward.x);
-            let from = origin + right * message.muzzle[0] + forward * message.muzzle[2];
-            let to = from + forward * tuning.reach;
+            let ArrowFlight { from, to, height, flight } = arrow_flight(&message, &tuning);
             let id = self.id();
-            let arrival = tick + flight_ticks(tuning.reach, tuning.projectile_speed);
             self.projectiles.push(Projectile {
                 id,
                 defender: None,
                 target: None,
                 item: None,
                 from,
-                launch_height: message.muzzle[1],
+                launch_height: height,
                 to,
                 born: tick,
-                arrival,
+                arrival: tick + flight,
                 damage: tuning.damage,
                 kind: ProjectileKind::Arrow,
             });

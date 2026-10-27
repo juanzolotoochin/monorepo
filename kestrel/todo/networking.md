@@ -75,19 +75,6 @@
 - **Where:** `kestrel/app/src/nametags.rs` (`update`, `SLOT_COLORS`).
 - **Found in:** the eight-player lab run.
 
-## The network lab can't start Node through a mise shim
-
-- **Status:** open (low priority)
-- **Why:** on this machine `node` on PATH is a mise shim, and the repo has
-  no mise config that picks a version, so the shim fails ("cannot find
-  binary path") and the lab can't start its relay. The lab ran with an
-  installed Node put first on PATH.
-- **What to do:** pin Node for the repo (a `mise.toml` or `.tool-versions`
-  entry), or let `network-lab.ps1` take a `-Node` path and say so when the
-  `node` it finds can't run.
-- **Where:** `kestrel/tools/network-lab.ps1` (the `Get-Command node` check).
-- **Found in:** the eight-player lab run.
-
 ## Keep a client's movement prediction when its avatar's index moves
 
 - **Status:** open (low priority)
@@ -202,6 +189,22 @@
 - **Found in:** stage 3 of PR #111.
 
 ## Done
+
+### The network lab can't start Node through a mise shim
+
+- **Status:** done (branch `kestrel-rust-relay`)
+- **Why:** on this machine `node` on PATH is a mise shim, and the repo has
+  no mise config that picks a version, so the shim fails ("cannot find
+  binary path") and the lab can't start its relay. The lab ran with an
+  installed Node put first on PATH.
+- **Done:** the lab no longer needs Node. The relay is now a Rust program,
+  `//kestrel/tools/network_lab:relay` (`relay.mjs` is gone), with the same
+  flags, delays (the same seeded streams), `ready.json`/`stats.json` and
+  stop handshake, and unit and localhost UDP tests in `:relay_test`.
+  `network-lab.ps1 -Build` builds it next to the game; `-RelayPath` points
+  at one built elsewhere.
+- **Where:** `kestrel/tools/network_lab/`, `kestrel/tools/network-lab.ps1`.
+- **Found in:** the eight-player lab run.
 
 ### Find what stalls clients around a leave and rejoin at 75 ms
 

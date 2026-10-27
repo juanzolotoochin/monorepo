@@ -18,7 +18,7 @@ use super::combat::{Event, TossEnd};
 use super::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
 use super::action::{Action, View};
 use super::{AgentIx, DepotState, InventoryRef, ItemIx, Settlement};
-use crate::messages::{ActionMessages, CarryUnit, DropHaul, DropNotes, Messages, ReserveStock, RestartMemory, StockChange, Strike};
+use crate::messages::{ActionMessages, CarryUnit, DropHaul, DropNotes, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
 use crate::nav::{self, angle_between, distance};
 use crate::terrain::{Terrain, MAX_LAYERS};
 
@@ -183,7 +183,7 @@ pub struct AvatarState {
     /// An action this tick let go of the pile haul (`drop_haul`). Until
     /// stage 5 ends it, the haul neither steers the avatar nor moves units;
     /// stage 5 clears this, so it is never set between ticks and isn't
-    /// saved or hashed. A replayed avatar keeps it.
+    /// saved or hashed. A replay clears it too, ending its own copy of the haul.
     #[serde(skip)]
     pub dropped_haul: bool,
 }
@@ -454,13 +454,17 @@ impl Settlement {
 
     /// Commands: applies a player's action to their avatar (`act`). What it
     /// does to the world goes to `out`, which stage 5 applies
-    /// (`apply_actions`) and `AvatarReplay` never does.
+    /// (`apply_actions`) and `AvatarReplay` never does. A pile haul's lab
+    /// part (`StartHaul`) is the exception: it applies here, at once.
     pub(crate) fn act(&mut self, tick: u64, me: AgentIx, action: &Action, terrain: &Terrain, out: &mut ActionMessages) {
         // Only owned avatars get commands: commands never drive haulers.
         if !self.agents.get(me as usize).is_some_and(|a| a.avatar().is_some()) {
             return;
         }
         self.act_agent(tick, me, action, terrain, out);
+        for StartHaul { agent, start } in std::mem::take(&mut out.haul) {
+            self.piles.as_mut().expect("a haul starts only in the pile lab").start_haul(agent, start);
+        }
     }
 
     /// Applies an action to any agent (`action::act`), by its role: a
@@ -715,6 +719,11 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
             // Letting go releases held piano keys.
             out.drop_notes.push(DropNotes { agent: me, serial: view.piano_serial });
             release(body, avatar, transferring, view.hauling() && !avatar.dropped_haul);
+        }
+        Action::Haul { action, pace, approach } => {
+            if let Some(start) = super::piles::haul(body, carry, avatar, view, def.body.radius, action, pace, approach) {
+                out.haul.push(StartHaul { agent: me, start });
+            }
         }
         Action::Respawn => {
             // Respawning restarts the memory trial, closing its door again.
