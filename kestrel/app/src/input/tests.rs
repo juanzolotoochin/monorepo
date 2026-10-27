@@ -898,17 +898,19 @@ fn drop_proposes_a_point_ahead_and_pause_keeps_the_accepted_job() {
     assert!(!game.paused());
     game.frames(2);
     let preview = game.dispatcher().drop_preview.expect("carrying shows a drop preview");
+    // It names the mineral of the backpack's top unit.
+    let (top, _) = game.app.world().resource::<crate::piles::PileLab>().stock.as_ref().unwrap().cargo.top().unwrap();
     game.tap(1, Button::East);
     let drop = game.commands().into_iter().rev().find_map(|c| match c {
-        CommandKind::Pile { action: sim::settlement::piles::PileAction::Drop(p), .. } => Some(p),
+        CommandKind::Pile { action: sim::settlement::piles::PileAction::DropMineral(p, mineral), .. } => Some((p, mineral)),
         _ => None,
     });
     let service = game.service();
-    assert_eq!(drop, Some(service.to_sim(preview)));
+    assert_eq!(drop, Some((service.to_sim(preview), crate::piles::mineral_index(top) as u8)));
     // Whatever the simulation decides, one proposal was sent: a refusal
     // would report its reason, never retry elsewhere.
     game.seconds(4.0);
-    assert_eq!(game.count(|c| matches!(c, CommandKind::Pile { action: sim::settlement::piles::PileAction::Drop(_), .. })), 1);
+    assert_eq!(game.count(|c| matches!(c, CommandKind::Pile { action: sim::settlement::piles::PileAction::DropMineral(..), .. })), 1);
 }
 
 #[test]

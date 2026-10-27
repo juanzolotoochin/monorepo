@@ -10,13 +10,17 @@
 //!   version-1 variant. Version 1 logs still load: postcard names variants
 //!   by position, so their bytes decode the same way, and a version-1 log
 //!   that claims a newer command is refused as corrupt.
+//! - 3: adds `PileAction::DropMineral` (a drop that names its mineral),
+//!   appended after every older pile action, so older logs decode the same
+//!   way; one that claims it is refused as corrupt.
 
 use serde::{Deserialize, Serialize};
+use sim::settlement::piles::PileAction;
 use sim::{Command, CommandKind};
 
 use crate::LoadError;
 
-pub const INPUT_FORMAT_VERSION: u32 = 2;
+pub const INPUT_FORMAT_VERSION: u32 = 3;
 /// The oldest input log this build reads.
 pub const OLDEST_INPUT_FORMAT_VERSION: u32 = 1;
 const MAGIC: &[u8; 4] = b"GLOG";
@@ -69,6 +73,9 @@ impl InputLog {
         if found < 2 && log.turns.iter().flatten().any(|c| matches!(c.kind, CommandKind::ReleaseDirectControl { .. })) {
             return Err(crate::corrupt("a version 1 input log holds a command added in version 2"));
         }
+        if found < 3 && log.turns.iter().flatten().any(|c| matches!(c.kind, CommandKind::Pile { action: PileAction::DropMineral(..), .. })) {
+            return Err(crate::corrupt(format!("a version {found} input log holds a pile action added in version 3")));
+        }
         Ok(log)
     }
 }
@@ -95,8 +102,29 @@ mod tests {
     fn release_round_trips_in_the_current_version() {
         let written = log(vec![CommandKind::ReleaseDirectControl { agent: 2 }]);
         let bytes = written.to_bytes();
-        assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 2);
+        assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), INPUT_FORMAT_VERSION);
         assert_eq!(InputLog::from_bytes(&bytes).unwrap(), written);
+    }
+
+    fn pile(action: PileAction) -> CommandKind {
+        CommandKind::Pile { agent: 0, action, pace: Fx::ZERO, approach: None }
+    }
+
+    #[test]
+    fn a_named_drop_round_trips_in_the_current_version() {
+        let written = log(vec![pile(PileAction::DropMineral(FxVec2::new(Fx::ONE, Fx::ZERO), 2))]);
+        assert_eq!(InputLog::from_bytes(&written.to_bytes()).unwrap(), written);
+    }
+
+    /// A version-2 log, with the drop and delivery it knew, loads unchanged;
+    /// one that claims a named drop is refused.
+    #[test]
+    fn version_two_logs_still_load_without_named_drops() {
+        let at = FxVec2::new(Fx::ONE, Fx::ZERO);
+        let written = log(vec![pile(PileAction::Drop(at)), pile(PileAction::Deliver), CommandKind::ReleaseDirectControl { agent: 1 }]);
+        assert_eq!(InputLog::from_bytes(&with_version(written.to_bytes(), 2)).unwrap(), written);
+        let named = with_version(log(vec![pile(PileAction::DropMineral(at, 0))]).to_bytes(), 2);
+        assert!(matches!(InputLog::from_bytes(&named), Err(LoadError::Corrupt(_))));
     }
 
     /// A version-1 log is the same bytes under an older header: it loads
@@ -133,7 +161,7 @@ mod tests {
     #[test]
     fn newer_and_unknown_versions_are_refused() {
         let bytes = log(vec![]).to_bytes();
-        for version in [0, 3] {
+        for version in [0, INPUT_FORMAT_VERSION + 1] {
             assert_eq!(
                 InputLog::from_bytes(&with_version(bytes.clone(), version)).unwrap_err(),
                 LoadError::FormatVersion { found: version, expected: INPUT_FORMAT_VERSION }

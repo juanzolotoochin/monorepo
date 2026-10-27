@@ -35,9 +35,14 @@ impl Cargo {
     pub fn holds(&self, material: Mineral) -> bool {
         self.count(material) > 0
     }
-    /// The first mineral held: the one a drop puts down.
+    /// The first mineral held: the one a drop that names none puts down.
     pub fn first(&self) -> Option<(Mineral, u32)> {
         self.minerals.first().copied()
+    }
+    /// The mineral of the backpack's top unit (minerals in mineral order,
+    /// so the last held): the one the player's drop names.
+    pub fn top(&self) -> Option<(Mineral, u32)> {
+        self.minerals.last().copied()
     }
     /// The mineral drawn at backpack `slot`: minerals in mineral order.
     pub fn material_at(&self, slot: u32) -> Option<Mineral> {
