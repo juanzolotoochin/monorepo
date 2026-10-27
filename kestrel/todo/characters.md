@@ -17,27 +17,6 @@
   (`apply_commands`), `messages.rs` (`ActionMessages`).
 - **Found in:** ability prediction task 7 (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D3).
 
-## Follow a matched swing to its end
-
-- **Status:** open
-- **Why:** the local swing starts on the press and, once the drawn avatar
-  swings for it, takes that swing's stroke; then it plays on the view's own
-  clock (`combat::follow_drawn_swing`). So a matched swing the prediction
-  later withdraws plays out, and a confirmed sword or spear hit, which
-  shortens the simulated swing to the rebound in stage 5, isn't reflected
-  in the pose (the view rebounds only off its own obstacles). Ending a
-  matched swing when the drawn one ends would cut its recovery short,
-  since the press starts the view's swing a few ticks before the drawn
-  avatar's.
-- **What to do:** time a matched swing from the drawn swing (`started`,
-  `until`, `resolved`) at the drawn time, keeping the press's head start
-  only until the drawn swing shows, and end it when the drawn avatar no
-  longer swings.
-- **Where:** `kestrel/app/src/combat.rs` (`follow_drawn_swing`, `combat`,
-  `Attack`), `kestrel/app/src/gameplay.rs` (`Controls`).
-- **Found in:** ability prediction task 5, lasting effects from the drawn
-  state (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D5).
-
 ## Make the control snapshot read one avatar consistently
 
 - **Status:** open
@@ -179,6 +158,47 @@
 - **Found in:** threat characters (`kestrel/THREAT_CHARACTERS_HANDOFF.md`, D4).
 
 ## Done
+
+### Follow a matched swing to its end
+
+- **Status:** done (branch `kestrel-character-todos`)
+- **Why:** the local swing started on the press and, once the drawn avatar
+  swung for it, took that swing's stroke; then it played on the view's own
+  clock (`combat::follow_drawn_swing`). So a matched swing the prediction
+  later withdrew played out, and a confirmed sword or spear hit, which
+  shortens the simulated swing to the rebound in stage 5, wasn't reflected
+  in the pose (the view rebounded only off its own obstacles). Ending a
+  matched swing when the drawn one ends would cut its recovery short,
+  since the press starts the view's swing a few ticks before the drawn
+  avatar's.
+- **What to do:** time a matched swing from the drawn swing (`started`,
+  `until`, `resolved`) at the drawn time, keeping the press's head start
+  only until the drawn swing shows, and end it when the drawn avatar no
+  longer swings.
+- **Where:** `kestrel/app/src/combat.rs` (`follow_drawn_swing`, `combat`,
+  `Attack`), `kestrel/app/src/gameplay.rs` (`Controls`).
+- **Found in:** ability prediction task 5, lasting effects from the drawn
+  state (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D5).
+- **Done:** app only. `Attack::bound` became `matched` (the drawn swing's
+  `Swing::pressed`) plus `drawn_age`, the age the drawn swing has at the
+  drawn time. Before the match the press plays on the view's clock (its
+  head start). Once matched, `follow_drawn_swing` sets `drawn_age` every
+  frame and `combat` advances the age with `Attack::advanced`: the view's
+  own step, with its offset from `drawn_age` decaying over `CATCH_UP`
+  (0.12 s), never going back. A head start of a few ticks slows the swing
+  to roughly half speed for its first frames instead of popping it back;
+  it meets the drawn age well before the recovery. When the drawn swing is
+  resolved with hits and is a sword or spear swing, the view starts its
+  rebound from its current angle (`impact_angle`, age 0) and eases onto the
+  drawn rebound (`rebound_end` before `until`), with no hit stop or sparks
+  of its own (those stay with the confirmed `Hit`). A rebound off the
+  view's own obstacles plays on the view's clock. The matched swing ends
+  when the drawn avatar no longer has it (its `pressed` tick) or the drawn
+  time reaches its `until`, and a queued press swings next
+  (`combat::end_attack`). `Controls` didn't change. Tests in `combat.rs`:
+  `a_matched_swing_eases_onto_the_drawn_timing_and_ends_with_it`,
+  `a_withdrawn_swing_ends_and_the_queued_press_swings`,
+  `a_confirmed_hit_rebounds_the_pose`, `an_unmatched_press_plays_on_the_view_clock`.
 
 ### Draw a predicted arrow in flight
 

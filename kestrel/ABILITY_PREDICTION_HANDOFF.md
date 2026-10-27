@@ -150,7 +150,7 @@ local player's avatar on a joined client:
 | Dig pose | confirmed `dig` at the confirmed render time | drawn `dig` at the drawn time (`DrawnState::dig_age`) |
 | Dig bar, dust and chip sound | confirmed `dig` and position | drawn `dig` at the drawn time, over the drawn body (`digging::shown_digs`); others confirmed |
 | Layer-out burst and sound | confirmed terrain (stage 5) | unchanged: a world change |
-| Swing pose, whoosh, blade contact, swing HUD | the press (`Controls::strike`), the view's combo guess, and played even when the simulation refused the attack | still starts on the press; takes the drawn swing's stroke and combo once it shows; ends if the drawn avatar shows no swing or held press for it 2 ticks past its asked tick (`combat::follow_drawn_swing`) |
+| Swing pose, whoosh, blade contact, swing HUD | the press (`Controls::strike`), the view's combo guess, and played even when the simulation refused the attack | still starts on the press; takes the drawn swing's stroke and combo once it shows; ends if the drawn avatar shows no swing or held press for it 2 ticks past its asked tick (`combat::follow_drawn_swing`); since `kestrel-character-todos` a matched swing is timed from the drawn one at the drawn time (the press's head start eased out, never backward), rebounds on a confirmed sword or spear hit, and ends when the drawn avatar no longer swings it |
 | Weapon in hand | the selection (`Controls::weapon`) | unchanged: only offered weapons are selected and `Equip` is never refused |
 | Laser beam and sound | the ledger (`Keep`) | unchanged |
 | Bow sound | the ledger, early (task 4) | confirmed only; since `kestrel-character-todos` the ledger again, with a predicted arrow drawn in flight (D8) |
@@ -160,8 +160,9 @@ local player's avatar on a joined client:
 | Looping sounds | none: `sound.rs` cues are one-shots; the thrust repeats from `Flight` | covered by `Flight` |
 
 Remote players stay on confirmed, interpolated state (`peers`). A matched
-swing then plays on its own clock; see "Follow a matched swing to its end"
-in `todo/characters.md`.
+swing used to play on its own clock after taking the stroke; since
+`kestrel-character-todos` it follows the drawn swing to its end (done in
+"Follow a matched swing to its end", `todo/characters.md`).
 
 ### D6. Knockback has its own correction kind
 
