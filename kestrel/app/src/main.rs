@@ -37,6 +37,8 @@ mod settlement;
 mod sound;
 mod style;
 mod telemetry;
+mod vfx;
+mod vfx_stress;
 mod viewer;
 
 use bevy::prelude::*;
@@ -153,6 +155,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
     let fps = options.fps();
     let deterministic = simulation || options.script.is_some() || options.studio_frames.is_some();
     let menus = options.menus();
+    let stress = options.vfx_stress.clone();
     let mut app = App::new();
     // Development only: synthetic controllers replace native ones and play
     // a timed scenario (`--gamepad-script`, see `input::synthetic`).
@@ -237,6 +240,9 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
     if !simulation {
         app.add_plugins(bevy::pbr::MaterialPlugin::<atmosphere::GrassMaterial>::default());
         atmosphere::register_shader(&mut app);
+        // GPU particles (kestrel/VFX_SPIKE_HANDOFF.md): they need the renderer
+        // and compute shaders, so the web build uses WebGPU.
+        app.add_plugins(bevy_sprinkles::SprinklesPlugin);
     }
     app.add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default());
     // Routed input in every run; the egui debug overlay only in windowed
@@ -247,6 +253,11 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
             bevy::render::diagnostic::RenderDiagnosticsPlugin,
             bevy::render::diagnostic::MeshAllocatorDiagnosticPlugin,
         ));
+        // Debug only: the VFX spike's stress harness (`vfx_stress.rs`).
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(spec) = stress {
+            app.add_plugins(vfx_stress::StressPlugin(spec));
+        }
     }
     if deterministic {
         app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
@@ -270,7 +281,8 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .add_service::<input::InputService>()
         .add_service::<flow::Flow>()
         .add_service::<viewer::Viewer>()
-        .add_service::<telemetry::TelemetryPanels>();
+        .add_service::<telemetry::TelemetryPanels>()
+        .add_service::<vfx::Vfx>();
     if menus {
         app.add_service::<menu::MainMenu>().add_service::<pause::Pause>();
     }

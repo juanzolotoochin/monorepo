@@ -1,0 +1,114 @@
+# Effect files
+
+One RON file per visual effect, drawn by our fork of sprinkles
+(`kestrel/vfx/sprinkles`). This is the first version of the format, from the
+VFX spike (`kestrel/VFX_SPIKE_HANDOFF.md`); three effects use it so far
+(see "Files"). The loader is `app/src/vfx.rs`.
+
+## Where and why here
+
+The files live with the app, not in `kestrel/content/data/`: `content` is
+read by the simulation, and effects are view-only. Nothing in an effect file
+may change what the simulation computes or hashes. Files are compiled in
+with `include_str!` (list them in `vfx::FILES`); a bad file fails the
+`vfx::tests::every_effect_file_parses` test and panics at startup.
+
+## Format
+
+```ron
+(
+    version: 1,
+    particles: ( /* a sprinkles ParticlesAsset, sprinkles_version: "0.3" */ ),
+    lights: [
+        (color: (1.0, 0.38, 0.08), intensity: 18000.0, range: 4.5, radius: 0.15,
+         offset: 0.2, fade_seconds: 0.1),
+    ],
+)
+```
+
+- `version`: our format version, `1`.
+- `particles`: the particle layer, sprinkles' own `ParticlesAsset` schema
+  embedded as is (see `kestrel/vfx/sprinkles/src/asset/mod.rs`; colors there
+  are **linear** RGBA). It must set `despawn_on_finish: true`, and every
+  emitter `one_shot: true`: effects are bursts that end by themselves.
+- `lights`: point lights spawned with the particles, because GPU particles
+  can't light the scene. `color` is **sRGB**, `intensity` in lumens at the
+  start, `offset` in meters along the normal. The light fades out
+  quadratically over `fade_seconds`, then despawns.
+
+Unknown or misspelled fields are errors, in our layer and in the sprinkles
+asset (the fork denies unknown fields).
+
+## Placement
+
+An effect is triggered with a `vfx::Trigger` (`vfx::spawn`): a position and
+a normal, plus optional per-trigger parameters (below). The effect's local
++Y points along the normal, so emitters aim with
+`initial_direction: (0.0, 1.0, 0.0)`. Gravity, collisions and the floor are
+in world space. Every scene gets a floor collider at y = 0 for particles to
+bounce on (`ParticlesCollider3D` box; emitters opt in with `collision`).
+
+`vfx::spawn` may be called before transform propagation (in `Update`) or
+after it, before `bevy_sprinkles::SprinklesLateSetup` (in `PostUpdate`, for
+example at a posed weapon's muzzle); either way the effect draws that frame.
+
+## Trigger parameters
+
+Values the game gives when it triggers an effect, not stored in the file.
+The file says which emitters use them; they are our fork's additions to the
+sprinkles schema.
+
+| Trigger field | Meaning | Used by |
+|---|---|---|
+| `target` | A world-space point the effect reaches for. | `Segment` shape, `particles_per_meter`, `lifetime_to_target` |
+| `seed` | Every random choice (direction, size, lifetime, jitter). The same seed always draws the same burst. Each emitter mixes in its index. Without one, random per spawn (or the emitter's `fixed_seed`). | every emitter |
+| `scale` | Uniform size: positions, speeds, gravity and particle sizes (not lifetimes, not lights' range). Default 1. | every emitter |
+
+Emitter fields that read them:
+
+- `emission.shape: Segment(jitter: (x, y, z))`: particles spread evenly along
+  the line from the emitter to the target, particle `i` of `n` at
+  `(i + 0.5) / n`, each moved by a random offset within `jitter`
+  (half-extents, local space). Ignores `emission.offset` and `scale`.
+  Without a target, a point.
+- `emission.particles_per_meter: Some(9.0)`: with a target, a burst spawns
+  `ceil(distance × 9)` particles, at least one and at most
+  `particles_amount` (the cap; buffers are sized for it).
+- `time.lifetime_to_target: true`: each particle lives until it has
+  traveled from where it spawned to the target at its initial speed (a
+  bolt dies on arrival). `lifetime` is the cap. The burst ends after the
+  emitter-to-target trip at the slowest `initial_velocity`.
+- `velocities.world_bias: (x, y, z)`: a world-space vector added to every
+  spawn direction before it is normalized again; `(0.0, 0.46, 0.0)` makes a
+  spray lean upward however the effect is placed. Not a trigger value, but
+  world space.
+
+Gameplay timing stays in Rust. The laser's `effects::LaserBolt` still
+decides when a shot arrives (`CoverContacts`, the impact); `laser_bolt.ron`
+only draws it, and its arrival matches because both use the same speed.
+
+## Files
+
+- `impact_stone.ron`: a blade or dig hitting stone (`effects::impact`).
+  Seeded by the impact's number.
+- `arc.ron`: the arc coil's discharge (`effects::arc`): `Segment` from the
+  coil to the target, 9 cubes per meter.
+- `laser_bolt.ron`: the laser's bolt (`effects::emit_lasers`): one bar at
+  80 m/s with `lifetime_to_target`, placed at the muzzle with +Y toward the
+  target.
+
+The fork also applies `draw_pass.visibility_aabb` (upstream ignored it):
+the emitter is culled by that box around the emitter, so effects reaching
+far (arcs, bolts) need a box that big.
+
+## Trying it
+
+`--vfx sprinkles` (or Effects → VFX backend in the debug menu, `/`) draws
+effects from these files; `--vfx legacy` (the default) draws the
+hand-written ones in `effects.rs`. Runs without GPU particles (simulation,
+the web build for now) always use the legacy effects.
+
+## Planned
+
+Decals, live reload and a schema doc like `docs/character-definition.md`;
+see `kestrel/todo/vfx.md`.
