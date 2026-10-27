@@ -70,7 +70,10 @@ pub struct WaveState {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Threat {
     pub id: u64,
+    /// The wave that sent it: where it came from, not what it is.
     pub wave: u16,
+    /// What it is: its radius, attack, speed, health and breach damage.
+    pub character: content::character::CharacterIx,
     pub position: FxVec2,
     pub heading: Fx,
     pub travelled: Fx,
@@ -974,11 +977,12 @@ impl Settlement {
             if route.is_empty() {
                 continue;
             }
-            let (position, hp, armor) = (wave.position, wave.hp, wave.armor);
+            let (character, position, hp, armor) = (wave.character, wave.position, wave.hp, wave.armor);
             let id = self.id();
             self.threats.push(Threat {
                 id,
                 wave: w as u16,
+                character,
                 position,
                 heading: Fx::ZERO,
                 travelled: Fx::ZERO,

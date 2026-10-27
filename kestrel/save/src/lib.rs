@@ -60,7 +60,9 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 /// 19: a pile haul's units are a `CarryJob` on the avatar's `Carry`, held on
 ///     the pile or collector too; the lab's `PileJob` keeps the walk, with
 ///     `started` for `remaining`, and no `next_toss` or `destination`.
-pub const FORMAT_VERSION: u32 = 19;
+/// 20: threats keep their character (`Threat::character`); waves no longer
+///     copy its speed, health, armor or breach damage.
+pub const FORMAT_VERSION: u32 = 20;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 
@@ -259,6 +261,9 @@ fn remap_characters(saved: &Names, content: &Content, state: &mut WorldState) ->
     }
     for wave in &mut settlement.waves {
         wave.character = map(wave.character)?;
+    }
+    for threat in &mut settlement.threats {
+        threat.character = map(threat.character)?;
     }
     Ok(())
 }

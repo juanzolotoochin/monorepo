@@ -162,9 +162,11 @@ impl Arena {
     fn threat(&mut self, id: u64, x: f64, y: f64, hp: u32, armor: u32) {
         let (position, goal) = (self.at(x, y), self.at(0.0, -6.0));
         let s = self.s_mut();
+        let character = s.waves[0].character;
         s.threats.push(Threat {
             id,
             wave: 0,
+            character,
             position,
             heading: Fx::ZERO,
             travelled: Fx::ZERO,
@@ -1123,6 +1125,7 @@ fn brute_radius_follows_its_armor() {
     let mut brute = Threat {
         id: 900,
         wave: brutes as u16,
+        character: s.waves[brutes].character,
         position: FxVec2::ZERO,
         heading: Fx::ZERO,
         travelled: Fx::ZERO,

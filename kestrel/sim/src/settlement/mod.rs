@@ -841,6 +841,9 @@ impl Settlement {
         if let Some(w) = self.waves.iter().find(|w| !known(w.character)) {
             return Err(format!("wave {} has unknown character {}", w.id, w.character));
         }
+        if let Some(t) = self.threats.iter().find(|t| !known(t.character)) {
+            return Err(format!("threat {} has unknown character {}", t.id, t.character));
+        }
         self.characters = characters.to_vec();
         Ok(())
     }

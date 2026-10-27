@@ -153,6 +153,12 @@ step is one commit on `kestrel-threat-characters`.
      (`remap_characters`, `FORMAT_VERSION`), `combat_tests.rs` (`threat`
      helper, `brute_radius_follows_its_armor`), `app/src/settlement.rs`
      (`forest_with_a_ghoul`).
+   - Done in step 1: `Threat::character` beside `wave`, format 20.
+     `size_of::<Threat>()` is 144 before and after (measured with a local
+     `rustc` mirror of the struct). Golden: only the arena total columns
+     changed; the forest lines didn't, since its first wave spawns at tick
+     600 and the report stops at 599, so it never has a threat.
+     `testdata/*.hashes` unchanged.
 2. **Read the kind through the threat.** `threat_def` (D2) in
    `threat_radius`, `threat_attack` and `breach`; the per-character table
    and `follow_route` in stage 2 (D2, D4); the app's attack lookup.
