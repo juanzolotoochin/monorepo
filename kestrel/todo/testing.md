@@ -40,6 +40,23 @@
 - **Where:** `kestrel/session/src/lib.rs` (`two_players_walk_around_together`).
 - **Found in:** inventory step 3 (`kestrel/INVENTORY_HANDOFF.md`).
 
+## Stop the weapons demo's decapitation check hanging on strike timing
+
+- **Status:** open
+- **Why:** `combat_weapons.assertions.json` wants at least one decapitation,
+  but a sword hit decapitates on a 1-in-4 roll keyed on the tick
+  (`combat_roll` in `sim/src/settlement/combat.rs`). The demo's sword hits
+  land on ticks set by hard-coded waits and by how long the view's swing
+  lasts, so any change to swing timing can move them onto ticks that never
+  roll a decapitation. The matched-swing change did, and the waits were
+  lengthened by 2 frames to put the hits back.
+- **What to do:** make the check independent of the roll: more sword hits,
+  a scripted step that waits on the confirmed hit rather than the view's
+  swing, or a demo-only seed or tuning that makes a decapitation certain.
+- **Where:** `kestrel/app/demos/combat_weapons.json` and its
+  `.assertions.json`; `Pending::Strike` in `app/src/control/mod.rs`.
+- **Found in:** branch `kestrel-character-todos`, commit `14d1ea4`.
+
 ## Done
 
 ### App builds from Windows fail on the libxcb1 genrule
