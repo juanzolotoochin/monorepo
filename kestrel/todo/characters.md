@@ -17,30 +17,6 @@
   (`apply_commands`), `messages.rs` (`ActionMessages`).
 - **Found in:** ability prediction task 7 (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D3).
 
-## Draw a predicted arrow in flight
-
-- **Status:** open
-- **Why:** a client's own bow shot is presented only once confirmed, about
-  an input lead after the drawn avatar looses it, because the arrow is a
-  projectile in the confirmed world. Task 4 played the bow's sound early,
-  but sound an input lead before the arrow appears felt worse than late, so
-  task 5 made the bow confirmed-only again (`BowFired` is not in
-  `PRESENTED_EARLY`).
-- **What to do:** decide whether to draw a predicted arrow from `BowFired`
-  (it has no aim or speed yet) that hands over to the confirmed projectile,
-  or accept the gap. If it is drawn, add `"bow"` to `PRESENTED_EARLY`,
-  present the arrow with its `Cue::Bow` in `predict_events`, give the legacy
-  `BowFired` its agent back, and skip the matched confirmed shot's arrow and
-  sound in `settlement.rs` (`presented_early.next("bow")`). Ghouls hitting agents
-  (step 5) may change what a bow shot needs.
-- **Where:** `kestrel/app/src/event_prediction.rs` (`PRESENTED_EARLY`),
-  `kestrel/app/src/lockstep.rs` (`predict_events`), projectile
-  views in `kestrel/app/src/settlement.rs`, `kestrel/app/src/legacy.rs`,
-  `strike_event` in
-  `kestrel/sim/src/settlement/combat.rs`.
-- **Found in:** ability prediction task 4, the predicted-events ledger
-  (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D8).
-
 ## Follow a matched swing to its end
 
 - **Status:** open
@@ -203,6 +179,47 @@
 - **Found in:** threat characters (`kestrel/THREAT_CHARACTERS_HANDOFF.md`, D4).
 
 ## Done
+
+### Draw a predicted arrow in flight
+
+- **Status:** done (branch `kestrel-character-todos`)
+- **Why:** a client's own bow shot was presented only once confirmed, about
+  an input lead after the drawn avatar loosed it, because the arrow is a
+  projectile in the confirmed world. Task 4 played the bow's sound early,
+  but sound an input lead before the arrow appears felt worse than late, so
+  task 5 made the bow confirmed-only again (`BowFired` was not in
+  `PRESENTED_EARLY`).
+- **What to do:** draw a predicted arrow from `BowFired` (it had no aim or
+  speed) that hands over to the confirmed projectile, add `"bow"` to
+  `PRESENTED_EARLY`, present the arrow with its `Cue::Bow` in
+  `predict_events`, give the legacy `BowFired` its agent back, and skip the
+  matched confirmed shot's arrow and sound in `settlement.rs`
+  (`presented_early.next("bow")`).
+- **Where:** `kestrel/app/src/event_prediction.rs` (`PRESENTED_EARLY`),
+  `kestrel/app/src/lockstep.rs` (`predict_events`), projectile
+  views in `kestrel/app/src/settlement.rs`, `kestrel/app/src/legacy.rs`,
+  `strike_event` in
+  `kestrel/sim/src/settlement/combat.rs`.
+- **Found in:** ability prediction task 4, the predicted-events ledger
+  (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D8).
+- **Done:** the sim's `BowFired` carries its arrow's flight (`from`, `to`,
+  `height`, `flight` ticks), from the same `arrow_flight` the projectile is
+  built from, so `strike_event` now takes the weapon's tuning. Events aren't
+  state (not hashed or serialized); the golden file is unchanged. The legacy
+  `BowFired` carries its `agent` and the confirmed `projectile` it added.
+  `PRESENTED_EARLY` is laser, arc and bow. `predict_events` presents a
+  predicted shot as a `settlement::PredictedArrow` and plays `Cue::Bow` on
+  the same frame. `settlement.rs` draws an unconfirmed arrow as a projectile
+  view (`projectile/predicted/{id}`) on its own clock at
+  `PREDICTED_ARROW_PACE` (half) of the drawn time. A matched confirmed shot
+  plays no sound and its projectile takes the arrow over: the same rig (the
+  view is moved to `projectile/{id}`), drawn at the later of its confirmed
+  age and the arrow's paced age, so it never jumps back and meets the
+  confirmed flight after twice the input lead, before it can hit anything.
+  A shot that never confirms (expired or dropped by the ledger) withdraws
+  its arrow; an unconfirmed arrow that has come down, or one left after a
+  ledger reset, is dropped. A confirmed shot that differs (`Keep`) still
+  takes the arrow over, and snaps to the confirmed flight's line.
 
 ### Present the arc coil's shot early
 

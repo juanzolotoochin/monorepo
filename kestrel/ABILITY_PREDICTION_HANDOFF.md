@@ -153,7 +153,7 @@ local player's avatar on a joined client:
 | Swing pose, whoosh, blade contact, swing HUD | the press (`Controls::strike`), the view's combo guess, and played even when the simulation refused the attack | still starts on the press; takes the drawn swing's stroke and combo once it shows; ends if the drawn avatar shows no swing or held press for it 2 ticks past its asked tick (`combat::follow_drawn_swing`) |
 | Weapon in hand | the selection (`Controls::weapon`) | unchanged: only offered weapons are selected and `Equip` is never refused |
 | Laser beam and sound | the ledger (`Keep`) | unchanged |
-| Bow sound | the ledger, early (task 4) | confirmed only, until a predicted arrow is drawn (`todo/characters.md`) |
+| Bow sound | the ledger, early (task 4) | confirmed only; since `kestrel-character-todos` the ledger again, with a predicted arrow drawn in flight (D8) |
 | Holding repair | no avatar visual; the cover rebuilds in stage 5; the prompt follows the drawn body | unchanged |
 | Carried units, units in flight, transfer job | pile lab state and tosses, stage 5 | unchanged (D1) |
 | Hits, flinches, hit stop on the avatar | confirmed `Hit` (stage 5) | unchanged |
@@ -266,10 +266,14 @@ frame's confirmed events, expires (`TIMEOUT_TICKS`, 10), then presents the
 replay's new events: a laser shot as before. The
 app presents `PRESENTED_EARLY` (laser, and since `kestrel-character-todos` the
 arc coil: a matched confirmed shot still starts its hits' chain, `ArcChain` in
-`settlement.rs`). The bow's stays
-confirmed-only (`todo/characters.md`): task 4 presented the bow's sound
+`settlement.rs`), and the bow. Task 4 presented the bow's sound
 early, but the arrow is confirmed world state, so the sound came an input
-lead before the arrow; task 5 took it back out. A matched confirmed event is skipped
+lead before the arrow; task 5 took it back out. Since
+`kestrel-character-todos` the bow's `BowFired` carries its arrow's flight,
+and a predicted shot draws its arrow in flight with its sound
+(`settlement::PredictedArrows`): at half pace until the matched confirmed
+projectile takes the arrow's rig over, never drawn further back, and
+withdrawn if the shot never confirms. A matched confirmed event is skipped
 (`Confirmations`, read by `settlement.rs`); an event is exact if it equals
 the confirmed one but for `started`. On a miss, `Cancel` asks
 `stop_presented` to stop it, and a `Cancel` event that confirmed

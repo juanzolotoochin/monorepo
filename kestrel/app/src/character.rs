@@ -288,6 +288,7 @@ impl service::Service for Avatar {
             .init_resource::<crate::prediction::DrawnAvatar>()
             .init_resource::<crate::effects::PendingLasers>()
             .init_resource::<crate::effects::PendingArcs>()
+            .init_resource::<crate::settlement::PredictedArrows>()
             .add_service_systems::<Self, _>(Phase::Mirror, crate::lockstep::follow_avatar.run_if(active.clone()))
             .add_service_systems::<Self, _>(
                 Phase::Present,

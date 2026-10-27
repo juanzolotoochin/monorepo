@@ -338,6 +338,28 @@ fn ranged_attacks_follow_the_aimed_line_instead_of_seeking_a_threat() {
     assert!(arena.s().events.iter().any(|e| matches!(e, Event::ArcFired { .. })));
 }
 
+/// A bow shot's event says where its arrow flies, as the projectile it adds
+/// does, so a client can draw the arrow before the projectile is confirmed.
+#[test]
+fn a_bow_shot_event_carries_its_arrows_flight() {
+    let mut arena = Arena::combat(&[]);
+    let aside = FxVec2::new(fx(0.6), fx(2.0)).normalize_or_zero();
+    let tick = arena.tick();
+    assert_eq!(arena.attack_toward(Weapon::Bow, aside), 1);
+    let arrow = arena.s().projectiles.last().unwrap().clone();
+    let fired: Vec<_> = arena.s().events.iter().filter(|e| matches!(e, Event::BowFired { .. })).cloned().collect();
+    assert_eq!(fired, [Event::BowFired {
+        agent: arena.player as u16,
+        from: arrow.from,
+        to: arrow.to,
+        height: arrow.launch_height,
+        flight: arrow.arrival - arrow.born,
+        started: tick,
+    }]);
+    assert_eq!(arrow.born, tick);
+    assert!(arrow.arrival > arrow.born);
+}
+
 #[test]
 fn rock_blocks_melee_and_defender_shots() {
     let mut arena = Arena::combat(&[Disc { center: FxVec2::new(Fx::ZERO, fx(0.65)), radius: fx(0.15) }]);
