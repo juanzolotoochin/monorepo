@@ -20,7 +20,7 @@ pub type CharacterIx = u16;
 pub enum Brain {
     /// Driven by a player's commands.
     Player,
-    /// Walks its wave's route to the target and breaches.
+    /// A threat: walks the route its wave planned to the target and breaches.
     FollowRoute,
     /// Carries goods along its haul links.
     Hauler,

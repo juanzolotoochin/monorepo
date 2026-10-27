@@ -848,8 +848,9 @@ impl Settlement {
 
     /// A hash of what the settlement does: where agents, threats and
     /// projectiles are, what they carry and how healthy they are, stock and
-    /// metrics. It leaves out definition references and tuning copied into
-    /// state, so moving definitions around keeps it while `hash_into` changes.
+    /// metrics. It leaves out definition references (agents', waves' and
+    /// `Threat::character`) and tuning copied into state, so moving
+    /// definitions around keeps it while `hash_into` changes.
     pub fn behaviour_digest(&self) -> u64 {
         let agents: Vec<_> = self
             .agents

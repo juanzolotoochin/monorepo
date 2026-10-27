@@ -1151,6 +1151,80 @@ fn brute_radius_follows_its_armor() {
     assert!(body < plated);
 }
 
+// Threats as characters (THREAT_CHARACTERS_HANDOFF.md, step 4).
+
+/// Every arena threat is its wave's character and spawns with that
+/// character's hp and armor.
+#[test]
+fn threats_carry_their_waves_character() {
+    let scenario = Scenario::parse(ARENA).unwrap();
+    let world = World::new_settlement(9, &test_content(), &scenario, &[]).unwrap();
+    let mut sim = Simulation::from_world(world, 1);
+    let (mut seen, mut brutes) = (std::collections::BTreeSet::new(), 0);
+    for _ in 0..ms(60_000) {
+        sim.step(&[]);
+        let s = sim.world().settlement().unwrap();
+        for t in &s.threats {
+            assert_eq!(t.character, s.waves[t.wave as usize].character, "threat {}", t.id);
+            if seen.insert(t.id) {
+                let health = s.characters[t.character as usize].health.as_ref().unwrap();
+                let armor = health.armor.as_ref().map_or(0, |a| a.points);
+                assert_eq!((t.hp, t.armor), (health.hp, armor), "threat {} spawns whole", t.id);
+                brutes += (armor > 0) as u32;
+            }
+        }
+        if s.waves.iter().all(|w| w.spawned > 0) {
+            break;
+        }
+    }
+    assert!(sim.world().settlement().unwrap().waves.iter().all(|w| w.spawned > 0), "every wave spawned");
+    assert!(brutes > 0, "a brute spawned");
+}
+
+/// A brute sent by the ghoul wave is plated, walks at the brute's speed and
+/// breaches for the brute's damage: no tuning comes through the wave.
+#[test]
+fn threat_tuning_follows_its_character_not_its_wave() {
+    let mut arena = Arena::combat(&[]);
+    let brute = test_content().names.character_index("ghoul_brute").unwrap();
+    let s = arena.s_mut();
+    assert_ne!(s.waves[0].character, brute);
+    let def = &mut s.characters[brute as usize];
+    def.movement.walk = fx(1.0);
+    let health = def.health.as_mut().unwrap();
+    health.breach_damage = 3;
+    let (hp, armor, plated) = (health.hp, health.armor.as_ref().unwrap().points, health.armor.as_ref().unwrap().radius);
+    arena.threat(900, 0.0, 1.0, hp, armor);
+    arena.s_mut().threats[0].character = brute;
+
+    let s = arena.s();
+    assert_eq!(s.threat_radius(&s.threats[0]), plated);
+    let start = arena.y(900);
+    arena.step(ms(1000));
+    let walked = start - arena.y(900);
+    assert!((walked - fx(1.0)).abs() < fx(0.03), "the brute walks at its own 1 m/s: {walked}");
+
+    let before = arena.s().health;
+    arena.s_mut().threats[0].route.clear();
+    arena.step(1);
+    assert!(arena.s().threat(900).is_none());
+    assert_eq!(before - arena.s().health, 3);
+}
+
+/// A wave's character must walk its route.
+#[test]
+fn a_wave_must_send_a_follow_route_character() {
+    let mut config = combat_scenario(vec![]);
+    config.waves[0].character = "test_hauler".into();
+    let error = World::new_settlement(1, &test_content(), &config, &[]).err().expect("a hauler wave is rejected");
+    assert!(error.contains("wave standard") && error.contains("FollowRoute"), "{error}");
+}
+
+#[test]
+fn threat_size_is_pinned() {
+    assert_eq!(std::mem::size_of::<Threat>(), 144);
+}
+
 // Ghouls hitting players in passing (GHOUL_ATTACK_HANDOFF.md, task 3). The
 // test ghouls inherit the base ghoul's `attack`.
 

@@ -1,6 +1,6 @@
 # Kestrel threat characters (design)
 
-Status: planned (branch `kestrel-threat-characters`). Part of character step 5 ([character definitions](docs/character-definition.md)).
+Status: done (branch `kestrel-threat-characters`, steps 1–4). Part of character step 5 ([character definitions](docs/character-definition.md)).
 
 ## Goal
 
@@ -197,6 +197,18 @@ step is one commit on `kestrel-threat-characters`.
    comment ("Walks its wave's route": the threat walks the route its wave
    planned), the `behaviour_digest` comment, the todo above, "Done in step
    N" notes here. Run the full suite once. Add the `docs/test-time.md` row.
+   - Done in step 4: in `combat_tests.rs`,
+     `threats_carry_their_waves_character`,
+     `threat_tuning_follows_its_character_not_its_wave` (the test brute's
+     walk and breach damage are set apart from the test ghoul's, since the
+     builtin brute breaches for 1 like a ghoul),
+     `a_wave_must_send_a_follow_route_character` and
+     `threat_size_is_pinned` (144); in `settlement/tests.rs`,
+     `set_characters_rejects_an_unknown_threat_character`; in
+     `save/src/tests.rs`, `settlement_characters_remap_by_name` steps the
+     forest until a threat exists. Docs and the todo as planned. The full
+     suite (`--build_tests_only //kestrel/...`) passed, 24 of 24; the app
+     needed no fixes.
 
 ## Tests
 
