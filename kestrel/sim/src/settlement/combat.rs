@@ -10,7 +10,7 @@
 //!   finds the swings that start or land, stage 5 hurts and pushes players.
 //! - Waves spawn, spent arrows fade and pinned bodies land in housekeeping.
 
-use content::character::AttackDef;
+use content::character::{AttackDef, CharacterDef};
 use content::scenario::{ticks_from_60hz, ProjectileKind, Weapon, WeaponTuning};
 use content::TICKS_PER_SECOND;
 use fx::{Fx, FxVec2};
@@ -47,6 +47,37 @@ pub fn combat_roll(tick: u64, entity: u64, stream: u64) -> u64 {
     x ^ (x >> 31)
 }
 
+/// The `FollowRoute` brain, a threat's stage 2: a shock freezes it, a
+/// stagger slides it back, a windup plants it, and otherwise it walks its
+/// route at `speed` meters per tick, slower once below `full_hp`. Returns
+/// the meters knockback moved it.
+fn follow_route(t: &mut Threat, speed: Fx, full_hp: u32, tick: u64, terrain: &Terrain) -> Fx {
+    let previous = t.position;
+    let recoiling = tick < t.stagger_until;
+    let mut knocked = Fx::ZERO;
+    if tick < t.shocked_until {
+        // The coil freezes the whole body, then the route resumes.
+    } else if recoiling {
+        let next = t.position + t.knockback.div_int(content::TICKS_PER_SECOND as i64);
+        if terrain.clear(t.position, next, Fx::from_ratio(1, 5)) {
+            t.position = next;
+            knocked = distance(previous, next);
+        }
+        t.knockback = t.knockback * KNOCKBACK_DECAY;
+    } else if t.windup.is_some() {
+        // Planted for the swing; the route resumes after it lands.
+    } else {
+        let wounded = if t.hp < full_hp { Fx::from_ratio(11, 20) } else { Fx::ONE };
+        super::haulers::move_route(&mut t.position, &mut t.route, speed * wounded);
+    }
+    let moved = distance(previous, t.position);
+    t.travelled += moved;
+    if moved > Fx::ZERO && !recoiling {
+        t.heading = nav::bearing(previous, t.position);
+    }
+    knocked
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WaveState {
     pub id: String,
@@ -56,11 +87,6 @@ pub struct WaveState {
     pub target: FxVec2,
     pub first: u64,
     pub every: u64,
-    /// Meters per tick.
-    pub speed: Fx,
-    pub hp: u32,
-    pub armor: u32,
-    pub damage: u32,
     pub count: u32,
     pub spawned: u32,
     /// Every enemy of a wave follows the same planned route.
@@ -70,7 +96,10 @@ pub struct WaveState {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Threat {
     pub id: u64,
+    /// The wave that sent it: where it came from, not what it is.
     pub wave: u16,
+    /// What it is: its radius, attack, speed, health and breach damage.
+    pub character: content::character::CharacterIx,
     pub position: FxVec2,
     pub heading: Fx,
     pub travelled: Fx,
@@ -371,7 +400,7 @@ impl Settlement {
     /// A threat's collision radius: its character's armor radius while
     /// plating is left, its body radius once it breaks.
     pub(super) fn threat_radius(&self, t: &Threat) -> Fx {
-        let def = &self.characters[self.waves[t.wave as usize].character as usize];
+        let def = self.threat_def(t);
         match def.health.as_ref().and_then(|h| h.armor.as_ref()) {
             Some(armor) if t.armor > 0 => armor.radius,
             _ => def.body.radius,
@@ -386,38 +415,29 @@ impl Settlement {
         self.threats.binary_search_by_key(&id, |t| t.id).ok()
     }
 
-    /// Stage 2: every threat moves itself.
+    /// A threat's character definition.
+    pub(super) fn threat_def(&self, t: &Threat) -> &CharacterDef {
+        &self.characters[t.character as usize]
+    }
+
+    /// Stage 2: every threat moves itself. Every threat's brain is
+    /// `FollowRoute`, so each runs `follow_route`.
     pub(crate) fn threats_self_update(&mut self, tick: u64, terrain: &Terrain) {
-        let waves = &self.waves;
+        // Speed in meters per tick and full hp, by character: one division
+        // per character rather than per threat. The division is the one waves
+        // used, so speeds stay bit-equal.
+        let per_second = Fx::from_int(content::TICKS_PER_SECOND);
+        let tuning: Vec<(Fx, u32)> = self
+            .characters
+            .iter()
+            .map(|def| (def.movement.walk / per_second, def.health.as_ref().map_or(0, |h| h.hp)))
+            .collect();
         let knockback_moved: Fx = self
             .threats
             .par_iter_mut()
             .map(|t| {
-                let wave = &waves[t.wave as usize];
-                let previous = t.position;
-                let recoiling = tick < t.stagger_until;
-                let mut knocked = Fx::ZERO;
-                if tick < t.shocked_until {
-                    // The coil freezes the whole body, then the route resumes.
-                } else if recoiling {
-                    let next = t.position + t.knockback.div_int(content::TICKS_PER_SECOND as i64);
-                    if terrain.clear(t.position, next, Fx::from_ratio(1, 5)) {
-                        t.position = next;
-                        knocked = distance(previous, next);
-                    }
-                    t.knockback = t.knockback * KNOCKBACK_DECAY;
-                } else if t.windup.is_some() {
-                    // Planted for the swing; the route resumes after it lands.
-                } else {
-                    let wounded = if t.hp < wave.hp { Fx::from_ratio(11, 20) } else { Fx::ONE };
-                    super::haulers::move_route(&mut t.position, &mut t.route, wave.speed * wounded);
-                }
-                let moved = distance(previous, t.position);
-                t.travelled += moved;
-                if moved > Fx::ZERO && !recoiling {
-                    t.heading = nav::bearing(previous, t.position);
-                }
-                knocked
+                let (speed, full_hp) = tuning[t.character as usize];
+                follow_route(t, speed, full_hp, tick, terrain)
             })
             .reduce(|| Fx::ZERO, |a, b| a + b);
         self.combat.knockback_meters += knockback_moved;
@@ -475,7 +495,7 @@ impl Settlement {
 
     /// How a threat hits players, if its character does.
     fn threat_attack(&self, t: &Threat) -> Option<AttackDef> {
-        self.characters[self.waves[t.wave as usize].character as usize].attack
+        self.threat_def(t).attack
     }
 
     /// Stage 3: whether a threat's swing landing now reaches `agent`, alive,
@@ -911,7 +931,8 @@ impl Settlement {
     pub(crate) fn breach(&mut self, message: Breach) {
         let Some(i) = self.threat_index(message.threat) else { return };
         let t = self.threats.remove(i);
-        self.health = self.health.saturating_sub(self.waves[t.wave as usize].damage);
+        let damage = self.threat_def(&t).health.as_ref().map_or(0, |h| h.breach_damage);
+        self.health = self.health.saturating_sub(damage);
         self.combat.breaches += 1;
         self.events.push(Event::Breach { position: t.position });
     }
@@ -974,11 +995,14 @@ impl Settlement {
             if route.is_empty() {
                 continue;
             }
-            let (position, hp, armor) = (wave.position, wave.hp, wave.armor);
+            let (character, position) = (wave.character, wave.position);
+            let health = self.characters[character as usize].health.as_ref().expect("a wave sends a FollowRoute character");
+            let (hp, armor) = (health.hp, health.armor.as_ref().map_or(0, |a| a.points));
             let id = self.id();
             self.threats.push(Threat {
                 id,
                 wave: w as u16,
+                character,
                 position,
                 heading: Fx::ZERO,
                 travelled: Fx::ZERO,

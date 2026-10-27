@@ -394,6 +394,37 @@ fn forest_supply_runs_and_its_balances_hold() {
     assert!(s.agents.iter().filter_map(|a| a.hauler()).all(|h| h.phase != Phase::Attaching));
 }
 
+/// Loading rules checks threats' characters as it does agents' and waves'.
+#[test]
+fn set_characters_rejects_an_unknown_threat_character() {
+    let scenario = Scenario::parse(FOREST).unwrap();
+    let mut sim = world(&scenario, &[]);
+    let characters = test_content().rules.characters;
+    let s = sim.world_mut().settlement_mut();
+    s.set_characters(&characters).unwrap();
+    let wave = &s.waves[0];
+    let threat = super::Threat {
+        id: 900,
+        wave: 0,
+        character: characters.len() as u16,
+        position: wave.position,
+        heading: Fx::ZERO,
+        travelled: Fx::ZERO,
+        hp: 1,
+        armor: 0,
+        pierced: false,
+        shocked_until: 0,
+        route: vec![wave.target],
+        stagger_until: 0,
+        knockback: FxVec2::ZERO,
+        windup: None,
+        ready_at: 0,
+    };
+    s.threats.push(threat);
+    let error = s.set_characters(&characters).unwrap_err();
+    assert!(error.contains("threat 900 has unknown character"), "{error}");
+}
+
 #[test]
 fn settlements_are_deterministic_across_thread_counts() {
     let scenario = Scenario::parse(FOREST).unwrap();

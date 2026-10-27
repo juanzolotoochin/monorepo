@@ -172,13 +172,23 @@ fn settlement_characters_remap_by_name() {
     let content = Content::builtin();
     let text = include_str!("../../app/assets/levels/forest_supply.ron");
     let scenario = content::scenario::Scenario::parse(text).unwrap();
-    let world = sim::World::new_settlement(5, &content, &scenario, &[]).unwrap();
-    let bytes = write(&world, &content);
-    let wave_names = |world: &sim::World, content: &Content| -> Vec<String> {
+    let mut running = Simulation::from_world(sim::World::new_settlement(5, &content, &scenario, &[]).unwrap(), 2);
+    for _ in 0..2_000 {
+        if !running.world().settlement().unwrap().threats.is_empty() {
+            break;
+        }
+        running.step(&[]);
+    }
+    let world = running.world();
+    assert!(!world.settlement().unwrap().threats.is_empty(), "a threat is saved");
+    let bytes = write(world, &content);
+    // Waves' characters, then threats'.
+    let character_names = |world: &sim::World, content: &Content| -> Vec<String> {
         let s = world.settlement().unwrap();
-        s.waves.iter().map(|w| content.names.characters[w.character as usize].clone()).collect()
+        let name = |ix: u16| content.names.characters[ix as usize].clone();
+        s.waves.iter().map(|w| name(w.character)).chain(s.threats.iter().map(|t| name(t.character))).collect()
     };
-    let saved = wave_names(&world, &content);
+    let saved = character_names(world, &content);
 
     // A character sorting first shifts every index by one.
     let mut sources = content::builtin_sources();
@@ -186,7 +196,7 @@ fn settlement_characters_remap_by_name() {
     sources.push(("character/aaa.ron".to_string(), first.to_string()));
     let shifted = Content::from_sources(sources).unwrap();
     let loaded = read(&bytes, &shifted).unwrap();
-    assert_eq!(wave_names(&loaded, &shifted), saved);
+    assert_eq!(character_names(&loaded, &shifted), saved);
     assert_eq!(loaded.settlement().unwrap().characters, shifted.rules.characters, "rules restored on load");
 
     let without: Vec<_> = content::builtin_sources().into_iter().filter(|(path, _)| path != "character/ghoul_forest.ron").collect();

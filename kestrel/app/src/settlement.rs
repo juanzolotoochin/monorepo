@@ -1120,9 +1120,11 @@ mod tests {
         let center = world.terrain().center;
         let mut s = world.settlement().unwrap().clone();
         let position = s.agents[0].body.position + FxVec2::new(Fx::from_ratio(1, 2), Fx::ZERO);
+        let character = s.waves[0].character;
         s.threats.push(sim::settlement::Threat {
             id: 7,
             wave: 0,
+            character,
             position,
             heading: Fx::ZERO,
             travelled: Fx::ZERO,

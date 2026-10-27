@@ -391,7 +391,9 @@ impl Settlement {
             .map(|w| {
                 let ix = character(&w.character)?;
                 let def = &content.rules.characters[ix as usize];
-                let health = def.health.as_ref().ok_or_else(|| format!("wave {} sends {:?}, which has no health", w.id, w.character))?;
+                if def.brain != Brain::FollowRoute {
+                    return Err(format!("wave {} sends {:?}, a {:?} character; it needs a {:?} one", w.id, w.character, def.brain, Brain::FollowRoute));
+                }
                 Ok(WaveState {
                     id: w.id.clone(),
                     character: ix,
@@ -399,10 +401,6 @@ impl Settlement {
                     target: at(w.target),
                     first: (w.first * per_second).round().floor_to_int().max(1) as u64,
                     every: scenario::ticks(w.every),
-                    speed: def.movement.walk / per_second,
-                    hp: health.hp,
-                    armor: health.armor.as_ref().map_or(0, |a| a.points),
-                    damage: health.breach_damage,
                     count: w.count,
                     spawned: 0,
                     route: None,
@@ -841,14 +839,18 @@ impl Settlement {
         if let Some(w) = self.waves.iter().find(|w| !known(w.character)) {
             return Err(format!("wave {} has unknown character {}", w.id, w.character));
         }
+        if let Some(t) = self.threats.iter().find(|t| !known(t.character)) {
+            return Err(format!("threat {} has unknown character {}", t.id, t.character));
+        }
         self.characters = characters.to_vec();
         Ok(())
     }
 
     /// A hash of what the settlement does: where agents, threats and
     /// projectiles are, what they carry and how healthy they are, stock and
-    /// metrics. It leaves out definition references and tuning copied into
-    /// state, so moving definitions around keeps it while `hash_into` changes.
+    /// metrics. It leaves out definition references (agents', waves' and
+    /// `Threat::character`) and tuning copied into state, so moving
+    /// definitions around keeps it while `hash_into` changes.
     pub fn behaviour_digest(&self) -> u64 {
         let agents: Vec<_> = self
             .agents

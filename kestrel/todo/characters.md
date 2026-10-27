@@ -275,6 +275,19 @@
   `app/src/input/gameplay.rs`.
 - **Found in:** inventory step 7 (`kestrel/INVENTORY_HANDOFF.md`, Decisions).
 
+## Let threat brains pick actions
+
+- **Status:** open
+- **Why:** threats move themselves in stage 2 (`follow_route`), outside the
+  action vocabulary players and haulers share. A route follower decides
+  nothing a player would, so that is fine for now.
+- **What to do:** when a hunter brain (or possessing a threat) lands, give
+  threats `Move` through a threat `act`, and dispatch stage 2 on
+  `threat_def(t).brain`.
+- **Where:** `kestrel/sim/src/settlement/combat.rs` (`follow_route`,
+  `threats_self_update`), `action.rs`.
+- **Found in:** threat characters (`kestrel/THREAT_CHARACTERS_HANDOFF.md`, D4).
+
 ## Done
 
 ### Keep a player's health over the Respawn action
