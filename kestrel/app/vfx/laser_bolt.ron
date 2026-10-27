@@ -1,0 +1,46 @@
+// The laser's bolt: a 0.65 m red bar flying from the muzzle to the target at
+// 80 m/s, gone on arrival. Port of the hand-written bolt in
+// `effects::emit_lasers` (VFX spike step 3). The format is in README.md.
+//
+// Triggered at the muzzle with +Y toward the target, the target, and the
+// shot's seed. Gameplay timing stays in Rust: `effects::LaserBolt` still
+// decides when the bolt arrives, releases the cover and fires the impact.
+(
+    version: 1,
+    particles: (
+        sprinkles_version: "0.3",
+        name: "laser_bolt",
+        dimension: D3,
+        despawn_on_finish: true,
+        emitters: [
+            (
+                name: "bolt",
+                // The bar's front starts 0.18 m past the muzzle, as before (its
+                // center 0.18 - 0.325 m along +Y); the rest hides in the gun.
+                initial_transform: (translation: (0.0, -0.145, 0.0)),
+                // Lives as long as the trip to the target takes; 1 s caps it (80 m).
+                time: (lifetime: 1.0, one_shot: true, explosiveness: 1.0, lifetime_to_target: true),
+                draw_pass: (
+                    mesh: Cuboid(half_size: (0.06, 0.325, 0.06)),
+                    material: Standard((
+                        // sRGB (1.0, 0.025, 0.02) in linear.
+                        base_color: (1.0, 0.0019, 0.0015, 1.0),
+                        emissive: (12.0, 0.08, 0.05, 1.0),
+                        unlit: true,
+                    )),
+                    transform_align: Some(YToVelocity),
+                    shadow_caster: false,
+                    visibility_aabb: (center: (0.0, 0.0, 0.0), half_extents: (80.0, 80.0, 80.0)),
+                ),
+                emission: (particles_amount: 1),
+                scale: (range: (min: 1.0, max: 1.0)),
+                velocities: (
+                    initial_direction: (0.0, 1.0, 0.0),
+                    spread: 0.0,
+                    initial_velocity: (min: 80.0, max: 80.0),
+                ),
+                accelerations: (gravity: (0.0, 0.0, 0.0)),
+            ),
+        ],
+    ),
+)

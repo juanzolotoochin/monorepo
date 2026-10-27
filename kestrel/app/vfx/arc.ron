@@ -1,0 +1,53 @@
+// The arc coil's discharge: a jittered chain of glowing blue cubes from the
+// coil to what it hit, gone in 0.13 s. Port of the hand-written
+// `effects::arc` (VFX spike step 3). The format is in README.md.
+//
+// Triggered at the line's start with the line's end as the target; the seed
+// is the arc's (the tick, or the struck agent for a chained hit).
+(
+    version: 1,
+    particles: (
+        sprinkles_version: "0.3",
+        name: "arc",
+        dimension: D3,
+        despawn_on_finish: true,
+        emitters: [
+            (
+                name: "segments",
+                time: (lifetime: 0.13, one_shot: true, explosiveness: 1.0),
+                draw_pass: (
+                    // A unit cube, sized by `scale`: 4.5 to 8 cm.
+                    mesh: Cuboid(half_size: (0.5, 0.5, 0.5)),
+                    material: Standard((
+                        // The crystal spark glow: sRGB (0.18, 0.65, 1.0) in
+                        // linear, glowing 12x for bloom.
+                        base_color: (0.0272, 0.38, 1.0, 1.0),
+                        emissive: (2.16, 7.8, 12.0, 1.0),
+                    )),
+                    // Arcs reach across the arena.
+                    visibility_aabb: (center: (0.0, 0.0, 0.0), half_extents: (30.0, 30.0, 30.0)),
+                ),
+                // Nine per meter along the line, ±6 cm off it on each axis.
+                emission: (
+                    shape: Segment(jitter: (0.06, 0.06, 0.06)),
+                    particles_amount: 270,
+                    particles_per_meter: Some(9.0),
+                ),
+                scale: (range: (min: 0.045, max: 0.08), scale_over_lifetime: Some((
+                    name: Some("Shrink"),
+                    // (1 - t)^0.65, sampled.
+                    x: (points: [
+                        (position: 0.0, value: 1.0, mode: SingleCurve),
+                        (position: 0.25, value: 0.83, mode: SingleCurve),
+                        (position: 0.5, value: 0.64, mode: SingleCurve),
+                        (position: 0.75, value: 0.41, mode: SingleCurve),
+                        (position: 0.9, value: 0.22, mode: SingleCurve),
+                        (position: 1.0, value: 0.0, mode: SingleCurve),
+                    ], range: (min: 0.0, max: 1.0)),
+                ))),
+                velocities: (spread: 0.0),
+                accelerations: (gravity: (0.0, 0.0, 0.0)),
+            ),
+        ],
+    ),
+)
