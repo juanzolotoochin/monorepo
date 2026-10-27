@@ -382,8 +382,8 @@ used slots" come after the blood port.
 
 ## Draw all live bursts of an effect emitter in one draw
 
-- **Status:** done as a prototype (branch `kestrel-vfx-spike`, PR not
-  opened yet)
+- **Status:** done as a prototype
+  (https://github.com/juanzolotoochin/monorepo/pull/126)
 - **Why:** sprinkles made every burst's every emitter its own mesh entity
   with its own material, so each was its own bin in every view. At 200
   impacts/s the Deck took 89 ms a frame against legacy's 9.9.
