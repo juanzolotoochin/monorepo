@@ -77,10 +77,26 @@ pub enum PileAction {
     Pickup(PileId),
     PickupAmount(PileId, u32),
     Deposit(PileId),
-    /// Starts a new pile here.
+    /// Starts a new pile here, of the first mineral carried (in mineral
+    /// order). Kept for input logs from before `DropMineral`.
     Drop(FxVec2),
-    /// Empties the cargo into the collector.
+    /// Empties the cargo into the collector, every mineral: the collector
+    /// takes any mix, so there is nothing to choose.
     Deliver,
+    /// Starts a new pile here of the mineral named (`crate::mine`'s
+    /// numbering), all of it carried. Appended after every other action,
+    /// so older input logs decode unchanged (input format 3).
+    DropMineral(FxVec2, u8),
+}
+
+impl PileAction {
+    /// Where a drop starts its pile.
+    pub fn drop_position(self) -> Option<FxVec2> {
+        match self {
+            PileAction::Drop(p) | PileAction::DropMineral(p, _) => Some(p),
+            _ => None,
+        }
+    }
 }
 
 /// Takes any mineral delivered to it, and keeps count.
@@ -217,8 +233,9 @@ impl PileLab {
         self.first_mineral..self.first_mineral + MINERALS as ItemIx
     }
 
-    /// The mineral a pile holds or makes. Only a pile set up with no units
-    /// has none.
+    /// The mineral a pile holds or makes. A scene can't set up a pile with
+    /// no units (`Settlement::from_scene`), and an empty pile goes
+    /// (`prune`) unless a haul holds room in it, so every pile has one.
     pub fn pile_mineral(&self, pile: &Pile) -> Option<u8> {
         pile.item().map(|item| self.mineral(item))
     }
@@ -234,8 +251,8 @@ impl PileLab {
         self.minerals().map(|i| cargo.count(i)).collect()
     }
 
-    /// The first mineral a cargo holds, in mineral order: the one a drop
-    /// puts down.
+    /// The first mineral a cargo holds, in mineral order: the one a
+    /// `Drop` that names none puts down, and the next a delivery empties.
     pub fn first_carried(&self, cargo: &Inventory) -> Option<ItemIx> {
         self.minerals().find(|&i| cargo.count(i) > 0)
     }
@@ -247,9 +264,27 @@ impl PileLab {
         (self.first_mineral..=item).map(|i| cargo.count(i)).sum()
     }
 
-    /// Units of the first mineral in a cargo: what a drop puts down.
-    fn drop_units(&self, cargo: &Inventory) -> u32 {
-        self.first_carried(cargo).map_or(0, |i| cargo.count(i))
+    /// The mineral a drop puts down: the one it names, if carried, or the
+    /// first carried.
+    fn drop_item(&self, cargo: &Inventory, action: PileAction) -> Result<ItemIx, &'static str> {
+        match action {
+            PileAction::DropMineral(_, mineral) => {
+                if (mineral as usize) >= MINERALS {
+                    return Err("Unknown mineral");
+                }
+                let item = self.item(mineral);
+                if cargo.count(item) == 0 {
+                    return Err("That mineral isn't carried");
+                }
+                Ok(item)
+            }
+            _ => self.first_carried(cargo).ok_or("Carrier is empty"),
+        }
+    }
+
+    /// Units a drop puts down: all of its mineral.
+    fn drop_units(&self, cargo: &Inventory, action: PileAction) -> u32 {
+        self.drop_item(cargo, action).map_or(0, |i| cargo.count(i))
     }
 
     /// Units delivered to the collector, by mineral (empty without one).
@@ -327,8 +362,11 @@ impl PileLab {
                 }
                 Ok((Some(InventoryRef::Pile(id)), item, Direction::Deposit, units))
             }
-            PileAction::Drop(position) => {
-                let item = self.first_carried(cargo).ok_or("Carrier is empty")?;
+            PileAction::Drop(position) | PileAction::DropMineral(position, _) => {
+                if self.carried(cargo) == 0 {
+                    return Err("Carrier is empty");
+                }
+                let item = self.drop_item(cargo, action)?;
                 let offset = position - self.center;
                 if offset.x.abs() > self.limit || offset.y.abs() > self.limit {
                     return Err("Drop position must be on the deck");
@@ -418,7 +456,7 @@ impl PileLab {
                 let units = if matches!(action, PileAction::Deposit(_)) { (p.units() + carried).min(PILE_CAPACITY) } else { p.units() };
                 Ok((p.position, pile_radius(units)))
             }
-            PileAction::Drop(p) => Ok((p, pile_radius(self.drop_units(cargo)))),
+            PileAction::Drop(p) | PileAction::DropMineral(p, _) => Ok((p, pile_radius(self.drop_units(cargo, action)))),
             PileAction::Deliver => Ok((self.collector.as_ref().ok_or("There is no collector here")?.position, COLLECTOR_RADIUS)),
         }
     }
@@ -513,7 +551,7 @@ impl Settlement {
         let AgentState { body, carry, role: Role::Avatar(avatar), .. } = a else { unreachable!("checked: an avatar") };
         let cargo = &carry.inventory;
         let (center, radius) = lab.target(cargo, action)?;
-        if matches!(action, PileAction::Drop(_)) && !lab.free_drop(terrain, center, lab.drop_units(cargo)) {
+        if action.drop_position().is_some() && !lab.free_drop(terrain, center, lab.drop_units(cargo, action)) {
             return Err("Choose open floor away from piles, machines and the deck edge");
         }
         if action == PileAction::Deliver && lab.carried(cargo) == 0 {
@@ -689,7 +727,7 @@ impl Settlement {
         if tick < units.next_tick {
             return;
         }
-        if let (false, PileAction::Drop(p)) = (job.started, job.action) {
+        if let (false, Some(p)) = (job.started, job.action.drop_position()) {
             let lab = self.piles.as_ref().expect("a pile scene");
             if !lab.free_drop(terrain, p, units.remaining) {
                 let error = if job.pace == 0 { "Drop location is now blocked. Cargo retained." } else { "Drop location is blocked" };
@@ -790,7 +828,7 @@ fn done_notice(job: &PileJob, cargo: &Inventory, first: ItemIx) -> String {
     match job.action {
         PileAction::Pickup(_) | PileAction::PickupAmount(..) => format!("Collected {n} units. Carrying {}/{}.", cargo.total(), cargo.capacity),
         PileAction::Deposit(_) => format!("Deposited {n} units. {carried} still carried."),
-        PileAction::Drop(_) => format!("Placed a new pile of {n} units."),
+        PileAction::Drop(_) | PileAction::DropMineral(..) => format!("Placed a new pile of {n} units."),
         PileAction::Deliver => format!("Delivered {n} units to the collector."),
     }
 }
@@ -850,9 +888,9 @@ mod tests {
         fn start(&mut self, agent: AgentIx, action: PileAction) -> Result<CarryJob, &'static str> {
             let (lab, cargo) = self.parts(agent);
             let (other, item, direction, remaining) = lab.plan(cargo, action)?;
-            let other = other.unwrap_or_else(|| match action {
-                PileAction::Drop(p) => InventoryRef::Pile(lab.insert(item, p, 0, None)),
-                _ => unreachable!("only a drop makes its pile"),
+            let other = other.unwrap_or_else(|| match action.drop_position() {
+                Some(p) => InventoryRef::Pile(lab.insert(item, p, 0, None)),
+                None => unreachable!("only a drop makes its pile"),
             });
             let job = CarryJob { other, item, direction, remaining, next_tick: 0 };
             assert!(job.reserve(cargo, Side::Own) && job.reserve(lab.holder_mut(other), Side::Other));
@@ -1001,6 +1039,29 @@ mod tests {
         let id = s.drop_new(A, FxVec2::new(Fx::ONE, Fx::from_int(2))).unwrap();
         assert_eq!((s.lab.pile_mineral(&s.piles[&id]), s.piles[&id].units()), (Some(0), 5));
         assert_eq!(s.cargo(A).units, 0);
+        assert!(s.conserved());
+    }
+
+    /// A drop that names its mineral puts down that one, all of it, and
+    /// leaves the rest; it is refused for a mineral not carried or unknown.
+    #[test]
+    fn a_drop_puts_down_the_mineral_it_names() {
+        let mut s = lab();
+        s.add(0, 5).unwrap();
+        s.pickup(A, 0).unwrap();
+        s.pickup(A, 1).unwrap();
+        assert_eq!(s.cargo(A).minerals, vec![5, 7, 0]);
+        let spot = FxVec2::new(Fx::ONE, Fx::from_int(2));
+        assert_eq!(s.start(A, PileAction::DropMineral(spot, 2)), Err("That mineral isn't carried"));
+        assert_eq!(s.start(A, PileAction::DropMineral(spot, MINERALS as u8)), Err("Unknown mineral"));
+        let (other, units) = s.haul(A, PileAction::DropMineral(spot, 1)).unwrap();
+        let InventoryRef::Pile(id) = other else { panic!("a drop makes a pile") };
+        assert_eq!((s.lab.pile_mineral(&s.piles[&id]), units), (Some(1), 7));
+        assert_eq!(s.cargo(A).minerals, vec![5, 0, 0]);
+        // The old drop still puts down the first mineral carried.
+        let id = s.drop_new(A, FxVec2::new(Fx::from_int(-1), Fx::from_int(2))).unwrap();
+        assert_eq!((s.lab.pile_mineral(&s.piles[&id]), s.piles[&id].units()), (Some(0), 5));
+        assert_eq!(s.start(A, PileAction::DropMineral(spot, 0)), Err("Carrier is empty"));
         assert!(s.conserved());
     }
 

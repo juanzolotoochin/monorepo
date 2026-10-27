@@ -20,7 +20,7 @@ fn mineral_name(m: Mineral) -> &'static str {
         Mineral::GreenMalachite => "GREEN MALACHITE",
     }
 }
-fn mineral_index(m: Mineral) -> usize {
+pub(crate) fn mineral_index(m: Mineral) -> usize {
     match m {
         Mineral::AmberOre => 0,
         Mineral::BlueCrystal => 1,
@@ -235,6 +235,13 @@ pub fn mirror(service: Res<SessionService>, mirror: Res<WorldMirror>, mut lab: R
     lab.last_error = mine.and_then(|h| h.last_error.clone());
 }
 
+/// The player's drop at `at` (simulation coordinates): it names the
+/// mineral of the backpack's top unit. None when nothing is carried.
+pub(crate) fn drop_action(stock: &Stock, at: fx::FxVec2) -> Option<PileAction> {
+    let (top, _) = stock.cargo.top()?;
+    Some(PileAction::DropMineral(at, mineral_index(top) as u8))
+}
+
 /// Starts a haul: the player walks to the pile and transfers, `pace`
 /// seconds per unit (zero: all at once).
 pub(crate) fn haul(service: &mut SessionService, action: PileAction, pace: f32, approach: Option<Vec3>) {
@@ -333,8 +340,8 @@ pub fn input(
         } else {
             PileAction::Deposit(id)
         }
-    } else if carrying {
-        PileAction::Drop(service.to_sim(ground))
+    } else if let Some(drop) = drop_action(stock, service.to_sim(ground)) {
+        drop
     } else {
         lab.notice = "Click a pile to collect it, or use WASD to move.".into();
         return;

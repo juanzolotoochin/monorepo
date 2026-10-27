@@ -217,20 +217,6 @@
   `mod.rs`.
 - **Found in:** inventory step 5 (`kestrel/INVENTORY_HANDOFF.md`).
 
-## Give a scene's empty starting pile a mineral
-
-- **Status:** open
-- **Why:** since inventory step 6 a pile's mineral is what its `OneKind`
-  inventory holds (or a dispenser's `source`). A non-dispenser pile set up
-  with 0 units therefore has no mineral: it takes a deposit of any mineral,
-  where it used to take only its own, and the app draws it as amber. No
-  scene does this today (`pile_lab.ron` starts every pile with units).
-- **What to do:** reject a 0-unit starting pile in `Settlement::from_scene`
-  (or the scene loader), or leave it out.
-- **Where:** `PileLab::new` in `kestrel/sim/src/settlement/piles.rs`;
-  `from_scene` in `mod.rs`; `app/src/lockstep.rs` (the `PileSetup`).
-- **Found in:** inventory step 6 (`kestrel/INVENTORY_HANDOFF.md`).
-
 ## Decide whether minerals show in the settlement panel
 
 - **Status:** open
@@ -242,22 +228,6 @@
   and hide the minerals there or label them.
 - **Where:** `kestrel/app/src/legacy.rs` (`balances`), the settlement HUD.
 - **Found in:** inventory step 6 (`kestrel/INVENTORY_HANDOFF.md`).
-
-## Let a drop or a delivery name its mineral
-
-- **Status:** open
-- **Why:** a player's cargo mixes minerals since inventory step 7, but
-  `PileAction::Drop` and `Deliver` name no mineral (changing them would
-  change `CommandKind` and the input log), so a drop puts down the first
-  mineral carried, in mineral order, and a delivery takes all of them. A
-  player can't choose which ore to put down.
-- **What to do:** add a mineral to the drop (and maybe the delivery) as a
-  new append-only `CommandKind` variant or field, with the input format bumped,
-  and let the app pick it (the backpack's top unit, or a menu).
-- **Where:** `sim/src/settlement/piles.rs` (`PileLab::plan`),
-  `sim/src/world.rs` (`CommandKind::Pile`), `app/src/piles/mod.rs` (`input`),
-  `app/src/input/gameplay.rs`.
-- **Found in:** inventory step 7 (`kestrel/INVENTORY_HANDOFF.md`, Decisions).
 
 ## Let threat brains pick actions
 
@@ -273,6 +243,50 @@
 - **Found in:** threat characters (`kestrel/THREAT_CHARACTERS_HANDOFF.md`, D4).
 
 ## Done
+
+### Give a scene's empty starting pile a mineral
+
+- **Status:** done (branch `kestrel-character-todos`)
+- **Why:** since inventory step 6 a pile's mineral is what its `OneKind`
+  inventory holds (or a dispenser's `source`). A non-dispenser pile set up
+  with 0 units therefore has no mineral: it takes a deposit of any mineral,
+  where it used to take only its own, and the app draws it as amber. No
+  scene does this today (`pile_lab.ron` starts every pile with units).
+- **What to do:** reject a 0-unit starting pile in `Settlement::from_scene`
+  (or the scene loader), or leave it out.
+- **Where:** `PileLab::new` in `kestrel/sim/src/settlement/piles.rs`;
+  `from_scene` in `mod.rs`; `app/src/lockstep.rs` (the `PileSetup`).
+- **Done:** `Settlement::from_scene` refuses a scene whose starting pile has
+  no units ("starting pile N has no units; give it some, or make it a
+  dispenser"), so the world isn't made; a pile meant to start empty is a
+  dispenser. Tested in `scene_tests.rs`.
+- **Found in:** inventory step 6 (`kestrel/INVENTORY_HANDOFF.md`).
+
+### Let a drop or a delivery name its mineral
+
+- **Status:** done (branch `kestrel-character-todos`)
+- **Why:** a player's cargo mixes minerals since inventory step 7, but
+  `PileAction::Drop` and `Deliver` name no mineral (changing them would
+  change `CommandKind` and the input log), so a drop puts down the first
+  mineral carried, in mineral order, and a delivery takes all of them. A
+  player can't choose which ore to put down.
+- **What to do:** add a mineral to the drop (and maybe the delivery) as a
+  new append-only `CommandKind` variant or field, with the input format bumped,
+  and let the app pick it (the backpack's top unit, or a menu).
+- **Where:** `sim/src/settlement/piles.rs` (`PileLab::plan`),
+  `sim/src/world.rs` (`CommandKind::Pile`), `app/src/piles/mod.rs` (`input`),
+  `app/src/input/gameplay.rs`.
+- **Done:** `PileAction::DropMineral(position, mineral)`, appended after
+  every other action, puts down all of the named mineral; it is refused for
+  a mineral not carried or unknown. `Drop` stays, for older logs and the
+  control protocol's `DropAll`, and still puts down the first mineral. The
+  app's click and B drops name the backpack's top unit (the last mineral
+  in mineral order, `Cargo::top`). `Deliver` still empties every mineral:
+  the collector takes any mix and only counts, so choosing gains nothing.
+  Input log format 3 (a version-2 log naming a drop is refused as corrupt),
+  net protocol 5; save format 21 (unreleased on this branch) notes the new
+  action. Golden hashes unchanged.
+- **Found in:** inventory step 7 (`kestrel/INVENTORY_HANDOFF.md`, Decisions).
 
 ### Trim body fields one role ignores
 

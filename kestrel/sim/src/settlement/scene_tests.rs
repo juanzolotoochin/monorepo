@@ -397,6 +397,16 @@ fn pile_lab() -> SceneSetup {
     }
 }
 
+/// A starting pile with no units would have no mineral, so the scene is
+/// refused rather than loaded with a pile that takes any mineral.
+#[test]
+fn a_scene_with_an_empty_starting_pile_is_refused() {
+    let mut setup = pile_lab();
+    setup.piles.as_mut().unwrap().piles[1].2 = 0;
+    let error = World::new_scene(1, &Content::builtin(), &setup).err().expect("an empty starting pile is refused");
+    assert!(error.contains("starting pile 1 has no units"), "{error}");
+}
+
 /// `demos/haul_four.json`: walk to a dispenser's pile, take exactly four
 /// units one at a time, carry them across, and start a new pile.
 #[test]

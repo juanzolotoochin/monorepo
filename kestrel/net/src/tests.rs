@@ -749,9 +749,25 @@ fn leave_needs_protocol_four() {
     let inputs = vec![Input { seq: 1, tick: 4, kind: sim::CommandKind::Leave }];
     let packet = Packet::Inputs { epoch: 1, world: 1, turn_ack: 0, inputs, hashes: vec![], ping: 0 };
     let mut bytes = encode(&packet);
-    assert_eq!(PROTOCOL_VERSION, 4);
+    assert!(PROTOCOL_VERSION >= 4);
     assert_eq!(decode(&bytes), Some(packet));
     bytes[4..6].copy_from_slice(&3u16.to_le_bytes());
+    assert_eq!(decode(&bytes), None);
+}
+
+/// A drop that names its mineral is new in protocol 5: it round-trips, and
+/// a peer speaking 4 is ignored rather than misread.
+#[test]
+fn a_named_drop_needs_protocol_five() {
+    use crate::protocol::{decode, encode, Input, Packet, PROTOCOL_VERSION};
+    use sim::settlement::piles::PileAction;
+    let action = PileAction::DropMineral(fx::FxVec2::new(fx::Fx::ONE, fx::Fx::ZERO), 1);
+    let kind = sim::CommandKind::Pile { agent: 0, action, pace: fx::Fx::ZERO, approach: None };
+    let packet = Packet::Inputs { epoch: 1, world: 1, turn_ack: 0, inputs: vec![Input { seq: 1, tick: 4, kind }], hashes: vec![], ping: 0 };
+    let mut bytes = encode(&packet);
+    assert_eq!(PROTOCOL_VERSION, 5);
+    assert_eq!(decode(&bytes), Some(packet));
+    bytes[4..6].copy_from_slice(&4u16.to_le_bytes());
     assert_eq!(decode(&bytes), None);
 }
 
