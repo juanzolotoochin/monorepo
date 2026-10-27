@@ -10,7 +10,11 @@ bazel run --config=remote //kestrel/app:web
 ```
 
 Open the printed URL (`http://127.0.0.1:8000/` by default) in a browser with
-WebGL2. Pass `-- --port 8080` to use another port. The launch menu,
+WebGPU: Chrome or Edge 113+ on Windows, macOS and ChromeOS, Firefox 141+ on
+Windows, or Safari 26. On Linux, Chrome may need WebGPU enabled in
+`chrome://flags`. There is no WebGL2 fallback: the GPU particles (`vfx.rs`)
+need compute shaders. If the page reports no adapter, check `chrome://gpu`.
+Pass `-- --port 8080` to use another port. The launch menu,
 Asset Studio, and solo scenes use the same game executable as desktop;
 the canvas fits the browser window. Audio uses the same procedural cues as the
 desktop game; click or press a key in the page to enable browser playback. The

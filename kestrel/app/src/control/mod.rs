@@ -45,6 +45,12 @@ pub struct Options {
     pub fullscreen: bool,
     /// Use the sole connected controller without a separate Menu claim press.
     pub auto_claim_gamepad: bool,
+    /// Which path draws effects that have an effect file
+    /// (`--vfx legacy|sprinkles`, see `vfx.rs`).
+    pub vfx: crate::vfx::VfxBackend,
+    /// Debug only: the VFX spike's stress harness (`--vfx-stress <spec>`,
+    /// see `vfx_stress.rs`).
+    pub vfx_stress: Option<crate::vfx_stress::Spec>,
 }
 impl Options {
     pub fn from_args(args: &[String]) -> Result<Self, String> {
@@ -82,6 +88,8 @@ impl Options {
             headless_menus: false,
             fullscreen: args.iter().any(|arg| arg == "--fullscreen"),
             auto_claim_gamepad: args.iter().any(|arg| arg == "--auto-claim-gamepad"),
+            vfx: value("--vfx").map(crate::vfx::VfxBackend::parse).transpose()?.unwrap_or_default(),
+            vfx_stress: value("--vfx-stress").map(crate::vfx_stress::Spec::parse).transpose()?,
         };
         if options.frames_dir.is_some()
             && ((options.script.is_none() && options.studio_frames.is_none()) || options.simulation)

@@ -8,6 +8,13 @@
 //! or releasing depot stock, restarting the memory trial, releasing piano
 //! keys) it emits as messages (`ActionMessages`), which the simulation
 //! applies and the replay drops (`ABILITY_PREDICTION_HANDOFF.md`, D3).
+//! A pile haul (`Haul`, the "interact" action) is the exception: its lab
+//! part (`StartHaul`) still applies at once in stage 1, in the simulation
+//! and, on its own copy of the lab, in the replay.
+//!
+//! A piano key is no action: it changes nothing on the avatar, only the
+//! settlement's held notes, so it stays a world command
+//! (`Settlement::play_piano`) that the replay ignores.
 //!
 //! Avatars act on their players' commands; haulers act on their brain's
 //! picks (stage 2) and on the jobs stage 5 accepts, through the same `act`,
@@ -23,7 +30,7 @@ use fx::{Fx, FxVec2};
 
 use super::avatar::{self, Intent};
 use super::haulers;
-use super::piles::PileLab;
+use super::piles::{PileAction, PileLab};
 use super::{AgentIx, AgentState, DepotIx, DepotState, ItemIx, Role, Settlement, Transfer};
 use crate::messages::ActionMessages;
 use crate::terrain::Terrain;
@@ -61,6 +68,10 @@ pub enum Action {
     Release,
     /// Back to the spawn point with a fresh state.
     Respawn,
+    /// Interact with the pile lab: walk to a pile (or the collector, or a
+    /// drop spot) and move units there, one every `pace` seconds (zero for
+    /// all at once), standing at `approach` if given (`piles::haul`).
+    Haul { action: PileAction, pace: Fx, approach: Option<FxVec2> },
     /// Climb into the nearest free vehicle in reach, or out of the one
     /// driven (`vehicle`).
     Board,
@@ -68,8 +79,8 @@ pub enum Action {
 
 impl Action {
     /// The agent a command drives and what it tells it to do. `None` for
-    /// commands that drive no agent, and for the pile lab and the piano,
-    /// which act on the world rather than on the avatar.
+    /// commands that drive no agent, and for the piano, which acts on the
+    /// world rather than on the avatar.
     pub fn of(command: &CommandKind) -> Option<(AgentIx, Action)> {
         let (agent, action) = match *command {
             CommandKind::MoveAvatar { agent, ref intent } => (agent, Action::Move(intent.clone())),
@@ -84,9 +95,9 @@ impl Action {
             CommandKind::ReleaseDirectControl { agent } => (agent, Action::Release),
             CommandKind::RepairCover { agent, asset } => (agent, Action::RepairCover(asset)),
             CommandKind::Respawn { agent } => (agent, Action::Respawn),
+            CommandKind::Pile { agent, action, pace, approach } => (agent, Action::Haul { action, pace, approach }),
             CommandKind::Board { agent } => (agent, Action::Board),
-            CommandKind::Pile { .. }
-            | CommandKind::PlayPiano { .. }
+            CommandKind::PlayPiano { .. }
             | CommandKind::SpawnMovers { .. }
             | CommandKind::Impulse { .. }
             | CommandKind::Dig { .. }

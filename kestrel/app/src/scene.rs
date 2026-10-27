@@ -12,7 +12,6 @@ use bevy::{
     camera::ScalingMode, core_pipeline::tonemapping::Tonemapping,
     post_process::bloom::Bloom, prelude::*, camera::Hdr,
 };
-#[cfg(not(target_arch = "wasm32"))]
 use bevy::{anti_alias::taa::TemporalAntiAliasing, pbr::ScreenSpaceAmbientOcclusion};
 use service::WorldScoped;
 
@@ -153,8 +152,6 @@ pub fn setup(
             zoom: 21.5,
         },
     ));
-    // WebGL2 cannot compile the TAA shader's sampler combination.
-    #[cfg(not(target_arch = "wasm32"))]
     camera.insert((ScreenSpaceAmbientOcclusion::default(), TemporalAntiAliasing::default()));
     commands.spawn((
         DirectionalLight {

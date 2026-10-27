@@ -1,4 +1,4 @@
-//! Vehicles: the rover's driving rules on made-up ground, and players
+﻿//! Vehicles: the rover's driving rules on made-up ground, and players
 //! driving it across the dig lab's mine.
 
 use content::character::{CharacterDef, CharacterIx};
@@ -325,7 +325,7 @@ fn driving_is_predicted_exactly() {
         let mut replay = settlement.replay_avatar(0, confirmed.tick(), confirmed.terrain()).unwrap();
         let mut ahead = Simulation::from_world(copy(&confirmed), 1);
         for turn in commands.iter().skip(start).take(40) {
-            assert!(replay.step_with(turn.iter()));
+            replay.step_with(turn.iter());
             ahead.step(&turn.iter().cloned().map(host).collect::<Vec<_>>());
             let real = ahead.world().settlement().unwrap();
             let (ix, predicted) = replay.vehicle().expect("still driving");

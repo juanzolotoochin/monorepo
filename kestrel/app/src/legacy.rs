@@ -425,13 +425,15 @@ pub enum Event {
     Produced { producer: String },
     Equipped { agent: String },
     Shot { defender: String },
-    /// An avatar loosed an arrow.
-    BowFired,
+    /// Player `agent` loosed an arrow: `projectile`, unless it is already
+    /// gone.
+    BowFired { agent: u16, projectile: Option<u64> },
     /// `by` is the avatar that struck, for melee and arc hits.
     Hit { target: u64, by: Option<String>, projectile: Option<u64>, position: Point, killed: bool, impact: Impact },
     PinnedLanded { target: u64, position: Point },
     BlockedShot { position: Point },
-    ArcFired { from: Point, to: Point },
+    /// Player `agent` fired the arc coil from `from`; its arc reaches `to`.
+    ArcFired { agent: u16, from: Point, to: Point },
     LaserFired { agent: u16, to: Point, hit_actor: bool, cover: Option<u16> },
     Breach { position: Point },
     /// A threat's swing landed on player `agent` (`hit`) or missed. `from`
@@ -683,7 +685,16 @@ impl Simulation {
                     s::Event::Produced { producer } => Event::Produced { producer: current.producers[*producer as usize].id.clone() },
                     s::Event::Equipped { agent } => Event::Equipped { agent: agent_name(*agent) },
                     s::Event::Shot { defender } => Event::Shot { defender: current.defenders[*defender as usize].id.clone() },
-                    s::Event::BowFired { .. } => Event::BowFired,
+                    s::Event::BowFired { agent, from, to, height, .. } => Event::BowFired {
+                        agent: *agent,
+                        // The newest player arrow flying as it says.
+                        projectile: current
+                            .projectiles
+                            .iter()
+                            .rev()
+                            .find(|p| p.defender.is_none() && p.from == *from && p.to == *to && p.launch_height == *height)
+                            .map(|p| p.id),
+                    },
                     s::Event::Hit { target, agent, projectile, position, killed, impact } => Event::Hit {
                         target: *target,
                         by: agent.map(agent_name),
@@ -704,7 +715,7 @@ impl Simulation {
                     },
                     s::Event::PinnedLanded { target, position } => Event::PinnedLanded { target: *target, position: p(*position) },
                     s::Event::BlockedShot { position } => Event::BlockedShot { position: p(*position) },
-                    s::Event::ArcFired { from, to, .. } => Event::ArcFired { from: p(*from), to: p(*to) },
+                    s::Event::ArcFired { agent, from, to, .. } => Event::ArcFired { agent: *agent, from: p(*from), to: p(*to) },
                     s::Event::LaserFired { agent, to, hit_actor, cover, .. } => Event::LaserFired { agent: *agent, to: p(*to), hit_actor: *hit_actor, cover: *cover },
                     s::Event::Breach { position } => Event::Breach { position: p(*position) },
                     s::Event::PileToss { .. } => return None,

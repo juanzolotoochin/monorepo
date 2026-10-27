@@ -933,7 +933,10 @@ pub fn follow_avatar(
     mut telemetry: ResMut<crate::telemetry::Telemetry>,
     mut ledger: ResMut<crate::event_prediction::EventPrediction>,
     mut pending_lasers: ResMut<crate::effects::PendingLasers>,
+    mut pending_arcs: ResMut<crate::effects::PendingArcs>,
+    mut predicted_arrows: ResMut<crate::settlement::PredictedArrows>,
     mut drawn_avatar: ResMut<crate::prediction::DrawnAvatar>,
+    withdraw: Option<Res<crate::prediction::WithdrawPrediction>>,
 ) {
     let (Some(current), Some(index)) = (&mirror.current, mirror.player()) else {
         drawn_avatar.0 = None;
@@ -941,7 +944,8 @@ pub fn follow_avatar(
     };
     let a = &current.agents[index as usize];
     let before = mirror.previous.as_ref().and_then(|p| current.same_agent_in(index, p)).unwrap_or(a);
-    let predicted = if service.is_client() { predict(&mut prediction, &mirror, &service, before, time.delta_secs()) } else { None };
+    let withdrawn = withdraw.is_some_and(|until| service.world().is_some_and(|world| world.tick() <= until.0));
+    let predicted = if service.is_client() && !withdrawn { predict(&mut prediction, &mirror, &service, before, time.delta_secs()) } else { None };
     // What the avatar's lasting effects are drawn from (D5): the newest
     // confirmed state at render time, unless it is predicted.
     drawn_avatar.0 = Some(match &predicted {
@@ -953,9 +957,10 @@ pub fn follow_avatar(
     }
     if service.is_client() {
         let now = time.elapsed_secs_f64();
-        predict_events(&mut ledger, &mirror, &service, index, predicted.as_ref(), now, &mut pending_lasers, &sound, &mut telemetry);
+        predict_events(&mut ledger, &mirror, &service, index, predicted.as_ref(), now, &mut pending_lasers, &mut pending_arcs, &mut predicted_arrows, &sound, &mut telemetry);
     } else {
         ledger.reset();
+        predicted_arrows.0.retain(|arrow| arrow.projectile.is_some());
     }
     let (from, to, alpha) = match &predicted {
         Some(drawn) => (&drawn.from, &drawn.to, drawn.fraction),
@@ -1069,8 +1074,12 @@ fn predict(
 /// A joined player's own predicted events (see `event_prediction`): this
 /// frame's confirmed ones are matched to those already presented, then the
 /// events the drawn avatar shows are presented: a laser shot drawn, with its
-/// sound, from where the avatar is drawn. Other players' events, and kinds
-/// not presented early, are presented as they are confirmed.
+/// sound, from where the avatar is drawn, an arc coil shot's arc to its
+/// first target, with its sound, and a bow shot's arrow, in flight from the
+/// bow with its sound, until its confirmed projectile takes it over
+/// (`settlement::PredictedArrows`). A shot the confirmed world never fires
+/// withdraws its arrow. Other players' events, and kinds not presented
+/// early, are presented as they are confirmed.
 #[allow(clippy::too_many_arguments)]
 fn predict_events(
     ledger: &mut crate::event_prediction::EventPrediction,
@@ -1080,12 +1089,15 @@ fn predict_events(
     drawn: Option<&crate::prediction::Drawn>,
     now: f64,
     pending: &mut crate::effects::PendingLasers,
+    arcs: &mut crate::effects::PendingArcs,
+    arrows: &mut crate::settlement::PredictedArrows,
     sound: &crate::sound::Sound,
     telemetry: &mut crate::telemetry::Telemetry,
 ) {
     use crate::event_prediction::{end_of, Outcome};
     let Some(world) = service.world().filter(|_| service.session.world_number() == mirror.world_number) else {
         ledger.reset();
+        arrows.0.retain(|arrow| arrow.projectile.is_some());
         return;
     };
     ledger.begin(mirror.world_number, agent);
@@ -1118,6 +1130,11 @@ fn predict_events(
         if outcome.cancel {
             stop_presented(outcome.kind, outcome.id, pending);
         }
+        if outcome.kind == "bow" && outcome.confirmed.is_none() {
+            // Never fired: its arrow is gone. One confirmed, even
+            // differently, is taken over by its projectile.
+            arrows.withdraw(outcome.id);
+        }
         telemetry.network.event_outcome(instant, crate::telemetry::EventOutcome {
             kind: outcome.kind,
             predicted: at(&outcome.predicted),
@@ -1138,6 +1155,29 @@ fn predict_events(
                     predicted: Some(presented.id),
                 });
                 sound.play(crate::sound::Cue::Laser);
+            }
+            sim::settlement::Event::ArcFired { from, to, .. } => {
+                // Its arc hits are stage 5: they chain on from the confirmed
+                // shot (`settlement::ArcChain`).
+                let at = |p: FxVec2| mirror.to_view(p).with_y(crate::settlement::ARC_HEIGHT);
+                arcs.0.push((at(from), at(to), presented.tick as u32));
+                sound.play(crate::sound::Cue::Arc);
+            }
+            sim::settlement::Event::BowFired { from, to, height, flight, .. } => {
+                let at = |p: FxVec2| {
+                    let at = mirror.to_view(p);
+                    [at.x, at.z]
+                };
+                arrows.0.push(crate::settlement::PredictedArrow {
+                    id: presented.id,
+                    fired: presented.tick,
+                    from: at(from),
+                    to: at(to),
+                    height: height.to_f32(),
+                    flight,
+                    projectile: None,
+                });
+                sound.play(crate::sound::Cue::Bow);
             }
             _ => continue,
         }
@@ -1575,9 +1615,9 @@ mod tests {
     }
 
     /// A UDP relay that holds every datagram for `delay ± jitter` of virtual
-    /// time, like `tools/network_lab/relay.mjs`. The client joins `listen`;
-    /// the relay talks to the host from `upstream` and answers the client
-    /// from `listen`, which the client checks.
+    /// time, like the network lab's relay (`tools/network_lab`). The client
+    /// joins `listen`; the relay talks to the host from `upstream` and
+    /// answers the client from `listen`, which the client checks.
     struct DelayRelay {
         listen: std::net::UdpSocket,
         upstream: std::net::UdpSocket,
@@ -1745,8 +1785,13 @@ mod tests {
     /// `app`'s player fires its laser toward `direction` (arena space), as a
     /// click there would.
     fn fire_laser(app: &mut App, direction: Vec3) {
+        strike_with(app, content::scenario::Weapon::Laser, direction);
+    }
+
+    /// `app`'s player strikes with `weapon` toward `direction` (arena space).
+    fn strike_with(app: &mut App, weapon: content::scenario::Weapon, direction: Vec3) {
         let world = app.world_mut();
-        world.resource_mut::<Controls>().weapon = content::scenario::Weapon::Laser;
+        world.resource_mut::<Controls>().weapon = weapon;
         world.resource_scope(|world, mut service: Mut<SessionService>| {
             world.resource_scope(|world, mut controls: Mut<Controls>| {
                 world.resource_scope(|world, mut control: Mut<PlayerControl>| {
@@ -2036,6 +2081,127 @@ mod tests {
         assert!(failures.is_empty(), "laser shots were not predicted exactly:\n{report}\n{}", failures.join("\n"));
     }
 
+    /// Under 100 ± 20 ms, the client fires the arc coil in the combat arena.
+    /// A shot's arc and sound are presented once, an input lead before the
+    /// confirmed world fires it, and the confirmed shot isn't presented
+    /// again (`settlement::ArcChain`). With the prediction withdrawn, the
+    /// shot is presented once, as it is confirmed.
+    #[test]
+    fn joined_player_arc_shots_are_presented_early_once() {
+        let mut game = RelayedGame::in_scene("combat-arena", 100.0, 20.0, 0xa2c);
+        game.hold(&[], 60);
+        let agent = game.client.world().resource::<SessionService>().player().unwrap();
+        let sounds = |game: &RelayedGame| game.client.world().resource::<crate::sound::Sound>().recorded_events().iter().filter(|(_, cue)| *cue == crate::sound::Cue::Arc as i32).count();
+        let presented = |game: &mut RelayedGame| game.telemetry().network.events_presented("arc");
+        let mut report = String::new();
+        for (shot, withdraw) in [(0, false), (1, true), (2, false)] {
+            let (sounds_before, presented_before) = (sounds(&game), presented(&mut game));
+            if withdraw {
+                // Withdrawn until well past the shot's confirmation.
+                let horizon = game.client.world().resource::<SessionService>().session.input_horizon().unwrap();
+                game.client.world_mut().insert_resource(crate::prediction::WithdrawPrediction(horizon + 60));
+            }
+            strike_with(&mut game.client, content::scenario::Weapon::ArcCoil, Vec3::NEG_Z);
+            let (mut played_at, mut confirmed_at) = (None, None);
+            for frame in 0..120 {
+                game.frame();
+                if played_at.is_none() && sounds(&game) > sounds_before {
+                    played_at = Some(frame);
+                }
+                let fired = game.client.world().resource::<WorldMirror>().events.iter().any(|e| matches!(e, sim::settlement::Event::ArcFired { agent: by, .. } if *by == agent));
+                if fired && confirmed_at.is_none() {
+                    confirmed_at = Some(frame);
+                }
+            }
+            game.client.world_mut().remove_resource::<crate::prediction::WithdrawPrediction>();
+            let (played, early) = (sounds(&game) - sounds_before, presented(&mut game) - presented_before);
+            report += &format!("shot {shot}{}: presented early {early}, arc sounds {played}, sound on frame {played_at:?}, confirmed on {confirmed_at:?}\n", if withdraw { " (withdrawn)" } else { "" });
+            let (Some(played_at), Some(confirmed_at)) = (played_at, confirmed_at) else { panic!("the shot was never shown:\n{report}") };
+            assert_eq!(played, 1, "the shot was presented other than once:\n{report}");
+            if withdraw {
+                assert_eq!(early, 0, "a withdrawn prediction presented the shot:\n{report}");
+                assert!(played_at >= confirmed_at, "the withdrawn shot was presented before it was confirmed:\n{report}");
+            } else {
+                assert_eq!(early, 1, "{report}");
+                assert!(played_at + 4 <= confirmed_at, "the shot waited for its confirmation:\n{report}");
+            }
+            game.hold(&[], 60);
+        }
+        let telemetry = game.telemetry();
+        let outcomes: Vec<_> = telemetry.network.event_outcomes("arc").cloned().collect();
+        report += &format!("outcomes {outcomes:?}\n");
+        assert!(outcomes.len() == 2 && outcomes.iter().all(|o| o.confirmed.is_some() && o.lead.is_some_and(|lead| lead > 0.0)), "{report}");
+        println!("{report}");
+    }
+
+    /// Under 100 ± 20 ms, the client looses arrows in the combat arena. A
+    /// shot's arrow is drawn in flight on the frame its sound plays, an input
+    /// lead before the confirmed world fires it, and the confirmed
+    /// projectile takes that arrow over on the frame it is confirmed: the
+    /// sound isn't played again, and the arrow is gone once the projectile
+    /// is. With the prediction withdrawn, no arrow is predicted, and the
+    /// sound comes as the shot is confirmed.
+    #[test]
+    fn joined_player_bow_shots_draw_their_arrow_early_and_hand_it_over() {
+        let mut game = RelayedGame::in_scene("combat-arena", 100.0, 20.0, 0xb0e);
+        game.hold(&[], 60);
+        let agent = game.client.world().resource::<SessionService>().player().unwrap();
+        let sounds = |game: &RelayedGame| game.client.world().resource::<crate::sound::Sound>().recorded_events().iter().filter(|(_, cue)| *cue == crate::sound::Cue::Bow as i32).count();
+        let presented = |game: &mut RelayedGame| game.telemetry().network.events_presented("bow");
+        let arrows = |game: &RelayedGame| game.client.world().resource::<crate::settlement::PredictedArrows>().0.clone();
+        let mut report = String::new();
+        for (shot, withdraw) in [(0, false), (1, true), (2, false)] {
+            let (sounds_before, presented_before) = (sounds(&game), presented(&mut game));
+            if withdraw {
+                let horizon = game.client.world().resource::<SessionService>().session.input_horizon().unwrap();
+                game.client.world_mut().insert_resource(crate::prediction::WithdrawPrediction(horizon + 60));
+            }
+            strike_with(&mut game.client, content::scenario::Weapon::Bow, Vec3::NEG_Z);
+            let (mut played_at, mut confirmed_at, mut drawn_at, mut taken_over_at) = (None, None, None, None);
+            for frame in 0..120 {
+                game.frame();
+                if played_at.is_none() && sounds(&game) > sounds_before {
+                    played_at = Some(frame);
+                }
+                let fired = game.client.world().resource::<WorldMirror>().events.iter().any(|e| matches!(e, sim::settlement::Event::BowFired { agent: by, .. } if *by == agent));
+                if fired && confirmed_at.is_none() {
+                    confirmed_at = Some(frame);
+                }
+                let arrows = arrows(&game);
+                if drawn_at.is_none() && !arrows.is_empty() {
+                    drawn_at = Some(frame);
+                }
+                if taken_over_at.is_none() && arrows.iter().any(|arrow| arrow.projectile.is_some()) {
+                    taken_over_at = Some(frame);
+                }
+            }
+            game.client.world_mut().remove_resource::<crate::prediction::WithdrawPrediction>();
+            let (played, early) = (sounds(&game) - sounds_before, presented(&mut game) - presented_before);
+            report += &format!(
+                "shot {shot}{}: presented early {early}, bow sounds {played}, sound on frame {played_at:?}, arrow drawn on {drawn_at:?}, taken over on {taken_over_at:?}, confirmed on {confirmed_at:?}\n",
+                if withdraw { " (withdrawn)" } else { "" }
+            );
+            let (Some(played_at), Some(confirmed_at)) = (played_at, confirmed_at) else { panic!("the shot was never shown:\n{report}") };
+            assert_eq!(played, 1, "the shot's sound played other than once:\n{report}");
+            assert!(arrows(&game).is_empty(), "a predicted arrow outlived its shot:\n{report}");
+            if withdraw {
+                assert_eq!((early, drawn_at), (0, None), "a withdrawn prediction drew the arrow:\n{report}");
+                assert!(played_at >= confirmed_at, "the withdrawn shot was presented before it was confirmed:\n{report}");
+            } else {
+                assert_eq!(early, 1, "{report}");
+                assert_eq!(drawn_at, Some(played_at), "the sound and the arrow came apart:\n{report}");
+                assert!(played_at + 4 <= confirmed_at, "the shot waited for its confirmation:\n{report}");
+                assert_eq!(taken_over_at, Some(confirmed_at), "the projectile didn't take the arrow over as it was confirmed:\n{report}");
+            }
+            game.hold(&[], 60);
+        }
+        let telemetry = game.telemetry();
+        let outcomes: Vec<_> = telemetry.network.event_outcomes("bow").cloned().collect();
+        report += &format!("outcomes {outcomes:?}\n");
+        assert!(outcomes.len() == 2 && outcomes.iter().all(|o| o.confirmed.is_some() && o.lead.is_some_and(|lead| lead > 0.0)), "{report}");
+        println!("{report}");
+    }
+
     /// Under 100 ± 20 ms, the host shoots the client's running avatar with
     /// the laser in the laser pit until it dies. A hit is stage 5, which the
     /// client's prediction never runs: one that doesn't move the avatar
@@ -2215,14 +2381,12 @@ mod tests {
         mirror.current.as_ref().unwrap().agents[mirror.player().unwrap() as usize].clone()
     }
 
-    /// Queues a command the replay can't predict (a pile haul, which does
-    /// nothing outside the pile lab): once the drawn time reaches it, the
-    /// prediction is withdrawn and the confirmed avatar is drawn until it
-    /// applies.
+    /// Withdraws the prediction (`prediction::WithdrawPrediction`): the
+    /// confirmed avatar is drawn until the confirmed world reaches the
+    /// input horizon, where a command sent now would apply.
     fn withdraw_prediction(app: &mut App) {
-        let mut service = app.world_mut().resource_mut::<SessionService>();
-        let agent = service.player().unwrap();
-        service.command(CommandKind::Pile { agent, action: sim::settlement::piles::PileAction::Deliver, pace: Fx::ZERO, approach: None });
+        let horizon = app.world().resource::<SessionService>().session.input_horizon().unwrap();
+        app.world_mut().insert_resource(crate::prediction::WithdrawPrediction(horizon));
     }
 
     /// Lifts off in `scene` (the jetpack, or a jump), then once more and

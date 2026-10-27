@@ -476,13 +476,6 @@ crate.annotation(
     patches = ["//bazel/patches:rav1e_build_metadata.patch"],
 )
 
-# rules_rs misses wgpu-core's WebGL -> wgpu-hal GLES feature edge for wasm.
-crate.annotation_select(
-    crate = "wgpu-hal",
-    crate_features = ["gles"],
-    triples = ["wasm32-unknown-unknown"],
-)
-
 # blake3 otherwise invokes Microsoft's ml64.exe assembler on MSVC targets.
 # Intrinsics keep SIMD acceleration while using the hermetic Rust/Clang tools
 # that can execute on Linux and macOS build hosts.

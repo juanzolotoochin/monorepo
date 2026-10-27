@@ -62,9 +62,12 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///     `started` for `remaining`, and no `next_toss` or `destination`.
 /// 20: threats keep their character (`Threat::character`); waves no longer
 ///     copy its speed, health, armor or breach damage.
-/// 21: the settlement keeps its `vehicles`, and an avatar the vehicle it
+/// 21: an agent's `Body` has no `speed` (haulers read their character's
+///     walk) and no `travel_heading`, which moved to `HaulerState`. A
+///     `PileJob`'s action can be `PileAction::DropMineral`, appended.
+/// 22: the settlement keeps its `vehicles`, and an avatar the vehicle it
 ///     drives (`AvatarState::driving`).
-pub const FORMAT_VERSION: u32 = 21;
+pub const FORMAT_VERSION: u32 = 22;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

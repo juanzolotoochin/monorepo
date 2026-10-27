@@ -1,0 +1,46 @@
+load("@rules_rs//rs:rust_library.bzl", "rust_library")
+load("@rules_rs//rs:rust_test.bzl", "rust_test")
+
+# Kestrel's fork of the sprinkles GPU particle system. See UPSTREAM.md.
+# The target name is the crate name: `embedded_asset!` builds the shaders'
+# `embedded://bevy_sprinkles/...` paths from it.
+rust_library(
+    name = "bevy_sprinkles",
+    srcs = glob(["src/**/*.rs"]),
+    # Bevy's derive macros inspect Cargo.toml to locate the `bevy` re-exports.
+    # The shaders are embedded with `embedded_asset!` / `load_shader_library!`.
+    compile_data = ["//:Cargo.toml"] + glob(["src/shaders/*.wesl"]),
+    edition = "2024",
+    rustc_env = {"CARGO_MANIFEST_DIR": "."},
+    visibility = ["//kestrel:__subpackages__"],
+    deps = [
+        "@crates//:bevy",
+        "@crates//:bitflags",
+        "@crates//:bytemuck",
+        "@crates//:paste",
+        "@crates//:ron",
+        "@crates//:serde",
+        "@crates//:thiserror",
+    ] + select({
+        "@platforms//cpu:wasm32": ["@crates//:web-time"],
+        "//conditions:default": [],
+    }),
+)
+
+rust_test(
+    name = "bevy_sprinkles_test",
+    size = "small",
+    compile_data = ["//:Cargo.toml"] + glob(["src/shaders/*.wesl"]),
+    crate = ":bevy_sprinkles",
+    edition = "2024",
+    rustc_env = {"CARGO_MANIFEST_DIR": "."},
+)
+
+rust_test(
+    name = "parse_test",
+    size = "small",
+    srcs = ["tests/parse.rs"],
+    compile_data = glob(["tests/fixtures/*.ron"]),
+    edition = "2024",
+    deps = [":bevy_sprinkles"],
+)

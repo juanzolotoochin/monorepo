@@ -25,6 +25,7 @@ impl service::Service for Effects {
     fn systems(app: &mut App) {
         use service::{AppServices, Phase, WorldState};
         app.init_resource::<PendingLasers>()
+            .init_resource::<PendingArcs>()
             .init_resource::<CoverContacts>()
             .add_service_systems::<Self, _>(
                 Phase::Present,
@@ -32,8 +33,10 @@ impl service::Service for Effects {
             )
             .add_systems(
                 PostUpdate,
-                emit_lasers
+                (emit_lasers, emit_arcs)
                     .after(bevy::transform::TransformSystems::Propagate)
+                    // An effect-file bolt (`vfx.rs`) still draws this frame.
+                    .before(bevy_sprinkles::SprinklesLateSetup)
                     .run_if(in_state(WorldState::Active)),
             );
     }
@@ -63,6 +66,19 @@ pub struct FxAssets {
 }
 #[derive(Resource, Default)]
 pub struct PendingLasers(pub Vec<LaserShot>);
+
+/// Arc coil arcs a system without world access asked for: the local
+/// player's shots prediction presents (`lockstep::predict_events`), as
+/// (from, to, seed). `emit_arcs` draws them.
+#[derive(Resource, Default)]
+pub struct PendingArcs(pub Vec<(Vec3, Vec3, u32)>);
+
+/// Draws the pending arcs.
+pub fn emit_arcs(world: &mut World) {
+    for (from, to, seed) in std::mem::take(&mut world.resource_mut::<PendingArcs>().0) {
+        arc(world, from, to, seed);
+    }
+}
 
 /// Keeps the rendered cover intact while an authoritative laser hit is in flight.
 #[derive(Resource, Default)]
@@ -181,6 +197,31 @@ pub fn laser_impact_seed(tick: u64, agent: u16) -> u32 {
 }
 
 pub fn impact(
+    commands: &mut Commands,
+    assets: &FxAssets,
+    position: Vec3,
+    normal: Vec3,
+    number: u32,
+    kind: ImpactResponse,
+) {
+    // VFX spike: the stone impact may come from its effect file instead
+    // (`vfx.rs`). The choice needs the world, so it is made as a command.
+    if kind == ImpactResponse::Stone {
+        commands.queue(move |world: &mut World| {
+            if crate::vfx::spawn(world, "impact_stone", crate::vfx::Trigger::new(position, normal).seed(number)) {
+                return;
+            }
+            let mut queue = bevy::ecs::world::CommandQueue::default();
+            legacy_impact(&mut Commands::new(&mut queue, world), world.resource::<FxAssets>(), position, normal, number, kind);
+            queue.apply(world);
+        });
+        return;
+    }
+    legacy_impact(commands, assets, position, normal, number, kind);
+}
+
+/// The hand-written impact: one CPU-moved entity per particle.
+fn legacy_impact(
     commands: &mut Commands,
     assets: &FxAssets,
     position: Vec3,
@@ -380,6 +421,10 @@ pub fn severed_head(
 }
 
 pub fn arc(world: &mut World, from: Vec3, to: Vec3, seed: u32) {
+    // VFX spike: or from its effect file (`vfx.rs`, `vfx/arc.ron`).
+    if crate::vfx::spawn(world, "arc", crate::vfx::Trigger::new(from, Vec3::Y).target(to).seed(seed)) {
+        return;
+    }
     let assets = world.resource::<FxAssets>();
     let cube = assets.cube.clone();
     let glow = assets.spark[2].clone();
@@ -458,8 +503,6 @@ pub fn emit_lasers(world: &mut World) {
     }).collect();
     let mut obstacle_query = world.query::<&Obstacle>();
     let obstacles: Vec<_> = obstacle_query.iter(world).map(|obstacle| obstacle.0).collect();
-    let assets = world.resource::<FxAssets>();
-    let (cube, red) = (assets.cube.clone(), assets.laser.clone());
     for shot in shots {
         let contact = shot.cover.filter(|_| shot.predicted.is_none());
         let Some(&(_, from)) = muzzles.iter().find(|(agent, _)| *agent == shot.agent) else {
@@ -473,22 +516,48 @@ pub fn emit_lasers(world: &mut World) {
             continue;
         }
         let direction = delta / distance;
-        let (_, front) = laser_segment(distance, 0.0).unwrap();
-        let transform = Transform::from_translation(from + direction * (front * 0.5))
-            .with_rotation(Quat::from_rotation_arc(Vec3::Z, direction))
-            .with_scale(Vec3::new(LASER_WIDTH, LASER_WIDTH, front));
         let obstacle_hit = if shot.cover.is_some() { Some((shot.target, -direction)) }
             else { obstacle_impact(shot.target, &obstacles) };
-        world.spawn((
-            Mesh3d(cube.clone()),
-            MeshMaterial3d(red.clone()),
-            transform,
-            GlobalTransform::from(transform),
-            bevy::light::NotShadowCaster,
-            LaserBolt { from, direction, distance, age: 0.0, impact: obstacle_hit,
-                hit_actor: shot.hit_actor, cover: contact, seed: shot.seed, predicted: shot.predicted },
-        ));
+        spawn_bolt(world, LaserBolt { from, direction, distance, age: 0.0, impact: obstacle_hit,
+            hit_actor: shot.hit_actor, cover: contact, seed: shot.seed, predicted: shot.predicted });
     }
+}
+
+/// Draws a bolt that doesn't hit anything, as `emit_lasers` would: for the
+/// VFX stress harness (`vfx_stress.rs`). Call it after transform propagation,
+/// before `bevy_sprinkles::SprinklesLateSetup`.
+pub fn stress_bolt(world: &mut World, from: Vec3, target: Vec3, seed: u32) {
+    let delta = target - from;
+    let distance = delta.length();
+    if distance >= 0.05 {
+        spawn_bolt(world, LaserBolt { from, direction: delta / distance, distance, age: 0.0, impact: None,
+            hit_actor: false, cover: None, seed, predicted: None });
+    }
+}
+
+fn spawn_bolt(world: &mut World, bolt: LaserBolt) {
+    let LaserBolt { from, direction, distance, seed, .. } = bolt;
+    let (_, front) = laser_segment(distance, 0.0).unwrap();
+    let transform = Transform::from_translation(from + direction * (front * 0.5))
+        .with_rotation(Quat::from_rotation_arc(Vec3::Z, direction))
+        .with_scale(Vec3::new(LASER_WIDTH, LASER_WIDTH, front));
+    // VFX spike: the effect file draws the bolt; the `LaserBolt` keeps the
+    // timing (arrival, cover hold, impact) either way.
+    let trigger = crate::vfx::Trigger::new(from, direction).target(from + direction * distance).seed(seed);
+    if crate::vfx::spawn(world, "laser_bolt", trigger) {
+        world.spawn((transform, bolt));
+        return;
+    }
+    let assets = world.resource::<FxAssets>();
+    let (cube, red) = (assets.cube.clone(), assets.laser.clone());
+    world.spawn((
+        Mesh3d(cube),
+        MeshMaterial3d(red),
+        transform,
+        GlobalTransform::from(transform),
+        bevy::light::NotShadowCaster,
+        bolt,
+    ));
 }
 
 pub fn deflection(world: &mut World, position: Vec3, seed: u32) {

@@ -87,7 +87,7 @@
     },
     {
       "op": "wait",
-      "frames": 34
+      "frames": 36
     },
     {
       "op": "equip_weapon",
@@ -107,13 +107,13 @@
         1.5
       ]
     },
-    {"op": "wait", "frames": 64},
+    {"op": "wait", "frames": 66},
     {"op": "strike", "target": [0, 1.5]},
-    {"op": "wait", "frames": 90},
+    {"op": "wait", "frames": 92},
     {"op": "strike", "target": [0, 1.8]},
-    {"op": "wait", "frames": 60},
+    {"op": "wait", "frames": 62},
     {"op": "strike", "target": [0, 1.5]},
-    {"op": "wait", "frames": 45},
+    {"op": "wait", "frames": 47},
     {"op": "strike", "target": [0, 1.5]},
     {
       "op": "settlement_defender",

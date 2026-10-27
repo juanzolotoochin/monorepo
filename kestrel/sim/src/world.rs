@@ -492,19 +492,16 @@ impl World {
                 | CommandKind::DigDown { .. }
                 | CommandKind::ReleaseDirectControl { .. }
                 | CommandKind::RepairCover { .. }
+                | CommandKind::Pile { .. }
                 | CommandKind::Board { .. } => {
                     if let (Some(s), Some((agent, action))) = (&mut self.settlement, Action::of(kind)) {
                         s.act(self.tick, agent, &action, &self.terrain, &mut self.actions);
                     }
                 }
+                // A piano key changes no agent, so it is no action.
                 CommandKind::PlayPiano { agent, piano, pitch, velocity } => {
                     if let Some(s) = &mut self.settlement {
                         s.play_piano(agent as usize, piano, pitch, velocity);
-                    }
-                }
-                CommandKind::Pile { agent, action, pace, approach } => {
-                    if let Some(s) = &mut self.settlement {
-                        s.pile_action(self.tick, &self.terrain, agent as usize, action, pace, approach);
                     }
                 }
                 CommandKind::Dispense { dispenser, units } => {

@@ -54,7 +54,6 @@ impl Settlement {
                 heading: Fx::PI,
                 health: self.player_health,
                 max_health: self.player_health,
-                speed: template.body.speed,
                 base_radius: template.body.base_radius,
                 ..Body::default()
             },

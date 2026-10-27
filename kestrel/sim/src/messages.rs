@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::hash::{StateHash, StateHasher};
 use crate::id::Id;
 use crate::mover::Mover;
+use crate::settlement::piles::PileJob;
 use crate::settlement::{CarryJob, InventoryRef};
 
 /// One mover attacks another.
@@ -214,6 +215,30 @@ pub struct DropNotes {
     pub serial: u64,
 }
 
+/// A player's pile haul (`Action::Haul`): the pile lab's part, after the
+/// avatar's part planned the walk and took the units on its own side
+/// (`PileLab::start_haul`). Unlike the other action messages it applies at
+/// once, in stage 1, as the `Pile` command always did, so a later command
+/// in the same turn sees the haul (`todo/characters.md`, "Turn the memory
+/// commands' world writes into messages").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StartHaul {
+    pub agent: u16,
+    pub start: HaulStart,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HaulStart {
+    /// Refused before it replaced the running haul: an interval out of
+    /// range, or units still in the air.
+    Refused(&'static str),
+    /// The running haul, if any, ended: its job serial moves on, and what
+    /// its carry job held on the other side is given back (`releases`).
+    /// Then the new haul starts (its walk, and its carry job, which holds
+    /// its units on the agent's side already), or fails with this error.
+    Replaced { releases: Vec<ReserveStock>, start: Result<(PileJob, CarryJob), &'static str> },
+}
+
 /// A player respawned (`Action::Respawn`): the memory trial starts over and
 /// its door closes again.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -318,17 +343,21 @@ pub struct ActionMessages {
     pub drop_haul: Vec<DropHaul>,
     pub drop_notes: Vec<DropNotes>,
     pub reserve_stock: Vec<ReserveStock>,
+    /// Applied at once by `Settlement::act`, not in stage 5 (`StartHaul`),
+    /// so always empty by then.
+    pub haul: Vec<StartHaul>,
     pub board: Vec<Board>,
 }
 
 impl ActionMessages {
     pub fn is_empty(&self) -> bool {
-        self.restart_memory.is_empty() && self.drop_haul.is_empty() && self.drop_notes.is_empty() && self.reserve_stock.is_empty()
+        self.restart_memory.is_empty() && self.drop_haul.is_empty() && self.drop_notes.is_empty() && self.reserve_stock.is_empty() && self.haul.is_empty()
             && self.board.is_empty()
     }
 }
 
 impl StateHash for ActionMessages {
+    // `haul` is left out: it is applied before anything hashes the queues.
     fn hash_into(&self, h: &mut StateHasher) {
         h.write(&self.restart_memory);
         h.write(&self.drop_haul);

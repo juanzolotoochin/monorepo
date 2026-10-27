@@ -334,7 +334,6 @@ pub(super) fn seat(body: &mut super::Body, avatar: &mut super::avatar::AvatarSta
     let (position, height) = v.seat(def);
     body.position = position;
     body.heading = v.heading;
-    body.travel_heading = v.heading;
     body.velocity = FxVec2::ZERO;
     avatar.height = height;
     avatar.flight.airborne = false;

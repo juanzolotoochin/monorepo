@@ -22,7 +22,7 @@ rust_binary(
     name = "demo",
     srcs = glob(["src/**/*.rs"]),
     # Bevy's derive macros inspect Cargo.toml to locate the `bevy` re-exports.
-    compile_data = ["//:Cargo.toml", "actors/exosuit.ron", "shaders/grass.wesl"],
+    compile_data = ["//:Cargo.toml", "actors/exosuit.ron", "shaders/grass.wesl"] + glob(["vfx/*.ron"]),
     edition = "2021",
     link_deps = select({
         "@platforms//cpu:wasm32": [],
@@ -54,6 +54,7 @@ rust_binary(
         "//kestrel/session",
         "//kestrel/sim",
         "//kestrel/tools/assetc/core:voxel_assets",
+        "//kestrel/vfx/sprinkles:bevy_sprinkles",
         "@crates//:bevy",
         "@crates//:image",
         "@crates//:ron",

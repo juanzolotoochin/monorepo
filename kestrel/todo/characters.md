@@ -1,32 +1,11 @@
 # Characters
 
-## Move pile hauls and piano keys onto actions
-
-- **Status:** open
-- **Why:** the `Pile` and `PlayPiano` commands still bypass
-  `settlement::action`. `Settlement::pile_action` checks and writes pile lab
-  state (the hauler's job, serial and notice) around planning the avatar's
-  route, so its agent part can't be split off cleanly, and the replay keeps
-  returning false for it. A piano key changes only `piano_notes`, nothing on
-  the avatar.
-- **What to do:** now that ending a haul is a message (`DropHaul`, handoff
-  D3, task 7), or once pile jobs merge into
-  the shared body's cargo (step 5), make a pile haul an action (step 5's
-  "interact") whose agent part plans the walk, and let the replay predict
-  it. Decide whether a piano key is an "interact" action with no agent part
-  or stays a world command.
-- **Where:** `kestrel/sim/src/settlement/action.rs` (`Action::of`),
-  `piles.rs` (`pile_action`), `piano.rs` (`play_piano`),
-  `prediction.rs` (`AvatarReplay::apply`).
-- **Found in:** ability prediction task 2, the shared action path
-  (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D2).
-
 ## Turn the memory commands' world writes into messages
 
 - **Status:** open
 - **Why:** since task 7 a `Respawn` restarts the memory trial in stage 5,
-  but `MemoryRecord`, `MemoryDeploy` and `MemoryClear` (and `Pile` and
-  `PlayPiano`) still write the world when the command applies. In one turn,
+  but `MemoryRecord`, `MemoryDeploy` and `MemoryClear` (and a `Pile`'s lab
+  part, `StartHaul`, and `PlayPiano`) still write the world when the command applies. In one turn,
   a Respawn followed by `MemoryRecord` now loses the recording, which used
   to start after the restart. `MemoryDeploy` also cancels the avatar's pile
   haul and moves the avatar directly.
@@ -37,70 +16,6 @@
 - **Where:** `kestrel/sim/src/settlement/memory.rs`, `world.rs`
   (`apply_commands`), `messages.rs` (`ActionMessages`).
 - **Found in:** ability prediction task 7 (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D3).
-
-## Present the arc coil's shot early
-
-- **Status:** open
-- **Why:** `ArcFired` is predicted (`Event::prediction` says `Keep`), but a
-  client still draws it only once confirmed. Its arc chains into the
-  `Hit { impact: Arc }` events that follow it in the same tick
-  (`arc_source` and `arc_fired` in `app/src/settlement.rs`): skipping a
-  confirmed `ArcFired` already drawn would make the next hit draw an extra
-  arc from the player. The legacy `ArcFired` also doesn't carry the agent.
-- **What to do:** give the legacy event its agent, draw the predicted arc
-  and its `Cue::Arc` from the ledger, and let a matched confirmed
-  `ArcFired` still set the chain's start for the hits without drawing again.
-  Then add `"arc"` to `PRESENTED_EARLY`.
-- **Where:** `kestrel/app/src/event_prediction.rs` (`PRESENTED_EARLY`),
-  `kestrel/app/src/lockstep.rs` (`predict_events`),
-  `kestrel/app/src/settlement.rs`, `kestrel/app/src/legacy.rs`.
-- **Found in:** ability prediction task 4, the predicted-events ledger
-  (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D8).
-
-## Draw a predicted arrow in flight
-
-- **Status:** open
-- **Why:** a client's own bow shot is presented only once confirmed, about
-  an input lead after the drawn avatar looses it, because the arrow is a
-  projectile in the confirmed world. Task 4 played the bow's sound early,
-  but sound an input lead before the arrow appears felt worse than late, so
-  task 5 made the bow confirmed-only again (`BowFired` is not in
-  `PRESENTED_EARLY`).
-- **What to do:** decide whether to draw a predicted arrow from `BowFired`
-  (it has no aim or speed yet) that hands over to the confirmed projectile,
-  or accept the gap. If it is drawn, add `"bow"` to `PRESENTED_EARLY`,
-  present the arrow with its `Cue::Bow` in `predict_events`, give the legacy
-  `BowFired` its agent back, and skip the matched confirmed shot's arrow and
-  sound in `settlement.rs` (`presented_early.next("bow")`). Ghouls hitting agents
-  (step 5) may change what a bow shot needs.
-- **Where:** `kestrel/app/src/event_prediction.rs` (`PRESENTED_EARLY`),
-  `kestrel/app/src/lockstep.rs` (`predict_events`), projectile
-  views in `kestrel/app/src/settlement.rs`, `kestrel/app/src/legacy.rs`,
-  `strike_event` in
-  `kestrel/sim/src/settlement/combat.rs`.
-- **Found in:** ability prediction task 4, the predicted-events ledger
-  (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D8).
-
-## Follow a matched swing to its end
-
-- **Status:** open
-- **Why:** the local swing starts on the press and, once the drawn avatar
-  swings for it, takes that swing's stroke; then it plays on the view's own
-  clock (`combat::follow_drawn_swing`). So a matched swing the prediction
-  later withdraws plays out, and a confirmed sword or spear hit, which
-  shortens the simulated swing to the rebound in stage 5, isn't reflected
-  in the pose (the view rebounds only off its own obstacles). Ending a
-  matched swing when the drawn one ends would cut its recovery short,
-  since the press starts the view's swing a few ticks before the drawn
-  avatar's.
-- **What to do:** time a matched swing from the drawn swing (`started`,
-  `until`, `resolved`) at the drawn time, keeping the press's head start
-  only until the drawn swing shows, and end it when the drawn avatar no
-  longer swings.
-- **Where:** `kestrel/app/src/combat.rs` (`follow_drawn_swing`, `combat`,
-  `Attack`), `kestrel/app/src/gameplay.rs` (`Controls`).
-- **Found in:** ability prediction task 5, lasting effects from the drawn
-  state (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D5).
 
 ## Make the control snapshot read one avatar consistently
 
@@ -162,22 +77,6 @@
   `haulers.rs`, `within_swing_height` in `combat.rs`.
 - **Found in:** branch `kestrel-shared-body`.
 
-## Trim body fields one role ignores
-
-- **Status:** open
-- **Why:** `Body::speed` and `travel_heading` are used only by haulers: an
-  avatar moves at its character's `movement` speeds and has no travel
-  heading. They sit in the body so every agent has the same shape.
-- **What to do:** once actions drive haulers too (step 5, "Haulers"), read
-  the speed from the character for both roles, and decide whether the
-  travel heading belongs to the hauler. A save format change.
-- **Unblocked:** actions drive haulers since branch
-  `kestrel-hauler-actions` (`kestrel/HAULER_ACTIONS_HANDOFF.md`). Do it as
-  its own change, since it changes the save format.
-- **Where:** `Body` in `kestrel/sim/src/settlement/agent.rs`, `speed_now`
-  in `haulers.rs`.
-- **Found in:** branch `kestrel-shared-body`.
-
 ## Share the "busy carrying" rule between the sim and the app
 
 - **Status:** open
@@ -233,20 +132,6 @@
   `mod.rs`.
 - **Found in:** inventory step 5 (`kestrel/INVENTORY_HANDOFF.md`).
 
-## Give a scene's empty starting pile a mineral
-
-- **Status:** open
-- **Why:** since inventory step 6 a pile's mineral is what its `OneKind`
-  inventory holds (or a dispenser's `source`). A non-dispenser pile set up
-  with 0 units therefore has no mineral: it takes a deposit of any mineral,
-  where it used to take only its own, and the app draws it as amber. No
-  scene does this today (`pile_lab.ron` starts every pile with units).
-- **What to do:** reject a 0-unit starting pile in `Settlement::from_scene`
-  (or the scene loader), or leave it out.
-- **Where:** `PileLab::new` in `kestrel/sim/src/settlement/piles.rs`;
-  `from_scene` in `mod.rs`; `app/src/lockstep.rs` (the `PileSetup`).
-- **Found in:** inventory step 6 (`kestrel/INVENTORY_HANDOFF.md`).
-
 ## Decide whether minerals show in the settlement panel
 
 - **Status:** open
@@ -258,22 +143,6 @@
   and hide the minerals there or label them.
 - **Where:** `kestrel/app/src/legacy.rs` (`balances`), the settlement HUD.
 - **Found in:** inventory step 6 (`kestrel/INVENTORY_HANDOFF.md`).
-
-## Let a drop or a delivery name its mineral
-
-- **Status:** open
-- **Why:** a player's cargo mixes minerals since inventory step 7, but
-  `PileAction::Drop` and `Deliver` name no mineral (changing them would
-  change `CommandKind` and the input log), so a drop puts down the first
-  mineral carried, in mineral order, and a delivery takes all of them. A
-  player can't choose which ore to put down.
-- **What to do:** add a mineral to the drop (and maybe the delivery) as a
-  new append-only `CommandKind` variant or field, with the input format bumped,
-  and let the app pick it (the backpack's top unit, or a menu).
-- **Where:** `sim/src/settlement/piles.rs` (`PileLab::plan`),
-  `sim/src/world.rs` (`CommandKind::Pile`), `app/src/piles/mod.rs` (`input`),
-  `app/src/input/gameplay.rs`.
-- **Found in:** inventory step 7 (`kestrel/INVENTORY_HANDOFF.md`, Decisions).
 
 ## Let threat brains pick actions
 
@@ -289,6 +158,238 @@
 - **Found in:** threat characters (`kestrel/THREAT_CHARACTERS_HANDOFF.md`, D4).
 
 ## Done
+
+### Follow a matched swing to its end
+
+- **Status:** done (branch `kestrel-character-todos`)
+- **Why:** the local swing started on the press and, once the drawn avatar
+  swung for it, took that swing's stroke; then it played on the view's own
+  clock (`combat::follow_drawn_swing`). So a matched swing the prediction
+  later withdrew played out, and a confirmed sword or spear hit, which
+  shortens the simulated swing to the rebound in stage 5, wasn't reflected
+  in the pose (the view rebounded only off its own obstacles). Ending a
+  matched swing when the drawn one ends would cut its recovery short,
+  since the press starts the view's swing a few ticks before the drawn
+  avatar's.
+- **What to do:** time a matched swing from the drawn swing (`started`,
+  `until`, `resolved`) at the drawn time, keeping the press's head start
+  only until the drawn swing shows, and end it when the drawn avatar no
+  longer swings.
+- **Where:** `kestrel/app/src/combat.rs` (`follow_drawn_swing`, `combat`,
+  `Attack`), `kestrel/app/src/gameplay.rs` (`Controls`).
+- **Found in:** ability prediction task 5, lasting effects from the drawn
+  state (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D5).
+- **Done:** app only. `Attack::bound` became `matched` (the drawn swing's
+  `Swing::pressed`) plus `drawn_age`, the age the drawn swing has at the
+  drawn time. Before the match the press plays on the view's clock (its
+  head start). Once matched, `follow_drawn_swing` sets `drawn_age` every
+  frame and `combat` advances the age with `Attack::advanced`: the view's
+  own step, with its offset from `drawn_age` decaying over `CATCH_UP`
+  (0.12 s), never going back. A head start of a few ticks slows the swing
+  to roughly half speed for its first frames instead of popping it back;
+  it meets the drawn age well before the recovery. When the drawn swing is
+  resolved with hits and is a sword or spear swing, the view starts its
+  rebound from its current angle (`impact_angle`, age 0) and eases onto the
+  drawn rebound (`rebound_end` before `until`), with no hit stop or sparks
+  of its own (those stay with the confirmed `Hit`). A rebound off the
+  view's own obstacles plays on the view's clock. The matched swing ends
+  when the drawn avatar no longer has it (its `pressed` tick) or the drawn
+  time reaches its `until`, and a queued press swings next
+  (`combat::end_attack`). `Controls` didn't change. Tests in `combat.rs`:
+  `a_matched_swing_eases_onto_the_drawn_timing_and_ends_with_it`,
+  `a_withdrawn_swing_ends_and_the_queued_press_swings`,
+  `a_confirmed_hit_rebounds_the_pose`, `an_unmatched_press_plays_on_the_view_clock`.
+
+### Draw a predicted arrow in flight
+
+- **Status:** done (branch `kestrel-character-todos`)
+- **Why:** a client's own bow shot was presented only once confirmed, about
+  an input lead after the drawn avatar loosed it, because the arrow is a
+  projectile in the confirmed world. Task 4 played the bow's sound early,
+  but sound an input lead before the arrow appears felt worse than late, so
+  task 5 made the bow confirmed-only again (`BowFired` was not in
+  `PRESENTED_EARLY`).
+- **What to do:** draw a predicted arrow from `BowFired` (it had no aim or
+  speed) that hands over to the confirmed projectile, add `"bow"` to
+  `PRESENTED_EARLY`, present the arrow with its `Cue::Bow` in
+  `predict_events`, give the legacy `BowFired` its agent back, and skip the
+  matched confirmed shot's arrow and sound in `settlement.rs`
+  (`presented_early.next("bow")`).
+- **Where:** `kestrel/app/src/event_prediction.rs` (`PRESENTED_EARLY`),
+  `kestrel/app/src/lockstep.rs` (`predict_events`), projectile
+  views in `kestrel/app/src/settlement.rs`, `kestrel/app/src/legacy.rs`,
+  `strike_event` in
+  `kestrel/sim/src/settlement/combat.rs`.
+- **Found in:** ability prediction task 4, the predicted-events ledger
+  (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D8).
+- **Done:** the sim's `BowFired` carries its arrow's flight (`from`, `to`,
+  `height`, `flight` ticks), from the same `arrow_flight` the projectile is
+  built from, so `strike_event` now takes the weapon's tuning. Events aren't
+  state (not hashed or serialized); the golden file is unchanged. The legacy
+  `BowFired` carries its `agent` and the confirmed `projectile` it added.
+  `PRESENTED_EARLY` is laser, arc and bow. `predict_events` presents a
+  predicted shot as a `settlement::PredictedArrow` and plays `Cue::Bow` on
+  the same frame. `settlement.rs` draws an unconfirmed arrow as a projectile
+  view (`projectile/predicted/{id}`) on its own clock at
+  `PREDICTED_ARROW_PACE` (half) of the drawn time. A matched confirmed shot
+  plays no sound and its projectile takes the arrow over: the same rig (the
+  view is moved to `projectile/{id}`), drawn at the later of its confirmed
+  age and the arrow's paced age, so it never jumps back and meets the
+  confirmed flight after twice the input lead, before it can hit anything.
+  A shot that never confirms (expired or dropped by the ledger) withdraws
+  its arrow; an unconfirmed arrow that has come down, or one left after a
+  ledger reset, is dropped. A confirmed shot that differs (`Keep`) still
+  takes the arrow over, and snaps to the confirmed flight's line.
+
+### Present the arc coil's shot early
+
+- **Status:** done (branch `kestrel-character-todos`)
+- **Why:** `ArcFired` is predicted (`Event::prediction` says `Keep`), but a
+  client still drew it only once confirmed. Its arc chains into the
+  `Hit { impact: Arc }` events that follow it in the same tick
+  (`arc_source` and `arc_fired` in `app/src/settlement.rs`): skipping a
+  confirmed `ArcFired` already drawn would make the next hit draw an extra
+  arc from the player. The legacy `ArcFired` also didn't carry the agent.
+- **What to do:** give the legacy event its agent, draw the predicted arc
+  and its `Cue::Arc` from the ledger, and let a matched confirmed
+  `ArcFired` still set the chain's start for the hits without drawing again.
+  Then add `"arc"` to `PRESENTED_EARLY`.
+- **Where:** `kestrel/app/src/event_prediction.rs` (`PRESENTED_EARLY`),
+  `kestrel/app/src/lockstep.rs` (`predict_events`),
+  `kestrel/app/src/settlement.rs`, `kestrel/app/src/legacy.rs`.
+- **Found in:** ability prediction task 4, the predicted-events ledger
+  (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D8).
+- **Done:** `PRESENTED_EARLY` is laser and arc. The legacy `ArcFired`
+  carries its `agent`. `predict_events` presents a predicted shot as its
+  arc from `from` to `to` (to the first target) through
+  `effects::PendingArcs`, drawn by `effects::emit_arcs`, and plays
+  `Cue::Arc`. `settlement.rs` keeps the chain in `ArcChain`: a matched
+  confirmed shot (`presented_early.next("arc")`) draws nothing and plays no
+  sound, but still starts the chain, so its first hit draws nothing and
+  later hits arc on from it. Unmatched shots (withdrawn, never presented,
+  or already given up) are drawn as confirmed; one that confirms ending
+  elsewhere stays as drawn (`Keep`). Tests: the ledger
+  (`an_arc_shot_is_presented_once_and_kept_however_it_confirms`), the chain
+  (`an_arc_shot_drawn_early_still_starts_its_chain`) and a relayed client
+  in the combat arena (`joined_player_arc_shots_are_presented_early_once`).
+  Not yet looked at in play: the early arc is drawn from the shot's
+  predicted `from` at a fixed height, not the arc coil's muzzle, and to
+  where the replay had the first ghoul.
+
+### Move pile hauls and piano keys onto actions
+
+- **Status:** done (branch `kestrel-character-todos`)
+- **Why:** the `Pile` and `PlayPiano` commands still bypass
+  `settlement::action`. `Settlement::pile_action` checks and writes pile lab
+  state (the hauler's job, serial and notice) around planning the avatar's
+  route, so its agent part can't be split off cleanly, and the replay keeps
+  returning false for it. A piano key changes only `piano_notes`, nothing on
+  the avatar.
+- **What to do:** now that ending a haul is a message (`DropHaul`, handoff
+  D3, task 7), or once pile jobs merge into
+  the shared body's cargo (step 5), make a pile haul an action (step 5's
+  "interact") whose agent part plans the walk, and let the replay predict
+  it. Decide whether a piano key is an "interact" action with no agent part
+  or stays a world command.
+- **Where:** `kestrel/sim/src/settlement/action.rs` (`Action::of`),
+  `piles.rs` (`pile_action`), `piano.rs` (`play_piano`),
+  `prediction.rs` (`AvatarReplay::apply`).
+- **Done:** a `Pile` command is `Action::Haul { action, pace, approach }`
+  and goes through `action::act` like the other actions; `pile_action` is
+  gone. Its avatar part (`piles::haul`) reads the lab through the `View`
+  and writes only the avatar: the running haul's carry job ends (its own
+  side given back), the new haul is planned against the lab as that
+  release leaves it, holds its units on the avatar's side, and points the
+  avatar along its route. The lab's part is a `StartHaul` message
+  (`PileLab::start_haul`: serial, notice, the old haul's lab-side release,
+  a drop's new pile, the new haul's lab-side hold), which `Settlement::act`
+  applies at once in stage 1, not in stage 5, so every check and write
+  happens in the order the command always ran them and a later command in
+  the same turn still sees the haul. Moving it to stage 5 would change
+  in-turn ordering; that is the open "Turn the memory commands' world
+  writes into messages" todo, which already lists `Pile`. Golden file and
+  determinism hashes unchanged; no format change (`Action` isn't saved or
+  sent). The replay (`AvatarReplay`) now predicts pile hauls: it keeps a
+  copy-on-write copy of the pile lab, applies its own `StartHaul` to it,
+  walks the haul in stage 2 as the simulation does, and plays its own part
+  of stage 5 and housekeeping (`DropHaul`, a respawn's lab release, a
+  failed walk, the haul's clocks, via the shared `cancel_haul`, `end_haul`
+  and `tend_haul`). Units tossed in stage 5 stay unpredicted, like a dock's.
+  `apply` and `step_with` no longer return whether a command was
+  predicted, since every one is; the app's `touched` skips ticks with a
+  haul before or after them, and its tests withdraw a prediction through a
+  `WithdrawPrediction` resource instead of an unpredictable `Pile`. A
+  piano key stays a world command: it changes nothing on the avatar, so it
+  would be an action with no agent part and only a world message, which
+  the replay ignores either way. Tested in `prediction.rs`
+  (`replayed_pile_hauls_match_the_simulation`: random hauls, walks,
+  releases and respawns in the pile lab, the replayed avatar and its
+  hauler equal the simulation's until a unit is tossed;
+  `a_haul_walks_in_the_replay_as_in_the_simulation`).
+- **Found in:** ability prediction task 2, the shared action path
+  (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D2).
+
+### Give a scene's empty starting pile a mineral
+
+- **Status:** done (branch `kestrel-character-todos`)
+- **Why:** since inventory step 6 a pile's mineral is what its `OneKind`
+  inventory holds (or a dispenser's `source`). A non-dispenser pile set up
+  with 0 units therefore has no mineral: it takes a deposit of any mineral,
+  where it used to take only its own, and the app draws it as amber. No
+  scene does this today (`pile_lab.ron` starts every pile with units).
+- **What to do:** reject a 0-unit starting pile in `Settlement::from_scene`
+  (or the scene loader), or leave it out.
+- **Where:** `PileLab::new` in `kestrel/sim/src/settlement/piles.rs`;
+  `from_scene` in `mod.rs`; `app/src/lockstep.rs` (the `PileSetup`).
+- **Done:** `Settlement::from_scene` refuses a scene whose starting pile has
+  no units ("starting pile N has no units; give it some, or make it a
+  dispenser"), so the world isn't made; a pile meant to start empty is a
+  dispenser. Tested in `scene_tests.rs`.
+- **Found in:** inventory step 6 (`kestrel/INVENTORY_HANDOFF.md`).
+
+### Let a drop or a delivery name its mineral
+
+- **Status:** done (branch `kestrel-character-todos`)
+- **Why:** a player's cargo mixes minerals since inventory step 7, but
+  `PileAction::Drop` and `Deliver` name no mineral (changing them would
+  change `CommandKind` and the input log), so a drop puts down the first
+  mineral carried, in mineral order, and a delivery takes all of them. A
+  player can't choose which ore to put down.
+- **What to do:** add a mineral to the drop (and maybe the delivery) as a
+  new append-only `CommandKind` variant or field, with the input format bumped,
+  and let the app pick it (the backpack's top unit, or a menu).
+- **Where:** `sim/src/settlement/piles.rs` (`PileLab::plan`),
+  `sim/src/world.rs` (`CommandKind::Pile`), `app/src/piles/mod.rs` (`input`),
+  `app/src/input/gameplay.rs`.
+- **Done:** `PileAction::DropMineral(position, mineral)`, appended after
+  every other action, puts down all of the named mineral; it is refused for
+  a mineral not carried or unknown. `Drop` stays, for older logs and the
+  control protocol's `DropAll`, and still puts down the first mineral. The
+  app's click and B drops name the backpack's top unit (the last mineral
+  in mineral order, `Cargo::top`). `Deliver` still empties every mineral:
+  the collector takes any mix and only counts, so choosing gains nothing.
+  Input log format 3 (a version-2 log naming a drop is refused as corrupt),
+  net protocol 5; save format 21 (unreleased on this branch) notes the new
+  action. Golden hashes unchanged.
+- **Found in:** inventory step 7 (`kestrel/INVENTORY_HANDOFF.md`, Decisions).
+
+### Trim body fields one role ignores
+
+- **Status:** done (branch `kestrel-character-todos`)
+- **Why:** `Body::speed` and `travel_heading` are used only by haulers: an
+  avatar moves at its character's `movement` speeds and has no travel
+  heading. They sat in the body so every agent had the same shape.
+- **What to do:** read the speed from the character for both roles, and
+  decide whether the travel heading belongs to the hauler. A save format
+  change.
+- **Where:** `Body` in `kestrel/sim/src/settlement/agent.rs`, `speed_now`
+  in `haulers.rs`.
+- **Done:** `Body` has no `speed`: a hauler's `walk` reads its character's
+  `movement.walk` (per tick) and `speed_now` slows it for towed equipment,
+  as the copy did. `travel_heading` moved to `HaulerState`, since only a
+  hauler's steering and trailer use it. Save format 21. The golden report's
+  state hashes changed with the shape; every behaviour digest stayed.
+- **Found in:** branch `kestrel-shared-body`.
 
 ### Keep a player's health over the Respawn action
 

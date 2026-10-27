@@ -87,6 +87,9 @@ pub struct HaulerState {
     pub assignment: Option<Assignment>,
     pub equipped: bool,
     pub trailer: Option<Trailer>,
+    /// The way the body is going, which a trailer's turning circle starts
+    /// from; `Body::heading` is the way it faces, turning more slowly.
+    pub travel_heading: Fx,
     /// While attaching, when the equipment is on. Loading and unloading
     /// time their units with the carry job (`CarryJob::next_tick`).
     pub transfer_at: u64,
@@ -144,10 +147,11 @@ impl HaulerState {
         }
     }
 
-    fn speed_now(&self, body: &Body) -> Fx {
+    /// Meters per tick: the character's walk, slowed by towed equipment.
+    fn speed_now(&self, walk: Fx) -> Fx {
         match &self.equipment {
-            Some(e) if self.equipped => body.speed * e.speed_factor,
-            _ => body.speed,
+            Some(e) if self.equipped => walk * e.speed_factor,
+            _ => walk,
         }
     }
 
@@ -161,7 +165,7 @@ impl HaulerState {
         if !terrain.clear(t.position, t.position, e.radius) {
             return nav::path_avoiding(terrain, body.position, to, self.radius(body), extra);
         }
-        let route = nav::articulated_path_avoiding(terrain, body.position, to, body.travel_heading, t.position, e.hitch, self.radius(body), e.radius, extra);
+        let route = nav::articulated_path_avoiding(terrain, body.position, to, self.travel_heading, t.position, e.hitch, self.radius(body), e.radius, extra);
         if route.is_empty() {
             // No turning circle fits here (a tight corner): take the direct
             // route rather than wait forever. The trailer follows its hitch.
@@ -176,13 +180,13 @@ impl HaulerState {
     pub(super) fn trailer_spot(&self, body: &Body, terrain: &Terrain) -> (FxVec2, Fx) {
         let e = self.equipment.as_ref().expect("only equipped agents get trailers");
         for sixths in [0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6] {
-            let heading = body.travel_heading + Fx::PI.mul_int(sixths).div_int(6);
+            let heading = self.travel_heading + Fx::PI.mul_int(sixths).div_int(6);
             let spot = body.position - nav::heading_vector(heading) * e.hitch;
             if terrain.clear(spot, spot, e.radius) {
                 return (spot, heading);
             }
         }
-        (body.position - nav::heading_vector(body.travel_heading) * e.hitch, body.travel_heading)
+        (body.position - nav::heading_vector(self.travel_heading) * e.hitch, self.travel_heading)
     }
 
     fn dock(&self, links: &[LinkState]) -> Option<DepotIx> {
@@ -353,18 +357,19 @@ pub(super) fn think(a: &mut AgentState, me: AgentIx, ctx: &Ctx) -> Option<Action
 /// hauler that just loaded waits a tick to set off, one that just turned
 /// for home sets off at once. The trailer follows last.
 fn walk(a: &mut AgentState, start: Phase, me: AgentIx, ctx: &Ctx) {
-    let AgentState { body, carry, role: Role::Hauler(hauler), .. } = a else { unreachable!("haulers walk") };
+    let AgentState { character, body, carry, role: Role::Hauler(hauler), .. } = a else { unreachable!("haulers walk") };
+    let walk = ctx.characters[*character as usize].movement.walk.div_int(content::TICKS_PER_SECOND as i64);
     match start {
         Phase::Idle | Phase::Returning => {
             if hauler.phase == Phase::Returning {
-                let speed = hauler.speed_now(body);
+                let speed = hauler.speed_now(walk);
                 travel(body, hauler, carry, me, ctx, speed);
                 if body.route.is_empty() {
                     hauler.phase = Phase::Idle;
                 }
             }
         }
-        Phase::ToPickup | Phase::ToDrop | Phase::ToEquip => approach(body, hauler, carry, me, ctx),
+        Phase::ToPickup | Phase::ToDrop | Phase::ToEquip => approach(body, hauler, carry, me, ctx, walk),
         Phase::Loading | Phase::Unloading | Phase::Attaching => {}
     }
     if let (Some(trailer), Some(e)) = (&mut hauler.trailer, &hauler.equipment) {
@@ -381,7 +386,8 @@ fn walk(a: &mut AgentState, start: Phase, me: AgentIx, ctx: &Ctx) {
 
 /// Walks to the dock: queues while another agent owns it, backing out of a
 /// larger carrier's way, and docks on arrival. `think` replans a lost route.
-fn approach(body: &mut Body, hauler: &mut HaulerState, carry: &Carry, me: AgentIx, ctx: &Ctx) {
+/// `walk` is the character's walk speed, in meters per tick.
+fn approach(body: &mut Body, hauler: &mut HaulerState, carry: &Carry, me: AgentIx, ctx: &Ctx, walk: Fx) {
     let dock = hauler.dock(ctx.links).expect("approaching agents have a dock");
     let goal = ctx.depots[dock as usize].position;
     let owner = ctx.dock_owner[dock as usize];
@@ -408,13 +414,13 @@ fn approach(body: &mut Body, hauler: &mut HaulerState, carry: &Carry, me: AgentI
                 away.x.clamp(min.x + margin, max.x - margin),
                 away.y.clamp(min.y + margin, max.y - margin),
             )];
-            let speed = body.speed;
+            let speed = walk;
             travel(body, hauler, carry, me, ctx, speed);
             body.route = route;
         }
         return;
     }
-    let speed = hauler.speed_now(body);
+    let speed = hauler.speed_now(walk);
     travel(body, hauler, carry, me, ctx, speed);
     if body.route.is_empty() && !busy && owner == Some(me) && distance(body.position, goal) <= Fx::from_ratio(1, 10) {
         hauler.phase = match hauler.phase {
@@ -534,7 +540,7 @@ fn move_worker(body: &mut Body, hauler: &mut HaulerState, me: AgentIx, ctx: &Ctx
     let straight = Fx::ZERO;
     let mut angles: Vec<Fx> = [0, 55, 105, 155, -55, -105, -155].iter().map(|&h| Fx::from_ratio(h, 100)).collect();
     if delta != FxVec2::ZERO {
-        let keep = angle_between(nav::bearing(FxVec2::ZERO, delta), body.travel_heading);
+        let keep = angle_between(nav::bearing(FxVec2::ZERO, delta), hauler.travel_heading);
         if keep != straight && keep.abs() <= Fx::from_ratio(3, 2) {
             angles.insert(1, keep);
         }
@@ -551,14 +557,14 @@ fn move_worker(body: &mut Body, hauler: &mut HaulerState, me: AgentIx, ctx: &Ctx
             });
         if clear {
             let target = nav::bearing(body.position, next);
-            let travel_turn = angle_between(body.travel_heading, target);
+            let travel_turn = angle_between(hauler.travel_heading, target);
             let turn = angle_between(body.heading, target);
             body.heading += turn.clamp(-TURN_PER_TICK, TURN_PER_TICK);
             if travel_turn.abs() > TRAVEL_TURN_PER_TICK {
-                body.travel_heading += travel_turn.clamp(-TRAVEL_TURN_PER_TICK, TRAVEL_TURN_PER_TICK);
+                hauler.travel_heading += travel_turn.clamp(-TRAVEL_TURN_PER_TICK, TRAVEL_TURN_PER_TICK);
                 return;
             }
-            body.travel_heading = target;
+            hauler.travel_heading = target;
             body.position = next;
             if angle == straight {
                 body.route = route;

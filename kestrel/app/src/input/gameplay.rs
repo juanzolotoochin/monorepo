@@ -440,7 +440,11 @@ fn drop_cargo(world: &mut World) {
         world.resource_mut::<Dispatcher>().notice = "Nothing carried to drop.".into();
         return;
     };
-    let mut service = world.resource_mut::<SessionService>();
-    let point = service.to_sim(at);
-    crate::piles::haul(&mut service, sim::settlement::piles::PileAction::Drop(point), 0.18, None);
+    let point = world.resource::<SessionService>().to_sim(at);
+    let action = world.get_resource::<crate::piles::PileLab>().and_then(|lab| lab.stock.as_ref()).and_then(|stock| crate::piles::drop_action(stock, point));
+    let Some(action) = action else {
+        world.resource_mut::<Dispatcher>().notice = "Nothing carried to drop.".into();
+        return;
+    };
+    crate::piles::haul(&mut world.resource_mut::<SessionService>(), action, 0.18, None);
 }

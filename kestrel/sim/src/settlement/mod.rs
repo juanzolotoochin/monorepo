@@ -533,6 +533,11 @@ impl Settlement {
             avatar.height = settlement.spawn_height;
         }
         if let Some(p) = &setup.piles {
+            // A pile's mineral is what it holds: one set up empty would
+            // have none, and take any mineral.
+            if let Some(i) = p.piles.iter().position(|&(_, _, units)| units == 0) {
+                return Err(format!("starting pile {i} has no units; give it some, or make it a dispenser"));
+            }
             // The mine's minerals become items, after the scenario's.
             let first_mineral = settlement.add_items(&crate::mine::MINERAL_IDS)?;
             // A player has one capacity, for depot items and minerals in any

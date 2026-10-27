@@ -3,8 +3,8 @@
 Plays a Kestrel host and clients on this machine through a delaying UDP relay.
 
 .DESCRIPTION
-Starts a localhost relay (network_lab/relay.mjs), a host window and a client
-window:
+Starts a localhost relay (//kestrel/tools/network_lab:relay, a Rust program
+built with Bazel), a host window and a client window:
 
     Client window <-> relay 127.0.0.1:<ProxyPort> <-> host 127.0.0.1:<HostPort>
 
@@ -36,8 +36,8 @@ A script can then ask any window for its state, for example its network
 status and the other players it shows. Each run writes its parameters, process
 IDs, relay counters and logs to network_lab/runs/<time>/.
 
-It reuses the built game. Pass -Build to build it first (once, no tests), or
--GamePath for a game built elsewhere.
+It reuses the built game and relay. Pass -Build to build both first (once, no
+tests), or -GamePath and -RelayPath for ones built elsewhere.
 
 The relay polls during the last ~17 ms before each delivery, because Windows
 timers wake in ~15.6 ms steps. That costs about one CPU core while packets are
@@ -72,12 +72,12 @@ param(
     [ValidateRange(1, 600)] [int] $RejoinAfterSeconds = 1,
     [switch] $Build,
     [switch] $CoarseTimers,
-    [string] $GamePath
+    [string] $GamePath,
+    [string] $RelayPath
 )
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
-$Relay = Join-Path $PSScriptRoot "network_lab/relay.mjs"
 
 function Fail([string] $Message) {
     Write-Host "network-lab: $Message" -ForegroundColor Red
@@ -91,9 +91,6 @@ if ($ControlPorts -contains $HostPort -or $ControlPorts -contains $ProxyPort) {
 }
 if ($Scene -notmatch '^[a-z0-9-]+$') { Fail "-Scene must be a scene name such as laser-pit." }
 
-$Node = Get-Command node -ErrorAction SilentlyContinue
-if (-not $Node) { Fail "Node.js is required for the relay and was not found on PATH." }
-
 foreach ($port in @($HostPort, $ProxyPort)) {
     $taken = Get-NetUDPEndpoint -LocalPort $port -ErrorAction SilentlyContinue
     if ($taken) {
@@ -106,22 +103,26 @@ foreach ($port in @($HostPort, $ProxyPort)) {
 }
 
 $DefaultGame = Join-Path $RepoRoot "bazel-bin/kestrel/app/demo.exe"
+$DefaultRelay = Join-Path $RepoRoot "bazel-bin/kestrel/tools/network_lab/relay.exe"
 if ($Build) {
-    if ($GamePath) { Fail "Pass -Build or -GamePath, not both." }
+    if ($GamePath -or $RelayPath) { Fail "Pass -Build or -GamePath/-RelayPath, not both." }
     # `bazel run` builds for this machine (see .bazelrc); a plain remote
     # `bazel build` would produce a Linux binary. --script_path makes `run`
-    # build and stop without starting the game.
+    # build and stop without starting the program. `run` takes one target,
+    # so this runs twice; the second reuses the first's analysis.
     $script = Join-Path ([IO.Path]::GetTempPath()) "kestrel-network-lab-build.bat"
-    Write-Host "Building the game (no tests)..."
-    Push-Location $RepoRoot
-    try {
-        & bazel run --config=remote "--script_path=$script" //kestrel/app:demo
-        $code = $LASTEXITCODE
-    } finally {
-        Pop-Location
-        Remove-Item $script -ErrorAction SilentlyContinue
+    foreach ($target in @("//kestrel/app:demo", "//kestrel/tools/network_lab:relay")) {
+        Write-Host "Building $target (no tests)..."
+        Push-Location $RepoRoot
+        try {
+            & bazel run --config=remote "--script_path=$script" $target
+            $code = $LASTEXITCODE
+        } finally {
+            Pop-Location
+            Remove-Item $script -ErrorAction SilentlyContinue
+        }
+        if ($code -ne 0) { Fail "Build of $target failed (bazel exited with $code)." }
     }
-    if ($code -ne 0) { Fail "Build failed (bazel exited with $code)." }
 }
 
 $Game = if ($GamePath) { $GamePath } else { $DefaultGame }
@@ -130,8 +131,14 @@ if (-not (Test-Path $Game -PathType Leaf)) {
 }
 $Game = (Resolve-Path $Game).Path
 $GameBuilt = (Get-Item $Game).LastWriteTime
+$Relay = if ($RelayPath) { $RelayPath } else { $DefaultRelay }
+if (-not (Test-Path $Relay -PathType Leaf)) {
+    Fail "No relay at $Relay. Build it once with -Build, or pass -RelayPath <path to relay.exe>."
+}
+$Relay = (Resolve-Path $Relay).Path
 Write-Host "Game:  $Game"
 Write-Host "Built: $($GameBuilt.ToString('yyyy-MM-dd HH:mm:ss'))"
+Write-Host "Relay: $Relay"
 
 $RunDir = Join-Path $PSScriptRoot ("network_lab/runs/" + (Get-Date -Format "yyyyMMdd-HHmmss"))
 New-Item -ItemType Directory -Force $RunDir | Out-Null
@@ -157,6 +164,7 @@ $Run = [ordered]@{
     proxy_port = $ProxyPort
     game = $Game
     game_built_at = $GameBuilt.ToString("o")
+    relay = $Relay
     pids = $Started
 }
 
@@ -208,8 +216,8 @@ $processes = [ordered]@{}
 $exitCode = 0
 try {
     Save-Run
-    $processes.relay = Start-Part "relay" $Node.Source @(
-        $Relay, "--listen", $ProxyPort, "--host", $HostPort,
+    $processes.relay = Start-Part "relay" $Relay @(
+        "--listen", $ProxyPort, "--host", $HostPort,
         "--delay-ms", $DelayMs, "--jitter-ms", $JitterMs, "--seed", $Seed,
         "--spin-ms", $(if ($CoarseTimers) { 0 } else { 17 }), "--max-clients", $Clients,
         "--run-dir", $RunDir, "--parent-pid", $PID)
