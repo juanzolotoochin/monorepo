@@ -6,10 +6,10 @@ use std::collections::BTreeMap;
 use fx::{Fx, FxVec2};
 use rayon::prelude::*;
 
-use super::action::View;
+use super::action::{Action, View};
 use super::haulers::{self, footprint, job_size, Assignment, Ctx, HaulerState, Phase, Trailer, ATTACH_TICKS, RETRY_TICKS};
 use super::{AgentIx, AgentState, Body, Carry, CarryJob, DepotIx, Direction, InventoryRef, ItemIx, Role, Settlement, Side, Transfer, TRANSFER_FLIGHT_TICKS};
-use crate::messages::{Attach, CarryUnit, ClaimDock, DockClaim, Equip, Messages, ReserveHaul, Retry};
+use crate::messages::{ActionMessages, Attach, CarryUnit, ClaimDock, DockClaim, Equip, Messages, ReserveHaul, Retry};
 use crate::terrain::Terrain;
 
 impl Settlement {
@@ -205,7 +205,7 @@ impl Settlement {
         matches!(self.hauler(agent).phase, Phase::Idle | Phase::Returning)
     }
 
-    pub(crate) fn equip(&mut self, tick: u64, message: Equip) {
+    pub(crate) fn equip(&mut self, tick: u64, terrain: &Terrain, message: Equip) {
         let h = self.hauler(message.agent);
         let e = h.equipment.as_ref().expect("equip comes from equippable agents");
         let (depot, item) = (e.depot as usize, e.item);
@@ -214,9 +214,17 @@ impl Settlement {
         }
         let reserved = self.depots[depot].inventory.reserve_out(item, 1);
         debug_assert!(reserved, "checked that one is available");
-        let (body, _, h) = self.hauler_parts(message.agent);
-        h.phase = Phase::ToEquip;
-        body.route = message.route;
+        self.hauler_mut(message.agent).phase = Phase::ToEquip;
+        self.follow(tick, message.agent, message.route, terrain);
+    }
+
+    /// An accepted job's hauler sets off on the route stage 3 planned for
+    /// it, as any agent's action applies (`Action::Follow`).
+    fn follow(&mut self, tick: u64, agent: AgentIx, route: Vec<FxVec2>, terrain: &Terrain) {
+        // A hauler's actions only move it: nothing for the world.
+        let mut out = ActionMessages::default();
+        self.act_agent(tick, agent, &Action::Follow(route), terrain, &mut out);
+        debug_assert!(out.is_empty(), "hauler actions emit no messages");
     }
 
     /// Accepts a haul job if it still fits, possibly smaller than asked. It
@@ -226,7 +234,7 @@ impl Settlement {
     /// on both its sides, the unload on the target only (`Carry::next`).
     /// Unlike a player's `ReserveStock`, which arrives with its job sized
     /// and its own side held, this sizes the job here and holds every side.
-    pub(crate) fn reserve_haul(&mut self, tick: u64, message: ReserveHaul) {
+    pub(crate) fn reserve_haul(&mut self, tick: u64, terrain: &Terrain, message: ReserveHaul) {
         let a = &self.agents[message.agent as usize];
         let link = &self.links[message.link as usize];
         let units = if self.idle(message.agent) && link.enabled {
@@ -244,14 +252,14 @@ impl Settlement {
         let held = load.reserve(self.inventory_mut(load.other), Side::Other) && unload.reserve(self.inventory_mut(unload.other), Side::Other);
         debug_assert!(held, "the job fits both depots");
         self.metrics.assignments += 1;
-        let (body, carry, h) = self.hauler_parts(message.agent);
+        let (_, carry, h) = self.hauler_parts(message.agent);
         let held = load.reserve(&mut carry.inventory, Side::Own);
         debug_assert!(held, "the job fits the cargo");
         carry.job = Some(load);
         carry.next = Some(unload);
         h.assignment = Some(Assignment { link: message.link });
         h.phase = Phase::ToPickup;
-        body.route = message.route;
+        self.follow(tick, message.agent, message.route, terrain);
     }
 
     pub(crate) fn attach(&mut self, tick: u64, terrain: &Terrain, message: Attach) {

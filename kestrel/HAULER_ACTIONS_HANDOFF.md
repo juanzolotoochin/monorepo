@@ -199,6 +199,10 @@ on `kestrel-hauler-actions`.
    route with `Follow` (D4) and take `terrain`. `bazel build` only.
    - Where: `economy.rs` (`equip`, `reserve_haul`, `hauler_parts`),
      `world.rs` (`apply_messages`).
+   - Done in step 3: as designed. Both handlers share a small
+     `Settlement::follow` (act through `act_agent`, assert the scratch
+     outbox is empty); `hauler_parts` stays for `reserve_haul`'s cargo and
+     `attach`.
 4. **Tests and docs.** The tests below; update the `action.rs` module doc
    ("Only player avatars act for now"), the `haulers.rs` module doc, the
    "Haulers" bullet in `docs/character-definition.md` (done, link here),
