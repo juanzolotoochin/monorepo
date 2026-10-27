@@ -87,11 +87,6 @@ pub struct WaveState {
     pub target: FxVec2,
     pub first: u64,
     pub every: u64,
-    /// Meters per tick.
-    pub speed: Fx,
-    pub hp: u32,
-    pub armor: u32,
-    pub damage: u32,
     pub count: u32,
     pub spawned: u32,
     /// Every enemy of a wave follows the same planned route.
@@ -1000,7 +995,9 @@ impl Settlement {
             if route.is_empty() {
                 continue;
             }
-            let (character, position, hp, armor) = (wave.character, wave.position, wave.hp, wave.armor);
+            let (character, position) = (wave.character, wave.position);
+            let health = self.characters[character as usize].health.as_ref().expect("a wave sends a FollowRoute character");
+            let (hp, armor) = (health.hp, health.armor.as_ref().map_or(0, |a| a.points));
             let id = self.id();
             self.threats.push(Threat {
                 id,

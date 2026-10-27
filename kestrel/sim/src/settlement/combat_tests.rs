@@ -1121,7 +1121,9 @@ fn brute_radius_follows_its_armor() {
     let scenario = Scenario::parse(ARENA).unwrap();
     let world = World::new_settlement(1, &test_content(), &scenario, &[]).unwrap();
     let mut sim = Simulation::from_world(world, 1);
-    let brutes = sim.world().settlement().unwrap().waves.iter().position(|w| w.armor > 0).expect("the arena has a brute wave");
+    let s = sim.world().settlement().unwrap();
+    let armor = |ix: u16| s.characters[ix as usize].health.as_ref().and_then(|h| h.armor.as_ref()).map_or(0, |a| a.points);
+    let brutes = s.waves.iter().position(|w| armor(w.character) > 0).expect("the arena has a brute wave");
     let mut arena = Arena { sim, player: 0, center: FxVec2::ZERO };
     let s = arena.s_mut();
     let mut brute = Threat {

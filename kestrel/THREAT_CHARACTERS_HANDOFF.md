@@ -115,8 +115,10 @@ through `save::write`/`read`; nothing else serializes threats.
   their character (`Threat::character`); waves no longer copy its speed,
   health, armor or breach damage." `remap_characters` remaps threats too;
   `set_characters` checks them.
-- **Golden:** in `golden.txt` only the second column (total) of the
-  `forest` and `arena` lines changes, in steps 1 and 3. The `behaviour`
+- **Golden:** in `golden.txt` only the second column (total) changes:
+  the `arena` lines in step 1 (the forest's first wave spawns at tick 600
+  and the report stops at 599, so the forest never has a threat), and the
+  `forest` and `arena` lines in step 3 (both carry waves). The `behaviour`
   column, the small scenario's `tick` lines and the subsystem lines stay
   (that scenario has no settlement). `testdata/*.hashes` stay (no
   settlements). Step 2 changes nothing: its golden file is byte-equal to
@@ -183,6 +185,13 @@ step is one commit on `kestrel-threat-characters`.
    only. `bazel build` the sim.
    - Where: `combat.rs` (`WaveState`, `combat_housekeeping`),
      `settlement/mod.rs` (`Settlement::new` waves), `combat_tests.rs`.
+   - Done in step 3: `WaveState` lost `speed`, `hp`, `armor` and `damage`;
+     spawn reads `hp` and `armor.points` from the character; the loader
+     requires `Brain::FollowRoute`. `brute_radius_follows_its_armor` finds
+     the brute wave by its character's armor (the `melee_staggers_...`
+     change was done in step 2). Golden: the 16 forest and arena total
+     columns changed (the forest's saved waves changed shape too), nothing
+     else; `testdata/*.hashes` unchanged. `//kestrel/sim/...` builds.
 4. **Tests and docs.** The tests below. Docs: the "Threats" bullet in
    `docs/character-definition.md` (done, link here), `Brain::FollowRoute`'s
    comment ("Walks its wave's route": the threat walks the route its wave
@@ -232,7 +241,7 @@ In `settlement/combat_tests.rs` unless noted:
   Golden regeneration in steps 1 and 3 is a `bazel run`; count it.
 - Bazel: `bazel test --config=remote ...` (`AGENTS.md`).
 - Only the forest and arena total columns of `golden.txt` may change, and
-  only in steps 1 and 3. If a behaviour column, a small-scenario line or a
+  only in steps 1 (arena only) and 3. If a behaviour column, a small-scenario line or a
   `.hashes` file changes, the refactor slipped: find it, don't regenerate.
 - Things found but out of scope go in `kestrel/todo/`.
 - When a step is done, add a "Done in step N" note under it here.

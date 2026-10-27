@@ -391,7 +391,9 @@ impl Settlement {
             .map(|w| {
                 let ix = character(&w.character)?;
                 let def = &content.rules.characters[ix as usize];
-                let health = def.health.as_ref().ok_or_else(|| format!("wave {} sends {:?}, which has no health", w.id, w.character))?;
+                if def.brain != Brain::FollowRoute {
+                    return Err(format!("wave {} sends {:?}, a {:?} character; it needs a {:?} one", w.id, w.character, def.brain, Brain::FollowRoute));
+                }
                 Ok(WaveState {
                     id: w.id.clone(),
                     character: ix,
@@ -399,10 +401,6 @@ impl Settlement {
                     target: at(w.target),
                     first: (w.first * per_second).round().floor_to_int().max(1) as u64,
                     every: scenario::ticks(w.every),
-                    speed: def.movement.walk / per_second,
-                    hp: health.hp,
-                    armor: health.armor.as_ref().map_or(0, |a| a.points),
-                    damage: health.breach_damage,
                     count: w.count,
                     spawned: 0,
                     route: None,
