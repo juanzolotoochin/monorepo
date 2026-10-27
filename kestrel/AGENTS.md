@@ -11,6 +11,12 @@
 - When you find something worth doing later that is out of scope for the current task, add it there instead of leaving it only in a chat, a PR description or a handoff.
 - When you finish a listed task, mark it done and move it to the topic's `## Done` section with a link to the PR.
 
+# When to run tests
+
+- Run the full test suite once, when the work is done, not after every commit. PRs are squashed on merge, so commits in the middle of a task don't need to pass on their own.
+- Run a test in between only when it's warranted: to check a risky change, or when later work depends on it being right (a refactor the next steps build on, a golden file you need to compare against). Then run only the affected target (for example `//kestrel/sim:sim_test`), not the whole suite.
+- When you only need to know that intermediate work compiles, `bazel build` the affected target instead of testing it.
+
 # Test time
 
 We track how much of a task is spent waiting on Bazel, to decide whether

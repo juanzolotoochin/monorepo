@@ -233,7 +233,7 @@ gameplay last.
 
 ## Rules for the work
 
-- Each numbered step is its own commit on branch `kestrel-inventory`, in order. Each commit builds and passes the tests.
+- Each numbered step is its own commit on branch `kestrel-inventory`, in order. Run the tests at the end of the work, not per commit (see "When to run tests" in `AGENTS.md`).
 - Bazel: `bazel test --config=remote ...` (see `AGENTS.md`).
 - Golden file and hash files change only where the step explains it. Commits 1–6 keep every golden behaviour line.
 - Bump the save `FORMAT_VERSION` whenever saved or hashed state changes.
