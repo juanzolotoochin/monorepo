@@ -182,6 +182,8 @@ on `kestrel-hauler-actions`.
    arm yet. `bazel build` only.
    - Where: `settlement/action.rs`, `avatar.rs` (`Settlement::act`, `act`),
      `haulers.rs`, `prediction.rs` (`apply`).
+   - Done in step 1: as designed. `action::act` lives in `action.rs`;
+     `haulers::act` takes `&HaulerState` (it only plans), the body `&mut`.
 2. **Stage 2 brain.** Split `haulers::self_update` into `think`, `act`,
    `walk` per D1's table; `approach` splits into its replan (`think`) and
    the rest (`walk`). Put a `View` in `Ctx` (D3). The three

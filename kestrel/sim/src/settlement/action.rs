@@ -14,12 +14,15 @@
 
 use std::collections::BTreeMap;
 
+use content::character::CharacterDef;
 use content::scenario::Weapon;
 use fx::{Fx, FxVec2};
 
-use super::avatar::Intent;
+use super::avatar::{self, Intent};
+use super::haulers;
 use super::piles::PileLab;
-use super::{AgentIx, DepotIx, DepotState, ItemIx, Settlement, Transfer};
+use super::{AgentIx, AgentState, DepotIx, DepotState, ItemIx, Role, Settlement, Transfer};
+use crate::messages::ActionMessages;
 use crate::terrain::Terrain;
 use crate::CommandKind;
 
@@ -27,6 +30,10 @@ use crate::CommandKind;
 pub enum Action {
     /// Walk in a direction, walk to a point along a planned route, or stop.
     Move(Intent),
+    /// Walk a route already planned: a hauler's accepted job, whose route
+    /// stage 3 planned to check it is reachable. No command sends one
+    /// (`Action::of` never makes it).
+    Follow(Vec<FxVec2>),
     /// Face the upper body this way, independently of travel.
     Aim(FxVec2),
     /// Attack toward `aim` (a direction on the ground), or buffer the press
@@ -92,9 +99,20 @@ impl Action {
     }
 }
 
+/// Applies an action to an agent, by its role: an avatar's part is
+/// `avatar::act`, a hauler's `haulers::act`. Every route a command or a
+/// brain gives an agent goes through here.
+pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &CharacterDef, out: &mut ActionMessages) {
+    match a.role {
+        Role::Avatar(_) => avatar::act(a, action, view, def, out),
+        Role::Hauler(ref hauler) => haulers::act(&mut a.body, hauler, action, view),
+    }
+}
+
 /// What an acting agent reads of the world: the settlement as of the tick
 /// the action applies on, without the agents (an action reads its own agent
 /// only through the state it is given).
+#[derive(Clone, Copy)]
 pub struct View<'a> {
     pub me: AgentIx,
     pub tick: u64,

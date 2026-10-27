@@ -10,6 +10,8 @@ use content::{millis_to_ticks, per_tick};
 use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
+use super::action::{Action, View};
+use super::avatar::Intent;
 use super::{AgentIx, AgentState, Body, Carry, DepotIx, DepotState, Direction, ItemIx, LinkIx, LinkState, Role, Transfer};
 use crate::messages::{Attach, CarryUnit, ClaimDock, DockClaim, Equip, ReserveHaul, Retry};
 use crate::messages::Messages;
@@ -225,6 +227,17 @@ pub(super) fn footprint(a: &AgentState) -> Footprint {
             _ => None,
         },
         next: a.hauler().and(a.body.route.first().copied()),
+    }
+}
+
+/// Applies an action to a hauler (see `action::act`): `GoTo` plans a route
+/// (the trailer's path when towing), `Follow` takes one already planned.
+/// Only the hauler brain and stage 5 drive haulers, with nothing else.
+pub(super) fn act(body: &mut Body, hauler: &HaulerState, action: &Action, view: &View) {
+    match action {
+        Action::Move(Intent::GoTo { target, .. }) => body.route = hauler.plan(body, view.terrain, *target, &[]),
+        Action::Follow(route) => body.route = route.clone(),
+        _ => debug_assert!(false, "haulers only go to points and follow routes: {action:?}"),
     }
 }
 

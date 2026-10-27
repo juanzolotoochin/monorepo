@@ -3,7 +3,7 @@
 
 use content::scenario::Weapon;
 
-use super::action::Action;
+use super::action::{self, Action};
 use super::avatar::{self, character_of};
 use super::combat::{strike_event, Event};
 use super::{AgentIx, AgentState, Role, Settlement};
@@ -71,7 +71,7 @@ impl<'a> AvatarReplay<'a> {
     }
 
     /// Applies one of the owner's commands on `tick`: its action's part on
-    /// the avatar (`avatar::act`), as `World::step` applies it. Commands that
+    /// the avatar (`action::act`), as `World::step` applies it. Commands that
     /// don't drive this avatar change nothing. Returns false for a pile haul,
     /// which plans its walk from pile lab state the replay doesn't run.
     pub fn apply(&mut self, command: &CommandKind) -> bool {
@@ -82,7 +82,7 @@ impl<'a> AvatarReplay<'a> {
             let view = self.settlement.view(self.me, self.tick, self.terrain);
             let def = character_of(&self.settlement.characters, &self.state);
             // What the action does to the world is never applied (D1).
-            avatar::act(&mut self.state, &action, &view, def, &mut ActionMessages::default());
+            action::act(&mut self.state, &action, &view, def, &mut ActionMessages::default());
         }
         true
     }
