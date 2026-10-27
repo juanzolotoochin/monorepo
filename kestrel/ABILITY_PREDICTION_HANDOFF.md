@@ -26,8 +26,10 @@ A prediction can be wrong for three reasons:
 - something outside the avatar changed it (hits, knockback, terrain,
   depot stock, other players);
 - the host moved a late input;
-- the command can't be predicted. `Pile` makes `apply` return false, and
-  the client then draws the confirmed avatar. (Before D2, `GoTo` did too.)
+- the command couldn't be predicted. Before D2, `GoTo` made `apply`
+  return false and the client drew the confirmed avatar; then `Pile` did,
+  until pile hauls became the `Haul` action (`todo/characters.md`). No
+  command does now.
 
 ## Agreed decisions
 
@@ -326,5 +328,5 @@ runs, and leave the user's game windows alone.
   confirmed terrain. The `Transfer` sent with it is predicted too: it sets
   the avatar's job from the confirmed depot stock; the units that then move
   at the dock are stage 5 and correct like a hit, as does a job that stage
-  5 rolls back because another player reserved the stock first (task 7). Pile commands still read
-  and write pile lab state and stay unpredicted (`todo/characters.md`).
+  5 rolls back because another player reserved the stock first (task 7). Pile hauls are predicted
+  too since the `Haul` action, on the replay's own copy of the pile lab.

@@ -117,6 +117,14 @@ pub struct PredictedEvent {
 #[derive(Resource, Default)]
 pub struct DrawnAvatar(pub Option<DrawnState>);
 
+/// While present, the client's prediction is withdrawn until the confirmed
+/// world has run this tick: the confirmed avatar is drawn instead. In play a
+/// prediction is withdrawn only when the drawn time runs `MAX_LEAD` ahead of
+/// the confirmed world (no command is left that the replay can't predict),
+/// so tests insert this to check what a withdrawal does to the views.
+#[derive(Resource, Default)]
+pub struct WithdrawPrediction(pub u64);
+
 #[derive(Clone, Debug)]
 pub struct DrawnState {
     pub agent: u16,
@@ -382,18 +390,18 @@ impl StageFive {
 /// confirmed settlement before it, on the `terrain` it ran on, with the
 /// `commands` that applied on it, gives. A swing's hit count is left out:
 /// the replay assumes a swing hits nothing, and what the avatar hit is
-/// nothing done to it. An avatar on a pile job, which walks from pile lab
-/// state the replay doesn't run, is never touched.
+/// nothing done to it. An avatar on a pile job before or after the tick is
+/// never touched: the replay walks it, but its units move in stage 5, which
+/// is the haul's own doing rather than a push.
 pub fn touched(before: &Settlement, after: &Settlement, agent: u16, tick: u64, terrain: &Terrain, commands: &[&CommandKind]) -> bool {
-    if before.piles.as_ref().and_then(|lab| lab.hauler(agent)).is_some_and(|hauler| hauler.job.is_some()) {
+    let hauling = |s: &Settlement| s.piles.as_ref().and_then(|lab| lab.hauler(agent)).is_some_and(|hauler| hauler.job.is_some());
+    if hauling(before) || hauling(after) {
         return false;
     }
     let (Some(mut replay), Some(confirmed)) = (before.replay_avatar(agent, tick, terrain), after.agents.get(agent as usize)) else {
         return false;
     };
-    if !replay.step_with(commands.iter().copied()) {
-        return false;
-    }
+    replay.step_with(commands.iter().copied());
     let unhit = |a: &AgentState| {
         let mut a = a.clone();
         if let Some(swing) = a.avatar_mut().and_then(|avatar| avatar.swing.as_mut()) {
@@ -407,17 +415,15 @@ pub fn touched(before: &Settlement, after: &Settlement, agent: u16, tick: u64, t
 /// The avatar's states from the confirmed tick through tick `end`, each
 /// pending command applied on its tick, and the events it showed on the
 /// way. One the host already passed was moved later; the next tick is the
-/// best guess. `None` if the avatar can't be predicted (a pending pile job).
-/// Walks to a point (the dock walk, scripted walks) are predicted.
+/// best guess. `None` if the avatar isn't a player avatar. Walks to a point
+/// (the dock walk, scripted walks) and a pile haul's walk are predicted.
 fn replay(c: &Confirmed, end: u64) -> Option<(Vec<AgentState>, Vec<PredictedEvent>)> {
     let mut replay = c.settlement.replay_avatar(c.agent, c.tick, c.terrain)?;
     let mut states = vec![replay.state().clone()];
     let mut events = Vec::new();
     for tick in c.tick..end {
         let due = c.pending.iter().filter(|(asked, _)| (*asked).max(c.tick) == tick).map(|(_, kind)| *kind);
-        if !replay.step_with(due) {
-            return None;
-        }
+        replay.step_with(due);
         events.extend(replay.events().iter().map(|event| PredictedEvent { tick, event: event.clone() }));
         states.push(replay.state().clone());
     }
