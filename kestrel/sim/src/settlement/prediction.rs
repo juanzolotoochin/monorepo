@@ -119,7 +119,7 @@ impl<'a> AvatarReplay<'a> {
         s.read_avatar(self.me, &self.state, tick, terrain, &mut out);
         // Manual transfer units and pile steps show nothing until stage 5
         // moves them.
-        self.events = out.strike.iter().filter_map(strike_event).collect();
+        self.events = out.strike.iter().filter_map(|strike| strike_event(strike, s.tuning(strike.weapon))).collect();
         let a = &mut self.state;
         // As `Settlement::strike` would, assuming the swing hits nothing (a
         // bow shot always counts as one hit).

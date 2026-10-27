@@ -334,6 +334,92 @@ impl ArcChain {
     }
 }
 
+/// How fast a predicted arrow's flight runs, against the drawn time, until
+/// its confirmed projectile catches up. The arrow is drawn an input lead
+/// ahead of the confirmed world, like the avatar that looses it, but its
+/// hits are the confirmed world's (stage 5). Flying at half pace, it meets
+/// its confirmed projectile after twice the lead, a short way out of the
+/// bow, and from then on is drawn where the projectile is, so it reaches a
+/// ghoul when the hit is confirmed, not an input lead before.
+pub const PREDICTED_ARROW_PACE: f32 = 0.5;
+
+/// The local player's bow shots prediction presented
+/// (`lockstep::predict_events`), as arrows in flight ahead of the confirmed
+/// world. The matched confirmed shot's projectile takes its arrow over
+/// (`take_over`): the same rig, drawn no further back than it was. One the
+/// confirmed world never shoots is withdrawn, and one left unconfirmed
+/// once it has come down is dropped.
+#[derive(Resource, Default)]
+pub struct PredictedArrows(pub Vec<PredictedArrow>);
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PredictedArrow {
+    /// The presented event's id (`event_prediction`).
+    pub id: u64,
+    /// The tick the replay fires it on.
+    pub fired: u64,
+    /// Where it flies, as `legacy::Projectile`: from `from`, `height` up,
+    /// toward `to`, over `flight` ticks.
+    pub from: crate::legacy::Point,
+    pub to: crate::legacy::Point,
+    pub height: f32,
+    pub flight: u64,
+    /// The confirmed projectile that took it over.
+    pub projectile: Option<u64>,
+}
+
+impl PredictedArrow {
+    /// How many ticks into its flight it is drawn at drawn time `drawn` (on
+    /// the projectiles' clock, `Simulation::time`) on its own: at
+    /// `PREDICTED_ARROW_PACE`.
+    pub fn age(&self, drawn: f32) -> f32 {
+        (PREDICTED_ARROW_PACE * (drawn - self.fired as f32)).max(0.0)
+    }
+
+    /// Its view's key until a projectile takes it over.
+    fn key(&self) -> String {
+        format!("projectile/predicted/{}", self.id)
+    }
+}
+
+impl PredictedArrows {
+    /// The presented shot `id` was confirmed as `projectile`: it is drawn
+    /// from now on as that projectile's view. Whether it was still drawn.
+    pub fn take_over(&mut self, id: u64, projectile: u64) -> bool {
+        self.0.iter_mut().find(|arrow| arrow.id == id && arrow.projectile.is_none()).map(|arrow| arrow.projectile = Some(projectile)).is_some()
+    }
+
+    /// The presented shot `id` won't be confirmed: it is no longer drawn.
+    pub fn withdraw(&mut self, id: u64) {
+        self.0.retain(|arrow| arrow.id != id);
+    }
+
+    /// How far into its flight the projectile `id`, `confirmed` ticks in,
+    /// is drawn: no further back than the arrow it took over.
+    pub fn projectile_age(&self, id: u64, confirmed: f32, drawn: f32) -> f32 {
+        self.0.iter().find(|arrow| arrow.projectile == Some(id)).map_or(confirmed, |arrow| confirmed.max(arrow.age(drawn)))
+    }
+
+    /// Drops the arrows done flying at drawn time `drawn`: those taken over
+    /// by a projectile the confirmed world no longer has, and those never
+    /// confirmed that have come down.
+    pub fn retain_flying(&mut self, drawn: f32, flying: impl Fn(u64) -> bool) {
+        self.0.retain(|arrow| match arrow.projectile {
+            Some(projectile) => flying(projectile),
+            None => arrow.age(drawn) < arrow.flight as f32,
+        });
+    }
+}
+
+/// An arrow's view, `f` of the way from `from` (`height` up) to `to`.
+fn arrow_view(skin: &str, from: crate::legacy::Point, height: f32, to: crate::legacy::Point, f: f32) -> View {
+    let mut v = View::new(skin, [0., 0.]);
+    v.position = Vec3::new(from[0], height, from[1]).lerp(Vec3::new(to[0], 0.55, to[1]), f);
+    v.heading = -(to[1] - from[1]).atan2(to[0] - from[0]);
+    v.scale = 0.65;
+    v
+}
+
 pub fn tick(world: &mut World) {
     if world
         .get_resource::<crate::control::Hub>()
@@ -395,8 +481,28 @@ pub fn tick(world: &mut World) {
         let presented = match event {
             Event::LaserFired { agent, .. } if Some(*agent) == local => presented_early.next("laser"),
             Event::ArcFired { agent, .. } if Some(*agent) == local => presented_early.next("arc"),
+            Event::BowFired { agent, .. } if Some(*agent) == local => presented_early.next("bow"),
             _ => None,
         };
+        if let (Event::BowFired { projectile, .. }, Some(id)) = (event, presented) {
+            // The arrow prediction drew flies on as this projectile's view.
+            if let Some(mut arrows) = world.get_resource_mut::<PredictedArrows>() {
+                let key = arrows.0.iter().find(|arrow| arrow.id == id).map(PredictedArrow::key);
+                match (projectile, key) {
+                    (Some(projectile), Some(key)) if arrows.take_over(id, *projectile) => {
+                        if let Some(view) = state.views.remove(&key) {
+                            let confirmed = format!("projectile/{projectile}");
+                            if state.views.contains_key(&confirmed) {
+                                world.despawn(view.1.root);
+                            } else {
+                                state.views.insert(confirmed, view);
+                            }
+                        }
+                    }
+                    _ => arrows.withdraw(id),
+                }
+            }
+        }
         let drawn_shot = presented.filter(|_| matches!(event, Event::LaserFired { .. }));
         if let Event::ArcFired { from, to, .. } = event {
             let from = Vec3::new(from[0], ARC_HEIGHT, from[1]);
@@ -558,7 +664,7 @@ pub fn tick(world: &mut World) {
         }
         let cue = match event {
             // Prediction played these when it presented the shot.
-            Event::LaserFired { .. } | Event::ArcFired { .. } if presented.is_some() => None,
+            Event::LaserFired { .. } | Event::ArcFired { .. } | Event::BowFired { .. } if presented.is_some() => None,
             Event::BowFired { .. } => Some(crate::sound::Cue::Bow),
             Event::Shot { .. } => Some(crate::sound::Cue::Ballista),
             Event::ArcFired { .. } => Some(crate::sound::Cue::Arc),
@@ -731,15 +837,31 @@ pub fn tick(world: &mut World) {
         v.scale = item.scale;
         desired.insert(format!("transfer/{}", t.id), v);
     }
+    // The local player's arrows prediction drew, on the projectiles' clock
+    // at the drawn time.
+    let drawn = world
+        .get_resource::<crate::prediction::DrawnAvatar>()
+        .and_then(|drawn| drawn.0.as_ref())
+        .map_or(sim.time(), |drawn| drawn.time + 1.0);
+    let mut arrows = world
+        .get_resource_mut::<PredictedArrows>()
+        .map(|mut arrows| std::mem::take(&mut *arrows))
+        .unwrap_or_default();
+    arrows.retain_flying(drawn, |id| sim.projectiles.contains_key(&id));
     for p in sim.projectiles.values() {
         let item = sim.config().items.iter().find(|i| i.id == p.item).unwrap();
-        let f = ((sim.time() - p.born as f32) / (p.arrival - p.born) as f32).clamp(0., 1.);
-        let mut v = View::new(&item.skin, [0., 0.]);
-        v.position = Vec3::new(p.from[0], p.launch_height, p.from[1])
-            .lerp(Vec3::new(p.to[0], 0.55, p.to[1]), f);
-        v.heading = -(p.to[1] - p.from[1]).atan2(p.to[0] - p.from[0]);
-        v.scale = 0.65;
-        desired.insert(format!("projectile/{}", p.id), v);
+        let age = arrows.projectile_age(p.id, sim.time() - p.born as f32, drawn);
+        let f = (age / (p.arrival - p.born) as f32).clamp(0., 1.);
+        desired.insert(format!("projectile/{}", p.id), arrow_view(&item.skin, p.from, p.launch_height, p.to, f));
+    }
+    if let Some(item) = sim.config().items.iter().find(|i| i.id == "arrow") {
+        for arrow in arrows.0.iter().filter(|arrow| arrow.projectile.is_none()) {
+            let f = (arrow.age(drawn) / arrow.flight.max(1) as f32).clamp(0., 1.);
+            desired.insert(arrow.key(), arrow_view(&item.skin, arrow.from, arrow.height, arrow.to, f));
+        }
+    }
+    if let Some(mut kept) = world.get_resource_mut::<PredictedArrows>() {
+        *kept = arrows;
     }
     for p in sim.spent_projectiles.values() {
         let item = sim.config().items.iter().find(|i| i.id == p.item).unwrap();
@@ -1090,6 +1212,41 @@ mod tests {
     /// and the chain on from it to the second and third. A shot prediction
     /// already drew isn't drawn again, but its hits still chain from it, not
     /// from the player.
+    /// A predicted arrow flies at half pace from the bow until its confirmed
+    /// projectile, an input lead behind, catches up; the projectile that
+    /// takes it over is drawn no further back than the arrow was, then as
+    /// confirmed. Withdrawn, it is gone; never confirmed, it is dropped once
+    /// it has come down.
+    #[test]
+    fn a_predicted_arrow_is_handed_over_to_its_projectile() {
+        let arrow = |id: u64| PredictedArrow { id, fired: 100, from: [0.0, 0.0], to: [0.0, 9.0], height: 0.6, flight: 20, projectile: None };
+        let mut arrows = PredictedArrows(vec![arrow(0), arrow(1), arrow(2)]);
+        assert_eq!(arrows.0[0].age(99.0), 0.0, "not before it is fired");
+        assert_eq!(arrows.0[0].age(108.0), 4.0);
+        // Confirmed 8 ticks behind the drawn time: the projectile takes the
+        // arrow over where it was drawn.
+        assert!(arrows.take_over(0, 7));
+        assert!(!arrows.take_over(0, 8), "taken over once");
+        assert_eq!(arrows.projectile_age(7, 0.0, 108.0), 4.0);
+        assert_eq!(arrows.projectile_age(7, 2.0, 110.0), 5.0);
+        // It meets the projectile after twice the lead, then is drawn with it.
+        assert_eq!(arrows.projectile_age(7, 8.0, 116.0), 8.0);
+        assert_eq!(arrows.projectile_age(7, 10.0, 118.0), 10.0);
+        // Other projectiles are drawn as confirmed.
+        assert_eq!(arrows.projectile_age(9, 3.0, 118.0), 3.0);
+        // A shot the confirmed world never fires is no longer drawn.
+        arrows.withdraw(1);
+        assert_eq!(arrows.0.iter().map(|a| a.id).collect::<Vec<_>>(), [0, 2]);
+        // The taken-over arrow goes with its projectile; an unconfirmed one
+        // once it has come down.
+        arrows.retain_flying(139.0, |_| true);
+        assert_eq!(arrows.0.len(), 2);
+        arrows.retain_flying(140.0, |_| true);
+        assert_eq!(arrows.0.iter().map(|a| (a.id, a.projectile)).collect::<Vec<_>>(), [(0, Some(7))]);
+        arrows.retain_flying(140.0, |_| false);
+        assert!(arrows.0.is_empty());
+    }
+
     #[test]
     fn an_arc_shot_drawn_early_still_starts_its_chain() {
         let player = Vec3::new(0.0, 0.75, 0.0);
