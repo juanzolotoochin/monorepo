@@ -38,12 +38,9 @@ pub enum Role {
 pub struct Body {
     /// Where a hauler goes back to and an avatar respawns.
     pub home: FxVec2,
-    /// Meters per tick.
-    pub speed: Fx,
     pub base_radius: Fx,
     pub position: FxVec2,
     pub heading: Fx,
-    pub travel_heading: Fx,
     pub travelled: Fx,
     /// Waypoints still to walk: a hauler's route, an avatar's `GoTo` or pile
     /// haul.
@@ -206,8 +203,6 @@ impl AgentState {
             character,
             body: Body {
                 home: position,
-                // Copied from the character, like a wave's tuning.
-                speed: rules.movement.walk.div_int(content::TICKS_PER_SECOND as i64),
                 base_radius: rules.body.radius,
                 position,
                 ..Body::default()

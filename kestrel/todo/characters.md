@@ -162,22 +162,6 @@
   `haulers.rs`, `within_swing_height` in `combat.rs`.
 - **Found in:** branch `kestrel-shared-body`.
 
-## Trim body fields one role ignores
-
-- **Status:** open
-- **Why:** `Body::speed` and `travel_heading` are used only by haulers: an
-  avatar moves at its character's `movement` speeds and has no travel
-  heading. They sit in the body so every agent has the same shape.
-- **What to do:** once actions drive haulers too (step 5, "Haulers"), read
-  the speed from the character for both roles, and decide whether the
-  travel heading belongs to the hauler. A save format change.
-- **Unblocked:** actions drive haulers since branch
-  `kestrel-hauler-actions` (`kestrel/HAULER_ACTIONS_HANDOFF.md`). Do it as
-  its own change, since it changes the save format.
-- **Where:** `Body` in `kestrel/sim/src/settlement/agent.rs`, `speed_now`
-  in `haulers.rs`.
-- **Found in:** branch `kestrel-shared-body`.
-
 ## Share the "busy carrying" rule between the sim and the app
 
 - **Status:** open
@@ -289,6 +273,24 @@
 - **Found in:** threat characters (`kestrel/THREAT_CHARACTERS_HANDOFF.md`, D4).
 
 ## Done
+
+### Trim body fields one role ignores
+
+- **Status:** done (branch `kestrel-character-todos`)
+- **Why:** `Body::speed` and `travel_heading` are used only by haulers: an
+  avatar moves at its character's `movement` speeds and has no travel
+  heading. They sat in the body so every agent had the same shape.
+- **What to do:** read the speed from the character for both roles, and
+  decide whether the travel heading belongs to the hauler. A save format
+  change.
+- **Where:** `Body` in `kestrel/sim/src/settlement/agent.rs`, `speed_now`
+  in `haulers.rs`.
+- **Done:** `Body` has no `speed`: a hauler's `walk` reads its character's
+  `movement.walk` (per tick) and `speed_now` slows it for towed equipment,
+  as the copy did. `travel_heading` moved to `HaulerState`, since only a
+  hauler's steering and trailer use it. Save format 21. The golden report's
+  state hashes changed with the shape; every behaviour digest stayed.
+- **Found in:** branch `kestrel-shared-body`.
 
 ### Keep a player's health over the Respawn action
 
