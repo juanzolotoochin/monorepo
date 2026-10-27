@@ -5,7 +5,8 @@
 //! (`prediction`). The replay shows the events its stage 3 messages give
 //! (`Event::prediction` says `Predict`). When the drawn time first reaches
 //! one of a kind the app presents early (`PRESENTED_EARLY`), it is presented
-//! at once: a laser's beam, sound and impact. Damage,
+//! at once: a laser's beam, sound and impact, or an arc coil's arc to its
+//! first target and its sound. Damage, the arc's chain to further targets,
 //! flinches and cover breaking wait for the confirmed event, which is
 //! matched to the presented one and not presented again.
 //!
@@ -39,11 +40,12 @@ pub const TIMEOUT_TICKS: u64 = 10;
 
 /// The predictable kinds a client presents before they are confirmed, each
 /// by `lockstep::predict_events` (and `stop_presented` for a `Cancel` kind).
-/// The arc coil's `ArcFired` is still presented only once confirmed: its
-/// arc chains into the `Hit`s that follow it. So is the bow's `BowFired`:
-/// its arrow is a projectile in the confirmed world, and its sound an input
-/// lead before the arrow appears feels worse than late (`todo/characters.md`).
-pub const PRESENTED_EARLY: &[&str] = &["laser"];
+/// A matched confirmed arc coil shot isn't drawn again, but still starts the
+/// chain its `Hit`s draw (`settlement::ArcChain`). The bow's `BowFired` is
+/// still presented only once confirmed: its arrow is a projectile in the
+/// confirmed world, and its sound an input lead before the arrow appears
+/// feels worse than late (`todo/characters.md`).
+pub const PRESENTED_EARLY: &[&str] = &["laser", "arc"];
 
 /// A predictable event's kind, as telemetry names it.
 pub fn kind_of(event: &Event) -> Option<&'static str> {
@@ -345,12 +347,11 @@ mod tests {
     fn an_event_is_presented_once_and_its_confirmation_matched() {
         let mut ledger = ledger();
         let applied = [(2, command(0)), (12, command(1)), (20, command(2))];
-        // Only kinds presented early: neither the arc coil's nor the bow's.
-        let arc = PredictedEvent { tick: 13, event: Event::ArcFired { agent: AGENT, from: FxVec2::ZERO, to: at(1), started: 12 } };
+        // Only kinds presented early: not the bow's.
         // The replay runs the same ticks every frame; the shot is new once.
-        let first = ledger.predict(&[arrow(12), arc.clone(), laser(14, 5)], &applied, 1.0);
+        let first = ledger.predict(&[arrow(12), laser(14, 5)], &applied, 1.0);
         assert_eq!(first.new.iter().map(|e| (e.kind, e.tick)).collect::<Vec<_>>(), [("laser", 14)]);
-        assert!(ledger.predict(&[arrow(12), arc, laser(14, 5)], &applied, 1.1).new.is_empty());
+        assert!(ledger.predict(&[arrow(12), laser(14, 5)], &applied, 1.1).new.is_empty());
         // A second press, then the first shot is confirmed as presented.
         assert_eq!(ledger.predict(&[laser(14, 5), laser(22, 6)], &applied, 1.2).new.len(), 1);
         ledger.begin(1, AGENT);
@@ -375,6 +376,45 @@ mod tests {
         assert_eq!(ledger.confirmed.next("laser"), Some(0));
         ledger.begin(1, AGENT);
         assert_eq!(ledger.confirmed, Confirmations::default());
+    }
+
+    /// An arc coil shot ending `x` units along x, fired 2 ticks after its press.
+    fn arc_event(started: u64, x: i32) -> Event {
+        Event::ArcFired { agent: AGENT, from: FxVec2::ZERO, to: at(x), started }
+    }
+
+    fn arc(tick: u64, x: i32) -> PredictedEvent {
+        PredictedEvent { tick, event: arc_event(tick - 2, x) }
+    }
+
+    #[test]
+    fn an_arc_shot_is_presented_once_and_kept_however_it_confirms() {
+        let mut ledger = ledger();
+        let applied = [(10, command(0)), (20, command(1)), (30, command(2))];
+        let first = ledger.predict(&[arc(12, 3)], &applied, 0.0);
+        assert_eq!(first.new, [NewEvent { id: 0, kind: "arc", tick: 12, event: arc_event(10, 3) }]);
+        assert_eq!(ledger.predict(&[arc(12, 3), arc(22, 4)], &applied, 0.1).new.len(), 1, "the first shot is drawn once");
+        // Confirmed as drawn: settlement skips drawing it, but its hits
+        // still chain from it.
+        ledger.begin(1, AGENT);
+        assert!(ledger.confirm(&arc_event(10, 3), &applied, 0.2).unwrap().exact);
+        // The second reaches another ghoul: a misprediction, but the arc
+        // already drawn stays (`Keep`), and isn't drawn again.
+        let elsewhere = ledger.confirm(&arc_event(20, 6), &applied, 0.3).unwrap();
+        assert!(!elsewhere.exact && !elsewhere.cancel);
+        assert_eq!(ledger.confirmed.next("arc"), Some(0));
+        assert_eq!(ledger.confirmed.next("arc"), Some(1));
+        // A shot the replay never showed (the prediction was withdrawn) is
+        // drawn as it is confirmed.
+        ledger.begin(1, AGENT);
+        assert_eq!(ledger.confirm(&arc_event(30, 5), &applied, 0.4), None);
+        assert_eq!(ledger.confirmed.ids(), [None]);
+        // One that never confirms is given up once, and left drawn.
+        let applied = [(40, command(3))];
+        assert_eq!(ledger.predict(&[arc(42, 5)], &applied, 1.0).new.len(), 1);
+        let given_up = ledger.expire(43 + TIMEOUT_TICKS);
+        assert_eq!(given_up.iter().map(|o| (o.kind, o.id, o.confirmed.is_none(), o.cancel)).collect::<Vec<_>>(), [("arc", 2, true, false)]);
+        assert!(ledger.expire(200).is_empty());
     }
 
     #[test]

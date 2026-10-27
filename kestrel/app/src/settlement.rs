@@ -300,6 +300,40 @@ fn inventory(
         }
     }
 }
+/// The height arc coil arcs are drawn at.
+pub const ARC_HEIGHT: f32 = 0.72;
+
+/// The arc coil's arcs through one frame's events. An `ArcFired` arcs to its
+/// first target, which its first `Hit { impact: Arc }` struck; each later arc
+/// hit arcs on from the one before.
+struct ArcChain {
+    source: Vec3,
+    /// An `ArcFired` drew (or prediction drew) the arc to the next hit.
+    fired: bool,
+}
+
+impl ArcChain {
+    fn new(source: Vec3) -> Self {
+        ArcChain { source, fired: false }
+    }
+
+    /// A shot from `from` to `to`: the arc to draw, unless prediction already
+    /// drew it (`presented`). Either way its hits chain on from it.
+    fn fired(&mut self, from: Vec3, to: Vec3, presented: bool) -> Option<(Vec3, Vec3)> {
+        self.source = from;
+        self.fired = true;
+        (!presented).then_some((from, to))
+    }
+
+    /// An arc hit at `end`: the arc to draw to it, if its shot didn't.
+    fn hit(&mut self, end: Vec3) -> Option<(Vec3, Vec3)> {
+        let arc = (!self.fired).then_some((self.source, end));
+        self.fired = false;
+        self.source = end;
+        arc
+    }
+}
+
 pub fn tick(world: &mut World) {
     if world
         .get_resource::<crate::control::Hub>()
@@ -347,8 +381,7 @@ pub fn tick(world: &mut World) {
         feedback.hit_stop = 0.075;
         feedback.trauma = 0.24;
     }
-    let mut arc_source = pos + Vec3::Y * 0.75;
-    let mut arc_fired = false;
+    let mut arcs = ArcChain::new(pos + Vec3::Y * 0.75);
     // This player's events that prediction already presented, in order
     // (see `event_prediction`); other events are presented as they are
     // confirmed.
@@ -361,18 +394,16 @@ pub fn tick(world: &mut World) {
         use crate::legacy::Event;
         let presented = match event {
             Event::LaserFired { agent, .. } if Some(*agent) == local => presented_early.next("laser"),
+            Event::ArcFired { agent, .. } if Some(*agent) == local => presented_early.next("arc"),
             _ => None,
         };
         let drawn_shot = presented.filter(|_| matches!(event, Event::LaserFired { .. }));
-        if let Event::ArcFired { from, to } = event {
-            arc_source = Vec3::new(from[0], 0.72, from[1]);
-            crate::effects::arc(
-                world,
-                arc_source,
-                Vec3::new(to[0], 0.72, to[1]),
-                sim.tick as u32,
-            );
-            arc_fired = true;
+        if let Event::ArcFired { from, to, .. } = event {
+            let from = Vec3::new(from[0], ARC_HEIGHT, from[1]);
+            let to = Vec3::new(to[0], ARC_HEIGHT, to[1]);
+            if let Some((from, to)) = arcs.fired(from, to, presented.is_some()) {
+                crate::effects::arc(world, from, to, sim.tick as u32);
+            }
         }
         if let (Event::LaserFired { cover, .. }, Some(drawn)) = (event, drawn_shot) {
             // The drawn beam stays; its cover waits for it as it would for this one.
@@ -409,12 +440,10 @@ pub fn tick(world: &mut World) {
             let direction =
                 Vec3::new(position[0] - from.x, 0.0, position[1] - from.z).normalize_or(Vec3::Z);
             if *impact == crate::legacy::Impact::Arc {
-                let end = Vec3::new(position[0], 0.72, position[1]);
-                if !arc_fired {
-                    crate::effects::arc(world, arc_source, end, *target as u32);
+                let end = Vec3::new(position[0], ARC_HEIGHT, position[1]);
+                if let Some((from, to)) = arcs.hit(end) {
+                    crate::effects::arc(world, from, to, *target as u32);
                 }
-                arc_fired = false;
-                arc_source = end;
             } else if *impact == crate::legacy::Impact::Deflect {
                 crate::effects::deflection(
                     world,
@@ -529,7 +558,7 @@ pub fn tick(world: &mut World) {
         }
         let cue = match event {
             // Prediction played these when it presented the shot.
-            Event::LaserFired { .. } if presented.is_some() => None,
+            Event::LaserFired { .. } | Event::ArcFired { .. } if presented.is_some() => None,
             Event::BowFired { .. } => Some(crate::sound::Cue::Bow),
             Event::Shot { .. } => Some(crate::sound::Cue::Ballista),
             Event::ArcFired { .. } => Some(crate::sound::Cue::Arc),
@@ -1056,6 +1085,31 @@ pub fn captions(
 mod tests {
     use super::*;
     use fx::{Fx, FxVec2};
+
+    /// An arc coil shot through three ghouls: the shot arcs to the first,
+    /// and the chain on from it to the second and third. A shot prediction
+    /// already drew isn't drawn again, but its hits still chain from it, not
+    /// from the player.
+    #[test]
+    fn an_arc_shot_drawn_early_still_starts_its_chain() {
+        let player = Vec3::new(0.0, 0.75, 0.0);
+        let (from, first, second, third) = (Vec3::new(0.0, ARC_HEIGHT, 0.0), Vec3::X, Vec3::X * 2.0, Vec3::new(2.0, 0.0, 1.0));
+        for presented in [false, true] {
+            let mut arcs = ArcChain::new(player);
+            let shot = arcs.fired(from, first, presented);
+            assert_eq!(shot, (!presented).then_some((from, first)));
+            assert_eq!(arcs.hit(first), None, "the shot's arc reached the first ghoul");
+            assert_eq!(arcs.hit(second), Some((first, second)));
+            assert_eq!(arcs.hit(third), Some((second, third)));
+        }
+        // Arc hits without a shot this frame chain from the player.
+        let mut arcs = ArcChain::new(player);
+        assert_eq!(arcs.hit(first), Some((player, first)));
+        // A second shot in the same frame starts a new chain.
+        assert_eq!(arcs.fired(from, second, true), None);
+        assert_eq!(arcs.hit(second), None);
+        assert_eq!(arcs.hit(third), Some((second, third)));
+    }
 
     /// The forest outpost as the game builds it: its scenario plus the scene's
     /// obstacles, run for 100 seconds.
