@@ -320,7 +320,7 @@ used slots" come after the blood port.
 
 ## Write up the spike and decide
 
-- **Status:** done (branch `kestrel-vfx-spike`, PR not opened yet)
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/126)
 - **Why:** the spike ends in a decision: adopt the fork, rewrite parts, or
   build our own.
 - **What was done:** the handoff's "Decision" section: adopt the fork as
@@ -337,7 +337,7 @@ used slots" come after the blood port.
 
 ## Move the web build to WebGPU
 
-- **Status:** done (branch `kestrel-vfx-spike`, PR not opened yet)
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/126)
 - **Why:** both GPU particle libraries need compute shaders, which WebGL2
   lacks. The web build is for debugging, so dropping WebGL2 is fine.
 - **What was done:** Bevy's `webgl2` feature is now `webgpu`; the TAA and
@@ -355,7 +355,7 @@ used slots" come after the blood port.
 
 ## Measure burst performance
 
-- **Status:** done (branch `kestrel-vfx-spike`, PR not opened yet)
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/126)
 - **Why:** sprinkles allocates GPU buffers per spawn and per frame; our
   effects are many short bursts.
 - **What was done:** a debug stress harness (`--vfx-stress`,
@@ -406,7 +406,7 @@ used slots" come after the blood port.
 
 ## Add per-trigger parameters, port the arc and laser
 
-- **Status:** done (branch `kestrel-vfx-spike`, PR not opened yet)
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/126)
 - **Why:** effects need values given when they're triggered (target point,
   seed, scale). Upstream has no runtime overrides.
 - **What was done:** `ParticleTrigger` (target, seed; scale is the
@@ -425,7 +425,7 @@ used slots" come after the blood port.
 
 ## Aim impact sprays like the legacy ones
 
-- **Status:** done (branch `kestrel-vfx-spike`, PR not opened yet)
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/126)
 - **Why:** the legacy impact leans its sparks upward (`normal * 1.4 +
   random`, y in 0..1.3); `impact_stone.ron` sprayed a plain cone.
 - **What was done:** `velocities.world_bias` in the fork;
@@ -437,7 +437,7 @@ used slots" come after the blood port.
 
 ## Port the stone impact
 
-- **Status:** done (branch `kestrel-vfx-spike`, PR not opened yet)
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/126)
 - **Why:** proves one effect can match today's look in an authored file.
 - **What was done:** the first effect file format (`app/vfx/README.md`):
   a sprinkles `ParticlesAsset` layer plus a light layer, strict loading
@@ -454,7 +454,7 @@ used slots" come after the blood port.
 
 ## Vendor sprinkles as a Kestrel crate
 
-- **Status:** done (branch `kestrel-vfx-spike`, PR not opened yet)
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/126)
 - **Why:** we fork sprinkles heavily, so it lives in the monorepo as our code
   and builds with Bazel like the rest of Kestrel.
 - **What was done:** the core crate from upstream's `bevy-0.20` branch plus
