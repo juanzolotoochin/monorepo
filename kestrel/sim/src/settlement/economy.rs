@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use fx::{Fx, FxVec2};
 use rayon::prelude::*;
 
+use super::action::View;
 use super::haulers::{self, footprint, job_size, Assignment, Ctx, HaulerState, Phase, Trailer, ATTACH_TICKS, RETRY_TICKS};
 use super::{AgentIx, AgentState, Body, Carry, CarryJob, DepotIx, Direction, InventoryRef, ItemIx, Role, Settlement, Side, Transfer, TRANSFER_FLIGHT_TICKS};
 use crate::messages::{Attach, CarryUnit, ClaimDock, DockClaim, Equip, Messages, ReserveHaul, Retry};
@@ -17,8 +18,22 @@ impl Settlement {
         self.events.clear();
         self.threats_self_update(tick, terrain);
         let footprints: Vec<_> = self.agents.iter().map(footprint).collect();
-        let Settlement { agents, characters, dock_owner, depots, links, piles, transfers, .. } = self;
-        let ctx = Ctx { tick, characters, terrain, piles: piles.as_ref(), footprints: &footprints, dock_owner, depots, links, transfers };
+        let items = self.depot_items();
+        let Settlement { agents, characters, dock_owner, depots, links, piles, transfers, weapons, spawn, spawn_height, piano_serial, .. } = self;
+        let view = View {
+            me: 0,
+            tick,
+            terrain,
+            weapons,
+            piles: piles.as_ref(),
+            depots,
+            transfers,
+            items,
+            spawn: *spawn,
+            spawn_height: *spawn_height,
+            piano_serial: *piano_serial,
+        };
+        let ctx = Ctx { tick, characters, terrain, piles: piles.as_ref(), footprints: &footprints, dock_owner, depots, links, transfers, view };
         agents.par_iter_mut().enumerate().for_each(|(i, a)| haulers::self_update(a, i as AgentIx, &ctx));
         self.release_distant_piano_notes();
     }

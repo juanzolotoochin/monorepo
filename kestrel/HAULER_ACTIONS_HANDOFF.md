@@ -193,6 +193,8 @@ on `kestrel-hauler-actions`.
    must pass unchanged.
    - Where: `haulers.rs` (`self_update`, `approach`, `travel`, `Ctx`),
      `economy.rs` (`Settlement::self_update`), `action.rs` (`View`).
+   - Done in step 2: as designed; `sim_test` passed first time with the
+     golden file unchanged. `Ctx` keeps its overlapping fields beside `view`.
 3. **Stage 5 follows through `act`.** `equip` and `reserve_haul` set the
    route with `Follow` (D4) and take `terrain`. `bazel build` only.
    - Where: `economy.rs` (`equip`, `reserve_haul`, `hauler_parts`),
