@@ -186,6 +186,10 @@ pub struct AvatarState {
     /// saved or hashed. A replayed avatar keeps it.
     #[serde(skip)]
     pub dropped_haul: bool,
+    /// The vehicle this avatar sits in and drives (`vehicle`). Its movement
+    /// commands steer the vehicle, and housekeeping keeps it in the seat.
+    #[serde(default)]
+    pub driving: Option<super::VehicleIx>,
 }
 
 fn approach(current: FxVec2, target: FxVec2, max_change: Fx) -> FxVec2 {
@@ -242,6 +246,10 @@ pub(super) fn self_update(body: &mut Body, avatar: &mut AvatarState, me: AgentIx
             body.push = FxVec2::ZERO;
             avatar.intent = Some(Intent::Stop);
         }
+        return;
+    }
+    // A driver rides; the vehicle moves (`vehicle::self_update`).
+    if avatar.driving.is_some() {
         return;
     }
     if let Some(lab) = piles.filter(|_| !avatar.dropped_haul) {
@@ -460,6 +468,12 @@ impl Settlement {
         if !self.agents.get(me as usize).is_some_and(|a| a.avatar().is_some()) {
             return;
         }
+        // A driver's movement steers the vehicle lent to them: only they write it.
+        if let Some(ix) = self.driving(me as usize) {
+            if super::vehicle::drive(&mut self.vehicles[ix as usize], action) {
+                return;
+            }
+        }
         self.act_agent(tick, me, action, terrain, out);
     }
 
@@ -492,6 +506,7 @@ impl Settlement {
             self.piano_notes.retain(|note| note.agent != message.agent || note.serial > message.serial);
         }
         self.reserve_stock(messages.reserve_stock);
+        self.board(messages.board);
     }
 
     /// Stage 5: a hit takes `damage` from player `agent`'s health. At 0 the
@@ -513,6 +528,8 @@ impl Settlement {
         body.velocity = FxVec2::ZERO;
         body.push = FxVec2::ZERO;
         avatar.dig = None;
+        // The vehicle stays where it is, free for anyone.
+        avatar.driving = None;
         body.route.clear();
         let releases = carry.drop_carry(agent as AgentIx);
         self.reserve_stock(releases);
@@ -656,7 +673,32 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
     // lab's, and these checks treat it as they did before it was one: it
     // doesn't stop a dig, keep a released route or end on a cancel.
     let transferring = carry.job.as_ref().is_some_and(|j| !j.other.in_pile_lab());
+    if let Some(ix) = avatar.driving {
+        // Sitting in a vehicle, a player can look around, climb out,
+        // let go or respawn; movement went to the vehicle (`vehicle::drive`).
+        match *action {
+            Action::Board => {
+                let v = &view.vehicles[ix as usize];
+                let vehicle_def = &view.characters[v.character as usize];
+                if let Some((position, ground)) = super::vehicle::exit_spot(v, vehicle_def, def.body.radius, view.terrain) {
+                    avatar.driving = None;
+                    body.position = position;
+                    avatar.height = ground;
+                    avatar.flight.support = ground;
+                    avatar.intent = Some(Intent::Stop);
+                }
+                return;
+            }
+            Action::Aim(_) | Action::Equip(_) | Action::Release | Action::Respawn => {}
+            _ => return,
+        }
+    }
     match *action {
+        Action::Board => {
+            if body.alive() && avatar.dig.is_none() {
+                out.board.push(crate::messages::Board { agent: me });
+            }
+        }
         Action::Move(ref intent) => {
             // Moving lets go of a pile haul, dead or alive.
             drop_haul(avatar, view, out);

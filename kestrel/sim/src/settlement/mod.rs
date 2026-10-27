@@ -26,6 +26,7 @@ pub mod piano;
 pub mod piles;
 mod players;
 pub mod prediction;
+pub mod vehicle;
 
 use std::collections::BTreeMap;
 
@@ -44,6 +45,7 @@ pub use agent::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
 pub use haulers::{HaulerState, Phase};
 pub use inventory::{Inventory, Kinds};
 pub use prediction::AvatarReplay;
+pub use vehicle::{VehicleIx, VehicleState};
 
 pub type ItemIx = u16;
 pub type DepotIx = u16;
@@ -231,6 +233,17 @@ pub struct Settlement {
     pub piano_serial: u64,
     pub piles: Option<piles::PileLab>,
     pub memory: Option<memory::Memory>,
+    /// In scene order; an index is stable for the world's life.
+    #[serde(default)]
+    pub vehicles: Vec<VehicleState>,
+}
+
+/// A vehicle a scene parks, in arena coordinates.
+#[derive(Clone, Debug)]
+pub struct VehicleSetup {
+    pub character: String,
+    pub position: [Fx; 2],
+    pub heading: Fx,
 }
 
 /// Everything a scene contributes to a new world, in arena coordinates
@@ -261,6 +274,7 @@ pub struct SceneSetup {
     pub spawn: [Fx; 3],
     pub piles: Option<PileSetup>,
     pub memory_trial: bool,
+    pub vehicles: Vec<VehicleSetup>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -451,6 +465,7 @@ impl Settlement {
             piano_serial: 0,
             piles: None,
             memory: None,
+            vehicles: Vec::new(),
             scenario: scenario.id.clone(),
             dock_owner: vec![None; scenario.depots.len()],
             items,
@@ -547,6 +562,16 @@ impl Settlement {
         }
         let doors = setup.doors.iter().map(place).collect();
         settlement.memory = Some(memory::Memory::new(setup.memory_trial, center, doors));
+        for v in &setup.vehicles {
+            let ix = content.names.character_index(&v.character).ok_or_else(|| format!("unknown vehicle character {:?}", v.character))?;
+            let def = &content.rules.characters[ix as usize];
+            if def.brain != Brain::Vehicle {
+                return Err(format!("vehicle {:?} is a {:?} character; it needs a Vehicle one", v.character, def.brain));
+            }
+            let parked = VehicleState::new(ix, def, at(v.position), v.heading, terrain)
+                .ok_or_else(|| format!("vehicle {:?} at {:?} has a wheel off the ground", v.character, v.position))?;
+            settlement.vehicles.push(parked);
+        }
         Ok(settlement)
     }
 
@@ -842,6 +867,9 @@ impl Settlement {
         if let Some(t) = self.threats.iter().find(|t| !known(t.character)) {
             return Err(format!("threat {} has unknown character {}", t.id, t.character));
         }
+        if let Some(v) = self.vehicles.iter().find(|v| !known(v.character) || characters[v.character as usize].vehicle.is_none()) {
+            return Err(format!("a vehicle has character {}, which isn't a vehicle", v.character));
+        }
         self.characters = characters.to_vec();
         Ok(())
     }
@@ -924,3 +952,5 @@ mod tests;
 mod combat_tests;
 #[cfg(test)]
 mod scene_tests;
+#[cfg(test)]
+mod vehicle_tests;

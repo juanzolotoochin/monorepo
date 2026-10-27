@@ -42,12 +42,13 @@ The `sim` section has the same **shape** for every character kind, but `brain` d
 
 | `sim` field | Shape | Rule |
 | --- | --- | --- |
-| `brain` | `Player`, `FollowRoute`, or `Hauler` | Required, unless inherited. Selects behavior implemented by the engine. |
+| `brain` | `Player`, `FollowRoute`, `Hauler`, or `Vehicle` | Required, unless inherited. Selects behavior implemented by the engine. |
 | `body` | `(radius: number)` | Required collision radius in meters. |
 | `movement` | `(walk: number, run: number)` | `walk` is required in meters per second. `run` is optional and defaults to `walk`. |
 | `health` | `(hp: integer, breach_damage: integer, armor: (...))` | Required for `FollowRoute`; forbidden for `Player` and `Hauler`. `armor` is optional. |
 | `avatar` | `(acceleration: ..., braking: ..., attack_braking: ..., attack: (...))` | Required for `Player`; forbidden for `FollowRoute` and `Hauler`. |
-| `carry` | `(transfer: integer)` | Required for `Player` and `Hauler`; forbidden for `FollowRoute`. `transfer` is frames to load or unload one unit. |
+| `carry` | `(transfer: integer)` | Required for `Player` and `Hauler`; forbidden for `FollowRoute` and `Vehicle`. `transfer` is frames to load or unload one unit. |
+| `vehicle` | `(acceleration: ..., braking: ..., reverse: ..., turn: ..., wheelbase: ..., track: ..., climb: ..., lift: ..., gravity: ..., seat: ...)` | Required for `Vehicle`; forbidden otherwise. See [vehicles](vehicles.md). |
 | `abilities` | List of abilities, such as `[Jetpack(...), Dig(...)]` | Optional, `Player` only. Each ability at most once, and never both `Jump` and `Jetpack`. A variant replaces the whole list. |
 | `attack` | `(damage: integer, reach: number, windup: integer, cooldown: integer, knockback: number)` | Optional, `FollowRoute` only. How the character hits players in passing. |
 
@@ -150,6 +151,7 @@ It inherits `FollowRoute`, `body.radius`, and `health.breach_damage`, and draws 
 | Player avatar | The scene's `player`, such as `exosuit` | The character's `view.actor` builds the body, the scene's style may re-dress its joints, and `view.motion` tunes its pose. |
 | Wave enemy | A kind such as `ghoul_forest` | The character's `view.skin`, from the scene's style. |
 | Hauler | A kind such as `worker`, `runner`, or `ox` | The character's `view.skin`, from the scene's style. |
+| Vehicle | A kind such as `rover`, parked by a scene's `vehicles` list | Drawn by the app's built-in rover mesh for now; `view.skin` names its future style skin. |
 | Defender, machine, cart, item | No character definition | The scenario names a skin directly. |
 
 Each spawned character has its own position and other instance state. Scenario agents can also have different capacities and equipment while sharing a character definition. The character names a skin and the style supplies it, so one character can look different in each scene's style; [visual assets and characters](asset-system.md) explains the visual path. What a player can do comes from its character's `abilities`; whether the ground can be dug is the scene's `Digging` feature.

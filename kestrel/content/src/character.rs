@@ -24,6 +24,8 @@ pub enum Brain {
     FollowRoute,
     /// Carries goods along its haul links.
     Hauler,
+    /// Driven by the player sitting in it; idle without one.
+    Vehicle,
 }
 
 /// A character's simulation rules, in simulation units.
@@ -46,6 +48,36 @@ pub struct CharacterDef {
     /// their rules hash; `rules_hash` adds it when any character has one.
     #[serde(skip)]
     pub attack: Option<AttackDef>,
+    /// How a Vehicle drives. Left out of the encoding like `attack`;
+    /// `rules_hash` adds it when any character has one.
+    #[serde(skip)]
+    pub vehicle: Option<VehicleDef>,
+}
+
+/// How a vehicle drives over the ground, in simulation units. Its top
+/// speed is `movement.walk`, or `movement.run` with the run button held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VehicleDef {
+    /// Speed change per tick toward the throttle's, in meters per tick.
+    pub acceleration: Fx,
+    /// Speed change per tick when slowing down or stopping.
+    pub braking: Fx,
+    /// Top speed backing up, meters per tick.
+    pub reverse: Fx,
+    /// Radians per tick the heading turns at full speed.
+    pub turn: Fx,
+    /// Meters between the front and rear axles.
+    pub wheelbase: Fx,
+    /// Meters between the left and right wheels.
+    pub track: Fx,
+    /// The highest step a wheel rolls up, in meters.
+    pub climb: Fx,
+    /// Meters per tick the chassis rises onto higher ground.
+    pub lift: Fx,
+    /// Meters per tick, per tick, it falls when the ground drops away.
+    pub gravity: Fx,
+    /// The driver's feet above the chassis base, in meters.
+    pub seat: Fx,
 }
 
 /// A threat's swing at a player, in simulation units.
@@ -307,6 +339,23 @@ pub(crate) struct SimFile {
     /// Replaced as a whole, not merged.
     abilities: Option<Vec<AbilityFile>>,
     attack: Option<ThreatAttackFile>,
+    vehicle: Option<VehicleFile>,
+}
+
+/// A Vehicle character's `vehicle`: meters, m/s, m/s² and degrees per second.
+#[derive(Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct VehicleFile {
+    acceleration: Option<Fx>,
+    braking: Option<Fx>,
+    reverse: Option<Fx>,
+    turn: Option<Fx>,
+    wheelbase: Option<Fx>,
+    track: Option<Fx>,
+    climb: Option<Fx>,
+    lift: Option<Fx>,
+    gravity: Option<Fx>,
+    seat: Option<Fx>,
 }
 
 /// A FollowRoute character's `attack`: damage, meters, 60 Hz frames and m/s.
@@ -414,7 +463,8 @@ macro_rules! merge_fields {
     };
 }
 
-merge_fields!(SimFile { brain, abilities } { body, movement, health, avatar, carry, attack });
+merge_fields!(SimFile { brain, abilities } { body, movement, health, avatar, carry, attack, vehicle });
+merge_fields!(VehicleFile { acceleration, braking, reverse, turn, wheelbase, track, climb, lift, gravity, seat } {});
 merge_fields!(ThreatAttackFile { damage, reach, windup, cooldown, knockback } {});
 merge_fields!(CarryFile { transfer } {});
 merge_fields!(BodyFile { radius } {});
@@ -498,13 +548,44 @@ pub(crate) fn character_def(file: SimFile) -> Result<CharacterDef, String> {
         Brain::Hauler if carry.is_none() || avatar.is_some() || health.is_some() => {
             return Err("a Hauler character needs `carry`, and no `avatar` or `health`".into())
         }
+        Brain::Vehicle if file.vehicle.is_none() || carry.is_some() || avatar.is_some() || health.is_some() => {
+            return Err("a Vehicle character needs `vehicle`, and no `avatar`, `carry` or `health`".into())
+        }
         _ => {}
     }
     let attack = file.attack.map(attack_def).transpose()?;
     if attack.is_some() && brain != Brain::FollowRoute {
         return Err("only FollowRoute characters have `attack`".into());
     }
-    Ok(CharacterDef { brain, body: BodyDef { radius }, movement: MovementDef { walk, run }, health, avatar, carry, abilities, attack })
+    if file.vehicle.is_some() && brain != Brain::Vehicle {
+        return Err("only Vehicle characters have `vehicle`".into());
+    }
+    let vehicle = file.vehicle.map(vehicle_def).transpose()?;
+    Ok(CharacterDef { brain, body: BodyDef { radius }, movement: MovementDef { walk, run }, health, avatar, carry, abilities, attack, vehicle })
+}
+
+fn vehicle_def(file: VehicleFile) -> Result<VehicleDef, String> {
+    let get = |value: Option<Fx>, field: &str, lo: Fx, hi: Fx, unit: &str| -> Result<Fx, String> {
+        let value = need(value, &format!("vehicle.{field}"))?;
+        if !within(value, lo, hi) {
+            return Err(format!("vehicle.{field} must be in [{}, {}] {unit}", lo.to_f64(), hi.to_f64()));
+        }
+        Ok(value)
+    };
+    let (tenth, one) = (Fx::from_ratio(1, 10), Fx::ONE);
+    let degrees = get(file.turn, "turn", Fx::from_int(5), Fx::from_int(720), "degrees per second")?;
+    Ok(VehicleDef {
+        acceleration: per_tick(per_tick(get(file.acceleration, "acceleration", one, Fx::from_int(100), "m/s²")?)),
+        braking: per_tick(per_tick(get(file.braking, "braking", one, Fx::from_int(100), "m/s²")?)),
+        reverse: per_tick(get(file.reverse, "reverse", tenth, Fx::from_int(15), "m/s")?),
+        turn: per_tick(degrees * Fx::PI / Fx::from_int(180)),
+        wheelbase: get(file.wheelbase, "wheelbase", Fx::HALF, Fx::from_int(8), "m")?,
+        track: get(file.track, "track", Fx::HALF, Fx::from_int(8), "m")?,
+        climb: get(file.climb, "climb", Fx::ZERO, Fx::from_int(2), "m")?,
+        lift: per_tick(get(file.lift, "lift", tenth, Fx::from_int(20), "m/s")?),
+        gravity: per_tick(per_tick(get(file.gravity, "gravity", one, Fx::from_int(100), "m/s²")?)),
+        seat: get(file.seat, "seat", Fx::ZERO, Fx::from_int(3), "m")?,
+    })
 }
 
 fn attack_def(file: ThreatAttackFile) -> Result<AttackDef, String> {

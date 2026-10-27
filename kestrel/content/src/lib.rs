@@ -156,6 +156,7 @@ const BUILTIN: &[(&str, &str)] = &[
     ("character/ghoul_brute.ron", include_str!("../data/character/ghoul_brute.ron")),
     ("character/ghoul_forest.ron", include_str!("../data/character/ghoul_forest.ron")),
     ("character/ox.ron", include_str!("../data/character/ox.ron")),
+    ("character/rover.ron", include_str!("../data/character/rover.ron")),
     ("character/runner.ron", include_str!("../data/character/runner.ron")),
     ("character/worker.ron", include_str!("../data/character/worker.ron")),
     ("mover/large.ron", include_str!("../data/mover/large.ron")),
@@ -279,12 +280,16 @@ fn mover_def(file: MoverSimFile) -> Result<MoverDef, String> {
 /// character has one, so content without attacks keeps its hash.
 fn rules_hash(names: &Names, rules: &Rules) -> u64 {
     let attacks: Vec<_> = rules.characters.iter().map(|c| c.attack).collect();
-    let bytes = if attacks.iter().all(Option::is_none) {
+    let vehicles: Vec<_> = rules.characters.iter().map(|c| c.vehicle).collect();
+    let mut bytes = if attacks.iter().all(Option::is_none) {
         postcard::to_allocvec(&(TICKS_PER_SECOND, names, rules))
     } else {
         postcard::to_allocvec(&(TICKS_PER_SECOND, names, rules, attacks))
     }
     .expect("encode rules");
+    if vehicles.iter().any(Option::is_some) {
+        bytes.extend(postcard::to_allocvec(&vehicles).expect("encode vehicles"));
+    }
     bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, &byte| (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3))
 }
 

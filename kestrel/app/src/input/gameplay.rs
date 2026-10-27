@@ -211,6 +211,7 @@ pub fn dispatch(world: &mut World) {
             Edge::TargetPrevious => world.resource_mut::<Dispatcher>().targets.cycle(-1),
             Edge::TargetNext => world.resource_mut::<Dispatcher>().targets.cycle(1),
             Edge::Choose(index) => choose(world, index),
+            Edge::Board => world.resource_mut::<SessionService>().command(CommandKind::Board { agent }),
             Edge::LiftRelease | Edge::SelectWeapon(_) | Edge::NextWeapon => {}
         }
     }

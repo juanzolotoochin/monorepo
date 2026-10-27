@@ -265,6 +265,19 @@ impl StateHash for RestartMemory {
     }
 }
 
+/// A player reached for a vehicle's seat (`Action::Board`): stage 5 seats
+/// them in the nearest free one in reach (`Settlement::board`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Board {
+    pub agent: u16,
+}
+
+impl StateHash for Board {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+    }
+}
+
 impl StateHash for ReserveStock {
     fn hash_into(&self, h: &mut StateHasher) {
         let job = &self.job;
@@ -305,11 +318,13 @@ pub struct ActionMessages {
     pub drop_haul: Vec<DropHaul>,
     pub drop_notes: Vec<DropNotes>,
     pub reserve_stock: Vec<ReserveStock>,
+    pub board: Vec<Board>,
 }
 
 impl ActionMessages {
     pub fn is_empty(&self) -> bool {
         self.restart_memory.is_empty() && self.drop_haul.is_empty() && self.drop_notes.is_empty() && self.reserve_stock.is_empty()
+            && self.board.is_empty()
     }
 }
 
@@ -319,6 +334,10 @@ impl StateHash for ActionMessages {
         h.write(&self.drop_haul);
         h.write(&self.drop_notes);
         h.write(&self.reserve_stock);
+        // Empty everywhere but a vehicle scene, so other scenes hash as before.
+        if !self.board.is_empty() {
+            h.write(&self.board);
+        }
     }
 }
 

@@ -61,6 +61,9 @@ pub enum Action {
     Release,
     /// Back to the spawn point with a fresh state.
     Respawn,
+    /// Climb into the nearest free vehicle in reach, or out of the one
+    /// driven (`vehicle`).
+    Board,
 }
 
 impl Action {
@@ -81,6 +84,7 @@ impl Action {
             CommandKind::ReleaseDirectControl { agent } => (agent, Action::Release),
             CommandKind::RepairCover { agent, asset } => (agent, Action::RepairCover(asset)),
             CommandKind::Respawn { agent } => (agent, Action::Respawn),
+            CommandKind::Board { agent } => (agent, Action::Board),
             CommandKind::Pile { .. }
             | CommandKind::PlayPiano { .. }
             | CommandKind::SpawnMovers { .. }
@@ -130,6 +134,10 @@ pub struct View<'a> {
     pub spawn_height: Fx,
     /// The last piano key press's serial (`Settlement::piano_serial`).
     pub piano_serial: u64,
+    /// The vehicles, and the characters they are: a driver climbs out
+    /// beside theirs.
+    pub vehicles: &'a [super::VehicleState],
+    pub characters: &'a [CharacterDef],
 }
 
 impl Settlement {
@@ -147,6 +155,8 @@ impl Settlement {
             spawn: self.spawn,
             spawn_height: self.spawn_height,
             piano_serial: self.piano_serial,
+            vehicles: &self.vehicles,
+            characters: &self.characters,
         }
     }
 }

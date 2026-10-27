@@ -56,6 +56,15 @@ pub enum Command {
     Jetpack {
         enabled: bool,
     },
+    /// Climbs into the nearest vehicle, or out of the one driven.
+    Board,
+    /// Holds the movement stick this way (arena x and z, length up to 1);
+    /// a driver steers their vehicle with it.
+    Drive {
+        direction: [f32; 2],
+        #[serde(default)]
+        run: bool,
+    },
     /// Digs out a layer under the player, in a digging scene.
     Dig,
     /// Walks to the collector and empties the cargo into it.

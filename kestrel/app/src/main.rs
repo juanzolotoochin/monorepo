@@ -37,6 +37,7 @@ mod settlement;
 mod sound;
 mod style;
 mod telemetry;
+mod vehicles;
 mod viewer;
 
 use bevy::prelude::*;
@@ -283,6 +284,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .add_service::<character::Avatar>()
         .add_service::<peers::Peers>()
         .add_service::<digging::Digging>()
+        .add_service::<vehicles::Vehicles>()
         .add_service::<jetpack::Flight>()
         .add_service::<palimpsest::Memory>()
         .add_service::<effects::Effects>()
