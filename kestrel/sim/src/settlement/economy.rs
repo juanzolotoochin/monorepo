@@ -274,9 +274,9 @@ impl Settlement {
         self.depots[depot].inventory.take(item, 1);
         self.metrics.equipped += 1;
         self.events.push(super::Event::Equipped { agent: message.agent });
-        let (body, _, h) = self.hauler_parts(message.agent);
+        let (_, _, h) = self.hauler_parts(message.agent);
         h.equipped = true;
-        body.travel_heading = heading;
+        h.travel_heading = heading;
         h.trailer = Some(Trailer { position: spot, heading, travelled: Fx::ZERO });
         h.transfer_at = tick + ATTACH_TICKS;
     }
