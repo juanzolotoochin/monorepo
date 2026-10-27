@@ -175,6 +175,97 @@
   in `haulers.rs`.
 - **Found in:** branch `kestrel-shared-body`.
 
+## Share the "busy carrying" rule between the sim and the app
+
+- **Status:** open
+- **Why:** whether a player can start a depot transfer is decided twice: in
+  `act` (`carry.job`, `inventory.total_in() > 0`, `leaving_cargo`) and again
+  by hand in the app's control protocol, which waits for the same three to
+  clear. They can drift. Since inventory step 4 a pickup job holds its room
+  in `reserved_in`, so `total_in() > 0` already covers a running pickup.
+- **What to do:** one method (on `Settlement` or `View`, taking the agent)
+  that both call. Keep the result the same.
+- **Where:** `act` in `kestrel/sim/src/settlement/avatar.rs`; the transfer
+  wait in `kestrel/app/src/control/mod.rs`.
+- **Found in:** inventory step 4 (`kestrel/INVENTORY_HANDOFF.md`).
+
+## Let a hauler's haul end early
+
+- **Status:** open
+- **Why:** a hauler can't die or cancel, so nothing ends its haul early.
+  Since inventory step 5 its haul is two carry jobs (`Carry::job` and
+  `Carry::next`), and `drop_carry` already releases both. But the hauler's
+  `Assignment` and phase would stay, and its cargo may hold loaded units
+  with nowhere to go.
+- **What to do:** when haulers can be hurt, or a link switched off mid-haul
+  should stop it, add one hauler-side "end the haul" that calls
+  `drop_carry`, clears the assignment and decides what happens to units in
+  the cargo (keep them for the next haul, or return them to the source).
+  A rule change.
+- **Where:** `Carry::drop_carry` in `kestrel/sim/src/settlement/agent.rs`;
+  `haulers.rs` (`self_update`, `Phase`); `Settlement::reserve_stock` in
+  `avatar.rs` for applying the releases.
+- **Found in:** inventory step 5 (`kestrel/INVENTORY_HANDOFF.md`).
+
+## Move hauler equipment onto the carry path
+
+- **Status:** open
+- **Why:** `Equip` reserves one equipment unit at its depot and `Attach`
+  takes it at once. It stays outside carry jobs: equipment isn't stock (the
+  inventory work's scope), the unit goes onto the hauler as a trailer, not
+  into its cargo, and it doesn't fly. Folding it in now would need a job
+  with no own side and no flight, or change the golden file.
+- **What to do:** if equipment joins `Inventory` (handoff "Scope"), make
+  fetching it a one-unit pickup job and drop the `ToEquip` term in
+  `Settlement::validate`. `HaulerState::transfer_at` is now only the end of
+  attaching; rename it then (`attached_at`). A save format change.
+- **Where:** `Settlement::equip` and `attach` in
+  `kestrel/sim/src/settlement/economy.rs`; `haulers.rs`; `validate` in
+  `mod.rs`.
+- **Found in:** inventory step 5 (`kestrel/INVENTORY_HANDOFF.md`).
+
+## Give a scene's empty starting pile a mineral
+
+- **Status:** open
+- **Why:** since inventory step 6 a pile's mineral is what its `OneKind`
+  inventory holds (or a dispenser's `source`). A non-dispenser pile set up
+  with 0 units therefore has no mineral: it takes a deposit of any mineral,
+  where it used to take only its own, and the app draws it as amber. No
+  scene does this today (`pile_lab.ron` starts every pile with units).
+- **What to do:** reject a 0-unit starting pile in `Settlement::from_scene`
+  (or the scene loader), or leave it out.
+- **Where:** `PileLab::new` in `kestrel/sim/src/settlement/piles.rs`;
+  `from_scene` in `mod.rs`; `app/src/lockstep.rs` (the `PileSetup`).
+- **Found in:** inventory step 6 (`kestrel/INVENTORY_HANDOFF.md`).
+
+## Decide whether minerals show in the settlement panel
+
+- **Status:** open
+- **Why:** since inventory step 6 a pile scene's minerals are settlement
+  items, so `Settlement::balances` (and the app's legacy view of it) lists
+  them, with piles and the collector as `stored`. The legacy agent cargo
+  leaves them out (`Settlement::depot_cargo`); the balances don't.
+- **What to do:** check how the debug panels read in the pile and dig labs,
+  and hide the minerals there or label them.
+- **Where:** `kestrel/app/src/legacy.rs` (`balances`), the settlement HUD.
+- **Found in:** inventory step 6 (`kestrel/INVENTORY_HANDOFF.md`).
+
+## Let a drop or a delivery name its mineral
+
+- **Status:** open
+- **Why:** a player's cargo mixes minerals since inventory step 7, but
+  `PileAction::Drop` and `Deliver` name no mineral (changing them would
+  change `CommandKind` and the input log), so a drop puts down the first
+  mineral carried, in mineral order, and a delivery takes all of them. A
+  player can't choose which ore to put down.
+- **What to do:** add a mineral to the drop (and maybe the delivery) as a
+  new append-only `CommandKind` variant or field, with the input format bumped,
+  and let the app pick it (the backpack's top unit, or a menu).
+- **Where:** `sim/src/settlement/piles.rs` (`PileLab::plan`),
+  `sim/src/world.rs` (`CommandKind::Pile`), `app/src/piles/mod.rs` (`input`),
+  `app/src/input/gameplay.rs`.
+- **Found in:** inventory step 7 (`kestrel/INVENTORY_HANDOFF.md`, Decisions).
+
 ## Done
 
 ### Keep a player's health over the Respawn action

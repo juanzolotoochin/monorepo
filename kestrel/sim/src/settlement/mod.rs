@@ -7,9 +7,9 @@
 //! - Agents (haulers and player avatars) move in the parallel self-update
 //!   stage, reading last tick's positions of everyone else. Anything that
 //!   touches a depot, a dock or another entity is a message.
-//! - Reservations are incremental counters on each depot (`out` per item,
-//!   `incoming` per item), so checking availability is O(1). A debug
-//!   invariant recomputes them from scratch.
+//! - Reservations are incremental counters in each depot's inventory
+//!   (`reserved_out` and `reserved_in` per item), so checking availability
+//!   is O(1). A debug invariant recomputes them from scratch.
 //!
 //! Positions are world tiles (1 tile = 1 m). Scenario files use arena
 //! coordinates; [`Settlement::from_scenario`] offsets them by the arena center.
@@ -20,6 +20,7 @@ pub mod avatar;
 pub mod combat;
 mod economy;
 mod haulers;
+mod inventory;
 pub mod memory;
 pub mod piano;
 pub mod piles;
@@ -39,8 +40,9 @@ use crate::nav;
 use crate::terrain::{Disc, Terrain};
 
 pub use combat::{CombatMetrics, DefenderState, Event, Impact, OnMiss, Pinned, Prediction, Projectile, SpentProjectile, Threat, TossEnd, WaveState};
-pub use agent::{AgentState, Body, Carry, Role};
+pub use agent::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
 pub use haulers::{HaulerState, Phase};
+pub use inventory::{Inventory, Kinds};
 pub use prediction::AvatarReplay;
 
 pub type ItemIx = u16;
@@ -55,29 +57,10 @@ pub const TRANSFER_FLIGHT_TICKS: u64 = content::millis_to_ticks(350);
 pub struct DepotState {
     pub id: String,
     pub position: FxVec2,
-    pub capacity: u32,
-    /// Units on hand, per item.
-    pub stock: Vec<u32>,
-    /// Units promised to haulers, recipes or the player, per item.
-    pub out: Vec<u32>,
-    /// Units on their way here (hauled, flying, being produced), per item.
-    pub incoming: Vec<u32>,
-}
-
-impl DepotState {
-    pub fn total(&self) -> u32 {
-        self.stock.iter().sum()
-    }
-
-    /// Space not taken by stock or incoming units.
-    pub fn free(&self) -> u32 {
-        self.capacity.saturating_sub(self.total() + self.incoming.iter().sum::<u32>())
-    }
-
-    /// Stock not promised to anyone.
-    pub fn available(&self, item: ItemIx) -> u32 {
-        self.stock[item as usize].saturating_sub(self.out[item as usize])
-    }
+    /// The stock. `reserved_out` is promised to haulers, recipes or the
+    /// player; `reserved_in` is on its way here (hauled, flying, being
+    /// produced).
+    pub inventory: Inventory,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,10 +100,23 @@ pub struct ProducerState {
     pub cycles: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Endpoint {
+/// Names a holder of goods: a depot's inventory, an agent's cargo, a pile or
+/// the collector. A flying unit's two ends are these, and so is a carry
+/// job's other side. New variants go last: `behaviour_digest` hashes the
+/// variant index of every transfer's ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum InventoryRef {
     Depot(DepotIx),
-    Cargo(AgentIx),
+    Agent(AgentIx),
+    Pile(piles::PileId),
+    Collector,
+}
+
+impl InventoryRef {
+    /// A pile or the collector: a haul's other side.
+    pub fn in_pile_lab(self) -> bool {
+        matches!(self, InventoryRef::Pile(_) | InventoryRef::Collector)
+    }
 }
 
 /// One unit in the air. It belongs to neither end until it arrives.
@@ -128,12 +124,19 @@ pub enum Endpoint {
 pub struct Transfer {
     pub id: u64,
     pub item: ItemIx,
-    pub from: Endpoint,
-    pub to: Endpoint,
+    pub from: InventoryRef,
+    pub to: InventoryRef,
     pub start: FxVec2,
     pub end: FxVec2,
     pub born: u64,
     pub arrival: u64,
+}
+
+/// Whether a unit that left `agent`'s cargo is still in the air. It left the
+/// cargo's counts when it launched, so only its transfer shows it. It scans
+/// every transfer, so callers ask only when it matters.
+pub(crate) fn leaving_cargo(transfers: &BTreeMap<u64, Transfer>, agent: AgentIx) -> bool {
+    transfers.values().any(|t| t.from == InventoryRef::Agent(agent))
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -304,19 +307,13 @@ impl Settlement {
             .depots
             .iter()
             .map(|d| {
-                let mut stock = vec![0; items.len()];
+                let mut inventory = Inventory::new(items.len(), d.capacity, Kinds::AnyMix);
                 for s in &d.stock {
-                    stock[item(&s.item) as usize] += s.units;
+                    // Validated: the stock fits the capacity.
+                    inventory.counts[item(&s.item) as usize] += s.units;
                     accounts[item(&s.item) as usize].initial += s.units as u64;
                 }
-                DepotState {
-                    id: d.id.clone(),
-                    position: at(d.position),
-                    capacity: d.capacity,
-                    stock,
-                    out: vec![0; items.len()],
-                    incoming: vec![0; items.len()],
-                }
+                DepotState { id: d.id.clone(), position: at(d.position), inventory }
             })
             .collect();
         let sources = scenario
@@ -522,20 +519,30 @@ impl Settlement {
             body.heading = Fx::PI;
             avatar.height = settlement.spawn_height;
         }
-        settlement.piles = setup.piles.as_ref().map(|p| {
+        if let Some(p) = &setup.piles {
+            // The mine's minerals become items, after the scenario's.
+            let first_mineral = settlement.add_items(&crate::mine::MINERAL_IDS)?;
+            // A player has one capacity, for depot items and minerals in any
+            // mix: the larger of the scenario's and the lab's.
+            for a in settlement.agents.iter_mut().filter(|a| a.avatar().is_some()) {
+                a.carry.inventory.capacity = a.carry.inventory.capacity.max(p.capacity);
+            }
             let dispensers: Vec<(u8, FxVec2)> = p.dispensers.iter().map(|&(m, o)| (m, at(o))).collect();
             let piles: Vec<(u8, FxVec2, u32)> = p.piles.iter().map(|&(m, pos, units)| (m, at(pos), units)).collect();
-            let mut lab = piles::PileLab::new(center, p.capacity, &dispensers, &piles);
+            let mut lab = piles::PileLab::new(center, settlement.items.len(), first_mineral, &dispensers, &piles);
+            for &(mineral, _, units) in &piles {
+                settlement.accounts[lab.item(mineral) as usize].initial += units as u64;
+            }
             if setup.mine.is_some() {
                 // Ore can be piled anywhere in a mine, and there's a lot of it.
                 lab.limit = terrain.extent - Fx::ONE;
                 lab.max_piles = piles::MAX_MINE_PILES;
             }
             if let Some(position) = p.collector {
-                lab.collector = Some(piles::Collector::new(at(position)));
+                lab.collector = Some(piles::Collector::new(at(position), settlement.items.len()));
             }
-            lab
-        });
+            settlement.piles = Some(lab);
+        }
         if let Some(c) = settlement.piles.as_ref().and_then(|lab| lab.collector.as_ref()) {
             terrain.obstacles.push(Disc { center: c.position, radius: piles::COLLECTOR_RADIUS });
             terrain.revision += 1;
@@ -576,6 +583,44 @@ impl Settlement {
         }
     }
 
+    /// Adds items after the scenario's, with room for them in every
+    /// inventory. Returns the first one's index.
+    fn add_items(&mut self, ids: &[&str]) -> Result<ItemIx, String> {
+        if let Some(id) = ids.iter().find(|id| self.items.iter().any(|i| i == *id)) {
+            return Err(format!("the scenario has an item {id:?}, which is a mineral"));
+        }
+        let first = self.items.len() as ItemIx;
+        self.items.extend(ids.iter().map(|id| id.to_string()));
+        let items = self.items.len();
+        self.accounts.resize(items, Accounting::default());
+        for d in &mut self.depots {
+            d.inventory.resize(items);
+        }
+        for a in &mut self.agents {
+            a.carry.inventory.resize(items);
+        }
+        Ok(first)
+    }
+
+    /// The items depots and depot transfers take: the scenario's, without
+    /// a pile scene's minerals.
+    pub fn depot_items(&self) -> usize {
+        self.piles.as_ref().map_or(self.items.len(), |lab| lab.first_mineral as usize)
+    }
+
+    /// An agent's depot items: its cargo's units of each, leaving out a
+    /// player's minerals, which the pile views show.
+    pub fn depot_cargo<'a>(&self, a: &'a AgentState) -> &'a [u32] {
+        &a.carry.inventory.counts[..self.depot_items()]
+    }
+
+    /// The minerals `agent` carries, units by mineral number (empty without
+    /// piles).
+    pub fn carried_minerals(&self, agent: AgentIx) -> Vec<u32> {
+        let (Some(lab), Some(a)) = (self.piles.as_ref(), self.agents.get(agent as usize)) else { return Vec::new() };
+        lab.carried_by_mineral(&a.carry.inventory)
+    }
+
     pub fn item_index(&self, id: &str) -> Option<ItemIx> {
         self.items.iter().position(|i| i == id).map(|i| i as ItemIx)
     }
@@ -606,7 +651,32 @@ impl Settlement {
 
     /// Units of `item` at `depot`, by name.
     pub fn stock(&self, depot: &str, item: &str) -> u32 {
-        self.depot(depot).stock[self.item_index(item).expect("known item") as usize]
+        self.depot(depot).inventory.count(self.item_index(item).expect("known item"))
+    }
+
+    /// Whether a unit that left `agent`'s cargo is still in the air.
+    pub fn leaving_cargo(&self, agent: AgentIx) -> bool {
+        leaving_cargo(&self.transfers, agent)
+    }
+
+    /// The inventory `holder` names.
+    pub(crate) fn inventory_mut(&mut self, holder: InventoryRef) -> &mut Inventory {
+        match holder {
+            InventoryRef::Depot(d) => &mut self.depots[d as usize].inventory,
+            InventoryRef::Agent(a) => &mut self.agents[a as usize].carry.inventory,
+            InventoryRef::Pile(_) | InventoryRef::Collector => self.piles.as_mut().expect("a pile scene").holder_mut(holder),
+        }
+    }
+
+    /// Where `holder` takes and gives units: a depot's dock, an agent's
+    /// body, a pile, the collector.
+    pub(crate) fn position_of(&self, holder: InventoryRef) -> FxVec2 {
+        match holder {
+            InventoryRef::Depot(d) => self.depots[d as usize].position,
+            InventoryRef::Agent(a) => self.agents[a as usize].body.position,
+            InventoryRef::Pile(id) => self.piles.as_ref().expect("a pile scene").piles[&id].position,
+            InventoryRef::Collector => self.piles.as_ref().and_then(|lab| lab.collector.as_ref()).expect("a collector").position,
+        }
     }
 
     fn id(&mut self) -> u64 {
@@ -622,8 +692,10 @@ impl Settlement {
             .enumerate()
             .map(|(i, id)| {
                 let b = &self.accounts[i];
-                let stored = self.depots.iter().map(|d| d.stock[i] as u64).sum();
-                let carried = self.agents.iter().map(|a| a.carry.cargo[i] as u64).sum();
+                // Minerals are stored in piles and the collector.
+                let lab = self.piles.iter().flat_map(|lab| lab.piles.values().map(|p| &p.inventory).chain(lab.collector.as_ref().map(|c| &c.inventory)));
+                let stored = self.depots.iter().map(|d| &d.inventory).chain(lab).map(|inventory| inventory.counts[i] as u64).sum();
+                let carried = self.agents.iter().map(|a| a.carry.inventory.counts[i] as u64).sum();
                 let in_transit = self.transfers.values().filter(|t| t.item as usize == i).count() as u64;
                 let equipped = self.agents.iter().filter(|a| a.equipped_item() == Some(i as ItemIx)).count() as u64;
                 let supplied = b.initial + b.generated + b.produced;
@@ -653,20 +725,14 @@ impl Settlement {
         let mut out = vec![vec![0u32; items]; self.depots.len()];
         let mut incoming = vec![vec![0u32; items]; self.depots.len()];
         for h in self.agents.iter().filter_map(AgentState::hauler) {
-            if let Some(job) = &h.assignment {
-                let link = &self.links[job.link as usize];
-                out[link.from as usize][link.item as usize] += job.units - job.loaded;
-                incoming[link.to as usize][link.item as usize] += job.units - job.unloaded;
-            }
             if h.phase == Phase::ToEquip {
                 let e = h.equipment.as_ref().expect("equipping agents have equipment");
                 out[e.depot as usize][e.item as usize] += 1;
             }
         }
-        // A hauled unit counts as incoming from assignment until arrival: first
-        // as not yet unloaded, then as flying.
+        // A unit flying to a depot is incoming until it lands.
         for t in self.transfers.values() {
-            if let Endpoint::Depot(d) = t.to {
+            if let InventoryRef::Depot(d) = t.to {
                 incoming[d as usize][t.item as usize] += 1;
             }
         }
@@ -677,33 +743,81 @@ impl Settlement {
                 }
             }
         }
-        for avatar in self.agents.iter().filter_map(AgentState::avatar) {
-            if let Some(job) = &avatar.job {
-                if job.deposit {
-                    incoming[job.depot as usize][job.item as usize] += job.remaining;
-                } else {
-                    out[job.depot as usize][job.item as usize] += job.remaining;
-                }
+        // A carry job holds what it hasn't moved yet at its depot, and so
+        // does the job after it (a hauler's unload, while it loads).
+        for job in self.agents.iter().flat_map(|a| a.carry.job.iter().chain(&a.carry.next)) {
+            if let InventoryRef::Depot(d) = job.other {
+                let side = if job.gives(Side::Other) { &mut out } else { &mut incoming };
+                side[d as usize][job.item as usize] += job.remaining;
             }
         }
         for (i, d) in self.depots.iter().enumerate() {
-            if d.out != out[i] {
-                return Err(format!("depot {} outgoing reservations drifted: {:?} vs {:?}", d.id, d.out, out[i]));
+            let inventory = &d.inventory;
+            if inventory.reserved_out != out[i] {
+                return Err(format!("depot {} outgoing reservations drifted: {:?} vs {:?}", d.id, inventory.reserved_out, out[i]));
             }
-            if d.incoming != incoming[i] {
-                return Err(format!("depot {} incoming reservations drifted: {:?} vs {:?}", d.id, d.incoming, incoming[i]));
+            if inventory.reserved_in != incoming[i] {
+                return Err(format!("depot {} incoming reservations drifted: {:?} vs {:?}", d.id, inventory.reserved_in, incoming[i]));
             }
-            if d.total() + d.incoming.iter().sum::<u32>() > d.capacity {
-                return Err(format!("depot {} overbooked", d.id));
-            }
-            if (0..items).any(|item| d.out[item] > d.stock[item]) {
-                return Err(format!("depot {} stock overbooked", d.id));
-            }
+            inventory.validate().map_err(|e| format!("depot {} {e}", d.id))?;
         }
         for a in &self.agents {
-            let cargo: u32 = a.carry.cargo.iter().sum();
-            if cargo + a.carry.pending_in > a.carry.capacity {
-                return Err(format!("agent {} capacity exceeded", a.id));
+            a.carry.inventory.validate().map_err(|e| format!("agent {} cargo {e}", a.id))?;
+        }
+        // A unit flying into a cargo bed is reserved there until it lands. A
+        // carry job holds its own side too: room for the units it will pick
+        // up, the units it will deposit; the job after it holds nothing here
+        // until it starts. A unit flying out left the cargo when it
+        // launched, so it holds nothing there.
+        let mut cargo_in = vec![vec![0u32; items]; self.agents.len()];
+        let mut cargo_out = vec![vec![0u32; items]; self.agents.len()];
+        for t in self.transfers.values() {
+            if let InventoryRef::Agent(a) = t.to {
+                cargo_in[a as usize][t.item as usize] += 1;
+            }
+        }
+        for (i, a) in self.agents.iter().enumerate() {
+            if let Some(job) = &a.carry.job {
+                let side = if job.gives(Side::Own) { &mut cargo_out } else { &mut cargo_in };
+                side[i][job.item as usize] += job.remaining;
+            }
+        }
+        for (i, a) in self.agents.iter().enumerate() {
+            if a.carry.inventory.reserved_in != cargo_in[i] || a.carry.inventory.reserved_out != cargo_out[i] {
+                return Err(format!("agent {} cargo reservations drifted", a.id));
+            }
+        }
+        if let Some(lab) = &self.piles {
+            self.validate_lab(lab)?;
+        }
+        Ok(())
+    }
+
+    /// Checks the piles and the collector: each inventory on its own, and
+    /// its reservations against the units flying there and the carry jobs
+    /// (hauls) on it.
+    fn validate_lab(&self, lab: &piles::PileLab) -> Result<(), String> {
+        let items = self.items.len();
+        let expected = |holder: InventoryRef| {
+            let (mut out, mut incoming) = (vec![0u32; items], vec![0u32; items]);
+            for t in self.transfers.values().filter(|t| t.to == holder) {
+                incoming[t.item as usize] += 1;
+            }
+            for job in self.agents.iter().flat_map(|a| a.carry.job.iter().chain(&a.carry.next)).filter(|j| j.other == holder) {
+                let side = if job.gives(Side::Other) { &mut out } else { &mut incoming };
+                side[job.item as usize] += job.remaining;
+            }
+            (out, incoming)
+        };
+        let holders = lab.piles.iter().map(|(&id, p)| (InventoryRef::Pile(id), format!("pile {id}"), &p.inventory));
+        let collector = lab.collector.iter().map(|c| (InventoryRef::Collector, "collector".to_string(), &c.inventory));
+        for (holder, name, inventory) in holders.chain(collector) {
+            inventory.validate().map_err(|e| format!("{name} {e}"))?;
+            if (inventory.reserved_out.clone(), inventory.reserved_in.clone()) != expected(holder) {
+                return Err(format!("{name} reservations drifted"));
+            }
+            if (0..items as ItemIx).any(|i| inventory.count(i) > 0 && !lab.is_mineral(i)) {
+                return Err(format!("{name} holds an item that isn't a mineral"));
             }
         }
         Ok(())
@@ -743,7 +857,7 @@ impl Settlement {
                 // An avatar as it hashed when it had a hauler's fields: idle,
                 // with no trailer.
                 let (phase, trailer) = a.hauler().map_or((Phase::Idle, None), |h| (h.phase, h.trailer.as_ref()));
-                (&a.id, a.body.position, a.body.heading, a.body.travelled, phase, &a.body.route, &a.carry.cargo, trailer)
+                (&a.id, a.body.position, a.body.heading, a.body.travelled, phase, &a.body.route, &a.carry.inventory.counts, trailer)
             })
             .collect();
         let avatars: Vec<_> = self
@@ -761,12 +875,22 @@ impl Settlement {
             .map(|t| (t.id, t.wave, t.position, t.heading, t.hp, t.armor, t.stagger_until, t.knockback))
             .collect();
         let spawned: Vec<_> = self.waves.iter().map(|w| w.spawned).collect();
+        // A depot as it hashed before its inventory: capacity, stock, out
+        // and incoming, without the kinds.
+        let depots: Vec<_> = self
+            .depots
+            .iter()
+            .map(|d| {
+                let i = &d.inventory;
+                (&d.id, d.position, i.capacity, &i.counts, &i.reserved_out, &i.reserved_in)
+            })
+            .collect();
         let observed = (
             agents,
             avatars,
             threats,
             spawned,
-            &self.depots,
+            depots,
             &self.projectiles,
             &self.pinned,
             &self.transfers,

@@ -838,7 +838,7 @@ fn pile_targets_are_sticky_cycle_stably_and_take_and_deposit() {
 }
 
 #[test]
-fn incompatible_cargo_shows_a_reason_and_sends_nothing() {
+fn another_mineral_is_collected_beside_the_cargo() {
     let mut game = Game::new("pile-lab", 60.0);
     game.claim(1);
     game.seconds(0.5);
@@ -859,11 +859,12 @@ fn incompatible_cargo_shows_a_reason_and_sends_nothing() {
     game.walk_to(stand);
     game.frames(2);
     game.select(targets::TargetKey::Pile(other.0));
-    let count = game.commands().len();
+    let collect = |c: &CommandKind| matches!(c, CommandKind::Pile { action: sim::settlement::piles::PileAction::Pickup(id), .. } if *id == other.0);
+    assert_eq!(game.count(collect), 0);
     game.tap(1, Button::South);
     game.frames(2);
-    assert_eq!(game.commands().len(), count, "nothing sent");
-    assert!(game.dispatcher().notice.contains("Different minerals"), "{}", game.dispatcher().notice);
+    // Minerals mix in a cargo: a pile of a mineral not carried is collected.
+    assert_eq!(game.count(collect), 1, "collects the other mineral");
     assert_eq!(game.dispatcher().targets.selected, Some(targets::TargetKey::Pile(other.0)), "no silent substitution");
 }
 

@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::hash::{StateHash, StateHasher};
 use crate::id::Id;
 use crate::mover::Mover;
+use crate::settlement::{CarryJob, InventoryRef};
 
 /// One mover attacks another.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,9 +77,12 @@ pub struct Equip {
     pub route: Vec<FxVec2>,
 }
 
-/// An agent asks for a haul job: up to `units` along `link`.
+/// A hauler asks for a haul job: up to `units` along `link`, walking
+/// `route` to the source. Stage 5 sizes it again and, if any units are
+/// left, holds both ends at once (`Settlement::reserve_haul`): a load at
+/// the source, then an unload at the target, as two carry jobs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Reserve {
+pub struct ReserveHaul {
     pub agent: u16,
     pub link: u16,
     pub units: u32,
@@ -91,15 +95,13 @@ pub struct Attach {
     pub agent: u16,
 }
 
-/// An agent at its pickup dock loads one unit.
+/// An agent's carry job (`Carry::job`) moves its next unit: a hauler
+/// loading or unloading at its dock, or a player's depot transfer. In the
+/// `pile_carry` queue it launches the next unit of a player's pile haul (a
+/// carry job with a pile or the collector, walked to by `Hauler::job`), or
+/// all of it at pace zero.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Load {
-    pub agent: u16,
-}
-
-/// An agent at its drop dock unloads one unit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Unload {
+pub struct CarryUnit {
     pub agent: u16,
 }
 
@@ -193,24 +195,6 @@ pub struct Fire {
     pub to: FxVec2,
 }
 
-/// The player's pile job moves its next unit (or all of it).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PileStep {
-    pub agent: u16,
-}
-
-impl StateHash for PileStep {
-    fn hash_into(&self, h: &mut StateHasher) {
-        h.write(&self.agent);
-    }
-}
-
-/// A player's manual transfer moves its next unit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ManualUnit {
-    pub agent: u16,
-}
-
 /// A player's action let go of the avatar's pile haul (`Action::Move`, an
 /// `Attack` with an offered weapon, `Respawn`). Ends the haul if it is still
 /// the one the action saw: a `Pile` command later in the same turn starts a
@@ -239,24 +223,25 @@ pub struct RestartMemory {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StockChange {
-    /// A transfer the avatar took on (`Action::Transfer`) promises its units:
-    /// stock out of the depot, or room in it for a deposit.
+    /// A job the agent took on (`Action::Transfer`) holds its units on the
+    /// other side: stock out of a depot, or room in it for a deposit.
     Reserve,
-    /// A cancelled transfer (`Action::CancelTransfer`) gives back what it
-    /// hadn't moved yet.
+    /// A job that ended early (`Carry::drop_carry`) gives back what it held
+    /// there.
     Release,
 }
 
-/// A player's manual transfer reserves or releases depot stock. Contested:
-/// a reservation the depot can no longer cover when it applies is refused,
-/// and the avatar's job rolls back (`Settlement::transfer_stock`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TransferStock {
+/// A carry job's units on its other side (`CarryJob::other`), held or given
+/// back: `job.remaining` of them. The agent's own side changes where the
+/// job is set or dropped, since that is the agent's own state. Contested: a
+/// reservation the other side can no longer cover when it applies is
+/// refused, and the agent's job rolls back (`Settlement::reserve_stock`).
+/// Players' actions send it, applied first in stage 5; a hauler's haul is
+/// held by `ReserveHaul` instead, later in stage 5.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReserveStock {
     pub agent: u16,
-    pub depot: u16,
-    pub item: u16,
-    pub units: u32,
-    pub deposit: bool,
+    pub job: CarryJob,
     pub change: StockChange,
 }
 
@@ -280,13 +265,31 @@ impl StateHash for RestartMemory {
     }
 }
 
-impl StateHash for TransferStock {
+impl StateHash for ReserveStock {
     fn hash_into(&self, h: &mut StateHasher) {
+        let job = &self.job;
         h.write(&self.agent);
-        h.write(&self.depot);
-        h.write(&self.item);
-        h.write(&self.units);
-        h.write(&self.deposit);
+        // The holder's variant, then its index (a depot's and an agent's
+        // are `u16`, a pile's `u32`; the collector has none).
+        match job.other {
+            InventoryRef::Depot(d) => {
+                h.write_u64(0);
+                h.write(&d);
+            }
+            InventoryRef::Agent(a) => {
+                h.write_u64(1);
+                h.write(&a);
+            }
+            InventoryRef::Pile(id) => {
+                h.write_u64(2);
+                h.write(&id);
+            }
+            InventoryRef::Collector => h.write_u64(3),
+        }
+        h.write(&job.item);
+        h.write_u64(job.direction as u64);
+        h.write(&job.remaining);
+        h.write(&job.next_tick);
         h.write_u64(self.change as u64);
     }
 }
@@ -301,12 +304,12 @@ pub struct ActionMessages {
     pub restart_memory: Vec<RestartMemory>,
     pub drop_haul: Vec<DropHaul>,
     pub drop_notes: Vec<DropNotes>,
-    pub transfer_stock: Vec<TransferStock>,
+    pub reserve_stock: Vec<ReserveStock>,
 }
 
 impl ActionMessages {
     pub fn is_empty(&self) -> bool {
-        self.restart_memory.is_empty() && self.drop_haul.is_empty() && self.drop_notes.is_empty() && self.transfer_stock.is_empty()
+        self.restart_memory.is_empty() && self.drop_haul.is_empty() && self.drop_notes.is_empty() && self.reserve_stock.is_empty()
     }
 }
 
@@ -315,7 +318,7 @@ impl StateHash for ActionMessages {
         h.write(&self.restart_memory);
         h.write(&self.drop_haul);
         h.write(&self.drop_notes);
-        h.write(&self.transfer_stock);
+        h.write(&self.reserve_stock);
     }
 }
 
@@ -372,12 +375,6 @@ impl StateHash for Fire {
     }
 }
 
-impl StateHash for ManualUnit {
-    fn hash_into(&self, h: &mut StateHasher) {
-        h.write(&self.agent);
-    }
-}
-
 impl StateHash for ClaimDock {
     fn hash_into(&self, h: &mut StateHasher) {
         h.write(&self.depot);
@@ -405,7 +402,7 @@ impl StateHash for Equip {
     }
 }
 
-impl StateHash for Reserve {
+impl StateHash for ReserveHaul {
     fn hash_into(&self, h: &mut StateHasher) {
         h.write(&self.agent);
         h.write(&self.link);
@@ -420,13 +417,7 @@ impl StateHash for Attach {
     }
 }
 
-impl StateHash for Load {
-    fn hash_into(&self, h: &mut StateHasher) {
-        h.write(&self.agent);
-    }
-}
-
-impl StateHash for Unload {
+impl StateHash for CarryUnit {
     fn hash_into(&self, h: &mut StateHasher) {
         h.write(&self.agent);
     }
@@ -510,12 +501,18 @@ message_queues! {
     claim_dock: ClaimDock,
     retry: Retry,
     equip: Equip,
-    reserve: Reserve,
+    reserve_haul: ReserveHaul,
     attach: Attach,
-    load: Load,
-    unload: Unload,
-    manual_unit: ManualUnit,
-    pile_step: PileStep,
+    // Carry units: one type and one handler, in three queues. Each unit
+    // launched takes the next transfer ID, so they keep the order they had
+    // as `Load`, `Unload` and `ManualUnit`: haulers' loads, then their
+    // unloads, then players' units.
+    hauler_load: CarryUnit,
+    hauler_unload: CarryUnit,
+    player_carry: CarryUnit,
+    // Players' pile units, where `PileStep` was: launched by their own
+    // handler (`Settlement::pile_unit`), after depot units.
+    pile_carry: CarryUnit,
     // Combat: strikes and projectile hits before breaches, so a killing
     // blow on the last tick saves the base; shots last. Threats' swings
     // after them too, so a kill or stagger on the tick a swing starts or

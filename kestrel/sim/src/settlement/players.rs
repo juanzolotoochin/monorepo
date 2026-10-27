@@ -10,9 +10,8 @@
 
 use fx::{Fx, FxVec2};
 
-use super::avatar::{AvatarState, Intent, ManualJob};
-use super::{AgentIx, AgentState, Body, Carry, Endpoint, Role, Settlement};
-use crate::messages::{StockChange, TransferStock};
+use super::avatar::{AvatarState, Intent};
+use super::{AgentIx, AgentState, Body, Carry, Inventory, InventoryRef, Kinds, Role, Settlement};
 use crate::terrain::Terrain;
 use crate::PlayerId;
 
@@ -60,10 +59,10 @@ impl Settlement {
                 ..Body::default()
             },
             carry: Carry {
-                cargo: vec![0; template.carry.cargo.len()],
-                capacity: template.carry.capacity,
+                inventory: Inventory::new(template.carry.inventory.counts.len(), template.carry.inventory.capacity, Kinds::AnyMix),
                 transfer_ticks: template.carry.transfer_ticks,
-                ..Carry::default()
+                job: None,
+                next: None,
             },
             role: Role::Avatar(AvatarState {
                 owner: Some(player),
@@ -102,24 +101,28 @@ impl Settlement {
     }
 
     /// Commands: `player` left the game. Their avatar goes, with what it
-    /// held: its manual job's reservations are released, units flying to
-    /// or from it land at once, and what it carried is written off as
-    /// `abandoned`. The scene's first avatar never leaves, since every
-    /// joiner is a copy of it.
+    /// held:
+    /// - its carry jobs end through `drop_carry`, as a cancel ends them, so
+    ///   what they held on a depot, a pile or the collector and in `next` is
+    ///   released (an empty drop pile then goes in housekeeping);
+    /// - units flying to or from it land at once;
+    /// - what its cargo then holds, minerals among the items, is written off
+    ///   as `abandoned`;
+    /// - its pile lab hauler (walk, notices, toss landings) goes.
+    ///
+    /// The scene's first avatar never leaves, since every joiner is a copy
+    /// of it.
     pub fn leave(&mut self, player: PlayerId) {
         let Some(gone) = self.avatar_of(player) else { return };
         if Some(gone) == self.player() {
             return;
         }
-        if let Some(job) = self.agents[gone as usize].avatar_mut().and_then(|avatar| avatar.job.take()) {
-            let ManualJob { depot, item, remaining, deposit, .. } = job;
-            let release = TransferStock { agent: gone, depot, item, units: remaining, deposit, change: StockChange::Release };
-            self.transfer_stock(vec![release]);
-        }
+        let releases = self.agents[gone as usize].carry.drop_carry(gone);
+        self.reserve_stock(releases);
         let flying: Vec<u64> = self
             .transfers
             .values()
-            .filter(|t| t.from == Endpoint::Cargo(gone) || t.to == Endpoint::Cargo(gone))
+            .filter(|t| t.from == InventoryRef::Agent(gone) || t.to == InventoryRef::Agent(gone))
             .map(|t| t.id)
             .collect();
         for id in flying {
@@ -127,7 +130,7 @@ impl Settlement {
             self.land(t);
         }
         let a = &self.agents[gone as usize];
-        let mut abandoned = a.carry.cargo.clone();
+        let mut abandoned = a.carry.inventory.counts.clone();
         if let Some(item) = a.equipped_item() {
             abandoned[item as usize] += 1;
         }
@@ -166,9 +169,14 @@ impl Settlement {
         }
         for t in self.transfers.values_mut() {
             for end in [&mut t.from, &mut t.to] {
-                if let Endpoint::Cargo(ix) = end {
+                if let InventoryRef::Agent(ix) = end {
                     shift(ix);
                 }
+            }
+        }
+        for job in self.agents.iter_mut().flat_map(|a| [a.carry.job.as_mut(), a.carry.next.as_mut()]).flatten() {
+            if let InventoryRef::Agent(ix) = &mut job.other {
+                shift(ix);
             }
         }
         for windup in self.threats.iter_mut().filter_map(|t| t.windup.as_mut()) {

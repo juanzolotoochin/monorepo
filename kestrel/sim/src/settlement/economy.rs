@@ -7,8 +7,8 @@ use fx::{Fx, FxVec2};
 use rayon::prelude::*;
 
 use super::haulers::{self, footprint, job_size, Assignment, Ctx, HaulerState, Phase, Trailer, ATTACH_TICKS, RETRY_TICKS};
-use super::{AgentIx, AgentState, Body, Carry, DepotIx, Endpoint, ItemIx, Role, Settlement, Transfer, TRANSFER_FLIGHT_TICKS};
-use crate::messages::{Attach, ClaimDock, DockClaim, Equip, Load, Messages, Reserve, Retry, Unload};
+use super::{AgentIx, AgentState, Body, Carry, CarryJob, DepotIx, Direction, InventoryRef, ItemIx, Role, Settlement, Side, Transfer, TRANSFER_FLIGHT_TICKS};
+use crate::messages::{Attach, CarryUnit, ClaimDock, DockClaim, Equip, Messages, ReserveHaul, Retry};
 use crate::terrain::Terrain;
 
 impl Settlement {
@@ -17,8 +17,8 @@ impl Settlement {
         self.events.clear();
         self.threats_self_update(tick, terrain);
         let footprints: Vec<_> = self.agents.iter().map(footprint).collect();
-        let Settlement { agents, characters, dock_owner, depots, links, piles, .. } = self;
-        let ctx = Ctx { tick, characters, terrain, piles: piles.as_ref(), footprints: &footprints, dock_owner, depots, links };
+        let Settlement { agents, characters, dock_owner, depots, links, piles, transfers, .. } = self;
+        let ctx = Ctx { tick, characters, terrain, piles: piles.as_ref(), footprints: &footprints, dock_owner, depots, links, transfers };
         agents.par_iter_mut().enumerate().for_each(|(i, a)| haulers::self_update(a, i as AgentIx, &ctx));
         self.release_distant_piano_notes();
     }
@@ -55,27 +55,26 @@ impl Settlement {
         }
     }
 
-    /// A unit arrives at its end: a depot's stock or an agent's cargo.
+    /// A unit arrives at its end: a depot, an agent's cargo, a pile or the
+    /// collector. A unit leaving a cargo bed left its counts at launch, so
+    /// landing is all that changes at that end.
     pub(super) fn land(&mut self, t: super::Transfer) {
-        if let Endpoint::Cargo(a) = t.from {
-            self.agents[a as usize].carry.pending_out -= 1;
-        }
         match t.to {
-            Endpoint::Depot(d) => {
+            InventoryRef::Depot(d) => {
                 let depot = &mut self.depots[d as usize];
-                depot.stock[t.item as usize] += 1;
-                depot.incoming[t.item as usize] -= 1;
+                depot.inventory.put(t.item, 1);
                 self.metrics.delivered += 1;
                 *self.metrics.delivered_items.entry(self.items[t.item as usize].clone()).or_default() += 1;
-                if let Endpoint::Cargo(a) = t.from {
+                if let InventoryRef::Agent(a) = t.from {
                     *self.metrics.deliveries_by_agent.entry(self.agents[a as usize].id.clone()).or_default() += 1;
                 }
             }
-            Endpoint::Cargo(a) => {
-                let agent = &mut self.agents[a as usize];
-                agent.carry.cargo[t.item as usize] += 1;
-                agent.carry.pending_in -= 1;
+            InventoryRef::Agent(a) => {
+                self.agents[a as usize].carry.inventory.put(t.item, 1);
             }
+            // A pile haul's unit; its pile stays until nothing flies to
+            // or from it (`PileLab::prune`).
+            InventoryRef::Pile(_) | InventoryRef::Collector => self.inventory_mut(t.to).put(t.item, 1),
         }
     }
 
@@ -87,10 +86,11 @@ impl Settlement {
             }
             let depot = &self.depots[s.depot as usize];
             let left = s.max_units.map_or(u32::MAX, |max| max.saturating_sub(s.total));
-            let units = s.units.min(depot.free()).min(left);
+            let units = s.units.min(depot.inventory.free()).min(left);
             if units > 0 {
                 let (d, item) = (s.depot as usize, s.item as usize);
-                self.depots[d].stock[item] += units;
+                let added = self.depots[d].inventory.add(s.item, units);
+                debug_assert!(added, "within the free space");
                 self.accounts[item].generated += units as u64;
                 self.sources[i].total += units;
             }
@@ -107,8 +107,7 @@ impl Settlement {
                     let (output, products) = (p.output as usize, p.products.clone());
                     for (item, units) in products {
                         let depot = &mut self.depots[output];
-                        depot.stock[item as usize] += units;
-                        depot.incoming[item as usize] -= units;
+                        depot.inventory.put(item, units);
                         self.accounts[item as usize].produced += units as u64;
                     }
                     self.metrics.cycles += 1;
@@ -123,18 +122,19 @@ impl Settlement {
             // Ingredients leaving the same depot make room for the products.
             let freed: u32 = if p.input == p.output { p.ingredients.iter().map(|s| s.1).sum() } else { 0 };
             let (input, output) = (p.input as usize, p.output as usize);
-            let fits = self.depots[output].free() + freed >= required;
-            let stocked = p.ingredients.iter().all(|&(item, units)| self.depots[input].available(item) >= units);
+            let fits = self.depots[output].inventory.free() + freed >= required;
+            let stocked = p.ingredients.iter().all(|&(item, units)| self.depots[input].inventory.available(item) >= units);
             if !(fits && stocked) {
                 continue;
             }
             let (ingredients, products, ticks) = (p.ingredients.clone(), p.products.clone(), p.ticks);
             for (item, units) in ingredients {
-                self.depots[input].stock[item as usize] -= units;
+                self.depots[input].inventory.remove(item, units);
                 self.accounts[item as usize].consumed += units as u64;
             }
             for (item, units) in products {
-                self.depots[output].incoming[item as usize] += units;
+                let reserved = self.depots[output].inventory.reserve_in(item, units);
+                debug_assert!(reserved, "checked that the products fit");
             }
             self.producers[i].remaining = ticks;
         }
@@ -194,17 +194,24 @@ impl Settlement {
         let h = self.hauler(message.agent);
         let e = h.equipment.as_ref().expect("equip comes from equippable agents");
         let (depot, item) = (e.depot as usize, e.item);
-        if !self.idle(message.agent) || h.equipped || self.depots[depot].available(item) == 0 {
+        if !self.idle(message.agent) || h.equipped || self.depots[depot].inventory.available(item) == 0 {
             return self.retry(tick, Retry { agent: message.agent });
         }
-        self.depots[depot].out[item as usize] += 1;
+        let reserved = self.depots[depot].inventory.reserve_out(item, 1);
+        debug_assert!(reserved, "checked that one is available");
         let (body, _, h) = self.hauler_parts(message.agent);
         h.phase = Phase::ToEquip;
         body.route = message.route;
     }
 
-    /// Accepts a haul job if it still fits, possibly smaller than asked.
-    pub(crate) fn reserve(&mut self, tick: u64, message: Reserve) {
+    /// Accepts a haul job if it still fits, possibly smaller than asked. It
+    /// is two carry jobs: a load at the link's source, then an unload at its
+    /// target. Both ends are held now, before the hauler walks to the source
+    /// (`INVENTORY_HANDOFF.md`, "Why a haul reserves both ends"): the load
+    /// on both its sides, the unload on the target only (`Carry::next`).
+    /// Unlike a player's `ReserveStock`, which arrives with its job sized
+    /// and its own side held, this sizes the job here and holds every side.
+    pub(crate) fn reserve_haul(&mut self, tick: u64, message: ReserveHaul) {
         let a = &self.agents[message.agent as usize];
         let link = &self.links[message.link as usize];
         let units = if self.idle(message.agent) && link.enabled {
@@ -215,12 +222,19 @@ impl Settlement {
         if units == 0 {
             return self.retry(tick, Retry { agent: message.agent });
         }
-        let (from, to, item) = (link.from as usize, link.to as usize, link.item as usize);
-        self.depots[from].out[item] += units;
-        self.depots[to].incoming[item] += units;
+        let job = |other, direction| CarryJob { other: InventoryRef::Depot(other), item: link.item, direction, remaining: units, next_tick: tick };
+        let (load, unload) = (job(link.from, Direction::Pickup), job(link.to, Direction::Deposit));
+        // `job_size` checked both depots and the cargo's capacity, and an
+        // idle hauler's cargo is empty.
+        let held = load.reserve(self.inventory_mut(load.other), Side::Other) && unload.reserve(self.inventory_mut(unload.other), Side::Other);
+        debug_assert!(held, "the job fits both depots");
         self.metrics.assignments += 1;
-        let (body, _, h) = self.hauler_parts(message.agent);
-        h.assignment = Some(Assignment { link: message.link, units, loaded: 0, unloaded: 0 });
+        let (body, carry, h) = self.hauler_parts(message.agent);
+        let held = load.reserve(&mut carry.inventory, Side::Own);
+        debug_assert!(held, "the job fits the cargo");
+        carry.job = Some(load);
+        carry.next = Some(unload);
+        h.assignment = Some(Assignment { link: message.link });
         h.phase = Phase::ToPickup;
         body.route = message.route;
     }
@@ -232,10 +246,9 @@ impl Settlement {
             return;
         }
         let e = h.equipment.as_ref().expect("attaching agents have equipment");
-        let (depot, item) = (e.depot as usize, e.item as usize);
+        let (depot, item) = (e.depot as usize, e.item);
         let (spot, heading) = h.trailer_spot(&a.body, terrain);
-        self.depots[depot].stock[item] -= 1;
-        self.depots[depot].out[item] -= 1;
+        self.depots[depot].inventory.take(item, 1);
         self.metrics.equipped += 1;
         self.events.push(super::Event::Equipped { agent: message.agent });
         let (body, _, h) = self.hauler_parts(message.agent);
@@ -245,46 +258,39 @@ impl Settlement {
         h.transfer_at = tick + ATTACH_TICKS;
     }
 
-    pub(crate) fn load(&mut self, tick: u64, message: Load) {
-        let h = self.hauler(message.agent);
-        let Some(job) = &h.assignment else { return };
-        if h.phase != Phase::Loading || job.loaded >= job.units {
+    /// Moves one unit of an agent's carry job, if it is due. The unit leaves
+    /// the source, taking its share of what the job holds there; at the
+    /// target the job's room passes to the unit in the air, until it lands.
+    /// Stage 3 sends it only when the agent is at the job's dock.
+    pub(crate) fn carry_unit(&mut self, tick: u64, message: CarryUnit) {
+        let agent = message.agent as usize;
+        let Some(job) = self.agents[agent].carry.job.clone() else { return };
+        if tick < job.next_tick {
             return;
         }
-        let link = &self.links[job.link as usize];
-        let (from, item) = (link.from, link.item);
-        let depot = &mut self.depots[from as usize];
-        depot.stock[item as usize] -= 1;
-        depot.out[item as usize] -= 1;
-        self.metrics.picked += 1;
-        let start = depot.position;
-        let (body, carry, h) = self.hauler_parts(message.agent);
-        h.assignment.as_mut().expect("checked").loaded += 1;
-        carry.pending_in += 1;
-        h.transfer_at = tick + carry.transfer_ticks;
-        let end = body.position;
-        self.launch(tick, item, Endpoint::Depot(from), Endpoint::Cargo(message.agent), start, end);
-    }
-
-    pub(crate) fn unload(&mut self, tick: u64, message: Unload) {
-        let h = self.hauler(message.agent);
-        let Some(job) = &h.assignment else { return };
-        if h.phase != Phase::Unloading || job.unloaded >= job.units {
-            return;
+        let (me, item) = (InventoryRef::Agent(message.agent), job.item);
+        let (dock, at) = (self.position_of(job.other), self.agents[agent].body.position);
+        match job.direction {
+            Direction::Deposit => {
+                self.agents[agent].carry.inventory.take(item, 1);
+                self.launch(tick, item, me, job.other, at, dock);
+            }
+            Direction::Pickup => {
+                self.inventory_mut(job.other).take(item, 1);
+                self.metrics.picked += 1;
+                self.launch(tick, item, job.other, me, dock, at);
+            }
         }
-        let link = &self.links[job.link as usize];
-        let (to, item) = (link.to, link.item);
-        let end = self.depots[to as usize].position;
-        let (body, carry, h) = self.hauler_parts(message.agent);
-        carry.cargo[item as usize] -= 1;
-        h.assignment.as_mut().expect("checked").unloaded += 1;
-        carry.pending_out += 1;
-        h.transfer_at = tick + carry.transfer_ticks;
-        let start = body.position;
-        self.launch(tick, item, Endpoint::Cargo(message.agent), Endpoint::Depot(to), start, end);
+        let carry = &mut self.agents[agent].carry;
+        let job = carry.job.as_mut().expect("checked");
+        job.remaining -= 1;
+        job.next_tick = tick + carry.transfer_ticks;
+        if job.remaining == 0 {
+            carry.job = None;
+        }
     }
 
-    pub(crate) fn launch(&mut self, tick: u64, item: ItemIx, from: Endpoint, to: Endpoint, start: FxVec2, end: FxVec2) {
+    pub(crate) fn launch(&mut self, tick: u64, item: ItemIx, from: InventoryRef, to: InventoryRef, start: FxVec2, end: FxVec2) {
         let id = self.id();
         self.transfers.insert(id, Transfer { id, item, from, to, start, end, born: tick, arrival: tick + TRANSFER_FLIGHT_TICKS });
     }
@@ -292,11 +298,13 @@ impl Settlement {
     /// Commands: adds stock to a depot, within its unreserved space. For
     /// scripted demos and tests.
     pub fn add_stock(&mut self, depot: usize, item: usize, units: u32) {
-        let (Some(d), true) = (self.depots.get_mut(depot), item < self.items.len()) else { return };
-        if units == 0 || units > d.free() {
+        // Minerals go to piles, not depots.
+        let depot_items = self.depot_items();
+        let (Some(d), true) = (self.depots.get_mut(depot), item < depot_items) else { return };
+        // `add` refuses units that don't fit.
+        if units == 0 || !d.inventory.add(item as ItemIx, units) {
             return;
         }
-        d.stock[item] += units;
         self.accounts[item].generated += units as u64;
     }
 

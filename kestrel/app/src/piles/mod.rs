@@ -135,7 +135,7 @@ pub struct CarryVisual {
     /// Whose backpack: another player's avatar, or (none) this player's.
     agent: Option<u16>,
     units: u32,
-    material: Option<Mineral>,
+    minerals: Vec<(Mineral, u32)>,
     hidden: u32,
 }
 #[derive(Clone, Copy)]
@@ -189,7 +189,10 @@ fn ray_sphere(origin: Vec3, direction: Vec3, center: Vec3, radius: f32) -> Optio
 /// Fills the view's piles, carriers, and this player's job state from the
 /// simulation.
 pub fn mirror(service: Res<SessionService>, mirror: Res<WorldMirror>, mut lab: ResMut<PileLab>) {
-    let Some(sim) = mirror.current.as_ref().and_then(|s| s.piles.as_ref()) else {
+    let Some(settlement) = mirror.current.as_ref() else {
+        return;
+    };
+    let Some(sim) = settlement.piles.as_ref() else {
         return;
     };
     let local = |p: fx::FxVec2| [(p.x - mirror.center.x).to_f32(), (p.y - mirror.center.y).to_f32()];
@@ -198,21 +201,31 @@ pub fn mirror(service: Res<SessionService>, mirror: Res<WorldMirror>, mut lab: R
         .piles
         .iter()
         .map(|(&id, p)| {
-            let pile = Pile { material: mineral(p.material), position: local(p.position), units: p.units, source: p.source, height: ground(p.position) };
+            // Only a pile set up with no units has no mineral.
+            let material = mineral(sim.pile_mineral(p).unwrap_or_default());
+            let pile = Pile { material, position: local(p.position), units: p.units(), source: p.source.is_some(), height: ground(p.position) };
             (id, pile)
         })
         .collect();
     lab.collector = sim.collector.as_ref().map(|c| mirror.to_view(c.position).with_y(ground(c.position)));
-    lab.collected = sim.collector.as_ref().map_or_else(Vec::new, |c| c.stored.clone());
-    let view = |c: sim::settlement::piles::Cargo| crate::pile_model::Cargo { material: c.material.map(mineral), units: c.units, capacity: c.capacity };
+    lab.collected = sim.collected();
+    // An avatar's minerals, in its cargo beside any depot items, within its
+    // one capacity.
+    let view = |agent: u16| {
+        let minerals = settlement.carried_minerals(agent).into_iter().enumerate().map(|(m, n)| (mineral(m as u8), n));
+        let capacity = settlement.agents.get(agent as usize).map_or(0, |a| a.carry.inventory.capacity);
+        crate::pile_model::Cargo::new(minerals, capacity)
+    };
     let me = mirror.player();
     let mine = me.and_then(|m| sim.hauler(m));
-    let cargo = view(me.map_or_else(|| sim.cargo(u16::MAX), |m| sim.cargo(m)));
-    let others: u64 = sim.haulers.iter().filter(|(&a, _)| Some(a) != me).map(|(_, h)| u64::from(h.cargo.units)).sum();
-    let collected: u64 = sim.collector.as_ref().map_or(0, |c| c.stored.iter().map(|&n| u64::from(n)).sum());
-    lab.stock = Some(Stock { piles, cargo, created: sim.created, elsewhere: others + collected });
+    let cargo = view(me.unwrap_or(u16::MAX));
+    let others: u64 = sim.haulers.keys().filter(|&&a| Some(a) != me).map(|&a| u64::from(view(a).units)).sum();
+    let collected: u64 = sim.collected().iter().map(|&n| u64::from(n)).sum();
+    // Pile units fly as transfers, in neither end until they land.
+    let airborne = settlement.transfers.values().filter(|t| sim.is_mineral(t.item)).count() as u64;
+    lab.stock = Some(Stock { piles, cargo, created: sim.created, elsewhere: others + collected + airborne });
     lab.me = me;
-    lab.others = sim.haulers.iter().filter(|(&a, _)| Some(a) != me).map(|(&a, h)| (a, view(h.cargo.clone()))).collect();
+    lab.others = sim.haulers.keys().filter(|&&a| Some(a) != me).map(|&a| (a, view(a))).collect();
     lab.job = mine.and_then(|h| h.job.as_ref().map(|_| h.job_serial));
     lab.job_serial = mine.map_or(0, |h| h.job_serial);
     lab.in_flight = mine.map_or(0, |h| h.in_flight.len() as u32);
@@ -306,14 +319,12 @@ pub fn input(
         }
         return;
     }
-    let collect = !carrying || keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     let action = if let Some(id) = pile {
         let p = &stock.piles[&id];
-        if carrying && stock.cargo.material != Some(p.material) {
-            lab.notice = "Different minerals stay separate. Drop your cargo first.".into();
-            return;
-        }
-        if !carrying && p.units == 0 {
+        // A pile of a mineral carried takes it back; any other is collected
+        // beside the cargo.
+        let collect = !stock.cargo.holds(p.material) || keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+        if collect && p.units == 0 {
             lab.notice = "Empty output. Click its dispenser to add ore.".into();
             return;
         }

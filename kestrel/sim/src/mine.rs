@@ -15,6 +15,9 @@ pub const AMBER: u8 = 0;
 pub const BLUE: u8 = 1;
 pub const GREEN: u8 = 2;
 pub const MINERALS: usize = 3;
+/// Each mineral's item ID, in mineral order. A scene with piles adds them to
+/// the settlement's items, after the scenario's (`Settlement::from_scene`).
+pub const MINERAL_IDS: [&str; MINERALS] = ["amber_ore", "blue_crystal", "green_malachite"];
 /// The flat landing's half-width around the spawn, in tiles.
 const LANDING: i32 = 8;
 

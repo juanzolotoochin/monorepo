@@ -343,7 +343,7 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             if *units == 0 {
                 return Err("unknown depot/item or zero amount".into());
             }
-            if *units > s.depots[d as usize].free() {
+            if *units > s.depots[d as usize].inventory.free() {
                 return Err("stock does not fit unreserved destination capacity".into());
             }
             send(world, CommandKind::AddStock { depot: d, item: i, units: *units });
@@ -442,7 +442,7 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             let lab = world.resource::<PileLab>();
             let stock = lab.stock.as_ref().ok_or("No logistics scene loaded")?;
             let source = stock.piles.get(pile).ok_or("Unknown pile")?;
-            if material.is_some_and(|m| m != source.material) || stock.cargo.material.is_some_and(|m| m != source.material) {
+            if material.is_some_and(|m| m != source.material) {
                 return Err("Material mismatch".into());
             }
             if *units == 0 || *units > source.units || *units > stock.cargo.capacity - stock.cargo.units {
@@ -453,23 +453,28 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             Ok(Pending::Haul { expected_cargo: expected, serial })
         }
         Command::DropAll { position, seconds_per_unit, approach } => {
-            let carried = world.resource::<PileLab>().stock.as_ref().ok_or("No logistics scene loaded")?.cargo.units;
-            if carried == 0 {
+            let cargo = &world.resource::<PileLab>().stock.as_ref().ok_or("No logistics scene loaded")?.cargo;
+            // A drop puts down the first mineral carried.
+            let Some((_, dropped)) = cargo.first() else {
                 return Err("Carrier is empty".into());
-            }
+            };
+            let expected = cargo.units - dropped;
             let at = world.resource::<SessionService>().to_sim(point(*position)?);
             let serial = queue_haul(world, PileAction::Drop(at), *seconds_per_unit, *approach)?;
-            Ok(Pending::Haul { expected_cargo: 0, serial })
+            Ok(Pending::Haul { expected_cargo: expected, serial })
         }
         Command::DepositAll { pile, seconds_per_unit, approach } => {
             let lab = world.resource::<PileLab>();
             let stock = lab.stock.as_ref().ok_or("No logistics scene loaded")?;
             let target = stock.piles.get(pile).ok_or("Unknown pile")?;
-            if stock.cargo.units == 0 || stock.cargo.material != Some(target.material) || stock.cargo.units > voxel_assets::PILE_CAPACITY - target.units {
+            // Only the pile's mineral goes on it.
+            let deposited = stock.cargo.count(target.material);
+            if deposited == 0 || deposited > voxel_assets::PILE_CAPACITY - target.units {
                 return Err("Cargo is empty, incompatible, or does not fit destination".into());
             }
+            let expected = stock.cargo.units - deposited;
             let serial = queue_haul(world, PileAction::Deposit(*pile), *seconds_per_unit, *approach)?;
-            Ok(Pending::Haul { expected_cargo: 0, serial })
+            Ok(Pending::Haul { expected_cargo: expected, serial })
         }
         Command::Strike { target } => {
             let aim = point(*target)? - player_position(world);
@@ -543,11 +548,14 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
                 return None;
             }
             let service = world.get_resource::<SessionService>()?;
-            let a = &service.settlement()?.agents[service.player()? as usize];
-            if a.avatar()?.job.is_some() || a.carry.pending_in > 0 || a.carry.pending_out > 0 {
+            let (settlement, player) = (service.settlement()?, service.player()?);
+            let a = &settlement.agents[player as usize];
+            a.avatar()?;
+            if a.carry.job.is_some() || a.carry.inventory.total_in() > 0 || settlement.leaving_cargo(player) {
                 None
             } else {
-                Some(if a.carry.cargo.iter().sum::<u32>() == *expected {
+                // Depot items, as `player_transfer` counted them.
+                Some(if settlement.depot_cargo(a).iter().sum::<u32>() == *expected {
                     Ok(())
                 } else {
                     Err("Transfer canceled before exact quantity completed".into())
@@ -625,7 +633,7 @@ pub fn snapshot(world: &mut World, hub: &Hub) -> Value {
     let lab = world.get_resource::<PileLab>();
     let airborne = lab.map_or(0, |lab| lab.in_flight);
     let (piles, cargo, totals) = if let Some(stock) = lab.and_then(|lab| lab.stock.as_ref()) {
-        (stock.piles.iter().map(|(&id,p)|json!({"id":id,"material":p.material,"position":[p.position[0],0.0,p.position[1]],"units":p.units,"source":p.source,"capacity":voxel_assets::PILE_CAPACITY})).collect::<Vec<_>>(),json!({"material":stock.cargo.material,"units":stock.cargo.units,"capacity":stock.cargo.capacity}),json!({"created":stock.created,"ground":stock.ground(),"carried":stock.cargo.units,"conserved":stock.total()==stock.created}))
+        (stock.piles.iter().map(|(&id,p)|json!({"id":id,"material":p.material,"position":[p.position[0],0.0,p.position[1]],"units":p.units,"source":p.source,"capacity":voxel_assets::PILE_CAPACITY})).collect::<Vec<_>>(),json!({"material":stock.cargo.first().map(|(m, _)| m),"minerals":stock.cargo.minerals,"units":stock.cargo.units,"capacity":stock.cargo.capacity}),json!({"created":stock.created,"ground":stock.ground(),"carried":stock.cargo.units,"conserved":stock.total()==stock.created}))
     } else {
         (vec![], Value::Null, Value::Null)
     };

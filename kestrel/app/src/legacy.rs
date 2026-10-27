@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use content::scenario::{self as def, CargoLayout, ProjectileKind, Weapon};
 use fx::{Fx, FxVec2};
 use serde::Serialize;
-use sim::settlement::{self as s, Endpoint as SimEndpoint, Settlement as SimSettlement};
+use sim::settlement::{self as s, InventoryRef as SimHolder, Settlement as SimSettlement};
 
 pub type Point = [f32; 2];
 
@@ -541,9 +541,11 @@ impl Simulation {
         };
         let item = |i: s::ItemIx| current.items[i as usize].clone();
         let agent_name = |a: s::AgentIx| current.agents[a as usize].id.clone();
-        let endpoint = |e: SimEndpoint| match e {
-            SimEndpoint::Depot(d) => Endpoint::Depot(current.depots[d as usize].id.clone()),
-            SimEndpoint::Cargo(a) => Endpoint::Cargo(agent_name(a)),
+        // Piles and the collector are drawn by the pile view, not here.
+        let endpoint = |e: SimHolder| match e {
+            SimHolder::Depot(d) => Some(Endpoint::Depot(current.depots[d as usize].id.clone())),
+            SimHolder::Agent(a) => Some(Endpoint::Cargo(agent_name(a))),
+            SimHolder::Pile(_) | SimHolder::Collector => None,
         };
         let inventory = |units: &[u32], capacity: u32| Inventory {
             capacity,
@@ -570,7 +572,9 @@ impl Simulation {
                     travelled: a.body.travelled.to_f32(),
                     // A player shows as an idle hauler.
                     phase: format!("{:?}", a.hauler().map_or(s::Phase::Idle, |h| h.phase)),
-                    cargo: inventory(&a.carry.cargo, a.carry.capacity),
+                    // Depot items only: a player's minerals are drawn by the
+                    // pile view.
+                    cargo: inventory(current.depot_cargo(a), a.carry.inventory.capacity),
                     trailer,
                 };
                 (a.id.clone(), state)
@@ -661,9 +665,9 @@ impl Simulation {
                     "disabled"
                 } else if p.max_cycles.is_some_and(|limit| p.cycles >= limit) {
                     "commission_complete"
-                } else if current.depots[p.output as usize].free() < required {
+                } else if current.depots[p.output as usize].inventory.free() < required {
                     "output_blocked"
-                } else if p.ingredients.iter().any(|&(i, n)| current.depots[p.input as usize].available(i) < n) {
+                } else if p.ingredients.iter().any(|&(i, n)| current.depots[p.input as usize].inventory.available(i) < n) {
                     "input_starved"
                 } else {
                     "ready"
@@ -723,7 +727,7 @@ impl Simulation {
             alpha,
             paused: false,
             health: current.health,
-            depots: current.depots.iter().map(|d| (d.id.clone(), inventory(&d.stock, d.capacity))).collect(),
+            depots: current.depots.iter().map(|d| (d.id.clone(), inventory(&d.inventory.counts, d.inventory.capacity))).collect(),
             agents,
             producers: current
                 .producers
@@ -739,9 +743,9 @@ impl Simulation {
             transfers: current
                 .transfers
                 .values()
-                .map(|t| {
-                    let transfer = Transfer { id: t.id, item: item(t.item), from: endpoint(t.from), to: endpoint(t.to), born: t.born, arrival: t.arrival };
-                    (t.id, transfer)
+                .filter_map(|t| {
+                    let transfer = Transfer { id: t.id, item: item(t.item), from: endpoint(t.from)?, to: endpoint(t.to)?, born: t.born, arrival: t.arrival };
+                    Some((t.id, transfer))
                 })
                 .collect(),
             threats,
@@ -782,12 +786,15 @@ impl Simulation {
                 .agents
                 .iter()
                 .filter_map(|a| {
-                    let job = a.avatar()?.job.as_ref()?;
+                    // A player's depot transfer.
+                    a.avatar()?;
+                    let job = a.carry.job.as_ref()?;
+                    let SimHolder::Depot(depot) = job.other else { return None };
                     let manual = ManualJob {
-                        depot: current.depots[job.depot as usize].id.clone(),
+                        depot: current.depots[depot as usize].id.clone(),
                         item: item(job.item),
                         remaining: job.remaining,
-                        deposit: job.deposit,
+                        deposit: job.direction == s::Direction::Deposit,
                     };
                     Some((a.id.clone(), manual))
                 })

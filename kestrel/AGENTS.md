@@ -10,3 +10,19 @@
 - Deferred work lives in `kestrel/todo/`, one file per topic (`networking.md`, ...). The format is in `kestrel/todo/README.md`.
 - When you find something worth doing later that is out of scope for the current task, add it there instead of leaving it only in a chat, a PR description or a handoff.
 - When you finish a listed task, mark it done and move it to the topic's `## Done` section with a link to the PR.
+
+# When to run tests
+
+- Run the full test suite once, when the work is done, not after every commit. PRs are squashed on merge, so commits in the middle of a task don't need to pass on their own.
+- Run a test in between only when it's warranted: to check a risky change, or when later work depends on it being right (a refactor the next steps build on, a golden file you need to compare against). Then run only the affected target (for example `//kestrel/sim:sim_test`), not the whole suite.
+- When you only need to know that intermediate work compiles, `bazel build` the affected target instead of testing it.
+
+# Test time
+
+We track how much of a task is spent waiting on Bazel, to decide whether
+the build and test loop is worth optimizing.
+
+- When you start a task, note the time (`date`).
+- For every `bazel test`, `bazel build` and `bazel run` you wait on, add up the `INFO: Elapsed time: Ns` line Bazel prints at the end. Count failed and repeated runs too.
+- When the task ends, add one row to `kestrel/docs/test-time.md`: the date, the task, the total time from start to finish, the time spent in Bazel, the number of Bazel runs, and a short note (e.g. "golden regenerated twice", "remote cache cold").
+- Say the two numbers in your final report too.

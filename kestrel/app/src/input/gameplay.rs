@@ -361,11 +361,9 @@ fn interact(world: &mut World, collect: bool) {
         TargetKey::Pile(id) => {
             let Some(stock) = world.resource::<crate::piles::PileLab>().stock.clone() else { return };
             let Some(pile) = stock.piles.get(id) else { return };
-            let carrying = stock.cargo.units > 0;
-            if carrying && stock.cargo.material != Some(pile.material) {
-                return refuse(world, "Different minerals stay separate. Drop your cargo first.".into());
-            }
-            let action = if collect || !carrying {
+            // A pile of a mineral carried takes it back; any other is
+            // collected beside the cargo.
+            let action = if collect || !stock.cargo.holds(pile.material) {
                 if pile.units == 0 {
                     return refuse(world, "Empty output. Use its dispenser to add ore.".into());
                 }

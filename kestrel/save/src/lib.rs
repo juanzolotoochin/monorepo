@@ -40,7 +40,27 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///     owner, name and weapon cooldown move into its `AvatarState`.
 /// 12: material accounts count units players carried off when they left
 ///     (`Accounting::abandoned`).
-pub const FORMAT_VERSION: u32 = 12;
+/// 13: a depot's stock, reservations and capacity are an `Inventory`.
+/// 14: an agent's cargo is an `Inventory` too. Units flying in are its
+///     `reserved_in` per item; units flying out are only transfers.
+/// 15: a player's depot transfer is a `CarryJob` on its `Carry`, not on its
+///     avatar, and holds its units in the cargo too. `Endpoint` is
+///     `InventoryRef`, its `Cargo` now `Agent`.
+/// 16: a hauler's haul is two carry jobs, its load in `Carry::job` and its
+///     unload in `Carry::next`; its `Assignment` keeps only the link.
+///     Pending messages have `ReserveHaul` and `CarryUnit` queues for
+///     `Reserve`, `Load`, `Unload` and `ManualUnit`.
+/// 17: a pile scene's minerals are settlement items, after the scenario's.
+///     Piles and the collector hold an `Inventory`, and a player's minerals
+///     are in its `Carry` (the lab's `Hauler` has no cargo). `InventoryRef`
+///     gains `Pile` and `Collector`; pending messages have a `pile_carry`
+///     queue of `CarryUnit` for `PileStep`.
+/// 18: a player's cargo has one capacity, the larger of the scenario's and
+///     the pile lab's, for any mix; the lab keeps no capacity of its own.
+/// 19: a pile haul's units are a `CarryJob` on the avatar's `Carry`, held on
+///     the pile or collector too; the lab's `PileJob` keeps the walk, with
+///     `started` for `remaining`, and no `next_toss` or `destination`.
+pub const FORMAT_VERSION: u32 = 19;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

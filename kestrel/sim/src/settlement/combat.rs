@@ -614,7 +614,7 @@ impl Settlement {
     }
 
     fn aim_defender(&self, index: u16, d: &DefenderState, tick: u64, out: &mut Messages) {
-        if !d.enabled || d.ready_at > tick || self.depots[d.depot as usize].available(d.ammo) == 0 {
+        if !d.enabled || d.ready_at > tick || self.depots[d.depot as usize].inventory.available(d.ammo) == 0 {
             return;
         }
         let target = self
@@ -919,12 +919,12 @@ impl Settlement {
     pub(crate) fn fire(&mut self, tick: u64, message: Fire) {
         let d = &self.defenders[message.defender as usize];
         let (depot, ammo) = (d.depot as usize, d.ammo);
-        if !d.enabled || d.ready_at > tick || self.depots[depot].available(ammo) == 0 {
+        if !d.enabled || d.ready_at > tick || self.depots[depot].inventory.available(ammo) == 0 {
             return;
         }
         let (from, launch_height, damage, kind, period) = (d.position, d.muzzle_height, d.damage, d.kind, d.period);
         let arrival = tick + flight_ticks(distance(from, message.to), d.speed);
-        self.depots[depot].stock[ammo as usize] -= 1;
+        self.depots[depot].inventory.remove(ammo, 1);
         self.accounts[ammo as usize].spent += 1;
         self.combat.shots += 1;
         let id = self.id();

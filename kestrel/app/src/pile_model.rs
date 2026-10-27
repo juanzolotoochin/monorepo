@@ -14,11 +14,39 @@ pub struct Pile {
     /// The ground under the pile.
     pub height: f32,
 }
-#[derive(Clone, Debug)]
+/// The minerals a player carries, any mix within its cargo's one capacity.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Cargo {
-    pub material: Option<Mineral>,
+    /// The minerals held and their units, in mineral order, none empty.
+    pub minerals: Vec<(Mineral, u32)>,
+    /// Their units, of every mineral.
     pub units: u32,
     pub capacity: u32,
+}
+impl Cargo {
+    pub fn new(minerals: impl IntoIterator<Item = (Mineral, u32)>, capacity: u32) -> Self {
+        let minerals: Vec<_> = minerals.into_iter().filter(|&(_, n)| n > 0).collect();
+        Self { units: minerals.iter().map(|&(_, n)| n).sum(), minerals, capacity }
+    }
+    /// Units of `material` held.
+    pub fn count(&self, material: Mineral) -> u32 {
+        self.minerals.iter().find(|&&(m, _)| m == material).map_or(0, |&(_, n)| n)
+    }
+    pub fn holds(&self, material: Mineral) -> bool {
+        self.count(material) > 0
+    }
+    /// The first mineral held: the one a drop puts down.
+    pub fn first(&self) -> Option<(Mineral, u32)> {
+        self.minerals.first().copied()
+    }
+    /// The mineral drawn at backpack `slot`: minerals in mineral order.
+    pub fn material_at(&self, slot: u32) -> Option<Mineral> {
+        let mut end = 0;
+        self.minerals.iter().find(|&&(_, n)| {
+            end += n;
+            slot < end
+        }).map(|&(m, _)| m)
+    }
 }
 #[derive(Clone, Debug)]
 pub struct Stock {
@@ -26,7 +54,7 @@ pub struct Stock {
     pub cargo: Cargo,
     pub created: u64,
     /// Units neither on the ground nor carried by this player: in other
-    /// players' backpacks, or delivered to a collector.
+    /// players' backpacks, delivered to a collector, or in the air.
     pub elsewhere: u64,
 }
 impl Stock {
@@ -41,7 +69,7 @@ impl Stock {
             piles.insert(first + i as PileId, Pile { material: p.material, position: [p.position[0], p.position[2]], units: p.units, source: false, height: 0.0 });
         }
         let created = layout.piles.iter().map(|p| u64::from(p.units)).sum();
-        Self { piles, cargo: Cargo { material: None, units: 0, capacity: layout.capacity }, created, elsewhere: 0 }
+        Self { piles, cargo: Cargo::new([], layout.capacity), created, elsewhere: 0 }
     }
     /// Units in piles.
     pub fn ground(&self) -> u64 {

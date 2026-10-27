@@ -160,7 +160,7 @@ fn recipes_and_equipment_produce_a_cart_then_upgrade_real_transport_capacity() {
     assert_eq!(s.metrics.equipped, 1);
     assert_eq!(s.producers[0].cycles, 1);
     let a = s.agent("a");
-    assert_eq!(a.carry.capacity, 8);
+    assert_eq!(a.carry.inventory.capacity, 8);
     assert!(a.hauler().unwrap().trailer.is_some());
     assert!(s.metrics.delivered > 10, "delivered {}", s.metrics.delivered);
     assert_eq!(s.balances()["cart"].equipped, 1);
@@ -245,7 +245,7 @@ fn forest_supply_runs_and_its_balances_hold() {
     assert_eq!(s.producers[s.producer_index("cartworks").unwrap() as usize].cycles, 1);
     assert!(s.producers[s.producer_index("sawmill").unwrap() as usize].cycles > 3);
     let bramble = s.agent("bramble");
-    assert!(bramble.hauler().unwrap().equipped && bramble.carry.capacity == 9);
+    assert!(bramble.hauler().unwrap().equipped && bramble.carry.inventory.capacity == 9);
     assert!(s.agents.iter().filter_map(|a| a.hauler()).all(|h| h.phase != Phase::Attaching));
 }
 
@@ -277,7 +277,7 @@ fn forest_probe() {
             for (a, h) in s.agents.iter().filter_map(|a| Some((a, a.hauler()?))) {
                 println!(
                     "  {:<12} {:?} pos=({:.2},{:.2}) route={} job={:?} waits={} traffic={} steers={} dock={:?}",
-                    a.id, h.phase, a.body.position.x.to_f64(), a.body.position.y.to_f64(), a.body.route.len(), h.assignment.as_ref().map(|j| (j.link, j.units, j.loaded, j.unloaded)),
+                    a.id, h.phase, a.body.position.x.to_f64(), a.body.position.y.to_f64(), a.body.route.len(), h.assignment.as_ref().map(|j| (j.link, a.carry.job.as_ref().map(|c| (c.direction, c.remaining)))),
                     h.dock_wait_ticks, h.traffic_wait_ticks, h.avoidance_steers, h.departure_dock
                 );
             }
@@ -296,12 +296,12 @@ fn forest_probe() {
                 println!("  producer {:<10} enabled={} remaining={} cycles={}", p.id, p.enabled, p.remaining, p.cycles);
             }
             for d in &s.depots {
-                println!("  depot {:<12} stock={:?} out={:?} in={:?} free={}", d.id, d.stock, d.out, d.incoming, d.free());
+                println!("  depot {:<12} stock={:?} out={:?} in={:?} free={}", d.id, d.inventory.counts, d.inventory.reserved_out, d.inventory.reserved_in, d.inventory.free());
             }
             for l in &s.links {
                 let to = &s.depots[l.to as usize];
-                let demand = l.target.saturating_sub(to.stock[l.item as usize] + to.incoming[l.item as usize]);
-                println!("  link {:<14} avail={} free={} demand={}", l.id, s.depots[l.from as usize].available(l.item), to.free(), demand);
+                let demand = l.target.saturating_sub(to.inventory.count(l.item) + to.inventory.reserved_in[l.item as usize]);
+                println!("  link {:<14} avail={} free={} demand={}", l.id, s.depots[l.from as usize].inventory.available(l.item), to.inventory.free(), demand);
             }
         }
     }

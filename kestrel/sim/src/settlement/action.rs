@@ -12,12 +12,14 @@
 //! Only player avatars act for now. Step 5 has haulers and AI brains produce
 //! the same vocabulary (`docs/character-definition.md`).
 
+use std::collections::BTreeMap;
+
 use content::scenario::Weapon;
 use fx::{Fx, FxVec2};
 
 use super::avatar::Intent;
 use super::piles::PileLab;
-use super::{AgentIx, DepotIx, DepotState, ItemIx, Settlement};
+use super::{AgentIx, DepotIx, DepotState, ItemIx, Settlement, Transfer};
 use crate::terrain::Terrain;
 use crate::CommandKind;
 
@@ -100,6 +102,8 @@ pub struct View<'a> {
     pub weapons: &'a [Weapon],
     pub piles: Option<&'a PileLab>,
     pub depots: &'a [DepotState],
+    pub transfers: &'a BTreeMap<u64, Transfer>,
+    /// The depot items (`Settlement::depot_items`): minerals are left out.
     pub items: usize,
     pub spawn: FxVec2,
     pub spawn_height: Fx,
@@ -117,7 +121,8 @@ impl Settlement {
             weapons: &self.weapons,
             piles: self.piles.as_ref(),
             depots: &self.depots,
-            items: self.items.len(),
+            transfers: &self.transfers,
+            items: self.depot_items(),
             spawn: self.spawn,
             spawn_height: self.spawn_height,
             piano_serial: self.piano_serial,
@@ -134,6 +139,11 @@ impl View<'_> {
     /// Whether the scene allows digging here: no pile or machine on the tile.
     pub fn can_dig_at(&self, position: FxVec2) -> bool {
         self.terrain.diggable && !self.piles.is_some_and(|lab| lab.blocks_dig(Terrain::pit_tile(position)))
+    }
+
+    /// See `Settlement::leaving_cargo`.
+    pub fn leaving_cargo(&self) -> bool {
+        super::leaving_cargo(self.transfers, self.me)
     }
 
     /// Whether a pile haul owns the agent's route.

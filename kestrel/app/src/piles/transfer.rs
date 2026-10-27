@@ -1,4 +1,11 @@
 //! Tossed units: each simulated toss becomes a unit flying between endpoints.
+//!
+//! A haul's toss is a real flight: the unit is a `Transfer` in the
+//! simulation, in neither end, for `TRANSFER_FLIGHT_TICKS`, and its toss
+//! lasts as long. Its landing slot is where it lands, after the units
+//! already there and flying there, so the views draw nothing for it until
+//! it lands, then hide it there (`render`) until its toss ends: never
+//! twice. Dug ore lands in its pile at once, and is hidden the same way.
 use super::*;
 use crate::sound::{Cue, Sound};
 use sim::settlement::TossEnd;
@@ -13,6 +20,7 @@ pub enum Destination {
 #[derive(Component)]
 pub struct Transit {
     pub destination: Destination,
+    pub material: Mineral,
     start: Vec3,
     age: f32,
     duration: f32,
@@ -70,7 +78,7 @@ pub fn spawn_tosses(
         commands.spawn((
             LabEntity,
             MineralUnit,
-            Transit { destination, start, age: 0.0, duration: *ticks as f32 / crate::legacy::HZ },
+            Transit { destination, material: mineral(*material), start, age: 0.0, duration: *ticks as f32 / crate::legacy::HZ },
             Mesh3d(assets.cube.clone()),
             MeshMaterial3d(assets.mineral[mineral_index(mineral(*material))].clone()),
             Transform::from_translation(start).with_scale(Vec3::new(0.24, 0.21, 0.24)),

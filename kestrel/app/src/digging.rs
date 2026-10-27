@@ -461,7 +461,7 @@ pub fn snapshot(world: &World) -> serde_json::Value {
         })
         .collect();
     let digging = mirror.player().zip(mirror.current.as_ref()).is_some_and(|(i, s)| s.agents[i as usize].avatar().is_some_and(|avatar| avatar.dig.is_some()));
-    let collected = mirror.current.as_ref().and_then(|s| s.piles.as_ref()?.collector.as_ref()).map(|c| c.stored.clone());
+    let collected = mirror.current.as_ref().and_then(|s| s.piles.as_ref()).filter(|lab| lab.collector.is_some()).map(|lab| lab.collected());
     let me = mirror.player().zip(mirror.current.as_ref()).map(|(i, s)| Terrain::pit_tile(s.agents[i as usize].body.position));
     let nearest_ore = me.zip(terrain.mine()).and_then(|(me, mine)| {
         (-8..=8)
