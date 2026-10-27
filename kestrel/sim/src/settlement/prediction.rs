@@ -1,13 +1,16 @@
 //! Client-side prediction: one avatar run ahead of the confirmed world with
 //! its owner's commands that haven't applied yet.
 
+use std::borrow::Cow;
+
 use content::scenario::Weapon;
 
 use super::action::{self, Action};
 use super::avatar::{self, character_of};
 use super::combat::{strike_event, Event};
-use super::{AgentIx, AgentState, Role, Settlement};
-use crate::messages::{ActionMessages, Messages};
+use super::piles::{self, PileLab};
+use super::{AgentIx, AgentState, Role, Settlement, Side};
+use crate::messages::{ActionMessages, Messages, StartHaul, StockChange};
 use crate::terrain::Terrain;
 use crate::CommandKind;
 
@@ -17,11 +20,14 @@ use crate::CommandKind;
 ///
 /// Only the avatar's own part of each tick runs: its step (stage 2) and its
 /// reading of the world (stage 3), whose messages become the tick's
-/// predicted events and are never applied. Pile jobs, transfer units moving
-/// at a dock, hits and knockback, damage, terrain changes (its own digs too)
-/// and other players stay as confirmed, so a replay matches the simulation
-/// exactly while none of those touch the avatar, and its events match while
-/// what its strikes read of the world didn't change.
+/// predicted events and are never applied. Its pile haul runs too: the
+/// walk a `Pile` command plans, on a copy of the pile lab that the
+/// avatar's own hauls change as they do the simulation's (`StartHaul`, a
+/// `DropHaul`, a failed walk, the haul's clocks). Units moving in a haul or
+/// at a dock, hits and knockback, damage, terrain changes (its own digs
+/// too) and other players stay as confirmed, so a replay matches the
+/// simulation exactly while none of those touch the avatar, and its events
+/// match while what its strikes read of the world didn't change.
 #[derive(Clone)]
 pub struct AvatarReplay<'a> {
     settlement: &'a Settlement,
@@ -31,6 +37,12 @@ pub struct AvatarReplay<'a> {
     tick: u64,
     /// The events the last tick run showed.
     events: Vec<Event>,
+    /// The pile lab as the avatar's own hauls leave it: the confirmed lab
+    /// until one changes it, then a copy. `None` outside the pile lab.
+    piles: Option<Cow<'a, PileLab>>,
+    /// What this tick's actions did to the world, for the avatar's own part
+    /// of stage 5 (`settle_haul`).
+    actions: ActionMessages,
 }
 
 impl Settlement {
@@ -38,7 +50,8 @@ impl Settlement {
     /// `tick`. `None` unless `agent` is a player avatar.
     pub fn replay_avatar<'a>(&'a self, agent: AgentIx, tick: u64, terrain: &'a Terrain) -> Option<AvatarReplay<'a>> {
         let state = self.agents.get(agent as usize).filter(|a| a.avatar().is_some())?.clone();
-        Some(AvatarReplay { settlement: self, terrain, me: agent, state, tick, events: Vec::new() })
+        let piles = self.piles.as_ref().map(Cow::Borrowed);
+        Some(AvatarReplay { settlement: self, terrain, me: agent, state, tick, events: Vec::new(), piles, actions: ActionMessages::default() })
     }
 }
 
@@ -71,30 +84,37 @@ impl<'a> AvatarReplay<'a> {
     }
 
     /// Applies one of the owner's commands on `tick`: its action's part on
-    /// the avatar (`action::act`), as `World::step` applies it. Commands that
-    /// don't drive this avatar change nothing. Returns false for a pile haul,
-    /// which plans its walk from pile lab state the replay doesn't run.
-    pub fn apply(&mut self, command: &CommandKind) -> bool {
-        let Some((agent, action)) = Action::of(command) else {
-            return !matches!(*command, CommandKind::Pile { agent, .. } if agent == self.me);
-        };
-        if agent == self.me {
-            let view = self.settlement.view(self.me, self.tick, self.terrain);
-            let def = character_of(&self.settlement.characters, &self.state);
-            // What the action does to the world is never applied (D1).
-            action::act(&mut self.state, &action, &view, def, &mut ActionMessages::default());
+    /// the avatar (`action::act`), as `World::step` applies it. A pile
+    /// haul's lab part applies at once too, on the replay's copy of the lab,
+    /// as the simulation applies it. Commands that don't drive this avatar,
+    /// a piano key among them, change nothing.
+    pub fn apply(&mut self, command: &CommandKind) {
+        let Some((agent, action)) = Action::of(command) else { return };
+        if agent != self.me {
+            return;
         }
-        true
+        let mut view = self.settlement.view(self.me, self.tick, self.terrain);
+        view.piles = self.piles.as_deref();
+        let def = character_of(&self.settlement.characters, &self.state);
+        let mut out = ActionMessages::default();
+        action::act(&mut self.state, &action, &view, def, &mut out);
+        for StartHaul { agent, start } in out.haul.drain(..) {
+            self.piles.as_mut().expect("a haul starts only in the pile lab").to_mut().start_haul(agent, start);
+        }
+        // What else the action does to the world is never applied (D1),
+        // but for the avatar's own haul (`settle_haul`).
+        self.actions.drop_haul.append(&mut out.drop_haul);
+        self.actions.reserve_stock.append(&mut out.reserve_stock);
     }
 
-    /// Runs `tick`: the avatar's step (without a pile job), its reading of
-    /// the confirmed world and the events that gives, its swing resolving,
-    /// and its housekeeping.
+    /// Runs `tick`: the avatar's step (its pile haul's walk among it), its
+    /// reading of the confirmed world and the events that gives, its swing
+    /// resolving, and its housekeeping.
     pub fn step(&mut self) {
         let (s, terrain, tick) = (self.settlement, self.terrain, self.tick);
         let def = character_of(&s.characters, &self.state);
         let AgentState { body, role: Role::Avatar(state), .. } = &mut self.state else { unreachable!("replays start from avatars") };
-        avatar::self_update(body, state, self.me, tick, terrain, None, def);
+        avatar::self_update(body, state, self.me, tick, terrain, self.piles.as_deref(), def);
         let mut out = Messages::default();
         s.read_avatar(self.me, &self.state, tick, terrain, &mut out);
         // Manual transfer units and pile steps show nothing until stage 5
@@ -113,18 +133,41 @@ impl<'a> AvatarReplay<'a> {
             avatar::start_queued(a, tick, def);
         }
         avatar::finish_dig(a, tick);
+        self.settle_haul(tick);
         self.tick += 1;
     }
 
-    /// Applies one tick's commands, in order, and runs it. Returns false if
-    /// any of them can't be predicted (see `apply`).
-    pub fn step_with<'c>(&mut self, commands: impl IntoIterator<Item = &'c CommandKind>) -> bool {
-        let mut predicted = true;
+    /// The avatar's own part of what stage 5 and housekeeping do to its pile
+    /// haul, as `Settlement::apply_actions` and `pile_housekeeping` do it: a
+    /// `DropHaul` ends it, a respawn gives back what it held in the lab, a
+    /// walk that failed ends it, and its clocks run. Its units move in stage
+    /// 5, which the replay leaves to the simulation.
+    fn settle_haul(&mut self, tick: u64) {
+        let actions = std::mem::take(&mut self.actions);
+        let (Some(lab), AgentState { body, carry, role: Role::Avatar(avatar), .. }) = (self.piles.as_mut(), &mut self.state) else { return };
+        let me = self.me;
+        for message in actions.drop_haul {
+            piles::cancel_haul(lab.to_mut(), me, carry, message.serial);
+            avatar.dropped_haul = false;
+        }
+        for release in actions.reserve_stock.iter().filter(|r| r.change == StockChange::Release && r.job.other.in_pile_lab()) {
+            release.job.release(lab.to_mut().holder_mut(release.job.other), Side::Other);
+        }
+        if let Some(error) = avatar.pile_failure.take() {
+            piles::end_haul(lab.to_mut(), me, carry, &error, &error);
+        }
+        if lab.hauler(me).is_some_and(|hauler| hauler.job.is_some() || !hauler.in_flight.is_empty()) {
+            let first = lab.first_mineral;
+            piles::tend_haul(lab.to_mut().hauler_mut(me), body.position, carry, tick, first);
+        }
+    }
+
+    /// Applies one tick's commands, in order, and runs it.
+    pub fn step_with<'c>(&mut self, commands: impl IntoIterator<Item = &'c CommandKind>) {
         for command in commands {
-            predicted &= self.apply(command);
+            self.apply(command);
         }
         self.step();
-        predicted
     }
 }
 
@@ -135,8 +178,8 @@ mod tests {
     use fx::{Fx, FxVec2};
 
     use super::super::avatar::Intent;
-    use super::super::piles::PileAction;
-    use super::super::{AgentState, Event, OnMiss, Prediction, SceneSetup, Settlement};
+    use super::super::piles::{PileAction, PileLab};
+    use super::super::{AgentState, Event, OnMiss, PileSetup, Prediction, SceneSetup, Settlement};
     use crate::terrain::{Destructible, Disc, Surface, Terrain};
     use crate::{Command, CommandKind, PlayerId, Simulation, World};
 
@@ -325,7 +368,7 @@ mod tests {
             for i in start..start + AHEAD {
                 let tick = first + i as u64;
                 let context = || format!("{player}, seed {seed}: replayed from tick {}, tick {tick}", first + start as u64);
-                assert!(replay.step_with(&schedule[i]));
+                replay.step_with(&schedule[i]);
                 assert_eq!(unhit(replay.state()), unhit(&states[i + 1]), "{}: the avatar differs ({:?})", context(), &schedule[start..=i]);
                 swings += usize::from(replay.state().avatar().unwrap().swing.as_ref().is_some_and(|s| s.resolved));
                 routed += usize::from(matches!(replay.state().avatar().unwrap().intent, Some(Intent::GoTo { .. })) && !replay.state().body.route.is_empty());
@@ -390,7 +433,7 @@ mod tests {
         let turns = [vec![CommandKind::DigDown { agent }], vec![CommandKind::MoveAvatar { agent, intent: Intent::Stop }], vec![sword]];
         let step = |sim: &mut Simulation, replay: &mut super::AvatarReplay| {
             let turn = turns.get(sim.world().tick() as usize).cloned().unwrap_or_default();
-            assert!(replay.step_with(&turn));
+            replay.step_with(&turn);
             let turn: Vec<_> = turn.into_iter().map(|kind| Command { player: PlayerId(0), kind }).collect();
             sim.step(&turn);
         };
@@ -412,23 +455,166 @@ mod tests {
     }
 
     #[test]
-    fn pile_hauls_and_other_avatars_are_left_alone() {
+    fn piano_keys_hauls_outside_the_pile_lab_and_other_avatars_are_left_alone() {
         let sim = arena("exosuit", false);
         let world = sim.world();
         let settlement = world.settlement().unwrap();
         let agent = settlement.player().unwrap();
         let mut replay = settlement.replay_avatar(agent, world.tick(), world.terrain()).unwrap();
+        let before = replay.state().clone();
         let haul = CommandKind::Pile { agent, action: PileAction::Deliver, pace: Fx::ZERO, approach: None };
-        assert!(!replay.apply(&haul), "a pile haul is not predicted");
-        let goto = CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target: settlement.spawn + FxVec2::new(Fx::ONE, Fx::ZERO), run: false } };
-        assert!(replay.apply(&goto), "a GoTo walk is predicted");
-        assert!(!replay.state().body.route.is_empty());
+        replay.apply(&haul);
+        assert_eq!(replay.state(), &before, "there is no pile lab to haul in");
         let piano = CommandKind::PlayPiano { agent, piano: 0, pitch: 60, velocity: 100 };
-        assert!(replay.apply(&piano));
+        replay.apply(&piano);
+        assert_eq!(replay.state(), &before, "a piano key changes no avatar");
+        let goto = CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target: settlement.spawn + FxVec2::new(Fx::ONE, Fx::ZERO), run: false } };
+        replay.apply(&goto);
+        assert!(!replay.state().body.route.is_empty(), "a GoTo walk is predicted");
         let other = CommandKind::Jetpack { agent: agent + 1, enabled: true };
-        assert!(replay.apply(&other));
+        replay.apply(&other);
         assert!(!replay.state().avatar().unwrap().flight.requested);
         assert!(settlement.replay_avatar(agent + 1, 0, world.terrain()).is_none());
+    }
+
+    /// The pile lab of `scene_tests`: two dispensers (piles 0 and 1, empty)
+    /// and three piles (2 to 4), no collector.
+    fn pile_lab() -> Simulation {
+        let p = |x: i64, z: i64| [Fx::from_ratio(x, 10), Fx::from_ratio(z, 10)];
+        let setup = SceneSetup {
+            player: "exosuit".into(),
+            extent: Fx::from_int(8),
+            spawn: [Fx::ZERO, Fx::ZERO, Fx::ONE],
+            piles: Some(PileSetup {
+                capacity: 12,
+                dispensers: vec![(0, p(-31, -20)), (1, p(22, -31))],
+                piles: vec![(0, p(-40, 34), 8), (1, p(2, 43), 24), (0, p(46, 10), 64)],
+                collector: None,
+            }),
+            ..SceneSetup::default()
+        };
+        Simulation::from_world(World::new_scene(1, &Content::builtin(), &setup).unwrap(), 1)
+    }
+
+    /// Something a player might do in the pile lab on a tick: mostly hauls
+    /// (some refused: a bad interval, no collector, a pile that isn't
+    /// there), walks that let go of them, a release that keeps them, a
+    /// respawn.
+    fn random_haul_command(rng: &mut Rng, agent: u16, center: FxVec2) -> CommandKind {
+        let pace = [Fx::ZERO, Fx::ZERO, Fx::from_ratio(1, 5), Fx::from_int(7)][rng.below(4) as usize];
+        let spot = |rng: &mut Rng| center + rng.direction() * Fx::from_ratio(rng.below(50) as i64, 10);
+        let pile = |rng: &mut Rng| 2 + rng.below(4) as u32;
+        let action = match rng.below(20) {
+            0..=5 => PileAction::Pickup(pile(rng)),
+            6..=7 => PileAction::PickupAmount(pile(rng), 1 + rng.below(6) as u32),
+            8..=9 => PileAction::Deposit(pile(rng)),
+            10..=11 => PileAction::Drop(spot(rng)),
+            12..=13 => PileAction::DropMineral(spot(rng), rng.below(3) as u8),
+            14 => PileAction::Deliver,
+            15..=16 => return CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: rng.direction(), run: false } },
+            17 => return CommandKind::MoveAvatar { agent, intent: Intent::GoTo { target: spot(rng), run: false } },
+            18 => return CommandKind::ReleaseDirectControl { agent },
+            _ => return CommandKind::Respawn { agent },
+        };
+        CommandKind::Pile { agent, action, pace, approach: None }
+    }
+
+    /// Runs the pile lab on random hauls and walks and replays the avatar
+    /// from many confirmed ticks. Until a unit of its haul moves (stage 5,
+    /// which the replay leaves to the simulation), the replayed avatar
+    /// equals the simulated one at every tick, and so does its hauler in
+    /// the replay's copy of the lab. Returns how many ticks were compared
+    /// with a haul walking, how many replays started a haul, and how many
+    /// refused one.
+    fn replayed_hauls_match_the_simulation(seed: u64) -> [usize; 3] {
+        const TICKS: usize = 1500;
+        const AHEAD: usize = 40;
+        let mut sim = pile_lab();
+        let (agent, center, first) = {
+            let world = sim.world();
+            (world.settlement().unwrap().player().unwrap(), world.terrain().center, world.tick())
+        };
+        let mut rng = Rng(seed);
+        let schedule: Vec<Vec<CommandKind>> = (0..TICKS + AHEAD)
+            .map(|_| if rng.below(25) == 0 { vec![random_haul_command(&mut rng, agent, center)] } else { Vec::new() })
+            .collect();
+        let mut confirmed: Vec<(Settlement, Terrain)> = Vec::new();
+        let mut tossed = Vec::new();
+        for turn in &schedule {
+            let world = sim.world();
+            confirmed.push((world.settlement().unwrap().clone(), world.terrain().clone()));
+            sim.step(&turn.iter().map(|kind| Command { player: PlayerId(0), kind: kind.clone() }).collect::<Vec<_>>());
+            tossed.push(sim.world().settlement().unwrap().events.iter().any(|event| matches!(event, Event::PileToss { .. })));
+        }
+        let world = sim.world();
+        confirmed.push((world.settlement().unwrap().clone(), world.terrain().clone()));
+        let hauler = |lab: &PileLab| lab.hauler(agent).cloned();
+        fn lab(s: &Settlement) -> &PileLab {
+            s.piles.as_ref().unwrap()
+        }
+        let mut counts = [0; 3];
+        for start in (0..TICKS).step_by(3) {
+            let (settlement, terrain) = &confirmed[start];
+            // Units of a haul already moving land during the replay.
+            if hauler(lab(settlement)).is_some_and(|h| !h.in_flight.is_empty() || h.job.is_some_and(|job| job.started)) {
+                continue;
+            }
+            let mut replay = settlement.replay_avatar(agent, first + start as u64, terrain).unwrap();
+            for i in start..start + AHEAD {
+                let context = || format!("seed {seed}: replayed from tick {}, tick {} ({:?})", first + start as u64, first + i as u64, &schedule[start..=i]);
+                replay.step_with(&schedule[i]);
+                if tossed[i] {
+                    break;
+                }
+                let (real, mine) = (&confirmed[i + 1].0, replay.piles.as_deref().unwrap());
+                assert_eq!(replay.state(), &real.agents[agent as usize], "{}: the avatar differs", context());
+                assert_eq!(hauler(mine), hauler(lab(real)), "{}: the hauler differs", context());
+                let now = hauler(mine).unwrap_or_default();
+                let hauled = schedule[i].iter().any(|kind| matches!(kind, CommandKind::Pile { .. }));
+                counts[0] += usize::from(now.job.is_some() && !replay.state().body.route.is_empty());
+                counts[1] += usize::from(hauled && now.job.is_some());
+                counts[2] += usize::from(hauled && now.last_error.is_some());
+            }
+        }
+        println!("seed {seed}: {counts:?} (ticks walking a haul, hauls started, refused)");
+        counts
+    }
+
+    #[test]
+    fn replayed_pile_hauls_match_the_simulation() {
+        let counts = (1..=3).map(replayed_hauls_match_the_simulation).fold([0; 3], |a, b| [0, 1, 2].map(|k| a[k] + b[k]));
+        assert!(counts.iter().all(|&n| n > 0), "ticks walking a haul, hauls started, refused: {counts:?}");
+    }
+
+    /// A haul's walk is predicted from the command on: the replay walks the
+    /// avatar to the pile as the simulation does, and a walk let go of it.
+    #[test]
+    fn a_haul_walks_in_the_replay_as_in_the_simulation() {
+        let mut sim = pile_lab();
+        let world = sim.world();
+        let agent = world.settlement().unwrap().player().unwrap();
+        let first = world.tick();
+        let (settlement, terrain) = (world.settlement().unwrap().clone(), world.terrain().clone());
+        let mut replay = settlement.replay_avatar(agent, first, &terrain).unwrap();
+        let haul = CommandKind::Pile { agent, action: PileAction::Pickup(4), pace: Fx::ZERO, approach: None };
+        let walk = CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction: FxVec2::new(Fx::ZERO, Fx::ONE), run: false } };
+        let start = settlement.agents[agent as usize].body.position;
+        for tick in 0..60 {
+            let turn = match tick {
+                0 => vec![haul.clone()],
+                30 => vec![walk.clone()],
+                _ => Vec::new(),
+            };
+            replay.step_with(&turn);
+            sim.step(&turn.iter().map(|kind| Command { player: PlayerId(0), kind: kind.clone() }).collect::<Vec<_>>());
+            let real = sim.world().settlement().unwrap();
+            assert_eq!(replay.state(), &real.agents[agent as usize], "tick {tick}");
+            let job = |lab: &PileLab| lab.hauler(agent).and_then(|h| h.job.clone());
+            assert_eq!(job(replay.piles.as_deref().unwrap()), job(real.piles.as_ref().unwrap()), "tick {tick}");
+            assert_eq!(job(replay.piles.as_deref().unwrap()).is_some(), tick < 30, "tick {tick}: the walk let go of the haul");
+        }
+        assert_ne!(replay.state().body.position, start, "the avatar walked");
+        assert!(sim.world().settlement().unwrap().piles.as_ref().unwrap().hauler(agent).unwrap().last_error.is_some());
     }
 
     #[test]

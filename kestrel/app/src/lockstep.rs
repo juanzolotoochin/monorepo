@@ -929,6 +929,7 @@ pub fn follow_avatar(
     mut ledger: ResMut<crate::event_prediction::EventPrediction>,
     mut pending_lasers: ResMut<crate::effects::PendingLasers>,
     mut drawn_avatar: ResMut<crate::prediction::DrawnAvatar>,
+    withdraw: Option<Res<crate::prediction::WithdrawPrediction>>,
 ) {
     let (Some(current), Some(index)) = (&mirror.current, mirror.player()) else {
         drawn_avatar.0 = None;
@@ -936,7 +937,8 @@ pub fn follow_avatar(
     };
     let a = &current.agents[index as usize];
     let before = mirror.previous.as_ref().and_then(|p| current.same_agent_in(index, p)).unwrap_or(a);
-    let predicted = if service.is_client() { predict(&mut prediction, &mirror, &service, before, time.delta_secs()) } else { None };
+    let withdrawn = withdraw.is_some_and(|until| service.world().is_some_and(|world| world.tick() <= until.0));
+    let predicted = if service.is_client() && !withdrawn { predict(&mut prediction, &mirror, &service, before, time.delta_secs()) } else { None };
     // What the avatar's lasting effects are drawn from (D5): the newest
     // confirmed state at render time, unless it is predicted.
     drawn_avatar.0 = Some(match &predicted {
@@ -2205,14 +2207,12 @@ mod tests {
         mirror.current.as_ref().unwrap().agents[mirror.player().unwrap() as usize].clone()
     }
 
-    /// Queues a command the replay can't predict (a pile haul, which does
-    /// nothing outside the pile lab): once the drawn time reaches it, the
-    /// prediction is withdrawn and the confirmed avatar is drawn until it
-    /// applies.
+    /// Withdraws the prediction (`prediction::WithdrawPrediction`): the
+    /// confirmed avatar is drawn until the confirmed world reaches the
+    /// input horizon, where a command sent now would apply.
     fn withdraw_prediction(app: &mut App) {
-        let mut service = app.world_mut().resource_mut::<SessionService>();
-        let agent = service.player().unwrap();
-        service.command(CommandKind::Pile { agent, action: sim::settlement::piles::PileAction::Deliver, pace: Fx::ZERO, approach: None });
+        let horizon = app.world().resource::<SessionService>().session.input_horizon().unwrap();
+        app.world_mut().insert_resource(crate::prediction::WithdrawPrediction(horizon));
     }
 
     /// Lifts off in `scene` (the jetpack, or a jump), then once more and

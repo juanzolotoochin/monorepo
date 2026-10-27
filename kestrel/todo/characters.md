@@ -1,32 +1,11 @@
 # Characters
 
-## Move pile hauls and piano keys onto actions
-
-- **Status:** open
-- **Why:** the `Pile` and `PlayPiano` commands still bypass
-  `settlement::action`. `Settlement::pile_action` checks and writes pile lab
-  state (the hauler's job, serial and notice) around planning the avatar's
-  route, so its agent part can't be split off cleanly, and the replay keeps
-  returning false for it. A piano key changes only `piano_notes`, nothing on
-  the avatar.
-- **What to do:** now that ending a haul is a message (`DropHaul`, handoff
-  D3, task 7), or once pile jobs merge into
-  the shared body's cargo (step 5), make a pile haul an action (step 5's
-  "interact") whose agent part plans the walk, and let the replay predict
-  it. Decide whether a piano key is an "interact" action with no agent part
-  or stays a world command.
-- **Where:** `kestrel/sim/src/settlement/action.rs` (`Action::of`),
-  `piles.rs` (`pile_action`), `piano.rs` (`play_piano`),
-  `prediction.rs` (`AvatarReplay::apply`).
-- **Found in:** ability prediction task 2, the shared action path
-  (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D2).
-
 ## Turn the memory commands' world writes into messages
 
 - **Status:** open
 - **Why:** since task 7 a `Respawn` restarts the memory trial in stage 5,
-  but `MemoryRecord`, `MemoryDeploy` and `MemoryClear` (and `Pile` and
-  `PlayPiano`) still write the world when the command applies. In one turn,
+  but `MemoryRecord`, `MemoryDeploy` and `MemoryClear` (and a `Pile`'s lab
+  part, `StartHaul`, and `PlayPiano`) still write the world when the command applies. In one turn,
   a Respawn followed by `MemoryRecord` now loses the recording, which used
   to start after the restart. `MemoryDeploy` also cancels the avatar's pile
   haul and moves the avatar directly.
@@ -243,6 +222,59 @@
 - **Found in:** threat characters (`kestrel/THREAT_CHARACTERS_HANDOFF.md`, D4).
 
 ## Done
+
+### Move pile hauls and piano keys onto actions
+
+- **Status:** done (branch `kestrel-character-todos`)
+- **Why:** the `Pile` and `PlayPiano` commands still bypass
+  `settlement::action`. `Settlement::pile_action` checks and writes pile lab
+  state (the hauler's job, serial and notice) around planning the avatar's
+  route, so its agent part can't be split off cleanly, and the replay keeps
+  returning false for it. A piano key changes only `piano_notes`, nothing on
+  the avatar.
+- **What to do:** now that ending a haul is a message (`DropHaul`, handoff
+  D3, task 7), or once pile jobs merge into
+  the shared body's cargo (step 5), make a pile haul an action (step 5's
+  "interact") whose agent part plans the walk, and let the replay predict
+  it. Decide whether a piano key is an "interact" action with no agent part
+  or stays a world command.
+- **Where:** `kestrel/sim/src/settlement/action.rs` (`Action::of`),
+  `piles.rs` (`pile_action`), `piano.rs` (`play_piano`),
+  `prediction.rs` (`AvatarReplay::apply`).
+- **Done:** a `Pile` command is `Action::Haul { action, pace, approach }`
+  and goes through `action::act` like the other actions; `pile_action` is
+  gone. Its avatar part (`piles::haul`) reads the lab through the `View`
+  and writes only the avatar: the running haul's carry job ends (its own
+  side given back), the new haul is planned against the lab as that
+  release leaves it, holds its units on the avatar's side, and points the
+  avatar along its route. The lab's part is a `StartHaul` message
+  (`PileLab::start_haul`: serial, notice, the old haul's lab-side release,
+  a drop's new pile, the new haul's lab-side hold), which `Settlement::act`
+  applies at once in stage 1, not in stage 5, so every check and write
+  happens in the order the command always ran them and a later command in
+  the same turn still sees the haul. Moving it to stage 5 would change
+  in-turn ordering; that is the open "Turn the memory commands' world
+  writes into messages" todo, which already lists `Pile`. Golden file and
+  determinism hashes unchanged; no format change (`Action` isn't saved or
+  sent). The replay (`AvatarReplay`) now predicts pile hauls: it keeps a
+  copy-on-write copy of the pile lab, applies its own `StartHaul` to it,
+  walks the haul in stage 2 as the simulation does, and plays its own part
+  of stage 5 and housekeeping (`DropHaul`, a respawn's lab release, a
+  failed walk, the haul's clocks, via the shared `cancel_haul`, `end_haul`
+  and `tend_haul`). Units tossed in stage 5 stay unpredicted, like a dock's.
+  `apply` and `step_with` no longer return whether a command was
+  predicted, since every one is; the app's `touched` skips ticks with a
+  haul before or after them, and its tests withdraw a prediction through a
+  `WithdrawPrediction` resource instead of an unpredictable `Pile`. A
+  piano key stays a world command: it changes nothing on the avatar, so it
+  would be an action with no agent part and only a world message, which
+  the replay ignores either way. Tested in `prediction.rs`
+  (`replayed_pile_hauls_match_the_simulation`: random hauls, walks,
+  releases and respawns in the pile lab, the replayed avatar and its
+  hauler equal the simulation's until a unit is tossed;
+  `a_haul_walks_in_the_replay_as_in_the_simulation`).
+- **Found in:** ability prediction task 2, the shared action path
+  (`kestrel/ABILITY_PREDICTION_HANDOFF.md`, D2).
 
 ### Give a scene's empty starting pile a mineral
 

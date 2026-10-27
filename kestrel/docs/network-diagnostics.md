@@ -156,8 +156,8 @@ Pending commands go through the same actions the
 simulation applies (`settlement::action`), so walks to a point (the depot
 dock walk, scripted walks) are predicted too: the route is planned from the
 confirmed terrain when the walk starts. The units it then moves at the dock are not.
-Pile jobs read pile lab state the replay doesn't run, so they aren't
-predicted: while one is pending, the confirmed avatar is drawn.
+A pile haul is predicted the same way: the replay plans its walk and walks
+it on its own copy of the pile lab. The units it then tosses are not.
 
 Everything about your avatar that lasts is drawn from the drawn avatar's
 state ([`DrawnAvatar`](../app/src/prediction.rs)), not from the confirmed
