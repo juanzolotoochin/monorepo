@@ -822,10 +822,10 @@ impl World {
                 settlement.retry(tick, message);
             }
             for message in messages.equip {
-                settlement.equip(tick, message);
+                settlement.equip(tick, &self.terrain, message);
             }
             for message in messages.reserve_haul {
-                settlement.reserve_haul(tick, message);
+                settlement.reserve_haul(tick, &self.terrain, message);
             }
             for message in messages.attach {
                 settlement.attach(tick, &self.terrain, message);

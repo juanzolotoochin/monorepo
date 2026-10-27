@@ -2,6 +2,13 @@
 //! stages. Movement and phase changes that only touch the hauler itself run in
 //! the parallel self update; decisions that touch depots, docks or stock are
 //! messages, handled in the apply phase.
+//!
+//! The state machine is the hauler's brain (`think`): it keeps its phase and
+//! picks actions from the vocabulary players use (`Action`), which apply
+//! through the one `action::act` as an avatar's do (`HAULER_ACTIONS_HANDOFF.md`).
+//! It goes to points (`Move(GoTo)`); a job stage 5 accepts follows the route
+//! stage 3 planned (`Follow`). How to walk (the traffic detour, queuing at a
+//! busy dock) stays in `walk`.
 
 use std::collections::BTreeMap;
 
@@ -10,9 +17,11 @@ use content::{millis_to_ticks, per_tick};
 use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
+use super::action::{self, Action, View};
+use super::avatar::Intent;
 use super::{AgentIx, AgentState, Body, Carry, DepotIx, DepotState, Direction, ItemIx, LinkIx, LinkState, Role, Transfer};
 use crate::messages::{Attach, CarryUnit, ClaimDock, DockClaim, Equip, ReserveHaul, Retry};
-use crate::messages::Messages;
+use crate::messages::{ActionMessages, Messages};
 use crate::nav::{self, angle_between, distance};
 use crate::terrain::{Disc, Terrain};
 
@@ -214,6 +223,9 @@ pub(super) struct Ctx<'a> {
     pub depots: &'a [DepotState],
     pub links: &'a [LinkState],
     pub transfers: &'a BTreeMap<u64, Transfer>,
+    /// What an agent's actions read this tick; each agent puts itself in
+    /// `me`.
+    pub view: View<'a>,
 }
 
 pub(super) fn footprint(a: &AgentState) -> Footprint {
@@ -225,6 +237,17 @@ pub(super) fn footprint(a: &AgentState) -> Footprint {
             _ => None,
         },
         next: a.hauler().and(a.body.route.first().copied()),
+    }
+}
+
+/// Applies an action to a hauler (see `action::act`): `GoTo` plans a route
+/// (the trailer's path when towing), `Follow` takes one already planned.
+/// Only the hauler brain and stage 5 drive haulers, with nothing else.
+pub(super) fn act(body: &mut Body, hauler: &HaulerState, action: &Action, view: &View) {
+    match action {
+        Action::Move(Intent::GoTo { target, .. }) => body.route = hauler.plan(body, view.terrain, *target, &[]),
+        Action::Follow(route) => body.route = route.clone(),
+        _ => debug_assert!(false, "haulers only go to points and follow routes: {action:?}"),
     }
 }
 
@@ -246,14 +269,28 @@ pub(crate) fn move_route(position: &mut FxVec2, route: &mut Vec<FxVec2>, mut dis
     }
 }
 
-/// Stage 2 for one agent.
+/// Stage 2 for one agent. A hauler's brain picks what to do (`think`), the
+/// action applies as any agent's does (`action::act`), and the hauler walks
+/// (`walk`), as the phase it started the tick in says.
 pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
     let def = super::avatar::character_of(ctx.characters, a);
-    let AgentState { body, carry, role, .. } = a;
-    let hauler = match role {
-        Role::Hauler(hauler) => hauler,
-        Role::Avatar(avatar) => return super::avatar::self_update(body, avatar, me, ctx.tick, ctx.terrain, ctx.piles, def),
+    let start = match &mut a.role {
+        Role::Hauler(hauler) => hauler.phase,
+        Role::Avatar(avatar) => return super::avatar::self_update(&mut a.body, avatar, me, ctx.tick, ctx.terrain, ctx.piles, def),
     };
+    if let Some(action) = think(a, me, ctx) {
+        // A hauler's actions only move it: nothing for the world.
+        let mut out = ActionMessages::default();
+        action::act(a, &action, &View { me, ..ctx.view }, def, &mut out);
+        debug_assert!(out.is_empty(), "hauler actions emit no messages");
+    }
+    walk(a, start, me, ctx);
+}
+
+/// The hauler brain: the phase changes that come before walking, and the
+/// action to take. It writes the hauler's own state, never its route.
+pub(super) fn think(a: &mut AgentState, me: AgentIx, ctx: &Ctx) -> Option<Action> {
+    let AgentState { body, carry, role: Role::Hauler(hauler), .. } = a else { unreachable!("haulers think") };
     if let Some(d) = hauler.departure_dock {
         let dock = ctx.depots[d as usize].position;
         let clearance = hauler.departure_clearance();
@@ -261,12 +298,64 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
             hauler.departure_dock = None;
         }
     }
+    let go_to = |target| Some(Action::Move(Intent::GoTo { target, run: false }));
     match hauler.phase {
-        Phase::Idle | Phase::Returning => {
-            if hauler.phase == Phase::Idle && distance(body.position, body.home) > Fx::from_ratio(1, 10) {
-                body.route = hauler.plan(body, ctx.terrain, body.home, &[]);
-                hauler.phase = Phase::Returning;
+        Phase::Idle if distance(body.position, body.home) > Fx::from_ratio(1, 10) => {
+            hauler.phase = Phase::Returning;
+            go_to(body.home)
+        }
+        Phase::Idle | Phase::Returning => None,
+        Phase::ToPickup | Phase::ToDrop | Phase::ToEquip => {
+            // An approach that lost its route plans again, now and then.
+            let dock = hauler.dock(ctx.links).expect("approaching agents have a dock");
+            let goal = ctx.depots[dock as usize].position;
+            if body.route.is_empty() && distance(body.position, goal) > Fx::from_ratio(1, 10) && ctx.tick >= hauler.retries {
+                hauler.retries = ctx.tick + APPROACH_REPLAN_TICKS;
+                return go_to(goal);
             }
+            None
+        }
+        Phase::Loading => {
+            let job = hauler.assignment.as_ref().expect("loading agents have a job");
+            // Loaded once the load job is done and its units have landed:
+            // the unload starts, holding them in the cargo.
+            if carry.job.is_none() && carry.inventory.total_in() == 0 {
+                carry.start_next(ctx.tick);
+                let link = &ctx.links[job.link as usize];
+                hauler.departure_dock = Some(link.from);
+                hauler.phase = Phase::ToDrop;
+                return go_to(ctx.depots[link.to as usize].position);
+            }
+            None
+        }
+        Phase::Unloading => {
+            let job = hauler.assignment.as_ref().expect("unloading agents have a job");
+            if carry.job.is_none() && !super::leaving_cargo(ctx.transfers, me) {
+                hauler.departure_dock = Some(ctx.links[job.link as usize].to);
+                hauler.assignment = None;
+                hauler.phase = Phase::Idle;
+            }
+            None
+        }
+        Phase::Attaching => {
+            if hauler.equipped && ctx.tick >= hauler.transfer_at {
+                let e = hauler.equipment.as_ref().expect("attaching agents have equipment");
+                hauler.departure_dock = Some(e.depot);
+                carry.inventory.capacity = e.capacity;
+                hauler.phase = Phase::Idle;
+            }
+            None
+        }
+    }
+}
+
+/// The hauler's step, keyed on the phase the tick started in (`start`): a
+/// hauler that just loaded waits a tick to set off, one that just turned
+/// for home sets off at once. The trailer follows last.
+fn walk(a: &mut AgentState, start: Phase, me: AgentIx, ctx: &Ctx) {
+    let AgentState { body, carry, role: Role::Hauler(hauler), .. } = a else { unreachable!("haulers walk") };
+    match start {
+        Phase::Idle | Phase::Returning => {
             if hauler.phase == Phase::Returning {
                 let speed = hauler.speed_now(body);
                 travel(body, hauler, carry, me, ctx, speed);
@@ -276,34 +365,7 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
             }
         }
         Phase::ToPickup | Phase::ToDrop | Phase::ToEquip => approach(body, hauler, carry, me, ctx),
-        Phase::Loading => {
-            let job = hauler.assignment.as_ref().expect("loading agents have a job");
-            // Loaded once the load job is done and its units have landed:
-            // the unload starts, holding them in the cargo.
-            if carry.job.is_none() && carry.inventory.total_in() == 0 {
-                carry.start_next(ctx.tick);
-                let link = &ctx.links[job.link as usize];
-                hauler.departure_dock = Some(link.from);
-                body.route = hauler.plan(body, ctx.terrain, ctx.depots[link.to as usize].position, &[]);
-                hauler.phase = Phase::ToDrop;
-            }
-        }
-        Phase::Unloading => {
-            let job = hauler.assignment.as_ref().expect("unloading agents have a job");
-            if carry.job.is_none() && !super::leaving_cargo(ctx.transfers, me) {
-                hauler.departure_dock = Some(ctx.links[job.link as usize].to);
-                hauler.assignment = None;
-                hauler.phase = Phase::Idle;
-            }
-        }
-        Phase::Attaching => {
-            if hauler.equipped && ctx.tick >= hauler.transfer_at {
-                let e = hauler.equipment.as_ref().expect("attaching agents have equipment");
-                hauler.departure_dock = Some(e.depot);
-                carry.inventory.capacity = e.capacity;
-                hauler.phase = Phase::Idle;
-            }
-        }
+        Phase::Loading | Phase::Unloading | Phase::Attaching => {}
     }
     if let (Some(trailer), Some(e)) = (&mut hauler.trailer, &hauler.equipment) {
         let d = distance(trailer.position, body.position);
@@ -317,6 +379,8 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
     }
 }
 
+/// Walks to the dock: queues while another agent owns it, backing out of a
+/// larger carrier's way, and docks on arrival. `think` replans a lost route.
 fn approach(body: &mut Body, hauler: &mut HaulerState, carry: &Carry, me: AgentIx, ctx: &Ctx) {
     let dock = hauler.dock(ctx.links).expect("approaching agents have a dock");
     let goal = ctx.depots[dock as usize].position;
@@ -330,10 +394,6 @@ fn approach(body: &mut Body, hauler: &mut HaulerState, carry: &Carry, me: AgentI
         None => Fx::from_ratio(3, 2),
     };
     let to_goal = distance(body.position, goal);
-    if body.route.is_empty() && to_goal > Fx::from_ratio(1, 10) && ctx.tick >= hauler.retries {
-        body.route = hauler.plan(body, ctx.terrain, goal, &[]);
-        hauler.retries = ctx.tick + APPROACH_REPLAN_TICKS;
-    }
     if busy && to_goal < queue_distance + Fx::from_ratio(1, 5) {
         hauler.dock_wait_ticks += 1;
         // A larger carrier may take the dock while this one queues close by:

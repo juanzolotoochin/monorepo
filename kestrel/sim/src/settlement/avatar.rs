@@ -456,15 +456,20 @@ impl Settlement {
     /// does to the world goes to `out`, which stage 5 applies
     /// (`apply_actions`) and `AvatarReplay` never does.
     pub(crate) fn act(&mut self, tick: u64, me: AgentIx, action: &Action, terrain: &Terrain, out: &mut ActionMessages) {
-        let agent = me as usize;
-        // Only owned avatars get commands.
-        if !self.agents.get(agent).is_some_and(|a| a.avatar().is_some()) {
+        // Only owned avatars get commands: commands never drive haulers.
+        if !self.agents.get(me as usize).is_some_and(|a| a.avatar().is_some()) {
             return;
         }
-        // The view reads no agents, so the avatar can be written meanwhile.
+        self.act_agent(tick, me, action, terrain, out);
+    }
+
+    /// Applies an action to any agent (`action::act`), by its role: a
+    /// command's on an avatar, or an accepted job's route on a hauler.
+    pub(super) fn act_agent(&mut self, tick: u64, me: AgentIx, action: &Action, terrain: &Terrain, out: &mut ActionMessages) {
+        // The view reads no agents, so the agent can be written meanwhile.
         let mut agents = std::mem::take(&mut self.agents);
-        let a = &mut agents[agent];
-        act(a, action, &self.view(me, tick, terrain), character_of(&self.characters, a), out);
+        let a = &mut agents[me as usize];
+        super::action::act(a, action, &self.view(me, tick, terrain), character_of(&self.characters, a), out);
         self.agents = agents;
     }
 
@@ -659,6 +664,8 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
                 set_intent(body, avatar, intent.clone(), view.terrain, def);
             }
         }
+        // A planned route is a hauler's; no command sends one.
+        Action::Follow(_) => {}
         Action::Aim(aim) => aim_at(avatar, aim),
         Action::Attack { weapon, aim, muzzle } => {
             if view.has_weapon(weapon) {
