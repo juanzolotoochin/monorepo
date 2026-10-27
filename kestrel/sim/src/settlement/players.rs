@@ -101,10 +101,17 @@ impl Settlement {
     }
 
     /// Commands: `player` left the game. Their avatar goes, with what it
-    /// held: its carry job is dropped (`drop_carry`), units flying to
-    /// or from it land at once, and what it carried is written off as
-    /// `abandoned`. The scene's first avatar never leaves, since every
-    /// joiner is a copy of it.
+    /// held:
+    /// - its carry jobs end through `drop_carry`, as a cancel ends them, so
+    ///   what they held on a depot, a pile or the collector and in `next` is
+    ///   released (an empty drop pile then goes in housekeeping);
+    /// - units flying to or from it land at once;
+    /// - what its cargo then holds, minerals among the items, is written off
+    ///   as `abandoned`;
+    /// - its pile lab hauler (walk, notices, toss landings) goes.
+    ///
+    /// The scene's first avatar never leaves, since every joiner is a copy
+    /// of it.
     pub fn leave(&mut self, player: PlayerId) {
         let Some(gone) = self.avatar_of(player) else { return };
         if Some(gone) == self.player() {

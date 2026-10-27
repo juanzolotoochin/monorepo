@@ -239,3 +239,25 @@ gameplay last.
 - Bump the save `FORMAT_VERSION` whenever saved or hashed state changes.
 - Things found but out of scope go in `kestrel/todo/`.
 - When a step is done, add a "Done in step N" note under it here.
+
+## Rebased onto eight players (#117)
+
+The branch was rebased onto `master` after #117, which added
+`settlement/players.rs` (`join`, `leave`, `remap_agents`) and took save
+format 12 for `Accounting::abandoned`; the branch's formats moved up one, to
+13–19. `leave` is written in the inventory's terms:
+
+- the leaving avatar's carry jobs end through `drop_carry` (its `job` and
+  `next`), so what they held on a depot, a pile or the collector is given
+  back, as a cancel does; an empty drop pile then goes in housekeeping;
+- units flying to or from it land at once (`Settlement::land`), as on
+  `master`, and its cargo, minerals among the items, goes to `abandoned`;
+- its pile lab `Hauler` goes; `remap_agents` renumbers every
+  `InventoryRef::Agent` (transfers, other agents' `job` and `next`) and the
+  lab's haulers;
+- `join` builds the joiner's `Carry` from the template's inventory shape,
+  with no job.
+
+Tests in `combat_tests.rs`, beside `master`'s leave tests: a leave
+mid-transfer while haulers haul, mid-pile-haul, with pile units in flight,
+and mid-drop, each keeping `validate` clean.
