@@ -203,7 +203,13 @@ const COLLISION_MODE_RIGID: u32 = 1u;
 const COLLISION_MODE_HIDE_ON_CONTACT: u32 = 2u;
 const COLLISION_EPSILON: f32 = 0.001;
 
-@group(0) @binding(0) var<uniform> params: EmitterParams;
+// Kestrel: one dispatch simulates a batch of emitters that share every
+// other binding (the bursts of one pool): workgroup row `global_id.y` is
+// emitter `y` of the batch. Must match `MAX_BATCH` in `compute.rs`.
+const MAX_BATCH: u32 = 64u;
+@group(0) @binding(0) var<uniform> batch: array<EmitterParams, MAX_BATCH>;
+// This invocation's emitter, copied from `batch` at the start of `main`.
+var<private> params: EmitterParams;
 @group(0) @binding(1) var<storage, read_write> particles: array<Particle>;
 @group(0) @binding(2) var gradient_texture: texture_2d<f32>;
 @group(0) @binding(3) var gradient_sampler: sampler;
@@ -241,6 +247,7 @@ struct SubEmissionBuffer {
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    params = batch[global_id.y];
     let thread_idx = global_id.x;
 
     // trail pass 1: process trail segments (copy head state, offset position)
