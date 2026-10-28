@@ -37,8 +37,6 @@ pub fn load<'a>(sources: impl IntoIterator<Item = (&'a str, &'a str)>) -> Vec<(S
 
 /// The `.ron` files in `dir` as (name, text) pairs, sorted by name: the
 /// catalog's sources when reading `kestrel/app/vfx/` from disk.
-// Only tests read the folder until the Effects menu's Reload button does.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn read_dir(dir: &Path) -> std::io::Result<Vec<(String, String)>> {
     let mut files = Vec::new();
     for entry in std::fs::read_dir(dir)? {

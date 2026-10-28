@@ -162,7 +162,16 @@ effects from these files; `--vfx legacy` (the default) draws the
 hand-written ones in `effects.rs`. Runs without GPU particles (simulation,
 the web build for now) always use the legacy effects.
 
+Effects → **Reload effect files** rereads this folder from the source tree,
+in runs started with `bazel run` (it finds the folder through
+`BUILD_WORKSPACE_DIRECTORY`; otherwise the button is off and says why).
+Effects that load replace the running ones in place, and their pools are
+rebuilt. A file that fails keeps its last good version; its error shows in
+the window and in the log. New files appear; an effect whose file was
+deleted stays loaded until a restart. Add new files to `vfx::FILES` too, or
+the next start won't have them.
+
 ## Planned
 
-Decals, live reload, a debug-menu list that fires any effect, and a schema doc like `docs/character-definition.md`;
+Decals, a debug-menu list that fires any effect, and a schema doc like `docs/character-definition.md`;
 see `kestrel/todo/vfx.md`.

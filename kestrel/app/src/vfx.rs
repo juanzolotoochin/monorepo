@@ -11,6 +11,7 @@ use bevy_sprinkles::prelude::{Particles3d, ParticlesAsset, ParticlesCollider3D, 
 use debug_ui::{egui, ImguiManager, ImguiMenu, MenuHandle, MenuId, MenuSpec, UiOutbox};
 use serde::Deserialize;
 use service::{AppLayer, AppServices, Phase, Service, WorldScoped, WorldState};
+use std::path::PathBuf;
 
 pub mod catalog;
 mod ron_tree;
@@ -113,11 +114,32 @@ struct Effect {
     lights: Vec<LightLayer>,
 }
 
+impl Effect {
+    /// `file` as effect `name`. Its particles replace the asset behind
+    /// `handle` in place (a reload: running systems see `Modified` and
+    /// rebuild their pools) or go into a new asset.
+    fn new(name: String, file: EffectFile, handle: Option<Handle<ParticlesAsset>>, assets: Option<&mut Assets<ParticlesAsset>>) -> Self {
+        let emitters = file.particles.emitters.len();
+        let particles = assets.map(|assets| match handle {
+            Some(handle) => {
+                assets.insert(handle.id(), file.particles).expect("a live effect handle");
+                handle
+            }
+            None => assets.add(file.particles),
+        });
+        Effect { name, particles, emitters, lights: file.lights }
+    }
+}
+
 /// The effect library and backend switch (App layer).
 #[derive(Resource)]
 pub struct Vfx {
     pub backend: VfxBackend,
     effects: Vec<Effect>,
+    /// Where Reload reads the files, or why it can't.
+    source: Result<PathBuf, String>,
+    /// The last reload's outcome, shown in the Effects window.
+    reload: Option<ReloadReport>,
     menu: Option<MenuHandle>,
 }
 
@@ -131,13 +153,11 @@ impl Service for Vfx {
             .into_iter()
             .map(|(name, file)| {
                 let file = file.unwrap_or_else(|e| panic!("{e}"));
-                let emitters = file.particles.emitters.len();
-                let particles = world.get_resource_mut::<Assets<ParticlesAsset>>().map(|mut assets| assets.add(file.particles));
-                Effect { name, particles, emitters, lights: file.lights }
+                Effect::new(name, file, None, world.get_resource_mut::<Assets<ParticlesAsset>>().as_deref_mut())
             })
             .collect();
         let menu = ImguiManager::register::<Vfx>(world).map_err(|e| warn!("{e}")).ok();
-        Vfx { backend, effects, menu }
+        Vfx { backend, effects, source: source_dir(), reload: None, menu }
     }
 
     fn shutdown(self, world: &mut World) {
@@ -266,6 +286,80 @@ fn place_floor(mut commands: Commands, floors: Query<(), With<Floor>>) {
     }
 }
 
+/// The effect files in the source tree, for Effects → Reload. Only runs
+/// started with `bazel run` know where that is. Not gated on debug builds:
+/// the builds people run (and measure) are `-c opt`.
+fn source_dir() -> Result<PathBuf, String> {
+    let workspace = std::env::var_os("BUILD_WORKSPACE_DIRECTORY").ok_or("needs `bazel run` (BUILD_WORKSPACE_DIRECTORY unset)")?;
+    let dir = PathBuf::from(workspace).join("kestrel/app/vfx");
+    if !dir.is_dir() {
+        return Err(format!("can't find {}", dir.display()));
+    }
+    Ok(dir)
+}
+
+/// What a reload did, shown in the Effects window.
+#[derive(Debug, Default)]
+struct ReloadReport {
+    /// Counts reloads, so a repeated one shows.
+    number: u32,
+    loaded: Vec<String>,
+    /// Each failed file's error; that effect keeps its last good version.
+    errors: Vec<String>,
+    /// Effects whose file is gone: they stay loaded until a restart.
+    kept: Vec<String>,
+}
+
+/// Rereads the effect files from the source tree (Effects → Reload). Runs
+/// from the UI outbox in `Update`, so the `Modified` asset events reach
+/// sprinkles' pool rebuild in this frame's `PostUpdate`.
+fn reload(world: &mut World) {
+    world.resource_scope(|world, mut vfx: Mut<Vfx>| {
+        let read = vfx.source.clone().and_then(|dir| catalog::read_dir(&dir).map_err(|e| format!("{}: {e}", dir.display())));
+        let mut report = match read {
+            Ok(files) => {
+                let results = catalog::load(files.iter().map(|(n, t)| (n.as_str(), t.as_str())));
+                apply_reload(&mut vfx.effects, results, world.get_resource_mut::<Assets<ParticlesAsset>>().as_deref_mut())
+            }
+            Err(e) => ReloadReport { errors: vec![e], ..default() },
+        };
+        for error in &report.errors {
+            warn!("Effects reload: {error} (keeping the last good version)");
+        }
+        report.number = vfx.reload.as_ref().map_or(0, |r| r.number) + 1;
+        vfx.reload = Some(report);
+    });
+}
+
+/// Replaces each effect that loaded and adds new ones. An effect whose file
+/// failed, or is gone, keeps its last good version.
+fn apply_reload(
+    effects: &mut Vec<Effect>,
+    results: Vec<(String, Result<EffectFile, String>)>,
+    mut assets: Option<&mut Assets<ParticlesAsset>>,
+) -> ReloadReport {
+    let kept = effects.iter().filter(|e| !results.iter().any(|(n, _)| *n == e.name)).map(|e| e.name.clone()).collect();
+    let mut report = ReloadReport { kept, ..default() };
+    for (name, file) in results {
+        let file = match file {
+            Ok(file) => file,
+            Err(e) => {
+                report.errors.push(e);
+                continue;
+            }
+        };
+        report.loaded.push(name.clone());
+        let index = effects.iter().position(|e| e.name == name);
+        let handle = index.and_then(|i| effects[i].particles.clone());
+        let effect = Effect::new(name, file, handle, assets.as_deref_mut());
+        match index {
+            Some(i) => effects[i] = effect,
+            None => effects.push(effect),
+        }
+    }
+    report
+}
+
 const MENUS: &[MenuSpec] = &[MenuSpec::new("vfx_backend", "Effects", "VFX backend")];
 
 impl ImguiMenu for Vfx {
@@ -281,6 +375,26 @@ impl ImguiMenu for Vfx {
             ui.add_enabled_ui(gpu, |ui| ui.radio_value(&mut choice, VfxBackend::Sprinkles, "Sprinkles (effect files)"));
             if choice != self.backend {
                 world.resource_mut::<UiOutbox>().push(move |world| world.resource_mut::<Vfx>().backend = choice);
+            }
+            ui.separator();
+            let button = ui.add_enabled(self.source.is_ok(), egui::Button::new("Reload effect files"));
+            if let Err(why) = &self.source {
+                ui.weak(format!("Reload {why}."));
+            }
+            if button.clicked() {
+                world.resource_mut::<UiOutbox>().push(reload);
+            }
+            if let Some(report) = &self.reload {
+                ui.label(format!("Reload {}: {} loaded, {} failed", report.number, report.loaded.len(), report.errors.len()));
+                for error in &report.errors {
+                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                }
+                if !report.errors.is_empty() {
+                    ui.weak("Failed files keep their last good version.");
+                }
+                if !report.kept.is_empty() {
+                    ui.weak(format!("No file anymore, kept until restart: {}", report.kept.join(", ")));
+                }
             }
             ui.separator();
             for effect in &self.effects {
@@ -315,5 +429,38 @@ mod tests {
     fn an_effect_that_never_ends_is_an_error() {
         let (name, source) = FILES[0];
         assert!(parse(name, &source.replacen("one_shot: true", "one_shot: false", 1)).is_err());
+    }
+
+    #[test]
+    fn a_reload_replaces_good_files_in_place_and_keeps_the_last_good_version() {
+        let mut assets = Assets::<ParticlesAsset>::default();
+        let mut effects: Vec<Effect> =
+            catalog::load(FILES.iter().copied()).into_iter().map(|(n, f)| Effect::new(n, f.unwrap(), None, Some(&mut assets))).collect();
+        let handle = |effects: &[Effect], name: &str| effects.iter().find(|e| e.name == name).unwrap().particles.clone().unwrap();
+        let (stone, arc) = (handle(&effects, "impact_stone"), handle(&effects, "arc"));
+        let source = |name: &str| FILES.iter().find(|(n, _)| *n == name).unwrap().1;
+
+        // The arc changes, the stone breaks, the laser's file is gone and a new one appears.
+        let arc_text = source("arc").replace("lifetime: 0.13", "lifetime: 0.5");
+        let stone_text = source("impact_stone").replace("fade_seconds", "fade_secs");
+        let sources = [("arc", arc_text.as_str()), ("impact_stone", stone_text.as_str()), ("spark", r#"(base: "impact_stone")"#)];
+        let report = apply_reload(&mut effects, catalog::load(sources), Some(&mut assets));
+
+        assert_eq!(report.loaded, ["arc"]);
+        assert_eq!(report.errors.len(), 2, "{:?}", report.errors);
+        assert!(report.errors[0].starts_with("vfx/impact_stone.ron"), "{}", report.errors[0]);
+        assert_eq!(report.kept, ["laser_bolt"]);
+        // The arc's asset changed behind the same handle; the stone kept its own.
+        assert_eq!(handle(&effects, "arc"), arc);
+        assert_eq!(assets.get(&arc).unwrap().emitters[0].time.lifetime, 0.5);
+        assert_eq!(handle(&effects, "impact_stone"), stone);
+        assert_eq!(assets.get(&stone).unwrap().emitters.len(), 3);
+        assert_eq!(effects.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["impact_stone", "arc", "laser_bolt"]);
+
+        // A new file that loads is added.
+        let report = apply_reload(&mut effects, catalog::load([("impact_stone", source("impact_stone")), ("spark", r#"(base: "impact_stone")"#)]), Some(&mut assets));
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert_eq!(effects.last().unwrap().name, "spark");
+        assert!(effects.last().unwrap().particles.is_some());
     }
 }
