@@ -194,11 +194,26 @@ instead:
   frame, so it is sorted once more.
 - **What isn't pooled.** Emitters in local space, with trails, sub-emitters
   (either side) or in editor mode keep the upstream path, as does
-  everything with `KESTREL_SPRINKLES_NO_POOL=1` (spike A/B switch). Live
-  edits to a pooled emitter's mesh, material or particle count don't reach
-  existing pools (the `sync_*` systems only handle unpooled emitters), and
-  pools are never freed. Neither matters for Kestrel's compiled-in effect
-  files; both would for an editor.
+  everything with `KESTREL_SPRINKLES_NO_POOL=1` (spike A/B switch).
+- **Dropping pools** (2026-10-28). A pool empty for `IDLE_SECONDS` (5 s of
+  game time) is dropped in `maintain_pools`: its draw entity is despawned
+  (the material goes with it, the buffers with their last handles), and a
+  frame later its cached meshes leave `ParticleMeshCache` if nothing else
+  holds them (`release_unused`, by the handle's strong count). The first
+  pool of each (asset, emitter) is kept: the chained pools hold most of the
+  memory, and an effect fired every few seconds would otherwise build a new
+  pool (buffers, material, upload) per shot.
+- **Asset changes** (2026-10-28). The `sync_*` systems only update unpooled
+  emitters, and a pool's slot size, mesh and material come from the asset.
+  On `AssetEvent::Modified` or `Removed` for a `ParticlesAsset`,
+  `rebuild_changed_pools` (`PostUpdate`, after `AssetEventSystems`) drops
+  the asset's pools and restarts every system with a burst in them: its
+  emitter and collider entities are despawned and its
+  `ParticleSystemRuntime` removed, so it is set up again next frame on new
+  pools and plays from its start. A burst left on an old pool would be
+  simulated with the new particle count over the old slots. A change made
+  after the events flush (later in `PostUpdate`, or in `Last`) is seen a
+  frame late; change assets in `Update`.
 
 Keep this list current as the fork grows.
 
