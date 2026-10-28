@@ -53,11 +53,13 @@ used slots" come after the blood port.
 - **Status:** open
 - **Why:** they are plain bursts of cubes, still CPU particles.
 - **What to do:** see the blood sketch in the handoff ("Authoring"):
-  two droplet emitters; a world-space velocity added at spawn (legacy
-  adds 1.5 m/s up after normalizing) or an approximation; floor splats as
-  a separate effect triggered at the floor point, since they lie under the
-  cut. Deflection is a plain spray. The trial burst needs 24 cubes evenly
-  on a ring (an emission option) or random directions. Measure blood's
+  two droplet emitters. Decided (2026-10-28): a new fork emitter field,
+  a world-space velocity added at spawn, for legacy's 1.5 m/s upward
+  after normalizing; the floor splats as a separate `blood_splat` effect
+  that game code triggers at the floor point under the cut (flat box,
+  uniform scale range); the trial burst's 24 cubes from a new fork
+  emission option that places N particles at even angles on a ring.
+  Deflection is a plain spray. Measure blood's
   3 s splats on the Deck: they hold pool slots longer than any effect so
   far.
 - **Where:** `kestrel/app/vfx/`, `kestrel/app/src/effects.rs`,
@@ -243,10 +245,26 @@ used slots" come after the blood port.
   desktop's 200 impacts/s frame from 45.6 to 26.8 ms. Pooled, it's 4 extra
   draws per pool, so this is now a look question more than a cost one.
   Legacy sparks do cast shadows.
-- **What to do:** compare captures with and without `shadow_caster: false`
-  on sparks and debris; pick a default for effect files.
+- **What to do:** decided (2026-10-28): small particles don't cast
+  shadows. Set `shadow_caster: false` on sparks and debris in
+  `impact_stone.ron` (and the materials based on it), and say in the
+  README that small particles go without shadows.
 - **Where:** `kestrel/app/vfx/impact_stone.ron`, `kestrel/app/vfx/README.md`.
 - **Found in:** VFX spike step 4.
+
+## Revisit particle shadows per effect
+
+- **Status:** open (low priority)
+- **Why:** small particles go without shadows by default (see "Decide
+  whether small impact particles cast shadows"), but some effects may
+  read better with them: large debris, slow chunks, effects near the
+  camera, or scenes with strong directional light.
+- **What to do:** once more effects are ported, look at each with and
+  without `shadow_caster` in a few scenes and turn shadows back on where
+  they help; note the choice in the effect file. Check the cost on the
+  Deck if many shadow-casting pools are live at once.
+- **Where:** `kestrel/app/vfx/*.ron`, `kestrel/app/vfx/README.md`.
+- **Found in:** session of 2026-10-28 (shadow default decision).
 
 ## Find why reusing GPU objects is slower on the Deck at 200/s
 
