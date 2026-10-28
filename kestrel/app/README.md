@@ -25,6 +25,13 @@ the generated files in `bazel-bin/kestrel/app/web/web_bundle` can be served
 from any host. The reusable build and server rule is documented in
 `bazel/web/README.md`.
 
+The page's query string takes the place of the command line: each
+`key=value` is `--key value` and a bare `key` is `--key`, so
+`http://127.0.0.1:8000/?vfx=sprinkles&scene=boulder-lab` starts like
+`demo --vfx sprinkles --scene boulder-lab`. Flags that read or write files
+(`--demo-script`, `--frames-dir`, `--report` and the like) are native only
+and ignored. A bad option is reported in the browser console.
+
 ## Share an optimized build with developers
 
 `//kestrel/app:share_to_devs` builds optimized Linux x64 and Windows x64

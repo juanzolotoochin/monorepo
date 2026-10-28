@@ -218,19 +218,6 @@ used slots" come after the blood port.
   `kestrel/app/README.md`.
 - **Found in:** VFX spike step 4.
 
-## Pass options to the web build from the URL
-
-- **Status:** open
-- **Why:** the wasm build has no command line, so `--vfx sprinkles` and
-  the other `Options` flags can't be given in the browser; step 5 had to
-  switch the backend in the debug menu (Effects → VFX backend) by hand.
-- **What to do:** on wasm32, turn the page's query string (for example
-  `?vfx=sprinkles`) into the arguments `control::Options::from_args`
-  reads. Flags that need files (`--demo-script`, `--frames-dir`) stay
-  native only.
-- **Where:** `kestrel/app/src/main.rs`, `kestrel/app/src/control/mod.rs`.
-- **Found in:** VFX spike step 5.
-
 ## Check the web build in Firefox, Safari and on Linux
 
 - **Status:** open
@@ -323,6 +310,28 @@ used slots" come after the blood port.
 - **Found in:** porting the impact materials (branch kestrel-vfx-ports).
 
 ## Done
+
+## Pass options to the web build from the URL
+
+- **Status:** done (PR pending, branch kestrel-vfx-ports)
+- **Why:** the wasm build has no command line, so `--vfx sprinkles` and
+  the other `Options` flags can't be given in the browser; step 5 had to
+  switch the backend in the debug menu (Effects → VFX backend) by hand.
+- **What to do:** on wasm32, turn the page's query string (for example
+  `?vfx=sprinkles`) into the arguments `control::Options::from_args`
+  reads. Flags that need files (`--demo-script`, `--frames-dir`) stay
+  native only.
+- **What was done:** `Options::args_from_query` turns `?key=value` into
+  `--key value` and a bare `key` into `--key` (percent-decoded, `+` is a
+  space, file flags dropped) after a program name; on wasm32 `main` reads
+  `location.search` through wasm-bindgen and parses that like native
+  arguments, so `from_args` stays the one parser. A bad option goes to the
+  browser console (`exit_with`). Test:
+  `control::tests::query_strings_become_arguments`. Documented in
+  `kestrel/app/README.md` ("Browser build"); the web target builds, not
+  yet opened in a browser.
+- **Where:** `kestrel/app/src/main.rs`, `kestrel/app/src/control/mod.rs`.
+- **Found in:** VFX spike step 5.
 
 ## Run the stress matrix on the Deck with one command
 
