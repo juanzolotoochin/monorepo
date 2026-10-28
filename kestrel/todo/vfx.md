@@ -6,18 +6,6 @@ The spike's plan, decisions and evaluation are in
 order; "Simulate a pool's bursts in one dispatch" and "Draw only a pool's
 used slots" come after the blood port.
 
-## Write the effect file schema doc
-
-- **Status:** open
-- **Why:** AI and people author effect files from the schema; today it is
-  `app/vfx/README.md` plus the fork's Rust doc comments.
-- **What to do:** a doc like `docs/character-definition.md`: one complete
-  file read from the outside in, our layers, the sprinkles fields we use
-  and their units, trigger parameters, pitfalls (one scalar scale,
-  curves). Link it from `docs/README.md`.
-- **Where:** `kestrel/docs/`, `kestrel/app/vfx/README.md`.
-- **Found in:** VFX spike handoff, step 6.
-
 ## Port the impact materials
 
 - **Status:** open
@@ -310,6 +298,25 @@ used slots" come after the blood port.
 - **Found in:** effect catalog work (sRGB colors), 2026-10-28.
 
 ## Done
+
+## Write the effect file schema doc
+
+- **Status:** done (PR pending, branch kestrel-vfx-ports)
+- **Why:** AI and people author effect files from the schema; today it is
+  `app/vfx/README.md` plus the fork's Rust doc comments.
+- **What to do:** a doc like `docs/character-definition.md`: one complete
+  file read from the outside in, our layers, the sprinkles fields we use
+  and their units, trigger parameters, pitfalls (one scalar scale,
+  curves). Link it from `docs/README.md`.
+- **What was done:** `docs/effect-definition.md`: `impact_stone` read
+  from the outside in, both layers, the emitter fields we use with units,
+  trigger parameters, sRGB colors, `base` merge rules with an example,
+  pitfalls (effects must end, one scalar scale, curves, pooling
+  eligibility, culling box), adding a file and the Reload/Fire loop.
+  Linked from `docs/README.md` and the site's nav; `app/vfx/README.md`
+  now points there.
+- **Where:** `kestrel/docs/`, `kestrel/app/vfx/README.md`.
+- **Found in:** VFX spike handoff, step 6.
 
 ## Build an effect catalog
 

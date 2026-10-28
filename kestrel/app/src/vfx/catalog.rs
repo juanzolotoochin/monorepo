@@ -1,5 +1,6 @@
 //! The effect catalog: every file in `kestrel/app/vfx/` by name, with `base`
-//! merged in (README.md, "Base"). The file name is the effect's ID.
+//! merged in (`docs/effect-definition.md`, "Variants reuse an effect"). The
+//! file name is the effect's ID.
 //!
 //! A file with a `base` is merged as a RON tree (`ron_tree.rs`) over its
 //! base's merged tree; the result is printed and parsed by `vfx::parse` like
