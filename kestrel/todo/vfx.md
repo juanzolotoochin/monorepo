@@ -136,6 +136,10 @@ used slots" come after the blood port.
   the `arc.ron` port (emitters default to `shadow_caster: true`) shows none
   in the combat arena captures. The particle shadow pass may not place
   vertices from the particle buffer, or the shadow is just too faint.
+  Turning `shadow_caster` off for the stone impact's sparks and debris
+  (2026-10-28) changed no pixel in the boulder-lab hit frames (largest
+  difference 6 of 255, in 6 pixels), another hint that particle shadows
+  don't draw.
 - **What to do:** capture a big shadow-casting emitter in a lit scene;
   check the shadow prepass path of `particle_material.wesl`.
 - **Where:** `kestrel/vfx/sprinkles/src/shaders/particle_material.wesl`,
