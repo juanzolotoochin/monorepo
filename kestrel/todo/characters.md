@@ -157,6 +157,23 @@
   `threats_self_update`), `action.rs`.
 - **Found in:** threat characters (`kestrel/THREAT_CHARACTERS_HANDOFF.md`, D4).
 
+## Revisit character inheritance with the RON tree
+
+- **Status:** open (low priority)
+- **Why:** a character file's `base` is merged through all-`Option` mirror
+  structs (`CharacterFile`, `VehicleFile`, ...) and the `merge_fields!`
+  macro, so every new field is written twice. Effect files merge `base`
+  as a RON tree that keeps struct and variant names
+  (`app/src/vfx/ron_tree.rs`) and then parse the merged text strictly.
+- **What to do:** once the effect RON tree has proved itself, consider
+  merging character files the same way and dropping the mirror structs.
+  Keep the typed "missing X (here or in a base)" errors and the range
+  checks. Character data enters simulation hashes, so the merged result
+  must stay bit-identical (check the golden hashes).
+- **Where:** `kestrel/content/src/character.rs`,
+  `kestrel/app/src/vfx/ron_tree.rs`, `kestrel/docs/character-definition.md`.
+- **Found in:** effect catalog work, 2026-10-28.
+
 ## Done
 
 ### Follow a matched swing to its end

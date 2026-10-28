@@ -6,22 +6,6 @@ The spike's plan, decisions and evaluation are in
 order; "Simulate a pool's bursts in one dispatch" and "Draw only a pool's
 used slots" come after the blood port.
 
-## Build an effect catalog
-
-- **Status:** open
-- **Why:** effects should be listed, authored and changed the way
-  characters are. Today `vfx::FILES` is a hand-written list of
-  `include_str!` files, there is no inheritance, and every change to a
-  file is a rebuild.
-- **What to do:** load every file in `app/vfx/` by name (the file name is
-  the effect's ID), with strict loading as now; add `base` inheritance
-  like character files (nested sections merge, lists replace); pick one
-  color space for both layers; hot reload in debug builds; a debug-menu
-  list that fires any effect in front of the player.
-- **Where:** `kestrel/app/src/vfx.rs`, `kestrel/app/vfx/`,
-  `kestrel/app/BUILD.bazel`.
-- **Found in:** VFX spike handoff, step 6.
-
 ## Write the effect file schema doc
 
 - **Status:** open
@@ -307,7 +291,43 @@ used slots" come after the blood port.
 - **Where:** `kestrel/VFX_SPIKE_HANDOFF.md` (step 4, "Pool costs").
 - **Found in:** VFX pool costs (handoff, "Pool costs", 2026-10-28).
 
+## Write emissive as color times intensity
+
+- **Status:** open
+- **Why:** effect files are sRGB everywhere, so glowing `emissive` values
+  above 1 go through the sRGB curve too: linear 12 is written 2.9161,
+  which reads oddly and is hard to tune by hand.
+- **What to do:** write emissive as an sRGB color (0–1) plus a separate
+  intensity or strength the loader multiplies in linear space; convert the
+  three files and update the README's color paragraph. Keep the test that
+  walks the asset's color fields.
+- **Where:** `kestrel/app/src/vfx/catalog.rs` (`particles_to_linear`),
+  `kestrel/app/vfx/*.ron`, `kestrel/app/vfx/README.md`.
+- **Found in:** effect catalog work (sRGB colors), 2026-10-28.
+
 ## Done
+
+## Build an effect catalog
+
+- **Status:** done (PR pending, branch kestrel-vfx-pool-perf)
+- **Why:** effects should be listed, authored and changed the way
+  characters are. Today `vfx::FILES` is a hand-written list of
+  `include_str!` files, there is no inheritance, and every change to a
+  file is a rebuild.
+- **What to do:** load every file in `app/vfx/` by name (the file name is
+  the effect's ID), with strict loading as now; add `base` inheritance
+  like character files (nested sections merge, lists replace); pick one
+  color space for both layers; hot reload in debug builds; a debug-menu
+  list that fires any effect in front of the player.
+- **What was done:** `vfx::catalog` loads the compiled-in files by name
+  (a test checks the list against the folder), with `base` merged as a
+  RON tree that keeps names (emitters merge by `name`); colors are sRGB in
+  both layers; Effects → Reload rereads the folder in `bazel run` runs,
+  keeping the last good version of a file that fails; Effects → Fire
+  triggers any effect in front of the player.
+- **Where:** `kestrel/app/src/vfx.rs`, `vfx/catalog.rs`, `vfx/ron_tree.rs`,
+  `kestrel/app/vfx/`, `kestrel/app/BUILD.bazel`.
+- **Found in:** VFX spike handoff, step 6.
 
 ## Decide whether small impact particles cast shadows
 
