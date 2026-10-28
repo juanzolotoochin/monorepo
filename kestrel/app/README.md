@@ -160,6 +160,27 @@ bazel run --config=remote -c opt //kestrel/app:steamdeck -- --steam
 The Steam shortcut remains valid across updates. Steam must be running in
 Desktop Mode for the remote launch.
 
+### VFX stress matrix on the Deck
+
+To measure effect costs on the Deck (debug only, `src/vfx_stress.rs`), run
+from the repository root, with the Deck in Desktop Mode and the SSH setup
+above:
+
+```sh
+kestrel/app/deck_vfx_stress.sh deck_pools
+```
+
+It installs the game with `--install-only`, then runs `--vfx-stress` for
+each load (idle, 10/50/200 impacts/s, 8 lasers, 8 arcs/s and the two
+mixes) on the legacy and sprinkles backends, one at a time, fullscreen in
+the desktop session: 4200 frames each, the first 600 left out, about
+16 minutes in all. Reports are kept in `~/.local/opt/kestrel/vfx-stress/`
+on the Deck, copied to `kestrel-vfx-stress/<set>/` here, and printed as
+markdown tables by `vfx_stress_summary.py` (frame ms mean / p95 / p99 /
+max, then main, extract, GPU and render segments). Name loads after the
+set to run only those (`... deck_pools i200 mix200`); `BACKENDS=sprinkles`
+skips legacy and `EXTRA=max_seconds=120` adds spec keys.
+
 ## Run natively on Steam Frame
 
 The `:steamframe` target cross-builds the Linux ARM64 game while keeping the

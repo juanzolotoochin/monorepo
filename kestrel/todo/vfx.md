@@ -283,8 +283,13 @@ used slots" come after the blood port.
   impacts/s, lasers, arcs, both mixes) for legacy and sprinkles; compare
   with the handoff's pooled Deck table and the UHD 770 numbers in "Pool
   costs". Needs the Deck and a Linux host, or "Let the Steam Deck launcher
-  run from Windows" first.
-- **Where:** `kestrel/VFX_SPIKE_HANDOFF.md` (step 4, "Pool costs").
+  run from Windows" first. From the repository root on that host, with the
+  Deck in Desktop Mode: `kestrel/app/deck_vfx_stress.sh deck_pools`
+  installs the game, runs all 16 runs (4200 frames, 600 left out, as on the
+  desktop) and prints the tables; reports land in
+  `kestrel-vfx-stress/deck_pools/`. It hasn't been run yet.
+- **Where:** `kestrel/VFX_SPIKE_HANDOFF.md` (step 4, "Pool costs"),
+  `kestrel/app/deck_vfx_stress.sh`.
 - **Found in:** VFX pool costs (handoff, "Pool costs", 2026-10-28).
 
 ## Write emissive as color times intensity
@@ -318,6 +323,24 @@ used slots" come after the blood port.
 - **Found in:** porting the impact materials (branch kestrel-vfx-ports).
 
 ## Done
+
+## Run the stress matrix on the Deck with one command
+
+- **Status:** done (PR pending, branch kestrel-vfx-ports)
+- **Why:** the Deck runs so far copied a binary and a scratch script by
+  hand (handoff, step 4), and the tables came from a scratchpad script.
+- **What to do:** a script that installs the game on the Deck, runs every
+  load on both backends and prints the desktop matrix's tables.
+- **What was done:** `kestrel/app/deck_vfx_stress.sh <set> [loads...]`
+  installs with `//kestrel/app:steamdeck -- --install-only`, runs each
+  load through the Deck's `launch.sh` (fullscreen, desktop session) in one
+  SSH session, waits for the game's unit to exit, copies the reports back
+  and prints them with `kestrel/app/vfx_stress_summary.py` (the
+  scratchpad's `summarize.py`, same output, standard library only).
+  Documented in `kestrel/app/README.md`. Not run: no Deck here.
+- **Where:** `kestrel/app/deck_vfx_stress.sh`,
+  `kestrel/app/vfx_stress_summary.py`, `kestrel/app/README.md`.
+- **Found in:** VFX pool work, 2026-10-28.
 
 ## Port the impact materials
 
