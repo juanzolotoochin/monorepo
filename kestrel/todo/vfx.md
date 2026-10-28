@@ -70,15 +70,33 @@ used slots" come after the blood port.
 
 ## Match the arc's last frame
 
-- **Status:** open
-- **Why:** at 30 fps the sprinkles arc still draws small cubes on frame
-  117 of `arc_hits.json`, where legacy has none (about 700 pixels). Likely
-  the one-shot completion frame (`UPSTREAM.md`) or the shrink curve's end.
-- **What to do:** compare the particle age and scale at that frame;
-  shorten `arc.ron`'s lifetime or end the curve earlier if that's all.
-- **Where:** `kestrel/app/vfx/arc.ron`,
-  `kestrel/vfx/sprinkles/src/spawning.rs`.
-- **Found in:** VFX spike handoff, step 6.
+- **Status:** open (cause found, fix needs a decision)
+- **Why:** at 30 fps the sprinkles arc draws 4 frames and legacy's 3; the
+  extra one is small cubes after legacy's arc is gone (about 700 pixels).
+  Cause (2026-10-28, logged ages per frame with both backends, a warm and a
+  cold arc alike): both start drawing on the same frame, but legacy's cubes
+  are spawned before `update_effects` runs that frame, so they're aged once
+  before their first draw and draw at 1, 2 and 3 steps (scale 0.83, 0.62,
+  0.39), then reach 0.133 ≥ 0.13 and despawn. A sprinkles particle spawns
+  at age 0 at the end of its first step and draws at 0, 1, 2 and 3 steps
+  (1.0, 0.83, 0.62, 0.39): legacy's sequence one frame later, plus a
+  full-size first frame. Not the shrink curve (both end at 0.39), the
+  one-shot completion frame (the particles die in the shader at
+  age ≥ lifetime either way), pool zeroing or TAA.
+- **What to do:** decide whether a spawned particle is aged by the part of
+  its first step after its emission time, as Godot does (a burst emitted
+  at phase 0 ends its first step at age `dt`, and moves by `dt`). In
+  `particle_simulate.wesl` that's running `update_particle` with the
+  remaining time after `spawn_particle`; it changes every effect's first
+  frame (stone sprays, the laser bolt's spawn stub), so recapture all of
+  them, and the one-shot completion frame (`UPSTREAM.md`) may then be
+  unneeded. Shortening `arc.ron`'s lifetime instead would only match at
+  30 fps.
+- **Where:** `kestrel/vfx/sprinkles/src/shaders/particle_simulate.wesl`
+  (`spawn_particle`, `update_particle`), `spawning.rs`
+  (one-shot completion), `kestrel/app/vfx/arc.ron`.
+- **Found in:** VFX spike handoff, step 6. Reproduced with scratchpad
+  `perf/cap/arc2.json` (two arcs, frames 307–310 and 366–369).
 
 ## Decide on an effect editor
 
