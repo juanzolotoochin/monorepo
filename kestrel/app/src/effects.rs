@@ -196,28 +196,36 @@ pub fn laser_impact_seed(tick: u64, agent: u16) -> u32 {
         ^ (agent as u32).wrapping_mul(0x85eb_ca6b)
 }
 
+/// Sparks, debris, a flash and a light where something struck `kind`. The
+/// legacy path reads `FxAssets` from the world, so `_assets` is unused.
 pub fn impact(
     commands: &mut Commands,
-    assets: &FxAssets,
+    _assets: &FxAssets,
     position: Vec3,
     normal: Vec3,
     number: u32,
     kind: ImpactResponse,
 ) {
-    // VFX spike: the stone impact may come from its effect file instead
-    // (`vfx.rs`). The choice needs the world, so it is made as a command.
-    if kind == ImpactResponse::Stone {
-        commands.queue(move |world: &mut World| {
-            if crate::vfx::spawn(world, "impact_stone", crate::vfx::Trigger::new(position, normal).seed(number)) {
-                return;
-            }
-            let mut queue = bevy::ecs::world::CommandQueue::default();
-            legacy_impact(&mut Commands::new(&mut queue, world), world.resource::<FxAssets>(), position, normal, number, kind);
-            queue.apply(world);
-        });
-        return;
+    // With the sprinkles backend the impact comes from its material's effect
+    // file (`vfx.rs`). The choice needs the world, so it is made as a command.
+    commands.queue(move |world: &mut World| {
+        if crate::vfx::spawn(world, impact_effect(kind), crate::vfx::Trigger::new(position, normal).seed(number)) {
+            return;
+        }
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        legacy_impact(&mut Commands::new(&mut queue, world), world.resource::<FxAssets>(), position, normal, number, kind);
+        queue.apply(world);
+    });
+}
+
+/// The effect file that draws an impact on `kind`.
+fn impact_effect(kind: ImpactResponse) -> &'static str {
+    match kind {
+        ImpactResponse::Stone => "impact_stone",
+        ImpactResponse::Metal => "impact_metal",
+        ImpactResponse::Crystal => "impact_crystal",
+        ImpactResponse::Polymer => "impact_polymer",
     }
-    legacy_impact(commands, assets, position, normal, number, kind);
 }
 
 /// The hand-written impact: one CPU-moved entity per particle.

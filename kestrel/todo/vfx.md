@@ -6,20 +6,6 @@ The spike's plan, decisions and evaluation are in
 order; "Simulate a pool's bursts in one dispatch" and "Draw only a pool's
 used slots" come after the blood port.
 
-## Port the impact materials
-
-- **Status:** open
-- **Why:** only stone uses an effect file; Metal (also the laser's arrival
-  impact), Crystal and Polymer are still legacy.
-- **What to do:** `impact_metal.ron`, `impact_crystal.ron` and
-  `impact_polymer.ron` on `base: "impact_stone"` with the numbers from
-  `impact::response` (Polymer: no sparks, flash or light). Pick the file
-  by `ImpactResponse` in `effects::impact`. The struck target's emissive
-  flash and kick stay in Rust. Capture each against legacy.
-- **Where:** `kestrel/app/vfx/`, `kestrel/app/src/effects.rs`,
-  `impact.rs`.
-- **Found in:** VFX spike handoff, step 6 ("Authoring").
-
 ## Port blood, deflection and the trial burst
 
 - **Status:** open
@@ -297,7 +283,48 @@ used slots" come after the blood port.
   `kestrel/app/vfx/*.ron`, `kestrel/app/vfx/README.md`.
 - **Found in:** effect catalog work (sRGB colors), 2026-10-28.
 
+## Skip disabled emitters when spawning a burst
+
+- **Status:** open
+- **Why:** a variant turns a base's emitter off with `enabled: false`
+  (`impact_polymer.ron` turns off the sparks and the flash), but the fork
+  still spawns it: each burst claims a slot in that emitter's pool, which
+  is created and drawn (at least 8 slots) though nothing is simulated.
+- **What to do:** outside the editor, don't spawn disabled emitters
+  (`spawning.rs`); keep `emitter_entities` indexed by emitter for
+  sub-emitters, and make an effect whose emitters are all disabled finish
+  (or not spawn its particle system in `vfx::spawn`). Drop the pitfall
+  from `docs/effect-definition.md` after.
+- **Where:** `kestrel/vfx/sprinkles/src/spawning.rs`, `runtime.rs`
+  (`check_particle_system_finished`), `kestrel/app/src/vfx.rs`.
+- **Found in:** porting the impact materials (branch kestrel-vfx-ports).
+
 ## Done
+
+## Port the impact materials
+
+- **Status:** done (PR pending, branch kestrel-vfx-ports)
+- **Why:** only stone uses an effect file; Metal (also the laser's arrival
+  impact), Crystal and Polymer are still legacy.
+- **What to do:** `impact_metal.ron`, `impact_crystal.ron` and
+  `impact_polymer.ron` on `base: "impact_stone"` with the numbers from
+  `impact::response` (Polymer: no sparks, flash or light). Pick the file
+  by `ImpactResponse` in `effects::impact`. The struck target's emissive
+  flash and kick stay in Rust. Capture each against legacy.
+- **What was done:** the three files on `base: "impact_stone"`: counts,
+  speeds (`speed × 0.5` to `× 1.5`), spark, debris and light colors and
+  light intensity from `impact::response` and `FxAssets` (`scene.rs`),
+  linear emissive converted to sRGB. Metal's sparks get an 8 m culling
+  box for their 16.5 m/s. `effects::impact` picks the file by
+  `ImpactResponse` (`impact_effect`). Captures of each material in
+  boulder-lab and the laser pit's arrival, legacy against sprinkles, match
+  in color, count, timing, flash and light; as with stone, the sprinkles
+  sprays are a little tighter (45° cone against legacy's random box), and
+  legacy's debris chips cast floor shadows the ported ones don't
+  (`shadow_caster: false`, decided).
+- **Where:** `kestrel/app/vfx/`, `kestrel/app/src/effects.rs`,
+  `impact.rs`.
+- **Found in:** VFX spike handoff, step 6 ("Authoring").
 
 ## Write the effect file schema doc
 

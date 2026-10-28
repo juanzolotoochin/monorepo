@@ -22,6 +22,10 @@ read by the simulation, and effects are view-only. List every file in
 
 - `impact_stone.ron`: a blade or dig hitting stone (`effects::impact`).
   Seeded by the impact's number.
+- `impact_metal.ron`, `impact_crystal.ron`, `impact_polymer.ron`: the
+  other `ImpactResponse` materials, each `base: "impact_stone"` with the
+  numbers from `impact::response`. Metal is also the laser's arrival
+  impact. Polymer has no sparks, flash or light.
 - `arc.ron`: the arc coil's discharge (`effects::arc`): `Segment` from the
   coil to the target, 9 cubes per meter.
 - `laser_bolt.ron`: the laser's bolt (`effects::emit_lasers`): one bar at

@@ -1,0 +1,45 @@
+// A blade striking crystal: blue sparks, glowing blue shards, a contact flash
+// and a blue light. Port of the hand-written `effects::impact` for
+// `ImpactResponse::Crystal` (numbers from `impact::response`). The format is
+// in docs/effect-definition.md.
+(
+    version: 1,
+    base: "impact_stone",
+    particles: (
+        name: "impact_crystal",
+        emitters: [
+            (
+                name: "sparks",
+                draw_pass: (material: Standard((
+                    // Ice blue, glowing for bloom: linear (2.16, 7.8, 12.0).
+                    base_color: (0.18, 0.65, 1.0, 1.0),
+                    emissive: (1.3991, 2.4279, 2.9161, 1.0),
+                ))),
+                emission: (particles_amount: 20),
+                velocities: (initial_velocity: (min: 3.0, max: 9.0)),
+            ),
+            (
+                name: "debris",
+                draw_pass: (material: Standard((
+                    // Shards that glow a little: linear emissive (0.12, 0.75, 1.5).
+                    base_color: (0.08, 0.5, 1.0, 1.0),
+                    emissive: (0.3811, 0.8808, 1.1942, 1.0),
+                    perceptual_roughness: 0.5,
+                    metallic: 0.0,
+                ))),
+                emission: (particles_amount: 16),
+                velocities: (initial_velocity: (min: 3.0, max: 9.0)),
+            ),
+            (
+                name: "flash",
+                draw_pass: (material: Standard((
+                    base_color: (0.18, 0.65, 1.0, 1.0),
+                    emissive: (1.3991, 2.4279, 2.9161, 1.0),
+                ))),
+            ),
+        ],
+    ),
+    lights: [
+        (color: (0.18, 0.65, 1.0), intensity: 28000.0, range: 4.5, radius: 0.15, offset: 0.2, fade_seconds: 0.1),
+    ],
+)

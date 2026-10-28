@@ -1,7 +1,8 @@
 //! Authored effects: one RON file per effect in `kestrel/app/vfx/` (format in
-//! its README.md), drawn by our fork of sprinkles (`kestrel/vfx/sprinkles`).
-//! This is the VFX spike (`kestrel/VFX_SPIKE_HANDOFF.md`): the stone impact,
-//! the arc and the laser bolt have files so far, and `VfxBackend` switches
+//! `kestrel/docs/effect-definition.md`), drawn by our fork of sprinkles
+//! (`kestrel/vfx/sprinkles`).
+//! This is the VFX spike (`kestrel/VFX_SPIKE_HANDOFF.md`): the impacts, the
+//! arc and the laser bolt have files so far, and `VfxBackend` switches
 //! between them and the hand-written effects in `effects.rs`.
 //!
 //! Effects are view-only. Nothing here enters the simulation or its hashes:
@@ -23,6 +24,9 @@ pub const FORMAT_VERSION: u32 = 1;
 /// like the rest of Kestrel's data; a test checks the list against the folder.
 pub const FILES: &[(&str, &str)] = &[
     ("impact_stone", include_str!("../vfx/impact_stone.ron")),
+    ("impact_metal", include_str!("../vfx/impact_metal.ron")),
+    ("impact_crystal", include_str!("../vfx/impact_crystal.ron")),
+    ("impact_polymer", include_str!("../vfx/impact_polymer.ron")),
     ("arc", include_str!("../vfx/arc.ron")),
     ("laser_bolt", include_str!("../vfx/laser_bolt.ron")),
 ];
@@ -185,7 +189,7 @@ impl Service for Vfx {
 
 /// What an effect is triggered with. Only `position` and `normal` are
 /// required; the rest are per-trigger parameters the effect file may use
-/// (README.md, "Trigger parameters").
+/// (`docs/effect-definition.md`, "Trigger parameters").
 #[derive(Clone, Copy, Debug)]
 pub struct Trigger {
     pub position: Vec3,
@@ -478,8 +482,10 @@ mod tests {
     #[test]
     fn a_reload_replaces_good_files_in_place_and_keeps_the_last_good_version() {
         let mut assets = Assets::<ParticlesAsset>::default();
+        // Three effects, none built on another.
+        let files = FILES.iter().copied().filter(|(n, _)| ["impact_stone", "arc", "laser_bolt"].contains(n));
         let mut effects: Vec<Effect> =
-            catalog::load(FILES.iter().copied()).into_iter().map(|(n, f)| Effect::new(n, f.unwrap(), None, Some(&mut assets))).collect();
+            catalog::load(files).into_iter().map(|(n, f)| Effect::new(n, f.unwrap(), None, Some(&mut assets))).collect();
         let handle = |effects: &[Effect], name: &str| effects.iter().find(|e| e.name == name).unwrap().particles.clone().unwrap();
         let (stone, arc) = (handle(&effects, "impact_stone"), handle(&effects, "arc"));
         let source = |name: &str| FILES.iter().find(|(n, _)| *n == name).unwrap().1;
