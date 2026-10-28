@@ -297,14 +297,15 @@ pub struct ExtractedEmitterData {
 }
 
 impl ExtractedEmitterData {
-    /// Kestrel: a pool's sort over all its slots; nothing to simulate.
+    /// Kestrel: a pool's sort over the slots it draws; nothing to simulate.
     fn pool_sort(pool: &crate::pool::Pool, camera_position: Vec3, camera_forward: Vec3) -> Self {
         ExtractedEmitterData {
             uniform_steps: Vec::new(),
             particle_buffer_handle: pool.buffers.particle_buffer.clone(),
             indices_buffer_handle: pool.buffers.indices_buffer.clone(),
             sorted_particles_buffer_handle: pool.buffers.sorted_particles_buffer.clone(),
-            amount: pool.buffers.amount,
+            // Only the slots the pool draws (`pool::drawn_slots`).
+            amount: pool.drawn * pool.amount,
             draw_order: pool.draw_order,
             camera_position: camera_position.into(),
             camera_forward: camera_forward.into(),
@@ -924,7 +925,7 @@ pub fn extract_particle_systems(
         ));
     }
 
-    // Kestrel: one sort per pool in use, over all its slots, and the byte
+    // Kestrel: one sort per pool in use, over the slots it draws, and the byte
     // ranges of slots freed this frame, zeroed before the simulation.
     for pool in pools.pools.values().flatten().filter(|p| p.used > 0 || p.freed_this_frame) {
         extracted.emitters.push((pool.entity, ExtractedEmitterData::pool_sort(pool, camera_position, camera_forward)));

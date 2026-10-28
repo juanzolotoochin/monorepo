@@ -11,6 +11,12 @@
 //! and runtime (time steps, seed, trigger), simulates only its slot (the
 //! `slot_offset` uniform) and frees the slot when it despawns. The freed
 //! range is zeroed before the next draw. A full pool chains a bigger one.
+//!
+//! Bursts take the lowest free slot, and a pool draws (and sorts) only up to
+//! its highest used slot, rounded up to a power of two ([`drawn_slots`]),
+//! with a mesh of that many slots: the mesh's particle indices read the
+//! sorted buffer in order, so a smaller mesh draws the first slots, and
+//! every live particle is in them.
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -20,8 +26,9 @@ use bevy::{
     render::storage::ShaderBuffer,
 };
 
-use crate::asset::{EmitterData, ParticlesAsset};
+use crate::asset::{EmitterData, ParticleMesh, ParticlesAsset};
 use crate::material::ParticleEmitterUniforms;
+use crate::mesh::ParticleMeshCache;
 use crate::runtime::{ParticleBufferHandle, ParticleData};
 
 /// Whether emitters that allow it are pooled (the default).
@@ -41,6 +48,15 @@ pub fn enabled() -> bool {
 /// [`MAX_CAPACITY`].
 const FIRST_CAPACITY: u32 = 32;
 const MAX_CAPACITY: u32 = 256;
+/// The fewest slots a pool draws.
+const MIN_DRAWN: u32 = 8;
+
+/// How many slots a pool of `capacity` draws when its highest used slot is
+/// `high - 1`: a power of two, so a pool needs at most a few meshes (about
+/// twice its full mesh in all).
+pub(crate) fn drawn_slots(high: u32, capacity: u32) -> u32 {
+    high.next_power_of_two().max(MIN_DRAWN).min(capacity)
+}
 
 /// Whether emitter `index` of `asset` can be pooled: world space, no trails,
 /// no sub-emitters either way.
@@ -75,8 +91,14 @@ pub(crate) struct Pool {
     pub(crate) buffers: ParticleBufferHandle,
     /// The material's uniforms, rewritten each frame with the frame's time step.
     pub(crate) uniforms: ParticleEmitterUniforms,
-    free: Vec<u32>,
+    /// The emitter's particle mesh, to build the pool's smaller meshes.
+    mesh: ParticleMesh,
+    /// Per slot, whether a burst holds it.
+    occupied: Vec<bool>,
     pub(crate) used: u32,
+    /// How many slots, from the first, are drawn and sorted; set each frame
+    /// in [`maintain_pools`].
+    pub(crate) drawn: u32,
     /// Whether a slot was freed this frame: the pool is still drawn this
     /// frame, so it must still be sorted (with the freed slots zeroed).
     pub(crate) freed_this_frame: bool,
@@ -98,11 +120,17 @@ impl Pool {
             draw_order,
             buffers,
             uniforms,
-            // Lowest slots first.
-            free: (0..capacity).rev().collect(),
+            mesh: emitter.draw_pass.mesh.clone(),
+            occupied: vec![false; capacity as usize],
             used: 0,
+            drawn: capacity,
             freed_this_frame: false,
         }
+    }
+
+    /// One past the highest used slot (0 if none is).
+    fn high(&self) -> u32 {
+        self.occupied.iter().rposition(|&o| o).map_or(0, |i| i as u32 + 1)
     }
 }
 
@@ -121,7 +149,7 @@ impl ParticlePools {
     /// given the new pool's capacity) if every pool is full.
     pub(crate) fn claim(&mut self, key: PoolKey, create: impl FnOnce(u32) -> Pool) -> PoolSlot {
         let pools = self.pools.entry(key).or_default();
-        let index = match pools.iter().position(|p| !p.free.is_empty()) {
+        let index = match pools.iter().position(|p| p.used < p.capacity) {
             Some(index) => index,
             None => {
                 let capacity = pools.last().map_or(FIRST_CAPACITY, |p| (p.capacity * 2).min(MAX_CAPACITY));
@@ -130,7 +158,9 @@ impl ParticlePools {
             }
         };
         let pool = &mut pools[index];
-        let slot = pool.free.pop().unwrap();
+        // The lowest free slot, so used slots stay at the front.
+        let slot = pool.occupied.iter().position(|&o| !o).unwrap() as u32;
+        pool.occupied[slot as usize] = true;
         pool.used += 1;
         PoolSlot { key, pool: pool.entity, slot, offset: slot * pool.amount }
     }
@@ -165,6 +195,28 @@ fn release_slot(mut world: DeferredWorld, context: HookContext) {
 #[derive(Component)]
 pub struct ParticlePoolDraw;
 
+/// In `PostUpdate`, after the frame's bursts are set up (last in
+/// `SprinklesLateSetup`): sizes each pool's draw to its used slots. The mesh
+/// and the sort (`extract.rs`) both follow `drawn`. This runs before the
+/// asset events flush and materials re-specialize, so a new mesh and the
+/// changed `Mesh3d` are drawn this frame; from `Last` they would be a frame
+/// late (the pool undrawn, or binned with the old mesh). Slots freed in
+/// `Last` shrink the draw a frame later, which only draws zeroed slots.
+pub(crate) fn size_pool_draws(
+    mut pools: ResMut<ParticlePools>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut mesh_cache: ResMut<ParticleMeshCache>,
+    mut draws: Query<&mut Mesh3d, With<ParticlePoolDraw>>,
+) {
+    for pool in pools.pools.values_mut().flatten() {
+        pool.drawn = drawn_slots(pool.high(), pool.capacity);
+        if let Ok(mut mesh) = draws.get_mut(pool.entity) {
+            let handle = mesh_cache.get_or_create(&pool.mesh, pool.drawn * pool.amount, &mut meshes);
+            mesh.set_if_neq(Mesh3d(handle));
+        }
+    }
+}
+
 /// In `Last`: frees the slots released this frame (their particles are
 /// zeroed before this frame's simulation, see `compute.rs`), hides empty
 /// pools and writes each pool's material uniforms.
@@ -185,7 +237,7 @@ pub(crate) fn maintain_pools(
         else {
             continue;
         };
-        pool.free.push(released.slot);
+        pool.occupied[released.slot as usize] = false;
         pool.used -= 1;
         pool.freed_this_frame = true;
         let amount = u64::from(pool.amount);
@@ -267,5 +319,40 @@ mod tests {
         // The freed slot is the next one claimed.
         let mut pools = world.remove_resource::<ParticlePools>().unwrap();
         assert_eq!(pools.claim(key, |_| unreachable!()).slot, second.slot);
+    }
+
+    #[test]
+    fn a_pool_draws_up_to_its_highest_used_slot() {
+        assert_eq!(drawn_slots(0, 32), MIN_DRAWN);
+        assert_eq!(drawn_slots(9, 32), 16);
+        assert_eq!(drawn_slots(17, 32), 32);
+        assert_eq!(drawn_slots(200, 128), 128);
+
+        let mut world = World::new();
+        world.init_resource::<Time>();
+        world.init_resource::<Assets<ShaderBuffer>>();
+        world.init_resource::<Assets<Mesh>>();
+        world.init_resource::<ParticleMeshCache>();
+        let mut pools = ParticlePools::default();
+        let key = PoolKey { asset: AssetId::default(), emitter: 0 };
+        let slots: Vec<PoolSlot> = (0..10).map(|_| pools.claim(key, |c| pool(&mut world, c))).collect();
+        let draw = world.spawn((ParticlePoolDraw, Visibility::Inherited, Mesh3d::default())).id();
+        pools.pools.get_mut(&key).unwrap()[0].entity = draw;
+        world.insert_resource(pools);
+        let bursts: Vec<Entity> = slots.iter().map(|s| world.spawn(PoolSlot { pool: draw, ..*s }).id()).collect();
+        world.run_system_cached(size_pool_draws).unwrap();
+        let drawn = |world: &World| world.resource::<ParticlePools>().pools[&key][0].drawn;
+        assert_eq!(drawn(&world), 16);
+        let first_mesh = world.get::<Mesh3d>(draw).unwrap().0.clone();
+        // Freeing the two highest slots shrinks the draw, with a smaller mesh.
+        world.despawn(bursts[9]);
+        world.despawn(bursts[8]);
+        world.run_system_cached(maintain_pools).unwrap();
+        world.run_system_cached(size_pool_draws).unwrap();
+        assert_eq!(drawn(&world), MIN_DRAWN);
+        assert_ne!(world.get::<Mesh3d>(draw).unwrap().0, first_mesh);
+        // A new burst takes the lowest free slot.
+        let mut pools = world.remove_resource::<ParticlePools>().unwrap();
+        assert_eq!(pools.claim(key, |_| unreachable!()).slot, 8);
     }
 }

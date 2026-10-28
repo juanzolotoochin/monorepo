@@ -235,6 +235,8 @@ impl Plugin for SprinklesPlugin {
                 setup_particle_systems::<true>,
                 spawning::update_late_particle_time,
                 write_emitter_uniforms,
+                // Kestrel: after every burst of the frame claimed its slot.
+                pool::size_pool_draws,
             )
                 .chain()
                 .in_set(SprinklesLateSetup),

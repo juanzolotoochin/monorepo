@@ -145,17 +145,26 @@ instead:
 - **Pools.** One per (asset, emitter index), in `ParticlePools`. A pool
   owns a particle, indices and sorted buffer sized `particles_amount ×
   capacity`, one material (`ParticleEmitterUniforms::pooled = 1`, identity
-  transform), one mesh of `particles_amount × capacity` particles, and one
-  entity (`ParticlePoolDraw`, `NoFrustumCulling`) that draws all of it. The
-  first pool of an emitter has 32 slots; when every pool is full the next
-  one doubles, up to 256 slots, then 256 per pool. An empty pool is hidden.
+  transform), and one entity (`ParticlePoolDraw`, `NoFrustumCulling`) that
+  draws it. The first pool of an emitter has 32 slots; when every pool is
+  full the next one doubles, up to 256 slots, then 256 per pool. An empty
+  pool is hidden.
+- **Drawn slots.** A burst takes the pool's lowest free slot. Each frame,
+  `size_pool_draws` (last in `SprinklesLateSetup`, so after every claim and
+  before the asset events flush) sets `drawn` to one past the highest used
+  slot, rounded up to a power of two, at least 8, and gives the pool's
+  entity a cached mesh of `particles_amount × drawn` particles. The mesh's
+  particle index (`uv_b.x`) reads the sorted buffer in order, so the
+  smaller mesh draws the first slots, which hold every live particle; the
+  pool's sort covers the same `particles_amount × drawn`. A pool needs at
+  most a mesh per power of two (about twice its full mesh).
 - **Bursts.** `setup_particle_systems` still spawns one emitter entity per
   emitter with its `EmitterRuntime`: time steps, one-shot completion, seed,
   trigger and the late setup pass are unchanged. A poolable emitter's entity
   gets a `PoolSlot` and a copy of the pool's `ParticleBufferHandle` instead
   of buffers, a mesh and a material. Extraction sets the burst's
   `slot_offset` (`EmitterUniforms`, appended) and marks it not to sort; the
-  pool gets one sort-only entry, over all slots.
+  pool gets one sort-only entry, over its drawn slots.
 - **Simulation.** The head pass reads and writes
   `particles[slot_offset + idx]`. Particle indices, seeds and phases stay
   local to the burst, so the same seed gives the same particles, pooled or
