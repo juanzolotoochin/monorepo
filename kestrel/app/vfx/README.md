@@ -171,7 +171,13 @@ the window and in the log. New files appear; an effect whose file was
 deleted stays loaded until a restart. Add new files to `vfx::FILES` too, or
 the next start won't have them.
 
+Each effect in the window has a **Fire** button: with the sprinkles
+backend, it triggers the effect 3 m in front of the player, 0.5 m up with
+the normal up, and a target 4 m further along the player's facing. An
+effect that flies to its target (`lifetime_to_target`, the laser) is
+placed with +Y toward it instead.
+
 ## Planned
 
-Decals, a debug-menu list that fires any effect, and a schema doc like `docs/character-definition.md`;
+Decals and a schema doc like `docs/character-definition.md`;
 see `kestrel/todo/vfx.md`.

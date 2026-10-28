@@ -112,6 +112,9 @@ struct Effect {
     particles: Option<Handle<ParticlesAsset>>,
     emitters: usize,
     lights: Vec<LightLayer>,
+    /// An emitter flies to the target (`lifetime_to_target`), so Effects →
+    /// Fire places the effect with +Y toward it.
+    aims: bool,
 }
 
 impl Effect {
@@ -120,6 +123,7 @@ impl Effect {
     /// rebuild their pools) or go into a new asset.
     fn new(name: String, file: EffectFile, handle: Option<Handle<ParticlesAsset>>, assets: Option<&mut Assets<ParticlesAsset>>) -> Self {
         let emitters = file.particles.emitters.len();
+        let aims = file.particles.emitters.iter().any(|e| e.time.lifetime_to_target);
         let particles = assets.map(|assets| match handle {
             Some(handle) => {
                 assets.insert(handle.id(), file.particles).expect("a live effect handle");
@@ -127,7 +131,7 @@ impl Effect {
             }
             None => assets.add(file.particles),
         });
-        Effect { name, particles, emitters, lights: file.lights }
+        Effect { name, particles, emitters, lights: file.lights, aims }
     }
 }
 
@@ -360,6 +364,23 @@ fn apply_reload(
     report
 }
 
+/// Effects → Fire places an effect this far in front of the player, its
+/// target this much further on, at about the height of a blade's impact.
+const FIRE_DISTANCE: f32 = 3.0;
+const FIRE_REACH: f32 = 4.0;
+const FIRE_HEIGHT: f32 = 0.5;
+
+/// Where Effects → Fire triggers an effect for the player at `player`: in
+/// front of them (+Z is their facing), normal up, with a target further on.
+/// An effect that `aims` points its +Y at the target instead, as the laser
+/// is placed at its muzzle.
+fn fire_trigger(player: &Transform, aims: bool) -> Trigger {
+    let forward = (player.rotation * Vec3::Z).with_y(0.0).normalize_or(Vec3::Z);
+    let position = player.translation.with_y(FIRE_HEIGHT) + forward * FIRE_DISTANCE;
+    let normal = if aims { forward } else { Vec3::Y };
+    Trigger::new(position, normal).target(position + forward * FIRE_REACH)
+}
+
 const MENUS: &[MenuSpec] = &[MenuSpec::new("vfx_backend", "Effects", "VFX backend")];
 
 impl ImguiMenu for Vfx {
@@ -397,9 +418,32 @@ impl ImguiMenu for Vfx {
                 }
             }
             ui.separator();
+            let player = world.query_filtered::<&Transform, With<crate::character::Player>>().single(world).ok().copied();
+            let blocked = if self.backend != VfxBackend::Sprinkles {
+                Some("Fire needs the sprinkles backend.")
+            } else if !gpu {
+                Some("Fire needs GPU particles.")
+            } else if player.is_none() {
+                Some("Fire needs a player.")
+            } else {
+                None
+            };
             for effect in &self.effects {
-                ui.label(format!("{}: {} emitters, {} lights", effect.name, effect.emitters, effect.lights.len()));
+                ui.horizontal(|ui| {
+                    let fire = ui.add_enabled(blocked.is_none(), egui::Button::new("Fire"));
+                    if let (true, Some(player)) = (fire.clicked(), player) {
+                        let (name, trigger) = (effect.name.clone(), fire_trigger(&player, effect.aims));
+                        world.resource_mut::<UiOutbox>().push(move |world| {
+                            spawn(world, &name, trigger);
+                        });
+                    }
+                    ui.label(format!("{}: {} emitters, {} lights", effect.name, effect.emitters, effect.lights.len()));
+                });
             }
+            match blocked {
+                Some(why) => ui.weak(why),
+                None => ui.weak(format!("{FIRE_DISTANCE} m in front of the player, target {FIRE_REACH} m further on.")),
+            };
             ui.label("Effects without a file always use the legacy path.");
         });
     }
@@ -462,5 +506,19 @@ mod tests {
         assert!(report.errors.is_empty(), "{:?}", report.errors);
         assert_eq!(effects.last().unwrap().name, "spark");
         assert!(effects.last().unwrap().particles.is_some());
+    }
+
+    #[test]
+    fn fire_places_effects_in_front_of_the_player() {
+        // Facing +X.
+        let player = Transform::from_xyz(1.0, 0.0, 2.0).with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2));
+        let trigger = fire_trigger(&player, false);
+        assert!(trigger.position.distance(Vec3::new(4.0, 0.5, 2.0)) < 1e-5, "{trigger:?}");
+        assert!(trigger.target.unwrap().distance(Vec3::new(8.0, 0.5, 2.0)) < 1e-5, "{trigger:?}");
+        assert_eq!(trigger.normal, Vec3::Y);
+        assert!(fire_trigger(&player, true).normal.distance(Vec3::X) < 1e-5);
+        // Only the laser flies to its target.
+        let aims: Vec<_> = catalog::load(FILES.iter().copied()).into_iter().map(|(n, f)| (n, Effect::new(String::new(), f.unwrap(), None, None).aims)).collect();
+        assert!(aims.iter().all(|(n, aims)| *aims == (n == "laser_bolt")), "{aims:?}");
     }
 }
