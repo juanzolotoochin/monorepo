@@ -313,7 +313,7 @@ used slots" come after the blood port.
 
 ## Build an effect catalog
 
-- **Status:** done (PR pending, branch kestrel-vfx-pool-perf)
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/129)
 - **Why:** effects should be listed, authored and changed the way
   characters are. Today `vfx::FILES` is a hand-written list of
   `include_str!` files, there is no inheritance, and every change to a
@@ -335,7 +335,7 @@ used slots" come after the blood port.
 
 ## Decide whether small impact particles cast shadows
 
-- **Status:** done (PR pending, branch kestrel-vfx-pool-perf)
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/129)
 - **Why:** before pooling, each shadow-casting emitter was drawn in four
   cascade views, and turning shadows off for the stone impact cut the
   desktop's 200 impacts/s frame from 45.6 to 26.8 ms. Pooled, it's 4 extra
@@ -354,7 +354,7 @@ used slots" come after the blood port.
 
 ## Simulate a pool's bursts in one dispatch
 
-- **Status:** done (PR pending, branch kestrel-vfx-pool-perf)
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/129)
 - **Why:** with pooled bursts, each burst still has its own compute
   dispatch on the pool's shared buffer: 2.5 ms of Deck GPU at 200
   impacts/s (1.4 ms on the desktop). That is most of what is left between
@@ -375,7 +375,7 @@ used slots" come after the blood port.
 
 ## Draw only a pool's used slots
 
-- **Status:** done (PR pending, branch kestrel-vfx-pool-perf)
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/129)
 - **Why:** a pool's draw covers all its slots, live or not. Cheap for the
   stone impact (12–18 particles a slot), not for the arc (270 a slot, 8,640
   instances in its first pool): the Deck's arc-only load is +0.4 ms over
@@ -393,7 +393,7 @@ used slots" come after the blood port.
 
 ## Don't lose a burst when its first step can't run
 
-- **Status:** done (PR pending, branch kestrel-vfx-pool-perf)
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/129)
 - **Why:** a one-shot burst spawns all its particles in its first time step.
   If that step's compute dispatch is skipped (GPU buffers, material or
   pipeline not ready yet), the step is spent anyway and the burst never
@@ -413,7 +413,7 @@ used slots" come after the blood port.
 
 ## Free and update particle pools
 
-- **Status:** done (PR pending, branch kestrel-vfx-pool-perf)
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/129)
 - **Why:** pools are never freed or shrunk, so GPU memory stays at the
   high-water mark (+7 MB at 200 impacts/s, +24 MB with lasers and arcs).
   Live edits to a pooled emitter's mesh, material or particle count don't
