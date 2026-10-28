@@ -15,15 +15,19 @@ them here later along with the others (`kestrel/todo/vfx.md`). The bar for
 
 The files live with the app, not in `kestrel/content/data/`: `content` is
 read by the simulation, and effects are view-only. Nothing in an effect file
-may change what the simulation computes or hashes. Files are compiled in
-with `include_str!` (list them in `vfx::FILES`); a bad file fails the
-`vfx::tests::every_effect_file_parses` test and panics at startup.
+may change what the simulation computes or hashes. The file name is the
+effect's ID (`impact_stone.ron` is `"impact_stone"`). Files are compiled in
+with `include_str!`: list each one in `vfx::FILES` (a test fails when the
+list and the folder differ). A bad file fails the
+`vfx::tests::every_effect_file_parses` test and panics at startup. The
+loader is `vfx::catalog::load`.
 
 ## Format
 
 ```ron
 (
     version: 1,
+    base: "impact_stone", // optional
     particles: ( /* a sprinkles ParticlesAsset, sprinkles_version: "0.3" */ ),
     lights: [
         (color: (1.0, 0.38, 0.08), intensity: 18000.0, range: 4.5, radius: 0.15,
@@ -33,17 +37,61 @@ with `include_str!` (list them in `vfx::FILES`); a bad file fails the
 ```
 
 - `version`: our format version, `1`.
+- `base`: optional, another effect's ID to start from (see "Base").
 - `particles`: the particle layer, sprinkles' own `ParticlesAsset` schema
-  embedded as is (see `kestrel/vfx/sprinkles/src/asset/mod.rs`; colors there
-  are **linear** RGBA). It must set `despawn_on_finish: true`, and every
-  emitter `one_shot: true`: effects are bursts that end by themselves.
+  embedded as is (see `kestrel/vfx/sprinkles/src/asset/mod.rs`). It must set
+  `despawn_on_finish: true`, and every emitter `one_shot: true`: effects are
+  bursts that end by themselves.
 - `lights`: point lights spawned with the particles, because GPU particles
-  can't light the scene. `color` is **sRGB**, `intensity` in lumens at the
-  start, `offset` in meters along the normal. The light fades out
-  quadratically over `fade_seconds`, then despawns.
+  can't light the scene. `intensity` in lumens at the start, `offset` in
+  meters along the normal. The light fades out quadratically over
+  `fade_seconds`, then despawns.
+
+Colors are **sRGB** in both layers, like every authored color in Kestrel:
+particle colors (`base_color`, `emissive`, `specular_tint`,
+`attenuation_color`, `initial_color`, gradient stops) and light colors.
+The loader converts particle colors to the linear RGBA sprinkles takes
+(sprinkles' doc comments say linear: that is the loaded asset, not the
+file). Alpha is not converted. Glowing colors go above 1 (`emissive` for
+bloom) and convert with the same curve: linear 12 is sRGB 2.9161.
 
 Unknown or misspelled fields are errors, in our layer and in the sprinkles
 asset (the fork denies unknown fields).
+
+## Base
+
+A file with `base: "<effect ID>"` starts from that effect and overrides what
+it writes, like character files (`docs/character-definition.md`):
+
+```ron
+// impact_metal.ron: stone's impact, with blue sparks and no debris.
+(
+    version: 1,
+    base: "impact_stone",
+    particles: (emitters: [
+        (name: "sparks", draw_pass: (material: Standard((base_color: (0.5, 0.7, 1.0, 1.0))))),
+        (name: "debris", enabled: false),
+    ]),
+)
+```
+
+- Sections (`(field: ...)`) merge field by field, at any depth: a field the
+  variant leaves out comes from the base.
+- Lists replace the base's whole list (`lights`, curve `points`, gradient
+  `stops`), except `particles.emitters`.
+- `particles.emitters` merge by `name`: an emitter whose name matches one in
+  the base merges into it field by field; a new name is appended, after the
+  base's emitters, in the variant's order. Turn a base emitter off with
+  `enabled: false`.
+- A value with another struct or variant name replaces the base's
+  (`shape: Sphere(radius: 0.5)` over `Box(...)`); with the same name it
+  merges (`Standard((...))`, `Some((...))`).
+- Unknown bases, cycles, and a value of another shape than the base's (a
+  list over a section) are errors that name the file and the field. A base
+  can have its own base, and stays a usable effect itself.
+
+The merged file is checked as strictly as any other. Its parse errors point
+into the merged text, not the variant's (the message says so).
 
 ## Placement
 
@@ -116,5 +164,5 @@ the web build for now) always use the legacy effects.
 
 ## Planned
 
-Decals, live reload and a schema doc like `docs/character-definition.md`;
+Decals, live reload, a debug-menu list that fires any effect, and a schema doc like `docs/character-definition.md`;
 see `kestrel/todo/vfx.md`.

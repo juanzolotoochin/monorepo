@@ -206,6 +206,8 @@ rust_test(
     # The controller tests read the sample synthetic scenario.
     compile_data = ["//:Cargo.toml", "demos/controller_field.gamepad.json"],
     crate = ":demo",
+    # vfx::catalog checks that vfx::FILES lists every effect file.
+    data = glob(["vfx/*.ron"]),
     edition = "2021",
     rustc_env = {"CARGO_MANIFEST_DIR": "."},
 )

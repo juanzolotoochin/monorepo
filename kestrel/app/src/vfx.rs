@@ -12,10 +12,14 @@ use debug_ui::{egui, ImguiManager, ImguiMenu, MenuHandle, MenuId, MenuSpec, UiOu
 use serde::Deserialize;
 use service::{AppLayer, AppServices, Phase, Service, WorldScoped, WorldState};
 
+pub mod catalog;
+mod ron_tree;
+
 /// The version of our effect file format (`version:` in each file).
 pub const FORMAT_VERSION: u32 = 1;
 
-/// Every effect file, by name. Compiled in, like the rest of Kestrel's data.
+/// Every effect file, by name: the file name is the effect's ID. Compiled in,
+/// like the rest of Kestrel's data; a test checks the list against the folder.
 pub const FILES: &[(&str, &str)] = &[
     ("impact_stone", include_str!("../vfx/impact_stone.ron")),
     ("arc", include_str!("../vfx/arc.ron")),
@@ -44,8 +48,9 @@ impl VfxBackend {
     }
 }
 
-/// One effect file: layers drawn together at the trigger point.
-#[derive(Deserialize)]
+/// One effect file: layers drawn together at the trigger point. A file's
+/// `base` is merged in before this parse (`catalog::load`).
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EffectFile {
     pub version: u32,
@@ -73,10 +78,11 @@ pub struct LightLayer {
     pub fade_seconds: f32,
 }
 
-/// Parses and checks one effect file. Typos, unknown fields, another
-/// sprinkles format version and effects that would never end are errors.
+/// Parses and checks one effect file without a `base`. Typos, unknown
+/// fields, another sprinkles format version and effects that would never end
+/// are errors. Particle colors are converted from the file's sRGB to linear.
 pub fn parse(name: &str, source: &str) -> Result<EffectFile, String> {
-    let file: EffectFile = ron::from_str(source).map_err(|e| format!("vfx/{name}.ron: {e}"))?;
+    let mut file: EffectFile = ron::from_str(source).map_err(|e| format!("vfx/{name}.ron: {e}"))?;
     let fail = |why: String| Err(format!("vfx/{name}.ron: {why}"));
     if file.version != FORMAT_VERSION {
         return fail(format!("version {} (this build reads {FORMAT_VERSION})", file.version));
@@ -95,11 +101,12 @@ pub fn parse(name: &str, source: &str) -> Result<EffectFile, String> {
     if let Some(light) = file.lights.iter().find(|l| l.fade_seconds <= 0.0 || l.intensity < 0.0) {
         return fail(format!("light {light:?} needs a positive fade and intensity"));
     }
+    catalog::particles_to_linear(&mut file.particles);
     Ok(file)
 }
 
 struct Effect {
-    name: &'static str,
+    name: String,
     /// None in runs without GPU particles.
     particles: Option<Handle<ParticlesAsset>>,
     emitters: usize,
@@ -120,10 +127,10 @@ impl Service for Vfx {
 
     fn init(world: &mut World) -> Self {
         let backend = world.get_resource::<crate::control::Options>().map_or_else(VfxBackend::default, |o| o.vfx);
-        let effects = FILES
-            .iter()
-            .map(|&(name, source)| {
-                let file = parse(name, source).unwrap_or_else(|e| panic!("{e}"));
+        let effects = catalog::load(FILES.iter().copied())
+            .into_iter()
+            .map(|(name, file)| {
+                let file = file.unwrap_or_else(|e| panic!("{e}"));
                 let emitters = file.particles.emitters.len();
                 let particles = world.get_resource_mut::<Assets<ParticlesAsset>>().map(|mut assets| assets.add(file.particles));
                 Effect { name, particles, emitters, lights: file.lights }
@@ -197,12 +204,12 @@ pub fn spawn(world: &mut World, name: &str, trigger: Trigger) -> bool {
     }
     let effect = vfx.effects.iter().find(|e| e.name == name).unwrap_or_else(|| panic!("no effect file vfx/{name}.ron"));
     let Some(particles) = effect.particles.clone() else { return false };
-    let (label, lights) = (effect.name, effect.lights.clone());
+    let (label, lights) = (effect.name.clone(), effect.lights.clone());
     let Trigger { position, normal, target, seed, scale } = trigger;
     let rotation = Quat::from_rotation_arc(Vec3::Y, normal.normalize_or(Vec3::Y));
     let transform = Transform::from_translation(position).with_rotation(rotation).with_scale(Vec3::splat(scale));
     world.spawn((
-        Name::new(label),
+        Name::new(label.clone()),
         Particles3d(particles),
         ParticleTrigger { target, seed },
         transform,
@@ -213,7 +220,7 @@ pub fn spawn(world: &mut World, name: &str, trigger: Trigger) -> bool {
     for light in lights {
         let [r, g, b] = light.color;
         world.spawn((
-            Name::new(label),
+            Name::new(label.clone()),
             PointLight { color: Color::srgb(r, g, b), intensity: light.intensity, range: light.range, radius: light.radius, ..default() },
             Transform::from_translation(position + rotation * Vec3::Y * light.offset * scale),
             EffectLight { age: 0.0, fade: light.fade_seconds, intensity: light.intensity },
@@ -290,8 +297,8 @@ mod tests {
 
     #[test]
     fn every_effect_file_parses() {
-        for &(name, source) in FILES {
-            let file = parse(name, source).unwrap_or_else(|e| panic!("{e}"));
+        for (name, file) in catalog::load(FILES.iter().copied()) {
+            let file = file.unwrap_or_else(|e| panic!("{e}"));
             assert!(!file.particles.emitters.is_empty() || !file.lights.is_empty(), "{name} draws nothing");
         }
     }

@@ -23,9 +23,9 @@
                 draw_pass: (
                     mesh: Cuboid(half_size: (0.06, 0.325, 0.06)),
                     material: Standard((
-                        // sRGB (1.0, 0.025, 0.02) in linear.
-                        base_color: (1.0, 0.0019, 0.0015, 1.0),
-                        emissive: (12.0, 0.08, 0.05, 1.0),
+                        // Glowing for bloom: linear (12.0, 0.08, 0.05).
+                        base_color: (1.0, 0.025, 0.02, 1.0),
+                        emissive: (2.9161, 0.3133, 0.2478, 1.0),
                         unlit: true,
                     )),
                     transform_align: Some(YToVelocity),
