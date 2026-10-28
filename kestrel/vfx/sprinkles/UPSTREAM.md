@@ -215,6 +215,28 @@ instead:
   after the events flush (later in `PostUpdate`, or in `Last`) is seen a
   frame late; change assets in `Update`.
 
+### Blood, deflection and the trial burst (2026-10-28)
+
+- `EmitterVelocities::world_velocity`: a world-space velocity added to each
+  particle's spawn velocity, after `world_bias` and the speed (legacy blood
+  adds 1.5 m/s upward after normalizing its direction). Not scaled by the
+  system's transform. `EmitterUniforms` / `EmitterParams` carry it in spawn
+  space in the three padding slots before `slot_offset` (now `world_velocity:
+  vec3, slot_offset: u32`), so the struct's size and the 64-burst uniform
+  batch are unchanged. Only `spawn_particle` adds it; the emission direction
+  `update_particle` rebuilds for directional velocity leaves it out.
+- `EmitterVelocities::even_ring`: particle `i` of the `n` a cycle spawns
+  (`spawn_count`) leaves exactly `spread` degrees off `initial_direction`, at
+  `360° × i / n` around it, seed-independent; `flatness` is ignored. For the
+  trial burst's 24 cubes flung out on a ring. It is a velocity option, not a
+  `Ring { even }` emission shape: a ring of positions doesn't move outward
+  by itself, and the radial velocity pushes away from the pivot in 3D, so a
+  rising particle drifts up (1.1 m out and 2.5 m up after 0.8 s, against
+  legacy's 2.4 m and 0.5 m). Rides in `trigger_flags`
+  (`TRIGGER_FLAG_EVEN_RING`); `get_emission_velocity`, `get_spawn_velocity`
+  and `update_particle` take the particle's index.
+- Test: `tests/parse.rs` `world_velocity_and_even_ring_parse_and_default_off`.
+
 Keep this list current as the fork grows.
 
 ## Size

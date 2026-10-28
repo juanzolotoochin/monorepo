@@ -269,6 +269,8 @@ impl From<EmitterVelocities> for CurrentEmitterVelocities {
             pivot: old.pivot,
             inherit_ratio: old.inherit_ratio,
             world_bias: Vec3::ZERO,
+            world_velocity: Vec3::ZERO,
+            even_ring: false,
         }
     }
 }
