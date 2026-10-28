@@ -178,21 +178,6 @@ used slots" come after the blood port.
   `step4/poollaser_sprinkles` vs `step3/laser_sprinkles`.
 - **Found in:** VFX spike step 4 (pooled bursts).
 
-## Decide whether small impact particles cast shadows
-
-- **Status:** open
-- **Why:** before pooling, each shadow-casting emitter was drawn in four
-  cascade views, and turning shadows off for the stone impact cut the
-  desktop's 200 impacts/s frame from 45.6 to 26.8 ms. Pooled, it's 4 extra
-  draws per pool, so this is now a look question more than a cost one.
-  Legacy sparks do cast shadows.
-- **What to do:** decided (2026-10-28): small particles don't cast
-  shadows. Set `shadow_caster: false` on sparks and debris in
-  `impact_stone.ron` (and the materials based on it), and say in the
-  README that small particles go without shadows.
-- **Where:** `kestrel/app/vfx/impact_stone.ron`, `kestrel/app/vfx/README.md`.
-- **Found in:** VFX spike step 4.
-
 ## Revisit particle shadows per effect
 
 - **Status:** open (low priority)
@@ -323,6 +308,25 @@ used slots" come after the blood port.
 - **Found in:** VFX pool costs (handoff, "Pool costs", 2026-10-28).
 
 ## Done
+
+## Decide whether small impact particles cast shadows
+
+- **Status:** done (PR pending, branch kestrel-vfx-pool-perf)
+- **Why:** before pooling, each shadow-casting emitter was drawn in four
+  cascade views, and turning shadows off for the stone impact cut the
+  desktop's 200 impacts/s frame from 45.6 to 26.8 ms. Pooled, it's 4 extra
+  draws per pool, so this is now a look question more than a cost one.
+  Legacy sparks do cast shadows.
+- **What to do:** decided (2026-10-28): small particles don't cast
+  shadows. Set `shadow_caster: false` on sparks and debris in
+  `impact_stone.ron` (and the materials based on it), and say in the
+  README that small particles go without shadows.
+- **What was done:** sparks and debris in `impact_stone.ron` set
+  `shadow_caster: false` (the flash keeps its shadow); the README says
+  small particles go without shadows and points to "Revisit particle
+  shadows per effect".
+- **Where:** `kestrel/app/vfx/impact_stone.ron`, `kestrel/app/vfx/README.md`.
+- **Found in:** VFX spike step 4.
 
 ## Simulate a pool's bursts in one dispatch
 

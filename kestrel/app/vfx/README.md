@@ -151,6 +151,12 @@ only draws it, and its arrival matches because both use the same speed.
   80 m/s with `lifetime_to_target`, placed at the muzzle with +Y toward the
   target.
 
+Small particles go without shadows: set `draw_pass.shadow_caster: false`
+(sprinkles defaults to `true`) on sparks, chips and the like, as
+`impact_stone.ron` does. Turn shadows on for an emitter only where they
+read better (large or slow pieces); see "Revisit particle shadows per
+effect" in `kestrel/todo/vfx.md`.
+
 The fork also applies `draw_pass.visibility_aabb` (upstream ignored it):
 the emitter is culled by that box around the emitter, so effects reaching
 far (arcs, bolts) need a box that big.
