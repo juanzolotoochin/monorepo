@@ -214,7 +214,18 @@ pub struct ParticleDispatch {
 #[derive(Resource, Default)]
 pub struct ParticleComputeBindGroups {
     pub steps: Vec<Vec<ParticleDispatch>>,
+    /// Kestrel: every emitter these dispatches simulate.
+    pub emitters: Vec<Entity>,
 }
+
+/// Kestrel: the emitters (main world entities) a simulation dispatch has
+/// run for, recorded by the compute node. Until then, extraction starts an
+/// emitter's emission from the start of its cycle, so a burst whose first
+/// step was skipped (pipeline, buffers or textures not ready) still spawns
+/// in the first step that runs (`extract.rs`). Pruned of despawned emitters
+/// at extraction.
+#[derive(Resource, Default)]
+pub struct SimulatedEmitters(pub std::collections::HashSet<Entity>);
 
 /// Kestrel: the compute pass's GPU objects, kept from frame to frame.
 /// Upstream created, every frame, the colliders buffer and a uniform buffer
@@ -330,9 +341,9 @@ pub fn prepare_particle_compute_bind_groups(
     let mut live = std::collections::HashSet::new();
     // Per emitter that simulates this frame: its bind group's key and the
     // bind group.
-    let mut simulated: Vec<(&ExtractedEmitterData, u64, BindGroup)> = Vec::new();
+    let mut simulated: Vec<(Entity, &ExtractedEmitterData, u64, BindGroup)> = Vec::new();
 
-    for (_, emitter_data) in &extracted_systems.emitters {
+    for (entity, emitter_data) in &extracted_systems.emitters {
         // Kestrel: a pool's entry only sorts (`pool.rs`).
         if emitter_data.uniform_steps.is_empty() {
             continue;
@@ -530,7 +541,7 @@ pub fn prepare_particle_compute_bind_groups(
                 group
             }
         };
-        simulated.push((emitter_data, key, bind_group));
+        simulated.push((*entity, emitter_data, key, bind_group));
     }
     cache.bind_groups.retain(|key, _| live.contains(key));
 
@@ -538,14 +549,14 @@ pub fn prepare_particle_compute_bind_groups(
     // pass are simulated by one dispatch (up to `MAX_BATCH` at a time), in
     // the order their first emitter appears. Their uniforms are consecutive
     // in the shared buffer, from an aligned offset.
-    let max_steps = simulated.iter().map(|(e, ..)| e.uniform_steps.len()).max().unwrap_or(0);
+    let max_steps = simulated.iter().map(|(_, e, ..)| e.uniform_steps.len()).max().unwrap_or(0);
     let mut steps = Vec::with_capacity(max_steps);
     let mut batches: Vec<(BatchKey, BindGroup, Vec<EmitterUniforms>)> = Vec::new();
     let mut batch_index = std::collections::HashMap::new();
     for step_index in 0..max_steps {
         batches.clear();
         batch_index.clear();
-        for (emitter_data, bind_group_key, bind_group) in &simulated {
+        for (_, emitter_data, bind_group_key, bind_group) in &simulated {
             let Some(step_uniforms) = emitter_data.uniform_steps.get(step_index) else {
                 continue;
             };
@@ -598,7 +609,8 @@ pub fn prepare_particle_compute_bind_groups(
         }
     }
 
-    commands.insert_resource(ParticleComputeBindGroups { steps });
+    let emitters = simulated.iter().map(|(entity, ..)| *entity).collect();
+    commands.insert_resource(ParticleComputeBindGroups { steps, emitters });
     let ranges = extracted_systems
         .pool_clears
         .iter()
@@ -616,6 +628,7 @@ pub fn run_particle_compute_node(
     bind_groups: Res<ParticleComputeBindGroups>,
     extracted: Res<ExtractedParticleSystem>,
     emission_clear_list: Res<EmissionBufferClearList>,
+    mut simulated: ResMut<SimulatedEmitters>,
     mut ctx: RenderContext,
 ) {
     match pipeline_cache.get_compute_pipeline_state(pipeline.simulate_pipeline) {
@@ -678,6 +691,8 @@ pub fn run_particle_compute_node(
         }
     }
     time_span.end(ctx.command_encoder());
+    // Kestrel: past the early returns, every prepared dispatch was recorded.
+    simulated.0.extend(bind_groups.emitters.iter().copied());
 }
 
 pub struct ParticleComputePlugin;
@@ -692,6 +707,7 @@ impl Plugin for ParticleComputePlugin {
             .init_resource::<ParticleComputeBindGroups>()
             .init_resource::<ParticleComputeCache>()
             .init_resource::<EmissionBufferClearList>()
+            .init_resource::<SimulatedEmitters>()
             .add_systems(RenderStartup, init_particle_compute_pipeline)
             .add_systems(
                 Render,

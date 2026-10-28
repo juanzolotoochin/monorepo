@@ -12,7 +12,8 @@ use crate::{
     },
     runtime::{
         EmitterEntity, EmitterRuntime, ParticleBufferHandle, ParticleSystemRuntime, Particles3d,
-        ParticleTrigger, ParticlesCollider3D, SubEmitterBufferHandle, compute_phase, is_past_delay,
+        ParticleTrigger, ParticlesCollider3D, SimulationStep, SubEmitterBufferHandle, compute_phase,
+        is_past_delay,
     },
     textures::{CurveTextureCache, GradientTextureCache},
 };
@@ -642,8 +643,28 @@ fn build_base_uniforms(
     }
 }
 
+/// Kestrel: the phase step `index` of this frame emits from. An emitter no
+/// dispatch has run for yet (`simulated` false) emits its first step from
+/// the start of its first cycle: a one-shot burst spawns everything in its
+/// first time step, and if that step's dispatch was skipped (pipeline,
+/// buffers or textures not ready), the step was spent and the burst would
+/// never spawn. Later cycles aren't caught up.
+fn emission_start_phase(
+    step: &SimulationStep,
+    index: usize,
+    simulated: bool,
+    time: &crate::asset::EmitterTime,
+) -> f32 {
+    if index == 0 && !simulated && step.cycle == 0 {
+        0.0
+    } else {
+        compute_phase(step.prev_system_time, time)
+    }
+}
+
 pub fn extract_particle_systems(
     mut commands: Commands,
+    mut simulated: ResMut<crate::compute::SimulatedEmitters>,
     emitter_query: Extract<
         Query<(
             Entity,
@@ -664,6 +685,7 @@ pub fn extract_particle_systems(
 ) {
     let _timer = crate::stats::EXTRACT_NS.time();
     let mut extracted = ExtractedParticleSystem::default();
+    simulated.0.retain(|entity| emitter_query.contains(*entity));
 
     let (camera_position, camera_forward) = camera_query
         .iter()
@@ -815,10 +837,12 @@ pub fn extract_particle_systems(
         let is_sub_emitter_target = emission_buffer_map
             .contains_key(&(emitter_entity.parent_system, runtime.emitter_index));
 
+        let was_simulated = simulated.0.contains(&entity);
         let uniform_steps: Vec<EmitterUniforms> = runtime
             .simulation_steps
             .iter()
-            .flat_map(|step| {
+            .enumerate()
+            .flat_map(|(index, step)| {
                 let should_emit = if is_sub_emitter_target {
                     false
                 } else {
@@ -827,7 +851,8 @@ pub fn extract_particle_systems(
                 let head_uniforms = EmitterUniforms {
                     delta_time: step.delta_time,
                     system_phase: compute_phase(step.system_time, &emitter_time),
-                    prev_system_phase: compute_phase(step.prev_system_time, &emitter_time),
+                    // Kestrel: see `emission_start_phase`.
+                    prev_system_phase: emission_start_phase(step, index, was_simulated, &emitter_time),
                     cycle: step.cycle,
                     emitting: if should_emit { 1 } else { 0 },
                     clear_particles: if step.clear_requested { 1 } else { 0 },
@@ -970,4 +995,40 @@ pub fn extract_colliders(
     }
 
     commands.insert_resource(ExtractedColliders { colliders });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The shader's spawn test for a particle at `phase` (`particle_simulate.wesl`).
+    fn spawns(phase: f32, prev_system_phase: f32, system_phase: f32) -> bool {
+        phase >= prev_system_phase && phase < system_phase
+    }
+
+    #[test]
+    fn a_burst_whose_first_step_was_skipped_spawns_in_the_next() {
+        let time = crate::asset::EmitterTime { lifetime: 1.0, one_shot: true, ..default() };
+        let dt = 1.0 / 60.0;
+        let step = |prev: f32, cycle| SimulationStep {
+            prev_system_time: prev,
+            system_time: prev + dt,
+            cycle,
+            delta_time: dt,
+            clear_requested: false,
+            trail_history_write_index: 0,
+        };
+        // An explosive burst spawns every particle at phase 0, in the step
+        // from 0 to `dt`. That step's dispatch didn't run; the next one
+        // still spawns them.
+        let second = step(dt, 0);
+        let from = emission_start_phase(&second, 0, false, &time);
+        assert!(spawns(0.0, from, compute_phase(second.system_time, &time)));
+        // Once a dispatch ran, steps emit from where the last one ended.
+        let from = emission_start_phase(&second, 0, true, &time);
+        assert!(!spawns(0.0, from, compute_phase(second.system_time, &time)));
+        // Only a frame's first step, and only in the first cycle.
+        assert_eq!(emission_start_phase(&second, 1, false, &time), compute_phase(dt, &time));
+        assert_eq!(emission_start_phase(&step(dt, 1), 0, false, &time), compute_phase(dt, &time));
+    }
 }

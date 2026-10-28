@@ -83,6 +83,17 @@ Why it's vendored and what the fork is for: `kestrel/VFX_SPIKE_HANDOFF.md`.
   the asset events and visibility matters: otherwise the new buffers,
   material and visibility arrive a frame late, after the burst's only spawn
   step was spent on missing GPU buffers, and nothing ever spawns.
+- Skipped first steps (later, 2026-10-28): the ordering above fixes the
+  laser, but anything else that skips a burst's first dispatch (the compute
+  pipeline still compiling, a texture or buffer not uploaded yet) still
+  lost it. The compute node now records which emitters it simulated
+  (`SimulatedEmitters`, render world, from the emitter list of
+  `ParticleComputeBindGroups`, so it covers each burst of a batched pool
+  dispatch and the node's early returns alike). Until an emitter is in it,
+  extraction emits its frame's first step from phase 0 of its first cycle
+  (`emission_start_phase`), so the burst spawns in the first step that
+  runs. Time still advances as upstream; only the emission window widens.
+  Test: `extract.rs` `a_burst_whose_first_step_was_skipped_spawns_in_the_next`.
 - One-shot completion: a one-shot emitter stops emitting when its cycle
   ends but finishes (and its system despawns) a frame later. Particles
   spawn at age 0 at the end of their first step, so upstream cut the last
