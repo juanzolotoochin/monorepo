@@ -158,65 +158,6 @@ used slots" come after the blood port.
   `material.rs`.
 - **Found in:** VFX spike step 3.
 
-## Don't lose a burst when its first step can't run
-
-- **Status:** open
-- **Why:** a one-shot burst spawns all its particles in its first time step.
-  If that step's compute dispatch is skipped (GPU buffers, material or
-  pipeline not ready yet), the step is spent anyway and the burst never
-  spawns. Step 3 hit this with the laser (fixed by ordering, see
-  `UPSTREAM.md`), but anything that delays GPU resources a frame would
-  bring it back.
-- **What to do:** don't advance an emitter's time until a compute dispatch
-  has run for it (a feedback flag from the render world), or spawn
-  particles in the first step that actually runs.
-- **Where:** `kestrel/vfx/sprinkles/src/spawning.rs`
-  (`step_particle_time`), `compute.rs`.
-- **Found in:** VFX spike step 3.
-
-## Simulate a pool's bursts in one dispatch
-
-- **Status:** open
-- **Why:** with pooled bursts, each burst still has its own compute
-  dispatch on the pool's shared buffer: 2.5 ms of Deck GPU at 200
-  impacts/s (1.4 ms on the desktop). That is most of what is left between
-  pooled sprinkles (11.4 ms a frame) and legacy (9.9 ms). Dispatches that
-  write one buffer may also be serialized by barriers.
-- **What to do:** put each burst's parameters (the `EmitterUniforms` it has
-  now) in a storage buffer indexed by slot, and dispatch each pool once
-  over its used slots. Measure with `--vfx-stress impacts=200` on the Deck.
-- **Where:** `kestrel/vfx/sprinkles/src/compute.rs`, `extract.rs`,
-  `pool.rs`, `shaders/particle_simulate.wesl`.
-- **Found in:** VFX spike step 4 (pooled bursts).
-
-## Draw only a pool's used slots
-
-- **Status:** open
-- **Why:** a pool's draw covers all its slots, live or not. Cheap for the
-  stone impact (12–18 particles a slot), not for the arc (270 a slot, 8,640
-  instances in its first pool): the Deck's arc-only load is +0.4 ms over
-  legacy.
-- **What to do:** draw up to the highest used slot (indirect draw or a
-  mesh per capacity step), or give emitters with many particles smaller
-  pools.
-- **Where:** `kestrel/vfx/sprinkles/src/pool.rs`, `spawning.rs`
-  (`create_pool`), `mesh.rs`.
-- **Found in:** VFX spike step 4 (pooled bursts).
-
-## Free and update particle pools
-
-- **Status:** open
-- **Why:** pools are never freed or shrunk, so GPU memory stays at the
-  high-water mark (+7 MB at 200 impacts/s, +24 MB with lasers and arcs).
-  Live edits to a pooled emitter's mesh, material or particle count don't
-  reach existing pools. Fine for compiled-in files; not for live reload or
-  an editor.
-- **What to do:** drop a pool after it has been empty for a while; rebuild
-  an asset's pools when the asset changes.
-- **Where:** `kestrel/vfx/sprinkles/src/pool.rs`, `spawning.rs`
-  (`sync_*`).
-- **Found in:** VFX spike step 4 (pooled bursts).
-
 ## Find the pooled laser capture's difference near the impact
 
 - **Status:** open
@@ -288,13 +229,12 @@ used slots" come after the blood port.
 - **Why:** `--vfx-stress`, `effects::stress_bolt`, `bevy_sprinkles::stats`
   and the `KESTREL_SPRINKLES_NO_REUSE` / `KESTREL_SPRINKLES_NO_POOL`
   switches exist to measure the spike.
-- **What to do:** the fork is adopted (step 6), so keep `--vfx-stress`
-  until "Simulate a pool's bursts in one dispatch" is measured with it.
-  Then keep it only if we want a performance regression check, or delete
-  `app/src/vfx_stress.rs`, its hooks in `control/mod.rs`, `main.rs` and
-  `effects.rs`, and the fork's `stats.rs` and switches (`UPSTREAM.md`,
-  "Burst performance", "Pooled bursts"). Drop the switches with the
-  legacy path either way.
+- **What to do:** the single dispatch per pool is measured with it
+  (handoff, "Pool costs"). The user's direction (2026-10-28): keep
+  `--vfx-stress` as a performance regression check. Drop
+  `KESTREL_SPRINKLES_NO_REUSE` and the spike-only counters in the fork's
+  `stats.rs` later (`UPSTREAM.md`, "Burst performance", "Pooled bursts"),
+  and `KESTREL_SPRINKLES_NO_POOL` with the legacy path.
 - **Where:** `kestrel/app/src/vfx_stress.rs`,
   `kestrel/vfx/sprinkles/src/stats.rs`.
 - **Found in:** VFX spike step 4.
@@ -339,7 +279,128 @@ used slots" come after the blood port.
 - **Where:** `kestrel/app/README.md`, `kestrel/vfx/sprinkles/src/compute.rs`.
 - **Found in:** VFX spike step 5.
 
+## Let the stress harness stop firing
+
+- **Status:** open
+- **Why:** `--vfx-stress` fires until the run ends, so pools never sit
+  empty and the 5 s pool freeing, and the memory it gives back, can't be
+  measured with it.
+- **What to do:** add a spec key (for example `stop_after=N`) that stops
+  firing after N measured frames and keeps recording, so the report shows
+  pools dropping and wgpu memory falling back toward idle.
+- **Where:** `kestrel/app/src/vfx_stress.rs`; scratchpad `run_matrix.sh`.
+- **Found in:** VFX pool costs (handoff, "Pool costs", 2026-10-28).
+
+## Make bursts rows of their pool, not entities
+
+- **Status:** open
+- **Why:** after one dispatch per pool and drawing only used slots, what's
+  left over legacy is mostly render-world CPU from bursts still being
+  entities. At 200 impacts/s on the Intel UHD 770 the frame is 19.93 ms
+  against legacy's 18.61: prepare +0.5 ms, graph +0.3 ms, extract
+  +0.2 ms, and 0.3 ms of GPU in Bevy's `uniform_allocation` and
+  `bin_unpacking`. The Deck's slower CPU will make this share larger.
+- **What to do:** the handoff's "Adopt and rewrite parts now" option, for
+  the pooled path only: keep a burst's runtime (time steps, seed, trigger)
+  as a row in its pool instead of an emitter entity, and extract and
+  prepare per pool. Measure with `--vfx-stress` on the UHD 770 and the Deck.
+- **Where:** `kestrel/vfx/sprinkles/src/pool.rs`, `spawning.rs`,
+  `extract.rs`, `compute.rs`.
+- **Found in:** VFX pool costs (handoff, "Pool costs", 2026-10-28).
+
+## Measure the pool work on the Deck
+
+- **Status:** open
+- **Why:** one dispatch per pool and drawing only used slots were measured
+  on the RTX 4070 and the Intel UHD 770 (a GPU-bound stand-in), not on the
+  Deck, whose CPU is slower.
+- **What to do:** rerun the stress matrix on the Deck (idle, 10/50/200
+  impacts/s, lasers, arcs, both mixes) for legacy and sprinkles; compare
+  with the handoff's pooled Deck table and the UHD 770 numbers in "Pool
+  costs". Needs the Deck and a Linux host, or "Let the Steam Deck launcher
+  run from Windows" first.
+- **Where:** `kestrel/VFX_SPIKE_HANDOFF.md` (step 4, "Pool costs").
+- **Found in:** VFX pool costs (handoff, "Pool costs", 2026-10-28).
+
 ## Done
+
+## Simulate a pool's bursts in one dispatch
+
+- **Status:** done (PR pending, branch kestrel-vfx-pool-perf)
+- **Why:** with pooled bursts, each burst still has its own compute
+  dispatch on the pool's shared buffer: 2.5 ms of Deck GPU at 200
+  impacts/s (1.4 ms on the desktop). That is most of what is left between
+  pooled sprinkles (11.4 ms a frame) and legacy (9.9 ms). Dispatches that
+  write one buffer may also be serialized by barriers.
+- **What to do:** put each burst's parameters (the `EmitterUniforms` it has
+  now) in a storage buffer indexed by slot, and dispatch each pool once
+  over its used slots. Measure with `--vfx-stress impacts=200` on the Deck.
+- **What was done:** bursts that share a bind group (a pool's) are
+  simulated by one compute dispatch per step, up to 64 bursts each, with
+  their uniforms consecutive in the shared uniform buffer. Particle compute
+  at 200 impacts/s: 2.89 → 0.23 ms on the Intel UHD 770, 1.17 → 0.05 ms on
+  the RTX 4070 (handoff, "Pool costs"). Not measured on the Deck yet (see
+  "Measure the pool work on the Deck").
+- **Where:** `kestrel/vfx/sprinkles/src/compute.rs`, `extract.rs`,
+  `pool.rs`, `shaders/particle_simulate.wesl`.
+- **Found in:** VFX spike step 4 (pooled bursts).
+
+## Draw only a pool's used slots
+
+- **Status:** done (PR pending, branch kestrel-vfx-pool-perf)
+- **Why:** a pool's draw covers all its slots, live or not. Cheap for the
+  stone impact (12–18 particles a slot), not for the arc (270 a slot, 8,640
+  instances in its first pool): the Deck's arc-only load is +0.4 ms over
+  legacy.
+- **What to do:** draw up to the highest used slot (indirect draw or a
+  mesh per capacity step), or give emitters with many particles smaller
+  pools.
+- **What was done:** bursts take the lowest free slot; each frame a pool
+  draws and sorts only up to its highest used slot, rounded up to a power
+  of two (at least 8), with a cached mesh of that many slots. Arcs alone on
+  the UHD 770: 17.13 → 16.03 ms (legacy 15.57).
+- **Where:** `kestrel/vfx/sprinkles/src/pool.rs`, `spawning.rs`
+  (`create_pool`), `mesh.rs`.
+- **Found in:** VFX spike step 4 (pooled bursts).
+
+## Don't lose a burst when its first step can't run
+
+- **Status:** done (PR pending, branch kestrel-vfx-pool-perf)
+- **Why:** a one-shot burst spawns all its particles in its first time step.
+  If that step's compute dispatch is skipped (GPU buffers, material or
+  pipeline not ready yet), the step is spent anyway and the burst never
+  spawns. Step 3 hit this with the laser (fixed by ordering, see
+  `UPSTREAM.md`), but anything that delays GPU resources a frame would
+  bring it back.
+- **What to do:** don't advance an emitter's time until a compute dispatch
+  has run for it (a feedback flag from the render world), or spawn
+  particles in the first step that actually runs.
+- **What was done:** the compute node records the emitters it simulated;
+  until an emitter is recorded, extraction emits its first step from the
+  start of its first cycle, so a burst spawns in the first step that runs.
+  Works per burst within a pool's batched dispatch.
+- **Where:** `kestrel/vfx/sprinkles/src/spawning.rs`
+  (`step_particle_time`), `compute.rs`.
+- **Found in:** VFX spike step 3.
+
+## Free and update particle pools
+
+- **Status:** done (PR pending, branch kestrel-vfx-pool-perf)
+- **Why:** pools are never freed or shrunk, so GPU memory stays at the
+  high-water mark (+7 MB at 200 impacts/s, +24 MB with lasers and arcs).
+  Live edits to a pooled emitter's mesh, material or particle count don't
+  reach existing pools. Fine for compiled-in files; not for live reload or
+  an editor.
+- **What to do:** drop a pool after it has been empty for a while; rebuild
+  an asset's pools when the asset changes.
+- **What was done:** a pool empty for 5 s of game time is dropped (except
+  the first pool of each asset and emitter), and a modified or removed
+  particle asset drops its pools and restarts their bursts on new pools.
+  Freeing isn't measured yet: the stress harness never stops firing (see
+  "Let the stress harness stop firing").
+- **Where:** `kestrel/vfx/sprinkles/src/pool.rs`, `spawning.rs`
+  (`sync_*`).
+- **Found in:** VFX spike step 4 (pooled bursts).
 
 ## Write up the spike and decide
 

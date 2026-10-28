@@ -318,7 +318,8 @@ In order. Each is a task in `todo/vfx.md`.
 3. **Port the impact materials** (Metal, Crystal, Polymer) on `base`.
 4. **Port blood, deflection and the trial burst.**
 5. **One dispatch per pool** and **draw only used slots**; measure on the
-   Deck with the stress harness.
+   Deck with the stress harness. Done and measured on the desktop and the
+   UHD 770 (Findings, "Pool costs"); the Deck run is still to do.
 6. **Port blade echo and the dust ring** (trigger rotation, custom mesh,
    alpha over lifetime in pools).
 7. **Decide the atmosphere** (fireflies, lightning): port with looping
@@ -326,10 +327,10 @@ In order. Each is a task in `todo/vfx.md`.
 8. **Remove the legacy path** once every ported effect has parity: the
    `VfxBackend` toggle, the legacy functions and `FxAssets` parts no
    longer used; `update_effects` keeps severed heads and laser timing.
-9. **Stress harness:** keep `--vfx-stress` as a performance check until
-   item 5 is measured, then keep it only if we want a regression
-   check; drop `stats.rs` and the `KESTREL_SPRINKLES_NO_*` switches with
-   the legacy path.
+9. **Stress harness:** item 5 is measured; keep `--vfx-stress` as a
+   regression check. Drop `KESTREL_SPRINKLES_NO_REUSE` and the spike-only
+   counters later, the other `KESTREL_SPRINKLES_NO_*` switches with the
+   legacy path.
 10. **Editor:** not needed now. Revisit when people tune effects
     regularly and hot reload plus sliders aren't enough.
 
@@ -870,6 +871,109 @@ now sorted in the frame a slot is freed too.
 - **Earlier risks.** The burst-loss risk and the Deck reuse slowdown (above)
   are unchanged, but the per-burst path they concern no longer carries
   Kestrel's effects.
+
+#### Pool costs (after the spike, 2026-10-28)
+
+**What changed** (branch `kestrel-vfx-pool-perf`, one commit each).
+- "Simulate a pool's bursts in one dispatch": one compute dispatch per pool
+  and step, up to 64 bursts each, instead of one per burst.
+- "Draw only a pool's used slots": bursts take the lowest free slot, and a
+  pool draws and sorts only up to its highest used slot (a power of two, at
+  least 8).
+- "Don't lose a burst when its first step can't run": until the compute
+  node has simulated a burst, its first step is re-emitted.
+- "Free and update particle pools": a pool empty for 5 s is dropped (but
+  the first of each emitter stays), and a changed asset rebuilds its pools.
+
+**Method.** A different machine from step 4: RTX 4070, and Intel UHD 770
+as a GPU-bound stand-in for the Deck. Opt build, the same harness and
+loads, windowed 1440×960, vsync off. One run per load, 4200 frames with
+the first 600 left out (3600 measured). Legacy and "master" (pooled
+bursts, as merged) are the baseline runs from the same session; "final" is
+this branch. The Deck was not re-measured. Idle matches the baseline
+within 0.05 ms on both GPUs, so the runs compare.
+
+Intel UHD 770, frame ms mean (p99):
+
+| Load | Legacy | Master | Final | Final − legacy |
+|---|---|---|---|---|
+| idle | 15.56 (15.99) | 15.56 (15.90) | 15.57 (15.98) | +0.01 |
+| 10 impacts/s | 15.69 (16.09) | 16.24 (16.73) | 16.06 (16.52) | +0.37 |
+| 50 impacts/s | 16.26 (16.69) | 17.83 (18.31) | 16.92 (17.33) | +0.66 |
+| 200 impacts/s | 18.61 (19.14) | 22.77 (23.40) | 19.93 (20.43) | +1.33 |
+| 8 lasers | 15.55 (15.99) | 15.64 (16.07) | 15.65 (16.11) | +0.10 |
+| 8 arcs/s | 15.57 (15.95) | 17.13 (17.67) | 16.04 (16.49) | +0.47 |
+| 50/s + lasers + arcs | 16.25 (16.70) | 19.44 (20.00) | 17.41 (17.90) | +1.16 |
+| 200/s + lasers + arcs | 18.60 (19.11) | 24.39 (25.10) | 20.42 (21.00) | +1.82 |
+
+RTX 4070, frame ms mean (p99):
+
+| Load | Legacy | Master | Final | Final − legacy |
+|---|---|---|---|---|
+| idle | 2.12 (2.61) | 2.07 (2.40) | 2.07 (2.47) | −0.05 |
+| 10 impacts/s | 2.20 (2.63) | 2.36 (2.80) | 2.38 (2.82) | +0.18 |
+| 50 impacts/s | 2.52 (2.91) | 2.63 (3.12) | 2.63 (3.18) | +0.11 |
+| 200 impacts/s | 3.39 (3.89) | 3.40 (3.90) | 2.99 (3.47) | −0.40 |
+| 8 lasers | 2.08 (2.45) | 2.15 (2.55) | 2.18 (2.56) | +0.10 |
+| 8 arcs/s | 2.14 (2.60) | 2.19 (2.63) | 2.20 (2.62) | +0.06 |
+| 50/s + lasers + arcs | 2.55 (2.99) | 2.82 (3.56) | 2.71 (3.21) | +0.15 |
+| 200/s + lasers + arcs | 3.47 (3.94) | 3.55 (4.10) | 3.11 (3.62) | −0.35 |
+
+Where the time goes (ms per frame, means). Rendering is pipelined, and on
+the UHD 770 the render world waits for the GPU inside queue, so there
+queue tracks GPU time rather than CPU work.
+
+| UHD 770 | Legacy i200 | Master i200 | Final i200 | Legacy mix200 | Master mix200 | Final mix200 |
+|---|---|---|---|---|---|---|
+| main world CPU | 2.09 | 1.54 | 1.48 | 2.26 | 1.59 | 1.52 |
+| extract | 0.27 | 0.39 | 0.44 | 0.27 | 0.40 | 0.45 |
+| render prepare | 1.38 | 2.00 | 1.87 | 1.37 | 2.09 | 1.98 |
+| render graph | 1.05 | 1.57 | 1.31 | 1.05 | 1.63 | 1.34 |
+| render queue | 15.81 | 18.70 | 16.21 | 15.81 | 20.16 | 16.54 |
+| GPU, all passes | 16.36 | 19.99 | 17.14 | 16.36 | 20.99 | 17.43 |
+| ...particle compute + sort | – | 2.89 + 0.05 | 0.23 + 0.06 | – | 2.91 + 0.11 | 0.25 + 0.08 |
+
+| RTX 4070 | Legacy i200 | Master i200 | Final i200 | Legacy mix200 | Master mix200 | Final mix200 |
+|---|---|---|---|---|---|---|
+| main world CPU | 1.57 | 1.43 | 1.41 | 1.58 | 1.45 | 1.44 |
+| extract | 0.20 | 0.31 | 0.31 | 0.20 | 0.32 | 0.30 |
+| render prepare | 0.58 | 0.97 | 0.97 | 0.58 | 1.05 | 1.06 |
+| render graph | 0.91 | 1.51 | 1.13 | 0.93 | 1.57 | 1.16 |
+| render queue | 1.63 | 0.52 | 0.52 | 1.69 | 0.53 | 0.52 |
+| GPU, all passes | 0.98 | 2.16 | 1.02 | 1.01 | 2.22 | 1.05 |
+| ...particle compute + sort | – | 1.17 + 0.02 | 0.05 + 0.01 | – | 1.18 + 0.02 | 0.06 + 0.02 |
+
+**Per step.** Intermediate runs (`batch_*` after the dispatch, `drawn_*`
+after drawing used slots, `pools_rtx4070` after freeing pools) place each
+saving:
+- One dispatch per pool takes particle compute from 2.89 to 0.23 ms on the
+  UHD 770 at 200/s (1.17 to 0.05 on the RTX 4070). The 200/s frame drops
+  from 22.77 to 19.92 ms; arcs alone don't change (17.14).
+- Drawing used slots fixes arcs: 17.14 to 16.03 ms on the UHD 770, from
+  +1.56 to +0.46 over legacy. The depth prepass and opaque pass no longer
+  draw the arc pool's empty slots.
+- The burst-loss fix and pool freeing cost nothing measurable (final
+  matches `drawn_*` within 0.06 ms on every load).
+
+**Memory.** Peak wgpu memory is unchanged: 232 vs 231 MB at 200/s on the
+UHD 770, 250 vs 249 MB for the full load (legacy 226 and 229). The harness
+fires until the run ends, so pools never sit empty for 5 s and freeing
+isn't exercised here (todo).
+
+**What is left.**
+- On the UHD 770 the gap to legacy is now +1.3 ms at 200/s (was +4.2) and
+  +0.5 ms for arcs (was +1.6). On the RTX 4070 sprinkles is faster than
+  legacy at 200/s; legacy's 3,200 cubes cost it more in queue.
+- The rest is mostly render-world CPU from bursts still being entities. At
+  200/s on the UHD 770, prepare is +0.5 ms and graph +0.3 ms over legacy,
+  extract +0.2 ms (the fork's own extract 0.24 ms, its prepare 0.5 ms).
+  Of the +0.8 ms of GPU, 0.3 ms is particles, 0.3 ms Bevy's
+  `uniform_allocation` and `bin_unpacking`, 0.3 ms the depth prepass.
+  Making bursts rows of their pool instead of entities ("Adopt and rewrite
+  parts now", above) is the next step (todo).
+- The Deck was not re-measured. The UHD 770 is GPU-bound like the Deck,
+  but the Deck's CPU is slower, so its render-world share will be larger
+  (todo).
 
 ### Step 5: web build on WebGPU (2026-10-27)
 
