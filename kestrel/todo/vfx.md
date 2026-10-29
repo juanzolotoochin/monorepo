@@ -299,7 +299,7 @@ used slots" come after the blood port.
 
 ## Port blood, deflection and the trial burst
 
-- **Status:** done (PR pending, branch kestrel-vfx-ports)
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/130)
 - **Why:** they are plain bursts of cubes, still CPU particles.
 - **What to do:** see the blood sketch in the handoff ("Authoring"):
   two droplet emitters. Decided (2026-10-28): a new fork emitter field,
@@ -344,7 +344,7 @@ used slots" come after the blood port.
 
 ## Pass options to the web build from the URL
 
-- **Status:** done (PR pending, branch kestrel-vfx-ports)
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/130)
 - **Why:** the wasm build has no command line, so `--vfx sprinkles` and
   the other `Options` flags can't be given in the browser; step 5 had to
   switch the backend in the debug menu (Effects → VFX backend) by hand.
@@ -366,7 +366,7 @@ used slots" come after the blood port.
 
 ## Run the stress matrix on the Deck with one command
 
-- **Status:** done (PR pending, branch kestrel-vfx-ports)
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/130)
 - **Why:** the Deck runs so far copied a binary and a scratch script by
   hand (handoff, step 4), and the tables came from a scratchpad script.
 - **What to do:** a script that installs the game on the Deck, runs every
@@ -384,7 +384,7 @@ used slots" come after the blood port.
 
 ## Port the impact materials
 
-- **Status:** done (PR pending, branch kestrel-vfx-ports)
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/130)
 - **Why:** only stone uses an effect file; Metal (also the laser's arrival
   impact), Crystal and Polymer are still legacy.
 - **What to do:** `impact_metal.ron`, `impact_crystal.ron` and
@@ -409,7 +409,7 @@ used slots" come after the blood port.
 
 ## Write the effect file schema doc
 
-- **Status:** done (PR pending, branch kestrel-vfx-ports)
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/130)
 - **Why:** AI and people author effect files from the schema; today it is
   `app/vfx/README.md` plus the fork's Rust doc comments.
 - **What to do:** a doc like `docs/character-definition.md`: one complete
