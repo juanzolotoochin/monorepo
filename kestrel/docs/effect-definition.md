@@ -80,7 +80,7 @@ Read it from the outside in:
 3. Each **emitter** is one kind of particle. `sparks` fires 12 thin glowing bars at once, 2.5 to 7.5 m/s in a 45° cone around the surface normal, leaning upward. They fall at 14 m/s², bounce on the floor, shrink to nothing and are gone within 0.8 s. `flash` is one hot cube at the contact for about four frames.
 4. `lights` is the **light layer**: a point light at the contact, 0.2 m off the surface, fading out in 0.1 s. GPU particles can't light the scene, so lights are their own layer.
 
-The effect is placed at the contact point with its local +Y along the surface normal: emitters aim with `initial_direction: (0.0, 1.0, 0.0)`. Gravity, `world_bias` and the floor are in world space.
+The effect is placed at the contact point with its local +Y along the surface normal: emitters aim with `initial_direction: (0.0, 1.0, 0.0)`. Gravity, `world_bias`, `world_velocity` and the floor are in world space.
 
 The loader rejects unknown fields, in our layers and in the sprinkles asset. A field left out takes sprinkles' default (listed below where it matters), or comes from the `base`.
 
@@ -121,7 +121,7 @@ An emitter has many more fields than these; the fork's doc comments in `kestrel/
 | `time.explosiveness` | ratio 0–1 | 1 emits every particle at once; our bursts use 1. |
 | `time.lifetime_to_target` | | Ours: see "Trigger parameters". |
 | `emission.particles_amount` | count | Particles per burst. Default 8. Pools are sized by it. |
-| `emission.shape` | | `Point` (default), `Sphere(radius)`, `Box(extents)`, ... or ours, `Segment(jitter)`. |
+| `emission.shape` | | `Point` (default), `Sphere(radius)`, `Box(extents: (x, y, z))` (half-extents, local; `blood_splat` uses `(0.55, 0.0, 0.55)` for a flat patch), ... or ours, `Segment(jitter)`. |
 | `emission.particles_per_meter` | per meter | Ours: see "Trigger parameters". |
 | `draw_pass.mesh` | meters | The particle's shape: `Cuboid(half_size: (x, y, z))` is a box twice that size. |
 | `draw_pass.material` | | `Standard((...))`: Bevy's PBR material. We use `base_color`, `emissive`, `perceptual_roughness` (default 0.5), `metallic` (default 0) and `unlit`. |
@@ -134,6 +134,8 @@ An emitter has many more fields than these; the fork's doc comments in `kestrel/
 | `velocities.spread` | degrees | The cone's half-angle around `initial_direction`. Default 45. |
 | `velocities.initial_velocity` | m/s | A random speed between `min` and `max`. Default 0. |
 | `velocities.world_bias` | world vector | Ours: added to each spawn direction, which is normalized again. `(0.0, 0.46, 0.0)` makes a spray lean upward however the effect is placed. The speed doesn't change. |
+| `velocities.world_velocity` | m/s, world vector | Ours: added to each particle's spawn velocity after the direction, `world_bias` and the speed. `(0.0, 1.5, 0.0)` lifts every particle 1.5 m/s however the effect is placed (blood). Not scaled by the trigger's `scale`. Default zero. |
+| `velocities.even_ring` | | Ours: instead of a random direction in the cone, particle `i` of the `n` spawned leaves exactly `spread` degrees off `initial_direction`, at `360° × i / n` around it, the same for every seed; `flatness` is ignored. `spread: 90.0` is a flat ring (the trial burst). Default `false`. |
 | `accelerations.gravity` | m/s², world | Default `(0.0, -9.8, 0.0)`; set it, the legacy effects use 14 or none. |
 | `collision.mode` | | `Some(Rigid(friction, bounce))` bounces on the floor: `bounce` is the share of the normal speed kept, `friction` the share of the sliding speed lost. Default none: particles fall through. |
 | `collision.base_size` | meters | The particle's collision diameter: 0.09 rests the particle's center 4.5 cm above the floor. |
@@ -203,6 +205,7 @@ The base stays a usable effect, and can have its own base. Unknown bases, cycles
 - **Small particles don't cast shadows.** Set `draw_pass.shadow_caster: false` on sparks, chips and the like. Turn it on only where a shadow reads better (large or slow pieces).
 - **Keep bursts pooled.** An emitter is pooled, sharing one buffer and one draw with every other burst of the same emitter, only when it is in world space (`use_local_coords: false`, the default), has no trail mesh and is no sub-emitter's source or target. Any other emitter gets its own buffers, material and draw per burst, which is far slower when effects fire often.
 - **A disabled emitter still costs a pool slot** in each burst, though it draws nothing.
+- **Long-lived bursts hold their slots.** A burst keeps its pool slot until its longest particle dies: `blood_splat`'s 3 s splats at 50 cuts/s keep about 150 bursts per emitter alive, three chained pools (32 + 64 + 128 slots). On the Intel UHD 770 that was 0.4 ms (2.5%) slower than legacy and 2 MB more GPU memory (`kestrel/todo/vfx.md`, "Port blood, deflection and the trial burst").
 - **The culling box.** An effect that reaches far (an arc, a bolt, fast sparks) needs a `visibility_aabb` that big, or it vanishes when its center leaves the screen.
 - **Slow particles stick.** `Rigid` collision bounces only above `2 / (1 + bounce)` m/s of normal speed; slower particles stop and slide.
 

@@ -6,24 +6,6 @@ The spike's plan, decisions and evaluation are in
 order; "Simulate a pool's bursts in one dispatch" and "Draw only a pool's
 used slots" come after the blood port.
 
-## Port blood, deflection and the trial burst
-
-- **Status:** open
-- **Why:** they are plain bursts of cubes, still CPU particles.
-- **What to do:** see the blood sketch in the handoff ("Authoring"):
-  two droplet emitters. Decided (2026-10-28): a new fork emitter field,
-  a world-space velocity added at spawn, for legacy's 1.5 m/s upward
-  after normalizing; the floor splats as a separate `blood_splat` effect
-  that game code triggers at the floor point under the cut (flat box,
-  uniform scale range); the trial burst's 24 cubes from a new fork
-  emission option that places N particles at even angles on a ring.
-  Deflection is a plain spray. Measure blood's
-  3 s splats on the Deck: they hold pool slots longer than any effect so
-  far.
-- **Where:** `kestrel/app/vfx/`, `kestrel/app/src/effects.rs`,
-  `palimpsest/mod.rs`, `kestrel/vfx/sprinkles/src/shaders/particle_simulate.wesl`.
-- **Found in:** VFX spike handoff, step 6.
-
 ## Port blade echo and the dust ring
 
 - **Status:** open
@@ -275,6 +257,10 @@ used slots" come after the blood port.
   installs the game, runs all 16 runs (4200 frames, 600 left out, as on the
   desktop) and prints the tables; reports land in
   `kestrel-vfx-stress/deck_pools/`. It hasn't been run yet.
+  Also run blood at 50 cuts/s (`blood=50`) on both backends: its 3 s
+  splats hold pool slots longest; on the UHD 770 sprinkles was 0.4 ms
+  slower than legacy there (see "Port blood, deflection and the trial
+  burst").
 - **Where:** `kestrel/VFX_SPIKE_HANDOFF.md` (step 4, "Pool costs"),
   `kestrel/app/deck_vfx_stress.sh`.
 - **Found in:** VFX pool costs (handoff, "Pool costs", 2026-10-28).
@@ -310,6 +296,51 @@ used slots" come after the blood port.
 - **Found in:** porting the impact materials (branch kestrel-vfx-ports).
 
 ## Done
+
+## Port blood, deflection and the trial burst
+
+- **Status:** done (PR pending, branch kestrel-vfx-ports)
+- **Why:** they are plain bursts of cubes, still CPU particles.
+- **What to do:** see the blood sketch in the handoff ("Authoring"):
+  two droplet emitters. Decided (2026-10-28): a new fork emitter field,
+  a world-space velocity added at spawn, for legacy's 1.5 m/s upward
+  after normalizing; the floor splats as a separate `blood_splat` effect
+  that game code triggers at the floor point under the cut (flat box,
+  uniform scale range); the trial burst's 24 cubes from a new fork
+  emission option that places N particles at even angles on a ring.
+  Deflection is a plain spray. Measure blood's
+  3 s splats on the Deck: they hold pool slots longer than any effect so
+  far.
+- **What was done:** fork fields `EmitterVelocities::world_velocity`
+  (added at spawn, in the uniforms' padding before `slot_offset`, so the
+  struct's size is unchanged) and `even_ring` (particle `i` of `n` leaves
+  `spread` degrees off the direction at `360° × i / n`). The ring is a
+  velocity option rather than a ring emission shape: positions on a ring
+  don't fly outward, and radial velocity pushes from the pivot in 3D, so
+  rising cubes drift up (UPSTREAM.md). Files: `blood.ron` (two emitters of
+  11 droplets, one per blood material, 30° cone, 2 to 4.8 m/s, bias up
+  0.27, world velocity 1.5 m/s up, gravity 13, 0.48 to 0.93 s, Rigid
+  floor), `blood_splat.ron` (4 + 3 flat boxes in a ±0.55 m patch, scale
+  0.6 to 1.4, 3 s, shrinking like legacy), `deflection.ron` (14 metal
+  spark bars, 70° cone, 1.3 to 4.3 m/s, gravity 7, 0.33 s, Rigid) and
+  `trial_burst.ron` (24 crystal cubes on an even flat ring at 3 m/s plus
+  3 m/s up, gravity 6, 0.8 s). `effects::blood` triggers `blood` and
+  `blood_splat` at `(x, 0.012, z)`, `effects::deflection` and
+  `palimpsest::tick` theirs, on the sprinkles backend; legacy otherwise.
+  All four pool. Captures (combat-arena cuts and a brute's deflection,
+  the surprise lab's core) match in timing, direction, count and color.
+  Differences: no droplet, bar or cube shadows (`shadow_caster: false`),
+  square splats where legacy's are random rectangles, the trial ring at
+  one height where legacy alternates 2, 3 and 4 m/s up, and the cone
+  sprays a little tighter than legacy's random boxes. `--vfx-stress`
+  gained `blood=N`. On the Intel UHD 770 (the Deck's stand-in; the Deck
+  run is in "Measure the pool work on the Deck"), mean frame ms legacy /
+  sprinkles: idle 15.56 / 15.55, 20 cuts/s 15.78 / 16.03, 50 cuts/s
+  16.11 / 16.51 (particle compute and sort 0.26 ms; 10 pools for 396
+  live bursts, peak GPU memory 224 MB against legacy's 222).
+- **Where:** `kestrel/app/vfx/`, `kestrel/app/src/effects.rs`,
+  `palimpsest/mod.rs`, `kestrel/vfx/sprinkles/src/shaders/particle_simulate.wesl`.
+- **Found in:** VFX spike handoff, step 6.
 
 ## Pass options to the web build from the URL
 

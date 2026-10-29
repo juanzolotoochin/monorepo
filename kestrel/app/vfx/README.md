@@ -32,3 +32,12 @@ read by the simulation, and effects are view-only. List every file in
   80 m/s with `lifetime_to_target`, placed at the muzzle with +Y toward the
   target. `effects::LaserBolt` still decides when the shot arrives; both
   use the same speed.
+- `blood.ron`: the droplets of a cut (`effects::blood`): two emitters of
+  11 cubes, one per blood material, placed at the cut with +Y along the
+  cut's direction; `world_velocity` gives legacy's 1.5 m/s lift.
+- `blood_splat.ron`: the 7 floor splats under a cut, lying 3 s;
+  `effects::blood` triggers it at the floor point (y = 0.012) with +Y up.
+- `deflection.ron`: a blocked blow or shot (`effects::deflection`): 14
+  glowing bars sprayed upward.
+- `trial_burst.ron`: the memory trial's core collected
+  (`palimpsest::tick`): 24 cubes out on an `even_ring`.

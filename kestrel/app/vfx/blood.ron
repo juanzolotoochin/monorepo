@@ -1,0 +1,112 @@
+// Blood from a cut: 22 voxel droplets thrown away from the cut and a little
+// up, bouncing on the floor. Port of the droplets of the hand-written
+// `effects::blood`; the floor splats are `blood_splat`. The format is in
+// docs/effect-definition.md.
+//
+// Placed at the cut with local +Y along the cut's direction (away from
+// whoever struck); the lift, gravity and the floor are in world space.
+(
+    version: 1,
+    particles: (
+        sprinkles_version: "0.3",
+        name: "blood",
+        dimension: D3,
+        despawn_on_finish: true,
+        emitters: [
+            (
+                name: "droplets_dark",
+                // 0.48 to 0.93 s, as before.
+                time: (lifetime: 0.93, lifetime_randomness: 0.4839, one_shot: true, explosiveness: 1.0),
+                draw_pass: (
+                    // Droplets 7 to 14.5 cm across.
+                    mesh: Cuboid(half_size: (0.05, 0.05, 0.05)),
+                    material: Standard((
+                        // Dark blood (`FxAssets::blood[0]`).
+                        base_color: (0.42, 0.025, 0.035, 1.0),
+                        perceptual_roughness: 0.72,
+                        metallic: 0.55,
+                    )),
+                    transform_align: Some(YToVelocity),
+                    // Small particles go without shadows (docs/effect-definition.md).
+                    shadow_caster: false,
+                    visibility_aabb: (center: (0.0, 0.0, 0.0), half_extents: (5.0, 5.0, 5.0)),
+                ),
+                // Half of legacy's 22 droplets each.
+                emission: (particles_amount: 11),
+                scale: (range: (min: 0.7, max: 1.45), scale_over_lifetime: Some((
+                    name: Some("Shrink"),
+                    // (1 - t)^0.65, sampled.
+                    x: (points: [
+                        (position: 0.0, value: 1.0, mode: SingleCurve),
+                        (position: 0.25, value: 0.83, mode: SingleCurve),
+                        (position: 0.5, value: 0.64, mode: SingleCurve),
+                        (position: 0.75, value: 0.41, mode: SingleCurve),
+                        (position: 0.9, value: 0.22, mode: SingleCurve),
+                        (position: 1.0, value: 0.0, mode: SingleCurve),
+                    ], range: (min: 0.0, max: 1.0)),
+                ))),
+                velocities: (
+                    initial_direction: (0.0, 1.0, 0.0),
+                    // Legacy adds a random box of +-1 to 2.2 times the cut
+                    // direction: nearly all within 30 degrees of it.
+                    spread: 30.0,
+                    initial_velocity: (min: 2.0, max: 4.8),
+                    // The box's upward part (0 to 1.2, so 0.6 of 2.2 on average).
+                    world_bias: (0.0, 0.2727, 0.0),
+                    // Added after the speed, as legacy does.
+                    world_velocity: (0.0, 1.5, 0.0),
+                ),
+                accelerations: (gravity: (0.0, -13.0, 0.0)),
+                // Rests 4.5 cm above the floor; keeps a third of its fall speed and two thirds of its slide.
+                collision: (mode: Some(Rigid(friction: 0.35, bounce: 0.32)), base_size: 0.09),
+            ),
+            (
+                name: "droplets_bright",
+                // 0.48 to 0.93 s, as before.
+                time: (lifetime: 0.93, lifetime_randomness: 0.4839, one_shot: true, explosiveness: 1.0),
+                draw_pass: (
+                    // Droplets 7 to 14.5 cm across.
+                    mesh: Cuboid(half_size: (0.05, 0.05, 0.05)),
+                    material: Standard((
+                        // Bright blood (`FxAssets::blood[1]`).
+                        base_color: (0.73, 0.075, 0.055, 1.0),
+                        perceptual_roughness: 0.72,
+                        metallic: 0.48,
+                    )),
+                    transform_align: Some(YToVelocity),
+                    // Small particles go without shadows (docs/effect-definition.md).
+                    shadow_caster: false,
+                    visibility_aabb: (center: (0.0, 0.0, 0.0), half_extents: (5.0, 5.0, 5.0)),
+                ),
+                // Half of legacy's 22 droplets each.
+                emission: (particles_amount: 11),
+                scale: (range: (min: 0.7, max: 1.45), scale_over_lifetime: Some((
+                    name: Some("Shrink"),
+                    // (1 - t)^0.65, sampled.
+                    x: (points: [
+                        (position: 0.0, value: 1.0, mode: SingleCurve),
+                        (position: 0.25, value: 0.83, mode: SingleCurve),
+                        (position: 0.5, value: 0.64, mode: SingleCurve),
+                        (position: 0.75, value: 0.41, mode: SingleCurve),
+                        (position: 0.9, value: 0.22, mode: SingleCurve),
+                        (position: 1.0, value: 0.0, mode: SingleCurve),
+                    ], range: (min: 0.0, max: 1.0)),
+                ))),
+                velocities: (
+                    initial_direction: (0.0, 1.0, 0.0),
+                    // Legacy adds a random box of +-1 to 2.2 times the cut
+                    // direction: nearly all within 30 degrees of it.
+                    spread: 30.0,
+                    initial_velocity: (min: 2.0, max: 4.8),
+                    // The box's upward part (0 to 1.2, so 0.6 of 2.2 on average).
+                    world_bias: (0.0, 0.2727, 0.0),
+                    // Added after the speed, as legacy does.
+                    world_velocity: (0.0, 1.5, 0.0),
+                ),
+                accelerations: (gravity: (0.0, -13.0, 0.0)),
+                // Rests 4.5 cm above the floor; keeps a third of its fall speed and two thirds of its slide.
+                collision: (mode: Some(Rigid(friction: 0.35, bounce: 0.32)), base_size: 0.09),
+            ),
+        ],
+    ),
+)

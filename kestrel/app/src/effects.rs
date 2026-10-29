@@ -349,6 +349,19 @@ pub fn blade_trail(
 
 /// Voxel droplets travel away from the cut, then bounce and fade on the ground.
 pub fn blood(world: &mut World, position: Vec3, direction: Vec3, seed: u32) {
+    // With the sprinkles backend the droplets come from `vfx/blood.ron`, and
+    // the splats from `vfx/blood_splat.ron` on the floor under the cut.
+    let droplets = crate::vfx::Trigger::new(position, direction.normalize_or(Vec3::Y)).seed(seed);
+    if crate::vfx::spawn(world, "blood", droplets) {
+        let floor = Vec3::new(position.x, 0.012, position.z);
+        crate::vfx::spawn(world, "blood_splat", crate::vfx::Trigger::new(floor, Vec3::Y).seed(seed));
+        return;
+    }
+    legacy_blood(world, position, direction, seed);
+}
+
+/// The hand-written blood: one CPU-moved entity per droplet and splat.
+fn legacy_blood(world: &mut World, position: Vec3, direction: Vec3, seed: u32) {
     let assets = world.resource::<FxAssets>();
     let cube = assets.cube.clone();
     let materials = assets.blood.clone();
@@ -568,7 +581,17 @@ fn spawn_bolt(world: &mut World, bolt: LaserBolt) {
     ));
 }
 
+/// Glowing bars sprayed up where a blow or shot was blocked.
 pub fn deflection(world: &mut World, position: Vec3, seed: u32) {
+    // With the sprinkles backend, from `vfx/deflection.ron`.
+    if crate::vfx::spawn(world, "deflection", crate::vfx::Trigger::new(position, Vec3::Y).seed(seed)) {
+        return;
+    }
+    legacy_deflection(world, position, seed);
+}
+
+/// The hand-written deflection: one CPU-moved entity per bar.
+fn legacy_deflection(world: &mut World, position: Vec3, seed: u32) {
     let assets = world.resource::<FxAssets>();
     let cube = assets.cube.clone();
     let glow = assets.spark[1].clone();

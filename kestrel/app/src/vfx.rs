@@ -29,6 +29,10 @@ pub const FILES: &[(&str, &str)] = &[
     ("impact_polymer", include_str!("../vfx/impact_polymer.ron")),
     ("arc", include_str!("../vfx/arc.ron")),
     ("laser_bolt", include_str!("../vfx/laser_bolt.ron")),
+    ("blood", include_str!("../vfx/blood.ron")),
+    ("blood_splat", include_str!("../vfx/blood_splat.ron")),
+    ("deflection", include_str!("../vfx/deflection.ron")),
+    ("trial_burst", include_str!("../vfx/trial_burst.ron")),
 ];
 
 /// Which path draws effects that have a file. `--vfx legacy|sprinkles`, or
