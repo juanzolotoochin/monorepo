@@ -1,6 +1,6 @@
 // The arc coil's discharge: a jittered chain of glowing blue cubes from the
 // coil to what it hit, gone in 0.13 s. Port of the hand-written
-// `effects::arc` (VFX spike step 3). The format is in README.md.
+// `effects::arc` (VFX spike step 3). The format is in docs/effect-definition.md.
 //
 // Triggered at the line's start with the line's end as the target; the seed
 // is the arc's (the tick, or the struck agent for a chained hit).

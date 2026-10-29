@@ -236,12 +236,13 @@ pub struct EmitterUniforms {
     pub world_bias: [f32; 3],
     /// Particles a cycle spawns (`particles_per_meter`); `amount` otherwise.
     pub spawn_count: u32,
+    /// Kestrel: `EmitterVelocities::world_velocity`, world space (in spawn
+    /// space when the emitter simulates in local space). Takes the three
+    /// padding slots after `slot_offset` had, so the size is unchanged.
+    pub world_velocity: [f32; 3],
     /// Kestrel: where this burst's particles start in a pooled buffer
     /// (`pool.rs`); 0 for an emitter with its own buffer.
     pub slot_offset: u32,
-    pub _slot_pad0: u32,
-    pub _slot_pad1: u32,
-    pub _slot_pad2: u32,
 }
 
 /// Kestrel: the trigger has a target (`trigger_target` is set).
@@ -252,6 +253,9 @@ pub const TRIGGER_FLAG_LIFETIME_TO_TARGET: u32 = 2;
 /// particle keeps the emitter's rotation (`ref_up`, as a quaternion), since
 /// the pool is drawn without the emitter's transform.
 pub const TRIGGER_FLAG_KEEP_ROTATION: u32 = 4;
+/// Kestrel: `EmitterVelocities::even_ring`, spawn directions evenly on the
+/// spread cone's rim.
+pub const TRIGGER_FLAG_EVEN_RING: u32 = 8;
 
 #[derive(Resource, Default)]
 pub struct ExtractedColliders {
@@ -633,13 +637,11 @@ fn build_base_uniforms(
         _trail_pad1: 0,
 
         trigger_target: [0.0; 3],
-        trigger_flags: 0,
+        trigger_flags: if emitter.velocities.even_ring { TRIGGER_FLAG_EVEN_RING } else { 0 },
         world_bias: [0.0; 3],
         spawn_count: runtime.spawn_count.unwrap_or(emitter.emission.particles_amount),
+        world_velocity: [0.0; 3],
         slot_offset: 0,
-        _slot_pad0: 0,
-        _slot_pad1: 0,
-        _slot_pad2: 0,
     }
 }
 
@@ -830,6 +832,14 @@ pub fn extract_particle_systems(
             world_affine.inverse().transform_vector3(bias).normalize_or_zero() * bias.length()
         } else {
             bias
+        }
+        .into();
+        // Kestrel: the world velocity in spawn space too, keeping its speed.
+        let velocity = emitter.velocities.world_velocity;
+        base_uniforms.world_velocity = if use_local_coords {
+            world_affine.inverse().transform_vector3(velocity).normalize_or_zero() * velocity.length()
+        } else {
+            velocity
         }
         .into();
         let emitter_time = runtime.time(&emitter.time);

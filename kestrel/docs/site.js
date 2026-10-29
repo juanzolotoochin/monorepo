@@ -8,7 +8,7 @@ const imageFiles = import.meta.glob('./**/*.png', { query: '?url', import: 'defa
 const images = Object.fromEntries(Object.entries(imageFiles).map(([path, url]) => [path.slice(2), url]));
 const groups = [
   ['Start here', ['README.md', 'architecture.md', 'asset-walkthrough.md', 'architecture-reference.md']],
-  ['Systems', ['controller-support.md', 'asset-system.md', 'destructible-assets.md', 'character-definition.md', 'character-animation.md', 'service-layers.md']],
+  ['Systems', ['controller-support.md', 'asset-system.md', 'destructible-assets.md', 'character-definition.md', 'effect-definition.md', 'character-animation.md', 'service-layers.md']],
   ['Operations', ['network-diagnostics.md', 'flaky-tests.md']],
 ];
 

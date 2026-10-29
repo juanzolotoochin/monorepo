@@ -1,5 +1,6 @@
 //! The effect catalog: every file in `kestrel/app/vfx/` by name, with `base`
-//! merged in (README.md, "Base"). The file name is the effect's ID.
+//! merged in (`docs/effect-definition.md`, "Variants reuse an effect"). The
+//! file name is the effect's ID.
 //!
 //! A file with a `base` is merged as a RON tree (`ron_tree.rs`) over its
 //! base's merged tree; the result is printed and parsed by `vfx::parse` like
@@ -239,8 +240,13 @@ mod tests {
     #[test]
     fn every_file_round_trips_through_the_tree() {
         for &(name, source) in FILES {
-            let printed = ron_tree::parse(source).unwrap_or_else(|e| panic!("{name}: {e}")).print();
+            let tree = ron_tree::parse(source).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let printed = tree.print();
             assert_eq!(ron_tree::parse(&printed).unwrap().print(), printed, "{name}");
+            // A variant only parses merged with its base (`load`).
+            if tree.field("base").is_some() {
+                continue;
+            }
             let (own, again) = (parse(name, source).unwrap(), parse(name, &printed).unwrap_or_else(|e| panic!("{e}\n{printed}")));
             assert_eq!(ron::to_string(&own.particles).unwrap(), ron::to_string(&again.particles).unwrap(), "{name}");
             assert_eq!(format!("{:?}", own.lights), format!("{:?}", again.lights), "{name}");

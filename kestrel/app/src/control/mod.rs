@@ -52,7 +52,48 @@ pub struct Options {
     /// see `vfx_stress.rs`).
     pub vfx_stress: Option<crate::vfx_stress::Spec>,
 }
+/// Flags that read or write files, which a browser can't give the web build.
+const NATIVE_ONLY: [&str; 10] = [
+    "--demo-script", "--frames-dir", "--report", "--trace", "--audio-wav",
+    "--gamepad-script", "--control-address-file", "--record-input",
+    "--replay-input", "--capture-dir",
+];
 impl Options {
+    /// The web build's command line, from the page's query string:
+    /// `?vfx=sprinkles&scene=moonlit-glade&fullscreen` gives
+    /// `--vfx sprinkles --scene moonlit-glade --fullscreen`, after a program
+    /// name, for `from_args` and `main` to read like native arguments. Values
+    /// are percent-decoded (`+` is a space); flags in [`NATIVE_ONLY`] are
+    /// dropped.
+    pub fn args_from_query(query: &str) -> Vec<String> {
+        fn decode(text: &str) -> String {
+            let bytes = text.as_bytes();
+            let mut out = Vec::with_capacity(bytes.len());
+            let mut i = 0;
+            while i < bytes.len() {
+                let hex = bytes.get(i + 1..i + 3).and_then(|h| std::str::from_utf8(h).ok()).and_then(|h| u8::from_str_radix(h, 16).ok());
+                match (bytes[i], hex) {
+                    (b'%', Some(byte)) => { out.push(byte); i += 3; }
+                    (b'+', _) => { out.push(b' '); i += 1; }
+                    (byte, _) => { out.push(byte); i += 1; }
+                }
+            }
+            String::from_utf8_lossy(&out).into_owned()
+        }
+        let mut args = vec!["kestrel".to_string()];
+        for pair in query.trim_start_matches('?').split('&').filter(|pair| !pair.is_empty()) {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            let flag = format!("--{}", decode(key));
+            if NATIVE_ONLY.contains(&flag.as_str()) {
+                continue;
+            }
+            args.push(flag);
+            if !value.is_empty() {
+                args.push(decode(value));
+            }
+        }
+        args
+    }
     pub fn from_args(args: &[String]) -> Result<Self, String> {
         let value = |key: &str| -> Option<&str> {
             args.windows(2).find(|a| a[0] == key).map(|a| a[1].as_str())

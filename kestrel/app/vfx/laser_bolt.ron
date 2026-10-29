@@ -1,6 +1,6 @@
 // The laser's bolt: a 0.65 m red bar flying from the muzzle to the target at
 // 80 m/s, gone on arrival. Port of the hand-written bolt in
-// `effects::emit_lasers` (VFX spike step 3). The format is in README.md.
+// `effects::emit_lasers` (VFX spike step 3). The format is in docs/effect-definition.md.
 //
 // Triggered at the muzzle with +Y toward the target, the target, and the
 // shot's seed. Gameplay timing stays in Rust: `effects::LaserBolt` still

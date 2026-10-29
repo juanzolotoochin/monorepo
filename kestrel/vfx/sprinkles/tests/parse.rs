@@ -38,3 +38,20 @@ fn a_misspelled_field_is_rejected() {
         .replace("particles_amount", "particle_amount");
     assert!(matches!(versions::migrate_str(&source), Err(MigrationError::Ron(_))));
 }
+
+#[test]
+fn world_velocity_and_even_ring_parse_and_default_off() {
+    let source = include_str!("fixtures/valid_particle_system.ron");
+    let plain = versions::migrate_str(source).unwrap().asset;
+    assert_eq!(plain.emitters[0].velocities.world_velocity.to_array(), [0.0; 3]);
+    assert!(!plain.emitters[0].velocities.even_ring);
+
+    // Kestrel's fields (UPSTREAM.md).
+    let source = source.replace(
+        "emission: (",
+        "velocities: (world_velocity: (0.0, 1.5, 0.0), even_ring: true),\n            emission: (",
+    );
+    let set = versions::migrate_str(&source).unwrap().asset;
+    assert_eq!(set.emitters[0].velocities.world_velocity.to_array(), [0.0, 1.5, 0.0]);
+    assert!(set.emitters[0].velocities.even_ring);
+}

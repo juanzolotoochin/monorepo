@@ -1,6 +1,6 @@
 // A blade striking stone: hot sparks, rock chips, a contact flash and a short
 // orange light. Port of the hand-written `effects::impact` for
-// `ImpactResponse::Stone` (VFX spike step 2). The format is in README.md.
+// `ImpactResponse::Stone` (VFX spike step 2). The format is in docs/effect-definition.md.
 //
 // The effect is placed at the contact point with local +Y along the surface
 // normal; gravity and the floor are in world space.
@@ -26,7 +26,7 @@
                         emissive: (2.9161, 1.9303, 0.9822, 1.0),
                     )),
                     transform_align: Some(YToVelocity),
-                    // Small particles go without shadows (README.md).
+                    // Small particles go without shadows (docs/effect-definition.md).
                     shadow_caster: false,
                     visibility_aabb: (center: (0.0, 0.0, 0.0), half_extents: (4.0, 4.0, 4.0)),
                 ),
@@ -68,7 +68,7 @@
                         metallic: 0.1,
                     )),
                     transform_align: Some(YToVelocity),
-                    // Small particles go without shadows (README.md).
+                    // Small particles go without shadows (docs/effect-definition.md).
                     shadow_caster: false,
                     visibility_aabb: (center: (0.0, 0.0, 0.0), half_extents: (4.0, 4.0, 4.0)),
                 ),

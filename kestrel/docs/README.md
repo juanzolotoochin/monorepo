@@ -11,6 +11,7 @@ This site explains how Kestrel works: its engine boundaries, character and input
 - [Visual assets and characters](asset-system.md) — materials, boulder prefabs, reusable shapes, skins, motion, and Asset Studio.
 - [Destructible cover](destructible-assets.md) — author breakable pieces, permanent bases, and staged repair animations.
 - [Character definitions](character-definition.md) — character files, loading, and simulation use.
+- [Effect definitions](effect-definition.md) — effect files: particle and light layers, inheritance, trigger parameters, and how to add and try an effect.
 - [Vehicles](vehicles.md) — the rover, how players drive it, and how a vehicle fits the character framework.
 - [Character animation](character-animation.md) — rig and motion behavior.
 - [Service layers](service-layers.md) — front-end lifetimes and frame phases.

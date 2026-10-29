@@ -1,0 +1,25 @@
+// A blade striking polymer: a few soft green flakes, without the hot sparks,
+// contact flash or light. Port of the hand-written `effects::impact` for
+// `ImpactResponse::Polymer` (numbers from `impact::response`). The format is
+// in docs/effect-definition.md.
+(
+    version: 1,
+    base: "impact_stone",
+    particles: (
+        name: "impact_polymer",
+        emitters: [
+            (name: "sparks", enabled: false),
+            (
+                name: "debris",
+                draw_pass: (material: Standard((
+                    base_color: (0.12, 0.5, 0.23, 1.0),
+                    metallic: 0.0,
+                ))),
+                emission: (particles_amount: 10),
+                velocities: (initial_velocity: (min: 1.4, max: 4.2)),
+            ),
+            (name: "flash", enabled: false),
+        ],
+    ),
+    lights: [],
+)

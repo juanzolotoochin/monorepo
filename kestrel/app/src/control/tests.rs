@@ -1,5 +1,15 @@
 use super::protocol::{Command, PileCheck};
 use super::*;
+#[test]
+fn query_strings_become_arguments() {
+    let args = Options::args_from_query("?vfx=sprinkles&scene=moonlit%2Dglade&fullscreen&name=Ann+B%C3%A9&demo-script=a.json&&report=");
+    assert_eq!(args, ["kestrel", "--vfx", "sprinkles", "--scene", "moonlit-glade", "--fullscreen", "--name", "Ann Bé"]);
+    let options = Options::from_args(&args).unwrap();
+    assert_eq!(options.vfx, crate::vfx::VfxBackend::Sprinkles);
+    assert!(options.fullscreen && options.script.is_none());
+    assert_eq!(Options::args_from_query(""), ["kestrel"]);
+    assert_eq!(Options::args_from_query("?bad=%zz%4"), ["kestrel", "--bad", "%zz%4"]);
+}
 fn run(steps: Vec<Command>) -> Value {
     run_at(steps, 30)
 }

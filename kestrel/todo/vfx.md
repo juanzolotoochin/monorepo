@@ -6,50 +6,6 @@ The spike's plan, decisions and evaluation are in
 order; "Simulate a pool's bursts in one dispatch" and "Draw only a pool's
 used slots" come after the blood port.
 
-## Write the effect file schema doc
-
-- **Status:** open
-- **Why:** AI and people author effect files from the schema; today it is
-  `app/vfx/README.md` plus the fork's Rust doc comments.
-- **What to do:** a doc like `docs/character-definition.md`: one complete
-  file read from the outside in, our layers, the sprinkles fields we use
-  and their units, trigger parameters, pitfalls (one scalar scale,
-  curves). Link it from `docs/README.md`.
-- **Where:** `kestrel/docs/`, `kestrel/app/vfx/README.md`.
-- **Found in:** VFX spike handoff, step 6.
-
-## Port the impact materials
-
-- **Status:** open
-- **Why:** only stone uses an effect file; Metal (also the laser's arrival
-  impact), Crystal and Polymer are still legacy.
-- **What to do:** `impact_metal.ron`, `impact_crystal.ron` and
-  `impact_polymer.ron` on `base: "impact_stone"` with the numbers from
-  `impact::response` (Polymer: no sparks, flash or light). Pick the file
-  by `ImpactResponse` in `effects::impact`. The struck target's emissive
-  flash and kick stay in Rust. Capture each against legacy.
-- **Where:** `kestrel/app/vfx/`, `kestrel/app/src/effects.rs`,
-  `impact.rs`.
-- **Found in:** VFX spike handoff, step 6 ("Authoring").
-
-## Port blood, deflection and the trial burst
-
-- **Status:** open
-- **Why:** they are plain bursts of cubes, still CPU particles.
-- **What to do:** see the blood sketch in the handoff ("Authoring"):
-  two droplet emitters. Decided (2026-10-28): a new fork emitter field,
-  a world-space velocity added at spawn, for legacy's 1.5 m/s upward
-  after normalizing; the floor splats as a separate `blood_splat` effect
-  that game code triggers at the floor point under the cut (flat box,
-  uniform scale range); the trial burst's 24 cubes from a new fork
-  emission option that places N particles at even angles on a ring.
-  Deflection is a plain spray. Measure blood's
-  3 s splats on the Deck: they hold pool slots longer than any effect so
-  far.
-- **Where:** `kestrel/app/vfx/`, `kestrel/app/src/effects.rs`,
-  `palimpsest/mod.rs`, `kestrel/vfx/sprinkles/src/shaders/particle_simulate.wesl`.
-- **Found in:** VFX spike handoff, step 6.
-
 ## Port blade echo and the dust ring
 
 - **Status:** open
@@ -96,15 +52,33 @@ used slots" come after the blood port.
 
 ## Match the arc's last frame
 
-- **Status:** open
-- **Why:** at 30 fps the sprinkles arc still draws small cubes on frame
-  117 of `arc_hits.json`, where legacy has none (about 700 pixels). Likely
-  the one-shot completion frame (`UPSTREAM.md`) or the shrink curve's end.
-- **What to do:** compare the particle age and scale at that frame;
-  shorten `arc.ron`'s lifetime or end the curve earlier if that's all.
-- **Where:** `kestrel/app/vfx/arc.ron`,
-  `kestrel/vfx/sprinkles/src/spawning.rs`.
-- **Found in:** VFX spike handoff, step 6.
+- **Status:** open (cause found, fix needs a decision)
+- **Why:** at 30 fps the sprinkles arc draws 4 frames and legacy's 3; the
+  extra one is small cubes after legacy's arc is gone (about 700 pixels).
+  Cause (2026-10-28, logged ages per frame with both backends, a warm and a
+  cold arc alike): both start drawing on the same frame, but legacy's cubes
+  are spawned before `update_effects` runs that frame, so they're aged once
+  before their first draw and draw at 1, 2 and 3 steps (scale 0.83, 0.62,
+  0.39), then reach 0.133 ≥ 0.13 and despawn. A sprinkles particle spawns
+  at age 0 at the end of its first step and draws at 0, 1, 2 and 3 steps
+  (1.0, 0.83, 0.62, 0.39): legacy's sequence one frame later, plus a
+  full-size first frame. Not the shrink curve (both end at 0.39), the
+  one-shot completion frame (the particles die in the shader at
+  age ≥ lifetime either way), pool zeroing or TAA.
+- **What to do:** decide whether a spawned particle is aged by the part of
+  its first step after its emission time, as Godot does (a burst emitted
+  at phase 0 ends its first step at age `dt`, and moves by `dt`). In
+  `particle_simulate.wesl` that's running `update_particle` with the
+  remaining time after `spawn_particle`; it changes every effect's first
+  frame (stone sprays, the laser bolt's spawn stub), so recapture all of
+  them, and the one-shot completion frame (`UPSTREAM.md`) may then be
+  unneeded. Shortening `arc.ron`'s lifetime instead would only match at
+  30 fps.
+- **Where:** `kestrel/vfx/sprinkles/src/shaders/particle_simulate.wesl`
+  (`spawn_particle`, `update_particle`), `spawning.rs`
+  (one-shot completion), `kestrel/app/vfx/arc.ron`.
+- **Found in:** VFX spike handoff, step 6. Reproduced with scratchpad
+  `perf/cap/arc2.json` (two arcs, frames 307–310 and 366–369).
 
 ## Decide on an effect editor
 
@@ -226,19 +200,6 @@ used slots" come after the blood port.
   `kestrel/app/README.md`.
 - **Found in:** VFX spike step 4.
 
-## Pass options to the web build from the URL
-
-- **Status:** open
-- **Why:** the wasm build has no command line, so `--vfx sprinkles` and
-  the other `Options` flags can't be given in the browser; step 5 had to
-  switch the backend in the debug menu (Effects → VFX backend) by hand.
-- **What to do:** on wasm32, turn the page's query string (for example
-  `?vfx=sprinkles`) into the arguments `control::Options::from_args`
-  reads. Flags that need files (`--demo-script`, `--frames-dir`) stay
-  native only.
-- **Where:** `kestrel/app/src/main.rs`, `kestrel/app/src/control/mod.rs`.
-- **Found in:** VFX spike step 5.
-
 ## Check the web build in Firefox, Safari and on Linux
 
 - **Status:** open
@@ -291,8 +252,17 @@ used slots" come after the blood port.
   impacts/s, lasers, arcs, both mixes) for legacy and sprinkles; compare
   with the handoff's pooled Deck table and the UHD 770 numbers in "Pool
   costs". Needs the Deck and a Linux host, or "Let the Steam Deck launcher
-  run from Windows" first.
-- **Where:** `kestrel/VFX_SPIKE_HANDOFF.md` (step 4, "Pool costs").
+  run from Windows" first. From the repository root on that host, with the
+  Deck in Desktop Mode: `kestrel/app/deck_vfx_stress.sh deck_pools`
+  installs the game, runs all 16 runs (4200 frames, 600 left out, as on the
+  desktop) and prints the tables; reports land in
+  `kestrel-vfx-stress/deck_pools/`. It hasn't been run yet.
+  Also run blood at 50 cuts/s (`blood=50`) on both backends: its 3 s
+  splats hold pool slots longest; on the UHD 770 sprinkles was 0.4 ms
+  slower than legacy there (see "Port blood, deflection and the trial
+  burst").
+- **Where:** `kestrel/VFX_SPIKE_HANDOFF.md` (step 4, "Pool costs"),
+  `kestrel/app/deck_vfx_stress.sh`.
 - **Found in:** VFX pool costs (handoff, "Pool costs", 2026-10-28).
 
 ## Write emissive as color times intensity
@@ -309,7 +279,152 @@ used slots" come after the blood port.
   `kestrel/app/vfx/*.ron`, `kestrel/app/vfx/README.md`.
 - **Found in:** effect catalog work (sRGB colors), 2026-10-28.
 
+## Skip disabled emitters when spawning a burst
+
+- **Status:** open
+- **Why:** a variant turns a base's emitter off with `enabled: false`
+  (`impact_polymer.ron` turns off the sparks and the flash), but the fork
+  still spawns it: each burst claims a slot in that emitter's pool, which
+  is created and drawn (at least 8 slots) though nothing is simulated.
+- **What to do:** outside the editor, don't spawn disabled emitters
+  (`spawning.rs`); keep `emitter_entities` indexed by emitter for
+  sub-emitters, and make an effect whose emitters are all disabled finish
+  (or not spawn its particle system in `vfx::spawn`). Drop the pitfall
+  from `docs/effect-definition.md` after.
+- **Where:** `kestrel/vfx/sprinkles/src/spawning.rs`, `runtime.rs`
+  (`check_particle_system_finished`), `kestrel/app/src/vfx.rs`.
+- **Found in:** porting the impact materials (branch kestrel-vfx-ports).
+
 ## Done
+
+## Port blood, deflection and the trial burst
+
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/130)
+- **Why:** they are plain bursts of cubes, still CPU particles.
+- **What to do:** see the blood sketch in the handoff ("Authoring"):
+  two droplet emitters. Decided (2026-10-28): a new fork emitter field,
+  a world-space velocity added at spawn, for legacy's 1.5 m/s upward
+  after normalizing; the floor splats as a separate `blood_splat` effect
+  that game code triggers at the floor point under the cut (flat box,
+  uniform scale range); the trial burst's 24 cubes from a new fork
+  emission option that places N particles at even angles on a ring.
+  Deflection is a plain spray. Measure blood's
+  3 s splats on the Deck: they hold pool slots longer than any effect so
+  far.
+- **What was done:** fork fields `EmitterVelocities::world_velocity`
+  (added at spawn, in the uniforms' padding before `slot_offset`, so the
+  struct's size is unchanged) and `even_ring` (particle `i` of `n` leaves
+  `spread` degrees off the direction at `360° × i / n`). The ring is a
+  velocity option rather than a ring emission shape: positions on a ring
+  don't fly outward, and radial velocity pushes from the pivot in 3D, so
+  rising cubes drift up (UPSTREAM.md). Files: `blood.ron` (two emitters of
+  11 droplets, one per blood material, 30° cone, 2 to 4.8 m/s, bias up
+  0.27, world velocity 1.5 m/s up, gravity 13, 0.48 to 0.93 s, Rigid
+  floor), `blood_splat.ron` (4 + 3 flat boxes in a ±0.55 m patch, scale
+  0.6 to 1.4, 3 s, shrinking like legacy), `deflection.ron` (14 metal
+  spark bars, 70° cone, 1.3 to 4.3 m/s, gravity 7, 0.33 s, Rigid) and
+  `trial_burst.ron` (24 crystal cubes on an even flat ring at 3 m/s plus
+  3 m/s up, gravity 6, 0.8 s). `effects::blood` triggers `blood` and
+  `blood_splat` at `(x, 0.012, z)`, `effects::deflection` and
+  `palimpsest::tick` theirs, on the sprinkles backend; legacy otherwise.
+  All four pool. Captures (combat-arena cuts and a brute's deflection,
+  the surprise lab's core) match in timing, direction, count and color.
+  Differences: no droplet, bar or cube shadows (`shadow_caster: false`),
+  square splats where legacy's are random rectangles, the trial ring at
+  one height where legacy alternates 2, 3 and 4 m/s up, and the cone
+  sprays a little tighter than legacy's random boxes. `--vfx-stress`
+  gained `blood=N`. On the Intel UHD 770 (the Deck's stand-in; the Deck
+  run is in "Measure the pool work on the Deck"), mean frame ms legacy /
+  sprinkles: idle 15.56 / 15.55, 20 cuts/s 15.78 / 16.03, 50 cuts/s
+  16.11 / 16.51 (particle compute and sort 0.26 ms; 10 pools for 396
+  live bursts, peak GPU memory 224 MB against legacy's 222).
+- **Where:** `kestrel/app/vfx/`, `kestrel/app/src/effects.rs`,
+  `palimpsest/mod.rs`, `kestrel/vfx/sprinkles/src/shaders/particle_simulate.wesl`.
+- **Found in:** VFX spike handoff, step 6.
+
+## Pass options to the web build from the URL
+
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/130)
+- **Why:** the wasm build has no command line, so `--vfx sprinkles` and
+  the other `Options` flags can't be given in the browser; step 5 had to
+  switch the backend in the debug menu (Effects → VFX backend) by hand.
+- **What to do:** on wasm32, turn the page's query string (for example
+  `?vfx=sprinkles`) into the arguments `control::Options::from_args`
+  reads. Flags that need files (`--demo-script`, `--frames-dir`) stay
+  native only.
+- **What was done:** `Options::args_from_query` turns `?key=value` into
+  `--key value` and a bare `key` into `--key` (percent-decoded, `+` is a
+  space, file flags dropped) after a program name; on wasm32 `main` reads
+  `location.search` through wasm-bindgen and parses that like native
+  arguments, so `from_args` stays the one parser. A bad option goes to the
+  browser console (`exit_with`). Test:
+  `control::tests::query_strings_become_arguments`. Documented in
+  `kestrel/app/README.md` ("Browser build"); the web target builds, not
+  yet opened in a browser.
+- **Where:** `kestrel/app/src/main.rs`, `kestrel/app/src/control/mod.rs`.
+- **Found in:** VFX spike step 5.
+
+## Run the stress matrix on the Deck with one command
+
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/130)
+- **Why:** the Deck runs so far copied a binary and a scratch script by
+  hand (handoff, step 4), and the tables came from a scratchpad script.
+- **What to do:** a script that installs the game on the Deck, runs every
+  load on both backends and prints the desktop matrix's tables.
+- **What was done:** `kestrel/app/deck_vfx_stress.sh <set> [loads...]`
+  installs with `//kestrel/app:steamdeck -- --install-only`, runs each
+  load through the Deck's `launch.sh` (fullscreen, desktop session) in one
+  SSH session, waits for the game's unit to exit, copies the reports back
+  and prints them with `kestrel/app/vfx_stress_summary.py` (the
+  scratchpad's `summarize.py`, same output, standard library only).
+  Documented in `kestrel/app/README.md`. Not run: no Deck here.
+- **Where:** `kestrel/app/deck_vfx_stress.sh`,
+  `kestrel/app/vfx_stress_summary.py`, `kestrel/app/README.md`.
+- **Found in:** VFX pool work, 2026-10-28.
+
+## Port the impact materials
+
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/130)
+- **Why:** only stone uses an effect file; Metal (also the laser's arrival
+  impact), Crystal and Polymer are still legacy.
+- **What to do:** `impact_metal.ron`, `impact_crystal.ron` and
+  `impact_polymer.ron` on `base: "impact_stone"` with the numbers from
+  `impact::response` (Polymer: no sparks, flash or light). Pick the file
+  by `ImpactResponse` in `effects::impact`. The struck target's emissive
+  flash and kick stay in Rust. Capture each against legacy.
+- **What was done:** the three files on `base: "impact_stone"`: counts,
+  speeds (`speed × 0.5` to `× 1.5`), spark, debris and light colors and
+  light intensity from `impact::response` and `FxAssets` (`scene.rs`),
+  linear emissive converted to sRGB. Metal's sparks get an 8 m culling
+  box for their 16.5 m/s. `effects::impact` picks the file by
+  `ImpactResponse` (`impact_effect`). Captures of each material in
+  boulder-lab and the laser pit's arrival, legacy against sprinkles, match
+  in color, count, timing, flash and light; as with stone, the sprinkles
+  sprays are a little tighter (45° cone against legacy's random box), and
+  legacy's debris chips cast floor shadows the ported ones don't
+  (`shadow_caster: false`, decided).
+- **Where:** `kestrel/app/vfx/`, `kestrel/app/src/effects.rs`,
+  `impact.rs`.
+- **Found in:** VFX spike handoff, step 6 ("Authoring").
+
+## Write the effect file schema doc
+
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/130)
+- **Why:** AI and people author effect files from the schema; today it is
+  `app/vfx/README.md` plus the fork's Rust doc comments.
+- **What to do:** a doc like `docs/character-definition.md`: one complete
+  file read from the outside in, our layers, the sprinkles fields we use
+  and their units, trigger parameters, pitfalls (one scalar scale,
+  curves). Link it from `docs/README.md`.
+- **What was done:** `docs/effect-definition.md`: `impact_stone` read
+  from the outside in, both layers, the emitter fields we use with units,
+  trigger parameters, sRGB colors, `base` merge rules with an example,
+  pitfalls (effects must end, one scalar scale, curves, pooling
+  eligibility, culling box), adding a file and the Reload/Fire loop.
+  Linked from `docs/README.md` and the site's nav; `app/vfx/README.md`
+  now points there.
+- **Where:** `kestrel/docs/`, `kestrel/app/vfx/README.md`.
+- **Found in:** VFX spike handoff, step 6.
 
 ## Build an effect catalog
 
