@@ -1,0 +1,85 @@
+// Blood on the floor under a cut: seven flat red boxes that lie for 3 s and
+// shrink away. Port of the splats of the hand-written `effects::blood`, which
+// triggers it at the floor point under the cut (y = 0.012) with +Y up. The
+// format is in docs/effect-definition.md.
+(
+    version: 1,
+    particles: (
+        sprinkles_version: "0.3",
+        name: "blood_splat",
+        dimension: D3,
+        despawn_on_finish: true,
+        emitters: [
+            (
+                name: "splats_dark",
+                // They lie for 3 s, shrinking as before.
+                time: (lifetime: 3.0, one_shot: true, explosiveness: 1.0),
+                draw_pass: (
+                    // Flat boxes 1.2 cm thick and about 20 cm across.
+                    mesh: Cuboid(half_size: (0.1, 0.006, 0.1)),
+                    material: Standard((
+                        // Dark blood (`FxAssets::blood[0]`).
+                        base_color: (0.42, 0.025, 0.035, 1.0),
+                        perceptual_roughness: 0.72,
+                        metallic: 0.55,
+                    )),
+                    // Flat on the floor: nothing to shadow.
+                    shadow_caster: false,
+                    visibility_aabb: (center: (0.0, 0.0, 0.0), half_extents: (1.0, 0.5, 1.0)),
+                ),
+                // Within 55 cm of the point under the cut.
+                emission: (shape: Box(extents: (0.55, 0.0, 0.55)), particles_amount: 4),
+                // Legacy's 13 to 27 cm wide and 12 to 29 cm deep, as one factor.
+                scale: (range: (min: 0.6, max: 1.4), scale_over_lifetime: Some((
+                    name: Some("Shrink"),
+                    // (1 - t)^0.65, sampled.
+                    x: (points: [
+                        (position: 0.0, value: 1.0, mode: SingleCurve),
+                        (position: 0.25, value: 0.83, mode: SingleCurve),
+                        (position: 0.5, value: 0.64, mode: SingleCurve),
+                        (position: 0.75, value: 0.41, mode: SingleCurve),
+                        (position: 0.9, value: 0.22, mode: SingleCurve),
+                        (position: 1.0, value: 0.0, mode: SingleCurve),
+                    ], range: (min: 0.0, max: 1.0)),
+                ))),
+                velocities: (spread: 0.0),
+                accelerations: (gravity: (0.0, 0.0, 0.0)),
+            ),
+            (
+                name: "splats_bright",
+                // They lie for 3 s, shrinking as before.
+                time: (lifetime: 3.0, one_shot: true, explosiveness: 1.0),
+                draw_pass: (
+                    // Flat boxes 1.2 cm thick and about 20 cm across.
+                    mesh: Cuboid(half_size: (0.1, 0.006, 0.1)),
+                    material: Standard((
+                        // Bright blood (`FxAssets::blood[1]`).
+                        base_color: (0.73, 0.075, 0.055, 1.0),
+                        perceptual_roughness: 0.72,
+                        metallic: 0.48,
+                    )),
+                    // Flat on the floor: nothing to shadow.
+                    shadow_caster: false,
+                    visibility_aabb: (center: (0.0, 0.0, 0.0), half_extents: (1.0, 0.5, 1.0)),
+                ),
+                // Within 55 cm of the point under the cut.
+                emission: (shape: Box(extents: (0.55, 0.0, 0.55)), particles_amount: 3),
+                // Legacy's 13 to 27 cm wide and 12 to 29 cm deep, as one factor.
+                scale: (range: (min: 0.6, max: 1.4), scale_over_lifetime: Some((
+                    name: Some("Shrink"),
+                    // (1 - t)^0.65, sampled.
+                    x: (points: [
+                        (position: 0.0, value: 1.0, mode: SingleCurve),
+                        (position: 0.25, value: 0.83, mode: SingleCurve),
+                        (position: 0.5, value: 0.64, mode: SingleCurve),
+                        (position: 0.75, value: 0.41, mode: SingleCurve),
+                        (position: 0.9, value: 0.22, mode: SingleCurve),
+                        (position: 1.0, value: 0.0, mode: SingleCurve),
+                    ], range: (min: 0.0, max: 1.0)),
+                ))),
+                velocities: (spread: 0.0),
+                accelerations: (gravity: (0.0, 0.0, 0.0)),
+            ),
+        ],
+    ),
+)

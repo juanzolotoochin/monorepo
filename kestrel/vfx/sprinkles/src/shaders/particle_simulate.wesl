@@ -161,12 +161,11 @@ struct EmitterParams {
     world_bias: vec3<f32>,
     // Particles a cycle spawns; the rest of `amount` stay idle.
     spawn_count: u32,
+    // Kestrel: `world_velocity`, in spawn space, added at spawn.
+    world_velocity: vec3<f32>,
     // Kestrel: where this burst's particles start in a pooled buffer
     // (`pool.rs`). Particle indices (and so seeds) stay local to the burst.
     slot_offset: u32,
-    _slot_pad0: u32,
-    _slot_pad1: u32,
-    _slot_pad2: u32,
 }
 
 const TRIGGER_FLAG_TARGET: u32 = 1u;
@@ -174,6 +173,8 @@ const TRIGGER_FLAG_LIFETIME_TO_TARGET: u32 = 2u;
 // Kestrel: a pooled burst; particles that aren't velocity-aligned keep the
 // emitter's rotation in `ref_up`, as a quaternion.
 const TRIGGER_FLAG_KEEP_ROTATION: u32 = 4u;
+// Kestrel: `even_ring`, spawn directions evenly on the spread cone's rim.
+const TRIGGER_FLAG_EVEN_RING: u32 = 8u;
 
 struct Collider {
     transform: mat4x4<f32>,
@@ -203,7 +204,13 @@ const COLLISION_MODE_RIGID: u32 = 1u;
 const COLLISION_MODE_HIDE_ON_CONTACT: u32 = 2u;
 const COLLISION_EPSILON: f32 = 0.001;
 
-@group(0) @binding(0) var<uniform> params: EmitterParams;
+// Kestrel: one dispatch simulates a batch of emitters that share every
+// other binding (the bursts of one pool): workgroup row `global_id.y` is
+// emitter `y` of the batch. Must match `MAX_BATCH` in `compute.rs`.
+const MAX_BATCH: u32 = 64u;
+@group(0) @binding(0) var<uniform> batch: array<EmitterParams, MAX_BATCH>;
+// This invocation's emitter, copied from `batch` at the start of `main`.
+var<private> params: EmitterParams;
 @group(0) @binding(1) var<storage, read_write> particles: array<Particle>;
 @group(0) @binding(2) var gradient_texture: texture_2d<f32>;
 @group(0) @binding(3) var gradient_sampler: sampler;
@@ -241,6 +248,7 @@ struct SubEmissionBuffer {
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    params = batch[global_id.y];
     let thread_idx = global_id.x;
 
     // trail pass 1: process trail segments (copy head state, offset position)
@@ -395,7 +403,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 }
             }
         } else {
-            p = update_particle(p);
+            p = update_particle(p, particle_idx);
         }
     } else {
         // normal phase-based emission
@@ -415,7 +423,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (should_restart && particle_idx < params.spawn_count) {
             p = spawn_particle(particle_idx);
         } else if (is_active) {
-            p = update_particle(p);
+            p = update_particle(p, particle_idx);
         }
     }
 
@@ -618,11 +626,15 @@ fn rotate_to_axis(v: vec3<f32>, axis: vec3<f32>) -> vec3<f32> {
     return v * cos_angle + cross(rot_axis, v) * sin_angle + rot_axis * dot(rot_axis, v) * (1.0 - cos_angle);
 }
 
-fn get_emission_velocity(seed: u32) -> vec3<f32> {
+fn get_emission_velocity(seed: u32, idx: u32) -> vec3<f32> {
     var dir = normalize(params.direction);
     if (length(params.direction) < 0.0001) {
         dir = vec3(1.0, 0.0, 0.0);
     }
+
+    // Kestrel: with `even_ring`, particle `idx` of `spawn_count` leaves on
+    // the cone's rim at an even angle, without flatness.
+    let even_ring = (params.trigger_flags & TRIGGER_FLAG_EVEN_RING) != 0u;
 
     // randomize direction within a cone based on spread angle
     let spread_rad = radians(params.spread);
@@ -630,8 +642,12 @@ fn get_emission_velocity(seed: u32) -> vec3<f32> {
         let u = hash_to_float(seed);
         let v = hash_to_float(seed + 1u);
 
-        let phi = 2.0 * PI * u;
-        let theta = spread_rad * sqrt(v);
+        var phi = 2.0 * PI * u;
+        var theta = spread_rad * sqrt(v);
+        if (even_ring) {
+            phi = 2.0 * PI * f32(idx) / f32(max(params.spawn_count, 1u));
+            theta = spread_rad;
+        }
 
         let cos_theta = cos(theta);
         let sin_theta = sin(theta);
@@ -646,7 +662,7 @@ fn get_emission_velocity(seed: u32) -> vec3<f32> {
 
         // apply flatness: 0.0 = sphere cone, 1.0 = flat disc
         let flat_cos_phi = cos(phi);
-        let flat_sin_phi = sin(phi) * (1.0 - params.flatness);
+        let flat_sin_phi = sin(phi) * select(1.0 - params.flatness, 1.0, even_ring);
         let flat_angle = atan2(flat_sin_phi, flat_cos_phi);
 
         dir = dir * cos_theta + (perp1 * cos(flat_angle) + perp2 * sin(flat_angle)) * sin_theta;
@@ -663,8 +679,9 @@ fn get_emission_velocity(seed: u32) -> vec3<f32> {
 
 // Kestrel: the spawn velocity in spawn space, with `world_bias` added to its
 // direction. Used at spawn and to rebuild the emission direction later.
-fn get_spawn_velocity(seed: u32) -> vec3<f32> {
-    let vel = transform_direction(get_emission_velocity(seed));
+// `idx` is the particle's index in the burst (for `even_ring`).
+fn get_spawn_velocity(seed: u32, idx: u32) -> vec3<f32> {
+    let vel = transform_direction(get_emission_velocity(seed, idx));
     let speed = length(vel);
     if (speed < 0.0001 || dot(params.world_bias, params.world_bias) == 0.0) {
         return vel;
@@ -1360,7 +1377,10 @@ fn spawn_particle(idx: u32) -> Particle {
     let scale = get_scale_at_lifetime(initial_scale, 0.0, 1.0);
 
     let emission_pos = transform_point(local_emission_pos);
-    var vel = get_spawn_velocity(seed + 10u);
+    // Kestrel: plus `world_velocity`. Only at spawn: the emission direction
+    // rebuilt in `update_particle` leaves it out.
+    var vel = get_spawn_velocity(seed + 10u, idx)
+        + zero_z_if(params.world_velocity, (params.particle_flags & EMITTER_FLAG_DISABLE_Z) != 0u);
 
     p.position = vec4(emission_pos, scale);
     var lifetime = params.lifetime * (1.0 - hash_to_float(seed + 4u) * params.lifetime_randomness);
@@ -1461,7 +1481,7 @@ fn spawn_particle(idx: u32) -> Particle {
     return p;
 }
 
-fn update_particle(p_in: Particle) -> Particle {
+fn update_particle(p_in: Particle, idx: u32) -> Particle {
     var p = p_in;
     let dt = params.delta_time;
     let age = p.custom.x + dt;
@@ -1503,7 +1523,7 @@ fn update_particle(p_in: Particle) -> Particle {
     let disable_z = (params.particle_flags & EMITTER_FLAG_DISABLE_Z) != 0u;
 
     // reconstruct emission direction from seed for directional velocity
-    let emission_vel = get_spawn_velocity(seed + 10u);
+    let emission_vel = get_spawn_velocity(seed + 10u, idx);
     let emission_dir = select(normalize(emission_vel), vec3(0.0), length(emission_vel) < 0.0001);
 
     // stored velocity includes previous controlled displacements, extract pure physics velocity

@@ -26,6 +26,24 @@ impl ParticleMeshCache {
             .or_insert_with(|| build_particle_mesh(config, particle_count, meshes))
             .clone()
     }
+
+    /// Kestrel: drops the cached mesh of `config` × `particle_count` if
+    /// nothing but the cache holds it (`pool.rs`, when a pool is freed).
+    pub fn release_unused(&mut self, config: &ParticleMesh, particle_count: u32) {
+        let key = (config.clone(), particle_count);
+        let unused = match self.cache.get(&key) {
+            Some(Handle::Strong(handle)) => std::sync::Arc::strong_count(handle) == 1,
+            _ => false,
+        };
+        if unused {
+            self.cache.remove(&key);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn contains(&self, config: &ParticleMesh, particle_count: u32) -> bool {
+        self.cache.contains_key(&(config.clone(), particle_count))
+    }
 }
 
 fn create_cylinder_mesh(

@@ -7,6 +7,8 @@
 //! The spec is comma-separated `key=value`s, all optional:
 //! `impacts=50` stone impacts per second, `lasers=8` players firing laser
 //! bolts at the laser's cooldown (2.5 shots/s each), `arcs=8` arcs per second,
+//! `blood=50` cuts per second (`effects::blood`: droplets, and floor splats
+//! that last 3 s),
 //! `frames=4200` frames to run, `warmup=300` frames left out of the stats,
 //! `out=path` (writes `path.json` with the summary and `path.csv` per frame).
 //!
@@ -40,6 +42,7 @@ pub struct Spec {
     impacts: f32,
     lasers: u32,
     arcs: f32,
+    blood: f32,
     frames: u64,
     warmup: u64,
     /// Stop early (and say so in the report) once this many wall-clock
@@ -53,13 +56,14 @@ pub struct Spec {
 
 impl Spec {
     pub fn parse(text: &str) -> Result<Spec, String> {
-        let mut spec = Spec { impacts: 0.0, lasers: 0, arcs: 0.0, frames: 4200, warmup: 300, max_seconds: 0.0, abort_ms: 0.0, out: "vfx_stress".into() };
+        let mut spec = Spec { impacts: 0.0, lasers: 0, arcs: 0.0, blood: 0.0, frames: 4200, warmup: 300, max_seconds: 0.0, abort_ms: 0.0, out: "vfx_stress".into() };
         for pair in text.split(',').filter(|p| !p.is_empty()) {
             let (key, value) = pair.split_once('=').ok_or_else(|| format!("--vfx-stress: expected key=value, got {pair}"))?;
             let bad = |e: String| format!("--vfx-stress {key}: {e}");
             match key {
                 "impacts" => spec.impacts = value.parse().map_err(|e: std::num::ParseFloatError| bad(e.to_string()))?,
                 "arcs" => spec.arcs = value.parse().map_err(|e: std::num::ParseFloatError| bad(e.to_string()))?,
+                "blood" => spec.blood = value.parse().map_err(|e: std::num::ParseFloatError| bad(e.to_string()))?,
                 "lasers" => spec.lasers = value.parse().map_err(|e: std::num::ParseIntError| bad(e.to_string()))?,
                 "frames" => spec.frames = value.parse().map_err(|e: std::num::ParseIntError| bad(e.to_string()))?,
                 "warmup" => spec.warmup = value.parse().map_err(|e: std::num::ParseIntError| bad(e.to_string()))?,
@@ -87,7 +91,7 @@ impl Plugin for StressPlugin {
             .add_systems(First, begin_frame.before(crate::telemetry::begin))
             .add_systems(
                 Update,
-                (fire_impacts, fire_arcs).run_if(in_state(service::WorldState::Active)),
+                (fire_impacts, fire_arcs, fire_blood).run_if(in_state(service::WorldState::Active)),
             )
             .add_systems(
                 PostUpdate,
@@ -219,6 +223,9 @@ struct Stress {
     center: Option<Vec3>,
     impact_debt: f32,
     arc_debt: f32,
+    blood_debt: f32,
+    /// Its own sequence, so adding blood to a load keeps the impacts' places.
+    blood_rng: Rng,
     /// Game seconds until each player's next shot.
     shooters: Vec<f32>,
     seed: u32,
@@ -250,6 +257,8 @@ impl Stress {
             center: None,
             impact_debt: 0.0,
             arc_debt: 0.0,
+            blood_debt: 0.0,
+            blood_rng: Rng(0xb100d),
             shooters,
             seed: 1,
             fired: BTreeMap::new(),
@@ -334,6 +343,36 @@ fn fire_impacts(world: &mut World) {
         }
     }
     queue.apply(world);
+}
+
+/// Cuts around the center, 0.65 to 1 m up, spraying away in a random
+/// direction, as a sword cut on a ghoul does (`settlement.rs`).
+fn fire_blood(world: &mut World) {
+    if !running(world) {
+        return;
+    }
+    let Some(center) = center(world) else { return };
+    let dt = world.resource::<Time>().delta_secs();
+    let mut cuts = Vec::new();
+    {
+        let mut stress = world.resource_mut::<Stress>();
+        stress.blood_debt += stress.spec.blood * dt;
+        while stress.blood_debt >= 1.0 {
+            stress.blood_debt -= 1.0;
+            let rng = &mut stress.blood_rng;
+            let (angle, radius) = (rng.range(0.0, std::f32::consts::TAU), rng.range(1.0, 7.0));
+            let height = rng.range(0.65, 1.0);
+            let facing = rng.range(0.0, std::f32::consts::TAU);
+            let position = center + Vec3::new(angle.cos() * radius, height, angle.sin() * radius);
+            let direction = Vec3::new(facing.cos(), 0.0, facing.sin());
+            let seed = stress.next_seed();
+            stress.count("blood");
+            cuts.push((position, direction, seed));
+        }
+    }
+    for (position, direction, seed) in cuts {
+        crate::effects::blood(world, position, direction, seed);
+    }
 }
 
 fn fire_arcs(world: &mut World) {
@@ -554,7 +593,7 @@ fn write_results(world: &mut World) {
     let spec = &stress.spec;
     let result = json!({
         "backend": backend,
-        "spec": {"impacts_per_s": spec.impacts, "laser_players": spec.lasers, "arcs_per_s": spec.arcs, "frames": spec.frames, "warmup": spec.warmup, "max_seconds": spec.max_seconds, "abort_ms": spec.abort_ms},
+        "spec": {"impacts_per_s": spec.impacts, "laser_players": spec.lasers, "arcs_per_s": spec.arcs, "blood_per_s": spec.blood, "frames": spec.frames, "warmup": spec.warmup, "max_seconds": spec.max_seconds, "abort_ms": spec.abort_ms},
         "fired": stress.fired,
         "wall_s": wall,
         "measured_frames": stress.rows.len(),
@@ -583,8 +622,8 @@ mod tests {
 
     #[test]
     fn a_spec_parses_and_rejects_typos() {
-        let spec = Spec::parse("impacts=50,lasers=8,arcs=2.5,frames=900,warmup=100,out=x").unwrap();
-        assert_eq!((spec.impacts, spec.lasers, spec.arcs, spec.frames, spec.warmup), (50.0, 8, 2.5, 900, 100));
+        let spec = Spec::parse("impacts=50,lasers=8,arcs=2.5,blood=20,frames=900,warmup=100,out=x").unwrap();
+        assert_eq!((spec.impacts, spec.lasers, spec.arcs, spec.blood, spec.frames, spec.warmup), (50.0, 8, 2.5, 20.0, 900, 100));
         assert!(Spec::parse("impact=50").is_err());
         assert!(Spec::parse("impacts=lots").is_err());
         assert!(Spec::parse("frames=100,warmup=100").is_err());

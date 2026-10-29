@@ -1,0 +1,48 @@
+// A blade or a laser bolt striking metal: a shower of yellow sparks, a few
+// steel chips, a contact flash and a bright light. Port of the hand-written
+// `effects::impact` for `ImpactResponse::Metal` (numbers from
+// `impact::response`). Also the laser's arrival impact. The format is in
+// docs/effect-definition.md.
+(
+    version: 1,
+    base: "impact_stone",
+    particles: (
+        name: "impact_metal",
+        emitters: [
+            (
+                name: "sparks",
+                draw_pass: (
+                    material: Standard((
+                        // Yellow-hot, glowing for bloom: linear (12.0, 7.8, 2.64).
+                        base_color: (1.0, 0.65, 0.22, 1.0),
+                        emissive: (2.9161, 2.4279, 1.526, 1.0),
+                    )),
+                    // Twice stone's speed reaches further.
+                    visibility_aabb: (center: (0.0, 0.0, 0.0), half_extents: (8.0, 8.0, 8.0)),
+                ),
+                emission: (particles_amount: 48),
+                velocities: (initial_velocity: (min: 5.5, max: 16.5)),
+            ),
+            (
+                name: "debris",
+                draw_pass: (material: Standard((
+                    // Steel.
+                    base_color: (0.5, 0.57, 0.65, 1.0),
+                    metallic: 0.9,
+                ))),
+                emission: (particles_amount: 3),
+                velocities: (initial_velocity: (min: 5.5, max: 16.5)),
+            ),
+            (
+                name: "flash",
+                draw_pass: (material: Standard((
+                    base_color: (1.0, 0.65, 0.22, 1.0),
+                    emissive: (2.9161, 2.4279, 1.526, 1.0),
+                ))),
+            ),
+        ],
+    ),
+    lights: [
+        (color: (1.0, 0.65, 0.22), intensity: 45000.0, range: 4.5, radius: 0.15, offset: 0.2, fade_seconds: 0.1),
+    ],
+)

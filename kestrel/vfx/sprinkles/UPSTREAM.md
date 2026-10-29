@@ -83,6 +83,17 @@ Why it's vendored and what the fork is for: `kestrel/VFX_SPIKE_HANDOFF.md`.
   the asset events and visibility matters: otherwise the new buffers,
   material and visibility arrive a frame late, after the burst's only spawn
   step was spent on missing GPU buffers, and nothing ever spawns.
+- Skipped first steps (later, 2026-10-28): the ordering above fixes the
+  laser, but anything else that skips a burst's first dispatch (the compute
+  pipeline still compiling, a texture or buffer not uploaded yet) still
+  lost it. The compute node now records which emitters it simulated
+  (`SimulatedEmitters`, render world, from the emitter list of
+  `ParticleComputeBindGroups`, so it covers each burst of a batched pool
+  dispatch and the node's early returns alike). Until an emitter is in it,
+  extraction emits its frame's first step from phase 0 of its first cycle
+  (`emission_start_phase`), so the burst spawns in the first step that
+  runs. Time still advances as upstream; only the emission window widens.
+  Test: `extract.rs` `a_burst_whose_first_step_was_skipped_spawns_in_the_next`.
 - One-shot completion: a one-shot emitter stops emitting when its cycle
   ends but finishes (and its system despawns) a frame later. Particles
   spawn at age 0 at the end of their first step, so upstream cut the last
@@ -145,17 +156,26 @@ instead:
 - **Pools.** One per (asset, emitter index), in `ParticlePools`. A pool
   owns a particle, indices and sorted buffer sized `particles_amount ×
   capacity`, one material (`ParticleEmitterUniforms::pooled = 1`, identity
-  transform), one mesh of `particles_amount × capacity` particles, and one
-  entity (`ParticlePoolDraw`, `NoFrustumCulling`) that draws all of it. The
-  first pool of an emitter has 32 slots; when every pool is full the next
-  one doubles, up to 256 slots, then 256 per pool. An empty pool is hidden.
+  transform), and one entity (`ParticlePoolDraw`, `NoFrustumCulling`) that
+  draws it. The first pool of an emitter has 32 slots; when every pool is
+  full the next one doubles, up to 256 slots, then 256 per pool. An empty
+  pool is hidden.
+- **Drawn slots.** A burst takes the pool's lowest free slot. Each frame,
+  `size_pool_draws` (last in `SprinklesLateSetup`, so after every claim and
+  before the asset events flush) sets `drawn` to one past the highest used
+  slot, rounded up to a power of two, at least 8, and gives the pool's
+  entity a cached mesh of `particles_amount × drawn` particles. The mesh's
+  particle index (`uv_b.x`) reads the sorted buffer in order, so the
+  smaller mesh draws the first slots, which hold every live particle; the
+  pool's sort covers the same `particles_amount × drawn`. A pool needs at
+  most a mesh per power of two (about twice its full mesh).
 - **Bursts.** `setup_particle_systems` still spawns one emitter entity per
   emitter with its `EmitterRuntime`: time steps, one-shot completion, seed,
   trigger and the late setup pass are unchanged. A poolable emitter's entity
   gets a `PoolSlot` and a copy of the pool's `ParticleBufferHandle` instead
   of buffers, a mesh and a material. Extraction sets the burst's
   `slot_offset` (`EmitterUniforms`, appended) and marks it not to sort; the
-  pool gets one sort-only entry, over all slots.
+  pool gets one sort-only entry, over its drawn slots.
 - **Simulation.** The head pass reads and writes
   `particles[slot_offset + idx]`. Particle indices, seeds and phases stay
   local to the burst, so the same seed gives the same particles, pooled or
@@ -174,11 +194,48 @@ instead:
   frame, so it is sorted once more.
 - **What isn't pooled.** Emitters in local space, with trails, sub-emitters
   (either side) or in editor mode keep the upstream path, as does
-  everything with `KESTREL_SPRINKLES_NO_POOL=1` (spike A/B switch). Live
-  edits to a pooled emitter's mesh, material or particle count don't reach
-  existing pools (the `sync_*` systems only handle unpooled emitters), and
-  pools are never freed. Neither matters for Kestrel's compiled-in effect
-  files; both would for an editor.
+  everything with `KESTREL_SPRINKLES_NO_POOL=1` (spike A/B switch).
+- **Dropping pools** (2026-10-28). A pool empty for `IDLE_SECONDS` (5 s of
+  game time) is dropped in `maintain_pools`: its draw entity is despawned
+  (the material goes with it, the buffers with their last handles), and a
+  frame later its cached meshes leave `ParticleMeshCache` if nothing else
+  holds them (`release_unused`, by the handle's strong count). The first
+  pool of each (asset, emitter) is kept: the chained pools hold most of the
+  memory, and an effect fired every few seconds would otherwise build a new
+  pool (buffers, material, upload) per shot.
+- **Asset changes** (2026-10-28). The `sync_*` systems only update unpooled
+  emitters, and a pool's slot size, mesh and material come from the asset.
+  On `AssetEvent::Modified` or `Removed` for a `ParticlesAsset`,
+  `rebuild_changed_pools` (`PostUpdate`, after `AssetEventSystems`) drops
+  the asset's pools and restarts every system with a burst in them: its
+  emitter and collider entities are despawned and its
+  `ParticleSystemRuntime` removed, so it is set up again next frame on new
+  pools and plays from its start. A burst left on an old pool would be
+  simulated with the new particle count over the old slots. A change made
+  after the events flush (later in `PostUpdate`, or in `Last`) is seen a
+  frame late; change assets in `Update`.
+
+### Blood, deflection and the trial burst (2026-10-28)
+
+- `EmitterVelocities::world_velocity`: a world-space velocity added to each
+  particle's spawn velocity, after `world_bias` and the speed (legacy blood
+  adds 1.5 m/s upward after normalizing its direction). Not scaled by the
+  system's transform. `EmitterUniforms` / `EmitterParams` carry it in spawn
+  space in the three padding slots before `slot_offset` (now `world_velocity:
+  vec3, slot_offset: u32`), so the struct's size and the 64-burst uniform
+  batch are unchanged. Only `spawn_particle` adds it; the emission direction
+  `update_particle` rebuilds for directional velocity leaves it out.
+- `EmitterVelocities::even_ring`: particle `i` of the `n` a cycle spawns
+  (`spawn_count`) leaves exactly `spread` degrees off `initial_direction`, at
+  `360° × i / n` around it, seed-independent; `flatness` is ignored. For the
+  trial burst's 24 cubes flung out on a ring. It is a velocity option, not a
+  `Ring { even }` emission shape: a ring of positions doesn't move outward
+  by itself, and the radial velocity pushes away from the pivot in 3D, so a
+  rising particle drifts up (1.1 m out and 2.5 m up after 0.8 s, against
+  legacy's 2.4 m and 0.5 m). Rides in `trigger_flags`
+  (`TRIGGER_FLAG_EVEN_RING`); `get_emission_velocity`, `get_spawn_velocity`
+  and `update_particle` take the particle's index.
+- Test: `tests/parse.rs` `world_velocity_and_even_ring_parse_and_default_off`.
 
 Keep this list current as the fork grows.
 

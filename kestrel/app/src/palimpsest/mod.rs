@@ -148,30 +148,39 @@ pub fn tick(world: &mut World) {
         }
         if memory_trial && collected && !was_collected {
             world.resource::<Sound>().play(Cue::Land);
-            let fx = world.resource::<crate::effects::FxAssets>();
-            let mesh = fx.cube.clone();
-            let material = fx.spark[2].clone();
-            for n in 0..24 {
-                let angle = n as f32 * std::f32::consts::TAU / 24.0;
-                world.spawn((
-                    Trial,
-                    Mesh3d(mesh.clone()),
-                    MeshMaterial3d(material.clone()),
-                    Transform::from_translation(CORE).with_scale(Vec3::splat(0.08)),
-                    crate::effects::Particle {
-                        velocity: Vec3::new(angle.cos() * 3.0, 2.0 + (n % 3) as f32, angle.sin() * 3.0),
-                        age: 0.0,
-                        life: 0.8,
-                        size: Vec3::splat(0.08),
-                        gravity: 6.0,
-                        bounce: false,
-                    },
-                ));
+            // With the sprinkles backend the burst comes from `vfx/trial_burst.ron`.
+            if !crate::vfx::spawn(world, "trial_burst", crate::vfx::Trigger::new(CORE, Vec3::Y)) {
+                legacy_burst(world);
             }
         }
     }
     view::update(world, &m, elapsed, dt);
     world.insert_resource(m);
+}
+
+/// The hand-written core burst: 24 cubes out on a ring, one CPU-moved entity
+/// each.
+fn legacy_burst(world: &mut World) {
+    let fx = world.resource::<crate::effects::FxAssets>();
+    let mesh = fx.cube.clone();
+    let material = fx.spark[2].clone();
+    for n in 0..24 {
+        let angle = n as f32 * std::f32::consts::TAU / 24.0;
+        world.spawn((
+            Trial,
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(material.clone()),
+            Transform::from_translation(CORE).with_scale(Vec3::splat(0.08)),
+            crate::effects::Particle {
+                velocity: Vec3::new(angle.cos() * 3.0, 2.0 + (n % 3) as f32, angle.sin() * 3.0),
+                age: 0.0,
+                life: 0.8,
+                size: Vec3::splat(0.08),
+                gravity: 6.0,
+                bounce: false,
+            },
+        ));
+    }
 }
 
 pub fn snapshot(world: &World) -> serde_json::Value {

@@ -1,0 +1,56 @@
+// The memory trial's core collected: 24 glowing blue cubes flung out on an
+// even ring, rising and falling back. Port of the hand-written burst in
+// `palimpsest::tick`. The format is in docs/effect-definition.md.
+//
+// Placed at the core with +Y up.
+(
+    version: 1,
+    particles: (
+        sprinkles_version: "0.3",
+        name: "trial_burst",
+        dimension: D3,
+        despawn_on_finish: true,
+        emitters: [
+            (
+                name: "cubes",
+                time: (lifetime: 0.8, one_shot: true, explosiveness: 1.0),
+                draw_pass: (
+                    // 8 cm cubes.
+                    mesh: Cuboid(half_size: (0.04, 0.04, 0.04)),
+                    material: Standard((
+                        // The crystal spark glow, glowing for bloom: linear (2.16, 7.8, 12.0).
+                        base_color: (0.18, 0.65, 1.0, 1.0),
+                        emissive: (1.3991, 2.4279, 2.9161, 1.0),
+                    )),
+                    transform_align: Some(YToVelocity),
+                    // Small particles go without shadows (docs/effect-definition.md).
+                    shadow_caster: false,
+                    visibility_aabb: (center: (0.0, 0.0, 0.0), half_extents: (4.0, 4.0, 4.0)),
+                ),
+                emission: (particles_amount: 24),
+                scale: (range: (min: 1.0, max: 1.0), scale_over_lifetime: Some((
+                    name: Some("Shrink"),
+                    // (1 - t)^0.65, sampled.
+                    x: (points: [
+                        (position: 0.0, value: 1.0, mode: SingleCurve),
+                        (position: 0.25, value: 0.83, mode: SingleCurve),
+                        (position: 0.5, value: 0.64, mode: SingleCurve),
+                        (position: 0.75, value: 0.41, mode: SingleCurve),
+                        (position: 0.9, value: 0.22, mode: SingleCurve),
+                        (position: 1.0, value: 0.0, mode: SingleCurve),
+                    ], range: (min: 0.0, max: 1.0)),
+                ))),
+                velocities: (
+                    // Out at 3 m/s on a flat ring, 15 degrees apart.
+                    initial_direction: (0.0, 1.0, 0.0),
+                    spread: 90.0,
+                    even_ring: true,
+                    initial_velocity: (min: 3.0, max: 3.0),
+                    // Up at 3 m/s; legacy cycles 2, 3 and 4 around the ring.
+                    world_velocity: (0.0, 3.0, 0.0),
+                ),
+                accelerations: (gravity: (0.0, -6.0, 0.0)),
+            ),
+        ],
+    ),
+)

@@ -1026,6 +1026,22 @@ pub struct EmitterVelocities {
     /// the effect faces. Defaults to [`Vec3::ZERO`].
     #[serde(skip_serializing_if = "is_zero_vec3")]
     pub world_bias: Vec3,
+    /// Kestrel: a world-space velocity added to each particle's spawn
+    /// velocity, after [`world_bias`](Self::world_bias) and the speed are
+    /// applied. For example `(0.0, 1.5, 0.0)` lifts every particle by 1.5
+    /// units/s whichever way the effect faces. Not scaled by the system's
+    /// transform. Defaults to [`Vec3::ZERO`].
+    #[serde(skip_serializing_if = "is_zero_vec3")]
+    pub world_velocity: Vec3,
+    /// Kestrel: instead of a random direction within the spread cone,
+    /// particle `i` of the `n` a cycle spawns leaves at `360° × i / n` around
+    /// [`initial_direction`](Self::initial_direction), exactly
+    /// [`spread`](Self::spread) degrees off it: `n` directions evenly on the
+    /// cone's rim, a ring (`spread: 90.0` is a flat ring). The angles don't
+    /// depend on the seed. [`flatness`](Self::flatness) is ignored. Defaults
+    /// to `false`.
+    #[serde(skip_serializing_if = "is_false")]
+    pub even_ring: bool,
 }
 
 impl Default for EmitterVelocities {
@@ -1042,6 +1058,8 @@ impl Default for EmitterVelocities {
             pivot: Vec3::ZERO,
             inherit_ratio: 0.0,
             world_bias: Vec3::ZERO,
+            world_velocity: Vec3::ZERO,
+            even_ring: false,
         }
     }
 }

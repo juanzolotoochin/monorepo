@@ -191,7 +191,10 @@ impl Plugin for SprinklesPlugin {
         // Kestrel: pooled bursts (`pool.rs`). Slots freed this frame are
         // zeroed before this frame's simulation, so this runs last.
         app.init_resource::<pool::ParticlePools>()
-            .add_systems(Last, pool::maintain_pools);
+            .add_systems(Last, pool::maintain_pools)
+            // After this frame's asset events are sent, so a change made in
+            // `Update` rebuilds its pools before the frame is extracted.
+            .add_systems(PostUpdate, pool::rebuild_changed_pools.after(bevy::asset::AssetEventSystems));
 
         app.add_plugins(MaterialPlugin::<runtime::ParticleMaterial>::default());
 
@@ -235,6 +238,8 @@ impl Plugin for SprinklesPlugin {
                 setup_particle_systems::<true>,
                 spawning::update_late_particle_time,
                 write_emitter_uniforms,
+                // Kestrel: after every burst of the frame claimed its slot.
+                pool::size_pool_draws,
             )
                 .chain()
                 .in_set(SprinklesLateSetup),

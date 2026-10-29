@@ -46,24 +46,61 @@ use bevy::prelude::*;
 use service::{AppServices, ServicesPlugin};
 use gameplay::Controls;
 
-fn main() {
-    let args: Vec<_> = std::env::args().collect();
-    let options = control::Options::from_args(&args).unwrap_or_else(|error| {
+/// The command line; in the browser, the page's query string
+/// (`control::Options::args_from_query`).
+#[cfg(not(target_arch = "wasm32"))]
+fn command_line() -> Vec<String> {
+    std::env::args().collect()
+}
+#[cfg(target_arch = "wasm32")]
+fn command_line() -> Vec<String> {
+    use wasm_bindgen::prelude::wasm_bindgen;
+    #[wasm_bindgen]
+    extern "C" {
+        type Location;
+        #[wasm_bindgen(thread_local_v2, js_name = location)]
+        static LOCATION: Location;
+        #[wasm_bindgen(method, getter)]
+        fn search(this: &Location) -> String;
+    }
+    control::Options::args_from_query(&LOCATION.with(Location::search))
+}
+
+/// Reports a bad command line and exits; in the browser, logs it to the
+/// console, where stderr doesn't reach, and stops.
+fn exit_with(error: String) -> ! {
+    #[cfg(target_arch = "wasm32")]
+    {
+        #[wasm_bindgen::prelude::wasm_bindgen]
+        extern "C" {
+            #[wasm_bindgen(js_namespace = console, js_name = error)]
+            fn console_error(message: &str);
+        }
+        console_error(&error);
+        panic!("{error}");
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
         eprintln!("{error}");
         std::process::exit(2)
+    }
+}
+
+fn main() {
+    let args = command_line();
+    let options = control::Options::from_args(&args).unwrap_or_else(|error| {
+        exit_with(format!("{error}"))
     });
     let scenes = assets::SceneLibrary::new();
     let mut scene = options
         .initial_scene(&scenes)
         .unwrap_or_else(|error| {
-            eprintln!("{error}");
-            std::process::exit(2)
+            exit_with(format!("{error}"))
         })
         .unwrap_or(0);
     let value = |flag: &str| args.windows(2).find(|pair| pair[0] == flag).map(|pair| pair[1].clone());
     let network = network(&args).unwrap_or_else(|error| {
-        eprintln!("{error}");
-        std::process::exit(2)
+        exit_with(format!("{error}"))
     });
     if network.is_some() {
         // Networked games start on the field unless asked otherwise. The host
@@ -73,22 +110,18 @@ fn main() {
     }
     if let Some(name) = value("--scene") {
         scene = scenes.index(&name).unwrap_or_else(|error| {
-            eprintln!("{error}");
-            std::process::exit(2)
+            exit_with(format!("{error}"))
         });
     }
     let hub = control::Hub::new(options.clone()).unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(2)
+        exit_with(format!("{e}"))
     });
     let replay = value("--replay-input").map(|path| {
         let read = |path: &str| std::fs::read(path).unwrap_or_else(|e| {
-            eprintln!("{path}: {e}");
-            std::process::exit(2)
+            exit_with(format!("{path}: {e}"))
         });
         let log = save::InputLog::from_bytes(&read(&path)).unwrap_or_else(|e| {
-            eprintln!("{path}: {e}");
-            std::process::exit(2)
+            exit_with(format!("{path}: {e}"))
         });
         (read(&format!("{path}.gsav")), log)
     });
@@ -96,8 +129,7 @@ fn main() {
     // network tests; by default it adapts to the measured network.
     let input_margin_ms = value("--input-margin-ms").map(|ms| {
         ms.trim().parse::<u64>().unwrap_or_else(|e| {
-            eprintln!("--input-margin-ms: invalid number {ms}: {e}");
-            std::process::exit(2)
+            exit_with(format!("--input-margin-ms: invalid number {ms}: {e}"))
         })
     });
     // `--profile <name>` joins with that profile's saved player ID instead

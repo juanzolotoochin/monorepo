@@ -1,0 +1,56 @@
+// A blocked blow or shot: 14 glowing bars sprayed up and around, bouncing
+// once. Port of the hand-written `effects::deflection`. The format is in
+// docs/effect-definition.md.
+//
+// Placed at the contact with +Y up: legacy's spray is in world axes.
+(
+    version: 1,
+    particles: (
+        sprinkles_version: "0.3",
+        name: "deflection",
+        dimension: D3,
+        despawn_on_finish: true,
+        emitters: [
+            (
+                name: "sparks",
+                time: (lifetime: 0.33, one_shot: true, explosiveness: 1.0),
+                draw_pass: (
+                    // Bars 3.5 cm thick and 16 cm long, pointing along their flight.
+                    mesh: Cuboid(half_size: (0.0175, 0.08, 0.0175)),
+                    material: Standard((
+                        // The metal spark glow, glowing for bloom: linear (12.0, 7.8, 2.64).
+                        base_color: (1.0, 0.65, 0.22, 1.0),
+                        emissive: (2.9161, 2.4279, 1.526, 1.0),
+                    )),
+                    transform_align: Some(YToVelocity),
+                    // Small particles go without shadows (docs/effect-definition.md).
+                    shadow_caster: false,
+                    visibility_aabb: (center: (0.0, 0.0, 0.0), half_extents: (3.0, 3.0, 3.0)),
+                ),
+                emission: (particles_amount: 14),
+                scale: (range: (min: 1.0, max: 1.0), scale_over_lifetime: Some((
+                    name: Some("Shrink"),
+                    // (1 - t)^0.65, sampled.
+                    x: (points: [
+                        (position: 0.0, value: 1.0, mode: SingleCurve),
+                        (position: 0.25, value: 0.83, mode: SingleCurve),
+                        (position: 0.5, value: 0.64, mode: SingleCurve),
+                        (position: 0.75, value: 0.41, mode: SingleCurve),
+                        (position: 0.9, value: 0.22, mode: SingleCurve),
+                        (position: 1.0, value: 0.0, mode: SingleCurve),
+                    ], range: (min: 0.0, max: 1.0)),
+                ))),
+                velocities: (
+                    // Legacy's random box (+-2.5 sideways, 0 to 3.75 up): half
+                    // the directions within 45 degrees of up, nearly all within
+                    // 85; speeds 1.3 to 4.2 m/s for 90% of them.
+                    initial_direction: (0.0, 1.0, 0.0),
+                    spread: 70.0,
+                    initial_velocity: (min: 1.3, max: 4.3),
+                ),
+                accelerations: (gravity: (0.0, -7.0, 0.0)),
+                collision: (mode: Some(Rigid(friction: 0.35, bounce: 0.32)), base_size: 0.09),
+            ),
+        ],
+    ),
+)

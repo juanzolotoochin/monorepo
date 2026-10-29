@@ -12,7 +12,8 @@ use crate::{
     },
     runtime::{
         EmitterEntity, EmitterRuntime, ParticleBufferHandle, ParticleSystemRuntime, Particles3d,
-        ParticleTrigger, ParticlesCollider3D, SubEmitterBufferHandle, compute_phase, is_past_delay,
+        ParticleTrigger, ParticlesCollider3D, SimulationStep, SubEmitterBufferHandle, compute_phase,
+        is_past_delay,
     },
     textures::{CurveTextureCache, GradientTextureCache},
 };
@@ -235,12 +236,13 @@ pub struct EmitterUniforms {
     pub world_bias: [f32; 3],
     /// Particles a cycle spawns (`particles_per_meter`); `amount` otherwise.
     pub spawn_count: u32,
+    /// Kestrel: `EmitterVelocities::world_velocity`, world space (in spawn
+    /// space when the emitter simulates in local space). Takes the three
+    /// padding slots after `slot_offset` had, so the size is unchanged.
+    pub world_velocity: [f32; 3],
     /// Kestrel: where this burst's particles start in a pooled buffer
     /// (`pool.rs`); 0 for an emitter with its own buffer.
     pub slot_offset: u32,
-    pub _slot_pad0: u32,
-    pub _slot_pad1: u32,
-    pub _slot_pad2: u32,
 }
 
 /// Kestrel: the trigger has a target (`trigger_target` is set).
@@ -251,6 +253,9 @@ pub const TRIGGER_FLAG_LIFETIME_TO_TARGET: u32 = 2;
 /// particle keeps the emitter's rotation (`ref_up`, as a quaternion), since
 /// the pool is drawn without the emitter's transform.
 pub const TRIGGER_FLAG_KEEP_ROTATION: u32 = 4;
+/// Kestrel: `EmitterVelocities::even_ring`, spawn directions evenly on the
+/// spread cone's rim.
+pub const TRIGGER_FLAG_EVEN_RING: u32 = 8;
 
 #[derive(Resource, Default)]
 pub struct ExtractedColliders {
@@ -297,14 +302,15 @@ pub struct ExtractedEmitterData {
 }
 
 impl ExtractedEmitterData {
-    /// Kestrel: a pool's sort over all its slots; nothing to simulate.
+    /// Kestrel: a pool's sort over the slots it draws; nothing to simulate.
     fn pool_sort(pool: &crate::pool::Pool, camera_position: Vec3, camera_forward: Vec3) -> Self {
         ExtractedEmitterData {
             uniform_steps: Vec::new(),
             particle_buffer_handle: pool.buffers.particle_buffer.clone(),
             indices_buffer_handle: pool.buffers.indices_buffer.clone(),
             sorted_particles_buffer_handle: pool.buffers.sorted_particles_buffer.clone(),
-            amount: pool.buffers.amount,
+            // Only the slots the pool draws (`pool::drawn_slots`).
+            amount: pool.drawn * pool.amount,
             draw_order: pool.draw_order,
             camera_position: camera_position.into(),
             camera_forward: camera_forward.into(),
@@ -631,18 +637,36 @@ fn build_base_uniforms(
         _trail_pad1: 0,
 
         trigger_target: [0.0; 3],
-        trigger_flags: 0,
+        trigger_flags: if emitter.velocities.even_ring { TRIGGER_FLAG_EVEN_RING } else { 0 },
         world_bias: [0.0; 3],
         spawn_count: runtime.spawn_count.unwrap_or(emitter.emission.particles_amount),
+        world_velocity: [0.0; 3],
         slot_offset: 0,
-        _slot_pad0: 0,
-        _slot_pad1: 0,
-        _slot_pad2: 0,
+    }
+}
+
+/// Kestrel: the phase step `index` of this frame emits from. An emitter no
+/// dispatch has run for yet (`simulated` false) emits its first step from
+/// the start of its first cycle: a one-shot burst spawns everything in its
+/// first time step, and if that step's dispatch was skipped (pipeline,
+/// buffers or textures not ready), the step was spent and the burst would
+/// never spawn. Later cycles aren't caught up.
+fn emission_start_phase(
+    step: &SimulationStep,
+    index: usize,
+    simulated: bool,
+    time: &crate::asset::EmitterTime,
+) -> f32 {
+    if index == 0 && !simulated && step.cycle == 0 {
+        0.0
+    } else {
+        compute_phase(step.prev_system_time, time)
     }
 }
 
 pub fn extract_particle_systems(
     mut commands: Commands,
+    mut simulated: ResMut<crate::compute::SimulatedEmitters>,
     emitter_query: Extract<
         Query<(
             Entity,
@@ -663,6 +687,7 @@ pub fn extract_particle_systems(
 ) {
     let _timer = crate::stats::EXTRACT_NS.time();
     let mut extracted = ExtractedParticleSystem::default();
+    simulated.0.retain(|entity| emitter_query.contains(*entity));
 
     let (camera_position, camera_forward) = camera_query
         .iter()
@@ -809,15 +834,25 @@ pub fn extract_particle_systems(
             bias
         }
         .into();
+        // Kestrel: the world velocity in spawn space too, keeping its speed.
+        let velocity = emitter.velocities.world_velocity;
+        base_uniforms.world_velocity = if use_local_coords {
+            world_affine.inverse().transform_vector3(velocity).normalize_or_zero() * velocity.length()
+        } else {
+            velocity
+        }
+        .into();
         let emitter_time = runtime.time(&emitter.time);
 
         let is_sub_emitter_target = emission_buffer_map
             .contains_key(&(emitter_entity.parent_system, runtime.emitter_index));
 
+        let was_simulated = simulated.0.contains(&entity);
         let uniform_steps: Vec<EmitterUniforms> = runtime
             .simulation_steps
             .iter()
-            .flat_map(|step| {
+            .enumerate()
+            .flat_map(|(index, step)| {
                 let should_emit = if is_sub_emitter_target {
                     false
                 } else {
@@ -826,7 +861,8 @@ pub fn extract_particle_systems(
                 let head_uniforms = EmitterUniforms {
                     delta_time: step.delta_time,
                     system_phase: compute_phase(step.system_time, &emitter_time),
-                    prev_system_phase: compute_phase(step.prev_system_time, &emitter_time),
+                    // Kestrel: see `emission_start_phase`.
+                    prev_system_phase: emission_start_phase(step, index, was_simulated, &emitter_time),
                     cycle: step.cycle,
                     emitting: if should_emit { 1 } else { 0 },
                     clear_particles: if step.clear_requested { 1 } else { 0 },
@@ -924,7 +960,7 @@ pub fn extract_particle_systems(
         ));
     }
 
-    // Kestrel: one sort per pool in use, over all its slots, and the byte
+    // Kestrel: one sort per pool in use, over the slots it draws, and the byte
     // ranges of slots freed this frame, zeroed before the simulation.
     for pool in pools.pools.values().flatten().filter(|p| p.used > 0 || p.freed_this_frame) {
         extracted.emitters.push((pool.entity, ExtractedEmitterData::pool_sort(pool, camera_position, camera_forward)));
@@ -969,4 +1005,40 @@ pub fn extract_colliders(
     }
 
     commands.insert_resource(ExtractedColliders { colliders });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The shader's spawn test for a particle at `phase` (`particle_simulate.wesl`).
+    fn spawns(phase: f32, prev_system_phase: f32, system_phase: f32) -> bool {
+        phase >= prev_system_phase && phase < system_phase
+    }
+
+    #[test]
+    fn a_burst_whose_first_step_was_skipped_spawns_in_the_next() {
+        let time = crate::asset::EmitterTime { lifetime: 1.0, one_shot: true, ..default() };
+        let dt = 1.0 / 60.0;
+        let step = |prev: f32, cycle| SimulationStep {
+            prev_system_time: prev,
+            system_time: prev + dt,
+            cycle,
+            delta_time: dt,
+            clear_requested: false,
+            trail_history_write_index: 0,
+        };
+        // An explosive burst spawns every particle at phase 0, in the step
+        // from 0 to `dt`. That step's dispatch didn't run; the next one
+        // still spawns them.
+        let second = step(dt, 0);
+        let from = emission_start_phase(&second, 0, false, &time);
+        assert!(spawns(0.0, from, compute_phase(second.system_time, &time)));
+        // Once a dispatch ran, steps emit from where the last one ended.
+        let from = emission_start_phase(&second, 0, true, &time);
+        assert!(!spawns(0.0, from, compute_phase(second.system_time, &time)));
+        // Only a frame's first step, and only in the first cycle.
+        assert_eq!(emission_start_phase(&second, 1, false, &time), compute_phase(dt, &time));
+        assert_eq!(emission_start_phase(&step(dt, 1), 0, false, &time), compute_phase(dt, &time));
+    }
 }

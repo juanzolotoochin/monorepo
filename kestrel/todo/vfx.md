@@ -6,64 +6,6 @@ The spike's plan, decisions and evaluation are in
 order; "Simulate a pool's bursts in one dispatch" and "Draw only a pool's
 used slots" come after the blood port.
 
-## Build an effect catalog
-
-- **Status:** open
-- **Why:** effects should be listed, authored and changed the way
-  characters are. Today `vfx::FILES` is a hand-written list of
-  `include_str!` files, there is no inheritance, and every change to a
-  file is a rebuild.
-- **What to do:** load every file in `app/vfx/` by name (the file name is
-  the effect's ID), with strict loading as now; add `base` inheritance
-  like character files (nested sections merge, lists replace); pick one
-  color space for both layers; hot reload in debug builds; a debug-menu
-  list that fires any effect in front of the player.
-- **Where:** `kestrel/app/src/vfx.rs`, `kestrel/app/vfx/`,
-  `kestrel/app/BUILD.bazel`.
-- **Found in:** VFX spike handoff, step 6.
-
-## Write the effect file schema doc
-
-- **Status:** open
-- **Why:** AI and people author effect files from the schema; today it is
-  `app/vfx/README.md` plus the fork's Rust doc comments.
-- **What to do:** a doc like `docs/character-definition.md`: one complete
-  file read from the outside in, our layers, the sprinkles fields we use
-  and their units, trigger parameters, pitfalls (one scalar scale,
-  curves). Link it from `docs/README.md`.
-- **Where:** `kestrel/docs/`, `kestrel/app/vfx/README.md`.
-- **Found in:** VFX spike handoff, step 6.
-
-## Port the impact materials
-
-- **Status:** open
-- **Why:** only stone uses an effect file; Metal (also the laser's arrival
-  impact), Crystal and Polymer are still legacy.
-- **What to do:** `impact_metal.ron`, `impact_crystal.ron` and
-  `impact_polymer.ron` on `base: "impact_stone"` with the numbers from
-  `impact::response` (Polymer: no sparks, flash or light). Pick the file
-  by `ImpactResponse` in `effects::impact`. The struck target's emissive
-  flash and kick stay in Rust. Capture each against legacy.
-- **Where:** `kestrel/app/vfx/`, `kestrel/app/src/effects.rs`,
-  `impact.rs`.
-- **Found in:** VFX spike handoff, step 6 ("Authoring").
-
-## Port blood, deflection and the trial burst
-
-- **Status:** open
-- **Why:** they are plain bursts of cubes, still CPU particles.
-- **What to do:** see the blood sketch in the handoff ("Authoring"):
-  two droplet emitters; a world-space velocity added at spawn (legacy
-  adds 1.5 m/s up after normalizing) or an approximation; floor splats as
-  a separate effect triggered at the floor point, since they lie under the
-  cut. Deflection is a plain spray. The trial burst needs 24 cubes evenly
-  on a ring (an emission option) or random directions. Measure blood's
-  3 s splats on the Deck: they hold pool slots longer than any effect so
-  far.
-- **Where:** `kestrel/app/vfx/`, `kestrel/app/src/effects.rs`,
-  `palimpsest/mod.rs`, `kestrel/vfx/sprinkles/src/shaders/particle_simulate.wesl`.
-- **Found in:** VFX spike handoff, step 6.
-
 ## Port blade echo and the dust ring
 
 - **Status:** open
@@ -110,15 +52,33 @@ used slots" come after the blood port.
 
 ## Match the arc's last frame
 
-- **Status:** open
-- **Why:** at 30 fps the sprinkles arc still draws small cubes on frame
-  117 of `arc_hits.json`, where legacy has none (about 700 pixels). Likely
-  the one-shot completion frame (`UPSTREAM.md`) or the shrink curve's end.
-- **What to do:** compare the particle age and scale at that frame;
-  shorten `arc.ron`'s lifetime or end the curve earlier if that's all.
-- **Where:** `kestrel/app/vfx/arc.ron`,
-  `kestrel/vfx/sprinkles/src/spawning.rs`.
-- **Found in:** VFX spike handoff, step 6.
+- **Status:** open (cause found, fix needs a decision)
+- **Why:** at 30 fps the sprinkles arc draws 4 frames and legacy's 3; the
+  extra one is small cubes after legacy's arc is gone (about 700 pixels).
+  Cause (2026-10-28, logged ages per frame with both backends, a warm and a
+  cold arc alike): both start drawing on the same frame, but legacy's cubes
+  are spawned before `update_effects` runs that frame, so they're aged once
+  before their first draw and draw at 1, 2 and 3 steps (scale 0.83, 0.62,
+  0.39), then reach 0.133 ≥ 0.13 and despawn. A sprinkles particle spawns
+  at age 0 at the end of its first step and draws at 0, 1, 2 and 3 steps
+  (1.0, 0.83, 0.62, 0.39): legacy's sequence one frame later, plus a
+  full-size first frame. Not the shrink curve (both end at 0.39), the
+  one-shot completion frame (the particles die in the shader at
+  age ≥ lifetime either way), pool zeroing or TAA.
+- **What to do:** decide whether a spawned particle is aged by the part of
+  its first step after its emission time, as Godot does (a burst emitted
+  at phase 0 ends its first step at age `dt`, and moves by `dt`). In
+  `particle_simulate.wesl` that's running `update_particle` with the
+  remaining time after `spawn_particle`; it changes every effect's first
+  frame (stone sprays, the laser bolt's spawn stub), so recapture all of
+  them, and the one-shot completion frame (`UPSTREAM.md`) may then be
+  unneeded. Shortening `arc.ron`'s lifetime instead would only match at
+  30 fps.
+- **Where:** `kestrel/vfx/sprinkles/src/shaders/particle_simulate.wesl`
+  (`spawn_particle`, `update_particle`), `spawning.rs`
+  (one-shot completion), `kestrel/app/vfx/arc.ron`.
+- **Found in:** VFX spike handoff, step 6. Reproduced with scratchpad
+  `perf/cap/arc2.json` (two arcs, frames 307–310 and 366–369).
 
 ## Decide on an effect editor
 
@@ -150,70 +110,15 @@ used slots" come after the blood port.
   the `arc.ron` port (emitters default to `shadow_caster: true`) shows none
   in the combat arena captures. The particle shadow pass may not place
   vertices from the particle buffer, or the shadow is just too faint.
+  Turning `shadow_caster` off for the stone impact's sparks and debris
+  (2026-10-28) changed no pixel in the boulder-lab hit frames (largest
+  difference 6 of 255, in 6 pixels), another hint that particle shadows
+  don't draw.
 - **What to do:** capture a big shadow-casting emitter in a lit scene;
   check the shadow prepass path of `particle_material.wesl`.
 - **Where:** `kestrel/vfx/sprinkles/src/shaders/particle_material.wesl`,
   `material.rs`.
 - **Found in:** VFX spike step 3.
-
-## Don't lose a burst when its first step can't run
-
-- **Status:** open
-- **Why:** a one-shot burst spawns all its particles in its first time step.
-  If that step's compute dispatch is skipped (GPU buffers, material or
-  pipeline not ready yet), the step is spent anyway and the burst never
-  spawns. Step 3 hit this with the laser (fixed by ordering, see
-  `UPSTREAM.md`), but anything that delays GPU resources a frame would
-  bring it back.
-- **What to do:** don't advance an emitter's time until a compute dispatch
-  has run for it (a feedback flag from the render world), or spawn
-  particles in the first step that actually runs.
-- **Where:** `kestrel/vfx/sprinkles/src/spawning.rs`
-  (`step_particle_time`), `compute.rs`.
-- **Found in:** VFX spike step 3.
-
-## Simulate a pool's bursts in one dispatch
-
-- **Status:** open
-- **Why:** with pooled bursts, each burst still has its own compute
-  dispatch on the pool's shared buffer: 2.5 ms of Deck GPU at 200
-  impacts/s (1.4 ms on the desktop). That is most of what is left between
-  pooled sprinkles (11.4 ms a frame) and legacy (9.9 ms). Dispatches that
-  write one buffer may also be serialized by barriers.
-- **What to do:** put each burst's parameters (the `EmitterUniforms` it has
-  now) in a storage buffer indexed by slot, and dispatch each pool once
-  over its used slots. Measure with `--vfx-stress impacts=200` on the Deck.
-- **Where:** `kestrel/vfx/sprinkles/src/compute.rs`, `extract.rs`,
-  `pool.rs`, `shaders/particle_simulate.wesl`.
-- **Found in:** VFX spike step 4 (pooled bursts).
-
-## Draw only a pool's used slots
-
-- **Status:** open
-- **Why:** a pool's draw covers all its slots, live or not. Cheap for the
-  stone impact (12–18 particles a slot), not for the arc (270 a slot, 8,640
-  instances in its first pool): the Deck's arc-only load is +0.4 ms over
-  legacy.
-- **What to do:** draw up to the highest used slot (indirect draw or a
-  mesh per capacity step), or give emitters with many particles smaller
-  pools.
-- **Where:** `kestrel/vfx/sprinkles/src/pool.rs`, `spawning.rs`
-  (`create_pool`), `mesh.rs`.
-- **Found in:** VFX spike step 4 (pooled bursts).
-
-## Free and update particle pools
-
-- **Status:** open
-- **Why:** pools are never freed or shrunk, so GPU memory stays at the
-  high-water mark (+7 MB at 200 impacts/s, +24 MB with lasers and arcs).
-  Live edits to a pooled emitter's mesh, material or particle count don't
-  reach existing pools. Fine for compiled-in files; not for live reload or
-  an editor.
-- **What to do:** drop a pool after it has been empty for a while; rebuild
-  an asset's pools when the asset changes.
-- **Where:** `kestrel/vfx/sprinkles/src/pool.rs`, `spawning.rs`
-  (`sync_*`).
-- **Found in:** VFX spike step 4 (pooled bursts).
 
 ## Find the pooled laser capture's difference near the impact
 
@@ -235,18 +140,19 @@ used slots" come after the blood port.
   `step4/poollaser_sprinkles` vs `step3/laser_sprinkles`.
 - **Found in:** VFX spike step 4 (pooled bursts).
 
-## Decide whether small impact particles cast shadows
+## Revisit particle shadows per effect
 
-- **Status:** open
-- **Why:** before pooling, each shadow-casting emitter was drawn in four
-  cascade views, and turning shadows off for the stone impact cut the
-  desktop's 200 impacts/s frame from 45.6 to 26.8 ms. Pooled, it's 4 extra
-  draws per pool, so this is now a look question more than a cost one.
-  Legacy sparks do cast shadows.
-- **What to do:** compare captures with and without `shadow_caster: false`
-  on sparks and debris; pick a default for effect files.
-- **Where:** `kestrel/app/vfx/impact_stone.ron`, `kestrel/app/vfx/README.md`.
-- **Found in:** VFX spike step 4.
+- **Status:** open (low priority)
+- **Why:** small particles go without shadows by default (see "Decide
+  whether small impact particles cast shadows"), but some effects may
+  read better with them: large debris, slow chunks, effects near the
+  camera, or scenes with strong directional light.
+- **What to do:** once more effects are ported, look at each with and
+  without `shadow_caster` in a few scenes and turn shadows back on where
+  they help; note the choice in the effect file. Check the cost on the
+  Deck if many shadow-casting pools are live at once.
+- **Where:** `kestrel/app/vfx/*.ron`, `kestrel/app/vfx/README.md`.
+- **Found in:** session of 2026-10-28 (shadow default decision).
 
 ## Find why reusing GPU objects is slower on the Deck at 200/s
 
@@ -270,13 +176,12 @@ used slots" come after the blood port.
 - **Why:** `--vfx-stress`, `effects::stress_bolt`, `bevy_sprinkles::stats`
   and the `KESTREL_SPRINKLES_NO_REUSE` / `KESTREL_SPRINKLES_NO_POOL`
   switches exist to measure the spike.
-- **What to do:** the fork is adopted (step 6), so keep `--vfx-stress`
-  until "Simulate a pool's bursts in one dispatch" is measured with it.
-  Then keep it only if we want a performance regression check, or delete
-  `app/src/vfx_stress.rs`, its hooks in `control/mod.rs`, `main.rs` and
-  `effects.rs`, and the fork's `stats.rs` and switches (`UPSTREAM.md`,
-  "Burst performance", "Pooled bursts"). Drop the switches with the
-  legacy path either way.
+- **What to do:** the single dispatch per pool is measured with it
+  (handoff, "Pool costs"). The user's direction (2026-10-28): keep
+  `--vfx-stress` as a performance regression check. Drop
+  `KESTREL_SPRINKLES_NO_REUSE` and the spike-only counters in the fork's
+  `stats.rs` later (`UPSTREAM.md`, "Burst performance", "Pooled bursts"),
+  and `KESTREL_SPRINKLES_NO_POOL` with the legacy path.
 - **Where:** `kestrel/app/src/vfx_stress.rs`,
   `kestrel/vfx/sprinkles/src/stats.rs`.
 - **Found in:** VFX spike step 4.
@@ -295,19 +200,6 @@ used slots" come after the blood port.
   `kestrel/app/README.md`.
 - **Found in:** VFX spike step 4.
 
-## Pass options to the web build from the URL
-
-- **Status:** open
-- **Why:** the wasm build has no command line, so `--vfx sprinkles` and
-  the other `Options` flags can't be given in the browser; step 5 had to
-  switch the backend in the debug menu (Effects → VFX backend) by hand.
-- **What to do:** on wasm32, turn the page's query string (for example
-  `?vfx=sprinkles`) into the arguments `control::Options::from_args`
-  reads. Flags that need files (`--demo-script`, `--frames-dir`) stay
-  native only.
-- **Where:** `kestrel/app/src/main.rs`, `kestrel/app/src/control/mod.rs`.
-- **Found in:** VFX spike step 5.
-
 ## Check the web build in Firefox, Safari and on Linux
 
 - **Status:** open
@@ -321,7 +213,337 @@ used slots" come after the blood port.
 - **Where:** `kestrel/app/README.md`, `kestrel/vfx/sprinkles/src/compute.rs`.
 - **Found in:** VFX spike step 5.
 
+## Let the stress harness stop firing
+
+- **Status:** open
+- **Why:** `--vfx-stress` fires until the run ends, so pools never sit
+  empty and the 5 s pool freeing, and the memory it gives back, can't be
+  measured with it.
+- **What to do:** add a spec key (for example `stop_after=N`) that stops
+  firing after N measured frames and keeps recording, so the report shows
+  pools dropping and wgpu memory falling back toward idle.
+- **Where:** `kestrel/app/src/vfx_stress.rs`; scratchpad `run_matrix.sh`.
+- **Found in:** VFX pool costs (handoff, "Pool costs", 2026-10-28).
+
+## Make bursts rows of their pool, not entities
+
+- **Status:** open
+- **Why:** after one dispatch per pool and drawing only used slots, what's
+  left over legacy is mostly render-world CPU from bursts still being
+  entities. At 200 impacts/s on the Intel UHD 770 the frame is 19.93 ms
+  against legacy's 18.61: prepare +0.5 ms, graph +0.3 ms, extract
+  +0.2 ms, and 0.3 ms of GPU in Bevy's `uniform_allocation` and
+  `bin_unpacking`. The Deck's slower CPU will make this share larger.
+- **What to do:** the handoff's "Adopt and rewrite parts now" option, for
+  the pooled path only: keep a burst's runtime (time steps, seed, trigger)
+  as a row in its pool instead of an emitter entity, and extract and
+  prepare per pool. Measure with `--vfx-stress` on the UHD 770 and the Deck.
+- **Where:** `kestrel/vfx/sprinkles/src/pool.rs`, `spawning.rs`,
+  `extract.rs`, `compute.rs`.
+- **Found in:** VFX pool costs (handoff, "Pool costs", 2026-10-28).
+
+## Measure the pool work on the Deck
+
+- **Status:** open
+- **Why:** one dispatch per pool and drawing only used slots were measured
+  on the RTX 4070 and the Intel UHD 770 (a GPU-bound stand-in), not on the
+  Deck, whose CPU is slower.
+- **What to do:** rerun the stress matrix on the Deck (idle, 10/50/200
+  impacts/s, lasers, arcs, both mixes) for legacy and sprinkles; compare
+  with the handoff's pooled Deck table and the UHD 770 numbers in "Pool
+  costs". Needs the Deck and a Linux host, or "Let the Steam Deck launcher
+  run from Windows" first. From the repository root on that host, with the
+  Deck in Desktop Mode: `kestrel/app/deck_vfx_stress.sh deck_pools`
+  installs the game, runs all 16 runs (4200 frames, 600 left out, as on the
+  desktop) and prints the tables; reports land in
+  `kestrel-vfx-stress/deck_pools/`. It hasn't been run yet.
+  Also run blood at 50 cuts/s (`blood=50`) on both backends: its 3 s
+  splats hold pool slots longest; on the UHD 770 sprinkles was 0.4 ms
+  slower than legacy there (see "Port blood, deflection and the trial
+  burst").
+- **Where:** `kestrel/VFX_SPIKE_HANDOFF.md` (step 4, "Pool costs"),
+  `kestrel/app/deck_vfx_stress.sh`.
+- **Found in:** VFX pool costs (handoff, "Pool costs", 2026-10-28).
+
+## Write emissive as color times intensity
+
+- **Status:** open
+- **Why:** effect files are sRGB everywhere, so glowing `emissive` values
+  above 1 go through the sRGB curve too: linear 12 is written 2.9161,
+  which reads oddly and is hard to tune by hand.
+- **What to do:** write emissive as an sRGB color (0–1) plus a separate
+  intensity or strength the loader multiplies in linear space; convert the
+  three files and update the README's color paragraph. Keep the test that
+  walks the asset's color fields.
+- **Where:** `kestrel/app/src/vfx/catalog.rs` (`particles_to_linear`),
+  `kestrel/app/vfx/*.ron`, `kestrel/app/vfx/README.md`.
+- **Found in:** effect catalog work (sRGB colors), 2026-10-28.
+
+## Skip disabled emitters when spawning a burst
+
+- **Status:** open
+- **Why:** a variant turns a base's emitter off with `enabled: false`
+  (`impact_polymer.ron` turns off the sparks and the flash), but the fork
+  still spawns it: each burst claims a slot in that emitter's pool, which
+  is created and drawn (at least 8 slots) though nothing is simulated.
+- **What to do:** outside the editor, don't spawn disabled emitters
+  (`spawning.rs`); keep `emitter_entities` indexed by emitter for
+  sub-emitters, and make an effect whose emitters are all disabled finish
+  (or not spawn its particle system in `vfx::spawn`). Drop the pitfall
+  from `docs/effect-definition.md` after.
+- **Where:** `kestrel/vfx/sprinkles/src/spawning.rs`, `runtime.rs`
+  (`check_particle_system_finished`), `kestrel/app/src/vfx.rs`.
+- **Found in:** porting the impact materials (branch kestrel-vfx-ports).
+
 ## Done
+
+## Port blood, deflection and the trial burst
+
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/130)
+- **Why:** they are plain bursts of cubes, still CPU particles.
+- **What to do:** see the blood sketch in the handoff ("Authoring"):
+  two droplet emitters. Decided (2026-10-28): a new fork emitter field,
+  a world-space velocity added at spawn, for legacy's 1.5 m/s upward
+  after normalizing; the floor splats as a separate `blood_splat` effect
+  that game code triggers at the floor point under the cut (flat box,
+  uniform scale range); the trial burst's 24 cubes from a new fork
+  emission option that places N particles at even angles on a ring.
+  Deflection is a plain spray. Measure blood's
+  3 s splats on the Deck: they hold pool slots longer than any effect so
+  far.
+- **What was done:** fork fields `EmitterVelocities::world_velocity`
+  (added at spawn, in the uniforms' padding before `slot_offset`, so the
+  struct's size is unchanged) and `even_ring` (particle `i` of `n` leaves
+  `spread` degrees off the direction at `360° × i / n`). The ring is a
+  velocity option rather than a ring emission shape: positions on a ring
+  don't fly outward, and radial velocity pushes from the pivot in 3D, so
+  rising cubes drift up (UPSTREAM.md). Files: `blood.ron` (two emitters of
+  11 droplets, one per blood material, 30° cone, 2 to 4.8 m/s, bias up
+  0.27, world velocity 1.5 m/s up, gravity 13, 0.48 to 0.93 s, Rigid
+  floor), `blood_splat.ron` (4 + 3 flat boxes in a ±0.55 m patch, scale
+  0.6 to 1.4, 3 s, shrinking like legacy), `deflection.ron` (14 metal
+  spark bars, 70° cone, 1.3 to 4.3 m/s, gravity 7, 0.33 s, Rigid) and
+  `trial_burst.ron` (24 crystal cubes on an even flat ring at 3 m/s plus
+  3 m/s up, gravity 6, 0.8 s). `effects::blood` triggers `blood` and
+  `blood_splat` at `(x, 0.012, z)`, `effects::deflection` and
+  `palimpsest::tick` theirs, on the sprinkles backend; legacy otherwise.
+  All four pool. Captures (combat-arena cuts and a brute's deflection,
+  the surprise lab's core) match in timing, direction, count and color.
+  Differences: no droplet, bar or cube shadows (`shadow_caster: false`),
+  square splats where legacy's are random rectangles, the trial ring at
+  one height where legacy alternates 2, 3 and 4 m/s up, and the cone
+  sprays a little tighter than legacy's random boxes. `--vfx-stress`
+  gained `blood=N`. On the Intel UHD 770 (the Deck's stand-in; the Deck
+  run is in "Measure the pool work on the Deck"), mean frame ms legacy /
+  sprinkles: idle 15.56 / 15.55, 20 cuts/s 15.78 / 16.03, 50 cuts/s
+  16.11 / 16.51 (particle compute and sort 0.26 ms; 10 pools for 396
+  live bursts, peak GPU memory 224 MB against legacy's 222).
+- **Where:** `kestrel/app/vfx/`, `kestrel/app/src/effects.rs`,
+  `palimpsest/mod.rs`, `kestrel/vfx/sprinkles/src/shaders/particle_simulate.wesl`.
+- **Found in:** VFX spike handoff, step 6.
+
+## Pass options to the web build from the URL
+
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/130)
+- **Why:** the wasm build has no command line, so `--vfx sprinkles` and
+  the other `Options` flags can't be given in the browser; step 5 had to
+  switch the backend in the debug menu (Effects → VFX backend) by hand.
+- **What to do:** on wasm32, turn the page's query string (for example
+  `?vfx=sprinkles`) into the arguments `control::Options::from_args`
+  reads. Flags that need files (`--demo-script`, `--frames-dir`) stay
+  native only.
+- **What was done:** `Options::args_from_query` turns `?key=value` into
+  `--key value` and a bare `key` into `--key` (percent-decoded, `+` is a
+  space, file flags dropped) after a program name; on wasm32 `main` reads
+  `location.search` through wasm-bindgen and parses that like native
+  arguments, so `from_args` stays the one parser. A bad option goes to the
+  browser console (`exit_with`). Test:
+  `control::tests::query_strings_become_arguments`. Documented in
+  `kestrel/app/README.md` ("Browser build"); the web target builds, not
+  yet opened in a browser.
+- **Where:** `kestrel/app/src/main.rs`, `kestrel/app/src/control/mod.rs`.
+- **Found in:** VFX spike step 5.
+
+## Run the stress matrix on the Deck with one command
+
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/130)
+- **Why:** the Deck runs so far copied a binary and a scratch script by
+  hand (handoff, step 4), and the tables came from a scratchpad script.
+- **What to do:** a script that installs the game on the Deck, runs every
+  load on both backends and prints the desktop matrix's tables.
+- **What was done:** `kestrel/app/deck_vfx_stress.sh <set> [loads...]`
+  installs with `//kestrel/app:steamdeck -- --install-only`, runs each
+  load through the Deck's `launch.sh` (fullscreen, desktop session) in one
+  SSH session, waits for the game's unit to exit, copies the reports back
+  and prints them with `kestrel/app/vfx_stress_summary.py` (the
+  scratchpad's `summarize.py`, same output, standard library only).
+  Documented in `kestrel/app/README.md`. Not run: no Deck here.
+- **Where:** `kestrel/app/deck_vfx_stress.sh`,
+  `kestrel/app/vfx_stress_summary.py`, `kestrel/app/README.md`.
+- **Found in:** VFX pool work, 2026-10-28.
+
+## Port the impact materials
+
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/130)
+- **Why:** only stone uses an effect file; Metal (also the laser's arrival
+  impact), Crystal and Polymer are still legacy.
+- **What to do:** `impact_metal.ron`, `impact_crystal.ron` and
+  `impact_polymer.ron` on `base: "impact_stone"` with the numbers from
+  `impact::response` (Polymer: no sparks, flash or light). Pick the file
+  by `ImpactResponse` in `effects::impact`. The struck target's emissive
+  flash and kick stay in Rust. Capture each against legacy.
+- **What was done:** the three files on `base: "impact_stone"`: counts,
+  speeds (`speed × 0.5` to `× 1.5`), spark, debris and light colors and
+  light intensity from `impact::response` and `FxAssets` (`scene.rs`),
+  linear emissive converted to sRGB. Metal's sparks get an 8 m culling
+  box for their 16.5 m/s. `effects::impact` picks the file by
+  `ImpactResponse` (`impact_effect`). Captures of each material in
+  boulder-lab and the laser pit's arrival, legacy against sprinkles, match
+  in color, count, timing, flash and light; as with stone, the sprinkles
+  sprays are a little tighter (45° cone against legacy's random box), and
+  legacy's debris chips cast floor shadows the ported ones don't
+  (`shadow_caster: false`, decided).
+- **Where:** `kestrel/app/vfx/`, `kestrel/app/src/effects.rs`,
+  `impact.rs`.
+- **Found in:** VFX spike handoff, step 6 ("Authoring").
+
+## Write the effect file schema doc
+
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/130)
+- **Why:** AI and people author effect files from the schema; today it is
+  `app/vfx/README.md` plus the fork's Rust doc comments.
+- **What to do:** a doc like `docs/character-definition.md`: one complete
+  file read from the outside in, our layers, the sprinkles fields we use
+  and their units, trigger parameters, pitfalls (one scalar scale,
+  curves). Link it from `docs/README.md`.
+- **What was done:** `docs/effect-definition.md`: `impact_stone` read
+  from the outside in, both layers, the emitter fields we use with units,
+  trigger parameters, sRGB colors, `base` merge rules with an example,
+  pitfalls (effects must end, one scalar scale, curves, pooling
+  eligibility, culling box), adding a file and the Reload/Fire loop.
+  Linked from `docs/README.md` and the site's nav; `app/vfx/README.md`
+  now points there.
+- **Where:** `kestrel/docs/`, `kestrel/app/vfx/README.md`.
+- **Found in:** VFX spike handoff, step 6.
+
+## Build an effect catalog
+
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/129)
+- **Why:** effects should be listed, authored and changed the way
+  characters are. Today `vfx::FILES` is a hand-written list of
+  `include_str!` files, there is no inheritance, and every change to a
+  file is a rebuild.
+- **What to do:** load every file in `app/vfx/` by name (the file name is
+  the effect's ID), with strict loading as now; add `base` inheritance
+  like character files (nested sections merge, lists replace); pick one
+  color space for both layers; hot reload in debug builds; a debug-menu
+  list that fires any effect in front of the player.
+- **What was done:** `vfx::catalog` loads the compiled-in files by name
+  (a test checks the list against the folder), with `base` merged as a
+  RON tree that keeps names (emitters merge by `name`); colors are sRGB in
+  both layers; Effects → Reload rereads the folder in `bazel run` runs,
+  keeping the last good version of a file that fails; Effects → Fire
+  triggers any effect in front of the player.
+- **Where:** `kestrel/app/src/vfx.rs`, `vfx/catalog.rs`, `vfx/ron_tree.rs`,
+  `kestrel/app/vfx/`, `kestrel/app/BUILD.bazel`.
+- **Found in:** VFX spike handoff, step 6.
+
+## Decide whether small impact particles cast shadows
+
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/129)
+- **Why:** before pooling, each shadow-casting emitter was drawn in four
+  cascade views, and turning shadows off for the stone impact cut the
+  desktop's 200 impacts/s frame from 45.6 to 26.8 ms. Pooled, it's 4 extra
+  draws per pool, so this is now a look question more than a cost one.
+  Legacy sparks do cast shadows.
+- **What to do:** decided (2026-10-28): small particles don't cast
+  shadows. Set `shadow_caster: false` on sparks and debris in
+  `impact_stone.ron` (and the materials based on it), and say in the
+  README that small particles go without shadows.
+- **What was done:** sparks and debris in `impact_stone.ron` set
+  `shadow_caster: false` (the flash keeps its shadow); the README says
+  small particles go without shadows and points to "Revisit particle
+  shadows per effect".
+- **Where:** `kestrel/app/vfx/impact_stone.ron`, `kestrel/app/vfx/README.md`.
+- **Found in:** VFX spike step 4.
+
+## Simulate a pool's bursts in one dispatch
+
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/129)
+- **Why:** with pooled bursts, each burst still has its own compute
+  dispatch on the pool's shared buffer: 2.5 ms of Deck GPU at 200
+  impacts/s (1.4 ms on the desktop). That is most of what is left between
+  pooled sprinkles (11.4 ms a frame) and legacy (9.9 ms). Dispatches that
+  write one buffer may also be serialized by barriers.
+- **What to do:** put each burst's parameters (the `EmitterUniforms` it has
+  now) in a storage buffer indexed by slot, and dispatch each pool once
+  over its used slots. Measure with `--vfx-stress impacts=200` on the Deck.
+- **What was done:** bursts that share a bind group (a pool's) are
+  simulated by one compute dispatch per step, up to 64 bursts each, with
+  their uniforms consecutive in the shared uniform buffer. Particle compute
+  at 200 impacts/s: 2.89 → 0.23 ms on the Intel UHD 770, 1.17 → 0.05 ms on
+  the RTX 4070 (handoff, "Pool costs"). Not measured on the Deck yet (see
+  "Measure the pool work on the Deck").
+- **Where:** `kestrel/vfx/sprinkles/src/compute.rs`, `extract.rs`,
+  `pool.rs`, `shaders/particle_simulate.wesl`.
+- **Found in:** VFX spike step 4 (pooled bursts).
+
+## Draw only a pool's used slots
+
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/129)
+- **Why:** a pool's draw covers all its slots, live or not. Cheap for the
+  stone impact (12–18 particles a slot), not for the arc (270 a slot, 8,640
+  instances in its first pool): the Deck's arc-only load is +0.4 ms over
+  legacy.
+- **What to do:** draw up to the highest used slot (indirect draw or a
+  mesh per capacity step), or give emitters with many particles smaller
+  pools.
+- **What was done:** bursts take the lowest free slot; each frame a pool
+  draws and sorts only up to its highest used slot, rounded up to a power
+  of two (at least 8), with a cached mesh of that many slots. Arcs alone on
+  the UHD 770: 17.13 → 16.03 ms (legacy 15.57).
+- **Where:** `kestrel/vfx/sprinkles/src/pool.rs`, `spawning.rs`
+  (`create_pool`), `mesh.rs`.
+- **Found in:** VFX spike step 4 (pooled bursts).
+
+## Don't lose a burst when its first step can't run
+
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/129)
+- **Why:** a one-shot burst spawns all its particles in its first time step.
+  If that step's compute dispatch is skipped (GPU buffers, material or
+  pipeline not ready yet), the step is spent anyway and the burst never
+  spawns. Step 3 hit this with the laser (fixed by ordering, see
+  `UPSTREAM.md`), but anything that delays GPU resources a frame would
+  bring it back.
+- **What to do:** don't advance an emitter's time until a compute dispatch
+  has run for it (a feedback flag from the render world), or spawn
+  particles in the first step that actually runs.
+- **What was done:** the compute node records the emitters it simulated;
+  until an emitter is recorded, extraction emits its first step from the
+  start of its first cycle, so a burst spawns in the first step that runs.
+  Works per burst within a pool's batched dispatch.
+- **Where:** `kestrel/vfx/sprinkles/src/spawning.rs`
+  (`step_particle_time`), `compute.rs`.
+- **Found in:** VFX spike step 3.
+
+## Free and update particle pools
+
+- **Status:** done (https://github.com/juanzolotoochin/monorepo/pull/129)
+- **Why:** pools are never freed or shrunk, so GPU memory stays at the
+  high-water mark (+7 MB at 200 impacts/s, +24 MB with lasers and arcs).
+  Live edits to a pooled emitter's mesh, material or particle count don't
+  reach existing pools. Fine for compiled-in files; not for live reload or
+  an editor.
+- **What to do:** drop a pool after it has been empty for a while; rebuild
+  an asset's pools when the asset changes.
+- **What was done:** a pool empty for 5 s of game time is dropped (except
+  the first pool of each asset and emitter), and a modified or removed
+  particle asset drops its pools and restarts their bursts on new pools.
+  Freeing isn't measured yet: the stress harness never stops firing (see
+  "Let the stress harness stop firing").
+- **Where:** `kestrel/vfx/sprinkles/src/pool.rs`, `spawning.rs`
+  (`sync_*`).
+- **Found in:** VFX spike step 4 (pooled bursts).
 
 ## Write up the spike and decide
 
