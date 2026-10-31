@@ -106,16 +106,18 @@ pub struct ProducerState {
     pub cycles: u32,
 }
 
-/// Names a holder of goods: a depot's inventory, an agent's cargo, a pile or
-/// the collector. A flying unit's two ends are these, and so is a carry
-/// job's other side. New variants go last: `behaviour_digest` hashes the
-/// variant index of every transfer's ends.
+/// Names a holder of goods: a depot's inventory, an agent's cargo, a pile,
+/// the collector or a building's output. A flying unit's two ends are these,
+/// and so is a carry job's other side. New variants go last:
+/// `behaviour_digest` hashes the variant index of every transfer's ends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum InventoryRef {
     Depot(DepotIx),
     Agent(AgentIx),
     Pile(piles::PileId),
     Collector,
+    /// A building's output pile, which a bundle picks up from (D6).
+    Output(BuildingIx),
 }
 
 impl InventoryRef {
@@ -336,7 +338,9 @@ impl Settlement {
             .depots
             .iter()
             .map(|d| {
-                let mut inventory = Inventory::new(items.len(), d.capacity, Kinds::AnyMix);
+                // A tree pile takes only its item (`Depot::only`).
+                let kinds = d.only.as_deref().map_or(Kinds::AnyMix, |only| Kinds::Only(item(only)));
+                let mut inventory = Inventory::new(items.len(), d.capacity, kinds);
                 for s in &d.stock {
                     // Validated: the stock fits the capacity.
                     inventory.counts[item(&s.item) as usize] += s.units;
@@ -628,6 +632,7 @@ impl Settlement {
                 links: Vec::new(),
                 cargo_anchor: [0.0, 0.65, -0.19],
                 cargo_layout: scenario::CargoLayout::default(),
+                one_kind: false,
                 equipment: None,
             }],
             producers: Vec::new(),
@@ -729,17 +734,19 @@ impl Settlement {
             InventoryRef::Depot(d) => &mut self.depots[d as usize].inventory,
             InventoryRef::Agent(a) => &mut self.agents[a as usize].carry.inventory,
             InventoryRef::Pile(_) | InventoryRef::Collector => self.piles.as_mut().expect("a pile scene").holder_mut(holder),
+            InventoryRef::Output(b) => &mut self.buildings[b as usize].output,
         }
     }
 
     /// Where `holder` takes and gives units: a depot's dock, an agent's
-    /// body, a pile, the collector.
+    /// body, a pile, the collector, a building's output pile.
     pub(crate) fn position_of(&self, holder: InventoryRef) -> FxVec2 {
         match holder {
             InventoryRef::Depot(d) => self.depots[d as usize].position,
             InventoryRef::Agent(a) => self.agents[a as usize].body.position,
             InventoryRef::Pile(id) => self.piles.as_ref().expect("a pile scene").piles[&id].position,
             InventoryRef::Collector => self.piles.as_ref().and_then(|lab| lab.collector.as_ref()).expect("a collector").position,
+            InventoryRef::Output(b) => self.buildings[b as usize].output_position,
         }
     }
 
@@ -866,22 +873,28 @@ impl Settlement {
         Ok(())
     }
 
+    /// What `holder` should hold reserved, `(out, in)` per item, recomputed
+    /// from the units flying there and the carry jobs on it: a pile, the
+    /// collector or a building output, which nothing else reserves on.
+    fn expected_reservations(&self, holder: InventoryRef) -> (Vec<u32>, Vec<u32>) {
+        let items = self.items.len();
+        let (mut out, mut incoming) = (vec![0u32; items], vec![0u32; items]);
+        for t in self.transfers.values().filter(|t| t.to == holder) {
+            incoming[t.item as usize] += 1;
+        }
+        for job in self.agents.iter().flat_map(|a| a.carry.job.iter().chain(&a.carry.next)).filter(|j| j.other == holder) {
+            let side = if job.gives(Side::Other) { &mut out } else { &mut incoming };
+            side[job.item as usize] += job.remaining;
+        }
+        (out, incoming)
+    }
+
     /// Checks the piles and the collector: each inventory on its own, and
     /// its reservations against the units flying there and the carry jobs
     /// (hauls) on it.
     fn validate_lab(&self, lab: &piles::PileLab) -> Result<(), String> {
         let items = self.items.len();
-        let expected = |holder: InventoryRef| {
-            let (mut out, mut incoming) = (vec![0u32; items], vec![0u32; items]);
-            for t in self.transfers.values().filter(|t| t.to == holder) {
-                incoming[t.item as usize] += 1;
-            }
-            for job in self.agents.iter().flat_map(|a| a.carry.job.iter().chain(&a.carry.next)).filter(|j| j.other == holder) {
-                let side = if job.gives(Side::Other) { &mut out } else { &mut incoming };
-                side[job.item as usize] += job.remaining;
-            }
-            (out, incoming)
-        };
+        let expected = |holder: InventoryRef| self.expected_reservations(holder);
         let holders = lab.piles.iter().map(|(&id, p)| (InventoryRef::Pile(id), format!("pile {id}"), &p.inventory));
         let collector = lab.collector.iter().map(|c| (InventoryRef::Collector, "collector".to_string(), &c.inventory));
         for (holder, name, inventory) in holders.chain(collector) {
@@ -1009,6 +1022,8 @@ impl StateHash for Settlement {
 
 #[cfg(test)]
 mod buildings_tests;
+#[cfg(test)]
+mod bundle_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

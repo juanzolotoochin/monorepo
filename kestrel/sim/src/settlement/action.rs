@@ -33,7 +33,7 @@ use super::avatar::{self, Intent};
 use super::haulers;
 use super::piles::{PileAction, PileLab};
 use super::sprites;
-use super::{AgentIx, AgentState, BuildingKind, BuildingState, DepotIx, DepotState, ItemIx, Role, Settlement, Transfer};
+use super::{AgentIx, AgentState, BuildingKind, BuildingState, DepotIx, DepotState, Direction, InventoryRef, ItemIx, Role, Settlement, Transfer};
 use crate::messages::ActionMessages;
 use crate::terrain::Terrain;
 use crate::CommandKind;
@@ -77,6 +77,10 @@ pub enum Action {
     /// Climb into the nearest free vehicle in reach, or out of the one
     /// driven (`vehicle`).
     Board,
+    /// Pick up a bundle from (or, with `Deposit`, empty it into) a depot or
+    /// a building output, as many units as fit (`avatar::bundle_job`);
+    /// units move once the agent is there, as a transfer's do.
+    Bundle { other: InventoryRef, direction: Direction },
 }
 
 impl Action {
@@ -99,6 +103,7 @@ impl Action {
             CommandKind::Respawn { agent } => (agent, Action::Respawn),
             CommandKind::Pile { agent, action, pace, approach } => (agent, Action::Haul { action, pace, approach }),
             CommandKind::Board { agent } => (agent, Action::Board),
+            CommandKind::Bundle { agent, other, direction } => (agent, Action::Bundle { other, direction }),
             CommandKind::PlayPiano { .. }
             | CommandKind::SpawnMovers { .. }
             | CommandKind::Impulse { .. }

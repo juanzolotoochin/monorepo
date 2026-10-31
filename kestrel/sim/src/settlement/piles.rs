@@ -392,7 +392,7 @@ impl PileLab {
         match holder {
             InventoryRef::Pile(id) => &mut self.piles.get_mut(&id).expect("a pile that exists").inventory,
             InventoryRef::Collector => &mut self.collector.as_mut().expect("a collector").inventory,
-            InventoryRef::Depot(_) | InventoryRef::Agent(_) => unreachable!("not in the pile lab"),
+            InventoryRef::Depot(_) | InventoryRef::Agent(_) | InventoryRef::Output(_) => unreachable!("not in the pile lab"),
         }
     }
 
@@ -881,7 +881,7 @@ impl Settlement {
                 let cargo = &self.agents[agent as usize].carry.inventory;
                 TossEnd::Cargo { agent, slot: lab.cargo_slot(cargo, item) + flying - u32::from(leaving) }
             }
-            InventoryRef::Depot(_) => unreachable!("hauls don't reach depots"),
+            InventoryRef::Depot(_) | InventoryRef::Output(_) => unreachable!("hauls don't reach depots or outputs"),
         }
     }
 

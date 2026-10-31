@@ -98,6 +98,8 @@ impl Settlement {
             // A pile haul's unit; its pile stays until nothing flies to
             // or from it (`PileLab::prune`).
             InventoryRef::Pile(_) | InventoryRef::Collector => self.inventory_mut(t.to).put(t.item, 1),
+            // Nothing sends units to an output yet; this keeps `land` whole.
+            InventoryRef::Output(_) => self.inventory_mut(t.to).put(t.item, 1),
         }
     }
 

@@ -18,7 +18,7 @@ use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
 use super::sprites::Hold;
-use super::{AgentIx, DepotIx, Event, Inventory, ItemIx, Kinds, Settlement};
+use super::{AgentIx, DepotIx, Event, Inventory, InventoryRef, ItemIx, Kinds, Settlement};
 use crate::terrain::{Disc, Terrain, CLEARANCE_MARGIN};
 
 pub type BuildingIx = u16;
@@ -248,7 +248,10 @@ impl Settlement {
     }
 
     /// Part of the economy step: every built, occupied building below its
-    /// cap works one tick, and at its period puts a unit in its output.
+    /// cap works one tick, and at its period puts a unit in its output. The
+    /// cap counts every unit still in the output, those a bundle has
+    /// reserved but not taken yet among them, and any on their way in; a
+    /// unit a bundle took is in the air to the bundle and no longer counts.
     pub(super) fn building_production(&mut self) {
         for i in 0..self.buildings.len() {
             let b = &self.buildings[i];
@@ -279,8 +282,10 @@ impl Settlement {
     }
 
     /// Checks every building on its own: a known kind, a site's part in
-    /// range, the output holding the kind's product only and nothing
-    /// reserved (nothing moves units in or out yet). Then the slots against
+    /// range, the output holding the kind's product only, its reservations
+    /// against the bundles picking up from it (`expected_reservations`, as
+    /// for piles), and nothing reserved on a site's materials (nothing
+    /// delivers there yet). Then the slots against
     /// the agents, both ways: a claim or a sprite inside names a sprite that
     /// holds just that (`SpriteState::holds`), an elder names an avatar, and
     /// every sprite's hold is that building's slot.
@@ -298,7 +303,8 @@ impl Settlement {
                 return Err(format!("{name} output has capacity {}, not its possessed cap", b.output.capacity));
             }
             let reserved = |inventory: &Inventory| inventory.total_in() > 0 || inventory.reserved_out.iter().any(|&u| u > 0);
-            if reserved(&b.output) {
+            let building = i as BuildingIx;
+            if (b.output.reserved_out.clone(), b.output.reserved_in.clone()) != self.expected_reservations(InventoryRef::Output(building)) {
                 return Err(format!("{name} output reservations drifted"));
             }
             if let Stage::Site { part, materials } = &b.stage {
@@ -310,7 +316,6 @@ impl Settlement {
                     return Err(format!("{name} materials reservations drifted"));
                 }
             }
-            let building = i as BuildingIx;
             let holds = |a: AgentIx| self.agents.get(a as usize).and_then(|a| a.sprite()).map(|sprite| sprite.holds);
             let agrees = match b.slot {
                 Slot::Empty => true,

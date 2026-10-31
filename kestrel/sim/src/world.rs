@@ -124,8 +124,12 @@ pub enum CommandKind {
     /// out of the one it drives.
     Board { agent: u16 },
     /// Gives a settlement sprite a job: idle, or a building kind to staff
-    /// (`Settlement::set_sprite_job`). New variants go after this one.
+    /// (`Settlement::set_sprite_job`).
     SetSpriteJob { agent: u16, job: crate::settlement::SpriteJob },
+    /// A player's avatar picks up a bundle from a depot or a building output,
+    /// or empties it into a depot (`Action::Bundle`). New variants go after
+    /// this one.
+    Bundle { agent: u16, other: crate::settlement::InventoryRef, direction: crate::settlement::Direction },
 }
 
 impl CommandKind {
@@ -146,6 +150,7 @@ impl CommandKind {
             | CommandKind::RepairCover { agent, .. }
             | CommandKind::PlayPiano { agent, .. }
             | CommandKind::Board { agent }
+            | CommandKind::Bundle { agent, .. }
             | CommandKind::Pile { agent, .. } => *agent = to,
             _ => {}
         }
@@ -168,6 +173,7 @@ impl CommandKind {
             | CommandKind::RepairCover { agent, .. }
             | CommandKind::PlayPiano { agent, .. }
             | CommandKind::Board { agent }
+            | CommandKind::Bundle { agent, .. }
             | CommandKind::Pile { agent, .. } => Some(agent),
             _ => None,
         }
@@ -501,7 +507,8 @@ impl World {
                 | CommandKind::ReleaseDirectControl { .. }
                 | CommandKind::RepairCover { .. }
                 | CommandKind::Pile { .. }
-                | CommandKind::Board { .. } => {
+                | CommandKind::Board { .. }
+                | CommandKind::Bundle { .. } => {
                     if let (Some(s), Some((agent, action))) = (&mut self.settlement, Action::of(kind)) {
                         s.act(self.tick, agent, &action, &self.terrain, &mut self.actions);
                     }

@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 use super::combat::{Event, TossEnd};
 use super::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
 use super::action::{Action, View};
-use super::{AgentIx, DepotState, InventoryRef, ItemIx, Settlement};
-use crate::messages::{ActionMessages, CarryUnit, DropHaul, DropNotes, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
+use super::{AgentIx, DepotState, InventoryRef, ItemIx, Kinds, Settlement};
+use crate::messages::{ActionMessages, BundleRefused, CarryUnit, DropHaul, DropNotes, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
 use crate::nav::{self, angle_between, distance};
 use crate::terrain::{Terrain, MAX_LAYERS};
 
@@ -511,6 +511,9 @@ impl Settlement {
         }
         self.reserve_stock(messages.reserve_stock);
         self.board(messages.board);
+        for BundleRefused { agent, reason } in messages.bundle_refused {
+            self.events.push(Event::BundleRefused { agent, reason });
+        }
     }
 
     /// Stage 5: a hit takes `damage` from player `agent`'s health. At 0 the
@@ -656,6 +659,14 @@ impl Settlement {
         swing_resolved(a, tick, hits, def);
     }
 
+    /// The carry job `agent`'s bundle action on `other` would start now, or
+    /// why it can't (`bundle_job`): for the view and scripts, which read the
+    /// same rule the action applies.
+    pub fn bundle_job(&self, agent: AgentIx, other: InventoryRef, direction: Direction, tick: u64, terrain: &Terrain) -> Result<CarryJob, BundleRefusal> {
+        let a = self.agents.get(agent as usize).ok_or(BundleRefusal::NotAHolder)?;
+        bundle_job(&a.carry, &self.view(agent, tick, terrain), other, direction)
+    }
+
     /// The most units `agent` could move between its cargo and `depot` now.
     pub fn transfer_limit(&self, agent: usize, depot: usize, item: usize, deposit: bool) -> u32 {
         self.agents.get(agent).map_or(0, |a| transfer_limit(&a.carry, &self.depots, self.depot_items(), depot, item, deposit))
@@ -747,6 +758,16 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
                 out.reserve_stock.push(ReserveStock { agent: me, job, change: StockChange::Reserve });
             }
         }
+        Action::Bundle { other, direction } => match bundle_job(carry, view, other, direction) {
+            Ok(job) => {
+                // As a transfer: the cargo side now, the other in stage 5.
+                let reserved = job.reserve(&mut carry.inventory, Side::Own);
+                debug_assert!(reserved, "`bundle_job` sized it to the cargo");
+                carry.job = Some(job.clone());
+                out.reserve_stock.push(ReserveStock { agent: me, job, change: StockChange::Reserve });
+            }
+            Err(reason) => out.bundle_refused.push(BundleRefused { agent: me, reason }),
+        },
         Action::CancelTransfer => {
             if transferring {
                 out.reserve_stock.extend(carry.drop_carry(me));
@@ -794,10 +815,12 @@ fn drop_haul(avatar: &mut AvatarState, view: &View, out: &mut ActionMessages) {
 
 /// See `Settlement::transfer_limit`. `items` are the depot items
 /// (`Settlement::depot_items`): minerals don't go to depots. The cargo's
-/// one capacity holds depot items and minerals in any mix.
+/// one capacity holds depot items and minerals in any mix, unless it is a
+/// bundle (`OneKind`), and a tree pile (`Kinds::Only`) takes its item only.
 fn transfer_limit(carry: &Carry, depots: &[DepotState], items: usize, depot: usize, item: usize, deposit: bool) -> u32 {
     let Some(d) = depots.get(depot) else { return 0 };
-    if item >= items {
+    let item_ix = item as ItemIx;
+    if item >= items || !d.inventory.accepts(item_ix) || !carry.inventory.accepts(item_ix) {
         return 0;
     }
     if deposit {
@@ -807,6 +830,105 @@ fn transfer_limit(carry: &Carry, depots: &[DepotState], items: usize, depot: usi
         // Space not taken by units carried, flying in or held by a job.
         carry.inventory.free().min(d.inventory.available(item as ItemIx))
     }
+}
+
+/// Why a bundle action can't start (`bundle_job`). Stage 5 reports it as
+/// `Event::BundleRefused`; `message` says it for the view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BundleRefusal {
+    /// A carry job is running, or units are still in the air.
+    Busy,
+    /// Not a depot or a building output there is.
+    NotAHolder,
+    /// A building output takes nothing back: it is picked up from only.
+    PickupOnly,
+    /// Nothing there that isn't promised to someone else.
+    NothingToTake,
+    /// The bundle holds another item than the one there (D6).
+    OtherItem,
+    /// The bundle has no room left.
+    BundleFull,
+    /// The bundle holds nothing to deposit.
+    NothingCarried,
+    /// The pile takes another item: wood goes to the wood pile (D6).
+    WrongPile,
+    /// The pile has no room left.
+    PileFull,
+}
+
+impl BundleRefusal {
+    /// The refusal in words, for the view.
+    pub fn message(self) -> &'static str {
+        match self {
+            BundleRefusal::Busy => "Still moving the last load",
+            BundleRefusal::NotAHolder => "Nothing to carry there",
+            BundleRefusal::PickupOnly => "Outputs are picked up from, not filled",
+            BundleRefusal::NothingToTake => "Nothing there to pick up",
+            BundleRefusal::OtherItem => "Carrying something else: deposit it first",
+            BundleRefusal::BundleFull => "The bundle is full",
+            BundleRefusal::NothingCarried => "Carrying nothing to deposit",
+            BundleRefusal::WrongPile => "That pile takes something else",
+            BundleRefusal::PileFull => "That pile is full",
+        }
+    }
+}
+
+/// The carry job a bundle action starts on `other` (D6), or why it can't:
+/// a pickup (from a building output, or a withdrawal from a depot) tops the
+/// bundle up with the holder's item, as many units as fit; a deposit moves
+/// every unit of the bundle's item the depot has room for. Only depots and
+/// building outputs are holders here, and outputs take no deposits. Its
+/// units move once the agent is at the holder (`read_avatar`), as a
+/// transfer's do. M2.2's interact acts through this too.
+pub fn bundle_job(carry: &Carry, view: &View, other: InventoryRef, direction: Direction) -> Result<CarryJob, BundleRefusal> {
+    if carry.job.is_some() || carry.inventory.total_in() > 0 || view.leaving_cargo() {
+        return Err(BundleRefusal::Busy);
+    }
+    let holder = match other {
+        InventoryRef::Depot(d) => view.depots.get(d as usize).map(|d| &d.inventory),
+        InventoryRef::Output(b) => view.buildings.get(b as usize).map(|b| &b.output),
+        InventoryRef::Agent(_) | InventoryRef::Pile(_) | InventoryRef::Collector => None,
+    };
+    let Some(holder) = holder else { return Err(BundleRefusal::NotAHolder) };
+    let cargo = &carry.inventory;
+    // Depot items only: minerals don't go to depots or come out of them.
+    let depot_item = |item: &ItemIx| (*item as usize) < view.items;
+    let (item, units) = match direction {
+        Direction::Pickup => {
+            // The holder's item: a tree pile's own, what an output holds, or
+            // in a mixed depot the bundle's item, else the first there.
+            let item = match holder.kinds {
+                Kinds::Only(item) => Some(item),
+                Kinds::OneKind => holder.kind(),
+                Kinds::AnyMix => cargo.kind().filter(depot_item).or_else(|| (0..view.items as ItemIx).find(|&i| holder.available(i) > 0)),
+            };
+            let Some(item) = item.filter(depot_item) else { return Err(BundleRefusal::NothingToTake) };
+            if !cargo.accepts(item) {
+                return Err(BundleRefusal::OtherItem);
+            }
+            if holder.available(item) == 0 {
+                return Err(BundleRefusal::NothingToTake);
+            }
+            if cargo.free() == 0 {
+                return Err(BundleRefusal::BundleFull);
+            }
+            (item, cargo.free().min(holder.available(item)))
+        }
+        Direction::Deposit => {
+            if matches!(other, InventoryRef::Output(_)) {
+                return Err(BundleRefusal::PickupOnly);
+            }
+            let Some(item) = (0..view.items as ItemIx).find(|&i| cargo.available(i) > 0) else { return Err(BundleRefusal::NothingCarried) };
+            if !holder.accepts(item) {
+                return Err(BundleRefusal::WrongPile);
+            }
+            if holder.free() == 0 {
+                return Err(BundleRefusal::PileFull);
+            }
+            (item, cargo.available(item).min(holder.free()))
+        }
+    };
+    Ok(CarryJob { other, item, direction, remaining: units, next_tick: view.tick })
 }
 
 /// Sets a live avatar's intent. Walking off stops a dig; a `GoTo` plans its

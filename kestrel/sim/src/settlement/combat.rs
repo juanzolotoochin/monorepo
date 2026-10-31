@@ -247,6 +247,9 @@ pub enum Event {
     ThreatSwing { threat: u64, agent: AgentIx, hit: bool, damage: u32, killed: bool },
     /// A building put a unit in its output.
     BuildingProduced { building: super::BuildingIx },
+    /// Player `agent`'s bundle action didn't start, for `reason`
+    /// (`BundleRefusal::message` says it in words).
+    BundleRefused { agent: AgentIx, reason: super::avatar::BundleRefusal },
 }
 
 /// What a strike reaches (`Settlement::strike_targets`), as its `Strike`

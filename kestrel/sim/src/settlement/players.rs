@@ -11,7 +11,7 @@
 use fx::{Fx, FxVec2};
 
 use super::avatar::{AvatarState, Intent};
-use super::{AgentIx, AgentState, Body, Carry, Inventory, InventoryRef, Kinds, Role, Settlement};
+use super::{AgentIx, AgentState, Body, Carry, Inventory, InventoryRef, Role, Settlement};
 use crate::terrain::Terrain;
 use crate::PlayerId;
 
@@ -58,7 +58,7 @@ impl Settlement {
                 ..Body::default()
             },
             carry: Carry {
-                inventory: Inventory::new(template.carry.inventory.counts.len(), template.carry.inventory.capacity, Kinds::AnyMix),
+                inventory: Inventory::new(template.carry.inventory.counts.len(), template.carry.inventory.capacity, template.carry.inventory.kinds),
                 transfer_ticks: template.carry.transfer_ticks,
                 job: None,
                 next: None,

@@ -9,6 +9,7 @@ use crate::hash::{StateHash, StateHasher};
 use crate::id::Id;
 use crate::mover::Mover;
 use crate::settlement::piles::PileJob;
+use crate::settlement::avatar::BundleRefusal;
 use crate::settlement::{CarryJob, InventoryRef};
 
 /// One mover attacks another.
@@ -335,6 +336,21 @@ impl StateHash for Board {
     }
 }
 
+/// A bundle action that couldn't start (`Action::Bundle`), and why: stage 5
+/// reports it as `Event::BundleRefused`, for the view to explain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BundleRefused {
+    pub agent: u16,
+    pub reason: BundleRefusal,
+}
+
+impl StateHash for BundleRefused {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+        h.write_u64(self.reason as u64);
+    }
+}
+
 impl StateHash for ReserveStock {
     fn hash_into(&self, h: &mut StateHasher) {
         let job = &self.job;
@@ -355,6 +371,10 @@ impl StateHash for ReserveStock {
                 h.write(&id);
             }
             InventoryRef::Collector => h.write_u64(3),
+            InventoryRef::Output(b) => {
+                h.write_u64(4);
+                h.write(&b);
+            }
         }
         h.write(&job.item);
         h.write_u64(job.direction as u64);
@@ -379,12 +399,13 @@ pub struct ActionMessages {
     /// so always empty by then.
     pub haul: Vec<StartHaul>,
     pub board: Vec<Board>,
+    pub bundle_refused: Vec<BundleRefused>,
 }
 
 impl ActionMessages {
     pub fn is_empty(&self) -> bool {
         self.restart_memory.is_empty() && self.drop_haul.is_empty() && self.drop_notes.is_empty() && self.reserve_stock.is_empty() && self.haul.is_empty()
-            && self.board.is_empty()
+            && self.board.is_empty() && self.bundle_refused.is_empty()
     }
 }
 
@@ -398,6 +419,10 @@ impl StateHash for ActionMessages {
         // Empty everywhere but a vehicle scene, so other scenes hash as before.
         if !self.board.is_empty() {
             h.write(&self.board);
+        }
+        // Empty everywhere but the Sacred Tree, likewise.
+        if !self.bundle_refused.is_empty() {
+            h.write(&self.bundle_refused);
         }
     }
 }

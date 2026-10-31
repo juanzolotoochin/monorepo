@@ -49,7 +49,7 @@ fn stack(item: &str, units: u32) -> Stack {
 }
 
 fn depot(id: &str, position: [Fx; 2], capacity: u32, stock: Vec<Stack>) -> Depot {
-    Depot { id: id.into(), label: id.into(), position, capacity, stock, stock_anchor: [0.0, 0.08, -0.6], stock_layout: CargoLayout::depot() }
+    Depot { id: id.into(), label: id.into(), position, capacity, stock, stock_anchor: [0.0, 0.08, -0.6], stock_layout: CargoLayout::depot(), only: None }
 }
 
 fn agent(id: &str) -> Agent {
@@ -63,6 +63,7 @@ fn agent(id: &str) -> Agent {
         links: vec!["wood".into()],
         cargo_anchor: [0.0, 0.5, -0.2],
         cargo_layout: CargoLayout::default(),
+        one_kind: false,
         equipment: None,
     }
 }

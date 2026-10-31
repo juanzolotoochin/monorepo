@@ -212,7 +212,8 @@ impl AgentState {
                 ..Body::default()
             },
             carry: Carry {
-                inventory: Inventory::new(items, def.capacity, Kinds::AnyMix),
+                // A bundle holds one item at a time (`Agent::one_kind`).
+                inventory: Inventory::new(items, def.capacity, if def.one_kind { Kinds::OneKind } else { Kinds::AnyMix }),
                 transfer_ticks: rules.carry.as_ref().expect("players and haulers carry").transfer,
                 job: None,
                 next: None,
