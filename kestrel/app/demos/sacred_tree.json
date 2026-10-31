@@ -30,7 +30,7 @@
     },
     {
       "op": "wait",
-      "frames": 600
+      "frames": 540
     },
     {
       "op": "inspect_building",
@@ -77,10 +77,6 @@
     },
     {
       "op": "settlement_interact"
-    },
-    {
-      "op": "wait",
-      "frames": 30
     },
     {
       "op": "wait",
@@ -227,6 +223,21 @@
     },
     {
       "op": "inspect"
+    },
+    {
+      "op": "settlement_board",
+      "building": 0
+    },
+    {
+      "op": "wait",
+      "frames": 45
+    },
+    {
+      "op": "inspect"
+    },
+    {
+      "op": "wait",
+      "frames": 30
     }
   ]
 }
