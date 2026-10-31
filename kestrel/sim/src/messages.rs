@@ -351,6 +351,20 @@ impl StateHash for BundleRefused {
     }
 }
 
+/// A bundle dropped on the ground (`Action::Drop`): stage 5 puts it on a
+/// pile of its item at the agent's feet, or a new one there
+/// (`Settlement::drop_bundles`), in command order, or reports why not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DropBundle {
+    pub agent: u16,
+}
+
+impl StateHash for DropBundle {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+    }
+}
+
 /// A blueprint put down (`CommandKind::PlaceBlueprint`): stage 5 lays its
 /// site where the ground allows (`Settlement::place_blueprints`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -436,12 +450,14 @@ pub struct ActionMessages {
     pub bundle_refused: Vec<BundleRefused>,
     pub place_blueprint: Vec<PlaceBlueprint>,
     pub install: Vec<Install>,
+    pub drop_bundle: Vec<DropBundle>,
 }
 
 impl ActionMessages {
     pub fn is_empty(&self) -> bool {
         self.restart_memory.is_empty() && self.drop_haul.is_empty() && self.drop_notes.is_empty() && self.reserve_stock.is_empty() && self.haul.is_empty()
             && self.board.is_empty() && self.bundle_refused.is_empty() && self.place_blueprint.is_empty() && self.install.is_empty()
+            && self.drop_bundle.is_empty()
     }
 }
 
@@ -465,6 +481,9 @@ impl StateHash for ActionMessages {
         }
         if !self.install.is_empty() {
             h.write(&self.install);
+        }
+        if !self.drop_bundle.is_empty() {
+            h.write(&self.drop_bundle);
         }
     }
 }

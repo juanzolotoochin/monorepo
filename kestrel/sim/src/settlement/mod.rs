@@ -108,7 +108,8 @@ pub struct ProducerState {
     pub cycles: u32,
 }
 
-/// Names a holder of goods: a depot's inventory, an agent's cargo, a pile,
+/// Names a holder of goods: a depot's inventory, an agent's cargo, a pile
+/// (of a mineral, or of a bundle dropped on the ground),
 /// the collector, a building's output or a site's materials. A flying unit's two ends are these,
 /// and so is a carry job's other side. New variants go last:
 /// `behaviour_digest` hashes the variant index of every transfer's ends.
@@ -477,7 +478,7 @@ impl Settlement {
             })
             .collect();
         let tuning = [Weapon::Sword, Weapon::Spear, Weapon::Bow, Weapon::ArcCoil, Weapon::Laser].map(|w| scenario.weapon_tuning(w)).to_vec();
-        let settlement = Settlement {
+        let mut settlement = Settlement {
             characters: content.rules.characters.clone(),
             base_health: scenario.base_health,
             health: scenario.base_health,
@@ -519,6 +520,12 @@ impl Settlement {
             if nav::path(terrain, d.position, d.position, Fx::from_ratio(3, 20)).is_empty() {
                 return Err(format!("depot {} dock is blocked", d.id));
             }
+        }
+        // A town's elder drops bundles on ground piles anywhere in the
+        // clearing but its edge: a lab with no minerals (a scene's own pile
+        // setup replaces it, `from_scene`).
+        if !settlement.building_kinds.is_empty() {
+            settlement.piles = Some(piles::PileLab::town(center, settlement.items.len(), terrain.extent - Fx::ONE));
         }
         Ok(settlement)
     }
@@ -901,7 +908,8 @@ impl Settlement {
 
     /// Checks the piles and the collector: each inventory on its own, and
     /// its reservations against the units flying there and the carry jobs
-    /// (hauls) on it.
+    /// (hauls and bundles) on it. A pile holds any one item; the collector
+    /// minerals only.
     fn validate_lab(&self, lab: &piles::PileLab) -> Result<(), String> {
         let items = self.items.len();
         let expected = |holder: InventoryRef| self.expected_reservations(holder);
@@ -912,7 +920,7 @@ impl Settlement {
             if (inventory.reserved_out.clone(), inventory.reserved_in.clone()) != expected(holder) {
                 return Err(format!("{name} reservations drifted"));
             }
-            if (0..items as ItemIx).any(|i| inventory.count(i) > 0 && !lab.is_mineral(i)) {
+            if holder == InventoryRef::Collector && (0..items as ItemIx).any(|i| inventory.count(i) > 0 && !lab.is_mineral(i)) {
                 return Err(format!("{name} holds an item that isn't a mineral"));
             }
         }
@@ -1036,6 +1044,8 @@ mod buildings_tests;
 mod bundle_tests;
 #[cfg(test)]
 mod construction_tests;
+#[cfg(test)]
+mod ground_pile_tests;
 #[cfg(test)]
 mod interact_tests;
 #[cfg(test)]

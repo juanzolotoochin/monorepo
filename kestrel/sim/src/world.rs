@@ -137,8 +137,11 @@ pub enum CommandKind {
     /// Puts down a blueprint of building kind `kind` centered on `position`
     /// (world tiles): stage 5 lays its site if the ground allows
     /// (`Settlement::place_blueprints`), in command order. Any player may.
-    /// New variants go after this one.
     PlaceBlueprint { kind: u16, position: FxVec2 },
+    /// A player's avatar drops its whole bundle on the ground at its feet:
+    /// onto a pile of the same item there, or a new pile (`Action::Drop`).
+    /// New variants go after this one.
+    Drop { agent: u16 },
 }
 
 impl CommandKind {
@@ -161,6 +164,7 @@ impl CommandKind {
             | CommandKind::Board { agent }
             | CommandKind::Bundle { agent, .. }
             | CommandKind::Interact { agent, .. }
+            | CommandKind::Drop { agent }
             | CommandKind::Pile { agent, .. } => *agent = to,
             _ => {}
         }
@@ -185,6 +189,7 @@ impl CommandKind {
             | CommandKind::Board { agent }
             | CommandKind::Bundle { agent, .. }
             | CommandKind::Interact { agent, .. }
+            | CommandKind::Drop { agent }
             | CommandKind::Pile { agent, .. } => Some(agent),
             _ => None,
         }
@@ -527,7 +532,8 @@ impl World {
                 | CommandKind::Pile { .. }
                 | CommandKind::Board { .. }
                 | CommandKind::Bundle { .. }
-                | CommandKind::Interact { .. } => {
+                | CommandKind::Interact { .. }
+                | CommandKind::Drop { .. } => {
                     if let (Some(s), Some((agent, action))) = (&mut self.settlement, Action::of(kind)) {
                         s.act(self.tick, agent, &action, &self.terrain, &mut self.actions);
                     }
@@ -853,7 +859,7 @@ impl World {
 
         if let Some(settlement) = &mut self.settlement {
             let tick = self.tick;
-            settlement.apply_actions(actions, &mut self.terrain);
+            settlement.apply_actions(actions, tick, &mut self.terrain);
             settlement.economy(tick);
             settlement.resolve_docks(messages.claim_dock);
             for message in messages.retry {

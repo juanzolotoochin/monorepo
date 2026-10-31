@@ -87,6 +87,10 @@ pub enum Action {
     /// too), walking in to the dock, or a site's install. A sprite target,
     /// and a site's needs, do nothing here.
     Interact(InteractTarget),
+    /// Drop the whole bundle on the ground at the agent's feet: onto a pile
+    /// of its item there, or a new pile (`piles::drop_plan`). Stage 5 makes
+    /// the pile and starts the carry job (`Settlement::drop_bundles`).
+    Drop,
 }
 
 impl Action {
@@ -111,6 +115,7 @@ impl Action {
             CommandKind::Board { agent } => (agent, Action::Board),
             CommandKind::Bundle { agent, other, direction } => (agent, Action::Bundle { other, direction }),
             CommandKind::Interact { agent, target } => (agent, Action::Interact(target)),
+            CommandKind::Drop { agent } => (agent, Action::Drop),
             CommandKind::PlayPiano { .. }
             | CommandKind::SpawnMovers { .. }
             | CommandKind::Impulse { .. }

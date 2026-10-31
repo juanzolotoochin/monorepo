@@ -19,7 +19,7 @@ use super::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
 use super::action::{Action, View};
 use super::interact::{self, Interaction};
 use super::{AgentIx, DepotState, InventoryRef, ItemIx, Kinds, Settlement};
-use crate::messages::{ActionMessages, BundleRefused, CarryUnit, Install, DropHaul, DropNotes, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
+use crate::messages::{ActionMessages, BundleRefused, CarryUnit, DropBundle, DropHaul, DropNotes, Install, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
 use crate::nav::{self, angle_between, distance};
 use crate::terrain::{Terrain, MAX_LAYERS};
 
@@ -41,7 +41,7 @@ const AIM_BLEND: Fx = match TICKS_PER_SECOND {
     _ => panic!("add AIM_BLEND for this tick rate"),
 };
 /// Manual transfers start within this distance of the dock.
-const DOCK_REACH: Fx = Fx::from_bits(3_650_722_202); // 0.85
+pub(super) const DOCK_REACH: Fx = Fx::from_bits(3_650_722_202); // 0.85
 /// Dug ore flies out of the pit for 0.6 s.
 const ORE_FLIGHT_TICKS: u64 = millis_to_ticks(600);
 
@@ -497,7 +497,7 @@ impl Settlement {
     /// touch are separate) and in command order within a type. They come
     /// before everything else stage 5 applies, as the commands they come
     /// from ran before everything else in the tick.
-    pub(crate) fn apply_actions(&mut self, messages: ActionMessages, terrain: &mut Terrain) {
+    pub(crate) fn apply_actions(&mut self, messages: ActionMessages, tick: u64, terrain: &mut Terrain) {
         for _ in messages.restart_memory {
             self.restart_memory(terrain);
         }
@@ -511,6 +511,7 @@ impl Settlement {
             self.piano_notes.retain(|note| note.agent != message.agent || note.serial > message.serial);
         }
         self.reserve_stock(messages.reserve_stock);
+        self.drop_bundles(messages.drop_bundle, tick, terrain);
         self.board(messages.board);
         for BundleRefused { agent, reason } in messages.bundle_refused {
             self.events.push(Event::BundleRefused { agent, reason });
@@ -640,8 +641,9 @@ impl Settlement {
                 started: swing.pressed(),
             });
         }
-        // A depot transfer's unit; a haul's are `read_pile_job`'s.
-        if let Some(job) = a.carry.job.as_ref().filter(|j| !j.other.in_pile_lab()) {
+        // A depot transfer's unit, or a bundle's at a pile; a haul's are
+        // `read_pile_job`'s.
+        if let Some(job) = a.carry.job.as_ref().filter(|j| !self.piles.as_ref().is_some_and(|lab| lab.is_haul(j))) {
             if tick >= job.next_tick && distance(a.body.position, self.position_of(job.other)) <= DOCK_REACH {
                 out.player_carry.push(CarryUnit { agent: me });
             }
@@ -695,7 +697,7 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
     // A depot transfer. A pile haul is a carry job too, but its walk is the
     // lab's, and these checks treat it as they did before it was one: it
     // doesn't stop a dig, keep a released route or end on a cancel.
-    let transferring = carry.job.as_ref().is_some_and(|j| !j.other.in_pile_lab());
+    let transferring = carry.job.as_ref().is_some_and(|j| !view.piles.is_some_and(|lab| lab.is_haul(j)));
     if let Some(ix) = avatar.driving {
         // Sitting in a vehicle, a player can look around, climb out,
         // let go or respawn; movement went to the vehicle (`vehicle::drive`).
@@ -781,7 +783,7 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
             } else {
                 match interact::interaction(view, carry, target) {
                     Ok(Interaction::Bundle(job)) => {
-                        let spot = interact::stand_spot(view, job.other);
+                        let spot = interact::stand_spot(view, job.other, body.position);
                         start_bundle(carry, job, me, out);
                         // Step in to the dock, as the verbs walk the elder
                         // there; the units move once it is in reach.
@@ -794,6 +796,16 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
                     Ok(Interaction::Install { building, .. }) => out.install.push(Install { agent: me, building }),
                     // A site's needs are the view's to show.
                     Ok(Interaction::JobMenu | Interaction::Needs { .. }) => {}
+                    Err(reason) => out.bundle_refused.push(BundleRefused { agent: me, reason }),
+                }
+            }
+        }
+        Action::Drop => {
+            // Checked here for the refusal's sake, and again in stage 5,
+            // which makes the pile: another drop may have come first.
+            if body.alive() && view.piles.is_some() {
+                match super::piles::drop_plan(carry, body, view) {
+                    Ok(_) => out.drop_bundle.push(DropBundle { agent: me }),
                     Err(reason) => out.bundle_refused.push(BundleRefused { agent: me, reason }),
                 }
             }
@@ -901,6 +913,13 @@ pub enum BundleRefusal {
     DepositOnly,
     /// The site's next part takes none of what the bundle holds.
     NotNeeded,
+    /// A drop with nothing in the bundle (`piles::drop_plan`).
+    NothingToDrop,
+    /// A drop would make a new pile, and the ground has its most.
+    TooManyPiles,
+    /// A drop's new pile has no clear ground at the agent's feet: an
+    /// obstacle, another pile, a dock or a building's spot, or the edge.
+    NoRoom,
 }
 
 impl BundleRefusal {
@@ -920,6 +939,9 @@ impl BundleRefusal {
             BundleRefusal::HandsFull => "Hands full: deposit the bundle first",
             BundleRefusal::DepositOnly => "A site only takes deliveries",
             BundleRefusal::NotNeeded => "The site doesn't need that",
+            BundleRefusal::NothingToDrop => "Nothing carried",
+            BundleRefusal::TooManyPiles => "Too many piles: pick one up first",
+            BundleRefusal::NoRoom => "No room to drop it here",
         }
     }
 }
@@ -929,8 +951,10 @@ impl BundleRefusal {
 /// bundle up with the holder's item, as many units as fit; a deposit moves
 /// every unit of the bundle's item the depot has room for, and a delivery
 /// to a site every unit its next part still takes (D4). Only depots,
-/// building outputs and sites are holders here; outputs take no deposits,
-/// and sites nothing else. Its
+/// building outputs, sites and ground piles are holders here; outputs take
+/// no deposits, and sites nothing else. A ground pile tops the bundle up as
+/// an output does, and takes a deposit of its own item (a drop's merge,
+/// `piles::drop_plan`); minerals in it are a haul's, not a bundle's. Its
 /// units move once the agent is at the holder (`read_avatar`), as a
 /// transfer's do. M2.2's interact acts through this too.
 pub fn bundle_job(carry: &Carry, view: &View, other: InventoryRef, direction: Direction) -> Result<CarryJob, BundleRefusal> {
@@ -941,7 +965,9 @@ pub fn bundle_job(carry: &Carry, view: &View, other: InventoryRef, direction: Di
         InventoryRef::Depot(d) => view.depots.get(d as usize).map(|d| &d.inventory),
         InventoryRef::Output(b) => view.buildings.get(b as usize).map(|b| &b.output),
         InventoryRef::Site(b) => view.buildings.get(b as usize).and_then(|b| b.site()).map(|(_, materials)| materials),
-        InventoryRef::Agent(_) | InventoryRef::Pile(_) | InventoryRef::Collector => None,
+        // A dispenser's output is the pile lab's alone.
+        InventoryRef::Pile(id) => view.piles.and_then(|lab| lab.piles.get(&id)).filter(|p| p.source.is_none()).map(|p| &p.inventory),
+        InventoryRef::Agent(_) | InventoryRef::Collector => None,
     };
     let Some(holder) = holder else { return Err(BundleRefusal::NotAHolder) };
     let cargo = &carry.inventory;

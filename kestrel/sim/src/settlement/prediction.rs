@@ -176,7 +176,8 @@ impl<'a> AvatarReplay<'a> {
             piles::cancel_haul(lab.to_mut(), me, carry, message.serial);
             avatar.dropped_haul = false;
         }
-        for release in actions.reserve_stock.iter().filter(|r| r.change == StockChange::Release && r.job.other.in_pile_lab()) {
+        let releases: Vec<_> = actions.reserve_stock.iter().filter(|r| r.change == StockChange::Release && lab.is_haul(&r.job)).collect();
+        for release in releases {
             release.job.release(lab.to_mut().holder_mut(release.job.other), Side::Other);
         }
         if let Some(error) = avatar.pile_failure.take() {

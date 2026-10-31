@@ -20,6 +20,9 @@
 //!   otherwise, empty-handed, a readout of what it still needs, which does
 //!   nothing in the sim. Carrying something it doesn't need, it is no
 //!   target. A site has no output to pick up from yet.
+//! - **A ground pile** (a dropped bundle, `piles`): a pickup, as an
+//!   output's, topping up a bundle of its item. A site never takes a
+//!   delivery from one: deliveries come from the bundle only.
 //!
 //! A bundle target is usable when `bundle_job` would start a job there, so
 //! the highlight and the action never disagree about it. The reach is wider
@@ -27,10 +30,10 @@
 //! and the units move once it is there, as a transfer's do.
 //!
 //! New kinds slot in as new `InteractTarget` variants, each with a position
-//! (`position`) and a use (`interaction`): ground piles (M2.4) and building
-//! slots to board (M3.1). Dropping
-//! on the ground (M2.4) is no thing in reach: it is the fallback when no
-//! target is.
+//! (`position`) and a use (`interaction`): building slots to board (M3.1)
+//! next. Dropping on the ground is no thing in reach and no interact: it is
+//! its own key (`Action::Drop`, D4), so a press that just misses a target
+//! never drops the bundle.
 
 use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
@@ -38,6 +41,7 @@ use serde::{Deserialize, Serialize};
 use super::action::View;
 use super::avatar::{bundle_job, BundleRefusal};
 use super::buildings::STAND_GAP;
+use super::piles::{PileId, DROP_GAP};
 use super::{AgentIx, AgentState, BuildingIx, Carry, CarryJob, DepotIx, Direction, InventoryRef, ItemIx, Settlement};
 use crate::nav::distance;
 use crate::terrain::Terrain;
@@ -60,6 +64,8 @@ pub enum InteractTarget {
     Sprite(AgentIx),
     /// A site, delivered to, installed or read (D4).
     Site(BuildingIx),
+    /// A ground pile (a dropped bundle), picked up from.
+    Pile(PileId),
 }
 
 impl InteractTarget {
@@ -70,6 +76,7 @@ impl InteractTarget {
             InteractTarget::Output(b) => Some(InventoryRef::Output(b)),
             InteractTarget::Depot(d) => Some(InventoryRef::Depot(d)),
             InteractTarget::Site(b) => Some(InventoryRef::Site(b)),
+            InteractTarget::Pile(id) => Some(InventoryRef::Pile(id)),
             InteractTarget::Sprite(_) => None,
         }
     }
@@ -102,8 +109,10 @@ pub fn interact_target(view: &View, me: &AgentState, sprites: impl IntoIterator<
     // A building's output once it is built, its site until then.
     let buildings = view.buildings.iter().enumerate().map(|(b, building)| if building.built() { InteractTarget::Output(b as BuildingIx) } else { InteractTarget::Site(b as BuildingIx) });
     let depots = (0..view.depots.len() as DepotIx).map(InteractTarget::Depot);
+    let piles = view.piles.into_iter().flat_map(|lab| lab.piles.keys().copied().map(InteractTarget::Pile));
     let mut candidates: Vec<(Fx, InteractTarget, FxVec2)> = buildings
         .chain(depots)
+        .chain(piles)
         .filter_map(|t| position(view, t).map(|p| (t, p)))
         .chain(sprites.into_iter().map(|(a, p)| (InteractTarget::Sprite(a), p)))
         .map(|(t, p)| (distance(from, p), t, p))
@@ -115,12 +124,14 @@ pub fn interact_target(view: &View, me: &AgentState, sprites: impl IntoIterator<
 }
 
 /// Where `target` is, for its reach, if the view has it: an output pile, a
-/// depot's dock, or the spot a site's output pile will take. A sprite
+/// depot's dock, the spot a site's output pile will take, or a ground
+/// pile. A sprite
 /// stands among the agents, which the view hasn't.
 pub fn position(view: &View, target: InteractTarget) -> Option<FxVec2> {
     match target {
         InteractTarget::Output(b) | InteractTarget::Site(b) => view.buildings.get(b as usize).map(|b| b.output_position),
         InteractTarget::Depot(d) => view.depots.get(d as usize).map(|d| d.position),
+        InteractTarget::Pile(id) => view.piles?.piles.get(&id).map(|p| p.position),
         InteractTarget::Sprite(_) => None,
     }
 }
@@ -133,9 +144,10 @@ pub fn position(view: &View, target: InteractTarget) -> Option<FxVec2> {
 pub fn interaction(view: &View, carry: &Carry, target: InteractTarget) -> Result<Interaction, BundleRefusal> {
     let carrying = carry.inventory.total() + carry.inventory.total_in() > 0;
     match target {
-        InteractTarget::Output(_) | InteractTarget::Depot(_) => {
+        InteractTarget::Output(_) | InteractTarget::Depot(_) | InteractTarget::Pile(_) => {
             let other = target.holder().expect("a bundle kind");
-            // An output is only picked up from; a depot takes the bundle.
+            // An output and a ground pile are only picked up from (a drop
+            // is its own key); a depot takes the bundle.
             let direction = if carrying && matches!(target, InteractTarget::Depot(_)) { Direction::Deposit } else { Direction::Pickup };
             bundle_job(carry, view, other, direction).map(Interaction::Bundle)
         }
@@ -159,16 +171,23 @@ pub fn interaction(view: &View, carry: &Carry, target: InteractTarget) -> Result
     }
 }
 
-/// Where an agent stands to move units with `holder`: a depot's dock, or
-/// just in front of an output pile (or the spot a site's will take), away
-/// from its building (the pile is that close to the footprint). Within the dock's reach of the holder.
-pub fn stand_spot(view: &View, holder: InventoryRef) -> Option<FxVec2> {
+/// Where an agent standing at `from` stands to move units with `holder`: a
+/// depot's dock, just in front of an output pile (or the spot a site's will
+/// take), away from its building (the pile is that close to the
+/// footprint), or `PILE_STAND` from a ground pile on its side. Within the
+/// dock's reach of the holder.
+pub fn stand_spot(view: &View, holder: InventoryRef, from: FxVec2) -> Option<FxVec2> {
     match holder {
         InventoryRef::Depot(d) => view.depots.get(d as usize).map(|d| d.position),
         InventoryRef::Output(b) | InventoryRef::Site(b) => view.buildings.get(b as usize).map(|b| b.output_position + (b.output_position - b.position).normalize_or_zero() * STAND_GAP),
-        InventoryRef::Agent(_) | InventoryRef::Pile(_) | InventoryRef::Collector => None,
+        InventoryRef::Pile(id) => view.piles?.piles.get(&id).map(|p| p.position + (from - p.position).normalize_or_zero() * PILE_STAND),
+        InventoryRef::Agent(_) | InventoryRef::Collector => None,
     }
 }
+
+/// How far from a ground pile's center the agent stands to pick it up: as
+/// far as a drop puts it (`piles::DROP_GAP`), well within the dock's reach.
+const PILE_STAND: Fx = DROP_GAP;
 
 impl Settlement {
     /// `agent`'s interact target on `tick` and what using it does
