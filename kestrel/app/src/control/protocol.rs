@@ -76,6 +76,26 @@ pub enum Command {
         #[serde(default)]
         job: Option<String>,
     },
+    /// The town's build key: with no `kind`, opens the build menu as B or X
+    /// does; with a building kind's id, picks it from the open build menu
+    /// (or, with none open, starts placing it). Its ghost then follows the
+    /// player, and the receipt's `settlement.interact.ghost` says where it
+    /// stands and whether it may go down there (`reason` if not).
+    SettlementBuild {
+        #[serde(default)]
+        kind: Option<String>,
+    },
+    /// Puts a blueprint down. With `position` (arena x and z), a blueprint
+    /// of `kind` there; without, the ghost being placed, as interact does.
+    /// Fails with the sim's reason when it can't go down, such as "BLOCKED".
+    SettlementPlaceBlueprint {
+        #[serde(default)]
+        kind: Option<String>,
+        #[serde(default)]
+        position: Option<[f32; 2]>,
+    },
+    /// Backs out of placing a blueprint, as Escape does.
+    SettlementCancelBuild,
     AssertSettlement {
         delivered: u64,
         cycles: u64,

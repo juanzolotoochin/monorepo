@@ -329,7 +329,44 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             match crate::input::town::interact(world)? {
                 crate::input::town::Used::Bundle { expected } => Ok(Pending::SettlementTransfer { scene: shown(world).unwrap_or(usize::MAX), expected }),
                 crate::input::town::Used::Menu => Ok(Pending::Instant),
+                crate::input::town::Used::Install | crate::input::town::Used::Placed => Ok(Pending::Applied),
             }
+        }
+        Command::SettlementBuild { kind } => {
+            let s = settlement(world)?;
+            if s.building_kinds.is_empty() {
+                return Err("Nothing to build here".into());
+            }
+            let Some(id) = kind else {
+                crate::input::town::open_build_menu(world);
+                return Ok(Pending::Instant);
+            };
+            let kind = s.building_kinds.iter().position(|k| k.id == *id).ok_or("unknown building kind")? as u16;
+            let menu = world.resource::<crate::input::gameplay::Dispatcher>().town.build_menu.clone();
+            match menu {
+                Some(kinds) => crate::input::town::pick_build(world, kinds.iter().position(|&k| k == kind).ok_or("The build menu has no such building")?)?,
+                None => crate::input::town::start_placing(world, kind)?,
+            }
+            Ok(Pending::Instant)
+        }
+        Command::SettlementPlaceBlueprint { kind, position } => {
+            let Some(position) = position else {
+                crate::input::town::place(world)?;
+                return Ok(Pending::Applied);
+            };
+            let service = world.resource::<SessionService>();
+            let (s, sim_world) = (service.settlement().ok_or("No settlement loaded")?, service.world().ok_or("No settlement loaded")?);
+            let id = kind.as_deref().ok_or("A blueprint at a position needs its kind")?;
+            let kind = s.building_kinds.iter().position(|k| k.id == id).ok_or("unknown building kind")? as u16;
+            let position = service.to_sim(point(*position)?);
+            s.placement_check(kind, position, sim_world.terrain()).map_err(|r| r.message().to_string())?;
+            world.resource_mut::<SessionService>().command(sim::CommandKind::PlaceBlueprint { kind, position });
+            Ok(Pending::Applied)
+        }
+        Command::SettlementCancelBuild => {
+            settlement(world)?;
+            crate::input::town::cancel_build(world);
+            Ok(Pending::Instant)
         }
         Command::SettlementJobMenu { job } => {
             let s = settlement(world)?;

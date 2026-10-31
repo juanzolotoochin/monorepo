@@ -743,9 +743,19 @@ key's own path is scriptable too: `settlement_interact_target` reports the
 player's target in the receipt's `settlement.interact` (with `prompt`, it
 fails unless the target's prompt is that, such as `"PICK UP 3 WOOD"`, or
 `""` for none); `settlement_interact` acts on it as E or A does (a bundle
-target's units move, and a sprite opens its job menu); and
-`settlement_job_menu` (`job`: a building kind's id, or none for idle) picks
-the open menu's option. Transfers walk the player to the dock and wait for the precise
+target's units move, a site's part goes in, and a sprite opens its job
+menu); and `settlement_job_menu` (`job`: a building kind's id, or none for
+idle) picks the open menu's option. Building has verbs of its own:
+`settlement_build` opens the build menu as B does, and with `kind` (a
+building kind's id) picks it, or starts placing it with no menu open; the
+receipt's `settlement.interact.ghost` says where the ghost stands and
+whether it may go down there (`valid`, and `reason` such as `"BLOCKED"`).
+`settlement_place_blueprint` puts it down as interact does, or with `kind`
+and `position` (arena x and z) puts one there; a refusal fails the step with
+the sim's reason. `settlement_cancel_build` backs out. Each building in
+`settlement.simulation.buildings` has, while it is a site, a `site` with its
+next `part`, its `parts`, its `materials` (item, landed, needed) and whether
+it is `ready` to install. Transfers walk the player to the dock and wait for the precise
 quantity to arrive. `assert_settlement` checks minimum `delivered`, `cycles`,
 `equipped`, and `kills` counts plus all accounting invariants. `inspect` includes
 full `settlement.simulation`, scenario data, and per-material `balances`.
@@ -776,6 +786,21 @@ ring around it (Idle, Gather Wood, Gather Stone): WASD, the arrows, the
 stick or the D-pad pick a direction, E or A sets the job, Escape or B
 closes it. A refusal shows over the elder's head for a moment.
 
+B (X on a controller) opens the build menu, a ring of the building kinds.
+Picking one puts its ghost on the ground a step in front of the elder,
+following it as it walks: green, with "E  PLACE", where the sim would let it
+stand, and red with the reason where it wouldn't ("BLOCKED", "TOO CLOSE TO A
+PILE", "CAN'T BE REACHED"). E or A puts it down as a site; B again, Escape
+or controller B backs out. A site is a staked plot whose card says what its
+next part takes ("FOUNDATION 0/2 WOOD"). Carrying something it needs,
+interact delivers every unit it still takes ("DELIVER 2 WOOD"), the rest
+staying in the bundle; once its materials are in, interact installs the part
+("INSTALL FOUNDATION"), and the skin grows a part at a time. Empty-handed
+with materials missing, the prompt says what it needs ("NEEDS 2 STONE").
+The last part makes the building, which a sprite with that job then
+staffs. While the tree's canopy hides the elder, a site or the ghost from
+the camera, it fades.
+
 ```sh
 bazel build //kestrel/app:sacred_tree_demo
 ```
@@ -785,6 +810,10 @@ sprites given jobs: one works the Wood Gatherer, one waits for it, and one
 waits for a Stone Gatherer that isn't built yet. Then the elder walks to the
 Wood Gatherer's output, its pickup ringed and prompted, picks the wood up
 with one interact and deposits it at the tree's wood pile with another.
+Then it builds: the build menu, a Stone Gatherer's ghost red on the tree and
+green east of it, put down; wood from the tree delivered and the foundation
+installed, leaving the site half built; and a walk behind the tree, whose
+canopy fades.
 
 ## Red Clearing combat arena
 

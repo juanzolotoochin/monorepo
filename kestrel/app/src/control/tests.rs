@@ -606,6 +606,88 @@ fn the_elder_interacts_its_way_through_the_town() {
     assert!(report["error"].as_str().unwrap().contains("Nothing in reach"), "{report}");
 }
 
+/// Building, as a script (D1, D4): the build menu, a Stone Gatherer's
+/// ghost refused on the tree and valid in the open, put down; wood carried
+/// from the tree and delivered, both parts installed, each by the interact
+/// key's own path; then a sprite assigned works it and stone comes out.
+#[test]
+fn the_elder_builds_a_stone_gatherer_that_a_sprite_works() {
+    let walk = |x, z| Command::Walk { position: [x, z] };
+    let target = |prompt: &str| Command::SettlementInteractTarget { prompt: Some(prompt.into()) };
+    let report = run(vec![
+        Command::Scene {
+            scene: "sacred-tree".into(),
+        },
+        Command::SettlementStock {
+            depot: "tree_wood".into(),
+            item: "wood".into(),
+            units: 5,
+        },
+        Command::SettlementBuild { kind: None },
+        Command::Inspect,
+        Command::SettlementBuild {
+            kind: Some("stone_gatherer".into()),
+        },
+        // Facing the tree, the ghost stands on it.
+        walk(0.0, 2.6),
+        Command::Inspect,
+        // Facing -z east of the tree, it stands in the open.
+        walk(3.0, 1.0),
+        walk(3.0, 0.0),
+        Command::Inspect,
+        Command::SettlementPlaceBlueprint { kind: None, position: None },
+        Command::Inspect,
+        // Five wood from the tree's wood pile.
+        walk(-1.7, 2.4),
+        Command::SettlementInteract,
+        // In front of the site, where its output pile will be.
+        walk(2.0, -0.6),
+        target("DELIVER 2 WOOD"),
+        Command::SettlementInteract,
+        target("INSTALL FOUNDATION"),
+        Command::SettlementInteract,
+        target("DELIVER 2 WOOD"),
+        Command::SettlementInteract,
+        target("INSTALL MECHANISM"),
+        Command::SettlementInteract,
+        Command::Inspect,
+        Command::SettlementSpriteJob {
+            sprite: "sprite_fern".into(),
+            job: Some("stone_gatherer".into()),
+        },
+        Command::SettlementRate { rate: 4.0 },
+        Command::Wait { frames: 600 },
+    ]);
+    assert_eq!(report["status"], "passed", "{report}");
+    let receipts = report["receipts"].as_array().unwrap();
+    let state = |i: usize| &receipts[i]["state"]["settlement"];
+    assert_eq!(state(3)["interact"]["build_menu"], json!(["wood_gatherer", "stone_gatherer"]), "{}", state(3)["interact"]);
+    let ghost = |i: usize| &state(i)["interact"]["ghost"];
+    assert_eq!(state(6)["interact"]["placing"], "stone_gatherer");
+    assert_eq!((&ghost(6)["valid"], &ghost(6)["reason"]), (&json!(false), &json!("BLOCKED")), "{}", ghost(6));
+    assert_eq!((&ghost(9)["valid"], &ghost(9)["reason"]), (&json!(true), &Value::Null), "{}", ghost(9));
+    // Put down where the ghost stood: a site waiting for its foundation.
+    let site = &state(11)["simulation"]["buildings"][1];
+    assert_eq!((&site["kind"], &site["status"]), (&json!("stone_gatherer"), &json!("site")), "{site}");
+    assert_eq!(site["site"], json!({"part": 0, "parts": 2, "materials": [["wood", 0, 2]], "ready": false}));
+    let (at, stood) = (&site["position"], &ghost(9)["position"]);
+    assert!((0..2).all(|i| (at[i].as_f64().unwrap() - stood[i].as_f64().unwrap()).abs() < 0.05), "{at} vs {stood}");
+    assert_eq!(state(11)["interact"]["placing"], Value::Null);
+    // Delivered, the foundation reads ready; then built.
+    assert_eq!(state(17)["simulation"]["buildings"][1]["site"]["ready"], true, "{}", state(17)["simulation"]["buildings"][1]);
+    assert_eq!(state(19)["simulation"]["buildings"][1]["site"]["part"], 1);
+    let built = &state(23)["simulation"]["buildings"][1];
+    assert_eq!((&built["status"], &built["site"]), (&json!("idle"), &Value::Null), "{built}");
+    assert_eq!(state(23)["simulation"]["agents"]["elder"]["cargo"]["items"]["wood"], 1);
+    // Fern staffs it, and stone comes out.
+    let last = &report["state"]["settlement"];
+    let stone = &last["simulation"]["buildings"][1];
+    assert_eq!(stone["occupant"], json!({"sprite": "sprite_fern"}), "{stone}");
+    assert!(stone["output"]["items"]["stone"].as_u64().is_some_and(|n| n >= 1), "{stone}");
+    assert_eq!(last["balances"]["wood"]["consumed"], 4);
+    assert!(last["balances"].as_object().unwrap().values().all(|b| b["conserved"] == true));
+}
+
 #[test]
 fn player_stands_on_baked_raised_roads_and_steps_back_to_the_ground() {
     let report = run(vec![
