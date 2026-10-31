@@ -4,7 +4,7 @@
   "fps": 30,
   "width": 1440,
   "height": 960,
-  "max_frames": 3200,
+  "max_frames": 3600,
   "steps": [
     {
       "op": "walk",
@@ -193,6 +193,37 @@
     {
       "op": "wait",
       "frames": 60
+    },
+    {
+      "op": "inspect"
+    },
+    {
+      "op": "walk",
+      "position": [
+        4.5,
+        1.0
+      ]
+    },
+    {
+      "op": "settlement_drop"
+    },
+    {
+      "op": "walk",
+      "position": [
+        5.2,
+        0.2
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "settlement_interact_target"
+    },
+    {
+      "op": "wait",
+      "frames": 45
     },
     {
       "op": "inspect"

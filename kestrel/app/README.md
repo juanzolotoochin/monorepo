@@ -827,7 +827,8 @@ with one interact and deposits it at the tree's wood pile with another.
 Then it builds: the build menu, a Stone Gatherer's ghost red on the tree and
 green east of it, put down; wood from the tree delivered and the foundation
 installed, leaving the site half built; and a walk behind the tree, whose
-canopy fades.
+canopy fades. Last, the elder drops the wood it still carries on the ground
+east of the tree, and the pile is ringed with "E  PICK UP 2 WOOD".
 
 ## Red Clearing combat arena
 
