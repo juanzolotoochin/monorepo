@@ -17,6 +17,13 @@
 //! reason. Interact puts it down (`PlaceBlueprint`, [`place`]); the build
 //! key again, Escape or controller B backs out ([`cancel_build`]). While
 //! placing there is no interact target.
+//!
+//! Dropping (D4): its own key, keyboard Q and controller B (B backs out of
+//! a blueprint first, while placing), never an interact fallback, so a
+//! press that just misses a target never drops the bundle. [`drop_bundle`]
+//! sends `Drop`; the sim puts the bundle on a pile of its item at the
+//! elder's feet or a new one there. A ground pile is then an interact
+//! target like an output ("PICK UP 3 WOOD"). Nothing drops while placing.
 
 use bevy::prelude::*;
 use fx::{Fx, FxVec2};
@@ -96,6 +103,13 @@ pub enum Used {
     Install,
     /// Sent `PlaceBlueprint` where the ghost stood.
     Placed,
+}
+
+/// What a drop sent: the depot items the cargo holds once its units have
+/// landed, as `Used::Bundle` counts them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Dropped {
+    pub expected: u32,
 }
 
 /// Whether the scene is a town: its settlement has building kinds.
@@ -179,9 +193,13 @@ fn highlight(world: &World, target: InteractTarget, interaction: &Interaction) -
         InteractTarget::Output(b) | InteractTarget::Site(b) => (s.buildings.get(b as usize)?.output_position, 0.6),
         InteractTarget::Depot(d) => (s.depots.get(d as usize)?.position, 0.8),
         InteractTarget::Sprite(a) => (s.agents.get(a as usize)?.body.position, 0.45),
+        InteractTarget::Pile(id) => {
+            let pile = s.piles.as_ref()?.piles.get(&id)?;
+            (pile.position, sim::settlement::piles::pile_radius(pile.units()).to_f32() + 0.15)
+        }
     };
     let prompt = match (target, interaction) {
-        (InteractTarget::Output(_), Interaction::Bundle(job)) => format!("PICK UP {} {}", job.remaining, item(job.item)),
+        (InteractTarget::Output(_) | InteractTarget::Pile(_), Interaction::Bundle(job)) => format!("PICK UP {} {}", job.remaining, item(job.item)),
         (InteractTarget::Site(_), Interaction::Bundle(job)) => format!("DELIVER {} {}", job.remaining, item(job.item)),
         (_, Interaction::Bundle(job)) if job.direction == sim::settlement::Direction::Deposit => format!("DEPOSIT {} {}", job.remaining, item(job.item)),
         (_, Interaction::Bundle(job)) => format!("WITHDRAW {} {}", job.remaining, item(job.item)),
@@ -245,6 +263,22 @@ pub fn interact(world: &mut World) -> Result<Used, String> {
             Ok(Used::Menu)
         }
     }
+}
+
+/// The drop key: sends `Drop` when the sim's own check (`drop_plan`) lets
+/// the bundle go down now, or fails with its words ("Nothing carried"),
+/// which show over the elder as the sim's refusals do. Nothing drops while
+/// placing a blueprint.
+pub fn drop_bundle(world: &mut World) -> Result<Dropped, String> {
+    if world.resource::<Dispatcher>().town.placing.is_some() {
+        return Err("Put the blueprint down first".into());
+    }
+    let service = world.resource::<SessionService>();
+    let (s, sim_world, agent) = (service.settlement().ok_or("No settlement loaded")?, service.world().ok_or("No settlement loaded")?, service.player().ok_or("No controlled actor")?);
+    let (_, job) = s.drop_plan(agent, sim_world.tick(), sim_world.terrain()).map_err(|r| r.message().to_string())?;
+    let before: u32 = s.depot_cargo(&s.agents[agent as usize]).iter().sum();
+    world.resource_mut::<SessionService>().command(CommandKind::Drop { agent });
+    Ok(Dropped { expected: before - job.remaining })
 }
 
 /// The job menu's options: idle, then one per building kind, gathering its

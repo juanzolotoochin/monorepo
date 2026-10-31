@@ -606,6 +606,55 @@ fn the_elder_interacts_its_way_through_the_town() {
     assert!(report["error"].as_str().unwrap().contains("Nothing in reach"), "{report}");
 }
 
+/// Dropping, as a script (M2.4): wood from the tree dropped on the ground
+/// with the drop verb (Q's path), picked back up with one interact as an
+/// output is, and deposited at the tree with another.
+#[test]
+fn the_elder_drops_wood_and_picks_it_back_up() {
+    let walk = |x, z| Command::Walk { position: [x, z] };
+    let target = |prompt: &str| Command::SettlementInteractTarget { prompt: Some(prompt.into()) };
+    let report = run(vec![
+        Command::Scene {
+            scene: "sacred-tree".into(),
+        },
+        Command::SettlementStock {
+            depot: "tree_wood".into(),
+            item: "wood".into(),
+            units: 5,
+        },
+        walk(-1.7, 2.4),
+        Command::SettlementInteract,
+        // Out in the open, east of the tree.
+        walk(3.0, -3.0),
+        Command::SettlementDrop,
+        Command::Inspect,
+        target("PICK UP 5 WOOD"),
+        Command::SettlementInteract,
+        Command::Wait { frames: 2 },
+        Command::Inspect,
+        walk(-1.7, 2.4),
+        target("DEPOSIT 5 WOOD"),
+        Command::SettlementInteract,
+    ]);
+    assert_eq!(report["status"], "passed", "{report}");
+    let receipts = report["receipts"].as_array().unwrap();
+    let simulation = |i: usize| &receipts[i]["state"]["settlement"]["simulation"];
+    let dropped = &simulation(6)["ground_piles"];
+    assert_eq!(dropped.as_array().map(Vec::len), Some(1), "{dropped}");
+    assert_eq!(dropped[0]["stock"]["items"], json!({"wood": 5}), "{dropped}");
+    assert_eq!(simulation(6)["agents"]["elder"]["cargo"]["items"], json!({}));
+    assert_eq!(simulation(10)["agents"]["elder"]["cargo"]["items"]["wood"], 5);
+    assert_eq!(simulation(10)["ground_piles"], Value::Null, "the emptied pile went");
+    let last = &report["state"]["settlement"];
+    assert_eq!(last["simulation"]["depots"]["tree_wood"]["items"]["wood"], 5);
+    assert_eq!(last["simulation"]["agents"]["elder"]["cargo"]["items"], json!({}));
+    assert!(last["balances"].as_object().unwrap().values().all(|b| b["conserved"] == true));
+    // Empty-handed, a drop fails with the sim's reason.
+    let report = run(vec![Command::Scene { scene: "sacred-tree".into() }, Command::SettlementDrop]);
+    assert_eq!(report["status"], "failed", "{report}");
+    assert!(report["error"].as_str().unwrap().contains("Nothing carried"), "{report}");
+}
+
 /// Building, as a script (D1, D4): the build menu, a Stone Gatherer's
 /// ghost refused on the tree and valid in the open, put down; wood carried
 /// from the tree and delivered, both parts installed, each by the interact

@@ -1011,6 +1011,14 @@ pub fn drop_plan(carry: &Carry, body: &Body, view: &View) -> Result<(DropSpot, C
 }
 
 impl Settlement {
+    /// Where `agent`'s drop on `tick` would put its bundle and the carry job
+    /// that moves it, or why it can't (`drop_plan`): for the view and
+    /// scripts, by the rule the action and stage 5 apply.
+    pub fn drop_plan(&self, agent: AgentIx, tick: u64, terrain: &Terrain) -> Result<(DropSpot, CarryJob), BundleRefusal> {
+        let a = self.agents.get(agent as usize).ok_or(BundleRefusal::NothingToDrop)?;
+        drop_plan(&a.carry, &a.body, &self.view(agent, tick, terrain))
+    }
+
     /// Stage 5: each drop (`Action::Drop`), in command order, planned again
     /// (`drop_plan`): an earlier drop this tick may have made a pile here,
     /// or taken the lab's last room. A new pile is made empty, holding room

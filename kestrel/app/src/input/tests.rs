@@ -367,6 +367,37 @@ fn the_build_keys_follow_the_town() {
     assert!(rig.frame().gameplay.edges.is_empty());
 }
 
+/// In a town, keyboard Q and controller B drop the bundle (B backs out of
+/// a blueprint first, while one is being placed; Q stays a drop, which the
+/// town refuses then). Elsewhere Q clears a recording or means nothing,
+/// and controller B still proposes a cargo drop.
+#[test]
+fn the_drop_key_follows_the_town() {
+    let mut rig = Rig::seated(1);
+    rig.input.set_scene(SceneContext { scenario: true, town: true, ..default() });
+    rig.keys.press(KeyCode::KeyQ);
+    assert_eq!(rig.frame().gameplay.edges, vec![Edge::Drop]);
+    rig.keys.release(KeyCode::KeyQ);
+    rig.frame();
+    assert_eq!(rig.tap(1, Button::East).gameplay.edges, vec![Edge::Drop]);
+    rig.input.set_placing(true);
+    assert_eq!(rig.tap(1, Button::East).gameplay.edges, vec![Edge::CancelBuild]);
+    rig.keys.press(KeyCode::KeyQ);
+    assert_eq!(rig.frame().gameplay.edges, vec![Edge::Drop]);
+    rig.keys.release(KeyCode::KeyQ);
+    rig.frame();
+    rig.input.set_placing(false);
+    rig.input.set_scene(SceneContext { scenario: true, ..default() });
+    rig.keys.press(KeyCode::KeyQ);
+    assert!(rig.frame().gameplay.edges.is_empty(), "Q has no meaning with a supply chain");
+    rig.keys.release(KeyCode::KeyQ);
+    rig.frame();
+    assert_eq!(rig.tap(1, Button::East).gameplay.edges, vec![Edge::Drop]);
+    rig.input.set_scene(SceneContext::default());
+    rig.keys.press(KeyCode::KeyQ);
+    assert_eq!(rig.frame().gameplay.edges, vec![Edge::Utility(Utility::ClearRecording)]);
+}
+
 /// A radial menu: a direction focuses the option that way, from the
 /// keyboard or the controller, and A or E picks it; Escape picks nothing.
 #[test]

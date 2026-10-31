@@ -192,7 +192,10 @@ pub fn mirror(service: Res<SessionService>, mirror: Res<WorldMirror>, mut lab: R
     let Some(settlement) = mirror.current.as_ref() else {
         return;
     };
-    let Some(sim) = settlement.piles.as_ref() else {
+    // A town's lab holds dropped bundles only, which the settlement view
+    // draws (`settlement::town`); this view is for scenes with a pile
+    // layout, whose piles hold minerals.
+    let Some(sim) = settlement.piles.as_ref().filter(|_| lab.layout.is_some()) else {
         return;
     };
     let local = |p: fx::FxVec2| [(p.x - mirror.center.x).to_f32(), (p.y - mirror.center.y).to_f32()];

@@ -471,6 +471,18 @@ pub enum Endpoint {
     /// A site's materials, by building index: delivered to where its output
     /// pile will be.
     Site(u16),
+    /// A ground pile of a dropped bundle, by pile id.
+    Ground(u32),
+}
+
+/// A pile of a dropped bundle on the ground (`sim::settlement::piles`, a
+/// pile whose item is no mineral). Mineral piles are the pile view's.
+#[derive(Clone, Debug, Serialize)]
+pub struct GroundPile {
+    pub id: u32,
+    pub position: Point,
+    /// What it holds: one item.
+    pub stock: Inventory,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -636,6 +648,10 @@ pub struct Simulation {
     pub buildings: Vec<Building>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub sprites: BTreeMap<String, SpriteView>,
+    /// Dropped bundles on the ground; empty, and left out of traces, until
+    /// a town's elder drops one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ground_piles: Vec<GroundPile>,
     #[serde(skip)]
     pub events: Vec<Event>,
     #[serde(skip)]
@@ -715,10 +731,15 @@ impl Simulation {
         };
         let item = |i: s::ItemIx| current.items[i as usize].clone();
         let agent_name = |a: s::AgentIx| current.agents[a as usize].id.clone();
-        // Piles and the collector are drawn by the pile view, not here.
-        let endpoint = |e: SimHolder| match e {
+        // Mineral piles and the collector are drawn by the pile view, not
+        // here; a dropped bundle's pile is.
+        let lab = current.piles.as_ref();
+        let mineral = |i: s::ItemIx| lab.is_some_and(|lab| lab.is_mineral(i));
+        // A unit of `item` to or from `e`.
+        let endpoint = |e: SimHolder, item: s::ItemIx| match e {
             SimHolder::Depot(d) => Some(Endpoint::Depot(current.depots[d as usize].id.clone())),
             SimHolder::Agent(a) => Some(Endpoint::Cargo(agent_name(a))),
+            SimHolder::Pile(id) if !mineral(item) => Some(Endpoint::Ground(id)),
             SimHolder::Pile(_) | SimHolder::Collector => None,
             SimHolder::Output(b) => Some(Endpoint::Output(b)),
             SimHolder::Site(b) => Some(Endpoint::Site(b)),
@@ -977,6 +998,15 @@ impl Simulation {
                 Some((a.id.clone(), view))
             })
             .collect();
+        // A pile of a depot item, or an empty one a unit of one still flies
+        // from or to (its last, picked up).
+        let flying = |id: u32| current.transfers.values().any(|t| !mineral(t.item) && (t.from == SimHolder::Pile(id) || t.to == SimHolder::Pile(id)));
+        let ground_piles = lab
+            .into_iter()
+            .flat_map(|lab| lab.piles.iter())
+            .filter(|&(&id, p)| p.source.is_none() && p.item().map_or_else(|| flying(id), |i| !mineral(i)))
+            .map(|(&id, p)| GroundPile { id, position: local(p.position), stock: inventory(&p.inventory.counts, p.inventory.capacity) })
+            .collect();
         Simulation {
             config: config.clone(),
             tick,
@@ -1000,7 +1030,7 @@ impl Simulation {
                 .transfers
                 .values()
                 .filter_map(|t| {
-                    let transfer = Transfer { id: t.id, item: item(t.item), from: endpoint(t.from)?, to: endpoint(t.to)?, born: t.born, arrival: t.arrival };
+                    let transfer = Transfer { id: t.id, item: item(t.item), from: endpoint(t.from, t.item)?, to: endpoint(t.to, t.item)?, born: t.born, arrival: t.arrival };
                     Some((t.id, transfer))
                 })
                 .collect(),
@@ -1057,6 +1087,7 @@ impl Simulation {
                 .collect(),
             buildings,
             sprites,
+            ground_piles,
             events,
             balances,
             statuses,

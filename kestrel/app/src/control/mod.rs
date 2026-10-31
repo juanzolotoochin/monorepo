@@ -363,6 +363,11 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             world.resource_mut::<SessionService>().command(sim::CommandKind::PlaceBlueprint { kind, position });
             Ok(Pending::Applied)
         }
+        Command::SettlementDrop => {
+            settlement(world)?;
+            let dropped = crate::input::town::drop_bundle(world)?;
+            Ok(Pending::SettlementTransfer { scene: shown(world).unwrap_or(usize::MAX), expected: dropped.expected })
+        }
         Command::SettlementCancelBuild => {
             settlement(world)?;
             crate::input::town::cancel_build(world);

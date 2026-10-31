@@ -113,7 +113,8 @@ pub enum Edge {
     Interact,
     /// Collect more compatible material while carrying.
     Collect,
-    /// Propose a cargo drop just ahead.
+    /// Propose a cargo drop just ahead; in a town, drop the bundle at the
+    /// elder's feet (keyboard Q, controller B while not placing).
     Drop,
     NextWeapon,
     SelectWeapon(Weapon),
@@ -724,6 +725,9 @@ impl InputService {
             if keys.just_pressed(KeyCode::KeyB) {
                 edges.push(Edge::Build);
             }
+            if keys.just_pressed(KeyCode::KeyQ) {
+                edges.push(Edge::Drop);
+            }
         } else if self.scene.scenario {
             if keys.just_pressed(KeyCode::KeyE) {
                 edges.push(Edge::MachineToggle);
@@ -760,7 +764,7 @@ impl InputService {
         press(Control::Button(Button::RightBumper), Edge::Lift);
         press(Control::Button(Button::South), Edge::Interact);
         // A town has no nearby targets to collect from: X builds, and B
-        // backs out of a blueprint being placed.
+        // backs out of a blueprint being placed, else drops the bundle.
         press(Control::Button(Button::West), if self.scene.town { Edge::Build } else { Edge::Collect });
         press(Control::Button(Button::East), if self.scene.town && self.placing { Edge::CancelBuild } else { Edge::Drop });
         press(Control::Button(Button::North), Edge::NextWeapon);

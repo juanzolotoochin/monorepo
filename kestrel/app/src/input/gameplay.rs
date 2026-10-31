@@ -222,6 +222,7 @@ pub fn dispatch(world: &mut World) {
             Edge::Interact if town => town_interact(world),
             Edge::Interact => interact(world, false),
             Edge::Collect => interact(world, true),
+            Edge::Drop if town => town_drop(world),
             Edge::Drop => drop_cargo(world),
             Edge::TargetPrevious => world.resource_mut::<Dispatcher>().targets.cycle(-1),
             Edge::TargetNext => world.resource_mut::<Dispatcher>().targets.cycle(1),
@@ -370,8 +371,21 @@ fn cancel_logistics(world: &mut World, agent: u16) {
 /// The town's interact: a refusal before anything is sent (nothing in
 /// reach) shows near the elder, as the sim's own refusals do.
 fn town_interact(world: &mut World) {
-    match super::town::interact(world) {
-        Ok(_) => world.resource_mut::<Dispatcher>().notice = String::new(),
+    let used = super::town::interact(world).map(|_| ());
+    town_feedback(world, used);
+}
+
+/// The town's drop key (keyboard Q, controller B): the bundle goes on the
+/// ground at the elder's feet (`town::drop_bundle`).
+fn town_drop(world: &mut World) {
+    let dropped = super::town::drop_bundle(world).map(|_| ());
+    town_feedback(world, dropped);
+}
+
+/// A town action's refusal shows over the elder, as the sim's do.
+fn town_feedback(world: &mut World, result: Result<(), String>) {
+    match result {
+        Ok(()) => world.resource_mut::<Dispatcher>().notice = String::new(),
         Err(reason) => {
             if let Some(mut s) = world.get_resource_mut::<crate::settlement::Settlement>() {
                 s.refuse(&reason);

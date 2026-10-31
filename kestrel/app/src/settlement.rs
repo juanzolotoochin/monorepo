@@ -404,6 +404,10 @@ fn endpoint(sim: &Simulation, e: &Endpoint) -> Vec3 {
             let p = sim.buildings[*b as usize].output_position;
             Vec3::new(p[0], 0., p[1])
         }
+        Endpoint::Ground(id) => {
+            let p = sim.ground_piles.iter().find(|p| p.id == *id).map_or([0., 0.], |p| p.position);
+            Vec3::new(p[0], 0., p[1])
+        }
     }
 }
 fn inventory(
@@ -1416,6 +1420,25 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
         if b.site.is_none() {
             town_caption(world, state, &format!("output/{i}"), out, format!("{held}/{} {product}", b.cap), tint, String::new());
         } else if let Some(e) = state.labels.remove(&format!("output/{i}")) {
+            world.despawn(e);
+        }
+    }
+    // Dropped bundles: stacked on the ground in their item's skin, as an
+    // output's units are, with their count ("3 WOOD").
+    let mut piles = Vec::new();
+    for p in &sim.ground_piles {
+        let at = Vec3::new(p.position[0], 0., p.position[1]);
+        inventory(desired, sim, &format!("ground/{}", p.id), &p.stock, at, 0.0, &OUTPUT_LAYOUT);
+        let Some((id, units)) = p.stock.items.first_key_value() else { continue };
+        let label = sim.config().items.iter().find(|it| it.id == *id).map_or_else(|| id.to_uppercase(), |it| it.label.clone());
+        let key = format!("ground/{}", p.id);
+        let above = at + Vec3::Y * (ground(world, at) + 0.45);
+        town_caption(world, state, &key, above, format!("{units} {label}"), Color::srgb(0.98, 0.92, 0.70), String::new());
+        piles.push(key);
+    }
+    let gone: Vec<String> = state.labels.keys().filter(|k| k.starts_with("ground/") && !piles.contains(k)).cloned().collect();
+    for k in gone {
+        if let Some(e) = state.labels.remove(&k) {
             world.despawn(e);
         }
     }

@@ -96,6 +96,10 @@ pub enum Command {
     },
     /// Backs out of placing a blueprint, as Escape does.
     SettlementCancelBuild,
+    /// Drops the bundle on the ground at the player's feet, as Q or B does:
+    /// onto a pile of its item there, or a new one. Fails with the sim's
+    /// reason, such as "Nothing carried"; done once every unit has landed.
+    SettlementDrop,
     AssertSettlement {
         delivered: u64,
         cycles: u64,

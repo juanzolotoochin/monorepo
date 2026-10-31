@@ -752,7 +752,12 @@ receipt's `settlement.interact.ghost` says where the ghost stands and
 whether it may go down there (`valid`, and `reason` such as `"BLOCKED"`).
 `settlement_place_blueprint` puts it down as interact does, or with `kind`
 and `position` (arena x and z) puts one there; a refusal fails the step with
-the sim's reason. `settlement_cancel_build` backs out. Each building in
+the sim's reason. `settlement_cancel_build` backs out. `settlement_drop`
+drops the bundle at the player's feet as Q does, onto a pile of its item
+there or a new one, and waits for the units to land; a refusal fails the
+step with its reason, such as `"Nothing carried"`. Interact picks a ground
+pile up as it does an output. `settlement.simulation.ground_piles` lists
+the dropped piles (`id`, `position`, `stock`). Each building in
 `settlement.simulation.buildings` has, while it is a site, a `site` with its
 next `part`, its `parts`, its `materials` (item, landed, needed) and whether
 it is `ready` to install. Transfers walk the player to the dock and wait for the precise
@@ -800,6 +805,15 @@ with materials missing, the prompt says what it needs ("NEEDS 2 STONE").
 The last part makes the building, which a sprite with that job then
 staffs. While the tree's canopy hides the elder, a site or the ghost from
 the camera, it fades.
+
+Q (B on a controller, when no blueprint is being placed) drops the whole
+bundle on the ground at the elder's feet: onto a pile of the same item
+there, or a new pile, stacked in the item's skin with its count ("5 WOOD").
+It is its own key, never what interact does when it misses, and nothing
+drops while a blueprint is being placed. Interact picks a ground pile back
+up as it does an output ("PICK UP 3 WOOD"); an emptied pile goes. A drop
+that can't go down says why over the elder ("Nothing carried", "No room to
+drop it here", "Too many piles: pick one up first").
 
 ```sh
 bazel build //kestrel/app:sacred_tree_demo
