@@ -860,7 +860,9 @@ green east of it, put down; wood from the tree delivered and the foundation
 installed, leaving the site half built; and a walk behind the tree, whose
 canopy fades. Last, the elder drops the wood it still carries on the ground
 east of the tree, and the pile is ringed with "E  PICK UP 2 WOOD".
-Finally it possesses the Wood Gatherer, putting its sprite out beside it.
+Finally it possesses the Wood Gatherer, putting its sprite out beside it,
+and Bursts it: its card says "BURST READY (R)", two units land at once with
+the lamp flaring, and the card counts the cooldown down ("BURST 30 s").
 
 ## Red Clearing combat arena
 

@@ -236,6 +236,23 @@
       "op": "inspect"
     },
     {
+      "op": "settlement_burst"
+    },
+    {
+      "op": "wait",
+      "frames": 8
+    },
+    {
+      "op": "inspect"
+    },
+    {
+      "op": "wait",
+      "frames": 60
+    },
+    {
+      "op": "inspect"
+    },
+    {
       "op": "wait",
       "frames": 30
     }
