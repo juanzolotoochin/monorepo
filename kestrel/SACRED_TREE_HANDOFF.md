@@ -224,6 +224,8 @@ pickup and boarding never compete for one target.
 ## Rules for the work
 
 - Branch off `master` (not a feature branch), one PR per milestone.
-- Golden file and the other scenes don't change: the new state is empty
-  for every existing scene.
+- Other scenes behave the same: the new state is empty for every existing
+  scene, and the golden file's behaviour lines don't change. State hashes
+  may move when characters are added, since characters are numbered by
+  name (agreed 2026-10-30, after M1.1).
 - Commands are appended, never reordered.
