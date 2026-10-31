@@ -245,6 +245,8 @@ pub enum Event {
     /// (`killed` if that was the last) and pushed the player; a miss (`hit`
     /// false, `damage` 0) means the player got out of reach or was dead.
     ThreatSwing { threat: u64, agent: AgentIx, hit: bool, damage: u32, killed: bool },
+    /// A building put a unit in its output.
+    BuildingProduced { building: super::BuildingIx },
 }
 
 /// What a strike reaches (`Settlement::strike_targets`), as its `Strike`

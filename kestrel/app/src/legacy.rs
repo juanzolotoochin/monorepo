@@ -722,6 +722,7 @@ impl Simulation {
                     // Drawn from the threat's `windup` instead, which also
                     // covers a client that joins mid-windup.
                     s::Event::ThreatWindup { .. } => return None,
+                    s::Event::BuildingProduced { .. } => return None,
                     s::Event::ThreatSwing { threat, agent, hit, killed, .. } => Event::ThreatSwing {
                         threat: *threat,
                         agent: agent_name(*agent),

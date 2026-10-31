@@ -58,11 +58,13 @@ impl Settlement {
         result
     }
 
-    /// The start of stage 5: units land, sources produce, recipes run.
+    /// The start of stage 5: units land, sources produce, recipes run,
+    /// occupied buildings work.
     pub(crate) fn economy(&mut self, tick: u64) {
         self.arrivals(tick);
         self.sources(tick);
         self.production();
+        self.building_production();
     }
 
     fn arrivals(&mut self, tick: u64) {

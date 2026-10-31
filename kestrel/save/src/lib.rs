@@ -67,7 +67,9 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///     `PileJob`'s action can be `PileAction::DropMineral`, appended.
 /// 22: the settlement keeps its `vehicles`, and an avatar the vehicle it
 ///     drives (`AvatarState::driving`).
-pub const FORMAT_VERSION: u32 = 22;
+/// 23: the settlement keeps its `building_kinds` and `buildings`, and an
+///     occupied building's production.
+pub const FORMAT_VERSION: u32 = 23;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

@@ -17,6 +17,7 @@
 pub mod action;
 mod agent;
 pub mod avatar;
+pub mod buildings;
 pub mod combat;
 mod economy;
 mod haulers;
@@ -42,6 +43,7 @@ use crate::terrain::{Disc, Terrain};
 
 pub use combat::{CombatMetrics, DefenderState, Event, Impact, OnMiss, Pinned, Prediction, Projectile, SpentProjectile, Threat, TossEnd, WaveState};
 pub use agent::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
+pub use buildings::{BuildingIx, BuildingKind, BuildingKindIx, BuildingState, Occupant, Slot, Stage};
 pub use haulers::{HaulerState, Phase};
 pub use inventory::{Inventory, Kinds};
 pub use prediction::AvatarReplay;
@@ -236,6 +238,12 @@ pub struct Settlement {
     /// In scene order; an index is stable for the world's life.
     #[serde(default)]
     pub vehicles: Vec<VehicleState>,
+    /// The scenario's building kinds, resolved (`buildings::kinds`).
+    #[serde(default)]
+    pub building_kinds: Vec<BuildingKind>,
+    /// Append-only: an index is stable for the world's life.
+    #[serde(default)]
+    pub buildings: Vec<BuildingState>,
 }
 
 /// A vehicle a scene parks, in arena coordinates.
@@ -289,7 +297,8 @@ pub struct PileSetup {
 
 impl Settlement {
     /// Builds the tick-0 settlement and adds its terrain: the arena bounds,
-    /// `obstacles` from the scene, and machine and defender footprints.
+    /// `obstacles` from the scene, machine and defender footprints, and the
+    /// prebuilt buildings' footprints.
     pub fn from_scenario(scenario: &Scenario, obstacles: &[Disc], terrain: &mut Terrain, content: &Content) -> Result<Settlement, String> {
         scenario.validate()?;
         let character = |name: &str| -> Result<CharacterIx, String> {
@@ -297,6 +306,8 @@ impl Settlement {
         };
         let center = terrain.center;
         let at = |p: scenario::Point| FxVec2::new(center.x + p[0], center.y + p[1]);
+        let items: Vec<String> = scenario.items.iter().map(|i| i.id.clone()).collect();
+        let item = |id: &str| items.iter().position(|i| i == id).expect("validated item") as ItemIx;
         terrain.extent = scenario.extent;
         terrain.obstacles.extend_from_slice(obstacles);
         let footprints = scenario
@@ -310,9 +321,11 @@ impl Settlement {
             }
         }
         terrain.revision += 1;
+        // Before the agents' spawn check, so nobody starts inside one.
+        let building_kinds = buildings::kinds(scenario, item);
+        let docks: Vec<(DepotIx, FxVec2)> = scenario.depots.iter().enumerate().map(|(i, d)| (i as DepotIx, at(d.position))).collect();
+        let buildings = buildings::prebuilt(scenario, &building_kinds, &docks, items.len(), terrain, at)?;
 
-        let items: Vec<String> = scenario.items.iter().map(|i| i.id.clone()).collect();
-        let item = |id: &str| items.iter().position(|i| i == id).expect("validated item") as ItemIx;
         let depot = |id: &str| scenario.depots.iter().position(|d| d.id == id).expect("validated depot") as DepotIx;
         let stacks = |s: &[scenario::Stack]| s.iter().map(|s| (item(&s.item), s.units)).collect::<Vec<_>>();
 
@@ -466,6 +479,8 @@ impl Settlement {
             piles: None,
             memory: None,
             vehicles: Vec::new(),
+            building_kinds,
+            buildings,
             scenario: scenario.id.clone(),
             dock_owner: vec![None; scenario.depots.len()],
             items,
@@ -630,6 +645,12 @@ impl Settlement {
         for a in &mut self.agents {
             a.carry.inventory.resize(items);
         }
+        for b in &mut self.buildings {
+            b.output.resize(items);
+            if let Stage::Site { materials, .. } = &mut b.stage {
+                materials.resize(items);
+            }
+        }
         Ok(first)
     }
 
@@ -725,7 +746,15 @@ impl Settlement {
                 let b = &self.accounts[i];
                 // Minerals are stored in piles and the collector.
                 let lab = self.piles.iter().flat_map(|lab| lab.piles.values().map(|p| &p.inventory).chain(lab.collector.as_ref().map(|c| &c.inventory)));
-                let stored = self.depots.iter().map(|d| &d.inventory).chain(lab).map(|inventory| inventory.counts[i] as u64).sum();
+                // So are building outputs and the materials delivered to sites.
+                let buildings = self.buildings.iter().flat_map(|b| {
+                    let materials = match &b.stage {
+                        Stage::Site { materials, .. } => Some(materials),
+                        Stage::Built => None,
+                    };
+                    std::iter::once(&b.output).chain(materials)
+                });
+                let stored = self.depots.iter().map(|d| &d.inventory).chain(lab).chain(buildings).map(|inventory| inventory.counts[i] as u64).sum();
                 let carried = self.agents.iter().map(|a| a.carry.inventory.counts[i] as u64).sum();
                 let in_transit = self.transfers.values().filter(|t| t.item as usize == i).count() as u64;
                 let equipped = self.agents.iter().filter(|a| a.equipped_item() == Some(i as ItemIx)).count() as u64;
@@ -821,6 +850,7 @@ impl Settlement {
         if let Some(lab) = &self.piles {
             self.validate_lab(lab)?;
         }
+        self.validate_buildings()?;
         Ok(())
     }
 
@@ -936,7 +966,13 @@ impl Settlement {
             &self.combat,
             self.health,
         );
-        let bytes = postcard::to_allocvec(&observed).expect("behaviour encodes");
+        let mut bytes = postcard::to_allocvec(&observed).expect("behaviour encodes");
+        // Buildings only where there are any, so scenes without them hash
+        // as they did before the table.
+        if !self.buildings.is_empty() {
+            let buildings: Vec<_> = self.buildings.iter().map(|b| (b.kind, b.position, &b.stage, b.slot, b.progress, &b.output.counts)).collect();
+            bytes.extend(postcard::to_allocvec(&buildings).expect("buildings encode"));
+        }
         bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, &byte| (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3))
     }
 }
@@ -954,6 +990,8 @@ impl StateHash for Settlement {
     }
 }
 
+#[cfg(test)]
+mod buildings_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
