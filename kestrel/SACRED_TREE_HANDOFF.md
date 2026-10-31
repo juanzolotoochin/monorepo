@@ -155,6 +155,10 @@ stay fixed for the world's life. That is the one real gap.
   needs. Installing the last part makes the building `Built`; it stays
   inert until someone occupies it.
 - Only the next part takes materials, so the site's needs read as one list.
+- Installing works while carrying an item the site doesn't need (M2.3), so
+  leftover units after a delivery don't force a trip to the tree first.
+- Dropping a bundle on the ground (M2.4) is its own key, not an interact
+  fallback, so a press that just misses a target never drops the bundle.
 
 ### D5. Interact acts on the nearest usable thing, highlighted
 
