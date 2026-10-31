@@ -4,9 +4,178 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M2.3 Blueprints, sites and installing parts
+## M2.4 Dropping bundles on ground piles
 
 - **Status:** open
+- **Why:** the elder must drop a bundle before possessing (requirements
+  3.1); piles reuse the pile lab.
+- **What to do:** let piles hold any item, not only minerals (handoff,
+  "Open questions"), then drop into and pick up from ground piles of wood
+  and stone.
+- **From M2.1:** `avatar::bundle_job` refuses `InventoryRef::Pile` as "not
+  a holder"; add piles there (a `OneKind` pile's item is `kind()`, as an
+  output's is), so a pickup tops up from a ground pile by the same rule. A
+  pile haul is still a `PileJob` on its own path (`piles::haul`).
+- **Where:** `kestrel/sim/src/settlement/piles.rs`.
+- **From M2.3:** in a town controller B backs out of a blueprint being
+  placed (`Edge::CancelBuild`) and is `Edge::Drop` otherwise; keep that
+  order if the drop goes on B. Interact while placing puts the blueprint
+  down (`input::town::interact`), so a drop fallback must not apply then.
+  A site's deliveries come from the bundle only; a ground pile is no
+  holder `bundle_job` delivers from.
+- **From M2.2:** a ground pile is a new `InteractTarget` variant, appended
+  (`Pile(PileId)`), usable as an output is (top up, by `bundle_job`). The
+  ground (drop) is no candidate: at distance zero it would always win.
+  Make it the fallback while carrying when `interact_target` finds nothing
+  (an `Interaction::Drop`), or keep the drop on its own key (controller B)
+  as the pile lab does. `Action::Interact` refuses a target with no
+  `position` as out of reach today.
+- **Found in:** Sacred Tree handoff.
+
+## M3.1 Building seats and ejection
+
+- **Status:** open
+- **Why:** the elder becomes a building, and the sprite it displaces
+  replans (D3, A3).
+- **What to do:** `driving` becomes `seat`, `Board` takes building slots,
+  ejection beside the building, the raised cap and the multiplier.
+- **Where:** `kestrel/sim/src/settlement/vehicle.rs`, `avatar.rs`,
+  `buildings.rs`.
+- **From M1.3:** eject in the boarding handler with
+  `Settlement::release_slot(sprite)` (it clears the sprite's `holds` and
+  empties the slot), then set the slot to `Occupant::Elder`; the sprite's
+  brain finds its claim or seat gone on its next step and replans. A sprite
+  on its way in (`Slot::Claimed`) loses its claim the same way. Move the
+  ejected sprite off the slot spot, or the elder's own leaving spot and the
+  sprite's spot may coincide: a walker whose goal sits under another body
+  holds back (`haulers::move_worker`). `validate_buildings` already wants an
+  elder's slot to name an avatar; `players::leave` empties a leaving
+  player's elder slot and `remap_agents` shifts slot agents.
+- **From M1.4:** the view already draws an elder occupant: the building's
+  lamp turns violet and its card says "POSSESSED" (`settlement::town`,
+  `legacy::Occupant::Elder`). The elder's own rig is still drawn where its
+  body stands; hide it, or draw its flame form, while it is seated.
+- **From M2.3:** a site is no building to board: `validate_buildings`
+  insists a site's slot stays empty, so `Board` and a `Slot` target must
+  take built buildings only (as `interact_target` lists a site as `Site`,
+  not `Output`). Placing checks bodies, so a footprint never lands on an
+  elder; an ejected sprite is put beside its building, clear of others'
+  footprints already.
+- **From M2.2:** a building slot is a new `InteractTarget` variant,
+  appended (`Slot(BuildingIx)`), empty-handed only (D5): `interaction` says
+  board, and `Action::Interact` sends the `Board` message for it. Today
+  boarding is its own key (G, the left stick), and `interact_target` gives a
+  seated agent no target (`avatar.driving`): with `seat`, decide whether
+  interact also leaves the seat. A slot spot and the output pile are about
+  1.7 m apart, so with the 1.5 m reach the nearer one wins.
+- **Found in:** Sacred Tree handoff.
+
+## M3.2 Burst
+
+- **Status:** open
+- **Why:** the stand-in for building-specific elder abilities (D3).
+- **From M1.4:** a Burst's units arrive in the output as any unit does;
+  `Event::BuildingProduced` flares the lamp and plays the dispenser cue, so
+  a Burst event can reuse both (`settlement::tick`, `town`).
+- **What to do:** `Burst { agent }`, its cooldown on the elder, its control
+  verb and its ready indicator.
+- **Where:** `kestrel/sim/src/settlement/avatar.rs`, `buildings.rs`,
+  `kestrel/app/`.
+- **Found in:** Sacred Tree handoff.
+
+## M4.1 Happy path and stability
+
+- **Status:** open
+- **Why:** the 10-step happy path must play from a fresh start, and
+  repeated cycles must never strand a sprite (A6, A8).
+- **What to do:** the happy path as a headless control script, the
+  stability soak and the bootstrapping test (handoff, "Tests"); fix what
+  they find, then tune rates.
+- **Where:** `kestrel/sim/src/settlement/` tests, `kestrel/headless/`.
+- **From M1.3:** `sprites_tests::no_sprite_keeps_waiting_while_a_matching_slot_is_free`
+  already reassigns sprites over two gatherers for 90 s; the soak can grow
+  from it with possession and building.
+- **From M2.3:** the bootstrapping order already runs in the sim
+  (`construction_tests::both_kinds_build_from_an_empty_tree`, through
+  `Interact` only); the headless happy path can drive it with
+  `settlement_build`, `settlement_place_blueprint` and `settlement_interact`
+  (the control test `the_elder_builds_a_stone_gatherer_that_a_sprite_works`
+  is a start). Placing checks that the new building's own pile and slot
+  spot can be reached, not that it leaves the others reachable: a ring of
+  buildings could wall one off. A new footprint can also land on a route a
+  sprite is walking; the soak should show whether either needs a rule.
+- **Found in:** Sacred Tree handoff.
+
+## Art for the Sacred Tree
+
+- **Status:** open
+- **Why:** the scene stands in existing art: the elder is the `exosuit`
+  actor, sprites the `worker` skin, the gatherers the forest style's `mill`
+  and `factory`, wood and stone its `item_lumber` and `item_iron`, and the
+  tree plain architecture.
+- **What to do:** a flame actor for the elder (and its flame form in a
+  building, D3), small sprite skin variants, Wood and Stone Gatherer skins,
+  wood and stone item skins, and a Sacred Tree that reads as the center of
+  town, probably in a style of its own instead of `styles/forest.ron`.
+- **Where:** `kestrel/app/actors/`, `kestrel/app/assets/styles/`,
+  `kestrel/content/data/character/elder.ron` and `sprite.ron`,
+  `kestrel/app/assets/levels/sacred_tree*.ron`.
+- **From M1.4:** sprites are the `worker` skin, told apart only by size,
+  with a glowing ball over the head as a stand-in flame
+  (`settlement::town`); a flame skin can take its activity color and
+  motion from the same place. The camera shows the whole 26 m clearing, so
+  the tags of the four sprites standing together at the start still touch
+  (every other tag stands higher); a closer camera, or tags that only
+  unfold near the elder, would read better.
+- **From M2.3:** a site is its kind's skin scaled down per installed part
+  (`settlement::town`, `grown`) on a plot ringed in gizmos (`input::hud`),
+  and the ghost is the skin with every material tinted (`rig::Fade::tint`);
+  per-part skins (a foundation, then the mechanism) would read better. The
+  canopy that fades is the scene's raised architecture within 4 m of its
+  center (`canopy.rs`); a tree in a style of its own should keep its canopy
+  findable that way, or mark it.
+- **Found in:** M1.1.
+
+## A scene with no weapon
+
+- **Status:** open
+- **Why:** the elder has no weapon, but a scenario with an empty `weapons`
+  list still offers the sword (`combat::offers_weapon`, as the original
+  game did), so the elder can swing one.
+- **What to do:** let a scenario say it offers no weapon (for example an
+  explicit empty list that differs from a missing one), and have the
+  attack command do nothing there.
+- **Where:** `kestrel/content/src/scenario.rs`,
+  `kestrel/sim/src/settlement/combat.rs`, `kestrel/app/src/input/gameplay.rs`.
+- **Found in:** M1.1.
+
+## Interact feedback and the mouse
+
+- **Status:** open
+- **Why:** three rough edges M2.2 left. The job menu has no mouse: its
+  ring is picked by direction keys, the stick or the D-pad only. Walking
+  off cancels a pending deposit or withdrawal at a tree pile (the app's
+  `movement` cancels jobs `manual_jobs` lists, depot jobs only) but not a
+  pickup at an output, which waits until the elder is back in the dock's
+  reach. And letting go of a walk key just after pressing E sends Stop,
+  which ends the elder's step in, so the job waits the same way.
+- **What to do:** hover and click the ring's options; list output jobs in
+  `manual_jobs` (or cancel by the carry job itself) so walking off cancels
+  both alike; keep the step in through a Stop, or cancel the job with it.
+  A delivery to a site (M2.3) is a carry job on `InventoryRef::Site` and
+  waits the same way. A site's needs readout sends nothing: pressing E
+  shows its prompt over the elder as a refusal; a blueprint refused in
+  stage 5 (`Event::BlueprintRefused`) names no player, so every client
+  shows it.
+- **Where:** `kestrel/app/src/input/town.rs`, `gameplay.rs`,
+  `kestrel/app/src/legacy.rs` (`manual_jobs`), `kestrel/app/src/settlement.rs`.
+- **Found in:** M2.2.
+
+## Done
+
+### M2.3 Blueprints, sites and installing parts
+
+- **Status:** done (branch `kestrel-sacred-tree`)
 - **Why:** both kinds are built from two installed parts (D4, A5).
 - **What to do:** `PlaceBlueprint` and its checks, the ghost and the
   two-option build menu, deliver and install, the needs readout.
@@ -44,142 +213,49 @@ its milestones, in order; one PR per milestone.
   building's output, a site's too: it is empty, so never usable, but skip
   sites there once they have a target of their own.
 - **Found in:** Sacred Tree handoff.
-
-## M2.4 Dropping bundles on ground piles
-
-- **Status:** open
-- **Why:** the elder must drop a bundle before possessing (requirements
-  3.1); piles reuse the pile lab.
-- **What to do:** let piles hold any item, not only minerals (handoff,
-  "Open questions"), then drop into and pick up from ground piles of wood
-  and stone.
-- **From M2.1:** `avatar::bundle_job` refuses `InventoryRef::Pile` as "not
-  a holder"; add piles there (a `OneKind` pile's item is `kind()`, as an
-  output's is), so a pickup tops up from a ground pile by the same rule. A
-  pile haul is still a `PileJob` on its own path (`piles::haul`).
-- **Where:** `kestrel/sim/src/settlement/piles.rs`.
-- **From M2.2:** a ground pile is a new `InteractTarget` variant, appended
-  (`Pile(PileId)`), usable as an output is (top up, by `bundle_job`). The
-  ground (drop) is no candidate: at distance zero it would always win.
-  Make it the fallback while carrying when `interact_target` finds nothing
-  (an `Interaction::Drop`), or keep the drop on its own key (controller B)
-  as the pile lab does. `Action::Interact` refuses a target with no
-  `position` as out of reach today.
-- **Found in:** Sacred Tree handoff.
-
-## M3.1 Building seats and ejection
-
-- **Status:** open
-- **Why:** the elder becomes a building, and the sprite it displaces
-  replans (D3, A3).
-- **What to do:** `driving` becomes `seat`, `Board` takes building slots,
-  ejection beside the building, the raised cap and the multiplier.
-- **Where:** `kestrel/sim/src/settlement/vehicle.rs`, `avatar.rs`,
-  `buildings.rs`.
-- **From M1.3:** eject in the boarding handler with
-  `Settlement::release_slot(sprite)` (it clears the sprite's `holds` and
-  empties the slot), then set the slot to `Occupant::Elder`; the sprite's
-  brain finds its claim or seat gone on its next step and replans. A sprite
-  on its way in (`Slot::Claimed`) loses its claim the same way. Move the
-  ejected sprite off the slot spot, or the elder's own leaving spot and the
-  sprite's spot may coincide: a walker whose goal sits under another body
-  holds back (`haulers::move_worker`). `validate_buildings` already wants an
-  elder's slot to name an avatar; `players::leave` empties a leaving
-  player's elder slot and `remap_agents` shifts slot agents.
-- **From M1.4:** the view already draws an elder occupant: the building's
-  lamp turns violet and its card says "POSSESSED" (`settlement::town`,
-  `legacy::Occupant::Elder`). The elder's own rig is still drawn where its
-  body stands; hide it, or draw its flame form, while it is seated.
-- **From M2.2:** a building slot is a new `InteractTarget` variant,
-  appended (`Slot(BuildingIx)`), empty-handed only (D5): `interaction` says
-  board, and `Action::Interact` sends the `Board` message for it. Today
-  boarding is its own key (G, the left stick), and `interact_target` gives a
-  seated agent no target (`avatar.driving`): with `seat`, decide whether
-  interact also leaves the seat. A slot spot and the output pile are about
-  1.7 m apart, so with the 1.5 m reach the nearer one wins.
-- **Found in:** Sacred Tree handoff.
-
-## M3.2 Burst
-
-- **Status:** open
-- **Why:** the stand-in for building-specific elder abilities (D3).
-- **From M1.4:** a Burst's units arrive in the output as any unit does;
-  `Event::BuildingProduced` flares the lamp and plays the dispenser cue, so
-  a Burst event can reuse both (`settlement::tick`, `town`).
-- **What to do:** `Burst { agent }`, its cooldown on the elder, its control
-  verb and its ready indicator.
-- **Where:** `kestrel/sim/src/settlement/avatar.rs`, `buildings.rs`,
-  `kestrel/app/`.
-- **Found in:** Sacred Tree handoff.
-
-## M4.1 Happy path and stability
-
-- **Status:** open
-- **Why:** the 10-step happy path must play from a fresh start, and
-  repeated cycles must never strand a sprite (A6, A8).
-- **What to do:** the happy path as a headless control script, the
-  stability soak and the bootstrapping test (handoff, "Tests"); fix what
-  they find, then tune rates.
-- **Where:** `kestrel/sim/src/settlement/` tests, `kestrel/headless/`.
-- **From M1.3:** `sprites_tests::no_sprite_keeps_waiting_while_a_matching_slot_is_free`
-  already reassigns sprites over two gatherers for 90 s; the soak can grow
-  from it with possession and building.
-- **Found in:** Sacred Tree handoff.
-
-## Art for the Sacred Tree
-
-- **Status:** open
-- **Why:** the scene stands in existing art: the elder is the `exosuit`
-  actor, sprites the `worker` skin, the gatherers the forest style's `mill`
-  and `factory`, wood and stone its `item_lumber` and `item_iron`, and the
-  tree plain architecture.
-- **What to do:** a flame actor for the elder (and its flame form in a
-  building, D3), small sprite skin variants, Wood and Stone Gatherer skins,
-  wood and stone item skins, and a Sacred Tree that reads as the center of
-  town, probably in a style of its own instead of `styles/forest.ron`.
-- **Where:** `kestrel/app/actors/`, `kestrel/app/assets/styles/`,
-  `kestrel/content/data/character/elder.ron` and `sprite.ron`,
-  `kestrel/app/assets/levels/sacred_tree*.ron`.
-- **From M1.4:** sprites are the `worker` skin, told apart only by size,
-  with a glowing ball over the head as a stand-in flame
-  (`settlement::town`); a flame skin can take its activity color and
-  motion from the same place. The camera shows the whole 26 m clearing, so
-  the tags of the four sprites standing together at the start still touch
-  (every other tag stands higher); a closer camera, or tags that only
-  unfold near the elder, would read better.
-- **Found in:** M1.1.
-
-## A scene with no weapon
-
-- **Status:** open
-- **Why:** the elder has no weapon, but a scenario with an empty `weapons`
-  list still offers the sword (`combat::offers_weapon`, as the original
-  game did), so the elder can swing one.
-- **What to do:** let a scenario say it offers no weapon (for example an
-  explicit empty list that differs from a missing one), and have the
-  attack command do nothing there.
-- **Where:** `kestrel/content/src/scenario.rs`,
-  `kestrel/sim/src/settlement/combat.rs`, `kestrel/app/src/input/gameplay.rs`.
-- **Found in:** M1.1.
-
-## Interact feedback and the mouse
-
-- **Status:** open
-- **Why:** three rough edges M2.2 left. The job menu has no mouse: its
-  ring is picked by direction keys, the stick or the D-pad only. Walking
-  off cancels a pending deposit or withdrawal at a tree pile (the app's
-  `movement` cancels jobs `manual_jobs` lists, depot jobs only) but not a
-  pickup at an output, which waits until the elder is back in the dock's
-  reach. And letting go of a walk key just after pressing E sends Stop,
-  which ends the elder's step in, so the job waits the same way.
-- **What to do:** hover and click the ring's options; list output jobs in
-  `manual_jobs` (or cancel by the carry job itself) so walking off cancels
-  both alike; keep the step in through a Stop, or cancel the job with it.
-- **Where:** `kestrel/app/src/input/town.rs`, `gameplay.rs`,
-  `kestrel/app/src/legacy.rs` (`manual_jobs`), `kestrel/app/src/settlement.rs`.
-- **Found in:** M2.2.
-
-## Done
+- **Done:** one placement check, `buildings::placement` (prebuilt
+  buildings pass it too; `Settlement::placement_check` for the app):
+  footprint inside the arena and clear of the terrain and live agents'
+  bodies (`Blocked`), off every dock (`CoversDock`) and other buildings'
+  output piles and slot spots (`CoversSpot`); its own pile and slot spot
+  clear and uncrowded (`OutputBlocked`, `SlotBlocked`); both reachable on
+  foot from every dock for a 0.3 m body (`Unreachable`). The ghost says
+  "BLOCKED", "TOO CLOSE TO A PILE", "CAN'T BE REACHED" or "OUT OF BOUNDS".
+  `CommandKind::PlaceBlueprint { kind, position }` (appended, any player)
+  is checked in stage 5 in command order (`place_blueprints`): a site with
+  an obstacle and `terrain.revision` bumped, or `Event::BlueprintRefused`.
+  `InventoryRef::Site(b)` (appended) is the site's materials, at its output
+  pile's spot: `bundle_job` delivers every unit of the bundle's item the
+  next part still takes (`BuildingState::wanted`, which counts units on
+  their way), refuses others (`BundleRefusal::NotNeeded`) and any pickup
+  (`DepositOnly`); `reserve_stock` checks the need again for two deliveries
+  on one tick. `InteractTarget::Site(b)` (appended; built buildings stay
+  `Output`, sites aren't): deliver, else `Interaction::Install` once the
+  part's materials have landed (also while carrying something it doesn't
+  need, so the leftover bundle needs no trip to the tree; D5 listed install
+  empty-handed only), else empty-handed `Interaction::Needs` (no sim
+  effect; the app shows it). An install (stage 5, `Settlement::install`)
+  counts the materials as `consumed` and moves on; the last part makes it
+  `Built` (`Event::PartInstalled { built }`). `validate_buildings` checks a
+  site's reservations with `expected_reservations`, its materials within
+  the part, and an empty slot and output. In the app, keyboard B and
+  controller X open a radial build menu; the ghost (`input::town::ghost`)
+  stands 0.8 m past its footprint in front of the confirmed elder, the
+  kind's skin tinted green or red with its reason, rings for the footprint,
+  pile and slot spot; E or A places, B again, Escape or controller B backs
+  out. A site is a staked plot, then the skin at half size per part, its
+  card saying "FOUNDATION 1/2 WOOD". The canopy (raised architecture within
+  4 m of the scene's center) is split out of the baked environment and
+  fades while it hides the elder, a site or the ghost (`canopy.rs`). Verbs
+  `settlement_build`, `settlement_place_blueprint`,
+  `settlement_cancel_build`; the state has `settlement.interact.ghost`,
+  `placing`, `build_menu` and each building's `site`. Save format 26,
+  input logs 7, net protocol 9. The golden file didn't change. Tests: sim
+  `construction_tests` (each refusal, two placements on one tick, delivery
+  and needs, install, consumption, both kinds from an empty tree), save
+  `a_town_saved_mid_delivery_continues`, input `the_build_keys_follow_the_town`,
+  control `the_elder_builds_a_stone_gatherer_that_a_sprite_works`. The demo
+  shows the ghost red and green, a half-built site and the canopy fading.
 
 ### M2.2 Interact target and highlight
 
