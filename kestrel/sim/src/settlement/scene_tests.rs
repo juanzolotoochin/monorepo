@@ -844,6 +844,9 @@ fn supply_pile_lab() -> SceneSetup {
         waves: vec![],
         base_health: 1,
         player_health: 0,
+        building_kinds: vec![],
+        buildings: vec![],
+        sprites: vec![],
     };
     SceneSetup { scenario: Some(scenario), ..pile_lab() }
 }

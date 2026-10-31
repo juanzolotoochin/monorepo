@@ -608,6 +608,9 @@ impl Settlement {
             waves: Vec::new(),
             base_health: 1,
             player_health: 0,
+            building_kinds: Vec::new(),
+            buildings: Vec::new(),
+            sprites: Vec::new(),
         }
     }
 

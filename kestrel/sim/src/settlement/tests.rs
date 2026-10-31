@@ -88,6 +88,9 @@ fn scenario() -> Scenario {
         waves: vec![],
         base_health: 10,
         player_health: 0,
+        building_kinds: vec![],
+        buildings: vec![],
+        sprites: vec![],
     }
 }
 

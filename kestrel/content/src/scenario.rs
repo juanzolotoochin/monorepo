@@ -1,5 +1,6 @@
 //! Scenarios: the starting setup of a settlement scene (depots, haul links,
-//! haulers, machines, defenders, enemy waves). A host turns a scenario into
+//! haulers, machines, defenders, enemy waves, building kinds and the
+//! buildings that start built, sprites). A host turns a scenario into
 //! the world at tick 0; from then on the state lives in saves.
 //!
 //! The file format is the original game's, so existing scene files load
@@ -179,6 +180,78 @@ pub struct Producer {
     pub max_cycles: Option<u32>,
 }
 
+fn output_distance() -> Fx {
+    Fx::from_ratio(6, 5)
+}
+
+/// A kind of building players put up from parts: a gatherer that turns out
+/// one item while someone occupies it. Every rate and recipe is here, not in
+/// code.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BuildingKind {
+    pub id: String,
+    pub label: String,
+    pub skin: String,
+    /// Footprint radius in meters.
+    pub radius: Fx,
+    /// The item it produces, one unit at a time.
+    pub product: String,
+    /// Seconds per unit while a sprite occupies it.
+    pub period: Fx,
+    /// Units its output holds; production pauses when it is full.
+    pub cap: u32,
+    /// The output's cap while an elder possesses it.
+    pub possessed_cap: u32,
+    /// A possessing elder divides the period by this.
+    pub possessed_multiplier: Fx,
+    pub burst: Burst,
+    /// Meters from the building's center to its output pile, in front.
+    #[serde(default = "output_distance")]
+    pub output_distance: Fx,
+    /// Installed one after another; installing the last one finishes it.
+    pub parts: Vec<Part>,
+}
+
+/// What a possessing elder's Burst does: `units` at once into the output,
+/// then `cooldown` seconds before the next.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Burst {
+    pub units: u32,
+    pub cooldown: Fx,
+}
+
+/// One part of a building, and the materials it takes to install.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Part {
+    pub id: String,
+    pub label: String,
+    pub materials: Vec<Stack>,
+}
+
+/// A building that stands, built, when the scenario starts.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Building {
+    /// Its kind, by id.
+    pub kind: String,
+    pub position: Point,
+}
+
+/// A sprite: a small worker that staffs buildings. It carries nothing, so it
+/// has none of a hauler's cargo, links or equipment, and starts idle.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Sprite {
+    pub id: String,
+    pub label: String,
+    /// The character it is, by short name: a `Sprite` character.
+    pub character: String,
+    pub position: Point,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ProjectileKind {
     #[default]
@@ -322,6 +395,13 @@ pub struct Scenario {
     /// Hit points for player avatars; zero disables player combat.
     #[serde(default)]
     pub player_health: u32,
+    #[serde(default)]
+    pub building_kinds: Vec<BuildingKind>,
+    /// The buildings standing, built, at the start.
+    #[serde(default)]
+    pub buildings: Vec<Building>,
+    #[serde(default)]
+    pub sprites: Vec<Sprite>,
 }
 
 fn f(n: i64, d: i64) -> Fx {
@@ -377,7 +457,9 @@ impl Scenario {
             || self.items.is_empty()
             || self.items.len() > 32
             || self.depots.len() > 64
-            || self.agents.len() > 32
+            || self.agents.len() + self.sprites.len() > 32
+            || self.building_kinds.len() > 16
+            || self.buildings.len() > 64
             || self.links.len() > 128
             || self.producers.len() > 32
             || self.defenders.len() > 16
@@ -395,7 +477,9 @@ impl Scenario {
         let items = ids(self.items.iter().map(|x| x.id.as_str()))?;
         let depots = ids(self.depots.iter().map(|x| x.id.as_str()))?;
         let links = ids(self.links.iter().map(|x| x.id.as_str()))?;
-        ids(self.agents.iter().map(|x| x.id.as_str()))?;
+        // Sprites are agents too, so they share the agents' ids.
+        ids(self.agents.iter().map(|x| x.id.as_str()).chain(self.sprites.iter().map(|x| x.id.as_str())))?;
+        let kinds = ids(self.building_kinds.iter().map(|x| x.id.as_str()))?;
         ids(self.producers.iter().map(|x| x.id.as_str()))?;
         ids(self.defenders.iter().map(|x| x.id.as_str()))?;
         ids(self.waves.iter().map(|x| x.id.as_str()))?;
@@ -483,6 +567,38 @@ impl Scenario {
                 || p.max_cycles == Some(0)
             {
                 return Err(format!("invalid producer {}", p.id));
+            }
+        }
+        for k in &self.building_kinds {
+            let parts = ids(k.parts.iter().map(|p| p.id.as_str())).is_ok();
+            if k.label.is_empty()
+                || k.label.len() > 128
+                || !ident(&k.skin)
+                || !within(k.radius, f(1, 10), Fx::from_int(3))
+                || !items.contains(k.product.as_str())
+                || !within(k.period, f(1, 10), Fx::from_int(3600))
+                || !(1..=4096).contains(&k.cap)
+                || !(k.cap..=4096).contains(&k.possessed_cap)
+                || !within(k.possessed_multiplier, Fx::ONE, Fx::from_int(16))
+                || !(1..=k.possessed_cap).contains(&k.burst.units)
+                || !within(k.burst.cooldown, f(1, 10), Fx::from_int(3600))
+                || !within(k.output_distance, k.radius, k.radius + Fx::from_int(4))
+                || k.parts.is_empty()
+                || k.parts.len() > 8
+                || !parts
+                || k.parts.iter().any(|p| p.label.is_empty() || p.label.len() > 128 || !stacks(&p.materials))
+            {
+                return Err(format!("invalid building kind {}", k.id));
+            }
+        }
+        for b in &self.buildings {
+            if !kinds.contains(b.kind.as_str()) || !point(b.position) {
+                return Err(format!("invalid building of kind {}", b.kind));
+            }
+        }
+        for s in &self.sprites {
+            if !point(s.position) || !ident(&s.character) || s.label.is_empty() || s.label.len() > 128 {
+                return Err(format!("invalid sprite {}", s.id));
             }
         }
         for d in &self.defenders {
