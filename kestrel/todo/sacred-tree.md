@@ -4,51 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M3.1 Building seats and ejection
-
-- **Status:** open
-- **Why:** the elder becomes a building, and the sprite it displaces
-  replans (D3, A3).
-- **What to do:** `driving` becomes `seat`, `Board` takes building slots,
-  ejection beside the building, the raised cap and the multiplier.
-- **Where:** `kestrel/sim/src/settlement/vehicle.rs`, `avatar.rs`,
-  `buildings.rs`.
-- **From M1.3:** eject in the boarding handler with
-  `Settlement::release_slot(sprite)` (it clears the sprite's `holds` and
-  empties the slot), then set the slot to `Occupant::Elder`; the sprite's
-  brain finds its claim or seat gone on its next step and replans. A sprite
-  on its way in (`Slot::Claimed`) loses its claim the same way. Move the
-  ejected sprite off the slot spot, or the elder's own leaving spot and the
-  sprite's spot may coincide: a walker whose goal sits under another body
-  holds back (`haulers::move_worker`). `validate_buildings` already wants an
-  elder's slot to name an avatar; `players::leave` empties a leaving
-  player's elder slot and `remap_agents` shifts slot agents.
-- **From M1.4:** the view already draws an elder occupant: the building's
-  lamp turns violet and its card says "POSSESSED" (`settlement::town`,
-  `legacy::Occupant::Elder`). The elder's own rig is still drawn where its
-  body stands; hide it, or draw its flame form, while it is seated.
-- **From M2.3:** a site is no building to board: `validate_buildings`
-  insists a site's slot stays empty, so `Board` and a `Slot` target must
-  take built buildings only (as `interact_target` lists a site as `Site`,
-  not `Output`). Placing checks bodies, so a footprint never lands on an
-  elder; an ejected sprite is put beside its building, clear of others'
-  footprints already.
-- **From M2.2:** a building slot is a new `InteractTarget` variant,
-  appended (`Slot(BuildingIx)`), empty-handed only (D5): `interaction` says
-  board, and `Action::Interact` sends the `Board` message for it. Today
-  boarding is its own key (G, the left stick), and `interact_target` gives a
-  seated agent no target (`avatar.driving`): with `seat`, decide whether
-  interact also leaves the seat. A slot spot and the output pile are about
-  1.7 m apart, so with the 1.5 m reach the nearer one wins.
-- **From M2.4:** dropping exists for the boarding refusal: Q or controller
-  B drops the bundle (`CommandKind::Drop`), so the refusal can say "drop
-  the bundle first". A slot target goes after `InteractTarget::Pile` (the
-  enum is append-only). A seated agent's `Drop` does nothing (`avatar::act`
-  returns for it while `driving`); keep that for a building seat. A drop
-  keeps its pile clear of slot spots and output piles (`drop_plan`), so a
-  ground pile never sits on a seat.
-- **Found in:** Sacred Tree handoff.
-
 ## M3.2 Burst
 
 - **Status:** open
@@ -60,6 +15,14 @@ its milestones, in order; one PR per milestone.
   verb and its ready indicator.
 - **Where:** `kestrel/sim/src/settlement/avatar.rs`, `buildings.rs`,
   `kestrel/app/`.
+- **From M3.1:** the possessed building is `avatar.seat` (`Seat::Building`).
+  A seated elder's actions go through the `Some(Seat::Building(b))` arm at
+  the top of `avatar::act`, which lets only Board, a Slot interact, Aim,
+  Equip, Release and Respawn through: add `Burst` there (its cooldown on
+  `AvatarState` survives leaving; `respawn` resets `AvatarState`, so keep
+  the cooldown across it as `attack_ready` is). The units go into the
+  output up to `possessed_cap` in stage 5 (a message, as `Install`).
+  Bind the key in a town only while seated; G and E are taken.
 - **Found in:** Sacred Tree handoff.
 
 ## M4.1 Happy path and stability
@@ -89,6 +52,15 @@ its milestones, in order; one PR per milestone.
   `the_elder_drops_wood_and_picks_it_back_up`). A town holds at most
   `MAX_PILES` (32) ground piles; the soak can drop and pick up in its
   cycles, with `validate` checking piles' reservations.
+- **From M3.1:** `settlement_board` (walks there first) and
+  `settlement_leave` drive possession; `settlement.seat` reads it.
+  `seat_tests::repeated_board_and_leave_cycles_stay_valid` is a short
+  possess/leave soak over two gatherers. A staffed building is boarded with
+  G (or the verb): E there reaches the sprite inside, whose job menu wins
+  the tie at the slot spot. The elder's leaving spot and a put-out sprite's
+  spot ignore bodies (the action's view reads no agents), so a crowd beside
+  a building can overlap them for a moment; the soak should show whether
+  that strands anyone.
 - **Found in:** Sacred Tree handoff.
 
 ## Art for the Sacred Tree
@@ -119,6 +91,10 @@ its milestones, in order; one PR per milestone.
   canopy that fades is the scene's raised architecture within 4 m of its
   center (`canopy.rs`); a tree in a style of its own should keep its canopy
   findable that way, or mark it.
+- **From M3.1:** a possessing elder's rig is only hidden
+  (`settlement::hide_possessing`); its flame form in the building is still
+  to draw. The "E  LEAVE" prompt at the slot spot overlaps the tag of a
+  sprite put out beside the building.
 - **From M2.4:** a ground pile is its item's skin stacked as an output's
   units are (`settlement::town`, `OUTPUT_LAYOUT`); a loose heap, like the
   pile lab's mound (`pile_model::unit_positions`), would read more like
@@ -161,9 +137,95 @@ its milestones, in order; one PR per milestone.
   shows it.
 - **Where:** `kestrel/app/src/input/town.rs`, `gameplay.rs`,
   `kestrel/app/src/legacy.rs` (`manual_jobs`), `kestrel/app/src/settlement.rs`.
+- **From M3.1:** a sprite working inside stands on its building's slot
+  spot, so E there opens its job menu (the lower kind wins the tie) and only
+  G possesses a staffed building; E possesses an empty one. If the playtest
+  wants E to possess a staffed building, either the slot target needs a
+  spot of its own or the job menu an entry to possess (`interact`,
+  `inside`). A G press while carrying shows "Drop the bundle first (Q)"; E
+  offers no slot then, so nothing says why.
 - **Found in:** M2.2.
 
 ## Done
+
+### M3.1 Building seats and ejection
+
+- **Status:** done (branch `kestrel-sacred-tree`)
+- **Why:** the elder becomes a building, and the sprite it displaces
+  replans (D3, A3).
+- **What to do:** `driving` becomes `seat`, `Board` takes building slots,
+  ejection beside the building, the raised cap and the multiplier.
+- **Where:** `kestrel/sim/src/settlement/vehicle.rs`, `avatar.rs`,
+  `buildings.rs`.
+- **From M1.3:** eject in the boarding handler with
+  `Settlement::release_slot(sprite)` (it clears the sprite's `holds` and
+  empties the slot), then set the slot to `Occupant::Elder`; the sprite's
+  brain finds its claim or seat gone on its next step and replans. A sprite
+  on its way in (`Slot::Claimed`) loses its claim the same way. Move the
+  ejected sprite off the slot spot, or the elder's own leaving spot and the
+  sprite's spot may coincide: a walker whose goal sits under another body
+  holds back (`haulers::move_worker`). `validate_buildings` already wants an
+  elder's slot to name an avatar; `players::leave` empties a leaving
+  player's elder slot and `remap_agents` shifts slot agents.
+- **From M1.4:** the view already draws an elder occupant: the building's
+  lamp turns violet and its card says "POSSESSED" (`settlement::town`,
+  `legacy::Occupant::Elder`). The elder's own rig is still drawn where its
+  body stands; hide it, or draw its flame form, while it is seated.
+- **From M2.3:** a site is no building to board: `validate_buildings`
+  insists a site's slot stays empty, so `Board` and a `Slot` target must
+  take built buildings only (as `interact_target` lists a site as `Site`,
+  not `Output`). Placing checks bodies, so a footprint never lands on an
+  elder; an ejected sprite is put beside its building, clear of others'
+  footprints already.
+- **From M2.2:** a building slot is a new `InteractTarget` variant,
+  appended (`Slot(BuildingIx)`), empty-handed only (D5): `interaction` says
+  board, and `Action::Interact` sends the `Board` message for it. Today
+  boarding is its own key (G, the left stick), and `interact_target` gives a
+  seated agent no target (`avatar.driving`): with `seat`, decide whether
+  interact also leaves the seat. A slot spot and the output pile are about
+  1.7 m apart, so with the 1.5 m reach the nearer one wins.
+- **From M2.4:** dropping exists for the boarding refusal: Q or controller
+  B drops the bundle (`CommandKind::Drop`), so the refusal can say "drop
+  the bundle first". A slot target goes after `InteractTarget::Pile` (the
+  enum is append-only). A seated agent's `Drop` does nothing (`avatar::act`
+  returns for it while `driving`); keep that for a building seat. A drop
+  keeps its pile clear of slot spots and output piles (`drop_plan`), so a
+  ground pile never sits on a seat.
+- **Found in:** Sacred Tree handoff.
+- **Done:** `AvatarState::driving` is `seat: Option<Seat>` (`Seat::Vehicle`,
+  `Seat::Building`; `Settlement::seat`, `driving` kept for vehicles).
+  `Board` (G, the left stick) takes the nearest free vehicle (as before) or
+  built building whose slot spot is within `INTERACT_REACH`; between the
+  two the nearer point wins (vehicle center against slot spot), a tie to
+  the vehicle, then the lower building index; command order otherwise
+  (players in order, so of two elders on one tick the lower player wins).
+  `InteractTarget::Slot(b)` (appended) is offered empty-handed for built
+  buildings ("E  POSSESS") and names its building (`Board { building }`);
+  seated in a building it is the one target ("E  LEAVE"). Refusals
+  (`interact::board_refusal`, `Event::BundleRefused`): `Carrying` ("Drop
+  the bundle first (Q)"), `Busy`, `Possessed` ("Another elder is in
+  there"), and `OutOfReach` for an interact. Boarding puts a sprite inside
+  out at the first clear `PUT_OUT` spot on the slot spot's ring that isn't
+  the elder's leaving spot (`buildings::eject_spot`), and one on its way
+  loses its claim where it stands; both stop and replan. The elder stands at
+  the slot spot, out of the steering footprints; movement and `Drop` do
+  nothing. Leaving (boarding again or interacting) is the avatar's own part,
+  as a vehicle's: it puts the elder at the first clear `LEAVING` spot
+  (`leave_spot`, behind the slot); `seat_housekeeping` empties a slot whose
+  elder left, died or respawned, and `players::leave` empties it at once.
+  `validate_buildings` checks slot and seat both ways. The view hides a
+  possessing elder's rig (local or a peer's, `hide_possessing`); the camera
+  follows its body at the slot spot. Help "... / G POSSESS"; verbs
+  `settlement_board` (walks there first) and `settlement_leave`; the state's
+  `settlement.seat`. Save format 28, input logs 9, net protocol 11. The
+  golden file didn't change. Tests: sim `seat_tests` (ejection and return,
+  another free building, a claim lost on the way, 4x and cap 20 and back,
+  refusals, a site, interact and the tie, seated movement, two elders,
+  leaving the game and respawning, 12 board/leave cycles with `validate`
+  every tick), save `a_town_saved_while_possessed_continues`, input
+  `e_and_g_possess_a_building_in_a_town_and_g_still_drives_elsewhere`,
+  control `the_elder_possesses_the_wood_gatherer_and_its_sprite_goes_back_in`.
+  The demo ends possessing the Wood Gatherer.
 
 ### M2.4 Dropping bundles on ground piles
 
