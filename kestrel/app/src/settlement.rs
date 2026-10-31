@@ -39,6 +39,12 @@ pub struct Settlement {
     /// The elder's last interact refusal and the tick it came, shown over
     /// its head for `REFUSAL_SECONDS`.
     refusal: Option<(String, f32)>,
+    /// A blueprint's ghost: its skin, its rig, and the rig's materials made
+    /// see-through and tinted.
+    ghost: Option<(String, Rig, Fade)>,
+    /// The tree's canopy, split off to fade while it hides the elder, a site
+    /// or the ghost (`canopy`); `None` until the town has been drawn.
+    canopy: Option<crate::canopy::Canopy>,
 }
 /// How long an interact refusal stays over the elder.
 const REFUSAL_SECONDS: f32 = 2.5;
@@ -197,6 +203,10 @@ impl Service for Settlement {
         }
         for (_, e) in std::mem::take(&mut self.glows) {
             world.despawn(e);
+        }
+        if let Some((_, rig, fade)) = self.ghost.take() {
+            fade.restore(world);
+            world.despawn(rig.root);
         }
         if let Some(glows) = self.glow_assets.take() {
             world.resource_mut::<Assets<Mesh>>().remove(&glows.mesh);
@@ -390,7 +400,7 @@ fn endpoint(sim: &Simulation, e: &Endpoint) -> Vec3 {
             Vec3::new(d.position[0], 0., d.position[1]) + Vec3::from_array(d.stock_anchor)
         }
         Endpoint::Cargo(id) => cargo_position(sim, id),
-        Endpoint::Output(b) => {
+        Endpoint::Output(b) | Endpoint::Site(b) => {
             let p = sim.buildings[*b as usize].output_position;
             Vec3::new(p[0], 0., p[1])
         }
@@ -790,6 +800,10 @@ pub fn tick(world: &mut World) {
                 state.refusal = Some((reason.message().to_string(), sim.time()));
             }
         }
+        // Nobody sends a blueprint but a player, so this one's is shown.
+        if let Event::BlueprintRefused { reason } = event {
+            state.refusal = Some((reason.message().to_string(), sim.time()));
+        }
         let cue = match event {
             // Prediction played these when it presented the shot.
             Event::LaserFired { .. } | Event::ArcFired { .. } | Event::BowFired { .. } if presented.is_some() => None,
@@ -838,6 +852,7 @@ pub fn tick(world: &mut World) {
             Event::Produced { .. } | Event::Equipped { .. } => Some(crate::sound::Cue::Clang),
             // A gatherer's unit pops onto its pile as a dispenser's does.
             Event::BuildingProduced { .. } => Some(crate::sound::Cue::Dispense),
+            Event::BlueprintPlaced { .. } | Event::PartInstalled { .. } => Some(crate::sound::Cue::Clang),
             _ => None,
         };
         if let Some(cue) = cue {
@@ -952,6 +967,10 @@ pub fn tick(world: &mut World) {
     }
     let glows = town(world, &mut state, sim, &mut desired);
     town_interact(world, &mut state, sim, pos);
+    if !sim.config().building_kinds.is_empty() {
+        town_ghost(world, &mut state, sim);
+        town_canopy(world, &mut state, sim, pos);
+    }
     for d in &sim.config().depots {
         inventory(
             &mut desired,
@@ -1319,11 +1338,17 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
         let heading = facing(b.position, b.output_position);
         let mut v = View::new(&kind.skin, b.position);
         v.heading = heading;
-        v.scale = shape.scale;
+        // A site shows its parts going in: a bare plot (ringed on the ground,
+        // `input::hud`), then the skin at a share of its size for each part
+        // installed, and whole once built.
+        let grown = b.site.as_ref().map_or(1.0, |site| site.part as f32 / site.parts.max(1) as f32);
+        v.scale = shape.scale * grown.max(0.0);
         // A machine skin turns its rotor a full turn per `activity`: three
         // turns a unit while it works, standing still while idle or full.
         v.activity = b.progress * 3.0;
-        desired.insert(format!("building/{i}"), v);
+        if grown > 0.0 {
+            desired.insert(format!("building/{i}"), v);
+        }
         let out = Vec3::new(b.output_position[0], 0., b.output_position[1]);
         inventory(desired, sim, &format!("output/{i}"), &b.output, out, heading, &OUTPUT_LAYOUT);
         let center = Vec3::new(b.position[0], 0., b.position[1]);
@@ -1350,7 +1375,7 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
             Glow::Full => 0.12 + 0.03 * (seconds * 3.0).sin(),
             _ => 0.08,
         } * (1.0 + flare * 0.9);
-        let lamp = center + Vec3::Y * (shape.height + 0.3);
+        let lamp = center + Vec3::Y * (shape.height * grown.max(0.4) + 0.3);
         glows.push((format!("lamp/{i}"), lamp, size, glow));
         let product = sim.config().items.iter().find(|it| it.id == kind.product).map_or(kind.product.clone(), |it| it.label.clone());
         let held = b.output.total();
@@ -1369,10 +1394,27 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
                 BuildingStatus::Site => "Being built".into(),
             }
         );
+        // A site's card says what its next part takes and how much is in
+        // ("FOUNDATION 1/2 WOOD"); its output pile isn't there yet.
+        let (status, detail) = match &b.site {
+            Some(site) => {
+                let part = kind.parts.get(site.part).map_or_else(|| format!("PART {}", site.part + 1), |p| p.label.clone());
+                let label = |id: &str| sim.config().items.iter().find(|it| it.id == id).map_or_else(|| id.to_uppercase(), |it| it.label.clone());
+                let materials: Vec<String> = site.materials.iter().map(|(item, have, need)| format!("{have}/{need} {}", label(item))).collect();
+                let next = if site.ready { "READY TO INSTALL".to_string() } else { materials.join(", ") };
+                let detail = format!("{}\nBeing built: part {} of {}, {}\nNeeds: {}", kind.label, site.part + 1, site.parts, part.to_lowercase(), materials.join(", ").to_lowercase());
+                (format!("{status}\n{part} {next}"), detail)
+            }
+            None => (status, detail),
+        };
         town_caption(world, state, &format!("building/{i}"), lamp + Vec3::Y * 0.3, format!("{}\n{}", kind.label, status), glow.text(), detail);
         let tint = if b.status == BuildingStatus::Full { Glow::Full.text() } else { Color::srgb(0.98, 0.92, 0.70) };
         let out = out + Vec3::Y * (ground(world, out) + 0.45);
-        town_caption(world, state, &format!("output/{i}"), out, format!("{held}/{} {product}", b.cap), tint, String::new());
+        if b.site.is_none() {
+            town_caption(world, state, &format!("output/{i}"), out, format!("{held}/{} {product}", b.cap), tint, String::new());
+        } else if let Some(e) = state.labels.remove(&format!("output/{i}")) {
+            world.despawn(e);
+        }
     }
     for (index, sprite) in sim.config().sprites.iter().enumerate() {
         let (Some(a), Some(s)) = (sim.agents.get(&sprite.id), sim.sprites.get(&sprite.id)) else { continue };
@@ -1480,6 +1522,68 @@ fn town_interact(world: &mut World, state: &mut Settlement, sim: &Simulation, pl
         }
     }
 }
+/// A blueprint's ghost (`input::town`): the kind's skin where it would
+/// stand, see-through and tinted green while it may go down there and red
+/// while it may not, with its name and the sim's reason over it. Its rings
+/// on the ground are the HUD's (`input::hud`).
+fn town_ghost(world: &mut World, state: &mut Settlement, sim: &Simulation) {
+    let ghost = world.get_resource::<crate::input::gameplay::Dispatcher>().and_then(|d| d.town.ghost.clone());
+    let kind = ghost.as_ref().and_then(|g| world.resource::<crate::lockstep::SessionService>().settlement()?.building_kinds.get(g.kind as usize).map(|k| k.id.clone()));
+    let kind = kind.and_then(|id| sim.config().building_kinds.iter().find(|k| k.id == id).cloned());
+    let (Some(ghost), Some(kind)) = (ghost, kind) else {
+        if let Some((_, rig, fade)) = state.ghost.take() {
+            fade.restore(world);
+            world.despawn(rig.root);
+        }
+        if let Some(e) = state.labels.remove("ghost/caption") {
+            world.despawn(e);
+        }
+        return;
+    };
+    if state.ghost.as_ref().is_some_and(|(skin, _, _)| *skin != kind.skin) {
+        let (_, rig, fade) = state.ghost.take().unwrap();
+        fade.restore(world);
+        world.despawn(rig.root);
+    }
+    if state.ghost.is_none() {
+        let rig = state.templates[&kind.skin].spawn(world);
+        let fade = Fade::new(world, rig.root);
+        state.ghost = Some((kind.skin.clone(), rig, fade));
+    }
+    let (valid, invalid) = (Color::srgb(0.35, 1.0, 0.55), Color::srgb(1.0, 0.3, 0.25));
+    let tint = if ghost.verdict.is_ok() { valid } else { invalid };
+    let shape = state.building_shapes[&kind.id];
+    let template_scale = state.templates[&kind.skin].scale;
+    let at = ghost.center + Vec3::Y * crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, ghost.center).unwrap_or(0.);
+    let heading = facing([ghost.center.x, ghost.center.z], [ghost.output.x, ghost.output.z]);
+    let (_, rig, fade) = state.ghost.as_mut().unwrap();
+    fade.tint(world, tint, 0.45);
+    rig.pose(world, at, heading, 0.0, template_scale * shape.scale, 0.0, 0.0, 0.0, 0.0, crate::rig::Strike::default(), None, None);
+    let text = match ghost.verdict {
+        Ok(()) => format!("{}\nE  PLACE", kind.label),
+        Err(reason) => format!("{}\n{}", kind.label, reason.message()),
+    };
+    let key = match world.get_resource::<crate::input::InputService>().map(|i| i.frame().owner) {
+        Some(crate::input::Device::Gamepad) => text.replace("E  PLACE", "A  PLACE"),
+        _ => text,
+    };
+    town_caption(world, state, "ghost/caption", at + Vec3::Y * (shape.height + 0.6), key.clone(), tint, key);
+}
+/// Fades the tree's canopy while it hides the elder, a site or the ghost
+/// from the camera (`canopy`). View only.
+fn town_canopy(world: &mut World, state: &mut Settlement, sim: &Simulation, player: Vec3) {
+    if state.canopy.is_none() {
+        state.canopy = crate::canopy::Canopy::split(world);
+    }
+    let ghost = world.get_resource::<crate::input::gameplay::Dispatcher>().and_then(|d| d.town.ghost.as_ref().map(|g| g.center));
+    let sites = sim.buildings.iter().filter(|b| b.site.is_some()).map(|b| Vec3::new(b.position[0], 0.0, b.position[1]));
+    // Each at about half its height, where the eye looks for it.
+    let targets: Vec<Vec3> = std::iter::once(player).chain(ghost).chain(sites).map(|p| p + Vec3::Y * 0.8).collect();
+    let dt = world.resource::<Time>().delta_secs();
+    if let Some(canopy) = state.canopy.as_mut() {
+        canopy.fade(world, &targets, dt);
+    }
+}
 /// Draws `glows` (key, position, radius, state), making and dropping their
 /// entities as they come and go.
 fn sync_glows(world: &mut World, state: &mut Settlement, glows: Vec<(String, Vec3, f32, Glow)>) {
@@ -1517,6 +1621,9 @@ pub fn snapshot(world: &World) -> serde_json::Value {
         // The town's interact target and job menu (`input::town`).
         if !s.config().building_kinds.is_empty() {
             out["interact"] = crate::input::town::snapshot(world);
+            // The tree's canopy: 1 whole, less while it is see-through.
+            let canopy = world.get_resource::<Settlement>().and_then(|state| state.canopy.as_ref()).map_or(1.0, crate::canopy::Canopy::opacity);
+            out["canopy_opacity"] = canopy.into();
         }
         out
     })

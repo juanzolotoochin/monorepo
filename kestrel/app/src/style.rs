@@ -18,7 +18,7 @@ pub struct ActiveStyle {
 pub struct MaterialBindings(pub Vec<(Handle<StandardMaterial>, String, StandardMaterial)>);
 
 #[derive(Component)]
-struct Environment;
+pub(crate) struct Environment;
 #[derive(Component)]
 pub struct DestructibleView {
     pub index: usize,

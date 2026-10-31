@@ -119,6 +119,16 @@ pub struct BuildingKind {
     /// Seconds per unit with a sprite inside.
     pub period: f32,
     pub cap: u32,
+    /// The parts it is put up from, in install order.
+    pub parts: Vec<Part>,
+}
+
+/// A part of a building kind: its label ("FOUNDATION") and the items it
+/// takes, by item id.
+#[derive(Clone, Debug, Serialize)]
+pub struct Part {
+    pub label: String,
+    pub materials: Vec<(String, u32)>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -284,6 +294,7 @@ impl Scenario {
                     product: k.product.clone(),
                     period: k.period.to_f32(),
                     cap: k.cap,
+                    parts: k.parts.iter().map(|p| Part { label: p.label.clone(), materials: p.materials.iter().map(|m| (m.item.clone(), m.units)).collect() }).collect(),
                 })
                 .collect(),
         }
@@ -388,6 +399,22 @@ pub struct Building {
     pub output: Inventory,
     /// What the output holds before production pauses, for this occupant.
     pub cap: u32,
+    /// While it is a site: the part going in next and its materials.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub site: Option<Site>,
+}
+
+/// A site as the view sees it (`sim::settlement::Stage::Site`).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Site {
+    /// The next part to install, an index into its kind's `parts`, and how
+    /// many parts there are.
+    pub part: usize,
+    pub parts: usize,
+    /// The next part's materials: item id, units landed, units it takes.
+    pub materials: Vec<(String, u32, u32)>,
+    /// Whether they are all there, so the part can be installed.
+    pub ready: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -441,6 +468,9 @@ pub enum Endpoint {
     Cargo(String),
     /// A building's output pile, by building index.
     Output(u16),
+    /// A site's materials, by building index: delivered to where its output
+    /// pile will be.
+    Site(u16),
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -569,6 +599,12 @@ pub enum Event {
     /// Player `agent`'s bundle action was refused; `reason.message()` says
     /// why, for the view to show (M2.2).
     BundleRefused { agent: String, reason: s::avatar::BundleRefusal },
+    /// A blueprint became site `building`.
+    BlueprintPlaced { building: usize },
+    /// A blueprint couldn't go down; `reason.message()` says why.
+    BlueprintRefused { reason: s::PlacementRefusal },
+    /// A part of `building` went in; `built` when it was the last.
+    PartInstalled { building: usize, built: bool },
 }
 
 /// One frame's settlement, interpolated between the last two ticks.
@@ -685,6 +721,7 @@ impl Simulation {
             SimHolder::Agent(a) => Some(Endpoint::Cargo(agent_name(a))),
             SimHolder::Pile(_) | SimHolder::Collector => None,
             SimHolder::Output(b) => Some(Endpoint::Output(b)),
+            SimHolder::Site(b) => Some(Endpoint::Site(b)),
         };
         let inventory = |units: &[u32], capacity: u32| Inventory {
             capacity,
@@ -861,6 +898,9 @@ impl Simulation {
                     s::Event::ThreatWindup { .. } => return None,
                     s::Event::BuildingProduced { building } => Event::BuildingProduced { building: *building as usize },
                     s::Event::BundleRefused { agent, reason } => Event::BundleRefused { agent: agent_name(*agent), reason: *reason },
+                    s::Event::BlueprintPlaced { building } => Event::BlueprintPlaced { building: *building as usize },
+                    s::Event::BlueprintRefused { reason, .. } => Event::BlueprintRefused { reason: *reason },
+                    s::Event::PartInstalled { building, built, .. } => Event::PartInstalled { building: *building as usize, built: *built },
                     s::Event::ThreatSwing { threat, agent, hit, killed, .. } => Event::ThreatSwing {
                         threat: *threat,
                         agent: agent_name(*agent),
@@ -905,6 +945,12 @@ impl Simulation {
                     progress: (b.progress.to_f32() / kind.period.max(1) as f32).clamp(0.0, 1.0),
                     output: inventory(&b.output.counts, cap),
                     cap,
+                    site: b.site().map(|(part, materials)| Site {
+                        part: part as usize,
+                        parts: kind.parts.len(),
+                        materials: kind.parts.get(part as usize).into_iter().flatten().map(|&(i, units)| (item(i), materials.count(i), units)).collect(),
+                        ready: b.ready(kind),
+                    }),
                 }
             })
             .collect();

@@ -2,6 +2,7 @@
 mod actor;
 mod assets;
 mod atmosphere;
+mod canopy;
 mod character;
 mod character_catalog;
 mod combat;

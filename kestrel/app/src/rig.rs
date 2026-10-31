@@ -555,6 +555,16 @@ impl Fade {
                 .set_alpha(opacity.clamp(0., 1.));
         }
     }
+    /// Paints every faded material `color` at `opacity`: a blueprint's
+    /// ghost, one flat color whatever the skin's own.
+    pub fn tint(&self, world: &mut World, color: Color, opacity: f32) {
+        let mut assets = world.resource_mut::<Assets<StandardMaterial>>();
+        for (_, _, handle, _) in &self.materials {
+            let mut material = assets.get_mut(handle).unwrap();
+            material.base_color = color.with_alpha(opacity.clamp(0., 1.));
+            material.emissive = color.to_linear() * 0.4;
+        }
+    }
     pub fn restore(self, world: &mut World) {
         for (e, original, faded, no_shadow) in self.materials {
             world
