@@ -23,6 +23,8 @@
 //! - 8: adds `CommandKind::Drop`, appended likewise, and
 //!   `InteractTarget::Pile`, appended after the older targets; an older log
 //!   that claims either is refused as corrupt.
+//! - 9: adds `InteractTarget::Slot` (boarding a building), appended after
+//!   the older targets; an older log that claims it is refused as corrupt.
 
 use serde::{Deserialize, Serialize};
 use sim::settlement::piles::PileAction;
@@ -30,7 +32,7 @@ use sim::{Command, CommandKind};
 
 use crate::LoadError;
 
-pub const INPUT_FORMAT_VERSION: u32 = 8;
+pub const INPUT_FORMAT_VERSION: u32 = 9;
 /// The oldest input log this build reads.
 pub const OLDEST_INPUT_FORMAT_VERSION: u32 = 1;
 const MAGIC: &[u8; 4] = b"GLOG";
@@ -106,6 +108,9 @@ impl InputLog {
         };
         if found < 8 && log.turns.iter().flatten().any(|c| added_in_8(&c.kind)) {
             return Err(crate::corrupt(format!("a version {found} input log holds a command added in version 8")));
+        }
+        if found < 9 && log.turns.iter().flatten().any(|c| matches!(c.kind, CommandKind::Interact { target: sim::settlement::InteractTarget::Slot(_), .. })) {
+            return Err(crate::corrupt(format!("a version {found} input log holds a command added in version 9")));
         }
         Ok(log)
     }
@@ -196,6 +201,17 @@ mod tests {
         assert_eq!(InputLog::from_bytes(&written.to_bytes()).unwrap(), written);
         let bytes = with_version(written.to_bytes(), 3);
         assert!(matches!(InputLog::from_bytes(&bytes), Err(LoadError::Corrupt(_))));
+    }
+
+    #[test]
+    fn a_version_eight_log_with_a_slot_is_refused() {
+        let slot = log(vec![CommandKind::Interact { agent: 0, target: sim::settlement::InteractTarget::Slot(0) }]);
+        assert_eq!(InputLog::from_bytes(&slot.to_bytes()).unwrap(), slot);
+        let bytes = with_version(slot.to_bytes(), 8);
+        assert!(matches!(InputLog::from_bytes(&bytes), Err(LoadError::Corrupt(_))));
+        // An older target still loads from a version 8 log.
+        let pile = log(vec![CommandKind::Interact { agent: 0, target: sim::settlement::InteractTarget::Pile(3) }]);
+        assert_eq!(InputLog::from_bytes(&with_version(pile.to_bytes(), 8)).unwrap(), pile);
     }
 
     #[test]

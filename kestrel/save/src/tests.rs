@@ -331,3 +331,59 @@ fn a_town_saved_mid_drop_continues() {
         tick += 1;
     }
 }
+
+/// A Sacred Tree saved while the elder possesses the Wood Gatherer, a seat
+/// since format 28 (`AvatarState::seat`), with the sprite it put out
+/// waiting beside it, continues exactly: the elder leaves and the sprite
+/// goes back in as it would have.
+#[test]
+fn a_town_saved_while_possessed_continues() {
+    use fx::{Fx, FxVec2};
+    use sim::settlement::avatar::Intent;
+    use sim::settlement::{Hold, Seat, SpriteJob};
+    use sim::{Command, CommandKind, PlayerId};
+    let content = Content::builtin();
+    let text = include_str!("../../app/assets/levels/sacred_tree_supply.ron");
+    let scenario = content::scenario::Scenario::parse(text).unwrap();
+    // The tree's trunk, as the scene's architecture blocks it.
+    let trunk = [sim::terrain::Disc { center: FxVec2::ZERO, radius: Fx::ONE }];
+    let start = || Simulation::from_world(sim::World::new_settlement(5, &content, &scenario, &trunk).unwrap(), 2);
+    let probe = start();
+    let leave = {
+        let s = probe.world().settlement().unwrap();
+        s.leave_spot(0, s.agents[0].radius(), probe.world().terrain()).unwrap()
+    };
+    let command = |kind| Command { player: PlayerId(0), kind };
+    // Ash staffs the Wood Gatherer; the elder walks up, possesses it,
+    // and leaves later.
+    let turn = |tick: u64| -> Vec<Command> {
+        match tick {
+            0 => vec![
+                command(CommandKind::SetSpriteJob { agent: 1, job: SpriteJob::Staff(0) }),
+                command(CommandKind::MoveAvatar { agent: 0, intent: Intent::GoTo { target: leave, run: false } }),
+            ],
+            900 => vec![command(CommandKind::Board { agent: 0 })],
+            1500 => vec![command(CommandKind::Board { agent: 0 })],
+            _ => vec![],
+        }
+    };
+    let mut uninterrupted = start();
+    let expected: Vec<_> = (0..2400).map(|tick| uninterrupted.step(&turn(tick))).collect();
+    let s = uninterrupted.world().settlement().unwrap();
+    assert_eq!((s.seat(0), s.agents[1].sprite().unwrap().holds), (None, Some(Hold::Inside(0))), "left, and Ash is back in");
+
+    let mut first = start();
+    for tick in 0..1200 {
+        first.step(&turn(tick));
+    }
+    let s = first.world().settlement().unwrap();
+    assert_eq!((s.seat(0), s.agents[1].sprite().unwrap().holds), (Some(Seat::Building(0)), None), "possessed, Ash put out");
+    let bytes = write(first.world(), &content);
+    let mut resumed = Simulation::from_world(read(&bytes, &content).unwrap(), 2);
+    for (tick, expected) in expected.iter().enumerate().skip(1200) {
+        let actual = resumed.step(&turn(tick as u64));
+        if let Some(difference) = expected.first_difference(&actual) {
+            panic!("first difference at {difference}");
+        }
+    }
+}

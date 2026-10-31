@@ -66,7 +66,7 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///     walk) and no `travel_heading`, which moved to `HaulerState`. A
 ///     `PileJob`'s action can be `PileAction::DropMineral`, appended.
 /// 22: the settlement keeps its `vehicles`, and an avatar the vehicle it
-///     drives (`AvatarState::driving`).
+///     drives (`AvatarState::driving`, now `seat`).
 /// 23: the settlement keeps its `building_kinds` and `buildings`, and an
 ///     occupied building's production.
 /// 24: an agent's role can be a sprite (`Role::Sprite`, its job, plan and
@@ -80,7 +80,10 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 /// 27: a town keeps a pile lab (`Settlement::piles`, `PileLab::town`) for
 ///     the bundles dropped on the ground, whose piles hold any item; a 26
 ///     town has none.
-pub const FORMAT_VERSION: u32 = 27;
+/// 28: an avatar's vehicle (`AvatarState::driving`, 22) is a seat
+///     (`AvatarState::seat`): a vehicle it drives or a building it
+///     possesses (`Seat`).
+pub const FORMAT_VERSION: u32 = 28;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 
