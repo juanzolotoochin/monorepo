@@ -436,6 +436,25 @@ fn player_can_divert_real_supply_chain_stock_while_workers_continue() {
         .all(|b| b["conserved"] == true));
 }
 
+/// A sprite's job names a sprite: a hauler isn't one. (The scenes with
+/// sprites aren't in the app yet; the sim's tests set jobs there.)
+#[test]
+fn a_sprite_job_needs_a_sprite() {
+    for sprite in ["nobody", "bramble"] {
+        let report = run(vec![
+            Command::Scene {
+                scene: "forest-outpost".into(),
+            },
+            Command::SettlementSpriteJob {
+                sprite: sprite.into(),
+                job: Some("wood_gatherer".into()),
+            },
+        ]);
+        assert_eq!(report["status"], "failed", "{report}");
+        assert!(report["error"].as_str().unwrap().contains("unknown sprite"), "{report}");
+    }
+}
+
 #[test]
 fn player_stands_on_baked_raised_roads_and_steps_back_to_the_ground() {
     let report = run(vec![

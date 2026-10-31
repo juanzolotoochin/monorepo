@@ -332,6 +332,19 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             send(world, CommandKind::SetLink { link, enabled: *enabled });
             Ok(Pending::Instant)
         }
+        Command::SettlementSpriteJob { sprite, job } => {
+            let s = settlement(world)?;
+            let agent = s.agent_index(sprite).filter(|&a| s.agents[a as usize].sprite().is_some()).ok_or("unknown sprite")?;
+            let job = match job {
+                Some(kind) => {
+                    let kind = s.building_kinds.iter().position(|k| k.id == *kind).ok_or("unknown building kind")?;
+                    sim::settlement::SpriteJob::Staff(kind as u16)
+                }
+                None => sim::settlement::SpriteJob::Idle,
+            };
+            send(world, CommandKind::SetSpriteJob { agent, job });
+            Ok(Pending::Instant)
+        }
         Command::SettlementMachine { id, enabled } => {
             let producer = settlement(world)?.producer_index(id).ok_or("unknown producer")?;
             send(world, CommandKind::SetMachine { producer, enabled: *enabled });

@@ -732,8 +732,9 @@ production, cart attachment, defense, and material conservation.
 The existing JSON/TCP interface also exposes `settlement_transfer` (`depot`,
 `item`, `units`, `deposit`), `settlement_cancel`, `settlement_pause` (`paused`),
 `settlement_rate` (`rate`, 0.25–4), `settlement_link`, `settlement_machine`, and
-`settlement_defender` (each `id`, `enabled`), and `settlement_stock` (`depot`,
-`item`, `units`). Transfers walk the player to the dock and wait for the precise
+`settlement_defender` (each `id`, `enabled`), `settlement_stock` (`depot`,
+`item`, `units`), and `settlement_sprite_job` (`sprite`, and `job`: a building
+kind's id, or none for idle). Transfers walk the player to the dock and wait for the precise
 quantity to arrive. `assert_settlement` checks minimum `delivered`, `cycles`,
 `equipped`, and `kills` counts plus all accounting invariants. `inspect` includes
 full `settlement.simulation`, scenario data, and per-material `balances`.

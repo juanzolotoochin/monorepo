@@ -40,6 +40,13 @@ pub enum Command {
         item: String,
         units: u32,
     },
+    /// Gives a sprite (by id) a job: a building kind (by id) to staff, or
+    /// idle when `job` is missing or null.
+    SettlementSpriteJob {
+        sprite: String,
+        #[serde(default)]
+        job: Option<String>,
+    },
     AssertSettlement {
         delivered: u64,
         cycles: u64,
