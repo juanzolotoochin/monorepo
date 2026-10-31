@@ -229,6 +229,8 @@ pickup and boarding never compete for one target.
 - Branch off `master` (not a feature branch), one PR per milestone.
 - Other scenes behave the same: the new state is empty for every existing
   scene, and the golden file's behaviour lines don't change. State hashes
-  may move when characters are added, since characters are numbered by
-  name (agreed 2026-10-30, after M1.1).
+  may move whenever the settlement gains state (new characters shift
+  indices, since characters are numbered by name; a new field adds bytes
+  even when empty). Regenerate the golden in a commit of its own and say
+  why (agreed 2026-10-30).
 - Commands are appended, never reordered.
