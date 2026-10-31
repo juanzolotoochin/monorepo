@@ -4,24 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M1.3 Sprites, jobs and slot claims
-
-- **Status:** open
-- **Why:** sprites staff buildings on their own and replan when a step
-  breaks (D2, A2).
-- **What to do:** `Role::Sprite`, the plan builder and replan, `Claim` in
-  stage 3 granted in stage 5, `SetSpriteJob` and its control verb. Make
-  sprite agents from the scenario's `sprites` list (M1.1), after its
-  `agents`, and reject a sprite whose character hasn't the `Sprite` brain;
-  `Settlement::from_scenario` ignores the list until then.
-- **Where:** `kestrel/sim/src/settlement/agent.rs`, new `sprites.rs`,
-  `world.rs`, `kestrel/app/src/control/`.
-- **From M1.2:** `Slot::Claimed` and `Slot::Occupied(Occupant::Sprite)`
-  exist, but nothing sets them; `validate_buildings` only checks the slot
-  names an agent, so tighten it to a sprite (and an elder to an avatar)
-  once the roles exist.
-- **Found in:** Sacred Tree handoff.
-
 ## M1.4 Drawing buildings, sprites and outputs
 
 - **Status:** open
@@ -34,6 +16,12 @@ its milestones, in order; one PR per milestone.
   the `sacred_tree` scene pack to the app's scenes and launch menu
   (`app/BUILD.bazel`, `app/src/assets.rs`).
 - **Where:** `kestrel/view/`, `kestrel/app/`.
+- **From M1.3:** `app/src/legacy.rs` shows a sprite as an idle hauler with
+  no cargo. Show its job (`SpriteState::job`) and step (`current()`:
+  `Step::Wait` is waiting, `Enter` with `holds` `Inside` is working). Inside,
+  it stands at `BuildingState::slot_position`. The control verb
+  `settlement_sprite_job` exists; once the scene is in the app, give it a
+  script test that sets a job and waits for wood.
 - **Found in:** Sacred Tree handoff.
 
 ## M2.1 Bundles at piles and the tree
@@ -69,6 +57,12 @@ its milestones, in order; one PR per milestone.
   (footprint, docks, extent, output pile clear) for a placement, as one
   function. An output pile is not an obstacle, so a placement must also
   keep off the existing buildings' output piles.
+- **From M1.3:** `prebuilt` also checks each slot spot
+  (`BuildingState::slot_position`) is clear; a placement must keep it clear
+  and off the other buildings' slot spots too. Nothing checks a slot spot is
+  reachable: a sprite that claims a building it can't walk to holds the
+  claim and asks for a route every `RETRY_TICKS`. Check reachability from
+  the tree when placing, or let a sprite give up a claim it can't reach.
 - **Found in:** Sacred Tree handoff.
 
 ## M2.4 Dropping bundles on ground piles
@@ -91,6 +85,16 @@ its milestones, in order; one PR per milestone.
   ejection beside the building, the raised cap and the multiplier.
 - **Where:** `kestrel/sim/src/settlement/vehicle.rs`, `avatar.rs`,
   `buildings.rs`.
+- **From M1.3:** eject in the boarding handler with
+  `Settlement::release_slot(sprite)` (it clears the sprite's `holds` and
+  empties the slot), then set the slot to `Occupant::Elder`; the sprite's
+  brain finds its claim or seat gone on its next step and replans. A sprite
+  on its way in (`Slot::Claimed`) loses its claim the same way. Move the
+  ejected sprite off the slot spot, or the elder's own leaving spot and the
+  sprite's spot may coincide: a walker whose goal sits under another body
+  holds back (`haulers::move_worker`). `validate_buildings` already wants an
+  elder's slot to name an avatar; `players::leave` empties a leaving
+  player's elder slot and `remap_agents` shifts slot agents.
 - **Found in:** Sacred Tree handoff.
 
 ## M3.2 Burst
@@ -112,6 +116,9 @@ its milestones, in order; one PR per milestone.
   stability soak and the bootstrapping test (handoff, "Tests"); fix what
   they find, then tune rates.
 - **Where:** `kestrel/sim/src/settlement/` tests, `kestrel/headless/`.
+- **From M1.3:** `sprites_tests::no_sprite_keeps_waiting_while_a_matching_slot_is_free`
+  already reassigns sprites over two gatherers for 90 s; the soak can grow
+  from it with possession and building.
 - **Found in:** Sacred Tree handoff.
 
 ## Art for the Sacred Tree
@@ -144,6 +151,33 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M1.1.
 
 ## Done
+
+### M1.3 Sprites, jobs and slot claims
+
+- **Status:** done (branch `kestrel-sacred-tree`)
+- **Why:** sprites staff buildings on their own and replan when a step
+  breaks (D2, A2).
+- **What to do:** `Role::Sprite`, the plan builder and replan, `Claim` in
+  stage 3 granted in stage 5, `SetSpriteJob` and its control verb. Make
+  sprite agents from the scenario's `sprites` list (M1.1), after its
+  `agents`, and reject a sprite whose character hasn't the `Sprite` brain.
+- **Where:** `kestrel/sim/src/settlement/agent.rs`, new `sprites.rs`,
+  `world.rs`, `kestrel/app/src/control/`.
+- **Found in:** Sacred Tree handoff.
+- **Done:** `sprites.rs` holds `SpriteState` (job, plan, step, the slot it
+  `holds`, a retry tick and its steering) and `plan`: idle goes home; a
+  staffing job claims the nearest free built building of its kind, walks to
+  its slot spot (a quarter turn from the output pile) and steps in, or
+  waits and plans again after `RETRY_TICKS`. Stage 2 runs the brain and the
+  walk (the hauler's `move_worker`, now generic over a `Walker` trait);
+  stage 3 sends `ClaimSlot` and `EnterSlot`; stage 5 grants claims (lowest
+  agent index wins) and entries, writing the slot and `holds` together. A
+  broken step (a refused claim, a lost hold, a new job) drops the plan;
+  `Settlement::release_slot` is the one way a sprite loses a slot. Inside,
+  a sprite leaves the steering footprints. `SetSpriteJob` and the
+  `settlement_sprite_job` control verb; `validate_buildings` checks slots
+  and holds both ways. Save format 24, input logs 4, net protocol 6. The
+  golden file didn't change.
 
 ### M1.2 The buildings table and production
 
