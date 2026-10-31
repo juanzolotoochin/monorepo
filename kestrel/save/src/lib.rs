@@ -83,7 +83,9 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 /// 28: an avatar's vehicle (`AvatarState::driving`, 22) is a seat
 ///     (`AvatarState::seat`): a vehicle it drives or a building it
 ///     possesses (`Seat`).
-pub const FORMAT_VERSION: u32 = 28;
+/// 29: an avatar keeps the tick its next Burst is ready on
+///     (`AvatarState::burst_ready`).
+pub const FORMAT_VERSION: u32 = 29;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

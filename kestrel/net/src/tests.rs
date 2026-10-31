@@ -853,9 +853,23 @@ fn a_slot_needs_protocol_eleven() {
     let slot = sim::CommandKind::Interact { agent: 0, target: sim::settlement::InteractTarget::Slot(1) };
     let packet = Packet::Inputs { epoch: 1, world: 1, turn_ack: 0, inputs: vec![Input { seq: 1, tick: 4, kind: slot }], hashes: vec![], ping: 0 };
     let mut bytes = encode(&packet);
-    assert_eq!(PROTOCOL_VERSION, 11);
+    assert!(PROTOCOL_VERSION >= 11);
     assert_eq!(decode(&bytes), Some(packet));
     bytes[4..6].copy_from_slice(&10u16.to_le_bytes());
+    assert_eq!(decode(&bytes), None);
+}
+
+/// A Burst is new in protocol 12: it round-trips, and a peer speaking 11
+/// is ignored rather than misread.
+#[test]
+fn a_burst_needs_protocol_twelve() {
+    use crate::protocol::{decode, encode, Input, Packet, PROTOCOL_VERSION};
+    let burst = sim::CommandKind::Burst { agent: 0 };
+    let packet = Packet::Inputs { epoch: 1, world: 1, turn_ack: 0, inputs: vec![Input { seq: 1, tick: 4, kind: burst }], hashes: vec![], ping: 0 };
+    let mut bytes = encode(&packet);
+    assert_eq!(PROTOCOL_VERSION, 12);
+    assert_eq!(decode(&bytes), Some(packet));
+    bytes[4..6].copy_from_slice(&11u16.to_le_bytes());
     assert_eq!(decode(&bytes), None);
 }
 

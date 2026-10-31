@@ -25,6 +25,8 @@
 //!   that claims either is refused as corrupt.
 //! - 9: adds `InteractTarget::Slot` (boarding a building), appended after
 //!   the older targets; an older log that claims it is refused as corrupt.
+//! - 10: adds `CommandKind::Burst`, appended after every older command; an
+//!   older log that claims it is refused as corrupt.
 
 use serde::{Deserialize, Serialize};
 use sim::settlement::piles::PileAction;
@@ -32,7 +34,7 @@ use sim::{Command, CommandKind};
 
 use crate::LoadError;
 
-pub const INPUT_FORMAT_VERSION: u32 = 9;
+pub const INPUT_FORMAT_VERSION: u32 = 10;
 /// The oldest input log this build reads.
 pub const OLDEST_INPUT_FORMAT_VERSION: u32 = 1;
 const MAGIC: &[u8; 4] = b"GLOG";
@@ -111,6 +113,9 @@ impl InputLog {
         }
         if found < 9 && log.turns.iter().flatten().any(|c| matches!(c.kind, CommandKind::Interact { target: sim::settlement::InteractTarget::Slot(_), .. })) {
             return Err(crate::corrupt(format!("a version {found} input log holds a command added in version 9")));
+        }
+        if found < 10 && log.turns.iter().flatten().any(|c| matches!(c.kind, CommandKind::Burst { .. })) {
+            return Err(crate::corrupt(format!("a version {found} input log holds a command added in version 10")));
         }
         Ok(log)
     }
@@ -201,6 +206,17 @@ mod tests {
         assert_eq!(InputLog::from_bytes(&written.to_bytes()).unwrap(), written);
         let bytes = with_version(written.to_bytes(), 3);
         assert!(matches!(InputLog::from_bytes(&bytes), Err(LoadError::Corrupt(_))));
+    }
+
+    #[test]
+    fn a_version_nine_log_with_a_burst_is_refused() {
+        let burst = log(vec![CommandKind::Burst { agent: 0 }]);
+        assert_eq!(InputLog::from_bytes(&burst.to_bytes()).unwrap(), burst);
+        let bytes = with_version(burst.to_bytes(), 9);
+        assert!(matches!(InputLog::from_bytes(&bytes), Err(LoadError::Corrupt(_))));
+        // An older command still loads from a version 9 log.
+        let slot = log(vec![CommandKind::Interact { agent: 0, target: sim::settlement::InteractTarget::Slot(0) }]);
+        assert_eq!(InputLog::from_bytes(&with_version(slot.to_bytes(), 9)).unwrap(), slot);
     }
 
     #[test]

@@ -24,7 +24,8 @@ const MAGIC: &[u8; 4] = b"LSTP";
 ///     cannot decode them.
 /// 11: adds `InteractTarget::Slot` (boarding a building); peers on 10
 ///     cannot decode it.
-pub const PROTOCOL_VERSION: u16 = 11;
+/// 12: adds `CommandKind::Burst`; peers on 11 cannot decode it.
+pub const PROTOCOL_VERSION: u16 = 12;
 /// Stay under typical path MTUs (and Steam's unreliable message limit).
 pub const MAX_PACKET: usize = 1200;
 pub const SAVE_CHUNK: usize = 1000;

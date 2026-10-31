@@ -387,3 +387,62 @@ fn a_town_saved_while_possessed_continues() {
         }
     }
 }
+
+/// A Sacred Tree saved while the elder's Burst cools down, its ready tick
+/// kept since format 29 (`AvatarState::burst_ready`), continues exactly:
+/// boarding again, a Burst before the cooldown ends is refused and one
+/// after it works, as they would have.
+#[test]
+fn a_town_saved_while_a_burst_cools_down_continues() {
+    use fx::{Fx, FxVec2};
+    use sim::settlement::avatar::Intent;
+    use sim::settlement::Seat;
+    use sim::{Command, CommandKind, PlayerId};
+    let content = Content::builtin();
+    let text = include_str!("../../app/assets/levels/sacred_tree_supply.ron");
+    let scenario = content::scenario::Scenario::parse(text).unwrap();
+    // The tree's trunk, as the scene's architecture blocks it.
+    let trunk = [sim::terrain::Disc { center: FxVec2::ZERO, radius: Fx::ONE }];
+    let start = || Simulation::from_world(sim::World::new_settlement(5, &content, &scenario, &trunk).unwrap(), 2);
+    let probe = start();
+    let leave = {
+        let s = probe.world().settlement().unwrap();
+        s.leave_spot(0, s.agents[0].radius(), probe.world().terrain()).unwrap()
+    };
+    let cooldown = probe.world().settlement().unwrap().building_kind(0).burst_cooldown;
+    let command = |kind| Command { player: PlayerId(0), kind };
+    let (board, burst) = (CommandKind::Board { agent: 0 }, CommandKind::Burst { agent: 0 });
+    // The elder walks up, possesses the Wood Gatherer, bursts and leaves;
+    // back in, it bursts too early and then once the cooldown is over.
+    let first_burst = 960;
+    let turn = |tick: u64| -> Vec<Command> {
+        match tick {
+            0 => vec![command(CommandKind::MoveAvatar { agent: 0, intent: Intent::GoTo { target: leave, run: false } })],
+            900 | 1200 | 2400 => vec![command(board.clone())],
+            960 | 2500 => vec![command(burst.clone())],
+            t if t == first_burst + cooldown + 10 => vec![command(burst.clone())],
+            _ => vec![],
+        }
+    };
+    let total = first_burst + cooldown + 60;
+    let mut uninterrupted = start();
+    let expected: Vec<_> = (0..total).map(|tick| uninterrupted.step(&turn(tick))).collect();
+    let s = uninterrupted.world().settlement().unwrap();
+    assert_eq!(s.agents[0].avatar().unwrap().burst_ready, first_burst + 2 * cooldown + 10, "the second Burst went off");
+
+    let mut first = start();
+    for tick in 0..1500 {
+        first.step(&turn(tick));
+    }
+    let s = first.world().settlement().unwrap();
+    assert_eq!((s.seat(0), s.agents[0].avatar().unwrap().burst_ready), (None, first_burst + cooldown), "left, cooling down");
+    let bytes = write(first.world(), &content);
+    let mut resumed = Simulation::from_world(read(&bytes, &content).unwrap(), 2);
+    for (tick, expected) in expected.iter().enumerate().skip(1500) {
+        let actual = resumed.step(&turn(tick as u64));
+        if let Some(difference) = expected.first_difference(&actual) {
+            panic!("first difference at {difference}");
+        }
+    }
+    assert_eq!(resumed.world().settlement().unwrap().seat(0), Some(Seat::Building(0)));
+}
