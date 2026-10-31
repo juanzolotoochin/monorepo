@@ -96,6 +96,17 @@ pub enum Command {
     },
     /// Backs out of placing a blueprint, as Escape does.
     SettlementCancelBuild,
+    /// Possesses building `building` (its index), as interacting with its
+    /// slot or the boarding key does: walks the elder beside it first when
+    /// it is out of reach, then boards, putting out a sprite inside. Fails
+    /// with the sim's reason ("Drop the bundle first (Q)"); done once the
+    /// elder sits in it (`settlement.seat`).
+    SettlementBoard {
+        building: u16,
+    },
+    /// Leaves the building the elder possesses, as interacting or the
+    /// boarding key does; done once it stands beside it.
+    SettlementLeave,
     /// Drops the bundle on the ground at the player's feet, as Q or B does:
     /// onto a pile of its item there, or a new one. Fails with the sim's
     /// reason, such as "Nothing carried"; done once every unit has landed.

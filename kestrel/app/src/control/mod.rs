@@ -142,6 +142,9 @@ enum Pending {
     Scene(usize),
     Wait(u64),
     Strike,
+    /// Waits until the player sits in `building`, or in none. `sent` is
+    /// false while it walks there first: the boarding goes out on arrival.
+    Seat { building: Option<u16>, sent: std::sync::atomic::AtomicBool },
     Failed(String),
 }
 struct Active {
@@ -329,7 +332,7 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             match crate::input::town::interact(world)? {
                 crate::input::town::Used::Bundle { expected } => Ok(Pending::SettlementTransfer { scene: shown(world).unwrap_or(usize::MAX), expected }),
                 crate::input::town::Used::Menu => Ok(Pending::Instant),
-                crate::input::town::Used::Install | crate::input::town::Used::Placed => Ok(Pending::Applied),
+                crate::input::town::Used::Install | crate::input::town::Used::Placed | crate::input::town::Used::Seat => Ok(Pending::Applied),
             }
         }
         Command::SettlementBuild { kind } => {
@@ -367,6 +370,45 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             settlement(world)?;
             let dropped = crate::input::town::drop_bundle(world)?;
             Ok(Pending::SettlementTransfer { scene: shown(world).unwrap_or(usize::MAX), expected: dropped.expected })
+        }
+        Command::SettlementBoard { building } => {
+            let (s, sim_world) = {
+                let service = world.resource::<SessionService>();
+                (service.settlement().ok_or("No settlement loaded")?, service.world().ok_or("No settlement loaded")?)
+            };
+            let agent = player(world).ok_or("No controlled actor")?;
+            let b = s.buildings.get(*building as usize).ok_or("unknown building")?;
+            if !b.built() {
+                return Err("Not built yet".into());
+            }
+            let a = &s.agents[agent as usize];
+            if s.seat(agent as usize).is_some() {
+                return Err("Already seated".into());
+            }
+            if let Some(reason) = sim::settlement::interact::board_refusal(&a.carry, b.slot, agent) {
+                return Err(reason.message().into());
+            }
+            let spot = b.slot_position(s.building_kind(*building));
+            let walk = if a.body.position.distance(spot) > sim::settlement::interact::INTERACT_REACH {
+                let stand = s.leave_spot(*building, a.radius(), sim_world.terrain()).ok_or("No room beside the building")?;
+                Some(world.resource::<SessionService>().to_view(stand))
+            } else {
+                None
+            };
+            match walk {
+                Some(stand) => world.resource_scope(|world, mut control: Mut<PlayerControl>| {
+                    control.go_to(&mut world.resource_mut::<SessionService>(), stand, false);
+                }),
+                None => send(world, CommandKind::Interact { agent, target: sim::settlement::InteractTarget::Slot(*building) }),
+            }
+            Ok(Pending::Seat { building: Some(*building), sent: std::sync::atomic::AtomicBool::new(walk.is_none()) })
+        }
+        Command::SettlementLeave => {
+            let s = settlement(world)?;
+            let agent = player(world).ok_or("No controlled actor")?;
+            let Some(building) = s.seat(agent as usize).and_then(|seat| seat.building()) else { return Err("Not in a building".into()) };
+            send(world, CommandKind::Interact { agent, target: sim::settlement::InteractTarget::Slot(building) });
+            Ok(Pending::Seat { building: None, sent: std::sync::atomic::AtomicBool::new(true) })
         }
         Command::SettlementCancelBuild => {
             settlement(world)?;
@@ -680,6 +722,40 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
             }
         }
         Pending::Failed(e) => Some(Err(e.clone())),
+        Pending::Seat { building, sent } => {
+            if !applied {
+                return None;
+            }
+            let service = world.get_resource::<SessionService>()?;
+            let (s, agent) = (service.settlement()?, service.player()?);
+            let seat = s.seat(agent as usize).and_then(|seat| seat.building());
+            if seat == *building {
+                return Some(Ok(()));
+            }
+            // The sim's refusal, as the view shows it.
+            let refused = s.events.iter().find_map(|e| match *e {
+                sim::settlement::Event::BundleRefused { agent: a, reason } if a == agent => Some(reason.message().to_string()),
+                _ => None,
+            });
+            if let Some(reason) = refused {
+                return Some(Err(reason));
+            }
+            if sent.load(std::sync::atomic::Ordering::Relaxed) {
+                return Some(Err(if building.is_some() { "The elder didn't board".into() } else { "The elder couldn't leave".into() }));
+            }
+            let a = &s.agents[agent as usize];
+            if !a.body.route.is_empty() {
+                return None;
+            }
+            let b = building.expect("only boarding walks");
+            let spot = s.buildings[b as usize].slot_position(s.building_kind(b));
+            if a.body.position.distance(spot) > sim::settlement::interact::INTERACT_REACH {
+                return Some(Err("Couldn't walk to the building".into()));
+            }
+            sent.store(true, std::sync::atomic::Ordering::Relaxed);
+            send(world, CommandKind::Interact { agent, target: sim::settlement::InteractTarget::Slot(b) });
+            None
+        }
         Pending::Wait(until) => (tick >= *until).then_some(Ok(())),
         Pending::Scene(index) => (shown(world) == Some(*index) && applied_scene(world, *index)).then_some(Ok(())),
         Pending::Strike => (applied && world.resource::<Controls>().attack.is_none()).then_some(Ok(())),

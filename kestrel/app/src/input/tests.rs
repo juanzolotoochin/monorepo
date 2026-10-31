@@ -1337,3 +1337,48 @@ fn history_keeps_recent_frames_with_their_suspensions() {
     let last = rig.input.history().last().unwrap();
     assert_eq!((last.suspended, last.seat, last.owner), (Some(Suspend::Disconnected), None, Device::KeyboardMouse));
 }
+
+/// In a town, E on a building's slot possesses it and E again leaves, and
+/// G does both too (D3); in the dig lab G still climbs into the rover and
+/// out, as it always did.
+#[test]
+fn e_and_g_possess_a_building_in_a_town_and_g_still_drives_elsewhere() {
+    let mut game = Game::new("sacred-tree", 60.0);
+    game.frames(5);
+    let stand = {
+        let service = game.service();
+        let (s, world) = (service.settlement().unwrap(), service.world().unwrap());
+        let agent = service.player().unwrap();
+        service.to_view(s.leave_spot(0, s.agents[agent as usize].radius(), world.terrain()).unwrap())
+    };
+    game.walk_to(stand);
+    let seat = |game: &Game| game.avatar().avatar().unwrap().seat;
+    let press = |game: &mut Game, key: KeyCode| {
+        game.app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+        game.frames(1);
+        game.app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(key);
+        game.frames(10);
+    };
+    press(&mut game, KeyCode::KeyE);
+    assert_eq!(seat(&game), Some(sim::settlement::Seat::Building(0)), "E possessed the Wood Gatherer");
+    assert_eq!(game.count(|c| matches!(c, CommandKind::Interact { target: sim::settlement::InteractTarget::Slot(0), .. })), 1);
+    press(&mut game, KeyCode::KeyE);
+    assert_eq!(seat(&game), None, "E left it");
+    press(&mut game, KeyCode::KeyG);
+    assert_eq!(seat(&game), Some(sim::settlement::Seat::Building(0)), "G possessed it");
+    press(&mut game, KeyCode::KeyG);
+    assert_eq!(seat(&game), None, "G left it");
+    assert_eq!(game.count(|c| matches!(c, CommandKind::Board { .. })), 2);
+
+    let mut game = Game::new("dig-lab", 60.0);
+    game.frames(5);
+    let rover = {
+        let s = game.service().settlement().unwrap();
+        game.service().to_view(s.vehicles[0].position)
+    };
+    game.walk_to(rover + Vec3::new(1.6, 0.0, 0.0));
+    press(&mut game, KeyCode::KeyG);
+    assert_eq!(seat(&game), Some(sim::settlement::Seat::Vehicle(0)), "G climbed into the rover");
+    press(&mut game, KeyCode::KeyG);
+    assert_eq!(seat(&game), None, "and out");
+}

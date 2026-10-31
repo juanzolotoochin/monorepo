@@ -152,7 +152,7 @@ pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack, studio: bool) {
         } else if jumping {
             "WASD MOVE / SHIFT RUN / SPACE JUMP / LMB ATTACK"
         } else if town {
-            "WASD MOVE / SHIFT RUN / E INTERACT / B BUILD / Q DROP"
+            "WASD MOVE / SHIFT RUN / E INTERACT / B BUILD / Q DROP / G POSSESS"
         } else if settlement && !available_weapons.is_empty() {
             "WASD MOVE / SHIFT RUN / LMB STOCK OR ATTACK / CTRL+LMB DEPOSIT / E MACHINE"
         } else if !available_weapons.is_empty() {

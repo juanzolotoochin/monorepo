@@ -897,3 +897,58 @@ mod debug_ui_capture {
         panic!("script failed to finish");
     }
 }
+
+/// Possessing, as a script (D3, A3): a sprite works the Wood Gatherer; the
+/// elder walks up and boards it, which puts the sprite out beside it; the
+/// gatherer works four times as fast while possessed; the elder leaves and
+/// the sprite goes back in with no new job. Boarding with a bundle in hand
+/// fails with the sim's reason.
+#[test]
+fn the_elder_possesses_the_wood_gatherer_and_its_sprite_goes_back_in() {
+    let wood = |state: &Value| state["settlement"]["simulation"]["buildings"][0]["output"]["items"]["wood"].as_u64().unwrap_or(0);
+    let report = run(vec![
+        Command::Scene {
+            scene: "sacred-tree".into(),
+        },
+        Command::SettlementSpriteJob {
+            sprite: "sprite_ash".into(),
+            job: Some("wood_gatherer".into()),
+        },
+        Command::Wait { frames: 420 },
+        Command::SettlementBoard { building: 0 },
+        Command::Wait { frames: 2 },
+        Command::Inspect,
+        Command::Wait { frames: 300 },
+        Command::Inspect,
+        Command::SettlementLeave,
+        Command::Wait { frames: 150 },
+        Command::Inspect,
+    ]);
+    assert_eq!(report["status"], "passed", "{report}");
+    let receipts = report["receipts"].as_array().unwrap();
+    let possessed = &receipts[5]["state"];
+    let settlement = &possessed["settlement"];
+    assert_eq!(settlement["seat"], json!({"building": 0}), "{settlement}");
+    let building = &settlement["simulation"]["buildings"][0];
+    assert_eq!(building["occupant"], json!({"elder": "elder"}), "{building}");
+    let ash = &settlement["simulation"]["sprites"]["sprite_ash"];
+    assert_eq!((ash["job"].as_str(), ash["activity"].as_str()), (Some("wood_gatherer"), Some("waiting")), "{ash}");
+    // Ten seconds possessed: a unit every 1.25 s, against one per 5 s.
+    let made = wood(&receipts[7]["state"]) - wood(possessed);
+    assert!((7..=9).contains(&made), "{made} units in 10 s");
+    let last = &receipts[10]["state"]["settlement"];
+    assert_eq!(last["seat"], Value::Null);
+    assert_eq!(last["simulation"]["buildings"][0]["occupant"], json!({"sprite": "sprite_ash"}), "{last}");
+    assert_eq!(last["simulation"]["sprites"]["sprite_ash"]["activity"], "working");
+    assert!(last["balances"].as_object().unwrap().values().all(|b| b["conserved"] == true));
+
+    let report = run(vec![
+        Command::Scene { scene: "sacred-tree".into() },
+        Command::SettlementStock { depot: "tree_wood".into(), item: "wood".into(), units: 5 },
+        Command::Walk { position: [-1.7, 2.4] },
+        Command::SettlementInteract,
+        Command::SettlementBoard { building: 0 },
+    ]);
+    assert_eq!(report["status"], "failed", "{report}");
+    assert!(report["error"].as_str().unwrap().contains("Drop the bundle first (Q)"), "{report}");
+}

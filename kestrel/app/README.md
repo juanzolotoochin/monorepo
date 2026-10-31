@@ -756,7 +756,13 @@ the sim's reason. `settlement_cancel_build` backs out. `settlement_drop`
 drops the bundle at the player's feet as Q does, onto a pile of its item
 there or a new one, and waits for the units to land; a refusal fails the
 step with its reason, such as `"Nothing carried"`. Interact picks a ground
-pile up as it does an output. `settlement.simulation.ground_piles` lists
+pile up as it does an output. `settlement_board` (`building`, its index)
+possesses a built building as interacting with its slot or G does, walking
+the elder beside it first when it is out of reach; a sprite inside is put
+out, and a refusal fails the step with its reason, such as `"Drop the
+bundle first (Q)"`. `settlement_leave` leaves it. `settlement.seat` is the
+player's seat: `{"building": 0}`, `{"vehicle": 0}` or null.
+`settlement.simulation.ground_piles` lists
 the dropped piles (`id`, `position`, `stock`). Each building in
 `settlement.simulation.buildings` has, while it is a site, a `site` with its
 next `part`, its `parts`, its `materials` (item, landed, needed) and whether
@@ -815,6 +821,17 @@ up as it does an output ("PICK UP 3 WOOD"); an emptied pile goes. A drop
 that can't go down says why over the elder ("Nothing carried", "No room to
 drop it here", "Too many piles: pick one up first").
 
+G (the left stick on a controller) possesses the nearest built building in
+reach, or leaves it; empty-handed, interact does too, on its slot spot
+("E  POSSESS", then "E  LEAVE" while inside). A sprite working there is put
+out beside the building and plans again: another free building of its kind,
+or a wait until the elder leaves, when it goes back in. Possessed, the
+building's lamp turns violet, its card says "POSSESSED", the elder's body is
+hidden and the building works four times as fast, up to a higher cap.
+Moving and dropping do nothing while inside. Boarding with a bundle is
+refused: "Drop the bundle first (Q)". A sprite working inside is reached
+at the slot spot too, so E there opens its job menu, and G possesses.
+
 ```sh
 bazel build //kestrel/app:sacred_tree_demo
 ```
@@ -829,6 +846,7 @@ green east of it, put down; wood from the tree delivered and the foundation
 installed, leaving the site half built; and a walk behind the tree, whose
 canopy fades. Last, the elder drops the wood it still carries on the ground
 east of the tree, and the pile is ringed with "E  PICK UP 2 WOOD".
+Finally it possesses the Wood Gatherer, putting its sprite out beside it.
 
 ## Red Clearing combat arena
 

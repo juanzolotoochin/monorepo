@@ -970,6 +970,7 @@ pub fn tick(world: &mut World) {
         desired.insert(format!("threat/{}", p.target), v);
     }
     let glows = town(world, &mut state, sim, &mut desired);
+    hide_possessing(world);
     town_interact(world, &mut state, sim, pos);
     if !sim.config().building_kinds.is_empty() {
         town_ghost(world, &mut state, sim);
@@ -1494,6 +1495,44 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
 /// target ("E  PICK UP 3 WOOD"), a refusal over the elder's head for a
 /// moment, and the job menu's options in a ring around its sprite, the
 /// focused one lit. The target's ring is the HUD's (`input::hud`).
+/// An elder possessing a building (D3) is the building now: its lamp turns
+/// violet and its card says "POSSESSED" (`town`), so its own rig, the local
+/// player's or a peer's, is hidden until it leaves (`Possessing` marks the
+/// ones hidden here). The camera keeps following the hidden body, which
+/// stands at the building's slot spot.
+fn hide_possessing(world: &mut World) {
+    let (possessing, me) = {
+        let Some(service) = world.get_resource::<crate::lockstep::SessionService>() else { return };
+        let Some(s) = service.settlement() else { return };
+        let possessing: Vec<u16> = (0..s.agents.len()).filter(|&a| s.seat(a).is_some_and(|seat| seat.building().is_some())).map(|a| a as u16).collect();
+        (possessing, service.player())
+    };
+    let mut bodies = world.query_filtered::<(Entity, &mut Visibility, Option<&crate::peers::Peer>, Has<Possessing>), Or<(With<crate::character::Player>, With<crate::peers::Peer>)>>();
+    let mut changes = Vec::new();
+    for (entity, mut visibility, peer, marked) in bodies.iter_mut(world) {
+        let agent = peer.map_or(me, |p| Some(p.agent()));
+        let hidden = agent.is_some_and(|a| possessing.contains(&a));
+        if hidden && !marked {
+            *visibility = Visibility::Hidden;
+            changes.push((entity, true));
+        } else if !hidden && marked {
+            *visibility = Visibility::Inherited;
+            changes.push((entity, false));
+        }
+    }
+    for (entity, hide) in changes {
+        if hide {
+            world.entity_mut(entity).insert(Possessing);
+        } else {
+            world.entity_mut(entity).remove::<Possessing>();
+        }
+    }
+}
+
+/// A player's body hidden while it possesses a building (`hide_possessing`).
+#[derive(Component)]
+struct Possessing;
+
 fn town_interact(world: &mut World, state: &mut Settlement, sim: &Simulation, player: Vec3) {
     use crate::input::{gameplay::Dispatcher, InputService, Panel};
     let ground = |world: &World, p: Vec3| crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, p).unwrap_or(0.);
@@ -1651,6 +1690,15 @@ pub fn snapshot(world: &World) -> serde_json::Value {
             let canopy = world.get_resource::<Settlement>().and_then(|state| state.canopy.as_ref()).map_or(1.0, crate::canopy::Canopy::opacity);
             out["canopy_opacity"] = canopy.into();
         }
+        // The local player's seat: a vehicle it drives or a building it
+        // possesses, by index, or null.
+        let service = world.get_resource::<crate::lockstep::SessionService>();
+        let seat = service.and_then(|service| service.settlement()?.seat(service.player()? as usize));
+        out["seat"] = match seat {
+            Some(sim::settlement::Seat::Vehicle(v)) => serde_json::json!({"vehicle": v}),
+            Some(sim::settlement::Seat::Building(b)) => serde_json::json!({"building": b}),
+            None => serde_json::Value::Null,
+        };
         out
     })
 }

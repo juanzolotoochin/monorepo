@@ -24,6 +24,12 @@
 //! sends `Drop`; the sim puts the bundle on a pile of its item at the
 //! elder's feet or a new one there. A ground pile is then an interact
 //! target like an output ("PICK UP 3 WOOD"). Nothing drops while placing.
+//!
+//! Possessing (D3): a built building's slot is a target empty-handed
+//! ("POSSESS"), and while the elder possesses a building its slot is the
+//! one target ("LEAVE"). The boarding key (G, the left stick) boards and
+//! leaves as well; a sprite working inside is the target at its slot spot
+//! (its job menu), so the boarding key is what possesses a staffed one.
 
 use bevy::prelude::*;
 use fx::{Fx, FxVec2};
@@ -103,6 +109,9 @@ pub enum Used {
     Install,
     /// Sent `PlaceBlueprint` where the ghost stood.
     Placed,
+    /// Sent `Interact` to board a building's slot, or to leave the one the
+    /// elder possesses.
+    Seat,
 }
 
 /// What a drop sent: the depot items the cargo holds once its units have
@@ -197,6 +206,7 @@ fn highlight(world: &World, target: InteractTarget, interaction: &Interaction) -
             let pile = s.piles.as_ref()?.piles.get(&id)?;
             (pile.position, sim::settlement::piles::pile_radius(pile.units()).to_f32() + 0.15)
         }
+        InteractTarget::Slot(b) => (s.buildings.get(b as usize)?.slot_position(s.building_kinds.get(s.buildings[b as usize].kind as usize)?), 0.45),
     };
     let prompt = match (target, interaction) {
         (InteractTarget::Output(_) | InteractTarget::Pile(_), Interaction::Bundle(job)) => format!("PICK UP {} {}", job.remaining, item(job.item)),
@@ -209,6 +219,8 @@ fn highlight(world: &World, target: InteractTarget, interaction: &Interaction) -
             let needs: Vec<String> = needs.iter().map(|&(i, units)| format!("{units} {}", item(i))).collect();
             format!("NEEDS {}", needs.join(", "))
         }
+        (_, Interaction::Board { .. }) => "POSSESS".to_string(),
+        (_, Interaction::Leave { .. }) => "LEAVE".to_string(),
     };
     let position = service.to_view(position);
     Some(Highlight { target, position: position.with_y(0.0), radius, prompt })
@@ -227,8 +239,9 @@ fn part_label(world: &World, building: u16, part: u8) -> String {
 }
 
 /// E or A: acts on the target, as the sim picks it now. A bundle target
-/// (a site's delivery too) and a site's install get `Interact`; a sprite
-/// opens the job menu. A site's needs send nothing: they fail with the
+/// (a site's delivery too), a site's install and a building's slot (board,
+/// or leave while possessing it) get `Interact`; a sprite opens the job
+/// menu. A site's needs send nothing: they fail with the
 /// prompt's words, which show over the elder as a refusal does. While
 /// placing, it puts the blueprint down instead.
 pub fn interact(world: &mut World) -> Result<Used, String> {
@@ -252,6 +265,10 @@ pub fn interact(world: &mut World) -> Result<Used, String> {
         Interaction::Install { .. } => {
             world.resource_mut::<SessionService>().command(CommandKind::Interact { agent, target });
             Ok(Used::Install)
+        }
+        Interaction::Board { .. } | Interaction::Leave { .. } => {
+            world.resource_mut::<SessionService>().command(CommandKind::Interact { agent, target });
+            Ok(Used::Seat)
         }
         Interaction::Needs { .. } => Err(highlight(world, target, &interaction).map_or_else(|| "Not ready".to_string(), |h| h.prompt)),
         Interaction::JobMenu => {
