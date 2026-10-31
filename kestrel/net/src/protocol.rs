@@ -17,7 +17,8 @@ const MAGIC: &[u8; 4] = b"LSTP";
 ///    cannot decode it.
 /// 6: adds `CommandKind::SetSpriteJob`; peers on 5 cannot decode it.
 /// 7: adds `CommandKind::Bundle`; peers on 6 cannot decode it.
-pub const PROTOCOL_VERSION: u16 = 7;
+/// 8: adds `CommandKind::Interact`; peers on 7 cannot decode it.
+pub const PROTOCOL_VERSION: u16 = 8;
 /// Stay under typical path MTUs (and Steam's unreliable message limit).
 pub const MAX_PACKET: usize = 1200;
 pub const SAVE_CHUNK: usize = 1000;

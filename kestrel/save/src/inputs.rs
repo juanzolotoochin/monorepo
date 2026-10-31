@@ -16,6 +16,7 @@
 //! - 4: adds `CommandKind::SetSpriteJob`, appended after every older
 //!   command; an older log that claims it is refused as corrupt.
 //! - 5: adds `CommandKind::Bundle`, appended likewise.
+//! - 6: adds `CommandKind::Interact`, appended likewise.
 
 use serde::{Deserialize, Serialize};
 use sim::settlement::piles::PileAction;
@@ -23,7 +24,7 @@ use sim::{Command, CommandKind};
 
 use crate::LoadError;
 
-pub const INPUT_FORMAT_VERSION: u32 = 5;
+pub const INPUT_FORMAT_VERSION: u32 = 6;
 /// The oldest input log this build reads.
 pub const OLDEST_INPUT_FORMAT_VERSION: u32 = 1;
 const MAGIC: &[u8; 4] = b"GLOG";
@@ -84,6 +85,9 @@ impl InputLog {
         }
         if found < 5 && log.turns.iter().flatten().any(|c| matches!(c.kind, CommandKind::Bundle { .. })) {
             return Err(crate::corrupt(format!("a version {found} input log holds a command added in version 5")));
+        }
+        if found < 6 && log.turns.iter().flatten().any(|c| matches!(c.kind, CommandKind::Interact { .. })) {
+            return Err(crate::corrupt(format!("a version {found} input log holds a command added in version 6")));
         }
         Ok(log)
     }
@@ -173,6 +177,15 @@ mod tests {
         let written = log(vec![kind]);
         assert_eq!(InputLog::from_bytes(&written.to_bytes()).unwrap(), written);
         let bytes = with_version(written.to_bytes(), 3);
+        assert!(matches!(InputLog::from_bytes(&bytes), Err(LoadError::Corrupt(_))));
+    }
+
+    #[test]
+    fn a_version_five_log_with_an_interact_is_refused() {
+        let kind = CommandKind::Interact { agent: 0, target: sim::settlement::InteractTarget::Output(0) };
+        let written = log(vec![kind]);
+        assert_eq!(InputLog::from_bytes(&written.to_bytes()).unwrap(), written);
+        let bytes = with_version(written.to_bytes(), 5);
         assert!(matches!(InputLog::from_bytes(&bytes), Err(LoadError::Corrupt(_))));
     }
 
