@@ -1407,7 +1407,10 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
             }
             None => (status, detail),
         };
-        town_caption(world, state, &format!("building/{i}"), lamp + Vec3::Y * 0.3, format!("{}\n{}", kind.label, status), glow.text(), detail);
+        // A site's card hangs where a built one's does, clear of the
+        // interact prompt over its pile.
+        let card = center + Vec3::Y * (shape.height + 0.6);
+        town_caption(world, state, &format!("building/{i}"), card, format!("{}\n{}", kind.label, status), glow.text(), detail);
         let tint = if b.status == BuildingStatus::Full { Glow::Full.text() } else { Color::srgb(0.98, 0.92, 0.70) };
         let out = out + Vec3::Y * (ground(world, out) + 0.45);
         if b.site.is_none() {

@@ -4,7 +4,7 @@
   "fps": 30,
   "width": 1440,
   "height": 960,
-  "max_frames": 1500,
+  "max_frames": 3200,
   "steps": [
     {
       "op": "walk",
@@ -81,6 +81,118 @@
     {
       "op": "wait",
       "frames": 30
+    },
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "settlement_build"
+    },
+    {
+      "op": "wait",
+      "frames": 45
+    },
+    {
+      "op": "settlement_build",
+      "kind": "stone_gatherer"
+    },
+    {
+      "op": "walk",
+      "position": [
+        0.0,
+        2.6
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 45
+    },
+    {
+      "op": "inspect"
+    },
+    {
+      "op": "walk",
+      "position": [
+        3.0,
+        1.0
+      ]
+    },
+    {
+      "op": "walk",
+      "position": [
+        3.0,
+        0.0
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 45
+    },
+    {
+      "op": "inspect"
+    },
+    {
+      "op": "settlement_place_blueprint"
+    },
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "walk",
+      "position": [
+        -1.7,
+        2.4
+      ]
+    },
+    {
+      "op": "settlement_interact"
+    },
+    {
+      "op": "walk",
+      "position": [
+        2.0,
+        -0.6
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 20
+    },
+    {
+      "op": "settlement_interact_target"
+    },
+    {
+      "op": "settlement_interact"
+    },
+    {
+      "op": "wait",
+      "frames": 20
+    },
+    {
+      "op": "settlement_interact_target"
+    },
+    {
+      "op": "settlement_interact"
+    },
+    {
+      "op": "wait",
+      "frames": 60
+    },
+    {
+      "op": "inspect"
+    },
+    {
+      "op": "walk",
+      "position": [
+        -2.4,
+        -2.4
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 60
     },
     {
       "op": "inspect"
