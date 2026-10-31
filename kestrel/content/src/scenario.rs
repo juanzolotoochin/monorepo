@@ -91,6 +91,11 @@ pub struct Depot {
     pub position: Point,
     pub capacity: u32,
     pub stock: Vec<Stack>,
+    /// The one item it takes, if it takes only one: the Sacred Tree's wood
+    /// and stone piles. Its stock, sources, links, machines and defenders
+    /// must use that item too.
+    #[serde(default)]
+    pub only: Option<String>,
     #[serde(default = "stock_anchor")]
     pub stock_anchor: [f32; 3],
     #[serde(default = "CargoLayout::depot")]
@@ -154,6 +159,10 @@ pub struct Agent {
     /// Units it carries. Set here, not on the character: haulers of one
     /// kind carry different loads by job.
     pub capacity: u32,
+    /// Carries one item at a time, as a bundle: the Sacred Tree's elder.
+    /// Without it a cargo holds any mix.
+    #[serde(default)]
+    pub one_kind: bool,
     pub links: Vec<String>,
     pub cargo_anchor: [f32; 3],
     #[serde(default)]
@@ -621,6 +630,22 @@ impl Scenario {
                 return Err("invalid defender".into());
             }
         }
+        // A depot that takes one item takes it from everything that fills
+        // or draws on it.
+        for d in &self.depots {
+            let Some(only) = &d.only else { continue };
+            let bad = |depot: &str, item: &str| depot == d.id && item != only;
+            if !items.contains(only.as_str())
+                || d.stock.iter().any(|s| s.item != *only)
+                || self.sources.iter().any(|s| bad(&s.depot, &s.item))
+                || self.links.iter().any(|l| bad(&l.from, &l.item) || bad(&l.to, &l.item))
+                || self.producers.iter().any(|p| p.ingredients.iter().any(|s| bad(&p.input, &s.item)) || p.products.iter().any(|s| bad(&p.output, &s.item)))
+                || self.defenders.iter().any(|x| bad(&x.depot, &x.ammo))
+                || self.agents.iter().filter_map(|a| a.equipment.as_ref()).any(|e| bad(&e.depot, &e.item))
+            {
+                return Err(format!("depot {} takes only {only}, but something else goes there", d.id));
+            }
+        }
         for w in &self.waves {
             if !point(w.position)
                 || !point(w.target)
@@ -714,6 +739,26 @@ mod tests {
         assert!(invalid(|s| s.buildings[0].kind = "castle".into()));
         assert!(invalid(|s| s.buildings[0].position = [Fx::from_int(20), Fx::ZERO]));
         assert!(invalid(|s| s.sprites[0].id = "elder".into()));
+    }
+
+    #[test]
+    fn the_tree_piles_take_one_item_and_the_elder_carries_one() {
+        let tree = Scenario::parse(SACRED_TREE).unwrap();
+        let only: Vec<_> = tree.depots.iter().map(|d| (d.id.as_str(), d.only.as_deref())).collect();
+        assert_eq!(only, [("tree_wood", Some("wood")), ("tree_stone", Some("stone"))]);
+        assert!(tree.agents[0].one_kind && tree.agents[0].capacity == 5);
+        // Other scenes' depots and cargo take any mix.
+        let forest = Scenario::parse(FOREST).unwrap();
+        assert!(forest.depots.iter().all(|d| d.only.is_none()) && forest.agents.iter().all(|a| !a.one_kind));
+        let invalid = |change: fn(&mut Scenario)| {
+            let mut scenario = Scenario::parse(SACRED_TREE).unwrap();
+            change(&mut scenario);
+            scenario.validate().is_err()
+        };
+        assert!(invalid(|s| s.depots[0].only = Some("unobtainium".into())));
+        assert!(invalid(|s| s.depots[0].stock.push(Stack { item: "stone".into(), units: 1 })));
+        assert!(invalid(|s| s.sources.push(Source { depot: "tree_wood".into(), item: "stone".into(), units: 1, every: Fx::ONE, max_units: None })));
+        assert!(!invalid(|s| s.sources.push(Source { depot: "tree_wood".into(), item: "wood".into(), units: 1, every: Fx::ONE, max_units: None })));
     }
 
     #[test]
