@@ -1,6 +1,7 @@
 //! What the controller shows: the claim prompt, the selected target (its
 //! outline, name, verb or why it is unavailable), the last refusal, the
-//! drop preview, and the utility panel or item chooser.
+//! drop preview, and the utility panel or item chooser. In a town, the
+//! interact target's ring, a blueprint ghost's rings and each site's plot.
 
 use bevy::prelude::*;
 
@@ -16,6 +17,7 @@ pub(super) fn show(
     input: Res<InputService>,
     snapshots: Res<GamepadSnapshots>,
     dispatcher: Option<Res<Dispatcher>>,
+    session: Option<Res<crate::lockstep::SessionService>>,
     time: Res<Time>,
     mut text: Query<&mut Text, With<ControllerText>>,
     mut gizmos: Gizmos,
@@ -83,6 +85,28 @@ pub(super) fn show(
         gizmos.circle(Isometry3d::new(h.position + Vec3::Y * 0.05, flat), h.radius, color);
         let pulse = (time.elapsed_secs() * 1.6).fract();
         gizmos.circle(Isometry3d::new(h.position + Vec3::Y * 0.05, flat), h.radius + 0.25 * pulse, color.with_alpha(0.6 * (1.0 - pulse)));
+    }
+    let flat = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+    // A blueprint's ghost: its footprint as rings filling in toward the
+    // center, and its output pile and slot spot, green while it may go down
+    // and red while it may not (its skin and reason are `settlement`'s).
+    if let Some(g) = dispatcher.as_ref().and_then(|d| d.town.ghost.as_ref()) {
+        let color = if g.verdict.is_ok() { Color::srgba(0.35, 1.0, 0.55, 0.95) } else { Color::srgba(1.0, 0.3, 0.25, 0.95) };
+        for (i, share) in [1.0, 0.75, 0.5, 0.25].into_iter().enumerate() {
+            gizmos.circle(Isometry3d::new(g.center + Vec3::Y * 0.06, flat), g.radius * share, color.with_alpha(0.95 - 0.2 * i as f32));
+        }
+        gizmos.circle(Isometry3d::new(g.output + Vec3::Y * 0.06, flat), 0.25, color);
+        gizmos.circle(Isometry3d::new(g.slot + Vec3::Y * 0.06, flat), 0.3, color.with_alpha(0.6));
+    }
+    // Each site's plot, staked out on the ground until it is built.
+    if let Some(s) = session.as_ref().and_then(|s| s.settlement().map(|settlement| (s, settlement))) {
+        let (service, settlement) = s;
+        for (i, b) in settlement.buildings.iter().enumerate().filter(|(_, b)| !b.built()) {
+            let center = service.to_view(b.position).with_y(0.06);
+            let radius = settlement.building_kind(i as u16).radius.to_f32();
+            gizmos.circle(Isometry3d::new(center, flat), radius, Color::srgba(0.95, 0.78, 0.40, 0.85));
+            gizmos.circle(Isometry3d::new(center, flat), radius * 0.92, Color::srgba(0.95, 0.78, 0.40, 0.4));
+        }
     }
     let shown = lines.join("\n");
     if text.0 != shown {

@@ -126,6 +126,12 @@ pub enum Edge {
     Choose(usize),
     /// Climb into the nearest vehicle, or out of the one driven.
     Board,
+    /// In a town: open the build menu, or back out of placing a blueprint
+    /// (keyboard B, controller X).
+    Build,
+    /// In a town, while placing a blueprint: back out of it (Escape,
+    /// controller B).
+    CancelBuild,
 }
 
 /// Navigation, confirm, back, and the menu buttons, from the seated
@@ -284,6 +290,9 @@ pub struct InputService {
     history: VecDeque<HistoryEntry>,
     /// A suspension asked for after this frame's sample (by pause).
     pending_suspend: Option<Suspend>,
+    /// The town is placing a blueprint (`town`): Escape and controller B
+    /// back out of it.
+    placing: bool,
 }
 
 impl Service for InputService {
@@ -375,6 +384,12 @@ impl InputService {
     /// The World's view of the scene, for bindings and the utility panel.
     pub fn set_scene(&mut self, scene: SceneContext) {
         self.scene = scene;
+    }
+
+    /// Whether the town is placing a blueprint, for the keys that back out
+    /// of it.
+    pub fn set_placing(&mut self, placing: bool) {
+        self.placing = placing;
     }
 
     /// Opens an item chooser at the next frame. Its pick arrives as
@@ -570,6 +585,10 @@ impl InputService {
             self.panel = Some(Panel::Utility { items: self.scene.utility.clone(), focus: 0 });
             frame.suspended.get_or_insert(Suspend::Panel);
             panel_took = true;
+        } else if escape && self.placing {
+            // Escape backs out of a blueprint rather than pausing.
+            ui.escape_taken = true;
+            panel_edges.push(Edge::CancelBuild);
         }
         frame.ui = ui;
 
@@ -577,6 +596,7 @@ impl InputService {
         // current owner.
         let keys = game.keys();
         let keyboard_deliberate = GAMEPLAY_KEYS.iter().any(|&k| keys.just_pressed(k))
+            || (self.scene.town && keys.just_pressed(KeyCode::KeyB))
             || game.mouse().get_just_pressed().next().is_some()
             || game.motion().length() >= tuning::MOUSE_TAKEOVER_PIXELS;
         let pad_deliberate = (self.seat.is_some() && pad.deliberate()) || claimed;
@@ -701,6 +721,9 @@ impl InputService {
             if keys.just_pressed(KeyCode::KeyE) {
                 edges.push(Edge::Interact);
             }
+            if keys.just_pressed(KeyCode::KeyB) {
+                edges.push(Edge::Build);
+            }
         } else if self.scene.scenario {
             if keys.just_pressed(KeyCode::KeyE) {
                 edges.push(Edge::MachineToggle);
@@ -736,8 +759,10 @@ impl InputService {
         press(Control::RightTrigger, Edge::Attack);
         press(Control::Button(Button::RightBumper), Edge::Lift);
         press(Control::Button(Button::South), Edge::Interact);
-        press(Control::Button(Button::West), Edge::Collect);
-        press(Control::Button(Button::East), Edge::Drop);
+        // A town has no nearby targets to collect from: X builds, and B
+        // backs out of a blueprint being placed.
+        press(Control::Button(Button::West), if self.scene.town { Edge::Build } else { Edge::Collect });
+        press(Control::Button(Button::East), if self.scene.town && self.placing { Edge::CancelBuild } else { Edge::Drop });
         press(Control::Button(Button::North), Edge::NextWeapon);
         press(Control::Button(Button::DPadLeft), Edge::TargetPrevious);
         press(Control::Button(Button::DPadRight), Edge::TargetNext);

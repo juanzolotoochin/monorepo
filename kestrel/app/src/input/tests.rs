@@ -340,6 +340,33 @@ fn keyboard_e_interacts_in_a_town() {
     assert_eq!(rig.frame().gameplay.edges, vec![Edge::Interact]);
 }
 
+/// In a town, keyboard B and controller X build; while a blueprint is being
+/// placed, Escape and controller B back out of it (Escape doesn't pause).
+/// Elsewhere B is nothing and X still collects.
+#[test]
+fn the_build_keys_follow_the_town() {
+    let mut rig = Rig::seated(1);
+    rig.input.set_scene(SceneContext { scenario: true, town: true, ..default() });
+    rig.keys.press(KeyCode::KeyB);
+    assert_eq!(rig.frame().gameplay.edges, vec![Edge::Build]);
+    rig.keys.release(KeyCode::KeyB);
+    rig.frame();
+    rig.input.set_placing(true);
+    rig.keys.press(KeyCode::Escape);
+    let frame = rig.frame();
+    assert_eq!(frame.gameplay.edges, vec![Edge::CancelBuild]);
+    assert!(rig.input.escape_taken());
+    rig.keys.release(KeyCode::Escape);
+    assert_eq!(rig.tap(1, Button::East).gameplay.edges, vec![Edge::CancelBuild]);
+    rig.input.set_placing(false);
+    assert_eq!(rig.tap(1, Button::West).gameplay.edges, vec![Edge::Build]);
+    assert_eq!(rig.tap(1, Button::East).gameplay.edges, vec![Edge::Drop]);
+    rig.input.set_scene(SceneContext { scenario: true, ..default() });
+    assert_eq!(rig.tap(1, Button::West).gameplay.edges, vec![Edge::Collect]);
+    rig.keys.press(KeyCode::KeyB);
+    assert!(rig.frame().gameplay.edges.is_empty());
+}
+
 /// A radial menu: a direction focuses the option that way, from the
 /// keyboard or the controller, and A or E picks it; Escape picks nothing.
 #[test]

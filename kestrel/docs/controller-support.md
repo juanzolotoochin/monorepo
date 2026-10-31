@@ -30,8 +30,8 @@ The native reader and synthetic test source both produce `GamepadSnapshot` value
 | RB | Jump if the player character has `Jump`; hold jetpack otherwise | — |
 | RT | One attack per press | — |
 | A | Interact with selected target | Confirm |
-| X | Collect compatible material while carrying | — |
-| B | Propose a nearby cargo drop | Back or cancel chooser |
+| X | Collect compatible material while carrying; in a town, the build menu | — |
+| B | Propose a nearby cargo drop; in a town, back out of a blueprint being placed | Back or cancel chooser |
 | Y | Cycle available weapons | — |
 | D-pad left/right | Cycle nearby targets | Move focus |
 | D-pad up/down | Zoom camera | Move focus |
@@ -60,7 +60,7 @@ RT fires once when it crosses its press threshold. It must fall below a separate
 
 The controller selects a nearby eligible target instead of moving a virtual cursor. Selection remains on a target while it is valid; D-pad left/right cycles candidates in stable ID order. Candidates are filtered by distance, floor, and local reachability. Simulation validation remains authoritative, so the UI reports a rejection rather than silently substituting another target.
 
-A interacts with the selected pile, depot, collector, dispenser, or machine according to the available action. In a town (the Sacred Tree) there is no selection to cycle: A, like keyboard E, acts on the one target the simulation's `interact_target` picks, which is highlighted for every device, and a sprite target opens a radial job menu steered by the stick or D-pad. A chooser handles multiple item types. X collects more compatible material. B previews a cargo drop ahead of confirmed facing. New deliberate movement cancels an accepted approach job; merely entering a UI context does not. Explicit Cancel Logistics is a separate action.
+A interacts with the selected pile, depot, collector, dispenser, or machine according to the available action. In a town (the Sacred Tree) there is no selection to cycle: A, like keyboard E, acts on the one target the simulation's `interact_target` picks, which is highlighted for every device, and a sprite target opens a radial job menu steered by the stick or D-pad. X opens the build menu, a radial menu of building kinds; its pick puts a blueprint's ghost in front of the elder, which A puts down and B backs out of (keyboard B and E, and Escape). A chooser handles multiple item types. X collects more compatible material. B previews a cargo drop ahead of confirmed facing. New deliberate movement cancels an accepted approach job; merely entering a UI context does not. Explicit Cancel Logistics is a separate action.
 
 ## Platform and verification boundaries
 

@@ -126,7 +126,10 @@ fn publish_scene(world: &mut World) {
     if logistics_active(world) {
         utility.push(Utility::CancelLogistics);
     }
-    world.resource_mut::<InputService>().set_scene(SceneContext { scenario, town, utility, recording });
+    let placing = world.get_resource::<Dispatcher>().is_some_and(|d| d.town.placing.is_some());
+    let mut input = world.resource_mut::<InputService>();
+    input.set_scene(SceneContext { scenario, town, utility, recording });
+    input.set_placing(placing);
 }
 
 /// An accepted pile haul or depot transfer is running for this player.
@@ -224,6 +227,9 @@ pub fn dispatch(world: &mut World) {
             Edge::TargetNext => world.resource_mut::<Dispatcher>().targets.cycle(1),
             Edge::Choose(index) => choose(world, index),
             Edge::Board => world.resource_mut::<SessionService>().command(CommandKind::Board { agent }),
+            Edge::Build if town => super::town::build(world),
+            Edge::CancelBuild if town => super::town::cancel_build(world),
+            Edge::Build | Edge::CancelBuild => {}
             Edge::LiftRelease | Edge::SelectWeapon(_) | Edge::NextWeapon => {}
         }
     }
@@ -436,8 +442,14 @@ fn transfer(world: &mut World, depot: &str, item: &str, units: u32, deposit: boo
     }
 }
 
-/// The chooser's pick, or the town's job menu's.
+/// The chooser's pick, or the town's job menu's or build menu's.
 fn choose(world: &mut World, index: usize) {
+    if world.resource::<Dispatcher>().town.build_menu.is_some() {
+        if let Err(e) = super::town::pick_build(world, index) {
+            world.resource_mut::<Dispatcher>().notice = e;
+        }
+        return;
+    }
     if world.resource::<Dispatcher>().town.menu.is_some() {
         if let Err(e) = super::town::pick(world, index) {
             world.resource_mut::<Dispatcher>().notice = e;

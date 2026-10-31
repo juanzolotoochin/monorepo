@@ -426,6 +426,16 @@ impl Settlement {
         placement(&ground, kind, position)
     }
 
+    /// Where a building of kind `kind` at `position` would have its output
+    /// pile and its slot spot, whether or not it may stand there: for the
+    /// app's ghost.
+    pub fn blueprint_spots(&self, kind: BuildingKindIx, position: FxVec2, terrain: &Terrain) -> Option<(FxVec2, FxVec2)> {
+        let k = self.building_kinds.get(kind as usize)?;
+        let docks: Vec<FxVec2> = self.depots.iter().map(|d| d.position).collect();
+        let output = output_position(position, k.output_distance, &docks, terrain.center);
+        Some((output, slot_position(position, output, k)))
+    }
+
     /// Stage 5: this tick's blueprints, in command order, so of two that
     /// overlap the first stands. Each one `placement_check` allows becomes a
     /// site waiting for its first part's materials, its footprint an
