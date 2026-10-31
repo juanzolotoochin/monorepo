@@ -31,6 +31,7 @@ use fx::{Fx, FxVec2};
 
 use super::avatar::{self, Intent};
 use super::haulers;
+use super::interact::InteractTarget;
 use super::piles::{PileAction, PileLab};
 use super::sprites;
 use super::{AgentIx, AgentState, BuildingKind, BuildingState, DepotIx, DepotState, Direction, InventoryRef, ItemIx, Role, Settlement, Transfer};
@@ -81,6 +82,10 @@ pub enum Action {
     /// a building output, as many units as fit (`avatar::bundle_job`);
     /// units move once the agent is there, as a transfer's do.
     Bundle { other: InventoryRef, direction: Direction },
+    /// Act on a target the client highlighted (`interact`), if it is still
+    /// in reach and usable: a bundle target's carry job, walking in to the
+    /// dock. A sprite target does nothing here.
+    Interact(InteractTarget),
 }
 
 impl Action {
@@ -104,6 +109,7 @@ impl Action {
             CommandKind::Pile { agent, action, pace, approach } => (agent, Action::Haul { action, pace, approach }),
             CommandKind::Board { agent } => (agent, Action::Board),
             CommandKind::Bundle { agent, other, direction } => (agent, Action::Bundle { other, direction }),
+            CommandKind::Interact { agent, target } => (agent, Action::Interact(target)),
             CommandKind::PlayPiano { .. }
             | CommandKind::SpawnMovers { .. }
             | CommandKind::Impulse { .. }

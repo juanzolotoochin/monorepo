@@ -21,6 +21,7 @@ pub mod buildings;
 pub mod combat;
 mod economy;
 mod haulers;
+pub mod interact;
 mod inventory;
 pub mod memory;
 pub mod piano;
@@ -46,6 +47,7 @@ pub use combat::{CombatMetrics, DefenderState, Event, Impact, OnMiss, Pinned, Pr
 pub use agent::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
 pub use buildings::{BuildingIx, BuildingKind, BuildingKindIx, BuildingState, Occupant, Slot, Stage};
 pub use haulers::{HaulerState, Phase};
+pub use interact::{InteractTarget, Interaction};
 pub use inventory::{Inventory, Kinds};
 pub use prediction::AvatarReplay;
 pub use sprites::{Hold, SpriteJob, SpriteState, Step};
@@ -1024,6 +1026,8 @@ impl StateHash for Settlement {
 mod buildings_tests;
 #[cfg(test)]
 mod bundle_tests;
+#[cfg(test)]
+mod interact_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

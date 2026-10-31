@@ -127,9 +127,13 @@ pub enum CommandKind {
     /// (`Settlement::set_sprite_job`).
     SetSpriteJob { agent: u16, job: crate::settlement::SpriteJob },
     /// A player's avatar picks up a bundle from a depot or a building output,
-    /// or empties it into a depot (`Action::Bundle`). New variants go after
-    /// this one.
+    /// or empties it into a depot (`Action::Bundle`).
     Bundle { agent: u16, other: crate::settlement::InventoryRef, direction: crate::settlement::Direction },
+    /// A player's avatar interacts with the target its client highlighted
+    /// (`settlement::interact`), which the sim checks again (`Action::Interact`).
+    /// A sprite target's index is not remapped when players leave: the sim
+    /// does nothing with it. New variants go after this one.
+    Interact { agent: u16, target: crate::settlement::InteractTarget },
 }
 
 impl CommandKind {
@@ -151,6 +155,7 @@ impl CommandKind {
             | CommandKind::PlayPiano { agent, .. }
             | CommandKind::Board { agent }
             | CommandKind::Bundle { agent, .. }
+            | CommandKind::Interact { agent, .. }
             | CommandKind::Pile { agent, .. } => *agent = to,
             _ => {}
         }
@@ -174,6 +179,7 @@ impl CommandKind {
             | CommandKind::PlayPiano { agent, .. }
             | CommandKind::Board { agent }
             | CommandKind::Bundle { agent, .. }
+            | CommandKind::Interact { agent, .. }
             | CommandKind::Pile { agent, .. } => Some(agent),
             _ => None,
         }
@@ -508,7 +514,8 @@ impl World {
                 | CommandKind::RepairCover { .. }
                 | CommandKind::Pile { .. }
                 | CommandKind::Board { .. }
-                | CommandKind::Bundle { .. } => {
+                | CommandKind::Bundle { .. }
+                | CommandKind::Interact { .. } => {
                     if let (Some(s), Some((agent, action))) = (&mut self.settlement, Action::of(kind)) {
                         s.act(self.tick, agent, &action, &self.terrain, &mut self.actions);
                     }

@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use super::combat::{Event, TossEnd};
 use super::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
 use super::action::{Action, View};
+use super::interact::{self, Interaction};
 use super::{AgentIx, DepotState, InventoryRef, ItemIx, Kinds, Settlement};
 use crate::messages::{ActionMessages, BundleRefused, CarryUnit, DropHaul, DropNotes, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
 use crate::nav::{self, angle_between, distance};
@@ -759,15 +760,35 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
             }
         }
         Action::Bundle { other, direction } => match bundle_job(carry, view, other, direction) {
-            Ok(job) => {
-                // As a transfer: the cargo side now, the other in stage 5.
-                let reserved = job.reserve(&mut carry.inventory, Side::Own);
-                debug_assert!(reserved, "`bundle_job` sized it to the cargo");
-                carry.job = Some(job.clone());
-                out.reserve_stock.push(ReserveStock { agent: me, job, change: StockChange::Reserve });
-            }
+            Ok(job) => start_bundle(carry, job, me, out),
             Err(reason) => out.bundle_refused.push(BundleRefused { agent: me, reason }),
         },
+        Action::Interact(target) => {
+            // The target the client highlighted, checked again: still in
+            // reach and still usable. A sprite's is the app's job menu, so
+            // the sim has nothing to do for it.
+            let at = interact::position(view, target);
+            if !body.alive() || target.holder().is_none() {
+            } else if !at.is_some_and(|p| distance(body.position, p) <= interact::INTERACT_REACH) {
+                out.bundle_refused.push(BundleRefused { agent: me, reason: BundleRefusal::OutOfReach });
+            } else {
+                match interact::interaction(view, carry, target) {
+                    Ok(Interaction::Bundle(job)) => {
+                        let spot = interact::stand_spot(view, job.other);
+                        start_bundle(carry, job, me, out);
+                        // Step in to the dock, as the verbs walk the elder
+                        // there; the units move once it is in reach.
+                        if let (Some(at), Some(spot)) = (at, spot) {
+                            if distance(body.position, at) > DOCK_REACH {
+                                set_intent(body, avatar, Intent::GoTo { target: spot, run: false }, view.terrain, def);
+                            }
+                        }
+                    }
+                    Ok(Interaction::JobMenu) => {}
+                    Err(reason) => out.bundle_refused.push(BundleRefused { agent: me, reason }),
+                }
+            }
+        }
         Action::CancelTransfer => {
             if transferring {
                 out.reserve_stock.extend(carry.drop_carry(me));
@@ -798,6 +819,15 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
             drop_haul(avatar, view, out);
         }
     }
+}
+
+/// Starts a bundle's carry job, as a transfer does: its cargo side now,
+/// the other in stage 5.
+fn start_bundle(carry: &mut Carry, job: CarryJob, me: AgentIx, out: &mut ActionMessages) {
+    let reserved = job.reserve(&mut carry.inventory, Side::Own);
+    debug_assert!(reserved, "`bundle_job` sized it to the cargo");
+    carry.job = Some(job.clone());
+    out.reserve_stock.push(ReserveStock { agent: me, job, change: StockChange::Reserve });
 }
 
 /// Lets go of the agent's pile haul, if one runs: `DropHaul` ends it in
@@ -854,6 +884,10 @@ pub enum BundleRefusal {
     WrongPile,
     /// The pile has no room left.
     PileFull,
+    /// An interact target that is no longer in reach (`interact`).
+    OutOfReach,
+    /// A sprite's job is set empty-handed only (`interact`, D5).
+    HandsFull,
 }
 
 impl BundleRefusal {
@@ -869,6 +903,8 @@ impl BundleRefusal {
             BundleRefusal::NothingCarried => "Carrying nothing to deposit",
             BundleRefusal::WrongPile => "That pile takes something else",
             BundleRefusal::PileFull => "That pile is full",
+            BundleRefusal::OutOfReach => "Too far away",
+            BundleRefusal::HandsFull => "Hands full: deposit the bundle first",
         }
     }
 }
