@@ -4,29 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M2.2 Interact target and highlight
-
-- **Status:** open
-- **Why:** one key covers piles, the tree, sites, slots and sprites (D5).
-- **What to do:** `interact_target` in the sim, `Interact { agent, target }`,
-  the app's highlight from the same function, the radial menu on sprites.
-- **Where:** `kestrel/sim/src/settlement/action.rs`, `kestrel/app/`.
-- **From M2.1:** an output pile and a tree pile act through
-  `avatar::bundle_job(carry, view, other, direction)`: Interact on
-  `InventoryRef::Output(b)` is a `Direction::Pickup`; on a tree pile
-  (`InventoryRef::Depot(d)`) a `Deposit` while carrying, a `Pickup` when
-  empty-handed. Its `Err(BundleRefusal)` says why a target isn't usable, so
-  `interact_target` can filter on `is_ok()`, and `Action::Bundle`'s body is
-  what Interact runs for these kinds (it emits `Event::BundleRefused`, which
-  the view can show with `BundleRefusal::message`). A job refused later in
-  stage 5 (another player took the units first, `reserve_stock`) rolls back
-  with no event; give it one if the feedback needs it. The units move only
-  once the elder is within 0.85 m of the pile (`DOCK_REACH`); the verbs
-  walk it there, and Interact's reach check must be at least that close. The
-  view's `manual_jobs` lists depot jobs only, so an output pickup in
-  progress doesn't show there yet.
-- **Found in:** Sacred Tree handoff.
-
 ## M2.3 Blueprints, sites and installing parts
 
 - **Status:** open
@@ -57,6 +34,15 @@ its milestones, in order; one PR per milestone.
   while it hides something. A new site draws through `settlement::town` as
   any building does (status `site`, card "BEING BUILT"); its needs readout
   can go on the same card.
+- **From M2.2:** a site is a new `InteractTarget` variant, appended
+  (`Site(BuildingIx)`): give it a `position` and an arm in `interaction`
+  (deliver while carrying a needed item, through `bundle_job` on the site
+  holder; install when the next part's materials are in; otherwise its
+  needs), with an `Interaction` variant for install and needs, an arm in
+  `Action::Interact` and a prompt in `input::town::highlight`
+  ("DELIVER 2 WOOD", "INSTALL FOUNDATION"). `interact_target` lists every
+  building's output, a site's too: it is empty, so never usable, but skip
+  sites there once they have a target of their own.
 - **Found in:** Sacred Tree handoff.
 
 ## M2.4 Dropping bundles on ground piles
@@ -72,6 +58,13 @@ its milestones, in order; one PR per milestone.
   output's is), so a pickup tops up from a ground pile by the same rule. A
   pile haul is still a `PileJob` on its own path (`piles::haul`).
 - **Where:** `kestrel/sim/src/settlement/piles.rs`.
+- **From M2.2:** a ground pile is a new `InteractTarget` variant, appended
+  (`Pile(PileId)`), usable as an output is (top up, by `bundle_job`). The
+  ground (drop) is no candidate: at distance zero it would always win.
+  Make it the fallback while carrying when `interact_target` finds nothing
+  (an `Interaction::Drop`), or keep the drop on its own key (controller B)
+  as the pile lab does. `Action::Interact` refuses a target with no
+  `position` as out of reach today.
 - **Found in:** Sacred Tree handoff.
 
 ## M3.1 Building seats and ejection
@@ -97,6 +90,13 @@ its milestones, in order; one PR per milestone.
   lamp turns violet and its card says "POSSESSED" (`settlement::town`,
   `legacy::Occupant::Elder`). The elder's own rig is still drawn where its
   body stands; hide it, or draw its flame form, while it is seated.
+- **From M2.2:** a building slot is a new `InteractTarget` variant,
+  appended (`Slot(BuildingIx)`), empty-handed only (D5): `interaction` says
+  board, and `Action::Interact` sends the `Board` message for it. Today
+  boarding is its own key (G, the left stick), and `interact_target` gives a
+  seated agent no target (`avatar.driving`): with `seat`, decide whether
+  interact also leaves the seat. A slot spot and the output pile are about
+  1.7 m apart, so with the 1.5 m reach the nearer one wins.
 - **Found in:** Sacred Tree handoff.
 
 ## M3.2 Burst
@@ -162,7 +162,74 @@ its milestones, in order; one PR per milestone.
   `kestrel/sim/src/settlement/combat.rs`, `kestrel/app/src/input/gameplay.rs`.
 - **Found in:** M1.1.
 
+## Interact feedback and the mouse
+
+- **Status:** open
+- **Why:** three rough edges M2.2 left. The job menu has no mouse: its
+  ring is picked by direction keys, the stick or the D-pad only. Walking
+  off cancels a pending deposit or withdrawal at a tree pile (the app's
+  `movement` cancels jobs `manual_jobs` lists, depot jobs only) but not a
+  pickup at an output, which waits until the elder is back in the dock's
+  reach. And letting go of a walk key just after pressing E sends Stop,
+  which ends the elder's step in, so the job waits the same way.
+- **What to do:** hover and click the ring's options; list output jobs in
+  `manual_jobs` (or cancel by the carry job itself) so walking off cancels
+  both alike; keep the step in through a Stop, or cancel the job with it.
+- **Where:** `kestrel/app/src/input/town.rs`, `gameplay.rs`,
+  `kestrel/app/src/legacy.rs` (`manual_jobs`), `kestrel/app/src/settlement.rs`.
+- **Found in:** M2.2.
+
 ## Done
+
+### M2.2 Interact target and highlight
+
+- **Status:** done (branch `kestrel-sacred-tree`)
+- **Why:** one key covers piles, the tree, sites, slots and sprites (D5).
+- **What to do:** `interact_target` in the sim, `Interact { agent, target }`,
+  the app's highlight from the same function, the radial menu on sprites.
+- **Where:** `kestrel/sim/src/settlement/action.rs`, `kestrel/app/`.
+- **From M2.1:** an output pile and a tree pile act through
+  `avatar::bundle_job(carry, view, other, direction)`: Interact on
+  `InventoryRef::Output(b)` is a `Direction::Pickup`; on a tree pile
+  (`InventoryRef::Depot(d)`) a `Deposit` while carrying, a `Pickup` when
+  empty-handed. Its `Err(BundleRefusal)` says why a target isn't usable, so
+  `interact_target` can filter on `is_ok()`, and `Action::Bundle`'s body is
+  what Interact runs for these kinds (it emits `Event::BundleRefused`, which
+  the view can show with `BundleRefusal::message`). A job refused later in
+  stage 5 (another player took the units first, `reserve_stock`) rolls back
+  with no event; give it one if the feedback needs it. The units move only
+  once the elder is within 0.85 m of the pile (`DOCK_REACH`); the verbs
+  walk it there, and Interact's reach check must be at least that close. The
+  view's `manual_jobs` lists depot jobs only, so an output pickup in
+  progress doesn't show there yet.
+- **Found in:** Sacred Tree handoff.
+- **Done:** `sim::settlement::interact` holds `interact_target(view, me,
+  sprites)` (and `Settlement::interact_target`, which the app and scripts
+  read): building outputs, depots and sprites within `INTERACT_REACH`
+  (1.5 m) of the agent, nearest first, a tie to the lower `InteractTarget`
+  (kind, then index); the first one `interaction` can use wins. A bundle
+  kind is usable when `bundle_job` is `Ok` (an output is a pickup; a depot a
+  deposit while carrying, a withdrawal empty-handed); a sprite only
+  empty-handed (D5), for the job menu. A dead or seated agent has none.
+  `CommandKind::Interact { agent, target }` (appended) is `Action::Interact`:
+  it checks reach and use again, refusing with `BundleRefused`
+  (`BundleRefusal` gained `OutOfReach` and `HandsFull`), starts the carry
+  job and walks the elder in to `stand_spot` when it is past the dock's
+  reach, as the verbs do. A sprite target does nothing in the sim. In the
+  app (`input::town`), keyboard E and controller A interact in a town (a
+  settlement with building kinds), where the controller's nearby targets
+  are off; the target is ringed on the ground (`input::hud`) with its
+  prompt over it ("E  PICK UP 3 WOOD"), and refusals show over the elder
+  (`settlement::town_interact`). A sprite opens `Panel::Radial`, a ring of
+  Idle and one Gather entry per building kind around it, steered by WASD,
+  the arrows, the stick or the D-pad, picked with E or A, sending
+  `SetSpriteJob`. Control verbs `settlement_interact_target`,
+  `settlement_interact` and `settlement_job_menu`; the state's
+  `settlement.interact` has the target, prompt and open menu. Input logs 6,
+  net protocol 8; the save format stays 25 (saves hold no commands, and
+  interact adds no state). The golden file didn't change. The Sacred Tree
+  demo ends with two interacts.
+
 
 ### M2.1 Bundles at piles and the tree
 
