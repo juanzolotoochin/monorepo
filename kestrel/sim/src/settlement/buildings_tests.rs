@@ -7,7 +7,7 @@ use content::scenario::{Building, Scenario};
 use content::{Content, TICKS_PER_SECOND};
 use fx::{Fx, FxVec2};
 
-use super::{BuildingIx, Event, Hold, Occupant, Settlement, Slot, SpriteJob, SpriteState, Stage, Step};
+use super::{BuildingIx, Event, Hold, Occupant, Seat, Settlement, Slot, SpriteJob, SpriteState, Stage, Step};
 use crate::terrain::Disc;
 use crate::{Simulation, World};
 
@@ -41,14 +41,21 @@ fn output(sim: &Simulation) -> u32 {
 }
 
 /// Puts `occupant` in the Wood Gatherer, as the sprite brain or possession
-/// would leave it, and takes the slot from whoever had it. A sprite put in
+/// would leave it, and takes the slot from whoever had it (an elder leaves
+/// its seat). A sprite put in
 /// stands at the slot spot on the last step of a plan for the gatherer.
 fn occupy(sim: &mut Simulation, occupant: Option<Occupant>) {
     let s = sim.world_mut().settlement_mut();
-    if let Slot::Claimed(a) | Slot::Occupied(Occupant::Sprite(a)) = s.buildings[0].slot {
-        s.release_slot(a);
+    match s.buildings[0].slot {
+        Slot::Claimed(a) | Slot::Occupied(Occupant::Sprite(a)) => s.release_slot(a),
+        Slot::Occupied(Occupant::Elder(a)) => s.agents[a as usize].avatar_mut().unwrap().seat = None,
+        Slot::Empty => {}
     }
     s.buildings[0].slot = occupant.map_or(Slot::Empty, Slot::Occupied);
+    // An elder sits in the slot as boarding seats it (`Settlement::board`).
+    if let Some(Occupant::Elder(a)) = occupant {
+        s.agents[a as usize].avatar_mut().unwrap().seat = Some(Seat::Building(0));
+    }
     if let Some(Occupant::Sprite(a)) = occupant {
         let spot = s.buildings[0].slot_position(s.building_kind(0));
         let agent = &mut s.agents[a as usize];

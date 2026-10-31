@@ -934,7 +934,7 @@ impl World {
         if let Some(settlement) = &mut self.settlement {
             settlement.combat_housekeeping(self.tick, &self.terrain);
             settlement.avatar_housekeeping(self.tick);
-            settlement.vehicle_housekeeping();
+            settlement.seat_housekeeping(&self.terrain);
             settlement.dig_housekeeping(self.tick, &mut self.terrain);
             settlement.pile_housekeeping(self.tick);
             settlement.memory_housekeeping(&mut self.terrain);

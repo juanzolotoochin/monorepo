@@ -75,8 +75,8 @@ pub enum Action {
     /// drop spot) and move units there, one every `pace` seconds (zero for
     /// all at once), standing at `approach` if given (`piles::haul`).
     Haul { action: PileAction, pace: Fx, approach: Option<FxVec2> },
-    /// Climb into the nearest free vehicle in reach, or out of the one
-    /// driven (`vehicle`).
+    /// Climb into the nearest free vehicle or built building in reach, or
+    /// out of the seat it has (`vehicle`, `Settlement::board`).
     Board,
     /// Pick up a bundle from (or, with `Deposit`, empty it into) a depot or
     /// a building output, as many units as fit (`avatar::bundle_job`);

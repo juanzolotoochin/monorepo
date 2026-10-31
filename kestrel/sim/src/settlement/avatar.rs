@@ -187,10 +187,39 @@ pub struct AvatarState {
     /// saved or hashed. A replay clears it too, ending its own copy of the haul.
     #[serde(skip)]
     pub dropped_haul: bool,
-    /// The vehicle this avatar sits in and drives (`vehicle`). Its movement
-    /// commands steer the vehicle, and housekeeping keeps it in the seat.
+    /// The seat this avatar sits in: a vehicle it drives (`vehicle`), whose
+    /// movement commands steer the vehicle, or a building it possesses
+    /// (D3), where movement does nothing. Housekeeping keeps it in the seat.
     #[serde(default)]
-    pub driving: Option<super::VehicleIx>,
+    pub seat: Option<Seat>,
+}
+
+/// Where a seated avatar sits (`AvatarState::seat`). Boarding enters the
+/// nearest free one in reach (`Settlement::board`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Seat {
+    /// Driving a vehicle.
+    Vehicle(super::VehicleIx),
+    /// Possessing a building, as its slot's `Occupant::Elder`.
+    Building(super::BuildingIx),
+}
+
+impl Seat {
+    /// The vehicle, if it is a vehicle's seat.
+    pub fn vehicle(self) -> Option<super::VehicleIx> {
+        match self {
+            Seat::Vehicle(ix) => Some(ix),
+            Seat::Building(_) => None,
+        }
+    }
+
+    /// The building, if it is a building's slot.
+    pub fn building(self) -> Option<super::BuildingIx> {
+        match self {
+            Seat::Building(b) => Some(b),
+            Seat::Vehicle(_) => None,
+        }
+    }
 }
 
 fn approach(current: FxVec2, target: FxVec2, max_change: Fx) -> FxVec2 {
@@ -249,8 +278,9 @@ pub(super) fn self_update(body: &mut Body, avatar: &mut AvatarState, me: AgentIx
         }
         return;
     }
-    // A driver rides; the vehicle moves (`vehicle::self_update`).
-    if avatar.driving.is_some() {
+    // A driver rides, the vehicle moving (`vehicle::self_update`); an elder
+    // in a building stays at its slot.
+    if avatar.seat.is_some() {
         return;
     }
     if let Some(lab) = piles.filter(|_| !avatar.dropped_haul) {
@@ -512,7 +542,7 @@ impl Settlement {
         }
         self.reserve_stock(messages.reserve_stock);
         self.drop_bundles(messages.drop_bundle, tick, terrain);
-        self.board(messages.board);
+        self.board(messages.board, terrain);
         for BundleRefused { agent, reason } in messages.bundle_refused {
             self.events.push(Event::BundleRefused { agent, reason });
         }
@@ -539,8 +569,9 @@ impl Settlement {
         body.velocity = FxVec2::ZERO;
         body.push = FxVec2::ZERO;
         avatar.dig = None;
-        // The vehicle stays where it is, free for anyone.
-        avatar.driving = None;
+        // The vehicle stays where it is, free for anyone; a building's slot
+        // empties in housekeeping (`seat_housekeeping`).
+        avatar.seat = None;
         body.route.clear();
         let releases = carry.drop_carry(agent as AgentIx);
         self.reserve_stock(releases);
@@ -698,30 +729,59 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
     // lab's, and these checks treat it as they did before it was one: it
     // doesn't stop a dig, keep a released route or end on a cancel.
     let transferring = carry.job.as_ref().is_some_and(|j| !view.piles.is_some_and(|lab| lab.is_haul(j)));
-    if let Some(ix) = avatar.driving {
-        // Sitting in a vehicle, a player can look around, climb out,
-        // let go or respawn; movement went to the vehicle (`vehicle::drive`).
-        match *action {
-            Action::Board => {
-                let v = &view.vehicles[ix as usize];
-                let vehicle_def = &view.characters[v.character as usize];
-                if let Some((position, ground)) = super::vehicle::exit_spot(v, vehicle_def, def.body.radius, view.terrain) {
-                    avatar.driving = None;
-                    body.position = position;
-                    avatar.height = ground;
-                    avatar.flight.support = ground;
-                    avatar.intent = Some(Intent::Stop);
+    match avatar.seat {
+        Some(Seat::Vehicle(ix)) => {
+            // Sitting in a vehicle, a player can look around, climb out,
+            // let go or respawn; movement went to the vehicle (`vehicle::drive`).
+            match *action {
+                Action::Board => {
+                    let v = &view.vehicles[ix as usize];
+                    let vehicle_def = &view.characters[v.character as usize];
+                    if let Some((position, ground)) = super::vehicle::exit_spot(v, vehicle_def, def.body.radius, view.terrain) {
+                        avatar.seat = None;
+                        body.position = position;
+                        avatar.height = ground;
+                        avatar.flight.support = ground;
+                        avatar.intent = Some(Intent::Stop);
+                    }
+                    return;
                 }
-                return;
+                Action::Aim(_) | Action::Equip(_) | Action::Release | Action::Respawn => {}
+                _ => return,
             }
-            Action::Aim(_) | Action::Equip(_) | Action::Release | Action::Respawn => {}
-            _ => return,
         }
+        Some(Seat::Building(b)) => {
+            // Possessing a building (D3), a player can look around, leave
+            // (boarding again, or interacting: the seat is a seated elder's
+            // one target), let go or respawn. Movement and dropping do
+            // nothing. Leaving puts it beside the building; housekeeping
+            // empties the slot (`seat_housekeeping`), for a waiting sprite
+            // to take.
+            match *action {
+                Action::Board | Action::Interact(interact::InteractTarget::Slot(_)) => {
+                    if matches!(*action, Action::Interact(target) if target != interact::InteractTarget::Slot(b)) {
+                        return;
+                    }
+                    if let Some(position) = view.leave_spot(b, def.body.radius) {
+                        let ground = view.terrain.footprint(position, def.body.radius).unwrap_or(avatar.height);
+                        avatar.seat = None;
+                        body.position = position;
+                        avatar.height = ground;
+                        avatar.flight.support = ground;
+                        avatar.intent = Some(Intent::Stop);
+                    }
+                    return;
+                }
+                Action::Aim(_) | Action::Equip(_) | Action::Release | Action::Respawn => {}
+                _ => return,
+            }
+        }
+        None => {}
     }
     match *action {
         Action::Board => {
             if body.alive() && avatar.dig.is_none() {
-                out.board.push(crate::messages::Board { agent: me });
+                out.board.push(crate::messages::Board { agent: me, building: None });
             }
         }
         Action::Move(ref intent) => {
@@ -794,8 +854,11 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
                         }
                     }
                     Ok(Interaction::Install { building, .. }) => out.install.push(Install { agent: me, building }),
-                    // A site's needs are the view's to show.
-                    Ok(Interaction::JobMenu | Interaction::Needs { .. }) => {}
+                    // Stage 5 seats the elder, putting out a sprite there.
+                    Ok(Interaction::Board { building }) => out.board.push(crate::messages::Board { agent: me, building: Some(building) }),
+                    // A site's needs are the view's to show; leaving is the
+                    // seated elder's (above).
+                    Ok(Interaction::JobMenu | Interaction::Needs { .. } | Interaction::Leave { .. }) => {}
                     Err(reason) => out.bundle_refused.push(BundleRefused { agent: me, reason }),
                 }
             }
@@ -883,8 +946,9 @@ fn transfer_limit(carry: &Carry, depots: &[DepotState], items: usize, depot: usi
     }
 }
 
-/// Why a bundle action can't start (`bundle_job`). Stage 5 reports it as
-/// `Event::BundleRefused`; `message` says it for the view.
+/// Why a bundle action can't start (`bundle_job`), or an interact, a drop
+/// or boarding a building. Stage 5 reports it as `Event::BundleRefused`;
+/// `message` says it for the view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BundleRefusal {
     /// A carry job is running, or units are still in the air.
@@ -920,6 +984,10 @@ pub enum BundleRefusal {
     /// A drop's new pile has no clear ground at the agent's feet: an
     /// obstacle, another pile, a dock or a building's spot, or the edge.
     NoRoom,
+    /// Boarding a building with a bundle in hand (D3): drop it first.
+    Carrying,
+    /// Boarding a building another elder possesses.
+    Possessed,
 }
 
 impl BundleRefusal {
@@ -942,6 +1010,8 @@ impl BundleRefusal {
             BundleRefusal::NothingToDrop => "Nothing carried",
             BundleRefusal::TooManyPiles => "Too many piles: pick one up first",
             BundleRefusal::NoRoom => "No room to drop it here",
+            BundleRefusal::Carrying => "Drop the bundle first (Q)",
+            BundleRefusal::Possessed => "Another elder is in there",
         }
     }
 }

@@ -323,16 +323,19 @@ impl StateHash for EnterSlot {
     }
 }
 
-/// A player reached for a vehicle's seat (`Action::Board`): stage 5 seats
-/// them in the nearest free one in reach (`Settlement::board`).
+/// A player reached for a seat (`Action::Board`): stage 5 seats them in the
+/// nearest free vehicle or built building in reach, or with `building`
+/// (an interact on its slot) in that building (`Settlement::board`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Board {
     pub agent: u16,
+    pub building: Option<u16>,
 }
 
 impl StateHash for Board {
     fn hash_into(&self, h: &mut StateHasher) {
         h.write(&self.agent);
+        h.write_u64(self.building.map_or(0, |b| b as u64 + 1));
     }
 }
 

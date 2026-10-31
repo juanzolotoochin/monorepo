@@ -409,7 +409,96 @@ fn slot_position(center: FxVec2, output: FxVec2, kind: &BuildingKind) -> FxVec2 
     center + FxVec2::new(-out.y, out.x) * (kind.radius + SLOT_GAP)
 }
 
+/// The ways out of a building an elder leaving it takes, first to last:
+/// behind the slot, behind the building, round the far side, then in front
+/// of the slot. Each is a step (along the slot's side, along the output's
+/// way); the spot is on the slot spot's ring that way (`beside`).
+const LEAVING: [(i32, i32); 6] = [(1, -1), (0, -1), (-1, -1), (-1, 0), (-1, 1), (1, 1)];
+/// The ways a sprite an elder put out goes: in front of the slot first, on
+/// the side away from where the elder leaves, so its walk back to the slot
+/// spot never passes the elder; then as the elder does.
+const PUT_OUT: [(i32, i32); 6] = [(1, 1), (1, -1), (0, -1), (-1, -1), (-1, 0), (-1, 1)];
+
+/// The clear spots beside building `b` where a body of `radius` can be put
+/// (D3), the `ways` in order: an elder leaving it, or a sprite an elder put
+/// out. They sit on the slot spot's ring, each a step from the slot spot and
+/// from one another. A spot is left out unless it is inside the arena,
+/// clear of the terrain (the building's own footprint among it), and off
+/// the docks and every building's output pile and slot spot, as a placement
+/// keeps them. Bodies don't count: the view doesn't read the agents, and a
+/// body that stands there walks off.
+fn beside(ground: &Ground, b: BuildingIx, radius: Fx, ways: &[(i32, i32)]) -> Vec<FxVec2> {
+    let Ground { kinds, docks, buildings, terrain, .. } = *ground;
+    let Some(building) = buildings.get(b as usize) else { return Vec::new() };
+    let kind = &kinds[building.kind as usize];
+    let out = (building.output_position - building.position).normalize_or_zero();
+    let out = if out == FxVec2::ZERO { FxVec2::new(Fx::ZERO, Fx::ONE) } else { out };
+    let side = FxVec2::new(-out.y, out.x);
+    let ring = kind.radius + SLOT_GAP;
+    let apart = |p: FxVec2, q: FxVec2, gap: Fx| p.distance(q) > gap + CLEARANCE_MARGIN;
+    let spots: Vec<(FxVec2, Fx)> = buildings
+        .iter()
+        .flat_map(|o| [(o.output_position, DOCK_RADIUS), (o.slot_position(&kinds[o.kind as usize]), SLOT_RADIUS)])
+        .chain(docks.iter().map(|&d| (d, DOCK_RADIUS)))
+        .collect();
+    ways.iter()
+        .map(|&(along, ahead)| building.position + (side * Fx::from_int(along) + out * Fx::from_int(ahead)).normalize_or_zero() * ring)
+        .filter(|&p| {
+            let r = FxVec2::new(radius, radius);
+            terrain.inside(p - r)
+                && terrain.inside(p + r)
+                && terrain.footprint(p, radius).is_some()
+                && terrain.clear(p, p, radius)
+                && spots.iter().all(|&(q, gap)| apart(p, q, radius + gap))
+        })
+        .collect()
+}
+
+/// Where an elder of `radius` leaving building `b` stands: the first clear
+/// way out (`LEAVING`). `None` when every one is blocked; the elder then
+/// stays in, as a driver does in a vehicle boxed in on every side.
+pub(super) fn leave_spot(ground: &Ground, b: BuildingIx, radius: Fx) -> Option<FxVec2> {
+    beside(ground, b, radius, &LEAVING).first().copied()
+}
+
+/// Where a sprite of `radius` that an elder of `elder_radius` put out of
+/// building `b` stands: the first clear way (`PUT_OUT`) that isn't the
+/// elder's leaving spot, so the two never land on one another, nor on the
+/// slot spot the sprite walks back to (a walker whose goal sits under
+/// another body holds back, `haulers::move_worker`). With no other spot,
+/// the elder's.
+pub(super) fn eject_spot(ground: &Ground, b: BuildingIx, radius: Fx, elder_radius: Fx) -> Option<FxVec2> {
+    let elder = leave_spot(ground, b, elder_radius);
+    let spots = beside(ground, b, radius, &PUT_OUT);
+    spots.iter().copied().find(|&p| Some(p) != elder).or_else(|| spots.first().copied())
+}
+
+impl super::action::View<'_> {
+    /// Where `me`, of `radius`, stands on leaving building `b` (`leave_spot`).
+    pub(super) fn leave_spot(&self, b: BuildingIx, radius: Fx) -> Option<FxVec2> {
+        let docks: Vec<FxVec2> = self.depots.iter().map(|d| d.position).collect();
+        let ground = Ground { kinds: self.building_kinds, docks: &docks, buildings: self.buildings, bodies: &[], terrain: self.terrain };
+        leave_spot(&ground, b, radius)
+    }
+}
+
 impl Settlement {
+    /// Where an elder of `radius` would stand on leaving building `b`
+    /// (`leave_spot`): for scripts and the view.
+    pub fn leave_spot(&self, b: BuildingIx, radius: Fx, terrain: &Terrain) -> Option<FxVec2> {
+        let docks: Vec<FxVec2> = self.depots.iter().map(|d| d.position).collect();
+        let ground = Ground { kinds: &self.building_kinds, docks: &docks, buildings: &self.buildings, bodies: &[], terrain };
+        leave_spot(&ground, b, radius)
+    }
+
+    /// Where a sprite of `radius` put out of building `b` by an elder of
+    /// `elder_radius` stands (`eject_spot`).
+    pub(super) fn eject_spot(&self, b: BuildingIx, radius: Fx, elder_radius: Fx, terrain: &Terrain) -> Option<FxVec2> {
+        let docks: Vec<FxVec2> = self.depots.iter().map(|d| d.position).collect();
+        let ground = Ground { kinds: &self.building_kinds, docks: &docks, buildings: &self.buildings, bodies: &[], terrain };
+        eject_spot(&ground, b, radius, elder_radius)
+    }
+
     /// The kind of building `b`.
     pub fn building_kind(&self, b: BuildingIx) -> &BuildingKind {
         &self.building_kinds[self.buildings[b as usize].kind as usize]
@@ -526,8 +615,9 @@ impl Settlement {
     /// empty slot and output (nobody works a site). A built building has no
     /// delivery left on its way. Then the slots against
     /// the agents, both ways: a claim or a sprite inside names a sprite that
-    /// holds just that (`SpriteState::holds`), an elder names an avatar, and
-    /// every sprite's hold is that building's slot.
+    /// holds just that (`SpriteState::holds`), an elder names an avatar
+    /// seated there (`Seat::Building`), every sprite's hold is that
+    /// building's slot, and every avatar seated in a building is its elder.
     pub(super) fn validate_buildings(&self) -> Result<(), String> {
         for (i, b) in self.buildings.iter().enumerate() {
             let Some(kind) = self.building_kinds.get(b.kind as usize) else {
@@ -574,7 +664,7 @@ impl Settlement {
                 Slot::Empty => true,
                 Slot::Claimed(a) => holds(a) == Some(Some(Hold::Claimed(building))),
                 Slot::Occupied(Occupant::Sprite(a)) => holds(a) == Some(Some(Hold::Inside(building))),
-                Slot::Occupied(Occupant::Elder(a)) => self.agents.get(a as usize).is_some_and(|a| a.avatar().is_some()),
+                Slot::Occupied(Occupant::Elder(a)) => self.agents.get(a as usize).and_then(|a| a.avatar()).is_some_and(|p| p.seat == Some(super::Seat::Building(building))),
             };
             if !agrees {
                 return Err(format!("{name} slot {:?} doesn't agree with its agent", b.slot));
@@ -589,6 +679,13 @@ impl Settlement {
             };
             if self.buildings.get(building as usize).map(|b| b.slot) != Some(slot) {
                 return Err(format!("sprite {} holds {hold:?}, which its building's slot doesn't show", a.id));
+            }
+        }
+        for (i, a) in self.agents.iter().enumerate() {
+            let Some(building) = a.avatar().and_then(|p| p.seat).and_then(super::Seat::building) else { continue };
+            let slot = Slot::Occupied(Occupant::Elder(i as AgentIx));
+            if self.buildings.get(building as usize).map(|b| (b.built(), b.slot)) != Some((true, slot)) {
+                return Err(format!("avatar {} possesses building {building}, whose slot doesn't show it", a.id));
             }
         }
         Ok(())

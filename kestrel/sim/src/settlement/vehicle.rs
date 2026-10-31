@@ -3,11 +3,15 @@
 //!
 //! A vehicle keeps its own table (`Settlement::vehicles`), as threats do,
 //! and its index is stable for the life of the world. It is lent to its
-//! driver: the avatar's `AvatarState::driving` is the one link between them,
+//! driver: the avatar's `AvatarState::seat` is the one link between them,
 //! and while it is set the driver's movement commands steer the vehicle
 //! instead of the avatar (`drive`). Only the driver writes the vehicle's
 //! controls, in stage 1, so they need no message; climbing in does, since
 //! two players may reach for the same seat on one tick (`Settlement::board`).
+//!
+//! A built building's slot is a seat too (`Seat::Building`, D3): boarding
+//! it possesses the building, putting out the sprite there. One handler
+//! boards both, the nearer one winning.
 //!
 //! Driving is an arcade model in `Fx`: the stick is a direction on the
 //! ground, the vehicle turns toward it (or backs toward it, when it points
@@ -22,8 +26,9 @@ use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
 use super::action::Action;
-use super::avatar::Intent;
-use super::{AgentState, Role, Settlement};
+use super::avatar::{AvatarState, BundleRefusal, Intent, Seat};
+use super::interact::{self, INTERACT_REACH};
+use super::{AgentIx, AgentState, BuildingIx, Event, Occupant, Role, Settlement, Slot};
 use crate::messages::Board;
 use crate::nav::{angle_between, bearing, heading_vector};
 use crate::terrain::Terrain;
@@ -267,26 +272,52 @@ impl Settlement {
 
     /// The vehicle `agent` drives, if it drives one.
     pub fn driving(&self, agent: usize) -> Option<VehicleIx> {
-        self.agents.get(agent)?.avatar()?.driving
+        self.seat(agent)?.vehicle()
+    }
+
+    /// The seat `agent` sits in, if it sits in one: a vehicle it drives or
+    /// a building it possesses.
+    pub fn seat(&self, agent: usize) -> Option<Seat> {
+        self.agents.get(agent)?.avatar()?.seat
     }
 
     /// The agent driving vehicle `vehicle`, if anyone is.
     pub fn driver_of(&self, vehicle: VehicleIx) -> Option<usize> {
-        self.agents.iter().position(|a| a.avatar().is_some_and(|p| p.driving == Some(vehicle)))
+        self.agents.iter().position(|a| a.avatar().is_some_and(|p| p.seat == Some(Seat::Vehicle(vehicle))))
     }
 
-    /// Stage 5: players climb into the nearest free vehicle in reach, in
-    /// command order, so the first to reach for a seat gets it.
-    pub(crate) fn board(&mut self, messages: Vec<Board>) {
-        for Board { agent } in messages {
-            let agent = agent as usize;
+    /// Stage 5: players climb into the nearest free seat in reach, in
+    /// command order (players in order, `World::apply_commands`), so the
+    /// first to reach for a seat gets it.
+    ///
+    /// - A vehicle is in reach within `BOARD_REACH` of touching it and free
+    ///   while nobody drives it, as it always was.
+    /// - A building (D3) is in reach while its slot spot is within the
+    ///   interact reach, so the boarding key and interact (which names the
+    ///   building, `building`) reach the same. Only a built one counts; it
+    ///   is free unless another elder possesses it, and boarding it is
+    ///   refused while a carry job runs or the bundle holds anything
+    ///   (`interact::board_refusal`).
+    /// - Between a vehicle and a building, the nearer one wins: the vehicle's
+    ///   center against the building's slot spot. A tie goes to the vehicle,
+    ///   and among buildings to the lower index.
+    ///
+    /// When nothing free is in reach but a building is, the nearest one's
+    /// refusal is an event the view explains (`Event::BundleRefused`); an
+    /// interact on a building out of reach is refused as `OutOfReach`.
+    /// Taking a building puts out a sprite in its slot or on its way to it
+    /// (`possess`).
+    pub(crate) fn board(&mut self, messages: Vec<Board>, terrain: &Terrain) {
+        for Board { agent: me, building: wanted } in messages {
+            let agent = me as usize;
             let Some(a) = self.agents.get(agent) else { continue };
             let Some(avatar) = a.avatar() else { continue };
-            if !a.body.alive() || avatar.driving.is_some() || avatar.dig.is_some() {
+            if !a.body.alive() || avatar.seat.is_some() || avatar.dig.is_some() {
                 continue;
             }
             let (position, radius) = (a.body.position, a.radius());
-            let nearest = (0..self.vehicles.len())
+            let vehicle = (0..self.vehicles.len())
+                .filter(|_| wanted.is_none())
                 .filter(|&ix| self.driver_of(ix as VehicleIx).is_none())
                 .map(|ix| {
                     let v = &self.vehicles[ix];
@@ -294,43 +325,136 @@ impl Settlement {
                     ((v.position - position).length_squared(), reach, ix)
                 })
                 .filter(|&(d2, reach, _)| d2 <= reach * reach)
-                .min_by_key(|&(d2, _, ix)| (d2, ix));
-            let Some((_, _, ix)) = nearest else { continue };
-            let AgentState { body, role: Role::Avatar(avatar), .. } = &mut self.agents[agent] else { continue };
-            avatar.driving = Some(ix as VehicleIx);
-            avatar.intent = Some(Intent::Stop);
-            avatar.flight.requested = false;
-            avatar.swing = None;
-            avatar.queued = None;
-            avatar.queued_at = None;
-            body.route.clear();
-            body.velocity = FxVec2::ZERO;
-            body.push = FxVec2::ZERO;
-            self.vehicles[ix].control = Control::default();
+                .min_by_key(|&(d2, _, ix)| (d2, ix))
+                .map(|(d2, _, ix)| (d2, ix));
+            // Built buildings in reach, nearest first, with why each can't
+            // be boarded, if it can't.
+            let mut buildings: Vec<(Fx, BuildingIx, Option<BundleRefusal>)> = (0..self.buildings.len() as BuildingIx)
+                .filter(|&b| wanted.is_none_or(|w| w == b))
+                .filter(|&b| self.buildings[b as usize].built())
+                .map(|b| {
+                    let building = &self.buildings[b as usize];
+                    let spot = building.slot_position(&self.building_kinds[building.kind as usize]);
+                    ((spot - position).length_squared(), b, interact::board_refusal(&a.carry, building.slot, me))
+                })
+                .filter(|&(d2, _, _)| d2 <= INTERACT_REACH * INTERACT_REACH)
+                .collect();
+            buildings.sort_by_key(|&(d2, b, _)| (d2, b));
+            let building = buildings.iter().find(|(_, _, refusal)| refusal.is_none()).map(|&(d2, b, _)| (d2, b));
+            match (vehicle, building) {
+                (Some((dv, ix)), Some((db, _))) if dv <= db => self.drive_off(agent, ix),
+                (Some((_, ix)), None) => self.drive_off(agent, ix),
+                (_, Some((_, b))) => self.possess(agent, b, terrain),
+                (None, None) => {
+                    let reason = match buildings.first() {
+                        Some(&(_, _, refusal)) => refusal,
+                        None if wanted.is_some() => Some(BundleRefusal::OutOfReach),
+                        None => None,
+                    };
+                    if let Some(reason) = reason {
+                        self.events.push(Event::BundleRefused { agent: me, reason });
+                    }
+                }
+            }
         }
     }
 
+    /// Seats `agent` in vehicle `ix`, stopping what it was doing.
+    fn drive_off(&mut self, agent: usize, ix: usize) {
+        let AgentState { body, role: Role::Avatar(avatar), .. } = &mut self.agents[agent] else { return };
+        avatar.seat = Some(Seat::Vehicle(ix as VehicleIx));
+        sit_down(body, avatar);
+        self.vehicles[ix].control = Control::default();
+    }
+
+    /// Seats `agent` in building `b`'s slot (D3), stopping what it was
+    /// doing. A sprite inside is put out beside the building
+    /// (`buildings::eject_spot`); one on its way loses its claim where it
+    /// is. Either stops and, finding its slot gone on its next step, plans
+    /// again (`sprites`): another free building of its kind, or a wait.
+    fn possess(&mut self, agent: usize, b: BuildingIx, terrain: &Terrain) {
+        let sprite = match self.buildings[b as usize].slot {
+            Slot::Claimed(s) => Some((s, false)),
+            Slot::Occupied(Occupant::Sprite(s)) => Some((s, true)),
+            Slot::Empty | Slot::Occupied(Occupant::Elder(_)) => None,
+        };
+        if let Some((s, inside)) = sprite {
+            self.release_slot(s);
+            let spot = inside.then(|| self.eject_spot(b, self.agents[s as usize].radius(), self.agents[agent].radius(), terrain)).flatten();
+            let body = &mut self.agents[s as usize].body;
+            if let Some(spot) = spot {
+                body.position = spot;
+            }
+            body.route.clear();
+            body.velocity = FxVec2::ZERO;
+            body.push = FxVec2::ZERO;
+        }
+        self.buildings[b as usize].slot = Slot::Occupied(Occupant::Elder(agent as AgentIx));
+        let AgentState { body, role: Role::Avatar(avatar), .. } = &mut self.agents[agent] else { return };
+        avatar.seat = Some(Seat::Building(b));
+        sit_down(body, avatar);
+    }
+
     /// Housekeeping: drivers sit in their seats, and a vehicle nobody
-    /// drives lets go of its controls.
-    pub(crate) fn vehicle_housekeeping(&mut self) {
+    /// drives lets go of its controls. An elder possessing a building
+    /// stands at its slot spot, facing it; a building whose elder no longer
+    /// sits there (it left, died or respawned, `avatar::act`) empties its
+    /// slot, for a waiting sprite to take (A3).
+    pub(crate) fn seat_housekeeping(&mut self, terrain: &Terrain) {
         let mut driven = vec![false; self.vehicles.len()];
         for a in &mut self.agents {
             let AgentState { body, role: Role::Avatar(avatar), .. } = a else { continue };
-            let Some(ix) = avatar.driving else { continue };
-            let v = &self.vehicles[ix as usize];
-            seat(body, avatar, v, &self.characters[v.character as usize]);
-            driven[ix as usize] = true;
+            match avatar.seat {
+                Some(Seat::Vehicle(ix)) => {
+                    let v = &self.vehicles[ix as usize];
+                    seat(body, avatar, v, &self.characters[v.character as usize]);
+                    driven[ix as usize] = true;
+                }
+                Some(Seat::Building(b)) => {
+                    let building = &self.buildings[b as usize];
+                    let spot = building.slot_position(&self.building_kinds[building.kind as usize]);
+                    body.position = spot;
+                    body.heading = bearing(spot, building.position);
+                    body.velocity = FxVec2::ZERO;
+                    if let Some(ground) = terrain.footprint(spot, body.base_radius) {
+                        avatar.height = ground;
+                        avatar.flight.support = ground;
+                    }
+                    avatar.flight.airborne = false;
+                }
+                None => {}
+            }
         }
         for (v, driven) in self.vehicles.iter_mut().zip(driven) {
             if !driven {
                 v.control = Control::default();
             }
         }
+        for (i, building) in self.buildings.iter_mut().enumerate() {
+            let Slot::Occupied(Occupant::Elder(a)) = building.slot else { continue };
+            let seated = self.agents.get(a as usize).and_then(AgentState::avatar).is_some_and(|avatar| avatar.seat == Some(Seat::Building(i as BuildingIx)));
+            if !seated {
+                building.slot = Slot::Empty;
+            }
+        }
     }
 }
 
+/// Stops what a player sitting down was doing: walking, flying, a swing
+/// and what it queued.
+fn sit_down(body: &mut super::Body, avatar: &mut AvatarState) {
+    avatar.intent = Some(Intent::Stop);
+    avatar.flight.requested = false;
+    avatar.swing = None;
+    avatar.queued = None;
+    avatar.queued_at = None;
+    body.route.clear();
+    body.velocity = FxVec2::ZERO;
+    body.push = FxVec2::ZERO;
+}
+
 /// Puts a driver in the vehicle's seat, facing its way.
-pub(super) fn seat(body: &mut super::Body, avatar: &mut super::avatar::AvatarState, v: &VehicleState, def: &CharacterDef) {
+pub(super) fn seat(body: &mut super::Body, avatar: &mut AvatarState, v: &VehicleState, def: &CharacterDef) {
     let (position, height) = v.seat(def);
     body.position = position;
     body.heading = v.heading;
