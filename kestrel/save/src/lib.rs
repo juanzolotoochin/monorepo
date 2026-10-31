@@ -77,7 +77,10 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///     (`Kinds::Only`, the Sacred Tree's piles).
 /// 26: a holder can be a site's materials (`InventoryRef::Site`, in
 ///     transfers and carry jobs), which deliveries fill.
-pub const FORMAT_VERSION: u32 = 26;
+/// 27: a town keeps a pile lab (`Settlement::piles`, `PileLab::town`) for
+///     the bundles dropped on the ground, whose piles hold any item; a 26
+///     town has none.
+pub const FORMAT_VERSION: u32 = 27;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

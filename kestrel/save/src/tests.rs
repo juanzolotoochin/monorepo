@@ -271,3 +271,63 @@ fn a_town_saved_mid_delivery_continues() {
         tick += 1;
     }
 }
+
+/// A Sacred Tree saved while a dropped bundle flies onto its new ground
+/// pile, which a town's pile lab holds since format 27 (`PileLab::town`),
+/// continues exactly.
+#[test]
+fn a_town_saved_mid_drop_continues() {
+    use fx::{Fx, FxVec2};
+    use sim::settlement::avatar::Intent;
+    use sim::settlement::{InteractTarget, InventoryRef};
+    use sim::{Command, CommandKind, PlayerId};
+    let content = Content::builtin();
+    let text = include_str!("../../app/assets/levels/sacred_tree_supply.ron");
+    let scenario = content::scenario::Scenario::parse(text).unwrap();
+    // The tree's trunk, as the scene's architecture blocks it.
+    let trunk = [sim::terrain::Disc { center: FxVec2::ZERO, radius: Fx::ONE }];
+    let start = || Simulation::from_world(sim::World::new_settlement(5, &content, &scenario, &trunk).unwrap(), 2);
+    let probe = start();
+    let (center, dock) = {
+        let s = probe.world().settlement().unwrap();
+        (probe.world().terrain().center, s.depots[0].position)
+    };
+    let open = FxVec2::new(center.x + Fx::from_int(3), center.y - Fx::from_int(4));
+    let command = |kind| Command { player: PlayerId(0), kind };
+    let walk = |target| command(CommandKind::MoveAvatar { agent: 0, intent: Intent::GoTo { target, run: true } });
+    // Five wood from the tree's wood pile, dropped in the open.
+    let turn = |tick: u64| -> Vec<Command> {
+        match tick {
+            0 => vec![command(CommandKind::AddStock { depot: 0, item: 0, units: 5 }), walk(dock)],
+            150 => vec![command(CommandKind::Interact { agent: 0, target: InteractTarget::Depot(0) })],
+            300 => vec![walk(open)],
+            600 => vec![command(CommandKind::Drop { agent: 0 })],
+            _ => vec![],
+        }
+    };
+    let mut uninterrupted = start();
+    let expected: Vec<_> = (0..800).map(|tick| uninterrupted.step(&turn(tick))).collect();
+    let piles = &uninterrupted.world().settlement().unwrap().piles.as_ref().unwrap().piles;
+    assert_eq!(piles.values().map(|p| p.units()).collect::<Vec<_>>(), vec![5], "dropped");
+
+    let mut first = start();
+    let mut tick = 0;
+    loop {
+        first.step(&turn(tick));
+        tick += 1;
+        let s = first.world().settlement().unwrap();
+        if s.transfers.values().any(|t| matches!(t.to, InventoryRef::Pile(_))) && s.agents[0].carry.job.is_some() {
+            break;
+        }
+        assert!(tick < 800, "no drop in flight");
+    }
+    let bytes = write(first.world(), &content);
+    let mut resumed = Simulation::from_world(read(&bytes, &content).unwrap(), 2);
+    for expected in &expected[tick as usize..] {
+        let actual = resumed.step(&turn(tick));
+        if let Some(difference) = expected.first_difference(&actual) {
+            panic!("first difference at {difference}");
+        }
+        tick += 1;
+    }
+}

@@ -823,9 +823,25 @@ fn a_blueprint_needs_protocol_nine() {
     let inputs = vec![Input { seq: 1, tick: 4, kind: place }, Input { seq: 2, tick: 4, kind: site }];
     let packet = Packet::Inputs { epoch: 1, world: 1, turn_ack: 0, inputs, hashes: vec![], ping: 0 };
     let mut bytes = encode(&packet);
-    assert_eq!(PROTOCOL_VERSION, 9);
+    assert!(PROTOCOL_VERSION >= 9);
     assert_eq!(decode(&bytes), Some(packet));
     bytes[4..6].copy_from_slice(&8u16.to_le_bytes());
+    assert_eq!(decode(&bytes), None);
+}
+
+/// A drop and a ground pile target are new in protocol 10: they
+/// round-trip, and a peer speaking 9 is ignored rather than misread.
+#[test]
+fn a_drop_needs_protocol_ten() {
+    use crate::protocol::{decode, encode, Input, Packet, PROTOCOL_VERSION};
+    let drop = sim::CommandKind::Drop { agent: 0 };
+    let pile = sim::CommandKind::Interact { agent: 0, target: sim::settlement::InteractTarget::Pile(2) };
+    let inputs = vec![Input { seq: 1, tick: 4, kind: drop }, Input { seq: 2, tick: 4, kind: pile }];
+    let packet = Packet::Inputs { epoch: 1, world: 1, turn_ack: 0, inputs, hashes: vec![], ping: 0 };
+    let mut bytes = encode(&packet);
+    assert_eq!(PROTOCOL_VERSION, 10);
+    assert_eq!(decode(&bytes), Some(packet));
+    bytes[4..6].copy_from_slice(&9u16.to_le_bytes());
     assert_eq!(decode(&bytes), None);
 }
 

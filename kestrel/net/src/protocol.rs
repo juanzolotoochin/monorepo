@@ -20,7 +20,9 @@ const MAGIC: &[u8; 4] = b"LSTP";
 /// 8: adds `CommandKind::Interact`; peers on 7 cannot decode it.
 /// 9: adds `CommandKind::PlaceBlueprint` and `InteractTarget::Site`; peers
 ///    on 8 cannot decode them.
-pub const PROTOCOL_VERSION: u16 = 9;
+/// 10: adds `CommandKind::Drop` and `InteractTarget::Pile`; peers on 9
+///     cannot decode them.
+pub const PROTOCOL_VERSION: u16 = 10;
 /// Stay under typical path MTUs (and Steam's unreliable message limit).
 pub const MAX_PACKET: usize = 1200;
 pub const SAVE_CHUNK: usize = 1000;
