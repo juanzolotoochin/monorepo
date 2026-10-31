@@ -4,19 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M2.1 Bundles at piles and the tree
-
-- **Status:** open
-- **Why:** resources move only by hand (D6, A4).
-- **What to do:** a one-type cargo of 5 for the elder, top-up pickups,
-  deposit and withdraw at the tree's wood and stone piles.
-- **Where:** `kestrel/sim/src/settlement/avatar.rs`, `inventory.rs`.
-- **From M1.2:** an output has no `InventoryRef` yet, and
-  `validate_buildings` insists nothing is reserved on it. Picking up from
-  one needs a variant (appended) and the reservation check to count the
-  carry jobs and transfers on it, as `validate_lab` does.
-- **Found in:** Sacred Tree handoff.
-
 ## M2.2 Interact target and highlight
 
 - **Status:** open
@@ -24,6 +11,20 @@ its milestones, in order; one PR per milestone.
 - **What to do:** `interact_target` in the sim, `Interact { agent, target }`,
   the app's highlight from the same function, the radial menu on sprites.
 - **Where:** `kestrel/sim/src/settlement/action.rs`, `kestrel/app/`.
+- **From M2.1:** an output pile and a tree pile act through
+  `avatar::bundle_job(carry, view, other, direction)`: Interact on
+  `InventoryRef::Output(b)` is a `Direction::Pickup`; on a tree pile
+  (`InventoryRef::Depot(d)`) a `Deposit` while carrying, a `Pickup` when
+  empty-handed. Its `Err(BundleRefusal)` says why a target isn't usable, so
+  `interact_target` can filter on `is_ok()`, and `Action::Bundle`'s body is
+  what Interact runs for these kinds (it emits `Event::BundleRefused`, which
+  the view can show with `BundleRefusal::message`). A job refused later in
+  stage 5 (another player took the units first, `reserve_stock`) rolls back
+  with no event; give it one if the feedback needs it. The units move only
+  once the elder is within 0.85 m of the pile (`DOCK_REACH`); the verbs
+  walk it there, and Interact's reach check must be at least that close. The
+  view's `manual_jobs` lists depot jobs only, so an output pickup in
+  progress doesn't show there yet.
 - **Found in:** Sacred Tree handoff.
 
 ## M2.3 Blueprints, sites and installing parts
@@ -43,6 +44,12 @@ its milestones, in order; one PR per milestone.
   reachable: a sprite that claims a building it can't walk to holds the
   claim and asks for a route every `RETRY_TICKS`. Check reachability from
   the tree when placing, or let a sprite give up a claim it can't reach.
+- **From M2.1:** a delivery is a bundle deposit into the site's
+  `materials`: give `avatar::bundle_job` a site holder (an appended
+  `InventoryRef` variant) that takes only what the next part still needs,
+  sized to that need, and have `validate_buildings` count its reservations
+  with `expected_reservations` as outputs do (it insists materials hold
+  nothing reserved today).
 - **From M1.4:** the camera looks from +x, +z at a fixed angle, so the
   tree's canopy hides a building just behind it (-x, -z): M1.4 moved the
   prebuilt Wood Gatherer from (-4.6, -2.2) to (-5.2, 0.6) for this. Keep
@@ -60,6 +67,10 @@ its milestones, in order; one PR per milestone.
 - **What to do:** let piles hold any item, not only minerals (handoff,
   "Open questions"), then drop into and pick up from ground piles of wood
   and stone.
+- **From M2.1:** `avatar::bundle_job` refuses `InventoryRef::Pile` as "not
+  a holder"; add piles there (a `OneKind` pile's item is `kind()`, as an
+  output's is), so a pickup tops up from a ground pile by the same rule. A
+  pile haul is still a `PileJob` on its own path (`piles::haul`).
 - **Where:** `kestrel/sim/src/settlement/piles.rs`.
 - **Found in:** Sacred Tree handoff.
 
@@ -152,6 +163,39 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M1.1.
 
 ## Done
+
+### M2.1 Bundles at piles and the tree
+
+- **Status:** done (branch `kestrel-sacred-tree`)
+- **Why:** resources move only by hand (D6, A4).
+- **What to do:** a one-type cargo of 5 for the elder, top-up pickups,
+  deposit and withdraw at the tree's wood and stone piles.
+- **Where:** `kestrel/sim/src/settlement/avatar.rs`, `inventory.rs`.
+- **From M1.2:** an output has no `InventoryRef` yet, and
+  `validate_buildings` insists nothing is reserved on it. Picking up from
+  one needs a variant (appended) and the reservation check to count the
+  carry jobs and transfers on it, as `validate_lab` does.
+- **Found in:** Sacred Tree handoff.
+- **Done:** a depot's `only` (content) makes its inventory `Kinds::Only`
+  (the tree's wood and stone piles take their own item); an agent's
+  `one_kind` makes its cargo `OneKind` (the elder: one item, up to its
+  capacity of 5). Other scenes set neither. `InventoryRef::Output(b)`
+  (appended) names a building's output. `CommandKind::Bundle { agent,
+  other, direction }` and `Action::Bundle` start a carry job sized by
+  `avatar::bundle_job` (also `Settlement::bundle_job`, for the view): a
+  pickup from an output or a depot tops the bundle up with the holder's
+  item, as many as fit; a deposit empties it into a depot that takes its
+  item. Units move once the elder is within the dock reach (0.85 m) of the
+  holder and fly as transfers. Refusals (`BundleRefusal`: busy, not a
+  holder, pickup only, nothing to take, other item, bundle full, nothing
+  carried, wrong pile, pile full) come out as `Event::BundleRefused`, with
+  `message()` for words; the app mirrors it. Depot transfers keep both
+  rules. `validate_buildings` counts output reservations from jobs and
+  transfers (`expected_reservations`, shared with `validate_lab`).
+  Production's cap counts reserved units, which stay in the output until
+  they launch. Control verbs `settlement_pick_up`, `settlement_withdraw`,
+  `settlement_deposit`. Save format 25, input logs 5, net protocol 7. The
+  golden file didn't change.
 
 ### M1.4 Drawing buildings, sprites and outputs
 
