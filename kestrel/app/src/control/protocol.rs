@@ -47,6 +47,19 @@ pub enum Command {
         #[serde(default)]
         job: Option<String>,
     },
+    /// The player tops up their bundle from building `building`'s output
+    /// (its index), as many units as fit, walking there first.
+    SettlementPickUp {
+        building: u16,
+    },
+    /// The player empties their bundle into a depot (by id), walking there.
+    SettlementDeposit {
+        depot: String,
+    },
+    /// The player fills their bundle from a depot (by id), walking there.
+    SettlementWithdraw {
+        depot: String,
+    },
     AssertSettlement {
         delivered: u64,
         cycles: u64,

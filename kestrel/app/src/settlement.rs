@@ -377,6 +377,10 @@ fn endpoint(sim: &Simulation, e: &Endpoint) -> Vec3 {
             Vec3::new(d.position[0], 0., d.position[1]) + Vec3::from_array(d.stock_anchor)
         }
         Endpoint::Cargo(id) => cargo_position(sim, id),
+        Endpoint::Output(b) => {
+            let p = sim.buildings[*b as usize].output_position;
+            Vec3::new(p[0], 0., p[1])
+        }
     }
 }
 fn inventory(
@@ -1845,6 +1849,38 @@ pub fn player_transfer(world: &mut World, depot: &str, item: &str, units: u32, d
         if deposit { "Delivering" } else { "Collecting" },
         if deposit { "to" } else { "from" }
     );
+    Ok(expected)
+}
+/// Starts the player's bundle action on `other` (`Action::Bundle`): walks
+/// there and sends it, sized by the sim's own rule (`bundle_job`). A refusal
+/// fails with its words (`BundleRefusal::message`). Returns the depot items
+/// the cargo will hold once the units land, as `player_transfer` does.
+pub fn player_bundle(world: &mut World, other: sim::settlement::InventoryRef, direction: sim::settlement::Direction) -> Result<u32, String> {
+    let service = world.resource::<crate::lockstep::SessionService>();
+    let (current, sim_world) = (service.settlement().ok_or("No settlement loaded")?, service.world().ok_or("No settlement loaded")?);
+    let agent = service.player().ok_or("No controlled actor")?;
+    let job = current.bundle_job(agent, other, direction, sim_world.tick(), sim_world.terrain()).map_err(|r| r.message().to_string())?;
+    let before: u32 = current.depot_cargo(&current.agents[agent as usize]).iter().sum();
+    // Stand at a depot's dock, or just in front of an output pile, away from
+    // its building (an output pile is that close to the footprint).
+    let target = match other {
+        sim::settlement::InventoryRef::Output(b) => {
+            let b = &current.buildings[b as usize];
+            b.output_position + (b.output_position - b.position).normalize_or_zero() * fx::Fx::from_ratio(2, 5)
+        }
+        sim::settlement::InventoryRef::Depot(d) => current.depots[d as usize].position,
+        _ => return Err("Not a depot or an output".into()),
+    };
+    let target = service.to_view(target);
+    let expected = match direction {
+        sim::settlement::Direction::Pickup => before + job.remaining,
+        sim::settlement::Direction::Deposit => before - job.remaining,
+    };
+    world.resource_scope(|world, mut control: Mut<crate::lockstep::PlayerControl>| {
+        let mut service = world.resource_mut::<crate::lockstep::SessionService>();
+        service.command(sim::CommandKind::Bundle { agent, other, direction });
+        control.go_to(&mut service, target, false);
+    });
     Ok(expected)
 }
 /// Clicking a depot collects from it (Ctrl: deposits). Keyboard E and

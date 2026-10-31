@@ -734,7 +734,11 @@ The existing JSON/TCP interface also exposes `settlement_transfer` (`depot`,
 `settlement_rate` (`rate`, 0.25–4), `settlement_link`, `settlement_machine`, and
 `settlement_defender` (each `id`, `enabled`), `settlement_stock` (`depot`,
 `item`, `units`), and `settlement_sprite_job` (`sprite`, and `job`: a building
-kind's id, or none for idle). Transfers walk the player to the dock and wait for the precise
+kind's id, or none for idle). Where the player carries a bundle (the Sacred
+Tree's elder), `settlement_pick_up` (`building`, its index) tops it up from a
+building's output, and `settlement_withdraw` and `settlement_deposit` (each
+`depot`) fill it from or empty it into a depot, each moving as many units as
+fit; a refusal fails the step with its reason. Transfers walk the player to the dock and wait for the precise
 quantity to arrive. `assert_settlement` checks minimum `delivered`, `cycles`,
 `equipped`, and `kills` counts plus all accounting invariants. `inspect` includes
 full `settlement.simulation`, scenario data, and per-material `balances`.
@@ -758,7 +762,9 @@ works it; the lamp over it and its card say whether it is idle (and who is
 coming), working (and who) or full, and the lamp flares as a unit comes out.
 Its output stacks on the pile in front of it, with the count over it. Hover
 a card for details. Jobs are set through the control protocol
-(`settlement_sprite_job`) until the radial menu lands.
+(`settlement_sprite_job`) until the radial menu lands, and the elder's
+bundle moves through `settlement_pick_up`, `settlement_withdraw` and
+`settlement_deposit` until the interact key does.
 
 ```sh
 bazel build //kestrel/app:sacred_tree_demo

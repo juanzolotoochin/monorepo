@@ -494,6 +494,53 @@ fn a_sprite_staffs_the_wood_gatherer_and_wood_comes_out() {
         .all(|b| b["conserved"] == true));
 }
 
+/// The town's first loop with no UI: a sprite works the Wood Gatherer, the
+/// elder picks its wood up as a bundle and carries it to the tree's wood
+/// pile. Stone can't go there, and a refusal reads as words.
+#[test]
+fn the_elder_carries_the_gatherer_wood_to_the_tree() {
+    let report = run(vec![
+        Command::Scene {
+            scene: "sacred-tree".into(),
+        },
+        Command::SettlementSpriteJob {
+            sprite: "sprite_ash".into(),
+            job: Some("wood_gatherer".into()),
+        },
+        // Four times as fast: about 5 s to walk there and 20 s for 4 wood.
+        Command::SettlementRate { rate: 4.0 },
+        Command::Wait { frames: 240 },
+        Command::SettlementPickUp { building: 0 },
+        Command::Inspect,
+        Command::SettlementDeposit {
+            depot: "tree_wood".into(),
+        },
+        Command::Inspect,
+    ]);
+    assert_eq!(report["status"], "passed", "{report}");
+    let receipts = report["receipts"].as_array().unwrap();
+    let picked = receipts[4]["state"]["settlement"]["simulation"]["agents"]["elder"]["cargo"]["items"]["wood"].as_u64().unwrap();
+    assert!((4..=5).contains(&picked), "{picked}");
+    let simulation = &report["state"]["settlement"]["simulation"];
+    assert_eq!(simulation["agents"]["elder"]["cargo"]["items"], json!({}));
+    assert_eq!(simulation["depots"]["tree_wood"]["items"]["wood"], picked);
+    assert!(report["state"]["settlement"]["balances"]
+        .as_object()
+        .unwrap()
+        .values()
+        .all(|b| b["conserved"] == true));
+    // Nothing there: the step fails with the sim's reason.
+    for (command, error) in [
+        (Command::SettlementWithdraw { depot: "tree_stone".into() }, "Nothing there to pick up"),
+        (Command::SettlementDeposit { depot: "tree_wood".into() }, "Carrying nothing to deposit"),
+        (Command::SettlementPickUp { building: 3 }, "unknown building"),
+    ] {
+        let report = run(vec![Command::Scene { scene: "sacred-tree".into() }, command]);
+        assert_eq!(report["status"], "failed", "{report}");
+        assert!(report["error"].as_str().unwrap().contains(error), "{report}");
+    }
+}
+
 #[test]
 fn player_stands_on_baked_raised_roads_and_steps_back_to_the_ground() {
     let report = run(vec![

@@ -302,6 +302,20 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             let expected = crate::settlement::player_transfer(world, depot, item, *units, *deposit)?;
             Ok(Pending::SettlementTransfer { scene: shown(world).unwrap_or(usize::MAX), expected })
         }
+        Command::SettlementPickUp { building } => {
+            let other = sim::settlement::InventoryRef::Output(*building);
+            if settlement(world)?.buildings.len() <= *building as usize {
+                return Err("unknown building".into());
+            }
+            let expected = crate::settlement::player_bundle(world, other, sim::settlement::Direction::Pickup)?;
+            Ok(Pending::SettlementTransfer { scene: shown(world).unwrap_or(usize::MAX), expected })
+        }
+        Command::SettlementDeposit { depot } | Command::SettlementWithdraw { depot } => {
+            let other = sim::settlement::InventoryRef::Depot(settlement(world)?.depot_index(depot).ok_or("unknown depot")?);
+            let direction = if matches!(command, Command::SettlementDeposit { .. }) { sim::settlement::Direction::Deposit } else { sim::settlement::Direction::Pickup };
+            let expected = crate::settlement::player_bundle(world, other, direction)?;
+            Ok(Pending::SettlementTransfer { scene: shown(world).unwrap_or(usize::MAX), expected })
+        }
         Command::SettlementCancel => {
             settlement(world)?;
             let agent = player(world).ok_or("No controlled actor")?;

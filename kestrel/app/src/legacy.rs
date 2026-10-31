@@ -439,6 +439,8 @@ pub struct Windup {
 pub enum Endpoint {
     Depot(String),
     Cargo(String),
+    /// A building's output pile, by building index.
+    Output(u16),
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -564,6 +566,9 @@ pub enum Event {
     /// Building `building` (an index into `Simulation::buildings`) put a
     /// unit in its output.
     BuildingProduced { building: usize },
+    /// Player `agent`'s bundle action was refused; `reason.message()` says
+    /// why, for the view to show (M2.2).
+    BundleRefused { agent: String, reason: s::avatar::BundleRefusal },
 }
 
 /// One frame's settlement, interpolated between the last two ticks.
@@ -679,6 +684,7 @@ impl Simulation {
             SimHolder::Depot(d) => Some(Endpoint::Depot(current.depots[d as usize].id.clone())),
             SimHolder::Agent(a) => Some(Endpoint::Cargo(agent_name(a))),
             SimHolder::Pile(_) | SimHolder::Collector => None,
+            SimHolder::Output(b) => Some(Endpoint::Output(b)),
         };
         let inventory = |units: &[u32], capacity: u32| Inventory {
             capacity,
@@ -854,6 +860,7 @@ impl Simulation {
                     // covers a client that joins mid-windup.
                     s::Event::ThreatWindup { .. } => return None,
                     s::Event::BuildingProduced { building } => Event::BuildingProduced { building: *building as usize },
+                    s::Event::BundleRefused { agent, reason } => Event::BundleRefused { agent: agent_name(*agent), reason: *reason },
                     s::Event::ThreatSwing { threat, agent, hit, killed, .. } => Event::ThreatSwing {
                         threat: *threat,
                         agent: agent_name(*agent),
