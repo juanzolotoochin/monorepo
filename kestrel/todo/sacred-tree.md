@@ -4,27 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M3.2 Burst
-
-- **Status:** open
-- **Why:** the stand-in for building-specific elder abilities (D3).
-- **From M1.4:** a Burst's units arrive in the output as any unit does;
-  `Event::BuildingProduced` flares the lamp and plays the dispenser cue, so
-  a Burst event can reuse both (`settlement::tick`, `town`).
-- **What to do:** `Burst { agent }`, its cooldown on the elder, its control
-  verb and its ready indicator.
-- **Where:** `kestrel/sim/src/settlement/avatar.rs`, `buildings.rs`,
-  `kestrel/app/`.
-- **From M3.1:** the possessed building is `avatar.seat` (`Seat::Building`).
-  A seated elder's actions go through the `Some(Seat::Building(b))` arm at
-  the top of `avatar::act`, which lets only Board, a Slot interact, Aim,
-  Equip, Release and Respawn through: add `Burst` there (its cooldown on
-  `AvatarState` survives leaving; `respawn` resets `AvatarState`, so keep
-  the cooldown across it as `attack_ready` is). The units go into the
-  output up to `possessed_cap` in stage 5 (a message, as `Install`).
-  Bind the key in a town only while seated; G and E are taken.
-- **Found in:** Sacred Tree handoff.
-
 ## M4.1 Happy path and stability
 
 - **Status:** open
@@ -61,6 +40,16 @@ its milestones, in order; one PR per milestone.
   spot ignore bodies (the action's view reads no agents), so a crowd beside
   a building can overlap them for a moment; the soak should show whether
   that strands anyone.
+- **From M3.2:** `settlement_burst` Bursts the possessed building (R or RT
+  in the app) and fails with the sim's reason ("Burst ready in 12 s",
+  "Output full"); `settlement.burst` has the `cooldown` left in seconds and
+  whether one would go off (`ready`), so the happy path's Burst step can
+  check the output gained its two units, and the soak can Burst in its
+  possess cycles (`burst_tests` cover a cooldown kept across leaving,
+  another building and a respawn). For tuning: a Burst adds 2 against the
+  4x multiplier's 24 units in the 30 s cooldown, and a Burst into a nearly
+  full output adds only what fits, still spending the cooldown; both are
+  content (`burst.units`, `burst.cooldown`, `possessed_cap`).
 - **Found in:** Sacred Tree handoff.
 
 ## Art for the Sacred Tree
@@ -147,6 +136,27 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M2.2.
 
 ## Done
+
+### M3.2 Burst
+
+- **Status:** done (branch `kestrel-sacred-tree`)
+- **Why:** the stand-in for building-specific elder abilities (D3).
+- **From M1.4:** a Burst's units arrive in the output as any unit does;
+  `Event::BuildingProduced` flares the lamp and plays the dispenser cue, so
+  a Burst event can reuse both (`settlement::tick`, `town`).
+- **What to do:** `Burst { agent }`, its cooldown on the elder, its control
+  verb and its ready indicator.
+- **Where:** `kestrel/sim/src/settlement/avatar.rs`, `buildings.rs`,
+  `kestrel/app/`.
+- **From M3.1:** the possessed building is `avatar.seat` (`Seat::Building`).
+  A seated elder's actions go through the `Some(Seat::Building(b))` arm at
+  the top of `avatar::act`, which lets only Board, a Slot interact, Aim,
+  Equip, Release and Respawn through: add `Burst` there (its cooldown on
+  `AvatarState` survives leaving; `respawn` resets `AvatarState`, so keep
+  the cooldown across it as `attack_ready` is). The units go into the
+  output up to `possessed_cap` in stage 5 (a message, as `Install`).
+  Bind the key in a town only while seated; G and E are taken.
+- **Found in:** Sacred Tree handoff.
 
 ### M3.1 Building seats and ejection
 
