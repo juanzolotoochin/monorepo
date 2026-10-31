@@ -4,26 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M1.4 Drawing buildings, sprites and outputs
-
-- **Status:** open
-- **Why:** occupancy, job and working, waiting or full must read from the
-  game view (A7).
-- **What to do:** building skins with idle, working and full states
-  (`Event::BuildingProduced` is ignored by `app/src/legacy.rs` so far; give
-  it a cue),
-  sprites with their job and state, output piles, the tree's counts. Add
-  the `sacred_tree` scene pack to the app's scenes and launch menu
-  (`app/BUILD.bazel`, `app/src/assets.rs`).
-- **Where:** `kestrel/view/`, `kestrel/app/`.
-- **From M1.3:** `app/src/legacy.rs` shows a sprite as an idle hauler with
-  no cargo. Show its job (`SpriteState::job`) and step (`current()`:
-  `Step::Wait` is waiting, `Enter` with `holds` `Inside` is working). Inside,
-  it stands at `BuildingState::slot_position`. The control verb
-  `settlement_sprite_job` exists; once the scene is in the app, give it a
-  script test that sets a job and waits for wood.
-- **Found in:** Sacred Tree handoff.
-
 ## M2.1 Bundles at piles and the tree
 
 - **Status:** open
@@ -63,6 +43,13 @@ its milestones, in order; one PR per milestone.
   reachable: a sprite that claims a building it can't walk to holds the
   claim and asks for a route every `RETRY_TICKS`. Check reachability from
   the tree when placing, or let a sprite give up a claim it can't reach.
+- **From M1.4:** the camera looks from +x, +z at a fixed angle, so the
+  tree's canopy hides a building just behind it (-x, -z): M1.4 moved the
+  prebuilt Wood Gatherer from (-4.6, -2.2) to (-5.2, 0.6) for this. Keep
+  the ghost and placements out of the canopy's shadow, or fade the canopy
+  while it hides something. A new site draws through `settlement::town` as
+  any building does (status `site`, card "BEING BUILT"); its needs readout
+  can go on the same card.
 - **Found in:** Sacred Tree handoff.
 
 ## M2.4 Dropping bundles on ground piles
@@ -95,12 +82,19 @@ its milestones, in order; one PR per milestone.
   holds back (`haulers::move_worker`). `validate_buildings` already wants an
   elder's slot to name an avatar; `players::leave` empties a leaving
   player's elder slot and `remap_agents` shifts slot agents.
+- **From M1.4:** the view already draws an elder occupant: the building's
+  lamp turns violet and its card says "POSSESSED" (`settlement::town`,
+  `legacy::Occupant::Elder`). The elder's own rig is still drawn where its
+  body stands; hide it, or draw its flame form, while it is seated.
 - **Found in:** Sacred Tree handoff.
 
 ## M3.2 Burst
 
 - **Status:** open
 - **Why:** the stand-in for building-specific elder abilities (D3).
+- **From M1.4:** a Burst's units arrive in the output as any unit does;
+  `Event::BuildingProduced` flares the lamp and plays the dispenser cue, so
+  a Burst event can reuse both (`settlement::tick`, `town`).
 - **What to do:** `Burst { agent }`, its cooldown on the elder, its control
   verb and its ready indicator.
 - **Where:** `kestrel/sim/src/settlement/avatar.rs`, `buildings.rs`,
@@ -135,6 +129,13 @@ its milestones, in order; one PR per milestone.
 - **Where:** `kestrel/app/actors/`, `kestrel/app/assets/styles/`,
   `kestrel/content/data/character/elder.ron` and `sprite.ron`,
   `kestrel/app/assets/levels/sacred_tree*.ron`.
+- **From M1.4:** sprites are the `worker` skin, told apart only by size,
+  with a glowing ball over the head as a stand-in flame
+  (`settlement::town`); a flame skin can take its activity color and
+  motion from the same place. The camera shows the whole 26 m clearing, so
+  the tags of the four sprites standing together at the start still touch
+  (every other tag stands higher); a closer camera, or tags that only
+  unfold near the elder, would read better.
 - **Found in:** M1.1.
 
 ## A scene with no weapon
@@ -151,6 +152,34 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M1.1.
 
 ## Done
+
+### M1.4 Drawing buildings, sprites and outputs
+
+- **Status:** done (branch `kestrel-sacred-tree`)
+- **Why:** occupancy, job and working, waiting or full must read from the
+  game view (A7).
+- **What to do:** building skins with idle, working and full states, a cue
+  for `Event::BuildingProduced`, sprites with their job and state, output
+  piles, the tree's counts; the `sacred_tree` scene pack in the app's scenes
+  and launch menu.
+- **Where:** `kestrel/app/src/legacy.rs`, `settlement.rs`, `assets.rs`.
+- **Found in:** Sacred Tree handoff.
+- **Done:** the scene is in the app and its menu (last, so other scenes keep
+  their keys). `legacy.rs` mirrors the buildings (status idle, working,
+  full or site; occupant; claim; progress; output and cap) and each
+  sprite's job and activity (idle, moving, waiting, working), both left out
+  of traces when empty. `settlement::town` draws each building in its
+  kind's skin fitted to its footprint and facing its output, its rotor
+  turning while it works; a lamp over it (amber working, red full, dim
+  idle, violet for an elder) and a card ("WOOD GATHERER / WORKING / ASH");
+  its output stacked on its pile with "3/10 WOOD". A sprite has a flame
+  over its head in its activity's color and a tag with its name, job and
+  activity; inside, it faces its building and bobs. The tree's piles say
+  "WOOD PILE 3" and the HUD line counts the tree's wood and stone.
+  `BuildingProduced` plays the dispenser cue and flares the lamp. The
+  control test `a_sprite_staffs_the_wood_gatherer_and_wood_comes_out` and
+  the manual video `//kestrel/app:sacred_tree_demo`. The Wood Gatherer moved
+  to (-5.2, 0.6): behind the tree, the canopy hid it from the camera.
 
 ### M1.3 Sprites, jobs and slot claims
 
