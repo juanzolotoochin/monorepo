@@ -807,9 +807,25 @@ fn an_interact_needs_protocol_eight() {
     let kind = sim::CommandKind::Interact { agent: 0, target: sim::settlement::InteractTarget::Sprite(2) };
     let packet = Packet::Inputs { epoch: 1, world: 1, turn_ack: 0, inputs: vec![Input { seq: 1, tick: 4, kind }], hashes: vec![], ping: 0 };
     let mut bytes = encode(&packet);
-    assert_eq!(PROTOCOL_VERSION, 8);
+    assert!(PROTOCOL_VERSION >= 8);
     assert_eq!(decode(&bytes), Some(packet));
     bytes[4..6].copy_from_slice(&7u16.to_le_bytes());
+    assert_eq!(decode(&bytes), None);
+}
+
+/// A blueprint and a site target are new in protocol 9: they round-trip,
+/// and a peer speaking 8 is ignored rather than misread.
+#[test]
+fn a_blueprint_needs_protocol_nine() {
+    use crate::protocol::{decode, encode, Input, Packet, PROTOCOL_VERSION};
+    let place = sim::CommandKind::PlaceBlueprint { kind: 1, position: fx::FxVec2::new(fx::Fx::from_int(5), fx::Fx::ONE) };
+    let site = sim::CommandKind::Interact { agent: 0, target: sim::settlement::InteractTarget::Site(1) };
+    let inputs = vec![Input { seq: 1, tick: 4, kind: place }, Input { seq: 2, tick: 4, kind: site }];
+    let packet = Packet::Inputs { epoch: 1, world: 1, turn_ack: 0, inputs, hashes: vec![], ping: 0 };
+    let mut bytes = encode(&packet);
+    assert_eq!(PROTOCOL_VERSION, 9);
+    assert_eq!(decode(&bytes), Some(packet));
+    bytes[4..6].copy_from_slice(&8u16.to_le_bytes());
     assert_eq!(decode(&bytes), None);
 }
 

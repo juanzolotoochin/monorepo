@@ -203,3 +203,71 @@ fn settlement_characters_remap_by_name() {
     let missing = Content::from_sources(without).unwrap();
     assert!(matches!(read(&bytes, &missing), Err(LoadError::MissingContent { name }) if name == "character/ghoul_forest"));
 }
+
+/// A Sacred Tree saved while wood flies to a site, a holder since format
+/// 26 (`InventoryRef::Site`, in the elder's carry job and the units in the
+/// air), continues exactly.
+#[test]
+fn a_town_saved_mid_delivery_continues() {
+    use fx::{Fx, FxVec2};
+    use sim::settlement::avatar::Intent;
+    use sim::settlement::{InteractTarget, InventoryRef};
+    use sim::{Command, CommandKind, PlayerId};
+    let content = Content::builtin();
+    let text = include_str!("../../app/assets/levels/sacred_tree_supply.ron");
+    let scenario = content::scenario::Scenario::parse(text).unwrap();
+    // The tree's trunk, as the scene's architecture blocks it.
+    let trunk = [sim::terrain::Disc { center: FxVec2::ZERO, radius: Fx::ONE }];
+    let start = || Simulation::from_world(sim::World::new_settlement(5, &content, &scenario, &trunk).unwrap(), 2);
+    let probe = start();
+    let (center, dock) = {
+        let s = probe.world().settlement().unwrap();
+        (probe.world().terrain().center, s.depots[0].position)
+    };
+    let site = FxVec2::new(center.x + Fx::from_int(5), center.y);
+    let command = |kind| Command { player: PlayerId(0), kind };
+    let walk = |target| command(CommandKind::MoveAvatar { agent: 0, intent: Intent::GoTo { target, run: true } });
+    // A Stone Gatherer east of the tree, five wood in the tree's wood pile;
+    // the elder takes it to the site and delivers.
+    let turn = |sim: &Simulation, tick: u64| -> Vec<Command> {
+        match tick {
+            0 => vec![command(CommandKind::PlaceBlueprint { kind: 1, position: site }), command(CommandKind::AddStock { depot: 0, item: 0, units: 5 }), walk(dock)],
+            150 => vec![command(CommandKind::Interact { agent: 0, target: InteractTarget::Depot(0) })],
+            300 => {
+                let b = &sim.world().settlement().unwrap().buildings[1];
+                vec![walk(b.output_position + (b.output_position - b.position).normalize_or_zero() * Fx::from_ratio(2, 5))]
+            }
+            700 => vec![command(CommandKind::Interact { agent: 0, target: InteractTarget::Site(1) })],
+            _ => vec![],
+        }
+    };
+    let mut uninterrupted = start();
+    let expected: Vec<_> = (0..900).map(|tick| {
+        let commands = turn(&uninterrupted, tick);
+        uninterrupted.step(&commands)
+    }).collect();
+    assert_eq!(uninterrupted.world().settlement().unwrap().buildings[1].site().unwrap().1.count(0), 2, "delivered");
+
+    let mut first = start();
+    let mut tick = 0;
+    loop {
+        let commands = turn(&first, tick);
+        first.step(&commands);
+        tick += 1;
+        let s = first.world().settlement().unwrap();
+        if s.transfers.values().any(|t| t.to == InventoryRef::Site(1)) && s.agents[0].carry.job.is_some() {
+            break;
+        }
+        assert!(tick < 900, "no delivery in flight");
+    }
+    let bytes = write(first.world(), &content);
+    let mut resumed = Simulation::from_world(read(&bytes, &content).unwrap(), 2);
+    for expected in &expected[tick as usize..] {
+        let commands = turn(&resumed, tick);
+        let actual = resumed.step(&commands);
+        if let Some(difference) = expected.first_difference(&actual) {
+            panic!("first difference at {difference}");
+        }
+        tick += 1;
+    }
+}
