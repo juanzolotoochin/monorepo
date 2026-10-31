@@ -1441,7 +1441,8 @@ fn town_interact(world: &mut World, state: &mut Settlement, sim: &Simulation, pl
         _ => None,
     };
     if let Some(h) = town.highlight.as_ref().filter(|_| menu.is_none()) {
-        let at = h.position + Vec3::Y * (ground(world, h.position) + 0.7);
+        // Above the pile's own count or label, which hang lower.
+        let at = h.position + Vec3::Y * (ground(world, h.position) + 1.3);
         let text = format!("{key}  {}", h.prompt);
         town_caption(world, state, "interact/prompt", at, text.clone(), prompt, text);
         shown.push("interact/prompt".into());

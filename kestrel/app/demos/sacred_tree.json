@@ -4,7 +4,7 @@
   "fps": 30,
   "width": 1440,
   "height": 960,
-  "max_frames": 1200,
+  "max_frames": 1500,
   "steps": [
     {
       "op": "walk",
@@ -43,6 +43,44 @@
     {
       "op": "inspect_building",
       "building": null
+    },
+    {
+      "op": "walk",
+      "position": [
+        -3.3,
+        0.5
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 60
+    },
+    {
+      "op": "settlement_interact_target"
+    },
+    {
+      "op": "settlement_interact"
+    },
+    {
+      "op": "walk",
+      "position": [
+        -1.7,
+        2.4
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 45
+    },
+    {
+      "op": "settlement_interact_target"
+    },
+    {
+      "op": "settlement_interact"
+    },
+    {
+      "op": "wait",
+      "frames": 30
     },
     {
       "op": "inspect"

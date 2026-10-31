@@ -782,7 +782,9 @@ bazel build //kestrel/app:sacred_tree_demo
 
 renders a short video (a local GPU target, like the other demos) of three
 sprites given jobs: one works the Wood Gatherer, one waits for it, and one
-waits for a Stone Gatherer that isn't built yet.
+waits for a Stone Gatherer that isn't built yet. Then the elder walks to the
+Wood Gatherer's output, its pickup ringed and prompted, picks the wood up
+with one interact and deposits it at the tree's wood pile with another.
 
 ## Red Clearing combat arena
 

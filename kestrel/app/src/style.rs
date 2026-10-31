@@ -126,6 +126,8 @@ pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack, studio: bool) {
     let fixture_lighting = environment.as_ref().is_some_and(|e| !e.lights.is_empty());
 
     let settlement = scene.scene.scenario.is_some();
+    // A town (the Sacred Tree): E interacts (`input::town`).
+    let town = scene.scene.scenario.as_ref().is_some_and(|s| !s.building_kinds.is_empty());
     let jumping = crate::lockstep::builtin_character(&scene.scene.player).jump().is_some();
     world.insert_resource(crate::character::ActorFootContacts::from_actor(&actor));
     for mut visible in world
@@ -149,6 +151,8 @@ pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack, studio: bool) {
             "WASD MOVE / SHIFT RUN / LMB FIRE LASER / HOLD R NEAR BASE TO REPAIR"
         } else if jumping {
             "WASD MOVE / SHIFT RUN / SPACE JUMP / LMB ATTACK"
+        } else if town {
+            "WASD MOVE / SHIFT RUN / E INTERACT"
         } else if settlement && !available_weapons.is_empty() {
             "WASD MOVE / SHIFT RUN / LMB STOCK OR ATTACK / CTRL+LMB DEPOSIT / E MACHINE"
         } else if !available_weapons.is_empty() {
