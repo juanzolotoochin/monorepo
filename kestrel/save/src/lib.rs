@@ -69,7 +69,10 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///     drives (`AvatarState::driving`).
 /// 23: the settlement keeps its `building_kinds` and `buildings`, and an
 ///     occupied building's production.
-pub const FORMAT_VERSION: u32 = 23;
+/// 24: an agent's role can be a sprite (`Role::Sprite`, its job, plan and
+///     the slot it holds), and pending messages have `claim_slot` and
+///     `enter_slot` queues.
+pub const FORMAT_VERSION: u32 = 24;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

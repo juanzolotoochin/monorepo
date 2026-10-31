@@ -13,6 +13,8 @@
 //! - 3: adds `PileAction::DropMineral` (a drop that names its mineral),
 //!   appended after every older pile action, so older logs decode the same
 //!   way; one that claims it is refused as corrupt.
+//! - 4: adds `CommandKind::SetSpriteJob`, appended after every older
+//!   command; an older log that claims it is refused as corrupt.
 
 use serde::{Deserialize, Serialize};
 use sim::settlement::piles::PileAction;
@@ -20,7 +22,7 @@ use sim::{Command, CommandKind};
 
 use crate::LoadError;
 
-pub const INPUT_FORMAT_VERSION: u32 = 3;
+pub const INPUT_FORMAT_VERSION: u32 = 4;
 /// The oldest input log this build reads.
 pub const OLDEST_INPUT_FORMAT_VERSION: u32 = 1;
 const MAGIC: &[u8; 4] = b"GLOG";
@@ -75,6 +77,9 @@ impl InputLog {
         }
         if found < 3 && log.turns.iter().flatten().any(|c| matches!(c.kind, CommandKind::Pile { action: PileAction::DropMineral(..), .. })) {
             return Err(crate::corrupt(format!("a version {found} input log holds a pile action added in version 3")));
+        }
+        if found < 4 && log.turns.iter().flatten().any(|c| matches!(c.kind, CommandKind::SetSpriteJob { .. })) {
+            return Err(crate::corrupt(format!("a version {found} input log holds a command added in version 4")));
         }
         Ok(log)
     }
@@ -155,6 +160,15 @@ mod tests {
     #[test]
     fn a_version_one_log_with_a_newer_command_is_refused() {
         let bytes = with_version(log(vec![CommandKind::ReleaseDirectControl { agent: 0 }]).to_bytes(), 1);
+        assert!(matches!(InputLog::from_bytes(&bytes), Err(LoadError::Corrupt(_))));
+    }
+
+    #[test]
+    fn a_version_three_log_with_a_sprite_job_is_refused() {
+        let kind = CommandKind::SetSpriteJob { agent: 1, job: sim::settlement::SpriteJob::Staff(0) };
+        let written = log(vec![kind]);
+        assert_eq!(InputLog::from_bytes(&written.to_bytes()).unwrap(), written);
+        let bytes = with_version(written.to_bytes(), 3);
         assert!(matches!(InputLog::from_bytes(&bytes), Err(LoadError::Corrupt(_))));
     }
 

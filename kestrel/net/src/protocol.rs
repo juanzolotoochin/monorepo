@@ -15,7 +15,8 @@ const MAGIC: &[u8; 4] = b"LSTP";
 /// 4: adds `CommandKind::Leave`, and saves (format 12) count abandoned units.
 /// 5: adds `PileAction::DropMineral` to `CommandKind::Pile`; peers on 4
 ///    cannot decode it.
-pub const PROTOCOL_VERSION: u16 = 5;
+/// 6: adds `CommandKind::SetSpriteJob`; peers on 5 cannot decode it.
+pub const PROTOCOL_VERSION: u16 = 6;
 /// Stay under typical path MTUs (and Steam's unreliable message limit).
 pub const MAX_PACKET: usize = 1200;
 pub const SAVE_CHUNK: usize = 1000;
