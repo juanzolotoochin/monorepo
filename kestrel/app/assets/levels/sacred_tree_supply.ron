@@ -27,5 +27,5 @@
 (id: "mechanism", label: "MECHANISM", materials: [(item: "wood", units: 2)])
 ])
 ], buildings: [
-(kind: "wood_gatherer", position: (-4.6, -2.2))
+(kind: "wood_gatherer", position: (-5.2, 0.6))
 ], producers: [], defenders: [], waves: [], base_health: 1)

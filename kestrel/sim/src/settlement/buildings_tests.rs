@@ -89,7 +89,7 @@ fn the_sacred_tree_loads_with_one_built_wood_gatherer() {
     let b = &s.buildings[0];
     assert_eq!((b.stage.clone(), b.slot, b.output.total()), (Stage::Built, Slot::Empty, 0));
     let center = sim.world().terrain().center;
-    assert_eq!(b.position, FxVec2::new(center.x + fx(-4.6), center.y + fx(-2.2)));
+    assert_eq!(b.position, FxVec2::new(center.x + fx(-5.2), center.y + fx(0.6)));
     assert!(sim.world().terrain().obstacles.contains(&Disc { center: b.position, radius: kind.radius }));
     // The output faces the tree: toward the midpoint of its two piles.
     let tree = FxVec2::new(center.x, center.y + fx(1.7));
@@ -190,7 +190,7 @@ fn a_prebuilt_building_must_stand_clear() {
     let at = |x: f64, y: f64| [fx(x), fx(y)];
     let tree = error(&|s| s.buildings[0].position = at(0.5, -0.5));
     assert!(tree.contains("overlaps an obstacle or another building"), "{tree}");
-    let other = error(&|s| s.buildings.push(Building { kind: "stone_gatherer".into(), position: at(-4.0, -3.0) }));
+    let other = error(&|s| s.buildings.push(Building { kind: "stone_gatherer".into(), position: at(-4.6, 1.2) }));
     assert!(other.contains("building 1 (stone_gatherer)") && other.contains("another building"), "{other}");
     let pile = error(&|s| s.buildings[0].position = at(-2.4, 2.2));
     assert!(pile.contains("covers depot tree_wood's dock"), "{pile}");
@@ -200,7 +200,7 @@ fn a_prebuilt_building_must_stand_clear() {
     assert!(spawn.contains("spawns inside an obstacle"), "{spawn}");
     // A rock where a sprite would stand to work, a quarter turn from the
     // output pile.
-    let rock = Disc { center: FxVec2::new(fx(-5.44), fx(-1.21)), radius: fx(0.2) };
+    let rock = Disc { center: FxVec2::new(fx(-5.47), fx(1.87)), radius: fx(0.2) };
     let slot = World::new_settlement(1, &Content::builtin(), &base, &[trunk(), rock]).err().expect("refused");
     assert!(slot.contains("slot spot is blocked"), "{slot}");
     // Two that just clear each other both stand.

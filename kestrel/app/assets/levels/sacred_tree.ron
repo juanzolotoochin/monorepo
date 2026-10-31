@@ -18,7 +18,7 @@ Scene(id: "sacred-tree", player: "elder", features: [], name: "THE SACRED TREE /
 (kind: Ellipsoid, position: (0.0, 5.8, 0.0), size: (1.8, 1.1, 1.8), material: "flowers"),
 (kind: Ellipsoid, position: (-1.7, -0.075, 1.7), size: (1.4, 0.15, 1.4), material: "dirt"),
 (kind: Ellipsoid, position: (1.7, -0.075, 1.7), size: (1.4, 0.15, 1.4), material: "dirt"),
-(kind: Ellipsoid, position: (-4.6, -0.075, -2.2), size: (2.6, 0.15, 2.6), material: "dirt"),
+(kind: Ellipsoid, position: (-5.2, -0.075, 0.6), size: (2.6, 0.15, 2.6), material: "dirt"),
 (kind: Cylinder, position: (10.14, 1.000, 2.72), size: (0.45, 2.00, 0.45), material: "wood", solid_radius: None),
 (kind: Cone, position: (10.14, 2.166, 2.72), size: (2.2, 2.00, 2.2), material: "leaves"),
 (kind: Cone, position: (10.14, 3.000, 2.72), size: (1.8, 2.00, 1.8), material: "leaves"),
