@@ -738,7 +738,14 @@ kind's id, or none for idle). Where the player carries a bundle (the Sacred
 Tree's elder), `settlement_pick_up` (`building`, its index) tops it up from a
 building's output, and `settlement_withdraw` and `settlement_deposit` (each
 `depot`) fill it from or empty it into a depot, each moving as many units as
-fit; a refusal fails the step with its reason. Transfers walk the player to the dock and wait for the precise
+fit; a refusal fails the step with its reason. In a town, the interact
+key's own path is scriptable too: `settlement_interact_target` reports the
+player's target in the receipt's `settlement.interact` (with `prompt`, it
+fails unless the target's prompt is that, such as `"PICK UP 3 WOOD"`, or
+`""` for none); `settlement_interact` acts on it as E or A does (a bundle
+target's units move, and a sprite opens its job menu); and
+`settlement_job_menu` (`job`: a building kind's id, or none for idle) picks
+the open menu's option. Transfers walk the player to the dock and wait for the precise
 quantity to arrive. `assert_settlement` checks minimum `delivered`, `cycles`,
 `equipped`, and `kills` counts plus all accounting invariants. `inspect` includes
 full `settlement.simulation`, scenario data, and per-material `balances`.
@@ -761,10 +768,13 @@ building, and smoulders when idle. A building's rotor turns while someone
 works it; the lamp over it and its card say whether it is idle (and who is
 coming), working (and who) or full, and the lamp flares as a unit comes out.
 Its output stacks on the pile in front of it, with the count over it. Hover
-a card for details. Jobs are set through the control protocol
-(`settlement_sprite_job`) until the radial menu lands, and the elder's
-bundle moves through `settlement_pick_up`, `settlement_withdraw` and
-`settlement_deposit` until the interact key does.
+a card for details. E (A on a controller) acts on the one thing in reach
+the sim picks (`sim::settlement::interact`), ringed on the ground with what
+it does over it ("E  PICK UP 3 WOOD", "DEPOSIT 5 WOOD", "WITHDRAW 5 WOOD"):
+the elder steps in and the units fly. On a sprite it opens a job menu in a
+ring around it (Idle, Gather Wood, Gather Stone): WASD, the arrows, the
+stick or the D-pad pick a direction, E or A sets the job, Escape or B
+closes it. A refusal shows over the elder's head for a moment.
 
 ```sh
 bazel build //kestrel/app:sacred_tree_demo

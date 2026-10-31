@@ -316,6 +316,32 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             let expected = crate::settlement::player_bundle(world, other, direction)?;
             Ok(Pending::SettlementTransfer { scene: shown(world).unwrap_or(usize::MAX), expected })
         }
+        Command::SettlementInteractTarget { prompt } => {
+            settlement(world)?;
+            let shown = crate::input::town::target(world).map(|h| h.prompt).unwrap_or_default();
+            match prompt {
+                Some(p) if *p != shown => Err(format!("The interact target says {shown:?}, not {p:?}")),
+                _ => Ok(Pending::Instant),
+            }
+        }
+        Command::SettlementInteract => {
+            settlement(world)?;
+            match crate::input::town::interact(world)? {
+                crate::input::town::Used::Bundle { expected } => Ok(Pending::SettlementTransfer { scene: shown(world).unwrap_or(usize::MAX), expected }),
+                crate::input::town::Used::Menu => Ok(Pending::Instant),
+            }
+        }
+        Command::SettlementJobMenu { job } => {
+            let s = settlement(world)?;
+            let wanted = match job {
+                Some(kind) => sim::settlement::SpriteJob::Staff(s.building_kinds.iter().position(|k| k.id == *kind).ok_or("unknown building kind")? as u16),
+                None => sim::settlement::SpriteJob::Idle,
+            };
+            let menu = world.resource::<crate::input::gameplay::Dispatcher>().town.menu.as_ref().ok_or("No job menu open")?;
+            let index = menu.jobs.iter().position(|&j| j == wanted).ok_or("The job menu has no such job")?;
+            crate::input::town::pick(world, index)?;
+            Ok(Pending::Applied)
+        }
         Command::SettlementCancel => {
             settlement(world)?;
             let agent = player(world).ok_or("No controlled actor")?;

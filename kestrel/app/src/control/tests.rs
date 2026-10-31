@@ -541,6 +541,71 @@ fn the_elder_carries_the_gatherer_wood_to_the_tree() {
     }
 }
 
+/// The interact key's path, as a script: the target the highlight shows,
+/// then one interact each to pick up at the Wood Gatherer's output (the
+/// elder steps in), deposit at the tree's wood pile, and open a sprite's
+/// job menu, whose pick sets its job (D5).
+#[test]
+fn the_elder_interacts_its_way_through_the_town() {
+    let wait = |frames| Command::Wait { frames };
+    let walk = |x, z| Command::Walk { position: [x, z] };
+    let target = |prompt: Option<&str>| Command::SettlementInteractTarget { prompt: prompt.map(String::from) };
+    let report = run(vec![
+        Command::Scene {
+            scene: "sacred-tree".into(),
+        },
+        target(Some("")),
+        Command::SettlementSpriteJob {
+            sprite: "sprite_ash".into(),
+            job: Some("wood_gatherer".into()),
+        },
+        Command::SettlementRate { rate: 4.0 },
+        wait(240),
+        // Beside the output pile, a step short of it.
+        walk(-3.3, 0.5),
+        target(None),
+        Command::SettlementInteract,
+        // At the wood pile.
+        walk(-1.7, 2.4),
+        target(None),
+        Command::SettlementInteract,
+        // In front of Fern.
+        walk(-0.6, 4.3),
+        target(Some("SET JOB")),
+        Command::SettlementInteract,
+        Command::Inspect,
+        Command::SettlementJobMenu {
+            job: Some("stone_gatherer".into()),
+        },
+        wait(2),
+    ]);
+    assert_eq!(report["status"], "passed", "{report}");
+    let receipts = report["receipts"].as_array().unwrap();
+    let state = |i: usize| &receipts[i]["state"]["settlement"];
+    let pick_up = state(6)["interact"]["prompt"].as_str().unwrap().to_string();
+    assert_eq!(state(6)["interact"]["target"], json!({"Output": 0}), "{}", state(6)["interact"]);
+    let picked = state(7)["simulation"]["agents"]["elder"]["cargo"]["items"]["wood"].as_u64().unwrap();
+    assert!((4..=5).contains(&picked), "{picked}");
+    assert_eq!(pick_up, format!("PICK UP {picked} WOOD"));
+    assert_eq!(state(9)["interact"]["prompt"], format!("DEPOSIT {picked} WOOD"));
+    assert_eq!(state(10)["simulation"]["depots"]["tree_wood"]["items"]["wood"], picked);
+    assert_eq!(state(10)["simulation"]["agents"]["elder"]["cargo"]["items"], json!({}));
+    let menu = &state(14)["interact"]["menu"];
+    assert_eq!(menu["options"], json!(["IDLE", "GATHER WOOD", "GATHER STONE"]), "{}", state(14)["interact"]);
+    let simulation = &report["state"]["settlement"]["simulation"];
+    assert_eq!(simulation["sprites"]["sprite_fern"]["job"], "stone_gatherer");
+    assert_eq!(report["state"]["settlement"]["interact"]["menu"], Value::Null);
+    assert!(report["state"]["settlement"]["balances"]
+        .as_object()
+        .unwrap()
+        .values()
+        .all(|b| b["conserved"] == true));
+    // Nothing in reach at the start: an interact fails with the reason.
+    let report = run(vec![Command::Scene { scene: "sacred-tree".into() }, Command::SettlementInteract]);
+    assert_eq!(report["status"], "failed", "{report}");
+    assert!(report["error"].as_str().unwrap().contains("Nothing in reach"), "{report}");
+}
+
 #[test]
 fn player_stands_on_baked_raised_roads_and_steps_back_to_the_ground() {
     let report = run(vec![

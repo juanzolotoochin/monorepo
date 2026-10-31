@@ -60,6 +60,22 @@ pub enum Command {
     SettlementWithdraw {
         depot: String,
     },
+    /// Reports the player's interact target in the receipt's state
+    /// (`settlement.interact`); with `prompt`, fails unless the target's
+    /// prompt is that ("PICK UP 3 WOOD"), or there is none and it is empty.
+    SettlementInteractTarget {
+        #[serde(default)]
+        prompt: Option<String>,
+    },
+    /// Interacts as E or A does, on the same target: a bundle target's units
+    /// move (the elder steps in to it), and a sprite opens its job menu.
+    SettlementInteract,
+    /// Picks the open job menu's option for `job` (a building kind's id, or
+    /// idle when missing), as the menu's own pick does.
+    SettlementJobMenu {
+        #[serde(default)]
+        job: Option<String>,
+    },
     AssertSettlement {
         delivered: u64,
         cycles: u64,
