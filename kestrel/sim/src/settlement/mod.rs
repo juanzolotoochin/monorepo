@@ -45,7 +45,7 @@ use crate::terrain::{Disc, Terrain};
 
 pub use combat::{CombatMetrics, DefenderState, Event, Impact, OnMiss, Pinned, Prediction, Projectile, SpentProjectile, Threat, TossEnd, WaveState};
 pub use agent::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
-pub use buildings::{BuildingIx, BuildingKind, BuildingKindIx, BuildingState, Occupant, Slot, Stage};
+pub use buildings::{BuildingIx, BuildingKind, BuildingKindIx, BuildingState, Occupant, PlacementRefusal, Slot, Stage};
 pub use haulers::{HaulerState, Phase};
 pub use interact::{InteractTarget, Interaction};
 pub use inventory::{Inventory, Kinds};
@@ -109,7 +109,7 @@ pub struct ProducerState {
 }
 
 /// Names a holder of goods: a depot's inventory, an agent's cargo, a pile,
-/// the collector or a building's output. A flying unit's two ends are these,
+/// the collector, a building's output or a site's materials. A flying unit's two ends are these,
 /// and so is a carry job's other side. New variants go last:
 /// `behaviour_digest` hashes the variant index of every transfer's ends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -120,6 +120,9 @@ pub enum InventoryRef {
     Collector,
     /// A building's output pile, which a bundle picks up from (D6).
     Output(BuildingIx),
+    /// A site's materials, which a bundle delivers to and nothing takes
+    /// from (D4). Units land beside the site, where its output pile will be.
+    Site(BuildingIx),
 }
 
 impl InventoryRef {
@@ -737,18 +740,22 @@ impl Settlement {
             InventoryRef::Agent(a) => &mut self.agents[a as usize].carry.inventory,
             InventoryRef::Pile(_) | InventoryRef::Collector => self.piles.as_mut().expect("a pile scene").holder_mut(holder),
             InventoryRef::Output(b) => &mut self.buildings[b as usize].output,
+            InventoryRef::Site(b) => match &mut self.buildings[b as usize].stage {
+                Stage::Site { materials, .. } => materials,
+                Stage::Built => unreachable!("a built building takes no deliveries"),
+            },
         }
     }
 
     /// Where `holder` takes and gives units: a depot's dock, an agent's
-    /// body, a pile, the collector, a building's output pile.
+    /// body, a pile, the collector, a building's output pile (a site's too).
     pub(crate) fn position_of(&self, holder: InventoryRef) -> FxVec2 {
         match holder {
             InventoryRef::Depot(d) => self.depots[d as usize].position,
             InventoryRef::Agent(a) => self.agents[a as usize].body.position,
             InventoryRef::Pile(id) => self.piles.as_ref().expect("a pile scene").piles[&id].position,
             InventoryRef::Collector => self.piles.as_ref().and_then(|lab| lab.collector.as_ref()).expect("a collector").position,
-            InventoryRef::Output(b) => self.buildings[b as usize].output_position,
+            InventoryRef::Output(b) | InventoryRef::Site(b) => self.buildings[b as usize].output_position,
         }
     }
 
@@ -877,7 +884,8 @@ impl Settlement {
 
     /// What `holder` should hold reserved, `(out, in)` per item, recomputed
     /// from the units flying there and the carry jobs on it: a pile, the
-    /// collector or a building output, which nothing else reserves on.
+    /// collector, a building output or a site, which nothing else reserves
+    /// on.
     fn expected_reservations(&self, holder: InventoryRef) -> (Vec<u32>, Vec<u32>) {
         let items = self.items.len();
         let (mut out, mut incoming) = (vec![0u32; items], vec![0u32; items]);
@@ -1026,6 +1034,8 @@ impl StateHash for Settlement {
 mod buildings_tests;
 #[cfg(test)]
 mod bundle_tests;
+#[cfg(test)]
+mod construction_tests;
 #[cfg(test)]
 mod interact_tests;
 #[cfg(test)]

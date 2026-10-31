@@ -83,8 +83,9 @@ pub enum Action {
     /// units move once the agent is there, as a transfer's do.
     Bundle { other: InventoryRef, direction: Direction },
     /// Act on a target the client highlighted (`interact`), if it is still
-    /// in reach and usable: a bundle target's carry job, walking in to the
-    /// dock. A sprite target does nothing here.
+    /// in reach and usable: a bundle target's carry job (a site's delivery
+    /// too), walking in to the dock, or a site's install. A sprite target,
+    /// and a site's needs, do nothing here.
     Interact(InteractTarget),
 }
 
@@ -116,6 +117,7 @@ impl Action {
             | CommandKind::Dig { .. }
             | CommandKind::SetLink { .. }
             | CommandKind::SetSpriteJob { .. }
+            | CommandKind::PlaceBlueprint { .. }
             | CommandKind::SetMachine { .. }
             | CommandKind::SetDefender { .. }
             | CommandKind::Dispense { .. }

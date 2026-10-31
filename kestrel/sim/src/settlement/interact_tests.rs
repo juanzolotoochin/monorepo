@@ -115,7 +115,7 @@ fn produce(sim: &mut Simulation, units: u32) {
 fn offer(sim: &Simulation) -> Option<(InteractTarget, Direction, ItemIx, u32)> {
     match target(sim)? {
         (t, Interaction::Bundle(job)) => Some((t, job.direction, job.item, job.remaining)),
-        (_, Interaction::JobMenu) => None,
+        _ => None,
     }
 }
 

@@ -250,6 +250,12 @@ pub enum Event {
     /// Player `agent`'s bundle action didn't start, for `reason`
     /// (`BundleRefusal::message` says it in words).
     BundleRefused { agent: AgentIx, reason: super::avatar::BundleRefusal },
+    /// A blueprint became a site, the last building in the table.
+    BlueprintPlaced { building: super::BuildingIx },
+    /// A blueprint of `kind` couldn't go down, for `reason`.
+    BlueprintRefused { kind: super::BuildingKindIx, reason: super::buildings::PlacementRefusal },
+    /// A site's part `part` went in; `built` when it was the last.
+    PartInstalled { building: super::BuildingIx, part: u8, built: bool },
 }
 
 /// What a strike reaches (`Settlement::strike_targets`), as its `Strike`

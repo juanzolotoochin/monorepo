@@ -351,6 +351,36 @@ impl StateHash for BundleRefused {
     }
 }
 
+/// A blueprint put down (`CommandKind::PlaceBlueprint`): stage 5 lays its
+/// site where the ground allows (`Settlement::place_blueprints`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaceBlueprint {
+    pub kind: u16,
+    pub position: FxVec2,
+}
+
+impl StateHash for PlaceBlueprint {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.kind);
+        h.write(&self.position);
+    }
+}
+
+/// A player installs a site's next part (`Interaction::Install`): stage 5
+/// uses up its materials if they are all there (`Settlement::install`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Install {
+    pub agent: u16,
+    pub building: u16,
+}
+
+impl StateHash for Install {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+        h.write(&self.building);
+    }
+}
+
 impl StateHash for ReserveStock {
     fn hash_into(&self, h: &mut StateHasher) {
         let job = &self.job;
@@ -373,6 +403,10 @@ impl StateHash for ReserveStock {
             InventoryRef::Collector => h.write_u64(3),
             InventoryRef::Output(b) => {
                 h.write_u64(4);
+                h.write(&b);
+            }
+            InventoryRef::Site(b) => {
+                h.write_u64(5);
                 h.write(&b);
             }
         }
@@ -400,12 +434,14 @@ pub struct ActionMessages {
     pub haul: Vec<StartHaul>,
     pub board: Vec<Board>,
     pub bundle_refused: Vec<BundleRefused>,
+    pub place_blueprint: Vec<PlaceBlueprint>,
+    pub install: Vec<Install>,
 }
 
 impl ActionMessages {
     pub fn is_empty(&self) -> bool {
         self.restart_memory.is_empty() && self.drop_haul.is_empty() && self.drop_notes.is_empty() && self.reserve_stock.is_empty() && self.haul.is_empty()
-            && self.board.is_empty() && self.bundle_refused.is_empty()
+            && self.board.is_empty() && self.bundle_refused.is_empty() && self.place_blueprint.is_empty() && self.install.is_empty()
     }
 }
 
@@ -423,6 +459,12 @@ impl StateHash for ActionMessages {
         // Empty everywhere but the Sacred Tree, likewise.
         if !self.bundle_refused.is_empty() {
             h.write(&self.bundle_refused);
+        }
+        if !self.place_blueprint.is_empty() {
+            h.write(&self.place_blueprint);
+        }
+        if !self.install.is_empty() {
+            h.write(&self.install);
         }
     }
 }

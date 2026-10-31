@@ -19,7 +19,7 @@ use super::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
 use super::action::{Action, View};
 use super::interact::{self, Interaction};
 use super::{AgentIx, DepotState, InventoryRef, ItemIx, Kinds, Settlement};
-use crate::messages::{ActionMessages, BundleRefused, CarryUnit, DropHaul, DropNotes, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
+use crate::messages::{ActionMessages, BundleRefused, CarryUnit, Install, DropHaul, DropNotes, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
 use crate::nav::{self, angle_between, distance};
 use crate::terrain::{Terrain, MAX_LAYERS};
 
@@ -515,6 +515,8 @@ impl Settlement {
         for BundleRefused { agent, reason } in messages.bundle_refused {
             self.events.push(Event::BundleRefused { agent, reason });
         }
+        self.install(messages.install);
+        self.place_blueprints(messages.place_blueprint, terrain);
     }
 
     /// Stage 5: a hit takes `damage` from player `agent`'s health. At 0 the
@@ -555,17 +557,22 @@ impl Settlement {
     /// is that reservation's: a release from the same agent later in the
     /// order (it dropped that job, and its own side with it) is dropped with
     /// it, and a later reservation means the agent took a new job, which
-    /// stands on its own.
+    /// stands on its own. A delivery to a site must also fit what its next
+    /// part still takes, which the inventory alone doesn't know.
     pub(super) fn reserve_stock(&mut self, messages: Vec<ReserveStock>) {
         // Agents whose last reservation was refused, until their job goes.
         let mut refused: Vec<AgentIx> = Vec::new();
         for message in messages {
             let ReserveStock { agent, job, change } = message;
+            let fits = match job.other {
+                InventoryRef::Site(b) => self.buildings.get(b as usize).is_some_and(|site| job.remaining <= site.wanted(&self.building_kinds[site.kind as usize], job.item)),
+                _ => true,
+            };
             let other = self.inventory_mut(job.other);
             match change {
                 StockChange::Reserve => {
                     refused.retain(|&a| a != agent);
-                    if !job.reserve(other, Side::Other) {
+                    if !fits || !job.reserve(other, Side::Other) {
                         refused.push(agent);
                     }
                 }
@@ -768,7 +775,7 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
             // reach and still usable. A sprite's is the app's job menu, so
             // the sim has nothing to do for it.
             let at = interact::position(view, target);
-            if !body.alive() || target.holder().is_none() {
+            if !body.alive() || matches!(target, interact::InteractTarget::Sprite(_)) {
             } else if !at.is_some_and(|p| distance(body.position, p) <= interact::INTERACT_REACH) {
                 out.bundle_refused.push(BundleRefused { agent: me, reason: BundleRefusal::OutOfReach });
             } else {
@@ -784,7 +791,9 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
                             }
                         }
                     }
-                    Ok(Interaction::JobMenu) => {}
+                    Ok(Interaction::Install { building, .. }) => out.install.push(Install { agent: me, building }),
+                    // A site's needs are the view's to show.
+                    Ok(Interaction::JobMenu | Interaction::Needs { .. }) => {}
                     Err(reason) => out.bundle_refused.push(BundleRefused { agent: me, reason }),
                 }
             }
@@ -888,6 +897,10 @@ pub enum BundleRefusal {
     OutOfReach,
     /// A sprite's job is set empty-handed only (`interact`, D5).
     HandsFull,
+    /// A site only takes deliveries (D4).
+    DepositOnly,
+    /// The site's next part takes none of what the bundle holds.
+    NotNeeded,
 }
 
 impl BundleRefusal {
@@ -905,6 +918,8 @@ impl BundleRefusal {
             BundleRefusal::PileFull => "That pile is full",
             BundleRefusal::OutOfReach => "Too far away",
             BundleRefusal::HandsFull => "Hands full: deposit the bundle first",
+            BundleRefusal::DepositOnly => "A site only takes deliveries",
+            BundleRefusal::NotNeeded => "The site doesn't need that",
         }
     }
 }
@@ -912,8 +927,10 @@ impl BundleRefusal {
 /// The carry job a bundle action starts on `other` (D6), or why it can't:
 /// a pickup (from a building output, or a withdrawal from a depot) tops the
 /// bundle up with the holder's item, as many units as fit; a deposit moves
-/// every unit of the bundle's item the depot has room for. Only depots and
-/// building outputs are holders here, and outputs take no deposits. Its
+/// every unit of the bundle's item the depot has room for, and a delivery
+/// to a site every unit its next part still takes (D4). Only depots,
+/// building outputs and sites are holders here; outputs take no deposits,
+/// and sites nothing else. Its
 /// units move once the agent is at the holder (`read_avatar`), as a
 /// transfer's do. M2.2's interact acts through this too.
 pub fn bundle_job(carry: &Carry, view: &View, other: InventoryRef, direction: Direction) -> Result<CarryJob, BundleRefusal> {
@@ -923,6 +940,7 @@ pub fn bundle_job(carry: &Carry, view: &View, other: InventoryRef, direction: Di
     let holder = match other {
         InventoryRef::Depot(d) => view.depots.get(d as usize).map(|d| &d.inventory),
         InventoryRef::Output(b) => view.buildings.get(b as usize).map(|b| &b.output),
+        InventoryRef::Site(b) => view.buildings.get(b as usize).and_then(|b| b.site()).map(|(_, materials)| materials),
         InventoryRef::Agent(_) | InventoryRef::Pile(_) | InventoryRef::Collector => None,
     };
     let Some(holder) = holder else { return Err(BundleRefusal::NotAHolder) };
@@ -930,6 +948,8 @@ pub fn bundle_job(carry: &Carry, view: &View, other: InventoryRef, direction: Di
     // Depot items only: minerals don't go to depots or come out of them.
     let depot_item = |item: &ItemIx| (*item as usize) < view.items;
     let (item, units) = match direction {
+        // A site is a drop-off: nothing is taken back out (D4).
+        Direction::Pickup if matches!(other, InventoryRef::Site(_)) => return Err(BundleRefusal::DepositOnly),
         Direction::Pickup => {
             // The holder's item: a tree pile's own, what an output holds, or
             // in a mixed depot the bundle's item, else the first there.
@@ -955,6 +975,16 @@ pub fn bundle_job(carry: &Carry, view: &View, other: InventoryRef, direction: Di
                 return Err(BundleRefusal::PickupOnly);
             }
             let Some(item) = (0..view.items as ItemIx).find(|&i| cargo.available(i) > 0) else { return Err(BundleRefusal::NothingCarried) };
+            if let InventoryRef::Site(b) = other {
+                // Every unit the next part still takes, the rest staying in
+                // the bundle.
+                let site = &view.buildings[b as usize];
+                let wanted = site.wanted(&view.building_kinds[site.kind as usize], item);
+                if wanted == 0 {
+                    return Err(BundleRefusal::NotNeeded);
+                }
+                return Ok(CarryJob { other, item, direction, remaining: cargo.available(item).min(wanted), next_tick: view.tick });
+            }
             if !holder.accepts(item) {
                 return Err(BundleRefusal::WrongPile);
             }

@@ -12,6 +12,13 @@
 //! or one a sprite has only claimed, does nothing (A1). An output is a pile
 //! of the kind's product beside the building; production pauses while it
 //! holds the occupant's cap.
+//!
+//! Players put new buildings up (D1, D4). `PlaceBlueprint` lays a site where
+//! `placement` allows one, the check the scenario's prebuilt buildings pass
+//! too. Deliveries fill the next part's materials (`InventoryRef::Site`, a
+//! drop-off nothing is taken back from), and an install uses them up and
+//! moves on to the next part. Installing the last makes the building
+//! `Built`; it stays inert until someone occupies it.
 
 use content::scenario::{self, Scenario};
 use fx::{Fx, FxVec2};
@@ -19,6 +26,8 @@ use serde::{Deserialize, Serialize};
 
 use super::sprites::Hold;
 use super::{AgentIx, DepotIx, Event, Inventory, InventoryRef, ItemIx, Kinds, Settlement};
+use crate::messages::{Install, PlaceBlueprint};
+use crate::nav;
 use crate::terrain::{Disc, Terrain, CLEARANCE_MARGIN};
 
 pub type BuildingIx = u16;
@@ -31,6 +40,9 @@ const DOCK_RADIUS: Fx = Fx::from_ratio(3, 20);
 const SLOT_RADIUS: Fx = Fx::from_ratio(3, 10);
 /// How far past its footprint a building's slot spot is.
 const SLOT_GAP: Fx = Fx::from_ratio(2, 5);
+/// How far in front of an output pile, away from its building, a player
+/// stands to pick up there, or to deliver to a site's materials there.
+pub const STAND_GAP: Fx = Fx::from_ratio(2, 5);
 
 /// A building kind's rules, from the scenario: rules, not state, but copied
 /// into the settlement as weapon tuning is, since the scenario isn't kept.
@@ -136,13 +148,67 @@ impl BuildingState {
         self.stage == Stage::Built
     }
 
+    /// A site's next part and the materials delivered for it; `None` once
+    /// built.
+    pub fn site(&self) -> Option<(u8, &Inventory)> {
+        match &self.stage {
+            Stage::Site { part, materials } => Some((*part, materials)),
+            Stage::Built => None,
+        }
+    }
+
+    /// What a site's next part still lacks on the ground, in the part's
+    /// order: its materials less what has landed (units in the air still
+    /// count as missing). Empty once the part is complete, and for a built
+    /// building.
+    pub fn needs(&self, kind: &BuildingKind) -> Vec<(ItemIx, u32)> {
+        let Some((part, materials)) = self.site() else { return Vec::new() };
+        let part = kind.parts.get(part as usize).map_or(&[][..], |p| &p[..]);
+        part.iter().map(|&(item, units)| (item, units.saturating_sub(materials.count(item)))).filter(|&(_, units)| units > 0).collect()
+    }
+
+    /// Units of `item` a site's next part still takes: its need less what
+    /// has landed and what is on its way. Zero for an item the part doesn't
+    /// use, and for a built building.
+    pub fn wanted(&self, kind: &BuildingKind, item: ItemIx) -> u32 {
+        let Some((part, materials)) = self.site() else { return 0 };
+        let need = kind.parts.get(part as usize).and_then(|p| p.iter().find(|&&(i, _)| i == item)).map_or(0, |&(_, units)| units);
+        need.saturating_sub(materials.count(item) + materials.reserved_in[item as usize])
+    }
+
+    /// Whether a site's next part has all its materials on the ground, so
+    /// it can be installed.
+    pub fn ready(&self, kind: &BuildingKind) -> bool {
+        self.site().is_some() && self.needs(kind).is_empty()
+    }
+
     /// Where the occupant stands (D2): just past the footprint, a quarter
     /// turn from the output pile, so the two never share a spot.
     pub fn slot_position(&self, kind: &BuildingKind) -> FxVec2 {
-        let out = (self.output_position - self.position).normalize_or_zero();
-        let out = if out == FxVec2::ZERO { FxVec2::new(Fx::ZERO, Fx::ONE) } else { out };
-        self.position + FxVec2::new(-out.y, out.x) * (kind.radius + SLOT_GAP)
+        slot_position(self.position, self.output_position, kind)
     }
+
+    /// A building of kind `k` at `center`, at `stage`, with its slot and
+    /// output empty. A site's materials take any mix up to its biggest part.
+    fn new(k: BuildingKindIx, kind: &BuildingKind, center: FxVec2, output: FxVec2, stage: Stage, items: usize) -> BuildingState {
+        BuildingState {
+            kind: k,
+            position: center,
+            output_position: output,
+            stage,
+            slot: Slot::Empty,
+            progress: Fx::ZERO,
+            output: Inventory::new(items, kind.possessed_cap, Kinds::OneKind),
+        }
+    }
+}
+
+/// An empty site's materials for `kind`: any mix, up to the most units a
+/// part takes. Only what the next part still needs comes in
+/// (`BuildingState::wanted`), so the capacity is never the limit.
+fn materials(kind: &BuildingKind, items: usize) -> Inventory {
+    let most = kind.parts.iter().map(|p| p.iter().map(|&(_, units)| units).sum::<u32>()).max().unwrap_or(0);
+    Inventory::new(items, most, Kinds::AnyMix)
 }
 
 /// Resolves the scenario's building kinds. `item` maps an item's id to its
@@ -183,11 +249,121 @@ pub(super) fn output_position(center: FxVec2, distance: Fx, depots: &[FxVec2], a
     center + toward * distance
 }
 
+/// Why a building can't go where it was put (`placement`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlacementRefusal {
+    /// The scenario has no such building kind.
+    UnknownKind,
+    /// The footprint reaches past the arena's edge.
+    OutsideArena,
+    /// The footprint overlaps an obstacle (the tree, a prop), another
+    /// building or someone standing there.
+    Blocked,
+    /// The footprint covers a depot's dock (a tree pile).
+    CoversDock(DepotIx),
+    /// The footprint covers another building's output pile or slot spot.
+    CoversSpot(BuildingIx),
+    /// Its own output pile is blocked, or crowds a dock or another
+    /// building's output pile or slot spot.
+    OutputBlocked,
+    /// Its own slot spot is blocked, or crowds a dock or another building's
+    /// output pile or slot spot.
+    SlotBlocked,
+    /// Nobody could walk from the depots (the tree's piles) to its output
+    /// pile or its slot spot.
+    Unreachable,
+}
+
+impl PlacementRefusal {
+    /// What a blueprint's ghost says: "BLOCKED", "TOO CLOSE TO A PILE".
+    pub fn message(self) -> &'static str {
+        match self {
+            PlacementRefusal::UnknownKind => "UNKNOWN BUILDING",
+            PlacementRefusal::OutsideArena => "OUT OF BOUNDS",
+            PlacementRefusal::Blocked | PlacementRefusal::OutputBlocked | PlacementRefusal::SlotBlocked => "BLOCKED",
+            PlacementRefusal::CoversDock(_) | PlacementRefusal::CoversSpot(_) => "TOO CLOSE TO A PILE",
+            PlacementRefusal::Unreachable => "CAN'T BE REACHED",
+        }
+    }
+}
+
+/// What a placement is checked against.
+#[derive(Clone, Copy)]
+pub(super) struct Ground<'a> {
+    pub kinds: &'a [BuildingKind],
+    /// The depots' docks: no footprint covers one, and reachability starts
+    /// there. They also mark the tree for the output pile's side.
+    pub docks: &'a [FxVec2],
+    /// The buildings standing; their footprints are already in the terrain.
+    pub buildings: &'a [BuildingState],
+    /// Bodies a footprint must not land on.
+    pub bodies: &'a [Disc],
+    pub terrain: &'a Terrain,
+}
+
+/// Whether a building of kind `k` can stand at `center`, and if so where its
+/// output pile goes: one check for the scenario's prebuilt buildings and a
+/// player's blueprint (`PlaceBlueprint`), in this order.
+///
+/// - The footprint is inside the arena, clear of the terrain (props, the
+///   tree, the buildings before it) and the `bodies`, and off every dock and
+///   the other buildings' output piles and slot spots, which are no
+///   obstacles.
+/// - Its own output pile and slot spot are clear, its footprint counted,
+///   and off the docks and the other buildings' piles and slot spots.
+/// - From every dock, a body as wide as one that stands at a slot spot can
+///   walk to the slot spot (a sprite that claims it walks there) and to
+///   where the elder stands at the output pile. With no docks there is
+///   nothing to walk from, and this is skipped.
+pub(super) fn placement(ground: &Ground, k: BuildingKindIx, center: FxVec2) -> Result<FxVec2, PlacementRefusal> {
+    let Ground { kinds, docks, buildings, bodies, terrain } = *ground;
+    let kind = kinds.get(k as usize).ok_or(PlacementRefusal::UnknownKind)?;
+    let reach = FxVec2::new(kind.radius, kind.radius);
+    if !terrain.inside(center - reach) || !terrain.inside(center + reach) {
+        return Err(PlacementRefusal::OutsideArena);
+    }
+    let apart = |p: FxVec2, q: FxVec2, gap: Fx| p.distance(q) > gap + CLEARANCE_MARGIN;
+    if !terrain.clear(center, center, kind.radius) || bodies.iter().any(|b| !apart(center, b.center, kind.radius + b.radius)) {
+        return Err(PlacementRefusal::Blocked);
+    }
+    if let Some(d) = docks.iter().position(|&p| !apart(center, p, kind.radius + DOCK_RADIUS)) {
+        return Err(PlacementRefusal::CoversDock(d as DepotIx));
+    }
+    // Each other building's output pile and slot spot, with the clearance
+    // each keeps.
+    let spots: Vec<(BuildingIx, FxVec2, Fx)> = buildings
+        .iter()
+        .enumerate()
+        .flat_map(|(i, b)| [(i as BuildingIx, b.output_position, DOCK_RADIUS), (i as BuildingIx, b.slot_position(&kinds[b.kind as usize]), SLOT_RADIUS)])
+        .collect();
+    if let Some(&(b, _, _)) = spots.iter().find(|&&(_, p, r)| !apart(center, p, kind.radius + r)) {
+        return Err(PlacementRefusal::CoversSpot(b));
+    }
+    let output = output_position(center, kind.output_distance, docks, terrain.center);
+    let slot = slot_position(center, output, kind);
+    let footprint = [Disc { center, radius: kind.radius }];
+    for (spot, radius, refusal) in [(output, DOCK_RADIUS, PlacementRefusal::OutputBlocked), (slot, SLOT_RADIUS, PlacementRefusal::SlotBlocked)] {
+        let crowded = spots.iter().any(|&(_, p, r)| !apart(spot, p, radius + r)) || docks.iter().any(|&p| !apart(spot, p, radius + DOCK_RADIUS));
+        if crowded || !terrain.clear_with(spot, spot, radius, &footprint) {
+            return Err(refusal);
+        }
+    }
+    // The elder stands just in front of the pile (`interact::stand_spot`).
+    let stand = output + (output - center).normalize_or_zero() * STAND_GAP;
+    let walkable = |p: FxVec2, q: FxVec2| terrain.walkable(p, q, SLOT_RADIUS);
+    for &from in docks {
+        for to in [stand, slot] {
+            if nav::path_with(terrain, from, to, SLOT_RADIUS, &footprint, &walkable).is_empty() {
+                return Err(PlacementRefusal::Unreachable);
+            }
+        }
+    }
+    Ok(output)
+}
+
 /// Puts up the scenario's prebuilt buildings, built and empty, in scenario
-/// order. Each footprint must be clear of the terrain (the scene's props,
-/// machines, defenders and the buildings before it), of every depot's dock,
-/// and inside the arena; it becomes an obstacle. Every output pile and slot
-/// spot must then be clear and inside the arena too. `at` places a scenario
+/// order: each where `placement` allows it with the buildings before it
+/// standing, and its footprint becomes an obstacle. `at` places a scenario
 /// point.
 pub(super) fn prebuilt(
     scenario: &Scenario,
@@ -198,53 +374,103 @@ pub(super) fn prebuilt(
     at: impl Fn(scenario::Point) -> FxVec2,
 ) -> Result<Vec<BuildingState>, String> {
     let docks: Vec<FxVec2> = depots.iter().map(|&(_, p)| p).collect();
-    let mut buildings = Vec::with_capacity(scenario.buildings.len());
+    let mut buildings: Vec<BuildingState> = Vec::with_capacity(scenario.buildings.len());
     for (i, b) in scenario.buildings.iter().enumerate() {
-        let k = kinds.iter().position(|k| k.id == b.kind).expect("validated building kind");
-        let kind = &kinds[k];
+        let k = kinds.iter().position(|k| k.id == b.kind).expect("validated building kind") as BuildingKindIx;
         let center = at(b.position);
-        let name = format!("building {i} ({})", b.kind);
-        let reach = FxVec2::new(kind.radius, kind.radius);
-        if !terrain.inside(center - reach) || !terrain.inside(center + reach) {
-            return Err(format!("{name} at {:?} reaches outside the arena", b.position));
-        }
-        if !terrain.clear(center, center, kind.radius) {
-            return Err(format!("{name} at {:?} overlaps an obstacle or another building", b.position));
-        }
-        let near = kind.radius + DOCK_RADIUS + CLEARANCE_MARGIN;
-        if let Some(&(d, _)) = depots.iter().find(|&&(_, p)| p.distance(center) <= near) {
-            return Err(format!("{name} at {:?} covers depot {}'s dock", b.position, scenario.depots[d as usize].id));
-        }
-        terrain.obstacles.push(Disc { center, radius: kind.radius });
-        buildings.push(BuildingState {
-            kind: k as BuildingKindIx,
-            position: center,
-            output_position: output_position(center, kind.output_distance, &docks, terrain.center),
-            stage: Stage::Built,
-            slot: Slot::Empty,
-            progress: Fx::ZERO,
-            output: Inventory::new(items, kind.possessed_cap, Kinds::OneKind),
-        });
+        let ground = Ground { kinds, docks: &docks, buildings: &buildings, bodies: &[], terrain };
+        let output = placement(&ground, k, center).map_err(|refusal| {
+            let why = match refusal {
+                PlacementRefusal::UnknownKind => "has an unknown kind".to_string(),
+                PlacementRefusal::OutsideArena => "reaches outside the arena".to_string(),
+                PlacementRefusal::Blocked => "overlaps an obstacle or another building".to_string(),
+                PlacementRefusal::CoversDock(d) => format!("covers depot {}'s dock", scenario.depots[depots[d as usize].0 as usize].id),
+                PlacementRefusal::CoversSpot(other) => format!("covers building {other}'s output pile or slot spot"),
+                PlacementRefusal::OutputBlocked => "has its output pile blocked".to_string(),
+                PlacementRefusal::SlotBlocked => "has its slot spot blocked".to_string(),
+                PlacementRefusal::Unreachable => "can't be reached on foot from the depots".to_string(),
+            };
+            format!("building {i} ({}) at {:?} {why}", b.kind, b.position)
+        })?;
+        terrain.obstacles.push(Disc { center, radius: kinds[k as usize].radius });
+        buildings.push(BuildingState::new(k, &kinds[k as usize], center, output, Stage::Built, items));
     }
     if !buildings.is_empty() {
         terrain.revision += 1;
     }
-    for (i, b) in buildings.iter().enumerate() {
-        if !terrain.clear(b.output_position, b.output_position, DOCK_RADIUS) {
-            return Err(format!("building {i} ({})'s output pile is blocked", kinds[b.kind as usize].id));
-        }
-        let slot = b.slot_position(&kinds[b.kind as usize]);
-        if !terrain.clear(slot, slot, SLOT_RADIUS) {
-            return Err(format!("building {i} ({})'s slot spot is blocked", kinds[b.kind as usize].id));
-        }
-    }
     Ok(buildings)
+}
+
+/// Where a building's occupant stands (D2): just past the footprint, a
+/// quarter turn from the output pile, so the two never share a spot.
+fn slot_position(center: FxVec2, output: FxVec2, kind: &BuildingKind) -> FxVec2 {
+    let out = (output - center).normalize_or_zero();
+    let out = if out == FxVec2::ZERO { FxVec2::new(Fx::ZERO, Fx::ONE) } else { out };
+    center + FxVec2::new(-out.y, out.x) * (kind.radius + SLOT_GAP)
 }
 
 impl Settlement {
     /// The kind of building `b`.
     pub fn building_kind(&self, b: BuildingIx) -> &BuildingKind {
         &self.building_kinds[self.buildings[b as usize].kind as usize]
+    }
+
+    /// Whether a blueprint of kind `kind` could go down at `position` now
+    /// (`placement`, with every live agent's body in the way): what stage 5
+    /// checks for `PlaceBlueprint`, and what the app's ghost shows, so the
+    /// two never disagree. `Ok` holds where its output pile would go.
+    pub fn placement_check(&self, kind: BuildingKindIx, position: FxVec2, terrain: &Terrain) -> Result<FxVec2, PlacementRefusal> {
+        let docks: Vec<FxVec2> = self.depots.iter().map(|d| d.position).collect();
+        let bodies: Vec<Disc> = self.agents.iter().filter(|a| a.body.alive()).map(|a| Disc { center: a.body.position, radius: a.radius() }).collect();
+        let ground = Ground { kinds: &self.building_kinds, docks: &docks, buildings: &self.buildings, bodies: &bodies, terrain };
+        placement(&ground, kind, position)
+    }
+
+    /// Stage 5: this tick's blueprints, in command order, so of two that
+    /// overlap the first stands. Each one `placement_check` allows becomes a
+    /// site waiting for its first part's materials, its footprint an
+    /// obstacle; the rest are refused with an event.
+    pub(super) fn place_blueprints(&mut self, messages: Vec<PlaceBlueprint>, terrain: &mut Terrain) {
+        for PlaceBlueprint { kind, position } in messages {
+            match self.placement_check(kind, position, terrain) {
+                Ok(output) => {
+                    let k = &self.building_kinds[kind as usize];
+                    let stage = Stage::Site { part: 0, materials: materials(k, self.items.len()) };
+                    terrain.obstacles.push(Disc { center: position, radius: k.radius });
+                    terrain.revision += 1;
+                    self.buildings.push(BuildingState::new(kind, k, position, output, stage, self.items.len()));
+                    self.events.push(Event::BlueprintPlaced { building: (self.buildings.len() - 1) as BuildingIx });
+                }
+                Err(reason) => self.events.push(Event::BlueprintRefused { kind, reason }),
+            }
+        }
+    }
+
+    /// Stage 5: installs, in command order. A site whose next part has all
+    /// its materials on the ground uses them up (the balances count them as
+    /// consumed) and moves on to the next part; the last part makes it
+    /// built, empty until someone occupies it. One that isn't ready (an
+    /// install earlier in the order took the part) does nothing.
+    pub(super) fn install(&mut self, messages: Vec<Install>) {
+        for Install { building, .. } in messages {
+            let Some(b) = self.buildings.get(building as usize) else { continue };
+            let kind = &self.building_kinds[b.kind as usize];
+            if !b.ready(kind) {
+                continue;
+            }
+            let parts = kind.parts.len();
+            let Stage::Site { part, materials } = &mut self.buildings[building as usize].stage else { unreachable!("ready means a site") };
+            let installed = *part;
+            for &(item, units) in &kind.parts[installed as usize] {
+                materials.remove(item, units);
+                self.accounts[item as usize].consumed += units as u64;
+            }
+            *part += 1;
+            if *part as usize == parts {
+                self.buildings[building as usize].stage = Stage::Built;
+            }
+            self.events.push(Event::PartInstalled { building, part: installed, built: installed as usize + 1 == parts });
+        }
     }
 
     /// Part of the economy step: every built, occupied building below its
@@ -284,8 +510,11 @@ impl Settlement {
     /// Checks every building on its own: a known kind, a site's part in
     /// range, the output holding the kind's product only, its reservations
     /// against the bundles picking up from it (`expected_reservations`, as
-    /// for piles), and nothing reserved on a site's materials (nothing
-    /// delivers there yet). Then the slots against
+    /// for piles), and a site's materials: their reservations against the
+    /// deliveries on their way (likewise), nothing promised out (nothing is
+    /// taken back), no more of an item than the next part takes, and an
+    /// empty slot and output (nobody works a site). A built building has no
+    /// delivery left on its way. Then the slots against
     /// the agents, both ways: a claim or a sprite inside names a sprite that
     /// holds just that (`SpriteState::holds`), an elder names an avatar, and
     /// every sprite's hold is that building's slot.
@@ -302,18 +531,32 @@ impl Settlement {
             if b.output.capacity != kind.possessed_cap {
                 return Err(format!("{name} output has capacity {}, not its possessed cap", b.output.capacity));
             }
-            let reserved = |inventory: &Inventory| inventory.total_in() > 0 || inventory.reserved_out.iter().any(|&u| u > 0);
             let building = i as BuildingIx;
             if (b.output.reserved_out.clone(), b.output.reserved_in.clone()) != self.expected_reservations(InventoryRef::Output(building)) {
                 return Err(format!("{name} output reservations drifted"));
             }
-            if let Stage::Site { part, materials } = &b.stage {
-                if *part as usize >= kind.parts.len() {
-                    return Err(format!("{name} is a site past its last part"));
+            let deliveries = self.expected_reservations(InventoryRef::Site(building));
+            match &b.stage {
+                Stage::Site { part, materials } => {
+                    let Some(needs) = kind.parts.get(*part as usize) else {
+                        return Err(format!("{name} is a site past its last part"));
+                    };
+                    materials.validate().map_err(|e| format!("{name} materials {e}"))?;
+                    if materials.reserved_out.iter().any(|&u| u > 0) || (materials.reserved_out.clone(), materials.reserved_in.clone()) != deliveries {
+                        return Err(format!("{name} materials reservations drifted"));
+                    }
+                    let need = |item: usize| needs.iter().find(|&&(i, _)| i as usize == item).map_or(0, |&(_, units)| units);
+                    if (0..materials.counts.len()).any(|item| materials.counts[item] + materials.reserved_in[item] > need(item)) {
+                        return Err(format!("{name} materials hold more than its next part takes"));
+                    }
+                    if b.slot != Slot::Empty || b.output.total() + b.output.total_in() > 0 {
+                        return Err(format!("{name} is a site with someone in its slot or something in its output"));
+                    }
                 }
-                materials.validate().map_err(|e| format!("{name} materials {e}"))?;
-                if reserved(materials) {
-                    return Err(format!("{name} materials reservations drifted"));
+                Stage::Built => {
+                    if deliveries.0.iter().chain(&deliveries.1).any(|&u| u > 0) {
+                        return Err(format!("{name} is built with deliveries still on their way"));
+                    }
                 }
             }
             let holds = |a: AgentIx| self.agents.get(a as usize).and_then(|a| a.sprite()).map(|sprite| sprite.holds);

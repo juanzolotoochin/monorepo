@@ -99,7 +99,8 @@ impl Settlement {
             // or from it (`PileLab::prune`).
             InventoryRef::Pile(_) | InventoryRef::Collector => self.inventory_mut(t.to).put(t.item, 1),
             // Nothing sends units to an output yet; this keeps `land` whole.
-            InventoryRef::Output(_) => self.inventory_mut(t.to).put(t.item, 1),
+            // A delivery lands in a site's materials.
+            InventoryRef::Output(_) | InventoryRef::Site(_) => self.inventory_mut(t.to).put(t.item, 1),
         }
     }
 

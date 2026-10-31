@@ -13,6 +13,13 @@
 //!   empty-handed.
 //! - **A sprite**, empty-handed only: the app's job menu, which sends
 //!   `SetSpriteJob`. The sim does nothing with it.
+//! - **A site** (D4), at the spot where its output pile will be: a delivery
+//!   while carrying an item its next part still needs (every unit it still
+//!   takes, through `bundle_job`; the rest stays in the bundle); otherwise
+//!   an install once the part's materials are all there, carrying or not;
+//!   otherwise, empty-handed, a readout of what it still needs, which does
+//!   nothing in the sim. Carrying something it doesn't need, it is no
+//!   target. A site has no output to pick up from yet.
 //!
 //! A bundle target is usable when `bundle_job` would start a job there, so
 //! the highlight and the action never disagree about it. The reach is wider
@@ -20,8 +27,8 @@
 //! and the units move once it is there, as a transfer's do.
 //!
 //! New kinds slot in as new `InteractTarget` variants, each with a position
-//! (`position`) and a use (`interaction`): sites to deliver to or install
-//! (M2.3), ground piles (M2.4) and building slots to board (M3.1). Dropping
+//! (`position`) and a use (`interaction`): ground piles (M2.4) and building
+//! slots to board (M3.1). Dropping
 //! on the ground (M2.4) is no thing in reach: it is the fallback when no
 //! target is.
 
@@ -30,7 +37,8 @@ use serde::{Deserialize, Serialize};
 
 use super::action::View;
 use super::avatar::{bundle_job, BundleRefusal};
-use super::{AgentIx, AgentState, BuildingIx, Carry, CarryJob, DepotIx, Direction, InventoryRef, Settlement};
+use super::buildings::STAND_GAP;
+use super::{AgentIx, AgentState, BuildingIx, Carry, CarryJob, DepotIx, Direction, InventoryRef, ItemIx, Settlement};
 use crate::nav::distance;
 use crate::terrain::Terrain;
 
@@ -50,6 +58,8 @@ pub enum InteractTarget {
     Depot(DepotIx),
     /// A sprite, whose job the app's menu sets.
     Sprite(AgentIx),
+    /// A site, delivered to, installed or read (D4).
+    Site(BuildingIx),
 }
 
 impl InteractTarget {
@@ -59,6 +69,7 @@ impl InteractTarget {
         match self {
             InteractTarget::Output(b) => Some(InventoryRef::Output(b)),
             InteractTarget::Depot(d) => Some(InventoryRef::Depot(d)),
+            InteractTarget::Site(b) => Some(InventoryRef::Site(b)),
             InteractTarget::Sprite(_) => None,
         }
     }
@@ -71,6 +82,11 @@ pub enum Interaction {
     Bundle(CarryJob),
     /// Opens the app's job menu on a sprite; the sim does nothing.
     JobMenu,
+    /// Installs a site's next part, `part`, whose materials are all there.
+    Install { building: BuildingIx, part: u8 },
+    /// What a site's next part, `part`, still needs (`BuildingState::needs`),
+    /// for the view to show; the sim does nothing.
+    Needs { building: BuildingIx, part: u8, needs: Vec<(ItemIx, u32)> },
 }
 
 /// The nearest target in reach that `me` can use now and what using it
@@ -83,9 +99,10 @@ pub fn interact_target(view: &View, me: &AgentState, sprites: impl IntoIterator<
         return None;
     }
     let from = me.body.position;
-    let outputs = (0..view.buildings.len() as BuildingIx).map(InteractTarget::Output);
+    // A building's output once it is built, its site until then.
+    let buildings = view.buildings.iter().enumerate().map(|(b, building)| if building.built() { InteractTarget::Output(b as BuildingIx) } else { InteractTarget::Site(b as BuildingIx) });
     let depots = (0..view.depots.len() as DepotIx).map(InteractTarget::Depot);
-    let mut candidates: Vec<(Fx, InteractTarget, FxVec2)> = outputs
+    let mut candidates: Vec<(Fx, InteractTarget, FxVec2)> = buildings
         .chain(depots)
         .filter_map(|t| position(view, t).map(|p| (t, p)))
         .chain(sprites.into_iter().map(|(a, p)| (InteractTarget::Sprite(a), p)))
@@ -97,11 +114,12 @@ pub fn interact_target(view: &View, me: &AgentState, sprites: impl IntoIterator<
     candidates.into_iter().find_map(|(_, t, _)| interaction(view, &me.carry, t).ok().map(|use_| (t, use_)))
 }
 
-/// Where `target` is, for its reach, if the view has it: an output pile or
-/// a depot's dock. A sprite stands among the agents, which the view hasn't.
+/// Where `target` is, for its reach, if the view has it: an output pile, a
+/// depot's dock, or the spot a site's output pile will take. A sprite
+/// stands among the agents, which the view hasn't.
 pub fn position(view: &View, target: InteractTarget) -> Option<FxVec2> {
     match target {
-        InteractTarget::Output(b) => view.buildings.get(b as usize).map(|b| b.output_position),
+        InteractTarget::Output(b) | InteractTarget::Site(b) => view.buildings.get(b as usize).map(|b| b.output_position),
         InteractTarget::Depot(d) => view.depots.get(d as usize).map(|d| d.position),
         InteractTarget::Sprite(_) => None,
     }
@@ -109,8 +127,9 @@ pub fn position(view: &View, target: InteractTarget) -> Option<FxVec2> {
 
 /// What interacting with `target` would do for an agent carrying `carry`,
 /// or why it can't: a bundle kind's `bundle_job` (a deposit into a depot
-/// while carrying, else a pickup), and a sprite's job menu while
-/// empty-handed. Reach is the caller's to check.
+/// while carrying, else a pickup), a sprite's job menu while empty-handed,
+/// and a site's delivery, install or needs (see the module). Reach is the
+/// caller's to check.
 pub fn interaction(view: &View, carry: &Carry, target: InteractTarget) -> Result<Interaction, BundleRefusal> {
     let carrying = carry.inventory.total() + carry.inventory.total_in() > 0;
     match target {
@@ -123,16 +142,30 @@ pub fn interaction(view: &View, carry: &Carry, target: InteractTarget) -> Result
         // D5: a sprite is a target only empty-handed.
         InteractTarget::Sprite(_) if carrying => Err(BundleRefusal::HandsFull),
         InteractTarget::Sprite(_) => Ok(Interaction::JobMenu),
+        InteractTarget::Site(b) => {
+            let site = view.buildings.get(b as usize).filter(|b| !b.built()).ok_or(BundleRefusal::NotAHolder)?;
+            let kind = &view.building_kinds[site.kind as usize];
+            let part = site.site().map_or(0, |(part, _)| part);
+            let delivery = if carrying { Some(bundle_job(carry, view, InventoryRef::Site(b), Direction::Deposit)) } else { None };
+            match delivery {
+                Some(Ok(job)) => Ok(Interaction::Bundle(job)),
+                // Nothing to deliver: the part goes in once it is all there,
+                // whatever the bundle holds.
+                Some(Err(BundleRefusal::NotNeeded)) | None if site.ready(kind) => Ok(Interaction::Install { building: b, part }),
+                Some(Err(reason)) => Err(reason),
+                None => Ok(Interaction::Needs { building: b, part, needs: site.needs(kind) }),
+            }
+        }
     }
 }
 
 /// Where an agent stands to move units with `holder`: a depot's dock, or
-/// just in front of an output pile, away from its building (the pile is
-/// that close to the footprint). Within the dock's reach of the holder.
+/// just in front of an output pile (or the spot a site's will take), away
+/// from its building (the pile is that close to the footprint). Within the dock's reach of the holder.
 pub fn stand_spot(view: &View, holder: InventoryRef) -> Option<FxVec2> {
     match holder {
         InventoryRef::Depot(d) => view.depots.get(d as usize).map(|d| d.position),
-        InventoryRef::Output(b) => view.buildings.get(b as usize).map(|b| b.output_position + (b.output_position - b.position).normalize_or_zero() * Fx::from_ratio(2, 5)),
+        InventoryRef::Output(b) | InventoryRef::Site(b) => view.buildings.get(b as usize).map(|b| b.output_position + (b.output_position - b.position).normalize_or_zero() * STAND_GAP),
         InventoryRef::Agent(_) | InventoryRef::Pile(_) | InventoryRef::Collector => None,
     }
 }

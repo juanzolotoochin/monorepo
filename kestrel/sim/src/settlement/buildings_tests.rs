@@ -202,7 +202,7 @@ fn a_prebuilt_building_must_stand_clear() {
     // output pile.
     let rock = Disc { center: FxVec2::new(fx(-5.47), fx(1.87)), radius: fx(0.2) };
     let slot = World::new_settlement(1, &Content::builtin(), &base, &[trunk(), rock]).err().expect("refused");
-    assert!(slot.contains("slot spot is blocked"), "{slot}");
+    assert!(slot.contains("has its slot spot blocked"), "{slot}");
     // Two that just clear each other both stand.
     let mut two = base.clone();
     two.buildings.push(Building { kind: "stone_gatherer".into(), position: at(4.6, -2.2) });

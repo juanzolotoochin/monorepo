@@ -132,8 +132,13 @@ pub enum CommandKind {
     /// A player's avatar interacts with the target its client highlighted
     /// (`settlement::interact`), which the sim checks again (`Action::Interact`).
     /// A sprite target's index is not remapped when players leave: the sim
-    /// does nothing with it. New variants go after this one.
+    /// does nothing with it.
     Interact { agent: u16, target: crate::settlement::InteractTarget },
+    /// Puts down a blueprint of building kind `kind` centered on `position`
+    /// (world tiles): stage 5 lays its site if the ground allows
+    /// (`Settlement::place_blueprints`), in command order. Any player may.
+    /// New variants go after this one.
+    PlaceBlueprint { kind: u16, position: FxVec2 },
 }
 
 impl CommandKind {
@@ -487,6 +492,13 @@ impl World {
                 CommandKind::SetSpriteJob { agent, job } => {
                     if let Some(s) = &mut self.settlement {
                         s.set_sprite_job(agent, job);
+                    }
+                }
+                // Checked in stage 5, after the tick's walks, against the
+                // ground as it is then.
+                CommandKind::PlaceBlueprint { kind, position } => {
+                    if self.settlement.is_some() {
+                        self.actions.place_blueprint.push(crate::messages::PlaceBlueprint { kind, position });
                     }
                 }
                 CommandKind::SetMachine { producer, enabled } => {
