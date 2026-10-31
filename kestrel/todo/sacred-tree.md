@@ -4,20 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M1.2 The buildings table and production
-
-- **Status:** open
-- **Why:** buildings are made at runtime and only produce when occupied
-  (D1, A1).
-- **What to do:** `Settlement::buildings`, production in the economy step,
-  output inventories in `balances` and `validate`, the behaviour digest,
-  the save format. Make the table from the scenario's `building_kinds`
-  and `buildings` (M1.1), which `Settlement::from_scenario` ignores until
-  then; check prebuilt footprints are clear.
-- **Where:** `kestrel/sim/src/settlement/` (new `buildings.rs`),
-  `economy.rs`, `mod.rs`.
-- **Found in:** Sacred Tree handoff.
-
 ## M1.3 Sprites, jobs and slot claims
 
 - **Status:** open
@@ -30,6 +16,10 @@ its milestones, in order; one PR per milestone.
   `Settlement::from_scenario` ignores the list until then.
 - **Where:** `kestrel/sim/src/settlement/agent.rs`, new `sprites.rs`,
   `world.rs`, `kestrel/app/src/control/`.
+- **From M1.2:** `Slot::Claimed` and `Slot::Occupied(Occupant::Sprite)`
+  exist, but nothing sets them; `validate_buildings` only checks the slot
+  names an agent, so tighten it to a sprite (and an elder to an avatar)
+  once the roles exist.
 - **Found in:** Sacred Tree handoff.
 
 ## M1.4 Drawing buildings, sprites and outputs
@@ -37,7 +27,9 @@ its milestones, in order; one PR per milestone.
 - **Status:** open
 - **Why:** occupancy, job and working, waiting or full must read from the
   game view (A7).
-- **What to do:** building skins with idle, working and full states,
+- **What to do:** building skins with idle, working and full states
+  (`Event::BuildingProduced` is ignored by `app/src/legacy.rs` so far; give
+  it a cue),
   sprites with their job and state, output piles, the tree's counts. Add
   the `sacred_tree` scene pack to the app's scenes and launch menu
   (`app/BUILD.bazel`, `app/src/assets.rs`).
@@ -51,6 +43,10 @@ its milestones, in order; one PR per milestone.
 - **What to do:** a one-type cargo of 5 for the elder, top-up pickups,
   deposit and withdraw at the tree's wood and stone piles.
 - **Where:** `kestrel/sim/src/settlement/avatar.rs`, `inventory.rs`.
+- **From M1.2:** an output has no `InventoryRef` yet, and
+  `validate_buildings` insists nothing is reserved on it. Picking up from
+  one needs a variant (appended) and the reservation check to count the
+  carry jobs and transfers on it, as `validate_lab` does.
 - **Found in:** Sacred Tree handoff.
 
 ## M2.2 Interact target and highlight
@@ -69,6 +65,10 @@ its milestones, in order; one PR per milestone.
 - **What to do:** `PlaceBlueprint` and its checks, the ghost and the
   two-option build menu, deliver and install, the needs readout.
 - **Where:** `kestrel/sim/src/settlement/buildings.rs`, `kestrel/app/`.
+- **From M1.2:** reuse the prebuilt checks in `buildings::prebuilt`
+  (footprint, docks, extent, output pile clear) for a placement, as one
+  function. An output pile is not an obstacle, so a placement must also
+  keep off the existing buildings' output piles.
 - **Found in:** Sacred Tree handoff.
 
 ## M2.4 Dropping bundles on ground piles
@@ -144,6 +144,29 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M1.1.
 
 ## Done
+
+### M1.2 The buildings table and production
+
+- **Status:** done (branch `kestrel-sacred-tree`)
+- **Why:** buildings are made at runtime and only produce when occupied
+  (D1, A1).
+- **What to do:** `Settlement::buildings`, production in the economy step,
+  output inventories in `balances` and `validate`, the behaviour digest,
+  the save format. Make the table from the scenario's `building_kinds`
+  and `buildings` (M1.1), which `Settlement::from_scenario` ignores until
+  then; check prebuilt footprints are clear.
+- **Where:** `kestrel/sim/src/settlement/` (new `buildings.rs`),
+  `economy.rs`, `mod.rs`.
+- **Found in:** Sacred Tree handoff.
+- **Done:** `buildings.rs` holds `BuildingState` (kind, position, output
+  position, stage, slot, progress, output) and the kinds resolved into
+  ticks (`Settlement::building_kinds`). Prebuilt buildings load built and
+  empty; a footprint on an obstacle, another building, a depot's dock or
+  past the arena's edge fails the load. The output pile faces the tree
+  (handoff, D1). Occupied buildings produce in the economy step, an elder
+  at the multiplier up to the possessed cap; outputs count in `balances`
+  and `validate`. Save format 23; the golden file's state hashes moved
+  (two new settlement fields), behaviour lines unchanged.
 
 ### M1.1 Building kinds, the scene and its supply
 

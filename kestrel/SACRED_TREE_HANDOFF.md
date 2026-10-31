@@ -70,6 +70,9 @@ stay fixed for the world's life. That is the one real gap.
   or occupied by a sprite or an elder), its production progress and its
   output `Inventory` (`OneKind`, capped).
 - The Sacred Tree stays a depot. It is no building kind.
+- **Output side:** the output pile sits `output_distance` from the center,
+  toward the midpoint of the scenario's depots (the tree's two stock piles),
+  or toward the arena's center when there are none (decided in M1.2).
 - **Kinds are content:** the supply file lists building kinds with label,
   skin, radius, product, period, cap, possessed cap, multiplier, Burst units
   and cooldown, and the ordered parts with their materials. The scenario
