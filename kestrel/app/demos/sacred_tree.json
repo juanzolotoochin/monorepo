@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "scene": "sacred-tree",
+  "fps": 30,
+  "width": 1440,
+  "height": 960,
+  "max_frames": 1200,
+  "steps": [
+    {
+      "op": "walk",
+      "position": [
+        -1.2,
+        3.2
+      ]
+    },
+    {
+      "op": "settlement_sprite_job",
+      "sprite": "sprite_ash",
+      "job": "wood_gatherer"
+    },
+    {
+      "op": "settlement_sprite_job",
+      "sprite": "sprite_reed",
+      "job": "wood_gatherer"
+    },
+    {
+      "op": "settlement_sprite_job",
+      "sprite": "sprite_fern",
+      "job": "stone_gatherer"
+    },
+    {
+      "op": "wait",
+      "frames": 600
+    },
+    {
+      "op": "inspect_building",
+      "building": "0"
+    },
+    {
+      "op": "wait",
+      "frames": 60
+    },
+    {
+      "op": "inspect_building",
+      "building": null
+    },
+    {
+      "op": "inspect"
+    }
+  ]
+}

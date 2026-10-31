@@ -123,6 +123,7 @@ mod tests {
                 ("mining-deck", 14, 0),
                 ("moonlit-glade", 24, 0),
                 ("pile-lab", 2, 0),
+                ("sacred-tree", 1, 0),
                 ("surprise-lab", 32, 5),
             ]
         );

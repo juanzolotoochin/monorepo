@@ -436,8 +436,7 @@ fn player_can_divert_real_supply_chain_stock_while_workers_continue() {
         .all(|b| b["conserved"] == true));
 }
 
-/// A sprite's job names a sprite: a hauler isn't one. (The scenes with
-/// sprites aren't in the app yet; the sim's tests set jobs there.)
+/// A sprite's job names a sprite: a hauler isn't one.
 #[test]
 fn a_sprite_job_needs_a_sprite() {
     for sprite in ["nobody", "bramble"] {
@@ -453,6 +452,46 @@ fn a_sprite_job_needs_a_sprite() {
         assert_eq!(report["status"], "failed", "{report}");
         assert!(report["error"].as_str().unwrap().contains("unknown sprite"), "{report}");
     }
+}
+
+/// In the Sacred Tree, a sprite given the Wood Gatherer's job walks to it,
+/// steps in and works: wood comes out on its output pile, and the view
+/// reads the sprite as working and the building as worked by it (A7).
+#[test]
+fn a_sprite_staffs_the_wood_gatherer_and_wood_comes_out() {
+    let report = run(vec![
+        Command::Scene {
+            scene: "sacred-tree".into(),
+        },
+        Command::Inspect,
+        Command::SettlementSpriteJob {
+            sprite: "sprite_ash".into(),
+            job: Some("wood_gatherer".into()),
+        },
+        // About 5 s to walk there and 5 s to make the first wood.
+        Command::Wait { frames: 420 },
+        Command::Inspect,
+    ]);
+    assert_eq!(report["status"], "passed", "{report}");
+    let receipts = report["receipts"].as_array().unwrap();
+    let before = &receipts[1]["state"]["settlement"]["simulation"];
+    assert_eq!(before["buildings"][0]["status"], "idle", "{before}");
+    assert_eq!(before["sprites"]["sprite_ash"]["activity"], "idle", "{before}");
+    let simulation = &report["state"]["settlement"]["simulation"];
+    let building = &simulation["buildings"][0];
+    assert_eq!(building["kind"], "wood_gatherer");
+    assert!(building["output"]["items"]["wood"].as_u64().unwrap() >= 1, "{building}");
+    assert_eq!(building["status"], "working", "{building}");
+    assert_eq!(building["occupant"], json!({"sprite": "sprite_ash"}));
+    let ash = &simulation["sprites"]["sprite_ash"];
+    assert_eq!(ash["job"], "wood_gatherer");
+    assert_eq!(ash["activity"], "working");
+    assert_eq!(simulation["sprites"]["sprite_fern"]["activity"], "idle");
+    assert!(report["state"]["settlement"]["balances"]
+        .as_object()
+        .unwrap()
+        .values()
+        .all(|b| b["conserved"] == true));
 }
 
 #[test]

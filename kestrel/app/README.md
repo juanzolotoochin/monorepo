@@ -739,6 +739,35 @@ quantity to arrive. `assert_settlement` checks minimum `delivered`, `cycles`,
 `equipped`, and `kills` counts plus all accounting invariants. `inspect` includes
 full `settlement.simulation`, scenario data, and per-material `balances`.
 
+## The Sacred Tree
+
+Pick **THE SACRED TREE / TOWN MVP** in the launch menu, or launch it directly:
+
+```sh
+bazel run --config=remote //kestrel/app:demo -- --scene sacred-tree
+```
+
+The town MVP's clearing ([design](../SACRED_TREE_HANDOFF.md)): the tree's
+wood and stone piles, four sprites and one Wood Gatherer, all in placeholder
+art. The HUD line and the piles' labels count the tree's wood and stone.
+Each sprite has a flame over its head and a tag with its name, job and what
+it is doing: the flame dances orange while it works inside its building,
+bobs pale yellow on the way, breathes blue while it waits for a free
+building, and smoulders when idle. A building's rotor turns while someone
+works it; the lamp over it and its card say whether it is idle (and who is
+coming), working (and who) or full, and the lamp flares as a unit comes out.
+Its output stacks on the pile in front of it, with the count over it. Hover
+a card for details. Jobs are set through the control protocol
+(`settlement_sprite_job`) until the radial menu lands.
+
+```sh
+bazel build //kestrel/app:sacred_tree_demo
+```
+
+renders a short video (a local GPU target, like the other demos) of three
+sprites given jobs: one works the Wood Gatherer, one waits for it, and one
+waits for a Stone Gatherer that isn't built yet.
+
 ## Red Clearing combat arena
 
 Press **8** or start the focused forest combat scene directly:

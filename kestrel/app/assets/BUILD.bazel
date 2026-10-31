@@ -151,8 +151,7 @@ scene_assets(
     style = "styles/combat.ron",
 )
 
-# The Sacred Tree town MVP. Not in the app yet: buildings and sprites are
-# loaded and drawn in later steps (kestrel/todo/sacred-tree.md).
+# The Sacred Tree town MVP (kestrel/SACRED_TREE_HANDOFF.md).
 scene_assets(
     name = "sacred_tree",
     layout = "levels/sacred_tree.ron",
