@@ -1,4 +1,5 @@
-//! Characters: one definition per kind of avatar, hauler or enemy.
+//! Characters: one definition per kind of avatar, hauler, sprite, vehicle
+//! or enemy.
 //!
 //! A file `character/<name>.ron` has an optional `base`, a `sim` section and
 //! a `view` section. A file with a `base` starts from that character and
@@ -26,6 +27,8 @@ pub enum Brain {
     Hauler,
     /// Driven by the player sitting in it; idle without one.
     Vehicle,
+    /// Staffs the buildings of its job. Carries nothing and can't be hurt.
+    Sprite,
 }
 
 /// A character's simulation rules, in simulation units.
@@ -550,6 +553,9 @@ pub(crate) fn character_def(file: SimFile) -> Result<CharacterDef, String> {
         }
         Brain::Vehicle if file.vehicle.is_none() || carry.is_some() || avatar.is_some() || health.is_some() => {
             return Err("a Vehicle character needs `vehicle`, and no `avatar`, `carry` or `health`".into())
+        }
+        Brain::Sprite if carry.is_some() || avatar.is_some() || health.is_some() => {
+            return Err("a Sprite character has no `avatar`, `carry` or `health`".into())
         }
         _ => {}
     }

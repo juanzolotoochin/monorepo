@@ -149,6 +149,7 @@ struct MoverSimFile {
 
 /// The content shipped with the game, compiled into the binary.
 const BUILTIN: &[(&str, &str)] = &[
+    ("character/elder.ron", include_str!("../data/character/elder.ron")),
     ("character/exosuit.ron", include_str!("../data/character/exosuit.ron")),
     ("character/exosuit_laser_pit.ron", include_str!("../data/character/exosuit_laser_pit.ron")),
     ("character/exosuit_moonlit.ron", include_str!("../data/character/exosuit_moonlit.ron")),
@@ -158,6 +159,7 @@ const BUILTIN: &[(&str, &str)] = &[
     ("character/ox.ron", include_str!("../data/character/ox.ron")),
     ("character/rover.ron", include_str!("../data/character/rover.ron")),
     ("character/runner.ron", include_str!("../data/character/runner.ron")),
+    ("character/sprite.ron", include_str!("../data/character/sprite.ron")),
     ("character/worker.ron", include_str!("../data/character/worker.ron")),
     ("mover/large.ron", include_str!("../data/mover/large.ron")),
     ("mover/medium.ron", include_str!("../data/mover/medium.ron")),
@@ -490,6 +492,26 @@ mod tests {
         assert!(bad(&GHOUL.replace("hp: 3", "hp: 3, armor: (points: 2, radius: 0.1)")).contains("armor"));
         assert!(bad(&GHOUL.replace("view: (skin: \"ghoul\")", "view: (skin: \"ghoul\", color: 1)")).contains("color"));
         assert!(bad(&GHOUL.replace("radius: 0.27", "radius: 0.27, mass: 2")).contains("mass"));
+        let sprite = "(sim: (brain: Sprite, body: (radius: 0.22), movement: (walk: 1.6)), view: (skin: \"worker\"))";
+        assert!(characters(&[("character/x.ron", sprite)]).is_ok());
+        assert!(bad(&sprite.replace("walk: 1.6)", "walk: 1.6), carry: (transfer: 27)")).contains("Sprite"));
+        assert!(bad(&sprite.replace("walk: 1.6)", "walk: 1.6), health: (hp: 3, breach_damage: 1)")).contains("Sprite"));
+        assert!(bad(&sprite.replace("(skin: \"worker\")", "()")).contains("view.skin"));
+    }
+
+    /// The Sacred Tree's elder walks as the exosuit with no abilities, and
+    /// its sprites carry nothing.
+    #[test]
+    fn the_sacred_tree_characters_load() {
+        let content = Content::builtin();
+        let get = |name: &str| &content.rules.characters[content.names.character_index(name).unwrap() as usize];
+        let elder = get("elder");
+        assert_eq!(elder.brain, character::Brain::Player);
+        assert!(elder.abilities.is_empty());
+        assert_eq!(elder.movement, get("exosuit").movement);
+        let sprite = get("sprite");
+        assert_eq!(sprite.brain, character::Brain::Sprite);
+        assert!(sprite.carry.is_none() && sprite.health.is_none() && sprite.avatar.is_none());
     }
 
     #[test]
