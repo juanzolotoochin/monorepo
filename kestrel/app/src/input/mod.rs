@@ -36,6 +36,7 @@ mod native;
 pub mod pad;
 pub mod synthetic;
 pub mod targets;
+pub mod town;
 #[cfg(test)]
 mod tests;
 pub mod tuning;
@@ -173,11 +174,38 @@ pub struct ActionFrame {
     pub pause_requested: bool,
 }
 
-/// An open panel: the utility panel, or an item chooser.
+/// An open panel: the utility panel, an item chooser, or a radial menu.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Panel {
     Utility { items: Vec<Utility>, focus: usize },
     Chooser { title: String, options: Vec<String>, focus: usize },
+    /// Options in a ring (the town's job menu on a sprite): a direction
+    /// focuses the option that way (`radial_angle`), from the stick, the
+    /// D-pad, WASD or the arrows; A, E, Enter or Space picks it. Its pick
+    /// arrives as [`Edge::Choose`], as a chooser's does.
+    Radial { title: String, options: Vec<String>, focus: usize },
+}
+
+/// Where option `index` of `count` sits on a radial menu: radians
+/// counterclockwise from screen right, the first at the top.
+pub fn radial_angle(index: usize, count: usize) -> f32 {
+    std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU * index as f32 / count.max(1) as f32
+}
+
+/// The radial option nearest the direction `nav` points (screen up is up),
+/// the lower on a tie.
+fn radial_focus(nav: Nav, count: usize) -> usize {
+    let toward = match nav {
+        Nav::Right => 0.0,
+        Nav::Up => std::f32::consts::FRAC_PI_2,
+        Nav::Left => std::f32::consts::PI,
+        Nav::Down => -std::f32::consts::FRAC_PI_2,
+    };
+    let off = |i: usize| {
+        let d = (radial_angle(i, count) - toward).rem_euclid(std::f32::consts::TAU);
+        d.min(std::f32::consts::TAU - d)
+    };
+    (0..count).min_by(|&a, &b| off(a).total_cmp(&off(b)).then(a.cmp(&b))).unwrap_or(0)
 }
 
 /// What the World tells the input layer about the current scene.
@@ -185,6 +213,9 @@ pub enum Panel {
 pub struct SceneContext {
     /// A supply chain: keyboard E is the machine toggle, not memory.
     pub scenario: bool,
+    /// A town (the Sacred Tree): keyboard E, like A, interacts with the
+    /// highlighted target (`gameplay::town_interact`).
+    pub town: bool,
     pub utility: Vec<Utility>,
     pub recording: bool,
 }
@@ -352,6 +383,24 @@ impl InputService {
         self.requested_chooser = Some(Panel::Chooser { title: title.into(), options, focus: 0 });
     }
 
+    /// Opens a radial menu at the next frame, focused on its first option.
+    /// Its pick arrives as [`Edge::Choose`].
+    pub fn open_radial(&mut self, title: impl Into<String>, options: Vec<String>) {
+        self.requested_chooser = Some(Panel::Radial { title: title.into(), options, focus: 0 });
+    }
+
+    /// Whether a radial menu opens at the next frame.
+    pub fn radial_requested(&self) -> bool {
+        matches!(self.requested_chooser, Some(Panel::Radial { .. }))
+    }
+
+    /// Closes the open panel, or one about to open, picking nothing: a
+    /// script picked for it (`control`).
+    pub fn close_panel(&mut self) {
+        self.panel = None;
+        self.requested_chooser = None;
+    }
+
     /// The UI navigation step this frame, if any; taking it consumes it.
     pub fn take_nav(&mut self) -> Option<Nav> {
         let nav = self.frame.ui.nav.take();
@@ -470,10 +519,33 @@ impl InputService {
         let mut panel_took = false;
         if let Some(panel) = &mut self.panel {
             panel_took = true;
+            let radial = matches!(panel, Panel::Radial { .. });
             let (count, focus) = match panel {
                 Panel::Utility { items, focus } => (items.len(), focus),
-                Panel::Chooser { options, focus, .. } => (options.len(), focus),
+                Panel::Chooser { options, focus, .. } | Panel::Radial { options, focus, .. } => (options.len(), focus),
             };
+            let keys = game.keys();
+            if radial {
+                // The keyboard steers a radial menu too: it has gameplay
+                // while the menu is open, so its keys are free.
+                let key_nav = [
+                    (KeyCode::KeyW, Nav::Up),
+                    (KeyCode::ArrowUp, Nav::Up),
+                    (KeyCode::KeyS, Nav::Down),
+                    (KeyCode::ArrowDown, Nav::Down),
+                    (KeyCode::KeyA, Nav::Left),
+                    (KeyCode::ArrowLeft, Nav::Left),
+                    (KeyCode::KeyD, Nav::Right),
+                    (KeyCode::ArrowRight, Nav::Right),
+                ]
+                .into_iter()
+                .find_map(|(key, nav)| keys.just_pressed(key).then_some(nav));
+                let pad_nav = ui.nav.take();
+                if let Some(nav) = key_nav.or(pad_nav) {
+                    *focus = radial_focus(nav, count);
+                }
+                ui.confirm |= keys.any_just_pressed([KeyCode::KeyE, KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::Space]);
+            }
             match ui.nav.take() {
                 Some(Nav::Up) if count > 0 => *focus = (*focus + count - 1) % count,
                 Some(Nav::Down) if count > 0 => *focus = (*focus + 1) % count,
@@ -487,7 +559,7 @@ impl InputService {
             if std::mem::take(&mut ui.confirm) && count > 0 {
                 panel_edges.push(match panel {
                     Panel::Utility { items, focus } => Edge::Utility(items[*focus]),
-                    Panel::Chooser { focus, .. } => Edge::Choose(*focus),
+                    Panel::Chooser { focus, .. } | Panel::Radial { focus, .. } => Edge::Choose(*focus),
                 });
                 close = true;
             }
@@ -625,7 +697,11 @@ impl InputService {
         }
         // E toggles a machine where there is a supply chain, and drives the
         // memory recording elsewhere; Q clears it.
-        if self.scene.scenario {
+        if self.scene.town {
+            if keys.just_pressed(KeyCode::KeyE) {
+                edges.push(Edge::Interact);
+            }
+        } else if self.scene.scenario {
             if keys.just_pressed(KeyCode::KeyE) {
                 edges.push(Edge::MachineToggle);
             }

@@ -36,6 +36,19 @@ pub struct Settlement {
     building_shapes: BTreeMap<String, BuildingShape>,
     /// The tick each building last put out a unit, for its lamp's flash.
     produced_at: BTreeMap<usize, u64>,
+    /// The elder's last interact refusal and the tick it came, shown over
+    /// its head for `REFUSAL_SECONDS`.
+    refusal: Option<(String, f32)>,
+}
+/// How long an interact refusal stays over the elder.
+const REFUSAL_SECONDS: f32 = 2.5;
+impl Settlement {
+    /// Shows `reason` over the player's head for a moment: an interact
+    /// refused by the sim (`Event::BundleRefused`) or before it was sent.
+    pub fn refuse(&mut self, reason: &str) {
+        let now = self.simulation.as_ref().map_or(0.0, Simulation::time);
+        self.refusal = Some((reason.to_string(), now));
+    }
 }
 struct Corpse {
     skin: String,
@@ -772,6 +785,11 @@ pub fn tick(world: &mut World) {
         if let Event::BuildingProduced { building } = event {
             state.produced_at.insert(*building, sim.tick);
         }
+        if let Event::BundleRefused { agent, reason } = event {
+            if Some(agent) == me.as_ref() {
+                state.refusal = Some((reason.message().to_string(), sim.time()));
+            }
+        }
         let cue = match event {
             // Prediction played these when it presented the shot.
             Event::LaserFired { .. } | Event::ArcFired { .. } | Event::BowFired { .. } if presented.is_some() => None,
@@ -933,6 +951,7 @@ pub fn tick(world: &mut World) {
         desired.insert(format!("threat/{}", p.target), v);
     }
     let glows = town(world, &mut state, sim, &mut desired);
+    town_interact(world, &mut state, sim, pos);
     for d in &sim.config().depots {
         inventory(
             &mut desired,
@@ -1403,6 +1422,63 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
     }
     glows
 }
+/// The town's interact (`input::town`): the prompt over the highlighted
+/// target ("E  PICK UP 3 WOOD"), a refusal over the elder's head for a
+/// moment, and the job menu's options in a ring around its sprite, the
+/// focused one lit. The target's ring is the HUD's (`input::hud`).
+fn town_interact(world: &mut World, state: &mut Settlement, sim: &Simulation, player: Vec3) {
+    use crate::input::{gameplay::Dispatcher, InputService, Panel};
+    let ground = |world: &World, p: Vec3| crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, p).unwrap_or(0.);
+    let mut shown: Vec<String> = Vec::new();
+    let town = world.get_resource::<Dispatcher>().map(|d| d.town.clone()).unwrap_or_default();
+    let key = match world.get_resource::<InputService>().map(|i| i.frame().owner) {
+        Some(crate::input::Device::Gamepad) => "A",
+        _ => "E",
+    };
+    let prompt = Color::srgb(0.55, 1.0, 0.88);
+    let menu = match world.get_resource::<InputService>().and_then(|i| i.panel()) {
+        Some(Panel::Radial { options, focus, .. }) => Some((options.clone(), *focus)),
+        _ => None,
+    };
+    if let Some(h) = town.highlight.as_ref().filter(|_| menu.is_none()) {
+        let at = h.position + Vec3::Y * (ground(world, h.position) + 0.7);
+        let text = format!("{key}  {}", h.prompt);
+        town_caption(world, state, "interact/prompt", at, text.clone(), prompt, text);
+        shown.push("interact/prompt".into());
+    }
+    if let (Some((options, focus)), Some(menu)) = (menu, town.menu.as_ref()) {
+        // Around the sprite, in screen directions (`radial_angle`).
+        let sprite = world.resource::<crate::lockstep::SessionService>().settlement().and_then(|s| s.agents.get(menu.sprite as usize)).map(|a| a.body.position);
+        if let Some(sprite) = sprite {
+            let center = world.resource::<crate::lockstep::SessionService>().to_view(sprite).with_y(0.0);
+            let center = center + Vec3::Y * (ground(world, center) + 0.6);
+            for (i, option) in options.iter().enumerate() {
+                let angle = crate::input::radial_angle(i, options.len());
+                let at = center + crate::input::gameplay::camera_relative(Vec2::new(angle.cos(), angle.sin())) * 1.1;
+                let (text, tint) = if i == focus { (format!("[ {option} ]"), prompt) } else { (option.clone(), Color::srgba(0.85, 0.85, 0.7, 0.75)) };
+                let key = format!("interact/menu/{i}");
+                town_caption(world, state, &key, at, text.clone(), tint, text);
+                shown.push(key);
+            }
+        }
+    }
+    if let Some((reason, at)) = state.refusal.clone() {
+        if sim.time() - at < REFUSAL_SECONDS * HZ {
+            let head = player + Vec3::Y * 1.9;
+            town_caption(world, state, "interact/refusal", head, reason.clone(), Color::srgb(1.0, 0.6, 0.35), reason);
+            shown.push("interact/refusal".into());
+        } else {
+            state.refusal = None;
+        }
+    }
+    // Drop the ones not shown this frame.
+    let stale: Vec<String> = state.labels.keys().filter(|k| k.starts_with("interact/") && !shown.contains(k)).cloned().collect();
+    for k in stale {
+        if let Some(e) = state.labels.remove(&k) {
+            world.despawn(e);
+        }
+    }
+}
 /// Draws `glows` (key, position, radius, state), making and dropping their
 /// entities as they come and go.
 fn sync_glows(world: &mut World, state: &mut Settlement, glows: Vec<(String, Vec3, f32, Glow)>) {
@@ -1436,7 +1512,12 @@ fn sync_glows(world: &mut World, state: &mut Settlement, glows: Vec<(String, Vec
 pub fn snapshot(world: &World) -> serde_json::Value {
     let fingerprint = world.get_resource::<crate::lockstep::WorldMirror>().map_or_else(String::new, |m| m.fingerprint());
     world.get_resource::<Settlement>().and_then(|state| state.simulation.as_ref()).map_or(serde_json::Value::Null, |s| {
-        serde_json::json!({"simulation": s, "replay_fingerprint": fingerprint, "balances": s.balances(), "scenario": s.config(), "seconds": s.seconds()})
+        let mut out = serde_json::json!({"simulation": s, "replay_fingerprint": fingerprint, "balances": s.balances(), "scenario": s.config(), "seconds": s.seconds()});
+        // The town's interact target and job menu (`input::town`).
+        if !s.config().building_kinds.is_empty() {
+            out["interact"] = crate::input::town::snapshot(world);
+        }
+        out
     })
 }
 /// Pin the same hover card for deterministic capture or remote inspection.

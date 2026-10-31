@@ -55,6 +55,8 @@ pub struct Dispatcher {
     pub drop_preview: Option<Vec3>,
     /// Releases sent (suspensions), for tests and the HUD.
     pub releases: u32,
+    /// The town's highlighted target and job menu (`town`).
+    pub town: super::town::Town,
 }
 
 impl Service for Dispatcher {
@@ -111,6 +113,7 @@ fn publish_scene(world: &mut World) {
     let scenario = scene.scene().scenario.is_some();
     let diggable = scene.has_feature(SceneFeature::Digging) && scene.player().dig().is_some();
     let recording = world.get_resource::<crate::palimpsest::Memory>().is_some_and(|m| m.recording());
+    let town = super::town::active(world);
     let mut utility = Vec::new();
     if diggable {
         utility.push(Utility::Dig);
@@ -123,7 +126,7 @@ fn publish_scene(world: &mut World) {
     if logistics_active(world) {
         utility.push(Utility::CancelLogistics);
     }
-    world.resource_mut::<InputService>().set_scene(SceneContext { scenario, utility, recording });
+    world.resource_mut::<InputService>().set_scene(SceneContext { scenario, town, utility, recording });
 }
 
 /// An accepted pile haul or depot transfer is running for this player.
@@ -159,8 +162,16 @@ pub fn dispatch(world: &mut World) {
     let frame = world.resource::<InputService>().frame().clone();
     let seated = world.resource::<InputService>().seat().is_some();
     let now = world.resource::<Time>().elapsed_secs();
-    if seated || frame.owner == Device::Gamepad {
-        world.resource_scope(|world, mut dispatcher: Mut<Dispatcher>| dispatcher.targets.refresh(world, now));
+    // A town has one target for every device, the sim's (`town`), in place
+    // of the controller's nearby targets.
+    let town = super::town::active(world);
+    if town {
+        super::town::refresh(world);
+    } else {
+        world.resource_mut::<Dispatcher>().town = default();
+        if seated || frame.owner == Device::Gamepad {
+            world.resource_scope(|world, mut dispatcher: Mut<Dispatcher>| dispatcher.targets.refresh(world, now));
+        }
     }
     update_drop_preview(world);
     if frame.blocked {
@@ -205,6 +216,7 @@ pub fn dispatch(world: &mut World) {
             Edge::Utility(Utility::ClearRecording) => crate::palimpsest::clear(world),
             Edge::Utility(Utility::CancelLogistics) => cancel_logistics(world, agent),
             Edge::MachineToggle => toggle_nearest_machine(world),
+            Edge::Interact if town => town_interact(world),
             Edge::Interact => interact(world, false),
             Edge::Collect => interact(world, true),
             Edge::Drop => drop_cargo(world),
@@ -349,6 +361,19 @@ fn cancel_logistics(world: &mut World, agent: u16) {
     world.resource_mut::<Dispatcher>().notice = "Logistics canceled; airborne units still land.".into();
 }
 
+/// The town's interact: a refusal before anything is sent (nothing in
+/// reach) shows near the elder, as the sim's own refusals do.
+fn town_interact(world: &mut World) {
+    match super::town::interact(world) {
+        Ok(_) => world.resource_mut::<Dispatcher>().notice = String::new(),
+        Err(reason) => {
+            if let Some(mut s) = world.get_resource_mut::<crate::settlement::Settlement>() {
+                s.refuse(&reason);
+            }
+        }
+    }
+}
+
 /// The selected target's primary action (or, with `collect`, collecting
 /// more while carrying). A refusal shows its reason; the selection never
 /// silently moves to another target.
@@ -411,8 +436,14 @@ fn transfer(world: &mut World, depot: &str, item: &str, units: u32, deposit: boo
     }
 }
 
-/// The chooser's pick.
+/// The chooser's pick, or the town's job menu's.
 fn choose(world: &mut World, index: usize) {
+    if world.resource::<Dispatcher>().town.menu.is_some() {
+        if let Err(e) = super::town::pick(world, index) {
+            world.resource_mut::<Dispatcher>().notice = e;
+        }
+        return;
+    }
     let Some(choice) = world.resource_mut::<Dispatcher>().choice.take() else { return };
     if let Some((item, units)) = choice.items.get(index) {
         transfer(world, &choice.depot, item, *units, choice.deposit);

@@ -60,7 +60,7 @@ RT fires once when it crosses its press threshold. It must fall below a separate
 
 The controller selects a nearby eligible target instead of moving a virtual cursor. Selection remains on a target while it is valid; D-pad left/right cycles candidates in stable ID order. Candidates are filtered by distance, floor, and local reachability. Simulation validation remains authoritative, so the UI reports a rejection rather than silently substituting another target.
 
-A interacts with the selected pile, depot, collector, dispenser, or machine according to the available action. A chooser handles multiple item types. X collects more compatible material. B previews a cargo drop ahead of confirmed facing. New deliberate movement cancels an accepted approach job; merely entering a UI context does not. Explicit Cancel Logistics is a separate action.
+A interacts with the selected pile, depot, collector, dispenser, or machine according to the available action. In a town (the Sacred Tree) there is no selection to cycle: A, like keyboard E, acts on the one target the simulation's `interact_target` picks, which is highlighted for every device, and a sprite target opens a radial job menu steered by the stick or D-pad. A chooser handles multiple item types. X collects more compatible material. B previews a cargo drop ahead of confirmed facing. New deliberate movement cancels an accepted approach job; merely entering a UI context does not. Explicit Cancel Logistics is a separate action.
 
 ## Platform and verification boundaries
 

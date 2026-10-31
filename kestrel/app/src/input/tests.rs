@@ -256,7 +256,7 @@ fn focus_loss_suspends_and_held_controls_count_only_after_rest() {
 #[test]
 fn the_utility_panel_takes_controller_ui_and_confirms_one_action() {
     let mut rig = Rig::seated(1);
-    rig.input.set_scene(SceneContext { scenario: false, utility: vec![Utility::Dig, Utility::Record, Utility::Respawn], recording: false });
+    rig.input.set_scene(SceneContext { scenario: false, town: false, utility: vec![Utility::Dig, Utility::Record, Utility::Respawn], recording: false });
     let frame = rig.tap(1, Button::View);
     assert_eq!(frame.suspended, Some(Suspend::Panel));
     assert!(frame.blocked);
@@ -330,6 +330,44 @@ fn keyboard_bindings_follow_the_scene() {
     rig.keys.press(KeyCode::KeyE);
     rig.keys.press(KeyCode::KeyQ);
     assert_eq!(rig.frame().gameplay.edges, vec![Edge::MachineToggle], "Q has no meaning with a supply chain");
+}
+
+#[test]
+fn keyboard_e_interacts_in_a_town() {
+    let mut rig = Rig::new();
+    rig.input.set_scene(SceneContext { scenario: true, town: true, ..default() });
+    rig.keys.press(KeyCode::KeyE);
+    assert_eq!(rig.frame().gameplay.edges, vec![Edge::Interact]);
+}
+
+/// A radial menu: a direction focuses the option that way, from the
+/// keyboard or the controller, and A or E picks it; Escape picks nothing.
+#[test]
+fn a_radial_menu_picks_by_direction() {
+    let mut rig = Rig::seated(1);
+    let options = || vec!["IDLE".to_string(), "GATHER WOOD".to_string(), "GATHER STONE".to_string()];
+    rig.input.open_radial("ASH: SET JOB", options());
+    assert_eq!(rig.frame().suspended, Some(Suspend::Panel));
+    // Idle at the top, wood lower left, stone lower right.
+    rig.tap(1, Button::DPadRight);
+    assert!(matches!(rig.input.panel(), Some(Panel::Radial { focus: 2, .. })));
+    assert_eq!(rig.tap(1, Button::South).gameplay.edges, vec![Edge::Choose(2)]);
+    assert!(rig.input.panel().is_none());
+    rig.input.open_radial("ASH: SET JOB", options());
+    rig.frame();
+    rig.keys.press(KeyCode::KeyA);
+    rig.frame();
+    assert!(matches!(rig.input.panel(), Some(Panel::Radial { focus: 1, .. })));
+    rig.keys.release(KeyCode::KeyA);
+    rig.keys.press(KeyCode::KeyE);
+    assert_eq!(rig.frame().gameplay.edges, vec![Edge::Choose(1)]);
+    rig.keys.release(KeyCode::KeyE);
+    rig.frame();
+    rig.input.open_radial("ASH: SET JOB", options());
+    rig.frame();
+    rig.keys.press(KeyCode::Escape);
+    assert!(rig.frame().gameplay.edges.is_empty());
+    assert!(rig.input.panel().is_none());
 }
 
 // ---------------------------------------------------------------------------
