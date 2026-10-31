@@ -4,19 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M1.1 Building kinds, the scene and its supply
-
-- **Status:** open
-- **Why:** the map, its items and every tunable come from content (D1,
-  "Scene").
-- **What to do:** add building kinds (product, period, cap, possessed cap,
-  multiplier, Burst, ordered parts) and prebuilt buildings to the supply
-  format; the `Sprite` brain; the elder and sprite characters; the scene
-  and supply files with the tree depot, four sprites and one Wood Gatherer.
-- **Where:** `kestrel/content/src/scenario.rs`, `content/src/character.rs`,
-  `kestrel/app/assets/levels/`, `docs/character-definition.md`.
-- **Found in:** Sacred Tree handoff.
-
 ## M1.2 The buildings table and production
 
 - **Status:** open
@@ -24,7 +11,9 @@ its milestones, in order; one PR per milestone.
   (D1, A1).
 - **What to do:** `Settlement::buildings`, production in the economy step,
   output inventories in `balances` and `validate`, the behaviour digest,
-  the save format.
+  the save format. Make the table from the scenario's `building_kinds`
+  and `buildings` (M1.1), which `Settlement::from_scenario` ignores until
+  then; check prebuilt footprints are clear.
 - **Where:** `kestrel/sim/src/settlement/` (new `buildings.rs`),
   `economy.rs`, `mod.rs`.
 - **Found in:** Sacred Tree handoff.
@@ -35,7 +24,10 @@ its milestones, in order; one PR per milestone.
 - **Why:** sprites staff buildings on their own and replan when a step
   breaks (D2, A2).
 - **What to do:** `Role::Sprite`, the plan builder and replan, `Claim` in
-  stage 3 granted in stage 5, `SetSpriteJob` and its control verb.
+  stage 3 granted in stage 5, `SetSpriteJob` and its control verb. Make
+  sprite agents from the scenario's `sprites` list (M1.1), after its
+  `agents`, and reject a sprite whose character hasn't the `Sprite` brain;
+  `Settlement::from_scenario` ignores the list until then.
 - **Where:** `kestrel/sim/src/settlement/agent.rs`, new `sprites.rs`,
   `world.rs`, `kestrel/app/src/control/`.
 - **Found in:** Sacred Tree handoff.
@@ -46,7 +38,9 @@ its milestones, in order; one PR per milestone.
 - **Why:** occupancy, job and working, waiting or full must read from the
   game view (A7).
 - **What to do:** building skins with idle, working and full states,
-  sprites with their job and state, output piles, the tree's counts.
+  sprites with their job and state, output piles, the tree's counts. Add
+  the `sacred_tree` scene pack to the app's scenes and launch menu
+  (`app/BUILD.bazel`, `app/src/assets.rs`).
 - **Where:** `kestrel/view/`, `kestrel/app/`.
 - **Found in:** Sacred Tree handoff.
 
@@ -120,4 +114,52 @@ its milestones, in order; one PR per milestone.
 - **Where:** `kestrel/sim/src/settlement/` tests, `kestrel/headless/`.
 - **Found in:** Sacred Tree handoff.
 
+## Art for the Sacred Tree
+
+- **Status:** open
+- **Why:** the scene stands in existing art: the elder is the `exosuit`
+  actor, sprites the `worker` skin, the gatherers the forest style's `mill`
+  and `factory`, wood and stone its `item_lumber` and `item_iron`, and the
+  tree plain architecture.
+- **What to do:** a flame actor for the elder (and its flame form in a
+  building, D3), small sprite skin variants, Wood and Stone Gatherer skins,
+  wood and stone item skins, and a Sacred Tree that reads as the center of
+  town, probably in a style of its own instead of `styles/forest.ron`.
+- **Where:** `kestrel/app/actors/`, `kestrel/app/assets/styles/`,
+  `kestrel/content/data/character/elder.ron` and `sprite.ron`,
+  `kestrel/app/assets/levels/sacred_tree*.ron`.
+- **Found in:** M1.1.
+
+## A scene with no weapon
+
+- **Status:** open
+- **Why:** the elder has no weapon, but a scenario with an empty `weapons`
+  list still offers the sword (`combat::offers_weapon`, as the original
+  game did), so the elder can swing one.
+- **What to do:** let a scenario say it offers no weapon (for example an
+  explicit empty list that differs from a missing one), and have the
+  attack command do nothing there.
+- **Where:** `kestrel/content/src/scenario.rs`,
+  `kestrel/sim/src/settlement/combat.rs`, `kestrel/app/src/input/gameplay.rs`.
+- **Found in:** M1.1.
+
 ## Done
+
+### M1.1 Building kinds, the scene and its supply
+
+- **Status:** done (branch `kestrel-sacred-tree`)
+- **Why:** the map, its items and every tunable come from content (D1,
+  "Scene").
+- **What to do:** add building kinds (product, period, cap, possessed cap,
+  multiplier, Burst, ordered parts) and prebuilt buildings to the supply
+  format; the `Sprite` brain; the elder and sprite characters; the scene
+  and supply files with the tree depot, four sprites and one Wood Gatherer.
+- **Where:** `kestrel/content/src/scenario.rs`, `content/src/character.rs`,
+  `kestrel/app/assets/levels/`, `docs/character-definition.md`.
+- **Found in:** Sacred Tree handoff.
+- **Done:** `building_kinds`, `buildings` and `sprites` in the scenario
+  format (all default empty), the `Sprite` brain, the `elder` and `sprite`
+  characters, and `levels/sacred_tree.ron` with `sacred_tree_supply.ron`
+  (the `//kestrel/app/assets:sacred_tree` pack, not in the app yet). The
+  sim reads none of the new lists yet: the scene loads with the elder and
+  the tree's two piles only.
