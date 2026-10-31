@@ -650,6 +650,7 @@ mod tests {
 
     const FOREST: &str = include_str!("../../app/assets/levels/forest_supply.ron");
     const ARENA: &str = include_str!("../../app/assets/levels/combat_arena_supply.ron");
+    const SACRED_TREE: &str = include_str!("../../app/assets/levels/sacred_tree_supply.ron");
 
     #[test]
     fn the_original_scene_files_load() {
@@ -670,6 +671,49 @@ mod tests {
         let mut scenario = Scenario::parse(FOREST).unwrap();
         scenario.depots[0].stock.push(Stack { item: "lumber".into(), units: 1 });
         assert!(scenario.validate().is_err());
+    }
+
+    #[test]
+    fn the_sacred_tree_supply_loads_its_tunables() {
+        let tree = Scenario::parse(SACRED_TREE).unwrap();
+        assert_eq!((tree.agents.len(), tree.sprites.len(), tree.buildings.len()), (1, 4, 1));
+        assert!(tree.depots.iter().all(|d| d.stock.is_empty()));
+        let kind = |id: &str| tree.building_kinds.iter().find(|k| k.id == id).unwrap();
+        let wood = kind("wood_gatherer");
+        assert_eq!((wood.product.as_str(), wood.period, wood.cap, wood.possessed_cap), ("wood", Fx::from_int(5), 10, 20));
+        assert_eq!((wood.possessed_multiplier, wood.burst.units, wood.burst.cooldown), (Fx::from_int(4), 2, Fx::from_int(30)));
+        assert_eq!(wood.output_distance, "1.2".parse().unwrap(), "the default");
+        fn needs(k: &BuildingKind) -> Vec<Vec<(&str, u32)>> {
+            k.parts.iter().map(|p| p.materials.iter().map(|s| (s.item.as_str(), s.units)).collect()).collect()
+        }
+        assert_eq!(needs(wood), [vec![("wood", 2)], vec![("wood", 2), ("stone", 2)]]);
+        let stone = kind("stone_gatherer");
+        assert_eq!((stone.product.as_str(), stone.period), ("stone", Fx::from_int(8)));
+        assert_eq!(needs(stone), [vec![("wood", 2)], vec![("wood", 2)]]);
+        assert_eq!(tree.buildings[0].kind, "wood_gatherer");
+        // The other scenes have none of it.
+        let forest = Scenario::parse(FOREST).unwrap();
+        assert!(forest.building_kinds.is_empty() && forest.buildings.is_empty() && forest.sprites.is_empty());
+    }
+
+    #[test]
+    fn validation_rejects_bad_buildings() {
+        let invalid = |change: fn(&mut Scenario)| {
+            let mut scenario = Scenario::parse(SACRED_TREE).unwrap();
+            change(&mut scenario);
+            scenario.validate().is_err()
+        };
+        assert!(invalid(|s| s.building_kinds[0].product = "unobtainium".into()));
+        assert!(invalid(|s| s.building_kinds[0].parts[1].materials[1].item = "unobtainium".into()));
+        assert!(invalid(|s| s.building_kinds[0].parts.clear()));
+        assert!(invalid(|s| s.building_kinds[0].parts[0].materials.clear()));
+        assert!(invalid(|s| s.building_kinds[0].parts[1].id = "foundation".into()));
+        assert!(invalid(|s| s.building_kinds[0].possessed_cap = 5));
+        assert!(invalid(|s| s.building_kinds[0].burst.units = 0));
+        assert!(invalid(|s| s.building_kinds[0].output_distance = Fx::HALF));
+        assert!(invalid(|s| s.buildings[0].kind = "castle".into()));
+        assert!(invalid(|s| s.buildings[0].position = [Fx::from_int(20), Fx::ZERO]));
+        assert!(invalid(|s| s.sprites[0].id = "elder".into()));
     }
 
     #[test]
