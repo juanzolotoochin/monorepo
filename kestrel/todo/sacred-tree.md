@@ -4,34 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M2.4 Dropping bundles on ground piles
-
-- **Status:** open
-- **Why:** the elder must drop a bundle before possessing (requirements
-  3.1); piles reuse the pile lab.
-- **What to do:** let piles hold any item, not only minerals (handoff,
-  "Open questions"), then drop into and pick up from ground piles of wood
-  and stone.
-- **From M2.1:** `avatar::bundle_job` refuses `InventoryRef::Pile` as "not
-  a holder"; add piles there (a `OneKind` pile's item is `kind()`, as an
-  output's is), so a pickup tops up from a ground pile by the same rule. A
-  pile haul is still a `PileJob` on its own path (`piles::haul`).
-- **Where:** `kestrel/sim/src/settlement/piles.rs`.
-- **From M2.3:** in a town controller B backs out of a blueprint being
-  placed (`Edge::CancelBuild`) and is `Edge::Drop` otherwise; keep that
-  order if the drop goes on B. Interact while placing puts the blueprint
-  down (`input::town::interact`), so a drop fallback must not apply then.
-  A site's deliveries come from the bundle only; a ground pile is no
-  holder `bundle_job` delivers from.
-- **From M2.2:** a ground pile is a new `InteractTarget` variant, appended
-  (`Pile(PileId)`), usable as an output is (top up, by `bundle_job`). The
-  ground (drop) is no candidate: at distance zero it would always win.
-  Make it the fallback while carrying when `interact_target` finds nothing
-  (an `Interaction::Drop`), or keep the drop on its own key (controller B)
-  as the pile lab does. `Action::Interact` refuses a target with no
-  `position` as out of reach today.
-- **Found in:** Sacred Tree handoff.
-
 ## M3.1 Building seats and ejection
 
 - **Status:** open
@@ -68,6 +40,13 @@ its milestones, in order; one PR per milestone.
   seated agent no target (`avatar.driving`): with `seat`, decide whether
   interact also leaves the seat. A slot spot and the output pile are about
   1.7 m apart, so with the 1.5 m reach the nearer one wins.
+- **From M2.4:** dropping exists for the boarding refusal: Q or controller
+  B drops the bundle (`CommandKind::Drop`), so the refusal can say "drop
+  the bundle first". A slot target goes after `InteractTarget::Pile` (the
+  enum is append-only). A seated agent's `Drop` does nothing (`avatar::act`
+  returns for it while `driving`); keep that for a building seat. A drop
+  keeps its pile clear of slot spots and output piles (`drop_plan`), so a
+  ground pile never sits on a seat.
 - **Found in:** Sacred Tree handoff.
 
 ## M3.2 Burst
@@ -104,6 +83,12 @@ its milestones, in order; one PR per milestone.
   spot can be reached, not that it leaves the others reachable: a ring of
   buildings could wall one off. A new footprint can also land on a route a
   sprite is walking; the soak should show whether either needs a rule.
+- **From M2.4:** `settlement_drop` drops the bundle and waits for it to
+  land; the happy path's "drop before possessing" step can use it, and
+  interact picks a ground pile back up (control test
+  `the_elder_drops_wood_and_picks_it_back_up`). A town holds at most
+  `MAX_PILES` (32) ground piles; the soak can drop and pick up in its
+  cycles, with `validate` checking piles' reservations.
 - **Found in:** Sacred Tree handoff.
 
 ## Art for the Sacred Tree
@@ -134,6 +119,10 @@ its milestones, in order; one PR per milestone.
   canopy that fades is the scene's raised architecture within 4 m of its
   center (`canopy.rs`); a tree in a style of its own should keep its canopy
   findable that way, or mark it.
+- **From M2.4:** a ground pile is its item's skin stacked as an output's
+  units are (`settlement::town`, `OUTPUT_LAYOUT`); a loose heap, like the
+  pile lab's mound (`pile_model::unit_positions`), would read more like
+  something dropped.
 - **Found in:** M1.1.
 
 ## A scene with no weapon
@@ -163,8 +152,11 @@ its milestones, in order; one PR per milestone.
   `manual_jobs` (or cancel by the carry job itself) so walking off cancels
   both alike; keep the step in through a Stop, or cancel the job with it.
   A delivery to a site (M2.3) is a carry job on `InventoryRef::Site` and
-  waits the same way. A site's needs readout sends nothing: pressing E
-  shows its prompt over the elder as a refusal; a blueprint refused in
+  waits the same way, and so does a drop or a ground pile pickup (M2.4,
+  `InventoryRef::Pile`): the elder walking off before its units moved
+  leaves them waiting until it is back within the dock's reach. A site's
+  needs readout sends nothing: pressing E shows its prompt over the elder
+  as a refusal; a blueprint refused in
   stage 5 (`Event::BlueprintRefused`) names no player, so every client
   shows it.
 - **Where:** `kestrel/app/src/input/town.rs`, `gameplay.rs`,
@@ -172,6 +164,62 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M2.2.
 
 ## Done
+
+### M2.4 Dropping bundles on ground piles
+
+- **Status:** done (branch `kestrel-sacred-tree`)
+- **Why:** the elder must drop a bundle before possessing (requirements
+  3.1); piles reuse the pile lab.
+- **What to do:** let piles hold any item, not only minerals (handoff,
+  "Open questions"), then drop into and pick up from ground piles of wood
+  and stone.
+- **From M2.1:** `avatar::bundle_job` refuses `InventoryRef::Pile` as "not
+  a holder"; add piles there (a `OneKind` pile's item is `kind()`, as an
+  output's is), so a pickup tops up from a ground pile by the same rule. A
+  pile haul is still a `PileJob` on its own path (`piles::haul`).
+- **Where:** `kestrel/sim/src/settlement/piles.rs`.
+- **From M2.3:** in a town controller B backs out of a blueprint being
+  placed (`Edge::CancelBuild`) and is `Edge::Drop` otherwise; keep that
+  order if the drop goes on B. Interact while placing puts the blueprint
+  down (`input::town::interact`), so a drop fallback must not apply then.
+  A site's deliveries come from the bundle only; a ground pile is no
+  holder `bundle_job` delivers from.
+- **From M2.2:** a ground pile is a new `InteractTarget` variant, appended
+  (`Pile(PileId)`), usable as an output is (top up, by `bundle_job`). The
+  ground (drop) is no candidate: at distance zero it would always win.
+  Make it the fallback while carrying when `interact_target` finds nothing
+  (an `Interaction::Drop`), or keep the drop on its own key (controller B)
+  as the pile lab does. `Action::Interact` refuses a target with no
+  `position` as out of reach today.
+- **Found in:** Sacred Tree handoff.
+- **Done:** piles hold any item. A pile scene's minerals keep their
+  numbering after the scenario's items, unchanged; a town gets
+  `PileLab::town` from `Settlement::from_scenario` (no minerals, dispensers
+  or collector; drop limit the extent less 1 m, `MAX_PILES` 32). A haul is
+  a mineral moved with a pile or the collector (`PileLab::is_haul`); a
+  bundle of a depot item on a pile is a carry job that moves as a depot
+  transfer's (`read_avatar`), and a town refuses `Pile` commands ("Nothing
+  here is hauled"). `CommandKind::Drop { agent }` (appended) is
+  `Action::Drop`: `piles::drop_plan` (also `Settlement::drop_plan`) puts
+  every unit of the bundle's item on the nearest pile of it within the
+  dock's reach with room, else a new pile `DROP_GAP` (0.5 m) in front of the
+  elder, clear of obstacles, other piles, docks and buildings' pile and
+  slot spots; stage 5 (`drop_bundles`, in command order) makes the pile and
+  holds both sides. Refusals: `NothingToDrop` ("Nothing carried"),
+  `TooManyPiles`, `NoRoom`, `Busy`. `InteractTarget::Pile(id)` (appended)
+  is a pickup through `bundle_job` (`InventoryRef::Pile`, dispenser piles
+  excluded), walking in to `stand_spot` (which now takes where the agent
+  stands); an emptied pile is pruned once nothing flies. In the app,
+  keyboard Q and controller B (B backs out of placing first) drop; nothing
+  drops while placing. The view mirrors `ground_piles` and draws them in
+  the item's skin with "5 WOOD" (`settlement::town`); the pile lab's own
+  view mirrors only scenes with a pile layout. Help line "... / Q DROP";
+  verb `settlement_drop`. Save format 27 (a town keeps a pile lab), input
+  logs 8, net protocol 10. The golden file didn't change. Tests: sim
+  `ground_pile_tests`, save `a_town_saved_mid_drop_continues`, input
+  `the_drop_key_follows_the_town`, control
+  `the_elder_drops_wood_and_picks_it_back_up`. The demo ends with a drop.
+
 
 ### M2.3 Blueprints, sites and installing parts
 

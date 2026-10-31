@@ -166,7 +166,8 @@ stay fixed for the world's life. That is the one real gap.
   and usable in the agent's current state, and returns the nearest (lowest
   kind, then index, on a tie).
   - **Carrying:** the tree (deposit), sites that need that item, output
-    piles and ground piles of that item (top up), the ground (drop).
+    piles and ground piles of that item (top up). The ground is no target:
+    dropping is its own key (D4).
   - **Empty-handed:** output piles, ground piles, the tree (withdraw),
     sites ready to install, sites to read, building slots (board),
     sprites (radial menu).
