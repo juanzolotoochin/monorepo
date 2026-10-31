@@ -72,7 +72,10 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 /// 24: an agent's role can be a sprite (`Role::Sprite`, its job, plan and
 ///     the slot it holds), and pending messages have `claim_slot` and
 ///     `enter_slot` queues.
-pub const FORMAT_VERSION: u32 = 24;
+/// 25: a holder can be a building's output (`InventoryRef::Output`, in
+///     transfers and carry jobs), and an inventory can take one item only
+///     (`Kinds::Only`, the Sacred Tree's piles).
+pub const FORMAT_VERSION: u32 = 25;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

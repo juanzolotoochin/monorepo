@@ -16,7 +16,8 @@ const MAGIC: &[u8; 4] = b"LSTP";
 /// 5: adds `PileAction::DropMineral` to `CommandKind::Pile`; peers on 4
 ///    cannot decode it.
 /// 6: adds `CommandKind::SetSpriteJob`; peers on 5 cannot decode it.
-pub const PROTOCOL_VERSION: u16 = 6;
+/// 7: adds `CommandKind::Bundle`; peers on 6 cannot decode it.
+pub const PROTOCOL_VERSION: u16 = 7;
 /// Stay under typical path MTUs (and Steam's unreliable message limit).
 pub const MAX_PACKET: usize = 1200;
 pub const SAVE_CHUNK: usize = 1000;
