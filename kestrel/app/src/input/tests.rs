@@ -644,6 +644,82 @@ fn keyboard_r_is_a_held_repair_action() {
     assert!(!rig.frame().gameplay.repair_held);
 }
 
+/// In a town, keyboard R and controller RT Burst while the elder
+/// possesses a building, and only then: otherwise R stays the repair key
+/// and RT attacks, in a town and in every other scene.
+#[test]
+fn the_burst_keys_work_only_while_possessing_in_a_town() {
+    let mut rig = Rig::seated(1);
+    let r = |rig: &mut Rig| {
+        rig.keys.press(KeyCode::KeyR);
+        let frame = rig.frame();
+        rig.keys.release(KeyCode::KeyR);
+        rig.frame();
+        frame
+    };
+    let rt = |rig: &mut Rig| {
+        rig.pads.right_trigger(1, 1.0);
+        let frame = rig.frame();
+        rig.pads.right_trigger(1, 0.0);
+        rig.frame();
+        frame
+    };
+    rig.input.set_scene(SceneContext { scenario: true, town: true, ..default() });
+    let frame = r(&mut rig);
+    assert!(frame.gameplay.edges.is_empty() && frame.gameplay.repair_pressed, "not possessing: R repairs");
+    assert_eq!(rt(&mut rig).gameplay.edges, vec![Edge::Attack]);
+    rig.input.set_possessing(true);
+    let frame = r(&mut rig);
+    assert_eq!(frame.gameplay.edges, vec![Edge::Burst]);
+    assert!(!frame.gameplay.repair_held && !frame.gameplay.repair_pressed);
+    assert_eq!(rt(&mut rig).gameplay.edges, vec![Edge::Burst]);
+    rig.input.set_possessing(false);
+    assert_eq!(rt(&mut rig).gameplay.edges, vec![Edge::Attack]);
+    // Elsewhere nothing Bursts, even with the flag left on.
+    rig.input.set_possessing(true);
+    for scene in [SceneContext { scenario: true, ..default() }, SceneContext::default()] {
+        rig.input.set_scene(scene);
+        let frame = r(&mut rig);
+        assert!(!frame.gameplay.edges.contains(&Edge::Burst) && frame.gameplay.repair_pressed);
+        assert_eq!(rt(&mut rig).gameplay.edges, vec![Edge::Attack]);
+    }
+}
+
+/// In the Sacred Tree, R Bursts the possessed Wood Gatherer: its output
+/// gains two units at once. Standing outside, R sends nothing.
+#[test]
+fn r_bursts_a_possessed_building_in_a_town() {
+    let mut game = Game::new("sacred-tree", 60.0);
+    game.frames(5);
+    let stand = {
+        let service = game.service();
+        let (s, world) = (service.settlement().unwrap(), service.world().unwrap());
+        let agent = service.player().unwrap();
+        service.to_view(s.leave_spot(0, s.agents[agent as usize].radius(), world.terrain()).unwrap())
+    };
+    game.walk_to(stand);
+    let press = |game: &mut Game, key: KeyCode| {
+        game.app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+        game.frames(1);
+        game.app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(key);
+        game.frames(10);
+    };
+    let bursts = |game: &Game| game.count(|c| matches!(c, CommandKind::Burst { .. }));
+    press(&mut game, KeyCode::KeyR);
+    assert_eq!(bursts(&game), 0, "not possessing: R sends nothing");
+    press(&mut game, KeyCode::KeyG);
+    assert_eq!(game.avatar().avatar().unwrap().seat, Some(sim::settlement::Seat::Building(0)));
+    let wood = |game: &Game| game.service().settlement().unwrap().buildings[0].output.count(0);
+    let before = wood(&game);
+    press(&mut game, KeyCode::KeyR);
+    assert_eq!(bursts(&game), 1);
+    assert!(wood(&game) >= before + 2, "{} then {}", before, wood(&game));
+    assert!(game.avatar().avatar().unwrap().burst_ready > 0, "cooling down");
+    // Cooling down, R is refused before anything is sent.
+    press(&mut game, KeyCode::KeyR);
+    assert_eq!(bursts(&game), 1);
+}
+
 #[test]
 fn takeover_releases_outgoing_movement_and_thrust_in_both_directions() {
     let mut game = Game::new("jetpack-lab", 60.0);

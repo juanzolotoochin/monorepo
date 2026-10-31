@@ -133,6 +133,9 @@ pub enum Edge {
     /// In a town, while placing a blueprint: back out of it (Escape,
     /// controller B).
     CancelBuild,
+    /// In a town, while possessing a building: Burst (keyboard R,
+    /// controller RT).
+    Burst,
 }
 
 /// Navigation, confirm, back, and the menu buttons, from the seated
@@ -294,6 +297,9 @@ pub struct InputService {
     /// The town is placing a blueprint (`town`): Escape and controller B
     /// back out of it.
     placing: bool,
+    /// The local elder possesses a building in a town (`town`): keyboard R
+    /// and controller RT Burst instead of repairing and attacking.
+    possessing: bool,
 }
 
 impl Service for InputService {
@@ -391,6 +397,11 @@ impl InputService {
     /// of it.
     pub fn set_placing(&mut self, placing: bool) {
         self.placing = placing;
+    }
+
+    /// Whether the town's elder possesses a building, for the Burst keys.
+    pub fn set_possessing(&mut self, possessing: bool) {
+        self.possessing = possessing;
     }
 
     /// Opens an item chooser at the next frame. Its pick arrives as
@@ -728,6 +739,9 @@ impl InputService {
             if keys.just_pressed(KeyCode::KeyQ) {
                 edges.push(Edge::Drop);
             }
+            if self.possessing && keys.just_pressed(KeyCode::KeyR) {
+                edges.push(Edge::Burst);
+            }
         } else if self.scene.scenario {
             if keys.just_pressed(KeyCode::KeyE) {
                 edges.push(Edge::MachineToggle);
@@ -740,11 +754,13 @@ impl InputService {
                 edges.push(Edge::Utility(Utility::Record));
             }
         }
+        // R Bursts while possessing a building, and repairs nothing then.
+        let repair = !(self.scene.town && self.possessing);
         Gameplay {
             movement,
             run: keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),
-            repair_held: keys.pressed(KeyCode::KeyR),
-            repair_pressed: keys.just_pressed(KeyCode::KeyR),
+            repair_held: repair && keys.pressed(KeyCode::KeyR),
+            repair_pressed: repair && keys.just_pressed(KeyCode::KeyR),
             lift_held: keys.pressed(KeyCode::Space),
             aim: None,
             edges,
@@ -760,7 +776,9 @@ impl InputService {
                 edges.push(edge);
             }
         };
-        press(Control::RightTrigger, Edge::Attack);
+        // RT Bursts while possessing a building in a town, where it could
+        // attack nothing anyway (a seated elder doesn't swing).
+        press(Control::RightTrigger, if self.scene.town && self.possessing { Edge::Burst } else { Edge::Attack });
         press(Control::Button(Button::RightBumper), Edge::Lift);
         press(Control::Button(Button::South), Edge::Interact);
         // A town has no nearby targets to collect from: X builds, and B

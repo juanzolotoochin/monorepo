@@ -36,6 +36,8 @@ pub struct Settlement {
     building_shapes: BTreeMap<String, BuildingShape>,
     /// The tick each building last put out a unit, for its lamp's flash.
     produced_at: BTreeMap<usize, u64>,
+    /// The tick each building last had a Burst, for its lamp's bigger flash.
+    burst_at: BTreeMap<usize, u64>,
     /// The elder's last interact refusal and the tick it came, shown over
     /// its head for `REFUSAL_SECONDS`.
     refusal: Option<(String, f32)>,
@@ -135,6 +137,8 @@ const OUTPUT_LAYOUT: content::scenario::CargoLayout =
     content::scenario::CargoLayout { columns: 3, rows: 2, spacing: [0.2, 0.11, 0.17], scale: 1.0, roll: 0.0 };
 /// Seconds a lamp flares after its building puts out a unit.
 const FLARE_SECONDS: f32 = 0.45;
+/// Seconds a lamp flares after a Burst, brighter than a unit's.
+const BURST_FLARE_SECONDS: f32 = 1.2;
 struct View {
     skin: String,
     position: Vec3,
@@ -799,6 +803,14 @@ pub fn tick(world: &mut World) {
         if let Event::BuildingProduced { building } = event {
             state.produced_at.insert(*building, sim.tick);
         }
+        if let Event::BuildingBurst { building, .. } = event {
+            state.burst_at.insert(*building, sim.tick);
+        }
+        if let Event::BurstRefused { agent, reason } = event {
+            if Some(agent) == me.as_ref() {
+                state.refusal = Some((reason.message(), sim.time()));
+            }
+        }
         if let Event::BundleRefused { agent, reason } = event {
             if Some(agent) == me.as_ref() {
                 state.refusal = Some((reason.message().to_string(), sim.time()));
@@ -855,7 +867,8 @@ pub fn tick(world: &mut World) {
             Event::ThreatSwing { hit: false, .. } => Some(crate::sound::Cue::Swing),
             Event::Produced { .. } | Event::Equipped { .. } => Some(crate::sound::Cue::Clang),
             // A gatherer's unit pops onto its pile as a dispenser's does.
-            Event::BuildingProduced { .. } => Some(crate::sound::Cue::Dispense),
+            // So do a Burst's, all at once.
+            Event::BuildingProduced { .. } | Event::BuildingBurst { .. } => Some(crate::sound::Cue::Dispense),
             Event::BlueprintPlaced { .. } | Event::PartInstalled { .. } => Some(crate::sound::Cue::Clang),
             _ => None,
         };
@@ -975,6 +988,7 @@ pub fn tick(world: &mut World) {
     if !sim.config().building_kinds.is_empty() {
         town_ghost(world, &mut state, sim);
         town_canopy(world, &mut state, sim, pos);
+        town_help(world);
     }
     for d in &sim.config().depots {
         inventory(
@@ -1114,12 +1128,14 @@ pub fn tick(world: &mut World) {
         } else if !sim.config().building_kinds.is_empty() {
             let tree = |item: &str| sim.config().depots.iter().map(|d| sim.depots[&d.id].units(item)).sum::<u32>();
             let items = sim.config().items.iter().map(|i| format!("{} {}", i.label, tree(&i.id))).collect::<Vec<_>>().join("  ");
+            let burst = burst_indicator(world).map_or_else(String::new, |(_, burst)| format!("  /  {burst}"));
             format!(
-                "SACRED TREE  {}  /  PACK {}/{} {}   [P] pause",
+                "SACRED TREE  {}  /  PACK {}/{} {}{}   [P] pause",
                 items,
                 mine.map_or(0, |a| a.cargo.total()),
                 mine.map_or(0, |a| a.cargo.capacity),
-                cargo
+                cargo,
+                burst
             )
         } else if !sim.config().weapons.is_empty() {
             format!(
@@ -1337,6 +1353,7 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
     let mut glows = vec![];
     let ground = |world: &World, p: Vec3| crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, p).unwrap_or(0.);
     let seconds = sim.time() / HZ;
+    let burst = burst_indicator(world);
     for (i, b) in sim.buildings.iter().enumerate() {
         let kind = sim.config().building_kinds.iter().find(|k| k.id == b.kind).expect("a scenario building kind");
         let shape = state.building_shapes[&b.kind];
@@ -1369,17 +1386,23 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
                 None => (Glow::Idle, "IDLE".to_string()),
             },
         };
+        // The building the local elder possesses says when it can Burst.
+        let status = match burst.as_ref().filter(|(b, _)| *b == i) {
+            Some((_, burst)) => format!("{status}
+{burst}"),
+            None => status,
+        };
         // The lamp flickers while the building works, flares as a unit
-        // comes out, and pulses slowly while the output waits for a pickup.
-        let flare = state
-            .produced_at
-            .get(&i)
-            .map_or(0.0, |&at| (1.0 - (sim.time() - at as f32) / (FLARE_SECONDS * HZ)).max(0.0));
+        // comes out (more, and for longer, at a Burst), and pulses slowly
+        // while the output waits for a pickup.
+        let fading = |at: Option<&u64>, seconds: f32| at.map_or(0.0, |&at| (1.0 - (sim.time() - at as f32) / (seconds * HZ)).max(0.0));
+        let flare = fading(state.produced_at.get(&i), FLARE_SECONDS);
+        let burst_flare = fading(state.burst_at.get(&i), BURST_FLARE_SECONDS);
         let size = match glow {
             Glow::Working | Glow::Elder => 0.13 + 0.015 * (seconds * 11.0 + i as f32).sin(),
             Glow::Full => 0.12 + 0.03 * (seconds * 3.0).sin(),
             _ => 0.08,
-        } * (1.0 + flare * 0.9);
+        } * (1.0 + flare * 0.9 + burst_flare * 2.2);
         let lamp = center + Vec3::Y * (shape.height * grown.max(0.4) + 0.3);
         glows.push((format!("lamp/{i}"), lamp, size, glow));
         let product = sim.config().items.iter().find(|it| it.id == kind.product).map_or(kind.product.clone(), |it| it.label.clone());
@@ -1525,6 +1548,39 @@ fn hide_possessing(world: &mut World) {
             world.entity_mut(entity).insert(Possessing);
         } else {
             world.entity_mut(entity).remove::<Possessing>();
+        }
+    }
+}
+
+/// While the local elder possesses a building: the building's index and
+/// whether it can Burst now, by the sim's own check
+/// (`Settlement::burst_check`), with the key ("BURST READY (R)"), or the
+/// seconds left ("BURST 12 s"). For its card and the HUD line.
+fn burst_indicator(world: &World) -> Option<(usize, String)> {
+    let service = world.get_resource::<crate::lockstep::SessionService>()?;
+    let (s, sim_world, agent) = (service.settlement()?, service.world()?, service.player()? as usize);
+    let building = s.seat(agent)?.building()?;
+    let key = match world.get_resource::<crate::input::InputService>().map(|i| i.frame().owner) {
+        Some(crate::input::Device::Gamepad) => "RT",
+        _ => "R",
+    };
+    let text = match s.burst_check(agent, sim_world.tick()) {
+        Ok(_) => format!("BURST READY ({key})"),
+        Err(sim::settlement::BurstRefusal::Cooling { ticks }) => format!("BURST {} s", ticks.div_ceil(content::TICKS_PER_SECOND as u64)),
+        Err(sim::settlement::BurstRefusal::OutputFull) => "BURST: OUTPUT FULL".to_string(),
+        Err(sim::settlement::BurstRefusal::NotPossessing) => return None,
+    };
+    Some((building as usize, text))
+}
+
+/// The controls help line in a town: the town's keys, or while the elder
+/// possesses a building, the keys that work there (leaving and Burst).
+/// `style::apply` writes the first when the world starts.
+fn town_help(world: &mut World) {
+    let help = if crate::input::town::possessing(world) { crate::style::TOWN_POSSESSED_HELP } else { crate::style::TOWN_HELP };
+    for mut text in world.query_filtered::<&mut Text, With<crate::scene::ControlHelp>>().iter_mut(world) {
+        if text.0 != help {
+            text.0 = help.into();
         }
     }
 }
@@ -1689,6 +1745,20 @@ pub fn snapshot(world: &World) -> serde_json::Value {
             // The tree's canopy: 1 whole, less while it is see-through.
             let canopy = world.get_resource::<Settlement>().and_then(|state| state.canopy.as_ref()).map_or(1.0, crate::canopy::Canopy::opacity);
             out["canopy_opacity"] = canopy.into();
+            // The local elder's Burst: the seconds its cooldown has left
+            // (0 when over), and whether one would go off now, with the
+            // units it adds or the sim's reason why not.
+            let service = world.get_resource::<crate::lockstep::SessionService>();
+            let burst = service.and_then(|service| {
+                let (s, sim_world, agent) = (service.settlement()?, service.world()?, service.player()? as usize);
+                let ready = s.agents.get(agent)?.avatar()?.burst_ready;
+                let cooldown = ready.saturating_sub(sim_world.tick()) as f64 / content::TICKS_PER_SECOND as f64;
+                Some(match s.burst_check(agent, sim_world.tick()) {
+                    Ok(units) => serde_json::json!({"cooldown": cooldown, "ready": true, "units": units, "reason": null}),
+                    Err(reason) => serde_json::json!({"cooldown": cooldown, "ready": false, "units": null, "reason": reason.message()}),
+                })
+            });
+            out["burst"] = burst.unwrap_or(serde_json::Value::Null);
         }
         // The local player's seat: a vehicle it drives or a building it
         // possesses, by index, or null.

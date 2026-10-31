@@ -28,7 +28,7 @@ The native reader and synthetic test source both produce `GamepadSnapshot` value
 | Right stick | Independent aim | — |
 | LB | Hold run | — |
 | RB | Jump if the player character has `Jump`; hold jetpack otherwise | — |
-| RT | One attack per press | — |
+| RT | One attack per press; in a town, while possessing a building, Burst (keyboard R) | — |
 | A | Interact with selected target | Confirm |
 | X | Collect compatible material while carrying; in a town, the build menu | — |
 | B | Propose a nearby cargo drop; in a town, back out of a blueprint being placed, else drop the bundle at the elder's feet | Back or cancel chooser |

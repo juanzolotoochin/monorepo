@@ -30,6 +30,12 @@
 //! one target ("LEAVE"). The boarding key (G, the left stick) boards and
 //! leaves as well; a sprite working inside is the target at its slot spot
 //! (its job menu), so the boarding key is what possesses a staffed one.
+//!
+//! Burst (D3): while the elder possesses a building, keyboard R and
+//! controller RT Burst ([`burst`]), sending `Burst` when the sim's own
+//! check (`Settlement::burst_check`) lets it go off now, or failing with its
+//! words ("Burst ready in 12 s"). Elsewhere, and in other scenes, those
+//! keys keep what they did.
 
 use bevy::prelude::*;
 use fx::{Fx, FxVec2};
@@ -296,6 +302,25 @@ pub fn drop_bundle(world: &mut World) -> Result<Dropped, String> {
     let before: u32 = s.depot_cargo(&s.agents[agent as usize]).iter().sum();
     world.resource_mut::<SessionService>().command(CommandKind::Drop { agent });
     Ok(Dropped { expected: before - job.remaining })
+}
+
+/// The Burst key: sends `Burst` when the sim's own check
+/// (`Settlement::burst_check`) lets it go off now, or fails with its words
+/// ("Burst ready in 12 s", "Output full"), which show over the elder as the
+/// sim's refusals do. Returns the units it adds.
+pub fn burst(world: &mut World) -> Result<u32, String> {
+    let service = world.resource::<SessionService>();
+    let (s, sim_world, agent) = (service.settlement().ok_or("No settlement loaded")?, service.world().ok_or("No settlement loaded")?, service.player().ok_or("No controlled actor")?);
+    let units = s.burst_check(agent as usize, sim_world.tick()).map_err(|r| r.message())?;
+    world.resource_mut::<SessionService>().command(CommandKind::Burst { agent });
+    Ok(units)
+}
+
+/// Whether the local player possesses a building now, for the keys that
+/// only Burst there.
+pub fn possessing(world: &World) -> bool {
+    let service = world.resource::<SessionService>();
+    service.player().zip(service.settlement()).is_some_and(|(agent, s)| s.seat(agent as usize).is_some_and(|seat| seat.building().is_some()))
 }
 
 /// The job menu's options: idle, then one per building kind, gathering its

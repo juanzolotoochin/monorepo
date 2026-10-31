@@ -111,6 +111,11 @@ pub enum Command {
     /// onto a pile of its item there, or a new one. Fails with the sim's
     /// reason, such as "Nothing carried"; done once every unit has landed.
     SettlementDrop,
+    /// Bursts the building the elder possesses, as R or RT does there: its
+    /// Burst units go into the output at once. Fails with the sim's reason
+    /// ("Burst ready in 12 s", "Output full", "Possess a building to
+    /// Burst"); done once the units are in (`settlement.burst`).
+    SettlementBurst,
     AssertSettlement {
         delivered: u64,
         cycles: u64,

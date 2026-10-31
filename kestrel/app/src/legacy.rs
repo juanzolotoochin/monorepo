@@ -617,6 +617,10 @@ pub enum Event {
     BlueprintRefused { reason: s::PlacementRefusal },
     /// A part of `building` went in; `built` when it was the last.
     PartInstalled { building: usize, built: bool },
+    /// A Burst put `units` in building `building`'s output at once.
+    BuildingBurst { building: usize, units: u32 },
+    /// Player `agent`'s Burst was refused; `reason.message()` says why.
+    BurstRefused { agent: String, reason: s::BurstRefusal },
 }
 
 /// One frame's settlement, interpolated between the last two ticks.
@@ -922,6 +926,8 @@ impl Simulation {
                     s::Event::BlueprintPlaced { building } => Event::BlueprintPlaced { building: *building as usize },
                     s::Event::BlueprintRefused { reason, .. } => Event::BlueprintRefused { reason: *reason },
                     s::Event::PartInstalled { building, built, .. } => Event::PartInstalled { building: *building as usize, built: *built },
+                    s::Event::BuildingBurst { building, units } => Event::BuildingBurst { building: *building as usize, units: *units },
+                    s::Event::BurstRefused { agent, reason } => Event::BurstRefused { agent: agent_name(*agent), reason: *reason },
                     s::Event::ThreatSwing { threat, agent, hit, killed, .. } => Event::ThreatSwing {
                         threat: *threat,
                         agent: agent_name(*agent),

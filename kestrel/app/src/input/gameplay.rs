@@ -127,9 +127,11 @@ fn publish_scene(world: &mut World) {
         utility.push(Utility::CancelLogistics);
     }
     let placing = world.get_resource::<Dispatcher>().is_some_and(|d| d.town.placing.is_some());
+    let possessing = town && super::town::possessing(world);
     let mut input = world.resource_mut::<InputService>();
     input.set_scene(SceneContext { scenario, town, utility, recording });
     input.set_placing(placing);
+    input.set_possessing(possessing);
 }
 
 /// An accepted pile haul or depot transfer is running for this player.
@@ -224,6 +226,8 @@ pub fn dispatch(world: &mut World) {
             Edge::Collect => interact(world, true),
             Edge::Drop if town => town_drop(world),
             Edge::Drop => drop_cargo(world),
+            Edge::Burst if town => town_burst(world),
+            Edge::Burst => {}
             Edge::TargetPrevious => world.resource_mut::<Dispatcher>().targets.cycle(-1),
             Edge::TargetNext => world.resource_mut::<Dispatcher>().targets.cycle(1),
             Edge::Choose(index) => choose(world, index),
@@ -380,6 +384,13 @@ fn town_interact(world: &mut World) {
 fn town_drop(world: &mut World) {
     let dropped = super::town::drop_bundle(world).map(|_| ());
     town_feedback(world, dropped);
+}
+
+/// The town's Burst key (keyboard R, controller RT, while possessing a
+/// building): `town::burst`.
+fn town_burst(world: &mut World) {
+    let burst = super::town::burst(world).map(|_| ());
+    town_feedback(world, burst);
 }
 
 /// A town action's refusal shows over the elder, as the sim's do.

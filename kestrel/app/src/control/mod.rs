@@ -145,6 +145,9 @@ enum Pending {
     /// Waits until the player sits in `building`, or in none. `sent` is
     /// false while it walks there first: the boarding goes out on arrival.
     Seat { building: Option<u16>, sent: std::sync::atomic::AtomicBool },
+    /// Waits until the Burst sent restarts the player's cooldown, which
+    /// stood at `ready` before.
+    Burst { ready: u64 },
     Failed(String),
 }
 struct Active {
@@ -402,6 +405,13 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
                 None => send(world, CommandKind::Interact { agent, target: sim::settlement::InteractTarget::Slot(*building) }),
             }
             Ok(Pending::Seat { building: Some(*building), sent: std::sync::atomic::AtomicBool::new(walk.is_none()) })
+        }
+        Command::SettlementBurst => {
+            let s = settlement(world)?;
+            let agent = player(world).ok_or("No controlled actor")?;
+            let ready = s.agents[agent as usize].avatar().map_or(0, |a| a.burst_ready);
+            crate::input::town::burst(world)?;
+            Ok(Pending::Burst { ready })
         }
         Command::SettlementLeave => {
             let s = settlement(world)?;
@@ -755,6 +765,22 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
             sent.store(true, std::sync::atomic::Ordering::Relaxed);
             send(world, CommandKind::Interact { agent, target: sim::settlement::InteractTarget::Slot(b) });
             None
+        }
+        Pending::Burst { ready } => {
+            if !applied {
+                return None;
+            }
+            let service = world.get_resource::<SessionService>()?;
+            let (s, agent) = (service.settlement()?, service.player()?);
+            if s.agents[agent as usize].avatar().is_some_and(|a| a.burst_ready != *ready) {
+                return Some(Ok(()));
+            }
+            // The sim's refusal, as the view shows it.
+            let refused = s.events.iter().find_map(|e| match *e {
+                sim::settlement::Event::BurstRefused { agent: a, reason } if a == agent => Some(reason.message()),
+                _ => None,
+            });
+            Some(Err(refused.unwrap_or_else(|| "The Burst didn't go off".into())))
         }
         Pending::Wait(until) => (tick >= *until).then_some(Ok(())),
         Pending::Scene(index) => (shown(world) == Some(*index) && applied_scene(world, *index)).then_some(Ok(())),

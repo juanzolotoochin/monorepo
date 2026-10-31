@@ -952,3 +952,56 @@ fn the_elder_possesses_the_wood_gatherer_and_its_sprite_goes_back_in() {
     assert_eq!(report["status"], "failed", "{report}");
     assert!(report["error"].as_str().unwrap().contains("Drop the bundle first (Q)"), "{report}");
 }
+
+/// Possessing the Wood Gatherer, `settlement_burst` puts two units in its
+/// output at once; a second right after fails with the cooldown left, and
+/// once the cooldown is over (the elder waiting outside, so the output has
+/// room), a Burst works again. `settlement.burst` reports the cooldown.
+#[test]
+fn the_elder_bursts_the_wood_gatherer_and_waits_out_the_cooldown() {
+    let wood = |state: &Value| state["settlement"]["simulation"]["buildings"][0]["output"]["items"]["wood"].as_u64().unwrap_or(0);
+    let report = run(vec![
+        Command::Scene { scene: "sacred-tree".into() },
+        Command::SettlementBoard { building: 0 },
+        Command::Inspect,
+        Command::SettlementBurst,
+        Command::Inspect,
+        Command::SettlementBurst,
+    ]);
+    assert_eq!(report["status"], "failed", "{report}");
+    assert!(report["error"].as_str().unwrap().contains("Burst ready in"), "{report}");
+    let receipts = report["receipts"].as_array().unwrap();
+    let (before, after) = (&receipts[2]["state"], &receipts[4]["state"]);
+    assert_eq!(before["settlement"]["burst"]["ready"], true, "{}", before["settlement"]["burst"]);
+    // Two at once, and perhaps a unit of the elder's own work meanwhile.
+    let added = wood(after) - wood(before);
+    assert!((2..=3).contains(&added), "{added} units");
+    let burst = &after["settlement"]["burst"];
+    assert_eq!(burst["ready"], false, "{burst}");
+    assert!(burst["cooldown"].as_f64().unwrap() > 29.0, "{burst}");
+    assert!(burst["reason"].as_str().unwrap().starts_with("Burst ready in"), "{burst}");
+    assert!(after["settlement"]["balances"].as_object().unwrap().values().all(|b| b["conserved"] == true));
+
+    // At 20 frames a second, so the script's frame budget covers the wait.
+    let report = run_at(
+        vec![
+            Command::Scene { scene: "sacred-tree".into() },
+            Command::SettlementBoard { building: 0 },
+            Command::SettlementBurst,
+            Command::SettlementLeave,
+            Command::Wait { frames: 610 },
+            Command::Inspect,
+            Command::SettlementBoard { building: 0 },
+            Command::Inspect,
+            Command::SettlementBurst,
+            Command::Inspect,
+        ],
+        20,
+    );
+    assert_eq!(report["status"], "passed", "{report}");
+    let receipts = report["receipts"].as_array().unwrap();
+    let outside = &receipts[5]["state"]["settlement"]["burst"];
+    assert_eq!((outside["cooldown"].as_f64(), outside["reason"].as_str()), (Some(0.0), Some("Possess a building to Burst")), "{outside}");
+    let added = wood(&receipts[9]["state"]) - wood(&receipts[7]["state"]);
+    assert!((2..=3).contains(&added), "{added} units");
+}

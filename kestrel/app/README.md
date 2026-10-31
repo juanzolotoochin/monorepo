@@ -762,6 +762,10 @@ the elder beside it first when it is out of reach; a sprite inside is put
 out, and a refusal fails the step with its reason, such as `"Drop the
 bundle first (Q)"`. `settlement_leave` leaves it. `settlement.seat` is the
 player's seat: `{"building": 0}`, `{"vehicle": 0}` or null.
+`settlement_burst` Bursts the possessed building as R does, failing with the
+sim's reason (`"Burst ready in 12 s"`, `"Output full"`, `"Possess a building
+to Burst"`); `settlement.burst` has the seconds of `cooldown` left, whether a
+Burst would go off now (`ready`), and its `units` or the `reason` it wouldn't.
 `settlement.simulation.ground_piles` lists
 the dropped piles (`id`, `position`, `stock`). Each building in
 `settlement.simulation.buildings` has, while it is a site, a `site` with its
@@ -831,6 +835,16 @@ hidden and the building works four times as fast, up to a higher cap.
 Moving and dropping do nothing while inside. Boarding with a bundle is
 refused: "Drop the bundle first (Q)". A sprite working inside is reached
 at the slot spot too, so E there opens its job menu, and G possesses.
+
+Possessing a building, R (RT on a controller) Bursts: two units go into its
+output at once (up to the possessed cap), the lamp flares bright and the
+pop plays. Then the elder waits 30 seconds for the next, wherever it goes:
+leaving, possessing another building or respawning doesn't reset it. The
+building's card and the HUD line say "BURST READY (R)", or the seconds left
+("BURST 12 s"), and the help line shows the keys that work inside. A Burst
+too soon, or into a full output, says why over the elder ("Burst ready in
+12 s", "Output full") and spends no cooldown. Outside a building R and RT
+keep what they do.
 
 ```sh
 bazel build //kestrel/app:sacred_tree_demo
