@@ -100,6 +100,27 @@ pub struct Defender {
     pub projectile: ProjectileKind,
 }
 
+/// A sprite as the view sees it: drawn by its character's skin.
+#[derive(Clone, Debug, Serialize)]
+pub struct Sprite {
+    pub id: String,
+    pub label: String,
+    pub skin: String,
+}
+
+/// A building kind as the view sees it.
+#[derive(Clone, Debug, Serialize)]
+pub struct BuildingKind {
+    pub id: String,
+    pub label: String,
+    pub skin: String,
+    pub radius: f32,
+    pub product: String,
+    /// Seconds per unit with a sprite inside.
+    pub period: f32,
+    pub cap: u32,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Wave {
     pub id: String,
@@ -120,6 +141,19 @@ pub struct Scenario {
     pub producers: Vec<Producer>,
     pub defenders: Vec<Defender>,
     pub waves: Vec<Wave>,
+    /// The town's sprites and building kinds; empty, and left out of
+    /// traces, in every other scene.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sprites: Vec<Sprite>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub building_kinds: Vec<BuildingKind>,
+}
+
+impl Scenario {
+    /// A sprite's definition, by agent id.
+    pub fn sprite(&self, id: &str) -> Option<&Sprite> {
+        self.sprites.iter().find(|s| s.id == id)
+    }
 }
 
 fn point(p: [Fx; 2]) -> Point {
@@ -230,6 +264,28 @@ impl Scenario {
                     Wave { id: w.id.clone(), skin, hp }
                 })
                 .collect(),
+            sprites: scenario
+                .sprites
+                .iter()
+                .map(|s| Sprite {
+                    id: s.id.clone(),
+                    label: s.label.clone(),
+                    skin: crate::lockstep::builtin_character_view(&s.character).skin.clone().unwrap_or_default(),
+                })
+                .collect(),
+            building_kinds: scenario
+                .building_kinds
+                .iter()
+                .map(|k| BuildingKind {
+                    id: k.id.clone(),
+                    label: k.label.clone(),
+                    skin: k.skin.clone(),
+                    radius: k.radius.to_f32(),
+                    product: k.product.clone(),
+                    period: k.period.to_f32(),
+                    cap: k.cap,
+                })
+                .collect(),
         }
     }
 }
@@ -266,6 +322,72 @@ pub struct AgentState {
     pub phase: String,
     pub cargo: Inventory,
     pub trailer: Option<Trailer>,
+}
+
+/// What a sprite is doing, as the player reads it (A7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpriteActivity {
+    /// No job: home, or standing there.
+    Idle,
+    /// Walking: to its building, or home.
+    Moving,
+    /// No building of its job's kind is free.
+    Waiting,
+    /// Inside its building.
+    Working,
+}
+
+/// A sprite's job and what it is doing about it.
+#[derive(Clone, Debug, Serialize)]
+pub struct SpriteView {
+    /// The building kind it staffs (its id), or none when idle.
+    pub job: Option<String>,
+    pub activity: SpriteActivity,
+    /// The building it holds a slot in, claimed or inside.
+    pub building: Option<usize>,
+}
+
+/// Who works a building.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Occupant {
+    Sprite(String),
+    Elder(String),
+}
+
+/// Why a building is or isn't producing, as the player reads it (A7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BuildingStatus {
+    /// Still a site, being put up.
+    Site,
+    /// Built, with nobody inside (a sprite may be on its way).
+    Idle,
+    Working,
+    /// Its output holds its occupant's cap: production waits for a pickup.
+    Full,
+}
+
+/// A building as the view sees it (`sim::settlement::BuildingState`).
+#[derive(Clone, Debug, Serialize)]
+pub struct Building {
+    /// Its kind's id.
+    pub kind: String,
+    pub position: Point,
+    pub output_position: Point,
+    /// Where its occupant stands.
+    pub slot_position: Point,
+    pub status: BuildingStatus,
+    pub occupant: Option<Occupant>,
+    /// The sprite on its way in on a claim.
+    pub claimed_by: Option<String>,
+    /// How far the next unit is, 0 to 1.
+    pub progress: f32,
+    /// The produced units waiting to be picked up.
+    pub output: Inventory,
+    /// What the output holds before production pauses, for this occupant.
+    pub cap: u32,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -439,6 +561,9 @@ pub enum Event {
     /// A threat's swing landed on player `agent` (`hit`) or missed. `from`
     /// is where the threat stands, if it still does.
     ThreatSwing { threat: u64, agent: String, from: Option<Point>, hit: bool, killed: bool },
+    /// Building `building` (an index into `Simulation::buildings`) put a
+    /// unit in its output.
+    BuildingProduced { building: usize },
 }
 
 /// One frame's settlement, interpolated between the last two ticks.
@@ -464,6 +589,12 @@ pub struct Simulation {
     pub pinned: BTreeMap<u64, Pinned>,
     pub metrics: Metrics,
     pub manual_jobs: BTreeMap<String, ManualJob>,
+    /// The town's buildings and sprites; empty, and left out of traces, in
+    /// every other scene.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub buildings: Vec<Building>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub sprites: BTreeMap<String, SpriteView>,
     #[serde(skip)]
     pub events: Vec<Event>,
     #[serde(skip)]
@@ -722,7 +853,7 @@ impl Simulation {
                     // Drawn from the threat's `windup` instead, which also
                     // covers a client that joins mid-windup.
                     s::Event::ThreatWindup { .. } => return None,
-                    s::Event::BuildingProduced { .. } => return None,
+                    s::Event::BuildingProduced { building } => Event::BuildingProduced { building: *building as usize },
                     s::Event::ThreatSwing { threat, agent, hit, killed, .. } => Event::ThreatSwing {
                         threat: *threat,
                         agent: agent_name(*agent),
@@ -731,6 +862,66 @@ impl Simulation {
                         killed: *killed,
                     },
                 })
+            })
+            .collect();
+        let buildings = current
+            .buildings
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                let kind = current.building_kind(i as s::BuildingIx);
+                let occupant = b.slot.occupant().map(|o| match o {
+                    s::Occupant::Sprite(a) => Occupant::Sprite(agent_name(a)),
+                    s::Occupant::Elder(a) => Occupant::Elder(agent_name(a)),
+                });
+                let cap = kind.cap_for(b.slot.occupant());
+                let status = if !b.built() {
+                    BuildingStatus::Site
+                } else if occupant.is_none() {
+                    BuildingStatus::Idle
+                } else if b.output.total() + b.output.total_in() >= cap {
+                    BuildingStatus::Full
+                } else {
+                    BuildingStatus::Working
+                };
+                Building {
+                    kind: kind.id.clone(),
+                    position: local(b.position),
+                    output_position: local(b.output_position),
+                    slot_position: local(b.slot_position(kind)),
+                    status,
+                    occupant,
+                    claimed_by: match b.slot {
+                        s::Slot::Claimed(a) => Some(agent_name(a)),
+                        _ => None,
+                    },
+                    progress: (b.progress.to_f32() / kind.period.max(1) as f32).clamp(0.0, 1.0),
+                    output: inventory(&b.output.counts, cap),
+                    cap,
+                }
+            })
+            .collect();
+        let sprites = current
+            .agents
+            .iter()
+            .filter_map(|a| {
+                let sprite = a.sprite()?;
+                let job = match sprite.job {
+                    s::SpriteJob::Idle => None,
+                    s::SpriteJob::Staff(kind) => Some(current.building_kinds[kind as usize].id.clone()),
+                };
+                let activity = match sprite.current() {
+                    _ if sprite.inside() => SpriteActivity::Working,
+                    Some(s::Step::Wait) => SpriteActivity::Waiting,
+                    // Walking, or about to: a claim is granted on the way.
+                    Some(s::Step::GoTo(_) | s::Step::Claim(_) | s::Step::Enter(_)) => SpriteActivity::Moving,
+                    // An idle sprite's plan is done once it is home; a job
+                    // with no plan yet gets one on the next tick.
+                    None if job.is_none() => SpriteActivity::Idle,
+                    None => SpriteActivity::Waiting,
+                };
+                let view = SpriteView { job, activity, building: sprite.holds.map(|h| h.building() as usize) };
+                Some((a.id.clone(), view))
             })
             .collect();
         Simulation {
@@ -811,6 +1002,8 @@ impl Simulation {
                     Some((a.id.clone(), manual))
                 })
                 .collect(),
+            buildings,
+            sprites,
             events,
             balances,
             statuses,

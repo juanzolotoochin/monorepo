@@ -29,6 +29,13 @@ pub struct Settlement {
     blockers: Vec<Entity>,
     pub notice: String,
     pub inspection: Option<String>,
+    /// The town's glows (sprites' flames, buildings' lamps) by key.
+    glows: BTreeMap<String, Entity>,
+    glow_assets: Option<GlowAssets>,
+    /// How each building kind's skin is fitted to its footprint.
+    building_shapes: BTreeMap<String, BuildingShape>,
+    /// The tick each building last put out a unit, for its lamp's flash.
+    produced_at: BTreeMap<usize, u64>,
 }
 struct Corpse {
     skin: String,
@@ -38,13 +45,77 @@ struct Corpse {
     fade: Fade,
     arrows: Vec<Rig>,
 }
+/// A label in the world. Folded, a depot's shows its unit count and a
+/// building's card is hidden; one with a `brief` shows that instead, in its
+/// `tint`. Hovered (or pinned), it unfolds to `detail`.
 #[derive(Component)]
 pub struct Caption {
+    /// A card with no take or deposit hint, hidden folded unless it has a
+    /// brief.
     building: bool,
     position: Vec3,
     detail: String,
     units: u32,
+    brief: String,
+    tint: Color,
 }
+
+/// The glows' shared mesh and a material per state.
+struct GlowAssets {
+    mesh: Handle<Mesh>,
+    materials: [Handle<StandardMaterial>; GLOWS.len()],
+}
+
+/// What a glow shows, an index into `GLOWS`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Glow {
+    Working = 0,
+    Moving = 1,
+    Waiting = 2,
+    Idle = 3,
+    Full = 4,
+    Elder = 5,
+}
+
+/// The glows' colors, by `Glow`: the warm flame of work, a pale yellow
+/// walk, the cool blue of waiting, a dim ember for idle, red for an output
+/// that is full, and violet for the elder.
+const GLOWS: [(f32, f32, f32); 6] = [
+    (1.0, 0.55, 0.12),
+    (1.0, 0.86, 0.45),
+    (0.35, 0.62, 1.0),
+    (0.45, 0.36, 0.30),
+    (1.0, 0.16, 0.10),
+    (0.78, 0.45, 1.0),
+];
+
+impl Glow {
+    /// The color of text in this state: the glow's, but an idle ember's
+    /// would be too dark to read, so idle text is a pale gray.
+    fn text(self) -> Color {
+        if self == Glow::Idle {
+            return Color::srgb(0.82, 0.80, 0.74);
+        }
+        let (r, g, b) = GLOWS[self as usize];
+        Color::srgb(r, g, b)
+    }
+}
+
+/// A building kind's skin fitted to the kind's footprint.
+#[derive(Clone, Copy)]
+struct BuildingShape {
+    /// The view scale that fits the skin's body inside the footprint.
+    scale: f32,
+    /// The fitted skin's height in meters.
+    height: f32,
+}
+
+/// How a building's output is stacked: three across and two deep, then
+/// layer on layer.
+const OUTPUT_LAYOUT: content::scenario::CargoLayout =
+    content::scenario::CargoLayout { columns: 3, rows: 2, spacing: [0.2, 0.11, 0.17], scale: 1.0, roll: 0.0 };
+/// Seconds a lamp flares after its building puts out a unit.
+const FLARE_SECONDS: f32 = 0.45;
 struct View {
     skin: String,
     position: Vec3,
@@ -111,6 +182,16 @@ impl Service for Settlement {
         for e in self.blockers.drain(..) {
             world.despawn(e);
         }
+        for (_, e) in std::mem::take(&mut self.glows) {
+            world.despawn(e);
+        }
+        if let Some(glows) = self.glow_assets.take() {
+            world.resource_mut::<Assets<Mesh>>().remove(&glows.mesh);
+            let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
+            for material in &glows.materials {
+                materials.remove(material);
+            }
+        }
     }
 
     fn systems(app: &mut App) {
@@ -150,6 +231,24 @@ fn build(world: &mut World) -> Settlement {
         }
     }
     state.config = scenario.as_ref().map(crate::legacy::Scenario::new);
+    if let Some(config) = state.config.clone().filter(|c| !c.building_kinds.is_empty() || !c.sprites.is_empty()) {
+        let pack = world.resource::<SceneLibrary>().scenes[index].clone();
+        for kind in &config.building_kinds {
+            let skin = pack.skins.iter().find(|s| s.id == kind.skin).expect("validated building skin");
+            state.building_shapes.insert(kind.id.clone(), building_shape(skin, state.templates[&kind.skin].scale, kind.radius));
+        }
+        let mesh = world.resource_mut::<Assets<Mesh>>().add(Sphere::new(1.0).mesh().ico(2).unwrap());
+        let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
+        let materials = GLOWS.map(|(r, g, b)| {
+            materials.add(StandardMaterial {
+                base_color: Color::srgb(r, g, b),
+                emissive: LinearRgba::rgb(r * 6.0, g * 6.0, b * 6.0),
+                unlit: true,
+                ..default()
+            })
+        });
+        state.glow_assets = Some(GlowAssets { mesh, materials });
+    }
     if let Some(config) = state.config.clone() {
         for d in &config.depots {
             let e = world
@@ -159,6 +258,8 @@ fn build(world: &mut World) -> Settlement {
                         position: Vec3::new(d.position[0], 0.7, d.position[1]),
                         detail: String::new(),
                         units: 0,
+                        brief: String::new(),
+                        tint: Color::NONE,
                     },
                     BackgroundColor(Color::NONE),
                     Text::new(""),
@@ -193,6 +294,8 @@ fn build(world: &mut World) -> Settlement {
                         position: Vec3::new(position[0], 1.4, position[1]),
                         detail: String::new(),
                         units: 0,
+                        brief: String::new(),
+                        tint: Color::NONE,
                     },
                     BackgroundColor(Color::NONE),
                     Text::new(""),
@@ -662,6 +765,9 @@ pub fn tick(world: &mut World) {
                 feedback.trauma = feedback.trauma.max(if *killed { 0.45 } else { 0.3 });
             }
         }
+        if let Event::BuildingProduced { building } = event {
+            state.produced_at.insert(*building, sim.tick);
+        }
         let cue = match event {
             // Prediction played these when it presented the shot.
             Event::LaserFired { .. } | Event::ArcFired { .. } | Event::BowFired { .. } if presented.is_some() => None,
@@ -708,6 +814,8 @@ pub fn tick(world: &mut World) {
             Event::ThreatSwing { hit: true, .. } => Some(crate::sound::Cue::GhoulHit),
             Event::ThreatSwing { hit: false, .. } => Some(crate::sound::Cue::Swing),
             Event::Produced { .. } | Event::Equipped { .. } => Some(crate::sound::Cue::Clang),
+            // A gatherer's unit pops onto its pile as a dispenser's does.
+            Event::BuildingProduced { .. } => Some(crate::sound::Cue::Dispense),
             _ => None,
         };
         if let Some(cue) = cue {
@@ -734,6 +842,10 @@ pub fn tick(world: &mut World) {
     }
     let mut desired = BTreeMap::new();
     for a in sim.agents.values() {
+        if let Some(sprite) = sim.config().sprite(&a.id) {
+            desired.insert(format!("agent/{}", a.id), sprite_view(sim, sprite, a));
+            continue;
+        }
         let config = agent_config(sim, &a.id);
         let mut view = View::new(&config.skin, a.position);
         view.heading = a.heading;
@@ -816,6 +928,7 @@ pub fn tick(world: &mut World) {
         v.roll = -f * 0.8;
         desired.insert(format!("threat/{}", p.target), v);
     }
+    let glows = town(world, &mut state, sim, &mut desired);
     for d in &sim.config().depots {
         inventory(
             &mut desired,
@@ -890,8 +1003,15 @@ pub fn tick(world: &mut World) {
                 counts
             }
         );
+        // The town's piles say what they are, not only how much: the tree's
+        // stock is the town's score.
+        let town = !sim.config().building_kinds.is_empty();
         let mut caption = world.get_mut::<Caption>(state.labels[&d.id]).unwrap();
         if caption.detail != label {
+            if town {
+                caption.brief = format!("{} {}", d.label, stock.total());
+                caption.tint = Color::srgb(0.98, 0.92, 0.70);
+            }
             caption.detail = label;
             caption.units = stock.total();
             world
@@ -944,6 +1064,16 @@ pub fn tick(world: &mut World) {
                 .map_or_else(|| "--".to_string(), |agent| format!("{}/{}", agent.body.health, agent.body.max_health));
             let players = mirror.current.as_ref().map_or(0, |current| current.agents.iter().filter(|agent| agent.avatar().is_some()).count());
             format!("LASER  /  HEALTH {health}  /  {players} PLAYERS")
+        } else if !sim.config().building_kinds.is_empty() {
+            let tree = |item: &str| sim.config().depots.iter().map(|d| sim.depots[&d.id].units(item)).sum::<u32>();
+            let items = sim.config().items.iter().map(|i| format!("{} {}", i.label, tree(&i.id))).collect::<Vec<_>>().join("  ");
+            format!(
+                "SACRED TREE  {}  /  PACK {}/{} {}   [P] pause",
+                items,
+                mine.map_or(0, |a| a.cargo.total()),
+                mine.map_or(0, |a| a.cargo.capacity),
+                cargo
+            )
         } else if !sim.config().weapons.is_empty() {
             format!(
                 "{:?}  /  {} SLAIN  /  {} MELEE HITS  /  {} APPROACHING",
@@ -1047,6 +1177,7 @@ pub fn tick(world: &mut World) {
         writes += changed;
         skipped += unchanged;
     }
+    sync_glows(world, &mut state, glows);
     crate::telemetry::elapsed(world, "settlement_sync", sync_start);
     let mut telemetry = world.resource_mut::<crate::telemetry::Telemetry>();
     for (name, value) in [
@@ -1071,6 +1202,233 @@ pub fn tick(world: &mut World) {
     );
     world.insert_resource(state);
 }
+/// Fits a building skin to its kind's footprint: its body, seen from
+/// above, fills the footprint's width, so the slot spot and the output pile
+/// beside it stay clear of the model. `template_scale` is the skin's own.
+fn building_shape(skin: &voxel_assets::SkinMesh, template_scale: f32, radius: f32) -> BuildingShape {
+    let positions = || {
+        skin.parts
+            .iter()
+            .filter(|p| p.part == voxel_assets::ActorPart::Body)
+            .flat_map(|p| p.meshes.iter().flat_map(|m| m.positions.iter()))
+    };
+    let half = positions().map(|p| p[0].abs().max(p[2].abs())).fold(0.0_f32, f32::max).max(0.01);
+    let top = positions().map(|p| p[1]).fold(0.0_f32, f32::max);
+    let scale = radius / (half * template_scale);
+    BuildingShape { scale, height: top * template_scale * scale }
+}
+/// The heading that turns a skin's front (+z) toward `to` from `from`.
+fn facing(from: [f32; 2], to: [f32; 2]) -> f32 {
+    (to[0] - from[0]).atan2(to[1] - from[1])
+}
+/// A sprite's rig: its character's skin, each a little different in size
+/// so the four read as separate. Working, it faces its building and bobs
+/// with the work.
+fn sprite_view(sim: &Simulation, sprite: &crate::legacy::Sprite, a: &crate::legacy::AgentState) -> View {
+    const SIZES: [f32; 4] = [1.0, 0.9, 1.07, 0.95];
+    let index = sim.config().sprites.iter().position(|s| s.id == sprite.id).unwrap_or(0);
+    let mut view = View::new(&sprite.skin, a.position);
+    view.heading = a.heading;
+    view.travel = a.travelled;
+    view.scale = SIZES[index % SIZES.len()];
+    let state = sim.sprites.get(&a.id);
+    if let Some(b) = state.filter(|s| s.activity == crate::legacy::SpriteActivity::Working).and_then(|s| s.building) {
+        view.heading = facing(a.position, sim.buildings[b].position);
+        view.activity = 0.5 + 0.5 * (sim.time() / HZ * 7.0 + index as f32).sin();
+    }
+    view
+}
+/// A sprite's job, by its building kind's label ("WOOD GATHERER"), and
+/// shortened to the kind's product for its tag ("WOOD"), so neighbors' tags
+/// overlap less.
+fn job_labels(sim: &Simulation, job: Option<&String>) -> (String, String) {
+    let Some(kind) = job.and_then(|id| sim.config().building_kinds.iter().find(|k| k.id == *id)) else {
+        return (String::new(), String::new());
+    };
+    let product = sim.config().items.iter().find(|i| i.id == kind.product).map_or_else(|| kind.product.to_uppercase(), |i| i.label.clone());
+    (kind.label.clone(), product)
+}
+/// An agent's label: a sprite's or a scenario agent's.
+fn agent_label(sim: &Simulation, id: &str) -> String {
+    sim.config()
+        .sprite(id)
+        .map(|s| s.label.clone())
+        .or_else(|| sim.config().agents.iter().find(|a| a.id == id).map(|a| a.label.clone()))
+        .unwrap_or_else(|| id.to_uppercase())
+}
+/// A caption that follows something in the town, made on first use.
+fn town_caption(world: &mut World, state: &mut Settlement, key: &str, position: Vec3, brief: String, tint: Color, detail: String) {
+    let e = *state.labels.entry(key.to_string()).or_insert_with(|| {
+        world
+            .spawn((
+                Caption { building: true, position, detail: String::new(), units: 0, brief: String::new(), tint },
+                BackgroundColor(Color::NONE),
+                Text::new(""),
+                TextFont { font_size: FontSize::Px(11.), ..default() },
+                TextColor(tint),
+                Node { position_type: PositionType::Absolute, max_width: px(310.), ..default() },
+            ))
+            .id()
+    });
+    let mut caption = world.get_mut::<Caption>(e).unwrap();
+    if caption.position != position {
+        caption.position = position;
+    }
+    if caption.brief != brief || caption.tint != tint || caption.detail != detail {
+        caption.brief = brief;
+        caption.tint = tint;
+        caption.detail = detail;
+    }
+}
+/// The town (`SACRED_TREE_HANDOFF.md`): each building in its kind's skin,
+/// its rotor turning while it works, with a lamp over it and a card saying
+/// who works it; its output stacked on its pile with the count; and each
+/// sprite's flame and tag, saying its job and what it is doing (A7).
+/// Returns the glows to draw.
+fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &mut BTreeMap<String, View>) -> Vec<(String, Vec3, f32, Glow)> {
+    use crate::legacy::{BuildingStatus, Occupant, SpriteActivity};
+    let mut glows = vec![];
+    let ground = |world: &World, p: Vec3| crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, p).unwrap_or(0.);
+    let seconds = sim.time() / HZ;
+    for (i, b) in sim.buildings.iter().enumerate() {
+        let kind = sim.config().building_kinds.iter().find(|k| k.id == b.kind).expect("a scenario building kind");
+        let shape = state.building_shapes[&b.kind];
+        let heading = facing(b.position, b.output_position);
+        let mut v = View::new(&kind.skin, b.position);
+        v.heading = heading;
+        v.scale = shape.scale;
+        // A machine skin turns its rotor a full turn per `activity`: three
+        // turns a unit while it works, standing still while idle or full.
+        v.activity = b.progress * 3.0;
+        desired.insert(format!("building/{i}"), v);
+        let out = Vec3::new(b.output_position[0], 0., b.output_position[1]);
+        inventory(desired, sim, &format!("output/{i}"), &b.output, out, heading, &OUTPUT_LAYOUT);
+        let center = Vec3::new(b.position[0], 0., b.position[1]);
+        let center = center + Vec3::Y * ground(world, center);
+        let (glow, status) = match (&b.occupant, b.status) {
+            (Some(Occupant::Elder(_)), BuildingStatus::Full) => (Glow::Full, "FULL / POSSESSED".to_string()),
+            (Some(Occupant::Elder(_)), _) => (Glow::Elder, "POSSESSED".to_string()),
+            (Some(Occupant::Sprite(a)), BuildingStatus::Full) => (Glow::Full, format!("FULL / {}", agent_label(sim, a))),
+            (Some(Occupant::Sprite(a)), _) => (Glow::Working, format!("WORKING / {}", agent_label(sim, a))),
+            (None, BuildingStatus::Site) => (Glow::Idle, "BEING BUILT".to_string()),
+            (None, _) => match &b.claimed_by {
+                Some(a) => (Glow::Idle, format!("IDLE / {} COMING", agent_label(sim, a))),
+                None => (Glow::Idle, "IDLE".to_string()),
+            },
+        };
+        // The lamp flickers while the building works, flares as a unit
+        // comes out, and pulses slowly while the output waits for a pickup.
+        let flare = state
+            .produced_at
+            .get(&i)
+            .map_or(0.0, |&at| (1.0 - (sim.time() - at as f32) / (FLARE_SECONDS * HZ)).max(0.0));
+        let size = match glow {
+            Glow::Working | Glow::Elder => 0.13 + 0.015 * (seconds * 11.0 + i as f32).sin(),
+            Glow::Full => 0.12 + 0.03 * (seconds * 3.0).sin(),
+            _ => 0.08,
+        } * (1.0 + flare * 0.9);
+        let lamp = center + Vec3::Y * (shape.height + 0.3);
+        glows.push((format!("lamp/{i}"), lamp, size, glow));
+        let product = sim.config().items.iter().find(|it| it.id == kind.product).map_or(kind.product.clone(), |it| it.label.clone());
+        let held = b.output.total();
+        let detail = format!(
+            "{}\nMakes 1 {} every {:.1}s while someone works it\nOutput: {}/{} {}\nStatus: {}",
+            kind.label,
+            product.to_lowercase(),
+            kind.period,
+            held,
+            b.cap,
+            product.to_lowercase(),
+            match b.status {
+                BuildingStatus::Working => format!("Working, next unit {:.0}%", b.progress * 100.0),
+                BuildingStatus::Full => "Output full: waiting for a pickup".into(),
+                BuildingStatus::Idle => "Idle: nobody inside".into(),
+                BuildingStatus::Site => "Being built".into(),
+            }
+        );
+        town_caption(world, state, &format!("building/{i}"), lamp + Vec3::Y * 0.3, format!("{}\n{}", kind.label, status), glow.text(), detail);
+        let tint = if b.status == BuildingStatus::Full { Glow::Full.text() } else { Color::srgb(0.98, 0.92, 0.70) };
+        let out = out + Vec3::Y * (ground(world, out) + 0.45);
+        town_caption(world, state, &format!("output/{i}"), out, format!("{held}/{} {product}", b.cap), tint, String::new());
+    }
+    for (index, sprite) in sim.config().sprites.iter().enumerate() {
+        let (Some(a), Some(s)) = (sim.agents.get(&sprite.id), sim.sprites.get(&sprite.id)) else { continue };
+        let p = Vec3::new(a.position[0], 0., a.position[1]);
+        let p = p + Vec3::Y * ground(world, p);
+        let glow = match s.activity {
+            SpriteActivity::Working => Glow::Working,
+            SpriteActivity::Moving => Glow::Moving,
+            SpriteActivity::Waiting => Glow::Waiting,
+            SpriteActivity::Idle => Glow::Idle,
+        };
+        // A flame over its head: it dances while working, bobs on the walk,
+        // breathes slowly while waiting and smoulders when idle.
+        let phase = index as f32 * 1.7;
+        let (size, lift) = match s.activity {
+            SpriteActivity::Working => (0.13 + 0.03 * (seconds * 13.0 + phase).sin(), 0.04 * (seconds * 9.0 + phase).sin()),
+            SpriteActivity::Moving => (0.11, 0.04 * (seconds * 6.0 + phase).sin()),
+            SpriteActivity::Waiting => (0.09 + 0.03 * (seconds * 2.0 + phase).sin(), 0.0),
+            SpriteActivity::Idle => (0.07, 0.0),
+        };
+        let head = p + Vec3::Y * 1.12;
+        glows.push((format!("flame/{}", sprite.id), head + Vec3::Y * lift, size, glow));
+        let (job, short) = job_labels(sim, s.job.as_ref());
+        let doing = match s.activity {
+            SpriteActivity::Working => "WORKING",
+            SpriteActivity::Moving if s.job.is_none() => "GOING HOME",
+            SpriteActivity::Moving => "ON THE WAY",
+            SpriteActivity::Waiting => "WAITING",
+            SpriteActivity::Idle => "IDLE",
+        };
+        let brief = if job.is_empty() { format!("{}\n{doing}", sprite.label) } else { format!("{}\n{short} / {doing}", sprite.label) };
+        let detail = format!(
+            "{} (sprite)\nJob: {}\nNow: {}",
+            sprite.label,
+            if job.is_empty() { "none" } else { job.as_str() },
+            match s.activity {
+                SpriteActivity::Working => "working inside",
+                SpriteActivity::Moving => "walking",
+                SpriteActivity::Waiting => "waiting for a free building",
+                SpriteActivity::Idle => "standing at home",
+            }
+        );
+        // Every other tag stands a line higher, so neighbors standing side
+        // by side (as the sprites start) don't write over each other.
+        let above = 0.3 + (index % 2) as f32 * 1.0;
+        town_caption(world, state, &format!("sprite/{}", sprite.id), head + Vec3::Y * above, brief, glow.text(), detail);
+    }
+    glows
+}
+/// Draws `glows` (key, position, radius, state), making and dropping their
+/// entities as they come and go.
+fn sync_glows(world: &mut World, state: &mut Settlement, glows: Vec<(String, Vec3, f32, Glow)>) {
+    let Some(assets) = &state.glow_assets else { return };
+    let keep: std::collections::BTreeSet<&str> = glows.iter().map(|g| g.0.as_str()).collect();
+    let gone: Vec<String> = state.glows.keys().filter(|k| !keep.contains(k.as_str())).cloned().collect();
+    for key in gone {
+        world.despawn(state.glows.remove(&key).unwrap());
+    }
+    for (key, position, size, glow) in glows {
+        let transform = Transform::from_translation(position).with_scale(Vec3::splat(size));
+        let material = assets.materials[glow as usize].clone();
+        match state.glows.get(&key) {
+            Some(&e) => {
+                if *world.get::<Transform>(e).unwrap() != transform {
+                    *world.get_mut::<Transform>(e).unwrap() = transform;
+                }
+                if world.get::<MeshMaterial3d<StandardMaterial>>(e).unwrap().0 != material {
+                    world.entity_mut(e).insert(MeshMaterial3d(material));
+                }
+            }
+            None => {
+                let e = world
+                    .spawn((Mesh3d(assets.mesh.clone()), MeshMaterial3d(material), transform, bevy::light::NotShadowCaster))
+                    .id();
+                state.glows.insert(key, e);
+            }
+        }
+    }
+}
 pub fn snapshot(world: &World) -> serde_json::Value {
     let fingerprint = world.get_resource::<crate::lockstep::WorldMirror>().map_or_else(String::new, |m| m.fingerprint());
     world.get_resource::<Settlement>().and_then(|state| state.simulation.as_ref()).map_or(serde_json::Value::Null, |s| {
@@ -1082,7 +1440,7 @@ pub fn snapshot(world: &World) -> serde_json::Value {
 pub fn inspect_building(world: &mut World, id: Option<&str>) -> Result<(), String> {
     let mut state = world.resource_mut::<Settlement>();
     let key = if let Some(id) = id {
-        [format!("producer/{id}"), format!("defender/{id}")]
+        [format!("producer/{id}"), format!("defender/{id}"), format!("building/{id}")]
             .into_iter()
             .find(|key| state.labels.contains_key(key))
             .ok_or("Unknown building")
@@ -1126,6 +1484,7 @@ pub fn captions(
         &mut TextFont,
         &mut TextColor,
         &mut BackgroundColor,
+        &ComputedNode,
     )>,
 ) {
     let cursor = windows.iter().next().and_then(|w| w.cursor_position());
@@ -1137,7 +1496,7 @@ pub fn captions(
             cursor.and_then(|cursor| {
                 labels
                     .iter()
-                    .filter_map(|(e, p, _, _, _, _, _, _)| {
+                    .filter_map(|(e, p, _, _, _, _, _, _, _)| {
                         camera
                             .0
                             .world_to_viewport(camera.1, p.position)
@@ -1155,7 +1514,7 @@ pub fn captions(
                     .map(|(e, _, _)| e)
             })
         });
-    for (e, p, mut node, mut visibility, mut text, mut font, mut color, mut background) in
+    for (e, p, mut node, mut visibility, mut text, mut font, mut color, mut background, computed) in
         &mut labels
     {
         let Ok(v) = camera.0.world_to_viewport(camera.1, p.position) else {
@@ -1163,10 +1522,11 @@ pub fn captions(
             continue;
         };
         let expanded = hovered == Some(e);
-        *visibility = if (hovered.is_some() || p.building) && !expanded {
-            Visibility::Hidden
-        } else {
+        let folded = !p.building || !p.brief.is_empty();
+        *visibility = if expanded || (hovered.is_none() && folded) {
             Visibility::Inherited
+        } else {
+            Visibility::Hidden
         };
         let content = if expanded {
             if p.building {
@@ -1174,32 +1534,45 @@ pub fn captions(
             } else {
                 format!("{}\nLMB take / Ctrl+LMB deposit", p.detail)
             }
+        } else if !p.brief.is_empty() {
+            p.brief.clone()
         } else {
             p.units.to_string()
         };
         if text.0 != content {
             text.0 = content;
         }
-        font.font_size = FontSize::Px(if expanded { 14. } else { 10. });
+        font.font_size = FontSize::Px(if expanded { 14. } else if !p.brief.is_empty() { 12. } else { 10. });
         color.0 = if expanded {
             Color::srgb(0.95, 0.89, 0.72)
+        } else if !p.brief.is_empty() {
+            p.tint
         } else {
             Color::srgba(0.85, 0.85, 0.65, 0.65)
         };
+        // A brief gets a faint backing, so it reads over grass and foliage.
         background.0 = if expanded {
             Color::srgba(0.025, 0.045, 0.03, 0.94)
+        } else if !p.brief.is_empty() {
+            Color::srgba(0.025, 0.045, 0.03, 0.55)
         } else {
             Color::NONE
         };
-        node.padding = UiRect::all(px(if expanded { 8. } else { 0. }));
+        node.padding = UiRect::all(px(if expanded { 8. } else if !p.brief.is_empty() { 2. } else { 0. }));
         let size = windows
             .iter()
             .next()
             .map_or(Vec2::new(1440., 960.), |w| Vec2::new(w.width(), w.height()));
-        node.left = px((v.x - if expanded { 45. } else { 3. })
-            .clamp(8., (size.x - if expanded { 330. } else { 20. }).max(8.)));
-        node.top =
-            px(v.y.clamp(8., (size.y - if expanded { 300. } else { 20. }).max(8.)));
+        // A folded brief stands centered on top of its point, so it doesn't
+        // cover what it labels; anything else hangs from it.
+        let (left, top) = if !expanded && !p.brief.is_empty() {
+            let text = computed.size() * computed.inverse_scale_factor();
+            (v.x - text.x * 0.5, v.y - text.y)
+        } else {
+            (v.x - if expanded { 45. } else { 3. }, v.y)
+        };
+        node.left = px(left.clamp(8., (size.x - if expanded { 330. } else { 20. }).max(8.)));
+        node.top = px(top.clamp(8., (size.y - if expanded { 300. } else { 20. }).max(8.)));
     }
 }
 
