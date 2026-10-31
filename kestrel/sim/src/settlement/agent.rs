@@ -1,7 +1,8 @@
-//! Agents: player avatars and haulers. Every agent has a body and a cargo
-//! hold; what drives it is its role, fixed when the agent is made: a
-//! scenario's controlled agents and joining players are avatars, the rest
-//! haulers.
+//! Agents: player avatars, haulers and sprites. Every agent has a body and a
+//! cargo hold; what drives it is its role, fixed when the agent is made: a
+//! scenario's controlled agents and joining players are avatars, its other
+//! agents haulers, and its sprites (after its agents) sprites. A sprite's
+//! hold has no room: it carries nothing.
 
 use content::character::{CharacterDef, CharacterIx};
 use content::scenario;
@@ -10,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use super::avatar::AvatarState;
 use super::haulers::HaulerState;
+use super::sprites::SpriteState;
 use super::{AgentIx, DepotIx, Inventory, InventoryRef, ItemIx, Kinds};
 use crate::messages::{ReserveStock, StockChange};
 
@@ -30,6 +32,8 @@ pub enum Role {
     Hauler(HaulerState),
     /// A player's commands (`avatar`), never haul links.
     Avatar(AvatarState),
+    /// A job and the plan for it (`sprites`): staffs buildings.
+    Sprite(SpriteState),
 }
 
 /// What every agent has, whatever drives it: where it is, how it moves and
@@ -217,33 +221,66 @@ impl AgentState {
         }
     }
 
-    /// A player's avatar; `None` for a hauler.
+    /// A scenario's sprite: its body at `position`, no room in its hold
+    /// (`items` long, so the item counts line up) and no health. It starts
+    /// idle.
+    pub(super) fn new_sprite(def: &scenario::Sprite, character: CharacterIx, rules: &CharacterDef, position: FxVec2, items: usize) -> AgentState {
+        AgentState {
+            id: def.id.clone(),
+            character,
+            body: Body {
+                home: position,
+                base_radius: rules.body.radius,
+                position,
+                ..Body::default()
+            },
+            carry: Carry { inventory: Inventory::new(items, 0, Kinds::AnyMix), ..Carry::default() },
+            role: Role::Sprite(SpriteState::default()),
+        }
+    }
+
+    /// A player's avatar; `None` for a hauler or a sprite.
     pub fn avatar(&self) -> Option<&AvatarState> {
         match &self.role {
             Role::Avatar(avatar) => Some(avatar),
-            Role::Hauler(_) => None,
+            _ => None,
         }
     }
 
     pub fn avatar_mut(&mut self) -> Option<&mut AvatarState> {
         match &mut self.role {
             Role::Avatar(avatar) => Some(avatar),
-            Role::Hauler(_) => None,
+            _ => None,
         }
     }
 
-    /// A hauler's state; `None` for a player's avatar.
+    /// A hauler's state; `None` for a player's avatar or a sprite.
     pub fn hauler(&self) -> Option<&HaulerState> {
         match &self.role {
             Role::Hauler(hauler) => Some(hauler),
-            Role::Avatar(_) => None,
+            _ => None,
         }
     }
 
     pub fn hauler_mut(&mut self) -> Option<&mut HaulerState> {
         match &mut self.role {
             Role::Hauler(hauler) => Some(hauler),
-            Role::Avatar(_) => None,
+            _ => None,
+        }
+    }
+
+    /// A sprite's state; `None` for any other agent.
+    pub fn sprite(&self) -> Option<&SpriteState> {
+        match &self.role {
+            Role::Sprite(sprite) => Some(sprite),
+            _ => None,
+        }
+    }
+
+    pub fn sprite_mut(&mut self) -> Option<&mut SpriteState> {
+        match &mut self.role {
+            Role::Sprite(sprite) => Some(sprite),
+            _ => None,
         }
     }
 

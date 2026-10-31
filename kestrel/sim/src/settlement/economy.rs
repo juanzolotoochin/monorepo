@@ -19,7 +19,7 @@ impl Settlement {
         self.threats_self_update(tick, terrain);
         let footprints: Vec<_> = self.agents.iter().map(footprint).collect();
         let items = self.depot_items();
-        let Settlement { agents, characters, dock_owner, depots, links, piles, transfers, weapons, spawn, spawn_height, piano_serial, vehicles, .. } = self;
+        let Settlement { agents, characters, dock_owner, depots, links, piles, transfers, weapons, spawn, spawn_height, piano_serial, vehicles, buildings, building_kinds, .. } = self;
         let view = View {
             me: 0,
             tick,
@@ -34,6 +34,8 @@ impl Settlement {
             piano_serial: *piano_serial,
             vehicles,
             characters,
+            buildings,
+            building_kinds,
         };
         let ctx = Ctx { tick, characters, terrain, piles: piles.as_ref(), footprints: &footprints, dock_owner, depots, links, transfers, view };
         agents.par_iter_mut().enumerate().for_each(|(i, a)| haulers::self_update(a, i as AgentIx, &ctx));
@@ -51,6 +53,7 @@ impl Settlement {
             .map(|(i, a)| {
                 let mut out = Messages::default();
                 haulers::read(a, i as AgentIx, tick, self, terrain, &mut out);
+                super::sprites::read(a, i as AgentIx, self, &mut out);
                 (a.body.position, out)
             })
             .collect();

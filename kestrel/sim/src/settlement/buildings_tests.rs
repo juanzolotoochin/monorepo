@@ -1,12 +1,13 @@
 //! Buildings: the Sacred Tree's prebuilt Wood Gatherer, its footprint
-//! checks, and production by who occupies it. The slot is set by hand here;
-//! sprites and possession fill it in later steps.
+//! checks, and production by who occupies it. The slot is set by hand here
+//! (`occupy`); `sprites_tests` has sprites fill it on their own, and a claim
+//! that produces nothing.
 
 use content::scenario::{Building, Scenario};
 use content::{Content, TICKS_PER_SECOND};
 use fx::{Fx, FxVec2};
 
-use super::{BuildingIx, Event, Occupant, Settlement, Slot, Stage};
+use super::{BuildingIx, Event, Hold, Occupant, Settlement, Slot, SpriteJob, SpriteState, Stage, Step};
 use crate::terrain::Disc;
 use crate::{Simulation, World};
 
@@ -39,8 +40,28 @@ fn output(sim: &Simulation) -> u32 {
     s.buildings[0].output.count(s.item_index("wood").unwrap())
 }
 
-fn occupy(sim: &mut Simulation, slot: Slot) {
-    sim.world_mut().settlement_mut().buildings[0].slot = slot;
+/// Puts `occupant` in the Wood Gatherer, as the sprite brain or possession
+/// would leave it, and takes the slot from whoever had it. A sprite put in
+/// stands at the slot spot on the last step of a plan for the gatherer.
+fn occupy(sim: &mut Simulation, occupant: Option<Occupant>) {
+    let s = sim.world_mut().settlement_mut();
+    if let Slot::Claimed(a) | Slot::Occupied(Occupant::Sprite(a)) = s.buildings[0].slot {
+        s.release_slot(a);
+    }
+    s.buildings[0].slot = occupant.map_or(Slot::Empty, Slot::Occupied);
+    if let Some(Occupant::Sprite(a)) = occupant {
+        let spot = s.buildings[0].slot_position(s.building_kind(0));
+        let agent = &mut s.agents[a as usize];
+        agent.body.position = spot;
+        agent.body.route.clear();
+        *agent.sprite_mut().unwrap() = SpriteState {
+            job: SpriteJob::Staff(0),
+            plan: vec![Step::Claim(0), Step::GoTo(spot), Step::Enter(0)],
+            step: 2,
+            holds: Some(Hold::Inside(0)),
+            ..SpriteState::default()
+        };
+    }
 }
 
 /// Steps `ticks` ticks, checking every invariant after each.
@@ -51,9 +72,9 @@ fn steps(sim: &mut Simulation, ticks: u64) {
     }
 }
 
-/// The elder, the only agent until sprites come in: any agent index does
-/// for a slot set by hand.
+/// The elder, and the first of the four sprites after it.
 const ELDER: u16 = 0;
+const SPRITE: u16 = 1;
 
 #[test]
 fn the_sacred_tree_loads_with_one_built_wood_gatherer() {
@@ -87,17 +108,9 @@ fn an_empty_building_never_produces() {
 }
 
 #[test]
-fn a_claimed_slot_does_not_produce() {
-    let mut sim = sacred_tree();
-    occupy(&mut sim, Slot::Claimed(ELDER));
-    steps(&mut sim, 30 * TICKS_PER_SECOND as u64);
-    assert_eq!(output(&sim), 0);
-}
-
-#[test]
 fn a_sprite_produces_one_unit_per_period() {
     let mut sim = sacred_tree();
-    occupy(&mut sim, Slot::Occupied(Occupant::Sprite(ELDER)));
+    occupy(&mut sim, Some(Occupant::Sprite(SPRITE)));
     let period = 5 * TICKS_PER_SECOND as u64;
     steps(&mut sim, period - 1);
     assert_eq!(output(&sim), 0);
@@ -114,7 +127,7 @@ fn a_sprite_produces_one_unit_per_period() {
 #[test]
 fn production_pauses_at_the_cap_and_resumes_when_units_leave() {
     let mut sim = sacred_tree();
-    occupy(&mut sim, Slot::Occupied(Occupant::Sprite(ELDER)));
+    occupy(&mut sim, Some(Occupant::Sprite(SPRITE)));
     let period = 5 * TICKS_PER_SECOND as u64;
     steps(&mut sim, 10 * period);
     assert_eq!(output(&sim), 10);
@@ -137,7 +150,7 @@ fn production_pauses_at_the_cap_and_resumes_when_units_leave() {
 #[test]
 fn an_elder_works_at_the_multiplier_up_to_the_possessed_cap() {
     let mut sim = sacred_tree();
-    occupy(&mut sim, Slot::Occupied(Occupant::Elder(ELDER)));
+    occupy(&mut sim, Some(Occupant::Elder(ELDER)));
     let period = 5 * TICKS_PER_SECOND as u64 / 4;
     steps(&mut sim, period - 1);
     assert_eq!(output(&sim), 0);
@@ -148,7 +161,7 @@ fn an_elder_works_at_the_multiplier_up_to_the_possessed_cap() {
     steps(&mut sim, 4 * period);
     assert_eq!(output(&sim), 20, "the possessed cap");
     // A sprite taking over finds it above its own cap.
-    occupy(&mut sim, Slot::Occupied(Occupant::Sprite(ELDER)));
+    occupy(&mut sim, Some(Occupant::Sprite(SPRITE)));
     steps(&mut sim, 10 * TICKS_PER_SECOND as u64);
     assert_eq!(output(&sim), 20);
 }
@@ -156,10 +169,10 @@ fn an_elder_works_at_the_multiplier_up_to_the_possessed_cap() {
 #[test]
 fn work_carries_over_when_the_occupant_changes() {
     let mut sim = sacred_tree();
-    occupy(&mut sim, Slot::Occupied(Occupant::Sprite(ELDER)));
+    occupy(&mut sim, Some(Occupant::Sprite(SPRITE)));
     // Half a sprite's period, then the elder does the other half 4x faster.
     steps(&mut sim, 150);
-    occupy(&mut sim, Slot::Occupied(Occupant::Elder(ELDER)));
+    occupy(&mut sim, Some(Occupant::Elder(ELDER)));
     steps(&mut sim, 37);
     assert_eq!(output(&sim), 0);
     steps(&mut sim, 1);
@@ -185,6 +198,11 @@ fn a_prebuilt_building_must_stand_clear() {
     assert!(edge.contains("reaches outside the arena"), "{edge}");
     let spawn = error(&|s| s.buildings[0].position = at(0.0, 3.6));
     assert!(spawn.contains("spawns inside an obstacle"), "{spawn}");
+    // A rock where a sprite would stand to work, a quarter turn from the
+    // output pile.
+    let rock = Disc { center: FxVec2::new(fx(-5.44), fx(-1.21)), radius: fx(0.2) };
+    let slot = World::new_settlement(1, &Content::builtin(), &base, &[trunk(), rock]).err().expect("refused");
+    assert!(slot.contains("slot spot is blocked"), "{slot}");
     // Two that just clear each other both stand.
     let mut two = base.clone();
     two.buildings.push(Building { kind: "stone_gatherer".into(), position: at(4.6, -2.2) });

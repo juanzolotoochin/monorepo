@@ -290,6 +290,38 @@ impl StateHash for RestartMemory {
     }
 }
 
+/// A sprite on a `Claim` step asks for a building's slot, to hold while it
+/// walks there (`SACRED_TREE_HANDOFF.md`, D2). Contested like a dock: the
+/// lowest agent index wins a building, whatever the message order
+/// (`Settlement::claim_slots`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimSlot {
+    pub agent: u16,
+    pub building: u16,
+}
+
+/// A sprite that claimed a building's slot reached its spot and steps in
+/// (`Settlement::enter_slots`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnterSlot {
+    pub agent: u16,
+    pub building: u16,
+}
+
+impl StateHash for ClaimSlot {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+        h.write(&self.building);
+    }
+}
+
+impl StateHash for EnterSlot {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+        h.write(&self.building);
+    }
+}
+
 /// A player reached for a vehicle's seat (`Action::Board`): stage 5 seats
 /// them in the nearest free one in reach (`Settlement::board`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -508,31 +540,38 @@ impl StateHash for EatFailed {
 }
 
 macro_rules! message_queues {
-    ($($field:ident: $ty:ty,)+) => {
+    ($($field:ident: $ty:ty,)+ ; $($late:ident: $late_ty:ty,)*) => {
         /// One queue per message type, in apply order.
         #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
         pub struct Messages {
             $(pub $field: Vec<$ty>,)+
+            $(pub $late: Vec<$late_ty>,)*
         }
 
         impl Messages {
             /// Moves every message in `other` to the end of the matching queue.
             pub fn append(&mut self, other: &mut Messages) {
                 $(self.$field.append(&mut other.$field);)+
+                $(self.$late.append(&mut other.$late);)*
             }
 
             pub fn is_empty(&self) -> bool {
-                true $(&& self.$field.is_empty())+
+                true $(&& self.$field.is_empty())+ $(&& self.$late.is_empty())*
             }
 
             pub fn len(&self) -> usize {
-                0 $(+ self.$field.len())+
+                0 $(+ self.$field.len())+ $(+ self.$late.len())*
             }
         }
 
         impl StateHash for Messages {
             fn hash_into(&self, h: &mut StateHasher) {
                 $(h.write(&self.$field);)+
+                // Queues added later hash only when they hold something, so
+                // the scenes that never send them hash as they did before.
+                $(if !self.$late.is_empty() {
+                    h.write(&self.$late);
+                })*
             }
         }
     };
@@ -573,4 +612,9 @@ message_queues! {
     swing_lands: SwingLands,
     breach: Breach,
     fire: Fire,
+    ;
+    // Sprites (`settlement::sprites`): slot claims, then entries, so an
+    // entry sees this tick's claims. Hashed only when not empty.
+    claim_slot: ClaimSlot,
+    enter_slot: EnterSlot,
 }

@@ -18,7 +18,8 @@
 //!
 //! Avatars act on their players' commands; haulers act on their brain's
 //! picks (stage 2) and on the jobs stage 5 accepts, through the same `act`,
-//! which dispatches by role (`HAULER_ACTIONS_HANDOFF.md`). Commands still
+//! which dispatches by role (`HAULER_ACTIONS_HANDOFF.md`); sprites on their
+//! brain's picks (`sprites`). Commands still
 //! drive only avatars (`Settlement::act`). AI brains are to produce the same
 //! vocabulary (`docs/character-definition.md`).
 
@@ -31,7 +32,8 @@ use fx::{Fx, FxVec2};
 use super::avatar::{self, Intent};
 use super::haulers;
 use super::piles::{PileAction, PileLab};
-use super::{AgentIx, AgentState, DepotIx, DepotState, ItemIx, Role, Settlement, Transfer};
+use super::sprites;
+use super::{AgentIx, AgentState, BuildingKind, BuildingState, DepotIx, DepotState, ItemIx, Role, Settlement, Transfer};
 use crate::messages::ActionMessages;
 use crate::terrain::Terrain;
 use crate::CommandKind;
@@ -102,6 +104,7 @@ impl Action {
             | CommandKind::Impulse { .. }
             | CommandKind::Dig { .. }
             | CommandKind::SetLink { .. }
+            | CommandKind::SetSpriteJob { .. }
             | CommandKind::SetMachine { .. }
             | CommandKind::SetDefender { .. }
             | CommandKind::Dispense { .. }
@@ -118,12 +121,13 @@ impl Action {
 }
 
 /// Applies an action to an agent, by its role: an avatar's part is
-/// `avatar::act`, a hauler's `haulers::act`. Every route a command or a
-/// brain gives an agent goes through here.
+/// `avatar::act`, a hauler's `haulers::act`, a sprite's `sprites::act`.
+/// Every route a command or a brain gives an agent goes through here.
 pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &CharacterDef, out: &mut ActionMessages) {
     match a.role {
         Role::Avatar(_) => avatar::act(a, action, view, def, out),
         Role::Hauler(ref hauler) => haulers::act(&mut a.body, hauler, action, view),
+        Role::Sprite(ref sprite) => sprites::act(&mut a.body, sprite, action, view),
     }
 }
 
@@ -149,6 +153,9 @@ pub struct View<'a> {
     /// beside theirs.
     pub vehicles: &'a [super::VehicleState],
     pub characters: &'a [CharacterDef],
+    /// The buildings and their kinds, which a sprite plans its job over.
+    pub buildings: &'a [BuildingState],
+    pub building_kinds: &'a [BuildingKind],
 }
 
 impl Settlement {
@@ -168,6 +175,8 @@ impl Settlement {
             piano_serial: self.piano_serial,
             vehicles: &self.vehicles,
             characters: &self.characters,
+            buildings: &self.buildings,
+            building_kinds: &self.building_kinds,
         }
     }
 }

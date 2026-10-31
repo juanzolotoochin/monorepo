@@ -5,8 +5,8 @@
 //! removing one shifts the indices after it. `Settlement::leave` drops what
 //! points at the leaving avatar and moves every other reference down
 //! (`remap_agents`). Joins append, and nothing else adds agents, so the
-//! scenario's agents (haulers and the first avatar) come first and never
-//! move; only joined avatars after the removed one do.
+//! scenario's agents (haulers and the first avatar) and its sprites come
+//! first and never move; only joined avatars after the removed one do.
 
 use fx::{Fx, FxVec2};
 
@@ -147,6 +147,11 @@ impl Settlement {
                 *owner = None;
             }
         }
+        for b in &mut self.buildings {
+            if b.slot == super::Slot::Occupied(super::Occupant::Elder(gone)) {
+                b.slot = super::Slot::Empty;
+            }
+        }
         if let Some(lab) = &mut self.piles {
             lab.haulers.remove(&gone);
         }
@@ -183,6 +188,13 @@ impl Settlement {
         }
         for note in &mut self.piano_notes {
             shift(&mut note.agent);
+        }
+        for b in &mut self.buildings {
+            match &mut b.slot {
+                super::Slot::Empty => {}
+                super::Slot::Claimed(ix) => shift(ix),
+                super::Slot::Occupied(super::Occupant::Sprite(ix) | super::Occupant::Elder(ix)) => shift(ix),
+            }
         }
         if let Some(lab) = &mut self.piles {
             lab.haulers = std::mem::take(&mut lab.haulers)

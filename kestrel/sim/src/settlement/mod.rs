@@ -4,7 +4,7 @@
 //! - Depots, sources, links and producers are buildings. Their state changes
 //!   only in single-threaded stages: the economy step at the start of the
 //!   apply phase, and message handlers.
-//! - Agents (haulers and player avatars) move in the parallel self-update
+//! - Agents (haulers, sprites and player avatars) move in the parallel self-update
 //!   stage, reading last tick's positions of everyone else. Anything that
 //!   touches a depot, a dock or another entity is a message.
 //! - Reservations are incremental counters in each depot's inventory
@@ -27,6 +27,7 @@ pub mod piano;
 pub mod piles;
 mod players;
 pub mod prediction;
+pub mod sprites;
 pub mod vehicle;
 
 use std::collections::BTreeMap;
@@ -47,6 +48,7 @@ pub use buildings::{BuildingIx, BuildingKind, BuildingKindIx, BuildingState, Occ
 pub use haulers::{HaulerState, Phase};
 pub use inventory::{Inventory, Kinds};
 pub use prediction::AvatarReplay;
+pub use sprites::{Hold, SpriteJob, SpriteState, Step};
 pub use vehicle::{VehicleIx, VehicleState};
 
 pub type ItemIx = u16;
@@ -398,6 +400,16 @@ impl Settlement {
                 Ok(AgentState::new(a, ix, def, at(a.position), &scenario.links, items.len(), &item, &depot))
             })
             .collect::<Result<Vec<_>, String>>()?;
+        // Sprites after the agents: indices that never move, as no agent
+        // before a joined player's does (`players`).
+        for s in &scenario.sprites {
+            let ix = character(&s.character)?;
+            let def = &content.rules.characters[ix as usize];
+            if def.brain != Brain::Sprite {
+                return Err(format!("sprite {} is {:?}, a {:?} character; it needs a {:?} one", s.id, s.character, def.brain, Brain::Sprite));
+            }
+            agents.push(AgentState::new_sprite(s, ix, def, at(s.position), items.len()));
+        }
         for agent in &mut agents {
             if let AgentState { body, role: Role::Avatar(avatar), .. } = agent {
                 body.health = scenario.player_health;
@@ -973,6 +985,11 @@ impl Settlement {
             let buildings: Vec<_> = self.buildings.iter().map(|b| (b.kind, b.position, &b.stage, b.slot, b.progress, &b.output.counts)).collect();
             bytes.extend(postcard::to_allocvec(&buildings).expect("buildings encode"));
         }
+        // And sprites' jobs and plans only where there are sprites.
+        let sprites: Vec<_> = self.agents.iter().filter_map(AgentState::sprite).map(|s| (s.job, &s.plan, s.step, s.holds)).collect();
+        if !sprites.is_empty() {
+            bytes.extend(postcard::to_allocvec(&sprites).expect("sprites encode"));
+        }
         bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, &byte| (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3))
     }
 }
@@ -998,5 +1015,7 @@ mod tests;
 mod combat_tests;
 #[cfg(test)]
 mod scene_tests;
+#[cfg(test)]
+mod sprites_tests;
 #[cfg(test)]
 mod vehicle_tests;

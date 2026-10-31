@@ -17,6 +17,7 @@ use content::scenario::{self, Scenario};
 use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
+use super::sprites::Hold;
 use super::{AgentIx, DepotIx, Event, Inventory, ItemIx, Kinds, Settlement};
 use crate::terrain::{Disc, Terrain, CLEARANCE_MARGIN};
 
@@ -26,6 +27,10 @@ pub type BuildingKindIx = u16;
 /// The clearance kept around a depot's dock and an output pile, as the
 /// depot dock check in `Settlement::from_scenario` uses.
 const DOCK_RADIUS: Fx = Fx::from_ratio(3, 20);
+/// The widest body that stands at a slot spot, which must be clear for it.
+const SLOT_RADIUS: Fx = Fx::from_ratio(3, 10);
+/// How far past its footprint a building's slot spot is.
+const SLOT_GAP: Fx = Fx::from_ratio(2, 5);
 
 /// A building kind's rules, from the scenario: rules, not state, but copied
 /// into the settlement as weapon tuning is, since the scenario isn't kept.
@@ -130,6 +135,14 @@ impl BuildingState {
     pub fn built(&self) -> bool {
         self.stage == Stage::Built
     }
+
+    /// Where the occupant stands (D2): just past the footprint, a quarter
+    /// turn from the output pile, so the two never share a spot.
+    pub fn slot_position(&self, kind: &BuildingKind) -> FxVec2 {
+        let out = (self.output_position - self.position).normalize_or_zero();
+        let out = if out == FxVec2::ZERO { FxVec2::new(Fx::ZERO, Fx::ONE) } else { out };
+        self.position + FxVec2::new(-out.y, out.x) * (kind.radius + SLOT_GAP)
+    }
 }
 
 /// Resolves the scenario's building kinds. `item` maps an item's id to its
@@ -173,8 +186,9 @@ pub(super) fn output_position(center: FxVec2, distance: Fx, depots: &[FxVec2], a
 /// Puts up the scenario's prebuilt buildings, built and empty, in scenario
 /// order. Each footprint must be clear of the terrain (the scene's props,
 /// machines, defenders and the buildings before it), of every depot's dock,
-/// and inside the arena; it becomes an obstacle. Every output pile must then
-/// be clear and inside the arena too. `at` places a scenario point.
+/// and inside the arena; it becomes an obstacle. Every output pile and slot
+/// spot must then be clear and inside the arena too. `at` places a scenario
+/// point.
 pub(super) fn prebuilt(
     scenario: &Scenario,
     kinds: &[BuildingKind],
@@ -219,6 +233,10 @@ pub(super) fn prebuilt(
         if !terrain.clear(b.output_position, b.output_position, DOCK_RADIUS) {
             return Err(format!("building {i} ({})'s output pile is blocked", kinds[b.kind as usize].id));
         }
+        let slot = b.slot_position(&kinds[b.kind as usize]);
+        if !terrain.clear(slot, slot, SLOT_RADIUS) {
+            return Err(format!("building {i} ({})'s slot spot is blocked", kinds[b.kind as usize].id));
+        }
     }
     Ok(buildings)
 }
@@ -262,8 +280,10 @@ impl Settlement {
 
     /// Checks every building on its own: a known kind, a site's part in
     /// range, the output holding the kind's product only and nothing
-    /// reserved (nothing moves units in or out yet), and occupants that
-    /// are agents.
+    /// reserved (nothing moves units in or out yet). Then the slots against
+    /// the agents, both ways: a claim or a sprite inside names a sprite that
+    /// holds just that (`SpriteState::holds`), an elder names an avatar, and
+    /// every sprite's hold is that building's slot.
     pub(super) fn validate_buildings(&self) -> Result<(), String> {
         for (i, b) in self.buildings.iter().enumerate() {
             let Some(kind) = self.building_kinds.get(b.kind as usize) else {
@@ -290,13 +310,27 @@ impl Settlement {
                     return Err(format!("{name} materials reservations drifted"));
                 }
             }
-            let agent = match b.slot {
-                Slot::Empty => None,
-                Slot::Claimed(a) => Some(a),
-                Slot::Occupied(o) => Some(o.agent()),
+            let building = i as BuildingIx;
+            let holds = |a: AgentIx| self.agents.get(a as usize).and_then(|a| a.sprite()).map(|sprite| sprite.holds);
+            let agrees = match b.slot {
+                Slot::Empty => true,
+                Slot::Claimed(a) => holds(a) == Some(Some(Hold::Claimed(building))),
+                Slot::Occupied(Occupant::Sprite(a)) => holds(a) == Some(Some(Hold::Inside(building))),
+                Slot::Occupied(Occupant::Elder(a)) => self.agents.get(a as usize).is_some_and(|a| a.avatar().is_some()),
             };
-            if agent.is_some_and(|a| a as usize >= self.agents.len()) {
-                return Err(format!("{name} slot names an unknown agent"));
+            if !agrees {
+                return Err(format!("{name} slot {:?} doesn't agree with its agent", b.slot));
+            }
+        }
+        for (i, a) in self.agents.iter().enumerate() {
+            let Some(hold) = a.sprite().and_then(|sprite| sprite.holds) else { continue };
+            let me = i as AgentIx;
+            let (building, slot) = match hold {
+                Hold::Claimed(b) => (b, Slot::Claimed(me)),
+                Hold::Inside(b) => (b, Slot::Occupied(Occupant::Sprite(me))),
+            };
+            if self.buildings.get(building as usize).map(|b| b.slot) != Some(slot) {
+                return Err(format!("sprite {} holds {hold:?}, which its building's slot doesn't show", a.id));
             }
         }
         Ok(())

@@ -121,8 +121,11 @@ pub enum CommandKind {
     /// still decode.
     Leave,
     /// A player's avatar climbs into the nearest free vehicle in reach, or
-    /// out of the one it drives. New variants go after this one.
+    /// out of the one it drives.
     Board { agent: u16 },
+    /// Gives a settlement sprite a job: idle, or a building kind to staff
+    /// (`Settlement::set_sprite_job`). New variants go after this one.
+    SetSpriteJob { agent: u16, job: crate::settlement::SpriteJob },
 }
 
 impl CommandKind {
@@ -467,6 +470,11 @@ impl World {
                 CommandKind::SetLink { link, enabled } => {
                     if let Some(s) = &mut self.settlement {
                         s.set_link(link as usize, enabled);
+                    }
+                }
+                CommandKind::SetSpriteJob { agent, job } => {
+                    if let Some(s) = &mut self.settlement {
+                        s.set_sprite_job(agent, job);
                     }
                 }
                 CommandKind::SetMachine { producer, enabled } => {
@@ -872,6 +880,8 @@ impl World {
             for message in messages.fire {
                 settlement.fire(tick, message);
             }
+            settlement.claim_slots(messages.claim_slot);
+            settlement.enter_slots(messages.enter_slot);
         }
         self.apply_repairs();
     }
