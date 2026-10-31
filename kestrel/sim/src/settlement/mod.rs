@@ -46,7 +46,7 @@ use crate::terrain::{Disc, Terrain};
 pub use combat::{CombatMetrics, DefenderState, Event, Impact, OnMiss, Pinned, Prediction, Projectile, SpentProjectile, Threat, TossEnd, WaveState};
 pub use agent::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
 pub use avatar::Seat;
-pub use buildings::{BuildingIx, BuildingKind, BuildingKindIx, BuildingState, Occupant, PlacementRefusal, Slot, Stage};
+pub use buildings::{BuildingIx, BuildingKind, BuildingKindIx, BuildingState, BurstRefusal, Occupant, PlacementRefusal, Slot, Stage};
 pub use haulers::{HaulerState, Phase};
 pub use interact::{InteractTarget, Interaction};
 pub use inventory::{Inventory, Kinds};
@@ -1043,6 +1043,8 @@ impl StateHash for Settlement {
 mod buildings_tests;
 #[cfg(test)]
 mod bundle_tests;
+#[cfg(test)]
+mod burst_tests;
 #[cfg(test)]
 mod construction_tests;
 #[cfg(test)]

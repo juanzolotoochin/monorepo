@@ -91,6 +91,10 @@ pub enum Action {
     /// of its item there, or a new pile (`piles::drop_plan`). Stage 5 makes
     /// the pile and starts the carry job (`Settlement::drop_bundles`).
     Drop,
+    /// Add the possessed building's Burst units to its output, if the
+    /// cooldown allows (D3). Only a seated elder can; stage 5 adds them
+    /// (`Settlement::bursts`).
+    Burst,
 }
 
 impl Action {
@@ -116,6 +120,7 @@ impl Action {
             CommandKind::Bundle { agent, other, direction } => (agent, Action::Bundle { other, direction }),
             CommandKind::Interact { agent, target } => (agent, Action::Interact(target)),
             CommandKind::Drop { agent } => (agent, Action::Drop),
+            CommandKind::Burst { agent } => (agent, Action::Burst),
             CommandKind::PlayPiano { .. }
             | CommandKind::SpawnMovers { .. }
             | CommandKind::Impulse { .. }

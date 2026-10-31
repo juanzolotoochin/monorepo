@@ -19,6 +19,10 @@
 //! drop-off nothing is taken back from), and an install uses them up and
 //! moves on to the next part. Installing the last makes the building
 //! `Built`; it stays inert until someone occupies it.
+//!
+//! An elder possessing a building can Burst (D3): its kind's Burst units go
+//! into the output at once, up to the possessed cap, and the elder waits out
+//! the kind's cooldown before the next (`AvatarState::burst_ready`).
 
 use content::scenario::{self, Scenario};
 use fx::{Fx, FxVec2};
@@ -26,7 +30,8 @@ use serde::{Deserialize, Serialize};
 
 use super::sprites::Hold;
 use super::{AgentIx, DepotIx, Event, Inventory, InventoryRef, ItemIx, Kinds, Settlement};
-use crate::messages::{Install, PlaceBlueprint};
+use super::avatar::Seat;
+use crate::messages::{Burst, Install, PlaceBlueprint};
 use crate::nav;
 use crate::terrain::{Disc, Terrain, CLEARANCE_MARGIN};
 
@@ -401,6 +406,48 @@ pub(super) fn prebuilt(
     Ok(buildings)
 }
 
+/// Why a Burst didn't happen (`Settlement::bursts`). Stage 5 reports it as
+/// `Event::BurstRefused`; `message` says it for the view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BurstRefusal {
+    /// Only an elder possessing a built building can Burst (D3).
+    NotPossessing,
+    /// The elder's last Burst is still cooling down, for `ticks` more.
+    Cooling { ticks: u64 },
+    /// The output already holds its possessed cap.
+    OutputFull,
+}
+
+impl BurstRefusal {
+    /// The refusal in words, for the view: a cooldown in whole seconds,
+    /// rounded up, so it never reads "0 s" while it still runs.
+    pub fn message(self) -> String {
+        match self {
+            BurstRefusal::NotPossessing => "Possess a building to Burst".to_string(),
+            BurstRefusal::Cooling { ticks } => format!("Burst ready in {} s", ticks.div_ceil(content::TICKS_PER_SECOND as u64)),
+            BurstRefusal::OutputFull => "Output full".to_string(),
+        }
+    }
+}
+
+/// What a Burst would do (`Settlement::bursts`): the building `seat`
+/// possesses and the units that fit in its output, or why there is none.
+/// A cooldown running reads before a full output.
+fn burst_plan(seat: Option<Seat>, ready: u64, tick: u64, buildings: &[BuildingState], kinds: &[BuildingKind]) -> Result<(BuildingIx, u32), BurstRefusal> {
+    let Some((b, building)) = seat.and_then(Seat::building).and_then(|b| Some((b, buildings.get(b as usize)?))).filter(|(_, building)| building.built()) else {
+        return Err(BurstRefusal::NotPossessing);
+    };
+    if tick < ready {
+        return Err(BurstRefusal::Cooling { ticks: ready - tick });
+    }
+    let kind = &kinds[building.kind as usize];
+    let held = building.output.total() + building.output.total_in();
+    match kind.burst.min(kind.possessed_cap.saturating_sub(held)) {
+        0 => Err(BurstRefusal::OutputFull),
+        units => Ok((b, units)),
+    }
+}
+
 /// Where a building's occupant stands (D2): just past the footprint, a
 /// quarter turn from the output pile, so the two never share a spot.
 fn slot_position(center: FxVec2, output: FxVec2, kind: &BuildingKind) -> FxVec2 {
@@ -570,6 +617,39 @@ impl Settlement {
             }
             self.events.push(Event::PartInstalled { building, part: installed, built: installed as usize + 1 == parts });
         }
+    }
+
+    /// Stage 5: Bursts, in command order (D3). An elder still possessing a
+    /// building, its cooldown over and the output not at its possessed cap,
+    /// puts the kind's Burst units in the output (as many as fit; the
+    /// balances count them as produced) and starts its cooldown. Otherwise
+    /// the view hears why, and the cooldown doesn't start.
+    pub(super) fn bursts(&mut self, messages: Vec<Burst>, tick: u64) {
+        for Burst { agent } in messages {
+            let Some(avatar) = self.agents.get(agent as usize).and_then(|a| a.avatar()) else { continue };
+            match burst_plan(avatar.seat, avatar.burst_ready, tick, &self.buildings, &self.building_kinds) {
+                Ok((building, units)) => {
+                    let kind = &self.building_kinds[self.buildings[building as usize].kind as usize];
+                    let (product, cooldown) = (kind.product, kind.burst_cooldown);
+                    let added = self.buildings[building as usize].output.add(product, units);
+                    debug_assert!(added, "below the possessed cap, which is the capacity");
+                    self.accounts[product as usize].produced += units as u64;
+                    if let Some(avatar) = self.agents[agent as usize].avatar_mut() {
+                        avatar.burst_ready = tick + cooldown;
+                    }
+                    self.events.push(Event::BuildingBurst { building, units });
+                }
+                Err(reason) => self.events.push(Event::BurstRefused { agent, reason }),
+            }
+        }
+    }
+
+    /// Whether `agent` could Burst on `tick`, and how many units it would
+    /// add, as stage 5 checks it (`bursts`): for the view's ready
+    /// indicator and the control verb.
+    pub fn burst_check(&self, agent: usize, tick: u64) -> Result<u32, BurstRefusal> {
+        let Some(avatar) = self.agents.get(agent).and_then(|a| a.avatar()) else { return Err(BurstRefusal::NotPossessing) };
+        burst_plan(avatar.seat, avatar.burst_ready, tick, &self.buildings, &self.building_kinds).map(|(_, units)| units)
     }
 
     /// Part of the economy step: every built, occupied building below its

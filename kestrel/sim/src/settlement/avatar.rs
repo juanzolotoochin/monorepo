@@ -17,9 +17,10 @@ use serde::{Deserialize, Serialize};
 use super::combat::{Event, TossEnd};
 use super::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
 use super::action::{Action, View};
+use super::buildings::BurstRefusal;
 use super::interact::{self, Interaction};
 use super::{AgentIx, DepotState, InventoryRef, ItemIx, Kinds, Settlement};
-use crate::messages::{ActionMessages, BundleRefused, CarryUnit, DropBundle, DropHaul, DropNotes, Install, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
+use crate::messages::{ActionMessages, BundleRefused, Burst, BurstRefused, CarryUnit, DropBundle, DropHaul, DropNotes, Install, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
 use crate::nav::{self, angle_between, distance};
 use crate::terrain::{Terrain, MAX_LAYERS};
 
@@ -148,6 +149,11 @@ pub struct AvatarState {
     pub name: String,
     /// Weapons are ready again on this tick.
     pub attack_ready: u64,
+    /// A Burst is ready again on this tick (D3). It is the elder's, not the
+    /// building's, so hopping between buildings doesn't reset it, and it
+    /// outlasts leaving a seat and a respawn, as `attack_ready` does.
+    #[serde(default)]
+    pub burst_ready: u64,
     /// Dead until this tick, then back at home (`Body::health`).
     #[serde(default)]
     pub respawn_at: u64,
@@ -547,6 +553,10 @@ impl Settlement {
             self.events.push(Event::BundleRefused { agent, reason });
         }
         self.install(messages.install);
+        self.bursts(messages.burst, tick);
+        for BurstRefused { agent, reason } in messages.burst_refused {
+            self.events.push(Event::BurstRefused { agent, reason });
+        }
         self.place_blueprints(messages.place_blueprint, terrain);
     }
 
@@ -747,14 +757,18 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
                     return;
                 }
                 Action::Aim(_) | Action::Equip(_) | Action::Release | Action::Respawn => {}
+                Action::Burst => {
+                    out.burst_refused.push(BurstRefused { agent: me, reason: BurstRefusal::NotPossessing });
+                    return;
+                }
                 _ => return,
             }
         }
         Some(Seat::Building(b)) => {
-            // Possessing a building (D3), a player can look around, leave
-            // (boarding again, or interacting: the seat is a seated elder's
-            // one target), let go or respawn. Movement and dropping do
-            // nothing. Leaving puts it beside the building; housekeeping
+            // Possessing a building (D3), a player can look around, Burst,
+            // leave (boarding again, or interacting: the seat is a seated
+            // elder's one target), let go or respawn. Movement and dropping
+            // do nothing. Leaving puts it beside the building; housekeeping
             // empties the slot (`seat_housekeeping`), for a waiting sprite
             // to take.
             match *action {
@@ -769,6 +783,14 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
                         avatar.height = ground;
                         avatar.flight.support = ground;
                         avatar.intent = Some(Intent::Stop);
+                    }
+                    return;
+                }
+                // Stage 5 checks the cooldown and the output's room, and
+                // adds the units (`Settlement::bursts`).
+                Action::Burst => {
+                    if body.alive() {
+                        out.burst.push(Burst { agent: me });
                     }
                     return;
                 }
@@ -873,6 +895,8 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
                 }
             }
         }
+        // A seated elder's alone (above).
+        Action::Burst => out.burst_refused.push(BurstRefused { agent: me, reason: BurstRefusal::NotPossessing }),
         Action::CancelTransfer => {
             if transferring {
                 out.reserve_stock.extend(carry.drop_carry(me));
@@ -1248,9 +1272,9 @@ pub(super) fn finish_dig(a: &mut AgentState, tick: u64) -> Option<Dig> {
 }
 
 /// Puts the avatar at the spawn point with a fresh state. The player's
-/// owner, name and weapon cooldown stay. So do the body's speed, radius and
-/// max health. Its motion starts over and its health refills, as after a
-/// death.
+/// owner, name and weapon and Burst cooldowns stay. So do the body's speed,
+/// radius and max health. Its motion starts over and its health refills, as
+/// after a death.
 fn respawn(body: &mut Body, avatar: &mut AvatarState, spawn: FxVec2, height: Fx) {
     body.position = spawn;
     body.heading = Fx::PI;
@@ -1262,6 +1286,7 @@ fn respawn(body: &mut Body, avatar: &mut AvatarState, spawn: FxVec2, height: Fx)
         owner: avatar.owner,
         name: std::mem::take(&mut avatar.name),
         attack_ready: avatar.attack_ready,
+        burst_ready: avatar.burst_ready,
         height,
         intent: Some(Intent::Stop),
         ..AvatarState::default()

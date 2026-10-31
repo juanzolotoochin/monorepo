@@ -256,6 +256,12 @@ pub enum Event {
     BlueprintRefused { kind: super::BuildingKindIx, reason: super::buildings::PlacementRefusal },
     /// A site's part `part` went in; `built` when it was the last.
     PartInstalled { building: super::BuildingIx, part: u8, built: bool },
+    /// An elder's Burst put `units` in the output of the building it
+    /// possesses, at once.
+    BuildingBurst { building: super::BuildingIx, units: u32 },
+    /// Player `agent`'s Burst didn't happen, for `reason`
+    /// (`BurstRefusal::message` says it in words).
+    BurstRefused { agent: AgentIx, reason: super::buildings::BurstRefusal },
 }
 
 /// What a strike reaches (`Settlement::strike_targets`), as its `Strike`

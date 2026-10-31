@@ -10,6 +10,7 @@ use crate::id::Id;
 use crate::mover::Mover;
 use crate::settlement::piles::PileJob;
 use crate::settlement::avatar::BundleRefusal;
+use crate::settlement::buildings::BurstRefusal;
 use crate::settlement::{CarryJob, InventoryRef};
 
 /// One mover attacks another.
@@ -368,6 +369,43 @@ impl StateHash for DropBundle {
     }
 }
 
+/// A Burst (`Action::Burst`) from an elder possessing a building: stage 5
+/// adds the building's Burst units to its output, up to its possessed cap,
+/// and starts the elder's cooldown (`Settlement::bursts`), in command
+/// order, or reports why not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Burst {
+    pub agent: u16,
+}
+
+impl StateHash for Burst {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+    }
+}
+
+/// A Burst that couldn't start, and why: stage 5 reports it as
+/// `Event::BurstRefused`, for the view to explain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BurstRefused {
+    pub agent: u16,
+    pub reason: BurstRefusal,
+}
+
+impl StateHash for BurstRefused {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+        match self.reason {
+            BurstRefusal::NotPossessing => h.write_u64(0),
+            BurstRefusal::Cooling { ticks } => {
+                h.write_u64(1);
+                h.write(&ticks);
+            }
+            BurstRefusal::OutputFull => h.write_u64(2),
+        }
+    }
+}
+
 /// A blueprint put down (`CommandKind::PlaceBlueprint`): stage 5 lays its
 /// site where the ground allows (`Settlement::place_blueprints`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -454,13 +492,15 @@ pub struct ActionMessages {
     pub place_blueprint: Vec<PlaceBlueprint>,
     pub install: Vec<Install>,
     pub drop_bundle: Vec<DropBundle>,
+    pub burst: Vec<Burst>,
+    pub burst_refused: Vec<BurstRefused>,
 }
 
 impl ActionMessages {
     pub fn is_empty(&self) -> bool {
         self.restart_memory.is_empty() && self.drop_haul.is_empty() && self.drop_notes.is_empty() && self.reserve_stock.is_empty() && self.haul.is_empty()
             && self.board.is_empty() && self.bundle_refused.is_empty() && self.place_blueprint.is_empty() && self.install.is_empty()
-            && self.drop_bundle.is_empty()
+            && self.drop_bundle.is_empty() && self.burst.is_empty() && self.burst_refused.is_empty()
     }
 }
 
@@ -487,6 +527,12 @@ impl StateHash for ActionMessages {
         }
         if !self.drop_bundle.is_empty() {
             h.write(&self.drop_bundle);
+        }
+        if !self.burst.is_empty() {
+            h.write(&self.burst);
+        }
+        if !self.burst_refused.is_empty() {
+            h.write(&self.burst_refused);
         }
     }
 }

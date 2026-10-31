@@ -140,8 +140,11 @@ pub enum CommandKind {
     PlaceBlueprint { kind: u16, position: FxVec2 },
     /// A player's avatar drops its whole bundle on the ground at its feet:
     /// onto a pile of the same item there, or a new pile (`Action::Drop`).
-    /// New variants go after this one.
     Drop { agent: u16 },
+    /// A player's avatar, possessing a building, adds the building's Burst
+    /// units to its output at once, then waits out its cooldown
+    /// (`Action::Burst`). New variants go after this one.
+    Burst { agent: u16 },
 }
 
 impl CommandKind {
@@ -165,6 +168,7 @@ impl CommandKind {
             | CommandKind::Bundle { agent, .. }
             | CommandKind::Interact { agent, .. }
             | CommandKind::Drop { agent }
+            | CommandKind::Burst { agent }
             | CommandKind::Pile { agent, .. } => *agent = to,
             _ => {}
         }
@@ -190,6 +194,7 @@ impl CommandKind {
             | CommandKind::Bundle { agent, .. }
             | CommandKind::Interact { agent, .. }
             | CommandKind::Drop { agent }
+            | CommandKind::Burst { agent }
             | CommandKind::Pile { agent, .. } => Some(agent),
             _ => None,
         }
@@ -533,7 +538,8 @@ impl World {
                 | CommandKind::Board { .. }
                 | CommandKind::Bundle { .. }
                 | CommandKind::Interact { .. }
-                | CommandKind::Drop { .. } => {
+                | CommandKind::Drop { .. }
+                | CommandKind::Burst { .. } => {
                     if let (Some(s), Some((agent, action))) = (&mut self.settlement, Action::of(kind)) {
                         s.act(self.tick, agent, &action, &self.terrain, &mut self.actions);
                     }
