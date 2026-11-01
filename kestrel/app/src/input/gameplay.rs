@@ -232,7 +232,10 @@ pub fn dispatch(world: &mut World) {
             Edge::TargetNext => world.resource_mut::<Dispatcher>().targets.cycle(1),
             Edge::Choose(index) => choose(world, index),
             Edge::Board => world.resource_mut::<SessionService>().command(CommandKind::Board { agent }),
-            Edge::Build if town => super::town::build(world),
+            Edge::Build if town => {
+                let built = super::town::build(world);
+                town_feedback(world, built);
+            }
             Edge::CancelBuild if town => super::town::cancel_build(world),
             Edge::Build | Edge::CancelBuild => {}
             Edge::LiftRelease | Edge::SelectWeapon(_) | Edge::NextWeapon => {}

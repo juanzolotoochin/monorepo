@@ -28,8 +28,10 @@
 //! Possessing (D3): a built building's slot is a target empty-handed
 //! ("POSSESS"), and while the elder possesses a building its slot is the
 //! one target ("LEAVE"). The boarding key (G, the left stick) boards and
-//! leaves as well; a sprite working inside is the target at its slot spot
-//! (its job menu), so the boarding key is what possesses a staffed one.
+//! leaves as well. A sprite working inside is no target, so E possesses a
+//! staffed building too ("POSSESS, ASH STEPS OUT"); the job menu opens on
+//! sprites standing outside. While possessing, the build key refuses
+//! ("Leave the building first (E)").
 //!
 //! Burst (D3): while the elder possesses a building, keyboard R and
 //! controller RT Burst ([`burst`]), sending `Burst` when the sim's own
@@ -225,7 +227,10 @@ fn highlight(world: &World, target: InteractTarget, interaction: &Interaction) -
             let needs: Vec<String> = needs.iter().map(|&(i, units)| format!("{units} {}", item(i))).collect();
             format!("NEEDS {}", needs.join(", "))
         }
-        (_, Interaction::Board { .. }) => "POSSESS".to_string(),
+        (_, Interaction::Board { building }) => match s.buildings.get(*building as usize).map(|b| b.slot) {
+            Some(sim::settlement::Slot::Occupied(sim::settlement::Occupant::Sprite(a))) => format!("POSSESS, {} STEPS OUT", sprite_label(world, a)),
+            _ => "POSSESS".to_string(),
+        },
         (_, Interaction::Leave { .. }) => "LEAVE".to_string(),
     };
     let position = service.to_view(position);
@@ -357,25 +362,41 @@ pub fn pick(world: &mut World, index: usize) -> Result<(), String> {
 }
 
 /// The build key: opens the build menu, or backs out of placing a
-/// blueprint.
-pub fn build(world: &mut World) {
+/// blueprint. Refused while the elder possesses a building.
+pub fn build(world: &mut World) -> Result<(), String> {
     if world.resource::<Dispatcher>().town.placing.is_some() {
         cancel_build(world);
+        Ok(())
     } else {
-        open_build_menu(world);
+        open_build_menu(world)
     }
 }
 
+/// Why nothing can be built now: the elder possesses a building, so a
+/// ghost in front of it would mean nothing.
+fn build_refusal(world: &World) -> Result<(), String> {
+    if possessing(world) {
+        return Err(LEAVE_FIRST.into());
+    }
+    Ok(())
+}
+
+/// The build key's refusal while possessing, as the boarding key's
+/// "Drop the bundle first (Q)" names the key that fixes it.
+pub const LEAVE_FIRST: &str = "Leave the building first (E)";
+
 /// Opens the build menu: a radial panel with one option per building kind,
-/// by its label.
-pub fn open_build_menu(world: &mut World) {
-    let Some(sim) = world.get_resource::<crate::settlement::Settlement>().and_then(|s| s.simulation.as_ref()) else { return };
+/// by its label. Refused while the elder possesses a building.
+pub fn open_build_menu(world: &mut World) -> Result<(), String> {
+    build_refusal(world)?;
+    let Some(sim) = world.get_resource::<crate::settlement::Settlement>().and_then(|s| s.simulation.as_ref()) else { return Ok(()) };
     let options: Vec<String> = sim.config().building_kinds.iter().map(|k| k.label.clone()).collect();
     let kinds = (0..options.len() as u16).collect();
     world.resource_mut::<InputService>().open_radial("BUILD", options);
     let mut dispatcher = world.resource_mut::<Dispatcher>();
     dispatcher.town.menu = None;
     dispatcher.town.build_menu = Some(kinds);
+    Ok(())
 }
 
 /// The build menu's pick `index`: starts placing that kind's blueprint.
@@ -386,7 +407,9 @@ pub fn pick_build(world: &mut World, index: usize) -> Result<(), String> {
 }
 
 /// Starts placing a blueprint of `kind`: its ghost follows the elder.
+/// Refused while the elder possesses a building.
 pub fn start_placing(world: &mut World, kind: u16) -> Result<(), String> {
+    build_refusal(world)?;
     let known = world.resource::<SessionService>().settlement().is_some_and(|s| (kind as usize) < s.building_kinds.len());
     if !known {
         return Err("No such building".into());

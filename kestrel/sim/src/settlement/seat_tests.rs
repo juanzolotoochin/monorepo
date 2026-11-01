@@ -309,7 +309,7 @@ fn a_site_is_no_seat() {
 }
 
 #[test]
-fn interact_boards_and_leaves_and_a_sprite_inside_keeps_its_menu() {
+fn interact_boards_and_leaves_and_possesses_a_staffed_building() {
     let mut sim = sacred_tree();
     let target = |sim: &Simulation| {
         let world = sim.world();
@@ -329,11 +329,12 @@ fn interact_boards_and_leaves_and_a_sprite_inside_keeps_its_menu() {
     assert_eq!(seat(&sim, ELDER), None);
     step(&mut sim, &[]);
     assert_eq!(slot(&sim, 0), Slot::Empty);
-    // A sprite inside stands on the slot spot: the tie goes to the sprite's
-    // job menu (the lower kind), and the boarding key still boards.
+    // A sprite working inside is no target: interacting possesses the
+    // staffed building and puts the sprite out, whose job menu is a target
+    // again once it stands outside.
     staff(&mut sim);
-    assert_eq!(target(&sim), Some((InteractTarget::Sprite(ASH), Interaction::JobMenu)));
-    step(&mut sim, &[board(ELDER)]);
+    assert_eq!(target(&sim), Some((InteractTarget::Slot(0), Interaction::Board { building: 0 })));
+    step(&mut sim, &[command(CommandKind::Interact { agent: ELDER, target: InteractTarget::Slot(0) })]);
     assert_eq!((seat(&sim, ELDER), holds(&sim, ASH)), (Some(Seat::Building(0)), None));
 }
 

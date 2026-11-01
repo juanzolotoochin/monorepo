@@ -344,7 +344,7 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
                 return Err("Nothing to build here".into());
             }
             let Some(id) = kind else {
-                crate::input::town::open_build_menu(world);
+                crate::input::town::open_build_menu(world)?;
                 return Ok(Pending::Instant);
             };
             let kind = s.building_kinds.iter().position(|k| k.id == *id).ok_or("unknown building kind")? as u16;

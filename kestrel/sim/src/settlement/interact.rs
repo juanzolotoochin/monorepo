@@ -11,8 +11,8 @@
 //! - **A building's output:** a bundle pickup (`avatar::bundle_job`).
 //! - **A tree pile** (a depot): a deposit while carrying, a withdrawal when
 //!   empty-handed.
-//! - **A sprite**, empty-handed only: the app's job menu, which sends
-//!   `SetSpriteJob`. The sim does nothing with it.
+//! - **A sprite** standing outside buildings, empty-handed only: the app's
+//!   job menu, which sends `SetSpriteJob`. The sim does nothing with it.
 //! - **A site** (D4), at the spot where its output pile will be: a delivery
 //!   while carrying an item its next part still needs (every unit it still
 //!   takes, through `bundle_job`; the rest stays in the bundle); otherwise
@@ -25,9 +25,9 @@
 //!   delivery from one: deliveries come from the bundle only.
 //! - **A building's slot** (D3), at its slot spot, empty-handed only and for
 //!   built buildings only: boarding it, as `Board` does, putting out a
-//!   sprite there. A sprite inside is reached at that spot too, so the tie
-//!   goes to the sprite's job menu (the lower kind), and boarding a staffed
-//!   building is the boarding key's. One another elder possesses is no target.
+//!   sprite there. A sprite working inside is no target (its job menu is
+//!   for sprites standing outside), so interacting possesses a staffed
+//!   building as an empty one. One another elder possesses is no target.
 //!   Seated in a building, the slot is the one target, and interacting
 //!   leaves it; seated in a vehicle there is none.
 //!
@@ -135,9 +135,10 @@ pub fn interact_target(view: &View, me: &AgentState, sprites: impl IntoIterator<
         .chain(piles)
         .chain(slots)
         .filter_map(|t| position(view, t).map(|p| (t, p)))
-        // A sprite inside a building is reached at its slot spot, where its
-        // building's slot is: the tie goes to the sprite.
-        .chain(sprites.into_iter().map(|(a, p)| (InteractTarget::Sprite(a), inside(view, a).unwrap_or(p))))
+        // A sprite working inside a building is no target: its slot is, so
+        // interacting possesses the building and puts the sprite out. The
+        // job menu is for sprites standing outside.
+        .chain(sprites.into_iter().filter(|&(a, _)| !inside(view, a)).map(|(a, p)| (InteractTarget::Sprite(a), p)))
         .map(|(t, p)| (distance(from, p), t, p))
         .filter(|&(d, _, _)| d <= INTERACT_REACH)
         .collect();
@@ -146,10 +147,9 @@ pub fn interact_target(view: &View, me: &AgentState, sprites: impl IntoIterator<
     candidates.into_iter().find_map(|(_, t, _)| interaction(view, &me.carry, t).ok().map(|use_| (t, use_)))
 }
 
-/// The slot spot of the building sprite `a` works inside, if it works in one.
-fn inside(view: &View, a: AgentIx) -> Option<FxVec2> {
-    let building = view.buildings.iter().find(|b| b.slot == Slot::Occupied(Occupant::Sprite(a)))?;
-    Some(building.slot_position(&view.building_kinds[building.kind as usize]))
+/// Whether sprite `a` works inside a building.
+fn inside(view: &View, a: AgentIx) -> bool {
+    view.buildings.iter().any(|b| b.slot == Slot::Occupied(Occupant::Sprite(a)))
 }
 
 /// Where `target` is, for its reach, if the view has it: an output pile, a

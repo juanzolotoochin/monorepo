@@ -112,8 +112,9 @@ fn apply_actor_pivots(
 /// The controls help line in a town (the Sacred Tree).
 pub const TOWN_HELP: &str = "WASD MOVE / SHIFT RUN / E INTERACT / B BUILD / Q DROP / G POSSESS";
 /// The town's help line while the elder possesses a building
-/// (`settlement::town_help`): leaving, and Burst.
-pub const TOWN_POSSESSED_HELP: &str = "E OR G LEAVE / R BURST / B BUILD";
+/// (`settlement::town_help`): leaving, and Burst. Building waits until
+/// the elder leaves (`input::town::build`).
+pub const TOWN_POSSESSED_HELP: &str = "E OR G LEAVE / R BURST";
 
 /// Dresses a world in its scene's style: materials, lights, fog, the
 /// environment and the player's styled parts. Runs when the world starts
