@@ -982,7 +982,7 @@ pub fn tick(world: &mut World) {
         v.roll = -f * 0.8;
         desired.insert(format!("threat/{}", p.target), v);
     }
-    let glows = town(world, &mut state, sim, &mut desired);
+    let glows = town(world, &mut state, sim, &mut desired, pos);
     hide_possessing(world);
     town_interact(world, &mut state, sim, pos);
     if !sim.config().building_kinds.is_empty() {
@@ -1347,8 +1347,9 @@ fn town_caption(world: &mut World, state: &mut Settlement, key: &str, position: 
 /// its rotor turning while it works, with a lamp over it and a card saying
 /// who works it; its output stacked on its pile with the count; and each
 /// sprite's flame and tag, saying its job and what it is doing (A7).
-/// Returns the glows to draw.
-fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &mut BTreeMap<String, View>) -> Vec<(String, Vec3, f32, Glow)> {
+/// `player` is where the local elder stands, which unfolds the tags of the
+/// sprites beside it (`TAG_UNFOLD`). Returns the glows to draw.
+fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &mut BTreeMap<String, View>, player: Vec3) -> Vec<(String, Vec3, f32, Glow)> {
     use crate::legacy::{BuildingStatus, Occupant, SpriteActivity};
     let mut glows = vec![];
     let ground = |world: &World, p: Vec3| crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, p).unwrap_or(0.);
@@ -1495,7 +1496,16 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
             SpriteActivity::Waiting => "WAITING",
             SpriteActivity::Idle => "IDLE",
         };
-        let brief = if job.is_empty() { format!("{}\n{doing}", sprite.label) } else { format!("{}\n{short} / {doing}", sprite.label) };
+        // Declutter: a sprite working inside has no tag (its building's card
+        // names it), and the others show their name alone (the flame's color
+        // says what they are doing) until the elder stands beside them.
+        let near = Vec2::new(p.x - player.x, p.z - player.z).length() <= TAG_UNFOLD;
+        let brief = match s.activity {
+            SpriteActivity::Working if s.building.is_some() => String::new(),
+            _ if !near => sprite.label.clone(),
+            _ if job.is_empty() => format!("{}\n{doing}", sprite.label),
+            _ => format!("{}\n{short} / {doing}", sprite.label),
+        };
         let detail = format!(
             "{} (sprite)\nJob: {}\nNow: {}",
             sprite.label,
@@ -1507,13 +1517,18 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
                 SpriteActivity::Idle => "standing at home",
             }
         );
-        // Every other tag stands a line higher, so neighbors standing side
-        // by side (as the sprites start) don't write over each other.
-        let above = 0.3 + (index % 2) as f32 * 1.0;
+        // Every other tag stands a little higher, so neighbors standing side
+        // by side (as the sprites start) don't write over each other, while
+        // staying clear of the tree's piles behind them.
+        let above = 0.3 + (index % 2) as f32 * 0.4;
         town_caption(world, state, &format!("sprite/{}", sprite.id), head + Vec3::Y * above, brief, glow.text(), detail);
     }
     glows
 }
+/// How near the elder (in meters) a sprite's tag unfolds to its job and
+/// what it is doing: about the interact reach, so the sprite it is about to
+/// set a job on reads in full while the crowd stays one line each.
+const TAG_UNFOLD: f32 = 2.0;
 /// The town's interact (`input::town`): the prompt over the highlighted
 /// target ("E  PICK UP 3 WOOD"), a refusal over the elder's head for a
 /// moment, and the job menu's options in a ring around its sprite, the
