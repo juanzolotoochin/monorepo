@@ -4,13 +4,16 @@ fn run(steps: Vec<Command>) -> Value {
     run_at(steps, 30)
 }
 fn run_at(steps: Vec<Command>, fps: u32) -> Value {
+    run_for(steps, fps, 1200)
+}
+fn run_for(steps: Vec<Command>, fps: u32, max_frames: u32) -> Value {
     let script = Script {
         version: 1,
         scene: "pile-lab".into(),
         fps,
         width: 1440,
         height: 960,
-        max_frames: 1200,
+        max_frames,
         steps,
     };
     let options = Options {
@@ -21,7 +24,7 @@ fn run_at(steps: Vec<Command>, fps: u32) -> Value {
     let scenes = SceneLibrary::new();
     let hub = Hub::new(options.clone()).unwrap();
     let mut app = crate::test_app(options, scenes, hub, crate::flow::Launch::single_player(2));
-    for _ in 0..1300 {
+    for _ in 0..max_frames + 100 {
         app.update();
         let world = app.world_mut();
         let p = player_position(world);
@@ -953,7 +956,7 @@ fn the_elder_possesses_the_wood_gatherer_and_its_sprite_goes_back_in() {
     assert!(report["error"].as_str().unwrap().contains("Drop the bundle first (Q)"), "{report}");
 }
 
-/// Possessing the Wood Gatherer, `settlement_burst` puts two units in its
+/// Possessing the Wood Gatherer, `settlement_burst` puts five units in its
 /// output at once; a second right after fails with the cooldown left, and
 /// once the cooldown is over (the elder waiting outside, so the output has
 /// room), a Burst works again. `settlement.burst` reports the cooldown.
@@ -973,9 +976,9 @@ fn the_elder_bursts_the_wood_gatherer_and_waits_out_the_cooldown() {
     let receipts = report["receipts"].as_array().unwrap();
     let (before, after) = (&receipts[2]["state"], &receipts[4]["state"]);
     assert_eq!(before["settlement"]["burst"]["ready"], true, "{}", before["settlement"]["burst"]);
-    // Two at once, and perhaps a unit of the elder's own work meanwhile.
+    // Five at once, and perhaps a unit of the elder's own work meanwhile.
     let added = wood(after) - wood(before);
-    assert!((2..=3).contains(&added), "{added} units");
+    assert!((5..=6).contains(&added), "{added} units");
     let burst = &after["settlement"]["burst"];
     assert_eq!(burst["ready"], false, "{burst}");
     assert!(burst["cooldown"].as_f64().unwrap() > 29.0, "{burst}");
@@ -1003,5 +1006,134 @@ fn the_elder_bursts_the_wood_gatherer_and_waits_out_the_cooldown() {
     let outside = &receipts[5]["state"]["settlement"]["burst"];
     assert_eq!((outside["cooldown"].as_f64(), outside["reason"].as_str()), (Some(0.0), Some("Possess a building to Burst")), "{outside}");
     let added = wood(&receipts[9]["state"]) - wood(&receipts[7]["state"]);
-    assert!((2..=3).contains(&added), "{added} units");
+    assert!((5..=6).contains(&added), "{added} units");
+}
+
+/// The happy path (A6) from a fresh start, through the control protocol
+/// alone and the interact key's own path wherever there is one: 1. E on a
+/// sprite opens its job menu, which sends it to the Wood Gatherer; 2. its
+/// wood is picked up as a bundle; 3. and put in the tree; 4. the build menu
+/// puts a Stone Gatherer's blueprint down; 5. wood withdrawn from the tree
+/// goes into its foundation; 6. and its mechanism, which builds it; 7. a
+/// sprite assigned works it and stone comes out; 8. two sprites swap jobs,
+/// each taking the other's building; 9. with the leftover wood dropped, E
+/// possesses the staffed Wood Gatherer, putting its sprite out; 10. a Burst
+/// fills the output at once, and leaving lets the sprite back in. The sim
+/// runs four times as fast (`settlement_rate`) so the waits stay short.
+#[test]
+fn the_happy_path_plays_from_a_fresh_start() {
+    let wait = |frames| Command::Wait { frames };
+    let walk = |x, z| Command::Walk { position: [x, z] };
+    let target = |prompt: &str| Command::SettlementInteractTarget { prompt: Some(prompt.into()) };
+    let job = |sprite: &str, kind: &str| Command::SettlementSpriteJob { sprite: sprite.into(), job: Some(kind.into()) };
+    let steps = vec![
+        Command::Scene { scene: "sacred-tree".into() },
+        // 1. Fern's job menu, in front of Fern.
+        walk(-0.6, 4.3),
+        target("SET JOB"),
+        Command::SettlementInteract,
+        Command::SettlementJobMenu { job: Some("wood_gatherer".into()) },
+        Command::SettlementRate { rate: 4.0 },
+        wait(300),
+        // 2. A bundle of wood from its output.
+        walk(-3.3, 0.5),
+        target("PICK UP 5 WOOD"),
+        Command::SettlementInteract,
+        // 3. Into the tree's wood pile.
+        walk(-1.7, 2.4),
+        target("DEPOSIT 5 WOOD"),
+        Command::SettlementInteract,
+        // 4. A Stone Gatherer east of the tree.
+        Command::SettlementBuild { kind: None },
+        Command::SettlementBuild { kind: Some("stone_gatherer".into()) },
+        walk(3.0, 1.0),
+        walk(3.0, 0.0),
+        Command::SettlementPlaceBlueprint { kind: None, position: None },
+        // 5. Its foundation, from the tree's wood.
+        walk(-1.7, 2.4),
+        target("WITHDRAW 5 WOOD"),
+        Command::SettlementInteract,
+        walk(2.0, -0.6),
+        target("DELIVER 2 WOOD"),
+        Command::SettlementInteract,
+        target("INSTALL FOUNDATION"),
+        Command::SettlementInteract,
+        // 6. Its mechanism: built.
+        target("DELIVER 2 WOOD"),
+        Command::SettlementInteract,
+        target("INSTALL MECHANISM"),
+        Command::SettlementInteract,
+        Command::Inspect,
+        // 7. Ash works it.
+        job("sprite_ash", "stone_gatherer"),
+        wait(240),
+        Command::Inspect,
+        // 8. Ash and Fern swap.
+        job("sprite_ash", "wood_gatherer"),
+        job("sprite_fern", "stone_gatherer"),
+        wait(240),
+        Command::Inspect,
+        // 9. The leftover wood down, then E at the Wood Gatherer's slot.
+        walk(4.5, 1.0),
+        Command::SettlementDrop,
+        walk(-5.1, 2.6),
+        target("POSSESS, ASH STEPS OUT"),
+        Command::SettlementInteract,
+        Command::Inspect,
+        // 10. Burst, and leave.
+        Command::SettlementBurst,
+        Command::Inspect,
+        target("LEAVE"),
+        Command::SettlementInteract,
+        wait(60),
+        Command::Inspect,
+    ];
+    let report = run_for(steps, 30, 2400);
+    assert_eq!(report["status"], "passed", "{report}");
+    let receipts = report["receipts"].as_array().unwrap();
+    let state = |i: usize| &receipts[i]["state"]["settlement"];
+    let conserved = |i: usize| state(i)["balances"].as_object().unwrap().values().all(|b| b["conserved"] == true);
+    // 6. Built, with one wood left in the bundle.
+    let built = &state(30)["simulation"]["buildings"][1];
+    assert_eq!((&built["kind"], &built["status"]), (&json!("stone_gatherer"), &json!("idle")), "{built}");
+    assert_eq!(state(30)["simulation"]["agents"]["elder"]["cargo"]["items"]["wood"], 1);
+    // 7. Ash works it, and stone came out.
+    let stone = &state(33)["simulation"]["buildings"][1];
+    assert_eq!(stone["occupant"], json!({"sprite": "sprite_ash"}), "{stone}");
+    assert!(stone["output"]["items"]["stone"].as_u64().is_some_and(|n| n >= 1), "{stone}");
+    // 8. Swapped.
+    let buildings = &state(37)["simulation"]["buildings"];
+    assert_eq!((&buildings[0]["occupant"], &buildings[1]["occupant"]), (&json!({"sprite": "sprite_ash"}), &json!({"sprite": "sprite_fern"})), "{buildings}");
+    // 9. Possessed, Ash put out to wait.
+    let possessed = state(43);
+    assert_eq!(possessed["seat"], json!({"building": 0}), "{possessed}");
+    assert_eq!(possessed["simulation"]["sprites"]["sprite_ash"]["activity"], "waiting");
+    assert_eq!(possessed["simulation"]["ground_piles"][0]["stock"]["items"], json!({"wood": 1}));
+    // 10. The Burst's five, and Ash back in once the elder left.
+    let wood = |i: usize| state(i)["simulation"]["buildings"][0]["output"]["items"]["wood"].as_u64().unwrap_or(0);
+    assert!((5..=7).contains(&(wood(45) - wood(43))), "{} then {}", wood(43), wood(45));
+    let last = state(49);
+    assert_eq!(last["seat"], Value::Null);
+    assert_eq!(last["simulation"]["buildings"][0]["occupant"], json!({"sprite": "sprite_ash"}), "{last}");
+    assert!([30, 33, 37, 43, 45, 49].into_iter().all(conserved));
+}
+
+/// The build key is refused while the elder possesses a building, with a
+/// hint that names the key that leaves.
+#[test]
+fn building_waits_until_the_elder_leaves_its_building() {
+    let report = run(vec![
+        Command::Scene { scene: "sacred-tree".into() },
+        Command::SettlementBoard { building: 0 },
+        Command::SettlementBuild { kind: None },
+    ]);
+    assert_eq!(report["status"], "failed", "{report}");
+    assert!(report["error"].as_str().unwrap().contains("Leave the building first (E)"), "{report}");
+    let report = run(vec![
+        Command::Scene { scene: "sacred-tree".into() },
+        Command::SettlementBoard { building: 0 },
+        Command::SettlementBuild { kind: Some("stone_gatherer".into()) },
+    ]);
+    assert_eq!(report["status"], "failed", "{report}");
+    assert!(report["error"].as_str().unwrap().contains("Leave the building first (E)"), "{report}");
 }
