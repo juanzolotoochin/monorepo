@@ -4,54 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M4.1 Happy path and stability
-
-- **Status:** open
-- **Why:** the 10-step happy path must play from a fresh start, and
-  repeated cycles must never strand a sprite (A6, A8).
-- **What to do:** the happy path as a headless control script, the
-  stability soak and the bootstrapping test (handoff, "Tests"); fix what
-  they find, then tune rates.
-- **Where:** `kestrel/sim/src/settlement/` tests, `kestrel/headless/`.
-- **From M1.3:** `sprites_tests::no_sprite_keeps_waiting_while_a_matching_slot_is_free`
-  already reassigns sprites over two gatherers for 90 s; the soak can grow
-  from it with possession and building.
-- **From M2.3:** the bootstrapping order already runs in the sim
-  (`construction_tests::both_kinds_build_from_an_empty_tree`, through
-  `Interact` only); the headless happy path can drive it with
-  `settlement_build`, `settlement_place_blueprint` and `settlement_interact`
-  (the control test `the_elder_builds_a_stone_gatherer_that_a_sprite_works`
-  is a start). Placing checks that the new building's own pile and slot
-  spot can be reached, not that it leaves the others reachable: a ring of
-  buildings could wall one off. A new footprint can also land on a route a
-  sprite is walking; the soak should show whether either needs a rule.
-- **From M2.4:** `settlement_drop` drops the bundle and waits for it to
-  land; the happy path's "drop before possessing" step can use it, and
-  interact picks a ground pile back up (control test
-  `the_elder_drops_wood_and_picks_it_back_up`). A town holds at most
-  `MAX_PILES` (32) ground piles; the soak can drop and pick up in its
-  cycles, with `validate` checking piles' reservations.
-- **From M3.1:** `settlement_board` (walks there first) and
-  `settlement_leave` drive possession; `settlement.seat` reads it.
-  `seat_tests::repeated_board_and_leave_cycles_stay_valid` is a short
-  possess/leave soak over two gatherers. A staffed building is boarded with
-  G (or the verb): E there reaches the sprite inside, whose job menu wins
-  the tie at the slot spot. The elder's leaving spot and a put-out sprite's
-  spot ignore bodies (the action's view reads no agents), so a crowd beside
-  a building can overlap them for a moment; the soak should show whether
-  that strands anyone.
-- **From M3.2:** `settlement_burst` Bursts the possessed building (R or RT
-  in the app) and fails with the sim's reason ("Burst ready in 12 s",
-  "Output full"); `settlement.burst` has the `cooldown` left in seconds and
-  whether one would go off (`ready`), so the happy path's Burst step can
-  check the output gained its two units, and the soak can Burst in its
-  possess cycles (`burst_tests` cover a cooldown kept across leaving,
-  another building and a respawn). For tuning: a Burst adds 2 against the
-  4x multiplier's 24 units in the 30 s cooldown, and a Burst into a nearly
-  full output adds only what fits, still spending the cooldown; both are
-  content (`burst.units`, `burst.cooldown`, `possessed_cap`).
-- **Found in:** Sacred Tree handoff.
-
 ## Art for the Sacred Tree
 
 - **Status:** open
@@ -70,9 +22,11 @@ its milestones, in order; one PR per milestone.
   with a glowing ball over the head as a stand-in flame
   (`settlement::town`); a flame skin can take its activity color and
   motion from the same place. The camera shows the whole 26 m clearing, so
-  the tags of the four sprites standing together at the start still touch
-  (every other tag stands higher); a closer camera, or tags that only
-  unfold near the elder, would read better.
+  the tags of the four sprites standing together at the start still touch.
+  Since M4.1 a tag shows the name alone until the elder is within 2 m
+  (`settlement::TAG_UNFOLD`), a sprite working inside has none, and every
+  other tag stands 0.4 m higher (was 1 m, which reached the tree's piles);
+  a closer camera would still read better.
 - **From M2.3:** a site is its kind's skin scaled down per installed part
   (`settlement::town`, `grown`) on a plot ringed in gizmos (`input::hud`),
   and the ghost is the skin with every material tinted (`rig::Fade::tint`);
@@ -126,16 +80,80 @@ its milestones, in order; one PR per milestone.
   shows it.
 - **Where:** `kestrel/app/src/input/town.rs`, `gameplay.rs`,
   `kestrel/app/src/legacy.rs` (`manual_jobs`), `kestrel/app/src/settlement.rs`.
-- **From M3.1:** a sprite working inside stands on its building's slot
-  spot, so E there opens its job menu (the lower kind wins the tie) and only
-  G possesses a staffed building; E possesses an empty one. If the playtest
-  wants E to possess a staffed building, either the slot target needs a
-  spot of its own or the job menu an entry to possess (`interact`,
-  `inside`). A G press while carrying shows "Drop the bundle first (Q)"; E
-  offers no slot then, so nothing says why.
+- **From M3.1:** a G press while carrying shows "Drop the bundle first
+  (Q)"; E offers no slot then, so nothing says why. (Since M4.1, a sprite
+  working inside is no interact target, so E possesses a staffed building
+  as G does; the job menu is for sprites standing outside.)
 - **Found in:** M2.2.
 
 ## Done
+
+### M4.1 Happy path and stability
+
+- **Status:** done (branch `kestrel-sacred-tree`)
+- **Why:** the 10-step happy path must play from a fresh start, and
+  repeated cycles must never strand a sprite (A6, A8).
+- **What to do:** the happy path as a headless control script, the
+  stability soak and the bootstrapping test (handoff, "Tests"); fix what
+  they find, then tune rates.
+- **Where:** `kestrel/sim/src/settlement/` tests, `kestrel/headless/`.
+- **From M1.3:** `sprites_tests::no_sprite_keeps_waiting_while_a_matching_slot_is_free`
+  already reassigns sprites over two gatherers for 90 s; the soak can grow
+  from it with possession and building.
+- **From M2.3:** the bootstrapping order already runs in the sim
+  (`construction_tests::both_kinds_build_from_an_empty_tree`, through
+  `Interact` only); the headless happy path can drive it with
+  `settlement_build`, `settlement_place_blueprint` and `settlement_interact`
+  (the control test `the_elder_builds_a_stone_gatherer_that_a_sprite_works`
+  is a start). Placing checks that the new building's own pile and slot
+  spot can be reached, not that it leaves the others reachable: a ring of
+  buildings could wall one off. A new footprint can also land on a route a
+  sprite is walking; the soak should show whether either needs a rule.
+- **From M2.4:** `settlement_drop` drops the bundle and waits for it to
+  land; the happy path's "drop before possessing" step can use it, and
+  interact picks a ground pile back up (control test
+  `the_elder_drops_wood_and_picks_it_back_up`). A town holds at most
+  `MAX_PILES` (32) ground piles; the soak can drop and pick up in its
+  cycles, with `validate` checking piles' reservations.
+- **From M3.1:** `settlement_board` (walks there first) and
+  `settlement_leave` drive possession; `settlement.seat` reads it.
+  `seat_tests::repeated_board_and_leave_cycles_stay_valid` is a short
+  possess/leave soak over two gatherers. A staffed building is boarded with
+  G (or the verb): E there reaches the sprite inside, whose job menu wins
+  the tie at the slot spot. The elder's leaving spot and a put-out sprite's
+  spot ignore bodies (the action's view reads no agents), so a crowd beside
+  a building can overlap them for a moment; the soak should show whether
+  that strands anyone.
+- **From M3.2:** `settlement_burst` Bursts the possessed building (R or RT
+  in the app) and fails with the sim's reason ("Burst ready in 12 s",
+  "Output full"); `settlement.burst` has the `cooldown` left in seconds and
+  whether one would go off (`ready`), so the happy path's Burst step can
+  check the output gained its two units, and the soak can Burst in its
+  possess cycles (`burst_tests` cover a cooldown kept across leaving,
+  another building and a respawn). For tuning: a Burst adds 2 against the
+  4x multiplier's 24 units in the 30 s cooldown, and a Burst into a nearly
+  full output adds only what fits, still spending the cooldown; both are
+  content (`burst.units`, `burst.cooldown`, `possessed_cap`).
+- **Found in:** Sacred Tree handoff.
+- **Done:** the happy path as a control script
+  (`control::tests::the_happy_path_plays_from_a_fresh_start`; the ten
+  steps are in its doc comment, taken from the handoff's goal loop, as the
+  requirements document isn't in the repo: assign, pick up, deposit,
+  blueprint, foundation, mechanism, staff, reassign, drop and possess with
+  E, Burst and leave); the soak
+  (`soak_tests::possess_leave_reassign_and_build_cycles_strand_no_sprite`,
+  16 cycles, four buildings put up, `validate` and the no-stranding check on
+  every tick); bootstrapping was already
+  `construction_tests::both_kinds_build_from_an_empty_tree`. E possesses a
+  staffed building ("POSSESS, ASH STEPS OUT"); the build key refuses while
+  possessing ("Leave the building first (E)"); sprite tags decluttered;
+  Burst tuned to 5 units (one full bundle).
+- **Left open:** the soak strands nobody, so no rule was added for a
+  footprint walling another building off, landing on a sprite's route, or
+  a leaving spot overlapping a crowd; it doesn't build a deliberate ring,
+  so walling off stays untested. A Burst into a nearly full output still
+  spends the whole cooldown for what fits (content: `possessed_cap`).
+  Rates other than Burst are untouched until the playtest says otherwise.
 
 ### M3.2 Burst
 

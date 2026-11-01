@@ -170,8 +170,9 @@ stay fixed for the world's life. That is the one real gap.
     piles and ground piles of that item (top up). The ground is no target:
     dropping is its own key (D4).
   - **Empty-handed:** output piles, ground piles, the tree (withdraw),
-    sites ready to install, sites to read, building slots (board),
-    sprites (radial menu).
+    sites ready to install, sites to read, building slots (board, a
+    staffed one too, putting its sprite out: decided in M4.1), sprites
+    standing outside buildings (radial menu).
 - The app highlights the target from the same function, so the sim and
   the view never disagree. This avoids the drift that "Share the busy
   carrying rule" in `todo/characters.md` has.
