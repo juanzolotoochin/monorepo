@@ -225,8 +225,25 @@
       "op": "inspect"
     },
     {
-      "op": "settlement_board",
-      "building": 0
+      "op": "walk",
+      "position": [
+        -5.1,
+        2.6
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "settlement_interact_target"
+    },
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "settlement_interact"
     },
     {
       "op": "wait",
