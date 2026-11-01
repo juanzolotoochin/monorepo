@@ -18,12 +18,12 @@
 (id: "sprite_reed", label: "REED", character: "sprite", position: (1.8, 4.6))
 ], building_kinds: [
 (id: "wood_gatherer", label: "WOOD GATHERER", skin: "mill", radius: 0.9, product: "wood", period: 5.0,
- cap: 10, possessed_cap: 20, possessed_multiplier: 4.0, burst: (units: 2, cooldown: 30.0), parts: [
+ cap: 10, possessed_cap: 20, possessed_multiplier: 4.0, burst: (units: 5, cooldown: 30.0), parts: [
 (id: "foundation", label: "FOUNDATION", materials: [(item: "wood", units: 2)]),
 (id: "mechanism", label: "MECHANISM", materials: [(item: "wood", units: 2), (item: "stone", units: 2)])
 ]),
 (id: "stone_gatherer", label: "STONE GATHERER", skin: "factory", radius: 0.9, product: "stone", period: 8.0,
- cap: 10, possessed_cap: 20, possessed_multiplier: 4.0, burst: (units: 2, cooldown: 30.0), parts: [
+ cap: 10, possessed_cap: 20, possessed_multiplier: 4.0, burst: (units: 5, cooldown: 30.0), parts: [
 (id: "foundation", label: "FOUNDATION", materials: [(item: "wood", units: 2)]),
 (id: "mechanism", label: "MECHANISM", materials: [(item: "wood", units: 2)])
 ])

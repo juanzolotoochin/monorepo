@@ -706,7 +706,7 @@ mod tests {
         let kind = |id: &str| tree.building_kinds.iter().find(|k| k.id == id).unwrap();
         let wood = kind("wood_gatherer");
         assert_eq!((wood.product.as_str(), wood.period, wood.cap, wood.possessed_cap), ("wood", Fx::from_int(5), 10, 20));
-        assert_eq!((wood.possessed_multiplier, wood.burst.units, wood.burst.cooldown), (Fx::from_int(4), 2, Fx::from_int(30)));
+        assert_eq!((wood.possessed_multiplier, wood.burst.units, wood.burst.cooldown), (Fx::from_int(4), 5, Fx::from_int(30)));
         assert_eq!(wood.output_distance, "1.2".parse().unwrap(), "the default");
         fn needs(k: &BuildingKind) -> Vec<Vec<(&str, u32)>> {
             k.parts.iter().map(|p| p.materials.iter().map(|s| (s.item.as_str(), s.units)).collect()).collect()

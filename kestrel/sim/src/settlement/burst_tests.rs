@@ -103,6 +103,11 @@ fn possess(sim: &mut Simulation, b: BuildingIx) {
     assert_eq!(settlement(sim).seat(ELDER as usize), Some(Seat::Building(b)));
 }
 
+/// Building `b`'s Burst units, as its kind sets them (content).
+fn units(sim: &Simulation, b: BuildingIx) -> u32 {
+    settlement(sim).building_kind(b).burst
+}
+
 /// Bursts once, checking it added `units` on top of the tick's production.
 fn burst_adds(sim: &mut Simulation, b: BuildingIx, units: u32) {
     let before = wood(sim, b);
@@ -114,12 +119,13 @@ fn burst_adds(sim: &mut Simulation, b: BuildingIx, units: u32) {
 }
 
 #[test]
-fn a_burst_adds_two_at_once_then_waits_out_its_cooldown() {
+fn a_burst_adds_its_units_at_once_then_waits_out_its_cooldown() {
     let mut sim = roomy();
     possess(&mut sim, 0);
     let cooldown = settlement(&sim).building_kind(0).burst_cooldown;
     assert_eq!(cooldown, 30 * HZ);
-    burst_adds(&mut sim, 0, 2);
+    let units_0 = units(&sim, 0);
+    burst_adds(&mut sim, 0, units_0);
     let ready = burst_ready(&sim);
     assert_eq!(ready, sim.world().tick() - 1 + cooldown);
     // A second Burst right after is refused, in whole seconds left.
@@ -137,8 +143,9 @@ fn a_burst_adds_two_at_once_then_waits_out_its_cooldown() {
     assert_eq!(wood(&sim, 0), before + produced(&sim, 0));
     assert_eq!(burst_ready(&sim), ready);
     // Ready on its tick.
-    assert_eq!(settlement(&sim).burst_check(ELDER as usize, sim.world().tick()), Ok(2));
-    burst_adds(&mut sim, 0, 2);
+    assert_eq!(settlement(&sim).burst_check(ELDER as usize, sim.world().tick()), Ok(units(&sim, 0)));
+    let units_0 = units(&sim, 0);
+    burst_adds(&mut sim, 0, units_0);
     assert_eq!(burst_ready(&sim), ready + cooldown);
 }
 
@@ -196,7 +203,8 @@ fn the_cooldown_outlasts_leaving_another_building_and_a_respawn() {
         s.building_kinds.iter_mut().for_each(|k| k.possessed_cap = 60);
     });
     possess(&mut sim, 0);
-    burst_adds(&mut sim, 0, 2);
+    let units_0 = units(&sim, 0);
+    burst_adds(&mut sim, 0, units_0);
     let ready = burst_ready(&sim);
     // Leaving and possessing the other gatherer doesn't reset it.
     step(&mut sim, &[board()]);
@@ -216,5 +224,6 @@ fn the_cooldown_outlasts_leaving_another_building_and_a_respawn() {
     assert!(matches!(bursted(&sim), Some(Err(BurstRefusal::Cooling { .. }))));
     let wait = ready - sim.world().tick();
     steps(&mut sim, wait);
-    burst_adds(&mut sim, 1, 2);
+    let units_1 = units(&sim, 1);
+    burst_adds(&mut sim, 1, units_1);
 }

@@ -21,7 +21,8 @@ requirements are "Sacred Tree — Town MVP Requirements (v0.1)" (session of
 
 - An output holds at most 10 units; production pauses when it is full.
 - A possessing elder produces at 4× and the cap goes up (tunable, e.g. 20).
-- Burst: +2 units at once, 30 s cooldown.
+- Burst: +2 units at once, 30 s cooldown (tuned to +5, one full bundle,
+  in M4.1: +2 was lost against the 24 units 4× makes in the cooldown).
 - A bundle holds up to 5 units of one type. The tree holds any amount.
 - Every rate, cap, recipe and multiplier lives in content, not code.
 

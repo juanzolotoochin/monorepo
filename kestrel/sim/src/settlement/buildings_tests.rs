@@ -90,7 +90,7 @@ fn the_sacred_tree_loads_with_one_built_wood_gatherer() {
     assert_eq!(s.building_kinds.iter().map(|k| k.id.as_str()).collect::<Vec<_>>(), ["wood_gatherer", "stone_gatherer"]);
     let kind = s.building_kind(0);
     assert_eq!((kind.period, kind.cap, kind.possessed_cap), (5 * TICKS_PER_SECOND as u64, 10, 20));
-    assert_eq!((kind.possessed_multiplier, kind.burst, kind.burst_cooldown), (Fx::from_int(4), 2, 30 * TICKS_PER_SECOND as u64));
+    assert_eq!((kind.possessed_multiplier, kind.burst, kind.burst_cooldown), (Fx::from_int(4), 5, 30 * TICKS_PER_SECOND as u64));
     assert_eq!(kind.parts.len(), 2);
     assert_eq!(s.buildings.len(), 1);
     let b = &s.buildings[0];
