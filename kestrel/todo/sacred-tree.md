@@ -136,11 +136,10 @@ its milestones, in order; one PR per milestone.
   content (`burst.units`, `burst.cooldown`, `possessed_cap`).
 - **Found in:** Sacred Tree handoff.
 - **Done:** the happy path as a control script
-  (`control::tests::the_happy_path_plays_from_a_fresh_start`; the ten
-  steps are in its doc comment, taken from the handoff's goal loop, as the
-  requirements document isn't in the repo: assign, pick up, deposit,
-  blueprint, foundation, mechanism, staff, reassign, drop and possess with
-  E, Burst and leave); the soak
+  (`control::tests::the_happy_path_plays_from_a_fresh_start`), one-to-one
+  with the requirements' section 5 (A6), with no cheat or speed-up
+  commands (about four minutes of play at 20 frames a second, 2.3 s of
+  test time); the soak
   (`soak_tests::possess_leave_reassign_and_build_cycles_strand_no_sprite`,
   16 cycles, four buildings put up, `validate` and the no-stranding check on
   every tick); bootstrapping was already
