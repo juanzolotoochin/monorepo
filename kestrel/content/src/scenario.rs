@@ -263,6 +263,31 @@ pub struct Defence {
     pub muzzle_height: Fx,
     #[serde(default)]
     pub projectile: ProjectileKind,
+    /// What a possessing elder's Burst key throws instead
+    /// (`SACRED_TREE_BALLISTA.md`, B4); `None` for no fireball.
+    #[serde(default)]
+    pub fireball: Option<Fireball>,
+}
+
+/// A possessed ballista's fireball (B4): it flies to the reticle at
+/// `speed` meters a second, hurts every enemy within `radius` of where it
+/// lands by `damage`, and sets the ground there alight: a fire of radius
+/// `fire_radius` for `fire_seconds`. An enemy in the fire burns, taking
+/// `burn_damage` every `burn_period` seconds until `burn_linger` seconds
+/// after it leaves. The elder waits `cooldown` seconds before the next. It
+/// costs no ammo.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Fireball {
+    pub cooldown: Fx,
+    pub speed: Fx,
+    pub damage: u32,
+    pub radius: Fx,
+    pub fire_radius: Fx,
+    pub fire_seconds: Fx,
+    pub burn_damage: u32,
+    pub burn_period: Fx,
+    pub burn_linger: Fx,
 }
 
 /// One part of a building, and the materials it takes to install.
@@ -648,6 +673,17 @@ impl Scenario {
                         && (1..=1000).contains(&d.damage)
                         && within(d.projectile_speed, Fx::HALF, Fx::from_int(100))
                         && within(d.muzzle_height, Fx::ZERO, Fx::from_int(5))
+                        && d.fireball.as_ref().is_none_or(|b| {
+                            within(b.cooldown, f(1, 10), Fx::from_int(3600))
+                                && within(b.speed, Fx::HALF, Fx::from_int(100))
+                                && (0..=1000).contains(&b.damage)
+                                && within(b.radius, Fx::ZERO, Fx::from_int(8))
+                                && within(b.fire_radius, f(1, 10), Fx::from_int(8))
+                                && within(b.fire_seconds, f(1, 10), Fx::from_int(600))
+                                && (1..=1000).contains(&b.burn_damage)
+                                && within(b.burn_period, f(1, 10), Fx::from_int(60))
+                                && within(b.burn_linger, Fx::ZERO, Fx::from_int(600))
+                        })
                 }
                 _ => false,
             };
@@ -779,6 +815,11 @@ mod tests {
         assert_eq!((defence.ammo.as_str(), defence.ammo_cap, defence.damage), ("stone", 10, 1));
         assert_eq!((defence.range, defence.period, defence.projectile_speed), ("3.8".parse().unwrap(), "0.7".parse().unwrap(), Fx::from_int(8)));
         assert_eq!(needs(ballista), [vec![("wood", 2)], vec![("wood", 2), ("stone", 2)]]);
+        // And its fireball (B4): every 20 s, a fire of radius 1.5 m for 6 s
+        // that burns 1 a second until 3 s after an enemy leaves it.
+        let fireball = defence.fireball.as_ref().unwrap();
+        assert_eq!((fireball.cooldown, fireball.damage, fireball.fire_radius, fireball.fire_seconds), (Fx::from_int(20), 2, "1.5".parse().unwrap(), Fx::from_int(6)));
+        assert_eq!((fireball.burn_damage, fireball.burn_period, fireball.burn_linger), (1, Fx::ONE, Fx::from_int(3)));
         assert_eq!(tree.buildings[0].kind, "wood_gatherer");
         // The other scenes have none of it.
         let forest = Scenario::parse(FOREST).unwrap();
@@ -800,6 +841,8 @@ mod tests {
         assert!(invalid(|s| s.building_kinds[2].defence.as_mut().unwrap().ammo = "unobtainium".into()));
         assert!(invalid(|s| s.building_kinds[2].defence.as_mut().unwrap().ammo_cap = 0));
         assert!(invalid(|s| s.building_kinds[2].defence.as_mut().unwrap().period = Fx::ZERO));
+        assert!(invalid(|s| s.building_kinds[2].defence.as_mut().unwrap().fireball.as_mut().unwrap().burn_period = Fx::ZERO));
+        assert!(invalid(|s| s.building_kinds[2].defence.as_mut().unwrap().fireball.as_mut().unwrap().cooldown = Fx::ZERO));
         assert!(invalid(|s| s.building_kinds[0].parts[1].materials[1].item = "unobtainium".into()));
         assert!(invalid(|s| s.building_kinds[0].parts.clear()));
         assert!(invalid(|s| s.building_kinds[0].parts[0].materials.clear()));

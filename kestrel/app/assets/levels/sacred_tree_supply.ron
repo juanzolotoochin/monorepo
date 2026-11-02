@@ -31,8 +31,12 @@
 // A ballista shoots the nearest enemy while someone mans it and it has
 // stone, one stone a shot; its numbers are the forest's Woodland Ballista's.
 // It produces nothing: its pile in front is its ammo, only delivered to.
+// A possessing elder throws a fireball with the Burst key: no stone, every
+// 20 s; it sets the ground alight, and enemies in the fire burn.
 (id: "ballista", label: "BALLISTA", skin: "turret", radius: 0.7,
- defence: (ammo: "stone", ammo_cap: 10, range: 3.8, period: 0.7, damage: 1, projectile_speed: 8.0), parts: [
+ defence: (ammo: "stone", ammo_cap: 10, range: 3.8, period: 0.7, damage: 1, projectile_speed: 8.0,
+  fireball: Some((cooldown: 20.0, speed: 6.0, damage: 2, radius: 0.8, fire_radius: 1.5, fire_seconds: 6.0,
+   burn_damage: 1, burn_period: 1.0, burn_linger: 3.0))), parts: [
 (id: "foundation", label: "FOUNDATION", materials: [(item: "wood", units: 2)]),
 (id: "mechanism", label: "MECHANISM", materials: [(item: "wood", units: 2), (item: "stone", units: 2)])
 ])
