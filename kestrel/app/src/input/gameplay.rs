@@ -21,11 +21,19 @@ use crate::lockstep::{PlayerControl, SessionService, WorldMirror};
 use crate::scene_view::SceneView;
 
 /// The camera's isometric basis, shared by keys and stick: input x is
-/// screen right, input y screen up.
-pub fn camera_relative(input: Vec2) -> Vec3 {
-    let right = Vec3::new(1.0, 0.0, -1.0).normalize();
-    let up = Vec3::new(-1.0, 0.0, -1.0).normalize();
+/// screen right, input y screen up, with the view turned `yaw` radians
+/// counter-clockwise (seen from above) from the default (`town::ViewTurn`).
+pub fn camera_relative(input: Vec2, yaw: f32) -> Vec3 {
+    let turn = Quat::from_rotation_y(yaw);
+    let right = turn * Vec3::new(1.0, 0.0, -1.0).normalize();
+    let up = turn * Vec3::new(-1.0, 0.0, -1.0).normalize();
     right * input.x + up * input.y
+}
+
+/// The view's yaw now, for [`camera_relative`]: the town's turn, 0
+/// elsewhere. Mid-turn it is the eased yaw the camera shows.
+pub fn view_yaw(world: &World) -> f32 {
+    world.get_resource::<Dispatcher>().map_or(0.0, |d| d.town.view.yaw())
 }
 
 /// A transfer waiting on the item chooser.
@@ -172,6 +180,8 @@ pub fn dispatch(world: &mut World) {
     // of the controller's nearby targets.
     let town = super::town::active(world);
     if town {
+        let dt = world.resource::<Time>().delta_secs();
+        world.resource_mut::<Dispatcher>().town.view.advance(dt);
         super::town::refresh(world);
     } else {
         world.resource_mut::<Dispatcher>().town = default();
@@ -182,6 +192,10 @@ pub fn dispatch(world: &mut World) {
     update_drop_preview(world);
     if frame.blocked {
         return;
+    }
+    // Z and C, or the D-pad's left and right, turn the town's view.
+    if town {
+        world.resource_mut::<Dispatcher>().town.view.turn(frame.gameplay.turn);
     }
     if frame.gameplay.repair_pressed && world.resource::<SessionService>().settlement()
         .and_then(|settlement| settlement.agents.get(agent as usize))
@@ -295,7 +309,7 @@ fn aim(world: &mut World, stick: Option<Vec2>) {
     let tick = world.resource::<WorldMirror>().tick;
     let waiting = world.resource::<Dispatcher>().aim_after.is_some_and(|after| tick <= after);
     if let Some(stick) = stick {
-        let direction = crate::navigation::flat(camera_relative(stick)).normalize_or_zero();
+        let direction = crate::navigation::flat(camera_relative(stick, view_yaw(world))).normalize_or_zero();
         let mut dispatcher = world.resource_mut::<Dispatcher>();
         dispatcher.aim = Some(direction);
         dispatcher.aim_after = None;
@@ -343,7 +357,7 @@ fn respawn(world: &mut World, agent: u16) {
 /// this player's own directional walk; the other device's neutral never
 /// does. Manual movement also cancels a depot transfer, from any binding.
 fn movement(world: &mut World, gameplay: &super::Gameplay) {
-    let direction = camera_relative(gameplay.movement);
+    let direction = camera_relative(gameplay.movement, view_yaw(world));
     let walking = world.resource::<PlayerControl>().walking_direction();
     if gameplay.movement != Vec2::ZERO || walking {
         world.resource_scope(|world, mut control: Mut<PlayerControl>| {

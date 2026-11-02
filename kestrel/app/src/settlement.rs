@@ -1861,7 +1861,7 @@ fn town_interact(world: &mut World, state: &mut Settlement, sim: &Simulation, pl
             let center = center + Vec3::Y * (ground(world, center) + 0.6);
             for (i, option) in options.iter().enumerate() {
                 let angle = crate::input::radial_angle(i, options.len());
-                let at = center + crate::input::gameplay::camera_relative(Vec2::new(angle.cos(), angle.sin())) * 1.1;
+                let at = center + crate::input::gameplay::camera_relative(Vec2::new(angle.cos(), angle.sin()), crate::input::gameplay::view_yaw(world)) * 1.1;
                 let (text, tint) = if i == focus { (format!("[ {option} ]"), prompt) } else { (option.clone(), Color::srgba(0.85, 0.85, 0.7, 0.75)) };
                 let key = format!("interact/menu/{i}");
                 town_caption(world, state, &key, at, text.clone(), tint, text);

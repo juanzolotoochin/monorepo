@@ -51,6 +51,14 @@
 //! the ballista has reloaded, so holding repeats at its period. A press on
 //! an empty ballista says "No ammo: bring stone". The elder's own weapon
 //! never swings there (`lockstep::attack_input` stands down).
+//!
+//! Turning the view: Z and controller D-pad left turn the camera a quarter
+//! turn counter-clockwise around its target, as seen from above; C and
+//! D-pad right clockwise ([`ViewTurn`]). It eases over [`TURN_SECONDS`],
+//! stays orthographic at the same zoom and height, starts at the default
+//! angle with every world and is never saved. View only: the sim never
+//! knows, and the movement keys, the stick, the reticle and the radial
+//! menu stay screen-relative (`gameplay::camera_relative`).
 
 use bevy::prelude::*;
 use fx::{Fx, FxVec2};
@@ -122,6 +130,71 @@ pub struct Town {
     sent_aim: Option<FxVec2>,
     /// The confirmed tick the last shot went out on: one `Attack` a tick.
     fired_on: Option<u64>,
+    /// The camera's turn around its target.
+    pub view: ViewTurn,
+}
+
+/// How long a quarter turn of the view takes, in seconds.
+pub const TURN_SECONDS: f32 = 0.25;
+
+/// The town camera's turn around its target, in quarter turns: positive is
+/// counter-clockwise seen from above (the camera orbits that way, so the
+/// scene seems to turn clockwise on screen). View only.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ViewTurn {
+    /// The quarter turns it is at or going to.
+    quarter: i32,
+    /// Where the turn under way started, in radians.
+    from: f32,
+    /// How much of the turn under way is left, 1 to 0 (0 when settled).
+    left: f32,
+    /// The yaw now, in radians.
+    yaw: f32,
+}
+
+impl ViewTurn {
+    /// Starts another quarter turn (`step` +1 counter-clockwise, -1
+    /// clockwise) from where the view is now, mid-turn too.
+    pub fn turn(&mut self, step: i32) {
+        if step == 0 {
+            return;
+        }
+        self.from = self.yaw;
+        self.quarter += step;
+        self.left = 1.0;
+    }
+
+    /// Eases the turn on by `dt` seconds.
+    pub fn advance(&mut self, dt: f32) {
+        if self.settled() {
+            return;
+        }
+        self.left = (self.left - dt / TURN_SECONDS).max(0.0);
+        let to = self.quarter as f32 * std::f32::consts::FRAC_PI_2;
+        let t = 1.0 - self.left;
+        // Smoothstep: it starts and stops gently.
+        self.yaw = self.from + (to - self.from) * t * t * (3.0 - 2.0 * t);
+        if self.left == 0.0 {
+            self.quarter = self.quarter.rem_euclid(4);
+            self.yaw = self.quarter as f32 * std::f32::consts::FRAC_PI_2;
+        }
+    }
+
+    /// The camera's yaw around its target now: radians counter-clockwise
+    /// seen from above, from the default view.
+    pub fn yaw(&self) -> f32 {
+        self.yaw
+    }
+
+    /// The quarter turns it is at or going to, 0 to 3.
+    pub fn quarter(&self) -> i32 {
+        self.quarter.rem_euclid(4)
+    }
+
+    /// No turn is under way.
+    pub fn settled(&self) -> bool {
+        self.left <= 0.0
+    }
 }
 
 /// A possessed ballista's reticle (B3).
@@ -237,6 +310,7 @@ pub fn snapshot(world: &World) -> serde_json::Value {
         "build_menu": town.build_menu.filter(|_| open).map(|kinds| kinds.into_iter().map(kind_id).collect::<Vec<_>>()),
         "placing": town.placing.and_then(kind_id),
         "ghost": ghost,
+        "view": town.view.quarter(),
     })
 }
 
@@ -410,7 +484,7 @@ pub fn aim_reticle(world: &mut World, cursor: Option<Vec3>, stick: Option<Vec2>,
     let wanted = match (cursor, stick) {
         (Some(point), _) => service.to_sim(point) - center,
         (None, Some(stick)) => {
-            let step = super::gameplay::camera_relative(stick) * RETICLE_SPEED * dt;
+            let step = super::gameplay::camera_relative(stick, super::gameplay::view_yaw(world)) * RETICLE_SPEED * dt;
             start + FxVec2::new(Fx::quantize(step.x), Fx::quantize(step.z))
         }
         (None, None) => start,

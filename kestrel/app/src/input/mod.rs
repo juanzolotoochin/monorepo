@@ -173,6 +173,9 @@ pub struct Gameplay {
     pub edges: Vec<Edge>,
     /// View zoom change (positive zooms out).
     pub zoom: f32,
+    /// In a town, a view turn in quarter turns: +1 counter-clockwise seen
+    /// from above (Z, D-pad left), -1 clockwise (C, D-pad right).
+    pub turn: i32,
 }
 
 /// This frame's resolved input.
@@ -722,8 +725,11 @@ impl InputService {
         )
         .normalize_or_zero();
         let mut edges = Vec::new();
+        // In a town Z and C turn the view instead of choosing a weapon.
+        let town = self.scene.town;
+        let turn = if town { i32::from(keys.just_pressed(KeyCode::KeyZ)) - i32::from(keys.just_pressed(KeyCode::KeyC)) } else { 0 };
         for (key, weapon) in [(KeyCode::KeyZ, Weapon::Sword), (KeyCode::KeyX, Weapon::Spear), (KeyCode::KeyC, Weapon::Bow), (KeyCode::KeyV, Weapon::ArcCoil)] {
-            if keys.just_pressed(key) {
+            if keys.just_pressed(key) && !(town && matches!(key, KeyCode::KeyZ | KeyCode::KeyC)) {
                 edges.push(Edge::SelectWeapon(weapon));
             }
         }
@@ -784,6 +790,7 @@ impl InputService {
             aim: None,
             edges,
             zoom: 0.0,
+            turn,
         }
     }
 
@@ -810,8 +817,13 @@ impl InputService {
         press(Control::Button(Button::West), if self.scene.town { Edge::Build } else { Edge::Collect });
         press(Control::Button(Button::East), if self.scene.town && self.placing { Edge::CancelBuild } else { Edge::Drop });
         press(Control::Button(Button::North), Edge::NextWeapon);
-        press(Control::Button(Button::DPadLeft), Edge::TargetPrevious);
-        press(Control::Button(Button::DPadRight), Edge::TargetNext);
+        // A town has one target, the sim's, so nothing to cycle: there the
+        // D-pad's left and right turn the view.
+        let town = self.scene.town;
+        if !town {
+            press(Control::Button(Button::DPadLeft), Edge::TargetPrevious);
+            press(Control::Button(Button::DPadRight), Edge::TargetNext);
+        }
         press(Control::Button(Button::LeftStick), Edge::Board);
         if pad.released(Button::RightBumper) && !ballista {
             edges.push(Edge::LiftRelease);
@@ -834,6 +846,7 @@ impl InputService {
             aim: pad.aim,
             edges,
             zoom,
+            turn: if town { i32::from(pad.pressed(Button::DPadLeft)) - i32::from(pad.pressed(Button::DPadRight)) } else { 0 },
         }
     }
 }
