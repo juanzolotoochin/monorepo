@@ -26,4 +26,4 @@ arena tick 1199 cf93ffda5f242525 behaviour 6d93c21810d666dd
 arena tick 1349 b19a130dfe5507a7 behaviour 76deacde9e3e410f
 arena tick 1499 8013bf47d23b88c6 behaviour c8c6e08cc2533686
 arena tick 1649 968e28e7954c3778 behaviour e9be09909faf62b8
-arena tick 1799 27c1fe9422146906 behaviour 8bac24fae07f10de
+arena tick 1799 d7d97797f8076715 behaviour 8bac24fae07f10de
