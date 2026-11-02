@@ -1181,8 +1181,21 @@ pub fn tick(world: &mut World) {
             let base = mirror.current.as_ref().map_or(sim.health, |current| current.base_health);
             let elder = mirror.player().and_then(|id| mirror.current.as_ref()?.agents.get(id as usize)).map(|agent| (agent.body.health, agent.body.max_health));
             let elder = elder.filter(|&(_, max)| max > 0).map_or_else(String::new, |(health, max)| format!("  ELDER {health}/{max}"));
+            // The waves (M5.6): how many ghouls are out, or with none out,
+            // how long until the next comes; nothing once the last came.
+            let waves = mirror.current.as_ref().map_or_else(String::new, |current| {
+                let next = current.waves.iter().filter(|w| w.spawned < w.count).map(|w| w.first + u64::from(w.spawned) * w.every).min();
+                match (current.threats.len(), next) {
+                    (0, Some(next)) => {
+                        let seconds = ((next as f32 - sim.time()) / HZ).ceil().max(0.0) as u32;
+                        format!("  /  NEXT WAVE {}:{:02}", seconds / 60, seconds % 60)
+                    }
+                    (0, None) => String::new(),
+                    (n, _) => format!("  /  GHOULS {n}"),
+                }
+            });
             format!(
-                "SACRED TREE {}/{base}{elder}  {}  /  PACK {}/{} {}{}   [P] pause",
+                "SACRED TREE {}/{base}{elder}{waves}  {}  /  PACK {}/{} {}{}   [P] pause",
                 sim.health,
                 items,
                 mine.map_or(0, |a| a.cargo.total()),
@@ -1422,6 +1435,7 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
     let ground = |world: &World, p: Vec3| crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, p).unwrap_or(0.);
     let seconds = sim.time() / HZ;
     let burst = burst_indicator(world);
+    let leave = leave_prompt(world);
     for (i, b) in sim.buildings.iter().enumerate() {
         let kind = sim.config().building_kinds.iter().find(|k| k.id == b.kind).expect("a scenario building kind");
         let shape = state.building_shapes[&b.kind];
@@ -1538,6 +1552,11 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
         // A damaged building's card says what health it has left (B8).
         let status = if b.health < b.max_health { format!("{status}\nHP {}/{}", b.health, b.max_health) } else { status };
         let detail = format!("{detail}\nHealth: {}/{}", b.health, b.max_health);
+        // The building the local elder possesses says how to leave it.
+        let status = match leave.as_ref().filter(|(b, _)| *b == i) {
+            Some((_, prompt)) => format!("{status}\n{prompt}"),
+            None => status,
+        };
         // A site's card hangs where a built one's does, clear of the
         // interact prompt over its pile.
         let card = center + Vec3::Y * (shape.height + 0.6);
@@ -1768,6 +1787,26 @@ fn burst_indicator(world: &World) -> Option<(usize, String)> {
     Some((building as usize, text))
 }
 
+/// While the local elder possesses a building and its slot is the
+/// interact target (leaving it): the building's index and the prompt with
+/// its key ("E  LEAVE"). The building's card says it as its last line,
+/// instead of a prompt over the slot, which hung over the card's lower
+/// lines (its Burst or fireball cooldown).
+fn leave_prompt(world: &World) -> Option<(usize, String)> {
+    use crate::input::{gameplay::Dispatcher, InputService};
+    let service = world.get_resource::<crate::lockstep::SessionService>()?;
+    let building = service.settlement()?.seat(service.player()? as usize)?.building()?;
+    let highlight = world.get_resource::<Dispatcher>()?.town.highlight.clone()?;
+    if highlight.target != sim::settlement::InteractTarget::Slot(building) {
+        return None;
+    }
+    let key = match world.get_resource::<InputService>().map(|i| i.frame().owner) {
+        Some(crate::input::Device::Gamepad) => "A",
+        _ => "E",
+    };
+    Some((building as usize, format!("{key}  {}", highlight.prompt)))
+}
+
 /// The controls help line in a town: the town's keys, or while the elder
 /// possesses a building, the keys that work there (leaving and Burst, or
 /// in a ballista firing).
@@ -1805,7 +1844,9 @@ fn town_interact(world: &mut World, state: &mut Settlement, sim: &Simulation, pl
         Some(Panel::Radial { options, focus, .. }) => Some((options.clone(), *focus)),
         _ => None,
     };
-    if let Some(h) = town.highlight.as_ref().filter(|_| menu.is_none()) {
+    // Leaving a possessed building is said on its card (`leave_prompt`).
+    let leaving = leave_prompt(world).is_some();
+    if let Some(h) = town.highlight.as_ref().filter(|_| menu.is_none() && !leaving) {
         // Above the pile's own count or label, which hang lower.
         let at = h.position + Vec3::Y * (ground(world, h.position) + 1.3);
         let text = format!("{key}  {}", h.prompt);
