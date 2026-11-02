@@ -19,6 +19,7 @@ mod agent;
 pub mod avatar;
 pub mod buildings;
 pub mod combat;
+pub mod fire;
 mod economy;
 mod haulers;
 pub mod interact;
@@ -46,7 +47,8 @@ use crate::terrain::{Disc, Terrain};
 pub use combat::{CombatMetrics, DefenderState, Event, Impact, OnMiss, Pinned, Prediction, Projectile, SpentProjectile, Threat, TossEnd, WaveState};
 pub use agent::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
 pub use avatar::Seat;
-pub use buildings::{BuildingIx, BuildingKind, BuildingKindIx, BuildingState, BurstRefusal, Defence, FireRefusal, Occupant, PlacementRefusal, Slot, Stage, Turret};
+pub use fire::{Burn, BurnDef, FireballDef, FirePatch, Fireball};
+pub use buildings::{Ability, BuildingIx, BuildingKind, BuildingKindIx, BuildingState, BurstRefusal, Defence, FireRefusal, Occupant, PlacementRefusal, Slot, Stage, Turret};
 pub use haulers::{HaulerState, Phase};
 pub use interact::{InteractTarget, Interaction};
 pub use inventory::{Inventory, Kinds};
@@ -255,6 +257,12 @@ pub struct Settlement {
     /// Append-only: an index is stable for the world's life.
     #[serde(default)]
     pub buildings: Vec<BuildingState>,
+    /// Possessed ballistas' fireballs in flight, by ID (B4).
+    #[serde(default)]
+    pub fireballs: Vec<Fireball>,
+    /// The fires they left, by ID.
+    #[serde(default)]
+    pub fires: Vec<FirePatch>,
 }
 
 /// A vehicle a scene parks, in arena coordinates.
@@ -492,6 +500,8 @@ impl Settlement {
             projectiles: Vec::new(),
             spent: Vec::new(),
             pinned: Vec::new(),
+            fireballs: Vec::new(),
+            fires: Vec::new(),
             combat: CombatMetrics::default(),
             events: Vec::new(),
             spawn: FxVec2::ZERO,
@@ -1017,6 +1027,12 @@ impl Settlement {
             let buildings: Vec<_> = self.buildings.iter().map(|b| (b.kind, b.position, &b.stage, b.slot, b.progress, &b.output.counts)).collect();
             bytes.extend(postcard::to_allocvec(&buildings).expect("buildings encode"));
         }
+        // Fire only where there is some, so scenes without it hash as they
+        // did before it.
+        let burns: Vec<_> = self.threats.iter().filter_map(|t| t.burn.map(|b| (t.id, b))).collect();
+        if !self.fireballs.is_empty() || !self.fires.is_empty() || !burns.is_empty() {
+            bytes.extend(postcard::to_allocvec(&(&self.fireballs, &self.fires, &burns)).expect("fire encodes"));
+        }
         // And sprites' jobs and plans only where there are sprites.
         let sprites: Vec<_> = self.agents.iter().filter_map(AgentState::sprite).map(|s| (s.job, &s.plan, s.step, s.holds)).collect();
         if !sprites.is_empty() {
@@ -1049,6 +1065,8 @@ mod bundle_tests;
 mod burst_tests;
 #[cfg(test)]
 mod construction_tests;
+#[cfg(test)]
+mod fire_tests;
 #[cfg(test)]
 mod ground_pile_tests;
 #[cfg(test)]

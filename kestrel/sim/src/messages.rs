@@ -439,6 +439,10 @@ impl StateHash for BurstRefused {
             }
             BurstRefusal::OutputFull => h.write_u64(2),
             BurstRefusal::NoBurst => h.write_u64(3),
+            BurstRefusal::FireballCooling { ticks } => {
+                h.write_u64(4);
+                h.write(&ticks);
+            }
         }
     }
 }

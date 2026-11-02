@@ -921,6 +921,7 @@ impl World {
             for message in messages.building_fire {
                 settlement.building_fire(tick, message);
             }
+            settlement.burn(tick);
             settlement.claim_slots(messages.claim_slot);
             settlement.enter_slots(messages.enter_slot);
         }

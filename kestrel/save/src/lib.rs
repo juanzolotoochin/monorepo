@@ -89,7 +89,12 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///     optional, `BuildingKind::defence`), a building keeps its turret's
 ///     aim and next shot (`BuildingState::turret`), and pending messages
 ///     have a `building_fire` queue.
-pub const FORMAT_VERSION: u32 = 30;
+/// 31: a ballista kind may have a fireball (`Defence::fireball`), an avatar
+///     keeps the tick its next fireball is ready on
+///     (`AvatarState::fireball_ready`), a threat keeps its burn
+///     (`Threat::burn`), and the settlement keeps fireballs in flight and
+///     fire patches (`Settlement::fireballs`, `Settlement::fires`).
+pub const FORMAT_VERSION: u32 = 31;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

@@ -44,6 +44,7 @@ use super::sprites::Hold;
 use super::{AgentIx, DepotIx, Event, Inventory, InventoryRef, ItemIx, Kinds, Settlement};
 use super::avatar::Seat;
 use super::combat::Launcher;
+use super::fire::{BurnDef, FireballDef};
 use crate::messages::{Burst, BuildingFire, ElderFire, Install, Messages, PlaceBlueprint};
 use crate::nav;
 use crate::terrain::{Disc, Terrain, CLEARANCE_MARGIN};
@@ -106,6 +107,8 @@ pub struct Defence {
     pub speed: Fx,
     pub muzzle_height: Fx,
     pub projectile: scenario::ProjectileKind,
+    /// What a possessing elder's Burst key throws (B4), if anything.
+    pub fireball: Option<FireballDef>,
 }
 
 impl BuildingKind {
@@ -321,6 +324,15 @@ pub(super) fn kinds(scenario: &Scenario, item: impl Fn(&str) -> ItemIx) -> Vec<B
                 speed: d.projectile_speed,
                 muzzle_height: d.muzzle_height,
                 projectile: d.projectile,
+                fireball: d.fireball.as_ref().map(|f| FireballDef {
+                    cooldown: scenario::ticks(f.cooldown),
+                    speed: f.speed,
+                    damage: f.damage,
+                    radius: f.radius,
+                    fire_radius: f.fire_radius,
+                    fire_ticks: scenario::ticks(f.fire_seconds),
+                    burn: BurnDef { damage: f.burn_damage, period: scenario::ticks(f.burn_period), linger: scenario::ticks(f.burn_linger) },
+                }),
             }),
         })
         .collect()
@@ -504,8 +516,20 @@ pub enum BurstRefusal {
     Cooling { ticks: u64 },
     /// The output already holds its possessed cap.
     OutputFull,
-    /// The building possessed has no Burst (a ballista).
+    /// The building possessed has no Burst (a ballista with no fireball).
     NoBurst,
+    /// The elder's last fireball is still cooling down, for `ticks` more
+    /// (B4): the Burst key in a ballista throws one.
+    FireballCooling { ticks: u64 },
+}
+
+/// What the Burst key does now (`Settlement::burst_check`): in a gatherer,
+/// a Burst of `units`; in a ballista, a fireball that lands at `to`
+/// (world tiles), the reticle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ability {
+    Burst { units: u32 },
+    Fireball { to: FxVec2 },
 }
 
 impl BurstRefusal {
@@ -517,6 +541,7 @@ impl BurstRefusal {
             BurstRefusal::Cooling { ticks } => format!("Burst ready in {} s", ticks.div_ceil(content::TICKS_PER_SECOND as u64)),
             BurstRefusal::OutputFull => "Output full".to_string(),
             BurstRefusal::NoBurst => "This building has no Burst".to_string(),
+            BurstRefusal::FireballCooling { ticks } => format!("Fireball ready in {} s", ticks.div_ceil(content::TICKS_PER_SECOND as u64)),
         }
     }
 }
@@ -565,24 +590,36 @@ fn fire_plan<'a>(agent: AgentIx, seat: Option<Seat>, tick: u64, buildings: &[Bui
     Ok((ix, defence))
 }
 
-/// What a Burst would do (`Settlement::bursts`): the building `seat`
-/// possesses and the units that fit in its output, or why there is none.
-/// A cooldown running reads before a full output.
-fn burst_plan(seat: Option<Seat>, ready: u64, tick: u64, buildings: &[BuildingState], kinds: &[BuildingKind]) -> Result<(BuildingIx, u32), BurstRefusal> {
-    let Some((b, building)) = seat.and_then(Seat::building).and_then(|b| Some((b, buildings.get(b as usize)?))).filter(|(_, building)| building.built()) else {
+/// What the Burst key would do (`Settlement::bursts`): the building
+/// `avatar` possesses, and the units that fit in its output, or, in a
+/// ballista with a fireball (B4), where the fireball lands: the reticle
+/// (`aim`, cut to range; half the range straight ahead before any aim). Or
+/// why there is none. A cooldown running reads before a full output; a
+/// Burst and a fireball each have their own.
+fn burst_plan(avatar: &super::avatar::AvatarState, tick: u64, buildings: &[BuildingState], kinds: &[BuildingKind]) -> Result<(BuildingIx, Ability), BurstRefusal> {
+    let Some((b, building)) = avatar.seat.and_then(Seat::building).and_then(|b| Some((b, buildings.get(b as usize)?))).filter(|(_, building)| building.built()) else {
         return Err(BurstRefusal::NotPossessing);
     };
+    let kind = &kinds[building.kind as usize];
+    if let Some(defence) = kind.defence.as_ref().filter(|d| d.fireball.is_some()) {
+        if tick < avatar.fireball_ready {
+            return Err(BurstRefusal::FireballCooling { ticks: avatar.fireball_ready - tick });
+        }
+        let ahead = FxVec2::new(Fx::ZERO, defence.range.div_int(2));
+        let offset = avatar.aim.and_then(|aim| kind.reticle(aim)).unwrap_or(ahead);
+        return Ok((b, Ability::Fireball { to: building.position + offset }));
+    }
+    let ready = avatar.burst_ready;
     if tick < ready {
         return Err(BurstRefusal::Cooling { ticks: ready - tick });
     }
-    let kind = &kinds[building.kind as usize];
     if kind.product.is_none() || kind.burst == 0 {
         return Err(BurstRefusal::NoBurst);
     }
     let held = building.output.total() + building.output.total_in();
     match kind.burst.min(kind.possessed_cap.saturating_sub(held)) {
         0 => Err(BurstRefusal::OutputFull),
-        units => Ok((b, units)),
+        units => Ok((b, Ability::Burst { units })),
     }
 }
 
@@ -773,12 +810,19 @@ impl Settlement {
     /// building, its cooldown over and the output not at its possessed cap,
     /// puts the kind's Burst units in the output (as many as fit; the
     /// balances count them as produced) and starts its cooldown. Otherwise
-    /// the view hears why, and the cooldown doesn't start.
+    /// the view hears why, and the cooldown doesn't start. In a ballista
+    /// with a fireball, its own cooldown over, it throws the fireball at the
+    /// reticle instead (B4, `throw_fireball`).
     pub(super) fn bursts(&mut self, messages: Vec<Burst>, tick: u64) {
         for Burst { agent } in messages {
             let Some(avatar) = self.agents.get(agent as usize).and_then(|a| a.avatar()) else { continue };
-            match burst_plan(avatar.seat, avatar.burst_ready, tick, &self.buildings, &self.building_kinds) {
-                Ok((building, units)) => {
+            match burst_plan(avatar, tick, &self.buildings, &self.building_kinds) {
+                Ok((building, Ability::Fireball { to })) => {
+                    let defence = self.building_kind(building).defence.as_ref().expect("a ballista");
+                    let (def, height) = (defence.fireball.expect("a fireball"), defence.muzzle_height);
+                    self.throw_fireball(tick, agent, building, to, def, height);
+                }
+                Ok((building, Ability::Burst { units })) => {
                     let kind = &self.building_kinds[self.buildings[building as usize].kind as usize];
                     let (product, cooldown) = (kind.product.expect("only a gatherer Bursts"), kind.burst_cooldown);
                     let added = self.buildings[building as usize].output.add(product, units);
@@ -794,12 +838,12 @@ impl Settlement {
         }
     }
 
-    /// Whether `agent` could Burst on `tick`, and how many units it would
-    /// add, as stage 5 checks it (`bursts`): for the view's ready
-    /// indicator and the control verb.
-    pub fn burst_check(&self, agent: usize, tick: u64) -> Result<u32, BurstRefusal> {
+    /// What `agent`'s Burst key would do on `tick` (a Burst's units, or a
+    /// fireball and where it lands), as stage 5 checks it (`bursts`): for
+    /// the view's ready indicator and the control verb.
+    pub fn burst_check(&self, agent: usize, tick: u64) -> Result<Ability, BurstRefusal> {
         let Some(avatar) = self.agents.get(agent).and_then(|a| a.avatar()) else { return Err(BurstRefusal::NotPossessing) };
-        burst_plan(avatar.seat, avatar.burst_ready, tick, &self.buildings, &self.building_kinds).map(|(_, units)| units)
+        burst_plan(avatar, tick, &self.buildings, &self.building_kinds).map(|(_, ability)| ability)
     }
 
     /// Stage 3: every ballista that can shoot now (`ready_to_shoot`) aims at

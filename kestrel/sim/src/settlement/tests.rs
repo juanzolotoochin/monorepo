@@ -424,6 +424,7 @@ fn set_characters_rejects_an_unknown_threat_character() {
         knockback: FxVec2::ZERO,
         windup: None,
         ready_at: 0,
+        burn: None,
     };
     s.threats.push(threat);
     let error = s.set_characters(&characters).unwrap_err();

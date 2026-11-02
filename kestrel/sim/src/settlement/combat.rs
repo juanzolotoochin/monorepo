@@ -117,6 +117,9 @@ pub struct Threat {
     /// The first tick a new windup can start: the tick after its last swing
     /// landed plus the attack's cooldown.
     pub ready_at: u64,
+    /// Burning, from standing in a fire (B4, `fire`).
+    #[serde(default)]
+    pub burn: Option<super::fire::Burn>,
 }
 
 /// A threat's swing on its way (`Threat::windup`).
@@ -225,6 +228,8 @@ pub enum Impact {
     Laser,
     BoltImpale,
     BoltPierce,
+    /// A fireball's landing or a burn (`fire`).
+    Fire,
 }
 
 /// What happened this tick, for sounds and effects. Not part of the state.
@@ -277,6 +282,11 @@ pub enum Event {
     BurstRefused { agent: AgentIx, reason: super::buildings::BurstRefusal },
     /// A ballista building fired, as a defender's `Shot`.
     BuildingShot { building: super::BuildingIx },
+    /// Elder `agent`, possessing ballista `building`, threw a fireball; it
+    /// lands at `to` on tick `arrival` (B4).
+    FireballThrown { agent: AgentIx, building: super::BuildingIx, to: FxVec2, arrival: u64 },
+    /// A fireball came down at `position` and set the ground alight.
+    FireballLanded { position: FxVec2 },
 }
 
 /// What a strike reaches (`Settlement::strike_targets`), as its `Strike`
@@ -1089,6 +1099,7 @@ impl Settlement {
                 knockback: FxVec2::ZERO,
                 windup: None,
                 ready_at: 0,
+                burn: None,
             });
             self.waves[w].spawned += 1;
         }

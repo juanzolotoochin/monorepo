@@ -154,6 +154,10 @@ pub struct AvatarState {
     /// outlasts leaving a seat and a respawn, as `attack_ready` does.
     #[serde(default)]
     pub burst_ready: u64,
+    /// A possessed ballista's fireball is ready again on this tick (B4):
+    /// the elder's, as `burst_ready` is, and apart from it.
+    #[serde(default)]
+    pub fireball_ready: u64,
     /// Dead until this tick, then back at home (`Body::health`).
     #[serde(default)]
     pub respawn_at: u64,
@@ -1299,7 +1303,7 @@ pub(super) fn finish_dig(a: &mut AgentState, tick: u64) -> Option<Dig> {
 }
 
 /// Puts the avatar at the spawn point with a fresh state. The player's
-/// owner, name and weapon and Burst cooldowns stay. So do the body's speed,
+/// owner, name and weapon, Burst and fireball cooldowns stay. So do the body's speed,
 /// radius and max health. Its motion starts over and its health refills, as
 /// after a death.
 fn respawn(body: &mut Body, avatar: &mut AvatarState, spawn: FxVec2, height: Fx) {
@@ -1314,6 +1318,7 @@ fn respawn(body: &mut Body, avatar: &mut AvatarState, spawn: FxVec2, height: Fx)
         name: std::mem::take(&mut avatar.name),
         attack_ready: avatar.attack_ready,
         burst_ready: avatar.burst_ready,
+        fireball_ready: avatar.fireball_ready,
         height,
         intent: Some(Intent::Stop),
         ..AvatarState::default()

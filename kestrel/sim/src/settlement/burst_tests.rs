@@ -143,7 +143,7 @@ fn a_burst_adds_its_units_at_once_then_waits_out_its_cooldown() {
     assert_eq!(wood(&sim, 0), before + produced(&sim, 0));
     assert_eq!(burst_ready(&sim), ready);
     // Ready on its tick.
-    assert_eq!(settlement(&sim).burst_check(ELDER as usize, sim.world().tick()), Ok(units(&sim, 0)));
+    assert_eq!(settlement(&sim).burst_check(ELDER as usize, sim.world().tick()), Ok(super::Ability::Burst { units: units(&sim, 0) }));
     let units_0 = units(&sim, 0);
     burst_adds(&mut sim, 0, units_0);
     assert_eq!(burst_ready(&sim), ready + cooldown);
