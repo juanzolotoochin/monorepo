@@ -11,6 +11,7 @@ use crate::mover::Mover;
 use crate::settlement::piles::PileJob;
 use crate::settlement::avatar::BundleRefusal;
 use crate::settlement::buildings::BurstRefusal;
+use crate::settlement::chase::{Goal, Quarry};
 use crate::settlement::{CarryJob, InventoryRef};
 
 /// One mover attacks another.
@@ -205,6 +206,28 @@ pub struct BuildingFire {
     pub building: u16,
     pub target: u64,
     pub to: FxVec2,
+}
+
+/// A threat changes what it is after (`SACRED_TREE_BALLISTA.md`, B5,
+/// `Settlement::threat_goals`): it turns on a quarry, or gives up on one and
+/// heads for the tree again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreatGoal {
+    pub threat: u64,
+    pub goal: Goal,
+}
+
+impl StateHash for ThreatGoal {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.threat);
+        match self.goal {
+            Goal::Tree => h.write_u64(0),
+            Goal::Chase(Quarry::Agent(agent)) => {
+                h.write_u64(1);
+                h.write(&agent);
+            }
+        }
+    }
 }
 
 impl StateHash for BuildingFire {
@@ -800,4 +823,7 @@ message_queues! {
     // Ballista buildings' shots (`Settlement::building_fire`), applied after
     // the defenders'.
     building_fire: BuildingFire,
+    // Threats that turn on a quarry or give up on one (`chase`), after the
+    // shots, so a threat killed this tick changes nothing.
+    threat_goal: ThreatGoal,
 }

@@ -184,6 +184,7 @@ impl Arena {
             windup: None,
             ready_at: 0,
             burn: None,
+            goal: Default::default(),
         });
         s.threats.sort_by_key(|t| t.id);
         s.next_id = s.next_id.max(id + 1);
@@ -1170,6 +1171,7 @@ fn brute_radius_follows_its_armor() {
         windup: None,
         ready_at: 0,
         burn: None,
+        goal: Default::default(),
     };
     let def = &s.characters[s.waves[brutes].character as usize];
     let (body, plated) = (def.body.radius, def.health.as_ref().unwrap().armor.as_ref().unwrap().radius);
@@ -1252,7 +1254,7 @@ fn a_wave_must_send_a_follow_route_character() {
 /// fireball, B4).
 #[test]
 fn threat_size_is_pinned() {
-    assert_eq!(std::mem::size_of::<Threat>(), 184);
+    assert_eq!(std::mem::size_of::<Threat>(), 192);
 }
 
 // Ghouls hitting players in passing (GHOUL_ATTACK_HANDOFF.md, task 3). The

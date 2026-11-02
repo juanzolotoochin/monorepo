@@ -94,7 +94,9 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///     (`AvatarState::fireball_ready`), a threat keeps its burn
 ///     (`Threat::burn`), and the settlement keeps fireballs in flight and
 ///     fire patches (`Settlement::fireballs`, `Settlement::fires`).
-pub const FORMAT_VERSION: u32 = 31;
+/// 32: a threat keeps what it is after (`Threat::goal`: the tree or a
+///     quarry it chases), and pending messages have a `threat_goal` queue.
+pub const FORMAT_VERSION: u32 = 32;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

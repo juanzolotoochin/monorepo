@@ -464,6 +464,10 @@ pub struct Threat {
     /// not.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub burning: bool,
+    /// The agent it chases, an elder or a sprite
+    /// (`sim::settlement::Threat::goal`); left out of traces when none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chasing: Option<String>,
 }
 
 /// A possessed ballista's fireball in flight (`sim::settlement::Fireball`).
@@ -859,6 +863,7 @@ impl Simulation {
                     windup,
                     swung,
                     burning: t.burn.is_some(),
+                    chasing: t.goal.agent().map(agent_name),
                 };
                 (t.id, threat)
             })

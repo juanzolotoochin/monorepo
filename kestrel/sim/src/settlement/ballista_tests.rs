@@ -186,6 +186,7 @@ fn threat(sim: &mut Simulation, id: u64, x: f64, y: f64, hp: u32) {
         windup: None,
         ready_at: 0,
         burn: None,
+        goal: Default::default(),
     });
     s.threats.sort_by_key(|t| t.id);
     s.next_id = s.next_id.max(id + 1);

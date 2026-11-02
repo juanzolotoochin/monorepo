@@ -18,6 +18,7 @@ pub mod action;
 mod agent;
 pub mod avatar;
 pub mod buildings;
+pub mod chase;
 pub mod combat;
 pub mod fire;
 mod economy;
@@ -47,6 +48,7 @@ use crate::terrain::{Disc, Terrain};
 pub use combat::{CombatMetrics, DefenderState, Event, Impact, OnMiss, Pinned, Prediction, Projectile, SpentProjectile, Threat, TossEnd, WaveState};
 pub use agent::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
 pub use avatar::Seat;
+pub use chase::{Goal, Quarry};
 pub use fire::{Burn, BurnDef, FireballDef, FirePatch, Fireball};
 pub use buildings::{Ability, BuildingIx, BuildingKind, BuildingKindIx, BuildingState, BurstRefusal, Defence, FireRefusal, Occupant, PlacementRefusal, Slot, Stage, Turret};
 pub use haulers::{HaulerState, Phase};
@@ -897,6 +899,7 @@ impl Settlement {
             self.validate_lab(lab)?;
         }
         self.validate_buildings()?;
+        self.validate_chases()?;
         Ok(())
     }
 
@@ -1033,6 +1036,12 @@ impl Settlement {
         if !self.fireballs.is_empty() || !self.fires.is_empty() || !burns.is_empty() {
             bytes.extend(postcard::to_allocvec(&(&self.fireballs, &self.fires, &burns)).expect("fire encodes"));
         }
+        // Chasers' goals only while any threat chases, so scenes whose
+        // enemies never chase hash as they did before it.
+        let goals: Vec<_> = self.threats.iter().filter(|t| t.goal != Goal::Tree).map(|t| (t.id, t.goal, &t.route)).collect();
+        if !goals.is_empty() {
+            bytes.extend(postcard::to_allocvec(&goals).expect("goals encode"));
+        }
         // And sprites' jobs and plans only where there are sprites.
         let sprites: Vec<_> = self.agents.iter().filter_map(AgentState::sprite).map(|s| (s.job, &s.plan, s.step, s.holds)).collect();
         if !sprites.is_empty() {
@@ -1063,6 +1072,8 @@ mod buildings_tests;
 mod bundle_tests;
 #[cfg(test)]
 mod burst_tests;
+#[cfg(test)]
+mod chase_tests;
 #[cfg(test)]
 mod construction_tests;
 #[cfg(test)]

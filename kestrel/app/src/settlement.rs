@@ -2198,6 +2198,7 @@ mod tests {
             windup: None,
             ready_at: 0,
             burn: None,
+            goal: Default::default(),
         });
         (crate::legacy::Scenario::new(&scenario), s, center)
     }
@@ -2263,6 +2264,7 @@ mod tests {
             windup: windup.map(|(lands, ticks)| crate::legacy::Windup { agent: "player".into(), lands, ticks }),
             swung,
             burning: false,
+            chasing: None,
         }
     }
 

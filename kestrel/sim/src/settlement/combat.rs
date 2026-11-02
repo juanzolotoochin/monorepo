@@ -49,9 +49,10 @@ pub fn combat_roll(tick: u64, entity: u64, stream: u64) -> u64 {
 
 /// The `FollowRoute` brain, a threat's stage 2: a shock freezes it, a
 /// stagger slides it back, a windup plants it, and otherwise it walks its
-/// route at `speed` meters per tick, slower once below `full_hp`. Returns
-/// the meters knockback moved it.
-fn follow_route(t: &mut Threat, speed: Fx, full_hp: u32, tick: u64, terrain: &Terrain) -> Fx {
+/// plan at `speed` meters per tick, slower once below `full_hp`: its route,
+/// or, chasing (`chase`), straight at `quarry`, the point it chases, to
+/// `stop` short of it. Returns the meters knockback moved it.
+fn follow_route(t: &mut Threat, speed: Fx, full_hp: u32, tick: u64, terrain: &Terrain, quarry: Option<FxVec2>, stop: Fx) -> Fx {
     let previous = t.position;
     let recoiling = tick < t.stagger_until;
     let mut knocked = Fx::ZERO;
@@ -68,7 +69,10 @@ fn follow_route(t: &mut Threat, speed: Fx, full_hp: u32, tick: u64, terrain: &Te
         // Planted for the swing; the route resumes after it lands.
     } else {
         let wounded = if t.hp < full_hp { Fx::from_ratio(11, 20) } else { Fx::ONE };
-        super::haulers::move_route(&mut t.position, &mut t.route, speed * wounded);
+        match quarry {
+            Some(to) => super::chase::steer(&mut t.position, to, stop, speed * wounded, terrain),
+            None => super::haulers::move_route(&mut t.position, &mut t.route, speed * wounded),
+        }
     }
     let moved = distance(previous, t.position);
     t.travelled += moved;
@@ -120,12 +124,16 @@ pub struct Threat {
     /// Burning, from standing in a fire (B4, `fire`).
     #[serde(default)]
     pub burn: Option<super::fire::Burn>,
+    /// What it is after: the tree, along `route`, or a quarry it chases
+    /// (B5, `chase`). Always `Tree` for a character without a `chase`.
+    #[serde(default)]
+    pub goal: super::chase::Goal,
 }
 
 /// A threat's swing on its way (`Threat::windup`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Windup {
-    /// The player it swings at.
+    /// The player it swings at, or the sprite it chases.
     pub agent: AgentIx,
     /// The tick the swing lands: stage 3 checks reach then, against where
     /// the player is on that tick.
@@ -487,23 +495,30 @@ impl Settlement {
     }
 
     /// Stage 2: every threat moves itself. Every threat's brain is
-    /// `FollowRoute`, so each runs `follow_route`.
+    /// `FollowRoute`, so each runs `follow_route`. A chaser reads where its
+    /// quarry stood at the end of last tick: agents move after threats in
+    /// this stage, so nothing it reads changes meanwhile.
     pub(crate) fn threats_self_update(&mut self, tick: u64, terrain: &Terrain) {
-        // Speed in meters per tick and full hp, by character: one division
-        // per character rather than per threat. The division is the one waves
-        // used, so speeds stay bit-equal.
+        // Speed in meters per tick, full hp and a chaser's stop, by
+        // character: one division per character rather than per threat. The
+        // division is the one waves used, so speeds stay bit-equal.
         let per_second = Fx::from_int(content::TICKS_PER_SECOND);
-        let tuning: Vec<(Fx, u32)> = self
+        let tuning: Vec<(Fx, u32, Fx)> = self
             .characters
             .iter()
-            .map(|def| (def.movement.walk / per_second, def.health.as_ref().map_or(0, |h| h.hp)))
+            .map(|def| {
+                let stop = def.attack.map_or(Fx::ZERO, |a| super::chase::stop_distance(a.reach));
+                (def.movement.walk / per_second, def.health.as_ref().map_or(0, |h| h.hp), stop)
+            })
             .collect();
+        let agents = &self.agents;
         let knockback_moved: Fx = self
             .threats
             .par_iter_mut()
             .map(|t| {
-                let (speed, full_hp) = tuning[t.character as usize];
-                follow_route(t, speed, full_hp, tick, terrain)
+                let (speed, full_hp, stop) = tuning[t.character as usize];
+                let quarry = t.goal.agent().and_then(|a| agents.get(a as usize)).map(|a| a.body.position);
+                follow_route(t, speed, full_hp, tick, terrain, quarry, stop)
             })
             .reduce(|| Fx::ZERO, |a, b| a + b);
         self.combat.knockback_meters += knockback_moved;
@@ -532,7 +547,13 @@ impl Settlement {
                 out.swing_lands.push(SwingLands { threat: t.id, agent: windup.agent, hit: self.swing_reaches(t, windup.agent, terrain) });
                 result.push((t.position, out));
             }
+            if let Some(swing) = self.swing_at_quarry(t, tick, terrain) {
+                let mut out = Messages::default();
+                out.start_swing.push(swing);
+                result.push((t.position, out));
+            }
         }
+        self.read_chase(tick, terrain, &mut result);
         if self.player_health > 0 {
             for (i, a) in self.agents.iter().enumerate() {
                 if a.avatar().is_some() && a.body.health > 0 {
@@ -568,9 +589,31 @@ impl Settlement {
     /// Stage 3: whether a threat's swing landing now reaches `agent`, alive,
     /// within the attack's reach of the threat and low enough
     /// (`SWING_HEIGHT`). A player who lifted off during the windup is missed.
+    /// A sprite (the quarry of a chaser, B5) is reached outside a building.
     fn swing_reaches(&self, t: &Threat, agent: AgentIx, terrain: &Terrain) -> bool {
-        let (Some(attack), Some(a)) = (self.threat_attack(t), self.agents.get(agent as usize)) else { return false };
-        a.avatar().is_some() && a.body.health > 0 && distance(t.position, a.body.position) <= attack.reach && self.within_swing_height(a, terrain)
+        let Some(attack) = self.threat_attack(t) else { return false };
+        self.agents.get(agent as usize).is_some_and(|a| self.swingable(a, terrain) && distance(t.position, a.body.position) <= attack.reach)
+    }
+
+    /// Whether a threat's swing can reach agent `a` at all: a live player
+    /// low enough (`SWING_HEIGHT`), or a sprite outside a building.
+    fn swingable(&self, a: &super::AgentState, terrain: &Terrain) -> bool {
+        match a.sprite() {
+            Some(sprite) => a.body.alive() && !sprite.inside(),
+            None => a.avatar().is_some() && a.body.alive() && self.within_swing_height(a, terrain),
+        }
+    }
+
+    /// Stage 3 for a chaser (B5): the swing it could start at its quarry
+    /// now. Players in reach draw swings from every threat where player
+    /// combat is on (`threats_in_reach`; the same swing twice is one); a
+    /// sprite, or a player where it is off, only draws its chaser's.
+    fn swing_at_quarry(&self, t: &Threat, tick: u64, terrain: &Terrain) -> Option<StartSwing> {
+        let agent = t.goal.agent()?;
+        let a = self.agents.get(agent as usize)?;
+        let attack = self.threat_attack(t)?;
+        let gap = distance(t.position, a.body.position);
+        (self.swingable(a, terrain) && can_start_swing(t, tick) && gap <= attack.reach).then_some(StartSwing { threat: t.id, agent, distance: gap })
     }
 
     /// Whether a player's feet are low enough for a threat's swing: at most
@@ -646,6 +689,13 @@ impl Settlement {
         t.ready_at = tick + 1 + attack.cooldown;
         let (threat, from, heading) = (t.id, t.position, t.heading);
         let agent = message.agent as usize;
+        if self.agents[agent].sprite().is_some() || self.player_health == 0 {
+            // A chaser's swing at its quarry where nothing it hits has
+            // health: a sprite (M5.5 hurts it here, B6), or a player where
+            // player combat is off. It reaches or misses, and nothing more.
+            self.events.push(Event::ThreatSwing { threat, agent: message.agent, hit: message.hit, damage: 0, killed: false });
+            return;
+        }
         // A laser earlier in stage 5 may have killed the player.
         let hit = message.hit && self.player_health > 0 && self.agents[agent].body.health > 0;
         let killed = hit && self.hurt_player(agent, attack.damage, tick, terrain);
@@ -1100,6 +1150,7 @@ impl Settlement {
                 windup: None,
                 ready_at: 0,
                 burn: None,
+                goal: super::chase::Goal::Tree,
             });
             self.waves[w].spawned += 1;
         }
