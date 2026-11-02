@@ -4,20 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M5.2 Aiming and firing while possessing
-
-- **Status:** open
-- **Why:** the elder's reward for possessing a ballista is aiming (B3).
-- **What to do:**
-  - While seated in a ballista, the avatar's aim point is the reticle,
-    clamped to range, drawn in the app.
-  - `Attack` fires a bolt there, at most once per period.
-  - Left mouse fires; on a controller, the right stick aims and RT fires.
-  - The possessed ballista stops its own targeting.
-- **Where:** `kestrel/sim/src/settlement/avatar.rs`, `buildings.rs`,
-  `kestrel/app/src/input/town`.
-- **Found in:** ballista design.
-
 ## M5.3 The fireball and burning ground
 
 - **Status:** open
@@ -186,6 +172,66 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M2.2.
 
 ## Done
+
+### M5.2 Aiming and firing while possessing
+
+- **Status:** done (branch `kestrel-sacred-tree-ballista`)
+- **Why:** the elder's reward for possessing a ballista is aiming (B3).
+- **What to do:**
+  - While seated in a ballista, the avatar's aim point is the reticle,
+    clamped to range, drawn in the app.
+  - `Attack` fires a bolt there, at most once per period.
+  - Left mouse fires; on a controller, the right stick aims and RT fires.
+  - The possessed ballista stops its own targeting.
+- **Where:** `kestrel/sim/src/settlement/avatar.rs`, `buildings.rs`,
+  `kestrel/app/src/input/town`.
+- **Found in:** ballista design.
+- **Done:** while the elder sits in a ballista, `AimAvatar` keeps the
+  reticle in `AvatarState::aim` as an offset from the ballista, cut to its
+  range (`BuildingKind::reticle`); leaving turns it back into a unit
+  facing. `Attack` there pushes an `ElderFire` action message (no new
+  command), and stage 5 (`Settlement::elder_fire`, after Burst) shoots
+  through `launch_shot` if `fire_plan` allows it: the elder still in the
+  slot, stone in the store, the period over. Its bolt has no `target`
+  (`launch_shot` takes an `Option` now) and hits whatever it meets on the
+  way. Spam within the period and a second `Attack` on one tick do
+  nothing; a seated elder never swings. `ready_to_shoot` needs
+  `Occupant::Sprite`, so a possessed ballista picks no targets.
+  `Settlement::fire_check` (`FireRefusal`: `NotInBallista`, `NoAmmo`,
+  `Reloading`) is the app's check. Prediction needed nothing: the replay
+  runs the same seated arm (tested). App: `input::town::aim_reticle`
+  follows the mouse's ground point, or the right stick moves it (4 m/s),
+  and sends `AimAvatar` when it moves 5 cm; `input::town::fire` sends an
+  `Attack` at the reticle whenever `fire_check` passes, one per confirmed
+  tick, while left mouse or RT is held (`Gameplay::fire_held`), so holding
+  repeats at the period; a fresh press on an empty ballista says "No
+  ammo: bring stone". RT fires only in a ballista (it still Bursts in a
+  gatherer); R still Bursts and a ballista refuses it ("This building has
+  no Burst"). `lockstep::attack_input` stands down while seated in a
+  building. The HUD draws the range ring, the reticle and a faint line of
+  fire; the turret turns to the elder's reticle (`legacy`); the help line
+  reads "MOUSE AIM / LMB FIRE / E OR G LEAVE". Control verb
+  `settlement_fire { x, y }` (meters from the ballista). Tests:
+  `ballista_tests` (possessed doesn't auto-fire, reticle clamped, once a
+  period, bolt hits on the way, no ammo no shot, replay matches),
+  `input::tests::the_fire_keys_work_only_while_possessing_a_ballista`,
+  `control::tests::the_elder_fires_a_possessed_ballista_at_the_reticle`
+  (builds, loads, possesses and fires one). No format changed: the
+  reticle lives in an existing field and `ElderFire` hashes only when
+  sent; golden file unchanged. Demo script not changed (it builds no
+  ballista; a scratch copy with one rendered the screenshot).
+- **From M5.2 for M5.3:** R/RB are free in a ballista: R reaches
+  `Edge::Burst` → `town::burst` → `NoBurst` today, RB is the lift. The
+  fireball can aim at `AvatarState::aim` (the reticle offset) from the
+  seated arm in `avatar::act`, as `Attack` does, and reuse
+  `possessing_ballista` for its keys and the help line.
+- **From M5.2 for M5.5:** a seated elder put out of a broken ballista
+  should turn its aim back into a facing, as leaving does
+  (`avatar::act`, the `Seat::Building` arm); `fire_plan` already refuses
+  a site.
+- **Left open:** the "E LEAVE" prompt sits over the possessed card's
+  last line (seen in the M5.2 screenshot; it was so before). The reticle
+  is drawn on the flat ground plane (y 0), fine on this map.
 
 ### M5.1 The ballista building and its ammo
 
