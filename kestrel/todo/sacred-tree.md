@@ -4,29 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M5.1 The ballista building and its ammo
-
-- **Status:** open
-- **Why:** a defence building that fires only while occupied
-  ([ballista design](../SACRED_TREE_BALLISTA.md), B1, B2).
-- **What to do:**
-  - Extract target picking and bolt launching from `aim_defender` and
-    `fire` into shared helpers. The Woodland Ballista keeps its behaviour:
-    the golden file's behaviour lines must not change.
-  - Add a ballista building kind with a `defence` section in content, and
-    an `Only(stone)` ammo store filled by interact like a site delivery.
-  - A built, occupied ballista with ammo fires at the nearest enemy
-    through the helpers, one stone per bolt.
-  - Add a "Man Ballista" sprite job.
-  - The card shows ammo, and "NO AMMO" when empty.
-  - Put ammo in `balances` and `validate`.
-  - Add it to the build menu and the Sacred Tree supply.
-- **Where:** `kestrel/sim/src/settlement/combat.rs`, `buildings.rs`,
-  `sprites.rs`, `interact.rs`, `kestrel/content/src/scenario.rs`,
-  `kestrel/app/assets/levels/sacred_tree_supply.ron`, the app's town
-  drawing and job menu.
-- **Found in:** ballista design.
-
 ## M5.2 Aiming and firing while possessing
 
 - **Status:** open
@@ -209,6 +186,74 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M2.2.
 
 ## Done
+
+### M5.1 The ballista building and its ammo
+
+- **Status:** done (branch `kestrel-sacred-tree-ballista`)
+- **Why:** a defence building that fires only while occupied
+  ([ballista design](../SACRED_TREE_BALLISTA.md), B1, B2).
+- **What to do:**
+  - Extract target picking and bolt launching from `aim_defender` and
+    `fire` into shared helpers. The Woodland Ballista keeps its behaviour:
+    the golden file's behaviour lines must not change.
+  - Add a ballista building kind with a `defence` section in content, and
+    an `Only(stone)` ammo store filled by interact like a site delivery.
+  - A built, occupied ballista with ammo fires at the nearest enemy
+    through the helpers, one stone per bolt.
+  - Add a "Man Ballista" sprite job.
+  - The card shows ammo, and "NO AMMO" when empty.
+  - Put ammo in `balances` and `validate`.
+  - Add it to the build menu and the Sacred Tree supply.
+- **Where:** `kestrel/sim/src/settlement/combat.rs`, `buildings.rs`,
+  `sprites.rs`, `interact.rs`, `kestrel/content/src/scenario.rs`,
+  `kestrel/app/assets/levels/sacred_tree_supply.ron`, the app's town
+  drawing and job menu.
+- **Found in:** ballista design.
+- **Done:** the target picking and shot launching are
+  `Settlement::pick_target` and `Settlement::launch_shot` (`combat.rs`),
+  which `aim_defender`/`fire` and the building ballista both call (golden
+  file unchanged, behaviour lines and state hashes alike). A building kind
+  has either a `product` or a `defence` (`content::scenario::Defence`:
+  ammo, ammo cap, range, period, damage, projectile speed, muzzle height,
+  projectile kind); the supply's `ballista` (BALLISTA, `turret` skin,
+  radius 0.7) is the Woodland Ballista's numbers with stone, cap 10, built
+  from foundation 2 wood and mechanism 2 wood + 2 stone. Its ammo store
+  is the building's `output` (`Kinds::Only(stone)`, capacity the ammo
+  cap; `BuildingKind::store_capacity`/`store_kinds`), so balances,
+  `validate`, transfers and saving needed nothing new: interact while
+  carrying stone delivers as much as fits (`Interaction::Bundle`,
+  Deposit, "LOAD 5 STONE"), a pickup is `DepositOnly`, wood is
+  `WrongPile`, and a full store is no target. A built ballista with any
+  occupant, stone in the store and its period over (`ready_to_shoot`,
+  `BuildingState::turret`) aims in stage 3 (`aim_buildings`, a
+  `BuildingFire` message, a new late queue) and shoots in stage 5
+  (`building_fire`), one stone spent a shot, `Event::BuildingShot` (the
+  app plays it as a defender's `Shot`). A stock shot ignores the obstacle
+  centred on its launch point (`fly`), so it leaves its own footprint.
+  Possessed, it shoots as staffed (the simpler choice). A ballista has no
+  Burst (`BurstRefusal::NoBurst`, appended). App: the turret turns and
+  recoils (`legacy::Building::turret`), the card says "MANNED / ASH",
+  "AMMO 7/10 STONE" or "NO AMMO" (`BuildingStatus::NoAmmo`), the job menu
+  has "MAN BALLISTA". Tests: `ballista_tests` (unmanned or empty never
+  fires, nearest first at its period one stone a shot, out of ammo stops
+  until stocked, delivery caps), `save::tests::a_town_saved_while_a_ballista_shoots_continues`
+  (save format 30). No new command, target or control verb: the existing
+  `settlement_interact`, `settlement_sprite_job`/`settlement_job_menu` and
+  `settlement_build` drive it; the state's `buildings[i].output` is its
+  ammo and `turret` its aim.
+- **From M5.1 for M5.2:** "the possessed ballista stops its own
+  targeting" is one line in `ready_to_shoot` (`buildings.rs`): require
+  `Occupant::Sprite`, then fire the elder's `Attack` through
+  `launch_shot` with the same `Launcher` and `turret.ready_at`.
+- **From M5.1 for M5.3:** `burst_plan` refuses a ballista with `NoBurst`;
+  the fireball can take that branch by building kind.
+- **From M5.1 for M5.5/B8:** a broken ballista's ammo is its `output`, so
+  spilling the output spills the ammo; reset `turret` when it becomes a
+  site (`validate_buildings` only checks a gatherer's turret is default).
+- **From M5.1 for M5.6:** no wave spawns on the map yet; tests push a
+  staggered `Threat` by hand (`ballista_tests::threat`), the save test
+  adds a scenario wave. Threats still read `waves[t.wave]` in the app's
+  view, so a hand-pushed threat in a scene with no waves would not draw.
 
 ### M4.1 Happy path and stability
 
