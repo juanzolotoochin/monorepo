@@ -4,6 +4,128 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
+## M5.1 The ballista building and its ammo
+
+- **Status:** open
+- **Why:** a defence building that fires only while occupied
+  ([ballista design](../SACRED_TREE_BALLISTA.md), B1, B2).
+- **What to do:**
+  - Extract target picking and bolt launching from `aim_defender` and
+    `fire` into shared helpers. The Woodland Ballista keeps its behaviour:
+    the golden file's behaviour lines must not change.
+  - Add a ballista building kind with a `defence` section in content, and
+    an `Only(stone)` ammo store filled by interact like a site delivery.
+  - A built, occupied ballista with ammo fires at the nearest enemy
+    through the helpers, one stone per bolt.
+  - Add a "Man Ballista" sprite job.
+  - The card shows ammo, and "NO AMMO" when empty.
+  - Put ammo in `balances` and `validate`.
+  - Add it to the build menu and the Sacred Tree supply.
+- **Where:** `kestrel/sim/src/settlement/combat.rs`, `buildings.rs`,
+  `sprites.rs`, `interact.rs`, `kestrel/content/src/scenario.rs`,
+  `kestrel/app/assets/levels/sacred_tree_supply.ron`, the app's town
+  drawing and job menu.
+- **Found in:** ballista design.
+
+## M5.2 Aiming and firing while possessing
+
+- **Status:** open
+- **Why:** the elder's reward for possessing a ballista is aiming (B3).
+- **What to do:**
+  - While seated in a ballista, the avatar's aim point is the reticle,
+    clamped to range, drawn in the app.
+  - `Attack` fires a bolt there, at most once per period.
+  - Left mouse fires; on a controller, the right stick aims and RT fires.
+  - The possessed ballista stops its own targeting.
+- **Where:** `kestrel/sim/src/settlement/avatar.rs`, `buildings.rs`,
+  `kestrel/app/src/input/town`.
+- **Found in:** ballista design.
+
+## M5.3 The fireball and burning ground
+
+- **Status:** open
+- **Why:** the possessed ballista's special ability (B4).
+- **What to do:**
+  - R (or RB) throws a fireball at the reticle, with a cooldown on the
+    elder (about 20 s). Choose a new appended command or `Burst` by
+    building kind.
+  - The fireball deals impact damage and leaves a fire patch (a new table:
+    about 1.5 m, about 6 s).
+  - Threats in a patch get a refreshed burn: 1 damage per second, until
+    about 3 s after leaving.
+  - Draw the patches and burning enemies, and add a control verb.
+- **Where:** `kestrel/sim/src/settlement/combat.rs` (or a new module),
+  `avatar.rs`, the app.
+- **Found in:** ballista design.
+
+## M5.4 Enemies chase, then return
+
+- **Status:** open
+- **Why:** enemies should turn on whoever comes close, then go back to the
+  tree (B5).
+- **What to do:**
+  - About every 0.5 s, an enemy picks the nearest visible elder or sprite
+    within about 3 m and steers straight at it, using the existing swing.
+  - Past a leash of about 5 m, when the target dies, or when it leaves
+    sight, the enemy plans a fresh route to the tree from where it stands.
+  - Other scenes' enemies must behave the same, so their golden behaviour
+    lines stay unchanged. Gate the chase by character or by scenario.
+- **Where:** `kestrel/sim/src/settlement/combat.rs`, `kestrel/content/`
+  (the character's detect and leash).
+- **Found in:** ballista design.
+
+## M5.5 Sprite health, building health and the tree
+
+- **Status:** open
+- **Why:** enemies need something to hurt, and defence needs a stake (B6,
+  B7, B8).
+- **What to do:**
+  - **Sprites:** sprites get health. A dead sprite returns at the tree
+    after about 15 s with its job, and occupants of a building can't be
+    hit.
+  - **Buildings and sites:** they get health, about 10. An enemy with no
+    elder or sprite to chase attacks a building that blocks it or is in
+    reach.
+  - **A building at 0** becomes a site again with its parts lost, puts its
+    occupant out, and spills its output and ammo onto a ground pile.
+  - **The tree:** it has about 20 health and takes breaches. At 0, show
+    "The tree has fallen" and restart.
+- **Where:** `kestrel/sim/src/settlement/sprites.rs`, `buildings.rs`,
+  `combat.rs`, `piles.rs`, the app.
+- **Found in:** ballista design.
+
+## M5.6 Waves on the map, soak and tuning
+
+- **Status:** open
+- **Why:** the defence has to be playable on the Sacred Tree map.
+- **What to do:**
+  - Add a calm start, then ghoul waves on a timer, in
+    `sacred_tree_supply.ron`.
+  - Extend the soak test with waves, with `validate` every tick.
+  - Update the demo and capture screenshots.
+  - Tune the numbers so a first play isn't lost early.
+- **Where:** `kestrel/app/assets/levels/sacred_tree*.ron`,
+  `kestrel/sim/src/settlement/soak_tests.rs`, `demos/sacred_tree.json`.
+- **Found in:** ballista design.
+
+## A possessed ballista fires faster
+
+- **Status:** open
+- **Why:** possessing a gatherer speeds it up, but possessing a ballista
+  only adds aiming and the fireball (ballista design, "Settled").
+- **What to do:** decide after the playtest whether a possessed ballista
+  also fires faster.
+- **Found in:** ballista design.
+
+## Repairing buildings
+
+- **Status:** open
+- **Why:** a broken building is lost back to a site, and nothing repairs a
+  damaged one (B8).
+- **What to do:** decide after the playtest, for example delivering 1 wood
+  to restore health.
+- **Found in:** ballista design.
+
 ## Art for the Sacred Tree
 
 - **Status:** open
