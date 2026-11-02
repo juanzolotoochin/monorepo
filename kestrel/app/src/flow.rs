@@ -86,6 +86,19 @@ pub struct Flow {
     pub defaults: Defaults,
     /// A text field has the keyboard, so the app's keys don't apply.
     pub typing: bool,
+    /// What the last single-player session started with, so it can start
+    /// again from scratch (`restart`); `None` after a networked one or a
+    /// replay.
+    last: Option<Again>,
+}
+
+/// A single-player launch's choices, kept to start it again.
+#[derive(Clone)]
+struct Again {
+    scene: usize,
+    name: String,
+    input_margin_ms: Option<u64>,
+    profile: Option<String>,
 }
 
 impl Service for Flow {
@@ -94,7 +107,7 @@ impl Service for Flow {
 
     fn init(world: &mut World) -> Self {
         let Start { launch, defaults } = world.remove_resource::<Start>().expect("the game starts from a Start");
-        Flow { launch, opened: None, leaving: false, ended: None, defaults, typing: false }
+        Flow { launch, opened: None, leaving: false, ended: None, defaults, typing: false, last: None }
     }
 
     fn systems(app: &mut App) {
@@ -116,6 +129,25 @@ impl Flow {
         self.launch = None;
         self.leaving = true;
         self.ended = reason;
+    }
+
+    /// Leaves the session and starts its scene again from scratch at the
+    /// next Input phases, as it was launched (not recording): the Sacred
+    /// Tree's restart once it falls (B7). Only a single-player session
+    /// restarts; for any other this does nothing and returns false.
+    pub fn restart(&mut self) -> bool {
+        let Some(again) = self.last.clone() else { return false };
+        self.leave(None);
+        self.launch = Some(Launch {
+            network: None,
+            scene: again.scene,
+            name: again.name,
+            record: None,
+            replay: None,
+            input_margin_ms: again.input_margin_ms,
+            profile: again.profile,
+        });
+        true
     }
 
     /// The session about to start, if one is.
@@ -187,6 +219,12 @@ fn follow(world: &mut World) {
         return;
     }
     let Some(launch) = flow.launch.take() else { return };
+    flow.last = (launch.network.is_none() && launch.replay.is_none()).then(|| Again {
+        scene: launch.scene,
+        name: launch.name.clone(),
+        input_margin_ms: launch.input_margin_ms,
+        profile: launch.profile.clone(),
+    });
     match crate::lockstep::open(world, launch) {
         Ok(opened) => {
             world.resource_mut::<Flow>().opened = Some(opened);
