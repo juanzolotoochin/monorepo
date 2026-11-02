@@ -73,6 +73,8 @@ its milestones, in order; one PR per milestone.
   attack command do nothing there.
 - **Where:** `kestrel/content/src/scenario.rs`,
   `kestrel/sim/src/settlement/combat.rs`, `kestrel/app/src/input/gameplay.rs`.
+- **Since the view turn:** keyboard Z and C turn the town's view, so
+  only X, V and controller Y could still choose a weapon there.
 - **Found in:** M1.1.
 
 ## Interact feedback and the mouse
@@ -105,6 +107,42 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M2.2.
 
 ## Done
+
+### Rotating the town camera
+
+- **Status:** done (branch `kestrel-sacred-tree-ballista`)
+- **Why:** the camera looks from +x, +z at a fixed angle, so the tree's
+  canopy hides what stands behind it (a ballista north of the tree).
+- **What to do:** turn the orthographic camera in 90° steps in the town,
+  keeping input screen-relative; view only.
+- **Where:** `kestrel/app/src/input/town.rs` (`ViewTurn`),
+  `input/gameplay.rs` (`camera_relative`, `view_yaw`), `input/mod.rs`,
+  `effects.rs` (`camera_feedback`).
+- **Found in:** user request after M5.
+- **Done:** in a town, Z and controller D-pad left orbit the camera a
+  quarter turn counter-clockwise around its target (seen from above), C
+  and D-pad right clockwise, smoothstepped over 0.25 s at the same zoom
+  and height (`input::town::ViewTurn`, kept in the dispatcher's town
+  state, so every world starts at the default angle; never saved; no sim,
+  command or format change). There is no reduced-motion setting to honor
+  yet. Z/C pick no weapon in a town, and the D-pad's left and right cycle
+  no targets there (the town has one target, the sim's); elsewhere both
+  keep what they did. `camera_relative` takes the live yaw (eased
+  mid-turn), so WASD, the stick, the right stick moving the ballista
+  reticle and the job menu's ring stay screen-relative; mouse picking, the
+  reticle under the mouse, labels, prompts and cards project through the
+  live camera, the ghost stands in front of the elder, and the canopy's
+  fade tests the segment from the live camera, so it fades for whatever it
+  hides from the new angle. Lights and shadows stay world-fixed. The help
+  lines end in "Z/C ROTATE". The control protocol has `camera_rotate
+  {turns}`, and the demo pauses the sim, turns half way round to show the
+  ballista behind the tree, and turns back. Tested: Z/C and the D-pad turn
+  in a town and pick weapons and targets elsewhere, `camera_relative`
+  matches the turned camera's up and right at each quarter turn and eases
+  mid-turn, W walks up the turned screen in the Sacred Tree, and the
+  canopy hides the other side when turned half way round. Cosmetic, left
+  as is: pines at the clearing's edge can hide things from any angle, as
+  they could before, and only the tree's canopy fades.
 
 ### M5.6 Waves on the map, soak and tuning
 
