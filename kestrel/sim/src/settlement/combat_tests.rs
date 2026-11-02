@@ -1703,6 +1703,42 @@ fn leaving_removes_the_avatar_and_later_avatars_keep_their_players() {
     s.validate().unwrap();
 }
 
+/// A threat chasing a player who leaves gives up and plans its way back to
+/// the tree from where it stands; one chasing a later player keeps chasing
+/// it under its new index.
+#[test]
+fn chasers_of_a_leaving_player_go_back_and_the_others_follow_their_quarry() {
+    let mut config = combat_scenario(vec![]);
+    config.agents = vec![player()];
+    config.links.clear();
+    let mut arena = Arena::new(&config, &[]);
+    for slot in 1..3 {
+        arena.sim.step(&[Command { player: PlayerId(slot), kind: CommandKind::Join }]);
+    }
+    let s = arena.s();
+    let (leaver, stayer) = (s.avatar_of(PlayerId(1)).unwrap(), s.avatar_of(PlayerId(2)).unwrap());
+    let chaser = Content::builtin().names.character_index("ghoul_sacred_tree").unwrap();
+    arena.threat(900, 3.0, 3.0, 10, 0);
+    arena.threat(901, -3.0, 3.0, 10, 0);
+    let s = arena.s_mut();
+    for (t, quarry) in [(0, leaver), (1, stayer)] {
+        s.threats[t].character = chaser;
+        s.threats[t].goal = super::Goal::Chase(super::Quarry::Agent(quarry));
+    }
+    s.validate().unwrap();
+
+    let terrain = arena.sim.world().terrain().clone();
+    arena.s_mut().leave(PlayerId(1), &terrain);
+    let s = arena.s();
+    let moved = s.avatar_of(PlayerId(2)).unwrap();
+    assert_eq!(moved, stayer - 1);
+    assert_eq!(s.threats[0].goal, super::Goal::Tree, "the leaver's chaser gives up");
+    let target = s.waves[0].target;
+    assert_eq!(s.threats[0].route.last(), Some(&target), "and walks to its wave's target");
+    assert_eq!(s.threats[1].goal, super::Goal::Chase(super::Quarry::Agent(moved)), "the stayer's still chases it");
+    s.validate().unwrap();
+}
+
 /// What pointed at the avatars after a leaving one moves with them; what
 /// pointed at the leaving one goes. Units flying to or from the leaver land
 /// at once, and what it carried is written off, so material still balances.
@@ -1746,7 +1782,8 @@ fn leaving_moves_references_to_later_avatars_and_balances_material() {
 
     // Directly, so this tick's stages don't redo what the test checks
     // (docks are resolved every tick).
-    arena.s_mut().leave(PlayerId(1));
+    let terrain = arena.sim.world().terrain().clone();
+    arena.s_mut().leave(PlayerId(1), &terrain);
     let s = arena.s();
     let moved = s.avatar_of(PlayerId(2)).unwrap();
     assert_eq!(moved, stayer - 1);
@@ -1796,7 +1833,8 @@ fn leaving_mid_transfer_releases_its_job_while_haulers_haul() {
     let room = s.depots[mill as usize].inventory.reserved_in[i] - 2;
     s.validate().unwrap();
 
-    arena.s_mut().leave(PlayerId(1));
+    let terrain = arena.sim.world().terrain().clone();
+    arena.s_mut().leave(PlayerId(1), &terrain);
     let s = arena.s();
     assert_eq!(s.depots[mill as usize].inventory.reserved_in[i], room, "the deposit's room is given back");
     assert_eq!(s.accounts[i].abandoned, 2, "the cargo is written off");
@@ -1914,7 +1952,8 @@ fn leaving_with_pile_units_in_flight_writes_them_off() {
     let stayer_flying = s.transfers.values().filter(|t| t.to == InventoryRef::Agent(stayer)).count();
     let stayer_has = s.agents[stayer as usize].carry.inventory.counts[blue];
 
-    arena.s_mut().leave(PlayerId(1));
+    let terrain = arena.sim.world().terrain().clone();
+    arena.s_mut().leave(PlayerId(1), &terrain);
     let s = arena.s();
     let moved = s.avatar_of(PlayerId(2)).unwrap();
     assert_eq!(s.accounts[amber].abandoned, 8, "the units in the air landed and were written off");

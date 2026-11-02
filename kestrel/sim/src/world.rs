@@ -587,7 +587,7 @@ impl World {
                 }
                 CommandKind::Leave => {
                     if let Some(s) = &mut self.settlement {
-                        s.leave(turn[i].player);
+                        s.leave(turn[i].player, &self.terrain);
                     }
                 }
             }

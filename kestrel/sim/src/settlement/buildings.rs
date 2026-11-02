@@ -770,7 +770,9 @@ impl Settlement {
     /// overlap the first stands. Each one `placement_check` allows becomes a
     /// site waiting for its first part's materials, its footprint an
     /// obstacle; the rest are refused with an event.
+    /// Enemies then plan their routes afresh round it (`replan_routes`).
     pub(super) fn place_blueprints(&mut self, messages: Vec<PlaceBlueprint>, terrain: &mut Terrain) {
+        let revision = terrain.revision;
         for PlaceBlueprint { kind, position } in messages {
             match self.placement_check(kind, position, terrain) {
                 Ok(output) => {
@@ -783,6 +785,9 @@ impl Settlement {
                 }
                 Err(reason) => self.events.push(Event::BlueprintRefused { kind, reason }),
             }
+        }
+        if terrain.revision != revision {
+            self.replan_routes(terrain);
         }
     }
 

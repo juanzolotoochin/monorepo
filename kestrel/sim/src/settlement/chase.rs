@@ -271,15 +271,45 @@ impl Settlement {
                 continue;
             }
             if message.goal == Goal::Tree {
-                let target = self.waves.get(t.wave as usize).map(|w| w.target).or(t.route.last().copied());
-                if let Some(target) = target {
-                    let route = route_home(terrain, t.position, target);
-                    if !route.is_empty() {
-                        self.threats[i].route = route;
-                    }
-                }
+                self.give_up(i, terrain);
+            } else {
+                self.threats[i].goal = message.goal;
             }
-            self.threats[i].goal = message.goal;
+        }
+    }
+
+    /// Threat `i` (by table index) goes back to the tree: it plans a route
+    /// from where it stands to its wave's target (the route's last point
+    /// without a wave), keeping the old route if there is no way.
+    pub(super) fn give_up(&mut self, i: usize, terrain: &Terrain) {
+        self.threats[i].goal = Goal::Tree;
+        self.replan_route(i, terrain);
+    }
+
+    /// Threat `i` plans its way to its wave's target afresh, from where it
+    /// stands, keeping the old route if there is no way.
+    fn replan_route(&mut self, i: usize, terrain: &Terrain) {
+        let t = &self.threats[i];
+        let Some(target) = self.waves.get(t.wave as usize).map(|w| w.target).or(t.route.last().copied()) else { return };
+        let route = route_home(terrain, t.position, target);
+        if !route.is_empty() {
+            self.threats[i].route = route;
+        }
+    }
+
+    /// Stage 5, after the ground changed under the town (a blueprint went
+    /// down): every threat on its way to the tree plans its route afresh
+    /// from where it stands, and each wave still sending enemies plans its
+    /// own again at its next spawn, so they walk round a new site instead
+    /// of through it. Routes are planned once otherwise (M5.6).
+    pub(super) fn replan_routes(&mut self, terrain: &Terrain) {
+        for w in self.waves.iter_mut().filter(|w| w.spawned < w.count) {
+            w.route = None;
+        }
+        for i in 0..self.threats.len() {
+            if self.threats[i].goal == Goal::Tree {
+                self.replan_route(i, terrain);
+            }
         }
     }
 }

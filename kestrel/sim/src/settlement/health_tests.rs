@@ -43,6 +43,8 @@ fn point(p: [f64; 2]) -> [Fx; 2] {
 /// one a second from `first` seconds.
 fn town((from, to): ([f64; 2], [f64; 2]), first: f64, count: u32) -> Simulation {
     let mut scenario = Scenario::parse(SACRED_TREE).unwrap();
+    // Only the enemies a test sends: none of the map's own waves.
+    scenario.waves.clear();
     scenario.waves.push(Wave {
         id: "test".into(),
         position: point(from),
@@ -308,21 +310,24 @@ fn a_ghoul_breaks_a_possessed_ballista_and_puts_the_elder_out() {
 }
 
 /// A building put down on a ghoul's planned way, with nobody to chase
-/// about, is attacked before the ghoul reaches it: it is in the way. Once
-/// it is a bare site, with nothing left to lose, the ghoul plans a way
-/// round it and breaches at the tree.
+/// about: the ghoul plans its way afresh round the new site (M5.6), but
+/// passes within reach of it and attacks it. Once it is a bare site, with
+/// nothing left to lose, the ghoul walks on round it and breaches at the
+/// tree.
 #[test]
-fn a_ghoul_breaks_a_building_that_blocks_its_way_then_walks_round_it() {
+fn a_ghoul_walks_round_a_building_put_on_its_way_and_breaks_it_in_passing() {
     let mut sim = town(SOUTH, 1.0, 1);
     until(&mut sim, 3 * HZ, |sim| !settlement(sim).threats.is_empty());
     let site = build(&mut sim, 0, [0.0, -4.0]);
-    let reach = {
-        let s = settlement(&sim);
-        s.characters[s.threats[0].character as usize].attack.unwrap().reach
-    };
+    let s = settlement(&sim);
+    let (b, t) = (&s.buildings[site as usize], &s.threats[0]);
+    let radius = s.building_kind(site).radius;
+    let legs = std::iter::once(t.position).chain(t.route.iter().copied()).collect::<Vec<_>>();
+    assert!(legs.windows(2).all(|leg| crate::terrain::segment_disc(leg[0], leg[1], b.position, radius).is_none()), "its route goes round the site");
+    let reach = s.characters[t.character as usize].attack.unwrap().reach;
     until(&mut sim, 20 * HZ, |sim| goal(sim) == Some(Goal::Chase(Quarry::Building(site))));
     let s = settlement(&sim);
-    assert!(s.building_gap(s.threats[0].position, site) > reach, "spotted in its way, not only in reach");
+    assert!(s.building_gap(s.threats[0].position, site) <= reach, "attacked in reach, in passing");
     until(&mut sim, 60 * HZ, |sim| broke(sim, site));
     step(&mut sim, &[]);
     assert_eq!(goal(&sim), Some(Goal::Tree), "nothing left to lose");
