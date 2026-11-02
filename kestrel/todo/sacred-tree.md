@@ -4,22 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M5.4 Enemies chase, then return
-
-- **Status:** open
-- **Why:** enemies should turn on whoever comes close, then go back to the
-  tree (B5).
-- **What to do:**
-  - About every 0.5 s, an enemy picks the nearest visible elder or sprite
-    within about 3 m and steers straight at it, using the existing swing.
-  - Past a leash of about 5 m, when the target dies, or when it leaves
-    sight, the enemy plans a fresh route to the tree from where it stands.
-  - Other scenes' enemies must behave the same, so their golden behaviour
-    lines stay unchanged. Gate the chase by character or by scenario.
-- **Where:** `kestrel/sim/src/settlement/combat.rs`, `kestrel/content/`
-  (the character's detect and leash).
-- **Found in:** ballista design.
-
 ## M5.5 Sprite health, building health and the tree
 
 - **Status:** open
@@ -155,6 +139,81 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M2.2.
 
 ## Done
+
+### M5.4 Enemies chase, then return
+
+- **Status:** done (branch `kestrel-sacred-tree-ballista`)
+- **Why:** enemies should turn on whoever comes close, then go back to the
+  tree (B5).
+- **What to do:**
+  - About every 0.5 s, an enemy picks the nearest visible elder or sprite
+    within about 3 m and steers straight at it, using the existing swing.
+  - Past a leash of about 5 m, when the target dies, or when it leaves
+    sight, the enemy plans a fresh route to the tree from where it stands.
+  - Other scenes' enemies must behave the same, so their golden behaviour
+    lines stay unchanged. Gate the chase by character or by scenario.
+- **Where:** `kestrel/sim/src/settlement/combat.rs`, `kestrel/content/`
+  (the character's detect and leash).
+- **Found in:** ballista design.
+- **Done:** gated by character: a FollowRoute character with an `attack`
+  may have `chase` (`content::character::ChaseDef`: detect 3 m, leash
+  5 m, look 30 frames), left out of the encoding like `attack` and added
+  to `rules_hash` when any has one. Only the new `ghoul_sacred_tree`
+  (base `ghoul_forest`) has one, so the forest and arena ghouls keep their
+  routes. The sim side is `settlement::chase`, in the sprites' shape:
+  `Threat::goal` is the goal (`Goal::Tree`, the plan being `route`, or
+  `Goal::Chase(Quarry::Agent(a))`, the plan a straight line at the
+  quarry), `read_chase` invalidates and decides, `route_home` replans.
+  Stage 3: a threat on its way to the tree looks on its look ticks
+  (`(tick + id) % look == 0`, spread over threats) for the nearest
+  chaseable agent within the detect radius and in sight, lowest index on
+  a tie; a chaser checks its quarry every tick (alive, not seated or
+  inside a building, within the leash, in sight). Either sends a
+  `ThreatGoal` (a new late queue). Stage 5 (`threat_goals`, after the
+  burns) applies it; giving up plans `nav::path` from where the threat
+  stands to its wave's target (the route's last point without a wave),
+  keeping the old route if there is no way. Stage 2 stays parallel-safe:
+  `follow_route` steers a chaser at where its quarry stood at the end of
+  last tick (agents move after threats in stage 2), straight, stopping at
+  4/5 of its reach, each step only if the ground is clear at the route's
+  0.2 m clearance. "In sight" is a thin (0.02 m) line to the quarry plus a
+  clear 0.2 m walk to where the chaser would stop, so a sprite at a slot
+  spot is seen and a seen quarry is walkable. The route waits while
+  chasing (never empty, so no breach mid-chase). A chaser swings at its
+  quarry with its usual attack (`swing_at_quarry`; players keep
+  `threats_in_reach`, the same swing twice is one in `start_swings`). A
+  swing that lands on a sprite, or on a player where player combat is
+  off (the Sacred Tree has no `player_health`), is a `ThreatSwing` with
+  `hit` and no damage, no push. The behaviour digest hashes goals and
+  their routes only while any threat chases (behaviour lines unchanged;
+  state hashes regenerated in their own commit: the new character and
+  the new field). Save format 32; input and net unchanged (no command).
+  `Threat` grows to 192 bytes. `validate` checks chasers
+  (`validate_chases`). App: the threat view has `chasing` (the agent's
+  id) in snapshots; nothing new is drawn (a chaser faces where it walks).
+  Tests: `chase_tests` (leaves its route for a sprite on a look tick and
+  swings at it for no damage; not behind a wall; not a sprite inside the
+  gatherer nor the elder possessing it; gives up past the leash on the
+  elder, replans from where it stands and breaches; gives up at once out
+  of sight; a forest ghoul keeps its route; two runs hash the same), the
+  content test `chases_parse_and_only_the_sacred_tree_ghoul_has_one`.
+  No waves on the map yet, so no demo or screenshot change.
+- **From M5.4 for M5.5:** hurting a sprite goes in `swing_lands`
+  (`combat.rs`), in the branch for a sprite or a player with combat off;
+  `Quarry` takes a `Building(BuildingIx)` variant for B8, with
+  `chaseable`/`keeps`/`spot` in `chase.rs` the places to extend (a
+  building is no agent, so `swing_at_quarry`, `Windup::agent` and
+  `StartSwing::agent` need a target type then). `Body::alive` already
+  makes a dead sprite no quarry once sprites have `max_health`. The
+  elder: the Sacred Tree has no `player_health`, so a chaser's swings at
+  it do no harm but still play as hits in the app (blood, shake); decide
+  whether the elder gets health or is never chased. A seated elder put
+  out of a broken building becomes chaseable again on the next look.
+- **From M5.4 for M5.6:** waves on the map must name
+  `ghoul_sacred_tree` and target a point outside the trunk's disc (a
+  target inside an obstacle plans an empty route, and the wave never
+  spawns). Detect 3 m and leash 5 m are first guesses; a chaser stops at
+  0.72 m. The soak should walk sprites and the elder through a wave's way.
 
 ### M5.3 The fireball and burning ground
 

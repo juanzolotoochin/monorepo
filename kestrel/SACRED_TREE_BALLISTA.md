@@ -1,6 +1,6 @@
 # Kestrel Sacred Tree ballista (design)
 
-Status: design agreed (2026-11-01), M5.1 to M5.3 done. Tasks in
+Status: design agreed (2026-11-01), M5.1 to M5.4 done. Tasks in
 [`todo/sacred-tree.md`](todo/sacred-tree.md) under M5. It builds on the town
 MVP in [`SACRED_TREE_HANDOFF.md`](SACRED_TREE_HANDOFF.md) (D1–D6), whose
 rules for the work apply here too.
