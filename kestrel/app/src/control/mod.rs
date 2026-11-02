@@ -413,6 +413,11 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             crate::input::town::burst(world)?;
             Ok(Pending::Burst { ready })
         }
+        Command::SettlementFire { x, y } => {
+            settlement(world)?;
+            crate::input::town::fire_at(world, Vec2::new(*x, *y))?;
+            Ok(Pending::Applied)
+        }
         Command::SettlementLeave => {
             let s = settlement(world)?;
             let agent = player(world).ok_or("No controlled actor")?;

@@ -116,6 +116,15 @@ pub enum Command {
     /// ("Burst ready in 12 s", "Output full", "Possess a building to
     /// Burst"); done once the units are in (`settlement.burst`).
     SettlementBurst,
+    /// Fires the ballista the elder possesses once, as left mouse or RT
+    /// does there: the reticle goes `x`, `y` meters from the ballista (cut
+    /// to its range) and a bolt flies there. Fails with the sim's reason
+    /// ("No ammo: bring stone", "Reloading", "Possess a ballista to
+    /// fire"); done once the shot has been simulated.
+    SettlementFire {
+        x: f32,
+        y: f32,
+    },
     AssertSettlement {
         delivered: u64,
         cycles: u64,
