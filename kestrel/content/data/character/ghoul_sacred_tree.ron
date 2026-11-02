@@ -1,0 +1,11 @@
+// The Sacred Tree's ghouls: the forest's, but they turn on an elder or
+// sprite they see within 3 m (looking every 30 frames, 0.5 s), and give up
+// to walk on to the tree once their quarry is 5 m away, out of sight,
+// dead or sheltered in a building (SACRED_TREE_BALLISTA.md, B5).
+(
+    base: "ghoul_forest",
+    sim: (
+        chase: (detect: 3.0, leash: 5.0, look: 30),
+    ),
+    view: (),
+)
