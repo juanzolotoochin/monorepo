@@ -4,20 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M5.6 Waves on the map, soak and tuning
-
-- **Status:** open
-- **Why:** the defence has to be playable on the Sacred Tree map.
-- **What to do:**
-  - Add a calm start, then ghoul waves on a timer, in
-    `sacred_tree_supply.ron`.
-  - Extend the soak test with waves, with `validate` every tick.
-  - Update the demo and capture screenshots.
-  - Tune the numbers so a first play isn't lost early.
-- **Where:** `kestrel/app/assets/levels/sacred_tree*.ron`,
-  `kestrel/sim/src/settlement/soak_tests.rs`, `demos/sacred_tree.json`.
-- **Found in:** ballista design.
-
 ## A possessed ballista fires faster
 
 - **Status:** open
@@ -35,19 +21,6 @@ its milestones, in order; one PR per milestone.
 - **What to do:** decide after the playtest, for example delivering 1 wood
   to restore health.
 - **Found in:** ballista design.
-
-## Chasers of a player who leaves
-
-- **Status:** open
-- **Why:** `Settlement::leave` drops and remaps the windups that name the
-  leaving avatar, but not a threat's `Goal::Chase(Quarry::Agent)`: a
-  chaser of the leaver keeps its index, which then names the next agent
-  (or none), and chasers of later avatars point one too far.
-- **What to do:** in `players::leave`, send a leaver's chasers back to
-  the tree (as `threat_goals` does when giving up) and shift the other
-  goals in `remap_agents`. Matters once the town is played networked.
-- **Where:** `kestrel/sim/src/settlement/players.rs`, `chase.rs`.
-- **Found in:** M5.5 (ballista design, B5).
 
 ## Art for the Sacred Tree
 
@@ -132,6 +105,85 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M2.2.
 
 ## Done
+
+### M5.6 Waves on the map, soak and tuning
+
+- **Status:** done (branch `kestrel-sacred-tree-ballista`)
+- **Why:** the defence has to be playable on the Sacred Tree map.
+- **What to do:**
+  - Add a calm start, then ghoul waves on a timer, in
+    `sacred_tree_supply.ron`.
+  - Extend the soak test with waves, with `validate` every tick.
+  - Update the demo and capture screenshots.
+  - Tune the numbers so a first play isn't lost early.
+- **Where:** `kestrel/app/assets/levels/sacred_tree*.ron`,
+  `kestrel/sim/src/settlement/soak_tests.rs`, `demos/sacred_tree.json`.
+- **Found in:** ballista design.
+- **Done:** waves: `sacred_tree_supply.ron` has a calm start of 210 s
+  (3.5 min), then a wave every 90 s of 3, 4, 5, 7, 8 and 8
+  `ghoul_sacred_tree`s, the last at 660 s. Why 3.5 min: the happy path
+  (Stone Gatherer, a second Wood Gatherer, possession and Burst) takes
+  175 s of game time when scripted, and a first player also needs a
+  ballista (4 wood, 2 stone) and stone in it. A scenario holds at most 8
+  waves (`Scenario::validate`), so each entry is a lane sending one ghoul a
+  wave (`every: 90`) from its `first` on: three north lanes 2.5 s apart
+  from the first wave, a fourth from the second, a west lane from the
+  third, a fifth north and an east lane from the fourth and a second east
+  lane from the fifth. North comes from (0, -8.5) to (0, -1.8); west from
+  (-8.5, -2.5) and east from (8.5, -2.5) to (∓1.8, -0.6): all outside the
+  trunk's disc. Routes: a blueprint going down now replans every threat on
+  its way to the tree from where it stands, and resets the routes of waves
+  still sending (`Settlement::replan_routes`, `chase.rs`, called from
+  `place_blueprints`), so ghouls walk round a new site instead of through
+  it; skirting a building at the route's 0.2 m clearance is within their
+  0.9 m reach, so they still attack it in passing (the M5.5 test "breaks a
+  building that blocks its way" became
+  `a_ghoul_walks_round_a_building_put_on_its_way_and_breaks_it_in_passing`).
+  `give_up`/`replan_route` are shared with `threat_goals`. Chasers of a
+  leaving player: `Settlement::leave` takes the terrain; a leaver's chasers
+  give up and plan their way to the tree, and `remap_agents` shifts the
+  other `Goal::Chase(Quarry::Agent)`s
+  (`combat_tests::chasers_of_a_leaving_player_go_back_and_the_others_follow_their_quarry`;
+  the task "Chasers of a player who leaves" is done). Tuning, measured by
+  `waves_tests` on the real waves (a ballista manned by a sprite, stone
+  topped up from the tree):
+
+  | Number | Before | After | Why |
+  |---|---|---|---|
+  | Waves | none | 210 s calm, then 3/4/5/7/8/8 every 90 s | Ignored, the tree falls in the fifth wave (581 s); one ballista reloaded once mid-wave keeps 15/20; two stocked between waves stop all 35. |
+  | Fireball cooldown | 20 s | 25 s | About one throw a wave, two in a long one. |
+  | Fireball impact | 2 within 0.8 m | 1 within 1.0 m | 2 killed any ghoul (2 health) outright: a wave-clear button. |
+  | Fire | 1.5 m for 6 s | 1.5 m for 4 s | The column walked into a 6 s fire one after another. |
+  | Burn | 1 every 1 s, linger 3 s | 1 every 1.5 s, linger 1 s | A ghoul crossing the fire took 3–5 hits. Now a fireball at a column's head kills about 2 of 6 and hurts one (was 4 of 6). |
+  | Building health | 10 | 10 (kept) | An empty ballista on a lane is broken in a big wave; a stocked one isn't. Losing one is the stake. |
+  | Ghoul detect / leash | 3 m / 5 m | kept | The soak sees 4 sprite deaths in 12 min, all back after 15 s; buildings shelter. |
+  | Sprite health / return | 3 / 15 s | kept | As above. |
+  | Ballista ammo / range | 10 / 3.8 m | kept | Ammo is the binding limit (range 4.5 changed nothing): a ghoul takes 2 bolts, so a 10-stone store covers 5 and the bigger waves need a reload mid-wave or a second ballista. That is the "defence matters, not every second" lever, and it ties defence to stone. |
+
+  Soak: `soak_tests::defending_against_the_waves_strands_no_sprite` plays
+  all twelve minutes: a ballista, a Stone Gatherer on the east lane and a
+  Wood Gatherer by the north one go up in the calm start, then cycles
+  reassign the sprites, stock and man the ballista, possess it to shoot
+  and throw fireballs while ghouls are out, Burst a gatherer otherwise,
+  and rebuild what breaks (84 cycles: 6 fireballs, 13 fire kills of 27,
+  8 buildings broken, 4 sprite deaths and returns, tree 12/20). Every tick
+  validates, checks balances, no sprite waiting past a retry with a slot
+  free, and (both soaks) none dead past its return. The happy path asserts
+  it ends in the calm start (175 s). Tests that send their own enemies
+  clear the map's waves (`scenario.waves.clear()`). App: the possessed
+  building's card says "E  LEAVE" as its last line instead of a prompt
+  over the slot that hid its fireball line (`leave_prompt`); the status
+  line adds "NEXT WAVE 1:20", or "GHOULS 3" while any are out. Demo
+  `demos/sacred_tree.json`: stocks the tree, builds and loads a ballista
+  at 2× speed, waits at 4× to the first wave, Fern mans it and shoots, the
+  elder possesses it (Fern steps out), throws a fireball at the column and
+  fires four bolts, leaves, and Fern takes over. No format changed (no
+  save, input or net version bump); golden unchanged.
+- **Left open:** the "THE TREE HAS FALLEN" overlay isn't in the demo (it
+  needs 20 breaches; its test covers it). Wave lanes are a workaround for
+  the 8-wave limit; if waves grow, a wave with groups (or a higher limit)
+  would read better in content. Repair (todo "Repairing buildings") and a
+  faster possessed ballista stay for the playtest.
 
 ### M5.5 Sprite health, building health and the tree
 
