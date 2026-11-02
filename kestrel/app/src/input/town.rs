@@ -217,6 +217,8 @@ fn highlight(world: &World, target: InteractTarget, interaction: &Interaction) -
         InteractTarget::Slot(b) => (s.buildings.get(b as usize)?.slot_position(s.building_kinds.get(s.buildings[b as usize].kind as usize)?), 0.45),
     };
     let prompt = match (target, interaction) {
+        // A ballista's ammo store is loaded, not picked up from (B2).
+        (InteractTarget::Output(_), Interaction::Bundle(job)) if job.direction == sim::settlement::Direction::Deposit => format!("LOAD {} {}", job.remaining, item(job.item)),
         (InteractTarget::Output(_) | InteractTarget::Pile(_), Interaction::Bundle(job)) => format!("PICK UP {} {}", job.remaining, item(job.item)),
         (InteractTarget::Site(_), Interaction::Bundle(job)) => format!("DELIVER {} {}", job.remaining, item(job.item)),
         (_, Interaction::Bundle(job)) if job.direction == sim::settlement::Direction::Deposit => format!("DEPOSIT {} {}", job.remaining, item(job.item)),
@@ -329,14 +331,17 @@ pub fn possessing(world: &World) -> bool {
 }
 
 /// The job menu's options: idle, then one per building kind, gathering its
-/// product.
+/// product, or manning a ballista ("MAN BALLISTA").
 fn job_menu(world: &World, sprite: u16) -> JobMenu {
     let s = world.resource::<SessionService>().settlement().expect("a town");
     let mut options = vec!["IDLE".to_string()];
     let mut jobs = vec![SpriteJob::Idle];
     for (i, kind) in s.building_kinds.iter().enumerate() {
-        let product = s.items.get(kind.product as usize).map_or_else(|| kind.id.to_uppercase(), |id| id.to_uppercase());
-        options.push(format!("GATHER {product}"));
+        let option = match kind.product {
+            Some(product) => format!("GATHER {}", s.items.get(product as usize).map_or_else(|| kind.id.to_uppercase(), |id| id.to_uppercase())),
+            None => format!("MAN {}", kind.id.to_uppercase().replace('_', " ")),
+        };
+        options.push(option);
         jobs.push(SpriteJob::Staff(i as u16));
     }
     JobMenu { sprite, options, jobs }

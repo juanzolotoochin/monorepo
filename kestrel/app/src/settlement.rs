@@ -1303,12 +1303,13 @@ fn sprite_view(sim: &Simulation, sprite: &crate::legacy::Sprite, a: &crate::lega
 }
 /// A sprite's job, by its building kind's label ("WOOD GATHERER"), and
 /// shortened to the kind's product for its tag ("WOOD"), so neighbors' tags
-/// overlap less.
+/// overlap less. A ballista, which makes nothing, keeps its label.
 fn job_labels(sim: &Simulation, job: Option<&String>) -> (String, String) {
     let Some(kind) = job.and_then(|id| sim.config().building_kinds.iter().find(|k| k.id == *id)) else {
         return (String::new(), String::new());
     };
-    let product = sim.config().items.iter().find(|i| i.id == kind.product).map_or_else(|| kind.product.to_uppercase(), |i| i.label.clone());
+    let Some(product) = &kind.product else { return (kind.label.clone(), kind.label.clone()) };
+    let product = sim.config().items.iter().find(|i| i.id == *product).map_or_else(|| product.to_uppercase(), |i| i.label.clone());
     (kind.label.clone(), product)
 }
 /// An agent's label: a sprite's or a scenario agent's.
@@ -1369,6 +1370,12 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
         // A machine skin turns its rotor a full turn per `activity`: three
         // turns a unit while it works, standing still while idle or full.
         v.activity = b.progress * 3.0;
+        // A ballista's skin is the forest's turret: it turns to its last
+        // aim and recoils as it shoots, as a defender's does.
+        if let Some(turret) = &b.turret {
+            v.aim = turret.aim.map(|p| (p[0] - b.position[0]).atan2(p[1] - b.position[1]));
+            v.activity = (1. - (sim.time() - turret.fired_at as f32) / (0.25 * HZ)).max(0.);
+        }
         if grown > 0.0 {
             desired.insert(format!("building/{i}"), v);
         }
@@ -1378,8 +1385,11 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
         let center = center + Vec3::Y * ground(world, center);
         let (glow, status) = match (&b.occupant, b.status) {
             (Some(Occupant::Elder(_)), BuildingStatus::Full) => (Glow::Full, "FULL / POSSESSED".to_string()),
+            (Some(Occupant::Elder(_)), BuildingStatus::NoAmmo) => (Glow::Full, "NO AMMO / POSSESSED".to_string()),
             (Some(Occupant::Elder(_)), _) => (Glow::Elder, "POSSESSED".to_string()),
             (Some(Occupant::Sprite(a)), BuildingStatus::Full) => (Glow::Full, format!("FULL / {}", agent_label(sim, a))),
+            (Some(Occupant::Sprite(a)), BuildingStatus::NoAmmo) => (Glow::Full, format!("NO AMMO / {}", agent_label(sim, a))),
+            (Some(Occupant::Sprite(a)), _) if kind.ammo.is_some() => (Glow::Working, format!("MANNED / {}", agent_label(sim, a))),
             (Some(Occupant::Sprite(a)), _) => (Glow::Working, format!("WORKING / {}", agent_label(sim, a))),
             (None, BuildingStatus::Site) => (Glow::Idle, "BEING BUILT".to_string()),
             (None, _) => match &b.claimed_by {
@@ -1406,23 +1416,46 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
         } * (1.0 + flare * 0.9 + burst_flare * 2.2);
         let lamp = center + Vec3::Y * (shape.height * grown.max(0.4) + 0.3);
         glows.push((format!("lamp/{i}"), lamp, size, glow));
-        let product = sim.config().items.iter().find(|it| it.id == kind.product).map_or(kind.product.clone(), |it| it.label.clone());
+        // A gatherer's product, or a ballista's ammo: what its pile holds.
+        let stored = kind.product.clone().or_else(|| kind.ammo.as_ref().map(|(item, _)| item.clone())).unwrap_or_default();
+        let product = sim.config().items.iter().find(|it| it.id == stored).map_or(stored.to_uppercase(), |it| it.label.clone());
         let held = b.output.total();
-        let detail = format!(
-            "{}\nMakes 1 {} every {:.1}s while someone works it\nOutput: {}/{} {}\nStatus: {}",
-            kind.label,
-            product.to_lowercase(),
-            kind.period,
-            held,
-            b.cap,
-            product.to_lowercase(),
-            match b.status {
-                BuildingStatus::Working => format!("Working, next unit {:.0}%", b.progress * 100.0),
-                BuildingStatus::Full => "Output full: waiting for a pickup".into(),
-                BuildingStatus::Idle => "Idle: nobody inside".into(),
-                BuildingStatus::Site => "Being built".into(),
-            }
-        );
+        let status_line = match b.status {
+            BuildingStatus::Working if kind.ammo.is_some() => "Manned, shooting the nearest enemy in range".into(),
+            BuildingStatus::Working => format!("Working, next unit {:.0}%", b.progress * 100.0),
+            BuildingStatus::Full => "Output full: waiting for a pickup".into(),
+            BuildingStatus::NoAmmo => "No ammo: bring it stone".into(),
+            BuildingStatus::Idle => "Idle: nobody inside".into(),
+            BuildingStatus::Site => "Being built".into(),
+        };
+        let detail = match &kind.ammo {
+            Some(_) => format!(
+                "{}\nShoots the nearest enemy in range while someone mans it, 1 {} a shot\nAmmo: {}/{} {}\nStatus: {}",
+                kind.label,
+                product.to_lowercase(),
+                held,
+                b.cap,
+                product.to_lowercase(),
+                status_line
+            ),
+            None => format!(
+                "{}\nMakes 1 {} every {:.1}s while someone works it\nOutput: {}/{} {}\nStatus: {}",
+                kind.label,
+                product.to_lowercase(),
+                kind.period,
+                held,
+                b.cap,
+                product.to_lowercase(),
+                status_line
+            ),
+        };
+        // A built ballista's card says how much ammo it has, or that it has
+        // none (B2).
+        let status = match &kind.ammo {
+            Some(_) if b.site.is_none() && held == 0 && b.status != BuildingStatus::NoAmmo => format!("{status}\nNO AMMO"),
+            Some(_) if b.site.is_none() && held > 0 => format!("{status}\nAMMO {held}/{} {product}", b.cap),
+            _ => status,
+        };
         // A site's card says what its next part takes and how much is in
         // ("FOUNDATION 1/2 WOOD"); its output pile isn't there yet.
         let (status, detail) = match &b.site {
@@ -1583,7 +1616,7 @@ fn burst_indicator(world: &World) -> Option<(usize, String)> {
         Ok(_) => format!("BURST READY ({key})"),
         Err(sim::settlement::BurstRefusal::Cooling { ticks }) => format!("BURST {} s", ticks.div_ceil(content::TICKS_PER_SECOND as u64)),
         Err(sim::settlement::BurstRefusal::OutputFull) => "BURST: OUTPUT FULL".to_string(),
-        Err(sim::settlement::BurstRefusal::NotPossessing) => return None,
+        Err(sim::settlement::BurstRefusal::NotPossessing | sim::settlement::BurstRefusal::NoBurst) => return None,
     };
     Some((building as usize, text))
 }

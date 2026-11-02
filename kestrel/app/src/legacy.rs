@@ -115,10 +115,14 @@ pub struct BuildingKind {
     pub label: String,
     pub skin: String,
     pub radius: f32,
-    pub product: String,
+    /// What a gatherer makes; a ballista makes nothing.
+    pub product: Option<String>,
     /// Seconds per unit with a sprite inside.
     pub period: f32,
     pub cap: u32,
+    /// A ballista's ammo item and how much its store holds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ammo: Option<(String, u32)>,
     /// The parts it is put up from, in install order.
     pub parts: Vec<Part>,
 }
@@ -294,6 +298,7 @@ impl Scenario {
                     product: k.product.clone(),
                     period: k.period.to_f32(),
                     cap: k.cap,
+                    ammo: k.defence.as_ref().map(|d| (d.ammo.clone(), d.ammo_cap)),
                     parts: k.parts.iter().map(|p| Part { label: p.label.clone(), materials: p.materials.iter().map(|m| (m.item.clone(), m.units)).collect() }).collect(),
                 })
                 .collect(),
@@ -378,6 +383,9 @@ pub enum BuildingStatus {
     Working,
     /// Its output holds its occupant's cap: production waits for a pickup.
     Full,
+    /// A ballista with someone inside and nothing in its ammo store: it
+    /// can't shoot (B2).
+    NoAmmo,
 }
 
 /// A building as the view sees it (`sim::settlement::BuildingState`).
@@ -402,6 +410,9 @@ pub struct Building {
     /// While it is a site: the part going in next and its materials.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub site: Option<Site>,
+    /// A ballista's: where it last aimed and the tick it last shot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turret: Option<DefenderState>,
 }
 
 /// A site as the view sees it (`sim::settlement::Stage::Site`).
@@ -927,6 +938,8 @@ impl Simulation {
                     s::Event::BlueprintRefused { reason, .. } => Event::BlueprintRefused { reason: *reason },
                     s::Event::PartInstalled { building, built, .. } => Event::PartInstalled { building: *building as usize, built: *built },
                     s::Event::BuildingBurst { building, units } => Event::BuildingBurst { building: *building as usize, units: *units },
+                    // A ballista building's shot sounds as a defender's.
+                    s::Event::BuildingShot { building } => Event::Shot { defender: format!("building/{building}") },
                     s::Event::BurstRefused { agent, reason } => Event::BurstRefused { agent: agent_name(*agent), reason: *reason },
                     s::Event::ThreatSwing { threat, agent, hit, killed, .. } => Event::ThreatSwing {
                         threat: *threat,
@@ -949,10 +962,15 @@ impl Simulation {
                     s::Occupant::Elder(a) => Occupant::Elder(agent_name(a)),
                 });
                 let cap = kind.cap_for(b.slot.occupant());
+                let ballista = kind.defence.is_some();
                 let status = if !b.built() {
                     BuildingStatus::Site
                 } else if occupant.is_none() {
                     BuildingStatus::Idle
+                } else if ballista && b.output.total() == 0 {
+                    BuildingStatus::NoAmmo
+                } else if ballista {
+                    BuildingStatus::Working
                 } else if b.output.total() + b.output.total_in() >= cap {
                     BuildingStatus::Full
                 } else {
@@ -978,6 +996,7 @@ impl Simulation {
                         materials: kind.parts.get(part as usize).into_iter().flatten().map(|&(i, units)| (item(i), materials.count(i), units)).collect(),
                         ready: b.ready(kind),
                     }),
+                    turret: ballista.then(|| DefenderState { enabled: true, aim: b.turret.aim.map(local), fired_at: b.turret.fired_at }),
                 }
             })
             .collect();
