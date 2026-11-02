@@ -9,6 +9,8 @@
 //! may have moved on since the client looked, and acts by its kind.
 //!
 //! - **A building's output:** a bundle pickup (`avatar::bundle_job`).
+//!   A ballista's (its ammo store, B2) is a delivery instead, while
+//!   carrying its ammo, as much as fits; nothing comes back out of it.
 //! - **A tree pile** (a depot): a deposit while carrying, a withdrawal when
 //!   empty-handed.
 //! - **A sprite** standing outside buildings, empty-handed only: the app's
@@ -147,6 +149,12 @@ pub fn interact_target(view: &View, me: &AgentState, sprites: impl IntoIterator<
     candidates.into_iter().find_map(|(_, t, _)| interaction(view, &me.carry, t).ok().map(|use_| (t, use_)))
 }
 
+/// Whether building `b`'s output is a ballista's ammo store, delivered to
+/// rather than picked up from (B2).
+pub(super) fn ammo_store(view: &View, b: BuildingIx) -> bool {
+    view.buildings.get(b as usize).is_some_and(|b| view.building_kinds[b.kind as usize].defence.is_some())
+}
+
 /// Whether sprite `a` works inside a building.
 fn inside(view: &View, a: AgentIx) -> bool {
     view.buildings.iter().any(|b| b.slot == Slot::Occupied(Occupant::Sprite(a)))
@@ -178,8 +186,14 @@ pub fn interaction(view: &View, carry: &Carry, target: InteractTarget) -> Result
         InteractTarget::Output(_) | InteractTarget::Depot(_) | InteractTarget::Pile(_) => {
             let other = target.holder().expect("a bundle kind");
             // An output and a ground pile are only picked up from (a drop
-            // is its own key); a depot takes the bundle.
-            let direction = if carrying && matches!(target, InteractTarget::Depot(_)) { Direction::Deposit } else { Direction::Pickup };
+            // is its own key); a depot takes the bundle, and so does a
+            // ballista's ammo store, which nothing is picked up from (B2).
+            let takes = match target {
+                InteractTarget::Depot(_) => true,
+                InteractTarget::Output(b) => ammo_store(view, b),
+                _ => false,
+            };
+            let direction = if carrying && takes { Direction::Deposit } else { Direction::Pickup };
             bundle_job(carry, view, other, direction).map(Interaction::Bundle)
         }
         // D5: a sprite is a target only empty-handed.

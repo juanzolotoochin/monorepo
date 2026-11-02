@@ -194,8 +194,9 @@ fn output_distance() -> Fx {
 }
 
 /// A kind of building players put up from parts: a gatherer that turns out
-/// one item while someone occupies it. Every rate and recipe is here, not in
-/// code.
+/// one item while someone occupies it, or a ballista that shoots the
+/// nearest enemy while someone occupies it and it has ammo (`defence`).
+/// Every rate and recipe is here, not in code.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BuildingKind {
@@ -204,18 +205,30 @@ pub struct BuildingKind {
     pub skin: String,
     /// Footprint radius in meters.
     pub radius: Fx,
-    /// The item it produces, one unit at a time.
-    pub product: String,
+    /// The item a gatherer produces, one unit at a time. A ballista has
+    /// none, and none of the production fields after it.
+    #[serde(default)]
+    pub product: Option<String>,
     /// Seconds per unit while a sprite occupies it.
+    #[serde(default)]
     pub period: Fx,
     /// Units its output holds; production pauses when it is full.
+    #[serde(default)]
     pub cap: u32,
     /// The output's cap while an elder possesses it.
+    #[serde(default)]
     pub possessed_cap: u32,
     /// A possessing elder divides the period by this.
+    #[serde(default)]
     pub possessed_multiplier: Fx,
+    #[serde(default)]
     pub burst: Burst,
-    /// Meters from the building's center to its output pile, in front.
+    /// A ballista's shooting and its ammo store, which takes the place of a
+    /// gatherer's output pile. A building kind has either this or a product.
+    #[serde(default)]
+    pub defence: Option<Defence>,
+    /// Meters from the building's center to its output pile (a ballista's
+    /// ammo pile), in front.
     #[serde(default = "output_distance")]
     pub output_distance: Fx,
     /// Installed one after another; installing the last one finishes it.
@@ -224,11 +237,32 @@ pub struct BuildingKind {
 
 /// What a possessing elder's Burst does: `units` at once into the output,
 /// then `cooldown` seconds before the next.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Burst {
     pub units: u32,
     pub cooldown: Fx,
+}
+
+/// A ballista building's shooting (`BuildingKind::defence`), as a
+/// `Defender`'s: the nearest enemy in range, one unit of ammo a shot. Its
+/// ammo store takes `ammo` only, up to `ammo_cap`, and is only delivered
+/// to.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Defence {
+    /// The item it shoots, by id.
+    pub ammo: String,
+    pub ammo_cap: u32,
+    pub range: Fx,
+    /// Seconds between shots.
+    pub period: Fx,
+    pub damage: u32,
+    pub projectile_speed: Fx,
+    #[serde(default = "muzzle_height")]
+    pub muzzle_height: Fx,
+    #[serde(default)]
+    pub projectile: ProjectileKind,
 }
 
 /// One part of a building, and the materials it takes to install.
@@ -580,23 +614,44 @@ impl Scenario {
         }
         for k in &self.building_kinds {
             let parts = ids(k.parts.iter().map(|p| p.id.as_str())).is_ok();
-            if k.label.is_empty()
+            let shared = k.label.is_empty()
                 || k.label.len() > 128
                 || !ident(&k.skin)
                 || !within(k.radius, f(1, 10), Fx::from_int(3))
-                || !items.contains(k.product.as_str())
-                || !within(k.period, f(1, 10), Fx::from_int(3600))
-                || !(1..=4096).contains(&k.cap)
-                || !(k.cap..=4096).contains(&k.possessed_cap)
-                || !within(k.possessed_multiplier, Fx::ONE, Fx::from_int(16))
-                || !(1..=k.possessed_cap).contains(&k.burst.units)
-                || !within(k.burst.cooldown, f(1, 10), Fx::from_int(3600))
                 || !within(k.output_distance, k.radius, k.radius + Fx::from_int(4))
                 || k.parts.is_empty()
                 || k.parts.len() > 8
                 || !parts
-                || k.parts.iter().any(|p| p.label.is_empty() || p.label.len() > 128 || !stacks(&p.materials))
-            {
+                || k.parts.iter().any(|p| p.label.is_empty() || p.label.len() > 128 || !stacks(&p.materials));
+            // A gatherer produces; a ballista shoots and has no production.
+            let role = match (&k.product, &k.defence) {
+                (Some(product), None) => {
+                    items.contains(product.as_str())
+                        && within(k.period, f(1, 10), Fx::from_int(3600))
+                        && (1..=4096).contains(&k.cap)
+                        && (k.cap..=4096).contains(&k.possessed_cap)
+                        && within(k.possessed_multiplier, Fx::ONE, Fx::from_int(16))
+                        && (1..=k.possessed_cap).contains(&k.burst.units)
+                        && within(k.burst.cooldown, f(1, 10), Fx::from_int(3600))
+                }
+                (None, Some(d)) => {
+                    k.period == Fx::ZERO
+                        && k.cap == 0
+                        && k.possessed_cap == 0
+                        && k.possessed_multiplier == Fx::ZERO
+                        && k.burst.units == 0
+                        && k.burst.cooldown == Fx::ZERO
+                        && items.contains(d.ammo.as_str())
+                        && (1..=4096).contains(&d.ammo_cap)
+                        && within(d.range, f(1, 10), Fx::from_int(32))
+                        && within(d.period, f(1, 10), Fx::from_int(3600))
+                        && (1..=1000).contains(&d.damage)
+                        && within(d.projectile_speed, Fx::HALF, Fx::from_int(100))
+                        && within(d.muzzle_height, Fx::ZERO, Fx::from_int(5))
+                }
+                _ => false,
+            };
+            if shared || !role {
                 return Err(format!("invalid building kind {}", k.id));
             }
         }
@@ -705,7 +760,8 @@ mod tests {
         assert!(tree.depots.iter().all(|d| d.stock.is_empty()));
         let kind = |id: &str| tree.building_kinds.iter().find(|k| k.id == id).unwrap();
         let wood = kind("wood_gatherer");
-        assert_eq!((wood.product.as_str(), wood.period, wood.cap, wood.possessed_cap), ("wood", Fx::from_int(5), 10, 20));
+        assert_eq!((wood.product.as_deref(), wood.period, wood.cap, wood.possessed_cap), (Some("wood"), Fx::from_int(5), 10, 20));
+        assert!(wood.defence.is_none());
         assert_eq!((wood.possessed_multiplier, wood.burst.units, wood.burst.cooldown), (Fx::from_int(4), 5, Fx::from_int(30)));
         assert_eq!(wood.output_distance, "1.2".parse().unwrap(), "the default");
         fn needs(k: &BuildingKind) -> Vec<Vec<(&str, u32)>> {
@@ -713,8 +769,16 @@ mod tests {
         }
         assert_eq!(needs(wood), [vec![("wood", 2)], vec![("wood", 2), ("stone", 2)]]);
         let stone = kind("stone_gatherer");
-        assert_eq!((stone.product.as_str(), stone.period), ("stone", Fx::from_int(8)));
+        assert_eq!((stone.product.as_deref(), stone.period), (Some("stone"), Fx::from_int(8)));
         assert_eq!(needs(stone), [vec![("wood", 2)], vec![("wood", 2)]]);
+        // The ballista shoots as the Woodland Ballista does, from a store of
+        // stone, and produces nothing.
+        let ballista = kind("ballista");
+        let defence = ballista.defence.as_ref().unwrap();
+        assert_eq!((ballista.product.as_deref(), ballista.cap, ballista.burst.units), (None, 0, 0));
+        assert_eq!((defence.ammo.as_str(), defence.ammo_cap, defence.damage), ("stone", 10, 1));
+        assert_eq!((defence.range, defence.period, defence.projectile_speed), ("3.8".parse().unwrap(), "0.7".parse().unwrap(), Fx::from_int(8)));
+        assert_eq!(needs(ballista), [vec![("wood", 2)], vec![("wood", 2), ("stone", 2)]]);
         assert_eq!(tree.buildings[0].kind, "wood_gatherer");
         // The other scenes have none of it.
         let forest = Scenario::parse(FOREST).unwrap();
@@ -728,7 +792,14 @@ mod tests {
             change(&mut scenario);
             scenario.validate().is_err()
         };
-        assert!(invalid(|s| s.building_kinds[0].product = "unobtainium".into()));
+        assert!(invalid(|s| s.building_kinds[0].product = Some("unobtainium".into())));
+        assert!(invalid(|s| s.building_kinds[0].product = None));
+        assert!(invalid(|s| s.building_kinds[0].defence = s.building_kinds[2].defence.clone()));
+        assert!(invalid(|s| s.building_kinds[2].defence = None));
+        assert!(invalid(|s| s.building_kinds[2].cap = 10));
+        assert!(invalid(|s| s.building_kinds[2].defence.as_mut().unwrap().ammo = "unobtainium".into()));
+        assert!(invalid(|s| s.building_kinds[2].defence.as_mut().unwrap().ammo_cap = 0));
+        assert!(invalid(|s| s.building_kinds[2].defence.as_mut().unwrap().period = Fx::ZERO));
         assert!(invalid(|s| s.building_kinds[0].parts[1].materials[1].item = "unobtainium".into()));
         assert!(invalid(|s| s.building_kinds[0].parts.clear()));
         assert!(invalid(|s| s.building_kinds[0].parts[0].materials.clear()));

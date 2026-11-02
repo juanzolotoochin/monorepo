@@ -23,6 +23,15 @@
 //! An elder possessing a building can Burst (D3): its kind's Burst units go
 //! into the output at once, up to the possessed cap, and the elder waits out
 //! the kind's cooldown before the next (`AvatarState::burst_ready`).
+//!
+//! A ballista (a kind with a `defence`, `SACRED_TREE_BALLISTA.md` B1, B2)
+//! produces nothing. Its output is its ammo store instead: its ammo item
+//! only, up to its ammo cap, which players deliver to as to a site and
+//! nothing takes back out. Built, occupied and stocked, it shoots the
+//! nearest threat in range through the helpers the Woodland Ballista uses
+//! (`Settlement::pick_target`, `Settlement::launch_shot`), one unit a shot.
+//! Empty, or with nobody inside, it never shoots. An elder possessing it
+//! shoots as a sprite does for now (aiming is M5.2's).
 
 use content::scenario::{self, Scenario};
 use fx::{Fx, FxVec2};
@@ -31,7 +40,8 @@ use serde::{Deserialize, Serialize};
 use super::sprites::Hold;
 use super::{AgentIx, DepotIx, Event, Inventory, InventoryRef, ItemIx, Kinds, Settlement};
 use super::avatar::Seat;
-use crate::messages::{Burst, Install, PlaceBlueprint};
+use super::combat::Launcher;
+use crate::messages::{Burst, BuildingFire, Install, Messages, PlaceBlueprint};
 use crate::nav;
 use crate::terrain::{Disc, Terrain, CLEARANCE_MARGIN};
 
@@ -54,7 +64,8 @@ pub const STAND_GAP: Fx = Fx::from_ratio(2, 5);
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BuildingKind {
     pub id: String,
-    pub product: ItemIx,
+    /// What a gatherer makes; a ballista makes nothing.
+    pub product: Option<ItemIx>,
     /// Footprint radius in meters.
     pub radius: Fx,
     /// Ticks of a sprite's work per unit.
@@ -73,16 +84,63 @@ pub struct BuildingKind {
     pub output_distance: Fx,
     /// The materials of each part, in install order.
     pub parts: Vec<Vec<(ItemIx, u32)>>,
+    /// A ballista's shooting; `None` for a gatherer.
+    pub defence: Option<Defence>,
+}
+
+/// A ballista building's shooting (`scenario::Defence`), in ticks and item
+/// indices: what a `DefenderState` holds, for a building.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Defence {
+    /// The one item its ammo store takes and it shoots.
+    pub ammo: ItemIx,
+    pub ammo_cap: u32,
+    pub range: Fx,
+    /// Ticks between shots.
+    pub period: u64,
+    pub damage: u32,
+    /// Projectile speed, meters per second.
+    pub speed: Fx,
+    pub muzzle_height: Fx,
+    pub projectile: scenario::ProjectileKind,
 }
 
 impl BuildingKind {
-    /// The output's cap with `occupant` in the slot.
+    /// The output's cap with `occupant` in the slot: a ballista's ammo
+    /// store holds its ammo cap whoever is inside.
     pub fn cap_for(&self, occupant: Option<Occupant>) -> u32 {
-        match occupant {
-            Some(Occupant::Elder(_)) => self.possessed_cap,
-            _ => self.cap,
+        match (&self.defence, occupant) {
+            (Some(d), _) => d.ammo_cap,
+            (None, Some(Occupant::Elder(_))) => self.possessed_cap,
+            (None, _) => self.cap,
         }
     }
+
+    /// What the building's `output` holds at most: a gatherer's possessed
+    /// cap (the most any occupant fills it to), a ballista's ammo cap.
+    pub fn store_capacity(&self) -> u32 {
+        self.defence.as_ref().map_or(self.possessed_cap, |d| d.ammo_cap)
+    }
+
+    /// What the building's `output` takes: a gatherer's one product, a
+    /// ballista's ammo only.
+    pub fn store_kinds(&self) -> Kinds {
+        match &self.defence {
+            Some(d) => Kinds::Only(d.ammo),
+            None => Kinds::OneKind,
+        }
+    }
+}
+
+/// A ballista building's aim, as a `DefenderState` keeps it: when it may
+/// shoot next, and where and when it last did (for the view). Stays at its
+/// default for a gatherer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Turret {
+    /// The first tick it may shoot again.
+    pub ready_at: u64,
+    pub aim: Option<FxVec2>,
+    pub fired_at: u64,
 }
 
 /// How far a building has got.
@@ -144,8 +202,13 @@ pub struct BuildingState {
     /// the work done.
     pub progress: Fx,
     /// The produced units waiting to be picked up: the kind's product only,
-    /// up to the possessed cap (the most any occupant fills it to).
+    /// up to the possessed cap (the most any occupant fills it to). A
+    /// ballista's is its ammo store instead: its ammo only, up to the ammo
+    /// cap, delivered to and never picked up from (B2); each shot spends
+    /// one unit from it.
     pub output: Inventory,
+    /// A ballista's aim and its next shot.
+    pub turret: Turret,
 }
 
 impl BuildingState {
@@ -203,7 +266,8 @@ impl BuildingState {
             stage,
             slot: Slot::Empty,
             progress: Fx::ZERO,
-            output: Inventory::new(items, kind.possessed_cap, Kinds::OneKind),
+            output: Inventory::new(items, kind.store_capacity(), kind.store_kinds()),
+            turret: Turret::default(),
         }
     }
 }
@@ -224,7 +288,7 @@ pub(super) fn kinds(scenario: &Scenario, item: impl Fn(&str) -> ItemIx) -> Vec<B
         .iter()
         .map(|k| BuildingKind {
             id: k.id.clone(),
-            product: item(&k.product),
+            product: k.product.as_deref().map(&item),
             radius: k.radius,
             period: scenario::ticks(k.period),
             cap: k.cap,
@@ -234,6 +298,16 @@ pub(super) fn kinds(scenario: &Scenario, item: impl Fn(&str) -> ItemIx) -> Vec<B
             burst_cooldown: scenario::ticks(k.burst.cooldown),
             output_distance: k.output_distance,
             parts: k.parts.iter().map(|p| p.materials.iter().map(|s| (item(&s.item), s.units)).collect()).collect(),
+            defence: k.defence.as_ref().map(|d| Defence {
+                ammo: item(&d.ammo),
+                ammo_cap: d.ammo_cap,
+                range: d.range,
+                period: scenario::ticks(d.period),
+                damage: d.damage,
+                speed: d.projectile_speed,
+                muzzle_height: d.muzzle_height,
+                projectile: d.projectile,
+            }),
         })
         .collect()
 }
@@ -416,6 +490,8 @@ pub enum BurstRefusal {
     Cooling { ticks: u64 },
     /// The output already holds its possessed cap.
     OutputFull,
+    /// The building possessed has no Burst (a ballista).
+    NoBurst,
 }
 
 impl BurstRefusal {
@@ -426,6 +502,7 @@ impl BurstRefusal {
             BurstRefusal::NotPossessing => "Possess a building to Burst".to_string(),
             BurstRefusal::Cooling { ticks } => format!("Burst ready in {} s", ticks.div_ceil(content::TICKS_PER_SECOND as u64)),
             BurstRefusal::OutputFull => "Output full".to_string(),
+            BurstRefusal::NoBurst => "This building has no Burst".to_string(),
         }
     }
 }
@@ -441,11 +518,25 @@ fn burst_plan(seat: Option<Seat>, ready: u64, tick: u64, buildings: &[BuildingSt
         return Err(BurstRefusal::Cooling { ticks: ready - tick });
     }
     let kind = &kinds[building.kind as usize];
+    if kind.product.is_none() || kind.burst == 0 {
+        return Err(BurstRefusal::NoBurst);
+    }
     let held = building.output.total() + building.output.total_in();
     match kind.burst.min(kind.possessed_cap.saturating_sub(held)) {
         0 => Err(BurstRefusal::OutputFull),
         units => Ok((b, units)),
     }
+}
+
+/// A ballista's shooting, when building `b` of `kind` can shoot on `tick`:
+/// a ballista, built, with someone inside (a sprite or, until aiming
+/// comes, an elder), ammo in its store and its period over since the last
+/// shot. `None` for a gatherer, a site, an empty or unstocked ballista, or
+/// one still reloading.
+fn ready_to_shoot<'a>(b: &BuildingState, kind: &'a BuildingKind, tick: u64) -> Option<&'a Defence> {
+    let defence = kind.defence.as_ref()?;
+    let stocked = b.output.available(defence.ammo) > 0;
+    (b.built() && b.slot.occupant().is_some() && stocked && b.turret.ready_at <= tick).then_some(defence)
 }
 
 /// Where a building's occupant stands (D2): just past the footprint, a
@@ -630,7 +721,7 @@ impl Settlement {
             match burst_plan(avatar.seat, avatar.burst_ready, tick, &self.buildings, &self.building_kinds) {
                 Ok((building, units)) => {
                     let kind = &self.building_kinds[self.buildings[building as usize].kind as usize];
-                    let (product, cooldown) = (kind.product, kind.burst_cooldown);
+                    let (product, cooldown) = (kind.product.expect("only a gatherer Bursts"), kind.burst_cooldown);
                     let added = self.buildings[building as usize].output.add(product, units);
                     debug_assert!(added, "below the possessed cap, which is the capacity");
                     self.accounts[product as usize].produced += units as u64;
@@ -652,6 +743,38 @@ impl Settlement {
         burst_plan(avatar.seat, avatar.burst_ready, tick, &self.buildings, &self.building_kinds).map(|(_, units)| units)
     }
 
+    /// Stage 3: every ballista that can shoot now (`ready_to_shoot`) aims at
+    /// the nearest threat in range that the shots in flight won't kill
+    /// (`pick_target`), as a defender does.
+    pub(super) fn aim_buildings(&self, tick: u64, out: &mut Vec<(FxVec2, Messages)>) {
+        for (i, b) in self.buildings.iter().enumerate() {
+            let kind = &self.building_kinds[b.kind as usize];
+            let Some(defence) = ready_to_shoot(b, kind, tick) else { continue };
+            if let Some(t) = self.pick_target(b.position, defence.range) {
+                let mut messages = Messages::default();
+                messages.building_fire.push(BuildingFire { building: i as BuildingIx, target: t.id, to: t.position });
+                out.push((b.position, messages));
+            }
+        }
+    }
+
+    /// Stage 5: a ballista's shot, if it can still shoot (`ready_to_shoot`):
+    /// one unit of ammo leaves its store (spent, in the balances) and the
+    /// shot flies (`launch_shot`), then it waits out its period.
+    pub(crate) fn building_fire(&mut self, tick: u64, message: BuildingFire) {
+        let Some(b) = self.buildings.get(message.building as usize) else { return };
+        let kind = &self.building_kinds[b.kind as usize];
+        let Some(defence) = ready_to_shoot(b, kind, tick) else { return };
+        let launcher = Launcher { from: b.position, height: defence.muzzle_height, damage: defence.damage, speed: defence.speed, kind: defence.projectile, defender: None };
+        let (ammo, period) = (defence.ammo, defence.period);
+        let shot = Event::BuildingShot { building: message.building };
+        self.launch_shot(tick, &launcher, InventoryRef::Output(message.building), ammo, message.target, message.to, shot);
+        let turret = &mut self.buildings[message.building as usize].turret;
+        turret.aim = Some(message.to);
+        turret.ready_at = tick + period;
+        turret.fired_at = tick;
+    }
+
     /// Part of the economy step: every built, occupied building below its
     /// cap works one tick, and at its period puts a unit in its output. The
     /// cap counts every unit still in the output, those a bundle has
@@ -662,6 +785,7 @@ impl Settlement {
             let b = &self.buildings[i];
             let kind = &self.building_kinds[b.kind as usize];
             let Some(occupant) = b.slot.occupant() else { continue };
+            let Some(product) = kind.product else { continue };
             let held = b.output.total() + b.output.total_in();
             if !b.built() || held >= kind.cap_for(Some(occupant)) {
                 continue;
@@ -670,7 +794,7 @@ impl Settlement {
                 Occupant::Sprite(_) => Fx::ONE,
                 Occupant::Elder(_) => kind.possessed_multiplier,
             };
-            let (product, period) = (kind.product, Fx::ONE.mul_int(kind.period as i64));
+            let period = Fx::ONE.mul_int(kind.period as i64);
             let b = &mut self.buildings[i];
             b.progress = b.progress + work;
             if b.progress < period {
@@ -705,11 +829,14 @@ impl Settlement {
             };
             let name = format!("building {i} ({})", kind.id);
             b.output.validate().map_err(|e| format!("{name} output {e}"))?;
-            if b.output.kind().is_some_and(|item| item != kind.product) {
-                return Err(format!("{name} output holds an item it doesn't make"));
+            if b.output.kind().is_some_and(|item| Some(item) != kind.product.or(kind.defence.as_ref().map(|d| d.ammo))) {
+                return Err(format!("{name} output holds an item it doesn't make or shoot"));
             }
-            if b.output.capacity != kind.possessed_cap {
-                return Err(format!("{name} output has capacity {}, not its possessed cap", b.output.capacity));
+            if b.output.capacity != kind.store_capacity() || b.output.kinds != kind.store_kinds() {
+                return Err(format!("{name} output has capacity {} or kinds {:?}, not its kind's", b.output.capacity, b.output.kinds));
+            }
+            if kind.defence.is_none() && b.turret != Turret::default() {
+                return Err(format!("{name} is a gatherer with a turret's aim"));
             }
             let building = i as BuildingIx;
             if (b.output.reserved_out.clone(), b.output.reserved_in.clone()) != self.expected_reservations(InventoryRef::Output(building)) {

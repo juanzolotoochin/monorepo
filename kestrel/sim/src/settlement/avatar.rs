@@ -1068,8 +1068,10 @@ pub fn bundle_job(carry: &Carry, view: &View, other: InventoryRef, direction: Di
     // Depot items only: minerals don't go to depots or come out of them.
     let depot_item = |item: &ItemIx| (*item as usize) < view.items;
     let (item, units) = match direction {
-        // A site is a drop-off: nothing is taken back out (D4).
+        // A site is a drop-off: nothing is taken back out (D4), nor out of
+        // a ballista's ammo store (B2).
         Direction::Pickup if matches!(other, InventoryRef::Site(_)) => return Err(BundleRefusal::DepositOnly),
+        Direction::Pickup if matches!(other, InventoryRef::Output(b) if super::interact::ammo_store(view, b)) => return Err(BundleRefusal::DepositOnly),
         Direction::Pickup => {
             // The holder's item: a tree pile's own, what an output holds, or
             // in a mixed depot the bundle's item, else the first there.
@@ -1091,7 +1093,9 @@ pub fn bundle_job(carry: &Carry, view: &View, other: InventoryRef, direction: Di
             (item, cargo.free().min(holder.available(item)))
         }
         Direction::Deposit => {
-            if matches!(other, InventoryRef::Output(_)) {
+            // A gatherer's output is only picked up from; a ballista's ammo
+            // store takes as much of its ammo as fits.
+            if matches!(other, InventoryRef::Output(b) if !super::interact::ammo_store(view, b)) {
                 return Err(BundleRefusal::PickupOnly);
             }
             let Some(item) = (0..view.items as ItemIx).find(|&i| cargo.available(i) > 0) else { return Err(BundleRefusal::NothingCarried) };

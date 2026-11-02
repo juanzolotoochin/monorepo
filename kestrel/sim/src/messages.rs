@@ -198,6 +198,23 @@ pub struct Fire {
     pub to: FxVec2,
 }
 
+/// A ballista building shoots at a threat's current position
+/// (`Settlement::building_fire`), as a defender's `Fire`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildingFire {
+    pub building: u16,
+    pub target: u64,
+    pub to: FxVec2,
+}
+
+impl StateHash for BuildingFire {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.building);
+        h.write(&self.target);
+        h.write(&self.to);
+    }
+}
+
 /// A player's action let go of the avatar's pile haul (`Action::Move`, an
 /// `Attack` with an offered weapon, `Respawn`). Ends the haul if it is still
 /// the one the action saw: a `Pile` command later in the same turn starts a
@@ -402,6 +419,7 @@ impl StateHash for BurstRefused {
                 h.write(&ticks);
             }
             BurstRefusal::OutputFull => h.write_u64(2),
+            BurstRefusal::NoBurst => h.write_u64(3),
         }
     }
 }
@@ -752,4 +770,7 @@ message_queues! {
     // entry sees this tick's claims. Hashed only when not empty.
     claim_slot: ClaimSlot,
     enter_slot: EnterSlot,
+    // Ballista buildings' shots (`Settlement::building_fire`), applied after
+    // the defenders'.
+    building_fire: BuildingFire,
 }

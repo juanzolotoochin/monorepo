@@ -275,6 +275,8 @@ pub enum Event {
     /// Player `agent`'s Burst didn't happen, for `reason`
     /// (`BurstRefusal::message` says it in words).
     BurstRefused { agent: AgentIx, reason: super::buildings::BurstRefusal },
+    /// A ballista building fired, as a defender's `Shot`.
+    BuildingShot { building: super::BuildingIx },
 }
 
 /// What a strike reaches (`Settlement::strike_targets`), as its `Strike`
@@ -537,6 +539,7 @@ impl Settlement {
             self.aim_defender(i as u16, d, tick, &mut out);
             result.push((d.position, out));
         }
+        self.aim_buildings(tick, &mut result);
         for (i, a) in self.agents.iter().enumerate() {
             if a.avatar().is_some() {
                 let mut out = Messages::default();

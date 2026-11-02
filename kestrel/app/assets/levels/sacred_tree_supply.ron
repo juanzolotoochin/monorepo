@@ -1,7 +1,8 @@
 // The Sacred Tree town MVP: a clearing with the tree at its center. Its
 // stock is two piles beside it, one per item (each takes only its own),
 // starting empty. The elder carries a bundle of one item, up to 5. One Wood
-// Gatherer stands built; the clearing's east side has room for more.
+// Gatherer stands built; the clearing's east side has room for more. A
+// ballista can be built too, and shoots while manned and stocked.
 // Positions are meters from the clearing's center (the scene's x and z).
 (id: "sacred_tree", extent: 9.0, items: [
 (id: "wood", label: "WOOD", skin: "item_lumber", scale: 0.45),
@@ -26,6 +27,14 @@
  cap: 10, possessed_cap: 20, possessed_multiplier: 4.0, burst: (units: 5, cooldown: 30.0), parts: [
 (id: "foundation", label: "FOUNDATION", materials: [(item: "wood", units: 2)]),
 (id: "mechanism", label: "MECHANISM", materials: [(item: "wood", units: 2)])
+]),
+// A ballista shoots the nearest enemy while someone mans it and it has
+// stone, one stone a shot; its numbers are the forest's Woodland Ballista's.
+// It produces nothing: its pile in front is its ammo, only delivered to.
+(id: "ballista", label: "BALLISTA", skin: "turret", radius: 0.7,
+ defence: (ammo: "stone", ammo_cap: 10, range: 3.8, period: 0.7, damage: 1, projectile_speed: 8.0), parts: [
+(id: "foundation", label: "FOUNDATION", materials: [(item: "wood", units: 2)]),
+(id: "mechanism", label: "MECHANISM", materials: [(item: "wood", units: 2), (item: "stone", units: 2)])
 ])
 ], buildings: [
 (kind: "wood_gatherer", position: (-5.2, 0.6))
