@@ -4,23 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M5.3 The fireball and burning ground
-
-- **Status:** open
-- **Why:** the possessed ballista's special ability (B4).
-- **What to do:**
-  - R (or RB) throws a fireball at the reticle, with a cooldown on the
-    elder (about 20 s). Choose a new appended command or `Burst` by
-    building kind.
-  - The fireball deals impact damage and leaves a fire patch (a new table:
-    about 1.5 m, about 6 s).
-  - Threats in a patch get a refreshed burn: 1 damage per second, until
-    about 3 s after leaving.
-  - Draw the patches and burning enemies, and add a control verb.
-- **Where:** `kestrel/sim/src/settlement/combat.rs` (or a new module),
-  `avatar.rs`, the app.
-- **Found in:** ballista design.
-
 ## M5.4 Enemies chase, then return
 
 - **Status:** open
@@ -172,6 +155,84 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M2.2.
 
 ## Done
+
+### M5.3 The fireball and burning ground
+
+- **Status:** done (branch `kestrel-sacred-tree-ballista`)
+- **Why:** the possessed ballista's special ability (B4).
+- **What to do:**
+  - R (or RB) throws a fireball at the reticle, with a cooldown on the
+    elder (about 20 s). Choose a new appended command or `Burst` by
+    building kind.
+  - The fireball deals impact damage and leaves a fire patch (a new table:
+    about 1.5 m, about 6 s).
+  - Threats in a patch get a refreshed burn: 1 damage per second, until
+    about 3 s after leaving.
+  - Draw the patches and burning enemies, and add a control verb.
+- **Where:** `kestrel/sim/src/settlement/combat.rs` (or a new module),
+  `avatar.rs`, the app.
+- **Found in:** ballista design.
+- **Done:** no new command: the Burst key is the fireball in a ballista.
+  `burst_plan` (`buildings.rs`) checks the possessed kind first: a
+  ballista whose `Defence::fireball` is set returns
+  `Ability::Fireball { to }` (the reticle, `AvatarState::aim` cut to
+  range, half the range ahead before any aim), a gatherer
+  `Ability::Burst { units }`; `burst_check` returns that `Ability` now.
+  The fireball has its own cooldown, `AvatarState::fireball_ready`, kept
+  across leaving and respawning like `burst_ready` and apart from it, so
+  hopping between a ballista and a gatherer neither resets nor blocks
+  either (`BurstRefusal::FireballCooling`, appended: "Fireball ready in
+  12 s"). It costs no stone. Content: `scenario::Fireball` (cooldown 20 s,
+  speed 6 m/s, damage 2 within 0.8 m, fire radius 1.5 m for 6 s, burn 1
+  every 1 s, linger 3 s), resolved into `FireballDef`/`BurnDef`
+  (`fire.rs`). Stage 5 throws it (`throw_fireball`: `Settlement::fireballs`,
+  `Event::FireballThrown`); after the shots, `Settlement::burn` lands
+  fireballs (impact on every threat within the radius, then a
+  `FirePatch` in `Settlement::fires`, `Event::FireballLanded`), drops
+  fires on their `expires` tick, refreshes the burn (`Threat::burn`:
+  `until` the linger after the last tick in any fire, `next` hit a period
+  after catching; never stacked), and hits each burning threat once a
+  period while `next <= until`. Fire only reads threats, so elders and
+  sprites are never hurt. Hits are `Event::Hit` with `Impact::Fire`
+  (appended); kills count in `combat.kills`. The behaviour digest hashes
+  fireballs, fires and burns only when any exist (golden behaviour lines
+  unchanged; state hashes regenerated in their own commit: the new empty
+  fields add bytes). Save format 31; input and net unchanged (no
+  command). `Threat` grows to 184 bytes (`threat_size_is_pinned`). App:
+  R (keyboard) and RB (controller, where RT fires) send `Burst` in a
+  ballista; the card and HUD read "FIREBALL READY (R)" / "FIREBALL 12 s";
+  the help line "MOUSE AIM / LMB FIRE / R FIREBALL / E OR G LEAVE". Drawn
+  as glows (`settlement::fire_glows`): the fireball arcs with a trail,
+  a fire is 11 flickering flames over its disc that die down in its last
+  second, with a flickering ring (`input::hud`); a burning enemy carries
+  two flames; the landing bursts in sparks (`effects::deflection`). Fire
+  hits don't bleed; a burn tick is silent, a fire kill sounds as any; the
+  throw plays `Toss`, the landing `LaserImpact`. Control verb
+  `settlement_fireball { x, y }`; the snapshot's `settlement.burst` has
+  `fireball_cooldown` and `fireball_to`, the simulation `fires`,
+  `fireballs` and a threat's `burning`. Tests: `fire_tests` (throw at the
+  reticle, own cooldown and its refusals, kept over a gatherer Burst and a
+  respawn; impact damage and a kill; patch radius and expiry; a burn's
+  hits a period apart until the linger; two fires refresh, not stack, and
+  leaving ends it after the linger; fire spares the elder and sprites;
+  two runs match and a replay predicts no event),
+  `input::tests::the_fire_keys_work_only_while_possessing_a_ballista` (RB
+  is the Burst key there), `control::tests::the_elder_throws_a_fireball_from_a_possessed_ballista`.
+  Demo script not changed (the map has no waves yet; a scratch copy with a
+  temporary wave rendered the screenshots).
+- **From M5.3 for M5.4:** a threat chasing an elder or sprite keeps its
+  `burn`; chasing changes nothing in `Settlement::burn`, which reads only
+  positions. A fire is a good place to lure a chaser.
+- **From M5.3 for M5.5:** fire stays enemies-only once sprites and
+  buildings get health: `fire_hit` reads `threats` only. A ballista broken
+  back into a site has no fireball (`burst_plan` needs a built building);
+  fireballs in flight from it still land (they keep their `FireballDef`).
+- **From M5.3 for M5.6:** the soak with waves should throw fireballs too
+  (a Burst in a possessed ballista every 20 s), so burns and kills run
+  under `validate`. Fireball numbers (20 s, 2 + 1/s, 1.5 m, 6 s) are first
+  guesses; in the scratch demo a fireball ahead of a 6-ghoul column killed
+  4 of them. The card's third line ("FIREBALL 17 s") sits under the
+  "E LEAVE" prompt, as M5.2's left-open note says.
 
 ### M5.2 Aiming and firing while possessing
 

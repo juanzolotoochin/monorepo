@@ -1,6 +1,6 @@
 # Kestrel Sacred Tree ballista (design)
 
-Status: design agreed (2026-11-01), M5.1 and M5.2 done. Tasks in
+Status: design agreed (2026-11-01), M5.1 to M5.3 done. Tasks in
 [`todo/sacred-tree.md`](todo/sacred-tree.md) under M5. It builds on the town
 MVP in [`SACRED_TREE_HANDOFF.md`](SACRED_TREE_HANDOFF.md) (D1–D6), whose
 rules for the work apply here too.
@@ -67,9 +67,9 @@ intervention that isn't production.
   ballista's period.
 - R throws the fireball at the reticle (the Burst key; a ballista has no
   Burst). Controller: right stick moves the reticle, RT fires, RB throws.
-- No new aim commands. The fireball may need a command of its own, or reuse
-  `Burst` by building kind; the task decides, appending to `CommandKind`
-  if it adds one.
+- No new aim commands. The fireball reuses `Burst` by building kind
+  (decided in M5.3): in a ballista the Burst key throws it, with a
+  cooldown of its own on the elder.
 
 ### B4. The fireball and burning ground
 
