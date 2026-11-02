@@ -202,6 +202,37 @@
       "op": "inspect"
     },
     {
+      "op": "settlement_pause",
+      "paused": true
+    },
+    {
+      "op": "wait",
+      "frames": 20
+    },
+    {
+      "op": "camera_rotate",
+      "turns": 2
+    },
+    {
+      "op": "wait",
+      "frames": 45
+    },
+    {
+      "op": "inspect"
+    },
+    {
+      "op": "camera_rotate",
+      "turns": -2
+    },
+    {
+      "op": "wait",
+      "frames": 20
+    },
+    {
+      "op": "settlement_pause",
+      "paused": false
+    },
+    {
       "op": "settlement_rate",
       "rate": 4.0
     },

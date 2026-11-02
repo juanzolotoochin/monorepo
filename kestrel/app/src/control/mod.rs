@@ -441,6 +441,16 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             crate::input::town::cancel_build(world);
             Ok(Pending::Instant)
         }
+        Command::CameraRotate { turns } => {
+            if !crate::input::town::active(world) {
+                return Err("The view turns only in a town".into());
+            }
+            let view = &mut world.resource_mut::<crate::input::gameplay::Dispatcher>().town.view;
+            for _ in 0..turns.unsigned_abs().min(4) {
+                view.turn(turns.signum());
+            }
+            Ok(Pending::Instant)
+        }
         Command::SettlementJobMenu { job } => {
             let s = settlement(world)?;
             let wanted = match job {

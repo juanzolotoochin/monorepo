@@ -96,6 +96,13 @@ pub enum Command {
     },
     /// Backs out of placing a blueprint, as Escape does.
     SettlementCancelBuild,
+    /// Turns the town's view `turns` quarter turns around the camera's
+    /// target, as Z (positive, counter-clockwise seen from above) or C
+    /// (negative, clockwise) does; the turn then eases over a quarter
+    /// second. View only. Fails outside a town.
+    CameraRotate {
+        turns: i32,
+    },
     /// Possesses building `building` (its index), as interacting with its
     /// slot or the boarding key does: walks the elder beside it first when
     /// it is out of reach, then boards, putting out a sprite inside. Fails
