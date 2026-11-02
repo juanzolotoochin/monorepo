@@ -594,7 +594,7 @@ fn the_elder_interacts_its_way_through_the_town() {
     assert_eq!(state(10)["simulation"]["depots"]["tree_wood"]["items"]["wood"], picked);
     assert_eq!(state(10)["simulation"]["agents"]["elder"]["cargo"]["items"], json!({}));
     let menu = &state(14)["interact"]["menu"];
-    assert_eq!(menu["options"], json!(["IDLE", "GATHER WOOD", "GATHER STONE"]), "{}", state(14)["interact"]);
+    assert_eq!(menu["options"], json!(["IDLE", "GATHER WOOD", "GATHER STONE", "MAN BALLISTA"]), "{}", state(14)["interact"]);
     let simulation = &report["state"]["settlement"]["simulation"];
     assert_eq!(simulation["sprites"]["sprite_fern"]["job"], "stone_gatherer");
     assert_eq!(report["state"]["settlement"]["interact"]["menu"], Value::Null);
@@ -713,7 +713,7 @@ fn the_elder_builds_a_stone_gatherer_that_a_sprite_works() {
     assert_eq!(report["status"], "passed", "{report}");
     let receipts = report["receipts"].as_array().unwrap();
     let state = |i: usize| &receipts[i]["state"]["settlement"];
-    assert_eq!(state(3)["interact"]["build_menu"], json!(["wood_gatherer", "stone_gatherer"]), "{}", state(3)["interact"]);
+    assert_eq!(state(3)["interact"]["build_menu"], json!(["wood_gatherer", "stone_gatherer", "ballista"]), "{}", state(3)["interact"]);
     let ghost = |i: usize| &state(i)["interact"]["ghost"];
     assert_eq!(state(6)["interact"]["placing"], "stone_gatherer");
     assert_eq!((&ghost(6)["valid"], &ghost(6)["reason"]), (&json!(false), &json!("BLOCKED")), "{}", ghost(6));
