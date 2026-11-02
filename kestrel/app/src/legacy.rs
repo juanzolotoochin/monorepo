@@ -460,6 +460,32 @@ pub struct Threat {
     pub windup: Option<Windup>,
     /// The tick its last swing landed, hit or miss.
     pub swung: Option<u64>,
+    /// On fire (`sim::settlement::Threat::burn`); left out of traces when
+    /// not.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub burning: bool,
+}
+
+/// A possessed ballista's fireball in flight (`sim::settlement::Fireball`).
+#[derive(Clone, Debug, Serialize)]
+pub struct Fireball {
+    pub id: u64,
+    pub from: Point,
+    pub launch_height: f32,
+    pub to: Point,
+    pub born: u64,
+    pub arrival: u64,
+}
+
+/// Burning ground a fireball left (`sim::settlement::FirePatch`).
+#[derive(Clone, Debug, Serialize)]
+pub struct Fire {
+    pub id: u64,
+    pub position: Point,
+    pub radius: f32,
+    pub born: u64,
+    /// The first tick it is out.
+    pub expires: u64,
 }
 
 /// A threat's swing being wound up (`sim::settlement::Windup`).
@@ -594,6 +620,8 @@ pub enum Impact {
     Laser,
     BoltImpale,
     BoltPierce,
+    /// A fireball's landing or a burn.
+    Fire,
 }
 
 /// This frame's events, in the original shapes.
@@ -632,6 +660,10 @@ pub enum Event {
     BuildingBurst { building: usize, units: u32 },
     /// Player `agent`'s Burst was refused; `reason.message()` says why.
     BurstRefused { agent: String, reason: s::BurstRefusal },
+    /// Ballista `building` threw a fireball.
+    FireballThrown { building: usize },
+    /// A fireball came down at `position` and set the ground alight.
+    FireballLanded { position: Point },
 }
 
 /// One frame's settlement, interpolated between the last two ticks.
@@ -667,6 +699,12 @@ pub struct Simulation {
     /// a town's elder drops one.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub ground_piles: Vec<GroundPile>,
+    /// Fireballs in flight and the fires they left; empty, and left out of
+    /// traces, until a possessed ballista throws one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fireballs: Vec<Fireball>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fires: Vec<Fire>,
     #[serde(skip)]
     pub events: Vec<Event>,
     #[serde(skip)]
@@ -820,6 +858,7 @@ impl Simulation {
                     knockback: [t.knockback.x.to_f32(), t.knockback.y.to_f32()],
                     windup,
                     swung,
+                    burning: t.burn.is_some(),
                 };
                 (t.id, threat)
             })
@@ -921,6 +960,7 @@ impl Simulation {
                             s::Impact::Laser => Impact::Laser,
                             s::Impact::BoltImpale => Impact::BoltImpale,
                             s::Impact::BoltPierce => Impact::BoltPierce,
+                            s::Impact::Fire => Impact::Fire,
                         },
                     },
                     s::Event::PinnedLanded { target, position } => Event::PinnedLanded { target: *target, position: p(*position) },
@@ -941,6 +981,8 @@ impl Simulation {
                     // A ballista building's shot sounds as a defender's.
                     s::Event::BuildingShot { building } => Event::Shot { defender: format!("building/{building}") },
                     s::Event::BurstRefused { agent, reason } => Event::BurstRefused { agent: agent_name(*agent), reason: *reason },
+                    s::Event::FireballThrown { building, .. } => Event::FireballThrown { building: *building as usize },
+                    s::Event::FireballLanded { position } => Event::FireballLanded { position: p(*position) },
                     s::Event::ThreatSwing { threat, agent, hit, killed, .. } => Event::ThreatSwing {
                         threat: *threat,
                         agent: agent_name(*agent),
@@ -1120,6 +1162,16 @@ impl Simulation {
             buildings,
             sprites,
             ground_piles,
+            fireballs: current
+                .fireballs
+                .iter()
+                .map(|f| Fireball { id: f.id, from: local(f.from), launch_height: f.launch_height.to_f32(), to: local(f.to), born: f.born, arrival: f.arrival })
+                .collect(),
+            fires: current
+                .fires
+                .iter()
+                .map(|f| Fire { id: f.id, position: local(f.position), radius: f.radius.to_f32(), born: f.born, expires: f.expires })
+                .collect(),
             events,
             balances,
             statuses,

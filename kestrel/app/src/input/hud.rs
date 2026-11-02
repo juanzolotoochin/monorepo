@@ -1,8 +1,8 @@
 //! What the controller shows: the claim prompt, the selected target (its
 //! outline, name, verb or why it is unavailable), the last refusal, the
 //! drop preview, and the utility panel or item chooser. In a town, the
-//! interact target's ring, a blueprint ghost's rings, each site's plot and
-//! a possessed ballista's range and reticle.
+//! interact target's ring, a blueprint ghost's rings, each site's plot, a
+//! possessed ballista's range and reticle, and the edges of burning ground.
 
 use bevy::prelude::*;
 
@@ -125,6 +125,15 @@ pub(super) fn show(
             let radius = settlement.building_kind(i as u16).radius.to_f32();
             gizmos.circle(Isometry3d::new(center, flat), radius, Color::srgba(0.95, 0.78, 0.40, 0.85));
             gizmos.circle(Isometry3d::new(center, flat), radius * 0.92, Color::srgba(0.95, 0.78, 0.40, 0.4));
+        }
+        // Burning ground (B4): the fire's edge, flickering, and a fainter
+        // ring inside it; its flames are glows (`settlement`).
+        let pulse = (time.elapsed_secs() * 9.0).sin() * 0.5 + 0.5;
+        for fire in &settlement.fires {
+            let center = service.to_view(fire.position).with_y(0.06);
+            let radius = fire.radius.to_f32();
+            gizmos.circle(Isometry3d::new(center, flat), radius * (0.97 + 0.03 * pulse), Color::srgba(1.0, 0.42, 0.08, 0.75 + 0.2 * pulse));
+            gizmos.circle(Isometry3d::new(center, flat), radius * 0.6, Color::srgba(1.0, 0.65, 0.2, 0.35 + 0.2 * (1.0 - pulse)));
         }
     }
     let shown = lines.join("\n");

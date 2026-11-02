@@ -96,18 +96,21 @@ enum Glow {
     Idle = 3,
     Full = 4,
     Elder = 5,
+    /// A fireball, a fire on the ground, a burning enemy (B4).
+    Fire = 6,
 }
 
 /// The glows' colors, by `Glow`: the warm flame of work, a pale yellow
 /// walk, the cool blue of waiting, a dim ember for idle, red for an output
-/// that is full, and violet for the elder.
-const GLOWS: [(f32, f32, f32); 6] = [
+/// that is full, violet for the elder, and the deep orange of fire.
+const GLOWS: [(f32, f32, f32); 7] = [
     (1.0, 0.55, 0.12),
     (1.0, 0.86, 0.45),
     (0.35, 0.62, 1.0),
     (0.45, 0.36, 0.30),
     (1.0, 0.16, 0.10),
     (0.78, 0.45, 1.0),
+    (1.0, 0.32, 0.04),
 ];
 
 impl Glow {
@@ -694,6 +697,8 @@ pub fn tick(world: &mut World) {
                     Vec3::new(position[0], 0.72, position[1]),
                     *target as u32,
                 );
+            } else if *impact == crate::legacy::Impact::Fire {
+                // Fire draws its own flames (`fire_glows`); it doesn't bleed.
             } else {
                 crate::effects::blood(
                     world,
@@ -751,6 +756,11 @@ pub fn tick(world: &mut World) {
             } else {
                 state.hit_until.insert(*target, sim.tick + (0.23 * HZ) as u64);
             }
+        }
+        // A fireball bursts in sparks where it comes down; its fire's
+        // flames are glows (`fire_glows`).
+        if let Event::FireballLanded { position } = event {
+            crate::effects::deflection(world, Vec3::new(position[0], 0.35, position[1]), sim.tick as u32);
         }
         if let Event::PinnedLanded { target, .. } = event {
             let key = format!("threat/{target}");
@@ -828,6 +838,11 @@ pub fn tick(world: &mut World) {
             Event::ArcFired { .. } => Some(crate::sound::Cue::Arc),
             // The visible bolt plays this cue when it reaches the actor.
             Event::Hit { impact: crate::legacy::Impact::Laser, .. } => None,
+            // A burn ticks quietly; its kill sounds as any (`GhoulHit`).
+            Event::Hit { impact: crate::legacy::Impact::Fire, killed: false, .. } => None,
+            // A fireball goes up as a toss does, and comes down with a burst.
+            Event::FireballThrown { .. } => Some(crate::sound::Cue::Toss),
+            Event::FireballLanded { .. } => Some(crate::sound::Cue::LaserImpact),
             Event::LaserFired { .. } => Some(crate::sound::Cue::Laser),
             Event::Hit {
                 impact: crate::legacy::Impact::Arc,
@@ -883,6 +898,8 @@ pub fn tick(world: &mut World) {
                     | Event::PinnedLanded { .. }
                     | Event::BlockedShot { .. }
                     | Event::ThreatSwing { .. }
+                    | Event::FireballThrown { .. }
+                    | Event::FireballLanded { .. }
             );
             if combat_event || sim.tick >= state.last_sound + (0.3 * HZ) as u64 {
                 world.resource_mut::<crate::sound::Sound>().play(cue);
@@ -1556,7 +1573,65 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
         let above = 0.3 + (index % 2) as f32 * 0.4;
         town_caption(world, state, &format!("sprite/{}", sprite.id), head + Vec3::Y * above, brief, glow.text(), detail);
     }
+    fire_glows(world, sim, &mut glows);
     glows
+}
+
+/// Flames in a fire patch, scattered over its disc.
+const FIRE_FLAMES: usize = 11;
+
+/// The fireball and burning ground (`SACRED_TREE_BALLISTA.md`, B4), as
+/// glows: a fireball arcs from its ballista to where it lands, a fire's
+/// flames flicker over its disc and die down in its last second, and a
+/// burning enemy carries two small flames. The fire's ring is the HUD's
+/// (`input::hud`).
+fn fire_glows(world: &World, sim: &Simulation, glows: &mut Vec<(String, Vec3, f32, Glow)>) {
+    let ground = |p: Vec3| crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, p).unwrap_or(0.);
+    let now = sim.time();
+    let seconds = now / HZ;
+    for f in &sim.fireballs {
+        let t = ((now - f.born as f32) / (f.arrival - f.born).max(1) as f32).clamp(0., 1.);
+        let (from, to) = (Vec3::new(f.from[0], 0., f.from[1]), Vec3::new(f.to[0], 0., f.to[1]));
+        let flat = from.lerp(to, t);
+        let base = ground(from) + f.launch_height;
+        let height = base + (ground(to) - base) * t + 1.4 * (std::f32::consts::PI * t).sin();
+        let at = flat.with_y(height);
+        let flicker = 0.04 * (seconds * 31.0).sin();
+        glows.push((format!("fireball/{}", f.id), at, 0.26 + flicker, Glow::Fire));
+        // A smaller, paler trail behind it.
+        let behind = (to - from).normalize_or_zero() * 0.3;
+        glows.push((format!("fireball/{}/trail", f.id), at - behind + Vec3::Y * 0.05, 0.15 - flicker, Glow::Working));
+    }
+    for fire in &sim.fires {
+        let center = Vec3::new(fire.position[0], 0., fire.position[1]);
+        // Grows in over a quarter second, dies down over its last second.
+        let age = (now - fire.born as f32) / HZ;
+        let left = (fire.expires as f32 - now) / HZ;
+        let strength = (age * 4.0).min(1.0) * left.clamp(0., 1.);
+        for k in 0..FIRE_FLAMES {
+            // Spread evenly over the disc (the golden angle), a little
+            // inside its edge.
+            let angle = k as f32 * 2.399_963;
+            let r = fire.radius * 0.85 * ((k as f32 + 0.5) / FIRE_FLAMES as f32).sqrt();
+            let p = center + Vec3::new(angle.cos() * r, 0., angle.sin() * r);
+            let phase = k as f32 * 1.3 + fire.id as f32;
+            let size = strength * (0.14 + 0.06 * (seconds * 11.0 + phase).sin());
+            let lift = 0.12 + 0.08 * (seconds * 7.0 + phase).sin().abs();
+            let glow = if k % 3 == 0 { Glow::Working } else { Glow::Fire };
+            glows.push((format!("fire/{}/{k}", fire.id), p.with_y(ground(p) + lift), size.max(0.0), glow));
+        }
+    }
+    for t in sim.threats.values().filter(|t| t.burning) {
+        let p = Vec3::new(t.position[0], 0., t.position[1]);
+        let p = p.with_y(ground(p));
+        let phase = t.id as f32;
+        for (k, (side, up)) in [(0.12f32, 0.95f32), (-0.1, 1.25)].into_iter().enumerate() {
+            let sway = 0.03 * (seconds * 9.0 + phase + k as f32).sin();
+            let size = 0.1 + 0.03 * (seconds * 13.0 + phase + 2.0 * k as f32).sin();
+            let right = Vec3::new(t.heading.cos(), 0., -t.heading.sin());
+            glows.push((format!("burn/{}/{k}", t.id), p + right * (side + sway) + Vec3::Y * up, size, Glow::Fire));
+        }
+    }
 }
 /// How near the elder (in meters) a sprite's tag unfolds to its job and
 /// what it is doing: about the interact reach, so the sprite it is about to
@@ -1603,20 +1678,22 @@ fn hide_possessing(world: &mut World) {
 /// While the local elder possesses a building: the building's index and
 /// whether it can Burst now, by the sim's own check
 /// (`Settlement::burst_check`), with the key ("BURST READY (R)"), or the
-/// seconds left ("BURST 12 s"). For its card and the HUD line.
+/// seconds left ("BURST 12 s"); in a ballista, its fireball
+/// ("FIREBALL READY (R)", "FIREBALL 12 s"). For its card and the HUD line.
 fn burst_indicator(world: &World) -> Option<(usize, String)> {
+    use sim::settlement::{Ability, BurstRefusal};
     let service = world.get_resource::<crate::lockstep::SessionService>()?;
     let (s, sim_world, agent) = (service.settlement()?, service.world()?, service.player()? as usize);
     let building = s.seat(agent)?.building()?;
-    let key = match world.get_resource::<crate::input::InputService>().map(|i| i.frame().owner) {
-        Some(crate::input::Device::Gamepad) => "RT",
-        _ => "R",
-    };
+    let pad = world.get_resource::<crate::input::InputService>().is_some_and(|i| i.frame().owner == crate::input::Device::Gamepad);
+    let seconds = |ticks: u64| ticks.div_ceil(content::TICKS_PER_SECOND as u64);
     let text = match s.burst_check(agent, sim_world.tick()) {
-        Ok(_) => format!("BURST READY ({key})"),
-        Err(sim::settlement::BurstRefusal::Cooling { ticks }) => format!("BURST {} s", ticks.div_ceil(content::TICKS_PER_SECOND as u64)),
-        Err(sim::settlement::BurstRefusal::OutputFull) => "BURST: OUTPUT FULL".to_string(),
-        Err(sim::settlement::BurstRefusal::NotPossessing | sim::settlement::BurstRefusal::NoBurst) => return None,
+        Ok(Ability::Burst { .. }) => format!("BURST READY ({})", if pad { "RT" } else { "R" }),
+        Ok(Ability::Fireball { .. }) => format!("FIREBALL READY ({})", if pad { "RB" } else { "R" }),
+        Err(BurstRefusal::Cooling { ticks }) => format!("BURST {} s", seconds(ticks)),
+        Err(BurstRefusal::FireballCooling { ticks }) => format!("FIREBALL {} s", seconds(ticks)),
+        Err(BurstRefusal::OutputFull) => "BURST: OUTPUT FULL".to_string(),
+        Err(BurstRefusal::NotPossessing | BurstRefusal::NoBurst) => return None,
     };
     Some((building as usize, text))
 }
@@ -1802,15 +1879,22 @@ pub fn snapshot(world: &World) -> serde_json::Value {
             out["canopy_opacity"] = canopy.into();
             // The local elder's Burst: the seconds its cooldown has left
             // (0 when over), and whether one would go off now, with the
-            // units it adds or the sim's reason why not.
+            // units it adds or the sim's reason why not. In a ballista the
+            // Burst key throws a fireball (B4): its cooldown, and where it
+            // would land (`fireball_to`, arena meters).
             let service = world.get_resource::<crate::lockstep::SessionService>();
             let burst = service.and_then(|service| {
                 let (s, sim_world, agent) = (service.settlement()?, service.world()?, service.player()? as usize);
-                let ready = s.agents.get(agent)?.avatar()?.burst_ready;
-                let cooldown = ready.saturating_sub(sim_world.tick()) as f64 / content::TICKS_PER_SECOND as f64;
+                let avatar = s.agents.get(agent)?.avatar()?;
+                let seconds = |ready: u64| ready.saturating_sub(sim_world.tick()) as f64 / content::TICKS_PER_SECOND as f64;
+                let (cooldown, fireball) = (seconds(avatar.burst_ready), seconds(avatar.fireball_ready));
                 Some(match s.burst_check(agent, sim_world.tick()) {
-                    Ok(units) => serde_json::json!({"cooldown": cooldown, "ready": true, "units": units, "reason": null}),
-                    Err(reason) => serde_json::json!({"cooldown": cooldown, "ready": false, "units": null, "reason": reason.message()}),
+                    Ok(sim::settlement::Ability::Burst { units }) => serde_json::json!({"cooldown": cooldown, "fireball_cooldown": fireball, "ready": true, "units": units, "fireball_to": null, "reason": null}),
+                    Ok(sim::settlement::Ability::Fireball { to }) => {
+                        let to = service.to_view(to);
+                        serde_json::json!({"cooldown": cooldown, "fireball_cooldown": fireball, "ready": true, "units": null, "fireball_to": [to.x, to.z], "reason": null})
+                    }
+                    Err(reason) => serde_json::json!({"cooldown": cooldown, "fireball_cooldown": fireball, "ready": false, "units": null, "fireball_to": null, "reason": reason.message()}),
                 })
             });
             out["burst"] = burst.unwrap_or(serde_json::Value::Null);
@@ -2113,6 +2197,7 @@ mod tests {
             knockback: FxVec2::ZERO,
             windup: None,
             ready_at: 0,
+            burn: None,
         });
         (crate::legacy::Scenario::new(&scenario), s, center)
     }
@@ -2177,6 +2262,7 @@ mod tests {
             knockback: [0.0, 0.0],
             windup: windup.map(|(lands, ticks)| crate::legacy::Windup { agent: "player".into(), lands, ticks }),
             swung,
+            burning: false,
         }
     }
 

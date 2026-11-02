@@ -125,6 +125,16 @@ pub enum Command {
         x: f32,
         y: f32,
     },
+    /// Throws the fireball of the ballista the elder possesses, as R or RB
+    /// does there: the reticle goes `x`, `y` meters from the ballista (cut
+    /// to its range) and the fireball flies there, for no stone. Fails with
+    /// the sim's reason ("Fireball ready in 12 s", "Possess a building to
+    /// Burst"); done once the elder's fireball cooldown has started
+    /// (`settlement.burst`).
+    SettlementFireball {
+        x: f32,
+        y: f32,
+    },
     AssertSettlement {
         delivered: u64,
         cycles: u64,

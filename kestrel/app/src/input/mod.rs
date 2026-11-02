@@ -134,7 +134,7 @@ pub enum Edge {
     /// controller B).
     CancelBuild,
     /// In a town, while possessing a building: Burst (keyboard R,
-    /// controller RT).
+    /// controller RT), or in a ballista its fireball (R, controller RB).
     Burst,
 }
 
@@ -308,7 +308,7 @@ pub struct InputService {
     /// and controller RT Burst instead of repairing and attacking.
     possessing: bool,
     /// The building possessed is a ballista: RT fires it instead (left
-    /// mouse too), and Burst stays on R, which a ballista refuses.
+    /// mouse too), and its fireball is on R and RB (the Burst key).
     ballista: bool,
 }
 
@@ -797,12 +797,13 @@ impl InputService {
         };
         // RT Bursts while possessing a gatherer in a town, where it could
         // attack nothing anyway (a seated elder doesn't swing), and fires a
-        // possessed ballista (`fire_held`).
+        // possessed ballista (`fire_held`). There RB, the lift, which a
+        // seated elder can't use, throws the fireball (the Burst key).
         let ballista = self.scene.town && self.ballista;
         if !ballista {
             press(Control::RightTrigger, if self.scene.town && self.possessing { Edge::Burst } else { Edge::Attack });
         }
-        press(Control::Button(Button::RightBumper), Edge::Lift);
+        press(Control::Button(Button::RightBumper), if ballista { Edge::Burst } else { Edge::Lift });
         press(Control::Button(Button::South), Edge::Interact);
         // A town has no nearby targets to collect from: X builds, and B
         // backs out of a blueprint being placed, else drops the bundle.
@@ -812,7 +813,7 @@ impl InputService {
         press(Control::Button(Button::DPadLeft), Edge::TargetPrevious);
         press(Control::Button(Button::DPadRight), Edge::TargetNext);
         press(Control::Button(Button::LeftStick), Edge::Board);
-        if pad.released(Button::RightBumper) {
+        if pad.released(Button::RightBumper) && !ballista {
             edges.push(Edge::LiftRelease);
         }
         let zoom = if pad.pressed(Button::DPadUp) {
@@ -827,7 +828,7 @@ impl InputService {
             run: pad.held(Button::LeftBumper),
             repair_held: false,
             repair_pressed: false,
-            lift_held: pad.held(Button::RightBumper),
+            lift_held: !ballista && pad.held(Button::RightBumper),
             fire_held: ballista && pad.held.contains(&Control::RightTrigger),
             fire_pressed: ballista && pad.pressed.contains(&Control::RightTrigger),
             aim: pad.aim,

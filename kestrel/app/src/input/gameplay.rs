@@ -420,7 +420,7 @@ fn town_drop(world: &mut World) {
 }
 
 /// The town's Burst key (keyboard R, controller RT, while possessing a
-/// building): `town::burst`.
+/// building; R and RB in a ballista, its fireball): `town::burst`.
 fn town_burst(world: &mut World) {
     let burst = super::town::burst(world).map(|_| ());
     town_feedback(world, burst);

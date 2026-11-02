@@ -37,7 +37,10 @@
 //! controller RT Burst ([`burst`]), sending `Burst` when the sim's own
 //! check (`Settlement::burst_check`) lets it go off now, or failing with its
 //! words ("Burst ready in 12 s"). Elsewhere, and in other scenes, those
-//! keys keep what they did.
+//! keys keep what they did. In a ballista the same key (R, and RB on a
+//! controller, where RT fires) throws its fireball at the reticle
+//! (`SACRED_TREE_BALLISTA.md`, B4): the same command, which the sim turns
+//! into a fireball by the building's kind ("Fireball ready in 12 s").
 //!
 //! Aiming (`SACRED_TREE_BALLISTA.md`, B3): while the elder possesses a
 //! ballista, a reticle stands within its range ([`aim_reticle`]): under the
@@ -51,7 +54,7 @@
 
 use bevy::prelude::*;
 use fx::{Fx, FxVec2};
-use sim::settlement::{FireRefusal, InteractTarget, Interaction, PlacementRefusal, SpriteJob};
+use sim::settlement::{Ability, FireRefusal, InteractTarget, Interaction, PlacementRefusal, SpriteJob};
 use sim::CommandKind;
 
 use super::gameplay::Dispatcher;
@@ -348,14 +351,28 @@ pub fn drop_bundle(world: &mut World) -> Result<Dropped, String> {
 
 /// The Burst key: sends `Burst` when the sim's own check
 /// (`Settlement::burst_check`) lets it go off now, or fails with its words
-/// ("Burst ready in 12 s", "Output full"), which show over the elder as the
-/// sim's refusals do. Returns the units it adds.
-pub fn burst(world: &mut World) -> Result<u32, String> {
+/// ("Burst ready in 12 s", "Output full", "Fireball ready in 12 s"), which
+/// show over the elder as the sim's refusals do. Returns what it does: a
+/// Burst's units, or in a ballista a fireball at the reticle.
+pub fn burst(world: &mut World) -> Result<Ability, String> {
     let service = world.resource::<SessionService>();
     let (s, sim_world, agent) = (service.settlement().ok_or("No settlement loaded")?, service.world().ok_or("No settlement loaded")?, service.player().ok_or("No controlled actor")?);
-    let units = s.burst_check(agent as usize, sim_world.tick()).map_err(|r| r.message())?;
+    let ability = s.burst_check(agent as usize, sim_world.tick()).map_err(|r| r.message())?;
     world.resource_mut::<SessionService>().command(CommandKind::Burst { agent });
-    Ok(units)
+    Ok(ability)
+}
+
+/// Throws the possessed ballista's fireball at `offset` from it, in
+/// meters, for the control protocol: the reticle goes there (cut to range)
+/// and the Burst key's command follows, if the sim's check lets it now.
+pub fn fireball_at(world: &mut World, offset: Vec2) -> Result<(), String> {
+    let (_, center, _) = possessed_ballista(world).ok_or("Possess a ballista to throw a fireball")?;
+    let point = world.resource::<SessionService>().to_view(center) + Vec3::new(offset.x, 0.0, offset.y);
+    aim_reticle(world, Some(point), None, 0.0);
+    match burst(world)? {
+        Ability::Fireball { .. } => Ok(()),
+        Ability::Burst { .. } => unreachable!("a ballista has no Burst"),
+    }
 }
 
 /// The ballista the local player possesses: its index, center and kind.

@@ -766,6 +766,13 @@ player's seat: `{"building": 0}`, `{"vehicle": 0}` or null.
 sim's reason (`"Burst ready in 12 s"`, `"Output full"`, `"Possess a building
 to Burst"`); `settlement.burst` has the seconds of `cooldown` left, whether a
 Burst would go off now (`ready`), and its `units` or the `reason` it wouldn't.
+In a possessed ballista the same key (R, or RB) throws its fireball:
+`settlement_fireball` with `x`, `y` (meters from the ballista) puts the
+reticle there and throws it, failing with `"Fireball ready in 12 s"`;
+`settlement.burst` then has `fireball_cooldown` and, while one would go off,
+where it lands (`fireball_to`). `settlement.simulation.fires` lists the
+burning ground (`position`, `radius`, `born`, `expires`), `fireballs` those in
+flight, and a burning threat has `burning: true`.
 `settlement.simulation.ground_piles` lists
 the dropped piles (`id`, `position`, `stock`). Each building in
 `settlement.simulation.buildings` has, while it is a site, a `site` with its

@@ -719,6 +719,13 @@ fn the_fire_keys_work_only_while_possessing_a_ballista() {
     assert!(rig.frame().gameplay.fire_held);
     rig.pads.right_trigger(1, 0.0);
     assert!(!rig.frame().gameplay.fire_held);
+    // RB throws the fireball there (the Burst key), and lifts nothing.
+    rig.pads.press(1, Button::RightBumper);
+    let frame = rig.frame();
+    assert_eq!(frame.gameplay.edges, vec![Edge::Burst]);
+    assert!(!frame.gameplay.lift_held);
+    rig.pads.release(1, Button::RightBumper);
+    assert!(rig.frame().gameplay.edges.is_empty(), "no lift release either");
     rig.input.set_possessing(true, false);
     rig.pads.right_trigger(1, 1.0);
     let frame = rig.frame();

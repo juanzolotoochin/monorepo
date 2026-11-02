@@ -1028,6 +1028,68 @@ fn the_elder_fires_a_possessed_ballista_at_the_reticle() {
     assert!(after["settlement"]["balances"].as_object().unwrap().values().all(|b| b["conserved"] == true));
 }
 
+/// The elder builds a ballista and possesses it, with no stone in it:
+/// `settlement_fireball` throws a fireball at the reticle anyway (it costs
+/// none), which comes down and sets the ground alight; a second one right
+/// after fails while the elder's fireball cooldown runs.
+#[test]
+fn the_elder_throws_a_fireball_from_a_possessed_ballista() {
+    let walk = |x, z| Command::Walk { position: [x, z] };
+    let target = |prompt: &str| Command::SettlementInteractTarget { prompt: Some(prompt.into()) };
+    let stock = |depot: &str, item: &str, units| Command::SettlementStock { depot: depot.into(), item: item.into(), units };
+    let report = run_for(
+        vec![
+            Command::Scene { scene: "sacred-tree".into() },
+            stock("tree_wood", "wood", 4),
+            stock("tree_stone", "stone", 2),
+            Command::SettlementBuild { kind: Some("ballista".into()) },
+            walk(3.0, 1.0),
+            walk(3.0, 0.0),
+            Command::SettlementPlaceBlueprint { kind: None, position: None },
+            walk(-1.7, 2.4),
+            Command::SettlementInteract,
+            walk(2.0, -0.6),
+            target("DELIVER 2 WOOD"),
+            Command::SettlementInteract,
+            target("INSTALL FOUNDATION"),
+            Command::SettlementInteract,
+            target("DELIVER 2 WOOD"),
+            Command::SettlementInteract,
+            walk(1.7, 2.4),
+            Command::SettlementInteract,
+            walk(2.0, -0.6),
+            target("DELIVER 2 STONE"),
+            Command::SettlementInteract,
+            target("INSTALL MECHANISM"),
+            Command::SettlementInteract,
+            Command::SettlementBoard { building: 1 },
+            Command::Inspect,
+            Command::SettlementFireball { x: 2.0, y: 1.0 },
+            Command::Wait { frames: 30 },
+            Command::Inspect,
+            Command::SettlementFireball { x: 1.0, y: 0.0 },
+        ],
+        30,
+        2400,
+    );
+    assert_eq!(report["status"], "failed", "{report}");
+    assert!(report["error"].as_str().unwrap().contains("Fireball ready in"), "{report}");
+    let receipts = report["receipts"].as_array().unwrap();
+    let (before, after) = (&receipts[receipts.len() - 5]["state"], &receipts[receipts.len() - 2]["state"]);
+    assert_eq!(before["settlement"]["burst"]["ready"], true, "{}", before["settlement"]["burst"]);
+    assert!(before["settlement"]["burst"]["fireball_to"].is_array());
+    let burst = &after["settlement"]["burst"];
+    assert_eq!(burst["ready"], false, "{burst}");
+    assert!(burst["fireball_cooldown"].as_f64().unwrap() > 15.0, "{burst}");
+    let simulation = &after["settlement"]["simulation"];
+    let fires = simulation["fires"].as_array().expect("a fire on the ground");
+    assert_eq!(fires.len(), 1, "{simulation}");
+    let (at, fire) = (&simulation["buildings"][1]["position"], &fires[0]["position"]);
+    let d = |i: usize| fire[i].as_f64().unwrap() - at[i].as_f64().unwrap();
+    assert!((d(0) - 2.0).abs() < 0.05 && (d(1) - 1.0).abs() < 0.05, "at the reticle: {fire} from {at}");
+    assert!(after["settlement"]["balances"].as_object().unwrap().values().all(|b| b["conserved"] == true));
+}
+
 /// Possessing the Wood Gatherer, `settlement_burst` puts five units in its
 /// output at once; a second right after fails with the cooldown left, and
 /// once the cooldown is over (the elder waiting outside, so the output has

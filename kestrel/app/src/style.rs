@@ -115,9 +115,9 @@ pub const TOWN_HELP: &str = "WASD MOVE / SHIFT RUN / E INTERACT / B BUILD / Q DR
 /// (`settlement::town_help`): leaving, and Burst. Building waits until
 /// the elder leaves (`input::town::build`).
 pub const TOWN_POSSESSED_HELP: &str = "E OR G LEAVE / R BURST";
-/// The town's help line while the elder possesses a ballista (B3): firing
-/// at the reticle under the mouse, and leaving.
-pub const TOWN_BALLISTA_HELP: &str = "MOUSE AIM / LMB FIRE / E OR G LEAVE";
+/// The town's help line while the elder possesses a ballista (B3, B4):
+/// firing at the reticle under the mouse, the fireball, and leaving.
+pub const TOWN_BALLISTA_HELP: &str = "MOUSE AIM / LMB FIRE / R FIREBALL / E OR G LEAVE";
 
 /// Dresses a world in its scene's style: materials, lights, fog, the
 /// environment and the player's styled parts. Runs when the world starts
