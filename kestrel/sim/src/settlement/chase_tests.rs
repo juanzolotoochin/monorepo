@@ -133,8 +133,7 @@ fn swings(sim: &Simulation) -> Vec<(AgentIx, bool, u32)> {
 
 /// A sprite 1.6 m east of the ghoul's way: the ghoul turns on it once it
 /// comes within 3 m, on one of its look ticks, leaves its route to walk at
-/// it, and swings at it. Sprites have no health yet, so the swing is a hit
-/// for no damage.
+/// it, and swings at it: a hit for one of the sprite's health (B6).
 #[test]
 fn a_ghoul_leaves_its_route_to_chase_a_sprite_and_swings_at_it() {
     let mut sim = town(CHASER, SOUTH, 1.0, &[]);
@@ -161,7 +160,7 @@ fn a_ghoul_leaves_its_route_to_chase_a_sprite_and_swings_at_it() {
     // It steers off its route, straight at the sprite, and swings.
     let mut hit = false;
     until(&mut sim, 10 * HZ, |sim| {
-        hit |= swings(sim).contains(&(ASH, true, 0));
+        hit |= swings(sim).contains(&(ASH, true, 1));
         hit
     });
     let t = ghoul(&sim).unwrap();
@@ -197,7 +196,8 @@ fn a_ghoul_does_not_chase_a_sprite_behind_a_wall() {
 
 /// A sprite working inside a building, and the elder possessing one, are
 /// sheltered (B6): a ghoul passing in sight of the slot never turns on
-/// them.
+/// them nor swings at them. It attacks the building instead, which is
+/// within its reach (B8), until it breaks and puts them out.
 #[test]
 fn an_occupant_inside_a_building_is_no_quarry() {
     // Past the Wood Gatherer's slot side, to the tree's west.
@@ -227,17 +227,22 @@ fn an_occupant_inside_a_building_is_no_quarry() {
         // It would see it from where it comes in.
         assert!((t.position - occupant).length() <= def.detect);
         assert!(in_sight(sim.world().terrain(), t.position, occupant, stop));
-        until(&mut sim, 30 * HZ, |sim| {
-            assert_eq!(goal(sim).unwrap_or(Goal::Tree), Goal::Tree, "no chase (possessing: {possess})");
-            breaches(sim) == 1
+        let sheltered = if possess { ELDER } else { ASH };
+        let mut attacked = false;
+        until(&mut sim, 60 * HZ, |sim| {
+            assert!(goal(sim).unwrap_or(Goal::Tree).agent().is_none(), "no chase (possessing: {possess})");
+            assert!(swings(sim).iter().all(|&(agent, ..)| agent != sheltered), "no swing (possessing: {possess})");
+            attacked |= goal(sim) == Some(Goal::Chase(Quarry::Building(0)));
+            settlement(sim).events.contains(&Event::BuildingBroken { building: 0 })
         });
+        assert!(attacked, "it attacked the building instead");
     }
 }
 
 /// The elder walks up to the ghoul's way and is chased; it runs off past
 /// the leash, and the ghoul gives up there, plans a fresh route to the tree
-/// from where it stands, and breaches. Player combat is off on this map,
-/// so its swings at the elder do no harm.
+/// from where it stands, and breaches. Its swing at the elder takes one of
+/// the map's player health.
 #[test]
 fn a_ghoul_gives_up_past_the_leash_and_reaches_the_tree() {
     let mut sim = town(CHASER, SOUTH, 6.0, &[]);
@@ -247,10 +252,10 @@ fn a_ghoul_gives_up_past_the_leash_and_reaches_the_tree() {
     assert_eq!(goal(&sim), Some(Goal::Chase(Quarry::Agent(ELDER))));
     let mut swung = false;
     until(&mut sim, 10 * HZ, |sim| {
-        swung |= swings(sim).iter().any(|&(agent, hit, damage)| agent == ELDER && hit && damage == 0);
+        swung |= swings(sim).iter().any(|&(agent, hit, damage)| agent == ELDER && hit && damage == 1);
         swung
     });
-    assert_eq!(settlement(&sim).agents[ELDER as usize].body.health, settlement(&sim).agents[ELDER as usize].body.max_health);
+    assert!(settlement(&sim).agents[ELDER as usize].body.health < settlement(&sim).agents[ELDER as usize].body.max_health);
     // Off east, past the leash.
     let away = at(&sim, [8.0, -4.0]);
     step(&mut sim, &[command(CommandKind::MoveAvatar { agent: ELDER, intent: Intent::GoTo { target: away, run: true } })]);

@@ -1010,7 +1010,54 @@ pub fn drop_plan(carry: &Carry, body: &Body, view: &View) -> Result<(DropSpot, C
     Ok((DropSpot::New(spot), job(lab.next_id)))
 }
 
+/// How far past a broken building's footprint and a spilled pile's own
+/// radius the rings of spots `Settlement::spill` tries lie.
+const SPILL_RINGS: [Fx; 3] = [Fx::from_ratio(3, 10), Fx::from_ratio(7, 10), Fx::from_ratio(11, 10)];
+/// Spots on each ring, a turn apart.
+const SPILL_SPOTS: i32 = 12;
+
 impl Settlement {
+    /// Puts `units` of `item` from a broken building at `center`, of
+    /// footprint `radius`, on a new ground pile beside it (B8): the first
+    /// spot, ring by ring outward and round each from +x, where a dropped
+    /// bundle could go (`drop_plan`: inside the drop limit, off obstacles
+    /// and other piles, clear of docks, output piles and slot spots). With
+    /// none, onto the nearest pile of that item with room, or else at the
+    /// first spot anyway: the units are never lost. Nothing reserves a
+    /// spilled pile, so it is picked up like any other.
+    pub(super) fn spill(&mut self, item: ItemIx, units: u32, center: FxVec2, radius: Fx, terrain: &Terrain) {
+        let docks: Vec<FxVec2> = self.depots.iter().map(|d| d.position).collect();
+        let spots: Vec<FxVec2> = self.buildings.iter().flat_map(|b| [b.output_position, b.slot_position(&self.building_kinds[b.kind as usize])]).collect();
+        let lab = self.piles.as_mut().expect("a town has ground piles");
+        let size = pile_radius(units);
+        let fits = |lab: &PileLab, spot: FxVec2| {
+            let piles_clear = lab.piles.values().all(|p| nav::distance(p.position, spot) > pile_radius(p.units()) + size + Fx::from_ratio(1, 10));
+            let targets_clear = docks.iter().chain(&spots).all(|&p| nav::distance(p, spot) > size + DROP_CLEARANCE);
+            lab.free_drop(terrain, spot, units) && piles_clear && targets_clear
+        };
+        let ring = |gap: Fx, k: i32| center + nav::heading_vector((Fx::PI + Fx::PI).mul_int(k as i64).div_int(SPILL_SPOTS as i64)) * (radius + size + gap);
+        let spot = SPILL_RINGS.iter().flat_map(|&gap| (0..SPILL_SPOTS).map(move |k| (gap, k))).map(|(gap, k)| ring(gap, k)).find(|&spot| fits(lab, spot));
+        if let Some(spot) = spot {
+            lab.insert(item, spot, units, None);
+            return;
+        }
+        let merge = lab
+            .piles
+            .iter()
+            .filter(|(_, p)| p.source.is_none() && p.item() == Some(item) && p.inventory.free() >= units)
+            .map(|(&id, p)| (nav::distance(center, p.position), id))
+            .min();
+        match merge {
+            Some((_, id)) => {
+                let added = lab.piles.get_mut(&id).expect("listed pile").inventory.add(item, units);
+                debug_assert!(added, "the pile had room");
+            }
+            None => {
+                lab.insert(item, ring(SPILL_RINGS[0], 0), units, None);
+            }
+        }
+    }
+
     /// Where `agent`'s drop on `tick` would put its bundle and the carry job
     /// that moves it, or why it can't (`drop_plan`): for the view and
     /// scripts, by the rule the action and stage 5 apply.

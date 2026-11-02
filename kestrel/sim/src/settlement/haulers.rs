@@ -246,7 +246,7 @@ pub(super) fn footprint(a: &AgentState) -> Footprint {
         },
         // Players walk on their own; haulers and sprites follow routes.
         next: a.avatar().is_none().then(|| a.body.route.first().copied()).flatten(),
-        solid: a.sprite().is_none_or(|sprite| !sprite.inside()) && a.avatar().is_none_or(|p| p.seat.and_then(super::Seat::building).is_none()),
+        solid: a.sprite().is_none_or(|sprite| !sprite.inside() && a.body.alive()) && a.avatar().is_none_or(|p| p.seat.and_then(super::Seat::building).is_none()),
     }
 }
 

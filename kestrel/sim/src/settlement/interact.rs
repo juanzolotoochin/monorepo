@@ -262,7 +262,7 @@ impl Settlement {
     /// the rule the action checks.
     pub fn interact_target(&self, agent: AgentIx, tick: u64, terrain: &Terrain) -> Option<(InteractTarget, Interaction)> {
         let me = self.agents.get(agent as usize)?;
-        let sprites = self.agents.iter().enumerate().filter(|(_, a)| a.sprite().is_some()).map(|(i, a)| (i as AgentIx, a.body.position));
+        let sprites = self.agents.iter().enumerate().filter(|(_, a)| a.sprite().is_some() && a.body.alive()).map(|(i, a)| (i as AgentIx, a.body.position));
         interact_target(&self.view(agent, tick, terrain), me, sprites)
     }
 }

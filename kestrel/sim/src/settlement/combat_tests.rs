@@ -1250,11 +1250,12 @@ fn a_wave_must_send_a_follow_route_character() {
     assert!(error.contains("wave standard") && error.contains("FollowRoute"), "{error}");
 }
 
-/// 144 bytes, and 40 more for a burn (`Threat::burn`, the ballista's
-/// fireball, B4).
+/// 144 bytes, 40 more for a burn (`Threat::burn`, the ballista's
+/// fireball, B4) and 8 more for a goal (B5); a windup naming its target
+/// (`SwingTarget`, B8) packs 8 smaller than one naming an agent did.
 #[test]
 fn threat_size_is_pinned() {
-    assert_eq!(std::mem::size_of::<Threat>(), 192);
+    assert_eq!(std::mem::size_of::<Threat>(), 184);
 }
 
 // Ghouls hitting players in passing (GHOUL_ATTACK_HANDOFF.md, task 3). The
@@ -1369,7 +1370,7 @@ fn a_ghoul_swings_at_the_nearest_player_and_the_lowest_index_on_a_tie() {
     arena.place(guest, 0.5, 0.0);
     arena.threat(100, 0.0, 0.3, 3, 0);
     arena.step(1);
-    let tie = arena.s().threat(100).unwrap().windup.unwrap().agent;
+    let tie = arena.s().threat(100).unwrap().windup.unwrap().target.agent().unwrap();
     assert_eq!(tie, host as u16, "the lowest agent index wins a tie");
     assert_eq!(windups(&arena).len(), 1, "one windup per threat");
 
@@ -1378,7 +1379,7 @@ fn a_ghoul_swings_at_the_nearest_player_and_the_lowest_index_on_a_tie() {
     arena.place(guest, 0.3, 0.0);
     arena.threat(101, 0.0, 0.3, 3, 0);
     arena.step(1);
-    assert_eq!(arena.s().threat(101).unwrap().windup.unwrap().agent, guest as u16, "the nearer player");
+    assert_eq!(arena.s().threat(101).unwrap().windup.unwrap().target.agent().unwrap(), guest as u16, "the nearer player");
 }
 
 #[test]
@@ -1740,7 +1741,7 @@ fn leaving_moves_references_to_later_avatars_and_balances_material() {
     s.piano_notes.push(super::piano::PianoNote { agent: leaver, piano: 0, pitch: 62, velocity: 90, serial: 2 });
     arena.threat(900, 0.0, 3.0, 10, 0);
     let s = arena.s_mut();
-    s.threats[0].windup = Some(super::combat::Windup { agent: stayer, lands: tick + 100 });
+    s.threats[0].windup = Some(super::combat::Windup { target: super::combat::SwingTarget::Agent(stayer), lands: tick + 100 });
     s.validate().unwrap();
 
     // Directly, so this tick's stages don't redo what the test checks
@@ -1751,7 +1752,7 @@ fn leaving_moves_references_to_later_avatars_and_balances_material() {
     assert_eq!(moved, stayer - 1);
     assert_eq!(s.dock_owner[d], Some(moved));
     assert_eq!(s.piano_notes.iter().map(|n| n.agent).collect::<Vec<_>>(), [moved]);
-    assert_eq!(s.threats[0].windup.map(|w| w.agent), Some(moved));
+    assert_eq!(s.threats[0].windup.and_then(|w| w.target.agent()), Some(moved));
     let flying: Vec<_> = s.transfers.values().map(|t| t.to).collect();
     assert_eq!(flying, [super::InventoryRef::Agent(moved)], "the stayer's unit still flies to it");
     assert_eq!(s.depots[d].inventory.reserved_out[i], out, "the leaver's reservation is released");

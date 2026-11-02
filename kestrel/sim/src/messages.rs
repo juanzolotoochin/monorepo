@@ -12,6 +12,7 @@ use crate::settlement::piles::PileJob;
 use crate::settlement::avatar::BundleRefusal;
 use crate::settlement::buildings::BurstRefusal;
 use crate::settlement::chase::{Goal, Quarry};
+use crate::settlement::combat::SwingTarget;
 use crate::settlement::{CarryJob, InventoryRef};
 
 /// One mover attacks another.
@@ -157,28 +158,42 @@ pub struct Breach {
 }
 
 /// A threat with an `attack` can start a swing at a hurtable player in its
-/// reach, `distance` meters away. Stage 5 keeps the nearest player for each
-/// threat, the lowest agent index on a tie.
+/// reach, or at the quarry it chases (an agent or a building), `distance`
+/// meters away. Stage 5 keeps the nearest target for each threat, agents
+/// before buildings and the lowest index on a tie.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StartSwing {
     pub threat: u64,
-    pub agent: u16,
+    pub target: SwingTarget,
     pub distance: Fx,
 }
 
-/// A threat's windup ends this tick. `hit` if its player was alive and in
-/// reach then.
+/// A threat's windup ends this tick. `hit` if its target was alive (a
+/// building: worth breaking) and in reach then.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SwingLands {
     pub threat: u64,
-    pub agent: u16,
+    pub target: SwingTarget,
     pub hit: bool,
+}
+
+/// Hashes a swing's target: an agent as the bare index it hashed as before
+/// buildings could be swung at, a building after a marker no agent index
+/// reaches.
+fn hash_target(target: SwingTarget, h: &mut StateHasher) {
+    match target {
+        SwingTarget::Agent(agent) => h.write(&agent),
+        SwingTarget::Building(building) => {
+            h.write(&u16::MAX);
+            h.write(&building);
+        }
+    }
 }
 
 impl StateHash for StartSwing {
     fn hash_into(&self, h: &mut StateHasher) {
         h.write(&self.threat);
-        h.write(&self.agent);
+        hash_target(self.target, h);
         h.write(&self.distance);
     }
 }
@@ -186,7 +201,7 @@ impl StateHash for StartSwing {
 impl StateHash for SwingLands {
     fn hash_into(&self, h: &mut StateHasher) {
         h.write(&self.threat);
-        h.write(&self.agent);
+        hash_target(self.target, h);
         h.write(&self.hit);
     }
 }
@@ -225,6 +240,10 @@ impl StateHash for ThreatGoal {
             Goal::Chase(Quarry::Agent(agent)) => {
                 h.write_u64(1);
                 h.write(&agent);
+            }
+            Goal::Chase(Quarry::Building(building)) => {
+                h.write_u64(2);
+                h.write(&building);
             }
         }
     }

@@ -138,7 +138,7 @@ impl Settlement {
         }
         self.piano_notes.retain(|note| note.agent != gone);
         for t in &mut self.threats {
-            if t.windup.is_some_and(|w| w.agent == gone) {
+            if t.windup.is_some_and(|w| w.target == super::combat::SwingTarget::Agent(gone)) {
                 t.windup = None;
             }
         }
@@ -184,7 +184,8 @@ impl Settlement {
             }
         }
         for windup in self.threats.iter_mut().filter_map(|t| t.windup.as_mut()) {
-            shift(&mut windup.agent);
+            let super::combat::SwingTarget::Agent(agent) = &mut windup.target else { continue };
+            shift(agent);
         }
         for note in &mut self.piano_notes {
             shift(&mut note.agent);

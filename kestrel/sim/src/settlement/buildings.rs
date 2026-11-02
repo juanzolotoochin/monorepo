@@ -90,6 +90,8 @@ pub struct BuildingKind {
     pub parts: Vec<Vec<(ItemIx, u32)>>,
     /// A ballista's shooting; `None` for a gatherer.
     pub defence: Option<Defence>,
+    /// Hits from enemies' swings it takes before it breaks (B8).
+    pub health: u32,
 }
 
 /// A ballista building's shooting (`scenario::Defence`), in ticks and item
@@ -226,6 +228,9 @@ pub struct BuildingState {
     pub output: Inventory,
     /// A ballista's aim and its next shot.
     pub turret: Turret,
+    /// What is left of its kind's `health` (B8): an enemy's swing takes its
+    /// damage, and at 0 it breaks (`Settlement::break_building`).
+    pub health: u32,
 }
 
 impl BuildingState {
@@ -285,6 +290,7 @@ impl BuildingState {
             progress: Fx::ZERO,
             output: Inventory::new(items, kind.store_capacity(), kind.store_kinds()),
             turret: Turret::default(),
+            health: kind.health,
         }
     }
 }
@@ -314,6 +320,7 @@ pub(super) fn kinds(scenario: &Scenario, item: impl Fn(&str) -> ItemIx) -> Vec<B
             burst: k.burst.units,
             burst_cooldown: scenario::ticks(k.burst.cooldown),
             output_distance: k.output_distance,
+            health: k.health,
             parts: k.parts.iter().map(|p| p.materials.iter().map(|s| (item(&s.item), s.units)).collect()).collect(),
             defence: k.defence.as_ref().map(|d| Defence {
                 ammo: item(&d.ammo),
@@ -944,6 +951,100 @@ impl Settlement {
         }
     }
 
+    /// Stage 5: an enemy's swing takes `damage` from building `b`'s health
+    /// (B8). At 0 it breaks (`break_building`). Returns whether it broke.
+    pub(super) fn hurt_building(&mut self, b: BuildingIx, damage: u32, terrain: &Terrain) -> bool {
+        let building = &mut self.buildings[b as usize];
+        building.health = building.health.saturating_sub(damage);
+        if building.health > 0 {
+            return false;
+        }
+        self.break_building(b, terrain);
+        true
+    }
+
+    /// Breaks building `b` (B8): it becomes a site at its first part again,
+    /// at full health, its parts lost (consumed when they went in). Nothing
+    /// that touches it is left hanging:
+    /// - units flying to or from it land now, as when a player leaves;
+    /// - carry jobs on its output or its site end (`drop_carry`), giving
+    ///   back what they hold;
+    /// - its occupant is put out beside it: a sprite (its plan breaks, so it
+    ///   replans, D2) or a possessing elder, whose reticle turns back into a
+    ///   facing, as leaving does; a sprite on its way loses its claim;
+    /// - what its output held (a ballista's ammo) and what was delivered to
+    ///   it as a site spill onto ground piles beside it, one per item
+    ///   (`spill`), so every unit is still stored and the balances hold.
+    ///
+    /// Its footprint stays an obstacle: the site stands where it stood.
+    pub(super) fn break_building(&mut self, b: BuildingIx, terrain: &Terrain) {
+        let holders = [InventoryRef::Output(b), InventoryRef::Site(b)];
+        let flying: Vec<u64> = self.transfers.values().filter(|t| holders.contains(&t.from) || holders.contains(&t.to)).map(|t| t.id).collect();
+        for id in flying {
+            let t = self.transfers.remove(&id).expect("listed transfer");
+            self.land(t);
+        }
+        for agent in 0..self.agents.len() {
+            let carry = &mut self.agents[agent].carry;
+            if carry.job.iter().chain(&carry.next).any(|job| holders.contains(&job.other)) {
+                let releases = carry.drop_carry(agent as AgentIx);
+                self.reserve_stock(releases);
+            }
+        }
+        match self.buildings[b as usize].slot {
+            Slot::Empty => {}
+            Slot::Claimed(s) => self.release_slot(s),
+            Slot::Occupied(Occupant::Sprite(s)) => {
+                let radius = self.agents[s as usize].radius();
+                let spot = self.eject_spot(b, radius, radius, terrain);
+                self.release_slot(s);
+                let body = &mut self.agents[s as usize].body;
+                if let Some(spot) = spot {
+                    body.position = spot;
+                }
+                body.route.clear();
+                body.velocity = FxVec2::ZERO;
+                body.push = FxVec2::ZERO;
+            }
+            Slot::Occupied(Occupant::Elder(e)) => {
+                let radius = self.agents[e as usize].radius();
+                let spot = self.leave_spot(b, radius, terrain);
+                self.buildings[b as usize].slot = Slot::Empty;
+                if let super::AgentState { body, role: super::Role::Avatar(avatar), .. } = &mut self.agents[e as usize] {
+                    avatar.seat = None;
+                    avatar.aim = avatar.aim.map(FxVec2::normalize_or_zero).filter(|aim| *aim != FxVec2::ZERO);
+                    avatar.intent = Some(super::avatar::Intent::Stop);
+                    if let Some(spot) = spot {
+                        body.position = spot;
+                        if let Some(ground) = terrain.footprint(spot, radius) {
+                            avatar.height = ground;
+                            avatar.flight.support = ground;
+                        }
+                    }
+                }
+            }
+        }
+        let items = self.items.len();
+        let building = &mut self.buildings[b as usize];
+        let kind = &self.building_kinds[building.kind as usize];
+        let mut spilled = building.output.counts.clone();
+        if let Stage::Site { materials, .. } = &building.stage {
+            for (units, &more) in spilled.iter_mut().zip(&materials.counts) {
+                *units += more;
+            }
+        }
+        building.output = Inventory::new(items, kind.store_capacity(), kind.store_kinds());
+        building.stage = Stage::Site { part: 0, materials: materials(kind, items) };
+        building.progress = Fx::ZERO;
+        building.turret = Turret::default();
+        building.health = kind.health;
+        let (center, radius) = (building.position, kind.radius);
+        for (item, units) in spilled.into_iter().enumerate().filter(|&(_, units)| units > 0) {
+            self.spill(item as ItemIx, units, center, radius, terrain);
+        }
+        self.events.push(Event::BuildingBroken { building: b });
+    }
+
     /// Checks every building on its own: a known kind, a site's part in
     /// range, the output holding the kind's product only, its reservations
     /// against the bundles picking up from it (`expected_reservations`, as
@@ -971,6 +1072,9 @@ impl Settlement {
             }
             if kind.defence.is_none() && b.turret != Turret::default() {
                 return Err(format!("{name} is a gatherer with a turret's aim"));
+            }
+            if b.health == 0 || b.health > kind.health {
+                return Err(format!("{name} has health {} of {}", b.health, kind.health));
             }
             let building = i as BuildingIx;
             if (b.output.reserved_out.clone(), b.output.reserved_in.clone()) != self.expected_reservations(InventoryRef::Output(building)) {
@@ -1013,6 +1117,9 @@ impl Settlement {
         }
         for (i, a) in self.agents.iter().enumerate() {
             let Some(hold) = a.sprite().and_then(|sprite| sprite.holds) else { continue };
+            if !a.body.alive() {
+                return Err(format!("sprite {} is dead and still holds {hold:?}", a.id));
+            }
             let me = i as AgentIx;
             let (building, slot) = match hold {
                 Hold::Claimed(b) => (b, Slot::Claimed(me)),

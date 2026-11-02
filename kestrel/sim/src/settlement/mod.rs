@@ -1079,6 +1079,8 @@ mod construction_tests;
 #[cfg(test)]
 mod fire_tests;
 #[cfg(test)]
+mod health_tests;
+#[cfg(test)]
 mod ground_pile_tests;
 #[cfg(test)]
 mod interact_tests;

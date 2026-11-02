@@ -5,6 +5,12 @@
 //! building, gets past the leash or out of sight, and plans a fresh route
 //! to its wave's target from where it stands.
 //!
+//! Buildings come second (B8): with no elder or sprite about, it attacks a
+//! building in its reach or in the way of its route (`spot_building`),
+//! walking to its edge and swinging at it, until it breaks back into a bare
+//! site (`Settlement::break_building`) or an elder or sprite comes into
+//! sight.
+//!
 //! The shape is the sprites' (D2): a goal (`Goal`), a plan for it (the
 //! route to the tree, or a straight line at the quarry), something that
 //! invalidates it, and a replan (`route_home`). A real planner later
@@ -27,21 +33,22 @@ use content::character::ChaseDef;
 use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
-use super::{AgentIx, AgentState, Settlement, Threat};
+use super::{AgentIx, AgentState, BuildingIx, Settlement, Stage, Threat};
 use crate::messages::{Messages, ThreatGoal};
 use crate::nav::{self, distance};
-use crate::terrain::Terrain;
+use crate::terrain::{segment_disc, Terrain};
 
 /// The clearance a threat walks with, as its wave's route was planned.
 pub(super) const WALK_CLEARANCE: Fx = Fx::from_ratio(1, 5);
 /// A thin line of sight, as a sword's (`strike_targets`).
 const SIGHT: Fx = Fx::from_ratio(1, 50);
 
-/// Whom a threat chases. Only agents for now, an elder or a sprite;
-/// buildings that block the way come with M5.5 (B8).
+/// Whom a threat chases: an elder or a sprite, or, with neither about, a
+/// building that blocks its way or stands within its reach (B5, B8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Quarry {
     Agent(AgentIx),
+    Building(BuildingIx),
 }
 
 /// What a threat is after.
@@ -60,7 +67,15 @@ impl Goal {
     pub fn agent(self) -> Option<AgentIx> {
         match self {
             Goal::Chase(Quarry::Agent(a)) => Some(a),
-            Goal::Tree => None,
+            Goal::Chase(Quarry::Building(_)) | Goal::Tree => None,
+        }
+    }
+
+    /// The building it chases, if it chases one.
+    pub fn building(self) -> Option<BuildingIx> {
+        match self {
+            Goal::Chase(Quarry::Building(b)) => Some(b),
+            Goal::Chase(Quarry::Agent(_)) | Goal::Tree => None,
         }
     }
 }
@@ -109,10 +124,9 @@ pub(super) fn route_home(terrain: &Terrain, from: FxVec2, target: FxVec2) -> Vec
 impl Settlement {
     /// Whether agent `a` can be chased: a live player not seated (an elder
     /// on foot), or a sprite outside a building (B6: a building shelters
-    /// its occupant). Where player combat is off (no `player_health`, as on
-    /// the Sacred Tree map so far) a player counts as alive and its
-    /// chaser's swings do no harm. M5.5's sprite health makes a dead sprite
-    /// no quarry here too (`Body::alive`).
+    /// its occupant). A dead one is no quarry (`Body::alive`). Where player
+    /// combat is off (no `player_health`) a player counts as alive and its
+    /// chaser's swings do no harm.
     fn chaseable(&self, a: &AgentState) -> bool {
         if let Some(avatar) = a.avatar() {
             return a.body.alive() && avatar.seat.is_none();
@@ -140,10 +154,51 @@ impl Settlement {
             .map(|(_, i, _)| i as AgentIx)
     }
 
+    /// Whether building `b` has something an enemy's swing can take (B8):
+    /// built, or a site with a part installed or materials delivered. A
+    /// bare site, as a broken building is, has nothing left to lose, so
+    /// nobody attacks it and its chaser goes back to the tree.
+    pub(super) fn breakable(&self, b: BuildingIx) -> bool {
+        self.buildings.get(b as usize).is_some_and(|building| match &building.stage {
+            Stage::Built => true,
+            Stage::Site { part, materials } => *part > 0 || materials.holds_any(),
+        })
+    }
+
+    /// Whether threat `t` still attacks building `b`: something to lose,
+    /// and its edge within the leash.
+    fn keeps_building(&self, t: &Threat, b: BuildingIx, def: &ChaseDef) -> bool {
+        self.breakable(b) && self.building_gap(t.position, b) <= def.leash
+    }
+
+    /// The building threat `t` turns on when no elder or sprite is about
+    /// (B5, B8), if any: one with something to lose whose edge is within
+    /// its attack's `reach`, or within the detect radius and in the way of
+    /// its route's next leg (a building put down on a wave's route: threats
+    /// walk their routes as planned). The nearest edge, the lowest index on
+    /// a tie.
+    fn spot_building(&self, t: &Threat, def: &ChaseDef, reach: Fx) -> Option<BuildingIx> {
+        let radius = self.threat_radius(t);
+        let next = t.route.first().copied().unwrap_or(t.position);
+        (0..self.buildings.len() as BuildingIx)
+            .filter(|&b| self.breakable(b))
+            .map(|b| (self.building_gap(t.position, b), b))
+            .filter(|&(gap, b)| {
+                let building = &self.buildings[b as usize];
+                let blocks = || segment_disc(t.position, next, building.position, self.building_kinds[building.kind as usize].radius + radius).is_some();
+                gap <= reach || (gap <= def.detect && blocks())
+            })
+            .min()
+            .map(|(_, b)| b)
+    }
+
     /// Stage 3: every threat that chases decides. One on its way to the
     /// tree looks for a quarry on its look ticks (spread over threats by
-    /// id); a chaser gives up the moment its quarry no longer holds. A
-    /// threat at its route's end breaches instead.
+    /// id): an elder or sprite, else a building (`spot_building`). One
+    /// attacking a building looks for an elder or sprite on its look ticks
+    /// too, and turns on one it sees (buildings come second). A chaser
+    /// gives up the moment its quarry no longer holds. A threat at its
+    /// route's end breaches instead.
     pub(super) fn read_chase(&self, tick: u64, terrain: &Terrain, result: &mut Vec<(FxVec2, Messages)>) {
         for t in &self.threats {
             let def = self.threat_def(t);
@@ -152,11 +207,20 @@ impl Settlement {
                 continue;
             }
             let stop = stop_distance(attack.reach);
+            let look = (tick + t.id) % chase.look == 0;
             let goal = match t.goal {
                 Goal::Chase(Quarry::Agent(agent)) if !self.keeps(t, agent, &chase, stop, terrain) => Goal::Tree,
-                Goal::Tree if (tick + t.id) % chase.look == 0 => match self.spot(t, &chase, stop, terrain) {
+                Goal::Chase(Quarry::Building(b)) if !self.keeps_building(t, b, &chase) => Goal::Tree,
+                Goal::Chase(Quarry::Building(_)) if look => match self.spot(t, &chase, stop, terrain) {
                     Some(agent) => Goal::Chase(Quarry::Agent(agent)),
                     None => continue,
+                },
+                Goal::Tree if look => match self.spot(t, &chase, stop, terrain) {
+                    Some(agent) => Goal::Chase(Quarry::Agent(agent)),
+                    None => match self.spot_building(t, &chase, attack.reach) {
+                        Some(b) => Goal::Chase(Quarry::Building(b)),
+                        None => continue,
+                    },
                 },
                 _ => continue,
             };
@@ -175,6 +239,18 @@ impl Settlement {
             }
             if t.goal.agent().is_some_and(|a| a as usize >= self.agents.len()) {
                 return Err(format!("threat {} chases an agent that doesn't exist", t.id));
+            }
+            if t.goal.building().is_some_and(|b| b as usize >= self.buildings.len()) {
+                return Err(format!("threat {} attacks a building that doesn't exist", t.id));
+            }
+            if let Some(w) = t.windup {
+                let exists = match w.target {
+                    super::combat::SwingTarget::Agent(a) => (a as usize) < self.agents.len(),
+                    super::combat::SwingTarget::Building(b) => (b as usize) < self.buildings.len(),
+                };
+                if !exists {
+                    return Err(format!("threat {} winds up at a target that doesn't exist", t.id));
+                }
             }
             if t.route.is_empty() {
                 return Err(format!("threat {} chases with no route back", t.id));

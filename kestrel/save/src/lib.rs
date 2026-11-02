@@ -96,7 +96,12 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///     fire patches (`Settlement::fireballs`, `Settlement::fires`).
 /// 32: a threat keeps what it is after (`Threat::goal`: the tree or a
 ///     quarry it chases), and pending messages have a `threat_goal` queue.
-pub const FORMAT_VERSION: u32 = 32;
+/// 33: a threat's windup and swing messages name a target, an agent or a
+///     building (`combat::SwingTarget`), and a chaser may attack a building
+///     (`Quarry::Building`); a building kind and a building keep health
+///     (`BuildingKind::health`, `BuildingState::health`), and a sprite the
+///     tick it comes back on after dying (`SpriteState::respawn_at`).
+pub const FORMAT_VERSION: u32 = 33;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 
