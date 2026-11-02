@@ -17,7 +17,7 @@ use fx::{Fx, FxVec2};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use super::{AgentIx, DepotIx, ItemIx, Settlement};
+use super::{AgentIx, DepotIx, InventoryRef, ItemIx, Settlement};
 use crate::messages::{Breach, Fire, Messages, ProjectileBlocked, ProjectileExpired, ProjectileHit, StartSwing, Strike, SwingLands};
 use crate::nav::{self, distance};
 use crate::terrain::{segment_disc, Terrain};
@@ -147,6 +147,19 @@ pub struct DefenderState {
     pub ready_at: u64,
     pub aim: Option<FxVec2>,
     pub fired_at: u64,
+}
+
+/// What a ballista shoots from and with (`Settlement::launch_shot`).
+pub(super) struct Launcher {
+    pub from: FxVec2,
+    /// Above the ground at `from`.
+    pub height: Fx,
+    pub damage: u32,
+    /// Meters per second.
+    pub speed: Fx,
+    pub kind: ProjectileKind,
+    /// The defender that shoots, if a `DefenderState` does.
+    pub defender: Option<u16>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -643,7 +656,10 @@ impl Settlement {
 
     fn fly(&self, p: &Projectile, tick: u64, terrain: &Terrain, out: &mut Messages) {
         let (start, end) = p.segment(tick);
-        let own = p.defender.map(|d| self.defenders[d as usize].position);
+        // A ballista's shot (a stock one: a defender's or a ballista
+        // building's) leaves from the center of its own footprint, which
+        // doesn't stop it. A player's arrow has no footprint to leave.
+        let own = p.item.is_some().then_some(p.from);
         let margin = Fx::from_ratio(1, 25);
         let static_obstacle = terrain
             .obstacles.iter()
@@ -678,17 +694,23 @@ impl Settlement {
         if !d.enabled || d.ready_at > tick || self.depots[d.depot as usize].inventory.available(d.ammo) == 0 {
             return;
         }
-        let target = self
-            .threats
+        if let Some(t) = self.pick_target(d.position, d.range) {
+            out.fire.push(Fire { defender: index, target: t.id, to: t.position });
+        }
+    }
+
+    /// What a ballista aims at (the Woodland Ballista's `DefenderState` and
+    /// a ballista building's both): the nearest threat within `range` of
+    /// `from` that the projectiles already in flight to it won't kill,
+    /// the lowest id on a tie.
+    pub(super) fn pick_target(&self, from: FxVec2, range: Fx) -> Option<&Threat> {
+        self.threats
             .iter()
             .filter(|t| {
                 let incoming: u32 = self.projectiles.iter().filter(|p| p.target == Some(t.id)).map(|p| p.damage).sum();
-                distance(d.position, t.position) <= d.range && incoming < t.hp
+                distance(from, t.position) <= range && incoming < t.hp
             })
-            .min_by_key(|t| (distance(d.position, t.position), t.id));
-        if let Some(t) = target {
-            out.fire.push(Fire { defender: index, target: t.id, to: t.position });
-        }
+            .min_by_key(|t| (distance(from, t.position), t.id))
     }
 
     /// What a strike from a shooter at `origin` and `height` reaches. It
@@ -980,30 +1002,41 @@ impl Settlement {
         if !d.enabled || d.ready_at > tick || self.depots[depot].inventory.available(ammo) == 0 {
             return;
         }
-        let (from, launch_height, damage, kind, period) = (d.position, d.muzzle_height, d.damage, d.kind, d.period);
-        let arrival = tick + flight_ticks(distance(from, message.to), d.speed);
-        self.depots[depot].inventory.remove(ammo, 1);
+        let launcher = Launcher { from: d.position, height: d.muzzle_height, damage: d.damage, speed: d.speed, kind: d.kind, defender: Some(message.defender) };
+        let period = d.period;
+        let shot = Event::Shot { defender: message.defender };
+        self.launch_shot(tick, &launcher, InventoryRef::Depot(depot as DepotIx), ammo, message.target, message.to, shot);
+        let d = &mut self.defenders[message.defender as usize];
+        d.aim = Some(message.to);
+        d.ready_at = tick + period;
+        d.fired_at = tick;
+    }
+
+    /// Launches a shot from `launcher` at threat `target`, standing at `to`
+    /// (both ballistas' shots go through here): one unit of `ammo` leaves
+    /// `holder` and counts as spent, the shot counts, the projectile flies
+    /// and `event` tells the view (its sound). The caller has checked the
+    /// ammo is there and the launcher is ready.
+    pub(super) fn launch_shot(&mut self, tick: u64, launcher: &Launcher, holder: InventoryRef, ammo: ItemIx, target: u64, to: FxVec2, event: Event) {
+        let arrival = tick + flight_ticks(distance(launcher.from, to), launcher.speed);
+        self.inventory_mut(holder).remove(ammo, 1);
         self.accounts[ammo as usize].spent += 1;
         self.combat.shots += 1;
         let id = self.id();
         self.projectiles.push(Projectile {
             id,
-            defender: Some(message.defender),
-            target: Some(message.target),
+            defender: launcher.defender,
+            target: Some(target),
             item: Some(ammo),
-            from,
-            launch_height,
-            to: message.to,
+            from: launcher.from,
+            launch_height: launcher.height,
+            to,
             born: tick,
             arrival,
-            damage,
-            kind,
+            damage: launcher.damage,
+            kind: launcher.kind,
         });
-        let d = &mut self.defenders[message.defender as usize];
-        d.aim = Some(message.to);
-        d.ready_at = tick + period;
-        d.fired_at = tick;
-        self.events.push(Event::Shot { defender: message.defender });
+        self.events.push(event);
     }
 
     /// Housekeeping: fading arrows, landing bodies, new enemies.
