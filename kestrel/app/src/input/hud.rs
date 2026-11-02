@@ -94,11 +94,16 @@ pub(super) fn show(
         let color = Color::srgba(1.0, 0.82, 0.35, 0.95);
         gizmos.circle(Isometry3d::new(r.center + Vec3::Y * 0.05, flat), r.range, color.with_alpha(0.35));
         let at = r.point + Vec3::Y * 0.07;
-        gizmos.circle(Isometry3d::new(at, flat), 0.3, color);
-        gizmos.circle(Isometry3d::new(at, flat), 0.12, color.with_alpha(0.7));
+        // The line of fire, faint, then the reticle itself.
+        let from = r.center + Vec3::Y * 0.07;
+        if (at - from).length() > 0.8 {
+            gizmos.line(from + (at - from).normalize() * 0.8, at, color.with_alpha(0.3));
+        }
+        gizmos.circle(Isometry3d::new(at, flat), 0.55, color);
+        gizmos.circle(Isometry3d::new(at, flat), 0.2, color.with_alpha(0.8));
         for d in [Vec3::X, Vec3::Z] {
-            gizmos.line(at - d * 0.45, at - d * 0.18, color);
-            gizmos.line(at + d * 0.18, at + d * 0.45, color);
+            gizmos.line(at - d * 0.8, at - d * 0.3, color);
+            gizmos.line(at + d * 0.3, at + d * 0.8, color);
         }
     }
     // A blueprint's ghost: its footprint as rings filling in toward the
