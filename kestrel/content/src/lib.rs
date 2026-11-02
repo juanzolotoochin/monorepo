@@ -297,6 +297,10 @@ fn rules_hash(names: &Names, rules: &Rules) -> u64 {
     if chases.iter().any(Option::is_some) {
         bytes.extend(postcard::to_allocvec(&chases).expect("encode chases"));
     }
+    let sprites: Vec<_> = rules.characters.iter().map(|c| c.sprite).collect();
+    if sprites.iter().any(Option::is_some) {
+        bytes.extend(postcard::to_allocvec(&sprites).expect("encode sprites"));
+    }
     bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, &byte| (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3))
 }
 
@@ -578,6 +582,23 @@ mod tests {
         }
         let attack_of = |name: &str| builtin.rules.characters[builtin.names.character_index(name).unwrap() as usize].attack;
         assert_eq!(attack_of("ghoul_sacred_tree"), attack_of("ghoul_forest"), "it swings as the forest's");
+    }
+
+    #[test]
+    fn a_sprite_section_parses_and_only_sprites_have_one() {
+        use scenario::ticks_from_60hz;
+        let sprite = "(sim: (brain: Sprite, body: (radius: 0.22), movement: (walk: 1.6), sprite: (health: 3, respawn: 900)), view: (skin: \"worker\"))";
+        let content = characters(&[("character/x.ron", sprite)]).unwrap();
+        let def = content.rules.characters[0].sprite.unwrap();
+        assert_eq!((def.health, def.respawn), (3, ticks_from_60hz(900)));
+        let bad = |ron: &str| characters(&[("character/x.ron", ron)]).unwrap_err().message;
+        assert!(bad(&sprite.replace("health: 3", "health: 0")).contains("sprite.health"));
+        assert!(bad(&sprite.replace(", respawn: 900", "")).contains("sprite.respawn"));
+        assert!(bad(&GHOUL.replace("breach_damage: 1)", "breach_damage: 1), sprite: (health: 3, respawn: 900)")).contains("Sprite"));
+        let builtin = Content::builtin();
+        let sprite_of = |name: &str| builtin.rules.characters[builtin.names.character_index(name).unwrap() as usize].sprite;
+        assert_eq!(sprite_of("sprite").map(|s| (s.health, s.respawn)), Some((3, ticks_from_60hz(900))));
+        assert!(sprite_of("ghoul_forest").is_none());
     }
 
     #[test]

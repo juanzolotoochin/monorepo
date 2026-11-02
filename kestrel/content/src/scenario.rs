@@ -193,6 +193,10 @@ fn output_distance() -> Fx {
     Fx::from_ratio(6, 5)
 }
 
+fn building_health() -> u32 {
+    10
+}
+
 /// A kind of building players put up from parts: a gatherer that turns out
 /// one item while someone occupies it, or a ballista that shoots the
 /// nearest enemy while someone occupies it and it has ammo (`defence`).
@@ -231,6 +235,10 @@ pub struct BuildingKind {
     /// ammo pile), in front.
     #[serde(default = "output_distance")]
     pub output_distance: Fx,
+    /// Hits an enemy's swings take to break it (B8): a built building goes
+    /// back to a site, and a site loses what was delivered to it.
+    #[serde(default = "building_health")]
+    pub health: u32,
     /// Installed one after another; installing the last one finishes it.
     pub parts: Vec<Part>,
 }
@@ -644,6 +652,7 @@ impl Scenario {
                 || !ident(&k.skin)
                 || !within(k.radius, f(1, 10), Fx::from_int(3))
                 || !within(k.output_distance, k.radius, k.radius + Fx::from_int(4))
+                || !(1..=1000).contains(&k.health)
                 || k.parts.is_empty()
                 || k.parts.len() > 8
                 || !parts
@@ -800,6 +809,7 @@ mod tests {
         assert!(wood.defence.is_none());
         assert_eq!((wood.possessed_multiplier, wood.burst.units, wood.burst.cooldown), (Fx::from_int(4), 5, Fx::from_int(30)));
         assert_eq!(wood.output_distance, "1.2".parse().unwrap(), "the default");
+        assert_eq!(wood.health, 10);
         fn needs(k: &BuildingKind) -> Vec<Vec<(&str, u32)>> {
             k.parts.iter().map(|p| p.materials.iter().map(|s| (s.item.as_str(), s.units)).collect()).collect()
         }
@@ -850,6 +860,7 @@ mod tests {
         assert!(invalid(|s| s.building_kinds[0].possessed_cap = 5));
         assert!(invalid(|s| s.building_kinds[0].burst.units = 0));
         assert!(invalid(|s| s.building_kinds[0].output_distance = Fx::HALF));
+        assert!(invalid(|s| s.building_kinds[0].health = 0));
         assert!(invalid(|s| s.buildings[0].kind = "castle".into()));
         assert!(invalid(|s| s.buildings[0].position = [Fx::from_int(20), Fx::ZERO]));
         assert!(invalid(|s| s.sprites[0].id = "elder".into()));

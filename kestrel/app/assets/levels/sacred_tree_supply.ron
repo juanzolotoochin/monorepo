@@ -19,12 +19,12 @@
 (id: "sprite_reed", label: "REED", character: "sprite", position: (1.8, 4.6))
 ], building_kinds: [
 (id: "wood_gatherer", label: "WOOD GATHERER", skin: "mill", radius: 0.9, product: "wood", period: 5.0,
- cap: 10, possessed_cap: 20, possessed_multiplier: 4.0, burst: (units: 5, cooldown: 30.0), parts: [
+ cap: 10, possessed_cap: 20, possessed_multiplier: 4.0, burst: (units: 5, cooldown: 30.0), health: 10, parts: [
 (id: "foundation", label: "FOUNDATION", materials: [(item: "wood", units: 2)]),
 (id: "mechanism", label: "MECHANISM", materials: [(item: "wood", units: 2), (item: "stone", units: 2)])
 ]),
 (id: "stone_gatherer", label: "STONE GATHERER", skin: "factory", radius: 0.9, product: "stone", period: 8.0,
- cap: 10, possessed_cap: 20, possessed_multiplier: 4.0, burst: (units: 5, cooldown: 30.0), parts: [
+ cap: 10, possessed_cap: 20, possessed_multiplier: 4.0, burst: (units: 5, cooldown: 30.0), health: 10, parts: [
 (id: "foundation", label: "FOUNDATION", materials: [(item: "wood", units: 2)]),
 (id: "mechanism", label: "MECHANISM", materials: [(item: "wood", units: 2)])
 ]),
@@ -33,7 +33,7 @@
 // It produces nothing: its pile in front is its ammo, only delivered to.
 // A possessing elder throws a fireball with the Burst key: no stone, every
 // 20 s; it sets the ground alight, and enemies in the fire burn.
-(id: "ballista", label: "BALLISTA", skin: "turret", radius: 0.7,
+(id: "ballista", label: "BALLISTA", skin: "turret", radius: 0.7, health: 10,
  defence: (ammo: "stone", ammo_cap: 10, range: 3.8, period: 0.7, damage: 1, projectile_speed: 8.0,
   fireball: Some((cooldown: 20.0, speed: 6.0, damage: 2, radius: 0.8, fire_radius: 1.5, fire_seconds: 6.0,
    burn_damage: 1, burn_period: 1.0, burn_linger: 3.0))), parts: [
@@ -42,4 +42,4 @@
 ])
 ], buildings: [
 (kind: "wood_gatherer", position: (-5.2, 0.6))
-], producers: [], defenders: [], waves: [], base_health: 1)
+], producers: [], defenders: [], waves: [], base_health: 20, player_health: 6)
