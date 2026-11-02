@@ -4,26 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M5.5 Sprite health, building health and the tree
-
-- **Status:** open
-- **Why:** enemies need something to hurt, and defence needs a stake (B6,
-  B7, B8).
-- **What to do:**
-  - **Sprites:** sprites get health. A dead sprite returns at the tree
-    after about 15 s with its job, and occupants of a building can't be
-    hit.
-  - **Buildings and sites:** they get health, about 10. An enemy with no
-    elder or sprite to chase attacks a building that blocks it or is in
-    reach.
-  - **A building at 0** becomes a site again with its parts lost, puts its
-    occupant out, and spills its output and ammo onto a ground pile.
-  - **The tree:** it has about 20 health and takes breaches. At 0, show
-    "The tree has fallen" and restart.
-- **Where:** `kestrel/sim/src/settlement/sprites.rs`, `buildings.rs`,
-  `combat.rs`, `piles.rs`, the app.
-- **Found in:** ballista design.
-
 ## M5.6 Waves on the map, soak and tuning
 
 - **Status:** open
@@ -55,6 +35,19 @@ its milestones, in order; one PR per milestone.
 - **What to do:** decide after the playtest, for example delivering 1 wood
   to restore health.
 - **Found in:** ballista design.
+
+## Chasers of a player who leaves
+
+- **Status:** open
+- **Why:** `Settlement::leave` drops and remaps the windups that name the
+  leaving avatar, but not a threat's `Goal::Chase(Quarry::Agent)`: a
+  chaser of the leaver keeps its index, which then names the next agent
+  (or none), and chasers of later avatars point one too far.
+- **What to do:** in `players::leave`, send a leaver's chasers back to
+  the tree (as `threat_goals` does when giving up) and shift the other
+  goals in `remap_agents`. Matters once the town is played networked.
+- **Where:** `kestrel/sim/src/settlement/players.rs`, `chase.rs`.
+- **Found in:** M5.5 (ballista design, B5).
 
 ## Art for the Sacred Tree
 
@@ -139,6 +132,117 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M2.2.
 
 ## Done
+
+### M5.5 Sprite health, building health and the tree
+
+- **Status:** done (branch `kestrel-sacred-tree-ballista`)
+- **Why:** enemies need something to hurt, and defence needs a stake (B6,
+  B7, B8).
+- **What to do:**
+  - **Sprites:** sprites get health. A dead sprite returns at the tree
+    after about 15 s with its job, and occupants of a building can't be
+    hit.
+  - **Buildings and sites:** they get health, about 10. An enemy with no
+    elder or sprite to chase attacks a building that blocks it or is in
+    reach.
+  - **A building at 0** becomes a site again with its parts lost, puts its
+    occupant out, and spills its output and ammo onto a ground pile.
+  - **The tree:** it has about 20 health and takes breaches. At 0, show
+    "The tree has fallen" and restart.
+- **Where:** `kestrel/sim/src/settlement/sprites.rs`, `buildings.rs`,
+  `combat.rs`, `piles.rs`, the app.
+- **Found in:** ballista design.
+- **Done:** content: a Sprite character may have a `sprite` section
+  (`content::character::SpriteDef`: health 3, respawn 900 frames, 15 s),
+  left out of the encoding like `chase` and added to `rules_hash` when any
+  has one; a building kind has `health` (default 10, written out in the
+  supply); the Sacred Tree supply has `base_health: 20` (the tree) and
+  `player_health: 6` (the elder, decided: enemies target the elder, who
+  dies and respawns as on the forest map, Burst and fireball cooldowns
+  kept). Sim: a swing names its target, `combat::SwingTarget` (`Agent` or
+  `Building`) on `Windup`, `StartSwing` and `SwingLands` (an agent hashes
+  as the bare index it did; agents sort before buildings in
+  `start_swings`). `Quarry::Building(BuildingIx)`: in `read_chase`, a
+  threat on its way to the tree with no elder or sprite to spot attacks
+  the nearest breakable building (`Settlement::breakable`: built, or a
+  site with a part in or materials delivered) whose edge is within its
+  attack's reach, or within detect and in the way of its route's next leg
+  (`spot_building`, `segment_disc` with its radius); one attacking a
+  building looks for an elder or sprite on its look ticks and turns on
+  one (buildings come second); it gives up when the building has nothing
+  left to lose or is past the leash. It steers to stop its usual distance
+  short of the building's edge and swings at the edge gap
+  (`building_gap`). Sprites: `Body` health from the character; a hit in
+  `swing_lands` takes the damage, no push (a sprite walks routes and has
+  no velocity); at 0 `hurt_sprite` releases its slot (a claim; one inside
+  is never hit), drops its plan and route and sets
+  `SpriteState::respawn_at`; a dead sprite doesn't think, walk, claim, block
+  steering or show up as an interact target, and `sprite_housekeeping`
+  puts it back at home (its start spot beside the tree), healed, with its
+  job and an empty plan, so it replans (`Event::SpriteReturned`). Shelter:
+  `swingable` and `threats_in_reach` skip an avatar seated in a building.
+  Buildings: `BuildingState::health`; at 0 `break_building` lands units
+  flying to or from it, ends carry jobs on its output or site
+  (`drop_carry`/`reserve_stock`), puts a sprite inside out at
+  `eject_spot` (it replans) and drops a claim, unseats a possessing elder
+  at `leave_spot` with the reticle back to a unit facing, then spills its
+  output (ammo too) and a site's delivered materials onto new ground piles
+  beside it, one per item (`Settlement::spill`, chosen over counting them
+  destroyed: conservation holds with no new account), and resets it to a
+  site at part 0 with empty materials, a default turret and full health;
+  the footprint stays an obstacle (`Event::BuildingStruck`,
+  `BuildingWindup`, `BuildingBroken`). The tree: `Settlement::tree_fallen`
+  (a town at base health 0); the breach that takes the last pushes
+  `Event::TreeFell` once and the waves stop spawning. `validate` checks
+  building health, that a dead sprite holds no slot, and a chaser's
+  building or windup target exists. Save format 33; input and net
+  unchanged (no command). `Threat` shrinks to 184 bytes (the windup's
+  target packs smaller). Golden: behaviour lines unchanged; the arena's
+  last state hash regenerated in its own commit (a windup encodes its
+  target's variant). App: the status line reads "SACRED TREE 20/20
+  ELDER 6/6 ..."; a damaged building's card adds "HP 7/10" (its detail
+  "Health: 7/10"); a hurt sprite's tag "ASH 2/3"; a dead sprite falls over
+  and fades in 1.5 s, its flame out and its tag "BACK IN 12 s"
+  (`SpriteActivity::Dead`, `SpriteView::dead`); a blow on a building
+  strikes sparks (Stone), a break bursts it (Pierce) and says "WOOD
+  GATHERER broken: it is a site again"; a returning sprite plays
+  Dispense. `fallen.rs`: once the tree falls an overlay says "THE TREE HAS
+  FALLEN" and takes input; R, Enter or confirm restarts the scene from
+  scratch (`Flow::restart`, single player) or leaves to the menu when
+  networked. Tests: `health_tests` (a sprite dies after three hits, lies
+  still, isn't swung at or chased, is back at home after exactly 15 s with
+  its job and takes the slot that came free; a ghoul breaks a staffed
+  gatherer without hitting its sprite, which is put out and waits, the
+  output on a ground pile; a ghoul breaks a possessed, stocked ballista
+  without hitting the elder, who is put out at the leave spot with the
+  reticle a facing, the ammo on a ground pile; a building put down on a
+  ghoul's way is attacked from beyond reach, then left as a bare site and
+  walked round to a breach; a broken site spills its materials one pile
+  per item; the elder dies after six hits and respawns at home; the tree
+  at 0 falls once and no more enemies come; balances and `validate` every
+  tick), `chase_tests` updated (a hit on a sprite and on the elder takes
+  1; a ghoul passing occupants attacks the gatherer instead and never
+  chases or swings at them), the content tests
+  `a_sprite_section_parses_and_only_sprites_have_one` and the kind's
+  health, `fallen::tests::a_fallen_tree_shows_its_overlay_and_the_scene_restarts`.
+  Demo script not changed (no waves on the map yet); a scratch copy with a
+  temporary wave past the Wood Gatherer rendered the screenshots.
+- **From M5.5 for M5.6:** a wave's route is planned once, when its first
+  enemy spawns, and threats walk it through anything built later: a
+  building on it is attacked (as it blocks), but a bare site left on it is
+  walked through (it has nothing to lose). Replanning wave routes when
+  `terrain.revision` changes may be worth it once waves run. Ghouls passing
+  within 0.9 m of a building break it (about 15 s for 10 health at one
+  ghoul's 1.45 s swing); with the WEST way past the Wood Gatherer a lone
+  ghoul broke it in the scratch demo, so wave paths and building health
+  need tuning together. The elder now has 6 health and is chased like any
+  sprite; the soak should keep them alive or let them respawn. The tree
+  falling stops the waves (`tree_fallen`); the soak should check
+  `TreeFell` isn't reached early.
+- **Left open:** a leaving player's chasers keep `Goal::Chase(Quarry::Agent)`
+  pointing at the removed index (`players::leave` remaps windups but not
+  goals; from M5.4). Single player only for now: the task "Chasers of a
+  player who leaves".
 
 ### M5.4 Enemies chase, then return
 
