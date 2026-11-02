@@ -30,6 +30,8 @@ fn fx(v: f64) -> Fx {
 /// The scene with a built, empty ballista on the clearing's east side.
 fn town() -> Simulation {
     let mut scenario = Scenario::parse(SACRED_TREE).unwrap();
+    // Only the enemies a test sends: none of the map's own waves.
+    scenario.waves.clear();
     scenario.buildings.push(Building { kind: "ballista".into(), position: [fx(5.0), fx(0.6)] });
     let world = World::new_settlement(1, &Content::builtin(), &scenario, &[Disc { center: FxVec2::ZERO, radius: Fx::ONE }]).unwrap();
     Simulation::from_world(world, 1)
@@ -198,7 +200,7 @@ fn light(sim: &mut Simulation, offset: FxVec2) {
 fn a_fireball_goes_to_the_reticle_then_waits_out_its_own_cooldown() {
     let mut sim = town();
     let def = fireball(&sim);
-    assert_eq!(def.cooldown, 20 * HZ);
+    assert_eq!(def.cooldown, 25 * HZ);
     step(&mut sim, &[burst()]);
     assert_eq!(thrown(&sim), Some(Err(BurstRefusal::NotPossessing)));
 
@@ -218,7 +220,7 @@ fn a_fireball_goes_to_the_reticle_then_waits_out_its_own_cooldown() {
     step(&mut sim, &[burst()]);
     let Some(Err(reason)) = thrown(&sim) else { panic!("refused") };
     assert_eq!(reason, BurstRefusal::FireballCooling { ticks: def.cooldown - 1 });
-    assert_eq!(reason.message(), "Fireball ready in 20 s");
+    assert_eq!(reason.message(), "Fireball ready in 25 s");
     // Still refused on its last tick, with no new cooldown.
     let wait = ready - 1 - tick(&sim);
     steps(&mut sim, wait);
@@ -253,7 +255,7 @@ fn a_fireball_hurts_threats_where_it_lands_and_leaves_a_fire() {
     possess(&mut sim, BALLISTA);
     let offset = FxVec2::new(fx(3.0), Fx::ZERO);
     threat(&mut sim, 1000, offset, 5);
-    threat(&mut sim, 1001, offset + FxVec2::new(Fx::ZERO, fx(0.5)), 2);
+    threat(&mut sim, 1001, offset + FxVec2::new(Fx::ZERO, fx(0.5)), 1);
     // In the fire's reach but past the blast's.
     threat(&mut sim, 1002, offset + FxVec2::new(Fx::ZERO, fx(-1.2)), 5);
     threat(&mut sim, 1003, FxVec2::new(fx(-3.0), Fx::ZERO), 5);
@@ -265,7 +267,7 @@ fn a_fireball_hurts_threats_where_it_lands_and_leaves_a_fire() {
     assert_eq!(arrival, ran(&sim) + flight);
     until(&mut sim, 2 * HZ, |sim| ran(sim) == arrival);
     assert_eq!(fire_hits(&sim), [(1000, false), (1001, true)]);
-    assert_eq!((hp(&sim, 1000), hp(&sim, 1001), hp(&sim, 1002), hp(&sim, 1003)), (Some(3), None, Some(5), Some(5)));
+    assert_eq!((hp(&sim, 1000), hp(&sim, 1001), hp(&sim, 1002), hp(&sim, 1003)), (Some(4), None, Some(5), Some(5)));
     assert_eq!(settlement(&sim).combat.kills, kills + 1);
     assert!(settlement(&sim).events.contains(&Event::FireballLanded { position: to }));
     let s = settlement(&sim);
@@ -287,7 +289,7 @@ fn a_burn_hits_once_a_period_until_the_linger_runs_out() {
     let mut sim = town();
     let def = fireball(&sim);
     let (period, linger) = (def.burn.period, def.burn.linger);
-    assert_eq!((period, linger, def.fire_ticks), (HZ, 3 * HZ, 6 * HZ));
+    assert_eq!((period, linger, def.fire_ticks), (3 * HZ / 2, HZ, 4 * HZ));
     threat(&mut sim, 1000, FxVec2::new(fx(3.0), Fx::ZERO), 20);
     light(&mut sim, FxVec2::new(fx(3.0), fx(0.5)));
     let lit = tick(&sim);
@@ -298,13 +300,13 @@ fn a_burn_hits_once_a_period_until_the_linger_runs_out() {
             hits.push(ran(&sim) - lit);
         }
     }
-    // In the fire for its 6 s (its last tick is 6 s less one after it
-    // lit), then 3 s more.
+    // In the fire for its 4 s (its last tick is 4 s less one after it
+    // lit), then 1 s more: hits at 1.5, 3 and 4.5 s.
     let last = def.fire_ticks - 1 + linger;
     let expected: Vec<u64> = (1..).map(|k| k * period).take_while(|&t| t <= last).collect();
     assert_eq!(hits, expected);
-    assert_eq!(hits.len(), 8);
-    assert_eq!(hp(&sim, 1000), Some(12));
+    assert_eq!(hits.len(), 3);
+    assert_eq!(hp(&sim, 1000), Some(17));
     assert!(settlement(&sim).threat(1000).unwrap().burn.is_none());
 }
 
@@ -338,8 +340,8 @@ fn a_burn_refreshes_rather_than_stacks_and_ends_after_leaving() {
     let last = out - 1 - lit + def.burn.linger;
     let expected: Vec<u64> = (1..).map(|k| k * period).take_while(|&t| t <= last).collect();
     assert_eq!(hits, expected, "one hit a period, however many fires");
-    assert_eq!(hits.len(), 4);
-    assert_eq!(hp(&sim, 1000), Some(16));
+    assert_eq!(hits.len(), 2);
+    assert_eq!(hp(&sim, 1000), Some(18));
     assert!(settlement(&sim).threat(1000).unwrap().burn.is_none());
 }
 

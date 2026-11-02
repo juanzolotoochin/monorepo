@@ -34,6 +34,8 @@ fn fx(v: f64) -> Fx {
 /// and wood in the tree's piles to stock it from.
 fn town() -> Simulation {
     let mut scenario = Scenario::parse(SACRED_TREE).unwrap();
+    // Only the enemies a test sends: none of the map's own waves.
+    scenario.waves.clear();
     scenario.buildings.push(Building { kind: "ballista".into(), position: [fx(5.0), fx(0.6)] });
     scenario.depots[TREE_WOOD as usize].stock.push(Stack { item: "wood".into(), units: 10 });
     scenario.depots[TREE_STONE as usize].stock.push(Stack { item: "stone".into(), units: 40 });

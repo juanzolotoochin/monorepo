@@ -36,6 +36,8 @@ fn point(p: [f64; 2]) -> [Fx; 2] {
 /// `first` seconds, and extra obstacles (scenario meters) beside the trunk.
 fn town(character: &str, (from, to): ([f64; 2], [f64; 2]), first: f64, walls: &[Disc]) -> Simulation {
     let mut scenario = Scenario::parse(SACRED_TREE).unwrap();
+    // Only the enemies a test sends: none of the map's own waves.
+    scenario.waves.clear();
     scenario.waves.push(Wave {
         id: "test".into(),
         position: point(from),

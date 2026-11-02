@@ -825,11 +825,12 @@ mod tests {
         assert_eq!((defence.ammo.as_str(), defence.ammo_cap, defence.damage), ("stone", 10, 1));
         assert_eq!((defence.range, defence.period, defence.projectile_speed), ("3.8".parse().unwrap(), "0.7".parse().unwrap(), Fx::from_int(8)));
         assert_eq!(needs(ballista), [vec![("wood", 2)], vec![("wood", 2), ("stone", 2)]]);
-        // And its fireball (B4): every 20 s, a fire of radius 1.5 m for 6 s
-        // that burns 1 a second until 3 s after an enemy leaves it.
+        // And its fireball (B4, tuned in M5.6): every 25 s, 1 damage where
+        // it lands and a fire of radius 1.5 m for 4 s that burns 1 every
+        // 1.5 s until 1 s after an enemy leaves it.
         let fireball = defence.fireball.as_ref().unwrap();
-        assert_eq!((fireball.cooldown, fireball.damage, fireball.fire_radius, fireball.fire_seconds), (Fx::from_int(20), 2, "1.5".parse().unwrap(), Fx::from_int(6)));
-        assert_eq!((fireball.burn_damage, fireball.burn_period, fireball.burn_linger), (1, Fx::ONE, Fx::from_int(3)));
+        assert_eq!((fireball.cooldown, fireball.damage, fireball.fire_radius, fireball.fire_seconds), (Fx::from_int(25), 1, "1.5".parse().unwrap(), Fx::from_int(4)));
+        assert_eq!((fireball.burn_damage, fireball.burn_period, fireball.burn_linger), (1, "1.5".parse().unwrap(), Fx::ONE));
         assert_eq!(tree.buildings[0].kind, "wood_gatherer");
         // The other scenes have none of it.
         let forest = Scenario::parse(FOREST).unwrap();

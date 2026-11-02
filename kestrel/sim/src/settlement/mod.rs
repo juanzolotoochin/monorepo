@@ -1097,4 +1097,6 @@ mod sprites_tests;
 #[cfg(test)]
 mod soak_tests;
 #[cfg(test)]
+mod waves_tests;
+#[cfg(test)]
 mod vehicle_tests;

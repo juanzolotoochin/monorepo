@@ -465,6 +465,8 @@ fn a_town_saved_while_a_ballista_shoots_continues() {
     let at = |x: i64, y: i64| [Fx::from_ratio(x, 10), Fx::from_ratio(y, 10)];
     scenario.buildings.push(content::scenario::Building { kind: "ballista".into(), position: at(50, 6) });
     scenario.depots[1].stock.push(content::scenario::Stack { item: "stone".into(), units: 5 });
+    // Only this test's ghouls, none of the map's own waves.
+    scenario.waves.clear();
     scenario.waves.push(content::scenario::Wave {
         id: "east".into(),
         position: at(85, 6),
