@@ -20,7 +20,7 @@ use super::action::{Action, View};
 use super::buildings::BurstRefusal;
 use super::interact::{self, Interaction};
 use super::{AgentIx, DepotState, InventoryRef, ItemIx, Kinds, Settlement};
-use crate::messages::{ActionMessages, BundleRefused, Burst, BurstRefused, CarryUnit, DropBundle, DropHaul, DropNotes, Install, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
+use crate::messages::{ActionMessages, BundleRefused, Burst, BurstRefused, CarryUnit, DropBundle, DropHaul, ElderFire, DropNotes, Install, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
 use crate::nav::{self, angle_between, distance};
 use crate::terrain::{Terrain, MAX_LAYERS};
 
@@ -173,7 +173,9 @@ pub struct AvatarState {
     pub combo_until: u64,
     /// The weapon in hand, so every peer shows it.
     pub weapon: Weapon,
-    /// Upper body facing; movement heading remains on the agent.
+    /// Upper body facing; movement heading remains on the agent. While
+    /// possessing a ballista, the reticle instead: an offset from the
+    /// ballista, within its range (`BuildingKind::reticle`).
     #[serde(default)]
     pub aim: Option<FxVec2>,
     /// A follow-up attack clicked during the end of a swing.
@@ -554,6 +556,7 @@ impl Settlement {
         }
         self.install(messages.install);
         self.bursts(messages.burst, tick);
+        self.elder_fire(messages.elder_fire, tick);
         for BurstRefused { agent, reason } in messages.burst_refused {
             self.events.push(Event::BurstRefused { agent, reason });
         }
@@ -770,7 +773,10 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
             // elder's one target), let go or respawn. Movement and dropping
             // do nothing. Leaving puts it beside the building; housekeeping
             // empties the slot (`seat_housekeeping`), for a waiting sprite
-            // to take.
+            // to take. In a ballista (B3) the aim is the reticle, an offset
+            // from the ballista within its range, and `Attack` shoots there;
+            // a seated elder never swings its own weapon.
+            let kind = &view.building_kinds[view.buildings[b as usize].kind as usize];
             match *action {
                 Action::Board | Action::Interact(interact::InteractTarget::Slot(_)) => {
                     if matches!(*action, Action::Interact(target) if target != interact::InteractTarget::Slot(b)) {
@@ -779,6 +785,8 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
                     if let Some(position) = view.leave_spot(b, def.body.radius) {
                         let ground = view.terrain.footprint(position, def.body.radius).unwrap_or(avatar.height);
                         avatar.seat = None;
+                        // A ballista's reticle back to a facing.
+                        avatar.aim = avatar.aim.map(FxVec2::normalize_or_zero).filter(|aim| *aim != FxVec2::ZERO);
                         body.position = position;
                         avatar.height = ground;
                         avatar.flight.support = ground;
@@ -791,6 +799,21 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
                 Action::Burst => {
                     if body.alive() {
                         out.burst.push(Burst { agent: me });
+                    }
+                    return;
+                }
+                Action::Aim(offset) if kind.defence.is_some() => {
+                    if let Some(reticle) = kind.reticle(offset) {
+                        avatar.aim = Some(reticle);
+                    }
+                    return;
+                }
+                // Stage 5 checks the elder still sits there, the ammo and
+                // the reload, and shoots (`Settlement::elder_fire`).
+                Action::Attack { aim, .. } => {
+                    if let Some(reticle) = kind.reticle(aim).filter(|_| body.alive()) {
+                        avatar.aim = Some(reticle);
+                        out.elder_fire.push(ElderFire { agent: me, building: b, to: view.buildings[b as usize].position + reticle });
                     }
                     return;
                 }

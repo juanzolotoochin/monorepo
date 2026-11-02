@@ -9,8 +9,8 @@ use content::scenario::{Building, Scenario, Stack};
 use content::{Content, TICKS_PER_SECOND};
 use fx::{Fx, FxVec2};
 
-use super::avatar::{BundleRefusal, Intent};
-use super::{AgentIx, BuildingIx, BuildingKindIx, DepotIx, Event, InteractTarget, Interaction, ItemIx, Occupant, Settlement, Slot, SpriteJob, Threat};
+use super::avatar::{BundleRefusal, Intent, Seat};
+use super::{AgentIx, BuildingIx, BuildingKindIx, DepotIx, Event, FireRefusal, InteractTarget, Interaction, ItemIx, Occupant, Settlement, Slot, SpriteJob, Threat};
 use crate::terrain::Disc;
 use crate::{Command, CommandKind, PlayerId, Simulation, World};
 
@@ -306,4 +306,180 @@ fn a_delivery_fills_the_store_up_to_its_cap() {
 
 fn settlement_mut(sim: &mut Simulation) -> &mut Settlement {
     sim.world_mut().settlement_mut()
+}
+
+/// Walks the elder to the ballista's slot and possesses it.
+fn possess(sim: &mut Simulation) {
+    let s = settlement(sim);
+    let spot = s.buildings[BALLISTA as usize].slot_position(s.building_kind(BALLISTA));
+    walk_to(sim, spot);
+    step(sim, &[command(CommandKind::Board { agent: ELDER })]);
+    until(sim, HZ, |sim| settlement(sim).seat(ELDER as usize) == Some(Seat::Building(BALLISTA)));
+}
+
+fn aim(offset: FxVec2) -> Command {
+    command(CommandKind::AimAvatar { agent: ELDER, aim: offset })
+}
+
+/// The fire key: an `Attack` at `offset` from the ballista. Its weapon is
+/// whatever the client holds; a seated elder never swings it.
+fn fire(offset: FxVec2) -> Command {
+    command(CommandKind::Attack { agent: ELDER, weapon: content::scenario::Weapon::Sword, aim: offset, muzzle: [Fx::ZERO; 3] })
+}
+
+fn reticle(sim: &Simulation) -> Option<FxVec2> {
+    settlement(sim).agents[ELDER as usize].avatar().unwrap().aim
+}
+
+fn swinging(sim: &Simulation) -> bool {
+    settlement(sim).agents[ELDER as usize].avatar().unwrap().swing.is_some()
+}
+
+/// The newest projectile's target and where it comes down.
+fn last_shot(sim: &Simulation) -> (Option<u64>, FxVec2) {
+    let s = settlement(sim);
+    let p = s.projectiles.iter().max_by_key(|p| p.id).unwrap();
+    assert_eq!((p.item, p.from), (Some(STONE), s.buildings[BALLISTA as usize].position));
+    (p.target, p.to)
+}
+
+/// Possessed, a ballista picks no targets of its own (B3): a threat in
+/// range is left alone until the elder fires. Staffed by a sprite again
+/// once the elder leaves, it shoots on its own as before.
+#[test]
+fn a_possessed_ballista_does_not_fire_on_its_own() {
+    let mut sim = town();
+    assert_eq!(stock(&mut sim), 5);
+    possess(&mut sim);
+    threat(&mut sim, 1000, 7.0, 0.6, 3);
+    assert_eq!(steps(&mut sim, 5 * HZ), 0);
+    assert_eq!((ammo(&sim), hp(&sim, 1000)), (5, Some(3)));
+    // Leaving turns the reticle back into a facing, and a sprite takes over.
+    step(&mut sim, &[command(CommandKind::Board { agent: ELDER })]);
+    assert_eq!(settlement(&sim).seat(ELDER as usize), None);
+    assert!(reticle(&sim).is_none_or(|aim| (aim.length() - Fx::ONE).abs() < Fx::from_ratio(1, 100)), "{:?}", reticle(&sim));
+    man(&mut sim);
+    assert!(steps(&mut sim, 3 * HZ) > 0, "staffed by a sprite, it shoots");
+}
+
+/// The aim is the reticle, an offset from the ballista cut to its range,
+/// and `Attack` shoots a bolt there, one stone a shot. Held (an `Attack`
+/// every tick), it shoots once a period; pressed again within the period,
+/// nothing. The elder never swings.
+#[test]
+fn the_possessing_elder_fires_at_the_reticle_once_a_period() {
+    let mut sim = town();
+    assert_eq!(stock(&mut sim), 5);
+    possess(&mut sim);
+    let (range, period) = settlement(&sim).building_kind(BALLISTA).defence.as_ref().map(|d| (d.range, d.period)).unwrap();
+    let center = settlement(&sim).buildings[BALLISTA as usize].position;
+    let close = |a: Fx, b: Fx| (a - b).abs() < Fx::from_ratio(1, 100);
+    // Within range, the aim is the offset itself; past it, cut to range.
+    let near = FxVec2::new(fx(2.0), fx(-1.0));
+    step(&mut sim, &[aim(near)]);
+    assert_eq!(reticle(&sim), Some(near));
+    step(&mut sim, &[aim(FxVec2::new(fx(30.0), Fx::ZERO))]);
+    let far = reticle(&sim).unwrap();
+    assert!(close(far.length(), range) && far.y == Fx::ZERO, "{far:?} against {range:?}");
+    assert_eq!(fired(&sim), 0, "aiming shoots nothing");
+
+    // A shot at a far point comes down at the range, aimed at no threat.
+    step(&mut sim, &[fire(FxVec2::new(fx(30.0), Fx::ZERO))]);
+    assert_eq!(fired(&sim), 1);
+    let (target, to) = last_shot(&sim);
+    assert_eq!(target, None);
+    assert!(close((to - center).length(), range), "{to:?}");
+    assert_eq!((ammo(&sim), spent(&sim)), (4, 1));
+    assert!(!swinging(&sim), "a seated elder doesn't swing");
+
+    // Spamming within the period gives nothing.
+    for _ in 1..period {
+        step(&mut sim, &[fire(near), fire(near)]);
+        assert_eq!(fired(&sim), 0);
+    }
+    // Held, one shot each period, at the reticle.
+    let mut shots = Vec::new();
+    for _ in 0..3 * period {
+        step(&mut sim, &[fire(near)]);
+        if fired(&sim) > 0 {
+            shots.push(sim.world().tick());
+            assert_eq!(last_shot(&sim).1, center + near);
+        }
+    }
+    assert_eq!(shots.len(), 3, "{shots:?}");
+    assert!(shots.windows(2).all(|w| w[1] - w[0] == period), "{shots:?}");
+    assert_eq!((ammo(&sim), spent(&sim), settlement(&sim).combat.shots), (1, 4, 4));
+    assert!(!swinging(&sim));
+}
+
+/// The elder's bolt hits a threat on its way to the reticle.
+#[test]
+fn the_elders_bolt_hits_a_threat_on_its_way() {
+    let mut sim = town();
+    assert_eq!(stock(&mut sim), 5);
+    possess(&mut sim);
+    threat(&mut sim, 1000, 7.0, 0.6, 3);
+    step(&mut sim, &[fire(FxVec2::new(fx(3.0), Fx::ZERO))]);
+    assert_eq!(fired(&sim), 1);
+    until(&mut sim, 2 * HZ, |sim| hp(sim, 1000) != Some(3));
+    assert_eq!(hp(&sim, 1000), Some(2));
+}
+
+/// An empty ballista doesn't shoot, and its check says why; once stocked,
+/// the next press shoots, and the one after waits for the reload.
+#[test]
+fn no_ammo_no_shot() {
+    let mut sim = town();
+    possess(&mut sim);
+    let check = |sim: &Simulation, ahead: u64| settlement(sim).fire_check(ELDER as usize, sim.world().tick() + ahead);
+    assert_eq!(check(&sim, 0), Err(FireRefusal::NoAmmo));
+    for _ in 0..HZ {
+        step(&mut sim, &[fire(FxVec2::new(fx(2.0), Fx::ZERO))]);
+        assert_eq!(fired(&sim), 0);
+    }
+    assert_eq!((spent(&sim), settlement(&sim).combat.shots), (0, 0));
+    assert!(!swinging(&sim));
+    // Not possessing, there is nothing to fire.
+    step(&mut sim, &[command(CommandKind::Board { agent: ELDER })]);
+    assert_eq!(check(&sim, 0), Err(FireRefusal::NotInBallista));
+    assert_eq!(stock(&mut sim), 5);
+    possess(&mut sim);
+    assert_eq!(check(&sim, 0), Ok(BALLISTA));
+    step(&mut sim, &[fire(FxVec2::new(fx(2.0), Fx::ZERO))]);
+    assert_eq!(fired(&sim), 1);
+    assert!(matches!(check(&sim, 1), Err(FireRefusal::Reloading { .. })));
+}
+
+/// A client's replay of a possessing elder's aim and fire matches the
+/// simulation: the reticle as the sim keeps it, no swing, no events.
+#[test]
+fn a_replayed_elder_aims_and_fires_as_the_simulation_does() {
+    let mut sim = town();
+    assert_eq!(stock(&mut sim), 5);
+    possess(&mut sim);
+    let turns = [
+        vec![aim(FxVec2::new(fx(1.0), fx(1.0)))],
+        vec![fire(FxVec2::new(fx(20.0), fx(-3.0)))],
+        vec![],
+        vec![fire(FxVec2::new(fx(2.0), Fx::ZERO))],
+    ];
+    let mut predicted = Vec::new();
+    {
+        let world = sim.world();
+        let mut replay = settlement(&sim).replay_avatar(ELDER, world.tick(), world.terrain()).unwrap();
+        for turn in &turns {
+            let kinds: Vec<CommandKind> = turn.iter().map(|c| c.kind.clone()).collect();
+            replay.step_with(kinds.iter());
+            assert_eq!(replay.events(), []);
+            predicted.push(replay.state().avatar().unwrap().clone());
+        }
+    }
+    for (turn, predicted) in turns.iter().zip(predicted) {
+        step(&mut sim, turn);
+        let confirmed = settlement(&sim).agents[ELDER as usize].avatar().unwrap();
+        assert_eq!(confirmed.aim, predicted.aim);
+        assert!(predicted.swing.is_none() && confirmed.swing.is_none());
+    }
+    assert_eq!(fired(&sim), 0, "the second press came within the period");
+    assert_eq!(spent(&sim), 1);
 }

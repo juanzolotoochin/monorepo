@@ -1008,19 +1008,20 @@ impl Settlement {
         let launcher = Launcher { from: d.position, height: d.muzzle_height, damage: d.damage, speed: d.speed, kind: d.kind, defender: Some(message.defender) };
         let period = d.period;
         let shot = Event::Shot { defender: message.defender };
-        self.launch_shot(tick, &launcher, InventoryRef::Depot(depot as DepotIx), ammo, message.target, message.to, shot);
+        self.launch_shot(tick, &launcher, InventoryRef::Depot(depot as DepotIx), ammo, Some(message.target), message.to, shot);
         let d = &mut self.defenders[message.defender as usize];
         d.aim = Some(message.to);
         d.ready_at = tick + period;
         d.fired_at = tick;
     }
 
-    /// Launches a shot from `launcher` at threat `target`, standing at `to`
-    /// (both ballistas' shots go through here): one unit of `ammo` leaves
+    /// Launches a shot from `launcher` at threat `target`, standing at `to`,
+    /// or with no `target` at the point `to` (a possessing elder's shot at
+    /// its reticle). Every ballista's shots go through here: one unit of `ammo` leaves
     /// `holder` and counts as spent, the shot counts, the projectile flies
     /// and `event` tells the view (its sound). The caller has checked the
     /// ammo is there and the launcher is ready.
-    pub(super) fn launch_shot(&mut self, tick: u64, launcher: &Launcher, holder: InventoryRef, ammo: ItemIx, target: u64, to: FxVec2, event: Event) {
+    pub(super) fn launch_shot(&mut self, tick: u64, launcher: &Launcher, holder: InventoryRef, ammo: ItemIx, target: Option<u64>, to: FxVec2, event: Event) {
         let arrival = tick + flight_ticks(distance(launcher.from, to), launcher.speed);
         self.inventory_mut(holder).remove(ammo, 1);
         self.accounts[ammo as usize].spent += 1;
@@ -1029,7 +1030,7 @@ impl Settlement {
         self.projectiles.push(Projectile {
             id,
             defender: launcher.defender,
-            target: Some(target),
+            target,
             item: Some(ammo),
             from: launcher.from,
             launch_height: launcher.height,

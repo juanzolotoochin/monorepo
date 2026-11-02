@@ -401,6 +401,25 @@ impl StateHash for Burst {
     }
 }
 
+/// An elder possessing a ballista shoots at its reticle, `to`
+/// (`SACRED_TREE_BALLISTA.md`, B3): stage 5 launches the bolt if the elder
+/// still sits in `building` and it is stocked and reloaded
+/// (`Settlement::elder_fire`), and does nothing otherwise.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ElderFire {
+    pub agent: u16,
+    pub building: u16,
+    pub to: FxVec2,
+}
+
+impl StateHash for ElderFire {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+        h.write(&self.building);
+        h.write(&self.to);
+    }
+}
+
 /// A Burst that couldn't start, and why: stage 5 reports it as
 /// `Event::BurstRefused`, for the view to explain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -512,13 +531,14 @@ pub struct ActionMessages {
     pub drop_bundle: Vec<DropBundle>,
     pub burst: Vec<Burst>,
     pub burst_refused: Vec<BurstRefused>,
+    pub elder_fire: Vec<ElderFire>,
 }
 
 impl ActionMessages {
     pub fn is_empty(&self) -> bool {
         self.restart_memory.is_empty() && self.drop_haul.is_empty() && self.drop_notes.is_empty() && self.reserve_stock.is_empty() && self.haul.is_empty()
             && self.board.is_empty() && self.bundle_refused.is_empty() && self.place_blueprint.is_empty() && self.install.is_empty()
-            && self.drop_bundle.is_empty() && self.burst.is_empty() && self.burst_refused.is_empty()
+            && self.drop_bundle.is_empty() && self.burst.is_empty() && self.burst_refused.is_empty() && self.elder_fire.is_empty()
     }
 }
 
@@ -551,6 +571,9 @@ impl StateHash for ActionMessages {
         }
         if !self.burst_refused.is_empty() {
             h.write(&self.burst_refused);
+        }
+        if !self.elder_fire.is_empty() {
+            h.write(&self.elder_fire);
         }
     }
 }

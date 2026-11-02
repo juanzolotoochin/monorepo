@@ -31,7 +31,10 @@
 //! nearest threat in range through the helpers the Woodland Ballista uses
 //! (`Settlement::pick_target`, `Settlement::launch_shot`), one unit a shot.
 //! Empty, or with nobody inside, it never shoots. An elder possessing it
-//! shoots as a sprite does for now (aiming is M5.2's).
+//! aims instead (B3): its avatar's aim is the reticle, an offset from the
+//! ballista clamped to its range (`BuildingKind::reticle`), and `Attack`
+//! shoots there (`Settlement::elder_fire`), at most once a period; the
+//! ballista picks no targets of its own then.
 
 use content::scenario::{self, Scenario};
 use fx::{Fx, FxVec2};
@@ -41,7 +44,7 @@ use super::sprites::Hold;
 use super::{AgentIx, DepotIx, Event, Inventory, InventoryRef, ItemIx, Kinds, Settlement};
 use super::avatar::Seat;
 use super::combat::Launcher;
-use crate::messages::{Burst, BuildingFire, Install, Messages, PlaceBlueprint};
+use crate::messages::{Burst, BuildingFire, ElderFire, Install, Messages, PlaceBlueprint};
 use crate::nav;
 use crate::terrain::{Disc, Terrain, CLEARANCE_MARGIN};
 
@@ -114,6 +117,17 @@ impl BuildingKind {
             (None, Some(Occupant::Elder(_))) => self.possessed_cap,
             (None, _) => self.cap,
         }
+    }
+
+    /// A possessing elder's reticle for an aim `offset` from the building
+    /// (B3): the offset, cut to the ballista's range. `None` for a
+    /// gatherer, or for no offset at all.
+    pub fn reticle(&self, offset: FxVec2) -> Option<FxVec2> {
+        let range = self.defence.as_ref()?.range;
+        if offset == FxVec2::ZERO {
+            return None;
+        }
+        Some(if offset.length() > range { offset.normalize_or_zero() * range } else { offset })
     }
 
     /// What the building's `output` holds at most: a gatherer's possessed
@@ -507,6 +521,50 @@ impl BurstRefusal {
     }
 }
 
+/// Why a possessing elder's shot wouldn't go off now
+/// (`Settlement::fire_check`). Stage 5 drops such a shot without a word;
+/// the view says it (`message`) when the fire key is pressed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FireRefusal {
+    /// The elder possesses no ballista.
+    NotInBallista,
+    /// Its ammo store is empty.
+    NoAmmo,
+    /// It shot less than a period ago: `ticks` more.
+    Reloading { ticks: u64 },
+}
+
+impl FireRefusal {
+    /// The refusal in words, for the view.
+    pub fn message(self) -> String {
+        match self {
+            FireRefusal::NotInBallista => "Possess a ballista to fire".to_string(),
+            FireRefusal::NoAmmo => "No ammo: bring stone".to_string(),
+            FireRefusal::Reloading { .. } => "Reloading".to_string(),
+        }
+    }
+}
+
+/// Whether `agent`, seated in `seat`, could shoot its ballista on `tick`
+/// (B3): the building and its defence, or why not. An empty store reads
+/// before a reload, so holding the fire key on an empty ballista says so.
+fn fire_plan<'a>(agent: AgentIx, seat: Option<Seat>, tick: u64, buildings: &[BuildingState], kinds: &'a [BuildingKind]) -> Result<(BuildingIx, &'a Defence), FireRefusal> {
+    let Some((ix, b)) = seat.and_then(Seat::building).and_then(|ix| Some((ix, buildings.get(ix as usize)?))) else {
+        return Err(FireRefusal::NotInBallista);
+    };
+    let kind = &kinds[b.kind as usize];
+    let Some(defence) = kind.defence.as_ref().filter(|_| b.built() && b.slot.occupant() == Some(Occupant::Elder(agent))) else {
+        return Err(FireRefusal::NotInBallista);
+    };
+    if b.output.available(defence.ammo) == 0 {
+        return Err(FireRefusal::NoAmmo);
+    }
+    if b.turret.ready_at > tick {
+        return Err(FireRefusal::Reloading { ticks: b.turret.ready_at - tick });
+    }
+    Ok((ix, defence))
+}
+
 /// What a Burst would do (`Settlement::bursts`): the building `seat`
 /// possesses and the units that fit in its output, or why there is none.
 /// A cooldown running reads before a full output.
@@ -528,15 +586,16 @@ fn burst_plan(seat: Option<Seat>, ready: u64, tick: u64, buildings: &[BuildingSt
     }
 }
 
-/// A ballista's shooting, when building `b` of `kind` can shoot on `tick`:
-/// a ballista, built, with someone inside (a sprite or, until aiming
-/// comes, an elder), ammo in its store and its period over since the last
-/// shot. `None` for a gatherer, a site, an empty or unstocked ballista, or
-/// one still reloading.
+/// A ballista's own shooting, when building `b` of `kind` can shoot on
+/// `tick`: a ballista, built, with a sprite inside, ammo in its store and
+/// its period over since the last shot. `None` for a gatherer, a site, an
+/// empty, unstocked or possessed ballista (a possessing elder aims it
+/// instead, `fire_plan`), or one still reloading.
 fn ready_to_shoot<'a>(b: &BuildingState, kind: &'a BuildingKind, tick: u64) -> Option<&'a Defence> {
     let defence = kind.defence.as_ref()?;
     let stocked = b.output.available(defence.ammo) > 0;
-    (b.built() && b.slot.occupant().is_some() && stocked && b.turret.ready_at <= tick).then_some(defence)
+    let staffed = matches!(b.slot.occupant(), Some(Occupant::Sprite(_)));
+    (b.built() && staffed && stocked && b.turret.ready_at <= tick).then_some(defence)
 }
 
 /// Where a building's occupant stands (D2): just past the footprint, a
@@ -768,11 +827,42 @@ impl Settlement {
         let launcher = Launcher { from: b.position, height: defence.muzzle_height, damage: defence.damage, speed: defence.speed, kind: defence.projectile, defender: None };
         let (ammo, period) = (defence.ammo, defence.period);
         let shot = Event::BuildingShot { building: message.building };
-        self.launch_shot(tick, &launcher, InventoryRef::Output(message.building), ammo, message.target, message.to, shot);
+        self.launch_shot(tick, &launcher, InventoryRef::Output(message.building), ammo, Some(message.target), message.to, shot);
         let turret = &mut self.buildings[message.building as usize].turret;
         turret.aim = Some(message.to);
         turret.ready_at = tick + period;
         turret.fired_at = tick;
+    }
+
+    /// Stage 5: possessing elders' shots at their reticles (B3), in command
+    /// order, each through the shared launch (`launch_shot`) if the elder
+    /// can still shoot (`fire_plan`): one unit of ammo spent, the bolt aimed
+    /// at no threat in particular (it hits whatever it meets on its way),
+    /// and the ballista's period to wait. A second shot on the same tick, or
+    /// one before the period is over, does nothing.
+    pub(super) fn elder_fire(&mut self, messages: Vec<ElderFire>, tick: u64) {
+        for ElderFire { agent, building, to } in messages {
+            let seat = self.agents.get(agent as usize).and_then(|a| a.avatar()).and_then(|a| a.seat);
+            let Ok((b, defence)) = fire_plan(agent, seat, tick, &self.buildings, &self.building_kinds) else { continue };
+            if b != building {
+                continue;
+            }
+            let from = self.buildings[b as usize].position;
+            let launcher = Launcher { from, height: defence.muzzle_height, damage: defence.damage, speed: defence.speed, kind: defence.projectile, defender: None };
+            let (ammo, period) = (defence.ammo, defence.period);
+            self.launch_shot(tick, &launcher, InventoryRef::Output(b), ammo, None, to, Event::BuildingShot { building: b });
+            let turret = &mut self.buildings[b as usize].turret;
+            turret.aim = Some(to);
+            turret.ready_at = tick + period;
+            turret.fired_at = tick;
+        }
+    }
+
+    /// Whether `agent` could shoot the ballista it possesses on `tick`, as
+    /// stage 5 checks it (`elder_fire`): for the view's fire key.
+    pub fn fire_check(&self, agent: usize, tick: u64) -> Result<BuildingIx, FireRefusal> {
+        let seat = self.agents.get(agent).and_then(|a| a.avatar()).and_then(|a| a.seat);
+        fire_plan(agent as AgentIx, seat, tick, &self.buildings, &self.building_kinds).map(|(b, _)| b)
     }
 
     /// Part of the economy step: every built, occupied building below its

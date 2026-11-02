@@ -46,7 +46,7 @@ use crate::terrain::{Disc, Terrain};
 pub use combat::{CombatMetrics, DefenderState, Event, Impact, OnMiss, Pinned, Prediction, Projectile, SpentProjectile, Threat, TossEnd, WaveState};
 pub use agent::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
 pub use avatar::Seat;
-pub use buildings::{BuildingIx, BuildingKind, BuildingKindIx, BuildingState, BurstRefusal, Defence, Occupant, PlacementRefusal, Slot, Stage, Turret};
+pub use buildings::{BuildingIx, BuildingKind, BuildingKindIx, BuildingState, BurstRefusal, Defence, FireRefusal, Occupant, PlacementRefusal, Slot, Stage, Turret};
 pub use haulers::{HaulerState, Phase};
 pub use interact::{InteractTarget, Interaction};
 pub use inventory::{Inventory, Kinds};
