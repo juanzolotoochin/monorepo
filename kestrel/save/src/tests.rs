@@ -199,7 +199,9 @@ fn settlement_characters_remap_by_name() {
     assert_eq!(character_names(&loaded, &shifted), saved);
     assert_eq!(loaded.settlement().unwrap().characters, shifted.rules.characters, "rules restored on load");
 
-    let without: Vec<_> = content::builtin_sources().into_iter().filter(|(path, _)| path != "character/ghoul_forest.ron").collect();
+    // Without the forest ghoul, and the Sacred Tree's, which builds on it.
+    let gone = ["character/ghoul_forest.ron", "character/ghoul_sacred_tree.ron"];
+    let without: Vec<_> = content::builtin_sources().into_iter().filter(|(path, _)| !gone.contains(&path.as_str())).collect();
     let missing = Content::from_sources(without).unwrap();
     assert!(matches!(read(&bytes, &missing), Err(LoadError::MissingContent { name }) if name == "character/ghoul_forest"));
 }
