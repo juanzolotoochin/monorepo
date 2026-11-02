@@ -1241,6 +1241,11 @@ fn the_happy_path_plays_from_a_fresh_start() {
 
     let report = run_for(steps, FPS, 6000);
     assert_eq!(report["status"], "passed", "{report}");
+    // All of it is played in the map's calm start, before its first wave
+    // (210 s): no ghoul gets in the way.
+    let ticks = report["state"]["sim_tick"].as_u64().unwrap();
+    eprintln!("the happy path took {} s", ticks / 60);
+    assert!(ticks < 210 * content::TICKS_PER_SECOND as u64, "the happy path took {} s", ticks / 60);
     let receipts = report["receipts"].as_array().unwrap();
     let sim = |i: usize| &receipts[i]["state"]["settlement"]["simulation"];
     let building = |i: usize, b: usize| &sim(i)["buildings"][b];
