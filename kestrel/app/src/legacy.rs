@@ -996,7 +996,14 @@ impl Simulation {
                         materials: kind.parts.get(part as usize).into_iter().flatten().map(|&(i, units)| (item(i), materials.count(i), units)).collect(),
                         ready: b.ready(kind),
                     }),
-                    turret: ballista.then(|| DefenderState { enabled: true, aim: b.turret.aim.map(local), fired_at: b.turret.fired_at }),
+                    // Possessed, it turns to the elder's reticle (B3).
+                    turret: ballista.then(|| {
+                        let reticle = match b.slot.occupant() {
+                            Some(s::Occupant::Elder(a)) => current.agents[a as usize].avatar().and_then(|avatar| avatar.aim).map(|aim| b.position + aim),
+                            _ => None,
+                        };
+                        DefenderState { enabled: true, aim: reticle.or(b.turret.aim).map(local), fired_at: b.turret.fired_at }
+                    }),
                 }
             })
             .collect();

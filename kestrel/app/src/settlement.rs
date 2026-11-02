@@ -1622,10 +1622,17 @@ fn burst_indicator(world: &World) -> Option<(usize, String)> {
 }
 
 /// The controls help line in a town: the town's keys, or while the elder
-/// possesses a building, the keys that work there (leaving and Burst).
+/// possesses a building, the keys that work there (leaving and Burst, or
+/// in a ballista firing).
 /// `style::apply` writes the first when the world starts.
 fn town_help(world: &mut World) {
-    let help = if crate::input::town::possessing(world) { crate::style::TOWN_POSSESSED_HELP } else { crate::style::TOWN_HELP };
+    let help = if crate::input::town::possessing_ballista(world) {
+        crate::style::TOWN_BALLISTA_HELP
+    } else if crate::input::town::possessing(world) {
+        crate::style::TOWN_POSSESSED_HELP
+    } else {
+        crate::style::TOWN_HELP
+    };
     for mut text in world.query_filtered::<&mut Text, With<crate::scene::ControlHelp>>().iter_mut(world) {
         if text.0 != help {
             text.0 = help.into();

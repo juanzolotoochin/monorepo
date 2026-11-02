@@ -1,7 +1,8 @@
 //! What the controller shows: the claim prompt, the selected target (its
 //! outline, name, verb or why it is unavailable), the last refusal, the
 //! drop preview, and the utility panel or item chooser. In a town, the
-//! interact target's ring, a blueprint ghost's rings and each site's plot.
+//! interact target's ring, a blueprint ghost's rings, each site's plot and
+//! a possessed ballista's range and reticle.
 
 use bevy::prelude::*;
 
@@ -87,6 +88,19 @@ pub(super) fn show(
         gizmos.circle(Isometry3d::new(h.position + Vec3::Y * 0.05, flat), h.radius + 0.25 * pulse, color.with_alpha(0.6 * (1.0 - pulse)));
     }
     let flat = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+    // A possessed ballista's range on the ground, and its reticle: a ring
+    // and a cross where the next bolt goes (`town::aim_reticle`).
+    if let Some(r) = dispatcher.as_ref().and_then(|d| d.town.reticle.as_ref()) {
+        let color = Color::srgba(1.0, 0.82, 0.35, 0.95);
+        gizmos.circle(Isometry3d::new(r.center + Vec3::Y * 0.05, flat), r.range, color.with_alpha(0.35));
+        let at = r.point + Vec3::Y * 0.07;
+        gizmos.circle(Isometry3d::new(at, flat), 0.3, color);
+        gizmos.circle(Isometry3d::new(at, flat), 0.12, color.with_alpha(0.7));
+        for d in [Vec3::X, Vec3::Z] {
+            gizmos.line(at - d * 0.45, at - d * 0.18, color);
+            gizmos.line(at + d * 0.18, at + d * 0.45, color);
+        }
+    }
     // A blueprint's ghost: its footprint as rings filling in toward the
     // center, and its output pile and slot spot, green while it may go down
     // and red while it may not (its skin and reason are `settlement`'s).
