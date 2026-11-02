@@ -810,6 +810,27 @@ pub fn tick(world: &mut World) {
                 feedback.trauma = feedback.trauma.max(if *killed { 0.45 } else { 0.3 });
             }
         }
+        // An enemy's blow on a building strikes sparks off it; breaking it
+        // bursts it in sparks and says so (B8).
+        if let Event::BuildingStruck { building, from, hit: true, .. } = event {
+            if let Some(b) = sim.buildings.get(*building) {
+                let center = Vec3::new(b.position[0], 0.6, b.position[1]);
+                let from = from.map_or(center, |p| Vec3::new(p[0], 0.6, p[1]));
+                let at = center + (from - center).normalize_or(Vec3::Z) * 0.6;
+                crate::effects::deflection(world, at, (sim.tick as u32).wrapping_add(*building as u32));
+            }
+        }
+        if let Event::BuildingBroken { building } = event {
+            if let Some(b) = sim.buildings.get(*building) {
+                for k in 0..4u32 {
+                    let angle = k as f32 * std::f32::consts::FRAC_PI_2;
+                    let at = Vec3::new(b.position[0] + 0.5 * angle.cos(), 0.5, b.position[1] + 0.5 * angle.sin());
+                    crate::effects::deflection(world, at, (sim.tick as u32).wrapping_add(k));
+                }
+                let label = sim.config().building_kinds.iter().find(|k| k.id == b.kind).map_or_else(|| b.kind.to_uppercase(), |k| k.label.clone());
+                state.refusal = Some((format!("{label} broken: it is a site again"), sim.time()));
+            }
+        }
         if let Event::BuildingProduced { building } = event {
             state.produced_at.insert(*building, sim.tick);
         }
@@ -880,6 +901,11 @@ pub fn tick(world: &mut World) {
             Event::BlockedShot { .. } => Some(crate::sound::Cue::Stone),
             Event::ThreatSwing { hit: true, .. } => Some(crate::sound::Cue::GhoulHit),
             Event::ThreatSwing { hit: false, .. } => Some(crate::sound::Cue::Swing),
+            Event::BuildingStruck { hit: true, .. } => Some(crate::sound::Cue::Stone),
+            Event::BuildingStruck { hit: false, .. } => Some(crate::sound::Cue::Swing),
+            Event::BuildingBroken { .. } => Some(crate::sound::Cue::Pierce),
+            // A sprite back beside the tree pops up as a unit does.
+            Event::SpriteReturned { .. } => Some(crate::sound::Cue::Dispense),
             Event::Produced { .. } | Event::Equipped { .. } => Some(crate::sound::Cue::Clang),
             // A gatherer's unit pops onto its pile as a dispenser's does.
             // So do a Burst's, all at once.
@@ -898,6 +924,8 @@ pub fn tick(world: &mut World) {
                     | Event::PinnedLanded { .. }
                     | Event::BlockedShot { .. }
                     | Event::ThreatSwing { .. }
+                    | Event::BuildingStruck { .. }
+                    | Event::BuildingBroken { .. }
                     | Event::FireballThrown { .. }
                     | Event::FireballLanded { .. }
             );
@@ -914,7 +942,9 @@ pub fn tick(world: &mut World) {
     let mut desired = BTreeMap::new();
     for a in sim.agents.values() {
         if let Some(sprite) = sim.config().sprite(&a.id) {
-            desired.insert(format!("agent/{}", a.id), sprite_view(sim, sprite, a));
+            if let Some(view) = sprite_view(sim, sprite, a) {
+                desired.insert(format!("agent/{}", a.id), view);
+            }
             continue;
         }
         let config = agent_config(sim, &a.id);
@@ -1146,8 +1176,14 @@ pub fn tick(world: &mut World) {
             let tree = |item: &str| sim.config().depots.iter().map(|d| sim.depots[&d.id].units(item)).sum::<u32>();
             let items = sim.config().items.iter().map(|i| format!("{} {}", i.label, tree(&i.id))).collect::<Vec<_>>().join("  ");
             let burst = burst_indicator(world).map_or_else(String::new, |(_, burst)| format!("  /  {burst}"));
+            // The tree's health and the elder's (B7, B6).
+            let mirror = world.resource::<crate::lockstep::WorldMirror>();
+            let base = mirror.current.as_ref().map_or(sim.health, |current| current.base_health);
+            let elder = mirror.player().and_then(|id| mirror.current.as_ref()?.agents.get(id as usize)).map(|agent| (agent.body.health, agent.body.max_health));
+            let elder = elder.filter(|&(_, max)| max > 0).map_or_else(String::new, |(health, max)| format!("  ELDER {health}/{max}"));
             format!(
-                "SACRED TREE  {}  /  PACK {}/{} {}{}   [P] pause",
+                "SACRED TREE {}/{base}{elder}  {}  /  PACK {}/{} {}{}   [P] pause",
+                sim.health,
                 items,
                 mine.map_or(0, |a| a.cargo.total()),
                 mine.map_or(0, |a| a.cargo.capacity),
@@ -1304,7 +1340,7 @@ fn facing(from: [f32; 2], to: [f32; 2]) -> f32 {
 /// A sprite's rig: its character's skin, each a little different in size
 /// so the four read as separate. Working, it faces its building and bobs
 /// with the work.
-fn sprite_view(sim: &Simulation, sprite: &crate::legacy::Sprite, a: &crate::legacy::AgentState) -> View {
+fn sprite_view(sim: &Simulation, sprite: &crate::legacy::Sprite, a: &crate::legacy::AgentState) -> Option<View> {
     const SIZES: [f32; 4] = [1.0, 0.9, 1.07, 0.95];
     let index = sim.config().sprites.iter().position(|s| s.id == sprite.id).unwrap_or(0);
     let mut view = View::new(&sprite.skin, a.position);
@@ -1316,8 +1352,21 @@ fn sprite_view(sim: &Simulation, sprite: &crate::legacy::Sprite, a: &crate::lega
         view.heading = facing(a.position, sim.buildings[b].position);
         view.activity = 0.5 + 0.5 * (sim.time() / HZ * 7.0 + index as f32).sin();
     }
-    view
+    // A dead sprite falls over and fades away (B6), shrinking to nothing in
+    // `SPRITE_FADE_SECONDS`, then isn't drawn until it comes back.
+    if let Some((died, _)) = state.and_then(|s| s.dead) {
+        let t = ((sim.time() - died as f32) / (SPRITE_FADE_SECONDS * HZ)).clamp(0.0, 1.0);
+        if t >= 1.0 {
+            return None;
+        }
+        view.roll = std::f32::consts::FRAC_PI_2 * (t * 3.0).min(1.0);
+        view.scale *= 1.0 - t;
+    }
+    Some(view)
 }
+
+/// Seconds a dead sprite takes to fade away.
+const SPRITE_FADE_SECONDS: f32 = 1.5;
 /// A sprite's job, by its building kind's label ("WOOD GATHERER"), and
 /// shortened to the kind's product for its tag ("WOOD"), so neighbors' tags
 /// overlap less. A ballista, which makes nothing, keeps its label.
@@ -1486,6 +1535,9 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
             }
             None => (status, detail),
         };
+        // A damaged building's card says what health it has left (B8).
+        let status = if b.health < b.max_health { format!("{status}\nHP {}/{}", b.health, b.max_health) } else { status };
+        let detail = format!("{detail}\nHealth: {}/{}", b.health, b.max_health);
         // A site's card hangs where a built one's does, clear of the
         // interact prompt over its pile.
         let card = center + Vec3::Y * (shape.height + 0.6);
@@ -1525,46 +1577,64 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
             SpriteActivity::Working => Glow::Working,
             SpriteActivity::Moving => Glow::Moving,
             SpriteActivity::Waiting => Glow::Waiting,
-            SpriteActivity::Idle => Glow::Idle,
+            SpriteActivity::Idle | SpriteActivity::Dead => Glow::Idle,
         };
         // A flame over its head: it dances while working, bobs on the walk,
-        // breathes slowly while waiting and smoulders when idle.
+        // breathes slowly while waiting and smoulders when idle. A dead
+        // sprite's goes out.
         let phase = index as f32 * 1.7;
         let (size, lift) = match s.activity {
             SpriteActivity::Working => (0.13 + 0.03 * (seconds * 13.0 + phase).sin(), 0.04 * (seconds * 9.0 + phase).sin()),
             SpriteActivity::Moving => (0.11, 0.04 * (seconds * 6.0 + phase).sin()),
             SpriteActivity::Waiting => (0.09 + 0.03 * (seconds * 2.0 + phase).sin(), 0.0),
             SpriteActivity::Idle => (0.07, 0.0),
+            SpriteActivity::Dead => (0.0, 0.0),
         };
         let head = p + Vec3::Y * 1.12;
-        glows.push((format!("flame/{}", sprite.id), head + Vec3::Y * lift, size, glow));
+        if s.activity != SpriteActivity::Dead {
+            glows.push((format!("flame/{}", sprite.id), head + Vec3::Y * lift, size, glow));
+        }
         let (job, short) = job_labels(sim, s.job.as_ref());
+        // Seconds until a dead sprite is back beside the tree.
+        let back = s.dead.map_or(0, |(_, back)| ((back as f32 - sim.time()) / HZ).ceil().max(0.0) as u32);
         let doing = match s.activity {
-            SpriteActivity::Working => "WORKING",
-            SpriteActivity::Moving if s.job.is_none() => "GOING HOME",
-            SpriteActivity::Moving => "ON THE WAY",
-            SpriteActivity::Waiting => "WAITING",
-            SpriteActivity::Idle => "IDLE",
+            SpriteActivity::Working => "WORKING".to_string(),
+            SpriteActivity::Moving if s.job.is_none() => "GOING HOME".to_string(),
+            SpriteActivity::Moving => "ON THE WAY".to_string(),
+            SpriteActivity::Waiting => "WAITING".to_string(),
+            SpriteActivity::Idle => "IDLE".to_string(),
+            SpriteActivity::Dead => format!("BACK IN {back} s"),
+        };
+        // A hurt sprite's name says what health it has left ("ASH 2/3").
+        let name = if s.health < s.max_health && s.activity != SpriteActivity::Dead {
+            format!("{} {}/{}", sprite.label, s.health, s.max_health)
+        } else {
+            sprite.label.clone()
         };
         // Declutter: a sprite working inside has no tag (its building's card
         // names it), and the others show their name alone (the flame's color
-        // says what they are doing) until the elder stands beside them.
+        // says what they are doing) until the elder stands beside them. A
+        // dead one always says when it is back.
         let near = Vec2::new(p.x - player.x, p.z - player.z).length() <= TAG_UNFOLD;
         let brief = match s.activity {
             SpriteActivity::Working if s.building.is_some() => String::new(),
-            _ if !near => sprite.label.clone(),
-            _ if job.is_empty() => format!("{}\n{doing}", sprite.label),
-            _ => format!("{}\n{short} / {doing}", sprite.label),
+            SpriteActivity::Dead => format!("{name}\n{doing}"),
+            _ if !near => name,
+            _ if job.is_empty() => format!("{name}\n{doing}"),
+            _ => format!("{name}\n{short} / {doing}"),
         };
         let detail = format!(
-            "{} (sprite)\nJob: {}\nNow: {}",
+            "{} (sprite)\nJob: {}\nHealth: {}/{}\nNow: {}",
             sprite.label,
             if job.is_empty() { "none" } else { job.as_str() },
+            s.health,
+            s.max_health,
             match s.activity {
-                SpriteActivity::Working => "working inside",
-                SpriteActivity::Moving => "walking",
-                SpriteActivity::Waiting => "waiting for a free building",
-                SpriteActivity::Idle => "standing at home",
+                SpriteActivity::Working => "working inside".to_string(),
+                SpriteActivity::Moving => "walking".to_string(),
+                SpriteActivity::Waiting => "waiting for a free building".to_string(),
+                SpriteActivity::Idle => "standing at home".to_string(),
+                SpriteActivity::Dead => format!("dead, back beside the tree in {back} s"),
             }
         );
         // Every other tag stands a little higher, so neighbors standing side
@@ -2210,7 +2280,7 @@ mod tests {
         let agent = idle.agents[0].id.clone();
         let with = |windup: Option<u64>, ready_at: u64| {
             let mut s = idle.clone();
-            s.threats[0].windup = windup.map(|lands| sim::settlement::combat::Windup { agent: 0, lands });
+            s.threats[0].windup = windup.map(|lands| sim::settlement::combat::Windup { target: sim::settlement::combat::SwingTarget::Agent(0), lands });
             s.threats[0].ready_at = ready_at;
             s
         };
@@ -2221,7 +2291,7 @@ mod tests {
         let fresh = view(&idle, &idle);
         assert_eq!((fresh.windup, fresh.swung), (None, None), "no windup, no swing yet");
         let winding = view(&with(Some(110), 0), &with(Some(110), 0));
-        let expected = crate::legacy::Windup { agent: agent.clone(), lands: 110, ticks: attack.windup };
+        let expected = crate::legacy::Windup { agent: agent.clone(), building: None, lands: 110, ticks: attack.windup };
         assert_eq!(winding.windup, Some(expected));
         // Drawn between ticks 99 and 100, a swing that landed on 100 still
         // shows its windup finishing, and the landed tick is known.
@@ -2261,10 +2331,11 @@ mod tests {
             shocked_until: 0,
             stagger_until: 0,
             knockback: [0.0, 0.0],
-            windup: windup.map(|(lands, ticks)| crate::legacy::Windup { agent: "player".into(), lands, ticks }),
+            windup: windup.map(|(lands, ticks)| crate::legacy::Windup { agent: "player".into(), building: None, lands, ticks }),
             swung,
             burning: false,
             chasing: None,
+            attacking: None,
         }
     }
 
