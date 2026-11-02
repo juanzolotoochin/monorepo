@@ -85,7 +85,11 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///     possesses (`Seat`).
 /// 29: an avatar keeps the tick its next Burst is ready on
 ///     (`AvatarState::burst_ready`).
-pub const FORMAT_VERSION: u32 = 29;
+/// 30: a building kind may be a ballista (`BuildingKind::product` is
+///     optional, `BuildingKind::defence`), a building keeps its turret's
+///     aim and next shot (`BuildingState::turret`), and pending messages
+///     have a `building_fire` queue.
+pub const FORMAT_VERSION: u32 = 30;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

@@ -446,3 +446,82 @@ fn a_town_saved_while_a_burst_cools_down_continues() {
     }
     assert_eq!(resumed.world().settlement().unwrap().seat(0), Some(Seat::Building(0)));
 }
+
+/// A Sacred Tree saved while a manned ballista shoots, a shot in the air
+/// and its turret reloading (format 30: `BuildingState::turret` and the
+/// `building_fire` queue), continues exactly: the elder loads it with
+/// stone, a sprite mans it, and it shoots the ghouls walking past.
+#[test]
+fn a_town_saved_while_a_ballista_shoots_continues() {
+    use fx::{Fx, FxVec2};
+    use sim::settlement::avatar::Intent;
+    use sim::settlement::{InteractTarget, SpriteJob};
+    use sim::{Command, CommandKind, PlayerId};
+    let content = Content::builtin();
+    let text = include_str!("../../app/assets/levels/sacred_tree_supply.ron");
+    let mut scenario = content::scenario::Scenario::parse(text).unwrap();
+    let at = |x: i64, y: i64| [Fx::from_ratio(x, 10), Fx::from_ratio(y, 10)];
+    scenario.buildings.push(content::scenario::Building { kind: "ballista".into(), position: at(50, 6) });
+    scenario.depots[1].stock.push(content::scenario::Stack { item: "stone".into(), units: 5 });
+    scenario.waves.push(content::scenario::Wave {
+        id: "east".into(),
+        position: at(85, 6),
+        target: at(20, 0),
+        character: "ghoul_forest".into(),
+        first: Fx::from_int(25),
+        every: Fx::from_int(4),
+        count: 2,
+    });
+    // The tree's trunk, as the scene's architecture blocks it.
+    let trunk = [sim::terrain::Disc { center: FxVec2::ZERO, radius: Fx::ONE }];
+    let start = || Simulation::from_world(sim::World::new_settlement(5, &content, &scenario, &trunk).unwrap(), 2);
+    let probe = start();
+    let (dock, stand, away) = {
+        let s = probe.world().settlement().unwrap();
+        let b = &s.buildings[1];
+        let center = probe.world().terrain().center;
+        (s.depots[1].position, b.output_position + (b.output_position - b.position).normalize_or_zero() * Fx::from_ratio(2, 5), center + FxVec2::new(Fx::ZERO, Fx::from_int(6)))
+    };
+    let hz = content::TICKS_PER_SECOND as u64;
+    let command = |kind| Command { player: PlayerId(0), kind };
+    let go = |target| command(CommandKind::MoveAvatar { agent: 0, intent: Intent::GoTo { target, run: true } });
+    let interact = |target| command(CommandKind::Interact { agent: 0, target });
+    // The elder takes the stone to the ballista, and steps away; Ash mans it.
+    let turn = |tick: u64| -> Vec<Command> {
+        match tick {
+            0 => vec![go(dock), command(CommandKind::SetSpriteJob { agent: 1, job: SpriteJob::Staff(2) })],
+            t if t == 4 * hz => vec![interact(InteractTarget::Depot(1))],
+            t if t == 7 * hz => vec![go(stand)],
+            t if t == 13 * hz => vec![interact(InteractTarget::Output(1))],
+            t if t == 17 * hz => vec![go(away)],
+            _ => vec![],
+        }
+    };
+    let total = 45 * hz;
+    let mut uninterrupted = start();
+    let expected: Vec<_> = (0..total).map(|tick| uninterrupted.step(&turn(tick))).collect();
+    let s = uninterrupted.world().settlement().unwrap();
+    assert!(s.combat.shots >= 3, "{} shots", s.combat.shots);
+    assert_eq!(s.accounts[1].spent, s.combat.shots, "a stone a shot");
+
+    // Save on a tick a shot is in the air.
+    let mut first = start();
+    let mut tick = 0;
+    loop {
+        first.step(&turn(tick));
+        tick += 1;
+        let s = first.world().settlement().unwrap();
+        if s.combat.shots == 2 && !s.projectiles.is_empty() {
+            break;
+        }
+        assert!(tick < total, "never shot twice");
+    }
+    let bytes = write(first.world(), &content);
+    let mut resumed = Simulation::from_world(read(&bytes, &content).unwrap(), 2);
+    for (t, expected) in expected.iter().enumerate().skip(tick as usize) {
+        let actual = resumed.step(&turn(t as u64));
+        if let Some(difference) = expected.first_difference(&actual) {
+            panic!("first difference at {difference}");
+        }
+    }
+}
