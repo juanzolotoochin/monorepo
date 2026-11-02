@@ -38,10 +38,20 @@
 //! check (`Settlement::burst_check`) lets it go off now, or failing with its
 //! words ("Burst ready in 12 s"). Elsewhere, and in other scenes, those
 //! keys keep what they did.
+//!
+//! Aiming (`SACRED_TREE_BALLISTA.md`, B3): while the elder possesses a
+//! ballista, a reticle stands within its range ([`aim_reticle`]): under the
+//! mouse, or moved by the right stick. Its offset from the ballista goes to
+//! the sim as the avatar's aim (`AimAvatar`), which the sim keeps as the
+//! reticle. Left mouse or RT, held, fires there ([`fire`]): an `Attack` at
+//! the reticle whenever the sim's own check (`Settlement::fire_check`) says
+//! the ballista has reloaded, so holding repeats at its period. A press on
+//! an empty ballista says "No ammo: bring stone". The elder's own weapon
+//! never swings there (`lockstep::attack_input` stands down).
 
 use bevy::prelude::*;
 use fx::{Fx, FxVec2};
-use sim::settlement::{InteractTarget, Interaction, PlacementRefusal, SpriteJob};
+use sim::settlement::{FireRefusal, InteractTarget, Interaction, PlacementRefusal, SpriteJob};
 use sim::CommandKind;
 
 use super::gameplay::Dispatcher;
@@ -103,7 +113,32 @@ pub struct Town {
     pub placing: Option<u16>,
     /// This frame's ghost, while placing.
     pub ghost: Option<Ghost>,
+    /// The reticle, while possessing a ballista.
+    pub reticle: Option<Reticle>,
+    /// The last aim sent (`AimAvatar`), so an unmoved reticle sends nothing.
+    sent_aim: Option<FxVec2>,
+    /// The confirmed tick the last shot went out on: one `Attack` a tick.
+    fired_on: Option<u64>,
 }
+
+/// A possessed ballista's reticle (B3).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Reticle {
+    pub building: u16,
+    /// Arena coordinates on the ground: the ballista's center and the
+    /// reticle.
+    pub center: Vec3,
+    pub point: Vec3,
+    /// The ballista's range in meters.
+    pub range: f32,
+    /// The reticle as the sim takes it: its offset from the ballista in
+    /// world tiles, within range (`BuildingKind::reticle`).
+    pub offset: FxVec2,
+}
+
+/// How fast the right stick moves a ballista's reticle, meters a second at
+/// full tilt.
+const RETICLE_SPEED: f32 = 4.0;
 
 /// What an interact did.
 #[derive(Clone, Debug, PartialEq)]
@@ -321,6 +356,102 @@ pub fn burst(world: &mut World) -> Result<u32, String> {
     let units = s.burst_check(agent as usize, sim_world.tick()).map_err(|r| r.message())?;
     world.resource_mut::<SessionService>().command(CommandKind::Burst { agent });
     Ok(units)
+}
+
+/// The ballista the local player possesses: its index, center and kind.
+fn possessed_ballista(world: &World) -> Option<(u16, FxVec2, sim::settlement::BuildingKind)> {
+    let service = world.resource::<SessionService>();
+    let (agent, s) = (service.player()?, service.settlement()?);
+    let b = s.seat(agent as usize)?.building()?;
+    let kind = s.building_kind(b);
+    kind.defence.is_some().then(|| (b, s.buildings[b as usize].position, kind.clone()))
+}
+
+/// Whether the local player possesses a ballista now, for the fire keys.
+pub fn possessing_ballista(world: &World) -> bool {
+    possessed_ballista(world).is_some()
+}
+
+/// Moves the reticle while the elder possesses a ballista, and forgets it
+/// otherwise: to the ground under the mouse (`cursor`, arena coordinates),
+/// or by the right stick (`stick`, input space) over `dt` seconds, within
+/// the ballista's range. It starts where the sim has the aim (a facing a
+/// meter out, on boarding). A moved reticle goes to the sim as `AimAvatar`.
+pub fn aim_reticle(world: &mut World, cursor: Option<Vec3>, stick: Option<Vec2>, dt: f32) {
+    let Some((building, center, kind)) = possessed_ballista(world) else {
+        let mut dispatcher = world.resource_mut::<Dispatcher>();
+        dispatcher.town.reticle = None;
+        dispatcher.town.sent_aim = None;
+        return;
+    };
+    let service = world.resource::<SessionService>();
+    let Some(agent) = service.player() else { return };
+    let confirmed = service.settlement().and_then(|s| s.agents.get(agent as usize)?.avatar()?.aim);
+    let previous = world.resource::<Dispatcher>().town.reticle.as_ref().filter(|r| r.building == building).map(|r| r.offset);
+    let range = kind.defence.as_ref().map_or(0.0, |d| d.range.to_f32());
+    let start = previous.or(confirmed).unwrap_or(FxVec2::new(Fx::ZERO, Fx::quantize(range * 0.5)));
+    let wanted = match (cursor, stick) {
+        (Some(point), _) => service.to_sim(point) - center,
+        (None, Some(stick)) => {
+            let step = super::gameplay::camera_relative(stick) * RETICLE_SPEED * dt;
+            start + FxVec2::new(Fx::quantize(step.x), Fx::quantize(step.z))
+        }
+        (None, None) => start,
+    };
+    let offset = kind.reticle(wanted).unwrap_or(start);
+    let center_view = service.to_view(center);
+    let point = service.to_view(center + offset);
+    let reticle = Reticle { building, center: center_view, point, range, offset };
+    let mut dispatcher = world.resource_mut::<Dispatcher>();
+    let moved = dispatcher.town.sent_aim.is_none_or(|sent| (sent - offset).length() > Fx::from_ratio(1, 20));
+    dispatcher.town.reticle = Some(reticle);
+    if moved {
+        dispatcher.town.sent_aim = Some(offset);
+        world.resource_mut::<SessionService>().command(CommandKind::AimAvatar { agent, aim: offset });
+    }
+}
+
+/// The fire key, held or `pressed`, while possessing a ballista: an
+/// `Attack` at the reticle when the sim's own check
+/// (`Settlement::fire_check`) says it would go off, at most one a
+/// confirmed tick, so holding repeats at the ballista's period and extra
+/// presses add nothing. A fresh press on an empty ballista fails with the
+/// sim's words ("No ammo: bring stone"); while it reloads it waits quietly.
+/// Returns whether it sent a shot.
+pub fn fire(world: &mut World, pressed: bool) -> Result<bool, String> {
+    let offset = world.resource::<Dispatcher>().town.reticle.as_ref().map(|r| r.offset).ok_or("Possess a ballista to fire")?;
+    let service = world.resource::<SessionService>();
+    let (s, sim_world, agent) = (service.settlement().ok_or("No settlement loaded")?, service.world().ok_or("No settlement loaded")?, service.player().ok_or("No controlled actor")?);
+    let tick = sim_world.tick();
+    match s.fire_check(agent as usize, tick) {
+        Ok(_) => {}
+        Err(FireRefusal::Reloading { .. }) => return Ok(false),
+        Err(reason) if pressed => return Err(reason.message()),
+        Err(_) => return Ok(false),
+    }
+    if world.resource::<Dispatcher>().town.fired_on == Some(tick) {
+        return Ok(false);
+    }
+    world.resource_mut::<Dispatcher>().town.fired_on = Some(tick);
+    let weapon = world.get_resource::<crate::gameplay::Controls>().map_or(content::scenario::Weapon::Sword, |c| c.weapon);
+    world.resource_mut::<SessionService>().command(CommandKind::Attack { agent, weapon, aim: offset, muzzle: [Fx::ZERO; 3] });
+    Ok(true)
+}
+
+/// Fires the possessed ballista once at `offset` from it, in meters, for
+/// the control protocol: the reticle goes there (cut to range) and the
+/// shot goes out if the sim's check lets it now, or fails with its words
+/// ("No ammo: bring stone", "Reloading").
+pub fn fire_at(world: &mut World, offset: Vec2) -> Result<(), String> {
+    let (_, center, _) = possessed_ballista(world).ok_or("Possess a ballista to fire")?;
+    let point = world.resource::<SessionService>().to_view(center) + Vec3::new(offset.x, 0.0, offset.y);
+    aim_reticle(world, Some(point), None, 0.0);
+    {
+        let service = world.resource::<SessionService>();
+        let (s, sim_world, agent) = (service.settlement().ok_or("No settlement loaded")?, service.world().ok_or("No settlement loaded")?, service.player().ok_or("No controlled actor")?);
+        s.fire_check(agent as usize, sim_world.tick()).map_err(|r| r.message())?;
+    }
+    fire(world, true).map(|_| ())
 }
 
 /// Whether the local player possesses a building now, for the keys that

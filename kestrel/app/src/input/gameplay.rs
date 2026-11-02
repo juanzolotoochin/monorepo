@@ -128,10 +128,11 @@ fn publish_scene(world: &mut World) {
     }
     let placing = world.get_resource::<Dispatcher>().is_some_and(|d| d.town.placing.is_some());
     let possessing = town && super::town::possessing(world);
+    let ballista = possessing && super::town::possessing_ballista(world);
     let mut input = world.resource_mut::<InputService>();
     input.set_scene(SceneContext { scenario, town, utility, recording });
     input.set_placing(placing);
-    input.set_possessing(possessing);
+    input.set_possessing(possessing, ballista);
 }
 
 /// An accepted pile haul or depot transfer is running for this player.
@@ -190,8 +191,24 @@ pub fn dispatch(world: &mut World) {
         return;
     }
     let pad = frame.owner == Device::Gamepad;
-    if pad {
+    // A possessed ballista's reticle takes the aim (`town::aim_reticle`):
+    // the mouse's ground point, or the right stick moving it.
+    let ballista = town && super::town::possessing_ballista(world);
+    if ballista {
+        let cursor = if pad { None } else { cursor_ground(world) };
+        let dt = world.resource::<Time>().delta_secs();
+        super::town::aim_reticle(world, cursor, frame.gameplay.aim.filter(|_| pad), dt);
+    } else if town {
+        super::town::aim_reticle(world, None, None, 0.0);
+    }
+    if pad && !ballista {
         aim(world, frame.gameplay.aim);
+    }
+    if ballista && frame.gameplay.fire_held {
+        let fired = super::town::fire(world, frame.gameplay.fire_pressed).map(|_| ());
+        if fired.is_err() {
+            town_feedback(world, fired);
+        }
     }
     let jumping = world.resource::<SceneView>().player().jump().is_some();
     for &edge in &frame.gameplay.edges {
@@ -257,6 +274,19 @@ fn repair(world: &mut World, agent: u16, held: bool) {
         dispatcher.repair_target = target;
         world.resource_mut::<SessionService>().command(CommandKind::RepairCover { agent, asset: target });
     }
+}
+
+/// The ground under the mouse, in arena coordinates, unless the debug UI
+/// has the pointer.
+fn cursor_ground(world: &mut World) -> Option<Vec3> {
+    let game = world.get_resource::<debug_ui::GameInput>()?;
+    if game.capture().pointer || game.ui_owns_pointer() {
+        return None;
+    }
+    let (camera, transform) = world.query::<(&Camera, &GlobalTransform)>().iter(world).next()?;
+    let (camera, transform) = (camera.clone(), *transform);
+    let window = world.query::<&Window>().iter(world).next()?.clone();
+    crate::gameplay::cursor_ground(&camera, &transform, &window)
 }
 
 /// The controller's aim: explicit stick input, else the remembered aim,

@@ -668,21 +668,62 @@ fn the_burst_keys_work_only_while_possessing_in_a_town() {
     let frame = r(&mut rig);
     assert!(frame.gameplay.edges.is_empty() && frame.gameplay.repair_pressed, "not possessing: R repairs");
     assert_eq!(rt(&mut rig).gameplay.edges, vec![Edge::Attack]);
-    rig.input.set_possessing(true);
+    rig.input.set_possessing(true, false);
     let frame = r(&mut rig);
     assert_eq!(frame.gameplay.edges, vec![Edge::Burst]);
     assert!(!frame.gameplay.repair_held && !frame.gameplay.repair_pressed);
     assert_eq!(rt(&mut rig).gameplay.edges, vec![Edge::Burst]);
-    rig.input.set_possessing(false);
+    rig.input.set_possessing(false, false);
     assert_eq!(rt(&mut rig).gameplay.edges, vec![Edge::Attack]);
     // Elsewhere nothing Bursts, even with the flag left on.
-    rig.input.set_possessing(true);
+    rig.input.set_possessing(true, false);
     for scene in [SceneContext { scenario: true, ..default() }, SceneContext::default()] {
         rig.input.set_scene(scene);
         let frame = r(&mut rig);
         assert!(!frame.gameplay.edges.contains(&Edge::Burst) && frame.gameplay.repair_pressed);
         assert_eq!(rt(&mut rig).gameplay.edges, vec![Edge::Attack]);
     }
+}
+
+/// Possessing a ballista, left mouse and RT fire it, held to repeat, and
+/// RT neither Bursts nor attacks; R still asks for a Burst (which a
+/// ballista refuses). In a gatherer RT Bursts as before.
+#[test]
+fn the_fire_keys_work_only_while_possessing_a_ballista() {
+    let mut rig = Rig::new();
+    rig.input.set_scene(SceneContext { scenario: true, town: true, ..default() });
+    rig.mouse.press(MouseButton::Left);
+    let frame = rig.frame();
+    assert!(!frame.gameplay.fire_held && !frame.gameplay.fire_pressed, "not possessing");
+    rig.mouse.release(MouseButton::Left);
+    rig.frame();
+    rig.input.set_possessing(true, true);
+    rig.mouse.press(MouseButton::Left);
+    let frame = rig.frame();
+    assert!(frame.gameplay.fire_held && frame.gameplay.fire_pressed);
+    let frame = rig.frame();
+    assert!(frame.gameplay.fire_held && !frame.gameplay.fire_pressed, "held, not pressed again");
+    rig.mouse.release(MouseButton::Left);
+    assert!(!rig.frame().gameplay.fire_held);
+    rig.keys.press(KeyCode::KeyR);
+    assert_eq!(rig.frame().gameplay.edges, vec![Edge::Burst]);
+    rig.keys.release(KeyCode::KeyR);
+
+    let mut rig = Rig::seated(1);
+    rig.input.set_scene(SceneContext { scenario: true, town: true, ..default() });
+    rig.input.set_possessing(true, true);
+    rig.pads.right_trigger(1, 1.0);
+    let frame = rig.frame();
+    assert!(frame.gameplay.fire_held && frame.gameplay.fire_pressed);
+    assert!(frame.gameplay.edges.is_empty(), "{:?}", frame.gameplay.edges);
+    assert!(rig.frame().gameplay.fire_held);
+    rig.pads.right_trigger(1, 0.0);
+    assert!(!rig.frame().gameplay.fire_held);
+    rig.input.set_possessing(true, false);
+    rig.pads.right_trigger(1, 1.0);
+    let frame = rig.frame();
+    assert_eq!(frame.gameplay.edges, vec![Edge::Burst]);
+    assert!(!frame.gameplay.fire_held);
 }
 
 /// In the Sacred Tree, R Bursts the possessed Wood Gatherer: its output

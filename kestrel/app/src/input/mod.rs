@@ -161,6 +161,13 @@ pub struct Gameplay {
     pub repair_pressed: bool,
     /// The lift (Space / RB) is held.
     pub lift_held: bool,
+    /// In a town, while possessing a ballista: the fire key (left mouse,
+    /// controller RT) is held. Each frame it is, the town fires when the
+    /// ballista has reloaded (`town::fire`), so holding repeats at its
+    /// period.
+    pub fire_held: bool,
+    /// The fire key went down this frame, for its refusal ("No ammo").
+    pub fire_pressed: bool,
     /// An explicit input-space aim direction from the aim stick.
     pub aim: Option<Vec2>,
     pub edges: Vec<Edge>,
@@ -300,6 +307,9 @@ pub struct InputService {
     /// The local elder possesses a building in a town (`town`): keyboard R
     /// and controller RT Burst instead of repairing and attacking.
     possessing: bool,
+    /// The building possessed is a ballista: RT fires it instead (left
+    /// mouse too), and Burst stays on R, which a ballista refuses.
+    ballista: bool,
 }
 
 impl Service for InputService {
@@ -399,9 +409,11 @@ impl InputService {
         self.placing = placing;
     }
 
-    /// Whether the town's elder possesses a building, for the Burst keys.
-    pub fn set_possessing(&mut self, possessing: bool) {
+    /// Whether the town's elder possesses a building, and whether it is a
+    /// ballista, for the Burst and fire keys.
+    pub fn set_possessing(&mut self, possessing: bool, ballista: bool) {
         self.possessing = possessing;
+        self.ballista = possessing && ballista;
     }
 
     /// Opens an item chooser at the next frame. Its pick arrives as
@@ -756,12 +768,19 @@ impl InputService {
         }
         // R Bursts while possessing a building, and repairs nothing then.
         let repair = !(self.scene.town && self.possessing);
+        // Left mouse fires a possessed ballista, held to repeat, unless the
+        // debug UI has the pointer.
+        let mouse = game.mouse();
+        let pointer_free = !game.capture().pointer && !game.ui_owns_pointer();
+        let firing = self.scene.town && self.ballista && pointer_free;
         Gameplay {
             movement,
             run: keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),
             repair_held: repair && keys.pressed(KeyCode::KeyR),
             repair_pressed: repair && keys.just_pressed(KeyCode::KeyR),
             lift_held: keys.pressed(KeyCode::Space),
+            fire_held: firing && mouse.pressed(MouseButton::Left),
+            fire_pressed: firing && mouse.just_pressed(MouseButton::Left),
             aim: None,
             edges,
             zoom: 0.0,
@@ -776,9 +795,13 @@ impl InputService {
                 edges.push(edge);
             }
         };
-        // RT Bursts while possessing a building in a town, where it could
-        // attack nothing anyway (a seated elder doesn't swing).
-        press(Control::RightTrigger, if self.scene.town && self.possessing { Edge::Burst } else { Edge::Attack });
+        // RT Bursts while possessing a gatherer in a town, where it could
+        // attack nothing anyway (a seated elder doesn't swing), and fires a
+        // possessed ballista (`fire_held`).
+        let ballista = self.scene.town && self.ballista;
+        if !ballista {
+            press(Control::RightTrigger, if self.scene.town && self.possessing { Edge::Burst } else { Edge::Attack });
+        }
         press(Control::Button(Button::RightBumper), Edge::Lift);
         press(Control::Button(Button::South), Edge::Interact);
         // A town has no nearby targets to collect from: X builds, and B
@@ -805,6 +828,8 @@ impl InputService {
             repair_held: false,
             repair_pressed: false,
             lift_held: pad.held(Button::RightBumper),
+            fire_held: ballista && pad.held.contains(&Control::RightTrigger),
+            fire_pressed: ballista && pad.pressed.contains(&Control::RightTrigger),
             aim: pad.aim,
             edges,
             zoom,
