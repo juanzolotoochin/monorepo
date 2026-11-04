@@ -340,6 +340,15 @@ fn keyboard_e_interacts_in_a_town() {
     assert_eq!(rig.frame().gameplay.edges, vec![Edge::Interact]);
 }
 
+/// Keyboard F digs in a town as in the dig lab (`gameplay::town_dig`).
+#[test]
+fn keyboard_f_digs_in_a_town() {
+    let mut rig = Rig::new();
+    rig.input.set_scene(SceneContext { scenario: true, town: true, utility: vec![Utility::Dig, Utility::Respawn], recording: false });
+    rig.keys.press(KeyCode::KeyF);
+    assert_eq!(rig.frame().gameplay.edges, vec![Edge::Utility(Utility::Dig)]);
+}
+
 /// In a town, keyboard B and controller X build; while a blueprint is being
 /// placed, Escape and controller B back out of it (Escape doesn't pause).
 /// Elsewhere B is nothing and X still collects.

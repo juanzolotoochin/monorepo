@@ -241,6 +241,7 @@ pub fn dispatch(world: &mut World) {
                 world.resource_mut::<SessionService>().command(CommandKind::Jetpack { agent, enabled: false });
                 world.resource_mut::<Dispatcher>().thrust = false;
             }
+            Edge::Utility(Utility::Dig) if town => town_dig(world),
             Edge::Utility(Utility::Dig) => world.resource_mut::<SessionService>().dig(),
             Edge::Utility(Utility::Record) => {
                 let recording = world.resource::<crate::palimpsest::Memory>().recording();
@@ -438,6 +439,21 @@ fn town_drop(world: &mut World) {
 fn town_burst(world: &mut World) {
     let burst = super::town::burst(world).map(|_| ());
     town_feedback(world, burst);
+}
+
+/// The town's dig key (F): the tile in front, or why not, over the elder
+/// (`Settlement::dig_in_front_of`). Already digging, the press does nothing.
+fn town_dig(world: &mut World) {
+    let service = world.resource::<SessionService>();
+    let refusal = service.player().zip(service.settlement()).zip(service.world()).and_then(|((agent, settlement), sim)| {
+        let digging = settlement.agents.get(agent as usize).is_some_and(|a| a.digging().is_some());
+        let terrain = sim.terrain();
+        (terrain.sloped && !digging).then(|| settlement.dig_in_front_of(agent, sim.tick(), terrain)?.err()).flatten()
+    });
+    match refusal {
+        Some(refusal) => town_feedback(world, Err(crate::digging::refusal_text(refusal).into())),
+        None => world.resource_mut::<SessionService>().dig(),
+    }
 }
 
 /// A town action's refusal shows over the elder, as the sim's do.
