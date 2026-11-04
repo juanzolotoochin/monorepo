@@ -1,6 +1,6 @@
 # Kestrel Sacred Tree mining (design)
 
-Status: design agreed (2026-11-03). Tasks in
+Status: M6 done (2026-11-04). Tasks in
 [`todo/sacred-tree.md`](todo/sacred-tree.md) under M6. It builds on the town
 MVP in [`SACRED_TREE_HANDOFF.md`](SACRED_TREE_HANDOFF.md) and the ballista
 in [`SACRED_TREE_BALLISTA.md`](SACRED_TREE_BALLISTA.md), whose rules for the

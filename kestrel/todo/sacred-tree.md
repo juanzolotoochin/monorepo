@@ -106,9 +106,74 @@ its milestones, in order; one PR per milestone.
   as G does; the job menu is for sprites standing outside.)
 - **Found in:** M2.2.
 
-## M6.7 Waves, tuning, soak and demo
+## Moats make the tree safe
 
 - **Status:** open
+- **Why:** since M6.7 a ghoul with no walkable way to the tree walks to the
+  reachable point nearest it and waits there (`Threat::stranded`). A moat
+  two layers deep round both ramps' feet (about 124 tile-layers, four or
+  five minutes of the elder's digging) leaves every wave waiting at the
+  cliff's foot, 16 m from the tree: nothing breaches, and the defence is
+  trivial. Cutting one ramp only sends its ghouls round to the other
+  (`lane_tests`).
+- **What to do:** decide after the playtest whether that is a fair
+  strategy (it costs the calm start and more), or whether ghouls should
+  answer it: dig or fill their way through, climb a cliff slowly, or the
+  ramps' feet stay undiggable for a few tiles.
+- **Where:** `kestrel/sim/src/settlement/chase.rs` (`route_home`,
+  `retry_stranded`), `mine.rs` (`Hill::ranges`).
+- **Found in:** M6.7.
+
+## Fled sprites and ghouls that linger
+
+- **Status:** open
+- **Why:** a sprite that fled a ghoul (M6.7) goes back to work once no
+  ghoul chases it or is within three detect radii (9 m). A miner whose
+  stone lies past a ghoul that lingers (a stranded one, or one chasing
+  someone else) walks back toward it, is threatened again and runs home:
+  it can go back and forth without digging. Miners also plan without
+  looking at ghouls, so one may pick stone beside the column's way.
+- **What to do:** watch it in the playtest; if it matters, let a miner
+  give up targets near a ghoul until the ghoul goes (as `unreachable`
+  does for routes), or stay home while a wave is out.
+- **Where:** `kestrel/sim/src/settlement/sprites.rs` (`Alarm`, `replan`),
+  `miners.rs` (`plan`).
+- **Found in:** M6.7.
+
+## Stone yield and veins in content
+
+- **Status:** open
+- **Why:** M6.7 tuned the waves in the supply file, but a stone layer's
+  3–6 (`Mine::yield_of`) and the 4 guaranteed exposed veins
+  (`EXPOSED_VEINS`, two layers deep) are code, so tuning them needs a
+  build, not a content edit.
+- **What to do:** move them to the scene's `mine:` line (with the
+  `voxel_assets` scene schema) if the playtest wants them tuned.
+- **Where:** `kestrel/sim/src/mine.rs`, `kestrel/tools/assetc/core`.
+- **Found in:** M6.7.
+
+## Pale stripes on far terraces
+
+- **Status:** open
+- **Why:** seen at a low angle from the foot of the Sacred Tree's east
+  ramp, the far terraces show tall, pale, one-tile-wide vertical walls
+  (M6.6, checked again in M6.7's demo frames). `sloped_chunk_mesh` draws
+  a wall only from a steep tile down to a lower neighbour, or down past the
+  deepest layer at the arena's edge, and the town's generator makes no
+  drop tiles, so the cause is still unknown.
+- **What to do:** sample the sim's heights under one stripe (the demo's
+  first seconds) and compare with the chunk's walls; check `Heights::read`'s
+  window at chunk borders and walls facing the camera on terraces that
+  rise past the plateau.
+- **Where:** `kestrel/app/src/digging.rs` (`sloped_chunk_mesh`, `drawn`,
+  `Heights`).
+- **Found in:** M6.6, M6.7.
+
+## Done
+
+### M6.7 Waves, tuning, soak and demo
+
+- **Status:** done (branch `kestrel-sacred-tree-mining`)
 - **Why:** the big map changes travel times and the stone supply.
 - **What to do:**
   - Tune the waves, starting stone, dig speeds and yields on the big map.
@@ -127,8 +192,68 @@ its milestones, in order; one PR per milestone.
 - **Where:** `kestrel/sim/src/settlement/soak_tests.rs`,
   `sacred_tree_supply.ron`, `kestrel/app/demos/`.
 - **Found in:** mining design.
+- **Done:** routes: a dig replans the routes that pass within 2 m of the
+  dug tile (`Settlement::reroute_round`, from `dig_housekeeping`): every
+  threat on its way to the tree whose remaining route does, and each wave
+  still sending whose planned route does (at its next spawn); routes far
+  from a dig are kept, so a dig costs a few searches at most. A cut lane:
+  routes are planned with `nav::path_toward`, which, when no route reaches
+  the goal, returns the route to the searched node nearest it that the
+  search reached (`path_with` shares the search and gives the same routes
+  as before). A ghoul with such a route is `Threat::stranded`: it walks to
+  its end and waits there (the route keeps its last point, so it never
+  breaches from afar), still chasing anyone who comes in sight, and plans
+  again every 5 s (`retry_stranded`, spread by id; a failed search costs
+  the whole window, so not on every dig) and on any blueprint. A wave cut
+  off spawns its ghouls stranded. Cutting one ramp sends its ghouls round
+  the hill to the other; cutting both leaves them waiting at the cliff's
+  foot 16 m from the tree (new open task "Moats make the tree safe").
+  Fleeing: stage 2 hands sprites the chasing enemies (`Ctx::danger`); a
+  sprite off the hill's plateau (`Hill::on_plateau`) that one chases or is
+  within its detect radius of (`Alarm::Threatened`) drops its plan and its
+  route and plans `[GoTo(home), Wait]`, the sprites' plan shape; at home it
+  waits a retry and stays fled while one chases it or is within 9 m
+  (`Alarm::Wary`), then plans its job. One holding a slot claim or moving
+  a bundle's units finishes that first; scenes without a hill never flee.
+  Tests (`settlement/lane_tests.rs`): a pit dug (the last layer by the
+  elder's dig) on a walking ghoul's route turns it round and it still
+  breaches; a moat round the east ramp sends the east ghoul up the west
+  ramp; with both moated, one on its way and one sent later wait stranded
+  for 150 s without a breach; a miner digging off the hill flees a ghoul
+  2.5 m away, outruns it up the hill and digs again once it is gone.
+  `hill_tests`' `walks` compared each leg with itself; it checks the real
+  legs now (the ramp routes still pass). Tuning (all in
+  `sacred_tree_supply.ron`; measured by `waves_tests`, ballistas manned by
+  sprites and topped up from the tree 5 s before each wave's march ends,
+  by `miner_tests::two_miners_bring_a_steady_modest_income` and by the
+  wave soak):
 
-## Done
+  | Number | Before | After | Measured |
+  |---|---|---|---|
+  | Calm start | first ghoul at 210 s, at the tree about 273 s | first at 165 s, the hill's top about 205 s, the tree about 228 s | Ghouls walk 63 s from the ring; this puts them back near M5.6's arrival. The happy path (no cheats) still ends in the calm start, at 131 s. |
+  | Waves | 3/4/5/7/8/8: east column 3 to 5 (5 lanes), west 1 to 3 from the third wave; 35 ghouls | 3/5/6/7/8/8: east 3, then 4 from the second (4 lanes), west one more a wave from the second, to 4; 37 ghouls | Ignored, the tree fell in the fifth wave (633 s), now in the fourth (504 s). One ballista by the east ramp: tree 11/20 with 9 breaches before, 6/20 with 14 after. One by each ramp: 20/20 both (35, then 37 killed). No reload mid-wave: a ramp brings at most 4, 8 bolts of a 10-stone store. |
+  | Elder dig | 2 s | kept | Settled (M6.2). No starting stone: the first mechanism's 2 stone are dug, so the elder digs first (the happy path digs at 65 s). |
+  | Miner dig / bundle | 9 s / 6 | kept | Two miners alone bring 45 stone in 5 min (10, 8, 15, 8, 4 a minute, slowing as the near stone goes): about the 10 a minute two ballistas spend over the waves, so they keep them stocked between waves and the elder's digs top up. |
+  | Stone yield / veins | 3–6 a layer; 4 exposed veins 18–37 m out | kept | A vein's ten stone layers give about 45 stone in a minute of the elder's digging; stone is never short, it costs trips. Yields and veins are code (new open task). |
+  | Wave soak | one ballista: tree 11/20; no elder digs | a ballista by each ramp (Ash and Fern), the elder digging stone off the hill in quiet cycles | Tree 18/20: 42 cycles, 35 kills, 2 breaches, 7 buildings broken, 3 sprite deaths and returns, 1 elder death, 10 elder digs, 216 stone dug. |
+
+  Soak: `defending_against_the_waves_strands_no_sprite` plays all six
+  waves on the real map (the hill in its mine) with miners and the elder
+  digging (`dig_stone`: down to a stone tile the miners' search finds,
+  from the tile behind its stand so it faces it, then F), `validate` and
+  the balances every tick; both ballistas and two Wood Gatherers go up in
+  the calm start (by 41 s). Demo `demos/sacred_tree.json`, at 2x then 4x:
+  the elder digs two stone layers at the east ramp's vein, picks up a
+  bundle, sends Reed to mine, builds a ballista by the east ramp's end
+  from the tree's wood and the dug stone and loads the leftover, and Fern
+  mans it; at 4x the elder loads the stone Reed brought, then possesses
+  the ballista as the first column tops the ramp, throws a fireball at its
+  head, fires four bolts and leaves, and Fern finishes it (tree 20/20).
+  Only the wood is stocked. `app/README.md` describes the hill, F, miners,
+  fleeing, the waves and the demo. The M6.6 stripes: the demo's frames by the east ramp's foot show them (pale, tall, one-tile-wide walls on the far terraces at the screen's lower right); `sloped_chunk_mesh` draws walls only down to a lower neighbour or at the arena's edge, and the generator makes no drop tiles, so the cause is not found yet (new open task). Save format 38
+  (`Threat::stranded`); input log, net protocol and `CommandKind`
+  unchanged. Golden: the arena's state hashes moved (the new field),
+  behaviour lines unchanged; regenerated in its own commit.
 
 ### M6.6 Drawing sloped ground and stone
 
