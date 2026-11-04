@@ -793,11 +793,37 @@ bazel run --config=remote //kestrel/app:demo -- --scene sacred-tree
 The town MVP's clearing ([design](../SACRED_TREE_HANDOFF.md)): the tree's
 wood and stone piles, four sprites and one Wood Gatherer, all in placeholder
 art, on a hill in 256 m of ground to dig. The HUD line and the piles'
-labels count the tree's wood and stone. No building makes stone: the elder
-digs it (F, the tile in front, a layer in about 2 s) out of the stone veins
-below the hill, a few of them exposed 15 to 40 m out, down either ramp.
-Each stone layer drops 3 to 6 stone on a pile beside the pit, carried up
-to the tree like any ground pile.
+labels count the tree's wood and stone.
+
+The town stands on a plateau 2 m up whose sides are cliffs; the only ways
+up and down are two ramps, west and east, and the camera follows the elder
+down them. No building makes stone: the elder digs it out of the stone
+veins below the hill (grey in the ground and the pit walls), a few of them
+exposed 15 to 40 m out, down either ramp. F (Dig) digs the tile in front
+of the elder, a layer in about 2 s, never deeper than a layer below the
+tile it stands on, so a deep pit is a stair it can always walk back out
+of; the hill, the plateau, piles and buildings can't be dug, and a refused
+dig says why over the elder ("Too deep from here: step down first", "A
+pile is in the way"). Pit edges slope, so ghouls and sprites walk into a
+shallow pit and around a deep one. Each stone layer drops 3 to 6 stone on
+a pile beside the pit, carried up to the tree like any ground pile.
+
+A sprite given the MINE job is a miner: it walks to the nearest exposed
+stone it can reach from the tree, digs it (about 9 s a layer, with a dig
+bar and dust over the pit), carries the drop (up to 6) up to the tree's
+stone pile, and clears stone lying on the ground first. With no exposed
+stone, it waits by the stone pile until the elder uncovers some. Off the
+hill, a sprite that a ghoul chases or comes within 3 m of runs home beside
+the tree and waits there until the ghouls are gone, then goes back to
+work.
+
+After a calm start of 2:45, ghouls come in six waves, 90 s apart, from a
+ring 40 m out: an east column up the east ramp from the first wave and
+west lanes up the west ramp from the second, about a minute's walk to the
+tree. A ballista by each ramp's end (manned and stocked with stone) stops
+them; one alone leaves the other ramp's ghouls to breach. A pit dug in a
+ghoul's way re-routes it; with no walkable way left to the tree (a moat
+round both ramps' feet) it walks as close as it can and waits there.
 Each sprite has a flame over its head and a tag with its name, job and what
 it is doing: the flame dances orange while it works inside its building,
 bobs pale yellow on the way, breathes blue while it waits for a free
@@ -809,7 +835,7 @@ a card for details. E (A on a controller) acts on the one thing in reach
 the sim picks (`sim::settlement::interact`), ringed on the ground with what
 it does over it ("E  PICK UP 3 WOOD", "DEPOSIT 5 WOOD", "WITHDRAW 5 WOOD"):
 the elder steps in and the units fly. On a sprite it opens a job menu in a
-ring around it (Idle, Gather Wood, Man Ballista): WASD, the arrows, the
+ring around it (Idle, Gather Wood, Man Ballista, Mine): WASD, the arrows, the
 stick or the D-pad pick a direction, E or A sets the job, Escape or B
 closes it. A refusal shows over the elder's head for a moment.
 
@@ -862,19 +888,17 @@ keep what they do.
 bazel build //kestrel/app:sacred_tree_demo
 ```
 
-renders a short video (a local GPU target, like the other demos) of three
-sprites given jobs: one works the Wood Gatherer, one waits for it, and one
-waits for a ballista that isn't built yet. Then the elder walks to the
-Wood Gatherer's output, its pickup ringed and prompted, picks the wood up
-with one interact and deposits it at the tree's wood pile with another.
-Then it builds: the build menu, a ballista's ghost red on the tree and
-green east of it, put down; wood from the tree delivered and the foundation
-installed, leaving the site half built; and a walk behind the tree, whose
-canopy fades. Last, the elder drops the wood it still carries on the ground
-east of the tree, and the pile is ringed with "E  PICK UP 2 WOOD".
-Finally it possesses the Wood Gatherer, putting its sprite out beside it,
-and Bursts it: its card says "BURST READY (R)", two units land at once with
-the lamp flaring, and the card counts the cooldown down ("BURST 30 s").
+renders a short video (a local GPU target, like the other demos; build it
+without `--config=remote`) on the big map. Ash works the Wood Gatherer.
+The elder walks down the east ramp to the vein beside it, digs two stone
+layers with F (the second from inside the first pit), picks up a bundle
+of the dug stone, and sends Reed to mine, who fetches the rest and digs
+on. Back on the plateau the elder builds a ballista by the east ramp's
+end from the tree's wood and the dug stone, loads it with the leftover,
+and Fern mans it. At 4x the elder loads the stone Reed brought meanwhile,
+and the first wave's east column comes up the ramp: the elder possesses
+the ballista (Fern steps out), throws a fireball at the column's head and
+fires four bolts, then leaves, and Fern finishes the column.
 
 ## Red Clearing combat arena
 
