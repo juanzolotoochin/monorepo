@@ -21,7 +21,7 @@ const SUPPLY: &str = include_str!("../../../app/assets/levels/sacred_tree_supply
 
 const HZ: u64 = TICKS_PER_SECOND as u64;
 const ELDER: AgentIx = 0;
-const STONE_GATHERER: BuildingKindIx = 1;
+const WOOD_GATHERER: BuildingKindIx = 0;
 /// How wide a wave plans its route (`combat_housekeeping`).
 fn ghoul_clearance() -> Fx {
     Fx::from_ratio(1, 5)
@@ -256,7 +256,7 @@ fn buildings_stand_on_the_plateau_but_not_over_pits_or_cliffs() {
     assert_eq!(s.buildings.len(), 1, "the Wood Gatherer");
     let check = |sim: &Simulation, x: f64, y: f64| {
         let terrain = sim.world().terrain();
-        settlement(sim).placement_check(STONE_GATHERER, at(terrain, x, y), terrain)
+        settlement(sim).placement_check(WOOD_GATHERER, at(terrain, x, y), terrain)
     };
     assert!(check(&sim, 5.0, 0.0).is_ok(), "open ground to the east");
     let hill = terrain.mine.unwrap().hill.unwrap();

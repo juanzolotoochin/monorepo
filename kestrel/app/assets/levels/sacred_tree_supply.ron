@@ -3,7 +3,9 @@
 // Its stock is two piles beside it, one per item (each takes only its own),
 // starting empty. The elder carries a bundle of one item, up to 5. One Wood
 // Gatherer stands built; the clearing's east side has room for more. A
-// ballista can be built too, and shoots while manned and stocked.
+// ballista can be built too, and shoots while manned and stocked. No
+// building makes stone: it is dug out of the ground (the scene's stone
+// veins, a few exposed 15 to 40 m out), so the stone pile starts empty too.
 // Positions are meters from the clearing's center (the scene's x and z).
 (id: "sacred_tree", extent: 128.0, items: [
 (id: "wood", label: "WOOD", skin: "item_lumber", scale: 0.45),
@@ -24,11 +26,6 @@
 (id: "foundation", label: "FOUNDATION", materials: [(item: "wood", units: 2)]),
 (id: "mechanism", label: "MECHANISM", materials: [(item: "wood", units: 2), (item: "stone", units: 2)])
 ]),
-(id: "stone_gatherer", label: "STONE GATHERER", skin: "factory", radius: 0.9, product: "stone", period: 8.0,
- cap: 10, possessed_cap: 20, possessed_multiplier: 4.0, burst: (units: 5, cooldown: 30.0), health: 10, parts: [
-(id: "foundation", label: "FOUNDATION", materials: [(item: "wood", units: 2)]),
-(id: "mechanism", label: "MECHANISM", materials: [(item: "wood", units: 2)])
-]),
 // A ballista shoots the nearest enemy while someone mans it and it has
 // stone, one stone a shot; its numbers are the forest's Woodland Ballista's.
 // It produces nothing: its pile in front is its ammo, only delivered to.
@@ -47,8 +44,8 @@
 ], buildings: [
 (kind: "wood_gatherer", position: (-5.2, 0.6))
 ], producers: [], defenders: [],
-// Ghouls come after a calm start of 3.5 min (time to build a Stone
-// Gatherer and a ballista, and stock it), then a wave every 90 s, each as
+// Ghouls come after a calm start of 3.5 min (time to dig stone, build a
+// ballista and stock it), then a wave every 90 s, each as
 // big as the last or bigger: 3, 4, 5, 7, 8 and 8 ghouls. A scenario has at
 // most 8 waves, so each entry here is a lane that sends one ghoul a wave
 // (`every: 90`) from its first one on: the east lanes 2.5 s apart make a

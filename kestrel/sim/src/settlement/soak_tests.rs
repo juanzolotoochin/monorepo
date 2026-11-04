@@ -30,16 +30,20 @@ const WOOD: ItemIx = 0;
 const STONE: ItemIx = 1;
 const TREE: [DepotIx; 2] = [0, 1];
 const WOOD_GATHERER: BuildingKindIx = 0;
-const STONE_GATHERER: BuildingKindIx = 1;
+const BALLISTA: BuildingKindIx = 1;
+/// The build soak's test-only kind (`tests::with_stone_gatherer`): the
+/// scene has no building that makes stone (M6.4), but the soak reassigns
+/// sprites across two gathering kinds.
+const STONE_GATHERER: BuildingKindIx = 2;
 
 /// The scene on its map: the hill in the middle of its mine (M6.3).
 fn sacred_tree() -> Simulation {
     super::hill_tests::sacred_tree_map(Scenario::parse(SACRED_TREE).unwrap())
 }
 
-/// The map with no waves.
+/// The map with no waves, and a test-only Stone Gatherer to build.
 fn calm_sacred_tree() -> Simulation {
-    let mut scenario = Scenario::parse(SACRED_TREE).unwrap();
+    let mut scenario = super::tests::with_stone_gatherer(SACRED_TREE);
     scenario.waves.clear();
     super::hill_tests::sacred_tree_map(scenario)
 }
@@ -279,8 +283,6 @@ fn possess_leave_reassign_and_build_cycles_strand_no_sprite() {
     assert!(soak.longest <= RETRY_TICKS + 1);
 }
 
-const BALLISTA: BuildingKindIx = 2;
-
 /// What the wave soak saw, from the events.
 #[derive(Debug, Default)]
 struct Seen {
@@ -478,8 +480,8 @@ impl Soak {
 
 /// The map played through all its waves (13 minutes, the last ghouls
 /// walking up from the ring) by a town that defends: before the first wave
-/// it puts up a ballista beside the tree, a Stone Gatherer on the west
-/// lane's way and a Wood Gatherer near the east column's; then it cycles
+/// it puts up a ballista beside the tree and a Wood Gatherer on each lane's
+/// way, the west's and near the east column's; then it cycles
 /// reassigning the sprites (Ash always on the ballista, the others walking
 /// to gatherers across the waves' ways or idling), stocking the ballista, possessing it to shoot and throw
 /// fireballs while ghouls are about, possessing a gatherer to Burst while
@@ -491,7 +493,7 @@ fn defending_against_the_waves_strands_no_sprite() {
     let mut soak = Soak::new(sacred_tree());
     let mut seen = Seen::default();
     let ballista = soak.build(BALLISTA, soak.point(3.0, -1.4));
-    let west = soak.build(STONE_GATHERER, soak.point(-4.6, -2.6));
+    let west = soak.build(WOOD_GATHERER, soak.point(-4.6, -2.6));
     let east = soak.build(WOOD_GATHERER, soak.point(6.0, -1.6));
     soak.empty_bundle();
     let gatherers = [0, west, east];
@@ -501,7 +503,7 @@ fn defending_against_the_waves_strands_no_sprite() {
         // Ash mans the ballista; the others rotate over the gatherers and
         // idling every fourth cycle, so they walk across the clearing and
         // stay a while in buildings on the waves' ways.
-        let rota = [SpriteJob::Staff(WOOD_GATHERER), SpriteJob::Staff(STONE_GATHERER), SpriteJob::Idle];
+        let rota = [SpriteJob::Staff(WOOD_GATHERER), SpriteJob::Staff(WOOD_GATHERER), SpriteJob::Idle];
         let mut jobs = vec![command(CommandKind::SetSpriteJob { agent: SPRITES[0], job: SpriteJob::Staff(BALLISTA) })];
         jobs.extend(SPRITES[1..].iter().enumerate().map(|(i, &agent)| command(CommandKind::SetSpriteJob { agent, job: rota[(cycle / 4 + i) % 3] })));
         soak.watch(&jobs, &mut seen);

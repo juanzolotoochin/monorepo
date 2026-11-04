@@ -18,7 +18,7 @@ const ELDER: AgentIx = 0;
 const SPRITES: [AgentIx; 4] = [1, 2, 3, 4];
 const STONE: ItemIx = 1;
 const TREE_STONE: DepotIx = 1;
-const BALLISTA_KIND: BuildingKindIx = 2;
+const BALLISTA_KIND: BuildingKindIx = 1;
 /// When the map's first ghoul comes: the calm start (the supply's first
 /// wave).
 const CALM: u64 = 210 * HZ;

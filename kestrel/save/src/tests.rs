@@ -229,11 +229,11 @@ fn a_town_saved_mid_delivery_continues() {
     let site = FxVec2::new(center.x + Fx::from_int(5), center.y);
     let command = |kind| Command { player: PlayerId(0), kind };
     let walk = |target| command(CommandKind::MoveAvatar { agent: 0, intent: Intent::GoTo { target, run: true } });
-    // A Stone Gatherer east of the tree, five wood in the tree's wood pile;
+    // A Wood Gatherer east of the tree, five wood in the tree's wood pile;
     // the elder takes it to the site and delivers.
     let turn = |sim: &Simulation, tick: u64| -> Vec<Command> {
         match tick {
-            0 => vec![command(CommandKind::PlaceBlueprint { kind: 1, position: site }), command(CommandKind::AddStock { depot: 0, item: 0, units: 5 }), walk(dock)],
+            0 => vec![command(CommandKind::PlaceBlueprint { kind: 0, position: site }), command(CommandKind::AddStock { depot: 0, item: 0, units: 5 }), walk(dock)],
             150 => vec![command(CommandKind::Interact { agent: 0, target: InteractTarget::Depot(0) })],
             300 => {
                 let b = &sim.world().settlement().unwrap().buildings[1];
@@ -493,7 +493,7 @@ fn a_town_saved_while_a_ballista_shoots_continues() {
     // The elder takes the stone to the ballista, and steps away; Ash mans it.
     let turn = |tick: u64| -> Vec<Command> {
         match tick {
-            0 => vec![go(dock), command(CommandKind::SetSpriteJob { agent: 1, job: SpriteJob::Staff(2) })],
+            0 => vec![go(dock), command(CommandKind::SetSpriteJob { agent: 1, job: SpriteJob::Staff(1) })],
             t if t == 4 * hz => vec![interact(InteractTarget::Depot(1))],
             t if t == 7 * hz => vec![go(stand)],
             t if t == 13 * hz => vec![interact(InteractTarget::Output(1))],

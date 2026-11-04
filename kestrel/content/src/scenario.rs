@@ -814,9 +814,8 @@ mod tests {
             k.parts.iter().map(|p| p.materials.iter().map(|s| (s.item.as_str(), s.units)).collect()).collect()
         }
         assert_eq!(needs(wood), [vec![("wood", 2)], vec![("wood", 2), ("stone", 2)]]);
-        let stone = kind("stone_gatherer");
-        assert_eq!((stone.product.as_deref(), stone.period), (Some("stone"), Fx::from_int(8)));
-        assert_eq!(needs(stone), [vec![("wood", 2)], vec![("wood", 2)]]);
+        // No building makes stone: it is dug (the mining design, M6.4).
+        assert!(tree.building_kinds.iter().all(|k| k.product.as_deref() != Some("stone")));
         // The ballista shoots as the Woodland Ballista does, from a store of
         // stone, and produces nothing.
         let ballista = kind("ballista");
@@ -846,14 +845,14 @@ mod tests {
         };
         assert!(invalid(|s| s.building_kinds[0].product = Some("unobtainium".into())));
         assert!(invalid(|s| s.building_kinds[0].product = None));
-        assert!(invalid(|s| s.building_kinds[0].defence = s.building_kinds[2].defence.clone()));
-        assert!(invalid(|s| s.building_kinds[2].defence = None));
-        assert!(invalid(|s| s.building_kinds[2].cap = 10));
-        assert!(invalid(|s| s.building_kinds[2].defence.as_mut().unwrap().ammo = "unobtainium".into()));
-        assert!(invalid(|s| s.building_kinds[2].defence.as_mut().unwrap().ammo_cap = 0));
-        assert!(invalid(|s| s.building_kinds[2].defence.as_mut().unwrap().period = Fx::ZERO));
-        assert!(invalid(|s| s.building_kinds[2].defence.as_mut().unwrap().fireball.as_mut().unwrap().burn_period = Fx::ZERO));
-        assert!(invalid(|s| s.building_kinds[2].defence.as_mut().unwrap().fireball.as_mut().unwrap().cooldown = Fx::ZERO));
+        assert!(invalid(|s| s.building_kinds[0].defence = s.building_kinds[1].defence.clone()));
+        assert!(invalid(|s| s.building_kinds[1].defence = None));
+        assert!(invalid(|s| s.building_kinds[1].cap = 10));
+        assert!(invalid(|s| s.building_kinds[1].defence.as_mut().unwrap().ammo = "unobtainium".into()));
+        assert!(invalid(|s| s.building_kinds[1].defence.as_mut().unwrap().ammo_cap = 0));
+        assert!(invalid(|s| s.building_kinds[1].defence.as_mut().unwrap().period = Fx::ZERO));
+        assert!(invalid(|s| s.building_kinds[1].defence.as_mut().unwrap().fireball.as_mut().unwrap().burn_period = Fx::ZERO));
+        assert!(invalid(|s| s.building_kinds[1].defence.as_mut().unwrap().fireball.as_mut().unwrap().cooldown = Fx::ZERO));
         assert!(invalid(|s| s.building_kinds[0].parts[1].materials[1].item = "unobtainium".into()));
         assert!(invalid(|s| s.building_kinds[0].parts.clear()));
         assert!(invalid(|s| s.building_kinds[0].parts[0].materials.clear()));

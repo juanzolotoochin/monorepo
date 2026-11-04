@@ -382,6 +382,25 @@ fn commands_never_drive_haulers() {
 
 pub(super) const FOREST: &str = include_str!("../../../app/assets/levels/forest_supply.ron");
 
+/// A Stone Gatherer as the Sacred Tree had one before its stone came from
+/// digging (M6.4 of the mining design): for tests that need a second
+/// gathering kind, not the scene's own build menu.
+const STONE_GATHERER: &str = r#"(id: "stone_gatherer", label: "STONE GATHERER", skin: "factory", radius: 0.9, product: "stone", period: 8.0,
+ cap: 10, possessed_cap: 20, possessed_multiplier: 4.0, burst: (units: 5, cooldown: 30.0), health: 10, parts: [
+(id: "foundation", label: "FOUNDATION", materials: [(item: "wood", units: 2)]),
+(id: "mechanism", label: "MECHANISM", materials: [(item: "wood", units: 2)])
+])"#;
+
+/// The Sacred Tree's `supply` with a test-only Stone Gatherer as its last
+/// building kind, after the ballista.
+pub(super) fn with_stone_gatherer(supply: &str) -> Scenario {
+    let end = "\n], buildings: [";
+    assert_eq!(supply.matches(end).count(), 1, "the building kinds end once");
+    let scenario = Scenario::parse(&supply.replace(end, &format!(",\n{STONE_GATHERER}{end}"))).unwrap();
+    assert_eq!(scenario.building_kinds.last().map(|k| k.id.as_str()), Some("stone_gatherer"));
+    scenario
+}
+
 /// The forest outpost's supply chain runs for five minutes with every
 /// invariant holding: haulers deliver, the cartworks builds the cart, the ox
 /// takes it, and the mill keeps making arrows.

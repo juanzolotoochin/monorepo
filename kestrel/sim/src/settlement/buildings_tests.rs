@@ -87,7 +87,7 @@ const SPRITE: u16 = 1;
 fn the_sacred_tree_loads_with_one_built_wood_gatherer() {
     let sim = sacred_tree();
     let s = settlement(&sim);
-    assert_eq!(s.building_kinds.iter().map(|k| k.id.as_str()).collect::<Vec<_>>(), ["wood_gatherer", "stone_gatherer", "ballista"]);
+    assert_eq!(s.building_kinds.iter().map(|k| k.id.as_str()).collect::<Vec<_>>(), ["wood_gatherer", "ballista"]);
     let kind = s.building_kind(0);
     assert_eq!((kind.period, kind.cap, kind.possessed_cap), (5 * TICKS_PER_SECOND as u64, 10, 20));
     assert_eq!((kind.possessed_multiplier, kind.burst, kind.burst_cooldown), (Fx::from_int(4), 5, 30 * TICKS_PER_SECOND as u64));
@@ -197,8 +197,8 @@ fn a_prebuilt_building_must_stand_clear() {
     let at = |x: f64, y: f64| [fx(x), fx(y)];
     let tree = error(&|s| s.buildings[0].position = at(0.5, -0.5));
     assert!(tree.contains("overlaps an obstacle or another building"), "{tree}");
-    let other = error(&|s| s.buildings.push(Building { kind: "stone_gatherer".into(), position: at(-4.6, 1.2) }));
-    assert!(other.contains("building 1 (stone_gatherer)") && other.contains("another building"), "{other}");
+    let other = error(&|s| s.buildings.push(Building { kind: "wood_gatherer".into(), position: at(-4.6, 1.2) }));
+    assert!(other.contains("building 1 (wood_gatherer)") && other.contains("another building"), "{other}");
     let pile = error(&|s| s.buildings[0].position = at(-2.4, 2.2));
     assert!(pile.contains("covers depot tree_wood's dock"), "{pile}");
     let edge = error(&|s| s.buildings[0].position = at(127.5, 0.0));
@@ -212,7 +212,7 @@ fn a_prebuilt_building_must_stand_clear() {
     assert!(slot.contains("has its slot spot blocked"), "{slot}");
     // Two that just clear each other both stand.
     let mut two = base.clone();
-    two.buildings.push(Building { kind: "stone_gatherer".into(), position: at(4.6, -2.2) });
+    two.buildings.push(Building { kind: "wood_gatherer".into(), position: at(4.6, -2.2) });
     assert_eq!(load(&two).unwrap().settlement().unwrap().buildings.len(), 2);
 }
 

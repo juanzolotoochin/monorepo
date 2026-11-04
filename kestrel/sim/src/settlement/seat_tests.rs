@@ -297,7 +297,7 @@ fn a_site_is_no_seat() {
     let mut sim = sacred_tree();
     let site = FxVec2::new(fx(4.6), fx(-2.2));
     let center = sim.world().terrain().center;
-    step(&mut sim, &[command(CommandKind::PlaceBlueprint { kind: 1, position: center + site })]);
+    step(&mut sim, &[command(CommandKind::PlaceBlueprint { kind: 0, position: center + site })]);
     assert_eq!(settlement(&sim).buildings.len(), 2, "the site went down");
     let to = leave_spot(&sim, ELDER, 1);
     walk_to(&mut sim, ELDER, PlayerId(0), to);
