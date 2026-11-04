@@ -466,7 +466,7 @@ pub fn snapshot(world: &World) -> serde_json::Value {
     let nearest_ore = me.zip(terrain.mine()).and_then(|(me, mine)| {
         (-8..=8)
             .flat_map(|y| (-8..=8).map(move |x| (me.0 + x, me.1 + y)))
-            .filter(|&t| terrain.pit(t) < MAX_LAYERS && mine.ore(t, terrain.pit(t)).is_some())
+            .filter(|&t| terrain.pit(t) < terrain.max_layers && mine.ore(t, terrain.pit(t)).is_some())
             .min_by_key(|&t| ((t.0 - me.0).pow(2) + (t.1 - me.1).pow(2), t))
             .map(|t| {
                 let a = arena_tile(mirror.center, t);

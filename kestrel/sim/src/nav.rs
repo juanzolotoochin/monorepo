@@ -97,9 +97,11 @@ pub fn path(terrain: &Terrain, start: FxVec2, goal: FxVec2, radius: Fx) -> Vec<F
     path_avoiding(terrain, start, goal, radius, &[])
 }
 
-/// [`path`], also avoiding `extra` discs (other bodies).
+/// [`path`], also avoiding `extra` discs (other bodies). In sloped scenes it
+/// keeps to walkable ground ([`Terrain::walkable`]), so routes go around
+/// pits and steep slopes and walk in by their ramps.
 pub fn path_avoiding(terrain: &Terrain, start: FxVec2, goal: FxVec2, radius: Fx, extra: &[Disc]) -> Vec<FxVec2> {
-    path_with(terrain, start, goal, radius, extra, &|_, _| true)
+    path_with(terrain, start, goal, radius, extra, &|a, b| !terrain.sloped || terrain.walkable(a, b, radius))
 }
 
 /// [`path_avoiding`], where every straight segment must also pass `valid`

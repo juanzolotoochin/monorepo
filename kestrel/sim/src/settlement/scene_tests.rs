@@ -679,6 +679,44 @@ fn avatars_dig_pits_and_fly_out() {
     assert!(!scene.avatar().avatar().unwrap().flight.airborne);
 }
 
+/// In a sloped scene, a one-layer pit's edges are ramps: the avatar walks
+/// out of it on foot. Its pits go as deep as the scene says.
+#[test]
+fn sloped_pits_are_walked_out_of() {
+    let dig_ticks = dig_ticks();
+    use crate::terrain::{Terrain, LAYER};
+    let mut scene = Scene::new(SceneSetup { sloped: true, dig_layers: Some(6), ..dig_lab() });
+    let agent = scene.agent();
+    scene.walk(0.3, 1.8);
+    let tile = Terrain::pit_tile(scene.avatar().body.position);
+    scene.command(CommandKind::DigDown { agent });
+    scene.wait(dig_ticks + ms(1000));
+    assert_eq!(scene.sim.world().terrain().pit(tile), 1);
+    assert_eq!(scene.altitude(), -LAYER, "on the pit's flat floor");
+    scene.walk(3.0, 1.8);
+    assert_eq!(scene.altitude(), Fx::ZERO, "walked up and out");
+
+    scene.walk(0.0, 2.0);
+    for depth in 2..=6 {
+        scene.command(CommandKind::DigDown { agent });
+        scene.wait(dig_ticks + ms(100));
+        assert_eq!(scene.sim.world().terrain().pit(tile), depth);
+    }
+    scene.command(CommandKind::DigDown { agent });
+    assert_eq!(scene.avatar().avatar().unwrap().dig, None, "six layers is as deep as it goes");
+}
+
+/// The dig lab keeps its steps and three layers, in its ground and its mine.
+#[test]
+fn the_dig_lab_keeps_its_steps_and_depth() {
+    use crate::terrain::MAX_LAYERS;
+    let scene = Scene::new(mine());
+    let terrain = scene.sim.world().terrain();
+    assert!(!terrain.sloped);
+    assert_eq!(terrain.max_layers, MAX_LAYERS);
+    assert_eq!(terrain.mine.unwrap().layers, MAX_LAYERS);
+}
+
 /// The dig lab's mine: 256 x 256 m of generated ground with a collector by
 /// the spawn.
 fn mine() -> SceneSetup {

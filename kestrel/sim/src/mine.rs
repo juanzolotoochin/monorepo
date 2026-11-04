@@ -30,6 +30,13 @@ pub struct MineSpec {
     pub size: u32,
     /// The spawn's tile, at the middle of the landing.
     pub landing: (i32, i32),
+    /// How many diggable layers each tile has ([`crate::terrain::Terrain::max_layers`]).
+    #[serde(default = "layers")]
+    pub layers: u8,
+}
+
+fn layers() -> u8 {
+    MAX_LAYERS
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -45,14 +52,15 @@ impl Mine {
     pub fn generate(spec: MineSpec) -> Mine {
         let size = spec.size as usize;
         let mut heights = vec![0; size * size];
-        let mut ore = vec![0; size * size * MAX_LAYERS as usize];
+        let layers = spec.layers as usize;
+        let mut ore = vec![0; size * size * layers];
         for row in 0..size {
             for column in 0..size {
                 let (x, y) = (spec.min.0 + column as i32, spec.min.1 + row as i32);
                 let i = row * size + column;
                 heights[i] = steps(spec, x, y);
-                for layer in 0..MAX_LAYERS {
-                    ore[i * MAX_LAYERS as usize + layer as usize] = vein(spec.seed, x, y, layer).map_or(0, |m| m + 1);
+                for layer in 0..spec.layers {
+                    ore[i * layers + layer as usize] = vein(spec.seed, x, y, layer).map_or(0, |m| m + 1);
                 }
             }
         }
@@ -78,10 +86,10 @@ impl Mine {
     /// The mineral in a tile's `layer` (0 is the top), if any.
     pub fn ore(&self, tile: (i32, i32), layer: u8) -> Option<u8> {
         let i = self.index(tile)?;
-        if layer >= MAX_LAYERS {
+        if layer >= self.spec.layers {
             return None;
         }
-        self.ore[i * MAX_LAYERS as usize + layer as usize].checked_sub(1)
+        self.ore[i * self.spec.layers as usize + layer as usize].checked_sub(1)
     }
 
     /// How many units digging out an ore layer yields: 3 to 6.
@@ -146,7 +154,7 @@ mod tests {
     use super::*;
 
     fn spec(seed: u64) -> MineSpec {
-        MineSpec { seed, min: (-128, -128), size: 257, landing: (0, 2) }
+        MineSpec { seed, min: (-128, -128), size: 257, landing: (0, 2), layers: MAX_LAYERS }
     }
 
     #[test]

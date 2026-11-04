@@ -3,7 +3,7 @@
 // wood and stone piles beside it, the elder and the four sprites on its +z
 // side and one Wood Gatherer to the west (-x); the east side (+x) is left
 // open to build on. Scene x and z are the supply's positions.
-Scene(id: "sacred-tree", player: "elder", features: [], name: "THE SACRED TREE / TOWN MVP", spawn: (0.0, 0.0, 3.4), industrial: false, instances: [
+Scene(id: "sacred-tree", player: "elder", features: [SlopedGround], dig_layers: Some(6), name: "THE SACRED TREE / TOWN MVP", spawn: (0.0, 0.0, 3.4), industrial: false, instances: [
 
 ], architecture: [
 (kind: Box, position: (0.0, -0.075, 0.0), size: (26.0, 0.15, 26.0), material: "grass"),

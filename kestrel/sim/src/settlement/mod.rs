@@ -298,6 +298,12 @@ pub struct SceneSetup {
     pub platforms_only: bool,
     /// The ground can be dug, by characters with the Dig ability.
     pub diggable: bool,
+    /// The ground slopes between tiles, and walks stop at slopes too steep
+    /// ([`crate::terrain::Terrain::sloped`]).
+    pub sloped: bool,
+    /// The deepest a pit goes, in layers; [`crate::terrain::MAX_LAYERS`] if
+    /// unset.
+    pub dig_layers: Option<u8>,
     /// Generates the arena's ground as a mine from this seed.
     pub mine: Option<u64>,
     pub spawn: [Fx; 3],
@@ -574,6 +580,12 @@ impl Settlement {
             .collect();
         terrain.platforms_only = setup.platforms_only;
         terrain.diggable = setup.diggable;
+        terrain.sloped = setup.sloped;
+        match setup.dig_layers {
+            Some(0) => return Err("a scene's pits go at least one layer deep".into()),
+            Some(layers) => terrain.max_layers = layers,
+            None => {}
+        }
         if let Some(seed) = setup.mine {
             terrain.generate_mine(seed, at([setup.spawn[0], setup.spawn[2]]));
         }

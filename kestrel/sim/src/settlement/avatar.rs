@@ -22,7 +22,7 @@ use super::interact::{self, Interaction};
 use super::{AgentIx, DepotState, InventoryRef, ItemIx, Kinds, Settlement};
 use crate::messages::{ActionMessages, BundleRefused, Burst, BurstRefused, CarryUnit, DropBundle, DropHaul, ElderFire, DropNotes, Install, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
 use crate::nav::{self, angle_between, distance};
-use crate::terrain::{Terrain, MAX_LAYERS};
+use crate::terrain::Terrain;
 
 /// The longest player name, in characters.
 pub const NAME_CHARS: usize = 16;
@@ -1289,7 +1289,7 @@ fn dig(body: &mut Body, avatar: &mut AvatarState, carrying: bool, tick: u64, ter
         return;
     }
     let tile = Terrain::pit_tile(body.position);
-    if terrain.pit(tile) >= MAX_LAYERS || !terrain.inside(Terrain::pit_center(tile)) {
+    if terrain.pit(tile) >= terrain.max_layers || !terrain.inside(Terrain::pit_center(tile)) {
         return;
     }
     body.route.clear();

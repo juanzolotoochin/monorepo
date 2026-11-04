@@ -299,6 +299,9 @@ pub struct Scene {
     /// Vehicles parked in the scene, for players to climb into.
     #[serde(default)]
     pub vehicles: Vec<VehicleLayout>,
+    /// The deepest a pit goes, in layers; three if unset.
+    #[serde(default)]
+    pub dig_layers: Option<u8>,
     #[serde(default)]
     pub terrain: Option<Terrain>,
     #[serde(default)]
@@ -321,6 +324,9 @@ pub enum SceneFeature {
     CameraFollow,
     /// The ground can be dug, by player characters with the Dig ability.
     Digging,
+    /// The ground slopes between tiles, so pit edges are ramps, and walks
+    /// stop at slopes steeper than a layer per tile instead of at steps.
+    SlopedGround,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScenePack {
@@ -801,6 +807,7 @@ mod tests {
                 piles: None,
                 mine: None,
                 vehicles: Vec::new(),
+                dig_layers: None,
                 terrain: None,
                 style: None,
                 architecture: vec![],
@@ -854,6 +861,7 @@ mod tests {
                 piles: None,
                 mine: None,
                 vehicles: Vec::new(),
+                dig_layers: None,
                 style: None,
                 architecture: vec![],
                 destructibles: vec![],
