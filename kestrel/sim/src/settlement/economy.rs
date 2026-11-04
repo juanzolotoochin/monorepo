@@ -19,6 +19,9 @@ impl Settlement {
         self.threats_self_update(tick, terrain);
         let footprints: Vec<_> = self.agents.iter().map(footprint).collect();
         let items = self.depot_items();
+        // Miners' dig claims as of last tick, and where their stone goes.
+        let dig_claims: Vec<((i32, i32), AgentIx)> = self.agents.iter().enumerate().filter_map(|(i, a)| Some((a.sprite()?.dig_claim?, i as AgentIx))).collect();
+        let stone = self.stone_depot();
         let Settlement { agents, characters, dock_owner, depots, links, piles, transfers, weapons, spawn, spawn_height, piano_serial, vehicles, buildings, building_kinds, .. } = self;
         let view = View {
             me: 0,
@@ -37,7 +40,7 @@ impl Settlement {
             buildings,
             building_kinds,
         };
-        let ctx = Ctx { tick, characters, terrain, piles: piles.as_ref(), footprints: &footprints, dock_owner, depots, links, transfers, view };
+        let ctx = Ctx { tick, characters, terrain, piles: piles.as_ref(), footprints: &footprints, dock_owner, depots, links, transfers, view, dig_claims: &dig_claims, stone };
         agents.par_iter_mut().enumerate().for_each(|(i, a)| haulers::self_update(a, i as AgentIx, &ctx));
         self.vehicles_self_update(terrain);
         self.release_distant_piano_notes();
@@ -53,7 +56,7 @@ impl Settlement {
             .map(|(i, a)| {
                 let mut out = Messages::default();
                 haulers::read(a, i as AgentIx, tick, self, terrain, &mut out);
-                super::sprites::read(a, i as AgentIx, self, &mut out);
+                super::sprites::read(a, i as AgentIx, tick, self, &mut out);
                 (a.body.position, out)
             })
             .collect();

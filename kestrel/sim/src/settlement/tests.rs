@@ -261,6 +261,8 @@ fn think(sim: &Simulation, a: &mut AgentState, me: AgentIx) -> Option<Action> {
         links: &s.links,
         transfers: &s.transfers,
         view: s.view(me, tick, terrain),
+        dig_claims: &[],
+        stone: None,
     };
     haulers::think(a, me, &ctx)
 }

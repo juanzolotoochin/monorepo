@@ -440,7 +440,7 @@ impl PileLab {
 
     /// Dug ore: `units` of mineral `item` out of the pit at `tile`, onto a
     /// pile of the same ore beside it with room, or a new one on the nearest
-    /// open tile around, clear of `targets` (a town's docks, output piles
+    /// open tile around that isn't steep, clear of `targets` (a town's docks, output piles
     /// and slot spots) as a dropped bundle is. Returns the pile and the slot
     /// the first unit lands in, or nothing if there is nowhere to put it
     /// (the ore stays buried).
@@ -469,7 +469,10 @@ impl PileLab {
         around.sort_by_key(|&(x, y)| (x * x + y * y, y, x));
         let spot = around.into_iter().map(|(x, y)| (tile.0 + x, tile.1 + y)).find(|&t| {
             let center = Terrain::pit_center(t);
+            // Not on ground the dig made steep (beside a pit two layers
+            // deep, in a sloped scene): no one could walk up to it.
             terrain.pit(t) == 0
+                && !terrain.steep(t)
                 && self.free_drop(terrain, center, units)
                 && targets.iter().all(|&p| nav::distance(p, center) > radius + DROP_CLEARANCE)
                 && self.piles.values().all(|p| nav::distance(p.position, center) > pile_radius(p.units()) + radius + Fx::from_ratio(1, 10))

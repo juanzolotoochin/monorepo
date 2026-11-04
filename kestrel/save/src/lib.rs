@@ -110,7 +110,12 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 /// 36: a mine keeps its authored hill (`MineSpec::hill`: the Sacred Tree's
 ///     plateau and ramps), and a blueprint can be refused over a pit or
 ///     steep ground (`PlacementRefusal::Uneven`).
-pub const FORMAT_VERSION: u32 = 36;
+/// 37: miner sprites (M6.5): a sprite job to mine (`SpriteJob::Mine`), its
+///     steps (`ClaimTile`, `Dig`, `Pickup`, `Deposit`), a sprite's dig claim,
+///     dig and given-up goals (`SpriteState::dig_claim`, `dig`, `asks`,
+///     `unreachable`, `unreachable_at`), and the queues that claim tiles and
+///     start its bundles (`Messages::claim_dig_tile`, `sprite_bundle`).
+pub const FORMAT_VERSION: u32 = 37;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

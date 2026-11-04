@@ -24,15 +24,26 @@
 //! Inside a building the sprite stands at its slot spot
 //! (`BuildingState::slot_position`) and leaves the steering footprints:
 //! others walk past it.
+//!
+//! A miner (`SpriteJob::Mine`, `miners`) plans one errand at a time and
+//! plans again when it is done: carry its bundle to the tree's stone pile,
+//! fetch stone lying on the ground, or claim, walk to and dig a stone tile.
+//! Its dig claim is its own (`SpriteState::dig_claim`): stage 5 grants it
+//! (`Settlement::claim_dig_tiles`) and the sprite gives it up when it drops
+//! its plan. Its bundle's carry jobs start in stage 5 too
+//! (`Settlement::sprite_bundles`) and move their units as an elder's do.
 
 use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
 use super::action::{Action, View};
-use super::avatar::Intent;
+use super::avatar::{Dig, Intent, DOCK_REACH};
 use super::haulers::{self, Ctx, Walker, RETRY_TICKS};
-use super::{AgentIx, AgentState, Body, BuildingIx, BuildingKindIx, Occupant, Role, Settlement, Slot};
-use crate::messages::{ActionMessages, ClaimSlot, EnterSlot, Messages};
+use super::miners::{self, Targets, Town};
+use super::piles::PileId;
+use super::{AgentIx, AgentState, Body, BuildingIx, BuildingKindIx, Carry, DepotIx, Direction, InventoryRef, Occupant, Role, Settlement, Slot};
+use crate::messages::{ActionMessages, CarryUnit, ClaimDigTile, ClaimSlot, EnterSlot, Messages, ReserveStock, SpriteBundle, StockChange};
+use crate::terrain::Terrain as Ground;
 use crate::nav::{self, distance};
 use crate::terrain::{Disc, Terrain};
 
@@ -50,6 +61,10 @@ pub enum SpriteJob {
     Idle,
     /// Work in a building of this kind.
     Staff(BuildingKindIx),
+    /// Dig the nearest exposed stone and carry it to the tree's stone pile
+    /// (`miners`, `SACRED_TREE_MINING.md`, M9). Appended, so older saves
+    /// and input logs decode unchanged.
+    Mine,
 }
 
 /// One step of a sprite's plan.
@@ -66,6 +81,19 @@ pub enum Step {
     /// No building of the job's kind is free: stand, and plan again after
     /// `RETRY_TICKS`.
     Wait,
+    /// A miner's: hold a dig claim on this tile while walking there and
+    /// digging it. Stage 3 asks, stage 5 grants; done once the sprite holds
+    /// it.
+    ClaimTile((i32, i32)),
+    /// A miner's: face `tile` and dig out the layer under `depth` (the
+    /// pit's depth when planned). Done once the pit is deeper.
+    Dig { tile: (i32, i32), depth: u8 },
+    /// A miner's: fill its bundle from this ground pile. Done once it holds
+    /// what the job moved.
+    Pickup(PileId),
+    /// Empty the bundle into this depot (the tree's stone pile). Done once
+    /// the bundle is empty.
+    Deposit(DepotIx),
 }
 
 /// The part of a building's slot a sprite holds: the slot names it back.
@@ -116,6 +144,29 @@ pub struct SpriteState {
     /// beside the tree with its job (`Settlement::sprite_housekeeping`).
     #[serde(default)]
     pub respawn_at: u64,
+    /// The tile a miner may dig, granted in stage 5
+    /// (`Settlement::claim_dig_tiles`): no two sprites hold the same one.
+    /// It gives it up when it drops its plan.
+    #[serde(default)]
+    pub dig_claim: Option<(i32, i32)>,
+    /// The dig under way, as an elder's (`AvatarState::dig`): housekeeping
+    /// takes the layer out when it is done (`Settlement::dig_housekeeping`).
+    #[serde(default)]
+    pub dig: Option<Dig>,
+    /// A miner's route requests on its `GoTo` step that found no route; at
+    /// `miners::GIVE_UP_ASKS` it gives that goal up.
+    #[serde(default)]
+    pub asks: u8,
+    /// The goal tiles a miner gave up as unreachable, as of terrain
+    /// revision `unreachable_at`: a change of the ground clears them.
+    #[serde(default)]
+    pub unreachable: Vec<(i32, i32)>,
+    #[serde(default)]
+    pub unreachable_at: u64,
+    /// The stone a miner could dig, cached by terrain revision
+    /// (`miners::Targets`). Not state: the ground gives it again.
+    #[serde(skip)]
+    pub targets: Targets,
 }
 
 impl SpriteState {
@@ -137,13 +188,24 @@ impl SpriteState {
         })
     }
 
+    /// The tile the plan claims to dig, if it claims one.
+    fn claimed_tile(&self) -> Option<(i32, i32)> {
+        self.plan.iter().find_map(|step| match *step {
+            Step::ClaimTile(t) => Some(t),
+            _ => None,
+        })
+    }
+
     /// Where the step it is on stands: done, still going (with the action
-    /// to take, if any), or broken.
-    fn progress(&mut self, body: &Body, view: &View) -> Progress {
+    /// to take, if any), or broken. A miner's plan is one errand: done, it
+    /// plans the next.
+    fn progress(&mut self, body: &mut Body, carry: &Carry, view: &View, town: &Town) -> Progress {
         if self.plan.is_empty() {
             return Progress::Replan;
         }
-        let Some(step) = self.current() else { return Progress::Stay(None) };
+        let Some(step) = self.current() else {
+            return if self.job == SpriteJob::Mine { Progress::Replan } else { Progress::Stay(None) };
+        };
         match step {
             Step::Wait if view.tick >= self.retry_at => Progress::Replan,
             Step::Wait => Progress::Stay(None),
@@ -156,21 +218,105 @@ impl SpriteState {
             },
             Step::GoTo(target) => {
                 // The claim must hold all the way there.
-                if self.holds != self.claimed().map(Hold::Claimed) {
+                if self.holds != self.claimed().map(Hold::Claimed) || self.dig_claim != self.claimed_tile() {
                     return Progress::Replan;
                 }
+                // Walking to a pile, in reach of it is there: someone may
+                // stand on the spot.
+                if let Some(holder) = self.holder_next(view) {
+                    if distance(body.position, holder) <= miners::REACH {
+                        body.route.clear();
+                        self.asks = 0;
+                        return Progress::Next;
+                    }
+                }
                 if !body.route.is_empty() {
+                    self.asks = 0;
                     return Progress::Stay(None);
                 }
                 if distance(body.position, target) <= ARRIVED {
+                    self.asks = 0;
                     return Progress::Next;
                 }
                 // Not there and no route: ask for one, now and then.
                 if view.tick < self.retry_at {
                     return Progress::Stay(None);
                 }
+                // A miner gives up a goal it finds no route to, until the
+                // ground changes.
+                if self.job == SpriteJob::Mine {
+                    if self.asks >= miners::GIVE_UP_ASKS {
+                        self.unreachable.push(Ground::pit_tile(target));
+                        self.unreachable_at = view.terrain.revision;
+                        return Progress::Replan;
+                    }
+                    self.asks += 1;
+                }
                 self.retry_at = view.tick + RETRY_TICKS;
                 Progress::Stay(Some(Action::Move(Intent::GoTo { target, run: false })))
+            }
+            Step::ClaimTile(tile) => {
+                if self.dig_claim == Some(tile) {
+                    return Progress::Next;
+                }
+                // Stage 3 asks, unless another sprite holds it.
+                if self.dig_claim.is_none() && !town.claims.iter().any(|&(t, a)| t == tile && a != view.me) {
+                    return Progress::Stay(None);
+                }
+                Progress::Replan
+            }
+            Step::Dig { tile, depth } => {
+                // Dug: by this sprite, or someone got there first.
+                if view.terrain.pit(tile) > depth {
+                    self.dig = None;
+                    return Progress::Next;
+                }
+                if self.dig_claim != Some(tile) {
+                    return Progress::Replan;
+                }
+                if self.dig.is_some() {
+                    return Progress::Stay(None);
+                }
+                // Face the tile and start, if the ground and what stands on
+                // it still allow it.
+                let Some(mine) = town.mine else { return Progress::Replan };
+                body.route.clear();
+                body.heading = crate::nav::bearing(body.position, Ground::pit_center(tile));
+                match view.dig_in_front(body.position, body.heading, body.base_radius) {
+                    Ok(t) if t == tile => {
+                        self.dig = Some(Dig { tile, started: view.tick, until: view.tick + mine.dig });
+                        Progress::Stay(None)
+                    }
+                    _ => Progress::Replan,
+                }
+            }
+            Step::Pickup(pile) => {
+                // Under way: stage 3 moves the units.
+                if carry.job.is_some() || carry.inventory.total_in() > 0 {
+                    return Progress::Stay(None);
+                }
+                if carry.carrying() {
+                    return Progress::Next;
+                }
+                // Stage 3 starts it, while the pile still has stone for it.
+                let other = InventoryRef::Pile(pile);
+                if in_reach(body, view, other) && super::avatar::bundle_job(carry, view, other, Direction::Pickup).is_ok() {
+                    return Progress::Stay(None);
+                }
+                Progress::Replan
+            }
+            Step::Deposit(depot) => {
+                if carry.job.is_some() || view.leaving_cargo() {
+                    return Progress::Stay(None);
+                }
+                if !carry.carrying() {
+                    return Progress::Next;
+                }
+                let other = InventoryRef::Depot(depot);
+                if in_reach(body, view, other) && super::avatar::bundle_job(carry, view, other, Direction::Deposit).is_ok() {
+                    return Progress::Stay(None);
+                }
+                Progress::Replan
             }
             Step::Enter(b) => match self.holds {
                 // Stage 3 asks to step in; then it works there.
@@ -181,12 +327,45 @@ impl SpriteState {
         }
     }
 
-    /// Drops the plan and makes a new one for the job.
-    fn replan(&mut self, body: &Body, view: &View) {
-        self.plan = plan(self.job, body, view);
+    /// Where the holder of the step after this one stands, if that step
+    /// moves a bundle (`Pickup`, `Deposit`).
+    fn holder_next(&self, view: &View) -> Option<FxVec2> {
+        match self.plan.get(self.step as usize + 1)? {
+            Step::Pickup(pile) => view.piles?.piles.get(pile).map(|p| p.position),
+            Step::Deposit(depot) => view.depots.get(*depot as usize).map(|d| d.position),
+            _ => None,
+        }
+    }
+
+    /// Drops the plan, and the dig claim and dig with it, and makes a new
+    /// one for the job. Whatever the job, a sprite carrying something
+    /// takes it to the tree's stone pile first.
+    fn replan(&mut self, body: &Body, carry: &Carry, view: &View, town: &Town) {
+        self.dig_claim = None;
+        self.dig = None;
+        self.asks = 0;
+        self.plan = match self.job {
+            SpriteJob::Mine => miners::plan(self, body, carry, view, town),
+            job => {
+                let mut steps = miners::deliver(carry, view, town);
+                steps.extend(plan(job, body, view));
+                steps
+            }
+        };
         self.step = 0;
         self.retry_at = if self.plan == [Step::Wait] { view.tick + RETRY_TICKS } else { view.tick };
     }
+}
+
+/// Whether `body` is in reach of `holder` to move units, as an elder's
+/// bundle must be (`DOCK_REACH`).
+fn in_reach(body: &Body, view: &View, holder: InventoryRef) -> bool {
+    let at = match holder {
+        InventoryRef::Pile(id) => view.piles.and_then(|lab| lab.piles.get(&id)).map(|p| p.position),
+        InventoryRef::Depot(d) => view.depots.get(d as usize).map(|d| d.position),
+        _ => None,
+    };
+    at.is_some_and(|at| distance(body.position, at) <= DOCK_REACH)
 }
 
 enum Progress {
@@ -272,6 +451,17 @@ pub(super) fn act(body: &mut Body, sprite: &SpriteState, action: &Action, view: 
     }
 }
 
+/// Housekeeping: ends a miner's dig that is done, returning it if its
+/// layer is still in the ground (someone else may have dug it out first).
+pub(super) fn finish_dig(a: &mut AgentState, tick: u64, terrain: &Ground) -> Option<Dig> {
+    let sprite = a.sprite_mut()?;
+    let dig = sprite.dig.take_if(|d| tick + 1 >= d.until)?;
+    match sprite.current() {
+        Some(Step::Dig { tile, depth }) if tile == dig.tile && terrain.pit(tile) == depth => Some(dig),
+        _ => None,
+    }
+}
+
 /// Stage 2 for a sprite: the brain checks its step (`think`), the action
 /// applies as any agent's does (`action::act`), and the sprite walks, unless
 /// it is inside a building.
@@ -282,14 +472,16 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
     }
     let def = super::avatar::character_of(ctx.characters, a);
     let view = View { me, ..ctx.view };
-    if let Some(action) = think(a, &view) {
+    let town = Town { claims: ctx.dig_claims, stone: ctx.stone, mine: def.sprite.and_then(|s| s.mine) };
+    if let Some(action) = think(a, &view, &town) {
         // A sprite's actions only move it: nothing for the world.
         let mut out = ActionMessages::default();
         super::action::act(a, &action, &view, def, &mut out);
         debug_assert!(out.is_empty(), "sprite actions emit no messages");
     }
     let AgentState { character, body, role: Role::Sprite(sprite), .. } = a else { unreachable!("sprites walk") };
-    if sprite.inside() {
+    // A digger stands still, as the elder does.
+    if sprite.inside() || sprite.dig.is_some() {
         return;
     }
     let walk = ctx.characters[*character as usize].movement.walk.div_int(content::TICKS_PER_SECOND as i64);
@@ -301,22 +493,46 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
 /// The sprite brain: moves through the plan, planning again when a step
 /// breaks, and returns the action to take. It writes the sprite's own plan,
 /// never its route or what it holds.
-pub(super) fn think(a: &mut AgentState, view: &View) -> Option<Action> {
-    let AgentState { body, role: Role::Sprite(sprite), .. } = a else { unreachable!("sprites think") };
+pub(super) fn think(a: &mut AgentState, view: &View, town: &Town) -> Option<Action> {
+    let AgentState { body, carry, role: Role::Sprite(sprite), .. } = a else { unreachable!("sprites think") };
     for _ in 0..PASSES {
-        match sprite.progress(body, view) {
+        match sprite.progress(body, carry, view, town) {
             Progress::Stay(action) => return action,
             Progress::Next => sprite.step += 1,
-            Progress::Replan => sprite.replan(body, view),
+            Progress::Replan => sprite.replan(body, carry, view, town),
         }
     }
     None
 }
 
 /// Stage 3 for a sprite: asks for the slot on a `Claim` step while it is
-/// free, and to step in on an `Enter` step once the claim is held.
-pub(super) fn read(a: &AgentState, me: AgentIx, s: &Settlement, out: &mut Messages) {
+/// free, and to step in on an `Enter` step once the claim is held. A miner
+/// asks for its tile on a `ClaimTile` step, starts its bundle's carry job
+/// at a pile, then moves a unit whenever one is due and it is in reach, as
+/// an elder's bundle does (`read_avatar`).
+pub(super) fn read(a: &AgentState, me: AgentIx, tick: u64, s: &Settlement, out: &mut Messages) {
     let Some(sprite) = a.sprite().filter(|_| a.body.alive()) else { return };
+    if let Some(job) = &a.carry.job {
+        if tick >= job.next_tick && distance(a.body.position, s.position_of(job.other)) <= DOCK_REACH {
+            out.player_carry.push(CarryUnit { agent: me });
+        }
+        return;
+    }
+    let reach = |other: InventoryRef| distance(a.body.position, s.position_of(other)) <= DOCK_REACH;
+    match sprite.current() {
+        Some(Step::ClaimTile(tile)) if sprite.dig_claim.is_none() => out.claim_dig_tile.push(ClaimDigTile { agent: me, tile }),
+        Some(Step::Pickup(pile)) if !a.carry.carrying() && a.carry.inventory.total_in() == 0 && s.piles.as_ref().is_some_and(|lab| lab.piles.contains_key(&pile)) => {
+            if reach(InventoryRef::Pile(pile)) {
+                out.sprite_bundle.push(SpriteBundle { agent: me, other: InventoryRef::Pile(pile), direction: Direction::Pickup });
+            }
+        }
+        Some(Step::Deposit(depot)) if a.carry.carrying() && (depot as usize) < s.depots.len() => {
+            if reach(InventoryRef::Depot(depot)) {
+                out.sprite_bundle.push(SpriteBundle { agent: me, other: InventoryRef::Depot(depot), direction: Direction::Deposit });
+            }
+        }
+        _ => {}
+    }
     match (sprite.current(), sprite.holds) {
         (Some(Step::Claim(building)), None) if s.buildings.get(building as usize).is_some_and(|b| b.slot == Slot::Empty) => {
             out.claim_slot.push(ClaimSlot { agent: me, building });
@@ -344,10 +560,23 @@ impl Settlement {
             return;
         }
         self.release_slot(agent);
+        self.drop_sprite_errand(agent as usize);
         let sprite = self.agents[agent as usize].sprite_mut().expect("checked");
         sprite.job = job;
         sprite.plan.clear();
         sprite.step = 0;
+    }
+
+    /// Ends what a miner's errand holds outside its plan: its bundle's
+    /// carry job (giving back what it holds on both sides; units in the air
+    /// still land), its dig and its dig claim. What it carries it keeps, to
+    /// take to the tree's stone pile when it plans again.
+    fn drop_sprite_errand(&mut self, agent: usize) {
+        let releases = self.agents[agent].carry.drop_carry(agent as AgentIx);
+        self.reserve_stock(releases);
+        let sprite = self.agents[agent].sprite_mut().expect("a sprite");
+        sprite.dig = None;
+        sprite.dig_claim = None;
     }
 
     /// Takes the slot sprite `agent` holds, claimed or inside, away from it,
@@ -397,6 +626,7 @@ impl Settlement {
             return false;
         }
         self.release_slot(agent as AgentIx);
+        self.drop_sprite_errand(agent);
         let AgentState { body, role: Role::Sprite(sprite), .. } = &mut self.agents[agent] else { unreachable!("only sprites are hurt here") };
         body.route.clear();
         body.velocity = FxVec2::ZERO;
@@ -424,6 +654,7 @@ impl Settlement {
             sprite.plan.clear();
             sprite.step = 0;
             sprite.retry_at = 0;
+            sprite.asks = 0;
             sprite.steering = Steering::default();
             self.events.push(super::Event::SpriteReturned { agent: i as AgentIx });
         }
@@ -440,6 +671,51 @@ impl Settlement {
             }
             building.slot = Slot::Occupied(Occupant::Sprite(e.agent));
             sprite.holds = Some(Hold::Inside(e.building));
+        }
+    }
+
+    /// Stage 5: grants dig claims. Of the claims a tile can take (no sprite
+    /// holds it, and the miner is alive, on that `ClaimTile` step, holding
+    /// none), the lowest agent index wins, whatever the message order. The
+    /// others find it taken on their next step and plan again.
+    pub(crate) fn claim_dig_tiles(&mut self, claims: Vec<ClaimDigTile>) {
+        let mut winners: std::collections::BTreeMap<(i32, i32), AgentIx> = std::collections::BTreeMap::new();
+        for c in claims {
+            let held = self.agents.iter().filter_map(AgentState::sprite).any(|s| s.dig_claim == Some(c.tile));
+            let wanted = self.agents.get(c.agent as usize).filter(|a| a.body.alive()).and_then(AgentState::sprite).is_some_and(|sprite| {
+                sprite.job == SpriteJob::Mine && sprite.dig_claim.is_none() && sprite.current() == Some(Step::ClaimTile(c.tile))
+            });
+            if wanted && !held {
+                let winner = winners.entry(c.tile).or_insert(c.agent);
+                *winner = (*winner).min(c.agent);
+            }
+        }
+        for (tile, agent) in winners {
+            self.agents[agent as usize].sprite_mut().expect("checked").dig_claim = Some(tile);
+        }
+    }
+
+    /// Stage 5: miners at a pile start their bundle's carry job there by the
+    /// rule an elder's bundle follows (`avatar::bundle_job`), holding both
+    /// sides now. One the rule refuses (the pile emptied, the stone pile
+    /// filled) starts nothing, and its sprite plans again.
+    pub(crate) fn sprite_bundles(&mut self, messages: Vec<SpriteBundle>, tick: u64, terrain: &Ground) {
+        for m in messages {
+            let Some(a) = self.agents.get(m.agent as usize).filter(|a| a.body.alive() && a.carry.job.is_none()) else { continue };
+            let step = match m.other {
+                InventoryRef::Pile(id) => Step::Pickup(id),
+                InventoryRef::Depot(d) => Step::Deposit(d),
+                _ => continue,
+            };
+            if a.sprite().and_then(SpriteState::current) != Some(step) {
+                continue;
+            }
+            let Ok(job) = super::avatar::bundle_job(&a.carry, &self.view(m.agent, tick, terrain), m.other, m.direction) else { continue };
+            let carry = &mut self.agents[m.agent as usize].carry;
+            let reserved = job.reserve(&mut carry.inventory, super::Side::Own);
+            debug_assert!(reserved, "`bundle_job` sized it to the cargo");
+            carry.job = Some(job.clone());
+            self.reserve_stock(vec![ReserveStock { agent: m.agent, job, change: StockChange::Reserve }]);
         }
     }
 }

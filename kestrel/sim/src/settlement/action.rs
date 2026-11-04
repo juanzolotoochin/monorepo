@@ -231,6 +231,14 @@ impl View<'_> {
         if let Some(refusal) = self.terrain.dig_refusal(Terrain::pit_tile(position), tile, radius) {
             return Err(refusal);
         }
+        self.dig_blocked(tile).map_or(Ok(tile), Err)
+    }
+
+    /// What stands on `tile` that a dig in front refuses
+    /// (`dig_in_front`), the ground aside: an obstacle (`Blocked`), or a
+    /// pile, dock, output pile or slot spot (`Pile`). Cheap, unlike the
+    /// ground's check, so a miner checks it on every plan (`miners`).
+    pub fn dig_blocked(&self, tile: (i32, i32)) -> Option<DigRefusal> {
         // Whether a disc reaches into the tile's square.
         let center = Terrain::pit_center(tile);
         let touches = |p: FxVec2, radius: Fx| {
@@ -238,15 +246,15 @@ impl View<'_> {
             (p - nearest).length() < radius
         };
         if self.terrain.blocking_obstacles().any(|o| touches(o.center, o.radius)) {
-            return Err(DigRefusal::Blocked);
+            return Some(DigRefusal::Blocked);
         }
         let piles = self.piles.iter().flat_map(|lab| lab.piles.values()).map(|p| (p.position, super::piles::pile_radius(p.units())));
         let docks = self.depots.iter().map(|d| (d.position, DIG_CLEARANCE));
         let spots = self.buildings.iter().flat_map(|b| [b.output_position, b.slot_position(&self.building_kinds[b.kind as usize])]).map(|p| (p, DIG_CLEARANCE));
         if piles.chain(docks).chain(spots).any(|(p, radius)| touches(p, radius)) || self.piles.is_some_and(|lab| lab.blocks_dig(tile)) {
-            return Err(DigRefusal::Pile);
+            return Some(DigRefusal::Pile);
         }
-        Ok(tile)
+        None
     }
 
     /// See `Settlement::leaving_cargo`.

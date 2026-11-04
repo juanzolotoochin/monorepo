@@ -659,6 +659,12 @@ impl Settlement {
                     dug.push(dig.tile);
                 }
             }
+            // A miner's, if no one dug its layer out first (`Step::Dig`).
+            if let Some(dig) = super::sprites::finish_dig(a, tick, terrain) {
+                if terrain.deepen(dig.tile) {
+                    dug.push(dig.tile);
+                }
+            }
         }
         if dug.is_empty() {
             return;

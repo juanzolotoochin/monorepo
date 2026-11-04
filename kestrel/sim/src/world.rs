@@ -925,6 +925,8 @@ impl World {
             settlement.threat_goals(messages.threat_goal, &self.terrain);
             settlement.claim_slots(messages.claim_slot);
             settlement.enter_slots(messages.enter_slot);
+            settlement.claim_dig_tiles(messages.claim_dig_tile);
+            settlement.sprite_bundles(messages.sprite_bundle, tick, &self.terrain);
         }
         self.apply_repairs();
     }

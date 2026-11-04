@@ -26,6 +26,7 @@ mod haulers;
 pub mod interact;
 mod inventory;
 pub mod memory;
+pub mod miners;
 pub mod piano;
 pub mod piles;
 mod players;
@@ -1115,6 +1116,8 @@ mod hill_tests;
 mod ground_pile_tests;
 #[cfg(test)]
 mod interact_tests;
+#[cfg(test)]
+mod miner_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

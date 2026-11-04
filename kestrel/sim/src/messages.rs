@@ -13,7 +13,7 @@ use crate::settlement::avatar::BundleRefusal;
 use crate::settlement::buildings::BurstRefusal;
 use crate::settlement::chase::{Goal, Quarry};
 use crate::settlement::combat::SwingTarget;
-use crate::settlement::{CarryJob, InventoryRef};
+use crate::settlement::{CarryJob, Direction, InventoryRef};
 
 /// One mover attacks another.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -369,6 +369,42 @@ pub struct EnterSlot {
     pub building: u16,
 }
 
+/// A miner on a `ClaimTile` step asks to dig a tile, to hold while it walks
+/// there and digs (`SACRED_TREE_MINING.md`, M9): the lowest agent index
+/// wins a tile no one holds, whatever the message order
+/// (`Settlement::claim_dig_tiles`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimDigTile {
+    pub agent: u16,
+    pub tile: (i32, i32),
+}
+
+/// A miner at a ground pile or the tree's stone pile starts its bundle's
+/// carry job there (`Settlement::sprite_bundles`): stage 5 reserves both
+/// sides at once, by the rule an elder's bundle follows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpriteBundle {
+    pub agent: u16,
+    pub other: InventoryRef,
+    pub direction: Direction,
+}
+
+impl StateHash for ClaimDigTile {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+        h.write_u64(self.tile.0 as u32 as u64);
+        h.write_u64(self.tile.1 as u32 as u64);
+    }
+}
+
+impl StateHash for SpriteBundle {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+        hash_holder(h, self.other);
+        h.write_u64(self.direction as u64);
+    }
+}
+
 impl StateHash for ClaimSlot {
     fn hash_into(&self, h: &mut StateHasher) {
         h.write(&self.agent);
@@ -523,36 +559,40 @@ impl StateHash for ReserveStock {
     fn hash_into(&self, h: &mut StateHasher) {
         let job = &self.job;
         h.write(&self.agent);
-        // The holder's variant, then its index (a depot's and an agent's
-        // are `u16`, a pile's `u32`; the collector has none).
-        match job.other {
-            InventoryRef::Depot(d) => {
-                h.write_u64(0);
-                h.write(&d);
-            }
-            InventoryRef::Agent(a) => {
-                h.write_u64(1);
-                h.write(&a);
-            }
-            InventoryRef::Pile(id) => {
-                h.write_u64(2);
-                h.write(&id);
-            }
-            InventoryRef::Collector => h.write_u64(3),
-            InventoryRef::Output(b) => {
-                h.write_u64(4);
-                h.write(&b);
-            }
-            InventoryRef::Site(b) => {
-                h.write_u64(5);
-                h.write(&b);
-            }
-        }
+        hash_holder(h, job.other);
         h.write(&job.item);
         h.write_u64(job.direction as u64);
         h.write(&job.remaining);
         h.write(&job.next_tick);
         h.write_u64(self.change as u64);
+    }
+}
+
+/// A holder's variant, then its index (a depot's and an agent's are
+/// `u16`, a pile's `u32`; the collector has none).
+fn hash_holder(h: &mut StateHasher, other: InventoryRef) {
+    match other {
+        InventoryRef::Depot(d) => {
+            h.write_u64(0);
+            h.write(&d);
+        }
+        InventoryRef::Agent(a) => {
+            h.write_u64(1);
+            h.write(&a);
+        }
+        InventoryRef::Pile(id) => {
+            h.write_u64(2);
+            h.write(&id);
+        }
+        InventoryRef::Collector => h.write_u64(3),
+        InventoryRef::Output(b) => {
+            h.write_u64(4);
+            h.write(&b);
+        }
+        InventoryRef::Site(b) => {
+            h.write_u64(5);
+            h.write(&b);
+        }
     }
 }
 
@@ -839,6 +879,10 @@ message_queues! {
     // entry sees this tick's claims. Hashed only when not empty.
     claim_slot: ClaimSlot,
     enter_slot: EnterSlot,
+    // Miners (`settlement::miners`): dig claims, then bundles started at a
+    // pile, after the slots. Hashed only when not empty.
+    claim_dig_tile: ClaimDigTile,
+    sprite_bundle: SpriteBundle,
     // Ballista buildings' shots (`Settlement::building_fire`), applied after
     // the defenders'.
     building_fire: BuildingFire,
