@@ -169,22 +169,6 @@ its milestones, in order; one PR per milestone.
   `Heights`).
 - **Found in:** M6.6, M6.7.
 
-## M7.1 The clock
-
-- **Status:** open
-- **Why:** the night decides when ghouls come, so the sim must know the
-  hour ([day and night design](../SACRED_TREE_DAYNIGHT.md), N1, N4).
-- **What to do:** a `day_cycle: Some((day: 150.0, night: 75.0))` setting
-  in the supply's scenario (seconds; start at dawn); pure functions of the
-  tick for the phase (day or night), the fraction through it, the night's
-  number and the time to the next dusk, in `Fx`/ticks. No new settlement
-  state. Scenarios without a cycle report none.
-- **Where:** `kestrel/content` (scenario schema), `kestrel/sim/src/settlement`
-  (a new `clock.rs`), `app/assets/levels/sacred_tree_supply.ron`.
-- **Found in:** day and night design.
-- **Tests:** boundaries for unequal lengths, night numbers, time to dusk;
-  no cycle means no clock.
-
 ## M7.2 Night waves and dawn
 
 - **Status:** open
@@ -268,6 +252,48 @@ its milestones, in order; one PR per milestone.
 - **Found in:** day and night design.
 
 ## Done
+
+### M7.1 The clock
+
+- **Status:** done (branch `kestrel-sacred-tree-daynight`)
+- **Why:** the night decides when ghouls come, so the sim must know the
+  hour ([day and night design](../SACRED_TREE_DAYNIGHT.md), N1, N4).
+- **What to do:** a `day_cycle: Some((day: 150.0, night: 75.0))` setting
+  in the supply's scenario (seconds; start at dawn); pure functions of the
+  tick for the phase (day or night), the fraction through it, the night's
+  number and the time to the next dusk, in `Fx`/ticks. No new settlement
+  state. Scenarios without a cycle report none.
+- **Where:** `kestrel/content` (scenario schema), `kestrel/sim/src/settlement`
+  (a new `clock.rs`), `app/assets/levels/sacred_tree_supply.ron`.
+- **Found in:** day and night design.
+- **Tests:** boundaries for unequal lengths, night numbers, time to dusk;
+  no cycle means no clock.
+- **Done:** content: `Scenario::day_cycle: Option<DayCycle>`
+  (`content::scenario::DayCycle { day, night }`, `Fx` seconds, each 1 to
+  3600 s), `#[serde(default)]` so other scenarios read none; written
+  `day_cycle: Some((day: 150.0, night: 75.0))`. The Sacred Tree's supply
+  has it; its waves are unchanged. Sim: `settlement::clock` (re-exported
+  `settlement::{Clock, TimeOfDay}`; the phase enum is `clock::Phase`, since
+  `settlement::Phase` is the haulers'). `Clock::of(&Scenario) ->
+  Option<Clock>` converts with `scenario::ticks` (150 s is 9000 ticks);
+  `Clock { day, night }` in ticks, `cycle()`, and for a tick `phase(t)`
+  (`Day` below `day` ticks into the cycle, then `Night`), `fraction(t)`
+  (`Fx`, 0 at the phase's first tick, under 1 at its last), `night(t)`
+  (nights begun: 0 the first day, `n` through the `n`th night and the day
+  after it), `ticks_to_dusk(t)` (`day` at dawn, 1 on a day's last tick, a
+  whole cycle at dusk itself), and `at(t) -> TimeOfDay` with all four. The
+  cycle starts at dawn at tick 0; there is no start offset (the design's
+  `start`), add one with a field if a scene needs it. Nothing is stored in
+  `Settlement`, so saves, hashes and the golden don't change; the app can
+  build the clock from its scene's scenario. M7.2 needs it inside the
+  sim's tick: keep a `Clock` (or the cycle's ticks) in `Settlement` from
+  `from_scenario` then, with that task's save format bump. Tests
+  (`settlement/clock_tests.rs`, 6 s days and 3 s nights): phases and
+  fractions at dawn and dusk, night numbers, time to dusk counting down and
+  wrapping; the Sacred Tree's clock (dusk at 2:30, night 1 at dusk and the
+  next day, four nights by 15 minutes); no cycle means no clock, and
+  fractional seconds round up as the loader's do. `content_test`: only the
+  Sacred Tree has a cycle, and out-of-range lengths fail validation.
 
 ### M6.7 Waves, tuning, soak and demo
 
