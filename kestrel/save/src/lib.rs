@@ -115,7 +115,9 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///     dig and given-up goals (`SpriteState::dig_claim`, `dig`, `asks`,
 ///     `unreachable`, `unreachable_at`), and the queues that claim tiles and
 ///     start its bundles (`Messages::claim_dig_tile`, `sprite_bundle`).
-pub const FORMAT_VERSION: u32 = 37;
+/// 38: a threat cut off from the tree waits as close as it can walk
+///     (`Threat::stranded`, M6.7).
+pub const FORMAT_VERSION: u32 = 38;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 
