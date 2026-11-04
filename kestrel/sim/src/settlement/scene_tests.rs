@@ -679,31 +679,44 @@ fn avatars_dig_pits_and_fly_out() {
     assert!(!scene.avatar().avatar().unwrap().flight.airborne);
 }
 
-/// In a sloped scene, a one-layer pit's edges are ramps: the avatar walks
-/// out of it on foot. Its pits go as deep as the scene says.
+/// In a sloped scene the avatar digs the tile in front of it, never its
+/// own, and at most a layer below its own. Digging on along a line, each
+/// tile a layer deeper than the last, it cuts a stair down to the scene's
+/// six layers and walks down it; it can't dig the stair's last step out
+/// from under its way up, and walks back up and out on foot.
 #[test]
-fn sloped_pits_are_walked_out_of() {
+fn sloped_scenes_dig_a_stair_in_front() {
     let dig_ticks = dig_ticks();
     use crate::terrain::{Terrain, LAYER};
     let mut scene = Scene::new(SceneSetup { sloped: true, dig_layers: Some(6), ..dig_lab() });
     let agent = scene.agent();
-    scene.walk(0.3, 1.8);
-    let tile = Terrain::pit_tile(scene.avatar().body.position);
-    scene.command(CommandKind::DigDown { agent });
-    scene.wait(dig_ticks + ms(1000));
-    assert_eq!(scene.sim.world().terrain().pit(tile), 1);
-    assert_eq!(scene.altitude(), -LAYER, "on the pit's flat floor");
-    scene.walk(3.0, 1.8);
-    assert_eq!(scene.altitude(), Fx::ZERO, "walked up and out");
-
-    scene.walk(0.0, 2.0);
-    for depth in 2..=6 {
+    let pit = |scene: &Scene, x: f64| scene.sim.world().terrain().pit(Terrain::pit_tile(scene.at(x, 2.0)));
+    let digging = |scene: &Scene| scene.avatar().avatar().unwrap().dig.is_some();
+    // Facing +x.
+    scene.walk(-5.0, 2.0);
+    scene.walk(-4.0, 2.0);
+    for depth in 1..=6u8 {
+        let x = depth as f64 - 4.0;
+        for _ in 0..depth {
+            scene.command(CommandKind::DigDown { agent });
+            assert!(digging(&scene), "digging to {depth}");
+            scene.wait(dig_ticks + ms(100));
+        }
+        assert_eq!(pit(&scene, x), depth, "the tile in front");
+        assert_eq!(pit(&scene, x - 1.0), depth - 1, "not its own");
         scene.command(CommandKind::DigDown { agent });
-        scene.wait(dig_ticks + ms(100));
-        assert_eq!(scene.sim.world().terrain().pit(tile), depth);
+        assert!(!digging(&scene), "no more than a layer below its own");
+        scene.walk(x, 2.0);
+        assert_eq!(scene.altitude(), -LAYER.mul_int(depth as i64), "down the stair");
     }
+    // Facing back up the stair, its last step is a layer above: dug, it
+    // would leave the bottom two layers below any way up.
+    scene.walk(2.1, 2.0);
+    scene.walk(1.6, 2.0);
     scene.command(CommandKind::DigDown { agent });
-    assert_eq!(scene.avatar().avatar().unwrap().dig, None, "six layers is as deep as it goes");
+    assert!(!digging(&scene), "the way up stays");
+    scene.walk(-6.0, 2.0);
+    assert_eq!(scene.altitude(), Fx::ZERO, "walked up and out");
 }
 
 /// The dig lab keeps its steps and three layers, in its ground and its mine.

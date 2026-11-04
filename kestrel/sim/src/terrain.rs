@@ -15,7 +15,7 @@ use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
 use crate::hash::{StateHash, StateHasher};
-use crate::mine::{Mine, MineSpec};
+use crate::mine::{Mine, MineSpec, Veins};
 
 /// Extra separation kept from obstacles, as in the original game (1.5 cm).
 pub const CLEARANCE_MARGIN: Fx = Fx::from_bits(64_424_509); // 0.015
@@ -27,6 +27,33 @@ pub const LAYER: Fx = Fx::HALF;
 pub const MAX_LAYERS: u8 = 3;
 /// In sloped scenes, the steepest walkable ground: a layer per tile.
 pub const MAX_SLOPE: Fx = LAYER;
+/// A search for a walk out of a pit that finds this many tiles stops:
+/// that much open ground counts as out ([`Terrain::dig_refusal`]).
+pub const WALK_OUT_TILES: usize = 256;
+
+/// Why a dig in front of a digger doesn't start ([`Terrain::dig_refusal`],
+/// `View::dig_in_front`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DigRefusal {
+    /// The scene can't be dug, or not there: outside the arena, a drop, or
+    /// an [`Terrain::undiggable`] range.
+    Undiggable,
+    /// A digger digs the tile in front, never its own.
+    OwnTile,
+    /// The pit is as deep as the scene's pits go.
+    Bottom,
+    /// The dig would leave the tile more than a layer below the digger's.
+    TooDeep,
+    /// The digger's own tile would get too steep to walk on.
+    Steepens,
+    /// Someone in a tile near the pit would have no walk left to undug
+    /// ground.
+    Strands,
+    /// A building, a site, the tree or a prop stands on the tile.
+    Blocked,
+    /// A pile, a tree pile's dock or a building's output pile is on it.
+    Pile,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Disc {
@@ -83,6 +110,10 @@ pub struct Terrain {
     /// [`Terrain::generate_mine`], which gives the mine as many.
     #[serde(default = "max_layers")]
     pub max_layers: u8,
+    /// Tiles no one digs (a town's hill, M6.3): ranges of tiles, each its
+    /// first and last tile on both axes.
+    #[serde(default)]
+    pub undiggable: Vec<((i32, i32), (i32, i32))>,
     /// Generated ground under the whole arena, if this is a mine.
     #[serde(default)]
     pub mine: Option<MineSpec>,
@@ -125,6 +156,7 @@ impl Terrain {
             pits: Vec::new(),
             sloped: false,
             max_layers: MAX_LAYERS,
+            undiggable: Vec::new(),
             mine: None,
             generated: Generated::default(),
             revision: 0,
@@ -182,7 +214,7 @@ impl Terrain {
 
     /// A tile's height in sloped scenes: [`Terrain::top`] at its center, less
     /// its pit. Surfaces count by the tile's center, so they snap to tiles.
-    fn tile_height(&self, tile: (i32, i32)) -> Option<Fx> {
+    pub fn tile_height(&self, tile: (i32, i32)) -> Option<Fx> {
         let top = self.top(Self::pit_center(tile))?;
         Some(top - LAYER.mul_int(self.pit(tile) as i64))
     }
@@ -219,11 +251,12 @@ impl Terrain {
         Some(self.generated.0.get_or_init(|| Arc::new(Mine::generate(spec))))
     }
 
-    /// Makes the arena a mine generated from `seed`, its landing at `spawn`.
-    pub fn generate_mine(&mut self, seed: u64, spawn: FxVec2) {
+    /// Makes the arena a mine generated from `seed`, its landing at `spawn`,
+    /// with `veins` in its layers.
+    pub fn generate_mine(&mut self, seed: u64, spawn: FxVec2, veins: Veins) {
         let min = Self::pit_tile(self.min());
         let size = (Self::pit_tile(self.max()).0 - min.0 + 1) as u32;
-        self.mine = Some(MineSpec { seed, min, size, landing: Self::pit_tile(spawn), layers: self.max_layers });
+        self.mine = Some(MineSpec { seed, min, size, landing: Self::pit_tile(spawn), layers: self.max_layers, veins });
         self.generated = Generated::default();
         self.revision += 1;
     }
@@ -243,7 +276,11 @@ impl Terrain {
     /// Whether a body can walk from `a` to `b` without a step over 0.25 m or a drop.
     /// In sloped scenes, without ground steeper than [`MAX_SLOPE`] or a
     /// drop under any of [`Terrain::footprint`]'s five points, every 0.1 m
-    /// of the way from `a` on.
+    /// of the way from `a` on. A body that stands on steep ground (a dig
+    /// beside it made it so) may still walk off it, as long as it doesn't
+    /// climb faster than [`MAX_SLOPE`] while on it: leaving downhill or
+    /// along the slope, never back onto steep ground once off it. So no one
+    /// is left stuck, and no walk from gentle ground enters steep ground.
     pub fn walkable(&self, a: FxVec2, b: FxVec2, radius: Fx) -> bool {
         let steps = ((b - a).length() / Fx::from_ratio(1, 10)).ceil().floor_to_int().max(1);
         if self.sloped {
@@ -251,10 +288,29 @@ impl Terrain {
                 return true;
             }
             let offsets = [(Fx::ZERO, Fx::ZERO), (radius, Fx::ZERO), (-radius, Fx::ZERO), (Fx::ZERO, radius), (Fx::ZERO, -radius)];
-            return (0..=steps).all(|i| {
+            // The most a step of the walk may climb while on steep ground.
+            let climb = MAX_SLOPE * (b - a).length().div_int(steps);
+            let (mut leaving, mut last) = (true, Fx::ZERO);
+            for i in 0..=steps {
                 let p = a + (b - a) * Fx::from_ratio(i, steps);
-                offsets.iter().all(|&(dx, dy)| self.patch(FxVec2::new(p.x + dx, p.y + dy)).is_some_and(|patch| !patch.steep()))
-            });
+                let (mut steep, mut height) = (false, Fx::ZERO);
+                for (k, &(dx, dy)) in offsets.iter().enumerate() {
+                    let Some(patch) = self.patch(FxVec2::new(p.x + dx, p.y + dy)) else { return false };
+                    steep |= patch.steep();
+                    if k == 0 {
+                        height = patch.height();
+                    }
+                }
+                if steep {
+                    if !leaving || (i > 0 && height - last > climb) {
+                        return false;
+                    }
+                } else {
+                    leaving = false;
+                }
+                last = height;
+            }
+            return true;
         }
         let Some(mut last) = self.footprint(a, radius) else { return false };
         for i in 1..=steps {
@@ -305,6 +361,110 @@ impl Terrain {
             let [c00, c10, c01, c11] = patch.corners;
             [c10 - c00, c11 - c01, c01 - c00, c11 - c10].iter().any(|d| d.abs() > MAX_SLOPE)
         })
+    }
+
+    /// Whether the ground lets a digger of `radius` standing on tile `own`
+    /// dig a layer out of `tile` (M3 of the mining design): a diggable tile
+    /// in the arena, not as deep as pits go, left at most a layer below
+    /// `own`, `own` no steeper for it, and no one stranded by it. What
+    /// stands on the tile (buildings, piles) is the settlement's to check
+    /// (`View::dig_in_front`).
+    ///
+    /// Stranded: from the middle of every tile, a body of `radius` walks to
+    /// undug ground that isn't steep (`walks_out`). With no pits that
+    /// holds; a dig changes the ground of the tiles touching it only, so
+    /// only walks that cross those, or start beside them, change: checking
+    /// the tiles within two of the dug one keeps it everywhere. The depth
+    /// rule alone doesn't: deepening the last step of a stair from its
+    /// bottom strands the bottom, and a deep pit beside a step drags its
+    /// corners down until the step is too steep to climb.
+    ///
+    /// Since every corner of `own` is at most its height, and the dig
+    /// lowers a corner to no less than a layer below it, a dig the depth
+    /// rule allows never makes `own` steep that wasn't: that check is a
+    /// guard for diggers that stand elsewhere than beside the tile.
+    pub fn dig_refusal(&self, own: (i32, i32), tile: (i32, i32), radius: Fx) -> Option<DigRefusal> {
+        if !self.diggable || !self.inside(Self::pit_center(tile)) || self.is_undiggable(tile) {
+            return Some(DigRefusal::Undiggable);
+        }
+        if tile == own {
+            return Some(DigRefusal::OwnTile);
+        }
+        if self.pit(tile) >= self.max_layers {
+            return Some(DigRefusal::Bottom);
+        }
+        let (Some(here), Some(there)) = (self.tile_height(own), self.tile_height(tile)) else { return Some(DigRefusal::Undiggable) };
+        // Dug, it would be a layer below `there`; it may go to a layer below `here`.
+        if there < here {
+            return Some(DigRefusal::TooDeep);
+        }
+        let mut dug = self.clone();
+        dug.deepen(tile);
+        if !self.steep(own) && dug.steep(own) {
+            return Some(DigRefusal::Steepens);
+        }
+        if !dug.walks_out(tile, radius) {
+            return Some(DigRefusal::Strands);
+        }
+        None
+    }
+
+    /// Whether a body of `radius` in the middle of any tile within two of
+    /// `around` can walk to the middle of an undug tile that isn't steep:
+    /// a search from tile middle to tile middle, along x, y and diagonals,
+    /// where [`Terrain::walkable`] allows it (so a body on steep ground may
+    /// walk off it). Obstacles aren't counted: this is about the ground.
+    /// A search that finds [`WALK_OUT_TILES`] tiles counts as out.
+    fn walks_out(&self, around: (i32, i32), radius: Fx) -> bool {
+        let out = |t: (i32, i32)| self.pit(t) == 0 && !self.steep(t);
+        let ground = |t: (i32, i32)| self.inside(Self::pit_center(t)) && self.tile_height(t).is_some();
+        // Tiles found to walk out, so later searches stop at them.
+        let mut free = std::collections::BTreeSet::new();
+        for dy in -2..=2 {
+            for dx in -2..=2 {
+                let from = (around.0 + dx, around.1 + dy);
+                if !ground(from) || out(from) {
+                    continue;
+                }
+                let mut seen = std::collections::BTreeSet::from([from]);
+                let mut open = std::collections::VecDeque::from([from]);
+                let mut found = false;
+                while let Some(t) = open.pop_front() {
+                    if out(t) || free.contains(&t) || seen.len() >= WALK_OUT_TILES {
+                        found = true;
+                        break;
+                    }
+                    for (nx, ny) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
+                        let n = (t.0 + nx, t.1 + ny);
+                        if !seen.contains(&n) && ground(n) && self.walkable(Self::pit_center(t), Self::pit_center(n), radius) {
+                            seen.insert(n);
+                            open.push_back(n);
+                        }
+                    }
+                }
+                if !found {
+                    return false;
+                }
+                free.insert(from);
+            }
+        }
+        true
+    }
+
+    /// The tile in front of a body at `p` facing `forward` (any length):
+    /// the one beside its own along the axis it faces most, x on a tie.
+    pub fn front_tile(p: FxVec2, forward: FxVec2) -> (i32, i32) {
+        let (x, y) = Self::pit_tile(p);
+        if forward.x.abs() >= forward.y.abs() {
+            (x + if forward.x < Fx::ZERO { -1 } else { 1 }, y)
+        } else {
+            (x, y + if forward.y < Fx::ZERO { -1 } else { 1 })
+        }
+    }
+
+    /// Whether `tile` is in one of the [`Terrain::undiggable`] ranges.
+    pub fn is_undiggable(&self, tile: (i32, i32)) -> bool {
+        self.undiggable.iter().any(|&(min, max)| tile.0 >= min.0 && tile.0 <= max.0 && tile.1 >= min.1 && tile.1 <= max.1)
     }
 
     /// Digs one more layer out of `tile`, down to [`Terrain::max_layers`].
@@ -474,6 +634,17 @@ impl StateHash for Terrain {
             h.write_u64((mine.landing.0 as u32 as u64) << 32 | mine.landing.1 as u32 as u64);
             if mine.layers != MAX_LAYERS {
                 h.write_u64(mine.layers as u64);
+            }
+            if mine.veins != Veins::Ore {
+                h.write_u64(mine.veins as u64);
+            }
+        }
+        // Only when set, as below.
+        if !self.undiggable.is_empty() {
+            h.write_u64(self.undiggable.len() as u64);
+            for &(min, max) in &self.undiggable {
+                h.write_u64((min.0 as u32 as u64) << 32 | min.1 as u32 as u64);
+                h.write_u64((max.0 as u32 as u64) << 32 | max.1 as u32 as u64);
             }
         }
         // Only when set, so terrains from before sloped scenes hash the same.

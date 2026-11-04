@@ -6,7 +6,8 @@
 //! stop); each tick the avatar accelerates toward it and slides along
 //! obstacles. Attacks wind up, resolve on a tick, and lock movement until
 //! the swing (or the rebound after a hit) ends. In digging scenes an avatar
-//! digs out the tile it stands on, standing still for the dig.
+//! digs out the tile it stands on, standing still for the dig; in sloped
+//! ones, the tile in front of it, at most a layer below its own.
 
 use content::character::{AttackTiming, AvatarDef, CharacterDef, JetpackDef, JumpDef};
 use content::scenario::{ticks_from_60hz, Weapon};
@@ -113,7 +114,8 @@ impl SwordStroke {
     }
 }
 
-/// Digging out the tile under the avatar.
+/// Digging out the tile under the avatar, or in a sloped scene the one in
+/// front of it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Dig {
     pub tile: (i32, i32),
@@ -357,9 +359,13 @@ fn walk(body: &mut Body, avatar: &mut AvatarState, tick: u64, terrain: &Terrain,
     let per_tick = Fx::from_int(content::TICKS_PER_SECOND);
     if let Some(dig) = &avatar.dig {
         body.velocity = approach(body.velocity, FxVec2::ZERO, tuning.braking);
-        let center = Terrain::pit_center(dig.tile);
-        let centering = def.dig().map_or(Fx::ZERO, |d| d.centering);
-        body.position = slide(terrain, body.position, approach(body.position, center, centering) - body.position, radius);
+        // Digging underfoot steps to the middle of the tile; digging in
+        // front stands where it is.
+        if dig.tile == Terrain::pit_tile(body.position) {
+            let center = Terrain::pit_center(dig.tile);
+            let centering = def.dig().map_or(Fx::ZERO, |d| d.centering);
+            body.position = slide(terrain, body.position, approach(body.position, center, centering) - body.position, radius);
+        }
         return;
     }
     if let Some((started, until, weapon, aim)) = avatar.swing.as_ref().map(|s| (s.started, s.until, s.weapon, s.aim)) {
@@ -641,7 +647,10 @@ impl Settlement {
     }
 
     /// Housekeeping: digs that are done take their layer out of the ground.
-    /// In a mine, the layer's ore flies out onto a pile beside the pit.
+    /// In a mine, the layer's ore flies out onto a pile beside the pit. In a
+    /// town's, its stone lands on a ground pile beside the pit, clear of the
+    /// docks, output piles and slot spots as a dropped bundle is; earth
+    /// yields nothing.
     pub(crate) fn dig_housekeeping(&mut self, tick: u64, terrain: &mut Terrain) {
         let mut dug = Vec::new();
         for a in &mut self.agents {
@@ -651,15 +660,29 @@ impl Settlement {
                 }
             }
         }
+        if dug.is_empty() {
+            return;
+        }
+        let docks = self.depots.iter().map(|d| d.position);
+        let spots = self.buildings.iter().flat_map(|b| [b.output_position, b.slot_position(&self.building_kinds[b.kind as usize])]);
+        let targets: Vec<FxVec2> = docks.chain(spots).collect();
+        let stone = self.item_index(crate::mine::STONE_ID);
         for tile in dug {
             let layer = terrain.pit(tile) - 1;
             let Some(mine) = terrain.mine() else { continue };
             let Some(material) = mine.ore(tile, layer) else { continue };
             let units = mine.yield_of(tile, layer);
             let Some(lab) = self.piles.as_mut() else { continue };
-            let item = lab.item(material);
-            let Some((id, first)) = lab.mined(item, units, tile, terrain) else { continue };
+            let item = match mine.spec.veins {
+                crate::mine::Veins::Ore => lab.item(material),
+                crate::mine::Veins::Stone => stone.expect("a town's mine has a stone item (`from_scene`)"),
+            };
+            let Some((id, first)) = lab.mined(item, units, tile, terrain, &targets) else { continue };
             self.accounts[item as usize].generated += units as u64;
+            // Ore flies onto the pile; a town's stone (no mineral) is just there.
+            if !lab.has_minerals() {
+                continue;
+            }
             let position = lab.piles[&id].position;
             let from = TossEnd::Pit { position: Terrain::pit_center(tile) };
             for slot in first..first + units {
@@ -859,8 +882,15 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
         Action::Jetpack(enabled) => jetpack(avatar, enabled, def),
         Action::Jump => jump(avatar, view.tick, def),
         Action::DigDown => {
-            if view.can_dig_at(body.position) {
-                dig(body, avatar, transferring, view.tick, view.terrain, def);
+            // Sloped scenes dig in front, so a pit never traps its digger;
+            // the dig lab digs underfoot.
+            let tile = if view.terrain.sloped {
+                view.dig_in_front(body.position, body.heading, def.body.radius).ok()
+            } else {
+                view.can_dig_at(body.position).then(|| Terrain::pit_tile(body.position))
+            };
+            if let Some(tile) = tile {
+                dig(body, avatar, transferring, view.tick, view.terrain, def, tile);
             }
         }
         Action::Transfer { depot, item, units, deposit } => {
@@ -1278,17 +1308,16 @@ fn jump(avatar: &mut AvatarState, tick: u64, def: &CharacterDef) {
     }
 }
 
-/// Starts digging where `View::can_dig_at` allows it, if the character
-/// digs, stands on the ground with its hands free, and the pit isn't as deep
-/// as it goes.
-fn dig(body: &mut Body, avatar: &mut AvatarState, carrying: bool, tick: u64, terrain: &Terrain, def: &CharacterDef) {
+/// Starts digging `tile`, which the scene allows (`View::can_dig_at`,
+/// `View::dig_in_front`), if the character digs, stands on the ground with
+/// its hands free, and the pit isn't as deep as it goes.
+fn dig(body: &mut Body, avatar: &mut AvatarState, carrying: bool, tick: u64, terrain: &Terrain, def: &CharacterDef, tile: (i32, i32)) {
     let Some(ticks) = def.dig().map(|d| d.ticks) else { return };
     let busy = avatar.swing.as_ref().is_some_and(|s| tick < s.until) || carrying;
     let flight = &avatar.flight;
     if busy || avatar.dig.is_some() || flight.requested || flight.airborne {
         return;
     }
-    let tile = Terrain::pit_tile(body.position);
     if terrain.pit(tile) >= terrain.max_layers || !terrain.inside(Terrain::pit_center(tile)) {
         return;
     }

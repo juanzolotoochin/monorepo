@@ -508,15 +508,16 @@ mod tests {
         assert!(bad(&sprite.replace("(skin: \"worker\")", "()")).contains("view.skin"));
     }
 
-    /// The Sacred Tree's elder walks as the exosuit with no abilities, and
-    /// its sprites carry nothing.
+    /// The Sacred Tree's elder walks and digs as the exosuit, with no other
+    /// ability, and its sprites carry nothing.
     #[test]
     fn the_sacred_tree_characters_load() {
         let content = Content::builtin();
         let get = |name: &str| &content.rules.characters[content.names.character_index(name).unwrap() as usize];
         let elder = get("elder");
         assert_eq!(elder.brain, character::Brain::Player);
-        assert!(elder.abilities.is_empty());
+        assert_eq!(elder.abilities.len(), 1);
+        assert_eq!(elder.dig(), get("exosuit").dig());
         assert_eq!(elder.movement, get("exosuit").movement);
         let sprite = get("sprite");
         assert_eq!(sprite.brain, character::Brain::Sprite);

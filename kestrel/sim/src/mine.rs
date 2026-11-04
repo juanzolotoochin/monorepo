@@ -1,7 +1,8 @@
 //! Generated mining ground: terraced hills a quarter meter per step, a flat
 //! landing around the spawn, raised mesas, and ore veins in the diggable
-//! layers. Integer math on a seed, so every machine generates the same
-//! ground; only the [`MineSpec`] is state (see [`crate::terrain::Terrain::mine`]).
+//! layers: the dig lab's three minerals, or a town's stone ([`Veins`]).
+//! Integer math on a seed, so every machine generates the same ground; only
+//! the [`MineSpec`] is state (see [`crate::terrain::Terrain::mine`]).
 
 use fx::Fx;
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,10 @@ pub const MINERALS: usize = 3;
 /// Each mineral's item ID, in mineral order. A scene with piles adds them to
 /// the settlement's items, after the scenario's (`Settlement::from_scene`).
 pub const MINERAL_IDS: [&str; MINERALS] = ["amber_ore", "blue_crystal", "green_malachite"];
+/// A stone mine's one mineral.
+pub const STONE: u8 = 0;
+/// The scenario item a town's stone veins yield (`Settlement::from_scene`).
+pub const STONE_ID: &str = "stone";
 /// The flat landing's half-width around the spawn, in tiles.
 const LANDING: i32 = 8;
 
@@ -33,6 +38,20 @@ pub struct MineSpec {
     /// How many diggable layers each tile has ([`crate::terrain::Terrain::max_layers`]).
     #[serde(default = "layers")]
     pub layers: u8,
+    /// What the veins hold.
+    #[serde(default)]
+    pub veins: Veins,
+}
+
+/// What a mine's veins hold.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Veins {
+    /// The dig lab's amber, blue and green ([`MINERAL_IDS`]).
+    #[default]
+    Ore,
+    /// A town's stone ([`STONE`]): its pits yield the scenario's
+    /// [`STONE_ID`] item.
+    Stone,
 }
 
 fn layers() -> u8 {
@@ -60,7 +79,11 @@ impl Mine {
                 let i = row * size + column;
                 heights[i] = steps(spec, x, y);
                 for layer in 0..spec.layers {
-                    ore[i * layers + layer as usize] = vein(spec.seed, x, y, layer).map_or(0, |m| m + 1);
+                    let mineral = match spec.veins {
+                        Veins::Ore => vein(spec.seed, x, y, layer),
+                        Veins::Stone => stone(spec.seed, x, y, layer).then_some(STONE),
+                    };
+                    ore[i * layers + layer as usize] = mineral.map_or(0, |m| m + 1);
                 }
             }
         }
@@ -92,7 +115,7 @@ impl Mine {
         self.ore[i * self.spec.layers as usize + layer as usize].checked_sub(1)
     }
 
-    /// How many units digging out an ore layer yields: 3 to 6.
+    /// How many units digging out an ore (or stone) layer yields: 3 to 6.
     pub fn yield_of(&self, tile: (i32, i32), layer: u8) -> u32 {
         3 + hash(self.spec.seed, tile.0, tile.1, 90 + layer as u32) % 4
     }
@@ -126,6 +149,13 @@ fn vein(seed: u64, x: i32, y: i32, layer: u8) -> Option<u8> {
     })
 }
 
+/// Whether a tile's layer is stone: broad veins, a few reaching the surface,
+/// richer each layer down.
+fn stone(seed: u64, x: i32, y: i32, layer: u8) -> bool {
+    let k = layer as u32;
+    noise(seed, x, y, 9, 70) > 184 - 9 * k && hash(seed, x, y, 71 + k) % 5 != 0
+}
+
 fn hash(seed: u64, x: i32, y: i32, salt: u32) -> u32 {
     let mut h = seed
         ^ (x as u32 as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
@@ -154,7 +184,30 @@ mod tests {
     use super::*;
 
     fn spec(seed: u64) -> MineSpec {
-        MineSpec { seed, min: (-128, -128), size: 257, landing: (0, 2), layers: MAX_LAYERS }
+        MineSpec { seed, min: (-128, -128), size: 257, landing: (0, 2), layers: MAX_LAYERS, veins: Veins::Ore }
+    }
+
+    /// A town's mine has stone and nothing else: some at the surface, more
+    /// each layer down, and most ground plain earth.
+    #[test]
+    fn stone_mines_have_stone_richer_deeper() {
+        let mine = Mine::generate(MineSpec { layers: 6, veins: Veins::Stone, ..spec(7) });
+        let mut by_layer = [0u32; 6];
+        for x in -128..128 {
+            for y in -128..128 {
+                for layer in 0..6 {
+                    if let Some(m) = mine.ore((x, y), layer) {
+                        assert_eq!(m, STONE);
+                        by_layer[layer as usize] += 1;
+                    }
+                }
+            }
+        }
+        let tiles = 256 * 256;
+        assert!(by_layer[0] * 50 > tiles, "stone at the surface: {by_layer:?}");
+        assert!(by_layer.windows(2).all(|w| w[0] < w[1]), "richer deeper: {by_layer:?}");
+        assert!(by_layer[5] * 2 < tiles, "most ground is earth: {by_layer:?}");
+        eprintln!("stone by layer: {by_layer:?} of {tiles}");
     }
 
     #[test]

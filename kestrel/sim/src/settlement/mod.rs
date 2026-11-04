@@ -587,7 +587,14 @@ impl Settlement {
             None => {}
         }
         if let Some(seed) = setup.mine {
-            terrain.generate_mine(seed, at([setup.spawn[0], setup.spawn[2]]));
+            // A town's mine (buildings, and no pile lab of its own) holds
+            // stone, which its pits yield as the scenario's stone item.
+            let town = setup.piles.is_none() && !settlement.building_kinds.is_empty();
+            let veins = if town { crate::mine::Veins::Stone } else { crate::mine::Veins::Ore };
+            if town && settlement.item_index(crate::mine::STONE_ID).is_none() {
+                return Err(format!("a town's mine yields {:?}, which the scenario has no item for", crate::mine::STONE_ID));
+            }
+            terrain.generate_mine(seed, at([setup.spawn[0], setup.spawn[2]]), veins);
         }
         terrain.revision += 1;
         settlement.spawn = at([setup.spawn[0], setup.spawn[2]]);
@@ -1086,6 +1093,8 @@ mod bundle_tests;
 mod burst_tests;
 #[cfg(test)]
 mod chase_tests;
+#[cfg(test)]
+mod dig_tests;
 #[cfg(test)]
 mod construction_tests;
 #[cfg(test)]

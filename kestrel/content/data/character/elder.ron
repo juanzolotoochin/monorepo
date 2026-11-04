@@ -1,11 +1,14 @@
 // The Sacred Tree's elder, the player there: a flame spirit that carries
-// bundles by hand and possesses buildings. No abilities; it walks and
-// carries as the exosuit does. Drawn by the exosuit actor until it has a
-// flame body of its own.
+// bundles by hand and possesses buildings. It walks and carries as the
+// exosuit does, and digs as it does too (a layer in 120 frames, 2 s), but
+// has no jetpack. Drawn by the exosuit actor until it has a flame body of
+// its own.
 (
     base: "exosuit",
     sim: (
-        abilities: [],
+        abilities: [
+            Dig(time: 120, centering: 1.5),
+        ],
     ),
     view: (),
 )
