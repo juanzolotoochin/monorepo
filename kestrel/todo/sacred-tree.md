@@ -106,23 +106,6 @@ its milestones, in order; one PR per milestone.
   as G does; the job menu is for sprites standing outside.)
 - **Found in:** M2.2.
 
-## M6.3 The big map and the hill
-
-- **Status:** open
-- **Why:** room to explore for stone, and a hill that makes the defence a
-  question of two entrances (M5, M7).
-- **What to do:**
-  - The Sacred Tree becomes 256 × 256 m of generated ground with an
-    authored plateau about 2 m high, wide enough for the 26 m town, with two
-    ramps on opposite sides. The hill and plateau can't be dug.
-  - The generator guarantees a few stone veins exposed at the surface 15–40
-    m from the tree.
-  - Ghouls spawn on a ring about 40 m from the tree, one lane per ramp.
-  - The town camera follows the elder over the big map.
-- **Where:** `kestrel/sim/src/mine.rs`, `terrain.rs`,
-  `kestrel/app/assets/levels/sacred_tree.ron`, `sacred_tree_supply.ron`.
-- **Found in:** mining design.
-
 ## M6.4 No more Stone Gatherer
 
 - **Status:** open
@@ -178,6 +161,84 @@ its milestones, in order; one PR per milestone.
 - **Found in:** mining design.
 
 ## Done
+
+### M6.3 The big map and the hill
+
+- **Status:** done (branch `kestrel-sacred-tree-mining`)
+- **Why:** room to explore for stone, and a hill that makes the defence a
+  question of two entrances (M5, M7).
+- **What to do:**
+  - The Sacred Tree becomes 256 × 256 m of generated ground with an
+    authored plateau about 2 m high, wide enough for the 26 m town, with two
+    ramps on opposite sides. The hill and plateau can't be dug.
+  - The generator guarantees a few stone veins exposed at the surface 15–40
+    m from the tree.
+  - Ghouls spawn on a ring about 40 m from the tree, one lane per ramp.
+  - The town camera follows the elder over the big map.
+- **Where:** `kestrel/sim/src/mine.rs`, `terrain.rs`,
+  `kestrel/app/assets/levels/sacred_tree.ron`, `sacred_tree_supply.ron`.
+- **Found in:** mining design.
+- **Done:** `sacred_tree.ron` has `features: [Digging, SlopedGround]`,
+  `dig_layers: Some(6)` and `mine: Some((extent: 128.0, seed: 7, hill:
+  Some((plateau: 15, height: 8, ramp_width: 7, ramp_length: 8, foot:
+  10))))`; the supply's extent is 128. The hill (`voxel_assets::HillLayout`
+  in whole tiles and 0.25 m steps, `SceneSetup::hill`, `mine::Hill`,
+  `Terrain::raise_hill`, centered on the tree's tile) is a 31 m square
+  plateau 8 steps up, cliffs on every side, and a ramp 7 tiles wide down
+  the middle of its west (-x) and east (+x) sides falling a step a tile
+  over 8 tiles. The generator applies it over its terraces (integer only):
+  flat for `foot` tiles round the plateau, then a step at most every 3
+  tiles, as round Dig Lab's landing. The plateau's top is the mine's datum
+  (`Mine::height` subtracts the hill's steps), so the town and its
+  architecture stay at zero and the ground round it lies 2 m below
+  (terraces far off rise past the plateau). `raise_hill` pushes the
+  plateau and both ramps into `Terrain::undiggable`. A town's hill
+  guarantees `EXPOSED_VEINS` (4) stone veins, one per quarter, a plus of
+  five tiles stone two layers down, 18 to 37 m from the tree, off the hill
+  (`Hill::exposed_veins`). Waves: the five north lanes became an east
+  column from (40, 0) to (1.8, -0.6) and the west/east lanes three west
+  lanes from (-40, 0) to (-1.8, -0.6), same timings; each route is a
+  straight walk up its ramp. Ramps went west and east, not north and
+  south: the sprites idle on the tree's +z side, and a south lane killed
+  them 34 times in a run. Nav: big-arena windows always hold the hill and
+  its ramps' feet (`HILL_MARGIN`, 4 tiles), else a route off the plateau
+  found no ramp. Cost (unoptimized test build): a wave's route 0.1 ms, the
+  elder's walk to the foot 7–10 ms, an errand on the plateau 1–2 ms, a
+  failing search (a walled pit at the foot) 49 ms; the wave soak (13 game
+  minutes) and the build soak take 3.3 s together; no height cache needed.
+  Chasers steer, are knocked back, and see a quarry only over walkable
+  ground in sloped scenes (`chase::walk_clear`), so none climbs a cliff.
+  Placement refuses a footprint over a pit or a steep tile
+  (`PlacementRefusal::Uneven`, "UNEVEN GROUND"); prebuilt buildings are
+  placed before the mine is generated, so they aren't checked against it
+  (the Wood Gatherer is on the plateau). The app's camera follows the elder
+  as in Dig Lab (`digging::follow_camera`, on in `Digging` scenes; Z/C
+  orbit round the followed target). `digging.rs` bands pit walls from the
+  datum. The grass box is lifted 1 cm off the drawn plateau. Save format
+  36 (`MineSpec::hill`, `PlacementRefusal::Uneven`); input log, net
+  protocol and commands unchanged; golden unchanged. Tests:
+  `settlement/hill_tests.rs` (reads the scene's mine line; the shape,
+  undiggable hill, exposed veins, ramp routes from the ring, placements,
+  the elder down a ramp and back, nav timings) and
+  `save::a_town_mine_keeps_its_hill`. Changed for the map: waves and both
+  soaks play on it (`hill_tests::sacred_tree_map`); their restocks and
+  end wait the 52 s longer walk; the defence test became
+  `a_ballista_guards_one_ramp_and_two_keep_the_tree_standing` (one by the
+  east ramp kills the whole column, tree 11; one per ramp, tree 20); the
+  wave soak's buildings moved to the new lanes (tree 11) and the build
+  soak has no waves (the east column crossed its spots); the 8.5 m
+  outside-the-arena checks moved to 127.5/130 m; the Burst test respawns
+  the elder at its start (a bare scenario's spawn is the world corner,
+  past the big map's edge).
+  For later: M6.7 must retune: one ballista beside the tree no longer
+  runs dry (the east column brings 3–5 a wave, 10 bolts), so the
+  "reload mid-wave" lever is gone; ghouls take about 63 s to arrive; the
+  demo script still expects the old lanes. Ghoul routes walk straight
+  through a pit dug later at a ramp's foot (routes plan once a wave; a dig
+  doesn't replan them as a blueprint does), and digging a moat round a
+  ramp's foot can cut a lane. In a town the Dig Lab HUD line ("PIT x/6 / F
+  TO DIG / HOLD SPACE TO FLY OUT") shows. M6.5 miners: veins are at
+  `Hill::exposed_veins`; routes off the plateau go by a ramp.
 
 ### M6.2 Digging in front, and the stone yield
 
