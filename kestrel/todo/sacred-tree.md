@@ -106,22 +106,6 @@ its milestones, in order; one PR per milestone.
   as G does; the job menu is for sprites standing outside.)
 - **Found in:** M2.2.
 
-## M6.5 Miner sprites
-
-- **Status:** open
-- **Why:** sprites dig, slowly (Settled, M9).
-- **What to do:**
-  - A "Mine" sprite job. A miner goes to the nearest tile reachable from
-    the tree whose top layer is stone, digs it 4–5 times slower than the
-    elder (within the M3 rule), and carries the drop to the tree's stone
-    pile.
-  - With no exposed stone, it waits at the stone pile and replans when the
-    ground changes.
-  - The plan keeps the sprites' shape (goal, plan, invalidate, replan).
-  - Add the job to the job menu.
-- **Where:** `kestrel/sim/src/settlement/sprites.rs`, `kestrel/app/src/legacy.rs`.
-- **Found in:** mining design.
-
 ## M6.6 Drawing sloped ground and stone
 
 - **Status:** open
@@ -133,6 +117,8 @@ its milestones, in order; one PR per milestone.
   - Keep the 256 m map fast to draw and re-mesh only what a dig changes.
   - From M6.3: the HUD shows Dig Lab's line ("PIT x/6 / F TO DIG / HOLD
     SPACE TO FLY OUT") in the town; show the town's own dig hint instead.
+  - From M6.5: `digging::shown_digs` shows avatars' digs only; a miner's
+    is `AgentState::digging()` (a `Dig` as the elder's, 9 s long).
 - **Where:** `kestrel/app/src/digging.rs`, the town drawing.
 - **Found in:** mining design.
 
@@ -149,12 +135,85 @@ its milestones, in order; one PR per milestone.
   - From M6.3: mid-wave reloads are no longer needed and ghouls take about
     63 s to arrive; the demo still expects the old lanes.
   - The soak test runs with digging and miners, with `validate` every tick.
+    (From M6.5: the wave soak already rotates sprites over mining.)
+  - From M6.5: tune the miner's 9 s dig and 6-unit bundle; miners walk
+    into ghouls off the hill and don't flee, and they lure chasers away
+    from the tree.
   - Update `demos/sacred_tree.json` and `app/README.md`.
 - **Where:** `kestrel/sim/src/settlement/soak_tests.rs`,
   `sacred_tree_supply.ron`, `kestrel/app/demos/`.
 - **Found in:** mining design.
 
 ## Done
+
+### M6.5 Miner sprites
+
+- **Status:** done (branch `kestrel-sacred-tree-mining`)
+- **Why:** sprites dig, slowly (Settled, M9).
+- **What to do:**
+  - A "Mine" sprite job. A miner goes to the nearest tile reachable from
+    the tree whose top layer is stone, digs it 4–5 times slower than the
+    elder (within the M3 rule), and carries the drop to the tree's stone
+    pile.
+  - With no exposed stone, it waits at the stone pile and replans when the
+    ground changes.
+  - The plan keeps the sprites' shape (goal, plan, invalidate, replan).
+  - Add the job to the job menu.
+- **Where:** `kestrel/sim/src/settlement/sprites.rs`, `kestrel/app/src/legacy.rs`.
+- **Found in:** mining design.
+- **Done:** `SpriteJob::Mine` (appended; the job command takes it, so
+  the input log, net protocol and `CommandKind` are unchanged) and
+  `settlement/miners.rs`. A miner plans one errand at a time and plans
+  again when it ends: carrying something, to the tree's stone pile
+  (`Settlement::stone_depot`, the depot that takes only stone; any job
+  delivers first); else the nearest stone ground pile within 48 m of the
+  tree (its own drops, the elder's, dropped bundles: stone on the ground
+  is worth more than stone in it, so it clears drops before digging on);
+  else `[ClaimTile, GoTo, Dig]` on the nearest stone tile; else it walks
+  to a spot 1.2 m off the stone pile (one per sprite) and `Wait`s,
+  planning again every `RETRY_TICKS`. The search (`miners::search`)
+  walks tile middles four ways from the stone pile's tile over ground
+  that isn't steep and between obstacles, out to 48 tiles, and keeps the
+  nearest 8 stone-topped tiles `dig_refusal` lets it dig from the tile it
+  reached them from, cached by terrain revision in `SpriteState::targets`
+  (serde-skipped, equal to any other: the ground gives it again after a
+  load), so waiting replans are cheap; claims, what stands on a tile
+  (`View::dig_blocked`, split out of `dig_in_front`) and given-up goals
+  are checked on every plan. Claims: `SpriteState::dig_claim`, asked in
+  stage 3 (`ClaimDigTile`), granted in stage 5 to the lowest agent index
+  for a tile no sprite holds (`claim_dig_tiles`), given up when the
+  sprite drops its plan. `Dig` faces the tile and starts only if
+  `dig_in_front` still gives it; it is done once the pit is deeper (by
+  anyone); housekeeping deepens only if the layer is still there. Dig
+  540 frames (9 s, 4.5x the elder; `sprite.ron`'s new `sprite.mine:
+  (dig, capacity: 6, transfer: 20)`); every sprite's hold is now a 6-unit
+  bundle. `Pickup`/`Deposit` start their carry job in stage 5
+  (`SpriteBundle`, `sprite_bundles`, by `avatar::bundle_job`) and move
+  units through `player_carry` from stage 3. A `GoTo` that finds no route
+  twice gives its goal tile up until the terrain revision changes
+  (`unreachable`). Death or a job change ends the carry job, dig and claim
+  (`drop_sprite_errand`); the stone carried is kept and delivered. Dug
+  stone no longer lands on a tile made steep by a deep pit (`mined`; the
+  miner test found a drop no one could reach). `AgentState::digging()`
+  gives an elder's or a miner's dig for M6.6. App: MINE in the job menu
+  where the ground has stone veins and the tree a stone pile, `"mine"` in
+  the control protocol's job fields, `SpriteView::job` "mine" and
+  activities `digging`/`hauling`, MINER tags. Happy path: step 6 sends
+  Reed to mine before the deposit, and at the end the tree holds the 3
+  left plus the 1 to 7 stone left on the ground (all under 210 s). Tests:
+  `settlement/miner_tests.rs` (exposed stone fetched and delivered, two
+  miners never share a tile, waiting until the elder uncovers a buried
+  vein in a 12 m town, thread and save determinism); the wave soak's rota
+  mines instead of idling, and the elder defends only against ghouls
+  within 15 m of the tree (else miners lured chasers away and the elder sat
+  in the ballista all wave, so Ash never shot). Save format 37; golden
+  unchanged.
+  For later: M6.6 draws sprite dig bars and dust (`digging::shown_digs`
+  reads avatars only; use `AgentState::digging`); miners walk into ghouls
+  (no fleeing); the elder can dig a tile a miner claimed (the miner just
+  replans); M6.7 tunes the miner's 9 s and 6-unit bundle; the search is a
+  tile walk, not nav, so a goal it reaches nav may still refuse (given up
+  until the ground changes).
 
 ### M6.4 No more Stone Gatherer
 
