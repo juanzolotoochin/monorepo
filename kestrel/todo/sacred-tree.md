@@ -145,6 +145,8 @@ its milestones, in order; one PR per milestone.
     with the hill's cliff sides.
   - Stone tints on the ground and pit walls; a dig bar and dust for sprites.
   - Keep the 256 m map fast to draw and re-mesh only what a dig changes.
+  - From M6.3: the HUD shows Dig Lab's line ("PIT x/6 / F TO DIG / HOLD
+    SPACE TO FLY OUT") in the town; show the town's own dig hint instead.
 - **Where:** `kestrel/app/src/digging.rs`, the town drawing.
 - **Found in:** mining design.
 
@@ -154,6 +156,12 @@ its milestones, in order; one PR per milestone.
 - **Why:** the big map changes travel times and the stone supply.
 - **What to do:**
   - Tune the waves, starting stone, dig speeds and yields on the big map.
+  - From M6.3: a wave's route is planned once, so a pit dug on it later
+    doesn't re-route ghouls, and a moat round a ramp's foot can cut a lane.
+    Replan routes when the terrain changes (the chase's `replan_routes`),
+    and decide what a cut lane means.
+  - From M6.3: mid-wave reloads are no longer needed and ghouls take about
+    63 s to arrive; the demo still expects the old lanes.
   - The soak test runs with digging and miners, with `validate` every tick.
   - Update `demos/sacred_tree.json` and `app/README.md`.
 - **Where:** `kestrel/sim/src/settlement/soak_tests.rs`,
