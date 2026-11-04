@@ -582,3 +582,33 @@ fn a_town_mine_keeps_its_stone_and_undiggable_ground() {
     assert!(terrain.is_undiggable((1, -2)) && !terrain.is_undiggable((3, 0)));
     assert_eq!(terrain, world.terrain());
 }
+
+/// A town's mine with its hill (format 36: `MineSpec::hill`) loads with the
+/// hill, its ground and its undiggable plateau and ramps.
+#[test]
+fn a_town_mine_keeps_its_hill() {
+    use fx::{Fx, FxVec2};
+    let content = Content::builtin();
+    let text = include_str!("../../app/assets/levels/sacred_tree_supply.ron");
+    let hill = sim::mine::Hill { center: (0, 0), plateau: 15, steps: 8, ramp_width: 7, ramp_length: 8, foot: 10 };
+    let setup = sim::settlement::SceneSetup {
+        scenario: Some(content::scenario::Scenario::parse(text).unwrap()),
+        player: "elder".into(),
+        diggable: true,
+        sloped: true,
+        dig_layers: Some(6),
+        mine: Some(7),
+        hill: Some(hill),
+        spawn: [Fx::ZERO, Fx::ZERO, Fx::from_int(3)],
+        ..Default::default()
+    };
+    let world = sim::World::new_scene(5, &content, &setup).unwrap();
+    let loaded = read(&write(&world, &content), &content).unwrap();
+    let terrain = loaded.terrain();
+    let center = terrain.center;
+    assert_eq!(terrain.mine.unwrap().hill.unwrap().plateau, 15);
+    assert_eq!(terrain.height(center), Fx::ZERO, "the plateau");
+    assert_eq!(terrain.height(center + FxVec2::new(Fx::ZERO, Fx::from_int(20))), -Fx::from_int(2), "its foot");
+    assert!(terrain.is_undiggable(sim::terrain::Terrain::pit_tile(center)));
+    assert_eq!(terrain, world.terrain());
+}

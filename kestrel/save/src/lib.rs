@@ -107,7 +107,10 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 /// 35: a mine keeps what its veins hold (`MineSpec::veins`: the dig lab's
 ///     ore or a town's stone), and the terrain its undiggable tiles
 ///     (`Terrain::undiggable`).
-pub const FORMAT_VERSION: u32 = 35;
+/// 36: a mine keeps its authored hill (`MineSpec::hill`: the Sacred Tree's
+///     plateau and ramps), and a blueprint can be refused over a pit or
+///     steep ground (`PlacementRefusal::Uneven`).
+pub const FORMAT_VERSION: u32 = 36;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 
