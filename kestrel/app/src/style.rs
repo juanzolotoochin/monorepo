@@ -268,6 +268,11 @@ pub fn apply(world: &mut World, scene: &voxel_assets::ScenePack, studio: bool) {
             rig.zoom = profile.viewport_height;
         }
     }
+    // A day cycle's light wins over the style's (and without one the light
+    // goes back to its fixed place).
+    if !studio {
+        crate::daylight::dress(world, scene);
+    }
     if let Some(environment) = environment {
         let key = content_key(&(&profile, &environment));
         let handles = upload(world, key, &environment.meshes, &profile);
@@ -759,6 +764,80 @@ mod tests {
         assert!((shoulder_x(app.world_mut()) - 0.28).abs() < 0.001);
         crate::switch_world(&mut app, 0);
         assert!((shoulder_x(app.world_mut()) - 0.43).abs() < 0.001);
+    }
+
+    #[test]
+    fn a_day_cycle_wins_over_the_style_and_other_scenes_keep_their_fixed_light() {
+        let options = crate::control::Options {
+            simulation: true,
+            ..default()
+        };
+        let hub = crate::control::Hub::new(options.clone()).unwrap();
+        let scenes = SceneLibrary::new();
+        let town = scenes.index("sacred-tree").unwrap();
+        let mut app = crate::test_app(options, scenes, hub, crate::flow::Launch::single_player(0));
+        crate::start_world(&mut app);
+        let sun = |world: &mut World| {
+            let (light, transform) = world.query::<(&DirectionalLight, &Transform)>().single(world).unwrap();
+            (light.clone(), *transform)
+        };
+        let sky = |world: &World| world.resource::<ClearColor>().0;
+        for _ in 0..2 {
+            crate::switch_world(&mut app, town);
+            let world = app.world_mut();
+            let pack = world.resource::<crate::scene_view::SceneView>().pack.clone();
+            let cycle = pack.scene.day_cycle.clone().expect("the Sacred Tree has a day cycle");
+            let time = {
+                let mirror = world.resource::<crate::lockstep::WorldMirror>();
+                mirror.tick as f64 + f64::from(mirror.alpha)
+            };
+            let expected = crate::daylight::light_at(&pack, time).unwrap();
+            // Early morning: dawn's colors, not the forest style's.
+            assert!(time < 600.0, "{time}");
+            let (light, transform) = sun(world);
+            assert_eq!(light.color, color(expected.key.sunlight));
+            assert_eq!(light.illuminance, expected.key.illuminance);
+            assert!(light.shadow_maps_enabled);
+            assert_ne!(light.color, color(pack.scene.style.as_ref().unwrap().sunlight));
+            assert_eq!(sky(world), color(expected.key.sky));
+            let ambient = world.resource::<GlobalAmbientLight>();
+            assert_eq!(ambient.brightness, expected.key.ambient_brightness);
+            assert!((ambient.brightness - cycle.dawn.ambient_brightness).abs() < 1.0);
+            // Low in the east: the light shines west and down.
+            let shine = transform.forward();
+            assert!(shine.x < -0.9 && shine.y < -0.1 && shine.y > -0.3, "{shine}");
+            for fog in world.query::<&DistanceFog>().iter(world) {
+                assert_eq!(fog.color, color(expected.key.sky));
+            }
+            for config in world.query_filtered::<&bevy::light::CascadeShadowConfig, With<DirectionalLight>>().iter(world) {
+                assert_eq!(config.bounds.len(), 3);
+            }
+            // Frames on, the light follows the clock.
+            for _ in 0..5 {
+                app.update();
+            }
+            let world = app.world_mut();
+            let time = {
+                let mirror = world.resource::<crate::lockstep::WorldMirror>();
+                mirror.tick as f64 + f64::from(mirror.alpha)
+            };
+            let expected = crate::daylight::light_at(&pack, time).unwrap();
+            assert_eq!(sun(world).0.illuminance, expected.key.illuminance);
+            assert_eq!(sun(world).1.rotation, Transform::from_translation(Vec3::from_array(expected.toward) * 30.0)
+                .looking_at(Vec3::ZERO, Vec3::Y).rotation);
+            // Back to a scene without a cycle: its fixed light, as before.
+            crate::switch_world(&mut app, 0);
+            let world = app.world_mut();
+            let (light, transform) = sun(world);
+            assert_eq!(light.illuminance, 10500.0);
+            assert_eq!(light.color, color(voxel_assets::StyleProfile::default().sunlight));
+            assert_eq!(transform, crate::daylight::fixed_transform());
+            assert_eq!(sky(world), color(voxel_assets::StyleProfile::default().background));
+            assert_eq!(world.resource::<GlobalAmbientLight>().brightness, 180.0);
+            for config in world.query_filtered::<&bevy::light::CascadeShadowConfig, With<DirectionalLight>>().iter(world) {
+                assert_eq!(config.bounds, bevy::light::CascadeShadowConfig::default().bounds);
+            }
+        }
     }
 
     #[test]

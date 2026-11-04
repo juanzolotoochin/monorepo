@@ -7,6 +7,7 @@ mod character;
 mod character_catalog;
 mod combat;
 mod control;
+mod daylight;
 mod destruction;
 mod effects;
 mod event_prediction;
