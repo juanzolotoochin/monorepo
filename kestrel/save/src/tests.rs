@@ -529,3 +529,28 @@ fn a_town_saved_while_a_ballista_shoots_continues() {
         }
     }
 }
+
+/// A sloped scene with its own depth limit (format 34: `Terrain::sloped`,
+/// `Terrain::max_layers` and `MineSpec::layers`) loads with them, and its
+/// mine keeps as many layers.
+#[test]
+fn a_sloped_scene_keeps_its_slopes_and_depth() {
+    use fx::Fx;
+    let content = Content::builtin();
+    let setup = sim::settlement::SceneSetup {
+        player: "exosuit".into(),
+        extent: Fx::from_int(16),
+        diggable: true,
+        sloped: true,
+        dig_layers: Some(6),
+        mine: Some(7),
+        ..Default::default()
+    };
+    let world = sim::World::new_scene(5, &content, &setup).unwrap();
+    let loaded = read(&write(&world, &content), &content).unwrap();
+    let terrain = loaded.terrain();
+    assert!(terrain.sloped);
+    assert_eq!(terrain.max_layers, 6);
+    assert_eq!(terrain.mine.unwrap().layers, 6);
+    assert_eq!(terrain, world.terrain());
+}

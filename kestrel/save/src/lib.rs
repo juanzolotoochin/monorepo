@@ -101,7 +101,10 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///     (`Quarry::Building`); a building kind and a building keep health
 ///     (`BuildingKind::health`, `BuildingState::health`), and a sprite the
 ///     tick it comes back on after dying (`SpriteState::respawn_at`).
-pub const FORMAT_VERSION: u32 = 33;
+/// 34: the terrain keeps whether it slopes (`Terrain::sloped`) and how deep
+///     its pits go (`Terrain::max_layers`), and a mine its layers
+///     (`MineSpec::layers`).
+pub const FORMAT_VERSION: u32 = 34;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 
