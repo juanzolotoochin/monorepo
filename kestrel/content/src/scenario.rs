@@ -379,6 +379,17 @@ pub struct Wave {
     pub count: u32,
 }
 
+/// A scenario's days and nights, in seconds. The cycle starts at dawn at
+/// tick 0: a day, then a night, then the next day, forever. The clock is a
+/// function of the tick (`sim::settlement::clock`), so nothing about it is
+/// saved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DayCycle {
+    pub day: Fx,
+    pub night: Fx,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Weapon {
     #[default]
@@ -478,6 +489,9 @@ pub struct Scenario {
     pub buildings: Vec<Building>,
     #[serde(default)]
     pub sprites: Vec<Sprite>,
+    /// Days and nights; without one it is always day, as before.
+    #[serde(default)]
+    pub day_cycle: Option<DayCycle>,
 }
 
 fn f(n: i64, d: i64) -> Fx {
@@ -757,6 +771,11 @@ impl Scenario {
                 return Err("invalid wave".into());
             }
         }
+        if let Some(c) = self.day_cycle {
+            if !within(c.day, Fx::ONE, Fx::from_int(3600)) || !within(c.night, Fx::ONE, Fx::from_int(3600)) {
+                return Err("invalid day cycle".into());
+            }
+        }
         Ok(())
     }
 }
@@ -786,6 +805,19 @@ mod tests {
         let sword = arena.weapon_tuning(Weapon::Sword);
         assert_eq!(sword.cooldown(), ticks_from_60hz(38));
         assert_eq!(arena.weapon_tuning(Weapon::Bow).cooldown(), ticks_from_60hz(28));
+    }
+
+    #[test]
+    fn only_the_sacred_tree_has_days_and_nights() {
+        assert_eq!(Scenario::parse(FOREST).unwrap().day_cycle, None);
+        assert_eq!(Scenario::parse(ARENA).unwrap().day_cycle, None);
+        let tree = Scenario::parse(SACRED_TREE).unwrap();
+        assert_eq!(tree.day_cycle, Some(DayCycle { day: Fx::from_int(150), night: Fx::from_int(75) }));
+        for (day, night) in [(0, 75), (150, 0), (3601, 75), (150, 3601)] {
+            let mut bad = tree.clone();
+            bad.day_cycle = Some(DayCycle { day: Fx::from_int(day), night: Fx::from_int(night) });
+            assert!(bad.validate().is_err(), "{day} s days and {night} s nights");
+        }
     }
 
     #[test]

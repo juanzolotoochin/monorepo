@@ -66,4 +66,8 @@ waves: [
 (id: "west_2", position: (-40.0, 0.0), target: (-1.8, -0.6), character: "ghoul_sacred_tree", first: 348.5, every: 90.0, count: 4),
 (id: "west_3", position: (-40.0, 0.0), target: (-1.8, -0.6), character: "ghoul_sacred_tree", first: 441.0, every: 90.0, count: 3),
 (id: "west_4", position: (-40.0, 0.0), target: (-1.8, -0.6), character: "ghoul_sacred_tree", first: 533.5, every: 90.0, count: 2)
-], base_health: 20, player_health: 6)
+],
+// Days of 150 s and nights of 75 s, starting at dawn: the first night falls
+// at 2:30. The waves don't follow it yet (M7.2).
+day_cycle: Some((day: 150.0, night: 75.0)),
+base_health: 20, player_health: 6)

@@ -696,6 +696,7 @@ impl Settlement {
             building_kinds: Vec::new(),
             buildings: Vec::new(),
             sprites: Vec::new(),
+            day_cycle: None,
         }
     }
 
