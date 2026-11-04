@@ -104,7 +104,10 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 /// 34: the terrain keeps whether it slopes (`Terrain::sloped`) and how deep
 ///     its pits go (`Terrain::max_layers`), and a mine its layers
 ///     (`MineSpec::layers`).
-pub const FORMAT_VERSION: u32 = 34;
+/// 35: a mine keeps what its veins hold (`MineSpec::veins`: the dig lab's
+///     ore or a town's stone), and the terrain its undiggable tiles
+///     (`Terrain::undiggable`).
+pub const FORMAT_VERSION: u32 = 35;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

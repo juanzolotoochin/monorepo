@@ -554,3 +554,31 @@ fn a_sloped_scene_keeps_its_slopes_and_depth() {
     assert_eq!(terrain.mine.unwrap().layers, 6);
     assert_eq!(terrain, world.terrain());
 }
+
+/// A town's mine (format 35: `MineSpec::veins`, `Terrain::undiggable`)
+/// loads with its stone veins and its undiggable tiles.
+#[test]
+fn a_town_mine_keeps_its_stone_and_undiggable_ground() {
+    use fx::Fx;
+    let content = Content::builtin();
+    let text = include_str!("../../app/assets/levels/sacred_tree_supply.ron");
+    let setup = sim::settlement::SceneSetup {
+        scenario: Some(content::scenario::Scenario::parse(text).unwrap()),
+        player: "elder".into(),
+        diggable: true,
+        sloped: true,
+        dig_layers: Some(6),
+        mine: Some(7),
+        spawn: [Fx::ZERO, Fx::ZERO, Fx::from_int(3)],
+        ..Default::default()
+    };
+    let mut world = sim::World::new_scene(5, &content, &setup).unwrap();
+    let mut terrain = world.terrain().clone();
+    terrain.undiggable.push(((-2, -2), (2, 2)));
+    world.set_terrain(terrain);
+    let loaded = read(&write(&world, &content), &content).unwrap();
+    let terrain = loaded.terrain();
+    assert_eq!(terrain.mine.unwrap().veins, sim::mine::Veins::Stone);
+    assert!(terrain.is_undiggable((1, -2)) && !terrain.is_undiggable((3, 0)));
+    assert_eq!(terrain, world.terrain());
+}
