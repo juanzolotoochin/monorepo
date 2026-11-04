@@ -669,6 +669,8 @@ impl Settlement {
         if dug.is_empty() {
             return;
         }
+        // Ghouls walk round the new pits (M6.7).
+        self.reroute_round(&dug, terrain);
         let docks = self.depots.iter().map(|d| d.position);
         let spots = self.buildings.iter().flat_map(|b| [b.output_position, b.slot_position(&self.building_kinds[b.kind as usize])]);
         let targets: Vec<FxVec2> = docks.chain(spots).collect();

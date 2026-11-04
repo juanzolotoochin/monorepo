@@ -32,6 +32,15 @@
 //! (`Settlement::claim_dig_tiles`) and the sprite gives it up when it drops
 //! its plan. Its bundle's carry jobs start in stage 5 too
 //! (`Settlement::sprite_bundles`) and move their units as an elder's do.
+//!
+//! **Fleeing (M6.7):** a sprite off the tree's hill that a ghoul chases, or
+//! that one comes within its detect radius of, drops its plan and runs
+//! home beside the tree (`Alarm::Threatened`, the plan `flee_plan`), so a
+//! miner neither walks into ghouls nor lures them away from the tree. At
+//! home it waits, and stays fled while a ghoul chases it or is within
+//! `CALM_DETECTS` detect radii (`Alarm::Wary`); then it plans its job
+//! again. A sprite holding a slot claim or moving a bundle finishes that
+//! first; inside a building it is safe.
 
 use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
@@ -52,6 +61,52 @@ const ARRIVED: Fx = Fx::from_ratio(1, 10);
 /// The most steps the brain looks at in one tick: a plan is a few steps,
 /// and each pass moves on one or plans once.
 const PASSES: usize = 8;
+/// How many of a ghoul's detect radii away it must be before a fled
+/// sprite goes back to work.
+const CALM_DETECTS: i64 = 3;
+
+/// An enemy that chases, as a sprite's brain sees it: where it stands,
+/// how far it sees, and whom it chases.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Danger {
+    pub position: FxVec2,
+    pub detect: Fx,
+    pub quarry: Option<AgentIx>,
+}
+
+/// How the enemies about stand to a sprite.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum Alarm {
+    /// None near, none after it.
+    #[default]
+    Calm,
+    /// One chases it, or is within `CALM_DETECTS` detect radii: a fled
+    /// sprite stays home.
+    Wary,
+    /// Off the hill's plateau, one chases it or sees it (within its detect
+    /// radius): it flees.
+    Threatened,
+}
+
+/// The alarm for sprite `me` at `body`, from `danger`. Only scenes with a
+/// hill (the Sacred Tree's) have somewhere to flee to; elsewhere sprites
+/// stay calm, as they were.
+fn alarm(me: AgentIx, body: &Body, terrain: &Terrain, danger: &[Danger]) -> Alarm {
+    let Some(hill) = terrain.mine.and_then(|m| m.hill) else { return Alarm::Calm };
+    let near = |d: &Danger, reach: Fx| d.quarry == Some(me) || distance(body.position, d.position) <= reach;
+    if !hill.on_plateau(Terrain::pit_tile(body.position)) && danger.iter().any(|d| near(d, d.detect)) {
+        Alarm::Threatened
+    } else if danger.iter().any(|d| near(d, d.detect.mul_int(CALM_DETECTS))) {
+        Alarm::Wary
+    } else {
+        Alarm::Calm
+    }
+}
+
+/// A fleeing sprite's plan: run home beside the tree, and wait.
+fn flee_plan(body: &Body) -> Vec<Step> {
+    vec![Step::GoTo(body.home), Step::Wait]
+}
 
 /// What a player told a sprite to do.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -203,6 +258,12 @@ impl SpriteState {
         if self.plan.is_empty() {
             return Progress::Replan;
         }
+        // Threatened off the hill: drop the plan (and the route it walks)
+        // and flee.
+        if town.alarm == Alarm::Threatened && self.may_flee(carry) && !self.fleeing(body) {
+            body.route.clear();
+            return Progress::Replan;
+        }
         let Some(step) = self.current() else {
             return if self.job == SpriteJob::Mine { Progress::Replan } else { Progress::Stay(None) };
         };
@@ -337,13 +398,33 @@ impl SpriteState {
         }
     }
 
+    /// Whether it may drop its plan to flee: not on its way to a slot it
+    /// claimed, nor moving a bundle's units.
+    fn may_flee(&self, carry: &Carry) -> bool {
+        self.holds.is_none() && carry.job.is_none()
+    }
+
+    /// Whether its plan is fleeing home (`flee_plan`).
+    fn fleeing(&self, body: &Body) -> bool {
+        self.plan == flee_plan(body)
+    }
+
     /// Drops the plan, and the dig claim and dig with it, and makes a new
     /// one for the job. Whatever the job, a sprite carrying something
-    /// takes it to the tree's stone pile first.
+    /// takes it to the tree's stone pile first. Threatened, or fled with a
+    /// ghoul still about, it flees home instead and waits there.
     fn replan(&mut self, body: &Body, carry: &Carry, view: &View, town: &Town) {
         self.dig_claim = None;
         self.dig = None;
         self.asks = 0;
+        let flee = self.may_flee(carry) && (town.alarm == Alarm::Threatened || (town.alarm == Alarm::Wary && self.fleeing(body)));
+        if flee {
+            self.plan = flee_plan(body);
+            self.step = 0;
+            // At home already, it waits a retry before looking again.
+            self.retry_at = if distance(body.position, body.home) <= ARRIVED { view.tick + RETRY_TICKS } else { view.tick };
+            return;
+        }
         self.plan = match self.job {
             SpriteJob::Mine => miners::plan(self, body, carry, view, town),
             job => {
@@ -472,7 +553,7 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
     }
     let def = super::avatar::character_of(ctx.characters, a);
     let view = View { me, ..ctx.view };
-    let town = Town { claims: ctx.dig_claims, stone: ctx.stone, mine: def.sprite.and_then(|s| s.mine) };
+    let town = Town { claims: ctx.dig_claims, stone: ctx.stone, mine: def.sprite.and_then(|s| s.mine), alarm: alarm(me, &a.body, ctx.terrain, ctx.danger) };
     if let Some(action) = think(a, &view, &town) {
         // A sprite's actions only move it: nothing for the world.
         let mut out = ActionMessages::default();
@@ -545,6 +626,17 @@ pub(super) fn read(a: &AgentState, me: AgentIx, tick: u64, s: &Settlement, out: 
 }
 
 impl Settlement {
+    /// The enemies that chase, for sprites to flee from (`Danger`).
+    pub(super) fn danger(&self) -> Vec<Danger> {
+        self.threats
+            .iter()
+            .filter_map(|t| {
+                let chase = self.threat_def(t).chase?;
+                Some(Danger { position: t.position, detect: chase.detect, quarry: t.goal.agent() })
+            })
+            .collect()
+    }
+
     /// Commands: gives sprite `agent` a new job. It gives up the slot it
     /// holds and drops its plan; the brain plans for the new job on its next
     /// step. The job it already has, an agent that isn't a sprite, or a

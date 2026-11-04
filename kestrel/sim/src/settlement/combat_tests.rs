@@ -185,6 +185,7 @@ impl Arena {
             ready_at: 0,
             burn: None,
             goal: Default::default(),
+            stranded: false,
         });
         s.threats.sort_by_key(|t| t.id);
         s.next_id = s.next_id.max(id + 1);
@@ -1172,6 +1173,7 @@ fn brute_radius_follows_its_armor() {
         ready_at: 0,
         burn: None,
         goal: Default::default(),
+        stranded: false,
     };
     let def = &s.characters[s.waves[brutes].character as usize];
     let (body, plated) = (def.body.radius, def.health.as_ref().unwrap().armor.as_ref().unwrap().radius);

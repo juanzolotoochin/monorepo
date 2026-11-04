@@ -2328,6 +2328,7 @@ mod tests {
             ready_at: 0,
             burn: None,
             goal: Default::default(),
+            stranded: false,
         });
         (crate::legacy::Scenario::new(&scenario), s, center)
     }

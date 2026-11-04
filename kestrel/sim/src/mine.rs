@@ -119,6 +119,12 @@ impl Hill {
         (dy <= w && out <= l).then(|| (self.steps as i32 * (l - out) / l) as u8)
     }
 
+    /// Whether a tile is on the plateau (not a ramp).
+    pub fn on_plateau(&self, tile: (i32, i32)) -> bool {
+        let p = self.plateau as i32;
+        (tile.0 - self.center.0).abs() <= p && (tile.1 - self.center.1).abs() <= p
+    }
+
     /// How far a tile is from the plateau, in whole tiles (0 on it).
     fn from_plateau(&self, x: i32, y: i32) -> i32 {
         let p = self.plateau as i32;

@@ -62,6 +62,8 @@ pub(super) struct Town<'a> {
     pub claims: &'a [((i32, i32), AgentIx)],
     pub stone: Option<(ItemIx, DepotIx)>,
     pub mine: Option<SpriteMineDef>,
+    /// How the enemies about stand to the sprite (`sprites::Alarm`).
+    pub alarm: super::sprites::Alarm,
 }
 
 /// A stone tile to dig, and the tile to dig it from.

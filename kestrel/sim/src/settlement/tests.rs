@@ -263,6 +263,7 @@ fn think(sim: &Simulation, a: &mut AgentState, me: AgentIx) -> Option<Action> {
         view: s.view(me, tick, terrain),
         dig_claims: &[],
         stone: None,
+        danger: &[],
     };
     haulers::think(a, me, &ctx)
 }
@@ -447,6 +448,7 @@ fn set_characters_rejects_an_unknown_threat_character() {
         ready_at: 0,
         burn: None,
         goal: Default::default(),
+        stranded: false,
     };
     s.threats.push(threat);
     let error = s.set_characters(&characters).unwrap_err();

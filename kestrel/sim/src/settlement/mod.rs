@@ -1119,6 +1119,8 @@ mod interact_tests;
 #[cfg(test)]
 mod miner_tests;
 #[cfg(test)]
+mod lane_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod combat_tests;

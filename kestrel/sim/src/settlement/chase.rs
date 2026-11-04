@@ -28,6 +28,14 @@
 //!
 //! Characters without a `chase` never send a message, so other scenes'
 //! enemies behave as they did.
+//!
+//! **Routes and the ground (M6.7):** a route is planned for the ground as
+//! it was. A blueprint going down replans every route (`replan_routes`); a
+//! dig replans the routes that pass near it (`reroute_round`). With no
+//! walkable way to the tree (a moat round a ramp's foot), a threat walks
+//! to the reachable point nearest it and waits there (`Threat::stranded`),
+//! chasing whoever comes in sight, and tries again every few seconds
+//! (`retry_stranded`).
 
 use content::character::ChaseDef;
 use fx::{Fx, FxVec2};
@@ -124,9 +132,34 @@ pub(super) fn steer(position: &mut FxVec2, target: FxVec2, stop: Fx, step: Fx, t
 }
 
 /// The plan for `Goal::Tree`: a route from `from` to `target`, as a wave
-/// plans one (`combat_housekeeping`).
-pub(super) fn route_home(terrain: &Terrain, from: FxVec2, target: FxVec2) -> Vec<FxVec2> {
-    nav::path(terrain, from, target, WALK_CLEARANCE)
+/// plans one (`combat_housekeeping`), and whether it gets there. With no
+/// walkable way to it, the route ends at the reachable point nearest it
+/// (`nav::path_toward`), where the threat waits (`Threat::stranded`).
+pub(super) fn route_home(terrain: &Terrain, from: FxVec2, target: FxVec2) -> (Vec<FxVec2>, bool) {
+    nav::path_toward(terrain, from, target, WALK_CLEARANCE)
+}
+
+/// How near a dug tile's middle a route must pass for the dig to change
+/// it: a dig reshapes the corners of the 3 x 3 tiles round it (M1), and a
+/// walker's footprint reaches a little past the tile it stands on.
+const DUG_REACH: Fx = Fx::from_int(2);
+
+/// How often a stranded threat plans again, ground changed or not: every
+/// 5 s, spread over threats by id (`Settlement::retry_stranded`).
+const STRANDED_RETRY: u64 = 5 * content::TICKS_PER_SECOND as u64;
+
+/// Whether a walk from `from` along `route` passes within `DUG_REACH` of
+/// any of the `dug` tiles.
+fn crosses(from: FxVec2, route: &[FxVec2], dug: &[(i32, i32)]) -> bool {
+    let mut a = from;
+    route.iter().any(|&b| {
+        let near = dug.iter().any(|&tile| {
+            let center = Terrain::pit_center(tile);
+            distance(a, center) <= DUG_REACH || segment_disc(a, b, center, DUG_REACH).is_some()
+        });
+        a = b;
+        near
+    })
 }
 
 impl Settlement {
@@ -264,6 +297,9 @@ impl Settlement {
                 return Err(format!("threat {} chases with no route back", t.id));
             }
         }
+        if let Some(t) = self.threats.iter().find(|t| t.stranded && t.route.is_empty()) {
+            return Err(format!("threat {} is stranded with nowhere to wait", t.id));
+        }
         Ok(())
     }
 
@@ -295,13 +331,15 @@ impl Settlement {
     }
 
     /// Threat `i` plans its way to its wave's target afresh, from where it
-    /// stands, keeping the old route if there is no way.
+    /// stands: there, or, with no walkable way, as close as it gets
+    /// (stranded). It keeps the old route if it can't move at all.
     fn replan_route(&mut self, i: usize, terrain: &Terrain) {
         let t = &self.threats[i];
         let Some(target) = self.waves.get(t.wave as usize).map(|w| w.target).or(t.route.last().copied()) else { return };
-        let route = route_home(terrain, t.position, target);
+        let (route, reaches) = route_home(terrain, t.position, target);
         if !route.is_empty() {
             self.threats[i].route = route;
+            self.threats[i].stranded = !reaches;
         }
     }
 
@@ -316,6 +354,41 @@ impl Settlement {
         }
         for i in 0..self.threats.len() {
             if self.threats[i].goal == Goal::Tree {
+                self.replan_route(i, terrain);
+            }
+        }
+    }
+
+    /// Housekeeping, after digs took layers out of the `dug` tiles (M6.7):
+    /// a wave still sending whose route passes near one plans it again at
+    /// its next spawn, and so does one that was cut off; every threat on its
+    /// way to the tree whose remaining route passes near one plans afresh
+    /// from where it stands, so ghouls walk round a pit dug in their way.
+    /// Routes far from the digs stay as they are: a dig only reshapes the
+    /// ground round it.
+    pub(super) fn reroute_round(&mut self, dug: &[(i32, i32)], terrain: &Terrain) {
+        for w in self.waves.iter_mut().filter(|w| w.spawned < w.count) {
+            let cut = w.route.as_ref().is_some_and(|r| r.last() != Some(&w.target));
+            if cut || w.route.as_ref().is_some_and(|r| crosses(w.position, r, dug)) {
+                w.route = None;
+            }
+        }
+        for i in 0..self.threats.len() {
+            let t = &self.threats[i];
+            if t.goal == Goal::Tree && crosses(t.position, &t.route, dug) {
+                self.replan_route(i, terrain);
+            }
+        }
+    }
+
+    /// Housekeeping: a stranded threat on its way to the tree tries again
+    /// every `STRANDED_RETRY` ticks (spread by id), so a lane that opens
+    /// again (a pit dug into a stair, a site gone) takes it to the tree. A
+    /// failed search costs the whole window, so it isn't run on every dig.
+    pub(super) fn retry_stranded(&mut self, tick: u64, terrain: &Terrain) {
+        for i in 0..self.threats.len() {
+            let t = &self.threats[i];
+            if t.goal == Goal::Tree && t.stranded && (tick + t.id) % STRANDED_RETRY == 0 {
                 self.replan_route(i, terrain);
             }
         }

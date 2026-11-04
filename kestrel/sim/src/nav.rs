@@ -130,21 +130,53 @@ pub fn path_with(
     valid: &dyn Fn(FxVec2, FxVec2) -> bool,
 ) -> Vec<FxVec2> {
     let grid = Grid::new(terrain, start, goal, radius, extra, valid);
+    match search(&grid, start, goal, false) {
+        Some((route, true)) => route,
+        _ => Vec::new(),
+    }
+}
+
+/// [`path`], or, when no route reaches `goal`, a route to the reachable
+/// point nearest it: the searched window's node, of those the search
+/// reached from `start`, closest to `goal` (the lowest index on a tie). The
+/// flag says whether the route reaches `goal`. Empty when `start` sees no
+/// node. A wave cut off from the tree (a moat round a ramp's foot) walks
+/// as close as it can and waits there (`Threat::stranded`).
+pub fn path_toward(terrain: &Terrain, start: FxVec2, goal: FxVec2, radius: Fx) -> (Vec<FxVec2>, bool) {
+    let valid = |a, b| !terrain.sloped || terrain.walkable(a, b, radius);
+    let grid = Grid::new(terrain, start, goal, radius, &[], &valid);
+    search(&grid, start, goal, true).unwrap_or_default()
+}
+
+/// A* over `grid` from `start` to `goal`, string-pulled, and whether it
+/// reaches `goal`. With no way there, `None`, or, `toward`, the route to
+/// the reached node nearest `goal`.
+fn search(grid: &Grid, start: FxVec2, goal: FxVec2, toward: bool) -> Option<(Vec<FxVec2>, bool)> {
     let (width, height) = (grid.width, grid.height);
-    if !grid.clear(goal, goal) {
-        return Vec::new();
+    let open_goal = grid.clear(goal, goal);
+    if !open_goal && !toward {
+        return None;
     }
-    if grid.clear(start, goal) {
-        return vec![goal];
+    if open_goal && grid.clear(start, goal) {
+        return Some((vec![goal], true));
     }
-    let (Some(first), Some(last)) = (grid.nearest_visible(start), grid.nearest_visible(goal)) else {
-        return Vec::new();
+    let first = grid.nearest_visible(start)?;
+    let last = if open_goal { grid.nearest_visible(goal) } else { None };
+    if last.is_none() && !toward {
+        return None;
+    }
+    // With no node for the goal, the search aims at the lattice point
+    // nearest it.
+    let aim = |v: Fx, from: Fx, side: usize| ((v - from) / SPACING).round().floor_to_int().clamp(0, side as i64 - 1) as usize;
+    let (aim_x, aim_y) = match last {
+        Some(last) => (last % width, last / width),
+        None => (aim(goal.x, grid.origin.x, width), aim(goal.y, grid.origin.y, height)),
     };
     let mut costs = vec![u32::MAX; width * height];
     let mut parents = vec![usize::MAX; width * height];
     let heuristic = |i: usize| -> u32 {
-        let dx = (i % width).abs_diff(last % width) as u32;
-        let dy = (i / width).abs_diff(last / width) as u32;
+        let dx = (i % width).abs_diff(aim_x) as u32;
+        let dy = (i / width).abs_diff(aim_y) as u32;
         10 * dx.max(dy) + 4 * dx.min(dy)
     };
     let mut open = BinaryHeap::new();
@@ -154,7 +186,7 @@ pub fn path_with(
         if cost != costs[current] {
             continue;
         }
-        if current == last {
+        if Some(current) == last {
             break;
         }
         let (x, y) = ((current % width) as i64, (current / width) as i64);
@@ -177,11 +209,16 @@ pub fn path_with(
             }
         }
     }
-    if costs[last] == u32::MAX {
-        return Vec::new();
-    }
-    let mut raw = vec![goal];
-    let mut node = last;
+    let reached = last.filter(|&l| costs[l] != u32::MAX);
+    let (end, mut raw) = match reached {
+        Some(last) => (last, vec![goal]),
+        None if toward => {
+            let nearest = (0..width * height).filter(|&i| costs[i] != u32::MAX).min_by_key(|&i| ((grid.point(i) - goal).length_squared(), i));
+            (nearest?, Vec::new())
+        }
+        None => return None,
+    };
+    let mut node = end;
     loop {
         raw.push(grid.point(node));
         if node == first {
@@ -200,7 +237,7 @@ pub fn path_with(
         result.push(from);
         i = next + 1;
     }
-    result
+    Some((result, reached.is_some()))
 }
 
 pub fn distance(a: FxVec2, b: FxVec2) -> Fx {

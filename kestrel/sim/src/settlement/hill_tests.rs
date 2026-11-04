@@ -81,8 +81,12 @@ fn at(terrain: &Terrain, x: f64, y: f64) -> FxVec2 {
 
 /// Every leg of `route` from `from` is walkable for a body of `radius`.
 fn walks(terrain: &Terrain, from: FxVec2, route: &[FxVec2], radius: Fx) -> bool {
-    let mut from = from;
-    route.iter().all(|&to| std::mem::replace(&mut from, to) == to || terrain.walkable(from, to, radius))
+    let mut a = from;
+    route.iter().all(|&b| {
+        let ok = a == b || terrain.walkable(a, b, radius);
+        a = b;
+        ok
+    })
 }
 
 /// Where `route` from `from` crosses the plateau's edge `x` meters from

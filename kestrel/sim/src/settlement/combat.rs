@@ -71,7 +71,13 @@ fn follow_route(t: &mut Threat, speed: Fx, full_hp: u32, tick: u64, terrain: &Te
         let wounded = if t.hp < full_hp { Fx::from_ratio(11, 20) } else { Fx::ONE };
         match quarry {
             Some(to) => super::chase::steer(&mut t.position, to, stop, speed * wounded, terrain),
-            None => super::haulers::move_route(&mut t.position, &mut t.route, speed * wounded),
+            None => {
+                super::haulers::move_route(&mut t.position, &mut t.route, speed * wounded);
+                // Stranded, it waits at its route's end instead of breaching.
+                if t.stranded && t.route.is_empty() {
+                    t.route.push(t.position);
+                }
+            }
         }
     }
     let moved = distance(previous, t.position);
@@ -128,6 +134,13 @@ pub struct Threat {
     /// (B5, `chase`). Always `Tree` for a character without a `chase`.
     #[serde(default)]
     pub goal: super::chase::Goal,
+    /// Its route ends short of its wave's target: no walkable way reaches
+    /// the tree (a moat cut its lane, M6.7). It walks to the route's end,
+    /// the reachable point nearest the tree, and waits there, still chasing
+    /// whoever comes near, and plans again now and then
+    /// (`Settlement::retry_stranded`) and when the ground changes.
+    #[serde(default)]
+    pub stranded: bool,
 }
 
 /// What a threat swings at: an agent (a player in reach, or the elder or
@@ -1219,6 +1232,7 @@ impl Settlement {
             let f = Fx::from_int((tick - p.born) as i32) / Fx::from_int((p.land - p.born) as i32);
             p.position += nav::heading_vector(p.heading) * ((Fx::ONE - f.min(Fx::ONE)) * Fx::from_ratio(19, 100));
         }
+        self.retry_stranded(tick, terrain);
         // A fallen tree ends the run (B7): no more enemies come.
         let waves = if self.tree_fallen() { 0 } else { self.waves.len() };
         for w in 0..waves {
@@ -1226,8 +1240,10 @@ impl Settlement {
             if tick < wave.first || wave.spawned >= wave.count || (tick - wave.first) % wave.every != 0 {
                 continue;
             }
+            // With no way to the tree, the wave sends its enemies as close
+            // as they can walk (`Threat::stranded`).
             if wave.route.is_none() {
-                let route = nav::path(terrain, wave.position, wave.target, Fx::from_ratio(1, 5));
+                let (route, _) = nav::path_toward(terrain, wave.position, wave.target, super::chase::WALK_CLEARANCE);
                 self.waves[w].route = Some(route);
             }
             let wave = &self.waves[w];
@@ -1235,7 +1251,7 @@ impl Settlement {
             if route.is_empty() {
                 continue;
             }
-            let (character, position) = (wave.character, wave.position);
+            let (character, position, stranded) = (wave.character, wave.position, route.last() != Some(&wave.target));
             let health = self.characters[character as usize].health.as_ref().expect("a wave sends a FollowRoute character");
             let (hp, armor) = (health.hp, health.armor.as_ref().map_or(0, |a| a.points));
             let id = self.id();
@@ -1257,6 +1273,7 @@ impl Settlement {
                 ready_at: 0,
                 burn: None,
                 goal: super::chase::Goal::Tree,
+                stranded,
             });
             self.waves[w].spawned += 1;
         }
