@@ -792,7 +792,12 @@ bazel run --config=remote //kestrel/app:demo -- --scene sacred-tree
 
 The town MVP's clearing ([design](../SACRED_TREE_HANDOFF.md)): the tree's
 wood and stone piles, four sprites and one Wood Gatherer, all in placeholder
-art. The HUD line and the piles' labels count the tree's wood and stone.
+art, on a hill in 256 m of ground to dig. The HUD line and the piles'
+labels count the tree's wood and stone. No building makes stone: the elder
+digs it (F, the tile in front, a layer in about 2 s) out of the stone veins
+below the hill, a few of them exposed 15 to 40 m out, down either ramp.
+Each stone layer drops 3 to 6 stone on a pile beside the pit, carried up
+to the tree like any ground pile.
 Each sprite has a flame over its head and a tag with its name, job and what
 it is doing: the flame dances orange while it works inside its building,
 bobs pale yellow on the way, breathes blue while it waits for a free
@@ -804,7 +809,7 @@ a card for details. E (A on a controller) acts on the one thing in reach
 the sim picks (`sim::settlement::interact`), ringed on the ground with what
 it does over it ("E  PICK UP 3 WOOD", "DEPOSIT 5 WOOD", "WITHDRAW 5 WOOD"):
 the elder steps in and the units fly. On a sprite it opens a job menu in a
-ring around it (Idle, Gather Wood, Gather Stone): WASD, the arrows, the
+ring around it (Idle, Gather Wood, Man Ballista): WASD, the arrows, the
 stick or the D-pad pick a direction, E or A sets the job, Escape or B
 closes it. A refusal shows over the elder's head for a moment.
 
@@ -859,10 +864,10 @@ bazel build //kestrel/app:sacred_tree_demo
 
 renders a short video (a local GPU target, like the other demos) of three
 sprites given jobs: one works the Wood Gatherer, one waits for it, and one
-waits for a Stone Gatherer that isn't built yet. Then the elder walks to the
+waits for a ballista that isn't built yet. Then the elder walks to the
 Wood Gatherer's output, its pickup ringed and prompted, picks the wood up
 with one interact and deposits it at the tree's wood pile with another.
-Then it builds: the build menu, a Stone Gatherer's ghost red on the tree and
+Then it builds: the build menu, a ballista's ghost red on the tree and
 green east of it, put down; wood from the tree delivered and the foundation
 installed, leaving the site half built; and a walk behind the tree, whose
 canopy fades. Last, the elder drops the wood it still carries on the ground

@@ -578,7 +578,7 @@ fn the_elder_interacts_its_way_through_the_town() {
         Command::SettlementInteract,
         Command::Inspect,
         Command::SettlementJobMenu {
-            job: Some("stone_gatherer".into()),
+            job: Some("ballista".into()),
         },
         wait(2),
     ]);
@@ -594,9 +594,9 @@ fn the_elder_interacts_its_way_through_the_town() {
     assert_eq!(state(10)["simulation"]["depots"]["tree_wood"]["items"]["wood"], picked);
     assert_eq!(state(10)["simulation"]["agents"]["elder"]["cargo"]["items"], json!({}));
     let menu = &state(14)["interact"]["menu"];
-    assert_eq!(menu["options"], json!(["IDLE", "GATHER WOOD", "GATHER STONE", "MAN BALLISTA"]), "{}", state(14)["interact"]);
+    assert_eq!(menu["options"], json!(["IDLE", "GATHER WOOD", "MAN BALLISTA"]), "{}", state(14)["interact"]);
     let simulation = &report["state"]["settlement"]["simulation"];
-    assert_eq!(simulation["sprites"]["sprite_fern"]["job"], "stone_gatherer");
+    assert_eq!(simulation["sprites"]["sprite_fern"]["job"], "ballista");
     assert_eq!(report["state"]["settlement"]["interact"]["menu"], Value::Null);
     assert!(report["state"]["settlement"]["balances"]
         .as_object()
@@ -658,27 +658,31 @@ fn the_elder_drops_wood_and_picks_it_back_up() {
     assert!(report["error"].as_str().unwrap().contains("Nothing carried"), "{report}");
 }
 
-/// Building, as a script (D1, D4): the build menu, a Stone Gatherer's
+/// Building, as a script (D1, D4): the build menu, a Wood Gatherer's
 /// ghost refused on the tree and valid in the open, put down; wood carried
-/// from the tree and delivered, both parts installed, each by the interact
-/// key's own path; then a sprite assigned works it and stone comes out.
+/// from the tree and delivered, the leftover put back and stone fetched,
+/// both parts installed, each by the interact key's own path; then a
+/// sprite assigned works it and wood comes out. Ash works the prebuilt one
+/// first, so the new one is the free one.
 #[test]
-fn the_elder_builds_a_stone_gatherer_that_a_sprite_works() {
+fn the_elder_builds_a_wood_gatherer_that_a_sprite_works() {
     let walk = |x, z| Command::Walk { position: [x, z] };
     let target = |prompt: &str| Command::SettlementInteractTarget { prompt: Some(prompt.into()) };
+    let stock = |depot: &str, item: &str, units| Command::SettlementStock { depot: depot.into(), item: item.into(), units };
     let report = run(vec![
         Command::Scene {
             scene: "sacred-tree".into(),
         },
-        Command::SettlementStock {
-            depot: "tree_wood".into(),
-            item: "wood".into(),
-            units: 5,
+        Command::SettlementSpriteJob {
+            sprite: "sprite_ash".into(),
+            job: Some("wood_gatherer".into()),
         },
+        stock("tree_wood", "wood", 5),
+        stock("tree_stone", "stone", 2),
         Command::SettlementBuild { kind: None },
         Command::Inspect,
         Command::SettlementBuild {
-            kind: Some("stone_gatherer".into()),
+            kind: Some("wood_gatherer".into()),
         },
         // Facing the tree, the ghost stands on it.
         walk(0.0, 2.6),
@@ -700,12 +704,18 @@ fn the_elder_builds_a_stone_gatherer_that_a_sprite_works() {
         Command::SettlementInteract,
         target("DELIVER 2 WOOD"),
         Command::SettlementInteract,
+        // The wood left over back in the tree, and its two stone.
+        Command::SettlementDeposit { depot: "tree_wood".into() },
+        Command::SettlementWithdraw { depot: "tree_stone".into() },
+        walk(2.0, -0.6),
+        target("DELIVER 2 STONE"),
+        Command::SettlementInteract,
         target("INSTALL MECHANISM"),
         Command::SettlementInteract,
         Command::Inspect,
         Command::SettlementSpriteJob {
             sprite: "sprite_fern".into(),
-            job: Some("stone_gatherer".into()),
+            job: Some("wood_gatherer".into()),
         },
         Command::SettlementRate { rate: 4.0 },
         Command::Wait { frames: 600 },
@@ -713,30 +723,31 @@ fn the_elder_builds_a_stone_gatherer_that_a_sprite_works() {
     assert_eq!(report["status"], "passed", "{report}");
     let receipts = report["receipts"].as_array().unwrap();
     let state = |i: usize| &receipts[i]["state"]["settlement"];
-    assert_eq!(state(3)["interact"]["build_menu"], json!(["wood_gatherer", "stone_gatherer", "ballista"]), "{}", state(3)["interact"]);
+    assert_eq!(state(5)["interact"]["build_menu"], json!(["wood_gatherer", "ballista"]), "{}", state(5)["interact"]);
     let ghost = |i: usize| &state(i)["interact"]["ghost"];
-    assert_eq!(state(6)["interact"]["placing"], "stone_gatherer");
-    assert_eq!((&ghost(6)["valid"], &ghost(6)["reason"]), (&json!(false), &json!("BLOCKED")), "{}", ghost(6));
-    assert_eq!((&ghost(9)["valid"], &ghost(9)["reason"]), (&json!(true), &Value::Null), "{}", ghost(9));
+    assert_eq!(state(8)["interact"]["placing"], "wood_gatherer");
+    assert_eq!((&ghost(8)["valid"], &ghost(8)["reason"]), (&json!(false), &json!("BLOCKED")), "{}", ghost(8));
+    assert_eq!((&ghost(11)["valid"], &ghost(11)["reason"]), (&json!(true), &Value::Null), "{}", ghost(11));
     // Put down where the ghost stood: a site waiting for its foundation.
-    let site = &state(11)["simulation"]["buildings"][1];
-    assert_eq!((&site["kind"], &site["status"]), (&json!("stone_gatherer"), &json!("site")), "{site}");
+    let site = &state(13)["simulation"]["buildings"][1];
+    assert_eq!((&site["kind"], &site["status"]), (&json!("wood_gatherer"), &json!("site")), "{site}");
     assert_eq!(site["site"], json!({"part": 0, "parts": 2, "materials": [["wood", 0, 2]], "ready": false}));
-    let (at, stood) = (&site["position"], &ghost(9)["position"]);
+    let (at, stood) = (&site["position"], &ghost(11)["position"]);
     assert!((0..2).all(|i| (at[i].as_f64().unwrap() - stood[i].as_f64().unwrap()).abs() < 0.05), "{at} vs {stood}");
-    assert_eq!(state(11)["interact"]["placing"], Value::Null);
+    assert_eq!(state(13)["interact"]["placing"], Value::Null);
     // Delivered, the foundation reads ready; then built.
-    assert_eq!(state(17)["simulation"]["buildings"][1]["site"]["ready"], true, "{}", state(17)["simulation"]["buildings"][1]);
-    assert_eq!(state(19)["simulation"]["buildings"][1]["site"]["part"], 1);
-    let built = &state(23)["simulation"]["buildings"][1];
+    assert_eq!(state(19)["simulation"]["buildings"][1]["site"]["ready"], true, "{}", state(19)["simulation"]["buildings"][1]);
+    assert_eq!(state(21)["simulation"]["buildings"][1]["site"]["part"], 1);
+    let built = &state(30)["simulation"]["buildings"][1];
     assert_eq!((&built["status"], &built["site"]), (&json!("idle"), &Value::Null), "{built}");
-    assert_eq!(state(23)["simulation"]["agents"]["elder"]["cargo"]["items"]["wood"], 1);
-    // Fern staffs it, and stone comes out.
+    assert_eq!(state(30)["simulation"]["agents"]["elder"]["cargo"]["items"], json!({}));
+    assert_eq!(state(30)["simulation"]["depots"]["tree_wood"]["items"]["wood"], 1);
+    // Fern staffs it, and wood comes out.
     let last = &report["state"]["settlement"];
-    let stone = &last["simulation"]["buildings"][1];
-    assert_eq!(stone["occupant"], json!({"sprite": "sprite_fern"}), "{stone}");
-    assert!(stone["output"]["items"]["stone"].as_u64().is_some_and(|n| n >= 1), "{stone}");
-    assert_eq!(last["balances"]["wood"]["consumed"], 4);
+    let new = &last["simulation"]["buildings"][1];
+    assert_eq!(new["occupant"], json!({"sprite": "sprite_fern"}), "{new}");
+    assert!(new["output"]["items"]["wood"].as_u64().is_some_and(|n| n >= 1), "{new}");
+    assert_eq!((&last["balances"]["wood"]["consumed"], &last["balances"]["stone"]["consumed"]), (&json!(4), &json!(2)));
     assert!(last["balances"].as_object().unwrap().values().all(|b| b["conserved"] == true));
 }
 
@@ -983,7 +994,8 @@ fn the_elder_fires_a_possessed_ballista_at_the_reticle() {
             stock("tree_wood", "wood", 4),
             stock("tree_stone", "stone", 5),
             Command::SettlementBuild { kind: Some("ballista".into()) },
-            // Facing -z east of the tree, as the Stone Gatherer goes up.
+            // Facing -z east of the tree, as the Wood Gatherer goes up in
+            // the build test.
             walk(3.0, 1.0),
             walk(3.0, 0.0),
             Command::SettlementPlaceBlueprint { kind: None, position: None },
@@ -1145,9 +1157,12 @@ fn the_elder_bursts_the_wood_gatherer_and_waits_out_the_cooldown() {
 
 /// The happy path, section 5 of the requirements (A6), step by step from a
 /// fresh start with no cheat commands (no stock added, no speed-up): only
-/// the player's own verbs, at the game's own pace (about four minutes of
+/// the player's own verbs, at the game's own pace (about two minutes of
 /// play, at 20 frames a second). Each pickup waits for a full bundle of 5,
-/// so every leftover is known and goes back to the tree.
+/// so every leftover is known and goes back to the tree. No building makes
+/// stone (M6.4 of the mining design): steps 4 to 6, which built and worked
+/// a Stone Gatherer, are the elder digging stone out of an exposed vein
+/// below the hill and carrying it up to the tree.
 #[test]
 fn the_happy_path_plays_from_a_fresh_start() {
     const FPS: u32 = 20;
@@ -1172,32 +1187,23 @@ fn the_happy_path_plays_from_a_fresh_start() {
     // 3. A bundle of 5 wood to the tree.
     steps.extend([wait(30), pick_up(0), deposit("tree_wood")]);
     let stocked = inspect(&mut steps);
-    // 4. A Stone Gatherer from the build menu, built with the tree's wood;
-    // the one wood left over goes back.
-    steps.extend([
-        Command::SettlementBuild { kind: None },
-        Command::SettlementBuild { kind: Some("stone_gatherer".into()) },
-        walk(3.0, 1.0),
-        walk(3.0, 0.0),
-        Command::SettlementPlaceBlueprint { kind: None, position: None },
-        withdraw("tree_wood"),
-        walk(2.0, -0.6),
-        target("DELIVER 2 WOOD"),
-        Command::SettlementInteract,
-        target("INSTALL FOUNDATION"),
-        Command::SettlementInteract,
-        target("DELIVER 2 WOOD"),
-        Command::SettlementInteract,
-        target("INSTALL MECHANISM"),
-        Command::SettlementInteract,
-    ]);
-    let stone_built = inspect(&mut steps);
-    steps.push(deposit("tree_wood"));
-    // 5. Reed to Gather Stone.
-    steps.extend([job("sprite_reed", "stone_gatherer"), wait(20)]);
-    let first_stone = inspect(&mut steps);
-    // 6. A bundle of 5 stone to the tree.
-    steps.extend([wait(35), pick_up(1), deposit("tree_stone")]);
+    // 4. Down the east ramp to the stone vein beside it, 11 m off its
+    // middle (one of the four M6.3 guarantees for the scene's seed, at
+    // arena tile (18, -11); `hill_tests` prints them). The elder
+    // stands two tiles east of the vein's middle, facing west, and digs the
+    // tile in front, a stone layer; then steps into that pit and digs the
+    // vein's middle. Each layer drops 3 to 6 stone onto a pile beside it.
+    steps.extend([walk(21.0, -11.0), walk(20.0, -11.0)]);
+    let at_vein = inspect(&mut steps);
+    steps.extend([Command::Dig, wait(3), walk(19.0, -11.0), Command::Dig, wait(3)]);
+    let dug = inspect(&mut steps);
+    // 5. A bundle of 5 stone from the pile; the rest stays on the ground.
+    steps.extend([target("PICK UP 5 STONE"), Command::SettlementInteract]);
+    let picked = inspect(&mut steps);
+    // 6. Up the ramp to the tree's stone pile.
+    // M6.5: here Reed goes to Mine and a miner sprite fetches the rest of
+    // the dug stone (and digs more) to the tree; assert it lands there.
+    steps.push(deposit("tree_stone"));
     let stone_stocked = inspect(&mut steps);
     // 7. A second Wood Gatherer north-east: wood from the first one's
     // output, stone from the tree, leftovers back in the tree.
@@ -1247,6 +1253,8 @@ fn the_happy_path_plays_from_a_fresh_start() {
     eprintln!("the happy path took {} s", ticks / 60);
     assert!(ticks < 210 * content::TICKS_PER_SECOND as u64, "the happy path took {} s", ticks / 60);
     let receipts = report["receipts"].as_array().unwrap();
+    let seconds = |i: usize| receipts[i]["state"]["sim_tick"].as_u64().unwrap() / content::TICKS_PER_SECOND as u64;
+    eprintln!("dug at {} s, stone at the tree at {} s, the mechanism in at {} s", seconds(dug), seconds(stone_stocked), seconds(wood_built));
     let sim = |i: usize| &receipts[i]["state"]["settlement"]["simulation"];
     let building = |i: usize, b: usize| &sim(i)["buildings"][b];
     let output = |i: usize, b: usize, item: &str| building(i, b)["output"]["items"][item].as_u64().unwrap_or(0);
@@ -1264,26 +1272,31 @@ fn the_happy_path_plays_from_a_fresh_start() {
     assert!(output(first_wood, 0, "wood") >= 1);
     // 3.
     assert_eq!(tree(stocked, "tree_wood", "wood"), 5);
-    // 4.
-    let stone = building(stone_built, 1);
-    assert_eq!((&stone["kind"], &stone["status"]), (&json!("stone_gatherer"), &json!("idle")), "{stone}");
-    assert_eq!((tree(stone_built, "tree_wood", "wood"), cargo(stone_built)["wood"].as_u64()), (0, Some(1)));
+    // 4. No Stone Gatherer stands; the vein lies in front.
+    let digging = |i: usize| &receipts[i]["state"]["digging"];
+    assert!(receipts[at_vein]["state"]["settlement"]["simulation"]["buildings"].as_array().unwrap().iter().all(|b| b["kind"] != "stone_gatherer"));
+    assert_eq!(digging(at_vein)["nearest_ore"]["tile"], json!([19, -11]), "{}", digging(at_vein));
+    assert_eq!(digging(dug)["pits"], json!([{"tile": [18, -11], "depth": 1}, {"tile": [19, -11], "depth": 1}]), "{}", digging(dug));
+    let piles = sim(dug)["ground_piles"].as_array().unwrap();
+    let on_ground: u64 = piles.iter().map(|p| p["stock"]["items"]["stone"].as_u64().unwrap_or(0)).sum();
+    assert!((6..=12).contains(&on_ground), "two stone layers, 3 to 6 each: {piles:?}");
+    assert_eq!(cargo(dug), &json!({}));
     // 5.
-    assert_eq!(building(first_stone, 1)["occupant"], json!({"sprite": "sprite_reed"}), "{}", building(first_stone, 1));
-    assert!(output(first_stone, 1, "stone") >= 1);
+    assert_eq!(cargo(picked)["stone"], 5, "{}", cargo(picked));
     // 6.
     assert_eq!(tree(stone_stocked, "tree_stone", "stone"), 5);
+    assert_eq!(cargo(stone_stocked), &json!({}));
     // 7.
-    let second = building(wood_built, 2);
+    let second = building(wood_built, 1);
     assert_eq!((&second["kind"], &second["status"]), (&json!("wood_gatherer"), &json!("idle")), "{second}");
-    assert_eq!((tree(wood_built, "tree_wood", "wood"), tree(wood_built, "tree_stone", "stone")), (2, 3));
+    assert_eq!((tree(wood_built, "tree_wood", "wood"), tree(wood_built, "tree_stone", "stone")), (6, 3));
     assert_eq!(cargo(wood_built), &json!({}));
     // 8. Both staffed and working, and both made wood in the 6 s between.
     for i in [both, both_later] {
-        assert_eq!((&building(i, 0)["occupant"], &building(i, 2)["occupant"]), (&json!({"sprite": "sprite_fern"}), &json!({"sprite": "sprite_ash"})));
-        assert_eq!((&building(i, 0)["status"], &building(i, 2)["status"]), (&json!("working"), &json!("working")));
+        assert_eq!((&building(i, 0)["occupant"], &building(i, 1)["occupant"]), (&json!({"sprite": "sprite_fern"}), &json!({"sprite": "sprite_ash"})));
+        assert_eq!((&building(i, 0)["status"], &building(i, 1)["status"]), (&json!("working"), &json!("working")));
     }
-    assert!(output(both_later, 0, "wood") > output(both, 0, "wood") && output(both_later, 2, "wood") > output(both, 2, "wood"));
+    assert!(output(both_later, 0, "wood") > output(both, 0, "wood") && output(both_later, 1, "wood") > output(both, 1, "wood"));
     // 9. Fern put out and waiting (the other Wood Gatherer is Ash's), the
     // building at 4x: a unit every 1.25 s, against one per 5 s.
     let seated = &receipts[possessed]["state"]["settlement"];
@@ -1299,8 +1312,8 @@ fn the_happy_path_plays_from_a_fresh_start() {
     assert_eq!(last["seat"], Value::Null);
     assert_eq!(building(left, 0)["occupant"], json!({"sprite": "sprite_fern"}), "{}", building(left, 0));
     assert_eq!((&sprite(left, "sprite_fern")["job"], &sprite(left, "sprite_fern")["activity"]), (&json!("wood_gatherer"), &json!("working")));
-    assert_eq!(building(left, 2)["occupant"], json!({"sprite": "sprite_ash"}));
-    for i in [start, first_wood, stocked, stone_built, first_stone, stone_stocked, wood_built, both, both_later, possessed, possessed_later, burst, left] {
+    assert_eq!(building(left, 1)["occupant"], json!({"sprite": "sprite_ash"}));
+    for i in [start, first_wood, stocked, at_vein, dug, picked, stone_stocked, wood_built, both, both_later, possessed, possessed_later, burst, left] {
         assert!(receipts[i]["state"]["settlement"]["balances"].as_object().unwrap().values().all(|b| b["conserved"] == true), "receipt {i}");
     }
 }
@@ -1319,7 +1332,7 @@ fn building_waits_until_the_elder_leaves_its_building() {
     let report = run(vec![
         Command::Scene { scene: "sacred-tree".into() },
         Command::SettlementBoard { building: 0 },
-        Command::SettlementBuild { kind: Some("stone_gatherer".into()) },
+        Command::SettlementBuild { kind: Some("ballista".into()) },
     ]);
     assert_eq!(report["status"], "failed", "{report}");
     assert!(report["error"].as_str().unwrap().contains("Leave the building first (E)"), "{report}");
