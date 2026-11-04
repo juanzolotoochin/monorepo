@@ -386,8 +386,10 @@ fn installing_the_last_part_makes_the_building_and_a_sprite_staffs_it() {
 /// "Tests"): no building makes stone, so the elder digs it from an exposed
 /// vein and carries it to the tree; with the prebuilt Wood Gatherer's wood
 /// it puts up a second Wood Gatherer and a ballista (4 wood and 2 stone
-/// each), with no stock added and no softlock. Both end up staffed.
-/// (M6.5: a miner sprite fetches stone too.)
+/// each), with no stock added and no softlock. Both end up staffed. The
+/// elder bootstraps alone, so every stone is counted: a miner sprite
+/// (M6.5) can do the stone's part too (`miner_tests`), and the happy path
+/// sends one after the elder's first dig.
 #[test]
 fn both_kinds_build_from_an_empty_tree_and_dug_stone() {
     let mut sim = sacred_tree_map();

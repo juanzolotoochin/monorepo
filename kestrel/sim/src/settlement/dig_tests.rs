@@ -24,7 +24,7 @@ const SACRED_TREE: &str = include_str!("../../../app/assets/levels/sacred_tree_s
 const HZ: u64 = TICKS_PER_SECOND as u64;
 const ELDER: AgentIx = 0;
 /// The elder's body radius (the exosuit's).
-fn radius() -> Fx {
+pub(super) fn radius() -> Fx {
     Fx::from_ratio(8, 25)
 }
 
@@ -57,12 +57,12 @@ fn terrain(sim: &Simulation) -> &Terrain {
 }
 
 /// Steps one tick with `turn`, checking every invariant after it.
-fn step(sim: &mut Simulation, turn: &[Command]) {
+pub(super) fn step(sim: &mut Simulation, turn: &[Command]) {
     sim.step(turn);
     settlement(sim).validate().unwrap();
 }
 
-fn command(kind: CommandKind) -> Command {
+pub(super) fn command(kind: CommandKind) -> Command {
     Command { player: PlayerId(0), kind }
 }
 
@@ -73,12 +73,12 @@ fn tile(sim: &Simulation, x: i32, z: i32) -> (i32, i32) {
 }
 
 /// The heading that faces along `(x, y)`.
-fn facing(x: i32, y: i32) -> Fx {
+pub(super) fn facing(x: i32, y: i32) -> Fx {
     nav::bearing(FxVec2::ZERO, FxVec2::new(Fx::from_int(x), Fx::from_int(y)))
 }
 
 /// Walks the elder to `target` and waits until it stands there.
-fn walk_to(sim: &mut Simulation, target: FxVec2) {
+pub(super) fn walk_to(sim: &mut Simulation, target: FxVec2) {
     if nav::distance(settlement(sim).agents[ELDER as usize].body.position, target) < Fx::from_ratio(1, 20) {
         return;
     }
@@ -96,7 +96,7 @@ fn walk_to(sim: &mut Simulation, target: FxVec2) {
 
 /// Walks the elder onto the middle of `on`, its last tile `toward` (a
 /// step along x or y), so it faces the next tile that way.
-fn stand(sim: &mut Simulation, on: (i32, i32), toward: (i32, i32)) {
+pub(super) fn stand(sim: &mut Simulation, on: (i32, i32), toward: (i32, i32)) {
     walk_to(sim, Terrain::pit_center((on.0 - toward.0, on.1 - toward.1)));
     walk_to(sim, Terrain::pit_center(on));
     assert_eq!(Terrain::pit_tile(settlement(sim).agents[ELDER as usize].body.position), on);
@@ -104,7 +104,7 @@ fn stand(sim: &mut Simulation, on: (i32, i32), toward: (i32, i32)) {
 
 /// Sends the dig command, returning the tile the dig started on, and waits
 /// for it to finish.
-fn dig(sim: &mut Simulation) -> Option<(i32, i32)> {
+pub(super) fn dig(sim: &mut Simulation) -> Option<(i32, i32)> {
     step(sim, &[command(CommandKind::DigDown { agent: ELDER })]);
     let dig = settlement(sim).agents[ELDER as usize].avatar().unwrap().dig.clone()?;
     while settlement(sim).agents[ELDER as usize].avatar().unwrap().dig.is_some() {

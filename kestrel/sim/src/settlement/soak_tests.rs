@@ -483,7 +483,8 @@ impl Soak {
 /// it puts up a ballista beside the tree and a Wood Gatherer on each lane's
 /// way, the west's and near the east column's; then it cycles
 /// reassigning the sprites (Ash always on the ballista, the others walking
-/// to gatherers across the waves' ways or idling), stocking the ballista, possessing it to shoot and throw
+/// to gatherers across the waves' ways or mining down the ramps, M6.5, left
+/// mid-errand as it may be), stocking the ballista, possessing it to shoot and throw
 /// fireballs while ghouls are about, possessing a gatherer to Burst while
 /// none are, and putting broken buildings back up. Every tick checks every
 /// invariant and the balances, that no sprite waits past a retry with a
@@ -501,9 +502,9 @@ fn defending_against_the_waves_strands_no_sprite() {
     let mut cycle = 0usize;
     while soak.sim.world().tick() < 775 * HZ {
         // Ash mans the ballista; the others rotate over the gatherers and
-        // idling every fourth cycle, so they walk across the clearing and
-        // stay a while in buildings on the waves' ways.
-        let rota = [SpriteJob::Staff(WOOD_GATHERER), SpriteJob::Staff(WOOD_GATHERER), SpriteJob::Idle];
+        // mining every fourth cycle, so they walk across the clearing, stay
+        // a while in buildings on the waves' ways, and dig off the hill.
+        let rota = [SpriteJob::Staff(WOOD_GATHERER), SpriteJob::Staff(WOOD_GATHERER), SpriteJob::Mine];
         let mut jobs = vec![command(CommandKind::SetSpriteJob { agent: SPRITES[0], job: SpriteJob::Staff(BALLISTA) })];
         jobs.extend(SPRITES[1..].iter().enumerate().map(|(i, &agent)| command(CommandKind::SetSpriteJob { agent, job: rota[(cycle / 4 + i) % 3] })));
         soak.watch(&jobs, &mut seen);
@@ -515,7 +516,11 @@ fn defending_against_the_waves_strands_no_sprite() {
         if soak.s().buildings[ballista as usize].built() && soak.s().buildings[ballista as usize].output.free() >= 5 {
             soak.bring(ballista, STONE, false, &mut seen);
         }
-        if !soak.s().threats.is_empty() && soak.s().buildings[ballista as usize].built() {
+        // Ghouls on the hill: the elder defends. Those off it, after a
+        // miner below, are the miner's lookout.
+        let tree = soak.sim.world().terrain().center;
+        let near = soak.s().threats.iter().any(|t| (t.position - tree).length() < Fx::from_int(15));
+        if near && soak.s().buildings[ballista as usize].built() {
             soak.defend(ballista, 8 + cycle as u64 % 5, &mut seen);
         } else {
             let b = gatherers[cycle % gatherers.len()];
@@ -526,8 +531,9 @@ fn defending_against_the_waves_strands_no_sprite() {
         soak.wait((cycle % 3) as u64 * HZ, &mut seen);
         cycle += 1;
     }
-    eprintln!("wave soak: {cycle} cycles, {seen:?}, tree {}", soak.s().health);
     let s = soak.s();
+    let mined = s.accounts[STONE as usize].generated;
+    eprintln!("wave soak: {cycle} cycles, {seen:?}, tree {}, {mined} stone mined", s.health);
     assert!(!s.tree_fallen(), "the tree stands: {seen:?}");
     assert!(s.waves.iter().all(|w| w.spawned == w.count), "every wave came");
     assert!(seen.sprite_shots > 0 && seen.elder_shots > 0, "{seen:?}");
@@ -535,4 +541,5 @@ fn defending_against_the_waves_strands_no_sprite() {
     assert!(seen.kills >= 20 && seen.fire_kills > 0, "{seen:?}");
     assert!(seen.broken >= 2 && seen.sprite_deaths >= 1 && seen.sprite_returns == seen.sprite_deaths, "buildings broke, sprites died and came back: {seen:?}");
     assert!(soak.longest <= RETRY_TICKS + 1);
+    assert!(mined >= 6, "the miner dug stone: {mined}");
 }
