@@ -599,6 +599,14 @@ mod tests {
         let builtin = Content::builtin();
         let sprite_of = |name: &str| builtin.rules.characters[builtin.names.character_index(name).unwrap() as usize].sprite;
         assert_eq!(sprite_of("sprite").map(|s| (s.health, s.respawn)), Some((3, ticks_from_60hz(900))));
+        // It digs a layer 4.5 times slower than the elder (Settled, "Speed").
+        let mine = sprite_of("sprite").unwrap().mine.unwrap();
+        assert_eq!((mine.dig, mine.capacity), (ticks_from_60hz(540), 6));
+        assert!(def.mine.is_none(), "no mining without a `mine`");
+        let mining = sprite.replace("respawn: 900)", "respawn: 900, mine: (dig: 540, capacity: 6, transfer: 20))");
+        assert!(characters(&[("character/x.ron", &mining)]).is_ok());
+        assert!(bad(&mining.replace("capacity: 6", "capacity: 0")).contains("sprite.mine.capacity"));
+        assert!(bad(&mining.replace("dig: 540, ", "")).contains("sprite.mine.dig"));
         assert!(sprite_of("ghoul_forest").is_none());
     }
 

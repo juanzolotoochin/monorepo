@@ -27,8 +27,9 @@ pub enum Brain {
     Hauler,
     /// Driven by the player sitting in it; idle without one.
     Vehicle,
-    /// Staffs the buildings of its job. Carries nothing; its `sprite`
-    /// section, if any, gives it health and a respawn delay.
+    /// Staffs the buildings of its job, or mines. Its `sprite` section, if
+    /// any, gives it health, a respawn delay and how it mines; only a miner
+    /// carries anything.
     Sprite,
 }
 
@@ -77,6 +78,21 @@ pub struct SpriteDef {
     pub health: u32,
     /// Ticks from its death until it is back beside the tree.
     pub respawn: u64,
+    /// How it mines (M6.5 of the mining design), if it can: without it, a
+    /// sprite given the Mine job carries nothing and only waits.
+    pub mine: Option<SpriteMineDef>,
+}
+
+/// A sprite's mining, in simulation units (`SACRED_TREE_MINING.md`, M9).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpriteMineDef {
+    /// Ticks to dig out one layer, standing still: 4 to 5 times the
+    /// elder's (Settled, "Speed").
+    pub dig: u64,
+    /// Units its bundle holds, one item at a time.
+    pub capacity: u32,
+    /// Ticks to load or unload one unit.
+    pub transfer: u64,
 }
 
 /// A threat's chase, in simulation units (`SACRED_TREE_BALLISTA.md`, B5).
@@ -386,6 +402,17 @@ pub(crate) struct SimFile {
 struct SpriteFile {
     health: Option<u32>,
     respawn: Option<u64>,
+    mine: Option<SpriteMineFile>,
+}
+
+/// A sprite's `mine`: 60 Hz frames a layer, units a bundle holds, and 60
+/// Hz frames a unit.
+#[derive(Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct SpriteMineFile {
+    dig: Option<u64>,
+    capacity: Option<u32>,
+    transfer: Option<u64>,
 }
 
 /// A FollowRoute character's `chase`: meters and 60 Hz frames.
@@ -519,7 +546,8 @@ macro_rules! merge_fields {
 }
 
 merge_fields!(SimFile { brain, abilities } { body, movement, health, avatar, carry, attack, vehicle, chase, sprite });
-merge_fields!(SpriteFile { health, respawn } {});
+merge_fields!(SpriteFile { health, respawn } { mine });
+merge_fields!(SpriteMineFile { dig, capacity, transfer } {});
 merge_fields!(ChaseFile { detect, leash, look } {});
 merge_fields!(VehicleFile { acceleration, braking, reverse, turn, wheelbase, track, climb, lift, gravity, seat } {});
 merge_fields!(ThreatAttackFile { damage, reach, windup, cooldown, knockback } {});
@@ -641,7 +669,25 @@ fn sprite_def(file: SpriteFile) -> Result<SpriteDef, String> {
     if !(1..=36000).contains(&respawn) {
         return Err("sprite.respawn must be 1..=36000 frames".into());
     }
-    Ok(SpriteDef { health, respawn: ticks_from_60hz(respawn) })
+    let mine = file
+        .mine
+        .map(|m| {
+            let dig = need(m.dig, "sprite.mine.dig")?;
+            if !(1..=36000).contains(&dig) {
+                return Err("sprite.mine.dig must be 1..=36000 frames".to_string());
+            }
+            let capacity = need(m.capacity, "sprite.mine.capacity")?;
+            if !(1..=64).contains(&capacity) {
+                return Err("sprite.mine.capacity must be 1..=64 units".to_string());
+            }
+            let transfer = need(m.transfer, "sprite.mine.transfer")?;
+            if !(3..=300).contains(&transfer) {
+                return Err("sprite.mine.transfer must be 3..=300 frames".to_string());
+            }
+            Ok(SpriteMineDef { dig: ticks_from_60hz(dig), capacity, transfer: ticks_from_60hz(transfer) })
+        })
+        .transpose()?;
+    Ok(SpriteDef { health, respawn: ticks_from_60hz(respawn), mine })
 }
 
 fn chase_def(file: ChaseFile) -> Result<ChaseDef, String> {

@@ -1,14 +1,16 @@
-// A forest sprite that staffs a building of its job. It carries nothing.
-// Out of a building, an enemy's swings hurt it: three hits kill it, and it
-// comes back beside the tree 900 frames (15 s) later, keeping its job
-// (SACRED_TREE_BALLISTA.md, B6). Drawn by the worker skin until it has its
-// own.
+// A forest sprite that staffs a building of its job, or mines. Out of a
+// building, an enemy's swings hurt it: three hits kill it, and it comes
+// back beside the tree 900 frames (15 s) later, keeping its job
+// (SACRED_TREE_BALLISTA.md, B6). A miner digs a layer in 540 frames (9 s,
+// 4.5 times the elder's 2 s; SACRED_TREE_MINING.md, M9) and carries up to
+// 6 stone, a dig's most, a unit every 20 frames. Drawn by the worker skin
+// until it has its own.
 (
     sim: (
         brain: Sprite,
         body: (radius: 0.22),
         movement: (walk: 1.6),
-        sprite: (health: 3, respawn: 900),
+        sprite: (health: 3, respawn: 900, mine: (dig: 540, capacity: 6, transfer: 20)),
     ),
     view: (skin: "worker"),
 )
