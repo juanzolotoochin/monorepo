@@ -40,8 +40,8 @@ pub enum Command {
         item: String,
         units: u32,
     },
-    /// Gives a sprite (by id) a job: a building kind (by id) to staff, or
-    /// idle when `job` is missing or null.
+    /// Gives a sprite (by id) a job: a building kind (by id) to staff,
+    /// `"mine"` to mine stone (M6.5), or idle when `job` is missing or null.
     SettlementSpriteJob {
         sprite: String,
         #[serde(default)]
@@ -70,8 +70,8 @@ pub enum Command {
     /// Interacts as E or A does, on the same target: a bundle target's units
     /// move (the elder steps in to it), and a sprite opens its job menu.
     SettlementInteract,
-    /// Picks the open job menu's option for `job` (a building kind's id, or
-    /// idle when missing), as the menu's own pick does.
+    /// Picks the open job menu's option for `job` (a building kind's id,
+    /// `"mine"`, or idle when missing), as the menu's own pick does.
     SettlementJobMenu {
         #[serde(default)]
         job: Option<String>,

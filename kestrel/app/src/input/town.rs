@@ -553,9 +553,11 @@ pub fn possessing(world: &World) -> bool {
 }
 
 /// The job menu's options: idle, then one per building kind, gathering its
-/// product, or manning a ballista ("MAN BALLISTA").
+/// product, or manning a ballista ("MAN BALLISTA"), then mining ("MINE")
+/// where the ground holds stone to dig and the tree a pile for it (M6.5).
 fn job_menu(world: &World, sprite: u16) -> JobMenu {
-    let s = world.resource::<SessionService>().settlement().expect("a town");
+    let service = world.resource::<SessionService>();
+    let s = service.settlement().expect("a town");
     let mut options = vec!["IDLE".to_string()];
     let mut jobs = vec![SpriteJob::Idle];
     for (i, kind) in s.building_kinds.iter().enumerate() {
@@ -565,6 +567,11 @@ fn job_menu(world: &World, sprite: u16) -> JobMenu {
         };
         options.push(option);
         jobs.push(SpriteJob::Staff(i as u16));
+    }
+    let stone = service.world().and_then(|w| w.terrain().mine()).is_some_and(|m| m.spec.veins == sim::mine::Veins::Stone);
+    if stone && s.stone_depot().is_some() {
+        options.push("MINE".to_string());
+        jobs.push(SpriteJob::Mine);
     }
     JobMenu { sprite, options, jobs }
 }

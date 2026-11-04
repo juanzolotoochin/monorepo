@@ -594,7 +594,7 @@ fn the_elder_interacts_its_way_through_the_town() {
     assert_eq!(state(10)["simulation"]["depots"]["tree_wood"]["items"]["wood"], picked);
     assert_eq!(state(10)["simulation"]["agents"]["elder"]["cargo"]["items"], json!({}));
     let menu = &state(14)["interact"]["menu"];
-    assert_eq!(menu["options"], json!(["IDLE", "GATHER WOOD", "MAN BALLISTA"]), "{}", state(14)["interact"]);
+    assert_eq!(menu["options"], json!(["IDLE", "GATHER WOOD", "MAN BALLISTA", "MINE"]), "{}", state(14)["interact"]);
     let simulation = &report["state"]["settlement"]["simulation"];
     assert_eq!(simulation["sprites"]["sprite_fern"]["job"], "ballista");
     assert_eq!(report["state"]["settlement"]["interact"]["menu"], Value::Null);
@@ -1162,7 +1162,8 @@ fn the_elder_bursts_the_wood_gatherer_and_waits_out_the_cooldown() {
 /// so every leftover is known and goes back to the tree. No building makes
 /// stone (M6.4 of the mining design): steps 4 to 6, which built and worked
 /// a Stone Gatherer, are the elder digging stone out of an exposed vein
-/// below the hill and carrying it up to the tree.
+/// below the hill and carrying it up to the tree, and Reed sent to mine
+/// (M6.5), fetching what the elder left on the ground.
 #[test]
 fn the_happy_path_plays_from_a_fresh_start() {
     const FPS: u32 = 20;
@@ -1200,10 +1201,10 @@ fn the_happy_path_plays_from_a_fresh_start() {
     // 5. A bundle of 5 stone from the pile; the rest stays on the ground.
     steps.extend([target("PICK UP 5 STONE"), Command::SettlementInteract]);
     let picked = inspect(&mut steps);
-    // 6. Up the ramp to the tree's stone pile.
-    // M6.5: here Reed goes to Mine and a miner sprite fetches the rest of
-    // the dug stone (and digs more) to the tree; assert it lands there.
-    steps.push(deposit("tree_stone"));
+    // 6. Reed to Mine: it fetches the rest of the dug stone from the
+    // ground (and digs more) while the elder goes up the ramp to the
+    // tree's stone pile.
+    steps.extend([job("sprite_reed", "mine"), deposit("tree_stone")]);
     let stone_stocked = inspect(&mut steps);
     // 7. A second Wood Gatherer north-east: wood from the first one's
     // output, stone from the tree, leftovers back in the tree.
@@ -1289,7 +1290,9 @@ fn the_happy_path_plays_from_a_fresh_start() {
     // 7.
     let second = building(wood_built, 1);
     assert_eq!((&second["kind"], &second["status"]), (&json!("wood_gatherer"), &json!("idle")), "{second}");
-    assert_eq!((tree(wood_built, "tree_wood", "wood"), tree(wood_built, "tree_stone", "stone")), (6, 3));
+    // 3 stone left in the tree, and whatever Reed brought meanwhile.
+    assert_eq!(tree(wood_built, "tree_wood", "wood"), 6);
+    assert!(tree(wood_built, "tree_stone", "stone") >= 3);
     assert_eq!(cargo(wood_built), &json!({}));
     // 8. Both staffed and working, and both made wood in the 6 s between.
     for i in [both, both_later] {
@@ -1313,6 +1316,11 @@ fn the_happy_path_plays_from_a_fresh_start() {
     assert_eq!(building(left, 0)["occupant"], json!({"sprite": "sprite_fern"}), "{}", building(left, 0));
     assert_eq!((&sprite(left, "sprite_fern")["job"], &sprite(left, "sprite_fern")["activity"]), (&json!("wood_gatherer"), &json!("working")));
     assert_eq!(building(left, 1)["occupant"], json!({"sprite": "sprite_ash"}));
+    // 6, later: Reed, mining, has brought the stone the elder left on the
+    // ground to the tree.
+    assert_eq!(sprite(left, "sprite_reed")["job"], "mine");
+    let left_over = on_ground - 5;
+    assert!(tree(left, "tree_stone", "stone") >= 3 + left_over, "Reed brought the {left_over} left on the ground: {}", tree(left, "tree_stone", "stone"));
     for i in [start, first_wood, stocked, at_vein, dug, picked, stone_stocked, wood_built, both, both_later, possessed, possessed_later, burst, left] {
         assert!(receipts[i]["state"]["settlement"]["balances"].as_object().unwrap().values().all(|b| b["conserved"] == true), "receipt {i}");
     }
