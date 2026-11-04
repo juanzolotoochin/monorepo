@@ -97,9 +97,17 @@ fn approach(from: FxVec2, to: FxVec2, stop: Fx) -> FxVec2 {
 
 /// Whether a threat at `from` sees `to` and can walk straight to striking
 /// distance of it: a thin line of sight all the way, and a clear walk to
-/// where it would stop. A quarry hugging a building is still seen.
+/// where it would stop. A quarry hugging a building is still seen. In
+/// sloped scenes the walk keeps to walkable ground, so a quarry up a cliff
+/// (the Sacred Tree's hill) is out of reach, and the threat walks on.
 pub(super) fn in_sight(terrain: &Terrain, from: FxVec2, to: FxVec2, stop: Fx) -> bool {
-    terrain.clear(from, to, SIGHT) && terrain.clear(from, approach(from, to, stop), WALK_CLEARANCE)
+    terrain.clear(from, to, SIGHT) && walk_clear(terrain, from, approach(from, to, stop))
+}
+
+/// Whether a threat can walk straight from `a` to `b`: clear of the
+/// terrain and, in sloped scenes, on walkable ground.
+pub(super) fn walk_clear(terrain: &Terrain, a: FxVec2, b: FxVec2) -> bool {
+    terrain.clear(a, b, WALK_CLEARANCE) && (!terrain.sloped || terrain.walkable(a, b, WALK_CLEARANCE))
 }
 
 /// Stage 2 for a chaser: a step of at most `step` meters straight at
@@ -110,7 +118,7 @@ pub(super) fn steer(position: &mut FxVec2, target: FxVec2, stop: Fx, step: Fx, t
         return;
     }
     let next = *position + (target - *position) * (step.min(gap - stop) / gap);
-    if terrain.clear(*position, next, WALK_CLEARANCE) {
+    if walk_clear(terrain, *position, next) {
         *position = next;
     }
 }

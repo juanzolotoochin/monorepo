@@ -306,6 +306,9 @@ pub struct SceneSetup {
     pub dig_layers: Option<u8>,
     /// Generates the arena's ground as a mine from this seed.
     pub mine: Option<u64>,
+    /// Raises this hill in the mine's middle, on the arena's center (the
+    /// tree's tile; its `center` is set there), undiggable.
+    pub hill: Option<crate::mine::Hill>,
     pub spawn: [Fx; 3],
     pub piles: Option<PileSetup>,
     pub memory_trial: bool,
@@ -595,6 +598,11 @@ impl Settlement {
                 return Err(format!("a town's mine yields {:?}, which the scenario has no item for", crate::mine::STONE_ID));
             }
             terrain.generate_mine(seed, at([setup.spawn[0], setup.spawn[2]]), veins);
+            if let Some(hill) = setup.hill {
+                terrain.raise_hill(hill)?;
+            }
+        } else if setup.hill.is_some() {
+            return Err("a scene's hill stands in a mine; give it one".into());
         }
         terrain.revision += 1;
         settlement.spawn = at([setup.spawn[0], setup.spawn[2]]);
@@ -1101,6 +1109,8 @@ mod construction_tests;
 mod fire_tests;
 #[cfg(test)]
 mod health_tests;
+#[cfg(test)]
+mod hill_tests;
 #[cfg(test)]
 mod ground_pile_tests;
 #[cfg(test)]

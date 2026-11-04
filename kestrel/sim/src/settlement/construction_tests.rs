@@ -184,7 +184,7 @@ fn a_placement_is_refused_for_each_reason() {
     let east = at(&sim, 5.0, 0.0);
     let output = check(&sim, STONE_GATHERER, east).expect("open ground to the east");
     assert_eq!(check(&sim, 9, east), Err(PlacementRefusal::UnknownKind));
-    assert_eq!(check(&sim, STONE_GATHERER, at(&sim, 8.5, 0.0)), Err(PlacementRefusal::OutsideArena));
+    assert_eq!(check(&sim, STONE_GATHERER, at(&sim, 127.5, 0.0)), Err(PlacementRefusal::OutsideArena));
     assert_eq!(check(&sim, STONE_GATHERER, at(&sim, 0.5, -0.5)), Err(PlacementRefusal::Blocked), "the tree");
     assert_eq!(check(&sim, STONE_GATHERER, at(&sim, -4.6, 1.2)), Err(PlacementRefusal::Blocked), "the Wood Gatherer");
     assert_eq!(check(&sim, STONE_GATHERER, at(&sim, 0.0, 3.6)), Err(PlacementRefusal::Blocked), "the elder");

@@ -15,7 +15,7 @@ use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
 use crate::hash::{StateHash, StateHasher};
-use crate::mine::{Mine, MineSpec, Veins};
+use crate::mine::{Hill, Mine, MineSpec, Veins};
 
 /// Extra separation kept from obstacles, as in the original game (1.5 cm).
 pub const CLEARANCE_MARGIN: Fx = Fx::from_bits(64_424_509); // 0.015
@@ -256,9 +256,22 @@ impl Terrain {
     pub fn generate_mine(&mut self, seed: u64, spawn: FxVec2, veins: Veins) {
         let min = Self::pit_tile(self.min());
         let size = (Self::pit_tile(self.max()).0 - min.0 + 1) as u32;
-        self.mine = Some(MineSpec { seed, min, size, landing: Self::pit_tile(spawn), layers: self.max_layers, veins });
+        self.mine = Some(MineSpec { seed, min, size, landing: Self::pit_tile(spawn), layers: self.max_layers, veins, hill: None });
         self.generated = Generated::default();
         self.revision += 1;
+    }
+
+    /// Raises `hill` in the middle of the mine, centered on the arena's
+    /// center tile (its `center` is set to it), and makes it undiggable.
+    pub fn raise_hill(&mut self, hill: Hill) -> Result<(), String> {
+        hill.validate()?;
+        let Some(spec) = &mut self.mine else { return Err("a hill needs a mine to stand in".into()) };
+        let hill = Hill { center: Self::pit_tile(self.center), ..hill };
+        spec.hill = Some(hill);
+        self.undiggable.extend(hill.ranges());
+        self.generated = Generated::default();
+        self.revision += 1;
+        Ok(())
     }
 
     /// [`Terrain::ground`], with drops at zero.
@@ -637,6 +650,12 @@ impl StateHash for Terrain {
             }
             if mine.veins != Veins::Ore {
                 h.write_u64(mine.veins as u64);
+            }
+            if let Some(hill) = &mine.hill {
+                h.write_u64((hill.center.0 as u32 as u64) << 32 | hill.center.1 as u32 as u64);
+                for v in [hill.plateau, hill.steps, hill.ramp_width, hill.ramp_length, hill.foot] {
+                    h.write_u64(v as u64);
+                }
             }
         }
         // Only when set, as below.

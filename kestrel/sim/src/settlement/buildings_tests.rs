@@ -201,7 +201,7 @@ fn a_prebuilt_building_must_stand_clear() {
     assert!(other.contains("building 1 (stone_gatherer)") && other.contains("another building"), "{other}");
     let pile = error(&|s| s.buildings[0].position = at(-2.4, 2.2));
     assert!(pile.contains("covers depot tree_wood's dock"), "{pile}");
-    let edge = error(&|s| s.buildings[0].position = at(8.5, 0.0));
+    let edge = error(&|s| s.buildings[0].position = at(127.5, 0.0));
     assert!(edge.contains("reaches outside the arena"), "{edge}");
     let spawn = error(&|s| s.buildings[0].position = at(0.0, 3.6));
     assert!(spawn.contains("spawns inside an obstacle"), "{spawn}");

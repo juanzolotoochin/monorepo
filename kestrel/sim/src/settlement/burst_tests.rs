@@ -27,7 +27,12 @@ fn sim_with(edit: impl FnOnce(&mut Scenario)) -> Simulation {
     let mut scenario = Scenario::parse(SACRED_TREE).unwrap();
     edit(&mut scenario);
     // The tree's trunk, as the scene's architecture blocks it.
-    let world = World::new_settlement(1, &Content::builtin(), &scenario, &[Disc { center: FxVec2::ZERO, radius: Fx::ONE }]).unwrap();
+    let mut world = World::new_settlement(1, &Content::builtin(), &scenario, &[Disc { center: FxVec2::ZERO, radius: Fx::ONE }]).unwrap();
+    // A respawn puts the elder back where it starts, as the scene's spawn
+    // does (a bare scenario's is the world's corner, past the 256 m map's
+    // edge).
+    let s = world.settlement_mut();
+    s.spawn = s.agents[ELDER as usize].body.position;
     Simulation::from_world(world, 1)
 }
 

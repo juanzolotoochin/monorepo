@@ -1,10 +1,11 @@
-// The Sacred Tree town MVP: a clearing with the tree at its center. Its
-// stock is two piles beside it, one per item (each takes only its own),
+// The Sacred Tree town MVP: a clearing with the tree at its center, on a
+// hill in the middle of 256 x 256 m of ground to dig (the scene's mine).
+// Its stock is two piles beside it, one per item (each takes only its own),
 // starting empty. The elder carries a bundle of one item, up to 5. One Wood
 // Gatherer stands built; the clearing's east side has room for more. A
 // ballista can be built too, and shoots while manned and stocked.
 // Positions are meters from the clearing's center (the scene's x and z).
-(id: "sacred_tree", extent: 9.0, items: [
+(id: "sacred_tree", extent: 128.0, items: [
 (id: "wood", label: "WOOD", skin: "item_lumber", scale: 0.45),
 (id: "stone", label: "STONE", skin: "item_iron", scale: 0.45)
 ], depots: [
@@ -50,17 +51,18 @@
 // Gatherer and a ballista, and stock it), then a wave every 90 s, each as
 // big as the last or bigger: 3, 4, 5, 7, 8 and 8 ghouls. A scenario has at
 // most 8 waves, so each entry here is a lane that sends one ghoul a wave
-// (`every: 90`) from its first one on: the north lanes 2.5 s apart make a
-// column, the west lane joins at the third wave and the east ones at the
-// fourth and fifth. Each walks to a spot beside the trunk (outside its
-// disc) and breaches the tree there; ignored, they fell it in the fifth.
+// (`every: 90`) from its first one on: the east lanes 2.5 s apart make a
+// column, and the west ones join at the third, fourth and fifth waves.
+// They come from a ring 40 m out, one side per ramp up the tree's hill
+// (the scene's), walk up it to a spot beside the trunk (outside its disc)
+// and breach the tree there; ignored, they fell it in the fifth.
 waves: [
-(id: "north_1", position: (0.0, -8.5), target: (0.0, -1.8), character: "ghoul_sacred_tree", first: 210.0, every: 90.0, count: 6),
-(id: "north_2", position: (0.0, -8.5), target: (0.0, -1.8), character: "ghoul_sacred_tree", first: 212.5, every: 90.0, count: 6),
-(id: "north_3", position: (0.0, -8.5), target: (0.0, -1.8), character: "ghoul_sacred_tree", first: 215.0, every: 90.0, count: 6),
-(id: "north_4", position: (0.0, -8.5), target: (0.0, -1.8), character: "ghoul_sacred_tree", first: 307.5, every: 90.0, count: 5),
-(id: "north_5", position: (0.0, -8.5), target: (0.0, -1.8), character: "ghoul_sacred_tree", first: 490.0, every: 90.0, count: 3),
-(id: "west", position: (-8.5, -2.5), target: (-1.8, -0.6), character: "ghoul_sacred_tree", first: 391.0, every: 90.0, count: 4),
-(id: "east_1", position: (8.5, -2.5), target: (1.8, -0.6), character: "ghoul_sacred_tree", first: 481.0, every: 90.0, count: 3),
-(id: "east_2", position: (8.5, -2.5), target: (1.8, -0.6), character: "ghoul_sacred_tree", first: 573.5, every: 90.0, count: 2)
+(id: "east_1", position: (40.0, 0.0), target: (1.8, -0.6), character: "ghoul_sacred_tree", first: 210.0, every: 90.0, count: 6),
+(id: "east_2", position: (40.0, 0.0), target: (1.8, -0.6), character: "ghoul_sacred_tree", first: 212.5, every: 90.0, count: 6),
+(id: "east_3", position: (40.0, 0.0), target: (1.8, -0.6), character: "ghoul_sacred_tree", first: 215.0, every: 90.0, count: 6),
+(id: "east_4", position: (40.0, 0.0), target: (1.8, -0.6), character: "ghoul_sacred_tree", first: 307.5, every: 90.0, count: 5),
+(id: "east_5", position: (40.0, 0.0), target: (1.8, -0.6), character: "ghoul_sacred_tree", first: 490.0, every: 90.0, count: 3),
+(id: "west_1", position: (-40.0, 0.0), target: (-1.8, -0.6), character: "ghoul_sacred_tree", first: 391.0, every: 90.0, count: 4),
+(id: "west_2", position: (-40.0, 0.0), target: (-1.8, -0.6), character: "ghoul_sacred_tree", first: 481.0, every: 90.0, count: 3),
+(id: "west_3", position: (-40.0, 0.0), target: (-1.8, -0.6), character: "ghoul_sacred_tree", first: 573.5, every: 90.0, count: 2)
 ], base_health: 20, player_health: 6)

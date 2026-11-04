@@ -8,17 +8,17 @@
 //!
 //! The second soak plays the map's waves (M5.6) while doing all that and
 //! defending: stocking, manning, possessing and firing a ballista,
-//! throwing fireballs, and putting broken buildings back up.
+//! throwing fireballs, and putting broken buildings back up. Both play on
+//! the map: the town on its hill in the 256 m mine (M6.3).
 
 use content::scenario::Scenario;
-use content::{Content, TICKS_PER_SECOND};
+use content::TICKS_PER_SECOND;
 use fx::{Fx, FxVec2};
 
 use super::avatar::Intent;
 use super::haulers::RETRY_TICKS;
 use super::{AgentIx, BuildingIx, BuildingKindIx, DepotIx, Event, InteractTarget, Interaction, ItemIx, Seat, Settlement, Slot, SpriteJob, Step};
-use crate::terrain::Disc;
-use crate::{Command, CommandKind, PlayerId, Simulation, World};
+use crate::{Command, CommandKind, PlayerId, Simulation};
 
 const SACRED_TREE: &str = include_str!("../../../app/assets/levels/sacred_tree_supply.ron");
 
@@ -32,11 +32,16 @@ const TREE: [DepotIx; 2] = [0, 1];
 const WOOD_GATHERER: BuildingKindIx = 0;
 const STONE_GATHERER: BuildingKindIx = 1;
 
-/// The scene, its tree's trunk blocking the ground as the architecture does.
+/// The scene on its map: the hill in the middle of its mine (M6.3).
 fn sacred_tree() -> Simulation {
-    let scenario = Scenario::parse(SACRED_TREE).unwrap();
-    let world = World::new_settlement(1, &Content::builtin(), &scenario, &[Disc { center: FxVec2::ZERO, radius: Fx::ONE }]).unwrap();
-    Simulation::from_world(world, 1)
+    super::hill_tests::sacred_tree_map(Scenario::parse(SACRED_TREE).unwrap())
+}
+
+/// The map with no waves.
+fn calm_sacred_tree() -> Simulation {
+    let mut scenario = Scenario::parse(SACRED_TREE).unwrap();
+    scenario.waves.clear();
+    super::hill_tests::sacred_tree_map(scenario)
 }
 
 fn command(kind: CommandKind) -> Command {
@@ -56,8 +61,8 @@ struct Soak {
 }
 
 impl Soak {
-    fn new() -> Self {
-        Soak { sim: sacred_tree(), waiting: [0; 4], longest: 0 }
+    fn new(sim: Simulation) -> Self {
+        Soak { sim, waiting: [0; 4], longest: 0 }
     }
 
     fn s(&self) -> &Settlement {
@@ -231,10 +236,11 @@ impl Soak {
 /// Bursting when ready, carries and drops what an output holds, and every
 /// fourth puts up a building. Nothing strands a sprite, every invariant
 /// holds on every tick, and at the end every sprite with a job and a free
-/// building of its kind is at work.
+/// building of its kind is at work. No waves come: the east one's column
+/// would walk through the spots it builds on.
 #[test]
 fn possess_leave_reassign_and_build_cycles_strand_no_sprite() {
-    let mut soak = Soak::new();
+    let mut soak = Soak::new(calm_sacred_tree());
     // Where buildings go, in turn: around the clearing's open sides.
     let spots = [(5, 0, STONE_GATHERER), (4, 4, WOOD_GATHERER), (4, -4, STONE_GATHERER), (-4, -4, WOOD_GATHERER)];
     let drops = [(3, -2), (-2, -3), (1, -4), (-3, -1)];
@@ -470,28 +476,28 @@ impl Soak {
     }
 }
 
-/// The map played through all its waves (12 minutes) by a town that
-/// defends: before the first wave it puts up a ballista beside the tree, a
-/// Stone Gatherer on the east lane's way and a Wood Gatherer near the north
-/// one's; then it cycles reassigning the sprites (Ash always on the
-/// ballista, the others walking to gatherers across the waves' ways or
-/// idling), stocking the ballista, possessing it to shoot and throw
+/// The map played through all its waves (13 minutes, the last ghouls
+/// walking up from the ring) by a town that defends: before the first wave
+/// it puts up a ballista beside the tree, a Stone Gatherer on the west
+/// lane's way and a Wood Gatherer near the east column's; then it cycles
+/// reassigning the sprites (Ash always on the ballista, the others walking
+/// to gatherers across the waves' ways or idling), stocking the ballista, possessing it to shoot and throw
 /// fireballs while ghouls are about, possessing a gatherer to Burst while
 /// none are, and putting broken buildings back up. Every tick checks every
 /// invariant and the balances, that no sprite waits past a retry with a
 /// slot free or stays dead past its return; the tree stands.
 #[test]
 fn defending_against_the_waves_strands_no_sprite() {
-    let mut soak = Soak::new();
+    let mut soak = Soak::new(sacred_tree());
     let mut seen = Seen::default();
-    let ballista = soak.build(BALLISTA, soak.point(-1.4, -3.0));
-    let east = soak.build(STONE_GATHERER, soak.point(4.6, -2.6));
-    let north = soak.build(WOOD_GATHERER, soak.point(-1.6, -6.0));
+    let ballista = soak.build(BALLISTA, soak.point(3.0, -1.4));
+    let west = soak.build(STONE_GATHERER, soak.point(-4.6, -2.6));
+    let east = soak.build(WOOD_GATHERER, soak.point(6.0, -1.6));
     soak.empty_bundle();
-    let gatherers = [0, east, north];
+    let gatherers = [0, west, east];
     assert!(soak.sim.world().tick() < 210 * HZ, "built in the calm start");
     let mut cycle = 0usize;
-    while soak.sim.world().tick() < 720 * HZ {
+    while soak.sim.world().tick() < 775 * HZ {
         // Ash mans the ballista; the others rotate over the gatherers and
         // idling every fourth cycle, so they walk across the clearing and
         // stay a while in buildings on the waves' ways.
@@ -499,7 +505,7 @@ fn defending_against_the_waves_strands_no_sprite() {
         let mut jobs = vec![command(CommandKind::SetSpriteJob { agent: SPRITES[0], job: SpriteJob::Staff(BALLISTA) })];
         jobs.extend(SPRITES[1..].iter().enumerate().map(|(i, &agent)| command(CommandKind::SetSpriteJob { agent, job: rota[(cycle / 4 + i) % 3] })));
         soak.watch(&jobs, &mut seen);
-        for b in [ballista, east, north] {
+        for b in [ballista, west, east] {
             if !soak.s().buildings[b as usize].built() {
                 soak.rebuild(b, &mut seen);
             }

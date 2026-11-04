@@ -863,7 +863,7 @@ mod tests {
         assert!(invalid(|s| s.building_kinds[0].output_distance = Fx::HALF));
         assert!(invalid(|s| s.building_kinds[0].health = 0));
         assert!(invalid(|s| s.buildings[0].kind = "castle".into()));
-        assert!(invalid(|s| s.buildings[0].position = [Fx::from_int(20), Fx::ZERO]));
+        assert!(invalid(|s| s.buildings[0].position = [Fx::from_int(130), Fx::ZERO]));
         assert!(invalid(|s| s.sprites[0].id = "elder".into()));
     }
 

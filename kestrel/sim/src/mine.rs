@@ -1,8 +1,10 @@
 //! Generated mining ground: terraced hills a quarter meter per step, a flat
 //! landing around the spawn, raised mesas, and ore veins in the diggable
 //! layers: the dig lab's three minerals, or a town's stone ([`Veins`]).
-//! Integer math on a seed, so every machine generates the same ground; only
-//! the [`MineSpec`] is state (see [`crate::terrain::Terrain::mine`]).
+//! A town's mine can have an authored [`Hill`] in the middle instead of the
+//! landing. Integer math on a seed, so every machine generates the same
+//! ground; only the [`MineSpec`] is state (see
+//! [`crate::terrain::Terrain::mine`]).
 
 use fx::Fx;
 use serde::{Deserialize, Serialize};
@@ -41,6 +43,106 @@ pub struct MineSpec {
     /// What the veins hold.
     #[serde(default)]
     pub veins: Veins,
+    /// The authored hill in the middle, if any, in place of the landing.
+    #[serde(default)]
+    pub hill: Option<Hill>,
+}
+
+/// An authored hill (the Sacred Tree's, M7 of the mining design): a square
+/// plateau `steps` up from the ground around it, its sides cliffs, with
+/// two ramps down from the middle of its -x and +x sides. Round its foot
+/// the generated terraces stay flat for `foot` tiles, then rise at most a
+/// step every three tiles, as round the landing. The plateau's top is the
+/// mine's datum: [`Mine::height`] measures from it, so a town on it stands
+/// at zero as on flat ground, and the ground around lies the hill's height
+/// below. Nobody digs the plateau or the ramps ([`Hill::ranges`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hill {
+    /// The plateau's middle tile (the tree's).
+    pub center: (i32, i32),
+    /// The plateau's half-width in tiles: it spans `2 * plateau + 1`.
+    pub plateau: u8,
+    /// How high it stands, in terrace steps ([`STEP`]).
+    pub steps: u8,
+    /// Each ramp's width in tiles, centered on the plateau's (an even width
+    /// rounds up to odd).
+    pub ramp_width: u8,
+    /// Each ramp's length in tiles, out from the plateau's side. It falls
+    /// evenly to the foot, so it is at least half `steps` long to stay
+    /// walkable (a layer, two steps, per tile).
+    pub ramp_length: u8,
+    /// How far the flat ground reaches from the plateau, in tiles.
+    pub foot: u8,
+}
+
+/// How many stone veins a hill guarantees at the surface
+/// ([`Hill::exposed_veins`]).
+pub const EXPOSED_VEINS: usize = 4;
+/// How many layers deep a guaranteed vein goes.
+const EXPOSED_VEIN_LAYERS: u8 = 2;
+
+impl Hill {
+    /// Why this hill can't be raised, if it can't: a plateau or ramps too
+    /// small to stand on, or ramps too steep to walk.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.plateau < 2 || self.steps == 0 || self.ramp_width < 3 || self.ramp_length == 0 {
+            return Err(format!("a hill needs a plateau, a height and ramps: {self:?}"));
+        }
+        if self.ramp_width / 2 >= self.plateau {
+            return Err(format!("a hill's ramps are wider than its plateau: {self:?}"));
+        }
+        if self.steps as u32 > 2 * self.ramp_length as u32 {
+            return Err(format!("a hill's ramps are too steep to walk: {self:?}"));
+        }
+        Ok(())
+    }
+
+    /// The tile ranges nobody digs, each its first and last tile on both
+    /// axes (as [`crate::terrain::Terrain::undiggable`] has them): the
+    /// plateau and its two ramps.
+    pub fn ranges(&self) -> [((i32, i32), (i32, i32)); 3] {
+        let (x, y) = self.center;
+        let (p, w, l) = (self.plateau as i32, (self.ramp_width / 2) as i32, self.ramp_length as i32);
+        [((x - p, y - p), (x + p, y + p)), ((x - p - l, y - w), (x - p - 1, y + w)), ((x + p + 1, y - w), (x + p + l, y + w))]
+    }
+
+    /// The hill's steps at a tile on the plateau or a ramp. A ramp tile
+    /// `k` tiles out from the plateau has `steps * (length - k) / length`,
+    /// so its last tile is down at the foot.
+    fn steps_at(&self, x: i32, y: i32) -> Option<u8> {
+        let (dx, dy) = ((x - self.center.0).abs(), (y - self.center.1).abs());
+        let (p, w, l) = (self.plateau as i32, (self.ramp_width / 2) as i32, self.ramp_length as i32);
+        if dx <= p && dy <= p {
+            return Some(self.steps);
+        }
+        let out = dx - p;
+        (dy <= w && out <= l).then(|| (self.steps as i32 * (l - out) / l) as u8)
+    }
+
+    /// How far a tile is from the plateau, in whole tiles (0 on it).
+    fn from_plateau(&self, x: i32, y: i32) -> i32 {
+        let p = self.plateau as i32;
+        let dx = ((x - self.center.0).abs() - p).max(0);
+        let dy = ((y - self.center.1).abs() - p).max(0);
+        ((dx * dx + dy * dy) as u32).isqrt() as i32
+    }
+
+    /// The middle tiles of the stone veins a town's hill guarantees at the
+    /// surface (M5 of the mining design), from the seed: one in each
+    /// quarter round it, one axis 2 to 13 tiles past the plateau's side and
+    /// the other 3 to 21 past a ramp's, so each is off the plateau and
+    /// beside the ramps; round the Sacred Tree's hill, 18 to 37 tiles from
+    /// the tree. Each is a plus of five tiles, stone two layers down.
+    pub fn exposed_veins(&self, seed: u64) -> [(i32, i32); EXPOSED_VEINS] {
+        let (p, w) = (self.plateau as i32, (self.ramp_width / 2) as i32);
+        std::array::from_fn(|quarter| {
+            let h = hash(seed, self.center.0, self.center.1, 80 + quarter as u32);
+            let (far, near) = (p + 2 + (h % 12) as i32, w + 3 + ((h >> 8) % 19) as i32);
+            let (ax, ay) = if h & (1 << 16) == 0 { (far, near) } else { (near, far) };
+            let (sx, sy) = [(1, 1), (-1, 1), (-1, -1), (1, -1)][quarter];
+            (self.center.0 + sx * ax, self.center.1 + sy * ay)
+        })
+    }
 }
 
 /// What a mine's veins hold.
@@ -73,15 +175,21 @@ impl Mine {
         let mut heights = vec![0; size * size];
         let layers = spec.layers as usize;
         let mut ore = vec![0; size * size * layers];
+        // A town's hill guarantees a few stone veins at the surface.
+        let exposed = match (spec.veins, spec.hill) {
+            (Veins::Stone, Some(hill)) => hill.exposed_veins(spec.seed).to_vec(),
+            _ => Vec::new(),
+        };
         for row in 0..size {
             for column in 0..size {
                 let (x, y) = (spec.min.0 + column as i32, spec.min.1 + row as i32);
                 let i = row * size + column;
                 heights[i] = steps(spec, x, y);
+                let vein_top = exposed.iter().any(|&(vx, vy)| (x - vx).abs() + (y - vy).abs() <= 1);
                 for layer in 0..spec.layers {
                     let mineral = match spec.veins {
                         Veins::Ore => vein(spec.seed, x, y, layer),
-                        Veins::Stone => stone(spec.seed, x, y, layer).then_some(STONE),
+                        Veins::Stone => (stone(spec.seed, x, y, layer) || (vein_top && layer < EXPOSED_VEIN_LAYERS)).then_some(STONE),
                     };
                     ore[i * layers + layer as usize] = mineral.map_or(0, |m| m + 1);
                 }
@@ -101,9 +209,11 @@ impl Mine {
         self.index(tile).map(|i| self.heights[i])
     }
 
-    /// The tile's ground height before digging.
+    /// The tile's ground height before digging: from a hill's plateau, if
+    /// the mine has one ([`Hill`]), else from the lowest ground.
     pub fn height(&self, tile: (i32, i32)) -> Option<Fx> {
-        self.steps(tile).map(|s| STEP.mul_int(s as i64))
+        let datum = self.spec.hill.map_or(0, |hill| hill.steps as i64);
+        self.steps(tile).map(|s| STEP.mul_int(s as i64 - datum))
     }
 
     /// The mineral in a tile's `layer` (0 is the top), if any.
@@ -123,17 +233,26 @@ impl Mine {
 
 /// Terrace steps at a tile: two octaves of hills, mesas a meter up, and the
 /// landing flat, a round clearing that ramps up a step every three tiles
-/// past its edge.
+/// past its edge. With a hill, the hill instead, and the flat round its
+/// foot ([`Hill`]).
 fn steps(spec: MineSpec, x: i32, y: i32) -> u8 {
     let seed = spec.seed;
+    if let Some(steps) = spec.hill.and_then(|hill| hill.steps_at(x, y)) {
+        return steps;
+    }
     let hills = (noise(seed, x, y, 40, 1) * 2 + noise(seed, x, y, 14, 2)) / 3;
     let mut steps = (hills.saturating_sub(64) * 10 / 128).min(9);
     if noise(seed, x, y, 22, 3) > 178 {
         steps += 4;
     }
-    let (dx, dy) = (x - spec.landing.0, y - spec.landing.1);
-    let from_landing = ((dx * dx + dy * dy) as u32).isqrt() as i32;
-    let cap = ((from_landing - LANDING).max(0) / 3) as u32;
+    let cap = match spec.hill {
+        Some(hill) => ((hill.from_plateau(x, y) - hill.foot as i32).max(0) / 3) as u32,
+        None => {
+            let (dx, dy) = (x - spec.landing.0, y - spec.landing.1);
+            let from_landing = ((dx * dx + dy * dy) as u32).isqrt() as i32;
+            ((from_landing - LANDING).max(0) / 3) as u32
+        }
+    };
     steps.min(cap) as u8
 }
 
@@ -184,7 +303,7 @@ mod tests {
     use super::*;
 
     fn spec(seed: u64) -> MineSpec {
-        MineSpec { seed, min: (-128, -128), size: 257, landing: (0, 2), layers: MAX_LAYERS, veins: Veins::Ore }
+        MineSpec { seed, min: (-128, -128), size: 257, landing: (0, 2), layers: MAX_LAYERS, veins: Veins::Ore, hill: None }
     }
 
     /// A town's mine has stone and nothing else: some at the surface, more

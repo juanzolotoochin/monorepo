@@ -2,7 +2,8 @@
 //! navigation in fixed point. Paths are string-pulled into straight segments.
 //! Every query is a pure function of the terrain, so the read phase can plan
 //! in parallel. On big arenas (mines), a query searches a window around its
-//! start and goal instead of the whole arena.
+//! start and goal (and a mine's hill, with its ramps) instead of the whole
+//! arena.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -16,6 +17,8 @@ const SPACING: Fx = Fx::HALF;
 const WHOLE_ARENA: Fx = Fx::from_bits(32 << 32);
 /// Bigger ones search this far around the start and goal.
 const WINDOW_MARGIN: Fx = Fx::from_bits(16 << 32);
+/// How far past a hill's sides and ramps the window reaches, in tiles.
+const HILL_MARGIN: i32 = 4;
 /// Nodes this close to a point are tried first for its nearest visible node.
 const NEAR_NODES: i64 = 4;
 
@@ -48,6 +51,18 @@ impl Grid<'_> {
             y0 = node(start.y.min(goal.y) - WINDOW_MARGIN, min.y);
             x1 = node(start.x.max(goal.x) + WINDOW_MARGIN, min.x);
             y1 = node(start.y.max(goal.y) + WINDOW_MARGIN, min.y);
+            // A hill's only ways up are its ramps, whose feet may lie past
+            // the margin (from the plateau to the ground below one of its
+            // sides): the window always holds the hill and its ramps' feet.
+            if let Some(hill) = terrain.mine.and_then(|m| m.hill) {
+                let (half, reach) = (hill.plateau as i32 + HILL_MARGIN, hill.plateau as i32 + hill.ramp_length as i32 + HILL_MARGIN);
+                let corner = |dx: i32, dy: i32| Terrain::pit_center((hill.center.0 + dx, hill.center.1 + dy));
+                let (low, high) = (corner(-reach, -half), corner(reach, half));
+                x0 = x0.min(node(low.x, min.x));
+                y0 = y0.min(node(low.y, min.y));
+                x1 = x1.max(node(high.x, min.x));
+                y1 = y1.max(node(high.y, min.y));
+            }
         }
         Grid {
             terrain,

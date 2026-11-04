@@ -168,7 +168,8 @@ fn chunk_mesh(terrain: &Terrain, center: IVec2, extent: i32, key: IVec2) -> Mesh
             let a = IVec2::new(x, y);
             let top = ground(a);
             let steps = mine.and_then(|m| m.steps(tile(a))).unwrap_or(0);
-            let base = steps as f32 * STEP.to_f32();
+            // Undug ground, from the mine's datum (a hill's plateau).
+            let base = mine.and_then(|m| m.height(tile(a))).map_or(0.0, |h| h.to_f32());
             let dug = terrain.pit(tile(a));
             let shade = if (x + y) & 1 == 0 { 1.0 } else { 0.94 };
             let color = if dug == 0 {

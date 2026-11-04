@@ -6,6 +6,8 @@ exports_files(
         "levels/combat_arena_supply.ron",
         "levels/laser_pit_supply.ron",
         "levels/forest_supply.ron",
+        # The sim's hill tests read its mine line.
+        "levels/sacred_tree.ron",
         "levels/sacred_tree_supply.ron",
     ],
     visibility = ["//kestrel:__subpackages__"],

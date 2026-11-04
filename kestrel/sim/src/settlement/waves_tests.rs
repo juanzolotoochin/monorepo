@@ -1,16 +1,15 @@
 //! The Sacred Tree's waves on the map (M5.6): a calm start, then ghouls on
-//! a timer from the clearing's edges. These tests play the map's own
+//! a timer from a ring 40 m out, up the hill's ramps. These tests play the map's own
 //! waves against a town that ignores them and against one that defends,
 //! so the numbers in the supply keep the defence mattering without being
 //! needed every second. Every tick checks every invariant.
 
 use content::scenario::{Building, Scenario, Stack, Wave};
-use content::{Content, TICKS_PER_SECOND};
-use fx::{Fx, FxVec2};
+use content::TICKS_PER_SECOND;
+use fx::Fx;
 
 use super::{AgentIx, BuildingIx, BuildingKindIx, DepotIx, Event, ItemIx, Seat, Settlement, SpriteJob};
-use crate::terrain::Disc;
-use crate::{Command, CommandKind, PlayerId, Simulation, World};
+use crate::{Command, CommandKind, PlayerId, Simulation};
 
 const SACRED_TREE: &str = include_str!("../../../app/assets/levels/sacred_tree_supply.ron");
 
@@ -23,14 +22,15 @@ const BALLISTA_KIND: BuildingKindIx = 2;
 /// When the map's first ghoul comes: the calm start (the supply's first
 /// wave).
 const CALM: u64 = 210 * HZ;
-/// Every lane has sent all its ghouls by then, and the last have arrived.
-const LAST: u64 = 720 * HZ;
+/// Every lane has sent all its ghouls by then, and the last have walked up
+/// from the ring and arrived.
+const LAST: u64 = 775 * HZ;
 
 fn fx(v: f64) -> Fx {
     Fx::from_bits((v * 4294967296.0).round() as i64)
 }
 
-/// The map as it ships, with `ballistas` built at scenario points and
+/// The map as it ships (the hill in its mine), with `ballistas` built at scenario points and
 /// plenty of stone in the tree to stock them from.
 fn town(ballistas: &[[f64; 2]]) -> Simulation {
     let mut scenario = Scenario::parse(SACRED_TREE).unwrap();
@@ -38,8 +38,7 @@ fn town(ballistas: &[[f64; 2]]) -> Simulation {
         scenario.buildings.push(Building { kind: "ballista".into(), position: [fx(x), fx(y)] });
     }
     scenario.depots[TREE_STONE as usize].stock.push(Stack { item: "stone".into(), units: 400 });
-    let world = World::new_settlement(1, &Content::builtin(), &scenario, &[Disc { center: FxVec2::ZERO, radius: Fx::ONE }]).unwrap();
-    Simulation::from_world(world, 1)
+    super::hill_tests::sacred_tree_map(scenario)
 }
 
 fn settlement(sim: &Simulation) -> &Settlement {
@@ -136,11 +135,18 @@ fn an_undefended_town_has_its_calm_start_then_falls_to_the_waves() {
     assert_eq!(spawned, s.threats.len() as u32 + tally.breaches + tally.kills, "every ghoul breached, died or is still out");
 }
 
+/// How much longer a ghoul walks from the ring 40 m out than it did from
+/// the clearing's edge 8.5 m out, before the big map (M6.3): 31.5 m at its
+/// 0.6 m/s. The restocks wait for it, to come before and during the
+/// fighting as they did.
+const MARCH: u64 = 52 * HZ;
+
 /// Plays the map's waves against ballistas at `spots` (scenario meters),
-/// each manned by a sprite, their stone topped up 5 s before each wave and,
-/// with `mid_wave`, once more 12 s into it, as a player would on one trip
-/// from the tree. Returns the tree's health at the end and what happened.
-fn defend(spots: &[[f64; 2]], mid_wave: bool) -> (u32, Tally) {
+/// each manned by a sprite, their stone topped up 5 s before each wave
+/// reaches the old clearing's edge (`MARCH` after it starts), as a player
+/// would on one trip from the tree. Returns the tree's health at the end
+/// and what happened.
+fn defend(spots: &[[f64; 2]]) -> (u32, Tally) {
     let mut sim = town(spots);
     let mut tally = Tally::default();
     let starts = wave_starts(settlement(&sim));
@@ -148,7 +154,7 @@ fn defend(spots: &[[f64; 2]], mid_wave: bool) -> (u32, Tally) {
     step(&mut sim, &man, &mut tally);
     while sim.world().tick() < LAST && tally.fell_at.is_none() {
         let t = sim.world().tick();
-        if starts.iter().any(|&start| start == t + 5 * HZ || (mid_wave && start + 12 * HZ == t)) {
+        if starts.iter().any(|&start| start + MARCH == t + 5 * HZ) {
             for b in 1..=spots.len() {
                 restock(&mut sim, b as BuildingIx);
             }
@@ -161,26 +167,32 @@ fn defend(spots: &[[f64; 2]], mid_wave: bool) -> (u32, Tally) {
     (s.health, tally)
 }
 
-/// Beside the tree, off the north column's way.
-const WEST_OF_NORTH: [f64; 2] = [-1.4, -3.0];
-const EAST_OF_NORTH: [f64; 2] = [1.6, -2.8];
+/// Beside the tree, off the way of the column up the east ramp, in reach
+/// of where it ends.
+const EAST_OF_TREE: [f64; 2] = [3.0, -1.4];
+/// Beside the tree, off the way of the lanes up the west ramp, in reach of
+/// where they end.
+const WEST_OF_TREE: [f64; 2] = [-3.0, -1.4];
 
-/// Defence matters, but not every second. One manned ballista stocked only
-/// between waves runs dry in the bigger ones (a ghoul needs two bolts and
-/// the store holds ten), is broken while empty and the tree barely stands.
-/// The same ballista reloaded once mid-wave keeps most of the tree's health
-/// though some ghouls breach; two stocked between waves stop nearly all.
+/// The defence is a question of two entrances (M7). A manned ballista by
+/// the east ramp's end, stocked between waves, shoots its whole column (a
+/// ghoul needs two bolts, the store holds ten and the column brings 3 to 5
+/// a wave), but the west ramp's lanes walk in and breach; a second by the
+/// west ramp's end stops nearly all of them.
+///
+/// Before the big map, every lane ended by one ballista beside the tree,
+/// which ran dry in the bigger waves unless reloaded mid-wave; with the
+/// lanes split over two ramps that lever is gone, for M6.7's tuning.
 #[test]
-fn one_ballista_reloaded_mid_wave_or_two_keep_the_tree_standing() {
-    let (dry, tally) = defend(&[WEST_OF_NORTH], false);
-    eprintln!("one ballista, between waves: tree {dry} {tally:?}");
-    assert!(dry < 8, "one ballista with no reload mid-wave runs dry: tree {dry}, {tally:?}");
-    let (reloaded, tally) = defend(&[WEST_OF_NORTH], true);
-    eprintln!("one ballista, reloaded mid-wave: tree {reloaded} {tally:?}");
+fn a_ballista_guards_one_ramp_and_two_keep_the_tree_standing() {
+    let east_lanes: u32 = settlement(&town(&[])).waves.iter().filter(|w| w.id.starts_with("east")).map(|w| w.count).sum();
+    let (one, tally) = defend(&[EAST_OF_TREE]);
+    eprintln!("one ballista by the east ramp: tree {one} {tally:?}");
     assert_eq!(tally.fell_at, None);
-    assert!((12..20).contains(&reloaded), "some ghouls breach, most don't: tree {reloaded}, {tally:?}");
-    let (two, tally) = defend(&[WEST_OF_NORTH, EAST_OF_NORTH], false);
-    eprintln!("two ballistas, between waves: tree {two} {tally:?}");
+    assert!(tally.kills + 2 >= east_lanes, "the east column falls to it: {east_lanes} came, {tally:?}");
+    assert!(tally.breaches >= 6 && one <= 14, "the west lanes breach: tree {one}, {tally:?}");
+    let (two, tally) = defend(&[EAST_OF_TREE, WEST_OF_TREE]);
+    eprintln!("a ballista by each ramp: tree {two} {tally:?}");
     assert!(two >= 17, "tree {two}, {tally:?}");
 }
 
@@ -202,8 +214,7 @@ fn a_fireball_on_a_column_leaves_survivors() {
     });
     // An empty ballista east of the column's way: the elder only throws.
     scenario.buildings.push(Building { kind: "ballista".into(), position: [fx(2.6), fx(-4.0)] });
-    let world = World::new_settlement(1, &Content::builtin(), &scenario, &[Disc { center: FxVec2::ZERO, radius: Fx::ONE }]).unwrap();
-    let mut sim = Simulation::from_world(world, 1);
+    let mut sim = super::hill_tests::sacred_tree_map(scenario);
     let mut tally = Tally::default();
     let ballista: BuildingIx = 1;
     let board = |sim: &Simulation| {

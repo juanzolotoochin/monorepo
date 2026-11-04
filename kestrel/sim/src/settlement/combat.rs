@@ -60,7 +60,7 @@ fn follow_route(t: &mut Threat, speed: Fx, full_hp: u32, tick: u64, terrain: &Te
         // The coil freezes the whole body, then the route resumes.
     } else if recoiling {
         let next = t.position + t.knockback.div_int(content::TICKS_PER_SECOND as i64);
-        if terrain.clear(t.position, next, Fx::from_ratio(1, 5)) {
+        if super::chase::walk_clear(terrain, t.position, next) {
             t.position = next;
             knocked = distance(previous, next);
         }

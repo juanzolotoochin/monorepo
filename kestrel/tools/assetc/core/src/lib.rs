@@ -250,6 +250,31 @@ pub struct MineLayout {
     /// Half-width of the square ground, in meters.
     pub extent: f32,
     pub seed: u64,
+    /// A hill in the middle, under the scene's origin, in place of the
+    /// flat landing round the spawn.
+    #[serde(default)]
+    pub hill: Option<HillLayout>,
+}
+
+/// An authored hill in a mine (the Sacred Tree's): a square plateau with
+/// cliff sides and a ramp down the middle of its -z and +z sides. Whole
+/// tiles (meters) and terrace steps (0.25 m), so the simulation raises it
+/// the same on every machine. The plateau's top is the ground's zero; the
+/// ground round it lies `height` steps below.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HillLayout {
+    /// Half-width of the plateau, in tiles: it spans `2 * plateau + 1`.
+    pub plateau: u8,
+    /// How high it stands, in 0.25 m steps.
+    pub height: u8,
+    /// Each ramp's width, in tiles.
+    pub ramp_width: u8,
+    /// Each ramp's length out from the plateau, in tiles; at least half
+    /// `height` so it is walkable.
+    pub ramp_length: u8,
+    /// How far the ground round the hill stays flat, in tiles.
+    pub foot: u8,
 }
 
 /// A vehicle parked in a scene: a `Vehicle` character, where it stands

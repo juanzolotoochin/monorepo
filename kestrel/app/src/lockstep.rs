@@ -412,6 +412,15 @@ fn scene_setup(library: &SceneLibrary, index: usize, cache: &crate::assets::Mode
         sloped: scene.features.contains(&voxel_assets::SceneFeature::SlopedGround),
         dig_layers: scene.dig_layers,
         mine: scene.mine.as_ref().map(|m| m.seed),
+        // Centered on the tree when raised (`Terrain::raise_hill`).
+        hill: scene.mine.as_ref().and_then(|m| m.hill).map(|h| sim::mine::Hill {
+            center: (0, 0),
+            plateau: h.plateau,
+            steps: h.height,
+            ramp_width: h.ramp_width,
+            ramp_length: h.ramp_length,
+            foot: h.foot,
+        }),
         vehicles: scene.vehicles.iter().map(|v| sim::settlement::VehicleSetup {
             character: v.character.clone(),
             position: [q(v.position[0]), q(v.position[2])],
