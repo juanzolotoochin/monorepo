@@ -106,33 +106,6 @@ its milestones, in order; one PR per milestone.
   as G does; the job menu is for sprites standing outside.)
 - **Found in:** M2.2.
 
-## M6.2 Digging in front, and the stone yield
-
-- **Status:** open
-- **Why:** digging must never trap the digger, and stone comes from the
-  ground (M3, M5, M6).
-- **What to do:**
-  - In sloped scenes, a dig takes the faced tile, at most one layer below
-    the digger's own tile. No dig under a building, site, pile, the tree or
-    undiggable ground (M7). The elder digs in about 2 s, reusing Dig Lab's
-    dig command, bar and dust.
-  - Stone becomes a mineral in the generator's layers; digging out a stone
-    layer drops 3–6 stone onto a town ground pile beside the pit.
-  - Put the drops in `balances` and `validate`.
-  - A randomized property test: no sequence of allowed digs leaves a walker
-    without a walkable way to undug ground.
-  - **From M6.1:** a dig can make a tile it doesn't touch steep (a
-    diagonal neighbour of the dug tile, whose shared corner drops a
-    second layer below its far corners), and `walkable` is strict: a body
-    whose footprint is on steep ground can't move or path at all. Either
-    refuse such digs while someone stands there, or let a walker step off
-    steep ground it already stands on (without letting nav chain nodes
-    across steep tiles). Today's underfoot dig (Dig Lab's) still works in
-    sloped scenes and is what M3 replaces there.
-- **Where:** `kestrel/sim/src/settlement/avatar.rs`, `terrain.rs`,
-  `mine.rs`, `piles.rs`.
-- **Found in:** mining design.
-
 ## M6.3 The big map and the hill
 
 - **Status:** open
@@ -205,6 +178,82 @@ its milestones, in order; one PR per milestone.
 - **Found in:** mining design.
 
 ## Done
+
+### M6.2 Digging in front, and the stone yield
+
+- **Status:** done (branch `kestrel-sacred-tree-mining`)
+- **Why:** digging must never trap the digger, and stone comes from the
+  ground (M3, M5, M6).
+- **What to do:**
+  - In sloped scenes, a dig takes the faced tile, at most one layer below
+    the digger's own tile. No dig under a building, site, pile, the tree or
+    undiggable ground (M7). The elder digs in about 2 s, reusing Dig Lab's
+    dig command, bar and dust.
+  - Stone becomes a mineral in the generator's layers; digging out a stone
+    layer drops 3–6 stone onto a town ground pile beside the pit.
+  - Put the drops in `balances` and `validate`.
+  - A randomized property test: no sequence of allowed digs leaves a walker
+    without a walkable way to undug ground.
+  - **From M6.1:** a dig can make a tile it doesn't touch steep (a
+    diagonal neighbour of the dug tile, whose shared corner drops a
+    second layer below its far corners), and `walkable` is strict: a body
+    whose footprint is on steep ground can't move or path at all. Either
+    refuse such digs while someone stands there, or let a walker step off
+    steep ground it already stands on (without letting nav chain nodes
+    across steep tiles). Today's underfoot dig (Dig Lab's) still works in
+    sloped scenes and is what M3 replaces there.
+- **Where:** `kestrel/sim/src/settlement/avatar.rs`, `terrain.rs`,
+  `mine.rs`, `piles.rs`.
+- **Found in:** mining design.
+- **Done:** in a sloped scene `DigDown` (unchanged command) digs
+  `Terrain::front_tile`: the tile beside the digger's along the axis its
+  `body.heading` points most. `View::dig_in_front` refuses it under a
+  terrain obstacle (tree, buildings, sites, props), a ground pile, a
+  depot dock, or a building's output pile or slot spot (`DigRefusal`);
+  `Terrain::dig_refusal` refuses an undiggable scene or tile (outside, a
+  drop, a `Terrain::undiggable` tile range: the seam M6.3's hill sets,
+  empty today), the bottom layer, a dig leaving the tile more than a layer
+  below the digger's (`TooDeep`), and a dig that strands anyone
+  (`Strands`): on a clone with the layer dug, from the middle of every
+  tile within two of it, a body of the digger's radius must walk (tile
+  middle to middle, 8 ways, `walkable`) to an undug tile that isn't steep
+  (a search past `WALK_OUT_TILES`, 256, counts as out). The depth rule
+  alone isn't enough: the property test trapped the digger by deepening a
+  stair's last step from below, and by deep pits dragging a step's corners
+  down. The steep-tile issue from M6.1: `walkable` lets a body whose
+  footprint starts on steep ground walk off it as long as no 0.1 m step
+  climbs faster than `MAX_SLOPE`, and never back onto steep ground once
+  off it, so nav can't enter steep ground from gentle ground. A digger's
+  own tile can't get steep from an allowed dig (shown in the doc; the
+  `Steepens` check is a guard). Digging in front stands still (no
+  centering); the dig lab still digs and centers underfoot. A town's mine
+  (`from_scene`: building kinds and no `PileSetup`) has
+  `MineSpec::veins: Veins::Stone` (broad veins, over 1 in 50 surface
+  tiles on seed 7, richer each layer down) and needs the scenario's
+  `stone` item (`mine::STONE_ID`); a stone layer drops `yield_of` (3–6)
+  stone onto a ground pile beside the pit or one within 2.2 m
+  (`PileLab::mined`, now kept clear of docks, output piles and slot
+  spots), counted as `generated`, so `balances` and `validate` cover it;
+  no `PileToss` events in a town (the pile just appears; M6.6 can animate
+  it). The elder has the exosuit's Dig (120 frames). Save format 35
+  (`MineSpec::veins`, `Terrain::undiggable`); input log, net protocol and
+  commands unchanged; the golden file is unchanged. Tests:
+  `settlement/dig_tests.rs` (stone in front onto a pile and merging,
+  carried as a bundle, every refusal, the seeded random-dig property test
+  on level ground and on terraces, walking off steep ground) and
+  `scene_tests::sloped_scenes_dig_a_stair_in_front` (a six-layer stair,
+  refusing to strand its bottom). For later: M6.3 makes the Sacred Tree a
+  mine (`mine:` and `Digging` in the level; the stone veins follow) and
+  sets `Terrain::undiggable` for the hill and plateau (scene plumbing
+  still to add), and guarantees exposed veins 15–40 m out; M6.5 miners
+  can call `Terrain::dig_refusal`/`View::dig_in_front` from a standing
+  tile (it clones the terrain per call, so cache plans, don't poll it);
+  `Strands` uses the digger's radius, so a wider body (a ghoul brute)
+  could still be boxed in; obstacles aren't counted, so buildings can wall
+  a pit in; a building placed later isn't refused over a pit; M6.6 draws
+  the stone tint (`Mine::ore` gives `STONE` = 0, which `digging.rs` would
+  color as amber) and the town dig's bar and dust; the app sends the dig
+  only in `Digging` scenes.
 
 ### M6.1 Sloped ground
 
