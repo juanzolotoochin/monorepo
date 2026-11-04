@@ -53,6 +53,7 @@ fn town((from, to): ([f64; 2], [f64; 2]), first: f64, count: u32) -> Simulation 
         first: fx(first),
         every: fx(1.0),
         count,
+        nights: Vec::new(),
     });
     let world = World::new_settlement(1, &Content::builtin(), &scenario, &[Disc { center: FxVec2::ZERO, radius: Fx::ONE }]).unwrap();
     Simulation::from_world(world, 1)

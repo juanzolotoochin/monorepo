@@ -2314,6 +2314,7 @@ mod tests {
                 first: q(1.0),
                 every: q(60.0),
                 count: 1,
+                nights: Vec::new(),
             }];
         });
         let agent = game.client.world().resource::<SessionService>().player().unwrap();

@@ -349,7 +349,7 @@ impl Settlement {
     /// own again at its next spawn, so they walk round a new site instead
     /// of through it. Routes are planned once otherwise (M5.6).
     pub(super) fn replan_routes(&mut self, terrain: &Terrain) {
-        for w in self.waves.iter_mut().filter(|w| w.spawned < w.count) {
+        for w in self.waves.iter_mut().filter(|w| w.sending()) {
             w.route = None;
         }
         for i in 0..self.threats.len() {
@@ -367,7 +367,7 @@ impl Settlement {
     /// Routes far from the digs stay as they are: a dig only reshapes the
     /// ground round it.
     pub(super) fn reroute_round(&mut self, dug: &[(i32, i32)], terrain: &Terrain) {
-        for w in self.waves.iter_mut().filter(|w| w.spawned < w.count) {
+        for w in self.waves.iter_mut().filter(|w| w.sending()) {
             let cut = w.route.as_ref().is_some_and(|r| r.last() != Some(&w.target));
             if cut || w.route.as_ref().is_some_and(|r| crosses(w.position, r, dug)) {
                 w.route = None;

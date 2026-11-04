@@ -32,6 +32,13 @@ const SPENT_TICKS: u64 = ticks_from_60hz(12);
 const DEFLECTED_TICKS: u64 = ticks_from_60hz(18);
 const PINNED_TICKS: u64 = ticks_from_60hz(36);
 const STAGGER_ON_PIERCE: u64 = ticks_from_60hz(42);
+/// A lane's ghouls set off this far apart on a night (2.5 s), a column, or
+/// closer when that would run past the night's first third
+/// ([`lane_starts`]).
+pub const COLUMN_GAP: u64 = content::millis_to_ticks(2500);
+/// At sunrise a ghoul burns this long (2 s), and up to as long again, by
+/// its id, before it falls (`Settlement::dawn`).
+pub const DAWN_BURN: u64 = content::millis_to_ticks(2000);
 /// A threat's swing reaches a player whose feet are at most this high
 /// above the ground under it, in meters. A jump (apex about 0.57 m) doesn't
 /// dodge it; the jetpack's hover (1.8 m) does. Every attacking character is
@@ -56,7 +63,9 @@ fn follow_route(t: &mut Threat, speed: Fx, full_hp: u32, tick: u64, terrain: &Te
     let previous = t.position;
     let recoiling = tick < t.stagger_until;
     let mut knocked = Fx::ZERO;
-    if tick < t.shocked_until {
+    if t.burn.is_some_and(|b| b.dawn) {
+        // Burning in the sunrise, it stands until it falls.
+    } else if tick < t.shocked_until {
         // The coil freezes the whole body, then the route resumes.
     } else if recoiling {
         let next = t.position + t.knockback.div_int(content::TICKS_PER_SECOND as i64);
@@ -95,12 +104,51 @@ pub struct WaveState {
     pub character: content::character::CharacterIx,
     pub position: FxVec2,
     pub target: FxVec2,
+    /// A timed wave: its first enemy on this tick, then one every `every`
+    /// ticks, `count` in all. Zero for a lane.
     pub first: u64,
     pub every: u64,
     pub count: u32,
+    /// Enemies sent so far: of `count`, or by a lane over all its nights.
     pub spawned: u32,
     /// Every enemy of a wave follows the same planned route.
     pub route: Option<Vec<FxVec2>>,
+    /// A lane (`content::scenario::Wave::nights`): the enemies it sends on
+    /// each night, the last repeating. Empty for a timed wave.
+    #[serde(default)]
+    pub nights: Vec<u32>,
+}
+
+impl WaveState {
+    /// Whether it sends by night rather than on a timer.
+    pub fn lane(&self) -> bool {
+        !self.nights.is_empty()
+    }
+
+    /// Whether it may send more enemies: a timed wave until its `count`, a
+    /// lane every night.
+    pub fn sending(&self) -> bool {
+        self.lane() || self.spawned < self.count
+    }
+
+    /// How many a lane sends on night `night` (1 the first): the last
+    /// listed night's count after the list runs out. Zero for a timed wave
+    /// and before the first night.
+    pub fn on_night(&self, night: u64) -> u32 {
+        let listed = self.nights.len() as u64;
+        if night == 0 || listed == 0 {
+            return 0;
+        }
+        self.nights[(night.min(listed) - 1) as usize]
+    }
+}
+
+/// When a lane's `count` ghouls set off on a night of `night` ticks, in
+/// ticks after dusk: [`COLUMN_GAP`] apart from dusk, or spread evenly over
+/// the night's first third if that would run past it.
+pub fn lane_starts(count: u32, night: u64) -> impl Iterator<Item = u64> {
+    let gap = if count == 0 { 0 } else { COLUMN_GAP.min(night / 3 / count as u64) };
+    (0..count as u64).map(move |i| i * gap)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -303,6 +351,9 @@ pub enum Event {
     /// (`killed` if that was the last) and pushed the player; a miss (`hit`
     /// false, `damage` 0) means the player got out of reach or was dead.
     ThreatSwing { threat: u64, agent: AgentIx, hit: bool, damage: u32, killed: bool },
+    /// Threat `threat` burned away in the sunrise at `position`: dispelled,
+    /// not killed (no kill counts; `Settlement::dispelled` does).
+    Dispelled { threat: u64, position: FxVec2 },
     /// A building put a unit in its output.
     BuildingProduced { building: super::BuildingIx },
     /// Player `agent`'s bundle action didn't start, for `reason`
@@ -593,7 +644,7 @@ impl Settlement {
             })
             .collect();
         for t in &self.threats {
-            if t.route.is_empty() {
+            if t.route.is_empty() && !t.burn.is_some_and(|b| b.dawn) {
                 let mut out = Messages::default();
                 out.breach.push(Breach { threat: t.id });
                 result.push((t.position, out));
@@ -1233,49 +1284,104 @@ impl Settlement {
             p.position += nav::heading_vector(p.heading) * ((Fx::ONE - f.min(Fx::ONE)) * Fx::from_ratio(19, 100));
         }
         self.retry_stranded(tick, terrain);
+        if self.clock.is_some_and(|c| c.dawn(tick)) {
+            self.dawn(tick);
+        }
         // A fallen tree ends the run (B7): no more enemies come.
         let waves = if self.tree_fallen() { 0 } else { self.waves.len() };
         for w in 0..waves {
+            for _ in 0..self.due(w, tick) {
+                self.spawn(w, terrain);
+            }
+        }
+    }
+
+    /// How many enemies wave `w` sends on `tick`: a timed wave one on its
+    /// timer, a lane its night's column (`lane_starts`) by night.
+    fn due(&self, w: usize, tick: u64) -> u32 {
+        let wave = &self.waves[w];
+        if !wave.lane() {
+            return u32::from(tick >= wave.first && wave.spawned < wave.count && (tick - wave.first) % wave.every == 0);
+        }
+        let Some(clock) = self.clock else { return 0 };
+        let Some(since) = clock.since_dusk(tick) else { return 0 };
+        lane_starts(wave.on_night(clock.night(tick)), clock.night).filter(|&start| start == since).count() as u32
+    }
+
+    /// The next tick from `tick` on that a wave sends an enemy, if any
+    /// will (within the next eight nights, for lanes): a HUD's "next wave".
+    pub fn next_wave(&self, tick: u64) -> Option<u64> {
+        let timed = self.waves.iter().filter(|w| !w.lane() && w.spawned < w.count).map(|w| tick.max(w.first + u64::from(w.spawned) * w.every)).min();
+        let lanes = self.clock.filter(|_| self.waves.iter().any(WaveState::lane)).and_then(|clock| {
+            // This night's starts still to come, then the next nights'.
+            let dusk = |n: u64| (n - 1) * clock.cycle() + clock.day;
+            let night = clock.night(tick).max(1);
+            (night..night + 8).find_map(|n| {
+                let starts = self.waves.iter().flat_map(|w| lane_starts(w.on_night(n), clock.night)).map(|start| dusk(n) + start);
+                starts.filter(|&at| at >= tick).min()
+            })
+        });
+        timed.into_iter().chain(lanes).min()
+    }
+
+    /// The sunrises by `tick`: the nights the town has seen through, while
+    /// the tree stands (`tree_fallen`). None without days and nights.
+    pub fn nights_survived(&self, tick: u64) -> Option<u64> {
+        self.clock.map(|c| tick / c.cycle())
+    }
+
+    /// Wave `w` sends an enemy along its route, planning it first if it
+    /// has none.
+    fn spawn(&mut self, w: usize, terrain: &Terrain) {
+        // With no way to the tree, the wave sends its enemies as close
+        // as they can walk (`Threat::stranded`).
+        if self.waves[w].route.is_none() {
             let wave = &self.waves[w];
-            if tick < wave.first || wave.spawned >= wave.count || (tick - wave.first) % wave.every != 0 {
-                continue;
-            }
-            // With no way to the tree, the wave sends its enemies as close
-            // as they can walk (`Threat::stranded`).
-            if wave.route.is_none() {
-                let (route, _) = nav::path_toward(terrain, wave.position, wave.target, super::chase::WALK_CLEARANCE);
-                self.waves[w].route = Some(route);
-            }
-            let wave = &self.waves[w];
-            let route = wave.route.clone().expect("planned");
-            if route.is_empty() {
-                continue;
-            }
-            let (character, position, stranded) = (wave.character, wave.position, route.last() != Some(&wave.target));
-            let health = self.characters[character as usize].health.as_ref().expect("a wave sends a FollowRoute character");
-            let (hp, armor) = (health.hp, health.armor.as_ref().map_or(0, |a| a.points));
-            let id = self.id();
-            self.threats.push(Threat {
-                id,
-                wave: w as u16,
-                character,
-                position,
-                heading: Fx::ZERO,
-                travelled: Fx::ZERO,
-                hp,
-                armor,
-                pierced: false,
-                shocked_until: 0,
-                route,
-                stagger_until: 0,
-                knockback: FxVec2::ZERO,
-                windup: None,
-                ready_at: 0,
-                burn: None,
-                goal: super::chase::Goal::Tree,
-                stranded,
-            });
-            self.waves[w].spawned += 1;
+            let (route, _) = nav::path_toward(terrain, wave.position, wave.target, super::chase::WALK_CLEARANCE);
+            self.waves[w].route = Some(route);
+        }
+        let wave = &self.waves[w];
+        let route = wave.route.clone().expect("planned");
+        if route.is_empty() {
+            return;
+        }
+        let (character, position, stranded) = (wave.character, wave.position, route.last() != Some(&wave.target));
+        let health = self.characters[character as usize].health.as_ref().expect("a wave sends a FollowRoute character");
+        let (hp, armor) = (health.hp, health.armor.as_ref().map_or(0, |a| a.points));
+        let id = self.id();
+        self.threats.push(Threat {
+            id,
+            wave: w as u16,
+            character,
+            position,
+            heading: Fx::ZERO,
+            travelled: Fx::ZERO,
+            hp,
+            armor,
+            pierced: false,
+            shocked_until: 0,
+            route,
+            stagger_until: 0,
+            knockback: FxVec2::ZERO,
+            windup: None,
+            ready_at: 0,
+            burn: None,
+            goal: super::chase::Goal::Tree,
+            stranded,
+        });
+        self.waves[w].spawned += 1;
+    }
+
+    /// Sunrise (N3): every threat still out catches fire and stands
+    /// burning, dropping any swing, for `DAWN_BURN` and up to as long again
+    /// (by its id, so they don't all fall at once); then it falls,
+    /// dispelled (`Settlement::burn`). The burn does no damage: it isn't a
+    /// kill.
+    fn dawn(&mut self, tick: u64) {
+        for t in &mut self.threats {
+            let spread = combat_roll(tick, t.id, 0x6461_776e) % DAWN_BURN;
+            t.windup = None;
+            t.burn = Some(super::fire::Burn { until: tick + DAWN_BURN + spread, next: u64::MAX, damage: 0, period: DAWN_BURN, dawn: true });
         }
     }
 
@@ -1295,7 +1401,7 @@ fn flight_ticks(distance: Fx, speed: Fx) -> u64 {
 /// Whether a threat may start a swing on `tick`: not already winding up,
 /// its cooldown over, neither staggered nor shocked, and still on its route.
 fn can_start_swing(t: &Threat, tick: u64) -> bool {
-    t.windup.is_none() && tick >= t.ready_at && tick >= t.stagger_until && tick >= t.shocked_until && !t.route.is_empty()
+    t.windup.is_none() && !t.burn.is_some_and(|b| b.dawn) && tick >= t.ready_at && tick >= t.stagger_until && tick >= t.shocked_until && !t.route.is_empty()
 }
 
 /// See `Settlement::has_weapon`.

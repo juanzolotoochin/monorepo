@@ -1,11 +1,12 @@
 //! The time of day: a pure function of the tick and the scenario's day
 //! cycle ([`content::scenario::DayCycle`]). The cycle starts at dawn at tick
-//! 0, so tick `t` is `t mod (day + night)` ticks into its cycle. Nothing is
-//! stored, so there is nothing to save or hash and every peer agrees; the
-//! view reads the same functions.
+//! 0, so tick `t` is `t mod (day + night)` ticks into its cycle. Only the
+//! two lengths are kept (`Settlement::clock`, from the scenario), so every
+//! peer agrees; the view reads the same functions.
 
 use content::scenario::{self, Scenario};
 use fx::Fx;
+use serde::{Deserialize, Serialize};
 
 /// Day or night.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -14,8 +15,10 @@ pub enum Phase {
     Night,
 }
 
-/// A scenario's day and night lengths, in ticks (each at least one).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// A scenario's day and night lengths, in ticks (each at least one). The
+/// settlement keeps its scenario's (`Settlement::clock`), so the tick can
+/// send ghouls by night and burn them at dawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Clock {
     pub day: u64,
     pub night: u64,
@@ -89,6 +92,18 @@ impl Clock {
         } else {
             self.cycle() - t + self.day
         }
+    }
+
+    /// Ticks since dusk, during a night (zero on its first tick); none by
+    /// day.
+    pub fn since_dusk(&self, tick: u64) -> Option<u64> {
+        self.into_cycle(tick).checked_sub(self.day)
+    }
+
+    /// Whether `tick` is a sunrise: the first tick of a day after a night.
+    /// Tick 0 starts the first day, but no night came before it.
+    pub fn dawn(&self, tick: u64) -> bool {
+        tick > 0 && self.into_cycle(tick) == 0
     }
 
     pub fn at(&self, tick: u64) -> TimeOfDay {

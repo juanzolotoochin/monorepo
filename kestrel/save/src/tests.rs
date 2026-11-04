@@ -475,6 +475,7 @@ fn a_town_saved_while_a_ballista_shoots_continues() {
         first: Fx::from_int(25),
         every: Fx::from_int(4),
         count: 2,
+        nights: Vec::new(),
     });
     // The tree's trunk, as the scene's architecture blocks it.
     let trunk = [sim::terrain::Disc { center: FxVec2::ZERO, radius: Fx::ONE }];

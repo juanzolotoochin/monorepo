@@ -46,6 +46,7 @@ fn town(character: &str, (from, to): ([f64; 2], [f64; 2]), first: f64, walls: &[
         first: fx(first),
         every: fx(1.0),
         count: 1,
+        nights: Vec::new(),
     });
     let mut obstacles = vec![Disc { center: FxVec2::ZERO, radius: Fx::ONE }];
     obstacles.extend_from_slice(walls);

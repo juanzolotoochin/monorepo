@@ -19,6 +19,12 @@
 //! Fire only ever touches threats: elders and sprites walk through it.
 //! Every hit is an `Event::Hit` with `Impact::Fire`, and a kill counts as
 //! any other (`CombatMetrics::kills`).
+//!
+//! At sunrise (M7.2, a scenario with a day cycle) every threat still out
+//! catches the dawn's fire (`Burn::dawn`): it stands burning, takes no
+//! hits, and when the burn runs out it falls, dispelled
+//! (`Event::Dispelled`, `Settlement::dispelled`), not killed. A fire patch
+//! doesn't change a dawn burn.
 
 use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
@@ -98,6 +104,10 @@ pub struct Burn {
     pub next: u64,
     pub damage: u32,
     pub period: u64,
+    /// The sunrise's burn (`Settlement::dawn`): no hits, and the threat
+    /// falls, dispelled, when it runs out.
+    #[serde(default)]
+    pub dawn: bool,
 }
 
 impl Settlement {
@@ -136,13 +146,15 @@ impl Settlement {
         self.fires.retain(|p| p.expires > tick);
         let fires = &self.fires;
         let mut due = Vec::new();
+        let mut dispelled = Vec::new();
         for t in &mut self.threats {
             // The newest fire it stands in sets the burn.
             if let Some(fire) = fires.iter().rev().find(|p| p.covers(t.position)) {
                 let until = tick + fire.burn.linger;
                 match &mut t.burn {
+                    Some(burn) if burn.dawn => {}
                     Some(burn) => burn.until = burn.until.max(until),
-                    None => t.burn = Some(Burn { until, next: tick + fire.burn.period, damage: fire.burn.damage, period: fire.burn.period }),
+                    None => t.burn = Some(Burn { until, next: tick + fire.burn.period, damage: fire.burn.damage, period: fire.burn.period, dawn: false }),
                 }
             }
             let Some(burn) = &mut t.burn else { continue };
@@ -151,11 +163,20 @@ impl Settlement {
                 burn.next += burn.period;
             }
             if tick >= burn.until {
+                if burn.dawn {
+                    dispelled.push(t.id);
+                }
                 t.burn = None;
             }
         }
         for (id, damage) in due {
             self.fire_hit(id, damage);
+        }
+        for id in dispelled {
+            let Ok(i) = self.threats.binary_search_by_key(&id, |t| t.id) else { continue };
+            let t = self.threats.remove(i);
+            self.dispelled += 1;
+            self.events.push(Event::Dispelled { threat: id, position: t.position });
         }
     }
 

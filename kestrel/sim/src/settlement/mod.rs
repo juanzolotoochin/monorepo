@@ -268,6 +268,15 @@ pub struct Settlement {
     /// The fires they left, by ID.
     #[serde(default)]
     pub fires: Vec<FirePatch>,
+    /// The scenario's days and nights, if it has them (M7.1): lanes send
+    /// ghouls by night and the sunrise burns them away (M7.2). Rules, but
+    /// kept with the state so the tick has them; the hour is a function
+    /// of the tick.
+    #[serde(default)]
+    pub clock: Option<Clock>,
+    /// Threats the sunrise burned away (`Event::Dispelled`): not kills.
+    #[serde(default)]
+    pub dispelled: u64,
 }
 
 /// A vehicle a scene parks, in arena coordinates.
@@ -471,11 +480,12 @@ impl Settlement {
                     character: ix,
                     position: at(w.position),
                     target: at(w.target),
-                    first: (w.first * per_second).round().floor_to_int().max(1) as u64,
-                    every: scenario::ticks(w.every),
+                    first: if w.lane() { 0 } else { (w.first * per_second).round().floor_to_int().max(1) as u64 },
+                    every: if w.lane() { 0 } else { scenario::ticks(w.every) },
                     count: w.count,
                     spawned: 0,
                     route: None,
+                    nights: w.nights.clone(),
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -516,6 +526,8 @@ impl Settlement {
             pinned: Vec::new(),
             fireballs: Vec::new(),
             fires: Vec::new(),
+            clock: Clock::of(scenario),
+            dispelled: 0,
             combat: CombatMetrics::default(),
             events: Vec::new(),
             spawn: FxVec2::ZERO,
@@ -1072,6 +1084,10 @@ impl Settlement {
         let goals: Vec<_> = self.threats.iter().filter(|t| t.goal != Goal::Tree).map(|t| (t.id, t.goal, &t.route)).collect();
         if !goals.is_empty() {
             bytes.extend(postcard::to_allocvec(&goals).expect("goals encode"));
+        }
+        // The sunrise's toll only where there are days and nights.
+        if self.clock.is_some() {
+            bytes.extend(postcard::to_allocvec(&self.dispelled).expect("dispelled encodes"));
         }
         // And sprites' jobs and plans only where there are sprites.
         let sprites: Vec<_> = self.agents.iter().filter_map(AgentState::sprite).map(|s| (s.job, &s.plan, s.step, s.holds)).collect();

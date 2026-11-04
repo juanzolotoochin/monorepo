@@ -709,6 +709,9 @@ pub enum Event {
     SpriteReturned { agent: String },
     /// The Sacred Tree's health reached 0: the run is over (B7).
     TreeFell,
+    /// Threat `target` burned away in the sunrise at `position` (M7.2):
+    /// dispelled, not killed.
+    Dispelled { target: u64, position: Point },
 }
 
 /// One frame's settlement, interpolated between the last two ticks.
@@ -1053,6 +1056,7 @@ impl Simulation {
                     s::Event::BuildingBroken { building } => Event::BuildingBroken { building: *building as usize },
                     s::Event::SpriteReturned { agent } => Event::SpriteReturned { agent: agent_name(*agent) },
                     s::Event::TreeFell => Event::TreeFell,
+                    s::Event::Dispelled { threat, position } => Event::Dispelled { target: *threat, position: p(*position) },
                 })
             })
             .collect();

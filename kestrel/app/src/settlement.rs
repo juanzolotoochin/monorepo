@@ -1180,9 +1180,10 @@ pub fn tick(world: &mut World) {
             let elder = mirror.player().and_then(|id| mirror.current.as_ref()?.agents.get(id as usize)).map(|agent| (agent.body.health, agent.body.max_health));
             let elder = elder.filter(|&(_, max)| max > 0).map_or_else(String::new, |(health, max)| format!("  ELDER {health}/{max}"));
             // The waves (M5.6): how many ghouls are out, or with none out,
-            // how long until the next comes; nothing once the last came.
+            // how long until the next comes (by night, M7.2); nothing once
+            // the last came.
             let waves = mirror.current.as_ref().map_or_else(String::new, |current| {
-                let next = current.waves.iter().filter(|w| w.spawned < w.count).map(|w| w.first + u64::from(w.spawned) * w.every).min();
+                let next = current.next_wave(sim.tick);
                 match (current.threats.len(), next) {
                     (0, Some(next)) => {
                         let seconds = ((next as f32 - sim.time()) / HZ).ceil().max(0.0) as u32;
