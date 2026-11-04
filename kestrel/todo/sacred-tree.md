@@ -180,26 +180,6 @@ its milestones, in order; one PR per milestone.
   `app/src/effects.rs`.
 - **Found in:** M7.2.
 
-## M7.3 The sun, the moon and the colors
-
-- **Status:** open
-- **Why:** you read the hour from the shadows and the light's color (N5,
-  N6).
-- **What to do:** a `day_cycle` section in the scene file with four keys
-  (dawn, noon, dusk, midnight), each with sunlight color and illuminance,
-  ambient color and brightness, sky color and fog; blended between keys.
-  The scene's one `DirectionalLight` follows an east-to-west arc tilted
-  south, elevation clamped near 10° at the horizon; at night the same
-  light is a dim blue moon on the same arc. The moon is dim: night is
-  dark enough that M7.4's lights matter. Tune the shadow cascades for the
-  256 m map and low sun. Scenes without the section keep their fixed
-  light; a style switch keeps the cycle's light.
-- **Where:** `kestrel/tools/assetc/core` (scene schema),
-  `app/src/scene.rs`, `style.rs`, `app/assets/levels/sacred_tree.ron`.
-- **Found in:** day and night design.
-- **Tests:** keyframe blending at and between keys; screenshots at dawn,
-  noon, dusk and midnight.
-
 ## M7.4 Lights at night
 
 - **Status:** open
@@ -213,6 +193,15 @@ its milestones, in order; one PR per milestone.
 - **Found in:** day and night design.
 - **Tests:** a midnight screenshot shows the plaza, both ramp tops and an
   approaching ghoul.
+- **From M7.3:** the moon is a 1800 lux key with ambient 150
+  (`sacred_tree.ron`'s `day_cycle.midnight`); lights rising at dusk can
+  read the hour with `voxel_assets::day_cycle::hour` and the cycle's
+  `MORNING`/`EVENING` blends (`app/src/daylight.rs` samples it each frame
+  at the mirror's `tick + alpha`). The built-in deck's three
+  `style::AccentLight` point lights still shine in the town (a warm patch
+  by the stone pile at night): keep, move or switch them off for the
+  town. Dusk reads darker than dawn because the camera sees the sun's back
+  side then; the tree's glow can help.
 
 ## M7.5 The time on the HUD
 
@@ -244,8 +233,97 @@ its milestones, in order; one PR per milestone.
   move the ring in or lengthen the night rather than grow columns.
   `COLUMN_GAP` (2.5 s) and `DAWN_BURN` (2 to 4 s) are code
   (`settlement/combat.rs`).
+- **From M7.3:** a demo script runs at most 8 ticks a frame (the host's
+  `MAX_CATCH_UP`), so `settlement_rate` 4 needs 30 fps or more (at 10 fps
+  it silently runs one tick a frame). The four lighting shots were frames
+  of one 4x run picked by the trace's `settlement.seconds` (9, 75, 143 and
+  187.5 s).
 
 ## Done
+
+### M7.3 The sun, the moon and the colors
+
+- **Status:** done (branch `kestrel-sacred-tree-daynight`)
+- **Why:** you read the hour from the shadows and the light's color (N5,
+  N6).
+- **What to do:** a `day_cycle` section in the scene file with four keys
+  (dawn, noon, dusk, midnight), each with sunlight color and illuminance,
+  ambient color and brightness, sky color and fog; blended between keys.
+  The scene's one `DirectionalLight` follows an east-to-west arc tilted
+  south, elevation clamped near 10° at the horizon; at night the same
+  light is a dim blue moon on the same arc. The moon is dim: night is
+  dark enough that M7.4's lights matter. Tune the shadow cascades for the
+  256 m map and low sun. Scenes without the section keep their fixed
+  light; a style switch keeps the cycle's light.
+- **Where:** `kestrel/tools/assetc/core` (scene schema),
+  `app/src/scene.rs`, `style.rs`, `app/assets/levels/sacred_tree.ron`.
+- **Found in:** day and night design.
+- **Tests:** keyframe blending at and between keys; screenshots at dawn,
+  noon, dusk and midnight.
+- **Done:** schema: `Scene::day_cycle: Option<DayCycleLight>`
+  (`voxel_assets::day_cycle`, `#[serde(default)]`, so other scenes read
+  none; no pack version bump, as with earlier optional scene fields):
+  `DayCycleLight { dawn, noon, dusk, midnight }`, each a `LightKey {
+  sunlight, illuminance, ambient, ambient_brightness, sky, fog_density }`
+  (sRGB 0..1, the style profile's ranges). The fog's color is `sky`, as a
+  style's fog is its background. A scene with one must have a scenario
+  with a day cycle (`ScenePack::validate`). Pure functions:
+  `day_cycle::hour(&Clock, time: f64) -> Hour { night, fraction }` (the
+  sim's clock at a fractional tick, so the view eases between ticks);
+  `DayCycleLight::at(hour) -> Light { key, toward }`: each key holds at its
+  hour and eases (smoothstep) to the next, dawn to noon over the day's
+  first 30% (`MORNING`), noon from 70% (`AFTERNOON`) to dusk, dusk to
+  midnight over the night's first 30% (`EVENING`), midnight from 75%
+  (`SMALL_HOURS`) to dawn; the illuminance dims to zero over the 3% at
+  each end of a phase (`SWAP`), so the sun setting in the west comes back
+  as the moon rising in the east unseen. `day_cycle::sky_arc(fraction)`:
+  the unit direction towards the sun (by night the moon): `(cos a * cos
+  e, sin e, sin a * cos e)` with `a = pi * fraction`, so east (+x) at the
+  phase's start, due south (+z) in its middle and west (-x) at its end;
+  elevation `e = 10 + 48 * sin a` degrees (`HORIZON_ELEVATION` 10,
+  `PEAK_ELEVATION` 58), so shadows are at most about 5.7 times a caster's
+  height. App (`app/src/daylight.rs`): `follow`, every frame in the scene
+  view's Present phase, samples the cycle at the mirror's `tick + alpha`
+  and writes the DirectionalLight's color, illuminance and rotation
+  (shadows on), `GlobalAmbientLight`, `ClearColor` and the camera's
+  `DistanceFog`. `style::apply` calls `daylight::dress` after the style,
+  so the cycle wins over the style's sunlight, ambient, background and
+  fog on a scene switch; without a cycle `dress` puts the light back at
+  its fixed place (`fixed_transform`, the deck's (-8, 12, 5)) with the
+  default cascades, so other scenes are as before. Cascades in a cycle
+  scene (`cycle_cascades`): 3 cascades, 10 to 80 m, first far bound 32 m,
+  overlap 0.2 (the town's orthographic camera is about 35 m out and shows
+  ground 15 to 60 m deep; the default's first cascade, 0.1 to 10 m, was
+  empty air and its last ran to 150 m at about 5 cm texels, now the far
+  one is about 2.8 cm with the default 2048 map). Long low-sun shadows
+  fall on ground on the caster's own light ray, so they stay inside a
+  cascade's box; none clipped in the shots. The Sacred Tree's keys
+  (`sacred_tree.ron`): dawn sun (1.0, 0.68, 0.42) 11000 lux, ambient 600;
+  noon the forest style's (1.0, 0.96, 0.88) 14000, ambient 800; dusk
+  (1.0, 0.52, 0.30) 12000, ambient 720, a red sky; midnight a moon (0.55,
+  0.68, 1.0) at 1800 lux, ambient (0.32, 0.42, 0.78) 150, sky (0.015,
+  0.025, 0.06). Tests: `voxel_assets` `day_cycle::tests` (keys hold at
+  their hours, dawn and dusk dim at the swap, eased blends between every
+  pair, the arc's east, south and west and its elevations, `hour` against
+  the sim's `Clock::at` tick by tick, out-of-range keys fail);
+  `style::tests::a_day_cycle_wins_over_the_style_and_other_scenes_keep_their_fixed_light`
+  (the Sacred Tree twice from the industrial scene: dawn's colors, not the
+  forest's, low in the east, 3 cascades, following the clock frame by
+  frame; back in the industrial scene its fixed light, place and
+  cascades). Screenshots (a demo script at 4x, 30 fps, frames picked by
+  the trace's `settlement.seconds`: 9 s, 75 s, 143 s, 187.5 s): dawn warm
+  with long shadows to the west; noon as before; dusk red-orange, the
+  shadows long to the east; midnight dark blue, the ground, trees and the
+  first ghouls on the east ramp faintly readable. Save format, input log,
+  net protocol, commands and golden unchanged (view only). For later: the
+  camera looks west-north-west, so at dusk the faces it sees are back-lit
+  and the town reads darker than at dawn (dusk's ambient is raised to
+  make up); the built-in deck's three accent point lights still light the
+  town (a faint warm patch by the stone pile at night), worth deciding in
+  M7.4; a demo script at under 30 fps with rate 4 runs at one tick a
+  frame (the host's `MAX_CATCH_UP` of 8 ticks resets the pacer), so keep
+  `fps * 8 >= 60 * rate` in M7.6's demo; the control protocol can't skip
+  time, so shots of an hour need the whole run up to it.
 
 ### M7.2 Night waves and dawn
 
