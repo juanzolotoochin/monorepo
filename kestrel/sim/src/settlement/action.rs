@@ -207,6 +207,15 @@ impl Settlement {
             building_kinds: &self.building_kinds,
         }
     }
+
+    /// The tile `agent` would dig in front of it now in a sloped scene, or
+    /// why it can't (`View::dig_in_front`): for the app's refusal hint. It
+    /// clones the terrain for the stranding check, so ask on a key press,
+    /// not every frame.
+    pub fn dig_in_front_of(&self, agent: AgentIx, tick: u64, terrain: &Terrain) -> Option<Result<(i32, i32), DigRefusal>> {
+        let body = &self.agents.get(agent as usize)?.body;
+        Some(self.view(agent, tick, terrain).dig_in_front(body.position, body.heading, body.base_radius))
+    }
 }
 
 impl View<'_> {
