@@ -19,6 +19,7 @@ mod agent;
 pub mod avatar;
 pub mod buildings;
 pub mod chase;
+pub mod clock;
 pub mod combat;
 pub mod fire;
 mod economy;
@@ -50,6 +51,7 @@ pub use combat::{CombatMetrics, DefenderState, Event, Impact, OnMiss, Pinned, Pr
 pub use agent::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
 pub use avatar::Seat;
 pub use chase::{Goal, Quarry};
+pub use clock::{Clock, TimeOfDay};
 pub use fire::{Burn, BurnDef, FireballDef, FirePatch, Fireball};
 pub use buildings::{Ability, BuildingIx, BuildingKind, BuildingKindIx, BuildingState, BurstRefusal, Defence, FireRefusal, Occupant, PlacementRefusal, Slot, Stage, Turret};
 pub use haulers::{HaulerState, Phase};
@@ -1103,6 +1105,8 @@ mod bundle_tests;
 mod burst_tests;
 #[cfg(test)]
 mod chase_tests;
+#[cfg(test)]
+mod clock_tests;
 #[cfg(test)]
 mod dig_tests;
 #[cfg(test)]
