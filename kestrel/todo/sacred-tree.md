@@ -106,27 +106,6 @@ its milestones, in order; one PR per milestone.
   as G does; the job menu is for sprites standing outside.)
 - **Found in:** M2.2.
 
-## M6.1 Sloped ground
-
-- **Status:** open
-- **Why:** pit edges become ramps, so no pit traps a walker
-  ([mining design](../SACRED_TREE_MINING.md), M1, M2, M4, M8).
-- **What to do:**
-  - Scene settings for sloped ground and the depth limit (layers). The
-    Sacred Tree gets sloped ground and six layers; Dig Lab keeps its steps
-    and three layers.
-  - In sloped scenes, corner heights take the lowest of the four touching
-    tiles, and `Terrain::ground` interpolates the four corners (`Fx`, no
-    floats).
-  - In sloped scenes, `walkable` fails on ground steeper than one layer per
-    tile, instead of the 0.25 m step rule.
-  - Check that paths (`nav.rs`) and enemy routes follow the new
-    walkability.
-  - Dig Lab's tests and golden behaviour lines must not change.
-- **Where:** `kestrel/sim/src/terrain.rs`, `mine.rs`, `nav.rs`,
-  `kestrel/content/src` (scene settings).
-- **Found in:** mining design.
-
 ## M6.2 Digging in front, and the stone yield
 
 - **Status:** open
@@ -142,6 +121,14 @@ its milestones, in order; one PR per milestone.
   - Put the drops in `balances` and `validate`.
   - A randomized property test: no sequence of allowed digs leaves a walker
     without a walkable way to undug ground.
+  - **From M6.1:** a dig can make a tile it doesn't touch steep (a
+    diagonal neighbour of the dug tile, whose shared corner drops a
+    second layer below its far corners), and `walkable` is strict: a body
+    whose footprint is on steep ground can't move or path at all. Either
+    refuse such digs while someone stands there, or let a walker step off
+    steep ground it already stands on (without letting nav chain nodes
+    across steep tiles). Today's underfoot dig (Dig Lab's) still works in
+    sloped scenes and is what M3 replaces there.
 - **Where:** `kestrel/sim/src/settlement/avatar.rs`, `terrain.rs`,
   `mine.rs`, `piles.rs`.
 - **Found in:** mining design.
@@ -218,6 +205,53 @@ its milestones, in order; one PR per milestone.
 - **Found in:** mining design.
 
 ## Done
+
+### M6.1 Sloped ground
+
+- **Status:** done (branch `kestrel-sacred-tree-mining`)
+- **Why:** pit edges become ramps, so no pit traps a walker
+  ([mining design](../SACRED_TREE_MINING.md), M1, M2, M4, M8).
+- **What to do:** scene settings for sloped ground and the depth limit;
+  corner heights and bilinear ground; walkable by slope; paths and enemy
+  routes follow it; Dig Lab unchanged.
+- **Where:** `kestrel/sim/src/terrain.rs`, `mine.rs`, `nav.rs`,
+  `settlement/mod.rs` (`SceneSetup`), `kestrel/tools/assetc/core`
+  (scene schema), `kestrel/app/src/lockstep.rs`.
+- **Found in:** mining design.
+- **Done:** a scene opts in with `features: [SlopedGround]` and sets its
+  depth with `dig_layers: Some(n)` (scene schema in `voxel_assets`, the
+  pack stays version 16 since both default); `SceneSetup::sloped` and
+  `dig_layers` carry them to `Terrain::sloped` and `Terrain::max_layers`
+  (default `MAX_LAYERS`, 3). A generated mine takes the terrain's layers
+  at `generate_mine` (`MineSpec::layers`, ore arrays sized by it), so set
+  `max_layers` first. In a sloped scene a tile's height is `top` at its
+  center less its pit (surfaces snap to tiles), each corner is the lowest
+  of the four tiles touching it (drop tiles skipped; a drop tile itself
+  has no ground), and `ground` is bilinear in `Fx` (`Terrain::patch`).
+  `walkable` checks, every 0.1 m from `a` on, all five footprint points:
+  no drop, and no slope over `MAX_SLOPE` (a layer per tile) along x or y
+  at that point; a diagonal may be up to √2 steeper, so a one-layer pit's
+  diagonal neighbours stay walkable. `Terrain::steep(tile)` says whether
+  any of a tile's edges falls more than a layer (for M6.2's dig rules and
+  M6.6's drawing). A terrain with no pits, mine, surfaces or drops is
+  level and skips all of it, so the Sacred Tree (now sloped, six layers)
+  behaves exactly as before; only its world's terrain hash moved, since
+  the settings hash only when set. `nav::path`/`path_avoiding` (threat
+  waves, chasers, sprites, haulers) keep to `walkable` in sloped scenes;
+  `path_with` callers pass their own check as before (the avatar's
+  jetpack still ignores slopes). Not slope-checked: the articulated
+  turning circle of towed haulers (none in the Sacred Tree). Save format
+  34; input log, net protocol and commands unchanged; the sim golden file
+  is unchanged. App: the Dig Lab HUD and ore probe read
+  `terrain.max_layers`; `digging.rs`'s pit walls still draw
+  `MAX_LAYERS` bands (M6.6). Cost: a sloped ground sample reads 9 tile
+  heights; with M6.3's generated 256 m map, watch nav cost (every edge
+  now runs `walkable`). Tested: a pit's flat floor and sloping
+  neighbours, a tile between neighbours two layers apart is steep (and
+  the body's edge counts), a route around a deep pit and in by a
+  one-layer ramp, walking out of a one-layer pit and digging six deep in
+  a sloped scene, the Dig Lab keeping steps and three layers, and a save
+  round trip of a sloped six-layer mine.
 
 ### Rotating the town camera
 
