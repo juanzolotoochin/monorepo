@@ -791,9 +791,7 @@ pub fn tick(world: &mut World) {
             let at = match sim.agents.get(agent) {
                 Some(a) if !mine => {
                     let p = Vec3::new(a.position[0], 0.0, a.position[1]);
-                    p + Vec3::Y
-                        * crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, p)
-                            .unwrap_or(0.0)
+                    p + Vec3::Y * town_ground(world, p)
                 }
                 _ => pos,
             };
@@ -1271,8 +1269,7 @@ pub fn tick(world: &mut World) {
         }
     }
     for (key, mut view) in desired {
-        view.position.y +=
-            crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, view.position).unwrap_or(0.);
+        view.position.y += town_ground(world, view.position);
         let template = &state.templates[&view.skin];
         if !state.views.contains_key(&key) {
             let rig = if let Some(rig) = state.pool.get_mut(&view.skin).and_then(|p| p.pop()) {
@@ -1435,7 +1432,7 @@ fn town_caption(world: &mut World, state: &mut Settlement, key: &str, position: 
 fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &mut BTreeMap<String, View>, player: Vec3) -> Vec<(String, Vec3, f32, Glow)> {
     use crate::legacy::{BuildingStatus, Occupant, SpriteActivity};
     let mut glows = vec![];
-    let ground = |world: &World, p: Vec3| crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, p).unwrap_or(0.);
+    let ground = town_ground;
     let seconds = sim.time() / HZ;
     let burst = burst_indicator(world);
     let leave = leave_prompt(world);
@@ -1683,7 +1680,7 @@ const FIRE_FLAMES: usize = 11;
 /// burning enemy carries two small flames. The fire's ring is the HUD's
 /// (`input::hud`).
 fn fire_glows(world: &World, sim: &Simulation, glows: &mut Vec<(String, Vec3, f32, Glow)>) {
-    let ground = |p: Vec3| crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, p).unwrap_or(0.);
+    let ground = |p: Vec3| town_ground(world, p);
     let now = sim.time();
     let seconds = now / HZ;
     for f in &sim.fireballs {
@@ -1834,13 +1831,26 @@ fn town_help(world: &mut World) {
     }
 }
 
+/// The drawn ground under `p`: a generated mine's ground and pits where the
+/// scene has one (the town's big map round its hill, M6.3; what the dug
+/// ground draws, `digging`), else the scene's platforms.
+fn town_ground(world: &World, p: Vec3) -> f32 {
+    let service = world.resource::<crate::lockstep::SessionService>();
+    if service.world().is_some_and(|w| w.terrain().mine().is_some()) {
+        if let Some(height) = service.ground_height(p) {
+            return height;
+        }
+    }
+    crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, p).unwrap_or(0.)
+}
+
 /// A player's body hidden while it possesses a building (`hide_possessing`).
 #[derive(Component)]
 struct Possessing;
 
 fn town_interact(world: &mut World, state: &mut Settlement, sim: &Simulation, player: Vec3) {
     use crate::input::{gameplay::Dispatcher, InputService, Panel};
-    let ground = |world: &World, p: Vec3| crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, p).unwrap_or(0.);
+    let ground = town_ground;
     let mut shown: Vec<String> = Vec::new();
     let town = world.get_resource::<Dispatcher>().map(|d| d.town.clone()).unwrap_or_default();
     let key = match world.get_resource::<InputService>().map(|i| i.frame().owner) {
@@ -1926,7 +1936,7 @@ fn town_ghost(world: &mut World, state: &mut Settlement, sim: &Simulation) {
     let tint = if ghost.verdict.is_ok() { valid } else { invalid };
     let shape = state.building_shapes[&kind.id];
     let template_scale = state.templates[&kind.skin].scale;
-    let at = ghost.center + Vec3::Y * crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, ghost.center).unwrap_or(0.);
+    let at = ghost.center + Vec3::Y * town_ground(world, ghost.center);
     let heading = facing([ghost.center.x, ghost.center.z], [ghost.output.x, ghost.output.z]);
     let (_, rig, fade) = state.ghost.as_mut().unwrap();
     fade.tint(world, tint, 0.45);
