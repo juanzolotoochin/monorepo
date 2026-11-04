@@ -106,20 +106,6 @@ its milestones, in order; one PR per milestone.
   as G does; the job menu is for sprites standing outside.)
 - **Found in:** M2.2.
 
-## M6.4 No more Stone Gatherer
-
-- **Status:** open
-- **Why:** all stone comes from digging (Settled).
-- **What to do:**
-  - Remove the Stone Gatherer from the Sacred Tree's supply and build menu;
-    test fixtures may keep it as a generic kind.
-  - Rewrite the happy-path test: the Stone Gatherer step becomes the elder
-    digging stone (and, after M6.5, a miner fetching it).
-  - A small starting stone stock if the first mechanism needs it.
-- **Where:** `kestrel/app/assets/levels/sacred_tree_supply.ron`, the sim
-  and control tests that build one.
-- **Found in:** mining design.
-
 ## M6.5 Miner sprites
 
 - **Status:** open
@@ -169,6 +155,53 @@ its milestones, in order; one PR per milestone.
 - **Found in:** mining design.
 
 ## Done
+
+### M6.4 No more Stone Gatherer
+
+- **Status:** done (branch `kestrel-sacred-tree-mining`)
+- **Why:** all stone comes from digging (Settled).
+- **What to do:**
+  - Remove the Stone Gatherer from the Sacred Tree's supply and build menu;
+    test fixtures may keep it as a generic kind.
+  - Rewrite the happy-path test: the Stone Gatherer step becomes the elder
+    digging stone (and, after M6.5, a miner fetching it).
+  - A small starting stone stock if the first mechanism needs it.
+- **Where:** `kestrel/app/assets/levels/sacred_tree_supply.ron`, the sim
+  and control tests that build one.
+- **Found in:** mining design.
+- **Done:** the supply's building kinds are `wood_gatherer` and
+  `ballista` (so the ballista is kind 1; tests' constants moved), and its
+  comments say stone is dug; the job menu reads IDLE, GATHER WOOD, MAN
+  BALLISTA (it lists kinds generically; no app-side special case used the
+  Stone Gatherer). No starting stone: the happy path digs its first stone
+  at 65 s, has it at the tree at 77 s and the first mechanism in at 92 s,
+  all of it in 131 s of the 210 s calm start. The happy path
+  (`control::tests::the_happy_path_plays_from_a_fresh_start`, no cheats)
+  steps 4 to 6 now: walk down the east ramp to arena tile (20, -11), facing
+  west; `{"op":"dig"}` (works in the town, a `Digging` scene since M6.3)
+  digs the vein's east arm (19, -11); walk into that pit and dig the
+  vein's middle (18, -11); two stone layers drop 6 to 12 stone on one
+  pile; "PICK UP 5 STONE"; deposit at the tree's stone pile. Step 7's
+  Wood Gatherer is building 1, and leaves the tree 6 wood and 3 stone.
+  The vein is the east one `Hill::exposed_veins` gives for seed 7,
+  hard-coded and checked through the state's `digging.nearest_ore`. The
+  control build test builds a Wood Gatherer (Ash staffs the prebuilt one
+  first; wood, the leftover back, then stone) and the job-menu test picks
+  the ballista. The bootstrapping test became
+  `construction_tests::both_kinds_build_from_an_empty_tree_and_dug_stone`
+  on the map (dig two layers of the east vein, carry every dug stone up,
+  then a Wood Gatherer and a ballista). Tests that only needed a second
+  gathering kind (the construction steps, the build soak) add a test-only
+  Stone Gatherer after the ballista (`tests::with_stone_gatherer`); the
+  wave soak builds a Wood Gatherer where its Stone Gatherer stood.
+  `app/README.md` says where stone comes from; the demo script needs
+  nothing for M6.4 (it never built a Stone Gatherer; it stocks stone with
+  `settlement_stock`), its old lanes stay M6.7's. Save format, input log,
+  net protocol, commands and the golden file unchanged.
+  For later: M6.5 extends the happy path where its step 6 says
+  (Reed to Mine, a miner fetching the dug stone left on the ground, 1 to
+  7 units) and the bootstrapping test's note; M6.7 can tune the yields
+  against the 77 s first stone.
 
 ### M6.3 The big map and the hill
 
