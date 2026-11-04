@@ -117,6 +117,32 @@ fn a_miner_digs_exposed_stone_and_carries_it_to_the_tree() {
     eprintln!("first stone at the tree at {} s", sim.world().tick() / HZ);
 }
 
+/// Miners are a steady but modest income (M6.7's tuning): two miners on
+/// the map, left alone for five minutes, bring stone to the tree every
+/// minute, but far less than the elder digs (a layer in 2 s, a vein's ten
+/// stone layers in a minute or so): enough to keep a ballista or two
+/// stocked between waves, not to stock them mid-wave.
+#[test]
+fn two_miners_bring_a_steady_modest_income() {
+    let mut sim = map();
+    step(&mut sim, &[command(CommandKind::SetSpriteJob { agent: MOSS, job: SpriteJob::Mine }), command(CommandKind::SetSpriteJob { agent: REED, job: SpriteJob::Mine })]);
+    let mut minutes = Vec::new();
+    for _ in 0..5 {
+        let before = delivered(&sim);
+        for _ in 0..60 * HZ {
+            step(&mut sim, &[]);
+        }
+        minutes.push(delivered(&sim) - before);
+    }
+    let total: u32 = minutes.iter().sum();
+    eprintln!("two miners, stone at the tree each minute: {minutes:?}, {total} in 5 min");
+    assert!(minutes[1..].iter().all(|&m| m > 0), "stone comes every minute after the first: {minutes:?}");
+    assert!((MINER_INCOME.0..=MINER_INCOME.1).contains(&total), "{total} stone in 5 min: {minutes:?}");
+}
+
+/// What two miners bring the tree in five minutes, at least and at most.
+const MINER_INCOME: (u32, u32) = (20, 120);
+
 /// Two miners never hold or dig the same tile: the nearest goes to one,
 /// and the other digs the next.
 #[test]

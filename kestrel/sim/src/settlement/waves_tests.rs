@@ -21,10 +21,10 @@ const TREE_STONE: DepotIx = 1;
 const BALLISTA_KIND: BuildingKindIx = 1;
 /// When the map's first ghoul comes: the calm start (the supply's first
 /// wave).
-const CALM: u64 = 210 * HZ;
+const CALM: u64 = 165 * HZ;
 /// Every lane has sent all its ghouls by then, and the last have walked up
 /// from the ring and arrived.
-const LAST: u64 = 775 * HZ;
+const LAST: u64 = 730 * HZ;
 
 fn fx(v: f64) -> Fx {
     Fx::from_bits((v * 4294967296.0).round() as i64)
@@ -109,8 +109,9 @@ fn wave_starts(s: &Settlement) -> Vec<u64> {
 
 /// Left alone, the town meets nothing during the calm start, then every
 /// lane sends its ghouls on the timer, and the waves fell the tree in the
-/// fifth wave: losing is possible when the defence is ignored, but not
-/// early.
+/// fourth wave of six (M6.7: the first ghouls reach the hill's top about
+/// 63 s after they set off): losing is possible when the defence is
+/// ignored, but not early.
 #[test]
 fn an_undefended_town_has_its_calm_start_then_falls_to_the_waves() {
     let mut sim = town(&[]);
@@ -129,8 +130,8 @@ fn an_undefended_town_has_its_calm_start_then_falls_to_the_waves() {
     eprintln!("undefended: {tally:?}");
     let fell = tally.fell_at.expect("the tree falls");
     let wave = starts.iter().filter(|&&t| t <= fell).count();
-    assert_eq!(wave, 5, "the tree falls in the fifth wave (at {} s)", fell / HZ);
-    assert!(s.waves.iter().all(|w| w.spawned > 0), "every lane sent ghouls: {:?}", s.waves.iter().map(|w| w.spawned).collect::<Vec<_>>());
+    assert_eq!(wave, 4, "the tree falls in the fourth wave (at {} s)", fell / HZ);
+    assert!(s.waves.iter().filter(|w| w.first <= fell).all(|w| w.spawned > 0), "every lane due sent ghouls: {:?}", s.waves.iter().map(|w| w.spawned).collect::<Vec<_>>());
     let spawned: u32 = s.waves.iter().map(|w| w.spawned).sum();
     assert_eq!(spawned, s.threats.len() as u32 + tally.breaches + tally.kills, "every ghoul breached, died or is still out");
 }
@@ -176,13 +177,15 @@ const WEST_OF_TREE: [f64; 2] = [-3.0, -1.4];
 
 /// The defence is a question of two entrances (M7). A manned ballista by
 /// the east ramp's end, stocked between waves, shoots its whole column (a
-/// ghoul needs two bolts, the store holds ten and the column brings 3 to 5
-/// a wave), but the west ramp's lanes walk in and breach; a second by the
+/// ghoul needs two bolts, the store holds ten and the column brings 3 or 4
+/// a wave), but the west ramp's lanes, one ghoul more each wave from the
+/// second, walk in and breach: the tree ends near falling. A second by the
 /// west ramp's end stops nearly all of them.
 ///
 /// Before the big map, every lane ended by one ballista beside the tree,
-/// which ran dry in the bigger waves unless reloaded mid-wave; with the
-/// lanes split over two ramps that lever is gone, for M6.7's tuning.
+/// which ran dry in the bigger waves unless reloaded mid-wave. With the
+/// lanes split over two ramps, the lever is a second ballista by the mid
+/// waves, and the stone to keep both stocked (M6.7).
 #[test]
 fn a_ballista_guards_one_ramp_and_two_keep_the_tree_standing() {
     let east_lanes: u32 = settlement(&town(&[])).waves.iter().filter(|w| w.id.starts_with("east")).map(|w| w.count).sum();
@@ -190,7 +193,7 @@ fn a_ballista_guards_one_ramp_and_two_keep_the_tree_standing() {
     eprintln!("one ballista by the east ramp: tree {one} {tally:?}");
     assert_eq!(tally.fell_at, None);
     assert!(tally.kills + 2 >= east_lanes, "the east column falls to it: {east_lanes} came, {tally:?}");
-    assert!(tally.breaches >= 6 && one <= 14, "the west lanes breach: tree {one}, {tally:?}");
+    assert!(tally.breaches >= 10 && one <= 10, "the west lanes breach: tree {one}, {tally:?}");
     let (two, tally) = defend(&[EAST_OF_TREE, WEST_OF_TREE]);
     eprintln!("a ballista by each ramp: tree {two} {tally:?}");
     assert!(two >= 17, "tree {two}, {tally:?}");
