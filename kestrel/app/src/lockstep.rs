@@ -2497,7 +2497,7 @@ mod tests {
                 let world = game.client.world_mut();
                 let player = world.query_filtered::<&Transform, With<Player>>().single(world).unwrap().translation;
                 let mirror = world.resource::<WorldMirror>();
-                let shown = crate::digging::shown_digs(mirror, Some(&drawn), player);
+                let shown = crate::digging::shown_digs(mirror, Some(&drawn), player, None);
                 let mine: Vec<_> = shown.iter().filter(|d| d.agent == drawn.agent).collect();
                 assert!(mine.len() <= 1);
                 let digging = drawn.avatar().dig.clone();
