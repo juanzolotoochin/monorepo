@@ -106,6 +106,117 @@ its milestones, in order; one PR per milestone.
   as G does; the job menu is for sprites standing outside.)
 - **Found in:** M2.2.
 
+## M6.1 Sloped ground
+
+- **Status:** open
+- **Why:** pit edges become ramps, so no pit traps a walker
+  ([mining design](../SACRED_TREE_MINING.md), M1, M2, M4, M8).
+- **What to do:**
+  - Scene settings for sloped ground and the depth limit (layers). The
+    Sacred Tree gets sloped ground and six layers; Dig Lab keeps its steps
+    and three layers.
+  - In sloped scenes, corner heights take the lowest of the four touching
+    tiles, and `Terrain::ground` interpolates the four corners (`Fx`, no
+    floats).
+  - In sloped scenes, `walkable` fails on ground steeper than one layer per
+    tile, instead of the 0.25 m step rule.
+  - Check that paths (`nav.rs`) and enemy routes follow the new
+    walkability.
+  - Dig Lab's tests and golden behaviour lines must not change.
+- **Where:** `kestrel/sim/src/terrain.rs`, `mine.rs`, `nav.rs`,
+  `kestrel/content/src` (scene settings).
+- **Found in:** mining design.
+
+## M6.2 Digging in front, and the stone yield
+
+- **Status:** open
+- **Why:** digging must never trap the digger, and stone comes from the
+  ground (M3, M5, M6).
+- **What to do:**
+  - In sloped scenes, a dig takes the faced tile, at most one layer below
+    the digger's own tile. No dig under a building, site, pile, the tree or
+    undiggable ground (M7). The elder digs in about 2 s, reusing Dig Lab's
+    dig command, bar and dust.
+  - Stone becomes a mineral in the generator's layers; digging out a stone
+    layer drops 3–6 stone onto a town ground pile beside the pit.
+  - Put the drops in `balances` and `validate`.
+  - A randomized property test: no sequence of allowed digs leaves a walker
+    without a walkable way to undug ground.
+- **Where:** `kestrel/sim/src/settlement/avatar.rs`, `terrain.rs`,
+  `mine.rs`, `piles.rs`.
+- **Found in:** mining design.
+
+## M6.3 The big map and the hill
+
+- **Status:** open
+- **Why:** room to explore for stone, and a hill that makes the defence a
+  question of two entrances (M5, M7).
+- **What to do:**
+  - The Sacred Tree becomes 256 × 256 m of generated ground with an
+    authored plateau about 2 m high, wide enough for the 26 m town, with two
+    ramps on opposite sides. The hill and plateau can't be dug.
+  - The generator guarantees a few stone veins exposed at the surface 15–40
+    m from the tree.
+  - Ghouls spawn on a ring about 40 m from the tree, one lane per ramp.
+  - The town camera follows the elder over the big map.
+- **Where:** `kestrel/sim/src/mine.rs`, `terrain.rs`,
+  `kestrel/app/assets/levels/sacred_tree.ron`, `sacred_tree_supply.ron`.
+- **Found in:** mining design.
+
+## M6.4 No more Stone Gatherer
+
+- **Status:** open
+- **Why:** all stone comes from digging (Settled).
+- **What to do:**
+  - Remove the Stone Gatherer from the Sacred Tree's supply and build menu;
+    test fixtures may keep it as a generic kind.
+  - Rewrite the happy-path test: the Stone Gatherer step becomes the elder
+    digging stone (and, after M6.5, a miner fetching it).
+  - A small starting stone stock if the first mechanism needs it.
+- **Where:** `kestrel/app/assets/levels/sacred_tree_supply.ron`, the sim
+  and control tests that build one.
+- **Found in:** mining design.
+
+## M6.5 Miner sprites
+
+- **Status:** open
+- **Why:** sprites dig, slowly (Settled, M9).
+- **What to do:**
+  - A "Mine" sprite job. A miner goes to the nearest tile reachable from
+    the tree whose top layer is stone, digs it 4–5 times slower than the
+    elder (within the M3 rule), and carries the drop to the tree's stone
+    pile.
+  - With no exposed stone, it waits at the stone pile and replans when the
+    ground changes.
+  - The plan keeps the sprites' shape (goal, plan, invalidate, replan).
+  - Add the job to the job menu.
+- **Where:** `kestrel/sim/src/settlement/sprites.rs`, `kestrel/app/src/legacy.rs`.
+- **Found in:** mining design.
+
+## M6.6 Drawing sloped ground and stone
+
+- **Status:** open
+- **Why:** the ramps, pits and veins must read on screen.
+- **What to do:**
+  - A ground mesh from the corner heights (sloped pit edges and terraces),
+    with the hill's cliff sides.
+  - Stone tints on the ground and pit walls; a dig bar and dust for sprites.
+  - Keep the 256 m map fast to draw and re-mesh only what a dig changes.
+- **Where:** `kestrel/app/src/digging.rs`, the town drawing.
+- **Found in:** mining design.
+
+## M6.7 Waves, tuning, soak and demo
+
+- **Status:** open
+- **Why:** the big map changes travel times and the stone supply.
+- **What to do:**
+  - Tune the waves, starting stone, dig speeds and yields on the big map.
+  - The soak test runs with digging and miners, with `validate` every tick.
+  - Update `demos/sacred_tree.json` and `app/README.md`.
+- **Where:** `kestrel/sim/src/settlement/soak_tests.rs`,
+  `sacred_tree_supply.ron`, `kestrel/app/demos/`.
+- **Found in:** mining design.
+
 ## Done
 
 ### Rotating the town camera
