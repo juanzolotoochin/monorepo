@@ -106,22 +106,6 @@ its milestones, in order; one PR per milestone.
   as G does; the job menu is for sprites standing outside.)
 - **Found in:** M2.2.
 
-## M6.6 Drawing sloped ground and stone
-
-- **Status:** open
-- **Why:** the ramps, pits and veins must read on screen.
-- **What to do:**
-  - A ground mesh from the corner heights (sloped pit edges and terraces),
-    with the hill's cliff sides.
-  - Stone tints on the ground and pit walls; a dig bar and dust for sprites.
-  - Keep the 256 m map fast to draw and re-mesh only what a dig changes.
-  - From M6.3: the HUD shows Dig Lab's line ("PIT x/6 / F TO DIG / HOLD
-    SPACE TO FLY OUT") in the town; show the town's own dig hint instead.
-  - From M6.5: `digging::shown_digs` shows avatars' digs only; a miner's
-    is `AgentState::digging()` (a `Dig` as the elder's, 9 s long).
-- **Where:** `kestrel/app/src/digging.rs`, the town drawing.
-- **Found in:** mining design.
-
 ## M6.7 Waves, tuning, soak and demo
 
 - **Status:** open
@@ -145,6 +129,71 @@ its milestones, in order; one PR per milestone.
 - **Found in:** mining design.
 
 ## Done
+
+### M6.6 Drawing sloped ground and stone
+
+- **Status:** done (branch `kestrel-sacred-tree-mining`)
+- **Why:** the ramps, pits and veins must read on screen.
+- **What to do:**
+  - A ground mesh from the corner heights (sloped pit edges and terraces),
+    with the hill's cliff sides.
+  - Stone tints on the ground and pit walls; a dig bar and dust for sprites.
+  - Keep the 256 m map fast to draw and re-mesh only what a dig changes.
+  - From M6.3: the HUD shows Dig Lab's line ("PIT x/6 / F TO DIG / HOLD
+    SPACE TO FLY OUT") in the town; show the town's own dig hint instead.
+  - From M6.5: `digging::shown_digs` shows avatars' digs only; a miner's
+    is `AgentState::digging()` (a `Dig` as the elder's, 9 s long).
+- **Where:** `kestrel/app/src/digging.rs`, the town drawing.
+- **Found in:** mining design.
+- **Done:** `digging.rs` meshes sloped scenes
+  (`sloped_chunk_mesh`; the Dig Lab keeps `chunk_mesh`, its colors
+  unchanged): a gentle tile's top is two triangles from its corner heights
+  (each the lowest of the four tiles round it, as `Terrain::patch`; split
+  on the flatter diagonal), so pit edges, ramps and terraces slope; a
+  steep tile (`Terrain::steep`'s rule) is drawn flat at its own height with
+  walls down to lower neighbours, so the hill's sides, the ramps' edges and
+  pits two or more layers deep stand as cliffs. A gentle tile's corners
+  are never above a neighbour's top, so walls only fall from steep tiles
+  (tested: no holes). Walls are clipped into quarter-meter bands through
+  the scene's `max_layers` (six in the town; `layer_of` darkens over
+  however many there are), then rock. A slope's corners are colored by how
+  far they are dug below the lowest undug ground round them, so terraces
+  stay surface. Stone: `tint` gives `STONE_TINT` (cool grey) for
+  `Veins::Stone`, the dig lab's ore colors otherwise. Chunks stay 16 x 16
+  tiles; a dig rebuilds the chunks of the tiles within two of it in sloped
+  scenes (its four corners move, reshaping the 3 x 3 round it, whose walls
+  reach one further; `redrawn`, `dirty_chunks`), the old plus elsewhere.
+  Cost (release demo, 256 m map): the 289 chunks build in 29-30 ms at
+  world start; a dig rebuilds 1 or 2 chunks in 0.2-0.44 ms (logged at
+  info). Miners: `shown_digs` reads `AgentState::digging()` for every
+  agent, a sprite's bar 1.18 m over its feet (under its tag); dust and the
+  layer burst as the elder's. Dug stone: three grey cubes fly 0.45 s from
+  the pit onto the nearest ground pile within 3.5 m and land with a clack
+  (`toss_stone`, `fly_stones`; the pile itself still fills at once). Town
+  drawing stood every sprite, ghoul, pile, building and caption on the
+  scene pack's height (0), so off the plateau they floated 2 m over the
+  ground; `settlement::town_ground` reads the sim's terrain in scenes with
+  a mine. HUD: F works in the town (keyboard F is `Utility::Dig` there
+  too, `input::tests::keyboard_f_digs_in_a_town`); `gameplay::town_dig`
+  asks the sim (`Settlement::dig_in_front_of`, new) and shows the refusal
+  over the elder ("Too deep from here: step down first", "A pile is in
+  the way", ...) instead of sending a dig that would be refused; the town
+  help line reads "... E INTERACT / F DIG / B BUILD ..."; the digging HUD
+  line in sloped scenes reads "PIT x/6 / F DIG IN FRONT" (no flying).
+  Tests (`digging::tests`): drawn corners equal the sim's ground and
+  steepness on level ground and generated terraces, edges close, a dig
+  changes nothing outside `redrawn`, chunk dirtiness at borders and
+  corners, band clipping, stone tint. Save format, input log, net
+  protocol, commands and golden file unchanged.
+  For later: the digging HUD line sits in the contact panel, which towns
+  hide, so the town's hint is the help line and the refusal text; the
+  refusal is checked against the confirmed world (a joined client's
+  prediction can differ by a tick). The camera can't zoom from the control
+  protocol, so the shots are crops. Pits at the hill's foot lie in its
+  shadow and read dark; far terraces seen at a grazing angle show pale
+  vertical stripes (probably distant steep tiles' walls in the fog), worth a
+  look with M6.7's demo. Slope colors interpolate between corners (soft,
+  not banded like walls).
 
 ### M6.5 Miner sprites
 
