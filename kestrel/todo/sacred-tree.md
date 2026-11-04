@@ -169,6 +169,104 @@ its milestones, in order; one PR per milestone.
   `Heights`).
 - **Found in:** M6.6, M6.7.
 
+## M7.1 The clock
+
+- **Status:** open
+- **Why:** the night decides when ghouls come, so the sim must know the
+  hour ([day and night design](../SACRED_TREE_DAYNIGHT.md), N1, N4).
+- **What to do:** a `day_cycle: Some((day: 150.0, night: 75.0))` setting
+  in the supply's scenario (seconds; start at dawn); pure functions of the
+  tick for the phase (day or night), the fraction through it, the night's
+  number and the time to the next dusk, in `Fx`/ticks. No new settlement
+  state. Scenarios without a cycle report none.
+- **Where:** `kestrel/content` (scenario schema), `kestrel/sim/src/settlement`
+  (a new `clock.rs`), `app/assets/levels/sacred_tree_supply.ron`.
+- **Found in:** day and night design.
+- **Tests:** boundaries for unequal lengths, night numbers, time to dusk;
+  no cycle means no clock.
+
+## M7.2 Night waves and dawn
+
+- **Status:** open
+- **Why:** ghouls attack at night, one wave per night, and the day starts
+  clean (N2, N3, N10).
+- **What to do:** in a scenario with a day cycle, waves are lanes (id,
+  position, target, character) plus a `nights` list, each night giving the
+  ghouls per lane; a night's ghouls spawn spread over its first third; the
+  last night repeats. At sunrise every live ghoul catches fire (the fire
+  effect) and falls within a few seconds, as dispelled (its own event, no
+  kill). Replace the Sacred Tree's waves (start from today's 3/5/6/7/8/8
+  and retune for 150 s days and 75 s nights). Scenarios without a cycle
+  keep `first`/`every`/`count`. Save format up.
+- **Where:** `kestrel/content` (scenario), `sim/src/settlement/combat.rs`
+  (spawning), `fire.rs`, `mod.rs` (loading), `waves_tests.rs`,
+  `lane_tests.rs`, `soak_tests.rs`, the happy path,
+  `sacred_tree_supply.ron`.
+- **Found in:** day and night design.
+- **Tests:** no spawn by day; listed counts per lane within the first
+  third; the last night repeats; dawn dispels all and the balances hold;
+  ignored, the town falls on a known night; one ballista per ramp holds
+  four nights; the soak runs several cycles; other scenes' golden
+  behaviour lines unchanged (regenerate state hashes in their own commit
+  if needed).
+
+## M7.3 The sun, the moon and the colors
+
+- **Status:** open
+- **Why:** you read the hour from the shadows and the light's color (N5,
+  N6).
+- **What to do:** a `day_cycle` section in the scene file with four keys
+  (dawn, noon, dusk, midnight), each with sunlight color and illuminance,
+  ambient color and brightness, sky color and fog; blended between keys.
+  The scene's one `DirectionalLight` follows an east-to-west arc tilted
+  south, elevation clamped near 10° at the horizon; at night the same
+  light is a dim blue moon on the same arc. The moon is dim: night is
+  dark enough that M7.4's lights matter. Tune the shadow cascades for the
+  256 m map and low sun. Scenes without the section keep their fixed
+  light; a style switch keeps the cycle's light.
+- **Where:** `kestrel/tools/assetc/core` (scene schema),
+  `app/src/scene.rs`, `style.rs`, `app/assets/levels/sacred_tree.ron`.
+- **Found in:** day and night design.
+- **Tests:** keyframe blending at and between keys; screenshots at dawn,
+  noon, dusk and midnight.
+
+## M7.4 Lights at night
+
+- **Status:** open
+- **Why:** the town and the threat stay readable in a dark night (N7).
+- **What to do:** the tree glows (a warm point light rising at dusk,
+  fading at dawn); ghouls' eyes glow (two small emissive dots); a few
+  fixed lanterns placed in the scene file, lit at dusk: at the top of each
+  ramp and round the tree's plaza.
+- **Where:** `app/src/scene.rs`, `settlement.rs` (ghoul drawing),
+  `sacred_tree.ron`, the scene schema.
+- **Found in:** day and night design.
+- **Tests:** a midnight screenshot shows the plaza, both ramp tops and an
+  approaching ghoul.
+
+## M7.5 The time on the HUD
+
+- **Status:** open
+- **Why:** you plan the last trip before dark (N8, N10).
+- **What to do:** a small sun-and-moon dial with the night's number; a
+  "Night falls in 0:20" warning near dusk; nights survived once the last
+  listed night repeats. Reads M7.1's clock.
+- **Where:** `app/src/settlement.rs` (HUD).
+- **Found in:** day and night design.
+- **Tests:** HUD text at day, near dusk and at night (the control tests).
+
+## M7.6 Tuning, soak and demo
+
+- **Status:** open
+- **Why:** the playtest needs four nights that feel right in 15 minutes.
+- **What to do:** tune night sizes and the first day; update the demo to
+  show a full cycle (a day of building, dusk, a night attack, dawn);
+  screenshots; full suite once; a `docs/test-time.md` row; mark the
+  design done.
+- **Where:** `sacred_tree_supply.ron`, `app/demos/sacred_tree.json`,
+  `SACRED_TREE_DAYNIGHT.md`.
+- **Found in:** day and night design.
+
 ## Done
 
 ### M6.7 Waves, tuning, soak and demo
