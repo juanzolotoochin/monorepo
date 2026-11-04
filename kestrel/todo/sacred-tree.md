@@ -169,30 +169,16 @@ its milestones, in order; one PR per milestone.
   `Heights`).
 - **Found in:** M6.6, M6.7.
 
-## M7.2 Night waves and dawn
+## The dawn's dispel effect
 
 - **Status:** open
-- **Why:** ghouls attack at night, one wave per night, and the day starts
-  clean (N2, N3, N10).
-- **What to do:** in a scenario with a day cycle, waves are lanes (id,
-  position, target, character) plus a `nights` list, each night giving the
-  ghouls per lane; a night's ghouls spawn spread over its first third; the
-  last night repeats. At sunrise every live ghoul catches fire (the fire
-  effect) and falls within a few seconds, as dispelled (its own event, no
-  kill). Replace the Sacred Tree's waves (start from today's 3/5/6/7/8/8
-  and retune for 150 s days and 75 s nights). Scenarios without a cycle
-  keep `first`/`every`/`count`. Save format up.
-- **Where:** `kestrel/content` (scenario), `sim/src/settlement/combat.rs`
-  (spawning), `fire.rs`, `mod.rs` (loading), `waves_tests.rs`,
-  `lane_tests.rs`, `soak_tests.rs`, the happy path,
-  `sacred_tree_supply.ron`.
-- **Found in:** day and night design.
-- **Tests:** no spawn by day; listed counts per lane within the first
-  third; the last night repeats; dawn dispels all and the balances hold;
-  ignored, the town falls on a known night; one ballista per ramp holds
-  four nights; the soak runs several cycles; other scenes' golden
-  behaviour lines unchanged (regenerate state hashes in their own commit
-  if needed).
+- **Why:** at sunrise a ghoul burns (its fire flames show) and then just
+  vanishes: `Event::Dispelled` (M7.2) has no effect or sound in the app.
+- **What to do:** a fall, ash or smoke effect and a soft cue on
+  `legacy::Event::Dispelled`, in the style of the fire kill.
+- **Where:** `kestrel/app/src/settlement.rs` (events to effects and cues),
+  `app/src/effects.rs`.
+- **Found in:** M7.2.
 
 ## M7.3 The sun, the moon and the colors
 
@@ -250,8 +236,110 @@ its milestones, in order; one PR per milestone.
 - **Where:** `sacred_tree_supply.ron`, `app/demos/sacred_tree.json`,
   `SACRED_TREE_DAYNIGHT.md`.
 - **Found in:** day and night design.
+- **From M7.2:** the demo's waits are timed for the old first wave (165 s,
+  three east ghouls); night 1 now falls at 150 s with three east and two
+  west, so rebuild it rather than nudge it. Ghouls take about 63 s from the
+  ring and nights are 75 s, so the fight is all in a night's last 20 s and
+  a column's 6th ghoul only burns at dawn: if nights should feel longer,
+  move the ring in or lengthen the night rather than grow columns.
+  `COLUMN_GAP` (2.5 s) and `DAWN_BURN` (2 to 4 s) are code
+  (`settlement/combat.rs`).
 
 ## Done
+
+### M7.2 Night waves and dawn
+
+- **Status:** done (branch `kestrel-sacred-tree-daynight`)
+- **Why:** ghouls attack at night, one wave per night, and the day starts
+  clean (N2, N3, N10).
+- **What to do:** in a scenario with a day cycle, waves are lanes (id,
+  position, target, character) plus a `nights` list, each night giving the
+  ghouls per lane; a night's ghouls spawn spread over its first third; the
+  last night repeats. At sunrise every live ghoul catches fire (the fire
+  effect) and falls within a few seconds, as dispelled (its own event, no
+  kill). Replace the Sacred Tree's waves (start from today's 3/5/6/7/8/8
+  and retune for 150 s days and 75 s nights). Scenarios without a cycle
+  keep `first`/`every`/`count`. Save format up.
+- **Where:** `kestrel/content` (scenario), `sim/src/settlement/combat.rs`
+  (spawning), `fire.rs`, `mod.rs` (loading), `waves_tests.rs`,
+  `lane_tests.rs`, `soak_tests.rs`, the happy path,
+  `sacred_tree_supply.ron`.
+- **Found in:** day and night design.
+- **Tests:** no spawn by day; listed counts per lane within the first
+  third; the last night repeats; dawn dispels all and the balances hold;
+  ignored, the town falls on a known night; one ballista per ramp holds
+  four nights; the soak runs several cycles; other scenes' golden
+  behaviour lines unchanged (regenerate state hashes in their own commit
+  if needed).
+- **Done:** content: a wave with `nights: [..]` is a lane
+  (`content::scenario::Wave::nights`, `Wave::lane()`): how many ghouls it
+  sends on each night, the first night first; `first`/`every`/`count` are
+  now `#[serde(default)]` and must be left out of a lane. Validation: a
+  lane needs the day cycle, every lane lists the same number of nights (up
+  to 64, each up to 64 ghouls); timed waves keep their old checks and may
+  still run beside a day cycle (tests use one to send a ghoul at a set
+  time); other scenes are unchanged. The supply reads
+  `(id: "east", position: (40.0, 0.0), target: (1.8, -0.6), character:
+  "ghoul_sacred_tree", nights: [3, 5, 5, 5])` and west `[2, 4, 5, 5]`
+  (one lane per ramp, no more lane-per-ghoul workaround). Sim:
+  `Settlement::clock: Option<Clock>` (from `Clock::of` in
+  `from_scenario`; `Clock` is serde now) and `Settlement::dispelled: u64`;
+  `WaveState::nights` (empty for timed), `lane()`, `sending()` (timed until
+  its count, a lane always; the reroutes use it, so a moat dug by day
+  replans a lane's route), `on_night(n)` (the last listed night repeats).
+  `combat::lane_starts(count, night_ticks)`: a lane's ghouls set off
+  `COLUMN_GAP` (2.5 s) apart from dusk, closer (evenly over the night's
+  first third) only if that would run past it; `combat_housekeeping`
+  spawns `due` ones per tick (`spawn` is the old body). Clock helpers:
+  `since_dusk(t) -> Option<u64>`, `dawn(t)` (a tick that starts a day after
+  a night; tick 0 isn't). Dawn (`Settlement::dawn`, from housekeeping on a
+  `dawn` tick): every threat gets `Burn { dawn: true, damage: 0, .. }`
+  lasting `DAWN_BURN` (2 s) plus up to 2 s by id, drops its windup, stands
+  still (`follow_route`), starts no swing and doesn't breach; a fire patch
+  doesn't touch a dawn burn; when it runs out `Settlement::burn` removes it
+  with `Event::Dispelled { threat, position }` and `dispelled += 1`: no
+  `Hit`, no kill, no breach. The app maps it to
+  `legacy::Event::Dispelled { target, position }` (no effect or sound yet:
+  the threat's `burning` flames show, then it's gone). For the HUD:
+  `Settlement::next_wave(tick) -> Option<u64>` (the next tick any wave
+  sends, timed or by night; the status line's "NEXT WAVE" now uses it, so
+  it counts down to dusk), `nights_survived(tick)` (sunrises so far),
+  `clock.map(|c| c.night(tick))` for the night's number, `dispelled` for
+  the dawn's toll. Tuning (measured by `waves_tests`: ballistas manned by
+  sprites and topped up from the tree 47 s after each dusk):
+
+  | Number | Before | After | Measured |
+  |---|---|---|---|
+  | Waves | 165 s calm, then 3/5/6/7/8/8 every 90 s over 8 one-ghoul lanes | the first day calm (dusk at 150 s), then a night's columns of east 3/5/5/5, west 2/4/5/5: 5, 9, 10 and 10 ghouls, the fourth repeating | Ghouls take about 63 s from the ring, so a column's 5th (10 s behind its head) reaches the tree just before dawn (73 s); a 6th would only burn on the hill, hence columns of at most 5. Ignored, the tree falls on the third night, at 668 s (68 s after dusk, 20 breaches, with ghouls of that night still to come); before, the fourth wave at 504 s. One ballista by the east ramp: tree 4/20 after four nights, 16 breaches, 18 kills. One by each ramp: 20/20, all 34 killed, none dispelled. |
+  | Dawn | none | 2 to 4 s burn | With the real nights all columns arrive before dawn, so dawn burns only stragglers (chasers, broken-building fighters, stranded ghouls). |
+
+  Tests: `clock_tests::sunrises_and_the_time_since_dusk`; `waves_tests`
+  (rewritten): `a_lanes_ghouls_set_off_in_a_column_within_the_nights_first_third`,
+  `ghouls_come_only_by_night_as_listed_and_the_last_night_repeats` (20 s
+  days, 9 s nights, six nights: every spawn by night within the first
+  third, each lane's listed count per night, nights 5 and 6 repeat night
+  4, every ghoul dispelled, no kill), `the_sunrise_burns_every_ghoul_away`
+  (real clock, an east night of 8: at dawn all alight, standing still, gone
+  within 2 to 4 s, no hit, kill or breach, then a calm day),
+  `an_undefended_town_has_its_calm_day_then_falls_on_the_third_night`
+  (also `next_wave(0)` is the first dusk, `nights_survived` 2), and
+  `a_ballista_guards_one_ramp_and_one_by_each_holds_four_nights`; every
+  run checks spawned = out + breached + killed + dispelled.
+  `lane_tests::a_moat_dug_by_day_sends_the_next_nights_column_round_by_the_other_ramp`.
+  The wave soak plays five days and nights (1130 s) with `validate` and the
+  balances every tick and checks every night's ghouls came and five nights
+  survived. `content_test`: the lanes, and lanes without a cycle, with
+  timing or with unequal night lists fail. The app's happy path (control
+  tests) must end before 190 s (ghouls set off at the 150 s dusk). Save
+  format 39 (`WaveState::nights`, `Settlement::clock`, `dispelled`,
+  `Burn::dawn`); input log, net protocol and `CommandKind` unchanged.
+  Golden: forest and arena state hashes moved (the new fields), behaviour
+  lines unchanged; regenerated in its own commit. `Threat` is 8 bytes
+  smaller (the `dawn` flag gives `Option<Burn>` a niche). Not done: the
+  demo `demos/sacred_tree.json` was not rerun; its fixed frame waits were
+  timed for a first wave at 165 s and three east ghouls, and night 1 now
+  falls at 150 s with 3 east and 2 west, so its fireball and bolts likely
+  miss the column (M7.6).
 
 ### M7.1 The clock
 
