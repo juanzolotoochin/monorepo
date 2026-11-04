@@ -33,6 +33,14 @@ fn nights_are_counted_from_the_first_dusk() {
 }
 
 #[test]
+fn sunrises_and_the_time_since_dusk() {
+    let since: Vec<Option<u64>> = (0..10).map(|t| CLOCK.since_dusk(t)).collect();
+    assert_eq!(since, [None, None, None, None, None, None, Some(0), Some(1), Some(2), None]);
+    let dawns: Vec<u64> = (0..30).filter(|&t| CLOCK.dawn(t)).collect();
+    assert_eq!(dawns, [9, 18, 27], "tick 0 is no sunrise: no night came before it");
+}
+
+#[test]
 fn the_time_to_dusk_counts_down_and_wraps_at_dusk() {
     let to_dusk: Vec<u64> = (0..16).map(|t| CLOCK.ticks_to_dusk(t)).collect();
     assert_eq!(to_dusk, [6, 5, 4, 3, 2, 1, 9, 8, 7, 6, 5, 4, 3, 2, 1, 9]);

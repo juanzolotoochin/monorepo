@@ -45,6 +45,7 @@ fn map(waves: &[([f64; 2], f64)]) -> Simulation {
             first: fx(first),
             every: fx(90.0),
             count: 1,
+            nights: Vec::new(),
         });
     }
     super::hill_tests::sacred_tree_map(scenario)
@@ -175,6 +176,44 @@ fn a_moat_round_one_ramp_sends_its_ghouls_round_by_the_other() {
         }
     }
     assert!(breached, "it reaches the tree the long way round");
+}
+
+/// A night's lane keeps sending, so a moat dug by day round the east ramp
+/// after its first column came sends the next night's ghoul round by the
+/// west ramp: the dig drops the lane's planned route as it does a timed
+/// wave's still sending. On a short day (20 s days, 9 s nights) with only
+/// the east lane, one ghoul a night.
+#[test]
+fn a_moat_dug_by_day_sends_the_next_nights_column_round_by_the_other_ramp() {
+    let mut scenario = Scenario::parse(SUPPLY).unwrap();
+    scenario.day_cycle = Some(content::scenario::DayCycle { day: Fx::from_int(20), night: Fx::from_int(9) });
+    scenario.waves.truncate(1);
+    scenario.waves[0].nights = vec![1];
+    let mut sim = super::hill_tests::sacred_tree_map(scenario);
+    until_spawned(&mut sim);
+    let center = sim.world().terrain().center;
+    let hill = sim.world().terrain().mine.unwrap().hill.unwrap();
+    let west_edge = center.x - Fx::from_int(hill.plateau as i32);
+    let first = settlement(&sim).threats[0].clone();
+    assert!(first.route.iter().all(|p| p.x > center.x), "the first comes up the east ramp: {:?}", first.route);
+    // The next day, after the sunrise burned it away.
+    let clock = settlement(&sim).clock.unwrap();
+    while sim.world().tick() < clock.cycle() + 5 * HZ {
+        step(&mut sim, &[]);
+    }
+    assert!(settlement(&sim).threats.is_empty(), "burned away at dawn");
+    let east = moat(&sim, 1);
+    dig_out(&mut sim, &east);
+    {
+        let (s, terrain) = sim.world_mut().settlement_and_terrain_mut();
+        let terrain = terrain.clone();
+        s.reroute_round(&east, &terrain);
+    }
+    assert!(settlement(&sim).waves[0].route.is_none(), "the lane plans again");
+    until_spawned(&mut sim);
+    let t = &settlement(&sim).threats[0];
+    assert_eq!(clock.night(sim.world().tick()), 2);
+    assert!(!t.stranded && t.route.iter().any(|p| p.x < west_edge), "the second comes up the west ramp: {:?}", t.route);
 }
 
 /// With both ramps cut, no ghoul reaches the tree: one already on its way

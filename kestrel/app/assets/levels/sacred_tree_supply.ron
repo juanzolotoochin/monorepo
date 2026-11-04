@@ -44,30 +44,24 @@
 ], buildings: [
 (kind: "wood_gatherer", position: (-5.2, 0.6))
 ], producers: [], defenders: [],
-// Ghouls come after a calm start of 2:45 (time to dig stone, build a
-// ballista and stock it): they walk about 63 s from the ring, so the first
-// reach the hill's top near 3:50. Then a wave every 90 s, each as big as
-// the last or bigger: 3, 5, 6, 7, 8 and 8 ghouls. A scenario has at most 8
-// waves, so each entry here is a lane that sends one ghoul a wave
-// (`every: 90`) from its first one on: the east lanes 2.5 s apart make a
-// column of 3, then 4 from the second wave; the west lanes join one a
-// wave from the second, to 4. They come from a ring 40 m out, one side
-// per ramp up the tree's hill (the scene's), walk up it to a spot beside
-// the trunk (outside its disc) and breach the tree there. Ignored, they
-// fell it in the fourth wave; one ballista by the east ramp leaves the
-// west lanes to breach (the tree at 6 of 20); one by each ramp keeps it
-// whole.
+// Days of 150 s and nights of 75 s, starting at dawn: the first day is the
+// calm start (time to dig stone, build a ballista and stock it), and the
+// first night falls at 2:30. Ghouls come only by night, one wave a night,
+// from a ring 40 m out, one lane per ramp up the tree's hill (the scene's):
+// they walk up it to a spot beside the trunk (outside its disc) and breach
+// the tree there. A lane's ghouls set off 2.5 s apart at dusk, a column
+// (closer if a night's would run past its first third), and take about
+// 63 s to reach the tree: the fight is on the hill in the night's last 20 s. At
+// sunrise every ghoul still out burns away. `nights` is how many each lane
+// sends, night by night; after the last, the last repeats forever: 5, 9,
+// 10 and 10 ghouls, columns of at most 5 so that all can reach the tree
+// before dawn. Ignored, they fell the tree on the third night (about 11:08);
+// one ballista by the east ramp leaves the west column to breach (the tree
+// at 4 of 20 after four nights); one by each ramp, stocked each night,
+// keeps it whole.
 waves: [
-(id: "east_1", position: (40.0, 0.0), target: (1.8, -0.6), character: "ghoul_sacred_tree", first: 165.0, every: 90.0, count: 6),
-(id: "east_2", position: (40.0, 0.0), target: (1.8, -0.6), character: "ghoul_sacred_tree", first: 167.5, every: 90.0, count: 6),
-(id: "east_3", position: (40.0, 0.0), target: (1.8, -0.6), character: "ghoul_sacred_tree", first: 170.0, every: 90.0, count: 6),
-(id: "east_4", position: (40.0, 0.0), target: (1.8, -0.6), character: "ghoul_sacred_tree", first: 262.5, every: 90.0, count: 5),
-(id: "west_1", position: (-40.0, 0.0), target: (-1.8, -0.6), character: "ghoul_sacred_tree", first: 256.0, every: 90.0, count: 5),
-(id: "west_2", position: (-40.0, 0.0), target: (-1.8, -0.6), character: "ghoul_sacred_tree", first: 348.5, every: 90.0, count: 4),
-(id: "west_3", position: (-40.0, 0.0), target: (-1.8, -0.6), character: "ghoul_sacred_tree", first: 441.0, every: 90.0, count: 3),
-(id: "west_4", position: (-40.0, 0.0), target: (-1.8, -0.6), character: "ghoul_sacred_tree", first: 533.5, every: 90.0, count: 2)
+(id: "east", position: (40.0, 0.0), target: (1.8, -0.6), character: "ghoul_sacred_tree", nights: [3, 5, 5, 5]),
+(id: "west", position: (-40.0, 0.0), target: (-1.8, -0.6), character: "ghoul_sacred_tree", nights: [2, 4, 5, 5])
 ],
-// Days of 150 s and nights of 75 s, starting at dawn: the first night falls
-// at 2:30. The waves don't follow it yet (M7.2).
 day_cycle: Some((day: 150.0, night: 75.0)),
 base_health: 20, player_health: 6)

@@ -6,8 +6,9 @@
 //! them), and that no sprite waits longer than a retry while a building of
 //! its job's kind has a free slot, nor stays dead past its return.
 //!
-//! The second soak plays the map's waves (M5.6) while doing all that and
-//! defending: stocking, manning, possessing and firing a ballista,
+//! The second soak plays the map's nights (M5.6, M7.2: five days and
+//! nights, a wave each night and the sunrise burning the stragglers away)
+//! while doing all that and defending: stocking, manning, possessing and firing a ballista,
 //! throwing fireballs, and putting broken buildings back up. Both play on
 //! the map: the town on its hill in the 256 m mine (M6.3).
 
@@ -297,6 +298,7 @@ struct Seen {
     sprite_returns: u32,
     elder_deaths: u32,
     elder_digs: u32,
+    dispelled: u32,
 }
 
 impl Soak {
@@ -326,6 +328,7 @@ impl Soak {
                 Event::Breach { .. } => seen.breaches += 1,
                 Event::BuildingBroken { .. } => seen.broken += 1,
                 Event::SpriteReturned { .. } => seen.sprite_returns += 1,
+                Event::Dispelled { .. } => seen.dispelled += 1,
                 _ => {}
             }
         }
@@ -497,8 +500,9 @@ impl Soak {
     }
 }
 
-/// The map played through all its waves (13 minutes, the last ghouls
-/// walking up from the ring) by a town that defends: before the first wave
+/// The map played through five days and nights (nearly 19 minutes, the
+/// last night repeating the fourth) by a town that defends: before the
+/// first dusk
 /// it puts up a ballista beside the tree and a Wood Gatherer on each lane's
 /// way, the west's and near the east column's; then it cycles
 /// reassigning the sprites (Ash always on the ballista, the others walking
@@ -522,9 +526,11 @@ fn defending_against_the_waves_strands_no_sprite() {
     soak.empty_bundle();
     let gatherers = [0, west, east];
     eprintln!("wave soak: built at {} s", soak.sim.world().tick() / HZ);
-    assert!(soak.sim.world().tick() < 165 * HZ, "built in the calm start");
+    assert!(soak.sim.world().tick() < 150 * HZ, "built on the first day");
+    let clock = soak.s().clock.expect("days and nights");
+    let nights = 5;
     let mut cycle = 0usize;
-    while soak.sim.world().tick() < 730 * HZ {
+    while soak.sim.world().tick() < nights * clock.cycle() + 5 * HZ {
         // Ash and Fern man the ballistas; the others rotate over the
         // gatherers and mining every fourth cycle, so they walk across the
         // clearing, stay a while in buildings on the waves' ways, and dig
@@ -567,7 +573,10 @@ fn defending_against_the_waves_strands_no_sprite() {
     let mined = s.accounts[STONE as usize].generated;
     eprintln!("wave soak: {cycle} cycles, {seen:?}, tree {}, {mined} stone mined", s.health);
     assert!(!s.tree_fallen(), "the tree stands: {seen:?}");
-    assert!(s.waves.iter().all(|w| w.spawned == w.count), "every wave came");
+    let due: u32 = s.waves.iter().map(|w| (1..=nights).map(|n| w.on_night(n)).sum::<u32>()).sum();
+    assert_eq!(s.waves.iter().map(|w| w.spawned).sum::<u32>(), due, "every night came");
+    assert_eq!(s.nights_survived(soak.sim.world().tick()), Some(nights));
+    assert_eq!(u64::from(seen.dispelled), s.dispelled);
     assert!(seen.sprite_shots > 0 && seen.elder_shots > 0, "{seen:?}");
     assert!(seen.fireballs >= 3, "{seen:?}");
     assert!(seen.kills >= 20 && seen.fire_kills > 0, "{seen:?}");
