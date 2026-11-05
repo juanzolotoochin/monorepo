@@ -13,6 +13,20 @@
 //! - 3: adds `PileAction::DropMineral` (a drop that names its mineral),
 //!   appended after every older pile action, so older logs decode the same
 //!   way; one that claims it is refused as corrupt.
+//! - 4: adds `CommandKind::SetSpriteJob`, appended after every older
+//!   command; an older log that claims it is refused as corrupt.
+//! - 5: adds `CommandKind::Bundle`, appended likewise.
+//! - 6: adds `CommandKind::Interact`, appended likewise.
+//! - 7: adds `CommandKind::PlaceBlueprint`, appended likewise, and
+//!   `InteractTarget::Site`, appended after the older targets; an older log
+//!   that claims either is refused as corrupt.
+//! - 8: adds `CommandKind::Drop`, appended likewise, and
+//!   `InteractTarget::Pile`, appended after the older targets; an older log
+//!   that claims either is refused as corrupt.
+//! - 9: adds `InteractTarget::Slot` (boarding a building), appended after
+//!   the older targets; an older log that claims it is refused as corrupt.
+//! - 10: adds `CommandKind::Burst`, appended after every older command; an
+//!   older log that claims it is refused as corrupt.
 
 use serde::{Deserialize, Serialize};
 use sim::settlement::piles::PileAction;
@@ -20,7 +34,7 @@ use sim::{Command, CommandKind};
 
 use crate::LoadError;
 
-pub const INPUT_FORMAT_VERSION: u32 = 3;
+pub const INPUT_FORMAT_VERSION: u32 = 10;
 /// The oldest input log this build reads.
 pub const OLDEST_INPUT_FORMAT_VERSION: u32 = 1;
 const MAGIC: &[u8; 4] = b"GLOG";
@@ -75,6 +89,33 @@ impl InputLog {
         }
         if found < 3 && log.turns.iter().flatten().any(|c| matches!(c.kind, CommandKind::Pile { action: PileAction::DropMineral(..), .. })) {
             return Err(crate::corrupt(format!("a version {found} input log holds a pile action added in version 3")));
+        }
+        if found < 4 && log.turns.iter().flatten().any(|c| matches!(c.kind, CommandKind::SetSpriteJob { .. })) {
+            return Err(crate::corrupt(format!("a version {found} input log holds a command added in version 4")));
+        }
+        if found < 5 && log.turns.iter().flatten().any(|c| matches!(c.kind, CommandKind::Bundle { .. })) {
+            return Err(crate::corrupt(format!("a version {found} input log holds a command added in version 5")));
+        }
+        if found < 6 && log.turns.iter().flatten().any(|c| matches!(c.kind, CommandKind::Interact { .. })) {
+            return Err(crate::corrupt(format!("a version {found} input log holds a command added in version 6")));
+        }
+        let added_in_7 = |kind: &CommandKind| {
+            matches!(kind, CommandKind::PlaceBlueprint { .. } | CommandKind::Interact { target: sim::settlement::InteractTarget::Site(_), .. })
+        };
+        if found < 7 && log.turns.iter().flatten().any(|c| added_in_7(&c.kind)) {
+            return Err(crate::corrupt(format!("a version {found} input log holds a command added in version 7")));
+        }
+        let added_in_8 = |kind: &CommandKind| {
+            matches!(kind, CommandKind::Drop { .. } | CommandKind::Interact { target: sim::settlement::InteractTarget::Pile(_), .. })
+        };
+        if found < 8 && log.turns.iter().flatten().any(|c| added_in_8(&c.kind)) {
+            return Err(crate::corrupt(format!("a version {found} input log holds a command added in version 8")));
+        }
+        if found < 9 && log.turns.iter().flatten().any(|c| matches!(c.kind, CommandKind::Interact { target: sim::settlement::InteractTarget::Slot(_), .. })) {
+            return Err(crate::corrupt(format!("a version {found} input log holds a command added in version 9")));
+        }
+        if found < 10 && log.turns.iter().flatten().any(|c| matches!(c.kind, CommandKind::Burst { .. })) {
+            return Err(crate::corrupt(format!("a version {found} input log holds a command added in version 10")));
         }
         Ok(log)
     }
@@ -155,6 +196,85 @@ mod tests {
     #[test]
     fn a_version_one_log_with_a_newer_command_is_refused() {
         let bytes = with_version(log(vec![CommandKind::ReleaseDirectControl { agent: 0 }]).to_bytes(), 1);
+        assert!(matches!(InputLog::from_bytes(&bytes), Err(LoadError::Corrupt(_))));
+    }
+
+    #[test]
+    fn a_version_three_log_with_a_sprite_job_is_refused() {
+        let kind = CommandKind::SetSpriteJob { agent: 1, job: sim::settlement::SpriteJob::Staff(0) };
+        let written = log(vec![kind]);
+        assert_eq!(InputLog::from_bytes(&written.to_bytes()).unwrap(), written);
+        let bytes = with_version(written.to_bytes(), 3);
+        assert!(matches!(InputLog::from_bytes(&bytes), Err(LoadError::Corrupt(_))));
+    }
+
+    #[test]
+    fn a_version_nine_log_with_a_burst_is_refused() {
+        let burst = log(vec![CommandKind::Burst { agent: 0 }]);
+        assert_eq!(InputLog::from_bytes(&burst.to_bytes()).unwrap(), burst);
+        let bytes = with_version(burst.to_bytes(), 9);
+        assert!(matches!(InputLog::from_bytes(&bytes), Err(LoadError::Corrupt(_))));
+        // An older command still loads from a version 9 log.
+        let slot = log(vec![CommandKind::Interact { agent: 0, target: sim::settlement::InteractTarget::Slot(0) }]);
+        assert_eq!(InputLog::from_bytes(&with_version(slot.to_bytes(), 9)).unwrap(), slot);
+    }
+
+    #[test]
+    fn a_version_eight_log_with_a_slot_is_refused() {
+        let slot = log(vec![CommandKind::Interact { agent: 0, target: sim::settlement::InteractTarget::Slot(0) }]);
+        assert_eq!(InputLog::from_bytes(&slot.to_bytes()).unwrap(), slot);
+        let bytes = with_version(slot.to_bytes(), 8);
+        assert!(matches!(InputLog::from_bytes(&bytes), Err(LoadError::Corrupt(_))));
+        // An older target still loads from a version 8 log.
+        let pile = log(vec![CommandKind::Interact { agent: 0, target: sim::settlement::InteractTarget::Pile(3) }]);
+        assert_eq!(InputLog::from_bytes(&with_version(pile.to_bytes(), 8)).unwrap(), pile);
+    }
+
+    #[test]
+    fn a_version_seven_log_with_a_drop_or_a_ground_pile_is_refused() {
+        let drop = CommandKind::Drop { agent: 0 };
+        let pile = CommandKind::Interact { agent: 0, target: sim::settlement::InteractTarget::Pile(3) };
+        for kind in [drop, pile] {
+            let written = log(vec![kind]);
+            assert_eq!(InputLog::from_bytes(&written.to_bytes()).unwrap(), written);
+            let bytes = with_version(written.to_bytes(), 7);
+            assert!(matches!(InputLog::from_bytes(&bytes), Err(LoadError::Corrupt(_))));
+        }
+        // An older target still loads from a version 7 log.
+        let site = log(vec![CommandKind::Interact { agent: 0, target: sim::settlement::InteractTarget::Site(1) }]);
+        assert_eq!(InputLog::from_bytes(&with_version(site.to_bytes(), 7)).unwrap(), site);
+    }
+
+    #[test]
+    fn a_version_six_log_with_a_blueprint_or_a_site_is_refused() {
+        let place = CommandKind::PlaceBlueprint { kind: 1, position: FxVec2::new(Fx::from_int(5), Fx::ONE) };
+        let site = CommandKind::Interact { agent: 0, target: sim::settlement::InteractTarget::Site(1) };
+        for kind in [place, site] {
+            let written = log(vec![kind]);
+            assert_eq!(InputLog::from_bytes(&written.to_bytes()).unwrap(), written);
+            let bytes = with_version(written.to_bytes(), 6);
+            assert!(matches!(InputLog::from_bytes(&bytes), Err(LoadError::Corrupt(_))));
+        }
+        // An older target still loads from a version 6 log.
+        let output = log(vec![CommandKind::Interact { agent: 0, target: sim::settlement::InteractTarget::Output(0) }]);
+        assert_eq!(InputLog::from_bytes(&with_version(output.to_bytes(), 6)).unwrap(), output);
+    }
+
+    #[test]
+    fn a_version_five_log_with_an_interact_is_refused() {
+        let kind = CommandKind::Interact { agent: 0, target: sim::settlement::InteractTarget::Output(0) };
+        let written = log(vec![kind]);
+        assert_eq!(InputLog::from_bytes(&written.to_bytes()).unwrap(), written);
+        let bytes = with_version(written.to_bytes(), 5);
+        assert!(matches!(InputLog::from_bytes(&bytes), Err(LoadError::Corrupt(_))));
+    }
+
+    #[test]
+    fn a_version_four_log_with_a_bundle_is_refused() {
+        let kind = CommandKind::Bundle { agent: 0, other: sim::settlement::InventoryRef::Output(0), direction: sim::settlement::Direction::Pickup };
+        let written = log(vec![kind]);
+        assert_eq!(InputLog::from_bytes(&written.to_bytes()).unwrap(), written);
+        let bytes = with_version(written.to_bytes(), 4);
         assert!(matches!(InputLog::from_bytes(&bytes), Err(LoadError::Corrupt(_))));
     }
 

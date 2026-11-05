@@ -1,0 +1,32 @@
+// The Sacred Tree town MVP: a clearing with the tree at its center. Its
+// stock is two piles beside it, one per item (each takes only its own),
+// starting empty. The elder carries a bundle of one item, up to 5. One Wood
+// Gatherer stands built; the clearing's east side has room for more.
+// Positions are meters from the clearing's center (the scene's x and z).
+(id: "sacred_tree", extent: 9.0, items: [
+(id: "wood", label: "WOOD", skin: "item_lumber", scale: 0.45),
+(id: "stone", label: "STONE", skin: "item_iron", scale: 0.45)
+], depots: [
+(id: "tree_wood", label: "WOOD PILE", position: (-1.7, 1.7), capacity: 4096, stock: [], only: Some("wood")),
+(id: "tree_stone", label: "STONE PILE", position: (1.7, 1.7), capacity: 4096, stock: [], only: Some("stone"))
+], sources: [], links: [], agents: [
+(id: "elder", label: "ELDER", character: "elder", position: (0.0, 3.4), capacity: 5, one_kind: true, links: [], cargo_anchor: (0.0, 0.65, -0.19), equipment: None, controlled: true)
+], sprites: [
+(id: "sprite_ash", label: "ASH", character: "sprite", position: (-1.8, 4.6)),
+(id: "sprite_fern", label: "FERN", character: "sprite", position: (-0.6, 5.0)),
+(id: "sprite_moss", label: "MOSS", character: "sprite", position: (0.6, 5.0)),
+(id: "sprite_reed", label: "REED", character: "sprite", position: (1.8, 4.6))
+], building_kinds: [
+(id: "wood_gatherer", label: "WOOD GATHERER", skin: "mill", radius: 0.9, product: "wood", period: 5.0,
+ cap: 10, possessed_cap: 20, possessed_multiplier: 4.0, burst: (units: 5, cooldown: 30.0), parts: [
+(id: "foundation", label: "FOUNDATION", materials: [(item: "wood", units: 2)]),
+(id: "mechanism", label: "MECHANISM", materials: [(item: "wood", units: 2), (item: "stone", units: 2)])
+]),
+(id: "stone_gatherer", label: "STONE GATHERER", skin: "factory", radius: 0.9, product: "stone", period: 8.0,
+ cap: 10, possessed_cap: 20, possessed_multiplier: 4.0, burst: (units: 5, cooldown: 30.0), parts: [
+(id: "foundation", label: "FOUNDATION", materials: [(item: "wood", units: 2)]),
+(id: "mechanism", label: "MECHANISM", materials: [(item: "wood", units: 2)])
+])
+], buildings: [
+(kind: "wood_gatherer", position: (-5.2, 0.6))
+], producers: [], defenders: [], waves: [], base_health: 1)

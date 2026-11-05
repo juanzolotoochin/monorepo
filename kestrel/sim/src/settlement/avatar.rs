@@ -17,8 +17,10 @@ use serde::{Deserialize, Serialize};
 use super::combat::{Event, TossEnd};
 use super::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
 use super::action::{Action, View};
-use super::{AgentIx, DepotState, InventoryRef, ItemIx, Settlement};
-use crate::messages::{ActionMessages, CarryUnit, DropHaul, DropNotes, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
+use super::buildings::BurstRefusal;
+use super::interact::{self, Interaction};
+use super::{AgentIx, DepotState, InventoryRef, ItemIx, Kinds, Settlement};
+use crate::messages::{ActionMessages, BundleRefused, Burst, BurstRefused, CarryUnit, DropBundle, DropHaul, DropNotes, Install, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
 use crate::nav::{self, angle_between, distance};
 use crate::terrain::{Terrain, MAX_LAYERS};
 
@@ -40,7 +42,7 @@ const AIM_BLEND: Fx = match TICKS_PER_SECOND {
     _ => panic!("add AIM_BLEND for this tick rate"),
 };
 /// Manual transfers start within this distance of the dock.
-const DOCK_REACH: Fx = Fx::from_bits(3_650_722_202); // 0.85
+pub(super) const DOCK_REACH: Fx = Fx::from_bits(3_650_722_202); // 0.85
 /// Dug ore flies out of the pit for 0.6 s.
 const ORE_FLIGHT_TICKS: u64 = millis_to_ticks(600);
 
@@ -147,6 +149,11 @@ pub struct AvatarState {
     pub name: String,
     /// Weapons are ready again on this tick.
     pub attack_ready: u64,
+    /// A Burst is ready again on this tick (D3). It is the elder's, not the
+    /// building's, so hopping between buildings doesn't reset it, and it
+    /// outlasts leaving a seat and a respawn, as `attack_ready` does.
+    #[serde(default)]
+    pub burst_ready: u64,
     /// Dead until this tick, then back at home (`Body::health`).
     #[serde(default)]
     pub respawn_at: u64,
@@ -186,10 +193,39 @@ pub struct AvatarState {
     /// saved or hashed. A replay clears it too, ending its own copy of the haul.
     #[serde(skip)]
     pub dropped_haul: bool,
-    /// The vehicle this avatar sits in and drives (`vehicle`). Its movement
-    /// commands steer the vehicle, and housekeeping keeps it in the seat.
+    /// The seat this avatar sits in: a vehicle it drives (`vehicle`), whose
+    /// movement commands steer the vehicle, or a building it possesses
+    /// (D3), where movement does nothing. Housekeeping keeps it in the seat.
     #[serde(default)]
-    pub driving: Option<super::VehicleIx>,
+    pub seat: Option<Seat>,
+}
+
+/// Where a seated avatar sits (`AvatarState::seat`). Boarding enters the
+/// nearest free one in reach (`Settlement::board`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Seat {
+    /// Driving a vehicle.
+    Vehicle(super::VehicleIx),
+    /// Possessing a building, as its slot's `Occupant::Elder`.
+    Building(super::BuildingIx),
+}
+
+impl Seat {
+    /// The vehicle, if it is a vehicle's seat.
+    pub fn vehicle(self) -> Option<super::VehicleIx> {
+        match self {
+            Seat::Vehicle(ix) => Some(ix),
+            Seat::Building(_) => None,
+        }
+    }
+
+    /// The building, if it is a building's slot.
+    pub fn building(self) -> Option<super::BuildingIx> {
+        match self {
+            Seat::Building(b) => Some(b),
+            Seat::Vehicle(_) => None,
+        }
+    }
 }
 
 fn approach(current: FxVec2, target: FxVec2, max_change: Fx) -> FxVec2 {
@@ -248,8 +284,9 @@ pub(super) fn self_update(body: &mut Body, avatar: &mut AvatarState, me: AgentIx
         }
         return;
     }
-    // A driver rides; the vehicle moves (`vehicle::self_update`).
-    if avatar.driving.is_some() {
+    // A driver rides, the vehicle moving (`vehicle::self_update`); an elder
+    // in a building stays at its slot.
+    if avatar.seat.is_some() {
         return;
     }
     if let Some(lab) = piles.filter(|_| !avatar.dropped_haul) {
@@ -496,7 +533,7 @@ impl Settlement {
     /// touch are separate) and in command order within a type. They come
     /// before everything else stage 5 applies, as the commands they come
     /// from ran before everything else in the tick.
-    pub(crate) fn apply_actions(&mut self, messages: ActionMessages, terrain: &mut Terrain) {
+    pub(crate) fn apply_actions(&mut self, messages: ActionMessages, tick: u64, terrain: &mut Terrain) {
         for _ in messages.restart_memory {
             self.restart_memory(terrain);
         }
@@ -510,7 +547,17 @@ impl Settlement {
             self.piano_notes.retain(|note| note.agent != message.agent || note.serial > message.serial);
         }
         self.reserve_stock(messages.reserve_stock);
-        self.board(messages.board);
+        self.drop_bundles(messages.drop_bundle, tick, terrain);
+        self.board(messages.board, terrain);
+        for BundleRefused { agent, reason } in messages.bundle_refused {
+            self.events.push(Event::BundleRefused { agent, reason });
+        }
+        self.install(messages.install);
+        self.bursts(messages.burst, tick);
+        for BurstRefused { agent, reason } in messages.burst_refused {
+            self.events.push(Event::BurstRefused { agent, reason });
+        }
+        self.place_blueprints(messages.place_blueprint, terrain);
     }
 
     /// Stage 5: a hit takes `damage` from player `agent`'s health. At 0 the
@@ -532,8 +579,9 @@ impl Settlement {
         body.velocity = FxVec2::ZERO;
         body.push = FxVec2::ZERO;
         avatar.dig = None;
-        // The vehicle stays where it is, free for anyone.
-        avatar.driving = None;
+        // The vehicle stays where it is, free for anyone; a building's slot
+        // empties in housekeeping (`seat_housekeeping`).
+        avatar.seat = None;
         body.route.clear();
         let releases = carry.drop_carry(agent as AgentIx);
         self.reserve_stock(releases);
@@ -551,17 +599,22 @@ impl Settlement {
     /// is that reservation's: a release from the same agent later in the
     /// order (it dropped that job, and its own side with it) is dropped with
     /// it, and a later reservation means the agent took a new job, which
-    /// stands on its own.
+    /// stands on its own. A delivery to a site must also fit what its next
+    /// part still takes, which the inventory alone doesn't know.
     pub(super) fn reserve_stock(&mut self, messages: Vec<ReserveStock>) {
         // Agents whose last reservation was refused, until their job goes.
         let mut refused: Vec<AgentIx> = Vec::new();
         for message in messages {
             let ReserveStock { agent, job, change } = message;
+            let fits = match job.other {
+                InventoryRef::Site(b) => self.buildings.get(b as usize).is_some_and(|site| job.remaining <= site.wanted(&self.building_kinds[site.kind as usize], job.item)),
+                _ => true,
+            };
             let other = self.inventory_mut(job.other);
             match change {
                 StockChange::Reserve => {
                     refused.retain(|&a| a != agent);
-                    if !job.reserve(other, Side::Other) {
+                    if !fits || !job.reserve(other, Side::Other) {
                         refused.push(agent);
                     }
                 }
@@ -629,8 +682,9 @@ impl Settlement {
                 started: swing.pressed(),
             });
         }
-        // A depot transfer's unit; a haul's are `read_pile_job`'s.
-        if let Some(job) = a.carry.job.as_ref().filter(|j| !j.other.in_pile_lab()) {
+        // A depot transfer's unit, or a bundle's at a pile; a haul's are
+        // `read_pile_job`'s.
+        if let Some(job) = a.carry.job.as_ref().filter(|j| !self.piles.as_ref().is_some_and(|lab| lab.is_haul(j))) {
             if tick >= job.next_tick && distance(a.body.position, self.position_of(job.other)) <= DOCK_REACH {
                 out.player_carry.push(CarryUnit { agent: me });
             }
@@ -656,6 +710,14 @@ impl Settlement {
         swing_resolved(a, tick, hits, def);
     }
 
+    /// The carry job `agent`'s bundle action on `other` would start now, or
+    /// why it can't (`bundle_job`): for the view and scripts, which read the
+    /// same rule the action applies.
+    pub fn bundle_job(&self, agent: AgentIx, other: InventoryRef, direction: Direction, tick: u64, terrain: &Terrain) -> Result<CarryJob, BundleRefusal> {
+        let a = self.agents.get(agent as usize).ok_or(BundleRefusal::NotAHolder)?;
+        bundle_job(&a.carry, &self.view(agent, tick, terrain), other, direction)
+    }
+
     /// The most units `agent` could move between its cargo and `depot` now.
     pub fn transfer_limit(&self, agent: usize, depot: usize, item: usize, deposit: bool) -> u32 {
         self.agents.get(agent).map_or(0, |a| transfer_limit(&a.carry, &self.depots, self.depot_items(), depot, item, deposit))
@@ -676,31 +738,72 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
     // A depot transfer. A pile haul is a carry job too, but its walk is the
     // lab's, and these checks treat it as they did before it was one: it
     // doesn't stop a dig, keep a released route or end on a cancel.
-    let transferring = carry.job.as_ref().is_some_and(|j| !j.other.in_pile_lab());
-    if let Some(ix) = avatar.driving {
-        // Sitting in a vehicle, a player can look around, climb out,
-        // let go or respawn; movement went to the vehicle (`vehicle::drive`).
-        match *action {
-            Action::Board => {
-                let v = &view.vehicles[ix as usize];
-                let vehicle_def = &view.characters[v.character as usize];
-                if let Some((position, ground)) = super::vehicle::exit_spot(v, vehicle_def, def.body.radius, view.terrain) {
-                    avatar.driving = None;
-                    body.position = position;
-                    avatar.height = ground;
-                    avatar.flight.support = ground;
-                    avatar.intent = Some(Intent::Stop);
+    let transferring = carry.job.as_ref().is_some_and(|j| !view.piles.is_some_and(|lab| lab.is_haul(j)));
+    match avatar.seat {
+        Some(Seat::Vehicle(ix)) => {
+            // Sitting in a vehicle, a player can look around, climb out,
+            // let go or respawn; movement went to the vehicle (`vehicle::drive`).
+            match *action {
+                Action::Board => {
+                    let v = &view.vehicles[ix as usize];
+                    let vehicle_def = &view.characters[v.character as usize];
+                    if let Some((position, ground)) = super::vehicle::exit_spot(v, vehicle_def, def.body.radius, view.terrain) {
+                        avatar.seat = None;
+                        body.position = position;
+                        avatar.height = ground;
+                        avatar.flight.support = ground;
+                        avatar.intent = Some(Intent::Stop);
+                    }
+                    return;
                 }
-                return;
+                Action::Aim(_) | Action::Equip(_) | Action::Release | Action::Respawn => {}
+                Action::Burst => {
+                    out.burst_refused.push(BurstRefused { agent: me, reason: BurstRefusal::NotPossessing });
+                    return;
+                }
+                _ => return,
             }
-            Action::Aim(_) | Action::Equip(_) | Action::Release | Action::Respawn => {}
-            _ => return,
         }
+        Some(Seat::Building(b)) => {
+            // Possessing a building (D3), a player can look around, Burst,
+            // leave (boarding again, or interacting: the seat is a seated
+            // elder's one target), let go or respawn. Movement and dropping
+            // do nothing. Leaving puts it beside the building; housekeeping
+            // empties the slot (`seat_housekeeping`), for a waiting sprite
+            // to take.
+            match *action {
+                Action::Board | Action::Interact(interact::InteractTarget::Slot(_)) => {
+                    if matches!(*action, Action::Interact(target) if target != interact::InteractTarget::Slot(b)) {
+                        return;
+                    }
+                    if let Some(position) = view.leave_spot(b, def.body.radius) {
+                        let ground = view.terrain.footprint(position, def.body.radius).unwrap_or(avatar.height);
+                        avatar.seat = None;
+                        body.position = position;
+                        avatar.height = ground;
+                        avatar.flight.support = ground;
+                        avatar.intent = Some(Intent::Stop);
+                    }
+                    return;
+                }
+                // Stage 5 checks the cooldown and the output's room, and
+                // adds the units (`Settlement::bursts`).
+                Action::Burst => {
+                    if body.alive() {
+                        out.burst.push(Burst { agent: me });
+                    }
+                    return;
+                }
+                Action::Aim(_) | Action::Equip(_) | Action::Release | Action::Respawn => {}
+                _ => return,
+            }
+        }
+        None => {}
     }
     match *action {
         Action::Board => {
             if body.alive() && avatar.dig.is_none() {
-                out.board.push(crate::messages::Board { agent: me });
+                out.board.push(crate::messages::Board { agent: me, building: None });
             }
         }
         Action::Move(ref intent) => {
@@ -747,6 +850,53 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
                 out.reserve_stock.push(ReserveStock { agent: me, job, change: StockChange::Reserve });
             }
         }
+        Action::Bundle { other, direction } => match bundle_job(carry, view, other, direction) {
+            Ok(job) => start_bundle(carry, job, me, out),
+            Err(reason) => out.bundle_refused.push(BundleRefused { agent: me, reason }),
+        },
+        Action::Interact(target) => {
+            // The target the client highlighted, checked again: still in
+            // reach and still usable. A sprite's is the app's job menu, so
+            // the sim has nothing to do for it.
+            let at = interact::position(view, target);
+            if !body.alive() || matches!(target, interact::InteractTarget::Sprite(_)) {
+            } else if !at.is_some_and(|p| distance(body.position, p) <= interact::INTERACT_REACH) {
+                out.bundle_refused.push(BundleRefused { agent: me, reason: BundleRefusal::OutOfReach });
+            } else {
+                match interact::interaction(view, carry, target) {
+                    Ok(Interaction::Bundle(job)) => {
+                        let spot = interact::stand_spot(view, job.other, body.position);
+                        start_bundle(carry, job, me, out);
+                        // Step in to the dock, as the verbs walk the elder
+                        // there; the units move once it is in reach.
+                        if let (Some(at), Some(spot)) = (at, spot) {
+                            if distance(body.position, at) > DOCK_REACH {
+                                set_intent(body, avatar, Intent::GoTo { target: spot, run: false }, view.terrain, def);
+                            }
+                        }
+                    }
+                    Ok(Interaction::Install { building, .. }) => out.install.push(Install { agent: me, building }),
+                    // Stage 5 seats the elder, putting out a sprite there.
+                    Ok(Interaction::Board { building }) => out.board.push(crate::messages::Board { agent: me, building: Some(building) }),
+                    // A site's needs are the view's to show; leaving is the
+                    // seated elder's (above).
+                    Ok(Interaction::JobMenu | Interaction::Needs { .. } | Interaction::Leave { .. }) => {}
+                    Err(reason) => out.bundle_refused.push(BundleRefused { agent: me, reason }),
+                }
+            }
+        }
+        Action::Drop => {
+            // Checked here for the refusal's sake, and again in stage 5,
+            // which makes the pile: another drop may have come first.
+            if body.alive() && view.piles.is_some() {
+                match super::piles::drop_plan(carry, body, view) {
+                    Ok(_) => out.drop_bundle.push(DropBundle { agent: me }),
+                    Err(reason) => out.bundle_refused.push(BundleRefused { agent: me, reason }),
+                }
+            }
+        }
+        // A seated elder's alone (above).
+        Action::Burst => out.burst_refused.push(BurstRefused { agent: me, reason: BurstRefusal::NotPossessing }),
         Action::CancelTransfer => {
             if transferring {
                 out.reserve_stock.extend(carry.drop_carry(me));
@@ -779,6 +929,15 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
     }
 }
 
+/// Starts a bundle's carry job, as a transfer does: its cargo side now,
+/// the other in stage 5.
+fn start_bundle(carry: &mut Carry, job: CarryJob, me: AgentIx, out: &mut ActionMessages) {
+    let reserved = job.reserve(&mut carry.inventory, Side::Own);
+    debug_assert!(reserved, "`bundle_job` sized it to the cargo");
+    carry.job = Some(job.clone());
+    out.reserve_stock.push(ReserveStock { agent: me, job, change: StockChange::Reserve });
+}
+
 /// Lets go of the agent's pile haul, if one runs: `DropHaul` ends it in
 /// stage 5, and until then the haul neither steers the avatar (stage 2)
 /// nor moves units (stage 3).
@@ -794,10 +953,12 @@ fn drop_haul(avatar: &mut AvatarState, view: &View, out: &mut ActionMessages) {
 
 /// See `Settlement::transfer_limit`. `items` are the depot items
 /// (`Settlement::depot_items`): minerals don't go to depots. The cargo's
-/// one capacity holds depot items and minerals in any mix.
+/// one capacity holds depot items and minerals in any mix, unless it is a
+/// bundle (`OneKind`), and a tree pile (`Kinds::Only`) takes its item only.
 fn transfer_limit(carry: &Carry, depots: &[DepotState], items: usize, depot: usize, item: usize, deposit: bool) -> u32 {
     let Some(d) = depots.get(depot) else { return 0 };
-    if item >= items {
+    let item_ix = item as ItemIx;
+    if item >= items || !d.inventory.accepts(item_ix) || !carry.inventory.accepts(item_ix) {
         return 0;
     }
     if deposit {
@@ -807,6 +968,153 @@ fn transfer_limit(carry: &Carry, depots: &[DepotState], items: usize, depot: usi
         // Space not taken by units carried, flying in or held by a job.
         carry.inventory.free().min(d.inventory.available(item as ItemIx))
     }
+}
+
+/// Why a bundle action can't start (`bundle_job`), or an interact, a drop
+/// or boarding a building. Stage 5 reports it as `Event::BundleRefused`;
+/// `message` says it for the view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BundleRefusal {
+    /// A carry job is running, or units are still in the air.
+    Busy,
+    /// Not a depot or a building output there is.
+    NotAHolder,
+    /// A building output takes nothing back: it is picked up from only.
+    PickupOnly,
+    /// Nothing there that isn't promised to someone else.
+    NothingToTake,
+    /// The bundle holds another item than the one there (D6).
+    OtherItem,
+    /// The bundle has no room left.
+    BundleFull,
+    /// The bundle holds nothing to deposit.
+    NothingCarried,
+    /// The pile takes another item: wood goes to the wood pile (D6).
+    WrongPile,
+    /// The pile has no room left.
+    PileFull,
+    /// An interact target that is no longer in reach (`interact`).
+    OutOfReach,
+    /// A sprite's job is set empty-handed only (`interact`, D5).
+    HandsFull,
+    /// A site only takes deliveries (D4).
+    DepositOnly,
+    /// The site's next part takes none of what the bundle holds.
+    NotNeeded,
+    /// A drop with nothing in the bundle (`piles::drop_plan`).
+    NothingToDrop,
+    /// A drop would make a new pile, and the ground has its most.
+    TooManyPiles,
+    /// A drop's new pile has no clear ground at the agent's feet: an
+    /// obstacle, another pile, a dock or a building's spot, or the edge.
+    NoRoom,
+    /// Boarding a building with a bundle in hand (D3): drop it first.
+    Carrying,
+    /// Boarding a building another elder possesses.
+    Possessed,
+}
+
+impl BundleRefusal {
+    /// The refusal in words, for the view.
+    pub fn message(self) -> &'static str {
+        match self {
+            BundleRefusal::Busy => "Still moving the last load",
+            BundleRefusal::NotAHolder => "Nothing to carry there",
+            BundleRefusal::PickupOnly => "Outputs are picked up from, not filled",
+            BundleRefusal::NothingToTake => "Nothing there to pick up",
+            BundleRefusal::OtherItem => "Carrying something else: deposit it first",
+            BundleRefusal::BundleFull => "The bundle is full",
+            BundleRefusal::NothingCarried => "Carrying nothing to deposit",
+            BundleRefusal::WrongPile => "That pile takes something else",
+            BundleRefusal::PileFull => "That pile is full",
+            BundleRefusal::OutOfReach => "Too far away",
+            BundleRefusal::HandsFull => "Hands full: deposit the bundle first",
+            BundleRefusal::DepositOnly => "A site only takes deliveries",
+            BundleRefusal::NotNeeded => "The site doesn't need that",
+            BundleRefusal::NothingToDrop => "Nothing carried",
+            BundleRefusal::TooManyPiles => "Too many piles: pick one up first",
+            BundleRefusal::NoRoom => "No room to drop it here",
+            BundleRefusal::Carrying => "Drop the bundle first (Q)",
+            BundleRefusal::Possessed => "Another elder is in there",
+        }
+    }
+}
+
+/// The carry job a bundle action starts on `other` (D6), or why it can't:
+/// a pickup (from a building output, or a withdrawal from a depot) tops the
+/// bundle up with the holder's item, as many units as fit; a deposit moves
+/// every unit of the bundle's item the depot has room for, and a delivery
+/// to a site every unit its next part still takes (D4). Only depots,
+/// building outputs, sites and ground piles are holders here; outputs take
+/// no deposits, and sites nothing else. A ground pile tops the bundle up as
+/// an output does, and takes a deposit of its own item (a drop's merge,
+/// `piles::drop_plan`); minerals in it are a haul's, not a bundle's. Its
+/// units move once the agent is at the holder (`read_avatar`), as a
+/// transfer's do. M2.2's interact acts through this too.
+pub fn bundle_job(carry: &Carry, view: &View, other: InventoryRef, direction: Direction) -> Result<CarryJob, BundleRefusal> {
+    if carry.job.is_some() || carry.inventory.total_in() > 0 || view.leaving_cargo() {
+        return Err(BundleRefusal::Busy);
+    }
+    let holder = match other {
+        InventoryRef::Depot(d) => view.depots.get(d as usize).map(|d| &d.inventory),
+        InventoryRef::Output(b) => view.buildings.get(b as usize).map(|b| &b.output),
+        InventoryRef::Site(b) => view.buildings.get(b as usize).and_then(|b| b.site()).map(|(_, materials)| materials),
+        // A dispenser's output is the pile lab's alone.
+        InventoryRef::Pile(id) => view.piles.and_then(|lab| lab.piles.get(&id)).filter(|p| p.source.is_none()).map(|p| &p.inventory),
+        InventoryRef::Agent(_) | InventoryRef::Collector => None,
+    };
+    let Some(holder) = holder else { return Err(BundleRefusal::NotAHolder) };
+    let cargo = &carry.inventory;
+    // Depot items only: minerals don't go to depots or come out of them.
+    let depot_item = |item: &ItemIx| (*item as usize) < view.items;
+    let (item, units) = match direction {
+        // A site is a drop-off: nothing is taken back out (D4).
+        Direction::Pickup if matches!(other, InventoryRef::Site(_)) => return Err(BundleRefusal::DepositOnly),
+        Direction::Pickup => {
+            // The holder's item: a tree pile's own, what an output holds, or
+            // in a mixed depot the bundle's item, else the first there.
+            let item = match holder.kinds {
+                Kinds::Only(item) => Some(item),
+                Kinds::OneKind => holder.kind(),
+                Kinds::AnyMix => cargo.kind().filter(depot_item).or_else(|| (0..view.items as ItemIx).find(|&i| holder.available(i) > 0)),
+            };
+            let Some(item) = item.filter(depot_item) else { return Err(BundleRefusal::NothingToTake) };
+            if !cargo.accepts(item) {
+                return Err(BundleRefusal::OtherItem);
+            }
+            if holder.available(item) == 0 {
+                return Err(BundleRefusal::NothingToTake);
+            }
+            if cargo.free() == 0 {
+                return Err(BundleRefusal::BundleFull);
+            }
+            (item, cargo.free().min(holder.available(item)))
+        }
+        Direction::Deposit => {
+            if matches!(other, InventoryRef::Output(_)) {
+                return Err(BundleRefusal::PickupOnly);
+            }
+            let Some(item) = (0..view.items as ItemIx).find(|&i| cargo.available(i) > 0) else { return Err(BundleRefusal::NothingCarried) };
+            if let InventoryRef::Site(b) = other {
+                // Every unit the next part still takes, the rest staying in
+                // the bundle.
+                let site = &view.buildings[b as usize];
+                let wanted = site.wanted(&view.building_kinds[site.kind as usize], item);
+                if wanted == 0 {
+                    return Err(BundleRefusal::NotNeeded);
+                }
+                return Ok(CarryJob { other, item, direction, remaining: cargo.available(item).min(wanted), next_tick: view.tick });
+            }
+            if !holder.accepts(item) {
+                return Err(BundleRefusal::WrongPile);
+            }
+            if holder.free() == 0 {
+                return Err(BundleRefusal::PileFull);
+            }
+            (item, cargo.available(item).min(holder.free()))
+        }
+    };
+    Ok(CarryJob { other, item, direction, remaining: units, next_tick: view.tick })
 }
 
 /// Sets a live avatar's intent. Walking off stops a dig; a `GoTo` plans its
@@ -964,9 +1272,9 @@ pub(super) fn finish_dig(a: &mut AgentState, tick: u64) -> Option<Dig> {
 }
 
 /// Puts the avatar at the spawn point with a fresh state. The player's
-/// owner, name and weapon cooldown stay. So do the body's speed, radius and
-/// max health. Its motion starts over and its health refills, as after a
-/// death.
+/// owner, name and weapon and Burst cooldowns stay. So do the body's speed,
+/// radius and max health. Its motion starts over and its health refills, as
+/// after a death.
 fn respawn(body: &mut Body, avatar: &mut AvatarState, spawn: FxVec2, height: Fx) {
     body.position = spawn;
     body.heading = Fx::PI;
@@ -978,6 +1286,7 @@ fn respawn(body: &mut Body, avatar: &mut AvatarState, spawn: FxVec2, height: Fx)
         owner: avatar.owner,
         name: std::mem::take(&mut avatar.name),
         attack_ready: avatar.attack_ready,
+        burst_ready: avatar.burst_ready,
         height,
         intent: Some(Intent::Stop),
         ..AvatarState::default()

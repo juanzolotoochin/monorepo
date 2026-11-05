@@ -215,6 +215,10 @@ pub(super) struct Footprint {
     pub trailer: Option<Disc>,
     /// Where it is walking to next, if it is walking.
     pub next: Option<FxVec2>,
+    /// Whether walkers steer around it: everyone but a sprite inside a
+    /// building (`sprites`) or an elder possessing one (`Seat::Building`),
+    /// which the others walk past.
+    pub solid: bool,
 }
 
 pub(super) struct Ctx<'a> {
@@ -240,7 +244,9 @@ pub(super) fn footprint(a: &AgentState) -> Footprint {
             Some(HaulerState { trailer: Some(t), equipment: Some(e), .. }) => Some(Disc { center: t.position, radius: e.radius }),
             _ => None,
         },
-        next: a.hauler().and(a.body.route.first().copied()),
+        // Players walk on their own; haulers and sprites follow routes.
+        next: a.avatar().is_none().then(|| a.body.route.first().copied()).flatten(),
+        solid: a.sprite().is_none_or(|sprite| !sprite.inside()) && a.avatar().is_none_or(|p| p.seat.and_then(super::Seat::building).is_none()),
     }
 }
 
@@ -281,6 +287,7 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
     let start = match &mut a.role {
         Role::Hauler(hauler) => hauler.phase,
         Role::Avatar(avatar) => return super::avatar::self_update(&mut a.body, avatar, me, ctx.tick, ctx.terrain, ctx.piles, def),
+        Role::Sprite(_) => return super::sprites::self_update(a, me, ctx),
     };
     if let Some(action) = think(a, me, ctx) {
         // A hauler's actions only move it: nothing for the world.
@@ -444,9 +451,75 @@ fn travel(body: &mut Body, hauler: &mut HaulerState, carry: &Carry, me: AgentIx,
     }
 }
 
+/// What `move_worker` steers: a hauler, or a sprite (`sprites`). It gives
+/// the walker's shape and route planner, and the steering state it keeps
+/// between ticks.
+pub(super) trait Walker {
+    fn radius(&self, body: &Body) -> Fx;
+    /// Whether it tows a trailer: then it keeps every waypoint, which shape
+    /// the turns the trailer can make.
+    fn towing(&self) -> bool;
+    /// The trailer's footprint, which it steers clear of too.
+    fn trailer_disc(&self) -> Option<Disc>;
+    /// A route to `to`, also avoiding `extra` discs.
+    fn route_to(&self, body: &Body, terrain: &Terrain, to: FxVec2, extra: &[Disc]) -> Vec<FxVec2>;
+    /// The way the body is going (`HaulerState::travel_heading`).
+    fn travel_heading(&mut self) -> &mut Fx;
+    /// When a blocked walker may plan a detour again.
+    fn traffic_replan_at(&mut self) -> &mut u64;
+    /// Consecutive ticks spent giving way to another agent.
+    fn yielding(&mut self) -> &mut u64;
+    /// Steps taken around another body, for metrics.
+    fn avoidance_steers(&mut self) -> &mut u64;
+    /// Ticks spent waiting on traffic, for metrics.
+    fn traffic_wait_ticks(&mut self) -> &mut u64;
+}
+
+impl Walker for HaulerState {
+    fn radius(&self, body: &Body) -> Fx {
+        HaulerState::radius(self, body)
+    }
+
+    fn towing(&self) -> bool {
+        self.trailer.is_some()
+    }
+
+    fn trailer_disc(&self) -> Option<Disc> {
+        match (&self.trailer, &self.equipment) {
+            (Some(t), Some(e)) => Some(Disc { center: t.position, radius: e.radius }),
+            _ => None,
+        }
+    }
+
+    fn route_to(&self, body: &Body, terrain: &Terrain, to: FxVec2, extra: &[Disc]) -> Vec<FxVec2> {
+        self.plan(body, terrain, to, extra)
+    }
+
+    fn travel_heading(&mut self) -> &mut Fx {
+        &mut self.travel_heading
+    }
+
+    fn traffic_replan_at(&mut self) -> &mut u64 {
+        &mut self.traffic_replan_at
+    }
+
+    fn yielding(&mut self) -> &mut u64 {
+        &mut self.yielding
+    }
+
+    fn avoidance_steers(&mut self) -> &mut u64 {
+        &mut self.avoidance_steers
+    }
+
+    fn traffic_wait_ticks(&mut self) -> &mut u64 {
+        &mut self.traffic_wait_ticks
+    }
+}
+
 /// Bounded local steering: keep the global route, steer around nearby bodies
-/// and trailers, and wait if no collision-free step exists.
-fn move_worker(body: &mut Body, hauler: &mut HaulerState, me: AgentIx, ctx: &Ctx, step: Fx) {
+/// and trailers, and wait if no collision-free step exists. Bodies that
+/// aren't solid (a sprite inside a building) are walked past.
+pub(super) fn move_worker(body: &mut Body, hauler: &mut impl Walker, me: AgentIx, ctx: &Ctx, step: Fx) {
     let tolerance = Fx::from_ratio(1, 10);
     while body.route.first().is_some_and(|&w| distance(body.position, w) <= tolerance) {
         body.route.remove(0);
@@ -458,7 +531,7 @@ fn move_worker(body: &mut Body, hauler: &mut HaulerState, me: AgentIx, ctx: &Ctx
     // Skip a waypoint once the one after it is in reach: grid waypoints in a
     // tight gap can be closer to a rock than the body fits, and circling them
     // wastes time. Carts keep theirs, which shape the turns the cart can make.
-    if hauler.trailer.is_none() {
+    if !hauler.towing() {
         while body.route.len() >= 2 && ctx.terrain.clear(body.position, body.route[1], radius) {
             body.route.remove(0);
         }
@@ -466,7 +539,7 @@ fn move_worker(body: &mut Body, hauler: &mut HaulerState, me: AgentIx, ctx: &Ctx
     let near = Fx::from_int(3);
     let mut nearby = Vec::new();
     for (i, b) in ctx.footprints.iter().enumerate() {
-        if i == me as usize {
+        if i == me as usize || !b.solid {
             continue;
         }
         if distance(body.position, b.position) < near {
@@ -485,12 +558,12 @@ fn move_worker(body: &mut Body, hauler: &mut HaulerState, me: AgentIx, ctx: &Ctx
     if body.route.len() == 1 {
         let goal = body.route[0];
         if distance(body.position, goal) < Fx::from_ratio(4, 5) && nearby.iter().any(|o| distance(goal, o.center) < radius + o.radius + gap) {
-            hauler.traffic_wait_ticks += 1;
+            *hauler.traffic_wait_ticks() += 1;
             return;
         }
     }
-    if let (Some(t), Some(e)) = (&hauler.trailer, &hauler.equipment) {
-        nearby.push(Disc { center: t.position, radius: e.radius });
+    if let Some(trailer) = hauler.trailer_disc() {
+        nearby.push(trailer);
     }
     let mut route = body.route.clone();
     let mut direct = body.position;
@@ -500,11 +573,11 @@ fn move_worker(body: &mut Body, hauler: &mut HaulerState, me: AgentIx, ctx: &Ctx
         let after = distance(direct, o.center);
         after <= radius + o.radius + gap && after <= before + epsilon
     });
-    if blocked_by_agent && ctx.tick >= hauler.traffic_replan_at {
+    if blocked_by_agent && ctx.tick >= *hauler.traffic_replan_at() {
         let goal = *body.route.last().expect("non-empty route");
         let detour = {
             let saved = std::mem::take(&mut body.route);
-            let detour = hauler.plan(body, ctx.terrain, goal, &nearby[..dynamic]);
+            let detour = hauler.route_to(body, ctx.terrain, goal, &nearby[..dynamic]);
             body.route = saved;
             detour
         };
@@ -514,25 +587,25 @@ fn move_worker(body: &mut Body, hauler: &mut HaulerState, me: AgentIx, ctx: &Ctx
             direct = body.position;
             move_route(&mut direct, &mut route, step);
         }
-        hauler.traffic_replan_at = ctx.tick + TRAFFIC_REPLAN_TICKS;
+        *hauler.traffic_replan_at() = ctx.tick + TRAFFIC_REPLAN_TICKS;
     }
     let delta = direct - body.position;
     // Two agents meeting head-on would both step aside and back forever: the
     // later one waits while the earlier one steers around it.
-    let oncoming = ctx.footprints[..me as usize].iter().any(|b| {
+    let oncoming = ctx.footprints[..me as usize].iter().filter(|b| b.solid).any(|b| {
         let Some(next) = b.next else {
             return false;
         };
         let after = distance(direct, b.position);
         after <= radius + b.radius + gap && after <= distance(body.position, b.position) + epsilon && (next - b.position).dot(body.position - b.position) > Fx::ZERO
     });
-    if oncoming && hauler.yielding < YIELD_TICKS {
-        hauler.yielding += 1;
-        hauler.traffic_wait_ticks += 1;
+    if oncoming && *hauler.yielding() < YIELD_TICKS {
+        *hauler.yielding() += 1;
+        *hauler.traffic_wait_ticks() += 1;
         return;
     }
     if !oncoming {
-        hauler.yielding = 0;
+        *hauler.yielding() = 0;
     }
     // If going straight is blocked, keep the way it is already going before
     // trying fixed swerves: picking a new swerve each tick (each needing a turn
@@ -540,7 +613,7 @@ fn move_worker(body: &mut Body, hauler: &mut HaulerState, me: AgentIx, ctx: &Ctx
     let straight = Fx::ZERO;
     let mut angles: Vec<Fx> = [0, 55, 105, 155, -55, -105, -155].iter().map(|&h| Fx::from_ratio(h, 100)).collect();
     if delta != FxVec2::ZERO {
-        let keep = angle_between(nav::bearing(FxVec2::ZERO, delta), hauler.travel_heading);
+        let keep = angle_between(nav::bearing(FxVec2::ZERO, delta), *hauler.travel_heading());
         if keep != straight && keep.abs() <= Fx::from_ratio(3, 2) {
             angles.insert(1, keep);
         }
@@ -557,24 +630,24 @@ fn move_worker(body: &mut Body, hauler: &mut HaulerState, me: AgentIx, ctx: &Ctx
             });
         if clear {
             let target = nav::bearing(body.position, next);
-            let travel_turn = angle_between(hauler.travel_heading, target);
+            let travel_turn = angle_between(*hauler.travel_heading(), target);
             let turn = angle_between(body.heading, target);
             body.heading += turn.clamp(-TURN_PER_TICK, TURN_PER_TICK);
             if travel_turn.abs() > TRAVEL_TURN_PER_TICK {
-                hauler.travel_heading += travel_turn.clamp(-TRAVEL_TURN_PER_TICK, TRAVEL_TURN_PER_TICK);
+                *hauler.travel_heading() += travel_turn.clamp(-TRAVEL_TURN_PER_TICK, TRAVEL_TURN_PER_TICK);
                 return;
             }
-            hauler.travel_heading = target;
+            *hauler.travel_heading() = target;
             body.position = next;
             if angle == straight {
                 body.route = route;
             } else {
-                hauler.avoidance_steers += 1;
+                *hauler.avoidance_steers() += 1;
             }
             return;
         }
     }
-    hauler.traffic_wait_ticks += 1;
+    *hauler.traffic_wait_ticks() += 1;
 }
 
 /// Stage 3 for one agent: dock claims and decisions that need the economy.

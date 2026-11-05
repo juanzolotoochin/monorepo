@@ -256,7 +256,7 @@ fn focus_loss_suspends_and_held_controls_count_only_after_rest() {
 #[test]
 fn the_utility_panel_takes_controller_ui_and_confirms_one_action() {
     let mut rig = Rig::seated(1);
-    rig.input.set_scene(SceneContext { scenario: false, utility: vec![Utility::Dig, Utility::Record, Utility::Respawn], recording: false });
+    rig.input.set_scene(SceneContext { scenario: false, town: false, utility: vec![Utility::Dig, Utility::Record, Utility::Respawn], recording: false });
     let frame = rig.tap(1, Button::View);
     assert_eq!(frame.suspended, Some(Suspend::Panel));
     assert!(frame.blocked);
@@ -330,6 +330,102 @@ fn keyboard_bindings_follow_the_scene() {
     rig.keys.press(KeyCode::KeyE);
     rig.keys.press(KeyCode::KeyQ);
     assert_eq!(rig.frame().gameplay.edges, vec![Edge::MachineToggle], "Q has no meaning with a supply chain");
+}
+
+#[test]
+fn keyboard_e_interacts_in_a_town() {
+    let mut rig = Rig::new();
+    rig.input.set_scene(SceneContext { scenario: true, town: true, ..default() });
+    rig.keys.press(KeyCode::KeyE);
+    assert_eq!(rig.frame().gameplay.edges, vec![Edge::Interact]);
+}
+
+/// In a town, keyboard B and controller X build; while a blueprint is being
+/// placed, Escape and controller B back out of it (Escape doesn't pause).
+/// Elsewhere B is nothing and X still collects.
+#[test]
+fn the_build_keys_follow_the_town() {
+    let mut rig = Rig::seated(1);
+    rig.input.set_scene(SceneContext { scenario: true, town: true, ..default() });
+    rig.keys.press(KeyCode::KeyB);
+    assert_eq!(rig.frame().gameplay.edges, vec![Edge::Build]);
+    rig.keys.release(KeyCode::KeyB);
+    rig.frame();
+    rig.input.set_placing(true);
+    rig.keys.press(KeyCode::Escape);
+    let frame = rig.frame();
+    assert_eq!(frame.gameplay.edges, vec![Edge::CancelBuild]);
+    assert!(rig.input.escape_taken());
+    rig.keys.release(KeyCode::Escape);
+    assert_eq!(rig.tap(1, Button::East).gameplay.edges, vec![Edge::CancelBuild]);
+    rig.input.set_placing(false);
+    assert_eq!(rig.tap(1, Button::West).gameplay.edges, vec![Edge::Build]);
+    assert_eq!(rig.tap(1, Button::East).gameplay.edges, vec![Edge::Drop]);
+    rig.input.set_scene(SceneContext { scenario: true, ..default() });
+    assert_eq!(rig.tap(1, Button::West).gameplay.edges, vec![Edge::Collect]);
+    rig.keys.press(KeyCode::KeyB);
+    assert!(rig.frame().gameplay.edges.is_empty());
+}
+
+/// In a town, keyboard Q and controller B drop the bundle (B backs out of
+/// a blueprint first, while one is being placed; Q stays a drop, which the
+/// town refuses then). Elsewhere Q clears a recording or means nothing,
+/// and controller B still proposes a cargo drop.
+#[test]
+fn the_drop_key_follows_the_town() {
+    let mut rig = Rig::seated(1);
+    rig.input.set_scene(SceneContext { scenario: true, town: true, ..default() });
+    rig.keys.press(KeyCode::KeyQ);
+    assert_eq!(rig.frame().gameplay.edges, vec![Edge::Drop]);
+    rig.keys.release(KeyCode::KeyQ);
+    rig.frame();
+    assert_eq!(rig.tap(1, Button::East).gameplay.edges, vec![Edge::Drop]);
+    rig.input.set_placing(true);
+    assert_eq!(rig.tap(1, Button::East).gameplay.edges, vec![Edge::CancelBuild]);
+    rig.keys.press(KeyCode::KeyQ);
+    assert_eq!(rig.frame().gameplay.edges, vec![Edge::Drop]);
+    rig.keys.release(KeyCode::KeyQ);
+    rig.frame();
+    rig.input.set_placing(false);
+    rig.input.set_scene(SceneContext { scenario: true, ..default() });
+    rig.keys.press(KeyCode::KeyQ);
+    assert!(rig.frame().gameplay.edges.is_empty(), "Q has no meaning with a supply chain");
+    rig.keys.release(KeyCode::KeyQ);
+    rig.frame();
+    assert_eq!(rig.tap(1, Button::East).gameplay.edges, vec![Edge::Drop]);
+    rig.input.set_scene(SceneContext::default());
+    rig.keys.press(KeyCode::KeyQ);
+    assert_eq!(rig.frame().gameplay.edges, vec![Edge::Utility(Utility::ClearRecording)]);
+}
+
+/// A radial menu: a direction focuses the option that way, from the
+/// keyboard or the controller, and A or E picks it; Escape picks nothing.
+#[test]
+fn a_radial_menu_picks_by_direction() {
+    let mut rig = Rig::seated(1);
+    let options = || vec!["IDLE".to_string(), "GATHER WOOD".to_string(), "GATHER STONE".to_string()];
+    rig.input.open_radial("ASH: SET JOB", options());
+    assert_eq!(rig.frame().suspended, Some(Suspend::Panel));
+    // Idle at the top, wood lower left, stone lower right.
+    rig.tap(1, Button::DPadRight);
+    assert!(matches!(rig.input.panel(), Some(Panel::Radial { focus: 2, .. })));
+    assert_eq!(rig.tap(1, Button::South).gameplay.edges, vec![Edge::Choose(2)]);
+    assert!(rig.input.panel().is_none());
+    rig.input.open_radial("ASH: SET JOB", options());
+    rig.frame();
+    rig.keys.press(KeyCode::KeyA);
+    rig.frame();
+    assert!(matches!(rig.input.panel(), Some(Panel::Radial { focus: 1, .. })));
+    rig.keys.release(KeyCode::KeyA);
+    rig.keys.press(KeyCode::KeyE);
+    assert_eq!(rig.frame().gameplay.edges, vec![Edge::Choose(1)]);
+    rig.keys.release(KeyCode::KeyE);
+    rig.frame();
+    rig.input.open_radial("ASH: SET JOB", options());
+    rig.frame();
+    rig.keys.press(KeyCode::Escape);
+    assert!(rig.frame().gameplay.edges.is_empty());
+    assert!(rig.input.panel().is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -546,6 +642,82 @@ fn keyboard_r_is_a_held_repair_action() {
     assert!(held.gameplay.repair_held && !held.gameplay.repair_pressed);
     rig.keys.release(KeyCode::KeyR);
     assert!(!rig.frame().gameplay.repair_held);
+}
+
+/// In a town, keyboard R and controller RT Burst while the elder
+/// possesses a building, and only then: otherwise R stays the repair key
+/// and RT attacks, in a town and in every other scene.
+#[test]
+fn the_burst_keys_work_only_while_possessing_in_a_town() {
+    let mut rig = Rig::seated(1);
+    let r = |rig: &mut Rig| {
+        rig.keys.press(KeyCode::KeyR);
+        let frame = rig.frame();
+        rig.keys.release(KeyCode::KeyR);
+        rig.frame();
+        frame
+    };
+    let rt = |rig: &mut Rig| {
+        rig.pads.right_trigger(1, 1.0);
+        let frame = rig.frame();
+        rig.pads.right_trigger(1, 0.0);
+        rig.frame();
+        frame
+    };
+    rig.input.set_scene(SceneContext { scenario: true, town: true, ..default() });
+    let frame = r(&mut rig);
+    assert!(frame.gameplay.edges.is_empty() && frame.gameplay.repair_pressed, "not possessing: R repairs");
+    assert_eq!(rt(&mut rig).gameplay.edges, vec![Edge::Attack]);
+    rig.input.set_possessing(true);
+    let frame = r(&mut rig);
+    assert_eq!(frame.gameplay.edges, vec![Edge::Burst]);
+    assert!(!frame.gameplay.repair_held && !frame.gameplay.repair_pressed);
+    assert_eq!(rt(&mut rig).gameplay.edges, vec![Edge::Burst]);
+    rig.input.set_possessing(false);
+    assert_eq!(rt(&mut rig).gameplay.edges, vec![Edge::Attack]);
+    // Elsewhere nothing Bursts, even with the flag left on.
+    rig.input.set_possessing(true);
+    for scene in [SceneContext { scenario: true, ..default() }, SceneContext::default()] {
+        rig.input.set_scene(scene);
+        let frame = r(&mut rig);
+        assert!(!frame.gameplay.edges.contains(&Edge::Burst) && frame.gameplay.repair_pressed);
+        assert_eq!(rt(&mut rig).gameplay.edges, vec![Edge::Attack]);
+    }
+}
+
+/// In the Sacred Tree, R Bursts the possessed Wood Gatherer: its output
+/// gains two units at once. Standing outside, R sends nothing.
+#[test]
+fn r_bursts_a_possessed_building_in_a_town() {
+    let mut game = Game::new("sacred-tree", 60.0);
+    game.frames(5);
+    let stand = {
+        let service = game.service();
+        let (s, world) = (service.settlement().unwrap(), service.world().unwrap());
+        let agent = service.player().unwrap();
+        service.to_view(s.leave_spot(0, s.agents[agent as usize].radius(), world.terrain()).unwrap())
+    };
+    game.walk_to(stand);
+    let press = |game: &mut Game, key: KeyCode| {
+        game.app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+        game.frames(1);
+        game.app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(key);
+        game.frames(10);
+    };
+    let bursts = |game: &Game| game.count(|c| matches!(c, CommandKind::Burst { .. }));
+    press(&mut game, KeyCode::KeyR);
+    assert_eq!(bursts(&game), 0, "not possessing: R sends nothing");
+    press(&mut game, KeyCode::KeyG);
+    assert_eq!(game.avatar().avatar().unwrap().seat, Some(sim::settlement::Seat::Building(0)));
+    let wood = |game: &Game| game.service().settlement().unwrap().buildings[0].output.count(0);
+    let before = wood(&game);
+    press(&mut game, KeyCode::KeyR);
+    assert_eq!(bursts(&game), 1);
+    assert!(wood(&game) >= before + 2, "{} then {}", before, wood(&game));
+    assert!(game.avatar().avatar().unwrap().burst_ready > 0, "cooling down");
+    // Cooling down, R is refused before anything is sent.
+    press(&mut game, KeyCode::KeyR);
+    assert_eq!(bursts(&game), 1);
 }
 
 #[test]
@@ -1240,4 +1412,49 @@ fn history_keeps_recent_frames_with_their_suspensions() {
     rig.frame();
     let last = rig.input.history().last().unwrap();
     assert_eq!((last.suspended, last.seat, last.owner), (Some(Suspend::Disconnected), None, Device::KeyboardMouse));
+}
+
+/// In a town, E on a building's slot possesses it and E again leaves, and
+/// G does both too (D3); in the dig lab G still climbs into the rover and
+/// out, as it always did.
+#[test]
+fn e_and_g_possess_a_building_in_a_town_and_g_still_drives_elsewhere() {
+    let mut game = Game::new("sacred-tree", 60.0);
+    game.frames(5);
+    let stand = {
+        let service = game.service();
+        let (s, world) = (service.settlement().unwrap(), service.world().unwrap());
+        let agent = service.player().unwrap();
+        service.to_view(s.leave_spot(0, s.agents[agent as usize].radius(), world.terrain()).unwrap())
+    };
+    game.walk_to(stand);
+    let seat = |game: &Game| game.avatar().avatar().unwrap().seat;
+    let press = |game: &mut Game, key: KeyCode| {
+        game.app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+        game.frames(1);
+        game.app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(key);
+        game.frames(10);
+    };
+    press(&mut game, KeyCode::KeyE);
+    assert_eq!(seat(&game), Some(sim::settlement::Seat::Building(0)), "E possessed the Wood Gatherer");
+    assert_eq!(game.count(|c| matches!(c, CommandKind::Interact { target: sim::settlement::InteractTarget::Slot(0), .. })), 1);
+    press(&mut game, KeyCode::KeyE);
+    assert_eq!(seat(&game), None, "E left it");
+    press(&mut game, KeyCode::KeyG);
+    assert_eq!(seat(&game), Some(sim::settlement::Seat::Building(0)), "G possessed it");
+    press(&mut game, KeyCode::KeyG);
+    assert_eq!(seat(&game), None, "G left it");
+    assert_eq!(game.count(|c| matches!(c, CommandKind::Board { .. })), 2);
+
+    let mut game = Game::new("dig-lab", 60.0);
+    game.frames(5);
+    let rover = {
+        let s = game.service().settlement().unwrap();
+        game.service().to_view(s.vehicles[0].position)
+    };
+    game.walk_to(rover + Vec3::new(1.6, 0.0, 0.0));
+    press(&mut game, KeyCode::KeyG);
+    assert_eq!(seat(&game), Some(sim::settlement::Seat::Vehicle(0)), "G climbed into the rover");
+    press(&mut game, KeyCode::KeyG);
+    assert_eq!(seat(&game), None, "and out");
 }

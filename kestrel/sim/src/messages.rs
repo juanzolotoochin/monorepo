@@ -9,6 +9,8 @@ use crate::hash::{StateHash, StateHasher};
 use crate::id::Id;
 use crate::mover::Mover;
 use crate::settlement::piles::PileJob;
+use crate::settlement::avatar::BundleRefusal;
+use crate::settlement::buildings::BurstRefusal;
 use crate::settlement::{CarryJob, InventoryRef};
 
 /// One mover attacks another.
@@ -290,16 +292,147 @@ impl StateHash for RestartMemory {
     }
 }
 
-/// A player reached for a vehicle's seat (`Action::Board`): stage 5 seats
-/// them in the nearest free one in reach (`Settlement::board`).
+/// A sprite on a `Claim` step asks for a building's slot, to hold while it
+/// walks there (`SACRED_TREE_HANDOFF.md`, D2). Contested like a dock: the
+/// lowest agent index wins a building, whatever the message order
+/// (`Settlement::claim_slots`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimSlot {
+    pub agent: u16,
+    pub building: u16,
+}
+
+/// A sprite that claimed a building's slot reached its spot and steps in
+/// (`Settlement::enter_slots`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnterSlot {
+    pub agent: u16,
+    pub building: u16,
+}
+
+impl StateHash for ClaimSlot {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+        h.write(&self.building);
+    }
+}
+
+impl StateHash for EnterSlot {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+        h.write(&self.building);
+    }
+}
+
+/// A player reached for a seat (`Action::Board`): stage 5 seats them in the
+/// nearest free vehicle or built building in reach, or with `building`
+/// (an interact on its slot) in that building (`Settlement::board`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Board {
     pub agent: u16,
+    pub building: Option<u16>,
 }
 
 impl StateHash for Board {
     fn hash_into(&self, h: &mut StateHasher) {
         h.write(&self.agent);
+        h.write_u64(self.building.map_or(0, |b| b as u64 + 1));
+    }
+}
+
+/// A bundle action that couldn't start (`Action::Bundle`), and why: stage 5
+/// reports it as `Event::BundleRefused`, for the view to explain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BundleRefused {
+    pub agent: u16,
+    pub reason: BundleRefusal,
+}
+
+impl StateHash for BundleRefused {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+        h.write_u64(self.reason as u64);
+    }
+}
+
+/// A bundle dropped on the ground (`Action::Drop`): stage 5 puts it on a
+/// pile of its item at the agent's feet, or a new one there
+/// (`Settlement::drop_bundles`), in command order, or reports why not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DropBundle {
+    pub agent: u16,
+}
+
+impl StateHash for DropBundle {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+    }
+}
+
+/// A Burst (`Action::Burst`) from an elder possessing a building: stage 5
+/// adds the building's Burst units to its output, up to its possessed cap,
+/// and starts the elder's cooldown (`Settlement::bursts`), in command
+/// order, or reports why not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Burst {
+    pub agent: u16,
+}
+
+impl StateHash for Burst {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+    }
+}
+
+/// A Burst that couldn't start, and why: stage 5 reports it as
+/// `Event::BurstRefused`, for the view to explain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BurstRefused {
+    pub agent: u16,
+    pub reason: BurstRefusal,
+}
+
+impl StateHash for BurstRefused {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+        match self.reason {
+            BurstRefusal::NotPossessing => h.write_u64(0),
+            BurstRefusal::Cooling { ticks } => {
+                h.write_u64(1);
+                h.write(&ticks);
+            }
+            BurstRefusal::OutputFull => h.write_u64(2),
+        }
+    }
+}
+
+/// A blueprint put down (`CommandKind::PlaceBlueprint`): stage 5 lays its
+/// site where the ground allows (`Settlement::place_blueprints`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaceBlueprint {
+    pub kind: u16,
+    pub position: FxVec2,
+}
+
+impl StateHash for PlaceBlueprint {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.kind);
+        h.write(&self.position);
+    }
+}
+
+/// A player installs a site's next part (`Interaction::Install`): stage 5
+/// uses up its materials if they are all there (`Settlement::install`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Install {
+    pub agent: u16,
+    pub building: u16,
+}
+
+impl StateHash for Install {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+        h.write(&self.building);
     }
 }
 
@@ -323,6 +456,14 @@ impl StateHash for ReserveStock {
                 h.write(&id);
             }
             InventoryRef::Collector => h.write_u64(3),
+            InventoryRef::Output(b) => {
+                h.write_u64(4);
+                h.write(&b);
+            }
+            InventoryRef::Site(b) => {
+                h.write_u64(5);
+                h.write(&b);
+            }
         }
         h.write(&job.item);
         h.write_u64(job.direction as u64);
@@ -347,12 +488,19 @@ pub struct ActionMessages {
     /// so always empty by then.
     pub haul: Vec<StartHaul>,
     pub board: Vec<Board>,
+    pub bundle_refused: Vec<BundleRefused>,
+    pub place_blueprint: Vec<PlaceBlueprint>,
+    pub install: Vec<Install>,
+    pub drop_bundle: Vec<DropBundle>,
+    pub burst: Vec<Burst>,
+    pub burst_refused: Vec<BurstRefused>,
 }
 
 impl ActionMessages {
     pub fn is_empty(&self) -> bool {
         self.restart_memory.is_empty() && self.drop_haul.is_empty() && self.drop_notes.is_empty() && self.reserve_stock.is_empty() && self.haul.is_empty()
-            && self.board.is_empty()
+            && self.board.is_empty() && self.bundle_refused.is_empty() && self.place_blueprint.is_empty() && self.install.is_empty()
+            && self.drop_bundle.is_empty() && self.burst.is_empty() && self.burst_refused.is_empty()
     }
 }
 
@@ -366,6 +514,25 @@ impl StateHash for ActionMessages {
         // Empty everywhere but a vehicle scene, so other scenes hash as before.
         if !self.board.is_empty() {
             h.write(&self.board);
+        }
+        // Empty everywhere but the Sacred Tree, likewise.
+        if !self.bundle_refused.is_empty() {
+            h.write(&self.bundle_refused);
+        }
+        if !self.place_blueprint.is_empty() {
+            h.write(&self.place_blueprint);
+        }
+        if !self.install.is_empty() {
+            h.write(&self.install);
+        }
+        if !self.drop_bundle.is_empty() {
+            h.write(&self.drop_bundle);
+        }
+        if !self.burst.is_empty() {
+            h.write(&self.burst);
+        }
+        if !self.burst_refused.is_empty() {
+            h.write(&self.burst_refused);
         }
     }
 }
@@ -508,31 +675,38 @@ impl StateHash for EatFailed {
 }
 
 macro_rules! message_queues {
-    ($($field:ident: $ty:ty,)+) => {
+    ($($field:ident: $ty:ty,)+ ; $($late:ident: $late_ty:ty,)*) => {
         /// One queue per message type, in apply order.
         #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
         pub struct Messages {
             $(pub $field: Vec<$ty>,)+
+            $(pub $late: Vec<$late_ty>,)*
         }
 
         impl Messages {
             /// Moves every message in `other` to the end of the matching queue.
             pub fn append(&mut self, other: &mut Messages) {
                 $(self.$field.append(&mut other.$field);)+
+                $(self.$late.append(&mut other.$late);)*
             }
 
             pub fn is_empty(&self) -> bool {
-                true $(&& self.$field.is_empty())+
+                true $(&& self.$field.is_empty())+ $(&& self.$late.is_empty())*
             }
 
             pub fn len(&self) -> usize {
-                0 $(+ self.$field.len())+
+                0 $(+ self.$field.len())+ $(+ self.$late.len())*
             }
         }
 
         impl StateHash for Messages {
             fn hash_into(&self, h: &mut StateHasher) {
                 $(h.write(&self.$field);)+
+                // Queues added later hash only when they hold something, so
+                // the scenes that never send them hash as they did before.
+                $(if !self.$late.is_empty() {
+                    h.write(&self.$late);
+                })*
             }
         }
     };
@@ -573,4 +747,9 @@ message_queues! {
     swing_lands: SwingLands,
     breach: Breach,
     fire: Fire,
+    ;
+    // Sprites (`settlement::sprites`): slot claims, then entries, so an
+    // entry sees this tick's claims. Hashed only when not empty.
+    claim_slot: ClaimSlot,
+    enter_slot: EnterSlot,
 }

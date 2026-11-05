@@ -732,11 +732,137 @@ production, cart attachment, defense, and material conservation.
 The existing JSON/TCP interface also exposes `settlement_transfer` (`depot`,
 `item`, `units`, `deposit`), `settlement_cancel`, `settlement_pause` (`paused`),
 `settlement_rate` (`rate`, 0.25–4), `settlement_link`, `settlement_machine`, and
-`settlement_defender` (each `id`, `enabled`), and `settlement_stock` (`depot`,
-`item`, `units`). Transfers walk the player to the dock and wait for the precise
+`settlement_defender` (each `id`, `enabled`), `settlement_stock` (`depot`,
+`item`, `units`), and `settlement_sprite_job` (`sprite`, and `job`: a building
+kind's id, or none for idle). Where the player carries a bundle (the Sacred
+Tree's elder), `settlement_pick_up` (`building`, its index) tops it up from a
+building's output, and `settlement_withdraw` and `settlement_deposit` (each
+`depot`) fill it from or empty it into a depot, each moving as many units as
+fit; a refusal fails the step with its reason. In a town, the interact
+key's own path is scriptable too: `settlement_interact_target` reports the
+player's target in the receipt's `settlement.interact` (with `prompt`, it
+fails unless the target's prompt is that, such as `"PICK UP 3 WOOD"`, or
+`""` for none); `settlement_interact` acts on it as E or A does (a bundle
+target's units move, a site's part goes in, and a sprite opens its job
+menu); and `settlement_job_menu` (`job`: a building kind's id, or none for
+idle) picks the open menu's option. Building has verbs of its own:
+`settlement_build` opens the build menu as B does, and with `kind` (a
+building kind's id) picks it, or starts placing it with no menu open; the
+receipt's `settlement.interact.ghost` says where the ghost stands and
+whether it may go down there (`valid`, and `reason` such as `"BLOCKED"`).
+`settlement_place_blueprint` puts it down as interact does, or with `kind`
+and `position` (arena x and z) puts one there; a refusal fails the step with
+the sim's reason. `settlement_cancel_build` backs out. `settlement_drop`
+drops the bundle at the player's feet as Q does, onto a pile of its item
+there or a new one, and waits for the units to land; a refusal fails the
+step with its reason, such as `"Nothing carried"`. Interact picks a ground
+pile up as it does an output. `settlement_board` (`building`, its index)
+possesses a built building as interacting with its slot or G does, walking
+the elder beside it first when it is out of reach; a sprite inside is put
+out, and a refusal fails the step with its reason, such as `"Drop the
+bundle first (Q)"`. `settlement_leave` leaves it. `settlement.seat` is the
+player's seat: `{"building": 0}`, `{"vehicle": 0}` or null.
+`settlement_burst` Bursts the possessed building as R does, failing with the
+sim's reason (`"Burst ready in 12 s"`, `"Output full"`, `"Possess a building
+to Burst"`); `settlement.burst` has the seconds of `cooldown` left, whether a
+Burst would go off now (`ready`), and its `units` or the `reason` it wouldn't.
+`settlement.simulation.ground_piles` lists
+the dropped piles (`id`, `position`, `stock`). Each building in
+`settlement.simulation.buildings` has, while it is a site, a `site` with its
+next `part`, its `parts`, its `materials` (item, landed, needed) and whether
+it is `ready` to install. Transfers walk the player to the dock and wait for the precise
 quantity to arrive. `assert_settlement` checks minimum `delivered`, `cycles`,
 `equipped`, and `kills` counts plus all accounting invariants. `inspect` includes
 full `settlement.simulation`, scenario data, and per-material `balances`.
+
+## The Sacred Tree
+
+Pick **THE SACRED TREE / TOWN MVP** in the launch menu, or launch it directly:
+
+```sh
+bazel run --config=remote //kestrel/app:demo -- --scene sacred-tree
+```
+
+The town MVP's clearing ([design](../SACRED_TREE_HANDOFF.md)): the tree's
+wood and stone piles, four sprites and one Wood Gatherer, all in placeholder
+art. The HUD line and the piles' labels count the tree's wood and stone.
+Each sprite has a flame over its head and a tag with its name, job and what
+it is doing: the flame dances orange while it works inside its building,
+bobs pale yellow on the way, breathes blue while it waits for a free
+building, and smoulders when idle. A building's rotor turns while someone
+works it; the lamp over it and its card say whether it is idle (and who is
+coming), working (and who) or full, and the lamp flares as a unit comes out.
+Its output stacks on the pile in front of it, with the count over it. Hover
+a card for details. E (A on a controller) acts on the one thing in reach
+the sim picks (`sim::settlement::interact`), ringed on the ground with what
+it does over it ("E  PICK UP 3 WOOD", "DEPOSIT 5 WOOD", "WITHDRAW 5 WOOD"):
+the elder steps in and the units fly. On a sprite it opens a job menu in a
+ring around it (Idle, Gather Wood, Gather Stone): WASD, the arrows, the
+stick or the D-pad pick a direction, E or A sets the job, Escape or B
+closes it. A refusal shows over the elder's head for a moment.
+
+B (X on a controller) opens the build menu, a ring of the building kinds.
+Picking one puts its ghost on the ground a step in front of the elder,
+following it as it walks: green, with "E  PLACE", where the sim would let it
+stand, and red with the reason where it wouldn't ("BLOCKED", "TOO CLOSE TO A
+PILE", "CAN'T BE REACHED"). E or A puts it down as a site; B again, Escape
+or controller B backs out. A site is a staked plot whose card says what its
+next part takes ("FOUNDATION 0/2 WOOD"). Carrying something it needs,
+interact delivers every unit it still takes ("DELIVER 2 WOOD"), the rest
+staying in the bundle; once its materials are in, interact installs the part
+("INSTALL FOUNDATION"), and the skin grows a part at a time. Empty-handed
+with materials missing, the prompt says what it needs ("NEEDS 2 STONE").
+The last part makes the building, which a sprite with that job then
+staffs. While the tree's canopy hides the elder, a site or the ghost from
+the camera, it fades.
+
+Q (B on a controller, when no blueprint is being placed) drops the whole
+bundle on the ground at the elder's feet: onto a pile of the same item
+there, or a new pile, stacked in the item's skin with its count ("5 WOOD").
+It is its own key, never what interact does when it misses, and nothing
+drops while a blueprint is being placed. Interact picks a ground pile back
+up as it does an output ("PICK UP 3 WOOD"); an emptied pile goes. A drop
+that can't go down says why over the elder ("Nothing carried", "No room to
+drop it here", "Too many piles: pick one up first").
+
+G (the left stick on a controller) possesses the nearest built building in
+reach, or leaves it; empty-handed, interact does too, on its slot spot
+("E  POSSESS", then "E  LEAVE" while inside). A sprite working there is put
+out beside the building and plans again: another free building of its kind,
+or a wait until the elder leaves, when it goes back in. Possessed, the
+building's lamp turns violet, its card says "POSSESSED", the elder's body is
+hidden and the building works four times as fast, up to a higher cap.
+Moving and dropping do nothing while inside. Boarding with a bundle is
+refused: "Drop the bundle first (Q)". A sprite working inside is reached
+at the slot spot too, so E there opens its job menu, and G possesses.
+
+Possessing a building, R (RT on a controller) Bursts: two units go into its
+output at once (up to the possessed cap), the lamp flares bright and the
+pop plays. Then the elder waits 30 seconds for the next, wherever it goes:
+leaving, possessing another building or respawning doesn't reset it. The
+building's card and the HUD line say "BURST READY (R)", or the seconds left
+("BURST 12 s"), and the help line shows the keys that work inside. A Burst
+too soon, or into a full output, says why over the elder ("Burst ready in
+12 s", "Output full") and spends no cooldown. Outside a building R and RT
+keep what they do.
+
+```sh
+bazel build //kestrel/app:sacred_tree_demo
+```
+
+renders a short video (a local GPU target, like the other demos) of three
+sprites given jobs: one works the Wood Gatherer, one waits for it, and one
+waits for a Stone Gatherer that isn't built yet. Then the elder walks to the
+Wood Gatherer's output, its pickup ringed and prompted, picks the wood up
+with one interact and deposits it at the tree's wood pile with another.
+Then it builds: the build menu, a Stone Gatherer's ghost red on the tree and
+green east of it, put down; wood from the tree delivered and the foundation
+installed, leaving the site half built; and a walk behind the tree, whose
+canopy fades. Last, the elder drops the wood it still carries on the ground
+east of the tree, and the pile is ringed with "E  PICK UP 2 WOOD".
+Finally it possesses the Wood Gatherer, putting its sprite out beside it,
+and Bursts it: its card says "BURST READY (R)", two units land at once with
+the lamp flaring, and the card counts the cooldown down ("BURST 30 s").
 
 ## Red Clearing combat arena
 

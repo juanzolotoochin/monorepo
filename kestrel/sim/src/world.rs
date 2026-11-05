@@ -121,8 +121,30 @@ pub enum CommandKind {
     /// still decode.
     Leave,
     /// A player's avatar climbs into the nearest free vehicle in reach, or
-    /// out of the one it drives. New variants go after this one.
+    /// out of the one it drives.
     Board { agent: u16 },
+    /// Gives a settlement sprite a job: idle, or a building kind to staff
+    /// (`Settlement::set_sprite_job`).
+    SetSpriteJob { agent: u16, job: crate::settlement::SpriteJob },
+    /// A player's avatar picks up a bundle from a depot or a building output,
+    /// or empties it into a depot (`Action::Bundle`).
+    Bundle { agent: u16, other: crate::settlement::InventoryRef, direction: crate::settlement::Direction },
+    /// A player's avatar interacts with the target its client highlighted
+    /// (`settlement::interact`), which the sim checks again (`Action::Interact`).
+    /// A sprite target's index is not remapped when players leave: the sim
+    /// does nothing with it.
+    Interact { agent: u16, target: crate::settlement::InteractTarget },
+    /// Puts down a blueprint of building kind `kind` centered on `position`
+    /// (world tiles): stage 5 lays its site if the ground allows
+    /// (`Settlement::place_blueprints`), in command order. Any player may.
+    PlaceBlueprint { kind: u16, position: FxVec2 },
+    /// A player's avatar drops its whole bundle on the ground at its feet:
+    /// onto a pile of the same item there, or a new pile (`Action::Drop`).
+    Drop { agent: u16 },
+    /// A player's avatar, possessing a building, adds the building's Burst
+    /// units to its output at once, then waits out its cooldown
+    /// (`Action::Burst`). New variants go after this one.
+    Burst { agent: u16 },
 }
 
 impl CommandKind {
@@ -143,6 +165,10 @@ impl CommandKind {
             | CommandKind::RepairCover { agent, .. }
             | CommandKind::PlayPiano { agent, .. }
             | CommandKind::Board { agent }
+            | CommandKind::Bundle { agent, .. }
+            | CommandKind::Interact { agent, .. }
+            | CommandKind::Drop { agent }
+            | CommandKind::Burst { agent }
             | CommandKind::Pile { agent, .. } => *agent = to,
             _ => {}
         }
@@ -165,6 +191,10 @@ impl CommandKind {
             | CommandKind::RepairCover { agent, .. }
             | CommandKind::PlayPiano { agent, .. }
             | CommandKind::Board { agent }
+            | CommandKind::Bundle { agent, .. }
+            | CommandKind::Interact { agent, .. }
+            | CommandKind::Drop { agent }
+            | CommandKind::Burst { agent }
             | CommandKind::Pile { agent, .. } => Some(agent),
             _ => None,
         }
@@ -469,6 +499,18 @@ impl World {
                         s.set_link(link as usize, enabled);
                     }
                 }
+                CommandKind::SetSpriteJob { agent, job } => {
+                    if let Some(s) = &mut self.settlement {
+                        s.set_sprite_job(agent, job);
+                    }
+                }
+                // Checked in stage 5, after the tick's walks, against the
+                // ground as it is then.
+                CommandKind::PlaceBlueprint { kind, position } => {
+                    if self.settlement.is_some() {
+                        self.actions.place_blueprint.push(crate::messages::PlaceBlueprint { kind, position });
+                    }
+                }
                 CommandKind::SetMachine { producer, enabled } => {
                     if let Some(s) = &mut self.settlement {
                         s.set_machine(producer as usize, enabled);
@@ -493,7 +535,11 @@ impl World {
                 | CommandKind::ReleaseDirectControl { .. }
                 | CommandKind::RepairCover { .. }
                 | CommandKind::Pile { .. }
-                | CommandKind::Board { .. } => {
+                | CommandKind::Board { .. }
+                | CommandKind::Bundle { .. }
+                | CommandKind::Interact { .. }
+                | CommandKind::Drop { .. }
+                | CommandKind::Burst { .. } => {
                     if let (Some(s), Some((agent, action))) = (&mut self.settlement, Action::of(kind)) {
                         s.act(self.tick, agent, &action, &self.terrain, &mut self.actions);
                     }
@@ -819,7 +865,7 @@ impl World {
 
         if let Some(settlement) = &mut self.settlement {
             let tick = self.tick;
-            settlement.apply_actions(actions, &mut self.terrain);
+            settlement.apply_actions(actions, tick, &mut self.terrain);
             settlement.economy(tick);
             settlement.resolve_docks(messages.claim_dock);
             for message in messages.retry {
@@ -872,6 +918,8 @@ impl World {
             for message in messages.fire {
                 settlement.fire(tick, message);
             }
+            settlement.claim_slots(messages.claim_slot);
+            settlement.enter_slots(messages.enter_slot);
         }
         self.apply_repairs();
     }
@@ -892,7 +940,7 @@ impl World {
         if let Some(settlement) = &mut self.settlement {
             settlement.combat_housekeeping(self.tick, &self.terrain);
             settlement.avatar_housekeeping(self.tick);
-            settlement.vehicle_housekeeping();
+            settlement.seat_housekeeping(&self.terrain);
             settlement.dig_housekeeping(self.tick, &mut self.terrain);
             settlement.pile_housekeeping(self.tick);
             settlement.memory_housekeeping(&mut self.terrain);

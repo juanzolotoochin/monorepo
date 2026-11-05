@@ -1,26 +1,32 @@
-//! The pile lab: loose mineral piles, dispensers that add to their output
-//! pile, and a player who walks to a pile and tosses units one at a time.
-//! Ported from the original Bevy app (`piles/` and `pile_model.rs`). In a
-//! mine, dug ore lands in piles beside the pit, and a collector takes any
-//! mineral delivered to it.
+//! The pile lab: loose piles on the ground, dispensers that add to their
+//! output pile, and a player who walks to a pile and tosses units one at a
+//! time. Ported from the original Bevy app (`piles/` and `pile_model.rs`).
+//! In a mine, dug ore lands in piles beside the pit, and a collector takes
+//! any mineral delivered to it. In a town (the Sacred Tree) the lab has no
+//! minerals, dispensers or collector: its piles are the bundles the elder
+//! drops (`PileLab::town`, `Settlement::drop_bundles`).
 //!
-//! Minerals are settlement items (`ItemIx`), added after the scenario's in
-//! mineral order (`crate::mine`), so `item(mineral)` and `mineral(item)` map
-//! between the two where the scene's setup, events and views number them.
-//! Piles, the collector and a player's cargo are `Inventory`s; a player's
-//! minerals sit in its own `Carry` beside its depot items, any mix within
-//! the cargo's one capacity.
+//! A pile holds any one settlement item (`ItemIx`). Minerals are items
+//! added after the scenario's in mineral order (`crate::mine`), so
+//! `item(mineral)` and `mineral(item)` map between the two where the scene's
+//! setup, events and views number them; a town has none. Piles, the
+//! collector and a player's cargo are `Inventory`s; a player's minerals sit
+//! in its own `Carry` beside its depot items, any mix within the cargo's one
+//! capacity.
 //!
 //! A haul is a carry job (`Carry::job`) with a pile or the collector, which
 //! holds its units on both sides from the command on (`INVENTORY_HANDOFF.md`),
-//! and the walk to it (`PileJob`), which stays in the lab.
+//! and the walk to it (`PileJob`), which stays in the lab. Hauls move
+//! minerals only (`PileLab::is_haul`): a bundle of a depot item picked up
+//! from or dropped on a pile is a carry job like a depot transfer's, with no
+//! walk (`avatar::bundle_job`).
 //! A `Pile` command is the `Haul` action: `haul` is the avatar's part,
 //! which client prediction replays too, and `PileLab::start_haul` the lab's.
 //!
 //! A unit flies between the cargo and the pile as a `Transfer`, like a depot
 //! unit, held as room on its target until it lands.
 //!
-//! Minerals are accounted like any item (`Settlement::balances`): units in
+//! Pile units are accounted like any item (`Settlement::balances`): units in
 //! piles, cargo, the collector and the air make up what was set up, dispensed
 //! and dug, and `Settlement::validate` checks it. Positions are world tiles.
 
@@ -30,11 +36,11 @@ use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
 use super::action::View;
-use super::avatar::{character_of, AvatarState, Intent};
+use super::avatar::{character_of, AvatarState, BundleRefusal, Intent, DOCK_REACH};
 use super::combat::{Event, TossEnd};
 use super::{AgentState, Body, Carry, CarryJob, Direction, Inventory, InventoryRef, ItemIx, Kinds, Side};
 use super::{AgentIx, Settlement, TRANSFER_FLIGHT_TICKS};
-use crate::messages::{CarryUnit, HaulStart, ReserveStock, StockChange};
+use crate::messages::{CarryUnit, DropBundle, HaulStart, ReserveStock, StockChange};
 use crate::mine::MINERALS;
 use crate::nav;
 use crate::terrain::Terrain;
@@ -50,13 +56,20 @@ const JOB_TIMEOUT_TICKS: u64 = content::millis_to_ticks(30_000);
 const STALL_TICKS: u64 = content::millis_to_ticks(800);
 /// Piles can only be dropped this far from the arena center (6.5 m).
 const DROP_LIMIT: Fx = Fx::from_bits(27_917_287_424);
+/// A dropped bundle's new pile starts this far in front of the elder (0.5
+/// m): at its feet, within the dock's reach, so its units move at once.
+pub const DROP_GAP: Fx = Fx::from_ratio(1, 2);
+/// A dropped pile keeps this far clear of a depot's dock, a building's
+/// output pile and its slot spot, past its own radius, so it never hides
+/// another interact target.
+const DROP_CLEARANCE: Fx = Fx::from_ratio(3, 5);
 
 pub type PileId = u32;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pile {
     pub position: FxVec2,
-    /// One mineral at a time, up to `PILE_CAPACITY`.
+    /// One item at a time, up to `PILE_CAPACITY`.
     pub inventory: Inventory,
     /// A dispenser's output pile, and the mineral it makes: it stays when
     /// empty, and only it can grow from nothing.
@@ -68,7 +81,7 @@ impl Pile {
         self.inventory.total()
     }
 
-    /// The mineral it holds, or for an empty dispenser's pile the one it
+    /// The item it holds, or for an empty dispenser's pile the mineral it
     /// makes.
     pub fn item(&self) -> Option<ItemIx> {
         self.inventory.kind().or(self.source)
@@ -193,18 +206,8 @@ impl PileLab {
     /// for a settlement of `items` items whose minerals start at
     /// `first_mineral`.
     pub fn new(center: FxVec2, items: usize, first_mineral: ItemIx, dispensers: &[(u8, FxVec2)], piles: &[(u8, FxVec2, u32)]) -> PileLab {
-        let mut lab = PileLab {
-            piles: BTreeMap::new(),
-            created: 0,
-            next_id: 0,
-            center,
-            items,
-            first_mineral,
-            haulers: BTreeMap::new(),
-            limit: DROP_LIMIT,
-            max_piles: MAX_PILES,
-            collector: None,
-        };
+        let mut lab = PileLab::town(center, items, DROP_LIMIT);
+        lab.first_mineral = first_mineral;
         for &(mineral, output) in dispensers {
             let item = lab.item(mineral);
             lab.insert(item, output, 0, Some(item));
@@ -216,12 +219,30 @@ impl PileLab {
         lab
     }
 
+    /// A town's lab: no minerals, dispensers or collector, only the piles
+    /// bundles are dropped on, within `limit` of the center on either axis.
+    pub fn town(center: FxVec2, items: usize, limit: Fx) -> PileLab {
+        PileLab {
+            piles: BTreeMap::new(),
+            created: 0,
+            next_id: 0,
+            center,
+            items,
+            // Past the last item: the minerals' range is empty.
+            first_mineral: items as ItemIx,
+            haulers: BTreeMap::new(),
+            limit,
+            max_piles: MAX_PILES,
+            collector: None,
+        }
+    }
+
     /// A mineral's item.
     pub fn item(&self, mineral: u8) -> ItemIx {
         self.first_mineral + mineral as ItemIx
     }
 
-    /// An item's mineral. Only minerals are in piles.
+    /// An item's mineral, for an item that is one.
     pub fn mineral(&self, item: ItemIx) -> u8 {
         debug_assert!(self.is_mineral(item), "item {item} is not a mineral");
         (item - self.first_mineral) as u8
@@ -231,16 +252,30 @@ impl PileLab {
         self.minerals().contains(&item)
     }
 
-    /// The minerals' items.
+    /// The minerals' items: none in a town (`town`).
     fn minerals(&self) -> std::ops::Range<ItemIx> {
-        self.first_mineral..self.first_mineral + MINERALS as ItemIx
+        self.first_mineral..(self.first_mineral + MINERALS as ItemIx).min(self.items as ItemIx)
     }
 
-    /// The mineral a pile holds or makes. A scene can't set up a pile with
-    /// no units (`Settlement::from_scene`), and an empty pile goes
-    /// (`prune`) unless a haul holds room in it, so every pile has one.
+    /// Whether the lab has minerals, and so dispensers, hauls and the
+    /// pile lab's own views: every pile scene but a town.
+    pub fn has_minerals(&self) -> bool {
+        !self.minerals().is_empty()
+    }
+
+    /// Whether a carry job is a haul's: a mineral moved with a pile or the
+    /// collector, walked to by a `PileJob`. A bundle of a depot item on a
+    /// pile moves as a depot transfer does (`avatar::read_avatar`).
+    pub fn is_haul(&self, job: &CarryJob) -> bool {
+        job.other.in_pile_lab() && self.is_mineral(job.item)
+    }
+
+    /// The mineral a pile holds or makes, or `None` for a pile of another
+    /// item (a dropped bundle). A scene can't set up a pile with no units
+    /// (`Settlement::from_scene`), and an empty pile goes (`prune`) unless a
+    /// carry job holds room in it, so every pile has an item.
     pub fn pile_mineral(&self, pile: &Pile) -> Option<u8> {
-        pile.item().map(|item| self.mineral(item))
+        pile.item().filter(|&item| self.is_mineral(item)).map(|item| self.mineral(item))
     }
 
     /// Mineral units in a cargo, of every mineral. Depot items beside them
@@ -392,7 +427,7 @@ impl PileLab {
         match holder {
             InventoryRef::Pile(id) => &mut self.piles.get_mut(&id).expect("a pile that exists").inventory,
             InventoryRef::Collector => &mut self.collector.as_mut().expect("a collector").inventory,
-            InventoryRef::Depot(_) | InventoryRef::Agent(_) => unreachable!("not in the pile lab"),
+            InventoryRef::Depot(_) | InventoryRef::Agent(_) | InventoryRef::Output(_) | InventoryRef::Site(_) => unreachable!("not in the pile lab"),
         }
     }
 
@@ -534,6 +569,10 @@ pub(super) fn haul(
     approach: Option<FxVec2>,
 ) -> Option<HaulStart> {
     let lab = view.piles?;
+    // A town's piles hold bundles, moved by hand (`bundle_job`).
+    if !lab.has_minerals() {
+        return Some(HaulStart::Refused("Nothing here is hauled"));
+    }
     if pace < Fx::ZERO || pace > Fx::from_int(5) {
         return Some(HaulStart::Refused("Invalid transfer interval"));
     }
@@ -541,7 +580,7 @@ pub(super) fn haul(
         return Some(HaulStart::Refused("Wait for airborne units to land before starting another transfer"));
     }
     // A new haul replaces the one running, which gives back its units.
-    let releases = if carry.job.as_ref().is_some_and(|j| j.other.in_pile_lab()) { carry.drop_carry(view.me) } else { Vec::new() };
+    let releases = if carry.job.as_ref().is_some_and(|j| lab.is_haul(j)) { carry.drop_carry(view.me) } else { Vec::new() };
     let start = plan_haul(body, carry, avatar, view, lab, &releases, body_radius, action, pace, approach);
     Some(HaulStart::Replaced { releases, start })
 }
@@ -670,7 +709,7 @@ pub(super) fn end_haul(lab: &mut PileLab, me: AgentIx, carry: &mut Carry, notice
         hauler.notice = notice.into();
         hauler.last_error = Some(error.into());
     }
-    if carry.job.as_ref().is_some_and(|j| j.other.in_pile_lab()) {
+    if carry.job.as_ref().is_some_and(|j| lab.is_haul(j)) {
         for release in carry.drop_carry(me) {
             release.job.release(lab.holder_mut(release.job.other), Side::Other);
         }
@@ -792,7 +831,8 @@ impl Settlement {
             return None;
         }
         let job = self.piles.as_ref()?.hauler(me)?.job.as_ref()?;
-        let units = a.carry.job.as_ref().filter(|j| j.other.in_pile_lab())?;
+        let lab = self.piles.as_ref()?;
+        let units = a.carry.job.as_ref().filter(|j| lab.is_haul(j))?;
         let due = tick >= units.next_tick && (job.started || in_reach(a.body.position, job, character_of(&self.characters, a).body.radius));
         due.then_some(CarryUnit { agent: me })
     }
@@ -806,7 +846,8 @@ impl Settlement {
     pub(crate) fn pile_unit(&mut self, tick: u64, terrain: &Terrain, message: CarryUnit) {
         let (me, agent) = (message.agent, message.agent as usize);
         let Some(mut job) = self.piles.as_ref().and_then(|lab| lab.hauler(me)).and_then(|h| h.job.clone()) else { return };
-        let Some(units) = self.agents[agent].carry.job.as_ref().filter(|j| j.other.in_pile_lab()) else { return };
+        let lab = self.piles.as_ref().expect("a pile scene");
+        let Some(units) = self.agents[agent].carry.job.as_ref().filter(|j| lab.is_haul(j)) else { return };
         if tick < units.next_tick {
             return;
         }
@@ -819,7 +860,7 @@ impl Settlement {
         }
         job.started = true;
         let mut moved = 0;
-        while let Some(units) = self.agents[agent].carry.job.clone().filter(|j| j.other.in_pile_lab()) {
+        while let Some(units) = self.agents[agent].carry.job.clone().filter(|j| self.piles.as_ref().is_some_and(|lab| lab.is_haul(j))) {
             let (from, to) = self.pile_unit_launch(tick, me, &units);
             moved += 1;
             let lab = self.piles.as_mut().expect("a pile scene");
@@ -881,7 +922,7 @@ impl Settlement {
                 let cargo = &self.agents[agent as usize].carry.inventory;
                 TossEnd::Cargo { agent, slot: lab.cargo_slot(cargo, item) + flying - u32::from(leaving) }
             }
-            InventoryRef::Depot(_) => unreachable!("hauls don't reach depots"),
+            InventoryRef::Depot(_) | InventoryRef::Output(_) | InventoryRef::Site(_) => unreachable!("hauls don't reach depots, outputs or sites"),
         }
     }
 
@@ -913,6 +954,99 @@ fn done_notice(job: &PileJob, cargo: &Inventory, first: ItemIx) -> String {
         PileAction::Deposit(_) => format!("Deposited {n} units. {carried} still carried."),
         PileAction::Drop(_) | PileAction::DropMineral(..) => format!("Placed a new pile of {n} units."),
         PileAction::Deliver => format!("Delivered {n} units to the collector."),
+    }
+}
+
+/// Where a dropped bundle goes (`drop_plan`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DropSpot {
+    /// Onto this pile of its item, at the agent's feet.
+    Merge(PileId),
+    /// A new pile here, which takes the lab's next id.
+    New(FxVec2),
+}
+
+/// Where an agent carrying `carry` and standing as `body` drops its bundle,
+/// and the carry job that moves it, or why it can't: every unit of the
+/// bundle's item onto the nearest pile of that item within the dock's reach
+/// with room for them all (lowest id on a tie), else a new pile `DROP_GAP`
+/// in front of it. A new pile needs room in the lab (`max_piles`) and clear
+/// ground: within the drop limit, off obstacles and other piles, and clear
+/// of depots' docks and buildings' output piles and slot spots, so it hides
+/// no other target. Both the action (for its refusal) and stage 5 (which
+/// makes the pile, `Settlement::drop_bundles`) ask it.
+pub fn drop_plan(carry: &Carry, body: &Body, view: &View) -> Result<(DropSpot, CarryJob), BundleRefusal> {
+    if carry.job.is_some() || carry.inventory.total_in() > 0 || view.leaving_cargo() {
+        return Err(BundleRefusal::Busy);
+    }
+    let Some(lab) = view.piles else { return Err(BundleRefusal::NoRoom) };
+    // Depot items only: minerals are dropped by a haul (`PileAction::Drop`).
+    let cargo = &carry.inventory;
+    let Some(item) = (0..view.items as ItemIx).find(|&i| cargo.available(i) > 0) else { return Err(BundleRefusal::NothingToDrop) };
+    let units = cargo.available(item);
+    let job = |other: PileId| CarryJob { other: InventoryRef::Pile(other), item, direction: Direction::Deposit, remaining: units, next_tick: view.tick };
+    let merge = lab
+        .piles
+        .iter()
+        .filter(|(_, p)| p.source.is_none() && p.item() == Some(item) && p.inventory.free() >= units)
+        .map(|(&id, p)| (nav::distance(body.position, p.position), id))
+        .filter(|&(d, _)| d <= DOCK_REACH)
+        .min();
+    if let Some((_, id)) = merge {
+        return Ok((DropSpot::Merge(id), job(id)));
+    }
+    if lab.piles.len() >= lab.max_piles {
+        return Err(BundleRefusal::TooManyPiles);
+    }
+    let spot = body.position + nav::heading_vector(body.heading) * DROP_GAP;
+    let radius = pile_radius(units);
+    let piles_clear = lab.piles.values().all(|p| nav::distance(p.position, spot) > pile_radius(p.units()) + radius + Fx::from_ratio(1, 10));
+    let docks = view.depots.iter().map(|d| d.position);
+    let spots = view.buildings.iter().flat_map(|b| [b.output_position, b.slot_position(&view.building_kinds[b.kind as usize])]);
+    let targets_clear = docks.chain(spots).all(|p| nav::distance(p, spot) > radius + DROP_CLEARANCE);
+    if !lab.free_drop(view.terrain, spot, units) || !piles_clear || !targets_clear {
+        return Err(BundleRefusal::NoRoom);
+    }
+    Ok((DropSpot::New(spot), job(lab.next_id)))
+}
+
+impl Settlement {
+    /// Where `agent`'s drop on `tick` would put its bundle and the carry job
+    /// that moves it, or why it can't (`drop_plan`): for the view and
+    /// scripts, by the rule the action and stage 5 apply.
+    pub fn drop_plan(&self, agent: AgentIx, tick: u64, terrain: &Terrain) -> Result<(DropSpot, CarryJob), BundleRefusal> {
+        let a = self.agents.get(agent as usize).ok_or(BundleRefusal::NothingToDrop)?;
+        drop_plan(&a.carry, &a.body, &self.view(agent, tick, terrain))
+    }
+
+    /// Stage 5: each drop (`Action::Drop`), in command order, planned again
+    /// (`drop_plan`): an earlier drop this tick may have made a pile here,
+    /// or taken the lab's last room. A new pile is made empty, holding room
+    /// for the bundle; the carry job holds the units on both sides, and they
+    /// move once due (`read_avatar`), flying as transfers. A refusal is
+    /// `Event::BundleRefused`.
+    pub(super) fn drop_bundles(&mut self, messages: Vec<DropBundle>, tick: u64, terrain: &Terrain) {
+        for DropBundle { agent } in messages {
+            let a = &self.agents[agent as usize];
+            let plan = drop_plan(&a.carry, &a.body, &self.view(agent, tick, terrain));
+            let (spot, job) = match plan {
+                Ok(planned) => planned,
+                Err(reason) => {
+                    self.events.push(Event::BundleRefused { agent, reason });
+                    continue;
+                }
+            };
+            let lab = self.piles.as_mut().expect("a drop plans only with piles");
+            if let DropSpot::New(at) = spot {
+                let id = lab.insert(job.item, at, 0, None);
+                debug_assert_eq!(InventoryRef::Pile(id), job.other, "the plan named the new pile");
+            }
+            let held = job.reserve(lab.holder_mut(job.other), Side::Other);
+            let carry = &mut self.agents[agent as usize].carry;
+            let held = held && job.reserve(&mut carry.inventory, Side::Own);
+            debug_assert!(held, "`drop_plan` checked both sides");
+            carry.job = Some(job);
+        }
     }
 }
 

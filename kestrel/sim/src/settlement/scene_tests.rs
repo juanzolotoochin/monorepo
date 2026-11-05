@@ -824,6 +824,7 @@ fn supply_pile_lab() -> SceneSetup {
             stock: vec![Stack { item: "wood".into(), units: 10 }],
             stock_anchor: [0.0, 0.08, -0.6],
             stock_layout: CargoLayout::depot(),
+            only: None,
         }],
         sources: vec![],
         links: vec![],
@@ -837,6 +838,7 @@ fn supply_pile_lab() -> SceneSetup {
             links: vec![],
             cargo_anchor: [0.0, 0.65, -0.19],
             cargo_layout: CargoLayout::default(),
+            one_kind: false,
             equipment: None,
         }],
         producers: vec![],
@@ -844,6 +846,9 @@ fn supply_pile_lab() -> SceneSetup {
         waves: vec![],
         base_health: 1,
         player_health: 0,
+        building_kinds: vec![],
+        buildings: vec![],
+        sprites: vec![],
     };
     SceneSetup { scenario: Some(scenario), ..pile_lab() }
 }

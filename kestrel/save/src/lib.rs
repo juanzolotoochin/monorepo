@@ -66,8 +66,26 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///     walk) and no `travel_heading`, which moved to `HaulerState`. A
 ///     `PileJob`'s action can be `PileAction::DropMineral`, appended.
 /// 22: the settlement keeps its `vehicles`, and an avatar the vehicle it
-///     drives (`AvatarState::driving`).
-pub const FORMAT_VERSION: u32 = 22;
+///     drives (`AvatarState::driving`, now `seat`).
+/// 23: the settlement keeps its `building_kinds` and `buildings`, and an
+///     occupied building's production.
+/// 24: an agent's role can be a sprite (`Role::Sprite`, its job, plan and
+///     the slot it holds), and pending messages have `claim_slot` and
+///     `enter_slot` queues.
+/// 25: a holder can be a building's output (`InventoryRef::Output`, in
+///     transfers and carry jobs), and an inventory can take one item only
+///     (`Kinds::Only`, the Sacred Tree's piles).
+/// 26: a holder can be a site's materials (`InventoryRef::Site`, in
+///     transfers and carry jobs), which deliveries fill.
+/// 27: a town keeps a pile lab (`Settlement::piles`, `PileLab::town`) for
+///     the bundles dropped on the ground, whose piles hold any item; a 26
+///     town has none.
+/// 28: an avatar's vehicle (`AvatarState::driving`, 22) is a seat
+///     (`AvatarState::seat`): a vehicle it drives or a building it
+///     possesses (`Seat`).
+/// 29: an avatar keeps the tick its next Burst is ready on
+///     (`AvatarState::burst_ready`).
+pub const FORMAT_VERSION: u32 = 29;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

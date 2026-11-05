@@ -1,5 +1,6 @@
 //! Scenarios: the starting setup of a settlement scene (depots, haul links,
-//! haulers, machines, defenders, enemy waves). A host turns a scenario into
+//! haulers, machines, defenders, enemy waves, building kinds and the
+//! buildings that start built, sprites). A host turns a scenario into
 //! the world at tick 0; from then on the state lives in saves.
 //!
 //! The file format is the original game's, so existing scene files load
@@ -90,6 +91,11 @@ pub struct Depot {
     pub position: Point,
     pub capacity: u32,
     pub stock: Vec<Stack>,
+    /// The one item it takes, if it takes only one: the Sacred Tree's wood
+    /// and stone piles. Its stock, sources, links, machines and defenders
+    /// must use that item too.
+    #[serde(default)]
+    pub only: Option<String>,
     #[serde(default = "stock_anchor")]
     pub stock_anchor: [f32; 3],
     #[serde(default = "CargoLayout::depot")]
@@ -153,6 +159,10 @@ pub struct Agent {
     /// Units it carries. Set here, not on the character: haulers of one
     /// kind carry different loads by job.
     pub capacity: u32,
+    /// Carries one item at a time, as a bundle: the Sacred Tree's elder.
+    /// Without it a cargo holds any mix.
+    #[serde(default)]
+    pub one_kind: bool,
     pub links: Vec<String>,
     pub cargo_anchor: [f32; 3],
     #[serde(default)]
@@ -177,6 +187,78 @@ pub struct Producer {
     pub products: Vec<Stack>,
     pub seconds: Fx,
     pub max_cycles: Option<u32>,
+}
+
+fn output_distance() -> Fx {
+    Fx::from_ratio(6, 5)
+}
+
+/// A kind of building players put up from parts: a gatherer that turns out
+/// one item while someone occupies it. Every rate and recipe is here, not in
+/// code.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BuildingKind {
+    pub id: String,
+    pub label: String,
+    pub skin: String,
+    /// Footprint radius in meters.
+    pub radius: Fx,
+    /// The item it produces, one unit at a time.
+    pub product: String,
+    /// Seconds per unit while a sprite occupies it.
+    pub period: Fx,
+    /// Units its output holds; production pauses when it is full.
+    pub cap: u32,
+    /// The output's cap while an elder possesses it.
+    pub possessed_cap: u32,
+    /// A possessing elder divides the period by this.
+    pub possessed_multiplier: Fx,
+    pub burst: Burst,
+    /// Meters from the building's center to its output pile, in front.
+    #[serde(default = "output_distance")]
+    pub output_distance: Fx,
+    /// Installed one after another; installing the last one finishes it.
+    pub parts: Vec<Part>,
+}
+
+/// What a possessing elder's Burst does: `units` at once into the output,
+/// then `cooldown` seconds before the next.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Burst {
+    pub units: u32,
+    pub cooldown: Fx,
+}
+
+/// One part of a building, and the materials it takes to install.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Part {
+    pub id: String,
+    pub label: String,
+    pub materials: Vec<Stack>,
+}
+
+/// A building that stands, built, when the scenario starts.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Building {
+    /// Its kind, by id.
+    pub kind: String,
+    pub position: Point,
+}
+
+/// A sprite: a small worker that staffs buildings. It carries nothing, so it
+/// has none of a hauler's cargo, links or equipment, and starts idle.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Sprite {
+    pub id: String,
+    pub label: String,
+    /// The character it is, by short name: a `Sprite` character.
+    pub character: String,
+    pub position: Point,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -322,6 +404,13 @@ pub struct Scenario {
     /// Hit points for player avatars; zero disables player combat.
     #[serde(default)]
     pub player_health: u32,
+    #[serde(default)]
+    pub building_kinds: Vec<BuildingKind>,
+    /// The buildings standing, built, at the start.
+    #[serde(default)]
+    pub buildings: Vec<Building>,
+    #[serde(default)]
+    pub sprites: Vec<Sprite>,
 }
 
 fn f(n: i64, d: i64) -> Fx {
@@ -377,7 +466,9 @@ impl Scenario {
             || self.items.is_empty()
             || self.items.len() > 32
             || self.depots.len() > 64
-            || self.agents.len() > 32
+            || self.agents.len() + self.sprites.len() > 32
+            || self.building_kinds.len() > 16
+            || self.buildings.len() > 64
             || self.links.len() > 128
             || self.producers.len() > 32
             || self.defenders.len() > 16
@@ -395,7 +486,9 @@ impl Scenario {
         let items = ids(self.items.iter().map(|x| x.id.as_str()))?;
         let depots = ids(self.depots.iter().map(|x| x.id.as_str()))?;
         let links = ids(self.links.iter().map(|x| x.id.as_str()))?;
-        ids(self.agents.iter().map(|x| x.id.as_str()))?;
+        // Sprites are agents too, so they share the agents' ids.
+        ids(self.agents.iter().map(|x| x.id.as_str()).chain(self.sprites.iter().map(|x| x.id.as_str())))?;
+        let kinds = ids(self.building_kinds.iter().map(|x| x.id.as_str()))?;
         ids(self.producers.iter().map(|x| x.id.as_str()))?;
         ids(self.defenders.iter().map(|x| x.id.as_str()))?;
         ids(self.waves.iter().map(|x| x.id.as_str()))?;
@@ -485,6 +578,38 @@ impl Scenario {
                 return Err(format!("invalid producer {}", p.id));
             }
         }
+        for k in &self.building_kinds {
+            let parts = ids(k.parts.iter().map(|p| p.id.as_str())).is_ok();
+            if k.label.is_empty()
+                || k.label.len() > 128
+                || !ident(&k.skin)
+                || !within(k.radius, f(1, 10), Fx::from_int(3))
+                || !items.contains(k.product.as_str())
+                || !within(k.period, f(1, 10), Fx::from_int(3600))
+                || !(1..=4096).contains(&k.cap)
+                || !(k.cap..=4096).contains(&k.possessed_cap)
+                || !within(k.possessed_multiplier, Fx::ONE, Fx::from_int(16))
+                || !(1..=k.possessed_cap).contains(&k.burst.units)
+                || !within(k.burst.cooldown, f(1, 10), Fx::from_int(3600))
+                || !within(k.output_distance, k.radius, k.radius + Fx::from_int(4))
+                || k.parts.is_empty()
+                || k.parts.len() > 8
+                || !parts
+                || k.parts.iter().any(|p| p.label.is_empty() || p.label.len() > 128 || !stacks(&p.materials))
+            {
+                return Err(format!("invalid building kind {}", k.id));
+            }
+        }
+        for b in &self.buildings {
+            if !kinds.contains(b.kind.as_str()) || !point(b.position) {
+                return Err(format!("invalid building of kind {}", b.kind));
+            }
+        }
+        for s in &self.sprites {
+            if !point(s.position) || !ident(&s.character) || s.label.is_empty() || s.label.len() > 128 {
+                return Err(format!("invalid sprite {}", s.id));
+            }
+        }
         for d in &self.defenders {
             if d.description.len() > 512 || d.label.len() > 128 {
                 return Err("invalid defender description".into());
@@ -503,6 +628,22 @@ impl Scenario {
                 || !within(d.muzzle_height, f(1, 20), Fx::from_int(4))
             {
                 return Err("invalid defender".into());
+            }
+        }
+        // A depot that takes one item takes it from everything that fills
+        // or draws on it.
+        for d in &self.depots {
+            let Some(only) = &d.only else { continue };
+            let bad = |depot: &str, item: &str| depot == d.id && item != only;
+            if !items.contains(only.as_str())
+                || d.stock.iter().any(|s| s.item != *only)
+                || self.sources.iter().any(|s| bad(&s.depot, &s.item))
+                || self.links.iter().any(|l| bad(&l.from, &l.item) || bad(&l.to, &l.item))
+                || self.producers.iter().any(|p| p.ingredients.iter().any(|s| bad(&p.input, &s.item)) || p.products.iter().any(|s| bad(&p.output, &s.item)))
+                || self.defenders.iter().any(|x| bad(&x.depot, &x.ammo))
+                || self.agents.iter().filter_map(|a| a.equipment.as_ref()).any(|e| bad(&e.depot, &e.item))
+            {
+                return Err(format!("depot {} takes only {only}, but something else goes there", d.id));
             }
         }
         for w in &self.waves {
@@ -534,6 +675,7 @@ mod tests {
 
     const FOREST: &str = include_str!("../../app/assets/levels/forest_supply.ron");
     const ARENA: &str = include_str!("../../app/assets/levels/combat_arena_supply.ron");
+    const SACRED_TREE: &str = include_str!("../../app/assets/levels/sacred_tree_supply.ron");
 
     #[test]
     fn the_original_scene_files_load() {
@@ -554,6 +696,69 @@ mod tests {
         let mut scenario = Scenario::parse(FOREST).unwrap();
         scenario.depots[0].stock.push(Stack { item: "lumber".into(), units: 1 });
         assert!(scenario.validate().is_err());
+    }
+
+    #[test]
+    fn the_sacred_tree_supply_loads_its_tunables() {
+        let tree = Scenario::parse(SACRED_TREE).unwrap();
+        assert_eq!((tree.agents.len(), tree.sprites.len(), tree.buildings.len()), (1, 4, 1));
+        assert!(tree.depots.iter().all(|d| d.stock.is_empty()));
+        let kind = |id: &str| tree.building_kinds.iter().find(|k| k.id == id).unwrap();
+        let wood = kind("wood_gatherer");
+        assert_eq!((wood.product.as_str(), wood.period, wood.cap, wood.possessed_cap), ("wood", Fx::from_int(5), 10, 20));
+        assert_eq!((wood.possessed_multiplier, wood.burst.units, wood.burst.cooldown), (Fx::from_int(4), 5, Fx::from_int(30)));
+        assert_eq!(wood.output_distance, "1.2".parse().unwrap(), "the default");
+        fn needs(k: &BuildingKind) -> Vec<Vec<(&str, u32)>> {
+            k.parts.iter().map(|p| p.materials.iter().map(|s| (s.item.as_str(), s.units)).collect()).collect()
+        }
+        assert_eq!(needs(wood), [vec![("wood", 2)], vec![("wood", 2), ("stone", 2)]]);
+        let stone = kind("stone_gatherer");
+        assert_eq!((stone.product.as_str(), stone.period), ("stone", Fx::from_int(8)));
+        assert_eq!(needs(stone), [vec![("wood", 2)], vec![("wood", 2)]]);
+        assert_eq!(tree.buildings[0].kind, "wood_gatherer");
+        // The other scenes have none of it.
+        let forest = Scenario::parse(FOREST).unwrap();
+        assert!(forest.building_kinds.is_empty() && forest.buildings.is_empty() && forest.sprites.is_empty());
+    }
+
+    #[test]
+    fn validation_rejects_bad_buildings() {
+        let invalid = |change: fn(&mut Scenario)| {
+            let mut scenario = Scenario::parse(SACRED_TREE).unwrap();
+            change(&mut scenario);
+            scenario.validate().is_err()
+        };
+        assert!(invalid(|s| s.building_kinds[0].product = "unobtainium".into()));
+        assert!(invalid(|s| s.building_kinds[0].parts[1].materials[1].item = "unobtainium".into()));
+        assert!(invalid(|s| s.building_kinds[0].parts.clear()));
+        assert!(invalid(|s| s.building_kinds[0].parts[0].materials.clear()));
+        assert!(invalid(|s| s.building_kinds[0].parts[1].id = "foundation".into()));
+        assert!(invalid(|s| s.building_kinds[0].possessed_cap = 5));
+        assert!(invalid(|s| s.building_kinds[0].burst.units = 0));
+        assert!(invalid(|s| s.building_kinds[0].output_distance = Fx::HALF));
+        assert!(invalid(|s| s.buildings[0].kind = "castle".into()));
+        assert!(invalid(|s| s.buildings[0].position = [Fx::from_int(20), Fx::ZERO]));
+        assert!(invalid(|s| s.sprites[0].id = "elder".into()));
+    }
+
+    #[test]
+    fn the_tree_piles_take_one_item_and_the_elder_carries_one() {
+        let tree = Scenario::parse(SACRED_TREE).unwrap();
+        let only: Vec<_> = tree.depots.iter().map(|d| (d.id.as_str(), d.only.as_deref())).collect();
+        assert_eq!(only, [("tree_wood", Some("wood")), ("tree_stone", Some("stone"))]);
+        assert!(tree.agents[0].one_kind && tree.agents[0].capacity == 5);
+        // Other scenes' depots and cargo take any mix.
+        let forest = Scenario::parse(FOREST).unwrap();
+        assert!(forest.depots.iter().all(|d| d.only.is_none()) && forest.agents.iter().all(|a| !a.one_kind));
+        let invalid = |change: fn(&mut Scenario)| {
+            let mut scenario = Scenario::parse(SACRED_TREE).unwrap();
+            change(&mut scenario);
+            scenario.validate().is_err()
+        };
+        assert!(invalid(|s| s.depots[0].only = Some("unobtainium".into())));
+        assert!(invalid(|s| s.depots[0].stock.push(Stack { item: "stone".into(), units: 1 })));
+        assert!(invalid(|s| s.sources.push(Source { depot: "tree_wood".into(), item: "stone".into(), units: 1, every: Fx::ONE, max_units: None })));
+        assert!(!invalid(|s| s.sources.push(Source { depot: "tree_wood".into(), item: "wood".into(), units: 1, every: Fx::ONE, max_units: None })));
     }
 
     #[test]

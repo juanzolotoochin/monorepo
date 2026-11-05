@@ -100,6 +100,37 @@ pub struct Defender {
     pub projectile: ProjectileKind,
 }
 
+/// A sprite as the view sees it: drawn by its character's skin.
+#[derive(Clone, Debug, Serialize)]
+pub struct Sprite {
+    pub id: String,
+    pub label: String,
+    pub skin: String,
+}
+
+/// A building kind as the view sees it.
+#[derive(Clone, Debug, Serialize)]
+pub struct BuildingKind {
+    pub id: String,
+    pub label: String,
+    pub skin: String,
+    pub radius: f32,
+    pub product: String,
+    /// Seconds per unit with a sprite inside.
+    pub period: f32,
+    pub cap: u32,
+    /// The parts it is put up from, in install order.
+    pub parts: Vec<Part>,
+}
+
+/// A part of a building kind: its label ("FOUNDATION") and the items it
+/// takes, by item id.
+#[derive(Clone, Debug, Serialize)]
+pub struct Part {
+    pub label: String,
+    pub materials: Vec<(String, u32)>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Wave {
     pub id: String,
@@ -120,6 +151,19 @@ pub struct Scenario {
     pub producers: Vec<Producer>,
     pub defenders: Vec<Defender>,
     pub waves: Vec<Wave>,
+    /// The town's sprites and building kinds; empty, and left out of
+    /// traces, in every other scene.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sprites: Vec<Sprite>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub building_kinds: Vec<BuildingKind>,
+}
+
+impl Scenario {
+    /// A sprite's definition, by agent id.
+    pub fn sprite(&self, id: &str) -> Option<&Sprite> {
+        self.sprites.iter().find(|s| s.id == id)
+    }
 }
 
 fn point(p: [Fx; 2]) -> Point {
@@ -230,6 +274,29 @@ impl Scenario {
                     Wave { id: w.id.clone(), skin, hp }
                 })
                 .collect(),
+            sprites: scenario
+                .sprites
+                .iter()
+                .map(|s| Sprite {
+                    id: s.id.clone(),
+                    label: s.label.clone(),
+                    skin: crate::lockstep::builtin_character_view(&s.character).skin.clone().unwrap_or_default(),
+                })
+                .collect(),
+            building_kinds: scenario
+                .building_kinds
+                .iter()
+                .map(|k| BuildingKind {
+                    id: k.id.clone(),
+                    label: k.label.clone(),
+                    skin: k.skin.clone(),
+                    radius: k.radius.to_f32(),
+                    product: k.product.clone(),
+                    period: k.period.to_f32(),
+                    cap: k.cap,
+                    parts: k.parts.iter().map(|p| Part { label: p.label.clone(), materials: p.materials.iter().map(|m| (m.item.clone(), m.units)).collect() }).collect(),
+                })
+                .collect(),
         }
     }
 }
@@ -266,6 +333,88 @@ pub struct AgentState {
     pub phase: String,
     pub cargo: Inventory,
     pub trailer: Option<Trailer>,
+}
+
+/// What a sprite is doing, as the player reads it (A7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpriteActivity {
+    /// No job: home, or standing there.
+    Idle,
+    /// Walking: to its building, or home.
+    Moving,
+    /// No building of its job's kind is free.
+    Waiting,
+    /// Inside its building.
+    Working,
+}
+
+/// A sprite's job and what it is doing about it.
+#[derive(Clone, Debug, Serialize)]
+pub struct SpriteView {
+    /// The building kind it staffs (its id), or none when idle.
+    pub job: Option<String>,
+    pub activity: SpriteActivity,
+    /// The building it holds a slot in, claimed or inside.
+    pub building: Option<usize>,
+}
+
+/// Who works a building.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Occupant {
+    Sprite(String),
+    Elder(String),
+}
+
+/// Why a building is or isn't producing, as the player reads it (A7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BuildingStatus {
+    /// Still a site, being put up.
+    Site,
+    /// Built, with nobody inside (a sprite may be on its way).
+    Idle,
+    Working,
+    /// Its output holds its occupant's cap: production waits for a pickup.
+    Full,
+}
+
+/// A building as the view sees it (`sim::settlement::BuildingState`).
+#[derive(Clone, Debug, Serialize)]
+pub struct Building {
+    /// Its kind's id.
+    pub kind: String,
+    pub position: Point,
+    pub output_position: Point,
+    /// Where its occupant stands.
+    pub slot_position: Point,
+    pub status: BuildingStatus,
+    pub occupant: Option<Occupant>,
+    /// The sprite on its way in on a claim.
+    pub claimed_by: Option<String>,
+    /// How far the next unit is, 0 to 1.
+    pub progress: f32,
+    /// The produced units waiting to be picked up.
+    pub output: Inventory,
+    /// What the output holds before production pauses, for this occupant.
+    pub cap: u32,
+    /// While it is a site: the part going in next and its materials.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub site: Option<Site>,
+}
+
+/// A site as the view sees it (`sim::settlement::Stage::Site`).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Site {
+    /// The next part to install, an index into its kind's `parts`, and how
+    /// many parts there are.
+    pub part: usize,
+    pub parts: usize,
+    /// The next part's materials: item id, units landed, units it takes.
+    pub materials: Vec<(String, u32, u32)>,
+    /// Whether they are all there, so the part can be installed.
+    pub ready: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -317,6 +466,23 @@ pub struct Windup {
 pub enum Endpoint {
     Depot(String),
     Cargo(String),
+    /// A building's output pile, by building index.
+    Output(u16),
+    /// A site's materials, by building index: delivered to where its output
+    /// pile will be.
+    Site(u16),
+    /// A ground pile of a dropped bundle, by pile id.
+    Ground(u32),
+}
+
+/// A pile of a dropped bundle on the ground (`sim::settlement::piles`, a
+/// pile whose item is no mineral). Mineral piles are the pile view's.
+#[derive(Clone, Debug, Serialize)]
+pub struct GroundPile {
+    pub id: u32,
+    pub position: Point,
+    /// What it holds: one item.
+    pub stock: Inventory,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -439,6 +605,22 @@ pub enum Event {
     /// A threat's swing landed on player `agent` (`hit`) or missed. `from`
     /// is where the threat stands, if it still does.
     ThreatSwing { threat: u64, agent: String, from: Option<Point>, hit: bool, killed: bool },
+    /// Building `building` (an index into `Simulation::buildings`) put a
+    /// unit in its output.
+    BuildingProduced { building: usize },
+    /// Player `agent`'s bundle action was refused; `reason.message()` says
+    /// why, for the view to show (M2.2).
+    BundleRefused { agent: String, reason: s::avatar::BundleRefusal },
+    /// A blueprint became site `building`.
+    BlueprintPlaced { building: usize },
+    /// A blueprint couldn't go down; `reason.message()` says why.
+    BlueprintRefused { reason: s::PlacementRefusal },
+    /// A part of `building` went in; `built` when it was the last.
+    PartInstalled { building: usize, built: bool },
+    /// A Burst put `units` in building `building`'s output at once.
+    BuildingBurst { building: usize, units: u32 },
+    /// Player `agent`'s Burst was refused; `reason.message()` says why.
+    BurstRefused { agent: String, reason: s::BurstRefusal },
 }
 
 /// One frame's settlement, interpolated between the last two ticks.
@@ -464,6 +646,16 @@ pub struct Simulation {
     pub pinned: BTreeMap<u64, Pinned>,
     pub metrics: Metrics,
     pub manual_jobs: BTreeMap<String, ManualJob>,
+    /// The town's buildings and sprites; empty, and left out of traces, in
+    /// every other scene.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub buildings: Vec<Building>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub sprites: BTreeMap<String, SpriteView>,
+    /// Dropped bundles on the ground; empty, and left out of traces, until
+    /// a town's elder drops one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ground_piles: Vec<GroundPile>,
     #[serde(skip)]
     pub events: Vec<Event>,
     #[serde(skip)]
@@ -543,11 +735,18 @@ impl Simulation {
         };
         let item = |i: s::ItemIx| current.items[i as usize].clone();
         let agent_name = |a: s::AgentIx| current.agents[a as usize].id.clone();
-        // Piles and the collector are drawn by the pile view, not here.
-        let endpoint = |e: SimHolder| match e {
+        // Mineral piles and the collector are drawn by the pile view, not
+        // here; a dropped bundle's pile is.
+        let lab = current.piles.as_ref();
+        let mineral = |i: s::ItemIx| lab.is_some_and(|lab| lab.is_mineral(i));
+        // A unit of `item` to or from `e`.
+        let endpoint = |e: SimHolder, item: s::ItemIx| match e {
             SimHolder::Depot(d) => Some(Endpoint::Depot(current.depots[d as usize].id.clone())),
             SimHolder::Agent(a) => Some(Endpoint::Cargo(agent_name(a))),
+            SimHolder::Pile(id) if !mineral(item) => Some(Endpoint::Ground(id)),
             SimHolder::Pile(_) | SimHolder::Collector => None,
+            SimHolder::Output(b) => Some(Endpoint::Output(b)),
+            SimHolder::Site(b) => Some(Endpoint::Site(b)),
         };
         let inventory = |units: &[u32], capacity: u32| Inventory {
             capacity,
@@ -722,6 +921,13 @@ impl Simulation {
                     // Drawn from the threat's `windup` instead, which also
                     // covers a client that joins mid-windup.
                     s::Event::ThreatWindup { .. } => return None,
+                    s::Event::BuildingProduced { building } => Event::BuildingProduced { building: *building as usize },
+                    s::Event::BundleRefused { agent, reason } => Event::BundleRefused { agent: agent_name(*agent), reason: *reason },
+                    s::Event::BlueprintPlaced { building } => Event::BlueprintPlaced { building: *building as usize },
+                    s::Event::BlueprintRefused { reason, .. } => Event::BlueprintRefused { reason: *reason },
+                    s::Event::PartInstalled { building, built, .. } => Event::PartInstalled { building: *building as usize, built: *built },
+                    s::Event::BuildingBurst { building, units } => Event::BuildingBurst { building: *building as usize, units: *units },
+                    s::Event::BurstRefused { agent, reason } => Event::BurstRefused { agent: agent_name(*agent), reason: *reason },
                     s::Event::ThreatSwing { threat, agent, hit, killed, .. } => Event::ThreatSwing {
                         threat: *threat,
                         agent: agent_name(*agent),
@@ -731,6 +937,81 @@ impl Simulation {
                     },
                 })
             })
+            .collect();
+        let buildings = current
+            .buildings
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                let kind = current.building_kind(i as s::BuildingIx);
+                let occupant = b.slot.occupant().map(|o| match o {
+                    s::Occupant::Sprite(a) => Occupant::Sprite(agent_name(a)),
+                    s::Occupant::Elder(a) => Occupant::Elder(agent_name(a)),
+                });
+                let cap = kind.cap_for(b.slot.occupant());
+                let status = if !b.built() {
+                    BuildingStatus::Site
+                } else if occupant.is_none() {
+                    BuildingStatus::Idle
+                } else if b.output.total() + b.output.total_in() >= cap {
+                    BuildingStatus::Full
+                } else {
+                    BuildingStatus::Working
+                };
+                Building {
+                    kind: kind.id.clone(),
+                    position: local(b.position),
+                    output_position: local(b.output_position),
+                    slot_position: local(b.slot_position(kind)),
+                    status,
+                    occupant,
+                    claimed_by: match b.slot {
+                        s::Slot::Claimed(a) => Some(agent_name(a)),
+                        _ => None,
+                    },
+                    progress: (b.progress.to_f32() / kind.period.max(1) as f32).clamp(0.0, 1.0),
+                    output: inventory(&b.output.counts, cap),
+                    cap,
+                    site: b.site().map(|(part, materials)| Site {
+                        part: part as usize,
+                        parts: kind.parts.len(),
+                        materials: kind.parts.get(part as usize).into_iter().flatten().map(|&(i, units)| (item(i), materials.count(i), units)).collect(),
+                        ready: b.ready(kind),
+                    }),
+                }
+            })
+            .collect();
+        let sprites = current
+            .agents
+            .iter()
+            .filter_map(|a| {
+                let sprite = a.sprite()?;
+                let job = match sprite.job {
+                    s::SpriteJob::Idle => None,
+                    s::SpriteJob::Staff(kind) => Some(current.building_kinds[kind as usize].id.clone()),
+                };
+                let activity = match sprite.current() {
+                    _ if sprite.inside() => SpriteActivity::Working,
+                    Some(s::Step::Wait) => SpriteActivity::Waiting,
+                    // Walking, or about to: a claim is granted on the way.
+                    Some(s::Step::GoTo(_) | s::Step::Claim(_) | s::Step::Enter(_)) => SpriteActivity::Moving,
+                    // An idle sprite's plan is done once it is home; a job
+                    // with no plan yet gets one on the next tick.
+                    None if job.is_none() => SpriteActivity::Idle,
+                    None => SpriteActivity::Waiting,
+                };
+                let view = SpriteView { job, activity, building: sprite.holds.map(|h| h.building() as usize) };
+                Some((a.id.clone(), view))
+            })
+            .collect();
+        // A pile of a depot item, or an empty one a unit of one still flies
+        // from or to (its last, picked up).
+        let flying = |id: u32| current.transfers.values().any(|t| !mineral(t.item) && (t.from == SimHolder::Pile(id) || t.to == SimHolder::Pile(id)));
+        let ground_piles = lab
+            .into_iter()
+            .flat_map(|lab| lab.piles.iter())
+            .filter(|&(&id, p)| p.source.is_none() && p.item().map_or_else(|| flying(id), |i| !mineral(i)))
+            .map(|(&id, p)| GroundPile { id, position: local(p.position), stock: inventory(&p.inventory.counts, p.inventory.capacity) })
             .collect();
         Simulation {
             config: config.clone(),
@@ -755,7 +1036,7 @@ impl Simulation {
                 .transfers
                 .values()
                 .filter_map(|t| {
-                    let transfer = Transfer { id: t.id, item: item(t.item), from: endpoint(t.from)?, to: endpoint(t.to)?, born: t.born, arrival: t.arrival };
+                    let transfer = Transfer { id: t.id, item: item(t.item), from: endpoint(t.from, t.item)?, to: endpoint(t.to, t.item)?, born: t.born, arrival: t.arrival };
                     Some((t.id, transfer))
                 })
                 .collect(),
@@ -810,6 +1091,9 @@ impl Simulation {
                     Some((a.id.clone(), manual))
                 })
                 .collect(),
+            buildings,
+            sprites,
+            ground_piles,
             events,
             balances,
             statuses,

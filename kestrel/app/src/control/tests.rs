@@ -4,13 +4,16 @@ fn run(steps: Vec<Command>) -> Value {
     run_at(steps, 30)
 }
 fn run_at(steps: Vec<Command>, fps: u32) -> Value {
+    run_for(steps, fps, 1200)
+}
+fn run_for(steps: Vec<Command>, fps: u32, max_frames: u32) -> Value {
     let script = Script {
         version: 1,
         scene: "pile-lab".into(),
         fps,
         width: 1440,
         height: 960,
-        max_frames: 1200,
+        max_frames,
         steps,
     };
     let options = Options {
@@ -21,7 +24,7 @@ fn run_at(steps: Vec<Command>, fps: u32) -> Value {
     let scenes = SceneLibrary::new();
     let hub = Hub::new(options.clone()).unwrap();
     let mut app = crate::test_app(options, scenes, hub, crate::flow::Launch::single_player(2));
-    for _ in 0..1300 {
+    for _ in 0..max_frames + 100 {
         app.update();
         let world = app.world_mut();
         let p = player_position(world);
@@ -436,6 +439,307 @@ fn player_can_divert_real_supply_chain_stock_while_workers_continue() {
         .all(|b| b["conserved"] == true));
 }
 
+/// A sprite's job names a sprite: a hauler isn't one.
+#[test]
+fn a_sprite_job_needs_a_sprite() {
+    for sprite in ["nobody", "bramble"] {
+        let report = run(vec![
+            Command::Scene {
+                scene: "forest-outpost".into(),
+            },
+            Command::SettlementSpriteJob {
+                sprite: sprite.into(),
+                job: Some("wood_gatherer".into()),
+            },
+        ]);
+        assert_eq!(report["status"], "failed", "{report}");
+        assert!(report["error"].as_str().unwrap().contains("unknown sprite"), "{report}");
+    }
+}
+
+/// In the Sacred Tree, a sprite given the Wood Gatherer's job walks to it,
+/// steps in and works: wood comes out on its output pile, and the view
+/// reads the sprite as working and the building as worked by it (A7).
+#[test]
+fn a_sprite_staffs_the_wood_gatherer_and_wood_comes_out() {
+    let report = run(vec![
+        Command::Scene {
+            scene: "sacred-tree".into(),
+        },
+        Command::Inspect,
+        Command::SettlementSpriteJob {
+            sprite: "sprite_ash".into(),
+            job: Some("wood_gatherer".into()),
+        },
+        // About 5 s to walk there and 5 s to make the first wood.
+        Command::Wait { frames: 420 },
+        Command::Inspect,
+    ]);
+    assert_eq!(report["status"], "passed", "{report}");
+    let receipts = report["receipts"].as_array().unwrap();
+    let before = &receipts[1]["state"]["settlement"]["simulation"];
+    assert_eq!(before["buildings"][0]["status"], "idle", "{before}");
+    assert_eq!(before["sprites"]["sprite_ash"]["activity"], "idle", "{before}");
+    let simulation = &report["state"]["settlement"]["simulation"];
+    let building = &simulation["buildings"][0];
+    assert_eq!(building["kind"], "wood_gatherer");
+    assert!(building["output"]["items"]["wood"].as_u64().unwrap() >= 1, "{building}");
+    assert_eq!(building["status"], "working", "{building}");
+    assert_eq!(building["occupant"], json!({"sprite": "sprite_ash"}));
+    let ash = &simulation["sprites"]["sprite_ash"];
+    assert_eq!(ash["job"], "wood_gatherer");
+    assert_eq!(ash["activity"], "working");
+    assert_eq!(simulation["sprites"]["sprite_fern"]["activity"], "idle");
+    assert!(report["state"]["settlement"]["balances"]
+        .as_object()
+        .unwrap()
+        .values()
+        .all(|b| b["conserved"] == true));
+}
+
+/// The town's first loop with no UI: a sprite works the Wood Gatherer, the
+/// elder picks its wood up as a bundle and carries it to the tree's wood
+/// pile. Stone can't go there, and a refusal reads as words.
+#[test]
+fn the_elder_carries_the_gatherer_wood_to_the_tree() {
+    let report = run(vec![
+        Command::Scene {
+            scene: "sacred-tree".into(),
+        },
+        Command::SettlementSpriteJob {
+            sprite: "sprite_ash".into(),
+            job: Some("wood_gatherer".into()),
+        },
+        // Four times as fast: about 5 s to walk there and 20 s for 4 wood.
+        Command::SettlementRate { rate: 4.0 },
+        Command::Wait { frames: 240 },
+        Command::SettlementPickUp { building: 0 },
+        Command::Inspect,
+        Command::SettlementDeposit {
+            depot: "tree_wood".into(),
+        },
+        Command::Inspect,
+    ]);
+    assert_eq!(report["status"], "passed", "{report}");
+    let receipts = report["receipts"].as_array().unwrap();
+    let picked = receipts[4]["state"]["settlement"]["simulation"]["agents"]["elder"]["cargo"]["items"]["wood"].as_u64().unwrap();
+    assert!((4..=5).contains(&picked), "{picked}");
+    let simulation = &report["state"]["settlement"]["simulation"];
+    assert_eq!(simulation["agents"]["elder"]["cargo"]["items"], json!({}));
+    assert_eq!(simulation["depots"]["tree_wood"]["items"]["wood"], picked);
+    assert!(report["state"]["settlement"]["balances"]
+        .as_object()
+        .unwrap()
+        .values()
+        .all(|b| b["conserved"] == true));
+    // Nothing there: the step fails with the sim's reason.
+    for (command, error) in [
+        (Command::SettlementWithdraw { depot: "tree_stone".into() }, "Nothing there to pick up"),
+        (Command::SettlementDeposit { depot: "tree_wood".into() }, "Carrying nothing to deposit"),
+        (Command::SettlementPickUp { building: 3 }, "unknown building"),
+    ] {
+        let report = run(vec![Command::Scene { scene: "sacred-tree".into() }, command]);
+        assert_eq!(report["status"], "failed", "{report}");
+        assert!(report["error"].as_str().unwrap().contains(error), "{report}");
+    }
+}
+
+/// The interact key's path, as a script: the target the highlight shows,
+/// then one interact each to pick up at the Wood Gatherer's output (the
+/// elder steps in), deposit at the tree's wood pile, and open a sprite's
+/// job menu, whose pick sets its job (D5).
+#[test]
+fn the_elder_interacts_its_way_through_the_town() {
+    let wait = |frames| Command::Wait { frames };
+    let walk = |x, z| Command::Walk { position: [x, z] };
+    let target = |prompt: Option<&str>| Command::SettlementInteractTarget { prompt: prompt.map(String::from) };
+    let report = run(vec![
+        Command::Scene {
+            scene: "sacred-tree".into(),
+        },
+        target(Some("")),
+        Command::SettlementSpriteJob {
+            sprite: "sprite_ash".into(),
+            job: Some("wood_gatherer".into()),
+        },
+        Command::SettlementRate { rate: 4.0 },
+        wait(240),
+        // Beside the output pile, a step short of it.
+        walk(-3.3, 0.5),
+        target(None),
+        Command::SettlementInteract,
+        // At the wood pile.
+        walk(-1.7, 2.4),
+        target(None),
+        Command::SettlementInteract,
+        // In front of Fern.
+        walk(-0.6, 4.3),
+        target(Some("SET JOB")),
+        Command::SettlementInteract,
+        Command::Inspect,
+        Command::SettlementJobMenu {
+            job: Some("stone_gatherer".into()),
+        },
+        wait(2),
+    ]);
+    assert_eq!(report["status"], "passed", "{report}");
+    let receipts = report["receipts"].as_array().unwrap();
+    let state = |i: usize| &receipts[i]["state"]["settlement"];
+    let pick_up = state(6)["interact"]["prompt"].as_str().unwrap().to_string();
+    assert_eq!(state(6)["interact"]["target"], json!({"Output": 0}), "{}", state(6)["interact"]);
+    let picked = state(7)["simulation"]["agents"]["elder"]["cargo"]["items"]["wood"].as_u64().unwrap();
+    assert!((4..=5).contains(&picked), "{picked}");
+    assert_eq!(pick_up, format!("PICK UP {picked} WOOD"));
+    assert_eq!(state(9)["interact"]["prompt"], format!("DEPOSIT {picked} WOOD"));
+    assert_eq!(state(10)["simulation"]["depots"]["tree_wood"]["items"]["wood"], picked);
+    assert_eq!(state(10)["simulation"]["agents"]["elder"]["cargo"]["items"], json!({}));
+    let menu = &state(14)["interact"]["menu"];
+    assert_eq!(menu["options"], json!(["IDLE", "GATHER WOOD", "GATHER STONE"]), "{}", state(14)["interact"]);
+    let simulation = &report["state"]["settlement"]["simulation"];
+    assert_eq!(simulation["sprites"]["sprite_fern"]["job"], "stone_gatherer");
+    assert_eq!(report["state"]["settlement"]["interact"]["menu"], Value::Null);
+    assert!(report["state"]["settlement"]["balances"]
+        .as_object()
+        .unwrap()
+        .values()
+        .all(|b| b["conserved"] == true));
+    // Nothing in reach at the start: an interact fails with the reason.
+    let report = run(vec![Command::Scene { scene: "sacred-tree".into() }, Command::SettlementInteract]);
+    assert_eq!(report["status"], "failed", "{report}");
+    assert!(report["error"].as_str().unwrap().contains("Nothing in reach"), "{report}");
+}
+
+/// Dropping, as a script (M2.4): wood from the tree dropped on the ground
+/// with the drop verb (Q's path), picked back up with one interact as an
+/// output is, and deposited at the tree with another.
+#[test]
+fn the_elder_drops_wood_and_picks_it_back_up() {
+    let walk = |x, z| Command::Walk { position: [x, z] };
+    let target = |prompt: &str| Command::SettlementInteractTarget { prompt: Some(prompt.into()) };
+    let report = run(vec![
+        Command::Scene {
+            scene: "sacred-tree".into(),
+        },
+        Command::SettlementStock {
+            depot: "tree_wood".into(),
+            item: "wood".into(),
+            units: 5,
+        },
+        walk(-1.7, 2.4),
+        Command::SettlementInteract,
+        // Out in the open, east of the tree.
+        walk(3.0, -3.0),
+        Command::SettlementDrop,
+        Command::Inspect,
+        target("PICK UP 5 WOOD"),
+        Command::SettlementInteract,
+        Command::Wait { frames: 2 },
+        Command::Inspect,
+        walk(-1.7, 2.4),
+        target("DEPOSIT 5 WOOD"),
+        Command::SettlementInteract,
+    ]);
+    assert_eq!(report["status"], "passed", "{report}");
+    let receipts = report["receipts"].as_array().unwrap();
+    let simulation = |i: usize| &receipts[i]["state"]["settlement"]["simulation"];
+    let dropped = &simulation(6)["ground_piles"];
+    assert_eq!(dropped.as_array().map(Vec::len), Some(1), "{dropped}");
+    assert_eq!(dropped[0]["stock"]["items"], json!({"wood": 5}), "{dropped}");
+    assert_eq!(simulation(6)["agents"]["elder"]["cargo"]["items"], json!({}));
+    assert_eq!(simulation(10)["agents"]["elder"]["cargo"]["items"]["wood"], 5);
+    assert_eq!(simulation(10)["ground_piles"], Value::Null, "the emptied pile went");
+    let last = &report["state"]["settlement"];
+    assert_eq!(last["simulation"]["depots"]["tree_wood"]["items"]["wood"], 5);
+    assert_eq!(last["simulation"]["agents"]["elder"]["cargo"]["items"], json!({}));
+    assert!(last["balances"].as_object().unwrap().values().all(|b| b["conserved"] == true));
+    // Empty-handed, a drop fails with the sim's reason.
+    let report = run(vec![Command::Scene { scene: "sacred-tree".into() }, Command::SettlementDrop]);
+    assert_eq!(report["status"], "failed", "{report}");
+    assert!(report["error"].as_str().unwrap().contains("Nothing carried"), "{report}");
+}
+
+/// Building, as a script (D1, D4): the build menu, a Stone Gatherer's
+/// ghost refused on the tree and valid in the open, put down; wood carried
+/// from the tree and delivered, both parts installed, each by the interact
+/// key's own path; then a sprite assigned works it and stone comes out.
+#[test]
+fn the_elder_builds_a_stone_gatherer_that_a_sprite_works() {
+    let walk = |x, z| Command::Walk { position: [x, z] };
+    let target = |prompt: &str| Command::SettlementInteractTarget { prompt: Some(prompt.into()) };
+    let report = run(vec![
+        Command::Scene {
+            scene: "sacred-tree".into(),
+        },
+        Command::SettlementStock {
+            depot: "tree_wood".into(),
+            item: "wood".into(),
+            units: 5,
+        },
+        Command::SettlementBuild { kind: None },
+        Command::Inspect,
+        Command::SettlementBuild {
+            kind: Some("stone_gatherer".into()),
+        },
+        // Facing the tree, the ghost stands on it.
+        walk(0.0, 2.6),
+        Command::Inspect,
+        // Facing -z east of the tree, it stands in the open.
+        walk(3.0, 1.0),
+        walk(3.0, 0.0),
+        Command::Inspect,
+        Command::SettlementPlaceBlueprint { kind: None, position: None },
+        Command::Inspect,
+        // Five wood from the tree's wood pile.
+        walk(-1.7, 2.4),
+        Command::SettlementInteract,
+        // In front of the site, where its output pile will be.
+        walk(2.0, -0.6),
+        target("DELIVER 2 WOOD"),
+        Command::SettlementInteract,
+        target("INSTALL FOUNDATION"),
+        Command::SettlementInteract,
+        target("DELIVER 2 WOOD"),
+        Command::SettlementInteract,
+        target("INSTALL MECHANISM"),
+        Command::SettlementInteract,
+        Command::Inspect,
+        Command::SettlementSpriteJob {
+            sprite: "sprite_fern".into(),
+            job: Some("stone_gatherer".into()),
+        },
+        Command::SettlementRate { rate: 4.0 },
+        Command::Wait { frames: 600 },
+    ]);
+    assert_eq!(report["status"], "passed", "{report}");
+    let receipts = report["receipts"].as_array().unwrap();
+    let state = |i: usize| &receipts[i]["state"]["settlement"];
+    assert_eq!(state(3)["interact"]["build_menu"], json!(["wood_gatherer", "stone_gatherer"]), "{}", state(3)["interact"]);
+    let ghost = |i: usize| &state(i)["interact"]["ghost"];
+    assert_eq!(state(6)["interact"]["placing"], "stone_gatherer");
+    assert_eq!((&ghost(6)["valid"], &ghost(6)["reason"]), (&json!(false), &json!("BLOCKED")), "{}", ghost(6));
+    assert_eq!((&ghost(9)["valid"], &ghost(9)["reason"]), (&json!(true), &Value::Null), "{}", ghost(9));
+    // Put down where the ghost stood: a site waiting for its foundation.
+    let site = &state(11)["simulation"]["buildings"][1];
+    assert_eq!((&site["kind"], &site["status"]), (&json!("stone_gatherer"), &json!("site")), "{site}");
+    assert_eq!(site["site"], json!({"part": 0, "parts": 2, "materials": [["wood", 0, 2]], "ready": false}));
+    let (at, stood) = (&site["position"], &ghost(9)["position"]);
+    assert!((0..2).all(|i| (at[i].as_f64().unwrap() - stood[i].as_f64().unwrap()).abs() < 0.05), "{at} vs {stood}");
+    assert_eq!(state(11)["interact"]["placing"], Value::Null);
+    // Delivered, the foundation reads ready; then built.
+    assert_eq!(state(17)["simulation"]["buildings"][1]["site"]["ready"], true, "{}", state(17)["simulation"]["buildings"][1]);
+    assert_eq!(state(19)["simulation"]["buildings"][1]["site"]["part"], 1);
+    let built = &state(23)["simulation"]["buildings"][1];
+    assert_eq!((&built["status"], &built["site"]), (&json!("idle"), &Value::Null), "{built}");
+    assert_eq!(state(23)["simulation"]["agents"]["elder"]["cargo"]["items"]["wood"], 1);
+    // Fern staffs it, and stone comes out.
+    let last = &report["state"]["settlement"];
+    let stone = &last["simulation"]["buildings"][1];
+    assert_eq!(stone["occupant"], json!({"sprite": "sprite_fern"}), "{stone}");
+    assert!(stone["output"]["items"]["stone"].as_u64().is_some_and(|n| n >= 1), "{stone}");
+    assert_eq!(last["balances"]["wood"]["consumed"], 4);
+    assert!(last["balances"].as_object().unwrap().values().all(|b| b["conserved"] == true));
+}
+
 #[test]
 fn player_stands_on_baked_raised_roads_and_steps_back_to_the_ground() {
     let report = run(vec![
@@ -595,4 +899,289 @@ mod debug_ui_capture {
         }
         panic!("script failed to finish");
     }
+}
+
+/// Possessing, as a script (D3, A3): a sprite works the Wood Gatherer; the
+/// elder walks up and boards it, which puts the sprite out beside it; the
+/// gatherer works four times as fast while possessed; the elder leaves and
+/// the sprite goes back in with no new job. Boarding with a bundle in hand
+/// fails with the sim's reason.
+#[test]
+fn the_elder_possesses_the_wood_gatherer_and_its_sprite_goes_back_in() {
+    let wood = |state: &Value| state["settlement"]["simulation"]["buildings"][0]["output"]["items"]["wood"].as_u64().unwrap_or(0);
+    let report = run(vec![
+        Command::Scene {
+            scene: "sacred-tree".into(),
+        },
+        Command::SettlementSpriteJob {
+            sprite: "sprite_ash".into(),
+            job: Some("wood_gatherer".into()),
+        },
+        Command::Wait { frames: 420 },
+        Command::SettlementBoard { building: 0 },
+        Command::Wait { frames: 2 },
+        Command::Inspect,
+        Command::Wait { frames: 300 },
+        Command::Inspect,
+        Command::SettlementLeave,
+        Command::Wait { frames: 150 },
+        Command::Inspect,
+    ]);
+    assert_eq!(report["status"], "passed", "{report}");
+    let receipts = report["receipts"].as_array().unwrap();
+    let possessed = &receipts[5]["state"];
+    let settlement = &possessed["settlement"];
+    assert_eq!(settlement["seat"], json!({"building": 0}), "{settlement}");
+    let building = &settlement["simulation"]["buildings"][0];
+    assert_eq!(building["occupant"], json!({"elder": "elder"}), "{building}");
+    let ash = &settlement["simulation"]["sprites"]["sprite_ash"];
+    assert_eq!((ash["job"].as_str(), ash["activity"].as_str()), (Some("wood_gatherer"), Some("waiting")), "{ash}");
+    // Ten seconds possessed: a unit every 1.25 s, against one per 5 s.
+    let made = wood(&receipts[7]["state"]) - wood(possessed);
+    assert!((7..=9).contains(&made), "{made} units in 10 s");
+    let last = &receipts[10]["state"]["settlement"];
+    assert_eq!(last["seat"], Value::Null);
+    assert_eq!(last["simulation"]["buildings"][0]["occupant"], json!({"sprite": "sprite_ash"}), "{last}");
+    assert_eq!(last["simulation"]["sprites"]["sprite_ash"]["activity"], "working");
+    assert!(last["balances"].as_object().unwrap().values().all(|b| b["conserved"] == true));
+
+    let report = run(vec![
+        Command::Scene { scene: "sacred-tree".into() },
+        Command::SettlementStock { depot: "tree_wood".into(), item: "wood".into(), units: 5 },
+        Command::Walk { position: [-1.7, 2.4] },
+        Command::SettlementInteract,
+        Command::SettlementBoard { building: 0 },
+    ]);
+    assert_eq!(report["status"], "failed", "{report}");
+    assert!(report["error"].as_str().unwrap().contains("Drop the bundle first (Q)"), "{report}");
+}
+
+/// Possessing the Wood Gatherer, `settlement_burst` puts five units in its
+/// output at once; a second right after fails with the cooldown left, and
+/// once the cooldown is over (the elder waiting outside, so the output has
+/// room), a Burst works again. `settlement.burst` reports the cooldown.
+#[test]
+fn the_elder_bursts_the_wood_gatherer_and_waits_out_the_cooldown() {
+    let wood = |state: &Value| state["settlement"]["simulation"]["buildings"][0]["output"]["items"]["wood"].as_u64().unwrap_or(0);
+    let report = run(vec![
+        Command::Scene { scene: "sacred-tree".into() },
+        Command::SettlementBoard { building: 0 },
+        Command::Inspect,
+        Command::SettlementBurst,
+        Command::Inspect,
+        Command::SettlementBurst,
+    ]);
+    assert_eq!(report["status"], "failed", "{report}");
+    assert!(report["error"].as_str().unwrap().contains("Burst ready in"), "{report}");
+    let receipts = report["receipts"].as_array().unwrap();
+    let (before, after) = (&receipts[2]["state"], &receipts[4]["state"]);
+    assert_eq!(before["settlement"]["burst"]["ready"], true, "{}", before["settlement"]["burst"]);
+    // Five at once, and perhaps a unit of the elder's own work meanwhile.
+    let added = wood(after) - wood(before);
+    assert!((5..=6).contains(&added), "{added} units");
+    let burst = &after["settlement"]["burst"];
+    assert_eq!(burst["ready"], false, "{burst}");
+    assert!(burst["cooldown"].as_f64().unwrap() > 29.0, "{burst}");
+    assert!(burst["reason"].as_str().unwrap().starts_with("Burst ready in"), "{burst}");
+    assert!(after["settlement"]["balances"].as_object().unwrap().values().all(|b| b["conserved"] == true));
+
+    // At 20 frames a second, so the script's frame budget covers the wait.
+    let report = run_at(
+        vec![
+            Command::Scene { scene: "sacred-tree".into() },
+            Command::SettlementBoard { building: 0 },
+            Command::SettlementBurst,
+            Command::SettlementLeave,
+            Command::Wait { frames: 610 },
+            Command::Inspect,
+            Command::SettlementBoard { building: 0 },
+            Command::Inspect,
+            Command::SettlementBurst,
+            Command::Inspect,
+        ],
+        20,
+    );
+    assert_eq!(report["status"], "passed", "{report}");
+    let receipts = report["receipts"].as_array().unwrap();
+    let outside = &receipts[5]["state"]["settlement"]["burst"];
+    assert_eq!((outside["cooldown"].as_f64(), outside["reason"].as_str()), (Some(0.0), Some("Possess a building to Burst")), "{outside}");
+    let added = wood(&receipts[9]["state"]) - wood(&receipts[7]["state"]);
+    assert!((5..=6).contains(&added), "{added} units");
+}
+
+/// The happy path, section 5 of the requirements (A6), step by step from a
+/// fresh start with no cheat commands (no stock added, no speed-up): only
+/// the player's own verbs, at the game's own pace (about four minutes of
+/// play, at 20 frames a second). Each pickup waits for a full bundle of 5,
+/// so every leftover is known and goes back to the tree.
+#[test]
+fn the_happy_path_plays_from_a_fresh_start() {
+    const FPS: u32 = 20;
+    let wait = |seconds: u32| Command::Wait { frames: seconds * FPS };
+    let walk = |x, z| Command::Walk { position: [x, z] };
+    let target = |prompt: &str| Command::SettlementInteractTarget { prompt: Some(prompt.into()) };
+    let job = |sprite: &str, kind: &str| Command::SettlementSpriteJob { sprite: sprite.into(), job: Some(kind.into()) };
+    let pick_up = |building| Command::SettlementPickUp { building };
+    let deposit = |depot: &str| Command::SettlementDeposit { depot: depot.into() };
+    let withdraw = |depot: &str| Command::SettlementWithdraw { depot: depot.into() };
+    // Each `inspect` is a receipt to read back.
+    fn inspect(steps: &mut Vec<Command>) -> usize {
+        steps.push(Command::Inspect);
+        steps.len() - 1
+    }
+    let mut steps = vec![Command::Scene { scene: "sacred-tree".into() }];
+    // 1. The clearing: four idle sprites and a built Wood Gatherer.
+    let start = inspect(&mut steps);
+    // 2. Fern to Gather Wood, with E's job menu in front of Fern.
+    steps.extend([walk(-0.6, 4.3), target("SET JOB"), Command::SettlementInteract, Command::SettlementJobMenu { job: Some("wood_gatherer".into()) }, wait(14)]);
+    let first_wood = inspect(&mut steps);
+    // 3. A bundle of 5 wood to the tree.
+    steps.extend([wait(30), pick_up(0), deposit("tree_wood")]);
+    let stocked = inspect(&mut steps);
+    // 4. A Stone Gatherer from the build menu, built with the tree's wood;
+    // the one wood left over goes back.
+    steps.extend([
+        Command::SettlementBuild { kind: None },
+        Command::SettlementBuild { kind: Some("stone_gatherer".into()) },
+        walk(3.0, 1.0),
+        walk(3.0, 0.0),
+        Command::SettlementPlaceBlueprint { kind: None, position: None },
+        withdraw("tree_wood"),
+        walk(2.0, -0.6),
+        target("DELIVER 2 WOOD"),
+        Command::SettlementInteract,
+        target("INSTALL FOUNDATION"),
+        Command::SettlementInteract,
+        target("DELIVER 2 WOOD"),
+        Command::SettlementInteract,
+        target("INSTALL MECHANISM"),
+        Command::SettlementInteract,
+    ]);
+    let stone_built = inspect(&mut steps);
+    steps.push(deposit("tree_wood"));
+    // 5. Reed to Gather Stone.
+    steps.extend([job("sprite_reed", "stone_gatherer"), wait(20)]);
+    let first_stone = inspect(&mut steps);
+    // 6. A bundle of 5 stone to the tree.
+    steps.extend([wait(35), pick_up(1), deposit("tree_stone")]);
+    let stone_stocked = inspect(&mut steps);
+    // 7. A second Wood Gatherer north-east: wood from the first one's
+    // output, stone from the tree, leftovers back in the tree.
+    steps.extend([
+        pick_up(0),
+        Command::SettlementPlaceBlueprint { kind: Some("wood_gatherer".into()), position: Some([4.5, 4.0]) },
+        walk(3.1, 3.3),
+        target("DELIVER 2 WOOD"),
+        Command::SettlementInteract,
+        target("INSTALL FOUNDATION"),
+        Command::SettlementInteract,
+        target("DELIVER 2 WOOD"),
+        Command::SettlementInteract,
+        deposit("tree_wood"),
+        withdraw("tree_stone"),
+        walk(3.1, 3.3),
+        target("DELIVER 2 STONE"),
+        Command::SettlementInteract,
+        target("INSTALL MECHANISM"),
+        Command::SettlementInteract,
+        deposit("tree_stone"),
+    ]);
+    let wood_built = inspect(&mut steps);
+    // 8. Ash to Gather Wood: it takes the new one. The elder empties the
+    // first one's output meanwhile, so neither is full.
+    steps.extend([job("sprite_ash", "wood_gatherer"), pick_up(0), deposit("tree_wood"), wait(15)]);
+    let both = inspect(&mut steps);
+    steps.push(wait(6));
+    let both_later = inspect(&mut steps);
+    // 9. E at the first Wood Gatherer's slot: Fern is put out, the elder
+    // works it at 4x, and Burst works.
+    steps.extend([walk(-5.1, 2.6), target("POSSESS, FERN STEPS OUT"), Command::SettlementInteract]);
+    let possessed = inspect(&mut steps);
+    steps.push(wait(5));
+    let possessed_later = inspect(&mut steps);
+    steps.push(Command::SettlementBurst);
+    let burst = inspect(&mut steps);
+    // 10. Leaving: Fern goes back in on its own.
+    steps.extend([target("LEAVE"), Command::SettlementInteract, wait(6)]);
+    let left = inspect(&mut steps);
+
+    let report = run_for(steps, FPS, 6000);
+    assert_eq!(report["status"], "passed", "{report}");
+    let receipts = report["receipts"].as_array().unwrap();
+    let sim = |i: usize| &receipts[i]["state"]["settlement"]["simulation"];
+    let building = |i: usize, b: usize| &sim(i)["buildings"][b];
+    let output = |i: usize, b: usize, item: &str| building(i, b)["output"]["items"][item].as_u64().unwrap_or(0);
+    let tree = |i: usize, depot: &str, item: &str| sim(i)["depots"][depot]["items"][item].as_u64().unwrap_or(0);
+    let sprite = |i: usize, id: &str| &sim(i)["sprites"][id];
+    let cargo = |i: usize| &sim(i)["agents"]["elder"]["cargo"]["items"];
+    // 1.
+    assert_eq!(sim(start)["buildings"].as_array().map(Vec::len), Some(1));
+    assert_eq!((&building(start, 0)["kind"], &building(start, 0)["status"]), (&json!("wood_gatherer"), &json!("idle")));
+    for id in ["sprite_ash", "sprite_fern", "sprite_moss", "sprite_reed"] {
+        assert_eq!(sprite(start, id)["activity"], "idle", "{id}");
+    }
+    // 2.
+    assert_eq!(building(first_wood, 0)["occupant"], json!({"sprite": "sprite_fern"}), "{}", building(first_wood, 0));
+    assert!(output(first_wood, 0, "wood") >= 1);
+    // 3.
+    assert_eq!(tree(stocked, "tree_wood", "wood"), 5);
+    // 4.
+    let stone = building(stone_built, 1);
+    assert_eq!((&stone["kind"], &stone["status"]), (&json!("stone_gatherer"), &json!("idle")), "{stone}");
+    assert_eq!((tree(stone_built, "tree_wood", "wood"), cargo(stone_built)["wood"].as_u64()), (0, Some(1)));
+    // 5.
+    assert_eq!(building(first_stone, 1)["occupant"], json!({"sprite": "sprite_reed"}), "{}", building(first_stone, 1));
+    assert!(output(first_stone, 1, "stone") >= 1);
+    // 6.
+    assert_eq!(tree(stone_stocked, "tree_stone", "stone"), 5);
+    // 7.
+    let second = building(wood_built, 2);
+    assert_eq!((&second["kind"], &second["status"]), (&json!("wood_gatherer"), &json!("idle")), "{second}");
+    assert_eq!((tree(wood_built, "tree_wood", "wood"), tree(wood_built, "tree_stone", "stone")), (2, 3));
+    assert_eq!(cargo(wood_built), &json!({}));
+    // 8. Both staffed and working, and both made wood in the 6 s between.
+    for i in [both, both_later] {
+        assert_eq!((&building(i, 0)["occupant"], &building(i, 2)["occupant"]), (&json!({"sprite": "sprite_fern"}), &json!({"sprite": "sprite_ash"})));
+        assert_eq!((&building(i, 0)["status"], &building(i, 2)["status"]), (&json!("working"), &json!("working")));
+    }
+    assert!(output(both_later, 0, "wood") > output(both, 0, "wood") && output(both_later, 2, "wood") > output(both, 2, "wood"));
+    // 9. Fern put out and waiting (the other Wood Gatherer is Ash's), the
+    // building at 4x: a unit every 1.25 s, against one per 5 s.
+    let seated = &receipts[possessed]["state"]["settlement"];
+    assert_eq!(seated["seat"], json!({"building": 0}), "{seated}");
+    assert_eq!(building(possessed, 0)["occupant"], json!({"elder": "elder"}));
+    assert_eq!((&sprite(possessed, "sprite_fern")["job"], &sprite(possessed, "sprite_fern")["activity"]), (&json!("wood_gatherer"), &json!("waiting")));
+    let made = output(possessed_later, 0, "wood") - output(possessed, 0, "wood");
+    assert!((3..=5).contains(&made), "{made} units in 5 s");
+    let added = output(burst, 0, "wood") - output(possessed_later, 0, "wood");
+    assert!((5..=6).contains(&added), "a Burst added {added}");
+    // 10. Fern back in, with no job sent since step 2's.
+    let last = &receipts[left]["state"]["settlement"];
+    assert_eq!(last["seat"], Value::Null);
+    assert_eq!(building(left, 0)["occupant"], json!({"sprite": "sprite_fern"}), "{}", building(left, 0));
+    assert_eq!((&sprite(left, "sprite_fern")["job"], &sprite(left, "sprite_fern")["activity"]), (&json!("wood_gatherer"), &json!("working")));
+    assert_eq!(building(left, 2)["occupant"], json!({"sprite": "sprite_ash"}));
+    for i in [start, first_wood, stocked, stone_built, first_stone, stone_stocked, wood_built, both, both_later, possessed, possessed_later, burst, left] {
+        assert!(receipts[i]["state"]["settlement"]["balances"].as_object().unwrap().values().all(|b| b["conserved"] == true), "receipt {i}");
+    }
+}
+
+/// The build key is refused while the elder possesses a building, with a
+/// hint that names the key that leaves.
+#[test]
+fn building_waits_until_the_elder_leaves_its_building() {
+    let report = run(vec![
+        Command::Scene { scene: "sacred-tree".into() },
+        Command::SettlementBoard { building: 0 },
+        Command::SettlementBuild { kind: None },
+    ]);
+    assert_eq!(report["status"], "failed", "{report}");
+    assert!(report["error"].as_str().unwrap().contains("Leave the building first (E)"), "{report}");
+    let report = run(vec![
+        Command::Scene { scene: "sacred-tree".into() },
+        Command::SettlementBoard { building: 0 },
+        Command::SettlementBuild { kind: Some("stone_gatherer".into()) },
+    ]);
+    assert_eq!(report["status"], "failed", "{report}");
+    assert!(report["error"].as_str().unwrap().contains("Leave the building first (E)"), "{report}");
 }

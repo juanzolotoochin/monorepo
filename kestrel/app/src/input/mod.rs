@@ -36,6 +36,7 @@ mod native;
 pub mod pad;
 pub mod synthetic;
 pub mod targets;
+pub mod town;
 #[cfg(test)]
 mod tests;
 pub mod tuning;
@@ -112,7 +113,8 @@ pub enum Edge {
     Interact,
     /// Collect more compatible material while carrying.
     Collect,
-    /// Propose a cargo drop just ahead.
+    /// Propose a cargo drop just ahead; in a town, drop the bundle at the
+    /// elder's feet (keyboard Q, controller B while not placing).
     Drop,
     NextWeapon,
     SelectWeapon(Weapon),
@@ -125,6 +127,15 @@ pub enum Edge {
     Choose(usize),
     /// Climb into the nearest vehicle, or out of the one driven.
     Board,
+    /// In a town: open the build menu, or back out of placing a blueprint
+    /// (keyboard B, controller X).
+    Build,
+    /// In a town, while placing a blueprint: back out of it (Escape,
+    /// controller B).
+    CancelBuild,
+    /// In a town, while possessing a building: Burst (keyboard R,
+    /// controller RT).
+    Burst,
 }
 
 /// Navigation, confirm, back, and the menu buttons, from the seated
@@ -173,11 +184,38 @@ pub struct ActionFrame {
     pub pause_requested: bool,
 }
 
-/// An open panel: the utility panel, or an item chooser.
+/// An open panel: the utility panel, an item chooser, or a radial menu.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Panel {
     Utility { items: Vec<Utility>, focus: usize },
     Chooser { title: String, options: Vec<String>, focus: usize },
+    /// Options in a ring (the town's job menu on a sprite): a direction
+    /// focuses the option that way (`radial_angle`), from the stick, the
+    /// D-pad, WASD or the arrows; A, E, Enter or Space picks it. Its pick
+    /// arrives as [`Edge::Choose`], as a chooser's does.
+    Radial { title: String, options: Vec<String>, focus: usize },
+}
+
+/// Where option `index` of `count` sits on a radial menu: radians
+/// counterclockwise from screen right, the first at the top.
+pub fn radial_angle(index: usize, count: usize) -> f32 {
+    std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU * index as f32 / count.max(1) as f32
+}
+
+/// The radial option nearest the direction `nav` points (screen up is up),
+/// the lower on a tie.
+fn radial_focus(nav: Nav, count: usize) -> usize {
+    let toward = match nav {
+        Nav::Right => 0.0,
+        Nav::Up => std::f32::consts::FRAC_PI_2,
+        Nav::Left => std::f32::consts::PI,
+        Nav::Down => -std::f32::consts::FRAC_PI_2,
+    };
+    let off = |i: usize| {
+        let d = (radial_angle(i, count) - toward).rem_euclid(std::f32::consts::TAU);
+        d.min(std::f32::consts::TAU - d)
+    };
+    (0..count).min_by(|&a, &b| off(a).total_cmp(&off(b)).then(a.cmp(&b))).unwrap_or(0)
 }
 
 /// What the World tells the input layer about the current scene.
@@ -185,6 +223,9 @@ pub enum Panel {
 pub struct SceneContext {
     /// A supply chain: keyboard E is the machine toggle, not memory.
     pub scenario: bool,
+    /// A town (the Sacred Tree): keyboard E, like A, interacts with the
+    /// highlighted target (`gameplay::town_interact`).
+    pub town: bool,
     pub utility: Vec<Utility>,
     pub recording: bool,
 }
@@ -253,6 +294,12 @@ pub struct InputService {
     history: VecDeque<HistoryEntry>,
     /// A suspension asked for after this frame's sample (by pause).
     pending_suspend: Option<Suspend>,
+    /// The town is placing a blueprint (`town`): Escape and controller B
+    /// back out of it.
+    placing: bool,
+    /// The local elder possesses a building in a town (`town`): keyboard R
+    /// and controller RT Burst instead of repairing and attacking.
+    possessing: bool,
 }
 
 impl Service for InputService {
@@ -346,10 +393,39 @@ impl InputService {
         self.scene = scene;
     }
 
+    /// Whether the town is placing a blueprint, for the keys that back out
+    /// of it.
+    pub fn set_placing(&mut self, placing: bool) {
+        self.placing = placing;
+    }
+
+    /// Whether the town's elder possesses a building, for the Burst keys.
+    pub fn set_possessing(&mut self, possessing: bool) {
+        self.possessing = possessing;
+    }
+
     /// Opens an item chooser at the next frame. Its pick arrives as
     /// [`Edge::Choose`].
     pub fn open_chooser(&mut self, title: impl Into<String>, options: Vec<String>) {
         self.requested_chooser = Some(Panel::Chooser { title: title.into(), options, focus: 0 });
+    }
+
+    /// Opens a radial menu at the next frame, focused on its first option.
+    /// Its pick arrives as [`Edge::Choose`].
+    pub fn open_radial(&mut self, title: impl Into<String>, options: Vec<String>) {
+        self.requested_chooser = Some(Panel::Radial { title: title.into(), options, focus: 0 });
+    }
+
+    /// Whether a radial menu opens at the next frame.
+    pub fn radial_requested(&self) -> bool {
+        matches!(self.requested_chooser, Some(Panel::Radial { .. }))
+    }
+
+    /// Closes the open panel, or one about to open, picking nothing: a
+    /// script picked for it (`control`).
+    pub fn close_panel(&mut self) {
+        self.panel = None;
+        self.requested_chooser = None;
     }
 
     /// The UI navigation step this frame, if any; taking it consumes it.
@@ -470,10 +546,33 @@ impl InputService {
         let mut panel_took = false;
         if let Some(panel) = &mut self.panel {
             panel_took = true;
+            let radial = matches!(panel, Panel::Radial { .. });
             let (count, focus) = match panel {
                 Panel::Utility { items, focus } => (items.len(), focus),
-                Panel::Chooser { options, focus, .. } => (options.len(), focus),
+                Panel::Chooser { options, focus, .. } | Panel::Radial { options, focus, .. } => (options.len(), focus),
             };
+            let keys = game.keys();
+            if radial {
+                // The keyboard steers a radial menu too: it has gameplay
+                // while the menu is open, so its keys are free.
+                let key_nav = [
+                    (KeyCode::KeyW, Nav::Up),
+                    (KeyCode::ArrowUp, Nav::Up),
+                    (KeyCode::KeyS, Nav::Down),
+                    (KeyCode::ArrowDown, Nav::Down),
+                    (KeyCode::KeyA, Nav::Left),
+                    (KeyCode::ArrowLeft, Nav::Left),
+                    (KeyCode::KeyD, Nav::Right),
+                    (KeyCode::ArrowRight, Nav::Right),
+                ]
+                .into_iter()
+                .find_map(|(key, nav)| keys.just_pressed(key).then_some(nav));
+                let pad_nav = ui.nav.take();
+                if let Some(nav) = key_nav.or(pad_nav) {
+                    *focus = radial_focus(nav, count);
+                }
+                ui.confirm |= keys.any_just_pressed([KeyCode::KeyE, KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::Space]);
+            }
             match ui.nav.take() {
                 Some(Nav::Up) if count > 0 => *focus = (*focus + count - 1) % count,
                 Some(Nav::Down) if count > 0 => *focus = (*focus + 1) % count,
@@ -487,7 +586,7 @@ impl InputService {
             if std::mem::take(&mut ui.confirm) && count > 0 {
                 panel_edges.push(match panel {
                     Panel::Utility { items, focus } => Edge::Utility(items[*focus]),
-                    Panel::Chooser { focus, .. } => Edge::Choose(*focus),
+                    Panel::Chooser { focus, .. } | Panel::Radial { focus, .. } => Edge::Choose(*focus),
                 });
                 close = true;
             }
@@ -498,6 +597,10 @@ impl InputService {
             self.panel = Some(Panel::Utility { items: self.scene.utility.clone(), focus: 0 });
             frame.suspended.get_or_insert(Suspend::Panel);
             panel_took = true;
+        } else if escape && self.placing {
+            // Escape backs out of a blueprint rather than pausing.
+            ui.escape_taken = true;
+            panel_edges.push(Edge::CancelBuild);
         }
         frame.ui = ui;
 
@@ -505,6 +608,7 @@ impl InputService {
         // current owner.
         let keys = game.keys();
         let keyboard_deliberate = GAMEPLAY_KEYS.iter().any(|&k| keys.just_pressed(k))
+            || (self.scene.town && keys.just_pressed(KeyCode::KeyB))
             || game.mouse().get_just_pressed().next().is_some()
             || game.motion().length() >= tuning::MOUSE_TAKEOVER_PIXELS;
         let pad_deliberate = (self.seat.is_some() && pad.deliberate()) || claimed;
@@ -625,7 +729,20 @@ impl InputService {
         }
         // E toggles a machine where there is a supply chain, and drives the
         // memory recording elsewhere; Q clears it.
-        if self.scene.scenario {
+        if self.scene.town {
+            if keys.just_pressed(KeyCode::KeyE) {
+                edges.push(Edge::Interact);
+            }
+            if keys.just_pressed(KeyCode::KeyB) {
+                edges.push(Edge::Build);
+            }
+            if keys.just_pressed(KeyCode::KeyQ) {
+                edges.push(Edge::Drop);
+            }
+            if self.possessing && keys.just_pressed(KeyCode::KeyR) {
+                edges.push(Edge::Burst);
+            }
+        } else if self.scene.scenario {
             if keys.just_pressed(KeyCode::KeyE) {
                 edges.push(Edge::MachineToggle);
             }
@@ -637,11 +754,13 @@ impl InputService {
                 edges.push(Edge::Utility(Utility::Record));
             }
         }
+        // R Bursts while possessing a building, and repairs nothing then.
+        let repair = !(self.scene.town && self.possessing);
         Gameplay {
             movement,
             run: keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),
-            repair_held: keys.pressed(KeyCode::KeyR),
-            repair_pressed: keys.just_pressed(KeyCode::KeyR),
+            repair_held: repair && keys.pressed(KeyCode::KeyR),
+            repair_pressed: repair && keys.just_pressed(KeyCode::KeyR),
             lift_held: keys.pressed(KeyCode::Space),
             aim: None,
             edges,
@@ -657,11 +776,15 @@ impl InputService {
                 edges.push(edge);
             }
         };
-        press(Control::RightTrigger, Edge::Attack);
+        // RT Bursts while possessing a building in a town, where it could
+        // attack nothing anyway (a seated elder doesn't swing).
+        press(Control::RightTrigger, if self.scene.town && self.possessing { Edge::Burst } else { Edge::Attack });
         press(Control::Button(Button::RightBumper), Edge::Lift);
         press(Control::Button(Button::South), Edge::Interact);
-        press(Control::Button(Button::West), Edge::Collect);
-        press(Control::Button(Button::East), Edge::Drop);
+        // A town has no nearby targets to collect from: X builds, and B
+        // backs out of a blueprint being placed, else drops the bundle.
+        press(Control::Button(Button::West), if self.scene.town { Edge::Build } else { Edge::Collect });
+        press(Control::Button(Button::East), if self.scene.town && self.placing { Edge::CancelBuild } else { Edge::Drop });
         press(Control::Button(Button::North), Edge::NextWeapon);
         press(Control::Button(Button::DPadLeft), Edge::TargetPrevious);
         press(Control::Button(Button::DPadRight), Edge::TargetNext);

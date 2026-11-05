@@ -4,7 +4,7 @@
 //! - Depots, sources, links and producers are buildings. Their state changes
 //!   only in single-threaded stages: the economy step at the start of the
 //!   apply phase, and message handlers.
-//! - Agents (haulers and player avatars) move in the parallel self-update
+//! - Agents (haulers, sprites and player avatars) move in the parallel self-update
 //!   stage, reading last tick's positions of everyone else. Anything that
 //!   touches a depot, a dock or another entity is a message.
 //! - Reservations are incremental counters in each depot's inventory
@@ -17,15 +17,18 @@
 pub mod action;
 mod agent;
 pub mod avatar;
+pub mod buildings;
 pub mod combat;
 mod economy;
 mod haulers;
+pub mod interact;
 mod inventory;
 pub mod memory;
 pub mod piano;
 pub mod piles;
 mod players;
 pub mod prediction;
+pub mod sprites;
 pub mod vehicle;
 
 use std::collections::BTreeMap;
@@ -42,9 +45,13 @@ use crate::terrain::{Disc, Terrain};
 
 pub use combat::{CombatMetrics, DefenderState, Event, Impact, OnMiss, Pinned, Prediction, Projectile, SpentProjectile, Threat, TossEnd, WaveState};
 pub use agent::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
+pub use avatar::Seat;
+pub use buildings::{BuildingIx, BuildingKind, BuildingKindIx, BuildingState, BurstRefusal, Occupant, PlacementRefusal, Slot, Stage};
 pub use haulers::{HaulerState, Phase};
+pub use interact::{InteractTarget, Interaction};
 pub use inventory::{Inventory, Kinds};
 pub use prediction::AvatarReplay;
+pub use sprites::{Hold, SpriteJob, SpriteState, Step};
 pub use vehicle::{VehicleIx, VehicleState};
 
 pub type ItemIx = u16;
@@ -102,16 +109,22 @@ pub struct ProducerState {
     pub cycles: u32,
 }
 
-/// Names a holder of goods: a depot's inventory, an agent's cargo, a pile or
-/// the collector. A flying unit's two ends are these, and so is a carry
-/// job's other side. New variants go last: `behaviour_digest` hashes the
-/// variant index of every transfer's ends.
+/// Names a holder of goods: a depot's inventory, an agent's cargo, a pile
+/// (of a mineral, or of a bundle dropped on the ground),
+/// the collector, a building's output or a site's materials. A flying unit's two ends are these,
+/// and so is a carry job's other side. New variants go last:
+/// `behaviour_digest` hashes the variant index of every transfer's ends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum InventoryRef {
     Depot(DepotIx),
     Agent(AgentIx),
     Pile(piles::PileId),
     Collector,
+    /// A building's output pile, which a bundle picks up from (D6).
+    Output(BuildingIx),
+    /// A site's materials, which a bundle delivers to and nothing takes
+    /// from (D4). Units land beside the site, where its output pile will be.
+    Site(BuildingIx),
 }
 
 impl InventoryRef {
@@ -236,6 +249,12 @@ pub struct Settlement {
     /// In scene order; an index is stable for the world's life.
     #[serde(default)]
     pub vehicles: Vec<VehicleState>,
+    /// The scenario's building kinds, resolved (`buildings::kinds`).
+    #[serde(default)]
+    pub building_kinds: Vec<BuildingKind>,
+    /// Append-only: an index is stable for the world's life.
+    #[serde(default)]
+    pub buildings: Vec<BuildingState>,
 }
 
 /// A vehicle a scene parks, in arena coordinates.
@@ -289,7 +308,8 @@ pub struct PileSetup {
 
 impl Settlement {
     /// Builds the tick-0 settlement and adds its terrain: the arena bounds,
-    /// `obstacles` from the scene, and machine and defender footprints.
+    /// `obstacles` from the scene, machine and defender footprints, and the
+    /// prebuilt buildings' footprints.
     pub fn from_scenario(scenario: &Scenario, obstacles: &[Disc], terrain: &mut Terrain, content: &Content) -> Result<Settlement, String> {
         scenario.validate()?;
         let character = |name: &str| -> Result<CharacterIx, String> {
@@ -297,6 +317,8 @@ impl Settlement {
         };
         let center = terrain.center;
         let at = |p: scenario::Point| FxVec2::new(center.x + p[0], center.y + p[1]);
+        let items: Vec<String> = scenario.items.iter().map(|i| i.id.clone()).collect();
+        let item = |id: &str| items.iter().position(|i| i == id).expect("validated item") as ItemIx;
         terrain.extent = scenario.extent;
         terrain.obstacles.extend_from_slice(obstacles);
         let footprints = scenario
@@ -310,9 +332,11 @@ impl Settlement {
             }
         }
         terrain.revision += 1;
+        // Before the agents' spawn check, so nobody starts inside one.
+        let building_kinds = buildings::kinds(scenario, item);
+        let docks: Vec<(DepotIx, FxVec2)> = scenario.depots.iter().enumerate().map(|(i, d)| (i as DepotIx, at(d.position))).collect();
+        let buildings = buildings::prebuilt(scenario, &building_kinds, &docks, items.len(), terrain, at)?;
 
-        let items: Vec<String> = scenario.items.iter().map(|i| i.id.clone()).collect();
-        let item = |id: &str| items.iter().position(|i| i == id).expect("validated item") as ItemIx;
         let depot = |id: &str| scenario.depots.iter().position(|d| d.id == id).expect("validated depot") as DepotIx;
         let stacks = |s: &[scenario::Stack]| s.iter().map(|s| (item(&s.item), s.units)).collect::<Vec<_>>();
 
@@ -321,7 +345,9 @@ impl Settlement {
             .depots
             .iter()
             .map(|d| {
-                let mut inventory = Inventory::new(items.len(), d.capacity, Kinds::AnyMix);
+                // A tree pile takes only its item (`Depot::only`).
+                let kinds = d.only.as_deref().map_or(Kinds::AnyMix, |only| Kinds::Only(item(only)));
+                let mut inventory = Inventory::new(items.len(), d.capacity, kinds);
                 for s in &d.stock {
                     // Validated: the stock fits the capacity.
                     inventory.counts[item(&s.item) as usize] += s.units;
@@ -385,6 +411,16 @@ impl Settlement {
                 Ok(AgentState::new(a, ix, def, at(a.position), &scenario.links, items.len(), &item, &depot))
             })
             .collect::<Result<Vec<_>, String>>()?;
+        // Sprites after the agents: indices that never move, as no agent
+        // before a joined player's does (`players`).
+        for s in &scenario.sprites {
+            let ix = character(&s.character)?;
+            let def = &content.rules.characters[ix as usize];
+            if def.brain != Brain::Sprite {
+                return Err(format!("sprite {} is {:?}, a {:?} character; it needs a {:?} one", s.id, s.character, def.brain, Brain::Sprite));
+            }
+            agents.push(AgentState::new_sprite(s, ix, def, at(s.position), items.len()));
+        }
         for agent in &mut agents {
             if let AgentState { body, role: Role::Avatar(avatar), .. } = agent {
                 body.health = scenario.player_health;
@@ -443,7 +479,7 @@ impl Settlement {
             })
             .collect();
         let tuning = [Weapon::Sword, Weapon::Spear, Weapon::Bow, Weapon::ArcCoil, Weapon::Laser].map(|w| scenario.weapon_tuning(w)).to_vec();
-        let settlement = Settlement {
+        let mut settlement = Settlement {
             characters: content.rules.characters.clone(),
             base_health: scenario.base_health,
             health: scenario.base_health,
@@ -466,6 +502,8 @@ impl Settlement {
             piles: None,
             memory: None,
             vehicles: Vec::new(),
+            building_kinds,
+            buildings,
             scenario: scenario.id.clone(),
             dock_owner: vec![None; scenario.depots.len()],
             items,
@@ -483,6 +521,12 @@ impl Settlement {
             if nav::path(terrain, d.position, d.position, Fx::from_ratio(3, 20)).is_empty() {
                 return Err(format!("depot {} dock is blocked", d.id));
             }
+        }
+        // A town's elder drops bundles on ground piles anywhere in the
+        // clearing but its edge: a lab with no minerals (a scene's own pile
+        // setup replaces it, `from_scene`).
+        if !settlement.building_kinds.is_empty() {
+            settlement.piles = Some(piles::PileLab::town(center, settlement.items.len(), terrain.extent - Fx::ONE));
         }
         Ok(settlement)
     }
@@ -601,6 +645,7 @@ impl Settlement {
                 links: Vec::new(),
                 cargo_anchor: [0.0, 0.65, -0.19],
                 cargo_layout: scenario::CargoLayout::default(),
+                one_kind: false,
                 equipment: None,
             }],
             producers: Vec::new(),
@@ -608,6 +653,9 @@ impl Settlement {
             waves: Vec::new(),
             base_health: 1,
             player_health: 0,
+            building_kinds: Vec::new(),
+            buildings: Vec::new(),
+            sprites: Vec::new(),
         }
     }
 
@@ -626,6 +674,12 @@ impl Settlement {
         }
         for a in &mut self.agents {
             a.carry.inventory.resize(items);
+        }
+        for b in &mut self.buildings {
+            b.output.resize(items);
+            if let Stage::Site { materials, .. } = &mut b.stage {
+                materials.resize(items);
+            }
         }
         Ok(first)
     }
@@ -693,17 +747,23 @@ impl Settlement {
             InventoryRef::Depot(d) => &mut self.depots[d as usize].inventory,
             InventoryRef::Agent(a) => &mut self.agents[a as usize].carry.inventory,
             InventoryRef::Pile(_) | InventoryRef::Collector => self.piles.as_mut().expect("a pile scene").holder_mut(holder),
+            InventoryRef::Output(b) => &mut self.buildings[b as usize].output,
+            InventoryRef::Site(b) => match &mut self.buildings[b as usize].stage {
+                Stage::Site { materials, .. } => materials,
+                Stage::Built => unreachable!("a built building takes no deliveries"),
+            },
         }
     }
 
     /// Where `holder` takes and gives units: a depot's dock, an agent's
-    /// body, a pile, the collector.
+    /// body, a pile, the collector, a building's output pile (a site's too).
     pub(crate) fn position_of(&self, holder: InventoryRef) -> FxVec2 {
         match holder {
             InventoryRef::Depot(d) => self.depots[d as usize].position,
             InventoryRef::Agent(a) => self.agents[a as usize].body.position,
             InventoryRef::Pile(id) => self.piles.as_ref().expect("a pile scene").piles[&id].position,
             InventoryRef::Collector => self.piles.as_ref().and_then(|lab| lab.collector.as_ref()).expect("a collector").position,
+            InventoryRef::Output(b) | InventoryRef::Site(b) => self.buildings[b as usize].output_position,
         }
     }
 
@@ -722,7 +782,15 @@ impl Settlement {
                 let b = &self.accounts[i];
                 // Minerals are stored in piles and the collector.
                 let lab = self.piles.iter().flat_map(|lab| lab.piles.values().map(|p| &p.inventory).chain(lab.collector.as_ref().map(|c| &c.inventory)));
-                let stored = self.depots.iter().map(|d| &d.inventory).chain(lab).map(|inventory| inventory.counts[i] as u64).sum();
+                // So are building outputs and the materials delivered to sites.
+                let buildings = self.buildings.iter().flat_map(|b| {
+                    let materials = match &b.stage {
+                        Stage::Site { materials, .. } => Some(materials),
+                        Stage::Built => None,
+                    };
+                    std::iter::once(&b.output).chain(materials)
+                });
+                let stored = self.depots.iter().map(|d| &d.inventory).chain(lab).chain(buildings).map(|inventory| inventory.counts[i] as u64).sum();
                 let carried = self.agents.iter().map(|a| a.carry.inventory.counts[i] as u64).sum();
                 let in_transit = self.transfers.values().filter(|t| t.item as usize == i).count() as u64;
                 let equipped = self.agents.iter().filter(|a| a.equipped_item() == Some(i as ItemIx)).count() as u64;
@@ -818,25 +886,34 @@ impl Settlement {
         if let Some(lab) = &self.piles {
             self.validate_lab(lab)?;
         }
+        self.validate_buildings()?;
         Ok(())
+    }
+
+    /// What `holder` should hold reserved, `(out, in)` per item, recomputed
+    /// from the units flying there and the carry jobs on it: a pile, the
+    /// collector, a building output or a site, which nothing else reserves
+    /// on.
+    fn expected_reservations(&self, holder: InventoryRef) -> (Vec<u32>, Vec<u32>) {
+        let items = self.items.len();
+        let (mut out, mut incoming) = (vec![0u32; items], vec![0u32; items]);
+        for t in self.transfers.values().filter(|t| t.to == holder) {
+            incoming[t.item as usize] += 1;
+        }
+        for job in self.agents.iter().flat_map(|a| a.carry.job.iter().chain(&a.carry.next)).filter(|j| j.other == holder) {
+            let side = if job.gives(Side::Other) { &mut out } else { &mut incoming };
+            side[job.item as usize] += job.remaining;
+        }
+        (out, incoming)
     }
 
     /// Checks the piles and the collector: each inventory on its own, and
     /// its reservations against the units flying there and the carry jobs
-    /// (hauls) on it.
+    /// (hauls and bundles) on it. A pile holds any one item; the collector
+    /// minerals only.
     fn validate_lab(&self, lab: &piles::PileLab) -> Result<(), String> {
         let items = self.items.len();
-        let expected = |holder: InventoryRef| {
-            let (mut out, mut incoming) = (vec![0u32; items], vec![0u32; items]);
-            for t in self.transfers.values().filter(|t| t.to == holder) {
-                incoming[t.item as usize] += 1;
-            }
-            for job in self.agents.iter().flat_map(|a| a.carry.job.iter().chain(&a.carry.next)).filter(|j| j.other == holder) {
-                let side = if job.gives(Side::Other) { &mut out } else { &mut incoming };
-                side[job.item as usize] += job.remaining;
-            }
-            (out, incoming)
-        };
+        let expected = |holder: InventoryRef| self.expected_reservations(holder);
         let holders = lab.piles.iter().map(|(&id, p)| (InventoryRef::Pile(id), format!("pile {id}"), &p.inventory));
         let collector = lab.collector.iter().map(|c| (InventoryRef::Collector, "collector".to_string(), &c.inventory));
         for (holder, name, inventory) in holders.chain(collector) {
@@ -844,7 +921,7 @@ impl Settlement {
             if (inventory.reserved_out.clone(), inventory.reserved_in.clone()) != expected(holder) {
                 return Err(format!("{name} reservations drifted"));
             }
-            if (0..items as ItemIx).any(|i| inventory.count(i) > 0 && !lab.is_mineral(i)) {
+            if holder == InventoryRef::Collector && (0..items as ItemIx).any(|i| inventory.count(i) > 0 && !lab.is_mineral(i)) {
                 return Err(format!("{name} holds an item that isn't a mineral"));
             }
         }
@@ -933,7 +1010,18 @@ impl Settlement {
             &self.combat,
             self.health,
         );
-        let bytes = postcard::to_allocvec(&observed).expect("behaviour encodes");
+        let mut bytes = postcard::to_allocvec(&observed).expect("behaviour encodes");
+        // Buildings only where there are any, so scenes without them hash
+        // as they did before the table.
+        if !self.buildings.is_empty() {
+            let buildings: Vec<_> = self.buildings.iter().map(|b| (b.kind, b.position, &b.stage, b.slot, b.progress, &b.output.counts)).collect();
+            bytes.extend(postcard::to_allocvec(&buildings).expect("buildings encode"));
+        }
+        // And sprites' jobs and plans only where there are sprites.
+        let sprites: Vec<_> = self.agents.iter().filter_map(AgentState::sprite).map(|s| (s.job, &s.plan, s.step, s.holds)).collect();
+        if !sprites.is_empty() {
+            bytes.extend(postcard::to_allocvec(&sprites).expect("sprites encode"));
+        }
         bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, &byte| (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3))
     }
 }
@@ -952,10 +1040,28 @@ impl StateHash for Settlement {
 }
 
 #[cfg(test)]
+mod buildings_tests;
+#[cfg(test)]
+mod bundle_tests;
+#[cfg(test)]
+mod burst_tests;
+#[cfg(test)]
+mod construction_tests;
+#[cfg(test)]
+mod ground_pile_tests;
+#[cfg(test)]
+mod interact_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod combat_tests;
 #[cfg(test)]
 mod scene_tests;
+#[cfg(test)]
+mod seat_tests;
+#[cfg(test)]
+mod sprites_tests;
+#[cfg(test)]
+mod soak_tests;
 #[cfg(test)]
 mod vehicle_tests;

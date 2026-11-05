@@ -6,7 +6,7 @@ use std::borrow::Cow;
 use content::scenario::Weapon;
 
 use super::action::{self, Action};
-use super::avatar::{self, character_of};
+use super::avatar::{self, character_of, Seat};
 use super::combat::{strike_event, Event};
 use super::piles::{self, PileLab};
 use super::vehicle::{self, VehicleIx, VehicleState};
@@ -73,10 +73,13 @@ impl<'a> AvatarReplay<'a> {
 
     /// The vehicle the avatar drives as of `tick`, and its index, while it
     /// still drives it. Climbing in waits for stage 5, so it is never
-    /// predicted; climbing out is.
+    /// predicted; climbing out is. Boarding and leaving a building go the
+    /// same way: in through stage 5, out in the avatar's own part, though
+    /// the slot it leaves empties in housekeeping, which the replay leaves to
+    /// the simulation.
     pub fn vehicle(&self) -> Option<(VehicleIx, &VehicleState)> {
         let (ix, v) = self.vehicle.as_ref()?;
-        (self.state.avatar()?.driving == Some(*ix)).then_some((*ix, v))
+        (self.state.avatar()?.seat == Some(Seat::Vehicle(*ix))).then_some((*ix, v))
     }
 
     /// The confirmed settlement and terrain the replay started from.
@@ -107,7 +110,7 @@ impl<'a> AvatarReplay<'a> {
         if agent != self.me {
             return;
         }
-        let driving = self.state.avatar().and_then(|a| a.driving);
+        let driving = self.state.avatar().and_then(|a| a.seat).and_then(Seat::vehicle);
         if let Some((ix, v)) = self.vehicle.as_mut() {
             if driving == Some(*ix) && vehicle::drive(v, &action) {
                 return;
@@ -135,7 +138,7 @@ impl<'a> AvatarReplay<'a> {
         let def = character_of(&s.characters, &self.state);
         let AgentState { body, role: Role::Avatar(state), .. } = &mut self.state else { unreachable!("replays start from avatars") };
         avatar::self_update(body, state, self.me, tick, terrain, self.piles.as_deref(), def);
-        if let Some((_, v)) = self.vehicle.as_mut().filter(|(ix, _)| state.driving == Some(*ix)) {
+        if let Some((_, v)) = self.vehicle.as_mut().filter(|(ix, _)| state.seat == Some(Seat::Vehicle(*ix))) {
             // As stage 2 drives it and housekeeping seats its driver.
             let vehicle_def = &s.characters[v.character as usize];
             vehicle::self_update(v, terrain, vehicle_def);
@@ -176,7 +179,8 @@ impl<'a> AvatarReplay<'a> {
             piles::cancel_haul(lab.to_mut(), me, carry, message.serial);
             avatar.dropped_haul = false;
         }
-        for release in actions.reserve_stock.iter().filter(|r| r.change == StockChange::Release && r.job.other.in_pile_lab()) {
+        let releases: Vec<_> = actions.reserve_stock.iter().filter(|r| r.change == StockChange::Release && lab.is_haul(&r.job)).collect();
+        for release in releases {
             release.job.release(lab.to_mut().holder_mut(release.job.other), Side::Other);
         }
         if let Some(error) = avatar.pile_failure.take() {

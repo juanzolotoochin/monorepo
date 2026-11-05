@@ -18,7 +18,8 @@
 //!
 //! Avatars act on their players' commands; haulers act on their brain's
 //! picks (stage 2) and on the jobs stage 5 accepts, through the same `act`,
-//! which dispatches by role (`HAULER_ACTIONS_HANDOFF.md`). Commands still
+//! which dispatches by role (`HAULER_ACTIONS_HANDOFF.md`); sprites on their
+//! brain's picks (`sprites`). Commands still
 //! drive only avatars (`Settlement::act`). AI brains are to produce the same
 //! vocabulary (`docs/character-definition.md`).
 
@@ -30,8 +31,10 @@ use fx::{Fx, FxVec2};
 
 use super::avatar::{self, Intent};
 use super::haulers;
+use super::interact::InteractTarget;
 use super::piles::{PileAction, PileLab};
-use super::{AgentIx, AgentState, DepotIx, DepotState, ItemIx, Role, Settlement, Transfer};
+use super::sprites;
+use super::{AgentIx, AgentState, BuildingKind, BuildingState, DepotIx, DepotState, Direction, InventoryRef, ItemIx, Role, Settlement, Transfer};
 use crate::messages::ActionMessages;
 use crate::terrain::Terrain;
 use crate::CommandKind;
@@ -72,9 +75,26 @@ pub enum Action {
     /// drop spot) and move units there, one every `pace` seconds (zero for
     /// all at once), standing at `approach` if given (`piles::haul`).
     Haul { action: PileAction, pace: Fx, approach: Option<FxVec2> },
-    /// Climb into the nearest free vehicle in reach, or out of the one
-    /// driven (`vehicle`).
+    /// Climb into the nearest free vehicle or built building in reach, or
+    /// out of the seat it has (`vehicle`, `Settlement::board`).
     Board,
+    /// Pick up a bundle from (or, with `Deposit`, empty it into) a depot or
+    /// a building output, as many units as fit (`avatar::bundle_job`);
+    /// units move once the agent is there, as a transfer's do.
+    Bundle { other: InventoryRef, direction: Direction },
+    /// Act on a target the client highlighted (`interact`), if it is still
+    /// in reach and usable: a bundle target's carry job (a site's delivery
+    /// too), walking in to the dock, or a site's install. A sprite target,
+    /// and a site's needs, do nothing here.
+    Interact(InteractTarget),
+    /// Drop the whole bundle on the ground at the agent's feet: onto a pile
+    /// of its item there, or a new pile (`piles::drop_plan`). Stage 5 makes
+    /// the pile and starts the carry job (`Settlement::drop_bundles`).
+    Drop,
+    /// Add the possessed building's Burst units to its output, if the
+    /// cooldown allows (D3). Only a seated elder can; stage 5 adds them
+    /// (`Settlement::bursts`).
+    Burst,
 }
 
 impl Action {
@@ -97,11 +117,17 @@ impl Action {
             CommandKind::Respawn { agent } => (agent, Action::Respawn),
             CommandKind::Pile { agent, action, pace, approach } => (agent, Action::Haul { action, pace, approach }),
             CommandKind::Board { agent } => (agent, Action::Board),
+            CommandKind::Bundle { agent, other, direction } => (agent, Action::Bundle { other, direction }),
+            CommandKind::Interact { agent, target } => (agent, Action::Interact(target)),
+            CommandKind::Drop { agent } => (agent, Action::Drop),
+            CommandKind::Burst { agent } => (agent, Action::Burst),
             CommandKind::PlayPiano { .. }
             | CommandKind::SpawnMovers { .. }
             | CommandKind::Impulse { .. }
             | CommandKind::Dig { .. }
             | CommandKind::SetLink { .. }
+            | CommandKind::SetSpriteJob { .. }
+            | CommandKind::PlaceBlueprint { .. }
             | CommandKind::SetMachine { .. }
             | CommandKind::SetDefender { .. }
             | CommandKind::Dispense { .. }
@@ -118,12 +144,13 @@ impl Action {
 }
 
 /// Applies an action to an agent, by its role: an avatar's part is
-/// `avatar::act`, a hauler's `haulers::act`. Every route a command or a
-/// brain gives an agent goes through here.
+/// `avatar::act`, a hauler's `haulers::act`, a sprite's `sprites::act`.
+/// Every route a command or a brain gives an agent goes through here.
 pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &CharacterDef, out: &mut ActionMessages) {
     match a.role {
         Role::Avatar(_) => avatar::act(a, action, view, def, out),
         Role::Hauler(ref hauler) => haulers::act(&mut a.body, hauler, action, view),
+        Role::Sprite(ref sprite) => sprites::act(&mut a.body, sprite, action, view),
     }
 }
 
@@ -149,6 +176,9 @@ pub struct View<'a> {
     /// beside theirs.
     pub vehicles: &'a [super::VehicleState],
     pub characters: &'a [CharacterDef],
+    /// The buildings and their kinds, which a sprite plans its job over.
+    pub buildings: &'a [BuildingState],
+    pub building_kinds: &'a [BuildingKind],
 }
 
 impl Settlement {
@@ -168,6 +198,8 @@ impl Settlement {
             piano_serial: self.piano_serial,
             vehicles: &self.vehicles,
             characters: &self.characters,
+            buildings: &self.buildings,
+            building_kinds: &self.building_kinds,
         }
     }
 }

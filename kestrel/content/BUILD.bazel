@@ -28,6 +28,7 @@ rust_test(
     compile_data = [
         "//kestrel/app/assets:levels/combat_arena_supply.ron",
         "//kestrel/app/assets:levels/forest_supply.ron",
+        "//kestrel/app/assets:levels/sacred_tree_supply.ron",
     ],
     crate = ":content",
     edition = "2021",

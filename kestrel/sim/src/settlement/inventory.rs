@@ -22,8 +22,12 @@ pub enum Kinds {
     #[default]
     AnyMix,
     /// One item at a time. A second item is refused while any of the first
-    /// is held or reserved. Piles use it.
+    /// is held or reserved. Piles, building outputs and the Sacred Tree's
+    /// elder's bundle use it.
     OneKind,
+    /// This item only, whatever is held: the Sacred Tree's wood and stone
+    /// piles (`scenario::Depot::only`).
+    Only(ItemIx),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,7 +87,8 @@ impl Inventory {
         self.capacity.saturating_sub(self.total() + self.total_in())
     }
 
-    /// The item held or reserved, if any. With `OneKind` there is at most one.
+    /// The item held or reserved, if any. With `OneKind` or `Only` there is
+    /// at most one.
     pub fn kind(&self) -> Option<ItemIx> {
         (0..self.counts.len()).find(|&i| self.counts[i] + self.reserved_in[i] + self.reserved_out[i] > 0).map(|i| i as ItemIx)
     }
@@ -93,6 +98,7 @@ impl Inventory {
         match self.kinds {
             Kinds::AnyMix => true,
             Kinds::OneKind => self.kind().is_none_or(|k| k == item),
+            Kinds::Only(only) => item == only,
         }
     }
 
@@ -157,7 +163,8 @@ impl Inventory {
     }
 
     /// Checks this inventory on its own: per-item lists of one length, units
-    /// within capacity, promises within counts, and one kind for `OneKind`.
+    /// within capacity, promises within counts, one kind for `OneKind` and
+    /// only its item for `Only`.
     pub fn validate(&self) -> Result<(), String> {
         let items = self.counts.len();
         if self.reserved_out.len() != items || self.reserved_in.len() != items {
@@ -173,6 +180,11 @@ impl Inventory {
             let used = (0..items).filter(|&i| self.counts[i] + self.reserved_in[i] + self.reserved_out[i] > 0).count();
             if used > 1 {
                 return Err("holds more than one kind".into());
+            }
+        }
+        if let Kinds::Only(only) = self.kinds {
+            if (0..items).any(|i| i != only as usize && self.counts[i] + self.reserved_in[i] + self.reserved_out[i] > 0) {
+                return Err("holds an item it doesn't take".into());
             }
         }
         Ok(())
@@ -324,6 +336,18 @@ mod tests {
         assert_eq!(inv.kind(), None);
         assert!(inv.add(1, 1));
         assert_eq!(inv.validate(), Ok(()));
+    }
+
+    #[test]
+    fn only_takes_its_item_even_when_empty() {
+        let mut inv = Inventory::new(3, 10, Kinds::Only(1));
+        assert!(!inv.accepts(0) && inv.accepts(1));
+        assert!(!inv.add(0, 1));
+        assert!(!inv.reserve_in(2, 1));
+        assert!(inv.add(1, 2) && inv.reserve_in(1, 1));
+        assert_eq!(inv.validate(), Ok(()));
+        inv.counts[0] = 1;
+        assert_eq!(inv.validate(), Err("holds an item it doesn't take".into()));
     }
 
     #[test]

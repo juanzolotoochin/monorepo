@@ -42,12 +42,12 @@ The `sim` section has the same **shape** for every character kind, but `brain` d
 
 | `sim` field | Shape | Rule |
 | --- | --- | --- |
-| `brain` | `Player`, `FollowRoute`, `Hauler`, or `Vehicle` | Required, unless inherited. Selects behavior implemented by the engine. |
+| `brain` | `Player`, `FollowRoute`, `Hauler`, `Vehicle`, or `Sprite` | Required, unless inherited. Selects behavior implemented by the engine. |
 | `body` | `(radius: number)` | Required collision radius in meters. |
 | `movement` | `(walk: number, run: number)` | `walk` is required in meters per second. `run` is optional and defaults to `walk`. |
-| `health` | `(hp: integer, breach_damage: integer, armor: (...))` | Required for `FollowRoute`; forbidden for `Player` and `Hauler`. `armor` is optional. |
-| `avatar` | `(acceleration: ..., braking: ..., attack_braking: ..., attack: (...))` | Required for `Player`; forbidden for `FollowRoute` and `Hauler`. |
-| `carry` | `(transfer: integer)` | Required for `Player` and `Hauler`; forbidden for `FollowRoute` and `Vehicle`. `transfer` is frames to load or unload one unit. |
+| `health` | `(hp: integer, breach_damage: integer, armor: (...))` | Required for `FollowRoute`; forbidden for `Player`, `Hauler`, `Vehicle` and `Sprite`. `armor` is optional. |
+| `avatar` | `(acceleration: ..., braking: ..., attack_braking: ..., attack: (...))` | Required for `Player`; forbidden for the others. |
+| `carry` | `(transfer: integer)` | Required for `Player` and `Hauler`; forbidden for `FollowRoute`, `Vehicle` and `Sprite`. `transfer` is frames to load or unload one unit. |
 | `vehicle` | `(acceleration: ..., braking: ..., reverse: ..., turn: ..., wheelbase: ..., track: ..., climb: ..., lift: ..., gravity: ..., seat: ...)` | Required for `Vehicle`; forbidden otherwise. See [vehicles](vehicles.md). |
 | `abilities` | List of abilities, such as `[Jetpack(...), Dig(...)]` | Optional, `Player` only. Each ability at most once, and never both `Jump` and `Jetpack`. A variant replaces the whole list. |
 | `attack` | `(damage: integer, reach: number, windup: integer, cooldown: integer, knockback: number)` | Optional, `FollowRoute` only. How the character hits players in passing. |
@@ -73,7 +73,7 @@ The `view` section has three fields, each required or forbidden by role:
 
 | `view` field | Shape | Rule |
 | --- | --- | --- |
-| `skin` | Skin ID string, such as `"ghoul"` | Required for `FollowRoute` and `Hauler`; forbidden for `Player`, which its `actor` draws. Every scene that spawns the character must have a style with that skin. |
+| `skin` | Skin ID string, such as `"ghoul"` | Required for every brain but `Player`; forbidden for `Player`, which its `actor` draws. Every scene that spawns the character must have a style with that skin. |
 | `actor` | Actor name string, such as `"exosuit"` | Required for `Player`; forbidden otherwise. Names the articulated body the player is built from, a file in `kestrel/app/actors/`. |
 | `motion` | `(motion_style: Natural, arm_swing: 0.43, ...)` | Optional, `Player` only. Tunes how the rig poses; omitted fields keep their defaults. |
 
@@ -127,6 +127,23 @@ A hauler uses `Hauler` and `carry`, without an `avatar` or `health` section:
 
 This is the `worker` definition. The scenario separately chooses each worker's position, cargo capacity, links, and equipment. The `runner` variant inherits `worker` and changes its walk speed; the `ox` is another hauler kind.
 
+A sprite uses `Sprite`, with only a body and movement: it carries nothing and can't be hurt, so `carry`, `health` and `avatar` are forbidden:
+
+```ron
+(
+    sim: (
+        brain: Sprite,
+        body: (radius: 0.22),
+        movement: (walk: 1.6),
+    ),
+    view: (skin: "worker"),
+)
+```
+
+This is the `sprite` definition, the Sacred Tree's workers. A sprite staffs a building of the job it is given; the job and the plan to reach a free building are code ([the Sacred Tree design](../SACRED_TREE_HANDOFF.md), D2). A scenario places sprites in its own `sprites` list, by id, label, character and position, since they have none of a hauler's cargo, links or equipment. It draws with the worker skin until sprites have their own.
+
+The Sacred Tree's player is `elder`: it inherits `exosuit` and writes `abilities: []`, so it walks and carries but neither flies nor digs.
+
 ## Variants reuse a definition
 
 `ghoul_brute.ron` starts with `ghoul` and overrides only movement speed, hit points, and armor:
@@ -151,6 +168,7 @@ It inherits `FollowRoute`, `body.radius`, and `health.breach_damage`, and draws 
 | Player avatar | The scene's `player`, such as `exosuit` | The character's `view.actor` builds the body, the scene's style may re-dress its joints, and `view.motion` tunes its pose. |
 | Wave enemy | A kind such as `ghoul_forest` | The character's `view.skin`, from the scene's style. |
 | Hauler | A kind such as `worker`, `runner`, or `ox` | The character's `view.skin`, from the scene's style. |
+| Sprite | `sprite`, placed by a scenario's `sprites` list | The character's `view.skin`, from the scene's style. |
 | Vehicle | A kind such as `rover`, parked by a scene's `vehicles` list | Drawn by the app's built-in rover mesh for now; `view.skin` names its future style skin. |
 | Defender, machine, cart, item | No character definition | The scenario names a skin directly. |
 

@@ -1,0 +1,10 @@
+// A forest sprite that staffs a building of its job. It carries nothing and
+// can't be hurt. Drawn by the worker skin until it has its own.
+(
+    sim: (
+        brain: Sprite,
+        body: (radius: 0.22),
+        movement: (walk: 1.6),
+    ),
+    view: (skin: "worker"),
+)

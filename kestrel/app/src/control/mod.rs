@@ -142,6 +142,12 @@ enum Pending {
     Scene(usize),
     Wait(u64),
     Strike,
+    /// Waits until the player sits in `building`, or in none. `sent` is
+    /// false while it walks there first: the boarding goes out on arrival.
+    Seat { building: Option<u16>, sent: std::sync::atomic::AtomicBool },
+    /// Waits until the Burst sent restarts the player's cooldown, which
+    /// stood at `ready` before.
+    Burst { ready: u64 },
     Failed(String),
 }
 struct Active {
@@ -302,6 +308,134 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             let expected = crate::settlement::player_transfer(world, depot, item, *units, *deposit)?;
             Ok(Pending::SettlementTransfer { scene: shown(world).unwrap_or(usize::MAX), expected })
         }
+        Command::SettlementPickUp { building } => {
+            let other = sim::settlement::InventoryRef::Output(*building);
+            if settlement(world)?.buildings.len() <= *building as usize {
+                return Err("unknown building".into());
+            }
+            let expected = crate::settlement::player_bundle(world, other, sim::settlement::Direction::Pickup)?;
+            Ok(Pending::SettlementTransfer { scene: shown(world).unwrap_or(usize::MAX), expected })
+        }
+        Command::SettlementDeposit { depot } | Command::SettlementWithdraw { depot } => {
+            let other = sim::settlement::InventoryRef::Depot(settlement(world)?.depot_index(depot).ok_or("unknown depot")?);
+            let direction = if matches!(command, Command::SettlementDeposit { .. }) { sim::settlement::Direction::Deposit } else { sim::settlement::Direction::Pickup };
+            let expected = crate::settlement::player_bundle(world, other, direction)?;
+            Ok(Pending::SettlementTransfer { scene: shown(world).unwrap_or(usize::MAX), expected })
+        }
+        Command::SettlementInteractTarget { prompt } => {
+            settlement(world)?;
+            let shown = crate::input::town::target(world).map(|h| h.prompt).unwrap_or_default();
+            match prompt {
+                Some(p) if *p != shown => Err(format!("The interact target says {shown:?}, not {p:?}")),
+                _ => Ok(Pending::Instant),
+            }
+        }
+        Command::SettlementInteract => {
+            settlement(world)?;
+            match crate::input::town::interact(world)? {
+                crate::input::town::Used::Bundle { expected } => Ok(Pending::SettlementTransfer { scene: shown(world).unwrap_or(usize::MAX), expected }),
+                crate::input::town::Used::Menu => Ok(Pending::Instant),
+                crate::input::town::Used::Install | crate::input::town::Used::Placed | crate::input::town::Used::Seat => Ok(Pending::Applied),
+            }
+        }
+        Command::SettlementBuild { kind } => {
+            let s = settlement(world)?;
+            if s.building_kinds.is_empty() {
+                return Err("Nothing to build here".into());
+            }
+            let Some(id) = kind else {
+                crate::input::town::open_build_menu(world)?;
+                return Ok(Pending::Instant);
+            };
+            let kind = s.building_kinds.iter().position(|k| k.id == *id).ok_or("unknown building kind")? as u16;
+            let menu = world.resource::<crate::input::gameplay::Dispatcher>().town.build_menu.clone();
+            match menu {
+                Some(kinds) => crate::input::town::pick_build(world, kinds.iter().position(|&k| k == kind).ok_or("The build menu has no such building")?)?,
+                None => crate::input::town::start_placing(world, kind)?,
+            }
+            Ok(Pending::Instant)
+        }
+        Command::SettlementPlaceBlueprint { kind, position } => {
+            let Some(position) = position else {
+                crate::input::town::place(world)?;
+                return Ok(Pending::Applied);
+            };
+            let service = world.resource::<SessionService>();
+            let (s, sim_world) = (service.settlement().ok_or("No settlement loaded")?, service.world().ok_or("No settlement loaded")?);
+            let id = kind.as_deref().ok_or("A blueprint at a position needs its kind")?;
+            let kind = s.building_kinds.iter().position(|k| k.id == id).ok_or("unknown building kind")? as u16;
+            let position = service.to_sim(point(*position)?);
+            s.placement_check(kind, position, sim_world.terrain()).map_err(|r| r.message().to_string())?;
+            world.resource_mut::<SessionService>().command(sim::CommandKind::PlaceBlueprint { kind, position });
+            Ok(Pending::Applied)
+        }
+        Command::SettlementDrop => {
+            settlement(world)?;
+            let dropped = crate::input::town::drop_bundle(world)?;
+            Ok(Pending::SettlementTransfer { scene: shown(world).unwrap_or(usize::MAX), expected: dropped.expected })
+        }
+        Command::SettlementBoard { building } => {
+            let (s, sim_world) = {
+                let service = world.resource::<SessionService>();
+                (service.settlement().ok_or("No settlement loaded")?, service.world().ok_or("No settlement loaded")?)
+            };
+            let agent = player(world).ok_or("No controlled actor")?;
+            let b = s.buildings.get(*building as usize).ok_or("unknown building")?;
+            if !b.built() {
+                return Err("Not built yet".into());
+            }
+            let a = &s.agents[agent as usize];
+            if s.seat(agent as usize).is_some() {
+                return Err("Already seated".into());
+            }
+            if let Some(reason) = sim::settlement::interact::board_refusal(&a.carry, b.slot, agent) {
+                return Err(reason.message().into());
+            }
+            let spot = b.slot_position(s.building_kind(*building));
+            let walk = if a.body.position.distance(spot) > sim::settlement::interact::INTERACT_REACH {
+                let stand = s.leave_spot(*building, a.radius(), sim_world.terrain()).ok_or("No room beside the building")?;
+                Some(world.resource::<SessionService>().to_view(stand))
+            } else {
+                None
+            };
+            match walk {
+                Some(stand) => world.resource_scope(|world, mut control: Mut<PlayerControl>| {
+                    control.go_to(&mut world.resource_mut::<SessionService>(), stand, false);
+                }),
+                None => send(world, CommandKind::Interact { agent, target: sim::settlement::InteractTarget::Slot(*building) }),
+            }
+            Ok(Pending::Seat { building: Some(*building), sent: std::sync::atomic::AtomicBool::new(walk.is_none()) })
+        }
+        Command::SettlementBurst => {
+            let s = settlement(world)?;
+            let agent = player(world).ok_or("No controlled actor")?;
+            let ready = s.agents[agent as usize].avatar().map_or(0, |a| a.burst_ready);
+            crate::input::town::burst(world)?;
+            Ok(Pending::Burst { ready })
+        }
+        Command::SettlementLeave => {
+            let s = settlement(world)?;
+            let agent = player(world).ok_or("No controlled actor")?;
+            let Some(building) = s.seat(agent as usize).and_then(|seat| seat.building()) else { return Err("Not in a building".into()) };
+            send(world, CommandKind::Interact { agent, target: sim::settlement::InteractTarget::Slot(building) });
+            Ok(Pending::Seat { building: None, sent: std::sync::atomic::AtomicBool::new(true) })
+        }
+        Command::SettlementCancelBuild => {
+            settlement(world)?;
+            crate::input::town::cancel_build(world);
+            Ok(Pending::Instant)
+        }
+        Command::SettlementJobMenu { job } => {
+            let s = settlement(world)?;
+            let wanted = match job {
+                Some(kind) => sim::settlement::SpriteJob::Staff(s.building_kinds.iter().position(|k| k.id == *kind).ok_or("unknown building kind")? as u16),
+                None => sim::settlement::SpriteJob::Idle,
+            };
+            let menu = world.resource::<crate::input::gameplay::Dispatcher>().town.menu.as_ref().ok_or("No job menu open")?;
+            let index = menu.jobs.iter().position(|&j| j == wanted).ok_or("The job menu has no such job")?;
+            crate::input::town::pick(world, index)?;
+            Ok(Pending::Applied)
+        }
         Command::SettlementCancel => {
             settlement(world)?;
             let agent = player(world).ok_or("No controlled actor")?;
@@ -330,6 +464,19 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
         Command::SettlementLink { id, enabled } => {
             let link = settlement(world)?.link_index(id).ok_or("unknown haul link")?;
             send(world, CommandKind::SetLink { link, enabled: *enabled });
+            Ok(Pending::Instant)
+        }
+        Command::SettlementSpriteJob { sprite, job } => {
+            let s = settlement(world)?;
+            let agent = s.agent_index(sprite).filter(|&a| s.agents[a as usize].sprite().is_some()).ok_or("unknown sprite")?;
+            let job = match job {
+                Some(kind) => {
+                    let kind = s.building_kinds.iter().position(|k| k.id == *kind).ok_or("unknown building kind")?;
+                    sim::settlement::SpriteJob::Staff(kind as u16)
+                }
+                None => sim::settlement::SpriteJob::Idle,
+            };
+            send(world, CommandKind::SetSpriteJob { agent, job });
             Ok(Pending::Instant)
         }
         Command::SettlementMachine { id, enabled } => {
@@ -585,6 +732,56 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
             }
         }
         Pending::Failed(e) => Some(Err(e.clone())),
+        Pending::Seat { building, sent } => {
+            if !applied {
+                return None;
+            }
+            let service = world.get_resource::<SessionService>()?;
+            let (s, agent) = (service.settlement()?, service.player()?);
+            let seat = s.seat(agent as usize).and_then(|seat| seat.building());
+            if seat == *building {
+                return Some(Ok(()));
+            }
+            // The sim's refusal, as the view shows it.
+            let refused = s.events.iter().find_map(|e| match *e {
+                sim::settlement::Event::BundleRefused { agent: a, reason } if a == agent => Some(reason.message().to_string()),
+                _ => None,
+            });
+            if let Some(reason) = refused {
+                return Some(Err(reason));
+            }
+            if sent.load(std::sync::atomic::Ordering::Relaxed) {
+                return Some(Err(if building.is_some() { "The elder didn't board".into() } else { "The elder couldn't leave".into() }));
+            }
+            let a = &s.agents[agent as usize];
+            if !a.body.route.is_empty() {
+                return None;
+            }
+            let b = building.expect("only boarding walks");
+            let spot = s.buildings[b as usize].slot_position(s.building_kind(b));
+            if a.body.position.distance(spot) > sim::settlement::interact::INTERACT_REACH {
+                return Some(Err("Couldn't walk to the building".into()));
+            }
+            sent.store(true, std::sync::atomic::Ordering::Relaxed);
+            send(world, CommandKind::Interact { agent, target: sim::settlement::InteractTarget::Slot(b) });
+            None
+        }
+        Pending::Burst { ready } => {
+            if !applied {
+                return None;
+            }
+            let service = world.get_resource::<SessionService>()?;
+            let (s, agent) = (service.settlement()?, service.player()?);
+            if s.agents[agent as usize].avatar().is_some_and(|a| a.burst_ready != *ready) {
+                return Some(Ok(()));
+            }
+            // The sim's refusal, as the view shows it.
+            let refused = s.events.iter().find_map(|e| match *e {
+                sim::settlement::Event::BurstRefused { agent: a, reason } if a == agent => Some(reason.message()),
+                _ => None,
+            });
+            Some(Err(refused.unwrap_or_else(|| "The Burst didn't go off".into())))
+        }
         Pending::Wait(until) => (tick >= *until).then_some(Ok(())),
         Pending::Scene(index) => (shown(world) == Some(*index) && applied_scene(world, *index)).then_some(Ok(())),
         Pending::Strike => (applied && world.resource::<Controls>().attack.is_none()).then_some(Ok(())),

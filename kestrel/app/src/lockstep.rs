@@ -1024,11 +1024,11 @@ pub fn follow_avatar(
         }
         controls.velocity = predicted_velocity;
     }
-    // Sitting in a vehicle, the avatar rides rather than walks.
-    if to_avatar.driving.is_some() {
+    // Sitting in a vehicle or a building, the avatar rides rather than walks.
+    let riding = to_avatar.seat.is_some();
+    if riding {
         controls.velocity = Vec3::ZERO;
     }
-    let riding = to_avatar.driving.is_some();
     let moved = if teleport || riding { Vec3::ZERO } else { crate::navigation::flat(position - previous) };
     let relative_speed = controls.velocity.length() / motion.walk_speed.max(0.1);
     let step_distance = crate::character::step_distance_for_speed(motion.step_distance, relative_speed).clamp(0.2, 4.0);

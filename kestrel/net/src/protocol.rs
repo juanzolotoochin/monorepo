@@ -15,7 +15,17 @@ const MAGIC: &[u8; 4] = b"LSTP";
 /// 4: adds `CommandKind::Leave`, and saves (format 12) count abandoned units.
 /// 5: adds `PileAction::DropMineral` to `CommandKind::Pile`; peers on 4
 ///    cannot decode it.
-pub const PROTOCOL_VERSION: u16 = 5;
+/// 6: adds `CommandKind::SetSpriteJob`; peers on 5 cannot decode it.
+/// 7: adds `CommandKind::Bundle`; peers on 6 cannot decode it.
+/// 8: adds `CommandKind::Interact`; peers on 7 cannot decode it.
+/// 9: adds `CommandKind::PlaceBlueprint` and `InteractTarget::Site`; peers
+///    on 8 cannot decode them.
+/// 10: adds `CommandKind::Drop` and `InteractTarget::Pile`; peers on 9
+///     cannot decode them.
+/// 11: adds `InteractTarget::Slot` (boarding a building); peers on 10
+///     cannot decode it.
+/// 12: adds `CommandKind::Burst`; peers on 11 cannot decode it.
+pub const PROTOCOL_VERSION: u16 = 12;
 /// Stay under typical path MTUs (and Steam's unreliable message limit).
 pub const MAX_PACKET: usize = 1200;
 pub const SAVE_CHUNK: usize = 1000;

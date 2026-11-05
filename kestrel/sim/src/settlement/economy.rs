@@ -19,7 +19,7 @@ impl Settlement {
         self.threats_self_update(tick, terrain);
         let footprints: Vec<_> = self.agents.iter().map(footprint).collect();
         let items = self.depot_items();
-        let Settlement { agents, characters, dock_owner, depots, links, piles, transfers, weapons, spawn, spawn_height, piano_serial, vehicles, .. } = self;
+        let Settlement { agents, characters, dock_owner, depots, links, piles, transfers, weapons, spawn, spawn_height, piano_serial, vehicles, buildings, building_kinds, .. } = self;
         let view = View {
             me: 0,
             tick,
@@ -34,6 +34,8 @@ impl Settlement {
             piano_serial: *piano_serial,
             vehicles,
             characters,
+            buildings,
+            building_kinds,
         };
         let ctx = Ctx { tick, characters, terrain, piles: piles.as_ref(), footprints: &footprints, dock_owner, depots, links, transfers, view };
         agents.par_iter_mut().enumerate().for_each(|(i, a)| haulers::self_update(a, i as AgentIx, &ctx));
@@ -51,6 +53,7 @@ impl Settlement {
             .map(|(i, a)| {
                 let mut out = Messages::default();
                 haulers::read(a, i as AgentIx, tick, self, terrain, &mut out);
+                super::sprites::read(a, i as AgentIx, self, &mut out);
                 (a.body.position, out)
             })
             .collect();
@@ -58,11 +61,13 @@ impl Settlement {
         result
     }
 
-    /// The start of stage 5: units land, sources produce, recipes run.
+    /// The start of stage 5: units land, sources produce, recipes run,
+    /// occupied buildings work.
     pub(crate) fn economy(&mut self, tick: u64) {
         self.arrivals(tick);
         self.sources(tick);
         self.production();
+        self.building_production();
     }
 
     fn arrivals(&mut self, tick: u64) {
@@ -93,6 +98,9 @@ impl Settlement {
             // A pile haul's unit; its pile stays until nothing flies to
             // or from it (`PileLab::prune`).
             InventoryRef::Pile(_) | InventoryRef::Collector => self.inventory_mut(t.to).put(t.item, 1),
+            // Nothing sends units to an output yet; this keeps `land` whole.
+            // A delivery lands in a site's materials.
+            InventoryRef::Output(_) | InventoryRef::Site(_) => self.inventory_mut(t.to).put(t.item, 1),
         }
     }
 

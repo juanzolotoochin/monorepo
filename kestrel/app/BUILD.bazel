@@ -44,6 +44,7 @@ rust_binary(
         "//kestrel/app/assets:mining_deck",
         "//kestrel/app/assets:moonlit_glade",
         "//kestrel/app/assets:pile_lab",
+        "//kestrel/app/assets:sacred_tree",
         "//kestrel/app/assets:surprise_lab",
         "//kestrel/content",
         "//kestrel/debug_ui",
@@ -269,6 +270,13 @@ game_simulation_test(
     assertions = "demos/forest_motion.assertions.json",
     game = ":demo",
     script = "demos/forest_outpost.json",
+)
+
+game_demo(
+    name = "sacred_tree_demo",
+    game = ":demo",
+    script = "demos/sacred_tree.json",
+    tags = ["manual"],
 )
 
 game_demo(

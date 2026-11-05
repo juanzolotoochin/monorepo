@@ -6,6 +6,7 @@ exports_files(
         "levels/combat_arena_supply.ron",
         "levels/laser_pit_supply.ron",
         "levels/forest_supply.ron",
+        "levels/sacred_tree_supply.ron",
     ],
     visibility = ["//kestrel:__subpackages__"],
 )
@@ -148,6 +149,15 @@ scene_assets(
     prefabs = [],
     scenario = "levels/combat_arena_supply.ron",
     style = "styles/combat.ron",
+)
+
+# The Sacred Tree town MVP (kestrel/SACRED_TREE_HANDOFF.md).
+scene_assets(
+    name = "sacred_tree",
+    layout = "levels/sacred_tree.ron",
+    prefabs = [],
+    scenario = "levels/sacred_tree_supply.ron",
+    style = "styles/forest.ron",
 )
 
 boulder_prefab(

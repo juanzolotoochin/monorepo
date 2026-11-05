@@ -245,6 +245,23 @@ pub enum Event {
     /// (`killed` if that was the last) and pushed the player; a miss (`hit`
     /// false, `damage` 0) means the player got out of reach or was dead.
     ThreatSwing { threat: u64, agent: AgentIx, hit: bool, damage: u32, killed: bool },
+    /// A building put a unit in its output.
+    BuildingProduced { building: super::BuildingIx },
+    /// Player `agent`'s bundle action didn't start, for `reason`
+    /// (`BundleRefusal::message` says it in words).
+    BundleRefused { agent: AgentIx, reason: super::avatar::BundleRefusal },
+    /// A blueprint became a site, the last building in the table.
+    BlueprintPlaced { building: super::BuildingIx },
+    /// A blueprint of `kind` couldn't go down, for `reason`.
+    BlueprintRefused { kind: super::BuildingKindIx, reason: super::buildings::PlacementRefusal },
+    /// A site's part `part` went in; `built` when it was the last.
+    PartInstalled { building: super::BuildingIx, part: u8, built: bool },
+    /// An elder's Burst put `units` in the output of the building it
+    /// possesses, at once.
+    BuildingBurst { building: super::BuildingIx, units: u32 },
+    /// Player `agent`'s Burst didn't happen, for `reason`
+    /// (`BurstRefusal::message` says it in words).
+    BurstRefused { agent: AgentIx, reason: super::buildings::BurstRefusal },
 }
 
 /// What a strike reaches (`Settlement::strike_targets`), as its `Strike`

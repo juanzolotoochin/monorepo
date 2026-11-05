@@ -151,7 +151,7 @@ fn draw(
         spawn(&mut commands, parts, index, t.wheelbase.to_f32(), t.track.to_f32());
     }
     // The vehicle the local player is drawn sitting in, if any.
-    let mine = drawn.0.as_ref().and_then(|d| d.avatar().driving).map(usize::from);
+    let mine = drawn.0.as_ref().and_then(|d| d.avatar().seat).and_then(sim::settlement::Seat::vehicle).map(usize::from);
     let dt = time.delta_secs();
     for (entity, mut rover) in &mut rovers {
         let Some(v) = current.vehicles.get(rover.index) else { continue };

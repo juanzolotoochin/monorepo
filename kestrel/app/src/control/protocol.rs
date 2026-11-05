@@ -40,6 +40,82 @@ pub enum Command {
         item: String,
         units: u32,
     },
+    /// Gives a sprite (by id) a job: a building kind (by id) to staff, or
+    /// idle when `job` is missing or null.
+    SettlementSpriteJob {
+        sprite: String,
+        #[serde(default)]
+        job: Option<String>,
+    },
+    /// The player tops up their bundle from building `building`'s output
+    /// (its index), as many units as fit, walking there first.
+    SettlementPickUp {
+        building: u16,
+    },
+    /// The player empties their bundle into a depot (by id), walking there.
+    SettlementDeposit {
+        depot: String,
+    },
+    /// The player fills their bundle from a depot (by id), walking there.
+    SettlementWithdraw {
+        depot: String,
+    },
+    /// Reports the player's interact target in the receipt's state
+    /// (`settlement.interact`); with `prompt`, fails unless the target's
+    /// prompt is that ("PICK UP 3 WOOD"), or there is none and it is empty.
+    SettlementInteractTarget {
+        #[serde(default)]
+        prompt: Option<String>,
+    },
+    /// Interacts as E or A does, on the same target: a bundle target's units
+    /// move (the elder steps in to it), and a sprite opens its job menu.
+    SettlementInteract,
+    /// Picks the open job menu's option for `job` (a building kind's id, or
+    /// idle when missing), as the menu's own pick does.
+    SettlementJobMenu {
+        #[serde(default)]
+        job: Option<String>,
+    },
+    /// The town's build key: with no `kind`, opens the build menu as B or X
+    /// does; with a building kind's id, picks it from the open build menu
+    /// (or, with none open, starts placing it). Its ghost then follows the
+    /// player, and the receipt's `settlement.interact.ghost` says where it
+    /// stands and whether it may go down there (`reason` if not).
+    SettlementBuild {
+        #[serde(default)]
+        kind: Option<String>,
+    },
+    /// Puts a blueprint down. With `position` (arena x and z), a blueprint
+    /// of `kind` there; without, the ghost being placed, as interact does.
+    /// Fails with the sim's reason when it can't go down, such as "BLOCKED".
+    SettlementPlaceBlueprint {
+        #[serde(default)]
+        kind: Option<String>,
+        #[serde(default)]
+        position: Option<[f32; 2]>,
+    },
+    /// Backs out of placing a blueprint, as Escape does.
+    SettlementCancelBuild,
+    /// Possesses building `building` (its index), as interacting with its
+    /// slot or the boarding key does: walks the elder beside it first when
+    /// it is out of reach, then boards, putting out a sprite inside. Fails
+    /// with the sim's reason ("Drop the bundle first (Q)"); done once the
+    /// elder sits in it (`settlement.seat`).
+    SettlementBoard {
+        building: u16,
+    },
+    /// Leaves the building the elder possesses, as interacting or the
+    /// boarding key does; done once it stands beside it.
+    SettlementLeave,
+    /// Drops the bundle on the ground at the player's feet, as Q or B does:
+    /// onto a pile of its item there, or a new one. Fails with the sim's
+    /// reason, such as "Nothing carried"; done once every unit has landed.
+    SettlementDrop,
+    /// Bursts the building the elder possesses, as R or RT does there: its
+    /// Burst units go into the output at once. Fails with the sim's reason
+    /// ("Burst ready in 12 s", "Output full", "Possess a building to
+    /// Burst"); done once the units are in (`settlement.burst`).
+    SettlementBurst,
     AssertSettlement {
         delivered: u64,
         cycles: u64,
