@@ -812,6 +812,23 @@ mod tests {
             for config in world.query_filtered::<&bevy::light::CascadeShadowConfig, With<DirectionalLight>>().iter(world) {
                 assert_eq!(config.bounds.len(), 3);
             }
+            // The night's lights: the tree's glow and the lanterns, lit by
+            // the hour (dimming after dawn); the deck's accent lights off.
+            let glow = crate::daylight::glow_at(&pack, time);
+            assert!(glow > 0.0 && glow <= voxel_assets::day_cycle::DAWN_GLOW, "{glow}");
+            let lights: Vec<(f32, f32)> = world
+                .query::<(&crate::daylight::NightLight, &PointLight)>()
+                .iter(world)
+                .map(|(n, p)| (n.full, p.intensity))
+                .collect();
+            assert_eq!(lights.len(), 1 + pack.scene.lanterns.len());
+            assert!(pack.scene.lanterns.len() >= 6 && pack.scene.glow.is_some());
+            for (full, intensity) in lights {
+                assert!((intensity - full * glow).abs() <= full * 1e-4, "{intensity} vs {full} * {glow}");
+            }
+            for (_, light) in world.query::<(&AccentLight, &PointLight)>().iter(world) {
+                assert_eq!(light.intensity, 0.0);
+            }
             // Frames on, the light follows the clock.
             for _ in 0..5 {
                 app.update();
@@ -834,6 +851,8 @@ mod tests {
             assert_eq!(transform, crate::daylight::fixed_transform());
             assert_eq!(sky(world), color(voxel_assets::StyleProfile::default().background));
             assert_eq!(world.resource::<GlobalAmbientLight>().brightness, 180.0);
+            assert_eq!(world.query::<&crate::daylight::NightLight>().iter(world).count(), 0);
+            assert!(world.query::<(&AccentLight, &PointLight)>().iter(world).all(|(a, l)| l.intensity == a.intensity));
             for config in world.query_filtered::<&bevy::light::CascadeShadowConfig, With<DirectionalLight>>().iter(world) {
                 assert_eq!(config.bounds, bevy::light::CascadeShadowConfig::default().bounds);
             }

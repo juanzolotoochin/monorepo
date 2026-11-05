@@ -68,6 +68,7 @@ impl Service for SceneView {
         }) {
             world.resource_mut::<crate::gameplay::Controls>().weapon = weapon;
         }
+        crate::daylight::spawn_night_lights(world, &pack);
         crate::style::apply(world, &pack, false);
         crate::piano::spawn(world, &pack.scene);
         // The built-in deck shows only where the scene brings no ground of
