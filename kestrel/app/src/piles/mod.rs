@@ -200,13 +200,15 @@ pub fn mirror(service: Res<SessionService>, mirror: Res<WorldMirror>, mut lab: R
     };
     let local = |p: fx::FxVec2| [(p.x - mirror.center.x).to_f32(), (p.y - mirror.center.y).to_f32()];
     let ground = |p: fx::FxVec2| service.world().map_or(0.0, |w| w.terrain().height(p).to_f32());
+    // In a volume scene a pile lies on its own floor (V.7).
+    let volume = service.world().is_some_and(|w| w.terrain().volume.is_some());
     let piles = sim
         .piles
         .iter()
         .map(|(&id, p)| {
             // Only a pile set up with no units has no mineral.
             let material = mineral(sim.pile_mineral(p).unwrap_or_default());
-            let pile = Pile { material, position: local(p.position), units: p.units(), source: p.source.is_some(), height: ground(p.position) };
+            let pile = Pile { material, position: local(p.position), units: p.units(), source: p.source.is_some(), height: if volume { p.height.to_f32() } else { ground(p.position) } };
             (id, pile)
         })
         .collect();

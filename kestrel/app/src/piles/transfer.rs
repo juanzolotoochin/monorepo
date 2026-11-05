@@ -60,13 +60,22 @@ pub fn spawn_tosses(
             continue;
         };
         let ground = |p: fx::FxVec2| mirror.to_view(p).with_y(service.world().map_or(0.0, |w| w.terrain().height(p).to_f32()));
+        // In a volume scene a pile lies on its own floor (`Pile::height`,
+        // V.7), and ore dug out flies from that floor too.
+        let volume = service.world().is_some_and(|w| w.terrain().volume.is_some());
+        let floor = |id: u32| volume.then(|| service.settlement()?.piles.as_ref()?.piles.get(&id).map(|p| p.height.to_f32())).flatten();
+        let pile_ground = |id: u32, p: fx::FxVec2| floor(id).map_or_else(|| ground(p), |h| mirror.to_view(p).with_y(h));
+        let dug_floor = match *to {
+            TossEnd::Pile { id, .. } => floor(id),
+            _ => None,
+        };
         let start = match *from {
-            TossEnd::Pile { slot, position, .. } => ground(position) + Vec3::from_array(unit_positions()[slot as usize]),
+            TossEnd::Pile { id, slot, position } => pile_ground(id, position) + Vec3::from_array(unit_positions()[slot as usize]),
             TossEnd::Cargo { agent, slot } => {
                 let Some(body) = body(agent) else { continue };
                 body.transform_point(backpack_slot(slot))
             }
-            TossEnd::Pit { position } => ground(position) + Vec3::Y * 0.2,
+            TossEnd::Pit { position } => dug_floor.map_or_else(|| ground(position), |h| mirror.to_view(position).with_y(h)) + Vec3::Y * 0.2,
             TossEnd::Collector { position } => ground(position) + Vec3::Y * 1.6,
         };
         let destination = match *to {

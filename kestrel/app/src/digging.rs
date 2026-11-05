@@ -31,7 +31,7 @@ use crate::lockstep::{SessionService, WorldMirror};
 use service::{AppServices, Phase, Service, WorldLayer, WorldScoped, WorldState};
 
 /// Tiles per chunk side.
-const CHUNK: i32 = 16;
+pub(crate) const CHUNK: i32 = 16;
 /// The arena's outer walls go down to here.
 const BOTTOM: f32 = -3.0;
 /// Dust flies off every this many ticks of a dig.
@@ -65,10 +65,16 @@ fn arena_tile(center: FxVec2, tile: (i32, i32)) -> IVec2 {
 
 /// The dug ground of a digging scene (World layer): built when the world
 /// starts, its chunks rebuilt as pits change.
-#[derive(Resource)]
+#[derive(Resource, Default)]
 pub struct Digging {
     /// The pits the drawn ground shows.
     pits: Vec<((i32, i32), u8)>,
+    /// In a volume scene, the volume the drawn ground shows, and the
+    /// terrain revision it was read at (a volume dig bumps it).
+    volume: Option<sim::volume::Volume>,
+    revision: u64,
+    /// Where cells came out since `feedback` last looked: a burst each.
+    cleared: Vec<Vec3>,
 }
 
 impl Service for Digging {
@@ -77,14 +83,14 @@ impl Service for Digging {
 
     fn init(world: &mut World) -> Self {
         if !world.resource::<SceneView>().has_feature(SceneFeature::Digging) {
-            return Digging { pits: Vec::new() };
+            return Digging::default();
         }
         let center = center_tile(world.resource::<WorldMirror>().center);
         let terrain = world.resource::<SessionService>().world().map(|w| w.terrain().clone());
-        let Some(terrain) = terrain else { return Digging { pits: Vec::new() } };
-        let pits = terrain.pits.clone();
+        let Some(terrain) = terrain else { return Digging::default() };
+        let digging = Digging { pits: terrain.pits.clone(), volume: terrain.volume.clone(), revision: terrain.revision, cleared: Vec::new() };
         world.run_system_cached_with(build_ground, (terrain, center)).expect("building the dug ground");
-        Digging { pits }
+        digging
     }
 
     fn systems(app: &mut App) {
@@ -93,7 +99,7 @@ impl Service for Digging {
             .add_service_systems::<Self, _>(Phase::Mirror, (update, follow_camera).chain().run_if(active.clone()))
             .add_systems(
                 PostUpdate,
-                (feedback, toss_stone, fly_stones).after(bevy::transform::TransformSystems::Propagate).run_if(crate::control::rendered).run_if(active),
+                (feedback, toss_stone, fly_stones, crate::cutaway::follow, crate::walker_view::draw).after(bevy::transform::TransformSystems::Propagate).run_if(crate::control::rendered).run_if(active),
             );
     }
 }
@@ -102,20 +108,43 @@ impl Service for Digging {
 #[derive(Resource)]
 struct GroundMaterial(Handle<StandardMaterial>);
 
+/// The ground's base material (a volume scene's cutaway extends it).
+fn ground_material() -> StandardMaterial {
+    StandardMaterial { base_color: Color::WHITE, perceptual_roughness: 0.93, ..default() }
+}
+
 fn build_ground(
     In((terrain, center)): In<(Terrain, IVec2)>,
     mut commands: Commands,
     ground: Option<Res<GroundMaterial>>,
+    cutaway: Option<Res<crate::cutaway::CutawayGround>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut cutaways: ResMut<Assets<crate::cutaway::CutawayMaterial>>,
 ) {
-    let material = match ground {
-        Some(ground) => ground.0.clone(),
-        None => {
-            let material = materials.add(StandardMaterial { base_color: Color::WHITE, perceptual_roughness: 0.93, ..default() });
-            commands.insert_resource(GroundMaterial(material.clone()));
-            material
-        }
+    // A volume scene's ground is cut away over the player (`cutaway`).
+    enum Ground {
+        Plain(Handle<StandardMaterial>),
+        Cutaway(Handle<crate::cutaway::CutawayMaterial>),
+    }
+    let material = if terrain.volume.is_some() {
+        Ground::Cutaway(match cutaway {
+            Some(cutaway) => cutaway.0.clone(),
+            None => {
+                let material = cutaways.add(crate::cutaway::material(ground_material()));
+                commands.insert_resource(crate::cutaway::CutawayGround(material.clone()));
+                material
+            }
+        })
+    } else {
+        Ground::Plain(match ground {
+            Some(ground) => ground.0.clone(),
+            None => {
+                let material = materials.add(ground_material());
+                commands.insert_resource(GroundMaterial(material.clone()));
+                material
+            }
+        })
     };
     let extent = terrain.extent.round().floor_to_int() as i32;
     let count = (2 * extent + 1 + CHUNK - 1) / CHUNK;
@@ -124,16 +153,22 @@ fn build_ground(
         for x in 0..count {
             let key = IVec2::new(x, y);
             let mesh = meshes.add(ground_mesh(&terrain, center, extent, key));
-            commands.spawn((GroundChunk(key), WorldScoped::default(), Mesh3d(mesh), MeshMaterial3d(material.clone()), Transform::default()));
+            let mut chunk = commands.spawn((GroundChunk(key), WorldScoped::default(), Mesh3d(mesh), Transform::default()));
+            match &material {
+                Ground::Plain(material) => chunk.insert(MeshMaterial3d(material.clone())),
+                Ground::Cutaway(material) => chunk.insert(MeshMaterial3d(material.clone())),
+            };
         }
     }
     info!("Built the dug ground: {} chunks in {:.1} ms", count * count, started.elapsed().as_secs_f64() * 1e3);
 }
 
-/// A chunk's ground: sloped in sloped scenes, the Dig Lab's flat tiles
-/// and walls elsewhere.
+/// A chunk's ground: a volume scene's cells (`volume_mesh`), sloped in
+/// sloped scenes, the Dig Lab's flat tiles and walls elsewhere.
 fn ground_mesh(terrain: &Terrain, center: IVec2, extent: i32, key: IVec2) -> Mesh {
-    if terrain.sloped {
+    if let Some(volume) = &terrain.volume {
+        crate::volume_mesh::chunk_mesh(volume, center, extent, key)
+    } else if terrain.sloped {
         sloped_chunk_mesh(terrain, center, extent, key)
     } else {
         chunk_mesh(terrain, center, extent, key)
@@ -155,7 +190,7 @@ fn redrawn(at: IVec2, sloped: bool) -> Vec<IVec2> {
 
 /// The chunks to rebuild for pits that changed at these arena tiles, in an
 /// arena of `extent` tiles round its center.
-fn dirty_chunks(changed: impl IntoIterator<Item = IVec2>, extent: i32, sloped: bool) -> BTreeSet<[i32; 2]> {
+pub(crate) fn dirty_chunks(changed: impl IntoIterator<Item = IVec2>, extent: i32, sloped: bool) -> BTreeSet<[i32; 2]> {
     changed
         .into_iter()
         .flat_map(|at| redrawn(at, sloped))
@@ -173,25 +208,63 @@ pub fn update(
     chunks: Query<(Entity, &GroundChunk)>,
 ) {
     let Some(terrain) = service.world().map(sim::World::terrain) else { return };
+    let center = center_tile(mirror.center);
+    let extent = terrain.extent.round().floor_to_int() as i32;
+    if let Some(volume) = &terrain.volume {
+        // A volume dig bumps the revision; the cells that changed (and the
+        // tiles their corner rule reaches) say which chunks to re-mesh.
+        if chunks.is_empty() || digging.revision == terrain.revision {
+            return;
+        }
+        digging.revision = terrain.revision;
+        let Some(before) = digging.volume.replace(volume.clone()) else { return };
+        let changed = crate::volume_mesh::changed_tiles(&before, volume, center, extent);
+        if changed.is_empty() {
+            return;
+        }
+        for &a in &changed {
+            let tile = ((a + center).x, (a + center).y);
+            if let Some(k) = crate::volume_mesh::lowest_cleared(&before, volume, tile) {
+                digging.cleared.push(Vec3::new(a.x as f32, sim::volume::height(k).to_f32(), a.y as f32));
+            }
+        }
+        let dirty = dirty_chunks(changed, extent, true);
+        let started = std::time::Instant::now();
+        let rebuilt = rebuild(&mut commands, &mut meshes, &chunks, &dirty, terrain, center, extent);
+        info!("Re-meshed {rebuilt} volume chunks in {:.2} ms", started.elapsed().as_secs_f64() * 1e3);
+        return;
+    }
     if chunks.is_empty() || digging.pits == terrain.pits {
         return;
     }
-    let center = center_tile(mirror.center);
-    let extent = terrain.extent.round().floor_to_int() as i32;
     // A pit changes its own tile's top and its neighbors' walls (`redrawn`).
     let changed = digging.pits.iter().chain(&terrain.pits).filter(|p| !(digging.pits.contains(p) && terrain.pits.contains(p)));
     let dirty = dirty_chunks(changed.map(|&(tile, _)| arena_tile(mirror.center, tile)), extent, terrain.sloped);
     digging.pits = terrain.pits.clone();
     let started = std::time::Instant::now();
+    let rebuilt = rebuild(&mut commands, &mut meshes, &chunks, &dirty, terrain, center, extent);
+    info!("Rebuilt {rebuilt} ground chunks in {:.2} ms", started.elapsed().as_secs_f64() * 1e3);
+}
+
+/// Rebuilds the `dirty` chunks' meshes; returns how many.
+fn rebuild(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    chunks: &Query<(Entity, &GroundChunk)>,
+    dirty: &BTreeSet<[i32; 2]>,
+    terrain: &Terrain,
+    center: IVec2,
+    extent: i32,
+) -> usize {
     let mut rebuilt = 0;
-    for (entity, chunk) in &chunks {
+    for (entity, chunk) in chunks {
         if dirty.contains(&chunk.0.to_array()) {
             let mesh = meshes.add(ground_mesh(terrain, center, extent, chunk.0));
             commands.entity(entity).insert(Mesh3d(mesh));
             rebuilt += 1;
         }
     }
-    info!("Rebuilt {rebuilt} ground chunks in {:.2} ms", started.elapsed().as_secs_f64() * 1e3);
+    rebuilt
 }
 
 /// The ground of one chunk: a top for every tile, and walls down to every
@@ -339,11 +412,11 @@ fn drawn(a: IVec2, height: impl Fn(IVec2) -> Option<f32>) -> Option<([f32; 4], b
 
 /// Each side of a tile: its direction, the tile's two corners on it, and
 /// the neighbour's same two corners.
-const SIDES: [(IVec2, [usize; 2], [usize; 2]); 4] =
+pub(crate) const SIDES: [(IVec2, [usize; 2], [usize; 2]); 4] =
     [(IVec2::X, [1, 3], [0, 2]), (IVec2::NEG_X, [0, 2], [1, 3]), (IVec2::Y, [2, 3], [0, 1]), (IVec2::NEG_Y, [0, 1], [2, 3])];
 
 /// Where a tile's corner `i` ([`corners`]' order) is, at height `y`.
-fn corner_at(a: IVec2, i: usize, y: f32) -> Vec3 {
+pub(crate) fn corner_at(a: IVec2, i: usize, y: f32) -> Vec3 {
     Vec3::new(a.x as f32 - 0.5 + (i & 1) as f32, y, a.y as f32 - 0.5 + (i >> 1) as f32)
 }
 
@@ -418,7 +491,7 @@ fn sloped_chunk_mesh(terrain: &Terrain, center: IVec2, extent: i32, key: IVec2) 
 }
 
 /// The part of a convex polygon between heights `lower` and `upper`.
-fn slab(polygon: &[Vec3], lower: f32, upper: f32) -> Vec<Vec3> {
+pub(crate) fn slab(polygon: &[Vec3], lower: f32, upper: f32) -> Vec<Vec3> {
     // Keeps the part where `inside` is at least zero.
     let clip = |points: Vec<Vec3>, inside: &dyn Fn(f32) -> f32| {
         let mut kept = Vec::with_capacity(points.len() + 2);
@@ -439,7 +512,7 @@ fn slab(polygon: &[Vec3], lower: f32, upper: f32) -> Vec<Vec3> {
 }
 
 /// Ground color by terrace height: dusty low ground, redder high up.
-fn surface(steps: u8) -> Vec3 {
+pub(crate) fn surface(steps: u8) -> Vec3 {
     let t = (steps as f32 / 12.0).min(1.0);
     Vec3::new(0.23, 0.18, 0.15).lerp(Vec3::new(0.38, 0.26, 0.19), t)
 }
@@ -454,7 +527,7 @@ fn layer(k: u8) -> Vec3 {
 }
 
 /// Below the diggable layers.
-const ROCK: Vec3 = Vec3::new(0.15, 0.14, 0.16);
+pub(crate) const ROCK: Vec3 = Vec3::new(0.15, 0.14, 0.16);
 
 /// [`layer`] in ground `layers` deep (a sloped scene's `max_layers`): as
 /// dark at the bottom however many layers there are.
@@ -480,24 +553,30 @@ fn tint(mine: &Mine, mineral: u8) -> Vec3 {
 }
 
 /// `color` tinted toward a mineral's color.
-fn mix(color: Vec3, tint: Option<Vec3>, amount: f32) -> Vec3 {
+pub(crate) fn mix(color: Vec3, tint: Option<Vec3>, amount: f32) -> Vec3 {
     match tint {
         Some(tint) => color.lerp(tint, amount),
         None => color,
     }
 }
 
+/// Builds a ground mesh of vertex-coloured faces. Each vertex's `UV_0.x`
+/// is 1 if it was pushed while `cut` was set (a volume's walls and
+/// ceilings, `volume_mesh`), else 0.
 #[derive(Default)]
-struct MeshBuilder {
+pub(crate) struct MeshBuilder {
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
     colors: Vec<[f32; 4]>,
+    uvs: Vec<[f32; 2]>,
     indices: Vec<u32>,
+    /// Marks the faces pushed next as cut faces.
+    pub(crate) cut: bool,
 }
 
 impl MeshBuilder {
     /// A flat quad facing `normal`, in sRGB `color`.
-    fn quad(&mut self, mut corners: [Vec3; 4], normal: Vec3, color: Vec3) {
+    pub(crate) fn quad(&mut self, mut corners: [Vec3; 4], normal: Vec3, color: Vec3) {
         if (corners[1] - corners[0]).cross(corners[2] - corners[0]).dot(normal) < 0.0 {
             corners.reverse();
         }
@@ -507,12 +586,13 @@ impl MeshBuilder {
             self.positions.push(corner.to_array());
             self.normals.push(normal.to_array());
             self.colors.push(linear);
+            self.uvs.push([self.cut as u8 as f32, 0.0]);
         }
         self.indices.extend([first, first + 1, first + 2, first, first + 2, first + 3]);
     }
 
     /// A triangle facing up, its corners in sRGB `colors`, lit flat.
-    fn triangle(&mut self, mut corners: [Vec3; 3], mut colors: [Vec3; 3]) {
+    pub(crate) fn triangle(&mut self, mut corners: [Vec3; 3], mut colors: [Vec3; 3]) {
         let mut normal = (corners[1] - corners[0]).cross(corners[2] - corners[0]);
         if normal.y < 0.0 {
             corners.swap(1, 2);
@@ -525,13 +605,14 @@ impl MeshBuilder {
             self.positions.push(corner.to_array());
             self.normals.push(normal.to_array());
             self.colors.push(Color::srgb(color.x, color.y, color.z).to_linear().to_f32_array());
+            self.uvs.push([self.cut as u8 as f32, 0.0]);
         }
         self.indices.extend([first, first + 1, first + 2]);
     }
 
     /// A flat convex polygon facing `normal`, in sRGB `color`; nothing if
     /// it has no area.
-    fn polygon(&mut self, points: &[Vec3], normal: Vec3, color: Vec3) {
+    pub(crate) fn polygon(&mut self, points: &[Vec3], normal: Vec3, color: Vec3) {
         let mut corners: Vec<Vec3> = Vec::with_capacity(points.len());
         for &p in points {
             if corners.last().is_none_or(|q| q.distance_squared(p) > 1e-8) {
@@ -557,14 +638,15 @@ impl MeshBuilder {
             self.positions.push(corner.to_array());
             self.normals.push(normal.to_array());
             self.colors.push(linear);
+            self.uvs.push([self.cut as u8 as f32, 0.0]);
         }
         for n in 1..corners.len() as u32 - 1 {
             self.indices.extend([first, first + n, first + n + 1]);
         }
     }
 
-    fn build(self) -> Mesh {
-        let uvs = vec![[0.0, 0.0]; self.positions.len()];
+    pub(crate) fn build(self) -> Mesh {
+        let uvs = self.uvs;
         Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
             .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.positions)
             .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals)
@@ -599,6 +681,9 @@ pub fn follow_camera(
 /// Where a ray (from the camera, through the cursor) meets the ground.
 pub fn ground_hit(ray: Ray3d, service: &SessionService) -> Option<Vec3> {
     let terrain = service.world()?.terrain();
+    if let Some(volume) = &terrain.volume {
+        return crate::volume_mesh::ray_hit(volume, ray, |p| service.to_sim(p));
+    }
     let height = |p: Vec3| terrain.height(service.to_sim(p)).to_f32();
     let plane = InfinitePlane3d::new(Vec3::Y);
     let (start, end) = (ray.intersect_plane(Vec3::Y * 6.0, plane)?, ray.intersect_plane(Vec3::Y * BOTTOM, plane)?);
@@ -654,7 +739,9 @@ pub fn shown_digs(mirror: &WorldMirror, drawn: Option<&crate::prediction::DrawnS
             .filter(|&(i, _)| Some(i as u16) != me || drawn.is_none())
             .filter_map(|(i, a)| {
                 let dig = a.digging()?.clone();
-                let height = a.avatar().map_or_else(|| terrain.map_or(0.0, |t| t.height(a.body.position).to_f32()), |avatar| avatar.height.to_f32());
+                // A sprite on a volume's floor digs at its feet (V.7).
+                let on_floor = terrain.is_some_and(|t| t.volume.is_some()).then(|| a.sprite().map(|s| s.height.to_f32())).flatten();
+                let height = a.avatar().map(|avatar| avatar.height.to_f32()).or(on_floor).unwrap_or_else(|| terrain.map_or(0.0, |t| t.height(a.body.position).to_f32()));
                 let at = mirror.to_view(a.body.position).with_y(height);
                 Some(ShownDig { agent: i as u16, dig, at, now, sprite: a.avatar().is_none() })
             })
@@ -679,7 +766,13 @@ pub fn feedback(
     mut fills: Query<(&ChildOf, &mut Node), With<DigFill>>,
     mut chips: Local<HashMap<u16, u64>>,
     mut pits: Local<Vec<((i32, i32), u8)>>,
+    mut digging: ResMut<Digging>,
 ) {
+    // A volume dig came out: a burst from each dug tile's new floor.
+    for (n, at) in digging.cleared.drain(..).enumerate() {
+        burst(&mut commands, &assets, at, n as u32 * 977 + at.x as i32 as u32);
+        sound.play(crate::sound::Cue::Stone);
+    }
     let terrain = service.world().map(sim::World::terrain);
     let digs = shown_digs(&mirror, drawn.0.as_ref(), player.translation(), terrain);
     let scale = player.compute_transform().scale.y;
@@ -841,7 +934,8 @@ pub fn fly_stones(
 }
 
 /// What the town's dig hint says when a dig in front is refused
-/// (`Settlement::dig_in_front_of`).
+/// (`Settlement::dig_in_front_of`), and a volume scene's notice
+/// (`Settlement::dig_volume_of`).
 pub fn refusal_text(refusal: DigRefusal) -> &'static str {
     match refusal {
         DigRefusal::Undiggable => "Can't dig here",
@@ -852,6 +946,7 @@ pub fn refusal_text(refusal: DigRefusal) -> &'static str {
         DigRefusal::Strands => "That would leave someone no way out",
         DigRefusal::Blocked => "Something stands there",
         DigRefusal::Pile => "A pile is in the way",
+        DigRefusal::Clear => "Nothing to dig there",
     }
 }
 

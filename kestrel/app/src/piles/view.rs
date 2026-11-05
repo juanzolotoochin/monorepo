@@ -166,6 +166,7 @@ pub(super) fn build(
         spawn_collector(&mut commands, &assets, Vec3::from_array(at));
     }
     let mine = layout.dispensers.is_empty();
+    let volume = scene.scene().volume.is_some();
     // An empty destination bay suggests a place to start; mineral can be dropped elsewhere too.
     if !mine {
         commands
@@ -207,7 +208,19 @@ pub(super) fn build(
             p.spawn(Node { column_gap: px(4.0), ..default() }).with_children(|row| {
                 for index in 0..layout.capacity { row.spawn((CapacityTick(index),Node { width: px(21.0), height: px(12.0), ..default() },BackgroundColor(Color::srgb(0.1,0.18,0.22)))); }
             });
-            let help = if mine {
+            let help = if volume {
+                // A volume scene digs in front (V.4): level, a step down or up.
+                "F: dig in front (2 s)
+Ctrl+F: dig a step down
+Alt+F: dig a step up
+Ore lands on a pile nearby
+LMB pile: walk over + collect
+Carrying? LMB collector: deliver
+SPACE: jetpack
+WASD: move / cancel hauling
+SHIFT: run
+One chunk = one unit"
+            } else if mine {
                 "F: dig the tile underfoot (2 s)\nOre flies out onto a pile beside the pit\nLMB pile: walk over + collect\nCarrying? LMB collector: deliver\nSPACE: fly out of a pit\nWASD: move / cancel hauling\nSHIFT: run\nOne chunk = one unit"
             } else {
                 "LMB dispenser: add 5 units\nLMB pile: walk over + collect\nCtrl+LMB pile: collect / top up\nCarrying? LMB ground / matching pile:\nwalk over + deposit\nWASD: move / cancel hauling\nSHIFT: run\nOne chunk = one unit"

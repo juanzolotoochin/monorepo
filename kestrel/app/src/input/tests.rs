@@ -349,6 +349,31 @@ fn keyboard_f_digs_in_a_town() {
     assert_eq!(rig.frame().gameplay.edges, vec![Edge::Utility(Utility::Dig)]);
 }
 
+/// In a volume scene (its utility panel offers DIG DOWN and DIG UP) F digs
+/// level, Ctrl+F a step down and Alt+F a step up; elsewhere Ctrl+F and
+/// Alt+F are a plain dig.
+#[test]
+fn ctrl_and_alt_f_dig_down_and_up_in_a_volume() {
+    for volume in [true, false] {
+        let mut rig = Rig::new();
+        let utility = if volume { vec![Utility::Dig, Utility::DigDown, Utility::DigUp, Utility::Respawn] } else { vec![Utility::Dig, Utility::Respawn] };
+        rig.input.set_scene(SceneContext { scenario: false, town: false, utility, recording: false });
+        let (down, up) = if volume { (Utility::DigDown, Utility::DigUp) } else { (Utility::Dig, Utility::Dig) };
+        for (modifier, expected) in [(None, Utility::Dig), (Some(KeyCode::ControlLeft), down), (Some(KeyCode::AltLeft), up), (Some(KeyCode::ControlRight), down), (Some(KeyCode::AltRight), up)] {
+            if let Some(key) = modifier {
+                rig.keys.press(key);
+            }
+            rig.keys.press(KeyCode::KeyF);
+            assert_eq!(rig.frame().gameplay.edges, vec![Edge::Utility(expected)], "volume {volume}, {modifier:?}");
+            rig.keys.release(KeyCode::KeyF);
+            if let Some(key) = modifier {
+                rig.keys.release(key);
+            }
+            rig.frame();
+        }
+    }
+}
+
 /// In a town, keyboard B and controller X build; while a blueprint is being
 /// placed, Escape and controller B back out of it (Escape doesn't pause).
 /// Elsewhere B is nothing and X still collects.

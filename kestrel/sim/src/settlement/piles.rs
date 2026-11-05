@@ -74,6 +74,11 @@ pub struct Pile {
     /// A dispenser's output pile, and the mineral it makes: it stays when
     /// empty, and only it can grow from nothing.
     pub source: Option<ItemIx>,
+    /// The floor it lies on in a volume scene (V.7): where a volume dig's
+    /// ore landed, or a bundle was dropped. Zero elsewhere, where piles lie
+    /// on `Terrain::ground`.
+    #[serde(default)]
+    pub height: Fx,
 }
 
 impl Pile {
@@ -336,7 +341,7 @@ impl PileLab {
         let mut inventory = Inventory::new(self.items, PILE_CAPACITY, Kinds::OneKind);
         let added = inventory.add(item, units);
         debug_assert!(added, "a new pile holds up to {PILE_CAPACITY} units");
-        self.piles.insert(id, Pile { position, inventory, source });
+        self.piles.insert(id, Pile { position, inventory, source, height: Fx::ZERO });
         id
     }
 
@@ -445,6 +450,16 @@ impl PileLab {
     /// the first unit lands in, or nothing if there is nowhere to put it
     /// (the ore stays buried).
     pub fn mined(&mut self, item: ItemIx, units: u32, tile: (i32, i32), terrain: &Terrain, targets: &[FxVec2]) -> Option<(PileId, u32)> {
+        self.mined_at(item, units, tile, None, terrain, targets)
+    }
+
+    /// [`PileLab::mined`], for a volume dig whose cleared cells start at
+    /// layer `floor` (`Some`, in a volume scene): a new pile goes on a tile
+    /// with a floor within a layer of it, and lies on that floor
+    /// (`Pile::height`), so ore dug in a tunnel lands in the tunnel, not on
+    /// the mountain over it.
+    pub fn mined_at(&mut self, item: ItemIx, units: u32, tile: (i32, i32), floor: Option<i32>, terrain: &Terrain, targets: &[FxVec2]) -> Option<(PileId, u32)> {
+        let volume = floor.zip(terrain.volume.as_ref());
         let pit = Terrain::pit_center(tile);
         let beside = self
             .piles
@@ -471,13 +486,21 @@ impl PileLab {
             let center = Terrain::pit_center(t);
             // Not on ground the dig made steep (beside a pit two layers
             // deep, in a sloped scene): no one could walk up to it.
-            terrain.pit(t) == 0
-                && !terrain.steep(t)
+            let ground = match volume {
+                Some((floor, volume)) => volume.floor_near(t, floor).is_some(),
+                None => terrain.pit(t) == 0 && !terrain.steep(t),
+            };
+            ground
                 && self.free_drop(terrain, center, units)
                 && targets.iter().all(|&p| nav::distance(p, center) > radius + DROP_CLEARANCE)
                 && self.piles.values().all(|p| nav::distance(p.position, center) > pile_radius(p.units()) + radius + Fx::from_ratio(1, 10))
         })?;
         let id = self.insert(item, Terrain::pit_center(spot), units, None);
+        if let Some((floor, volume)) = volume {
+            let center = Terrain::pit_center(spot);
+            let near = volume.floor_near(spot, floor).expect("picked by its floor");
+            self.piles.get_mut(&id).expect("just made").height = volume.floor(center, crate::volume::height(near)).unwrap_or_default();
+        }
         self.created += units as u64;
         Some((id, 0))
     }
@@ -1089,9 +1112,14 @@ impl Settlement {
                     continue;
                 }
             };
+            let feet = self.agents[agent as usize].avatar().map_or(Fx::ZERO, |a| a.height);
             let lab = self.piles.as_mut().expect("a drop plans only with piles");
             if let DropSpot::New(at) = spot {
                 let id = lab.insert(job.item, at, 0, None);
+                // In a volume, on the dropper's floor (V.7).
+                if terrain.volume.is_some() {
+                    lab.piles.get_mut(&id).expect("just made").height = terrain.footprint_near(at, feet, Fx::ZERO).unwrap_or(feet);
+                }
                 debug_assert_eq!(InventoryRef::Pile(id), job.other, "the plan named the new pile");
             }
             let held = job.reserve(lab.holder_mut(job.other), Side::Other);

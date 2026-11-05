@@ -27,6 +27,7 @@ mod soa;
 pub mod spatial;
 pub mod terrain;
 pub mod timer;
+pub mod volume;
 mod world;
 
 pub use hash::TickHash;
@@ -39,3 +40,5 @@ pub use world::{
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod volume_tests;

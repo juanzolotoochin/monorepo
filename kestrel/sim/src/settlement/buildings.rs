@@ -1031,7 +1031,7 @@ impl Settlement {
                     avatar.intent = Some(super::avatar::Intent::Stop);
                     if let Some(spot) = spot {
                         body.position = spot;
-                        if let Some(ground) = terrain.footprint(spot, radius) {
+                        if let Some(ground) = terrain.footprint_near(spot, avatar.height, radius) {
                             avatar.height = ground;
                             avatar.flight.support = ground;
                         }

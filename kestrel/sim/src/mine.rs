@@ -237,6 +237,13 @@ impl Mine {
     }
 }
 
+/// How many units digging out a volume's solid cell yields (V.4 of the
+/// verticality design): 3 to 6, as [`Mine::yield_of`] hashes them, from
+/// the cell alone (a volume has no seed: seed 0).
+pub fn cell_yield(tile: (i32, i32), layer: i32) -> u32 {
+    3 + hash(0, tile.0, tile.1, 90u32.wrapping_add(layer as u32)) % 4
+}
+
 /// Terrace steps at a tile: two octaves of hills, mesas a meter up, and the
 /// landing flat, a round clearing that ramps up a step every three tiles
 /// past its edge. With a hill, the hill instead, and the flat round its

@@ -23,6 +23,10 @@ impl Settlement {
         let dig_claims: Vec<((i32, i32), AgentIx)> = self.agents.iter().enumerate().filter_map(|(i, a)| Some((a.sprite()?.dig_claim?, i as AgentIx))).collect();
         let stone = self.stone_depot();
         let danger = self.danger();
+        let leader = self.player().and_then(|p| {
+            let a = &self.agents[p as usize];
+            Some((a.body.position, a.avatar()?.height))
+        });
         let Settlement { agents, characters, dock_owner, depots, links, piles, transfers, weapons, spawn, spawn_height, piano_serial, vehicles, buildings, building_kinds, .. } = self;
         let view = View {
             me: 0,
@@ -41,7 +45,7 @@ impl Settlement {
             buildings,
             building_kinds,
         };
-        let ctx = Ctx { tick, characters, terrain, piles: piles.as_ref(), footprints: &footprints, dock_owner, depots, links, transfers, view, dig_claims: &dig_claims, stone, danger: &danger };
+        let ctx = Ctx { tick, characters, terrain, piles: piles.as_ref(), footprints: &footprints, dock_owner, depots, links, transfers, view, dig_claims: &dig_claims, stone, danger: &danger, leader };
         agents.par_iter_mut().enumerate().for_each(|(i, a)| haulers::self_update(a, i as AgentIx, &ctx));
         self.vehicles_self_update(terrain);
         self.release_distant_piano_notes();

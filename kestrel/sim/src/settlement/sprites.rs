@@ -120,6 +120,10 @@ pub enum SpriteJob {
     /// (`miners`, `SACRED_TREE_MINING.md`, M9). Appended, so older saves
     /// and input logs decode unchanged.
     Mine,
+    /// The test walker's (V.7, V8 of the verticality design): follow the
+    /// player through the volume, keeping `follow::KEEP` away, and do
+    /// nothing else (`follow`). Appended, as `Mine` was.
+    Follow,
 }
 
 /// One step of a sprite's plan.
@@ -222,6 +226,11 @@ pub struct SpriteState {
     /// (`miners::Targets`). Not state: the ground gives it again.
     #[serde(skip)]
     pub targets: Targets,
+    /// Its feet's height in a volume scene (V.7): the floor it stands on,
+    /// as `AvatarState::height` is an avatar's. Zero elsewhere, where
+    /// sprites stand on `Terrain::ground`.
+    #[serde(default)]
+    pub height: Fx,
 }
 
 impl SpriteState {
@@ -345,7 +354,7 @@ impl SpriteState {
                 body.heading = crate::nav::bearing(body.position, Ground::pit_center(tile));
                 match view.dig_in_front(body.position, body.heading, body.base_radius) {
                     Ok(t) if t == tile => {
-                        self.dig = Some(Dig { tile, started: view.tick, until: view.tick + mine.dig });
+                        self.dig = Some(Dig { tile, started: view.tick, until: view.tick + mine.dig, layer: None });
                         Progress::Stay(None)
                     }
                     _ => Progress::Replan,
@@ -552,6 +561,12 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
         return;
     }
     let def = super::avatar::character_of(ctx.characters, a);
+    if a.sprite().is_some_and(|s| s.job == SpriteJob::Follow) {
+        let walk = def.movement.walk.div_int(content::TICKS_PER_SECOND as i64);
+        let AgentState { body, role: Role::Sprite(sprite), .. } = a else { unreachable!("a sprite") };
+        super::follow::self_update(body, sprite, ctx, walk);
+        return;
+    }
     let view = View { me, ..ctx.view };
     let town = Town { claims: ctx.dig_claims, stone: ctx.stone, mine: def.sprite.and_then(|s| s.mine), alarm: alarm(me, &a.body, ctx.terrain, ctx.danger) };
     if let Some(action) = think(a, &view, &town) {

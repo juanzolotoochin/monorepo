@@ -125,6 +125,7 @@ mod tests {
                 ("pile-lab", 2, 0),
                 ("sacred-tree", 1, 0),
                 ("surprise-lab", 32, 5),
+                ("tunnel-lab", 1, 0),
             ]
         );
     }

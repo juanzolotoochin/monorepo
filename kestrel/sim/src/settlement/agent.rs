@@ -243,7 +243,7 @@ impl AgentState {
                 Some(mine) => Carry { inventory: Inventory::new(items, mine.capacity, Kinds::OneKind), transfer_ticks: mine.transfer, ..Carry::default() },
                 None => Carry { inventory: Inventory::new(items, 0, Kinds::AnyMix), ..Carry::default() },
             },
-            role: Role::Sprite(SpriteState::default()),
+            role: Role::Sprite(SpriteState { job: if def.follow { super::sprites::SpriteJob::Follow } else { super::sprites::SpriteJob::Idle }, ..SpriteState::default() }),
         }
     }
 

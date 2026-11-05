@@ -23,7 +23,8 @@ use super::interact::{self, Interaction};
 use super::{AgentIx, DepotState, InventoryRef, ItemIx, Kinds, Settlement};
 use crate::messages::{ActionMessages, BundleRefused, Burst, BurstRefused, CarryUnit, DropBundle, DropHaul, ElderFire, DropNotes, Install, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
 use crate::nav::{self, angle_between, distance};
-use crate::terrain::Terrain;
+use crate::terrain::{Terrain, LAYER};
+use crate::volume::{DigDirection, BODY_HEIGHT};
 
 /// The longest player name, in characters.
 pub const NAME_CHARS: usize = 16;
@@ -122,6 +123,10 @@ pub struct Dig {
     pub started: u64,
     /// The layer comes out on this tick.
     pub until: u64,
+    /// In a volume scene, the first of the `HEADROOM` layers the dig clears
+    /// in `tile` (`Terrain::volume_dig`, `Terrain::clear_column`); nothing
+    /// for a pit's layer (save format 41).
+    pub layer: Option<i32>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -281,7 +286,7 @@ pub(super) fn self_update(body: &mut Body, avatar: &mut AvatarState, me: AgentIx
     if !body.alive() {
         if tick >= avatar.respawn_at {
             body.position = body.home;
-            avatar.height = terrain.footprint(body.home, radius).unwrap_or_default();
+            avatar.height = terrain.footprint_near(body.home, avatar.height, radius).unwrap_or_default();
             body.health = body.max_health;
             avatar.respawn_at = 0;
             avatar.flight = Flight::default();
@@ -312,7 +317,7 @@ pub(super) fn self_update(body: &mut Body, avatar: &mut AvatarState, me: AgentIx
 /// A grounded jump, or for a character with neither jump nor jetpack, just
 /// keeping to the ground.
 fn jump_step(body: &Body, avatar: &mut AvatarState, tick: u64, terrain: &Terrain, radius: Fx, jump: Option<&JumpDef>) {
-    let ground = terrain.footprint(body.position, radius);
+    let ground = terrain.footprint_at(body.position, avatar.height, radius);
     if let Some(y) = ground {
         avatar.flight.support = y;
     }
@@ -321,21 +326,36 @@ fn jump_step(body: &Body, avatar: &mut AvatarState, tick: u64, terrain: &Terrain
         if let Some(y) = ground { avatar.height = y; }
         return;
     };
+    // The ceiling over the body before it moves (volume scenes only).
+    let ceiling = terrain.ceiling_at(body.position, avatar.height, radius);
     match avatar.jump {
+        // In a volume, walking off a drop (`step` keeps the feet up) falls
+        // as a jump's way down does.
+        JumpPhase::Grounded if terrain.volume.is_some() && ground.is_some_and(|y| avatar.height > y + Fx::from_ratio(1, 100)) => {
+            avatar.jump = JumpPhase::Airborne { started: tick, velocity: Fx::ZERO };
+            avatar.flight.airborne = true;
+        }
         JumpPhase::Grounded => {
             avatar.flight.airborne = false;
             if let Some(y) = ground { avatar.height = y; }
         }
         JumpPhase::Preparing { started } => {
             if tick >= started + jump.prep {
-                avatar.jump = JumpPhase::Airborne { started: tick, velocity: jump.velocity };
+                let mut velocity = jump.velocity;
                 avatar.flight.airborne = true;
                 avatar.height += jump.velocity;
+                if under_ceiling(&mut avatar.height, ceiling, ground) {
+                    velocity = Fx::ZERO;
+                }
+                avatar.jump = JumpPhase::Airborne { started: tick, velocity };
             }
         }
         JumpPhase::Airborne { started, velocity } => {
-            let next_velocity = velocity - jump.gravity;
+            let mut next_velocity = velocity - jump.gravity;
             avatar.height += next_velocity;
+            if under_ceiling(&mut avatar.height, ceiling, ground) {
+                next_velocity = next_velocity.min(Fx::ZERO);
+            }
             if next_velocity <= Fx::ZERO && ground.is_some_and(|y| avatar.height <= y) {
                 avatar.height = ground.unwrap();
                 avatar.flight.airborne = false;
@@ -351,6 +371,19 @@ fn jump_step(body: &Body, avatar: &mut AvatarState, tick: u64, terrain: &Terrain
             }
         }
     }
+}
+
+/// Keeps a body's head ([`BODY_HEIGHT`] over its feet at `height`) under
+/// `ceiling` ([`Terrain::ceiling_at`], volume scenes only), but its feet
+/// never under `ground`. Returns whether the head hit it.
+fn under_ceiling(height: &mut Fx, ceiling: Option<Fx>, ground: Option<Fx>) -> bool {
+    let Some(ceiling) = ceiling else { return false };
+    let limit = (ceiling - BODY_HEIGHT).max(ground.unwrap_or(Fx::MIN));
+    if *height > limit {
+        *height = limit;
+        return true;
+    }
+    false
 }
 
 fn walk(body: &mut Body, avatar: &mut AvatarState, tick: u64, terrain: &Terrain, def: &CharacterDef) {
@@ -435,20 +468,29 @@ fn walk(body: &mut Body, avatar: &mut AvatarState, tick: u64, terrain: &Terrain,
 
 /// Moves the avatar by `delta`, sliding along obstacles, if the ground
 /// (or, in the air, the flight rules) allows it. On foot, it keeps to the
-/// ground it reaches.
+/// ground it reaches. In a volume (V3 of the verticality design) the
+/// ground is the floor under its feet, and past a drop of more than a
+/// layer the feet stay up, for `fly` or `jump_step` to let it fall.
 fn step(body: &mut Body, avatar: &mut AvatarState, terrain: &Terrain, delta: FxVec2, radius: Fx) {
     let previous = body.position;
     let candidate = slide(terrain, previous, delta, radius);
     let airborne = avatar.flight.airborne;
     let allowed = if airborne {
-        terrain.flyable(previous, candidate, avatar.height, radius)
+        // A jetpack capped at the floor under a roof exactly `HEADROOM` high
+        // (a dug stair: each tile's ceiling is 2 m over its own floor, so a
+        // head over the ramp between two is above the lower one's) walks
+        // on, rather than stall where `flyable_at` finds no room (V.4).
+        let on_floor = || terrain.volume.is_some() && terrain.footprint_at(previous, avatar.height, radius).is_some_and(|y| avatar.height <= y + Fx::from_ratio(1, 100));
+        terrain.flyable_at(previous, candidate, avatar.height, radius) || (on_floor() && terrain.walkable_at(previous, candidate, avatar.height, radius))
     } else {
-        terrain.walkable(previous, candidate, radius)
+        terrain.walkable_at(previous, candidate, avatar.height, radius)
     };
     if allowed {
         if !airborne {
-            if let Some(ground) = terrain.footprint(candidate, radius) {
-                avatar.height = ground;
+            if let Some(ground) = terrain.footprint_at(candidate, avatar.height, radius) {
+                if terrain.volume.is_none() || ground >= avatar.height - LAYER {
+                    avatar.height = ground;
+                }
             }
         }
         body.position = candidate;
@@ -460,7 +502,8 @@ fn step(body: &mut Body, avatar: &mut AvatarState, terrain: &Terrain, delta: FxV
 /// the ground when released, and keep flying over drops.
 fn fly(body: &Body, avatar: &mut AvatarState, terrain: &Terrain, radius: Fx, jetpack: &JetpackDef) {
     let flight = &mut avatar.flight;
-    let ground = terrain.footprint(body.position, radius);
+    let ground = terrain.footprint_at(body.position, avatar.height, radius);
+    let ceiling = terrain.ceiling_at(body.position, avatar.height, radius);
     let landing = ground;
     if let Some(y) = ground {
         flight.support = y;
@@ -478,7 +521,11 @@ fn fly(body: &Body, avatar: &mut AvatarState, terrain: &Terrain, radius: Fx, jet
         for i in 0..=20 {
             let p = body.position + direction * Fx::from_ratio(i, 10);
             for &(dx, dy) in &offsets {
-                if let Some(y) = terrain.ground(FxVec2::new(p.x + dx, p.y + dy)) {
+                // In a volume, the floors within a step of the feet: not
+                // the top of the mountain over a tunnel.
+                let q = FxVec2::new(p.x + dx, p.y + dy);
+                let y = if terrain.volume.is_some() { terrain.floor(q, avatar.height) } else { terrain.ground(q) };
+                if let Some(y) = y {
                     target = target.max(y);
                 }
             }
@@ -487,6 +534,7 @@ fn fly(body: &Body, avatar: &mut AvatarState, terrain: &Terrain, radius: Fx, jet
     }
     let delta = (target - avatar.height).clamp(-jetpack.sink, jetpack.climb);
     avatar.height += delta;
+    under_ceiling(&mut avatar.height, ceiling, ground);
     flight.airborne = active || ground.is_none_or(|y| avatar.height > y + Fx::from_ratio(1, 100));
 }
 
@@ -650,13 +698,26 @@ impl Settlement {
     /// In a mine, the layer's ore flies out onto a pile beside the pit. In a
     /// town's, its stone lands on a ground pile beside the pit, clear of the
     /// docks, output piles and slot spots as a dropped bundle is; earth
-    /// yields nothing.
+    /// yields nothing. In a volume scene a dig clears its cells
+    /// (`Terrain::clear_column`), each solid one yielding
+    /// `mine::cell_yield` units: an ore cell its mineral, flying onto a
+    /// pile beside the tile, a stone cell the scene's stone item if it has
+    /// one (the Tunnel Lab has none: nothing).
     pub(crate) fn dig_housekeeping(&mut self, tick: u64, terrain: &mut Terrain) {
         let mut dug = Vec::new();
+        let mut cells = Vec::new();
         for a in &mut self.agents {
             if let Some(dig) = finish_dig(a, tick) {
-                if terrain.deepen(dig.tile) {
-                    dug.push(dig.tile);
+                match dig.layer {
+                    Some(bottom) => {
+                        let cleared = terrain.clear_column(dig.tile, bottom);
+                        cells.extend(cleared.into_iter().map(|(layer, ore)| (dig.tile, layer, ore, bottom)));
+                    }
+                    None => {
+                        if terrain.deepen(dig.tile) {
+                            dug.push(dig.tile);
+                        }
+                    }
                 }
             }
             // A miner's, if no one dug its layer out first (`Step::Dig`).
@@ -666,15 +727,35 @@ impl Settlement {
                 }
             }
         }
-        if dug.is_empty() {
+        if dug.is_empty() && cells.is_empty() {
             return;
         }
-        // Ghouls walk round the new pits (M6.7).
-        self.reroute_round(&dug, terrain);
+        // Ghouls walk round the new pits (M6.7), and the dug volume.
+        let mut changed = dug.clone();
+        changed.extend(cells.iter().map(|&(tile, _, _, _)| tile));
+        changed.dedup();
+        self.reroute_round(&changed, terrain);
         let docks = self.depots.iter().map(|d| d.position);
         let spots = self.buildings.iter().flat_map(|b| [b.output_position, b.slot_position(&self.building_kinds[b.kind as usize])]);
         let targets: Vec<FxVec2> = docks.chain(spots).collect();
         let stone = self.item_index(crate::mine::STONE_ID);
+        for (tile, layer, ore, bottom) in cells {
+            let Some(lab) = self.piles.as_mut() else { break };
+            let item = match (ore, stone) {
+                (Some(mineral), _) if lab.has_minerals() => lab.item(mineral),
+                (None, Some(stone)) => stone,
+                _ => continue,
+            };
+            let units = crate::mine::cell_yield(tile, layer);
+            let Some((id, first)) = lab.mined_at(item, units, tile, Some(bottom), terrain, &targets) else { continue };
+            self.accounts[item as usize].generated += units as u64;
+            let Some(material) = ore else { continue };
+            let position = lab.piles[&id].position;
+            let from = TossEnd::Pit { position: Terrain::pit_center(tile) };
+            for slot in first..first + units {
+                self.events.push(Event::PileToss { material, from, to: TossEnd::Pile { id, slot, position }, ticks: ORE_FLIGHT_TICKS });
+            }
+        }
         for tile in dug {
             let layer = terrain.pit(tile) - 1;
             let Some(mine) = terrain.mine() else { continue };
@@ -818,7 +899,7 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
                         return;
                     }
                     if let Some(position) = view.leave_spot(b, def.body.radius) {
-                        let ground = view.terrain.footprint(position, def.body.radius).unwrap_or(avatar.height);
+                        let ground = view.terrain.footprint_near(position, avatar.height, def.body.radius).unwrap_or(avatar.height);
                         avatar.seat = None;
                         // A ballista's reticle back to a facing.
                         avatar.aim = avatar.aim.map(FxVec2::normalize_or_zero).filter(|aim| *aim != FxVec2::ZERO);
@@ -889,7 +970,15 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
         }
         Action::Jetpack(enabled) => jetpack(avatar, enabled, def),
         Action::Jump => jump(avatar, view.tick, def),
-        Action::DigDown => {
+        // A volume scene digs the volume in front, level unless told down
+        // or up (V5 of the verticality design).
+        Action::DigDown | Action::DigFront(_) if view.terrain.volume.is_some() => {
+            let direction = if let Action::DigFront(direction) = *action { direction } else { DigDirection::Level };
+            if let Ok((tile, layer)) = view.dig_volume(body.position, avatar.height, body.heading, def.body.radius, direction) {
+                dig(body, avatar, transferring, view.tick, view.terrain, def, tile, Some(layer));
+            }
+        }
+        Action::DigDown | Action::DigFront(_) => {
             // Sloped scenes dig in front, so a pit never traps its digger;
             // the dig lab digs underfoot.
             let tile = if view.terrain.sloped {
@@ -898,7 +987,7 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
                 view.can_dig_at(body.position).then(|| Terrain::pit_tile(body.position))
             };
             if let Some(tile) = tile {
-                dig(body, avatar, transferring, view.tick, view.terrain, def, tile);
+                dig(body, avatar, transferring, view.tick, view.terrain, def, tile, None);
             }
         }
         Action::Transfer { depot, item, units, deposit } => {
@@ -1205,7 +1294,13 @@ fn set_intent(body: &mut Body, avatar: &mut AvatarState, intent: Intent, terrain
         let flying = avatar.flight.requested || avatar.flight.airborne;
         let radius = def.body.radius;
         let walkable = |p: FxVec2, q: FxVec2| flying || terrain.walkable(p, q, radius);
-        body.route = nav::path_with(terrain, body.position, target, radius, &[], &walkable);
+        body.route = if terrain.volume.is_some() && !flying {
+            // On foot in a volume (V.7): a 3D path from the floor it stands
+            // on to whichever floor at the target it reaches first.
+            nav::path_at(terrain, body.position, avatar.height, target, None, radius, &[]).into_iter().map(|(p, _)| p).collect()
+        } else {
+            nav::path_with(terrain, body.position, target, radius, &[], &walkable)
+        };
         avatar.run = run;
     } else if let Intent::Walk { run, .. } = intent {
         avatar.run = run;
@@ -1317,9 +1412,11 @@ fn jump(avatar: &mut AvatarState, tick: u64, def: &CharacterDef) {
 }
 
 /// Starts digging `tile`, which the scene allows (`View::can_dig_at`,
-/// `View::dig_in_front`), if the character digs, stands on the ground with
-/// its hands free, and the pit isn't as deep as it goes.
-fn dig(body: &mut Body, avatar: &mut AvatarState, carrying: bool, tick: u64, terrain: &Terrain, def: &CharacterDef, tile: (i32, i32)) {
+/// `View::dig_in_front`, `View::dig_volume`), if the character digs, stands
+/// on the ground with its hands free, and the pit isn't as deep as it goes.
+/// `layer` is a volume dig's first layer.
+#[allow(clippy::too_many_arguments)]
+fn dig(body: &mut Body, avatar: &mut AvatarState, carrying: bool, tick: u64, terrain: &Terrain, def: &CharacterDef, tile: (i32, i32), layer: Option<i32>) {
     let Some(ticks) = def.dig().map(|d| d.ticks) else { return };
     let busy = avatar.swing.as_ref().is_some_and(|s| tick < s.until) || carrying;
     let flight = &avatar.flight;
@@ -1331,7 +1428,7 @@ fn dig(body: &mut Body, avatar: &mut AvatarState, carrying: bool, tick: u64, ter
     }
     body.route.clear();
     avatar.intent = Some(Intent::Stop);
-    avatar.dig = Some(Dig { tile, started: tick, until: tick + ticks });
+    avatar.dig = Some(Dig { tile, started: tick, until: tick + ticks, layer });
 }
 
 /// Housekeeping: ends a dig that is done, returning it.
