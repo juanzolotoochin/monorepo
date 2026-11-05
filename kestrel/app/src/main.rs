@@ -5,6 +5,7 @@ mod atmosphere;
 mod canopy;
 mod character;
 mod character_catalog;
+mod clock_hud;
 mod combat;
 mod control;
 mod daylight;

@@ -21,6 +21,8 @@ pub struct Settlement {
     pool: BTreeMap<String, Vec<Rig>>,
     labels: BTreeMap<String, Entity>,
     hud: Option<Entity>,
+    /// The sun-and-moon dial (`clock_hud`), in a town.
+    clock_hud: Option<crate::clock_hud::ClockHud>,
     last_sound: u64,
     last_attack_serial: u64,
     dying: Vec<Corpse>,
@@ -205,6 +207,9 @@ impl Service for Settlement {
         if let Some(e) = self.hud.take() {
             world.despawn(e);
         }
+        if let Some(dial) = self.clock_hud.take() {
+            dial.despawn(world);
+        }
         for e in self.blockers.drain(..) {
             world.despawn(e);
         }
@@ -361,6 +366,9 @@ fn build(world: &mut World) -> Settlement {
                 ))
                 .id(),
         );
+        if !config.building_kinds.is_empty() {
+            state.clock_hud = Some(crate::clock_hud::ClockHud::spawn(world));
+        }
     }
     state
 }
@@ -1180,18 +1188,11 @@ pub fn tick(world: &mut World) {
             let elder = mirror.player().and_then(|id| mirror.current.as_ref()?.agents.get(id as usize)).map(|agent| (agent.body.health, agent.body.max_health));
             let elder = elder.filter(|&(_, max)| max > 0).map_or_else(String::new, |(health, max)| format!("  ELDER {health}/{max}"));
             // The waves (M5.6): how many ghouls are out, or with none out,
-            // how long until the next comes (by night, M7.2); nothing once
-            // the last came.
+            // how long until the next comes; with days and nights, the dial
+            // says when night falls instead (`clock_hud`).
             let waves = mirror.current.as_ref().map_or_else(String::new, |current| {
-                let next = current.next_wave(sim.tick);
-                match (current.threats.len(), next) {
-                    (0, Some(next)) => {
-                        let seconds = ((next as f32 - sim.time()) / HZ).ceil().max(0.0) as u32;
-                        format!("  /  NEXT WAVE {}:{:02}", seconds / 60, seconds % 60)
-                    }
-                    (0, None) => String::new(),
-                    (n, _) => format!("  /  GHOULS {n}"),
-                }
+                let to_dusk = current.clock.map(|clock| clock.ticks_to_dusk(sim.tick));
+                crate::clock_hud::waves_text(current.threats.len(), current.next_wave(sim.tick), sim.tick, to_dusk)
             });
             format!(
                 "SACRED TREE {}/{base}{elder}{waves}  {}  /  PACK {}/{} {}{}   [P] pause",
@@ -1222,6 +1223,17 @@ pub fn tick(world: &mut World) {
         if world.get::<Text>(e).unwrap().0 != line {
             world.get_mut::<Text>(e).unwrap().0 = line;
         }
+    }
+    if let Some(dial) = state.clock_hud.as_ref() {
+        // The clock's text at the confirmed tick, its sun or moon eased
+        // between ticks; gone once the tree has fallen.
+        let mirror = world.resource::<crate::lockstep::WorldMirror>();
+        let shown = mirror.current.as_ref().filter(|current| !current.tree_fallen()).and_then(|current| {
+            let clock = current.clock?;
+            let text = crate::clock_hud::clock_text(&clock, mirror.tick, current.nights_survived(mirror.tick).unwrap_or(0));
+            Some((text, voxel_assets::day_cycle::hour(&clock, mirror.tick as f64 + f64::from(mirror.alpha))))
+        });
+        dial.update(world, shown);
     }
     crate::telemetry::elapsed(world, "settlement_projection", projection_start);
     let sync_start = web_time::Instant::now();
@@ -2007,6 +2019,8 @@ pub fn snapshot(world: &World) -> serde_json::Value {
             // The tree's canopy: 1 whole, less while it is see-through.
             let canopy = world.get_resource::<Settlement>().and_then(|state| state.canopy.as_ref()).map_or(1.0, crate::canopy::Canopy::opacity);
             out["canopy_opacity"] = canopy.into();
+            // The sun-and-moon dial's text (`clock_hud`), null while hidden.
+            out["clock"] = world.get_resource::<Settlement>().and_then(|state| state.clock_hud.as_ref()).map_or(serde_json::Value::Null, |dial| dial.snapshot(world));
             // The local elder's Burst: the seconds its cooldown has left
             // (0 when over), and whether one would go off now, with the
             // units it adds or the sim's reason why not. In a ballista the
