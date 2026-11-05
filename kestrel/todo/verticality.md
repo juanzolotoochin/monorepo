@@ -4,24 +4,6 @@ Tunnels and levels: two or more floors over one x–y spot. The design is
 [`VERTICALITY.md`](../VERTICALITY.md) (decisions V1–V11). Tasks run in
 order, one agent each.
 
-## V.1 The volume
-
-- **Status:** open
-- **Why:** a heightfield has one height per x–y, so nothing can stand
-  under anything (V1, V2, V4, V11).
-- **What to do:** a `Volume` in the sim: per 1 m column, spans of solid
-  0.5 m cells, with ore per cell. Derived floors (top of a span with 4
-  empty layers above), ceilings and headroom. `floor(p, z)`: the highest
-  floor at or below `z` plus one step, sloped per floor with M6's corner
-  rule (neighbours from the floor within one layer in the next column).
-  `Terrain::volume: Option<Volume>`, opted into per scene; with one,
-  `ground(p)` is the top floor. Hashed and saved (save format up).
-- **Where:** new `sim/src/volume.rs`, `sim/src/terrain.rs`, `save/`.
-- **Found in:** verticality design.
-- **Tests:** spans split and merge on clear and fill; floors and ceilings;
-  `floor(p, z)` on two floors over one spot; sloped floors; hashing and a
-  save round trip; scenes without a volume unchanged.
-
 ## V.2 The Tunnel Lab
 
 - **Status:** open
@@ -45,7 +27,11 @@ order, one agent each.
   volume scene they stand on `floor(p, z)`, step up at most a layer, fall
   when the floor drops away, stop at walls and never enter a spot without
   headroom; jump and jetpack hit ceilings. Walkability uses the body's
-  floor. Other scenes keep today's behaviour.
+  floor. Other scenes keep today's behaviour. Note (from V.1): a neighbour
+  floor two or more layers off is a wall edge to the corner rule, so the
+  patches on both sides stay level and `Terrain::walkable`'s sloped branch
+  (which checks steepness, not jumps) would let a walk climb it: walks in
+  a volume must also refuse a floor change of more than a layer.
 - **Where:** `sim/src/settlement/avatar.rs`, `sim/src/terrain.rs`
   (`walkable`), the view's body height.
 - **Found in:** verticality design.
@@ -59,7 +45,10 @@ order, one agent each.
 - **What to do:** dig in front, level, down or up (chosen by where the
   player looks or by a modifier), clearing the 4 cells of headroom in
   front at that height; never under yourself. Ore lands in piles as
-  today. Refusals as today (reach, own tile, undiggable).
+  today. The volume stores only a cell's mineral (V.1): decide its
+  yield (the mine hashes 3 to 6 from its seed; a volume has no seed).
+  `Terrain::dig_refusal`, `deepen` and `walks_out` still work on pits and
+  ignore the volume. Refusals as today (reach, own tile, undiggable).
 - **Where:** `sim/src/settlement/avatar.rs`, `sim/src/settlement/action.rs`,
   `sim/src/volume.rs`, the input and the command if it needs the
   direction.
@@ -114,3 +103,50 @@ order, one agent each.
 - **Tests:** the soak; the full suite.
 
 ## Done
+
+### V.1 The volume
+
+- **Status:** done (branch `kestrel-verticality`, no PR yet)
+- **Why:** a heightfield has one height per x–y, so nothing can stand
+  under anything (V1, V2, V4, V11).
+- **What to do:** a `Volume` in the sim: per 1 m column, spans of solid
+  0.5 m cells, with ore per cell. Derived floors (top of a span with 4
+  empty layers above), ceilings and headroom. `floor(p, z)`: the highest
+  floor at or below `z` plus one step, sloped per floor with M6's corner
+  rule (neighbours from the floor within one layer in the next column).
+  `Terrain::volume: Option<Volume>`, opted into per scene; with one,
+  `ground(p)` is the top floor. Hashed and saved (save format up).
+- **Where:** new `sim/src/volume.rs`, `sim/src/terrain.rs`, `save/`.
+- **Found in:** verticality design.
+- **Tests:** spans split and merge on clear and fill; floors and ceilings;
+  `floor(p, z)` on two floors over one spot; sloped floors; hashing and a
+  save round trip; scenes without a volume unchanged.
+- **Done:** `sim/src/volume.rs`: a `Volume` of `Span`s (solid layers
+  `bottom..top`) per tile column, sorted, merged and without empty
+  columns, and ore per cell as a sorted sparse list of `((tile, layer),
+  mineral)` (the mineral numbered as `mine` numbers them; no yield yet).
+  Edits: `fill`, `clear` (drops the cell's ore), `fill_box`, `clear_box`,
+  `set_ore`, `shifted`. Queries: `spans`, `columns`, `is_solid`, `ore`,
+  `floors` (tops of spans with `HEADROOM` = 4 empty layers above, and the
+  top span's), `top`, `ceiling`, `headroom`, `floor_near` (the floor
+  within a layer), `floor_layer` and `floor(p, z)`: the highest floor at or
+  below the feet plus `STEP_UP` = one layer (the most a sloped walk climbs
+  per tile; floors in a column are at least five layers apart, so it never
+  reaches the next), sloped by M6's corner rule with each neighbour from
+  its `floor_near`, none counting as a wall edge (level). `height(layer)`
+  and `layer_at(z)` convert. The corner rule is factored into
+  `terrain::Patch::over`, shared by `Terrain::patch` and `Volume::patch`.
+  `Terrain::volume: Option<Volume>` (from `SceneSetup::volume`, in tiles
+  from the arena's center tile): with one it is the ground, `ground`,
+  `tile_height`, `patch` (so `walkable` and `steep`) read the top floor,
+  and surfaces, mines and pits don't count. `Terrain::floor(p, z)` is the
+  floor underfoot (`ground` without a volume); `Terrain::fill_cell` and
+  `clear_cell` edit it and bump `revision`. Hashed only when present, so
+  other scenes' hashes and golden lines are unchanged; save format 40.
+  Tests (`sim/src/volume_tests.rs`): `spans_split_on_clear_and_merge_on_fill`,
+  `floors_need_headroom_and_have_ceilings`,
+  `a_bridge_has_two_floors_over_one_spot`,
+  `tunnel_floors_slope_by_the_corner_rule`,
+  `edits_bump_the_revision_and_change_the_hash`,
+  `scenes_opt_into_a_volume`; in `save/src/tests.rs`,
+  `a_volume_scene_keeps_its_cells_and_ore`.

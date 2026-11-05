@@ -7,6 +7,8 @@
 //! digging scenes, avatars dig pits into the ground, a layer at a time, and
 //! mines generate their ground (terraces and ore) from a seed. Sloped
 //! scenes join the tiles' heights into slopes, so pit edges become ramps.
+//! Volume scenes keep their ground as solid and empty cells instead
+//! ([`Volume`]), so floors can lie over each other.
 //! Terrain is part of the saved state; navigation caches built from it are not.
 
 use std::sync::{Arc, OnceLock};
@@ -16,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::hash::{StateHash, StateHasher};
 use crate::mine::{Hill, Mine, MineSpec, Veins};
+use crate::volume::Volume;
 
 /// Extra separation kept from obstacles, as in the original game (1.5 cm).
 pub const CLEARANCE_MARGIN: Fx = Fx::from_bits(64_424_509); // 0.015
@@ -117,6 +120,13 @@ pub struct Terrain {
     /// Generated ground under the whole arena, if this is a mine.
     #[serde(default)]
     pub mine: Option<MineSpec>,
+    /// The ground as solid and empty cells, if the scene has a volume (V11
+    /// of the verticality design): then it is the ground, its top floor
+    /// what [`Terrain::ground`] gives, and surfaces, mines and pits don't
+    /// count. Edit it with [`Terrain::fill_cell`] and
+    /// [`Terrain::clear_cell`], which bump the revision.
+    #[serde(default)]
+    pub volume: Option<Volume>,
     #[serde(skip)]
     generated: Generated,
     /// Bumped by every change, so cached paths know to rebuild.
@@ -158,6 +168,7 @@ impl Terrain {
             max_layers: MAX_LAYERS,
             undiggable: Vec::new(),
             mine: None,
+            volume: None,
             generated: Generated::default(),
             revision: 0,
         }
@@ -179,7 +190,11 @@ impl Terrain {
     /// Ground height at `p`: the highest surface containing it; elsewhere
     /// zero, or nothing (a drop) in platform scenes. Pits sink it. In sloped
     /// scenes, the tile's four corners set it instead ([`Terrain::patch`]).
+    /// In volume scenes, the top floor ([`Volume::ground`]).
     pub fn ground(&self, p: FxVec2) -> Option<Fx> {
+        if let Some(volume) = &self.volume {
+            return volume.ground(p);
+        }
         if self.sloped && !self.level() {
             return self.patch(p).map(|patch| patch.height());
         }
@@ -206,15 +221,29 @@ impl Terrain {
         }
     }
 
-    /// Whether the ground is zero everywhere, with no surfaces, drops, mine
-    /// or pits: sloped or not, it's the same ground.
+    /// The ground under a body at `p` whose feet are at height `z`: in
+    /// volume scenes the floor it stands on ([`Volume::floor`]), which may
+    /// be under another; elsewhere [`Terrain::ground`].
+    pub fn floor(&self, p: FxVec2, z: Fx) -> Option<Fx> {
+        match &self.volume {
+            Some(volume) => volume.floor(p, z),
+            None => self.ground(p),
+        }
+    }
+
+    /// Whether the ground is zero everywhere, with no surfaces, drops, mine,
+    /// pits or volume: sloped or not, it's the same ground.
     fn level(&self) -> bool {
-        self.pits.is_empty() && self.mine.is_none() && self.surfaces.is_empty() && !self.platforms_only
+        self.volume.is_none() && self.pits.is_empty() && self.mine.is_none() && self.surfaces.is_empty() && !self.platforms_only
     }
 
     /// A tile's height in sloped scenes: [`Terrain::top`] at its center, less
     /// its pit. Surfaces count by the tile's center, so they snap to tiles.
+    /// In volume scenes, the column's top floor.
     pub fn tile_height(&self, tile: (i32, i32)) -> Option<Fx> {
+        if let Some(volume) = &self.volume {
+            return volume.top(tile).map(crate::volume::height);
+        }
         let top = self.top(Self::pit_center(tile))?;
         Some(top - LAYER.mul_int(self.pit(tile) as i64))
     }
@@ -222,27 +251,14 @@ impl Terrain {
     /// The sloped ground over `p`'s tile: each corner takes the height of
     /// the lowest of the four tiles touching it (drops aside), so a dug
     /// tile's floor is flat and its neighbours slope down into it. Nothing
-    /// if the tile itself is a drop.
+    /// if the tile itself is a drop. In volume scenes, the top floor's
+    /// ([`Volume::patch`]).
     fn patch(&self, p: FxVec2) -> Option<Patch> {
-        let (x, y) = Self::pit_tile(p);
-        let h = self.tile_height((x, y))?;
-        // The 3 × 3 tiles around it, row by row from -y.
-        let mut around = [[Some(h); 3]; 3];
-        for (dy, row) in around.iter_mut().enumerate() {
-            for (dx, height) in row.iter_mut().enumerate() {
-                if (dx, dy) != (1, 1) {
-                    *height = self.tile_height((x + dx as i32 - 1, y + dy as i32 - 1));
-                }
-            }
+        if let Some(volume) = &self.volume {
+            return volume.top_patch(p);
         }
-        // The corner between rows `dy`, `dy + 1` and columns `dx`, `dx + 1`.
-        let corner = |dx: usize, dy: usize| {
-            [around[dy][dx], around[dy][dx + 1], around[dy + 1][dx], around[dy + 1][dx + 1]].into_iter().flatten().fold(h, Fx::min)
-        };
-        // Where `p` is in the tile, 0 to 1 from its -x -y corner.
-        let u = p.x + Fx::HALF - Fx::from_int(x);
-        let v = p.y + Fx::HALF - Fx::from_int(y);
-        Some(Patch { corners: [corner(0, 0), corner(1, 0), corner(0, 1), corner(1, 1)], u, v })
+        let h = self.tile_height(Self::pit_tile(p))?;
+        Some(Patch::over(p, h, |tile| self.tile_height(tile)))
     }
 
     /// The generated mine, if this terrain is one.
@@ -492,6 +508,26 @@ impl Terrain {
         true
     }
 
+    /// Makes a cell of the volume solid. Returns whether it changed: never
+    /// without a volume.
+    pub fn fill_cell(&mut self, tile: (i32, i32), layer: i32) -> bool {
+        let filled = self.volume.as_mut().is_some_and(|volume| volume.fill(tile, layer));
+        if filled {
+            self.revision += 1;
+        }
+        filled
+    }
+
+    /// Clears a cell of the volume, and its ore. Returns whether it changed:
+    /// never without a volume.
+    pub fn clear_cell(&mut self, tile: (i32, i32), layer: i32) -> bool {
+        let cleared = self.volume.as_mut().is_some_and(|volume| volume.clear(tile, layer));
+        if cleared {
+            self.revision += 1;
+        }
+        cleared
+    }
+
     pub fn is_rock(&self, tile: (i32, i32)) -> bool {
         self.rock.binary_search(&tile).is_ok()
     }
@@ -671,6 +707,10 @@ impl StateHash for Terrain {
             h.write(&self.sloped);
             h.write_u64(self.max_layers as u64);
         }
+        // Only when set, so terrains from before volumes hash the same.
+        if let Some(volume) = &self.volume {
+            h.write(volume);
+        }
         h.write_u64(self.revision);
     }
 }
@@ -681,7 +721,7 @@ fn max_layers() -> u8 {
 
 /// The sloped ground over one tile: its corner heights, and where in it a
 /// point is.
-struct Patch {
+pub(crate) struct Patch {
     /// At the tile's -x -y, +x -y, -x +y and +x +y corners.
     corners: [Fx; 4],
     /// The point, 0 to 1 across the tile along x and along y.
@@ -690,8 +730,33 @@ struct Patch {
 }
 
 impl Patch {
+    /// The ground over `p`'s tile by M6's corner rule, the tile `h` high and
+    /// `around` giving each tile's height (nothing for a drop): each corner
+    /// takes the lowest of the four tiles touching it, drops counting as
+    /// `h`.
+    pub(crate) fn over(p: FxVec2, h: Fx, around: impl Fn((i32, i32)) -> Option<Fx>) -> Patch {
+        let (x, y) = Terrain::pit_tile(p);
+        // The 3 × 3 tiles around it, row by row from -y.
+        let mut heights = [[Some(h); 3]; 3];
+        for (dy, row) in heights.iter_mut().enumerate() {
+            for (dx, height) in row.iter_mut().enumerate() {
+                if (dx, dy) != (1, 1) {
+                    *height = around((x + dx as i32 - 1, y + dy as i32 - 1));
+                }
+            }
+        }
+        // The corner between rows `dy`, `dy + 1` and columns `dx`, `dx + 1`.
+        let corner = |dx: usize, dy: usize| {
+            [heights[dy][dx], heights[dy][dx + 1], heights[dy + 1][dx], heights[dy + 1][dx + 1]].into_iter().flatten().fold(h, Fx::min)
+        };
+        // Where `p` is in the tile, 0 to 1 from its -x -y corner.
+        let u = p.x + Fx::HALF - Fx::from_int(x);
+        let v = p.y + Fx::HALF - Fx::from_int(y);
+        Patch { corners: [corner(0, 0), corner(1, 0), corner(0, 1), corner(1, 1)], u, v }
+    }
+
     /// The height at the point, bilinear between the corners.
-    fn height(&self) -> Fx {
+    pub(crate) fn height(&self) -> Fx {
         let [c00, c10, c01, c11] = self.corners;
         let near = c00 + (c10 - c00) * self.u;
         let far = c01 + (c11 - c01) * self.u;

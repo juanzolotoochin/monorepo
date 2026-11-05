@@ -613,3 +613,39 @@ fn a_town_mine_keeps_its_hill() {
     assert!(terrain.is_undiggable(sim::terrain::Terrain::pit_tile(center)));
     assert_eq!(terrain, world.terrain());
 }
+
+/// A scene with a volume (format 40: `Terrain::volume`) loads with its
+/// spans and ore, and its floors over each other.
+#[test]
+fn a_volume_scene_keeps_its_cells_and_ore() {
+    use fx::Fx;
+    let content = Content::builtin();
+    let mut volume = sim::volume::Volume::default();
+    // Ground to 1 m, a bridge deck from 3 m to 4 m, ore in the deck.
+    volume.fill_box((-3, -3), (3, 3), 0, 2);
+    volume.fill_box((-1, -3), (1, 3), 6, 8);
+    volume.set_ore((0, 0), 7, Some(sim::mine::BLUE));
+    let setup = sim::settlement::SceneSetup {
+        player: "exosuit".into(),
+        extent: Fx::from_int(16),
+        sloped: true,
+        volume: Some(volume),
+        ..Default::default()
+    };
+    let mut world = sim::World::new_scene(5, &content, &setup).unwrap();
+    let mut terrain = world.terrain().clone();
+    let center = sim::terrain::Terrain::pit_tile(terrain.center);
+    let tunnel = (center.0 + 1, center.1);
+    assert!(terrain.clear_cell(tunnel, 1));
+    world.set_terrain(terrain);
+    let bytes = write(&world, &content);
+    let loaded = read(&bytes, &content).unwrap();
+    let terrain = loaded.terrain();
+    let volume = terrain.volume.as_ref().unwrap();
+    assert_eq!(volume.ore((center.0, center.1), 7), Some(sim::mine::BLUE));
+    assert!(!volume.is_solid(tunnel, 1) && volume.is_solid(tunnel, 0));
+    assert_eq!(volume.floors(center).collect::<Vec<_>>(), [2, 8]);
+    assert_eq!(terrain, world.terrain());
+    assert_eq!(sim::hash::hash_of(terrain), sim::hash::hash_of(world.terrain()));
+    assert_eq!(write(&loaded, &content), bytes, "saved again, the same bytes");
+}

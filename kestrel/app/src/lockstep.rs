@@ -410,6 +410,7 @@ fn scene_setup(library: &SceneLibrary, index: usize, cache: &crate::assets::Mode
         memory_trial: scene.features.contains(&voxel_assets::SceneFeature::MemoryTrial),
         diggable: scene.features.contains(&voxel_assets::SceneFeature::Digging),
         sloped: scene.features.contains(&voxel_assets::SceneFeature::SlopedGround),
+        volume: None,
         dig_layers: scene.dig_layers,
         mine: scene.mine.as_ref().map(|m| m.seed),
         // Centered on the tree when raised (`Terrain::raise_hill`).

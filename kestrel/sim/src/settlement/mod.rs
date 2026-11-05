@@ -313,6 +313,10 @@ pub struct SceneSetup {
     /// The ground slopes between tiles, and walks stop at slopes too steep
     /// ([`crate::terrain::Terrain::sloped`]).
     pub sloped: bool,
+    /// The ground as solid and empty cells, in tiles from the arena's
+    /// center tile ([`crate::terrain::Terrain::volume`]); none in scenes of
+    /// heightfield ground.
+    pub volume: Option<crate::volume::Volume>,
     /// The deepest a pit goes, in layers; [`crate::terrain::MAX_LAYERS`] if
     /// unset.
     pub dig_layers: Option<u8>,
@@ -599,6 +603,7 @@ impl Settlement {
         terrain.platforms_only = setup.platforms_only;
         terrain.diggable = setup.diggable;
         terrain.sloped = setup.sloped;
+        terrain.volume = setup.volume.as_ref().map(|volume| volume.shifted(Terrain::pit_tile(terrain.center)));
         match setup.dig_layers {
             Some(0) => return Err("a scene's pits go at least one layer deep".into()),
             Some(layers) => terrain.max_layers = layers,
