@@ -169,7 +169,511 @@ its milestones, in order; one PR per milestone.
   `Heights`).
 - **Found in:** M6.6, M6.7.
 
+## The dawn's dispel effect
+
+- **Status:** open
+- **Why:** at sunrise a ghoul burns (its fire flames show) and then just
+  vanishes: `Event::Dispelled` (M7.2) has no effect or sound in the app.
+- **What to do:** a fall, ash or smoke effect and a soft cue on
+  `legacy::Event::Dispelled`, in the style of the fire kill.
+- **Where:** `kestrel/app/src/settlement.rs` (events to effects and cues),
+  `app/src/effects.rs`.
+- **Found in:** M7.2.
+
+## Night lights polish
+
+- **Status:** open
+- **Why:** at the town zoom a ghoul's glowing eyes (M7.4) are a pixel or
+  two and show only when it faces the camera; the tree's warm pool shows
+  faint concentric bands on the grass; lanterns are drawn only, so the
+  elder and sprites walk through their posts.
+- **What to do:** bigger or brighter eyes, or a faint glow on the ghoul's
+  head readable from behind; check the banding (tonemapping, the point
+  light's range falloff or the grass's voxels); make lanterns solid (sim
+  obstacles from the scene, keeping routes and the happy path) if walking
+  through them reads badly in the playtest.
+- **Where:** `app/assets/styles/forest.ron` (`ghoul` skin, `eyes`),
+  `app/src/daylight.rs`, `app/assets/levels/sacred_tree.ron`.
+- **Found in:** M7.4.
+
+## Clock dial polish
+
+- **Status:** open
+- **Why:** the dial reads, but a few edges were left as they are.
+- **What to do:** by night the dial gives no countdown to dawn (a "DAWN IN
+  0:20" in the night's last seconds would help a player holding out); with
+  three lines (day, warning, nights survived) the dial reaches about 140 px
+  down the right edge and can sit under the F3 metrics overlay (`telemetry.rs`,
+  top 135 px), so move one of them; nights survived shows from the first
+  dawn, not only once the last listed night repeats (N10 allows either);
+  the dome is 64 x 34 px, small on the Steam Deck: check it there.
+- **Where:** `app/src/clock_hud.rs`, `app/src/telemetry.rs`.
+- **Found in:** M7.5.
+
 ## Done
+
+### The night's fight comes late
+
+- **Status:** done (branch `kestrel-sacred-tree-daynight`, PR #134)
+- **Why:** measured on the map's own nights (M7.6), ghouls walk 0.6 m/s
+  and take about 41 s from the 40 m ring to the tops of the ramps and
+  63.7 s to the tree; a column of five sets off over the night's first
+  10 s, so its last breaches at 73.7 s, 1.3 s before dawn. With a manned
+  ballista by each ramp the first bolt flies 55.4 s after dusk and the
+  kills come 56.5 to 66.9 s in: the fight is about 11 s of a 75 s night,
+  nothing is on the plateau for its first 41 s and its last 8 s are
+  empty. Dawn burns no ghoul on any of the four nights, defended or not
+  (0 dispelled); it only burns ghouls that were held up (lured by the
+  elder, as in the demo, smashing a building, or stranded by a moat).
+- **What to do:** decide with a playtest. The recommendation: move the
+  ring in to about 28 m (just past the ramps' feet at 23.5 m and the
+  hill's flat ring at 25.5 m), so ghouls top the ramps about 21 s after
+  dusk and reach the tree about 43 s in, and widen `COLUMN_GAP` (2.5 s)
+  to about 5 s so a column of five spans 20 s: the fight then runs from
+  about 35 s to 65 s into the night, and a slowed column's tail is still
+  out at dawn. A longer night only adds empty time and puts four nights
+  past 15 minutes (100 s nights: 4 x 4:10 = 16:40). A ring that close
+  may spawn ghouls in the town camera's view (it shows ground 15 to 60 m
+  out): spawn them in the dark or fade them in. Then retune the nights,
+  the `waves_tests` restock time (`RESTOCK`, 47 s) and the demo's waits.
+- **Where:** `app/assets/levels/sacred_tree_supply.ron` (wave positions),
+  `sim/src/settlement/combat.rs` (`COLUMN_GAP`),
+  `sim/src/settlement/waves_tests.rs`, `app/demos/sacred_tree.json`.
+- **Found in:** M7.2, M7.6.
+- **Done:** the supply's lanes start 28 m out (`(28.0, 0.0)` and
+  `(-28.0, 0.0)`, just past the ramps' feet at 23.5 m and the hill's flat
+  ring at 25.5 m; `hill_tests::ghouls_come_from_the_ring_up_the_ramps`
+  checks 26 to 30 m, a walkable route and the crossing on each ramp) and
+  `COLUMN_GAP` is 5 s. A column of five at 5 s sets off over 20 s, inside
+  the night's first 25 s, so `lane_starts`' rule is unchanged (six would
+  bunch to 4.2 s). The gap stays a constant: in content it would be a new
+  `WaveState` field, so a save format bump and new state hashes in the
+  forest's and arena's golden for no gain. Measured with a probe as in
+  M7.6 (four nights, the tree's health raised; removed, and its undefended
+  half kept as `waves_tests::the_nights_fight_comes_in_its_middle`), in
+  seconds after dusk:
+
+  | | Ramp tops | At the tree | First bolt | Kills | Dispelled |
+  |---|---|---|---|---|---|
+  | Undefended | 20.9 to 30.9 (night 1), 20.9 to 40.9 (nights 2 to 4) | 43.7 to 53.7, then 43.7 to 63.7 | none | none | 0 each night |
+  | A ballista by each ramp | as undefended | none | 35.4 | 36.5 to 46.7 (night 1), 36.5 to 56.7 (nights 2 to 4) | 0 each night |
+
+  Before: tops 41 s, the tree 63.7 to 73.7 s, the first bolt 55.4 s, the
+  kills 56.5 to 66.9 s. So a defended fight runs from about 35 s to 57 s
+  and an undefended one breaches from 44 s to 64 s, 11 s before dawn;
+  dawn burns none unless they are held up. In the wave soak (lured, chased
+  and smashing ghouls) dawn dispels 3 over five nights. The nights are
+  unchanged (3+2, 5+4, 5+5, 5+5 repeating): ignored, the tree falls on the
+  third night at 653 s (53 s after dusk, was 668 s); one ballista by the
+  east ramp: tree 4/20 after four nights, 16 breaches, 18 kills; one by
+  each: 20/20, all 34 killed. `waves_tests`: `RESTOCK` 47 s to 30 s (the
+  ballistas start empty, and at 47 s they first shot after the ghouls
+  reached the tree: tree 3/20 with two); the sunrise test sends its night
+  of eight from 40 m so some are still out at dawn; the column test checks
+  5 s. The happy path must end before 170 s (was 190 s; ghouls top the
+  ramps at about 171 s). Spawning is in view: from the west ramp's top the
+  camera shows the ring, and a ghoul popped in at 150 s. The view
+  (`settlement::rise_offset`) now draws a threat up to 1.9 m under the
+  ground at its spawn, rising (eased) over its first 0.6 m walked, about
+  a second; in the video the head shows at 0.3 s and it stands at 0.9 s.
+  Demo (`demos/sacred_tree.json`, the night rebuilt; 3562 frames at 30 fps,
+  1:59): the day as in M7.6, the elder waiting at (-12, 4.5) by the west
+  ramp's top; dusk at 2x (144 to 158 s), 4x to 166 s, 2x up the ramp, 1x
+  from 172 s; the elder steps down to (-12, 2.2) beside the column's way at
+  about 178 s, so both west ghouls (5 s apart, 3 m) turn on it within the
+  same second, and leads them round the plaza outside the pines (90 hops
+  of 0.3 m to about 45 degrees; they stay 1.7 and 2.1 m behind, no swing)
+  while Fern's ballista kills the east column (187.1, 191.7, 196.7 s); at
+  sunrise (225 s) both lured ghouls catch fire and fall (227.1, 227.6 s).
+  Tree 20/20. Tuned in seven simulation runs against the frame trace.
+  Save format, input log, net protocol, commands and golden unchanged.
+
+### M7.6 Tuning, soak and demo
+
+- **Status:** done (branch `kestrel-sacred-tree-daynight`)
+- **Why:** the playtest needs four nights that feel right in 15 minutes.
+- **What to do:** tune night sizes and the first day; update the demo to
+  show a full cycle (a day of building, dusk, a night attack, dawn);
+  screenshots; full suite once; a `docs/test-time.md` row; mark the
+  design done.
+- **Where:** `sacred_tree_supply.ron`, `app/demos/sacred_tree.json`,
+  `SACRED_TREE_DAYNIGHT.md`.
+- **Found in:** day and night design.
+- **Done:** tuning: the nights (3+2, 5+4, 5+5, 5+5 repeating), day 150 s,
+  night 75 s and the 40 m ring are kept; `waves_tests` and the soak pass
+  as they are. A probe (four nights, the tree's health raised so it
+  plays them all) measured the fight: ghouls top the ramps about 41 s
+  after dusk and breach 63.7 to 73.7 s in; with a ballista by each ramp
+  the bolts fly from 55.4 s and the kills come 56.5 to 66.9 s in, and dawn
+  burns none (0 dispelled, defended or not). So the fight is about 11 s
+  at the end of each night; see the new open task "The night's fight
+  comes late" for the numbers and the recommendation (a ring at about
+  28 m and a 5 s column gap). Dusk (`sacred_tree.ron`): the red, dark
+  key ((1.0, 0.52, 0.30) 12000 lux, ambient (0.74, 0.62, 0.70) 720, sky
+  (0.28, 0.16, 0.17)) is now golden: sun (1.0, 0.74, 0.42) 13000 lux,
+  ambient (0.80, 0.71, 0.60) 820, sky (0.34, 0.25, 0.15); the ground reads
+  warm brown and gold instead of rust, distinct from dawn's rosy sky and
+  lavender ambient, the shadows long to the east. Demo
+  (`demos/sacred_tree.json`, rebuilt; 3282 frames at 30 fps, 1:49): the
+  day as in M6.7 at 2x (the elder digs two stone layers at the east
+  vein, Reed mines, the ballista by the east ramp's end, loaded, Fern
+  mans it, by 53 s); 4x through the afternoon (the elder loads Reed's
+  stone and walks to the top of the west ramp at 132 s; "NIGHT FALLS IN"
+  from 120 s); dusk at 2x (144 to 158 s, the lanterns and the tree's glow
+  coming up); 4x to 186 s; 2x while the west column climbs its ramp; 1x
+  from 192 s: the west column tops the ramp under the lanterns facing the
+  camera, eyes glowing, turns on the elder at 3 m, and the elder leads
+  both ghouls round the plaza outside the pines (61 hops of 0.3 m, 9
+  frames apart, about 0.65 m/s on a 12.5 m arc from (-12, 2.2) to (2.1,
+  12.3); they stay 1.8 and 3.2 m behind, no swing starts) while Fern's
+  ballista shoots the east column (3 kills, 206 to 212 s); at sunrise
+  (225 s) the two lured ghouls catch fire beside the elder and fall
+  (227.5 s). Tree 20/20, no breach. Its waits were tuned in simulation
+  runs against the frame trace (threat and elder positions by
+  `settlement.seconds`); the stills were cut from the video by the
+  trace's seconds (no frame dump). The eyes read at the town zoom on a
+  ghoul facing the camera (two yellow dots), small as M7.4 found; the
+  `PLAYER 1` tag can sit over the nearest chaser. `app/README.md`
+  describes days and nights, the dial, the waves by night, the dawn burn
+  and the new demo. Save format, input log, net protocol, commands and
+  golden unchanged. The design is marked done.
+
+### M7.5 The time on the HUD
+
+- **Status:** done (branch `kestrel-sacred-tree-daynight`)
+- **Why:** you plan the last trip before dark (N8, N10).
+- **What to do:** a small sun-and-moon dial with the night's number; a
+  "Night falls in 0:20" warning near dusk; nights survived once the last
+  listed night repeats. Reads M7.1's clock.
+- **Where:** `app/src/settlement.rs` (HUD).
+- **Found in:** day and night design.
+- **Tests:** HUD text at day, near dusk and at night (the control tests).
+- **Done:** a new view module, `app/src/clock_hud.rs`, spawned by the
+  settlement view in towns (`Settlement::clock_hud`, despawned at shutdown)
+  and shown only while the mirror's settlement has a clock and the tree
+  stands (`tree_fallen` hides it; the fallen overlay speaks). Top right
+  (right 36 px, top 32 px, where the off-town contact panel sits), right
+  aligned: a 64 x 34 px dome (2 px rim in the HUD's cream, a dim blue sky by
+  day, dark navy by night) whose 12 px sun (warm yellow) by day or moon
+  (pale blue-white) by night rides a 22 px arc from half-risen on the
+  left (east) at dawn or dusk, over the top halfway, to setting on the
+  right; it moves at the mirror's eased tick (`day_cycle::hour` at `tick +
+  alpha`). Under it, in the HUD's font: "DAY 1" before the first dusk,
+  "NIGHT 1" through it, "DAY 2" after (14 px, cream); "NIGHT FALLS IN 0:14"
+  from `NIGHT_WARNING_SECONDS` (30) before dusk, rounding part seconds up
+  (16 px, orange); and "NIGHTS SURVIVED n" (`Settlement::nights_survived`)
+  always from the first dawn, the simpler choice N10 allows (12 px,
+  muted). Lines that are empty are `Display::None`. The status line's wave
+  part moved to `clock_hud::waves_text`: with a clock, a wave due at the
+  next dusk or later is no longer counted down there ("NEXT WAVE" would say
+  what the dial says); one due before dusk (a timed wave) still is, and
+  "GHOULS n" is unchanged; scenes without a cycle keep "NEXT WAVE". The
+  control snapshot's `settlement.clock` gives the dial's `label`,
+  `warning`, `survived` and `marker` (null while hidden). No sim state:
+  the clock, `nights_survived` and `next_wave` were all there. Tests
+  (pure functions, `movement_test`): `clock_hud::tests::by_day_the_dial_names_the_day_and_warns_only_near_dusk`
+  (no warning 31 s out, 0:30 at 30 s, 0:20, 0:01 on the day's last tick,
+  "DAY 2" with one night survived), `by_night_the_dial_names_the_night_and_the_nights_survived`
+  (night 1, night 4 past the three listed ones),
+  `with_days_and_nights_the_status_line_leaves_dusk_to_the_dial` and
+  `the_sun_and_moon_rise_in_the_east_and_set_in_the_west` (inside the
+  dome). Screenshots (the M7.4 4x script, frames by `settlement.seconds`):
+  near dusk (137 s) the sun low on the right, "DAY 1", "NIGHT FALLS IN
+  0:14" and no NEXT WAVE in the status line; midnight (187.5 s) the moon at
+  the top of a navy dome, "NIGHT 1", "GHOULS 5" in the status line. Save
+  format, input log, net protocol and golden unchanged (view only). See
+  "Clock dial polish" for what was left.
+
+### M7.4 Lights at night
+
+- **Status:** done (branch `kestrel-sacred-tree-daynight`)
+- **Why:** the town and the threat stay readable in a dark night (N7).
+- **What to do:** the tree glows (a warm point light rising at dusk,
+  fading at dawn); ghouls' eyes glow (two small emissive dots); a few
+  fixed lanterns placed in the scene file, lit at dusk: at the top of each
+  ramp and round the tree's plaza.
+- **Where:** `app/src/scene.rs`, `settlement.rs` (ghoul drawing),
+  `sacred_tree.ron`, the scene schema.
+- **Found in:** day and night design.
+- **Tests:** a midnight screenshot shows the plaza, both ramp tops and an
+  approaching ghoul.
+- **From M7.3:** the moon is a 1800 lux key with ambient 150
+  (`sacred_tree.ron`'s `day_cycle.midnight`); lights rising at dusk can
+  read the hour with `voxel_assets::day_cycle::hour` and the cycle's
+  `MORNING`/`EVENING` blends (`app/src/daylight.rs` samples it each frame
+  at the mirror's `tick + alpha`). The built-in deck's three
+  `style::AccentLight` point lights still shine in the town (a warm patch
+  by the stone pile at night): keep, move or switch them off for the
+  town. Dusk reads darker than dawn because the camera sees the sun's back
+  side then; the tree's glow can help.
+- **Done:** schema (`voxel_assets::day_cycle`, re-exported): `Scene::lanterns:
+  Vec<Lantern>` (`Lantern { position }`, a post's foot) and `Scene::glow:
+  Option<NightGlow>` (`NightGlow { position, color, intensity, range }`,
+  lumens at full glow, meters), both `#[serde(default)]` (no pack version
+  bump), checked by `validate_night_lights` (finite places, up to 64
+  lanterns, colors 0..1, up to 10 million lumens, range 0.1 to 100 m). Drawn
+  only: the sim doesn't know of them, so lanterns don't block walks (the
+  happy path and routes unchanged). The curve, `day_cycle::night_glow(hour)
+  -> 0..1`: out by day, lit up (smoothstep) from `LIGHTING_UP` (80% of the
+  day, 30 s before dusk) to `DUSK_GLOW` 0.5 at dusk, on to full over the
+  night's `EVENING` (30%), full until `SMALL_HOURS` (75%), down to
+  `DAWN_GLOW` 0.5 at dawn and out by `PUTTING_OUT` (10% of the day, 15 s);
+  continuous at both swaps. App (`app/src/daylight.rs`):
+  `spawn_night_lights` (from `SceneView::init`, `WorldScoped`) spawns the
+  glow's `PointLight` and, per lantern, four cuboids (a base, a 1.6 m post,
+  a glowing head at 1.75 m, a cap) and a warm point light (`LANTERN_LUMENS`
+  250000, `LANTERN_RANGE` 10 m), all with shadows off; `NightLight { full }`
+  marks them. `glow_at(pack, time)` is the curve at the mirror's eased
+  tick (always 1 without a cycle); `follow` and `dress` write `full * glow`
+  to each light and the heads' emissive (10, 5, 1.5 at full, only when it
+  changes). Accent lights: in a scene with a day cycle `dress` turns the
+  built-in deck's three `AccentLight`s off (the night's lights replace
+  them); other scenes keep them. Ghouls' eyes: a new `eyes` material in
+  `styles/forest.ron` (emissive (14, 10, 2)) and two 0.11 x 0.08 m boxes
+  under the `ghoul` skin's brow; always lit, so the forest's ghouls have
+  them too. The Sacred Tree (`sacred_tree.ron`): the glow at (0, 2.6, 0)
+  under the canopy, (1.0, 0.72, 0.40), 2 million lumens, 20 m; lanterns at
+  (+-14.6, 0, +-4.4) (each side of the top of both ramps; the plateau's edge
+  is 15.5 m out, the ramps 7 m wide) and round the plaza at (+-3.4, 0, 6.4)
+  and (+-4.6, 0, -4.6): nine point lights in all. Tests: `voxel_assets`
+  `day_cycle::tests::the_nights_lights_rise_at_dusk_and_fade_at_dawn` (out
+  by day, full at midnight, continuous at dusk and dawn, rising and falling
+  steadily) and `night_lights_out_of_range_fail_validation`;
+  `style::tests::a_day_cycle_wins_over_the_style_and_other_scenes_keep_their_fixed_light`
+  now also checks the Sacred Tree's glow and lanterns are lit by
+  `glow_at` and its accent lights are off, and that the industrial scene
+  has no night lights and its accents back. Screenshots (the M7.3 demo
+  script at 4x, 30 fps, frames by `settlement.seconds`): noon (75 s) the
+  lanterns are small dark posts, unlit; dusk (152 s) their heads lit and a
+  soft warm pool under the tree; midnight (187.5 s) a warm pool over the
+  plaza (piles, sprites, the wood gatherer), lantern pools at both ramp
+  tops, the west column's yellow eyes readable and the east column on its
+  ramp. A first try (400000 lm tree, 60000 lm lanterns) barely lit the
+  plaza against the 1800 lux moon. Save format, input log, net protocol,
+  commands and golden unchanged (view only). For later: the eyes are a pixel
+  or two at the town zoom and show only on a ghoul facing the camera (the
+  east column, walking away, shows none); the tree's pool shows faint
+  concentric bands on the grass; see "Night lights polish".
+
+### M7.3 The sun, the moon and the colors
+
+- **Status:** done (branch `kestrel-sacred-tree-daynight`)
+- **Why:** you read the hour from the shadows and the light's color (N5,
+  N6).
+- **What to do:** a `day_cycle` section in the scene file with four keys
+  (dawn, noon, dusk, midnight), each with sunlight color and illuminance,
+  ambient color and brightness, sky color and fog; blended between keys.
+  The scene's one `DirectionalLight` follows an east-to-west arc tilted
+  south, elevation clamped near 10° at the horizon; at night the same
+  light is a dim blue moon on the same arc. The moon is dim: night is
+  dark enough that M7.4's lights matter. Tune the shadow cascades for the
+  256 m map and low sun. Scenes without the section keep their fixed
+  light; a style switch keeps the cycle's light.
+- **Where:** `kestrel/tools/assetc/core` (scene schema),
+  `app/src/scene.rs`, `style.rs`, `app/assets/levels/sacred_tree.ron`.
+- **Found in:** day and night design.
+- **Tests:** keyframe blending at and between keys; screenshots at dawn,
+  noon, dusk and midnight.
+- **Done:** schema: `Scene::day_cycle: Option<DayCycleLight>`
+  (`voxel_assets::day_cycle`, `#[serde(default)]`, so other scenes read
+  none; no pack version bump, as with earlier optional scene fields):
+  `DayCycleLight { dawn, noon, dusk, midnight }`, each a `LightKey {
+  sunlight, illuminance, ambient, ambient_brightness, sky, fog_density }`
+  (sRGB 0..1, the style profile's ranges). The fog's color is `sky`, as a
+  style's fog is its background. A scene with one must have a scenario
+  with a day cycle (`ScenePack::validate`). Pure functions:
+  `day_cycle::hour(&Clock, time: f64) -> Hour { night, fraction }` (the
+  sim's clock at a fractional tick, so the view eases between ticks);
+  `DayCycleLight::at(hour) -> Light { key, toward }`: each key holds at its
+  hour and eases (smoothstep) to the next, dawn to noon over the day's
+  first 30% (`MORNING`), noon from 70% (`AFTERNOON`) to dusk, dusk to
+  midnight over the night's first 30% (`EVENING`), midnight from 75%
+  (`SMALL_HOURS`) to dawn; the illuminance dims to zero over the 3% at
+  each end of a phase (`SWAP`), so the sun setting in the west comes back
+  as the moon rising in the east unseen. `day_cycle::sky_arc(fraction)`:
+  the unit direction towards the sun (by night the moon): `(cos a * cos
+  e, sin e, sin a * cos e)` with `a = pi * fraction`, so east (+x) at the
+  phase's start, due south (+z) in its middle and west (-x) at its end;
+  elevation `e = 10 + 48 * sin a` degrees (`HORIZON_ELEVATION` 10,
+  `PEAK_ELEVATION` 58), so shadows are at most about 5.7 times a caster's
+  height. App (`app/src/daylight.rs`): `follow`, every frame in the scene
+  view's Present phase, samples the cycle at the mirror's `tick + alpha`
+  and writes the DirectionalLight's color, illuminance and rotation
+  (shadows on), `GlobalAmbientLight`, `ClearColor` and the camera's
+  `DistanceFog`. `style::apply` calls `daylight::dress` after the style,
+  so the cycle wins over the style's sunlight, ambient, background and
+  fog on a scene switch; without a cycle `dress` puts the light back at
+  its fixed place (`fixed_transform`, the deck's (-8, 12, 5)) with the
+  default cascades, so other scenes are as before. Cascades in a cycle
+  scene (`cycle_cascades`): 3 cascades, 10 to 80 m, first far bound 32 m,
+  overlap 0.2 (the town's orthographic camera is about 35 m out and shows
+  ground 15 to 60 m deep; the default's first cascade, 0.1 to 10 m, was
+  empty air and its last ran to 150 m at about 5 cm texels, now the far
+  one is about 2.8 cm with the default 2048 map). Long low-sun shadows
+  fall on ground on the caster's own light ray, so they stay inside a
+  cascade's box; none clipped in the shots. The Sacred Tree's keys
+  (`sacred_tree.ron`): dawn sun (1.0, 0.68, 0.42) 11000 lux, ambient 600;
+  noon the forest style's (1.0, 0.96, 0.88) 14000, ambient 800; dusk
+  (1.0, 0.52, 0.30) 12000, ambient 720, a red sky; midnight a moon (0.55,
+  0.68, 1.0) at 1800 lux, ambient (0.32, 0.42, 0.78) 150, sky (0.015,
+  0.025, 0.06). Tests: `voxel_assets` `day_cycle::tests` (keys hold at
+  their hours, dawn and dusk dim at the swap, eased blends between every
+  pair, the arc's east, south and west and its elevations, `hour` against
+  the sim's `Clock::at` tick by tick, out-of-range keys fail);
+  `style::tests::a_day_cycle_wins_over_the_style_and_other_scenes_keep_their_fixed_light`
+  (the Sacred Tree twice from the industrial scene: dawn's colors, not the
+  forest's, low in the east, 3 cascades, following the clock frame by
+  frame; back in the industrial scene its fixed light, place and
+  cascades). Screenshots (a demo script at 4x, 30 fps, frames picked by
+  the trace's `settlement.seconds`: 9 s, 75 s, 143 s, 187.5 s): dawn warm
+  with long shadows to the west; noon as before; dusk red-orange, the
+  shadows long to the east; midnight dark blue, the ground, trees and the
+  first ghouls on the east ramp faintly readable. Save format, input log,
+  net protocol, commands and golden unchanged (view only). For later: the
+  camera looks west-north-west, so at dusk the faces it sees are back-lit
+  and the town reads darker than at dawn (dusk's ambient is raised to
+  make up); the built-in deck's three accent point lights still light the
+  town (a faint warm patch by the stone pile at night), worth deciding in
+  M7.4; a demo script at under 30 fps with rate 4 runs at one tick a
+  frame (the host's `MAX_CATCH_UP` of 8 ticks resets the pacer), so keep
+  `fps * 8 >= 60 * rate` in M7.6's demo; the control protocol can't skip
+  time, so shots of an hour need the whole run up to it.
+
+### M7.2 Night waves and dawn
+
+- **Status:** done (branch `kestrel-sacred-tree-daynight`)
+- **Why:** ghouls attack at night, one wave per night, and the day starts
+  clean (N2, N3, N10).
+- **What to do:** in a scenario with a day cycle, waves are lanes (id,
+  position, target, character) plus a `nights` list, each night giving the
+  ghouls per lane; a night's ghouls spawn spread over its first third; the
+  last night repeats. At sunrise every live ghoul catches fire (the fire
+  effect) and falls within a few seconds, as dispelled (its own event, no
+  kill). Replace the Sacred Tree's waves (start from today's 3/5/6/7/8/8
+  and retune for 150 s days and 75 s nights). Scenarios without a cycle
+  keep `first`/`every`/`count`. Save format up.
+- **Where:** `kestrel/content` (scenario), `sim/src/settlement/combat.rs`
+  (spawning), `fire.rs`, `mod.rs` (loading), `waves_tests.rs`,
+  `lane_tests.rs`, `soak_tests.rs`, the happy path,
+  `sacred_tree_supply.ron`.
+- **Found in:** day and night design.
+- **Tests:** no spawn by day; listed counts per lane within the first
+  third; the last night repeats; dawn dispels all and the balances hold;
+  ignored, the town falls on a known night; one ballista per ramp holds
+  four nights; the soak runs several cycles; other scenes' golden
+  behaviour lines unchanged (regenerate state hashes in their own commit
+  if needed).
+- **Done:** content: a wave with `nights: [..]` is a lane
+  (`content::scenario::Wave::nights`, `Wave::lane()`): how many ghouls it
+  sends on each night, the first night first; `first`/`every`/`count` are
+  now `#[serde(default)]` and must be left out of a lane. Validation: a
+  lane needs the day cycle, every lane lists the same number of nights (up
+  to 64, each up to 64 ghouls); timed waves keep their old checks and may
+  still run beside a day cycle (tests use one to send a ghoul at a set
+  time); other scenes are unchanged. The supply reads
+  `(id: "east", position: (40.0, 0.0), target: (1.8, -0.6), character:
+  "ghoul_sacred_tree", nights: [3, 5, 5, 5])` and west `[2, 4, 5, 5]`
+  (one lane per ramp, no more lane-per-ghoul workaround). Sim:
+  `Settlement::clock: Option<Clock>` (from `Clock::of` in
+  `from_scenario`; `Clock` is serde now) and `Settlement::dispelled: u64`;
+  `WaveState::nights` (empty for timed), `lane()`, `sending()` (timed until
+  its count, a lane always; the reroutes use it, so a moat dug by day
+  replans a lane's route), `on_night(n)` (the last listed night repeats).
+  `combat::lane_starts(count, night_ticks)`: a lane's ghouls set off
+  `COLUMN_GAP` (2.5 s) apart from dusk, closer (evenly over the night's
+  first third) only if that would run past it; `combat_housekeeping`
+  spawns `due` ones per tick (`spawn` is the old body). Clock helpers:
+  `since_dusk(t) -> Option<u64>`, `dawn(t)` (a tick that starts a day after
+  a night; tick 0 isn't). Dawn (`Settlement::dawn`, from housekeeping on a
+  `dawn` tick): every threat gets `Burn { dawn: true, damage: 0, .. }`
+  lasting `DAWN_BURN` (2 s) plus up to 2 s by id, drops its windup, stands
+  still (`follow_route`), starts no swing and doesn't breach; a fire patch
+  doesn't touch a dawn burn; when it runs out `Settlement::burn` removes it
+  with `Event::Dispelled { threat, position }` and `dispelled += 1`: no
+  `Hit`, no kill, no breach. The app maps it to
+  `legacy::Event::Dispelled { target, position }` (no effect or sound yet:
+  the threat's `burning` flames show, then it's gone). For the HUD:
+  `Settlement::next_wave(tick) -> Option<u64>` (the next tick any wave
+  sends, timed or by night; the status line's "NEXT WAVE" now uses it, so
+  it counts down to dusk), `nights_survived(tick)` (sunrises so far),
+  `clock.map(|c| c.night(tick))` for the night's number, `dispelled` for
+  the dawn's toll. Tuning (measured by `waves_tests`: ballistas manned by
+  sprites and topped up from the tree 47 s after each dusk):
+
+  | Number | Before | After | Measured |
+  |---|---|---|---|
+  | Waves | 165 s calm, then 3/5/6/7/8/8 every 90 s over 8 one-ghoul lanes | the first day calm (dusk at 150 s), then a night's columns of east 3/5/5/5, west 2/4/5/5: 5, 9, 10 and 10 ghouls, the fourth repeating | Ghouls take about 63 s from the ring, so a column's 5th (10 s behind its head) reaches the tree just before dawn (73 s); a 6th would only burn on the hill, hence columns of at most 5. Ignored, the tree falls on the third night, at 668 s (68 s after dusk, 20 breaches, with ghouls of that night still to come); before, the fourth wave at 504 s. One ballista by the east ramp: tree 4/20 after four nights, 16 breaches, 18 kills. One by each ramp: 20/20, all 34 killed, none dispelled. |
+  | Dawn | none | 2 to 4 s burn | With the real nights all columns arrive before dawn, so dawn burns only stragglers (chasers, broken-building fighters, stranded ghouls). |
+
+  Tests: `clock_tests::sunrises_and_the_time_since_dusk`; `waves_tests`
+  (rewritten): `a_lanes_ghouls_set_off_in_a_column_within_the_nights_first_third`,
+  `ghouls_come_only_by_night_as_listed_and_the_last_night_repeats` (20 s
+  days, 9 s nights, six nights: every spawn by night within the first
+  third, each lane's listed count per night, nights 5 and 6 repeat night
+  4, every ghoul dispelled, no kill), `the_sunrise_burns_every_ghoul_away`
+  (real clock, an east night of 8: at dawn all alight, standing still, gone
+  within 2 to 4 s, no hit, kill or breach, then a calm day),
+  `an_undefended_town_has_its_calm_day_then_falls_on_the_third_night`
+  (also `next_wave(0)` is the first dusk, `nights_survived` 2), and
+  `a_ballista_guards_one_ramp_and_one_by_each_holds_four_nights`; every
+  run checks spawned = out + breached + killed + dispelled.
+  `lane_tests::a_moat_dug_by_day_sends_the_next_nights_column_round_by_the_other_ramp`.
+  The wave soak plays five days and nights (1130 s) with `validate` and the
+  balances every tick and checks every night's ghouls came and five nights
+  survived. `content_test`: the lanes, and lanes without a cycle, with
+  timing or with unequal night lists fail. The app's happy path (control
+  tests) must end before 190 s (ghouls set off at the 150 s dusk). Save
+  format 39 (`WaveState::nights`, `Settlement::clock`, `dispelled`,
+  `Burn::dawn`); input log, net protocol and `CommandKind` unchanged.
+  Golden: forest and arena state hashes moved (the new fields), behaviour
+  lines unchanged; regenerated in its own commit. `Threat` is 8 bytes
+  smaller (the `dawn` flag gives `Option<Burn>` a niche). Not done: the
+  demo `demos/sacred_tree.json` was not rerun; its fixed frame waits were
+  timed for a first wave at 165 s and three east ghouls, and night 1 now
+  falls at 150 s with 3 east and 2 west, so its fireball and bolts likely
+  miss the column (M7.6).
+
+### M7.1 The clock
+
+- **Status:** done (branch `kestrel-sacred-tree-daynight`)
+- **Why:** the night decides when ghouls come, so the sim must know the
+  hour ([day and night design](../SACRED_TREE_DAYNIGHT.md), N1, N4).
+- **What to do:** a `day_cycle: Some((day: 150.0, night: 75.0))` setting
+  in the supply's scenario (seconds; start at dawn); pure functions of the
+  tick for the phase (day or night), the fraction through it, the night's
+  number and the time to the next dusk, in `Fx`/ticks. No new settlement
+  state. Scenarios without a cycle report none.
+- **Where:** `kestrel/content` (scenario schema), `kestrel/sim/src/settlement`
+  (a new `clock.rs`), `app/assets/levels/sacred_tree_supply.ron`.
+- **Found in:** day and night design.
+- **Tests:** boundaries for unequal lengths, night numbers, time to dusk;
+  no cycle means no clock.
+- **Done:** content: `Scenario::day_cycle: Option<DayCycle>`
+  (`content::scenario::DayCycle { day, night }`, `Fx` seconds, each 1 to
+  3600 s), `#[serde(default)]` so other scenarios read none; written
+  `day_cycle: Some((day: 150.0, night: 75.0))`. The Sacred Tree's supply
+  has it; its waves are unchanged. Sim: `settlement::clock` (re-exported
+  `settlement::{Clock, TimeOfDay}`; the phase enum is `clock::Phase`, since
+  `settlement::Phase` is the haulers'). `Clock::of(&Scenario) ->
+  Option<Clock>` converts with `scenario::ticks` (150 s is 9000 ticks);
+  `Clock { day, night }` in ticks, `cycle()`, and for a tick `phase(t)`
+  (`Day` below `day` ticks into the cycle, then `Night`), `fraction(t)`
+  (`Fx`, 0 at the phase's first tick, under 1 at its last), `night(t)`
+  (nights begun: 0 the first day, `n` through the `n`th night and the day
+  after it), `ticks_to_dusk(t)` (`day` at dawn, 1 on a day's last tick, a
+  whole cycle at dusk itself), and `at(t) -> TimeOfDay` with all four. The
+  cycle starts at dawn at tick 0; there is no start offset (the design's
+  `start`), add one with a field if a scene needs it. Nothing is stored in
+  `Settlement`, so saves, hashes and the golden don't change; the app can
+  build the clock from its scene's scenario. M7.2 needs it inside the
+  sim's tick: keep a `Clock` (or the cycle's ticks) in `Settlement` from
+  `from_scenario` then, with that task's save format bump. Tests
+  (`settlement/clock_tests.rs`, 6 s days and 3 s nights): phases and
+  fractions at dawn and dusk, night numbers, time to dusk counting down and
+  wrapping; the Sacred Tree's clock (dusk at 2:30, night 1 at dusk and the
+  next day, four nights by 15 minutes); no cycle means no clock, and
+  fractional seconds round up as the loader's do. `content_test`: only the
+  Sacred Tree has a cycle, and out-of-range lengths fail validation.
 
 ### M6.7 Waves, tuning, soak and demo
 

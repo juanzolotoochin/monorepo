@@ -93,6 +93,7 @@ fn scenario() -> Scenario {
         building_kinds: vec![],
         buildings: vec![],
         sprites: vec![],
+        day_cycle: None,
     }
 }
 

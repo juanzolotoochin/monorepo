@@ -900,6 +900,7 @@ fn supply_pile_lab() -> SceneSetup {
         building_kinds: vec![],
         buildings: vec![],
         sprites: vec![],
+        day_cycle: None,
     };
     SceneSetup { scenario: Some(scenario), ..pile_lab() }
 }

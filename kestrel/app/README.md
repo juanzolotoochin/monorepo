@@ -817,11 +817,22 @@ hill, a sprite that a ghoul chases or comes within 3 m of runs home beside
 the tree and waits there until the ghouls are gone, then goes back to
 work.
 
-After a calm start of 2:45, ghouls come in six waves, 90 s apart, from a
-ring 40 m out: an east column up the east ramp from the first wave and
-west lanes up the west ramp from the second, about a minute's walk to the
-tree. A ballista by each ramp's end (manned and stocked with stone) stops
-them; one alone leaves the other ramp's ghouls to breach. A pit dug in a
+Days last 2:30 and nights 1:15, starting at dawn, so the first day is the
+calm start. The sun crosses the sky from east to west (the shadows swing
+and stretch) and the light turns golden at dusk; at night a dim blue moon
+takes its arc, the tree glows and lanterns light the tops of the ramps and
+the plaza. The dial at the top right shows the sun or moon, the day or
+night's number and, from 30 s before dusk, "NIGHT FALLS IN 0:14". Ghouls
+come only by night, one wave a night from a ring 28 m out, just past the
+ramps' feet: a column up each ramp, its ghouls 5 s apart, 3 east and 2 west
+on the first night, then 5 and 4, then 5 and 5, which repeats from then on.
+They top the ramps about 21 s after dusk and reach the tree from about 44 s
+to 64 s, so the fight comes in the night's middle. At sunrise every ghoul
+still out (one held up on the way) catches fire and falls (dispelled, not
+killed). A ballista by each ramp's end (manned and stocked with stone)
+stops them; one alone leaves the other ramp's ghouls to breach, and left
+alone the tree falls on the third night. Ghouls turn on an elder or sprite
+they see within 3 m and give up once it is 5 m away. A pit dug in a
 ghoul's way re-routes it; with no walkable way left to the tree (a moat
 round both ramps' feet) it walks as close as it can and waits there.
 Each sprite has a flame over its head and a tag with its name, job and what
@@ -888,17 +899,22 @@ keep what they do.
 bazel build //kestrel/app:sacred_tree_demo
 ```
 
-renders a short video (a local GPU target, like the other demos; build it
-without `--config=remote`) on the big map. Ash works the Wood Gatherer.
-The elder walks down the east ramp to the vein beside it, digs two stone
-layers with F (the second from inside the first pit), picks up a bundle
-of the dug stone, and sends Reed to mine, who fetches the rest and digs
-on. Back on the plateau the elder builds a ballista by the east ramp's
-end from the tree's wood and the dug stone, loads it with the leftover,
-and Fern mans it. At 4x the elder loads the stone Reed brought meanwhile,
-and the first wave's east column comes up the ramp: the elder possesses
-the ballista (Fern steps out), throws a fireball at the column's head and
-fires four bolts, then leaves, and Fern finishes the column.
+renders a video of a day and a night (a local GPU target, like the other
+demos; build it without `--config=remote`) on the big map. Ash works the
+Wood Gatherer. At 2x the elder walks down the east ramp to the vein beside
+it, digs two stone layers with F (the second from inside the first pit),
+picks up a bundle of the dug stone, and sends Reed to mine, who fetches
+the rest and digs on. Back on the plateau the elder builds a ballista by
+the east ramp's end from the tree's wood and the dug stone, loads it with
+the leftover, and Fern mans it. At 4x the afternoon passes; the elder
+loads the stone Reed brought and walks to the top of the west ramp as the
+dial warns of the night. Dusk turns the light golden and the lanterns and
+the tree's glow come up (at 2x); the first night's ghouls rise out of the
+ground on the ring below the ramp and walk in (4x, then 2x up the ramp).
+At 1x the west column tops its ramp under the lanterns, eyes glowing; the
+elder steps down beside its way, both ghouls turn on it, and it leads them
+round the plaza outside the pines while Fern's ballista shoots the east
+column at the tree; at sunrise the two lured ghouls catch fire and fall.
 
 ## Red Clearing combat arena
 

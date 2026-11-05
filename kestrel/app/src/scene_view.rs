@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use bevy::prelude::*;
-use service::{Service, WorldLayer, WorldState};
+use service::{AppServices, Service, WorldLayer, WorldState};
 use voxel_assets::{Scene, SceneFeature, ScenePack};
 
 use crate::assets::SceneLibrary;
@@ -68,6 +68,7 @@ impl Service for SceneView {
         }) {
             world.resource_mut::<crate::gameplay::Controls>().weapon = weapon;
         }
+        crate::daylight::spawn_night_lights(world, &pack);
         crate::style::apply(world, &pack, false);
         crate::piano::spawn(world, &pack.scene);
         // The built-in deck shows only where the scene brings no ground of
@@ -101,6 +102,8 @@ impl Service for SceneView {
                 .run_if(crate::control::rendered)
                 .run_if(in_state(WorldState::Active)),
         );
+        // The sun and moon of a scene with a day cycle, after the tick's mirror.
+        app.add_service_systems::<Self, _>(service::Phase::Present, crate::daylight::follow);
         app.add_systems(PostUpdate, (update_destructibles, crate::destruction::animate,
             draw_hazard_arcs.run_if(resource_exists::<bevy::gizmos::config::GizmoConfigStore>))
             .chain().run_if(in_state(WorldState::Active)));

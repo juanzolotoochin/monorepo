@@ -373,10 +373,39 @@ pub struct Wave {
     /// The enemy this wave sends, by short name (`ghoul` for
     /// `character/ghoul`): its speed, health, armor and breach damage.
     pub character: String,
-    /// Seconds until the first enemy.
+    /// Seconds until the first enemy, then one every `every` seconds,
+    /// `count` in all: a timed wave. Left out for a lane.
+    #[serde(default)]
     pub first: Fx,
+    #[serde(default)]
     pub every: Fx,
+    #[serde(default)]
     pub count: u32,
+    /// A lane of a scenario with a day cycle: how many enemies it sends on
+    /// each night, the first night first (`[3, 4, 5]`). After the last
+    /// listed night, the last repeats forever. Every lane lists the same
+    /// number of nights. A night's enemies set off over its first third
+    /// (`sim::settlement::combat`). Empty for a timed wave.
+    #[serde(default)]
+    pub nights: Vec<u32>,
+}
+
+impl Wave {
+    /// Whether it is a lane, sending enemies by night, rather than timed.
+    pub fn lane(&self) -> bool {
+        !self.nights.is_empty()
+    }
+}
+
+/// A scenario's days and nights, in seconds. The cycle starts at dawn at
+/// tick 0: a day, then a night, then the next day, forever. The clock is a
+/// function of the tick (`sim::settlement::clock`), so nothing about it is
+/// saved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DayCycle {
+    pub day: Fx,
+    pub night: Fx,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -478,6 +507,9 @@ pub struct Scenario {
     pub buildings: Vec<Building>,
     #[serde(default)]
     pub sprites: Vec<Sprite>,
+    /// Days and nights; without one it is always day, as before.
+    #[serde(default)]
+    pub day_cycle: Option<DayCycle>,
 }
 
 fn f(n: i64, d: i64) -> Fx {
@@ -747,14 +779,30 @@ impl Scenario {
             }
         }
         for w in &self.waves {
-            if !point(w.position)
-                || !point(w.target)
-                || !within(w.first, Fx::ZERO, Fx::from_int(3600))
-                || !within(w.every, Fx::HALF, Fx::from_int(3600))
-                || !ident(&w.character)
-                || w.count > 256
-            {
+            if !point(w.position) || !point(w.target) || !ident(&w.character) {
                 return Err("invalid wave".into());
+            }
+            // A lane sends by night, so it has no timing of its own.
+            let timed = within(w.first, Fx::ZERO, Fx::from_int(3600)) && within(w.every, Fx::HALF, Fx::from_int(3600)) && w.count <= 256;
+            let lane = w.first == Fx::ZERO && w.every == Fx::ZERO && w.count == 0 && w.nights.len() <= 64 && w.nights.iter().all(|&n| n <= 64);
+            if !(if w.lane() { lane } else { timed }) {
+                return Err(format!("invalid wave {}", w.id));
+            }
+        }
+        // Lanes need nights to send on, and agree on how many are listed,
+        // so the last night is the same night for every lane.
+        let mut lanes = self.waves.iter().filter(|w| w.lane());
+        if let Some(first) = lanes.next() {
+            if self.day_cycle.is_none() {
+                return Err(format!("wave {} sends by night, but the scenario has no day cycle", first.id));
+            }
+            if let Some(other) = lanes.find(|w| w.nights.len() != first.nights.len()) {
+                return Err(format!("lanes {} and {} list different numbers of nights", first.id, other.id));
+            }
+        }
+        if let Some(c) = self.day_cycle {
+            if !within(c.day, Fx::ONE, Fx::from_int(3600)) || !within(c.night, Fx::ONE, Fx::from_int(3600)) {
+                return Err("invalid day cycle".into());
             }
         }
         Ok(())
@@ -786,6 +834,47 @@ mod tests {
         let sword = arena.weapon_tuning(Weapon::Sword);
         assert_eq!(sword.cooldown(), ticks_from_60hz(38));
         assert_eq!(arena.weapon_tuning(Weapon::Bow).cooldown(), ticks_from_60hz(28));
+    }
+
+    #[test]
+    fn only_the_sacred_tree_has_days_and_nights() {
+        assert_eq!(Scenario::parse(FOREST).unwrap().day_cycle, None);
+        assert_eq!(Scenario::parse(ARENA).unwrap().day_cycle, None);
+        let tree = Scenario::parse(SACRED_TREE).unwrap();
+        assert_eq!(tree.day_cycle, Some(DayCycle { day: Fx::from_int(150), night: Fx::from_int(75) }));
+        for (day, night) in [(0, 75), (150, 0), (3601, 75), (150, 3601)] {
+            let mut bad = tree.clone();
+            bad.day_cycle = Some(DayCycle { day: Fx::from_int(day), night: Fx::from_int(night) });
+            assert!(bad.validate().is_err(), "{day} s days and {night} s nights");
+        }
+    }
+
+    #[test]
+    fn the_sacred_tree_sends_its_ghouls_by_night() {
+        let tree = Scenario::parse(SACRED_TREE).unwrap();
+        let lanes: Vec<_> = tree.waves.iter().map(|w| (w.id.as_str(), w.lane(), w.nights.len())).collect();
+        assert_eq!(lanes, [("east", true, 4), ("west", true, 4)]);
+        assert!(tree.waves.iter().all(|w| (w.first, w.every, w.count) == (Fx::ZERO, Fx::ZERO, 0)), "lanes have no timing");
+        // The other scenes' waves are timed, as before.
+        for other in [FOREST, ARENA] {
+            assert!(Scenario::parse(other).unwrap().waves.iter().all(|w| !w.lane() && w.count > 0));
+        }
+        let invalid = |change: fn(&mut Scenario)| {
+            let mut scenario = Scenario::parse(SACRED_TREE).unwrap();
+            change(&mut scenario);
+            scenario.validate().is_err()
+        };
+        assert!(invalid(|s| s.day_cycle = None), "lanes need nights");
+        assert!(invalid(|s| s.waves[0].count = 3), "a lane has no timing");
+        assert!(invalid(|s| s.waves[0].every = Fx::from_int(90)));
+        assert!(invalid(|s| s.waves[1].nights.push(5)), "every lane lists as many nights");
+        assert!(invalid(|s| s.waves[0].nights[0] = 65));
+        // A timed wave still runs alongside the day cycle (tests send one
+        // ghoul at a set time this way).
+        assert!(!invalid(|s| {
+            let w = &mut s.waves[0];
+            (w.nights, w.first, w.every, w.count) = (Vec::new(), Fx::ONE, Fx::from_int(90), 1);
+        }));
     }
 
     #[test]

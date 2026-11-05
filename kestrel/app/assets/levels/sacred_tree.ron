@@ -15,6 +15,28 @@ Scene(id: "sacred-tree", player: "elder", features: [Digging, SlopedGround], dig
 
 ],
 mine: Some((extent: 128.0, seed: 7, hill: Some((plateau: 15, height: 8, ramp_width: 7, ramp_length: 8, foot: 10)))),
+// The light through the day and night (the supply's day cycle: dawn at the
+// start, dusk at 2:30). Noon is the forest style's light; dusk is golden,
+// amber where dawn is rosy; the moon is dim, so the night's own lights
+// matter.
+day_cycle: Some((
+  dawn: (sunlight: (1.0, 0.68, 0.42), illuminance: 11000.0, ambient: (0.74, 0.70, 0.72), ambient_brightness: 600.0, sky: (0.38, 0.30, 0.27), fog_density: 0.004),
+  noon: (sunlight: (1.0, 0.96, 0.88), illuminance: 14000.0, ambient: (0.66, 0.79, 0.92), ambient_brightness: 800.0, sky: (0.16, 0.22, 0.18), fog_density: 0.003),
+  dusk: (sunlight: (1.0, 0.74, 0.42), illuminance: 13000.0, ambient: (0.80, 0.71, 0.60), ambient_brightness: 820.0, sky: (0.34, 0.25, 0.15), fog_density: 0.0035),
+  midnight: (sunlight: (0.55, 0.68, 1.0), illuminance: 1800.0, ambient: (0.32, 0.42, 0.78), ambient_brightness: 150.0, sky: (0.015, 0.025, 0.06), fog_density: 0.004),
+)),
+// The night's lights, lit from late afternoon to full in the evening and
+// out soon after dawn: the tree's warm glow under its canopy, lighting the
+// plaza (its piles and the sprites' idle spot), and lanterns, one each side
+// of the top of each ramp (the plateau's edge is 15.5 m out, the ramps 7 m
+// wide) and four round the plaza. Drawn only: nothing walks round them.
+glow: Some((position: (0.0, 2.6, 0.0), color: (1.0, 0.72, 0.40), intensity: 2000000.0, range: 20.0)),
+lanterns: [
+(position: (14.6, 0.0, -4.4)), (position: (14.6, 0.0, 4.4)),
+(position: (-14.6, 0.0, -4.4)), (position: (-14.6, 0.0, 4.4)),
+(position: (3.4, 0.0, 6.4)), (position: (-3.4, 0.0, 6.4)),
+(position: (4.6, 0.0, -4.6)), (position: (-4.6, 0.0, -4.6))
+],
 architecture: [
 // Lifted a centimeter off the drawn ground of the plateau.
 (kind: Box, position: (0.0, -0.065, 0.0), size: (26.0, 0.15, 26.0), material: "grass"),

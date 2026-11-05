@@ -1249,11 +1249,12 @@ fn the_happy_path_plays_from_a_fresh_start() {
     let report = run_for(steps, FPS, 6000);
     assert_eq!(report["status"], "passed", "{report}");
     // All of it is played before the map's first ghouls top the hill: they
-    // set off from the ring 40 m out at 165 s and take about 40 s to reach
-    // the east ramp's top (M6.7), so no ghoul gets in the way.
+    // set off from the ring 28 m out at the first dusk, 150 s (M7.2), and
+    // take about 21 s to reach the ramps' tops (M7.7), so no ghoul gets in
+    // the way.
     let ticks = report["state"]["sim_tick"].as_u64().unwrap();
     eprintln!("the happy path took {} s", ticks / 60);
-    assert!(ticks < 200 * content::TICKS_PER_SECOND as u64, "the happy path took {} s", ticks / 60);
+    assert!(ticks < 170 * content::TICKS_PER_SECOND as u64, "the happy path took {} s", ticks / 60);
     let receipts = report["receipts"].as_array().unwrap();
     let seconds = |i: usize| receipts[i]["state"]["sim_tick"].as_u64().unwrap() / content::TICKS_PER_SECOND as u64;
     eprintln!("dug at {} s, stone at the tree at {} s, the mechanism in at {} s", seconds(dug), seconds(stone_stocked), seconds(wood_built));

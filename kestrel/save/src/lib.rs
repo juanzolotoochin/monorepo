@@ -117,7 +117,10 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///     start its bundles (`Messages::claim_dig_tile`, `sprite_bundle`).
 /// 38: a threat cut off from the tree waits as close as it can walk
 ///     (`Threat::stranded`, M6.7).
-pub const FORMAT_VERSION: u32 = 38;
+/// 39: night waves and dawn (M7.2): a wave's nights (`WaveState::nights`),
+///     the settlement's day cycle and the threats the sunrise burned away
+///     (`Settlement::clock`, `dispelled`), and a burn's `dawn`.
+pub const FORMAT_VERSION: u32 = 39;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

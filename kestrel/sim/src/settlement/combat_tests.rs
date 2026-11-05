@@ -106,6 +106,7 @@ fn scenario() -> Scenario {
         building_kinds: vec![],
         buildings: vec![],
         sprites: vec![],
+        day_cycle: None,
     }
 }
 
@@ -124,6 +125,7 @@ fn combat_scenario(tuning: Vec<WeaponTuning>) -> Scenario {
         first: Fx::from_int(3600),
         every: Fx::from_int(10),
         count: 1,
+        nights: Vec::new(),
     });
     config
 }
@@ -525,6 +527,7 @@ fn processing_reserves_output_space_and_defense_cannot_fire_free_ammunition() {
         first: Fx::ZERO,
         every: fx(1.5),
         count: 8,
+        nights: Vec::new(),
     });
     let mut arena = Arena::new(&config, &[]);
     arena.command(CommandKind::SetMachine { producer: 0, enabled: false });
@@ -1254,10 +1257,12 @@ fn a_wave_must_send_a_follow_route_character() {
 
 /// 144 bytes, 40 more for a burn (`Threat::burn`, the ballista's
 /// fireball, B4) and 8 more for a goal (B5); a windup naming its target
-/// (`SwingTarget`, B8) packs 8 smaller than one naming an agent did.
+/// (`SwingTarget`, B8) packs 8 smaller than one naming an agent did. The
+/// burn's `dawn` flag (M7.2) sits in its padding and gives the option a
+/// niche, so a burn takes 32, not 40.
 #[test]
 fn threat_size_is_pinned() {
-    assert_eq!(std::mem::size_of::<Threat>(), 184);
+    assert_eq!(std::mem::size_of::<Threat>(), 176);
 }
 
 // Ghouls hitting players in passing (GHOUL_ATTACK_HANDOFF.md, task 3). The

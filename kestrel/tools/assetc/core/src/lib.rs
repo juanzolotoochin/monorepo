@@ -1,8 +1,10 @@
 //! Renderer-independent prefab recipes, meshing and versioned asset packs.
 mod boulder;
+pub mod day_cycle;
 mod piles;
 mod style;
 pub use boulder::generate_boulder;
+pub use day_cycle::{DayCycleLight, Lantern, LightKey, NightGlow};
 pub use content::scenario::Scenario;
 pub use piles::*;
 use serde::{Deserialize, Serialize};
@@ -340,6 +342,16 @@ pub struct Scene {
     pub shape_instances: Vec<ShapeInstance>,
     #[serde(default)]
     pub scenario: Option<Scenario>,
+    /// The light through the day and night, from the scenario's clock
+    /// (which it needs). Without one the style's light is fixed.
+    #[serde(default)]
+    pub day_cycle: Option<DayCycleLight>,
+    /// Lanterns lit by night (by the day cycle's hour), drawn only.
+    #[serde(default)]
+    pub lanterns: Vec<Lantern>,
+    /// A warm light that glows by night, such as the Sacred Tree's.
+    #[serde(default)]
+    pub glow: Option<NightGlow>,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SceneFeature {
@@ -648,6 +660,13 @@ impl ScenePack {
         if let Some(style) = &self.scene.style {
             style.validate()?;
         }
+        if let Some(cycle) = &self.scene.day_cycle {
+            cycle.validate()?;
+            if self.scene.scenario.as_ref().is_none_or(|s| s.day_cycle.is_none()) {
+                return Err("a scene's day cycle of light needs its scenario's day cycle".into());
+            }
+        }
+        day_cycle::validate_night_lights(&self.scene.lanterns, self.scene.glow.as_ref())?;
         expand_scene_shapes(self.scene.style.as_ref().unwrap_or(&StyleProfile::default()),
             &self.scene.architecture, &self.scene.shape_instances)?;
         let expected = compile_destructibles(self.scene.style.as_ref().unwrap_or(&StyleProfile::default()), &self.scene.destructibles)?;
@@ -839,6 +858,9 @@ mod tests {
                 destructibles: vec![],
                 shape_instances: vec![],
                 scenario: None,
+                day_cycle: None,
+                lanterns: vec![],
+                glow: None,
                 instances: vec![Instance {
                     prefab: "rock".into(),
                     position: [0.0; 3],
@@ -892,6 +914,9 @@ mod tests {
                 destructibles: vec![],
                 shape_instances: vec![],
                 scenario: None,
+                day_cycle: None,
+                lanterns: vec![],
+                glow: None,
                 terrain: Some(Terrain {
                     platforms: vec![TerrainPlatform {
                         min: [-1.0; 2],
