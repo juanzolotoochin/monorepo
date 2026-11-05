@@ -196,16 +196,19 @@ its milestones, in order; one PR per milestone.
   `app/src/daylight.rs`, `app/assets/levels/sacred_tree.ron`.
 - **Found in:** M7.4.
 
-## M7.5 The time on the HUD
+## Clock dial polish
 
 - **Status:** open
-- **Why:** you plan the last trip before dark (N8, N10).
-- **What to do:** a small sun-and-moon dial with the night's number; a
-  "Night falls in 0:20" warning near dusk; nights survived once the last
-  listed night repeats. Reads M7.1's clock.
-- **Where:** `app/src/settlement.rs` (HUD).
-- **Found in:** day and night design.
-- **Tests:** HUD text at day, near dusk and at night (the control tests).
+- **Why:** the dial reads, but a few edges were left as they are.
+- **What to do:** by night the dial gives no countdown to dawn (a "DAWN IN
+  0:20" in the night's last seconds would help a player holding out); with
+  three lines (day, warning, nights survived) the dial reaches about 140 px
+  down the right edge and can sit under the F3 metrics overlay (`telemetry.rs`,
+  top 135 px), so move one of them; nights survived shows from the first
+  dawn, not only once the last listed night repeats (N10 allows either);
+  the dome is 64 x 34 px, small on the Steam Deck: check it there.
+- **Where:** `app/src/clock_hud.rs`, `app/src/telemetry.rs`.
+- **Found in:** M7.5.
 
 ## M7.6 Tuning, soak and demo
 
@@ -240,6 +243,52 @@ its milestones, in order; one PR per milestone.
   picking.
 
 ## Done
+
+### M7.5 The time on the HUD
+
+- **Status:** done (branch `kestrel-sacred-tree-daynight`)
+- **Why:** you plan the last trip before dark (N8, N10).
+- **What to do:** a small sun-and-moon dial with the night's number; a
+  "Night falls in 0:20" warning near dusk; nights survived once the last
+  listed night repeats. Reads M7.1's clock.
+- **Where:** `app/src/settlement.rs` (HUD).
+- **Found in:** day and night design.
+- **Tests:** HUD text at day, near dusk and at night (the control tests).
+- **Done:** a new view module, `app/src/clock_hud.rs`, spawned by the
+  settlement view in towns (`Settlement::clock_hud`, despawned at shutdown)
+  and shown only while the mirror's settlement has a clock and the tree
+  stands (`tree_fallen` hides it; the fallen overlay speaks). Top right
+  (right 36 px, top 32 px, where the off-town contact panel sits), right
+  aligned: a 64 x 34 px dome (2 px rim in the HUD's cream, a dim blue sky by
+  day, dark navy by night) whose 12 px sun (warm yellow) by day or moon
+  (pale blue-white) by night rides a 22 px arc from half-risen on the
+  left (east) at dawn or dusk, over the top halfway, to setting on the
+  right; it moves at the mirror's eased tick (`day_cycle::hour` at `tick +
+  alpha`). Under it, in the HUD's font: "DAY 1" before the first dusk,
+  "NIGHT 1" through it, "DAY 2" after (14 px, cream); "NIGHT FALLS IN 0:14"
+  from `NIGHT_WARNING_SECONDS` (30) before dusk, rounding part seconds up
+  (16 px, orange); and "NIGHTS SURVIVED n" (`Settlement::nights_survived`)
+  always from the first dawn, the simpler choice N10 allows (12 px,
+  muted). Lines that are empty are `Display::None`. The status line's wave
+  part moved to `clock_hud::waves_text`: with a clock, a wave due at the
+  next dusk or later is no longer counted down there ("NEXT WAVE" would say
+  what the dial says); one due before dusk (a timed wave) still is, and
+  "GHOULS n" is unchanged; scenes without a cycle keep "NEXT WAVE". The
+  control snapshot's `settlement.clock` gives the dial's `label`,
+  `warning`, `survived` and `marker` (null while hidden). No sim state:
+  the clock, `nights_survived` and `next_wave` were all there. Tests
+  (pure functions, `movement_test`): `clock_hud::tests::by_day_the_dial_names_the_day_and_warns_only_near_dusk`
+  (no warning 31 s out, 0:30 at 30 s, 0:20, 0:01 on the day's last tick,
+  "DAY 2" with one night survived), `by_night_the_dial_names_the_night_and_the_nights_survived`
+  (night 1, night 4 past the three listed ones),
+  `with_days_and_nights_the_status_line_leaves_dusk_to_the_dial` and
+  `the_sun_and_moon_rise_in_the_east_and_set_in_the_west` (inside the
+  dome). Screenshots (the M7.4 4x script, frames by `settlement.seconds`):
+  near dusk (137 s) the sun low on the right, "DAY 1", "NIGHT FALLS IN
+  0:14" and no NEXT WAVE in the status line; midnight (187.5 s) the moon at
+  the top of a navy dome, "NIGHT 1", "GHOULS 5" in the status line. Save
+  format, input log, net protocol and golden unchanged (view only). See
+  "Clock dial polish" for what was left.
 
 ### M7.4 Lights at night
 
