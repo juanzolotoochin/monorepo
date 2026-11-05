@@ -244,6 +244,13 @@ game_demo(
 )
 
 game_demo(
+    name = "tunnel_lab_demo",
+    game = ":demo",
+    script = "demos/tunnel_lab.json",
+    tags = ["manual"],
+)
+
+game_demo(
     name = "surprise_demo",
     game = ":demo",
     script = "demos/surprise.json",

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "scene": "tunnel-lab",
+  "fps": 30,
+  "width": 1440,
+  "height": 960,
+  "max_frames": 600,
+  "steps": [
+    { "op": "wait", "frames": 20 },
+    { "op": "walk", "position": [4, 0] },
+    { "op": "wait", "frames": 20 },
+    { "op": "walk", "position": [12, 0] },
+    { "op": "wait", "frames": 30 }
+  ]
+}

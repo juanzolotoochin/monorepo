@@ -353,6 +353,76 @@ impl Terrain {
         true
     }
 
+    /// The five points of [`Terrain::footprint`]: the center and four sides.
+    fn footprint_points(p: FxVec2, radius: Fx) -> [FxVec2; 5] {
+        [(Fx::ZERO, Fx::ZERO), (radius, Fx::ZERO), (-radius, Fx::ZERO), (Fx::ZERO, radius), (Fx::ZERO, -radius)].map(|(dx, dy)| FxVec2::new(p.x + dx, p.y + dy))
+    }
+
+    /// The ground a body of `radius` at `p` whose feet are at height `z`
+    /// stands on: in volume scenes the highest of the floors under
+    /// [`Terrain::footprint`]'s five points ([`Volume::floor`]), or nothing
+    /// if any has none (a wall, or a passage without headroom, beside or
+    /// under it); elsewhere [`Terrain::footprint`].
+    pub fn footprint_at(&self, p: FxVec2, z: Fx, radius: Fx) -> Option<Fx> {
+        let Some(volume) = &self.volume else { return self.footprint(p, radius) };
+        Self::footprint_points(p, radius).iter().try_fold(Fx::MIN, |top, &q| Some(top.max(volume.floor(q, z)?)))
+    }
+
+    /// The lowest ceiling over a body of `radius` at `p` whose feet are at
+    /// `z`: of each of the five points' [`Volume::ceiling_over`]. Nothing
+    /// outside volume scenes or under open sky.
+    pub fn ceiling_at(&self, p: FxVec2, z: Fx, radius: Fx) -> Option<Fx> {
+        let volume = self.volume.as_ref()?;
+        Self::footprint_points(p, radius).iter().filter_map(|&q| volume.ceiling_over(q, z)).min()
+    }
+
+    /// Whether a body of `radius` on foot, its feet at `z`, can walk from
+    /// `a` to `b`. In volume scenes (V3 of the verticality design), every
+    /// 0.1 m of the way each of its five points needs a floor
+    /// ([`Terrain::footprint_at`]): at most a layer ([`STEP_UP`]) over its
+    /// feet, so a step two layers up is a wall, and with headroom. Its feet
+    /// follow the floor up and down ramps; past a drop of more than a layer
+    /// they stay where they were, for the body to fall. Elsewhere
+    /// [`Terrain::walkable`], which ignores `z`.
+    ///
+    /// [`STEP_UP`]: crate::volume::STEP_UP
+    pub fn walkable_at(&self, a: FxVec2, b: FxVec2, z: Fx, radius: Fx) -> bool {
+        if self.volume.is_none() {
+            return self.walkable(a, b, radius);
+        }
+        let steps = ((b - a).length() / Fx::from_ratio(1, 10)).ceil().floor_to_int().max(1);
+        let mut z = z;
+        for i in 1..=steps {
+            let p = a + (b - a) * Fx::from_ratio(i, steps);
+            let Some(floor) = self.footprint_at(p, z, radius) else { return false };
+            if floor >= z - LAYER {
+                z = floor;
+            }
+        }
+        true
+    }
+
+    /// Whether a flying body of `radius` with its feet at `z` can move from
+    /// `a` to `b`. In volume scenes, each of its five points needs a floor
+    /// no higher than its feet, and its head ([`BODY_HEIGHT`] up) under
+    /// that floor's ceiling, every 0.05 m of the way; elsewhere
+    /// [`Terrain::flyable`].
+    ///
+    /// [`BODY_HEIGHT`]: crate::volume::BODY_HEIGHT
+    pub fn flyable_at(&self, a: FxVec2, b: FxVec2, z: Fx, radius: Fx) -> bool {
+        let Some(volume) = &self.volume else { return self.flyable(a, b, z, radius) };
+        let steps = ((b - a).length() / Fx::from_ratio(1, 20)).ceil().floor_to_int().max(1);
+        let (feet, head) = (z + Fx::from_ratio(1, 50), z + crate::volume::BODY_HEIGHT);
+        (1..=steps).all(|i| {
+            let p = a + (b - a) * Fx::from_ratio(i, steps);
+            Self::footprint_points(p, radius).iter().all(|&q| {
+                volume.floor_at(q, z).is_some_and(|(floor, h)| {
+                    h <= feet && volume.ceiling(Self::pit_tile(q), floor).is_none_or(|c| head <= crate::volume::height(c))
+                })
+            })
+        })
+    }
+
     /// Whether a flying body at height `z` can move from `a` to `b`: no ground
     /// along the way may rise above it.
     pub fn flyable(&self, a: FxVec2, b: FxVec2, z: Fx, radius: Fx) -> bool {

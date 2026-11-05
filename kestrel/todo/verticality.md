@@ -4,28 +4,6 @@ Tunnels and levels: two or more floors over one x–y spot. The design is
 [`VERTICALITY.md`](../VERTICALITY.md) (decisions V1–V11). Tasks run in
 order, one agent each.
 
-## V.3 Bodies with a height
-
-- **Status:** open
-- **Why:** a body must know which floor it is on (V3).
-- **What to do:** the avatar (and agents) store their feet's height; in a
-  volume scene they stand on `floor(p, z)`, step up at most a layer, fall
-  when the floor drops away, stop at walls and never enter a spot without
-  headroom; jump and jetpack hit ceilings. Walkability uses the body's
-  floor. Other scenes keep today's behaviour. Note (from V.1): a neighbour
-  floor two or more layers off is a wall edge to the corner rule, so the
-  patches on both sides stay level and `Terrain::walkable`'s sloped branch
-  (which checks steepness, not jumps) would let a walk climb it: walks in
-  a volume must also refuse a floor change of more than a layer. Note
-  (from V.2): today bodies in the Tunnel Lab stand on the top floor, so
-  the tunnel's roof (4 m up from x 6) is a wall at its west mouth; the
-  map's coordinates are in V.2's **Done** below.
-- **Where:** `sim/src/settlement/avatar.rs`, `sim/src/terrain.rs`
-  (`walkable`), the view's body height.
-- **Found in:** verticality design.
-- **Tests:** walk through the tunnel; walk under the bridge and over it;
-  blocked by low headroom; fall off a ledge; golden unchanged.
-
 ## V.4 Digging in 3D
 
 - **Status:** open
@@ -40,6 +18,14 @@ order, one agent each.
   Note (from V.2): in the Tunnel Lab today's dig makes pits, which a
   volume's ground ignores, so it changes nothing seen; the scene has a
   collector at (-3, -4) for the ore.
+  Note (from V.3): digging should start from the body's floor
+  (`Terrain::footprint_at(position, avatar.height, radius)` or
+  `Volume::floor_at`), not `ground`. A ramp tunnel exactly `HEADROOM` high
+  is walkable (each footprint point checks its own tile's headroom), but
+  the jetpack there caps the feet at the lowest ceiling of the five points
+  less 2 m, which can be under the floor: it then holds them on the floor,
+  and `flyable_at` may refuse moves, so a jetpack held in such a ramp can
+  stall; check it once digging makes ramps.
 - **Where:** `sim/src/settlement/avatar.rs`, `sim/src/settlement/action.rs`,
   `sim/src/volume.rs`, the input and the command if it needs the
   direction.
@@ -69,6 +55,8 @@ order, one agent each.
 - **Why:** underground, the ground above hides the player (V7).
 - **What to do:** ground above the player's head is not drawn within a
   radius (a soft-edged hole); cut faces are dark.
+  Note (from V.3): `tunnel_lab_demo` (`app/demos/tunnel_lab.json`) walks
+  into the tunnel; today the placeholder mountain hides the avatar there.
 - **Where:** the volume material or shader, `app/src/rig.rs`.
 - **Found in:** verticality design.
 - **Tests:** screenshots in the tunnel, under the bridge and outside.
@@ -80,6 +68,16 @@ order, one agent each.
 - **What to do:** nav nodes per floor (x, y, floor height), edges where
   walkable with headroom; A* over them. One test walker in the Tunnel Lab
   follows the player.
+  Note (from V.3): agents (sprites, ghouls, haulers) still stand on
+  `ground(p)`, the top floor, and store no height: give them a feet height
+  (hashed, so save format 41 and a golden check) and move them to
+  `Terrain::footprint_at` / `walkable_at`. The avatar's own `GoTo` routes
+  (`avatar::set_intent`, and the demo scripts' `walk`) still plan with
+  `Terrain::walkable` on the top floor, whose sloped branch ignores floor
+  jumps, so a route into the tunnel is a straight line that only works
+  because `walkable_at` then walks it; plan them with the 3D nav. Spawn,
+  respawn, joining players, leaving a building and climbing out of a
+  vehicle still put the feet on the top floor (`footprint`).
 - **Where:** `sim/src/nav.rs`, a walker in the settlement.
 - **Found in:** verticality design.
 - **Tests:** paths through the tunnel and from under the bridge to over
@@ -98,6 +96,67 @@ order, one agent each.
 - **Tests:** the soak; the full suite.
 
 ## Done
+
+### V.3 Bodies with a height
+
+- **Status:** done (branch `kestrel-verticality`, no PR yet)
+- **Why:** a body must know which floor it is on (V3).
+- **What to do:** the avatar (and agents) store their feet's height; in a
+  volume scene they stand on `floor(p, z)`, step up at most a layer, fall
+  when the floor drops away, stop at walls and never enter a spot without
+  headroom; jump and jetpack hit ceilings. Walkability uses the body's
+  floor. Other scenes keep today's behaviour. Walks in a volume must also
+  refuse a floor change of more than a layer (from V.1).
+- **Where:** `sim/src/settlement/avatar.rs`, `sim/src/terrain.rs`
+  (`walkable`), the view's body height.
+- **Found in:** verticality design.
+- **Tests:** walk through the tunnel; walk under the bridge and over it;
+  blocked by low headroom; fall off a ledge; golden unchanged.
+- **Done:** the avatar's feet height is the existing
+  `AvatarState::height` (already hashed and saved), so the saved state and
+  the save format (40) are unchanged; agents keep `ground(p)` (see V.7).
+  `Volume::floor_at(p, z) -> Option<(layer, height)>` replaces V.1's
+  `floor_layer`: the highest floor of `p`'s tile whose *sloped* height at
+  `p` is at most `z + STEP_UP` layers (comparing the tile's layer instead
+  stalled walks up ramps, whose sloped height is under the tile's floor);
+  `floor(p, z)` is its height, `ceiling_over(p, z)` the ceiling over it.
+  `volume::BODY_HEIGHT` = 2 m (= `height(HEADROOM)`). New `Terrain` methods,
+  each the old one outside volume scenes: `footprint_at(p, z, radius)` (the
+  highest of the five footprint points' floors, nothing if any has none: a
+  wall, or a passage under `HEADROOM`, whose bottom is no floor),
+  `ceiling_at(p, z, radius)` (lowest ceiling over the five points; always
+  nothing without a volume), `walkable_at(a, b, z, radius)` (every 0.1 m
+  each point needs a floor at most a layer over the feet, so a 1 m step is
+  a wall; the feet follow ramps and stay up past a drop of more than a
+  layer) and `flyable_at(a, b, z, radius)` (each point's floor at or under
+  the feet, the head under its ceiling). The avatar's `step`, `jump_step`
+  and `fly` use them with its height: on foot past a drop the feet stay up
+  and the body falls by the existing rules (a grounded jumper over a drop
+  turns `Airborne` with velocity 0; the jetpack sinks at `sink`), jump and
+  jetpack heights are capped at the ceiling less `BODY_HEIGHT` (a capped
+  jump starts falling), and the jetpack's look-ahead reads floors within a
+  step of the feet, not the top floor. A threat's swing height check uses
+  `footprint_at` too. Every new rule is gated on `terrain.volume`, so
+  golden lines and hashes are unchanged. Prediction runs the same
+  `avatar::self_update`, so it follows. View: the avatar was already drawn
+  at `AvatarState::height`; `SessionService::ground_height` (foot IK,
+  targets) now reads `Terrain::floor(p, p.y)` in volume scenes so feet plant
+  on the tunnel floor. API for V.4 and V.7: a body's feet are
+  `avatar.height`; its floor is `terrain.footprint_at(position, height,
+  radius)` (or `volume.floor_at(p, height)` for the layer). A
+  `tunnel_lab_demo` game demo (`app/demos/tunnel_lab.json`) walks from the
+  spawn into the tunnel to (12, 0) at 0 m; inside, the placeholder mountain
+  hides the avatar until V.6's cutaway. Tests in
+  `sim/src/settlement/tunnel_lab_tests.rs`:
+  `the_avatar_walks_through_the_tunnel_on_its_floor`,
+  `the_avatar_walks_under_the_bridge_and_climbs_onto_it` (0 m in the cave,
+  5 m on the bridge over the same tile (-11, 13)),
+  `low_headroom_stops_a_walk`, `a_step_two_layers_up_is_a_wall`,
+  `walking_off_a_ledge_falls_to_the_floor_below` (jetpack and jumper),
+  `a_jump_is_stopped_by_the_ceiling`,
+  `the_jetpack_is_stopped_by_the_tunnel_roof` and
+  `a_replayed_avatar_walks_into_the_tunnel_as_the_simulation_does`; V.1's
+  `volume_tests` pass unchanged under the new `floor`.
 
 ### V.2 The Tunnel Lab
 

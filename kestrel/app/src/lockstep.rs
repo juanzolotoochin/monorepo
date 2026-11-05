@@ -313,8 +313,14 @@ impl SessionService {
 
     /// Ground at a rendered position, including generated terraces and dug pits.
     /// Character posing samples this; physics continues to use fixed-point terrain.
+    /// In volume scenes it is the floor under `p` at its height (`p.y`, a
+    /// body's feet; `Terrain::floor`), so a body in a tunnel stands on the
+    /// tunnel's floor, not the mountain over it; elsewhere `p.y` is ignored.
     pub fn ground_height(&self, p: Vec3) -> Option<f32> {
-        self.world()?.terrain().ground(self.to_sim(p)).map(|height| height.to_f32())
+        let terrain = self.world()?.terrain();
+        let at = self.to_sim(p);
+        let ground = if terrain.volume.is_some() { terrain.floor(at, Fx::quantize(p.y)) } else { terrain.ground(at) };
+        ground.map(|height| height.to_f32())
     }
 
     /// Writes the current world's recording, if asked to: `<path>.gsav` is

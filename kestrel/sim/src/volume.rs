@@ -26,6 +26,10 @@ pub const HEADROOM: i32 = 4;
 /// least [`HEADROOM`] plus one layers apart, so this never reaches the
 /// floor above.
 pub const STEP_UP: i32 = 1;
+/// A body's height, feet to head: 2 m, the [`HEADROOM`] a floor needs. A
+/// jump or a jetpack stops with the head at a ceiling
+/// ([`Terrain::ceiling_at`]).
+pub const BODY_HEIGHT: Fx = Fx::from_bits(2 << 32);
 
 /// A run of solid cells in a column: layers `bottom` up to, not including,
 /// `top`. Its top face, the floor it may make, is at `top * LAYER`.
@@ -221,19 +225,34 @@ impl Volume {
         self.floors(tile).find(|f| (f - layer).abs() <= 1)
     }
 
-    /// The floor a body whose feet are at height `z` stands on in `tile`:
-    /// the highest at or below `z` plus [`STEP_UP`] layers.
-    pub fn floor_layer(&self, tile: (i32, i32), z: Fx) -> Option<i32> {
-        let reach = layer_at(z).saturating_add(STEP_UP);
-        self.floors(tile).take_while(|&f| f <= reach).last()
+    /// The floor a body at `p` whose feet are at height `z` stands on, as
+    /// its layer and its sloped height there ([`Volume::patch`]): the
+    /// highest of `p`'s tile whose sloped height is at or below `z` plus
+    /// [`STEP_UP`] layers. Nothing if no floor is that low: in a wall, or
+    /// in a passage lower than [`HEADROOM`] (whose bottom is no floor).
+    /// A floor's ramps down to its neighbours a layer below rise smoothly
+    /// along a walk, so a walk up a ramp always reaches the next tile's
+    /// floor; a floor two layers up is a wall's edge, level, a meter up,
+    /// and out of reach.
+    pub fn floor_at(&self, p: FxVec2, z: Fx) -> Option<(i32, Fx)> {
+        let reach = z + height(STEP_UP);
+        // A floor's sloped height is within a layer below it, and floors are
+        // further apart than that, so the heights rise with the floors.
+        self.floors(Terrain::pit_tile(p)).map(|floor| (floor, self.patch(p, floor).height())).take_while(|&(_, h)| h <= reach).last()
     }
 
-    /// The ground under a body at `p` whose feet are at height `z`: its
-    /// tile's [`Volume::floor_layer`], sloped by M6's corner rule
-    /// ([`Volume::patch`]). Nothing if no floor is that low.
+    /// The ground under a body at `p` whose feet are at height `z`: the
+    /// height of its [`Volume::floor_at`]. Nothing if no floor is that low.
     pub fn floor(&self, p: FxVec2, z: Fx) -> Option<Fx> {
-        let tile = Terrain::pit_tile(p);
-        self.floor_layer(tile, z).map(|floor| self.patch(p, floor).height())
+        self.floor_at(p, z).map(|(_, h)| h)
+    }
+
+    /// The ceiling over a body at `p` whose feet are at `z`: the bottom of
+    /// the first span over its [`Volume::floor_at`], as a height. Nothing
+    /// under open sky, or without a floor.
+    pub fn ceiling_over(&self, p: FxVec2, z: Fx) -> Option<Fx> {
+        let (floor, _) = self.floor_at(p, z)?;
+        self.ceiling(Terrain::pit_tile(p), floor).map(height)
     }
 
     /// The top floor at `p`, sloped: what [`Terrain::ground`] is in a volume

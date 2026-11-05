@@ -23,7 +23,8 @@ use super::interact::{self, Interaction};
 use super::{AgentIx, DepotState, InventoryRef, ItemIx, Kinds, Settlement};
 use crate::messages::{ActionMessages, BundleRefused, Burst, BurstRefused, CarryUnit, DropBundle, DropHaul, ElderFire, DropNotes, Install, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
 use crate::nav::{self, angle_between, distance};
-use crate::terrain::Terrain;
+use crate::terrain::{Terrain, LAYER};
+use crate::volume::BODY_HEIGHT;
 
 /// The longest player name, in characters.
 pub const NAME_CHARS: usize = 16;
@@ -312,7 +313,7 @@ pub(super) fn self_update(body: &mut Body, avatar: &mut AvatarState, me: AgentIx
 /// A grounded jump, or for a character with neither jump nor jetpack, just
 /// keeping to the ground.
 fn jump_step(body: &Body, avatar: &mut AvatarState, tick: u64, terrain: &Terrain, radius: Fx, jump: Option<&JumpDef>) {
-    let ground = terrain.footprint(body.position, radius);
+    let ground = terrain.footprint_at(body.position, avatar.height, radius);
     if let Some(y) = ground {
         avatar.flight.support = y;
     }
@@ -321,21 +322,36 @@ fn jump_step(body: &Body, avatar: &mut AvatarState, tick: u64, terrain: &Terrain
         if let Some(y) = ground { avatar.height = y; }
         return;
     };
+    // The ceiling over the body before it moves (volume scenes only).
+    let ceiling = terrain.ceiling_at(body.position, avatar.height, radius);
     match avatar.jump {
+        // In a volume, walking off a drop (`step` keeps the feet up) falls
+        // as a jump's way down does.
+        JumpPhase::Grounded if terrain.volume.is_some() && ground.is_some_and(|y| avatar.height > y + Fx::from_ratio(1, 100)) => {
+            avatar.jump = JumpPhase::Airborne { started: tick, velocity: Fx::ZERO };
+            avatar.flight.airborne = true;
+        }
         JumpPhase::Grounded => {
             avatar.flight.airborne = false;
             if let Some(y) = ground { avatar.height = y; }
         }
         JumpPhase::Preparing { started } => {
             if tick >= started + jump.prep {
-                avatar.jump = JumpPhase::Airborne { started: tick, velocity: jump.velocity };
+                let mut velocity = jump.velocity;
                 avatar.flight.airborne = true;
                 avatar.height += jump.velocity;
+                if under_ceiling(&mut avatar.height, ceiling, ground) {
+                    velocity = Fx::ZERO;
+                }
+                avatar.jump = JumpPhase::Airborne { started: tick, velocity };
             }
         }
         JumpPhase::Airborne { started, velocity } => {
-            let next_velocity = velocity - jump.gravity;
+            let mut next_velocity = velocity - jump.gravity;
             avatar.height += next_velocity;
+            if under_ceiling(&mut avatar.height, ceiling, ground) {
+                next_velocity = next_velocity.min(Fx::ZERO);
+            }
             if next_velocity <= Fx::ZERO && ground.is_some_and(|y| avatar.height <= y) {
                 avatar.height = ground.unwrap();
                 avatar.flight.airborne = false;
@@ -351,6 +367,19 @@ fn jump_step(body: &Body, avatar: &mut AvatarState, tick: u64, terrain: &Terrain
             }
         }
     }
+}
+
+/// Keeps a body's head ([`BODY_HEIGHT`] over its feet at `height`) under
+/// `ceiling` ([`Terrain::ceiling_at`], volume scenes only), but its feet
+/// never under `ground`. Returns whether the head hit it.
+fn under_ceiling(height: &mut Fx, ceiling: Option<Fx>, ground: Option<Fx>) -> bool {
+    let Some(ceiling) = ceiling else { return false };
+    let limit = (ceiling - BODY_HEIGHT).max(ground.unwrap_or(Fx::MIN));
+    if *height > limit {
+        *height = limit;
+        return true;
+    }
+    false
 }
 
 fn walk(body: &mut Body, avatar: &mut AvatarState, tick: u64, terrain: &Terrain, def: &CharacterDef) {
@@ -435,20 +464,24 @@ fn walk(body: &mut Body, avatar: &mut AvatarState, tick: u64, terrain: &Terrain,
 
 /// Moves the avatar by `delta`, sliding along obstacles, if the ground
 /// (or, in the air, the flight rules) allows it. On foot, it keeps to the
-/// ground it reaches.
+/// ground it reaches. In a volume (V3 of the verticality design) the
+/// ground is the floor under its feet, and past a drop of more than a
+/// layer the feet stay up, for `fly` or `jump_step` to let it fall.
 fn step(body: &mut Body, avatar: &mut AvatarState, terrain: &Terrain, delta: FxVec2, radius: Fx) {
     let previous = body.position;
     let candidate = slide(terrain, previous, delta, radius);
     let airborne = avatar.flight.airborne;
     let allowed = if airborne {
-        terrain.flyable(previous, candidate, avatar.height, radius)
+        terrain.flyable_at(previous, candidate, avatar.height, radius)
     } else {
-        terrain.walkable(previous, candidate, radius)
+        terrain.walkable_at(previous, candidate, avatar.height, radius)
     };
     if allowed {
         if !airborne {
-            if let Some(ground) = terrain.footprint(candidate, radius) {
-                avatar.height = ground;
+            if let Some(ground) = terrain.footprint_at(candidate, avatar.height, radius) {
+                if terrain.volume.is_none() || ground >= avatar.height - LAYER {
+                    avatar.height = ground;
+                }
             }
         }
         body.position = candidate;
@@ -460,7 +493,8 @@ fn step(body: &mut Body, avatar: &mut AvatarState, terrain: &Terrain, delta: FxV
 /// the ground when released, and keep flying over drops.
 fn fly(body: &Body, avatar: &mut AvatarState, terrain: &Terrain, radius: Fx, jetpack: &JetpackDef) {
     let flight = &mut avatar.flight;
-    let ground = terrain.footprint(body.position, radius);
+    let ground = terrain.footprint_at(body.position, avatar.height, radius);
+    let ceiling = terrain.ceiling_at(body.position, avatar.height, radius);
     let landing = ground;
     if let Some(y) = ground {
         flight.support = y;
@@ -478,7 +512,11 @@ fn fly(body: &Body, avatar: &mut AvatarState, terrain: &Terrain, radius: Fx, jet
         for i in 0..=20 {
             let p = body.position + direction * Fx::from_ratio(i, 10);
             for &(dx, dy) in &offsets {
-                if let Some(y) = terrain.ground(FxVec2::new(p.x + dx, p.y + dy)) {
+                // In a volume, the floors within a step of the feet: not
+                // the top of the mountain over a tunnel.
+                let q = FxVec2::new(p.x + dx, p.y + dy);
+                let y = if terrain.volume.is_some() { terrain.floor(q, avatar.height) } else { terrain.ground(q) };
+                if let Some(y) = y {
                     target = target.max(y);
                 }
             }
@@ -487,6 +525,7 @@ fn fly(body: &Body, avatar: &mut AvatarState, terrain: &Terrain, radius: Fx, jet
     }
     let delta = (target - avatar.height).clamp(-jetpack.sink, jetpack.climb);
     avatar.height += delta;
+    under_ceiling(&mut avatar.height, ceiling, ground);
     flight.airborne = active || ground.is_none_or(|y| avatar.height > y + Fx::from_ratio(1, 100));
 }
 
