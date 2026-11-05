@@ -210,9 +210,40 @@ its milestones, in order; one PR per milestone.
 - **Where:** `app/src/clock_hud.rs`, `app/src/telemetry.rs`.
 - **Found in:** M7.5.
 
-## M7.6 Tuning, soak and demo
+## The night's fight comes late
 
 - **Status:** open
+- **Why:** measured on the map's own nights (M7.6), ghouls walk 0.6 m/s
+  and take about 41 s from the 40 m ring to the tops of the ramps and
+  63.7 s to the tree; a column of five sets off over the night's first
+  10 s, so its last breaches at 73.7 s, 1.3 s before dawn. With a manned
+  ballista by each ramp the first bolt flies 55.4 s after dusk and the
+  kills come 56.5 to 66.9 s in: the fight is about 11 s of a 75 s night,
+  nothing is on the plateau for its first 41 s and its last 8 s are
+  empty. Dawn burns no ghoul on any of the four nights, defended or not
+  (0 dispelled); it only burns ghouls that were held up (lured by the
+  elder, as in the demo, smashing a building, or stranded by a moat).
+- **What to do:** decide with a playtest. The recommendation: move the
+  ring in to about 28 m (just past the ramps' feet at 23.5 m and the
+  hill's flat ring at 25.5 m), so ghouls top the ramps about 21 s after
+  dusk and reach the tree about 43 s in, and widen `COLUMN_GAP` (2.5 s)
+  to about 5 s so a column of five spans 20 s: the fight then runs from
+  about 35 s to 65 s into the night, and a slowed column's tail is still
+  out at dawn. A longer night only adds empty time and puts four nights
+  past 15 minutes (100 s nights: 4 x 4:10 = 16:40). A ring that close
+  may spawn ghouls in the town camera's view (it shows ground 15 to 60 m
+  out): spawn them in the dark or fade them in. Then retune the nights,
+  the `waves_tests` restock time (`RESTOCK`, 47 s) and the demo's waits.
+- **Where:** `app/assets/levels/sacred_tree_supply.ron` (wave positions),
+  `sim/src/settlement/combat.rs` (`COLUMN_GAP`),
+  `sim/src/settlement/waves_tests.rs`, `app/demos/sacred_tree.json`.
+- **Found in:** M7.2, M7.6.
+
+## Done
+
+### M7.6 Tuning, soak and demo
+
+- **Status:** done (branch `kestrel-sacred-tree-daynight`)
 - **Why:** the playtest needs four nights that feel right in 15 minutes.
 - **What to do:** tune night sizes and the first day; update the demo to
   show a full cycle (a day of building, dusk, a night attack, dawn);
@@ -221,28 +252,44 @@ its milestones, in order; one PR per milestone.
 - **Where:** `sacred_tree_supply.ron`, `app/demos/sacred_tree.json`,
   `SACRED_TREE_DAYNIGHT.md`.
 - **Found in:** day and night design.
-- **From M7.2:** the demo's waits are timed for the old first wave (165 s,
-  three east ghouls); night 1 now falls at 150 s with three east and two
-  west, so rebuild it rather than nudge it. Ghouls take about 63 s from the
-  ring and nights are 75 s, so the fight is all in a night's last 20 s and
-  a column's 6th ghoul only burns at dawn: if nights should feel longer,
-  move the ring in or lengthen the night rather than grow columns.
-  `COLUMN_GAP` (2.5 s) and `DAWN_BURN` (2 to 4 s) are code
-  (`settlement/combat.rs`).
-- **From M7.3:** a demo script runs at most 8 ticks a frame (the host's
-  `MAX_CATCH_UP`), so `settlement_rate` 4 needs 30 fps or more (at 10 fps
-  it silently runs one tick a frame). The four lighting shots were frames
-  of one 4x run picked by the trace's `settlement.seconds` (9, 75, 143 and
-  187.5 s).
-- **From M7.4:** the night's lights are tuned against the 1800 lux moon
-  and ambient 150: if the midnight key changes, retune the tree's glow
-  (2 million lm in `sacred_tree.ron`) and `daylight::LANTERN_LUMENS`
-  (250000). The demo's night shots should frame a ghoul facing the camera
-  (the west column walks towards it) to show the eyes. A 1420-frame
-  capture at 1440 x 960 is about 5.6 GB of PNGs; delete the frames after
-  picking.
-
-## Done
+- **Done:** tuning: the nights (3+2, 5+4, 5+5, 5+5 repeating), day 150 s,
+  night 75 s and the 40 m ring are kept; `waves_tests` and the soak pass
+  as they are. A probe (four nights, the tree's health raised so it
+  plays them all) measured the fight: ghouls top the ramps about 41 s
+  after dusk and breach 63.7 to 73.7 s in; with a ballista by each ramp
+  the bolts fly from 55.4 s and the kills come 56.5 to 66.9 s in, and dawn
+  burns none (0 dispelled, defended or not). So the fight is about 11 s
+  at the end of each night; see the new open task "The night's fight
+  comes late" for the numbers and the recommendation (a ring at about
+  28 m and a 5 s column gap). Dusk (`sacred_tree.ron`): the red, dark
+  key ((1.0, 0.52, 0.30) 12000 lux, ambient (0.74, 0.62, 0.70) 720, sky
+  (0.28, 0.16, 0.17)) is now golden: sun (1.0, 0.74, 0.42) 13000 lux,
+  ambient (0.80, 0.71, 0.60) 820, sky (0.34, 0.25, 0.15); the ground reads
+  warm brown and gold instead of rust, distinct from dawn's rosy sky and
+  lavender ambient, the shadows long to the east. Demo
+  (`demos/sacred_tree.json`, rebuilt; 3282 frames at 30 fps, 1:49): the
+  day as in M6.7 at 2x (the elder digs two stone layers at the east
+  vein, Reed mines, the ballista by the east ramp's end, loaded, Fern
+  mans it, by 53 s); 4x through the afternoon (the elder loads Reed's
+  stone and walks to the top of the west ramp at 132 s; "NIGHT FALLS IN"
+  from 120 s); dusk at 2x (144 to 158 s, the lanterns and the tree's glow
+  coming up); 4x to 186 s; 2x while the west column climbs its ramp; 1x
+  from 192 s: the west column tops the ramp under the lanterns facing the
+  camera, eyes glowing, turns on the elder at 3 m, and the elder leads
+  both ghouls round the plaza outside the pines (61 hops of 0.3 m, 9
+  frames apart, about 0.65 m/s on a 12.5 m arc from (-12, 2.2) to (2.1,
+  12.3); they stay 1.8 and 3.2 m behind, no swing starts) while Fern's
+  ballista shoots the east column (3 kills, 206 to 212 s); at sunrise
+  (225 s) the two lured ghouls catch fire beside the elder and fall
+  (227.5 s). Tree 20/20, no breach. Its waits were tuned in simulation
+  runs against the frame trace (threat and elder positions by
+  `settlement.seconds`); the stills were cut from the video by the
+  trace's seconds (no frame dump). The eyes read at the town zoom on a
+  ghoul facing the camera (two yellow dots), small as M7.4 found; the
+  `PLAYER 1` tag can sit over the nearest chaser. `app/README.md`
+  describes days and nights, the dial, the waves by night, the dawn burn
+  and the new demo. Save format, input log, net protocol, commands and
+  golden unchanged. The design is marked done.
 
 ### M7.5 The time on the HUD
 

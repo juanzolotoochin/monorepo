@@ -1,6 +1,6 @@
 # Kestrel Sacred Tree day and night (design)
 
-Status: design agreed (2026-11-04). Tasks in
+Status: M7 done (2026-11-04). Tasks in
 [`todo/sacred-tree.md`](todo/sacred-tree.md) under M7. It builds on mining
 in [`SACRED_TREE_MINING.md`](SACRED_TREE_MINING.md) (PR #133), and the
 rules for the work in [`SACRED_TREE_HANDOFF.md`](SACRED_TREE_HANDOFF.md)
