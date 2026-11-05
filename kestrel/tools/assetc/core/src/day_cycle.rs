@@ -145,6 +145,84 @@ pub fn sky_arc(fraction: f32) -> [f32; 3] {
     [angle.cos() * flat, up, angle.sin() * flat]
 }
 
+/// When the night's lights (the tree's glow, the lanterns) are lit up:
+/// from this far into the day they rise to [`DUSK_GLOW`] at dusk, and on
+/// to full over the night's [`EVENING`].
+pub const LIGHTING_UP: f32 = 0.8;
+/// How bright the night's lights are at dusk, and still at dawn.
+pub const DUSK_GLOW: f32 = 0.5;
+pub const DAWN_GLOW: f32 = 0.5;
+/// How far into the day the night's lights are out.
+pub const PUTTING_OUT: f32 = 0.1;
+
+/// How lit the night's lights are at an hour, 0 (out) to 1: out through
+/// the day, lit up from [`LIGHTING_UP`] to [`DUSK_GLOW`] at dusk, full from
+/// the end of the [`EVENING`] through the small hours, dimming from the
+/// [`SMALL_HOURS`] to [`DAWN_GLOW`] at dawn and out by [`PUTTING_OUT`].
+/// Eased (smoothstep) and continuous across dusk and dawn.
+pub fn night_glow(hour: Hour) -> f32 {
+    let f = hour.fraction.clamp(0.0, 1.0);
+    if !hour.night {
+        if f < PUTTING_OUT {
+            DAWN_GLOW * (1.0 - smoothstep(f / PUTTING_OUT))
+        } else if f < LIGHTING_UP {
+            0.0
+        } else {
+            DUSK_GLOW * smoothstep((f - LIGHTING_UP) / (1.0 - LIGHTING_UP))
+        }
+    } else if f < EVENING {
+        mix(DUSK_GLOW, 1.0, smoothstep(f / EVENING))
+    } else if f < SMALL_HOURS {
+        1.0
+    } else {
+        mix(1.0, DAWN_GLOW, smoothstep((f - SMALL_HOURS) / (1.0 - SMALL_HOURS)))
+    }
+}
+
+/// A lantern of a scene (`Scene::lanterns`): a post standing at
+/// `position` (its foot) with a glowing head and a warm point light, lit
+/// by [`night_glow`] in a scene with a day cycle (always lit without one).
+/// Drawn only: the sim doesn't know of it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Lantern {
+    pub position: [f32; 3],
+}
+
+/// A warm light that glows by night (`Scene::glow`, the Sacred Tree's):
+/// a point light at `position` of `intensity` lumens at full glow, lit by
+/// [`night_glow`]. Its color is sRGB 0..1; `range` in meters.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NightGlow {
+    pub position: [f32; 3],
+    pub color: [f32; 3],
+    pub intensity: f32,
+    pub range: f32,
+}
+
+/// Checks a scene's night lights: finite places, colors in 0..1, up to 64
+/// lanterns, a glow's intensity up to 10 million lumens and range 0.1 to
+/// 100 m.
+pub fn validate_night_lights(lanterns: &[Lantern], glow: Option<&NightGlow>) -> crate::Result<()> {
+    let finite = |p: &[f32; 3]| p.iter().all(|v| v.is_finite() && v.abs() <= 10000.0);
+    if lanterns.len() > 64 || !lanterns.iter().all(|l| finite(&l.position)) {
+        return Err("invalid lanterns".into());
+    }
+    if let Some(g) = glow {
+        if !finite(&g.position)
+            || g.color.iter().any(|c| !c.is_finite() || !(0.0..=1.0).contains(c))
+            || !g.intensity.is_finite()
+            || !(0.0..=1.0e7).contains(&g.intensity)
+            || !g.range.is_finite()
+            || !(0.1..=100.0).contains(&g.range)
+        {
+            return Err("invalid night glow".into());
+        }
+    }
+    Ok(())
+}
+
 fn smoothstep(x: f32) -> f32 {
     let x = x.clamp(0.0, 1.0);
     x * x * (3.0 - 2.0 * x)
@@ -302,5 +380,58 @@ mod tests {
         c = cycle();
         c.dusk.fog_density = f32::NAN;
         assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn the_nights_lights_rise_at_dusk_and_fade_at_dawn() {
+        // Out through the day, full through the night's middle.
+        for f in [PUTTING_OUT, 0.3, 0.5, LIGHTING_UP] {
+            assert_eq!(night_glow(day(f)), 0.0, "{f}");
+        }
+        for f in [EVENING, 0.5, SMALL_HOURS] {
+            assert_eq!(night_glow(night(f)), 1.0, "{f}");
+        }
+        // Continuous across dusk and dawn.
+        assert!(close(night_glow(day(0.99999)), DUSK_GLOW));
+        assert!(close(night_glow(night(0.0)), DUSK_GLOW));
+        assert!(close(night_glow(night(0.99999)), DAWN_GLOW));
+        assert!(close(night_glow(day(0.0)), DAWN_GLOW));
+        // Rising steadily from the late afternoon to the evening's end...
+        let rising = (0..=40).map(|i| day(LIGHTING_UP + (1.0 - LIGHTING_UP) * i as f32 / 40.0))
+            .chain((0..=40).map(|i| night(EVENING * i as f32 / 40.0)));
+        let mut last = 0.0;
+        for h in rising {
+            let g = night_glow(h);
+            assert!(g >= last && g <= 1.0, "{h:?} {g}");
+            last = g;
+        }
+        assert_eq!(last, 1.0);
+        // ...and falling from the small hours to the morning.
+        let falling = (0..=40).map(|i| night(SMALL_HOURS + (1.0 - SMALL_HOURS) * i as f32 / 40.0))
+            .chain((0..=40).map(|i| day(PUTTING_OUT * i as f32 / 40.0)));
+        let mut last = 1.0;
+        for h in falling {
+            let g = night_glow(h);
+            assert!(g <= last && g >= 0.0, "{h:?} {g}");
+            last = g;
+        }
+        assert_eq!(last, 0.0);
+    }
+
+    #[test]
+    fn night_lights_out_of_range_fail_validation() {
+        let glow = NightGlow { position: [0.0, 3.0, 0.0], color: [1.0, 0.7, 0.4], intensity: 1.0e5, range: 12.0 };
+        let lantern = Lantern { position: [15.0, 0.0, 4.0] };
+        assert!(validate_night_lights(&[lantern.clone()], Some(&glow)).is_ok());
+        assert!(validate_night_lights(&[], None).is_ok());
+        assert!(validate_night_lights(&[Lantern { position: [f32::NAN, 0.0, 0.0] }], None).is_err());
+        assert!(validate_night_lights(&vec![lantern; 65], None).is_err());
+        for bad in [
+            NightGlow { intensity: -1.0, ..glow.clone() },
+            NightGlow { range: 0.0, ..glow.clone() },
+            NightGlow { color: [1.5, 0.0, 0.0], ..glow.clone() },
+        ] {
+            assert!(validate_night_lights(&[], Some(&bad)).is_err());
+        }
     }
 }
