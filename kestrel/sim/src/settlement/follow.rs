@@ -7,8 +7,11 @@
 //! the player stands on, and walks it at its character's walk: each step a
 //! straight walk on foot (`Terrain::walk_at`), its feet on the floor it
 //! reaches (`SpriteState::height`). Within `KEEP` of the player on the
-//! same floor it stops. A step the ground refuses (the player dug, or the
-//! path went stale) drops the route until the next plan. It steers round
+//! same floor it stops. A step the ground refuses slides along the wall
+//! (its x or y alone) if it can (V.8: a path's 0.1 m samples can skip a
+//! corner a step clips, and it stood there replanning every tick); if not
+//! (the player dug, or the path went stale) it drops the route and plans
+//! again next tick. It steers round
 //! no one: it keeps its distance from the player, and the Tunnel Lab has
 //! no one else.
 
@@ -47,7 +50,23 @@ pub(super) fn self_update(body: &mut Body, sprite: &mut SpriteState, ctx: &Ctx, 
         let gap = distance(body.position, target);
         let next = if gap <= left { target } else { body.position + (target - body.position) * (left / gap) };
         let Some(feet) = ctx.terrain.walk_at(body.position, next, sprite.height, radius) else {
-            // Stale: plan again next tick.
+            // A path checks its segments every 0.1 m, so a step can still
+            // clip a wall's corner the samples skipped: slide along it
+            // (the step's x or y alone) and go on next tick.
+            let d = next - body.position;
+            let slid = [FxVec2::new(d.x, Fx::ZERO), FxVec2::new(Fx::ZERO, d.y)]
+                .into_iter()
+                .filter(|&s| s != FxVec2::ZERO)
+                .find_map(|s| ctx.terrain.walk_at(body.position, body.position + s, sprite.height, radius).map(|feet| (body.position + s, feet)));
+            if let Some((p, feet)) = slid {
+                body.heading = nav::bearing(body.position, p);
+                body.travelled += distance(body.position, p);
+                body.position = p;
+                sprite.height = feet;
+                return;
+            }
+            // Stale (the player dug, or the ground changed): plan again
+            // next tick.
             body.route.clear();
             sprite.retry_at = ctx.tick + 1;
             return;

@@ -250,6 +250,12 @@ game_demo(
     tags = ["manual"],
 )
 
+filegroup(
+    name = "tunnel_lab_demo_video",
+    srcs = [":tunnel_lab_demo"],
+    output_group = "video",
+)
+
 game_demo(
     name = "surprise_demo",
     game = ":demo",

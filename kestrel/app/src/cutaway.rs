@@ -18,7 +18,8 @@
 //! `follow`), so in the open terraces beside the player that hide nothing
 //! keep their shape. The last `EDGE` meters of the radius are dithered (an
 //! ordered 4 x 4 discard), so the ground stays opaque. Back faces are the
-//! section colour. Shadows use the uncut ground (see
+//! section colour. Under a ceiling a fill light over the head (`FillLight`)
+//! lifts the shadowed floors. Shadows use the uncut ground (see
 //! `shaders/cutaway_prepass.wesl`). Other scenes keep `digging`'s plain
 //! ground material.
 use crate::character::Player;
@@ -51,8 +52,24 @@ pub const RADIUS: f32 = 4.5;
 pub const LOW_RADIUS: f32 = 2.25;
 /// The dithered band inside the radius, in meters.
 pub const EDGE: f32 = 1.0;
-/// The section colour, sRGB: the inside of solid ground.
-const SECTION: [f32; 3] = [0.11, 0.085, 0.075];
+/// The section colour, sRGB: the inside of solid ground. Lighter than
+/// the shadowed floors round it (V.8), so the cut reads as a cut and the
+/// body in it stands out.
+const SECTION: [f32; 3] = [0.3, 0.25, 0.21];
+/// The fill light that follows the player under a ceiling (V.8): the
+/// mountain's shadow leaves tunnel and cave floors nearly black. A point
+/// light over the head, no shadow map of its own (the sun's shadows stay
+/// as they are), warm, its brightness easing in under a ceiling and out
+/// in the open.
+pub const FILL_LUMENS: f32 = 200000.0;
+/// How far the fill light reaches, in meters.
+pub const FILL_RANGE: f32 = 8.0;
+/// How far over the feet it hangs: under a 2.5 m tunnel's roof.
+pub const FILL_HEIGHT: f32 = 1.8;
+
+/// The fill light (see [`FILL_LUMENS`]).
+#[derive(Component)]
+pub struct FillLight;
 
 pub type CutawayMaterial = ExtendedMaterial<StandardMaterial, CutawayExt>;
 
@@ -149,6 +166,9 @@ pub struct CutawayGround(pub Handle<CutawayMaterial>);
 /// open (a trench, beside a hill, on a bridge) it stays `LOW_RADIUS`, which
 /// still clears whatever hides the body.
 pub fn follow(
+    mut commands: Commands,
+    mut fill: Query<(&mut PointLight, &mut Transform), With<FillLight>>,
+    mut glow: Local<f32>,
     ground: Option<Res<CutawayGround>>,
     service: Option<Res<crate::lockstep::SessionService>>,
     time: Res<Time>,
@@ -167,6 +187,29 @@ pub fn follow(
     });
     let target = if covered.is_some() { RADIUS } else { LOW_RADIUS };
     let blend = 1.0 - (-6.0 * time.delta_secs()).exp();
+    *glow += (if covered.is_some() { 1.0 } else { 0.0 } - *glow) * blend;
+    let at = Transform::from_translation(feet + Vec3::Y * FILL_HEIGHT);
+    match fill.single_mut() {
+        Ok((mut light, mut transform)) => {
+            light.intensity = FILL_LUMENS * *glow;
+            *transform = at;
+        }
+        Err(_) => {
+            commands.spawn((
+                service::WorldScoped::default(),
+                FillLight,
+                PointLight {
+                    color: Color::srgb(1.0, 0.88, 0.72),
+                    intensity: FILL_LUMENS * *glow,
+                    range: FILL_RANGE,
+                    radius: 0.2,
+                    shadow_maps_enabled: false,
+                    ..default()
+                },
+                at,
+            ));
+        }
+    }
     let radius = radius.get_or_insert(target);
     *radius += (target - *radius) * blend;
     let cut = Cut::new(feet, camera.back().as_vec3());

@@ -14,7 +14,7 @@ use crate::{CommandKind, Simulation, World};
 
 /// The Tunnel Lab as the app makes it, with its test walker where the
 /// scene puts it (`walkers:`).
-fn tunnel_lab_with_walker() -> Simulation {
+pub(super) fn tunnel_lab_with_walker() -> Simulation {
     let layout = layout();
     assert!(super::tunnel_lab_tests::SCENE.contains("walkers: [(-2.0, 0.0, 3.0)]"), "the scene's walker");
     let setup = SceneSetup {

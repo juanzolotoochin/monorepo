@@ -585,3 +585,233 @@ fn defending_against_the_waves_strands_no_sprite() {
     assert!(mined >= 6, "the miners and the elder dug stone: {mined}");
     assert!(seen.elder_digs >= 3, "the elder dug: {seen:?}");
 }
+
+// The Tunnel Lab soak (V.8 of the verticality design,
+// `kestrel/VERTICALITY.md`): the avatar walks and digs at random through
+// the mountain, the cave and over the bridge, the test walker following.
+
+/// A small deterministic generator for the soak's choices (xorshift64*).
+struct Dice(u64);
+
+impl Dice {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_f491_4f6c_dd1d)
+    }
+
+    /// From `0` up to, not including, `n`.
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n
+    }
+
+    /// A whole number of meters from `-r` to `r`.
+    fn meters(&mut self, r: i32) -> Fx {
+        Fx::from_int(self.below(2 * r as u64 + 1) as i32 - r)
+    }
+}
+
+/// How long the soak's avatar steps to turn before a dig: two ticks, so
+/// it stays in its tile's middle (its footprint in its own tile).
+const TURN: u64 = 2;
+
+/// How long the Tunnel Lab soak plays: two minutes.
+const TUNNEL_SOAK_TICKS: u64 = 120 * HZ;
+
+/// A body of `radius` at `p`, its feet at `z`, stands on a floor (none of
+/// its five points over a wall or a passage without headroom), not under
+/// it, with its head under any ceiling; and the cells its body fills at its
+/// middle, from a layer over its feet to its head, are empty.
+fn standing_free(terrain: &crate::terrain::Terrain, who: &str, p: FxVec2, z: Fx, radius: Fx, tick: u64) {
+    use crate::volume::{layer_at, BODY_HEIGHT};
+    let floor = terrain.footprint_at(p, z, radius).unwrap_or_else(|| panic!("{who} has no floor at tick {tick}: {:?}, feet {z:?}", p - terrain.center));
+    assert!(floor <= z + Fx::from_ratio(1, 100), "{who} stands under its floor {floor:?} at tick {tick}: {:?}, feet {z:?}", p - terrain.center);
+    if let Some(ceiling) = terrain.ceiling_at(p, z, radius) {
+        assert!(ceiling >= z + BODY_HEIGHT - Fx::from_ratio(1, 100), "{who}'s head is over the ceiling {ceiling:?} at tick {tick}: {:?}, feet {z:?}", p - terrain.center);
+    }
+    let volume = terrain.volume.as_ref().unwrap();
+    let tile = crate::terrain::Terrain::pit_tile(p);
+    // From a layer over the feet (a ramp's sloped floor runs through the
+    // cell under its tile's top) to the head.
+    let (low, high) = (layer_at(z + crate::terrain::LAYER), layer_at(z + BODY_HEIGHT - Fx::from_ratio(1, 100)));
+    for layer in low..=high {
+        assert!(!volume.is_solid(tile, layer), "{who} is inside solid cell {layer} at tick {tick}: {:?}, feet {z:?}", p - terrain.center);
+    }
+}
+
+/// What the soak saw: how many digs went through, of each direction, the
+/// refusals by reason, the walks to a point, and the lowest and highest
+/// the avatar's and the walker's feet went.
+#[derive(Debug, Default)]
+struct Dug {
+    digs: [u32; 3],
+    refused: std::collections::BTreeMap<String, u32>,
+    walks: u32,
+    lowest: Fx,
+    highest: Fx,
+    walker_lowest: Fx,
+    walker_highest: Fx,
+}
+
+/// Where the soak's avatar is in a dig: going to its tile's middle (so the
+/// footprint is in its own tile only), stepping two ticks the way it will
+/// dig, or stopped and about to dig.
+enum Plan {
+    Free,
+    Center { direction: crate::volume::DigDirection, heading: FxVec2, until: u64, tries: u32 },
+    Turn { direction: crate::volume::DigDirection, stop_at: u64, dig_at: u64, tries: u32 },
+}
+
+/// The sixteen headings of the soak's turns, about 22.5° apart.
+fn heading(i: u64) -> FxVec2 {
+    let (x, y) = [(4, 0), (4, 2), (3, 3), (2, 4)][i as usize % 4];
+    let (x, y) = match i / 4 % 4 {
+        0 => (x, y),
+        1 => (-y, x),
+        2 => (-x, -y),
+        _ => (y, -x),
+    };
+    FxVec2::new(Fx::from_int(x), Fx::from_int(y)).normalize_or_zero()
+}
+
+/// Plays the Tunnel Lab for [`TUNNEL_SOAK_TICKS`] from `seed`: whenever
+/// the avatar is free, it goes to its tile's middle, turns a random way
+/// (mostly toward a wall beside it, trying other ways while only a down
+/// dig would go) and digs level, down or up, mostly one that digs
+/// something; or walks to a random point (a 3D route),
+/// anywhere or near one of the map's sights; or walks a random heading a
+/// while (often onto what it just dug). The walker follows all along.
+/// Every tick validates the settlement and checks both bodies stand free.
+/// Returns every tick's hash.
+fn tunnel_soak(seed: u64) -> (Vec<u64>, Dug) {
+    use crate::terrain::Terrain;
+    use crate::volume::DigDirection;
+    let mut sim = super::path_tests::tunnel_lab_with_walker();
+    let mut dice = Dice(seed);
+    let mut dug = Dug::default();
+    let me = sim.world().settlement().unwrap().player().unwrap();
+    let directions = [DigDirection::Level, DigDirection::Down, DigDirection::Up];
+    let (mut hashes, mut plan, mut next_at, mut walking) = (Vec::new(), Plan::Free, 0u64, false);
+    let walk = |intent| command(CommandKind::MoveAvatar { agent: me, intent });
+    while sim.world().tick() < TUNNEL_SOAK_TICKS {
+        let tick = sim.world().tick();
+        let s = sim.world().settlement().unwrap();
+        let a = &s.agents[me as usize];
+        let digging = a.avatar().unwrap().dig.is_some();
+        let still = a.body.route.is_empty() && a.avatar().unwrap().intent == Some(Intent::Stop);
+        let mut turn = Vec::new();
+        match plan {
+            Plan::Center { direction, heading, until, tries } if still || tick >= until => {
+                turn.push(walk(Intent::Walk { direction: heading, run: false }));
+                plan = Plan::Turn { direction, stop_at: tick + TURN, dig_at: tick + TURN + 12, tries };
+            }
+            Plan::Turn { stop_at, .. } if tick == stop_at => turn.push(walk(Intent::Stop)),
+            Plan::Turn { direction, dig_at, tries, .. } if tick >= dig_at => {
+                // Mostly a direction that digs something here (on open
+                // ground a level or up dig has nothing to take), else the
+                // one drawn, refused or not.
+                let would = |d| s.dig_volume_of(me, tick, sim.world().terrain(), d).unwrap();
+                let open: Vec<_> = directions.into_iter().filter(|&d| would(d).is_ok()).collect();
+                if (direction != DigDirection::Down && would(direction).is_err() || open.len() == 1) && tries < 8 {
+                    // Nothing for it this way: another heading, to look for a wall.
+                    let middle = Terrain::pit_center(Terrain::pit_tile(a.body.position));
+                    turn.push(walk(Intent::GoTo { target: middle, run: false }));
+                    plan = Plan::Center { direction, heading: heading(dice.below(16)), until: tick + HZ, tries: tries + 1 };
+                } else {
+                    let direction = if !open.is_empty() && dice.below(8) > 0 { open[dice.below(open.len() as u64) as usize] } else { direction };
+                    match would(direction) {
+                        Ok(_) => dug.digs[directions.iter().position(|&d| d == direction).unwrap()] += 1,
+                        Err(why) => *dug.refused.entry(format!("{why:?}")).or_default() += 1,
+                    }
+                    turn.push(command(CommandKind::DigFront { agent: me, direction }));
+                    // Then the next as soon as it is dug (or now, if refused).
+                    (plan, next_at, walking) = (Plan::Free, tick + 1, false);
+                }
+            }
+            Plan::Free if (tick >= next_at || (walking && still)) && !digging => {
+                let center = sim.world().terrain().center;
+                // Arrived from a walk to a point (by a wall, mostly): dig.
+                let roll = if walking && still { 0 } else { dice.below(10) };
+                walking = false;
+                match roll {
+                    // Dig: to the tile's middle, a turn, then the dig.
+                    0..=4 => {
+                        let middle = Terrain::pit_center(Terrain::pit_tile(a.body.position));
+                        turn.push(walk(Intent::GoTo { target: middle, run: false }));
+                        let direction = directions[dice.below(3) as usize];
+                        // Mostly toward a wall, if one is beside the tile.
+                        let volume = sim.world().terrain().volume.as_ref().unwrap();
+                        let floor = volume.floor_at(middle, a.avatar().unwrap().height).map_or(0, |(layer, _)| layer);
+                        let walls: Vec<u64> = (0..16)
+                            .filter(|&i| {
+                                let front = Terrain::front_tile(middle, heading(i));
+                                (floor..floor + crate::volume::HEADROOM + 1).any(|layer| volume.is_solid(front, layer))
+                            })
+                            .collect();
+                        let i = if !walls.is_empty() && dice.below(4) > 0 { walls[dice.below(walls.len() as u64) as usize] } else { dice.below(16) };
+                        plan = Plan::Center { direction, heading: heading(i), until: tick + HZ, tries: 0 };
+                    }
+                    // Somewhere at random by a 3D route: anywhere on the
+                    // map, or near one of its sights, where there are
+                    // walls to dig: the west cut, the tunnel, the cave,
+                    // the bridge's stairs and the mountain's foot.
+                    5..=8 => {
+                        let target = match dice.below(6) {
+                            0 => FxVec2::new(dice.meters(28), dice.meters(28)),
+                            // Beside the cut's and the tunnel's walls.
+                            1 => FxVec2::new(Fx::from_int(5) + dice.meters(3), Fx::from_int(if dice.below(2) == 0 { 1 } else { -1 })),
+                            2 => FxVec2::new(Fx::from_int(14) + dice.meters(8), Fx::from_int(if dice.below(2) == 0 { 1 } else { -1 })),
+                            3 => FxVec2::new(Fx::from_int(-11) + dice.meters(2), Fx::from_int(13) + dice.meters(3)),
+                            4 => FxVec2::new(Fx::from_int(-23) + dice.meters(4), Fx::from_int(13) + dice.meters(2)),
+                            _ => FxVec2::new(Fx::from_int(2) + dice.meters(2), dice.meters(8)),
+                        };
+                        turn.push(walk(Intent::GoTo { target: center + target, run: dice.below(2) == 0 }));
+                        dug.walks += 1;
+                        (next_at, walking) = (tick + 15 * HZ, true);
+                    }
+                    // A random heading for a while: often onto what was
+                    // just dug.
+                    _ => {
+                        turn.push(walk(Intent::Walk { direction: heading(dice.below(16)), run: false }));
+                        next_at = tick + HZ / 2 + dice.below(2 * HZ);
+                    }
+                }
+            }
+            _ => {}
+        }
+        hashes.push(sim.step(&turn).total);
+        check(&sim, me, &mut dug);
+    }
+    (hashes, dug)
+}
+
+/// The soak's checks after each tick: the settlement validates, and the
+/// avatar and the walker stand free.
+fn check(sim: &Simulation, me: AgentIx, dug: &mut Dug) {
+    let (world, tick) = (sim.world(), sim.world().tick());
+    let s = world.settlement().unwrap();
+    s.validate().unwrap_or_else(|e| panic!("tick {tick}: {e}"));
+    let avatar = &s.agents[me as usize];
+    let feet = avatar.avatar().unwrap().height;
+    standing_free(world.terrain(), "the avatar", avatar.body.position, feet, avatar.radius(), tick);
+    let walker = s.agents.iter().find(|a| a.id == "walker_0").unwrap();
+    let walker_feet = walker.sprite().unwrap().height;
+    standing_free(world.terrain(), "the walker", walker.body.position, walker_feet, walker.body.base_radius, tick);
+    dug.lowest = dug.lowest.min(feet);
+    dug.highest = dug.highest.max(feet);
+    dug.walker_lowest = dug.walker_lowest.min(walker_feet);
+    dug.walker_highest = dug.walker_highest.max(walker_feet);
+}
+
+/// Two minutes of random walks and digs in the Tunnel Lab: no panic,
+/// every invariant every tick, neither the avatar nor the walker ever in a
+/// solid cell or without headroom, and two runs alike tick for tick.
+#[test]
+fn the_tunnel_lab_soaks_walking_and_digging_at_random() {
+    let (hashes, dug) = tunnel_soak(0x5eed_7a11);
+    eprintln!("tunnel soak: {dug:?}");
+    assert!(dug.digs.iter().all(|&n| n >= 2) && dug.digs.iter().sum::<u32>() >= 10, "digs of every direction went through: {dug:?}");
+    assert!(dug.walks >= 5, "{dug:?}");
+    assert_eq!(hashes, tunnel_soak(0x5eed_7a11).0, "deterministic");
+}
