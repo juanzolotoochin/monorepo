@@ -697,6 +697,7 @@ pub fn camera_feedback(
     feedback: Res<Feedback>,
     input: Res<debug_ui::GameInput>,
     actions: Res<crate::input::InputService>,
+    dispatcher: Option<Res<crate::input::gameplay::Dispatcher>>,
     camera: Single<(&mut Transform, &mut Projection, &mut CameraRig), With<Camera>>,
 ) {
     let (mut transform, mut projection, mut rig) = camera.into_inner();
@@ -714,7 +715,11 @@ pub fn camera_feedback(
     // Bounded and decaying; never accumulate displacement or alter the aiming plane.
     let offset =
         Vec3::new((t * 97.0).sin(), (t * 121.0).cos() * 0.45, (t * 83.0).sin()) * amount * 0.32;
-    *transform = Transform::from_translation(rig.base + offset)
+    // The town's view turn orbits the camera around its target, at the
+    // same height and distance (`input::town::ViewTurn`).
+    let yaw = dispatcher.map_or(0.0, |d| d.town.view.yaw());
+    let base = rig.target + Quat::from_rotation_y(yaw) * (rig.base - rig.target);
+    *transform = Transform::from_translation(base + offset)
         .looking_at(rig.target + offset * 0.3, Vec3::Y);
 }
 

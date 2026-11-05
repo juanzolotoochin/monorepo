@@ -112,6 +112,10 @@ pub struct SpriteState {
     /// one again.
     pub retry_at: u64,
     pub steering: Steering,
+    /// Dead until this tick (B6, `Body::health` at 0), then back at home
+    /// beside the tree with its job (`Settlement::sprite_housekeeping`).
+    #[serde(default)]
+    pub respawn_at: u64,
 }
 
 impl SpriteState {
@@ -272,6 +276,10 @@ pub(super) fn act(body: &mut Body, sprite: &SpriteState, action: &Action, view: 
 /// applies as any agent's does (`action::act`), and the sprite walks, unless
 /// it is inside a building.
 pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
+    // A dead sprite waits to come back (`Settlement::sprite_housekeeping`).
+    if !a.body.alive() {
+        return;
+    }
     let def = super::avatar::character_of(ctx.characters, a);
     let view = View { me, ..ctx.view };
     if let Some(action) = think(a, &view) {
@@ -308,7 +316,7 @@ pub(super) fn think(a: &mut AgentState, view: &View) -> Option<Action> {
 /// Stage 3 for a sprite: asks for the slot on a `Claim` step while it is
 /// free, and to step in on an `Enter` step once the claim is held.
 pub(super) fn read(a: &AgentState, me: AgentIx, s: &Settlement, out: &mut Messages) {
-    let Some(sprite) = a.sprite() else { return };
+    let Some(sprite) = a.sprite().filter(|_| a.body.alive()) else { return };
     match (sprite.current(), sprite.holds) {
         (Some(Step::Claim(building)), None) if s.buildings.get(building as usize).is_some_and(|b| b.slot == Slot::Empty) => {
             out.claim_slot.push(ClaimSlot { agent: me, building });
@@ -374,6 +382,50 @@ impl Settlement {
         for (building, agent) in winners {
             self.buildings[building as usize].slot = Slot::Claimed(agent);
             self.agents[agent as usize].sprite_mut().expect("checked").holds = Some(Hold::Claimed(building));
+        }
+    }
+
+    /// Stage 5: an enemy's swing takes `damage` from sprite `agent`'s
+    /// health (B6). At 0 it dies: it gives up the slot it holds (a claim:
+    /// one inside a building is never hit) and its plan, stops, and comes
+    /// back at home beside the tree `respawn` ticks later, keeping its job
+    /// (`sprite_housekeeping`). Returns whether it died.
+    pub(super) fn hurt_sprite(&mut self, agent: usize, damage: u32, tick: u64, respawn: u64) -> bool {
+        let body = &mut self.agents[agent].body;
+        body.health = body.health.saturating_sub(damage);
+        if body.health > 0 {
+            return false;
+        }
+        self.release_slot(agent as AgentIx);
+        let AgentState { body, role: Role::Sprite(sprite), .. } = &mut self.agents[agent] else { unreachable!("only sprites are hurt here") };
+        body.route.clear();
+        body.velocity = FxVec2::ZERO;
+        body.push = FxVec2::ZERO;
+        sprite.plan.clear();
+        sprite.step = 0;
+        sprite.respawn_at = tick + respawn;
+        true
+    }
+
+    /// Housekeeping: dead sprites whose time is up come back at home, the
+    /// spot beside the tree they started on, with full health and their
+    /// job. Their plan is empty, so the brain plans for the job on their
+    /// next step (D2).
+    pub(crate) fn sprite_housekeeping(&mut self, tick: u64) {
+        for i in 0..self.agents.len() {
+            let AgentState { body, role: Role::Sprite(sprite), .. } = &mut self.agents[i] else { continue };
+            if body.alive() || tick < sprite.respawn_at {
+                continue;
+            }
+            body.position = body.home;
+            body.health = body.max_health;
+            body.route.clear();
+            sprite.respawn_at = 0;
+            sprite.plan.clear();
+            sprite.step = 0;
+            sprite.retry_at = 0;
+            sprite.steering = Steering::default();
+            self.events.push(super::Event::SpriteReturned { agent: i as AgentIx });
         }
     }
 

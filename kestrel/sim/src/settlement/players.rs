@@ -11,7 +11,7 @@
 use fx::{Fx, FxVec2};
 
 use super::avatar::{AvatarState, Intent};
-use super::{AgentIx, AgentState, Body, Carry, Inventory, InventoryRef, Role, Settlement};
+use super::{AgentIx, AgentState, Body, Carry, Goal, Inventory, InventoryRef, Quarry, Role, Settlement};
 use crate::terrain::Terrain;
 use crate::PlayerId;
 
@@ -107,11 +107,13 @@ impl Settlement {
     /// - units flying to or from it land at once;
     /// - what its cargo then holds, minerals among the items, is written off
     ///   as `abandoned`;
-    /// - its pile lab hauler (walk, notices, toss landings) goes.
+    /// - its pile lab hauler (walk, notices, toss landings) goes;
+    /// - threats chasing it give up and plan a route to the tree from where
+    ///   they stand, as giving up a chase does (`threat_goals`).
     ///
     /// The scene's first avatar never leaves, since every joiner is a copy
     /// of it.
-    pub fn leave(&mut self, player: PlayerId) {
+    pub fn leave(&mut self, player: PlayerId, terrain: &Terrain) {
         let Some(gone) = self.avatar_of(player) else { return };
         if Some(gone) == self.player() {
             return;
@@ -138,9 +140,13 @@ impl Settlement {
         }
         self.piano_notes.retain(|note| note.agent != gone);
         for t in &mut self.threats {
-            if t.windup.is_some_and(|w| w.agent == gone) {
+            if t.windup.is_some_and(|w| w.target == super::combat::SwingTarget::Agent(gone)) {
                 t.windup = None;
             }
+        }
+        let chasers: Vec<usize> = (0..self.threats.len()).filter(|&i| self.threats[i].goal == Goal::Chase(Quarry::Agent(gone))).collect();
+        for i in chasers {
+            self.give_up(i, terrain);
         }
         for owner in &mut self.dock_owner {
             if *owner == Some(gone) {
@@ -184,7 +190,13 @@ impl Settlement {
             }
         }
         for windup in self.threats.iter_mut().filter_map(|t| t.windup.as_mut()) {
-            shift(&mut windup.agent);
+            let super::combat::SwingTarget::Agent(agent) = &mut windup.target else { continue };
+            shift(agent);
+        }
+        for t in &mut self.threats {
+            if let Goal::Chase(Quarry::Agent(agent)) = &mut t.goal {
+                shift(agent);
+            }
         }
         for note in &mut self.piano_notes {
             shift(&mut note.agent);

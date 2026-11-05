@@ -1,7 +1,8 @@
 //! What the controller shows: the claim prompt, the selected target (its
 //! outline, name, verb or why it is unavailable), the last refusal, the
 //! drop preview, and the utility panel or item chooser. In a town, the
-//! interact target's ring, a blueprint ghost's rings and each site's plot.
+//! interact target's ring, a blueprint ghost's rings, each site's plot, a
+//! possessed ballista's range and reticle, and the edges of burning ground.
 
 use bevy::prelude::*;
 
@@ -87,6 +88,24 @@ pub(super) fn show(
         gizmos.circle(Isometry3d::new(h.position + Vec3::Y * 0.05, flat), h.radius + 0.25 * pulse, color.with_alpha(0.6 * (1.0 - pulse)));
     }
     let flat = Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+    // A possessed ballista's range on the ground, and its reticle: a ring
+    // and a cross where the next bolt goes (`town::aim_reticle`).
+    if let Some(r) = dispatcher.as_ref().and_then(|d| d.town.reticle.as_ref()) {
+        let color = Color::srgba(1.0, 0.82, 0.35, 0.95);
+        gizmos.circle(Isometry3d::new(r.center + Vec3::Y * 0.05, flat), r.range, color.with_alpha(0.35));
+        let at = r.point + Vec3::Y * 0.07;
+        // The line of fire, faint, then the reticle itself.
+        let from = r.center + Vec3::Y * 0.07;
+        if (at - from).length() > 0.8 {
+            gizmos.line(from + (at - from).normalize() * 0.8, at, color.with_alpha(0.3));
+        }
+        gizmos.circle(Isometry3d::new(at, flat), 0.55, color);
+        gizmos.circle(Isometry3d::new(at, flat), 0.2, color.with_alpha(0.8));
+        for d in [Vec3::X, Vec3::Z] {
+            gizmos.line(at - d * 0.8, at - d * 0.3, color);
+            gizmos.line(at + d * 0.3, at + d * 0.8, color);
+        }
+    }
     // A blueprint's ghost: its footprint as rings filling in toward the
     // center, and its output pile and slot spot, green while it may go down
     // and red while it may not (its skin and reason are `settlement`'s).
@@ -106,6 +125,15 @@ pub(super) fn show(
             let radius = settlement.building_kind(i as u16).radius.to_f32();
             gizmos.circle(Isometry3d::new(center, flat), radius, Color::srgba(0.95, 0.78, 0.40, 0.85));
             gizmos.circle(Isometry3d::new(center, flat), radius * 0.92, Color::srgba(0.95, 0.78, 0.40, 0.4));
+        }
+        // Burning ground (B4): the fire's edge, flickering, and a fainter
+        // ring inside it; its flames are glows (`settlement`).
+        let pulse = (time.elapsed_secs() * 9.0).sin() * 0.5 + 0.5;
+        for fire in &settlement.fires {
+            let center = service.to_view(fire.position).with_y(0.06);
+            let radius = fire.radius.to_f32();
+            gizmos.circle(Isometry3d::new(center, flat), radius * (0.97 + 0.03 * pulse), Color::srgba(1.0, 0.42, 0.08, 0.75 + 0.2 * pulse));
+            gizmos.circle(Isometry3d::new(center, flat), radius * 0.6, Color::srgba(1.0, 0.65, 0.2, 0.35 + 0.2 * (1.0 - pulse)));
         }
     }
     let shown = lines.join("\n");

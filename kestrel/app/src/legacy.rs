@@ -115,10 +115,14 @@ pub struct BuildingKind {
     pub label: String,
     pub skin: String,
     pub radius: f32,
-    pub product: String,
+    /// What a gatherer makes; a ballista makes nothing.
+    pub product: Option<String>,
     /// Seconds per unit with a sprite inside.
     pub period: f32,
     pub cap: u32,
+    /// A ballista's ammo item and how much its store holds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ammo: Option<(String, u32)>,
     /// The parts it is put up from, in install order.
     pub parts: Vec<Part>,
 }
@@ -294,6 +298,7 @@ impl Scenario {
                     product: k.product.clone(),
                     period: k.period.to_f32(),
                     cap: k.cap,
+                    ammo: k.defence.as_ref().map(|d| (d.ammo.clone(), d.ammo_cap)),
                     parts: k.parts.iter().map(|p| Part { label: p.label.clone(), materials: p.materials.iter().map(|m| (m.item.clone(), m.units)).collect() }).collect(),
                 })
                 .collect(),
@@ -347,6 +352,8 @@ pub enum SpriteActivity {
     Waiting,
     /// Inside its building.
     Working,
+    /// Dead, until it comes back beside the tree (B6).
+    Dead,
 }
 
 /// A sprite's job and what it is doing about it.
@@ -357,6 +364,13 @@ pub struct SpriteView {
     pub activity: SpriteActivity,
     /// The building it holds a slot in, claimed or inside.
     pub building: Option<usize>,
+    /// Its health and the most it has (B6); both 0 for a sprite that can't
+    /// be hurt.
+    pub health: u32,
+    pub max_health: u32,
+    /// While dead: the tick it died and the tick it comes back on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dead: Option<(u64, u64)>,
 }
 
 /// Who works a building.
@@ -378,6 +392,9 @@ pub enum BuildingStatus {
     Working,
     /// Its output holds its occupant's cap: production waits for a pickup.
     Full,
+    /// A ballista with someone inside and nothing in its ammo store: it
+    /// can't shoot (B2).
+    NoAmmo,
 }
 
 /// A building as the view sees it (`sim::settlement::BuildingState`).
@@ -402,6 +419,13 @@ pub struct Building {
     /// While it is a site: the part going in next and its materials.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub site: Option<Site>,
+    /// A ballista's: where it last aimed and the tick it last shot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turret: Option<DefenderState>,
+    /// Its health and its kind's (B8): an enemy's swings take it, and at 0
+    /// it breaks back into a site.
+    pub health: u32,
+    pub max_health: u32,
 }
 
 /// A site as the view sees it (`sim::settlement::Stage::Site`).
@@ -449,13 +473,51 @@ pub struct Threat {
     pub windup: Option<Windup>,
     /// The tick its last swing landed, hit or miss.
     pub swung: Option<u64>,
+    /// On fire (`sim::settlement::Threat::burn`); left out of traces when
+    /// not.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub burning: bool,
+    /// The agent it chases, an elder or a sprite
+    /// (`sim::settlement::Threat::goal`); left out of traces when none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chasing: Option<String>,
+    /// The building it attacks (B8), by index; left out of traces when
+    /// none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attacking: Option<usize>,
+}
+
+/// A possessed ballista's fireball in flight (`sim::settlement::Fireball`).
+#[derive(Clone, Debug, Serialize)]
+pub struct Fireball {
+    pub id: u64,
+    pub from: Point,
+    pub launch_height: f32,
+    pub to: Point,
+    pub born: u64,
+    pub arrival: u64,
+}
+
+/// Burning ground a fireball left (`sim::settlement::FirePatch`).
+#[derive(Clone, Debug, Serialize)]
+pub struct Fire {
+    pub id: u64,
+    pub position: Point,
+    pub radius: f32,
+    pub born: u64,
+    /// The first tick it is out.
+    pub expires: u64,
 }
 
 /// A threat's swing being wound up (`sim::settlement::Windup`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Windup {
-    /// The player it swings at.
+    /// The player it swings at; empty for a building.
     pub agent: String,
+    /// The building it swings at (B8), by index; left out of traces when
+    /// it swings at an agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub building: Option<usize>,
     /// The tick the swing lands.
     pub lands: u64,
     /// The windup's length: it started on tick `lands - ticks`.
@@ -583,6 +645,8 @@ pub enum Impact {
     Laser,
     BoltImpale,
     BoltPierce,
+    /// A fireball's landing or a burn.
+    Fire,
 }
 
 /// This frame's events, in the original shapes.
@@ -621,6 +685,20 @@ pub enum Event {
     BuildingBurst { building: usize, units: u32 },
     /// Player `agent`'s Burst was refused; `reason.message()` says why.
     BurstRefused { agent: String, reason: s::BurstRefusal },
+    /// Ballista `building` threw a fireball.
+    FireballThrown { building: usize },
+    /// A fireball came down at `position` and set the ground alight.
+    FireballLanded { position: Point },
+    /// A threat's swing at building `building` landed (`hit`) or missed;
+    /// `broken` when it was the last of its health. `from` is where the
+    /// threat stands, if it still does.
+    BuildingStruck { building: usize, from: Option<Point>, hit: bool, broken: bool },
+    /// Building `building` broke back into a site (B8).
+    BuildingBroken { building: usize },
+    /// Sprite `agent` came back beside the tree after dying (B6).
+    SpriteReturned { agent: String },
+    /// The Sacred Tree's health reached 0: the run is over (B7).
+    TreeFell,
 }
 
 /// One frame's settlement, interpolated between the last two ticks.
@@ -656,6 +734,12 @@ pub struct Simulation {
     /// a town's elder drops one.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub ground_piles: Vec<GroundPile>,
+    /// Fireballs in flight and the fires they left; empty, and left out of
+    /// traces, until a possessed ballista throws one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fireballs: Vec<Fireball>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fires: Vec<Fire>,
     #[serde(skip)]
     pub events: Vec<Event>,
     #[serde(skip)]
@@ -791,7 +875,13 @@ impl Simulation {
                 // so a windup that landed this tick is still drawn finishing.
                 // One a stagger cancelled (landing later) just goes away.
                 let windup = t.windup.or_else(|| before.and_then(|b| b.windup).filter(|w| w.lands <= tick));
-                let windup = windup.zip(attack).map(|(w, a)| Windup { agent: agent_name(w.agent), lands: w.lands, ticks: a.windup });
+                let windup = windup.zip(attack).map(|(w, a)| {
+                    let (agent, building) = match w.target {
+                        s::combat::SwingTarget::Agent(agent) => (agent_name(agent), None),
+                        s::combat::SwingTarget::Building(b) => (String::new(), Some(b as usize)),
+                    };
+                    Windup { agent, building, lands: w.lands, ticks: a.windup }
+                });
                 // A landed swing sets `ready_at` to the tick after it plus the
                 // cooldown; it is 0 before the first one.
                 let swung = attack.and_then(|a| t.ready_at.checked_sub(1 + a.cooldown));
@@ -809,6 +899,9 @@ impl Simulation {
                     knockback: [t.knockback.x.to_f32(), t.knockback.y.to_f32()],
                     windup,
                     swung,
+                    burning: t.burn.is_some(),
+                    chasing: t.goal.agent().map(agent_name),
+                    attacking: t.goal.building().map(|b| b as usize),
                 };
                 (t.id, threat)
             })
@@ -910,6 +1003,7 @@ impl Simulation {
                             s::Impact::Laser => Impact::Laser,
                             s::Impact::BoltImpale => Impact::BoltImpale,
                             s::Impact::BoltPierce => Impact::BoltPierce,
+                            s::Impact::Fire => Impact::Fire,
                         },
                     },
                     s::Event::PinnedLanded { target, position } => Event::PinnedLanded { target: *target, position: p(*position) },
@@ -927,7 +1021,11 @@ impl Simulation {
                     s::Event::BlueprintRefused { reason, .. } => Event::BlueprintRefused { reason: *reason },
                     s::Event::PartInstalled { building, built, .. } => Event::PartInstalled { building: *building as usize, built: *built },
                     s::Event::BuildingBurst { building, units } => Event::BuildingBurst { building: *building as usize, units: *units },
+                    // A ballista building's shot sounds as a defender's.
+                    s::Event::BuildingShot { building } => Event::Shot { defender: format!("building/{building}") },
                     s::Event::BurstRefused { agent, reason } => Event::BurstRefused { agent: agent_name(*agent), reason: *reason },
+                    s::Event::FireballThrown { building, .. } => Event::FireballThrown { building: *building as usize },
+                    s::Event::FireballLanded { position } => Event::FireballLanded { position: p(*position) },
                     s::Event::ThreatSwing { threat, agent, hit, killed, .. } => Event::ThreatSwing {
                         threat: *threat,
                         agent: agent_name(*agent),
@@ -935,6 +1033,16 @@ impl Simulation {
                         hit: *hit,
                         killed: *killed,
                     },
+                    s::Event::BuildingWindup { .. } => return None,
+                    s::Event::BuildingStruck { threat, building, hit, broken, .. } => Event::BuildingStruck {
+                        building: *building as usize,
+                        from: current.threat(*threat).map(|t| p(t.position)),
+                        hit: *hit,
+                        broken: *broken,
+                    },
+                    s::Event::BuildingBroken { building } => Event::BuildingBroken { building: *building as usize },
+                    s::Event::SpriteReturned { agent } => Event::SpriteReturned { agent: agent_name(*agent) },
+                    s::Event::TreeFell => Event::TreeFell,
                 })
             })
             .collect();
@@ -949,10 +1057,15 @@ impl Simulation {
                     s::Occupant::Elder(a) => Occupant::Elder(agent_name(a)),
                 });
                 let cap = kind.cap_for(b.slot.occupant());
+                let ballista = kind.defence.is_some();
                 let status = if !b.built() {
                     BuildingStatus::Site
                 } else if occupant.is_none() {
                     BuildingStatus::Idle
+                } else if ballista && b.output.total() == 0 {
+                    BuildingStatus::NoAmmo
+                } else if ballista {
+                    BuildingStatus::Working
                 } else if b.output.total() + b.output.total_in() >= cap {
                     BuildingStatus::Full
                 } else {
@@ -978,6 +1091,16 @@ impl Simulation {
                         materials: kind.parts.get(part as usize).into_iter().flatten().map(|&(i, units)| (item(i), materials.count(i), units)).collect(),
                         ready: b.ready(kind),
                     }),
+                    // Possessed, it turns to the elder's reticle (B3).
+                    turret: ballista.then(|| {
+                        let reticle = match b.slot.occupant() {
+                            Some(s::Occupant::Elder(a)) => current.agents[a as usize].avatar().and_then(|avatar| avatar.aim).map(|aim| b.position + aim),
+                            _ => None,
+                        };
+                        DefenderState { enabled: true, aim: reticle.or(b.turret.aim).map(local), fired_at: b.turret.fired_at }
+                    }),
+                    health: b.health,
+                    max_health: kind.health,
                 }
             })
             .collect();
@@ -990,7 +1113,10 @@ impl Simulation {
                     s::SpriteJob::Idle => None,
                     s::SpriteJob::Staff(kind) => Some(current.building_kinds[kind as usize].id.clone()),
                 };
+                let respawn = current.characters[a.character as usize].sprite.map_or(0, |d| d.respawn);
+                let dead = (!a.body.alive()).then(|| (sprite.respawn_at.saturating_sub(respawn), sprite.respawn_at));
                 let activity = match sprite.current() {
+                    _ if dead.is_some() => SpriteActivity::Dead,
                     _ if sprite.inside() => SpriteActivity::Working,
                     Some(s::Step::Wait) => SpriteActivity::Waiting,
                     // Walking, or about to: a claim is granted on the way.
@@ -1000,7 +1126,14 @@ impl Simulation {
                     None if job.is_none() => SpriteActivity::Idle,
                     None => SpriteActivity::Waiting,
                 };
-                let view = SpriteView { job, activity, building: sprite.holds.map(|h| h.building() as usize) };
+                let view = SpriteView {
+                    job,
+                    activity,
+                    building: sprite.holds.map(|h| h.building() as usize),
+                    health: a.body.health,
+                    max_health: a.body.max_health,
+                    dead,
+                };
                 Some((a.id.clone(), view))
             })
             .collect();
@@ -1094,6 +1227,16 @@ impl Simulation {
             buildings,
             sprites,
             ground_piles,
+            fireballs: current
+                .fireballs
+                .iter()
+                .map(|f| Fireball { id: f.id, from: local(f.from), launch_height: f.launch_height.to_f32(), to: local(f.to), born: f.born, arrival: f.arrival })
+                .collect(),
+            fires: current
+                .fires
+                .iter()
+                .map(|f| Fire { id: f.id, position: local(f.position), radius: f.radius.to_f32(), born: f.born, expires: f.expires })
+                .collect(),
             events,
             balances,
             statuses,

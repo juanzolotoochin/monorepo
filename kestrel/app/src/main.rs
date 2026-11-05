@@ -26,6 +26,7 @@ mod obstacles;
 mod palimpsest;
 mod piano;
 mod pause;
+mod fallen;
 mod peers;
 mod pile_model;
 mod prediction;
@@ -289,6 +290,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         app.add_service::<menu::MainMenu>().add_service::<pause::Pause>();
     }
     app.add_service::<lockstep::SessionService>()
+        .add_service::<fallen::Fallen>()
         .add_service::<lockstep::WorldMirror>()
         .add_service::<scene_view::SceneView>()
         .add_systems(PostUpdate, piano::update.run_if(in_state(service::WorldState::Active)))

@@ -96,18 +96,21 @@ enum Glow {
     Idle = 3,
     Full = 4,
     Elder = 5,
+    /// A fireball, a fire on the ground, a burning enemy (B4).
+    Fire = 6,
 }
 
 /// The glows' colors, by `Glow`: the warm flame of work, a pale yellow
 /// walk, the cool blue of waiting, a dim ember for idle, red for an output
-/// that is full, and violet for the elder.
-const GLOWS: [(f32, f32, f32); 6] = [
+/// that is full, violet for the elder, and the deep orange of fire.
+const GLOWS: [(f32, f32, f32); 7] = [
     (1.0, 0.55, 0.12),
     (1.0, 0.86, 0.45),
     (0.35, 0.62, 1.0),
     (0.45, 0.36, 0.30),
     (1.0, 0.16, 0.10),
     (0.78, 0.45, 1.0),
+    (1.0, 0.32, 0.04),
 ];
 
 impl Glow {
@@ -694,6 +697,8 @@ pub fn tick(world: &mut World) {
                     Vec3::new(position[0], 0.72, position[1]),
                     *target as u32,
                 );
+            } else if *impact == crate::legacy::Impact::Fire {
+                // Fire draws its own flames (`fire_glows`); it doesn't bleed.
             } else {
                 crate::effects::blood(
                     world,
@@ -752,6 +757,11 @@ pub fn tick(world: &mut World) {
                 state.hit_until.insert(*target, sim.tick + (0.23 * HZ) as u64);
             }
         }
+        // A fireball bursts in sparks where it comes down; its fire's
+        // flames are glows (`fire_glows`).
+        if let Event::FireballLanded { position } = event {
+            crate::effects::deflection(world, Vec3::new(position[0], 0.35, position[1]), sim.tick as u32);
+        }
         if let Event::PinnedLanded { target, .. } = event {
             let key = format!("threat/{target}");
             if let Some((skin, rig)) = state.views.remove(&key) {
@@ -800,6 +810,27 @@ pub fn tick(world: &mut World) {
                 feedback.trauma = feedback.trauma.max(if *killed { 0.45 } else { 0.3 });
             }
         }
+        // An enemy's blow on a building strikes sparks off it; breaking it
+        // bursts it in sparks and says so (B8).
+        if let Event::BuildingStruck { building, from, hit: true, .. } = event {
+            if let Some(b) = sim.buildings.get(*building) {
+                let center = Vec3::new(b.position[0], 0.6, b.position[1]);
+                let from = from.map_or(center, |p| Vec3::new(p[0], 0.6, p[1]));
+                let at = center + (from - center).normalize_or(Vec3::Z) * 0.6;
+                crate::effects::deflection(world, at, (sim.tick as u32).wrapping_add(*building as u32));
+            }
+        }
+        if let Event::BuildingBroken { building } = event {
+            if let Some(b) = sim.buildings.get(*building) {
+                for k in 0..4u32 {
+                    let angle = k as f32 * std::f32::consts::FRAC_PI_2;
+                    let at = Vec3::new(b.position[0] + 0.5 * angle.cos(), 0.5, b.position[1] + 0.5 * angle.sin());
+                    crate::effects::deflection(world, at, (sim.tick as u32).wrapping_add(k));
+                }
+                let label = sim.config().building_kinds.iter().find(|k| k.id == b.kind).map_or_else(|| b.kind.to_uppercase(), |k| k.label.clone());
+                state.refusal = Some((format!("{label} broken: it is a site again"), sim.time()));
+            }
+        }
         if let Event::BuildingProduced { building } = event {
             state.produced_at.insert(*building, sim.tick);
         }
@@ -828,6 +859,11 @@ pub fn tick(world: &mut World) {
             Event::ArcFired { .. } => Some(crate::sound::Cue::Arc),
             // The visible bolt plays this cue when it reaches the actor.
             Event::Hit { impact: crate::legacy::Impact::Laser, .. } => None,
+            // A burn ticks quietly; its kill sounds as any (`GhoulHit`).
+            Event::Hit { impact: crate::legacy::Impact::Fire, killed: false, .. } => None,
+            // A fireball goes up as a toss does, and comes down with a burst.
+            Event::FireballThrown { .. } => Some(crate::sound::Cue::Toss),
+            Event::FireballLanded { .. } => Some(crate::sound::Cue::LaserImpact),
             Event::LaserFired { .. } => Some(crate::sound::Cue::Laser),
             Event::Hit {
                 impact: crate::legacy::Impact::Arc,
@@ -865,6 +901,11 @@ pub fn tick(world: &mut World) {
             Event::BlockedShot { .. } => Some(crate::sound::Cue::Stone),
             Event::ThreatSwing { hit: true, .. } => Some(crate::sound::Cue::GhoulHit),
             Event::ThreatSwing { hit: false, .. } => Some(crate::sound::Cue::Swing),
+            Event::BuildingStruck { hit: true, .. } => Some(crate::sound::Cue::Stone),
+            Event::BuildingStruck { hit: false, .. } => Some(crate::sound::Cue::Swing),
+            Event::BuildingBroken { .. } => Some(crate::sound::Cue::Pierce),
+            // A sprite back beside the tree pops up as a unit does.
+            Event::SpriteReturned { .. } => Some(crate::sound::Cue::Dispense),
             Event::Produced { .. } | Event::Equipped { .. } => Some(crate::sound::Cue::Clang),
             // A gatherer's unit pops onto its pile as a dispenser's does.
             // So do a Burst's, all at once.
@@ -883,6 +924,10 @@ pub fn tick(world: &mut World) {
                     | Event::PinnedLanded { .. }
                     | Event::BlockedShot { .. }
                     | Event::ThreatSwing { .. }
+                    | Event::BuildingStruck { .. }
+                    | Event::BuildingBroken { .. }
+                    | Event::FireballThrown { .. }
+                    | Event::FireballLanded { .. }
             );
             if combat_event || sim.tick >= state.last_sound + (0.3 * HZ) as u64 {
                 world.resource_mut::<crate::sound::Sound>().play(cue);
@@ -897,7 +942,9 @@ pub fn tick(world: &mut World) {
     let mut desired = BTreeMap::new();
     for a in sim.agents.values() {
         if let Some(sprite) = sim.config().sprite(&a.id) {
-            desired.insert(format!("agent/{}", a.id), sprite_view(sim, sprite, a));
+            if let Some(view) = sprite_view(sim, sprite, a) {
+                desired.insert(format!("agent/{}", a.id), view);
+            }
             continue;
         }
         let config = agent_config(sim, &a.id);
@@ -1129,8 +1176,27 @@ pub fn tick(world: &mut World) {
             let tree = |item: &str| sim.config().depots.iter().map(|d| sim.depots[&d.id].units(item)).sum::<u32>();
             let items = sim.config().items.iter().map(|i| format!("{} {}", i.label, tree(&i.id))).collect::<Vec<_>>().join("  ");
             let burst = burst_indicator(world).map_or_else(String::new, |(_, burst)| format!("  /  {burst}"));
+            // The tree's health and the elder's (B7, B6).
+            let mirror = world.resource::<crate::lockstep::WorldMirror>();
+            let base = mirror.current.as_ref().map_or(sim.health, |current| current.base_health);
+            let elder = mirror.player().and_then(|id| mirror.current.as_ref()?.agents.get(id as usize)).map(|agent| (agent.body.health, agent.body.max_health));
+            let elder = elder.filter(|&(_, max)| max > 0).map_or_else(String::new, |(health, max)| format!("  ELDER {health}/{max}"));
+            // The waves (M5.6): how many ghouls are out, or with none out,
+            // how long until the next comes; nothing once the last came.
+            let waves = mirror.current.as_ref().map_or_else(String::new, |current| {
+                let next = current.waves.iter().filter(|w| w.spawned < w.count).map(|w| w.first + u64::from(w.spawned) * w.every).min();
+                match (current.threats.len(), next) {
+                    (0, Some(next)) => {
+                        let seconds = ((next as f32 - sim.time()) / HZ).ceil().max(0.0) as u32;
+                        format!("  /  NEXT WAVE {}:{:02}", seconds / 60, seconds % 60)
+                    }
+                    (0, None) => String::new(),
+                    (n, _) => format!("  /  GHOULS {n}"),
+                }
+            });
             format!(
-                "SACRED TREE  {}  /  PACK {}/{} {}{}   [P] pause",
+                "SACRED TREE {}/{base}{elder}{waves}  {}  /  PACK {}/{} {}{}   [P] pause",
+                sim.health,
                 items,
                 mine.map_or(0, |a| a.cargo.total()),
                 mine.map_or(0, |a| a.cargo.capacity),
@@ -1287,7 +1353,7 @@ fn facing(from: [f32; 2], to: [f32; 2]) -> f32 {
 /// A sprite's rig: its character's skin, each a little different in size
 /// so the four read as separate. Working, it faces its building and bobs
 /// with the work.
-fn sprite_view(sim: &Simulation, sprite: &crate::legacy::Sprite, a: &crate::legacy::AgentState) -> View {
+fn sprite_view(sim: &Simulation, sprite: &crate::legacy::Sprite, a: &crate::legacy::AgentState) -> Option<View> {
     const SIZES: [f32; 4] = [1.0, 0.9, 1.07, 0.95];
     let index = sim.config().sprites.iter().position(|s| s.id == sprite.id).unwrap_or(0);
     let mut view = View::new(&sprite.skin, a.position);
@@ -1299,16 +1365,30 @@ fn sprite_view(sim: &Simulation, sprite: &crate::legacy::Sprite, a: &crate::lega
         view.heading = facing(a.position, sim.buildings[b].position);
         view.activity = 0.5 + 0.5 * (sim.time() / HZ * 7.0 + index as f32).sin();
     }
-    view
+    // A dead sprite falls over and fades away (B6), shrinking to nothing in
+    // `SPRITE_FADE_SECONDS`, then isn't drawn until it comes back.
+    if let Some((died, _)) = state.and_then(|s| s.dead) {
+        let t = ((sim.time() - died as f32) / (SPRITE_FADE_SECONDS * HZ)).clamp(0.0, 1.0);
+        if t >= 1.0 {
+            return None;
+        }
+        view.roll = std::f32::consts::FRAC_PI_2 * (t * 3.0).min(1.0);
+        view.scale *= 1.0 - t;
+    }
+    Some(view)
 }
+
+/// Seconds a dead sprite takes to fade away.
+const SPRITE_FADE_SECONDS: f32 = 1.5;
 /// A sprite's job, by its building kind's label ("WOOD GATHERER"), and
 /// shortened to the kind's product for its tag ("WOOD"), so neighbors' tags
-/// overlap less.
+/// overlap less. A ballista, which makes nothing, keeps its label.
 fn job_labels(sim: &Simulation, job: Option<&String>) -> (String, String) {
     let Some(kind) = job.and_then(|id| sim.config().building_kinds.iter().find(|k| k.id == *id)) else {
         return (String::new(), String::new());
     };
-    let product = sim.config().items.iter().find(|i| i.id == kind.product).map_or_else(|| kind.product.to_uppercase(), |i| i.label.clone());
+    let Some(product) = &kind.product else { return (kind.label.clone(), kind.label.clone()) };
+    let product = sim.config().items.iter().find(|i| i.id == *product).map_or_else(|| product.to_uppercase(), |i| i.label.clone());
     (kind.label.clone(), product)
 }
 /// An agent's label: a sprite's or a scenario agent's.
@@ -1355,6 +1435,7 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
     let ground = |world: &World, p: Vec3| crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, p).unwrap_or(0.);
     let seconds = sim.time() / HZ;
     let burst = burst_indicator(world);
+    let leave = leave_prompt(world);
     for (i, b) in sim.buildings.iter().enumerate() {
         let kind = sim.config().building_kinds.iter().find(|k| k.id == b.kind).expect("a scenario building kind");
         let shape = state.building_shapes[&b.kind];
@@ -1369,6 +1450,12 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
         // A machine skin turns its rotor a full turn per `activity`: three
         // turns a unit while it works, standing still while idle or full.
         v.activity = b.progress * 3.0;
+        // A ballista's skin is the forest's turret: it turns to its last
+        // aim and recoils as it shoots, as a defender's does.
+        if let Some(turret) = &b.turret {
+            v.aim = turret.aim.map(|p| (p[0] - b.position[0]).atan2(p[1] - b.position[1]));
+            v.activity = (1. - (sim.time() - turret.fired_at as f32) / (0.25 * HZ)).max(0.);
+        }
         if grown > 0.0 {
             desired.insert(format!("building/{i}"), v);
         }
@@ -1378,8 +1465,11 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
         let center = center + Vec3::Y * ground(world, center);
         let (glow, status) = match (&b.occupant, b.status) {
             (Some(Occupant::Elder(_)), BuildingStatus::Full) => (Glow::Full, "FULL / POSSESSED".to_string()),
+            (Some(Occupant::Elder(_)), BuildingStatus::NoAmmo) => (Glow::Full, "NO AMMO / POSSESSED".to_string()),
             (Some(Occupant::Elder(_)), _) => (Glow::Elder, "POSSESSED".to_string()),
             (Some(Occupant::Sprite(a)), BuildingStatus::Full) => (Glow::Full, format!("FULL / {}", agent_label(sim, a))),
+            (Some(Occupant::Sprite(a)), BuildingStatus::NoAmmo) => (Glow::Full, format!("NO AMMO / {}", agent_label(sim, a))),
+            (Some(Occupant::Sprite(a)), _) if kind.ammo.is_some() => (Glow::Working, format!("MANNED / {}", agent_label(sim, a))),
             (Some(Occupant::Sprite(a)), _) => (Glow::Working, format!("WORKING / {}", agent_label(sim, a))),
             (None, BuildingStatus::Site) => (Glow::Idle, "BEING BUILT".to_string()),
             (None, _) => match &b.claimed_by {
@@ -1406,23 +1496,46 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
         } * (1.0 + flare * 0.9 + burst_flare * 2.2);
         let lamp = center + Vec3::Y * (shape.height * grown.max(0.4) + 0.3);
         glows.push((format!("lamp/{i}"), lamp, size, glow));
-        let product = sim.config().items.iter().find(|it| it.id == kind.product).map_or(kind.product.clone(), |it| it.label.clone());
+        // A gatherer's product, or a ballista's ammo: what its pile holds.
+        let stored = kind.product.clone().or_else(|| kind.ammo.as_ref().map(|(item, _)| item.clone())).unwrap_or_default();
+        let product = sim.config().items.iter().find(|it| it.id == stored).map_or(stored.to_uppercase(), |it| it.label.clone());
         let held = b.output.total();
-        let detail = format!(
-            "{}\nMakes 1 {} every {:.1}s while someone works it\nOutput: {}/{} {}\nStatus: {}",
-            kind.label,
-            product.to_lowercase(),
-            kind.period,
-            held,
-            b.cap,
-            product.to_lowercase(),
-            match b.status {
-                BuildingStatus::Working => format!("Working, next unit {:.0}%", b.progress * 100.0),
-                BuildingStatus::Full => "Output full: waiting for a pickup".into(),
-                BuildingStatus::Idle => "Idle: nobody inside".into(),
-                BuildingStatus::Site => "Being built".into(),
-            }
-        );
+        let status_line = match b.status {
+            BuildingStatus::Working if kind.ammo.is_some() => "Manned, shooting the nearest enemy in range".into(),
+            BuildingStatus::Working => format!("Working, next unit {:.0}%", b.progress * 100.0),
+            BuildingStatus::Full => "Output full: waiting for a pickup".into(),
+            BuildingStatus::NoAmmo => "No ammo: bring it stone".into(),
+            BuildingStatus::Idle => "Idle: nobody inside".into(),
+            BuildingStatus::Site => "Being built".into(),
+        };
+        let detail = match &kind.ammo {
+            Some(_) => format!(
+                "{}\nShoots the nearest enemy in range while someone mans it, 1 {} a shot\nAmmo: {}/{} {}\nStatus: {}",
+                kind.label,
+                product.to_lowercase(),
+                held,
+                b.cap,
+                product.to_lowercase(),
+                status_line
+            ),
+            None => format!(
+                "{}\nMakes 1 {} every {:.1}s while someone works it\nOutput: {}/{} {}\nStatus: {}",
+                kind.label,
+                product.to_lowercase(),
+                kind.period,
+                held,
+                b.cap,
+                product.to_lowercase(),
+                status_line
+            ),
+        };
+        // A built ballista's card says how much ammo it has, or that it has
+        // none (B2).
+        let status = match &kind.ammo {
+            Some(_) if b.site.is_none() && held == 0 && b.status != BuildingStatus::NoAmmo => format!("{status}\nNO AMMO"),
+            Some(_) if b.site.is_none() && held > 0 => format!("{status}\nAMMO {held}/{} {product}", b.cap),
+            _ => status,
+        };
         // A site's card says what its next part takes and how much is in
         // ("FOUNDATION 1/2 WOOD"); its output pile isn't there yet.
         let (status, detail) = match &b.site {
@@ -1435,6 +1548,14 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
                 (format!("{status}\n{part} {next}"), detail)
             }
             None => (status, detail),
+        };
+        // A damaged building's card says what health it has left (B8).
+        let status = if b.health < b.max_health { format!("{status}\nHP {}/{}", b.health, b.max_health) } else { status };
+        let detail = format!("{detail}\nHealth: {}/{}", b.health, b.max_health);
+        // The building the local elder possesses says how to leave it.
+        let status = match leave.as_ref().filter(|(b, _)| *b == i) {
+            Some((_, prompt)) => format!("{status}\n{prompt}"),
+            None => status,
         };
         // A site's card hangs where a built one's does, clear of the
         // interact prompt over its pile.
@@ -1475,46 +1596,64 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
             SpriteActivity::Working => Glow::Working,
             SpriteActivity::Moving => Glow::Moving,
             SpriteActivity::Waiting => Glow::Waiting,
-            SpriteActivity::Idle => Glow::Idle,
+            SpriteActivity::Idle | SpriteActivity::Dead => Glow::Idle,
         };
         // A flame over its head: it dances while working, bobs on the walk,
-        // breathes slowly while waiting and smoulders when idle.
+        // breathes slowly while waiting and smoulders when idle. A dead
+        // sprite's goes out.
         let phase = index as f32 * 1.7;
         let (size, lift) = match s.activity {
             SpriteActivity::Working => (0.13 + 0.03 * (seconds * 13.0 + phase).sin(), 0.04 * (seconds * 9.0 + phase).sin()),
             SpriteActivity::Moving => (0.11, 0.04 * (seconds * 6.0 + phase).sin()),
             SpriteActivity::Waiting => (0.09 + 0.03 * (seconds * 2.0 + phase).sin(), 0.0),
             SpriteActivity::Idle => (0.07, 0.0),
+            SpriteActivity::Dead => (0.0, 0.0),
         };
         let head = p + Vec3::Y * 1.12;
-        glows.push((format!("flame/{}", sprite.id), head + Vec3::Y * lift, size, glow));
+        if s.activity != SpriteActivity::Dead {
+            glows.push((format!("flame/{}", sprite.id), head + Vec3::Y * lift, size, glow));
+        }
         let (job, short) = job_labels(sim, s.job.as_ref());
+        // Seconds until a dead sprite is back beside the tree.
+        let back = s.dead.map_or(0, |(_, back)| ((back as f32 - sim.time()) / HZ).ceil().max(0.0) as u32);
         let doing = match s.activity {
-            SpriteActivity::Working => "WORKING",
-            SpriteActivity::Moving if s.job.is_none() => "GOING HOME",
-            SpriteActivity::Moving => "ON THE WAY",
-            SpriteActivity::Waiting => "WAITING",
-            SpriteActivity::Idle => "IDLE",
+            SpriteActivity::Working => "WORKING".to_string(),
+            SpriteActivity::Moving if s.job.is_none() => "GOING HOME".to_string(),
+            SpriteActivity::Moving => "ON THE WAY".to_string(),
+            SpriteActivity::Waiting => "WAITING".to_string(),
+            SpriteActivity::Idle => "IDLE".to_string(),
+            SpriteActivity::Dead => format!("BACK IN {back} s"),
+        };
+        // A hurt sprite's name says what health it has left ("ASH 2/3").
+        let name = if s.health < s.max_health && s.activity != SpriteActivity::Dead {
+            format!("{} {}/{}", sprite.label, s.health, s.max_health)
+        } else {
+            sprite.label.clone()
         };
         // Declutter: a sprite working inside has no tag (its building's card
         // names it), and the others show their name alone (the flame's color
-        // says what they are doing) until the elder stands beside them.
+        // says what they are doing) until the elder stands beside them. A
+        // dead one always says when it is back.
         let near = Vec2::new(p.x - player.x, p.z - player.z).length() <= TAG_UNFOLD;
         let brief = match s.activity {
             SpriteActivity::Working if s.building.is_some() => String::new(),
-            _ if !near => sprite.label.clone(),
-            _ if job.is_empty() => format!("{}\n{doing}", sprite.label),
-            _ => format!("{}\n{short} / {doing}", sprite.label),
+            SpriteActivity::Dead => format!("{name}\n{doing}"),
+            _ if !near => name,
+            _ if job.is_empty() => format!("{name}\n{doing}"),
+            _ => format!("{name}\n{short} / {doing}"),
         };
         let detail = format!(
-            "{} (sprite)\nJob: {}\nNow: {}",
+            "{} (sprite)\nJob: {}\nHealth: {}/{}\nNow: {}",
             sprite.label,
             if job.is_empty() { "none" } else { job.as_str() },
+            s.health,
+            s.max_health,
             match s.activity {
-                SpriteActivity::Working => "working inside",
-                SpriteActivity::Moving => "walking",
-                SpriteActivity::Waiting => "waiting for a free building",
-                SpriteActivity::Idle => "standing at home",
+                SpriteActivity::Working => "working inside".to_string(),
+                SpriteActivity::Moving => "walking".to_string(),
+                SpriteActivity::Waiting => "waiting for a free building".to_string(),
+                SpriteActivity::Idle => "standing at home".to_string(),
+                SpriteActivity::Dead => format!("dead, back beside the tree in {back} s"),
             }
         );
         // Every other tag stands a little higher, so neighbors standing side
@@ -1523,7 +1662,65 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
         let above = 0.3 + (index % 2) as f32 * 0.4;
         town_caption(world, state, &format!("sprite/{}", sprite.id), head + Vec3::Y * above, brief, glow.text(), detail);
     }
+    fire_glows(world, sim, &mut glows);
     glows
+}
+
+/// Flames in a fire patch, scattered over its disc.
+const FIRE_FLAMES: usize = 11;
+
+/// The fireball and burning ground (`SACRED_TREE_BALLISTA.md`, B4), as
+/// glows: a fireball arcs from its ballista to where it lands, a fire's
+/// flames flicker over its disc and die down in its last second, and a
+/// burning enemy carries two small flames. The fire's ring is the HUD's
+/// (`input::hud`).
+fn fire_glows(world: &World, sim: &Simulation, glows: &mut Vec<(String, Vec3, f32, Glow)>) {
+    let ground = |p: Vec3| crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, p).unwrap_or(0.);
+    let now = sim.time();
+    let seconds = now / HZ;
+    for f in &sim.fireballs {
+        let t = ((now - f.born as f32) / (f.arrival - f.born).max(1) as f32).clamp(0., 1.);
+        let (from, to) = (Vec3::new(f.from[0], 0., f.from[1]), Vec3::new(f.to[0], 0., f.to[1]));
+        let flat = from.lerp(to, t);
+        let base = ground(from) + f.launch_height;
+        let height = base + (ground(to) - base) * t + 1.4 * (std::f32::consts::PI * t).sin();
+        let at = flat.with_y(height);
+        let flicker = 0.04 * (seconds * 31.0).sin();
+        glows.push((format!("fireball/{}", f.id), at, 0.26 + flicker, Glow::Fire));
+        // A smaller, paler trail behind it.
+        let behind = (to - from).normalize_or_zero() * 0.3;
+        glows.push((format!("fireball/{}/trail", f.id), at - behind + Vec3::Y * 0.05, 0.15 - flicker, Glow::Working));
+    }
+    for fire in &sim.fires {
+        let center = Vec3::new(fire.position[0], 0., fire.position[1]);
+        // Grows in over a quarter second, dies down over its last second.
+        let age = (now - fire.born as f32) / HZ;
+        let left = (fire.expires as f32 - now) / HZ;
+        let strength = (age * 4.0).min(1.0) * left.clamp(0., 1.);
+        for k in 0..FIRE_FLAMES {
+            // Spread evenly over the disc (the golden angle), a little
+            // inside its edge.
+            let angle = k as f32 * 2.399_963;
+            let r = fire.radius * 0.85 * ((k as f32 + 0.5) / FIRE_FLAMES as f32).sqrt();
+            let p = center + Vec3::new(angle.cos() * r, 0., angle.sin() * r);
+            let phase = k as f32 * 1.3 + fire.id as f32;
+            let size = strength * (0.14 + 0.06 * (seconds * 11.0 + phase).sin());
+            let lift = 0.12 + 0.08 * (seconds * 7.0 + phase).sin().abs();
+            let glow = if k % 3 == 0 { Glow::Working } else { Glow::Fire };
+            glows.push((format!("fire/{}/{k}", fire.id), p.with_y(ground(p) + lift), size.max(0.0), glow));
+        }
+    }
+    for t in sim.threats.values().filter(|t| t.burning) {
+        let p = Vec3::new(t.position[0], 0., t.position[1]);
+        let p = p.with_y(ground(p));
+        let phase = t.id as f32;
+        for (k, (side, up)) in [(0.12f32, 0.95f32), (-0.1, 1.25)].into_iter().enumerate() {
+            let sway = 0.03 * (seconds * 9.0 + phase + k as f32).sin();
+            let size = 0.1 + 0.03 * (seconds * 13.0 + phase + 2.0 * k as f32).sin();
+            let right = Vec3::new(t.heading.cos(), 0., -t.heading.sin());
+            glows.push((format!("burn/{}/{k}", t.id), p + right * (side + sway) + Vec3::Y * up, size, Glow::Fire));
+        }
+    }
 }
 /// How near the elder (in meters) a sprite's tag unfolds to its job and
 /// what it is doing: about the interact reach, so the sprite it is about to
@@ -1570,29 +1767,58 @@ fn hide_possessing(world: &mut World) {
 /// While the local elder possesses a building: the building's index and
 /// whether it can Burst now, by the sim's own check
 /// (`Settlement::burst_check`), with the key ("BURST READY (R)"), or the
-/// seconds left ("BURST 12 s"). For its card and the HUD line.
+/// seconds left ("BURST 12 s"); in a ballista, its fireball
+/// ("FIREBALL READY (R)", "FIREBALL 12 s"). For its card and the HUD line.
 fn burst_indicator(world: &World) -> Option<(usize, String)> {
+    use sim::settlement::{Ability, BurstRefusal};
     let service = world.get_resource::<crate::lockstep::SessionService>()?;
     let (s, sim_world, agent) = (service.settlement()?, service.world()?, service.player()? as usize);
     let building = s.seat(agent)?.building()?;
-    let key = match world.get_resource::<crate::input::InputService>().map(|i| i.frame().owner) {
-        Some(crate::input::Device::Gamepad) => "RT",
-        _ => "R",
-    };
+    let pad = world.get_resource::<crate::input::InputService>().is_some_and(|i| i.frame().owner == crate::input::Device::Gamepad);
+    let seconds = |ticks: u64| ticks.div_ceil(content::TICKS_PER_SECOND as u64);
     let text = match s.burst_check(agent, sim_world.tick()) {
-        Ok(_) => format!("BURST READY ({key})"),
-        Err(sim::settlement::BurstRefusal::Cooling { ticks }) => format!("BURST {} s", ticks.div_ceil(content::TICKS_PER_SECOND as u64)),
-        Err(sim::settlement::BurstRefusal::OutputFull) => "BURST: OUTPUT FULL".to_string(),
-        Err(sim::settlement::BurstRefusal::NotPossessing) => return None,
+        Ok(Ability::Burst { .. }) => format!("BURST READY ({})", if pad { "RT" } else { "R" }),
+        Ok(Ability::Fireball { .. }) => format!("FIREBALL READY ({})", if pad { "RB" } else { "R" }),
+        Err(BurstRefusal::Cooling { ticks }) => format!("BURST {} s", seconds(ticks)),
+        Err(BurstRefusal::FireballCooling { ticks }) => format!("FIREBALL {} s", seconds(ticks)),
+        Err(BurstRefusal::OutputFull) => "BURST: OUTPUT FULL".to_string(),
+        Err(BurstRefusal::NotPossessing | BurstRefusal::NoBurst) => return None,
     };
     Some((building as usize, text))
 }
 
+/// While the local elder possesses a building and its slot is the
+/// interact target (leaving it): the building's index and the prompt with
+/// its key ("E  LEAVE"). The building's card says it as its last line,
+/// instead of a prompt over the slot, which hung over the card's lower
+/// lines (its Burst or fireball cooldown).
+fn leave_prompt(world: &World) -> Option<(usize, String)> {
+    use crate::input::{gameplay::Dispatcher, InputService};
+    let service = world.get_resource::<crate::lockstep::SessionService>()?;
+    let building = service.settlement()?.seat(service.player()? as usize)?.building()?;
+    let highlight = world.get_resource::<Dispatcher>()?.town.highlight.clone()?;
+    if highlight.target != sim::settlement::InteractTarget::Slot(building) {
+        return None;
+    }
+    let key = match world.get_resource::<InputService>().map(|i| i.frame().owner) {
+        Some(crate::input::Device::Gamepad) => "A",
+        _ => "E",
+    };
+    Some((building as usize, format!("{key}  {}", highlight.prompt)))
+}
+
 /// The controls help line in a town: the town's keys, or while the elder
-/// possesses a building, the keys that work there (leaving and Burst).
+/// possesses a building, the keys that work there (leaving and Burst, or
+/// in a ballista firing).
 /// `style::apply` writes the first when the world starts.
 fn town_help(world: &mut World) {
-    let help = if crate::input::town::possessing(world) { crate::style::TOWN_POSSESSED_HELP } else { crate::style::TOWN_HELP };
+    let help = if crate::input::town::possessing_ballista(world) {
+        crate::style::TOWN_BALLISTA_HELP
+    } else if crate::input::town::possessing(world) {
+        crate::style::TOWN_POSSESSED_HELP
+    } else {
+        crate::style::TOWN_HELP
+    };
     for mut text in world.query_filtered::<&mut Text, With<crate::scene::ControlHelp>>().iter_mut(world) {
         if text.0 != help {
             text.0 = help.into();
@@ -1618,7 +1844,9 @@ fn town_interact(world: &mut World, state: &mut Settlement, sim: &Simulation, pl
         Some(Panel::Radial { options, focus, .. }) => Some((options.clone(), *focus)),
         _ => None,
     };
-    if let Some(h) = town.highlight.as_ref().filter(|_| menu.is_none()) {
+    // Leaving a possessed building is said on its card (`leave_prompt`).
+    let leaving = leave_prompt(world).is_some();
+    if let Some(h) = town.highlight.as_ref().filter(|_| menu.is_none() && !leaving) {
         // Above the pile's own count or label, which hang lower.
         let at = h.position + Vec3::Y * (ground(world, h.position) + 1.3);
         let text = format!("{key}  {}", h.prompt);
@@ -1633,7 +1861,7 @@ fn town_interact(world: &mut World, state: &mut Settlement, sim: &Simulation, pl
             let center = center + Vec3::Y * (ground(world, center) + 0.6);
             for (i, option) in options.iter().enumerate() {
                 let angle = crate::input::radial_angle(i, options.len());
-                let at = center + crate::input::gameplay::camera_relative(Vec2::new(angle.cos(), angle.sin())) * 1.1;
+                let at = center + crate::input::gameplay::camera_relative(Vec2::new(angle.cos(), angle.sin()), crate::input::gameplay::view_yaw(world)) * 1.1;
                 let (text, tint) = if i == focus { (format!("[ {option} ]"), prompt) } else { (option.clone(), Color::srgba(0.85, 0.85, 0.7, 0.75)) };
                 let key = format!("interact/menu/{i}");
                 town_caption(world, state, &key, at, text.clone(), tint, text);
@@ -1762,15 +1990,22 @@ pub fn snapshot(world: &World) -> serde_json::Value {
             out["canopy_opacity"] = canopy.into();
             // The local elder's Burst: the seconds its cooldown has left
             // (0 when over), and whether one would go off now, with the
-            // units it adds or the sim's reason why not.
+            // units it adds or the sim's reason why not. In a ballista the
+            // Burst key throws a fireball (B4): its cooldown, and where it
+            // would land (`fireball_to`, arena meters).
             let service = world.get_resource::<crate::lockstep::SessionService>();
             let burst = service.and_then(|service| {
                 let (s, sim_world, agent) = (service.settlement()?, service.world()?, service.player()? as usize);
-                let ready = s.agents.get(agent)?.avatar()?.burst_ready;
-                let cooldown = ready.saturating_sub(sim_world.tick()) as f64 / content::TICKS_PER_SECOND as f64;
+                let avatar = s.agents.get(agent)?.avatar()?;
+                let seconds = |ready: u64| ready.saturating_sub(sim_world.tick()) as f64 / content::TICKS_PER_SECOND as f64;
+                let (cooldown, fireball) = (seconds(avatar.burst_ready), seconds(avatar.fireball_ready));
                 Some(match s.burst_check(agent, sim_world.tick()) {
-                    Ok(units) => serde_json::json!({"cooldown": cooldown, "ready": true, "units": units, "reason": null}),
-                    Err(reason) => serde_json::json!({"cooldown": cooldown, "ready": false, "units": null, "reason": reason.message()}),
+                    Ok(sim::settlement::Ability::Burst { units }) => serde_json::json!({"cooldown": cooldown, "fireball_cooldown": fireball, "ready": true, "units": units, "fireball_to": null, "reason": null}),
+                    Ok(sim::settlement::Ability::Fireball { to }) => {
+                        let to = service.to_view(to);
+                        serde_json::json!({"cooldown": cooldown, "fireball_cooldown": fireball, "ready": true, "units": null, "fireball_to": [to.x, to.z], "reason": null})
+                    }
+                    Err(reason) => serde_json::json!({"cooldown": cooldown, "fireball_cooldown": fireball, "ready": false, "units": null, "fireball_to": null, "reason": reason.message()}),
                 })
             });
             out["burst"] = burst.unwrap_or(serde_json::Value::Null);
@@ -2073,6 +2308,8 @@ mod tests {
             knockback: FxVec2::ZERO,
             windup: None,
             ready_at: 0,
+            burn: None,
+            goal: Default::default(),
         });
         (crate::legacy::Scenario::new(&scenario), s, center)
     }
@@ -2084,7 +2321,7 @@ mod tests {
         let agent = idle.agents[0].id.clone();
         let with = |windup: Option<u64>, ready_at: u64| {
             let mut s = idle.clone();
-            s.threats[0].windup = windup.map(|lands| sim::settlement::combat::Windup { agent: 0, lands });
+            s.threats[0].windup = windup.map(|lands| sim::settlement::combat::Windup { target: sim::settlement::combat::SwingTarget::Agent(0), lands });
             s.threats[0].ready_at = ready_at;
             s
         };
@@ -2095,7 +2332,7 @@ mod tests {
         let fresh = view(&idle, &idle);
         assert_eq!((fresh.windup, fresh.swung), (None, None), "no windup, no swing yet");
         let winding = view(&with(Some(110), 0), &with(Some(110), 0));
-        let expected = crate::legacy::Windup { agent: agent.clone(), lands: 110, ticks: attack.windup };
+        let expected = crate::legacy::Windup { agent: agent.clone(), building: None, lands: 110, ticks: attack.windup };
         assert_eq!(winding.windup, Some(expected));
         // Drawn between ticks 99 and 100, a swing that landed on 100 still
         // shows its windup finishing, and the landed tick is known.
@@ -2135,8 +2372,11 @@ mod tests {
             shocked_until: 0,
             stagger_until: 0,
             knockback: [0.0, 0.0],
-            windup: windup.map(|(lands, ticks)| crate::legacy::Windup { agent: "player".into(), lands, ticks }),
+            windup: windup.map(|(lands, ticks)| crate::legacy::Windup { agent: "player".into(), building: None, lands, ticks }),
             swung,
+            burning: false,
+            chasing: None,
+            attacking: None,
         }
     }
 

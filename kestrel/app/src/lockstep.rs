@@ -1284,6 +1284,11 @@ pub fn attack_input(
     if !attack_click(keys, buttons, pointer_free, piles.as_ref().is_some_and(|lab| lab.stock.is_some())) {
         return;
     }
+    // A seated elder doesn't swing: in a ballista the click fires it
+    // (`input::town::fire`), elsewhere in a building it does nothing.
+    if service.player().zip(service.settlement()).is_some_and(|(agent, s)| s.seat(agent as usize).is_some_and(|seat| seat.building().is_some())) {
+        return;
+    }
     if settlement.as_ref().and_then(|s| s.simulation.as_ref()).is_some_and(|sim| {
         crate::gameplay::cursor_ground(camera.0, camera.1, &window)
             .is_some_and(|point| crate::settlement::depot_at(sim, point).is_some())

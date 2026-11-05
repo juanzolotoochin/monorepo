@@ -1,5 +1,8 @@
-//! The town's canopy (World layer, view only): the camera looks at the
-//! Sacred Tree from +x, +z, so its canopy hides what stands just behind it.
+//! The town's canopy (World layer, view only): the camera looks down at the
+//! Sacred Tree (from +x, +z by default, from any quarter turn once the view
+//! is turned, `input::town::ViewTurn`), so its canopy hides what stands just
+//! behind it from there. The test is from the live camera, so it follows the
+//! turn.
 //! While it hides the elder, a site or a blueprint's ghost, it fades, and
 //! comes back once nothing is behind it. The sim never knows.
 //!
@@ -155,5 +158,15 @@ mod tests {
         assert!(segment_meets_ellipsoid(eye, Vec3::new(-2.0, 1.0, -2.0), center, half));
         // In front of it, nothing is hidden.
         assert!(!segment_meets_ellipsoid(eye, Vec3::new(3.0, 1.0, 3.0), center, half));
+    }
+
+    #[test]
+    fn turned_half_way_round_the_canopy_hides_the_other_side() {
+        let (center, half) = (Vec3::new(0.0, 4.3, 0.0), Vec3::new(2.8, 1.4, 2.8));
+        // The view turned two quarter turns: the camera at -x, -z.
+        let eye = Quat::from_rotation_y(std::f32::consts::PI) * Vec3::new(14.0, 18.0, 14.0);
+        assert!(segment_meets_ellipsoid(eye, Vec3::new(2.0, 1.0, 2.0), center, half));
+        // What hid behind the tree by default stands in front now.
+        assert!(!segment_meets_ellipsoid(eye, Vec3::new(-3.0, 1.0, -3.0), center, half));
     }
 }

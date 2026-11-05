@@ -17,7 +17,7 @@ use fx::{Fx, FxVec2};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use super::{AgentIx, DepotIx, ItemIx, Settlement};
+use super::{AgentIx, BuildingIx, DepotIx, InventoryRef, ItemIx, Settlement};
 use crate::messages::{Breach, Fire, Messages, ProjectileBlocked, ProjectileExpired, ProjectileHit, StartSwing, Strike, SwingLands};
 use crate::nav::{self, distance};
 use crate::terrain::{segment_disc, Terrain};
@@ -49,9 +49,10 @@ pub fn combat_roll(tick: u64, entity: u64, stream: u64) -> u64 {
 
 /// The `FollowRoute` brain, a threat's stage 2: a shock freezes it, a
 /// stagger slides it back, a windup plants it, and otherwise it walks its
-/// route at `speed` meters per tick, slower once below `full_hp`. Returns
-/// the meters knockback moved it.
-fn follow_route(t: &mut Threat, speed: Fx, full_hp: u32, tick: u64, terrain: &Terrain) -> Fx {
+/// plan at `speed` meters per tick, slower once below `full_hp`: its route,
+/// or, chasing (`chase`), straight at `quarry`, the point it chases, to
+/// `stop` short of it. Returns the meters knockback moved it.
+fn follow_route(t: &mut Threat, speed: Fx, full_hp: u32, tick: u64, terrain: &Terrain, quarry: Option<FxVec2>, stop: Fx) -> Fx {
     let previous = t.position;
     let recoiling = tick < t.stagger_until;
     let mut knocked = Fx::ZERO;
@@ -68,7 +69,10 @@ fn follow_route(t: &mut Threat, speed: Fx, full_hp: u32, tick: u64, terrain: &Te
         // Planted for the swing; the route resumes after it lands.
     } else {
         let wounded = if t.hp < full_hp { Fx::from_ratio(11, 20) } else { Fx::ONE };
-        super::haulers::move_route(&mut t.position, &mut t.route, speed * wounded);
+        match quarry {
+            Some(to) => super::chase::steer(&mut t.position, to, stop, speed * wounded, terrain),
+            None => super::haulers::move_route(&mut t.position, &mut t.route, speed * wounded),
+        }
     }
     let moved = distance(previous, t.position);
     t.travelled += moved;
@@ -117,13 +121,39 @@ pub struct Threat {
     /// The first tick a new windup can start: the tick after its last swing
     /// landed plus the attack's cooldown.
     pub ready_at: u64,
+    /// Burning, from standing in a fire (B4, `fire`).
+    #[serde(default)]
+    pub burn: Option<super::fire::Burn>,
+    /// What it is after: the tree, along `route`, or a quarry it chases
+    /// (B5, `chase`). Always `Tree` for a character without a `chase`.
+    #[serde(default)]
+    pub goal: super::chase::Goal,
+}
+
+/// What a threat swings at: an agent (a player in reach, or the elder or
+/// sprite it chases) or the building it chases (B8). Agents sort first, so
+/// a threat with both in reach at one distance swings at the agent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum SwingTarget {
+    Agent(AgentIx),
+    Building(BuildingIx),
+}
+
+impl SwingTarget {
+    /// The agent it swings at, if it swings at one.
+    pub fn agent(self) -> Option<AgentIx> {
+        match self {
+            SwingTarget::Agent(a) => Some(a),
+            SwingTarget::Building(_) => None,
+        }
+    }
 }
 
 /// A threat's swing on its way (`Threat::windup`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Windup {
-    /// The player it swings at.
-    pub agent: AgentIx,
+    /// The player it swings at, or the sprite or building it chases.
+    pub target: SwingTarget,
     /// The tick the swing lands: stage 3 checks reach then, against where
     /// the player is on that tick.
     pub lands: u64,
@@ -147,6 +177,19 @@ pub struct DefenderState {
     pub ready_at: u64,
     pub aim: Option<FxVec2>,
     pub fired_at: u64,
+}
+
+/// What a ballista shoots from and with (`Settlement::launch_shot`).
+pub(super) struct Launcher {
+    pub from: FxVec2,
+    /// Above the ground at `from`.
+    pub height: Fx,
+    pub damage: u32,
+    /// Meters per second.
+    pub speed: Fx,
+    pub kind: ProjectileKind,
+    /// The defender that shoots, if a `DefenderState` does.
+    pub defender: Option<u16>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -212,6 +255,8 @@ pub enum Impact {
     Laser,
     BoltImpale,
     BoltPierce,
+    /// A fireball's landing or a burn (`fire`).
+    Fire,
 }
 
 /// What happened this tick, for sounds and effects. Not part of the state.
@@ -262,6 +307,28 @@ pub enum Event {
     /// Player `agent`'s Burst didn't happen, for `reason`
     /// (`BurstRefusal::message` says it in words).
     BurstRefused { agent: AgentIx, reason: super::buildings::BurstRefusal },
+    /// A ballista building fired, as a defender's `Shot`.
+    BuildingShot { building: super::BuildingIx },
+    /// Elder `agent`, possessing ballista `building`, threw a fireball; it
+    /// lands at `to` on tick `arrival` (B4).
+    FireballThrown { agent: AgentIx, building: super::BuildingIx, to: FxVec2, arrival: u64 },
+    /// A fireball came down at `position` and set the ground alight.
+    FireballLanded { position: FxVec2 },
+    /// A threat started winding up a swing at building `building` (B8). It
+    /// lands on tick `lands` unless a stagger or shock cancels it first.
+    BuildingWindup { threat: u64, building: super::BuildingIx, lands: u64 },
+    /// A threat's swing at building `building` landed: a hit took `damage`
+    /// of its health (`broken` if that was the last, `break_building`); a
+    /// miss means the threat got out of reach or the building had nothing
+    /// left to lose.
+    BuildingStruck { threat: u64, building: super::BuildingIx, hit: bool, damage: u32, broken: bool },
+    /// Building `building` broke (B8): a site again, back to its first part,
+    /// its occupant put out and what it held spilled onto ground piles.
+    BuildingBroken { building: super::BuildingIx },
+    /// Sprite `agent` came back beside the tree after dying (B6).
+    SpriteReturned { agent: AgentIx },
+    /// The Sacred Tree's health reached 0: the run is over (B7).
+    TreeFell,
 }
 
 /// What a strike reaches (`Settlement::strike_targets`), as its `Strike`
@@ -462,23 +529,39 @@ impl Settlement {
     }
 
     /// Stage 2: every threat moves itself. Every threat's brain is
-    /// `FollowRoute`, so each runs `follow_route`.
+    /// `FollowRoute`, so each runs `follow_route`. A chaser reads where its
+    /// quarry stood at the end of last tick: agents move after threats in
+    /// this stage, so nothing it reads changes meanwhile.
     pub(crate) fn threats_self_update(&mut self, tick: u64, terrain: &Terrain) {
-        // Speed in meters per tick and full hp, by character: one division
-        // per character rather than per threat. The division is the one waves
-        // used, so speeds stay bit-equal.
+        // Speed in meters per tick, full hp and a chaser's stop, by
+        // character: one division per character rather than per threat. The
+        // division is the one waves used, so speeds stay bit-equal.
         let per_second = Fx::from_int(content::TICKS_PER_SECOND);
-        let tuning: Vec<(Fx, u32)> = self
+        let tuning: Vec<(Fx, u32, Fx)> = self
             .characters
             .iter()
-            .map(|def| (def.movement.walk / per_second, def.health.as_ref().map_or(0, |h| h.hp)))
+            .map(|def| {
+                let stop = def.attack.map_or(Fx::ZERO, |a| super::chase::stop_distance(a.reach));
+                (def.movement.walk / per_second, def.health.as_ref().map_or(0, |h| h.hp), stop)
+            })
             .collect();
+        let (agents, buildings, kinds) = (&self.agents, &self.buildings, &self.building_kinds);
         let knockback_moved: Fx = self
             .threats
             .par_iter_mut()
             .map(|t| {
-                let (speed, full_hp) = tuning[t.character as usize];
-                follow_route(t, speed, full_hp, tick, terrain)
+                let (speed, full_hp, stop) = tuning[t.character as usize];
+                // A building quarry is a disc: the chaser stops short of its
+                // edge rather than its center.
+                let quarry = match t.goal {
+                    super::chase::Goal::Chase(super::chase::Quarry::Agent(a)) => agents.get(a as usize).map(|a| (a.body.position, stop)),
+                    super::chase::Goal::Chase(super::chase::Quarry::Building(b)) => {
+                        buildings.get(b as usize).map(|b| (b.position, stop + kinds[b.kind as usize].radius))
+                    }
+                    super::chase::Goal::Tree => None,
+                };
+                let (quarry, stop) = quarry.map_or((None, stop), |(at, stop)| (Some(at), stop));
+                follow_route(t, speed, full_hp, tick, terrain, quarry, stop)
             })
             .reduce(|| Fx::ZERO, |a, b| a + b);
         self.combat.knockback_meters += knockback_moved;
@@ -504,13 +587,20 @@ impl Settlement {
             }
             if let Some(windup) = t.windup.filter(|w| w.lands <= tick) {
                 let mut out = Messages::default();
-                out.swing_lands.push(SwingLands { threat: t.id, agent: windup.agent, hit: self.swing_reaches(t, windup.agent, terrain) });
+                out.swing_lands.push(SwingLands { threat: t.id, target: windup.target, hit: self.swing_reaches(t, windup.target, terrain) });
+                result.push((t.position, out));
+            }
+            if let Some(swing) = self.swing_at_quarry(t, tick, terrain) {
+                let mut out = Messages::default();
+                out.start_swing.push(swing);
                 result.push((t.position, out));
             }
         }
+        self.read_chase(tick, terrain, &mut result);
         if self.player_health > 0 {
             for (i, a) in self.agents.iter().enumerate() {
-                if a.avatar().is_some() && a.body.health > 0 {
+                // A building shelters the elder possessing it (B6).
+                if a.avatar().is_some_and(|p| p.seat.and_then(super::Seat::building).is_none()) && a.body.health > 0 {
                     let mut out = Messages::default();
                     self.threats_in_reach(i as AgentIx, a, tick, terrain, &mut out);
                     if !out.is_empty() {
@@ -524,6 +614,7 @@ impl Settlement {
             self.aim_defender(i as u16, d, tick, &mut out);
             result.push((d.position, out));
         }
+        self.aim_buildings(tick, &mut result);
         for (i, a) in self.agents.iter().enumerate() {
             if a.avatar().is_some() {
                 let mut out = Messages::default();
@@ -542,9 +633,52 @@ impl Settlement {
     /// Stage 3: whether a threat's swing landing now reaches `agent`, alive,
     /// within the attack's reach of the threat and low enough
     /// (`SWING_HEIGHT`). A player who lifted off during the windup is missed.
-    fn swing_reaches(&self, t: &Threat, agent: AgentIx, terrain: &Terrain) -> bool {
-        let (Some(attack), Some(a)) = (self.threat_attack(t), self.agents.get(agent as usize)) else { return false };
-        a.avatar().is_some() && a.body.health > 0 && distance(t.position, a.body.position) <= attack.reach && self.within_swing_height(a, terrain)
+    /// A sprite (the quarry of a chaser, B5) is reached outside a building;
+    /// a building (B8) while it still has something to lose, its edge within
+    /// reach.
+    fn swing_reaches(&self, t: &Threat, target: SwingTarget, terrain: &Terrain) -> bool {
+        let Some(attack) = self.threat_attack(t) else { return false };
+        match target {
+            SwingTarget::Agent(agent) => self.agents.get(agent as usize).is_some_and(|a| self.swingable(a, terrain) && distance(t.position, a.body.position) <= attack.reach),
+            SwingTarget::Building(b) => self.breakable(b) && self.building_gap(t.position, b) <= attack.reach,
+        }
+    }
+
+    /// Whether a threat's swing can reach agent `a` at all: a live player
+    /// low enough (`SWING_HEIGHT`) and not possessing a building, or a
+    /// sprite outside a building: a building shelters its occupant (B6).
+    fn swingable(&self, a: &super::AgentState, terrain: &Terrain) -> bool {
+        match a.sprite() {
+            Some(sprite) => a.body.alive() && !sprite.inside(),
+            None => a.avatar().is_some_and(|p| p.seat.and_then(super::Seat::building).is_none()) && a.body.alive() && self.within_swing_height(a, terrain),
+        }
+    }
+
+    /// Meters from `at` to building `b`'s edge (negative inside it).
+    pub(super) fn building_gap(&self, at: FxVec2, b: BuildingIx) -> Fx {
+        let building = &self.buildings[b as usize];
+        distance(at, building.position) - self.building_kinds[building.kind as usize].radius
+    }
+
+    /// Stage 3 for a chaser (B5): the swing it could start at its quarry
+    /// now. Players in reach draw swings from every threat where player
+    /// combat is on (`threats_in_reach`; the same swing twice is one); a
+    /// sprite, a player where it is off, or a building (B8), only draws its
+    /// chaser's.
+    fn swing_at_quarry(&self, t: &Threat, tick: u64, terrain: &Terrain) -> Option<StartSwing> {
+        let attack = self.threat_attack(t)?;
+        let (target, gap, reachable) = match t.goal {
+            super::chase::Goal::Chase(super::chase::Quarry::Agent(agent)) => {
+                let a = self.agents.get(agent as usize)?;
+                (SwingTarget::Agent(agent), distance(t.position, a.body.position), self.swingable(a, terrain))
+            }
+            super::chase::Goal::Chase(super::chase::Quarry::Building(b)) => {
+                self.buildings.get(b as usize)?;
+                (SwingTarget::Building(b), self.building_gap(t.position, b), self.breakable(b))
+            }
+            super::chase::Goal::Tree => return None,
+        };
+        (reachable && can_start_swing(t, tick) && gap <= attack.reach).then_some(StartSwing { threat: t.id, target, distance: gap })
     }
 
     /// Whether a player's feet are low enough for a threat's swing: at most
@@ -573,32 +707,40 @@ impl Settlement {
             }
             let gap = distance(t.position, position);
             if gap <= attack.reach {
-                out.start_swing.push(StartSwing { threat: t.id, agent, distance: gap });
+                out.start_swing.push(StartSwing { threat: t.id, target: SwingTarget::Agent(agent), distance: gap });
             }
         }
     }
 
     /// Stage 5: threats start the swings stage 3 found. A threat named by
     /// several takes the nearest player, the lowest agent index on a tie,
-    /// whatever order the messages came in. It checks again that nothing
+    /// whatever order the messages came in; a building only when no agent
+    /// is named (B5: buildings come second). It checks again that nothing
     /// earlier in stage 5 (a strike's stagger, a kill) stopped it.
     pub(crate) fn start_swings(&mut self, tick: u64, mut messages: Vec<StartSwing>) {
-        messages.sort_by_key(|m| (m.threat, m.distance, m.agent));
+        messages.sort_by_key(|m| (m.threat, m.target.agent().is_none(), m.distance, m.target));
         messages.dedup_by_key(|m| m.threat);
         for message in messages {
             let Some(i) = self.threat_index(message.threat) else { continue };
             let Some(attack) = self.threat_attack(&self.threats[i]) else { continue };
-            let Some(target) = self.agents.get(message.agent as usize).map(|a| a.body.position) else { continue };
+            let target = match message.target {
+                SwingTarget::Agent(a) => self.agents.get(a as usize).map(|a| a.body.position),
+                SwingTarget::Building(b) => self.buildings.get(b as usize).map(|b| b.position),
+            };
+            let Some(target) = target else { continue };
             let t = &mut self.threats[i];
             if !can_start_swing(t, tick) {
                 continue;
             }
             let lands = tick + attack.windup;
-            t.windup = Some(Windup { agent: message.agent, lands });
+            t.windup = Some(Windup { target: message.target, lands });
             if target != t.position {
                 t.heading = nav::bearing(t.position, target);
             }
-            self.events.push(Event::ThreatWindup { threat: t.id, agent: message.agent, lands });
+            self.events.push(match message.target {
+                SwingTarget::Agent(agent) => Event::ThreatWindup { threat: t.id, agent, lands },
+                SwingTarget::Building(building) => Event::BuildingWindup { threat: t.id, building, lands },
+            });
         }
     }
 
@@ -613,13 +755,39 @@ impl Settlement {
         let Some(attack) = self.threat_attack(&self.threats[i]) else { return };
         let t = &mut self.threats[i];
         // A stagger or shock earlier in stage 5 cancelled it.
-        if t.windup.is_none_or(|w| w.agent != message.agent) {
+        if t.windup.is_none_or(|w| w.target != message.target) {
             return;
         }
         t.windup = None;
         t.ready_at = tick + 1 + attack.cooldown;
         let (threat, from, heading) = (t.id, t.position, t.heading);
-        let agent = message.agent as usize;
+        let agent = match message.target {
+            SwingTarget::Agent(agent) => agent as usize,
+            SwingTarget::Building(building) => {
+                // A break earlier in stage 5 may have left it nothing to lose.
+                let hit = message.hit && self.breakable(building);
+                let broken = hit && self.hurt_building(building, attack.damage, terrain);
+                let damage = if hit { attack.damage } else { 0 };
+                self.events.push(Event::BuildingStruck { threat, building, hit, damage, broken });
+                return;
+            }
+        };
+        if let Some(sprite_def) = self.agents[agent].sprite().and_then(|_| self.characters[self.agents[agent].character as usize].sprite) {
+            // A sprite with health (B6): a hit hurts it, and at 0 it dies.
+            // It isn't pushed: it walks its route, with no velocity to give.
+            let hit = message.hit && self.agents[agent].body.alive();
+            let killed = hit && self.hurt_sprite(agent, attack.damage, tick, sprite_def.respawn);
+            let damage = if hit { attack.damage } else { 0 };
+            self.events.push(Event::ThreatSwing { threat, agent: agent as AgentIx, hit, damage, killed });
+            return;
+        }
+        if self.agents[agent].sprite().is_some() || self.player_health == 0 {
+            // A chaser's swing at its quarry where nothing it hits has
+            // health: a sprite with no `sprite` section, or a player where
+            // player combat is off. It reaches or misses, and nothing more.
+            self.events.push(Event::ThreatSwing { threat, agent: agent as AgentIx, hit: message.hit, damage: 0, killed: false });
+            return;
+        }
         // A laser earlier in stage 5 may have killed the player.
         let hit = message.hit && self.player_health > 0 && self.agents[agent].body.health > 0;
         let killed = hit && self.hurt_player(agent, attack.damage, tick, terrain);
@@ -638,12 +806,15 @@ impl Settlement {
             }
         }
         let damage = if hit { attack.damage } else { 0 };
-        self.events.push(Event::ThreatSwing { threat, agent: message.agent, hit, damage, killed });
+        self.events.push(Event::ThreatSwing { threat, agent: agent as AgentIx, hit, damage, killed });
     }
 
     fn fly(&self, p: &Projectile, tick: u64, terrain: &Terrain, out: &mut Messages) {
         let (start, end) = p.segment(tick);
-        let own = p.defender.map(|d| self.defenders[d as usize].position);
+        // A ballista's shot (a stock one: a defender's or a ballista
+        // building's) leaves from the center of its own footprint, which
+        // doesn't stop it. A player's arrow has no footprint to leave.
+        let own = p.item.is_some().then_some(p.from);
         let margin = Fx::from_ratio(1, 25);
         let static_obstacle = terrain
             .obstacles.iter()
@@ -678,17 +849,23 @@ impl Settlement {
         if !d.enabled || d.ready_at > tick || self.depots[d.depot as usize].inventory.available(d.ammo) == 0 {
             return;
         }
-        let target = self
-            .threats
+        if let Some(t) = self.pick_target(d.position, d.range) {
+            out.fire.push(Fire { defender: index, target: t.id, to: t.position });
+        }
+    }
+
+    /// What a ballista aims at (the Woodland Ballista's `DefenderState` and
+    /// a ballista building's both): the nearest threat within `range` of
+    /// `from` that the projectiles already in flight to it won't kill,
+    /// the lowest id on a tie.
+    pub(super) fn pick_target(&self, from: FxVec2, range: Fx) -> Option<&Threat> {
+        self.threats
             .iter()
             .filter(|t| {
                 let incoming: u32 = self.projectiles.iter().filter(|p| p.target == Some(t.id)).map(|p| p.damage).sum();
-                distance(d.position, t.position) <= d.range && incoming < t.hp
+                distance(from, t.position) <= range && incoming < t.hp
             })
-            .min_by_key(|t| (distance(d.position, t.position), t.id));
-        if let Some(t) = target {
-            out.fire.push(Fire { defender: index, target: t.id, to: t.position });
-        }
+            .min_by_key(|t| (distance(from, t.position), t.id))
     }
 
     /// What a strike from a shooter at `origin` and `height` reaches. It
@@ -965,13 +1142,25 @@ impl Settlement {
         self.projectiles.retain(|p| p.id != message.projectile);
     }
 
+    /// Whether the Sacred Tree has fallen (B7): a town (a scene with
+    /// building kinds) whose base health, the tree's, is 0. The run is
+    /// over; the app says so and offers a restart. Other scenes carry on at
+    /// 0, as they always have.
+    pub fn tree_fallen(&self) -> bool {
+        !self.building_kinds.is_empty() && self.health == 0
+    }
+
     pub(crate) fn breach(&mut self, message: Breach) {
         let Some(i) = self.threat_index(message.threat) else { return };
         let t = self.threats.remove(i);
         let damage = self.threat_def(&t).health.as_ref().map_or(0, |h| h.breach_damage);
+        let standing = self.health > 0;
         self.health = self.health.saturating_sub(damage);
         self.combat.breaches += 1;
         self.events.push(Event::Breach { position: t.position });
+        if standing && self.tree_fallen() {
+            self.events.push(Event::TreeFell);
+        }
     }
 
     pub(crate) fn fire(&mut self, tick: u64, message: Fire) {
@@ -980,30 +1169,42 @@ impl Settlement {
         if !d.enabled || d.ready_at > tick || self.depots[depot].inventory.available(ammo) == 0 {
             return;
         }
-        let (from, launch_height, damage, kind, period) = (d.position, d.muzzle_height, d.damage, d.kind, d.period);
-        let arrival = tick + flight_ticks(distance(from, message.to), d.speed);
-        self.depots[depot].inventory.remove(ammo, 1);
+        let launcher = Launcher { from: d.position, height: d.muzzle_height, damage: d.damage, speed: d.speed, kind: d.kind, defender: Some(message.defender) };
+        let period = d.period;
+        let shot = Event::Shot { defender: message.defender };
+        self.launch_shot(tick, &launcher, InventoryRef::Depot(depot as DepotIx), ammo, Some(message.target), message.to, shot);
+        let d = &mut self.defenders[message.defender as usize];
+        d.aim = Some(message.to);
+        d.ready_at = tick + period;
+        d.fired_at = tick;
+    }
+
+    /// Launches a shot from `launcher` at threat `target`, standing at `to`,
+    /// or with no `target` at the point `to` (a possessing elder's shot at
+    /// its reticle). Every ballista's shots go through here: one unit of `ammo` leaves
+    /// `holder` and counts as spent, the shot counts, the projectile flies
+    /// and `event` tells the view (its sound). The caller has checked the
+    /// ammo is there and the launcher is ready.
+    pub(super) fn launch_shot(&mut self, tick: u64, launcher: &Launcher, holder: InventoryRef, ammo: ItemIx, target: Option<u64>, to: FxVec2, event: Event) {
+        let arrival = tick + flight_ticks(distance(launcher.from, to), launcher.speed);
+        self.inventory_mut(holder).remove(ammo, 1);
         self.accounts[ammo as usize].spent += 1;
         self.combat.shots += 1;
         let id = self.id();
         self.projectiles.push(Projectile {
             id,
-            defender: Some(message.defender),
-            target: Some(message.target),
+            defender: launcher.defender,
+            target,
             item: Some(ammo),
-            from,
-            launch_height,
-            to: message.to,
+            from: launcher.from,
+            launch_height: launcher.height,
+            to,
             born: tick,
             arrival,
-            damage,
-            kind,
+            damage: launcher.damage,
+            kind: launcher.kind,
         });
-        let d = &mut self.defenders[message.defender as usize];
-        d.aim = Some(message.to);
-        d.ready_at = tick + period;
-        d.fired_at = tick;
-        self.events.push(Event::Shot { defender: message.defender });
+        self.events.push(event);
     }
 
     /// Housekeeping: fading arrows, landing bodies, new enemies.
@@ -1018,7 +1219,9 @@ impl Settlement {
             let f = Fx::from_int((tick - p.born) as i32) / Fx::from_int((p.land - p.born) as i32);
             p.position += nav::heading_vector(p.heading) * ((Fx::ONE - f.min(Fx::ONE)) * Fx::from_ratio(19, 100));
         }
-        for w in 0..self.waves.len() {
+        // A fallen tree ends the run (B7): no more enemies come.
+        let waves = if self.tree_fallen() { 0 } else { self.waves.len() };
+        for w in 0..waves {
             let wave = &self.waves[w];
             if tick < wave.first || wave.spawned >= wave.count || (tick - wave.first) % wave.every != 0 {
                 continue;
@@ -1052,6 +1255,8 @@ impl Settlement {
                 knockback: FxVec2::ZERO,
                 windup: None,
                 ready_at: 0,
+                burn: None,
+                goal: super::chase::Goal::Tree,
             });
             self.waves[w].spawned += 1;
         }

@@ -23,6 +23,18 @@
 //! An elder possessing a building can Burst (D3): its kind's Burst units go
 //! into the output at once, up to the possessed cap, and the elder waits out
 //! the kind's cooldown before the next (`AvatarState::burst_ready`).
+//!
+//! A ballista (a kind with a `defence`, `SACRED_TREE_BALLISTA.md` B1, B2)
+//! produces nothing. Its output is its ammo store instead: its ammo item
+//! only, up to its ammo cap, which players deliver to as to a site and
+//! nothing takes back out. Built, occupied and stocked, it shoots the
+//! nearest threat in range through the helpers the Woodland Ballista uses
+//! (`Settlement::pick_target`, `Settlement::launch_shot`), one unit a shot.
+//! Empty, or with nobody inside, it never shoots. An elder possessing it
+//! aims instead (B3): its avatar's aim is the reticle, an offset from the
+//! ballista clamped to its range (`BuildingKind::reticle`), and `Attack`
+//! shoots there (`Settlement::elder_fire`), at most once a period; the
+//! ballista picks no targets of its own then.
 
 use content::scenario::{self, Scenario};
 use fx::{Fx, FxVec2};
@@ -31,7 +43,9 @@ use serde::{Deserialize, Serialize};
 use super::sprites::Hold;
 use super::{AgentIx, DepotIx, Event, Inventory, InventoryRef, ItemIx, Kinds, Settlement};
 use super::avatar::Seat;
-use crate::messages::{Burst, Install, PlaceBlueprint};
+use super::combat::Launcher;
+use super::fire::{BurnDef, FireballDef};
+use crate::messages::{Burst, BuildingFire, ElderFire, Install, Messages, PlaceBlueprint};
 use crate::nav;
 use crate::terrain::{Disc, Terrain, CLEARANCE_MARGIN};
 
@@ -54,7 +68,8 @@ pub const STAND_GAP: Fx = Fx::from_ratio(2, 5);
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BuildingKind {
     pub id: String,
-    pub product: ItemIx,
+    /// What a gatherer makes; a ballista makes nothing.
+    pub product: Option<ItemIx>,
     /// Footprint radius in meters.
     pub radius: Fx,
     /// Ticks of a sprite's work per unit.
@@ -73,16 +88,78 @@ pub struct BuildingKind {
     pub output_distance: Fx,
     /// The materials of each part, in install order.
     pub parts: Vec<Vec<(ItemIx, u32)>>,
+    /// A ballista's shooting; `None` for a gatherer.
+    pub defence: Option<Defence>,
+    /// Hits from enemies' swings it takes before it breaks (B8).
+    pub health: u32,
+}
+
+/// A ballista building's shooting (`scenario::Defence`), in ticks and item
+/// indices: what a `DefenderState` holds, for a building.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Defence {
+    /// The one item its ammo store takes and it shoots.
+    pub ammo: ItemIx,
+    pub ammo_cap: u32,
+    pub range: Fx,
+    /// Ticks between shots.
+    pub period: u64,
+    pub damage: u32,
+    /// Projectile speed, meters per second.
+    pub speed: Fx,
+    pub muzzle_height: Fx,
+    pub projectile: scenario::ProjectileKind,
+    /// What a possessing elder's Burst key throws (B4), if anything.
+    pub fireball: Option<FireballDef>,
 }
 
 impl BuildingKind {
-    /// The output's cap with `occupant` in the slot.
+    /// The output's cap with `occupant` in the slot: a ballista's ammo
+    /// store holds its ammo cap whoever is inside.
     pub fn cap_for(&self, occupant: Option<Occupant>) -> u32 {
-        match occupant {
-            Some(Occupant::Elder(_)) => self.possessed_cap,
-            _ => self.cap,
+        match (&self.defence, occupant) {
+            (Some(d), _) => d.ammo_cap,
+            (None, Some(Occupant::Elder(_))) => self.possessed_cap,
+            (None, _) => self.cap,
         }
     }
+
+    /// A possessing elder's reticle for an aim `offset` from the building
+    /// (B3): the offset, cut to the ballista's range. `None` for a
+    /// gatherer, or for no offset at all.
+    pub fn reticle(&self, offset: FxVec2) -> Option<FxVec2> {
+        let range = self.defence.as_ref()?.range;
+        if offset == FxVec2::ZERO {
+            return None;
+        }
+        Some(if offset.length() > range { offset.normalize_or_zero() * range } else { offset })
+    }
+
+    /// What the building's `output` holds at most: a gatherer's possessed
+    /// cap (the most any occupant fills it to), a ballista's ammo cap.
+    pub fn store_capacity(&self) -> u32 {
+        self.defence.as_ref().map_or(self.possessed_cap, |d| d.ammo_cap)
+    }
+
+    /// What the building's `output` takes: a gatherer's one product, a
+    /// ballista's ammo only.
+    pub fn store_kinds(&self) -> Kinds {
+        match &self.defence {
+            Some(d) => Kinds::Only(d.ammo),
+            None => Kinds::OneKind,
+        }
+    }
+}
+
+/// A ballista building's aim, as a `DefenderState` keeps it: when it may
+/// shoot next, and where and when it last did (for the view). Stays at its
+/// default for a gatherer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Turret {
+    /// The first tick it may shoot again.
+    pub ready_at: u64,
+    pub aim: Option<FxVec2>,
+    pub fired_at: u64,
 }
 
 /// How far a building has got.
@@ -144,8 +221,16 @@ pub struct BuildingState {
     /// the work done.
     pub progress: Fx,
     /// The produced units waiting to be picked up: the kind's product only,
-    /// up to the possessed cap (the most any occupant fills it to).
+    /// up to the possessed cap (the most any occupant fills it to). A
+    /// ballista's is its ammo store instead: its ammo only, up to the ammo
+    /// cap, delivered to and never picked up from (B2); each shot spends
+    /// one unit from it.
     pub output: Inventory,
+    /// A ballista's aim and its next shot.
+    pub turret: Turret,
+    /// What is left of its kind's `health` (B8): an enemy's swing takes its
+    /// damage, and at 0 it breaks (`Settlement::break_building`).
+    pub health: u32,
 }
 
 impl BuildingState {
@@ -203,7 +288,9 @@ impl BuildingState {
             stage,
             slot: Slot::Empty,
             progress: Fx::ZERO,
-            output: Inventory::new(items, kind.possessed_cap, Kinds::OneKind),
+            output: Inventory::new(items, kind.store_capacity(), kind.store_kinds()),
+            turret: Turret::default(),
+            health: kind.health,
         }
     }
 }
@@ -224,7 +311,7 @@ pub(super) fn kinds(scenario: &Scenario, item: impl Fn(&str) -> ItemIx) -> Vec<B
         .iter()
         .map(|k| BuildingKind {
             id: k.id.clone(),
-            product: item(&k.product),
+            product: k.product.as_deref().map(&item),
             radius: k.radius,
             period: scenario::ticks(k.period),
             cap: k.cap,
@@ -233,7 +320,27 @@ pub(super) fn kinds(scenario: &Scenario, item: impl Fn(&str) -> ItemIx) -> Vec<B
             burst: k.burst.units,
             burst_cooldown: scenario::ticks(k.burst.cooldown),
             output_distance: k.output_distance,
+            health: k.health,
             parts: k.parts.iter().map(|p| p.materials.iter().map(|s| (item(&s.item), s.units)).collect()).collect(),
+            defence: k.defence.as_ref().map(|d| Defence {
+                ammo: item(&d.ammo),
+                ammo_cap: d.ammo_cap,
+                range: d.range,
+                period: scenario::ticks(d.period),
+                damage: d.damage,
+                speed: d.projectile_speed,
+                muzzle_height: d.muzzle_height,
+                projectile: d.projectile,
+                fireball: d.fireball.as_ref().map(|f| FireballDef {
+                    cooldown: scenario::ticks(f.cooldown),
+                    speed: f.speed,
+                    damage: f.damage,
+                    radius: f.radius,
+                    fire_radius: f.fire_radius,
+                    fire_ticks: scenario::ticks(f.fire_seconds),
+                    burn: BurnDef { damage: f.burn_damage, period: scenario::ticks(f.burn_period), linger: scenario::ticks(f.burn_linger) },
+                }),
+            }),
         })
         .collect()
 }
@@ -416,6 +523,20 @@ pub enum BurstRefusal {
     Cooling { ticks: u64 },
     /// The output already holds its possessed cap.
     OutputFull,
+    /// The building possessed has no Burst (a ballista with no fireball).
+    NoBurst,
+    /// The elder's last fireball is still cooling down, for `ticks` more
+    /// (B4): the Burst key in a ballista throws one.
+    FireballCooling { ticks: u64 },
+}
+
+/// What the Burst key does now (`Settlement::burst_check`): in a gatherer,
+/// a Burst of `units`; in a ballista, a fireball that lands at `to`
+/// (world tiles), the reticle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ability {
+    Burst { units: u32 },
+    Fireball { to: FxVec2 },
 }
 
 impl BurstRefusal {
@@ -426,26 +547,99 @@ impl BurstRefusal {
             BurstRefusal::NotPossessing => "Possess a building to Burst".to_string(),
             BurstRefusal::Cooling { ticks } => format!("Burst ready in {} s", ticks.div_ceil(content::TICKS_PER_SECOND as u64)),
             BurstRefusal::OutputFull => "Output full".to_string(),
+            BurstRefusal::NoBurst => "This building has no Burst".to_string(),
+            BurstRefusal::FireballCooling { ticks } => format!("Fireball ready in {} s", ticks.div_ceil(content::TICKS_PER_SECOND as u64)),
         }
     }
 }
 
-/// What a Burst would do (`Settlement::bursts`): the building `seat`
-/// possesses and the units that fit in its output, or why there is none.
-/// A cooldown running reads before a full output.
-fn burst_plan(seat: Option<Seat>, ready: u64, tick: u64, buildings: &[BuildingState], kinds: &[BuildingKind]) -> Result<(BuildingIx, u32), BurstRefusal> {
-    let Some((b, building)) = seat.and_then(Seat::building).and_then(|b| Some((b, buildings.get(b as usize)?))).filter(|(_, building)| building.built()) else {
+/// Why a possessing elder's shot wouldn't go off now
+/// (`Settlement::fire_check`). Stage 5 drops such a shot without a word;
+/// the view says it (`message`) when the fire key is pressed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FireRefusal {
+    /// The elder possesses no ballista.
+    NotInBallista,
+    /// Its ammo store is empty.
+    NoAmmo,
+    /// It shot less than a period ago: `ticks` more.
+    Reloading { ticks: u64 },
+}
+
+impl FireRefusal {
+    /// The refusal in words, for the view.
+    pub fn message(self) -> String {
+        match self {
+            FireRefusal::NotInBallista => "Possess a ballista to fire".to_string(),
+            FireRefusal::NoAmmo => "No ammo: bring stone".to_string(),
+            FireRefusal::Reloading { .. } => "Reloading".to_string(),
+        }
+    }
+}
+
+/// Whether `agent`, seated in `seat`, could shoot its ballista on `tick`
+/// (B3): the building and its defence, or why not. An empty store reads
+/// before a reload, so holding the fire key on an empty ballista says so.
+fn fire_plan<'a>(agent: AgentIx, seat: Option<Seat>, tick: u64, buildings: &[BuildingState], kinds: &'a [BuildingKind]) -> Result<(BuildingIx, &'a Defence), FireRefusal> {
+    let Some((ix, b)) = seat.and_then(Seat::building).and_then(|ix| Some((ix, buildings.get(ix as usize)?))) else {
+        return Err(FireRefusal::NotInBallista);
+    };
+    let kind = &kinds[b.kind as usize];
+    let Some(defence) = kind.defence.as_ref().filter(|_| b.built() && b.slot.occupant() == Some(Occupant::Elder(agent))) else {
+        return Err(FireRefusal::NotInBallista);
+    };
+    if b.output.available(defence.ammo) == 0 {
+        return Err(FireRefusal::NoAmmo);
+    }
+    if b.turret.ready_at > tick {
+        return Err(FireRefusal::Reloading { ticks: b.turret.ready_at - tick });
+    }
+    Ok((ix, defence))
+}
+
+/// What the Burst key would do (`Settlement::bursts`): the building
+/// `avatar` possesses, and the units that fit in its output, or, in a
+/// ballista with a fireball (B4), where the fireball lands: the reticle
+/// (`aim`, cut to range; half the range straight ahead before any aim). Or
+/// why there is none. A cooldown running reads before a full output; a
+/// Burst and a fireball each have their own.
+fn burst_plan(avatar: &super::avatar::AvatarState, tick: u64, buildings: &[BuildingState], kinds: &[BuildingKind]) -> Result<(BuildingIx, Ability), BurstRefusal> {
+    let Some((b, building)) = avatar.seat.and_then(Seat::building).and_then(|b| Some((b, buildings.get(b as usize)?))).filter(|(_, building)| building.built()) else {
         return Err(BurstRefusal::NotPossessing);
     };
+    let kind = &kinds[building.kind as usize];
+    if let Some(defence) = kind.defence.as_ref().filter(|d| d.fireball.is_some()) {
+        if tick < avatar.fireball_ready {
+            return Err(BurstRefusal::FireballCooling { ticks: avatar.fireball_ready - tick });
+        }
+        let ahead = FxVec2::new(Fx::ZERO, defence.range.div_int(2));
+        let offset = avatar.aim.and_then(|aim| kind.reticle(aim)).unwrap_or(ahead);
+        return Ok((b, Ability::Fireball { to: building.position + offset }));
+    }
+    let ready = avatar.burst_ready;
     if tick < ready {
         return Err(BurstRefusal::Cooling { ticks: ready - tick });
     }
-    let kind = &kinds[building.kind as usize];
+    if kind.product.is_none() || kind.burst == 0 {
+        return Err(BurstRefusal::NoBurst);
+    }
     let held = building.output.total() + building.output.total_in();
     match kind.burst.min(kind.possessed_cap.saturating_sub(held)) {
         0 => Err(BurstRefusal::OutputFull),
-        units => Ok((b, units)),
+        units => Ok((b, Ability::Burst { units })),
     }
+}
+
+/// A ballista's own shooting, when building `b` of `kind` can shoot on
+/// `tick`: a ballista, built, with a sprite inside, ammo in its store and
+/// its period over since the last shot. `None` for a gatherer, a site, an
+/// empty, unstocked or possessed ballista (a possessing elder aims it
+/// instead, `fire_plan`), or one still reloading.
+fn ready_to_shoot<'a>(b: &BuildingState, kind: &'a BuildingKind, tick: u64) -> Option<&'a Defence> {
+    let defence = kind.defence.as_ref()?;
+    let stocked = b.output.available(defence.ammo) > 0;
+    let staffed = matches!(b.slot.occupant(), Some(Occupant::Sprite(_)));
+    (b.built() && staffed && stocked && b.turret.ready_at <= tick).then_some(defence)
 }
 
 /// Where a building's occupant stands (D2): just past the footprint, a
@@ -576,7 +770,9 @@ impl Settlement {
     /// overlap the first stands. Each one `placement_check` allows becomes a
     /// site waiting for its first part's materials, its footprint an
     /// obstacle; the rest are refused with an event.
+    /// Enemies then plan their routes afresh round it (`replan_routes`).
     pub(super) fn place_blueprints(&mut self, messages: Vec<PlaceBlueprint>, terrain: &mut Terrain) {
+        let revision = terrain.revision;
         for PlaceBlueprint { kind, position } in messages {
             match self.placement_check(kind, position, terrain) {
                 Ok(output) => {
@@ -589,6 +785,9 @@ impl Settlement {
                 }
                 Err(reason) => self.events.push(Event::BlueprintRefused { kind, reason }),
             }
+        }
+        if terrain.revision != revision {
+            self.replan_routes(terrain);
         }
     }
 
@@ -623,14 +822,21 @@ impl Settlement {
     /// building, its cooldown over and the output not at its possessed cap,
     /// puts the kind's Burst units in the output (as many as fit; the
     /// balances count them as produced) and starts its cooldown. Otherwise
-    /// the view hears why, and the cooldown doesn't start.
+    /// the view hears why, and the cooldown doesn't start. In a ballista
+    /// with a fireball, its own cooldown over, it throws the fireball at the
+    /// reticle instead (B4, `throw_fireball`).
     pub(super) fn bursts(&mut self, messages: Vec<Burst>, tick: u64) {
         for Burst { agent } in messages {
             let Some(avatar) = self.agents.get(agent as usize).and_then(|a| a.avatar()) else { continue };
-            match burst_plan(avatar.seat, avatar.burst_ready, tick, &self.buildings, &self.building_kinds) {
-                Ok((building, units)) => {
+            match burst_plan(avatar, tick, &self.buildings, &self.building_kinds) {
+                Ok((building, Ability::Fireball { to })) => {
+                    let defence = self.building_kind(building).defence.as_ref().expect("a ballista");
+                    let (def, height) = (defence.fireball.expect("a fireball"), defence.muzzle_height);
+                    self.throw_fireball(tick, agent, building, to, def, height);
+                }
+                Ok((building, Ability::Burst { units })) => {
                     let kind = &self.building_kinds[self.buildings[building as usize].kind as usize];
-                    let (product, cooldown) = (kind.product, kind.burst_cooldown);
+                    let (product, cooldown) = (kind.product.expect("only a gatherer Bursts"), kind.burst_cooldown);
                     let added = self.buildings[building as usize].output.add(product, units);
                     debug_assert!(added, "below the possessed cap, which is the capacity");
                     self.accounts[product as usize].produced += units as u64;
@@ -644,12 +850,75 @@ impl Settlement {
         }
     }
 
-    /// Whether `agent` could Burst on `tick`, and how many units it would
-    /// add, as stage 5 checks it (`bursts`): for the view's ready
-    /// indicator and the control verb.
-    pub fn burst_check(&self, agent: usize, tick: u64) -> Result<u32, BurstRefusal> {
+    /// What `agent`'s Burst key would do on `tick` (a Burst's units, or a
+    /// fireball and where it lands), as stage 5 checks it (`bursts`): for
+    /// the view's ready indicator and the control verb.
+    pub fn burst_check(&self, agent: usize, tick: u64) -> Result<Ability, BurstRefusal> {
         let Some(avatar) = self.agents.get(agent).and_then(|a| a.avatar()) else { return Err(BurstRefusal::NotPossessing) };
-        burst_plan(avatar.seat, avatar.burst_ready, tick, &self.buildings, &self.building_kinds).map(|(_, units)| units)
+        burst_plan(avatar, tick, &self.buildings, &self.building_kinds).map(|(_, ability)| ability)
+    }
+
+    /// Stage 3: every ballista that can shoot now (`ready_to_shoot`) aims at
+    /// the nearest threat in range that the shots in flight won't kill
+    /// (`pick_target`), as a defender does.
+    pub(super) fn aim_buildings(&self, tick: u64, out: &mut Vec<(FxVec2, Messages)>) {
+        for (i, b) in self.buildings.iter().enumerate() {
+            let kind = &self.building_kinds[b.kind as usize];
+            let Some(defence) = ready_to_shoot(b, kind, tick) else { continue };
+            if let Some(t) = self.pick_target(b.position, defence.range) {
+                let mut messages = Messages::default();
+                messages.building_fire.push(BuildingFire { building: i as BuildingIx, target: t.id, to: t.position });
+                out.push((b.position, messages));
+            }
+        }
+    }
+
+    /// Stage 5: a ballista's shot, if it can still shoot (`ready_to_shoot`):
+    /// one unit of ammo leaves its store (spent, in the balances) and the
+    /// shot flies (`launch_shot`), then it waits out its period.
+    pub(crate) fn building_fire(&mut self, tick: u64, message: BuildingFire) {
+        let Some(b) = self.buildings.get(message.building as usize) else { return };
+        let kind = &self.building_kinds[b.kind as usize];
+        let Some(defence) = ready_to_shoot(b, kind, tick) else { return };
+        let launcher = Launcher { from: b.position, height: defence.muzzle_height, damage: defence.damage, speed: defence.speed, kind: defence.projectile, defender: None };
+        let (ammo, period) = (defence.ammo, defence.period);
+        let shot = Event::BuildingShot { building: message.building };
+        self.launch_shot(tick, &launcher, InventoryRef::Output(message.building), ammo, Some(message.target), message.to, shot);
+        let turret = &mut self.buildings[message.building as usize].turret;
+        turret.aim = Some(message.to);
+        turret.ready_at = tick + period;
+        turret.fired_at = tick;
+    }
+
+    /// Stage 5: possessing elders' shots at their reticles (B3), in command
+    /// order, each through the shared launch (`launch_shot`) if the elder
+    /// can still shoot (`fire_plan`): one unit of ammo spent, the bolt aimed
+    /// at no threat in particular (it hits whatever it meets on its way),
+    /// and the ballista's period to wait. A second shot on the same tick, or
+    /// one before the period is over, does nothing.
+    pub(super) fn elder_fire(&mut self, messages: Vec<ElderFire>, tick: u64) {
+        for ElderFire { agent, building, to } in messages {
+            let seat = self.agents.get(agent as usize).and_then(|a| a.avatar()).and_then(|a| a.seat);
+            let Ok((b, defence)) = fire_plan(agent, seat, tick, &self.buildings, &self.building_kinds) else { continue };
+            if b != building {
+                continue;
+            }
+            let from = self.buildings[b as usize].position;
+            let launcher = Launcher { from, height: defence.muzzle_height, damage: defence.damage, speed: defence.speed, kind: defence.projectile, defender: None };
+            let (ammo, period) = (defence.ammo, defence.period);
+            self.launch_shot(tick, &launcher, InventoryRef::Output(b), ammo, None, to, Event::BuildingShot { building: b });
+            let turret = &mut self.buildings[b as usize].turret;
+            turret.aim = Some(to);
+            turret.ready_at = tick + period;
+            turret.fired_at = tick;
+        }
+    }
+
+    /// Whether `agent` could shoot the ballista it possesses on `tick`, as
+    /// stage 5 checks it (`elder_fire`): for the view's fire key.
+    pub fn fire_check(&self, agent: usize, tick: u64) -> Result<BuildingIx, FireRefusal> {
+        let seat = self.agents.get(agent).and_then(|a| a.avatar()).and_then(|a| a.seat);
+        fire_plan(agent as AgentIx, seat, tick, &self.buildings, &self.building_kinds).map(|(b, _)| b)
     }
 
     /// Part of the economy step: every built, occupied building below its
@@ -662,6 +931,7 @@ impl Settlement {
             let b = &self.buildings[i];
             let kind = &self.building_kinds[b.kind as usize];
             let Some(occupant) = b.slot.occupant() else { continue };
+            let Some(product) = kind.product else { continue };
             let held = b.output.total() + b.output.total_in();
             if !b.built() || held >= kind.cap_for(Some(occupant)) {
                 continue;
@@ -670,7 +940,7 @@ impl Settlement {
                 Occupant::Sprite(_) => Fx::ONE,
                 Occupant::Elder(_) => kind.possessed_multiplier,
             };
-            let (product, period) = (kind.product, Fx::ONE.mul_int(kind.period as i64));
+            let period = Fx::ONE.mul_int(kind.period as i64);
             let b = &mut self.buildings[i];
             b.progress = b.progress + work;
             if b.progress < period {
@@ -684,6 +954,100 @@ impl Settlement {
             self.accounts[product as usize].produced += 1;
             self.events.push(Event::BuildingProduced { building: i as BuildingIx });
         }
+    }
+
+    /// Stage 5: an enemy's swing takes `damage` from building `b`'s health
+    /// (B8). At 0 it breaks (`break_building`). Returns whether it broke.
+    pub(super) fn hurt_building(&mut self, b: BuildingIx, damage: u32, terrain: &Terrain) -> bool {
+        let building = &mut self.buildings[b as usize];
+        building.health = building.health.saturating_sub(damage);
+        if building.health > 0 {
+            return false;
+        }
+        self.break_building(b, terrain);
+        true
+    }
+
+    /// Breaks building `b` (B8): it becomes a site at its first part again,
+    /// at full health, its parts lost (consumed when they went in). Nothing
+    /// that touches it is left hanging:
+    /// - units flying to or from it land now, as when a player leaves;
+    /// - carry jobs on its output or its site end (`drop_carry`), giving
+    ///   back what they hold;
+    /// - its occupant is put out beside it: a sprite (its plan breaks, so it
+    ///   replans, D2) or a possessing elder, whose reticle turns back into a
+    ///   facing, as leaving does; a sprite on its way loses its claim;
+    /// - what its output held (a ballista's ammo) and what was delivered to
+    ///   it as a site spill onto ground piles beside it, one per item
+    ///   (`spill`), so every unit is still stored and the balances hold.
+    ///
+    /// Its footprint stays an obstacle: the site stands where it stood.
+    pub(super) fn break_building(&mut self, b: BuildingIx, terrain: &Terrain) {
+        let holders = [InventoryRef::Output(b), InventoryRef::Site(b)];
+        let flying: Vec<u64> = self.transfers.values().filter(|t| holders.contains(&t.from) || holders.contains(&t.to)).map(|t| t.id).collect();
+        for id in flying {
+            let t = self.transfers.remove(&id).expect("listed transfer");
+            self.land(t);
+        }
+        for agent in 0..self.agents.len() {
+            let carry = &mut self.agents[agent].carry;
+            if carry.job.iter().chain(&carry.next).any(|job| holders.contains(&job.other)) {
+                let releases = carry.drop_carry(agent as AgentIx);
+                self.reserve_stock(releases);
+            }
+        }
+        match self.buildings[b as usize].slot {
+            Slot::Empty => {}
+            Slot::Claimed(s) => self.release_slot(s),
+            Slot::Occupied(Occupant::Sprite(s)) => {
+                let radius = self.agents[s as usize].radius();
+                let spot = self.eject_spot(b, radius, radius, terrain);
+                self.release_slot(s);
+                let body = &mut self.agents[s as usize].body;
+                if let Some(spot) = spot {
+                    body.position = spot;
+                }
+                body.route.clear();
+                body.velocity = FxVec2::ZERO;
+                body.push = FxVec2::ZERO;
+            }
+            Slot::Occupied(Occupant::Elder(e)) => {
+                let radius = self.agents[e as usize].radius();
+                let spot = self.leave_spot(b, radius, terrain);
+                self.buildings[b as usize].slot = Slot::Empty;
+                if let super::AgentState { body, role: super::Role::Avatar(avatar), .. } = &mut self.agents[e as usize] {
+                    avatar.seat = None;
+                    avatar.aim = avatar.aim.map(FxVec2::normalize_or_zero).filter(|aim| *aim != FxVec2::ZERO);
+                    avatar.intent = Some(super::avatar::Intent::Stop);
+                    if let Some(spot) = spot {
+                        body.position = spot;
+                        if let Some(ground) = terrain.footprint(spot, radius) {
+                            avatar.height = ground;
+                            avatar.flight.support = ground;
+                        }
+                    }
+                }
+            }
+        }
+        let items = self.items.len();
+        let building = &mut self.buildings[b as usize];
+        let kind = &self.building_kinds[building.kind as usize];
+        let mut spilled = building.output.counts.clone();
+        if let Stage::Site { materials, .. } = &building.stage {
+            for (units, &more) in spilled.iter_mut().zip(&materials.counts) {
+                *units += more;
+            }
+        }
+        building.output = Inventory::new(items, kind.store_capacity(), kind.store_kinds());
+        building.stage = Stage::Site { part: 0, materials: materials(kind, items) };
+        building.progress = Fx::ZERO;
+        building.turret = Turret::default();
+        building.health = kind.health;
+        let (center, radius) = (building.position, kind.radius);
+        for (item, units) in spilled.into_iter().enumerate().filter(|&(_, units)| units > 0) {
+            self.spill(item as ItemIx, units, center, radius, terrain);
+        }
+        self.events.push(Event::BuildingBroken { building: b });
     }
 
     /// Checks every building on its own: a known kind, a site's part in
@@ -705,11 +1069,17 @@ impl Settlement {
             };
             let name = format!("building {i} ({})", kind.id);
             b.output.validate().map_err(|e| format!("{name} output {e}"))?;
-            if b.output.kind().is_some_and(|item| item != kind.product) {
-                return Err(format!("{name} output holds an item it doesn't make"));
+            if b.output.kind().is_some_and(|item| Some(item) != kind.product.or(kind.defence.as_ref().map(|d| d.ammo))) {
+                return Err(format!("{name} output holds an item it doesn't make or shoot"));
             }
-            if b.output.capacity != kind.possessed_cap {
-                return Err(format!("{name} output has capacity {}, not its possessed cap", b.output.capacity));
+            if b.output.capacity != kind.store_capacity() || b.output.kinds != kind.store_kinds() {
+                return Err(format!("{name} output has capacity {} or kinds {:?}, not its kind's", b.output.capacity, b.output.kinds));
+            }
+            if kind.defence.is_none() && b.turret != Turret::default() {
+                return Err(format!("{name} is a gatherer with a turret's aim"));
+            }
+            if b.health == 0 || b.health > kind.health {
+                return Err(format!("{name} has health {} of {}", b.health, kind.health));
             }
             let building = i as BuildingIx;
             if (b.output.reserved_out.clone(), b.output.reserved_in.clone()) != self.expected_reservations(InventoryRef::Output(building)) {
@@ -752,6 +1122,9 @@ impl Settlement {
         }
         for (i, a) in self.agents.iter().enumerate() {
             let Some(hold) = a.sprite().and_then(|sprite| sprite.holds) else { continue };
+            if !a.body.alive() {
+                return Err(format!("sprite {} is dead and still holds {hold:?}", a.id));
+            }
             let me = i as AgentIx;
             let (building, slot) = match hold {
                 Hold::Claimed(b) => (b, Slot::Claimed(me)),

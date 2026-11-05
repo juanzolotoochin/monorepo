@@ -34,7 +34,7 @@ fn sim_with(edit: impl FnOnce(&mut Scenario)) -> Simulation {
 /// The scene with room in the possessed output for 30 s of an elder's
 /// work and two Bursts, so a cooldown can run out before the output fills.
 fn roomy() -> Simulation {
-    sim_with(|s| s.building_kinds.iter_mut().for_each(|k| k.possessed_cap = 60))
+    sim_with(|s| s.building_kinds.iter_mut().filter(|k| k.product.is_some()).for_each(|k| k.possessed_cap = 60))
 }
 
 fn settlement(sim: &Simulation) -> &Settlement {
@@ -143,7 +143,7 @@ fn a_burst_adds_its_units_at_once_then_waits_out_its_cooldown() {
     assert_eq!(wood(&sim, 0), before + produced(&sim, 0));
     assert_eq!(burst_ready(&sim), ready);
     // Ready on its tick.
-    assert_eq!(settlement(&sim).burst_check(ELDER as usize, sim.world().tick()), Ok(units(&sim, 0)));
+    assert_eq!(settlement(&sim).burst_check(ELDER as usize, sim.world().tick()), Ok(super::Ability::Burst { units: units(&sim, 0) }));
     let units_0 = units(&sim, 0);
     burst_adds(&mut sim, 0, units_0);
     assert_eq!(burst_ready(&sim), ready + cooldown);
@@ -200,7 +200,7 @@ fn the_cooldown_outlasts_leaving_another_building_and_a_respawn() {
     // A second gatherer, with room for the 30 s it is possessed.
     let mut sim = sim_with(|s| {
         s.buildings.push(Building { kind: "wood_gatherer".into(), position: [fx(4.6), fx(-2.2)] });
-        s.building_kinds.iter_mut().for_each(|k| k.possessed_cap = 60);
+        s.building_kinds.iter_mut().filter(|k| k.product.is_some()).for_each(|k| k.possessed_cap = 60);
     });
     possess(&mut sim, 0);
     let units_0 = units(&sim, 0);

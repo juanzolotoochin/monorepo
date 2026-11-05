@@ -183,6 +183,8 @@ impl Arena {
             knockback: FxVec2::ZERO,
             windup: None,
             ready_at: 0,
+            burn: None,
+            goal: Default::default(),
         });
         s.threats.sort_by_key(|t| t.id);
         s.next_id = s.next_id.max(id + 1);
@@ -1168,6 +1170,8 @@ fn brute_radius_follows_its_armor() {
         knockback: FxVec2::ZERO,
         windup: None,
         ready_at: 0,
+        burn: None,
+        goal: Default::default(),
     };
     let def = &s.characters[s.waves[brutes].character as usize];
     let (body, plated) = (def.body.radius, def.health.as_ref().unwrap().armor.as_ref().unwrap().radius);
@@ -1246,9 +1250,12 @@ fn a_wave_must_send_a_follow_route_character() {
     assert!(error.contains("wave standard") && error.contains("FollowRoute"), "{error}");
 }
 
+/// 144 bytes, 40 more for a burn (`Threat::burn`, the ballista's
+/// fireball, B4) and 8 more for a goal (B5); a windup naming its target
+/// (`SwingTarget`, B8) packs 8 smaller than one naming an agent did.
 #[test]
 fn threat_size_is_pinned() {
-    assert_eq!(std::mem::size_of::<Threat>(), 144);
+    assert_eq!(std::mem::size_of::<Threat>(), 184);
 }
 
 // Ghouls hitting players in passing (GHOUL_ATTACK_HANDOFF.md, task 3). The
@@ -1363,7 +1370,7 @@ fn a_ghoul_swings_at_the_nearest_player_and_the_lowest_index_on_a_tie() {
     arena.place(guest, 0.5, 0.0);
     arena.threat(100, 0.0, 0.3, 3, 0);
     arena.step(1);
-    let tie = arena.s().threat(100).unwrap().windup.unwrap().agent;
+    let tie = arena.s().threat(100).unwrap().windup.unwrap().target.agent().unwrap();
     assert_eq!(tie, host as u16, "the lowest agent index wins a tie");
     assert_eq!(windups(&arena).len(), 1, "one windup per threat");
 
@@ -1372,7 +1379,7 @@ fn a_ghoul_swings_at_the_nearest_player_and_the_lowest_index_on_a_tie() {
     arena.place(guest, 0.3, 0.0);
     arena.threat(101, 0.0, 0.3, 3, 0);
     arena.step(1);
-    assert_eq!(arena.s().threat(101).unwrap().windup.unwrap().agent, guest as u16, "the nearer player");
+    assert_eq!(arena.s().threat(101).unwrap().windup.unwrap().target.agent().unwrap(), guest as u16, "the nearer player");
 }
 
 #[test]
@@ -1696,6 +1703,42 @@ fn leaving_removes_the_avatar_and_later_avatars_keep_their_players() {
     s.validate().unwrap();
 }
 
+/// A threat chasing a player who leaves gives up and plans its way back to
+/// the tree from where it stands; one chasing a later player keeps chasing
+/// it under its new index.
+#[test]
+fn chasers_of_a_leaving_player_go_back_and_the_others_follow_their_quarry() {
+    let mut config = combat_scenario(vec![]);
+    config.agents = vec![player()];
+    config.links.clear();
+    let mut arena = Arena::new(&config, &[]);
+    for slot in 1..3 {
+        arena.sim.step(&[Command { player: PlayerId(slot), kind: CommandKind::Join }]);
+    }
+    let s = arena.s();
+    let (leaver, stayer) = (s.avatar_of(PlayerId(1)).unwrap(), s.avatar_of(PlayerId(2)).unwrap());
+    let chaser = Content::builtin().names.character_index("ghoul_sacred_tree").unwrap();
+    arena.threat(900, 3.0, 3.0, 10, 0);
+    arena.threat(901, -3.0, 3.0, 10, 0);
+    let s = arena.s_mut();
+    for (t, quarry) in [(0, leaver), (1, stayer)] {
+        s.threats[t].character = chaser;
+        s.threats[t].goal = super::Goal::Chase(super::Quarry::Agent(quarry));
+    }
+    s.validate().unwrap();
+
+    let terrain = arena.sim.world().terrain().clone();
+    arena.s_mut().leave(PlayerId(1), &terrain);
+    let s = arena.s();
+    let moved = s.avatar_of(PlayerId(2)).unwrap();
+    assert_eq!(moved, stayer - 1);
+    assert_eq!(s.threats[0].goal, super::Goal::Tree, "the leaver's chaser gives up");
+    let target = s.waves[0].target;
+    assert_eq!(s.threats[0].route.last(), Some(&target), "and walks to its wave's target");
+    assert_eq!(s.threats[1].goal, super::Goal::Chase(super::Quarry::Agent(moved)), "the stayer's still chases it");
+    s.validate().unwrap();
+}
+
 /// What pointed at the avatars after a leaving one moves with them; what
 /// pointed at the leaving one goes. Units flying to or from the leaver land
 /// at once, and what it carried is written off, so material still balances.
@@ -1734,18 +1777,19 @@ fn leaving_moves_references_to_later_avatars_and_balances_material() {
     s.piano_notes.push(super::piano::PianoNote { agent: leaver, piano: 0, pitch: 62, velocity: 90, serial: 2 });
     arena.threat(900, 0.0, 3.0, 10, 0);
     let s = arena.s_mut();
-    s.threats[0].windup = Some(super::combat::Windup { agent: stayer, lands: tick + 100 });
+    s.threats[0].windup = Some(super::combat::Windup { target: super::combat::SwingTarget::Agent(stayer), lands: tick + 100 });
     s.validate().unwrap();
 
     // Directly, so this tick's stages don't redo what the test checks
     // (docks are resolved every tick).
-    arena.s_mut().leave(PlayerId(1));
+    let terrain = arena.sim.world().terrain().clone();
+    arena.s_mut().leave(PlayerId(1), &terrain);
     let s = arena.s();
     let moved = s.avatar_of(PlayerId(2)).unwrap();
     assert_eq!(moved, stayer - 1);
     assert_eq!(s.dock_owner[d], Some(moved));
     assert_eq!(s.piano_notes.iter().map(|n| n.agent).collect::<Vec<_>>(), [moved]);
-    assert_eq!(s.threats[0].windup.map(|w| w.agent), Some(moved));
+    assert_eq!(s.threats[0].windup.and_then(|w| w.target.agent()), Some(moved));
     let flying: Vec<_> = s.transfers.values().map(|t| t.to).collect();
     assert_eq!(flying, [super::InventoryRef::Agent(moved)], "the stayer's unit still flies to it");
     assert_eq!(s.depots[d].inventory.reserved_out[i], out, "the leaver's reservation is released");
@@ -1789,7 +1833,8 @@ fn leaving_mid_transfer_releases_its_job_while_haulers_haul() {
     let room = s.depots[mill as usize].inventory.reserved_in[i] - 2;
     s.validate().unwrap();
 
-    arena.s_mut().leave(PlayerId(1));
+    let terrain = arena.sim.world().terrain().clone();
+    arena.s_mut().leave(PlayerId(1), &terrain);
     let s = arena.s();
     assert_eq!(s.depots[mill as usize].inventory.reserved_in[i], room, "the deposit's room is given back");
     assert_eq!(s.accounts[i].abandoned, 2, "the cargo is written off");
@@ -1907,7 +1952,8 @@ fn leaving_with_pile_units_in_flight_writes_them_off() {
     let stayer_flying = s.transfers.values().filter(|t| t.to == InventoryRef::Agent(stayer)).count();
     let stayer_has = s.agents[stayer as usize].carry.inventory.counts[blue];
 
-    arena.s_mut().leave(PlayerId(1));
+    let terrain = arena.sim.world().terrain().clone();
+    arena.s_mut().leave(PlayerId(1), &terrain);
     let s = arena.s();
     let moved = s.avatar_of(PlayerId(2)).unwrap();
     assert_eq!(s.accounts[amber].abandoned, 8, "the units in the air landed and were written off");

@@ -587,7 +587,7 @@ fn the_controller_walks_with_the_keyboard_idle_and_stops_once_on_neutral() {
         game.frames(1);
     }
     let moved = crate::navigation::flat(game.position() - start);
-    let expected = gameplay::camera_relative(Vec2::Y);
+    let expected = gameplay::camera_relative(Vec2::Y, 0.0);
     assert!(moved.length() > 2.0, "walked {moved:?}");
     assert!(moved.normalize().dot(expected) > 0.99, "camera-relative like the keyboard: {moved:?}");
     assert_eq!(game.count(is_move), 1, "stick noise sent no extra movement: {:?}", game.commands());
@@ -668,21 +668,69 @@ fn the_burst_keys_work_only_while_possessing_in_a_town() {
     let frame = r(&mut rig);
     assert!(frame.gameplay.edges.is_empty() && frame.gameplay.repair_pressed, "not possessing: R repairs");
     assert_eq!(rt(&mut rig).gameplay.edges, vec![Edge::Attack]);
-    rig.input.set_possessing(true);
+    rig.input.set_possessing(true, false);
     let frame = r(&mut rig);
     assert_eq!(frame.gameplay.edges, vec![Edge::Burst]);
     assert!(!frame.gameplay.repair_held && !frame.gameplay.repair_pressed);
     assert_eq!(rt(&mut rig).gameplay.edges, vec![Edge::Burst]);
-    rig.input.set_possessing(false);
+    rig.input.set_possessing(false, false);
     assert_eq!(rt(&mut rig).gameplay.edges, vec![Edge::Attack]);
     // Elsewhere nothing Bursts, even with the flag left on.
-    rig.input.set_possessing(true);
+    rig.input.set_possessing(true, false);
     for scene in [SceneContext { scenario: true, ..default() }, SceneContext::default()] {
         rig.input.set_scene(scene);
         let frame = r(&mut rig);
         assert!(!frame.gameplay.edges.contains(&Edge::Burst) && frame.gameplay.repair_pressed);
         assert_eq!(rt(&mut rig).gameplay.edges, vec![Edge::Attack]);
     }
+}
+
+/// Possessing a ballista, left mouse and RT fire it, held to repeat, and
+/// RT neither Bursts nor attacks; R still asks for a Burst (which a
+/// ballista refuses). In a gatherer RT Bursts as before.
+#[test]
+fn the_fire_keys_work_only_while_possessing_a_ballista() {
+    let mut rig = Rig::new();
+    rig.input.set_scene(SceneContext { scenario: true, town: true, ..default() });
+    rig.mouse.press(MouseButton::Left);
+    let frame = rig.frame();
+    assert!(!frame.gameplay.fire_held && !frame.gameplay.fire_pressed, "not possessing");
+    rig.mouse.release(MouseButton::Left);
+    rig.frame();
+    rig.input.set_possessing(true, true);
+    rig.mouse.press(MouseButton::Left);
+    let frame = rig.frame();
+    assert!(frame.gameplay.fire_held && frame.gameplay.fire_pressed);
+    let frame = rig.frame();
+    assert!(frame.gameplay.fire_held && !frame.gameplay.fire_pressed, "held, not pressed again");
+    rig.mouse.release(MouseButton::Left);
+    assert!(!rig.frame().gameplay.fire_held);
+    rig.keys.press(KeyCode::KeyR);
+    assert_eq!(rig.frame().gameplay.edges, vec![Edge::Burst]);
+    rig.keys.release(KeyCode::KeyR);
+
+    let mut rig = Rig::seated(1);
+    rig.input.set_scene(SceneContext { scenario: true, town: true, ..default() });
+    rig.input.set_possessing(true, true);
+    rig.pads.right_trigger(1, 1.0);
+    let frame = rig.frame();
+    assert!(frame.gameplay.fire_held && frame.gameplay.fire_pressed);
+    assert!(frame.gameplay.edges.is_empty(), "{:?}", frame.gameplay.edges);
+    assert!(rig.frame().gameplay.fire_held);
+    rig.pads.right_trigger(1, 0.0);
+    assert!(!rig.frame().gameplay.fire_held);
+    // RB throws the fireball there (the Burst key), and lifts nothing.
+    rig.pads.press(1, Button::RightBumper);
+    let frame = rig.frame();
+    assert_eq!(frame.gameplay.edges, vec![Edge::Burst]);
+    assert!(!frame.gameplay.lift_held);
+    rig.pads.release(1, Button::RightBumper);
+    assert!(rig.frame().gameplay.edges.is_empty(), "no lift release either");
+    rig.input.set_possessing(true, false);
+    rig.pads.right_trigger(1, 1.0);
+    let frame = rig.frame();
+    assert_eq!(frame.gameplay.edges, vec![Edge::Burst]);
+    assert!(!frame.gameplay.fire_held);
 }
 
 /// In the Sacred Tree, R Bursts the possessed Wood Gatherer: its output
@@ -797,7 +845,7 @@ fn aim_starts_from_confirmed_facing_resolves_before_an_attack_and_is_remembered(
     game.frames(1);
     game.pads().right_stick(1, Vec2::ZERO).right_trigger(1, 0.0);
     game.seconds(1.0);
-    let aimed = gameplay::camera_relative(Vec2::X).normalize();
+    let aimed = gameplay::camera_relative(Vec2::X, 0.0).normalize();
     assert!(attack_aim(&game).unwrap().dot(Vec2::new(aimed.x, aimed.z)) > 0.999);
     // Walking sideways with the aim stick neutral keeps that aim.
     game.pads().left_stick(1, Vec2::Y);
@@ -1457,4 +1505,103 @@ fn e_and_g_possess_a_building_in_a_town_and_g_still_drives_elsewhere() {
     assert_eq!(seat(&game), Some(sim::settlement::Seat::Vehicle(0)), "G climbed into the rover");
     press(&mut game, KeyCode::KeyG);
     assert_eq!(seat(&game), None, "and out");
+}
+
+/// In a town Z and C (and the controller's D-pad left and right) turn the
+/// view and choose no weapon and no target; elsewhere Z and C still pick
+/// the sword and the bow, and the D-pad still cycles targets.
+#[test]
+fn z_and_c_turn_the_view_in_a_town_and_still_pick_weapons_elsewhere() {
+    let mut rig = Rig::seated(1);
+    rig.input.set_scene(SceneContext { scenario: true, town: true, ..default() });
+    let mut key = |rig: &mut Rig, key: KeyCode| {
+        rig.keys.press(key);
+        let frame = rig.frame();
+        rig.keys.release(key);
+        rig.frame();
+        frame.gameplay
+    };
+    let z = key(&mut rig, KeyCode::KeyZ);
+    assert_eq!((z.turn, z.edges.clone()), (1, vec![]), "Z turns counter-clockwise");
+    let c = key(&mut rig, KeyCode::KeyC);
+    assert_eq!((c.turn, c.edges.clone()), (-1, vec![]), "C turns clockwise");
+    let left = rig.tap(1, Button::DPadLeft).gameplay;
+    assert_eq!((left.turn, left.edges), (1, vec![]), "D-pad left turns as Z does");
+    let right = rig.tap(1, Button::DPadRight).gameplay;
+    assert_eq!((right.turn, right.edges), (-1, vec![]), "D-pad right turns as C does");
+
+    rig.input.set_scene(SceneContext::default());
+    let z = key(&mut rig, KeyCode::KeyZ);
+    assert_eq!((z.turn, z.edges), (0, vec![Edge::SelectWeapon(Weapon::Sword)]));
+    let c = key(&mut rig, KeyCode::KeyC);
+    assert_eq!((c.turn, c.edges), (0, vec![Edge::SelectWeapon(Weapon::Bow)]));
+    let left = rig.tap(1, Button::DPadLeft).gameplay;
+    assert_eq!((left.turn, left.edges), (0, vec![Edge::TargetPrevious]));
+    let right = rig.tap(1, Button::DPadRight).gameplay;
+    assert_eq!((right.turn, right.edges), (0, vec![Edge::TargetNext]));
+}
+
+/// At each of the four view angles, screen up and screen right in input
+/// space are the turned camera's own up and right, flattened on the ground,
+/// with the camera placed as `effects::camera_feedback` places it.
+#[test]
+fn camera_relative_follows_the_view_at_each_quarter_turn() {
+    let (base, target) = (Vec3::new(20.0, 20.0, 20.0), Vec3::new(0.0, 0.0, -0.4));
+    let mut view = town::ViewTurn::default();
+    for quarter in 0..4 {
+        assert_eq!(view.quarter(), quarter);
+        let yaw = view.yaw();
+        let eye = target + Quat::from_rotation_y(yaw) * (base - target);
+        let camera = Transform::from_translation(eye).looking_at(target, Vec3::Y);
+        let flat = |v: Vec3| crate::navigation::flat(v).normalize();
+        let up = gameplay::camera_relative(Vec2::Y, yaw);
+        let right = gameplay::camera_relative(Vec2::X, yaw);
+        assert!(up.dot(flat(*camera.up())) > 0.999, "quarter {quarter}: up {up:?}, camera {:?}", camera.up());
+        assert!(right.dot(flat(*camera.right())) > 0.999, "quarter {quarter}: right {right:?}, camera {:?}", camera.right());
+        view.turn(1);
+        // Mid-turn the yaw eases between the two.
+        view.advance(town::TURN_SECONDS / 2.0);
+        let half = quarter as f32 * std::f32::consts::FRAC_PI_2 + std::f32::consts::FRAC_PI_4;
+        assert!((view.yaw() - half).abs() < 1e-4, "halfway at {}", view.yaw());
+        view.advance(town::TURN_SECONDS);
+        assert!(view.settled());
+    }
+    // Back at the start after four, and a clockwise turn goes to three.
+    assert_eq!((view.quarter(), view.yaw()), (0, 0.0));
+    view.turn(-1);
+    view.advance(1.0);
+    assert_eq!(view.quarter(), 3);
+    assert!((view.yaw() - 3.0 * std::f32::consts::FRAC_PI_2).abs() < 1e-4);
+}
+
+/// In the Sacred Tree, Z turns the view a quarter turn and W still walks
+/// up the screen, which is now another way on the ground; C turns it back.
+#[test]
+fn the_town_view_turns_and_movement_stays_screen_relative() {
+    let mut game = Game::new("sacred-tree", 60.0);
+    game.frames(5);
+    let tap = |game: &mut Game, key: KeyCode| {
+        game.app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+        game.frames(1);
+        game.app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(key);
+        game.frames(1);
+    };
+    tap(&mut game, KeyCode::KeyZ);
+    game.seconds(0.5);
+    let view = game.dispatcher().town.view;
+    assert_eq!(view.quarter(), 1);
+    assert!(view.settled() && (view.yaw() - std::f32::consts::FRAC_PI_2).abs() < 1e-4);
+    assert_eq!(game.count(|c| matches!(c, CommandKind::Equip { .. })), 0, "Z chose no weapon");
+    let start = game.position();
+    game.app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyW);
+    game.seconds(0.5);
+    game.app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::KeyW);
+    game.frames(1);
+    let moved = crate::navigation::flat(game.position() - start);
+    let up = gameplay::camera_relative(Vec2::Y, std::f32::consts::FRAC_PI_2);
+    assert!(moved.length() > 0.5, "walked {moved:?}");
+    assert!(moved.normalize().dot(up) > 0.98, "up the turned screen: {moved:?}, wanted {up:?}");
+    tap(&mut game, KeyCode::KeyC);
+    game.seconds(0.5);
+    assert_eq!((game.dispatcher().town.view.quarter(), game.dispatcher().town.view.yaw()), (0, 0.0));
 }

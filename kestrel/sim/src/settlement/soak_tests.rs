@@ -4,7 +4,11 @@
 //! picking them back up, and putting up new buildings. Every tick checks
 //! every invariant (`validate`, conservation and pile reservations among
 //! them), and that no sprite waits longer than a retry while a building of
-//! its job's kind has a free slot.
+//! its job's kind has a free slot, nor stays dead past its return.
+//!
+//! The second soak plays the map's waves (M5.6) while doing all that and
+//! defending: stocking, manning, possessing and firing a ballista,
+//! throwing fireballs, and putting broken buildings back up.
 
 use content::scenario::Scenario;
 use content::{Content, TICKS_PER_SECOND};
@@ -72,6 +76,9 @@ impl Soak {
             self.waiting[i] = if stranded { self.waiting[i] + 1 } else { 0 };
             self.longest = self.longest.max(self.waiting[i]);
             assert!(self.waiting[i] <= RETRY_TICKS + 1, "{} waited {} ticks with a slot free at tick {}", s.agents[a as usize].id, self.waiting[i], self.sim.world().tick());
+            // A dead sprite is back on its return tick (B6).
+            let tick = self.sim.world().tick();
+            assert!(s.agents[a as usize].body.alive() || tick <= sprite.respawn_at + 1, "{} still dead {} ticks past its return", s.agents[a as usize].id, tick - sprite.respawn_at);
         }
     }
 
@@ -263,5 +270,261 @@ fn possess_leave_reassign_and_build_cycles_strand_no_sprite() {
     });
     let s = soak.s();
     assert_eq!(s.piles.as_ref().map_or(0, |p| p.piles.len()), 0, "every drop was picked back up");
+    assert!(soak.longest <= RETRY_TICKS + 1);
+}
+
+const BALLISTA: BuildingKindIx = 2;
+
+/// What the wave soak saw, from the events.
+#[derive(Debug, Default)]
+struct Seen {
+    sprite_shots: u32,
+    elder_shots: u32,
+    fireballs: u32,
+    fire_kills: u32,
+    kills: u32,
+    breaches: u32,
+    broken: u32,
+    sprite_deaths: u32,
+    sprite_returns: u32,
+    elder_deaths: u32,
+}
+
+impl Soak {
+    /// A scenario point in meters, as the supply writes them.
+    fn point(&self, x: f64, z: f64) -> FxVec2 {
+        let f = |v: f64| Fx::from_bits((v * 4294967296.0).round() as i64);
+        self.sim.world().terrain().center + FxVec2::new(f(x), f(z))
+    }
+
+    /// Steps with `turn` and adds up what happened.
+    fn watch(&mut self, turn: &[Command], seen: &mut Seen) {
+        let alive = self.s().agents[ELDER as usize].body.alive();
+        let sprites: Vec<bool> = SPRITES.iter().map(|&a| self.s().agents[a as usize].body.alive()).collect();
+        let seat = self.s().seat(ELDER as usize).and_then(|seat| seat.building());
+        self.step(turn);
+        let s = self.s();
+        for e in &s.events {
+            match *e {
+                Event::BuildingShot { building } if Some(building) == seat => seen.elder_shots += 1,
+                Event::BuildingShot { .. } => seen.sprite_shots += 1,
+                Event::FireballThrown { .. } => seen.fireballs += 1,
+                Event::Hit { killed: true, impact, .. } => {
+                    seen.kills += 1;
+                    seen.fire_kills += u32::from(impact == super::combat::Impact::Fire);
+                }
+                Event::Breach { .. } => seen.breaches += 1,
+                Event::BuildingBroken { .. } => seen.broken += 1,
+                Event::SpriteReturned { .. } => seen.sprite_returns += 1,
+                _ => {}
+            }
+        }
+        seen.elder_deaths += u32::from(alive && !s.agents[ELDER as usize].body.alive());
+        seen.sprite_deaths += SPRITES.iter().zip(sprites).filter(|&(&a, was)| was && !s.agents[a as usize].body.alive()).count() as u32;
+    }
+
+    fn wait(&mut self, ticks: u64, seen: &mut Seen) {
+        for _ in 0..ticks {
+            self.watch(&[], seen);
+        }
+    }
+
+    /// Walks the elder to `target`, as far as it gets in 20 s: a dead elder
+    /// waits to be back at home and sets off again. Ghouls may be in the
+    /// way, so it may not get there.
+    fn go(&mut self, target: FxVec2, seen: &mut Seen) {
+        let start = self.sim.world().tick();
+        let order = command(CommandKind::MoveAvatar { agent: ELDER, intent: Intent::GoTo { target, run: true } });
+        self.watch(std::slice::from_ref(&order), seen);
+        while self.sim.world().tick() < start + 20 * HZ {
+            let a = &self.s().agents[ELDER as usize];
+            if !a.body.alive() {
+                self.wait(1, seen);
+                if self.s().agents[ELDER as usize].body.alive() {
+                    self.watch(std::slice::from_ref(&order), seen);
+                }
+                continue;
+            }
+            if a.body.route.is_empty() && a.avatar().unwrap().intent == Some(Intent::Stop) {
+                return;
+            }
+            self.wait(1, seen);
+        }
+    }
+
+    /// Interacts with `target` if it is the elder's target now, and waits
+    /// (at most 10 s) for its units to land. Whether it was.
+    fn try_use(&mut self, target: InteractTarget, seen: &mut Seen) -> bool {
+        if self.target().map(|(t, _)| t) != Some(target) {
+            return false;
+        }
+        self.watch(&[interact(target)], seen);
+        for _ in 0..10 * HZ {
+            let s = self.s();
+            if s.agents[ELDER as usize].carry.job.is_none() && s.transfers.is_empty() {
+                break;
+            }
+            self.watch(&[], seen);
+        }
+        true
+    }
+
+    /// Puts whatever the bundle holds back in the tree, as far as it can.
+    fn unload(&mut self, seen: &mut Seen) {
+        for (item, depot) in [(WOOD, TREE[0]), (STONE, TREE[1])] {
+            if self.s().agents[ELDER as usize].carry.inventory.count(item) > 0 {
+                let dock = self.s().depots[depot as usize].position;
+                self.go(dock, seen);
+                self.try_use(InteractTarget::Depot(depot), seen);
+            }
+        }
+    }
+
+    /// Where the elder stands to use building `b`'s output or site.
+    fn front(&self, b: BuildingIx) -> FxVec2 {
+        let building = &self.s().buildings[b as usize];
+        building.output_position + (building.output_position - building.position).normalize_or_zero() * Fx::from_ratio(2, 5)
+    }
+
+    /// Fetches a bundle of `item` from the tree (topping its pile up first,
+    /// as a stocked town would be) and hands it to building `b`'s site or
+    /// store; what's left goes back.
+    fn bring(&mut self, b: BuildingIx, item: ItemIx, site: bool, seen: &mut Seen) {
+        let depot = TREE[item as usize];
+        self.watch(&[command(CommandKind::AddStock { depot, item, units: 5 })], seen);
+        let dock = self.s().depots[depot as usize].position;
+        self.go(dock, seen);
+        self.try_use(InteractTarget::Depot(depot), seen);
+        self.go(self.front(b), seen);
+        self.try_use(if site { InteractTarget::Site(b) } else { InteractTarget::Output(b) }, seen);
+        self.unload(seen);
+    }
+
+    /// Puts site `b` back up: its parts' materials brought from the tree
+    /// and installed, a few tries at most (a ghoul may be on the way).
+    fn rebuild(&mut self, b: BuildingIx, seen: &mut Seen) {
+        for _ in 0..6 {
+            if self.s().buildings[b as usize].built() {
+                return;
+            }
+            let k = &self.s().building_kinds[self.s().buildings[b as usize].kind as usize];
+            for (item, _) in self.s().buildings[b as usize].needs(k) {
+                self.bring(b, item, true, seen);
+            }
+            self.go(self.front(b), seen);
+            self.try_use(InteractTarget::Site(b), seen);
+        }
+    }
+
+    /// Possesses gatherer `b` a couple of seconds, Bursting if it may, and
+    /// leaves, as `possess` does, but a refused boarding is no failure.
+    fn work(&mut self, b: BuildingIx, seen: &mut Seen) {
+        let Some(to) = self.s().leave_spot(b, self.s().agents[ELDER as usize].radius(), self.sim.world().terrain()) else { return };
+        self.go(to, seen);
+        if !self.try_use(InteractTarget::Slot(b), seen) || self.s().seat(ELDER as usize) != Some(Seat::Building(b)) {
+            return;
+        }
+        if self.s().burst_check(ELDER as usize, self.sim.world().tick()).is_ok() {
+            self.watch(&[command(CommandKind::Burst { agent: ELDER })], seen);
+        }
+        self.wait(2 * HZ, seen);
+        if self.s().seat(ELDER as usize).is_some() {
+            self.watch(&[interact(InteractTarget::Slot(b))], seen);
+        }
+    }
+
+    /// Possesses ballista `b` for `seconds`, shooting at the nearest ghoul
+    /// in range whenever it may and throwing the fireball at it when ready,
+    /// then leaves. Whether it got in.
+    fn defend(&mut self, b: BuildingIx, seconds: u64, seen: &mut Seen) -> bool {
+        let Some(to) = self.s().leave_spot(b, self.s().agents[ELDER as usize].radius(), self.sim.world().terrain()) else { return false };
+        self.go(to, seen);
+        if !self.try_use(InteractTarget::Slot(b), seen) || self.s().seat(ELDER as usize) != Some(Seat::Building(b)) {
+            return false;
+        }
+        for _ in 0..seconds * HZ {
+            if self.s().seat(ELDER as usize).is_none() {
+                return true;
+            }
+            let (center, range) = {
+                let s = self.s();
+                (s.buildings[b as usize].position, s.building_kind(b).defence.as_ref().map_or(Fx::ZERO, |d| d.range))
+            };
+            let nearest = self.s().threats.iter().map(|t| t.position - center).filter(|o| o.length() <= range).min_by_key(|o| o.length());
+            let tick = self.sim.world().tick();
+            let mut turn = Vec::new();
+            if let Some(aim) = nearest {
+                turn.push(command(CommandKind::AimAvatar { agent: ELDER, aim }));
+                if self.s().burst_check(ELDER as usize, tick).is_ok() {
+                    turn.push(command(CommandKind::Burst { agent: ELDER }));
+                } else if self.s().fire_check(ELDER as usize, tick).is_ok() {
+                    turn.push(command(CommandKind::Attack { agent: ELDER, weapon: content::scenario::Weapon::Sword, aim, muzzle: [Fx::ZERO; 3] }));
+                }
+            }
+            self.watch(&turn, seen);
+        }
+        if self.s().seat(ELDER as usize).is_some() {
+            self.watch(&[interact(InteractTarget::Slot(b))], seen);
+        }
+        true
+    }
+}
+
+/// The map played through all its waves (12 minutes) by a town that
+/// defends: before the first wave it puts up a ballista beside the tree, a
+/// Stone Gatherer on the east lane's way and a Wood Gatherer near the north
+/// one's; then it cycles reassigning the sprites (Ash always on the
+/// ballista, the others walking to gatherers across the waves' ways or
+/// idling), stocking the ballista, possessing it to shoot and throw
+/// fireballs while ghouls are about, possessing a gatherer to Burst while
+/// none are, and putting broken buildings back up. Every tick checks every
+/// invariant and the balances, that no sprite waits past a retry with a
+/// slot free or stays dead past its return; the tree stands.
+#[test]
+fn defending_against_the_waves_strands_no_sprite() {
+    let mut soak = Soak::new();
+    let mut seen = Seen::default();
+    let ballista = soak.build(BALLISTA, soak.point(-1.4, -3.0));
+    let east = soak.build(STONE_GATHERER, soak.point(4.6, -2.6));
+    let north = soak.build(WOOD_GATHERER, soak.point(-1.6, -6.0));
+    soak.empty_bundle();
+    let gatherers = [0, east, north];
+    assert!(soak.sim.world().tick() < 210 * HZ, "built in the calm start");
+    let mut cycle = 0usize;
+    while soak.sim.world().tick() < 720 * HZ {
+        // Ash mans the ballista; the others rotate over the gatherers and
+        // idling every fourth cycle, so they walk across the clearing and
+        // stay a while in buildings on the waves' ways.
+        let rota = [SpriteJob::Staff(WOOD_GATHERER), SpriteJob::Staff(STONE_GATHERER), SpriteJob::Idle];
+        let mut jobs = vec![command(CommandKind::SetSpriteJob { agent: SPRITES[0], job: SpriteJob::Staff(BALLISTA) })];
+        jobs.extend(SPRITES[1..].iter().enumerate().map(|(i, &agent)| command(CommandKind::SetSpriteJob { agent, job: rota[(cycle / 4 + i) % 3] })));
+        soak.watch(&jobs, &mut seen);
+        for b in [ballista, east, north] {
+            if !soak.s().buildings[b as usize].built() {
+                soak.rebuild(b, &mut seen);
+            }
+        }
+        if soak.s().buildings[ballista as usize].built() && soak.s().buildings[ballista as usize].output.free() >= 5 {
+            soak.bring(ballista, STONE, false, &mut seen);
+        }
+        if !soak.s().threats.is_empty() && soak.s().buildings[ballista as usize].built() {
+            soak.defend(ballista, 8 + cycle as u64 % 5, &mut seen);
+        } else {
+            let b = gatherers[cycle % gatherers.len()];
+            if soak.s().buildings[b as usize].built() && soak.s().agents[ELDER as usize].carry.inventory.total() == 0 {
+                soak.work(b, &mut seen);
+            }
+        }
+        soak.wait((cycle % 3) as u64 * HZ, &mut seen);
+        cycle += 1;
+    }
+    eprintln!("wave soak: {cycle} cycles, {seen:?}, tree {}", soak.s().health);
+    let s = soak.s();
+    assert!(!s.tree_fallen(), "the tree stands: {seen:?}");
+    assert!(s.waves.iter().all(|w| w.spawned == w.count), "every wave came");
+    assert!(seen.sprite_shots > 0 && seen.elder_shots > 0, "{seen:?}");
+    assert!(seen.fireballs >= 3, "{seen:?}");
+    assert!(seen.kills >= 20 && seen.fire_kills > 0, "{seen:?}");
+    assert!(seen.broken >= 2 && seen.sprite_deaths >= 1 && seen.sprite_returns == seen.sprite_deaths, "buildings broke, sprites died and came back: {seen:?}");
     assert!(soak.longest <= RETRY_TICKS + 1);
 }

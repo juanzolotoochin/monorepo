@@ -96,6 +96,13 @@ pub enum Command {
     },
     /// Backs out of placing a blueprint, as Escape does.
     SettlementCancelBuild,
+    /// Turns the town's view `turns` quarter turns around the camera's
+    /// target, as Z (positive, counter-clockwise seen from above) or C
+    /// (negative, clockwise) does; the turn then eases over a quarter
+    /// second. View only. Fails outside a town.
+    CameraRotate {
+        turns: i32,
+    },
     /// Possesses building `building` (its index), as interacting with its
     /// slot or the boarding key does: walks the elder beside it first when
     /// it is out of reach, then boards, putting out a sprite inside. Fails
@@ -116,6 +123,25 @@ pub enum Command {
     /// ("Burst ready in 12 s", "Output full", "Possess a building to
     /// Burst"); done once the units are in (`settlement.burst`).
     SettlementBurst,
+    /// Fires the ballista the elder possesses once, as left mouse or RT
+    /// does there: the reticle goes `x`, `y` meters from the ballista (cut
+    /// to its range) and a bolt flies there. Fails with the sim's reason
+    /// ("No ammo: bring stone", "Reloading", "Possess a ballista to
+    /// fire"); done once the shot has been simulated.
+    SettlementFire {
+        x: f32,
+        y: f32,
+    },
+    /// Throws the fireball of the ballista the elder possesses, as R or RB
+    /// does there: the reticle goes `x`, `y` meters from the ballista (cut
+    /// to its range) and the fireball flies there, for no stone. Fails with
+    /// the sim's reason ("Fireball ready in 12 s", "Possess a building to
+    /// Burst"); done once the elder's fireball cooldown has started
+    /// (`settlement.burst`).
+    SettlementFireball {
+        x: f32,
+        y: f32,
+    },
     AssertSettlement {
         delivered: u64,
         cycles: u64,

@@ -145,9 +145,10 @@ enum Pending {
     /// Waits until the player sits in `building`, or in none. `sent` is
     /// false while it walks there first: the boarding goes out on arrival.
     Seat { building: Option<u16>, sent: std::sync::atomic::AtomicBool },
-    /// Waits until the Burst sent restarts the player's cooldown, which
-    /// stood at `ready` before.
-    Burst { ready: u64 },
+    /// Waits until the Burst (or fireball) sent restarts one of the
+    /// player's cooldowns, which stood at `ready` (Burst's, fireball's)
+    /// before.
+    Burst { ready: (u64, u64) },
     Failed(String),
 }
 struct Active {
@@ -286,6 +287,13 @@ fn send(world: &mut World, kind: CommandKind) {
 fn player(world: &World) -> Option<u16> {
     world.get_resource::<SessionService>()?.player()
 }
+/// The local elder's Burst and fireball cooldowns, the ticks each is ready
+/// on, for a Burst key verb to wait on.
+fn cooldowns(world: &World) -> Result<(u64, u64), String> {
+    let s = settlement(world)?;
+    let agent = player(world).ok_or("No controlled actor")?;
+    Ok(s.agents[agent as usize].avatar().map_or((0, 0), |a| (a.burst_ready, a.fireball_ready)))
+}
 /// Starts a haul toward a pile. The job serial lets the poll tell this job
 /// from a later one.
 fn queue_haul(world: &mut World, action: PileAction, pace: f32, approach: Option<[f32; 2]>) -> Result<u64, String> {
@@ -407,11 +415,19 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             Ok(Pending::Seat { building: Some(*building), sent: std::sync::atomic::AtomicBool::new(walk.is_none()) })
         }
         Command::SettlementBurst => {
-            let s = settlement(world)?;
-            let agent = player(world).ok_or("No controlled actor")?;
-            let ready = s.agents[agent as usize].avatar().map_or(0, |a| a.burst_ready);
+            let ready = cooldowns(world)?;
             crate::input::town::burst(world)?;
             Ok(Pending::Burst { ready })
+        }
+        Command::SettlementFireball { x, y } => {
+            let ready = cooldowns(world)?;
+            crate::input::town::fireball_at(world, Vec2::new(*x, *y))?;
+            Ok(Pending::Burst { ready })
+        }
+        Command::SettlementFire { x, y } => {
+            settlement(world)?;
+            crate::input::town::fire_at(world, Vec2::new(*x, *y))?;
+            Ok(Pending::Applied)
         }
         Command::SettlementLeave => {
             let s = settlement(world)?;
@@ -423,6 +439,16 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
         Command::SettlementCancelBuild => {
             settlement(world)?;
             crate::input::town::cancel_build(world);
+            Ok(Pending::Instant)
+        }
+        Command::CameraRotate { turns } => {
+            if !crate::input::town::active(world) {
+                return Err("The view turns only in a town".into());
+            }
+            let view = &mut world.resource_mut::<crate::input::gameplay::Dispatcher>().town.view;
+            for _ in 0..turns.unsigned_abs().min(4) {
+                view.turn(turns.signum());
+            }
             Ok(Pending::Instant)
         }
         Command::SettlementJobMenu { job } => {
@@ -772,7 +798,7 @@ fn poll(world: &mut World, pending: &Pending, tick: u64) -> Option<Result<(), St
             }
             let service = world.get_resource::<SessionService>()?;
             let (s, agent) = (service.settlement()?, service.player()?);
-            if s.agents[agent as usize].avatar().is_some_and(|a| a.burst_ready != *ready) {
+            if s.agents[agent as usize].avatar().is_some_and(|a| (a.burst_ready, a.fireball_ready) != *ready) {
                 return Some(Ok(()));
             }
             // The sim's refusal, as the view shows it.

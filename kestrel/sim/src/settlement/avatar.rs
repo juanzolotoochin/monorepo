@@ -20,7 +20,7 @@ use super::action::{Action, View};
 use super::buildings::BurstRefusal;
 use super::interact::{self, Interaction};
 use super::{AgentIx, DepotState, InventoryRef, ItemIx, Kinds, Settlement};
-use crate::messages::{ActionMessages, BundleRefused, Burst, BurstRefused, CarryUnit, DropBundle, DropHaul, DropNotes, Install, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
+use crate::messages::{ActionMessages, BundleRefused, Burst, BurstRefused, CarryUnit, DropBundle, DropHaul, ElderFire, DropNotes, Install, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
 use crate::nav::{self, angle_between, distance};
 use crate::terrain::{Terrain, MAX_LAYERS};
 
@@ -154,6 +154,10 @@ pub struct AvatarState {
     /// outlasts leaving a seat and a respawn, as `attack_ready` does.
     #[serde(default)]
     pub burst_ready: u64,
+    /// A possessed ballista's fireball is ready again on this tick (B4):
+    /// the elder's, as `burst_ready` is, and apart from it.
+    #[serde(default)]
+    pub fireball_ready: u64,
     /// Dead until this tick, then back at home (`Body::health`).
     #[serde(default)]
     pub respawn_at: u64,
@@ -173,7 +177,9 @@ pub struct AvatarState {
     pub combo_until: u64,
     /// The weapon in hand, so every peer shows it.
     pub weapon: Weapon,
-    /// Upper body facing; movement heading remains on the agent.
+    /// Upper body facing; movement heading remains on the agent. While
+    /// possessing a ballista, the reticle instead: an offset from the
+    /// ballista, within its range (`BuildingKind::reticle`).
     #[serde(default)]
     pub aim: Option<FxVec2>,
     /// A follow-up attack clicked during the end of a swing.
@@ -554,6 +560,7 @@ impl Settlement {
         }
         self.install(messages.install);
         self.bursts(messages.burst, tick);
+        self.elder_fire(messages.elder_fire, tick);
         for BurstRefused { agent, reason } in messages.burst_refused {
             self.events.push(Event::BurstRefused { agent, reason });
         }
@@ -770,7 +777,10 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
             // elder's one target), let go or respawn. Movement and dropping
             // do nothing. Leaving puts it beside the building; housekeeping
             // empties the slot (`seat_housekeeping`), for a waiting sprite
-            // to take.
+            // to take. In a ballista (B3) the aim is the reticle, an offset
+            // from the ballista within its range, and `Attack` shoots there;
+            // a seated elder never swings its own weapon.
+            let kind = &view.building_kinds[view.buildings[b as usize].kind as usize];
             match *action {
                 Action::Board | Action::Interact(interact::InteractTarget::Slot(_)) => {
                     if matches!(*action, Action::Interact(target) if target != interact::InteractTarget::Slot(b)) {
@@ -779,6 +789,8 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
                     if let Some(position) = view.leave_spot(b, def.body.radius) {
                         let ground = view.terrain.footprint(position, def.body.radius).unwrap_or(avatar.height);
                         avatar.seat = None;
+                        // A ballista's reticle back to a facing.
+                        avatar.aim = avatar.aim.map(FxVec2::normalize_or_zero).filter(|aim| *aim != FxVec2::ZERO);
                         body.position = position;
                         avatar.height = ground;
                         avatar.flight.support = ground;
@@ -791,6 +803,21 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
                 Action::Burst => {
                     if body.alive() {
                         out.burst.push(Burst { agent: me });
+                    }
+                    return;
+                }
+                Action::Aim(offset) if kind.defence.is_some() => {
+                    if let Some(reticle) = kind.reticle(offset) {
+                        avatar.aim = Some(reticle);
+                    }
+                    return;
+                }
+                // Stage 5 checks the elder still sits there, the ammo and
+                // the reload, and shoots (`Settlement::elder_fire`).
+                Action::Attack { aim, .. } => {
+                    if let Some(reticle) = kind.reticle(aim).filter(|_| body.alive()) {
+                        avatar.aim = Some(reticle);
+                        out.elder_fire.push(ElderFire { agent: me, building: b, to: view.buildings[b as usize].position + reticle });
                     }
                     return;
                 }
@@ -1068,8 +1095,10 @@ pub fn bundle_job(carry: &Carry, view: &View, other: InventoryRef, direction: Di
     // Depot items only: minerals don't go to depots or come out of them.
     let depot_item = |item: &ItemIx| (*item as usize) < view.items;
     let (item, units) = match direction {
-        // A site is a drop-off: nothing is taken back out (D4).
+        // A site is a drop-off: nothing is taken back out (D4), nor out of
+        // a ballista's ammo store (B2).
         Direction::Pickup if matches!(other, InventoryRef::Site(_)) => return Err(BundleRefusal::DepositOnly),
+        Direction::Pickup if matches!(other, InventoryRef::Output(b) if super::interact::ammo_store(view, b)) => return Err(BundleRefusal::DepositOnly),
         Direction::Pickup => {
             // The holder's item: a tree pile's own, what an output holds, or
             // in a mixed depot the bundle's item, else the first there.
@@ -1091,7 +1120,9 @@ pub fn bundle_job(carry: &Carry, view: &View, other: InventoryRef, direction: Di
             (item, cargo.free().min(holder.available(item)))
         }
         Direction::Deposit => {
-            if matches!(other, InventoryRef::Output(_)) {
+            // A gatherer's output is only picked up from; a ballista's ammo
+            // store takes as much of its ammo as fits.
+            if matches!(other, InventoryRef::Output(b) if !super::interact::ammo_store(view, b)) {
                 return Err(BundleRefusal::PickupOnly);
             }
             let Some(item) = (0..view.items as ItemIx).find(|&i| cargo.available(i) > 0) else { return Err(BundleRefusal::NothingCarried) };
@@ -1272,7 +1303,7 @@ pub(super) fn finish_dig(a: &mut AgentState, tick: u64) -> Option<Dig> {
 }
 
 /// Puts the avatar at the spawn point with a fresh state. The player's
-/// owner, name and weapon and Burst cooldowns stay. So do the body's speed,
+/// owner, name and weapon, Burst and fireball cooldowns stay. So do the body's speed,
 /// radius and max health. Its motion starts over and its health refills, as
 /// after a death.
 fn respawn(body: &mut Body, avatar: &mut AvatarState, spawn: FxVec2, height: Fx) {
@@ -1287,6 +1318,7 @@ fn respawn(body: &mut Body, avatar: &mut AvatarState, spawn: FxVec2, height: Fx)
         name: std::mem::take(&mut avatar.name),
         attack_ready: avatar.attack_ready,
         burst_ready: avatar.burst_ready,
+        fireball_ready: avatar.fireball_ready,
         height,
         intent: Some(Intent::Stop),
         ..AvatarState::default()

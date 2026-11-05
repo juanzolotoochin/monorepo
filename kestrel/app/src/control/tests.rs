@@ -594,7 +594,7 @@ fn the_elder_interacts_its_way_through_the_town() {
     assert_eq!(state(10)["simulation"]["depots"]["tree_wood"]["items"]["wood"], picked);
     assert_eq!(state(10)["simulation"]["agents"]["elder"]["cargo"]["items"], json!({}));
     let menu = &state(14)["interact"]["menu"];
-    assert_eq!(menu["options"], json!(["IDLE", "GATHER WOOD", "GATHER STONE"]), "{}", state(14)["interact"]);
+    assert_eq!(menu["options"], json!(["IDLE", "GATHER WOOD", "GATHER STONE", "MAN BALLISTA"]), "{}", state(14)["interact"]);
     let simulation = &report["state"]["settlement"]["simulation"];
     assert_eq!(simulation["sprites"]["sprite_fern"]["job"], "stone_gatherer");
     assert_eq!(report["state"]["settlement"]["interact"]["menu"], Value::Null);
@@ -713,7 +713,7 @@ fn the_elder_builds_a_stone_gatherer_that_a_sprite_works() {
     assert_eq!(report["status"], "passed", "{report}");
     let receipts = report["receipts"].as_array().unwrap();
     let state = |i: usize| &receipts[i]["state"]["settlement"];
-    assert_eq!(state(3)["interact"]["build_menu"], json!(["wood_gatherer", "stone_gatherer"]), "{}", state(3)["interact"]);
+    assert_eq!(state(3)["interact"]["build_menu"], json!(["wood_gatherer", "stone_gatherer", "ballista"]), "{}", state(3)["interact"]);
     let ghost = |i: usize| &state(i)["interact"]["ghost"];
     assert_eq!(state(6)["interact"]["placing"], "stone_gatherer");
     assert_eq!((&ghost(6)["valid"], &ghost(6)["reason"]), (&json!(false), &json!("BLOCKED")), "{}", ghost(6));
@@ -956,6 +956,140 @@ fn the_elder_possesses_the_wood_gatherer_and_its_sprite_goes_back_in() {
     assert!(report["error"].as_str().unwrap().contains("Drop the bundle first (Q)"), "{report}");
 }
 
+/// The elder builds a ballista, loads it with the stone left over and
+/// possesses it: `settlement_fire` shoots a bolt at a point past its range,
+/// which comes down at the range, one stone spent, the turret turned there;
+/// a second shot right after fails while it reloads. Firing outside a
+/// ballista fails too.
+#[test]
+fn the_elder_fires_a_possessed_ballista_at_the_reticle() {
+    let walk = |x, z| Command::Walk { position: [x, z] };
+    let target = |prompt: &str| Command::SettlementInteractTarget { prompt: Some(prompt.into()) };
+    let stock = |depot: &str, item: &str, units| Command::SettlementStock { depot: depot.into(), item: item.into(), units };
+    let ammo = |state: &Value| state["settlement"]["simulation"]["buildings"][1]["output"]["items"]["stone"].as_u64().unwrap_or(0);
+    let report = run_for(
+        vec![
+            Command::Scene { scene: "sacred-tree".into() },
+            Command::SettlementFire { x: 1.0, y: 0.0 },
+        ],
+        30,
+        600,
+    );
+    assert_eq!(report["status"], "failed", "{report}");
+    assert!(report["error"].as_str().unwrap().contains("Possess a ballista to fire"), "{report}");
+    let report = run_for(
+        vec![
+            Command::Scene { scene: "sacred-tree".into() },
+            stock("tree_wood", "wood", 4),
+            stock("tree_stone", "stone", 5),
+            Command::SettlementBuild { kind: Some("ballista".into()) },
+            // Facing -z east of the tree, as the Stone Gatherer goes up.
+            walk(3.0, 1.0),
+            walk(3.0, 0.0),
+            Command::SettlementPlaceBlueprint { kind: None, position: None },
+            walk(-1.7, 2.4),
+            Command::SettlementInteract,
+            walk(2.0, -0.6),
+            target("DELIVER 2 WOOD"),
+            Command::SettlementInteract,
+            target("INSTALL FOUNDATION"),
+            Command::SettlementInteract,
+            target("DELIVER 2 WOOD"),
+            Command::SettlementInteract,
+            walk(1.7, 2.4),
+            Command::SettlementInteract,
+            walk(2.0, -0.6),
+            target("DELIVER 2 STONE"),
+            Command::SettlementInteract,
+            target("INSTALL MECHANISM"),
+            Command::SettlementInteract,
+            target("LOAD 3 STONE"),
+            Command::SettlementInteract,
+            Command::SettlementBoard { building: 1 },
+            Command::Inspect,
+            Command::SettlementFire { x: 0.0, y: 10.0 },
+            Command::Inspect,
+            Command::SettlementFire { x: 1.0, y: 0.0 },
+        ],
+        30,
+        2400,
+    );
+    assert_eq!(report["status"], "failed", "{report}");
+    assert!(report["error"].as_str().unwrap().contains("Reloading"), "{report}");
+    let receipts = report["receipts"].as_array().unwrap();
+    // The failed shot has its receipt too.
+    let (before, after) = (&receipts[receipts.len() - 4]["state"], &receipts[receipts.len() - 2]["state"]);
+    assert_eq!((ammo(before), ammo(after)), (3, 2), "one stone a shot");
+    let ballista = &after["settlement"]["simulation"]["buildings"][1];
+    assert_eq!(ballista["kind"], "ballista", "{ballista}");
+    let (at, aim) = (&ballista["position"], &ballista["turret"]["aim"]);
+    let d = |i: usize| aim[i].as_f64().unwrap() - at[i].as_f64().unwrap();
+    assert!(d(0).abs() < 0.05 && (d(1) - 3.8).abs() < 0.05, "turned to the reticle at the range: {aim} from {at}");
+    assert!(after["settlement"]["balances"].as_object().unwrap().values().all(|b| b["conserved"] == true));
+}
+
+/// The elder builds a ballista and possesses it, with no stone in it:
+/// `settlement_fireball` throws a fireball at the reticle anyway (it costs
+/// none), which comes down and sets the ground alight; a second one right
+/// after fails while the elder's fireball cooldown runs.
+#[test]
+fn the_elder_throws_a_fireball_from_a_possessed_ballista() {
+    let walk = |x, z| Command::Walk { position: [x, z] };
+    let target = |prompt: &str| Command::SettlementInteractTarget { prompt: Some(prompt.into()) };
+    let stock = |depot: &str, item: &str, units| Command::SettlementStock { depot: depot.into(), item: item.into(), units };
+    let report = run_for(
+        vec![
+            Command::Scene { scene: "sacred-tree".into() },
+            stock("tree_wood", "wood", 4),
+            stock("tree_stone", "stone", 2),
+            Command::SettlementBuild { kind: Some("ballista".into()) },
+            walk(3.0, 1.0),
+            walk(3.0, 0.0),
+            Command::SettlementPlaceBlueprint { kind: None, position: None },
+            walk(-1.7, 2.4),
+            Command::SettlementInteract,
+            walk(2.0, -0.6),
+            target("DELIVER 2 WOOD"),
+            Command::SettlementInteract,
+            target("INSTALL FOUNDATION"),
+            Command::SettlementInteract,
+            target("DELIVER 2 WOOD"),
+            Command::SettlementInteract,
+            walk(1.7, 2.4),
+            Command::SettlementInteract,
+            walk(2.0, -0.6),
+            target("DELIVER 2 STONE"),
+            Command::SettlementInteract,
+            target("INSTALL MECHANISM"),
+            Command::SettlementInteract,
+            Command::SettlementBoard { building: 1 },
+            Command::Inspect,
+            Command::SettlementFireball { x: 2.0, y: 1.0 },
+            Command::Wait { frames: 30 },
+            Command::Inspect,
+            Command::SettlementFireball { x: 1.0, y: 0.0 },
+        ],
+        30,
+        2400,
+    );
+    assert_eq!(report["status"], "failed", "{report}");
+    assert!(report["error"].as_str().unwrap().contains("Fireball ready in"), "{report}");
+    let receipts = report["receipts"].as_array().unwrap();
+    let (before, after) = (&receipts[receipts.len() - 5]["state"], &receipts[receipts.len() - 2]["state"]);
+    assert_eq!(before["settlement"]["burst"]["ready"], true, "{}", before["settlement"]["burst"]);
+    assert!(before["settlement"]["burst"]["fireball_to"].is_array());
+    let burst = &after["settlement"]["burst"];
+    assert_eq!(burst["ready"], false, "{burst}");
+    assert!(burst["fireball_cooldown"].as_f64().unwrap() > 15.0, "{burst}");
+    let simulation = &after["settlement"]["simulation"];
+    let fires = simulation["fires"].as_array().expect("a fire on the ground");
+    assert_eq!(fires.len(), 1, "{simulation}");
+    let (at, fire) = (&simulation["buildings"][1]["position"], &fires[0]["position"]);
+    let d = |i: usize| fire[i].as_f64().unwrap() - at[i].as_f64().unwrap();
+    assert!((d(0) - 2.0).abs() < 0.05 && (d(1) - 1.0).abs() < 0.05, "at the reticle: {fire} from {at}");
+    assert!(after["settlement"]["balances"].as_object().unwrap().values().all(|b| b["conserved"] == true));
+}
+
 /// Possessing the Wood Gatherer, `settlement_burst` puts five units in its
 /// output at once; a second right after fails with the cooldown left, and
 /// once the cooldown is over (the elder waiting outside, so the output has
@@ -1107,6 +1241,11 @@ fn the_happy_path_plays_from_a_fresh_start() {
 
     let report = run_for(steps, FPS, 6000);
     assert_eq!(report["status"], "passed", "{report}");
+    // All of it is played in the map's calm start, before its first wave
+    // (210 s): no ghoul gets in the way.
+    let ticks = report["state"]["sim_tick"].as_u64().unwrap();
+    eprintln!("the happy path took {} s", ticks / 60);
+    assert!(ticks < 210 * content::TICKS_PER_SECOND as u64, "the happy path took {} s", ticks / 60);
     let receipts = report["receipts"].as_array().unwrap();
     let sim = |i: usize| &receipts[i]["state"]["settlement"]["simulation"];
     let building = |i: usize, b: usize| &sim(i)["buildings"][b];

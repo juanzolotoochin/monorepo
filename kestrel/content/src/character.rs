@@ -27,7 +27,8 @@ pub enum Brain {
     Hauler,
     /// Driven by the player sitting in it; idle without one.
     Vehicle,
-    /// Staffs the buildings of its job. Carries nothing and can't be hurt.
+    /// Staffs the buildings of its job. Carries nothing; its `sprite`
+    /// section, if any, gives it health and a respawn delay.
     Sprite,
 }
 
@@ -55,6 +56,38 @@ pub struct CharacterDef {
     /// `rules_hash` adds it when any character has one.
     #[serde(skip)]
     pub vehicle: Option<VehicleDef>,
+    /// How a FollowRoute character with an `attack` turns on an elder or
+    /// sprite who comes close, and when it gives up (Sacred Tree, B5).
+    /// Without it, it keeps to its route. Left out of the encoding like
+    /// `attack`; `rules_hash` adds it when any character has one.
+    #[serde(skip)]
+    pub chase: Option<ChaseDef>,
+    /// A Sprite character's health and how long it stays dead (Sacred
+    /// Tree, B6). Without it, a sprite can't be hurt. Left out of the
+    /// encoding like `attack`; `rules_hash` adds it when any character has
+    /// one.
+    #[serde(skip)]
+    pub sprite: Option<SpriteDef>,
+}
+
+/// A sprite's health, in simulation units (`SACRED_TREE_BALLISTA.md`, B6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpriteDef {
+    /// Hits an enemy's swings take before it dies.
+    pub health: u32,
+    /// Ticks from its death until it is back beside the tree.
+    pub respawn: u64,
+}
+
+/// A threat's chase, in simulation units (`SACRED_TREE_BALLISTA.md`, B5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChaseDef {
+    /// Meters: it turns on the nearest elder or sprite it can see this close.
+    pub detect: Fx,
+    /// Meters: it gives up on its quarry once it is farther than this.
+    pub leash: Fx,
+    /// Ticks between two looks for a quarry.
+    pub look: u64,
 }
 
 /// How a vehicle drives over the ground, in simulation units. Its top
@@ -343,6 +376,25 @@ pub(crate) struct SimFile {
     abilities: Option<Vec<AbilityFile>>,
     attack: Option<ThreatAttackFile>,
     vehicle: Option<VehicleFile>,
+    chase: Option<ChaseFile>,
+    sprite: Option<SpriteFile>,
+}
+
+/// A Sprite character's `sprite`: health, and 60 Hz frames dead.
+#[derive(Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct SpriteFile {
+    health: Option<u32>,
+    respawn: Option<u64>,
+}
+
+/// A FollowRoute character's `chase`: meters and 60 Hz frames.
+#[derive(Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct ChaseFile {
+    detect: Option<Fx>,
+    leash: Option<Fx>,
+    look: Option<u64>,
 }
 
 /// A Vehicle character's `vehicle`: meters, m/s, m/s² and degrees per second.
@@ -466,7 +518,9 @@ macro_rules! merge_fields {
     };
 }
 
-merge_fields!(SimFile { brain, abilities } { body, movement, health, avatar, carry, attack, vehicle });
+merge_fields!(SimFile { brain, abilities } { body, movement, health, avatar, carry, attack, vehicle, chase, sprite });
+merge_fields!(SpriteFile { health, respawn } {});
+merge_fields!(ChaseFile { detect, leash, look } {});
 merge_fields!(VehicleFile { acceleration, braking, reverse, turn, wheelbase, track, climb, lift, gravity, seat } {});
 merge_fields!(ThreatAttackFile { damage, reach, windup, cooldown, knockback } {});
 merge_fields!(CarryFile { transfer } {});
@@ -567,7 +621,40 @@ pub(crate) fn character_def(file: SimFile) -> Result<CharacterDef, String> {
         return Err("only Vehicle characters have `vehicle`".into());
     }
     let vehicle = file.vehicle.map(vehicle_def).transpose()?;
-    Ok(CharacterDef { brain, body: BodyDef { radius }, movement: MovementDef { walk, run }, health, avatar, carry, abilities, attack, vehicle })
+    if file.chase.is_some() && attack.is_none() {
+        return Err("only FollowRoute characters with an `attack` have `chase`".into());
+    }
+    let chase = file.chase.map(chase_def).transpose()?;
+    if file.sprite.is_some() && brain != Brain::Sprite {
+        return Err("only Sprite characters have `sprite`".into());
+    }
+    let sprite = file.sprite.map(sprite_def).transpose()?;
+    Ok(CharacterDef { brain, body: BodyDef { radius }, movement: MovementDef { walk, run }, health, avatar, carry, abilities, attack, vehicle, chase, sprite })
+}
+
+fn sprite_def(file: SpriteFile) -> Result<SpriteDef, String> {
+    let health = need(file.health, "sprite.health")?;
+    if !(1..=1000).contains(&health) {
+        return Err("sprite.health must be in 1..=1000".into());
+    }
+    let respawn = need(file.respawn, "sprite.respawn")?;
+    if !(1..=36000).contains(&respawn) {
+        return Err("sprite.respawn must be 1..=36000 frames".into());
+    }
+    Ok(SpriteDef { health, respawn: ticks_from_60hz(respawn) })
+}
+
+fn chase_def(file: ChaseFile) -> Result<ChaseDef, String> {
+    let detect = need(file.detect, "chase.detect")?;
+    let leash = need(file.leash, "chase.leash")?;
+    if !within(detect, Fx::from_ratio(1, 10), Fx::from_int(20)) || !within(leash, detect, Fx::from_int(20)) {
+        return Err("chase needs 0.1 <= detect <= leash <= 20 m".into());
+    }
+    let look = need(file.look, "chase.look")?;
+    if !(1..=600).contains(&look) {
+        return Err("chase.look must be 1..=600 frames".into());
+    }
+    Ok(ChaseDef { detect, leash, look: ticks_from_60hz(look) })
 }
 
 fn vehicle_def(file: VehicleFile) -> Result<VehicleDef, String> {

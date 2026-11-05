@@ -110,11 +110,14 @@ fn apply_actor_pivots(
     }
 }
 /// The controls help line in a town (the Sacred Tree).
-pub const TOWN_HELP: &str = "WASD MOVE / SHIFT RUN / E INTERACT / B BUILD / Q DROP / G POSSESS";
+pub const TOWN_HELP: &str = "WASD MOVE / SHIFT RUN / E INTERACT / B BUILD / Q DROP / G POSSESS / Z/C ROTATE";
 /// The town's help line while the elder possesses a building
 /// (`settlement::town_help`): leaving, and Burst. Building waits until
 /// the elder leaves (`input::town::build`).
-pub const TOWN_POSSESSED_HELP: &str = "E OR G LEAVE / R BURST";
+pub const TOWN_POSSESSED_HELP: &str = "E OR G LEAVE / R BURST / Z/C ROTATE";
+/// The town's help line while the elder possesses a ballista (B3, B4):
+/// firing at the reticle under the mouse, the fireball, and leaving.
+pub const TOWN_BALLISTA_HELP: &str = "MOUSE AIM / LMB FIRE / R FIREBALL / E OR G LEAVE / Z/C ROTATE";
 
 /// Dresses a world in its scene's style: materials, lights, fog, the
 /// environment and the player's styled parts. Runs when the world starts

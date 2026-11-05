@@ -156,6 +156,7 @@ const BUILTIN: &[(&str, &str)] = &[
     ("character/ghoul.ron", include_str!("../data/character/ghoul.ron")),
     ("character/ghoul_brute.ron", include_str!("../data/character/ghoul_brute.ron")),
     ("character/ghoul_forest.ron", include_str!("../data/character/ghoul_forest.ron")),
+    ("character/ghoul_sacred_tree.ron", include_str!("../data/character/ghoul_sacred_tree.ron")),
     ("character/ox.ron", include_str!("../data/character/ox.ron")),
     ("character/rover.ron", include_str!("../data/character/rover.ron")),
     ("character/runner.ron", include_str!("../data/character/runner.ron")),
@@ -291,6 +292,14 @@ fn rules_hash(names: &Names, rules: &Rules) -> u64 {
     .expect("encode rules");
     if vehicles.iter().any(Option::is_some) {
         bytes.extend(postcard::to_allocvec(&vehicles).expect("encode vehicles"));
+    }
+    let chases: Vec<_> = rules.characters.iter().map(|c| c.chase).collect();
+    if chases.iter().any(Option::is_some) {
+        bytes.extend(postcard::to_allocvec(&chases).expect("encode chases"));
+    }
+    let sprites: Vec<_> = rules.characters.iter().map(|c| c.sprite).collect();
+    if sprites.iter().any(Option::is_some) {
+        bytes.extend(postcard::to_allocvec(&sprites).expect("encode sprites"));
     }
     bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, &byte| (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3))
 }
@@ -552,6 +561,44 @@ mod tests {
         assert_eq!(attack_of("ghoul_brute"), attack_of("ghoul"), "variants inherit it");
         assert_eq!(attack_of("ghoul_forest"), attack_of("ghoul"));
         assert!(attack_of("exosuit").is_none());
+    }
+
+    #[test]
+    fn chases_parse_and_only_the_sacred_tree_ghoul_has_one() {
+        use scenario::ticks_from_60hz;
+        let chase = "chase: (detect: 3.0, leash: 5.0, look: 30)";
+        let content = characters(&[("character/x.ron", &with_attack(&format!("{ATTACK}, {chase}")))]).unwrap();
+        let def = content.rules.characters[0].chase.unwrap();
+        assert_eq!((def.detect, def.leash, def.look), (Fx::from_int(3), Fx::from_int(5), ticks_from_60hz(30)));
+        let without_attack = characters(&[("character/x.ron", &GHOUL.replace("breach_damage: 1)", &format!("breach_damage: 1), {chase}")))]);
+        assert!(without_attack.unwrap_err().message.contains("chase"));
+        let short_leash = characters(&[("character/x.ron", &with_attack(&format!("{ATTACK}, chase: (detect: 3.0, leash: 2.0, look: 30)")))]);
+        assert!(short_leash.unwrap_err().message.contains("leash"));
+        let builtin = Content::builtin();
+        let chase_of = |name: &str| builtin.rules.characters[builtin.names.character_index(name).unwrap() as usize].chase;
+        assert!(chase_of("ghoul_sacred_tree").is_some());
+        for name in ["ghoul", "ghoul_brute", "ghoul_forest"] {
+            assert!(chase_of(name).is_none(), "{name} keeps to its route");
+        }
+        let attack_of = |name: &str| builtin.rules.characters[builtin.names.character_index(name).unwrap() as usize].attack;
+        assert_eq!(attack_of("ghoul_sacred_tree"), attack_of("ghoul_forest"), "it swings as the forest's");
+    }
+
+    #[test]
+    fn a_sprite_section_parses_and_only_sprites_have_one() {
+        use scenario::ticks_from_60hz;
+        let sprite = "(sim: (brain: Sprite, body: (radius: 0.22), movement: (walk: 1.6), sprite: (health: 3, respawn: 900)), view: (skin: \"worker\"))";
+        let content = characters(&[("character/x.ron", sprite)]).unwrap();
+        let def = content.rules.characters[0].sprite.unwrap();
+        assert_eq!((def.health, def.respawn), (3, ticks_from_60hz(900)));
+        let bad = |ron: &str| characters(&[("character/x.ron", ron)]).unwrap_err().message;
+        assert!(bad(&sprite.replace("health: 3", "health: 0")).contains("sprite.health"));
+        assert!(bad(&sprite.replace(", respawn: 900", "")).contains("sprite.respawn"));
+        assert!(bad(&GHOUL.replace("breach_damage: 1)", "breach_damage: 1), sprite: (health: 3, respawn: 900)")).contains("Sprite"));
+        let builtin = Content::builtin();
+        let sprite_of = |name: &str| builtin.rules.characters[builtin.names.character_index(name).unwrap() as usize].sprite;
+        assert_eq!(sprite_of("sprite").map(|s| (s.health, s.respawn)), Some((3, ticks_from_60hz(900))));
+        assert!(sprite_of("ghoul_forest").is_none());
     }
 
     #[test]

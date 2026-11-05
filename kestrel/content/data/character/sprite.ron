@@ -1,10 +1,14 @@
-// A forest sprite that staffs a building of its job. It carries nothing and
-// can't be hurt. Drawn by the worker skin until it has its own.
+// A forest sprite that staffs a building of its job. It carries nothing.
+// Out of a building, an enemy's swings hurt it: three hits kill it, and it
+// comes back beside the tree 900 frames (15 s) later, keeping its job
+// (SACRED_TREE_BALLISTA.md, B6). Drawn by the worker skin until it has its
+// own.
 (
     sim: (
         brain: Sprite,
         body: (radius: 0.22),
         movement: (walk: 1.6),
+        sprite: (health: 3, respawn: 900),
     ),
     view: (skin: "worker"),
 )

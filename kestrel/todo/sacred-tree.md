@@ -4,6 +4,24 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
+## A possessed ballista fires faster
+
+- **Status:** open
+- **Why:** possessing a gatherer speeds it up, but possessing a ballista
+  only adds aiming and the fireball (ballista design, "Settled").
+- **What to do:** decide after the playtest whether a possessed ballista
+  also fires faster.
+- **Found in:** ballista design.
+
+## Repairing buildings
+
+- **Status:** open
+- **Why:** a broken building is lost back to a site, and nothing repairs a
+  damaged one (B8).
+- **What to do:** decide after the playtest, for example delivering 1 wood
+  to restore health.
+- **Found in:** ballista design.
+
 ## Art for the Sacred Tree
 
 - **Status:** open
@@ -55,6 +73,8 @@ its milestones, in order; one PR per milestone.
   attack command do nothing there.
 - **Where:** `kestrel/content/src/scenario.rs`,
   `kestrel/sim/src/settlement/combat.rs`, `kestrel/app/src/input/gameplay.rs`.
+- **Since the view turn:** keyboard Z and C turn the town's view, so
+  only X, V and controller Y could still choose a weapon there.
 - **Found in:** M1.1.
 
 ## Interact feedback and the mouse
@@ -87,6 +107,513 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M2.2.
 
 ## Done
+
+### Rotating the town camera
+
+- **Status:** done (branch `kestrel-sacred-tree-ballista`)
+- **Why:** the camera looks from +x, +z at a fixed angle, so the tree's
+  canopy hides what stands behind it (a ballista north of the tree).
+- **What to do:** turn the orthographic camera in 90° steps in the town,
+  keeping input screen-relative; view only.
+- **Where:** `kestrel/app/src/input/town.rs` (`ViewTurn`),
+  `input/gameplay.rs` (`camera_relative`, `view_yaw`), `input/mod.rs`,
+  `effects.rs` (`camera_feedback`).
+- **Found in:** user request after M5.
+- **Done:** in a town, Z and controller D-pad left orbit the camera a
+  quarter turn counter-clockwise around its target (seen from above), C
+  and D-pad right clockwise, smoothstepped over 0.25 s at the same zoom
+  and height (`input::town::ViewTurn`, kept in the dispatcher's town
+  state, so every world starts at the default angle; never saved; no sim,
+  command or format change). There is no reduced-motion setting to honor
+  yet. Z/C pick no weapon in a town, and the D-pad's left and right cycle
+  no targets there (the town has one target, the sim's); elsewhere both
+  keep what they did. `camera_relative` takes the live yaw (eased
+  mid-turn), so WASD, the stick, the right stick moving the ballista
+  reticle and the job menu's ring stay screen-relative; mouse picking, the
+  reticle under the mouse, labels, prompts and cards project through the
+  live camera, the ghost stands in front of the elder, and the canopy's
+  fade tests the segment from the live camera, so it fades for whatever it
+  hides from the new angle. Lights and shadows stay world-fixed. The help
+  lines end in "Z/C ROTATE". The control protocol has `camera_rotate
+  {turns}`, and the demo pauses the sim, turns half way round to show the
+  ballista behind the tree, and turns back. Tested: Z/C and the D-pad turn
+  in a town and pick weapons and targets elsewhere, `camera_relative`
+  matches the turned camera's up and right at each quarter turn and eases
+  mid-turn, W walks up the turned screen in the Sacred Tree, and the
+  canopy hides the other side when turned half way round. Cosmetic, left
+  as is: pines at the clearing's edge can hide things from any angle, as
+  they could before, and only the tree's canopy fades.
+
+### M5.6 Waves on the map, soak and tuning
+
+- **Status:** done (branch `kestrel-sacred-tree-ballista`)
+- **Why:** the defence has to be playable on the Sacred Tree map.
+- **What to do:**
+  - Add a calm start, then ghoul waves on a timer, in
+    `sacred_tree_supply.ron`.
+  - Extend the soak test with waves, with `validate` every tick.
+  - Update the demo and capture screenshots.
+  - Tune the numbers so a first play isn't lost early.
+- **Where:** `kestrel/app/assets/levels/sacred_tree*.ron`,
+  `kestrel/sim/src/settlement/soak_tests.rs`, `demos/sacred_tree.json`.
+- **Found in:** ballista design.
+- **Done:** waves: `sacred_tree_supply.ron` has a calm start of 210 s
+  (3.5 min), then a wave every 90 s of 3, 4, 5, 7, 8 and 8
+  `ghoul_sacred_tree`s, the last at 660 s. Why 3.5 min: the happy path
+  (Stone Gatherer, a second Wood Gatherer, possession and Burst) takes
+  175 s of game time when scripted, and a first player also needs a
+  ballista (4 wood, 2 stone) and stone in it. A scenario holds at most 8
+  waves (`Scenario::validate`), so each entry is a lane sending one ghoul a
+  wave (`every: 90`) from its `first` on: three north lanes 2.5 s apart
+  from the first wave, a fourth from the second, a west lane from the
+  third, a fifth north and an east lane from the fourth and a second east
+  lane from the fifth. North comes from (0, -8.5) to (0, -1.8); west from
+  (-8.5, -2.5) and east from (8.5, -2.5) to (∓1.8, -0.6): all outside the
+  trunk's disc. Routes: a blueprint going down now replans every threat on
+  its way to the tree from where it stands, and resets the routes of waves
+  still sending (`Settlement::replan_routes`, `chase.rs`, called from
+  `place_blueprints`), so ghouls walk round a new site instead of through
+  it; skirting a building at the route's 0.2 m clearance is within their
+  0.9 m reach, so they still attack it in passing (the M5.5 test "breaks a
+  building that blocks its way" became
+  `a_ghoul_walks_round_a_building_put_on_its_way_and_breaks_it_in_passing`).
+  `give_up`/`replan_route` are shared with `threat_goals`. Chasers of a
+  leaving player: `Settlement::leave` takes the terrain; a leaver's chasers
+  give up and plan their way to the tree, and `remap_agents` shifts the
+  other `Goal::Chase(Quarry::Agent)`s
+  (`combat_tests::chasers_of_a_leaving_player_go_back_and_the_others_follow_their_quarry`;
+  the task "Chasers of a player who leaves" is done). Tuning, measured by
+  `waves_tests` on the real waves (a ballista manned by a sprite, stone
+  topped up from the tree):
+
+  | Number | Before | After | Why |
+  |---|---|---|---|
+  | Waves | none | 210 s calm, then 3/4/5/7/8/8 every 90 s | Ignored, the tree falls in the fifth wave (581 s); one ballista reloaded once mid-wave keeps 15/20; two stocked between waves stop all 35. |
+  | Fireball cooldown | 20 s | 25 s | About one throw a wave, two in a long one. |
+  | Fireball impact | 2 within 0.8 m | 1 within 1.0 m | 2 killed any ghoul (2 health) outright: a wave-clear button. |
+  | Fire | 1.5 m for 6 s | 1.5 m for 4 s | The column walked into a 6 s fire one after another. |
+  | Burn | 1 every 1 s, linger 3 s | 1 every 1.5 s, linger 1 s | A ghoul crossing the fire took 3–5 hits. Now a fireball at a column's head kills about 2 of 6 and hurts one (was 4 of 6). |
+  | Building health | 10 | 10 (kept) | An empty ballista on a lane is broken in a big wave; a stocked one isn't. Losing one is the stake. |
+  | Ghoul detect / leash | 3 m / 5 m | kept | The soak sees 4 sprite deaths in 12 min, all back after 15 s; buildings shelter. |
+  | Sprite health / return | 3 / 15 s | kept | As above. |
+  | Ballista ammo / range | 10 / 3.8 m | kept | Ammo is the binding limit (range 4.5 changed nothing): a ghoul takes 2 bolts, so a 10-stone store covers 5 and the bigger waves need a reload mid-wave or a second ballista. That is the "defence matters, not every second" lever, and it ties defence to stone. |
+
+  Soak: `soak_tests::defending_against_the_waves_strands_no_sprite` plays
+  all twelve minutes: a ballista, a Stone Gatherer on the east lane and a
+  Wood Gatherer by the north one go up in the calm start, then cycles
+  reassign the sprites, stock and man the ballista, possess it to shoot
+  and throw fireballs while ghouls are out, Burst a gatherer otherwise,
+  and rebuild what breaks (84 cycles: 6 fireballs, 13 fire kills of 27,
+  8 buildings broken, 4 sprite deaths and returns, tree 12/20). Every tick
+  validates, checks balances, no sprite waiting past a retry with a slot
+  free, and (both soaks) none dead past its return. The happy path asserts
+  it ends in the calm start (175 s). Tests that send their own enemies
+  clear the map's waves (`scenario.waves.clear()`). App: the possessed
+  building's card says "E  LEAVE" as its last line instead of a prompt
+  over the slot that hid its fireball line (`leave_prompt`); the status
+  line adds "NEXT WAVE 1:20", or "GHOULS 3" while any are out. Demo
+  `demos/sacred_tree.json`: stocks the tree, builds and loads a ballista
+  at 2× speed, waits at 4× to the first wave, Fern mans it and shoots, the
+  elder possesses it (Fern steps out), throws a fireball at the column and
+  fires four bolts, leaves, and Fern takes over. No format changed (no
+  save, input or net version bump); golden unchanged.
+- **Left open:** the "THE TREE HAS FALLEN" overlay isn't in the demo (it
+  needs 20 breaches; its test covers it). Wave lanes are a workaround for
+  the 8-wave limit; if waves grow, a wave with groups (or a higher limit)
+  would read better in content. Repair (todo "Repairing buildings") and a
+  faster possessed ballista stay for the playtest.
+
+### M5.5 Sprite health, building health and the tree
+
+- **Status:** done (branch `kestrel-sacred-tree-ballista`)
+- **Why:** enemies need something to hurt, and defence needs a stake (B6,
+  B7, B8).
+- **What to do:**
+  - **Sprites:** sprites get health. A dead sprite returns at the tree
+    after about 15 s with its job, and occupants of a building can't be
+    hit.
+  - **Buildings and sites:** they get health, about 10. An enemy with no
+    elder or sprite to chase attacks a building that blocks it or is in
+    reach.
+  - **A building at 0** becomes a site again with its parts lost, puts its
+    occupant out, and spills its output and ammo onto a ground pile.
+  - **The tree:** it has about 20 health and takes breaches. At 0, show
+    "The tree has fallen" and restart.
+- **Where:** `kestrel/sim/src/settlement/sprites.rs`, `buildings.rs`,
+  `combat.rs`, `piles.rs`, the app.
+- **Found in:** ballista design.
+- **Done:** content: a Sprite character may have a `sprite` section
+  (`content::character::SpriteDef`: health 3, respawn 900 frames, 15 s),
+  left out of the encoding like `chase` and added to `rules_hash` when any
+  has one; a building kind has `health` (default 10, written out in the
+  supply); the Sacred Tree supply has `base_health: 20` (the tree) and
+  `player_health: 6` (the elder, decided: enemies target the elder, who
+  dies and respawns as on the forest map, Burst and fireball cooldowns
+  kept). Sim: a swing names its target, `combat::SwingTarget` (`Agent` or
+  `Building`) on `Windup`, `StartSwing` and `SwingLands` (an agent hashes
+  as the bare index it did; agents sort before buildings in
+  `start_swings`). `Quarry::Building(BuildingIx)`: in `read_chase`, a
+  threat on its way to the tree with no elder or sprite to spot attacks
+  the nearest breakable building (`Settlement::breakable`: built, or a
+  site with a part in or materials delivered) whose edge is within its
+  attack's reach, or within detect and in the way of its route's next leg
+  (`spot_building`, `segment_disc` with its radius); one attacking a
+  building looks for an elder or sprite on its look ticks and turns on
+  one (buildings come second); it gives up when the building has nothing
+  left to lose or is past the leash. It steers to stop its usual distance
+  short of the building's edge and swings at the edge gap
+  (`building_gap`). Sprites: `Body` health from the character; a hit in
+  `swing_lands` takes the damage, no push (a sprite walks routes and has
+  no velocity); at 0 `hurt_sprite` releases its slot (a claim; one inside
+  is never hit), drops its plan and route and sets
+  `SpriteState::respawn_at`; a dead sprite doesn't think, walk, claim, block
+  steering or show up as an interact target, and `sprite_housekeeping`
+  puts it back at home (its start spot beside the tree), healed, with its
+  job and an empty plan, so it replans (`Event::SpriteReturned`). Shelter:
+  `swingable` and `threats_in_reach` skip an avatar seated in a building.
+  Buildings: `BuildingState::health`; at 0 `break_building` lands units
+  flying to or from it, ends carry jobs on its output or site
+  (`drop_carry`/`reserve_stock`), puts a sprite inside out at
+  `eject_spot` (it replans) and drops a claim, unseats a possessing elder
+  at `leave_spot` with the reticle back to a unit facing, then spills its
+  output (ammo too) and a site's delivered materials onto new ground piles
+  beside it, one per item (`Settlement::spill`, chosen over counting them
+  destroyed: conservation holds with no new account), and resets it to a
+  site at part 0 with empty materials, a default turret and full health;
+  the footprint stays an obstacle (`Event::BuildingStruck`,
+  `BuildingWindup`, `BuildingBroken`). The tree: `Settlement::tree_fallen`
+  (a town at base health 0); the breach that takes the last pushes
+  `Event::TreeFell` once and the waves stop spawning. `validate` checks
+  building health, that a dead sprite holds no slot, and a chaser's
+  building or windup target exists. Save format 33; input and net
+  unchanged (no command). `Threat` shrinks to 184 bytes (the windup's
+  target packs smaller). Golden: behaviour lines unchanged; the arena's
+  last state hash regenerated in its own commit (a windup encodes its
+  target's variant). App: the status line reads "SACRED TREE 20/20
+  ELDER 6/6 ..."; a damaged building's card adds "HP 7/10" (its detail
+  "Health: 7/10"); a hurt sprite's tag "ASH 2/3"; a dead sprite falls over
+  and fades in 1.5 s, its flame out and its tag "BACK IN 12 s"
+  (`SpriteActivity::Dead`, `SpriteView::dead`); a blow on a building
+  strikes sparks (Stone), a break bursts it (Pierce) and says "WOOD
+  GATHERER broken: it is a site again"; a returning sprite plays
+  Dispense. `fallen.rs`: once the tree falls an overlay says "THE TREE HAS
+  FALLEN" and takes input; R, Enter or confirm restarts the scene from
+  scratch (`Flow::restart`, single player) or leaves to the menu when
+  networked. Tests: `health_tests` (a sprite dies after three hits, lies
+  still, isn't swung at or chased, is back at home after exactly 15 s with
+  its job and takes the slot that came free; a ghoul breaks a staffed
+  gatherer without hitting its sprite, which is put out and waits, the
+  output on a ground pile; a ghoul breaks a possessed, stocked ballista
+  without hitting the elder, who is put out at the leave spot with the
+  reticle a facing, the ammo on a ground pile; a building put down on a
+  ghoul's way is attacked from beyond reach, then left as a bare site and
+  walked round to a breach; a broken site spills its materials one pile
+  per item; the elder dies after six hits and respawns at home; the tree
+  at 0 falls once and no more enemies come; balances and `validate` every
+  tick), `chase_tests` updated (a hit on a sprite and on the elder takes
+  1; a ghoul passing occupants attacks the gatherer instead and never
+  chases or swings at them), the content tests
+  `a_sprite_section_parses_and_only_sprites_have_one` and the kind's
+  health, `fallen::tests::a_fallen_tree_shows_its_overlay_and_the_scene_restarts`.
+  Demo script not changed (no waves on the map yet); a scratch copy with a
+  temporary wave past the Wood Gatherer rendered the screenshots.
+- **From M5.5 for M5.6:** a wave's route is planned once, when its first
+  enemy spawns, and threats walk it through anything built later: a
+  building on it is attacked (as it blocks), but a bare site left on it is
+  walked through (it has nothing to lose). Replanning wave routes when
+  `terrain.revision` changes may be worth it once waves run. Ghouls passing
+  within 0.9 m of a building break it (about 15 s for 10 health at one
+  ghoul's 1.45 s swing); with the WEST way past the Wood Gatherer a lone
+  ghoul broke it in the scratch demo, so wave paths and building health
+  need tuning together. The elder now has 6 health and is chased like any
+  sprite; the soak should keep them alive or let them respawn. The tree
+  falling stops the waves (`tree_fallen`); the soak should check
+  `TreeFell` isn't reached early.
+- **Left open:** a leaving player's chasers keep `Goal::Chase(Quarry::Agent)`
+  pointing at the removed index (`players::leave` remaps windups but not
+  goals; from M5.4). Single player only for now: the task "Chasers of a
+  player who leaves".
+
+### M5.4 Enemies chase, then return
+
+- **Status:** done (branch `kestrel-sacred-tree-ballista`)
+- **Why:** enemies should turn on whoever comes close, then go back to the
+  tree (B5).
+- **What to do:**
+  - About every 0.5 s, an enemy picks the nearest visible elder or sprite
+    within about 3 m and steers straight at it, using the existing swing.
+  - Past a leash of about 5 m, when the target dies, or when it leaves
+    sight, the enemy plans a fresh route to the tree from where it stands.
+  - Other scenes' enemies must behave the same, so their golden behaviour
+    lines stay unchanged. Gate the chase by character or by scenario.
+- **Where:** `kestrel/sim/src/settlement/combat.rs`, `kestrel/content/`
+  (the character's detect and leash).
+- **Found in:** ballista design.
+- **Done:** gated by character: a FollowRoute character with an `attack`
+  may have `chase` (`content::character::ChaseDef`: detect 3 m, leash
+  5 m, look 30 frames), left out of the encoding like `attack` and added
+  to `rules_hash` when any has one. Only the new `ghoul_sacred_tree`
+  (base `ghoul_forest`) has one, so the forest and arena ghouls keep their
+  routes. The sim side is `settlement::chase`, in the sprites' shape:
+  `Threat::goal` is the goal (`Goal::Tree`, the plan being `route`, or
+  `Goal::Chase(Quarry::Agent(a))`, the plan a straight line at the
+  quarry), `read_chase` invalidates and decides, `route_home` replans.
+  Stage 3: a threat on its way to the tree looks on its look ticks
+  (`(tick + id) % look == 0`, spread over threats) for the nearest
+  chaseable agent within the detect radius and in sight, lowest index on
+  a tie; a chaser checks its quarry every tick (alive, not seated or
+  inside a building, within the leash, in sight). Either sends a
+  `ThreatGoal` (a new late queue). Stage 5 (`threat_goals`, after the
+  burns) applies it; giving up plans `nav::path` from where the threat
+  stands to its wave's target (the route's last point without a wave),
+  keeping the old route if there is no way. Stage 2 stays parallel-safe:
+  `follow_route` steers a chaser at where its quarry stood at the end of
+  last tick (agents move after threats in stage 2), straight, stopping at
+  4/5 of its reach, each step only if the ground is clear at the route's
+  0.2 m clearance. "In sight" is a thin (0.02 m) line to the quarry plus a
+  clear 0.2 m walk to where the chaser would stop, so a sprite at a slot
+  spot is seen and a seen quarry is walkable. The route waits while
+  chasing (never empty, so no breach mid-chase). A chaser swings at its
+  quarry with its usual attack (`swing_at_quarry`; players keep
+  `threats_in_reach`, the same swing twice is one in `start_swings`). A
+  swing that lands on a sprite, or on a player where player combat is
+  off (the Sacred Tree has no `player_health`), is a `ThreatSwing` with
+  `hit` and no damage, no push. The behaviour digest hashes goals and
+  their routes only while any threat chases (behaviour lines unchanged;
+  state hashes regenerated in their own commit: the new character and
+  the new field). Save format 32; input and net unchanged (no command).
+  `Threat` grows to 192 bytes. `validate` checks chasers
+  (`validate_chases`). App: the threat view has `chasing` (the agent's
+  id) in snapshots; nothing new is drawn (a chaser faces where it walks).
+  Tests: `chase_tests` (leaves its route for a sprite on a look tick and
+  swings at it for no damage; not behind a wall; not a sprite inside the
+  gatherer nor the elder possessing it; gives up past the leash on the
+  elder, replans from where it stands and breaches; gives up at once out
+  of sight; a forest ghoul keeps its route; two runs hash the same), the
+  content test `chases_parse_and_only_the_sacred_tree_ghoul_has_one`.
+  No waves on the map yet, so no demo or screenshot change.
+- **From M5.4 for M5.5:** hurting a sprite goes in `swing_lands`
+  (`combat.rs`), in the branch for a sprite or a player with combat off;
+  `Quarry` takes a `Building(BuildingIx)` variant for B8, with
+  `chaseable`/`keeps`/`spot` in `chase.rs` the places to extend (a
+  building is no agent, so `swing_at_quarry`, `Windup::agent` and
+  `StartSwing::agent` need a target type then). `Body::alive` already
+  makes a dead sprite no quarry once sprites have `max_health`. The
+  elder: the Sacred Tree has no `player_health`, so a chaser's swings at
+  it do no harm but still play as hits in the app (blood, shake); decide
+  whether the elder gets health or is never chased. A seated elder put
+  out of a broken building becomes chaseable again on the next look.
+- **From M5.4 for M5.6:** waves on the map must name
+  `ghoul_sacred_tree` and target a point outside the trunk's disc (a
+  target inside an obstacle plans an empty route, and the wave never
+  spawns). Detect 3 m and leash 5 m are first guesses; a chaser stops at
+  0.72 m. The soak should walk sprites and the elder through a wave's way.
+
+### M5.3 The fireball and burning ground
+
+- **Status:** done (branch `kestrel-sacred-tree-ballista`)
+- **Why:** the possessed ballista's special ability (B4).
+- **What to do:**
+  - R (or RB) throws a fireball at the reticle, with a cooldown on the
+    elder (about 20 s). Choose a new appended command or `Burst` by
+    building kind.
+  - The fireball deals impact damage and leaves a fire patch (a new table:
+    about 1.5 m, about 6 s).
+  - Threats in a patch get a refreshed burn: 1 damage per second, until
+    about 3 s after leaving.
+  - Draw the patches and burning enemies, and add a control verb.
+- **Where:** `kestrel/sim/src/settlement/combat.rs` (or a new module),
+  `avatar.rs`, the app.
+- **Found in:** ballista design.
+- **Done:** no new command: the Burst key is the fireball in a ballista.
+  `burst_plan` (`buildings.rs`) checks the possessed kind first: a
+  ballista whose `Defence::fireball` is set returns
+  `Ability::Fireball { to }` (the reticle, `AvatarState::aim` cut to
+  range, half the range ahead before any aim), a gatherer
+  `Ability::Burst { units }`; `burst_check` returns that `Ability` now.
+  The fireball has its own cooldown, `AvatarState::fireball_ready`, kept
+  across leaving and respawning like `burst_ready` and apart from it, so
+  hopping between a ballista and a gatherer neither resets nor blocks
+  either (`BurstRefusal::FireballCooling`, appended: "Fireball ready in
+  12 s"). It costs no stone. Content: `scenario::Fireball` (cooldown 20 s,
+  speed 6 m/s, damage 2 within 0.8 m, fire radius 1.5 m for 6 s, burn 1
+  every 1 s, linger 3 s), resolved into `FireballDef`/`BurnDef`
+  (`fire.rs`). Stage 5 throws it (`throw_fireball`: `Settlement::fireballs`,
+  `Event::FireballThrown`); after the shots, `Settlement::burn` lands
+  fireballs (impact on every threat within the radius, then a
+  `FirePatch` in `Settlement::fires`, `Event::FireballLanded`), drops
+  fires on their `expires` tick, refreshes the burn (`Threat::burn`:
+  `until` the linger after the last tick in any fire, `next` hit a period
+  after catching; never stacked), and hits each burning threat once a
+  period while `next <= until`. Fire only reads threats, so elders and
+  sprites are never hurt. Hits are `Event::Hit` with `Impact::Fire`
+  (appended); kills count in `combat.kills`. The behaviour digest hashes
+  fireballs, fires and burns only when any exist (golden behaviour lines
+  unchanged; state hashes regenerated in their own commit: the new empty
+  fields add bytes). Save format 31; input and net unchanged (no
+  command). `Threat` grows to 184 bytes (`threat_size_is_pinned`). App:
+  R (keyboard) and RB (controller, where RT fires) send `Burst` in a
+  ballista; the card and HUD read "FIREBALL READY (R)" / "FIREBALL 12 s";
+  the help line "MOUSE AIM / LMB FIRE / R FIREBALL / E OR G LEAVE". Drawn
+  as glows (`settlement::fire_glows`): the fireball arcs with a trail,
+  a fire is 11 flickering flames over its disc that die down in its last
+  second, with a flickering ring (`input::hud`); a burning enemy carries
+  two flames; the landing bursts in sparks (`effects::deflection`). Fire
+  hits don't bleed; a burn tick is silent, a fire kill sounds as any; the
+  throw plays `Toss`, the landing `LaserImpact`. Control verb
+  `settlement_fireball { x, y }`; the snapshot's `settlement.burst` has
+  `fireball_cooldown` and `fireball_to`, the simulation `fires`,
+  `fireballs` and a threat's `burning`. Tests: `fire_tests` (throw at the
+  reticle, own cooldown and its refusals, kept over a gatherer Burst and a
+  respawn; impact damage and a kill; patch radius and expiry; a burn's
+  hits a period apart until the linger; two fires refresh, not stack, and
+  leaving ends it after the linger; fire spares the elder and sprites;
+  two runs match and a replay predicts no event),
+  `input::tests::the_fire_keys_work_only_while_possessing_a_ballista` (RB
+  is the Burst key there), `control::tests::the_elder_throws_a_fireball_from_a_possessed_ballista`.
+  Demo script not changed (the map has no waves yet; a scratch copy with a
+  temporary wave rendered the screenshots).
+- **From M5.3 for M5.4:** a threat chasing an elder or sprite keeps its
+  `burn`; chasing changes nothing in `Settlement::burn`, which reads only
+  positions. A fire is a good place to lure a chaser.
+- **From M5.3 for M5.5:** fire stays enemies-only once sprites and
+  buildings get health: `fire_hit` reads `threats` only. A ballista broken
+  back into a site has no fireball (`burst_plan` needs a built building);
+  fireballs in flight from it still land (they keep their `FireballDef`).
+- **From M5.3 for M5.6:** the soak with waves should throw fireballs too
+  (a Burst in a possessed ballista every 20 s), so burns and kills run
+  under `validate`. Fireball numbers (20 s, 2 + 1/s, 1.5 m, 6 s) are first
+  guesses; in the scratch demo a fireball ahead of a 6-ghoul column killed
+  4 of them. The card's third line ("FIREBALL 17 s") sits under the
+  "E LEAVE" prompt, as M5.2's left-open note says.
+
+### M5.2 Aiming and firing while possessing
+
+- **Status:** done (branch `kestrel-sacred-tree-ballista`)
+- **Why:** the elder's reward for possessing a ballista is aiming (B3).
+- **What to do:**
+  - While seated in a ballista, the avatar's aim point is the reticle,
+    clamped to range, drawn in the app.
+  - `Attack` fires a bolt there, at most once per period.
+  - Left mouse fires; on a controller, the right stick aims and RT fires.
+  - The possessed ballista stops its own targeting.
+- **Where:** `kestrel/sim/src/settlement/avatar.rs`, `buildings.rs`,
+  `kestrel/app/src/input/town`.
+- **Found in:** ballista design.
+- **Done:** while the elder sits in a ballista, `AimAvatar` keeps the
+  reticle in `AvatarState::aim` as an offset from the ballista, cut to its
+  range (`BuildingKind::reticle`); leaving turns it back into a unit
+  facing. `Attack` there pushes an `ElderFire` action message (no new
+  command), and stage 5 (`Settlement::elder_fire`, after Burst) shoots
+  through `launch_shot` if `fire_plan` allows it: the elder still in the
+  slot, stone in the store, the period over. Its bolt has no `target`
+  (`launch_shot` takes an `Option` now) and hits whatever it meets on the
+  way. Spam within the period and a second `Attack` on one tick do
+  nothing; a seated elder never swings. `ready_to_shoot` needs
+  `Occupant::Sprite`, so a possessed ballista picks no targets.
+  `Settlement::fire_check` (`FireRefusal`: `NotInBallista`, `NoAmmo`,
+  `Reloading`) is the app's check. Prediction needed nothing: the replay
+  runs the same seated arm (tested). App: `input::town::aim_reticle`
+  follows the mouse's ground point, or the right stick moves it (4 m/s),
+  and sends `AimAvatar` when it moves 5 cm; `input::town::fire` sends an
+  `Attack` at the reticle whenever `fire_check` passes, one per confirmed
+  tick, while left mouse or RT is held (`Gameplay::fire_held`), so holding
+  repeats at the period; a fresh press on an empty ballista says "No
+  ammo: bring stone". RT fires only in a ballista (it still Bursts in a
+  gatherer); R still Bursts and a ballista refuses it ("This building has
+  no Burst"). `lockstep::attack_input` stands down while seated in a
+  building. The HUD draws the range ring, the reticle and a faint line of
+  fire; the turret turns to the elder's reticle (`legacy`); the help line
+  reads "MOUSE AIM / LMB FIRE / E OR G LEAVE". Control verb
+  `settlement_fire { x, y }` (meters from the ballista). Tests:
+  `ballista_tests` (possessed doesn't auto-fire, reticle clamped, once a
+  period, bolt hits on the way, no ammo no shot, replay matches),
+  `input::tests::the_fire_keys_work_only_while_possessing_a_ballista`,
+  `control::tests::the_elder_fires_a_possessed_ballista_at_the_reticle`
+  (builds, loads, possesses and fires one). No format changed: the
+  reticle lives in an existing field and `ElderFire` hashes only when
+  sent; golden file unchanged. Demo script not changed (it builds no
+  ballista; a scratch copy with one rendered the screenshot).
+- **From M5.2 for M5.3:** R/RB are free in a ballista: R reaches
+  `Edge::Burst` → `town::burst` → `NoBurst` today, RB is the lift. The
+  fireball can aim at `AvatarState::aim` (the reticle offset) from the
+  seated arm in `avatar::act`, as `Attack` does, and reuse
+  `possessing_ballista` for its keys and the help line.
+- **From M5.2 for M5.5:** a seated elder put out of a broken ballista
+  should turn its aim back into a facing, as leaving does
+  (`avatar::act`, the `Seat::Building` arm); `fire_plan` already refuses
+  a site.
+- **Left open:** the "E LEAVE" prompt sits over the possessed card's
+  last line (seen in the M5.2 screenshot; it was so before). The reticle
+  is drawn on the flat ground plane (y 0), fine on this map.
+
+### M5.1 The ballista building and its ammo
+
+- **Status:** done (branch `kestrel-sacred-tree-ballista`)
+- **Why:** a defence building that fires only while occupied
+  ([ballista design](../SACRED_TREE_BALLISTA.md), B1, B2).
+- **What to do:**
+  - Extract target picking and bolt launching from `aim_defender` and
+    `fire` into shared helpers. The Woodland Ballista keeps its behaviour:
+    the golden file's behaviour lines must not change.
+  - Add a ballista building kind with a `defence` section in content, and
+    an `Only(stone)` ammo store filled by interact like a site delivery.
+  - A built, occupied ballista with ammo fires at the nearest enemy
+    through the helpers, one stone per bolt.
+  - Add a "Man Ballista" sprite job.
+  - The card shows ammo, and "NO AMMO" when empty.
+  - Put ammo in `balances` and `validate`.
+  - Add it to the build menu and the Sacred Tree supply.
+- **Where:** `kestrel/sim/src/settlement/combat.rs`, `buildings.rs`,
+  `sprites.rs`, `interact.rs`, `kestrel/content/src/scenario.rs`,
+  `kestrel/app/assets/levels/sacred_tree_supply.ron`, the app's town
+  drawing and job menu.
+- **Found in:** ballista design.
+- **Done:** the target picking and shot launching are
+  `Settlement::pick_target` and `Settlement::launch_shot` (`combat.rs`),
+  which `aim_defender`/`fire` and the building ballista both call (golden
+  file unchanged, behaviour lines and state hashes alike). A building kind
+  has either a `product` or a `defence` (`content::scenario::Defence`:
+  ammo, ammo cap, range, period, damage, projectile speed, muzzle height,
+  projectile kind); the supply's `ballista` (BALLISTA, `turret` skin,
+  radius 0.7) is the Woodland Ballista's numbers with stone, cap 10, built
+  from foundation 2 wood and mechanism 2 wood + 2 stone. Its ammo store
+  is the building's `output` (`Kinds::Only(stone)`, capacity the ammo
+  cap; `BuildingKind::store_capacity`/`store_kinds`), so balances,
+  `validate`, transfers and saving needed nothing new: interact while
+  carrying stone delivers as much as fits (`Interaction::Bundle`,
+  Deposit, "LOAD 5 STONE"), a pickup is `DepositOnly`, wood is
+  `WrongPile`, and a full store is no target. A built ballista with any
+  occupant, stone in the store and its period over (`ready_to_shoot`,
+  `BuildingState::turret`) aims in stage 3 (`aim_buildings`, a
+  `BuildingFire` message, a new late queue) and shoots in stage 5
+  (`building_fire`), one stone spent a shot, `Event::BuildingShot` (the
+  app plays it as a defender's `Shot`). A stock shot ignores the obstacle
+  centred on its launch point (`fly`), so it leaves its own footprint.
+  Possessed, it shoots as staffed (the simpler choice). A ballista has no
+  Burst (`BurstRefusal::NoBurst`, appended). App: the turret turns and
+  recoils (`legacy::Building::turret`), the card says "MANNED / ASH",
+  "AMMO 7/10 STONE" or "NO AMMO" (`BuildingStatus::NoAmmo`), the job menu
+  has "MAN BALLISTA". Tests: `ballista_tests` (unmanned or empty never
+  fires, nearest first at its period one stone a shot, out of ammo stops
+  until stocked, delivery caps), `save::tests::a_town_saved_while_a_ballista_shoots_continues`
+  (save format 30). No new command, target or control verb: the existing
+  `settlement_interact`, `settlement_sprite_job`/`settlement_job_menu` and
+  `settlement_build` drive it; the state's `buildings[i].output` is its
+  ammo and `turret` its aim.
+- **From M5.1 for M5.2:** "the possessed ballista stops its own
+  targeting" is one line in `ready_to_shoot` (`buildings.rs`): require
+  `Occupant::Sprite`, then fire the elder's `Attack` through
+  `launch_shot` with the same `Launcher` and `turret.ready_at`.
+- **From M5.1 for M5.3:** `burst_plan` refuses a ballista with `NoBurst`;
+  the fireball can take that branch by building kind.
+- **From M5.1 for M5.5/B8:** a broken ballista's ammo is its `output`, so
+  spilling the output spills the ammo; reset `turret` when it becomes a
+  site (`validate_buildings` only checks a gatherer's turret is default).
+- **From M5.1 for M5.6:** no wave spawns on the map yet; tests push a
+  staggered `Threat` by hand (`ballista_tests::threat`), the save test
+  adds a scenario wave. Threats still read `waves[t.wave]` in the app's
+  view, so a hand-pushed threat in a scene with no waves would not draw.
 
 ### M4.1 Happy path and stability
 

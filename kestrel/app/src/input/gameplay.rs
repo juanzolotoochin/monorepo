@@ -21,11 +21,19 @@ use crate::lockstep::{PlayerControl, SessionService, WorldMirror};
 use crate::scene_view::SceneView;
 
 /// The camera's isometric basis, shared by keys and stick: input x is
-/// screen right, input y screen up.
-pub fn camera_relative(input: Vec2) -> Vec3 {
-    let right = Vec3::new(1.0, 0.0, -1.0).normalize();
-    let up = Vec3::new(-1.0, 0.0, -1.0).normalize();
+/// screen right, input y screen up, with the view turned `yaw` radians
+/// counter-clockwise (seen from above) from the default (`town::ViewTurn`).
+pub fn camera_relative(input: Vec2, yaw: f32) -> Vec3 {
+    let turn = Quat::from_rotation_y(yaw);
+    let right = turn * Vec3::new(1.0, 0.0, -1.0).normalize();
+    let up = turn * Vec3::new(-1.0, 0.0, -1.0).normalize();
     right * input.x + up * input.y
+}
+
+/// The view's yaw now, for [`camera_relative`]: the town's turn, 0
+/// elsewhere. Mid-turn it is the eased yaw the camera shows.
+pub fn view_yaw(world: &World) -> f32 {
+    world.get_resource::<Dispatcher>().map_or(0.0, |d| d.town.view.yaw())
 }
 
 /// A transfer waiting on the item chooser.
@@ -128,10 +136,11 @@ fn publish_scene(world: &mut World) {
     }
     let placing = world.get_resource::<Dispatcher>().is_some_and(|d| d.town.placing.is_some());
     let possessing = town && super::town::possessing(world);
+    let ballista = possessing && super::town::possessing_ballista(world);
     let mut input = world.resource_mut::<InputService>();
     input.set_scene(SceneContext { scenario, town, utility, recording });
     input.set_placing(placing);
-    input.set_possessing(possessing);
+    input.set_possessing(possessing, ballista);
 }
 
 /// An accepted pile haul or depot transfer is running for this player.
@@ -171,6 +180,8 @@ pub fn dispatch(world: &mut World) {
     // of the controller's nearby targets.
     let town = super::town::active(world);
     if town {
+        let dt = world.resource::<Time>().delta_secs();
+        world.resource_mut::<Dispatcher>().town.view.advance(dt);
         super::town::refresh(world);
     } else {
         world.resource_mut::<Dispatcher>().town = default();
@@ -182,6 +193,10 @@ pub fn dispatch(world: &mut World) {
     if frame.blocked {
         return;
     }
+    // Z and C, or the D-pad's left and right, turn the town's view.
+    if town {
+        world.resource_mut::<Dispatcher>().town.view.turn(frame.gameplay.turn);
+    }
     if frame.gameplay.repair_pressed && world.resource::<SessionService>().settlement()
         .and_then(|settlement| settlement.agents.get(agent as usize))
         .is_some_and(|avatar| avatar.body.max_health > 0 && avatar.body.health == 0)
@@ -190,8 +205,24 @@ pub fn dispatch(world: &mut World) {
         return;
     }
     let pad = frame.owner == Device::Gamepad;
-    if pad {
+    // A possessed ballista's reticle takes the aim (`town::aim_reticle`):
+    // the mouse's ground point, or the right stick moving it.
+    let ballista = town && super::town::possessing_ballista(world);
+    if ballista {
+        let cursor = if pad { None } else { cursor_ground(world) };
+        let dt = world.resource::<Time>().delta_secs();
+        super::town::aim_reticle(world, cursor, frame.gameplay.aim.filter(|_| pad), dt);
+    } else if town {
+        super::town::aim_reticle(world, None, None, 0.0);
+    }
+    if pad && !ballista {
         aim(world, frame.gameplay.aim);
+    }
+    if ballista && frame.gameplay.fire_held {
+        let fired = super::town::fire(world, frame.gameplay.fire_pressed).map(|_| ());
+        if fired.is_err() {
+            town_feedback(world, fired);
+        }
     }
     let jumping = world.resource::<SceneView>().player().jump().is_some();
     for &edge in &frame.gameplay.edges {
@@ -259,13 +290,26 @@ fn repair(world: &mut World, agent: u16, held: bool) {
     }
 }
 
+/// The ground under the mouse, in arena coordinates, unless the debug UI
+/// has the pointer.
+fn cursor_ground(world: &mut World) -> Option<Vec3> {
+    let game = world.get_resource::<debug_ui::GameInput>()?;
+    if game.capture().pointer || game.ui_owns_pointer() {
+        return None;
+    }
+    let (camera, transform) = world.query::<(&Camera, &GlobalTransform)>().iter(world).next()?;
+    let (camera, transform) = (camera.clone(), *transform);
+    let window = world.query::<&Window>().iter(world).next()?.clone();
+    crate::gameplay::cursor_ground(&camera, &transform, &window)
+}
+
 /// The controller's aim: explicit stick input, else the remembered aim,
 /// first taken from the confirmed facing.
 fn aim(world: &mut World, stick: Option<Vec2>) {
     let tick = world.resource::<WorldMirror>().tick;
     let waiting = world.resource::<Dispatcher>().aim_after.is_some_and(|after| tick <= after);
     if let Some(stick) = stick {
-        let direction = crate::navigation::flat(camera_relative(stick)).normalize_or_zero();
+        let direction = crate::navigation::flat(camera_relative(stick, view_yaw(world))).normalize_or_zero();
         let mut dispatcher = world.resource_mut::<Dispatcher>();
         dispatcher.aim = Some(direction);
         dispatcher.aim_after = None;
@@ -313,7 +357,7 @@ fn respawn(world: &mut World, agent: u16) {
 /// this player's own directional walk; the other device's neutral never
 /// does. Manual movement also cancels a depot transfer, from any binding.
 fn movement(world: &mut World, gameplay: &super::Gameplay) {
-    let direction = camera_relative(gameplay.movement);
+    let direction = camera_relative(gameplay.movement, view_yaw(world));
     let walking = world.resource::<PlayerControl>().walking_direction();
     if gameplay.movement != Vec2::ZERO || walking {
         world.resource_scope(|world, mut control: Mut<PlayerControl>| {
@@ -390,7 +434,7 @@ fn town_drop(world: &mut World) {
 }
 
 /// The town's Burst key (keyboard R, controller RT, while possessing a
-/// building): `town::burst`.
+/// building; R and RB in a ballista, its fireball): `town::burst`.
 fn town_burst(world: &mut World) {
     let burst = super::town::burst(world).map(|_| ());
     town_feedback(world, burst);

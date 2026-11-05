@@ -18,7 +18,9 @@ pub mod action;
 mod agent;
 pub mod avatar;
 pub mod buildings;
+pub mod chase;
 pub mod combat;
+pub mod fire;
 mod economy;
 mod haulers;
 pub mod interact;
@@ -46,7 +48,9 @@ use crate::terrain::{Disc, Terrain};
 pub use combat::{CombatMetrics, DefenderState, Event, Impact, OnMiss, Pinned, Prediction, Projectile, SpentProjectile, Threat, TossEnd, WaveState};
 pub use agent::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
 pub use avatar::Seat;
-pub use buildings::{BuildingIx, BuildingKind, BuildingKindIx, BuildingState, BurstRefusal, Occupant, PlacementRefusal, Slot, Stage};
+pub use chase::{Goal, Quarry};
+pub use fire::{Burn, BurnDef, FireballDef, FirePatch, Fireball};
+pub use buildings::{Ability, BuildingIx, BuildingKind, BuildingKindIx, BuildingState, BurstRefusal, Defence, FireRefusal, Occupant, PlacementRefusal, Slot, Stage, Turret};
 pub use haulers::{HaulerState, Phase};
 pub use interact::{InteractTarget, Interaction};
 pub use inventory::{Inventory, Kinds};
@@ -255,6 +259,12 @@ pub struct Settlement {
     /// Append-only: an index is stable for the world's life.
     #[serde(default)]
     pub buildings: Vec<BuildingState>,
+    /// Possessed ballistas' fireballs in flight, by ID (B4).
+    #[serde(default)]
+    pub fireballs: Vec<Fireball>,
+    /// The fires they left, by ID.
+    #[serde(default)]
+    pub fires: Vec<FirePatch>,
 }
 
 /// A vehicle a scene parks, in arena coordinates.
@@ -492,6 +502,8 @@ impl Settlement {
             projectiles: Vec::new(),
             spent: Vec::new(),
             pinned: Vec::new(),
+            fireballs: Vec::new(),
+            fires: Vec::new(),
             combat: CombatMetrics::default(),
             events: Vec::new(),
             spawn: FxVec2::ZERO,
@@ -887,6 +899,7 @@ impl Settlement {
             self.validate_lab(lab)?;
         }
         self.validate_buildings()?;
+        self.validate_chases()?;
         Ok(())
     }
 
@@ -1017,6 +1030,18 @@ impl Settlement {
             let buildings: Vec<_> = self.buildings.iter().map(|b| (b.kind, b.position, &b.stage, b.slot, b.progress, &b.output.counts)).collect();
             bytes.extend(postcard::to_allocvec(&buildings).expect("buildings encode"));
         }
+        // Fire only where there is some, so scenes without it hash as they
+        // did before it.
+        let burns: Vec<_> = self.threats.iter().filter_map(|t| t.burn.map(|b| (t.id, b))).collect();
+        if !self.fireballs.is_empty() || !self.fires.is_empty() || !burns.is_empty() {
+            bytes.extend(postcard::to_allocvec(&(&self.fireballs, &self.fires, &burns)).expect("fire encodes"));
+        }
+        // Chasers' goals only while any threat chases, so scenes whose
+        // enemies never chase hash as they did before it.
+        let goals: Vec<_> = self.threats.iter().filter(|t| t.goal != Goal::Tree).map(|t| (t.id, t.goal, &t.route)).collect();
+        if !goals.is_empty() {
+            bytes.extend(postcard::to_allocvec(&goals).expect("goals encode"));
+        }
         // And sprites' jobs and plans only where there are sprites.
         let sprites: Vec<_> = self.agents.iter().filter_map(AgentState::sprite).map(|s| (s.job, &s.plan, s.step, s.holds)).collect();
         if !sprites.is_empty() {
@@ -1040,13 +1065,21 @@ impl StateHash for Settlement {
 }
 
 #[cfg(test)]
+mod ballista_tests;
+#[cfg(test)]
 mod buildings_tests;
 #[cfg(test)]
 mod bundle_tests;
 #[cfg(test)]
 mod burst_tests;
 #[cfg(test)]
+mod chase_tests;
+#[cfg(test)]
 mod construction_tests;
+#[cfg(test)]
+mod fire_tests;
+#[cfg(test)]
+mod health_tests;
 #[cfg(test)]
 mod ground_pile_tests;
 #[cfg(test)]
@@ -1063,5 +1096,7 @@ mod seat_tests;
 mod sprites_tests;
 #[cfg(test)]
 mod soak_tests;
+#[cfg(test)]
+mod waves_tests;
 #[cfg(test)]
 mod vehicle_tests;

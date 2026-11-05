@@ -37,11 +37,32 @@
 //! controller RT Burst ([`burst`]), sending `Burst` when the sim's own
 //! check (`Settlement::burst_check`) lets it go off now, or failing with its
 //! words ("Burst ready in 12 s"). Elsewhere, and in other scenes, those
-//! keys keep what they did.
+//! keys keep what they did. In a ballista the same key (R, and RB on a
+//! controller, where RT fires) throws its fireball at the reticle
+//! (`SACRED_TREE_BALLISTA.md`, B4): the same command, which the sim turns
+//! into a fireball by the building's kind ("Fireball ready in 12 s").
+//!
+//! Aiming (`SACRED_TREE_BALLISTA.md`, B3): while the elder possesses a
+//! ballista, a reticle stands within its range ([`aim_reticle`]): under the
+//! mouse, or moved by the right stick. Its offset from the ballista goes to
+//! the sim as the avatar's aim (`AimAvatar`), which the sim keeps as the
+//! reticle. Left mouse or RT, held, fires there ([`fire`]): an `Attack` at
+//! the reticle whenever the sim's own check (`Settlement::fire_check`) says
+//! the ballista has reloaded, so holding repeats at its period. A press on
+//! an empty ballista says "No ammo: bring stone". The elder's own weapon
+//! never swings there (`lockstep::attack_input` stands down).
+//!
+//! Turning the view: Z and controller D-pad left turn the camera a quarter
+//! turn counter-clockwise around its target, as seen from above; C and
+//! D-pad right clockwise ([`ViewTurn`]). It eases over [`TURN_SECONDS`],
+//! stays orthographic at the same zoom and height, starts at the default
+//! angle with every world and is never saved. View only: the sim never
+//! knows, and the movement keys, the stick, the reticle and the radial
+//! menu stay screen-relative (`gameplay::camera_relative`).
 
 use bevy::prelude::*;
 use fx::{Fx, FxVec2};
-use sim::settlement::{InteractTarget, Interaction, PlacementRefusal, SpriteJob};
+use sim::settlement::{Ability, FireRefusal, InteractTarget, Interaction, PlacementRefusal, SpriteJob};
 use sim::CommandKind;
 
 use super::gameplay::Dispatcher;
@@ -103,7 +124,97 @@ pub struct Town {
     pub placing: Option<u16>,
     /// This frame's ghost, while placing.
     pub ghost: Option<Ghost>,
+    /// The reticle, while possessing a ballista.
+    pub reticle: Option<Reticle>,
+    /// The last aim sent (`AimAvatar`), so an unmoved reticle sends nothing.
+    sent_aim: Option<FxVec2>,
+    /// The confirmed tick the last shot went out on: one `Attack` a tick.
+    fired_on: Option<u64>,
+    /// The camera's turn around its target.
+    pub view: ViewTurn,
 }
+
+/// How long a quarter turn of the view takes, in seconds.
+pub const TURN_SECONDS: f32 = 0.25;
+
+/// The town camera's turn around its target, in quarter turns: positive is
+/// counter-clockwise seen from above (the camera orbits that way, so the
+/// scene seems to turn clockwise on screen). View only.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ViewTurn {
+    /// The quarter turns it is at or going to.
+    quarter: i32,
+    /// Where the turn under way started, in radians.
+    from: f32,
+    /// How much of the turn under way is left, 1 to 0 (0 when settled).
+    left: f32,
+    /// The yaw now, in radians.
+    yaw: f32,
+}
+
+impl ViewTurn {
+    /// Starts another quarter turn (`step` +1 counter-clockwise, -1
+    /// clockwise) from where the view is now, mid-turn too.
+    pub fn turn(&mut self, step: i32) {
+        if step == 0 {
+            return;
+        }
+        self.from = self.yaw;
+        self.quarter += step;
+        self.left = 1.0;
+    }
+
+    /// Eases the turn on by `dt` seconds.
+    pub fn advance(&mut self, dt: f32) {
+        if self.settled() {
+            return;
+        }
+        self.left = (self.left - dt / TURN_SECONDS).max(0.0);
+        let to = self.quarter as f32 * std::f32::consts::FRAC_PI_2;
+        let t = 1.0 - self.left;
+        // Smoothstep: it starts and stops gently.
+        self.yaw = self.from + (to - self.from) * t * t * (3.0 - 2.0 * t);
+        if self.left == 0.0 {
+            self.quarter = self.quarter.rem_euclid(4);
+            self.yaw = self.quarter as f32 * std::f32::consts::FRAC_PI_2;
+        }
+    }
+
+    /// The camera's yaw around its target now: radians counter-clockwise
+    /// seen from above, from the default view.
+    pub fn yaw(&self) -> f32 {
+        self.yaw
+    }
+
+    /// The quarter turns it is at or going to, 0 to 3.
+    pub fn quarter(&self) -> i32 {
+        self.quarter.rem_euclid(4)
+    }
+
+    /// No turn is under way.
+    pub fn settled(&self) -> bool {
+        self.left <= 0.0
+    }
+}
+
+/// A possessed ballista's reticle (B3).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Reticle {
+    pub building: u16,
+    /// Arena coordinates on the ground: the ballista's center and the
+    /// reticle.
+    pub center: Vec3,
+    pub point: Vec3,
+    /// The ballista's range in meters.
+    pub range: f32,
+    /// The reticle as the sim takes it: its offset from the ballista in
+    /// world tiles, within range (`BuildingKind::reticle`).
+    pub offset: FxVec2,
+}
+
+/// How fast the right stick moves a ballista's reticle, meters a second at
+/// full tilt.
+const RETICLE_SPEED: f32 = 4.0;
 
 /// What an interact did.
 #[derive(Clone, Debug, PartialEq)]
@@ -199,6 +310,7 @@ pub fn snapshot(world: &World) -> serde_json::Value {
         "build_menu": town.build_menu.filter(|_| open).map(|kinds| kinds.into_iter().map(kind_id).collect::<Vec<_>>()),
         "placing": town.placing.and_then(kind_id),
         "ghost": ghost,
+        "view": town.view.quarter(),
     })
 }
 
@@ -217,6 +329,8 @@ fn highlight(world: &World, target: InteractTarget, interaction: &Interaction) -
         InteractTarget::Slot(b) => (s.buildings.get(b as usize)?.slot_position(s.building_kinds.get(s.buildings[b as usize].kind as usize)?), 0.45),
     };
     let prompt = match (target, interaction) {
+        // A ballista's ammo store is loaded, not picked up from (B2).
+        (InteractTarget::Output(_), Interaction::Bundle(job)) if job.direction == sim::settlement::Direction::Deposit => format!("LOAD {} {}", job.remaining, item(job.item)),
         (InteractTarget::Output(_) | InteractTarget::Pile(_), Interaction::Bundle(job)) => format!("PICK UP {} {}", job.remaining, item(job.item)),
         (InteractTarget::Site(_), Interaction::Bundle(job)) => format!("DELIVER {} {}", job.remaining, item(job.item)),
         (_, Interaction::Bundle(job)) if job.direction == sim::settlement::Direction::Deposit => format!("DEPOSIT {} {}", job.remaining, item(job.item)),
@@ -311,14 +425,124 @@ pub fn drop_bundle(world: &mut World) -> Result<Dropped, String> {
 
 /// The Burst key: sends `Burst` when the sim's own check
 /// (`Settlement::burst_check`) lets it go off now, or fails with its words
-/// ("Burst ready in 12 s", "Output full"), which show over the elder as the
-/// sim's refusals do. Returns the units it adds.
-pub fn burst(world: &mut World) -> Result<u32, String> {
+/// ("Burst ready in 12 s", "Output full", "Fireball ready in 12 s"), which
+/// show over the elder as the sim's refusals do. Returns what it does: a
+/// Burst's units, or in a ballista a fireball at the reticle.
+pub fn burst(world: &mut World) -> Result<Ability, String> {
     let service = world.resource::<SessionService>();
     let (s, sim_world, agent) = (service.settlement().ok_or("No settlement loaded")?, service.world().ok_or("No settlement loaded")?, service.player().ok_or("No controlled actor")?);
-    let units = s.burst_check(agent as usize, sim_world.tick()).map_err(|r| r.message())?;
+    let ability = s.burst_check(agent as usize, sim_world.tick()).map_err(|r| r.message())?;
     world.resource_mut::<SessionService>().command(CommandKind::Burst { agent });
-    Ok(units)
+    Ok(ability)
+}
+
+/// Throws the possessed ballista's fireball at `offset` from it, in
+/// meters, for the control protocol: the reticle goes there (cut to range)
+/// and the Burst key's command follows, if the sim's check lets it now.
+pub fn fireball_at(world: &mut World, offset: Vec2) -> Result<(), String> {
+    let (_, center, _) = possessed_ballista(world).ok_or("Possess a ballista to throw a fireball")?;
+    let point = world.resource::<SessionService>().to_view(center) + Vec3::new(offset.x, 0.0, offset.y);
+    aim_reticle(world, Some(point), None, 0.0);
+    match burst(world)? {
+        Ability::Fireball { .. } => Ok(()),
+        Ability::Burst { .. } => unreachable!("a ballista has no Burst"),
+    }
+}
+
+/// The ballista the local player possesses: its index, center and kind.
+fn possessed_ballista(world: &World) -> Option<(u16, FxVec2, sim::settlement::BuildingKind)> {
+    let service = world.resource::<SessionService>();
+    let (agent, s) = (service.player()?, service.settlement()?);
+    let b = s.seat(agent as usize)?.building()?;
+    let kind = s.building_kind(b);
+    kind.defence.is_some().then(|| (b, s.buildings[b as usize].position, kind.clone()))
+}
+
+/// Whether the local player possesses a ballista now, for the fire keys.
+pub fn possessing_ballista(world: &World) -> bool {
+    possessed_ballista(world).is_some()
+}
+
+/// Moves the reticle while the elder possesses a ballista, and forgets it
+/// otherwise: to the ground under the mouse (`cursor`, arena coordinates),
+/// or by the right stick (`stick`, input space) over `dt` seconds, within
+/// the ballista's range. It starts where the sim has the aim (a facing a
+/// meter out, on boarding). A moved reticle goes to the sim as `AimAvatar`.
+pub fn aim_reticle(world: &mut World, cursor: Option<Vec3>, stick: Option<Vec2>, dt: f32) {
+    let Some((building, center, kind)) = possessed_ballista(world) else {
+        let mut dispatcher = world.resource_mut::<Dispatcher>();
+        dispatcher.town.reticle = None;
+        dispatcher.town.sent_aim = None;
+        return;
+    };
+    let service = world.resource::<SessionService>();
+    let Some(agent) = service.player() else { return };
+    let confirmed = service.settlement().and_then(|s| s.agents.get(agent as usize)?.avatar()?.aim);
+    let previous = world.resource::<Dispatcher>().town.reticle.as_ref().filter(|r| r.building == building).map(|r| r.offset);
+    let range = kind.defence.as_ref().map_or(0.0, |d| d.range.to_f32());
+    let start = previous.or(confirmed).unwrap_or(FxVec2::new(Fx::ZERO, Fx::quantize(range * 0.5)));
+    let wanted = match (cursor, stick) {
+        (Some(point), _) => service.to_sim(point) - center,
+        (None, Some(stick)) => {
+            let step = super::gameplay::camera_relative(stick, super::gameplay::view_yaw(world)) * RETICLE_SPEED * dt;
+            start + FxVec2::new(Fx::quantize(step.x), Fx::quantize(step.z))
+        }
+        (None, None) => start,
+    };
+    let offset = kind.reticle(wanted).unwrap_or(start);
+    let center_view = service.to_view(center);
+    let point = service.to_view(center + offset);
+    let reticle = Reticle { building, center: center_view, point, range, offset };
+    let mut dispatcher = world.resource_mut::<Dispatcher>();
+    let moved = dispatcher.town.sent_aim.is_none_or(|sent| (sent - offset).length() > Fx::from_ratio(1, 20));
+    dispatcher.town.reticle = Some(reticle);
+    if moved {
+        dispatcher.town.sent_aim = Some(offset);
+        world.resource_mut::<SessionService>().command(CommandKind::AimAvatar { agent, aim: offset });
+    }
+}
+
+/// The fire key, held or `pressed`, while possessing a ballista: an
+/// `Attack` at the reticle when the sim's own check
+/// (`Settlement::fire_check`) says it would go off, at most one a
+/// confirmed tick, so holding repeats at the ballista's period and extra
+/// presses add nothing. A fresh press on an empty ballista fails with the
+/// sim's words ("No ammo: bring stone"); while it reloads it waits quietly.
+/// Returns whether it sent a shot.
+pub fn fire(world: &mut World, pressed: bool) -> Result<bool, String> {
+    let offset = world.resource::<Dispatcher>().town.reticle.as_ref().map(|r| r.offset).ok_or("Possess a ballista to fire")?;
+    let service = world.resource::<SessionService>();
+    let (s, sim_world, agent) = (service.settlement().ok_or("No settlement loaded")?, service.world().ok_or("No settlement loaded")?, service.player().ok_or("No controlled actor")?);
+    let tick = sim_world.tick();
+    match s.fire_check(agent as usize, tick) {
+        Ok(_) => {}
+        Err(FireRefusal::Reloading { .. }) => return Ok(false),
+        Err(reason) if pressed => return Err(reason.message()),
+        Err(_) => return Ok(false),
+    }
+    if world.resource::<Dispatcher>().town.fired_on == Some(tick) {
+        return Ok(false);
+    }
+    world.resource_mut::<Dispatcher>().town.fired_on = Some(tick);
+    let weapon = world.get_resource::<crate::gameplay::Controls>().map_or(content::scenario::Weapon::Sword, |c| c.weapon);
+    world.resource_mut::<SessionService>().command(CommandKind::Attack { agent, weapon, aim: offset, muzzle: [Fx::ZERO; 3] });
+    Ok(true)
+}
+
+/// Fires the possessed ballista once at `offset` from it, in meters, for
+/// the control protocol: the reticle goes there (cut to range) and the
+/// shot goes out if the sim's check lets it now, or fails with its words
+/// ("No ammo: bring stone", "Reloading").
+pub fn fire_at(world: &mut World, offset: Vec2) -> Result<(), String> {
+    let (_, center, _) = possessed_ballista(world).ok_or("Possess a ballista to fire")?;
+    let point = world.resource::<SessionService>().to_view(center) + Vec3::new(offset.x, 0.0, offset.y);
+    aim_reticle(world, Some(point), None, 0.0);
+    {
+        let service = world.resource::<SessionService>();
+        let (s, sim_world, agent) = (service.settlement().ok_or("No settlement loaded")?, service.world().ok_or("No settlement loaded")?, service.player().ok_or("No controlled actor")?);
+        s.fire_check(agent as usize, sim_world.tick()).map_err(|r| r.message())?;
+    }
+    fire(world, true).map(|_| ())
 }
 
 /// Whether the local player possesses a building now, for the keys that
@@ -329,14 +553,17 @@ pub fn possessing(world: &World) -> bool {
 }
 
 /// The job menu's options: idle, then one per building kind, gathering its
-/// product.
+/// product, or manning a ballista ("MAN BALLISTA").
 fn job_menu(world: &World, sprite: u16) -> JobMenu {
     let s = world.resource::<SessionService>().settlement().expect("a town");
     let mut options = vec!["IDLE".to_string()];
     let mut jobs = vec![SpriteJob::Idle];
     for (i, kind) in s.building_kinds.iter().enumerate() {
-        let product = s.items.get(kind.product as usize).map_or_else(|| kind.id.to_uppercase(), |id| id.to_uppercase());
-        options.push(format!("GATHER {product}"));
+        let option = match kind.product {
+            Some(product) => format!("GATHER {}", s.items.get(product as usize).map_or_else(|| kind.id.to_uppercase(), |id| id.to_uppercase())),
+            None => format!("MAN {}", kind.id.to_uppercase().replace('_', " ")),
+        };
+        options.push(option);
         jobs.push(SpriteJob::Staff(i as u16));
     }
     JobMenu { sprite, options, jobs }

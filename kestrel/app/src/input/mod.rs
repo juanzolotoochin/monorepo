@@ -134,7 +134,7 @@ pub enum Edge {
     /// controller B).
     CancelBuild,
     /// In a town, while possessing a building: Burst (keyboard R,
-    /// controller RT).
+    /// controller RT), or in a ballista its fireball (R, controller RB).
     Burst,
 }
 
@@ -161,11 +161,21 @@ pub struct Gameplay {
     pub repair_pressed: bool,
     /// The lift (Space / RB) is held.
     pub lift_held: bool,
+    /// In a town, while possessing a ballista: the fire key (left mouse,
+    /// controller RT) is held. Each frame it is, the town fires when the
+    /// ballista has reloaded (`town::fire`), so holding repeats at its
+    /// period.
+    pub fire_held: bool,
+    /// The fire key went down this frame, for its refusal ("No ammo").
+    pub fire_pressed: bool,
     /// An explicit input-space aim direction from the aim stick.
     pub aim: Option<Vec2>,
     pub edges: Vec<Edge>,
     /// View zoom change (positive zooms out).
     pub zoom: f32,
+    /// In a town, a view turn in quarter turns: +1 counter-clockwise seen
+    /// from above (Z, D-pad left), -1 clockwise (C, D-pad right).
+    pub turn: i32,
 }
 
 /// This frame's resolved input.
@@ -300,6 +310,9 @@ pub struct InputService {
     /// The local elder possesses a building in a town (`town`): keyboard R
     /// and controller RT Burst instead of repairing and attacking.
     possessing: bool,
+    /// The building possessed is a ballista: RT fires it instead (left
+    /// mouse too), and its fireball is on R and RB (the Burst key).
+    ballista: bool,
 }
 
 impl Service for InputService {
@@ -399,9 +412,11 @@ impl InputService {
         self.placing = placing;
     }
 
-    /// Whether the town's elder possesses a building, for the Burst keys.
-    pub fn set_possessing(&mut self, possessing: bool) {
+    /// Whether the town's elder possesses a building, and whether it is a
+    /// ballista, for the Burst and fire keys.
+    pub fn set_possessing(&mut self, possessing: bool, ballista: bool) {
         self.possessing = possessing;
+        self.ballista = possessing && ballista;
     }
 
     /// Opens an item chooser at the next frame. Its pick arrives as
@@ -710,8 +725,11 @@ impl InputService {
         )
         .normalize_or_zero();
         let mut edges = Vec::new();
+        // In a town Z and C turn the view instead of choosing a weapon.
+        let town = self.scene.town;
+        let turn = if town { i32::from(keys.just_pressed(KeyCode::KeyZ)) - i32::from(keys.just_pressed(KeyCode::KeyC)) } else { 0 };
         for (key, weapon) in [(KeyCode::KeyZ, Weapon::Sword), (KeyCode::KeyX, Weapon::Spear), (KeyCode::KeyC, Weapon::Bow), (KeyCode::KeyV, Weapon::ArcCoil)] {
-            if keys.just_pressed(key) {
+            if keys.just_pressed(key) && !(town && matches!(key, KeyCode::KeyZ | KeyCode::KeyC)) {
                 edges.push(Edge::SelectWeapon(weapon));
             }
         }
@@ -756,15 +774,23 @@ impl InputService {
         }
         // R Bursts while possessing a building, and repairs nothing then.
         let repair = !(self.scene.town && self.possessing);
+        // Left mouse fires a possessed ballista, held to repeat, unless the
+        // debug UI has the pointer.
+        let mouse = game.mouse();
+        let pointer_free = !game.capture().pointer && !game.ui_owns_pointer();
+        let firing = self.scene.town && self.ballista && pointer_free;
         Gameplay {
             movement,
             run: keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),
             repair_held: repair && keys.pressed(KeyCode::KeyR),
             repair_pressed: repair && keys.just_pressed(KeyCode::KeyR),
             lift_held: keys.pressed(KeyCode::Space),
+            fire_held: firing && mouse.pressed(MouseButton::Left),
+            fire_pressed: firing && mouse.just_pressed(MouseButton::Left),
             aim: None,
             edges,
             zoom: 0.0,
+            turn,
         }
     }
 
@@ -776,20 +802,30 @@ impl InputService {
                 edges.push(edge);
             }
         };
-        // RT Bursts while possessing a building in a town, where it could
-        // attack nothing anyway (a seated elder doesn't swing).
-        press(Control::RightTrigger, if self.scene.town && self.possessing { Edge::Burst } else { Edge::Attack });
-        press(Control::Button(Button::RightBumper), Edge::Lift);
+        // RT Bursts while possessing a gatherer in a town, where it could
+        // attack nothing anyway (a seated elder doesn't swing), and fires a
+        // possessed ballista (`fire_held`). There RB, the lift, which a
+        // seated elder can't use, throws the fireball (the Burst key).
+        let ballista = self.scene.town && self.ballista;
+        if !ballista {
+            press(Control::RightTrigger, if self.scene.town && self.possessing { Edge::Burst } else { Edge::Attack });
+        }
+        press(Control::Button(Button::RightBumper), if ballista { Edge::Burst } else { Edge::Lift });
         press(Control::Button(Button::South), Edge::Interact);
         // A town has no nearby targets to collect from: X builds, and B
         // backs out of a blueprint being placed, else drops the bundle.
         press(Control::Button(Button::West), if self.scene.town { Edge::Build } else { Edge::Collect });
         press(Control::Button(Button::East), if self.scene.town && self.placing { Edge::CancelBuild } else { Edge::Drop });
         press(Control::Button(Button::North), Edge::NextWeapon);
-        press(Control::Button(Button::DPadLeft), Edge::TargetPrevious);
-        press(Control::Button(Button::DPadRight), Edge::TargetNext);
+        // A town has one target, the sim's, so nothing to cycle: there the
+        // D-pad's left and right turn the view.
+        let town = self.scene.town;
+        if !town {
+            press(Control::Button(Button::DPadLeft), Edge::TargetPrevious);
+            press(Control::Button(Button::DPadRight), Edge::TargetNext);
+        }
         press(Control::Button(Button::LeftStick), Edge::Board);
-        if pad.released(Button::RightBumper) {
+        if pad.released(Button::RightBumper) && !ballista {
             edges.push(Edge::LiftRelease);
         }
         let zoom = if pad.pressed(Button::DPadUp) {
@@ -804,10 +840,13 @@ impl InputService {
             run: pad.held(Button::LeftBumper),
             repair_held: false,
             repair_pressed: false,
-            lift_held: pad.held(Button::RightBumper),
+            lift_held: !ballista && pad.held(Button::RightBumper),
+            fire_held: ballista && pad.held.contains(&Control::RightTrigger),
+            fire_pressed: ballista && pad.pressed.contains(&Control::RightTrigger),
             aim: pad.aim,
             edges,
             zoom,
+            turn: if town { i32::from(pad.pressed(Button::DPadLeft)) - i32::from(pad.pressed(Button::DPadRight)) } else { 0 },
         }
     }
 }

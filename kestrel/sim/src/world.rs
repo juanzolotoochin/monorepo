@@ -587,7 +587,7 @@ impl World {
                 }
                 CommandKind::Leave => {
                     if let Some(s) = &mut self.settlement {
-                        s.leave(turn[i].player);
+                        s.leave(turn[i].player, &self.terrain);
                     }
                 }
             }
@@ -918,6 +918,11 @@ impl World {
             for message in messages.fire {
                 settlement.fire(tick, message);
             }
+            for message in messages.building_fire {
+                settlement.building_fire(tick, message);
+            }
+            settlement.burn(tick);
+            settlement.threat_goals(messages.threat_goal, &self.terrain);
             settlement.claim_slots(messages.claim_slot);
             settlement.enter_slots(messages.enter_slot);
         }
@@ -941,6 +946,7 @@ impl World {
             settlement.combat_housekeeping(self.tick, &self.terrain);
             settlement.avatar_housekeeping(self.tick);
             settlement.seat_housekeeping(&self.terrain);
+            settlement.sprite_housekeeping(self.tick);
             settlement.dig_housekeeping(self.tick, &mut self.terrain);
             settlement.pile_housekeeping(self.tick);
             settlement.memory_housekeeping(&mut self.terrain);

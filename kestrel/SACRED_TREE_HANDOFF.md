@@ -1,6 +1,7 @@
 # Kestrel Sacred Tree town MVP (design)
 
-Status: design agreed (2026-10-30), not started. Tasks in
+Status: design agreed (2026-10-30), M1–M4 done (PR #131). The ballista
+prototype that follows is in [`SACRED_TREE_BALLISTA.md`](SACRED_TREE_BALLISTA.md). Tasks in
 [`todo/sacred-tree.md`](todo/sacred-tree.md), one per step, by milestone.
 
 ## Goal

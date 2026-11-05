@@ -11,6 +11,8 @@ use crate::mover::Mover;
 use crate::settlement::piles::PileJob;
 use crate::settlement::avatar::BundleRefusal;
 use crate::settlement::buildings::BurstRefusal;
+use crate::settlement::chase::{Goal, Quarry};
+use crate::settlement::combat::SwingTarget;
 use crate::settlement::{CarryJob, InventoryRef};
 
 /// One mover attacks another.
@@ -156,28 +158,42 @@ pub struct Breach {
 }
 
 /// A threat with an `attack` can start a swing at a hurtable player in its
-/// reach, `distance` meters away. Stage 5 keeps the nearest player for each
-/// threat, the lowest agent index on a tie.
+/// reach, or at the quarry it chases (an agent or a building), `distance`
+/// meters away. Stage 5 keeps the nearest target for each threat, agents
+/// before buildings and the lowest index on a tie.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StartSwing {
     pub threat: u64,
-    pub agent: u16,
+    pub target: SwingTarget,
     pub distance: Fx,
 }
 
-/// A threat's windup ends this tick. `hit` if its player was alive and in
-/// reach then.
+/// A threat's windup ends this tick. `hit` if its target was alive (a
+/// building: worth breaking) and in reach then.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SwingLands {
     pub threat: u64,
-    pub agent: u16,
+    pub target: SwingTarget,
     pub hit: bool,
+}
+
+/// Hashes a swing's target: an agent as the bare index it hashed as before
+/// buildings could be swung at, a building after a marker no agent index
+/// reaches.
+fn hash_target(target: SwingTarget, h: &mut StateHasher) {
+    match target {
+        SwingTarget::Agent(agent) => h.write(&agent),
+        SwingTarget::Building(building) => {
+            h.write(&u16::MAX);
+            h.write(&building);
+        }
+    }
 }
 
 impl StateHash for StartSwing {
     fn hash_into(&self, h: &mut StateHasher) {
         h.write(&self.threat);
-        h.write(&self.agent);
+        hash_target(self.target, h);
         h.write(&self.distance);
     }
 }
@@ -185,7 +201,7 @@ impl StateHash for StartSwing {
 impl StateHash for SwingLands {
     fn hash_into(&self, h: &mut StateHasher) {
         h.write(&self.threat);
-        h.write(&self.agent);
+        hash_target(self.target, h);
         h.write(&self.hit);
     }
 }
@@ -196,6 +212,49 @@ pub struct Fire {
     pub defender: u16,
     pub target: u64,
     pub to: FxVec2,
+}
+
+/// A ballista building shoots at a threat's current position
+/// (`Settlement::building_fire`), as a defender's `Fire`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildingFire {
+    pub building: u16,
+    pub target: u64,
+    pub to: FxVec2,
+}
+
+/// A threat changes what it is after (`SACRED_TREE_BALLISTA.md`, B5,
+/// `Settlement::threat_goals`): it turns on a quarry, or gives up on one and
+/// heads for the tree again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreatGoal {
+    pub threat: u64,
+    pub goal: Goal,
+}
+
+impl StateHash for ThreatGoal {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.threat);
+        match self.goal {
+            Goal::Tree => h.write_u64(0),
+            Goal::Chase(Quarry::Agent(agent)) => {
+                h.write_u64(1);
+                h.write(&agent);
+            }
+            Goal::Chase(Quarry::Building(building)) => {
+                h.write_u64(2);
+                h.write(&building);
+            }
+        }
+    }
+}
+
+impl StateHash for BuildingFire {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.building);
+        h.write(&self.target);
+        h.write(&self.to);
+    }
 }
 
 /// A player's action let go of the avatar's pile haul (`Action::Move`, an
@@ -384,6 +443,25 @@ impl StateHash for Burst {
     }
 }
 
+/// An elder possessing a ballista shoots at its reticle, `to`
+/// (`SACRED_TREE_BALLISTA.md`, B3): stage 5 launches the bolt if the elder
+/// still sits in `building` and it is stocked and reloaded
+/// (`Settlement::elder_fire`), and does nothing otherwise.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ElderFire {
+    pub agent: u16,
+    pub building: u16,
+    pub to: FxVec2,
+}
+
+impl StateHash for ElderFire {
+    fn hash_into(&self, h: &mut StateHasher) {
+        h.write(&self.agent);
+        h.write(&self.building);
+        h.write(&self.to);
+    }
+}
+
 /// A Burst that couldn't start, and why: stage 5 reports it as
 /// `Event::BurstRefused`, for the view to explain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -402,6 +480,11 @@ impl StateHash for BurstRefused {
                 h.write(&ticks);
             }
             BurstRefusal::OutputFull => h.write_u64(2),
+            BurstRefusal::NoBurst => h.write_u64(3),
+            BurstRefusal::FireballCooling { ticks } => {
+                h.write_u64(4);
+                h.write(&ticks);
+            }
         }
     }
 }
@@ -494,13 +577,14 @@ pub struct ActionMessages {
     pub drop_bundle: Vec<DropBundle>,
     pub burst: Vec<Burst>,
     pub burst_refused: Vec<BurstRefused>,
+    pub elder_fire: Vec<ElderFire>,
 }
 
 impl ActionMessages {
     pub fn is_empty(&self) -> bool {
         self.restart_memory.is_empty() && self.drop_haul.is_empty() && self.drop_notes.is_empty() && self.reserve_stock.is_empty() && self.haul.is_empty()
             && self.board.is_empty() && self.bundle_refused.is_empty() && self.place_blueprint.is_empty() && self.install.is_empty()
-            && self.drop_bundle.is_empty() && self.burst.is_empty() && self.burst_refused.is_empty()
+            && self.drop_bundle.is_empty() && self.burst.is_empty() && self.burst_refused.is_empty() && self.elder_fire.is_empty()
     }
 }
 
@@ -533,6 +617,9 @@ impl StateHash for ActionMessages {
         }
         if !self.burst_refused.is_empty() {
             h.write(&self.burst_refused);
+        }
+        if !self.elder_fire.is_empty() {
+            h.write(&self.elder_fire);
         }
     }
 }
@@ -752,4 +839,10 @@ message_queues! {
     // entry sees this tick's claims. Hashed only when not empty.
     claim_slot: ClaimSlot,
     enter_slot: EnterSlot,
+    // Ballista buildings' shots (`Settlement::building_fire`), applied after
+    // the defenders'.
+    building_fire: BuildingFire,
+    // Threats that turn on a quarry or give up on one (`chase`), after the
+    // shots, so a threat killed this tick changes nothing.
+    threat_goal: ThreatGoal,
 }

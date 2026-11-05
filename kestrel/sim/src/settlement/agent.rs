@@ -223,8 +223,8 @@ impl AgentState {
     }
 
     /// A scenario's sprite: its body at `position`, no room in its hold
-    /// (`items` long, so the item counts line up) and no health. It starts
-    /// idle.
+    /// (`items` long, so the item counts line up) and its character's
+    /// `sprite` health, if any (B6). It starts idle.
     pub(super) fn new_sprite(def: &scenario::Sprite, character: CharacterIx, rules: &CharacterDef, position: FxVec2, items: usize) -> AgentState {
         AgentState {
             id: def.id.clone(),
@@ -232,6 +232,8 @@ impl AgentState {
             body: Body {
                 home: position,
                 base_radius: rules.body.radius,
+                health: rules.sprite.map_or(0, |s| s.health),
+                max_health: rules.sprite.map_or(0, |s| s.health),
                 position,
                 ..Body::default()
             },
