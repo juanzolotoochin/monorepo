@@ -210,9 +210,11 @@ its milestones, in order; one PR per milestone.
 - **Where:** `app/src/clock_hud.rs`, `app/src/telemetry.rs`.
 - **Found in:** M7.5.
 
-## The night's fight comes late
+## Done
 
-- **Status:** open
+### The night's fight comes late
+
+- **Status:** done (branch `kestrel-sacred-tree-daynight`, PR #134)
 - **Why:** measured on the map's own nights (M7.6), ghouls walk 0.6 m/s
   and take about 41 s from the 40 m ring to the tops of the ramps and
   63.7 s to the tree; a column of five sets off over the night's first
@@ -238,8 +240,53 @@ its milestones, in order; one PR per milestone.
   `sim/src/settlement/combat.rs` (`COLUMN_GAP`),
   `sim/src/settlement/waves_tests.rs`, `app/demos/sacred_tree.json`.
 - **Found in:** M7.2, M7.6.
+- **Done:** the supply's lanes start 28 m out (`(28.0, 0.0)` and
+  `(-28.0, 0.0)`, just past the ramps' feet at 23.5 m and the hill's flat
+  ring at 25.5 m; `hill_tests::ghouls_come_from_the_ring_up_the_ramps`
+  checks 26 to 30 m, a walkable route and the crossing on each ramp) and
+  `COLUMN_GAP` is 5 s. A column of five at 5 s sets off over 20 s, inside
+  the night's first 25 s, so `lane_starts`' rule is unchanged (six would
+  bunch to 4.2 s). The gap stays a constant: in content it would be a new
+  `WaveState` field, so a save format bump and new state hashes in the
+  forest's and arena's golden for no gain. Measured with a probe as in
+  M7.6 (four nights, the tree's health raised; removed, and its undefended
+  half kept as `waves_tests::the_nights_fight_comes_in_its_middle`), in
+  seconds after dusk:
 
-## Done
+  | | Ramp tops | At the tree | First bolt | Kills | Dispelled |
+  |---|---|---|---|---|---|
+  | Undefended | 20.9 to 30.9 (night 1), 20.9 to 40.9 (nights 2 to 4) | 43.7 to 53.7, then 43.7 to 63.7 | none | none | 0 each night |
+  | A ballista by each ramp | as undefended | none | 35.4 | 36.5 to 46.7 (night 1), 36.5 to 56.7 (nights 2 to 4) | 0 each night |
+
+  Before: tops 41 s, the tree 63.7 to 73.7 s, the first bolt 55.4 s, the
+  kills 56.5 to 66.9 s. So a defended fight runs from about 35 s to 57 s
+  and an undefended one breaches from 44 s to 64 s, 11 s before dawn;
+  dawn burns none unless they are held up. In the wave soak (lured, chased
+  and smashing ghouls) dawn dispels 3 over five nights. The nights are
+  unchanged (3+2, 5+4, 5+5, 5+5 repeating): ignored, the tree falls on the
+  third night at 653 s (53 s after dusk, was 668 s); one ballista by the
+  east ramp: tree 4/20 after four nights, 16 breaches, 18 kills; one by
+  each: 20/20, all 34 killed. `waves_tests`: `RESTOCK` 47 s to 30 s (the
+  ballistas start empty, and at 47 s they first shot after the ghouls
+  reached the tree: tree 3/20 with two); the sunrise test sends its night
+  of eight from 40 m so some are still out at dawn; the column test checks
+  5 s. The happy path must end before 170 s (was 190 s; ghouls top the
+  ramps at about 171 s). Spawning is in view: from the west ramp's top the
+  camera shows the ring, and a ghoul popped in at 150 s. The view
+  (`settlement::rise_offset`) now draws a threat up to 1.9 m under the
+  ground at its spawn, rising (eased) over its first 0.6 m walked, about
+  a second; in the video the head shows at 0.3 s and it stands at 0.9 s.
+  Demo (`demos/sacred_tree.json`, the night rebuilt; 3562 frames at 30 fps,
+  1:59): the day as in M7.6, the elder waiting at (-12, 4.5) by the west
+  ramp's top; dusk at 2x (144 to 158 s), 4x to 166 s, 2x up the ramp, 1x
+  from 172 s; the elder steps down to (-12, 2.2) beside the column's way at
+  about 178 s, so both west ghouls (5 s apart, 3 m) turn on it within the
+  same second, and leads them round the plaza outside the pines (90 hops
+  of 0.3 m to about 45 degrees; they stay 1.7 and 2.1 m behind, no swing)
+  while Fern's ballista kills the east column (187.1, 191.7, 196.7 s); at
+  sunrise (225 s) both lured ghouls catch fire and fall (227.1, 227.6 s).
+  Tree 20/20. Tuned in seven simulation runs against the frame trace.
+  Save format, input log, net protocol, commands and golden unchanged.
 
 ### M7.6 Tuning, soak and demo
 
