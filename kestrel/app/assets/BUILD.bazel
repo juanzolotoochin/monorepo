@@ -9,6 +9,8 @@ exports_files(
         # The sim's hill tests read its mine line.
         "levels/sacred_tree.ron",
         "levels/sacred_tree_supply.ron",
+        # The sim's and assetc's Tunnel Lab tests read its volume.
+        "levels/tunnel_lab.ron",
     ],
     visibility = ["//kestrel:__subpackages__"],
 )
@@ -160,6 +162,14 @@ scene_assets(
     prefabs = [],
     scenario = "levels/sacred_tree_supply.ron",
     style = "styles/forest.ron",
+)
+
+# The verticality MVP's map: a volume of solid and empty boxes, with a
+# mountain, a tunnel and a natural bridge (kestrel/VERTICALITY.md, V10).
+scene_assets(
+    name = "tunnel_lab",
+    layout = "levels/tunnel_lab.ron",
+    prefabs = [],
 )
 
 boulder_prefab(

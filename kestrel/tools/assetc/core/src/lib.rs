@@ -331,6 +331,13 @@ pub struct Scene {
     pub dig_layers: Option<u8>,
     #[serde(default)]
     pub terrain: Option<Terrain>,
+    /// The ground as solid and empty cells, so floors stand over floors
+    /// (tunnels, caves, bridges; `kestrel/VERTICALITY.md`): solid and empty
+    /// boxes in tiles and 0.5 m layers, applied in order
+    /// ([`sim::volume::VolumeLayout`] has the units). Needs `SlopedGround`;
+    /// the volume is the whole ground, so not with a mine or terrain.
+    #[serde(default)]
+    pub volume: Option<sim::volume::VolumeLayout>,
     #[serde(default)]
     pub style: Option<StyleProfile>,
     #[serde(default)]
@@ -711,6 +718,9 @@ impl ScenePack {
         if let Some(piles) = &self.scene.piles {
             piles.validate()?;
         }
+        if let Some(volume) = &self.scene.volume {
+            validate_volume(&self.scene, volume)?;
+        }
         if let Some(mine) = &self.scene.mine {
             if !(8.0..=128.0).contains(&mine.extent) || mine.extent.fract() != 0.0 {
                 return Err("a mine's extent must be a whole number of meters from 8 to 128".into());
@@ -761,6 +771,28 @@ impl ScenePack {
         Ok(pack)
     }
 }
+/// A scene's volume: its boxes make a map ([`sim::volume::VolumeLayout::validate`]),
+/// it is the scene's only ground and slopes, and the spawn stands on it.
+fn validate_volume(scene: &Scene, volume: &sim::volume::VolumeLayout) -> Result<()> {
+    volume.validate()?;
+    if scene.mine.is_some() || scene.terrain.is_some() {
+        return Err("a volume is the scene's ground: it can't have a mine or terrain too".into());
+    }
+    if !scene.features.contains(&SceneFeature::SlopedGround) {
+        return Err("a volume needs the SlopedGround feature".into());
+    }
+    let [x, _, z] = scene.spawn;
+    let half = volume.extent as f32 + 0.5;
+    if x.abs() >= half || z.abs() >= half {
+        return Err(format!("the spawn ({x}, {z}) is outside the volume's map"));
+    }
+    let tile = sim::terrain::Terrain::pit_tile(fx::FxVec2::new(fx::Fx::quantize(x), fx::Fx::quantize(z)));
+    if volume.build().top(tile).is_none() {
+        return Err(format!("the spawn ({x}, {z}) is over no ground in the volume"));
+    }
+    Ok(())
+}
+
 /// Stable content key shared by the tool and runtime cache.
 pub fn content_key(value: &impl Serialize) -> String {
     let bytes = serde_json::to_vec(value).expect("validated asset serializes");
@@ -861,6 +893,7 @@ mod tests {
                 day_cycle: None,
                 lanterns: vec![],
                 glow: None,
+                volume: None,
                 instances: vec![Instance {
                     prefab: "rock".into(),
                     position: [0.0; 3],
@@ -917,6 +950,7 @@ mod tests {
                 day_cycle: None,
                 lanterns: vec![],
                 glow: None,
+                volume: None,
                 terrain: Some(Terrain {
                     platforms: vec![TerrainPlatform {
                         min: [-1.0; 2],

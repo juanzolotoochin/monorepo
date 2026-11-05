@@ -257,6 +257,168 @@ impl Volume {
     }
 }
 
+/// The fewest tiles a volume scene reaches from its center, and the most.
+pub const LAYOUT_EXTENTS: std::ops::RangeInclusive<i32> = 8..=128;
+/// The most boxes a [`VolumeLayout`] has.
+pub const MAX_BOXES: usize = 256;
+/// The layers a box may reach: from 16 m below the scene's zero to 32 m
+/// above it.
+pub const LAYOUT_LAYERS: std::ops::RangeInclusive<i32> = -32..=64;
+/// The most cells all of a layout's boxes together cover (a 64 m map
+/// filled 16 m deep is about 133 000).
+pub const MAX_LAYOUT_CELLS: u64 = 1 << 22;
+
+/// A scene's volume as authored (V10 of the verticality design): solid
+/// and empty boxes applied in order, so a later empty box carves an
+/// earlier solid one, and a later solid box fills it back or puts ore in
+/// it. A scene's `volume:` section.
+///
+/// Units are the volume's cells, not meters: tiles on the ground (1 m,
+/// tile `(x, z)` spans scene meters `x - 0.5` to `x + 0.5` and `z - 0.5` to
+/// `z + 0.5`, so the scene's origin is the middle of tile `(0, 0)`) and
+/// [`LAYER`]s up (0.5 m, layer `k` from `k * 0.5` to `(k + 1) * 0.5` m, so
+/// a box with `top: 0` makes a floor at the scene's zero).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VolumeLayout {
+    /// Half-width of the square map, in tiles: tiles `-extent` to `extent`
+    /// on both axes. Every box stays inside it.
+    pub extent: i32,
+    /// In order: each applies over the ones before.
+    pub boxes: Vec<VolumeBox>,
+}
+
+/// One box of a [`VolumeLayout`]: the tiles from `min` to `max` (both
+/// included, as `(x, z)`), layers `bottom` up to, not including, `top`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum VolumeBox {
+    /// Fills its cells with `material` (stone if unset): stone takes out
+    /// any ore an earlier box put there.
+    Solid {
+        min: [i32; 2],
+        max: [i32; 2],
+        bottom: i32,
+        top: i32,
+        #[serde(default)]
+        material: VolumeMaterial,
+    },
+    /// Clears its cells, and their ore: a tunnel or a cave.
+    Empty { min: [i32; 2], max: [i32; 2], bottom: i32, top: i32 },
+}
+
+/// What a solid cell is: plain stone, or an ore mineral of the mine's
+/// (`crate::mine`'s numbering, [`VolumeMaterial::mineral`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VolumeMaterial {
+    #[default]
+    Stone,
+    AmberOre,
+    BlueCrystal,
+    GreenMalachite,
+}
+
+impl VolumeMaterial {
+    /// The cell's mineral as [`Volume::ore`] keeps it; none for stone.
+    pub fn mineral(self) -> Option<u8> {
+        match self {
+            VolumeMaterial::Stone => None,
+            VolumeMaterial::AmberOre => Some(crate::mine::AMBER),
+            VolumeMaterial::BlueCrystal => Some(crate::mine::BLUE),
+            VolumeMaterial::GreenMalachite => Some(crate::mine::GREEN),
+        }
+    }
+}
+
+impl VolumeBox {
+    /// Its tiles' corners and its layers.
+    fn bounds(&self) -> ([i32; 2], [i32; 2], i32, i32) {
+        match *self {
+            VolumeBox::Solid { min, max, bottom, top, .. } | VolumeBox::Empty { min, max, bottom, top } => (min, max, bottom, top),
+        }
+    }
+
+    /// How many cells it covers.
+    fn cells(&self) -> u64 {
+        let (min, max, bottom, top) = self.bounds();
+        let side = |a: i32, b: i32| (b as i64 - a as i64 + 1).max(0) as u64;
+        side(min[0], max[0]) * side(min[1], max[1]) * (top as i64 - bottom as i64).max(0) as u64
+    }
+}
+
+impl VolumeLayout {
+    /// Refuses a layout that isn't a map: an extent out of
+    /// [`LAYOUT_EXTENTS`], no boxes or more than [`MAX_BOXES`], a box
+    /// inside out or empty, out of the map or out of [`LAYOUT_LAYERS`], or
+    /// more than [`MAX_LAYOUT_CELLS`] in all. The error names the box.
+    pub fn validate(&self) -> Result<(), String> {
+        if !LAYOUT_EXTENTS.contains(&self.extent) {
+            return Err(format!(
+                "a volume's extent is {} tiles, but must be from {} to {}",
+                self.extent,
+                LAYOUT_EXTENTS.start(),
+                LAYOUT_EXTENTS.end()
+            ));
+        }
+        if self.boxes.is_empty() || self.boxes.len() > MAX_BOXES {
+            return Err(format!("a volume has {} boxes, but needs 1 to {MAX_BOXES}", self.boxes.len()));
+        }
+        let mut cells = 0u64;
+        for (i, b) in self.boxes.iter().enumerate() {
+            let (min, max, bottom, top) = b.bounds();
+            let at = |m: [i32; 2]| format!("({}, {})", m[0], m[1]);
+            if min[0] > max[0] || min[1] > max[1] {
+                return Err(format!("volume box {i}: its min {} is past its max {}", at(min), at(max)));
+            }
+            if [min, max].iter().flatten().any(|v| v.abs() > self.extent) {
+                return Err(format!(
+                    "volume box {i}: tiles {} to {} leave the map (tiles -{e} to {e})",
+                    at(min),
+                    at(max),
+                    e = self.extent
+                ));
+            }
+            if bottom >= top {
+                return Err(format!("volume box {i}: its bottom layer {bottom} is not below its top {top}"));
+            }
+            if !LAYOUT_LAYERS.contains(&bottom) || !LAYOUT_LAYERS.contains(&top) {
+                return Err(format!(
+                    "volume box {i}: layers {bottom} to {top} leave layers {} to {} (-16 m to 32 m)",
+                    LAYOUT_LAYERS.start(),
+                    LAYOUT_LAYERS.end()
+                ));
+            }
+            cells += b.cells();
+        }
+        if cells > MAX_LAYOUT_CELLS {
+            return Err(format!("a volume's boxes cover {cells} cells, more than {MAX_LAYOUT_CELLS}"));
+        }
+        Ok(())
+    }
+
+    /// The volume its boxes make, in tiles from the scene's origin (as
+    /// [`crate::settlement::SceneSetup::volume`] takes it).
+    pub fn build(&self) -> Volume {
+        let mut volume = Volume::default();
+        for b in &self.boxes {
+            match *b {
+                VolumeBox::Solid { min, max, bottom, top, material } => {
+                    for x in min[0]..=max[0] {
+                        for y in min[1]..=max[1] {
+                            for layer in bottom..top {
+                                volume.fill((x, y), layer);
+                                volume.set_ore((x, y), layer, material.mineral());
+                            }
+                        }
+                    }
+                }
+                VolumeBox::Empty { min, max, bottom, top } => volume.clear_box((min[0], min[1]), (max[0], max[1]), bottom, top),
+            }
+        }
+        volume
+    }
+}
+
 impl StateHash for Volume {
     fn hash_into(&self, h: &mut StateHasher) {
         h.write_u64(self.columns.len() as u64);

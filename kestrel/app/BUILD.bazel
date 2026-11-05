@@ -46,6 +46,7 @@ rust_binary(
         "//kestrel/app/assets:pile_lab",
         "//kestrel/app/assets:sacred_tree",
         "//kestrel/app/assets:surprise_lab",
+        "//kestrel/app/assets:tunnel_lab",
         "//kestrel/content",
         "//kestrel/debug_ui",
         "//kestrel/fx",

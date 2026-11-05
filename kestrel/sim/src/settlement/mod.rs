@@ -1155,6 +1155,8 @@ mod scene_tests;
 #[cfg(test)]
 mod seat_tests;
 #[cfg(test)]
+mod tunnel_lab_tests;
+#[cfg(test)]
 mod sprites_tests;
 #[cfg(test)]
 mod soak_tests;

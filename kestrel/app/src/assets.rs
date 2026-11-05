@@ -44,6 +44,7 @@ impl SceneLibrary {
             ScenePack::decode(laser_pit::PACK_BYTES).expect("validated laser pit asset pack"),
             ScenePack::decode(asset_guide::PACK_BYTES).expect("validated asset guide pack"),
             ScenePack::decode(sacred_tree::PACK_BYTES).expect("validated Sacred Tree asset pack"),
+            ScenePack::decode(tunnel_lab::PACK_BYTES).expect("validated Tunnel Lab asset pack"),
         ]
         .into_iter()
         .map(Arc::new)
@@ -77,6 +78,9 @@ impl SceneLibrary {
 pub fn extent(pack: &ScenePack) -> f32 {
     if let Some(mine) = &pack.scene.mine {
         return mine.extent;
+    }
+    if let Some(volume) = &pack.scene.volume {
+        return volume.extent as f32;
     }
     pack.scene.scenario.as_ref().map_or(8., |s| s.extent.to_f32())
 }
@@ -402,7 +406,7 @@ mod tests {
         assert!(library.scenes[8].scene.features.contains(&SceneFeature::Digging));
         assert_eq!(
             library.index("missing"),
-            Err("Unknown scene missing. Available scenes: mining-deck, boulder-lab, pile-lab, jetpack-lab, surprise-lab, atlantis, forest-outpost, combat-arena, dig-lab, field, moonlit-glade, laser-pit, asset-guide, sacred-tree".into())
+            Err("Unknown scene missing. Available scenes: mining-deck, boulder-lab, pile-lab, jetpack-lab, surprise-lab, atlantis, forest-outpost, combat-arena, dig-lab, field, moonlit-glade, laser-pit, asset-guide, sacred-tree, tunnel-lab".into())
         );
         assert!(library.scenes[4].scene.features.contains(&SceneFeature::MemoryTrial));
         assert!(library.scenes[3].scene.features.contains(&SceneFeature::FlightHud));

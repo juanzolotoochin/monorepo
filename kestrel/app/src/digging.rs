@@ -133,7 +133,9 @@ fn build_ground(
 /// A chunk's ground: sloped in sloped scenes, the Dig Lab's flat tiles
 /// and walls elsewhere.
 fn ground_mesh(terrain: &Terrain, center: IVec2, extent: i32, key: IVec2) -> Mesh {
-    if terrain.sloped {
+    if let Some(volume) = &terrain.volume {
+        volume_placeholder_mesh(volume, center, extent, key)
+    } else if terrain.sloped {
         sloped_chunk_mesh(terrain, center, extent, key)
     } else {
         chunk_mesh(terrain, center, extent, key)
@@ -411,6 +413,55 @@ fn sloped_chunk_mesh(terrain: &Terrain, center: IVec2, extent: i32, key: IVec2) 
                     mesh.polygon(&slab(&wall, upper - step, upper), normal, mix(layer_of(k, layers), ore(a, k), 0.7) * tone);
                 }
                 mesh.polygon(&slab(&wall, f32::MIN, deepest), normal, layer_of(layers, layers));
+            }
+        }
+    }
+    mesh.build()
+}
+
+/// PLACEHOLDER until V.5's volume mesher (`kestrel/todo/verticality.md`):
+/// a volume scene's chunk as plain blocks, so the Tunnel Lab can be seen.
+/// Each column's spans are boxes: a flat top, a bottom where something is
+/// under it (a cave's or tunnel's ceiling), and walls where the next
+/// column's cell is empty, tinted by the cell's ore. No slopes; not
+/// rebuilt after a dig.
+fn volume_placeholder_mesh(volume: &sim::volume::Volume, center: IVec2, extent: i32, key: IVec2) -> Mesh {
+    use sim::volume::height;
+    let tile = |a: IVec2| ((a + center).x, (a + center).y);
+    let ore = |a: IVec2, k: i32| volume.ore(tile(a), k).map(|m| Vec3::from_array(crate::piles::mineral_color(crate::piles::mineral(m))));
+    let stone = |k: i32| ROCK.lerp(STONE_TINT, ((k + 8) as f32 / 24.0).clamp(0.0, 1.0));
+    let mut mesh = MeshBuilder::default();
+    let first = key * CHUNK - IVec2::splat(extent);
+    for y in first.y..(first.y + CHUNK).min(extent + 1) {
+        for x in first.x..(first.x + CHUNK).min(extent + 1) {
+            let a = IVec2::new(x, y);
+            let shade = if (x + y) & 1 == 0 { 1.0 } else { 0.94 };
+            let (x0, x1, z0, z1) = (x as f32 - 0.5, x as f32 + 0.5, y as f32 - 0.5, y as f32 + 0.5);
+            let spans = volume.spans(tile(a));
+            for (n, span) in spans.iter().enumerate() {
+                let (bottom, top) = (height(span.bottom).to_f32(), height(span.top).to_f32());
+                let flat = |h: f32| [Vec3::new(x0, h, z0), Vec3::new(x1, h, z0), Vec3::new(x1, h, z1), Vec3::new(x0, h, z1)];
+                mesh.quad(flat(top), Vec3::Y, mix(surface(0), ore(a, span.top - 1), 0.5) * shade);
+                if n > 0 {
+                    mesh.quad(flat(bottom), Vec3::NEG_Y, mix(stone(span.bottom), ore(a, span.bottom), 0.6) * 0.7);
+                }
+                for side in [IVec2::X, IVec2::NEG_X, IVec2::Y, IVec2::NEG_Y] {
+                    let normal = Vec3::new(side.x as f32, 0.0, side.y as f32);
+                    let edge = Vec3::new(x as f32, 0.0, y as f32) + normal * 0.5;
+                    let along = Vec3::new(-normal.z, 0.0, normal.x) * 0.5;
+                    for k in span.bottom..span.top {
+                        if volume.is_solid(tile(a + side), k) {
+                            continue;
+                        }
+                        let (from, to) = (height(k).to_f32(), height(k + 1).to_f32());
+                        let tone = if k & 1 == 0 { 1.0 } else { 0.9 };
+                        mesh.quad(
+                            [edge - along + Vec3::Y * from, edge + along + Vec3::Y * from, edge + along + Vec3::Y * to, edge - along + Vec3::Y * to],
+                            normal,
+                            mix(stone(k), ore(a, k), 0.7) * tone,
+                        );
+                    }
+                }
             }
         }
     }

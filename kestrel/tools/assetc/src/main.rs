@@ -164,4 +164,50 @@ mod tests {
         assert_eq!(recipe.seed, 42);
         assert_eq!(recipe.radius, 1.2);
     }
+    /// The Tunnel Lab, as Bazel compiles it.
+    const TUNNEL_LAB: &str = include_str!("../../../app/assets/levels/tunnel_lab.ron");
+    fn tunnel_lab() -> Scene {
+        ron::from_str(TUNNEL_LAB).unwrap()
+    }
+    #[test]
+    fn the_tunnel_lab_loads_and_validates() {
+        let scene = tunnel_lab();
+        let volume = scene.volume.clone().expect("the tunnel lab has a volume");
+        assert_eq!(volume.extent, 32, "64 m across");
+        let pack = assemble(scene, vec![]).unwrap();
+        assert_eq!(pack.scene.id, "tunnel-lab");
+        // The pack round-trips its volume as the runtime decodes it.
+        let bytes = serde_json::to_vec(&pack).unwrap();
+        assert_eq!(ScenePack::decode(&bytes).unwrap().scene.volume, Some(volume));
+    }
+    #[test]
+    fn a_malformed_volume_box_is_refused() {
+        let refused = |edit: &dyn Fn(&mut sim::volume::VolumeBox), wanted: &str| {
+            let mut scene = tunnel_lab();
+            edit(&mut scene.volume.as_mut().unwrap().boxes[1]);
+            let error = assemble(scene, vec![]).unwrap_err();
+            assert!(error.contains(wanted), "{error:?} doesn't say {wanted:?}");
+            assert!(error.contains("volume box 1"), "{error:?} doesn't name the box");
+        };
+        use sim::volume::VolumeBox::Solid;
+        refused(&|b| if let Solid { min, .. } = b { min[0] = 30 }, "past its max");
+        refused(&|b| if let Solid { max, .. } = b { max[1] = 40 }, "leave the map");
+        refused(&|b| if let Solid { top, .. } = b { *top = 0 }, "not below its top");
+        refused(&|b| if let Solid { top, .. } = b { *top = 100 }, "leave layers");
+        // An unknown material, or a field a box doesn't have, doesn't parse.
+        for (from, to) in [("material: AmberOre", "material: Gold"), ("bottom: 9, top: 11", "bottom: 9, height: 11")] {
+            assert!(TUNNEL_LAB.contains(from));
+            assert!(ron::from_str::<Scene>(&TUNNEL_LAB.replace(from, to)).is_err(), "{to} parsed");
+        }
+        // No boxes, a spawn off the map, and a volume without sloped ground.
+        let mut scene = tunnel_lab();
+        scene.volume.as_mut().unwrap().boxes.clear();
+        assert!(assemble(scene, vec![]).unwrap_err().contains("boxes"));
+        let mut scene = tunnel_lab();
+        scene.spawn = [40.0, 0.0, 0.0];
+        assert!(assemble(scene, vec![]).unwrap_err().contains("spawn"));
+        let mut scene = tunnel_lab();
+        scene.features.retain(|f| *f != voxel_assets::SceneFeature::SlopedGround);
+        assert!(assemble(scene, vec![]).unwrap_err().contains("SlopedGround"));
+    }
 }

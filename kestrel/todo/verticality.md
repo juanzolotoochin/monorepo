@@ -4,21 +4,6 @@ Tunnels and levels: two or more floors over one x–y spot. The design is
 [`VERTICALITY.md`](../VERTICALITY.md) (decisions V1–V11). Tasks run in
 order, one agent each.
 
-## V.2 The Tunnel Lab
-
-- **Status:** open
-- **Why:** the MVP needs its own map (V10).
-- **What to do:** solid and empty boxes in the scene format (with stone or
-  ore), checked by assetc, building the volume at load. A 64 m map: a
-  mountain about 8 m high with a ready tunnel through it, a cave under a
-  natural bridge (two floors over one spot), stone and ore inside. Listed
-  in the launch menu. Drawing can be a placeholder until V.5.
-- **Where:** `app/assets/levels/tunnel_lab.ron`, `app/assets/BUILD.bazel`,
-  `tools/assetc/core`, `app/src/assets.rs`, scene setup in the sim.
-- **Found in:** verticality design.
-- **Tests:** the scene loads and validates; the volume has two floors over
-  the bridge spot; a malformed box is refused.
-
 ## V.3 Bodies with a height
 
 - **Status:** open
@@ -31,7 +16,10 @@ order, one agent each.
   floor two or more layers off is a wall edge to the corner rule, so the
   patches on both sides stay level and `Terrain::walkable`'s sloped branch
   (which checks steepness, not jumps) would let a walk climb it: walks in
-  a volume must also refuse a floor change of more than a layer.
+  a volume must also refuse a floor change of more than a layer. Note
+  (from V.2): today bodies in the Tunnel Lab stand on the top floor, so
+  the tunnel's roof (4 m up from x 6) is a wall at its west mouth; the
+  map's coordinates are in V.2's **Done** below.
 - **Where:** `sim/src/settlement/avatar.rs`, `sim/src/terrain.rs`
   (`walkable`), the view's body height.
 - **Found in:** verticality design.
@@ -49,6 +37,9 @@ order, one agent each.
   yield (the mine hashes 3 to 6 from its seed; a volume has no seed).
   `Terrain::dig_refusal`, `deepen` and `walks_out` still work on pits and
   ignore the volume. Refusals as today (reach, own tile, undiggable).
+  Note (from V.2): in the Tunnel Lab today's dig makes pits, which a
+  volume's ground ignores, so it changes nothing seen; the scene has a
+  collector at (-3, -4) for the ore.
 - **Where:** `sim/src/settlement/avatar.rs`, `sim/src/settlement/action.rs`,
   `sim/src/volume.rs`, the input and the command if it needs the
   direction.
@@ -62,7 +53,11 @@ order, one agent each.
 - **Why:** the volume must be seen (V9).
 - **What to do:** a mesher for volume chunks (16 × 16 columns): floors
   sloped as today's ground meshes, walls and ceilings as blocky faces;
-  re-mesh the chunks near a dig.
+  re-mesh the chunks near a dig. Note (from V.2): replace
+  `digging::volume_placeholder_mesh` (flat blocks, no slopes); chunks are
+  rebuilt only when pits change (`digging::update`), so volume edits need
+  their own trigger (`Terrain::revision`); and `digging::ground_hit`
+  searches down from 6 m, so the cursor can't hit the mountain's top (8 m).
 - **Where:** `app/src/digging.rs` or a new `app/src/volume_mesh.rs`.
 - **Found in:** verticality design.
 - **Tests:** mesh unit tests (faces per cell, no faces between solids);
@@ -103,6 +98,66 @@ order, one agent each.
 - **Tests:** the soak; the full suite.
 
 ## Done
+
+### V.2 The Tunnel Lab
+
+- **Status:** done (branch `kestrel-verticality`, no PR yet)
+- **Why:** the MVP needs its own map (V10).
+- **What to do:** solid and empty boxes in the scene format (with stone or
+  ore), checked by assetc, building the volume at load. A 64 m map: a
+  mountain about 8 m high with a ready tunnel through it, a cave under a
+  natural bridge (two floors over one spot), stone and ore inside. Listed
+  in the launch menu. Drawing can be a placeholder until V.5.
+- **Where:** `app/assets/levels/tunnel_lab.ron`, `app/assets/BUILD.bazel`,
+  `tools/assetc/core`, `app/src/assets.rs`, scene setup in the sim.
+- **Found in:** verticality design.
+- **Tests:** the scene loads and validates; the volume has two floors over
+  the bridge spot; a malformed box is refused.
+- **Done:** the scene format's optional `volume:` section
+  (`sim::volume::VolumeLayout`, embedded as `Scene::volume` in
+  `tools/assetc/core`): `(extent: 32, boxes: [...])`, each box
+  `Solid(min: (x, z), max: (x, z), bottom: k, top: k, material: ...)` or
+  `Empty(min, max, bottom, top)`, in cells: tiles (tile `(x, z)` centered
+  on scene meters `x, z`, `min`/`max` both included) and 0.5 m layers
+  (`bottom` up to, not including, `top`; `top: 0` is a floor at 0 m).
+  `material` is `Stone` (the default), `AmberOre`, `BlueCrystal` or
+  `GreenMalachite` (minerals 0, 1, 2 as `mine` numbers them). Boxes apply
+  in order: a solid box fills and sets its cells' ore (stone clears it), an
+  empty box clears cells and ore. `VolumeLayout::validate` refuses an
+  extent outside 8..128 tiles, no boxes or more than 256, a box with min
+  past max, leaving the map, `bottom >= top`, layers outside -32..64, or
+  more than 4M cells in all, naming the box (`volume box 3: ...`); unknown
+  materials or fields don't parse. assetc also wants `SlopedGround`, no
+  mine or terrain, and the spawn over ground. `VolumeLayout::build` makes
+  the `Volume`; `lockstep::scene_setup` passes it as `SceneSetup::volume`
+  and `assets::extent` takes the volume's extent. The map,
+  `app/assets/levels/tunnel_lab.ron` ("tunnel-lab", "TUNNEL LAB / CAVES",
+  exosuit, Digging and SlopedGround, last in the launch menu), in tiles
+  from the origin (x east, z south): ground layers -8..0 everywhere (floor
+  0 m); a mountain of eight 1 m tiers, each a tile in, from x 3..25, z
+  -12..12 to x 10..18, z -5..5 at 8 m (layer 16); a tunnel along x through
+  z -1..1 (3 m wide), floor 0 m, layers 0..6 clear (3 m), roofed from x 6
+  to x 22 (west mouth at x 6, east at x 22, open cuts from x 3 and to x
+  25); a natural bridge, block x -18..-4, z 10..16 topped at 5 m (layer
+  10), the cave under it x -13..-9 through z 10..16, floor 0 m, 3 m high,
+  so over `(-11, 13)` there are floors at layers 0 and 10 (0 m and 5 m);
+  stairs a layer a tile up its west side, x -27 (0.5 m) to x -19 (4.5 m),
+  z 11..15; ore: amber x 11..13, z 5..7, layers 9..11, blue in the
+  tunnel's south wall x 13..15, z -3..-2, layers 1..4, green x 17..18, z
+  2..3, layers -4..-2. Spawn at the origin (open ground, 6 m west of the
+  tunnel's roof), a collector at (-3, -4). Drawing:
+  `digging::volume_placeholder_mesh`, marked PLACEHOLDER, draws each
+  column's spans as flat blocks (tops, cave and tunnel ceilings, walls
+  against empty cells, ore-tinted). Tests: in `tools/assetc`,
+  `the_tunnel_lab_loads_and_validates` and
+  `a_malformed_volume_box_is_refused`; in
+  `sim/src/settlement/tunnel_lab_tests.rs` (reading the scene's `volume:`
+  section with `ron`, a `sim_test`-only dep),
+  `the_tunnel_lab_volume_is_valid`,
+  `the_bridge_has_two_floors_over_the_cave`,
+  `the_tunnel_runs_through_the_mountain_with_headroom` and
+  `digging_in_the_tunnel_lab_does_not_panic`; the app's scene list and
+  obstacle counts updated. Golden unchanged.
 
 ### V.1 The volume
 
