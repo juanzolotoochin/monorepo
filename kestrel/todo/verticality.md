@@ -4,6 +4,28 @@ Tunnels and levels: two or more floors over one x–y spot. The design is
 [`VERTICALITY.md`](../VERTICALITY.md) (decisions V1–V11). Tasks run in
 order, one agent each.
 
+## Seeing inside by line of sight (prototype)
+
+- **Status:** in progress
+- **Why:** V.6's cutaway cuts a fixed shape whatever the player can see,
+  and nibbles at the mountain outside. The idea from a devlog the user
+  shared ("Seamless Indoors-Outdoors Transition"): you only see the inside
+  when you're inside.
+- **What to do:** a prototype, the user's chosen options:
+  - outside (no ceiling over the head) nothing is cut;
+  - inside, everything above the current level's ceiling is hidden over
+    the whole view (the mountain goes), fading in and out over about
+    0.3 s as you cross a mouth;
+  - a flat line-of-sight pass on the player's level from head height:
+    what is in sight is lit, falling off with distance; what isn't is
+    dimmed, not black; the view out of a mouth has soft edges;
+  - other bodies out of sight fade out while inside;
+  - no fog of war (seen places don't stay revealed);
+  - view only: the sim, saves and the net protocol don't change;
+  - a key toggles back to V.6's cutaway to compare.
+- **Where:** `app/src/cutaway.rs`, its shaders, a new visibility module.
+- **Found in:** verticality follow-up, the user's devlog reference.
+
 ## The Sacred Tree on a volume
 
 - **Status:** open
