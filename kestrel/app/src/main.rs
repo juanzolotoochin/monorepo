@@ -7,6 +7,7 @@ mod character;
 mod character_catalog;
 mod clock_hud;
 mod combat;
+mod cutaway;
 mod control;
 mod daylight;
 mod destruction;
@@ -198,6 +199,7 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
         .init_resource::<Assets<Image>>()
         .init_resource::<Assets<StandardMaterial>>()
         .init_resource::<Assets<atmosphere::GrassMaterial>>()
+        .init_resource::<Assets<cutaway::CutawayMaterial>>()
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<ButtonInput<MouseButton>>();
     } else if offscreen {
@@ -246,6 +248,8 @@ fn build_app(options: control::Options, scenes: assets::SceneLibrary, hub: contr
     if !simulation {
         app.add_plugins(bevy::pbr::MaterialPlugin::<atmosphere::GrassMaterial>::default());
         atmosphere::register_shader(&mut app);
+        app.add_plugins(bevy::pbr::MaterialPlugin::<cutaway::CutawayMaterial>::default());
+        cutaway::register_shader(&mut app);
         // GPU particles (kestrel/VFX_SPIKE_HANDOFF.md): they need the renderer
         // and compute shaders, so the web build uses WebGPU.
         app.add_plugins(bevy_sprinkles::SprinklesPlugin);

@@ -4,25 +4,6 @@ Tunnels and levels: two or more floors over one x–y spot. The design is
 [`VERTICALITY.md`](../VERTICALITY.md) (decisions V1–V11). Tasks run in
 order, one agent each.
 
-## V.6 The cutaway
-
-- **Status:** open
-- **Why:** underground, the ground above hides the player (V7).
-- **What to do:** ground above the player's head is not drawn within a
-  radius (a soft-edged hole); cut faces are dark.
-  Note (from V.3): `tunnel_lab_demo` (`app/demos/tunnel_lab.json`) walks
-  into the tunnel; today the mountain hides the avatar there.
-  Note (from V.5): volume chunks are `GroundChunk`s with the shared
-  `GroundMaterial` (a plain `StandardMaterial`, vertex colours); cut faces
-  (walls, ceilings) have `UV_0.x = 1`, tops 0, so a cutaway shader or
-  extended material can darken cut faces and discard the ground over the
-  player. The camera looks toward -x -z, so the west tunnel mouth and the
-  bridge's north side face away from it; a 1 m dug stair is mostly in
-  shadow.
-- **Where:** the volume material or shader, `app/src/rig.rs`.
-- **Found in:** verticality design.
-- **Tests:** screenshots in the tunnel, under the bridge and outside.
-
 ## V.7 Paths in 3D and the test walker
 
 - **Status:** open
@@ -65,11 +46,75 @@ order, one agent each.
   doesn't re-mesh yet). A jetpack hovering outside can't enter a tunnel
   exactly 2 m high (its head at hover height is over the mouth's
   ceiling): walk in, then hold it.
+  Note (from V.6): underground floors sit in the mountain's shadow and
+  read close to the cutaway's dark section colour, and a 1 m dug stair is
+  mostly in shadow; for the demo's look, consider a little fill light or
+  ambient underground (or a lighter section colour), keeping shadows.
 - **Where:** sim tests, the demo scripts.
 - **Found in:** verticality design.
 - **Tests:** the soak; the full suite.
 
 ## Done
+
+### V.6 The cutaway
+
+- **Status:** done (branch `kestrel-verticality`, no PR yet)
+- **Why:** underground, the ground above hides the player (V7).
+- **What to do:** ground above the player's head is not drawn within a
+  radius (a soft-edged hole); cut faces are dark.
+  Note (from V.3): `tunnel_lab_demo` (`app/demos/tunnel_lab.json`) walks
+  into the tunnel; today the mountain hides the avatar there.
+  Note (from V.5): volume chunks are `GroundChunk`s with the shared
+  `GroundMaterial` (a plain `StandardMaterial`, vertex colours); cut faces
+  (walls, ceilings) have `UV_0.x = 1`, tops 0, so a cutaway shader or
+  extended material can darken cut faces and discard the ground over the
+  player. The camera looks toward -x -z, so the west tunnel mouth and the
+  bridge's north side face away from it; a 1 m dug stair is mostly in
+  shadow.
+- **Where:** the volume material or shader, `app/src/rig.rs`.
+- **Found in:** verticality design.
+- **Tests:** screenshots in the tunnel, under the bridge and outside.
+- **Done:** `app/src/cutaway.rs`: a volume scene's ground chunks use
+  `CutawayMaterial` = `ExtendedMaterial<StandardMaterial, CutawayExt>`
+  (the same vertex-coloured base, drawn with `cull_mode: None`), with
+  shaders `app/shaders/cutaway.wesl` (main pass) and
+  `cutaway_prepass.wesl` (the camera's depth/normal/motion prepass, which
+  SSAO and TAA turn on, so it must cut the same hole); other scenes keep
+  `GroundMaterial`. The cut: a cylinder round the ray from the middle of
+  the body (feet + 1 m) toward the camera (the orthographic camera's
+  backward axis, set each frame by `cutaway::follow` with the drawn
+  player's position), capped by a half sphere round the body. Inside it
+  the ground over the head plane (feet + `BODY_HEIGHT` + 0.25 m) goes:
+  ceilings and the hill between camera and player, while far walls stand;
+  on the camera's side of the body a narrower cylinder (`LOW_RADIUS` 2.25
+  m) also cuts down to 0.5 m over the feet, so a tunnel's near wall or a
+  dug stair's side hiding the body goes down to the shins. Floors at the
+  feet are never cut (a bridge underfoot stays). The radius over the head
+  is 4.5 m (`RADIUS`) while the player is under a ceiling
+  (`Terrain::ceiling_at`), easing to 2.25 m in the open, so outside the
+  terraces beside the player keep their shape (a tried always-4.5 m hole
+  bit a dark crater out of the mountain at the spawn). Soft edge: the
+  last 1 m of the radius is an ordered 4 × 4 dithered discard, so the
+  ground stays opaque. Section: back faces (the inside of solid ground
+  seen through the hole) are drawn flat `SECTION` (sRGB 0.11, 0.085,
+  0.075), unlit. Shadows are the uncut ground: opaque shadow passes run no
+  fragment shader, and a directional light's emulated unclipped depth
+  (`UNCLIPPED_DEPTH_ORTHO_EMULATION`) skips the cut, so the mountain still
+  shades the tunnel. The `UV_0.x` cut flag is unused. The Rust mirror of
+  the shaders' test is `cutaway::Cut::amount`; tests in
+  `cutaway::tests`: `ground_over_the_head_or_toward_the_camera_is_cut`,
+  `floors_and_far_walls_are_not_cut`,
+  `under_the_head_only_a_narrow_hole_is_cut`,
+  `ground_outside_the_radius_is_not_cut` and
+  `the_edge_fades_across_its_band`. `app/demos/tunnel_lab.json` now also
+  climbs the bridge's west stairs and stands on it over the cave (-11, 13)
+  at 5 m. Screenshots (local `tunnel_lab_demo`): in the tunnel and in the
+  cave under the bridge (the avatar in a dark-sectioned hole), on the
+  bridge (nothing cut), outside at the spawn and beside the bridge (a
+  faint nibble at most) and in the dug stair (the trench's near side cut,
+  the body visible). The dug stair was not brightened: the cave and tunnel
+  floors are in the mountain's shadow and read close to the section
+  colour (see the note on V.8).
 
 ### V.5 Drawing the volume
 

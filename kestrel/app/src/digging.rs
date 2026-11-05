@@ -99,7 +99,7 @@ impl Service for Digging {
             .add_service_systems::<Self, _>(Phase::Mirror, (update, follow_camera).chain().run_if(active.clone()))
             .add_systems(
                 PostUpdate,
-                (feedback, toss_stone, fly_stones).after(bevy::transform::TransformSystems::Propagate).run_if(crate::control::rendered).run_if(active),
+                (feedback, toss_stone, fly_stones, crate::cutaway::follow).after(bevy::transform::TransformSystems::Propagate).run_if(crate::control::rendered).run_if(active),
             );
     }
 }
@@ -108,20 +108,43 @@ impl Service for Digging {
 #[derive(Resource)]
 struct GroundMaterial(Handle<StandardMaterial>);
 
+/// The ground's base material (a volume scene's cutaway extends it).
+fn ground_material() -> StandardMaterial {
+    StandardMaterial { base_color: Color::WHITE, perceptual_roughness: 0.93, ..default() }
+}
+
 fn build_ground(
     In((terrain, center)): In<(Terrain, IVec2)>,
     mut commands: Commands,
     ground: Option<Res<GroundMaterial>>,
+    cutaway: Option<Res<crate::cutaway::CutawayGround>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut cutaways: ResMut<Assets<crate::cutaway::CutawayMaterial>>,
 ) {
-    let material = match ground {
-        Some(ground) => ground.0.clone(),
-        None => {
-            let material = materials.add(StandardMaterial { base_color: Color::WHITE, perceptual_roughness: 0.93, ..default() });
-            commands.insert_resource(GroundMaterial(material.clone()));
-            material
-        }
+    // A volume scene's ground is cut away over the player (`cutaway`).
+    enum Ground {
+        Plain(Handle<StandardMaterial>),
+        Cutaway(Handle<crate::cutaway::CutawayMaterial>),
+    }
+    let material = if terrain.volume.is_some() {
+        Ground::Cutaway(match cutaway {
+            Some(cutaway) => cutaway.0.clone(),
+            None => {
+                let material = cutaways.add(crate::cutaway::material(ground_material()));
+                commands.insert_resource(crate::cutaway::CutawayGround(material.clone()));
+                material
+            }
+        })
+    } else {
+        Ground::Plain(match ground {
+            Some(ground) => ground.0.clone(),
+            None => {
+                let material = materials.add(ground_material());
+                commands.insert_resource(GroundMaterial(material.clone()));
+                material
+            }
+        })
     };
     let extent = terrain.extent.round().floor_to_int() as i32;
     let count = (2 * extent + 1 + CHUNK - 1) / CHUNK;
@@ -130,7 +153,11 @@ fn build_ground(
         for x in 0..count {
             let key = IVec2::new(x, y);
             let mesh = meshes.add(ground_mesh(&terrain, center, extent, key));
-            commands.spawn((GroundChunk(key), WorldScoped::default(), Mesh3d(mesh), MeshMaterial3d(material.clone()), Transform::default()));
+            let mut chunk = commands.spawn((GroundChunk(key), WorldScoped::default(), Mesh3d(mesh), Transform::default()));
+            match &material {
+                Ground::Plain(material) => chunk.insert(MeshMaterial3d(material.clone())),
+                Ground::Cutaway(material) => chunk.insert(MeshMaterial3d(material.clone())),
+            };
         }
     }
     info!("Built the dug ground: {} chunks in {:.1} ms", count * count, started.elapsed().as_secs_f64() * 1e3);

@@ -15,8 +15,9 @@
 //!   cracks where a ramp meets a blocky wall.
 //!
 //! Cut faces (walls and ceilings) are drawn darker than tops and carry
-//! `UV_0.x = 1` (tops 0), for the cutaway (V.6) to tell them apart; all use
-//! the ground's one vertex-coloured material (`digging::GroundMaterial`).
+//! `UV_0.x = 1` (tops 0), for a shader to tell them apart (the cutaway
+//! doesn't need it); all use the volume ground's one vertex-coloured
+//! material (`cutaway::CutawayMaterial`).
 
 use bevy::prelude::*;
 use fx::FxVec2;
