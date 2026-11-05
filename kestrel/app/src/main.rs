@@ -22,6 +22,7 @@ mod legacy;
 mod lockstep;
 mod menu;
 mod digging;
+mod volume_mesh;
 mod nametags;
 mod navigation;
 mod obstacles;

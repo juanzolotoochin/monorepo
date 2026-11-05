@@ -4,29 +4,6 @@ Tunnels and levels: two or more floors over one x–y spot. The design is
 [`VERTICALITY.md`](../VERTICALITY.md) (decisions V1–V11). Tasks run in
 order, one agent each.
 
-## V.5 Drawing the volume
-
-- **Status:** open
-- **Why:** the volume must be seen (V9).
-- **What to do:** a mesher for volume chunks (16 × 16 columns): floors
-  sloped as today's ground meshes, walls and ceilings as blocky faces;
-  re-mesh the chunks near a dig. Note (from V.2): replace
-  `digging::volume_placeholder_mesh` (flat blocks, no slopes); chunks are
-  rebuilt only when pits change (`digging::update`), so volume edits need
-  their own trigger (`Terrain::revision`); and `digging::ground_hit`
-  searches down from 6 m, so the cursor can't hit the mountain's top (8 m).
-  Note (from V.4): a volume dig clears up to `HEADROOM` cells of one
-  column (`avatar::Dig { tile, layer: Some(bottom) }`, finished in
-  `Settlement::dig_housekeeping` through `Terrain::clear_column`), bumping
-  `Terrain::revision` once per cleared cell; re-mesh the dug tile's chunk
-  and its neighbours' (the corner rule slopes the tiles round it). The
-  dig's crack/progress visuals (`digging::shown_digs`) still draw at the
-  dig's tile on the top floor (`ground`): draw them at the dug cells.
-- **Where:** `app/src/digging.rs` or a new `app/src/volume_mesh.rs`.
-- **Found in:** verticality design.
-- **Tests:** mesh unit tests (faces per cell, no faces between solids);
-  screenshots of the mountain, the tunnel and the bridge.
-
 ## V.6 The cutaway
 
 - **Status:** open
@@ -34,7 +11,14 @@ order, one agent each.
 - **What to do:** ground above the player's head is not drawn within a
   radius (a soft-edged hole); cut faces are dark.
   Note (from V.3): `tunnel_lab_demo` (`app/demos/tunnel_lab.json`) walks
-  into the tunnel; today the placeholder mountain hides the avatar there.
+  into the tunnel; today the mountain hides the avatar there.
+  Note (from V.5): volume chunks are `GroundChunk`s with the shared
+  `GroundMaterial` (a plain `StandardMaterial`, vertex colours); cut faces
+  (walls, ceilings) have `UV_0.x = 1`, tops 0, so a cutaway shader or
+  extended material can darken cut faces and discard the ground over the
+  player. The camera looks toward -x -z, so the west tunnel mouth and the
+  bridge's north side face away from it; a 1 m dug stair is mostly in
+  shadow.
 - **Where:** the volume material or shader, `app/src/rig.rs`.
 - **Found in:** verticality design.
 - **Tests:** screenshots in the tunnel, under the bridge and outside.
@@ -56,6 +40,8 @@ order, one agent each.
   because `walkable_at` then walks it; plan them with the 3D nav. Spawn,
   respawn, joining players, leaving a building and climbing out of a
   vehicle still put the feet on the top floor (`footprint`).
+  Note (from V.5): a sprite's dig bar (`digging::shown_digs`) stands on
+  `Terrain::height`, the top floor; give it the sprite's feet height.
   Note (from V.4): piles store no height either: ore a volume dig drops
   lands on a pile at a tile within two of the dug one
   (`PileLab::mined`, which checks pits and the top floor's steepness, not
@@ -84,6 +70,76 @@ order, one agent each.
 - **Tests:** the soak; the full suite.
 
 ## Done
+
+### V.5 Drawing the volume
+
+- **Status:** done (branch `kestrel-verticality`, no PR yet)
+- **Why:** the volume must be seen (V9).
+- **What to do:** a mesher for volume chunks (16 × 16 columns): floors
+  sloped as today's ground meshes, walls and ceilings as blocky faces;
+  re-mesh the chunks near a dig. Note (from V.2): replace
+  `digging::volume_placeholder_mesh` (flat blocks, no slopes); chunks are
+  rebuilt only when pits change (`digging::update`), so volume edits need
+  their own trigger (`Terrain::revision`); and `digging::ground_hit`
+  searches down from 6 m, so the cursor can't hit the mountain's top (8 m).
+  Note (from V.4): a volume dig clears up to `HEADROOM` cells of one
+  column (`avatar::Dig { tile, layer: Some(bottom) }`, finished in
+  `Settlement::dig_housekeeping` through `Terrain::clear_column`), bumping
+  `Terrain::revision` once per cleared cell; re-mesh the dug tile's chunk
+  and its neighbours' (the corner rule slopes the tiles round it). The
+  dig's crack/progress visuals (`digging::shown_digs`) still draw at the
+  dig's tile on the top floor (`ground`): draw them at the dug cells.
+- **Where:** `app/src/digging.rs` or a new `app/src/volume_mesh.rs`.
+- **Found in:** verticality design.
+- **Tests:** mesh unit tests (faces per cell, no faces between solids);
+  screenshots of the mountain, the tunnel and the bridge.
+- **Done:** `app/src/volume_mesh.rs` replaces
+  `digging::volume_placeholder_mesh`; `digging::ground_mesh` calls
+  `volume_mesh::chunk_mesh` for a volume scene's 16 × 16 chunks, with the
+  ground's one vertex-coloured `StandardMaterial` (`GroundMaterial`), so
+  chunks cast and receive shadows as the ground does. Faces: every span's
+  top, sloped by the volume's corner rule (`volume_mesh::top_corners`:
+  each corner the lowest of the four tiles touching it, a neighbour by
+  its `Volume::floor_near` the span's top, as `Volume::patch` has it),
+  split on the diagonal as the sloped ground is; every span's underside
+  (ceilings, and the volume's bottom) flat; walls on each tile side as
+  the part of the column's profile (each span from its flat bottom up to
+  its sloped top along that side) the neighbour's profile doesn't cover,
+  cut by exact half-plane clips, so no face lies between solids and a
+  wall reaches exactly the sloped top's edge (no fins over ramps, no
+  cracks under them). Colours: open-sky tops by height as terraces are
+  (`digging::surface`), tops under a ceiling and walls the stone of their
+  layer (rock deep, warmer up), walls banded by 0.5 m layer, ore cells
+  tinted by mineral (`piles::mineral_color`); walls and ceilings darker
+  (`CUT`). For V.6: cut faces carry `UV_0.x = 1` (tops 0;
+  `MeshBuilder::cut`), and tops face up (normal y > 0), walls sideways,
+  ceilings down. Re-mesh: `Digging` keeps the volume it drew and the
+  `Terrain::revision` it read; on a new revision `digging::update`
+  diffs the volumes (`volume_mesh::changed_tiles`: spans or ore per
+  arena tile) and rebuilds the chunks within two tiles of each change
+  (`dirty_chunks(.., sloped: true)`), and `feedback` bursts dust (and
+  the stone cue) from each dug tile's lowest cleared cell
+  (`lowest_cleared`). Cursor: `digging::ground_hit` in a volume scene
+  marches the ray from over the highest column to under the lowest
+  (`volume_mesh::ray_hit`), hitting the first point inside a solid cell
+  under its span's drawn top, and returns that top. `shown_digs` already
+  drew an avatar's bar and chips at its feet (`AvatarState::height`, its
+  floor), so it is unchanged (sprites still read `ground`, see V.7).
+  Tests in `volume_mesh::tests`: `a_single_cell_has_six_faces`,
+  `two_solids_side_by_side_share_no_face`,
+  `a_tunnel_has_floor_walls_and_ceiling`,
+  `sloped_floors_are_the_simulations` (every drawn top corner of a ramp,
+  a tunnel and a cave is `Volume::floor` there),
+  `the_surface_is_closed` (face area vectors sum to zero over ramps
+  beside walls, a tunnel, a cave and a dug stair),
+  `a_dig_remeshes_only_the_dirty_chunks` (clean chunks' meshes are
+  unchanged) and `the_ray_hits_the_volumes_ground` (a hill's 8 m top).
+  `app/demos/tunnel_lab.json` now also walks out of the east mouth, to
+  the bridge's south side, and digs a stair (three `Down`, a `Level`,
+  an `Up`; a dig needs about 80 frames at 30 fps and walking cancels
+  it). Screenshots (local `tunnel_lab_demo`): the mountain from the
+  spawn, the east cut and tunnel mouth, the bridge with the cave mouth,
+  and the dug stair (its ramped rim follows the corner rule).
 
 ### V.4 Digging in 3D
 
