@@ -180,28 +180,21 @@ its milestones, in order; one PR per milestone.
   `app/src/effects.rs`.
 - **Found in:** M7.2.
 
-## M7.4 Lights at night
+## Night lights polish
 
 - **Status:** open
-- **Why:** the town and the threat stay readable in a dark night (N7).
-- **What to do:** the tree glows (a warm point light rising at dusk,
-  fading at dawn); ghouls' eyes glow (two small emissive dots); a few
-  fixed lanterns placed in the scene file, lit at dusk: at the top of each
-  ramp and round the tree's plaza.
-- **Where:** `app/src/scene.rs`, `settlement.rs` (ghoul drawing),
-  `sacred_tree.ron`, the scene schema.
-- **Found in:** day and night design.
-- **Tests:** a midnight screenshot shows the plaza, both ramp tops and an
-  approaching ghoul.
-- **From M7.3:** the moon is a 1800 lux key with ambient 150
-  (`sacred_tree.ron`'s `day_cycle.midnight`); lights rising at dusk can
-  read the hour with `voxel_assets::day_cycle::hour` and the cycle's
-  `MORNING`/`EVENING` blends (`app/src/daylight.rs` samples it each frame
-  at the mirror's `tick + alpha`). The built-in deck's three
-  `style::AccentLight` point lights still shine in the town (a warm patch
-  by the stone pile at night): keep, move or switch them off for the
-  town. Dusk reads darker than dawn because the camera sees the sun's back
-  side then; the tree's glow can help.
+- **Why:** at the town zoom a ghoul's glowing eyes (M7.4) are a pixel or
+  two and show only when it faces the camera; the tree's warm pool shows
+  faint concentric bands on the grass; lanterns are drawn only, so the
+  elder and sprites walk through their posts.
+- **What to do:** bigger or brighter eyes, or a faint glow on the ghoul's
+  head readable from behind; check the banding (tonemapping, the point
+  light's range falloff or the grass's voxels); make lanterns solid (sim
+  obstacles from the scene, keeping routes and the happy path) if walking
+  through them reads badly in the playtest.
+- **Where:** `app/assets/styles/forest.ron` (`ghoul` skin, `eyes`),
+  `app/src/daylight.rs`, `app/assets/levels/sacred_tree.ron`.
+- **Found in:** M7.4.
 
 ## M7.5 The time on the HUD
 
@@ -238,8 +231,86 @@ its milestones, in order; one PR per milestone.
   it silently runs one tick a frame). The four lighting shots were frames
   of one 4x run picked by the trace's `settlement.seconds` (9, 75, 143 and
   187.5 s).
+- **From M7.4:** the night's lights are tuned against the 1800 lux moon
+  and ambient 150: if the midnight key changes, retune the tree's glow
+  (2 million lm in `sacred_tree.ron`) and `daylight::LANTERN_LUMENS`
+  (250000). The demo's night shots should frame a ghoul facing the camera
+  (the west column walks towards it) to show the eyes. A 1420-frame
+  capture at 1440 x 960 is about 5.6 GB of PNGs; delete the frames after
+  picking.
 
 ## Done
+
+### M7.4 Lights at night
+
+- **Status:** done (branch `kestrel-sacred-tree-daynight`)
+- **Why:** the town and the threat stay readable in a dark night (N7).
+- **What to do:** the tree glows (a warm point light rising at dusk,
+  fading at dawn); ghouls' eyes glow (two small emissive dots); a few
+  fixed lanterns placed in the scene file, lit at dusk: at the top of each
+  ramp and round the tree's plaza.
+- **Where:** `app/src/scene.rs`, `settlement.rs` (ghoul drawing),
+  `sacred_tree.ron`, the scene schema.
+- **Found in:** day and night design.
+- **Tests:** a midnight screenshot shows the plaza, both ramp tops and an
+  approaching ghoul.
+- **From M7.3:** the moon is a 1800 lux key with ambient 150
+  (`sacred_tree.ron`'s `day_cycle.midnight`); lights rising at dusk can
+  read the hour with `voxel_assets::day_cycle::hour` and the cycle's
+  `MORNING`/`EVENING` blends (`app/src/daylight.rs` samples it each frame
+  at the mirror's `tick + alpha`). The built-in deck's three
+  `style::AccentLight` point lights still shine in the town (a warm patch
+  by the stone pile at night): keep, move or switch them off for the
+  town. Dusk reads darker than dawn because the camera sees the sun's back
+  side then; the tree's glow can help.
+- **Done:** schema (`voxel_assets::day_cycle`, re-exported): `Scene::lanterns:
+  Vec<Lantern>` (`Lantern { position }`, a post's foot) and `Scene::glow:
+  Option<NightGlow>` (`NightGlow { position, color, intensity, range }`,
+  lumens at full glow, meters), both `#[serde(default)]` (no pack version
+  bump), checked by `validate_night_lights` (finite places, up to 64
+  lanterns, colors 0..1, up to 10 million lumens, range 0.1 to 100 m). Drawn
+  only: the sim doesn't know of them, so lanterns don't block walks (the
+  happy path and routes unchanged). The curve, `day_cycle::night_glow(hour)
+  -> 0..1`: out by day, lit up (smoothstep) from `LIGHTING_UP` (80% of the
+  day, 30 s before dusk) to `DUSK_GLOW` 0.5 at dusk, on to full over the
+  night's `EVENING` (30%), full until `SMALL_HOURS` (75%), down to
+  `DAWN_GLOW` 0.5 at dawn and out by `PUTTING_OUT` (10% of the day, 15 s);
+  continuous at both swaps. App (`app/src/daylight.rs`):
+  `spawn_night_lights` (from `SceneView::init`, `WorldScoped`) spawns the
+  glow's `PointLight` and, per lantern, four cuboids (a base, a 1.6 m post,
+  a glowing head at 1.75 m, a cap) and a warm point light (`LANTERN_LUMENS`
+  250000, `LANTERN_RANGE` 10 m), all with shadows off; `NightLight { full }`
+  marks them. `glow_at(pack, time)` is the curve at the mirror's eased
+  tick (always 1 without a cycle); `follow` and `dress` write `full * glow`
+  to each light and the heads' emissive (10, 5, 1.5 at full, only when it
+  changes). Accent lights: in a scene with a day cycle `dress` turns the
+  built-in deck's three `AccentLight`s off (the night's lights replace
+  them); other scenes keep them. Ghouls' eyes: a new `eyes` material in
+  `styles/forest.ron` (emissive (14, 10, 2)) and two 0.11 x 0.08 m boxes
+  under the `ghoul` skin's brow; always lit, so the forest's ghouls have
+  them too. The Sacred Tree (`sacred_tree.ron`): the glow at (0, 2.6, 0)
+  under the canopy, (1.0, 0.72, 0.40), 2 million lumens, 20 m; lanterns at
+  (+-14.6, 0, +-4.4) (each side of the top of both ramps; the plateau's edge
+  is 15.5 m out, the ramps 7 m wide) and round the plaza at (+-3.4, 0, 6.4)
+  and (+-4.6, 0, -4.6): nine point lights in all. Tests: `voxel_assets`
+  `day_cycle::tests::the_nights_lights_rise_at_dusk_and_fade_at_dawn` (out
+  by day, full at midnight, continuous at dusk and dawn, rising and falling
+  steadily) and `night_lights_out_of_range_fail_validation`;
+  `style::tests::a_day_cycle_wins_over_the_style_and_other_scenes_keep_their_fixed_light`
+  now also checks the Sacred Tree's glow and lanterns are lit by
+  `glow_at` and its accent lights are off, and that the industrial scene
+  has no night lights and its accents back. Screenshots (the M7.3 demo
+  script at 4x, 30 fps, frames by `settlement.seconds`): noon (75 s) the
+  lanterns are small dark posts, unlit; dusk (152 s) their heads lit and a
+  soft warm pool under the tree; midnight (187.5 s) a warm pool over the
+  plaza (piles, sprites, the wood gatherer), lantern pools at both ramp
+  tops, the west column's yellow eyes readable and the east column on its
+  ramp. A first try (400000 lm tree, 60000 lm lanterns) barely lit the
+  plaza against the 1800 lux moon. Save format, input log, net protocol,
+  commands and golden unchanged (view only). For later: the eyes are a pixel
+  or two at the town zoom and show only on a ghoul facing the camera (the
+  east column, walking away, shows none); the tree's pool shows faint
+  concentric bands on the grass; see "Night lights polish".
 
 ### M7.3 The sun, the moon and the colors
 
