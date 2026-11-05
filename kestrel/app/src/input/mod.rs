@@ -81,6 +81,10 @@ pub enum Suspend {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Utility {
     Dig,
+    /// In a volume scene: dig a step down in front (keyboard Ctrl+F).
+    DigDown,
+    /// In a volume scene: dig a step up in front (keyboard Alt+F).
+    DigUp,
     /// Record, or deploy a recording in progress.
     Record,
     ClearRecording,
@@ -92,6 +96,8 @@ impl Utility {
     pub fn label(self, recording: bool) -> &'static str {
         match self {
             Utility::Dig => "DIG",
+            Utility::DigDown => "DIG DOWN",
+            Utility::DigUp => "DIG UP",
             Utility::Record if recording => "DEPLOY RECORDING",
             Utility::Record => "RECORD",
             Utility::ClearRecording => "CLEAR RECORDING",
@@ -743,7 +749,16 @@ impl InputService {
             edges.push(Edge::Board);
         }
         if keys.just_pressed(KeyCode::KeyF) {
-            edges.push(Edge::Utility(Utility::Dig));
+            // In a volume scene Ctrl digs a step down and Alt a step up.
+            let volume = self.scene.utility.contains(&Utility::DigDown);
+            let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+            let alt = keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight);
+            let dig = match (volume, ctrl, alt) {
+                (true, true, _) => Utility::DigDown,
+                (true, false, true) => Utility::DigUp,
+                _ => Utility::Dig,
+            };
+            edges.push(Edge::Utility(dig));
         }
         // E toggles a machine where there is a supply chain, and drives the
         // memory recording elsewhere; Q clears it.

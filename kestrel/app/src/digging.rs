@@ -892,7 +892,8 @@ pub fn fly_stones(
 }
 
 /// What the town's dig hint says when a dig in front is refused
-/// (`Settlement::dig_in_front_of`).
+/// (`Settlement::dig_in_front_of`), and a volume scene's notice
+/// (`Settlement::dig_volume_of`).
 pub fn refusal_text(refusal: DigRefusal) -> &'static str {
     match refusal {
         DigRefusal::Undiggable => "Can't dig here",
@@ -903,6 +904,7 @@ pub fn refusal_text(refusal: DigRefusal) -> &'static str {
         DigRefusal::Strands => "That would leave someone no way out",
         DigRefusal::Blocked => "Something stands there",
         DigRefusal::Pile => "A pile is in the way",
+        DigRefusal::Clear => "Nothing to dig there",
     }
 }
 

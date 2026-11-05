@@ -654,8 +654,9 @@ impl Settlement {
             for &(mineral, _, units) in &piles {
                 settlement.accounts[lab.item(mineral) as usize].initial += units as u64;
             }
-            if setup.mine.is_some() {
-                // Ore can be piled anywhere in a mine, and there's a lot of it.
+            if setup.mine.is_some() || setup.volume.is_some() {
+                // Ore can be piled anywhere in a mine or a volume (V.4), and
+                // there's a lot of it.
                 lab.limit = terrain.extent - Fx::ONE;
                 lab.max_piles = piles::MAX_MINE_PILES;
             }
@@ -1156,6 +1157,8 @@ mod scene_tests;
 mod seat_tests;
 #[cfg(test)]
 mod tunnel_lab_tests;
+#[cfg(test)]
+mod volume_dig_tests;
 #[cfg(test)]
 mod sprites_tests;
 #[cfg(test)]

@@ -24,7 +24,7 @@ use super::{AgentIx, DepotState, InventoryRef, ItemIx, Kinds, Settlement};
 use crate::messages::{ActionMessages, BundleRefused, Burst, BurstRefused, CarryUnit, DropBundle, DropHaul, ElderFire, DropNotes, Install, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
 use crate::nav::{self, angle_between, distance};
 use crate::terrain::{Terrain, LAYER};
-use crate::volume::BODY_HEIGHT;
+use crate::volume::{DigDirection, BODY_HEIGHT};
 
 /// The longest player name, in characters.
 pub const NAME_CHARS: usize = 16;
@@ -123,6 +123,10 @@ pub struct Dig {
     pub started: u64,
     /// The layer comes out on this tick.
     pub until: u64,
+    /// In a volume scene, the first of the `HEADROOM` layers the dig clears
+    /// in `tile` (`Terrain::volume_dig`, `Terrain::clear_column`); nothing
+    /// for a pit's layer (save format 41).
+    pub layer: Option<i32>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -472,7 +476,12 @@ fn step(body: &mut Body, avatar: &mut AvatarState, terrain: &Terrain, delta: FxV
     let candidate = slide(terrain, previous, delta, radius);
     let airborne = avatar.flight.airborne;
     let allowed = if airborne {
-        terrain.flyable_at(previous, candidate, avatar.height, radius)
+        // A jetpack capped at the floor under a roof exactly `HEADROOM` high
+        // (a dug stair: each tile's ceiling is 2 m over its own floor, so a
+        // head over the ramp between two is above the lower one's) walks
+        // on, rather than stall where `flyable_at` finds no room (V.4).
+        let on_floor = || terrain.volume.is_some() && terrain.footprint_at(previous, avatar.height, radius).is_some_and(|y| avatar.height <= y + Fx::from_ratio(1, 100));
+        terrain.flyable_at(previous, candidate, avatar.height, radius) || (on_floor() && terrain.walkable_at(previous, candidate, avatar.height, radius))
     } else {
         terrain.walkable_at(previous, candidate, avatar.height, radius)
     };
@@ -689,13 +698,26 @@ impl Settlement {
     /// In a mine, the layer's ore flies out onto a pile beside the pit. In a
     /// town's, its stone lands on a ground pile beside the pit, clear of the
     /// docks, output piles and slot spots as a dropped bundle is; earth
-    /// yields nothing.
+    /// yields nothing. In a volume scene a dig clears its cells
+    /// (`Terrain::clear_column`), each solid one yielding
+    /// `mine::cell_yield` units: an ore cell its mineral, flying onto a
+    /// pile beside the tile, a stone cell the scene's stone item if it has
+    /// one (the Tunnel Lab has none: nothing).
     pub(crate) fn dig_housekeeping(&mut self, tick: u64, terrain: &mut Terrain) {
         let mut dug = Vec::new();
+        let mut cells = Vec::new();
         for a in &mut self.agents {
             if let Some(dig) = finish_dig(a, tick) {
-                if terrain.deepen(dig.tile) {
-                    dug.push(dig.tile);
+                match dig.layer {
+                    Some(bottom) => {
+                        let cleared = terrain.clear_column(dig.tile, bottom);
+                        cells.extend(cleared.into_iter().map(|(layer, ore)| (dig.tile, layer, ore)));
+                    }
+                    None => {
+                        if terrain.deepen(dig.tile) {
+                            dug.push(dig.tile);
+                        }
+                    }
                 }
             }
             // A miner's, if no one dug its layer out first (`Step::Dig`).
@@ -705,15 +727,35 @@ impl Settlement {
                 }
             }
         }
-        if dug.is_empty() {
+        if dug.is_empty() && cells.is_empty() {
             return;
         }
-        // Ghouls walk round the new pits (M6.7).
-        self.reroute_round(&dug, terrain);
+        // Ghouls walk round the new pits (M6.7), and the dug volume.
+        let mut changed = dug.clone();
+        changed.extend(cells.iter().map(|&(tile, _, _)| tile));
+        changed.dedup();
+        self.reroute_round(&changed, terrain);
         let docks = self.depots.iter().map(|d| d.position);
         let spots = self.buildings.iter().flat_map(|b| [b.output_position, b.slot_position(&self.building_kinds[b.kind as usize])]);
         let targets: Vec<FxVec2> = docks.chain(spots).collect();
         let stone = self.item_index(crate::mine::STONE_ID);
+        for (tile, layer, ore) in cells {
+            let Some(lab) = self.piles.as_mut() else { break };
+            let item = match (ore, stone) {
+                (Some(mineral), _) if lab.has_minerals() => lab.item(mineral),
+                (None, Some(stone)) => stone,
+                _ => continue,
+            };
+            let units = crate::mine::cell_yield(tile, layer);
+            let Some((id, first)) = lab.mined(item, units, tile, terrain, &targets) else { continue };
+            self.accounts[item as usize].generated += units as u64;
+            let Some(material) = ore else { continue };
+            let position = lab.piles[&id].position;
+            let from = TossEnd::Pit { position: Terrain::pit_center(tile) };
+            for slot in first..first + units {
+                self.events.push(Event::PileToss { material, from, to: TossEnd::Pile { id, slot, position }, ticks: ORE_FLIGHT_TICKS });
+            }
+        }
         for tile in dug {
             let layer = terrain.pit(tile) - 1;
             let Some(mine) = terrain.mine() else { continue };
@@ -928,7 +970,15 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
         }
         Action::Jetpack(enabled) => jetpack(avatar, enabled, def),
         Action::Jump => jump(avatar, view.tick, def),
-        Action::DigDown => {
+        // A volume scene digs the volume in front, level unless told down
+        // or up (V5 of the verticality design).
+        Action::DigDown | Action::DigFront(_) if view.terrain.volume.is_some() => {
+            let direction = if let Action::DigFront(direction) = *action { direction } else { DigDirection::Level };
+            if let Ok((tile, layer)) = view.dig_volume(body.position, avatar.height, body.heading, def.body.radius, direction) {
+                dig(body, avatar, transferring, view.tick, view.terrain, def, tile, Some(layer));
+            }
+        }
+        Action::DigDown | Action::DigFront(_) => {
             // Sloped scenes dig in front, so a pit never traps its digger;
             // the dig lab digs underfoot.
             let tile = if view.terrain.sloped {
@@ -937,7 +987,7 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
                 view.can_dig_at(body.position).then(|| Terrain::pit_tile(body.position))
             };
             if let Some(tile) = tile {
-                dig(body, avatar, transferring, view.tick, view.terrain, def, tile);
+                dig(body, avatar, transferring, view.tick, view.terrain, def, tile, None);
             }
         }
         Action::Transfer { depot, item, units, deposit } => {
@@ -1356,9 +1406,11 @@ fn jump(avatar: &mut AvatarState, tick: u64, def: &CharacterDef) {
 }
 
 /// Starts digging `tile`, which the scene allows (`View::can_dig_at`,
-/// `View::dig_in_front`), if the character digs, stands on the ground with
-/// its hands free, and the pit isn't as deep as it goes.
-fn dig(body: &mut Body, avatar: &mut AvatarState, carrying: bool, tick: u64, terrain: &Terrain, def: &CharacterDef, tile: (i32, i32)) {
+/// `View::dig_in_front`, `View::dig_volume`), if the character digs, stands
+/// on the ground with its hands free, and the pit isn't as deep as it goes.
+/// `layer` is a volume dig's first layer.
+#[allow(clippy::too_many_arguments)]
+fn dig(body: &mut Body, avatar: &mut AvatarState, carrying: bool, tick: u64, terrain: &Terrain, def: &CharacterDef, tile: (i32, i32), layer: Option<i32>) {
     let Some(ticks) = def.dig().map(|d| d.ticks) else { return };
     let busy = avatar.swing.as_ref().is_some_and(|s| tick < s.until) || carrying;
     let flight = &avatar.flight;
@@ -1370,7 +1422,7 @@ fn dig(body: &mut Body, avatar: &mut AvatarState, carrying: bool, tick: u64, ter
     }
     body.route.clear();
     avatar.intent = Some(Intent::Stop);
-    avatar.dig = Some(Dig { tile, started: tick, until: tick + ticks });
+    avatar.dig = Some(Dig { tile, started: tick, until: tick + ticks, layer });
 }
 
 /// Housekeeping: ends a dig that is done, returning it.

@@ -291,6 +291,18 @@ impl SessionService {
         }
     }
 
+    /// Digs the volume in front of the avatar, level, down or up (V5 of the
+    /// verticality design), where the scene has a volume; elsewhere as
+    /// `dig`.
+    pub fn dig_toward(&mut self, direction: sim::volume::DigDirection) {
+        let Some(agent) = self.player() else { return };
+        match self.world().map(|w| w.terrain()) {
+            Some(terrain) if terrain.diggable && terrain.volume.is_some() => self.command(CommandKind::DigFront { agent, direction }),
+            Some(terrain) if terrain.diggable => self.command(CommandKind::DigDown { agent }),
+            _ => {}
+        }
+    }
+
     /// Whether every command sent so far has been applied.
     pub fn caught_up(&self) -> bool {
         self.world().is_some_and(|w| w.tick() > self.applies_at) && self.session.pending_inputs() == 0

@@ -4,35 +4,6 @@ Tunnels and levels: two or more floors over one x–y spot. The design is
 [`VERTICALITY.md`](../VERTICALITY.md) (decisions V1–V11). Tasks run in
 order, one agent each.
 
-## V.4 Digging in 3D
-
-- **Status:** open
-- **Why:** you make tunnels by digging (V5).
-- **What to do:** dig in front, level, down or up (chosen by where the
-  player looks or by a modifier), clearing the 4 cells of headroom in
-  front at that height; never under yourself. Ore lands in piles as
-  today. The volume stores only a cell's mineral (V.1): decide its
-  yield (the mine hashes 3 to 6 from its seed; a volume has no seed).
-  `Terrain::dig_refusal`, `deepen` and `walks_out` still work on pits and
-  ignore the volume. Refusals as today (reach, own tile, undiggable).
-  Note (from V.2): in the Tunnel Lab today's dig makes pits, which a
-  volume's ground ignores, so it changes nothing seen; the scene has a
-  collector at (-3, -4) for the ore.
-  Note (from V.3): digging should start from the body's floor
-  (`Terrain::footprint_at(position, avatar.height, radius)` or
-  `Volume::floor_at`), not `ground`. A ramp tunnel exactly `HEADROOM` high
-  is walkable (each footprint point checks its own tile's headroom), but
-  the jetpack there caps the feet at the lowest ceiling of the five points
-  less 2 m, which can be under the floor: it then holds them on the floor,
-  and `flyable_at` may refuse moves, so a jetpack held in such a ramp can
-  stall; check it once digging makes ramps.
-- **Where:** `sim/src/settlement/avatar.rs`, `sim/src/settlement/action.rs`,
-  `sim/src/volume.rs`, the input and the command if it needs the
-  direction.
-- **Found in:** verticality design.
-- **Tests:** each direction from each side; never under yourself; a
-  stair down and back up; ore yields.
-
 ## V.5 Drawing the volume
 
 - **Status:** open
@@ -44,6 +15,13 @@ order, one agent each.
   rebuilt only when pits change (`digging::update`), so volume edits need
   their own trigger (`Terrain::revision`); and `digging::ground_hit`
   searches down from 6 m, so the cursor can't hit the mountain's top (8 m).
+  Note (from V.4): a volume dig clears up to `HEADROOM` cells of one
+  column (`avatar::Dig { tile, layer: Some(bottom) }`, finished in
+  `Settlement::dig_housekeeping` through `Terrain::clear_column`), bumping
+  `Terrain::revision` once per cleared cell; re-mesh the dug tile's chunk
+  and its neighbours' (the corner rule slopes the tiles round it). The
+  dig's crack/progress visuals (`digging::shown_digs`) still draw at the
+  dig's tile on the top floor (`ground`): draw them at the dug cells.
 - **Where:** `app/src/digging.rs` or a new `app/src/volume_mesh.rs`.
 - **Found in:** verticality design.
 - **Tests:** mesh unit tests (faces per cell, no faces between solids);
@@ -70,7 +48,7 @@ order, one agent each.
   follows the player.
   Note (from V.3): agents (sprites, ghouls, haulers) still stand on
   `ground(p)`, the top floor, and store no height: give them a feet height
-  (hashed, so save format 41 and a golden check) and move them to
+  (hashed, so save format 42 — V.4 took 41 — and a golden check) and move them to
   `Terrain::footprint_at` / `walkable_at`. The avatar's own `GoTo` routes
   (`avatar::set_intent`, and the demo scripts' `walk`) still plan with
   `Terrain::walkable` on the top floor, whose sloped branch ignores floor
@@ -78,6 +56,11 @@ order, one agent each.
   because `walkable_at` then walks it; plan them with the 3D nav. Spawn,
   respawn, joining players, leaving a building and climbing out of a
   vehicle still put the feet on the top floor (`footprint`).
+  Note (from V.4): piles store no height either: ore a volume dig drops
+  lands on a pile at a tile within two of the dug one
+  (`PileLab::mined`, which checks pits and the top floor's steepness, not
+  the volume), so in a tunnel it may sit over a wall or on the mountain's
+  top floor as drawn; give piles a floor and pick the spot by the volume.
 - **Where:** `sim/src/nav.rs`, a walker in the settlement.
 - **Found in:** verticality design.
 - **Tests:** paths through the tunnel and from under the bridge to over
@@ -90,12 +73,82 @@ order, one agent each.
 - **What to do:** a soak test digging at random in the Tunnel Lab with
   `validate` every tick; a demo video walking through the tunnel, under
   the bridge, digging a stair down; the full suite; a `docs/test-time.md`
-  row.
+  row. Note (from V.4): the control protocol has `{"op": "dig_front",
+  "direction": "Down"}` (`"Level"`, `"Down"`, `"Up"`) for the stair demo;
+  the `tunnel_lab_demo` was not built for V.4 (the placeholder mesher
+  doesn't re-mesh yet). A jetpack hovering outside can't enter a tunnel
+  exactly 2 m high (its head at hover height is over the mouth's
+  ceiling): walk in, then hold it.
 - **Where:** sim tests, the demo scripts.
 - **Found in:** verticality design.
 - **Tests:** the soak; the full suite.
 
 ## Done
+
+### V.4 Digging in 3D
+
+- **Status:** done (branch `kestrel-verticality`, no PR yet)
+- **Why:** you make tunnels by digging (V5).
+- **What to do:** dig in front, level, down or up (chosen by where the
+  player looks or by a modifier), clearing the 4 cells of headroom in
+  front at that height; never under yourself. Ore lands in piles as
+  today; decide a volume cell's yield. Refusals as today (reach, own
+  tile, undiggable).
+- **Where:** `sim/src/settlement/avatar.rs`, `sim/src/settlement/action.rs`,
+  `sim/src/volume.rs`, the input and the command.
+- **Found in:** verticality design.
+- **Tests:** each direction from each side; never under yourself; a
+  stair down and back up; ore yields.
+- **Done:** a modifier, not the camera (the rig is fixed): in a volume
+  scene F digs level, Ctrl+F (either Ctrl) a step down, Alt+F (either
+  Alt) a step up; the controller picks DIG, DIG DOWN or DIG UP from the
+  utility panel (`input::Utility::DigDown`/`DigUp`, offered only when
+  the terrain has a volume, so other scenes' Ctrl+F and Alt+F stay a
+  plain dig). The HUD line reads `F DIG / CTRL+F DIG DOWN / ALT+F DIG UP`;
+  a refusal shows as the dispatcher's notice (`digging::refusal_text`).
+  The direction travels in a new command, `CommandKind::DigFront { agent,
+  direction: volume::DigDirection }` (`Level`, the default, `Down`, `Up`),
+  appended after `Burst`: input format 11 (an older log that claims it is
+  refused), net protocol 13. `DigDown` keeps its encoding and in a volume
+  scene digs level; elsewhere `DigFront` digs as `DigDown`. The control
+  protocol gained `dig_front`. `avatar::Dig` gained `layer: Option<i32>`
+  (the first cleared layer of a volume dig, none for a pit): save format
+  41; golden lines unchanged (no golden scene digs). The rule
+  (`Terrain::volume_dig`, via `View::dig_volume` and
+  `Settlement::dig_volume_of` for the app): the tile in front
+  (`front_tile`), cells `F + offset .. F + offset + HEADROOM` where `F` is
+  the digger's floor layer (`Volume::floor_at(position, avatar.height)`)
+  and the offset 0, -1 or +1, so the tile's floor ends at the digger's
+  floor, a layer under or a layer over it, with 2 m above. Refused:
+  `Undiggable` (no volume, not diggable, outside the arena, an undiggable
+  range, no floor under the digger), `OwnTile` (any of the footprint's
+  five points in the tile: never under yourself), `Clear` (new: every
+  cell already empty), `Bottom` (nothing solid would be left under the
+  cleared cells), and `Blocked`/`Pile` as today (`dig_blocked`). A down
+  dig may open onto a cave below: allowed, whoever walks in falls (no
+  collapse, V6); no stranding check (you can always dig a step back up).
+  Housekeeping clears the cells (`Terrain::clear_column`, a revision bump
+  per cell). Each cleared solid cell yields `mine::cell_yield(tile,
+  layer)` = 3 to 6 (the mine's hash with seed 0): an ore cell its
+  mineral onto a pile beside the tile (`PileLab::mined`, tossed as
+  today's ore), a stone cell the scene's stone item if it has one (the
+  Tunnel Lab has none). Volume scenes' pile labs now pile anywhere in the
+  map (as a mine's do), not only within 6.5 m of the center. The
+  jetpack-cap stall (V.3's note) was real on a dug stair up: a body held
+  on its floor by the cap now walks (`walkable_at`) where `flyable_at`
+  refuses (`avatar::step`). Tests in
+  `sim/src/settlement/volume_dig_tests.rs`:
+  `each_direction_from_each_side_clears_the_four_cells_in_front`,
+  `a_dig_is_never_under_the_digger`,
+  `volume_digs_are_refused_as_the_ground_says`,
+  `three_down_digs_make_a_stair_to_walk_down_and_back_up`,
+  `three_up_digs_make_a_stair_up_through_a_hill` (also the held jetpack
+  climbing it), `ore_cells_drop_their_yield_onto_piles` and
+  `a_replayed_avatar_digs_as_the_simulation_does`; in `save`,
+  `a_version_ten_log_with_a_dig_front_is_refused` and
+  `a_volume_dig_in_progress_keeps_its_layer`; in `net`,
+  `a_dig_front_needs_protocol_thirteen`; in the app's input tests,
+  `ctrl_and_alt_f_dig_down_and_up_in_a_volume`.
 
 ### V.3 Bodies with a height
 

@@ -11,6 +11,7 @@
 use bevy::prelude::*;
 use content::scenario::Weapon;
 use service::{Service, WorldLayer};
+use sim::volume::DigDirection;
 use sim::CommandKind;
 use voxel_assets::SceneFeature;
 
@@ -125,6 +126,12 @@ fn publish_scene(world: &mut World) {
     let mut utility = Vec::new();
     if diggable {
         utility.push(Utility::Dig);
+        // A volume digs level (Dig), down or up (V5 of the verticality
+        // design): the controller picks them from this panel.
+        if world.resource::<SessionService>().world().is_some_and(|w| w.terrain().volume.is_some()) {
+            utility.push(Utility::DigDown);
+            utility.push(Utility::DigUp);
+        }
     }
     if !scenario {
         utility.push(Utility::Record);
@@ -242,7 +249,10 @@ pub fn dispatch(world: &mut World) {
                 world.resource_mut::<Dispatcher>().thrust = false;
             }
             Edge::Utility(Utility::Dig) if town => town_dig(world),
+            Edge::Utility(Utility::Dig) if volume_scene(world) => volume_dig(world, DigDirection::Level),
             Edge::Utility(Utility::Dig) => world.resource_mut::<SessionService>().dig(),
+            Edge::Utility(Utility::DigDown) => volume_dig(world, DigDirection::Down),
+            Edge::Utility(Utility::DigUp) => volume_dig(world, DigDirection::Up),
             Edge::Utility(Utility::Record) => {
                 let recording = world.resource::<crate::palimpsest::Memory>().recording();
                 let result = if recording { crate::palimpsest::deploy(world) } else { crate::palimpsest::record(world) };
@@ -453,6 +463,30 @@ fn town_dig(world: &mut World) {
     match refusal {
         Some(refusal) => town_feedback(world, Err(crate::digging::refusal_text(refusal).into())),
         None => world.resource_mut::<SessionService>().dig(),
+    }
+}
+
+/// Whether the scene's ground is a volume (the Tunnel Lab).
+fn volume_scene(world: &World) -> bool {
+    world.resource::<SessionService>().world().is_some_and(|w| w.terrain().volume.is_some())
+}
+
+/// A volume scene's dig key (F level, Ctrl+F down, Alt+F up; the utility
+/// panel's DIG, DIG DOWN and DIG UP): the tile in front, or why not, as
+/// the dispatcher's notice (`Settlement::dig_volume_of`). Already digging,
+/// the press does nothing.
+fn volume_dig(world: &mut World, direction: DigDirection) {
+    let service = world.resource::<SessionService>();
+    let refusal = service.player().zip(service.settlement()).zip(service.world()).and_then(|((agent, settlement), sim)| {
+        let digging = settlement.agents.get(agent as usize).is_some_and(|a| a.digging().is_some());
+        (!digging).then(|| settlement.dig_volume_of(agent, sim.tick(), sim.terrain(), direction)?.err()).flatten()
+    });
+    match refusal {
+        Some(refusal) => world.resource_mut::<Dispatcher>().notice = crate::digging::refusal_text(refusal).into(),
+        None => {
+            world.resource_mut::<Dispatcher>().notice = String::new();
+            world.resource_mut::<SessionService>().dig_toward(direction);
+        }
     }
 }
 

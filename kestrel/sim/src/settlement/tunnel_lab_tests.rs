@@ -46,7 +46,7 @@ fn layout() -> VolumeLayout {
 }
 
 /// The Tunnel Lab as the app makes it.
-fn tunnel_lab() -> Simulation {
+pub(super) fn tunnel_lab() -> Simulation {
     let layout = layout();
     let setup = SceneSetup {
         player: "exosuit".into(),
@@ -61,7 +61,7 @@ fn tunnel_lab() -> Simulation {
 }
 
 /// The tile `x`, `z` tiles from the scene's origin.
-fn tile(terrain: &Terrain, x: i32, z: i32) -> (i32, i32) {
+pub(super) fn tile(terrain: &Terrain, x: i32, z: i32) -> (i32, i32) {
     let center = Terrain::pit_tile(terrain.center);
     (center.0 + x, center.1 + z)
 }
@@ -124,8 +124,8 @@ fn the_tunnel_runs_through_the_mountain_with_headroom() {
     assert_eq!(terrain.ground(body.position), Some(Fx::ZERO));
 }
 
-/// Until V.4 digs the volume, digging here is today's dig and must not
-/// break the world.
+/// A dig from the spawn (open ground: nothing in front to take, V.4)
+/// must not break the world.
 #[test]
 fn digging_in_the_tunnel_lab_does_not_panic() {
     let mut sim = tunnel_lab();
@@ -142,27 +142,27 @@ fn digging_in_the_tunnel_lab_does_not_panic() {
 // falls off drops and keeps its head under ceilings.
 
 /// Scene meters: `x` east and `z` south of the scene's origin.
-fn meters(sim: &Simulation, x: f64, z: f64) -> FxVec2 {
+pub(super) fn meters(sim: &Simulation, x: f64, z: f64) -> FxVec2 {
     let m = |v: f64| Fx::from_ratio((v * 1000.0).round() as i64, 1000);
     sim.world().terrain().center + FxVec2::new(m(x), m(z))
 }
 
-fn me(sim: &Simulation) -> &AgentState {
+pub(super) fn me(sim: &Simulation) -> &AgentState {
     let s = sim.world().settlement().unwrap();
     &s.agents[s.player().unwrap() as usize]
 }
 
-fn feet(sim: &Simulation) -> Fx {
+pub(super) fn feet(sim: &Simulation) -> Fx {
     me(sim).avatar().unwrap().height
 }
 
 /// Where the avatar is, in scene meters from the origin.
-fn offset(sim: &Simulation) -> FxVec2 {
+pub(super) fn offset(sim: &Simulation) -> FxVec2 {
     me(sim).body.position - sim.world().terrain().center
 }
 
 /// Puts the avatar at `x`, `z` with its feet at `height`, standing still.
-fn place(sim: &mut Simulation, x: f64, z: f64, height: Fx) {
+pub(super) fn place(sim: &mut Simulation, x: f64, z: f64, height: Fx) {
     let p = meters(sim, x, z);
     let s = sim.world_mut().settlement_mut();
     let player = s.player().unwrap() as usize;
@@ -174,13 +174,13 @@ fn place(sim: &mut Simulation, x: f64, z: f64, height: Fx) {
     avatar.flight.support = height;
 }
 
-fn command(sim: &mut Simulation, kind: CommandKind) {
+pub(super) fn command(sim: &mut Simulation, kind: CommandKind) {
     sim.step(&[Command { player: PlayerId(0), kind }]);
 }
 
 /// Walks `direction` until `done` or `seconds` pass, then stops and lets
 /// the avatar settle for a second. Returns its position and feet every tick.
-fn walk(sim: &mut Simulation, direction: (i32, i32), seconds: u64, done: impl Fn(FxVec2) -> bool) -> Vec<(FxVec2, Fx)> {
+pub(super) fn walk(sim: &mut Simulation, direction: (i32, i32), seconds: u64, done: impl Fn(FxVec2) -> bool) -> Vec<(FxVec2, Fx)> {
     let agent = sim.world().settlement().unwrap().player().unwrap();
     let direction = FxVec2::new(Fx::from_int(direction.0), Fx::from_int(direction.1));
     command(sim, CommandKind::MoveAvatar { agent, intent: Intent::Walk { direction, run: false } });
@@ -202,12 +202,12 @@ fn walk(sim: &mut Simulation, direction: (i32, i32), seconds: u64, done: impl Fn
 
 /// A box of cells for [`small`]: solid or empty, its tiles from `min` to
 /// `max` (from the center tile) and its layers `bottom` up to `top`.
-type Cells = (bool, (i32, i32), (i32, i32), i32, i32);
+pub(super) type Cells = (bool, (i32, i32), (i32, i32), i32, i32);
 
 /// A small volume scene: 33 m of ground (layers -8 to 0, its floor at 0 m)
 /// with `boxes` applied over it, spawning `player` at the center with its
 /// feet at `spawn` meters.
-fn small(player: &str, boxes: &[Cells], spawn: Fx) -> Simulation {
+pub(super) fn small(player: &str, boxes: &[Cells], spawn: Fx) -> Simulation {
     let mut volume = Volume::default();
     volume.fill_box((-16, -16), (16, 16), -8, 0);
     for &(solid, min, max, bottom, top) in boxes {

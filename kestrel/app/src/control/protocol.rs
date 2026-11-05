@@ -169,6 +169,12 @@ pub enum Command {
     },
     /// Digs out a layer under the player, in a digging scene.
     Dig,
+    /// In a volume scene, digs the tile in front: `"Level"` (the default),
+    /// `"Down"` or `"Up"` (`CommandKind::DigFront`).
+    DigFront {
+        #[serde(default)]
+        direction: sim::volume::DigDirection,
+    },
     /// Walks to the collector and empties the cargo into it.
     Deliver {
         #[serde(default)]

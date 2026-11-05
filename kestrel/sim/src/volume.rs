@@ -31,6 +31,31 @@ pub const STEP_UP: i32 = 1;
 /// ([`Terrain::ceiling_at`]).
 pub const BODY_HEIGHT: Fx = Fx::from_bits(2 << 32);
 
+/// Which way a dig in front goes in a volume scene (V5 of the verticality
+/// design): the [`HEADROOM`] cells it clears in the tile in front start at
+/// the digger's floor layer (`Level`, a tunnel), a layer under it (`Down`,
+/// a step down) or a layer over it (`Up`, a step up). The player picks it
+/// with a modifier on the dig key; it travels in
+/// `CommandKind::DigFront`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum DigDirection {
+    #[default]
+    Level,
+    Down,
+    Up,
+}
+
+impl DigDirection {
+    /// The first cleared layer, from the digger's floor layer.
+    pub fn offset(self) -> i32 {
+        match self {
+            DigDirection::Level => 0,
+            DigDirection::Down => -1,
+            DigDirection::Up => 1,
+        }
+    }
+}
+
 /// A run of solid cells in a column: layers `bottom` up to, not including,
 /// `top`. Its top face, the floor it may make, is at `top * LAYER`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

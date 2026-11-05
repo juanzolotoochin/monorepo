@@ -56,6 +56,9 @@ pub enum DigRefusal {
     Blocked,
     /// A pile, a tree pile's dock or a building's output pile is on it.
     Pile,
+    /// In a volume scene: every cell the dig would clear is already empty
+    /// ([`Terrain::volume_dig`]).
+    Clear,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -576,6 +579,62 @@ impl Terrain {
         }
         self.revision += 1;
         true
+    }
+
+    /// Whether a digger of `radius` at `p`, its feet at `z`, can dig `tile`
+    /// (the one in front) `direction`-wise in a volume scene (V5 of the
+    /// verticality design), and if so the first of the [`HEADROOM`] layers
+    /// the dig clears there: the digger's floor layer
+    /// ([`Volume::floor_at`] at `p`) plus the direction's offset. So a
+    /// level dig leaves `tile` a floor at the digger's (a tunnel), a down
+    /// dig one a layer lower and an up dig one a layer higher: repeated, a
+    /// stair. Refused: without a volume, a diggable ground or a floor under
+    /// the digger, outside the arena or in an undiggable range
+    /// (`Undiggable`); when any of the footprint's five points is in `tile`,
+    /// so a digger never digs under itself (`OwnTile`); when every cell is
+    /// already empty (`Clear`); and when nothing solid would be left under
+    /// the cleared cells, a hole through the volume's bottom (`Bottom`). A
+    /// dig may open onto a cave under it: then the new floor is the cave's,
+    /// and whoever walks in falls, as off any ledge (no collapse, V6). Unlike
+    /// [`Terrain::dig_refusal`], nothing checks stranding: a digger can
+    /// always dig a step back up. What stands on the tile is the
+    /// settlement's to check (`View::dig_volume`).
+    ///
+    /// [`HEADROOM`]: crate::volume::HEADROOM
+    pub fn volume_dig(&self, p: FxVec2, z: Fx, radius: Fx, tile: (i32, i32), direction: crate::volume::DigDirection) -> Result<i32, DigRefusal> {
+        let Some(volume) = self.volume.as_ref() else { return Err(DigRefusal::Undiggable) };
+        if !self.diggable || !self.inside(Self::pit_center(tile)) || self.is_undiggable(tile) {
+            return Err(DigRefusal::Undiggable);
+        }
+        if Self::footprint_points(p, radius).iter().any(|&q| Self::pit_tile(q) == tile) {
+            return Err(DigRefusal::OwnTile);
+        }
+        let Some((floor, _)) = volume.floor_at(p, z) else { return Err(DigRefusal::Undiggable) };
+        let bottom = floor + direction.offset();
+        if !(bottom..bottom + crate::volume::HEADROOM).any(|layer| volume.is_solid(tile, layer)) {
+            return Err(DigRefusal::Clear);
+        }
+        if volume.spans(tile).first().is_none_or(|s| s.bottom >= bottom) {
+            return Err(DigRefusal::Bottom);
+        }
+        Ok(bottom)
+    }
+
+    /// Clears the [`HEADROOM`] cells of `tile` from layer `bottom` up (a
+    /// [`Terrain::volume_dig`]), bumping the revision once per cell.
+    /// Returns the solid cells it cleared, bottom up, as their layer and
+    /// mineral (none for stone).
+    ///
+    /// [`HEADROOM`]: crate::volume::HEADROOM
+    pub fn clear_column(&mut self, tile: (i32, i32), bottom: i32) -> Vec<(i32, Option<u8>)> {
+        let mut cleared = Vec::new();
+        for layer in bottom..bottom + crate::volume::HEADROOM {
+            let ore = self.volume.as_ref().and_then(|v| v.ore(tile, layer));
+            if self.clear_cell(tile, layer) {
+                cleared.push((layer, ore));
+            }
+        }
+        cleared
     }
 
     /// Makes a cell of the volume solid. Returns whether it changed: never

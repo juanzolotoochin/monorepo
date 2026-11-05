@@ -954,8 +954,12 @@ pub fn update_hud(
         let net = if service.networked() { format!(" / NET / {}", service.status.to_uppercase()) } else { String::new() };
         let tile = sim::terrain::Terrain::pit_tile(service.to_sim(player.translation));
         let (pit, layers, sloped) = service.world().map_or((0, sim::terrain::MAX_LAYERS, false), |w| (w.terrain().pit(tile), w.terrain().max_layers, w.terrain().sloped));
-        // A sloped scene (the town) digs in front and walks out of its pits.
-        if sloped {
+        let volume = service.world().is_some_and(|w| w.terrain().volume.is_some());
+        // A volume scene (the Tunnel Lab) digs in front, level, down or up;
+        // a sloped scene (the town) digs in front and walks out of its pits.
+        if volume {
+            format!("F DIG / CTRL+F DIG DOWN / ALT+F DIG UP{net}")
+        } else if sloped {
             format!("PIT {pit}/{layers} / F DIG IN FRONT{net}")
         } else {
             format!("PIT {pit}/{layers} / F TO DIG / HOLD SPACE TO FLY OUT{net}")

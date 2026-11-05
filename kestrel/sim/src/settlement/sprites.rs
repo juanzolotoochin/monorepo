@@ -345,7 +345,7 @@ impl SpriteState {
                 body.heading = crate::nav::bearing(body.position, Ground::pit_center(tile));
                 match view.dig_in_front(body.position, body.heading, body.base_radius) {
                     Ok(t) if t == tile => {
-                        self.dig = Some(Dig { tile, started: view.tick, until: view.tick + mine.dig });
+                        self.dig = Some(Dig { tile, started: view.tick, until: view.tick + mine.dig, layer: None });
                         Progress::Stay(None)
                     }
                     _ => Progress::Replan,

@@ -143,8 +143,12 @@ pub enum CommandKind {
     Drop { agent: u16 },
     /// A player's avatar, possessing a building, adds the building's Burst
     /// units to its output at once, then waits out its cooldown
-    /// (`Action::Burst`). New variants go after this one.
+    /// (`Action::Burst`).
     Burst { agent: u16 },
+    /// A player's avatar digs in front of it in a volume scene, level, down
+    /// or up (`Action::DigFront`, `Terrain::volume_dig`). Elsewhere it digs
+    /// as `DigDown` does. New variants go after this one.
+    DigFront { agent: u16, direction: crate::volume::DigDirection },
 }
 
 impl CommandKind {
@@ -169,6 +173,7 @@ impl CommandKind {
             | CommandKind::Interact { agent, .. }
             | CommandKind::Drop { agent }
             | CommandKind::Burst { agent }
+            | CommandKind::DigFront { agent, .. }
             | CommandKind::Pile { agent, .. } => *agent = to,
             _ => {}
         }
@@ -195,6 +200,7 @@ impl CommandKind {
             | CommandKind::Interact { agent, .. }
             | CommandKind::Drop { agent }
             | CommandKind::Burst { agent }
+            | CommandKind::DigFront { agent, .. }
             | CommandKind::Pile { agent, .. } => Some(agent),
             _ => None,
         }
@@ -539,7 +545,8 @@ impl World {
                 | CommandKind::Bundle { .. }
                 | CommandKind::Interact { .. }
                 | CommandKind::Drop { .. }
-                | CommandKind::Burst { .. } => {
+                | CommandKind::Burst { .. }
+                | CommandKind::DigFront { .. } => {
                     if let (Some(s), Some((agent, action))) = (&mut self.settlement, Action::of(kind)) {
                         s.act(self.tick, agent, &action, &self.terrain, &mut self.actions);
                     }
