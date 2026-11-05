@@ -24,6 +24,18 @@ day_cycle: Some((
   dusk: (sunlight: (1.0, 0.52, 0.30), illuminance: 12000.0, ambient: (0.74, 0.62, 0.70), ambient_brightness: 720.0, sky: (0.28, 0.16, 0.17), fog_density: 0.0035),
   midnight: (sunlight: (0.55, 0.68, 1.0), illuminance: 1800.0, ambient: (0.32, 0.42, 0.78), ambient_brightness: 150.0, sky: (0.015, 0.025, 0.06), fog_density: 0.004),
 )),
+// The night's lights, lit from late afternoon to full in the evening and
+// out soon after dawn: the tree's warm glow under its canopy, lighting the
+// plaza (its piles and the sprites' idle spot), and lanterns, one each side
+// of the top of each ramp (the plateau's edge is 15.5 m out, the ramps 7 m
+// wide) and four round the plaza. Drawn only: nothing walks round them.
+glow: Some((position: (0.0, 2.6, 0.0), color: (1.0, 0.72, 0.40), intensity: 2000000.0, range: 20.0)),
+lanterns: [
+(position: (14.6, 0.0, -4.4)), (position: (14.6, 0.0, 4.4)),
+(position: (-14.6, 0.0, -4.4)), (position: (-14.6, 0.0, 4.4)),
+(position: (3.4, 0.0, 6.4)), (position: (-3.4, 0.0, 6.4)),
+(position: (4.6, 0.0, -4.6)), (position: (-4.6, 0.0, -4.6))
+],
 architecture: [
 // Lifted a centimeter off the drawn ground of the plateau.
 (kind: Box, position: (0.0, -0.065, 0.0), size: (26.0, 0.15, 26.0), material: "grass"),
