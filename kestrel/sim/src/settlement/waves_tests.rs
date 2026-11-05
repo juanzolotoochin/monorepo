@@ -1,5 +1,5 @@
 //! The Sacred Tree's waves on the map (M5.6, M7.2): a calm first day, then
-//! one wave a night, a column per lane from a ring 40 m out up the hill's
+//! one wave a night, a column per lane from a ring 28 m out up the hill's
 //! ramps, burned away at sunrise. These tests play the map's own nights
 //! against a town that ignores them and against one that defends, so the
 //! numbers in the supply keep the defence mattering without being needed
@@ -129,14 +129,16 @@ fn restock(sim: &mut Simulation, b: BuildingIx) {
     assert!(s.buildings[b as usize].output.add(STONE, units));
 }
 
-/// A lane's column: 2.5 s apart, or spread over the night's first third
-/// when that is too long.
+/// A lane's column: 5 s apart, or spread over the night's first third
+/// when that is too long. A column of five just fits: its last sets off
+/// 20 s after dusk.
 #[test]
 fn a_lanes_ghouls_set_off_in_a_column_within_the_nights_first_third() {
     let night = 75 * HZ;
     assert_eq!(lane_starts(5, night).collect::<Vec<_>>(), (0..5).map(|i| i * COLUMN_GAP).collect::<Vec<_>>());
-    assert_eq!(COLUMN_GAP, 5 * HZ / 2);
-    // Twelve 2.5 s apart would take 27.5 s, past the first 25 s.
+    assert_eq!(COLUMN_GAP, 5 * HZ);
+    assert_eq!(lane_starts(5, night).last(), Some(20 * HZ));
+    // Twelve 5 s apart would take 55 s, past the first 25 s.
     let crowded: Vec<u64> = lane_starts(12, night).collect();
     assert_eq!(crowded.len(), 12);
     assert!(crowded.windows(2).all(|w| w[1] - w[0] == night / 3 / 12) && *crowded.last().unwrap() < night / 3, "{crowded:?}");
@@ -181,12 +183,16 @@ fn ghouls_come_only_by_night_as_listed_and_the_last_night_repeats() {
 
 /// At the first sunrise every ghoul still out catches fire, stands where
 /// it is and falls within two to four seconds: dispelled, not killed, with
-/// no hit, kill or breach; the balances hold throughout (`step`). A first
-/// night of eight from the east (the last three are still on the hill at
-/// dawn) leaves some out.
+/// no hit, kill or breach; the balances hold throughout (`step`). From the
+/// 28 m ring every column reaches the tree before dawn, so here a first
+/// night of eight comes from the east 40 m out (as before M7.7: the last
+/// three are still on the hill at dawn) and leaves some out.
 #[test]
 fn the_sunrise_burns_every_ghoul_away() {
-    let mut sim = town_with(&[], |s| s.waves[0].nights = vec![8; 4]);
+    let mut sim = town_with(&[], |s| {
+        s.waves[0].nights = vec![8; 4];
+        s.waves[0].position = [fx(40.0), fx(0.0)];
+    });
     let mut tally = Tally::default();
     while sim.world().tick() < CYCLE {
         step(&mut sim, &[], &mut tally);
@@ -221,7 +227,7 @@ fn the_sunrise_burns_every_ghoul_away() {
 
 /// Left alone, the town meets nothing on the first day, then every lane
 /// sends its column each night, and the tree falls on the third night (the
-/// first ghouls reach the tree about 63 s after dusk, M6.7): losing is
+/// first ghouls reach the tree about 44 s after dusk, M7.7): losing is
 /// possible when the defence is ignored, but not early.
 #[test]
 fn an_undefended_town_has_its_calm_day_then_falls_on_the_third_night() {
@@ -244,9 +250,10 @@ fn an_undefended_town_has_its_calm_day_then_falls_on_the_third_night() {
     accounted(&sim, &tally);
 }
 
-/// How long after dusk the restock comes: 5 s before the first ghouls
-/// reach the old clearing's edge, 52 s after they set off (M6.7).
-const RESTOCK: u64 = 47 * HZ;
+/// How long after dusk the restock comes: about 10 s after the first
+/// ghouls top the ramps (21 s) and 5 s before they come in the
+/// ballistas' reach by the tree (35 s, M7.7).
+const RESTOCK: u64 = 30 * HZ;
 
 /// Plays four of the map's nights against ballistas at `spots` (scenario
 /// meters), each manned by a sprite, their stone topped up `RESTOCK` after
@@ -348,3 +355,40 @@ fn a_fireball_on_a_column_leaves_survivors() {
     assert_eq!(tally.kills + tally.breaches, 6, "{tally:?}");
 }
 
+
+
+/// The night's fight comes in its middle (M7.7): from the 28 m ring, left
+/// alone, a column's head tops its ramp about 21 s after dusk and reaches
+/// the tree about 44 s in, and a column of five, 5 s apart, has its last
+/// at the tree about 64 s in, 11 s before dawn. The tree's health is
+/// raised so the town plays the first three nights.
+#[test]
+fn the_nights_fight_comes_in_its_middle() {
+    let mut sim = town_with(&[], |s| s.base_health = 1000);
+    let mut tally = Tally::default();
+    let c = clock(&sim);
+    let center = sim.world().terrain().center;
+    let edge = fx(15.5);
+    let mut topped = std::collections::BTreeSet::new();
+    let (mut tops, mut breaches) = (Vec::new(), Vec::new());
+    while sim.world().tick() < 3 * CYCLE {
+        let tick = sim.world().tick();
+        step(&mut sim, &[], &mut tally);
+        let s = settlement(&sim);
+        let since = c.since_dusk(tick);
+        for t in &s.threats {
+            if (t.position.x - center.x).abs() <= edge && topped.insert(t.id) {
+                tops.push(since.expect("a ghoul tops a ramp by night"));
+            }
+        }
+        breaches.extend(s.events.iter().filter(|e| matches!(e, Event::Breach { .. })).map(|_| since.expect("a ghoul breaches by night")));
+    }
+    let secs = |v: &[u64], f: fn(u64, u64) -> u64| v.iter().copied().reduce(f).unwrap() as f64 / HZ as f64;
+    let (top, breach, last) = (secs(&tops, u64::min), secs(&breaches, u64::min), secs(&breaches, u64::max));
+    eprintln!("ramp tops from {top} s after dusk, breaches from {breach} s to {last} s");
+    assert!((18.0..24.0).contains(&top), "the first tops a ramp {top} s after dusk");
+    assert!((40.0..48.0).contains(&breach), "the first reaches the tree {breach} s after dusk");
+    assert!((58.0..70.0).contains(&last), "the last of a column of five reaches it {last} s after dusk");
+    assert_eq!(tally.breaches, 24, "all of three nights' 5, 9 and 10: {tally:?}");
+    assert_eq!(tally.dispelled, 0, "{tally:?}");
+}

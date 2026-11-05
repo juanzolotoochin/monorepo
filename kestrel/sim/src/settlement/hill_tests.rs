@@ -1,7 +1,7 @@
 //! The Sacred Tree's big map (M6.3 of the mining design, M5 and M7): 256 ×
 //! 256 m of generated ground to dig, the town on an undiggable plateau 2 m
 //! up with cliff sides and two ramps, stone exposed 15 to 40 m from the
-//! tree, and ghouls from a ring 40 m out coming up the ramps. The map is
+//! tree, and ghouls from a ring 28 m out coming up the ramps. The map is
 //! the scene's own: its mine line is read from `sacred_tree.ron`.
 
 use std::time::Instant;
@@ -221,7 +221,7 @@ fn stone_lies_exposed_15_to_40_m_from_the_tree() {
     eprintln!("stone at the surface 15 to 40 m from the tree: {exposed} tiles; veins at {veins:?}");
 }
 
-/// Every lane's ghouls start on the ring 40 m out, one side per ramp, and
+/// Every lane's ghouls start on the ring 28 m out (just past the ramps' feet at 23.5 m), one side per ramp, and
 /// their route comes up that side's ramp: the plateau's edge is crossed
 /// on the ramp, and every leg is walkable. Prints what a route costs.
 #[test]
@@ -234,7 +234,7 @@ fn ghouls_come_from_the_ring_up_the_ramps() {
     let mut sides = std::collections::BTreeSet::new();
     for wave in &s.waves {
         let ring = nav::distance(terrain.center, wave.position);
-        assert!((Fx::from_int(38)..=Fx::from_int(42)).contains(&ring), "{} starts {ring:?} out", wave.id);
+        assert!((Fx::from_int(26)..=Fx::from_int(30)).contains(&ring), "{} starts {ring:?} out", wave.id);
         let started = Instant::now();
         let route = nav::path(terrain, wave.position, wave.target, ghoul_clearance());
         let took = started.elapsed();

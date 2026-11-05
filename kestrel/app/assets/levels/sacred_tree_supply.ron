@@ -47,21 +47,22 @@
 // Days of 150 s and nights of 75 s, starting at dawn: the first day is the
 // calm start (time to dig stone, build a ballista and stock it), and the
 // first night falls at 2:30. Ghouls come only by night, one wave a night,
-// from a ring 40 m out, one lane per ramp up the tree's hill (the scene's):
-// they walk up it to a spot beside the trunk (outside its disc) and breach
-// the tree there. A lane's ghouls set off 2.5 s apart at dusk, a column
-// (closer if a night's would run past its first third), and take about
-// 63 s to reach the tree: the fight is on the hill in the night's last 20 s. At
-// sunrise every ghoul still out burns away. `nights` is how many each lane
-// sends, night by night; after the last, the last repeats forever: 5, 9,
-// 10 and 10 ghouls, columns of at most 5 so that all can reach the tree
-// before dawn. Ignored, they fell the tree on the third night (about 11:08);
-// one ballista by the east ramp leaves the west column to breach (the tree
-// at 4 of 20 after four nights); one by each ramp, stocked each night,
-// keeps it whole.
+// from a ring 28 m out (just past the ramps' feet), one lane per ramp up the
+// tree's hill (the scene's): they walk up it to a spot beside the trunk
+// (outside its disc) and breach the tree there. A lane's ghouls set off 5 s
+// apart at dusk, a column (closer if a night's would run past its first
+// third: five just fit), top the ramps about 21 s after dusk and reach the
+// tree about 44 s in, so the fight runs through the night's middle, from
+// about 35 s to 64 s, and a column held up on the way is still out at dawn.
+// At sunrise every ghoul still out burns away. `nights` is how many each
+// lane sends, night by night; after the last, the last repeats forever: 5,
+// 9, 10 and 10 ghouls, columns of at most 5. Ignored, they fell the tree on
+// the third night (about 10:53); one ballista by the east ramp leaves the
+// west column to breach (the tree at 4 of 20 after four nights); one by
+// each ramp, stocked each night, keeps it whole.
 waves: [
-(id: "east", position: (40.0, 0.0), target: (1.8, -0.6), character: "ghoul_sacred_tree", nights: [3, 5, 5, 5]),
-(id: "west", position: (-40.0, 0.0), target: (-1.8, -0.6), character: "ghoul_sacred_tree", nights: [2, 4, 5, 5])
+(id: "east", position: (28.0, 0.0), target: (1.8, -0.6), character: "ghoul_sacred_tree", nights: [3, 5, 5, 5]),
+(id: "west", position: (-28.0, 0.0), target: (-1.8, -0.6), character: "ghoul_sacred_tree", nights: [2, 4, 5, 5])
 ],
 day_cycle: Some((day: 150.0, night: 75.0)),
 base_health: 20, player_health: 6)

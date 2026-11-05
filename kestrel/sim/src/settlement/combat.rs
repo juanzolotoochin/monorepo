@@ -32,10 +32,10 @@ const SPENT_TICKS: u64 = ticks_from_60hz(12);
 const DEFLECTED_TICKS: u64 = ticks_from_60hz(18);
 const PINNED_TICKS: u64 = ticks_from_60hz(36);
 const STAGGER_ON_PIERCE: u64 = ticks_from_60hz(42);
-/// A lane's ghouls set off this far apart on a night (2.5 s), a column, or
+/// A lane's ghouls set off this far apart on a night (5 s), a column, or
 /// closer when that would run past the night's first third
 /// ([`lane_starts`]).
-pub const COLUMN_GAP: u64 = content::millis_to_ticks(2500);
+pub const COLUMN_GAP: u64 = content::millis_to_ticks(5000);
 /// At sunrise a ghoul burns this long (2 s), and up to as long again, by
 /// its id, before it falls (`Settlement::dawn`).
 pub const DAWN_BURN: u64 = content::millis_to_ticks(2000);
