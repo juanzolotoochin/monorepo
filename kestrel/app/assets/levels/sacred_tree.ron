@@ -3,10 +3,21 @@
 // wood and stone piles beside it, the elder and the four sprites on its +z
 // side and one Wood Gatherer to the west (-x); the east side (+x) is left
 // open to build on. Scene x and z are the supply's positions.
-Scene(id: "sacred-tree", player: "elder", features: [], name: "THE SACRED TREE / TOWN MVP", spawn: (0.0, 0.0, 3.4), industrial: false, instances: [
+//
+// The clearing tops a hill in the middle of 256 x 256 m of generated ground
+// to dig for stone (Dig Lab's terraces, six layers deep, sloped): a plateau
+// 31 m square and 2 m (8 steps) above the ground round it, with cliff
+// sides, and a ramp 7 m wide and 8 m long down the middle of its west
+// (-x) and east (+x) sides, one per wave lane. The plateau's top is the
+// ground's zero, so the clearing stands where it did; the hill and its
+// ramps can't be dug. Round its foot the ground stays flat for 10 m.
+Scene(id: "sacred-tree", player: "elder", features: [Digging, SlopedGround], dig_layers: Some(6), name: "THE SACRED TREE / TOWN MVP", spawn: (0.0, 0.0, 3.4), industrial: false, instances: [
 
-], architecture: [
-(kind: Box, position: (0.0, -0.075, 0.0), size: (26.0, 0.15, 26.0), material: "grass"),
+],
+mine: Some((extent: 128.0, seed: 7, hill: Some((plateau: 15, height: 8, ramp_width: 7, ramp_length: 8, foot: 10)))),
+architecture: [
+// Lifted a centimeter off the drawn ground of the plateau.
+(kind: Box, position: (0.0, -0.065, 0.0), size: (26.0, 0.15, 26.0), material: "grass"),
 (kind: Cylinder, position: (0.0, 1.6, 0.0), size: (1.8, 3.2, 1.8), material: "bark", solid_radius: Some(1.0)),
 (kind: Ellipsoid, position: (0.9, 0.15, 0.3), size: (1.1, 0.4, 0.8), material: "bark"),
 (kind: Ellipsoid, position: (-0.8, 0.15, 0.5), size: (1.1, 0.4, 0.8), material: "bark"),
@@ -16,9 +27,9 @@ Scene(id: "sacred-tree", player: "elder", features: [], name: "THE SACRED TREE /
 (kind: Ellipsoid, position: (-1.3, 4.9, 0.7), size: (3.2, 2.2, 3.2), material: "leaflight"),
 (kind: Ellipsoid, position: (1.2, 5.1, -0.8), size: (3.0, 2.0, 3.0), material: "leaflight"),
 (kind: Ellipsoid, position: (0.0, 5.8, 0.0), size: (1.8, 1.1, 1.8), material: "flowers"),
-(kind: Ellipsoid, position: (-1.7, -0.075, 1.7), size: (1.4, 0.15, 1.4), material: "dirt"),
-(kind: Ellipsoid, position: (1.7, -0.075, 1.7), size: (1.4, 0.15, 1.4), material: "dirt"),
-(kind: Ellipsoid, position: (-5.2, -0.075, 0.6), size: (2.6, 0.15, 2.6), material: "dirt"),
+(kind: Ellipsoid, position: (-1.7, -0.075, 1.7), size: (1.4, 0.17, 1.4), material: "dirt"),
+(kind: Ellipsoid, position: (1.7, -0.075, 1.7), size: (1.4, 0.17, 1.4), material: "dirt"),
+(kind: Ellipsoid, position: (-5.2, -0.075, 0.6), size: (2.6, 0.17, 2.6), material: "dirt"),
 (kind: Cylinder, position: (10.14, 1.000, 2.72), size: (0.45, 2.00, 0.45), material: "wood", solid_radius: None),
 (kind: Cone, position: (10.14, 2.166, 2.72), size: (2.2, 2.00, 2.2), material: "leaves"),
 (kind: Cone, position: (10.14, 3.000, 2.72), size: (1.8, 2.00, 1.8), material: "leaves"),

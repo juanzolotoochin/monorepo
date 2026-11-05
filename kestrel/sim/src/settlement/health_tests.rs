@@ -23,7 +23,7 @@ const ASH: AgentIx = 1;
 const FERN: AgentIx = 2;
 /// The prebuilt Wood Gatherer, west of the tree.
 const GATHERER: BuildingIx = 0;
-const BALLISTA_KIND: u16 = 2;
+const BALLISTA_KIND: u16 = 1;
 const CHASER: &str = "ghoul_sacred_tree";
 /// The wave south of the tree: ghouls walking north to the trunk.
 const SOUTH: ([f64; 2], [f64; 2]) = ([0.0, -7.5], [0.0, -1.8]);

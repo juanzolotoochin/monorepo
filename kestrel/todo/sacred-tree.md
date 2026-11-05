@@ -106,7 +106,536 @@ its milestones, in order; one PR per milestone.
   as G does; the job menu is for sprites standing outside.)
 - **Found in:** M2.2.
 
+## Moats make the tree safe
+
+- **Status:** open
+- **Why:** since M6.7 a ghoul with no walkable way to the tree walks to the
+  reachable point nearest it and waits there (`Threat::stranded`). A moat
+  two layers deep round both ramps' feet (about 124 tile-layers, four or
+  five minutes of the elder's digging) leaves every wave waiting at the
+  cliff's foot, 16 m from the tree: nothing breaches, and the defence is
+  trivial. Cutting one ramp only sends its ghouls round to the other
+  (`lane_tests`).
+- **What to do:** decide after the playtest whether that is a fair
+  strategy (it costs the calm start and more), or whether ghouls should
+  answer it: dig or fill their way through, climb a cliff slowly, or the
+  ramps' feet stay undiggable for a few tiles.
+- **Where:** `kestrel/sim/src/settlement/chase.rs` (`route_home`,
+  `retry_stranded`), `mine.rs` (`Hill::ranges`).
+- **Found in:** M6.7.
+
+## Fled sprites and ghouls that linger
+
+- **Status:** open
+- **Why:** a sprite that fled a ghoul (M6.7) goes back to work once no
+  ghoul chases it or is within three detect radii (9 m). A miner whose
+  stone lies past a ghoul that lingers (a stranded one, or one chasing
+  someone else) walks back toward it, is threatened again and runs home:
+  it can go back and forth without digging. Miners also plan without
+  looking at ghouls, so one may pick stone beside the column's way.
+- **What to do:** watch it in the playtest; if it matters, let a miner
+  give up targets near a ghoul until the ghoul goes (as `unreachable`
+  does for routes), or stay home while a wave is out.
+- **Where:** `kestrel/sim/src/settlement/sprites.rs` (`Alarm`, `replan`),
+  `miners.rs` (`plan`).
+- **Found in:** M6.7.
+
+## Stone yield and veins in content
+
+- **Status:** open
+- **Why:** M6.7 tuned the waves in the supply file, but a stone layer's
+  3–6 (`Mine::yield_of`) and the 4 guaranteed exposed veins
+  (`EXPOSED_VEINS`, two layers deep) are code, so tuning them needs a
+  build, not a content edit.
+- **What to do:** move them to the scene's `mine:` line (with the
+  `voxel_assets` scene schema) if the playtest wants them tuned.
+- **Where:** `kestrel/sim/src/mine.rs`, `kestrel/tools/assetc/core`.
+- **Found in:** M6.7.
+
+## Pale stripes on far terraces
+
+- **Status:** open
+- **Why:** seen at a low angle from the foot of the Sacred Tree's east
+  ramp, the far terraces show tall, pale, one-tile-wide vertical walls
+  (M6.6, checked again in M6.7's demo frames). `sloped_chunk_mesh` draws
+  a wall only from a steep tile down to a lower neighbour, or down past the
+  deepest layer at the arena's edge, and the town's generator makes no
+  drop tiles, so the cause is still unknown.
+- **What to do:** sample the sim's heights under one stripe (the demo's
+  first seconds) and compare with the chunk's walls; check `Heights::read`'s
+  window at chunk borders and walls facing the camera on terraces that
+  rise past the plateau.
+- **Where:** `kestrel/app/src/digging.rs` (`sloped_chunk_mesh`, `drawn`,
+  `Heights`).
+- **Found in:** M6.6, M6.7.
+
 ## Done
+
+### M6.7 Waves, tuning, soak and demo
+
+- **Status:** done (branch `kestrel-sacred-tree-mining`)
+- **Why:** the big map changes travel times and the stone supply.
+- **What to do:**
+  - Tune the waves, starting stone, dig speeds and yields on the big map.
+  - From M6.3: a wave's route is planned once, so a pit dug on it later
+    doesn't re-route ghouls, and a moat round a ramp's foot can cut a lane.
+    Replan routes when the terrain changes (the chase's `replan_routes`),
+    and decide what a cut lane means.
+  - From M6.3: mid-wave reloads are no longer needed and ghouls take about
+    63 s to arrive; the demo still expects the old lanes.
+  - The soak test runs with digging and miners, with `validate` every tick.
+    (From M6.5: the wave soak already rotates sprites over mining.)
+  - From M6.5: tune the miner's 9 s dig and 6-unit bundle; miners walk
+    into ghouls off the hill and don't flee, and they lure chasers away
+    from the tree.
+  - Update `demos/sacred_tree.json` and `app/README.md`.
+- **Where:** `kestrel/sim/src/settlement/soak_tests.rs`,
+  `sacred_tree_supply.ron`, `kestrel/app/demos/`.
+- **Found in:** mining design.
+- **Done:** routes: a dig replans the routes that pass within 2 m of the
+  dug tile (`Settlement::reroute_round`, from `dig_housekeeping`): every
+  threat on its way to the tree whose remaining route does, and each wave
+  still sending whose planned route does (at its next spawn); routes far
+  from a dig are kept, so a dig costs a few searches at most. A cut lane:
+  routes are planned with `nav::path_toward`, which, when no route reaches
+  the goal, returns the route to the searched node nearest it that the
+  search reached (`path_with` shares the search and gives the same routes
+  as before). A ghoul with such a route is `Threat::stranded`: it walks to
+  its end and waits there (the route keeps its last point, so it never
+  breaches from afar), still chasing anyone who comes in sight, and plans
+  again every 5 s (`retry_stranded`, spread by id; a failed search costs
+  the whole window, so not on every dig) and on any blueprint. A wave cut
+  off spawns its ghouls stranded. Cutting one ramp sends its ghouls round
+  the hill to the other; cutting both leaves them waiting at the cliff's
+  foot 16 m from the tree (new open task "Moats make the tree safe").
+  Fleeing: stage 2 hands sprites the chasing enemies (`Ctx::danger`); a
+  sprite off the hill's plateau (`Hill::on_plateau`) that one chases or is
+  within its detect radius of (`Alarm::Threatened`) drops its plan and its
+  route and plans `[GoTo(home), Wait]`, the sprites' plan shape; at home it
+  waits a retry and stays fled while one chases it or is within 9 m
+  (`Alarm::Wary`), then plans its job. One holding a slot claim or moving
+  a bundle's units finishes that first; scenes without a hill never flee.
+  Tests (`settlement/lane_tests.rs`): a pit dug (the last layer by the
+  elder's dig) on a walking ghoul's route turns it round and it still
+  breaches; a moat round the east ramp sends the east ghoul up the west
+  ramp; with both moated, one on its way and one sent later wait stranded
+  for 150 s without a breach; a miner digging off the hill flees a ghoul
+  2.5 m away, outruns it up the hill and digs again once it is gone.
+  `hill_tests`' `walks` compared each leg with itself; it checks the real
+  legs now (the ramp routes still pass). Tuning (all in
+  `sacred_tree_supply.ron`; measured by `waves_tests`, ballistas manned by
+  sprites and topped up from the tree 5 s before each wave's march ends,
+  by `miner_tests::two_miners_bring_a_steady_modest_income` and by the
+  wave soak):
+
+  | Number | Before | After | Measured |
+  |---|---|---|---|
+  | Calm start | first ghoul at 210 s, at the tree about 273 s | first at 165 s, the hill's top about 205 s, the tree about 228 s | Ghouls walk 63 s from the ring; this puts them back near M5.6's arrival. The happy path (no cheats) still ends in the calm start, at 131 s. |
+  | Waves | 3/4/5/7/8/8: east column 3 to 5 (5 lanes), west 1 to 3 from the third wave; 35 ghouls | 3/5/6/7/8/8: east 3, then 4 from the second (4 lanes), west one more a wave from the second, to 4; 37 ghouls | Ignored, the tree fell in the fifth wave (633 s), now in the fourth (504 s). One ballista by the east ramp: tree 11/20 with 9 breaches before, 6/20 with 14 after. One by each ramp: 20/20 both (35, then 37 killed). No reload mid-wave: a ramp brings at most 4, 8 bolts of a 10-stone store. |
+  | Elder dig | 2 s | kept | Settled (M6.2). No starting stone: the first mechanism's 2 stone are dug, so the elder digs first (the happy path digs at 65 s). |
+  | Miner dig / bundle | 9 s / 6 | kept | Two miners alone bring 45 stone in 5 min (10, 8, 15, 8, 4 a minute, slowing as the near stone goes): about the 10 a minute two ballistas spend over the waves, so they keep them stocked between waves and the elder's digs top up. |
+  | Stone yield / veins | 3–6 a layer; 4 exposed veins 18–37 m out | kept | A vein's ten stone layers give about 45 stone in a minute of the elder's digging; stone is never short, it costs trips. Yields and veins are code (new open task). |
+  | Wave soak | one ballista: tree 11/20; no elder digs | a ballista by each ramp (Ash and Fern), the elder digging stone off the hill in quiet cycles | Tree 18/20: 42 cycles, 35 kills, 2 breaches, 7 buildings broken, 3 sprite deaths and returns, 1 elder death, 10 elder digs, 216 stone dug. |
+
+  Soak: `defending_against_the_waves_strands_no_sprite` plays all six
+  waves on the real map (the hill in its mine) with miners and the elder
+  digging (`dig_stone`: down to a stone tile the miners' search finds,
+  from the tile behind its stand so it faces it, then F), `validate` and
+  the balances every tick; both ballistas and two Wood Gatherers go up in
+  the calm start (by 41 s). Demo `demos/sacred_tree.json`, at 2x then 4x:
+  the elder digs two stone layers at the east ramp's vein, picks up a
+  bundle, sends Reed to mine, builds a ballista by the east ramp's end
+  from the tree's wood and the dug stone and loads the leftover, and Fern
+  mans it; at 4x the elder loads the stone Reed brought, then possesses
+  the ballista as the first column tops the ramp, throws a fireball at its
+  head, fires four bolts and leaves, and Fern finishes it (tree 20/20).
+  Only the wood is stocked. `app/README.md` describes the hill, F, miners,
+  fleeing, the waves and the demo. The M6.6 stripes: the demo's frames by the east ramp's foot show them (pale, tall, one-tile-wide walls on the far terraces at the screen's lower right); `sloped_chunk_mesh` draws walls only down to a lower neighbour or at the arena's edge, and the generator makes no drop tiles, so the cause is not found yet (new open task). Save format 38
+  (`Threat::stranded`); input log, net protocol and `CommandKind`
+  unchanged. Golden: the arena's state hashes moved (the new field),
+  behaviour lines unchanged; regenerated in its own commit.
+
+### M6.6 Drawing sloped ground and stone
+
+- **Status:** done (branch `kestrel-sacred-tree-mining`)
+- **Why:** the ramps, pits and veins must read on screen.
+- **What to do:**
+  - A ground mesh from the corner heights (sloped pit edges and terraces),
+    with the hill's cliff sides.
+  - Stone tints on the ground and pit walls; a dig bar and dust for sprites.
+  - Keep the 256 m map fast to draw and re-mesh only what a dig changes.
+  - From M6.3: the HUD shows Dig Lab's line ("PIT x/6 / F TO DIG / HOLD
+    SPACE TO FLY OUT") in the town; show the town's own dig hint instead.
+  - From M6.5: `digging::shown_digs` shows avatars' digs only; a miner's
+    is `AgentState::digging()` (a `Dig` as the elder's, 9 s long).
+- **Where:** `kestrel/app/src/digging.rs`, the town drawing.
+- **Found in:** mining design.
+- **Done:** `digging.rs` meshes sloped scenes
+  (`sloped_chunk_mesh`; the Dig Lab keeps `chunk_mesh`, its colors
+  unchanged): a gentle tile's top is two triangles from its corner heights
+  (each the lowest of the four tiles round it, as `Terrain::patch`; split
+  on the flatter diagonal), so pit edges, ramps and terraces slope; a
+  steep tile (`Terrain::steep`'s rule) is drawn flat at its own height with
+  walls down to lower neighbours, so the hill's sides, the ramps' edges and
+  pits two or more layers deep stand as cliffs. A gentle tile's corners
+  are never above a neighbour's top, so walls only fall from steep tiles
+  (tested: no holes). Walls are clipped into quarter-meter bands through
+  the scene's `max_layers` (six in the town; `layer_of` darkens over
+  however many there are), then rock. A slope's corners are colored by how
+  far they are dug below the lowest undug ground round them, so terraces
+  stay surface. Stone: `tint` gives `STONE_TINT` (cool grey) for
+  `Veins::Stone`, the dig lab's ore colors otherwise. Chunks stay 16 x 16
+  tiles; a dig rebuilds the chunks of the tiles within two of it in sloped
+  scenes (its four corners move, reshaping the 3 x 3 round it, whose walls
+  reach one further; `redrawn`, `dirty_chunks`), the old plus elsewhere.
+  Cost (release demo, 256 m map): the 289 chunks build in 29-30 ms at
+  world start; a dig rebuilds 1 or 2 chunks in 0.2-0.44 ms (logged at
+  info). Miners: `shown_digs` reads `AgentState::digging()` for every
+  agent, a sprite's bar 1.18 m over its feet (under its tag); dust and the
+  layer burst as the elder's. Dug stone: three grey cubes fly 0.45 s from
+  the pit onto the nearest ground pile within 3.5 m and land with a clack
+  (`toss_stone`, `fly_stones`; the pile itself still fills at once). Town
+  drawing stood every sprite, ghoul, pile, building and caption on the
+  scene pack's height (0), so off the plateau they floated 2 m over the
+  ground; `settlement::town_ground` reads the sim's terrain in scenes with
+  a mine. HUD: F works in the town (keyboard F is `Utility::Dig` there
+  too, `input::tests::keyboard_f_digs_in_a_town`); `gameplay::town_dig`
+  asks the sim (`Settlement::dig_in_front_of`, new) and shows the refusal
+  over the elder ("Too deep from here: step down first", "A pile is in
+  the way", ...) instead of sending a dig that would be refused; the town
+  help line reads "... E INTERACT / F DIG / B BUILD ..."; the digging HUD
+  line in sloped scenes reads "PIT x/6 / F DIG IN FRONT" (no flying).
+  Tests (`digging::tests`): drawn corners equal the sim's ground and
+  steepness on level ground and generated terraces, edges close, a dig
+  changes nothing outside `redrawn`, chunk dirtiness at borders and
+  corners, band clipping, stone tint. Save format, input log, net
+  protocol, commands and golden file unchanged.
+  For later: the digging HUD line sits in the contact panel, which towns
+  hide, so the town's hint is the help line and the refusal text; the
+  refusal is checked against the confirmed world (a joined client's
+  prediction can differ by a tick). The camera can't zoom from the control
+  protocol, so the shots are crops. Pits at the hill's foot lie in its
+  shadow and read dark; far terraces seen at a grazing angle show pale
+  vertical stripes (probably distant steep tiles' walls in the fog), worth a
+  look with M6.7's demo. Slope colors interpolate between corners (soft,
+  not banded like walls).
+
+### M6.5 Miner sprites
+
+- **Status:** done (branch `kestrel-sacred-tree-mining`)
+- **Why:** sprites dig, slowly (Settled, M9).
+- **What to do:**
+  - A "Mine" sprite job. A miner goes to the nearest tile reachable from
+    the tree whose top layer is stone, digs it 4–5 times slower than the
+    elder (within the M3 rule), and carries the drop to the tree's stone
+    pile.
+  - With no exposed stone, it waits at the stone pile and replans when the
+    ground changes.
+  - The plan keeps the sprites' shape (goal, plan, invalidate, replan).
+  - Add the job to the job menu.
+- **Where:** `kestrel/sim/src/settlement/sprites.rs`, `kestrel/app/src/legacy.rs`.
+- **Found in:** mining design.
+- **Done:** `SpriteJob::Mine` (appended; the job command takes it, so
+  the input log, net protocol and `CommandKind` are unchanged) and
+  `settlement/miners.rs`. A miner plans one errand at a time and plans
+  again when it ends: carrying something, to the tree's stone pile
+  (`Settlement::stone_depot`, the depot that takes only stone; any job
+  delivers first); else the nearest stone ground pile within 48 m of the
+  tree (its own drops, the elder's, dropped bundles: stone on the ground
+  is worth more than stone in it, so it clears drops before digging on);
+  else `[ClaimTile, GoTo, Dig]` on the nearest stone tile; else it walks
+  to a spot 1.2 m off the stone pile (one per sprite) and `Wait`s,
+  planning again every `RETRY_TICKS`. The search (`miners::search`)
+  walks tile middles four ways from the stone pile's tile over ground
+  that isn't steep and between obstacles, out to 48 tiles, and keeps the
+  nearest 8 stone-topped tiles `dig_refusal` lets it dig from the tile it
+  reached them from, cached by terrain revision in `SpriteState::targets`
+  (serde-skipped, equal to any other: the ground gives it again after a
+  load), so waiting replans are cheap; claims, what stands on a tile
+  (`View::dig_blocked`, split out of `dig_in_front`) and given-up goals
+  are checked on every plan. Claims: `SpriteState::dig_claim`, asked in
+  stage 3 (`ClaimDigTile`), granted in stage 5 to the lowest agent index
+  for a tile no sprite holds (`claim_dig_tiles`), given up when the
+  sprite drops its plan. `Dig` faces the tile and starts only if
+  `dig_in_front` still gives it; it is done once the pit is deeper (by
+  anyone); housekeeping deepens only if the layer is still there. Dig
+  540 frames (9 s, 4.5x the elder; `sprite.ron`'s new `sprite.mine:
+  (dig, capacity: 6, transfer: 20)`); every sprite's hold is now a 6-unit
+  bundle. `Pickup`/`Deposit` start their carry job in stage 5
+  (`SpriteBundle`, `sprite_bundles`, by `avatar::bundle_job`) and move
+  units through `player_carry` from stage 3. A `GoTo` that finds no route
+  twice gives its goal tile up until the terrain revision changes
+  (`unreachable`). Death or a job change ends the carry job, dig and claim
+  (`drop_sprite_errand`); the stone carried is kept and delivered. Dug
+  stone no longer lands on a tile made steep by a deep pit (`mined`; the
+  miner test found a drop no one could reach). `AgentState::digging()`
+  gives an elder's or a miner's dig for M6.6. App: MINE in the job menu
+  where the ground has stone veins and the tree a stone pile, `"mine"` in
+  the control protocol's job fields, `SpriteView::job` "mine" and
+  activities `digging`/`hauling`, MINER tags. Happy path: step 6 sends
+  Reed to mine before the deposit, and at the end the tree holds the 3
+  left plus the 1 to 7 stone left on the ground (all under 210 s). Tests:
+  `settlement/miner_tests.rs` (exposed stone fetched and delivered, two
+  miners never share a tile, waiting until the elder uncovers a buried
+  vein in a 12 m town, thread and save determinism); the wave soak's rota
+  mines instead of idling, and the elder defends only against ghouls
+  within 15 m of the tree (else miners lured chasers away and the elder sat
+  in the ballista all wave, so Ash never shot). Save format 37; golden
+  unchanged.
+  For later: M6.6 draws sprite dig bars and dust (`digging::shown_digs`
+  reads avatars only; use `AgentState::digging`); miners walk into ghouls
+  (no fleeing); the elder can dig a tile a miner claimed (the miner just
+  replans); M6.7 tunes the miner's 9 s and 6-unit bundle; the search is a
+  tile walk, not nav, so a goal it reaches nav may still refuse (given up
+  until the ground changes).
+
+### M6.4 No more Stone Gatherer
+
+- **Status:** done (branch `kestrel-sacred-tree-mining`)
+- **Why:** all stone comes from digging (Settled).
+- **What to do:**
+  - Remove the Stone Gatherer from the Sacred Tree's supply and build menu;
+    test fixtures may keep it as a generic kind.
+  - Rewrite the happy-path test: the Stone Gatherer step becomes the elder
+    digging stone (and, after M6.5, a miner fetching it).
+  - A small starting stone stock if the first mechanism needs it.
+- **Where:** `kestrel/app/assets/levels/sacred_tree_supply.ron`, the sim
+  and control tests that build one.
+- **Found in:** mining design.
+- **Done:** the supply's building kinds are `wood_gatherer` and
+  `ballista` (so the ballista is kind 1; tests' constants moved), and its
+  comments say stone is dug; the job menu reads IDLE, GATHER WOOD, MAN
+  BALLISTA (it lists kinds generically; no app-side special case used the
+  Stone Gatherer). No starting stone: the happy path digs its first stone
+  at 65 s, has it at the tree at 77 s and the first mechanism in at 92 s,
+  all of it in 131 s of the 210 s calm start. The happy path
+  (`control::tests::the_happy_path_plays_from_a_fresh_start`, no cheats)
+  steps 4 to 6 now: walk down the east ramp to arena tile (20, -11), facing
+  west; `{"op":"dig"}` (works in the town, a `Digging` scene since M6.3)
+  digs the vein's east arm (19, -11); walk into that pit and dig the
+  vein's middle (18, -11); two stone layers drop 6 to 12 stone on one
+  pile; "PICK UP 5 STONE"; deposit at the tree's stone pile. Step 7's
+  Wood Gatherer is building 1, and leaves the tree 6 wood and 3 stone.
+  The vein is the east one `Hill::exposed_veins` gives for seed 7,
+  hard-coded and checked through the state's `digging.nearest_ore`. The
+  control build test builds a Wood Gatherer (Ash staffs the prebuilt one
+  first; wood, the leftover back, then stone) and the job-menu test picks
+  the ballista. The bootstrapping test became
+  `construction_tests::both_kinds_build_from_an_empty_tree_and_dug_stone`
+  on the map (dig two layers of the east vein, carry every dug stone up,
+  then a Wood Gatherer and a ballista). Tests that only needed a second
+  gathering kind (the construction steps, the build soak) add a test-only
+  Stone Gatherer after the ballista (`tests::with_stone_gatherer`); the
+  wave soak builds a Wood Gatherer where its Stone Gatherer stood.
+  `app/README.md` says where stone comes from; the demo script needs
+  nothing for M6.4 (it never built a Stone Gatherer; it stocks stone with
+  `settlement_stock`), its old lanes stay M6.7's. Save format, input log,
+  net protocol, commands and the golden file unchanged.
+  For later: M6.5 extends the happy path where its step 6 says
+  (Reed to Mine, a miner fetching the dug stone left on the ground, 1 to
+  7 units) and the bootstrapping test's note; M6.7 can tune the yields
+  against the 77 s first stone.
+
+### M6.3 The big map and the hill
+
+- **Status:** done (branch `kestrel-sacred-tree-mining`)
+- **Why:** room to explore for stone, and a hill that makes the defence a
+  question of two entrances (M5, M7).
+- **What to do:**
+  - The Sacred Tree becomes 256 × 256 m of generated ground with an
+    authored plateau about 2 m high, wide enough for the 26 m town, with two
+    ramps on opposite sides. The hill and plateau can't be dug.
+  - The generator guarantees a few stone veins exposed at the surface 15–40
+    m from the tree.
+  - Ghouls spawn on a ring about 40 m from the tree, one lane per ramp.
+  - The town camera follows the elder over the big map.
+- **Where:** `kestrel/sim/src/mine.rs`, `terrain.rs`,
+  `kestrel/app/assets/levels/sacred_tree.ron`, `sacred_tree_supply.ron`.
+- **Found in:** mining design.
+- **Done:** `sacred_tree.ron` has `features: [Digging, SlopedGround]`,
+  `dig_layers: Some(6)` and `mine: Some((extent: 128.0, seed: 7, hill:
+  Some((plateau: 15, height: 8, ramp_width: 7, ramp_length: 8, foot:
+  10))))`; the supply's extent is 128. The hill (`voxel_assets::HillLayout`
+  in whole tiles and 0.25 m steps, `SceneSetup::hill`, `mine::Hill`,
+  `Terrain::raise_hill`, centered on the tree's tile) is a 31 m square
+  plateau 8 steps up, cliffs on every side, and a ramp 7 tiles wide down
+  the middle of its west (-x) and east (+x) sides falling a step a tile
+  over 8 tiles. The generator applies it over its terraces (integer only):
+  flat for `foot` tiles round the plateau, then a step at most every 3
+  tiles, as round Dig Lab's landing. The plateau's top is the mine's datum
+  (`Mine::height` subtracts the hill's steps), so the town and its
+  architecture stay at zero and the ground round it lies 2 m below
+  (terraces far off rise past the plateau). `raise_hill` pushes the
+  plateau and both ramps into `Terrain::undiggable`. A town's hill
+  guarantees `EXPOSED_VEINS` (4) stone veins, one per quarter, a plus of
+  five tiles stone two layers down, 18 to 37 m from the tree, off the hill
+  (`Hill::exposed_veins`). Waves: the five north lanes became an east
+  column from (40, 0) to (1.8, -0.6) and the west/east lanes three west
+  lanes from (-40, 0) to (-1.8, -0.6), same timings; each route is a
+  straight walk up its ramp. Ramps went west and east, not north and
+  south: the sprites idle on the tree's +z side, and a south lane killed
+  them 34 times in a run. Nav: big-arena windows always hold the hill and
+  its ramps' feet (`HILL_MARGIN`, 4 tiles), else a route off the plateau
+  found no ramp. Cost (unoptimized test build): a wave's route 0.1 ms, the
+  elder's walk to the foot 7–10 ms, an errand on the plateau 1–2 ms, a
+  failing search (a walled pit at the foot) 49 ms; the wave soak (13 game
+  minutes) and the build soak take 3.3 s together; no height cache needed.
+  Chasers steer, are knocked back, and see a quarry only over walkable
+  ground in sloped scenes (`chase::walk_clear`), so none climbs a cliff.
+  Placement refuses a footprint over a pit or a steep tile
+  (`PlacementRefusal::Uneven`, "UNEVEN GROUND"); prebuilt buildings are
+  placed before the mine is generated, so they aren't checked against it
+  (the Wood Gatherer is on the plateau). The app's camera follows the elder
+  as in Dig Lab (`digging::follow_camera`, on in `Digging` scenes; Z/C
+  orbit round the followed target). `digging.rs` bands pit walls from the
+  datum. The grass box is lifted 1 cm off the drawn plateau. Save format
+  36 (`MineSpec::hill`, `PlacementRefusal::Uneven`); input log, net
+  protocol and commands unchanged; golden unchanged. Tests:
+  `settlement/hill_tests.rs` (reads the scene's mine line; the shape,
+  undiggable hill, exposed veins, ramp routes from the ring, placements,
+  the elder down a ramp and back, nav timings) and
+  `save::a_town_mine_keeps_its_hill`. Changed for the map: waves and both
+  soaks play on it (`hill_tests::sacred_tree_map`); their restocks and
+  end wait the 52 s longer walk; the defence test became
+  `a_ballista_guards_one_ramp_and_two_keep_the_tree_standing` (one by the
+  east ramp kills the whole column, tree 11; one per ramp, tree 20); the
+  wave soak's buildings moved to the new lanes (tree 11) and the build
+  soak has no waves (the east column crossed its spots); the 8.5 m
+  outside-the-arena checks moved to 127.5/130 m; the Burst test respawns
+  the elder at its start (a bare scenario's spawn is the world corner,
+  past the big map's edge).
+  For later: M6.7 must retune: one ballista beside the tree no longer
+  runs dry (the east column brings 3–5 a wave, 10 bolts), so the
+  "reload mid-wave" lever is gone; ghouls take about 63 s to arrive; the
+  demo script still expects the old lanes. Ghoul routes walk straight
+  through a pit dug later at a ramp's foot (routes plan once a wave; a dig
+  doesn't replan them as a blueprint does), and digging a moat round a
+  ramp's foot can cut a lane. In a town the Dig Lab HUD line ("PIT x/6 / F
+  TO DIG / HOLD SPACE TO FLY OUT") shows. M6.5 miners: veins are at
+  `Hill::exposed_veins`; routes off the plateau go by a ramp.
+
+### M6.2 Digging in front, and the stone yield
+
+- **Status:** done (branch `kestrel-sacred-tree-mining`)
+- **Why:** digging must never trap the digger, and stone comes from the
+  ground (M3, M5, M6).
+- **What to do:**
+  - In sloped scenes, a dig takes the faced tile, at most one layer below
+    the digger's own tile. No dig under a building, site, pile, the tree or
+    undiggable ground (M7). The elder digs in about 2 s, reusing Dig Lab's
+    dig command, bar and dust.
+  - Stone becomes a mineral in the generator's layers; digging out a stone
+    layer drops 3–6 stone onto a town ground pile beside the pit.
+  - Put the drops in `balances` and `validate`.
+  - A randomized property test: no sequence of allowed digs leaves a walker
+    without a walkable way to undug ground.
+  - **From M6.1:** a dig can make a tile it doesn't touch steep (a
+    diagonal neighbour of the dug tile, whose shared corner drops a
+    second layer below its far corners), and `walkable` is strict: a body
+    whose footprint is on steep ground can't move or path at all. Either
+    refuse such digs while someone stands there, or let a walker step off
+    steep ground it already stands on (without letting nav chain nodes
+    across steep tiles). Today's underfoot dig (Dig Lab's) still works in
+    sloped scenes and is what M3 replaces there.
+- **Where:** `kestrel/sim/src/settlement/avatar.rs`, `terrain.rs`,
+  `mine.rs`, `piles.rs`.
+- **Found in:** mining design.
+- **Done:** in a sloped scene `DigDown` (unchanged command) digs
+  `Terrain::front_tile`: the tile beside the digger's along the axis its
+  `body.heading` points most. `View::dig_in_front` refuses it under a
+  terrain obstacle (tree, buildings, sites, props), a ground pile, a
+  depot dock, or a building's output pile or slot spot (`DigRefusal`);
+  `Terrain::dig_refusal` refuses an undiggable scene or tile (outside, a
+  drop, a `Terrain::undiggable` tile range: the seam M6.3's hill sets,
+  empty today), the bottom layer, a dig leaving the tile more than a layer
+  below the digger's (`TooDeep`), and a dig that strands anyone
+  (`Strands`): on a clone with the layer dug, from the middle of every
+  tile within two of it, a body of the digger's radius must walk (tile
+  middle to middle, 8 ways, `walkable`) to an undug tile that isn't steep
+  (a search past `WALK_OUT_TILES`, 256, counts as out). The depth rule
+  alone isn't enough: the property test trapped the digger by deepening a
+  stair's last step from below, and by deep pits dragging a step's corners
+  down. The steep-tile issue from M6.1: `walkable` lets a body whose
+  footprint starts on steep ground walk off it as long as no 0.1 m step
+  climbs faster than `MAX_SLOPE`, and never back onto steep ground once
+  off it, so nav can't enter steep ground from gentle ground. A digger's
+  own tile can't get steep from an allowed dig (shown in the doc; the
+  `Steepens` check is a guard). Digging in front stands still (no
+  centering); the dig lab still digs and centers underfoot. A town's mine
+  (`from_scene`: building kinds and no `PileSetup`) has
+  `MineSpec::veins: Veins::Stone` (broad veins, over 1 in 50 surface
+  tiles on seed 7, richer each layer down) and needs the scenario's
+  `stone` item (`mine::STONE_ID`); a stone layer drops `yield_of` (3–6)
+  stone onto a ground pile beside the pit or one within 2.2 m
+  (`PileLab::mined`, now kept clear of docks, output piles and slot
+  spots), counted as `generated`, so `balances` and `validate` cover it;
+  no `PileToss` events in a town (the pile just appears; M6.6 can animate
+  it). The elder has the exosuit's Dig (120 frames). Save format 35
+  (`MineSpec::veins`, `Terrain::undiggable`); input log, net protocol and
+  commands unchanged; the golden file is unchanged. Tests:
+  `settlement/dig_tests.rs` (stone in front onto a pile and merging,
+  carried as a bundle, every refusal, the seeded random-dig property test
+  on level ground and on terraces, walking off steep ground) and
+  `scene_tests::sloped_scenes_dig_a_stair_in_front` (a six-layer stair,
+  refusing to strand its bottom). For later: M6.3 makes the Sacred Tree a
+  mine (`mine:` and `Digging` in the level; the stone veins follow) and
+  sets `Terrain::undiggable` for the hill and plateau (scene plumbing
+  still to add), and guarantees exposed veins 15–40 m out; M6.5 miners
+  can call `Terrain::dig_refusal`/`View::dig_in_front` from a standing
+  tile (it clones the terrain per call, so cache plans, don't poll it);
+  `Strands` uses the digger's radius, so a wider body (a ghoul brute)
+  could still be boxed in; obstacles aren't counted, so buildings can wall
+  a pit in; a building placed later isn't refused over a pit; M6.6 draws
+  the stone tint (`Mine::ore` gives `STONE` = 0, which `digging.rs` would
+  color as amber) and the town dig's bar and dust; the app sends the dig
+  only in `Digging` scenes.
+
+### M6.1 Sloped ground
+
+- **Status:** done (branch `kestrel-sacred-tree-mining`)
+- **Why:** pit edges become ramps, so no pit traps a walker
+  ([mining design](../SACRED_TREE_MINING.md), M1, M2, M4, M8).
+- **What to do:** scene settings for sloped ground and the depth limit;
+  corner heights and bilinear ground; walkable by slope; paths and enemy
+  routes follow it; Dig Lab unchanged.
+- **Where:** `kestrel/sim/src/terrain.rs`, `mine.rs`, `nav.rs`,
+  `settlement/mod.rs` (`SceneSetup`), `kestrel/tools/assetc/core`
+  (scene schema), `kestrel/app/src/lockstep.rs`.
+- **Found in:** mining design.
+- **Done:** a scene opts in with `features: [SlopedGround]` and sets its
+  depth with `dig_layers: Some(n)` (scene schema in `voxel_assets`, the
+  pack stays version 16 since both default); `SceneSetup::sloped` and
+  `dig_layers` carry them to `Terrain::sloped` and `Terrain::max_layers`
+  (default `MAX_LAYERS`, 3). A generated mine takes the terrain's layers
+  at `generate_mine` (`MineSpec::layers`, ore arrays sized by it), so set
+  `max_layers` first. In a sloped scene a tile's height is `top` at its
+  center less its pit (surfaces snap to tiles), each corner is the lowest
+  of the four tiles touching it (drop tiles skipped; a drop tile itself
+  has no ground), and `ground` is bilinear in `Fx` (`Terrain::patch`).
+  `walkable` checks, every 0.1 m from `a` on, all five footprint points:
+  no drop, and no slope over `MAX_SLOPE` (a layer per tile) along x or y
+  at that point; a diagonal may be up to √2 steeper, so a one-layer pit's
+  diagonal neighbours stay walkable. `Terrain::steep(tile)` says whether
+  any of a tile's edges falls more than a layer (for M6.2's dig rules and
+  M6.6's drawing). A terrain with no pits, mine, surfaces or drops is
+  level and skips all of it, so the Sacred Tree (now sloped, six layers)
+  behaves exactly as before; only its world's terrain hash moved, since
+  the settings hash only when set. `nav::path`/`path_avoiding` (threat
+  waves, chasers, sprites, haulers) keep to `walkable` in sloped scenes;
+  `path_with` callers pass their own check as before (the avatar's
+  jetpack still ignores slopes). Not slope-checked: the articulated
+  turning circle of towed haulers (none in the Sacred Tree). Save format
+  34; input log, net protocol and commands unchanged; the sim golden file
+  is unchanged. App: the Dig Lab HUD and ore probe read
+  `terrain.max_layers`; `digging.rs`'s pit walls still draw
+  `MAX_LAYERS` bands (M6.6). Cost: a sloped ground sample reads 9 tile
+  heights; with M6.3's generated 256 m map, watch nav cost (every edge
+  now runs `walkable`). Tested: a pit's flat floor and sloping
+  neighbours, a tile between neighbours two layers apart is steep (and
+  the body's edge counts), a route around a deep pit and in by a
+  one-layer ramp, walking out of a one-layer pit and digging six deep in
+  a sloped scene, the Dig Lab keeping steps and three layers, and a save
+  round trip of a sloped six-layer mine.
 
 ### Rotating the town camera
 

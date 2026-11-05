@@ -269,7 +269,7 @@ fn a_ghoul_gives_up_past_the_leash_and_reaches_the_tree() {
     assert!((t.position - elder).length() > leash, "gave up only past the leash");
     // Planned in stage 5, after the ghoul moved: from where it stands.
     let target = s.waves[t.wave as usize].target;
-    assert_eq!(t.route, route_home(sim.world().terrain(), t.position, target));
+    assert_eq!(t.route, route_home(sim.world().terrain(), t.position, target).0);
     assert_eq!(t.route.last(), Some(&target));
     until(&mut sim, 30 * HZ, |sim| {
         assert_ne!(goal(sim), Some(Goal::Chase(Quarry::Agent(ELDER))), "the elder stays out of reach");

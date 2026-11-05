@@ -953,8 +953,13 @@ pub fn update_hud(
     } else if scene.has_feature(voxel_assets::SceneFeature::Digging) {
         let net = if service.networked() { format!(" / NET / {}", service.status.to_uppercase()) } else { String::new() };
         let tile = sim::terrain::Terrain::pit_tile(service.to_sim(player.translation));
-        let pit = service.world().map_or(0, |w| w.terrain().pit(tile));
-        format!("PIT {pit}/{} / F TO DIG / HOLD SPACE TO FLY OUT{net}", sim::terrain::MAX_LAYERS)
+        let (pit, layers, sloped) = service.world().map_or((0, sim::terrain::MAX_LAYERS, false), |w| (w.terrain().pit(tile), w.terrain().max_layers, w.terrain().sloped));
+        // A sloped scene (the town) digs in front and walks out of its pits.
+        if sloped {
+            format!("PIT {pit}/{layers} / F DIG IN FRONT{net}")
+        } else {
+            format!("PIT {pit}/{layers} / F TO DIG / HOLD SPACE TO FLY OUT{net}")
+        }
     } else if service.networked() {
         format!("NET / {}", service.status.to_uppercase())
     } else {

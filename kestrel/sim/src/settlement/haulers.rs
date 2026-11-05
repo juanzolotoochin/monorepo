@@ -234,6 +234,13 @@ pub(super) struct Ctx<'a> {
     /// What an agent's actions read this tick; each agent puts itself in
     /// `me`.
     pub view: View<'a>,
+    /// Miners' dig claims as of last tick (`SpriteState::dig_claim`).
+    pub dig_claims: &'a [((i32, i32), AgentIx)],
+    /// The town's stone and its stone pile (`Settlement::stone_depot`).
+    pub stone: Option<(ItemIx, DepotIx)>,
+    /// The enemies that chase, as they stand this tick (they move first):
+    /// what a sprite off the hill flees from (`sprites::Alarm`).
+    pub danger: &'a [super::sprites::Danger],
 }
 
 pub(super) fn footprint(a: &AgentState) -> Footprint {

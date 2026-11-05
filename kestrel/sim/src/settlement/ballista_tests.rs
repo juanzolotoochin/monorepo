@@ -22,7 +22,7 @@ const ASH: AgentIx = 1;
 const STONE: ItemIx = 1;
 const TREE_WOOD: DepotIx = 0;
 const TREE_STONE: DepotIx = 1;
-const BALLISTA_KIND: BuildingKindIx = 2;
+const BALLISTA_KIND: BuildingKindIx = 1;
 /// The ballista these tests put up beside the prebuilt Wood Gatherer.
 const BALLISTA: BuildingIx = 1;
 
@@ -189,6 +189,7 @@ fn threat(sim: &mut Simulation, id: u64, x: f64, y: f64, hp: u32) {
         ready_at: 0,
         burn: None,
         goal: Default::default(),
+        stranded: false,
     });
     s.threats.sort_by_key(|t| t.id);
     s.next_id = s.next_id.max(id + 1);

@@ -508,15 +508,16 @@ mod tests {
         assert!(bad(&sprite.replace("(skin: \"worker\")", "()")).contains("view.skin"));
     }
 
-    /// The Sacred Tree's elder walks as the exosuit with no abilities, and
-    /// its sprites carry nothing.
+    /// The Sacred Tree's elder walks and digs as the exosuit, with no other
+    /// ability, and its sprites carry nothing.
     #[test]
     fn the_sacred_tree_characters_load() {
         let content = Content::builtin();
         let get = |name: &str| &content.rules.characters[content.names.character_index(name).unwrap() as usize];
         let elder = get("elder");
         assert_eq!(elder.brain, character::Brain::Player);
-        assert!(elder.abilities.is_empty());
+        assert_eq!(elder.abilities.len(), 1);
+        assert_eq!(elder.dig(), get("exosuit").dig());
         assert_eq!(elder.movement, get("exosuit").movement);
         let sprite = get("sprite");
         assert_eq!(sprite.brain, character::Brain::Sprite);
@@ -598,6 +599,14 @@ mod tests {
         let builtin = Content::builtin();
         let sprite_of = |name: &str| builtin.rules.characters[builtin.names.character_index(name).unwrap() as usize].sprite;
         assert_eq!(sprite_of("sprite").map(|s| (s.health, s.respawn)), Some((3, ticks_from_60hz(900))));
+        // It digs a layer 4.5 times slower than the elder (Settled, "Speed").
+        let mine = sprite_of("sprite").unwrap().mine.unwrap();
+        assert_eq!((mine.dig, mine.capacity), (ticks_from_60hz(540), 6));
+        assert!(def.mine.is_none(), "no mining without a `mine`");
+        let mining = sprite.replace("respawn: 900)", "respawn: 900, mine: (dig: 540, capacity: 6, transfer: 20))");
+        assert!(characters(&[("character/x.ron", &mining)]).is_ok());
+        assert!(bad(&mining.replace("capacity: 6", "capacity: 0")).contains("sprite.mine.capacity"));
+        assert!(bad(&mining.replace("dig: 540, ", "")).contains("sprite.mine.dig"));
         assert!(sprite_of("ghoul_forest").is_none());
     }
 

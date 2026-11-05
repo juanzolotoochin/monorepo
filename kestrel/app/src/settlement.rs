@@ -791,9 +791,7 @@ pub fn tick(world: &mut World) {
             let at = match sim.agents.get(agent) {
                 Some(a) if !mine => {
                     let p = Vec3::new(a.position[0], 0.0, a.position[1]);
-                    p + Vec3::Y
-                        * crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, p)
-                            .unwrap_or(0.0)
+                    p + Vec3::Y * town_ground(world, p)
                 }
                 _ => pos,
             };
@@ -1271,8 +1269,7 @@ pub fn tick(world: &mut World) {
         }
     }
     for (key, mut view) in desired {
-        view.position.y +=
-            crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, view.position).unwrap_or(0.);
+        view.position.y += town_ground(world, view.position);
         let template = &state.templates[&view.skin];
         if !state.views.contains_key(&key) {
             let rig = if let Some(rig) = state.pool.get_mut(&view.skin).and_then(|p| p.pop()) {
@@ -1384,6 +1381,9 @@ const SPRITE_FADE_SECONDS: f32 = 1.5;
 /// shortened to the kind's product for its tag ("WOOD"), so neighbors' tags
 /// overlap less. A ballista, which makes nothing, keeps its label.
 fn job_labels(sim: &Simulation, job: Option<&String>) -> (String, String) {
+    if job.is_some_and(|id| id == crate::legacy::MINE_JOB) {
+        return ("MINER".to_string(), "MINE".to_string());
+    }
     let Some(kind) = job.and_then(|id| sim.config().building_kinds.iter().find(|k| k.id == *id)) else {
         return (String::new(), String::new());
     };
@@ -1432,7 +1432,7 @@ fn town_caption(world: &mut World, state: &mut Settlement, key: &str, position: 
 fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &mut BTreeMap<String, View>, player: Vec3) -> Vec<(String, Vec3, f32, Glow)> {
     use crate::legacy::{BuildingStatus, Occupant, SpriteActivity};
     let mut glows = vec![];
-    let ground = |world: &World, p: Vec3| crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, p).unwrap_or(0.);
+    let ground = town_ground;
     let seconds = sim.time() / HZ;
     let burst = burst_indicator(world);
     let leave = leave_prompt(world);
@@ -1593,7 +1593,7 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
         let p = Vec3::new(a.position[0], 0., a.position[1]);
         let p = p + Vec3::Y * ground(world, p);
         let glow = match s.activity {
-            SpriteActivity::Working => Glow::Working,
+            SpriteActivity::Working | SpriteActivity::Digging | SpriteActivity::Hauling => Glow::Working,
             SpriteActivity::Moving => Glow::Moving,
             SpriteActivity::Waiting => Glow::Waiting,
             SpriteActivity::Idle | SpriteActivity::Dead => Glow::Idle,
@@ -1603,7 +1603,7 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
         // sprite's goes out.
         let phase = index as f32 * 1.7;
         let (size, lift) = match s.activity {
-            SpriteActivity::Working => (0.13 + 0.03 * (seconds * 13.0 + phase).sin(), 0.04 * (seconds * 9.0 + phase).sin()),
+            SpriteActivity::Working | SpriteActivity::Digging | SpriteActivity::Hauling => (0.13 + 0.03 * (seconds * 13.0 + phase).sin(), 0.04 * (seconds * 9.0 + phase).sin()),
             SpriteActivity::Moving => (0.11, 0.04 * (seconds * 6.0 + phase).sin()),
             SpriteActivity::Waiting => (0.09 + 0.03 * (seconds * 2.0 + phase).sin(), 0.0),
             SpriteActivity::Idle => (0.07, 0.0),
@@ -1618,6 +1618,8 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
         let back = s.dead.map_or(0, |(_, back)| ((back as f32 - sim.time()) / HZ).ceil().max(0.0) as u32);
         let doing = match s.activity {
             SpriteActivity::Working => "WORKING".to_string(),
+            SpriteActivity::Digging => "DIGGING".to_string(),
+            SpriteActivity::Hauling => "CARRYING".to_string(),
             SpriteActivity::Moving if s.job.is_none() => "GOING HOME".to_string(),
             SpriteActivity::Moving => "ON THE WAY".to_string(),
             SpriteActivity::Waiting => "WAITING".to_string(),
@@ -1651,7 +1653,10 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
             match s.activity {
                 SpriteActivity::Working => "working inside".to_string(),
                 SpriteActivity::Moving => "walking".to_string(),
+                SpriteActivity::Waiting if s.job.as_deref() == Some(crate::legacy::MINE_JOB) => "waiting for stone to dig".to_string(),
                 SpriteActivity::Waiting => "waiting for a free building".to_string(),
+                SpriteActivity::Digging => "digging stone".to_string(),
+                SpriteActivity::Hauling => "moving stone".to_string(),
                 SpriteActivity::Idle => "standing at home".to_string(),
                 SpriteActivity::Dead => format!("dead, back beside the tree in {back} s"),
             }
@@ -1675,7 +1680,7 @@ const FIRE_FLAMES: usize = 11;
 /// burning enemy carries two small flames. The fire's ring is the HUD's
 /// (`input::hud`).
 fn fire_glows(world: &World, sim: &Simulation, glows: &mut Vec<(String, Vec3, f32, Glow)>) {
-    let ground = |p: Vec3| crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, p).unwrap_or(0.);
+    let ground = |p: Vec3| town_ground(world, p);
     let now = sim.time();
     let seconds = now / HZ;
     for f in &sim.fireballs {
@@ -1826,13 +1831,26 @@ fn town_help(world: &mut World) {
     }
 }
 
+/// The drawn ground under `p`: a generated mine's ground and pits where the
+/// scene has one (the town's big map round its hill, M6.3; what the dug
+/// ground draws, `digging`), else the scene's platforms.
+fn town_ground(world: &World, p: Vec3) -> f32 {
+    let service = world.resource::<crate::lockstep::SessionService>();
+    if service.world().is_some_and(|w| w.terrain().mine().is_some()) {
+        if let Some(height) = service.ground_height(p) {
+            return height;
+        }
+    }
+    crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, p).unwrap_or(0.)
+}
+
 /// A player's body hidden while it possesses a building (`hide_possessing`).
 #[derive(Component)]
 struct Possessing;
 
 fn town_interact(world: &mut World, state: &mut Settlement, sim: &Simulation, player: Vec3) {
     use crate::input::{gameplay::Dispatcher, InputService, Panel};
-    let ground = |world: &World, p: Vec3| crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, p).unwrap_or(0.);
+    let ground = town_ground;
     let mut shown: Vec<String> = Vec::new();
     let town = world.get_resource::<Dispatcher>().map(|d| d.town.clone()).unwrap_or_default();
     let key = match world.get_resource::<InputService>().map(|i| i.frame().owner) {
@@ -1918,7 +1936,7 @@ fn town_ghost(world: &mut World, state: &mut Settlement, sim: &Simulation) {
     let tint = if ghost.verdict.is_ok() { valid } else { invalid };
     let shape = state.building_shapes[&kind.id];
     let template_scale = state.templates[&kind.skin].scale;
-    let at = ghost.center + Vec3::Y * crate::jetpack::height(&world.resource::<crate::scene_view::SceneView>().pack, ghost.center).unwrap_or(0.);
+    let at = ghost.center + Vec3::Y * town_ground(world, ghost.center);
     let heading = facing([ghost.center.x, ghost.center.z], [ghost.output.x, ghost.output.z]);
     let (_, rig, fade) = state.ghost.as_mut().unwrap();
     fade.tint(world, tint, 0.45);
@@ -2310,6 +2328,7 @@ mod tests {
             ready_at: 0,
             burn: None,
             goal: Default::default(),
+            stranded: false,
         });
         (crate::legacy::Scenario::new(&scenario), s, center)
     }

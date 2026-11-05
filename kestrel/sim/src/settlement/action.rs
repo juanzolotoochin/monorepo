@@ -36,8 +36,12 @@ use super::piles::{PileAction, PileLab};
 use super::sprites;
 use super::{AgentIx, AgentState, BuildingKind, BuildingState, DepotIx, DepotState, Direction, InventoryRef, ItemIx, Role, Settlement, Transfer};
 use crate::messages::ActionMessages;
-use crate::terrain::Terrain;
+use crate::terrain::{DigRefusal, Terrain};
 use crate::CommandKind;
+
+/// How far a dig keeps from a tree pile's dock and a building's output pile
+/// and slot spot (`View::dig_in_front`): a pile's ground radius.
+const DIG_CLEARANCE: Fx = Fx::from_bits(1_503_238_554); // 0.35
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
@@ -58,7 +62,8 @@ pub enum Action {
     Jetpack(bool),
     /// Start a grounded jump. Midair presses do nothing.
     Jump,
-    /// Dig out a layer of the tile the agent stands on.
+    /// Dig out a layer of the tile the agent stands on; in sloped scenes,
+    /// of the tile in front of it (`View::dig_in_front`).
     DigDown,
     /// Take units from (or, with `deposit`, give units to) a depot; units
     /// move once the agent is at the dock.
@@ -202,6 +207,15 @@ impl Settlement {
             building_kinds: &self.building_kinds,
         }
     }
+
+    /// The tile `agent` would dig in front of it now in a sloped scene, or
+    /// why it can't (`View::dig_in_front`): for the app's refusal hint. It
+    /// clones the terrain for the stranding check, so ask on a key press,
+    /// not every frame.
+    pub fn dig_in_front_of(&self, agent: AgentIx, tick: u64, terrain: &Terrain) -> Option<Result<(i32, i32), DigRefusal>> {
+        let body = &self.agents.get(agent as usize)?.body;
+        Some(self.view(agent, tick, terrain).dig_in_front(body.position, body.heading, body.base_radius))
+    }
 }
 
 impl View<'_> {
@@ -213,6 +227,43 @@ impl View<'_> {
     /// Whether the scene allows digging here: no pile or machine on the tile.
     pub fn can_dig_at(&self, position: FxVec2) -> bool {
         self.terrain.diggable && !self.piles.is_some_and(|lab| lab.blocks_dig(Terrain::pit_tile(position)))
+    }
+
+    /// The tile a digger of `radius` at `position` facing `heading` digs in a sloped
+    /// scene (M3 of the mining design): the one in front
+    /// (`Terrain::front_tile`), if the ground allows it
+    /// (`Terrain::dig_refusal`) and nothing stands on it: no building,
+    /// site, tree or prop (the terrain's obstacles), pile, tree pile's dock,
+    /// or building's output pile or slot spot.
+    pub fn dig_in_front(&self, position: FxVec2, heading: Fx, radius: Fx) -> Result<(i32, i32), DigRefusal> {
+        let tile = Terrain::front_tile(position, crate::nav::heading_vector(heading));
+        if let Some(refusal) = self.terrain.dig_refusal(Terrain::pit_tile(position), tile, radius) {
+            return Err(refusal);
+        }
+        self.dig_blocked(tile).map_or(Ok(tile), Err)
+    }
+
+    /// What stands on `tile` that a dig in front refuses
+    /// (`dig_in_front`), the ground aside: an obstacle (`Blocked`), or a
+    /// pile, dock, output pile or slot spot (`Pile`). Cheap, unlike the
+    /// ground's check, so a miner checks it on every plan (`miners`).
+    pub fn dig_blocked(&self, tile: (i32, i32)) -> Option<DigRefusal> {
+        // Whether a disc reaches into the tile's square.
+        let center = Terrain::pit_center(tile);
+        let touches = |p: FxVec2, radius: Fx| {
+            let nearest = FxVec2::new(p.x.clamp(center.x - Fx::HALF, center.x + Fx::HALF), p.y.clamp(center.y - Fx::HALF, center.y + Fx::HALF));
+            (p - nearest).length() < radius
+        };
+        if self.terrain.blocking_obstacles().any(|o| touches(o.center, o.radius)) {
+            return Some(DigRefusal::Blocked);
+        }
+        let piles = self.piles.iter().flat_map(|lab| lab.piles.values()).map(|p| (p.position, super::piles::pile_radius(p.units())));
+        let docks = self.depots.iter().map(|d| (d.position, DIG_CLEARANCE));
+        let spots = self.buildings.iter().flat_map(|b| [b.output_position, b.slot_position(&self.building_kinds[b.kind as usize])]).map(|p| (p, DIG_CLEARANCE));
+        if piles.chain(docks).chain(spots).any(|(p, radius)| touches(p, radius)) || self.piles.is_some_and(|lab| lab.blocks_dig(tile)) {
+            return Some(DigRefusal::Pile);
+        }
+        None
     }
 
     /// See `Settlement::leaving_cargo`.

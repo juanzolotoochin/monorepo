@@ -229,11 +229,11 @@ fn a_town_saved_mid_delivery_continues() {
     let site = FxVec2::new(center.x + Fx::from_int(5), center.y);
     let command = |kind| Command { player: PlayerId(0), kind };
     let walk = |target| command(CommandKind::MoveAvatar { agent: 0, intent: Intent::GoTo { target, run: true } });
-    // A Stone Gatherer east of the tree, five wood in the tree's wood pile;
+    // A Wood Gatherer east of the tree, five wood in the tree's wood pile;
     // the elder takes it to the site and delivers.
     let turn = |sim: &Simulation, tick: u64| -> Vec<Command> {
         match tick {
-            0 => vec![command(CommandKind::PlaceBlueprint { kind: 1, position: site }), command(CommandKind::AddStock { depot: 0, item: 0, units: 5 }), walk(dock)],
+            0 => vec![command(CommandKind::PlaceBlueprint { kind: 0, position: site }), command(CommandKind::AddStock { depot: 0, item: 0, units: 5 }), walk(dock)],
             150 => vec![command(CommandKind::Interact { agent: 0, target: InteractTarget::Depot(0) })],
             300 => {
                 let b = &sim.world().settlement().unwrap().buildings[1];
@@ -493,7 +493,7 @@ fn a_town_saved_while_a_ballista_shoots_continues() {
     // The elder takes the stone to the ballista, and steps away; Ash mans it.
     let turn = |tick: u64| -> Vec<Command> {
         match tick {
-            0 => vec![go(dock), command(CommandKind::SetSpriteJob { agent: 1, job: SpriteJob::Staff(2) })],
+            0 => vec![go(dock), command(CommandKind::SetSpriteJob { agent: 1, job: SpriteJob::Staff(1) })],
             t if t == 4 * hz => vec![interact(InteractTarget::Depot(1))],
             t if t == 7 * hz => vec![go(stand)],
             t if t == 13 * hz => vec![interact(InteractTarget::Output(1))],
@@ -528,4 +528,87 @@ fn a_town_saved_while_a_ballista_shoots_continues() {
             panic!("first difference at {difference}");
         }
     }
+}
+
+/// A sloped scene with its own depth limit (format 34: `Terrain::sloped`,
+/// `Terrain::max_layers` and `MineSpec::layers`) loads with them, and its
+/// mine keeps as many layers.
+#[test]
+fn a_sloped_scene_keeps_its_slopes_and_depth() {
+    use fx::Fx;
+    let content = Content::builtin();
+    let setup = sim::settlement::SceneSetup {
+        player: "exosuit".into(),
+        extent: Fx::from_int(16),
+        diggable: true,
+        sloped: true,
+        dig_layers: Some(6),
+        mine: Some(7),
+        ..Default::default()
+    };
+    let world = sim::World::new_scene(5, &content, &setup).unwrap();
+    let loaded = read(&write(&world, &content), &content).unwrap();
+    let terrain = loaded.terrain();
+    assert!(terrain.sloped);
+    assert_eq!(terrain.max_layers, 6);
+    assert_eq!(terrain.mine.unwrap().layers, 6);
+    assert_eq!(terrain, world.terrain());
+}
+
+/// A town's mine (format 35: `MineSpec::veins`, `Terrain::undiggable`)
+/// loads with its stone veins and its undiggable tiles.
+#[test]
+fn a_town_mine_keeps_its_stone_and_undiggable_ground() {
+    use fx::Fx;
+    let content = Content::builtin();
+    let text = include_str!("../../app/assets/levels/sacred_tree_supply.ron");
+    let setup = sim::settlement::SceneSetup {
+        scenario: Some(content::scenario::Scenario::parse(text).unwrap()),
+        player: "elder".into(),
+        diggable: true,
+        sloped: true,
+        dig_layers: Some(6),
+        mine: Some(7),
+        spawn: [Fx::ZERO, Fx::ZERO, Fx::from_int(3)],
+        ..Default::default()
+    };
+    let mut world = sim::World::new_scene(5, &content, &setup).unwrap();
+    let mut terrain = world.terrain().clone();
+    terrain.undiggable.push(((-2, -2), (2, 2)));
+    world.set_terrain(terrain);
+    let loaded = read(&write(&world, &content), &content).unwrap();
+    let terrain = loaded.terrain();
+    assert_eq!(terrain.mine.unwrap().veins, sim::mine::Veins::Stone);
+    assert!(terrain.is_undiggable((1, -2)) && !terrain.is_undiggable((3, 0)));
+    assert_eq!(terrain, world.terrain());
+}
+
+/// A town's mine with its hill (format 36: `MineSpec::hill`) loads with the
+/// hill, its ground and its undiggable plateau and ramps.
+#[test]
+fn a_town_mine_keeps_its_hill() {
+    use fx::{Fx, FxVec2};
+    let content = Content::builtin();
+    let text = include_str!("../../app/assets/levels/sacred_tree_supply.ron");
+    let hill = sim::mine::Hill { center: (0, 0), plateau: 15, steps: 8, ramp_width: 7, ramp_length: 8, foot: 10 };
+    let setup = sim::settlement::SceneSetup {
+        scenario: Some(content::scenario::Scenario::parse(text).unwrap()),
+        player: "elder".into(),
+        diggable: true,
+        sloped: true,
+        dig_layers: Some(6),
+        mine: Some(7),
+        hill: Some(hill),
+        spawn: [Fx::ZERO, Fx::ZERO, Fx::from_int(3)],
+        ..Default::default()
+    };
+    let world = sim::World::new_scene(5, &content, &setup).unwrap();
+    let loaded = read(&write(&world, &content), &content).unwrap();
+    let terrain = loaded.terrain();
+    let center = terrain.center;
+    assert_eq!(terrain.mine.unwrap().hill.unwrap().plateau, 15);
+    assert_eq!(terrain.height(center), Fx::ZERO, "the plateau");
+    assert_eq!(terrain.height(center + FxVec2::new(Fx::ZERO, Fx::from_int(20))), -Fx::from_int(2), "its foot");
+    assert!(terrain.is_undiggable(sim::terrain::Terrain::pit_tile(center)));
+    assert_eq!(terrain, world.terrain());
 }

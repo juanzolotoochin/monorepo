@@ -2,7 +2,9 @@
 //! deliveries fill its next part with only what that part still needs, and
 //! an install uses them up. Installing the last part makes the building,
 //! which a sprite then staffs. Every test checks every invariant on every
-//! tick, conservation among them.
+//! tick, conservation among them. The Sacred Tree has no building that
+//! makes stone (M6.4 of the mining design); the tests of the steps use a
+//! test-only Stone Gatherer as a second kind, and the build order digs.
 
 use content::scenario::Scenario;
 use content::{Content, TICKS_PER_SECOND};
@@ -10,7 +12,7 @@ use fx::{Fx, FxVec2};
 
 use super::avatar::{BundleRefusal, Intent};
 use super::{AgentIx, BuildingIx, BuildingKindIx, DepotIx, Event, InteractTarget, Interaction, ItemIx, PlacementRefusal, Settlement, Slot, SpriteJob, Stage};
-use crate::terrain::Disc;
+use crate::terrain::{Disc, Terrain};
 use crate::{Command, CommandKind, PlayerId, Simulation, World};
 
 const SACRED_TREE: &str = include_str!("../../../app/assets/levels/sacred_tree_supply.ron");
@@ -25,15 +27,17 @@ const STONE: ItemIx = 1;
 const TREE_WOOD: DepotIx = 0;
 const TREE_STONE: DepotIx = 1;
 const WOOD_GATHERER: BuildingKindIx = 0;
-const STONE_GATHERER: BuildingKindIx = 1;
+const BALLISTA: BuildingKindIx = 1;
+/// The test-only kind (`tests::with_stone_gatherer`), after the ballista.
+const STONE_GATHERER: BuildingKindIx = 2;
 /// The prebuilt Wood Gatherer, and the first site put down.
 const PREBUILT: BuildingIx = 0;
 const FIRST_SITE: BuildingIx = 1;
 
-/// The scene, with `rocks` on the ground besides the tree's trunk, in
-/// world tiles.
+/// The scene, with a test-only Stone Gatherer to build and `rocks` on the
+/// ground besides the tree's trunk, in world tiles.
 fn sacred_tree_with(rocks: &[Disc]) -> Simulation {
-    let scenario = Scenario::parse(SACRED_TREE).unwrap();
+    let scenario = super::tests::with_stone_gatherer(SACRED_TREE);
     // `new_settlement` takes arena coordinates.
     let center = World::new_settlement(1, &Content::builtin(), &scenario, &[]).unwrap().terrain().center;
     let mut obstacles = vec![Disc { center: FxVec2::ZERO, radius: Fx::ONE }];
@@ -44,6 +48,14 @@ fn sacred_tree_with(rocks: &[Disc]) -> Simulation {
 
 fn sacred_tree() -> Simulation {
     sacred_tree_with(&[])
+}
+
+/// The scene's own supply on its map (M6.3), where stone is dug, with no
+/// waves.
+fn sacred_tree_map() -> Simulation {
+    let mut scenario = Scenario::parse(SACRED_TREE).unwrap();
+    scenario.waves.clear();
+    super::hill_tests::sacred_tree_map(scenario)
 }
 
 fn settlement(sim: &Simulation) -> &Settlement {
@@ -169,6 +181,42 @@ fn empty_bundle(sim: &mut Simulation) {
     }
 }
 
+/// Digs the exposed stone vein nearest the tree on its east side (M6.3
+/// puts one in each quarter): two layers, the first from beside the vein
+/// and the second from inside that pit, both facing back west. Then
+/// carries every dug stone to the tree's stone pile. Returns how much
+/// was dug.
+fn dig_stone(sim: &mut Simulation) -> u32 {
+    let terrain = sim.world().terrain();
+    let mine = terrain.mine().unwrap();
+    let tree = Terrain::pit_tile(terrain.center);
+    let veins = mine.spec.hill.expect("the scene's hill").exposed_veins(mine.spec.seed);
+    let (x, y) = veins.into_iter().filter(|v| v.0 > tree.0).min_by_key(|v| (v.0 - tree.0).pow(2) + (v.1 - tree.1).pow(2)).expect("an east vein");
+    for from in [(x + 2, y), (x + 1, y)] {
+        walk_to(sim, Terrain::pit_center((from.0 + 1, from.1)));
+        walk_to(sim, Terrain::pit_center(from));
+        step(sim, &[command(CommandKind::DigDown { agent: ELDER })]);
+        assert!(settlement(sim).agents[ELDER as usize].avatar().unwrap().dig.is_some(), "a dig from {from:?}");
+        until(sim, 5 * HZ, |sim| settlement(sim).agents[ELDER as usize].avatar().unwrap().dig.is_none());
+    }
+    let dug = settlement(sim).accounts[STONE as usize].generated as u32;
+    let stone_pile = |sim: &Simulation| {
+        let piles = settlement(sim).piles.as_ref()?;
+        piles.piles.iter().find(|(_, p)| p.item() == Some(STONE)).map(|(&id, p)| (id, p.position))
+    };
+    for _ in 0..4 {
+        let Some((id, at)) = stone_pile(sim) else { break };
+        let from = settlement(sim).agents[ELDER as usize].body.position;
+        walk_to(sim, at + (from - at).normalize_or_zero() * Fx::from_ratio(3, 5));
+        step(sim, &[interact(InteractTarget::Pile(id))]);
+        assert_eq!(refusal(sim), None);
+        until(sim, 10 * HZ, settled);
+        empty_bundle(sim);
+    }
+    assert_eq!(stone_pile(sim), None, "every dug stone carried");
+    dug
+}
+
 /// Picks up from building `b`'s output once it holds `units`.
 fn pick_up(sim: &mut Simulation, b: BuildingIx, item: ItemIx, units: u32) {
     until(sim, (units as u64 * 8 + 20) * HZ, |sim| settlement(sim).buildings[b as usize].output.count(item) >= units);
@@ -184,7 +232,7 @@ fn a_placement_is_refused_for_each_reason() {
     let east = at(&sim, 5.0, 0.0);
     let output = check(&sim, STONE_GATHERER, east).expect("open ground to the east");
     assert_eq!(check(&sim, 9, east), Err(PlacementRefusal::UnknownKind));
-    assert_eq!(check(&sim, STONE_GATHERER, at(&sim, 8.5, 0.0)), Err(PlacementRefusal::OutsideArena));
+    assert_eq!(check(&sim, STONE_GATHERER, at(&sim, 127.5, 0.0)), Err(PlacementRefusal::OutsideArena));
     assert_eq!(check(&sim, STONE_GATHERER, at(&sim, 0.5, -0.5)), Err(PlacementRefusal::Blocked), "the tree");
     assert_eq!(check(&sim, STONE_GATHERER, at(&sim, -4.6, 1.2)), Err(PlacementRefusal::Blocked), "the Wood Gatherer");
     assert_eq!(check(&sim, STONE_GATHERER, at(&sim, 0.0, 3.6)), Err(PlacementRefusal::Blocked), "the elder");
@@ -334,50 +382,54 @@ fn installing_the_last_part_makes_the_building_and_a_sprite_staffs_it() {
     assert!(settlement(&sim).balances().values().all(|b| b.conserved));
 }
 
-/// From an empty tree, the whole build order (A5, handoff "Tests"): the
-/// prebuilt Wood Gatherer's wood puts up a Stone Gatherer (4 wood), and its
-/// stone with more wood a second Wood Gatherer (4 wood and 2 stone), with
-/// no stock added and no softlock. Both kinds built end up staffed.
+/// From an empty tree on the map, the whole build order (A5, handoff
+/// "Tests"): no building makes stone, so the elder digs it from an exposed
+/// vein and carries it to the tree; with the prebuilt Wood Gatherer's wood
+/// it puts up a second Wood Gatherer and a ballista (4 wood and 2 stone
+/// each), with no stock added and no softlock. Both end up staffed. The
+/// elder bootstraps alone, so every stone is counted: a miner sprite
+/// (M6.5) can do the stone's part too (`miner_tests`), and the happy path
+/// sends one after the elder's first dig.
 #[test]
-fn both_kinds_build_from_an_empty_tree() {
-    let mut sim = sacred_tree();
+fn both_kinds_build_from_an_empty_tree_and_dug_stone() {
+    let mut sim = sacred_tree_map();
     assert!(settlement(&sim).depots.iter().all(|d| d.inventory.total() == 0));
+    assert!(settlement(&sim).building_kinds.iter().all(|k| k.product != Some(STONE)), "no building makes stone");
     step(&mut sim, &[command(CommandKind::SetSpriteJob { agent: ASH, job: SpriteJob::Staff(WOOD_GATHERER) })]);
-    // The Stone Gatherer: two loads of two wood, straight from the output.
-    let spot = at(&sim, 5.0, 0.0);
-    step(&mut sim, &[place(STONE_GATHERER, spot)]);
-    let stone_gatherer = placed(&sim).expect("placed");
-    for part in 0..2 {
-        pick_up(&mut sim, PREBUILT, WOOD, 2);
-        walk_to_building(&mut sim, stone_gatherer);
-        use_target(&mut sim, InteractTarget::Site(stone_gatherer));
-        assert_eq!(use_target(&mut sim, InteractTarget::Site(stone_gatherer)), Interaction::Install { building: stone_gatherer, part });
+    let dug = dig_stone(&mut sim);
+    assert!(dug >= 6, "two stone layers, 3 to 6 each: {dug}");
+    assert_eq!(settlement(&sim).depots[TREE_STONE as usize].inventory.count(STONE), dug);
+    // The second Wood Gatherer north-east, then a ballista east of the
+    // tree: each a foundation, then the mechanism's wood and stone.
+    for (kind, (x, y)) in [(WOOD_GATHERER, (4.5, 4.0)), (BALLISTA, (5.0, 0.0))] {
+        let spot = at(&sim, x, y);
+        step(&mut sim, &[place(kind, spot)]);
+        let b = placed(&sim).expect("placed");
+        pick_up(&mut sim, PREBUILT, WOOD, 4);
+        walk_to_building(&mut sim, b);
+        use_target(&mut sim, InteractTarget::Site(b));
+        assert_eq!(use_target(&mut sim, InteractTarget::Site(b)), Interaction::Install { building: b, part: 0 });
+        assert_eq!(settlement(&sim).buildings[b as usize].needs(settlement(&sim).building_kind(b)), vec![(WOOD, 2), (STONE, 2)]);
+        use_target(&mut sim, InteractTarget::Site(b));
+        empty_bundle(&mut sim);
+        walk_to_dock(&mut sim, TREE_STONE);
+        use_target(&mut sim, InteractTarget::Depot(TREE_STONE));
+        walk_to_building(&mut sim, b);
+        use_target(&mut sim, InteractTarget::Site(b));
+        assert_eq!(use_target(&mut sim, InteractTarget::Site(b)), Interaction::Install { building: b, part: 1 });
+        assert!(settlement(&sim).buildings[b as usize].built());
         empty_bundle(&mut sim);
     }
-    assert!(settlement(&sim).buildings[stone_gatherer as usize].built());
-    step(&mut sim, &[command(CommandKind::SetSpriteJob { agent: FERN, job: SpriteJob::Staff(STONE_GATHERER) })]);
-    // The second Wood Gatherer, north-east: its foundation, then the
-    // mechanism's wood and stone.
-    let spot = at(&sim, 4.5, 4.0);
-    step(&mut sim, &[place(WOOD_GATHERER, spot)]);
-    let second = placed(&sim).expect("placed");
-    pick_up(&mut sim, PREBUILT, WOOD, 4);
-    walk_to_building(&mut sim, second);
-    use_target(&mut sim, InteractTarget::Site(second));
-    assert_eq!(use_target(&mut sim, InteractTarget::Site(second)), Interaction::Install { building: second, part: 0 });
-    assert_eq!(settlement(&sim).buildings[second as usize].needs(&settlement(&sim).building_kinds[0]), vec![(WOOD, 2), (STONE, 2)]);
-    use_target(&mut sim, InteractTarget::Site(second));
-    empty_bundle(&mut sim);
-    pick_up(&mut sim, stone_gatherer, STONE, 2);
-    walk_to_building(&mut sim, second);
-    use_target(&mut sim, InteractTarget::Site(second));
-    assert_eq!(use_target(&mut sim, InteractTarget::Site(second)), Interaction::Install { building: second, part: 1 });
-    assert!(settlement(&sim).buildings[second as usize].built());
-    // Moss takes the free Wood Gatherer, the new one.
+    // Moss takes the free Wood Gatherer, the new one; Fern mans the
+    // ballista.
+    let (second, ballista) = (FIRST_SITE, FIRST_SITE + 1);
     step(&mut sim, &[command(CommandKind::SetSpriteJob { agent: MOSS, job: SpriteJob::Staff(WOOD_GATHERER) })]);
+    step(&mut sim, &[command(CommandKind::SetSpriteJob { agent: FERN, job: SpriteJob::Staff(BALLISTA) })]);
     until(&mut sim, 30 * HZ, |sim| settlement(sim).buildings[second as usize].output.count(WOOD) >= 1);
+    until(&mut sim, 30 * HZ, |sim| settlement(sim).buildings[ballista as usize].slot == Slot::Occupied(super::Occupant::Sprite(FERN)));
     let s = settlement(&sim);
     assert_eq!(s.buildings[second as usize].slot, Slot::Occupied(super::Occupant::Sprite(MOSS)));
-    assert_eq!((s.balances()["wood"].consumed, s.balances()["stone"].consumed), (8, 2));
+    assert_eq!((s.balances()["wood"].consumed, s.balances()["stone"].consumed), (8, 4));
+    assert_eq!(s.depots[TREE_STONE as usize].inventory.count(STONE), dug - 4);
     assert!(s.balances().values().all(|b| b.conserved));
 }

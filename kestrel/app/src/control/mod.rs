@@ -283,6 +283,15 @@ fn settlement(world: &World) -> Result<&sim::settlement::Settlement, String> {
 fn send(world: &mut World, kind: CommandKind) {
     world.resource_mut::<SessionService>().command(kind);
 }
+/// The sprite job a command names: a building kind (by id) to staff,
+/// `"mine"` to mine (`legacy::MINE_JOB`), or idle when missing.
+fn sprite_job(s: &sim::settlement::Settlement, job: Option<&str>) -> Result<sim::settlement::SpriteJob, String> {
+    Ok(match job {
+        None => sim::settlement::SpriteJob::Idle,
+        Some(crate::legacy::MINE_JOB) => sim::settlement::SpriteJob::Mine,
+        Some(kind) => sim::settlement::SpriteJob::Staff(s.building_kinds.iter().position(|k| k.id == kind).ok_or("unknown building kind")? as u16),
+    })
+}
 /// The local player's avatar index.
 fn player(world: &World) -> Option<u16> {
     world.get_resource::<SessionService>()?.player()
@@ -453,10 +462,7 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
         }
         Command::SettlementJobMenu { job } => {
             let s = settlement(world)?;
-            let wanted = match job {
-                Some(kind) => sim::settlement::SpriteJob::Staff(s.building_kinds.iter().position(|k| k.id == *kind).ok_or("unknown building kind")? as u16),
-                None => sim::settlement::SpriteJob::Idle,
-            };
+            let wanted = sprite_job(s, job.as_deref())?;
             let menu = world.resource::<crate::input::gameplay::Dispatcher>().town.menu.as_ref().ok_or("No job menu open")?;
             let index = menu.jobs.iter().position(|&j| j == wanted).ok_or("The job menu has no such job")?;
             crate::input::town::pick(world, index)?;
@@ -495,13 +501,7 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
         Command::SettlementSpriteJob { sprite, job } => {
             let s = settlement(world)?;
             let agent = s.agent_index(sprite).filter(|&a| s.agents[a as usize].sprite().is_some()).ok_or("unknown sprite")?;
-            let job = match job {
-                Some(kind) => {
-                    let kind = s.building_kinds.iter().position(|k| k.id == *kind).ok_or("unknown building kind")?;
-                    sim::settlement::SpriteJob::Staff(kind as u16)
-                }
-                None => sim::settlement::SpriteJob::Idle,
-            };
+            let job = sprite_job(s, job.as_deref())?;
             send(world, CommandKind::SetSpriteJob { agent, job });
             Ok(Pending::Instant)
         }

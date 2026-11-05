@@ -101,7 +101,23 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///     (`Quarry::Building`); a building kind and a building keep health
 ///     (`BuildingKind::health`, `BuildingState::health`), and a sprite the
 ///     tick it comes back on after dying (`SpriteState::respawn_at`).
-pub const FORMAT_VERSION: u32 = 33;
+/// 34: the terrain keeps whether it slopes (`Terrain::sloped`) and how deep
+///     its pits go (`Terrain::max_layers`), and a mine its layers
+///     (`MineSpec::layers`).
+/// 35: a mine keeps what its veins hold (`MineSpec::veins`: the dig lab's
+///     ore or a town's stone), and the terrain its undiggable tiles
+///     (`Terrain::undiggable`).
+/// 36: a mine keeps its authored hill (`MineSpec::hill`: the Sacred Tree's
+///     plateau and ramps), and a blueprint can be refused over a pit or
+///     steep ground (`PlacementRefusal::Uneven`).
+/// 37: miner sprites (M6.5): a sprite job to mine (`SpriteJob::Mine`), its
+///     steps (`ClaimTile`, `Dig`, `Pickup`, `Deposit`), a sprite's dig claim,
+///     dig and given-up goals (`SpriteState::dig_claim`, `dig`, `asks`,
+///     `unreachable`, `unreachable_at`), and the queues that claim tiles and
+///     start its bundles (`Messages::claim_dig_tile`, `sprite_bundle`).
+/// 38: a threat cut off from the tree waits as close as it can walk
+///     (`Threat::stranded`, M6.7).
+pub const FORMAT_VERSION: u32 = 38;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

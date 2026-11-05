@@ -384,6 +384,9 @@ pub enum PlacementRefusal {
     /// Nobody could walk from the depots (the tree's piles) to its output
     /// pile or its slot spot.
     Unreachable,
+    /// The footprint is over a pit, or ground too steep to walk
+    /// ([`Terrain::steep`]).
+    Uneven,
 }
 
 impl PlacementRefusal {
@@ -395,6 +398,7 @@ impl PlacementRefusal {
             PlacementRefusal::Blocked | PlacementRefusal::OutputBlocked | PlacementRefusal::SlotBlocked => "BLOCKED",
             PlacementRefusal::CoversDock(_) | PlacementRefusal::CoversSpot(_) => "TOO CLOSE TO A PILE",
             PlacementRefusal::Unreachable => "CAN'T BE REACHED",
+            PlacementRefusal::Uneven => "UNEVEN GROUND",
         }
     }
 }
@@ -417,7 +421,8 @@ pub(super) struct Ground<'a> {
 /// output pile goes: one check for the scenario's prebuilt buildings and a
 /// player's blueprint (`PlaceBlueprint`), in this order.
 ///
-/// - The footprint is inside the arena, clear of the terrain (props, the
+/// - The footprint is inside the arena, on no pit and no steep tile (a
+///   tile it reaches into counts), clear of the terrain (props, the
 ///   tree, the buildings before it) and the `bodies`, and off every dock and
 ///   the other buildings' output piles and slot spots, which are no
 ///   obstacles.
@@ -433,6 +438,10 @@ pub(super) fn placement(ground: &Ground, k: BuildingKindIx, center: FxVec2) -> R
     let reach = FxVec2::new(kind.radius, kind.radius);
     if !terrain.inside(center - reach) || !terrain.inside(center + reach) {
         return Err(PlacementRefusal::OutsideArena);
+    }
+    let (first, last) = (Terrain::pit_tile(center - reach), Terrain::pit_tile(center + reach));
+    if (first.0..=last.0).any(|x| (first.1..=last.1).any(|y| terrain.pit((x, y)) > 0 || terrain.steep((x, y)))) {
+        return Err(PlacementRefusal::Uneven);
     }
     let apart = |p: FxVec2, q: FxVec2, gap: Fx| p.distance(q) > gap + CLEARANCE_MARGIN;
     if !terrain.clear(center, center, kind.radius) || bodies.iter().any(|b| !apart(center, b.center, kind.radius + b.radius)) {
@@ -501,6 +510,7 @@ pub(super) fn prebuilt(
                 PlacementRefusal::OutputBlocked => "has its output pile blocked".to_string(),
                 PlacementRefusal::SlotBlocked => "has its slot spot blocked".to_string(),
                 PlacementRefusal::Unreachable => "can't be reached on foot from the depots".to_string(),
+                PlacementRefusal::Uneven => "is over a pit or steep ground".to_string(),
             };
             format!("building {i} ({}) at {:?} {why}", b.kind, b.position)
         })?;

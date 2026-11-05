@@ -26,6 +26,7 @@ mod haulers;
 pub mod interact;
 mod inventory;
 pub mod memory;
+pub mod miners;
 pub mod piano;
 pub mod piles;
 mod players;
@@ -298,8 +299,17 @@ pub struct SceneSetup {
     pub platforms_only: bool,
     /// The ground can be dug, by characters with the Dig ability.
     pub diggable: bool,
+    /// The ground slopes between tiles, and walks stop at slopes too steep
+    /// ([`crate::terrain::Terrain::sloped`]).
+    pub sloped: bool,
+    /// The deepest a pit goes, in layers; [`crate::terrain::MAX_LAYERS`] if
+    /// unset.
+    pub dig_layers: Option<u8>,
     /// Generates the arena's ground as a mine from this seed.
     pub mine: Option<u64>,
+    /// Raises this hill in the mine's middle, on the arena's center (the
+    /// tree's tile; its `center` is set there), undiggable.
+    pub hill: Option<crate::mine::Hill>,
     pub spawn: [Fx; 3],
     pub piles: Option<PileSetup>,
     pub memory_trial: bool,
@@ -574,8 +584,26 @@ impl Settlement {
             .collect();
         terrain.platforms_only = setup.platforms_only;
         terrain.diggable = setup.diggable;
+        terrain.sloped = setup.sloped;
+        match setup.dig_layers {
+            Some(0) => return Err("a scene's pits go at least one layer deep".into()),
+            Some(layers) => terrain.max_layers = layers,
+            None => {}
+        }
         if let Some(seed) = setup.mine {
-            terrain.generate_mine(seed, at([setup.spawn[0], setup.spawn[2]]));
+            // A town's mine (buildings, and no pile lab of its own) holds
+            // stone, which its pits yield as the scenario's stone item.
+            let town = setup.piles.is_none() && !settlement.building_kinds.is_empty();
+            let veins = if town { crate::mine::Veins::Stone } else { crate::mine::Veins::Ore };
+            if town && settlement.item_index(crate::mine::STONE_ID).is_none() {
+                return Err(format!("a town's mine yields {:?}, which the scenario has no item for", crate::mine::STONE_ID));
+            }
+            terrain.generate_mine(seed, at([setup.spawn[0], setup.spawn[2]]), veins);
+            if let Some(hill) = setup.hill {
+                terrain.raise_hill(hill)?;
+            }
+        } else if setup.hill.is_some() {
+            return Err("a scene's hill stands in a mine; give it one".into());
         }
         terrain.revision += 1;
         settlement.spawn = at([setup.spawn[0], setup.spawn[2]]);
@@ -1075,15 +1103,23 @@ mod burst_tests;
 #[cfg(test)]
 mod chase_tests;
 #[cfg(test)]
+mod dig_tests;
+#[cfg(test)]
 mod construction_tests;
 #[cfg(test)]
 mod fire_tests;
 #[cfg(test)]
 mod health_tests;
 #[cfg(test)]
+mod hill_tests;
+#[cfg(test)]
 mod ground_pile_tests;
 #[cfg(test)]
 mod interact_tests;
+#[cfg(test)]
+mod miner_tests;
+#[cfg(test)]
+mod lane_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

@@ -2,7 +2,8 @@
 //! cargo hold; what drives it is its role, fixed when the agent is made: a
 //! scenario's controlled agents and joining players are avatars, its other
 //! agents haulers, and its sprites (after its agents) sprites. A sprite's
-//! hold has no room: it carries nothing.
+//! hold is a bundle as big as its character mines with (`SpriteMineDef`),
+//! and has no room if it doesn't mine.
 
 use content::character::{CharacterDef, CharacterIx};
 use content::scenario;
@@ -222,9 +223,10 @@ impl AgentState {
         }
     }
 
-    /// A scenario's sprite: its body at `position`, no room in its hold
-    /// (`items` long, so the item counts line up) and its character's
-    /// `sprite` health, if any (B6). It starts idle.
+    /// A scenario's sprite: its body at `position`, a hold (`items` long,
+    /// so the item counts line up) that is a bundle of its character's
+    /// `sprite.mine` capacity, or has no room, and its `sprite` health, if
+    /// any (B6). It starts idle.
     pub(super) fn new_sprite(def: &scenario::Sprite, character: CharacterIx, rules: &CharacterDef, position: FxVec2, items: usize) -> AgentState {
         AgentState {
             id: def.id.clone(),
@@ -237,7 +239,10 @@ impl AgentState {
                 position,
                 ..Body::default()
             },
-            carry: Carry { inventory: Inventory::new(items, 0, Kinds::AnyMix), ..Carry::default() },
+            carry: match rules.sprite.and_then(|s| s.mine) {
+                Some(mine) => Carry { inventory: Inventory::new(items, mine.capacity, Kinds::OneKind), transfer_ticks: mine.transfer, ..Carry::default() },
+                None => Carry { inventory: Inventory::new(items, 0, Kinds::AnyMix), ..Carry::default() },
+            },
             role: Role::Sprite(SpriteState::default()),
         }
     }
@@ -292,6 +297,16 @@ impl AgentState {
         match self.hauler() {
             Some(hauler) => hauler.radius(&self.body),
             None => self.body.base_radius,
+        }
+    }
+
+    /// The dig under way: an elder's or a miner's. What the app draws a
+    /// dig bar and dust for.
+    pub fn digging(&self) -> Option<&super::avatar::Dig> {
+        match &self.role {
+            Role::Avatar(avatar) => avatar.dig.as_ref(),
+            Role::Sprite(sprite) => sprite.dig.as_ref(),
+            Role::Hauler(_) => None,
         }
     }
 

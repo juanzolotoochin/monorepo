@@ -102,7 +102,8 @@ fn the_scene_makes_its_sprites_after_its_agents_idle_at_home() {
     for a in &s.agents[1..] {
         let sprite = a.sprite().unwrap();
         assert_eq!((sprite.job, sprite.holds), (SpriteJob::Idle, None));
-        assert_eq!((a.carry.inventory.capacity, a.body.health, a.body.max_health), (0, 3, 3), "no cargo, the sprite character's health");
+        assert_eq!((a.carry.inventory.capacity, a.body.health, a.body.max_health), (6, 3, 3), "a miner's bundle, the sprite character's health");
+        assert!(!a.carry.carrying(), "it carries nothing");
     }
     // Idle sprites stay home.
     steps(&mut sim, 5 * HZ);
