@@ -1,7 +1,27 @@
 # Kestrel verticality (design)
 
-Status: agreed (2026-11-05), not started. Tasks in
-[`todo/verticality.md`](todo/verticality.md). The rules for the work in
+Status: MVP done (2026-11-05), V.1–V.8 on the `kestrel-verticality`
+branch. Tasks, and the work left (the Sacred Tree on a volume, ghouls and
+haulers with a height, collapse, pile reach in 3D, lighting), in
+[`todo/verticality.md`](todo/verticality.md).
+
+What changed versus the design below:
+
+- Digging (V5): the direction is a modifier, not where you look (the rig
+  is fixed): F level, Ctrl+F down, Alt+F up. A down dig may open into a
+  cave below (whoever walks in falls; no stranding check).
+- Paths (V8): drops are not nav edges (a path never steps off a ledge
+  more than a layer); the walker slides along corners its path's samples
+  skipped.
+- The cutaway (V7): besides the hole over the head, a narrower cut on the
+  camera's side goes down to half a meter over the feet, so a tunnel's
+  near wall or a dug stair's side doesn't hide the body; the hole is wide
+  only under a ceiling. The section is a light earth colour, and a fill
+  light over the head lifts shadowed floors under a ceiling.
+- Piles and the walker's body have a height; haulers, threats and chasers
+  still stand on the top floor (none in the Tunnel Lab).
+
+The rules for the work in
 [`SACRED_TREE_HANDOFF.md`](SACRED_TREE_HANDOFF.md) apply here too (one
 subagent per task, tests per task, a `docs/test-time.md` row per
 milestone).

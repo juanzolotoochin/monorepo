@@ -4,38 +4,153 @@ Tunnels and levels: two or more floors over one x–y spot. The design is
 [`VERTICALITY.md`](../VERTICALITY.md) (decisions V1–V11). Tasks run in
 order, one agent each.
 
-## V.8 Soak and demo
+## The Sacred Tree on a volume
 
 - **Status:** open
+- **Why:** the MVP's floors are only in the Tunnel Lab (V11); the town's
+  map is still a heightfield, so its mine can't have tunnels.
+- **What to do:** build the Sacred Tree's map (its hill, mine terraces
+  and pits) as a volume, with `ground(p)` callers that matter there moved
+  to `floor(p, z)` / `footprint_at`; check the golden and the soaks.
+- **Where:** `sim/src/settlement/hill_tests.rs` (the map),
+  `app/assets/levels/sacred_tree_supply.ron`, `sim/src/terrain.rs`,
+  `app/src/digging.rs`.
+- **Found in:** verticality design (V11), V.8.
+
+## Ghouls and haulers with a height
+
+- **Status:** open
+- **Why:** in volume scenes only the avatar, sprites (the walker) and
+  piles have a feet height (V.7); haulers, threats and chasers stand on
+  the top floor, so a ghoul over a tunnel would walk on the mountain.
+- **What to do:** give haulers and threats a feet height (hashed, a save
+  format bump), path them with `nav::path_at`, and move `chase.rs` and
+  `Threat::position` to it. Also still on the top floor: the jetpack's
+  `GoTo` (a 2D route), sprite respawn (`sprite_housekeeping` puts a sprite
+  home with its old height), piles made by a pile haul's drop (`PileLab`
+  walk, height 0) and by `spill`, and `TossEnd::Pit` for a sprite's or
+  avatar's pit dig. The walker falls instantly if a step drops it (paths
+  never do) and steers round no one.
+- **Where:** `sim/src/settlement/haulers.rs`, `chase.rs`, `threats`,
+  `sprites.rs`, `piles.rs`.
+- **Found in:** V.7's note on V.8.
+
+## Collapse and support
+
+- **Status:** open
+- **Why:** ground holds wherever it is (V6): a bridge can be dug to a
+  one-cell thread, and a down dig may open into a cave below.
+- **What to do:** decide a support rule (e.g. cells with nothing under
+  them within N tiles fall), how falling cells and bodies on them behave,
+  and whether a dig is refused instead.
+- **Where:** `sim/src/volume.rs`, `Settlement::dig_housekeeping`.
+- **Found in:** verticality design (V6).
+
+## Pile reach in 3D
+
+- **Status:** open
+- **Why:** pile reach checks use the 2D distance, so a pile on the bridge
+  is in reach from the cave under it.
+- **What to do:** compare the floors too (the pile's `height` and the
+  body's feet, within a layer or so) in the reach and interact checks.
+- **Where:** `sim/src/settlement/piles.rs`, `interact.rs`.
+- **Found in:** V.7's note on V.8.
+
+## The jetpack into a 2 m tunnel
+
+- **Status:** open
+- **Why:** a jetpack hovering outside can't enter a dug tunnel exactly
+  2 m high: its head at hover height is over the mouth's ceiling, so
+  `flyable_at` refuses. Walking in, then holding it, works.
+- **What to do:** while the jetpack is held and the way ahead is refused
+  only by the ceiling, sink to the height that fits under it (feet at the
+  ceiling less `BODY_HEIGHT`, not under the floor) instead of stopping.
+- **Where:** `sim/src/settlement/avatar.rs` (`fly`, `step`),
+  `Terrain::flyable_at`.
+- **Found in:** V.4's note on V.8.
+
+## 3D paths to an unreachable floor
+
+- **Status:** open
+- **Why:** `nav::path_at` to a goal it can't reach searches the whole
+  window: in the soak about 1.2 s once, when the player stood in a pit the
+  walker couldn't enter, and 20–100 ms a plan across the Tunnel Lab. The
+  walker plans every half second.
+- **What to do:** bound the search (a node budget, or a reachability
+  check of the goal's floor first), or back the walker's replans off
+  after a failed plan.
+- **Where:** `sim/src/nav.rs`, `sim/src/settlement/follow.rs`.
+- **Found in:** V.8 (the soak).
+
+## Lighting underground
+
+- **Status:** open
+- **Why:** V.8 made underground readable with a lighter section colour
+  and a fill light over the head under a ceiling, but the light is a
+  plain point light without shadows (it lights through thin walls) and
+  is the same by day and night.
+- **What to do:** tune it with the day cycle (stronger at night or tied
+  to a lantern the player carries), consider a shadowed light or an
+  ambient term for covered faces in the cutaway shader, and darken far
+  tunnel interiors for depth.
+- **Where:** `app/src/cutaway.rs`, `app/shaders/cutaway.wesl`,
+  `app/src/daylight.rs`.
+- **Found in:** V.8.
+
+## Done
+
+### V.8 Soak and demo
+
+- **Status:** done (branch `kestrel-verticality`, no PR yet)
 - **Why:** the MVP needs a stable run and a look.
 - **What to do:** a soak test digging at random in the Tunnel Lab with
   `validate` every tick; a demo video walking through the tunnel, under
   the bridge, digging a stair down; the full suite; a `docs/test-time.md`
-  row. Note (from V.4): the control protocol has `{"op": "dig_front",
-  "direction": "Down"}` (`"Level"`, `"Down"`, `"Up"`) for the stair demo;
-  the `tunnel_lab_demo` was not built for V.4 (the placeholder mesher
-  doesn't re-mesh yet). A jetpack hovering outside can't enter a tunnel
-  exactly 2 m high (its head at hover height is over the mouth's
-  ceiling): walk in, then hold it.
-  Note (from V.6): underground floors sit in the mountain's shadow and
-  read close to the cutaway's dark section colour, and a 1 m dug stair is
-  mostly in shadow; for the demo's look, consider a little fill light or
-  ambient underground (or a lighter section colour), keeping shadows.
-  Note (from V.7): still on the top floor in volume scenes: haulers (no
-  feet height; none in the Tunnel Lab), threats and chasers (`chase.rs`,
-  `Threat::position` only: the Sacred Tree's ghouls), the jetpack's `GoTo`
-  (a 2D route), sprite respawn (`sprite_housekeeping` puts it home with
-  its old height; the walker can't die), piles made by a pile haul's drop
-  (`PileLab` walk, height 0) and by `spill`, pile reach checks (2D
-  distance, so a pile on the bridge is in reach from the cave under it),
-  and `TossEnd::Pit` for a sprite's or avatar's pit dig. The walker steers
-  round no one and falls instantly if a step drops it (paths never do).
-  The soak should also keep the walker following while digging.
+  row. (Notes from V.4, V.6 and V.7 on the jetpack into a 2 m tunnel, the
+  dark underground and what still stands on the top floor are now open
+  entries above.)
 - **Where:** sim tests, the demo scripts.
 - **Found in:** verticality design.
 - **Tests:** the soak; the full suite.
-
-## Done
+- **Done:** the soak, `the_tunnel_lab_soaks_walking_and_digging_at_random`
+  in `sim/src/settlement/soak_tests.rs`: two minutes (7200 ticks) of the
+  Tunnel Lab with its walker, from a fixed seed (a small xorshift). When
+  free, the avatar either digs (to its tile's middle by a `GoTo`, a
+  two-tick step one of sixteen headings, mostly toward a wall beside the
+  tile, trying up to eight other headings while only a down dig would go;
+  then `DigFront` level, down or up, mostly one `dig_volume_of` accepts),
+  or walks to a random point by its 3D route (anywhere, or by the west
+  cut's and tunnel's walls, the cave, the bridge's stairs or the
+  mountain's foot; it digs on arrival), or walks a random heading for
+  0.5–2.5 s. Every tick: `validate`, and both the avatar and the walker
+  stand free (`standing_free`: `Terrain::footprint_at` has a floor at or
+  under the feet, `ceiling_at` is at least `BODY_HEIGHT` over them, and
+  the middle tile's cells from a layer over the feet to the head are
+  empty); then a second run must hash alike every tick. It asserts at
+  least two digs of each direction and ten in all (the seed digs 2 level,
+  10 down and 3 up, with 7 refusals, all `Clear`) and five walks; about
+  3.3 s for both runs. The soak found the walker stuck: a path's segments
+  are checked every 0.1 m (`walk_at`), so a step along one can clip a
+  wall's corner the samples skipped; the walker then dropped its route
+  and replanned every tick, standing there for good (about 20 ms a
+  tick). `follow::self_update` now slides along the wall (the step's x or
+  y alone) before giving up. Polish: in volume scenes the cutaway's
+  section colour is lighter (sRGB 0.3, 0.25, 0.21 from 0.11, 0.085,
+  0.075), and a fill light (`cutaway::FillLight`, a warm point light
+  `FILL_HEIGHT` 1.8 m over the feet, `FILL_LUMENS` 200000, range 8 m, no
+  shadow map, so the sun's shadows stay) eases in under a ceiling and out
+  in the open (`cutaway::follow`); the pile lab's help panel in a volume
+  scene reads "F: dig in front (2 s) / Ctrl+F: dig a step down / Alt+F:
+  dig a step up / Ore lands on a pile nearby / ... / SPACE: jetpack"
+  (`piles/view.rs`). Demo: `//kestrel/app:tunnel_lab_demo_video` (a
+  `filegroup` of `tunnel_lab_demo`'s video, as `laser_pit_demo_video`),
+  built locally; `demos/tunnel_lab.json` unchanged (spawn and mountain,
+  the tunnel, the cave, the stairs onto the bridge with the walker, a
+  stair dug down, level and up, and back up it). Left open (entries
+  above): the Sacred Tree on a volume, ghouls and haulers with a height,
+  collapse, pile reach in 3D, the jetpack into a 2 m tunnel, 3D paths to
+  an unreachable floor and lighting underground. Full suite 27/27
+  (`bazel test --config=remote --build_tests_only //kestrel/...`).
 
 ### V.7 Paths in 3D and the test walker
 
