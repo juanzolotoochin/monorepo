@@ -416,7 +416,7 @@ impl Settlement {
                     body.position = spot;
                     body.heading = bearing(spot, building.position);
                     body.velocity = FxVec2::ZERO;
-                    if let Some(ground) = terrain.footprint(spot, body.base_radius) {
+                    if let Some(ground) = terrain.footprint_near(spot, avatar.height, body.base_radius) {
                         avatar.height = ground;
                         avatar.flight.support = ground;
                     }
@@ -473,7 +473,7 @@ pub(super) fn exit_spot(v: &VehicleState, def: &CharacterDef, radius: Fx, terrai
     let gap = def.body.radius + radius + Fx::from_ratio(3, 20);
     [-right, right, -forward, forward].into_iter().find_map(|side| {
         let p = v.position + side * gap;
-        let ground = terrain.footprint(p, radius)?;
+        let ground = terrain.footprint_near(p, v.height, radius)?;
         let level = (ground - v.height).abs() <= Fx::from_ratio(3, 5);
         (level && terrain.clear(p, p, radius)).then_some((p, ground))
     })

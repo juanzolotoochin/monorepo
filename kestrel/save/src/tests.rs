@@ -669,3 +669,44 @@ fn a_volume_dig_in_progress_keeps_its_layer() {
     assert_eq!(loaded.settlement().unwrap().agents[agent as usize].avatar().unwrap().dig, Some(dig));
     assert_eq!(write(&loaded, &content), bytes);
 }
+
+/// A volume scene keeps a sprite's feet (format 42): the test walker
+/// standing on a block 1 m up, which continues alike after loading.
+#[test]
+fn a_volume_scene_keeps_a_sprites_height() {
+    use fx::Fx;
+    let content = Content::builtin();
+    let scenario = content::scenario::Scenario::parse(
+        r#"(id: "walk", extent: 8.0, items: [(id: "ore", label: "ORE", skin: "ore", scale: 0.2)],
+         depots: [], sources: [], links: [],
+         agents: [(id: "player", label: "YOU", character: "exosuit", position: (0.0, 0.0), capacity: 8, links: [],
+                   cargo_anchor: (0.0, 0.65, -0.19), equipment: None, controlled: true)],
+         sprites: [(id: "walker", label: "WALKER", character: "sprite", position: (2.0, 0.0), follow: true)],
+         producers: [], defenders: [], waves: [], base_health: 1, player_health: 0)"#,
+    )
+    .unwrap();
+    let mut volume = sim::volume::Volume::default();
+    volume.fill_box((-8, -8), (8, 8), -8, 0);
+    volume.fill_box((1, -3), (5, 3), 0, 2);
+    let setup = sim::settlement::SceneSetup {
+        scenario: Some(scenario),
+        player: "exosuit".into(),
+        extent: Fx::from_int(8),
+        diggable: true,
+        sloped: true,
+        volume: Some(volume),
+        piles: Some(sim::settlement::PileSetup { capacity: 12, ..Default::default() }),
+        ..Default::default()
+    };
+    let mut sim = sim::Simulation::from_world(sim::World::new_scene(5, &content, &setup).unwrap(), 1);
+    let walker = |w: &sim::World| w.settlement().unwrap().agents.iter().find(|a| a.id == "walker").unwrap().sprite().unwrap().height;
+    assert_eq!(walker(sim.world()), Fx::ONE, "on the block");
+    let bytes = write(sim.world(), &content);
+    let loaded = read(&bytes, &content).unwrap();
+    assert_eq!(walker(&loaded), Fx::ONE);
+    assert_eq!(write(&loaded, &content), bytes);
+    let mut again = Simulation::from_world(loaded, 1);
+    for _ in 0..60 {
+        assert_eq!(sim.step(&[]).total, again.step(&[]).total);
+    }
+}

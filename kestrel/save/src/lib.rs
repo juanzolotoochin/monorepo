@@ -125,7 +125,10 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///     the verticality design).
 /// 41: a dig keeps the first layer it clears in a volume scene
 ///     (`avatar::Dig::layer`, V.4 of the verticality design).
-pub const FORMAT_VERSION: u32 = 41;
+/// 42: a sprite keeps its feet's height (`SpriteState::height`) and a pile
+///     the floor it lies on (`Pile::height`), V.7 of the verticality
+///     design; a sprite's job can be `SpriteJob::Follow`, appended.
+pub const FORMAT_VERSION: u32 = 42;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

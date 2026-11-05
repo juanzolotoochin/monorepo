@@ -24,6 +24,9 @@ Scene(id: "tunnel-lab", player: "exosuit", features: [Digging, SlopedGround],
     spawn: (0.0, 0.0, 0.0),
     industrial: false,
     instances: [],
+    // The test walker (V.7): a sprite that follows the player through the
+    // tunnel and over the bridge on 3D paths, and does nothing else.
+    walkers: [(-2.0, 0.0, 3.0)],
     // Dug ore lands in piles; carry it to the collector (V.4 digs here).
     piles: Some((
         capacity: 12,

@@ -286,7 +286,7 @@ pub(super) fn self_update(body: &mut Body, avatar: &mut AvatarState, me: AgentIx
     if !body.alive() {
         if tick >= avatar.respawn_at {
             body.position = body.home;
-            avatar.height = terrain.footprint(body.home, radius).unwrap_or_default();
+            avatar.height = terrain.footprint_near(body.home, avatar.height, radius).unwrap_or_default();
             body.health = body.max_health;
             avatar.respawn_at = 0;
             avatar.flight = Flight::default();
@@ -711,7 +711,7 @@ impl Settlement {
                 match dig.layer {
                     Some(bottom) => {
                         let cleared = terrain.clear_column(dig.tile, bottom);
-                        cells.extend(cleared.into_iter().map(|(layer, ore)| (dig.tile, layer, ore)));
+                        cells.extend(cleared.into_iter().map(|(layer, ore)| (dig.tile, layer, ore, bottom)));
                     }
                     None => {
                         if terrain.deepen(dig.tile) {
@@ -732,14 +732,14 @@ impl Settlement {
         }
         // Ghouls walk round the new pits (M6.7), and the dug volume.
         let mut changed = dug.clone();
-        changed.extend(cells.iter().map(|&(tile, _, _)| tile));
+        changed.extend(cells.iter().map(|&(tile, _, _, _)| tile));
         changed.dedup();
         self.reroute_round(&changed, terrain);
         let docks = self.depots.iter().map(|d| d.position);
         let spots = self.buildings.iter().flat_map(|b| [b.output_position, b.slot_position(&self.building_kinds[b.kind as usize])]);
         let targets: Vec<FxVec2> = docks.chain(spots).collect();
         let stone = self.item_index(crate::mine::STONE_ID);
-        for (tile, layer, ore) in cells {
+        for (tile, layer, ore, bottom) in cells {
             let Some(lab) = self.piles.as_mut() else { break };
             let item = match (ore, stone) {
                 (Some(mineral), _) if lab.has_minerals() => lab.item(mineral),
@@ -747,7 +747,7 @@ impl Settlement {
                 _ => continue,
             };
             let units = crate::mine::cell_yield(tile, layer);
-            let Some((id, first)) = lab.mined(item, units, tile, terrain, &targets) else { continue };
+            let Some((id, first)) = lab.mined_at(item, units, tile, Some(bottom), terrain, &targets) else { continue };
             self.accounts[item as usize].generated += units as u64;
             let Some(material) = ore else { continue };
             let position = lab.piles[&id].position;
@@ -899,7 +899,7 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
                         return;
                     }
                     if let Some(position) = view.leave_spot(b, def.body.radius) {
-                        let ground = view.terrain.footprint(position, def.body.radius).unwrap_or(avatar.height);
+                        let ground = view.terrain.footprint_near(position, avatar.height, def.body.radius).unwrap_or(avatar.height);
                         avatar.seat = None;
                         // A ballista's reticle back to a facing.
                         avatar.aim = avatar.aim.map(FxVec2::normalize_or_zero).filter(|aim| *aim != FxVec2::ZERO);
@@ -1294,7 +1294,13 @@ fn set_intent(body: &mut Body, avatar: &mut AvatarState, intent: Intent, terrain
         let flying = avatar.flight.requested || avatar.flight.airborne;
         let radius = def.body.radius;
         let walkable = |p: FxVec2, q: FxVec2| flying || terrain.walkable(p, q, radius);
-        body.route = nav::path_with(terrain, body.position, target, radius, &[], &walkable);
+        body.route = if terrain.volume.is_some() && !flying {
+            // On foot in a volume (V.7): a 3D path from the floor it stands
+            // on to whichever floor at the target it reaches first.
+            nav::path_at(terrain, body.position, avatar.height, target, None, radius, &[]).into_iter().map(|(p, _)| p).collect()
+        } else {
+            nav::path_with(terrain, body.position, target, radius, &[], &walkable)
+        };
         avatar.run = run;
     } else if let Intent::Walk { run, .. } = intent {
         avatar.run = run;

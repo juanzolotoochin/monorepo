@@ -338,6 +338,12 @@ pub struct Scene {
     /// the volume is the whole ground, so not with a mine or terrain.
     #[serde(default)]
     pub volume: Option<sim::volume::VolumeLayout>,
+    /// Test walkers (V.7 of the verticality design): where each starts
+    /// (scene meters; `y` is ignored, it stands on the floor nearest the
+    /// ground), a sprite that follows the player through the volume on 3D
+    /// paths and does nothing else.
+    #[serde(default)]
+    pub walkers: Vec<[f32; 3]>,
     #[serde(default)]
     pub style: Option<StyleProfile>,
     #[serde(default)]
@@ -721,6 +727,14 @@ impl ScenePack {
         if let Some(volume) = &self.scene.volume {
             validate_volume(&self.scene, volume)?;
         }
+        // Test walkers (V.7) walk a volume's floors, a few of them.
+        if !self.scene.walkers.is_empty() {
+            let Some(volume) = &self.scene.volume else { return Err("a scene's walkers walk a volume; give it one".into()) };
+            let extent = volume.extent as f32;
+            if self.scene.walkers.len() > 8 || self.scene.walkers.iter().any(|w| !w.iter().all(|v| v.is_finite()) || w[0].abs() > extent || w[2].abs() > extent) {
+                return Err("a scene has up to 8 walkers, inside its volume".into());
+            }
+        }
         if let Some(mine) = &self.scene.mine {
             if !(8.0..=128.0).contains(&mine.extent) || mine.extent.fract() != 0.0 {
                 return Err("a mine's extent must be a whole number of meters from 8 to 128".into());
@@ -894,6 +908,7 @@ mod tests {
                 lanterns: vec![],
                 glow: None,
                 volume: None,
+                walkers: vec![],
                 instances: vec![Instance {
                     prefab: "rock".into(),
                     position: [0.0; 3],
@@ -951,6 +966,7 @@ mod tests {
                 lanterns: vec![],
                 glow: None,
                 volume: None,
+                walkers: vec![],
                 terrain: Some(Terrain {
                     platforms: vec![TerrainPlatform {
                         min: [-1.0; 2],

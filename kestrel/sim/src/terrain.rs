@@ -405,6 +405,44 @@ impl Terrain {
         true
     }
 
+    /// Where the feet of a body of `radius` on foot end up when it walks
+    /// from `a`, its feet at `z`, straight to `b` in a volume scene, by
+    /// [`Terrain::walkable_at`]'s rule but without drops: every 0.1 m each
+    /// of its five points needs a floor ([`Terrain::footprint_at`]) at most
+    /// a layer over or under its feet, which follow it. Nothing if the walk
+    /// meets a wall, a passage without headroom or a drop of more than a
+    /// layer. What 3D paths are made of (`nav::path_at`); elsewhere the
+    /// end's [`Terrain::footprint`] if [`Terrain::walkable`] holds.
+    pub fn walk_at(&self, a: FxVec2, b: FxVec2, z: Fx, radius: Fx) -> Option<Fx> {
+        if self.volume.is_none() {
+            return if self.walkable(a, b, radius) { self.footprint(b, radius) } else { None };
+        }
+        let steps = ((b - a).length() / Fx::from_ratio(1, 10)).ceil().floor_to_int().max(1);
+        let mut z = z;
+        for i in 1..=steps {
+            let p = a + (b - a) * Fx::from_ratio(i, steps);
+            let floor = self.footprint_at(p, z, radius)?;
+            if floor < z - LAYER {
+                return None;
+            }
+            z = floor;
+        }
+        Some(z)
+    }
+
+    /// The ground a body of `radius` placed at `p` stands on, its feet
+    /// wanted near height `z`: in volume scenes the floor of `p`'s column
+    /// whose [`Terrain::footprint_at`] is nearest `z` (the higher on a
+    /// tie), or, if none has room for the body, the top floor's
+    /// [`Terrain::footprint`]; elsewhere [`Terrain::footprint`]. Where a
+    /// spawn, a respawn, a joining player, someone leaving a building or
+    /// climbing out of a vehicle puts their feet.
+    pub fn footprint_near(&self, p: FxVec2, z: Fx, radius: Fx) -> Option<Fx> {
+        let Some(volume) = &self.volume else { return self.footprint(p, radius) };
+        let floors = volume.floors(Self::pit_tile(p)).filter_map(|f| self.footprint_at(p, crate::volume::height(f), radius));
+        floors.min_by_key(|&h| ((h - z).abs(), -h)).or_else(|| self.footprint(p, radius))
+    }
+
     /// Whether a flying body of `radius` with its feet at `z` can move from
     /// `a` to `b`. In volume scenes, each of its five points needs a floor
     /// no higher than its feet, and its head ([`BODY_HEIGHT`] up) under

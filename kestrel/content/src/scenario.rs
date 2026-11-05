@@ -326,6 +326,10 @@ pub struct Sprite {
     /// The character it is, by short name: a `Sprite` character.
     pub character: String,
     pub position: Point,
+    /// A test walker (V.7 of the verticality design): it follows the
+    /// player and does nothing else, instead of starting idle.
+    #[serde(default)]
+    pub follow: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

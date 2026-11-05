@@ -4,9 +4,42 @@ Tunnels and levels: two or more floors over one x–y spot. The design is
 [`VERTICALITY.md`](../VERTICALITY.md) (decisions V1–V11). Tasks run in
 order, one agent each.
 
-## V.7 Paths in 3D and the test walker
+## V.8 Soak and demo
 
 - **Status:** open
+- **Why:** the MVP needs a stable run and a look.
+- **What to do:** a soak test digging at random in the Tunnel Lab with
+  `validate` every tick; a demo video walking through the tunnel, under
+  the bridge, digging a stair down; the full suite; a `docs/test-time.md`
+  row. Note (from V.4): the control protocol has `{"op": "dig_front",
+  "direction": "Down"}` (`"Level"`, `"Down"`, `"Up"`) for the stair demo;
+  the `tunnel_lab_demo` was not built for V.4 (the placeholder mesher
+  doesn't re-mesh yet). A jetpack hovering outside can't enter a tunnel
+  exactly 2 m high (its head at hover height is over the mouth's
+  ceiling): walk in, then hold it.
+  Note (from V.6): underground floors sit in the mountain's shadow and
+  read close to the cutaway's dark section colour, and a 1 m dug stair is
+  mostly in shadow; for the demo's look, consider a little fill light or
+  ambient underground (or a lighter section colour), keeping shadows.
+  Note (from V.7): still on the top floor in volume scenes: haulers (no
+  feet height; none in the Tunnel Lab), threats and chasers (`chase.rs`,
+  `Threat::position` only: the Sacred Tree's ghouls), the jetpack's `GoTo`
+  (a 2D route), sprite respawn (`sprite_housekeeping` puts it home with
+  its old height; the walker can't die), piles made by a pile haul's drop
+  (`PileLab` walk, height 0) and by `spill`, pile reach checks (2D
+  distance, so a pile on the bridge is in reach from the cave under it),
+  and `TossEnd::Pit` for a sprite's or avatar's pit dig. The walker steers
+  round no one and falls instantly if a step drops it (paths never do).
+  The soak should also keep the walker following while digging.
+- **Where:** sim tests, the demo scripts.
+- **Found in:** verticality design.
+- **Tests:** the soak; the full suite.
+
+## Done
+
+### V.7 Paths in 3D and the test walker
+
+- **Status:** done (branch `kestrel-verticality`, no PR yet)
 - **Why:** sprites and ghouls will need to path through tunnels (V8).
 - **What to do:** nav nodes per floor (x, y, floor height), edges where
   walkable with headroom; A* over them. One test walker in the Tunnel Lab
@@ -32,29 +65,80 @@ order, one agent each.
 - **Found in:** verticality design.
 - **Tests:** paths through the tunnel and from under the bridge to over
   it; the walker follows the player; no path where there is no headroom.
-
-## V.8 Soak and demo
-
-- **Status:** open
-- **Why:** the MVP needs a stable run and a look.
-- **What to do:** a soak test digging at random in the Tunnel Lab with
-  `validate` every tick; a demo video walking through the tunnel, under
-  the bridge, digging a stair down; the full suite; a `docs/test-time.md`
-  row. Note (from V.4): the control protocol has `{"op": "dig_front",
-  "direction": "Down"}` (`"Level"`, `"Down"`, `"Up"`) for the stair demo;
-  the `tunnel_lab_demo` was not built for V.4 (the placeholder mesher
-  doesn't re-mesh yet). A jetpack hovering outside can't enter a tunnel
-  exactly 2 m high (its head at hover height is over the mouth's
-  ceiling): walk in, then hold it.
-  Note (from V.6): underground floors sit in the mountain's shadow and
-  read close to the cutaway's dark section colour, and a 1 m dug stair is
-  mostly in shadow; for the demo's look, consider a little fill light or
-  ambient underground (or a lighter section colour), keeping shadows.
-- **Where:** sim tests, the demo scripts.
-- **Found in:** verticality design.
-- **Tests:** the soak; the full suite.
-
-## Done
+- **Done:** 3D nav in `sim/src/nav.rs`: `nav::path_at(terrain, start, z,
+  goal, goal_z, radius, extra)` returns waypoints with the feet's height at
+  each. Nodes: the half-tile lattice's points (the same window as 2D nav),
+  one per floor there a body fits on, at `Terrain::footprint_at` of the
+  floor's height, made lazily as the search reaches a point (`Floors`).
+  Edges: the 8 neighbours where `Terrain::walk_at` (new: `walkable_at`'s
+  rule every 0.1 m on the five footprint points, but strict, returning
+  the end feet height: a step of at most a layer up or down, headroom all
+  the way, no drops of more than a layer; drops are not edges) reaches a
+  node of the neighbour within a layer, plus the terrain's obstacle discs.
+  A* with the 2D octile costs and heuristic, ties broken by node index
+  (nodes are numbered in creation order, itself deterministic). The start
+  attaches to the nearest node it walks to; the goal to every node near
+  it that walks onto the wanted floor (`goal_z`: the floor
+  `Terrain::footprint_near` picks, within a layer; `None`: any floor, the
+  cheapest reached first). String pulling goes forward, stopping at the
+  first node a straight `walk_at` misses, at most `MAX_SEGMENT` (12) nodes
+  a segment. Without a volume `path_at` is `path_avoiding`, and no caller
+  uses it there: every 2D path is unchanged. `Terrain::footprint_near(p,
+  z, radius)` (new): the floor of `p`'s column nearest `z` with room for
+  the body (the top floor's `footprint` if none). Agents: sprites keep a
+  feet height, `SpriteState::height` (zero outside volume scenes), set at
+  setup (`follow::start_height`, the floor nearest 0 m) and by the walker;
+  haulers and threats still stand on `ground` (see V.8). Piles:
+  `Pile::height` (zero outside volume scenes); a volume dig's ore goes
+  through `PileLab::mined_at` with the dig's first cleared layer, which
+  picks a tile with a floor within a layer of it (instead of the top
+  floor's pit/steepness checks) and lies on that floor, so tunnel ore lands
+  in the tunnel; a bundle dropped in a volume lies on the dropper's floor;
+  the view draws piles (`app/src/piles/mod.rs`) and tosses (`piles/transfer.rs`) at
+  it. Save format 42 (`SpriteState::height`, `Pile::height`,
+  `SpriteJob::Follow` appended); the behaviour digest adds sprites' heights
+  only when one is nonzero, so golden lines (and the forest and arena
+  totals, which have no sprites or piles) are unchanged; the golden test
+  passes as is. The avatar's `GoTo` (`avatar::set_intent`, so also the
+  control/demo `walk` op, which sends a `GoTo`) plans with `path_at` (goal
+  floor `None`) in volume scenes on foot; with the jetpack it keeps the 2D
+  route. Feet placement: the scene spawn (`from_scene`: the floor nearest
+  the spawn's height, or the spawn's height if over it), respawn, joining
+  (`players::join`), leaving a building (`avatar`, `buildings`, `vehicle`'s
+  seat housekeeping) and the vehicle exit spot use `footprint_near`
+  (identical to `footprint` without a volume). Walker: `SpriteJob::Follow`
+  (appended), a sprite brain of its own (`sim/src/settlement/follow.rs`):
+  every `REPLAN_TICKS` (30, half a second) a `path_at` to the player's
+  floor (the player's position and feet come in through `Ctx::leader`),
+  then a walk of its character's walk speed per tick, each step a
+  `walk_at` (its feet follow; a refused step drops the route and replans
+  next tick), stopping within `KEEP` (2 m) of the player on the same floor
+  (1 m). It steers round no one. The scene file's new `walkers: [(x, y,
+  z)]` (assetc: up to 8, inside the volume, needs one) becomes
+  `SceneSetup::walkers`, sprites of the `sprite` character with
+  `scenario::Sprite::follow` (new, defaults false) appended to the scene's
+  scenario (`Settlement::with_walkers`); `tunnel_lab.ron` has one at (-2,
+  3). A scenario plus a style for the walker's skin was tried first and
+  dropped: a style and a scenario change the Tunnel Lab's HUD and the
+  player's rig. So the view draws it with `app/src/walker_view.rs`: a
+  small blocky body (no animation), between ticks, at its feet height. The
+  settlement view also draws a scenario's sprites at their feet in volume
+  scenes (`legacy::AgentState::feet`), and a sprite's dig bar sits at its
+  feet (`digging::shown_digs`), for when the Sacred Tree moves over. Tests
+  in `sim/src/settlement/path_tests.rs`: `a_path_runs_through_the_tunnel`
+  (in at the west mouth, out east, 0 m all the way),
+  `a_path_climbs_from_under_the_bridge_onto_it` (up the stairs, ends at
+  5 m over (-11, 13); and back down),
+  `no_path_through_a_passage_without_headroom`,
+  `a_path_goes_down_a_dug_stair` (and none down a sheer 2 m),
+  `paths_in_3d_are_deterministic`,
+  `the_walker_follows_the_player_into_the_tunnel_and_onto_the_bridge`
+  (the player's `GoTo`s ending on the bridge too) and
+  `the_walker_replays_as_the_simulation_does`; in `volume_dig_tests`,
+  `ore_cells_drop_their_yield_onto_piles` now checks the piles lie on the
+  tunnel's floor; in `save`, `a_volume_scene_keeps_a_sprites_height`.
+  `app/demos/tunnel_lab.json` waits in the tunnel and on the bridge for
+  the walker to catch up (it walks 1.6 m/s, the player 3.8).
 
 ### V.6 The cutaway
 

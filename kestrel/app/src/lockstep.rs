@@ -440,6 +440,7 @@ fn scene_setup(library: &SceneLibrary, index: usize, cache: &crate::assets::Mode
             ramp_length: h.ramp_length,
             foot: h.foot,
         }),
+        walkers: scene.walkers.iter().map(|w| [q(w[0]), q(w[2])]).collect(),
         vehicles: scene.vehicles.iter().map(|v| sim::settlement::VehicleSetup {
             character: v.character.clone(),
             position: [q(v.position[0]), q(v.position[2])],

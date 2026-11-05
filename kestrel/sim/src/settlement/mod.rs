@@ -23,6 +23,7 @@ pub mod clock;
 pub mod combat;
 pub mod fire;
 mod economy;
+mod follow;
 mod haulers;
 pub mod interact;
 mod inventory;
@@ -329,6 +330,10 @@ pub struct SceneSetup {
     pub piles: Option<PileSetup>,
     pub memory_trial: bool,
     pub vehicles: Vec<VehicleSetup>,
+    /// Test walkers (V.7 of the verticality design): sprites at these
+    /// points, in scene meters, that follow the player
+    /// (`SpriteJob::Follow`). They join the scenario's sprites.
+    pub walkers: Vec<[Fx; 2]>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -587,12 +592,13 @@ impl Settlement {
                 if let Some(a) = scenario.agents.iter().find(|a| a.controlled && a.character != setup.player) {
                     return Err(format!("agent {} is {:?}, but the scene's player is {:?}", a.id, a.character, setup.player));
                 }
-                Settlement::from_scenario(scenario, &obstacles, terrain, content)?
+                Settlement::from_scenario(&Self::with_walkers(scenario.clone(), &setup.walkers), &obstacles, terrain, content)?
             }
             None => {
                 terrain.extent = setup.extent;
                 terrain.obstacles.extend_from_slice(&obstacles);
-                Settlement::from_scenario(&Self::player_only(setup.extent, [setup.spawn[0], setup.spawn[2]], &setup.player), &[], terrain, content)?
+                let scenario = Self::player_only(setup.extent, [setup.spawn[0], setup.spawn[2]], &setup.player);
+                Settlement::from_scenario(&Self::with_walkers(scenario, &setup.walkers), &[], terrain, content)?
             }
         };
         terrain.surfaces = setup
@@ -634,6 +640,17 @@ impl Settlement {
             body.home = settlement.spawn;
             body.heading = Fx::PI;
             avatar.height = settlement.spawn_height;
+            // In a volume, on the floor nearest the spawn's height (V.7),
+            // or over it to fall onto it.
+            if terrain.volume.is_some() {
+                let floor = terrain.footprint_near(body.position, settlement.spawn_height, body.base_radius);
+                avatar.height = floor.map_or(settlement.spawn_height, |floor| floor.max(settlement.spawn_height));
+            }
+        }
+        // Sprites stand on a volume's floors (V.7), from the ground's.
+        for a in &mut settlement.agents {
+            let AgentState { body, role: Role::Sprite(sprite), .. } = a else { continue };
+            sprite.height = follow::start_height(terrain, body.position, body.base_radius);
         }
         if let Some(p) = &setup.piles {
             // A pile's mineral is what it holds: one set up empty would
@@ -682,6 +699,15 @@ impl Settlement {
             settlement.vehicles.push(parked);
         }
         Ok(settlement)
+    }
+
+    /// `scenario` with a test walker at each of `walkers` (V.7): a sprite
+    /// character that follows the player.
+    fn with_walkers(mut scenario: Scenario, walkers: &[[Fx; 2]]) -> Scenario {
+        for (i, &position) in walkers.iter().enumerate() {
+            scenario.sprites.push(scenario::Sprite { id: format!("walker_{i}"), label: "WALKER".into(), character: "sprite".into(), position, follow: true });
+        }
+        scenario
     }
 
     /// The scenario of a scene without a settlement: just the player.
@@ -1100,6 +1126,12 @@ impl Settlement {
         if !sprites.is_empty() {
             bytes.extend(postcard::to_allocvec(&sprites).expect("sprites encode"));
         }
+        // Sprites' feet only where any stands off the ground (a volume
+        // scene's floors, V.7), so other scenes hash as they did.
+        let heights: Vec<Fx> = self.agents.iter().filter_map(AgentState::sprite).map(|s| s.height).collect();
+        if heights.iter().any(|&h| h != Fx::ZERO) {
+            bytes.extend(postcard::to_allocvec(&heights).expect("heights encode"));
+        }
         bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, &byte| (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3))
     }
 }
@@ -1157,6 +1189,8 @@ mod scene_tests;
 mod seat_tests;
 #[cfg(test)]
 mod tunnel_lab_tests;
+#[cfg(test)]
+mod path_tests;
 #[cfg(test)]
 mod volume_dig_tests;
 #[cfg(test)]

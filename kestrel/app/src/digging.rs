@@ -99,7 +99,7 @@ impl Service for Digging {
             .add_service_systems::<Self, _>(Phase::Mirror, (update, follow_camera).chain().run_if(active.clone()))
             .add_systems(
                 PostUpdate,
-                (feedback, toss_stone, fly_stones, crate::cutaway::follow).after(bevy::transform::TransformSystems::Propagate).run_if(crate::control::rendered).run_if(active),
+                (feedback, toss_stone, fly_stones, crate::cutaway::follow, crate::walker_view::draw).after(bevy::transform::TransformSystems::Propagate).run_if(crate::control::rendered).run_if(active),
             );
     }
 }
@@ -739,7 +739,9 @@ pub fn shown_digs(mirror: &WorldMirror, drawn: Option<&crate::prediction::DrawnS
             .filter(|&(i, _)| Some(i as u16) != me || drawn.is_none())
             .filter_map(|(i, a)| {
                 let dig = a.digging()?.clone();
-                let height = a.avatar().map_or_else(|| terrain.map_or(0.0, |t| t.height(a.body.position).to_f32()), |avatar| avatar.height.to_f32());
+                // A sprite on a volume's floor digs at its feet (V.7).
+                let on_floor = terrain.is_some_and(|t| t.volume.is_some()).then(|| a.sprite().map(|s| s.height.to_f32())).flatten();
+                let height = a.avatar().map(|avatar| avatar.height.to_f32()).or(on_floor).unwrap_or_else(|| terrain.map_or(0.0, |t| t.height(a.body.position).to_f32()));
                 let at = mirror.to_view(a.body.position).with_y(height);
                 Some(ShownDig { agent: i as u16, dig, at, now, sprite: a.avatar().is_none() })
             })

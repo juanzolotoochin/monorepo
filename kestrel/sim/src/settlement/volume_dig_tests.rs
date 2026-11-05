@@ -258,6 +258,11 @@ fn ore_cells_drop_their_yield_onto_piles() {
     assert_eq!(tosses as u32, expected, "every unit flies onto its pile");
     for p in lab.piles.values() {
         assert!(super::nav::distance(p.position, Terrain::pit_center(front)) < Fx::from_int(3), "beside the tile: {:?}", p.position);
+        // In the tunnel, on its floor (V.7), not on the mountain over it.
+        let at = Terrain::pit_tile(p.position);
+        assert_eq!(volume(&sim).floor_near(at, 0), Some(0), "on a tile with the tunnel's floor: {at:?}");
+        assert_eq!(p.height, Fx::ZERO, "lying on the tunnel's floor");
+        assert!(sim.world().terrain().height(p.position) > Fx::from_int(3), "under the mountain");
     }
     assert_eq!((0..HEADROOM).filter_map(|layer| volume(&sim).ore(front, layer)).count(), 0, "the ore is gone");
 }

@@ -158,6 +158,9 @@ struct View {
     aim: Option<f32>,
     pierced: bool,
     armored: bool,
+    /// The height it stands at, when the sim says (a sprite on a volume's
+    /// floor, V.7); else the drawn ground's (`town_ground`).
+    floor: Option<f32>,
 }
 impl View {
     fn new(skin: &str, p: [f32; 2]) -> Self {
@@ -175,6 +178,7 @@ impl View {
             aim: None,
             pierced: false,
             armored: true,
+            floor: None,
         }
     }
 }
@@ -960,7 +964,7 @@ pub fn tick(world: &mut World) {
     let mut desired = BTreeMap::new();
     for a in sim.agents.values() {
         if let Some(sprite) = sim.config().sprite(&a.id) {
-            if let Some(view) = sprite_view(sim, sprite, a) {
+            if let Some(view) = sprite_view(sim, sprite, a, volume_feet(world, a)) {
                 desired.insert(format!("agent/{}", a.id), view);
             }
             continue;
@@ -1295,7 +1299,7 @@ pub fn tick(world: &mut World) {
         }
     }
     for (key, mut view) in desired {
-        view.position.y += town_ground(world, view.position);
+        view.position.y += view.floor.unwrap_or_else(|| town_ground(world, view.position));
         let template = &state.templates[&view.skin];
         if !state.views.contains_key(&key) {
             let rig = if let Some(rig) = state.pool.get_mut(&view.skin).and_then(|p| p.pop()) {
@@ -1376,13 +1380,14 @@ fn facing(from: [f32; 2], to: [f32; 2]) -> f32 {
 /// A sprite's rig: its character's skin, each a little different in size
 /// so the four read as separate. Working, it faces its building and bobs
 /// with the work.
-fn sprite_view(sim: &Simulation, sprite: &crate::legacy::Sprite, a: &crate::legacy::AgentState) -> Option<View> {
+fn sprite_view(sim: &Simulation, sprite: &crate::legacy::Sprite, a: &crate::legacy::AgentState, feet: Option<f32>) -> Option<View> {
     const SIZES: [f32; 4] = [1.0, 0.9, 1.07, 0.95];
     let index = sim.config().sprites.iter().position(|s| s.id == sprite.id).unwrap_or(0);
     let mut view = View::new(&sprite.skin, a.position);
     view.heading = a.heading;
     view.travel = a.travelled;
     view.scale = SIZES[index % SIZES.len()];
+    view.floor = feet;
     let state = sim.sprites.get(&a.id);
     if let Some(b) = state.filter(|s| s.activity == crate::legacy::SpriteActivity::Working).and_then(|s| s.building) {
         view.heading = facing(a.position, sim.buildings[b].position);
@@ -1617,7 +1622,7 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
     for (index, sprite) in sim.config().sprites.iter().enumerate() {
         let (Some(a), Some(s)) = (sim.agents.get(&sprite.id), sim.sprites.get(&sprite.id)) else { continue };
         let p = Vec3::new(a.position[0], 0., a.position[1]);
-        let p = p + Vec3::Y * ground(world, p);
+        let p = p + Vec3::Y * volume_feet(world, a).unwrap_or_else(|| ground(world, p));
         let glow = match s.activity {
             SpriteActivity::Working | SpriteActivity::Digging | SpriteActivity::Hauling => Glow::Working,
             SpriteActivity::Moving => Glow::Moving,
@@ -1855,6 +1860,13 @@ fn town_help(world: &mut World) {
             text.0 = help.into();
         }
     }
+}
+
+/// A sprite's feet in a volume scene (V.7): the floor the sim says it
+/// stands on, which may be under another; none elsewhere.
+fn volume_feet(world: &World, a: &crate::legacy::AgentState) -> Option<f32> {
+    let service = world.resource::<crate::lockstep::SessionService>();
+    service.world().is_some_and(|w| w.terrain().volume.is_some()).then_some(a.feet).flatten()
 }
 
 /// The drawn ground under `p`: a generated mine's ground and pits where the

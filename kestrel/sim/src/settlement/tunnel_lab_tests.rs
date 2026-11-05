@@ -12,7 +12,7 @@ use crate::terrain::{Terrain, LAYER};
 use crate::volume::{height, Volume, VolumeLayout, BODY_HEIGHT, HEADROOM};
 use crate::{Command, CommandKind, PlayerId, Simulation, World};
 
-const SCENE: &str = include_str!("../../../app/assets/levels/tunnel_lab.ron");
+pub(super) const SCENE: &str = include_str!("../../../app/assets/levels/tunnel_lab.ron");
 
 /// The text of the scene's `key: Some(...)` section, inside the `Some`:
 /// its parentheses matched past comments and strings.
@@ -41,7 +41,7 @@ fn section(text: &str, key: &str) -> String {
     panic!("{key}'s section never closes")
 }
 
-fn layout() -> VolumeLayout {
+pub(super) fn layout() -> VolumeLayout {
     ron::from_str(&section(SCENE, "volume")).unwrap()
 }
 
