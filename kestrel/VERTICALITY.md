@@ -18,6 +18,11 @@ What changed versus the design below:
   near wall or a dug stair's side doesn't hide the body; the hole is wide
   only under a ceiling. The section is a light earth colour, and a fill
   light over the head lifts shadowed floors under a ceiling.
+- Seeing inside (a prototype after the MVP, on `kestrel-verticality-sight`):
+  by default in volume scenes nothing is cut outside; under a ceiling
+  the ground over it fades away over the whole view and a line of sight
+  from the head lights what the player can see and dims the rest
+  (`app/src/sight.rs`, `cutaway.rs`); F7 switches back to the V7 cutaway.
 - Piles and the walker's body have a height; haulers, threats and chasers
   still stand on the top floor (none in the Tunnel Lab).
 
