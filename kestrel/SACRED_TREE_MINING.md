@@ -27,6 +27,8 @@ digs one can always walk back out.
   hill set in the level file, with walkable ramps.
 - **Waves:** ghouls spawn on a ring about 40 m from the tree, not at the
   map's edge, so paths stay within `nav.rs`'s search window.
+  (Since M7.7 of the day and night design the ring is 28 m, just past the
+  ramps' feet, so the night's fight comes in its middle.)
 
 ## Decisions
 

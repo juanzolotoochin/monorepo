@@ -41,6 +41,12 @@ hour.
   still form (a lane's ghouls a few seconds apart).
 - This replaces `first`/`every`/`count` for a scenario with a day cycle.
   Scenarios without one keep today's waves unchanged.
+- **The ring moved in (M7.7).** From the mining design's 40 m ring the
+  fight came in a night's last 11 s. The Sacred Tree's lanes now start
+  28 m out, just past the ramps' feet, and a column's ghouls set off 5 s
+  apart (`COLUMN_GAP`), so they top the ramps about 21 s after dusk,
+  reach the tree from about 44 s to 64 s, and a defended town fights from
+  about 35 s on. A column held up on the way is still out at dawn.
 
 ### N3. Ghouls burn away at dawn
 

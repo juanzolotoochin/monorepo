@@ -374,6 +374,18 @@ fn build(world: &mut World) -> Settlement {
 }
 /// Ticks a threat's swing takes to follow through after it lands.
 const SWING_TICKS: f32 = 0.3 * HZ;
+/// A threat rises out of the ground over its first meters walked (a
+/// ghoul's first second), from this far below it, so a wave spawning in
+/// view (the Sacred Tree's ring, 28 m out) doesn't pop in. Drawn only.
+const RISE_METERS: f32 = 0.6;
+const RISE_DEPTH: f32 = 1.9;
+
+/// How far below the ground a threat that has walked `travelled` meters is
+/// drawn: `RISE_DEPTH` at its spawn, eased up to nothing at `RISE_METERS`.
+fn rise_offset(travelled: f32) -> f32 {
+    let f = (travelled / RISE_METERS).clamp(0., 1.);
+    -RISE_DEPTH * (1. - f) * (1. - f)
+}
 /// How far a threat's swing is drawn at `drawn` (`Simulation::drawn_time`,
 /// the tick its position is drawn at): the windup builds from 0 when it
 /// starts to 1 when it lands, then the swing follows through, from 1 back
@@ -1002,6 +1014,7 @@ pub fn tick(world: &mut World) {
     }
     for t in sim.threats.values() {
         let mut v = View::new(&sim.config().waves[t.wave].skin, t.position);
+        v.position.y = rise_offset(t.travelled);
         v.heading = t.heading;
         v.travel = t.travelled;
         let wounded = t.hp < sim.config().waves[t.wave].hp;
@@ -2200,6 +2213,17 @@ pub fn captions(
 mod tests {
     use super::*;
     use fx::{Fx, FxVec2};
+
+    /// A new threat is drawn under the ground and rises as it walks its
+    /// first 0.6 m, then walks on the ground.
+    #[test]
+    fn a_new_threat_rises_out_of_the_ground() {
+        assert_eq!(rise_offset(0.0), -RISE_DEPTH);
+        assert!(rise_offset(0.3) > -RISE_DEPTH && rise_offset(0.3) < 0.0);
+        assert!(rise_offset(0.2) < rise_offset(0.4));
+        assert_eq!(rise_offset(RISE_METERS), 0.0);
+        assert_eq!(rise_offset(30.0), 0.0);
+    }
 
     /// An arc coil shot through three ghouls: the shot arcs to the first,
     /// and the chain on from it to the second and third. A shot prediction
