@@ -88,19 +88,6 @@ order, one agent each.
   `Terrain::flyable_at`.
 - **Found in:** V.4's note on V.8.
 
-## 3D paths to an unreachable floor
-
-- **Status:** open
-- **Why:** `nav::path_at` to a goal it can't reach searches the whole
-  window: in the soak about 1.2 s once, when the player stood in a pit the
-  walker couldn't enter, and 20–100 ms a plan across the Tunnel Lab. The
-  walker plans every half second.
-- **What to do:** bound the search (a node budget, or a reachability
-  check of the goal's floor first), or back the walker's replans off
-  after a failed plan.
-- **Where:** `sim/src/nav.rs`, `sim/src/settlement/follow.rs`.
-- **Found in:** V.8 (the soak).
-
 ## Lighting underground
 
 - **Status:** open
@@ -117,6 +104,25 @@ order, one agent each.
 - **Found in:** V.8.
 
 ## Done
+
+### 3D paths to an unreachable floor
+
+- **Status:** done (branch `kestrel-sacred-tree-depths`, M8.1 in `sacred-tree.md`)
+- **Why:** `nav::path_at` to a goal it can't reach searches the whole
+  window: in the soak about 1.2 s once, when the player stood in a pit the
+  walker couldn't enter, and 20–100 ms a plan across the Tunnel Lab. The
+  walker plans every half second.
+- **What to do:** bound the search (a node budget, or a reachability
+  check of the goal's floor first), or back the walker's replans off
+  after a failed plan.
+- **Where:** `sim/src/nav.rs`, `sim/src/settlement/follow.rs`.
+- **Found in:** V.8 (the soak).
+- **Done:** in M8.1 ("M8.1 Bounded 3D paths" in `sacred-tree.md`): a
+  3D plan expands at most `nav::PATH_BUDGET` nodes, a flood back from the
+  goal settles a shut-in goal (a pit, a mountain's top) in about twice its
+  floor's size, `nav::path_toward_at` gives a partial route to the reached
+  node nearest the goal, and the walker waits 2 s after a plan that didn't
+  reach.
 
 ### Seeing inside by line of sight (prototype)
 

@@ -4,20 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M8.1 Bounded 3D paths
-
-- **Status:** open
-- **Why:** dozens of bodies will plan in 3D, and one plan to an
-  unreachable floor took 1.2 s in the Tunnel Lab (see "3D paths to an
-  unreachable floor" in `verticality.md`).
-- **What to do:** bound `nav::path_at` (a node budget, or a reachability
-  check of the goal's floor first), and back off replans after a failed
-  plan. Deterministic.
-- **Where:** `sim/src/nav.rs`, `sim/src/settlement/follow.rs`.
-- **Found in:** depths design ([`SACRED_TREE_DEPTHS.md`](../SACRED_TREE_DEPTHS.md)).
-- **Tests:** a plan to an unreachable goal stays under a budget; paths
-  that exist are still found; the Tunnel Lab soak still passes.
-
 ## M8.2 Every body on a floor
 
 - **Status:** open
@@ -34,6 +20,21 @@ its milestones, in order; one PR per milestone.
 - **Tests:** in a test volume a ghoul chases a sprite into a tunnel and
   under a bridge; a hauler carries down a stair; golden unchanged for
   heightfield scenes.
+  Note (from M8.1): plan with `nav::path_at` (a full route or none) for
+  haulers and `nav::path_toward_at` (`PathAt { route, reached, expanded }`:
+  else a route to the reached node nearest the goal) for a ghoul's chase,
+  so a ghoul that can't climb to its target waits below it. Back each
+  body's replans off after a plan that didn't reach (`!reached`), as the
+  walker does (`follow::FAILED_REPLAN_TICKS`, 2 s): a plan to a goal on a
+  big floor it can't reach still costs up to `nav::PATH_BUDGET` (16384)
+  nodes. The walker's backoff is stateless (a refused step doesn't cut a
+  failed plan's wait short while more than `REPLAN_TICKS` of it is left);
+  with the save format going up here anyway, a failure count per body
+  (doubling waits) is an option. Not built: a cached flood of connected
+  floor components keyed by `Terrain::revision` (O(1) rejection, but every
+  dig floods the window again); the goal's flood already settles shut-in
+  goals (pits, tops, sealed rooms) in about twice their size, so build it
+  only if the town soak shows many plans at the budget.
 
 ## M8.3 The town as a volume
 
@@ -119,6 +120,11 @@ its milestones, in order; one PR per milestone.
 - **Where:** sim tests, the demo scripts.
 - **Found in:** depths design.
 - **Tests:** the soak; the full suite.
+  Note (from M8.1): count the town soak's plans as the Tunnel Lab soak
+  does (`Dug::plans`, `unreached`, `most_expanded`) and assert they stay
+  within `nav::PATH_BUDGET`. The Tunnel Lab soak's seed never planned to an
+  unreachable goal (240 plans, none unreached, at most 902 nodes); the
+  town's should, with ghouls chasing the elder up where they can't go.
 
 ## A possessed ballista fires faster
 
@@ -327,6 +333,78 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M7.5.
 
 ## Done
+
+### M8.1 Bounded 3D paths
+
+- **Status:** done (branch `kestrel-sacred-tree-depths`)
+- **Why:** dozens of bodies will plan in 3D, and one plan to an
+  unreachable floor took 1.2 s in the Tunnel Lab (see "3D paths to an
+  unreachable floor" in `verticality.md`).
+- **What to do:** bound `nav::path_at` (a node budget, or a reachability
+  check of the goal's floor first), and back off replans after a failed
+  plan. Deterministic.
+- **Where:** `sim/src/nav.rs`, `sim/src/settlement/follow.rs`.
+- **Found in:** depths design ([`SACRED_TREE_DEPTHS.md`](../SACRED_TREE_DEPTHS.md)).
+- **Tests:** a plan to an unreachable goal stays under a budget; paths
+  that exist are still found; the Tunnel Lab soak still passes.
+- **Done:** `nav::plan_at(terrain, start, z, goal, goal_z, radius, extra,
+  budget, toward) -> PathAt { route, reached, expanded }` is the 3D
+  search; `nav::path_at` is it with `PATH_BUDGET` and no partial route
+  (same signature as before: a full route or none), and
+  `nav::path_toward_at` (new) is it with `PATH_BUDGET` and a partial one.
+  Two bounds, both counting nodes, not time, so plans stay deterministic.
+  The budget: `PATH_BUDGET` (16384) nodes expanded, search and flood
+  together; the longest route across the Tunnel Lab (from the tunnel's
+  east side round the mountain to the bridge's stairs and up) takes
+  11075, a cross-map one 4329, through the tunnel 764. The goal's flood:
+  from the search's 256th node on (`FLOOD_AFTER`, so short plans pay
+  nothing), a breadth-first flood back from the goal's nodes (the nodes
+  that walk onto them, by `Terrain::walk_at` from the neighbour, so drops
+  count right) takes a node for each node of the search, up to
+  `GOAL_FLOOD` (1024). Meeting the search (a node both reached) proves a
+  way and the flood stops; running out of nodes proves the goal shut in (a
+  pit, the mountain's top, a sealed room): `path_at` returns at once, in
+  about twice the floor's size (968 nodes to the Tunnel Lab's mountain top
+  from the spawn, which searched the whole map before). Past `GOAL_FLOOD`
+  the goal's floor is big and the search goes on alone to the budget
+  (3429 nodes past a wall across a small map, the whole near side). A
+  cached flood of floor components keyed by `Terrain::revision` was not
+  built (every dig would flood the window again; noted on M8.2). Partial
+  routes (`path_toward_at`, `reached` false): to the node, of those the
+  search reached, nearest the goal in 3D (the squared distance plus the
+  squared height to the wanted floor; the lowest node on a tie),
+  string-pulled like a full route; when the goal is shut in, the search
+  stops once `STALL` (256) nodes in a row came no nearer. Empty only when
+  the start attaches to no node; without a volume there are no partial
+  routes (the full 2D `path_avoiding` route, `reached` if not empty). For
+  callers it means: come as close as you can (a ghoul under the bridge
+  someone stands on, a walker at a pit's edge), and plan again later.
+  Node numbers now interleave the flood's nodes, so tie-breaks (and so
+  some 3D routes) can differ from V.7's; without a volume nothing changed,
+  and the golden test passes as is. The walker (`follow.rs`) plans with
+  `path_toward_at`: after a plan that doesn't reach the player it walks
+  the partial route and waits `FAILED_REPLAN_TICKS` (120, 2 s) instead of
+  `REPLAN_TICKS` (30) to plan again; a refused step plans again next tick
+  only when no failed plan's wait has more than `REPLAN_TICKS` left
+  (stateless: no save change). The Tunnel Lab soak plans from the walker
+  to the avatar every half second as the walker does and asserts every
+  plan stays within the budget (240 plans, at most 902 nodes). Tests in
+  `sim/src/settlement/path_tests.rs`:
+  `paths_across_the_tunnel_lab_fit_in_the_budget` (five routes found,
+  under three quarters of the budget, `path_at` the same as
+  `path_toward_at`),
+  `a_plan_to_the_mountains_top_is_settled_by_the_goals_flood` (no route,
+  within `2 * GOAL_FLOOD` nodes; the partial one under the top on the
+  tunnel's floor, the same twice and on a clone),
+  `a_plan_past_a_wall_stops_at_the_budget` (stops at budgets of 500 and
+  2000 exactly; the partial route ends by the wall),
+  `a_partial_plan_ends_at_the_reachable_point_nearest_the_goal` (at a sheer
+  pit's edge by the goal; out of budget on the way to a reachable goal,
+  partial and closer) and
+  `the_walker_backs_off_when_it_cant_reach_the_player` (the player on the
+  mountain's top: every plan waits `FAILED_REPLAN_TICKS`, the walker ends
+  under it in the tunnel); in `soak_tests`,
+  `the_tunnel_lab_soaks_walking_and_digging_at_random` checks the plans.
 
 ### The night's fight comes late
 

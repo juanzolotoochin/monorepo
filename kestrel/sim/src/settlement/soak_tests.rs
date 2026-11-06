@@ -652,6 +652,11 @@ struct Dug {
     highest: Fx,
     walker_lowest: Fx,
     walker_highest: Fx,
+    /// Plans from the walker to the avatar every half second (M8.1): how
+    /// many, how many didn't reach it, and the most nodes one expanded.
+    plans: u32,
+    unreached: u32,
+    most_expanded: u32,
 }
 
 /// Where the soak's avatar is in a dig: going to its tile's middle (so the
@@ -787,7 +792,8 @@ fn tunnel_soak(seed: u64) -> (Vec<u64>, Dug) {
 }
 
 /// The soak's checks after each tick: the settlement validates, and the
-/// avatar and the walker stand free.
+/// avatar and the walker stand free. Every half second it also plans from
+/// the walker to the avatar, as the walker does, for the plans' sizes.
 fn check(sim: &Simulation, me: AgentIx, dug: &mut Dug) {
     let (world, tick) = (sim.world(), sim.world().tick());
     let s = world.settlement().unwrap();
@@ -802,16 +808,25 @@ fn check(sim: &Simulation, me: AgentIx, dug: &mut Dug) {
     dug.highest = dug.highest.max(feet);
     dug.walker_lowest = dug.walker_lowest.min(walker_feet);
     dug.walker_highest = dug.walker_highest.max(walker_feet);
+    if tick % super::follow::REPLAN_TICKS == 0 {
+        let plan = crate::nav::path_toward_at(world.terrain(), walker.body.position, walker_feet, avatar.body.position, Some(feet), walker.body.base_radius, &[]);
+        dug.plans += 1;
+        dug.unreached += u32::from(!plan.reached);
+        dug.most_expanded = dug.most_expanded.max(plan.expanded);
+    }
 }
 
 /// Two minutes of random walks and digs in the Tunnel Lab: no panic,
 /// every invariant every tick, neither the avatar nor the walker ever in a
-/// solid cell or without headroom, and two runs alike tick for tick.
+/// solid cell or without headroom, every plan within the budget, and two
+/// runs alike tick for tick.
 #[test]
 fn the_tunnel_lab_soaks_walking_and_digging_at_random() {
     let (hashes, dug) = tunnel_soak(0x5eed_7a11);
     eprintln!("tunnel soak: {dug:?}");
     assert!(dug.digs.iter().all(|&n| n >= 2) && dug.digs.iter().sum::<u32>() >= 10, "digs of every direction went through: {dug:?}");
     assert!(dug.walks >= 5, "{dug:?}");
+    // No plan searches the whole map any more (once 1.2 s, M8.1).
+    assert!(dug.plans >= 200 && dug.most_expanded <= crate::nav::PATH_BUDGET, "{dug:?}");
     assert_eq!(hashes, tunnel_soak(0x5eed_7a11).0, "deterministic");
 }

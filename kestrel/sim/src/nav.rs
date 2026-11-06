@@ -200,35 +200,113 @@ fn walk(grid: &Grid, a: FxVec2, z: Fx, b: FxVec2) -> Option<Fx> {
     grid.terrain.walk_at(a, b, z, grid.radius)
 }
 
+/// How many nodes a 3D plan expands at most, its search and its goal's
+/// flood together ([`path_at`], [`path_toward_at`]; M8.1 of the depths
+/// design). The longest routes across the Tunnel Lab (round the mountain
+/// to the bridge's stairs and up) fit in it; a plan to a goal it can't
+/// reach that the goal's flood doesn't settle (the goal's floor is big)
+/// stops here instead of searching every floor of the window, which once
+/// took 1.2 s.
+pub const PATH_BUDGET: u32 = 16384;
+
+/// How many nodes the goal's flood takes at most. A 3D plan floods back
+/// from the goal (the nodes that walk to it) alongside its search, a node
+/// for a node from the search's `FLOOD_AFTER`th on. When the flood runs out
+/// of nodes before it meets the search, the goal is shut in (a pit, a
+/// mountain's top, a sealed room) and can't be reached: settled for about
+/// twice the floor's size. Past this the floor is big, and the search goes
+/// on alone.
+pub const GOAL_FLOOD: u32 = 1024;
+
+/// The goal's flood starts once the search expanded this many nodes: most
+/// plans are found before, and pay nothing for it.
+const FLOOD_AFTER: u32 = 256;
+
+/// A partial plan to a goal shut in stops once this many nodes in a row
+/// came no nearer it.
+pub const STALL: u32 = 256;
+
+/// A 3D plan ([`plan_at`]): the route, as waypoints with the feet's
+/// height at each; whether it reaches the goal; and how many nodes the
+/// search and the goal's flood expanded (at most the budget).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PathAt {
+    pub route: Vec<(FxVec2, Fx)>,
+    /// The route ends at the goal, on the wanted floor. Without it the
+    /// route, if any, goes to the reachable node nearest the goal.
+    pub reached: bool,
+    pub expanded: u32,
+}
+
 /// A path on foot through a volume scene (V8 of the verticality design)
 /// from `start`, its feet at `z`, to `goal`: on the floor there nearest
 /// `goal_z` (within a layer of its [`Terrain::footprint_near`]), or on
 /// any floor without one. Its waypoints come with the feet's height at
-/// each, the last at `goal`; empty if there is no way.
+/// each, the last at `goal`; empty if there is no way, or none within
+/// [`PATH_BUDGET`] nodes.
 ///
 /// The nodes are the half-tile lattice's points, one per floor there
 /// (`Floors`); an edge joins neighbours where a body walks from one to the
 /// other ([`Terrain::walk_at`]: a step of at most a layer up or down, with
 /// headroom all the way, no drops). A* over them breaks ties by node, so
 /// the same ground gives the same path. String pulling joins nodes a
-/// straight walk joins, up to `MAX_SEGMENT` nodes a segment. Without a
-/// volume, [`path_avoiding`] with each waypoint's ground.
+/// straight walk joins, up to `MAX_SEGMENT` nodes a segment. Alongside, a
+/// flood from the goal ([`GOAL_FLOOD`]) finds a shut-in goal early.
+/// Without a volume, [`path_avoiding`] with each waypoint's ground.
 pub fn path_at(terrain: &Terrain, start: FxVec2, z: Fx, goal: FxVec2, goal_z: Option<Fx>, radius: Fx, extra: &[Disc]) -> Vec<(FxVec2, Fx)> {
+    plan_at(terrain, start, z, goal, goal_z, radius, extra, PATH_BUDGET, false).route
+}
+
+/// [`path_at`], or, when it finds no way to `goal` (there is none, or none
+/// within [`PATH_BUDGET`] nodes), a route as close to it as the search got:
+/// to the node, of those it reached from `start`, nearest `goal` (in 3D,
+/// to the wanted floor's height when there is one; the lowest node on a
+/// tie). `reached` says which. When the goal is shut in, the search stops
+/// once [`STALL`] nodes in a row come no nearer. For a body that should
+/// still come as close as it can: a ghoul chasing someone up where it
+/// can't climb waits below, a walker whose player stands in a pit it can't
+/// enter waits at its edge. The route is empty only when `start` attaches
+/// to no node (or, without a volume, there is no full path: partial routes
+/// are 3D only).
+pub fn path_toward_at(terrain: &Terrain, start: FxVec2, z: Fx, goal: FxVec2, goal_z: Option<Fx>, radius: Fx, extra: &[Disc]) -> PathAt {
+    plan_at(terrain, start, z, goal, goal_z, radius, extra, PATH_BUDGET, true)
+}
+
+/// The 3D search behind [`path_at`] (`toward` false: a route only if it
+/// reaches the goal) and [`path_toward_at`] (`toward`: else the partial
+/// route), expanding at most `budget` nodes. Deterministic: the budget
+/// counts nodes, not time.
+#[allow(clippy::too_many_arguments)]
+pub fn plan_at(
+    terrain: &Terrain,
+    start: FxVec2,
+    z: Fx,
+    goal: FxVec2,
+    goal_z: Option<Fx>,
+    radius: Fx,
+    extra: &[Disc],
+    budget: u32,
+    toward: bool,
+) -> PathAt {
+    use crate::terrain::LAYER;
     if terrain.volume.is_none() {
-        return path_avoiding(terrain, start, goal, radius, extra).into_iter().map(|p| (p, terrain.height(p))).collect();
+        let route: Vec<_> = path_avoiding(terrain, start, goal, radius, extra).into_iter().map(|p| (p, terrain.height(p))).collect();
+        return PathAt { reached: !route.is_empty(), route, expanded: 0 };
     }
     let any = |_: FxVec2, _: FxVec2| true;
     let grid = Grid::new(terrain, start, goal, radius, extra, &any);
-    let wanted = match goal_z {
-        Some(goal_z) => match terrain.footprint_near(goal, goal_z, radius) {
-            Some(floor) => Some(floor),
-            None => return Vec::new(),
-        },
-        None => None,
-    };
-    let arrives = |end: Fx| wanted.is_none_or(|w| (end - w).abs() <= crate::terrain::LAYER);
+    // The floor wanted at the goal; `open` is false when the goal's column
+    // has no floor for the body (nothing arrives, but a partial route
+    // still aims at `goal_z`).
+    let floor = goal_z.map(|goal_z| terrain.footprint_near(goal, goal_z, radius));
+    let open = !matches!(floor, Some(None));
+    if !open && !toward {
+        return PathAt::default();
+    }
+    let wanted = floor.zip(goal_z).map(|(floor, goal_z)| floor.unwrap_or(goal_z));
+    let arrives = |end: Fx| open && wanted.is_none_or(|w| (end - w).abs() <= LAYER);
     if let Some(end) = walk(&grid, start, z, goal).filter(|&end| arrives(end)) {
-        return vec![(goal, end)];
+        return PathAt { route: vec![(goal, end)], reached: true, expanded: 0 };
     }
     let (width, height) = (grid.width, grid.height);
     let mut floors = Floors { cells: vec![None; width * height], nodes: Vec::new() };
@@ -239,12 +317,21 @@ pub fn path_at(terrain: &Terrain, start: FxVec2, z: Fx, goal: FxVec2, goal_z: Op
         let ys = (c.1 - NEAR_NODES).max(0)..=(c.1 + NEAR_NODES).min(height as i64 - 1);
         ys.flat_map(move |y| ((c.0 - NEAR_NODES).max(0)..=(c.0 + NEAR_NODES).min(width as i64 - 1)).map(move |x| (y * width as i64 + x) as usize))
     };
+    // The 8 lattice neighbours of a cell, in order.
+    let neighbours = |cell: usize| {
+        let (x, y) = ((cell % width) as i64, (cell / width) as i64);
+        (-1..=1i64).flat_map(move |dy| (-1..=1i64).map(move |dx| (dx, dy))).filter_map(move |(dx, dy)| {
+            let (nx, ny) = (x + dx, y + dy);
+            let inside = (dx, dy) != (0, 0) && nx >= 0 && ny >= 0 && nx < width as i64 && ny < height as i64;
+            inside.then(|| (ny as usize * width + nx as usize, dx != 0 && dy != 0))
+        })
+    };
     // The start's node: the nearest it walks to (the lowest node on a tie).
     let mut first = None;
     for cell in near(lattice(start)) {
         for n in floors.of(&grid, cell) {
             let (at, h) = (grid.point(cell), floors.nodes[n].1);
-            let reached = walk(&grid, start, z, at).is_some_and(|end| (end - h).abs() <= crate::terrain::LAYER);
+            let reached = walk(&grid, start, z, at).is_some_and(|end| (end - h).abs() <= LAYER);
             if reached {
                 let key = ((at - start).length_squared(), n);
                 if first.is_none_or(|(best, _)| key < best) {
@@ -253,18 +340,20 @@ pub fn path_at(terrain: &Terrain, start: FxVec2, z: Fx, goal: FxVec2, goal_z: Op
             }
         }
     }
-    let Some((_, first)) = first else { return Vec::new() };
+    let Some((_, first)) = first else { return PathAt::default() };
     // The goal's nodes: those near it that walk onto the wanted floor there.
     let mut last: Vec<(usize, Fx)> = Vec::new();
-    for cell in near(lattice(goal)) {
-        for n in floors.of(&grid, cell) {
-            if let Some(end) = walk(&grid, grid.point(cell), floors.nodes[n].1, goal).filter(|&end| arrives(end)) {
-                last.push((n, end));
+    if open {
+        for cell in near(lattice(goal)) {
+            for n in floors.of(&grid, cell) {
+                if let Some(end) = walk(&grid, grid.point(cell), floors.nodes[n].1, goal).filter(|&end| arrives(end)) {
+                    last.push((n, end));
+                }
             }
         }
     }
-    if last.is_empty() {
-        return Vec::new();
+    if last.is_empty() && !toward {
+        return PathAt::default();
     }
     let aim = lattice(goal);
     let heuristic = |cell: usize| -> u32 {
@@ -272,20 +361,81 @@ pub fn path_at(terrain: &Terrain, start: FxVec2, z: Fx, goal: FxVec2, goal_z: Op
         let dy = ((cell / width) as i64).abs_diff(aim.1.clamp(0, height as i64 - 1)) as u32;
         10 * dx.max(dy) + 4 * dx.min(dy)
     };
+    // How far a node is from the goal, for a partial route: in 3D when a
+    // floor is wanted; the lower node on a tie.
+    let gap = |floors: &Floors, n: usize| {
+        let (cell, h) = floors.nodes[n];
+        let rise = wanted.map_or(Fx::ZERO, |w| (h - w) * (h - w));
+        ((grid.point(cell) - goal).length_squared() + rise, n)
+    };
     let mut costs: Vec<u32> = Vec::new();
     let mut parents: Vec<usize> = Vec::new();
-    let grow = |costs: &mut Vec<u32>, parents: &mut Vec<usize>, len: usize| {
+    // Nodes the goal's flood reached: they walk to the goal.
+    let mut back: Vec<bool> = Vec::new();
+    let grow = |costs: &mut Vec<u32>, parents: &mut Vec<usize>, back: &mut Vec<bool>, len: usize| {
         if costs.len() < len {
             costs.resize(len, u32::MAX);
             parents.resize(len, usize::MAX);
+            back.resize(len, false);
         }
     };
-    grow(&mut costs, &mut parents, floors.nodes.len());
+    grow(&mut costs, &mut parents, &mut back, floors.nodes.len());
+    let mut flood = std::collections::VecDeque::new();
+    for &(n, _) in &last {
+        if !back[n] {
+            back[n] = true;
+            flood.push_back(n);
+        }
+    }
+    // The flood runs until it meets the search (a way), grows past
+    // `GOAL_FLOOD` (the floor is big) or runs out of nodes: then the goal
+    // is `shut` in.
+    let mut flooding = !last.is_empty();
+    let mut shut = last.is_empty();
+    let (mut flooded, mut expanded) = (0u32, 0u32);
     costs[first] = 0;
-    let mut open = BinaryHeap::new();
-    open.push(Reverse((heuristic(floors.nodes[first].0), 0u32, first)));
+    let mut nearest = gap(&floors, first);
+    let mut stalled = 0u32;
+    let mut open_set = BinaryHeap::new();
+    open_set.push(Reverse((heuristic(floors.nodes[first].0), 0u32, first)));
     let mut end = None;
-    while let Some(Reverse((_, cost, current))) = open.pop() {
+    loop {
+        // A node of the goal's flood: the nodes that walk onto it.
+        if flooding && expanded >= FLOOD_AFTER {
+            match flood.pop_front() {
+                Some(_) if back[first] || flooded >= GOAL_FLOOD || expanded + flooded >= budget => flooding = false,
+                Some(v) => {
+                    flooded += 1;
+                    let (cell, h) = floors.nodes[v];
+                    for (from, _) in neighbours(cell) {
+                        for u in floors.of(&grid, from) {
+                            grow(&mut costs, &mut parents, &mut back, floors.nodes.len());
+                            if back[u] {
+                                continue;
+                            }
+                            if walk(&grid, grid.point(from), floors.nodes[u].1, grid.point(cell)).is_some_and(|arrived| (arrived - h).abs() <= LAYER) {
+                                back[u] = true;
+                                // The search reached it: there is a way.
+                                if costs[u] != u32::MAX {
+                                    flooding = false;
+                                }
+                                flood.push_back(u);
+                            }
+                        }
+                    }
+                }
+                None => {
+                    // Every node that walks to the goal is flooded, and the
+                    // search reached none of them: no way.
+                    (flooding, shut) = (false, true);
+                    if !toward {
+                        return PathAt { expanded: expanded + flooded, ..PathAt::default() };
+                    }
+                }
+            }
+        }
+        // A node of the search.
+        let Some(Reverse((_, cost, current))) = open_set.pop() else { break };
         if cost != costs[current] {
             continue;
         }
@@ -293,29 +443,42 @@ pub fn path_at(terrain: &Terrain, start: FxVec2, z: Fx, goal: FxVec2, goal_z: Op
             end = Some((n, h));
             break;
         }
+        // Out of budget (the goal may still be reachable), or shut in and
+        // coming no nearer it.
+        if expanded + flooded >= budget || (shut && stalled >= STALL) {
+            break;
+        }
+        expanded += 1;
+        stalled += 1;
         let (cell, z) = floors.nodes[current];
-        let (x, y) = ((cell % width) as i64, (cell / width) as i64);
-        for dy in -1..=1i64 {
-            for dx in -1..=1i64 {
-                let (nx, ny) = (x + dx, y + dy);
-                if (dx == 0 && dy == 0) || nx < 0 || ny < 0 || nx >= width as i64 || ny >= height as i64 {
-                    continue;
+        for (next_cell, diagonal) in neighbours(cell) {
+            let new_cost = cost + if diagonal { 14 } else { 10 };
+            let Some(arrived) = walk(&grid, grid.point(cell), z, grid.point(next_cell)) else { continue };
+            let Some(next) = floors.at(&grid, next_cell, arrived) else { continue };
+            grow(&mut costs, &mut parents, &mut back, floors.nodes.len());
+            if costs[next] == u32::MAX {
+                if back[next] {
+                    flooding = false;
                 }
-                let next_cell = ny as usize * width + nx as usize;
-                let new_cost = cost + if dx != 0 && dy != 0 { 14 } else { 10 };
-                let Some(arrived) = walk(&grid, grid.point(cell), z, grid.point(next_cell)) else { continue };
-                let Some(next) = floors.at(&grid, next_cell, arrived) else { continue };
-                grow(&mut costs, &mut parents, floors.nodes.len());
-                if new_cost < costs[next] {
-                    costs[next] = new_cost;
-                    parents[next] = current;
-                    open.push(Reverse((new_cost + heuristic(next_cell), new_cost, next)));
+                let key = gap(&floors, next);
+                if key < nearest {
+                    (nearest, stalled) = (key, 0);
                 }
+            }
+            if new_cost < costs[next] {
+                costs[next] = new_cost;
+                parents[next] = current;
+                open_set.push(Reverse((new_cost + heuristic(next_cell), new_cost, next)));
             }
         }
     }
-    let Some((end, arrival)) = end else { return Vec::new() };
-    let mut raw = vec![(goal, arrival)];
+    let expanded = expanded + flooded;
+    let (end, mut raw) = match end {
+        Some((end, arrival)) => (end, vec![(goal, arrival)]),
+        None if toward => (nearest.1, Vec::new()),
+        None => return PathAt { expanded, ..PathAt::default() },
+    };
+    let reached = !raw.is_empty();
     let mut node = end;
     loop {
         let (cell, h) = floors.nodes[node];
@@ -329,13 +492,13 @@ pub fn path_at(terrain: &Terrain, start: FxVec2, z: Fx, goal: FxVec2, goal_z: Op
     // String pulling: from each waypoint, the furthest of the next nodes a
     // straight walk reaches on their floor, stopping at the first it
     // doesn't.
-    let mut result = Vec::new();
+    let mut route = Vec::new();
     let (mut from, mut feet) = (start, z);
     let mut i = 0;
     while i < raw.len() {
         let mut next = (i, raw[i].1);
         for j in i..raw.len().min(i + MAX_SEGMENT as usize) {
-            match walk(&grid, from, feet, raw[j].0).filter(|&h| (h - raw[j].1).abs() <= crate::terrain::LAYER) {
+            match walk(&grid, from, feet, raw[j].0).filter(|&h| (h - raw[j].1).abs() <= LAYER) {
                 Some(h) => next = (j, h),
                 None if j > i => break,
                 None => {}
@@ -343,10 +506,10 @@ pub fn path_at(terrain: &Terrain, start: FxVec2, z: Fx, goal: FxVec2, goal_z: Op
         }
         from = raw[next.0].0;
         feet = next.1;
-        result.push((from, feet));
+        route.push((from, feet));
         i = next.0 + 1;
     }
-    result
+    PathAt { route, reached, expanded }
 }
 
 /// A* over `grid` from `start` to `goal`, string-pulled, and whether it
