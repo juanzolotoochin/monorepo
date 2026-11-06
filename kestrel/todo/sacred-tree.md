@@ -4,6 +4,122 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
+## M8.1 Bounded 3D paths
+
+- **Status:** open
+- **Why:** dozens of bodies will plan in 3D, and one plan to an
+  unreachable floor took 1.2 s in the Tunnel Lab (see "3D paths to an
+  unreachable floor" in `verticality.md`).
+- **What to do:** bound `nav::path_at` (a node budget, or a reachability
+  check of the goal's floor first), and back off replans after a failed
+  plan. Deterministic.
+- **Where:** `sim/src/nav.rs`, `sim/src/settlement/follow.rs`.
+- **Found in:** depths design ([`SACRED_TREE_DEPTHS.md`](../SACRED_TREE_DEPTHS.md)).
+- **Tests:** a plan to an unreachable goal stays under a budget; paths
+  that exist are still found; the Tunnel Lab soak still passes.
+
+## M8.2 Every body on a floor
+
+- **Status:** open
+- **Why:** in volume scenes only the avatar, sprites and piles have a
+  feet height; haulers and ghouls walk on the top floor (T5).
+- **What to do:** haulers and threats get a feet height (hashed, saved),
+  3D paths and chases (`chase.rs`, `Threat::position`); fix the rest of
+  "Ghouls and haulers with a height" in `verticality.md` (jetpack `GoTo`,
+  sprite respawn, pile-haul drops, spills, `TossEnd::Pit`). Other scenes
+  unchanged.
+- **Where:** `sim/src/settlement/haulers.rs`, `chase.rs`, `combat.rs`,
+  `sprites.rs`, `piles.rs`.
+- **Found in:** depths design.
+- **Tests:** in a test volume a ghoul chases a sprite into a tunnel and
+  under a bridge; a hauler carries down a stair; golden unchanged for
+  heightfield scenes.
+
+## M8.3 The town as a volume
+
+- **Status:** open
+- **Why:** the town's mine can't have tunnels on a heightfield (T1, T2,
+  T4, T6).
+- **What to do:** convert the Sacred Tree's generated ground and hill into
+  a volume at load (the surface the same), 16 layers deep; stone veins
+  richer deeper; amber, a new ore, only below 4 m and in the mountain
+  (content, piles, HUD); an authored mountain spur 8–10 m high, 40–60 m
+  from the tree, with a cave mouth; the hill, tree, buildings, sites and
+  piles undiggable at any depth; the elder digs in 3D there. Update the
+  golden, soaks and wave tests that change.
+- **Where:** `sim/src/mine.rs`, `sim/src/volume.rs`, `terrain.rs`,
+  `app/assets/levels/sacred_tree.ron`, its supply, `app/src/digging.rs`.
+- **Found in:** depths design.
+- **Tests:** surface heights match the old heightfield; protected columns
+  refuse digs; amber only below 4 m and in the mountain; the happy path
+  and soaks pass.
+
+## M8.4 Miners mine walls
+
+- **Status:** open
+- **Why:** sprites harvest the tunnels the elder digs (T3).
+- **What to do:** miner sprites pick exposed stone faces they can reach
+  and dig level into the wall beside them, never down or up.
+- **Where:** `sim/src/settlement/miners.rs`.
+- **Found in:** depths design.
+- **Tests:** a miner digs a tunnel wall, never its floor or ceiling; it
+  walks to the face in 3D.
+
+## M8.5 Seeing, second pass
+
+- **Status:** open
+- **Why:** the line-of-sight prototype is too dark and leaves big flat
+  lids (T7).
+- **What to do:** rock beyond a one-tile rim round what you see goes near
+  black; inside, light comes from lanterns and the elder's lamp, not the
+  sun; F7 keeps the cutaway. Pick up the cheap items of "Line of sight
+  follow-ups" in `verticality.md` (dim objects, piles and ghouls out of
+  sight).
+- **Where:** `app/src/cutaway.rs`, `app/src/sight.rs`,
+  `app/shaders/cutaway.wesl`.
+- **Found in:** depths design.
+- **Tests:** sight unit tests; screenshots in the town's tunnels and the
+  mountain cave, by day and night.
+
+## M8.6 Lanterns and the light grid
+
+- **Status:** open
+- **Why:** light is a resource you build (L1, L2, L5, L6).
+- **What to do:** a lantern building (blueprint on any floor, 1 stone and
+  1 amber, built by sprites; haulers deliver underground); a light grid
+  in the sim, each lantern lighting its line of sight on its level within
+  6 m, hashed and saved, recomputed on change; the view lights from the
+  grid with soft edges; the elder's lamp stays view only. Settle M7's
+  night lanterns.
+- **Where:** `sim/src/settlement/buildings.rs`, a new light module,
+  content, `app/src/cutaway.rs`.
+- **Found in:** depths design.
+- **Tests:** the grid stops at rock, at 6 m and at its level; a lantern
+  blueprint underground is supplied and built; save round trip.
+
+## M8.7 Sprites and ghouls read light
+
+- **Status:** open
+- **Why:** light matters to the town (L3, L4).
+- **What to do:** underground, sprites only walk and work on lit tiles
+  (the surface counts as lit); ghouls' paths cost more on lit tiles but
+  never block.
+- **Where:** `sim/src/nav.rs`, `sprites.rs`, `miners.rs`, `chase.rs`.
+- **Found in:** depths design.
+- **Tests:** a sprite won't mine a dark face and will once lit; a ghoul
+  takes the dark route when one exists and still reaches a lit target.
+
+## M8.8 Tuning, soak and demo
+
+- **Status:** open
+- **Why:** the milestone needs a stable run and a look.
+- **What to do:** tune amber, lantern and wave numbers; a soak over
+  several days and nights with digging and lanterns; a demo video of a
+  day and a night underground; the full suite; a `docs/test-time.md` row.
+- **Where:** sim tests, the demo scripts.
+- **Found in:** depths design.
+- **Tests:** the soak; the full suite.
+
 ## A possessed ballista fires faster
 
 - **Status:** open
