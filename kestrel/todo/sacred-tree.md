@@ -4,38 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M8.2 Every body on a floor
-
-- **Status:** open
-- **Why:** in volume scenes only the avatar, sprites and piles have a
-  feet height; haulers and ghouls walk on the top floor (T5).
-- **What to do:** haulers and threats get a feet height (hashed, saved),
-  3D paths and chases (`chase.rs`, `Threat::position`); fix the rest of
-  "Ghouls and haulers with a height" in `verticality.md` (jetpack `GoTo`,
-  sprite respawn, pile-haul drops, spills, `TossEnd::Pit`). Other scenes
-  unchanged.
-- **Where:** `sim/src/settlement/haulers.rs`, `chase.rs`, `combat.rs`,
-  `sprites.rs`, `piles.rs`.
-- **Found in:** depths design.
-- **Tests:** in a test volume a ghoul chases a sprite into a tunnel and
-  under a bridge; a hauler carries down a stair; golden unchanged for
-  heightfield scenes.
-  Note (from M8.1): plan with `nav::path_at` (a full route or none) for
-  haulers and `nav::path_toward_at` (`PathAt { route, reached, expanded }`:
-  else a route to the reached node nearest the goal) for a ghoul's chase,
-  so a ghoul that can't climb to its target waits below it. Back each
-  body's replans off after a plan that didn't reach (`!reached`), as the
-  walker does (`follow::FAILED_REPLAN_TICKS`, 2 s): a plan to a goal on a
-  big floor it can't reach still costs up to `nav::PATH_BUDGET` (16384)
-  nodes. The walker's backoff is stateless (a refused step doesn't cut a
-  failed plan's wait short while more than `REPLAN_TICKS` of it is left);
-  with the save format going up here anyway, a failure count per body
-  (doubling waits) is an option. Not built: a cached flood of connected
-  floor components keyed by `Terrain::revision` (O(1) rejection, but every
-  dig floods the window again); the goal's flood already settles shut-in
-  goals (pits, tops, sealed rooms) in about twice their size, so build it
-  only if the town soak shows many plans at the budget.
-
 ## M8.3 The town as a volume
 
 - **Status:** open
@@ -54,6 +22,14 @@ its milestones, in order; one PR per milestone.
 - **Tests:** surface heights match the old heightfield; protected columns
   refuse digs; amber only below 4 m and in the mountain; the happy path
   and soaks pass.
+  Note (from M8.2): every body already has a feet height and walks in 3D
+  once the terrain has a volume; buildings, depots, sites and the tree are
+  assumed on the top floor at their middle (`terrain.height`), for
+  reaches, ballista targets, fire and goal floors. Haulers and sprites
+  start on the floor nearest 0 m (`follow::start_height`): for a town
+  that is a hill, start them at the top floor instead. The forest/arena
+  golden total lines change with any state shape change; behaviour lines
+  are the check.
 
 ## M8.4 Miners mine walls
 
@@ -65,6 +41,9 @@ its milestones, in order; one PR per milestone.
 - **Found in:** depths design.
 - **Tests:** a miner digs a tunnel wall, never its floor or ceiling; it
   walks to the face in 3D.
+  Note (from M8.2): sprites already walk on 3D paths in volume scenes
+  (`haulers::route_at`, steps by `walk_at`), but `miners::search` and
+  `stand_spot` are still 2D (pits, `terrain.steep`).
 
 ## M8.5 Seeing, second pass
 
@@ -97,6 +76,10 @@ its milestones, in order; one PR per milestone.
 - **Found in:** depths design.
 - **Tests:** the grid stops at rock, at 6 m and at its level; a lantern
   blueprint underground is supplied and built; save round trip.
+  Note (from M8.2): buildings and sites have no floor yet; give a
+  lantern's site one, plan deliveries to it with that goal floor
+  (`haulers::route_at`'s `goal_z`), and use it in `on_building_floor` and
+  `pick_target` instead of the top floor.
 
 ## M8.7 Sprites and ghouls read light
 
@@ -109,6 +92,8 @@ its milestones, in order; one PR per milestone.
 - **Found in:** depths design.
 - **Tests:** a sprite won't mine a dark face and will once lit; a ghoul
   takes the dark route when one exists and still reaches a lit target.
+  Note (from M8.2): the dawn still dispels ghouls on every floor; decide
+  whether ghouls underground (unlit) survive it.
 
 ## M8.8 Tuning, soak and demo
 
@@ -333,6 +318,106 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M7.5.
 
 ## Done
+
+### M8.2 Every body on a floor
+
+- **Status:** done (branch `kestrel-sacred-tree-depths`)
+- **Why:** in volume scenes only the avatar, sprites and piles have a
+  feet height; haulers and ghouls walk on the top floor (T5).
+- **What to do:** haulers and threats get a feet height (hashed, saved),
+  3D paths and chases (`chase.rs`, `Threat::position`); fix the rest of
+  "Ghouls and haulers with a height" in `verticality.md` (jetpack `GoTo`,
+  sprite respawn, pile-haul drops, spills, `TossEnd::Pit`). Other scenes
+  unchanged.
+- **Where:** `sim/src/settlement/haulers.rs`, `chase.rs`, `combat.rs`,
+  `sprites.rs`, `piles.rs`.
+- **Found in:** depths design.
+- **Tests:** in a test volume a ghoul chases a sprite into a tunnel and
+  under a bridge; a hauler carries down a stair; golden unchanged for
+  heightfield scenes.
+  Note (from M8.1): plan with `nav::path_at` (a full route or none) for
+  haulers and `nav::path_toward_at` (`PathAt { route, reached, expanded }`:
+  else a route to the reached node nearest the goal) for a ghoul's chase,
+  so a ghoul that can't climb to its target waits below it. Back each
+  body's replans off after a plan that didn't reach (`!reached`), as the
+  walker does (`follow::FAILED_REPLAN_TICKS`, 2 s): a plan to a goal on a
+  big floor it can't reach still costs up to `nav::PATH_BUDGET` (16384)
+  nodes. The walker's backoff is stateless (a refused step doesn't cut a
+  failed plan's wait short while more than `REPLAN_TICKS` of it is left);
+  with the save format going up here anyway, a failure count per body
+  (doubling waits) is an option. Not built: a cached flood of connected
+  floor components keyed by `Terrain::revision` (O(1) rejection, but every
+  dig floods the window again); the goal's flood already settles shut-in
+  goals (pits, tops, sealed rooms) in about twice their size, so build it
+  only if the town soak shows many plans at the budget.
+
+- **Done:** haulers (`HaulerState::height`) and threats (`Threat::height`)
+  have a feet height, as sprites (`SpriteState::height`) already did;
+  `AgentState::height` reads any agent's. Haulers start on the floor
+  nearest 0 m (`follow::start_height`, as sprites), threats on the top
+  floor where their wave spawns (`chase::surface_feet`), and a sprite comes
+  back from dying on home's floor. In volume scenes every walker steps on
+  foot: `haulers::move_worker` (haulers and sprites on errands) checks
+  every step with `Terrain::walk_at`, its feet following, skips waypoints
+  only where it walks, steers round bodies on its own floor only
+  (`Footprint::height`) and drops a route the ground refuses, for its brain
+  to plan again; threats walk their routes with `chase::walk_route_at`
+  (sliding along a corner a path's samples skipped, as the walker does).
+  Paths: haulers and sprites plan with `nav::path_at` (`haulers::route_at`:
+  any floor at the goal, or the pile's floor when a sprite picks one up
+  next); a hauler's link check plans from the pickup's top floor; waves and
+  give-ups plan their route home with `nav::path_toward_at` to the target's
+  top floor (`chase::route_home_at`, `stranded` when it doesn't reach),
+  and a threat whose route went stale plans again from where it stands. A
+  chaser walks straight at its quarry while both are on one floor and the
+  walk is clear, else follows a 3D path to the quarry's floor
+  (`Threat::chase`, `path_toward_at`, every `follow::REPLAN_TICKS`), so a
+  ghoul that can't reach waits at the nearest point. In a volume it spots
+  a quarry within its detect radius in 3D that it sees (`chase::sees_at`:
+  eye to eye, 1.5 m up, through no solid cell) and keeps it within the
+  leash in 3D, without needing sight. Backoff: `Backoff { at, failures }`
+  (`follow.rs`) on haulers, sprites and threats: a plan that didn't reach
+  waits `FAILED_REPLAN_TICKS` (2 s), doubling per failure in a row up to
+  8 s; written only in volume scenes. Combat reach: `combat::FLOOR_REACH`
+  (1.5 m; stacked floors are at least 2.5 m apart) via `same_floor`, only
+  in volume scenes: swings at agents (their floor, or for an avatar in the
+  air the floor under it) and buildings (the top floor at their middle),
+  player strikes (sword, spear, arc chain, laser targets), projectile hits
+  (`Projectile::floor`, an arrow's shooter's feet; a ballista's shot the
+  top floor at its launcher), ballista and defender targets
+  (`pick_target`), fireball hits and fire patches (the top floor where they
+  land), building spotting, and sprites' alarm. The jetpack's `GoTo` plans
+  `path_at` from the floor under it in a volume (2D if there is none);
+  piles from a pile haul's drop lie on the dropper's floor and from a
+  broken building's `spill` on its floor; `TossEnd::Pit` carries the
+  floor it flies from (the dig's cleared bottom, the pit's floor). Save
+  format 43. The behaviour digest maps projectiles to their old fields and
+  adds haulers', threats' and arrows' floors only when one is nonzero:
+  golden behaviour lines unchanged; the forest and arena *total* lines
+  changed (the state's shape grew: `HaulerState`, `Threat` and
+  `Projectile` fields) and were regenerated. View: `legacy` gives haulers
+  and threats `feet` while off 0 m, and the town view draws haulers and
+  ghouls at their feet in volume scenes (`settlement::in_volume`); tosses
+  from a pit start at `TossEnd::Pit::height`. Tests in
+  `sim/src/settlement/floors_tests.rs`:
+  `a_ghoul_chases_a_sprite_into_the_tunnel` (round the mountain's corner,
+  0 m under the roof, hits it there),
+  `a_ghoul_chases_a_sprite_under_the_bridge`,
+  `a_ghoul_cant_hit_a_sprite_on_another_floor` (bridge over cave, both
+  ways), `a_ghoul_that_cant_reach_waits_at_the_nearest_point_and_backs_off`
+  (a sheer pillar 3 m high: waits by it, plans 2, 4, 8, 8 s apart),
+  `a_hauler_carries_wood_down_a_dug_stair` (down to -2 m and back),
+  `a_sprite_comes_back_on_homes_floor`, `chases_in_3d_are_deterministic`,
+  `other_scenes_keep_bodies_at_zero`; in `save`,
+  `a_volume_scene_keeps_haulers_and_threats_heights`;
+  `combat_tests::threat_size_is_pinned` at 224 bytes.
+  Not done, for later M8 tasks: buildings, depots and sites have no floor
+  (the top floor is assumed: M8.3/M8.6 must give an underground lantern's
+  site one, and its deliveries a goal floor); the dawn dispels ghouls on
+  every floor (M8.7: underground is dark); impaled bodies (`Pinned`) and
+  the test walker are as before (no height; the walker steers round no
+  one); a towing hauler plans for its body only in 3D; miners' targets and
+  pit digs are 2D (M8.4); pile reach is still 2D ("Pile reach in 3D").
 
 ### M8.1 Bounded 3D paths
 

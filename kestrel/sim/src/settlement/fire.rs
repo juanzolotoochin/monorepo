@@ -127,14 +127,23 @@ impl Settlement {
 
     /// Stage 5, after the shots: fireballs land, fires burn out, threats in
     /// a fire catch or keep burning, and burning threats take their hits.
-    pub(crate) fn burn(&mut self, tick: u64) {
+    /// In a volume scene (M8.2) fire burns on the top floor where it
+    /// lands (a fireball comes down from the sky): only threats on that
+    /// floor are hit or catch fire, not those in a tunnel under it.
+    pub(crate) fn burn(&mut self, tick: u64, terrain: &crate::terrain::Terrain) {
         if self.fireballs.is_empty() && self.fires.is_empty() && self.threats.iter().all(|t| t.burn.is_none()) {
             return;
         }
         let (landed, flying): (Vec<_>, Vec<_>) = std::mem::take(&mut self.fireballs).into_iter().partition(|f| f.arrival <= tick);
         self.fireballs = flying;
         for f in landed {
-            let hit: Vec<u64> = self.threats.iter().filter(|t| distance(t.position, f.to) <= f.def.radius).map(|t| t.id).collect();
+            let floor = terrain.height(f.to);
+            let hit: Vec<u64> = self
+                .threats
+                .iter()
+                .filter(|t| distance(t.position, f.to) <= f.def.radius && super::combat::same_floor(terrain, t.height, floor))
+                .map(|t| t.id)
+                .collect();
             for id in hit {
                 self.fire_hit(id, f.def.damage);
             }
@@ -149,7 +158,7 @@ impl Settlement {
         let mut dispelled = Vec::new();
         for t in &mut self.threats {
             // The newest fire it stands in sets the burn.
-            if let Some(fire) = fires.iter().rev().find(|p| p.covers(t.position)) {
+            if let Some(fire) = fires.iter().rev().find(|p| p.covers(t.position) && super::combat::same_floor(terrain, t.height, terrain.height(p.position))) {
                 let until = tick + fire.burn.linger;
                 match &mut t.burn {
                     Some(burn) if burn.dawn => {}

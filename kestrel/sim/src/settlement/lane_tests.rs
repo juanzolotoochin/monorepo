@@ -297,6 +297,9 @@ fn a_miner_flees_a_ghoul_home_and_goes_back_to_work() {
         burn: None,
         goal: Goal::Tree,
         stranded: false,
+        height: Default::default(),
+        chase: Vec::new(),
+        backoff: Default::default(),
     });
     for _ in 0..2 * HZ {
         step(&mut sim, &[]);

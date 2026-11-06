@@ -72,6 +72,9 @@ pub(super) struct Danger {
     pub position: FxVec2,
     pub detect: Fx,
     pub quarry: Option<AgentIx>,
+    /// Its feet (`Threat::height`): in a volume scene one on another floor
+    /// alarms only the sprite it chases (M8.2).
+    pub height: Fx,
 }
 
 /// How the enemies about stand to a sprite.
@@ -91,9 +94,9 @@ pub(super) enum Alarm {
 /// The alarm for sprite `me` at `body`, from `danger`. Only scenes with a
 /// hill (the Sacred Tree's) have somewhere to flee to; elsewhere sprites
 /// stay calm, as they were.
-fn alarm(me: AgentIx, body: &Body, terrain: &Terrain, danger: &[Danger]) -> Alarm {
+fn alarm(me: AgentIx, body: &Body, height: Fx, terrain: &Terrain, danger: &[Danger]) -> Alarm {
     let Some(hill) = terrain.mine.and_then(|m| m.hill) else { return Alarm::Calm };
-    let near = |d: &Danger, reach: Fx| d.quarry == Some(me) || distance(body.position, d.position) <= reach;
+    let near = |d: &Danger, reach: Fx| d.quarry == Some(me) || (distance(body.position, d.position) <= reach && super::combat::same_floor(terrain, d.height, height));
     if !hill.on_plateau(Terrain::pit_tile(body.position)) && danger.iter().any(|d| near(d, d.detect)) {
         Alarm::Threatened
     } else if danger.iter().any(|d| near(d, d.detect.mul_int(CALM_DETECTS))) {
@@ -231,6 +234,10 @@ pub struct SpriteState {
     /// sprites stand on `Terrain::ground`.
     #[serde(default)]
     pub height: Fx,
+    /// When it may ask for a route again after one that found no way, in a
+    /// volume scene (M8.2); never written elsewhere.
+    #[serde(default)]
+    pub backoff: super::Backoff,
 }
 
 impl SpriteState {
@@ -508,7 +515,14 @@ impl Walker for SpriteState {
     }
 
     fn route_to(&self, body: &Body, terrain: &Terrain, to: FxVec2, extra: &[Disc]) -> Vec<FxVec2> {
+        if terrain.volume.is_some() {
+            return haulers::route_at(terrain, body.position, self.height, to, None, body.base_radius, extra);
+        }
         nav::path_avoiding(terrain, body.position, to, body.base_radius, extra)
+    }
+
+    fn height(&mut self) -> &mut Fx {
+        &mut self.height
     }
 
     fn travel_heading(&mut self) -> &mut Fx {
@@ -533,9 +547,21 @@ impl Walker for SpriteState {
 }
 
 /// Applies an action to a sprite (see `action::act`): `GoTo` plans a route.
-/// Only the sprite brain drives sprites.
-pub(super) fn act(body: &mut Body, sprite: &SpriteState, action: &Action, view: &View) {
+/// Only the sprite brain drives sprites. In a volume scene (M8.2) the route
+/// is a 3D path, to the floor of the pile it picks up from next if it does
+/// (`Pile::height`), else to whichever floor it reaches first; one that
+/// finds no way backs its next ask off (`SpriteState::backoff`).
+pub(super) fn act(body: &mut Body, sprite: &mut SpriteState, action: &Action, view: &View) {
     match action {
+        Action::Move(Intent::GoTo { target, .. }) if view.terrain.volume.is_some() => {
+            let floor = match sprite.plan.get(sprite.step as usize + 1) {
+                Some(Step::Pickup(pile)) => view.piles.and_then(|lab| lab.piles.get(pile)).map(|p| p.height),
+                _ => None,
+            };
+            body.route = haulers::route_at(view.terrain, body.position, sprite.height, *target, floor, body.base_radius, &[]);
+            sprite.backoff.planned(view.tick, !body.route.is_empty(), 0);
+            sprite.retry_at = sprite.retry_at.max(sprite.backoff.at);
+        }
         Action::Move(Intent::GoTo { target, .. }) => body.route = sprite.route_to(body, view.terrain, *target, &[]),
         _ => debug_assert!(false, "sprites only go to points: {action:?}"),
     }
@@ -568,7 +594,7 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
         return;
     }
     let view = View { me, ..ctx.view };
-    let town = Town { claims: ctx.dig_claims, stone: ctx.stone, mine: def.sprite.and_then(|s| s.mine), alarm: alarm(me, &a.body, ctx.terrain, ctx.danger) };
+    let town = Town { claims: ctx.dig_claims, stone: ctx.stone, mine: def.sprite.and_then(|s| s.mine), alarm: alarm(me, &a.body, a.height(), ctx.terrain, ctx.danger) };
     if let Some(action) = think(a, &view, &town) {
         // A sprite's actions only move it: nothing for the world.
         let mut out = ActionMessages::default();
@@ -647,7 +673,7 @@ impl Settlement {
             .iter()
             .filter_map(|t| {
                 let chase = self.threat_def(t).chase?;
-                Some(Danger { position: t.position, detect: chase.detect, quarry: t.goal.agent() })
+                Some(Danger { position: t.position, detect: chase.detect, quarry: t.goal.agent(), height: t.height })
             })
             .collect()
     }
@@ -747,8 +773,9 @@ impl Settlement {
     /// Housekeeping: dead sprites whose time is up come back at home, the
     /// spot beside the tree they started on, with full health and their
     /// job. Their plan is empty, so the brain plans for the job on their
-    /// next step (D2).
-    pub(crate) fn sprite_housekeeping(&mut self, tick: u64) {
+    /// next step (D2). In a volume scene they stand on home's floor, as at
+    /// the start (`follow::start_height`, M8.2).
+    pub(crate) fn sprite_housekeeping(&mut self, tick: u64, terrain: &Terrain) {
         for i in 0..self.agents.len() {
             let AgentState { body, role: Role::Sprite(sprite), .. } = &mut self.agents[i] else { continue };
             if body.alive() || tick < sprite.respawn_at {
@@ -757,6 +784,10 @@ impl Settlement {
             body.position = body.home;
             body.health = body.max_health;
             body.route.clear();
+            if terrain.volume.is_some() {
+                sprite.height = super::follow::start_height(terrain, body.home, body.base_radius);
+                sprite.backoff = super::Backoff::default();
+            }
             sprite.respawn_at = 0;
             sprite.plan.clear();
             sprite.step = 0;

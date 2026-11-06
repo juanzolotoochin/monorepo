@@ -53,6 +53,7 @@ pub use agent::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
 pub use avatar::Seat;
 pub use chase::{Goal, Quarry};
 pub use clock::{Clock, TimeOfDay};
+pub use follow::Backoff;
 pub use fire::{Burn, BurnDef, FireballDef, FirePatch, Fireball};
 pub use buildings::{Ability, BuildingIx, BuildingKind, BuildingKindIx, BuildingState, BurstRefusal, Defence, FireRefusal, Occupant, PlacementRefusal, Slot, Stage, Turret};
 pub use haulers::{HaulerState, Phase};
@@ -647,10 +648,15 @@ impl Settlement {
                 avatar.height = floor.map_or(settlement.spawn_height, |floor| floor.max(settlement.spawn_height));
             }
         }
-        // Sprites stand on a volume's floors (V.7), from the ground's.
+        // Sprites (V.7) and haulers (M8.2) stand on a volume's floors, from
+        // the ground's.
         for a in &mut settlement.agents {
-            let AgentState { body, role: Role::Sprite(sprite), .. } = a else { continue };
-            sprite.height = follow::start_height(terrain, body.position, body.base_radius);
+            let AgentState { body, role, .. } = a;
+            match role {
+                Role::Sprite(sprite) => sprite.height = follow::start_height(terrain, body.position, body.base_radius),
+                Role::Hauler(hauler) => hauler.height = follow::start_height(terrain, body.position, body.base_radius),
+                Role::Avatar(_) => {}
+            }
         }
         if let Some(p) = &setup.piles {
             // A pile's mineral is what it holds: one set up empty would
@@ -1085,13 +1091,20 @@ impl Settlement {
                 (&d.id, d.position, i.capacity, &i.counts, &i.reserved_out, &i.reserved_in)
             })
             .collect();
+        // Projectiles as they hashed before their floor (M8.2): the same
+        // fields in order encode the same.
+        let projectiles: Vec<_> = self
+            .projectiles
+            .iter()
+            .map(|p| (p.id, p.defender, p.target, p.item, p.from, p.launch_height, p.to, p.born, p.arrival, p.damage, p.kind))
+            .collect();
         let observed = (
             agents,
             avatars,
             threats,
             spawned,
             depots,
-            &self.projectiles,
+            &projectiles,
             &self.pinned,
             &self.transfers,
             &self.metrics,
@@ -1132,6 +1145,18 @@ impl Settlement {
         if heights.iter().any(|&h| h != Fx::ZERO) {
             bytes.extend(postcard::to_allocvec(&heights).expect("heights encode"));
         }
+        // And haulers', threats' and arrows' floors likewise (M8.2).
+        let floors: Vec<Fx> = self
+            .agents
+            .iter()
+            .filter_map(AgentState::hauler)
+            .map(|h| h.height)
+            .chain(self.threats.iter().map(|t| t.height))
+            .chain(self.projectiles.iter().map(|p| p.floor))
+            .collect();
+        if floors.iter().any(|&h| h != Fx::ZERO) {
+            bytes.extend(postcard::to_allocvec(&floors).expect("floors encode"));
+        }
         bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, &byte| (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3))
     }
 }
@@ -1167,6 +1192,8 @@ mod dig_tests;
 mod construction_tests;
 #[cfg(test)]
 mod fire_tests;
+#[cfg(test)]
+mod floors_tests;
 #[cfg(test)]
 mod health_tests;
 #[cfg(test)]

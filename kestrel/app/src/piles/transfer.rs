@@ -75,14 +75,15 @@ pub fn spawn_tosses(
                 let Some(body) = body(agent) else { continue };
                 body.transform_point(backpack_slot(slot))
             }
-            TossEnd::Pit { position } => dug_floor.map_or_else(|| ground(position), |h| mirror.to_view(position).with_y(h)) + Vec3::Y * 0.2,
+            // In a volume, from the floor the dig cleared down to (M8.2).
+            TossEnd::Pit { position, height } => volume.then(|| mirror.to_view(position).with_y(height.to_f32())).or_else(|| dug_floor.map(|h| mirror.to_view(position).with_y(h))).unwrap_or_else(|| ground(position)) + Vec3::Y * 0.2,
             TossEnd::Collector { position } => ground(position) + Vec3::Y * 1.6,
         };
         let destination = match *to {
             TossEnd::Pile { id, slot, .. } => Destination::Pile(id, slot),
             TossEnd::Cargo { agent, slot } => Destination::Cargo(agent, slot),
             TossEnd::Collector { position } => Destination::Collector(ground(position) + Vec3::Y * 1.6),
-            TossEnd::Pit { position } => Destination::Collector(ground(position)),
+            TossEnd::Pit { position, .. } => Destination::Collector(ground(position)),
         };
         commands.spawn((
             LabEntity,

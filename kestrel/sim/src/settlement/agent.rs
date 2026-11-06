@@ -300,6 +300,18 @@ impl AgentState {
         }
     }
 
+    /// Its feet's height: an avatar's (`AvatarState::height`), a sprite's
+    /// or a hauler's (`SpriteState::height`, `HaulerState::height`): the
+    /// floor it stands on in a volume scene (M8.2). Zero for sprites and
+    /// haulers elsewhere.
+    pub fn height(&self) -> Fx {
+        match &self.role {
+            Role::Avatar(avatar) => avatar.height,
+            Role::Sprite(sprite) => sprite.height,
+            Role::Hauler(hauler) => hauler.height,
+        }
+    }
+
     /// The dig under way: an elder's or a miner's. What the app draws a
     /// dig bar and dust for.
     pub fn digging(&self) -> Option<&super::avatar::Dig> {

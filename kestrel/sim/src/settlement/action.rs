@@ -160,8 +160,8 @@ impl Action {
 pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &CharacterDef, out: &mut ActionMessages) {
     match a.role {
         Role::Avatar(_) => avatar::act(a, action, view, def, out),
-        Role::Hauler(ref hauler) => haulers::act(&mut a.body, hauler, action, view),
-        Role::Sprite(ref sprite) => sprites::act(&mut a.body, sprite, action, view),
+        Role::Hauler(ref mut hauler) => haulers::act(&mut a.body, hauler, action, view),
+        Role::Sprite(ref mut sprite) => sprites::act(&mut a.body, sprite, action, view),
     }
 }
 

@@ -928,7 +928,7 @@ impl World {
             for message in messages.building_fire {
                 settlement.building_fire(tick, message);
             }
-            settlement.burn(tick);
+            settlement.burn(tick, &self.terrain);
             settlement.threat_goals(messages.threat_goal, &self.terrain);
             settlement.claim_slots(messages.claim_slot);
             settlement.enter_slots(messages.enter_slot);
@@ -955,7 +955,7 @@ impl World {
             settlement.combat_housekeeping(self.tick, &self.terrain);
             settlement.avatar_housekeeping(self.tick);
             settlement.seat_housekeeping(&self.terrain);
-            settlement.sprite_housekeeping(self.tick);
+            settlement.sprite_housekeeping(self.tick, &self.terrain);
             settlement.dig_housekeeping(self.tick, &mut self.terrain);
             settlement.pile_housekeeping(self.tick);
             settlement.memory_housekeeping(&mut self.terrain);

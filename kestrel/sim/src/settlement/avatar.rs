@@ -21,7 +21,7 @@ use super::action::{Action, View};
 use super::buildings::BurstRefusal;
 use super::interact::{self, Interaction};
 use super::{AgentIx, DepotState, InventoryRef, ItemIx, Kinds, Settlement};
-use crate::messages::{ActionMessages, BundleRefused, Burst, BurstRefused, CarryUnit, DropBundle, DropHaul, ElderFire, DropNotes, Install, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
+use crate::messages::{ActionMessages, BundleRefused, Burst, BurstRefused, CarryUnit, DropBundle, DropHaul, ElderFire, DropNotes, HaulStart, Install, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
 use crate::nav::{self, angle_between, distance};
 use crate::terrain::{Terrain, LAYER};
 use crate::volume::{DigDirection, BODY_HEIGHT};
@@ -574,7 +574,20 @@ impl Settlement {
         }
         self.act_agent(tick, me, action, terrain, out);
         for StartHaul { agent, start } in std::mem::take(&mut out.haul) {
-            self.piles.as_mut().expect("a haul starts only in the pile lab").start_haul(agent, start);
+            // A drop's new pile lies on the dropper's floor in a volume
+            // scene (M8.2), as a dropped bundle's does.
+            let dropped = match &start {
+                HaulStart::Replaced { start: Ok((walk, job)), .. } if terrain.volume.is_some() && walk.action.drop_position().is_some() => Some((walk.center, job.other)),
+                _ => None,
+            };
+            let lab = self.piles.as_mut().expect("a haul starts only in the pile lab");
+            lab.start_haul(agent, start);
+            if let Some((center, InventoryRef::Pile(id))) = dropped {
+                let feet = self.agents[agent as usize].height();
+                if let Some(pile) = lab.piles.get_mut(&id) {
+                    pile.height = terrain.footprint_near(center, feet, Fx::ZERO).unwrap_or(feet);
+                }
+            }
         }
     }
 
@@ -751,7 +764,8 @@ impl Settlement {
             self.accounts[item as usize].generated += units as u64;
             let Some(material) = ore else { continue };
             let position = lab.piles[&id].position;
-            let from = TossEnd::Pit { position: Terrain::pit_center(tile) };
+            // From the floor the dig cleared down to (M8.2).
+            let from = TossEnd::Pit { position: Terrain::pit_center(tile), height: crate::volume::height(bottom) };
             for slot in first..first + units {
                 self.events.push(Event::PileToss { material, from, to: TossEnd::Pile { id, slot, position }, ticks: ORE_FLIGHT_TICKS });
             }
@@ -773,7 +787,7 @@ impl Settlement {
                 continue;
             }
             let position = lab.piles[&id].position;
-            let from = TossEnd::Pit { position: Terrain::pit_center(tile) };
+            let from = TossEnd::Pit { position: Terrain::pit_center(tile), height: terrain.height(Terrain::pit_center(tile)) };
             for slot in first..first + units {
                 self.events.push(Event::PileToss { material, from, to: TossEnd::Pile { id, slot, position }, ticks: ORE_FLIGHT_TICKS });
             }
@@ -1294,12 +1308,17 @@ fn set_intent(body: &mut Body, avatar: &mut AvatarState, intent: Intent, terrain
         let flying = avatar.flight.requested || avatar.flight.airborne;
         let radius = def.body.radius;
         let walkable = |p: FxVec2, q: FxVec2| flying || terrain.walkable(p, q, radius);
-        body.route = if terrain.volume.is_some() && !flying {
-            // On foot in a volume (V.7): a 3D path from the floor it stands
-            // on to whichever floor at the target it reaches first.
-            nav::path_at(terrain, body.position, avatar.height, target, None, radius, &[]).into_iter().map(|(p, _)| p).collect()
-        } else {
-            nav::path_with(terrain, body.position, target, radius, &[], &walkable)
+        // In a volume (V.7): a 3D path from the floor it stands on (the
+        // one under it, flying) to whichever floor at the target it
+        // reaches first. With the jetpack (M8.2) it flies over that path,
+        // so it comes down on the target's floor, not on the mountain over
+        // a tunnel; with no path on foot, straight there as elsewhere.
+        let floor = if flying { terrain.footprint_at(body.position, avatar.height, radius).unwrap_or(avatar.flight.support) } else { avatar.height };
+        let path = || nav::path_at(terrain, body.position, floor, target, None, radius, &[]).into_iter().map(|(p, _)| p).collect::<Vec<_>>();
+        body.route = match terrain.volume {
+            Some(_) if !flying => path(),
+            Some(_) => Some(path()).filter(|route| !route.is_empty()).unwrap_or_else(|| nav::path_with(terrain, body.position, target, radius, &[], &walkable)),
+            None => nav::path_with(terrain, body.position, target, radius, &[], &walkable),
         };
         avatar.run = run;
     } else if let Intent::Walk { run, .. } = intent {

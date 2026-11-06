@@ -338,8 +338,10 @@ pub struct AgentState {
     pub phase: String,
     pub cargo: Inventory,
     pub trailer: Option<Trailer>,
-    /// A sprite's feet height (`SpriteState::height`), interpolated: the
-    /// floor it stands on in a volume scene (V.7), 0 elsewhere.
+    /// A sprite's or hauler's feet height (`AgentState::height`),
+    /// interpolated: the floor it stands on in a volume scene (V.7, M8.2).
+    /// A sprite's always; a hauler's only while it (or the tick before) is
+    /// off 0 m, so traces of other scenes stay as they were.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub feet: Option<f32>,
 }
@@ -501,6 +503,11 @@ pub struct Threat {
     /// none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attacking: Option<usize>,
+    /// Its feet height (`sim::settlement::Threat::height`), interpolated,
+    /// while it or the tick before is off 0 m: the floor it walks on in a
+    /// volume scene (M8.2). Left out of traces when none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feet: Option<f32>,
 }
 
 /// A possessed ballista's fireball in flight (`sim::settlement::Fireball`).
@@ -855,6 +862,14 @@ impl Simulation {
             capacity,
             items: units.iter().enumerate().filter(|(_, &n)| n > 0).map(|(i, &n)| (current.items[i].clone(), n)).collect(),
         };
+        // A body's feet between the ticks (V.7, M8.2), if `drawn`: always
+        // when `always` (a sprite's), else only while off 0 m.
+        let feet = |drawn: bool, always: bool, now: Fx, then: Option<Fx>| -> Option<f32> {
+            (drawn && (always || now != Fx::ZERO || then.is_some_and(|h| h != Fx::ZERO))).then(|| {
+                let now = now.to_f32();
+                then.map_or(now, |b| b.to_f32() + (now - b.to_f32()) * alpha)
+            })
+        };
         let agents = current
             .agents
             .iter()
@@ -880,10 +895,7 @@ impl Simulation {
                     // pile view.
                     cargo: inventory(current.depot_cargo(a), a.carry.inventory.capacity),
                     trailer,
-                    feet: a.sprite().map(|s| {
-                        let now = s.height.to_f32();
-                        before.and_then(|b| b.sprite()).map_or(now, |b| b.height.to_f32() + (now - b.height.to_f32()) * alpha)
-                    }),
+                    feet: feet(a.avatar().is_none(), a.sprite().is_some(), a.height(), before.map(s::AgentState::height)),
                 };
                 (a.id.clone(), state)
             })
@@ -892,6 +904,7 @@ impl Simulation {
             .threats
             .iter()
             .map(|t| {
+                let feet = feet(true, false, t.height, previous.and_then(|p| p.threat(t.id)).map(|b| b.height));
                 let before = previous.and_then(|p| p.threat(t.id));
                 let attack = current.characters[t.character as usize].attack;
                 // Positions are drawn between the previous tick and this one,
@@ -925,6 +938,7 @@ impl Simulation {
                     burning: t.burn.is_some(),
                     chasing: t.goal.agent().map(agent_name),
                     attacking: t.goal.building().map(|b| b as usize),
+                    feet,
                 };
                 (t.id, threat)
             })

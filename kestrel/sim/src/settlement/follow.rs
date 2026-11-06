@@ -19,6 +19,7 @@
 //! Tunnel Lab has no one else.
 
 use fx::{Fx, FxVec2};
+use serde::{Deserialize, Serialize};
 
 use super::haulers::Ctx;
 use super::sprites::SpriteState;
@@ -37,6 +38,45 @@ pub const KEEP: Fx = Fx::from_bits(2 << 32);
 /// How far apart in height the player and it may be and still be on one
 /// floor: floors in a column are more than this apart.
 const SAME_FLOOR: Fx = Fx::ONE;
+
+/// The most a body's failed plans double its wait (M8.2): after the third
+/// in a row it waits `FAILED_REPLAN_TICKS` four times over, 8 s.
+const MAX_DOUBLINGS: u8 = 2;
+
+/// When a body in a volume scene may plan again, and how many plans in a
+/// row didn't reach their goal (M8.2): haulers, sprites on errands and
+/// chasing threats keep one. A plan that reaches waits what its caller
+/// says; one that doesn't waits `FAILED_REPLAN_TICKS`, doubled for each
+/// failure before it in a row (up to `MAX_DOUBLINGS`), since a plan to a
+/// goal on a big floor it can't reach costs up to `nav::PATH_BUDGET`
+/// nodes. Never written outside volume scenes, where it stays zero.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Backoff {
+    /// The tick from which it may plan again.
+    pub at: u64,
+    /// Plans in a row that didn't reach.
+    pub failures: u8,
+}
+
+impl Backoff {
+    /// Whether it may plan on `tick`.
+    pub fn due(&self, tick: u64) -> bool {
+        tick >= self.at
+    }
+
+    /// A plan was made on `tick`: one that `reached` waits `wait` ticks
+    /// and clears the failures; one that didn't counts one more and waits
+    /// for it.
+    pub fn planned(&mut self, tick: u64, reached: bool, wait: u64) {
+        if reached {
+            self.failures = 0;
+            self.at = tick + wait;
+        } else {
+            self.at = tick + (FAILED_REPLAN_TICKS << self.failures.min(MAX_DOUBLINGS));
+            self.failures = self.failures.saturating_add(1);
+        }
+    }
+}
 
 /// Stage 2 for the walker: plan when due, then walk a step of `step`
 /// meters along the route.

@@ -1053,8 +1053,11 @@ impl Settlement {
     /// and other piles, clear of docks, output piles and slot spots). With
     /// none, onto the nearest pile of that item with room, or else at the
     /// first spot anyway: the units are never lost. Nothing reserves a
-    /// spilled pile, so it is picked up like any other.
+    /// spilled pile, so it is picked up like any other. In a volume scene a
+    /// new pile lies on the building's floor, the top one at its middle
+    /// (M8.2).
     pub(super) fn spill(&mut self, item: ItemIx, units: u32, center: FxVec2, radius: Fx, terrain: &Terrain) {
+        let floor = terrain.volume.as_ref().map(|_| terrain.height(center));
         let docks: Vec<FxVec2> = self.depots.iter().map(|d| d.position).collect();
         let spots: Vec<FxVec2> = self.buildings.iter().flat_map(|b| [b.output_position, b.slot_position(&self.building_kinds[b.kind as usize])]).collect();
         let lab = self.piles.as_mut().expect("a town has ground piles");
@@ -1066,8 +1069,14 @@ impl Settlement {
         };
         let ring = |gap: Fx, k: i32| center + nav::heading_vector((Fx::PI + Fx::PI).mul_int(k as i64).div_int(SPILL_SPOTS as i64)) * (radius + size + gap);
         let spot = SPILL_RINGS.iter().flat_map(|&gap| (0..SPILL_SPOTS).map(move |k| (gap, k))).map(|(gap, k)| ring(gap, k)).find(|&spot| fits(lab, spot));
+        let lie = |lab: &mut PileLab, id: PileId, spot: FxVec2| {
+            if let Some(floor) = floor {
+                lab.piles.get_mut(&id).expect("just made").height = terrain.footprint_near(spot, floor, Fx::ZERO).unwrap_or(floor);
+            }
+        };
         if let Some(spot) = spot {
-            lab.insert(item, spot, units, None);
+            let id = lab.insert(item, spot, units, None);
+            lie(lab, id, spot);
             return;
         }
         let merge = lab
@@ -1082,7 +1091,9 @@ impl Settlement {
                 debug_assert!(added, "the pile had room");
             }
             None => {
-                lab.insert(item, ring(SPILL_RINGS[0], 0), units, None);
+                let spot = ring(SPILL_RINGS[0], 0);
+                let id = lab.insert(item, spot, units, None);
+                lie(lab, id, spot);
             }
         }
     }

@@ -29,6 +29,19 @@
 //! Characters without a `chase` never send a message, so other scenes'
 //! enemies behave as they did.
 //!
+//! **Floors (M8.2):** in a volume scene a threat has a feet height
+//! (`Threat::height`) and walks on foot (`Terrain::walk_at`). It spots a
+//! quarry it sees in 3D (`sees_at`: a line from eye to eye through no
+//! rock) within its detect radius, and keeps it within the leash, both in
+//! 3D; it needn't see it to keep it, since it doesn't walk straight at it.
+//! It walks straight at its quarry while both are on one floor and the walk
+//! is clear, as elsewhere; otherwise it follows a 3D path
+//! (`nav::path_toward_at`, `Threat::chase`), planned again every
+//! `follow::REPLAN_TICKS`. A quarry it can't reach (up a cliff, on a floor
+//! over it) it walks as close to as it gets and waits there, planning
+//! again after `Threat::backoff`'s wait, which doubles while it can't. Its
+//! route home is a 3D path too (`route_home_at`).
+//!
 //! **Routes and the ground (M6.7):** a route is planned for the ground as
 //! it was. A blueprint going down replans every route (`replan_routes`); a
 //! dig replans the routes that pass near it (`reroute_round`). With no
@@ -112,6 +125,129 @@ pub(super) fn in_sight(terrain: &Terrain, from: FxVec2, to: FxVec2, stop: Fx) ->
     terrain.clear(from, to, SIGHT) && walk_clear(terrain, from, approach(from, to, stop))
 }
 
+/// How high over a body's feet its eyes are, for a threat's sight in a
+/// volume (`sees_at`).
+const EYE: Fx = Fx::from_ratio(3, 2);
+
+/// Whether a threat whose feet are at `from_z` over `from` sees a body
+/// whose feet are at `to_z` over `to`, in a volume scene: a thin line of
+/// sight past the obstacles, and a line from eye to eye that goes through
+/// no solid cell, sampled every 0.25 m. Elsewhere [`Terrain::clear`].
+pub fn sees_at(terrain: &Terrain, from: FxVec2, from_z: Fx, to: FxVec2, to_z: Fx) -> bool {
+    if !terrain.clear(from, to, SIGHT) {
+        return false;
+    }
+    let Some(volume) = &terrain.volume else { return true };
+    let (a, b) = (from_z + EYE, to_z + EYE);
+    let steps = (distance_at(from, a, to, b) / Fx::from_ratio(1, 4)).ceil().floor_to_int().max(1);
+    (1..steps).all(|i| {
+        let f = Fx::from_ratio(i, steps);
+        let p = from + (to - from) * f;
+        !volume.is_solid(Terrain::pit_tile(p), crate::volume::layer_at(a + (b - a) * f))
+    })
+}
+
+/// The distance in 3D from `a`, at height `az`, to `b`, at height `bz`.
+pub fn distance_at(a: FxVec2, az: Fx, b: FxVec2, bz: Fx) -> Fx {
+    let (flat, up) = (distance(a, b), bz - az);
+    (flat * flat + up * up).sqrt()
+}
+
+/// Walks `position`, its feet at `height`, along `route` by up to `step`
+/// meters on foot in a volume scene, waypoint by waypoint, each step a
+/// straight walk (`Terrain::walk_at`) its feet follow, consuming the
+/// waypoints it reaches. Returns false if the ground refused a step: the
+/// route went stale (a dig), and it stopped short.
+pub(super) fn walk_route_at(position: &mut FxVec2, height: &mut Fx, route: &mut Vec<FxVec2>, step: Fx, terrain: &Terrain) -> bool {
+    let mut left = step;
+    while left > Fx::ZERO {
+        let Some(&target) = route.first() else { return true };
+        let gap = distance(*position, target);
+        let next = if gap <= left { target } else { *position + (target - *position) * (left / gap) };
+        let Some(feet) = terrain.walk_at(*position, next, *height, WALK_CLEARANCE) else {
+            // A step can clip a wall's corner the path's 0.1 m samples
+            // skipped: slide along it (its x or y alone), as the walker
+            // does (`follow`), and go on next tick.
+            let d = next - *position;
+            let slid = [FxVec2::new(d.x, Fx::ZERO), FxVec2::new(Fx::ZERO, d.y)]
+                .into_iter()
+                .filter(|&s| s != FxVec2::ZERO)
+                .find_map(|s| terrain.walk_at(*position, *position + s, *height, WALK_CLEARANCE).map(|z| (*position + s, z)));
+            let Some((p, z)) = slid else { return false };
+            *position = p;
+            *height = z;
+            return true;
+        };
+        *position = next;
+        *height = feet;
+        if next == target {
+            route.remove(0);
+        }
+        left -= gap.min(left);
+    }
+    true
+}
+
+/// Stage 2 for a chaser in a volume scene (M8.2): a step of at most `step`
+/// meters toward its quarry at `to`, feet at `feet`, stopping `stop` short
+/// of it on its floor. Straight at it while both are on one floor
+/// (`combat::FLOOR_REACH`) and the walk there is clear, as `steer` does;
+/// else along its 3D path (`Threat::chase`), planned again when its
+/// backoff allows: every `follow::REPLAN_TICKS`, or, after a plan that
+/// didn't reach, longer (meanwhile it waits at the path's end, as close as
+/// it gets).
+pub(super) fn chase_at(t: &mut Threat, to: FxVec2, feet: Fx, stop: Fx, step: Fx, tick: u64, terrain: &Terrain) {
+    let same = (feet - t.height).abs() <= super::combat::FLOOR_REACH;
+    let gap = distance(t.position, to);
+    if same && gap <= stop {
+        t.chase.clear();
+        return;
+    }
+    let straight = || terrain.clear(t.position, to, WALK_CLEARANCE) && terrain.walk_at(t.position, approach(t.position, to, stop), t.height, WALK_CLEARANCE).is_some();
+    if same && straight() {
+        let next = t.position + (to - t.position) * (step.min(gap - stop) / gap);
+        if let Some(z) = terrain.walk_at(t.position, next, t.height, WALK_CLEARANCE) {
+            t.chase.clear();
+            t.position = next;
+            t.height = z;
+            return;
+        }
+        // The step clips a corner the straight line's samples skipped:
+        // take the path.
+    }
+    if t.backoff.due(tick) {
+        let plan = nav::path_toward_at(terrain, t.position, t.height, to, Some(feet), WALK_CLEARANCE, &[]);
+        t.backoff.planned(tick, plan.reached, super::follow::REPLAN_TICKS);
+        t.chase = plan.route.into_iter().map(|(p, _)| p).collect();
+    }
+    if !walk_route_at(&mut t.position, &mut t.height, &mut t.chase, step, terrain) {
+        // Stale: plan again next tick, unless a failed plan's wait runs.
+        t.chase.clear();
+        if t.backoff.failures == 0 {
+            t.backoff.at = t.backoff.at.min(tick + 1);
+        }
+    }
+}
+
+/// [`route_home`] in a volume scene (M8.2): a 3D path from `from`, feet at
+/// `z`, to `target` on its top floor (`nav::path_toward_at`), or as close
+/// as it gets, and whether it gets there.
+pub(super) fn route_home_at(terrain: &Terrain, from: FxVec2, z: Fx, target: FxVec2) -> (Vec<FxVec2>, bool) {
+    let plan = nav::path_toward_at(terrain, from, z, target, Some(terrain.height(target)), WALK_CLEARANCE, &[]);
+    (plan.route.into_iter().map(|(p, _)| p).collect(), plan.reached)
+}
+
+/// Where a threat set down at `position` puts its feet: in a volume scene
+/// the top floor there, the surface its wave walks in on (M8.2); zero
+/// elsewhere.
+pub(super) fn surface_feet(terrain: &Terrain, position: FxVec2) -> Fx {
+    if terrain.volume.is_none() {
+        return Fx::ZERO;
+    }
+    let top = terrain.height(position);
+    terrain.footprint_near(position, top, WALK_CLEARANCE).unwrap_or(top)
+}
+
 /// Whether a threat can walk straight from `a` to `b`: clear of the
 /// terrain and, in sloped scenes, on walkable ground.
 pub(super) fn walk_clear(terrain: &Terrain, a: FxVec2, b: FxVec2) -> bool {
@@ -179,6 +315,10 @@ impl Settlement {
     /// leash and in sight.
     fn keeps(&self, t: &Threat, agent: AgentIx, def: &ChaseDef, stop: Fx, terrain: &Terrain) -> bool {
         let Some(a) = self.agents.get(agent as usize) else { return false };
+        if terrain.volume.is_some() {
+            // It follows a path, so it needn't see it (M8.2).
+            return self.chaseable(a) && distance_at(t.position, t.height, a.body.position, a.height()) <= def.leash;
+        }
         self.chaseable(a) && distance(t.position, a.body.position) <= def.leash && in_sight(terrain, t.position, a.body.position, stop)
     }
 
@@ -189,10 +329,18 @@ impl Settlement {
             .iter()
             .enumerate()
             .filter(|(_, a)| self.chaseable(a))
-            .map(|(i, a)| (distance(t.position, a.body.position), i, a.body.position))
-            .filter(|&(gap, _, at)| gap <= def.detect && in_sight(terrain, t.position, at, stop))
-            .min_by_key(|&(gap, i, _)| (gap, i))
-            .map(|(_, i, _)| i as AgentIx)
+            .filter_map(|(i, a)| {
+                let (at, z) = (a.body.position, a.height());
+                if terrain.volume.is_some() {
+                    // Seen in 3D, on any floor (M8.2): it paths there.
+                    let gap = distance_at(t.position, t.height, at, z);
+                    return (gap <= def.detect && sees_at(terrain, t.position, t.height, at, z)).then_some((gap, i));
+                }
+                let gap = distance(t.position, at);
+                (gap <= def.detect && in_sight(terrain, t.position, at, stop)).then_some((gap, i))
+            })
+            .min_by_key(|&(gap, i)| (gap, i))
+            .map(|(_, i)| i as AgentIx)
     }
 
     /// Whether building `b` has something an enemy's swing can take (B8):
@@ -208,8 +356,14 @@ impl Settlement {
 
     /// Whether threat `t` still attacks building `b`: something to lose,
     /// and its edge within the leash.
-    fn keeps_building(&self, t: &Threat, b: BuildingIx, def: &ChaseDef) -> bool {
-        self.breakable(b) && self.building_gap(t.position, b) <= def.leash
+    fn keeps_building(&self, t: &Threat, b: BuildingIx, def: &ChaseDef, terrain: &Terrain) -> bool {
+        self.breakable(b) && self.building_gap(t.position, b) <= def.leash && self.on_building_floor(t, b, terrain)
+    }
+
+    /// Whether threat `t` is on the floor building `b` stands on, the top
+    /// one at its middle, in a volume scene (M8.2); always elsewhere.
+    pub(super) fn on_building_floor(&self, t: &Threat, b: BuildingIx, terrain: &Terrain) -> bool {
+        terrain.volume.is_none() || (terrain.height(self.buildings[b as usize].position) - t.height).abs() <= super::combat::FLOOR_REACH
     }
 
     /// The building threat `t` turns on when no elder or sprite is about
@@ -218,11 +372,11 @@ impl Settlement {
     /// its route's next leg (a building put down on a wave's route: threats
     /// walk their routes as planned). The nearest edge, the lowest index on
     /// a tie.
-    fn spot_building(&self, t: &Threat, def: &ChaseDef, reach: Fx) -> Option<BuildingIx> {
+    fn spot_building(&self, t: &Threat, def: &ChaseDef, reach: Fx, terrain: &Terrain) -> Option<BuildingIx> {
         let radius = self.threat_radius(t);
         let next = t.route.first().copied().unwrap_or(t.position);
         (0..self.buildings.len() as BuildingIx)
-            .filter(|&b| self.breakable(b))
+            .filter(|&b| self.breakable(b) && self.on_building_floor(t, b, terrain))
             .map(|b| (self.building_gap(t.position, b), b))
             .filter(|&(gap, b)| {
                 let building = &self.buildings[b as usize];
@@ -251,14 +405,14 @@ impl Settlement {
             let look = (tick + t.id) % chase.look == 0;
             let goal = match t.goal {
                 Goal::Chase(Quarry::Agent(agent)) if !self.keeps(t, agent, &chase, stop, terrain) => Goal::Tree,
-                Goal::Chase(Quarry::Building(b)) if !self.keeps_building(t, b, &chase) => Goal::Tree,
+                Goal::Chase(Quarry::Building(b)) if !self.keeps_building(t, b, &chase, terrain) => Goal::Tree,
                 Goal::Chase(Quarry::Building(_)) if look => match self.spot(t, &chase, stop, terrain) {
                     Some(agent) => Goal::Chase(Quarry::Agent(agent)),
                     None => continue,
                 },
                 Goal::Tree if look => match self.spot(t, &chase, stop, terrain) {
                     Some(agent) => Goal::Chase(Quarry::Agent(agent)),
-                    None => match self.spot_building(t, &chase, attack.reach) {
+                    None => match self.spot_building(t, &chase, attack.reach, terrain) {
                         Some(b) => Goal::Chase(Quarry::Building(b)),
                         None => continue,
                     },
@@ -314,6 +468,10 @@ impl Settlement {
             if t.goal == message.goal {
                 continue;
             }
+            // A new goal plans afresh (M8.2, in a volume scene: elsewhere
+            // these stay empty).
+            self.threats[i].chase.clear();
+            self.threats[i].backoff = super::Backoff::default();
             if message.goal == Goal::Tree {
                 self.give_up(i, terrain);
             } else {
@@ -336,7 +494,7 @@ impl Settlement {
     fn replan_route(&mut self, i: usize, terrain: &Terrain) {
         let t = &self.threats[i];
         let Some(target) = self.waves.get(t.wave as usize).map(|w| w.target).or(t.route.last().copied()) else { return };
-        let (route, reaches) = route_home(terrain, t.position, target);
+        let (route, reaches) = if terrain.volume.is_some() { route_home_at(terrain, t.position, t.height, target) } else { route_home(terrain, t.position, target) };
         if !route.is_empty() {
             self.threats[i].route = route;
             self.threats[i].stranded = !reaches;

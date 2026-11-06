@@ -188,6 +188,9 @@ impl Arena {
             burn: None,
             goal: Default::default(),
             stranded: false,
+            height: Default::default(),
+            chase: Vec::new(),
+            backoff: Default::default(),
         });
         s.threats.sort_by_key(|t| t.id);
         s.next_id = s.next_id.max(id + 1);
@@ -246,7 +249,7 @@ impl Arena {
 }
 
 fn projectile(id: u64, from: FxVec2, to: FxVec2, target: Option<u64>, arrival: u64) -> Projectile {
-    Projectile { id, defender: None, target, item: None, from, launch_height: fx(1.6), to, born: 0, arrival, damage: 8, kind: ProjectileKind::Bolt }
+    Projectile { id, defender: None, target, item: None, from, launch_height: fx(1.6), to, born: 0, arrival, damage: 8, kind: ProjectileKind::Bolt, floor: Fx::ZERO }
 }
 
 #[test]
@@ -1177,6 +1180,9 @@ fn brute_radius_follows_its_armor() {
         burn: None,
         goal: Default::default(),
         stranded: false,
+        height: Default::default(),
+        chase: Vec::new(),
+        backoff: Default::default(),
     };
     let def = &s.characters[s.waves[brutes].character as usize];
     let (body, plated) = (def.body.radius, def.health.as_ref().unwrap().armor.as_ref().unwrap().radius);
@@ -1259,10 +1265,11 @@ fn a_wave_must_send_a_follow_route_character() {
 /// fireball, B4) and 8 more for a goal (B5); a windup naming its target
 /// (`SwingTarget`, B8) packs 8 smaller than one naming an agent did. The
 /// burn's `dawn` flag (M7.2) sits in its padding and gives the option a
-/// niche, so a burn takes 32, not 40.
+/// niche, so a burn takes 32, not 40. Floors (M8.2) add 48: the feet's
+/// height (8), a chase's 3D route (24) and the replan backoff (16).
 #[test]
 fn threat_size_is_pinned() {
-    assert_eq!(std::mem::size_of::<Threat>(), 176);
+    assert_eq!(std::mem::size_of::<Threat>(), 224);
 }
 
 // Ghouls hitting players in passing (GHOUL_ATTACK_HANDOFF.md, task 3). The

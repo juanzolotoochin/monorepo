@@ -36,24 +36,6 @@ order, one agent each.
   `app/src/digging.rs`.
 - **Found in:** verticality design (V11), V.8.
 
-## Ghouls and haulers with a height
-
-- **Status:** open
-- **Why:** in volume scenes only the avatar, sprites (the walker) and
-  piles have a feet height (V.7); haulers, threats and chasers stand on
-  the top floor, so a ghoul over a tunnel would walk on the mountain.
-- **What to do:** give haulers and threats a feet height (hashed, a save
-  format bump), path them with `nav::path_at`, and move `chase.rs` and
-  `Threat::position` to it. Also still on the top floor: the jetpack's
-  `GoTo` (a 2D route), sprite respawn (`sprite_housekeeping` puts a sprite
-  home with its old height), piles made by a pile haul's drop (`PileLab`
-  walk, height 0) and by `spill`, and `TossEnd::Pit` for a sprite's or
-  avatar's pit dig. The walker falls instantly if a step drops it (paths
-  never do) and steers round no one.
-- **Where:** `sim/src/settlement/haulers.rs`, `chase.rs`, `threats`,
-  `sprites.rs`, `piles.rs`.
-- **Found in:** V.7's note on V.8.
-
 ## Collapse and support
 
 - **Status:** open
@@ -104,6 +86,34 @@ order, one agent each.
 - **Found in:** V.8.
 
 ## Done
+
+### Ghouls and haulers with a height
+
+- **Status:** done (branch `kestrel-sacred-tree-depths`, M8.2 in `sacred-tree.md`)
+- **Why:** in volume scenes only the avatar, sprites (the walker) and
+  piles have a feet height (V.7); haulers, threats and chasers stand on
+  the top floor, so a ghoul over a tunnel would walk on the mountain.
+- **What to do:** give haulers and threats a feet height (hashed, a save
+  format bump), path them with `nav::path_at`, and move `chase.rs` and
+  `Threat::position` to it. Also still on the top floor: the jetpack's
+  `GoTo` (a 2D route), sprite respawn (`sprite_housekeeping` puts a sprite
+  home with its old height), piles made by a pile haul's drop (`PileLab`
+  walk, height 0) and by `spill`, and `TossEnd::Pit` for a sprite's or
+  avatar's pit dig. The walker falls instantly if a step drops it (paths
+  never do) and steers round no one.
+- **Where:** `sim/src/settlement/haulers.rs`, `chase.rs`, `threats`,
+  `sprites.rs`, `piles.rs`.
+- **Found in:** V.7's note on V.8.
+- **Done:** in M8.2 ("M8.2 Every body on a floor" in `sacred-tree.md`):
+  haulers and threats keep a feet height (save format 43), walk on foot by
+  `walk_at`, plan with `nav::path_at` / `path_toward_at` (chases), back
+  their replans off after a failed plan, and reach only bodies on their
+  floor; the jetpack's `GoTo` flies over a 3D path, a respawned sprite
+  stands on home's floor, pile-haul drops and spills lie on the dropper's
+  floor and `TossEnd::Pit` carries its floor. Left: the walker still falls
+  instantly and steers round no one (it is a test body); buildings and
+  sites have no floor (notes on M8.3, M8.6).
+
 
 ### 3D paths to an unreachable floor
 

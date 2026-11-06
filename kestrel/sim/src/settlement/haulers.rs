@@ -104,6 +104,14 @@ pub struct HaulerState {
     pub traffic_wait_ticks: u64,
     pub loaded_travel: Fx,
     pub empty_travel: Fx,
+    /// Its feet's height in a volume scene (M8.2): the floor it walks on,
+    /// as `SpriteState::height` is a sprite's. Zero elsewhere.
+    #[serde(default)]
+    pub height: Fx,
+    /// When it may plan again after a plan that found no way, in a volume
+    /// scene (M8.2); never written elsewhere.
+    #[serde(default)]
+    pub backoff: super::Backoff,
 }
 
 impl HaulerState {
@@ -155,8 +163,13 @@ impl HaulerState {
         }
     }
 
-    /// A route to `to`, turning carefully when towing a trailer.
+    /// A route to `to`, turning carefully when towing a trailer. In a volume
+    /// scene a 3D path on foot from its floor (M8.2, `route_at`), the body's
+    /// alone: a trailer follows its hitch.
     pub(super) fn plan(&self, body: &Body, terrain: &Terrain, to: FxVec2, extra: &[Disc]) -> Vec<FxVec2> {
+        if terrain.volume.is_some() {
+            return route_at(terrain, body.position, self.height, to, None, self.radius(body), extra);
+        }
         let (Some(t), Some(e)) = (&self.trailer, &self.equipment) else {
             return nav::path_avoiding(terrain, body.position, to, self.radius(body), extra);
         };
@@ -207,6 +220,23 @@ impl HaulerState {
     }
 }
 
+/// A walker's route on foot in a volume scene (M8.2): a 3D path
+/// (`nav::path_at`, a full route or none) from `from`, its feet at `z`, to
+/// whichever floor at `to` it reaches first, as the avatar's `GoTo`
+/// plans, or to the floor nearest `goal_z` there if it names one. Its
+/// waypoints' heights are dropped: the walker's feet follow the floors as
+/// it steps (`move_worker`).
+pub(super) fn route_at(terrain: &Terrain, from: FxVec2, z: Fx, to: FxVec2, goal_z: Option<Fx>, radius: Fx, extra: &[Disc]) -> Vec<FxVec2> {
+    nav::path_at(terrain, from, z, to, goal_z, radius, extra).into_iter().map(|(p, _)| p).collect()
+}
+
+/// The feet of a body at `p` on the top floor there, in a volume scene: a
+/// dock's, for a hauler planning a haul from it (M8.2).
+fn top_feet(terrain: &Terrain, p: FxVec2, radius: Fx) -> Fx {
+    let top = terrain.height(p);
+    terrain.footprint_near(p, top, radius).unwrap_or(top)
+}
+
 /// Everyone's footprint as of the end of last tick, for avoidance.
 #[derive(Clone, Debug)]
 pub(super) struct Footprint {
@@ -219,6 +249,9 @@ pub(super) struct Footprint {
     /// building (`sprites`) or an elder possessing one (`Seat::Building`),
     /// which the others walk past.
     pub solid: bool,
+    /// Its feet's height (`AgentState::height`): in a volume scene only
+    /// bodies on one's own floor are steered round (M8.2).
+    pub height: Fx,
 }
 
 pub(super) struct Ctx<'a> {
@@ -257,15 +290,25 @@ pub(super) fn footprint(a: &AgentState) -> Footprint {
         // Players walk on their own; haulers and sprites follow routes.
         next: a.avatar().is_none().then(|| a.body.route.first().copied()).flatten(),
         solid: a.sprite().is_none_or(|sprite| !sprite.inside() && a.body.alive()) && a.avatar().is_none_or(|p| p.seat.and_then(super::Seat::building).is_none()),
+        height: a.height(),
     }
 }
 
 /// Applies an action to a hauler (see `action::act`): `GoTo` plans a route
 /// (the trailer's path when towing), `Follow` takes one already planned.
-/// Only the hauler brain and stage 5 drive haulers, with nothing else.
-pub(super) fn act(body: &mut Body, hauler: &HaulerState, action: &Action, view: &View) {
+/// Only the hauler brain and stage 5 drive haulers, with nothing else. In
+/// a volume scene a `GoTo` that finds no way backs its next plan off
+/// (`HaulerState::backoff`, M8.2): approaches and job decisions wait it
+/// out (`retries`), and so does the walk home.
+pub(super) fn act(body: &mut Body, hauler: &mut HaulerState, action: &Action, view: &View) {
     match action {
-        Action::Move(Intent::GoTo { target, .. }) => body.route = hauler.plan(body, view.terrain, *target, &[]),
+        Action::Move(Intent::GoTo { target, .. }) => {
+            body.route = hauler.plan(body, view.terrain, *target, &[]);
+            if view.terrain.volume.is_some() {
+                hauler.backoff.planned(view.tick, !body.route.is_empty(), 0);
+                hauler.retries = hauler.retries.max(hauler.backoff.at);
+            }
+        }
         Action::Follow(route) => body.route = route.clone(),
         _ => debug_assert!(false, "haulers only go to points and follow routes: {action:?}"),
     }
@@ -321,7 +364,7 @@ pub(super) fn think(a: &mut AgentState, me: AgentIx, ctx: &Ctx) -> Option<Action
     }
     let go_to = |target| Some(Action::Move(Intent::GoTo { target, run: false }));
     match hauler.phase {
-        Phase::Idle if distance(body.position, body.home) > Fx::from_ratio(1, 10) => {
+        Phase::Idle if distance(body.position, body.home) > Fx::from_ratio(1, 10) && hauler.backoff.due(ctx.tick) => {
             hauler.phase = Phase::Returning;
             go_to(body.home)
         }
@@ -473,6 +516,8 @@ pub(super) trait Walker {
     fn trailer_disc(&self) -> Option<Disc>;
     /// A route to `to`, also avoiding `extra` discs.
     fn route_to(&self, body: &Body, terrain: &Terrain, to: FxVec2, extra: &[Disc]) -> Vec<FxVec2>;
+    /// Its feet's height, which its steps follow in a volume scene (M8.2).
+    fn height(&mut self) -> &mut Fx;
     /// The way the body is going (`HaulerState::travel_heading`).
     fn travel_heading(&mut self) -> &mut Fx;
     /// When a blocked walker may plan a detour again.
@@ -505,6 +550,10 @@ impl Walker for HaulerState {
         self.plan(body, terrain, to, extra)
     }
 
+    fn height(&mut self) -> &mut Fx {
+        &mut self.height
+    }
+
     fn travel_heading(&mut self) -> &mut Fx {
         &mut self.travel_heading
     }
@@ -529,7 +578,15 @@ impl Walker for HaulerState {
 /// Bounded local steering: keep the global route, steer around nearby bodies
 /// and trailers, and wait if no collision-free step exists. Bodies that
 /// aren't solid (a sprite inside a building) are walked past.
+///
+/// In a volume scene (M8.2) it walks on foot with its feet height
+/// (`Walker::height`): every step is a straight walk the ground allows
+/// (`Terrain::walk_at`), its feet following the floor, and only bodies on
+/// its floor (`combat::FLOOR_REACH`) are steered round. When the ground
+/// refuses every step (a dig made the route stale) it drops the route, for
+/// its brain to plan again.
 pub(super) fn move_worker(body: &mut Body, hauler: &mut impl Walker, me: AgentIx, ctx: &Ctx, step: Fx) {
+    let volume = ctx.terrain.volume.is_some();
     let tolerance = Fx::from_ratio(1, 10);
     while body.route.first().is_some_and(|&w| distance(body.position, w) <= tolerance) {
         body.route.remove(0);
@@ -541,15 +598,17 @@ pub(super) fn move_worker(body: &mut Body, hauler: &mut impl Walker, me: AgentIx
     // Skip a waypoint once the one after it is in reach: grid waypoints in a
     // tight gap can be closer to a rock than the body fits, and circling them
     // wastes time. Carts keep theirs, which shape the turns the cart can make.
+    let feet = *hauler.height();
+    let walks = |a: FxVec2, b: FxVec2| !volume || ctx.terrain.walk_at(a, b, feet, radius).is_some();
     if !hauler.towing() {
-        while body.route.len() >= 2 && ctx.terrain.clear(body.position, body.route[1], radius) {
+        while body.route.len() >= 2 && ctx.terrain.clear(body.position, body.route[1], radius) && walks(body.position, body.route[1]) {
             body.route.remove(0);
         }
     }
     let near = Fx::from_int(3);
     let mut nearby = Vec::new();
     for (i, b) in ctx.footprints.iter().enumerate() {
-        if i == me as usize || !b.solid {
+        if i == me as usize || !b.solid || !super::combat::same_floor(ctx.terrain, b.height, feet) {
             continue;
         }
         if distance(body.position, b.position) < near {
@@ -602,7 +661,7 @@ pub(super) fn move_worker(body: &mut Body, hauler: &mut impl Walker, me: AgentIx
     let delta = direct - body.position;
     // Two agents meeting head-on would both step aside and back forever: the
     // later one waits while the earlier one steers around it.
-    let oncoming = ctx.footprints[..me as usize].iter().filter(|b| b.solid).any(|b| {
+    let oncoming = ctx.footprints[..me as usize].iter().filter(|b| b.solid && super::combat::same_floor(ctx.terrain, b.height, feet)).any(|b| {
         let Some(next) = b.next else {
             return false;
         };
@@ -628,6 +687,7 @@ pub(super) fn move_worker(body: &mut Body, hauler: &mut impl Walker, me: AgentIx
             angles.insert(1, keep);
         }
     }
+    let mut refused = false;
     for angle in angles {
         let (sin, cos) = angle.sin_cos();
         let next = FxVec2::new(body.position.x + delta.x * cos + delta.y * sin, body.position.y + delta.y * cos - delta.x * sin);
@@ -638,6 +698,12 @@ pub(super) fn move_worker(body: &mut Body, hauler: &mut impl Walker, me: AgentIx
                 // A player may walk into a hauler: let the hauler escape the overlap.
                 after > radius + o.radius + gap || after > before + epsilon
             });
+        // On foot in a volume, the ground must allow the step too (M8.2).
+        let floor = if volume && clear { ctx.terrain.walk_at(body.position, next, feet, radius) } else { None };
+        if volume && clear && floor.is_none() {
+            refused |= angle == straight;
+            continue;
+        }
         if clear {
             let target = nav::bearing(body.position, next);
             let travel_turn = angle_between(*hauler.travel_heading(), target);
@@ -649,6 +715,9 @@ pub(super) fn move_worker(body: &mut Body, hauler: &mut impl Walker, me: AgentIx
             }
             *hauler.travel_heading() = target;
             body.position = next;
+            if let Some(z) = floor {
+                *hauler.height() = z;
+            }
             if angle == straight {
                 body.route = route;
             } else {
@@ -656,6 +725,12 @@ pub(super) fn move_worker(body: &mut Body, hauler: &mut impl Walker, me: AgentIx
             }
             return;
         }
+    }
+    // Every step refused by the ground, the straight one too: the route is
+    // stale. Drop it, for the brain to plan again.
+    if refused {
+        body.route.clear();
+        return;
     }
     *hauler.traffic_wait_ticks() += 1;
 }
@@ -726,7 +801,13 @@ fn decide(a: &AgentState, hauler: &HaulerState, me: AgentIx, s: &super::Settleme
         let from = s.depots[link.from as usize].position;
         let to = s.depots[link.to as usize].position;
         let route = hauler.plan(body, terrain, from, &[]);
-        if route.is_empty() || nav::path(terrain, from, to, hauler.radius(body)).is_empty() {
+        let radius = hauler.radius(body);
+        let linked = || match terrain.volume {
+            // From the pickup's floor to the drop's (M8.2).
+            Some(_) => !route_at(terrain, from, top_feet(terrain, from, radius), to, None, radius, &[]).is_empty(),
+            None => !nav::path(terrain, from, to, radius).is_empty(),
+        };
+        if route.is_empty() || !linked() {
             continue;
         }
         out.reserve_haul.push(ReserveHaul { agent: me, link: l, units, route });

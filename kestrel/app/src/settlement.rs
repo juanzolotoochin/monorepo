@@ -973,6 +973,7 @@ pub fn tick(world: &mut World) {
         let mut view = View::new(&config.skin, a.position);
         view.heading = a.heading;
         view.travel = a.travelled;
+        view.floor = volume_feet(world, a);
         if !config.controlled {
             desired.insert(format!("agent/{}", a.id), view);
         }
@@ -1016,9 +1017,12 @@ pub fn tick(world: &mut World) {
         v.activity = (1. - (sim.time() - d.fired_at as f32) / (0.25 * HZ)).max(0.);
         desired.insert(format!("defender/{}", config.id), v);
     }
+    let volume = in_volume(world);
     for t in sim.threats.values() {
         let mut v = View::new(&sim.config().waves[t.wave].skin, t.position);
         v.position.y = rise_offset(t.travelled);
+        // On its floor in a volume scene (M8.2), not the top one.
+        v.floor = volume.then(|| t.feet.unwrap_or(0.0));
         v.heading = t.heading;
         v.travel = t.travelled;
         let wounded = t.hp < sim.config().waves[t.wave].hp;
@@ -1862,11 +1866,18 @@ fn town_help(world: &mut World) {
     }
 }
 
-/// A sprite's feet in a volume scene (V.7): the floor the sim says it
-/// stands on, which may be under another; none elsewhere.
+/// A sprite's or hauler's feet in a volume scene (V.7, M8.2): the floor
+/// the sim says it stands on, which may be under another; none elsewhere.
 fn volume_feet(world: &World, a: &crate::legacy::AgentState) -> Option<f32> {
+    in_volume(world).then(|| a.feet.unwrap_or(0.0))
+}
+
+/// Whether the scene is a volume (V.1): then bodies are drawn at their
+/// feet (`legacy`'s `feet`, 0 m when it leaves them out), not on the top
+/// floor.
+fn in_volume(world: &World) -> bool {
     let service = world.resource::<crate::lockstep::SessionService>();
-    service.world().is_some_and(|w| w.terrain().volume.is_some()).then_some(a.feet).flatten()
+    service.world().is_some_and(|w| w.terrain().volume.is_some())
 }
 
 /// The drawn ground under `p`: a generated mine's ground and pits where the
@@ -2380,6 +2391,9 @@ mod tests {
             burn: None,
             goal: Default::default(),
             stranded: false,
+            height: Default::default(),
+            chase: Vec::new(),
+            backoff: Default::default(),
         });
         (crate::legacy::Scenario::new(&scenario), s, center)
     }
@@ -2447,6 +2461,7 @@ mod tests {
             burning: false,
             chasing: None,
             attacking: None,
+            feet: None,
         }
     }
 

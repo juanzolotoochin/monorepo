@@ -871,11 +871,11 @@ impl Settlement {
     /// Stage 3: every ballista that can shoot now (`ready_to_shoot`) aims at
     /// the nearest threat in range that the shots in flight won't kill
     /// (`pick_target`), as a defender does.
-    pub(super) fn aim_buildings(&self, tick: u64, out: &mut Vec<(FxVec2, Messages)>) {
+    pub(super) fn aim_buildings(&self, tick: u64, terrain: &crate::terrain::Terrain, out: &mut Vec<(FxVec2, Messages)>) {
         for (i, b) in self.buildings.iter().enumerate() {
             let kind = &self.building_kinds[b.kind as usize];
             let Some(defence) = ready_to_shoot(b, kind, tick) else { continue };
-            if let Some(t) = self.pick_target(b.position, defence.range) {
+            if let Some(t) = self.pick_target(b.position, defence.range, terrain) {
                 let mut messages = Messages::default();
                 messages.building_fire.push(BuildingFire { building: i as BuildingIx, target: t.id, to: t.position });
                 out.push((b.position, messages));

@@ -710,3 +710,57 @@ fn a_volume_scene_keeps_a_sprites_height() {
         assert_eq!(sim.step(&[]).total, again.step(&[]).total);
     }
 }
+
+/// A volume scene keeps a hauler's and a threat's feet (format 43, M8.2):
+/// a worker and a Sacred Tree ghoul standing on a block 1 m up, which
+/// continue alike after loading.
+#[test]
+fn a_volume_scene_keeps_haulers_and_threats_heights() {
+    use fx::Fx;
+    let content = Content::builtin();
+    let scenario = content::scenario::Scenario::parse(
+        r#"(id: "floors", extent: 8.0, items: [(id: "wood", label: "WOOD", skin: "item_lumber", scale: 0.45)],
+         depots: [(id: "a", label: "A", position: (-6.0, -2.0), capacity: 4, stock: []),
+                  (id: "b", label: "B", position: (-6.0, 2.0), capacity: 4, stock: [])],
+         sources: [], links: [(id: "idle", from: "a", to: "b", item: "wood", target: 1, priority: 1)],
+         agents: [(id: "player", label: "YOU", character: "exosuit", position: (0.0, 0.0), capacity: 8, links: [],
+                   cargo_anchor: (0.0, 0.65, -0.19), equipment: None, controlled: true),
+                  (id: "worker", label: "WORKER", character: "worker", position: (2.0, 2.0), capacity: 4, links: ["idle"],
+                   cargo_anchor: (0.0, 0.65, -0.19), equipment: None)],
+         producers: [], defenders: [],
+         waves: [(id: "w", position: (4.0, -2.0), target: (-6.0, -6.0), character: "ghoul_sacred_tree", first: 0.1, every: 1.0, count: 1)],
+         base_health: 5, player_health: 0)"#,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let mut volume = sim::volume::Volume::default();
+    volume.fill_box((-8, -8), (8, 8), -8, 0);
+    volume.fill_box((1, -3), (5, 3), 0, 2);
+    let setup = sim::settlement::SceneSetup {
+        scenario: Some(scenario),
+        player: "exosuit".into(),
+        extent: Fx::from_int(8),
+        diggable: true,
+        sloped: true,
+        volume: Some(volume),
+        spawn: [Fx::from_int(-6), Fx::ZERO, Fx::from_int(6)],
+        ..Default::default()
+    };
+    let mut sim = Simulation::from_world(sim::World::new_scene(5, &content, &setup).unwrap(), 1);
+    for _ in 0..12 {
+        sim.step(&[]);
+    }
+    let heights = |w: &sim::World| {
+        let s = w.settlement().unwrap();
+        let worker = s.agents.iter().find(|a| a.id == "worker").unwrap().hauler().unwrap().height;
+        (worker, s.threats.iter().map(|t| t.height).collect::<Vec<_>>())
+    };
+    assert_eq!(heights(sim.world()), (Fx::ONE, vec![Fx::ONE]), "both on the block");
+    let bytes = write(sim.world(), &content);
+    let loaded = read(&bytes, &content).unwrap();
+    assert_eq!(heights(&loaded), heights(sim.world()));
+    assert_eq!(write(&loaded, &content), bytes);
+    let mut again = Simulation::from_world(loaded, 1);
+    for _ in 0..120 {
+        assert_eq!(sim.step(&[]).total, again.step(&[]).total);
+    }
+}
