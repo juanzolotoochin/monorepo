@@ -36,7 +36,7 @@ use fx::{Fx, FxVec2};
 use super::action::View;
 use super::sprites::{SpriteState, Step};
 use super::{AgentIx, Body, Carry, DepotIx, ItemIx, Kinds, Settlement};
-use crate::mine::{Veins, STONE_ID};
+use crate::mine::{Veins, STONE, STONE_ID};
 use crate::nav::distance;
 use crate::terrain::Terrain;
 
@@ -109,6 +109,12 @@ impl Targets {
 /// `TARGETS`, nearest first, in a fixed order on ties.
 pub fn search(terrain: &Terrain, origin: (i32, i32), radius: Fx) -> Vec<Target> {
     let Some(mine) = terrain.mine().filter(|m| m.spec.veins == Veins::Stone) else { return Vec::new() };
+    // Stone at the top: the pit's next layer, or in a volume (M8.3) the
+    // column's top cell.
+    let stone_at = |t: (i32, i32)| match &terrain.volume {
+        Some(volume) => volume.top(t).is_some_and(|top| volume.ore(t, top - 1) == Some(STONE)),
+        None => mine.ore(t, terrain.pit(t)) == Some(STONE),
+    };
     let ground = |t: (i32, i32)| terrain.inside(Terrain::pit_center(t)) && terrain.tile_height(t).is_some();
     let mut seen = BTreeSet::from([origin]);
     let mut open = VecDeque::from([origin]);
@@ -119,14 +125,22 @@ pub fn search(terrain: &Terrain, origin: (i32, i32), radius: Fx) -> Vec<Target> 
             if (n.0 - origin.0).abs() > SEARCH_TILES || (n.1 - origin.1).abs() > SEARCH_TILES || !ground(n) {
                 continue;
             }
-            let stone = mine.ore(n, terrain.pit(n)).is_some();
-            if stone && !targets.iter().any(|x| x.tile == n) && terrain.dig_refusal(t, n, radius).is_none() {
-                targets.push(Target { tile: n, stand: t, depth: terrain.pit(n) });
+            if stone_at(n) && !targets.iter().any(|x| x.tile == n) && terrain.dig_refusal(t, n, radius).is_none() {
+                targets.push(Target { tile: n, stand: t, depth: terrain.dug(n) });
                 if targets.len() >= TARGETS {
                     return targets;
                 }
             }
-            if !seen.contains(&n) && !terrain.steep(n) && terrain.clear(Terrain::pit_center(t), Terrain::pit_center(n), radius) {
+            // In a volume a cliff is a wall, not steep ground: the walk on
+            // the top floor says where the search goes (M8.3).
+            let (a, b) = (Terrain::pit_center(t), Terrain::pit_center(n));
+            // (A layer up or down between top floors walks, by the corner
+            // rule: cheap, where a walk's samples cost a search per tile.)
+            let walks = match &terrain.volume {
+                Some(volume) => volume.top(t).zip(volume.top(n)).is_some_and(|(here, there)| (here - there).abs() <= 1),
+                None => !terrain.steep(n),
+            };
+            if !seen.contains(&n) && walks && terrain.clear(a, b, radius) {
                 seen.insert(n);
                 open.push_back(n);
             }
@@ -208,7 +222,7 @@ fn stand_spot(view: &View, pile: FxVec2, from: FxVec2, dock: FxVec2) -> Option<F
     let sides = [(from - pile).normalize_or_zero(), (dock - pile).normalize_or_zero(), FxVec2::new(Fx::ONE, Fx::ZERO), FxVec2::new(-Fx::ONE, Fx::ZERO), FxVec2::new(Fx::ZERO, Fx::ONE), FxVec2::new(Fx::ZERO, -Fx::ONE)];
     sides.into_iter().filter(|&side| side != FxVec2::ZERO).map(|side| pile + side * gap).find(|&spot| {
         let tile = Terrain::pit_tile(spot);
-        terrain.inside(spot) && !terrain.steep(tile) && terrain.pit(tile) <= terrain.pit(Terrain::pit_tile(pile)) + 1
+        terrain.inside(spot) && !terrain.steep(tile) && terrain.dug(tile) <= terrain.dug(Terrain::pit_tile(pile)) + 1
     })
 }
 

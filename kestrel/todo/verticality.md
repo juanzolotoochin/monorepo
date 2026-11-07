@@ -23,19 +23,6 @@ order, one agent each.
   `app/shaders/cutaway.wesl`, `app/src/piles/`, `app/src/legacy.rs`.
 - **Found in:** the line of sight prototype.
 
-## The Sacred Tree on a volume
-
-- **Status:** open
-- **Why:** the MVP's floors are only in the Tunnel Lab (V11); the town's
-  map is still a heightfield, so its mine can't have tunnels.
-- **What to do:** build the Sacred Tree's map (its hill, mine terraces
-  and pits) as a volume, with `ground(p)` callers that matter there moved
-  to `floor(p, z)` / `footprint_at`; check the golden and the soaks.
-- **Where:** `sim/src/settlement/hill_tests.rs` (the map),
-  `app/assets/levels/sacred_tree_supply.ron`, `sim/src/terrain.rs`,
-  `app/src/digging.rs`.
-- **Found in:** verticality design (V11), V.8.
-
 ## Collapse and support
 
 - **Status:** open
@@ -86,6 +73,21 @@ order, one agent each.
 - **Found in:** V.8.
 
 ## Done
+
+### The Sacred Tree on a volume
+
+- **Status:** done (branch `kestrel-sacred-tree-depths`)
+- **Why:** the MVP's floors are only in the Tunnel Lab (V11); the town's
+  map is still a heightfield, so its mine can't have tunnels.
+- **What to do:** build the Sacred Tree's map (its hill, mine terraces
+  and pits) as a volume, with `ground(p)` callers that matter there moved
+  to `floor(p, z)` / `footprint_at`; check the golden and the soaks.
+- **Where:** `sim/src/settlement/hill_tests.rs` (the map),
+  `app/assets/levels/sacred_tree_supply.ron`, `sim/src/terrain.rs`,
+  `app/src/digging.rs`.
+- **Found in:** verticality design (V11), V.8.
+- **Done:** as M8.3 of the depths design; see "M8.3 The town as a
+  volume" in [`sacred-tree.md`](sacred-tree.md).
 
 ### Ghouls and haulers with a height
 

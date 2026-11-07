@@ -6,13 +6,18 @@
 // ballista can be built too, and shoots while manned and stocked. No
 // building makes stone: it is dug out of the ground (the scene's stone
 // veins, a few exposed 15 to 40 m out), so the stone pile starts empty too.
+// Amber is dug too, from 4 m down and in the mountain north of the town
+// (the scene's volume); its pile by the tree keeps it for lanterns (M8.6 of
+// the depths design), and for now it just accumulates.
 // Positions are meters from the clearing's center (the scene's x and z).
 (id: "sacred_tree", extent: 128.0, items: [
 (id: "wood", label: "WOOD", skin: "item_lumber", scale: 0.45),
-(id: "stone", label: "STONE", skin: "item_iron", scale: 0.45)
+(id: "stone", label: "STONE", skin: "item_iron", scale: 0.45),
+(id: "amber", label: "AMBER", skin: "item_amber", scale: 0.45)
 ], depots: [
 (id: "tree_wood", label: "WOOD PILE", position: (-1.7, 1.7), capacity: 4096, stock: [], only: Some("wood")),
-(id: "tree_stone", label: "STONE PILE", position: (1.7, 1.7), capacity: 4096, stock: [], only: Some("stone"))
+(id: "tree_stone", label: "STONE PILE", position: (1.7, 1.7), capacity: 4096, stock: [], only: Some("stone")),
+(id: "tree_amber", label: "AMBER PILE", position: (0.0, 1.7), capacity: 4096, stock: [], only: Some("amber"))
 ], sources: [], links: [], agents: [
 (id: "elder", label: "ELDER", character: "elder", position: (0.0, 3.4), capacity: 5, one_kind: true, links: [], cargo_anchor: (0.0, 0.65, -0.19), equipment: None, controlled: true)
 ], sprites: [

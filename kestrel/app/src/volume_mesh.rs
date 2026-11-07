@@ -96,8 +96,27 @@ fn profile(volume: &Volume, tile: (i32, i32), corners: [usize; 2]) -> Vec<(f32, 
 /// corner, the arena `extent` tiles round its `center` tile): tops,
 /// ceilings and walls, as the module says.
 pub(crate) fn chunk_mesh(volume: &Volume, center: IVec2, extent: i32, key: IVec2) -> Mesh {
+    chunk_mesh_with(volume, center, extent, key, None)
+}
+
+/// The colour a mineral of a volume tints its cells: a town's stone grey
+/// (`mine::STONE`), else the minerals' colours.
+fn ore_color(mineral: u8) -> Vec3 {
+    if mineral == sim::mine::STONE {
+        crate::digging::STONE_TINT
+    } else {
+        Vec3::from_array(crate::piles::mineral_color(crate::piles::mineral(mineral)))
+    }
+}
+
+/// [`chunk_mesh`], with open-sky tops coloured as a mine's terraces are
+/// when `terraces` is the layer of the mine's lowest ground (a town's
+/// volume, M8.3 of the depths design: its datum is the hill's top, the
+/// ground round it lower), so the town looks as its heightfield did:
+/// by terrace steps up from there, the ore at the top tinting it lightly.
+pub(crate) fn chunk_mesh_with(volume: &Volume, center: IVec2, extent: i32, key: IVec2, terraces: Option<i32>) -> Mesh {
     let tile = |a: IVec2| ((a + center).x, (a + center).y);
-    let ore = |a: IVec2, k: i32| volume.ore(tile(a), k).map(|m| Vec3::from_array(crate::piles::mineral_color(crate::piles::mineral(m))));
+    let ore = |a: IVec2, k: i32| volume.ore(tile(a), k).map(ore_color);
     let mut mesh = MeshBuilder::default();
     let first = key * CHUNK - IVec2::splat(extent);
     for y in first.y..(first.y + CHUNK).min(extent + 1) {
@@ -115,8 +134,14 @@ pub(crate) fn chunk_mesh(volume: &Volume, center: IVec2, extent: i32, key: IVec2
                 // terraces are; under a ceiling (a tunnel's or cave's floor),
                 // the stone it is cut in.
                 mesh.cut = false;
-                let base = if n + 1 == spans.len() { surface((span.top.max(0) * 3 / 4).min(12) as u8) } else { stone(span.top - 1) * 1.12 };
-                let color = mix(base, ore(a, span.top - 1), 0.55) * shade;
+                let open = n + 1 == spans.len();
+                let base = match terraces {
+                    Some(lowest) if open => surface(((span.top - lowest) * 2).clamp(0, 12) as u8),
+                    _ if open => surface((span.top.max(0) * 3 / 4).min(12) as u8),
+                    _ => stone(span.top - 1) * 1.12,
+                };
+                let tint = if terraces.is_some() && open { 0.3 } else { 0.55 };
+                let color = mix(base, ore(a, span.top - 1), tint) * shade;
                 let p: [Vec3; 4] = std::array::from_fn(|i| corner_at(a, i, top[i]));
                 // Split along the diagonal whose ends are closer in height,
                 // as the sloped ground does.
@@ -173,22 +198,66 @@ pub(crate) fn chunk_mesh(volume: &Volume, center: IVec2, extent: i32, key: IVec2
 /// The arena tiles (within `extent` of the arena's `center` tile) whose
 /// cells or ore differ between two volumes.
 pub(crate) fn changed_tiles(before: &Volume, after: &Volume, center: IVec2, extent: i32) -> Vec<IVec2> {
-    if before == after {
-        return Vec::new();
-    }
-    let mut changed = Vec::new();
-    for y in -extent..=extent {
-        for x in -extent..=extent {
-            let a = IVec2::new(x, y);
-            let tile = ((a + center).x, (a + center).y);
-            let (old, new) = (before.spans(tile), after.spans(tile));
-            let ore_moved = || old.iter().flat_map(|s| s.bottom..s.top).any(|k| before.ore(tile, k) != after.ore(tile, k));
-            if old != new || ore_moved() {
-                changed.push(a);
+    // A merge of both volumes' sorted columns, then of their sorted ore: a
+    // town's volume has some 66 000 columns, so no lookups per tile.
+    let mut changed = std::collections::BTreeSet::new();
+    let mut note = |tile: (i32, i32)| {
+        let a = IVec2::new(tile.0, tile.1) - center;
+        if a.x.abs() <= extent && a.y.abs() <= extent {
+            changed.insert((a.y, a.x));
+        }
+    };
+    let (mut old, mut new) = (before.columns().peekable(), after.columns().peekable());
+    loop {
+        match (old.peek(), new.peek()) {
+            (None, None) => break,
+            (Some(&(a, spans_a)), Some(&(b, spans_b))) if a == b => {
+                if spans_a != spans_b {
+                    note(a);
+                }
+                old.next();
+                new.next();
+            }
+            (Some(&(a, _)), Some(&(b, _))) if a < b => {
+                note(a);
+                old.next();
+            }
+            (Some(&(a, _)), None) => {
+                note(a);
+                old.next();
+            }
+            (_, Some(&(b, _))) => {
+                note(b);
+                new.next();
             }
         }
     }
-    changed
+    let (mut old, mut new) = (before.ore_cells().peekable(), after.ore_cells().peekable());
+    loop {
+        match (old.peek(), new.peek()) {
+            (None, None) => break,
+            (Some(&(a, ma)), Some(&(b, mb))) if a == b => {
+                if ma != mb {
+                    note(a.0);
+                }
+                old.next();
+                new.next();
+            }
+            (Some(&(a, _)), Some(&(b, _))) if a < b => {
+                note(a.0);
+                old.next();
+            }
+            (Some(&(a, _)), None) => {
+                note(a.0);
+                old.next();
+            }
+            (_, Some(&(b, _))) => {
+                note(b.0);
+                new.next();
+            }
+        }
+    }
+    changed.into_iter().map(|(y, x)| IVec2::new(x, y)).collect()
 }
 
 /// The lowest cell of `tile` solid in `before` and empty in `after`, if
@@ -472,5 +541,39 @@ mod tests {
         let side = Ray3d::new(Vec3::new(-6.0, 4.0, 0.0), Dir3::X);
         let hit = ray_hit(&volume, Ray3d::new(side.origin, Dir3::new(Vec3::new(1.0, -0.01, 0.0)).unwrap()), to_sim).unwrap();
         assert!((hit.x + 0.5).abs() < 0.06 && hit.y == 8.0, "{hit}");
+    }
+
+    /// The Sacred Tree's ground as a volume (M8.3 of the depths design):
+    /// its 257 x 257 columns, 17 x 17 chunks, mesh at startup in well under
+    /// two seconds, and diffing two of its volumes after a dig finds only
+    /// the dug tile.
+    #[test]
+    fn the_towns_volume_meshes_quickly() {
+        let mut terrain = Terrain::flat(FxVec2::ZERO, Fx::from_int(128));
+        terrain.max_layers = 16;
+        terrain.generate_mine(7, FxVec2::new(Fx::ZERO, Fx::from_ratio(17, 5)), sim::mine::Veins::Stone);
+        let hill = sim::mine::Hill { center: (0, 0), plateau: 15, steps: 8, ramp_width: 7, ramp_length: 8, foot: 10 };
+        terrain.raise_hill(hill).unwrap();
+        terrain.volume_from_mine(None).unwrap();
+        let volume = terrain.volume.clone().unwrap();
+        let extent = 128;
+        let count = (2 * extent + 1 + CHUNK - 1) / CHUNK;
+        let started = std::time::Instant::now();
+        let mut triangles = 0;
+        for y in 0..count {
+            for x in 0..count {
+                let mesh = chunk_mesh_with(&volume, IVec2::ZERO, extent, IVec2::new(x, y), Some(-4));
+                triangles += mesh.indices().map_or(0, |i| i.len() / 3);
+            }
+        }
+        let took = started.elapsed();
+        eprintln!("the town's {} chunks: {triangles} triangles in {took:?}", count * count);
+        assert!(took < std::time::Duration::from_secs(2), "{took:?}");
+        let mut dug = volume.clone();
+        let top = dug.top((20, -30)).unwrap();
+        assert!(dug.clear((20, -30), top - 1));
+        let started = std::time::Instant::now();
+        assert_eq!(changed_tiles(&volume, &dug, IVec2::ZERO, extent), vec![IVec2::new(20, -30)]);
+        eprintln!("a dig's diff over the town in {:?}", started.elapsed());
     }
 }

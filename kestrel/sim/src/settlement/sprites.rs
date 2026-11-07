@@ -147,8 +147,9 @@ pub enum Step {
     /// digging it. Stage 3 asks, stage 5 grants; done once the sprite holds
     /// it.
     ClaimTile((i32, i32)),
-    /// A miner's: face `tile` and dig out the layer under `depth` (the
-    /// pit's depth when planned). Done once the pit is deeper.
+    /// A miner's: face `tile` and dig out the layer under `depth` (how far
+    /// it was dug when planned, `Terrain::dug`: the pit's depth, or in a
+    /// volume a number for its top). Done once it is dug further.
     Dig { tile: (i32, i32), depth: u8 },
     /// A miner's: fill its bundle from this ground pile. Done once it holds
     /// what the job moved.
@@ -344,7 +345,7 @@ impl SpriteState {
             }
             Step::Dig { tile, depth } => {
                 // Dug: by this sprite, or someone got there first.
-                if view.terrain.pit(tile) > depth {
+                if view.terrain.dug(tile) > depth {
                     self.dig = None;
                     return Progress::Next;
                 }
@@ -573,7 +574,7 @@ pub(super) fn finish_dig(a: &mut AgentState, tick: u64, terrain: &Ground) -> Opt
     let sprite = a.sprite_mut()?;
     let dig = sprite.dig.take_if(|d| tick + 1 >= d.until)?;
     match sprite.current() {
-        Some(Step::Dig { tile, depth }) if tile == dig.tile && terrain.pit(tile) == depth => Some(dig),
+        Some(Step::Dig { tile, depth }) if tile == dig.tile && terrain.dug(tile) == depth => Some(dig),
         _ => None,
     }
 }

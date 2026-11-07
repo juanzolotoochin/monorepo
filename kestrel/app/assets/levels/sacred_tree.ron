@@ -5,16 +5,50 @@
 // open to build on. Scene x and z are the supply's positions.
 //
 // The clearing tops a hill in the middle of 256 x 256 m of generated ground
-// to dig for stone (Dig Lab's terraces, six layers deep, sloped): a plateau
-// 31 m square and 2 m (8 steps) above the ground round it, with cliff
-// sides, and a ramp 7 m wide and 8 m long down the middle of its west
-// (-x) and east (+x) sides, one per wave lane. The plateau's top is the
-// ground's zero, so the clearing stands where it did; the hill and its
-// ramps can't be dug. Round its foot the ground stays flat for 10 m.
-Scene(id: "sacred-tree", player: "elder", features: [Digging, SlopedGround], dig_layers: Some(6), name: "THE SACRED TREE / TOWN MVP", spawn: (0.0, 0.0, 3.4), industrial: false, instances: [
+// to dig for stone (Dig Lab's terraces, sloped): a plateau 31 m square and
+// 2 m (8 steps) above the ground round it, with cliff sides, and a ramp
+// 7 m wide and 8 m long down the middle of its west (-x) and east (+x)
+// sides, one per wave lane. The plateau's top is the ground's zero, so the
+// clearing stands where it did; the hill and its ramps can't be dug, at
+// any depth. Round its foot the ground stays flat for 10 m.
+//
+// The ground is a volume (M8.3 of the depths design): the mine's terraces
+// and hill become solid cells at load, 16 layers (8 m) deep under the
+// surface (`dig_layers`) and one of bedrock, a quarter-meter terrace step
+// rounded down to the half-meter layer under it. Its stone veins go on
+// down, richer deeper; amber lies in pockets from 4 m down, and in the
+// mountain below. The elder digs it in 3D (F, Ctrl+F, Alt+F).
+Scene(id: "sacred-tree", player: "elder", features: [Digging, SlopedGround], dig_layers: Some(16), name: "THE SACRED TREE / TOWN MVP", spawn: (0.0, 0.0, 3.4), industrial: false, instances: [
 
 ],
 mine: Some((extent: 128.0, seed: 7, hill: Some((plateau: 15, height: 8, ramp_width: 7, ramp_length: 8, foot: 10)))),
+// A mountain spur north of the town (-z, away from the wave lanes along
+// x), applied over the generated volume: tiles x -16..4, z -68..-47, its
+// foot 47 m from the tree, nine 1 m tiers a tile in each (its face to the
+// town, +z, a cliff for its first four), topped at 8 m (layer 16), 9 m
+// over the ground round it (-1 m). A cave mouth in the middle of its face:
+// a hall x -8..-4 from z -47 to -53 (7 tiles in), floor -1 m (layer -2),
+// 3 m high, with a passage west x -11..-9, z -52..-50, 2.5 m high. Amber
+// in its rock: the hall's west wall by the mouth, its back wall, the
+// passage's end, and a pocket deep inside. Units are cells: tiles from the
+// tree's and 0.5 m layers (`volume::VolumeLayout`).
+volume: Some((extent: 128, boxes: [
+Solid(min: (-16, -68), max: (4, -47), bottom: -6, top: 0),
+Solid(min: (-15, -67), max: (3, -47), bottom: -6, top: 2),
+Solid(min: (-14, -66), max: (2, -47), bottom: -6, top: 4),
+Solid(min: (-13, -65), max: (1, -47), bottom: -6, top: 6),
+Solid(min: (-12, -64), max: (0, -48), bottom: -6, top: 8),
+Solid(min: (-11, -63), max: (-1, -49), bottom: -6, top: 10),
+Solid(min: (-10, -62), max: (-2, -50), bottom: -6, top: 12),
+Solid(min: (-9, -61), max: (-3, -51), bottom: -6, top: 14),
+Solid(min: (-8, -60), max: (-4, -52), bottom: -6, top: 16),
+Solid(min: (-9, -49), max: (-9, -48), bottom: -1, top: 2, material: AmberOre),
+Solid(min: (-7, -54), max: (-5, -54), bottom: 0, top: 3, material: AmberOre),
+Solid(min: (-12, -52), max: (-12, -50), bottom: -1, top: 2, material: AmberOre),
+Solid(min: (-13, -60), max: (-11, -58), bottom: 4, top: 8, material: AmberOre),
+Empty(min: (-8, -53), max: (-4, -47), bottom: -2, top: 4),
+Empty(min: (-11, -52), max: (-9, -50), bottom: -2, top: 3),
+])),
 // The light through the day and night (the supply's day cycle: dawn at the
 // start, dusk at 2:30). Noon is the forest style's light; dusk is golden,
 // amber where dawn is rosy; the moon is dim, so the night's own lights

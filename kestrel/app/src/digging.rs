@@ -172,7 +172,10 @@ fn build_ground(
 /// sloped scenes, the Dig Lab's flat tiles and walls elsewhere.
 fn ground_mesh(terrain: &Terrain, center: IVec2, extent: i32, key: IVec2) -> Mesh {
     if let Some(volume) = &terrain.volume {
-        crate::volume_mesh::chunk_mesh(volume, center, extent, key)
+        // A mine's volume (the town's) colours its tops as its terraces
+        // were, from the mine's lowest ground: the hill's foot.
+        let terraces = terrain.mine.map(|m| -(m.hill.map_or(0, |hill| hill.steps as i32) / 2));
+        crate::volume_mesh::chunk_mesh_with(volume, center, extent, key, terraces)
     } else if terrain.sloped {
         sloped_chunk_mesh(terrain, center, extent, key)
     } else {
@@ -546,7 +549,7 @@ fn layer_of(k: u8, layers: u8) -> Vec3 {
 
 /// A town's stone, in the ground and pit walls: a cool grey against the
 /// brown earth (the dig lab's minerals have their own colors).
-const STONE_TINT: Vec3 = Vec3::new(0.54, 0.55, 0.6);
+pub(crate) const STONE_TINT: Vec3 = Vec3::new(0.54, 0.55, 0.6);
 
 /// The color a mineral of `mine`'s veins tints the ground: stone grey in a
 /// town's mine (`Veins::Stone`), else the dig lab's ore colors.
@@ -968,8 +971,19 @@ pub fn snapshot(world: &World) -> serde_json::Value {
         return serde_json::Value::Null;
     };
     let Some(terrain) = service.world().map(sim::World::terrain) else { return serde_json::Value::Null };
-    let pits: Vec<_> = terrain
-        .pits
+    // A mine's volume (the town's, M8.3) has no pits: its dug tiles are
+    // those whose top is under the generated ground's, as deep as that.
+    let dug_depth = |tile: (i32, i32)| -> u8 {
+        match &terrain.volume {
+            Some(volume) => terrain.generated_top(tile).zip(volume.top(tile)).map_or(0, |(was, now)| (was - now).clamp(0, 255) as u8),
+            None => terrain.pit(tile),
+        }
+    };
+    let pits: Vec<_> = match (&terrain.volume, terrain.mine()) {
+        (Some(volume), Some(_)) => volume.columns().map(|(tile, _)| tile).filter(|&t| dug_depth(t) > 0).map(|t| (t, dug_depth(t))).collect(),
+        _ => terrain.pits.clone(),
+    };
+    let pits: Vec<_> = pits
         .iter()
         .map(|&(tile, depth)| {
             let t = arena_tile(mirror.center, tile);
@@ -979,14 +993,19 @@ pub fn snapshot(world: &World) -> serde_json::Value {
     let digging = mirror.player().zip(mirror.current.as_ref()).is_some_and(|(i, s)| s.agents[i as usize].avatar().is_some_and(|avatar| avatar.dig.is_some()));
     let collected = mirror.current.as_ref().and_then(|s| s.piles.as_ref()).filter(|lab| lab.collector.is_some()).map(|lab| lab.collected());
     let me = mirror.player().zip(mirror.current.as_ref()).map(|(i, s)| Terrain::pit_tile(s.agents[i as usize].body.position));
-    let nearest_ore = me.zip(terrain.mine()).and_then(|(me, mine)| {
+    // The ore at a tile's top: the pit's next layer, or a volume's top cell.
+    let top_ore = |t: (i32, i32)| match &terrain.volume {
+        Some(volume) => volume.top(t).and_then(|top| volume.ore(t, top - 1)),
+        None => terrain.mine().filter(|_| terrain.pit(t) < terrain.max_layers).and_then(|mine| mine.ore(t, terrain.pit(t))),
+    };
+    let nearest_ore = me.filter(|_| terrain.mine().is_some()).and_then(|me| {
         (-8..=8)
             .flat_map(|y| (-8..=8).map(move |x| (me.0 + x, me.1 + y)))
-            .filter(|&t| terrain.pit(t) < terrain.max_layers && mine.ore(t, terrain.pit(t)).is_some())
+            .filter(|&t| top_ore(t).is_some())
             .min_by_key(|&t| ((t.0 - me.0).pow(2) + (t.1 - me.1).pow(2), t))
             .map(|t| {
                 let a = arena_tile(mirror.center, t);
-                serde_json::json!({"tile": [a.x, a.y], "mineral": mine.ore(t, terrain.pit(t))})
+                serde_json::json!({"tile": [a.x, a.y], "mineral": top_ore(t)})
             })
     });
     serde_json::json!({"pits": pits, "digging": digging, "collected": collected, "nearest_ore": nearest_ore})

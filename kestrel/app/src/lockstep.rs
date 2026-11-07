@@ -428,7 +428,10 @@ fn scene_setup(library: &SceneLibrary, index: usize, cache: &crate::assets::Mode
         memory_trial: scene.features.contains(&voxel_assets::SceneFeature::MemoryTrial),
         diggable: scene.features.contains(&voxel_assets::SceneFeature::Digging),
         sloped: scene.features.contains(&voxel_assets::SceneFeature::SlopedGround),
-        volume: scene.volume.as_ref().map(|volume| volume.build()),
+        // A mine's volume (the Sacred Tree) is the mine's ground with the
+        // boxes over it, built with the mine (`Terrain::volume_from_mine`).
+        volume: scene.volume.as_ref().filter(|_| scene.mine.is_none()).map(|volume| volume.build()),
+        mine_volume: scene.volume.clone().filter(|_| scene.mine.is_some()),
         dig_layers: scene.dig_layers,
         mine: scene.mine.as_ref().map(|m| m.seed),
         // Centered on the tree when raised (`Terrain::raise_hill`).

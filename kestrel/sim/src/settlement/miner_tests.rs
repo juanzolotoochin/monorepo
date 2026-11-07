@@ -110,8 +110,8 @@ fn a_miner_digs_exposed_stone_and_carries_it_to_the_tree() {
     assert_eq!(dig.until - dig.started, ticks_from_60hz(540), "9 s a layer, 4.5 times the elder's 2 s");
     assert_eq!(dig.tile, targets[0].tile, "the nearest stone from the tree");
     let terrain = sim.world().terrain();
-    assert!(terrain.pit(dig.tile) >= 1);
-    assert!(terrain.mine().unwrap().ore(dig.tile, 0).is_some(), "it dug stone");
+    assert!(terrain.is_dug(dig.tile), "it dug the tile down");
+    assert_eq!(terrain.mine().unwrap().ore(dig.tile, 0), Some(crate::mine::STONE), "it dug stone");
     assert!(delivered(&sim) >= 3, "a dig's 3 to 6 stone at the tree: {}", delivered(&sim));
     assert!(delivered(&sim) as u64 <= dug_stone(&sim));
     eprintln!("first stone at the tree at {} s", sim.world().tick() / HZ);

@@ -140,10 +140,13 @@ pub(super) fn self_update(body: &mut Body, sprite: &mut SpriteState, ctx: &Ctx, 
 }
 
 /// Where a walker placed at `p` starts: on the floor nearest the ground
-/// (`Terrain::footprint_near` at 0 m) in a volume scene; elsewhere at 0.
+/// (`Terrain::footprint_near` at 0 m) in a volume scene, or in a mine's
+/// volume (a town on a hill, M8.3 of the depths design) on the top floor;
+/// elsewhere at 0.
 pub(super) fn start_height(terrain: &crate::terrain::Terrain, p: FxVec2, radius: Fx) -> Fx {
     if terrain.volume.is_none() {
         return Fx::ZERO;
     }
-    terrain.footprint_near(p, Fx::ZERO, radius).unwrap_or_default()
+    let near = if terrain.mine.is_some() { terrain.ground(p).unwrap_or_default() } else { Fx::ZERO };
+    terrain.footprint_near(p, near, radius).unwrap_or_default()
 }

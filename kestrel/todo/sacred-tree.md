@@ -4,33 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M8.3 The town as a volume
-
-- **Status:** open
-- **Why:** the town's mine can't have tunnels on a heightfield (T1, T2,
-  T4, T6).
-- **What to do:** convert the Sacred Tree's generated ground and hill into
-  a volume at load (the surface the same), 16 layers deep; stone veins
-  richer deeper; amber, a new ore, only below 4 m and in the mountain
-  (content, piles, HUD); an authored mountain spur 8–10 m high, 40–60 m
-  from the tree, with a cave mouth; the hill, tree, buildings, sites and
-  piles undiggable at any depth; the elder digs in 3D there. Update the
-  golden, soaks and wave tests that change.
-- **Where:** `sim/src/mine.rs`, `sim/src/volume.rs`, `terrain.rs`,
-  `app/assets/levels/sacred_tree.ron`, its supply, `app/src/digging.rs`.
-- **Found in:** depths design.
-- **Tests:** surface heights match the old heightfield; protected columns
-  refuse digs; amber only below 4 m and in the mountain; the happy path
-  and soaks pass.
-  Note (from M8.2): every body already has a feet height and walks in 3D
-  once the terrain has a volume; buildings, depots, sites and the tree are
-  assumed on the top floor at their middle (`terrain.height`), for
-  reaches, ballista targets, fire and goal floors. Haulers and sprites
-  start on the floor nearest 0 m (`follow::start_height`): for a town
-  that is a hill, start them at the top floor instead. The forest/arena
-  golden total lines change with any state shape change; behaviour lines
-  are the check.
-
 ## M8.4 Miners mine walls
 
 - **Status:** open
@@ -44,6 +17,12 @@ its milestones, in order; one PR per milestone.
   Note (from M8.2): sprites already walk on 3D paths in volume scenes
   (`haulers::route_at`, steps by `walk_at`), but `miners::search` and
   `stand_spot` are still 2D (pits, `terrain.steep`).
+  Note (from M8.3): in the town's volume a miner digs the column's top
+  cell (`Terrain::dig_top`, `dig_refusal`'s volume branch with no
+  stranding check) and `miners::search` steps between tops at most a layer
+  apart; `Step::Dig`'s depth is `Terrain::dug`. Replace these with wall
+  faces. Placement refuses footprints over tunnels and on wall edges
+  (`buildings::check`'s `hollow`).
 
 ## M8.5 Seeing, second pass
 
@@ -60,6 +39,10 @@ its milestones, in order; one PR per milestone.
 - **Found in:** depths design.
 - **Tests:** sight unit tests; screenshots in the town's tunnels and the
   mountain cave, by day and night.
+  Note (from M8.3): the town now uses the sight view; a stair dug down
+  past 2 m is a roofed tunnel and turns the view inside (everything but
+  the plateau goes dark), and inside the mountain's cave its whole top is
+  one dark lid. Screenshots in M8.3's entry.
 
 ## M8.6 Lanterns and the light grid
 
@@ -80,6 +63,11 @@ its milestones, in order; one PR per milestone.
   lantern's site one, plan deliveries to it with that goal floor
   (`haulers::route_at`'s `goal_z`), and use it in `on_building_floor` and
   `pick_target` instead of the top floor.
+  Note (from M8.3): the `amber` item and the AMBER PILE depot
+  (`tree_amber`, at (0, 1.7)) exist; amber lies from 4 m down (rare) and in
+  the mountain's cave walls (x -9, z -49..-48 by the mouth). A lantern on
+  a tunnel floor needs placement to allow its footprint there (today a
+  hollow column or a wall edge refuses).
 
 ## M8.7 Sprites and ghouls read light
 
@@ -110,6 +98,9 @@ its milestones, in order; one PR per milestone.
   within `nav::PATH_BUDGET`. The Tunnel Lab soak's seed never planned to an
   unreachable goal (240 plans, none unreached, at most 902 nodes); the
   town's should, with ghouls chasing the elder up where they can't go.
+  Note (from M8.3): amber numbers (`mine::amber`, the mountain's boxes),
+  the town save's size (1.5 MB with its volume) and the quarter-meter
+  rounding of the terraces are for here.
 
 ## A possessed ballista fires faster
 
@@ -318,6 +309,133 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M7.5.
 
 ## Done
+
+### M8.3 The town as a volume
+
+- **Status:** done (branch `kestrel-sacred-tree-depths`)
+- **Why:** the town's mine can't have tunnels on a heightfield (T1, T2,
+  T4, T6).
+- **What to do:** convert the Sacred Tree's generated ground and hill into
+  a volume at load (the surface the same), 16 layers deep; stone veins
+  richer deeper; amber, a new ore, only below 4 m and in the mountain
+  (content, piles, HUD); an authored mountain spur 8–10 m high, 40–60 m
+  from the tree, with a cave mouth; the hill, tree, buildings, sites and
+  piles undiggable at any depth; the elder digs in 3D there. Update the
+  golden, soaks and wave tests that change.
+- **Where:** `sim/src/mine.rs`, `sim/src/volume.rs`, `terrain.rs`,
+  `app/assets/levels/sacred_tree.ron`, its supply, `app/src/digging.rs`.
+- **Found in:** depths design.
+- **Tests:** surface heights match the old heightfield; protected columns
+  refuse digs; amber only below 4 m and in the mountain; the happy path
+  and soaks pass.
+  Note (from M8.2): every body already has a feet height and walks in 3D
+  once the terrain has a volume; buildings, depots, sites and the tree are
+  assumed on the top floor at their middle (`terrain.height`), for
+  reaches, ballista targets, fire and goal floors. Haulers and sprites
+  start on the floor nearest 0 m (`follow::start_height`): for a town
+  that is a hill, start them at the top floor instead. The forest/arena
+  golden total lines change with any state shape change; behaviour lines
+  are the check.
+
+- **Done:** at load (`Settlement::from_scene`, `SceneSetup::mine_volume`)
+  the mine's terraces and hill become the terrain's volume
+  (`Terrain::volume_from_mine`, `Mine::to_volume`): every tile a column
+  from its top down 16 layers (the scene's `dig_layers: Some(16)`, 8 m) and
+  one of bedrock, its veins in its cells (mine layer `k` is volume layer
+  `top - 1 - k`); then the scene's `volume:` boxes apply over it (the
+  mountain), and the rock they raise gets stone veins by depth under its
+  face (`Mine::rock_vein`), the generated veins put back under a box that
+  reached into the ground. The mine stays (`Terrain::mine`: hill, veins,
+  the generated top, `Terrain::generated_top`); pits don't count. **The
+  surface is not quite the old heightfield**: terraces step 0.25 m and
+  cells are 0.5 m, so a tile an odd number of steps up rounds down a
+  quarter meter (`Mine::volume_top`, `div_euclid`); even steps (the
+  plateau at 0 m, the foot at -2 m, every other terrace) are exact; two
+  tiles at most two steps apart stay at most a layer apart (walkable).
+  The ramps fall half a meter every other tile instead of a quarter each.
+  Veins: `mine::STONE` is now 3 (after the dig lab's three minerals), so a
+  town's volume holds stone and amber (`mine::AMBER`, 0) side by side;
+  stone as before in the top six layers, richer down to layer 8 then as
+  rich (`RICHEST_STONE`); amber pockets from 4 m down (`AMBER_DEPTH`,
+  `mine::amber`: about 0.3% of the deep cells) and authored in the
+  mountain. Content: an `amber` item ("AMBER", skin `item_amber`, a new
+  forest-style model in the `magic` and `flowers` materials) and an AMBER
+  PILE depot (`tree_amber`, only amber) at (0, 1.7), between the wood and
+  stone piles, so the depots' midpoint (the Wood Gatherer's output
+  direction) is unchanged; the HUD shows AMBER as it does STONE. A
+  volume dig's stone and amber cells yield their items on ground piles
+  (plain cells are earth: nothing), no tosses (`dig_housekeeping`).
+  The mountain spur (`sacred_tree.ron`'s `volume:`, 15 boxes): tiles x
+  -16..4, z -68..-47 from the tree, north (-z) of the town, away from the
+  wave lanes along x (rings at x ±28, z 0); nine 1 m tiers a tile in each
+  (its +z face a cliff for the first four), topped at 8 m (layer 16) over
+  ground at -1 m, so 9 m high; its foot 47 m from the tree. The cave: a
+  hall x -8..-4, z -53..-47 (mouth at z -47, 7 tiles in), floor -1 m
+  (layer -2), 3 m high, and a passage west x -11..-9, z -52..-50, 2.5 m
+  high; amber in the hall's west wall by the mouth (x -9, z -49..-48), its
+  back wall (x -7..-5, z -54), the passage's end (x -12) and a pocket deep
+  inside (x -13..-11, z -60..-58, layers 4..8). assetc accepts a volume
+  with a mine (its extent the mine's) and `lockstep::scene_setup` passes
+  it as `mine_volume`. Protected columns: the hill and ramps by the
+  undiggable ranges (`volume_dig`), the tree, buildings, sites and piles by
+  `dig_blocked` (tile-based, so every depth); placement refuses a
+  footprint over a tunnel or cave, or on a wall's edge (a neighbour's top
+  more than a layer off: a volume's cliff is not steep ground), and over
+  dug ground (`Terrain::is_dug`). The elder digs in 3D in the town (F,
+  Ctrl+F, Alt+F, as in the Tunnel Lab): to a floor 8 m under the surface,
+  no deeper (`Bottom` at the bedrock); a stair down past 2 m becomes a
+  descending tunnel (a dig clears `HEADROOM` cells), and the sight view
+  goes inside there. Miners: still surface pits, in the volume a dig of
+  the column's top cell (`Terrain::dig_top`; `dig_refusal`'s volume branch:
+  the depth rule, `Bottom` when the top span is one cell thick, no
+  steepening or stranding check); their search reads the top cell's ore
+  and steps between tiles whose tops are at most a layer apart (a cliff is
+  a wall); `Step::Dig`'s depth is `Terrain::dug` (the pit, or `128 - top`).
+  Haulers and sprites start on the top floor in a mine's volume
+  (`follow::start_height`). Speed: `Volume` caches its state hash (it is
+  hashed every tick) and keeps a lazily built grid of its columns
+  (`spans` was a binary search over 66 049 columns; the sim suite went from
+  227 s to 17 s with it), and `volume_mesh::changed_tiles` merges the two
+  volumes' sorted columns and ore instead of looking every tile up (0.7 ms
+  over the town). Drawing: the town uses the volume mesher and the sight
+  view; open-sky tops are coloured by terrace steps from the hill's foot
+  and tinted lightly by their stone as the heightfield did
+  (`chunk_mesh_with`, `ore_color`: stone grey); ground piles are drawn on
+  their own floor (`GroundPile::feet`). The 289 chunks (331 254 triangles)
+  mesh in 82 ms (`the_towns_volume_meshes_quickly`, remote opt build); the
+  town's save is 1.5 MB with the volume (`.gsav` of the demo). The control
+  snapshot's `pits` and `nearest_ore` read the volume. Golden unchanged
+  (no golden scene is the town); save format unchanged (43): no state
+  shape changed. Tests in `sim/src/settlement/town_volume_tests.rs`:
+  `the_surface_matches_the_old_heightfield` (tile by tile: exact or a
+  quarter meter lower, always the old height in whole layers),
+  `the_ground_is_sixteen_layers_deep`,
+  `veins_go_down_and_amber_lies_deep_and_in_the_mountain`,
+  `the_mountain_stands_north_of_the_town_8_to_10_m_high`,
+  `the_caves_mouth_walks_in_from_the_surface`,
+  `protected_columns_refuse_digs_at_every_depth` (plateau, east ramp,
+  tree, a site, a ground pile, from a shaft at each of its 16 floors),
+  `the_elder_digs_a_stair_down_8_m_but_no_deeper` and
+  `bodies_start_on_the_top_floor`; updated: `hill_tests` (cliffs as walls,
+  ramps rounded, 3D paths, a pit's goal flood), `lane_tests` (moats and
+  pits dug as top cells, routes walked in 3D, the planted ghoul's feet),
+  `miner_tests`, `construction_tests` (three items, a Ctrl+F dig),
+  `bundle_tests`, `soak_tests` (the elder's stone digs are Ctrl+F); in the
+  app `volume_mesh::tests::the_towns_volume_meshes_quickly` and the happy
+  path (a Ctrl+F then an F dig; the stone still on its way counts). The
+  Sacred Tree soaks and wave tests pass unchanged otherwise.
+  `app/demos/sacred_tree.json` digs with `dig_front`; a new
+  `sacred_tree_depths_demo` (`app/demos/sacred_tree_depths.json`) walks to
+  the mountain, into the cave and its passage, and digs five steps down at
+  the north foot. Screenshots (local plain build): the town from the usual
+  camera at dawn, the mountain spur and its cave mouth (amber in its
+  wall), the elder in the cave (sight view, the mountain dark), the stair
+  from outside, and inside its tunnel.
+  Not done, for later: the heightfield town's quarter-meter terraces (only
+  a finer volume layer would keep them); stone tosses for volume digs in
+  the town (`digging::toss_stone` reads pits; volume digs burst dust);
+  saves carry the whole volume (1.5 MB; a diff against the generated
+  ground would be small).
 
 ### M8.2 Every body on a floor
 

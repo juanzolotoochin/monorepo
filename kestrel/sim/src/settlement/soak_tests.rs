@@ -459,7 +459,7 @@ impl Soak {
         let behind = (2 * t.stand.0 - t.tile.0, 2 * t.stand.1 - t.tile.1);
         self.go(crate::terrain::Terrain::pit_center(behind), seen);
         self.go(crate::terrain::Terrain::pit_center(t.stand), seen);
-        self.watch(&[command(CommandKind::DigDown { agent: ELDER })], seen);
+        self.watch(&[command(CommandKind::DigFront { agent: ELDER, direction: crate::volume::DigDirection::Down })], seen);
         self.wait(5 * HZ / 2, seen);
     }
 

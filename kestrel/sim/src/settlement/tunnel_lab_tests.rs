@@ -16,7 +16,7 @@ pub(super) const SCENE: &str = include_str!("../../../app/assets/levels/tunnel_l
 
 /// The text of the scene's `key: Some(...)` section, inside the `Some`:
 /// its parentheses matched past comments and strings.
-fn section(text: &str, key: &str) -> String {
+pub(super) fn section(text: &str, key: &str) -> String {
     let open = format!("{key}: Some(");
     let start = text.find(&open).unwrap_or_else(|| panic!("no {open} in the scene")) + open.len();
     let (mut depth, mut chars) = (1, text[start..].char_indices().peekable());

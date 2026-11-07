@@ -1607,13 +1607,22 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
     // Dropped bundles: stacked on the ground in their item's skin, as an
     // output's units are, with their count ("3 WOOD").
     let mut piles = Vec::new();
+    let volume = in_volume(world);
     for p in &sim.ground_piles {
         let at = Vec3::new(p.position[0], 0., p.position[1]);
         inventory(desired, sim, &format!("ground/{}", p.id), &p.stock, at, 0.0, &OUTPUT_LAYOUT);
+        // On its own floor in a volume scene (M8.3), not the top one.
+        if volume {
+            let prefix = format!("ground/{}/", p.id);
+            for (_, view) in desired.range_mut(prefix.clone()..).take_while(|(k, _)| k.starts_with(&prefix)) {
+                view.floor = Some(p.feet.unwrap_or(0.0));
+            }
+        }
         let Some((id, units)) = p.stock.items.first_key_value() else { continue };
         let label = sim.config().items.iter().find(|it| it.id == *id).map_or_else(|| id.to_uppercase(), |it| it.label.clone());
         let key = format!("ground/{}", p.id);
-        let above = at + Vec3::Y * (ground(world, at) + 0.45);
+        let floor = if volume { p.feet.unwrap_or(0.0) } else { ground(world, at) };
+        let above = at + Vec3::Y * (floor + 0.45);
         town_caption(world, state, &key, above, format!("{units} {label}"), Color::srgb(0.98, 0.92, 0.70), String::new());
         piles.push(key);
     }

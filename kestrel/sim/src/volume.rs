@@ -72,6 +72,91 @@ pub struct Volume {
     /// The mineral in a solid cell, by tile and layer, sorted; plain ground
     /// has none.
     ore: Vec<(((i32, i32), i32), u8)>,
+    /// The state hash of the cells, once asked for: a town's volume has
+    /// hundreds of thousands of cells, and the world hashes every tick.
+    #[serde(skip)]
+    hash: HashCache,
+    /// Where each tile's column is in `columns`, once asked for: a town's
+    /// 3D paths look columns up millions of times.
+    #[serde(skip)]
+    index: IndexCache,
+}
+
+/// A grid over the columns' bounding box, each tile's column's place in
+/// `Volume::columns` (`u32::MAX` for none); built on first use and dropped
+/// when a column comes or goes. None when the box is too big for a grid.
+#[derive(Clone, Default)]
+struct IndexCache(std::sync::OnceLock<Option<ColumnGrid>>);
+
+#[derive(Clone)]
+struct ColumnGrid {
+    min: (i32, i32),
+    size: (i32, i32),
+    at: Vec<u32>,
+}
+
+/// The most tiles a [`ColumnGrid`] covers.
+const MAX_GRID_TILES: i64 = 1 << 22;
+
+impl PartialEq for IndexCache {
+    fn eq(&self, _: &IndexCache) -> bool {
+        true
+    }
+}
+
+impl Eq for IndexCache {}
+
+impl std::fmt::Debug for IndexCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("IndexCache")
+    }
+}
+
+impl ColumnGrid {
+    fn build(columns: &[((i32, i32), Vec<Span>)]) -> Option<ColumnGrid> {
+        let (first, last) = (columns.first()?.0, columns.last()?.0);
+        let (min_y, max_y) = columns.iter().fold((i32::MAX, i32::MIN), |(lo, hi), &((_, y), _)| (lo.min(y), hi.max(y)));
+        let size = (last.0 as i64 - first.0 as i64 + 1, max_y as i64 - min_y as i64 + 1);
+        if size.0 * size.1 > MAX_GRID_TILES {
+            return None;
+        }
+        let size = (size.0 as i32, size.1 as i32);
+        let mut at = vec![u32::MAX; (size.0 * size.1) as usize];
+        for (i, &((x, y), _)) in columns.iter().enumerate() {
+            at[((x - first.0) * size.1 + (y - min_y)) as usize] = i as u32;
+        }
+        Some(ColumnGrid { min: (first.0, min_y), size, at })
+    }
+
+    /// The tile's place in the columns: `Ok` if it has one, `Err` if not;
+    /// none when it is outside the grid.
+    fn find(&self, tile: (i32, i32)) -> Option<usize> {
+        let (x, y) = (tile.0 - self.min.0, tile.1 - self.min.1);
+        if x < 0 || y < 0 || x >= self.size.0 || y >= self.size.1 {
+            return None;
+        }
+        let at = self.at[(x * self.size.1 + y) as usize];
+        (at != u32::MAX).then_some(at as usize)
+    }
+}
+
+/// [`Volume`]'s hash, computed on first use and dropped by every edit. Not
+/// state: equal to any other, as `terrain::Generated` is.
+#[derive(Clone, Default)]
+struct HashCache(std::sync::OnceLock<u64>);
+
+impl PartialEq for HashCache {
+    fn eq(&self, _: &HashCache) -> bool {
+        true
+    }
+}
+
+impl Eq for HashCache {}
+
+impl std::fmt::Debug for HashCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HashCache")
+    }
 }
 
 /// The height of layer `layer`'s bottom face (the top of the layer below).
@@ -85,12 +170,26 @@ pub fn layer_at(z: Fx) -> i32 {
 }
 
 impl Volume {
+    /// A volume of these columns and ore, already as a volume keeps them:
+    /// columns sorted by tile, each's spans sorted, apart and not empty;
+    /// ore sorted by cell, in solid cells.
+    pub(crate) fn from_sorted(columns: Vec<((i32, i32), Vec<Span>)>, ore: Vec<(((i32, i32), i32), u8)>) -> Volume {
+        debug_assert!(columns.windows(2).all(|w| w[0].0 < w[1].0), "columns sorted");
+        debug_assert!(columns.iter().all(|(_, spans)| !spans.is_empty() && spans.iter().all(|s| s.bottom < s.top) && spans.windows(2).all(|w| w[0].top < w[1].bottom)));
+        debug_assert!(ore.windows(2).all(|w| w[0].0 < w[1].0), "ore sorted");
+        let volume = Volume { columns, ore, hash: HashCache::default(), index: IndexCache::default() };
+        debug_assert!(volume.ore.iter().all(|&((tile, layer), _)| volume.is_solid(tile, layer)), "ore in solid cells");
+        volume
+    }
+
     /// The same cells, `by` tiles over.
     pub fn shifted(&self, by: (i32, i32)) -> Volume {
         let shift = |(x, y): (i32, i32)| (x + by.0, y + by.1);
         Volume {
             columns: self.columns.iter().map(|(tile, spans)| (shift(*tile), spans.clone())).collect(),
             ore: self.ore.iter().map(|&((tile, layer), mineral)| ((shift(tile), layer), mineral)).collect(),
+            hash: HashCache::default(),
+            index: IndexCache::default(),
         }
     }
 
@@ -99,9 +198,19 @@ impl Volume {
         self.columns.iter().map(|(tile, spans)| (*tile, spans.as_slice()))
     }
 
+    /// Every cell with ore, by tile and layer, sorted, and its mineral.
+    pub fn ore_cells(&self) -> impl Iterator<Item = (((i32, i32), i32), u8)> + '_ {
+        self.ore.iter().copied()
+    }
+
     /// The solid spans of `tile`'s column, bottom up.
     pub fn spans(&self, tile: (i32, i32)) -> &[Span] {
-        self.columns.binary_search_by_key(&tile, |&(t, _)| t).map_or(&[], |at| &self.columns[at].1)
+        let grid = self.index.0.get_or_init(|| ColumnGrid::build(&self.columns));
+        let at = match grid {
+            Some(grid) => grid.find(tile),
+            None => self.columns.binary_search_by_key(&tile, |&(t, _)| t).ok(),
+        };
+        at.map_or(&[], |at| &self.columns[at].1)
     }
 
     pub fn is_solid(&self, tile: (i32, i32), layer: i32) -> bool {
@@ -117,6 +226,7 @@ impl Volume {
             Ok(at) => at,
             Err(at) => {
                 self.columns.insert(at, (tile, Vec::new()));
+                self.index = IndexCache::default();
                 at
             }
         };
@@ -126,6 +236,7 @@ impl Volume {
         if spans.get(at).is_some_and(|s| s.bottom <= layer) {
             return false;
         }
+        self.hash = HashCache::default();
         let below = at > 0 && spans[at - 1].top == layer;
         let above = spans.get(at).is_some_and(|s| s.bottom == layer + 1);
         match (below, above) {
@@ -147,6 +258,7 @@ impl Volume {
         let spans = &mut self.columns[column].1;
         let at = spans.partition_point(|s| s.top <= layer);
         let Some(&span) = spans.get(at).filter(|s| s.bottom <= layer) else { return false };
+        self.hash = HashCache::default();
         match (span.bottom == layer, span.top == layer + 1) {
             (true, true) => {
                 spans.remove(at);
@@ -160,6 +272,7 @@ impl Volume {
         }
         if spans.is_empty() {
             self.columns.remove(column);
+            self.index = IndexCache::default();
         }
         if let Ok(at) = self.ore.binary_search_by_key(&(tile, layer), |&(cell, _)| cell) {
             self.ore.remove(at);
@@ -203,6 +316,7 @@ impl Volume {
         if !self.is_solid(tile, layer) {
             return false;
         }
+        self.hash = HashCache::default();
         match (self.ore.binary_search_by_key(&(tile, layer), |&(cell, _)| cell), mineral) {
             (Ok(at), Some(m)) => self.ore[at].1 = m,
             (Ok(at), None) => {
@@ -444,6 +558,14 @@ impl VolumeLayout {
     /// [`crate::settlement::SceneSetup::volume`] takes it).
     pub fn build(&self) -> Volume {
         let mut volume = Volume::default();
+        self.apply(&mut volume);
+        volume
+    }
+
+    /// Applies its boxes, in order, over `volume` (in tiles from the
+    /// scene's origin): a town's generated ground (M8.3 of the depths
+    /// design), or nothing.
+    pub fn apply(&self, volume: &mut Volume) {
         for b in &self.boxes {
             match *b {
                 VolumeBox::Solid { min, max, bottom, top, material } => {
@@ -459,12 +581,22 @@ impl VolumeLayout {
                 VolumeBox::Empty { min, max, bottom, top } => volume.clear_box((min[0], min[1]), (max[0], max[1]), bottom, top),
             }
         }
-        volume
     }
 }
 
 impl StateHash for Volume {
+    /// The cells' hash, computed once per edit ([`HashCache`]).
     fn hash_into(&self, h: &mut StateHasher) {
+        h.write_u64(*self.hash.0.get_or_init(|| {
+            let mut cells = StateHasher::default();
+            self.hash_cells(&mut cells);
+            cells.finish()
+        }));
+    }
+}
+
+impl Volume {
+    fn hash_cells(&self, h: &mut StateHasher) {
         h.write_u64(self.columns.len() as u64);
         for ((x, y), spans) in &self.columns {
             h.write_u64((*x as u32 as u64) << 32 | *y as u32 as u64);

@@ -319,8 +319,15 @@ pub struct SceneSetup {
     /// center tile ([`crate::terrain::Terrain::volume`]); none in scenes of
     /// heightfield ground.
     pub volume: Option<crate::volume::Volume>,
+    /// A mine scene whose ground is a volume (the Sacred Tree, M8.3 of the
+    /// depths design): the mine's generated ground and hill become the
+    /// volume, `dig_layers` deep, and these boxes (the scene's `volume:`)
+    /// apply over it ([`crate::terrain::Terrain::volume_from_mine`]). Set
+    /// it with `mine`, and leave `volume` unset.
+    pub mine_volume: Option<crate::volume::VolumeLayout>,
     /// The deepest a pit goes, in layers; [`crate::terrain::MAX_LAYERS`] if
-    /// unset.
+    /// unset. In a mine's volume, how deep its ground goes under the
+    /// surface.
     pub dig_layers: Option<u8>,
     /// Generates the arena's ground as a mine from this seed.
     pub mine: Option<u64>,
@@ -628,8 +635,19 @@ impl Settlement {
             if let Some(hill) = setup.hill {
                 terrain.raise_hill(hill)?;
             }
+            if let Some(layout) = &setup.mine_volume {
+                if setup.volume.is_some() {
+                    return Err("a mine's volume is the mine's ground and its boxes; don't give the scene another".into());
+                }
+                if town && settlement.item_index(crate::mine::AMBER_ID).is_none() {
+                    return Err(format!("a town's volume yields {:?}, which the scenario has no item for", crate::mine::AMBER_ID));
+                }
+                terrain.volume_from_mine(Some(layout))?;
+            }
         } else if setup.hill.is_some() {
             return Err("a scene's hill stands in a mine; give it one".into());
+        } else if setup.mine_volume.is_some() {
+            return Err("a mine's volume needs a mine".into());
         }
         terrain.revision += 1;
         settlement.spawn = at([setup.spawn[0], setup.spawn[2]]);
@@ -1216,6 +1234,8 @@ mod scene_tests;
 mod seat_tests;
 #[cfg(test)]
 mod tunnel_lab_tests;
+#[cfg(test)]
+mod town_volume_tests;
 #[cfg(test)]
 mod path_tests;
 #[cfg(test)]

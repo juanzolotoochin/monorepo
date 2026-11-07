@@ -36,7 +36,8 @@
       ]
     },
     {
-      "op": "dig"
+      "op": "dig_front",
+      "direction": "Down"
     },
     {
       "op": "wait",
@@ -50,7 +51,8 @@
       ]
     },
     {
-      "op": "dig"
+      "op": "dig_front",
+      "direction": "Level"
     },
     {
       "op": "wait",

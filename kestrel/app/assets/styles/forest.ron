@@ -114,6 +114,12 @@ Style(id: "brasswood-frontier", actor_name: Some("FRONTIER RANGER"), actor_weapo
 (kind: Box, position: (0.0, 0.0, 0.0), size: (0.42, 0.22, 0.32), material: "iron")
 ])
 ]),
+(id: "item_amber", scale: 1.0, motion: Static, voxel_size: Some(0.05), parts: [
+(part: Body, pivot: Some((0.0, 0.0, 0.0)), shapes: [
+(kind: Octahedron, position: (0.0, 0.0, 0.0), size: (0.32, 0.3, 0.32), material: "magic"),
+(kind: Octahedron, position: (0.14, -0.04, 0.08), size: (0.18, 0.18, 0.18), material: "flowers")
+])
+]),
 (id: "item_arrow", scale: 1.0, motion: Static, voxel_size: Some(0.05), parts: [
 (part: Body, pivot: Some((0.0, 0.0, 0.0)), shapes: [
 (kind: Box, position: (0.0, 0.0, 0.0), size: (0.65, 0.08, 0.08), material: "arrow"),

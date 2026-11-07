@@ -568,6 +568,10 @@ pub struct GroundPile {
     pub position: Point,
     /// What it holds: one item.
     pub stock: Inventory,
+    /// The floor it lies on (`Pile::height`) while off 0 m: in a volume
+    /// scene it may be under another (M8.3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feet: Option<f32>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1186,7 +1190,12 @@ impl Simulation {
             .into_iter()
             .flat_map(|lab| lab.piles.iter())
             .filter(|&(&id, p)| p.source.is_none() && p.item().map_or_else(|| flying(id), |i| !mineral(i)))
-            .map(|(&id, p)| GroundPile { id, position: local(p.position), stock: inventory(&p.inventory.counts, p.inventory.capacity) })
+            .map(|(&id, p)| GroundPile {
+                id,
+                position: local(p.position),
+                stock: inventory(&p.inventory.counts, p.inventory.capacity),
+                feet: (p.height != Fx::ZERO).then(|| p.height.to_f32()),
+            })
             .collect();
         Simulation {
             config: config.clone(),

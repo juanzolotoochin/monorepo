@@ -733,9 +733,14 @@ impl Settlement {
                     }
                 }
             }
-            // A miner's, if no one dug its layer out first (`Step::Dig`).
+            // A miner's, if no one dug its layer out first (`Step::Dig`): in
+            // a volume, the column's top cell (M8.3).
             if let Some(dig) = super::sprites::finish_dig(a, tick, terrain) {
-                if terrain.deepen(dig.tile) {
+                if terrain.volume.is_some() {
+                    if let Some((layer, ore)) = terrain.dig_top(dig.tile) {
+                        cells.push((dig.tile, layer, ore, layer));
+                    }
+                } else if terrain.deepen(dig.tile) {
                     dug.push(dig.tile);
                 }
             }
@@ -752,17 +757,27 @@ impl Settlement {
         let spots = self.buildings.iter().flat_map(|b| [b.output_position, b.slot_position(&self.building_kinds[b.kind as usize])]);
         let targets: Vec<FxVec2> = docks.chain(spots).collect();
         let stone = self.item_index(crate::mine::STONE_ID);
+        // A town's volume (M8.3): plain cells are earth, stone and amber
+        // cells their items.
+        let town = terrain.mine.is_some_and(|m| m.veins == crate::mine::Veins::Stone);
+        let amber = self.item_index(crate::mine::AMBER_ID);
         for (tile, layer, ore, bottom) in cells {
             let Some(lab) = self.piles.as_mut() else { break };
             let item = match (ore, stone) {
                 (Some(mineral), _) if lab.has_minerals() => lab.item(mineral),
-                (None, Some(stone)) => stone,
+                (Some(crate::mine::STONE), Some(stone)) if town => stone,
+                (Some(crate::mine::AMBER), _) if town => match amber {
+                    Some(amber) => amber,
+                    None => continue,
+                },
+                (None, Some(stone)) if !town => stone,
                 _ => continue,
             };
             let units = crate::mine::cell_yield(tile, layer);
             let Some((id, first)) = lab.mined_at(item, units, tile, Some(bottom), terrain, &targets) else { continue };
             self.accounts[item as usize].generated += units as u64;
-            let Some(material) = ore else { continue };
+            // A town's stone and amber (no pile lab minerals) are just there.
+            let Some(material) = ore.filter(|_| lab.has_minerals()) else { continue };
             let position = lab.piles[&id].position;
             // From the floor the dig cleared down to (M8.2).
             let from = TossEnd::Pit { position: Terrain::pit_center(tile), height: crate::volume::height(bottom) };

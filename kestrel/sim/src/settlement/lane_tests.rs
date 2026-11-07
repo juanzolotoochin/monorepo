@@ -57,13 +57,17 @@ fn tile(sim: &Simulation, x: i32, y: i32) -> (i32, i32) {
     (tree.0 + x, tree.1 + y)
 }
 
-/// Every leg of `route` from `from` is walkable for a ghoul.
-fn walks(terrain: &Terrain, from: FxVec2, route: &[FxVec2]) -> bool {
-    let mut a = from;
+/// Every leg of `route` from `from`, its feet at `z`, is walkable for a
+/// ghoul on foot in the town's volume (M8.3), its feet following the floor.
+fn walks(terrain: &Terrain, from: FxVec2, z: Fx, route: &[FxVec2]) -> bool {
+    let (mut a, mut z) = (from, z);
     route.iter().all(|&b| {
-        let ok = a == b || super::chase::walk_clear(terrain, a, b);
-        a = b;
-        ok
+        if a == b {
+            return true;
+        }
+        let Some(feet) = terrain.walk_at(a, b, z, super::chase::WALK_CLEARANCE).filter(|_| terrain.clear(a, b, super::chase::WALK_CLEARANCE)) else { return false };
+        (a, z) = (b, feet);
+        true
     })
 }
 
@@ -100,13 +104,20 @@ fn moat(sim: &Simulation, side: i32) -> Vec<(i32, i32)> {
     tiles
 }
 
-/// Takes two layers out of each of `tiles`, straight in the ground.
+/// Takes two layers out of each of `tiles`, straight in the ground: the
+/// top cells of the town's volume (M8.3).
 fn dig_out(sim: &mut Simulation, tiles: &[(i32, i32)]) {
     let terrain = sim.world_mut().settlement_and_terrain_mut().1;
     for &t in tiles {
         assert!(!terrain.is_undiggable(t), "{t:?} can be dug");
-        assert!(terrain.deepen(t) && terrain.deepen(t));
+        assert!(terrain.dig_top(t).is_some() && terrain.dig_top(t).is_some());
     }
+}
+
+/// How many layers `tile` is dug under the generated ground.
+fn depth(sim: &Simulation, tile: (i32, i32)) -> i32 {
+    let terrain = sim.world().terrain();
+    terrain.generated_top(tile).unwrap() - terrain.volume.as_ref().unwrap().top(tile).unwrap()
 }
 
 /// Steps until the first ghoul is out.
@@ -131,15 +142,17 @@ fn a_pit_dug_in_a_ghouls_way_turns_it_round_the_pit() {
     // All but the last layer straight in the ground; the elder digs that.
     let (last, rest) = pit.split_last().unwrap();
     dig_out(&mut sim, rest);
-    sim.world_mut().settlement_and_terrain_mut().1.deepen(*last);
+    assert!(sim.world_mut().settlement_and_terrain_mut().1.dig_top(*last).is_some());
     let tick = sim.world().tick();
-    sim.world_mut().settlement_mut().agents[ELDER as usize].avatar_mut().unwrap().dig = Some(Dig { tile: *last, started: tick, until: tick + 1, layer: None });
+    // The elder's dig of the last layer: its top cell, in the volume.
+    let bottom = sim.world().terrain().volume.as_ref().unwrap().top(*last).unwrap() - 1;
+    sim.world_mut().settlement_mut().agents[ELDER as usize].avatar_mut().unwrap().dig = Some(Dig { tile: *last, started: tick, until: tick + 1, layer: Some(bottom) });
     step(&mut sim, &[]);
+    assert_eq!(depth(&sim, *last), 2, "the elder's dig went in");
     let terrain = sim.world().terrain();
-    assert_eq!(terrain.pit(*last), 2, "the elder's dig went in");
-    assert!(!walks(terrain, ghoul.position, &ghoul.route), "the old route crosses the pit");
+    assert!(!walks(terrain, ghoul.position, ghoul.height, &ghoul.route), "the old route crosses the pit");
     let t = &settlement(&sim).threats[0];
-    assert!(walks(terrain, t.position, &t.route), "the new one walks round it: {:?}", t.route);
+    assert!(walks(terrain, t.position, t.height, &t.route), "the new one walks round it: {:?}", t.route);
     assert!(!t.stranded);
     let mut breached = false;
     for _ in 0..120 * HZ {
@@ -272,7 +285,8 @@ fn a_miner_flees_a_ghoul_home_and_goes_back_to_work() {
     // the tree.
     let away = (at - terrain.center).normalize_or_zero();
     let position = at + away * fx(2.5);
-    let route = super::chase::route_home(terrain, position, terrain.center + FxVec2::new(fx(1.8), fx(-0.6))).0;
+    let height = terrain.height(position);
+    let route = super::chase::route_home_at(terrain, position, height, terrain.center + FxVec2::new(fx(1.8), fx(-0.6))).0;
     assert!(!route.is_empty());
     let character = Content::builtin().names.character_index("ghoul_sacred_tree").unwrap();
     let s = sim.world_mut().settlement_mut();
@@ -297,7 +311,7 @@ fn a_miner_flees_a_ghoul_home_and_goes_back_to_work() {
         burn: None,
         goal: Goal::Tree,
         stranded: false,
-        height: Default::default(),
+        height,
         chase: Vec::new(),
         backoff: Default::default(),
     });

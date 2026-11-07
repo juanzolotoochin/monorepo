@@ -335,7 +335,10 @@ pub struct Scene {
     /// (tunnels, caves, bridges; `kestrel/VERTICALITY.md`): solid and empty
     /// boxes in tiles and 0.5 m layers, applied in order
     /// ([`sim::volume::VolumeLayout`] has the units). Needs `SlopedGround`;
-    /// the volume is the whole ground, so not with a mine or terrain.
+    /// the volume is the whole ground, so not with terrain. With a mine
+    /// (the Sacred Tree, M8.3 of the depths design), the mine's generated
+    /// ground becomes the volume and the boxes apply over it: the volume's
+    /// extent is the mine's.
     #[serde(default)]
     pub volume: Option<sim::volume::VolumeLayout>,
     /// Test walkers (V.7 of the verticality design): where each starts
@@ -789,11 +792,18 @@ impl ScenePack {
 /// it is the scene's only ground and slopes, and the spawn stands on it.
 fn validate_volume(scene: &Scene, volume: &sim::volume::VolumeLayout) -> Result<()> {
     volume.validate()?;
-    if scene.mine.is_some() || scene.terrain.is_some() {
-        return Err("a volume is the scene's ground: it can't have a mine or terrain too".into());
+    if scene.terrain.is_some() {
+        return Err("a volume is the scene's ground: it can't have terrain too".into());
     }
     if !scene.features.contains(&SceneFeature::SlopedGround) {
         return Err("a volume needs the SlopedGround feature".into());
+    }
+    // Over a mine's ground, which covers the whole map.
+    if let Some(mine) = &scene.mine {
+        if mine.extent != volume.extent as f32 {
+            return Err(format!("a mine's volume has the mine's extent ({}), not {}", mine.extent, volume.extent));
+        }
+        return Ok(());
     }
     let [x, _, z] = scene.spawn;
     let half = volume.extent as f32 + 0.5;

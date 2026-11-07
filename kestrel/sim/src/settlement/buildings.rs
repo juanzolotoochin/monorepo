@@ -440,7 +440,18 @@ pub(super) fn placement(ground: &Ground, k: BuildingKindIx, center: FxVec2) -> R
         return Err(PlacementRefusal::OutsideArena);
     }
     let (first, last) = (Terrain::pit_tile(center - reach), Terrain::pit_tile(center + reach));
-    if (first.0..=last.0).any(|x| (first.1..=last.1).any(|y| terrain.pit((x, y)) > 0 || terrain.steep((x, y)))) {
+    // In a volume, not over a tunnel or cave either (T6 of the depths
+    // design: nothing is dug under the town), nor on a wall's edge (a
+    // neighbour's top more than a layer off: a volume's cliff is a wall,
+    // not steep ground).
+    let hollow = |t: (i32, i32)| {
+        terrain.volume.as_ref().is_some_and(|v| {
+            let top = v.top(t);
+            let edge = [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|&(dx, dy)| top.zip(v.top((t.0 + dx, t.1 + dy))).is_none_or(|(a, b)| (a - b).abs() > 1));
+            v.spans(t).len() > 1 || edge
+        })
+    };
+    if (first.0..=last.0).any(|x| (first.1..=last.1).any(|y| terrain.is_dug((x, y)) || terrain.steep((x, y)) || hollow((x, y)))) {
         return Err(PlacementRefusal::Uneven);
     }
     let apart = |p: FxVec2, q: FxVec2, gap: Fx| p.distance(q) > gap + CLEARANCE_MARGIN;

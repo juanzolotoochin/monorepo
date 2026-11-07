@@ -293,6 +293,16 @@ game_demo(
     tags = ["manual"],
 )
 
+# The Sacred Tree as a volume (M8.3 of the depths design): the town, the
+# walk to the mountain spur north of it and into its cave, and a stair dug
+# down at the north foot.
+game_demo(
+    name = "sacred_tree_depths_demo",
+    game = ":demo",
+    script = "demos/sacred_tree_depths.json",
+    tags = ["manual"],
+)
+
 game_demo(
     name = "combat_arena_demo",
     assertions = "demos/combat_arena.assertions.json",
