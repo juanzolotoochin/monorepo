@@ -8,7 +8,7 @@
 // veins, a few exposed 15 to 40 m out), so the stone pile starts empty too.
 // Amber is dug too, from 4 m down and in the mountain north of the town
 // (the scene's volume); its pile by the tree keeps it for lanterns (M8.6 of
-// the depths design), and for now it just accumulates.
+// the depths design).
 // Positions are meters from the clearing's center (the scene's x and z).
 (id: "sacred_tree", extent: 128.0, items: [
 (id: "wood", label: "WOOD", skin: "item_lumber", scale: 0.45),
@@ -45,6 +45,16 @@
    burn_damage: 1, burn_period: 1.5, burn_linger: 1.0))), parts: [
 (id: "foundation", label: "FOUNDATION", materials: [(item: "wood", units: 2)]),
 (id: "mechanism", label: "MECHANISM", materials: [(item: "wood", units: 2), (item: "stone", units: 2)])
+]),
+// A lantern (M8.6 of the depths design, L1, L2): a post with a glowing
+// amber head, put up on any floor, in a tunnel too, from 1 stone and 1
+// amber that miners bring from the tree's piles. Built, it burns forever
+// and lights what it sees on its own floor within 6 m (the sim's light
+// grid). It makes nothing, holds nothing and blocks no one (a tunnel is a
+// tile wide); ghouls leave it be.
+(id: "lantern", label: "LANTERN", skin: "lantern", radius: 0.2, output_distance: 0.0, health: 10,
+ light: Some((range: 6.0)), parts: [
+(id: "lantern", label: "LANTERN", materials: [(item: "stone", units: 1), (item: "amber", units: 1)])
 ])
 ], buildings: [
 (kind: "wood_gatherer", position: (-5.2, 0.6))

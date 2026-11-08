@@ -27,6 +27,7 @@ mod follow;
 mod haulers;
 pub mod interact;
 mod inventory;
+pub mod light;
 pub mod memory;
 pub mod miners;
 pub mod piano;
@@ -279,6 +280,11 @@ pub struct Settlement {
     /// Threats the sunrise burned away (`Event::Dispelled`): not kills.
     #[serde(default)]
     pub dispelled: u64,
+    /// What the built lanterns light (M8.6, `light`): derived from the
+    /// buildings and the volume, so neither saved nor hashed, and
+    /// recomputed when they change (`Settlement::refresh_light`).
+    #[serde(skip)]
+    pub light: light::LightGrid,
 }
 
 /// A vehicle a scene parks, in arena coordinates.
@@ -545,6 +551,7 @@ impl Settlement {
             fires: Vec::new(),
             clock: Clock::of(scenario),
             dispelled: 0,
+            light: light::LightGrid::default(),
             combat: CombatMetrics::default(),
             events: Vec::new(),
             spawn: FxVec2::ZERO,
@@ -1224,6 +1231,8 @@ mod interact_tests;
 mod miner_tests;
 #[cfg(test)]
 mod lane_tests;
+#[cfg(test)]
+mod light_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

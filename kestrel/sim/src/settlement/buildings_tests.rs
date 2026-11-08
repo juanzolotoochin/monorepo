@@ -87,7 +87,7 @@ const SPRITE: u16 = 1;
 fn the_sacred_tree_loads_with_one_built_wood_gatherer() {
     let sim = sacred_tree();
     let s = settlement(&sim);
-    assert_eq!(s.building_kinds.iter().map(|k| k.id.as_str()).collect::<Vec<_>>(), ["wood_gatherer", "ballista"]);
+    assert_eq!(s.building_kinds.iter().map(|k| k.id.as_str()).collect::<Vec<_>>(), ["wood_gatherer", "ballista", "lantern"]);
     let kind = s.building_kind(0);
     assert_eq!((kind.period, kind.cap, kind.possessed_cap), (5 * TICKS_PER_SECOND as u64, 10, 20));
     assert_eq!((kind.possessed_multiplier, kind.burst, kind.burst_cooldown), (Fx::from_int(4), 5, 30 * TICKS_PER_SECOND as u64));

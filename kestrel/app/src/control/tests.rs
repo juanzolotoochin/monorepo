@@ -723,7 +723,7 @@ fn the_elder_builds_a_wood_gatherer_that_a_sprite_works() {
     assert_eq!(report["status"], "passed", "{report}");
     let receipts = report["receipts"].as_array().unwrap();
     let state = |i: usize| &receipts[i]["state"]["settlement"];
-    assert_eq!(state(5)["interact"]["build_menu"], json!(["wood_gatherer", "ballista"]), "{}", state(5)["interact"]);
+    assert_eq!(state(5)["interact"]["build_menu"], json!(["wood_gatherer", "ballista", "lantern"]), "{}", state(5)["interact"]);
     let ghost = |i: usize| &state(i)["interact"]["ghost"];
     assert_eq!(state(8)["interact"]["placing"], "wood_gatherer");
     assert_eq!((&ghost(8)["valid"], &ghost(8)["reason"]), (&json!(false), &json!("BLOCKED")), "{}", ghost(8));

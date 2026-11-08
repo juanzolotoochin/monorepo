@@ -28,8 +28,9 @@ const TREE_WOOD: DepotIx = 0;
 const TREE_STONE: DepotIx = 1;
 const WOOD_GATHERER: BuildingKindIx = 0;
 const BALLISTA: BuildingKindIx = 1;
-/// The test-only kind (`tests::with_stone_gatherer`), after the ballista.
-const STONE_GATHERER: BuildingKindIx = 2;
+/// The test-only kind (`tests::with_stone_gatherer`), after the ballista
+/// and the lantern.
+const STONE_GATHERER: BuildingKindIx = 3;
 /// The prebuilt Wood Gatherer, and the first site put down.
 const PREBUILT: BuildingIx = 0;
 const FIRST_SITE: BuildingIx = 1;

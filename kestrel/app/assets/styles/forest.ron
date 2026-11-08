@@ -22,7 +22,8 @@ Style(id: "brasswood-frontier", actor_name: Some("FRONTIER RANGER"), actor_weapo
 (name: "rooflight", color: (0.18, 0.36, 0.39), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.95, impact: Stone),
 (name: "bark", color: (0.22, 0.14, 0.1), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.95, impact: Stone),
 (name: "moss", color: (0.29, 0.39, 0.29), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.95, impact: Stone),
-(name: "flowers", color: (0.78, 0.53, 0.24), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.95, impact: Stone)
+(name: "flowers", color: (0.78, 0.53, 0.24), emissive: (0.0, 0.0, 0.0), metallic: 0.0, roughness: 0.95, impact: Stone),
+(name: "lanternglow", color: (0.95, 0.72, 0.42), emissive: (10.0, 5.0, 1.5), metallic: 0.0, roughness: 0.6, impact: Stone)
 ], background: (0.16, 0.22, 0.18), ambient: (0.66, 0.79, 0.92), ambient_brightness: 800.0, sunlight: (1.0, 0.96, 0.88), illuminance: 14000.0, sun_shadows: true, accents: ((0.65, 0.7, 0.38), (0.9, 0.55, 0.18), (0.2, 0.45, 0.35)), bloom: 0.05, fog_density: 0.003, viewport_height: 26.0, exposure_ev100: 10.3, shadow_depth_bias: 0.008, shadow_normal_bias: 0.12, ao_thickness: 0.12, weapon_name: "BRASSWOOD / IRON LONGSWORD", actor: [
 (part: Body, pivot: Some((0.0, 0.94, 0.0)), shapes: [
 (kind: Box, position: (0.0, 0.05, 0.0), size: (0.55, 0.65, 0.35), material: "cloth"),
@@ -131,6 +132,14 @@ Style(id: "brasswood-frontier", actor_name: Some("FRONTIER RANGER"), actor_weapo
 (part: Body, pivot: Some((0.0, 0.0, 0.0)), shapes: [
 (kind: Box, position: (0.0, 0.16, 0.0), size: (0.8, 0.22, 0.7), material: "wood"),
 (kind: Box, position: (0.0, 0.0, 0.0), size: (1.0, 0.2, 0.5), material: "metal")
+])
+]),
+(id: "lantern", scale: 1.0, motion: Static, voxel_size: Some(0.05), parts: [
+(part: Body, pivot: Some((0.0, 0.0, 0.0)), shapes: [
+(kind: Box, position: (0.0, 0.05, 0.0), size: (0.3, 0.1, 0.3), material: "stone"),
+(kind: Box, position: (0.0, 0.6, 0.0), size: (0.1, 1.1, 0.1), material: "wood"),
+(kind: Box, position: (0.0, 1.25, 0.0), size: (0.24, 0.26, 0.24), material: "lanternglow"),
+(kind: Box, position: (0.0, 1.41, 0.0), size: (0.4, 0.06, 0.4), material: "wood")
 ])
 ]),
 (id: "mill", scale: 1.0, motion: Machine(axis: (0.0, 0.0, 1.0)), voxel_size: Some(0.05), parts: [

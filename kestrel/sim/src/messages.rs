@@ -531,12 +531,19 @@ impl StateHash for BurstRefused {
 pub struct PlaceBlueprint {
     pub kind: u16,
     pub position: FxVec2,
+    /// The placing player's elder's feet, if it has one: a lantern goes on
+    /// the floor under it (M8.6). Read from the settlement when the command
+    /// applies, so commands and the input log are unchanged.
+    pub feet: Option<Fx>,
 }
 
 impl StateHash for PlaceBlueprint {
     fn hash_into(&self, h: &mut StateHasher) {
         h.write(&self.kind);
         h.write(&self.position);
+        if let Some(feet) = self.feet {
+            h.write(&feet);
+        }
     }
 }
 
@@ -883,6 +890,8 @@ message_queues! {
     // pile, after the slots. Hashed only when not empty.
     claim_dig_tile: ClaimDigTile,
     sprite_bundle: SpriteBundle,
+    // Miners installing a lantern's site (M8.6), after their bundles.
+    sprite_install: Install,
     // Ballista buildings' shots (`Settlement::building_fire`), applied after
     // the defenders'.
     building_fire: BuildingFire,

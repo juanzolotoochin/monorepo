@@ -135,7 +135,14 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///     player's arrow the floor it flies over (`Projectile::floor`).
 /// 44: miners mine walls (M8.4 of the Sacred Tree depths): a sprite's plan
 ///     can hold a level wall dig (`sprites::Step::DigWall`, appended).
-pub const FORMAT_VERSION: u32 = 44;
+/// 45: lanterns and the light grid (M8.6 of the Sacred Tree depths): a
+///     building kind keeps its light (`BuildingKind::light`), a building
+///     the floor it stands on (`BuildingState::height`), a miner's plan can
+///     fetch for, supply and install a lantern's site (`sprites::Step::Fetch`,
+///     `Supply`, `Install`, appended), and the pending messages a queue of
+///     miners' installs (`Messages::sprite_install`). The light grid itself
+///     is derived and recomputed on load, never saved.
+pub const FORMAT_VERSION: u32 = 45;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

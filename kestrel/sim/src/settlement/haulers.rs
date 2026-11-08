@@ -269,6 +269,8 @@ pub(super) struct Ctx<'a> {
     pub view: View<'a>,
     /// Miners' dig claims as of last tick (`SpriteState::dig_claim`).
     pub dig_claims: &'a [((i32, i32), AgentIx)],
+    /// Miners' lantern errands as of last tick (`miners::Errand`, M8.6).
+    pub errands: &'a [super::miners::Errand],
     /// The town's stone and its stone pile (`Settlement::stone_depot`).
     pub stone: Option<(ItemIx, DepotIx)>,
     /// The town's amber and its amber pile (`Settlement::amber_depot`).

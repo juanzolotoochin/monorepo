@@ -40,6 +40,8 @@ pub struct Settlement {
     produced_at: BTreeMap<usize, u64>,
     /// The tick each building last had a Burst, for its lamp's bigger flash.
     burst_at: BTreeMap<usize, u64>,
+    /// Each built lantern's point light, by building index (M8.6).
+    lantern_lights: BTreeMap<usize, Entity>,
     /// The elder's last interact refusal and the tick it came, shown over
     /// its head for `REFUSAL_SECONDS`.
     refusal: Option<(String, f32)>,
@@ -1481,12 +1483,18 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
     let seconds = sim.time() / HZ;
     let burst = burst_indicator(world);
     let leave = leave_prompt(world);
+    let volume = in_volume(world);
+    let mut lanterns = Vec::new();
     for (i, b) in sim.buildings.iter().enumerate() {
         let kind = sim.config().building_kinds.iter().find(|k| k.id == b.kind).expect("a scenario building kind");
         let shape = state.building_shapes[&b.kind];
         let heading = facing(b.position, b.output_position);
         let mut v = View::new(&kind.skin, b.position);
         v.heading = heading;
+        // On its own floor in a volume scene (M8.6: a lantern in a tunnel).
+        if volume {
+            v.floor = Some(b.feet.unwrap_or(0.0));
+        }
         // A site shows its parts going in: a bare plot (ringed on the ground,
         // `input::hud`), then the skin at a share of its size for each part
         // installed, and whole once built.
@@ -1507,7 +1515,20 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
         let out = Vec3::new(b.output_position[0], 0., b.output_position[1]);
         inventory(desired, sim, &format!("output/{i}"), &b.output, out, heading, &OUTPUT_LAYOUT);
         let center = Vec3::new(b.position[0], 0., b.position[1]);
-        let center = center + Vec3::Y * ground(world, center);
+        let center = center + Vec3::Y * if volume { b.feet.unwrap_or(0.0) } else { ground(world, center) };
+        // A lantern (M8.6): built, it is its post and its light, with no
+        // card, lamp or pile; a site says what it needs, as any site.
+        if kind.light.is_some() {
+            if b.site.is_none() {
+                lanterns.push((i, center));
+                for key in [format!("building/{i}"), format!("output/{i}")] {
+                    if let Some(e) = state.labels.remove(&key) {
+                        world.despawn(e);
+                    }
+                }
+                continue;
+            }
+        }
         let (glow, status) = match (&b.occupant, b.status) {
             (Some(Occupant::Elder(_)), BuildingStatus::Full) => (Glow::Full, "FULL / POSSESSED".to_string()),
             (Some(Occupant::Elder(_)), BuildingStatus::NoAmmo) => (Glow::Full, "NO AMMO / POSSESSED".to_string()),
@@ -1614,10 +1635,10 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
             world.despawn(e);
         }
     }
+    lantern_lights(world, state, &lanterns);
     // Dropped bundles: stacked on the ground in their item's skin, as an
     // output's units are, with their count ("3 WOOD").
     let mut piles = Vec::new();
-    let volume = in_volume(world);
     for p in &sim.ground_piles {
         let at = Vec3::new(p.position[0], 0., p.position[1]);
         inventory(desired, sim, &format!("ground/{}", p.id), &p.stock, at, 0.0, &OUTPUT_LAYOUT);
@@ -1897,6 +1918,55 @@ fn volume_feet(world: &World, a: &crate::legacy::AgentState) -> Option<f32> {
 fn in_volume(world: &World) -> bool {
     let service = world.resource::<crate::lockstep::SessionService>();
     service.world().is_some_and(|w| w.terrain().volume.is_some())
+}
+
+/// A built lantern's light (M8.6): a small warm point light under its
+/// head, no shadows, always on (a lantern burns forever). The ground under
+/// a roof is lit from the sim's light grid by the cutaway shader; this
+/// lights bodies and the lantern's surroundings the way the grid can't.
+const LANTERN_LUMENS: f32 = 60000.0;
+const LANTERN_RANGE: f32 = 6.0;
+/// The light's height over the lantern's foot: just under its head.
+const LANTERN_LIGHT_HEIGHT: f32 = 1.15;
+
+/// Keeps one point light per built lantern, `lanterns` (building index and
+/// foot), spawning new ones and dropping those gone.
+fn lantern_lights(world: &mut World, state: &mut Settlement, lanterns: &[(usize, Vec3)]) {
+    let gone: Vec<usize> = state.lantern_lights.keys().filter(|i| !lanterns.iter().any(|(j, _)| j == *i)).copied().collect();
+    for i in gone {
+        if let Some(e) = state.lantern_lights.remove(&i) {
+            if let Ok(e) = world.get_entity_mut(e) {
+                e.despawn();
+            }
+        }
+    }
+    for &(i, foot) in lanterns {
+        let at = Transform::from_translation(foot + Vec3::Y * LANTERN_LIGHT_HEIGHT);
+        match state.lantern_lights.get(&i).copied() {
+            Some(e) if world.get_entity(e).is_ok() => {
+                if let Some(mut transform) = world.get_mut::<Transform>(e) {
+                    *transform = at;
+                }
+            }
+            _ => {
+                let e = world
+                    .spawn((
+                        service::WorldScoped::default(),
+                        PointLight {
+                            color: Color::srgb(1.0, 0.66, 0.34),
+                            intensity: LANTERN_LUMENS,
+                            range: LANTERN_RANGE,
+                            radius: 0.12,
+                            shadow_maps_enabled: false,
+                            ..default()
+                        },
+                        at,
+                    ))
+                    .id();
+                state.lantern_lights.insert(i, e);
+            }
+        }
+    }
 }
 
 /// The drawn ground under `p`: a generated mine's ground and pits where the

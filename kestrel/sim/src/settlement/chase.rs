@@ -348,7 +348,8 @@ impl Settlement {
     /// bare site, as a broken building is, has nothing left to lose, so
     /// nobody attacks it and its chaser goes back to the tree.
     pub(super) fn breakable(&self, b: BuildingIx) -> bool {
-        self.buildings.get(b as usize).is_some_and(|building| match &building.stage {
+        // A lantern burns forever (L2 of the depths design): ghouls leave it.
+        self.buildings.get(b as usize).filter(|building| !self.building_kinds[building.kind as usize].is_lantern()).is_some_and(|building| match &building.stage {
             Stage::Built => true,
             Stage::Site { part, materials } => *part > 0 || materials.holds_any(),
         })
@@ -360,10 +361,10 @@ impl Settlement {
         self.breakable(b) && self.building_gap(t.position, b) <= def.leash && self.on_building_floor(t, b, terrain)
     }
 
-    /// Whether threat `t` is on the floor building `b` stands on, the top
-    /// one at its middle, in a volume scene (M8.2); always elsewhere.
+    /// Whether threat `t` is on the floor building `b` stands on
+    /// (`BuildingState::height`, M8.6) in a volume scene; always elsewhere.
     pub(super) fn on_building_floor(&self, t: &Threat, b: BuildingIx, terrain: &Terrain) -> bool {
-        terrain.volume.is_none() || (terrain.height(self.buildings[b as usize].position) - t.height).abs() <= super::combat::FLOOR_REACH
+        terrain.volume.is_none() || (self.buildings[b as usize].height - t.height).abs() <= super::combat::FLOOR_REACH
     }
 
     /// The building threat `t` turns on when no elder or sprite is about

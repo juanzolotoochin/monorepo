@@ -51,7 +51,7 @@ use super::haulers::{self, Ctx, Walker, RETRY_TICKS};
 use super::miners::{self, Targets, Town};
 use super::piles::PileId;
 use super::{AgentIx, AgentState, Body, BuildingIx, BuildingKindIx, Carry, DepotIx, Direction, InventoryRef, Occupant, Role, Settlement, Slot};
-use crate::messages::{ActionMessages, CarryUnit, ClaimDigTile, ClaimSlot, EnterSlot, Messages, ReserveStock, SpriteBundle, StockChange};
+use crate::messages::{ActionMessages, CarryUnit, ClaimDigTile, ClaimSlot, EnterSlot, Install, Messages, ReserveStock, SpriteBundle, StockChange};
 use crate::terrain::Terrain as Ground;
 use crate::nav::{self, distance};
 use crate::terrain::{Disc, Terrain};
@@ -162,6 +162,16 @@ pub enum Step {
     /// `layer` (the floor it stands on) up (`Terrain::volume_dig`). Done
     /// once they are all empty. Appended, so older saves decode unchanged.
     DigWall { tile: (i32, i32), layer: i32 },
+    /// A miner's, for a lantern's site (M8.6 of the depths design, L1):
+    /// take from this depot (a tree pile of one item) what the site still
+    /// wants of it, no more. Done once it carries it. Appended.
+    Fetch { depot: DepotIx, site: BuildingIx },
+    /// Empty the bundle into this site's materials (`InventoryRef::Site`),
+    /// as much as its next part takes. Done once the bundle is empty.
+    Supply(BuildingIx),
+    /// Install this site's next part, `part`, its materials all there.
+    /// Done once the site moved past it.
+    Install { site: BuildingIx, part: u8 },
 }
 
 /// The part of a building's slot a sprite holds: the slot names it back.
@@ -433,6 +443,47 @@ impl SpriteState {
                 }
                 Progress::Replan
             }
+            Step::Fetch { depot, site } => {
+                // Under way: stage 3 moves the units.
+                if carry.job.is_some() || carry.inventory.total_in() > 0 {
+                    return Progress::Stay(None);
+                }
+                if carry.carrying() {
+                    return Progress::Next;
+                }
+                // Stage 3 starts it, while the depot has the item and the
+                // site still wants it.
+                let other = InventoryRef::Depot(depot);
+                let wanted = miners::depot_item(view, depot).is_some_and(|item| miners::site_wants(view, site, item) > 0);
+                if wanted && in_reach(body, view, other) && super::avatar::bundle_job(carry, view, other, Direction::Pickup).is_ok() {
+                    return Progress::Stay(None);
+                }
+                Progress::Replan
+            }
+            Step::Supply(site) => {
+                if carry.job.is_some() || view.leaving_cargo() {
+                    return Progress::Stay(None);
+                }
+                if !carry.carrying() {
+                    return Progress::Next;
+                }
+                let other = InventoryRef::Site(site);
+                if in_reach(body, view, other) && super::avatar::bundle_job(carry, view, other, Direction::Deposit).is_ok() {
+                    return Progress::Stay(None);
+                }
+                Progress::Replan
+            }
+            Step::Install { site, part } => {
+                let Some(b) = view.buildings.get(site as usize) else { return Progress::Replan };
+                if b.site().is_none_or(|(next, _)| next != part) {
+                    return Progress::Next;
+                }
+                // Stage 3 asks for it while it is ready and in reach.
+                if b.ready(&view.building_kinds[b.kind as usize]) && in_reach(body, view, InventoryRef::Site(site)) {
+                    return Progress::Stay(None);
+                }
+                Progress::Replan
+            }
             Step::Enter(b) => match self.holds {
                 // Stage 3 asks to step in; then it works there.
                 Some(Hold::Claimed(held) | Hold::Inside(held)) if held == b => Progress::Stay(None),
@@ -447,7 +498,8 @@ impl SpriteState {
     fn holder_next(&self, view: &View) -> Option<FxVec2> {
         match self.plan.get(self.step as usize + 1)? {
             Step::Pickup(pile) => view.piles?.piles.get(pile).map(|p| p.position),
-            Step::Deposit(depot) => view.depots.get(*depot as usize).map(|d| d.position),
+            Step::Deposit(depot) | Step::Fetch { depot, .. } => view.depots.get(*depot as usize).map(|d| d.position),
+            Step::Supply(site) | Step::Install { site, .. } => view.buildings.get(*site as usize).map(|b| b.output_position),
             _ => None,
         }
     }
@@ -498,6 +550,7 @@ fn in_reach(body: &Body, view: &View, holder: InventoryRef) -> bool {
     let at = match holder {
         InventoryRef::Pile(id) => view.piles.and_then(|lab| lab.piles.get(&id)).map(|p| p.position),
         InventoryRef::Depot(d) => view.depots.get(d as usize).map(|d| d.position),
+        InventoryRef::Site(b) => view.buildings.get(b as usize).map(|b| b.output_position),
         _ => None,
     };
     at.is_some_and(|at| distance(body.position, at) <= DOCK_REACH)
@@ -596,6 +649,8 @@ pub(super) fn act(body: &mut Body, sprite: &mut SpriteState, action: &Action, vi
                 Some(Step::Pickup(pile)) => view.piles.and_then(|lab| lab.piles.get(pile)).map(|p| p.height),
                 // A wall's floor (M8.4): under the mountain, the cave's.
                 Some(Step::DigWall { layer, .. }) => Some(crate::volume::height(*layer)),
+                // A site's floor (M8.6): a lantern's in a tunnel.
+                Some(Step::Supply(site) | Step::Install { site, .. }) => view.buildings.get(*site as usize).map(|b| b.height),
                 _ => None,
             };
             body.route = haulers::route_at(view.terrain, body.position, sprite.height, *target, floor, body.base_radius, &[]);
@@ -635,7 +690,7 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
         return;
     }
     let view = View { me, ..ctx.view };
-    let town = Town { claims: ctx.dig_claims, stone: ctx.stone, amber: ctx.amber, mine: def.sprite.and_then(|s| s.mine), alarm: alarm(me, &a.body, a.height(), ctx.terrain, ctx.danger) };
+    let town = Town { claims: ctx.dig_claims, errands: ctx.errands, stone: ctx.stone, amber: ctx.amber, mine: def.sprite.and_then(|s| s.mine), alarm: alarm(me, &a.body, a.height(), ctx.terrain, ctx.danger) };
     if let Some(action) = think(a, &view, &town) {
         // A sprite's actions only move it: nothing for the world.
         let mut out = ActionMessages::default();
@@ -692,6 +747,21 @@ pub(super) fn read(a: &AgentState, me: AgentIx, tick: u64, s: &Settlement, out: 
         Some(Step::Deposit(depot)) if a.carry.carrying() && (depot as usize) < s.depots.len() => {
             if reach(InventoryRef::Depot(depot)) {
                 out.sprite_bundle.push(SpriteBundle { agent: me, other: InventoryRef::Depot(depot), direction: Direction::Deposit });
+            }
+        }
+        Some(Step::Fetch { depot, .. }) if !a.carry.carrying() && a.carry.inventory.total_in() == 0 && (depot as usize) < s.depots.len() => {
+            if reach(InventoryRef::Depot(depot)) {
+                out.sprite_bundle.push(SpriteBundle { agent: me, other: InventoryRef::Depot(depot), direction: Direction::Pickup });
+            }
+        }
+        Some(Step::Supply(site)) if a.carry.carrying() && (site as usize) < s.buildings.len() => {
+            if reach(InventoryRef::Site(site)) {
+                out.sprite_bundle.push(SpriteBundle { agent: me, other: InventoryRef::Site(site), direction: Direction::Deposit });
+            }
+        }
+        Some(Step::Install { site, .. }) if s.buildings.get(site as usize).is_some_and(|b| b.ready(&s.building_kinds[b.kind as usize])) => {
+            if reach(InventoryRef::Site(site)) {
+                out.sprite_install.push(Install { agent: me, building: site });
             }
         }
         _ => {}
@@ -874,6 +944,23 @@ impl Settlement {
         }
     }
 
+    /// Stage 5: miners at a lantern's site, its next part's materials all
+    /// there, install it (M8.6), in agent order, as an elder's install does
+    /// (`Settlement::install`): the first to ask installs it, the rest find
+    /// the site moved on and plan again. Only a live miner on that
+    /// `Install` step, in reach of the site, counts.
+    pub(crate) fn sprite_installs(&mut self, messages: Vec<Install>) {
+        let wanted: Vec<Install> = messages
+            .into_iter()
+            .filter(|m| {
+                let Some(a) = self.agents.get(m.agent as usize).filter(|a| a.body.alive()) else { return false };
+                let on_step = matches!(a.sprite().and_then(SpriteState::current), Some(Step::Install { site, .. }) if site == m.building);
+                on_step && self.buildings.get(m.building as usize).is_some_and(|b| distance(a.body.position, b.output_position) <= DOCK_REACH)
+            })
+            .collect();
+        self.install(wanted);
+    }
+
     /// Stage 5: miners at a pile start their bundle's carry job there by the
     /// rule an elder's bundle follows (`avatar::bundle_job`), holding both
     /// sides now. One the rule refuses (the pile emptied, the stone pile
@@ -881,15 +968,26 @@ impl Settlement {
     pub(crate) fn sprite_bundles(&mut self, messages: Vec<SpriteBundle>, tick: u64, terrain: &Ground) {
         for m in messages {
             let Some(a) = self.agents.get(m.agent as usize).filter(|a| a.body.alive() && a.carry.job.is_none()) else { continue };
-            let step = match m.other {
-                InventoryRef::Pile(id) => Step::Pickup(id),
-                InventoryRef::Depot(d) => Step::Deposit(d),
+            // The step it is on must be the one that asked: a pile's
+            // pickup, a depot's deposit, or a lantern site's fetch from a
+            // depot and delivery (M8.6).
+            let step = a.sprite().and_then(SpriteState::current);
+            let site = match (m.other, m.direction, step) {
+                (InventoryRef::Pile(id), _, Some(Step::Pickup(p))) if p == id => None,
+                (InventoryRef::Depot(d), Direction::Deposit, Some(Step::Deposit(x))) if x == d => None,
+                (InventoryRef::Depot(d), Direction::Pickup, Some(Step::Fetch { depot, site })) if depot == d => Some(site),
+                (InventoryRef::Site(b), Direction::Deposit, Some(Step::Supply(x))) if x == b => None,
                 _ => continue,
             };
-            if a.sprite().and_then(SpriteState::current) != Some(step) {
-                continue;
+            let Ok(mut job) = super::avatar::bundle_job(&a.carry, &self.view(m.agent, tick, terrain), m.other, m.direction) else { continue };
+            // A fetch takes only what the site still wants.
+            if let Some(site) = site {
+                let wanted = self.buildings.get(site as usize).map_or(0, |b| b.wanted(&self.building_kinds[b.kind as usize], job.item));
+                if wanted == 0 {
+                    continue;
+                }
+                job.remaining = job.remaining.min(wanted);
             }
-            let Ok(job) = super::avatar::bundle_job(&a.carry, &self.view(m.agent, tick, terrain), m.other, m.direction) else { continue };
             let carry = &mut self.agents[m.agent as usize].carry;
             let reserved = job.reserve(&mut carry.inventory, super::Side::Own);
             debug_assert!(reserved, "`bundle_job` sized it to the cargo");

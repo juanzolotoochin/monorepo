@@ -125,6 +125,9 @@ pub struct BuildingKind {
     pub ammo: Option<(String, u32)>,
     /// The parts it is put up from, in install order.
     pub parts: Vec<Part>,
+    /// A lantern's range in meters (M8.6): it lights, nothing else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub light: Option<f32>,
 }
 
 /// A part of a building kind: its label ("FOUNDATION") and the items it
@@ -300,6 +303,7 @@ impl Scenario {
                     cap: k.cap,
                     ammo: k.defence.as_ref().map(|d| (d.ammo.clone(), d.ammo_cap)),
                     parts: k.parts.iter().map(|p| Part { label: p.label.clone(), materials: p.materials.iter().map(|m| (m.item.clone(), m.units)).collect() }).collect(),
+                    light: k.light.as_ref().map(|l| l.range.to_f32()),
                 })
                 .collect(),
         }
@@ -444,6 +448,10 @@ pub struct Building {
     /// it breaks back into a site.
     pub health: u32,
     pub max_health: u32,
+    /// The height of the floor it stands on (`BuildingState::height`), if
+    /// not 0 m: a lantern in a tunnel's (M8.6).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feet: Option<f32>,
 }
 
 /// A site as the view sees it (`sim::settlement::Stage::Site`).
@@ -1143,6 +1151,7 @@ impl Simulation {
                     }),
                     health: b.health,
                     max_health: kind.health,
+                    feet: (b.height != Fx::ZERO).then(|| b.height.to_f32()),
                 }
             })
             .collect();
@@ -1166,7 +1175,7 @@ impl Simulation {
                     // Walking, or about to: a claim is granted on the way.
                     Some(s::Step::GoTo(_) | s::Step::Claim(_) | s::Step::Enter(_) | s::Step::ClaimTile(_)) => SpriteActivity::Moving,
                     Some(s::Step::Dig { .. } | s::Step::DigWall { .. }) => SpriteActivity::Digging,
-                    Some(s::Step::Pickup(_) | s::Step::Deposit(_)) => SpriteActivity::Hauling,
+                    Some(s::Step::Pickup(_) | s::Step::Deposit(_) | s::Step::Fetch { .. } | s::Step::Supply(_) | s::Step::Install { .. }) => SpriteActivity::Hauling,
                     // An idle sprite's plan is done once it is home; a job
                     // with no plan yet gets one on the next tick.
                     None if job.is_none() => SpriteActivity::Idle,

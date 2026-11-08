@@ -293,10 +293,12 @@ game_demo(
     tags = ["manual"],
 )
 
-# The Sacred Tree as a volume (M8.3 of the depths design): the town, a
-# stair dug down at the north foot 5.5 m and a tunnel on from its bottom
-# (M8.5: the notch over a shallow roof, then the inside view), and the walk
-# to the mountain spur north of it, into its cave and its passage.
+# The Sacred Tree as a volume (M8.3 of the depths design): the walk to the
+# mountain spur north of the town, into its cave, where the elder puts a
+# lantern's blueprint down and two miners bring its stone and amber and
+# build it (M8.6, at 4x), its pool of light seen from the passage and the
+# mouth; then a stair dug down at the north foot 5.5 m and a tunnel on from
+# its bottom (M8.5: the notch over a shallow roof, then the inside view).
 game_demo(
     name = "sacred_tree_depths_demo",
     game = ":demo",

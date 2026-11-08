@@ -123,6 +123,10 @@ fn void_at(p: vec3<f32>) -> f32 {
     return 1.0 - textureLoad(sight_map, vec2<i32>(t), 0).g;
 }
 
+// The lanterns' light's colour (`cutaway::LANTERN_TINT`): warm amber, so
+// a lantern's pool reads apart from the elder's whiter lamp.
+const LANTERN_TINT: vec3<f32> = vec3<f32>(1.0, 0.55, 0.22);
+
 // Roofed ground's light (of its albedo, `cutaway::underground`): the
 // ambient, the elder's lamp where it is in sight (`seen`), and the
 // lanterns' channel.
@@ -132,7 +136,7 @@ fn underground(p: vec3<f32>, n: vec3<f32>, seen: f32, light: f32) -> vec3<f32> {
     let reach = clamp(1.0 - (d / cutaway.under.w) * (d / cutaway.under.w), 0.0, 1.0);
     let facing = 0.35 + 0.65 * max(dot(n, to / d), 0.0);
     let lamp = clamp(reach * reach * facing * cutaway.lamp.w * seen, 0.0, 1.0);
-    return vec3<f32>(cutaway.under.x) + cutaway.lamp_color.rgb * (cutaway.under.y * lamp) + vec3<f32>(cutaway.under.z * clamp(light, 0.0, 1.0));
+    return vec3<f32>(cutaway.under.x) + cutaway.lamp_color.rgb * (cutaway.under.y * lamp) + LANTERN_TINT * (cutaway.under.z * clamp(light, 0.0, 1.0));
 }
 
 // Where the ray from `p` toward the camera crosses the hidden height (two

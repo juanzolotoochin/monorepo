@@ -35,7 +35,7 @@ const BALLISTA: BuildingKindIx = 1;
 /// The build soak's test-only kind (`tests::with_stone_gatherer`): the
 /// scene has no building that makes stone (M6.4), but the soak reassigns
 /// sprites across two gathering kinds.
-const STONE_GATHERER: BuildingKindIx = 2;
+const STONE_GATHERER: BuildingKindIx = 3;
 
 /// The scene on its map: the hill in the middle of its mine (M6.3).
 fn sacred_tree() -> Simulation {

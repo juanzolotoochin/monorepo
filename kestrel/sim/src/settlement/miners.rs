@@ -60,7 +60,7 @@ use fx::{Fx, FxVec2};
 
 use super::action::View;
 use super::sprites::{SpriteState, Step};
-use super::{AgentIx, Body, Carry, DepotIx, ItemIx, Kinds, Settlement};
+use super::{AgentIx, Body, BuildingIx, Carry, DepotIx, ItemIx, Kinds, Settlement};
 use crate::mine::{Veins, AMBER, AMBER_ID, STONE, STONE_ID};
 use crate::nav::distance;
 use crate::terrain::{Terrain, LAYER};
@@ -111,6 +111,97 @@ pub(super) struct Town<'a> {
     pub mine: Option<SpriteMineDef>,
     /// How the enemies about stand to the sprite (`sprites::Alarm`).
     pub alarm: super::sprites::Alarm,
+    /// The lantern sites' errands miners are on, as of last tick
+    /// (`Errand`), so two don't fetch for the same need.
+    pub errands: &'a [Errand],
+}
+
+/// A miner's errand for a lantern's site (M8.6): the site, and the item it
+/// fetches or carries there, or `None` for an install.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Errand {
+    pub agent: AgentIx,
+    pub site: BuildingIx,
+    pub item: Option<ItemIx>,
+}
+
+/// The errand `sprite`'s plan is on from its current step, if any: a
+/// fetch's site and its depot's item, a delivery's site and what it
+/// carries, or an install's site.
+pub(super) fn errand(agent: AgentIx, sprite: &SpriteState, carry: &Carry, depots: &[super::DepotState]) -> Option<Errand> {
+    sprite.plan.iter().skip(sprite.step as usize).find_map(|step| match *step {
+        Step::Fetch { depot, site } => {
+            let item = depots.get(depot as usize).and_then(|d| match d.inventory.kinds {
+                Kinds::Only(item) => Some(item),
+                _ => None,
+            });
+            Some(Errand { agent, site, item })
+        }
+        Step::Supply(site) => Some(Errand { agent, site, item: carry.inventory.kind() }),
+        Step::Install { site, .. } => Some(Errand { agent, site, item: None }),
+        _ => None,
+    })
+}
+
+/// The one item depot `depot` takes, if it takes only one (a tree pile).
+pub(super) fn depot_item(view: &View, depot: DepotIx) -> Option<ItemIx> {
+    match view.depots.get(depot as usize)?.inventory.kinds {
+        Kinds::Only(item) => Some(item),
+        _ => None,
+    }
+}
+
+/// Units of `item` lantern site `site` still wants (`BuildingState::wanted`):
+/// 0 for anything but a lantern's site.
+pub(super) fn site_wants(view: &View, site: BuildingIx, item: ItemIx) -> u32 {
+    view.buildings.get(site as usize).map_or(0, |b| {
+        let kind = &view.building_kinds[b.kind as usize];
+        if kind.is_lantern() { b.wanted(kind, item) } else { 0 }
+    })
+}
+
+/// A lantern site's errand for a miner (M8.6 of the depths design, L1):
+/// miners are the town's carriers, so they put lanterns up. For the
+/// nearest lantern site (a tie to the lower index) that it hasn't given
+/// up: carrying an item it wants, take it there; its part all there,
+/// install it; else fetch an item it still wants from the tree's pile of
+/// it, and take it there. A need another miner is already on (`errands`)
+/// is left to it. Sites of other kinds stay the elder's (D4).
+fn lantern_errand(body: &Body, carry: &Carry, view: &View, town: &Town, gave_up: &dyn Fn(FxVec2) -> bool) -> Option<Vec<Step>> {
+    let me = view.me;
+    let taken = |site: BuildingIx, item: Option<ItemIx>| town.errands.iter().any(|e| e.agent != me && e.site == site && e.item == item);
+    let mut sites: Vec<(Fx, BuildingIx)> = view
+        .buildings
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| b.site().is_some() && view.building_kinds[b.kind as usize].is_lantern() && !gave_up(b.stand_position()))
+        .map(|(i, b)| (distance(body.position, b.position), i as BuildingIx))
+        .collect();
+    sites.sort();
+    for (_, site) in sites {
+        let b = &view.buildings[site as usize];
+        let kind = &view.building_kinds[b.kind as usize];
+        let stand = b.stand_position();
+        if carry.carrying() {
+            match carry.inventory.kind() {
+                Some(item) if b.wanted(kind, item) > 0 && !taken(site, Some(item)) => return Some(vec![Step::GoTo(stand), Step::Supply(site)]),
+                _ => continue,
+            }
+        }
+        if let Some((part, _)) = b.site().filter(|_| b.ready(kind) && !taken(site, None)) {
+            return Some(vec![Step::GoTo(stand), Step::Install { site, part }]);
+        }
+        for (item, _) in b.needs(kind) {
+            if b.wanted(kind, item) == 0 || taken(site, Some(item)) {
+                continue;
+            }
+            let depot = (0..view.depots.len() as DepotIx).find(|&d| depot_item(view, d) == Some(item) && view.depots[d as usize].inventory.available(item) > 0);
+            if let Some(depot) = depot.filter(|&d| !gave_up(view.depots[d as usize].position)) {
+                return Some(vec![Step::GoTo(view.depots[depot as usize].position), Step::Fetch { depot, site }, Step::GoTo(stand), Step::Supply(site)]);
+            }
+        }
+    }
+    None
 }
 
 /// A stone tile to dig, and the tile to dig it from.
@@ -307,6 +398,13 @@ pub(super) fn plan(sprite: &mut SpriteState, body: &Body, carry: &Carry, view: &
     let dock = view.depots[depot as usize].position;
     let room_for = |item: Option<ItemIx>| depot_for(item, town).is_some_and(|d| view.depots[d as usize].inventory.free() > 0);
     let room = room_for(Some(stone));
+    // A lantern's site first (M8.6): what it carries, if the site wants
+    // it, its install, or a fetch from the tree's piles for it.
+    if carry.inventory.capacity > 0 {
+        if let Some(steps) = lantern_errand(body, carry, view, town, &gave_up) {
+            return steps;
+        }
+    }
     if carry.carrying() {
         let to = depot_for(carry.inventory.kind(), town).map_or(dock, |d| view.depots[d as usize].position);
         if room_for(carry.inventory.kind()) && !gave_up(to) {

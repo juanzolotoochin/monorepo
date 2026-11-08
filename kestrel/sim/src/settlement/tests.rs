@@ -263,6 +263,7 @@ fn think(sim: &Simulation, a: &mut AgentState, me: AgentIx) -> Option<Action> {
         transfers: &s.transfers,
         view: s.view(me, tick, terrain),
         dig_claims: &[],
+        errands: &[],
         stone: None,
         amber: None,
         danger: &[],

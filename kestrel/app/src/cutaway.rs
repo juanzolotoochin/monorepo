@@ -45,7 +45,7 @@
 //! (`sight::Sight::open` 0) is not lit by the sun but by the elder's lamp
 //! (the fill light's place and glow, `LAMP`, `LAMP_RANGE`, on what is in
 //! sight only, so no light goes through walls), a small `AMBIENT` and the
-//! lanterns' light channel (`LANTERN`, all zero until M8.6;
+//! lanterns' light channel (`LANTERN`, warm, from the sim's light grid, M8.6;
 //! [`underground`] is the sum); ground under open sky (seen out of a mouth)
 //! keeps the sun. The view goes inside only when `sight::Sight::deep`: a
 //! shallow roof (a stair just dug down from the surface) gets a notch
@@ -141,8 +141,12 @@ pub const AMBIENT: f32 = 0.07;
 pub const LAMP: f32 = 1.6;
 /// ...reaching this far, meters...
 pub const LAMP_RANGE: f32 = 9.0;
-/// ...and the lanterns' light channel at 1 (M8.6's grid).
-pub const LANTERN: f32 = 1.2;
+/// ...and the lanterns' light channel at 1 (M8.6's grid), tinted warm
+/// (`LANTERN_TINT`, the shader's own copy) so a pool reads apart from the
+/// lamp.
+pub const LANTERN: f32 = 2.0;
+/// The lanterns' light's colour (linear): the shader's `LANTERN_TINT`.
+pub const LANTERN_TINT: [f32; 3] = [1.0, 0.55, 0.22];
 /// The void beyond the rim round what is in sight, linear: near black.
 const VOID: [f32; 3] = [0.006, 0.005, 0.0045];
 /// Inside, bodies and things whose tile is less visible than this are
@@ -504,11 +508,16 @@ pub fn follow(
         view.center = center;
         let floor = terrain.volume.as_ref().and_then(|volume| volume.floor_at(at, z)).map(|(floor, _)| floor);
         if let (Some(volume), Some(floor), true) = (&terrain.volume, floor, sight_mode) {
-            // `light: 0` and no `set_light` until M8.6's light grid: then
-            // its revision goes in the key and the grid fills the channel.
-            let key = crate::sight::Key { tile: sim::terrain::Terrain::pit_tile(at), floor, revision: terrain.revision, light: 0 };
+            // The sim's light grid (M8.6) fills the light channel for the
+            // player's level: each tile's floor within a layer of the
+            // player's; its revision is in the key.
+            let grid = world.settlement().map(|s| &s.light);
+            let key = crate::sight::Key { tile: sim::terrain::Terrain::pit_tile(at), floor, revision: terrain.revision, light: grid.map_or(0, |g| g.revision) };
             if crate::sight::Sight::stale(view.sight.as_ref(), key) {
-                let sight = crate::sight::of_volume(volume, key);
+                let mut sight = crate::sight::of_volume(volume, key);
+                if let Some(grid) = grid {
+                    sight.set_light(|tile| volume.floor_near(tile, floor).map_or(0.0, |f| grid.level(tile, f) as f32 / sim::settlement::light::FULL as f32));
+                }
                 let handle = materials.get(&ground.0).map(|m| m.extension.sight.clone());
                 if let Some(mut image) = handle.as_ref().and_then(|h| images.get_mut(h)) {
                     image.data = Some(sight.bytes());

@@ -37,7 +37,7 @@ fn sprite_radius() -> Fx {
 }
 
 /// The Sacred Tree's map (its hill and exposed veins), with no waves.
-fn map() -> Simulation {
+pub(super) fn map() -> Simulation {
     let mut scenario = Scenario::parse(SUPPLY).unwrap();
     scenario.waves.clear();
     super::hill_tests::sacred_tree_map(scenario)
@@ -65,11 +65,11 @@ fn small_town(seed: u64) -> Simulation {
     Simulation::from_world(World::new_scene(1, &Content::builtin(), &setup).unwrap(), 1)
 }
 
-fn settlement(sim: &Simulation) -> &Settlement {
+pub(super) fn settlement(sim: &Simulation) -> &Settlement {
     sim.world().settlement().unwrap()
 }
 
-fn mine(sim: &mut Simulation, sprite: AgentIx) {
+pub(super) fn mine(sim: &mut Simulation, sprite: AgentIx) {
     step(sim, &[command(CommandKind::SetSpriteJob { agent: sprite, job: SpriteJob::Mine })]);
 }
 
@@ -102,14 +102,14 @@ fn dug_amber(sim: &Simulation) -> u64 {
 }
 
 /// The tile `x`, `z` tiles from the tree's.
-fn tile(sim: &Simulation, x: i32, z: i32) -> (i32, i32) {
+pub(super) fn tile(sim: &Simulation, x: i32, z: i32) -> (i32, i32) {
     let tree = Terrain::pit_tile(sim.world().terrain().center);
     (tree.0 + x, tree.1 + z)
 }
 
 /// Takes the ore out of every cell of the town's volume for which `strip`
 /// holds (its tile from the tree's).
-fn strip_ore(sim: &mut Simulation, strip: impl Fn((i32, i32)) -> bool) {
+pub(super) fn strip_ore(sim: &mut Simulation, strip: impl Fn((i32, i32)) -> bool) {
     let tree = Terrain::pit_tile(sim.world().terrain().center);
     let terrain = sim.world_mut().settlement_and_terrain_mut().1;
     let volume = terrain.volume.as_mut().unwrap();
@@ -127,7 +127,7 @@ fn strip_ore(sim: &mut Simulation, strip: impl Fn((i32, i32)) -> bool) {
 /// floor are amber, and so are its cell under them (the floor's) and over
 /// them (the ceiling's). Returns the wall's tile, the tunnel's last tile (where a
 /// miner stands to dig it) and the floor's layer.
-fn tunnel(sim: &mut Simulation) -> ((i32, i32), (i32, i32), i32) {
+pub(super) fn tunnel(sim: &mut Simulation) -> ((i32, i32), (i32, i32), i32) {
     let (x0, z) = (8, -26);
     let [start, wall, stand] = [x0, x0 + 11, x0 + 10].map(|x| tile(sim, x, z));
     let terrain = sim.world_mut().settlement_and_terrain_mut().1;
@@ -160,7 +160,7 @@ fn tunnel(sim: &mut Simulation) -> ((i32, i32), (i32, i32), i32) {
 }
 
 /// What `who` is up to, and the ground piles: for a failed check.
-fn story(sim: &Simulation, who: AgentIx) -> String {
+pub(super) fn story(sim: &Simulation, who: AgentIx) -> String {
     let s = settlement(sim);
     let a = &s.agents[who as usize];
     let sprite = a.sprite().unwrap();

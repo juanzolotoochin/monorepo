@@ -275,8 +275,17 @@ pub fn ghost(world: &World, kind: u16) -> Option<Ghost> {
     let body = &s.agents.get(agent as usize)?.body;
     let position = body.position + sim::nav::heading_vector(body.heading) * (k.radius + GHOST_GAP);
     let (output, slot) = s.blueprint_spots(kind, position, sim_world.terrain())?;
-    let verdict = s.placement_check(kind, position, sim_world.terrain()).map(|_| ());
-    let ground = |p: FxVec2| service.to_view(p).with_y(0.0);
+    // The elder's feet: a lantern goes on the floor under it, in a tunnel
+    // too (M8.6), and its ghost stands there.
+    let feet = s.agents.get(agent as usize).map(|a| a.height());
+    let check = s.placement_check_at(kind, position, feet, sim_world.terrain());
+    let floor = match (&check, k.is_lantern()) {
+        (Ok(spot), true) => spot.height.to_f32(),
+        _ if k.is_lantern() => feet.map_or(0.0, |f| f.to_f32()),
+        _ => 0.0,
+    };
+    let verdict = check.map(|_| ());
+    let ground = |p: FxVec2| service.to_view(p).with_y(floor);
     Some(Ghost { kind, position, center: ground(position), output: ground(output), slot: ground(slot), radius: k.radius.to_f32(), verdict })
 }
 
@@ -560,7 +569,8 @@ fn job_menu(world: &World, sprite: u16) -> JobMenu {
     let s = service.settlement().expect("a town");
     let mut options = vec!["IDLE".to_string()];
     let mut jobs = vec![SpriteJob::Idle];
-    for (i, kind) in s.building_kinds.iter().enumerate() {
+    // A lantern has no slot to work (M8.6).
+    for (i, kind) in s.building_kinds.iter().enumerate().filter(|(_, k)| !k.is_lantern()) {
         let option = match kind.product {
             Some(product) => format!("GATHER {}", s.items.get(product as usize).map_or_else(|| kind.id.to_uppercase(), |id| id.to_uppercase())),
             None => format!("MAN {}", kind.id.to_uppercase().replace('_', " ")),

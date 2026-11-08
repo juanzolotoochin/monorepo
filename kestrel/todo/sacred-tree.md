@@ -4,41 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M8.6 Lanterns and the light grid
-
-- **Status:** open
-- **Why:** light is a resource you build (L1, L2, L5, L6).
-- **What to do:** a lantern building (blueprint on any floor, 1 stone and
-  1 amber, built by sprites; haulers deliver underground); a light grid
-  in the sim, each lantern lighting its line of sight on its level within
-  6 m, hashed and saved, recomputed on change; the view lights from the
-  grid with soft edges; the elder's lamp stays view only. Settle M7's
-  night lanterns.
-- **Where:** `sim/src/settlement/buildings.rs`, a new light module,
-  content, `app/src/cutaway.rs`.
-- **Found in:** depths design.
-- **Tests:** the grid stops at rock, at 6 m and at its level; a lantern
-  blueprint underground is supplied and built; save round trip.
-  Note (from M8.2): buildings and sites have no floor yet; give a
-  lantern's site one, plan deliveries to it with that goal floor
-  (`haulers::route_at`'s `goal_z`), and use it in `on_building_floor` and
-  `pick_target` instead of the top floor.
-  Note (from M8.3): the `amber` item and the AMBER PILE depot
-  (`tree_amber`, at (0, 1.7)) exist; amber lies from 4 m down (rare) and in
-  the mountain's cave walls (x -9, z -49..-48 by the mouth). A lantern on
-  a tunnel floor needs placement to allow its footprint there (today a
-  hollow column or a wall edge refuses).
-  Note (from M8.5): the view's light hook: `sight::Sight::set_light(|tile|
-  light)` fills the grid's light channel (0..1 per tile, the texture's
-  blue; all zero today) after `sight::of_volume` in `cutaway::follow`,
-  and `sight::Key::light` (0 today) should be the light grid's revision
-  so the grid is recomputed when lanterns change. The shader adds
-  `LANTERN` (1.2) times it to roofed ground's light
-  (`cutaway::underground`), filtered over tiles (soft edges); pools on
-  ground under open sky are not added (the surface keeps the sun or
-  moon). The elder's lamp stays view only (`LAMP`). Bodies are lit by the
-  fill point light, not the grid.
-
 ## M8.7 Sprites and ghouls read light
 
 - **Status:** open
@@ -59,7 +24,18 @@ its milestones, in order; one PR per milestone.
   `GoTo` routes (`haulers::route_at`: dark tiles are walls underground for
   sprites). The search's cache is keyed by terrain revision only: key it
   by the light grid's revision too.
-
+  Note (from M8.6): the query is `Settlement::light_at(terrain, tile,
+  layer) -> Fx` (0..1, `light::LightGrid::at`) and `Settlement::lit(terrain,
+  p, z)` (a body's feet), both 1 under open sky and without a volume;
+  `Settlement::light.level(tile, layer)` is the grid's byte and
+  `light.revision` goes up when the light changes (key caches by it). The
+  grid is derived (not saved or hashed) and refreshed before and after
+  every tick, so the brains read this tick's. A lantern blueprint's site
+  is supplied by miners (`miners::lantern_errand`): once dark tiles stop
+  sprites, a miner can't walk into a dark tunnel to build its first
+  lantern; let a lantern's site and the tiles on the way count as lit for
+  its errand, or let the elder's lamp-lit tiles count for that (L5 says
+  the lamp doesn't count).
 ## M8.8 Tuning, soak and demo
 
 - **Status:** open
@@ -91,6 +67,14 @@ its milestones, in order; one PR per milestone.
   a refused straight step was tried and made it worse (the replan from
   there found no route and the miner gave the wall up). Fix in nav (check
   pulled segments with a margin) or the walker.
+  Note (from M8.6): the demo's Reed, carrying stone to the cave's lantern,
+  dithered 20 s at the plateau's north edge (about x -11, z -16) before
+  going round by the west ramp: the same walker trouble. Lantern numbers:
+  range 6 m, falloff `1 - (d / range)²`, the shader's `LANTERN` 2.0 and
+  `LANTERN_TINT`, the point light (`settlement::LANTERN_LUMENS` 60000, 6 m).
+  Whether miners should also supply other kinds' sites, a lantern's post
+  blocking bodies, and a tunnel lantern protecting the ground over it from
+  digs are open.
 
 ## A possessed ballista fires faster
 
@@ -299,6 +283,148 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M7.5.
 
 ## Done
+
+### M8.6 Lanterns and the light grid
+
+- **Status:** done (branch `kestrel-sacred-tree-depths`)
+- **Why:** light is a resource you build (L1, L2, L5, L6).
+- **What to do:** a lantern building (blueprint on any floor, 1 stone and
+  1 amber, built by sprites; haulers deliver underground); a light grid
+  in the sim, each lantern lighting its line of sight on its level within
+  6 m, hashed and saved, recomputed on change; the view lights from the
+  grid with soft edges; the elder's lamp stays view only. Settle M7's
+  night lanterns.
+- **Where:** `sim/src/settlement/buildings.rs`, a new light module,
+  content, `app/src/cutaway.rs`.
+- **Found in:** depths design.
+- **Tests:** the grid stops at rock, at 6 m and at its level; a lantern
+  blueprint underground is supplied and built; save round trip.
+
+- **Done:** **The lantern** is a building kind (`sacred_tree_supply.ron`'s
+  `lantern`: radius 0.2, one part of 1 stone and 1 amber, `output_distance`
+  0, `light: Some((range: 6.0))`; content's `BuildingKind::light`, a role of
+  its own in validation: no product, defence or production numbers; sim
+  `BuildingKind::light`, `is_lantern`). Placed with the B menu's LANTERN
+  (the same `PlaceBlueprint` command: input log and net protocol unchanged)
+  on any floor: stage 1 reads the placer's elder's feet into the
+  blueprint's message (`messages::PlaceBlueprint::feet`) and
+  `buildings::lantern_placement` puts it on the floor under its footprint
+  within a layer of them (`Terrain::footprint_at`, the walkers' rule, so a
+  floor with headroom); none, or one more than a layer off (a drop), is
+  the new `PlacementRefusal::NoFloor` ("NO FLOOR HERE"). A hollow column
+  and a wall's edge are fine for a lantern; other kinds keep their rules
+  (`Uneven` over a tunnel). It keeps off props on the top floor, other
+  buildings on its floor, docks and other buildings' piles and slot spots;
+  no walk from the depots is checked (the ghost asks every frame; a miner
+  that finds no way gives the site up until the ground changes).
+  `Settlement::placement_check_at(kind, position, feet, terrain)` returns
+  a `buildings::Spot { output, height }`; `placement_check` is it with no
+  feet. **Every building has a floor** (`BuildingState::height`: the
+  ground at its middle, a lantern's own floor), which `on_building_floor`
+  now reads (`pick_target` is unchanged: ballistas stand on the top floor
+  anyway), and the interact target only offers buildings on the elder's
+  floor in a volume. A lantern is no obstacle (a tunnel is a tile wide;
+  bodies pass its post, as M7's lanterns), has no slot
+  (`slot_position` is its middle: no possessing, no job menu entry, no
+  boarding), its pile is the lantern itself, and ghouls leave it be
+  (`breakable` is false), so a built one burns forever (L2); its column is
+  protected from digs by its pile spot as any building's. **Miners build
+  lanterns**: miners are the town's carriers, so `miners::lantern_errand`
+  comes first in a miner's plan: for the nearest lantern site it hasn't
+  given up, carrying an item the site wants it takes it there
+  (`Step::Supply`), with the part all there it installs it
+  (`Step::Install { site, part }`, a new late message queue
+  `sprite_install`, `Settlement::sprite_installs`), else it fetches an item
+  the site wants from the tree's pile of it (`Step::Fetch { depot, site }`,
+  only as many units as the site wants) and takes it there; a need another
+  miner is on (`miners::Errand`, the plans as of last tick in `Ctx`) is left
+  to it, so the two miners fetch the stone and the amber at once. The
+  `GoTo` before a `Supply` or `Install` plans to the site's floor
+  (`haulers::route_at`'s goal floor), down the stair into a tunnel. Other
+  kinds' sites stay the elder's to supply and install (D4); the elder can
+  still supply and install a lantern's site too.
+  **The light grid** (`sim/src/settlement/light.rs`, `LightGrid` on
+  `Settlement::light`): each built lantern lights the floors of the tiles
+  within its range (by tile middles) that have a floor within a layer of
+  its own (`Volume::floor_near`: a ramp's step is the same level, a tunnel
+  two meters under or over is not), keyed by (tile, floor layer), when the
+  line from its tile's middle crosses no solid cell at its head height
+  (`light::HEAD`, the cells 1 to 2 m over its floor; sampled four times a
+  tile in integers, the far tile included), at `FULL` (255) times
+  `1 - (d / range)²` as a byte, the brightest lantern winning. **Derived,
+  not saved or hashed** (`#[serde(skip)]`): it is a function of the
+  buildings and the volume, which are; `World::step` refreshes it before
+  and after every tick and `World::from_state` on load
+  (`Settlement::refresh_light`), recomputing only when the terrain's
+  revision or the built lanterns changed; `LightGrid::revision` counts the
+  recomputes that changed the light. The save stays small and a loaded
+  world's grid is the one it had (a test checks). **The query for M8.7**:
+  `Settlement::light_at(terrain, tile, layer) -> Fx` (0..1;
+  `LightGrid::at`) and `Settlement::lit(terrain, p, z)` (a body's feet;
+  `LightGrid::lit`), both 1 under open sky (the sun or the moon) and in
+  scenes without a volume; `LightGrid::level(tile, layer)` is the grid's
+  own byte. The elder's lamp is not in the grid (L5). Nothing reads it yet.
+  **View**: `cutaway::follow` fills `Sight::set_light` from the grid for
+  the player's level (each tile's floor within a layer of the player's)
+  with `Key::light` the grid's revision; the shader's `LANTERN` adds it to
+  roofed ground (soft edges by the texture's filtering), so no light goes
+  through walls. The lantern's model is a `lantern` skin in
+  `styles/forest.ron` (a stone base, a 1.1 m wooden post, a head in a new
+  emissive `lanternglow` material, M7's lantern colours, and a cap: 1.44 m,
+  under a tunnel's 2 m roof), drawn on its floor (legacy
+  `Building::feet`); a built lantern has no card, lamp or pile caption, and
+  a small warm point light under its head (`settlement::LANTERN_LUMENS`
+  60000, range 6 m, no shadows, always on), for bodies and the lantern
+  itself; a site shows its card ("LANTERN 0/1 STONE, 0/1 AMBER"). The
+  ghost stands on the lantern's floor. Outside, lanterns look like
+  lanterns (open-sky ground keeps the sun). **M7's night lanterns stay
+  decoration** (view only, `daylight::spawn_night_lights`): converting them
+  to built lanterns would make them buildings in the sim (prebuilt kinds,
+  golden and the town's hash), for no gameplay today, since the surface is
+  always lit. Save format 45; golden unchanged (no golden scene has
+  buildings). Tests (`sim/src/settlement/light_tests.rs`):
+  `the_grid_stops_at_its_range_and_falls_off_softly`,
+  `the_grid_stops_at_rock` (a wall, round its end, over a low pillar, a
+  one-tile tunnel), `the_grid_stays_on_its_level` (rooms over one another,
+  a ramp's step), `ground_under_open_sky_counts_as_lit`,
+  `a_lantern_blueprint_underground_gets_its_stone_and_amber_and_is_built`
+  (in `miner_tests::tunnel`: placed from the tunnel's floor, `NoFloor` in
+  the rock beside it and over the trench's drop, a Wood Gatherer `Uneven`
+  there; the two miners bring the tree's stone and amber down and build
+  it; it lights its stretch of tunnel and not the ground over it, a dig far
+  off changes nothing and the end wall dug out is lit on the next tick; a
+  save gives the same grid and steps the same), and
+  `a_lantern_on_the_surface_lights_its_ground_and_has_no_slot`; content
+  `the_sacred_tree_supply_loads_its_tunables` (the lantern, invalid
+  variants); updated: `buildings_tests` (three kinds), the test-only Stone
+  Gatherer is kind 3 (`construction_tests`, `soak_tests`), the control
+  test's build menu, and content's `the_tree_piles_take_one_item_...` (the
+  amber pile from M8.3).
+  `//kestrel/sim:sim_test`, `//kestrel/save:save_test`,
+  `//kestrel/app:movement_test`, `//kestrel/content:content_test` pass.
+  The cave's first look was a white wash (the channel added white light
+  at `LANTERN` 1.2 over the lamp's): the channel is now tinted warm amber
+  in the shader (`LANTERN_TINT` (1.0, 0.55, 0.22)) at `LANTERN` 2.0, and
+  the pool reads apart from the lamp. `app/demos/sacred_tree_depths.json`
+  now walks into the mountain's cave first, stocks a stone and an amber at
+  the tree, puts a lantern's blueprint down at the hall's back
+  (x -7, z -52) from the hall's floor, sets Reed and Moss to mine (their
+  first errand is the lantern), waits at 4x (`settlement_rate`) until it
+  is built (128.6 s: Moss brings the amber at 78 s; Reed, with the stone,
+  dithers 20 s at the plateau's north edge on the known walker trouble,
+  M8.8), then sees the pool from the passage and the hall's front, and
+  digs the stair and tunnel as before (dig waits 66 frames, so it fits in
+  3529 frames; the stair now runs into the first night). Screenshots
+  (local plain build): the site placed with its card, Reed coming in with
+  the stone, the lantern built, its pool from the passage and from the
+  hall's front, the tunnel at night.
+  Not done, for later: miners supply only lanterns' sites (other kinds
+  stay the elder's); a lantern's post blocks no one (bodies pass through
+  it); its column is protected from digs at every depth, the ground over a
+  tunnel lantern too; no reachability check at placement (a miner gives an
+  unreachable site up until the ground changes); M7's night lanterns stay
+  decoration; light numbers (range 6, falloff, `LANTERN` 2.0, the point
+  light) are for M8.8.
 
 ### M8.5 Seeing, second pass
 
