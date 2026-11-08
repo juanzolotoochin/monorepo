@@ -103,7 +103,7 @@ impl Service for Digging {
             .add_service_systems::<Self, _>(Phase::Mirror, (update, follow_camera).chain().run_if(active.clone()))
             .add_systems(
                 PostUpdate,
-                (feedback, toss_stone, fly_stones, crate::cutaway::follow, crate::walker_view::draw).after(bevy::transform::TransformSystems::Propagate).run_if(crate::control::rendered).run_if(active),
+                (feedback, toss_stone, fly_stones, (crate::cutaway::follow, crate::cutaway::hide_outdoors).chain(), crate::walker_view::draw).after(bevy::transform::TransformSystems::Propagate).run_if(crate::control::rendered).run_if(active),
             );
     }
 }

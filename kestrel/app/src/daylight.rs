@@ -128,6 +128,7 @@ pub fn spawn_night_lights(world: &mut World, pack: &ScenePack) {
             let e = world
                 .spawn((
                     WorldScoped::default(),
+                    crate::cutaway::Outdoor,
                     Mesh3d(cube.clone()),
                     MeshMaterial3d(material.clone()),
                     Transform::from_translation(foot + offset).with_scale(size),

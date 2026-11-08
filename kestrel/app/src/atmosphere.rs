@@ -300,7 +300,7 @@ fn build(world: &mut World, profile: Option<AtmosphereProfile>) -> AtmosphereVis
         });
         state.entities.push(world.spawn((
             Mesh3d(cover.clone()), MeshMaterial3d(cover_material.clone()),
-            Transform::default(), bevy::light::NotShadowCaster,
+            Transform::default(), bevy::light::NotShadowCaster, crate::cutaway::Outdoor,
         )).id());
         state.cover = Some(cover);
         state.cover_material = Some(cover_material);
@@ -333,7 +333,7 @@ fn build(world: &mut World, profile: Option<AtmosphereProfile>) -> AtmosphereVis
                 bend_settings: Vec4::new(profile.grass_bend_radius, 0.0, 0.0, 0.0),
             },
         });
-        state.entities.push(world.spawn((Mesh3d(grass.clone()), MeshMaterial3d(material.clone()), Transform::default(), bevy::light::NotShadowCaster)).id());
+        state.entities.push(world.spawn((Mesh3d(grass.clone()), MeshMaterial3d(material.clone()), Transform::default(), bevy::light::NotShadowCaster, crate::cutaway::Outdoor)).id());
         state.grass = Some(grass);
         state.material = Some(material);
         state.bend_map = Some(bend_map);
@@ -368,7 +368,7 @@ fn build(world: &mut World, profile: Option<AtmosphereProfile>) -> AtmosphereVis
                 let mut entity = world.spawn((
                     Mesh3d(sparkle.clone()), MeshMaterial3d(color.clone()),
                     Transform::from_translation(home), firefly,
-                    bevy::light::NotShadowCaster,
+                    bevy::light::NotShadowCaster, crate::cutaway::Outdoor,
                 ));
                 if trail == 0 && i < profile.firefly_emitters.len() as u32 {
                     entity.insert(PointLight {

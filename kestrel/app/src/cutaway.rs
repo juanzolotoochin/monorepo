@@ -37,6 +37,27 @@
 //! mountain's shadow (`INSIDE_LIGHT`), out of sight it is dimmed to `DIM`
 //! (the section to `SECTION_DIM`) and partly desaturated (`GREY`).
 //! Everything blends by the factor, so the outside looks as it always did.
+//!
+//! The second pass (M8.5, T7 of the depths design): inside, rooms read as
+//! thin-walled boxes in a void, as in the devlog. Ground and cut tops that
+//! are not within a tile of floor in sight (`sight::Sight::near`) are drawn
+//! near black (`VOID`); the rim keeps its section colour. Roofed ground
+//! (`sight::Sight::open` 0) is not lit by the sun but by the elder's lamp
+//! (the fill light's place and glow, `LAMP`, `LAMP_RANGE`, on what is in
+//! sight only, so no light goes through walls), a small `AMBIENT` and the
+//! lanterns' light channel (`LANTERN`, all zero until M8.6;
+//! [`underground`] is the sum); ground under open sky (seen out of a mouth)
+//! keeps the sun. The view goes inside only when `sight::Sight::deep`: a
+//! shallow roof (a stair just dug down from the surface) gets a notch
+//! instead (`peek`: the near-wall box cut over the feet, nothing else), so
+//! the town stays as it is. Inside, walls stand only `INSIDE_WALL` high
+//! over the feet (not to the ceiling), so the floor of a one-tile tunnel
+//! shows past its wall. Inside, the outdoor dressing that has no place
+//! of its own (the baked environment: trees, lamp posts; the ground cover
+//! and grass, the night lanterns, `Outdoor`) is hidden, and bodies, piles,
+//! buildings and scene objects out of sight are hidden by their tile
+//! (`SightView::shows`: `settlement`, `piles`, `Placed`, `walker_view`).
+//! The player always shows.
 use crate::character::Player;
 use crate::effects::CameraRig;
 use bevy::{
@@ -89,6 +110,12 @@ pub const HIDE_MARGIN: f32 = 0.05;
 /// also cut this far over the feet, so a near wall doesn't hide the body
 /// (behind the player walls stand to the ceiling).
 pub const NEAR_WALL: f32 = 1.0;
+/// Inside (M8.5), ground over this height over the feet is hidden over
+/// the whole view (and under the ceiling's): walls stand a ledge high, so
+/// rooms read as thin-walled boxes and a one-tile corridor's floor isn't
+/// hidden behind its wall on the camera's side. In the near-wall box the
+/// lower of this and `NEAR_WALL`.
+pub const INSIDE_WALL: f32 = 0.75;
 /// ...in the tiles from the player's to this many tiles toward the camera
 /// along x and z (a blocky box on the camera's side).
 pub const NEAR_TILES: f32 = 4.0;
@@ -108,6 +135,23 @@ pub const SECTION_DIM: f32 = 0.12;
 pub const INSIDE_LIGHT: f32 = 0.35;
 /// ...and how far toward grey it goes (0 none, 1 grey).
 pub const GREY: f32 = 0.35;
+/// Inside, roofed ground's light (of its albedo): a small ambient...
+pub const AMBIENT: f32 = 0.07;
+/// ...the elder's lamp at full glow, by its foot...
+pub const LAMP: f32 = 1.6;
+/// ...reaching this far, meters...
+pub const LAMP_RANGE: f32 = 9.0;
+/// ...and the lanterns' light channel at 1 (M8.6's grid).
+pub const LANTERN: f32 = 1.2;
+/// The void beyond the rim round what is in sight, linear: near black.
+const VOID: [f32; 3] = [0.006, 0.005, 0.0045];
+/// Inside, bodies and things whose tile is less visible than this are
+/// hidden (`SightView::shows`).
+pub const SHOWN: f32 = 0.35;
+/// ...and so are those more than this many meters under the player's
+/// feet: the grid is for the player's level, and a tunnel under ground in
+/// sight is not in sight.
+pub const BELOW: f32 = 2.0;
 /// How far round the body the inside test looks for a ceiling, meters
 /// (the body's radius is 0.3).
 pub const INSIDE_REACH: f32 = 0.7;
@@ -143,8 +187,14 @@ pub struct SightView {
     pub inside: f32,
     /// Its eased value before smoothing.
     factor: f32,
+    /// The notch over a shallow roof (`sight::Sight::deep` false), drawn
+    /// and eased as `inside`.
+    pub peek: f32,
+    peek_factor: f32,
     /// The height ground is hidden over while inside.
     pub hide: f32,
+    /// The player's feet (arena height): the floor the grid is for.
+    pub feet: f32,
     /// The visibility round the player's level, in world tiles.
     pub sight: Option<crate::sight::Sight>,
     /// The terrain center in tiles, to turn arena meters into tiles.
@@ -165,10 +215,47 @@ impl SightView {
             return 1.0;
         }
         let tile = ((feet.x + 0.5).floor() as i32 + self.center.0, (feet.z + 0.5).floor() as i32 + self.center.1);
-        let seen = if feet.y > self.hide { 0.0 } else { self.sight.as_ref().map_or(1.0, |s| s.at(tile)) };
+        // The grid is for the player's level: over the hidden height, or
+        // `BELOW` under the player's feet (a tunnel under ground in sight),
+        // nothing is seen.
+        let off_level = feet.y > self.hide || feet.y < self.feet - BELOW;
+        let seen = if off_level { 0.0 } else { self.sight.as_ref().map_or(1.0, |s| s.at(tile)) };
         1.0 - self.inside * (1.0 - seen)
     }
+
+    /// Whether a body or thing with its feet at arena point `feet` is
+    /// drawn: always outside; inside, when its [`SightView::body_alpha`]
+    /// is at least [`SHOWN`].
+    pub fn shows(&self, feet: Vec3) -> bool {
+        self.body_alpha(feet) >= SHOWN
+    }
+
+    /// Whether a label at arena point `at` shows: as [`SightView::shows`],
+    /// by its tile only (a label floats over the hidden height).
+    pub fn shows_label(&self, at: Vec3) -> bool {
+        self.shows(at.with_y(self.hide.min(at.y)))
+    }
 }
+
+/// Inside, roofed ground's light as a share of its albedo: the ambient,
+/// the elder's lamp (`lamp`: its falloff and facing, 0..1, times the
+/// tile's visibility) and the lanterns' light channel (`light`, 0..1; all
+/// zero until M8.6). The shader's `underground` mirrors it.
+#[cfg_attr(not(test), allow(dead_code))] // Mirrored by the shader; tests check it.
+pub fn underground(lamp: f32, light: f32) -> f32 {
+    AMBIENT + LAMP * lamp.clamp(0.0, 1.0) + LANTERN * light.clamp(0.0, 1.0)
+}
+
+/// Outdoor dressing with no place of its own (the ground cover, grass,
+/// the night lanterns): hidden inside, with the baked environment
+/// (`style::Environment`).
+#[derive(Component)]
+pub struct Outdoor;
+
+/// A scene object standing where its transform is (the Tunnel Lab's
+/// collector): hidden inside while its tile is out of sight.
+#[derive(Component)]
+pub struct Placed;
 
 /// The view mode's label, shown a moment after a switch.
 #[derive(Component)]
@@ -212,8 +299,16 @@ pub struct CutawayUniform {
     pub eye: Vec4,
     /// x: `NEAR`, y: `FAR`, z: `FAR_LIGHT`, w: `NEAR_WALL`.
     pub light: Vec4,
-    /// x: `INSIDE_LIGHT`, y: `SECTION_DIM`.
+    /// x: `INSIDE_LIGHT`, y: `SECTION_DIM`, z: the peek factor.
     pub inside: Vec4,
+    /// xyz: the elder's lamp (arena); w: its glow, 0..1.
+    pub lamp: Vec4,
+    /// rgb: the lamp's colour (linear).
+    pub lamp_color: Vec4,
+    /// x: `AMBIENT`, y: `LAMP`, z: `LANTERN`, w: `LAMP_RANGE`.
+    pub under: Vec4,
+    /// rgb: the void's colour (linear).
+    pub void: Vec4,
 }
 
 impl MaterialExtension for CutawayExt {
@@ -231,14 +326,15 @@ pub fn register_shader(app: &mut App) {
         .expect("static cutaway prepass shader handle");
 }
 
-/// An empty visibility texture for [`material`] (`follow` fills it).
+/// An empty visibility texture for [`material`] (`follow` fills it): RGBA8,
+/// per tile visibility, near, light and open (`sight::Sight::bytes`).
 pub fn sight_image() -> Image {
     let size = crate::sight::WINDOW as u32;
     let mut image = Image::new_fill(
         bevy::render::render_resource::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
         bevy::render::render_resource::TextureDimension::D2,
-        &[0],
-        bevy::render::render_resource::TextureFormat::R8Unorm,
+        &[0, 0, 0, 255],
+        bevy::render::render_resource::TextureFormat::Rgba8Unorm,
         bevy::asset::RenderAssetUsages::default(),
     );
     image.sampler = bevy::image::ImageSampler::linear();
@@ -262,10 +358,22 @@ pub fn material(base: StandardMaterial, sight: Handle<Image>) -> CutawayMaterial
                 eye: Vec4::new(0.0, 0.0, 0.0, DIM),
                 light: Vec4::new(NEAR, FAR, FAR_LIGHT, NEAR_WALL),
                 inside: Vec4::new(INSIDE_LIGHT, SECTION_DIM, 0.0, 0.0),
+                lamp: Vec4::ZERO,
+                lamp_color: lamp_color().extend(0.0),
+                under: Vec4::new(AMBIENT, LAMP, LANTERN, LAMP_RANGE),
+                void: Vec4::new(VOID[0], VOID[1], VOID[2], 0.0),
             },
             sight,
         },
     }
+}
+
+/// The fill light's colour, sRGB.
+const LAMP_COLOR: [f32; 3] = [1.0, 0.88, 0.72];
+
+fn lamp_color() -> Vec3 {
+    let c = Color::srgb(LAMP_COLOR[0], LAMP_COLOR[1], LAMP_COLOR[2]).to_linear();
+    Vec3::new(c.red, c.green, c.blue)
 }
 
 /// The cut for feet at `feet` and a camera looking along `-toward`.
@@ -375,7 +483,7 @@ pub fn follow(
                 service::WorldScoped::default(),
                 FillLight,
                 PointLight {
-                    color: Color::srgb(1.0, 0.88, 0.72),
+                    color: Color::srgb(LAMP_COLOR[0], LAMP_COLOR[1], LAMP_COLOR[2]),
                     intensity: FILL_LUMENS * *glow,
                     range: FILL_RANGE,
                     radius: 0.2,
@@ -386,22 +494,21 @@ pub fn follow(
             ));
         }
     }
-    // Line of sight: the inside factor, the hidden height, the visibility.
+    // Line of sight: the visibility, then the inside factor (only under a
+    // room's roof, `Sight::deep`; a shallow roof peeks) and the hidden
+    // height.
     let sight_mode = view.mode == ViewMode::Sight;
-    view.factor = crate::sight::ease(view.factor, under.is_some() && sight_mode, time.delta_secs());
-    view.inside = crate::sight::shown(view.factor);
-    if let Some(ceiling) = under {
-        view.hide = ceiling.to_f32() - HIDE_MARGIN;
-    }
     if let (Some(world), Some(at)) = (world, at) {
         let terrain = world.terrain();
         let center = sim::terrain::Terrain::pit_tile(terrain.center);
         view.center = center;
         let floor = terrain.volume.as_ref().and_then(|volume| volume.floor_at(at, z)).map(|(floor, _)| floor);
         if let (Some(volume), Some(floor), true) = (&terrain.volume, floor, sight_mode) {
-            let key = crate::sight::Key { tile: sim::terrain::Terrain::pit_tile(at), floor, revision: terrain.revision };
+            // `light: 0` and no `set_light` until M8.6's light grid: then
+            // its revision goes in the key and the grid fills the channel.
+            let key = crate::sight::Key { tile: sim::terrain::Terrain::pit_tile(at), floor, revision: terrain.revision, light: 0 };
             if crate::sight::Sight::stale(view.sight.as_ref(), key) {
-                let sight = crate::sight::compute(key, crate::sight::WINDOW, |t| crate::sight::blocks(volume, t, floor));
+                let sight = crate::sight::of_volume(volume, key);
                 let handle = materials.get(&ground.0).map(|m| m.extension.sight.clone());
                 if let Some(mut image) = handle.as_ref().and_then(|h| images.get_mut(h)) {
                     image.data = Some(sight.bytes());
@@ -409,6 +516,16 @@ pub fn follow(
                 view.sight = Some(sight);
             }
         }
+    }
+    view.feet = feet.y;
+    let deep = view.sight.as_ref().is_none_or(|sight| sight.deep);
+    let covered_here = under.is_some() && sight_mode;
+    view.factor = crate::sight::ease(view.factor, covered_here && deep, time.delta_secs());
+    view.inside = crate::sight::shown(view.factor);
+    view.peek_factor = crate::sight::ease(view.peek_factor, covered_here, time.delta_secs());
+    view.peek = crate::sight::shown(view.peek_factor);
+    if let Some(ceiling) = under {
+        view.hide = ceiling.to_f32() - HIDE_MARGIN;
     }
     let target = if covered.is_some() { RADIUS } else { LOW_RADIUS };
     let radius = radius.get_or_insert(target);
@@ -424,13 +541,39 @@ pub fn follow(
     cutaway.toward = cut.toward.extend(EDGE);
     cutaway.planes = Vec4::new(cut.low, cut.head, LOW_RADIUS.min(*radius), 0.0);
     cutaway.section.w = if sight_mode { 0.0 } else { 1.0 };
-    cutaway.sight = Vec4::new(view.inside, view.hide, if sight_mode { 1.0 } else { 0.0 }, GREY);
+    // Inside, walls stand `INSIDE_WALL` high (under the ceiling's height).
+    let plane = view.hide.min(feet.y + INSIDE_WALL);
+    cutaway.sight = Vec4::new(view.inside, plane, if sight_mode { 1.0 } else { 0.0 }, GREY);
     if let Some(corner) = corner {
         cutaway.window = Vec4::new(corner.x, corner.y, crate::sight::WINDOW as f32, NEAR_TILES);
     }
     cutaway.eye = feet.extend(DIM);
     cutaway.light = Vec4::new(NEAR, FAR, FAR_LIGHT, NEAR_WALL);
-    cutaway.inside = Vec4::new(INSIDE_LIGHT, SECTION_DIM, 0.0, 0.0);
+    cutaway.inside = Vec4::new(INSIDE_LIGHT, SECTION_DIM, view.peek, 0.0);
+    cutaway.lamp = (feet + Vec3::Y * FILL_HEIGHT).extend(*glow);
+    cutaway.lamp_color = lamp_color().extend(0.0);
+    cutaway.under = Vec4::new(AMBIENT, LAMP, LANTERN, LAMP_RANGE);
+    cutaway.void = Vec4::new(VOID[0], VOID[1], VOID[2], 0.0);
+}
+
+/// Inside, hides the outdoor dressing that has no place of its own: the
+/// baked environment (one mesh per material over the whole scene) and
+/// `Outdoor` things; shows it again outside. Destructible pieces keep
+/// their own visibility.
+#[allow(clippy::type_complexity)]
+pub(crate) fn hide_outdoors(
+    view: Option<Res<SightView>>,
+    mut dressing: Query<&mut Visibility, (Or<(With<crate::style::Environment>, With<Outdoor>)>, Without<crate::style::DestructibleView>, Without<Placed>)>,
+    mut placed: Query<(&Transform, &mut Visibility), (With<Placed>, Without<Outdoor>, Without<crate::style::Environment>)>,
+) {
+    let Some(view) = view else { return };
+    let shown = if view.mode == ViewMode::Sight && view.inside > 0.5 { Visibility::Hidden } else { Visibility::Inherited };
+    for mut visibility in &mut dressing {
+        visibility.set_if_neq(shown);
+    }
+    for (transform, mut visibility) in &mut placed {
+        visibility.set_if_neq(if view.shows(transform.translation) { Visibility::Inherited } else { Visibility::Hidden });
+    }
 }
 
 #[cfg(test)]
@@ -441,6 +584,46 @@ mod tests {
     /// Square to the line of sight, level.
     fn side() -> Vec3 { Vec3::new(1.0, 0.0, -1.0).normalize() }
     fn amount(cut: &Cut, p: Vec3) -> f32 { cut.amount(p, RADIUS, LOW_RADIUS, EDGE) }
+
+    #[test]
+    fn with_no_lantern_light_roofed_ground_has_only_the_lamp_and_ambient() {
+        // The light channel is all zero until M8.6: out of the lamp's reach
+        // only the ambient, under it the lamp too.
+        assert_eq!(underground(0.0, 0.0), AMBIENT);
+        assert_eq!(underground(1.0, 0.0), AMBIENT + LAMP);
+        assert!((underground(0.5, 0.0) - (AMBIENT + 0.5 * LAMP)).abs() < 1e-6);
+        // A lantern's light adds a pool; it never goes past full.
+        assert_eq!(underground(0.0, 1.0), AMBIENT + LANTERN);
+        assert_eq!(underground(0.0, 4.0), AMBIENT + LANTERN);
+        // The ambient alone is dark: the room reads by the lamp.
+        assert!(AMBIENT < 0.1 && LAMP > 1.0);
+    }
+
+    #[test]
+    fn inside_things_out_of_sight_are_hidden_and_outside_all_show() {
+        let mut view = SightView::default();
+        let key = crate::sight::Key { tile: (0, 0), floor: 0, revision: 0, light: 0 };
+        // A corridor along x from the eye; everything else is rock.
+        view.sight = Some(crate::sight::compute(key, 16, |(x, y)| y != 0 || !(-1..=6).contains(&x)));
+        view.hide = 2.5;
+        let in_corridor = Vec3::new(4.0, 0.0, 0.0);
+        let in_rock = Vec3::new(4.0, 0.0, 5.0);
+        // Outside (factor 0) both show.
+        assert!(view.shows(in_corridor) && view.shows(in_rock));
+        view.inside = 1.0;
+        assert!(view.shows(in_corridor));
+        assert!(!view.shows(in_rock));
+        // On the surface over the hidden height: hidden.
+        assert!(!view.shows(in_corridor + Vec3::Y * 3.0));
+        // In a tunnel under a tile in sight: hidden; a step down: shown.
+        assert!(!view.shows(in_corridor - Vec3::Y * 2.5));
+        assert!(view.shows(in_corridor - Vec3::Y * 0.5));
+        // A label floats over the hidden height but goes by its tile.
+        assert!(view.shows_label(in_corridor + Vec3::Y * 3.0));
+        // The cutaway mode shows everything.
+        view.mode = ViewMode::Cutaway;
+        assert!(view.shows(in_rock));
+    }
 
     #[test]
     fn ground_over_the_head_or_toward_the_camera_is_cut() {

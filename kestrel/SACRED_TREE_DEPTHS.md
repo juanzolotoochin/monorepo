@@ -1,6 +1,6 @@
 # Kestrel Sacred Tree depths (design)
 
-Status: agreed (2026-11-06), M8.1 to M8.4 done. Tasks in
+Status: agreed (2026-11-06), M8.1 to M8.5 done. Tasks in
 [`todo/sacred-tree.md`](todo/sacred-tree.md) under M8. It builds on the
 verticality MVP in [`VERTICALITY.md`](VERTICALITY.md) (PR #135) and its
 line-of-sight prototype, and the rules for the work in

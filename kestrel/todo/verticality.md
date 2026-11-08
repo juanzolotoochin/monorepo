@@ -22,6 +22,15 @@ order, one agent each.
 - **Where:** `app/src/cutaway.rs`, `app/src/sight.rs`,
   `app/shaders/cutaway.wesl`, `app/src/piles/`, `app/src/legacy.rs`.
 - **Found in:** the line of sight prototype.
+  Note (from M8.5 of the depths design, `sacred-tree.md`): done there:
+  other things out of sight are hidden inside (the collector and scene
+  objects, piles and their items, sprites, haulers, ghouls, buildings,
+  their glows and labels; the baked environment and ground cover while
+  inside), by their tile and floor (`SightView::shows`); the near-wall
+  box question is moot inside (walls stand 0.75 m over the whole view);
+  the next step down a stair is in sight (`sight::blocks` reads two
+  layers). Still open: the eye within its tile, ground on other levels
+  in sight beyond a step, a `view_mode` control op.
 
 ## Collapse and support
 
@@ -71,6 +80,12 @@ order, one agent each.
 - **Where:** `app/src/cutaway.rs`, `app/shaders/cutaway.wesl`,
   `app/src/daylight.rs`.
 - **Found in:** V.8.
+  Note (from M8.5 of the depths design): done there for the line of sight
+  view: under a roof the ground is lit by the lamp only where it is in
+  sight (no light through walls), a small ambient and a lanterns' light
+  channel (M8.6), not the sun, and the far interiors are void. Still
+  open: the cutaway view (F7) and bodies keep the plain fill light;
+  nothing changes with the day cycle underground.
 
 ## Done
 

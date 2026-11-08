@@ -1336,6 +1336,16 @@ pub fn tick(world: &mut World) {
         );
         writes += changed;
         skipped += unchanged;
+        // Inside (line of sight, M8.5) what stands on a tile out of sight
+        // is hidden; outside everything shows.
+        let shown = world.get_resource::<crate::cutaway::SightView>().is_none_or(|s| s.shows(view.position));
+        if let Some(mut visibility) = world.get_mut::<Visibility>(rig.root) {
+            visibility.set_if_neq(if shown { Visibility::Inherited } else { Visibility::Hidden });
+        }
+    }
+    let mut glows = glows;
+    if let Some(sight) = world.get_resource::<crate::cutaway::SightView>() {
+        glows.retain(|g| sight.shows_label(g.1));
     }
     sync_glows(world, &mut state, glows);
     crate::telemetry::elapsed(world, "settlement_sync", sync_start);
@@ -2138,6 +2148,7 @@ fn producer_description(sim: &Simulation, p: &crate::legacy::Producer) -> String
 }
 pub fn captions(
     settlement: Res<Settlement>,
+    sight: Option<Res<crate::cutaway::SightView>>,
     camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>,
     windows: Query<&Window>,
     mut labels: Query<(
@@ -2188,7 +2199,8 @@ pub fn captions(
         };
         let expanded = hovered == Some(e);
         let folded = !p.building || !p.brief.is_empty();
-        *visibility = if expanded || (hovered.is_none() && folded) {
+        let in_sight = sight.as_ref().is_none_or(|s| s.shows_label(p.position));
+        *visibility = if in_sight && (expanded || (hovered.is_none() && folded)) {
             Visibility::Inherited
         } else {
             Visibility::Hidden

@@ -98,7 +98,7 @@ impl Canopy {
             let own = world.resource_mut::<Assets<StandardMaterial>>().add(own);
             // The cached environment mesh stays as it was for the next world.
             world.entity_mut(e).insert(Mesh3d(rest));
-            world.spawn((WorldScoped::default(), Mesh3d(leaves), MeshMaterial3d(own.clone()), Transform::default()));
+            world.spawn((WorldScoped::default(), crate::cutaway::Outdoor, Mesh3d(leaves), MeshMaterial3d(own.clone()), Transform::default()));
             canopy.materials.push(own);
         }
         Some(canopy)

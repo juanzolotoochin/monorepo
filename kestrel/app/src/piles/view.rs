@@ -388,6 +388,7 @@ fn spawn_collector(commands: &mut Commands, assets: &LabAssets, position: Vec3) 
     commands
         .spawn((
             LabEntity,
+            crate::cutaway::Placed,
             Transform::from_translation(position),
             Visibility::default(),
             Obstacle(Disc { center: position, radius: crate::obstacles::COLLECTOR_RADIUS }),
@@ -531,11 +532,23 @@ pub fn update_display(
     }
 }
 
+/// Places the labels; inside the line of sight view (`cutaway::SightView`,
+/// M8.5) a pile out of sight and its label are hidden.
 pub fn captions(
     camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>,
-    mut labels: Query<(&Caption, &mut Node, &mut Visibility)>,
+    sight: Option<Res<crate::cutaway::SightView>>,
+    mut labels: Query<(&Caption, &mut Node, &mut Visibility), Without<PileVisual>>,
+    mut piles: Query<(&Transform, &mut Visibility), (With<PileVisual>, Without<Caption>)>,
 ) {
+    for (transform, mut visibility) in &mut piles {
+        let shown = sight.as_ref().is_none_or(|s| s.shows(transform.translation));
+        visibility.set_if_neq(if shown { Visibility::Inherited } else { Visibility::Hidden });
+    }
     for (caption, mut node, mut visibility) in &mut labels {
+        if sight.as_ref().is_some_and(|s| !s.shows_label(caption.anchor)) {
+            *visibility = Visibility::Hidden;
+            continue;
+        }
         if let Ok(position) = camera.0.world_to_viewport(camera.1, caption.anchor) {
             let offset = if matches!(caption.kind, CaptionKind::Cargo) {
                 15.0

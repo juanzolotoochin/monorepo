@@ -4,26 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M8.5 Seeing, second pass
-
-- **Status:** open
-- **Why:** the line-of-sight prototype is too dark and leaves big flat
-  lids (T7).
-- **What to do:** rock beyond a one-tile rim round what you see goes near
-  black; inside, light comes from lanterns and the elder's lamp, not the
-  sun; F7 keeps the cutaway. Pick up the cheap items of "Line of sight
-  follow-ups" in `verticality.md` (dim objects, piles and ghouls out of
-  sight).
-- **Where:** `app/src/cutaway.rs`, `app/src/sight.rs`,
-  `app/shaders/cutaway.wesl`.
-- **Found in:** depths design.
-- **Tests:** sight unit tests; screenshots in the town's tunnels and the
-  mountain cave, by day and night.
-  Note (from M8.3): the town now uses the sight view; a stair dug down
-  past 2 m is a roofed tunnel and turns the view inside (everything but
-  the plateau goes dark), and inside the mountain's cave its whole top is
-  one dark lid. Screenshots in M8.3's entry.
-
 ## M8.6 Lanterns and the light grid
 
 - **Status:** open
@@ -48,6 +28,16 @@ its milestones, in order; one PR per milestone.
   the mountain's cave walls (x -9, z -49..-48 by the mouth). A lantern on
   a tunnel floor needs placement to allow its footprint there (today a
   hollow column or a wall edge refuses).
+  Note (from M8.5): the view's light hook: `sight::Sight::set_light(|tile|
+  light)` fills the grid's light channel (0..1 per tile, the texture's
+  blue; all zero today) after `sight::of_volume` in `cutaway::follow`,
+  and `sight::Key::light` (0 today) should be the light grid's revision
+  so the grid is recomputed when lanterns change. The shader adds
+  `LANTERN` (1.2) times it to roofed ground's light
+  (`cutaway::underground`), filtered over tiles (soft edges); pools on
+  ground under open sky are not added (the surface keeps the sun or
+  moon). The elder's lamp stays view only (`LAMP`). Bodies are lit by the
+  fill point light, not the grid.
 
 ## M8.7 Sprites and ghouls read light
 
@@ -309,6 +299,101 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M7.5.
 
 ## Done
+
+### M8.5 Seeing, second pass
+
+- **Status:** done (branch `kestrel-sacred-tree-depths`)
+- **Why:** the line-of-sight prototype is too dark and leaves big flat
+  lids (T7).
+- **What to do:** rock beyond a one-tile rim round what you see goes near
+  black; inside, light comes from lanterns and the elder's lamp, not the
+  sun; F7 keeps the cutaway. Pick up the cheap items of "Line of sight
+  follow-ups" in `verticality.md` (dim objects, piles and ghouls out of
+  sight).
+- **Where:** `app/src/cutaway.rs`, `app/src/sight.rs`,
+  `app/shaders/cutaway.wesl`.
+- **Found in:** depths design.
+- **Tests:** sight unit tests; screenshots in the town's tunnels and the
+  mountain cave, by day and night.
+  Note (from M8.3): the town now uses the sight view; a stair dug down
+  past 2 m is a roofed tunnel and turns the view inside (everything but
+  the plateau goes dark), and inside the mountain's cave its whole top is
+  one dark lid. Screenshots in M8.3's entry.
+
+- **Done:** the line of sight view's second pass (T7), view only (sim,
+  saves and protocol unchanged). **Void past a one-tile rim**: the sight
+  grid (`app/src/sight.rs`) is now an RGBA8 texture per tile: visibility,
+  **near** (the best ray share of the clear tiles in its 3 x 3, over
+  `NEAR_FULL` 0.2: floor in sight and the rock bordering it, corners
+  too, are 1), the lanterns' **light** and **open** sky (nothing solid at
+  or over the eye layer). Inside, ground and cut tops of a tile whose near
+  is 0 are drawn near black (`cutaway::VOID`, after fog, by the inside
+  factor; `sight::void` and the shader's `void_at`, unfiltered so the rim
+  is whole tiles; a wall face goes by the tile it faces, a cut top by
+  where the view crosses the cut); the rim keeps the section colour. And
+  inside, walls stand only `INSIDE_WALL` (0.75 m) over the feet over the
+  whole view, not to the ceiling: rooms read as thin-walled boxes, as in
+  the devlog, and a one-tile tunnel's floor isn't hidden behind its wall
+  on the camera's side (a first try kept walls to the ceiling outside the
+  near-wall box: the dug tunnel was a black slot). **Light**: roofed
+  ground (open 0) is not lit by the sun but by `cutaway::underground`:
+  `AMBIENT` 0.07 of its albedo, the elder's lamp (`LAMP` 1.6 at its foot,
+  the fill light's place 1.8 m over the feet and its glow, falling off to
+  `LAMP_RANGE` 9 m, half-wrapped by facing, times the tile's visibility,
+  so no light through walls) and `LANTERN` 1.2 times the light channel;
+  ground under open sky seen out of a mouth keeps the sun as before. Same
+  by day and night. **The light hook for M8.6**: `Sight::light` (the
+  texture's blue channel), all zero today; `Sight::set_light(|tile| ..)`
+  fills it 0..1 per tile and `Key::light` (0 today) is the light grid's
+  revision, so the grid is recomputed when it changes (see the note on
+  M8.6). **The stair**: under a roof the view goes inside only when
+  `Sight::deep`: at least `ROOF_AREA` (8) roofed floor tiles in sight
+  within `ROOF_TILES` (2) of the eye (a room: a cave mouth or a wide
+  tunnel goes inside at once), or no open sky in sight within `SKY_TILES`
+  (2). A stair dug down from the surface is one tile wide with sky a step
+  or two behind, so it **peeks** instead: a second factor (`SightView::peek`,
+  eased the same) cuts only the near-wall box over the feet and lights
+  the roofed floor there by the lamp, the town stays as it is; the view
+  goes inside once the sky is three steps back (3.5 m down the demo's
+  stair). `sight::blocks` now needs the eye layer and the one under it
+  solid, so the next step down a stair is in sight. **Things out of sight**
+  inside are hidden by their tile (`SightView::shows`: the body alpha
+  under `SHOWN` 0.35; over the hidden height or more than `BELOW` 2 m
+  under the player's feet, since the grid is for the player's level):
+  the settlement's rigs (sprites, haulers, ghouls, buildings and depots,
+  piles and their items, transfers), their glows and captions, the pile
+  lab's piles and labels, `cutaway::Placed` scene objects (the Tunnel
+  Lab's collector) and the test walker as before; the outdoor dressing
+  with no place of its own (the baked environment, the ground cover and
+  grass, fireflies, the canopy's leaves and the night lanterns,
+  `cutaway::Outdoor`) is hidden while inside. The player always shows.
+  F7 keeps the cutaway; outside and heightfield scenes unchanged. Tests:
+  `sight::tests::rock_beyond_a_one_tile_rim_round_what_you_see_is_void`,
+  `a_tile_at_a_wedge_side_is_partly_near`,
+  `a_shallow_stair_stays_outside_and_a_tunnel_goes_inside` (2.5 and 3 m
+  down a stair not deep, 4 and 6 m deep; a 5-wide room deep at its mouth,
+  a one-wide tunnel only two tiles in), `down_a_stair_the_next_step_is_in_sight`,
+  `the_light_channel_is_zero_until_a_light_grid_fills_it`,
+  `open_sky_is_where_nothing_is_over_the_eye`;
+  `cutaway::tests::with_no_lantern_light_roofed_ground_has_only_the_lamp_and_ambient`,
+  `inside_things_out_of_sight_are_hidden_and_outside_all_show`;
+  `//kestrel/app:movement_test` 295/295. `app/demos/sacred_tree_depths.json`
+  now digs the stair on to 5.5 m and a 4-tile tunnel from its bottom,
+  then walks to the cave and its passage (the miners' wait and the first
+  cave visit went to fit 120 s); a `sacred_tree_depths_demo_video`
+  target. Screenshots (local plain build): the town outside (unchanged),
+  the stair at 2.5 and 3 m (the notch), at 4.5 m (inside), deep in the
+  tunnel, the cave's mouth, the cave and its passage, leaving the cave
+  mid-fade, and the Tunnel Lab's outside, west mouth, tunnel, the passage
+  under the bridge and the stair; a 720p video. Night not shown: the
+  first night is at 150 s and a demo script is capped at 120 s.
+  Not done, for later: the interact prompt over a pile on the surface
+  still floats in the void from the stair; the notch is the near-wall
+  box (5 x 5 tiles), wide for a one-tile stair; a stair down shows only
+  the next step or two ahead (the grid is one level); trees and lamp
+  posts seen out of the cave's mouth are hidden with the rest of the
+  baked environment (it is one mesh per material); the sun-lit wedge out
+  of a mouth is much brighter than the lamp-lit room by day.
 
 ### M8.4 Miners mine walls
 
