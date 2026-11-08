@@ -391,7 +391,12 @@ its milestones, in order; one PR per milestone.
   (saved with a `DigWall` in a plan); `two_miners_bring_a_steady_modest_income`
   now on walls: 49 stone in 5 min (in 20..=120). The heightfield miner
   tests are as before; the wave soak and the happy path pass unchanged
-  otherwise.
+  otherwise. `app/demos/sacred_tree_depths.json` now sets Reed and Moss to
+  mine first and waits by them at the west ramp's foot: their first walls
+  are a terrace step 31 m west (stone 7 at the tree by the end); they
+  don't come to the elder's stair or the cave in the demo's two minutes.
+  Screenshots (local plain build): the two miners digging the step, full
+  view and a close-up.
   Not done, for later: light (M8.7, notes there); the walker can still be
   stuck by a route cut diagonally off a sloped stair (M8.8, note there);
   amber worth and the distance trade (M8.8).
