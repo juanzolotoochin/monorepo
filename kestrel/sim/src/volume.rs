@@ -26,6 +26,13 @@ pub const HEADROOM: i32 = 4;
 /// least [`HEADROOM`] plus one layers apart, so this never reaches the
 /// floor above.
 pub const STEP_UP: i32 = 1;
+/// How far a height may be off a layer's step and still count as on it:
+/// sloped heights are interpolated in fixed point, so feet on a floor
+/// that should be at -1.5 m can come out at -1.4999999972, and an exact
+/// one-layer step down from there measured as a hair more than a layer
+/// (a miner stuck on a terrace's edge for minutes, M8.4). A millimeter,
+/// far below anything a body walks over.
+pub const ROUNDING: Fx = Fx::from_ratio(1, 1000);
 /// A body's height, feet to head: 2 m, the [`HEADROOM`] a floor needs. A
 /// jump or a jetpack stops with the head at a ceiling
 /// ([`Terrain::ceiling_at`]).
@@ -374,7 +381,7 @@ impl Volume {
     /// floor; a floor two layers up is a wall's edge, level, a meter up,
     /// and out of reach.
     pub fn floor_at(&self, p: FxVec2, z: Fx) -> Option<(i32, Fx)> {
-        let reach = z + height(STEP_UP);
+        let reach = z + height(STEP_UP) + ROUNDING;
         // A floor's sloped height is within a layer below it, and floors are
         // further apart than that, so the heights rise with the floors.
         self.floors(Terrain::pit_tile(p)).map(|floor| (floor, self.patch(p, floor).height())).take_while(|&(_, h)| h <= reach).last()

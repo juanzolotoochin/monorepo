@@ -264,6 +264,7 @@ fn think(sim: &Simulation, a: &mut AgentState, me: AgentIx) -> Option<Action> {
         view: s.view(me, tick, terrain),
         dig_claims: &[],
         stone: None,
+        amber: None,
         danger: &[],
         leader: None,
     };

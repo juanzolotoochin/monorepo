@@ -501,7 +501,7 @@ impl Terrain {
         for i in 1..=steps {
             let p = a + (b - a) * Fx::from_ratio(i, steps);
             let Some(floor) = self.footprint_at(p, z, radius) else { return false };
-            if floor >= z - LAYER {
+            if floor >= z - LAYER - crate::volume::ROUNDING {
                 z = floor;
             }
         }
@@ -525,7 +525,7 @@ impl Terrain {
         for i in 1..=steps {
             let p = a + (b - a) * Fx::from_ratio(i, steps);
             let floor = self.footprint_at(p, z, radius)?;
-            if floor < z - LAYER {
+            if floor < z - LAYER - crate::volume::ROUNDING {
                 return None;
             }
             z = floor;

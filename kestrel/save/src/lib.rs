@@ -133,7 +133,9 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 ///     `Threat::height`), haulers, sprites and threats a replan backoff
 ///     (`Backoff`), a threat its chase's 3D route (`Threat::chase`), and a
 ///     player's arrow the floor it flies over (`Projectile::floor`).
-pub const FORMAT_VERSION: u32 = 43;
+/// 44: miners mine walls (M8.4 of the Sacred Tree depths): a sprite's plan
+///     can hold a level wall dig (`sprites::Step::DigWall`, appended).
+pub const FORMAT_VERSION: u32 = 44;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

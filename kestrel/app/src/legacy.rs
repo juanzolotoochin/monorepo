@@ -1165,7 +1165,7 @@ impl Simulation {
                     Some(s::Step::Wait) => SpriteActivity::Waiting,
                     // Walking, or about to: a claim is granted on the way.
                     Some(s::Step::GoTo(_) | s::Step::Claim(_) | s::Step::Enter(_) | s::Step::ClaimTile(_)) => SpriteActivity::Moving,
-                    Some(s::Step::Dig { .. }) => SpriteActivity::Digging,
+                    Some(s::Step::Dig { .. } | s::Step::DigWall { .. }) => SpriteActivity::Digging,
                     Some(s::Step::Pickup(_) | s::Step::Deposit(_)) => SpriteActivity::Hauling,
                     // An idle sprite's plan is done once it is home; a job
                     // with no plan yet gets one on the next tick.

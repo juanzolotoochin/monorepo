@@ -465,6 +465,9 @@ impl PileLab {
             .piles
             .iter()
             .filter(|(_, p)| p.source.is_none() && p.item() == Some(item) && p.inventory.free() >= units)
+            // In a volume, only a pile on the dig's floor (M8.4): not one
+            // on the mountain over a tunnel.
+            .filter(|(_, p)| volume.is_none_or(|(floor, _)| (p.height - crate::volume::height(floor)).abs() <= crate::volume::height(2)))
             .map(|(&id, p)| (nav::distance(p.position, pit), id))
             .filter(|&(d, _)| d < Fx::from_ratio(11, 5))
             .min();

@@ -450,16 +450,27 @@ impl Soak {
     /// Walks the elder down to the `n`th stone tile a miner's search finds
     /// from the tree's stone pile (`miners::search`), from the tile behind
     /// the one it digs from, so it faces it, and digs a layer in front
-    /// (M6.2). A ghoul or a miner may be in the way, or the tile dug out
-    /// already, so the dig may be refused.
+    /// (M6.2). In the town's volume the search finds walls (M8.4): the
+    /// elder digs level into one as a miner does, from a stand whose tile
+    /// behind is on its floor (so it walks up facing the wall). A ghoul or a
+    /// miner may be in the way, or the tile dug out already, so the dig may
+    /// be refused.
     fn dig_stone(&mut self, n: usize, seen: &mut Seen) {
         let (dock, radius) = (self.s().depots[TREE[1] as usize].position, self.s().agents[ELDER as usize].radius());
-        let targets = super::miners::search(self.sim.world().terrain(), crate::terrain::Terrain::pit_tile(dock), radius);
+        let terrain = self.sim.world().terrain();
+        let behind = |t: &super::miners::Target| (2 * t.stand.0 - t.tile.0, 2 * t.stand.1 - t.tile.1);
+        let targets: Vec<_> = super::miners::search(terrain, crate::terrain::Terrain::pit_tile(dock), radius)
+            .into_iter()
+            .filter(|t| match (&terrain.volume, t.wall) {
+                (Some(volume), Some(floor)) => volume.floor_near(behind(t), floor).is_some(),
+                _ => true,
+            })
+            .collect();
         let Some(t) = targets.get(n % targets.len().max(1)).copied() else { return };
-        let behind = (2 * t.stand.0 - t.tile.0, 2 * t.stand.1 - t.tile.1);
-        self.go(crate::terrain::Terrain::pit_center(behind), seen);
+        self.go(crate::terrain::Terrain::pit_center(behind(&t)), seen);
         self.go(crate::terrain::Terrain::pit_center(t.stand), seen);
-        self.watch(&[command(CommandKind::DigFront { agent: ELDER, direction: crate::volume::DigDirection::Down })], seen);
+        let direction = if t.wall.is_some() { crate::volume::DigDirection::Level } else { crate::volume::DigDirection::Down };
+        self.watch(&[command(CommandKind::DigFront { agent: ELDER, direction })], seen);
         self.wait(5 * HZ / 2, seen);
     }
 

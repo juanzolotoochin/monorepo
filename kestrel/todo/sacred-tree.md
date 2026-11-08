@@ -4,26 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M8.4 Miners mine walls
-
-- **Status:** open
-- **Why:** sprites harvest the tunnels the elder digs (T3).
-- **What to do:** miner sprites pick exposed stone faces they can reach
-  and dig level into the wall beside them, never down or up.
-- **Where:** `sim/src/settlement/miners.rs`.
-- **Found in:** depths design.
-- **Tests:** a miner digs a tunnel wall, never its floor or ceiling; it
-  walks to the face in 3D.
-  Note (from M8.2): sprites already walk on 3D paths in volume scenes
-  (`haulers::route_at`, steps by `walk_at`), but `miners::search` and
-  `stand_spot` are still 2D (pits, `terrain.steep`).
-  Note (from M8.3): in the town's volume a miner digs the column's top
-  cell (`Terrain::dig_top`, `dig_refusal`'s volume branch with no
-  stranding check) and `miners::search` steps between tops at most a layer
-  apart; `Step::Dig`'s depth is `Terrain::dug`. Replace these with wall
-  faces. Placement refuses footprints over tunnels and on wall edges
-  (`buildings::check`'s `hollow`).
-
 ## M8.5 Seeing, second pass
 
 - **Status:** open
@@ -82,6 +62,13 @@ its milestones, in order; one PR per milestone.
   takes the dark route when one exists and still reaches a lit target.
   Note (from M8.2): the dawn still dispels ghouls on every floor; decide
   whether ghouls underground (unlit) survive it.
+  Note (from M8.4): where miners need light: `miners::wall_search` (skip
+  floors and the stand tiles that are dark, so a wall is a target only from
+  a lit stand), `Step::DigWall` in `sprites.rs` (refuse to start, or stop,
+  on a dark tile), the pile fetch in `miners::plan` (`stand_spot`), and the
+  `GoTo` routes (`haulers::route_at`: dark tiles are walls underground for
+  sprites). The search's cache is keyed by terrain revision only: key it
+  by the light grid's revision too.
 
 ## M8.8 Tuning, soak and demo
 
@@ -101,6 +88,19 @@ its milestones, in order; one PR per milestone.
   Note (from M8.3): amber numbers (`mine::amber`, the mountain's boxes),
   the town save's size (1.5 MB with its volume) and the quarter-meter
   rounding of the terraces are for here.
+  Note (from M8.4): miners' numbers (`miners::AMBER_WORTH` 4,
+  `TILES_PER_WORTH` 2, `VOLUME_SEARCH_TILES`, `WALL_SEARCH_NODES`): today
+  they mine the nearest stone walls (49 stone in 5 min for two) and go to
+  the cave's amber only once there's no nearer wall. A walker
+  (`haulers::move_worker`) can dither for minutes where a string-pulled 3D
+  route cuts diagonally from a sloped stair step onto the ground beside it
+  (a trench a layer a tile down, its first step a layer under the ground):
+  the route was checked with the node's feet, the walker's are lower on the
+  slope and the step up is refused, and its swerves keep it there.
+  `miner_tests::tunnel` walls its trench to avoid it; dropping the route on
+  a refused straight step was tried and made it worse (the replan from
+  there found no route and the miner gave the wall up). Fix in nav (check
+  pulled segments with a margin) or the walker.
 
 ## A possessed ballista fires faster
 
@@ -309,6 +309,92 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M7.5.
 
 ## Done
+
+### M8.4 Miners mine walls
+
+- **Status:** done (branch `kestrel-sacred-tree-depths`)
+- **Why:** sprites harvest the tunnels the elder digs (T3).
+- **What to do:** miner sprites pick exposed stone faces they can reach
+  and dig level into the wall beside them, never down or up.
+- **Where:** `sim/src/settlement/miners.rs`.
+- **Found in:** depths design.
+- **Tests:** a miner digs a tunnel wall, never its floor or ceiling; it
+  walks to the face in 3D.
+  Note (from M8.2): sprites already walk on 3D paths in volume scenes
+  (`haulers::route_at`, steps by `walk_at`), but `miners::search` and
+  `stand_spot` are still 2D (pits, `terrain.steep`).
+  Note (from M8.3): in the town's volume a miner digs the column's top
+  cell (`Terrain::dig_top`, `dig_refusal`'s volume branch with no
+  stranding check) and `miners::search` steps between tops at most a layer
+  apart; `Step::Dig`'s depth is `Terrain::dug`. Replace these with wall
+  faces. Placement refuses footprints over tunnels and on wall edges
+  (`buildings::check`'s `hollow`).
+
+- **Done:** in a volume (the town's), a miner mines walls
+  (`miners::wall_search`, `Step::DigWall`): a level dig of the
+  `HEADROOM` (4) cells of the tile beside the one it stands on, from its
+  floor layer up, through `View::dig_volume` with `DigDirection::Level`
+  (so never down or up, never under itself: `volume_dig`'s `OwnTile`),
+  never a protected column (the hill's undiggable ranges, and
+  `dig_blocked` checked on every plan as before: tree, buildings, sites,
+  piles, docks). Housekeeping clears the cells as the elder's level dig
+  does (`Terrain::clear_column`); stone and amber land on piles on the
+  miner's floor (`PileLab::mined_at`, whose "pile beside it" now must be
+  on that floor too, not on the mountain over a tunnel). A wall is a face:
+  a terrace step or a pit's side on the surface, a tunnel's or the cave's
+  sides underground; flat open ground has none. The search: from the
+  stone pile's top floor, a breadth-first walk over floors, four ways, to
+  a neighbour's floor within a layer (`Volume::floor_near`), between
+  obstacles, out to `VOLUME_SEARCH_TILES` (64, past the cave's back wall)
+  and at most `WALL_SEARCH_NODES` (24576) floors, cached by terrain
+  revision as before. Beside every floor it reads the wall's worth
+  (`wall_worth`: `STONE_WORTH` 1 and `AMBER_WORTH` 4 per cell of the four,
+  earth 0; the same diggable and "something left under it" rules as
+  `volume_dig`) and keeps the `TARGETS` best by walk less
+  `TILES_PER_WORTH` (2) times worth: the nearest first, as on the
+  heightfield, a richer wall winning a near tie (a first try, worth per
+  tile walked, sent both miners 90 tiles to the cave's amber and halved
+  the stone at the tree: a miner carries 5 a trip, so distance is what
+  pays). With no wall worth anything a miner waits by the stone pile, as
+  with no stone. Miners carry amber too: piles of stone or amber (within
+  `VOLUME_SEARCH_TILES` of the tree), amber to the AMBER PILE
+  (`Settlement::amber_depot`, `Town::amber`, `deliver` by the carried
+  item); a pile's stand spot in a volume is where the body's footprint
+  stands within a layer of the pile's floor (`Terrain::footprint_at`), not
+  the mountain's top over a cave. A `GoTo` before a `DigWall` plans to the
+  wall's floor. A refused wall dig (it stands on another floor) gives the
+  spot up until the ground changes. Heightfield scenes unchanged (their
+  search, `Step::Dig`, pits); `Terrain::dig_top` and `dig_refusal`'s
+  volume branch stay for the elder's refusal hint and tests, no miner uses
+  them. Save format 44 (`Step::DigWall`, appended). A walking fix found on
+  the way: sloped heights come out of fixed point a hair off a layer
+  (-1.4999999972 for -1.5), so an exact one-layer step down measured more
+  than a layer and `walk_at` refused it: a miner stood on a terrace's edge
+  for minutes. `volume::ROUNDING` (1 mm) now pads `walk_at`'s and
+  `walkable_at`'s drop and `Volume::floor_at`'s reach. The soak's elder
+  (`dig_stone`) digs the search's walls level from a stand whose tile
+  behind is on its floor, instead of a step down into the old top-cell
+  targets (with Down digs into walls the elder spent its time walking and
+  the tree fell in the wave soak). Tests (`miner_tests`):
+  `a_miner_digs_a_tunnel_wall_beside_it_never_its_floor_or_ceiling` (a
+  walled trench and tunnel at the north foot, amber in the end wall and in
+  its floor and ceiling cells: it digs the four over its floor in 9 s from
+  the tunnel's end, its own column and the floor and ceiling cells stay,
+  and it carries the 18 amber to the tree),
+  `a_miner_walks_into_the_mountain_cave_and_mines_amber` (ore only in the
+  mountain: round the hill, in at the mouth, a hall wall from the -1 m
+  floor; amber at the tree at 194 s), `a_miner_never_digs_a_protected_column`
+  (amber all through the plateau's north edge is no target; a pile on the
+  amber wall's column keeps it whole while two miners dig elsewhere for
+  two minutes, every dig checked), `with_no_faces_a_miner_idles_by_the_stone_pile`
+  (the town stripped of ore), `miners_are_deterministic_across_threads_and_saves`
+  (saved with a `DigWall` in a plan); `two_miners_bring_a_steady_modest_income`
+  now on walls: 49 stone in 5 min (in 20..=120). The heightfield miner
+  tests are as before; the wave soak and the happy path pass unchanged
+  otherwise.
+  Not done, for later: light (M8.7, notes there); the walker can still be
+  stuck by a route cut diagonally off a sloped stair (M8.8, note there);
+  amber worth and the distance trade (M8.8).
 
 ### M8.3 The town as a volume
 

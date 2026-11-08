@@ -734,14 +734,19 @@ impl Settlement {
                 }
             }
             // A miner's, if no one dug its layer out first (`Step::Dig`): in
-            // a volume, the column's top cell (M8.3).
+            // a volume, the wall's cells from its floor up (`Step::DigWall`,
+            // M8.4), as the elder's level dig.
             if let Some(dig) = super::sprites::finish_dig(a, tick, terrain) {
-                if terrain.volume.is_some() {
-                    if let Some((layer, ore)) = terrain.dig_top(dig.tile) {
-                        cells.push((dig.tile, layer, ore, layer));
+                match dig.layer {
+                    Some(bottom) => {
+                        let cleared = terrain.clear_column(dig.tile, bottom);
+                        cells.extend(cleared.into_iter().map(|(layer, ore)| (dig.tile, layer, ore, bottom)));
                     }
-                } else if terrain.deepen(dig.tile) {
-                    dug.push(dig.tile);
+                    None => {
+                        if terrain.deepen(dig.tile) {
+                            dug.push(dig.tile);
+                        }
+                    }
                 }
             }
         }

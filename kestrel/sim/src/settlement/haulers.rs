@@ -271,6 +271,8 @@ pub(super) struct Ctx<'a> {
     pub dig_claims: &'a [((i32, i32), AgentIx)],
     /// The town's stone and its stone pile (`Settlement::stone_depot`).
     pub stone: Option<(ItemIx, DepotIx)>,
+    /// The town's amber and its amber pile (`Settlement::amber_depot`).
+    pub amber: Option<(ItemIx, DepotIx)>,
     /// The enemies that chase, as they stand this tick (they move first):
     /// what a sprite off the hill flees from (`sprites::Alarm`).
     pub danger: &'a [super::sprites::Danger],

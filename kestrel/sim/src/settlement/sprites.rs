@@ -157,6 +157,11 @@ pub enum Step {
     /// Empty the bundle into this depot (the tree's stone pile). Done once
     /// the bundle is empty.
     Deposit(DepotIx),
+    /// A miner's in a volume (M8.4 of the depths design): face `tile`
+    /// and dig level into its wall, the `volume::HEADROOM` cells from
+    /// `layer` (the floor it stands on) up (`Terrain::volume_dig`). Done
+    /// once they are all empty. Appended, so older saves decode unchanged.
+    DigWall { tile: (i32, i32), layer: i32 },
 }
 
 /// The part of a building's slot a sprite holds: the slot names it back.
@@ -368,6 +373,38 @@ impl SpriteState {
                     _ => Progress::Replan,
                 }
             }
+            Step::DigWall { tile, layer } => {
+                // Dug: by this sprite, or someone got there first.
+                if !miners::wall_left(view.terrain, tile, layer) {
+                    self.dig = None;
+                    return Progress::Next;
+                }
+                if self.dig_claim != Some(tile) {
+                    return Progress::Replan;
+                }
+                if self.dig.is_some() {
+                    return Progress::Stay(None);
+                }
+                // Face the wall and start a level dig from its floor, if the
+                // volume and what stands on the tile still allow it. Refused
+                // (it stands on another floor, or off the tile), it gives
+                // the spot up until the ground changes, so it doesn't plan
+                // the same dig again every tick.
+                let Some(mine) = town.mine else { return Progress::Replan };
+                body.route.clear();
+                body.heading = crate::nav::bearing(body.position, Ground::pit_center(tile));
+                match view.dig_volume(body.position, self.height, body.heading, body.base_radius, crate::volume::DigDirection::Level) {
+                    Ok((t, bottom)) if t == tile && bottom == layer => {
+                        self.dig = Some(Dig { tile, started: view.tick, until: view.tick + mine.dig, layer: Some(layer) });
+                        Progress::Stay(None)
+                    }
+                    _ => {
+                        self.unreachable.push(Ground::pit_tile(body.position));
+                        self.unreachable_at = view.terrain.revision;
+                        Progress::Replan
+                    }
+                }
+            }
             Step::Pickup(pile) => {
                 // Under way: stage 3 moves the units.
                 if carry.job.is_some() || carry.inventory.total_in() > 0 {
@@ -557,6 +594,8 @@ pub(super) fn act(body: &mut Body, sprite: &mut SpriteState, action: &Action, vi
         Action::Move(Intent::GoTo { target, .. }) if view.terrain.volume.is_some() => {
             let floor = match sprite.plan.get(sprite.step as usize + 1) {
                 Some(Step::Pickup(pile)) => view.piles.and_then(|lab| lab.piles.get(pile)).map(|p| p.height),
+                // A wall's floor (M8.4): under the mountain, the cave's.
+                Some(Step::DigWall { layer, .. }) => Some(crate::volume::height(*layer)),
                 _ => None,
             };
             body.route = haulers::route_at(view.terrain, body.position, sprite.height, *target, floor, body.base_radius, &[]);
@@ -575,6 +614,7 @@ pub(super) fn finish_dig(a: &mut AgentState, tick: u64, terrain: &Ground) -> Opt
     let dig = sprite.dig.take_if(|d| tick + 1 >= d.until)?;
     match sprite.current() {
         Some(Step::Dig { tile, depth }) if tile == dig.tile && terrain.dug(tile) == depth => Some(dig),
+        Some(Step::DigWall { tile, layer }) if tile == dig.tile && miners::wall_left(terrain, tile, layer) => Some(dig),
         _ => None,
     }
 }
@@ -595,7 +635,7 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
         return;
     }
     let view = View { me, ..ctx.view };
-    let town = Town { claims: ctx.dig_claims, stone: ctx.stone, mine: def.sprite.and_then(|s| s.mine), alarm: alarm(me, &a.body, a.height(), ctx.terrain, ctx.danger) };
+    let town = Town { claims: ctx.dig_claims, stone: ctx.stone, amber: ctx.amber, mine: def.sprite.and_then(|s| s.mine), alarm: alarm(me, &a.body, a.height(), ctx.terrain, ctx.danger) };
     if let Some(action) = think(a, &view, &town) {
         // A sprite's actions only move it: nothing for the world.
         let mut out = ActionMessages::default();
