@@ -4,6 +4,69 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
+## M9.1 The fog grid from many eyes
+
+- **Status:** open
+- **Why:** fog of war ([`SACRED_TREE_FOG.md`](../SACRED_TREE_FOG.md))
+  needs to know, per tile and level, what the team sees now and has seen.
+- **What to do:** a view-only, pure fog grid over the whole town, per
+  level: in sight, seen before, never seen (F2, F3, F9). Eyes (F1, F8):
+  every player's elder or possessed sprite (about 14 m), every sprite
+  (about 6 m), the tree (about 8 m), buildings (about 4 m), and lit
+  lanterns (the light grid's tiles). Night halves units' ranges, not
+  light's; underground is always night (F4). Ground over eye height blocks
+  (F5), reusing `sight.rs`'s ray rules. Each eye recomputed only when its
+  tile, level or the ground changes. Start with the town round the tree
+  seen (F9).
+- **Where:** `app/src/sight.rs` (or a new `app/src/fog.rs`),
+  `sim/src/settlement/light.rs` (read only).
+- **Found in:** fog design.
+- **Tests:** ranges, ground blocking, night, lanterns, levels, memory,
+  team eyes adding up; a cost test on the town with every eye.
+
+## M9.2 Drawing the fog
+
+- **Status:** open
+- **Why:** the fog grid must show.
+- **What to do:** the shader draws in sight as today, seen-before dimmed
+  and desaturated, never-seen black, with soft edges (F2). The fog
+  replaces the inside view's dimming; inside, the ground over you still
+  fades (F10). F7 cycles fog, the inside view as it is now, and the
+  cutaway; only the town has fog (F11).
+- **Where:** `app/src/cutaway.rs`, `app/shaders/cutaway.wesl`,
+  `app/src/sight.rs`.
+- **Found in:** fog design.
+- **Tests:** mode cycling; other scenes unchanged; screenshots by day, at
+  night and underground.
+
+## M9.3 Hiding things in the fog
+
+- **Status:** open
+- **Why:** the fog must hide what the team can't see.
+- **What to do:** ghouls and other moving things are drawn only in sight;
+  buildings and piles in remembered ground show as last seen (F2), with
+  their labels. A ghoul within about 12 m of any elder, out of sight, shows
+  only its glowing eyes (through rock too) and growls (F6). Widen
+  `SightView::shows` from the inside view to the fog.
+- **Where:** `app/src/sight.rs`, `app/src/legacy.rs`, the piles, buildings
+  and ghoul views, audio.
+- **Found in:** fog design.
+- **Tests:** a hidden ghoul isn't drawn; eyes within 12 m only; last-seen
+  buildings and piles.
+
+## M9.4 Demo and review
+
+- **Status:** open
+- **Why:** the prototype is reviewed by video.
+- **What to do:** a demo script and video: the elder walks out from the
+  tree by day, the fog opening and staying remembered, the hill as a
+  lookout, a lantern's pool, dusk shortening sight, ghouls' eyes in the
+  fog, then in sight, and a tunnel. Screenshots; the full suite; a
+  `docs/test-time.md` row for M9; the design's status and what changed.
+- **Where:** `app/demos/`, `app/BUILD.bazel`, docs.
+- **Found in:** fog design.
+- **Tests:** the full suite.
+
 ## Depths follow-ups
 
 - **Status:** open
