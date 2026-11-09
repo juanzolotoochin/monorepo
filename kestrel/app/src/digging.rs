@@ -140,7 +140,7 @@ fn build_ground(
         Ground::Cutaway(match cutaway {
             Some(cutaway) => cutaway.0.clone(),
             None => {
-                let material = cutaways.add(crate::cutaway::material(ground_material(), images.add(crate::cutaway::sight_image())));
+                let material = cutaways.add(crate::cutaway::material(ground_material(), images.add(crate::cutaway::sight_image()), images.add(crate::cutaway::fog_image(1, &[0; 4]))));
                 commands.insert_resource(crate::cutaway::CutawayGround(material.clone()));
                 material
             }

@@ -313,6 +313,24 @@ filegroup(
     output_group = "video",
 )
 
+# The Sacred Tree's fog of war (M9.2 of the fog design, M9.4 makes it the
+# review demo): the elder walks out from the tree west down the ramp and
+# round to the mountain's cave by day, the fog opening and staying
+# remembered, into the cave's passage, waits there to dusk at 4x, and comes
+# out under the night's shorter sight.
+game_demo(
+    name = "sacred_tree_fog_demo",
+    game = ":demo",
+    script = "demos/sacred_tree_fog.json",
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "sacred_tree_fog_demo_video",
+    srcs = [":sacred_tree_fog_demo"],
+    output_group = "video",
+)
+
 game_demo(
     name = "combat_arena_demo",
     assertions = "demos/combat_arena.assertions.json",

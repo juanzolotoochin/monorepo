@@ -6,7 +6,9 @@
 // cutaway_prepass.wesl, which cuts the depth prepass the same way).
 // In the line of sight mode (`cutaway::ViewMode::Sight`) the cylinder is
 // off; inside, ground over the ceiling's height is hidden (`hidden`) and
-// the rest shaded by the visibility texture (`shade`).
+// the rest shaded by the visibility texture (`shade`). In the fog mode
+// (`cutaway::ViewMode::Fog`, the town) the fog of war's texture shades
+// what is out of sight instead (`fogged`).
 import bevy_pbr::render::{
     forward_io::{VertexOutput, FragmentOutput},
     pbr_fragment::pbr_input_from_standard_material,
@@ -47,10 +49,19 @@ struct Cutaway {
     under: vec4<f32>,
     // rgb: the void beyond the rim round what is in sight.
     void_color: vec4<f32>,
+    // The fog of war. xy: its texture's lowest corner (world x, z); z: its
+    // side; w: 1 in the fog mode.
+    fog: vec4<f32>,
+    // x: the brightness seen ground keeps; y: how far toward grey; z: the
+    // ease from the last texture (b, a) to this one (r, g); w: the soft
+    // edge's reach.
+    fog_look: vec4<f32>,
 };
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> cutaway: Cutaway;
 @group(constants::MATERIAL_BIND_GROUP) @binding(101) var sight_map: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(102) var sight_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(103) var fog_map: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(104) var fog_sampler: sampler;
 
 // How much of the ground at `p` is cut: 0 drawn, 1 gone, between in the edge.
 fn cut(p: vec3<f32>) -> f32 {
@@ -176,13 +187,14 @@ fn shade(color: vec3<f32>, albedo: vec3<f32>, p: vec3<f32>, n: vec3<f32>, is_fro
         let fall = mix(1.0, cutaway.light.z, smoothstep(cutaway.light.x, cutaway.light.y, d));
         let grey = vec3<f32>(dot(color, vec3<f32>(0.2126, 0.7152, 0.0722)));
         let dim = mix(color, grey, cutaway.sight.w) * cutaway.eye.w;
-        let sunlit = mix(dim, color * fall, seen);
+        // In the fog mode the fog dims what is out of sight (`fogged`).
+        let sunlit = mix(dim, color * fall, select(seen, 1.0, fog_on()));
         // Under a roof no sun: the lamp, the ambient and the lanterns.
         let roofed = albedo * underground(p, n, seen, g.b);
         c = mix(roofed, sunlit, g.a);
     } else {
         // The section: the rim round floor in sight keeps its colour.
-        c = color * mix(cutaway.inside.y, 1.0, seen);
+        c = color * mix(cutaway.inside.y, 1.0, select(seen, 1.0, fog_on()));
     }
     // The notch's own cut faces keep the section colour.
     return mix(color, c, select(cutaway.sight.x * cutaway.sight.z, f, is_front));
@@ -190,13 +202,60 @@ fn shade(color: vec3<f32>, albedo: vec3<f32>, p: vec3<f32>, n: vec3<f32>, is_fro
 
 // Line of sight: how much of the ground at `p` is void while inside (after
 // fog, so it is near black): beyond the rim round floor in sight. A wall
-// face goes by the tile it faces, a back face by its cap.
+// face goes by the tile it faces, a back face by its cap. None in the fog
+// mode: the fog's never seen is the void.
 fn void_amount(p: vec3<f32>, n: vec3<f32>, is_front: bool) -> f32 {
     let f = cutaway.sight.x * cutaway.sight.z;
-    if f <= 0.0 {
+    if f <= 0.0 || fog_on() {
         return 0.0;
     }
     return f * void_at(select(cap(p), p + n * 0.05, is_front));
+}
+
+// The fog mode: whether it is on.
+fn fog_on() -> bool {
+    return cutaway.fog.w > 0.5;
+}
+
+// The fog of war at `xz` (`fog::FogTexture`, filtered): 0 never seen, 0.5
+// seen, 1 in sight; the elder's level's by `roofed`, else the surface's,
+// eased from the last texture. Outside the town's square: never seen.
+fn fog_tap(xz: vec2<f32>, roofed: f32) -> f32 {
+    let uv = (xz - cutaway.fog.xy) / cutaway.fog.z;
+    if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) {
+        return 0.0;
+    }
+    let s = textureSampleLevel(fog_map, fog_sampler, uv, 0.0);
+    return mix(mix(s.b, s.a, roofed), mix(s.r, s.g, roofed), cutaway.fog_look.z);
+}
+
+// ...softened: five taps `fog_look.w` round, so an edge is a few meters
+// wide and its tiles' corners round off.
+fn fog_state(xz: vec2<f32>, roofed: f32) -> f32 {
+    let r = cutaway.fog_look.w;
+    let sum = fog_tap(xz, roofed) * 2.0 + fog_tap(xz + vec2<f32>(r, 0.0), roofed) + fog_tap(xz - vec2<f32>(r, 0.0), roofed) + fog_tap(xz + vec2<f32>(0.0, r), roofed) + fog_tap(xz - vec2<f32>(0.0, r), roofed);
+    return sum / 6.0;
+}
+
+// The fog mode: `color` at `p` as the team knows it: in sight as it is,
+// seen before dimmed and greyed, never seen the void. Inside, roofed ground
+// and walls (`grid`'s a 0) go by the elder's level, open ground by the
+// surface, blended by the inside factor. A wall face goes by the tile it
+// faces, a back face by its cap.
+fn fogged(color: vec3<f32>, p: vec3<f32>, n: vec3<f32>, is_front: bool) -> vec3<f32> {
+    let inside = cutaway.sight.x * cutaway.sight.z;
+    var roofed = 0.0;
+    var at = p;
+    if inside > 0.0 {
+        at = select(cap(p), p + n * 0.05, is_front);
+        roofed = inside * (1.0 - grid(at).a);
+    }
+    let state = fog_state(at.xz, roofed);
+    let seen = smoothstep(0.05, 0.45, state);
+    let now = smoothstep(0.55, 0.95, state);
+    let grey = vec3<f32>(dot(color, vec3<f32>(0.2126, 0.7152, 0.0722)));
+    let dim = mix(color, grey, cutaway.fog_look.y) * cutaway.fog_look.x;
+    return mix(cutaway.void_color.rgb, mix(dim, color, now), seen);
 }
 
 // A 4 x 4 ordered dither threshold in (0, 1) for a pixel.
@@ -224,5 +283,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     let gone = void_amount(in.world_position.xyz, normalize(in.world_normal), is_front);
     out.color = vec4<f32>(mix(out.color.rgb, cutaway.void_color.rgb, gone), out.color.a);
+    if fog_on() {
+        out.color = vec4<f32>(fogged(out.color.rgb, in.world_position.xyz, normalize(in.world_normal), is_front), out.color.a);
+    }
     return out;
 }

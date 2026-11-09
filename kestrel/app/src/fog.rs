@@ -196,14 +196,12 @@ impl Fog {
     }
 
     /// The surface as an R8 texture's rows ([`State::byte`]).
-    #[cfg_attr(not(test), allow(dead_code))] // M9.2 uploads it.
     pub fn surface_bytes(&self) -> Vec<u8> {
         self.bytes_with(|fog, tile| fog.state(tile, Level::Surface))
     }
 
     /// The level under ground of an elder on `layer` as an R8 texture's
     /// rows ([`Fog::near`]).
-    #[cfg_attr(not(test), allow(dead_code))] // M9.2 uploads it.
     pub fn level_bytes(&self, layer: i32) -> Vec<u8> {
         self.bytes_with(|fog, tile| fog.near(tile, layer))
     }
@@ -428,21 +426,74 @@ pub fn eyes(world: &sim::World) -> Vec<(EyeId, Eye)> {
     eyes
 }
 
+/// How long the drawn fog takes to ease from one grid to the next,
+/// seconds: an edge moving a tile, or dusk halving sight at once, slides
+/// instead of popping.
+pub const EASE: f32 = 0.4;
+
+/// The fog's texture for the ground's shader (M9.2): RGBA8 over the fog's
+/// square, row by row (y, then x): r the surface ([`Fog::surface_bytes`]),
+/// g the level under ground of the elder's floor while it is inside
+/// ([`Fog::level_bytes`], else 0), b and a the same as drawn when the last
+/// texture came, which the shader eases from by `ease`. Made again only
+/// when the fog's revision or the elder's level changes.
+#[derive(Clone, Debug, Default)]
+pub struct FogTexture {
+    /// What the last texture was made for: the fog's revision and the
+    /// elder's level.
+    key: Option<(u64, Option<i32>)>,
+    /// The surface and level bytes, interleaved, now...
+    now: Vec<u8>,
+    /// ...and as drawn when they came.
+    before: Vec<u8>,
+    /// From `before` (0) to `now` (1).
+    pub ease: f32,
+}
+
+impl FogTexture {
+    /// The texture's rows for `fog` with the elder inside on `layer` (none
+    /// on the surface), when they differ from the last: the fog's revision
+    /// or the layer changed. The first eases from nothing to it at once.
+    pub fn update(&mut self, fog: &Fog, layer: Option<i32>) -> Option<Vec<u8>> {
+        let key = (fog.revision, layer);
+        if self.key == Some(key) {
+            return None;
+        }
+        let surface = fog.surface_bytes();
+        let level = layer.map_or_else(|| vec![0; surface.len()], |layer| fog.level_bytes(layer));
+        let now: Vec<u8> = surface.iter().zip(&level).flat_map(|(&s, &l)| [s, l]).collect();
+        // What is drawn now, mid-ease or not, is where the next ease starts.
+        let first = self.key.is_none() || self.now.len() != now.len();
+        self.before = if first { now.clone() } else { self.now.iter().zip(&self.before).map(|(&n, &b)| (b as f32 + (n as f32 - b as f32) * self.ease).round() as u8).collect() };
+        self.now = now;
+        self.ease = if first { 1.0 } else { 0.0 };
+        self.key = Some(key);
+        Some(self.now.chunks(2).zip(self.before.chunks(2)).flat_map(|(n, b)| [n[0], n[1], b[0], b[1]]).collect())
+    }
+
+    /// Eases on by `dt` seconds (0 to 1 in [`EASE`]).
+    pub fn step(&mut self, dt: f32) {
+        self.ease = (self.ease + dt / EASE).min(1.0);
+    }
+}
+
 /// The town's fog this frame: none outside the town.
 #[derive(bevy::prelude::Resource, Default)]
 pub struct FogView {
     pub fog: Option<Fog>,
+    /// Its texture as last uploaded (`cutaway::follow`).
+    pub texture: FogTexture,
 }
 
 impl FogView {
     /// A new world: its fog starts again (`Fog::of_town`).
     pub fn reset(&mut self) {
-        self.fog = None;
+        *self = FogView::default();
     }
 }
 
-/// Brings the town's fog up to the world each frame (none elsewhere). It
-/// draws nothing yet: M9.2 uploads it.
+/// Brings the town's fog up to the world each frame (none elsewhere);
+/// `cutaway::follow` draws it.
 pub fn follow(service: Option<bevy::prelude::Res<crate::lockstep::SessionService>>, mut view: bevy::prelude::ResMut<FogView>) {
     let Some(world) = service.as_ref().and_then(|service| service.world()) else { return };
     if view.fog.is_none() {
@@ -842,5 +893,46 @@ mod tests {
         eprintln!("every eye, 2 m a character, north up:\n{}", picture(&fog, Level::Surface, (tree.0 - 64, tree.1 - 64), (tree.0 + 64, tree.1 + 64), 2));
         assert!(moved < BUDGET, "every unit moved: {moved:?} over {BUDGET:?}");
         assert!(first < BUDGET * 2, "every eye looked: {first:?}");
+    }
+
+    #[test]
+    fn the_texture_is_made_again_only_when_the_fog_or_the_level_changes() {
+        let volume = flat();
+        let mut fog = fog();
+        let mut texture = FogTexture::default();
+        update(&mut fog, &volume, &[(agent("elder"), eye((0, 0), 0, ELDER_RANGE))]);
+        let at = |bytes: &[u8], tile: (i32, i32)| {
+            let i = 4 * ((tile.1 + 40) * 81 + tile.0 + 40) as usize;
+            [bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]
+        };
+        // The first texture: the surface in r, no level, nothing to ease from.
+        let first = texture.update(&fog, None).expect("the first texture");
+        assert_eq!(first.len(), 4 * 81 * 81);
+        assert_eq!(at(&first, (0, 0)), [255, 0, 255, 0]);
+        assert_eq!(at(&first, (30, 0)), [0, 0, 0, 0]);
+        assert_eq!(texture.ease, 1.0);
+        // Nothing changed: no upload.
+        assert!(texture.update(&fog, None).is_none());
+        assert!(!update(&mut fog, &volume, &[(agent("elder"), eye((0, 0), 0, ELDER_RANGE))]));
+        assert!(texture.update(&fog, None).is_none());
+        // The elder walks 20 tiles east: its old tile is seen, its new one in
+        // sight, and the texture eases from the last one.
+        update(&mut fog, &volume, &[(agent("elder"), eye((20, 0), 0, ELDER_RANGE))]);
+        let walked = texture.update(&fog, None).expect("the fog changed");
+        assert_eq!(at(&walked, (0, 0)), [128, 0, 255, 0]);
+        assert_eq!(at(&walked, (30, 0)), [255, 0, 0, 0]);
+        assert_eq!(texture.ease, 0.0);
+        // Halfway through the ease it changes again: the next starts from
+        // what is drawn, halfway.
+        texture.step(EASE / 2.0);
+        assert!((texture.ease - 0.5).abs() < 1e-6);
+        update(&mut fog, &volume, &[(agent("elder"), eye((40, 0), 0, ELDER_RANGE))]);
+        let again = texture.update(&fog, None).expect("the fog changed");
+        assert_eq!(at(&again, (30, 0)), [255, 0, 128, 0]);
+        texture.step(EASE * 2.0);
+        assert_eq!(texture.ease, 1.0);
+        // The elder's level going inside makes it again, with the level in g.
+        assert!(texture.update(&fog, Some(0)).is_some());
+        assert!(texture.update(&fog, Some(0)).is_none());
     }
 }

@@ -58,6 +58,22 @@
 //! buildings and scene objects out of sight are hidden by their tile
 //! (`SightView::shows`: `settlement`, `piles`, `Placed`, `walker_view`).
 //! The player always shows.
+//!
+//! The fog of war (M9.2 of the Sacred Tree fog, `SACRED_TREE_FOG.md`; the
+//! default in the town, `ViewMode::Fog`, F10): the line of sight view with
+//! the town's fog grid (`fog::Fog`) in place of its dimming. Ground in sight
+//! is drawn as it is, ground seen before dimmed to `FOG_DIM` and greyed by
+//! `FOG_GREY`, ground never seen the void's near black (F2), with soft edges
+//! (the fog sampled `FOG_SOFT` meters round). On the surface, and inside on
+//! open ground (out of a mouth), the surface's fog; inside on roofed ground
+//! and walls, the elder's level's. Inside, the ground over you still fades
+//! as above, and the lamp and the lanterns light roofed ground; the fog
+//! takes the place of the out of sight dimming and the void. The fog's
+//! texture is made again only when the grid's revision or the elder's level
+//! changes, and eases from the last one over `fog::EASE` (dusk halving
+//! sight at once slides in). F7 cycles fog, line of sight and the cutaway
+//! in the town; other scenes have no fog and keep line of sight and the
+//! cutaway (F11).
 use crate::character::Player;
 use crate::effects::CameraRig;
 use bevy::{
@@ -159,7 +175,14 @@ pub const BELOW: f32 = 2.0;
 /// How far round the body the inside test looks for a ceiling, meters
 /// (the body's radius is 0.3).
 pub const INSIDE_REACH: f32 = 0.7;
-/// The key that switches between line of sight and the V.6 cylinder.
+/// The fog of war: the brightness ground seen before keeps...
+pub const FOG_DIM: f32 = 0.45;
+/// ...and how far toward grey it goes.
+pub const FOG_GREY: f32 = 0.7;
+/// How far round a point the fog is sampled for its soft edge, meters.
+pub const FOG_SOFT: f32 = 0.8;
+/// The key that cycles the view modes (fog in the town, line of sight and
+/// the V.6 cylinder).
 pub const TOGGLE: KeyCode = KeyCode::F7;
 /// How long the view mode's label shows after a switch, seconds.
 const LABEL_SECONDS: f32 = 2.5;
@@ -167,8 +190,11 @@ const LABEL_SECONDS: f32 = 2.5;
 /// How a volume scene's ground is cut round the player.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ViewMode {
-    /// You only see the inside when you're inside (the default).
+    /// Line of sight with the town's fog of war (the default; elsewhere,
+    /// with no fog, it is `Sight`).
     #[default]
+    Fog,
+    /// You only see the inside when you're inside.
     Sight,
     /// V.6's cylinder along the line of sight.
     Cutaway,
@@ -177,8 +203,30 @@ pub enum ViewMode {
 impl ViewMode {
     fn label(self) -> &'static str {
         match self {
+            ViewMode::Fog => "VIEW: FOG OF WAR (F7)",
             ViewMode::Sight => "VIEW: LINE OF SIGHT (F7)",
             ViewMode::Cutaway => "VIEW: CUTAWAY (F7)",
+        }
+    }
+
+    /// The mode drawn when this one is chosen, in a scene with a fog
+    /// (`fog`, the town) or not: elsewhere the fog is line of sight.
+    pub fn shown(self, fog: bool) -> ViewMode {
+        if self == ViewMode::Fog && !fog {
+            ViewMode::Sight
+        } else {
+            self
+        }
+    }
+
+    /// The mode F7 picks next: in the town fog, line of sight, the
+    /// cutaway; elsewhere line of sight and the cutaway (F11).
+    pub fn next(self, fog: bool) -> ViewMode {
+        match (self.shown(fog), fog) {
+            (ViewMode::Fog, _) => ViewMode::Sight,
+            (ViewMode::Sight, _) => ViewMode::Cutaway,
+            (ViewMode::Cutaway, true) => ViewMode::Fog,
+            (ViewMode::Cutaway, false) => ViewMode::Sight,
         }
     }
 }
@@ -186,7 +234,10 @@ impl ViewMode {
 /// What the line of sight view shows this frame, for bodies to fade by.
 #[derive(Resource, Default)]
 pub struct SightView {
-    pub mode: ViewMode,
+    /// The mode chosen with F7 (see [`SightView::mode`]).
+    pub choice: ViewMode,
+    /// Whether the scene has a fog (`fog::FogView`, the town).
+    pub fog: bool,
     /// The inside factor as drawn (0 in the open, 1 inside).
     pub inside: f32,
     /// Its eased value before smoothing.
@@ -208,14 +259,20 @@ pub struct SightView {
 impl SightView {
     /// A new world: nothing seen yet, outside (the mode stays).
     pub fn reset(&mut self) {
-        *self = SightView { mode: self.mode, ..default() };
+        *self = SightView { choice: self.choice, ..default() };
+    }
+
+    /// The mode drawn: the chosen one, line of sight for the fog where
+    /// there is none.
+    pub fn mode(&self) -> ViewMode {
+        self.choice.shown(self.fog)
     }
 
     /// How visible a body with its feet at arena point `feet` is: 1 in
-    /// the open or in the cutaway mode; inside, its tile's visibility (0
-    /// over the hidden height).
+    /// the open or in the cutaway mode; inside (line of sight or fog), its
+    /// tile's visibility (0 over the hidden height).
     pub fn body_alpha(&self, feet: Vec3) -> f32 {
-        if self.mode != ViewMode::Sight || self.inside <= 0.0 {
+        if self.mode() == ViewMode::Cutaway || self.inside <= 0.0 {
             return 1.0;
         }
         let tile = ((feet.x + 0.5).floor() as i32 + self.center.0, (feet.z + 0.5).floor() as i32 + self.center.1);
@@ -279,6 +336,10 @@ pub struct CutawayExt {
     #[texture(101)]
     #[sampler(102)]
     pub sight: Handle<Image>,
+    /// The fog of war over the town (`fog::FogTexture`, RGBA8).
+    #[texture(103)]
+    #[sampler(104)]
+    pub fog: Handle<Image>,
 }
 
 /// The shaders' `Cutaway` struct.
@@ -313,6 +374,12 @@ pub struct CutawayUniform {
     pub under: Vec4,
     /// rgb: the void's colour (linear).
     pub void: Vec4,
+    /// The fog of war. xy: its texture's lowest corner (arena x, z); z: its
+    /// side in meters; w: 1 in the fog mode.
+    pub fog: Vec4,
+    /// x: `FOG_DIM`, y: `FOG_GREY`, z: the ease from the last texture
+    /// (`fog::FogTexture::ease`), w: `FOG_SOFT`.
+    pub fog_look: Vec4,
 }
 
 impl MaterialExtension for CutawayExt {
@@ -345,9 +412,24 @@ pub fn sight_image() -> Image {
     image
 }
 
+/// A fog texture for [`material`] over `size` tiles (`follow` makes it
+/// again for the town's fog): RGBA8 ([`crate::fog::FogTexture`]), linear.
+pub fn fog_image(size: u32, data: &[u8]) -> Image {
+    let mut image = Image::new(
+        bevy::render::render_resource::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
+        bevy::render::render_resource::TextureDimension::D2,
+        data.to_vec(),
+        bevy::render::render_resource::TextureFormat::Rgba8Unorm,
+        bevy::asset::RenderAssetUsages::default(),
+    );
+    image.sampler = bevy::image::ImageSampler::linear();
+    image
+}
+
 /// The volume ground's material: `base` drawn from both sides (back faces
-/// are the section), with the cut off until `follow` places it.
-pub fn material(base: StandardMaterial, sight: Handle<Image>) -> CutawayMaterial {
+/// are the section), with the cut off until `follow` places it, and no fog
+/// until `follow` uploads one.
+pub fn material(base: StandardMaterial, sight: Handle<Image>, fog: Handle<Image>) -> CutawayMaterial {
     let section = Color::srgb(SECTION[0], SECTION[1], SECTION[2]).to_linear();
     ExtendedMaterial {
         base: StandardMaterial { cull_mode: None::<Face>, double_sided: true, ..base },
@@ -366,8 +448,11 @@ pub fn material(base: StandardMaterial, sight: Handle<Image>) -> CutawayMaterial
                 lamp_color: lamp_color().extend(0.0),
                 under: Vec4::new(AMBIENT, LAMP, LANTERN, LAMP_RANGE),
                 void: Vec4::new(VOID[0], VOID[1], VOID[2], 0.0),
+                fog: Vec4::ZERO,
+                fog_look: Vec4::new(FOG_DIM, FOG_GREY, 1.0, FOG_SOFT),
             },
             sight,
+            fog,
         },
     }
 }
@@ -422,7 +507,9 @@ pub struct CutawayGround(pub Handle<CutawayMaterial>);
 /// over the head the hole opens to `RADIUS` only while the player is under
 /// a ceiling (`Terrain::ceiling_at`), easing in and out; in the open (a
 /// trench, beside a hill, on a bridge) it stays `LOW_RADIUS`, which still
-/// clears whatever hides the body. `TOGGLE` (F7) switches.
+/// clears whatever hides the body. In the fog mode also the town's fog
+/// texture (`fog::FogTexture`, made again when the grid or the elder's
+/// level changes). `TOGGLE` (F7) cycles the modes ([`ViewMode::next`]).
 #[allow(clippy::too_many_arguments)]
 pub fn follow(
     mut commands: Commands,
@@ -438,9 +525,11 @@ pub fn follow(
     mut materials: ResMut<Assets<CutawayMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut view: ResMut<SightView>,
+    mut fog: Option<ResMut<crate::fog::FogView>>,
     mut radius: Local<Option<f32>>,
 ) {
     let Some(ground) = ground else { return };
+    view.fog = fog.as_ref().is_some_and(|fog| fog.fog.is_some());
     for (entity, mut label) in &mut labels {
         label.0 -= time.delta_secs();
         if label.0 <= 0.0 {
@@ -448,17 +537,14 @@ pub fn follow(
         }
     }
     if input.as_ref().is_some_and(|input| input.keys().just_pressed(TOGGLE)) {
-        view.mode = match view.mode {
-            ViewMode::Sight => ViewMode::Cutaway,
-            ViewMode::Cutaway => ViewMode::Sight,
-        };
+        view.choice = view.choice.next(view.fog);
         for (entity, _) in &labels {
             commands.entity(entity).despawn();
         }
         commands.spawn((
             ModeLabel(LABEL_SECONDS),
             service::WorldScoped::default(),
-            Text::new(view.mode.label()),
+            Text::new(view.mode().label()),
             TextFont { font_size: FontSize::Px(18.0), ..default() },
             TextColor(Color::srgb(0.9, 0.83, 0.63)),
             Node { position_type: PositionType::Absolute, left: px(24), bottom: px(24), ..default() },
@@ -501,12 +587,14 @@ pub fn follow(
     // Line of sight: the visibility, then the inside factor (only under a
     // room's roof, `Sight::deep`; a shallow roof peeks) and the hidden
     // height.
-    let sight_mode = view.mode == ViewMode::Sight;
+    let sight_mode = view.mode() != ViewMode::Cutaway;
+    let fog_mode = view.mode() == ViewMode::Fog;
+    let mut floor = None;
     if let (Some(world), Some(at)) = (world, at) {
         let terrain = world.terrain();
         let center = sim::terrain::Terrain::pit_tile(terrain.center);
         view.center = center;
-        let floor = terrain.volume.as_ref().and_then(|volume| volume.floor_at(at, z)).map(|(floor, _)| floor);
+        floor = terrain.volume.as_ref().and_then(|volume| volume.floor_at(at, z)).map(|(floor, _)| floor);
         if let (Some(volume), Some(floor), true) = (&terrain.volume, floor, sight_mode) {
             // The sim's light grid (M8.6) fills the light channel for the
             // player's level: each tile's floor within a layer of the
@@ -536,6 +624,21 @@ pub fn follow(
     if let Some(ceiling) = under {
         view.hide = ceiling.to_f32() - HIDE_MARGIN;
     }
+    // The fog: the surface's, and inside the elder's level's, made again
+    // only when the grid or the level changed; eased from the last.
+    let mut fog_window = None;
+    if let Some(crate::fog::FogView { fog: Some(fog), texture }) = fog.as_deref_mut().filter(|_| fog_mode) {
+        let layer = floor.filter(|_| covered_here && deep);
+        if let Some(bytes) = texture.update(fog, layer) {
+            let handle = materials.get(&ground.0).map(|m| m.extension.fog.clone());
+            if let Some(mut image) = handle.as_ref().and_then(|h| images.get_mut(h)) {
+                *image = fog_image(fog.size as u32, &bytes);
+            }
+        }
+        texture.step(time.delta_secs());
+        let corner = Vec2::new((fog.origin.0 - view.center.0) as f32 - 0.5, (fog.origin.1 - view.center.1) as f32 - 0.5);
+        fog_window = Some((corner.extend(fog.size as f32).extend(1.0), texture.ease));
+    }
     let target = if covered.is_some() { RADIUS } else { LOW_RADIUS };
     let radius = radius.get_or_insert(target);
     *radius += (target - *radius) * blend;
@@ -563,6 +666,9 @@ pub fn follow(
     cutaway.lamp_color = lamp_color().extend(0.0);
     cutaway.under = Vec4::new(AMBIENT, LAMP, LANTERN, LAMP_RANGE);
     cutaway.void = Vec4::new(VOID[0], VOID[1], VOID[2], 0.0);
+    let (window, ease) = fog_window.unwrap_or((Vec4::ZERO, 1.0));
+    cutaway.fog = window;
+    cutaway.fog_look = Vec4::new(FOG_DIM, FOG_GREY, ease, FOG_SOFT);
 }
 
 /// Inside, hides the outdoor dressing that has no place of its own: the
@@ -576,7 +682,7 @@ pub(crate) fn hide_outdoors(
     mut placed: Query<(&Transform, &mut Visibility), (With<Placed>, Without<Outdoor>, Without<crate::style::Environment>)>,
 ) {
     let Some(view) = view else { return };
-    let shown = if view.mode == ViewMode::Sight && view.inside > 0.5 { Visibility::Hidden } else { Visibility::Inherited };
+    let shown = if view.mode() != ViewMode::Cutaway && view.inside > 0.5 { Visibility::Hidden } else { Visibility::Inherited };
     for mut visibility in &mut dressing {
         visibility.set_if_neq(shown);
     }
@@ -629,9 +735,47 @@ mod tests {
         assert!(view.shows(in_corridor - Vec3::Y * 0.5));
         // A label floats over the hidden height but goes by its tile.
         assert!(view.shows_label(in_corridor + Vec3::Y * 3.0));
+        // The fog mode hides inside as line of sight does (M9.3 widens it).
+        view.fog = true;
+        assert_eq!(view.mode(), ViewMode::Fog);
+        assert!(view.shows(in_corridor) && !view.shows(in_rock));
         // The cutaway mode shows everything.
-        view.mode = ViewMode::Cutaway;
+        view.choice = ViewMode::Cutaway;
         assert!(view.shows(in_rock));
+    }
+
+    #[test]
+    fn f7_cycles_fog_sight_and_cutaway_in_the_town() {
+        let mut view = SightView { fog: true, ..default() };
+        assert_eq!(view.mode(), ViewMode::Fog, "the town starts in the fog");
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            view.choice = view.choice.next(view.fog);
+            seen.push(view.mode());
+        }
+        assert_eq!(seen, [ViewMode::Sight, ViewMode::Cutaway, ViewMode::Fog, ViewMode::Sight]);
+    }
+
+    #[test]
+    fn other_scenes_keep_line_of_sight_and_the_cutaway() {
+        // No fog (the Tunnel Lab): the default is line of sight as before,
+        // and F7 switches between it and the cutaway.
+        let mut view = SightView::default();
+        assert_eq!(view.mode(), ViewMode::Sight);
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            view.choice = view.choice.next(view.fog);
+            seen.push(view.mode());
+        }
+        assert_eq!(seen, [ViewMode::Cutaway, ViewMode::Sight, ViewMode::Cutaway, ViewMode::Sight]);
+        // A choice of fog made in the town is line of sight here, and the
+        // town's fog again back there; a new world keeps the choice.
+        view.choice = ViewMode::Fog;
+        assert_eq!(view.mode(), ViewMode::Sight);
+        assert_eq!(view.choice.next(false), ViewMode::Cutaway);
+        view.reset();
+        view.fog = true;
+        assert_eq!(view.mode(), ViewMode::Fog);
     }
 
     #[test]

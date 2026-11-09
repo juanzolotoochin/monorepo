@@ -4,32 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M9.2 Drawing the fog
-
-- **Status:** open
-- **Why:** the fog grid must show.
-- **What to do:** the shader draws in sight as today, seen-before dimmed
-  and desaturated, never-seen black, with soft edges (F2). The fog
-  replaces the inside view's dimming; inside, the ground over you still
-  fades (F10). F7 cycles fog, the inside view as it is now, and the
-  cutaway; only the town has fog (F11).
-- **Where:** `app/src/cutaway.rs`, `app/shaders/cutaway.wesl`,
-  `app/src/sight.rs`.
-- **Found in:** fog design.
-- **Tests:** mode cycling; other scenes unchanged; screenshots by day, at
-  night and underground.
-  Note (from M9.1): the grid is `fog::FogView` (none outside the town),
-  brought up each frame by `fog::follow` before `cutaway::follow`.
-  Upload `Fog::surface_bytes()` (R8, 256 x 256 from `Fog::origin`, row by
-  row y then x; 0 never, 128 seen, 255 in sight) and, inside,
-  `Fog::level_bytes(floor)` for the elder's level, only when
-  `Fog::revision` changed. A fragment is on the surface when it is at or
-  over its tile's top floor; walls under ground were stored on the eye's
-  floor layer, which `level_bytes` reads with the layers a step either
-  side. Dusk halves sight at once (the clock's phase): ease it in the
-  shader or in `fog::range` if it pops. Tree and building ranges stay at
-  night (a choice: buildings as lights); revisit after playing.
-
 ## M9.3 Hiding things in the fog
 
 - **Status:** open
@@ -50,6 +24,13 @@ its milestones, in order; one PR per milestone.
   of buildings and piles per cell when it goes from `Now` to `Seen`: the
   grid keeps only the state; `Fog::update` rebuilds the `now` list, the
   place to diff.
+  Note (from M9.2): the fog mode is `ViewMode::Fog` (`SightView::mode()`;
+  `SightView::fog` says the scene has a fog); `SightView::shows` and
+  `hide_outdoors` treat it as line of sight for now. The pines, ground
+  cover, lamp posts and the baked environment (`style::Environment`,
+  `cutaway::Outdoor`) are not fogged: they are their own materials and
+  stand at full colour in never-seen ground. Hiding them by tile (or a fog
+  term in their materials) belongs here.
 
 ## M9.4 Demo and review
 
@@ -67,6 +48,11 @@ its milestones, in order; one PR per milestone.
   character) with `--test_arg=fog:: --test_output=all`; the M9.1 cost test's
   numbers (0.6 ms a frame with every unit moving, unoptimized) are the
   baseline for the demo's frame times.
+  Note (from M9.2): `app/demos/sacred_tree_fog.json`
+  (`:sacred_tree_fog_demo`) is a start: day out west, the cave's passage,
+  dusk at 4x in it, night outside; it has no hill, lantern or ghouls yet,
+  and no F7 step (the control protocol has no key op). The town camera is
+  close, so the fog's square edges are seldom in frame.
 
 ## Depths follow-ups
 
@@ -299,6 +285,78 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M7.5.
 
 ## Done
+
+### M9.2 Drawing the fog
+
+- **Status:** done (branch `kestrel-sacred-tree-fog`)
+- **Why:** the fog grid must show.
+- **What to do:** the shader draws in sight as today, seen-before dimmed
+  and desaturated, never-seen black, with soft edges (F2). The fog
+  replaces the inside view's dimming; inside, the ground over you still
+  fades (F10). F7 cycles fog, the inside view as it is now, and the
+  cutaway; only the town has fog (F11).
+- **Where:** `app/src/cutaway.rs`, `app/shaders/cutaway.wesl`,
+  `app/src/sight.rs`.
+- **Found in:** fog design.
+- **Tests:** mode cycling; other scenes unchanged; screenshots by day, at
+  night and underground.
+  Note (from M9.1): the grid is `fog::FogView` (none outside the town),
+  brought up each frame by `fog::follow` before `cutaway::follow`.
+  Upload `Fog::surface_bytes()` (R8, 256 x 256 from `Fog::origin`, row by
+  row y then x; 0 never, 128 seen, 255 in sight) and, inside,
+  `Fog::level_bytes(floor)` for the elder's level, only when
+  `Fog::revision` changed. A fragment is on the surface when it is at or
+  over its tile's top floor; walls under ground were stored on the eye's
+  floor layer, which `level_bytes` reads with the layers a step either
+  side. Dusk halves sight at once (the clock's phase): ease it in the
+  shader or in `fog::range` if it pops. Tree and building ranges stay at
+  night (a choice: buildings as lights); revisit after playing.
+
+- **Done:** **Drawing** (`app/shaders/cutaway.wesl`, `fogged`): a
+  `ViewMode::Fog`, the line of sight view with the fog in place of its
+  dimming (F10). Ground in sight is drawn as it is, seen before dimmed to
+  `cutaway::FOG_DIM` (0.45) and greyed by `FOG_GREY` (0.7), never seen the
+  void's near black (F2), after the scene's fog so black stays black. Soft
+  edges: the texture is linear and sampled five times `FOG_SOFT` (0.8 m)
+  round, so an edge is a few meters wide and tile corners round off. On the
+  surface (and inside on open ground, `sight`'s open channel) the surface's
+  fog; inside on roofed ground and walls the elder's level's, blended by the
+  inside factor; a back face goes by its cap, as the void did. Inside, the
+  ground over you still fades (`hidden`) and the lamp, ambient and lanterns
+  light roofed ground; the out of sight dimming, the section's dimming and
+  the void are off in the fog mode. **Texture** (`fog::FogTexture`, in
+  `FogView`): RGBA8 over the fog's square (256 x 256), r the surface
+  (`Fog::surface_bytes`), g the elder's level while it is inside (deep
+  under a roof; `Fog::level_bytes(floor)`, else 0), b and a what was drawn
+  when it came; made and uploaded (a new `Image` in the material's
+  bindings 103/104, `cutaway::fog_image`) only when `Fog::revision` or the
+  elder's level changes. The shader eases from b, a to r, g over
+  `fog::EASE` (0.4 s, the uniform's `fog_look.z`), and a change mid-ease
+  starts from what is drawn, so an edge moving a tile slides and dusk
+  halving sight doesn't pop. **Modes** (F11): `ViewMode::next` cycles fog,
+  line of sight and the cutaway in the town (`SightView::fog`, the town's
+  `FogView` has a fog); elsewhere fog is line of sight
+  (`ViewMode::shown`), so other scenes start in line of sight and F7
+  switches it and the cutaway as before (the shader's fog is off, `fog.w`
+  0). `SightView::mode` is now a method over the choice (`choice`); the
+  fog mode hides things inside as line of sight does (M9.3 widens it).
+  **Demo** (`app/demos/sacred_tree_fog.json`, `:sacred_tree_fog_demo`,
+  2550 frames): the elder walks down the west ramp, out west to (-42, -2),
+  round to the mountain's cave and into its passage, waits there at 4x to
+  dusk and comes out at night. Local plain build. Screenshots: day down the
+  ramp (the town's start memory and the trail), day out west (in sight,
+  the remembered trail, black beyond), day at the cave mouth, the cave's
+  passage (its floor in the lamp, the remembered surface out of the mouth
+  dim and grey), night at the cave mouth and out (sight halved, a small
+  blue pool; remembered ground near black at night). Tests: the mode
+  cycling in the town and elsewhere, the fog mode's hiding, the texture's
+  uploads and ease (`movement_test`, `fog::` and `cutaway::`).
+  Not done, for later: the pines, ground cover, lamp posts and the baked
+  environment are their own materials and are not fogged (they stand at
+  full colour in never-seen ground; M9.3); at night remembered ground is
+  near black, so remembered and never seen read alike (a lift by night if
+  the review wants it); a cliff's face takes its top tile's fog, not its
+  foot's.
 
 ### M9.1 The fog grid from many eyes
 
