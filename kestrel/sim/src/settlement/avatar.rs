@@ -24,7 +24,7 @@ use super::{AgentIx, DepotState, InventoryRef, ItemIx, Kinds, Settlement};
 use crate::messages::{ActionMessages, BundleRefused, Burst, BurstRefused, CarryUnit, DropBundle, DropHaul, ElderFire, DropNotes, HaulStart, Install, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
 use crate::nav::{self, angle_between, distance};
 use crate::terrain::{Terrain, LAYER};
-use crate::volume::{DigDirection, BODY_HEIGHT};
+use crate::volume::BODY_HEIGHT;
 
 /// The longest player name, in characters.
 pub const NAME_CHARS: usize = 16;
@@ -1004,11 +1004,15 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
         }
         Action::Jetpack(enabled) => jetpack(avatar, enabled, def),
         Action::Jump => jump(avatar, view.tick, def),
-        // A volume scene digs the volume in front, level unless told down
-        // or up (V5 of the verticality design).
+        // A volume scene digs the volume in front, level, down or up as
+        // told (V5 of the verticality design); the plain dig (F) level, or
+        // a step down where nothing is left to take level (M8.8).
         Action::DigDown | Action::DigFront(_) if view.terrain.volume.is_some() => {
-            let direction = if let Action::DigFront(direction) = *action { direction } else { DigDirection::Level };
-            if let Ok((tile, layer)) = view.dig_volume(body.position, avatar.height, body.heading, def.body.radius, direction) {
+            let dug = match *action {
+                Action::DigFront(direction) => view.dig_volume(body.position, avatar.height, body.heading, def.body.radius, direction),
+                _ => view.dig_volume_plain(body.position, avatar.height, body.heading, def.body.radius),
+            };
+            if let Ok((tile, layer)) = dug {
                 dig(body, avatar, transferring, view.tick, view.terrain, def, tile, Some(layer));
             }
         }

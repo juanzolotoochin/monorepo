@@ -248,11 +248,11 @@ pub fn dispatch(world: &mut World) {
                 world.resource_mut::<SessionService>().command(CommandKind::Jetpack { agent, enabled: false });
                 world.resource_mut::<Dispatcher>().thrust = false;
             }
+            Edge::Utility(Utility::Dig) if volume_scene(world) => volume_dig(world, None),
             Edge::Utility(Utility::Dig) if town => town_dig(world),
-            Edge::Utility(Utility::Dig) if volume_scene(world) => volume_dig(world, DigDirection::Level),
             Edge::Utility(Utility::Dig) => world.resource_mut::<SessionService>().dig(),
-            Edge::Utility(Utility::DigDown) => volume_dig(world, DigDirection::Down),
-            Edge::Utility(Utility::DigUp) => volume_dig(world, DigDirection::Up),
+            Edge::Utility(Utility::DigDown) => volume_dig(world, Some(DigDirection::Down)),
+            Edge::Utility(Utility::DigUp) => volume_dig(world, Some(DigDirection::Up)),
             Edge::Utility(Utility::Record) => {
                 let recording = world.resource::<crate::palimpsest::Memory>().recording();
                 let result = if recording { crate::palimpsest::deploy(world) } else { crate::palimpsest::record(world) };
@@ -466,26 +466,37 @@ fn town_dig(world: &mut World) {
     }
 }
 
-/// Whether the scene's ground is a volume (the Tunnel Lab).
+/// Whether the scene's ground is a volume (the Tunnel Lab, the town).
 fn volume_scene(world: &World) -> bool {
     world.resource::<SessionService>().world().is_some_and(|w| w.terrain().volume.is_some())
 }
 
-/// A volume scene's dig key (F level, Ctrl+F down, Alt+F up; the utility
-/// panel's DIG, DIG DOWN and DIG UP): the tile in front, or why not, as
-/// the dispatcher's notice (`Settlement::dig_volume_of`). Already digging,
+/// A volume scene's dig key: F (`None`, the plain dig: level, or a step
+/// down where nothing is left to take level in front, M8.8), Ctrl+F down,
+/// Alt+F up (the utility panel's DIG, DIG DOWN and DIG UP): the tile in
+/// front, or why not, as the dispatcher's notice (over the elder in a
+/// town) (`Settlement::dig_plain_of`, `dig_volume_of`). Already digging,
 /// the press does nothing.
-fn volume_dig(world: &mut World, direction: DigDirection) {
+fn volume_dig(world: &mut World, direction: Option<DigDirection>) {
     let service = world.resource::<SessionService>();
     let refusal = service.player().zip(service.settlement()).zip(service.world()).and_then(|((agent, settlement), sim)| {
         let digging = settlement.agents.get(agent as usize).is_some_and(|a| a.digging().is_some());
-        (!digging).then(|| settlement.dig_volume_of(agent, sim.tick(), sim.terrain(), direction)?.err()).flatten()
+        let dig = match direction {
+            Some(direction) => settlement.dig_volume_of(agent, sim.tick(), sim.terrain(), direction),
+            None => settlement.dig_plain_of(agent, sim.tick(), sim.terrain()),
+        };
+        (!digging).then(|| dig?.err()).flatten()
     });
+    let town = super::town::active(world);
     match refusal {
+        Some(refusal) if town => town_feedback(world, Err(crate::digging::refusal_text(refusal).into())),
         Some(refusal) => world.resource_mut::<Dispatcher>().notice = crate::digging::refusal_text(refusal).into(),
         None => {
             world.resource_mut::<Dispatcher>().notice = String::new();
-            world.resource_mut::<SessionService>().dig_toward(direction);
+            match direction {
+                Some(direction) => world.resource_mut::<SessionService>().dig_toward(direction),
+                None => world.resource_mut::<SessionService>().dig(),
+            }
         }
     }
 }

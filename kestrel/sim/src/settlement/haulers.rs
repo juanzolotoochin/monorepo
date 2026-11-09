@@ -598,19 +598,29 @@ impl Walker for HaulerState {
 pub(super) fn move_worker(body: &mut Body, hauler: &mut impl Walker, me: AgentIx, ctx: &Ctx, step: Fx) {
     let volume = ctx.terrain.volume.is_some();
     let tolerance = Fx::from_ratio(1, 10);
-    while body.route.first().is_some_and(|&w| distance(body.position, w) <= tolerance) {
+    let radius = hauler.radius(body);
+    let feet = *hauler.height();
+    let walks = |a: FxVec2, b: FxVec2| !volume || ctx.terrain.walk_at(a, b, feet, radius).is_some();
+    // A waypoint within reach is passed, but in a volume only once the
+    // next leg walks from here: a 3D route's legs are checked from their
+    // waypoints (`nav::plan_with`'s string pulling), and one that climbs
+    // out of a sloped stair step sideways may walk from the waypoint and
+    // not from a few centimeters down the slope short of it, where the
+    // feet are lower. Passed early there, the walker swerved along the
+    // stair for minutes (M8.8); now it walks on to the waypoint itself.
+    while body.route.first().is_some_and(|&w| distance(body.position, w) <= tolerance) && (body.route.len() < 2 || walks(body.position, body.route[1])) {
         body.route.remove(0);
     }
     if body.route.is_empty() {
         return;
     }
-    let radius = hauler.radius(body);
     // Skip a waypoint once the one after it is in reach: grid waypoints in a
     // tight gap can be closer to a rock than the body fits, and circling them
     // wastes time. Carts keep theirs, which shape the turns the cart can make.
-    let feet = *hauler.height();
-    let walks = |a: FxVec2, b: FxVec2| !volume || ctx.terrain.walk_at(a, b, feet, radius).is_some();
-    if !hauler.towing() {
+    // So do walkers in a volume: a 3D route is string-pulled already, and
+    // a walk that skips a waypoint may end on another floor than the
+    // route's (down a ramp's side, M8.8), which nothing here can tell.
+    if !hauler.towing() && !volume {
         while body.route.len() >= 2 && ctx.terrain.clear(body.position, body.route[1], radius) && walks(body.position, body.route[1]) {
             body.route.remove(0);
         }

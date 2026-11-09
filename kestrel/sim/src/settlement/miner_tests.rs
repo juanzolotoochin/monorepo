@@ -128,6 +128,12 @@ pub(super) fn strip_ore(sim: &mut Simulation, strip: impl Fn((i32, i32)) -> bool
 /// them (the ceiling's). Returns the wall's tile, the tunnel's last tile (where a
 /// miner stands to dig it) and the floor's layer.
 pub(super) fn tunnel(sim: &mut Simulation) -> ((i32, i32), (i32, i32), i32) {
+    tunnel_with(sim, true)
+}
+
+/// [`tunnel`], its trench walled on its sides or open to the ground beside
+/// it.
+pub(super) fn tunnel_with(sim: &mut Simulation, walled: bool) -> ((i32, i32), (i32, i32), i32) {
     let (x0, z) = (8, -26);
     let [start, wall, stand] = [x0, x0 + 11, x0 + 10].map(|x| tile(sim, x, z));
     let terrain = sim.world_mut().settlement_and_terrain_mut().1;
@@ -139,9 +145,9 @@ pub(super) fn tunnel(sim: &mut Simulation) -> ((i32, i32), (i32, i32), i32) {
     }
     // Walled 2 m high from a tile before it, so a route only walks in and
     // out along it (a string-pulled route cut diagonally from a sloped
-    // step onto the ground beside it is one a walker can't follow:
-    // `todo/sacred-tree.md`, M8.8).
-    for x in start.0 - 1..start.0 + 6 {
+    // step onto the ground beside it once stuck its walker, fixed in M8.8:
+    // `a_miner_climbs_out_of_an_open_trench_sideways` digs it open).
+    for x in (start.0 - 1..start.0 + 6).filter(|_| walled) {
         for side in [start.1 - 1, start.1 + 1] {
             let ground = volume.top((x, side)).unwrap();
             volume.fill_box((x, side), (x, side), ground, ground + HEADROOM);
@@ -313,8 +319,10 @@ fn a_miner_never_digs_a_protected_column() {
         let s = settlement(&sim);
         let view = s.view(ELDER, sim.world().tick(), sim.world().terrain());
         for a in [MOSS, REED] {
-            if let Some(dig) = &s.agents[a as usize].sprite().unwrap().dig {
-                assert!(!sim.world().terrain().is_undiggable(dig.tile) && view.dig_blocked(dig.tile).is_none(), "{a} digs a protected column {:?}", dig.tile);
+            // Checked as each dig starts: its own drop may land touching
+            // its tile as it ends.
+            if let Some(dig) = s.agents[a as usize].sprite().unwrap().dig.as_ref().filter(|d| d.started + 1 >= sim.world().tick()) {
+                assert!(!sim.world().terrain().is_undiggable(dig.tile) && view.dig_blocked(dig.tile).is_none(), "{a} digs a protected column {:?}: {:?}", dig.tile, view.dig_blocked(dig.tile));
                 digs.insert(dig.tile);
             }
         }
@@ -528,3 +536,41 @@ fn miners_are_deterministic_across_threads_and_saves() {
     assert!(walls, "saved while a miner planned a wall dig");
     assert_eq!(one, saved, "a save mid-dig changed them");
 }
+
+/// A walker climbs out of a sloped stair step sideways (M8.8): with the
+/// trench of [`tunnel`] open to the ground beside it, the miner's route up
+/// from the tunnel with the amber cuts diagonally off the trench's first
+/// step onto the ground. That leg walks from its waypoint, not from a few
+/// centimeters down the slope short of it, where the walker used to pass
+/// the waypoint: it swerved along the step for minutes. Now it walks on to
+/// the waypoint, and up: never still or swerving in one place for long.
+#[test]
+fn a_miner_climbs_out_of_an_open_trench_sideways() {
+    let mut sim = map();
+    let (wall, _, floor) = tunnel_with(&mut sim, false);
+    let lantern_at = tile(&sim, 16, -26);
+    super::light_tests::light_up(&mut sim, lantern_at, floor);
+    let wall_from_tree = (wall.0 - tile(&sim, 0, 0).0, wall.1 - tile(&sim, 0, 0).1);
+    strip_ore(&mut sim, |t| t != wall_from_tree);
+    mine(&mut sim, REED);
+    // The longest it stayed within a meter of one spot while walking a
+    // route, in ticks.
+    let (mut anchor, mut since, mut longest) = (FxVec2::ZERO, 0u64, 0u64);
+    for _ in 0..300 * HZ {
+        step(&mut sim, &[]);
+        let a = &settlement(&sim).agents[REED as usize];
+        let t = sim.world().tick();
+        let digging = a.sprite().unwrap().dig.is_some();
+        if a.body.route.is_empty() || digging || nav::distance(a.body.position, anchor) > Fx::ONE {
+            (anchor, since) = (a.body.position, t);
+        }
+        longest = longest.max(t - since);
+        if delivered_amber(&sim) as u64 == dug_amber(&sim) && dug_amber(&sim) > 0 {
+            break;
+        }
+    }
+    eprintln!("the open trench's amber at the tree at {} s, longest in one spot {} ticks", sim.world().tick() / HZ, longest);
+    assert!(dug_amber(&sim) > 0 && delivered_amber(&sim) as u64 == dug_amber(&sim), "it carried the amber up to the tree: {}", story(&sim, REED));
+    assert!(longest < 5 * HZ, "never stuck in one spot for 5 s: {longest} ticks");
+}
+

@@ -210,7 +210,7 @@ pub(super) fn build(
             });
             let help = if volume {
                 // A volume scene digs in front (V.4): level, a step down or up.
-                "F: dig in front (2 s)
+                "F: dig in front (2 s), down on flat ground
 Ctrl+F: dig a step down
 Alt+F: dig a step up
 Ore lands on a pile nearby

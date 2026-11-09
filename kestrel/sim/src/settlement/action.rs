@@ -68,7 +68,8 @@ pub enum Action {
     DigDown,
     /// In a volume scene, dig the tile in front, level, down or up
     /// (`View::dig_volume`); elsewhere as `DigDown`. `DigDown` in a volume
-    /// scene is a level dig.
+    /// scene is the plain dig (F): level, or a step down where nothing is
+    /// left to take level in front (`View::dig_volume_plain`).
     DigFront(DigDirection),
     /// Take units from (or, with `deposit`, give units to) a depot; units
     /// move once the agent is at the dock.
@@ -235,6 +236,15 @@ impl Settlement {
         let height = a.avatar()?.height;
         Some(self.view(agent, tick, terrain).dig_volume(a.body.position, height, a.body.heading, a.body.base_radius, direction))
     }
+
+    /// The tile and first layer `agent`'s plain dig (F) would dig now in a
+    /// volume scene, or why it can't (`View::dig_volume_plain`): for the
+    /// app's refusal hint.
+    pub fn dig_plain_of(&self, agent: AgentIx, tick: u64, terrain: &Terrain) -> Option<Result<((i32, i32), i32), DigRefusal>> {
+        let a = self.agents.get(agent as usize)?;
+        let height = a.avatar()?.height;
+        Some(self.view(agent, tick, terrain).dig_volume_plain(a.body.position, height, a.body.heading, a.body.base_radius))
+    }
 }
 
 impl View<'_> {
@@ -271,6 +281,17 @@ impl View<'_> {
         let tile = Terrain::front_tile(position, crate::nav::heading_vector(heading));
         let bottom = self.terrain.volume_dig(position, height, radius, tile, direction)?;
         self.dig_blocked(tile).map_or(Ok((tile, bottom)), Err)
+    }
+
+    /// The plain dig in a volume scene (F, `DigDown`, M8.8): level
+    /// (`dig_volume`), or, where every cell a level dig would clear is
+    /// already empty (`Clear`: flat open ground, a tunnel's dug end), a
+    /// step down instead. Ctrl+F and Alt+F keep their one direction.
+    pub fn dig_volume_plain(&self, position: FxVec2, height: Fx, heading: Fx, radius: Fx) -> Result<((i32, i32), i32), DigRefusal> {
+        match self.dig_volume(position, height, heading, radius, DigDirection::Level) {
+            Err(DigRefusal::Clear) => self.dig_volume(position, height, heading, radius, DigDirection::Down),
+            level => level,
+        }
     }
 
     /// What stands on `tile` that a dig in front refuses
