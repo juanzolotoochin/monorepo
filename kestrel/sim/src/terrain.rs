@@ -130,6 +130,12 @@ pub struct Terrain {
     /// [`Terrain::clear_cell`], which bump the revision.
     #[serde(default)]
     pub volume: Option<Volume>,
+    /// When the volume was made from the mine ([`Terrain::volume_from_mine`],
+    /// a town's), the layout laid over it (an empty one for none): so a save
+    /// stores only the volume's edits over [`Terrain::generated_volume`]
+    /// (M8.8). Not hashed: the volume is.
+    #[serde(default)]
+    pub mine_volume: Option<crate::volume::VolumeLayout>,
     #[serde(skip)]
     generated: Generated,
     /// Bumped by every change, so cached paths know to rebuild.
@@ -172,6 +178,7 @@ impl Terrain {
             undiggable: Vec::new(),
             mine: None,
             volume: None,
+            mine_volume: None,
             generated: Generated::default(),
             revision: 0,
         }
@@ -305,6 +312,24 @@ impl Terrain {
     /// box put no ore. The mine stays: its spec says what its veins hold,
     /// where its hill is and what each tile's ground was.
     pub fn volume_from_mine(&mut self, layout: Option<&crate::volume::VolumeLayout>) -> Result<(), String> {
+        let layout = layout.cloned().unwrap_or(crate::volume::VolumeLayout { extent: 0, boxes: Vec::new() });
+        self.volume = Some(self.mine_ground(&layout)?);
+        self.mine_volume = Some(layout);
+        self.revision += 1;
+        Ok(())
+    }
+
+    /// The volume [`Terrain::volume_from_mine`] made, before anyone dug:
+    /// from the mine and the layout it kept. Nothing when the volume
+    /// wasn't made from the mine.
+    pub fn generated_volume(&self) -> Option<Volume> {
+        self.mine_ground(self.mine_volume.as_ref()?).ok()
+    }
+
+    /// The mine's ground as a volume with `layout` over it
+    /// ([`Terrain::volume_from_mine`]).
+    fn mine_ground(&self, layout: &crate::volume::VolumeLayout) -> Result<Volume, String> {
+        let layout = Some(layout).filter(|l| !l.boxes.is_empty());
         let mine = self.mine().ok_or("a mine's volume needs a mine")?;
         let center = Self::pit_tile(self.center);
         let mut volume = mine.to_volume();
@@ -344,9 +369,7 @@ impl Terrain {
                 }
             }
         }
-        self.volume = Some(volume);
-        self.revision += 1;
-        Ok(())
+        Ok(volume)
     }
 
     /// The layer a tile's ground had before anyone dug, in a mine's volume

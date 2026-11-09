@@ -63,6 +63,16 @@ impl DigDirection {
     }
 }
 
+/// How a volume differs from the one it was made from
+/// ([`Volume::edits_over`]): columns by tile with their spans (none where
+/// the column is gone), and cells by tile and layer with their ore (none
+/// where it was taken), each sorted.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VolumeEdits {
+    pub columns: Vec<((i32, i32), Vec<Span>)>,
+    pub ore: Vec<(((i32, i32), i32), Option<u8>)>,
+}
+
 /// A run of solid cells in a column: layers `bottom` up to, not including,
 /// `top`. Its top face, the floor it may make, is at `top * LAYER`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,6 +205,74 @@ impl Volume {
         Volume {
             columns: self.columns.iter().map(|(tile, spans)| (shift(*tile), spans.clone())).collect(),
             ore: self.ore.iter().map(|&((tile, layer), mineral)| ((shift(tile), layer), mineral)).collect(),
+            hash: HashCache::default(),
+            index: IndexCache::default(),
+        }
+    }
+
+    /// What differs from `base`, the volume this one was made from (a
+    /// town's generated ground, M8.8): the columns whose spans differ (an
+    /// empty list where `base` had one and this has none) and the cells
+    /// whose ore differs. [`Volume::with_edits`] puts them back, so a save
+    /// stores only what was dug.
+    pub fn edits_over(&self, base: &Volume) -> VolumeEdits {
+        fn merge<K: Ord + Copy, V: PartialEq + Clone, D>(ours: &[(K, V)], theirs: &[(K, V)], gone: D, out: &mut Vec<(K, D)>)
+        where
+            D: Clone,
+            V: Into<D>,
+        {
+            let (mut i, mut j) = (0, 0);
+            while i < ours.len() || j < theirs.len() {
+                match (ours.get(i), theirs.get(j)) {
+                    (Some(a), Some(b)) if a.0 == b.0 => {
+                        if a.1 != b.1 {
+                            out.push((a.0, a.1.clone().into()));
+                        }
+                        i += 1;
+                        j += 1;
+                    }
+                    (Some(a), b) if b.is_none_or(|b| a.0 < b.0) => {
+                        out.push((a.0, a.1.clone().into()));
+                        i += 1;
+                    }
+                    (_, Some(b)) => {
+                        out.push((b.0, gone.clone()));
+                        j += 1;
+                    }
+                    (None, None) => break,
+                    (Some(_), None) => unreachable!("taken above"),
+                }
+            }
+        }
+        let mut edits = VolumeEdits::default();
+        merge(&self.columns, &base.columns, Vec::new(), &mut edits.columns);
+        let ours: Vec<_> = self.ore.iter().map(|&(cell, m)| (cell, Some(m))).collect();
+        let theirs: Vec<_> = base.ore.iter().map(|&(cell, m)| (cell, Some(m))).collect();
+        merge(&ours, &theirs, None, &mut edits.ore);
+        edits
+    }
+
+    /// `base` with `edits` ([`Volume::edits_over`]) applied.
+    pub fn with_edits(base: Volume, edits: &VolumeEdits) -> Volume {
+        fn apply<K: Ord + Copy, V: Clone>(base: Vec<(K, V)>, edits: &[(K, Option<V>)]) -> Vec<(K, V)> {
+            let mut out = Vec::with_capacity(base.len() + edits.len());
+            let mut edits = edits.iter().peekable();
+            for (k, v) in base {
+                while let Some((e, value)) = edits.next_if(|(e, _)| *e < k) {
+                    out.extend(value.clone().map(|v| (*e, v)));
+                }
+                match edits.next_if(|(e, _)| *e == k) {
+                    Some((_, value)) => out.extend(value.clone().map(|v| (k, v))),
+                    None => out.push((k, v)),
+                }
+            }
+            out.extend(edits.filter_map(|(e, value)| value.clone().map(|v| (*e, v))));
+            out
+        }
+        let columns: Vec<_> = edits.columns.iter().map(|(tile, spans)| (*tile, (!spans.is_empty()).then(|| spans.clone()))).collect();
+        Volume {
+            columns: apply(base.columns, &columns),
+            ore: apply(base.ore, &edits.ore),
             hash: HashCache::default(),
             index: IndexCache::default(),
         }
