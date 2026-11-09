@@ -1,10 +1,33 @@
 # Kestrel Sacred Tree depths (design)
 
-Status: agreed (2026-11-06), M8.1 to M8.7 done. Tasks in
-[`todo/sacred-tree.md`](todo/sacred-tree.md) under M8. It builds on the
+Status: agreed (2026-11-06), M8 done (2026-11-08). Tasks in
+[`todo/sacred-tree.md`](todo/sacred-tree.md) under M8; the work left is
+open entries there. It builds on the
 verticality MVP in [`VERTICALITY.md`](VERTICALITY.md) (PR #135) and its
 line-of-sight prototype, and the rules for the work in
 [`SACRED_TREE_HANDOFF.md`](SACRED_TREE_HANDOFF.md) apply here too.
+
+## What changed versus the design
+
+- L3a, added in M8.7: a miner on a lantern errand may walk dark floors for
+  it (else the first lantern of a dark tunnel could never be built); it
+  never mines in the dark.
+- Light rules only scenes with a lantern kind (`LightGrid::governs`): the
+  Tunnel Lab's sprites walk anywhere, as before.
+- T1: the surface isn't quite today's heightfield: terraces step 0.25 m
+  and cells are 0.5 m, so a tile an odd number of steps up rounds down a
+  quarter meter (M8.3); ramps fall half a meter every other tile.
+- L6: the light grid is derived, not saved or hashed (it follows from the
+  buildings and the volume, which are), and a lantern lights floors within
+  a layer of its own, so a stair needs a lantern every few steps.
+- M7's night lanterns stay decoration.
+- In the town, F digs level, or a step down where nothing is left to take
+  level (M8.8); Ctrl+F and Alt+F as before.
+- M8.8's tuning: amber pockets smaller and more of them (as much amber), a
+  unit a cell, about a lantern a day from a tunnel 5 to 6 m down; a pile
+  in a volume holds up only its own column; a town's save stores only its
+  digs over the generated ground.
+- Dawn still burns every ghoul, underground and in the dark too.
 
 ## Goal
 

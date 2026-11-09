@@ -308,7 +308,17 @@ impl View<'_> {
         if self.terrain.blocking_obstacles().any(|o| touches(o.center, o.radius)) {
             return Some(DigRefusal::Blocked);
         }
-        let piles = self.piles.iter().flat_map(|lab| lab.piles.values()).map(|p| (p.position, super::piles::pile_radius(p.units())));
+        // In a volume a pile holds up only its own column (M8.8): one on a
+        // tunnel's dug tile reaching over the next doesn't stop the next
+        // tile's dig, which leaves the pile's floor as it is (the depths
+        // soak's elder, and the demo's, were stopped in their tunnels so).
+        let volume = self.terrain.volume.is_some();
+        let piles = self
+            .piles
+            .iter()
+            .flat_map(|lab| lab.piles.values())
+            .filter(|p| !volume || Terrain::pit_tile(p.position) == tile)
+            .map(|p| (p.position, super::piles::pile_radius(p.units())));
         let docks = self.depots.iter().map(|d| (d.position, DIG_CLEARANCE));
         let spots = self.buildings.iter().flat_map(|b| [b.output_position, b.slot_position(&self.building_kinds[b.kind as usize])]).map(|p| (p, DIG_CLEARANCE));
         if piles.chain(docks).chain(spots).any(|(p, radius)| touches(p, radius)) || self.piles.is_some_and(|lab| lab.blocks_dig(tile)) {

@@ -4,58 +4,29 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M8.8 Tuning, soak and demo
+## Depths follow-ups
 
 - **Status:** open
-- **Why:** the milestone needs a stable run and a look.
-- **What to do:** tune amber, lantern and wave numbers; a soak over
-  several days and nights with digging and lanterns; a demo video of a
-  day and a night underground; the full suite; a `docs/test-time.md` row.
-- **Where:** sim tests, the demo scripts.
-- **Found in:** depths design.
-- **Tests:** the soak; the full suite.
-  Note (from M8.1): count the town soak's plans as the Tunnel Lab soak
-  does (`Dug::plans`, `unreached`, `most_expanded`) and assert they stay
-  within `nav::PATH_BUDGET`. The Tunnel Lab soak's seed never planned to an
-  unreachable goal (240 plans, none unreached, at most 902 nodes); the
-  town's should, with ghouls chasing the elder up where they can't go.
-  Note (from M8.3): amber numbers (`mine::amber`, the mountain's boxes),
-  the town save's size (1.5 MB with its volume) and the quarter-meter
-  rounding of the terraces are for here.
-  Note (from M8.4): miners' numbers (`miners::AMBER_WORTH` 4,
-  `TILES_PER_WORTH` 2, `VOLUME_SEARCH_TILES`, `WALL_SEARCH_NODES`): today
-  they mine the nearest stone walls (49 stone in 5 min for two) and go to
-  the cave's amber only once there's no nearer wall. A walker
-  (`haulers::move_worker`) can dither for minutes where a string-pulled 3D
-  route cuts diagonally from a sloped stair step onto the ground beside it
-  (a trench a layer a tile down, its first step a layer under the ground):
-  the route was checked with the node's feet, the walker's are lower on the
-  slope and the step up is refused, and its swerves keep it there.
-  `miner_tests::tunnel` walls its trench to avoid it; dropping the route on
-  a refused straight step was tried and made it worse (the replan from
-  there found no route and the miner gave the wall up). Fix in nav (check
-  pulled segments with a margin) or the walker.
-  Note (from M8.6): the demo's Reed, carrying stone to the cave's lantern,
-  dithered 20 s at the plateau's north edge (about x -11, z -16) before
-  going round by the west ramp: the same walker trouble. Lantern numbers:
-  range 6 m, falloff `1 - (d / range)²`, the shader's `LANTERN` 2.0 and
-  `LANTERN_TINT`, the point light (`settlement::LANTERN_LUMENS` 60000, 6 m).
-  Whether miners should also supply other kinds' sites, a lantern's post
-  blocking bodies, and a tunnel lantern protecting the ground over it from
-  digs are open.
-  Note (from M8.7): light. Miners mine only walls joined to the stone pile
-  by lit floors, so a deep stretch needs a chain of lanterns (one about
-  every 10 m): tune the range or say so in the demo. A ghoul's lit cost
-  (`chase::LIT_STEP` 30) makes its plans into a lit stretch expand more
-  nodes: count them in the soak against `nav::PATH_BUDGET`. Wave routes
-  (`WaveState::route`) are planned once and replanned on ground changes,
-  not when a lantern's light changes. Dawn still burns every ghoul,
-  underground too: decide whether an unlit ghoul underground outlives it.
-  A stranded miner's retreat (`Targets::retreat`) picks the nearest tile in
-  reach by straight distance, which may be past a wall (it gives it up
-  after two asks, then goes home); a traffic detour planned from a swerve
-  into the dark ignores the rule (rare). The elder's lamp still doesn't
-  count (L5); the test walker and haulers ignore light.
+- **Why:** what M8 left for later.
+- **What to do:** wave routes planned before a lantern goes up aren't
+  replanned for its light; a stranded miner's retreat picks the nearest
+  tile by straight distance (it may be past a wall); a traffic detour
+  planned from a swerve into the dark ignores the light rule; dawn still
+  burns ghouls underground (decide if an unlit ghoul there outlives it);
+  miners supply only lanterns' sites; a lantern's post blocks no one; the
+  ground over a tunnel lantern is protected from digs at every depth; no
+  reachability check when a lantern is placed; a lantern lights floors
+  within a layer of its own, so a stair needs one every few steps (or let
+  light follow a stair); the elder's lamp still doesn't count (L5); the test
+  walker and haulers ignore light; a dig's ore is still lost once the pile
+  lab is at its pile cap (the soak met 14 amber cells and got 8 amber);
+  the demo's tunnel shots are dark and far (a closer camera underground);
+  M7's night lanterns stay decoration; amber income: revisit with a
+  playtest (one a cell, about a lantern a day).
+- **Where:** `sim/src/settlement/chase.rs`, `miners.rs`, `light.rs`,
+  `piles.rs`, `app/src/cutaway.rs`.
+- **Found in:** M8.1–M8.8.
+- **Tests:** per item.
 
 ## A possessed ballista fires faster
 
@@ -264,6 +235,126 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M7.5.
 
 ## Done
+
+### M8.8 Tuning, soak and demo
+
+- **Status:** done (branch `kestrel-sacred-tree-depths`)
+- **Why:** the milestone needs a stable run and a look.
+- **What to do:** tune amber, lantern and wave numbers; a soak over
+  several days and nights with digging and lanterns; a demo video of a
+  day and a night underground; the full suite; a `docs/test-time.md` row.
+- **Where:** sim tests, the demo scripts.
+- **Found in:** depths design.
+- **Tests:** the soak; the full suite.
+  Note (from M8.1): count the town soak's plans as the Tunnel Lab soak
+  does (`Dug::plans`, `unreached`, `most_expanded`) and assert they stay
+  within `nav::PATH_BUDGET`. The Tunnel Lab soak's seed never planned to an
+  unreachable goal (240 plans, none unreached, at most 902 nodes); the
+  town's should, with ghouls chasing the elder up where they can't go.
+  Note (from M8.3): amber numbers (`mine::amber`, the mountain's boxes),
+  the town save's size (1.5 MB with its volume) and the quarter-meter
+  rounding of the terraces are for here.
+  Note (from M8.4): miners' numbers (`miners::AMBER_WORTH` 4,
+  `TILES_PER_WORTH` 2, `VOLUME_SEARCH_TILES`, `WALL_SEARCH_NODES`): today
+  they mine the nearest stone walls (49 stone in 5 min for two) and go to
+  the cave's amber only once there's no nearer wall. A walker
+  (`haulers::move_worker`) can dither for minutes where a string-pulled 3D
+  route cuts diagonally from a sloped stair step onto the ground beside it
+  (a trench a layer a tile down, its first step a layer under the ground):
+  the route was checked with the node's feet, the walker's are lower on the
+  slope and the step up is refused, and its swerves keep it there.
+  `miner_tests::tunnel` walls its trench to avoid it; dropping the route on
+  a refused straight step was tried and made it worse (the replan from
+  there found no route and the miner gave the wall up). Fix in nav (check
+  pulled segments with a margin) or the walker.
+  Note (from M8.6): the demo's Reed, carrying stone to the cave's lantern,
+  dithered 20 s at the plateau's north edge (about x -11, z -16) before
+  going round by the west ramp: the same walker trouble. Lantern numbers:
+  range 6 m, falloff `1 - (d / range)²`, the shader's `LANTERN` 2.0 and
+  `LANTERN_TINT`, the point light (`settlement::LANTERN_LUMENS` 60000, 6 m).
+  Whether miners should also supply other kinds' sites, a lantern's post
+  blocking bodies, and a tunnel lantern protecting the ground over it from
+  digs are open.
+  Note (from M8.7): light. Miners mine only walls joined to the stone pile
+  by lit floors, so a deep stretch needs a chain of lanterns (one about
+  every 10 m): tune the range or say so in the demo. A ghoul's lit cost
+  (`chase::LIT_STEP` 30) makes its plans into a lit stretch expand more
+  nodes: count them in the soak against `nav::PATH_BUDGET`. Wave routes
+  (`WaveState::route`) are planned once and replanned on ground changes,
+  not when a lantern's light changes. Dawn still burns every ghoul,
+  underground too: decide whether an unlit ghoul underground outlives it.
+  A stranded miner's retreat (`Targets::retreat`) picks the nearest tile in
+  reach by straight distance, which may be past a wall (it gives it up
+  after two asks, then goes home); a traffic detour planned from a swerve
+  into the dark ignores the rule (rare). The elder's lamp still doesn't
+  count (L5); the test walker and haulers ignore light.
+
+- **Done:** **F on flat ground**: in volume scenes the plain dig (F,
+  `DigDown`, the control `dig`) digs level, or a step down where every cell
+  a level dig would clear is already empty (`View::dig_volume_plain`,
+  `Settlement::dig_plain_of`, the app's `volume_dig(None)`); Ctrl+F and
+  Alt+F keep their one direction. HUD: `F DIG (DOWN ON FLAT GROUND) /
+  CTRL+F DIG DOWN / ALT+F DIG UP`, and the pile lab's help. Test
+  `volume_dig_tests::the_plain_dig_goes_level_into_a_wall_and_down_on_flat_ground`.
+  **The walker dithering (root cause)**: `haulers::move_worker` passed a
+  waypoint once within 0.1 m of it, and a 3D route's next leg is checked
+  from the waypoint itself (`nav::plan_with`'s string pulling); one that
+  climbs sideways off a sloped stair step onto the ground beside it walks
+  from the waypoint (feet -2.89) and not from 8 cm down the slope short of
+  it (feet -2.93), so the straight step was refused and the swerves kept
+  the walker sliding along the step for minutes. In a volume a waypoint is
+  now passed only once the next leg walks from where the walker is (else it
+  walks on to the waypoint itself), and walkers in a volume don't skip
+  waypoints (a skip could end on another floor than the route's: a miner
+  sent up a ramp's side instead of along its foot). Test
+  `miner_tests::a_miner_climbs_out_of_an_open_trench_sideways` (the
+  tunnel's trench open to the ground beside it: undelivered after 300 s
+  before, delivered at 86 s now, never 5 s in one spot); the walled tunnel's
+  amber now comes up at 88 s instead of 409 s. **The town soak**
+  (`soak_tests::the_town_digs_and_lights_its_depths_through_three_nights`,
+  6 s): three days and nights, two ballistas manned, Moss and Reed mining,
+  the elder defending while ghouls are near the tree and otherwise digging
+  a stair 6 m down from the north foot and a tunnel north (the plain dig),
+  picking up its amber, carrying piles in its way out and putting up a
+  lantern every 8 m the tree can pay for; validate and the balances every
+  tick. Every 3D plan the town's bodies make is counted (test-only
+  `nav::tally`, a thread-local read on the simulation's pool with
+  `Simulation::on_pool`): 417 plans, 27 short of their goal, 6 at
+  `PATH_BUDGET` (the most expanded 16384), none over. The town: tree 20 of
+  20, 3 nights survived, 24 kills, no breaches; 124 tiles dug, 14 amber
+  cells met, 8 amber and 1026 stone dug, 7 lantern blueprints, 4 built, 35
+  floors lit; no ghoul went underground. **Tuning, from the soak**: the
+  first soak's 117-tile tunnel 5 m down met no amber at all (the pockets
+  were 6-tile blobs, a 40 m tunnel at 5 m met none 59% of the time); amber
+  now on a 3-tile noise grid (`mine::amber`: about as much amber, 3.75% of
+  the deep cells; a 40 m tunnel at 5 m meets none 41% of the time, at 6 m
+  29% instead of 51%) and a town's amber cell yields one amber
+  (`mine::AMBER_YIELD`, was 3 to 6), so a tunnel 5 to 6 m down pays for a
+  lantern every 10 to 20 m, about a lantern a day. A volume dig's ore with
+  no room round it in a tile-wide tunnel lands on the dug tile (crowding its
+  piles) instead of staying buried, and in a volume a pile holds up only
+  its own column's digs (a tunnel's dug tile's pile stopped the next dig).
+  Lantern numbers kept (range 6 m, `LANTERN` 2.0, 60000 lm): a lantern
+  every 8 m chains its light; waves kept as they were (no ghoul came
+  underground in the soak). **Save size**: a volume made from the mine
+  keeps its layout (`Terrain::mine_volume`, `generated_volume`) and a save
+  stores the volume's edits over the generated one (`Volume::edits_over`,
+  `with_edits`, `WorldSection::volume_edits`), remade at load; save format
+  46. The town's save: 1.5 MB (the volume alone 1 529 960 bytes
+  compressed) to 1484 bytes untouched, 1509 with 44 cells dug (the demo's
+  `.glog.gsav` is 1493 bytes); `save::tests::a_towns_volume_is_saved_as_its_edits`.
+  **Demo** (`app/demos/sacred_tree_depths.json`, rewritten, 3233 frames at
+  30 fps, 2x and 4x between): dawn over the town; down the west ramp; a
+  stair six steps down north from its foot (Ctrl+F); a lantern's
+  blueprint on the fifth step; Moss and Reed set to mine bring its stone
+  and amber down and build it (97 s) and mine the stair's walls in its
+  light; the tunnel on six tiles with F; dusk; the elder at the stair's
+  mouth by the west column's way, then a tile at a time down into the lit
+  tunnel with two ghouls after it, where they kill it; dawn, the last ghoul
+  burning by the ramp. Local plain build; video and screenshots in the
+  session. The tunnel shots are dark and small at the town camera's
+  distance, and the ghouls in the tunnel are hard to see.
+  Not done, for later ("Depths follow-ups"): see that entry.
 
 ### M8.7 Sprites and ghouls read light
 

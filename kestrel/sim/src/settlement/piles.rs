@@ -485,10 +485,11 @@ impl PileLab {
         let radius = pile_radius(units);
         let mut around: Vec<(i32, i32)> = (-2..=2).flat_map(|y| (-2..=2).map(move |x| (x, y))).filter(|&o| o != (0, 0)).collect();
         around.sort_by_key(|&(x, y)| (x * x + y * y, y, x));
-        // In a volume, the dug tile itself last (M8.8): its cleared floor
-        // holds the pile when a tunnel a tile wide has its tiles behind
-        // the digger taken by earlier digs' piles (the depths soak's elder
-        // lost ten of fourteen amber cells so).
+        // In a volume, the dug tile itself last (M8.8), even crowding the
+        // piles already there: its cleared floor holds the pile when a
+        // tunnel a tile wide has its tiles behind the digger taken by
+        // earlier digs' piles (the depths soak's elder lost ten of
+        // fourteen amber cells so).
         if volume.is_some() {
             around.push((0, 0));
         }
@@ -503,7 +504,8 @@ impl PileLab {
             ground
                 && self.free_drop(terrain, center, units)
                 && targets.iter().all(|&p| nav::distance(p, center) > radius + DROP_CLEARANCE)
-                && self.piles.values().all(|p| nav::distance(p.position, center) > pile_radius(p.units()) + radius + Fx::from_ratio(1, 10))
+                // The dug tile, the last resort, may crowd the piles there.
+                && (t == tile || self.piles.values().all(|p| nav::distance(p.position, center) > pile_radius(p.units()) + radius + Fx::from_ratio(1, 10)))
         })?;
         let id = self.insert(item, Terrain::pit_center(spot), units, None);
         if let Some((floor, volume)) = volume {
