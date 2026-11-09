@@ -1279,6 +1279,13 @@ impl Simulation {
         }
     }
 
+    /// Runs `f` on the simulation's thread pool, where its steps run: for
+    /// tests reading thread-local tallies (`nav::tally`).
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn on_pool<R: Send>(&self, f: impl FnOnce() -> R + Send) -> R {
+        self.pool.install(f)
+    }
+
     pub fn into_world(self) -> World {
         self.world
     }

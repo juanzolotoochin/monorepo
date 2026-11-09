@@ -385,7 +385,8 @@ impl Soak {
 
     /// Puts whatever the bundle holds back in the tree, as far as it can.
     fn unload(&mut self, seen: &mut Seen) {
-        for (item, depot) in [(WOOD, TREE[0]), (STONE, TREE[1])] {
+        let amber = self.s().amber_depot();
+        for (item, depot) in [(WOOD, TREE[0]), (STONE, TREE[1])].into_iter().chain(amber) {
             if self.s().agents[ELDER as usize].carry.inventory.count(item) > 0 {
                 let dock = self.s().depots[depot as usize].position;
                 self.go(dock, seen);
@@ -595,6 +596,270 @@ fn defending_against_the_waves_strands_no_sprite() {
     assert!(soak.longest <= RETRY_TICKS + 1);
     assert!(mined >= 6, "the miners and the elder dug stone: {mined}");
     assert!(seen.elder_digs >= 3, "the elder dug: {seen:?}");
+}
+
+// The depths soak (M8.8 of the depths design, `kestrel/SACRED_TREE_DEPTHS.md`
+// "Tests"): the town through three days and nights with the elder digging
+// a stair and a tunnel under it and putting up lanterns, the miners
+// mining, and the waves coming.
+
+/// What the depths soak saw of the elder's tunnel.
+#[derive(Debug, Default)]
+struct Depths {
+    /// Digs sent, and those that went through.
+    sent: u32,
+    dug: u32,
+    refused: std::collections::BTreeMap<String, u32>,
+    /// Times the elder didn't get to its stand (a ghoul, a miner in the way).
+    missed: u32,
+    /// Its lowest feet, under the surface where it dug.
+    deepest: Fx,
+    /// Amber it picked up in the tunnel, in units.
+    amber_picked: u32,
+    /// Lantern blueprints put down, and refused.
+    lanterns: u32,
+    lantern_refused: u32,
+    /// The most ghouls at once more than a meter under the top floor.
+    ghouls_under: u32,
+    /// The most floors in lantern light.
+    lit: u32,
+    /// Units of piles in its way it carried out.
+    carried: u32,
+    /// Amber cells among those its digs cleared.
+    amber_cells: u32,
+    /// Where the tunnel turned (from the tree's tile).
+    turns: Vec<(i32, i32)>,
+}
+
+/// The elder's tunnel: where it stands to dig next, which way, the stair's
+/// steps still to dig down, and tiles dug level since the last lantern.
+struct Tunnel {
+    stand: (i32, i32),
+    way: (i32, i32),
+    stair: u32,
+    since_lantern: u32,
+    lantern_kind: BuildingKindIx,
+    /// The feet's height at the stand, and the tiles dug, in order.
+    feet: Fx,
+    dug: Vec<(i32, i32)>,
+}
+
+/// A lantern every this many tiles of level tunnel.
+const LANTERN_EVERY: u32 = 8;
+
+impl Soak {
+    /// The elder digs its tunnel on a tile: carries what it holds up to the
+    /// tree first, walks to its stand and turns the way, digs (a step down on the stair, then the plain dig, F: level),
+    /// steps in, picks up any amber the dig dropped and, past every
+    /// `LANTERN_EVERY` tiles, puts a lantern's blueprint down behind it if
+    /// the tree has a stone and an amber for it that no other site waits
+    /// for. A pile in the way it carries out; another refused tile turns
+    /// the tunnel left.
+    fn dig_tunnel(&mut self, t: &mut Tunnel, seen: &mut Seen, d: &mut Depths) {
+        use crate::terrain::Terrain;
+        if self.cargo() > 0 {
+            self.unload(seen);
+        }
+        // Back from the surface (the tree, a fight), in by the stair: a
+        // walk to the stand alone may end on the ground over it.
+        let feet = self.s().agents[ELDER as usize].avatar().unwrap().height;
+        if (feet - t.feet).abs() > Fx::ONE {
+            for &w in [3, 11].iter().filter_map(|&i| t.dug.get(i)) {
+                self.go(Terrain::pit_center(w), seen);
+            }
+        }
+        self.go(Terrain::pit_center(t.stand), seen);
+        // Face the way: two ticks' walk, then stand (`tunnel_soak`'s turn).
+        let way = FxVec2::new(Fx::from_int(t.way.0), Fx::from_int(t.way.1));
+        self.watch(&[command(CommandKind::MoveAvatar { agent: ELDER, intent: Intent::Walk { direction: way, run: false } })], seen);
+        self.wait(TURN - 1, seen);
+        self.watch(&[command(CommandKind::MoveAvatar { agent: ELDER, intent: Intent::Stop })], seen);
+        self.wait(12, seen);
+        let a = &self.s().agents[ELDER as usize];
+        if !a.body.alive() || Terrain::pit_tile(a.body.position) != t.stand || (a.avatar().unwrap().height - t.feet).abs() > Fx::from_ratio(3, 4) {
+            d.missed += 1;
+            return;
+        }
+        let front = (t.stand.0 + t.way.0, t.stand.1 + t.way.1);
+        let (world, tick) = (self.sim.world(), self.sim.world().tick());
+        let tree = Terrain::pit_tile(world.terrain().center);
+        let would = if t.stair > 0 {
+            self.s().dig_volume_of(ELDER, tick, world.terrain(), crate::volume::DigDirection::Down)
+        } else {
+            self.s().dig_plain_of(ELDER, tick, world.terrain())
+        };
+        match would.unwrap() {
+            Ok((tile, bottom)) if tile == front => {
+                let volume = self.sim.world().terrain().volume.as_ref().unwrap();
+                d.amber_cells += (bottom..bottom + crate::volume::HEADROOM).filter(|&l| volume.ore(tile, l) == Some(crate::mine::AMBER)).count() as u32;
+            }
+            Ok(_) => {
+                *d.refused.entry("Heading".into()).or_default() += 1;
+                return;
+            }
+            Err(why) => {
+                *d.refused.entry(format!("{why:?}")).or_default() += 1;
+                if matches!(why, crate::terrain::DigRefusal::Clear) {
+                    // Dug already (a miner): walk on.
+                    t.stand = front;
+                } else if matches!(why, crate::terrain::DigRefusal::Pile) {
+                    // A pile of earlier digs on the way: carry it out (the
+                    // next call takes it up to the tree).
+                    if let Some((target @ InteractTarget::Pile(_), _)) = self.target() {
+                        if self.try_use(target, seen) {
+                            d.carried += self.cargo();
+                        }
+                    }
+                } else {
+                    t.way = (t.way.1, -t.way.0);
+                    d.turns.push((t.stand.0 - tree.0, t.stand.1 - tree.1));
+                }
+                return;
+            }
+        }
+        let kind = if t.stair > 0 {
+            CommandKind::DigFront { agent: ELDER, direction: crate::volume::DigDirection::Down }
+        } else {
+            CommandKind::DigDown { agent: ELDER }
+        };
+        let digs = seen.elder_digs;
+        d.sent += 1;
+        self.watch(&[command(kind)], seen);
+        self.wait(5 * HZ / 2, seen);
+        if seen.elder_digs == digs {
+            return;
+        }
+        d.dug += 1;
+        let surface = self.sim.world().terrain().generated_top(front).map_or(Fx::ZERO, crate::volume::height);
+        if t.stair > 0 {
+            t.stair -= 1;
+        } else {
+            t.since_lantern += 1;
+        }
+        let was = t.stand;
+        t.stand = front;
+        t.dug.push(front);
+        self.go(Terrain::pit_center(front), seen);
+        let feet = self.s().agents[ELDER as usize].avatar().unwrap().height;
+        t.feet = feet;
+        d.deepest = d.deepest.min(feet - surface);
+        // The dig's amber, if it dropped any.
+        let amber = self.s().amber_depot().map(|(item, _)| item);
+        for _ in 0..3 {
+            let Some((target @ InteractTarget::Pile(id), _)) = self.target() else { break };
+            let pile = self.s().piles.as_ref().and_then(|p| p.piles.get(&id));
+            if pile.is_none_or(|p| p.item() != amber) || self.cargo() > 0 {
+                break;
+            }
+            if self.try_use(target, seen) {
+                d.amber_picked += self.cargo();
+            }
+        }
+        // A lantern when the tree can pay for it.
+        if t.stair == 0 && (t.since_lantern >= LANTERN_EVERY || d.lanterns == 0) && self.affords(t.lantern_kind) {
+            self.watch(&[command(CommandKind::PlaceBlueprint { kind: t.lantern_kind, position: Terrain::pit_center(was) })], seen);
+            if self.s().events.iter().any(|e| matches!(e, Event::BlueprintPlaced { .. })) {
+                d.lanterns += 1;
+                t.since_lantern = 0;
+            } else {
+                d.lantern_refused += 1;
+            }
+        }
+    }
+
+    /// Whether the tree's piles hold the materials for a building of
+    /// `kind` that no site of that kind already waits for.
+    fn affords(&self, kind: BuildingKindIx) -> bool {
+        let s = self.s();
+        let k = &s.building_kinds[kind as usize];
+        let have = |item: ItemIx| s.depots.iter().map(|dep| dep.inventory.count(item)).sum::<u32>();
+        let owed = |item: ItemIx| -> u32 {
+            s.buildings.iter().filter(|b| b.kind == kind && !b.built()).flat_map(|b| b.needs(k)).filter(|w| w.0 == item).map(|w| w.1).sum()
+        };
+        k.parts.iter().flatten().all(|&(item, units)| have(item) >= units + owed(item))
+    }
+}
+
+/// The town through three days and nights (11 min 15 s) with its depths:
+/// two ballistas by the ramps as in the wave soak, Ash and Fern on them,
+/// Moss and Reed mining; the elder defends while ghouls are near the tree
+/// and otherwise digs a stair down 6 m east from the hill's north foot and
+/// a tunnel on north from its bottom, picking up the amber it digs and
+/// carrying it up, and puts up a lantern every 8 m of tunnel the tree can
+/// pay for (the miners bring its stone and amber down and build it).
+/// Every tick validates the settlement and the balances; every 3D plan the
+/// town's bodies make is counted (`nav::tally`) and none expands more than
+/// `nav::PATH_BUDGET` nodes. The tree stands every night.
+#[test]
+fn the_town_digs_and_lights_its_depths_through_three_nights() {
+    let mut soak = Soak::new(sacred_tree());
+    let mut seen = Seen::default();
+    let mut d = Depths::default();
+    let ballistas = [soak.build(BALLISTA, soak.point(3.0, -1.4)), soak.build(BALLISTA, soak.point(-3.0, -1.4))];
+    soak.empty_bundle();
+    let lantern_kind = soak.s().building_kinds.iter().position(|k| k.is_lantern()).unwrap() as BuildingKindIx;
+    let mut jobs: Vec<Command> = SPRITES[..2].iter().map(|&agent| command(CommandKind::SetSpriteJob { agent, job: SpriteJob::Staff(BALLISTA) })).collect();
+    jobs.extend(SPRITES[2..].iter().map(|&agent| command(CommandKind::SetSpriteJob { agent, job: SpriteJob::Mine })));
+    soak.watch(&jobs, &mut seen);
+    let tree_tile = crate::terrain::Terrain::pit_tile(soak.sim.world().terrain().center);
+    let start = (tree_tile.0 - 8, tree_tile.1 - 22);
+    let feet = soak.sim.world().terrain().tile_height(start).unwrap();
+    let mut tunnel = Tunnel { stand: start, way: (1, 0), stair: 12, since_lantern: 0, lantern_kind, feet, dug: Vec::new() };
+    let (amber, stone) = (soak.s().amber_depot().unwrap().0, soak.s().stone_depot().unwrap().0);
+    soak.sim.on_pool(crate::nav::tally::take);
+    let clock = soak.s().clock.expect("days and nights");
+    let nights = 3;
+    let mut cycle = 0usize;
+    let mut turned = false;
+    while soak.sim.world().tick() < nights * clock.cycle() + 5 * HZ {
+        for b in ballistas {
+            if !soak.s().buildings[b as usize].built() {
+                soak.rebuild(b, &mut seen);
+            }
+            if soak.s().buildings[b as usize].built() && soak.s().buildings[b as usize].output.free() >= 5 {
+                soak.bring(b, STONE, false, &mut seen);
+            }
+        }
+        let tree = soak.sim.world().terrain().center;
+        let nearest = soak.s().threats.iter().map(|t| t.position).filter(|p| (*p - tree).length() < Fx::from_int(15)).min_by_key(|p| (*p - tree).length());
+        let ballista = nearest.map(|p| if p.x < tree.x { ballistas[1] } else { ballistas[0] });
+        if let Some(ballista) = ballista.filter(|&b| soak.s().buildings[b as usize].built()) {
+            soak.defend(ballista, 8 + cycle as u64 % 5, &mut seen);
+        } else {
+            // At the stair's bottom the tunnel turns north.
+            if tunnel.stair == 0 && !turned {
+                (tunnel.way, turned) = ((0, -1), true);
+            }
+            soak.dig_tunnel(&mut tunnel, &mut seen, &mut d);
+        }
+        let s = soak.s();
+        let terrain = soak.sim.world().terrain();
+        let under = s.threats.iter().filter(|t| t.height < terrain.height(t.position) - Fx::ONE).count() as u32;
+        d.ghouls_under = d.ghouls_under.max(under);
+        d.lit = d.lit.max(s.light.lantern_floors() as u32);
+        cycle += 1;
+    }
+    let plans = soak.sim.on_pool(crate::nav::tally::take);
+    let s = soak.s();
+    let lanterns_built = s.buildings.iter().filter(|b| b.kind == lantern_kind && b.built()).count();
+    let (mined_stone, mined_amber) = (s.accounts[stone as usize].generated, s.accounts[amber as usize].generated);
+    eprintln!("depths soak: {cycle} cycles, {seen:?}");
+    eprintln!("depths soak: tunnel {d:?}, {lanterns_built} lanterns built, ends at {:?}", (tunnel.stand.0 - tree_tile.0, tunnel.stand.1 - tree_tile.1));
+    eprintln!("depths soak: plans {plans:?}");
+    eprintln!(
+        "depths soak: tree {} of {}, {} nights, {mined_stone} stone and {mined_amber} amber dug, {} stone and {} amber at the tree",
+        s.health,
+        s.base_health,
+        s.nights_survived(soak.sim.world().tick()).unwrap(),
+        s.stock("tree_stone", "stone"),
+        s.stock("tree_amber", "amber")
+    );
+    assert!(!s.tree_fallen(), "the tree stands: {seen:?}");
+    assert_eq!(s.nights_survived(soak.sim.world().tick()), Some(nights));
+    assert!(plans.plans > 200 && plans.most_expanded <= crate::nav::PATH_BUDGET, "{plans:?}");
+    assert!(d.dug >= 40 && d.deepest <= Fx::from_int(-4), "the elder dug a stair and a tunnel under 4 m: {d:?}");
+    // M8.8's tuning: a lantern or so a day from the tunnel's own amber.
+    assert!(mined_amber >= 3 && lanterns_built >= 2, "the tunnel paid for its lanterns: {mined_amber} amber, {lanterns_built} lanterns, {d:?}");
 }
 
 // The Tunnel Lab soak (V.8 of the verticality design,

@@ -137,6 +137,12 @@ impl LightGrid {
         self.level(Terrain::pit_tile(p), feet_layer(terrain, p, z))
     }
 
+    /// How many floors lanterns light: for tests.
+    #[cfg(test)]
+    pub fn lantern_floors(&self) -> usize {
+        self.cells.len()
+    }
+
     /// A grid lit by `lamps` over `terrain`'s volume, keyed as if no
     /// building gave light: for tests of what reads the grid, in scenes
     /// with no lantern kind. It stays until the ground changes.

@@ -301,6 +301,12 @@ impl Mine {
     }
 }
 
+/// How many amber units a town's amber cell yields (M8.8): one, so a
+/// lantern (1 stone and 1 amber) costs a cell of amber, and a tunnel dug
+/// 5 to 6 m down pays for a lantern every 10 to 20 m of it on average (a
+/// stone cell yields [`cell_yield`], 3 to 6).
+pub const AMBER_YIELD: u32 = 1;
+
 /// How many units digging out a volume's solid cell yields (V.4 of the
 /// verticality design): 3 to 6, as [`Mine::yield_of`] hashes them, from
 /// the cell alone (a volume has no seed: seed 0).
@@ -354,10 +360,14 @@ fn stone(seed: u64, x: i32, y: i32, layer: u8) -> bool {
 }
 
 /// Whether a town's tile holds amber at `layer` (at least [`AMBER_DEPTH`]):
-/// small pockets, a little richer deeper.
+/// small pockets, a little richer deeper. M8.8: on a 3-tile noise grid (it
+/// was 6), so the pockets are smaller and more of them, about as much
+/// amber in all (3.75% of the deep cells, from 3.5%), but a 40 m tunnel
+/// with its floor 5 m down meets none 41% of the time instead of 59%, and
+/// at 6 m 29% instead of 51% (2.1 and 5.0 amber cells on average).
 fn amber(seed: u64, x: i32, y: i32, layer: u8) -> bool {
     let k = (layer - AMBER_DEPTH) as u32;
-    noise(seed, x, y, 6, 120) > 222 - 3 * k.min(8) && hash(seed, x, y, 121 + layer as u32) % 3 != 0
+    noise(seed, x, y, 3, 120) > 222 - 3 * k.min(8) && hash(seed, x, y, 121 + layer as u32) % 3 != 0
 }
 
 fn hash(seed: u64, x: i32, y: i32, salt: u32) -> u32 {

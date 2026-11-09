@@ -445,7 +445,7 @@ impl PileLab {
 
     /// Dug ore: `units` of mineral `item` out of the pit at `tile`, onto a
     /// pile of the same ore beside it with room, or a new one on the nearest
-    /// open tile around that isn't steep, clear of `targets` (a town's docks, output piles
+    /// open tile around that isn't steep (in a volume, the dug tile last), clear of `targets` (a town's docks, output piles
     /// and slot spots) as a dropped bundle is. Returns the pile and the slot
     /// the first unit lands in, or nothing if there is nowhere to put it
     /// (the ore stays buried).
@@ -485,6 +485,13 @@ impl PileLab {
         let radius = pile_radius(units);
         let mut around: Vec<(i32, i32)> = (-2..=2).flat_map(|y| (-2..=2).map(move |x| (x, y))).filter(|&o| o != (0, 0)).collect();
         around.sort_by_key(|&(x, y)| (x * x + y * y, y, x));
+        // In a volume, the dug tile itself last (M8.8): its cleared floor
+        // holds the pile when a tunnel a tile wide has its tiles behind
+        // the digger taken by earlier digs' piles (the depths soak's elder
+        // lost ten of fourteen amber cells so).
+        if volume.is_some() {
+            around.push((0, 0));
+        }
         let spot = around.into_iter().map(|(x, y)| (tile.0 + x, tile.1 + y)).find(|&t| {
             let center = Terrain::pit_center(t);
             // Not on ground the dig made steep (beside a pit two layers

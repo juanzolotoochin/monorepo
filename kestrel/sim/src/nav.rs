@@ -332,6 +332,67 @@ pub fn plan_with(
     toward: bool,
     weigh: Option<Weigh>,
 ) -> PathAt {
+    let plan = plan_inner(terrain, start, z, goal, goal_z, radius, extra, budget, toward, weigh);
+    #[cfg(test)]
+    if terrain.volume.is_some() {
+        tally::record(&plan, budget);
+    }
+    plan
+}
+
+/// Test-only tallies of the 3D plans made on this thread: a soak reads
+/// them from its simulation's pool (`Simulation::on_pool`) to count the
+/// town's plans against [`PATH_BUDGET`] (M8.8).
+#[cfg(test)]
+pub(crate) mod tally {
+    use std::cell::Cell;
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub struct Plans {
+        pub plans: u32,
+        /// Plans that didn't reach their goal.
+        pub unreached: u32,
+        /// Plans that stopped at their budget.
+        pub at_budget: u32,
+        pub most_expanded: u32,
+        pub expanded: u64,
+    }
+
+    thread_local! {
+        static PLANS: Cell<Plans> = Cell::new(Plans::default());
+    }
+
+    pub(super) fn record(plan: &super::PathAt, budget: u32) {
+        PLANS.with(|p| {
+            let mut t = p.get();
+            t.plans += 1;
+            t.unreached += u32::from(!plan.reached);
+            t.at_budget += u32::from(plan.expanded >= budget);
+            t.most_expanded = t.most_expanded.max(plan.expanded);
+            t.expanded += u64::from(plan.expanded);
+            p.set(t);
+        });
+    }
+
+    /// This thread's tallies since the last take.
+    pub fn take() -> Plans {
+        PLANS.with(|p| p.replace(Plans::default()))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn plan_inner(
+    terrain: &Terrain,
+    start: FxVec2,
+    z: Fx,
+    goal: FxVec2,
+    goal_z: Option<Fx>,
+    radius: Fx,
+    extra: &[Disc],
+    budget: u32,
+    toward: bool,
+    weigh: Option<Weigh>,
+) -> PathAt {
     use crate::terrain::LAYER;
     // Whether a straight walk from `a` (feet `za`) to `b` (feet `zb`)
     // weighs at most `most` at every half tile past `a` (`None`: anything

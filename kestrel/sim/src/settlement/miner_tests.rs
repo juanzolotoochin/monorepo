@@ -232,7 +232,7 @@ fn a_miner_digs_a_tunnel_wall_beside_it_never_its_floor_or_ceiling() {
         assert!(volume.is_solid(wall, layer) && volume.ore(wall, layer) == Some(AMBER), "the cell at layer {layer} stays");
     }
     assert_eq!(volume.spans(stand), &own[..], "its own tile is untouched");
-    assert_eq!(dug_amber(&sim), (floor..floor + HEADROOM).map(|layer| crate::mine::cell_yield(wall, layer) as u64).sum::<u64>());
+    assert_eq!(dug_amber(&sim), HEADROOM as u64 * crate::mine::AMBER_YIELD as u64, "a unit a cell");
     for _ in 0..240 * HZ {
         step(&mut sim, &[]);
         if delivered_amber(&sim) as u64 == dug_amber(&sim) {

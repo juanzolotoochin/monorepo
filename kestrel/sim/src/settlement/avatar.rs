@@ -778,7 +778,8 @@ impl Settlement {
                 (None, Some(stone)) if !town => stone,
                 _ => continue,
             };
-            let units = crate::mine::cell_yield(tile, layer);
+            // A town's amber is scarcer (M8.8): a unit a cell.
+            let units = if town && ore == Some(crate::mine::AMBER) { crate::mine::AMBER_YIELD } else { crate::mine::cell_yield(tile, layer) };
             let Some((id, first)) = lab.mined_at(item, units, tile, Some(bottom), terrain, &targets) else { continue };
             self.accounts[item as usize].generated += units as u64;
             // A town's stone and amber (no pile lab minerals) are just there.
