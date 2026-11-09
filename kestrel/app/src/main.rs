@@ -16,6 +16,7 @@ mod destruction;
 mod effects;
 mod event_prediction;
 mod flow;
+mod fog;
 mod gameplay;
 mod hurt;
 mod impact;

@@ -4,26 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M9.1 The fog grid from many eyes
-
-- **Status:** open
-- **Why:** fog of war ([`SACRED_TREE_FOG.md`](../SACRED_TREE_FOG.md))
-  needs to know, per tile and level, what the team sees now and has seen.
-- **What to do:** a view-only, pure fog grid over the whole town, per
-  level: in sight, seen before, never seen (F2, F3, F9). Eyes (F1, F8):
-  every player's elder or possessed sprite (about 14 m), every sprite
-  (about 6 m), the tree (about 8 m), buildings (about 4 m), and lit
-  lanterns (the light grid's tiles). Night halves units' ranges, not
-  light's; underground is always night (F4). Ground over eye height blocks
-  (F5), reusing `sight.rs`'s ray rules. Each eye recomputed only when its
-  tile, level or the ground changes. Start with the town round the tree
-  seen (F9).
-- **Where:** `app/src/sight.rs` (or a new `app/src/fog.rs`),
-  `sim/src/settlement/light.rs` (read only).
-- **Found in:** fog design.
-- **Tests:** ranges, ground blocking, night, lanterns, levels, memory,
-  team eyes adding up; a cost test on the town with every eye.
-
 ## M9.2 Drawing the fog
 
 - **Status:** open
@@ -38,6 +18,17 @@ its milestones, in order; one PR per milestone.
 - **Found in:** fog design.
 - **Tests:** mode cycling; other scenes unchanged; screenshots by day, at
   night and underground.
+  Note (from M9.1): the grid is `fog::FogView` (none outside the town),
+  brought up each frame by `fog::follow` before `cutaway::follow`.
+  Upload `Fog::surface_bytes()` (R8, 256 x 256 from `Fog::origin`, row by
+  row y then x; 0 never, 128 seen, 255 in sight) and, inside,
+  `Fog::level_bytes(floor)` for the elder's level, only when
+  `Fog::revision` changed. A fragment is on the surface when it is at or
+  over its tile's top floor; walls under ground were stored on the eye's
+  floor layer, which `level_bytes` reads with the layers a step either
+  side. Dusk halves sight at once (the clock's phase): ease it in the
+  shader or in `fog::range` if it pops. Tree and building ranges stay at
+  night (a choice: buildings as lights); revisit after playing.
 
 ## M9.3 Hiding things in the fog
 
@@ -53,6 +44,12 @@ its milestones, in order; one PR per milestone.
 - **Found in:** fog design.
 - **Tests:** a hidden ghoul isn't drawn; eyes within 12 m only; last-seen
   buildings and piles.
+  Note (from M9.1): `Fog::state(tile, Level)` and `Fog::near(tile, layer)`
+  answer per tile; a body on its top floor is `Level::Surface`, under a
+  roof its floor's level (`fog` module doc). "Last seen" needs a snapshot
+  of buildings and piles per cell when it goes from `Now` to `Seen`: the
+  grid keeps only the state; `Fog::update` rebuilds the `now` list, the
+  place to diff.
 
 ## M9.4 Demo and review
 
@@ -66,6 +63,10 @@ its milestones, in order; one PR per milestone.
 - **Where:** `app/demos/`, `app/BUILD.bazel`, docs.
 - **Found in:** fog design.
 - **Tests:** the full suite.
+  Note (from M9.1): `fog::tests` prints the town's fog as text (2 m a
+  character) with `--test_arg=fog:: --test_output=all`; the M9.1 cost test's
+  numbers (0.6 ms a frame with every unit moving, unoptimized) are the
+  baseline for the demo's frame times.
 
 ## Depths follow-ups
 
@@ -298,6 +299,68 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M7.5.
 
 ## Done
+
+### M9.1 The fog grid from many eyes
+
+- **Status:** done (branch `kestrel-sacred-tree-fog`)
+- **Why:** fog of war ([`SACRED_TREE_FOG.md`](../SACRED_TREE_FOG.md))
+  needs to know, per tile and level, what the team sees now and has seen.
+- **What to do:** a view-only, pure fog grid over the whole town, per
+  level: in sight, seen before, never seen (F2, F3, F9). Eyes (F1, F8):
+  every player's elder or possessed sprite (about 14 m), every sprite
+  (about 6 m), the tree (about 8 m), buildings (about 4 m), and lit
+  lanterns (the light grid's tiles). Night halves units' ranges, not
+  light's; underground is always night (F4). Ground over eye height blocks
+  (F5), reusing `sight.rs`'s ray rules. Each eye recomputed only when its
+  tile, level or the ground changes. Start with the town round the tree
+  seen (F9).
+- **Where:** `app/src/sight.rs` (or a new `app/src/fog.rs`),
+  `sim/src/settlement/light.rs` (read only).
+- **Found in:** fog design.
+- **Tests:** ranges, ground blocking, night, lanterns, levels, memory,
+  team eyes adding up; a cost test on the town with every eye.
+
+- **Done:** **`app/src/fog.rs`**: a pure, view-only `Fog` over the whole
+  town (256 x 256 tiles from the arena's center, `Fog::of_town`), per
+  `Level`: `Surface` (a tile's top floor, open to the sky) or
+  `Layer(floor)` (a floor with ground over it, and the walls an eye on
+  that layer sees). Each cell is `State::Never`, `Seen` or `Now` (bits;
+  `State::byte` 0, 128, 255). **Eyes** (`fog::eyes`, F1, F8): every
+  living avatar (`ELDER_RANGE` 14 m; an elder in a building sees from its
+  body), every sprite (`SPRITE_RANGE` 6 m), every built building
+  (`BUILDING_RANGE` 4 m) and the tree (`TREE_RANGE` 8 m, its tile's top
+  floor at the arena's center); `fog::range` halves the elder's and the
+  sprites' by night (the clock's phase) and under a roof (`NIGHT` 0.5, so
+  7 m and 3 m), not the tree's or buildings'. The light grid's lit floors
+  (`LightGrid::cells`, level > 0) are in sight at any hour. **Rays**: from
+  the eye tile's middle to each tile's middle and four corners
+  (`sight::TARGET_SAMPLES`, `sight::reaches`, now public) within range
+  (tile middles); any ray in sight. An eye under open sky
+  (`sight::open`) sees the surface and is blocked by tiles whose top is
+  over its head (`sight::EYE` layers over its floor): on the hill you see
+  over the town, from the foot not past the hill. An eye under a roof uses
+  `sight::blocks` and marks floors within a layer of its own on their
+  level, walls on its own layer, and open ground out of a mouth as the
+  surface. `Fog::near(tile, layer)` reads the three layers round a floor
+  (floors are more than two layers apart). **Cost**: each eye keeps its
+  cells and key (tile, floor, range, terrain revision) and is looked again
+  only when it changes; the light's cells are read again only when its
+  revision changes; then what is in sight is rebuilt from the kept cells
+  (no rays). **Start** (F9): `Fog::remember` from the tree at
+  `START_RANGE` 30 m (the clearing and the ballista ring) as seen. Nothing
+  saved; no sim change. **Hooked up**: `fog::FogView` (a resource,
+  `Option<Fog>`, none outside the town, F11, `fog::town`: a volume and
+  building kinds) and `fog::follow` before `cutaway::follow` in rendered
+  runs; `Digging::init` resets it each world. Nothing draws it yet.
+  **Measured** (the cost test, unoptimized, remote): the town with 8
+  elders, 16 sprites, 12 buildings, the tree and 6 lanterns (654 lit
+  floors): every eye looked 0.7 ms (8652 rays), nothing moved 7 us (no
+  rays), every unit moved a tile 0.6 ms (7880 rays); budget 4 ms. Tests
+  in `fog::tests` (12): ranges, ground blocking and the hill, night and
+  underground halving, levels apart and a mouth, lanterns, memory and the
+  texture bytes, the team adding up and an eye gone, keys, the town's
+  start and team, other scenes without fog, the cost.
+
 
 ### M8.8 Tuning, soak and demo
 
