@@ -459,7 +459,7 @@ impl Soak {
         let (dock, radius) = (self.s().depots[TREE[1] as usize].position, self.s().agents[ELDER as usize].radius());
         let terrain = self.sim.world().terrain();
         let behind = |t: &super::miners::Target| (2 * t.stand.0 - t.tile.0, 2 * t.stand.1 - t.tile.1);
-        let targets: Vec<_> = super::miners::search(terrain, crate::terrain::Terrain::pit_tile(dock), radius)
+        let targets: Vec<_> = super::miners::search(terrain, &self.s().light, crate::terrain::Terrain::pit_tile(dock), radius)
             .into_iter()
             .filter(|t| match (&terrain.volume, t.wall) {
                 (Some(volume), Some(floor)) => volume.floor_near(behind(t), floor).is_some(),

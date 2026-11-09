@@ -41,6 +41,20 @@
 //! `CALM_DETECTS` detect radii (`Alarm::Wary`); then it plans its job
 //! again. A sprite holding a slot claim or moving a bundle finishes that
 //! first; inside a building it is safe.
+//!
+//! **Light (M8.7 of the depths design, L3, L3a):** in a volume scene a
+//! sprite's routes keep to lit floors (open sky is lit;
+//! `haulers::route_at` with the light grid), and a miner starts a wall dig
+//! only standing in light. Two exceptions: a miner on a lantern errand
+//! (fetching for, supplying or installing a lantern's site) walks dark
+//! floors, only for it, so the first lantern of a dark tunnel can be put
+//! up; and a stranded sprite, one standing where it shouldn't (in the dark,
+//! or for a miner off its reach, `miners::Targets::reaches`: a lit pool a
+//! dark way cuts off), plans its way out through the dark. A stranded
+//! miner not on an errand drops what it does and walks back to the
+//! nearest floor in its reach on its level (`Targets::retreat`), or home;
+//! other sprites only go home or to the surface anyway. Worked out every
+//! tick by the brain (`SpriteState::see_light`), so it isn't state.
 
 use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
@@ -174,6 +188,22 @@ pub enum Step {
     Install { site: BuildingIx, part: u8 },
 }
 
+/// How light stands to a sprite this tick (M8.7, L3): whether it is
+/// stranded (see the module doc). The brain works it out every tick before
+/// it acts (`think`), so it is not state, and any two compare equal.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Lighting {
+    pub stranded: bool,
+}
+
+impl PartialEq for Lighting {
+    fn eq(&self, _: &Lighting) -> bool {
+        true
+    }
+}
+
+impl Eq for Lighting {}
+
 /// The part of a building's slot a sprite holds: the slot names it back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Hold {
@@ -254,12 +284,61 @@ pub struct SpriteState {
     /// volume scene (M8.2); never written elsewhere.
     #[serde(default)]
     pub backoff: super::Backoff,
+    /// How light stands to it this tick (M8.7): not state.
+    #[serde(skip)]
+    pub light: Lighting,
 }
 
 impl SpriteState {
     /// The step it is on, if its plan isn't done.
     pub fn current(&self) -> Option<Step> {
         self.plan.get(self.step as usize).copied()
+    }
+
+    /// Whether its plan, from the step it is on, is a lantern errand
+    /// (`miners::lantern_errand`): it may walk dark floors for it (L3a).
+    pub fn on_errand(&self) -> bool {
+        self.plan.iter().skip(self.step as usize).any(|s| matches!(s, Step::Fetch { .. } | Step::Supply(_) | Step::Install { .. }))
+    }
+
+    /// Whether its routes keep to lit floors (L3): in a volume scene, unless
+    /// it is on a lantern errand or stranded.
+    pub fn walks_lit(&self, terrain: &Terrain) -> bool {
+        terrain.volume.is_some() && !self.on_errand() && !self.light.stranded
+    }
+
+    /// Whether its plan is a single walk: a stranded miner's way back to
+    /// light or home, an idle sprite's way home, or a miner's to its
+    /// waiting spot; each ends in light.
+    fn retreating(&self) -> bool {
+        matches!(self.plan[..], [Step::GoTo(_)])
+    }
+
+    /// Works out how light stands to it this tick (`Lighting`): in a volume
+    /// scene a miner is stranded off its reach, any other sprite in the
+    /// dark.
+    fn see_light(&mut self, body: &Body, view: &View, town: &Town) {
+        let Some(volume) = view.terrain.volume.as_ref().filter(|_| view.light.governs) else {
+            self.light = Lighting::default();
+            return;
+        };
+        let reach = match (self.job, town.stone) {
+            (SpriteJob::Mine, Some((_, depot))) => {
+                let layer = volume.floor_at(body.position, self.height).map_or_else(|| crate::volume::layer_at(self.height), |(floor, _)| floor);
+                let dock = Ground::pit_tile(view.depots[depot as usize].position);
+                self.targets.reaches(view.terrain, view.light, dock, body.base_radius, Ground::pit_tile(body.position), layer)
+            }
+            _ => None,
+        };
+        let stranded = reach.map_or_else(|| !view.light.sprite_lit(view.terrain, body.position, self.height), |reaches| !reaches);
+        self.light = Lighting { stranded };
+    }
+
+    /// Where a stranded miner walks back to: the nearest floor in its reach
+    /// on its level (`Targets::retreat`), or home.
+    fn retreat(&self, body: &Body, terrain: &Terrain) -> FxVec2 {
+        let layer = terrain.volume.as_ref().and_then(|v| v.floor_at(body.position, self.height)).map_or_else(|| crate::volume::layer_at(self.height), |(floor, _)| floor);
+        self.targets.retreat(Ground::pit_tile(body.position), layer, &self.unreachable).unwrap_or(body.home)
     }
 
     /// Inside a building, working.
@@ -294,6 +373,11 @@ impl SpriteState {
         // and flee.
         if town.alarm == Alarm::Threatened && self.may_flee(carry) && !self.fleeing(body) {
             body.route.clear();
+            return Progress::Replan;
+        }
+        // A miner stranded where it stands (L3), not walking and not on a
+        // lantern errand: it walks back to light.
+        if self.job == SpriteJob::Mine && self.light.stranded && body.route.is_empty() && carry.job.is_none() && !self.on_errand() && !self.retreating() && !self.fleeing(body) {
             return Progress::Replan;
         }
         let Some(step) = self.current() else {
@@ -400,11 +484,13 @@ impl SpriteState {
                 // (it stands on another floor, or off the tile), it gives
                 // the spot up until the ground changes, so it doesn't plan
                 // the same dig again every tick.
+                // In the dark (L3) it doesn't start either.
                 let Some(mine) = town.mine else { return Progress::Replan };
                 body.route.clear();
                 body.heading = crate::nav::bearing(body.position, Ground::pit_center(tile));
+                let lit = view.light.sprite_lit(view.terrain, body.position, self.height);
                 match view.dig_volume(body.position, self.height, body.heading, body.base_radius, crate::volume::DigDirection::Level) {
-                    Ok((t, bottom)) if t == tile && bottom == layer => {
+                    Ok((t, bottom)) if lit && t == tile && bottom == layer => {
                         self.dig = Some(Dig { tile, started: view.tick, until: view.tick + mine.dig, layer: Some(layer) });
                         Progress::Stay(None)
                     }
@@ -540,6 +626,10 @@ impl SpriteState {
             }
         };
         self.step = 0;
+        // Stranded and not on a lantern errand (L3): back to light first.
+        if self.job == SpriteJob::Mine && self.light.stranded && !self.on_errand() {
+            self.plan = vec![Step::GoTo(self.retreat(body, view.terrain))];
+        }
         self.retry_at = if self.plan == [Step::Wait] { view.tick + RETRY_TICKS } else { view.tick };
     }
 }
@@ -605,9 +695,10 @@ impl Walker for SpriteState {
         None
     }
 
-    fn route_to(&self, body: &Body, terrain: &Terrain, to: FxVec2, extra: &[Disc]) -> Vec<FxVec2> {
+    fn route_to(&self, body: &Body, view: &View, to: FxVec2, extra: &[Disc]) -> Vec<FxVec2> {
+        let terrain = view.terrain;
         if terrain.volume.is_some() {
-            return haulers::route_at(terrain, body.position, self.height, to, None, body.base_radius, extra);
+            return haulers::route_at(terrain, body.position, self.height, to, None, body.base_radius, extra, self.walks_lit(terrain).then_some(view.light));
         }
         nav::path_avoiding(terrain, body.position, to, body.base_radius, extra)
     }
@@ -651,13 +742,16 @@ pub(super) fn act(body: &mut Body, sprite: &mut SpriteState, action: &Action, vi
                 Some(Step::DigWall { layer, .. }) => Some(crate::volume::height(*layer)),
                 // A site's floor (M8.6): a lantern's in a tunnel.
                 Some(Step::Supply(site) | Step::Install { site, .. }) => view.buildings.get(*site as usize).map(|b| b.height),
+                // A stranded miner's way back to light (M8.7): its level.
+                _ if sprite.light.stranded && sprite.retreating() => Some(sprite.height),
                 _ => None,
             };
-            body.route = haulers::route_at(view.terrain, body.position, sprite.height, *target, floor, body.base_radius, &[]);
+            let lit = sprite.walks_lit(view.terrain).then_some(view.light);
+            body.route = haulers::route_at(view.terrain, body.position, sprite.height, *target, floor, body.base_radius, &[], lit);
             sprite.backoff.planned(view.tick, !body.route.is_empty(), 0);
             sprite.retry_at = sprite.retry_at.max(sprite.backoff.at);
         }
-        Action::Move(Intent::GoTo { target, .. }) => body.route = sprite.route_to(body, view.terrain, *target, &[]),
+        Action::Move(Intent::GoTo { target, .. }) => body.route = sprite.route_to(body, view, *target, &[]),
         _ => debug_assert!(false, "sprites only go to points: {action:?}"),
     }
 }
@@ -713,6 +807,7 @@ pub(super) fn self_update(a: &mut AgentState, me: AgentIx, ctx: &Ctx) {
 /// never its route or what it holds.
 pub(super) fn think(a: &mut AgentState, view: &View, town: &Town) -> Option<Action> {
     let AgentState { body, carry, role: Role::Sprite(sprite), .. } = a else { unreachable!("sprites think") };
+    sprite.see_light(body, view, town);
     for _ in 0..PASSES {
         match sprite.progress(body, carry, view, town) {
             Progress::Stay(action) => return action,

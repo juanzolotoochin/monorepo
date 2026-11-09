@@ -286,7 +286,7 @@ fn a_miner_flees_a_ghoul_home_and_goes_back_to_work() {
     let away = (at - terrain.center).normalize_or_zero();
     let position = at + away * fx(2.5);
     let height = terrain.height(position);
-    let route = super::chase::route_home_at(terrain, position, height, terrain.center + FxVec2::new(fx(1.8), fx(-0.6))).0;
+    let route = super::chase::route_home_at(terrain, &sim.world().settlement().unwrap().light, position, height, terrain.center + FxVec2::new(fx(1.8), fx(-0.6))).0;
     assert!(!route.is_empty());
     let character = Content::builtin().names.character_index("ghoul_sacred_tree").unwrap();
     let s = sim.world_mut().settlement_mut();

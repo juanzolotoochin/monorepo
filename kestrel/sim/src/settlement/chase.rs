@@ -54,6 +54,7 @@ use content::character::ChaseDef;
 use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
+use super::light::LightGrid;
 use super::{AgentIx, AgentState, BuildingIx, Settlement, Stage, Threat};
 use crate::messages::{Messages, ThreatGoal};
 use crate::nav::{self, distance};
@@ -196,7 +197,8 @@ pub(super) fn walk_route_at(position: &mut FxVec2, height: &mut Fx, route: &mut 
 /// backoff allows: every `follow::REPLAN_TICKS`, or, after a plan that
 /// didn't reach, longer (meanwhile it waits at the path's end, as close as
 /// it gets).
-pub(super) fn chase_at(t: &mut Threat, to: FxVec2, feet: Fx, stop: Fx, step: Fx, tick: u64, terrain: &Terrain) {
+#[allow(clippy::too_many_arguments)]
+pub(super) fn chase_at(t: &mut Threat, to: FxVec2, feet: Fx, stop: Fx, step: Fx, tick: u64, terrain: &Terrain, light: &LightGrid) {
     let same = (feet - t.height).abs() <= super::combat::FLOOR_REACH;
     let gap = distance(t.position, to);
     if same && gap <= stop {
@@ -216,7 +218,8 @@ pub(super) fn chase_at(t: &mut Threat, to: FxVec2, feet: Fx, stop: Fx, step: Fx,
         // take the path.
     }
     if t.backoff.due(tick) {
-        let plan = nav::path_toward_at(terrain, t.position, t.height, to, Some(feet), WALK_CLEARANCE, &[]);
+        let shun = shun(terrain, light);
+        let plan = nav::path_toward_with(terrain, t.position, t.height, to, Some(feet), WALK_CLEARANCE, &[], shun.as_deref());
         t.backoff.planned(tick, plan.reached, super::follow::REPLAN_TICKS);
         t.chase = plan.route.into_iter().map(|(p, _)| p).collect();
     }
@@ -231,10 +234,30 @@ pub(super) fn chase_at(t: &mut Threat, to: FxVec2, feet: Fx, stop: Fx, step: Fx,
 
 /// [`route_home`] in a volume scene (M8.2): a 3D path from `from`, feet at
 /// `z`, to `target` on its top floor (`nav::path_toward_at`), or as close
-/// as it gets, and whether it gets there.
-pub(super) fn route_home_at(terrain: &Terrain, from: FxVec2, z: Fx, target: FxVec2) -> (Vec<FxVec2>, bool) {
-    let plan = nav::path_toward_at(terrain, from, z, target, Some(terrain.height(target)), WALK_CLEARANCE, &[]);
+/// as it gets, and whether it gets there. Lantern light costs it more
+/// (`shun`).
+pub(super) fn route_home_at(terrain: &Terrain, light: &LightGrid, from: FxVec2, z: Fx, target: FxVec2) -> (Vec<FxVec2>, bool) {
+    let shun = shun(terrain, light);
+    let plan = nav::path_toward_with(terrain, from, z, target, Some(terrain.height(target)), WALK_CLEARANCE, &[], shun.as_deref());
     (plan.route.into_iter().map(|(p, _)| p).collect(), plan.reached)
+}
+
+/// What a step onto a lantern-lit node adds to a ghoul's 3D plan (M8.7 of
+/// the Sacred Tree depths, L4), in the planner's units (10 a half-tile
+/// step): 30, so a lit tile costs a ghoul four tiles' walk. A dark way up
+/// to about three times as long as a lit one wins; a lit way is never
+/// barred, so a ghoul still comes in after a quarry standing in light, by
+/// the darkest way there. Only the lanterns' light counts
+/// (`LightGrid::lantern`), not open sky: the surface is lit for sprites
+/// (L3) but costs a ghoul nothing.
+pub const LIT_STEP: u32 = 30;
+
+/// A ghoul's [`nav::Weigh`] over `light`: `LIT_STEP` on any lantern-lit
+/// floor, nothing elsewhere. None while nothing is lit, so its plans are
+/// the ones they were.
+pub(super) fn shun<'a>(terrain: &'a Terrain, light: &'a LightGrid) -> Option<Box<dyn Fn(FxVec2, Fx) -> Option<u32> + 'a>> {
+    light.cells().next()?;
+    Some(Box::new(move |p, z| Some(if light.lantern(terrain, p, z) > 0 { LIT_STEP } else { 0 })))
 }
 
 /// Where a threat set down at `position` puts its feet: in a volume scene
@@ -495,7 +518,7 @@ impl Settlement {
     fn replan_route(&mut self, i: usize, terrain: &Terrain) {
         let t = &self.threats[i];
         let Some(target) = self.waves.get(t.wave as usize).map(|w| w.target).or(t.route.last().copied()) else { return };
-        let (route, reaches) = if terrain.volume.is_some() { route_home_at(terrain, t.position, t.height, target) } else { route_home(terrain, t.position, target) };
+        let (route, reaches) = if terrain.volume.is_some() { route_home_at(terrain, &self.light, t.position, t.height, target) } else { route_home(terrain, t.position, target) };
         if !route.is_empty() {
             self.threats[i].route = route;
             self.threats[i].stranded = !reaches;

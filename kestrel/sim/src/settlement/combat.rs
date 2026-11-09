@@ -117,7 +117,7 @@ fn follow_route(t: &mut Threat, speed: Fx, full_hp: u32, tick: u64, terrain: &Te
 /// plans its way to its wave's `target` again from where it stands, when
 /// its backoff allows.
 #[allow(clippy::too_many_arguments)]
-fn follow_route_at(t: &mut Threat, speed: Fx, full_hp: u32, tick: u64, terrain: &Terrain, quarry: Option<(FxVec2, Fx)>, stop: Fx, target: Option<FxVec2>) -> Fx {
+fn follow_route_at(t: &mut Threat, speed: Fx, full_hp: u32, tick: u64, terrain: &Terrain, light: &super::light::LightGrid, quarry: Option<(FxVec2, Fx)>, stop: Fx, target: Option<FxVec2>) -> Fx {
     let previous = t.position;
     let recoiling = tick < t.stagger_until;
     let mut knocked = Fx::ZERO;
@@ -136,11 +136,11 @@ fn follow_route_at(t: &mut Threat, speed: Fx, full_hp: u32, tick: u64, terrain: 
     } else {
         let wounded = if t.hp < full_hp { Fx::from_ratio(11, 20) } else { Fx::ONE };
         match quarry {
-            Some((to, feet)) => super::chase::chase_at(t, to, feet, stop, speed * wounded, tick, terrain),
+            Some((to, feet)) => super::chase::chase_at(t, to, feet, stop, speed * wounded, tick, terrain, light),
             None => {
                 let walked = super::chase::walk_route_at(&mut t.position, &mut t.height, &mut t.route, speed * wounded, terrain);
                 if let Some(target) = target.filter(|_| !walked && t.backoff.due(tick)) {
-                    let (route, reaches) = super::chase::route_home_at(terrain, t.position, t.height, target);
+                    let (route, reaches) = super::chase::route_home_at(terrain, light, t.position, t.height, target);
                     t.backoff.planned(tick, reaches, 0);
                     if !route.is_empty() {
                         t.route = route;
@@ -706,7 +706,7 @@ impl Settlement {
                 (def.movement.walk / per_second, def.health.as_ref().map_or(0, |h| h.hp), stop)
             })
             .collect();
-        let (agents, buildings, kinds, waves) = (&self.agents, &self.buildings, &self.building_kinds, &self.waves);
+        let (agents, buildings, kinds, waves, light) = (&self.agents, &self.buildings, &self.building_kinds, &self.waves, &self.light);
         let volume = terrain.volume.is_some();
         let knockback_moved: Fx = self
             .threats
@@ -725,7 +725,7 @@ impl Settlement {
                 if volume {
                     let (quarry, stop) = quarry.map_or((None, stop), |(at, feet, stop)| (Some((at, feet)), stop));
                     let target = waves.get(t.wave as usize).map(|w| w.target).or(t.route.last().copied());
-                    return follow_route_at(t, speed, full_hp, tick, terrain, quarry, stop, target);
+                    return follow_route_at(t, speed, full_hp, tick, terrain, light, quarry, stop, target);
                 }
                 let (quarry, stop) = quarry.map_or((None, stop), |(at, _, stop)| (Some(at), stop));
                 follow_route(t, speed, full_hp, tick, terrain, quarry, stop)
@@ -1465,7 +1465,7 @@ impl Settlement {
         if self.waves[w].route.is_none() {
             let wave = &self.waves[w];
             let (route, _) = if terrain.volume.is_some() {
-                super::chase::route_home_at(terrain, wave.position, feet, wave.target)
+                super::chase::route_home_at(terrain, &self.light, wave.position, feet, wave.target)
             } else {
                 nav::path_toward(terrain, wave.position, wave.target, super::chase::WALK_CLEARANCE)
             };

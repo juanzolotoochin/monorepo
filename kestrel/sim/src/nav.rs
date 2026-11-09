@@ -288,7 +288,62 @@ pub fn plan_at(
     budget: u32,
     toward: bool,
 ) -> PathAt {
+    plan_with(terrain, start, z, goal, goal_z, radius, extra, budget, toward, None)
+}
+
+/// What a 3D plan makes of a node ([`plan_with`]), by its lattice point
+/// and feet height: the extra cost of stepping onto it, in the search's
+/// units (10 a half-tile step, 14 a diagonal one), or `None` where the
+/// body may not go. M8.7 of the Sacred Tree depths: a sprite underground
+/// walks lit floors only (L3), a ghoul pays more for lantern light (L4).
+pub type Weigh<'a> = &'a dyn Fn(FxVec2, Fx) -> Option<u32>;
+
+/// [`path_at`] with a [`Weigh`] on its nodes.
+#[allow(clippy::too_many_arguments)]
+pub fn path_at_with(terrain: &Terrain, start: FxVec2, z: Fx, goal: FxVec2, goal_z: Option<Fx>, radius: Fx, extra: &[Disc], weigh: Option<Weigh>) -> Vec<(FxVec2, Fx)> {
+    plan_with(terrain, start, z, goal, goal_z, radius, extra, PATH_BUDGET, false, weigh).route
+}
+
+/// [`path_toward_at`] with a [`Weigh`] on its nodes.
+#[allow(clippy::too_many_arguments)]
+pub fn path_toward_with(terrain: &Terrain, start: FxVec2, z: Fx, goal: FxVec2, goal_z: Option<Fx>, radius: Fx, extra: &[Disc], weigh: Option<Weigh>) -> PathAt {
+    plan_with(terrain, start, z, goal, goal_z, radius, extra, PATH_BUDGET, true, weigh)
+}
+
+/// [`plan_at`] with a [`Weigh`] on its nodes (none: every node is free).
+/// The search adds each node's weight to the step onto it and never steps
+/// onto a node weighed `None`; the start's node is exempt (a body may
+/// always leave where it stands), the goal's are not. The goal's flood
+/// keeps off barred nodes too, so a goal shut in by them is found shut
+/// early. A string-pulled segment, and the straight walk to the goal tried
+/// first, are taken only where every half tile along it weighs no more than
+/// the heaviest of the nodes it stands for, so pulling never cuts a corner
+/// through a barred or dearer tile. Deterministic as long as `weigh` is.
+#[allow(clippy::too_many_arguments)]
+pub fn plan_with(
+    terrain: &Terrain,
+    start: FxVec2,
+    z: Fx,
+    goal: FxVec2,
+    goal_z: Option<Fx>,
+    radius: Fx,
+    extra: &[Disc],
+    budget: u32,
+    toward: bool,
+    weigh: Option<Weigh>,
+) -> PathAt {
     use crate::terrain::LAYER;
+    // Whether a straight walk from `a` (feet `za`) to `b` (feet `zb`)
+    // weighs at most `most` at every half tile past `a` (`None`: anything
+    // goes). Always true without a weigh.
+    let along = |a: FxVec2, za: Fx, b: FxVec2, zb: Fx, most: Option<u32>| -> bool {
+        let (Some(weigh), Some(most)) = (weigh, most) else { return true };
+        let n = ((b - a).length() / SPACING).ceil().floor_to_int().max(1);
+        (1..=n).all(|i| {
+            let t = Fx::from_ratio(i, n);
+            weigh(a + (b - a) * t, za + (zb - za) * t).is_some_and(|w| w <= most)
+        })
+    };
     if terrain.volume.is_none() {
         let route: Vec<_> = path_avoiding(terrain, start, goal, radius, extra).into_iter().map(|p| (p, terrain.height(p))).collect();
         return PathAt { reached: !route.is_empty(), route, expanded: 0 };
@@ -305,9 +360,21 @@ pub fn plan_at(
     }
     let wanted = floor.zip(goal_z).map(|(floor, goal_z)| floor.unwrap_or(goal_z));
     let arrives = |end: Fx| open && wanted.is_none_or(|w| (end - w).abs() <= LAYER);
-    if let Some(end) = walk(&grid, start, z, goal).filter(|&end| arrives(end)) {
+    if let Some(end) = walk(&grid, start, z, goal).filter(|&end| arrives(end) && along(start, z, goal, end, Some(0))) {
         return PathAt { route: vec![(goal, end)], reached: true, expanded: 0 };
     }
+    // Each node's weight, made when first asked for.
+    let mut weights: Vec<Option<Option<u32>>> = Vec::new();
+    let weight = |weights: &mut Vec<Option<Option<u32>>>, floors: &Floors, n: usize| -> Option<u32> {
+        let Some(weigh) = weigh else { return Some(0) };
+        if weights.len() <= n {
+            weights.resize(floors.nodes.len().max(n + 1), None);
+        }
+        *weights[n].get_or_insert_with(|| {
+            let (cell, h) = floors.nodes[n];
+            weigh(grid.point(cell), h)
+        })
+    };
     let (width, height) = (grid.width, grid.height);
     let mut floors = Floors { cells: vec![None; width * height], nodes: Vec::new() };
     let lattice = |p: FxVec2| -> (i64, i64) {
@@ -347,6 +414,9 @@ pub fn plan_at(
         for cell in near(lattice(goal)) {
             for n in floors.of(&grid, cell) {
                 if let Some(end) = walk(&grid, grid.point(cell), floors.nodes[n].1, goal).filter(|&end| arrives(end)) {
+                    if weight(&mut weights, &floors, n).is_none() {
+                        continue;
+                    }
                     last.push((n, end));
                 }
             }
@@ -410,7 +480,7 @@ pub fn plan_at(
                     for (from, _) in neighbours(cell) {
                         for u in floors.of(&grid, from) {
                             grow(&mut costs, &mut parents, &mut back, floors.nodes.len());
-                            if back[u] {
+                            if back[u] || weight(&mut weights, &floors, u).is_none() {
                                 continue;
                             }
                             if walk(&grid, grid.point(from), floors.nodes[u].1, grid.point(cell)).is_some_and(|arrived| (arrived - h).abs() <= LAYER) {
@@ -452,9 +522,10 @@ pub fn plan_at(
         stalled += 1;
         let (cell, z) = floors.nodes[current];
         for (next_cell, diagonal) in neighbours(cell) {
-            let new_cost = cost + if diagonal { 14 } else { 10 };
             let Some(arrived) = walk(&grid, grid.point(cell), z, grid.point(next_cell)) else { continue };
             let Some(next) = floors.at(&grid, next_cell, arrived) else { continue };
+            let Some(extra) = weight(&mut weights, &floors, next) else { continue };
+            let new_cost = cost + if diagonal { 14 } else { 10 } + extra;
             grow(&mut costs, &mut parents, &mut back, floors.nodes.len());
             if costs[next] == u32::MAX {
                 if back[next] {
@@ -492,13 +563,23 @@ pub fn plan_at(
     // String pulling: from each waypoint, the furthest of the next nodes a
     // straight walk reaches on their floor, stopping at the first it
     // doesn't.
+    // With a weigh, a segment weighs no more anywhere than the heaviest
+    // node it stands for (`along`).
+    let heavy: Vec<Option<u32>> = match weigh {
+        Some(weigh) => raw.iter().map(|&(p, h)| weigh(p, h)).collect(),
+        None => Vec::new(),
+    };
     let mut route = Vec::new();
     let (mut from, mut feet) = (start, z);
     let mut i = 0;
     while i < raw.len() {
         let mut next = (i, raw[i].1);
+        let mut most = Some(0u32);
         for j in i..raw.len().min(i + MAX_SEGMENT as usize) {
-            match walk(&grid, from, feet, raw[j].0).filter(|&h| (h - raw[j].1).abs() <= LAYER) {
+            if let Some(&w) = heavy.get(j) {
+                most = most.zip(w).map(|(a, b)| a.max(b));
+            }
+            match walk(&grid, from, feet, raw[j].0).filter(|&h| (h - raw[j].1).abs() <= LAYER && along(from, feet, raw[j].0, h, most)) {
                 Some(h) => next = (j, h),
                 None if j > i => break,
                 None => {}

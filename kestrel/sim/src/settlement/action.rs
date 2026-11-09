@@ -190,6 +190,9 @@ pub struct View<'a> {
     /// The buildings and their kinds, which a sprite plans its job over.
     pub buildings: &'a [BuildingState],
     pub building_kinds: &'a [BuildingKind],
+    /// The light grid (M8.6), refreshed before the tick: where sprites may
+    /// walk and work underground (M8.7, L3).
+    pub light: &'a super::light::LightGrid,
 }
 
 impl Settlement {
@@ -211,6 +214,7 @@ impl Settlement {
             characters: &self.characters,
             buildings: &self.buildings,
             building_kinds: &self.building_kinds,
+            light: &self.light,
         }
     }
 

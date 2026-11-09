@@ -181,7 +181,7 @@ pub(super) fn story(sim: &Simulation, who: AgentIx) -> String {
 }
 
 /// Runs until `who`'s first dig has started and ended, returning it.
-fn first_dig(sim: &mut Simulation, who: AgentIx, seconds: u64) -> super::avatar::Dig {
+pub(super) fn first_dig(sim: &mut Simulation, who: AgentIx, seconds: u64) -> super::avatar::Dig {
     let mut first = None;
     for _ in 0..seconds * HZ {
         step(sim, &[]);
@@ -203,9 +203,12 @@ fn first_dig(sim: &mut Simulation, who: AgentIx, seconds: u64) -> super::avatar:
 fn a_miner_digs_a_tunnel_wall_beside_it_never_its_floor_or_ceiling() {
     let mut sim = map();
     let (wall, stand, floor) = tunnel(&mut sim);
+    // A lantern lights the tunnel: miners work only in light (M8.7).
+    let lantern_at = tile(&sim, 16, -26);
+    super::light_tests::light_up(&mut sim, lantern_at, floor);
     let wall_from_tree = (wall.0 - tile(&sim, 0, 0).0, wall.1 - tile(&sim, 0, 0).1);
     strip_ore(&mut sim, |t| t != wall_from_tree);
-    let targets = miners::search(sim.world().terrain(), Terrain::pit_tile(stone_pile(&sim)), sprite_radius());
+    let targets = miners::search(sim.world().terrain(), &settlement(&sim).light, Terrain::pit_tile(stone_pile(&sim)), sprite_radius());
     eprintln!("targets: {targets:?}");
     assert_eq!((targets[0].tile, targets[0].stand, targets[0].wall), (wall, stand, Some(floor)), "the amber wall first");
     assert!(targets.iter().all(|t| t.wall.is_some()), "walls only, in a volume");
@@ -242,6 +245,9 @@ fn a_miner_walks_into_the_mountain_cave_and_mines_amber() {
     let mut sim = map();
     let mountain = |t: (i32, i32)| (-16..=4).contains(&t.0) && (-68..=-47).contains(&t.1);
     strip_ore(&mut sim, |t| !mountain(t));
+    // A lantern in the hall's middle lights it (M8.7: miners work in light).
+    let lantern_at = tile(&sim, -6, -50);
+    super::light_tests::light_up(&mut sim, lantern_at, -2);
     mine(&mut sim, REED);
     let dig = first_dig(&mut sim, REED, 300);
     let (x, z) = (dig.tile.0 - tile(&sim, 0, 0).0, dig.tile.1 - tile(&sim, 0, 0).1);
@@ -266,6 +272,9 @@ fn a_miner_walks_into_the_mountain_cave_and_mines_amber() {
 fn a_miner_never_digs_a_protected_column() {
     let mut sim = map();
     let (wall, _, floor) = tunnel(&mut sim);
+    // Lit, so the wall would be a target but for the pile (M8.7).
+    let lantern_at = tile(&sim, 16, -26);
+    super::light_tests::light_up(&mut sim, lantern_at, floor);
     // Amber all through the plateau's north edge and the ground at its foot.
     let cliff: Vec<(i32, i32)> = (-20..=-12).flat_map(|z| (-4..=4).map(move |x| (x, z))).map(|(x, z)| tile(&sim, x, z)).collect();
     {
@@ -281,7 +290,7 @@ fn a_miner_never_digs_a_protected_column() {
     let terrain = sim.world().terrain();
     let hill: Vec<_> = cliff.iter().filter(|&&t| terrain.is_undiggable(t)).collect();
     assert!(!hill.is_empty() && hill.len() < cliff.len(), "the plateau's edge and its foot");
-    let targets = miners::search(terrain, Terrain::pit_tile(stone_pile(&sim)), sprite_radius());
+    let targets = miners::search(terrain, &settlement(&sim).light, Terrain::pit_tile(stone_pile(&sim)), sprite_radius());
     assert!(targets.iter().all(|t| !terrain.is_undiggable(t.tile)), "no target on the hill: {targets:?}");
     // Wood on the wall's column (miners don't fetch wood).
     let wood = settlement(&sim).item_index("wood").unwrap();
@@ -322,7 +331,7 @@ fn a_miner_never_digs_a_protected_column() {
 fn with_no_faces_a_miner_idles_by_the_stone_pile() {
     let mut sim = map();
     strip_ore(&mut sim, |_| true);
-    assert!(miners::search(sim.world().terrain(), Terrain::pit_tile(stone_pile(&sim)), sprite_radius()).is_empty());
+    assert!(miners::search(sim.world().terrain(), &settlement(&sim).light, Terrain::pit_tile(stone_pile(&sim)), sprite_radius()).is_empty());
     mine(&mut sim, REED);
     for _ in 0..30 * HZ {
         step(&mut sim, &[]);
@@ -403,7 +412,7 @@ fn buried_vein() -> (u64, (i32, i32)) {
         let sim = small_town(seed);
         let (s, terrain) = (settlement(&sim), sim.world().terrain());
         let view = s.view(ELDER, 0, terrain);
-        let targets = miners::search(terrain, Terrain::pit_tile(stone_pile(&sim)), sprite_radius());
+        let targets = miners::search(terrain, &settlement(&sim).light, Terrain::pit_tile(stone_pile(&sim)), sprite_radius());
         if !targets.iter().all(|t| view.dig_blocked(t.tile).is_some()) {
             continue;
         }

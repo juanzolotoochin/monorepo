@@ -121,12 +121,12 @@ fn ground_under_open_sky_counts_as_lit() {
 }
 
 /// The lantern kind's index.
-fn lantern(sim: &Simulation) -> BuildingKindIx {
+pub(super) fn lantern(sim: &Simulation) -> BuildingKindIx {
     settlement(sim).building_kinds.iter().position(|k| k.is_lantern()).expect("the town has lanterns") as BuildingKindIx
 }
 
 /// Puts the elder in the middle of `on`, its feet at `feet`, standing.
-fn put_elder(sim: &mut Simulation, on: (i32, i32), feet: Fx) {
+pub(super) fn put_elder(sim: &mut Simulation, on: (i32, i32), feet: Fx) {
     let s = sim.world_mut().settlement_mut();
     let player = s.player().unwrap() as usize;
     let a = &mut s.agents[player];
@@ -139,7 +139,7 @@ fn put_elder(sim: &mut Simulation, on: (i32, i32), feet: Fx) {
 }
 
 /// Puts `units` of the town's stone and amber in the tree's piles.
-fn stock(sim: &mut Simulation, units: u32) {
+pub(super) fn stock(sim: &mut Simulation, units: u32) {
     let s = settlement(sim);
     let (stone, amber) = (s.stone_depot().unwrap(), s.amber_depot().unwrap());
     let turn: Vec<_> = [stone, amber].into_iter().map(|(item, depot)| command(CommandKind::AddStock { depot, item, units })).collect();
@@ -147,7 +147,7 @@ fn stock(sim: &mut Simulation, units: u32) {
 }
 
 /// Runs until building `b` is built, at most `seconds`.
-fn until_built(sim: &mut Simulation, b: BuildingIx, seconds: u64) {
+pub(super) fn until_built(sim: &mut Simulation, b: BuildingIx, seconds: u64) {
     for _ in 0..seconds * HZ {
         step(sim, &[]);
         if settlement(sim).buildings[b as usize].built() {
@@ -277,4 +277,31 @@ fn a_lantern_on_the_surface_lights_its_ground_and_has_no_slot() {
     let lantern = &s.buildings[b as usize];
     assert_eq!(lantern.slot_position(s.building_kind(b)), lantern.position, "no slot");
     assert!(!terrain.obstacles.iter().any(|o| o.center == lantern.position), "no obstacle");
+}
+
+/// Puts up a built lantern in the middle of `at`, on its floor at `floor`
+/// (a blueprint put down from there, then finished at once), and steps a
+/// tick so the grid has its light: for tests of what reads the light
+/// (M8.7). The elder goes back where it stood.
+pub(super) fn light_up(sim: &mut Simulation, at: (i32, i32), floor: i32) -> BuildingIx {
+    let player = settlement(sim).player().unwrap() as usize;
+    let (was, feet) = {
+        let a = &settlement(sim).agents[player];
+        (a.body.position, a.avatar().unwrap().height)
+    };
+    put_elder(sim, (at.0 - 1, at.1), height(floor));
+    let kind = lantern(sim);
+    step(sim, &[command(CommandKind::PlaceBlueprint { kind, position: Terrain::pit_center(at) })]);
+    let s = sim.world_mut().settlement_mut();
+    let b = s.buildings.len() - 1;
+    assert!(s.building_kind(b as BuildingIx).is_lantern() && s.buildings[b].site().is_some(), "the lantern's blueprint went down: {:?}", s.events);
+    s.buildings[b].stage = Stage::Built;
+    let a = &mut s.agents[player];
+    a.body.position = was;
+    let avatar = a.avatar_mut().unwrap();
+    avatar.height = feet;
+    avatar.flight.support = feet;
+    step(sim, &[]);
+    assert!(settlement(sim).light.level(at, floor) > 0, "it lights its floor");
+    b as BuildingIx
 }

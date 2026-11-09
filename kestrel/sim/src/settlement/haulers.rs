@@ -168,7 +168,7 @@ impl HaulerState {
     /// alone: a trailer follows its hitch.
     pub(super) fn plan(&self, body: &Body, terrain: &Terrain, to: FxVec2, extra: &[Disc]) -> Vec<FxVec2> {
         if terrain.volume.is_some() {
-            return route_at(terrain, body.position, self.height, to, None, self.radius(body), extra);
+            return route_at(terrain, body.position, self.height, to, None, self.radius(body), extra, None);
         }
         let (Some(t), Some(e)) = (&self.trailer, &self.equipment) else {
             return nav::path_avoiding(terrain, body.position, to, self.radius(body), extra);
@@ -225,9 +225,15 @@ impl HaulerState {
 /// whichever floor at `to` it reaches first, as the avatar's `GoTo`
 /// plans, or to the floor nearest `goal_z` there if it names one. Its
 /// waypoints' heights are dropped: the walker's feet follow the floors as
-/// it steps (`move_worker`).
-pub(super) fn route_at(terrain: &Terrain, from: FxVec2, z: Fx, to: FxVec2, goal_z: Option<Fx>, radius: Fx, extra: &[Disc]) -> Vec<FxVec2> {
-    nav::path_at(terrain, from, z, to, goal_z, radius, extra).into_iter().map(|(p, _)| p).collect()
+/// it steps (`move_worker`). With `lit`, only through lit floors (M8.7 of
+/// the depths design, L3: a sprite underground; open sky is lit). Haulers
+/// plan without: they run between docks, which stand on the top floor, and
+/// no volume scene has any yet.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn route_at(terrain: &Terrain, from: FxVec2, z: Fx, to: FxVec2, goal_z: Option<Fx>, radius: Fx, extra: &[Disc], lit: Option<&super::light::LightGrid>) -> Vec<FxVec2> {
+    let lit = lit.map(|light| move |p: FxVec2, h: Fx| light.sprite_lit(terrain, p, h).then_some(0u32));
+    let weigh = lit.as_ref().map(|w| w as nav::Weigh);
+    nav::path_at_with(terrain, from, z, to, goal_z, radius, extra, weigh).into_iter().map(|(p, _)| p).collect()
 }
 
 /// The feet of a body at `p` on the top floor there, in a volume scene: a
@@ -519,7 +525,7 @@ pub(super) trait Walker {
     /// The trailer's footprint, which it steers clear of too.
     fn trailer_disc(&self) -> Option<Disc>;
     /// A route to `to`, also avoiding `extra` discs.
-    fn route_to(&self, body: &Body, terrain: &Terrain, to: FxVec2, extra: &[Disc]) -> Vec<FxVec2>;
+    fn route_to(&self, body: &Body, view: &super::action::View, to: FxVec2, extra: &[Disc]) -> Vec<FxVec2>;
     /// Its feet's height, which its steps follow in a volume scene (M8.2).
     fn height(&mut self) -> &mut Fx;
     /// The way the body is going (`HaulerState::travel_heading`).
@@ -550,8 +556,8 @@ impl Walker for HaulerState {
         }
     }
 
-    fn route_to(&self, body: &Body, terrain: &Terrain, to: FxVec2, extra: &[Disc]) -> Vec<FxVec2> {
-        self.plan(body, terrain, to, extra)
+    fn route_to(&self, body: &Body, view: &super::action::View, to: FxVec2, extra: &[Disc]) -> Vec<FxVec2> {
+        self.plan(body, view.terrain, to, extra)
     }
 
     fn height(&mut self) -> &mut Fx {
@@ -650,7 +656,7 @@ pub(super) fn move_worker(body: &mut Body, hauler: &mut impl Walker, me: AgentIx
         let goal = *body.route.last().expect("non-empty route");
         let detour = {
             let saved = std::mem::take(&mut body.route);
-            let detour = hauler.route_to(body, ctx.terrain, goal, &nearby[..dynamic]);
+            let detour = hauler.route_to(body, &ctx.view, goal, &nearby[..dynamic]);
             body.route = saved;
             detour
         };
@@ -808,7 +814,7 @@ fn decide(a: &AgentState, hauler: &HaulerState, me: AgentIx, s: &super::Settleme
         let radius = hauler.radius(body);
         let linked = || match terrain.volume {
             // From the pickup's floor to the drop's (M8.2).
-            Some(_) => !route_at(terrain, from, top_feet(terrain, from, radius), to, None, radius, &[]).is_empty(),
+            Some(_) => !route_at(terrain, from, top_feet(terrain, from, radius), to, None, radius, &[], None).is_empty(),
             None => !nav::path(terrain, from, to, radius).is_empty(),
         };
         if route.is_empty() || !linked() {

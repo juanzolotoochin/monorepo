@@ -1234,6 +1234,8 @@ mod lane_tests;
 #[cfg(test)]
 mod light_tests;
 #[cfg(test)]
+mod dark_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod combat_tests;

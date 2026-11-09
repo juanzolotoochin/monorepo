@@ -1,6 +1,6 @@
 # Kestrel Sacred Tree depths (design)
 
-Status: agreed (2026-11-06), M8.1 to M8.6 done. Tasks in
+Status: agreed (2026-11-06), M8.1 to M8.7 done. Tasks in
 [`todo/sacred-tree.md`](todo/sacred-tree.md) under M8. It builds on the
 verticality MVP in [`VERTICALITY.md`](VERTICALITY.md) (PR #135) and its
 line-of-sight prototype, and the rules for the work in
@@ -81,10 +81,32 @@ is something you build: sprites only work where lanterns shine.
 - Underground, sprites only walk and work on lit tiles.
 - The surface always counts as lit (sun or moon).
 
+### L3a. A lantern errand may walk in the dark (M8.7, for review)
+
+- The gap L3 leaves: the first lantern of a dark tunnel could never be
+  built, since sprites can't walk to its site.
+- A miner on a lantern errand (fetching for, supplying or installing a
+  lantern's site) may walk dark floors, only for that errand. It never
+  mines in the dark: a wall is a target only from a lit stand that lit
+  floors join to the stone pile.
+- A sprite left where it shouldn't be (in the dark, or in a lit pool cut
+  off by a dark way, where an errand left it) walks back to the nearest
+  lit floor on its level within 12 tiles, or home, through the dark.
+- So a deep stretch is mined once lanterns light the way to it from the
+  surface: one lantern every 10 m or so of tunnel.
+- Only scenes with a lantern to build are ruled by light: the Tunnel Lab
+  has none, and its sprites walk anywhere, as before.
+
 ### L4. Ghouls avoid light
 
 - Lit tiles cost more in a ghoul's path when another way exists; ghouls
   are never blocked, and a chasing ghoul still comes in.
+- M8.7: a lantern-lit node costs a ghoul 30 more in its plan (a half-tile
+  step is 10), so a lit tile costs four tiles' walk: a dark way up to about
+  three times as long wins. Only lanterns' light counts, not open sky.
+- Dawn still burns every ghoul, underground and in the dark too (balance:
+  a night ends for all); whether an unlit ghoul underground outlives
+  dawn is for M8.8.
 
 ### L5. The elder's lamp is for seeing
 

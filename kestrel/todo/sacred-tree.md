@@ -4,38 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M8.7 Sprites and ghouls read light
-
-- **Status:** open
-- **Why:** light matters to the town (L3, L4).
-- **What to do:** underground, sprites only walk and work on lit tiles
-  (the surface counts as lit); ghouls' paths cost more on lit tiles but
-  never block.
-- **Where:** `sim/src/nav.rs`, `sprites.rs`, `miners.rs`, `chase.rs`.
-- **Found in:** depths design.
-- **Tests:** a sprite won't mine a dark face and will once lit; a ghoul
-  takes the dark route when one exists and still reaches a lit target.
-  Note (from M8.2): the dawn still dispels ghouls on every floor; decide
-  whether ghouls underground (unlit) survive it.
-  Note (from M8.4): where miners need light: `miners::wall_search` (skip
-  floors and the stand tiles that are dark, so a wall is a target only from
-  a lit stand), `Step::DigWall` in `sprites.rs` (refuse to start, or stop,
-  on a dark tile), the pile fetch in `miners::plan` (`stand_spot`), and the
-  `GoTo` routes (`haulers::route_at`: dark tiles are walls underground for
-  sprites). The search's cache is keyed by terrain revision only: key it
-  by the light grid's revision too.
-  Note (from M8.6): the query is `Settlement::light_at(terrain, tile,
-  layer) -> Fx` (0..1, `light::LightGrid::at`) and `Settlement::lit(terrain,
-  p, z)` (a body's feet), both 1 under open sky and without a volume;
-  `Settlement::light.level(tile, layer)` is the grid's byte and
-  `light.revision` goes up when the light changes (key caches by it). The
-  grid is derived (not saved or hashed) and refreshed before and after
-  every tick, so the brains read this tick's. A lantern blueprint's site
-  is supplied by miners (`miners::lantern_errand`): once dark tiles stop
-  sprites, a miner can't walk into a dark tunnel to build its first
-  lantern; let a lantern's site and the tiles on the way count as lit for
-  its errand, or let the elder's lamp-lit tiles count for that (L5 says
-  the lamp doesn't count).
 ## M8.8 Tuning, soak and demo
 
 - **Status:** open
@@ -75,6 +43,19 @@ its milestones, in order; one PR per milestone.
   Whether miners should also supply other kinds' sites, a lantern's post
   blocking bodies, and a tunnel lantern protecting the ground over it from
   digs are open.
+  Note (from M8.7): light. Miners mine only walls joined to the stone pile
+  by lit floors, so a deep stretch needs a chain of lanterns (one about
+  every 10 m): tune the range or say so in the demo. A ghoul's lit cost
+  (`chase::LIT_STEP` 30) makes its plans into a lit stretch expand more
+  nodes: count them in the soak against `nav::PATH_BUDGET`. Wave routes
+  (`WaveState::route`) are planned once and replanned on ground changes,
+  not when a lantern's light changes. Dawn still burns every ghoul,
+  underground too: decide whether an unlit ghoul underground outlives it.
+  A stranded miner's retreat (`Targets::retreat`) picks the nearest tile in
+  reach by straight distance, which may be past a wall (it gives it up
+  after two asks, then goes home); a traffic detour planned from a swerve
+  into the dark ignores the rule (rare). The elder's lamp still doesn't
+  count (L5); the test walker and haulers ignore light.
 
 ## A possessed ballista fires faster
 
@@ -283,6 +264,100 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M7.5.
 
 ## Done
+
+### M8.7 Sprites and ghouls read light
+
+- **Status:** done (branch `kestrel-sacred-tree-depths`)
+- **Why:** light matters to the town (L3, L4).
+- **What to do:** underground, sprites only walk and work on lit tiles
+  (the surface counts as lit); ghouls' paths cost more on lit tiles but
+  never block.
+- **Where:** `sim/src/nav.rs`, `sprites.rs`, `miners.rs`, `chase.rs`.
+- **Found in:** depths design.
+- **Tests:** a sprite won't mine a dark face and will once lit; a ghoul
+  takes the dark route when one exists and still reaches a lit target.
+  Note (from M8.2): the dawn still dispels ghouls on every floor; decide
+  whether ghouls underground (unlit) survive it.
+  Note (from M8.4): where miners need light: `miners::wall_search` (skip
+  floors and the stand tiles that are dark, so a wall is a target only from
+  a lit stand), `Step::DigWall` in `sprites.rs` (refuse to start, or stop,
+  on a dark tile), the pile fetch in `miners::plan` (`stand_spot`), and the
+  `GoTo` routes (`haulers::route_at`: dark tiles are walls underground for
+  sprites). The search's cache is keyed by terrain revision only: key it
+  by the light grid's revision too.
+  Note (from M8.6): the query is `Settlement::light_at(terrain, tile,
+  layer) -> Fx` (0..1, `light::LightGrid::at`) and `Settlement::lit(terrain,
+  p, z)` (a body's feet), both 1 under open sky and without a volume;
+  `Settlement::light.level(tile, layer)` is the grid's byte and
+  `light.revision` goes up when the light changes (key caches by it). The
+  grid is derived (not saved or hashed) and refreshed before and after
+  every tick, so the brains read this tick's. A lantern blueprint's site
+  is supplied by miners (`miners::lantern_errand`): once dark tiles stop
+  sprites, a miner can't walk into a dark tunnel to build its first
+  lantern; let a lantern's site and the tiles on the way count as lit for
+  its errand, or let the elder's lamp-lit tiles count for that (L5 says
+  the lamp doesn't count).
+
+- **Done:** **Nav**: `nav::plan_with` (and `path_at_with`,
+  `path_toward_with`) takes a `nav::Weigh`, a node's extra cost or `None`
+  where the body may not go; the start's node is exempt, the goal's nodes
+  and the goal's flood keep off barred nodes, and string pulling (and the
+  straight walk tried first) takes a segment only where every half tile
+  weighs no more than the heaviest node it replaces, so no corner is cut
+  through the dark or the light. `plan_at` is `plan_with` with none:
+  heightfield scenes and every old plan are unchanged (golden unchanged).
+  **Sprites (L3)**: `haulers::route_at` takes the light grid, and a
+  sprite's routes in a volume keep to lit floors (`LightGrid::sprite_lit`:
+  open sky is lit) unless it is on a lantern errand
+  (`SpriteState::on_errand`: a plan with `Fetch`, `Supply` or `Install`)
+  or stranded; traffic detours too (`Walker::route_to` now takes the
+  `View`, which gained `light`). `miners::wall_search` walks lit floors
+  only, so a wall is a target only from a lit stand joined to the stone
+  pile by lit floors; the floors it walked are the miner's reach
+  (`Targets::reaches`), cached with the targets by (terrain revision, light
+  revision); a pile is fetched only from a lit spot (`stand_spot`); a
+  `DigWall` doesn't start on an unlit tile (it gives the spot up as before).
+  **L3a (the gap, for the user's review, in `SACRED_TREE_DEPTHS.md`)**: a
+  miner on a lantern errand walks dark floors for it only, never mines in
+  the dark. **Stranded**: worked out every tick by the brain
+  (`SpriteState::see_light`, `sprites::Lighting`, not state): a miner off
+  its reach (in the dark, or in a lit pool a dark way cuts off), another
+  sprite in the dark. A stranded miner not on an errand, standing still,
+  drops its plan and walks back (through the dark) to the nearest tile in
+  its reach on its level within `miners::RETREAT_TILES` (12, the lower
+  tile on a tie, skipping tiles it gave up), or home. Light governs only
+  scenes that have a lantern kind (`LightGrid::governs`): the Tunnel Lab's
+  sprites walk anywhere, as before. **Ghouls (L4)**: `chase::LIT_STEP` 30
+  per lantern-lit node (a half-tile step costs 10, so a lit tile costs four
+  tiles' walk), via `chase::shun` in every threat plan (`chase_at`'s 3D
+  chase, `route_home_at`: wave routes, replans, giving up); only lantern
+  light (`LightGrid::lantern`), not open sky; never barred; none while
+  nothing is lit. **Dawn**: kept, every ghoul burns at dawn, underground
+  too (noted for M8.8). Haulers keep no light rule (no volume scene has
+  any; their docks are on the top floor); the elder and the test walker
+  ignore light. Save format unchanged (45): nothing new is saved. Tests
+  (`sim/src/settlement/dark_tests.rs`): `a_sprite_wont_route_through_a_dark_tunnel`
+  (round by an open-sky gap, nowhere without one, through once lit),
+  `a_ghoul_takes_the_dark_way_and_still_reaches_a_lit_target` (two tunnels
+  of one length, whichever is lit; a target in the lit one; the lit one
+  the only way), `a_miner_wont_mine_a_dark_face_and_will_once_a_lantern_lights_it`,
+  `a_miner_on_a_lantern_errand_walks_into_the_dark_and_builds_it`,
+  `a_miner_stranded_in_the_dark_walks_back_to_light`,
+  `a_ghoul_comes_into_a_lit_tunnel_after_a_sprite` (in the town's tunnel,
+  hits it there), `light_read_miners_are_deterministic_across_threads_and_saves`;
+  `light_tests::light_up` puts up a built lantern for tests;
+  `LightGrid::of_lamps` (test only) a grid from lamps. Updated: the
+  tunnel-wall, cave-amber and protected-column miner tests light their
+  tunnel or the cave's hall with a lantern. `//kestrel/sim:sim_test`
+  passes (the happy path, the soaks and golden among it); save and app
+  unchanged, not run. No screenshots.
+  Not done, for later (M8.8, notes there): wave routes planned before a
+  lantern goes up aren't replanned for its light; a stranded miner's
+  retreat picks the nearest tile by straight distance (it may be past a
+  wall: it gives it up after two asks, then home); a traffic detour from
+  a swerve into the dark is planned without the rule; the dawn rule
+  underground; the cost of ghoul plans into lit stretches against
+  `nav::PATH_BUDGET`.
 
 ### M8.6 Lanterns and the light grid
 

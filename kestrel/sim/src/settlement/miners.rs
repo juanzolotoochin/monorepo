@@ -48,8 +48,19 @@
 //! winning a near tie, and amber counting for four tiles of stone. The
 //! dig's stone and amber land on piles on the miner's floor
 //! (`PileLab::mined_at`), which miners carry up to the tree: stone to the
-//! stone pile, amber to the amber pile. No light checks yet (M8.7: the
-//! search's floors and the walls beside them are where they go).
+//! stone pile, amber to the amber pile.
+//!
+//! **Light (M8.7, L3):** underground a miner walks and works only on lit
+//! floors (open sky is lit), so the wall search walks lit floors only: a
+//! wall is a target only from a lit stand that a lit way joins to the
+//! stone pile. The floors it walked are the miner's *reach*
+//! (`Targets::reaches`); a miner standing off it (in the dark, or in a lit
+//! pool a dark way cuts off, where a lantern errand left it) is stranded
+//! and walks back to the nearest floor in reach on its level, or home
+//! (`retreat`, `sprites`). A pile is fetched only from a lit spot. The
+//! search is cached by the terrain's revision and the light grid's.
+//! Lantern errands are exempt (L3a of the depths design): a miner may walk
+//! dark floors to put up a lantern, never to mine.
 //!
 //! [`HEADROOM`]: crate::volume::HEADROOM
 
@@ -59,6 +70,7 @@ use content::character::SpriteMineDef;
 use fx::{Fx, FxVec2};
 
 use super::action::View;
+use super::light::LightGrid;
 use super::sprites::{SpriteState, Step};
 use super::{AgentIx, Body, BuildingIx, Carry, DepotIx, ItemIx, Kinds, Settlement};
 use crate::mine::{Veins, AMBER, AMBER_ID, STONE, STONE_ID};
@@ -95,6 +107,9 @@ pub const AMBER_WORTH: u32 = 4;
 /// richer wall far off brings no more stone an hour), and ore breaks
 /// near ties: a stone cell is worth 2 tiles, an amber cell 8.
 pub const TILES_PER_WORTH: u32 = 2;
+/// How far, in tiles along x or y, a stranded miner looks for a floor in
+/// its reach on its level to walk back to (`retreat`); past it, home.
+pub const RETREAT_TILES: i32 = 12;
 /// How far beside the stone pile a miner with nothing to do waits.
 const WAIT_GAP: Fx = Fx::from_ratio(6, 5);
 /// How close to its waiting spot counts as there.
@@ -222,13 +237,15 @@ pub struct Target {
     pub walk: u32,
 }
 
-/// The search's result for one terrain revision (`search`). Not state: a
-/// fresh copy (a loaded save) searches the same ground again and finds the
-/// same, so any two compare equal.
+/// The search's result for one terrain revision and light grid revision
+/// (`search`): the targets, and in a volume the floors the search walked
+/// (the miner's reach). Not state: a fresh copy (a loaded save) searches
+/// the same ground again and finds the same, so any two compare equal.
 #[derive(Clone, Debug, Default)]
 pub struct Targets {
-    revision: Option<u64>,
+    revision: Option<(u64, u64)>,
     list: Vec<Target>,
+    reach: Option<BTreeSet<((i32, i32), i32)>>,
 }
 
 impl PartialEq for Targets {
@@ -241,13 +258,50 @@ impl Eq for Targets {}
 
 impl Targets {
     /// The stone tiles to dig on `terrain`, searching again only when its
-    /// revision changed.
-    pub fn get(&mut self, terrain: &Terrain, origin: (i32, i32), radius: Fx) -> &[Target] {
-        if self.revision != Some(terrain.revision) {
-            self.list = search(terrain, origin, radius);
-            self.revision = Some(terrain.revision);
-        }
+    /// revision or the light's changed.
+    pub fn get(&mut self, terrain: &Terrain, light: &LightGrid, origin: (i32, i32), radius: Fx) -> &[Target] {
+        self.refresh(terrain, light, origin, radius);
         &self.list
+    }
+
+    fn refresh(&mut self, terrain: &Terrain, light: &LightGrid, origin: (i32, i32), radius: Fx) {
+        let revision = Some((terrain.revision, light.revision));
+        if self.revision != revision {
+            (self.list, self.reach) = searched(terrain, light, origin, radius);
+            self.revision = revision;
+        }
+    }
+
+    /// Whether the floor within a layer of `layer` of `tile` is in the reach of a search
+    /// from `origin` (a volume's wall search walked it: lit, and joined to
+    /// the stone pile by lit floors). `None` with no wall search (no volume,
+    /// or no stone veins).
+    pub fn reaches(&mut self, terrain: &Terrain, light: &LightGrid, origin: (i32, i32), radius: Fx, tile: (i32, i32), layer: i32) -> Option<bool> {
+        self.refresh(terrain, light, origin, radius);
+        self.reach.as_ref().map(|reach| (layer - 1..=layer + 1).any(|l| reach.contains(&(tile, l))))
+    }
+
+    /// Where a stranded miner on `tile`'s floor at `layer` walks back to
+    /// (see the module doc): the middle of the nearest tile, within
+    /// `RETREAT_TILES`, with a floor in reach within a layer of its own (the
+    /// lower tile on a tie), skipping tiles in `skip`. As of the last
+    /// search (`reaches` refreshes it).
+    pub fn retreat(&self, tile: (i32, i32), layer: i32, skip: &[(i32, i32)]) -> Option<FxVec2> {
+        let reach = self.reach.as_ref()?;
+        let mut best: Option<(i32, (i32, i32))> = None;
+        for dy in -RETREAT_TILES..=RETREAT_TILES {
+            for dx in -RETREAT_TILES..=RETREAT_TILES {
+                let t = (tile.0 + dx, tile.1 + dy);
+                let key = (dx * dx + dy * dy, t);
+                if best.is_some_and(|b| b <= key) || skip.contains(&t) {
+                    continue;
+                }
+                if (layer - 1..=layer + 1).any(|l| reach.contains(&(t, l))) {
+                    best = Some(key);
+                }
+            }
+        }
+        best.map(|(_, t)| Terrain::pit_center(t))
     }
 }
 
@@ -255,10 +309,18 @@ impl Targets {
 /// that a body of `radius` may dig from a tile beside them: at most
 /// `TARGETS`, nearest first, in a fixed order on ties. In a volume, the
 /// best walls instead (`wall_search`).
-pub fn search(terrain: &Terrain, origin: (i32, i32), radius: Fx) -> Vec<Target> {
-    let Some(mine) = terrain.mine().filter(|m| m.spec.veins == Veins::Stone) else { return Vec::new() };
+pub fn search(terrain: &Terrain, light: &LightGrid, origin: (i32, i32), radius: Fx) -> Vec<Target> {
+    searched(terrain, light, origin, radius).0
+}
+
+/// [`search`], and in a volume the floors its wall search walked (the
+/// reach, `Targets::reaches`).
+#[allow(clippy::type_complexity)]
+fn searched(terrain: &Terrain, light: &LightGrid, origin: (i32, i32), radius: Fx) -> (Vec<Target>, Option<BTreeSet<((i32, i32), i32)>>) {
+    let Some(mine) = terrain.mine().filter(|m| m.spec.veins == Veins::Stone) else { return (Vec::new(), None) };
     if let Some(volume) = &terrain.volume {
-        return wall_search(terrain, volume, origin, radius);
+        let (walls, reach) = wall_search(terrain, volume, light, origin, radius);
+        return (walls, Some(reach));
     }
     let ground = |t: (i32, i32)| terrain.inside(Terrain::pit_center(t)) && terrain.tile_height(t).is_some();
     let mut seen = BTreeSet::from([origin]);
@@ -273,7 +335,7 @@ pub fn search(terrain: &Terrain, origin: (i32, i32), radius: Fx) -> Vec<Target> 
             if mine.ore(n, terrain.pit(n)) == Some(STONE) && !targets.iter().any(|x| x.tile == n) && terrain.dig_refusal(t, n, radius).is_none() {
                 targets.push(Target { tile: n, stand: t, depth: terrain.dug(n), wall: None, worth: 1, walk });
                 if targets.len() >= TARGETS {
-                    return targets;
+                    return (targets, None);
                 }
             }
             let (a, b) = (Terrain::pit_center(t), Terrain::pit_center(n));
@@ -283,7 +345,7 @@ pub fn search(terrain: &Terrain, origin: (i32, i32), radius: Fx) -> Vec<Target> 
             }
         }
     }
-    targets
+    (targets, None)
 }
 
 /// The worth of the wall a miner standing on a floor at layer `floor`
@@ -316,12 +378,13 @@ pub fn wall_left(terrain: &Terrain, tile: (i32, i32), bottom: i32) -> bool {
     terrain.volume.as_ref().is_some_and(|volume| (bottom..bottom + HEADROOM).any(|layer| volume.is_solid(tile, layer)))
 }
 
-/// The best walls to mine in a volume, by a walk over floors from
+/// The best walls to mine in a volume, by a walk over lit floors from
 /// `origin`'s top floor (see the module doc): at most `TARGETS`, best
 /// first (`better`). Each tile is a target once, from the floor and stand
-/// it is worth the most from.
-fn wall_search(terrain: &Terrain, volume: &Volume, origin: (i32, i32), radius: Fx) -> Vec<Target> {
-    let Some(start) = volume.top(origin) else { return Vec::new() };
+/// it is worth the most from. With them, every floor it walked: the reach.
+#[allow(clippy::type_complexity)]
+fn wall_search(terrain: &Terrain, volume: &Volume, light: &LightGrid, origin: (i32, i32), radius: Fx) -> (Vec<Target>, BTreeSet<((i32, i32), i32)>) {
+    let Some(start) = volume.top(origin) else { return (Vec::new(), BTreeSet::new()) };
     let mut seen = BTreeSet::from([(origin, start)]);
     let mut open = VecDeque::from([(origin, start, 0u32)]);
     let mut walls: std::collections::BTreeMap<(i32, i32), Target> = std::collections::BTreeMap::new();
@@ -343,7 +406,8 @@ fn wall_search(terrain: &Terrain, volume: &Volume, origin: (i32, i32), radius: F
                 }
             }
             let Some(next) = volume.floor_near(n, floor) else { continue };
-            if !seen.contains(&(n, next)) && terrain.clear(Terrain::pit_center(t), Terrain::pit_center(n), radius) {
+            // A miner walks lit floors only (L3).
+            if !seen.contains(&(n, next)) && light.sprite_at(terrain, n, next) && terrain.clear(Terrain::pit_center(t), Terrain::pit_center(n), radius) {
                 seen.insert((n, next));
                 open.push_back((n, next, walk + 1));
             }
@@ -356,7 +420,7 @@ fn wall_search(terrain: &Terrain, volume: &Volume, origin: (i32, i32), radius: F
         _ => std::cmp::Ordering::Equal,
     });
     walls.truncate(TARGETS);
-    walls
+    (walls, seen)
 }
 
 /// Whether wall `a` scores better than `b`: a shorter walk less its worth
@@ -438,7 +502,7 @@ pub(super) fn plan(sprite: &mut SpriteState, body: &Body, carry: &Carry, view: &
     // no one else claimed and nothing stands on.
     if town.mine.is_some() && room {
         let me = view.me;
-        let targets = sprite.targets.get(view.terrain, Terrain::pit_tile(dock), body.base_radius);
+        let targets = sprite.targets.get(view.terrain, view.light, Terrain::pit_tile(dock), body.base_radius);
         let target = targets.iter().find(|t| {
             !town.claims.iter().any(|&(tile, a)| tile == t.tile && a != me) && view.dig_blocked(t.tile).is_none() && !unreachable.contains(&t.stand)
         });
@@ -468,7 +532,8 @@ fn stand_spot(view: &View, pile: &super::piles::Pile, from: FxVec2, dock: FxVec2
     sides.into_iter().filter(|&side| side != FxVec2::ZERO).map(|side| pile + side * gap).find(|&spot| {
         let tile = Terrain::pit_tile(spot);
         let ground = match &terrain.volume {
-            Some(_) => terrain.footprint_at(spot, feet, radius).is_some_and(|h| (h - feet).abs() <= LAYER),
+            // Lit (L3, M8.7): a miner picks a pile up in light only.
+            Some(_) => terrain.footprint_at(spot, feet, radius).is_some_and(|h| (h - feet).abs() <= LAYER && view.light.sprite_lit(terrain, spot, h)),
             None => !terrain.steep(tile) && terrain.dug(tile) <= terrain.dug(Terrain::pit_tile(pile)) + 1,
         };
         terrain.inside(spot) && ground

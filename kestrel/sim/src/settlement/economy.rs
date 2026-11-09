@@ -35,7 +35,7 @@ impl Settlement {
             let a = &self.agents[p as usize];
             Some((a.body.position, a.avatar()?.height))
         });
-        let Settlement { agents, characters, dock_owner, depots, links, piles, transfers, weapons, spawn, spawn_height, piano_serial, vehicles, buildings, building_kinds, .. } = self;
+        let Settlement { agents, characters, dock_owner, depots, links, piles, transfers, weapons, spawn, spawn_height, piano_serial, vehicles, buildings, building_kinds, light, .. } = self;
         let view = View {
             me: 0,
             tick,
@@ -52,6 +52,7 @@ impl Settlement {
             characters,
             buildings,
             building_kinds,
+            light,
         };
         let ctx = Ctx { tick, characters, terrain, piles: piles.as_ref(), footprints: &footprints, dock_owner, depots, links, transfers, view, dig_claims: &dig_claims, errands: &errands, stone, amber, danger: &danger, leader };
         agents.par_iter_mut().enumerate().for_each(|(i, a)| haulers::self_update(a, i as AgentIx, &ctx));

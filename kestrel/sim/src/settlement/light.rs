@@ -25,8 +25,10 @@
 //! the one it had. `LightGrid::revision` counts the recomputes that changed
 //! the grid, for the view (`sight::Key::light`).
 //!
-//! **What it is for.** Nothing in the sim reads it yet (M8.7: sprites work
-//! only where it is lit underground, ghouls prefer the dark). The query is
+//! **What it is for (M8.7).** Underground, sprites walk and work only where
+//! it is lit (`sprite_lit`, in scenes it `governs`: those with a lantern
+//! kind), and ghouls pay more for lantern light (`lantern`,
+//! `chase::shun`). The query is
 //! [`LightGrid::at`] (a tile's floor, 0..1) and [`LightGrid::lit`] (a body's
 //! feet); both count ground under open sky as lit (the sun or the moon, L3),
 //! and every scene without a volume too. The elder's lamp is view only (L5):
@@ -68,6 +70,11 @@ pub struct LightGrid {
     /// Goes up by one each time a recompute changes the light.
     pub revision: u64,
     cells: BTreeMap<((i32, i32), i32), u8>,
+    /// Whether the scene can light its depths at all: it has a building
+    /// kind that gives light (a lantern). Only then do sprites keep to
+    /// light (M8.7, L3); a volume scene with no lanterns to build (the
+    /// Tunnel Lab) leaves its sprites free, as they were.
+    pub governs: bool,
 }
 
 impl PartialEq for LightGrid {
@@ -104,14 +111,55 @@ impl LightGrid {
     /// floor's `at` is more than 0. A body on no floor (in the air) reads
     /// the layer its feet are in.
     pub fn lit(&self, terrain: &Terrain, p: FxVec2, z: Fx) -> bool {
-        let layer = terrain.volume.as_ref().and_then(|v| v.floor_at(p, z)).map_or_else(|| volume::layer_at(z), |(floor, _)| floor);
-        self.at(terrain, Terrain::pit_tile(p), layer) > Fx::ZERO
+        self.at(terrain, Terrain::pit_tile(p), feet_layer(terrain, p, z)) > Fx::ZERO
     }
+
+    /// Whether a sprite at `p`, feet at `z`, stands where it may walk and
+    /// work (M8.7, L3): lit (`lit`), or anywhere in a scene the light
+    /// doesn't govern.
+    pub fn sprite_lit(&self, terrain: &Terrain, p: FxVec2, z: Fx) -> bool {
+        !self.governs || self.lit(terrain, p, z)
+    }
+
+    /// `at` as a sprite reads it (`sprite_lit`): whether `tile`'s floor at
+    /// `layer` is one it may walk.
+    pub fn sprite_at(&self, terrain: &Terrain, tile: (i32, i32), layer: i32) -> bool {
+        !self.governs || self.at(terrain, tile, layer) > Fx::ZERO
+    }
+
+    /// The lanterns' own light (`level`) on the floor of a body at `p`
+    /// whose feet are at `z`, whatever the sky: what a ghoul shuns (M8.7,
+    /// L4). Open sky alone gives none.
+    pub fn lantern(&self, terrain: &Terrain, p: FxVec2, z: Fx) -> u8 {
+        if self.cells.is_empty() {
+            return 0;
+        }
+        self.level(Terrain::pit_tile(p), feet_layer(terrain, p, z))
+    }
+
+    /// A grid lit by `lamps` over `terrain`'s volume, keyed as if no
+    /// building gave light: for tests of what reads the grid, in scenes
+    /// with no lantern kind. It stays until the ground changes.
+    #[cfg(test)]
+    pub fn of_lamps(terrain: &Terrain, lamps: &[Lamp]) -> LightGrid {
+        let cells = terrain.volume.as_ref().map_or_else(BTreeMap::new, |volume| compute(volume, lamps));
+        LightGrid { key: Some((terrain.revision, Vec::new())), revision: 1, cells, governs: true }
+    }
+}
+
+/// The floor layer a body at `p` with its feet at `z` stands on, or the
+/// layer its feet are in when on none (in the air).
+fn feet_layer(terrain: &Terrain, p: FxVec2, z: Fx) -> i32 {
+    terrain.volume.as_ref().and_then(|v| v.floor_at(p, z)).map_or_else(|| volume::layer_at(z), |(floor, _)| floor)
+}
+
+impl LightGrid {
 
     /// Recomputes the grid if the terrain's revision or the built lanterns
     /// changed since it was computed; returns whether its light changed
     /// (and its revision went up).
     pub fn refresh(&mut self, terrain: &Terrain, buildings: &[BuildingState], kinds: &[BuildingKind]) -> bool {
+        self.governs = kinds.iter().any(|k| k.light.is_some());
         let lamps = lamps(terrain, buildings, kinds);
         if self.key.as_ref().is_some_and(|(revision, old)| *revision == terrain.revision && *old == lamps) {
             return false;
