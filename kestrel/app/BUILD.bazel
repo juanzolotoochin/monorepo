@@ -313,13 +313,15 @@ filegroup(
     output_group = "video",
 )
 
-# The Sacred Tree's fog of war (M9.2 of the fog design, M9.4 makes it the
-# review demo): the elder walks out from the tree west down the ramp and
-# round to the mountain's cave by day, the fog opening and staying
-# remembered (a pile dropped and a site laid out west stay as last seen,
-# M9.3), into the cave's passage, waits there to dusk at 4x, and comes out
-# under the night's shorter sight, to the west ramp's foot as the night's
-# column comes up it: heard by their eyes, then in sight.
+# The Sacred Tree's fog of war (M9.2 of the fog design, the review demo
+# since M9.4): by day the elder looks out from the hill's north-west corner,
+# walks west down the ramp, the fog opening and staying remembered (a pile
+# dropped and a site laid out west stay as last seen, M9.3), lays a lantern
+# site that two miners build, and goes round to the mountain's cave at 2x,
+# waiting in its passage at 4x. It comes out late in the day: dusk halves
+# its sight by the lantern, whose pool stays in sight; at the west ramp's
+# foot the night's column is heard by its eyes (a growl), then a ghoul is in
+# sight, and the elder walks on past the lantern's pool. 3117 frames.
 game_demo(
     name = "sacred_tree_fog_demo",
     game = ":demo",

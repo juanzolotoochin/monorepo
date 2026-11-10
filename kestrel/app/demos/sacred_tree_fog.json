@@ -12,6 +12,18 @@
     },
     {
       "op": "settlement_stock",
+      "depot": "tree_stone",
+      "item": "stone",
+      "units": 1
+    },
+    {
+      "op": "settlement_stock",
+      "depot": "tree_amber",
+      "item": "amber",
+      "units": 1
+    },
+    {
+      "op": "settlement_stock",
       "depot": "tree_wood",
       "item": "wood",
       "units": 12
@@ -23,8 +35,26 @@
     {
       "op": "walk",
       "position": [
+        -4,
+        -8
+      ]
+    },
+    {
+      "op": "walk",
+      "position": [
+        -13,
+        -13
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 50
+    },
+    {
+      "op": "walk",
+      "position": [
         -12,
-        0
+        -1
       ]
     },
     {
@@ -71,14 +101,43 @@
     },
     {
       "op": "wait",
-      "frames": 60
+      "frames": 40
     },
     {
       "op": "walk",
       "position": [
         -36,
-        -20
+        -19
       ]
+    },
+    {
+      "op": "settlement_place_blueprint",
+      "kind": "lantern",
+      "position": [
+        -30,
+        -19
+      ]
+    },
+    {
+      "op": "settlement_cancel_build"
+    },
+    {
+      "op": "settlement_sprite_job",
+      "sprite": "sprite_reed",
+      "job": "mine"
+    },
+    {
+      "op": "settlement_sprite_job",
+      "sprite": "sprite_moss",
+      "job": "mine"
+    },
+    {
+      "op": "wait",
+      "frames": 20
+    },
+    {
+      "op": "settlement_rate",
+      "rate": 2.0
     },
     {
       "op": "walk",
@@ -95,8 +154,12 @@
       ]
     },
     {
+      "op": "settlement_rate",
+      "rate": 1.0
+    },
+    {
       "op": "wait",
-      "frames": 45
+      "frames": 30
     },
     {
       "op": "walk",
@@ -144,7 +207,7 @@
     },
     {
       "op": "wait",
-      "frames": 210
+      "frames": 48
     },
     {
       "op": "settlement_rate",
@@ -174,9 +237,13 @@
     {
       "op": "walk",
       "position": [
-        -20,
-        -24
+        -26,
+        -23
       ]
+    },
+    {
+      "op": "wait",
+      "frames": 90
     },
     {
       "op": "walk",
@@ -192,13 +259,13 @@
     {
       "op": "walk",
       "position": [
-        -22,
-        -3
+        -25,
+        -6
       ]
     },
     {
       "op": "wait",
-      "frames": 90
+      "frames": 75
     },
     {
       "op": "walk",
@@ -208,8 +275,26 @@
       ]
     },
     {
+      "op": "walk",
+      "position": [
+        -28,
+        -19
+      ]
+    },
+    {
       "op": "wait",
-      "frames": 60
+      "frames": 45
+    },
+    {
+      "op": "walk",
+      "position": [
+        -18,
+        -28
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 90
     }
   ]
 }

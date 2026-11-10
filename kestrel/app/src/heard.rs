@@ -22,7 +22,13 @@ pub const GROWL_GAP: f32 = 1.5;
 /// The eyes' height over a ghoul's feet, meters.
 pub const EYES: f32 = 1.45;
 /// The eyes' color.
-const GLOW: Color = Color::srgb(1.0, 0.32, 0.08);
+const GLOW: Color = Color::srgb(1.0, 0.55, 0.1);
+/// One eye's size on screen, pixels: big enough to read at the town's zoom
+/// in a phone-sized video (M9.4; 6 x 5 was lost there).
+const DOT: (f32, f32) = (10.0, 8.0);
+/// The gap between the eyes and the glow's margin round them, pixels.
+const GAP: f32 = 10.0;
+const MARGIN: (f32, f32) = (6.0, 5.0);
 
 /// The ghouls heard this frame, by id, and where their eyes are.
 #[derive(Resource, Default)]
@@ -91,8 +97,8 @@ pub fn draw(
         drawn.push(*id);
         match camera.0.world_to_viewport(camera.1, at) {
             Ok(v) => {
-                node.left = px(v.x - 12.0);
-                node.top = px(v.y - 5.5);
+                node.left = px(v.x - (MARGIN.0 + DOT.0 + GAP / 2.0));
+                node.top = px(v.y - (MARGIN.1 + DOT.1 / 2.0));
                 *visibility = Visibility::Inherited;
             }
             Err(_) => *visibility = Visibility::Hidden,
@@ -104,13 +110,13 @@ pub fn draw(
                 Eyes(id),
                 service::WorldScoped::default(),
                 // A faint glow round the pair, so it reads at the town's zoom.
-                BackgroundColor(GLOW.with_alpha(0.16)),
-                Node { position_type: PositionType::Absolute, column_gap: px(6.0), padding: UiRect::axes(px(3.0), px(3.0)), border_radius: BorderRadius::all(px(5.0)), ..default() },
+                BackgroundColor(GLOW.with_alpha(0.22)),
+                Node { position_type: PositionType::Absolute, column_gap: px(GAP), padding: UiRect::axes(px(MARGIN.0), px(MARGIN.1)), border_radius: BorderRadius::all(px(9.0)), ..default() },
                 Visibility::Hidden,
             ))
             .with_children(|eyes| {
                 for _ in 0..2 {
-                    eyes.spawn((EyeDot, BackgroundColor(GLOW), Node { width: px(6.0), height: px(5.0), border_radius: BorderRadius::all(px(2.5)), ..default() }));
+                    eyes.spawn((EyeDot, BackgroundColor(GLOW), Node { width: px(DOT.0), height: px(DOT.1), border_radius: BorderRadius::all(px(DOT.1 / 2.0)), ..default() }));
                 }
             });
     }
