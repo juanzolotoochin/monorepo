@@ -743,8 +743,8 @@ pub(crate) fn character_def(file: SimFile) -> Result<CharacterDef, String> {
     let crawler = file.crawler.map(crawler_def).transpose()?;
     let mut vehicle_file = file.vehicle;
     if let (Some(c), Some(v)) = (&crawler, &mut vehicle_file) {
-        // Until the crawler walks on its feet (CR.2) it rolls like a rover
-        // on four points under its hips.
+        // The crawler walks (`sim::settlement::crawler`); its hips stand
+        // for the axles, its step for the climb and its deck for the seat.
         let two = Fx::from_int(2);
         for (field, value, from) in [
             ("wheelbase", &mut v.wheelbase, c.hip.along * two),

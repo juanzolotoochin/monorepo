@@ -21,6 +21,7 @@ pub mod buildings;
 pub mod chase;
 pub mod clock;
 pub mod combat;
+pub mod crawler;
 pub mod fire;
 mod economy;
 mod follow;
@@ -1006,7 +1007,18 @@ impl Settlement {
         }
         self.validate_buildings()?;
         self.validate_chases()?;
+        for v in &self.vehicles {
+            if let Some(c) = &self.characters[v.character as usize].crawler {
+                crawler::check_reach(v, c)?;
+            }
+        }
         Ok(())
+    }
+
+    /// Every crawler's planted feet stand on floors of `terrain`: the part
+    /// of `validate` that needs the ground.
+    pub fn validate_footholds(&self, terrain: &Terrain) -> Result<(), String> {
+        self.vehicles.iter().filter(|v| v.legs.is_some()).try_for_each(|v| crawler::check_floors(v, terrain))
     }
 
     /// What `holder` should hold reserved, `(out, in)` per item, recomputed

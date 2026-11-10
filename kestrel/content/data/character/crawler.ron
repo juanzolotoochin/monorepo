@@ -3,10 +3,11 @@
 // and drives it with the movement controls; run trots. Its feet step up or
 // down 1.5 m (three layers) and across gaps up to 2 m.
 //
-// Until its legs walk (CR.2) it rolls like the rover on four points under
-// its hips, so `vehicle` leaves out the wheelbase, track, climb and seat:
-// the `crawler` section sets them (twice the hip's offsets, the step and
-// the deck).
+// It walks on the footholds the simulation picks (sim::settlement::crawler).
+// `vehicle` holds how it speeds up, turns and how fast its body rises or
+// sinks to its feet (`lift`); it leaves out the wheelbase, track, climb and
+// seat, which the `crawler` section sets (twice the hip's offsets, the step
+// and the deck).
 (
     sim: (
         brain: Vehicle,
@@ -15,9 +16,11 @@
         body: (radius: 1.5),
         movement: (walk: 1.6, run: 3.2),
         vehicle: (
-            acceleration: 1.5, braking: 3, reverse: 0.8,
-            turn: 35,
-            lift: 1.5, gravity: 9.8,
+            acceleration: 1.0, braking: 3, reverse: 0.8,
+            // Slow enough that turning in place keeps the feet within 2 m
+            // of rest between steps.
+            turn: 20,
+            lift: 2.5, gravity: 9.8,
         ),
         crawler: (
             // 6 m long and 3 m wide, its deck 3 m over its feet (C2).

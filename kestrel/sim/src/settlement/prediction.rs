@@ -140,8 +140,9 @@ impl<'a> AvatarReplay<'a> {
         avatar::self_update(body, state, self.me, tick, terrain, self.piles.as_deref(), def);
         if let Some((_, v)) = self.vehicle.as_mut().filter(|(ix, _)| state.seat == Some(Seat::Vehicle(*ix))) {
             // As stage 2 drives it and housekeeping seats its driver.
+            // A crawler's feet keep clear of the bodies as confirmed.
             let vehicle_def = &s.characters[v.character as usize];
-            vehicle::self_update(v, terrain, vehicle_def);
+            vehicle::self_update_among(v, terrain, vehicle_def, &s.standing_for_crawlers());
             vehicle::seat(body, state, v, vehicle_def);
         }
         let mut out = Messages::default();

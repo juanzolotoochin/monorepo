@@ -21,10 +21,9 @@
 //! their mean height, rising at `lift` and falling under `gravity`. Discs,
 //! rock columns and the arena edge block it like an avatar's body.
 //!
-//! The crawler (`kestrel/CRAWLER.md`) is a vehicle too. Until its feet
-//! walk (CR.2) it rolls like this on four points under its hips, which its
-//! `crawler` section sets as the wheelbase and track, up steps of its
-//! `step` (1.5 m).
+//! The crawler (`kestrel/CRAWLER.md`) is a vehicle too, driven the same
+//! way, but it walks on four feet instead of rolling (`crawler`): its
+//! `legs` are set, and its `wheels` are its feet's floors.
 
 use content::character::{CharacterDef, CharacterIx, VehicleDef};
 use fx::{Fx, FxVec2};
@@ -32,6 +31,7 @@ use serde::{Deserialize, Serialize};
 
 use super::action::Action;
 use super::avatar::{AvatarState, BundleRefusal, Intent, Seat};
+use super::crawler::{self, Legs, Pose, Standing};
 use super::interact::{self, INTERACT_REACH};
 use super::{AgentIx, AgentState, BuildingIx, Event, Occupant, Role, Settlement, Slot};
 use crate::messages::Board;
@@ -43,9 +43,9 @@ pub type VehicleIx = u16;
 /// How far beyond touching a player can be to climb in, in meters.
 const BOARD_REACH: Fx = Fx::from_ratio(4, 5);
 /// A stick pointing further than this from the heading backs up (120°).
-const REVERSE_ANGLE: Fx = Fx::from_ratio(20_944, 10_000);
+pub(super) const REVERSE_ANGLE: Fx = Fx::from_ratio(20_944, 10_000);
 /// The longest stretch of a move checked at once, in meters.
-const SUBSTEP: Fx = Fx::from_ratio(1, 10);
+pub(super) const SUBSTEP: Fx = Fx::from_ratio(1, 10);
 /// A rock column blocks like the disc around it (as in `Terrain::clear`).
 const ROCK_RADIUS: Fx = Fx::from_ratio(71, 100);
 
@@ -67,6 +67,8 @@ pub struct VehicleState {
     pub wheels: [Fx; 4],
     /// What its driver asks for. Zero without a driver.
     pub control: Control,
+    /// A crawler's feet and gait (format 47); `None` for a rover.
+    pub legs: Option<Legs>,
 }
 
 /// A driver's controls: a direction on the ground (length 0 to 1) and
@@ -77,17 +79,26 @@ pub struct Control {
     pub boost: bool,
 }
 
-fn tuning(def: &CharacterDef) -> &VehicleDef {
+pub(super) fn tuning(def: &CharacterDef) -> &VehicleDef {
     def.vehicle.as_ref().expect("vehicle characters have vehicle tuning")
 }
 
 impl VehicleState {
     /// A parked vehicle at `position`, settled on the ground. `None` where
     /// a wheel would be over a drop or outside the arena.
+    /// A crawler stands with its feet at rest (`crawler::park`).
     pub fn new(character: CharacterIx, def: &CharacterDef, position: FxVec2, heading: Fx, terrain: &Terrain) -> Option<VehicleState> {
-        let wheels = ground_under(terrain, wheel_points(position, heading, tuning(def)), None)?;
-        let height = mean(wheels);
-        Some(VehicleState { character, position, heading, speed: Fx::ZERO, height, fall: Fx::ZERO, wheels, control: Control::default() })
+        let (wheels, height, legs) = match &def.crawler {
+            Some(c) => {
+                let (legs, height) = crawler::park(Pose { position, heading }, c, terrain)?;
+                (std::array::from_fn(|i| legs.feet[i].floor), height, Some(legs))
+            }
+            None => {
+                let wheels = ground_under(terrain, wheel_points(position, heading, tuning(def)), None)?;
+                (wheels, mean(wheels), None)
+            }
+        };
+        Some(VehicleState { character, position, heading, speed: Fx::ZERO, height, fall: Fx::ZERO, wheels, control: Control::default(), legs })
     }
 
     /// Where the driver sits: on the vehicle, facing its way, `seat` above
@@ -140,13 +151,13 @@ fn rollable(from: [Fx; 4], to: [Fx; 4], climb: Fx) -> bool {
     from.iter().zip(&to).all(|(&a, &b)| b - a <= climb)
 }
 
-fn approach(current: Fx, target: Fx, max_change: Fx) -> Fx {
+pub(super) fn approach(current: Fx, target: Fx, max_change: Fx) -> Fx {
     current + (target - current).clamp(-max_change, max_change)
 }
 
 /// Pushes a body of `radius` at `p` out of the terrain's discs and rock
 /// columns, three passes, and keeps it in the arena.
-fn push_out(terrain: &Terrain, mut p: FxVec2, radius: Fx) -> FxVec2 {
+pub(super) fn push_out(terrain: &Terrain, mut p: FxVec2, radius: Fx) -> FxVec2 {
     let (min, max) = (terrain.min(), terrain.max());
     let extra = Fx::from_ratio(1, 50);
     let rock = |p: FxVec2| {
@@ -200,9 +211,20 @@ pub(super) fn drive(vehicle: &mut VehicleState, action: &Action) -> bool {
     }
 }
 
-/// Stage 2 for one vehicle: turn and speed toward its controls, then roll
-/// over the ground.
+/// Stage 2 for one vehicle with nobody standing round it: see
+/// `self_update_among`.
+#[cfg(test)]
 pub(super) fn self_update(v: &mut VehicleState, terrain: &Terrain, def: &CharacterDef) {
+    self_update_among(v, terrain, def, &[]);
+}
+
+/// Stage 2 for one vehicle: turn and speed toward its controls, then roll
+/// over the ground. A crawler walks instead (`crawler::self_update`), its
+/// feet clear of `bodies`.
+pub(super) fn self_update_among(v: &mut VehicleState, terrain: &Terrain, def: &CharacterDef, bodies: &[Standing]) {
+    if v.legs.is_some() {
+        return crawler::self_update(v, terrain, def, bodies);
+    }
     let vd = tuning(def);
     let radius = def.body.radius;
     // The ground under it may have been dug since.
@@ -277,11 +299,21 @@ pub(super) fn self_update(v: &mut VehicleState, terrain: &Terrain, def: &Charact
 }
 
 impl Settlement {
-    /// Stage 2: every vehicle drives itself. Each writes only itself.
-    pub(super) fn vehicles_self_update(&mut self, terrain: &Terrain) {
+    /// Stage 2: every vehicle drives itself. Each writes only itself; a
+    /// crawler's feet keep clear of `bodies`, as they stood last tick.
+    pub(super) fn vehicles_self_update(&mut self, terrain: &Terrain, bodies: &[Standing]) {
         use rayon::prelude::*;
         let characters = &self.characters;
-        self.vehicles.par_iter_mut().for_each(|v| self_update(v, terrain, &characters[v.character as usize]));
+        self.vehicles.par_iter_mut().for_each(|v| self_update_among(v, terrain, &characters[v.character as usize], bodies));
+    }
+
+    /// The bodies a crawler's feet keep clear of, if there is a crawler.
+    pub(super) fn standing_for_crawlers(&self) -> Vec<Standing> {
+        if self.vehicles.iter().any(|v| v.legs.is_some()) {
+            crawler::standing(&self.agents)
+        } else {
+            Vec::new()
+        }
     }
 
     /// The vehicle `agent` drives, if it drives one.

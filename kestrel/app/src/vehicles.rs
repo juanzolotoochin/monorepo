@@ -11,8 +11,10 @@
 //!
 //! PLACEHOLDER until CR.3's rig (`kestrel/todo/vehicles.md`): a crawler (a
 //! vehicle with a `crawler` section) is drawn as a box its body's size, its
-//! top at the deck, with a cab on it and a post under each hip down to the
-//! ground in place of a wheel.
+//! top at the deck, level, with a cab on it and a post standing on each of
+//! its feet (`VehicleState::legs`) up to the deck: a planted foot where the
+//! simulation put it, a swinging one along a hop from where it lifted to
+//! where it lands.
 
 use bevy::prelude::*;
 use fx::Fx;
@@ -31,8 +33,9 @@ const CHASSIS_LIFT: f32 = 0.46;
 const WHEEL_EASE: f32 = 22.0;
 /// Higher than the wheels' ground by this, the rover is in the air.
 const AIRBORNE: f32 = 0.05;
-/// A placeholder crawler's body, top to bottom, and its legs' thickness.
-const CRAWLER_BODY: f32 = 0.9;
+/// A placeholder crawler's body, top to bottom (`crawler::BELLY`, which the
+/// simulation keeps clear of the ground), and its legs' thickness.
+const CRAWLER_BODY: f32 = 1.2;
 const CRAWLER_LEG: f32 = 0.35;
 
 /// The rovers drawn in this world.
@@ -146,6 +149,7 @@ fn spawn_crawler(commands: &mut Commands, parts: &Parts, index: usize, wheelbase
         })
         .id();
     let local = [(-track, wheelbase), (track, wheelbase), (-track, -wheelbase), (track, -wheelbase)].map(|(x, z)| Vec3::new(x / 2.0, 0.0, z / 2.0));
+    // Posts on the feet, placed by `draw`.
     let legs = local.map(|at| commands.spawn(block(&parts.brass, at, Vec3::new(CRAWLER_LEG, 1.0, CRAWLER_LEG))).id());
     let mut root = commands.spawn((
         Rover { index, chassis, wheels: legs, crawler: Some(c), contact: None, spin: 0.0, last: None },
@@ -215,6 +219,10 @@ fn draw(
             }
             _ => interpolated(&mirror, rover.index, v),
         };
+        if let (Some(c), Some(legs)) = (rover.crawler, &v.legs) {
+            draw_crawler(&mut transforms, &rover, entity, &mirror, &pose, &c, legs);
+            continue;
+        }
         // The ground under each wheel where it is drawn: in a volume, the
         // floor it rolls on, as `vehicle::self_update` reads it.
         let points = wheel_points(mirror.to_sim(pose.at), Fx::quantize(pose.heading), &t);
@@ -242,10 +250,7 @@ fn draw(
         let (left, right) = ((contact[0] + contact[2]) / 2.0, (contact[1] + contact[3]) / 2.0);
         let pitch = ((front - rear) / t.wheelbase.to_f32()).atan();
         let roll = ((left - right) / t.track.to_f32()).atan();
-        // A crawler's body hangs under its deck; a rover's chassis rides
-        // over its wheels.
-        let over = rover.crawler.map_or(CHASSIS_LIFT, |c| c.deck.to_f32() - CRAWLER_BODY / 2.0);
-        let lift = (contact.iter().sum::<f32>() / 4.0 + over).max(pose.base + over);
+        let lift = (contact.iter().sum::<f32>() / 4.0 + CHASSIS_LIFT).max(pose.base + CHASSIS_LIFT);
         if let Ok(mut root) = transforms.get_mut(entity) {
             *root = Transform::from_translation(pose.at).with_rotation(Quat::from_rotation_y(pose.heading));
         }
@@ -253,23 +258,53 @@ fn draw(
             chassis.translation.y = lift;
             chassis.rotation = Quat::from_rotation_x(-pitch) * Quat::from_rotation_z(-roll);
         }
-        if rover.crawler.is_some() {
-            // Each post from the ground under its hip up into the body.
-            let hip = lift - CRAWLER_BODY / 2.0 + 0.2;
-            for (i, &leg) in rover.wheels.iter().enumerate() {
-                if let Ok(mut l) = transforms.get_mut(leg) {
-                    let length = (hip - contact[i]).max(0.1);
-                    l.translation.y = contact[i] + length / 2.0;
-                    l.scale.y = length;
-                }
-            }
-            continue;
-        }
         for (i, &wheel) in rover.wheels.iter().enumerate() {
             if let Ok(mut w) = transforms.get_mut(wheel) {
                 w.translation.y = contact[i] + WHEEL_RADIUS;
                 w.rotation = Quat::from_rotation_x(rover.spin) * Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
             }
+        }
+    }
+}
+
+/// A placeholder crawler: its body level under its deck, at the height the
+/// simulation gives it, and a post on each foot up to the deck. A swinging
+/// foot hops from where it lifted to where it lands, `lift` at the top.
+fn draw_crawler(
+    transforms: &mut Query<&mut Transform, Without<Player>>,
+    rover: &Rover,
+    entity: Entity,
+    mirror: &WorldMirror,
+    pose: &Pose,
+    c: &content::character::CrawlerDef,
+    legs: &sim::settlement::crawler::Legs,
+) {
+    let deck = pose.base + c.deck.to_f32();
+    let root = Transform::from_translation(pose.at).with_rotation(Quat::from_rotation_y(pose.heading));
+    if let Ok(mut t) = transforms.get_mut(entity) {
+        *t = root;
+    }
+    if let Ok(mut chassis) = transforms.get_mut(rover.chassis) {
+        chassis.translation.y = deck - CRAWLER_BODY / 2.0;
+        chassis.rotation = Quat::IDENTITY;
+    }
+    let gait = legs.gait.def(c);
+    let to_local = root.compute_affine().inverse();
+    for (foot, &post) in legs.feet.iter().zip(&rover.wheels) {
+        let (spot, floor) = match &foot.swing {
+            Some(s) => {
+                let t = s.progress as f32 / gait.swing as f32;
+                let at = mirror.to_view(foot.spot).lerp(mirror.to_view(s.to), t);
+                let hop = gait.lift.to_f32() * (std::f32::consts::PI * t).sin();
+                (at, foot.floor.to_f32() + (s.floor - foot.floor).to_f32() * t + hop)
+            }
+            None => (mirror.to_view(foot.spot), foot.floor.to_f32()),
+        };
+        if let Ok(mut p) = transforms.get_mut(post) {
+            let length = (deck - floor).max(0.1);
+            let local = to_local.transform_point3(Vec3::new(spot.x, 0.0, spot.z));
+            p.translation = Vec3::new(local.x, floor + length / 2.0, local.z);
+            p.scale.y = length;
         }
     }
 }

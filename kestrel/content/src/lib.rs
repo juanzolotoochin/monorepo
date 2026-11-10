@@ -656,7 +656,7 @@ mod tests {
         assert!(edit("swing: 27", "swing: 31").contains("crawler.trot"), "two in a trot's");
         assert!(edit("swing: 33, lift: 0.9", "swing: 33, lift: 5.0").contains("walk.lift"));
         // It sets the wheels; the file may not.
-        assert!(edit("turn: 35,", "turn: 35, climb: 1.0,").contains("vehicle.climb"));
+        assert!(edit("turn: 20,", "turn: 20, climb: 1.0,").contains("vehicle.climb"));
         // Only a vehicle walks.
         let sprite = "(sim: (brain: Sprite, body: (radius: 0.22), movement: (walk: 1.6), crawler: (length: 6.0)), view: (skin: \"worker\"))";
         assert!(bad(sprite).contains("only Vehicle"));
