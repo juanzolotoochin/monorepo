@@ -51,10 +51,12 @@ impl Canopy {
             .map(|a| (Vec3::from_array(a.position), Vec3::from_array(a.size) * 0.5))
             .filter(|(center, half)| center.y - half.y >= CANOPY_BOTTOM && Vec2::new(center.x, center.z).length() <= CANOPY_REACH)
             .collect();
+        // In the town's fog the environment may be drawn by fogged copies
+        // already (`fog_dressing::Fogged`).
         let entities: Vec<(Entity, Handle<Mesh>, Handle<StandardMaterial>)> = world
-            .query_filtered::<(Entity, &Mesh3d, &MeshMaterial3d<StandardMaterial>), With<crate::style::Environment>>()
+            .query_filtered::<(Entity, &Mesh3d, AnyOf<(&MeshMaterial3d<StandardMaterial>, &crate::fog_dressing::Fogged)>), With<crate::style::Environment>>()
             .iter(world)
-            .map(|(e, mesh, material)| (e, mesh.0.clone(), material.0.clone()))
+            .filter_map(|(e, mesh, (material, fogged))| Some((e, mesh.0.clone(), material.map(|m| m.0.clone()).or_else(|| fogged.map(|f| f.0.clone()))?)))
             .collect();
         if pack.environment.is_some() && entities.is_empty() {
             return None;

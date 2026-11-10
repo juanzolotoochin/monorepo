@@ -51,6 +51,13 @@ pub struct Settlement {
     /// The tree's canopy, split off to fade while it hides the elder, a site
     /// or the ghost (`canopy`); `None` until the town has been drawn.
     canopy: Option<crate::canopy::Canopy>,
+    /// The fog's memory (M9.3, F2): each thing that stays (a building, an
+    /// output's or a ground pile's units, a depot's) as last drawn in sight,
+    /// by key; drawn so while its ground is out of sight.
+    remembered: BTreeMap<String, View>,
+    /// Whether the memory has started: at first what stands on the town's
+    /// remembered ground (`fog::START_RANGE`) is remembered as it is.
+    primed: bool,
 }
 /// How long an interact refusal stays over the elder.
 const REFUSAL_SECONDS: f32 = 2.5;
@@ -83,6 +90,35 @@ pub struct Caption {
     units: u32,
     brief: String,
     tint: Color,
+    /// Where the labelled thing stands, for the fog (M9.3): a label goes by
+    /// its thing's feet, not where it floats.
+    feet: Vec3,
+    /// How the fog hides it.
+    fog: LabelFog,
+}
+
+/// How the fog mode hides a label (M9.3, F2).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum LabelFog {
+    /// A moving thing's (a sprite's tag): shown only in sight.
+    Moving,
+    /// A thing that stays (a building's card, a pile's count): shown where
+    /// its ground was seen, as last seen.
+    Stays,
+    /// The player's own (an interact prompt, the ghost's): always shown.
+    Never,
+}
+
+impl LabelFog {
+    fn of(key: &str) -> LabelFog {
+        if key.starts_with("sprite/") {
+            LabelFog::Moving
+        } else if key.starts_with("interact/") || key.starts_with("ghost/") {
+            LabelFog::Never
+        } else {
+            LabelFog::Stays
+        }
+    }
 }
 
 /// The glows' shared mesh and a material per state.
@@ -146,6 +182,7 @@ const OUTPUT_LAYOUT: content::scenario::CargoLayout =
 const FLARE_SECONDS: f32 = 0.45;
 /// Seconds a lamp flares after a Burst, brighter than a unit's.
 const BURST_FLARE_SECONDS: f32 = 1.2;
+#[derive(Clone)]
 struct View {
     skin: String,
     position: Vec3,
@@ -242,7 +279,7 @@ impl Service for Settlement {
             .add_service_systems::<Self, _>(Phase::Present, tick.run_if(active.clone()))
             .add_systems(
                 PostUpdate,
-                captions.after(bevy::transform::TransformSystems::Propagate).run_if(crate::control::rendered).run_if(active),
+                (captions, crate::heard::draw).after(bevy::transform::TransformSystems::Propagate).run_if(crate::control::rendered).run_if(active),
             );
     }
 }
@@ -252,6 +289,8 @@ impl Service for Settlement {
 fn build(world: &mut World) -> Settlement {
     let index = world.resource::<crate::scene_view::SceneView>().index;
     let mut state = Settlement::default();
+    // A new world hears no ghoul yet (M9.3).
+    world.insert_resource(crate::heard::Heard::default());
     let has_weapons = world.resource::<SceneLibrary>().scenes[index]
         .scene
         .scenario
@@ -301,6 +340,8 @@ fn build(world: &mut World) -> Settlement {
                         units: 0,
                         brief: String::new(),
                         tint: Color::NONE,
+                        feet: Vec3::new(d.position[0], 0.0, d.position[1]),
+                        fog: LabelFog::Stays,
                     },
                     BackgroundColor(Color::NONE),
                     Text::new(""),
@@ -337,6 +378,8 @@ fn build(world: &mut World) -> Settlement {
                         units: 0,
                         brief: String::new(),
                         tint: Color::NONE,
+                        feet: Vec3::new(position[0], 0.0, position[1]),
+                        fog: LabelFog::Stays,
                     },
                     BackgroundColor(Color::NONE),
                     Text::new(""),
@@ -1258,6 +1301,19 @@ pub fn tick(world: &mut World) {
         });
         dial.update(world, shown);
     }
+    // The fog (M9.3, F2): what the team knows where each thing stands;
+    // things that stay are drawn as last seen.
+    let fogged = world.get_resource::<crate::cutaway::SightView>().is_some_and(|s| s.fogged());
+    let known = lookup(world, |lookup| {
+        let at = |view: &View| lookup.at(view.position.with_y(view.floor.unwrap_or_else(|| town_ground(world, view.position))));
+        remember(&mut state.remembered, &mut state.primed, &mut desired, fogged, at)
+    })
+    .unwrap_or_default();
+    if fogged {
+        heard(world, sim, &desired, &known);
+    } else if let Some(mut heard) = world.get_resource_mut::<crate::heard::Heard>() {
+        heard.ghouls.clear();
+    }
     crate::telemetry::elapsed(world, "settlement_projection", projection_start);
     let sync_start = web_time::Instant::now();
     let mut spawned = 0;
@@ -1339,8 +1395,10 @@ pub fn tick(world: &mut World) {
         writes += changed;
         skipped += unchanged;
         // Inside (line of sight, M8.5) what stands on a tile out of sight
-        // is hidden; outside everything shows.
-        let shown = world.get_resource::<crate::cutaway::SightView>().is_none_or(|s| s.shows(view.position));
+        // is hidden; outside everything shows. In the fog (M9.3) moving
+        // things only in sight, things that stay where seen.
+        let fog = known.get(&key).copied();
+        let shown = world.get_resource::<crate::cutaway::SightView>().is_none_or(|s| if stays(&key) { s.keeps(view.position, fog) } else { s.sees(view.position, fog) });
         if let Some(mut visibility) = world.get_mut::<Visibility>(rig.root) {
             visibility.set_if_neq(if shown { Visibility::Inherited } else { Visibility::Hidden });
         }
@@ -1348,6 +1406,11 @@ pub fn tick(world: &mut World) {
     let mut glows = glows;
     if let Some(sight) = world.get_resource::<crate::cutaway::SightView>() {
         glows.retain(|g| sight.shows_label(g.1));
+    }
+    // In the fog the glows (sprites' flames, buildings' lamps, fire) are
+    // live: only in sight.
+    if fogged {
+        glows.retain(|g| lookup(world, |lookup| lookup.at(g.1)).is_none_or(|k| k == crate::fog::State::Now));
     }
     sync_glows(world, &mut state, glows);
     crate::telemetry::elapsed(world, "settlement_sync", sync_start);
@@ -1447,11 +1510,125 @@ fn agent_label(sim: &Simulation, id: &str) -> String {
         .unwrap_or_else(|| id.to_uppercase())
 }
 /// A caption that follows something in the town, made on first use.
-fn town_caption(world: &mut World, state: &mut Settlement, key: &str, position: Vec3, brief: String, tint: Color, detail: String) {
+/// Calls `f` with the town's fog (`fog::Lookup`), in any view mode: none
+/// in other scenes.
+fn lookup<T>(world: &World, f: impl FnOnce(&crate::fog::Lookup) -> T) -> Option<T> {
+    let view = world.get_resource::<crate::fog::FogView>()?;
+    let sim = world.get_resource::<crate::lockstep::SessionService>()?.world()?;
+    crate::fog::Lookup::of(view, sim).map(|lookup| f(&lookup))
+}
+
+/// Whether in the fog mode `feet` is on ground seen before, out of sight
+/// now: a thing that stays there is drawn as last seen.
+fn remembered(world: &World, feet: Vec3) -> bool {
+    world.get_resource::<crate::cutaway::SightView>().is_some_and(|s| s.fogged()) && lookup(world, |lookup| lookup.at(feet)) == Some(crate::fog::State::Seen)
+}
+
+/// Drops the label of a thing gone, unless in the fog it is remembered
+/// (`remembered`): then it stays as last seen until its ground is seen.
+fn forget(world: &mut World, state: &mut Settlement, key: &str) {
+    let Some(&e) = state.labels.get(key) else { return };
+    if world.get::<Caption>(e).is_some_and(|c| remembered(world, c.feet)) {
+        return;
+    }
+    state.labels.remove(key);
+    world.despawn(e);
+}
+
+/// Whether the view under `key` is a thing that stays (a building, an
+/// output's or a ground pile's or a depot's units), which the fog draws as
+/// last seen; the rest (ghouls, sprites, haulers, flying units) move and
+/// show only in sight (M9.3, F2).
+fn stays(key: &str) -> bool {
+    ["building/", "output/", "ground/", "depot/"].iter().any(|p| key.starts_with(p))
+}
+
+/// The fog's memory (M9.3, F2): brings `memory` up to `desired` by what the
+/// team knows where each view stands (`at`) and returns that by key. A thing
+/// that stays is remembered as drawn while in sight; while its ground is
+/// out of sight, in the fog mode (`fogged`), it is drawn as remembered (a
+/// building that broke, a pile taken from, there still), and one that came
+/// while nobody looked isn't (known as never seen). What the memory has that
+/// is gone is forgotten once its ground is in sight. The first time
+/// (`primed` false) what stands on remembered ground is remembered as it is.
+fn remember(memory: &mut BTreeMap<String, View>, primed: &mut bool, desired: &mut BTreeMap<String, View>, fogged: bool, at: impl Fn(&View) -> crate::fog::State) -> BTreeMap<String, crate::fog::State> {
+    use crate::fog::State;
+    let gone: Vec<String> = memory.keys().filter(|k| !desired.contains_key(*k)).cloned().collect();
+    for key in gone {
+        match at(&memory[&key]) {
+            State::Now => {
+                memory.remove(&key);
+            }
+            State::Seen if fogged => {
+                desired.insert(key.clone(), memory[&key].clone());
+            }
+            _ => {}
+        }
+    }
+    let mut known = BTreeMap::new();
+    for (key, view) in desired.iter_mut() {
+        let mut state = at(view);
+        if stays(key) {
+            match state {
+                State::Now => {
+                    memory.insert(key.clone(), view.clone());
+                }
+                State::Seen => match memory.get(key) {
+                    Some(seen) if fogged => *view = seen.clone(),
+                    Some(_) => {}
+                    None if !*primed => {
+                        memory.insert(key.clone(), view.clone());
+                    }
+                    None if fogged => state = State::Never,
+                    None => {}
+                },
+                State::Never => {}
+            }
+        }
+        known.insert(key.clone(), state);
+    }
+    *primed = true;
+    known
+}
+
+/// Ghouls heard, not seen (M9.3, F6): the ghouls of `desired` out of sight
+/// (`known`) within `heard::HEAR` of a living player's elder, for
+/// `heard::draw` to show by their eyes; a growl when one is first heard.
+fn heard(world: &mut World, sim: &Simulation, desired: &BTreeMap<String, View>, known: &BTreeMap<String, crate::fog::State>) {
+    let service = world.resource::<crate::lockstep::SessionService>();
+    let elders: Vec<Vec3> = service.world().and_then(|w| w.settlement()).map_or_else(Vec::new, |s| {
+        s.agents.iter().filter(|a| a.avatar().is_some() && a.body.alive()).map(|a| service.to_view(a.body.position).with_y(a.height().to_f32())).collect()
+    });
+    let ghouls: Vec<(u64, Vec3, crate::fog::State)> = sim
+        .threats
+        .values()
+        .filter_map(|t| {
+            let key = format!("threat/{}", t.id);
+            let view = desired.get(&key)?;
+            Some((t.id, view.position.with_y(view.floor.unwrap_or_else(|| town_ground(world, view.position))), *known.get(&key)?))
+        })
+        .collect();
+    let now = sim.time() / HZ;
+    let growl = world.get_resource_or_init::<crate::heard::Heard>().hear(crate::heard::heard(&ghouls, &elders), now);
+    if growl {
+        world.resource::<crate::sound::Sound>().play(crate::sound::Cue::Growl);
+    }
+}
+
+/// A town label at `position` for the thing standing at `feet`: made the
+/// first time, its text brought up to `brief` and `detail` after. In the
+/// fog mode the label of a thing that stays (`LabelFog::Stays`) keeps its
+/// last text while its ground is out of sight (M9.3, F2).
+#[allow(clippy::too_many_arguments)]
+fn town_caption(world: &mut World, state: &mut Settlement, key: &str, position: Vec3, feet: Vec3, brief: String, tint: Color, detail: String) {
+    let fog = LabelFog::of(key);
+    if fog == LabelFog::Stays && state.labels.contains_key(key) && remembered(world, feet) {
+        return;
+    }
     let e = *state.labels.entry(key.to_string()).or_insert_with(|| {
         world
             .spawn((
-                Caption { building: true, position, detail: String::new(), units: 0, brief: String::new(), tint },
+                Caption { building: true, position, detail: String::new(), units: 0, brief: String::new(), tint, feet, fog },
                 BackgroundColor(Color::NONE),
                 Text::new(""),
                 TextFont { font_size: FontSize::Px(11.), ..default() },
@@ -1463,6 +1640,9 @@ fn town_caption(world: &mut World, state: &mut Settlement, key: &str, position: 
     let mut caption = world.get_mut::<Caption>(e).unwrap();
     if caption.position != position {
         caption.position = position;
+    }
+    if caption.feet != feet {
+        caption.feet = feet;
     }
     if caption.brief != brief || caption.tint != tint || caption.detail != detail {
         caption.brief = brief;
@@ -1626,13 +1806,14 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
         // A site's card hangs where a built one's does, clear of the
         // interact prompt over its pile.
         let card = center + Vec3::Y * (shape.height + 0.6);
-        town_caption(world, state, &format!("building/{i}"), card, format!("{}\n{}", kind.label, status), glow.text(), detail);
+        town_caption(world, state, &format!("building/{i}"), card, center, format!("{}\n{}", kind.label, status), glow.text(), detail);
         let tint = if b.status == BuildingStatus::Full { Glow::Full.text() } else { Color::srgb(0.98, 0.92, 0.70) };
-        let out = out + Vec3::Y * (ground(world, out) + 0.45);
+        let out_feet = out + Vec3::Y * ground(world, out);
+        let out = out_feet + Vec3::Y * 0.45;
         if b.site.is_none() {
-            town_caption(world, state, &format!("output/{i}"), out, format!("{held}/{} {product}", b.cap), tint, String::new());
-        } else if let Some(e) = state.labels.remove(&format!("output/{i}")) {
-            world.despawn(e);
+            town_caption(world, state, &format!("output/{i}"), out, out_feet, format!("{held}/{} {product}", b.cap), tint, String::new());
+        } else {
+            forget(world, state, &format!("output/{i}"));
         }
     }
     lantern_lights(world, state, &lanterns);
@@ -1654,14 +1835,12 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
         let key = format!("ground/{}", p.id);
         let floor = if volume { p.feet.unwrap_or(0.0) } else { ground(world, at) };
         let above = at + Vec3::Y * (floor + 0.45);
-        town_caption(world, state, &key, above, format!("{units} {label}"), Color::srgb(0.98, 0.92, 0.70), String::new());
+        town_caption(world, state, &key, above, at + Vec3::Y * floor, format!("{units} {label}"), Color::srgb(0.98, 0.92, 0.70), String::new());
         piles.push(key);
     }
     let gone: Vec<String> = state.labels.keys().filter(|k| k.starts_with("ground/") && !piles.contains(k)).cloned().collect();
     for k in gone {
-        if let Some(e) = state.labels.remove(&k) {
-            world.despawn(e);
-        }
+        forget(world, state, &k);
     }
     for (index, sprite) in sim.config().sprites.iter().enumerate() {
         let (Some(a), Some(s)) = (sim.agents.get(&sprite.id), sim.sprites.get(&sprite.id)) else { continue };
@@ -1740,7 +1919,7 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
         // by side (as the sprites start) don't write over each other, while
         // staying clear of the tree's piles behind them.
         let above = 0.3 + (index % 2) as f32 * 0.4;
-        town_caption(world, state, &format!("sprite/{}", sprite.id), head + Vec3::Y * above, brief, glow.text(), detail);
+        town_caption(world, state, &format!("sprite/{}", sprite.id), head + Vec3::Y * above, p, brief, glow.text(), detail);
     }
     fire_glows(world, sim, &mut glows);
     glows
@@ -2006,7 +2185,7 @@ fn town_interact(world: &mut World, state: &mut Settlement, sim: &Simulation, pl
         // Above the pile's own count or label, which hang lower.
         let at = h.position + Vec3::Y * (ground(world, h.position) + 1.3);
         let text = format!("{key}  {}", h.prompt);
-        town_caption(world, state, "interact/prompt", at, text.clone(), prompt, text);
+        town_caption(world, state, "interact/prompt", at, at, text.clone(), prompt, text);
         shown.push("interact/prompt".into());
     }
     if let (Some((options, focus)), Some(menu)) = (menu, town.menu.as_ref()) {
@@ -2020,7 +2199,7 @@ fn town_interact(world: &mut World, state: &mut Settlement, sim: &Simulation, pl
                 let at = center + crate::input::gameplay::camera_relative(Vec2::new(angle.cos(), angle.sin()), crate::input::gameplay::view_yaw(world)) * 1.1;
                 let (text, tint) = if i == focus { (format!("[ {option} ]"), prompt) } else { (option.clone(), Color::srgba(0.85, 0.85, 0.7, 0.75)) };
                 let key = format!("interact/menu/{i}");
-                town_caption(world, state, &key, at, text.clone(), tint, text);
+                town_caption(world, state, &key, at, at, text.clone(), tint, text);
                 shown.push(key);
             }
         }
@@ -2028,7 +2207,7 @@ fn town_interact(world: &mut World, state: &mut Settlement, sim: &Simulation, pl
     if let Some((reason, at)) = state.refusal.clone() {
         if sim.time() - at < REFUSAL_SECONDS * HZ {
             let head = player + Vec3::Y * 1.9;
-            town_caption(world, state, "interact/refusal", head, reason.clone(), Color::srgb(1.0, 0.6, 0.35), reason);
+            town_caption(world, state, "interact/refusal", head, head, reason.clone(), Color::srgb(1.0, 0.6, 0.35), reason);
             shown.push("interact/refusal".into());
         } else {
             state.refusal = None;
@@ -2087,7 +2266,7 @@ fn town_ghost(world: &mut World, state: &mut Settlement, sim: &Simulation) {
         Some(crate::input::Device::Gamepad) => text.replace("E  PLACE", "A  PLACE"),
         _ => text,
     };
-    town_caption(world, state, "ghost/caption", at + Vec3::Y * (shape.height + 0.6), key.clone(), tint, key);
+    town_caption(world, state, "ghost/caption", at + Vec3::Y * (shape.height + 0.6), at, key.clone(), tint, key);
 }
 /// Fades the tree's canopy while it hides the elder, a site or the ghost
 /// from the camera (`canopy`). View only.
@@ -2216,9 +2395,12 @@ fn producer_description(sim: &Simulation, p: &crate::legacy::Producer) -> String
     format!("{}\n{}\n\nConsumes: {}\nProduces: {}\nCycle: {:.1}s · Completed: {}\nStatus: {}\nE nearby: enable / disable", p.label, p.description,
         recipe(&p.ingredients), recipe(&p.products), p.seconds, state.cycles, status)
 }
+#[allow(clippy::too_many_arguments)]
 pub fn captions(
     settlement: Res<Settlement>,
     sight: Option<Res<crate::cutaway::SightView>>,
+    fog: Option<Res<crate::fog::FogView>>,
+    service: Option<Res<crate::lockstep::SessionService>>,
     camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>,
     windows: Query<&Window>,
     mut labels: Query<(
@@ -2234,6 +2416,9 @@ pub fn captions(
     )>,
 ) {
     let cursor = windows.iter().next().and_then(|w| w.cursor_position());
+    // The fog (M9.3): a sprite's tag only in sight, a building's or a
+    // pile's where its ground was seen.
+    let lookup = fog.as_deref().zip(service.as_ref().and_then(|s| s.world())).and_then(|(fog, world)| crate::fog::Lookup::of(fog, world));
     let hovered = settlement
         .inspection
         .as_ref()
@@ -2269,7 +2454,15 @@ pub fn captions(
         };
         let expanded = hovered == Some(e);
         let folded = !p.building || !p.brief.is_empty();
-        let in_sight = sight.as_ref().is_none_or(|s| s.shows_label(p.position));
+        let known = lookup.as_ref().map(|lookup| lookup.at(p.feet));
+        let in_sight = sight.as_ref().is_none_or(|s| {
+            s.shows_label(p.position)
+                && match p.fog {
+                    LabelFog::Moving => s.sees(p.feet, known),
+                    LabelFog::Stays => s.keeps(p.feet, known),
+                    LabelFog::Never => true,
+                }
+        });
         *visibility = if in_sight && (expanded || (hovered.is_none() && folded)) {
             Visibility::Inherited
         } else {
@@ -2327,6 +2520,77 @@ pub fn captions(
 mod tests {
     use super::*;
     use fx::{Fx, FxVec2};
+
+    /// The fog's memory (M9.3, F2), over a row of ground: in sight from x 0
+    /// to 9, seen before from 10 to 19, never seen from 20 on.
+    #[test]
+    fn in_the_fog_buildings_and_piles_show_as_last_seen() {
+        use crate::fog::State;
+        let at = |view: &View| match view.position.x {
+            x if x < 10.0 => State::Now,
+            x if x < 20.0 => State::Seen,
+            _ => State::Never,
+        };
+        let view = |skin: &str, x: f32| View::new(skin, [x, 0.0]);
+        let (mut memory, mut primed) = (BTreeMap::new(), false);
+        // The start: what stands on remembered ground is remembered as it is.
+        let mut desired = BTreeMap::from([
+            ("building/0".to_string(), view("mill", 5.0)),
+            ("building/1".to_string(), view("site", 15.0)),
+            ("ground/7/wood/0".to_string(), view("wood", 16.0)),
+            ("ground/7/wood/1".to_string(), view("wood", 16.5)),
+            ("threat/3".to_string(), view("ghoul", 12.0)),
+            ("building/2".to_string(), view("far", 25.0)),
+        ]);
+        let known = remember(&mut memory, &mut primed, &mut desired, true, at);
+        assert!(primed);
+        assert_eq!(known["building/1"], State::Seen);
+        assert_eq!(known["threat/3"], State::Seen, "a ghoul out of sight: hidden by `SightView::sees`");
+        assert_eq!(known["building/2"], State::Never);
+        assert!(memory.contains_key("building/0") && memory.contains_key("building/1") && memory.contains_key("ground/7/wood/1"));
+        assert!(!memory.contains_key("threat/3"), "a ghoul moves: not remembered");
+        assert!(!memory.contains_key("building/2"), "never seen: not remembered");
+        // Out of sight the site was built up, one unit taken from the pile,
+        // and a new pile dropped: still as last seen.
+        let mut desired = BTreeMap::from([
+            ("building/0".to_string(), view("mill", 5.0)),
+            ("building/1".to_string(), view("tower", 15.0)),
+            ("ground/7/wood/0".to_string(), view("wood", 16.0)),
+            ("ground/8/stone/0".to_string(), view("stone", 18.0)),
+        ]);
+        let known = remember(&mut memory, &mut primed, &mut desired, true, at);
+        assert_eq!(desired["building/1"].skin, "site", "the site as it was last seen");
+        assert_eq!(desired["ground/7/wood/1"].skin, "wood", "the unit taken is still drawn");
+        assert_eq!(known["ground/8/stone/0"], State::Never, "a pile dropped out of sight isn't known");
+        // Line of sight or the cutaway: drawn as it is, the memory kept.
+        let mut live = BTreeMap::from([("building/1".to_string(), view("tower", 15.0))]);
+        remember(&mut memory, &mut primed, &mut live, false, at);
+        assert_eq!(live["building/1"].skin, "tower");
+        assert_eq!(live.len(), 1, "nothing gone is drawn");
+        // Seen again: as it is now, and what is gone forgotten.
+        let at_now = |_: &View| State::Now;
+        let mut desired = BTreeMap::from([("building/1".to_string(), view("tower", 15.0))]);
+        remember(&mut memory, &mut primed, &mut desired, true, at_now);
+        assert_eq!(desired["building/1"].skin, "tower");
+        assert!(!desired.contains_key("ground/7/wood/1"));
+        assert!(!memory.contains_key("ground/7/wood/1"), "gone, and seen gone");
+        assert!(memory.keys().all(|k| stays(k)));
+    }
+
+    #[test]
+    fn only_buildings_and_piles_stay_in_the_fog() {
+        for key in ["building/0", "output/2/wood/1", "ground/5/stone/0", "depot/tree/wood/3"] {
+            assert!(stays(key), "{key}");
+        }
+        for key in ["threat/4", "agent/ash", "cargo/hauler/wood/0", "equipment/hauler", "transfer/9", "projectile/3"] {
+            assert!(!stays(key), "{key}");
+        }
+        assert_eq!(LabelFog::of("sprite/ash"), LabelFog::Moving);
+        assert_eq!(LabelFog::of("building/0"), LabelFog::Stays);
+        assert_eq!(LabelFog::of("ground/5"), LabelFog::Stays);
+        assert_eq!(LabelFog::of("interact/prompt"), LabelFog::Never);
+        assert_eq!(LabelFog::of("ghost/caption"), LabelFog::Never);
+    }
 
     /// A new threat is drawn under the ground and rises as it walks its
     /// first 0.6 m, then walks on the ground.

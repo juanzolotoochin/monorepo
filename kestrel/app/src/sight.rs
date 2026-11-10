@@ -301,8 +301,9 @@ pub fn void(near: f32) -> f32 {
 }
 
 /// Whether the segment `from`..`to` crosses only clear tiles before the
-/// tile holding `to` (a grid walk, Amanatides and Woo).
-fn reaches(from: (f32, f32), to: (f32, f32), clear: &impl Fn(i32, i32) -> bool) -> bool {
+/// tile holding `to` (a grid walk, Amanatides and Woo). The fog's rays
+/// too (`fog::look`).
+pub fn reaches(from: (f32, f32), to: (f32, f32), clear: &impl Fn(i32, i32) -> bool) -> bool {
     let (mut x, mut y) = (from.0.floor() as i32, from.1.floor() as i32);
     let end = (to.0.floor() as i32, to.1.floor() as i32);
     let (dx, dy) = (to.0 - from.0, to.1 - from.1);

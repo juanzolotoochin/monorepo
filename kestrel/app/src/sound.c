@@ -29,7 +29,7 @@ typedef struct {
 } audio_state;
 static audio_state playback;
 static int active;
-#define CUE_COUNT 20
+#define CUE_COUNT 21
 int kestrel_audio_cue_count(void) { return CUE_COUNT; }
 
 static float noise(audio_state *state) {
@@ -176,6 +176,16 @@ static void synth_frames(audio_state *state, float *out, ma_uint32 frames) {
                     + 0.22f * tone(1120.0f, t, 24.0f)
                     + 0.12f * tone(420.0f, t, 19.0f);
                 if (t > 0.24f) v->alive = 0;
+            } else if (v->kind == 20) {
+                // A ghoul in the fog: a low, rough growl swelling and dying
+                // over most of a second, its rasp fluttering in the throat.
+                float envelope = sinf(3.1415926f * fminf(t / 0.85f, 1.0f));
+                float flutter = 0.55f + 0.45f * sinf(6.2831853f * 23.0f * t);
+                v->filtered_noise += 0.08f * (noise(state) - v->filtered_noise);
+                sample = (0.20f * tone(68.0f + 9.0f * sinf(6.2831853f * 3.0f * t), t, 0.0f)
+                    + 0.10f * tone(103.0f, t, 0.0f)
+                    + 0.55f * v->filtered_noise) * flutter * envelope;
+                if (t > 0.85f) v->alive = 0;
             } else {
                 sample = 0.055f * tone(76.0f, t, 55.0f) + 0.035f * noise(state) * expf(-90.0f * t);
                 if (t > 0.12f) v->alive = 0;

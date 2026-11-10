@@ -107,13 +107,16 @@ pub enum Cue {
     Pierce = 17,
     Laser = 18,
     LaserImpact = 19,
+    /// A ghoul heard in the fog (M9.3 of the Sacred Tree fog, F6).
+    Growl = 20,
 }
 impl Cue {
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::Swing, Self::Clang, Self::Step, Self::Stone, Self::Crystal,
         Self::Polymer, Self::Toss, Self::Land, Self::Dispense, Self::Jetpack,
         Self::GhoulHit, Self::Bow, Self::Spear, Self::Ballista, Self::Arc,
         Self::ArrowHit, Self::Decapitate, Self::Pierce, Self::Laser, Self::LaserImpact,
+        Self::Growl,
     ];
     pub fn name(id: i32) -> String {
         let cue = Self::ALL.get(id as usize).expect("recorded cue id");

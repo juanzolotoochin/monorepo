@@ -5,7 +5,8 @@ prototype that follows is in [`SACRED_TREE_BALLISTA.md`](SACRED_TREE_BALLISTA.md
 mining after it in [`SACRED_TREE_MINING.md`](SACRED_TREE_MINING.md) (PR #133), then day and night in
 [`SACRED_TREE_DAYNIGHT.md`](SACRED_TREE_DAYNIGHT.md). Tunnels and floors over each other, on a
 separate map, in [`VERTICALITY.md`](VERTICALITY.md), and then under the town itself, with
-lanterns, in [`SACRED_TREE_DEPTHS.md`](SACRED_TREE_DEPTHS.md) (M8 done 2026-11-08). Tasks in
+lanterns, in [`SACRED_TREE_DEPTHS.md`](SACRED_TREE_DEPTHS.md) (M8 done 2026-11-08), and fog of war in
+[`SACRED_TREE_FOG.md`](SACRED_TREE_FOG.md) (M9, a prototype). Tasks in
 [`todo/sacred-tree.md`](todo/sacred-tree.md), one per step, by milestone.
 
 ## Goal

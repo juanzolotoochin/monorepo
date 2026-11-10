@@ -93,6 +93,9 @@ impl Service for Digging {
         if let Some(mut view) = world.get_resource_mut::<crate::cutaway::SightView>() {
             view.reset();
         }
+        if let Some(mut fog) = world.get_resource_mut::<crate::fog::FogView>() {
+            fog.reset();
+        }
         digging
     }
 
@@ -100,10 +103,12 @@ impl Service for Digging {
         let active = in_state(WorldState::Active);
         app.init_resource::<crate::prediction::DrawnAvatar>()
             .init_resource::<crate::cutaway::SightView>()
+            .init_resource::<crate::fog::FogView>()
+            .init_resource::<crate::fog_dressing::FoggedMaterials>()
             .add_service_systems::<Self, _>(Phase::Mirror, (update, follow_camera).chain().run_if(active.clone()))
             .add_systems(
                 PostUpdate,
-                (feedback, toss_stone, fly_stones, (crate::cutaway::follow, crate::cutaway::hide_outdoors).chain(), crate::walker_view::draw).after(bevy::transform::TransformSystems::Propagate).run_if(crate::control::rendered).run_if(active),
+                (feedback, toss_stone, fly_stones, (crate::fog::follow, crate::cutaway::follow, crate::cutaway::hide_outdoors, crate::fog_dressing::follow).chain(), crate::walker_view::draw).after(bevy::transform::TransformSystems::Propagate).run_if(crate::control::rendered).run_if(active),
             );
     }
 }
@@ -136,7 +141,7 @@ fn build_ground(
         Ground::Cutaway(match cutaway {
             Some(cutaway) => cutaway.0.clone(),
             None => {
-                let material = cutaways.add(crate::cutaway::material(ground_material(), images.add(crate::cutaway::sight_image())));
+                let material = cutaways.add(crate::cutaway::material(ground_material(), images.add(crate::cutaway::sight_image()), images.add(crate::cutaway::fog_image(1, &[0; 4]))));
                 commands.insert_resource(crate::cutaway::CutawayGround(material.clone()));
                 material
             }

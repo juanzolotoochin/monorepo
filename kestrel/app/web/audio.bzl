@@ -1,6 +1,6 @@
 """Build Kestrel's procedural audio cues as browser assets."""
 
-_CUE_COUNT = 20
+_CUE_COUNT = 21
 
 def _web_audio_impl(ctx):
     cues = [ctx.actions.declare_file(ctx.label.name + "/cue_%d.wav" % i) for i in range(_CUE_COUNT)]
