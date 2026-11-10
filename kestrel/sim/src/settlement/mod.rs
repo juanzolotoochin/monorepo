@@ -286,6 +286,12 @@ pub struct Settlement {
     /// recomputed when they change (`Settlement::refresh_light`).
     #[serde(skip)]
     pub light: light::LightGrid,
+    /// The crawlers' feet that came down in this tick's stage 2 (CR.5 of
+    /// the crawler), by vehicle and leg, for stage 3 to look under
+    /// (`read_footfalls`). Emptied in housekeeping, so never there between
+    /// ticks: neither saved nor hashed.
+    #[serde(skip)]
+    pub landings: Vec<(VehicleIx, u8)>,
 }
 
 /// A vehicle a scene parks, in arena coordinates.
@@ -555,6 +561,7 @@ impl Settlement {
             light: light::LightGrid::default(),
             combat: CombatMetrics::default(),
             events: Vec::new(),
+            landings: Vec::new(),
             spawn: FxVec2::ZERO,
             spawn_height: Fx::ZERO,
             pianos: Vec::new(),
@@ -1278,6 +1285,8 @@ mod seat_tests;
 mod tunnel_lab_tests;
 #[cfg(test)]
 mod crawler_lab_tests;
+#[cfg(test)]
+mod crawler_feet_tests;
 #[cfg(test)]
 mod town_volume_tests;
 #[cfg(test)]

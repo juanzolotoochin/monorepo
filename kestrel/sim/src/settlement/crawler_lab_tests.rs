@@ -26,12 +26,12 @@ fn layout() -> VolumeLayout {
     ron::from_str(&section(SCENE, "volume")).unwrap()
 }
 
-fn seconds(s: f64) -> u64 {
+pub(super) fn seconds(s: f64) -> u64 {
     (s * content::TICKS_PER_SECOND as f64).round() as u64
 }
 
 /// The Crawler Lab as the app makes it.
-fn crawler_lab() -> Simulation {
+pub(super) fn crawler_lab() -> Simulation {
     assert!(SCENE.contains(r#"vehicles: [(character: "crawler", position: (2.5, 0.0, 0.0), heading: 0.0)]"#), "the scene's crawler");
     assert!(SCENE.contains(r#"player: "elder""#) && SCENE.contains("spawn: (0.0, 0.0, 0.0)"));
     let layout = layout();
@@ -205,7 +205,7 @@ impl Walk {
     }
 }
 
-const SOUTH: Fx = Fx::ZERO;
+pub(super) const SOUTH: Fx = Fx::ZERO;
 const WEST: Fx = Fx::from_ratio(-31_415_926, 20_000_000);
 
 /// Whether `order` runs round `wave`, each leg followed by the next.
@@ -420,7 +420,7 @@ fn host(turn: &[CommandKind]) -> Vec<Command> {
 }
 
 /// A copy of a world, through its saved state.
-fn copy(world: &World) -> World {
+pub(super) fn copy(world: &World) -> World {
     World::from_state(world.to_state(), world.rules().clone()).unwrap()
 }
 
@@ -516,7 +516,7 @@ fn a_minute_driving_round_the_lab_validates() {
 /// The lab with four guests joined beside the host: every elder stands
 /// west of the crawler, in reach of its box. Returns the five avatars,
 /// the host first.
-fn crawler_lab_with_guests() -> (Simulation, Vec<u16>) {
+pub(super) fn crawler_lab_with_guests() -> (Simulation, Vec<u16>) {
     let mut sim = crawler_lab();
     let guests: Vec<_> = (1..=4).map(PlayerId).collect();
     sim.step(&guests.iter().map(|&player| Command { player, kind: CommandKind::Join }).collect::<Vec<_>>());
@@ -532,11 +532,11 @@ fn crawler_lab_with_guests() -> (Simulation, Vec<u16>) {
     (sim, agents)
 }
 
-fn owner(i: usize) -> PlayerId {
+pub(super) fn owner(i: usize) -> PlayerId {
     PlayerId(i as u32)
 }
 
-fn board(sim: &mut Simulation, agents: &[u16], who: &[usize]) {
+pub(super) fn board(sim: &mut Simulation, agents: &[u16], who: &[usize]) {
     sim.step(&who.iter().map(|&i| Command { player: owner(i), kind: CommandKind::Board { agent: agents[i] } }).collect::<Vec<_>>());
 }
 

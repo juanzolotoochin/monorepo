@@ -3,39 +3,6 @@
 The crawler prototype's design is [`CRAWLER.md`](../CRAWLER.md)
 (decisions C1–C12). Its tasks CR.1–CR.6 run in order, one agent each.
 
-## CR.5 Feet and bodies
-
-- **Status:** open
-- **Why:** C10: footfalls matter.
-- **What to do:** a landing foot shoves bodies off its spot (a message,
-  applied in stage 5 like knockback) and a ghoul under it takes heavy
-  damage. Bodies path round planted feet. Ghouls don't attack it yet.
-- **Where:** `sim/src/settlement/vehicle.rs`, `combat.rs`, `messages.rs`.
-- **Found in:** crawler design.
-- **Tests:** a shove; a stomp; never a foot on an elder or sprite.
-- **Notes from CR.4:** riders and the pilot are seated
-  (`Seat::Vehicle`, `Seat::Rider`) and so out of `crawler::standing`: a
-  stomp or shove must skip them too. An elder climbing down stands clear
-  of every foot's spot and swing landing (`crawler::exit_spot`) but not
-  of a foot that lifts later; the foothold then avoids them as a standing
-  body, as before.
-- **Notes from CR.3:** a landing's view is `crawler::swing_point` at
-  `t = 1`: the sole comes down the last 40% of the swing fast, so a stomp
-  effect (dust, a thud) fits the tick the `Swing` becomes planted. The
-  drawn foot's pad is 0.7 m across (the rig's foot pieces).
-- **Notes from CR.2:** `foothold` already refuses spots on standing
-  agents (`Standing`, radius + 0.4 m, within 1 m of the floor) and leaves
-  threats out of that list, so a stomp is a landing (a `Swing` becoming
-  planted in `crawler::self_update`) on a threat's spot. Stage 2 can't
-  write threats: emit a message there or read the landings in stage 3.
-  The bodies list is every agent, scanned per candidate spot; a town
-  with many agents may want a grid.
-- **Notes from CR.1:** the lab's ghouls are a timed wave of three
-  `ghoul_sacred_tree` (2 hit points, chase within 3 m, leash 5 m) from the
-  south-east corner to the north-west one (`crawler_lab_supply.ron`);
-  each breaches there and is gone, so a stomp test should catch one on
-  its way, or add a wave.
-
 ## CR.6 Soak, tuning and demo
 
 - **Status:** open
@@ -48,6 +15,19 @@ The crawler prototype's design is [`CRAWLER.md`](../CRAWLER.md)
 - **Where:** sim tests, `app/demos/`, docs.
 - **Found in:** crawler design.
 - **Tests:** the soak; the full suite.
+- **Notes from CR.5:** feet shove and stomp (`crawler::read_footfalls`,
+  `Settlement::foot_lands`, a `FootLands` message, save format 49).
+  Tuning knobs: `STOMP_DAMAGE` (4), `STOMP_KNOCKBACK` (4 m/s),
+  `STOMP_STAGGER` (0.4 s) and `SHOVE_GAP` (0.1 m) in `crawler.rs`; the
+  view's dust in `vehicles::footfalls` (`STOMP_DUST`, `SHOVE_DUST`,
+  `DUST_RING`). The lab's ghouls walk the diagonal from the south-east
+  corner past the parked crawler at 0.6 m/s; the demo as it stands
+  stomps two of them on its north-east leg (frames 674 and 818, about
+  (16.8, 11.9) and (20.1, 14.7)), and the third walks on to the corner.
+  Retuning the gait or the route can lose them. A soak with ghouls under the feet now exercises the stomp: validate
+  every tick then, and check `combat.kills`. `crawler_feet_tests` has the
+  shove, stomp, among-bodies, seated and path tests; its
+  `put_under_a_foot` puts anything on a landing spot a tick before.
 - **Notes from CR.4:** riders need other players: a demo script drives
   only the local player (`control::protocol::Script`), so carrying riders
   in the demo needs "Guests in demo scripts" first, or a video from a
@@ -189,7 +169,125 @@ The crawler prototype's design is [`CRAWLER.md`](../CRAWLER.md)
   `avatar.rs`.
 - **Found in:** CR.4 of the crawler.
 
+## Walking into a crawler's foot by hand
+
+- **Status:** open
+- **Why:** planned routes go round a crawler's planted feet (CR.5), but an
+  elder walking with the stick, a ghoul walking its wave's route or
+  steering straight at a quarry outside a volume walks through a foot's
+  post.
+- **What to do:** treat planted feet as discs in the avatar's step
+  (`avatar::step`, as `Terrain::clear` blocks obstacles) and in a threat's
+  `walk_route_at`/`steer`; or push bodies out of them in stage 2 from last
+  tick's feet. A wave's route, planned once for all its enemies, could
+  replan when it meets one.
+- **Where:** `kestrel/sim/src/settlement/avatar.rs`, `chase.rs`,
+  `combat.rs` (`follow_route`).
+- **Found in:** CR.5 of the crawler.
+
+## Predicted routes near a crawler's feet
+
+- **Status:** open
+- **Why:** an elder's click-to-move route goes round the crawlers' feet
+  (CR.5) as `action::View::vehicles` has them. A joined client's replay
+  plans with the confirmed vehicles, the sim with the tick's own, so a
+  route planned near a walking crawler can differ by a foot's step and the
+  drawn elder snaps when the confirmed route arrives. A shove isn't
+  predicted either: the local elder is drawn on the spot until the
+  confirmed shove reaches them.
+- **What to do:** plan with the replay's own vehicle copy where it has one
+  (as "Predicted climb-out reads the confirmed vehicle"), and let the
+  replay apply a confirmed `FootLands` it can see coming (a swing whose
+  landing spot is under the elder).
+- **Where:** `kestrel/sim/src/settlement/prediction.rs`, `avatar.rs`
+  (`set_intent`).
+- **Found in:** CR.5 of the crawler.
+
 ## Done
+
+## CR.5 Feet and bodies
+
+- **Status:** done (branch `kestrel-crawler`, PR to come with CR.6)
+- **Why:** C10: footfalls matter.
+- **What to do:** a landing foot shoves bodies off its spot (a message,
+  applied in stage 5 like knockback) and a ghoul under it takes heavy
+  damage. Bodies path round planted feet. Ghouls don't attack it yet.
+- **Where:** `sim/src/settlement/vehicle.rs`, `combat.rs`, `messages.rs`.
+- **Found in:** crawler design.
+- **Tests:** a shove; a stomp; never a foot on an elder or sprite.
+- **Done:** a foot coming down shoves and stomps (C10).
+  `crawler::self_update` reports which feet came down this tick;
+  `Settlement::vehicles_self_update` keeps them in `Settlement::landings`
+  (not saved, emptied in housekeeping); stage 3
+  (`Settlement::read_footfalls`) lists under each foot the agents (alive,
+  not seated, not inside a building) and threats within the foot's 0.4 m
+  (`FOOT_RADIUS`) plus their radius whose feet are within 1 m of its floor
+  (any height outside a volume), as a `FootLands` message, a new late
+  queue (hashed only when not empty), so the save format is 49 (the
+  pending messages' queues). Stage 5 (`Settlement::foot_lands`, after the
+  threats' swings, before breaches) checks each again: an agent is put
+  just clear of the foot, 0.1 m past touching (`SHOVE_GAP`), away from it
+  (from the crawler's middle if it stood on the spot itself), or turned by
+  eighths of a turn, in the arena, clear of discs, rock and every foot, on
+  a floor a walk from where it stood reaches (`Terrain::walk_at`), with
+  its feet's height set there; an elder shoved stops digging; with
+  nowhere to go it stays. A threat loses `STOMP_DAMAGE` (4, armor or not:
+  more than a ghoul's 2 or 3), dying at 0 as a strike's kill
+  (`Event::Hit` with the new `Impact::Stomp`, `combat.kills`), else thrown
+  off at 4 m/s and staggered 0.4 s. Then `Event::Footfall { shoved,
+  stomped }` for the view. Seated elders are skipped in stage 3 and stage
+  5; a foot still never picks a foothold on a standing elder, sprite or
+  hauler (`foothold`, unchanged). Paths: `crawler::feet_in_the_way` gives
+  a disc at every foot's spot (planted, or a swing's landing) level with
+  the walker, but one it already touches; an elder's click-to-move route
+  (`set_intent`, on foot; not a foot on the target), a ghoul's chase
+  (straight check and plan) and its route home when it replans
+  (`route_home_at` takes the discs; a wave's shared route doesn't), and
+  haulers' and sprites' traffic detours (`move_worker`'s nearby discs) go
+  round them. The body is overhead and blocks nothing. Ghouls don't
+  attack it. View (`vehicles::footfalls`): a stone-dust burst under every
+  foot that comes down and a step's sound; a shove adds a ring of three
+  bursts, a stomp a ring of six and the landing cue; the ghoul bleeds and
+  falls as any kill (`Impact::Stomp` in `legacy`). Tests
+  (`crawler_feet_tests`): a guest elder put on a landing spot a tick
+  before is shoved just clear, away, on the floor, `Footfall` (1, 0); a
+  2-hit-point ghoul there dies (`Impact::Stomp`, a kill), one with 10
+  lives at 6, staggered and thrown away from the foot; both the same on 1
+  and 4 threads and across a save made the tick before; walking south
+  among four elders and a sprite standing where a free walk's feet came
+  down, no foot lands on one and none is shoved, and it walks on; a foot
+  forced under the pilot and each rider lists none of them and a message
+  naming them moves nobody; an elder sent straight across a parked foot
+  walks round it (never nearer than touching) and gets there. Existing
+  crawler, prediction and determinism tests pass unchanged; the whole
+  `sim_test` passed with the golden unchanged (no golden scene has a
+  crawler), and `movement_test`, `save_test` and `determinism_test`
+  passed. The demo is unchanged: as it stands it stomps two of the wave's
+  ghouls on its north-east leg (frames 674 and 818); screenshots
+  `cr5_stomp_*.png` from it. See "Walking into a crawler's foot by hand"
+  and "Predicted routes near a crawler's feet".
+- **Notes from CR.4:** riders and the pilot are seated
+  (`Seat::Vehicle`, `Seat::Rider`) and so out of `crawler::standing`: a
+  stomp or shove must skip them too. An elder climbing down stands clear
+  of every foot's spot and swing landing (`crawler::exit_spot`) but not
+  of a foot that lifts later; the foothold then avoids them as a standing
+  body, as before.
+- **Notes from CR.3:** a landing's view is `crawler::swing_point` at
+  `t = 1`: the sole comes down the last 40% of the swing fast, so a stomp
+  effect (dust, a thud) fits the tick the `Swing` becomes planted. The
+  drawn foot's pad is 0.7 m across (the rig's foot pieces).
+- **Notes from CR.2:** `foothold` already refuses spots on standing
+  agents (`Standing`, radius + 0.4 m, within 1 m of the floor) and leaves
+  threats out of that list, so a stomp is a landing (a `Swing` becoming
+  planted in `crawler::self_update`) on a threat's spot. Stage 2 can't
+  write threats: emit a message there or read the landings in stage 3.
+  The bodies list is every agent, scanned per candidate spot; a town
+  with many agents may want a grid.
+- **Notes from CR.1:** the lab's ghouls are a timed wave of three
+  `ghoul_sacred_tree` (2 hit points, chase within 3 m, leash 5 m) from the
+  south-east corner to the north-west one (`crawler_lab_supply.ron`);
+  each breaches there and is gone, so a stomp test should catch one on
+  its way, or add a wave.
 
 ## CR.4 Riders
 

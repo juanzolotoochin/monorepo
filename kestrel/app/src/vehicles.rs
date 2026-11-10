@@ -117,7 +117,39 @@ impl Service for Vehicles {
 
     fn systems(app: &mut App) {
         app.init_resource::<crate::prediction::DrawnAvatar>()
-            .add_service_systems::<Self, _>(Phase::Present, draw.run_if(in_state(WorldState::Active)));
+            .add_service_systems::<Self, _>(Phase::Present, (draw, footfalls).run_if(in_state(WorldState::Active)));
+    }
+}
+
+/// How many more bursts ring a foot that stomped a threat, or shoved a
+/// body, and how far out from its middle (the pad is 0.7 m across).
+const STOMP_DUST: usize = 6;
+const SHOVE_DUST: usize = 3;
+const DUST_RING: f32 = 0.45;
+
+/// A crawler's foot coming down (CR.5, `Event::Footfall`, the tick its
+/// swing is planted): a puff of dust under it and a step's thud; a stomp
+/// on a ghoul throws a ring of dust round it and lands heavily, a shove a
+/// smaller ring.
+fn footfalls(mut commands: Commands, mirror: Res<WorldMirror>, assets: Option<Res<crate::effects::FxAssets>>, sound: Option<Res<crate::sound::Sound>>) {
+    let Some(assets) = assets else { return };
+    for event in &mirror.events {
+        let sim::settlement::Event::Footfall { vehicle, leg, position, floor, shoved, stomped } = *event else { continue };
+        let at = mirror.to_view(position).with_y(floor.to_f32() + 0.05);
+        let seed = (mirror.tick as u32).wrapping_mul(2_654_435_761).wrapping_add(vehicle as u32 * 7 + leg as u32);
+        crate::effects::impact(&mut commands, &assets, at, Vec3::Y, seed, voxel_assets::ImpactResponse::Stone);
+        let ring = if stomped > 0 { STOMP_DUST } else if shoved > 0 { SHOVE_DUST } else { 0 };
+        for i in 0..ring {
+            let a = std::f32::consts::TAU * i as f32 / ring as f32 + leg as f32;
+            let p = at + Vec3::new(a.cos(), 0.0, a.sin()) * DUST_RING;
+            crate::effects::impact(&mut commands, &assets, p, (Vec3::new(a.cos(), 2.0, a.sin())).normalize(), seed.wrapping_add(i as u32 * 977), voxel_assets::ImpactResponse::Stone);
+        }
+        if let Some(sound) = &sound {
+            sound.play(if stomped > 0 { crate::sound::Cue::Land } else { crate::sound::Cue::Step });
+            if stomped > 0 {
+                sound.play(crate::sound::Cue::Stone);
+            }
+        }
     }
 }
 

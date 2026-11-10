@@ -76,6 +76,7 @@ impl Settlement {
             })
             .collect();
         result.extend(self.read_combat(tick, terrain));
+        result.extend(self.read_footfalls(terrain));
         result
     }
 

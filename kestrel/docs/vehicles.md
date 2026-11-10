@@ -53,6 +53,16 @@ A crawler has four seats: the pilot's at the helm on the deck's middle, and thre
 - **Climbing down:** G again puts the elder by the box, 0.15 m past it beyond their radius: their seat's own spot first, so four climbing down together land apart (the pilot's beside the middle on the left, a front rider's beside the back on their side, the back rider's behind), then their seat's side level with the middle, toward the back and the front, then the other side, then behind and in front. A spot must be in the arena, clear of discs and rock, clear of every foot's spot and of the spot each swinging foot will land on, and on a floor within 0.6 m of the highest floor its feet stand on, so never down a trench or a pit, even with a foot down in it. With none, the elder stays aboard.
 - **Prediction:** a rider's client runs the crawler alongside the rider on its confirmed controls, as if the pilot held their stick: exact until the pilot's next command reaches it. Climbing down is predicted, as the driver's.
 
+### Feet and bodies
+
+A foot coming down matters to whoever stands there (C10, `crawler.rs`):
+
+- **Shove:** stage 2 notes the feet that came down (`Settlement::landings`), stage 3 lists the agents and threats under each, within the foot's 0.4 m (`FOOT_RADIUS`) plus their radius and on its floor (within 1 m), as a `FootLands` message (save format 49 for its queue), and stage 5 applies it after the threats' swings. An elder, sprite or hauler still under it is put just clear of the foot, 0.1 m past touching (`SHOVE_GAP`), away from it (or from the crawler's middle if it stood on the spot itself), else turned by eighths of a turn: on a floor it can walk to, clear of discs, rock and every foot. An elder shoved stops digging. With nowhere to go it stays.
+- **Stomp:** a threat under it loses `STOMP_DAMAGE` (4) hit points, armor or not, more than a ghoul has; at 0 it dies as a strike's kill (`Event::Hit` with `Impact::Stomp`, a kill counted). One that lives is thrown off at 4 m/s and staggered 0.4 s.
+- **Skipped:** the pilot and riders, seated on the deck, are never under a foot, and a sprite inside a building isn't there. A foot never comes down on an elder, sprite or hauler it saw standing when it lifted (`foothold`); only one that walked under it since is shoved. Ghouls don't attack the crawler.
+- **Paths:** bodies path round its feet, not its body, which is overhead: an elder's click-to-move route, a ghoul's chase and its route home when it plans again, and haulers' and sprites' detours round traffic take a disc at every foot's spot (planted, or where a swing lands) level with them, except one they already touch. A wave's route, planned once for all its enemies, doesn't.
+- **View:** each footfall is an `Event::Footfall` (shoved, stomped). The view raises a puff of dust under the foot with a step's sound; a shove rings it with a little more dust, and a stomp with a ring of six bursts and a heavy landing (`vehicles::footfalls`). The stomped ghoul bleeds and falls as any kill.
+
 `Settlement::validate` checks the planted feet are in reach and the gait's feet in the air; `validate_footholds` checks they stand on floors.
 
 ## Drawing
@@ -63,7 +73,7 @@ A crawler is drawn from its rig, `app/actors/crawler.ron` (`app/src/crawler.rs`)
 
 ## Current limits
 
-- Rovers don't collide with avatars, haulers, threats or each other.
+- Rovers don't collide with avatars, haulers, threats or each other. A crawler's feet shove and stomp, but bodies walking by hand (the stick) pass through a planted foot; only planned routes go round it.
 - Clicking a point to drive to stops the rover instead of routing there.
 - The driver and a crawler's riders stand at their seats in their idle pose, and there's no on-screen "press G" prompt.
 - The rover is a built-in mesh and the crawler a built-in rig, not style skins.

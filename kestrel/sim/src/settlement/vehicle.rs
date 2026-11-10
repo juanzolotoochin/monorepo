@@ -230,8 +230,9 @@ pub(super) fn self_update(v: &mut VehicleState, terrain: &Terrain, def: &Charact
 
 /// Stage 2 for one vehicle: turn and speed toward its controls, then roll
 /// over the ground. A crawler walks instead (`crawler::self_update`), its
-/// feet clear of `bodies`.
-pub(super) fn self_update_among(v: &mut VehicleState, terrain: &Terrain, def: &CharacterDef, bodies: &[Standing]) {
+/// feet clear of `bodies`. Returns which of a crawler's feet came down
+/// this tick (none for a rover).
+pub(super) fn self_update_among(v: &mut VehicleState, terrain: &Terrain, def: &CharacterDef, bodies: &[Standing]) -> [bool; 4] {
     if v.legs.is_some() {
         return crawler::self_update(v, terrain, def, bodies);
     }
@@ -306,15 +307,22 @@ pub(super) fn self_update_among(v: &mut VehicleState, terrain: &Terrain, def: &C
         v.fall = Fx::ZERO;
         v.height = (v.height + vd.lift).min(rest);
     }
+    [false; 4]
 }
 
 impl Settlement {
     /// Stage 2: every vehicle drives itself. Each writes only itself; a
-    /// crawler's feet keep clear of `bodies`, as they stood last tick.
+    /// crawler's feet keep clear of `bodies`, as they stood last tick. The
+    /// feet that came down are kept for stage 3 (`Settlement::landings`).
     pub(super) fn vehicles_self_update(&mut self, terrain: &Terrain, bodies: &[Standing]) {
         use rayon::prelude::*;
         let characters = &self.characters;
-        self.vehicles.par_iter_mut().for_each(|v| self_update_among(v, terrain, &characters[v.character as usize], bodies));
+        let landed: Vec<[bool; 4]> = self.vehicles.par_iter_mut().map(|v| self_update_among(v, terrain, &characters[v.character as usize], bodies)).collect();
+        self.landings = landed
+            .iter()
+            .enumerate()
+            .flat_map(|(ix, feet)| (0..4u8).filter(move |&leg| feet[leg as usize]).map(move |leg| (ix as VehicleIx, leg)))
+            .collect();
     }
 
     /// The bodies a crawler's feet keep clear of, if there is a crawler.

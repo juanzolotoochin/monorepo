@@ -932,6 +932,11 @@ impl World {
             for message in messages.swing_lands {
                 settlement.swing_lands(tick, message, &mut self.terrain);
             }
+            // Crawlers' feet (CR.5): after the threats' swings, before the
+            // breaches, so a ghoul stomped at the corner doesn't breach.
+            for message in messages.foot_lands {
+                settlement.foot_lands(tick, message, &self.terrain);
+            }
             for message in messages.breach {
                 settlement.breach(message);
             }
@@ -969,6 +974,7 @@ impl World {
             settlement.combat_housekeeping(self.tick, &self.terrain);
             settlement.avatar_housekeeping(self.tick);
             settlement.seat_housekeeping(&self.terrain);
+            settlement.landings.clear();
             settlement.sprite_housekeeping(self.tick, &self.terrain);
             settlement.dig_housekeeping(self.tick, &mut self.terrain);
             settlement.pile_housekeeping(self.tick);

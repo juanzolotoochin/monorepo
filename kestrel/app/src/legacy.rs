@@ -682,6 +682,8 @@ pub enum Impact {
     BoltPierce,
     /// A fireball's landing or a burn.
     Fire,
+    /// A crawler's foot coming down on it.
+    Stomp,
 }
 
 /// This frame's events, in the original shapes.
@@ -1053,6 +1055,7 @@ impl Simulation {
                             s::Impact::BoltImpale => Impact::BoltImpale,
                             s::Impact::BoltPierce => Impact::BoltPierce,
                             s::Impact::Fire => Impact::Fire,
+                            s::Impact::Stomp => Impact::Stomp,
                         },
                     },
                     s::Event::PinnedLanded { target, position } => Event::PinnedLanded { target: *target, position: p(*position) },
@@ -1093,6 +1096,9 @@ impl Simulation {
                     s::Event::SpriteReturned { agent } => Event::SpriteReturned { agent: agent_name(*agent) },
                     s::Event::TreeFell => Event::TreeFell,
                     s::Event::Dispelled { threat, position } => Event::Dispelled { target: *threat, position: p(*position) },
+                    // Drawn by the crawler's view from the mirror's events
+                    // (`vehicles::footfalls`).
+                    s::Event::Footfall { .. } => return None,
                 })
             })
             .collect();

@@ -39,9 +39,10 @@ use fx::{Fx, FxVec2};
 use serde::{Deserialize, Serialize};
 
 use super::vehicle::{self, VehicleState, REVERSE_ANGLE, SUBSTEP};
-use super::AgentState;
+use super::{AgentIx, AgentState, Event, Impact, Role, Settlement};
+use crate::messages::{FootLands, Messages};
 use crate::nav::{angle_between, bearing, heading_vector};
-use crate::terrain::Terrain;
+use crate::terrain::{Disc, Terrain};
 use crate::volume::{self, ROUNDING};
 
 /// How far a planted foot strays from its resting spot before the body
@@ -54,8 +55,9 @@ pub const MIN_RISE: Fx = Fx::ONE;
 /// The body hangs this far under the deck: ground under it higher than its
 /// belly stops it.
 pub const BELLY: Fx = Fx::from_ratio(6, 5);
-/// A foot's footprint, for the bodies it never lands on.
-const FOOT_RADIUS: Fx = Fx::from_ratio(2, 5);
+/// A foot's footprint, for the bodies it never lands on, the ones it
+/// shoves off and stomps (CR.5), and the paths that go round it.
+pub const FOOT_RADIUS: Fx = Fx::from_ratio(2, 5);
 /// Footholds are looked for on a grid this fine round the ideal spot.
 const GRID: Fx = Fx::from_ratio(1, 4);
 /// A stick pointing further than this from the heading turns it in place
@@ -393,11 +395,13 @@ fn fits(legs: &Legs, pose: Pose, height: Fx, terrain: &Terrain, c: &CrawlerDef) 
 
 /// Stage 2 for a crawler: steer, put down the feet that have swung, lift
 /// the feet the gait lifts, move the body as far as its feet allow and
-/// settle its height.
-pub(super) fn self_update(v: &mut VehicleState, terrain: &Terrain, def: &CharacterDef, bodies: &[Standing]) {
+/// settle its height. Returns which feet came down this tick (CR.5: stage
+/// 3 looks under them, `Settlement::read_footfalls`).
+pub(super) fn self_update(v: &mut VehicleState, terrain: &Terrain, def: &CharacterDef, bodies: &[Standing]) -> [bool; 4] {
+    let mut landed = [false; 4];
     let vd = vehicle::tuning(def);
     let c = def.crawler.as_ref().expect("crawlers have crawler tuning");
-    let Some(mut legs) = v.legs.take() else { return };
+    let Some(mut legs) = v.legs.take() else { return landed };
 
     // The stick: walk toward it, turn in place toward it, or back up.
     let top_speed = if v.control.boost { def.movement.run } else { def.movement.walk }.div_int(content::TICKS_PER_SECOND as i64);
@@ -434,6 +438,7 @@ pub(super) fn self_update(v: &mut VehicleState, terrain: &Terrain, def: &Charact
         let hip = pose.point(c.hip, leg);
         if heights(c, [(hip, to, floor)]).is_some_and(|(lo, hi)| lo <= v.height && v.height <= hi) {
             legs.feet[leg] = Foot { spot: to, floor, swing: None };
+            landed[leg] = true;
         } else if heights(c, planted(&legs, c, pose).chain([(hip, to, floor)])).is_none() {
             // The body can't bring it into reach: aim again from here.
             if let Some((to, floor)) = foothold(&legs, leg, pose, pose, to, v.height, terrain, c, legs.gait.def(c), bodies) {
@@ -522,6 +527,7 @@ pub(super) fn self_update(v: &mut VehicleState, terrain: &Terrain, def: &Charact
     v.fall = Fx::ZERO;
     v.wheels = std::array::from_fn(|i| legs.feet[i].floor);
     v.legs = Some(legs);
+    landed
 }
 
 // Riders (CR.4, C9): the pilot stands at the helm on the deck's middle (the
@@ -630,6 +636,175 @@ pub fn exit_spot(v: &VehicleState, c: &CrawlerDef, place: Option<u8>, radius: Fx
         let ground = terrain.footprint_near(p, level, radius)?;
         ((ground - level).abs() <= EXIT_LEVEL).then_some((p, ground))
     })
+}
+
+// Feet and bodies (CR.5, C10): a foot coming down shoves the bodies under
+// it off its spot and stomps the threats there. Stage 2 notes the feet that
+// came down (`Settlement::landings`), stage 3 lists who stands under each
+// (`read_footfalls`, a `FootLands` message) and stage 5 applies it
+// (`foot_lands`), as a threat's swing and its knockback are. Seated elders
+// (the pilot and riders) are on the deck, out of reach. A foot never comes
+// down on an elder or sprite it saw when it lifted (`foothold`); one that
+// walked under it since is shoved. Bodies path round the feet
+// (`feet_in_the_way`), not the body, which is overhead.
+
+/// How far past touching a foot a body it shoves stands, in meters.
+const SHOVE_GAP: Fx = Fx::from_ratio(1, 10);
+/// What a foot coming down on a threat takes from its health: more than a
+/// ghoul has (2 or 3), most of a brute's 5. Armor doesn't stop it.
+pub const STOMP_DAMAGE: u32 = 4;
+/// A stomped threat that lives is thrown off its spot at this, in meters
+/// per second, and staggered `STOMP_STAGGER`.
+const STOMP_KNOCKBACK: Fx = Fx::from_int(4);
+const STOMP_STAGGER: u64 = content::millis_to_ticks(400);
+/// A body whose feet are within this of a foot's floor stands on it, as
+/// `foothold` counts it; a body in a tunnel under the floor is out of it.
+const ON_FLOOR: Fx = Fx::ONE;
+
+/// Whether feet at `height` and a foot's `floor` are on one floor: always
+/// outside a volume, where every body walks on the ground.
+fn level_with(terrain: &Terrain, height: Fx, floor: Fx) -> bool {
+    terrain.volume.is_none() || (height - floor).abs() <= ON_FLOOR
+}
+
+/// Whether a body of `radius` at `position`, its feet at `height`, is
+/// under a foot at `spot` on `floor`.
+fn under_foot(terrain: &Terrain, spot: FxVec2, floor: Fx, position: FxVec2, radius: Fx, height: Fx) -> bool {
+    let reach = radius + FOOT_RADIUS;
+    (position - spot).length_squared() < reach * reach && level_with(terrain, height, floor)
+}
+
+/// Every crawler's feet as bodies see them: where each stands, or where it
+/// swings to, and its floor.
+pub fn footings(vehicles: &[VehicleState]) -> Vec<(FxVec2, Fx)> {
+    vehicles.iter().filter_map(|v| v.legs.as_ref()).flat_map(|legs| (0..4).map(move |i| legs.landing(i))).collect()
+}
+
+/// The feet a body of `radius` at `from`, its feet at `z`, paths round:
+/// a disc of `FOOT_RADIUS` at each of `footings` level with it, but those
+/// it already touches (it walks out from under them).
+pub fn feet_in_the_way(footings: &[(FxVec2, Fx)], terrain: &Terrain, from: FxVec2, z: Fx, radius: Fx) -> Vec<Disc> {
+    footings
+        .iter()
+        .filter(|&&(spot, floor)| !under_foot(terrain, spot, floor, from, radius, z) && level_with(terrain, z, floor))
+        .map(|&(center, _)| Disc { center, radius: FOOT_RADIUS })
+        .collect()
+}
+
+/// Where a body of `radius` under a foot at `spot` is shoved to from
+/// `from`, its feet at `z`: just clear of the foot, away from it (from the
+/// crawler's `middle` if it stands on the spot itself), or else turned by
+/// eighths of a turn, nearest first. The spot is in the arena, clear of
+/// discs, rock and every foot (`others`), and a walk from where it stands
+/// reaches it; with its feet's height there. `None` when nowhere is.
+fn shove_spot(terrain: &Terrain, spot: FxVec2, middle: FxVec2, from: FxVec2, z: Fx, radius: Fx, others: &[(FxVec2, Fx)]) -> Option<(FxVec2, Fx)> {
+    let away = if from != spot {
+        from - spot
+    } else if spot != middle {
+        spot - middle
+    } else {
+        FxVec2::new(Fx::ZERO, Fx::ONE)
+    };
+    let (base, reach) = (bearing(FxVec2::ZERO, away), FOOT_RADIUS + radius + SHOVE_GAP);
+    let touching = (FOOT_RADIUS + radius) * (FOOT_RADIUS + radius);
+    [0, 1, -1, 2, -2, 3, -3, 4].into_iter().find_map(|eighths: i64| {
+        let p = spot + heading_vector(base + Fx::PI.mul_int(eighths).div_int(4)) * reach;
+        if !terrain.inside(p) || !terrain.clear(p, p, radius) || others.iter().any(|&(f, _)| (f - p).length_squared() < touching) {
+            return None;
+        }
+        Some((p, terrain.walk_at(from, p, z, radius)?))
+    })
+}
+
+impl Settlement {
+    /// Stage 3: for each foot that came down this tick, the agents standing
+    /// under it (alive, not seated, not inside a building) and the threats,
+    /// filed at the foot.
+    pub(super) fn read_footfalls(&self, terrain: &Terrain) -> Vec<(FxVec2, Messages)> {
+        self.landings
+            .iter()
+            .filter_map(|&(vehicle, leg)| {
+                let foot = &self.vehicles.get(vehicle as usize)?.legs.as_ref()?.feet[leg as usize];
+                let (spot, floor) = (foot.spot, foot.floor);
+                let agents = self
+                    .agents
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, a)| a.body.alive() && a.avatar().is_none_or(|p| p.seat.is_none()) && a.sprite().is_none_or(|s| !s.inside()))
+                    .filter(|(_, a)| under_foot(terrain, spot, floor, a.body.position, a.radius(), a.height()))
+                    .map(|(i, _)| i as AgentIx)
+                    .collect();
+                let threats = self.threats.iter().filter(|t| under_foot(terrain, spot, floor, t.position, self.threat_def(t).body.radius, t.height)).map(|t| t.id).collect();
+                let mut out = Messages::default();
+                out.foot_lands.push(FootLands { vehicle, leg, spot, floor, agents, threats });
+                Some((spot, out))
+            })
+            .collect()
+    }
+
+    /// Stage 5: a foot came down. Each agent still under it is shoved just
+    /// clear of it (`shove_spot`; one with nowhere to go stays), and each
+    /// threat still under it takes `STOMP_DAMAGE`, dying at 0 as a strike's
+    /// kill (`Event::Hit`, `Impact::Stomp`), or is thrown off and staggered.
+    /// Then `Event::Footfall`, for the view's dust.
+    pub(crate) fn foot_lands(&mut self, tick: u64, message: FootLands, terrain: &Terrain) {
+        let FootLands { vehicle, leg, spot, floor, agents, threats } = message;
+        let Some(middle) = self.vehicles.get(vehicle as usize).map(|v| v.position) else { return };
+        let others = footings(&self.vehicles);
+        let mut shoved = 0;
+        for a in agents {
+            let Some(agent) = self.agents.get(a as usize) else { continue };
+            let seated = agent.avatar().is_some_and(|p| p.seat.is_some()) || agent.sprite().is_some_and(|s| s.inside());
+            let (position, radius, height) = (agent.body.position, agent.radius(), agent.height());
+            if !agent.body.alive() || seated || !under_foot(terrain, spot, floor, position, radius, height) {
+                continue;
+            }
+            let Some((to, feet)) = shove_spot(terrain, spot, middle, position, height, radius, &others) else { continue };
+            let agent = &mut self.agents[a as usize];
+            agent.body.position = to;
+            agent.body.velocity = FxVec2::ZERO;
+            agent.body.push = FxVec2::ZERO;
+            match &mut agent.role {
+                Role::Avatar(avatar) => {
+                    // Shoved off its spot, it can't dig there.
+                    avatar.dig = None;
+                    if !avatar.flight.airborne {
+                        avatar.height = feet;
+                        avatar.flight.support = feet;
+                    }
+                }
+                Role::Sprite(sprite) => sprite.height = feet,
+                Role::Hauler(hauler) => hauler.height = feet,
+            }
+            shoved += 1;
+        }
+        let mut stomped = 0;
+        for id in threats {
+            let Some(i) = self.threat_index(id) else { continue };
+            let t = &self.threats[i];
+            if !under_foot(terrain, spot, floor, t.position, self.threat_def(t).body.radius, t.height) {
+                continue;
+            }
+            let t = &mut self.threats[i];
+            t.hp = t.hp.saturating_sub(STOMP_DAMAGE);
+            let mut away = (t.position - spot).normalize_or_zero();
+            if away == FxVec2::ZERO {
+                away = (spot - middle).normalize_or_zero();
+            }
+            t.knockback = away * STOMP_KNOCKBACK;
+            t.stagger_until = tick + STOMP_STAGGER;
+            // A stagger cancels a windup.
+            t.windup = None;
+            let (killed, position) = (t.hp == 0, t.position);
+            self.events.push(Event::Hit { target: id, agent: None, projectile: None, position, killed, impact: Impact::Stomp });
+            if killed {
+                self.threats.remove(i);
+                self.combat.kills += 1;
+            }
+            stomped += 1;
+        }
+        self.events.push(Event::Footfall { vehicle, leg, position: spot, floor, shoved, stomped });
+    }
 }
 
 /// Every planted foot in reach of its hip and under it, and no more feet
