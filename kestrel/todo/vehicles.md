@@ -1,61 +1,8 @@
 # Vehicles
 
 The crawler prototype's design is [`CRAWLER.md`](../CRAWLER.md)
-(decisions C1–C12). Its tasks CR.1–CR.6 run in order, one agent each.
-
-## CR.6 Soak, tuning and demo
-
-- **Status:** open
-- **Why:** the prototype is reviewed by video.
-- **What to do:** a soak in the lab (driving randomly for minutes,
-  `validate` every tick); tune speeds and the gait; a demo video crossing
-  the terraces, the step, the trench and the moat, stopping at the wide
-  pit and the cliff, stomping a ghoul and carrying riders; the full suite;
-  a `docs/test-time.md` row; `docs/vehicles.md` and `CRAWLER.md`'s status.
-- **Where:** sim tests, `app/demos/`, docs.
-- **Found in:** crawler design.
-- **Tests:** the soak; the full suite.
-- **Notes from CR.5:** feet shove and stomp (`crawler::read_footfalls`,
-  `Settlement::foot_lands`, a `FootLands` message, save format 49).
-  Tuning knobs: `STOMP_DAMAGE` (4), `STOMP_KNOCKBACK` (4 m/s),
-  `STOMP_STAGGER` (0.4 s) and `SHOVE_GAP` (0.1 m) in `crawler.rs`; the
-  view's dust in `vehicles::footfalls` (`STOMP_DUST`, `SHOVE_DUST`,
-  `DUST_RING`). The lab's ghouls walk the diagonal from the south-east
-  corner past the parked crawler at 0.6 m/s; the demo as it stands
-  stomps two of them on its north-east leg (frames 674 and 818, about
-  (16.8, 11.9) and (20.1, 14.7)), and the third walks on to the corner.
-  Retuning the gait or the route can lose them. A soak with ghouls under the feet now exercises the stomp: validate
-  every tick then, and check `combat.kills`. `crawler_feet_tests` has the
-  shove, stomp, among-bodies, seated and path tests; its
-  `put_under_a_foot` puts anything on a landing spot a tick before.
-- **Notes from CR.4:** riders need other players: a demo script drives
-  only the local player (`control::protocol::Script`), so carrying riders
-  in the demo needs "Guests in demo scripts" first, or a video from a
-  hosted session with joined clients. The soak could seat riders with
-  `CommandKind::Join` and `Board` in the sim (`crawler_lab_tests`'s
-  `crawler_lab_with_guests` puts four guests beside it). Save format is
-  48. `docs/test-time.md` has no CR.4 row; add it with CR.6's.
-- **Notes from CR.3:** turning in place right after stopping at the pit
-  stalls (the body won't turn: a front foot's turned spot is over the pit
-  edge); the demo backs off 5 s first, and a test path that backed 3 s
-  still stalled at 41°. See "Crawler turns in place beside a pit". The
-  demo now climbs the plateau's south face (toward the camera; the north
-  face can't be seen from the follow camera) and ends turning south and
-  trotting, about 100 s. Tuning the gait or `lift` changes the view's
-  arcs too; the
-  rig's lengths (`actors/crawler.ron`) are checked against `reach` in
-  `crawler::tests`.
-- **Notes from CR.2:** `crawler_lab_tests::a_minute_driving_round_the_lab_validates`
-  is the short soak (random sticks, `validate` and `validate_footholds`
-  every tick); lengthen it. Tuning knobs: `WORKSPACE` (2 m) and `SETTLE`
-  in `crawler.rs`, the `CrawlerDef` gaits, and `vehicle.turn`,
-  `acceleration` and `lift` in `crawler.ron`. At a 25°/s turn or faster
-  the walk can't keep its feet within 2 m of rest and stutters. From
-  rest the body may stall a moment until the last leg of the wave steps.
-  The moat (2 m) is crossable like the trench; the lab's too-wide cases
-  are the 3 m pit and the 2 m cliff (no 1.6 m step can be built from
-  0.5 m layers). The demo's route is open-loop (held sticks for set
-  frames); retune it if speeds change.
+(decisions C1–C12). Its tasks CR.1–CR.6 are done (see Done); what's left
+of it is in the open entries below.
 
 ## Collide rovers with bodies
 
@@ -101,20 +48,6 @@ The crawler prototype's design is [`CRAWLER.md`](../CRAWLER.md)
 - **Where:** `kestrel/sim/src/settlement/crawler.rs`.
 - **Found in:** CR.2 of the crawler.
 
-## Crawler turns in place beside a pit
-
-- **Status:** open
-- **Why:** stopped with its front feet at the 3 m pit's edge, the crawler
-  turned in place (stick 90° off) doesn't turn at all, or turns a little
-  and stops, and a boost doesn't free it: the feet's turned resting spots
-  fall over the pit, no foothold is found, and the body can't turn on the
-  feet it has.
-- **What to do:** when the ideal spot has no foothold, try spots nearer
-  the body (or the body's side away from the gap) before staying down;
-  or let the turn walk the body back a little.
-- **Where:** `kestrel/sim/src/settlement/crawler.rs` (`foothold`, `fits`).
-- **Found in:** CR.3 of the crawler (the demo's turn at the pit).
-
 ## Predict a joined pilot's crawler feet
 
 - **Status:** open
@@ -126,20 +59,6 @@ The crawler prototype's design is [`CRAWLER.md`](../CRAWLER.md)
   the local pilot's feet from it.
 - **Where:** `kestrel/app/src/prediction.rs`, `vehicles.rs`.
 - **Found in:** CR.3 of the crawler.
-
-## Guests in demo scripts
-
-- **Status:** open
-- **Why:** a demo script (`app/demos/*.json`) drives only the local
-  player, so a demo can't show a crawler carrying riders (C9) or
-  anything else with several elders.
-- **What to do:** a script op that joins a scripted guest (a
-  `CommandKind::Join` under a new `PlayerId`) and ops that send that
-  guest's commands (walk, board), applied through the session like the
-  local player's.
-- **Where:** `kestrel/app/src/control/protocol.rs`, `control/mod.rs`,
-  `lockstep.rs`.
-- **Found in:** CR.4 of the crawler.
 
 ## Predicted climb-out reads the confirmed vehicle
 
@@ -203,7 +122,175 @@ The crawler prototype's design is [`CRAWLER.md`](../CRAWLER.md)
   (`set_intent`).
 - **Found in:** CR.5 of the crawler.
 
+## Crawler locks beside a gap's end
+
+- **Status:** open
+- **Why:** the rules that free a crawler held at a gap (CR.6) move it along
+  its heading only. A path that turned it beside the pit's south end, with
+  a foot stepped round the end onto the far rim and its resting spot over
+  the pit, stalled at 167° of a 180° turn (seen before the last of those
+  rules; not checked since). A foot held sideways of the heading may still
+  lock it.
+- **What to do:** a soak that drives at the gaps' ends and edges on
+  purpose; if it locks, let the body step sideways toward the held feet
+  (or lift the held foot back across when it can't reach its rest).
+- **Where:** `kestrel/sim/src/settlement/crawler.rs` (`over_a_gap`,
+  `fits`, `foothold`), `crawler_lab_tests.rs`.
+- **Found in:** CR.6 of the crawler.
+
+## Vehicles in the demo trace
+
+- **Status:** open
+- **Why:** a demo's frame trace (`settlement.simulation`) has agents and
+  threats but no vehicles, so routing the crawler demo read the pilot's
+  position for the crawler's and couldn't see its feet.
+- **What to do:** add each vehicle's position, heading, speed and (for a
+  crawler) feet to `settlement::snapshot`.
+- **Where:** `kestrel/app/src/settlement.rs` (`snapshot`).
+- **Found in:** CR.6 of the crawler.
+
+## The Crawler Lab's HUD
+
+- **Status:** open
+- **Why:** the lab shows the settlement's base, wave and pack lines and a
+  stock help line that don't apply to it (CR.1).
+- **What to do:** hide them in scenes without a base, or give the lab its
+  own help line (G boards, run trots).
+- **Where:** `kestrel/app/src/settlement.rs`, `scene.rs`.
+- **Found in:** CR.1 of the crawler.
+
 ## Done
+
+## CR.6 Soak, tuning and demo
+
+- **Status:** done (branch `kestrel-crawler`, PR to come)
+- **Why:** the prototype is reviewed by video.
+- **What to do:** a soak in the lab (driving randomly for minutes,
+  `validate` every tick); tune speeds and the gait; a demo video crossing
+  the terraces, the step, the trench and the moat, stopping at the wide
+  pit and the cliff, stomping a ghoul and carrying riders; the full suite;
+  a `docs/test-time.md` row; `docs/vehicles.md` and `CRAWLER.md`'s status.
+- **Where:** sim tests, `app/demos/`, docs.
+- **Found in:** crawler design.
+- **Tests:** the soak; the full suite.
+- **Done:** soak: `crawler_lab_tests::four_minutes_driving_with_riders_among_ghouls_validates`
+  (and `half_an_hour_..._validates`, `#[ignore]`d, run once) on
+  `crawler_lab_with_guests`: the pilot and three riders board, a fifth
+  elder stays on the ground; the wave sends a ghoul every 4 s; the pilot
+  walks, trots, turns in place either way, backs, heads for the lab's
+  middle or steers at random, 1 to 5 s each; every 1.5 s a ghoul (or,
+  every third time, the grounded elder) is put on a foot's landing spot a
+  tick before it lands. Every tick: `validate`, `validate_footholds`, the
+  pilot aboard, the riders in their places, every `Event::Hit` a stomp and
+  `combat.kills` equal to the stomp kills. Four minutes: 461 lifts, 60 of
+  60 ghouls put under a foot stomped, 29 shoves; half an hour: 3574 lifts,
+  450 of 450, 221 shoves (about 2 s of test time). Tuning: no speed or gait
+  change; the turn beside a pit and a lock astride the moat's edge, found
+  routing the demo, are fixed (see "Crawler turns in place beside a pit",
+  Done). Demo `crawler_lab.json` (3405 frames, `max_frames` 3600): the pilot and three guest
+  riders (see "Guests in demo scripts", Done) board, walk south over the
+  moat onto the island, turn and walk east off it, north-north-east and up
+  the plateau's 1.5 m south face, trot west down the terraces (stomping the
+  third ghoul about frame 1800 near (2.9, 4.2)) and across the trench,
+  stop at the pit, turn north beside it, trot north along it and walk east
+  into the mesa's cliff, where it stops; the pilot climbs down. Video and
+  frames reviewed (`cr6_demo_small.mp4`, `cr6_*.png`). Docs:
+  `docs/vehicles.md` (steering, footholds, the soak, the demo),
+  `CRAWLER.md` (done; "What changed versus the design"),
+  `todo/playtest-review.md` ("Play the crawler").
+- **Notes from CR.5:** feet shove and stomp (`crawler::read_footfalls`,
+  `Settlement::foot_lands`, a `FootLands` message, save format 49).
+  Tuning knobs: `STOMP_DAMAGE` (4), `STOMP_KNOCKBACK` (4 m/s),
+  `STOMP_STAGGER` (0.4 s) and `SHOVE_GAP` (0.1 m) in `crawler.rs`; the
+  view's dust in `vehicles::footfalls` (`STOMP_DUST`, `SHOVE_DUST`,
+  `DUST_RING`). The lab's ghouls walk the diagonal from the south-east
+  corner past the parked crawler at 0.6 m/s; the demo as it stands
+  stomps two of them on its north-east leg (frames 674 and 818, about
+  (16.8, 11.9) and (20.1, 14.7)), and the third walks on to the corner.
+  Retuning the gait or the route can lose them. A soak with ghouls under the feet now exercises the stomp: validate
+  every tick then, and check `combat.kills`. `crawler_feet_tests` has the
+  shove, stomp, among-bodies, seated and path tests; its
+  `put_under_a_foot` puts anything on a landing spot a tick before.
+- **Notes from CR.4:** riders need other players: a demo script drives
+  only the local player (`control::protocol::Script`), so carrying riders
+  in the demo needs "Guests in demo scripts" first, or a video from a
+  hosted session with joined clients. The soak could seat riders with
+  `CommandKind::Join` and `Board` in the sim (`crawler_lab_tests`'s
+  `crawler_lab_with_guests` puts four guests beside it). Save format is
+  48. `docs/test-time.md` has no CR.4 row; add it with CR.6's.
+- **Notes from CR.3:** turning in place right after stopping at the pit
+  stalls (the body won't turn: a front foot's turned spot is over the pit
+  edge); the demo backs off 5 s first, and a test path that backed 3 s
+  still stalled at 41°. See "Crawler turns in place beside a pit". The
+  demo now climbs the plateau's south face (toward the camera; the north
+  face can't be seen from the follow camera) and ends turning south and
+  trotting, about 100 s. Tuning the gait or `lift` changes the view's
+  arcs too; the
+  rig's lengths (`actors/crawler.ron`) are checked against `reach` in
+  `crawler::tests`.
+- **Notes from CR.2:** `crawler_lab_tests::a_minute_driving_round_the_lab_validates`
+  is the short soak (random sticks, `validate` and `validate_footholds`
+  every tick); lengthen it. Tuning knobs: `WORKSPACE` (2 m) and `SETTLE`
+  in `crawler.rs`, the `CrawlerDef` gaits, and `vehicle.turn`,
+  `acceleration` and `lift` in `crawler.ron`. At a 25°/s turn or faster
+  the walk can't keep its feet within 2 m of rest and stutters. From
+  rest the body may stall a moment until the last leg of the wave steps.
+  The moat (2 m) is crossable like the trench; the lab's too-wide cases
+  are the 3 m pit and the 2 m cliff (no 1.6 m step can be built from
+  0.5 m layers). The demo's route is open-loop (held sticks for set
+  frames); retune it if speeds change.
+
+## Crawler turns in place beside a pit
+
+- **Status:** done (with CR.6, branch `kestrel-crawler`, PR to come)
+- **Why:** stopped with its front feet at the 3 m pit's edge, the crawler
+  turned in place (stick 90° off) doesn't turn at all, or turns a little
+  and stops, and a boost doesn't free it: the feet's turned resting spots
+  fall over the pit, no foothold is found, and the body can't turn on the
+  feet it has.
+- **What to do:** when the ideal spot has no foothold, try spots nearer
+  the body (or the body's side away from the gap) before staying down;
+  or let the turn walk the body back a little.
+- **Where:** `kestrel/sim/src/settlement/crawler.rs` (`foothold`, `fits`).
+- **Found in:** CR.3 of the crawler (the demo's turn at the pit).
+- **Done:** two rules in `crawler.rs`. Footholds: with no foothold round
+  the ideal spot, `foothold` looks round the foot's resting spot (at
+  landing, then now) for one that brings it at least `SETTLE` nearer its
+  rest, so a foot beside a pit steps in toward the body instead of staying
+  put (and doesn't shuffle along the edge). Steering: stopped (speed not
+  positive) with a planted foot's resting spot over a gap
+  (`over_a_gap`: no floor within `step`) and the stick more than about 7°
+  off the heading (`TURN_NEAR`), it moves at half its reverse speed toward
+  the held feet as it turns: back off a pit ahead, on from a moat behind.
+  And `fits` lets a foot that came down past `WORKSPACE` come back in (it
+  only refused the body moving it further), which had locked the body.
+  Tests: `the_crawler_turns_in_place_beside_the_pit` (stopped at the pit,
+  it turns south or north within 12 s, backing off under 3 m, then walks
+  away along the edge; no foot ever down the pit) and
+  `the_crawler_walks_on_after_turning_by_the_moat` (CR.6's demo route,
+  which had locked it astride the moat's edge for good).
+
+## Guests in demo scripts
+
+- **Status:** done (with CR.6, branch `kestrel-crawler`, PR to come)
+- **Why:** a demo script (`app/demos/*.json`) drives only the local
+  player, so a demo can't show a crawler carrying riders (C9) or
+  anything else with several elders.
+- **What to do:** a script op that joins a scripted guest (a
+  `CommandKind::Join` under a new `PlayerId`) and ops that send that
+  guest's commands (walk, board), applied through the session like the
+  local player's.
+- **Where:** `kestrel/app/src/control/protocol.rs`, `control/mod.rs`,
+  `lockstep.rs`.
+- **Found in:** CR.4 of the crawler.
+- **Done:** three script ops (`control::protocol::Command`):
+  `guest_join { guest }` joins player `guest` (1 to 8), `guest_walk
+  { guest, position }` sends their elder to a point along a planned route,
+  `guest_board { guest }` presses G for them. A host files them through
+  `net::Host::queue_as` (`session::Session::queue_as`,
+  `SessionService::command_as`) in order with its own commands; a client
+  refuses them ("Guests need a host"). The crawler demo seats three riders
+  with them. No other script verbs for guests yet (strike, dig, carry).
 
 ## CR.5 Feet and bodies
 

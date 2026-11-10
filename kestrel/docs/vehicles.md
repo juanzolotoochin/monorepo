@@ -40,8 +40,8 @@ flowchart LR
 The Crawler Lab parks a **crawler** (`character/crawler.ron`, design in [`CRAWLER.md`](../CRAWLER.md)): a vehicle with a `crawler` section that walks on four feet instead of rolling. It boards, drives and seats its pilot as the rover does; `sim/src/settlement/crawler.rs` moves it, in `Fx`:
 
 - **State:** `VehicleState::legs` holds four feet (where each stands on which floor, or where it swings to) and the gait's clock (save format 47).
-- **Gait:** a wave walk, one leg at a time with three down, and a diagonal trot on boost. Each leg lifts at the start of its slice of the cycle; backing up runs the wave the other way. Turning in place steps the feet sideways round the middle.
-- **Footholds:** a lifting foot lands on the floor nearest its resting spot ahead of the body, within reach of its hip, at most 1.5 m up or down, with at most 2 m of gap on the way, and never on an elder, sprite or hauler. With none, it stays down, and the body stops where that foot can't reach any further.
+- **Gait:** a wave walk, one leg at a time with three down, and a diagonal trot on boost. Each leg lifts at the start of its slice of the cycle; backing up runs the wave the other way. The stick walks within 60° of the heading, turns in place up to 120° and backs up past that. Turning in place steps the feet sideways round the middle. Stopped with a foot's resting spot over a gap (at the pit's edge) and steered more than about 7° away, it backs off at half its reverse speed as it turns, until its feet have floor to step round on.
+- **Footholds:** a lifting foot lands on the floor nearest its resting spot ahead of the body, within reach of its hip, at most 1.5 m up or down, with at most 2 m of gap on the way, and never on an elder, sprite or hauler. With none there (the spot ahead is over a pit or a moat), it looks round its resting spot instead, for a spot that brings it nearer its rest. With none, it stays down, and the body stops where that foot can't reach any further: a planted foot strays at most 2 m from its resting spot, and one that came down further only comes back in.
 - **Body:** level, its height easing to its feet's mean floor, sinking when a foot far below needs it. Ground under its box higher than its belly (1.2 m under the deck) stops it, as the mesa's 2 m cliff does.
 
 ### Pilot and riders
@@ -63,7 +63,11 @@ A foot coming down matters to whoever stands there (C10, `crawler.rs`):
 - **Paths:** bodies path round its feet, not its body, which is overhead: an elder's click-to-move route, a ghoul's chase and its route home when it plans again, and haulers' and sprites' detours round traffic take a disc at every foot's spot (planted, or where a swing lands) level with them, except one they already touch. A wave's route, planned once for all its enemies, doesn't.
 - **View:** each footfall is an `Event::Footfall` (shoved, stomped). The view raises a puff of dust under the foot with a step's sound; a shove rings it with a little more dust, and a stomp with a ring of six bursts and a heavy landing (`vehicles::footfalls`). The stomped ghoul bleeds and falls as any kill.
 
-`Settlement::validate` checks the planted feet are in reach and the gait's feet in the air; `validate_footholds` checks they stand on floors.
+`Settlement::validate` checks the planted feet are in reach and the gait's feet in the air; `validate_footholds` checks they stand on floors. The soak (`crawler_lab_tests`, four minutes in CI and an ignored half hour) drives a pilot with three riders aboard at random, walking, trotting, turning and backing among ghouls and an elder put under its feet, and checks both every tick, the riders in their places and every kill a stomp.
+
+### The demo
+
+`//kestrel/app:crawler_lab_demo` (`_video` for the mp4, a local GPU target) boards a pilot and three riders, scripted guests (`guest_join`, `guest_walk` and `guest_board` in demo scripts, which a host sends as players 1 to 8), and walks the lab: south over the moat onto the island, east off it, north-north-east and up the plateau's 1.5 m south face, then trots west down the terraces (stomping a ghoul of the wave) and across the trench to the pit, where it stops. It turns north beside the pit, trots north and walks east into the mesa's cliff, where it stops again, and the pilot climbs down. The route is open-loop (sticks held for set frames): retune it if speeds or the gait change.
 
 ## Drawing
 

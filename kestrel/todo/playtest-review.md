@@ -5,14 +5,9 @@ and reviewed only by video and screenshots. All were accepted "for now";
 each needs a look in a real play session before it is settled. Work on a
 decision only after that review: until then the current behaviour stands.
 
-The work is on four stacked branches, none merged:
-
-1. `kestrel-verticality`: tunnels MVP and the Tunnel Lab (PR #135, open).
-2. `kestrel-verticality-sight`: seeing inside by line of sight (not pushed).
-3. `kestrel-sacred-tree-depths`: M8, the town on a volume with lanterns
-   (not pushed, last commit 823d4a4).
-4. `kestrel-sacred-tree-fog`: M9, fog of war in the town (a prototype, not
-   pushed).
+The work was on four stacked branches, all merged on master since
+(#135–#138, see Done). The crawler prototype ([`CRAWLER.md`](../CRAWLER.md))
+is on branch `kestrel-crawler`, its PR to come.
 
 Designs: [`VERTICALITY.md`](../VERTICALITY.md),
 [`SACRED_TREE_DEPTHS.md`](../SACRED_TREE_DEPTHS.md),
@@ -20,16 +15,6 @@ Designs: [`VERTICALITY.md`](../VERTICALITY.md),
 `//kestrel/app:tunnel_lab_demo_video`,
 `//kestrel/app:sacred_tree_depths_demo_video`,
 `//kestrel/app:sacred_tree_fog_demo_video`.
-
-## Merge and push the stack
-
-- **Status:** open
-- **Why:** the four branches wait on the user; nothing past #135 is pushed.
-- **What to do:** after the playtest, merge #135, then push the sight,
-  depths and fog branches and open their PRs (stacked, with `merge -s ours`
-  rather than a force-push).
-- **Where:** the branches above.
-- **Found in:** M8.8 report.
 
 ## Play the tunnels and digging
 
@@ -147,6 +132,40 @@ Designs: [`VERTICALITY.md`](../VERTICALITY.md),
 - **Where:** `sim/src/mine.rs` (`AMBER_YIELD`), `sim/src/settlement/piles.rs`.
 - **Found in:** M8.8.
 
+## Play the crawler
+
+- **Status:** open
+- **Why:** the crawler ([`CRAWLER.md`](../CRAWLER.md)) is a prototype
+  tuned by tests, a soak and one video (CR.6); nobody has driven it.
+- **What to do:** in the Crawler Lab (F4 steps to it), board with G and
+  judge:
+  - **Speed and weight.** It walks at 1.6 m/s on a wave of one leg at a
+    time and trots at 3.2 m/s on boost; it takes about 2 s to get going
+    (the last leg of the wave steps 1.8 s in) and turns at 20°/s. Too
+    slow, too heavy, or right for something four elders big?
+  - **Steering.** The stick walks within 60° of the heading, turns in
+    place up to 120° and backs up past that. Is turning in place as a
+    separate gait clear, or does it feel unresponsive?
+  - **Pits and cliffs.** It stops at the 3 m pit and the 2 m cliff with no
+    message; turned in place at the pit's edge it backs off slowly as it
+    turns (CR.6). Does a stop read as "too wide", or as stuck?
+  - **The legs.** Knees high and a little outward, feet upright, swing
+    arcs of 0.9 m walking and 0.6 m trotting. Do they read at the play
+    camera, and does the 1.4 pull-back while aboard help or lose the
+    elder?
+  - **Riders.** Three riders on the cargo deck, the pilot at the helm,
+    all standing in the idle pose; G boards the cab first, then the free
+    place nearest. Climbing down lands beside the box, never into a
+    trench.
+  - **Stomps and shoves.** A foot coming down kills a ghoul under it
+    (4 damage) and shoves an elder or sprite 0.1 m clear; feet never land
+    on someone already standing there. Walking into a foot with the stick
+    passes through it. Is a stomp satisfying, too easy, or too rare?
+- **Where:** `sim/src/settlement/crawler.rs`,
+  `content/data/character/crawler.ron`, `app/src/crawler.rs`,
+  `app/actors/crawler.ron`, `app/src/vehicles.rs`.
+- **Found in:** CR.1–CR.6.
+
 ## Look at the town's ground
 
 - **Status:** open
@@ -181,3 +200,15 @@ Smaller open work from these milestones, not decisions to review:
 sight follow-ups", "Collapse and support", "Pile reach in 3D", "The
 jetpack into a 2 m tunnel" and "Lighting underground" in
 [`verticality.md`](verticality.md).
+
+## Done
+
+## Merge and push the stack
+
+- **Status:** done (#135, #136, #137 and #138, merged on master)
+- **Why:** the four branches wait on the user; nothing past #135 is pushed.
+- **What to do:** after the playtest, merge #135, then push the sight,
+  depths and fog branches and open their PRs (stacked, with `merge -s ours`
+  rather than a force-push).
+- **Where:** the branches above.
+- **Found in:** M8.8 report.

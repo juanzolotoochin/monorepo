@@ -63,6 +63,9 @@ const GRID: Fx = Fx::from_ratio(1, 4);
 /// A stick pointing further than this from the heading turns it in place
 /// (60°), up to `REVERSE_ANGLE`, past which it backs up.
 const TURN_IN_PLACE: Fx = Fx::from_ratio(10_472, 10_000);
+/// Stopped at a gap, a stick further than this from the heading (about 7°)
+/// moves it slowly toward the feet held there as it turns (`over_a_gap`).
+const TURN_NEAR: Fx = Fx::from_ratio(1, 8);
 
 /// The legs' state: four feet, in `VehicleState::wheels` order (front left,
 /// front right, rear left, rear right), and the gait's clock.
@@ -346,8 +349,7 @@ fn foothold(legs: &Legs, leg: usize, now: Pose, landing: Pose, ideal: FxVec2, he
             (now.point(c.hip, i), spot, floor)
         })
         .collect();
-    search().iter().find_map(|&(i, j)| {
-        let p = ideal + FxVec2::new(GRID.mul_int(i), GRID.mul_int(j));
+    let fits_at = |p: FxVec2| {
         let near = |r: FxVec2| (p - r).length_squared() <= WORKSPACE * WORKSPACE;
         if !terrain.inside(p) || !near(rest) || !near(rest_now) || (p - hip).length_squared() > c.reach * c.reach {
             return None;
@@ -360,7 +362,14 @@ fn foothold(legs: &Legs, leg: usize, now: Pose, landing: Pose, ideal: FxVec2, he
         heights(c, others.iter().copied().chain([(hip, p, floor)]))?;
         let gap = gap_along(terrain, foot.spot, p, foot.floor, c.step, foot.floor.max(floor) + gait.lift)?;
         (gap <= c.gap + ROUNDING).then_some((p, floor))
-    })
+    };
+    let around = |centre: FxVec2| search().iter().map(move |&(i, j)| centre + FxVec2::new(GRID.mul_int(i), GRID.mul_int(j)));
+    // Round the ideal spot; with none there (over a pit, turning beside
+    // it), round its resting spot then and now, nearer the body: a spot
+    // there only if it brings the foot nearer its rest, so a foot at a
+    // pit's edge doesn't shuffle along it.
+    let standing = (foot.spot - rest).length();
+    around(ideal).find_map(fits_at).or_else(|| around(rest).chain(around(rest_now)).filter(|&p| (p - rest).length() + SETTLE < standing).find_map(fits_at))
 }
 
 /// A parked crawler's legs at `pose`, each foot at its resting spot on the
@@ -383,14 +392,33 @@ pub(super) fn park(pose: Pose, c: &CrawlerDef, terrain: &Terrain) -> Option<(Leg
     Some((legs, mean.clamp(lo, hi)))
 }
 
-/// Whether the body can stand at `pose`, its feet's level at `height`:
-/// every planted foot in reach of its hip and within `WORKSPACE` of its
-/// resting spot, and no ground under the body over its belly.
-fn fits(legs: &Legs, pose: Pose, height: Fx, terrain: &Terrain, c: &CrawlerDef) -> bool {
+/// Whether the body can move from `from` to `pose`, its feet's level at
+/// `height`: every planted foot in reach of its hip and within `WORKSPACE`
+/// of its resting spot (or, one that came down further, no further than
+/// at `from`), and no ground under the body over its belly.
+fn fits(legs: &Legs, from: Pose, pose: Pose, height: Fx, terrain: &Terrain, c: &CrawlerDef) -> bool {
     let reach = heights(c, planted(legs, c, pose)).is_some_and(|(lo, hi)| lo <= height && height <= hi);
-    let near = legs.feet.iter().enumerate().filter(|(_, f)| f.swing.is_none()).all(|(i, f)| (f.spot - pose.point(c.stance, i)).length_squared() <= WORKSPACE * WORKSPACE);
+    let near = legs.feet.iter().enumerate().filter(|(_, f)| f.swing.is_none()).all(|(i, f)| {
+        let d = (f.spot - pose.point(c.stance, i)).length_squared();
+        d <= WORKSPACE * WORKSPACE || d <= (f.spot - from.point(c.stance, i)).length_squared()
+    });
     let belly = height + c.deck - BELLY;
     reach && near && under_body(terrain, pose, c).is_none_or(|t| t <= belly + ROUNDING)
+}
+
+/// The planted feet whose resting spots at `pose` have no floor within
+/// `step` of the one each stands on (the body is out over a pit, a trench
+/// or a moat): how far ahead of their rests they stand, summed along the
+/// heading. Negative when the body has gone on past them. `None` if no
+/// foot is.
+fn over_a_gap(legs: &Legs, pose: Pose, terrain: &Terrain, c: &CrawlerDef) -> Option<Fx> {
+    let forward = heading_vector(pose.heading);
+    legs.feet
+        .iter()
+        .enumerate()
+        .filter(|(i, f)| f.swing.is_none() && !floor_within(terrain, pose.point(c.stance, *i), f.floor, c.step))
+        .map(|(i, f)| (f.spot - pose.point(c.stance, i)).dot(forward))
+        .reduce(|a, b| a + b)
 }
 
 /// Stage 2 for a crawler: steer, put down the feet that have swung, lift
@@ -415,8 +443,18 @@ pub(super) fn self_update(v: &mut VehicleState, terrain: &Terrain, def: &Charact
             target = -(vd.reverse * throttle);
             turn = angle_between(v.heading + Fx::PI, want);
         } else {
-            if ahead.abs() <= TURN_IN_PLACE {
+            // Stopped with a foot's resting spot over a gap (at a pit's edge)
+            // and steered away, it moves slowly toward the feet held there
+            // as it turns: back off a pit ahead, or on from a moat behind,
+            // until its feet have floor to step round on.
+            let held = over_a_gap(&legs, Pose::of(v), terrain, c);
+            let creep = (vd.reverse * throttle).div_int(2);
+            if held.is_some_and(Fx::is_negative) && ahead.abs() > TURN_NEAR && v.speed <= Fx::ZERO {
+                target = -creep;
+            } else if ahead.abs() <= TURN_IN_PLACE {
                 target = top_speed * throttle;
+            } else if held.is_some_and(|d| d > Fx::ZERO) && v.speed >= Fx::ZERO {
+                target = creep;
             }
             turn = ahead;
         }
@@ -492,7 +530,7 @@ pub(super) fn self_update(v: &mut VehicleState, terrain: &Terrain, def: &Charact
         let moved = vehicle::push_out(terrain, at.position + delta.div_int(steps), radius);
         let turned = at.heading + turn.div_int(steps);
         let tries = [Pose { position: moved, heading: turned }, Pose { position: moved, heading: at.heading }, Pose { position: at.position, heading: turned }];
-        match tries.into_iter().find(|&p| p != at && fits(&legs, p, v.height, terrain, c)) {
+        match tries.into_iter().find(|&p| p != at && fits(&legs, at, p, v.height, terrain, c)) {
             Some(p) => at = p,
             None => break,
         }

@@ -14,7 +14,7 @@ use super::crawler::{self, Gait, Pose, Standing};
 use super::tunnel_lab_tests::{command, me, meters, section, tile};
 use super::vehicle::{self, Control, VehicleState};
 use super::{SceneSetup, VehicleSetup};
-use crate::nav::heading_vector;
+use crate::nav::{angle_between, heading_vector};
 use crate::terrain::Terrain;
 use crate::volume::VolumeLayout;
 use crate::{Command, CommandKind, PlayerId, Simulation, World};
@@ -303,6 +303,40 @@ fn the_crawler_crosses_the_trench_and_stops_at_the_pit() {
     assert!(walk.v.position.x - stopped.x > Fx::from_int(2), "backed off: {:?}", walk.at(terrain));
 }
 
+/// Stopped at the pit's edge with its front feet held back, it still turns
+/// in place (CR.6), either way: it backs off slowly as it turns, its feet
+/// finding footholds this side of the pit nearer the body, then walks away
+/// along the edge, never a foot down the pit.
+#[test]
+fn the_crawler_turns_in_place_beside_the_pit() {
+    let sim = crawler_lab();
+    let terrain = sim.world().terrain();
+    for (towards, name) in [(SOUTH, "south"), (Fx::PI, "north")] {
+        let mut walk = Walk::new(&sim, (-4.0, 0.0), WEST);
+        walk.drive(terrain, heading_vector(WEST), false, 30.0);
+        let stopped = walk.v.position;
+        walk.drive(terrain, heading_vector(WEST), false, 2.0);
+        assert_eq!(walk.v.position, stopped, "stopped at the pit: {:?}", walk.at(terrain));
+        let mut turned = None;
+        for tick in 0..seconds(20.0) {
+            walk.step(terrain, Control { direction: heading_vector(towards), boost: false }, &[]);
+            assert!(walk.legs().feet.iter().all(|f| f.floor == Fx::ZERO && f.swing.as_ref().is_none_or(|s| s.floor == Fx::ZERO)), "a foot down the pit");
+            if angle_between(walk.v.heading, towards).abs() < Fx::from_ratio(1, 100) {
+                turned = Some(tick);
+                break;
+            }
+        }
+        let took = turned.unwrap_or_else(|| panic!("turned {name}: heading {}°, at {:?}", walk.v.heading.to_f64().to_degrees(), walk.at(terrain)));
+        assert!(took < seconds(12.0), "turned {name} in {} s", took as f64 / 60.0);
+        let back = (walk.v.position - stopped).length();
+        assert!(back < Fx::from_int(3), "it backed off only a little: {} m", back.to_f64());
+        // Turned, it walks away along the edge.
+        let before = walk.v.position;
+        walk.drive(terrain, heading_vector(towards), false, 6.0);
+        assert!((walk.v.position - before).length() > Fx::from_int(3), "walked {name} along the pit: {:?}", walk.at(terrain));
+    }
+}
+
 /// North from the spawn it stops at the mesa's 2 m cliff, its body short of
 /// the face and every foot on the ground.
 #[test]
@@ -508,6 +542,124 @@ fn a_minute_driving_round_the_lab_validates() {
         lifts += s.vehicles[0].legs.as_ref().unwrap().up().count().saturating_sub(before);
     }
     assert!(lifts > 40, "it walked: {lifts} lifts");
+}
+
+/// The soak (CR.6): a pilot and three riders aboard, a fifth elder on the
+/// ground, ghouls coming every few seconds. The pilot walks, trots, turns
+/// in place, backs and steers at random for `minutes`; every so often a
+/// ghoul is put where a foot is about to land, or the elder on the ground
+/// steps there. Every tick the settlement validates, its feet in reach and
+/// on floors, the riders stay in their places, and every kill is a stomp.
+fn soak(minutes: f64, seed: u64) {
+    let (mut sim, agents) = crawler_lab_with_guests();
+    {
+        let wave = &mut sim.world_mut().settlement_mut().waves[0];
+        wave.count = 10_000;
+        wave.every = seconds(4.0);
+    }
+    board(&mut sim, &agents, &[0, 1, 2, 3]);
+    let mut rng = seed;
+    let mut next = |n: u64| {
+        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (rng >> 33) % n
+    };
+    let mut until = 0;
+    let (mut put, mut shoved, mut stomp_kills, mut lifts) = (0u64, 0u64, 0u64, 0usize);
+    let mut gaits = [0u64; 2];
+    let mut backing = 0u64;
+    let mut next_put = 0;
+    let ticks = seconds(minutes * 60.0);
+    for tick in 0..ticks {
+        let (heading, position) = {
+            let v = &sim.world().settlement().unwrap().vehicles[0];
+            (v.heading, v.position)
+        };
+        let mut turn = Vec::new();
+        if tick >= until {
+            until = tick + seconds(1.0 + next(5) as f64);
+            // Toward the lab's middle now and then, so it doesn't sit in a corner.
+            let home = (sim.world().terrain().center - position).normalize_or_zero();
+            let (direction, run) = match next(7) {
+                0 => (heading_vector(heading), false),
+                1 => (heading_vector(heading), true),
+                2 => (heading_vector(heading + Fx::FRAC_PI_2), false),
+                3 => (heading_vector(heading - Fx::FRAC_PI_2), next(2) == 0),
+                4 => (heading_vector(heading + Fx::PI), false),
+                5 => (home, next(2) == 0),
+                _ => (FxVec2::new(Fx::from_ratio(next(201) as i64 - 100, 100), Fx::from_ratio(next(201) as i64 - 100, 100)).normalize_or_zero(), next(3) == 0),
+            };
+            turn.push(Command { player: owner(0), kind: CommandKind::MoveAvatar { agent: agents[0], intent: Intent::Walk { direction, run } } });
+        }
+        // Something under a foot a tick before it lands.
+        if tick >= next_put {
+            let s = sim.world().settlement().unwrap();
+            let v = &s.vehicles[0];
+            let legs = v.legs.as_ref().unwrap();
+            let swing = legs.gait.def(s.characters[v.character as usize].crawler.as_ref().unwrap()).swing;
+            let landing = legs.feet.iter().find_map(|f| f.swing.as_ref().filter(|w| w.progress + 1 == swing).map(|w| (w.to, w.floor)));
+            if let Some((to, floor)) = landing {
+                let s = sim.world_mut().settlement_mut();
+                if put % 3 != 2 && !s.threats.is_empty() {
+                    let t = &mut s.threats[0];
+                    (t.position, t.height, t.windup) = (to, floor, None);
+                    put += 1;
+                    next_put = tick + seconds(1.5);
+                } else if put % 3 == 2 {
+                    let a = &mut s.agents[agents[4] as usize];
+                    a.body.position = to + FxVec2::new(Fx::from_ratio(1, 10), Fx::ZERO);
+                    a.body.velocity = FxVec2::ZERO;
+                    a.avatar_mut().unwrap().height = floor;
+                    put += 1;
+                    next_put = tick + seconds(1.5);
+                }
+            }
+        }
+        let before = sim.world().settlement().unwrap().vehicles[0].legs.as_ref().unwrap().up().count();
+        sim.step(&turn);
+        let s = sim.world().settlement().unwrap();
+        s.validate().unwrap_or_else(|e| panic!("tick {tick}: {e}"));
+        s.validate_footholds(sim.world().terrain()).unwrap_or_else(|e| panic!("tick {tick}: {e}"));
+        let v = &s.vehicles[0];
+        let legs = v.legs.as_ref().unwrap();
+        lifts += legs.up().count().saturating_sub(before);
+        gaits[(legs.gait == Gait::Trot) as usize] += 1;
+        backing += legs.backing as u64;
+        assert_eq!(s.seat(agents[0] as usize), Some(Seat::Vehicle(0)), "tick {tick}: the pilot aboard");
+        let def = &s.characters[v.character as usize];
+        for (place, &agent) in agents[1..4].iter().enumerate() {
+            assert_eq!(s.agents[agent as usize].body.position, v.seat_at(def, Some(place as u8)).0, "tick {tick}: rider {place} in their place");
+        }
+        for e in &s.events {
+            match *e {
+                super::Event::Hit { impact, killed, .. } => {
+                    assert_eq!(impact, super::Impact::Stomp, "tick {tick}: only feet hurt anyone");
+                    stomp_kills += killed as u64;
+                }
+                super::Event::Footfall { shoved: n, .. } => shoved += n as u64,
+                _ => {}
+            }
+        }
+        assert_eq!(s.combat.kills, stomp_kills, "tick {tick}: every kill a stomp");
+    }
+    assert!(lifts as f64 > 60.0 * minutes, "it walked: {lifts} lifts");
+    assert!(gaits[1] > ticks / 20 && backing > ticks / 50, "it trotted ({} ticks) and backed ({backing} ticks)", gaits[1]);
+    let ghouls = put - put / 3;
+    eprintln!("soak {minutes} min: {lifts} lifts, {} ticks trotting, {backing} backing, {put} puts ({ghouls} ghouls), {stomp_kills} stomp kills, {shoved} shoved", gaits[1]);
+    assert!(stomp_kills * 10 >= ghouls * 9 && stomp_kills > 0, "{stomp_kills} kills of {ghouls} ghouls put under a foot ({put} puts)");
+    assert!(shoved > 0, "the elder on the ground was shoved");
+}
+
+/// Four minutes of the soak, every check every tick.
+#[test]
+fn four_minutes_driving_with_riders_among_ghouls_validates() {
+    soak(4.0, 0x50a6);
+}
+
+/// The long soak: half an hour. Run by hand (`--test_arg=--ignored`).
+#[test]
+#[ignore]
+fn half_an_hour_driving_with_riders_among_ghouls_validates() {
+    soak(30.0, 0x50a7);
 }
 
 // Riders (CR.4 of the crawler, C9): a pilot in the cab and up to three
@@ -725,5 +877,36 @@ fn riding_is_predicted_and_saved() {
     let (mut a, mut b) = (Simulation::from_world(world, 1), Simulation::from_world(loaded, 1));
     for _ in 0..seconds(3.0) {
         assert_eq!(a.step(&[]).total, b.step(&[]).total);
+    }
+}
+
+/// Turned east over the moat's edge and then north-north-east, a foot came
+/// to rest 2 m from its resting spot with the moat behind it (CR.6's demo):
+/// footholds round the resting spot, not only past it, let it step and walk
+/// on. Before, it stood there for good, whichever way it was steered.
+#[test]
+fn the_crawler_walks_on_after_turning_by_the_moat() {
+    let sim = crawler_lab();
+    let terrain = sim.world().terrain();
+    let mut walk = Walk::new(&sim, (2.5, 0.0), SOUTH);
+    let v = |x: f64, z: f64| FxVec2::new(Fx::quantize(x as f32), Fx::quantize(z as f32));
+    walk.drive(terrain, v(0.0, 1.0), false, 10.7);
+    walk.drive(terrain, v(1.0, 0.0), false, 10.0);
+    walk.drive(terrain, v(0.49, -0.87), false, 10.0);
+    for direction in [v(-1.0, 0.0), v(0.0, -1.0)] {
+        let before = walk.v.position;
+        walk.drive(terrain, direction, false, 10.0);
+        if (walk.v.position - before).length() <= Fx::from_int(3) {
+            let c = walk.def.crawler.unwrap();
+            let pose = Pose::of(&walk.v);
+            for (i, f) in walk.legs().feet.iter().enumerate() {
+                let r = pose.point(c.stance, i) - terrain.center;
+                eprintln!("DEBUG foot {i}: spot {:?} floor {} swing {:?} rest ({:.2},{:.2}) off {:.2}", (f.spot - terrain.center), f.floor.to_f64(), f.swing.as_ref().map(|s| (s.to - terrain.center, s.progress)), r.x.to_f64(), r.y.to_f64(), (f.spot - pose.point(c.stance, i)).length().to_f64());
+            }
+            eprintln!("DEBUG dir {direction:?} heading {:.2} clock {} gait {:?} backing {} speed {} height {}", walk.v.heading.to_f64(), walk.legs().clock, walk.legs().gait, walk.legs().backing, walk.v.speed.to_f64(), walk.v.height.to_f64());
+            let last: Vec<_> = walk.lifts.iter().rev().take(8).collect();
+            eprintln!("DEBUG last lifts {last:?} ticks {}", walk.ticks);
+        }
+        assert!((walk.v.position - before).length() > Fx::from_int(3), "walked on: {:?}", walk.at(terrain));
     }
 }
