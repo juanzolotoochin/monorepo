@@ -128,10 +128,14 @@ pub fn interact_target(view: &View, me: &AgentState, sprites: impl IntoIterator<
     }
     let from = me.body.position;
     // A building's output once it is built, its site until then.
-    let buildings = view.buildings.iter().enumerate().map(|(b, building)| if building.built() { InteractTarget::Output(b as BuildingIx) } else { InteractTarget::Site(b as BuildingIx) });
+    // In a volume, only buildings on the elder's floor (a lantern in a
+    // tunnel under it is no target from the surface, M8.6).
+    let on_floor = |b: &super::BuildingState| view.terrain.volume.is_none() || (b.height - avatar.height).abs() <= super::combat::FLOOR_REACH;
+    let buildings = view.buildings.iter().enumerate().filter(|(_, b)| on_floor(b)).map(|(b, building)| if building.built() { InteractTarget::Output(b as BuildingIx) } else { InteractTarget::Site(b as BuildingIx) });
     let depots = (0..view.depots.len() as DepotIx).map(InteractTarget::Depot);
     let piles = view.piles.into_iter().flat_map(|lab| lab.piles.keys().copied().map(InteractTarget::Pile));
-    let slots = view.buildings.iter().enumerate().filter(|(_, b)| b.built()).map(|(b, _)| InteractTarget::Slot(b as BuildingIx));
+    // A lantern has no slot to possess.
+    let slots = view.buildings.iter().enumerate().filter(|(_, b)| b.built() && on_floor(b) && !view.building_kinds[b.kind as usize].is_lantern()).map(|(b, _)| InteractTarget::Slot(b as BuildingIx));
     let mut candidates: Vec<(Fx, InteractTarget, FxVec2)> = buildings
         .chain(depots)
         .chain(piles)

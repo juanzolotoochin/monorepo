@@ -4,6 +4,30 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
+## Depths follow-ups
+
+- **Status:** open
+- **Why:** what M8 left for later.
+- **What to do:** wave routes planned before a lantern goes up aren't
+  replanned for its light; a stranded miner's retreat picks the nearest
+  tile by straight distance (it may be past a wall); a traffic detour
+  planned from a swerve into the dark ignores the light rule; dawn still
+  burns ghouls underground (decide if an unlit ghoul there outlives it);
+  miners supply only lanterns' sites; a lantern's post blocks no one; the
+  ground over a tunnel lantern is protected from digs at every depth; no
+  reachability check when a lantern is placed; a lantern lights floors
+  within a layer of its own, so a stair needs one every few steps (or let
+  light follow a stair); the elder's lamp still doesn't count (L5); the test
+  walker and haulers ignore light; a dig's ore is still lost once the pile
+  lab is at its pile cap (the soak met 14 amber cells and got 8 amber);
+  the demo's tunnel shots are dark and far (a closer camera underground);
+  M7's night lanterns stay decoration; amber income: revisit with a
+  playtest (one a cell, about a lantern a day).
+- **Where:** `sim/src/settlement/chase.rs`, `miners.rs`, `light.rs`,
+  `piles.rs`, `app/src/cutaway.rs`.
+- **Found in:** M8.1–M8.8.
+- **Tests:** per item.
+
 ## A possessed ballista fires faster
 
 - **Status:** open
@@ -211,6 +235,847 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M7.5.
 
 ## Done
+
+### M8.8 Tuning, soak and demo
+
+- **Status:** done (branch `kestrel-sacred-tree-depths`)
+- **Why:** the milestone needs a stable run and a look.
+- **What to do:** tune amber, lantern and wave numbers; a soak over
+  several days and nights with digging and lanterns; a demo video of a
+  day and a night underground; the full suite; a `docs/test-time.md` row.
+- **Where:** sim tests, the demo scripts.
+- **Found in:** depths design.
+- **Tests:** the soak; the full suite.
+  Note (from M8.1): count the town soak's plans as the Tunnel Lab soak
+  does (`Dug::plans`, `unreached`, `most_expanded`) and assert they stay
+  within `nav::PATH_BUDGET`. The Tunnel Lab soak's seed never planned to an
+  unreachable goal (240 plans, none unreached, at most 902 nodes); the
+  town's should, with ghouls chasing the elder up where they can't go.
+  Note (from M8.3): amber numbers (`mine::amber`, the mountain's boxes),
+  the town save's size (1.5 MB with its volume) and the quarter-meter
+  rounding of the terraces are for here.
+  Note (from M8.4): miners' numbers (`miners::AMBER_WORTH` 4,
+  `TILES_PER_WORTH` 2, `VOLUME_SEARCH_TILES`, `WALL_SEARCH_NODES`): today
+  they mine the nearest stone walls (49 stone in 5 min for two) and go to
+  the cave's amber only once there's no nearer wall. A walker
+  (`haulers::move_worker`) can dither for minutes where a string-pulled 3D
+  route cuts diagonally from a sloped stair step onto the ground beside it
+  (a trench a layer a tile down, its first step a layer under the ground):
+  the route was checked with the node's feet, the walker's are lower on the
+  slope and the step up is refused, and its swerves keep it there.
+  `miner_tests::tunnel` walls its trench to avoid it; dropping the route on
+  a refused straight step was tried and made it worse (the replan from
+  there found no route and the miner gave the wall up). Fix in nav (check
+  pulled segments with a margin) or the walker.
+  Note (from M8.6): the demo's Reed, carrying stone to the cave's lantern,
+  dithered 20 s at the plateau's north edge (about x -11, z -16) before
+  going round by the west ramp: the same walker trouble. Lantern numbers:
+  range 6 m, falloff `1 - (d / range)²`, the shader's `LANTERN` 2.0 and
+  `LANTERN_TINT`, the point light (`settlement::LANTERN_LUMENS` 60000, 6 m).
+  Whether miners should also supply other kinds' sites, a lantern's post
+  blocking bodies, and a tunnel lantern protecting the ground over it from
+  digs are open.
+  Note (from M8.7): light. Miners mine only walls joined to the stone pile
+  by lit floors, so a deep stretch needs a chain of lanterns (one about
+  every 10 m): tune the range or say so in the demo. A ghoul's lit cost
+  (`chase::LIT_STEP` 30) makes its plans into a lit stretch expand more
+  nodes: count them in the soak against `nav::PATH_BUDGET`. Wave routes
+  (`WaveState::route`) are planned once and replanned on ground changes,
+  not when a lantern's light changes. Dawn still burns every ghoul,
+  underground too: decide whether an unlit ghoul underground outlives it.
+  A stranded miner's retreat (`Targets::retreat`) picks the nearest tile in
+  reach by straight distance, which may be past a wall (it gives it up
+  after two asks, then goes home); a traffic detour planned from a swerve
+  into the dark ignores the rule (rare). The elder's lamp still doesn't
+  count (L5); the test walker and haulers ignore light.
+
+- **Done:** **F on flat ground**: in volume scenes the plain dig (F,
+  `DigDown`, the control `dig`) digs level, or a step down where every cell
+  a level dig would clear is already empty (`View::dig_volume_plain`,
+  `Settlement::dig_plain_of`, the app's `volume_dig(None)`); Ctrl+F and
+  Alt+F keep their one direction. HUD: `F DIG (DOWN ON FLAT GROUND) /
+  CTRL+F DIG DOWN / ALT+F DIG UP`, and the pile lab's help. Test
+  `volume_dig_tests::the_plain_dig_goes_level_into_a_wall_and_down_on_flat_ground`.
+  **The walker dithering (root cause)**: `haulers::move_worker` passed a
+  waypoint once within 0.1 m of it, and a 3D route's next leg is checked
+  from the waypoint itself (`nav::plan_with`'s string pulling); one that
+  climbs sideways off a sloped stair step onto the ground beside it walks
+  from the waypoint (feet -2.89) and not from 8 cm down the slope short of
+  it (feet -2.93), so the straight step was refused and the swerves kept
+  the walker sliding along the step for minutes. In a volume a waypoint is
+  now passed only once the next leg walks from where the walker is (else it
+  walks on to the waypoint itself), and walkers in a volume don't skip
+  waypoints (a skip could end on another floor than the route's: a miner
+  sent up a ramp's side instead of along its foot). Test
+  `miner_tests::a_miner_climbs_out_of_an_open_trench_sideways` (the
+  tunnel's trench open to the ground beside it: undelivered after 300 s
+  before, delivered at 86 s now, never 5 s in one spot); the walled tunnel's
+  amber now comes up at 88 s instead of 409 s. **The town soak**
+  (`soak_tests::the_town_digs_and_lights_its_depths_through_three_nights`,
+  6 s): three days and nights, two ballistas manned, Moss and Reed mining,
+  the elder defending while ghouls are near the tree and otherwise digging
+  a stair 6 m down from the north foot and a tunnel north (the plain dig),
+  picking up its amber, carrying piles in its way out and putting up a
+  lantern every 8 m the tree can pay for; validate and the balances every
+  tick. Every 3D plan the town's bodies make is counted (test-only
+  `nav::tally`, a thread-local read on the simulation's pool with
+  `Simulation::on_pool`): 417 plans, 27 short of their goal, 6 at
+  `PATH_BUDGET` (the most expanded 16384), none over. The town: tree 20 of
+  20, 3 nights survived, 24 kills, no breaches; 124 tiles dug, 14 amber
+  cells met, 8 amber and 1026 stone dug, 7 lantern blueprints, 4 built, 35
+  floors lit; no ghoul went underground. **Tuning, from the soak**: the
+  first soak's 117-tile tunnel 5 m down met no amber at all (the pockets
+  were 6-tile blobs, a 40 m tunnel at 5 m met none 59% of the time); amber
+  now on a 3-tile noise grid (`mine::amber`: about as much amber, 3.75% of
+  the deep cells; a 40 m tunnel at 5 m meets none 41% of the time, at 6 m
+  29% instead of 51%) and a town's amber cell yields one amber
+  (`mine::AMBER_YIELD`, was 3 to 6), so a tunnel 5 to 6 m down pays for a
+  lantern every 10 to 20 m, about a lantern a day. A volume dig's ore with
+  no room round it in a tile-wide tunnel lands on the dug tile (crowding its
+  piles) instead of staying buried, and in a volume a pile holds up only
+  its own column's digs (a tunnel's dug tile's pile stopped the next dig).
+  Lantern numbers kept (range 6 m, `LANTERN` 2.0, 60000 lm): a lantern
+  every 8 m chains its light; waves kept as they were (no ghoul came
+  underground in the soak). **Save size**: a volume made from the mine
+  keeps its layout (`Terrain::mine_volume`, `generated_volume`) and a save
+  stores the volume's edits over the generated one (`Volume::edits_over`,
+  `with_edits`, `WorldSection::volume_edits`), remade at load; save format
+  46. The town's save: 1.5 MB (the volume alone 1 529 960 bytes
+  compressed) to 1484 bytes untouched, 1509 with 44 cells dug (the demo's
+  `.glog.gsav` is 1493 bytes); `save::tests::a_towns_volume_is_saved_as_its_edits`.
+  **Demo** (`app/demos/sacred_tree_depths.json`, rewritten, 3233 frames at
+  30 fps, 2x and 4x between): dawn over the town; down the west ramp; a
+  stair six steps down north from its foot (Ctrl+F); a lantern's
+  blueprint on the fifth step; Moss and Reed set to mine bring its stone
+  and amber down and build it (97 s) and mine the stair's walls in its
+  light; the tunnel on six tiles with F; dusk; the elder at the stair's
+  mouth by the west column's way, then a tile at a time down into the lit
+  tunnel with two ghouls after it, where they kill it; dawn, the last ghoul
+  burning by the ramp. Local plain build; video and screenshots in the
+  session. The tunnel shots are dark and small at the town camera's
+  distance, and the ghouls in the tunnel are hard to see.
+  Not done, for later ("Depths follow-ups"): see that entry.
+
+### M8.7 Sprites and ghouls read light
+
+- **Status:** done (branch `kestrel-sacred-tree-depths`)
+- **Why:** light matters to the town (L3, L4).
+- **What to do:** underground, sprites only walk and work on lit tiles
+  (the surface counts as lit); ghouls' paths cost more on lit tiles but
+  never block.
+- **Where:** `sim/src/nav.rs`, `sprites.rs`, `miners.rs`, `chase.rs`.
+- **Found in:** depths design.
+- **Tests:** a sprite won't mine a dark face and will once lit; a ghoul
+  takes the dark route when one exists and still reaches a lit target.
+  Note (from M8.2): the dawn still dispels ghouls on every floor; decide
+  whether ghouls underground (unlit) survive it.
+  Note (from M8.4): where miners need light: `miners::wall_search` (skip
+  floors and the stand tiles that are dark, so a wall is a target only from
+  a lit stand), `Step::DigWall` in `sprites.rs` (refuse to start, or stop,
+  on a dark tile), the pile fetch in `miners::plan` (`stand_spot`), and the
+  `GoTo` routes (`haulers::route_at`: dark tiles are walls underground for
+  sprites). The search's cache is keyed by terrain revision only: key it
+  by the light grid's revision too.
+  Note (from M8.6): the query is `Settlement::light_at(terrain, tile,
+  layer) -> Fx` (0..1, `light::LightGrid::at`) and `Settlement::lit(terrain,
+  p, z)` (a body's feet), both 1 under open sky and without a volume;
+  `Settlement::light.level(tile, layer)` is the grid's byte and
+  `light.revision` goes up when the light changes (key caches by it). The
+  grid is derived (not saved or hashed) and refreshed before and after
+  every tick, so the brains read this tick's. A lantern blueprint's site
+  is supplied by miners (`miners::lantern_errand`): once dark tiles stop
+  sprites, a miner can't walk into a dark tunnel to build its first
+  lantern; let a lantern's site and the tiles on the way count as lit for
+  its errand, or let the elder's lamp-lit tiles count for that (L5 says
+  the lamp doesn't count).
+
+- **Done:** **Nav**: `nav::plan_with` (and `path_at_with`,
+  `path_toward_with`) takes a `nav::Weigh`, a node's extra cost or `None`
+  where the body may not go; the start's node is exempt, the goal's nodes
+  and the goal's flood keep off barred nodes, and string pulling (and the
+  straight walk tried first) takes a segment only where every half tile
+  weighs no more than the heaviest node it replaces, so no corner is cut
+  through the dark or the light. `plan_at` is `plan_with` with none:
+  heightfield scenes and every old plan are unchanged (golden unchanged).
+  **Sprites (L3)**: `haulers::route_at` takes the light grid, and a
+  sprite's routes in a volume keep to lit floors (`LightGrid::sprite_lit`:
+  open sky is lit) unless it is on a lantern errand
+  (`SpriteState::on_errand`: a plan with `Fetch`, `Supply` or `Install`)
+  or stranded; traffic detours too (`Walker::route_to` now takes the
+  `View`, which gained `light`). `miners::wall_search` walks lit floors
+  only, so a wall is a target only from a lit stand joined to the stone
+  pile by lit floors; the floors it walked are the miner's reach
+  (`Targets::reaches`), cached with the targets by (terrain revision, light
+  revision); a pile is fetched only from a lit spot (`stand_spot`); a
+  `DigWall` doesn't start on an unlit tile (it gives the spot up as before).
+  **L3a (the gap, for the user's review, in `SACRED_TREE_DEPTHS.md`)**: a
+  miner on a lantern errand walks dark floors for it only, never mines in
+  the dark. **Stranded**: worked out every tick by the brain
+  (`SpriteState::see_light`, `sprites::Lighting`, not state): a miner off
+  its reach (in the dark, or in a lit pool a dark way cuts off), another
+  sprite in the dark. A stranded miner not on an errand, standing still,
+  drops its plan and walks back (through the dark) to the nearest tile in
+  its reach on its level within `miners::RETREAT_TILES` (12, the lower
+  tile on a tie, skipping tiles it gave up), or home. Light governs only
+  scenes that have a lantern kind (`LightGrid::governs`): the Tunnel Lab's
+  sprites walk anywhere, as before. **Ghouls (L4)**: `chase::LIT_STEP` 30
+  per lantern-lit node (a half-tile step costs 10, so a lit tile costs four
+  tiles' walk), via `chase::shun` in every threat plan (`chase_at`'s 3D
+  chase, `route_home_at`: wave routes, replans, giving up); only lantern
+  light (`LightGrid::lantern`), not open sky; never barred; none while
+  nothing is lit. **Dawn**: kept, every ghoul burns at dawn, underground
+  too (noted for M8.8). Haulers keep no light rule (no volume scene has
+  any; their docks are on the top floor); the elder and the test walker
+  ignore light. Save format unchanged (45): nothing new is saved. Tests
+  (`sim/src/settlement/dark_tests.rs`): `a_sprite_wont_route_through_a_dark_tunnel`
+  (round by an open-sky gap, nowhere without one, through once lit),
+  `a_ghoul_takes_the_dark_way_and_still_reaches_a_lit_target` (two tunnels
+  of one length, whichever is lit; a target in the lit one; the lit one
+  the only way), `a_miner_wont_mine_a_dark_face_and_will_once_a_lantern_lights_it`,
+  `a_miner_on_a_lantern_errand_walks_into_the_dark_and_builds_it`,
+  `a_miner_stranded_in_the_dark_walks_back_to_light`,
+  `a_ghoul_comes_into_a_lit_tunnel_after_a_sprite` (in the town's tunnel,
+  hits it there), `light_read_miners_are_deterministic_across_threads_and_saves`;
+  `light_tests::light_up` puts up a built lantern for tests;
+  `LightGrid::of_lamps` (test only) a grid from lamps. Updated: the
+  tunnel-wall, cave-amber and protected-column miner tests light their
+  tunnel or the cave's hall with a lantern. `//kestrel/sim:sim_test`
+  passes (the happy path, the soaks and golden among it); save and app
+  unchanged, not run. No screenshots.
+  Not done, for later (M8.8, notes there): wave routes planned before a
+  lantern goes up aren't replanned for its light; a stranded miner's
+  retreat picks the nearest tile by straight distance (it may be past a
+  wall: it gives it up after two asks, then home); a traffic detour from
+  a swerve into the dark is planned without the rule; the dawn rule
+  underground; the cost of ghoul plans into lit stretches against
+  `nav::PATH_BUDGET`.
+
+### M8.6 Lanterns and the light grid
+
+- **Status:** done (branch `kestrel-sacred-tree-depths`)
+- **Why:** light is a resource you build (L1, L2, L5, L6).
+- **What to do:** a lantern building (blueprint on any floor, 1 stone and
+  1 amber, built by sprites; haulers deliver underground); a light grid
+  in the sim, each lantern lighting its line of sight on its level within
+  6 m, hashed and saved, recomputed on change; the view lights from the
+  grid with soft edges; the elder's lamp stays view only. Settle M7's
+  night lanterns.
+- **Where:** `sim/src/settlement/buildings.rs`, a new light module,
+  content, `app/src/cutaway.rs`.
+- **Found in:** depths design.
+- **Tests:** the grid stops at rock, at 6 m and at its level; a lantern
+  blueprint underground is supplied and built; save round trip.
+
+- **Done:** **The lantern** is a building kind (`sacred_tree_supply.ron`'s
+  `lantern`: radius 0.2, one part of 1 stone and 1 amber, `output_distance`
+  0, `light: Some((range: 6.0))`; content's `BuildingKind::light`, a role of
+  its own in validation: no product, defence or production numbers; sim
+  `BuildingKind::light`, `is_lantern`). Placed with the B menu's LANTERN
+  (the same `PlaceBlueprint` command: input log and net protocol unchanged)
+  on any floor: stage 1 reads the placer's elder's feet into the
+  blueprint's message (`messages::PlaceBlueprint::feet`) and
+  `buildings::lantern_placement` puts it on the floor under its footprint
+  within a layer of them (`Terrain::footprint_at`, the walkers' rule, so a
+  floor with headroom); none, or one more than a layer off (a drop), is
+  the new `PlacementRefusal::NoFloor` ("NO FLOOR HERE"). A hollow column
+  and a wall's edge are fine for a lantern; other kinds keep their rules
+  (`Uneven` over a tunnel). It keeps off props on the top floor, other
+  buildings on its floor, docks and other buildings' piles and slot spots;
+  no walk from the depots is checked (the ghost asks every frame; a miner
+  that finds no way gives the site up until the ground changes).
+  `Settlement::placement_check_at(kind, position, feet, terrain)` returns
+  a `buildings::Spot { output, height }`; `placement_check` is it with no
+  feet. **Every building has a floor** (`BuildingState::height`: the
+  ground at its middle, a lantern's own floor), which `on_building_floor`
+  now reads (`pick_target` is unchanged: ballistas stand on the top floor
+  anyway), and the interact target only offers buildings on the elder's
+  floor in a volume. A lantern is no obstacle (a tunnel is a tile wide;
+  bodies pass its post, as M7's lanterns), has no slot
+  (`slot_position` is its middle: no possessing, no job menu entry, no
+  boarding), its pile is the lantern itself, and ghouls leave it be
+  (`breakable` is false), so a built one burns forever (L2); its column is
+  protected from digs by its pile spot as any building's. **Miners build
+  lanterns**: miners are the town's carriers, so `miners::lantern_errand`
+  comes first in a miner's plan: for the nearest lantern site it hasn't
+  given up, carrying an item the site wants it takes it there
+  (`Step::Supply`), with the part all there it installs it
+  (`Step::Install { site, part }`, a new late message queue
+  `sprite_install`, `Settlement::sprite_installs`), else it fetches an item
+  the site wants from the tree's pile of it (`Step::Fetch { depot, site }`,
+  only as many units as the site wants) and takes it there; a need another
+  miner is on (`miners::Errand`, the plans as of last tick in `Ctx`) is left
+  to it, so the two miners fetch the stone and the amber at once. The
+  `GoTo` before a `Supply` or `Install` plans to the site's floor
+  (`haulers::route_at`'s goal floor), down the stair into a tunnel. Other
+  kinds' sites stay the elder's to supply and install (D4); the elder can
+  still supply and install a lantern's site too.
+  **The light grid** (`sim/src/settlement/light.rs`, `LightGrid` on
+  `Settlement::light`): each built lantern lights the floors of the tiles
+  within its range (by tile middles) that have a floor within a layer of
+  its own (`Volume::floor_near`: a ramp's step is the same level, a tunnel
+  two meters under or over is not), keyed by (tile, floor layer), when the
+  line from its tile's middle crosses no solid cell at its head height
+  (`light::HEAD`, the cells 1 to 2 m over its floor; sampled four times a
+  tile in integers, the far tile included), at `FULL` (255) times
+  `1 - (d / range)²` as a byte, the brightest lantern winning. **Derived,
+  not saved or hashed** (`#[serde(skip)]`): it is a function of the
+  buildings and the volume, which are; `World::step` refreshes it before
+  and after every tick and `World::from_state` on load
+  (`Settlement::refresh_light`), recomputing only when the terrain's
+  revision or the built lanterns changed; `LightGrid::revision` counts the
+  recomputes that changed the light. The save stays small and a loaded
+  world's grid is the one it had (a test checks). **The query for M8.7**:
+  `Settlement::light_at(terrain, tile, layer) -> Fx` (0..1;
+  `LightGrid::at`) and `Settlement::lit(terrain, p, z)` (a body's feet;
+  `LightGrid::lit`), both 1 under open sky (the sun or the moon) and in
+  scenes without a volume; `LightGrid::level(tile, layer)` is the grid's
+  own byte. The elder's lamp is not in the grid (L5). Nothing reads it yet.
+  **View**: `cutaway::follow` fills `Sight::set_light` from the grid for
+  the player's level (each tile's floor within a layer of the player's)
+  with `Key::light` the grid's revision; the shader's `LANTERN` adds it to
+  roofed ground (soft edges by the texture's filtering), so no light goes
+  through walls. The lantern's model is a `lantern` skin in
+  `styles/forest.ron` (a stone base, a 1.1 m wooden post, a head in a new
+  emissive `lanternglow` material, M7's lantern colours, and a cap: 1.44 m,
+  under a tunnel's 2 m roof), drawn on its floor (legacy
+  `Building::feet`); a built lantern has no card, lamp or pile caption, and
+  a small warm point light under its head (`settlement::LANTERN_LUMENS`
+  60000, range 6 m, no shadows, always on), for bodies and the lantern
+  itself; a site shows its card ("LANTERN 0/1 STONE, 0/1 AMBER"). The
+  ghost stands on the lantern's floor. Outside, lanterns look like
+  lanterns (open-sky ground keeps the sun). **M7's night lanterns stay
+  decoration** (view only, `daylight::spawn_night_lights`): converting them
+  to built lanterns would make them buildings in the sim (prebuilt kinds,
+  golden and the town's hash), for no gameplay today, since the surface is
+  always lit. Save format 45; golden unchanged (no golden scene has
+  buildings). Tests (`sim/src/settlement/light_tests.rs`):
+  `the_grid_stops_at_its_range_and_falls_off_softly`,
+  `the_grid_stops_at_rock` (a wall, round its end, over a low pillar, a
+  one-tile tunnel), `the_grid_stays_on_its_level` (rooms over one another,
+  a ramp's step), `ground_under_open_sky_counts_as_lit`,
+  `a_lantern_blueprint_underground_gets_its_stone_and_amber_and_is_built`
+  (in `miner_tests::tunnel`: placed from the tunnel's floor, `NoFloor` in
+  the rock beside it and over the trench's drop, a Wood Gatherer `Uneven`
+  there; the two miners bring the tree's stone and amber down and build
+  it; it lights its stretch of tunnel and not the ground over it, a dig far
+  off changes nothing and the end wall dug out is lit on the next tick; a
+  save gives the same grid and steps the same), and
+  `a_lantern_on_the_surface_lights_its_ground_and_has_no_slot`; content
+  `the_sacred_tree_supply_loads_its_tunables` (the lantern, invalid
+  variants); updated: `buildings_tests` (three kinds), the test-only Stone
+  Gatherer is kind 3 (`construction_tests`, `soak_tests`), the control
+  test's build menu, and content's `the_tree_piles_take_one_item_...` (the
+  amber pile from M8.3).
+  `//kestrel/sim:sim_test`, `//kestrel/save:save_test`,
+  `//kestrel/app:movement_test`, `//kestrel/content:content_test` pass.
+  The cave's first look was a white wash (the channel added white light
+  at `LANTERN` 1.2 over the lamp's): the channel is now tinted warm amber
+  in the shader (`LANTERN_TINT` (1.0, 0.55, 0.22)) at `LANTERN` 2.0, and
+  the pool reads apart from the lamp. `app/demos/sacred_tree_depths.json`
+  now walks into the mountain's cave first, stocks a stone and an amber at
+  the tree, puts a lantern's blueprint down at the hall's back
+  (x -7, z -52) from the hall's floor, sets Reed and Moss to mine (their
+  first errand is the lantern), waits at 4x (`settlement_rate`) until it
+  is built (128.6 s: Moss brings the amber at 78 s; Reed, with the stone,
+  dithers 20 s at the plateau's north edge on the known walker trouble,
+  M8.8), then sees the pool from the passage and the hall's front, and
+  digs the stair and tunnel as before (dig waits 66 frames, so it fits in
+  3529 frames; the stair now runs into the first night). Screenshots
+  (local plain build): the site placed with its card, Reed coming in with
+  the stone, the lantern built, its pool from the passage and from the
+  hall's front, the tunnel at night.
+  Not done, for later: miners supply only lanterns' sites (other kinds
+  stay the elder's); a lantern's post blocks no one (bodies pass through
+  it); its column is protected from digs at every depth, the ground over a
+  tunnel lantern too; no reachability check at placement (a miner gives an
+  unreachable site up until the ground changes); M7's night lanterns stay
+  decoration; light numbers (range 6, falloff, `LANTERN` 2.0, the point
+  light) are for M8.8.
+
+### M8.5 Seeing, second pass
+
+- **Status:** done (branch `kestrel-sacred-tree-depths`)
+- **Why:** the line-of-sight prototype is too dark and leaves big flat
+  lids (T7).
+- **What to do:** rock beyond a one-tile rim round what you see goes near
+  black; inside, light comes from lanterns and the elder's lamp, not the
+  sun; F7 keeps the cutaway. Pick up the cheap items of "Line of sight
+  follow-ups" in `verticality.md` (dim objects, piles and ghouls out of
+  sight).
+- **Where:** `app/src/cutaway.rs`, `app/src/sight.rs`,
+  `app/shaders/cutaway.wesl`.
+- **Found in:** depths design.
+- **Tests:** sight unit tests; screenshots in the town's tunnels and the
+  mountain cave, by day and night.
+  Note (from M8.3): the town now uses the sight view; a stair dug down
+  past 2 m is a roofed tunnel and turns the view inside (everything but
+  the plateau goes dark), and inside the mountain's cave its whole top is
+  one dark lid. Screenshots in M8.3's entry.
+
+- **Done:** the line of sight view's second pass (T7), view only (sim,
+  saves and protocol unchanged). **Void past a one-tile rim**: the sight
+  grid (`app/src/sight.rs`) is now an RGBA8 texture per tile: visibility,
+  **near** (the best ray share of the clear tiles in its 3 x 3, over
+  `NEAR_FULL` 0.2: floor in sight and the rock bordering it, corners
+  too, are 1), the lanterns' **light** and **open** sky (nothing solid at
+  or over the eye layer). Inside, ground and cut tops of a tile whose near
+  is 0 are drawn near black (`cutaway::VOID`, after fog, by the inside
+  factor; `sight::void` and the shader's `void_at`, unfiltered so the rim
+  is whole tiles; a wall face goes by the tile it faces, a cut top by
+  where the view crosses the cut); the rim keeps the section colour. And
+  inside, walls stand only `INSIDE_WALL` (0.75 m) over the feet over the
+  whole view, not to the ceiling: rooms read as thin-walled boxes, as in
+  the devlog, and a one-tile tunnel's floor isn't hidden behind its wall
+  on the camera's side (a first try kept walls to the ceiling outside the
+  near-wall box: the dug tunnel was a black slot). **Light**: roofed
+  ground (open 0) is not lit by the sun but by `cutaway::underground`:
+  `AMBIENT` 0.07 of its albedo, the elder's lamp (`LAMP` 1.6 at its foot,
+  the fill light's place 1.8 m over the feet and its glow, falling off to
+  `LAMP_RANGE` 9 m, half-wrapped by facing, times the tile's visibility,
+  so no light through walls) and `LANTERN` 1.2 times the light channel;
+  ground under open sky seen out of a mouth keeps the sun as before. Same
+  by day and night. **The light hook for M8.6**: `Sight::light` (the
+  texture's blue channel), all zero today; `Sight::set_light(|tile| ..)`
+  fills it 0..1 per tile and `Key::light` (0 today) is the light grid's
+  revision, so the grid is recomputed when it changes (see the note on
+  M8.6). **The stair**: under a roof the view goes inside only when
+  `Sight::deep`: at least `ROOF_AREA` (8) roofed floor tiles in sight
+  within `ROOF_TILES` (2) of the eye (a room: a cave mouth or a wide
+  tunnel goes inside at once), or no open sky in sight within `SKY_TILES`
+  (2). A stair dug down from the surface is one tile wide with sky a step
+  or two behind, so it **peeks** instead: a second factor (`SightView::peek`,
+  eased the same) cuts only the near-wall box over the feet and lights
+  the roofed floor there by the lamp, the town stays as it is; the view
+  goes inside once the sky is three steps back (3.5 m down the demo's
+  stair). `sight::blocks` now needs the eye layer and the one under it
+  solid, so the next step down a stair is in sight. **Things out of sight**
+  inside are hidden by their tile (`SightView::shows`: the body alpha
+  under `SHOWN` 0.35; over the hidden height or more than `BELOW` 2 m
+  under the player's feet, since the grid is for the player's level):
+  the settlement's rigs (sprites, haulers, ghouls, buildings and depots,
+  piles and their items, transfers), their glows and captions, the pile
+  lab's piles and labels, `cutaway::Placed` scene objects (the Tunnel
+  Lab's collector) and the test walker as before; the outdoor dressing
+  with no place of its own (the baked environment, the ground cover and
+  grass, fireflies, the canopy's leaves and the night lanterns,
+  `cutaway::Outdoor`) is hidden while inside. The player always shows.
+  F7 keeps the cutaway; outside and heightfield scenes unchanged. Tests:
+  `sight::tests::rock_beyond_a_one_tile_rim_round_what_you_see_is_void`,
+  `a_tile_at_a_wedge_side_is_partly_near`,
+  `a_shallow_stair_stays_outside_and_a_tunnel_goes_inside` (2.5 and 3 m
+  down a stair not deep, 4 and 6 m deep; a 5-wide room deep at its mouth,
+  a one-wide tunnel only two tiles in), `down_a_stair_the_next_step_is_in_sight`,
+  `the_light_channel_is_zero_until_a_light_grid_fills_it`,
+  `open_sky_is_where_nothing_is_over_the_eye`;
+  `cutaway::tests::with_no_lantern_light_roofed_ground_has_only_the_lamp_and_ambient`,
+  `inside_things_out_of_sight_are_hidden_and_outside_all_show`;
+  `//kestrel/app:movement_test` 295/295. `app/demos/sacred_tree_depths.json`
+  now digs the stair on to 5.5 m and a 4-tile tunnel from its bottom,
+  then walks to the cave and its passage (the miners' wait and the first
+  cave visit went to fit 120 s); a `sacred_tree_depths_demo_video`
+  target. Screenshots (local plain build): the town outside (unchanged),
+  the stair at 2.5 and 3 m (the notch), at 4.5 m (inside), deep in the
+  tunnel, the cave's mouth, the cave and its passage, leaving the cave
+  mid-fade, and the Tunnel Lab's outside, west mouth, tunnel, the passage
+  under the bridge and the stair; a 720p video. Night not shown: the
+  first night is at 150 s and a demo script is capped at 120 s.
+  Not done, for later: the interact prompt over a pile on the surface
+  still floats in the void from the stair; the notch is the near-wall
+  box (5 x 5 tiles), wide for a one-tile stair; a stair down shows only
+  the next step or two ahead (the grid is one level); trees and lamp
+  posts seen out of the cave's mouth are hidden with the rest of the
+  baked environment (it is one mesh per material); the sun-lit wedge out
+  of a mouth is much brighter than the lamp-lit room by day.
+
+### M8.4 Miners mine walls
+
+- **Status:** done (branch `kestrel-sacred-tree-depths`)
+- **Why:** sprites harvest the tunnels the elder digs (T3).
+- **What to do:** miner sprites pick exposed stone faces they can reach
+  and dig level into the wall beside them, never down or up.
+- **Where:** `sim/src/settlement/miners.rs`.
+- **Found in:** depths design.
+- **Tests:** a miner digs a tunnel wall, never its floor or ceiling; it
+  walks to the face in 3D.
+  Note (from M8.2): sprites already walk on 3D paths in volume scenes
+  (`haulers::route_at`, steps by `walk_at`), but `miners::search` and
+  `stand_spot` are still 2D (pits, `terrain.steep`).
+  Note (from M8.3): in the town's volume a miner digs the column's top
+  cell (`Terrain::dig_top`, `dig_refusal`'s volume branch with no
+  stranding check) and `miners::search` steps between tops at most a layer
+  apart; `Step::Dig`'s depth is `Terrain::dug`. Replace these with wall
+  faces. Placement refuses footprints over tunnels and on wall edges
+  (`buildings::check`'s `hollow`).
+
+- **Done:** in a volume (the town's), a miner mines walls
+  (`miners::wall_search`, `Step::DigWall`): a level dig of the
+  `HEADROOM` (4) cells of the tile beside the one it stands on, from its
+  floor layer up, through `View::dig_volume` with `DigDirection::Level`
+  (so never down or up, never under itself: `volume_dig`'s `OwnTile`),
+  never a protected column (the hill's undiggable ranges, and
+  `dig_blocked` checked on every plan as before: tree, buildings, sites,
+  piles, docks). Housekeeping clears the cells as the elder's level dig
+  does (`Terrain::clear_column`); stone and amber land on piles on the
+  miner's floor (`PileLab::mined_at`, whose "pile beside it" now must be
+  on that floor too, not on the mountain over a tunnel). A wall is a face:
+  a terrace step or a pit's side on the surface, a tunnel's or the cave's
+  sides underground; flat open ground has none. The search: from the
+  stone pile's top floor, a breadth-first walk over floors, four ways, to
+  a neighbour's floor within a layer (`Volume::floor_near`), between
+  obstacles, out to `VOLUME_SEARCH_TILES` (64, past the cave's back wall)
+  and at most `WALL_SEARCH_NODES` (24576) floors, cached by terrain
+  revision as before. Beside every floor it reads the wall's worth
+  (`wall_worth`: `STONE_WORTH` 1 and `AMBER_WORTH` 4 per cell of the four,
+  earth 0; the same diggable and "something left under it" rules as
+  `volume_dig`) and keeps the `TARGETS` best by walk less
+  `TILES_PER_WORTH` (2) times worth: the nearest first, as on the
+  heightfield, a richer wall winning a near tie (a first try, worth per
+  tile walked, sent both miners 90 tiles to the cave's amber and halved
+  the stone at the tree: a miner carries 5 a trip, so distance is what
+  pays). With no wall worth anything a miner waits by the stone pile, as
+  with no stone. Miners carry amber too: piles of stone or amber (within
+  `VOLUME_SEARCH_TILES` of the tree), amber to the AMBER PILE
+  (`Settlement::amber_depot`, `Town::amber`, `deliver` by the carried
+  item); a pile's stand spot in a volume is where the body's footprint
+  stands within a layer of the pile's floor (`Terrain::footprint_at`), not
+  the mountain's top over a cave. A `GoTo` before a `DigWall` plans to the
+  wall's floor. A refused wall dig (it stands on another floor) gives the
+  spot up until the ground changes. Heightfield scenes unchanged (their
+  search, `Step::Dig`, pits); `Terrain::dig_top` and `dig_refusal`'s
+  volume branch stay for the elder's refusal hint and tests, no miner uses
+  them. Save format 44 (`Step::DigWall`, appended). A walking fix found on
+  the way: sloped heights come out of fixed point a hair off a layer
+  (-1.4999999972 for -1.5), so an exact one-layer step down measured more
+  than a layer and `walk_at` refused it: a miner stood on a terrace's edge
+  for minutes. `volume::ROUNDING` (1 mm) now pads `walk_at`'s and
+  `walkable_at`'s drop and `Volume::floor_at`'s reach. The soak's elder
+  (`dig_stone`) digs the search's walls level from a stand whose tile
+  behind is on its floor, instead of a step down into the old top-cell
+  targets (with Down digs into walls the elder spent its time walking and
+  the tree fell in the wave soak). Tests (`miner_tests`):
+  `a_miner_digs_a_tunnel_wall_beside_it_never_its_floor_or_ceiling` (a
+  walled trench and tunnel at the north foot, amber in the end wall and in
+  its floor and ceiling cells: it digs the four over its floor in 9 s from
+  the tunnel's end, its own column and the floor and ceiling cells stay,
+  and it carries the 18 amber to the tree),
+  `a_miner_walks_into_the_mountain_cave_and_mines_amber` (ore only in the
+  mountain: round the hill, in at the mouth, a hall wall from the -1 m
+  floor; amber at the tree at 194 s), `a_miner_never_digs_a_protected_column`
+  (amber all through the plateau's north edge is no target; a pile on the
+  amber wall's column keeps it whole while two miners dig elsewhere for
+  two minutes, every dig checked), `with_no_faces_a_miner_idles_by_the_stone_pile`
+  (the town stripped of ore), `miners_are_deterministic_across_threads_and_saves`
+  (saved with a `DigWall` in a plan); `two_miners_bring_a_steady_modest_income`
+  now on walls: 49 stone in 5 min (in 20..=120). The heightfield miner
+  tests are as before; the wave soak and the happy path pass unchanged
+  otherwise. `app/demos/sacred_tree_depths.json` now sets Reed and Moss to
+  mine first and waits by them at the west ramp's foot: their first walls
+  are a terrace step 31 m west (stone 7 at the tree by the end); they
+  don't come to the elder's stair or the cave in the demo's two minutes.
+  Screenshots (local plain build): the two miners digging the step, full
+  view and a close-up.
+  Not done, for later: light (M8.7, notes there); the walker can still be
+  stuck by a route cut diagonally off a sloped stair (M8.8, note there);
+  amber worth and the distance trade (M8.8).
+
+### M8.3 The town as a volume
+
+- **Status:** done (branch `kestrel-sacred-tree-depths`)
+- **Why:** the town's mine can't have tunnels on a heightfield (T1, T2,
+  T4, T6).
+- **What to do:** convert the Sacred Tree's generated ground and hill into
+  a volume at load (the surface the same), 16 layers deep; stone veins
+  richer deeper; amber, a new ore, only below 4 m and in the mountain
+  (content, piles, HUD); an authored mountain spur 8–10 m high, 40–60 m
+  from the tree, with a cave mouth; the hill, tree, buildings, sites and
+  piles undiggable at any depth; the elder digs in 3D there. Update the
+  golden, soaks and wave tests that change.
+- **Where:** `sim/src/mine.rs`, `sim/src/volume.rs`, `terrain.rs`,
+  `app/assets/levels/sacred_tree.ron`, its supply, `app/src/digging.rs`.
+- **Found in:** depths design.
+- **Tests:** surface heights match the old heightfield; protected columns
+  refuse digs; amber only below 4 m and in the mountain; the happy path
+  and soaks pass.
+  Note (from M8.2): every body already has a feet height and walks in 3D
+  once the terrain has a volume; buildings, depots, sites and the tree are
+  assumed on the top floor at their middle (`terrain.height`), for
+  reaches, ballista targets, fire and goal floors. Haulers and sprites
+  start on the floor nearest 0 m (`follow::start_height`): for a town
+  that is a hill, start them at the top floor instead. The forest/arena
+  golden total lines change with any state shape change; behaviour lines
+  are the check.
+
+- **Done:** at load (`Settlement::from_scene`, `SceneSetup::mine_volume`)
+  the mine's terraces and hill become the terrain's volume
+  (`Terrain::volume_from_mine`, `Mine::to_volume`): every tile a column
+  from its top down 16 layers (the scene's `dig_layers: Some(16)`, 8 m) and
+  one of bedrock, its veins in its cells (mine layer `k` is volume layer
+  `top - 1 - k`); then the scene's `volume:` boxes apply over it (the
+  mountain), and the rock they raise gets stone veins by depth under its
+  face (`Mine::rock_vein`), the generated veins put back under a box that
+  reached into the ground. The mine stays (`Terrain::mine`: hill, veins,
+  the generated top, `Terrain::generated_top`); pits don't count. **The
+  surface is not quite the old heightfield**: terraces step 0.25 m and
+  cells are 0.5 m, so a tile an odd number of steps up rounds down a
+  quarter meter (`Mine::volume_top`, `div_euclid`); even steps (the
+  plateau at 0 m, the foot at -2 m, every other terrace) are exact; two
+  tiles at most two steps apart stay at most a layer apart (walkable).
+  The ramps fall half a meter every other tile instead of a quarter each.
+  Veins: `mine::STONE` is now 3 (after the dig lab's three minerals), so a
+  town's volume holds stone and amber (`mine::AMBER`, 0) side by side;
+  stone as before in the top six layers, richer down to layer 8 then as
+  rich (`RICHEST_STONE`); amber pockets from 4 m down (`AMBER_DEPTH`,
+  `mine::amber`: about 0.3% of the deep cells) and authored in the
+  mountain. Content: an `amber` item ("AMBER", skin `item_amber`, a new
+  forest-style model in the `magic` and `flowers` materials) and an AMBER
+  PILE depot (`tree_amber`, only amber) at (0, 1.7), between the wood and
+  stone piles, so the depots' midpoint (the Wood Gatherer's output
+  direction) is unchanged; the HUD shows AMBER as it does STONE. A
+  volume dig's stone and amber cells yield their items on ground piles
+  (plain cells are earth: nothing), no tosses (`dig_housekeeping`).
+  The mountain spur (`sacred_tree.ron`'s `volume:`, 15 boxes): tiles x
+  -16..4, z -68..-47 from the tree, north (-z) of the town, away from the
+  wave lanes along x (rings at x ±28, z 0); nine 1 m tiers a tile in each
+  (its +z face a cliff for the first four), topped at 8 m (layer 16) over
+  ground at -1 m, so 9 m high; its foot 47 m from the tree. The cave: a
+  hall x -8..-4, z -53..-47 (mouth at z -47, 7 tiles in), floor -1 m
+  (layer -2), 3 m high, and a passage west x -11..-9, z -52..-50, 2.5 m
+  high; amber in the hall's west wall by the mouth (x -9, z -49..-48), its
+  back wall (x -7..-5, z -54), the passage's end (x -12) and a pocket deep
+  inside (x -13..-11, z -60..-58, layers 4..8). assetc accepts a volume
+  with a mine (its extent the mine's) and `lockstep::scene_setup` passes
+  it as `mine_volume`. Protected columns: the hill and ramps by the
+  undiggable ranges (`volume_dig`), the tree, buildings, sites and piles by
+  `dig_blocked` (tile-based, so every depth); placement refuses a
+  footprint over a tunnel or cave, or on a wall's edge (a neighbour's top
+  more than a layer off: a volume's cliff is not steep ground), and over
+  dug ground (`Terrain::is_dug`). The elder digs in 3D in the town (F,
+  Ctrl+F, Alt+F, as in the Tunnel Lab): to a floor 8 m under the surface,
+  no deeper (`Bottom` at the bedrock); a stair down past 2 m becomes a
+  descending tunnel (a dig clears `HEADROOM` cells), and the sight view
+  goes inside there. Miners: still surface pits, in the volume a dig of
+  the column's top cell (`Terrain::dig_top`; `dig_refusal`'s volume branch:
+  the depth rule, `Bottom` when the top span is one cell thick, no
+  steepening or stranding check); their search reads the top cell's ore
+  and steps between tiles whose tops are at most a layer apart (a cliff is
+  a wall); `Step::Dig`'s depth is `Terrain::dug` (the pit, or `128 - top`).
+  Haulers and sprites start on the top floor in a mine's volume
+  (`follow::start_height`). Speed: `Volume` caches its state hash (it is
+  hashed every tick) and keeps a lazily built grid of its columns
+  (`spans` was a binary search over 66 049 columns; the sim suite went from
+  227 s to 17 s with it), and `volume_mesh::changed_tiles` merges the two
+  volumes' sorted columns and ore instead of looking every tile up (0.7 ms
+  over the town). Drawing: the town uses the volume mesher and the sight
+  view; open-sky tops are coloured by terrace steps from the hill's foot
+  and tinted lightly by their stone as the heightfield did
+  (`chunk_mesh_with`, `ore_color`: stone grey); ground piles are drawn on
+  their own floor (`GroundPile::feet`). The 289 chunks (331 254 triangles)
+  mesh in 82 ms (`the_towns_volume_meshes_quickly`, remote opt build); the
+  town's save is 1.5 MB with the volume (`.gsav` of the demo). The control
+  snapshot's `pits` and `nearest_ore` read the volume. Golden unchanged
+  (no golden scene is the town); save format unchanged (43): no state
+  shape changed. Tests in `sim/src/settlement/town_volume_tests.rs`:
+  `the_surface_matches_the_old_heightfield` (tile by tile: exact or a
+  quarter meter lower, always the old height in whole layers),
+  `the_ground_is_sixteen_layers_deep`,
+  `veins_go_down_and_amber_lies_deep_and_in_the_mountain`,
+  `the_mountain_stands_north_of_the_town_8_to_10_m_high`,
+  `the_caves_mouth_walks_in_from_the_surface`,
+  `protected_columns_refuse_digs_at_every_depth` (plateau, east ramp,
+  tree, a site, a ground pile, from a shaft at each of its 16 floors),
+  `the_elder_digs_a_stair_down_8_m_but_no_deeper` and
+  `bodies_start_on_the_top_floor`; updated: `hill_tests` (cliffs as walls,
+  ramps rounded, 3D paths, a pit's goal flood), `lane_tests` (moats and
+  pits dug as top cells, routes walked in 3D, the planted ghoul's feet),
+  `miner_tests`, `construction_tests` (three items, a Ctrl+F dig),
+  `bundle_tests`, `soak_tests` (the elder's stone digs are Ctrl+F); in the
+  app `volume_mesh::tests::the_towns_volume_meshes_quickly` and the happy
+  path (a Ctrl+F then an F dig; the stone still on its way counts). The
+  Sacred Tree soaks and wave tests pass unchanged otherwise.
+  `app/demos/sacred_tree.json` digs with `dig_front`; a new
+  `sacred_tree_depths_demo` (`app/demos/sacred_tree_depths.json`) walks to
+  the mountain, into the cave and its passage, and digs five steps down at
+  the north foot. Screenshots (local plain build): the town from the usual
+  camera at dawn, the mountain spur and its cave mouth (amber in its
+  wall), the elder in the cave (sight view, the mountain dark), the stair
+  from outside, and inside its tunnel.
+  Not done, for later: the heightfield town's quarter-meter terraces (only
+  a finer volume layer would keep them); stone tosses for volume digs in
+  the town (`digging::toss_stone` reads pits; volume digs burst dust);
+  saves carry the whole volume (1.5 MB; a diff against the generated
+  ground would be small).
+
+### M8.2 Every body on a floor
+
+- **Status:** done (branch `kestrel-sacred-tree-depths`)
+- **Why:** in volume scenes only the avatar, sprites and piles have a
+  feet height; haulers and ghouls walk on the top floor (T5).
+- **What to do:** haulers and threats get a feet height (hashed, saved),
+  3D paths and chases (`chase.rs`, `Threat::position`); fix the rest of
+  "Ghouls and haulers with a height" in `verticality.md` (jetpack `GoTo`,
+  sprite respawn, pile-haul drops, spills, `TossEnd::Pit`). Other scenes
+  unchanged.
+- **Where:** `sim/src/settlement/haulers.rs`, `chase.rs`, `combat.rs`,
+  `sprites.rs`, `piles.rs`.
+- **Found in:** depths design.
+- **Tests:** in a test volume a ghoul chases a sprite into a tunnel and
+  under a bridge; a hauler carries down a stair; golden unchanged for
+  heightfield scenes.
+  Note (from M8.1): plan with `nav::path_at` (a full route or none) for
+  haulers and `nav::path_toward_at` (`PathAt { route, reached, expanded }`:
+  else a route to the reached node nearest the goal) for a ghoul's chase,
+  so a ghoul that can't climb to its target waits below it. Back each
+  body's replans off after a plan that didn't reach (`!reached`), as the
+  walker does (`follow::FAILED_REPLAN_TICKS`, 2 s): a plan to a goal on a
+  big floor it can't reach still costs up to `nav::PATH_BUDGET` (16384)
+  nodes. The walker's backoff is stateless (a refused step doesn't cut a
+  failed plan's wait short while more than `REPLAN_TICKS` of it is left);
+  with the save format going up here anyway, a failure count per body
+  (doubling waits) is an option. Not built: a cached flood of connected
+  floor components keyed by `Terrain::revision` (O(1) rejection, but every
+  dig floods the window again); the goal's flood already settles shut-in
+  goals (pits, tops, sealed rooms) in about twice their size, so build it
+  only if the town soak shows many plans at the budget.
+
+- **Done:** haulers (`HaulerState::height`) and threats (`Threat::height`)
+  have a feet height, as sprites (`SpriteState::height`) already did;
+  `AgentState::height` reads any agent's. Haulers start on the floor
+  nearest 0 m (`follow::start_height`, as sprites), threats on the top
+  floor where their wave spawns (`chase::surface_feet`), and a sprite comes
+  back from dying on home's floor. In volume scenes every walker steps on
+  foot: `haulers::move_worker` (haulers and sprites on errands) checks
+  every step with `Terrain::walk_at`, its feet following, skips waypoints
+  only where it walks, steers round bodies on its own floor only
+  (`Footprint::height`) and drops a route the ground refuses, for its brain
+  to plan again; threats walk their routes with `chase::walk_route_at`
+  (sliding along a corner a path's samples skipped, as the walker does).
+  Paths: haulers and sprites plan with `nav::path_at` (`haulers::route_at`:
+  any floor at the goal, or the pile's floor when a sprite picks one up
+  next); a hauler's link check plans from the pickup's top floor; waves and
+  give-ups plan their route home with `nav::path_toward_at` to the target's
+  top floor (`chase::route_home_at`, `stranded` when it doesn't reach),
+  and a threat whose route went stale plans again from where it stands. A
+  chaser walks straight at its quarry while both are on one floor and the
+  walk is clear, else follows a 3D path to the quarry's floor
+  (`Threat::chase`, `path_toward_at`, every `follow::REPLAN_TICKS`), so a
+  ghoul that can't reach waits at the nearest point. In a volume it spots
+  a quarry within its detect radius in 3D that it sees (`chase::sees_at`:
+  eye to eye, 1.5 m up, through no solid cell) and keeps it within the
+  leash in 3D, without needing sight. Backoff: `Backoff { at, failures }`
+  (`follow.rs`) on haulers, sprites and threats: a plan that didn't reach
+  waits `FAILED_REPLAN_TICKS` (2 s), doubling per failure in a row up to
+  8 s; written only in volume scenes. Combat reach: `combat::FLOOR_REACH`
+  (1.5 m; stacked floors are at least 2.5 m apart) via `same_floor`, only
+  in volume scenes: swings at agents (their floor, or for an avatar in the
+  air the floor under it) and buildings (the top floor at their middle),
+  player strikes (sword, spear, arc chain, laser targets), projectile hits
+  (`Projectile::floor`, an arrow's shooter's feet; a ballista's shot the
+  top floor at its launcher), ballista and defender targets
+  (`pick_target`), fireball hits and fire patches (the top floor where they
+  land), building spotting, and sprites' alarm. The jetpack's `GoTo` plans
+  `path_at` from the floor under it in a volume (2D if there is none);
+  piles from a pile haul's drop lie on the dropper's floor and from a
+  broken building's `spill` on its floor; `TossEnd::Pit` carries the
+  floor it flies from (the dig's cleared bottom, the pit's floor). Save
+  format 43. The behaviour digest maps projectiles to their old fields and
+  adds haulers', threats' and arrows' floors only when one is nonzero:
+  golden behaviour lines unchanged; the forest and arena *total* lines
+  changed (the state's shape grew: `HaulerState`, `Threat` and
+  `Projectile` fields) and were regenerated. View: `legacy` gives haulers
+  and threats `feet` while off 0 m, and the town view draws haulers and
+  ghouls at their feet in volume scenes (`settlement::in_volume`); tosses
+  from a pit start at `TossEnd::Pit::height`. Tests in
+  `sim/src/settlement/floors_tests.rs`:
+  `a_ghoul_chases_a_sprite_into_the_tunnel` (round the mountain's corner,
+  0 m under the roof, hits it there),
+  `a_ghoul_chases_a_sprite_under_the_bridge`,
+  `a_ghoul_cant_hit_a_sprite_on_another_floor` (bridge over cave, both
+  ways), `a_ghoul_that_cant_reach_waits_at_the_nearest_point_and_backs_off`
+  (a sheer pillar 3 m high: waits by it, plans 2, 4, 8, 8 s apart),
+  `a_hauler_carries_wood_down_a_dug_stair` (down to -2 m and back),
+  `a_sprite_comes_back_on_homes_floor`, `chases_in_3d_are_deterministic`,
+  `other_scenes_keep_bodies_at_zero`; in `save`,
+  `a_volume_scene_keeps_haulers_and_threats_heights`;
+  `combat_tests::threat_size_is_pinned` at 224 bytes.
+  Not done, for later M8 tasks: buildings, depots and sites have no floor
+  (the top floor is assumed: M8.3/M8.6 must give an underground lantern's
+  site one, and its deliveries a goal floor); the dawn dispels ghouls on
+  every floor (M8.7: underground is dark); impaled bodies (`Pinned`) and
+  the test walker are as before (no height; the walker steers round no
+  one); a towing hauler plans for its body only in 3D; miners' targets and
+  pit digs are 2D (M8.4); pile reach is still 2D ("Pile reach in 3D").
+
+### M8.1 Bounded 3D paths
+
+- **Status:** done (branch `kestrel-sacred-tree-depths`)
+- **Why:** dozens of bodies will plan in 3D, and one plan to an
+  unreachable floor took 1.2 s in the Tunnel Lab (see "3D paths to an
+  unreachable floor" in `verticality.md`).
+- **What to do:** bound `nav::path_at` (a node budget, or a reachability
+  check of the goal's floor first), and back off replans after a failed
+  plan. Deterministic.
+- **Where:** `sim/src/nav.rs`, `sim/src/settlement/follow.rs`.
+- **Found in:** depths design ([`SACRED_TREE_DEPTHS.md`](../SACRED_TREE_DEPTHS.md)).
+- **Tests:** a plan to an unreachable goal stays under a budget; paths
+  that exist are still found; the Tunnel Lab soak still passes.
+- **Done:** `nav::plan_at(terrain, start, z, goal, goal_z, radius, extra,
+  budget, toward) -> PathAt { route, reached, expanded }` is the 3D
+  search; `nav::path_at` is it with `PATH_BUDGET` and no partial route
+  (same signature as before: a full route or none), and
+  `nav::path_toward_at` (new) is it with `PATH_BUDGET` and a partial one.
+  Two bounds, both counting nodes, not time, so plans stay deterministic.
+  The budget: `PATH_BUDGET` (16384) nodes expanded, search and flood
+  together; the longest route across the Tunnel Lab (from the tunnel's
+  east side round the mountain to the bridge's stairs and up) takes
+  11075, a cross-map one 4329, through the tunnel 764. The goal's flood:
+  from the search's 256th node on (`FLOOD_AFTER`, so short plans pay
+  nothing), a breadth-first flood back from the goal's nodes (the nodes
+  that walk onto them, by `Terrain::walk_at` from the neighbour, so drops
+  count right) takes a node for each node of the search, up to
+  `GOAL_FLOOD` (1024). Meeting the search (a node both reached) proves a
+  way and the flood stops; running out of nodes proves the goal shut in (a
+  pit, the mountain's top, a sealed room): `path_at` returns at once, in
+  about twice the floor's size (968 nodes to the Tunnel Lab's mountain top
+  from the spawn, which searched the whole map before). Past `GOAL_FLOOD`
+  the goal's floor is big and the search goes on alone to the budget
+  (3429 nodes past a wall across a small map, the whole near side). A
+  cached flood of floor components keyed by `Terrain::revision` was not
+  built (every dig would flood the window again; noted on M8.2). Partial
+  routes (`path_toward_at`, `reached` false): to the node, of those the
+  search reached, nearest the goal in 3D (the squared distance plus the
+  squared height to the wanted floor; the lowest node on a tie),
+  string-pulled like a full route; when the goal is shut in, the search
+  stops once `STALL` (256) nodes in a row came no nearer. Empty only when
+  the start attaches to no node; without a volume there are no partial
+  routes (the full 2D `path_avoiding` route, `reached` if not empty). For
+  callers it means: come as close as you can (a ghoul under the bridge
+  someone stands on, a walker at a pit's edge), and plan again later.
+  Node numbers now interleave the flood's nodes, so tie-breaks (and so
+  some 3D routes) can differ from V.7's; without a volume nothing changed,
+  and the golden test passes as is. The walker (`follow.rs`) plans with
+  `path_toward_at`: after a plan that doesn't reach the player it walks
+  the partial route and waits `FAILED_REPLAN_TICKS` (120, 2 s) instead of
+  `REPLAN_TICKS` (30) to plan again; a refused step plans again next tick
+  only when no failed plan's wait has more than `REPLAN_TICKS` left
+  (stateless: no save change). The Tunnel Lab soak plans from the walker
+  to the avatar every half second as the walker does and asserts every
+  plan stays within the budget (240 plans, at most 902 nodes). Tests in
+  `sim/src/settlement/path_tests.rs`:
+  `paths_across_the_tunnel_lab_fit_in_the_budget` (five routes found,
+  under three quarters of the budget, `path_at` the same as
+  `path_toward_at`),
+  `a_plan_to_the_mountains_top_is_settled_by_the_goals_flood` (no route,
+  within `2 * GOAL_FLOOD` nodes; the partial one under the top on the
+  tunnel's floor, the same twice and on a clone),
+  `a_plan_past_a_wall_stops_at_the_budget` (stops at budgets of 500 and
+  2000 exactly; the partial route ends by the wall),
+  `a_partial_plan_ends_at_the_reachable_point_nearest_the_goal` (at a sheer
+  pit's edge by the goal; out of budget on the way to a reachable goal,
+  partial and closer) and
+  `the_walker_backs_off_when_it_cant_reach_the_player` (the player on the
+  mountain's top: every plan waits `FAILED_REPLAN_TICKS`, the walker ends
+  under it in the tunnel); in `soak_tests`,
+  `the_tunnel_lab_soaks_walking_and_digging_at_random` checks the plans.
 
 ### The night's fight comes late
 

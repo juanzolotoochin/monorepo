@@ -434,6 +434,9 @@ impl World {
     /// Runs one tick with this turn's commands and returns the state hash.
     pub fn step(&mut self, turn: &[Command]) -> TickHash {
         let mut lap = Lap(Instant::now());
+        // The light grid is derived state (M8.6): up to date before the
+        // brains read it, whatever made the world.
+        self.refresh_light();
         self.apply_commands(turn);
         let commands = lap.next();
         self.self_update();
@@ -445,11 +448,20 @@ impl World {
         self.apply_messages(messages, actions);
         let apply = lap.next();
         self.housekeeping();
+        self.refresh_light();
         let housekeeping = lap.next();
         let hash = self.hash();
         self.tick += 1;
         self.times = StageTimes { commands, self_update, read, merge, apply, housekeeping, hash: lap.next() };
         hash
+    }
+
+    /// Recomputes the settlement's light grid if the ground or its
+    /// lanterns changed (`Settlement::refresh_light`, M8.6).
+    fn refresh_light(&mut self) {
+        if let Some(settlement) = &mut self.settlement {
+            settlement.refresh_light(&self.terrain);
+        }
     }
 
     /// How long each stage of the last tick took.
@@ -513,8 +525,9 @@ impl World {
                 // Checked in stage 5, after the tick's walks, against the
                 // ground as it is then.
                 CommandKind::PlaceBlueprint { kind, position } => {
-                    if self.settlement.is_some() {
-                        self.actions.place_blueprint.push(crate::messages::PlaceBlueprint { kind, position });
+                    if let Some(s) = &self.settlement {
+                        let feet = s.avatar_of(turn[i].player).map(|a| s.agents[a as usize].height());
+                        self.actions.place_blueprint.push(crate::messages::PlaceBlueprint { kind, position, feet });
                     }
                 }
                 CommandKind::SetMachine { producer, enabled } => {
@@ -928,12 +941,13 @@ impl World {
             for message in messages.building_fire {
                 settlement.building_fire(tick, message);
             }
-            settlement.burn(tick);
+            settlement.burn(tick, &self.terrain);
             settlement.threat_goals(messages.threat_goal, &self.terrain);
             settlement.claim_slots(messages.claim_slot);
             settlement.enter_slots(messages.enter_slot);
             settlement.claim_dig_tiles(messages.claim_dig_tile);
             settlement.sprite_bundles(messages.sprite_bundle, tick, &self.terrain);
+            settlement.sprite_installs(messages.sprite_install);
         }
         self.apply_repairs();
     }
@@ -955,7 +969,7 @@ impl World {
             settlement.combat_housekeeping(self.tick, &self.terrain);
             settlement.avatar_housekeeping(self.tick);
             settlement.seat_housekeeping(&self.terrain);
-            settlement.sprite_housekeeping(self.tick);
+            settlement.sprite_housekeeping(self.tick, &self.terrain);
             settlement.dig_housekeeping(self.tick, &mut self.terrain);
             settlement.pile_housekeeping(self.tick);
             settlement.memory_housekeeping(&mut self.terrain);
@@ -1133,6 +1147,7 @@ impl World {
         if let Some(settlement) = &mut world.settlement {
             settlement.set_characters(&world.rules.characters)?;
         }
+        world.refresh_light();
         world.timers = timers;
         world.pending = state.pending;
         for (index, saved) in state.chunks.into_iter().enumerate() {
@@ -1262,6 +1277,13 @@ impl Simulation {
                 .expect("build simulation thread pool");
             Simulation { world, pool }
         }
+    }
+
+    /// Runs `f` on the simulation's thread pool, where its steps run: for
+    /// tests reading thread-local tallies (`nav::tally`).
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn on_pool<R: Send>(&self, f: impl FnOnce() -> R + Send) -> R {
+        self.pool.install(f)
     }
 
     pub fn into_world(self) -> World {

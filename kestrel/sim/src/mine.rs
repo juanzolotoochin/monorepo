@@ -13,6 +13,9 @@ use crate::terrain::MAX_LAYERS;
 
 /// One terrace step: low enough to walk up.
 pub const STEP: Fx = Fx::from_bits(1 << 30); // 0.25
+/// Terrace steps in a volume's layer ([`crate::terrain::LAYER`]).
+const STEPS_PER_LAYER: i32 = 2;
+const _: () = assert!(STEP.to_bits() * STEPS_PER_LAYER as i64 == crate::terrain::LAYER.to_bits());
 /// Minerals, as the pile lab numbers them.
 pub const AMBER: u8 = 0;
 pub const BLUE: u8 = 1;
@@ -21,10 +24,20 @@ pub const MINERALS: usize = 3;
 /// Each mineral's item ID, in mineral order. A scene with piles adds them to
 /// the settlement's items, after the scenario's (`Settlement::from_scene`).
 pub const MINERAL_IDS: [&str; MINERALS] = ["amber_ore", "blue_crystal", "green_malachite"];
-/// A stone mine's one mineral.
-pub const STONE: u8 = 0;
+/// A town's stone, numbered after the dig lab's minerals so a town's
+/// volume can hold stone and amber ([`AMBER`]) side by side: in a town's
+/// mine ([`Veins::Stone`]) amber is the town's other ore.
+pub const STONE: u8 = 3;
 /// The scenario item a town's stone veins yield (`Settlement::from_scene`).
 pub const STONE_ID: &str = "stone";
+/// The scenario item a town's amber yields (M8.3 of the depths design):
+/// [`AMBER`] cells, deep in the ground and in the mountain's rock.
+pub const AMBER_ID: &str = "amber";
+/// The first layer under a town's surface that may hold amber: 4 m down
+/// (T4 of the depths design).
+pub const AMBER_DEPTH: u8 = 8;
+/// The deepest layer whose stone gets richer: below it, as rich as there.
+const RICHEST_STONE: u8 = 8;
 /// The flat landing's half-width around the spawn, in tiles.
 const LANDING: i32 = 8;
 
@@ -195,6 +208,7 @@ impl Mine {
                 for layer in 0..spec.layers {
                     let mineral = match spec.veins {
                         Veins::Ore => vein(spec.seed, x, y, layer),
+                        Veins::Stone if layer >= AMBER_DEPTH && amber(spec.seed, x, y, layer) => Some(AMBER),
                         Veins::Stone => (stone(spec.seed, x, y, layer) || (vein_top && layer < EXPOSED_VEIN_LAYERS)).then_some(STONE),
                     };
                     ore[i * layers + layer as usize] = mineral.map_or(0, |m| m + 1);
@@ -231,11 +245,67 @@ impl Mine {
         self.ore[i * self.spec.layers as usize + layer as usize].checked_sub(1)
     }
 
+    /// The tile's top as a volume layer (M8.3 of the depths design): its
+    /// ground height before digging ([`Mine::height`]) in whole
+    /// [`LAYER`]s, rounded down. Terraces step a quarter meter and a
+    /// volume's cells are half a meter, so a tile an odd number of steps
+    /// up lies a quarter meter lower than on the heightfield; one an even
+    /// number (the plateau, the foot round it) is where it was. Two tiles
+    /// at most two steps apart (walkable) end at most a layer apart
+    /// (still walkable).
+    ///
+    /// [`LAYER`]: crate::terrain::LAYER
+    pub fn volume_top(&self, tile: (i32, i32)) -> Option<i32> {
+        let datum = self.spec.hill.map_or(0, |hill| hill.steps as i32);
+        self.steps(tile).map(|s| (s as i32 - datum).div_euclid(STEPS_PER_LAYER))
+    }
+
+    /// The mine as a volume (M8.3 of the depths design): every tile a
+    /// column of solid cells from its [`Mine::volume_top`] down
+    /// [`MineSpec::layers`] layers and one more under them, the bedrock no
+    /// dig takes out (so a floor can be the last diggable layer's bottom),
+    /// the veins in its cells: the mine's layer `k` (0 the top) is the
+    /// volume's layer `top - 1 - k`.
+    pub fn to_volume(&self) -> crate::volume::Volume {
+        let size = self.spec.size as i32;
+        let layers = self.spec.layers as i32;
+        let mut columns = Vec::with_capacity((size * size) as usize);
+        let mut ore = Vec::new();
+        // Sorted by tile (x, then y), as the volume keeps them.
+        for column in 0..size {
+            for row in 0..size {
+                let tile = (self.spec.min.0 + column, self.spec.min.1 + row);
+                let top = self.volume_top(tile).expect("a tile of the mine");
+                columns.push((tile, vec![crate::volume::Span { bottom: top - layers - 1, top }]));
+                for k in (0..self.spec.layers).rev() {
+                    if let Some(mineral) = self.ore(tile, k) {
+                        ore.push(((tile, top - 1 - k as i32), mineral));
+                    }
+                }
+            }
+        }
+        crate::volume::Volume::from_sorted(columns, ore)
+    }
+
+    /// The stone of a town's rock over the generated ground (an authored
+    /// mountain's, M8.3 of the depths design) `depth` layers under its
+    /// face: the veins' rule a layer that deep has, without amber (the
+    /// mountain's is authored).
+    pub fn rock_vein(&self, tile: (i32, i32), depth: u8) -> Option<u8> {
+        (self.spec.veins == Veins::Stone && stone(self.spec.seed, tile.0, tile.1, depth)).then_some(STONE)
+    }
+
     /// How many units digging out an ore (or stone) layer yields: 3 to 6.
     pub fn yield_of(&self, tile: (i32, i32), layer: u8) -> u32 {
         3 + hash(self.spec.seed, tile.0, tile.1, 90 + layer as u32) % 4
     }
 }
+
+/// How many amber units a town's amber cell yields (M8.8): one, so a
+/// lantern (1 stone and 1 amber) costs a cell of amber, and a tunnel dug
+/// 5 to 6 m down pays for a lantern every 10 to 20 m of it on average (a
+/// stone cell yields [`cell_yield`], 3 to 6).
+pub const AMBER_YIELD: u32 = 1;
 
 /// How many units digging out a volume's solid cell yields (V.4 of the
 /// verticality design): 3 to 6, as [`Mine::yield_of`] hashes them, from
@@ -282,10 +352,22 @@ fn vein(seed: u64, x: i32, y: i32, layer: u8) -> Option<u8> {
 }
 
 /// Whether a tile's layer is stone: broad veins, a few reaching the surface,
-/// richer each layer down.
+/// richer each layer down to [`RICHEST_STONE`], then as rich (so 16 layers
+/// deep the ground stays mostly earth).
 fn stone(seed: u64, x: i32, y: i32, layer: u8) -> bool {
-    let k = layer as u32;
-    noise(seed, x, y, 9, 70) > 184 - 9 * k && hash(seed, x, y, 71 + k) % 5 != 0
+    let k = layer.min(RICHEST_STONE) as u32;
+    noise(seed, x, y, 9, 70) > 184 - 9 * k && hash(seed, x, y, 71 + layer as u32) % 5 != 0
+}
+
+/// Whether a town's tile holds amber at `layer` (at least [`AMBER_DEPTH`]):
+/// small pockets, a little richer deeper. M8.8: on a 3-tile noise grid (it
+/// was 6), so the pockets are smaller and more of them, about as much
+/// amber in all (3.75% of the deep cells, from 3.5%), but a 40 m tunnel
+/// with its floor 5 m down meets none 41% of the time instead of 59%, and
+/// at 6 m 29% instead of 51% (2.1 and 5.0 amber cells on average).
+fn amber(seed: u64, x: i32, y: i32, layer: u8) -> bool {
+    let k = (layer - AMBER_DEPTH) as u32;
+    noise(seed, x, y, 3, 120) > 222 - 3 * k.min(8) && hash(seed, x, y, 121 + layer as u32) % 3 != 0
 }
 
 fn hash(seed: u64, x: i32, y: i32, salt: u32) -> u32 {

@@ -22,37 +22,15 @@ order, one agent each.
 - **Where:** `app/src/cutaway.rs`, `app/src/sight.rs`,
   `app/shaders/cutaway.wesl`, `app/src/piles/`, `app/src/legacy.rs`.
 - **Found in:** the line of sight prototype.
-
-## The Sacred Tree on a volume
-
-- **Status:** open
-- **Why:** the MVP's floors are only in the Tunnel Lab (V11); the town's
-  map is still a heightfield, so its mine can't have tunnels.
-- **What to do:** build the Sacred Tree's map (its hill, mine terraces
-  and pits) as a volume, with `ground(p)` callers that matter there moved
-  to `floor(p, z)` / `footprint_at`; check the golden and the soaks.
-- **Where:** `sim/src/settlement/hill_tests.rs` (the map),
-  `app/assets/levels/sacred_tree_supply.ron`, `sim/src/terrain.rs`,
-  `app/src/digging.rs`.
-- **Found in:** verticality design (V11), V.8.
-
-## Ghouls and haulers with a height
-
-- **Status:** open
-- **Why:** in volume scenes only the avatar, sprites (the walker) and
-  piles have a feet height (V.7); haulers, threats and chasers stand on
-  the top floor, so a ghoul over a tunnel would walk on the mountain.
-- **What to do:** give haulers and threats a feet height (hashed, a save
-  format bump), path them with `nav::path_at`, and move `chase.rs` and
-  `Threat::position` to it. Also still on the top floor: the jetpack's
-  `GoTo` (a 2D route), sprite respawn (`sprite_housekeeping` puts a sprite
-  home with its old height), piles made by a pile haul's drop (`PileLab`
-  walk, height 0) and by `spill`, and `TossEnd::Pit` for a sprite's or
-  avatar's pit dig. The walker falls instantly if a step drops it (paths
-  never do) and steers round no one.
-- **Where:** `sim/src/settlement/haulers.rs`, `chase.rs`, `threats`,
-  `sprites.rs`, `piles.rs`.
-- **Found in:** V.7's note on V.8.
+  Note (from M8.5 of the depths design, `sacred-tree.md`): done there:
+  other things out of sight are hidden inside (the collector and scene
+  objects, piles and their items, sprites, haulers, ghouls, buildings,
+  their glows and labels; the baked environment and ground cover while
+  inside), by their tile and floor (`SightView::shows`); the near-wall
+  box question is moot inside (walls stand 0.75 m over the whole view);
+  the next step down a stair is in sight (`sight::blocks` reads two
+  layers). Still open: the eye within its tile, ground on other levels
+  in sight beyond a step, a `view_mode` control op.
 
 ## Collapse and support
 
@@ -88,19 +66,6 @@ order, one agent each.
   `Terrain::flyable_at`.
 - **Found in:** V.4's note on V.8.
 
-## 3D paths to an unreachable floor
-
-- **Status:** open
-- **Why:** `nav::path_at` to a goal it can't reach searches the whole
-  window: in the soak about 1.2 s once, when the player stood in a pit the
-  walker couldn't enter, and 20–100 ms a plan across the Tunnel Lab. The
-  walker plans every half second.
-- **What to do:** bound the search (a node budget, or a reachability
-  check of the goal's floor first), or back the walker's replans off
-  after a failed plan.
-- **Where:** `sim/src/nav.rs`, `sim/src/settlement/follow.rs`.
-- **Found in:** V.8 (the soak).
-
 ## Lighting underground
 
 - **Status:** open
@@ -115,8 +80,76 @@ order, one agent each.
 - **Where:** `app/src/cutaway.rs`, `app/shaders/cutaway.wesl`,
   `app/src/daylight.rs`.
 - **Found in:** V.8.
+  Note (from M8.5 of the depths design): done there for the line of sight
+  view: under a roof the ground is lit by the lamp only where it is in
+  sight (no light through walls), a small ambient and a lanterns' light
+  channel (M8.6), not the sun, and the far interiors are void. Still
+  open: the cutaway view (F7) and bodies keep the plain fill light;
+  nothing changes with the day cycle underground.
 
 ## Done
+
+### The Sacred Tree on a volume
+
+- **Status:** done (branch `kestrel-sacred-tree-depths`)
+- **Why:** the MVP's floors are only in the Tunnel Lab (V11); the town's
+  map is still a heightfield, so its mine can't have tunnels.
+- **What to do:** build the Sacred Tree's map (its hill, mine terraces
+  and pits) as a volume, with `ground(p)` callers that matter there moved
+  to `floor(p, z)` / `footprint_at`; check the golden and the soaks.
+- **Where:** `sim/src/settlement/hill_tests.rs` (the map),
+  `app/assets/levels/sacred_tree_supply.ron`, `sim/src/terrain.rs`,
+  `app/src/digging.rs`.
+- **Found in:** verticality design (V11), V.8.
+- **Done:** as M8.3 of the depths design; see "M8.3 The town as a
+  volume" in [`sacred-tree.md`](sacred-tree.md).
+
+### Ghouls and haulers with a height
+
+- **Status:** done (branch `kestrel-sacred-tree-depths`, M8.2 in `sacred-tree.md`)
+- **Why:** in volume scenes only the avatar, sprites (the walker) and
+  piles have a feet height (V.7); haulers, threats and chasers stand on
+  the top floor, so a ghoul over a tunnel would walk on the mountain.
+- **What to do:** give haulers and threats a feet height (hashed, a save
+  format bump), path them with `nav::path_at`, and move `chase.rs` and
+  `Threat::position` to it. Also still on the top floor: the jetpack's
+  `GoTo` (a 2D route), sprite respawn (`sprite_housekeeping` puts a sprite
+  home with its old height), piles made by a pile haul's drop (`PileLab`
+  walk, height 0) and by `spill`, and `TossEnd::Pit` for a sprite's or
+  avatar's pit dig. The walker falls instantly if a step drops it (paths
+  never do) and steers round no one.
+- **Where:** `sim/src/settlement/haulers.rs`, `chase.rs`, `threats`,
+  `sprites.rs`, `piles.rs`.
+- **Found in:** V.7's note on V.8.
+- **Done:** in M8.2 ("M8.2 Every body on a floor" in `sacred-tree.md`):
+  haulers and threats keep a feet height (save format 43), walk on foot by
+  `walk_at`, plan with `nav::path_at` / `path_toward_at` (chases), back
+  their replans off after a failed plan, and reach only bodies on their
+  floor; the jetpack's `GoTo` flies over a 3D path, a respawned sprite
+  stands on home's floor, pile-haul drops and spills lie on the dropper's
+  floor and `TossEnd::Pit` carries its floor. Left: the walker still falls
+  instantly and steers round no one (it is a test body); buildings and
+  sites have no floor (notes on M8.3, M8.6).
+
+
+### 3D paths to an unreachable floor
+
+- **Status:** done (branch `kestrel-sacred-tree-depths`, M8.1 in `sacred-tree.md`)
+- **Why:** `nav::path_at` to a goal it can't reach searches the whole
+  window: in the soak about 1.2 s once, when the player stood in a pit the
+  walker couldn't enter, and 20–100 ms a plan across the Tunnel Lab. The
+  walker plans every half second.
+- **What to do:** bound the search (a node budget, or a reachability
+  check of the goal's floor first), or back the walker's replans off
+  after a failed plan.
+- **Where:** `sim/src/nav.rs`, `sim/src/settlement/follow.rs`.
+- **Found in:** V.8 (the soak).
+- **Done:** in M8.1 ("M8.1 Bounded 3D paths" in `sacred-tree.md`): a
+  3D plan expands at most `nav::PATH_BUDGET` nodes, a flood back from the
+  goal settles a shut-in goal (a pit, a mountain's top) in about twice its
+  floor's size, `nav::path_toward_at` gives a partial route to the reached
+  node nearest the goal, and the walker waits 2 s after a plan that didn't
+  reach.
 
 ### Seeing inside by line of sight (prototype)
 

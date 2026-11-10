@@ -92,6 +92,9 @@ pub struct BuildingKind {
     pub defence: Option<Defence>,
     /// Hits from enemies' swings it takes before it breaks (B8).
     pub health: u32,
+    /// A lantern's range in meters (M8.6 of the Sacred Tree depths): built,
+    /// it lights its floor round it (`light`). `None` for every other kind.
+    pub light: Option<Fx>,
 }
 
 /// A ballista building's shooting (`scenario::Defence`), in ticks and item
@@ -114,6 +117,14 @@ pub struct Defence {
 }
 
 impl BuildingKind {
+    /// Whether it is a lantern (M8.6): it lights, and does nothing else. It
+    /// is no obstacle (a tunnel is a tile wide), has no slot (nobody works
+    /// it, nobody possesses it), and ghouls leave it be, so a built one
+    /// burns forever (L2).
+    pub fn is_lantern(&self) -> bool {
+        self.light.is_some()
+    }
+
     /// The output's cap with `occupant` in the slot: a ballista's ammo
     /// store holds its ammo cap whoever is inside.
     pub fn cap_for(&self, occupant: Option<Occupant>) -> u32 {
@@ -231,6 +242,11 @@ pub struct BuildingState {
     /// What is left of its kind's `health` (B8): an enemy's swing takes its
     /// damage, and at 0 it breaks (`Settlement::break_building`).
     pub health: u32,
+    /// The height of the floor it stands on (M8.6 of the Sacred Tree
+    /// depths): the ground at its middle for most (the top floor in a
+    /// volume), a lantern's own floor, a tunnel's too. Deliveries plan to
+    /// it, and threats strike it from it.
+    pub height: Fx,
 }
 
 impl BuildingState {
@@ -278,10 +294,20 @@ impl BuildingState {
         slot_position(self.position, self.output_position, kind)
     }
 
+    /// Where a body stands to deliver to its site or pick up from its
+    /// output: just in front of the output pile, away from the building
+    /// (`interact::stand_spot`); a lantern's, at the lantern (its pile is
+    /// the lantern).
+    pub fn stand_position(&self) -> FxVec2 {
+        self.output_position + (self.output_position - self.position).normalize_or_zero() * STAND_GAP
+    }
+
     /// A building of kind `k` at `center`, at `stage`, with its slot and
     /// output empty. A site's materials take any mix up to its biggest part.
-    fn new(k: BuildingKindIx, kind: &BuildingKind, center: FxVec2, output: FxVec2, stage: Stage, items: usize) -> BuildingState {
+    fn new(k: BuildingKindIx, kind: &BuildingKind, spot: Spot, center: FxVec2, stage: Stage, items: usize) -> BuildingState {
+        let Spot { output, height } = spot;
         BuildingState {
+            height,
             kind: k,
             position: center,
             output_position: output,
@@ -322,6 +348,7 @@ pub(super) fn kinds(scenario: &Scenario, item: impl Fn(&str) -> ItemIx) -> Vec<B
             output_distance: k.output_distance,
             health: k.health,
             parts: k.parts.iter().map(|p| p.materials.iter().map(|s| (item(&s.item), s.units)).collect()).collect(),
+            light: k.light.as_ref().map(|l| l.range),
             defence: k.defence.as_ref().map(|d| Defence {
                 ammo: item(&d.ammo),
                 ammo_cap: d.ammo_cap,
@@ -387,6 +414,9 @@ pub enum PlacementRefusal {
     /// The footprint is over a pit, or ground too steep to walk
     /// ([`Terrain::steep`]).
     Uneven,
+    /// A lantern with no floor under it within a layer of the placer's
+    /// feet (M8.6): in a wall, over a drop.
+    NoFloor,
 }
 
 impl PlacementRefusal {
@@ -399,6 +429,7 @@ impl PlacementRefusal {
             PlacementRefusal::CoversDock(_) | PlacementRefusal::CoversSpot(_) => "TOO CLOSE TO A PILE",
             PlacementRefusal::Unreachable => "CAN'T BE REACHED",
             PlacementRefusal::Uneven => "UNEVEN GROUND",
+            PlacementRefusal::NoFloor => "NO FLOOR HERE",
         }
     }
 }
@@ -432,15 +463,29 @@ pub(super) struct Ground<'a> {
 ///   walk to the slot spot (a sprite that claims it walks there) and to
 ///   where the elder stands at the output pile. With no docks there is
 ///   nothing to walk from, and this is skipped.
-pub(super) fn placement(ground: &Ground, k: BuildingKindIx, center: FxVec2) -> Result<FxVec2, PlacementRefusal> {
+pub(super) fn placement(ground: &Ground, k: BuildingKindIx, center: FxVec2, feet: Option<Fx>) -> Result<Spot, PlacementRefusal> {
     let Ground { kinds, docks, buildings, bodies, terrain } = *ground;
     let kind = kinds.get(k as usize).ok_or(PlacementRefusal::UnknownKind)?;
     let reach = FxVec2::new(kind.radius, kind.radius);
     if !terrain.inside(center - reach) || !terrain.inside(center + reach) {
         return Err(PlacementRefusal::OutsideArena);
     }
+    if kind.is_lantern() {
+        return lantern_placement(ground, kind, center, feet);
+    }
     let (first, last) = (Terrain::pit_tile(center - reach), Terrain::pit_tile(center + reach));
-    if (first.0..=last.0).any(|x| (first.1..=last.1).any(|y| terrain.pit((x, y)) > 0 || terrain.steep((x, y)))) {
+    // In a volume, not over a tunnel or cave either (T6 of the depths
+    // design: nothing is dug under the town), nor on a wall's edge (a
+    // neighbour's top more than a layer off: a volume's cliff is a wall,
+    // not steep ground).
+    let hollow = |t: (i32, i32)| {
+        terrain.volume.as_ref().is_some_and(|v| {
+            let top = v.top(t);
+            let edge = [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|&(dx, dy)| top.zip(v.top((t.0 + dx, t.1 + dy))).is_none_or(|(a, b)| (a - b).abs() > 1));
+            v.spans(t).len() > 1 || edge
+        })
+    };
+    if (first.0..=last.0).any(|x| (first.1..=last.1).any(|y| terrain.is_dug((x, y)) || terrain.steep((x, y)) || hollow((x, y)))) {
         return Err(PlacementRefusal::Uneven);
     }
     let apart = |p: FxVec2, q: FxVec2, gap: Fx| p.distance(q) > gap + CLEARANCE_MARGIN;
@@ -479,7 +524,71 @@ pub(super) fn placement(ground: &Ground, k: BuildingKindIx, center: FxVec2) -> R
             }
         }
     }
-    Ok(output)
+    Ok(Spot { output, height: terrain.height(center) })
+}
+
+/// Where a placement puts a building: its output pile, and the height of
+/// the floor it stands on (`BuildingState::height`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Spot {
+    pub output: FxVec2,
+    pub height: Fx,
+}
+
+/// A lantern's placement (M8.6 of the Sacred Tree depths, L1): on any
+/// floor, in a tunnel or the cave too. In a volume, its floor is the one
+/// under its footprint within a layer of `feet` (the placer's; the top
+/// floor without one), with headroom for a body (`Terrain::footprint_at`,
+/// the walkers' own rule): none, or one far under the feet (a drop), is
+/// `NoFloor`. A hollow column and a wall's edge are fine for it: its
+/// footprint is one post. It is no obstacle, so bodies don't refuse it; it
+/// keeps off the props on the top floor, every other building on its
+/// floor, the docks and the other buildings' piles and slot spots. Its
+/// pile, where deliveries go, is the lantern itself, and it has no slot.
+/// No walk is checked from the depots (a miner that finds no way gives the
+/// site up until the ground changes): the ghost asks every frame, and a 3D
+/// route into a tunnel is too dear for that. On a heightfield it keeps off
+/// pits and steep ground, as every building.
+fn lantern_placement(ground: &Ground, kind: &BuildingKind, center: FxVec2, feet: Option<Fx>) -> Result<Spot, PlacementRefusal> {
+    let Ground { kinds, docks, buildings, terrain, .. } = *ground;
+    let (height, on_top) = match &terrain.volume {
+        Some(volume) => {
+            let z = feet.unwrap_or_else(|| terrain.height(center));
+            let height = terrain.footprint_at(center, z, kind.radius).ok_or(PlacementRefusal::NoFloor)?;
+            if (height - z).abs() > crate::terrain::LAYER + crate::volume::ROUNDING {
+                return Err(PlacementRefusal::NoFloor);
+            }
+            let top = volume.ground(center).is_some_and(|top| (top - height).abs() <= crate::terrain::LAYER);
+            (height, top)
+        }
+        None => {
+            let reach = FxVec2::new(kind.radius, kind.radius);
+            let (first, last) = (Terrain::pit_tile(center - reach), Terrain::pit_tile(center + reach));
+            if (first.0..=last.0).any(|x| (first.1..=last.1).any(|y| terrain.is_dug((x, y)) || terrain.steep((x, y)))) {
+                return Err(PlacementRefusal::Uneven);
+            }
+            (terrain.height(center), true)
+        }
+    };
+    let apart = |p: FxVec2, q: FxVec2, gap: Fx| p.distance(q) > gap + CLEARANCE_MARGIN;
+    let same_floor = |b: &BuildingState| (b.height - height).abs() <= super::combat::FLOOR_REACH;
+    let crowded = buildings.iter().any(|b| same_floor(b) && !apart(center, b.position, kind.radius + kinds[b.kind as usize].radius));
+    if crowded || (on_top && !terrain.clear(center, center, kind.radius)) {
+        return Err(PlacementRefusal::Blocked);
+    }
+    if let Some(d) = docks.iter().position(|&p| !apart(center, p, kind.radius + DOCK_RADIUS)) {
+        return Err(PlacementRefusal::CoversDock(d as DepotIx));
+    }
+    let spots = buildings
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| !kinds[b.kind as usize].is_lantern())
+        .flat_map(|(i, b)| [(i as BuildingIx, b.output_position, DOCK_RADIUS), (i as BuildingIx, b.slot_position(&kinds[b.kind as usize]), SLOT_RADIUS)])
+        .collect::<Vec<_>>();
+    if let Some(&(b, _, _)) = spots.iter().find(|&&(_, p, r)| !apart(center, p, kind.radius + r)) {
+        return Err(PlacementRefusal::CoversSpot(b));
+    }
+    Ok(Spot { output: center, height })
 }
 
 /// Puts up the scenario's prebuilt buildings, built and empty, in scenario
@@ -500,7 +609,7 @@ pub(super) fn prebuilt(
         let k = kinds.iter().position(|k| k.id == b.kind).expect("validated building kind") as BuildingKindIx;
         let center = at(b.position);
         let ground = Ground { kinds, docks: &docks, buildings: &buildings, bodies: &[], terrain };
-        let output = placement(&ground, k, center).map_err(|refusal| {
+        let spot = placement(&ground, k, center, None).map_err(|refusal| {
             let why = match refusal {
                 PlacementRefusal::UnknownKind => "has an unknown kind".to_string(),
                 PlacementRefusal::OutsideArena => "reaches outside the arena".to_string(),
@@ -511,11 +620,14 @@ pub(super) fn prebuilt(
                 PlacementRefusal::SlotBlocked => "has its slot spot blocked".to_string(),
                 PlacementRefusal::Unreachable => "can't be reached on foot from the depots".to_string(),
                 PlacementRefusal::Uneven => "is over a pit or steep ground".to_string(),
+                PlacementRefusal::NoFloor => "has no floor under it".to_string(),
             };
             format!("building {i} ({}) at {:?} {why}", b.kind, b.position)
         })?;
-        terrain.obstacles.push(Disc { center, radius: kinds[k as usize].radius });
-        buildings.push(BuildingState::new(k, &kinds[k as usize], center, output, Stage::Built, items));
+        if !kinds[k as usize].is_lantern() {
+            terrain.obstacles.push(Disc { center, radius: kinds[k as usize].radius });
+        }
+        buildings.push(BuildingState::new(k, &kinds[k as usize], spot, center, Stage::Built, items));
     }
     if !buildings.is_empty() {
         terrain.revision += 1;
@@ -655,6 +767,10 @@ fn ready_to_shoot<'a>(b: &BuildingState, kind: &'a BuildingKind, tick: u64) -> O
 /// Where a building's occupant stands (D2): just past the footprint, a
 /// quarter turn from the output pile, so the two never share a spot.
 fn slot_position(center: FxVec2, output: FxVec2, kind: &BuildingKind) -> FxVec2 {
+    // A lantern has no slot: nobody stands in it (M8.6).
+    if kind.is_lantern() {
+        return center;
+    }
     let out = (output - center).normalize_or_zero();
     let out = if out == FxVec2::ZERO { FxVec2::new(Fx::ZERO, Fx::ONE) } else { out };
     center + FxVec2::new(-out.y, out.x) * (kind.radius + SLOT_GAP)
@@ -760,10 +876,18 @@ impl Settlement {
     /// checks for `PlaceBlueprint`, and what the app's ghost shows, so the
     /// two never disagree. `Ok` holds where its output pile would go.
     pub fn placement_check(&self, kind: BuildingKindIx, position: FxVec2, terrain: &Terrain) -> Result<FxVec2, PlacementRefusal> {
+        self.placement_check_at(kind, position, None, terrain).map(|spot| spot.output)
+    }
+
+    /// [`Settlement::placement_check`] for a placer whose feet are at
+    /// `feet`: a lantern goes on the floor under it within a layer of them
+    /// (M8.6), in a tunnel too; other kinds on the top floor as ever. `Ok`
+    /// holds where its pile goes and the height of its floor.
+    pub fn placement_check_at(&self, kind: BuildingKindIx, position: FxVec2, feet: Option<Fx>, terrain: &Terrain) -> Result<Spot, PlacementRefusal> {
         let docks: Vec<FxVec2> = self.depots.iter().map(|d| d.position).collect();
         let bodies: Vec<Disc> = self.agents.iter().filter(|a| a.body.alive()).map(|a| Disc { center: a.body.position, radius: a.radius() }).collect();
         let ground = Ground { kinds: &self.building_kinds, docks: &docks, buildings: &self.buildings, bodies: &bodies, terrain };
-        placement(&ground, kind, position)
+        placement(&ground, kind, position, feet)
     }
 
     /// Where a building of kind `kind` at `position` would have its output
@@ -783,14 +907,18 @@ impl Settlement {
     /// Enemies then plan their routes afresh round it (`replan_routes`).
     pub(super) fn place_blueprints(&mut self, messages: Vec<PlaceBlueprint>, terrain: &mut Terrain) {
         let revision = terrain.revision;
-        for PlaceBlueprint { kind, position } in messages {
-            match self.placement_check(kind, position, terrain) {
-                Ok(output) => {
+        for PlaceBlueprint { kind, position, feet } in messages {
+            match self.placement_check_at(kind, position, feet, terrain) {
+                Ok(spot) => {
                     let k = &self.building_kinds[kind as usize];
                     let stage = Stage::Site { part: 0, materials: materials(k, self.items.len()) };
-                    terrain.obstacles.push(Disc { center: position, radius: k.radius });
+                    // A lantern is no obstacle; the ground's revision goes
+                    // up all the same, so searches and routes see the site.
+                    if !k.is_lantern() {
+                        terrain.obstacles.push(Disc { center: position, radius: k.radius });
+                    }
                     terrain.revision += 1;
-                    self.buildings.push(BuildingState::new(kind, k, position, output, stage, self.items.len()));
+                    self.buildings.push(BuildingState::new(kind, k, spot, position, stage, self.items.len()));
                     self.events.push(Event::BlueprintPlaced { building: (self.buildings.len() - 1) as BuildingIx });
                 }
                 Err(reason) => self.events.push(Event::BlueprintRefused { kind, reason }),
@@ -871,11 +999,11 @@ impl Settlement {
     /// Stage 3: every ballista that can shoot now (`ready_to_shoot`) aims at
     /// the nearest threat in range that the shots in flight won't kill
     /// (`pick_target`), as a defender does.
-    pub(super) fn aim_buildings(&self, tick: u64, out: &mut Vec<(FxVec2, Messages)>) {
+    pub(super) fn aim_buildings(&self, tick: u64, terrain: &crate::terrain::Terrain, out: &mut Vec<(FxVec2, Messages)>) {
         for (i, b) in self.buildings.iter().enumerate() {
             let kind = &self.building_kinds[b.kind as usize];
             let Some(defence) = ready_to_shoot(b, kind, tick) else { continue };
-            if let Some(t) = self.pick_target(b.position, defence.range) {
+            if let Some(t) = self.pick_target(b.position, defence.range, terrain) {
                 let mut messages = Messages::default();
                 messages.building_fire.push(BuildingFire { building: i as BuildingIx, target: t.id, to: t.position });
                 out.push((b.position, messages));

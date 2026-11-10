@@ -710,3 +710,139 @@ fn a_volume_scene_keeps_a_sprites_height() {
         assert_eq!(sim.step(&[]).total, again.step(&[]).total);
     }
 }
+
+/// A volume scene keeps a hauler's and a threat's feet (format 43, M8.2):
+/// a worker and a Sacred Tree ghoul standing on a block 1 m up, which
+/// continue alike after loading.
+#[test]
+fn a_volume_scene_keeps_haulers_and_threats_heights() {
+    use fx::Fx;
+    let content = Content::builtin();
+    let scenario = content::scenario::Scenario::parse(
+        r#"(id: "floors", extent: 8.0, items: [(id: "wood", label: "WOOD", skin: "item_lumber", scale: 0.45)],
+         depots: [(id: "a", label: "A", position: (-6.0, -2.0), capacity: 4, stock: []),
+                  (id: "b", label: "B", position: (-6.0, 2.0), capacity: 4, stock: [])],
+         sources: [], links: [(id: "idle", from: "a", to: "b", item: "wood", target: 1, priority: 1)],
+         agents: [(id: "player", label: "YOU", character: "exosuit", position: (0.0, 0.0), capacity: 8, links: [],
+                   cargo_anchor: (0.0, 0.65, -0.19), equipment: None, controlled: true),
+                  (id: "worker", label: "WORKER", character: "worker", position: (2.0, 2.0), capacity: 4, links: ["idle"],
+                   cargo_anchor: (0.0, 0.65, -0.19), equipment: None)],
+         producers: [], defenders: [],
+         waves: [(id: "w", position: (4.0, -2.0), target: (-6.0, -6.0), character: "ghoul_sacred_tree", first: 0.1, every: 1.0, count: 1)],
+         base_health: 5, player_health: 0)"#,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let mut volume = sim::volume::Volume::default();
+    volume.fill_box((-8, -8), (8, 8), -8, 0);
+    volume.fill_box((1, -3), (5, 3), 0, 2);
+    let setup = sim::settlement::SceneSetup {
+        scenario: Some(scenario),
+        player: "exosuit".into(),
+        extent: Fx::from_int(8),
+        diggable: true,
+        sloped: true,
+        volume: Some(volume),
+        spawn: [Fx::from_int(-6), Fx::ZERO, Fx::from_int(6)],
+        ..Default::default()
+    };
+    let mut sim = Simulation::from_world(sim::World::new_scene(5, &content, &setup).unwrap(), 1);
+    for _ in 0..12 {
+        sim.step(&[]);
+    }
+    let heights = |w: &sim::World| {
+        let s = w.settlement().unwrap();
+        let worker = s.agents.iter().find(|a| a.id == "worker").unwrap().hauler().unwrap().height;
+        (worker, s.threats.iter().map(|t| t.height).collect::<Vec<_>>())
+    };
+    assert_eq!(heights(sim.world()), (Fx::ONE, vec![Fx::ONE]), "both on the block");
+    let bytes = write(sim.world(), &content);
+    let loaded = read(&bytes, &content).unwrap();
+    assert_eq!(heights(&loaded), heights(sim.world()));
+    assert_eq!(write(&loaded, &content), bytes);
+    let mut again = Simulation::from_world(loaded, 1);
+    for _ in 0..120 {
+        assert_eq!(sim.step(&[]).total, again.step(&[]).total);
+    }
+}
+
+/// The scene's `key: Some(...)` section's text, as `tunnel_lab_tests`
+/// reads it.
+fn section(text: &str, key: &str) -> String {
+    let open = format!("{key}: Some(");
+    let start = text.find(&open).unwrap_or_else(|| panic!("no {open} in the scene")) + open.len();
+    let mut depth = 1;
+    let mut chars = text[start..].char_indices().peekable();
+    while let Some((at, c)) = chars.next() {
+        match c {
+            '/' if chars.peek().is_some_and(|&(_, n)| n == '/') => {
+                chars.by_ref().find(|&(_, n)| n == '\n');
+            }
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return text[start..start + at].to_string();
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("{key} is not closed");
+}
+
+/// A town's volume, made from its mine with the mountain over it (format
+/// 46, M8.8 of the Sacred Tree depths), is saved as its edits over the
+/// generated ground and remade at load: the Sacred Tree with a few cells
+/// dug and an ore taken loads with the same cells, hashes the same and
+/// saves to the same bytes, in a few KB instead of the whole volume's
+/// 1.5 MB.
+#[test]
+fn a_towns_volume_is_saved_as_its_edits() {
+    use fx::{Fx, FxVec2};
+    let content = Content::builtin();
+    let scene = include_str!("../../app/assets/levels/sacred_tree.ron");
+    let supply = include_str!("../../app/assets/levels/sacred_tree_supply.ron");
+    let layout: sim::volume::VolumeLayout = ron::from_str(&section(scene, "volume")).unwrap();
+    let setup = sim::settlement::SceneSetup {
+        scenario: Some(content::scenario::Scenario::parse(supply).unwrap()),
+        player: "elder".into(),
+        obstacles: vec![sim::terrain::Disc { center: FxVec2::ZERO, radius: Fx::ONE }],
+        diggable: true,
+        sloped: true,
+        dig_layers: Some(16),
+        mine: Some(7),
+        mine_volume: Some(layout),
+        hill: Some(sim::mine::Hill { center: (0, 0), plateau: 15, steps: 8, ramp_width: 7, ramp_length: 8, foot: 10 }),
+        spawn: [Fx::ZERO, Fx::ZERO, Fx::from_ratio(17, 5)],
+        ..Default::default()
+    };
+    let mut world = sim::World::new_scene(5, &content, &setup).unwrap();
+    let untouched = write(&world, &content);
+    let whole = {
+        let volume = postcard::to_allocvec(world.terrain().volume.as_ref().unwrap()).unwrap();
+        ruzstd::encoding::compress_to_vec(volume.as_slice(), ruzstd::encoding::CompressionLevel::Fastest).len()
+    };
+    let mut terrain = world.terrain().clone();
+    let center = sim::terrain::Terrain::pit_tile(terrain.center);
+    // A stair's worth of cells north of the town, and an ore taken.
+    let mut dug = 0;
+    for step in 0..8 {
+        let tile = (center.0 - 8 + step, center.1 - 22);
+        let top = terrain.volume.as_ref().unwrap().top(tile).unwrap();
+        for layer in top - 2 - step..top {
+            dug += u32::from(terrain.clear_cell(tile, layer));
+        }
+    }
+    let (cell, _) = terrain.volume.as_ref().unwrap().ore_cells().next().unwrap();
+    terrain.volume.as_mut().unwrap().set_ore(cell.0, cell.1, None);
+    world.set_terrain(terrain);
+    let bytes = write(&world, &content);
+    eprintln!("the town's save: {} bytes untouched, {} with {dug} cells dug; the whole volume alone {whole} bytes", untouched.len(), bytes.len());
+    assert!(dug > 20);
+    assert!(bytes.len() < 64 * 1024 && bytes.len() * 10 < whole, "{} bytes", bytes.len());
+    let loaded = read(&bytes, &content).unwrap();
+    assert_eq!(loaded.terrain(), world.terrain());
+    assert_eq!(sim::hash::hash_of(loaded.terrain()), sim::hash::hash_of(world.terrain()));
+    assert_eq!(loaded.terrain().volume.as_ref().unwrap().ore(cell.0, cell.1), None);
+    assert_eq!(write(&loaded, &content), bytes, "saved again, the same bytes");
+}

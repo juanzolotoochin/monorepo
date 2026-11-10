@@ -27,6 +27,7 @@ mod follow;
 mod haulers;
 pub mod interact;
 mod inventory;
+pub mod light;
 pub mod memory;
 pub mod miners;
 pub mod piano;
@@ -53,6 +54,7 @@ pub use agent::{AgentState, Body, Carry, CarryJob, Direction, Role, Side};
 pub use avatar::Seat;
 pub use chase::{Goal, Quarry};
 pub use clock::{Clock, TimeOfDay};
+pub use follow::Backoff;
 pub use fire::{Burn, BurnDef, FireballDef, FirePatch, Fireball};
 pub use buildings::{Ability, BuildingIx, BuildingKind, BuildingKindIx, BuildingState, BurstRefusal, Defence, FireRefusal, Occupant, PlacementRefusal, Slot, Stage, Turret};
 pub use haulers::{HaulerState, Phase};
@@ -278,6 +280,11 @@ pub struct Settlement {
     /// Threats the sunrise burned away (`Event::Dispelled`): not kills.
     #[serde(default)]
     pub dispelled: u64,
+    /// What the built lanterns light (M8.6, `light`): derived from the
+    /// buildings and the volume, so neither saved nor hashed, and
+    /// recomputed when they change (`Settlement::refresh_light`).
+    #[serde(skip)]
+    pub light: light::LightGrid,
 }
 
 /// A vehicle a scene parks, in arena coordinates.
@@ -318,8 +325,15 @@ pub struct SceneSetup {
     /// center tile ([`crate::terrain::Terrain::volume`]); none in scenes of
     /// heightfield ground.
     pub volume: Option<crate::volume::Volume>,
+    /// A mine scene whose ground is a volume (the Sacred Tree, M8.3 of the
+    /// depths design): the mine's generated ground and hill become the
+    /// volume, `dig_layers` deep, and these boxes (the scene's `volume:`)
+    /// apply over it ([`crate::terrain::Terrain::volume_from_mine`]). Set
+    /// it with `mine`, and leave `volume` unset.
+    pub mine_volume: Option<crate::volume::VolumeLayout>,
     /// The deepest a pit goes, in layers; [`crate::terrain::MAX_LAYERS`] if
-    /// unset.
+    /// unset. In a mine's volume, how deep its ground goes under the
+    /// surface.
     pub dig_layers: Option<u8>,
     /// Generates the arena's ground as a mine from this seed.
     pub mine: Option<u64>,
@@ -537,6 +551,7 @@ impl Settlement {
             fires: Vec::new(),
             clock: Clock::of(scenario),
             dispelled: 0,
+            light: light::LightGrid::default(),
             combat: CombatMetrics::default(),
             events: Vec::new(),
             spawn: FxVec2::ZERO,
@@ -627,8 +642,19 @@ impl Settlement {
             if let Some(hill) = setup.hill {
                 terrain.raise_hill(hill)?;
             }
+            if let Some(layout) = &setup.mine_volume {
+                if setup.volume.is_some() {
+                    return Err("a mine's volume is the mine's ground and its boxes; don't give the scene another".into());
+                }
+                if town && settlement.item_index(crate::mine::AMBER_ID).is_none() {
+                    return Err(format!("a town's volume yields {:?}, which the scenario has no item for", crate::mine::AMBER_ID));
+                }
+                terrain.volume_from_mine(Some(layout))?;
+            }
         } else if setup.hill.is_some() {
             return Err("a scene's hill stands in a mine; give it one".into());
+        } else if setup.mine_volume.is_some() {
+            return Err("a mine's volume needs a mine".into());
         }
         terrain.revision += 1;
         settlement.spawn = at([setup.spawn[0], setup.spawn[2]]);
@@ -647,10 +673,15 @@ impl Settlement {
                 avatar.height = floor.map_or(settlement.spawn_height, |floor| floor.max(settlement.spawn_height));
             }
         }
-        // Sprites stand on a volume's floors (V.7), from the ground's.
+        // Sprites (V.7) and haulers (M8.2) stand on a volume's floors, from
+        // the ground's.
         for a in &mut settlement.agents {
-            let AgentState { body, role: Role::Sprite(sprite), .. } = a else { continue };
-            sprite.height = follow::start_height(terrain, body.position, body.base_radius);
+            let AgentState { body, role, .. } = a;
+            match role {
+                Role::Sprite(sprite) => sprite.height = follow::start_height(terrain, body.position, body.base_radius),
+                Role::Hauler(hauler) => hauler.height = follow::start_height(terrain, body.position, body.base_radius),
+                Role::Avatar(_) => {}
+            }
         }
         if let Some(p) = &setup.piles {
             // A pile's mineral is what it holds: one set up empty would
@@ -1085,13 +1116,20 @@ impl Settlement {
                 (&d.id, d.position, i.capacity, &i.counts, &i.reserved_out, &i.reserved_in)
             })
             .collect();
+        // Projectiles as they hashed before their floor (M8.2): the same
+        // fields in order encode the same.
+        let projectiles: Vec<_> = self
+            .projectiles
+            .iter()
+            .map(|p| (p.id, p.defender, p.target, p.item, p.from, p.launch_height, p.to, p.born, p.arrival, p.damage, p.kind))
+            .collect();
         let observed = (
             agents,
             avatars,
             threats,
             spawned,
             depots,
-            &self.projectiles,
+            &projectiles,
             &self.pinned,
             &self.transfers,
             &self.metrics,
@@ -1132,6 +1170,18 @@ impl Settlement {
         if heights.iter().any(|&h| h != Fx::ZERO) {
             bytes.extend(postcard::to_allocvec(&heights).expect("heights encode"));
         }
+        // And haulers', threats' and arrows' floors likewise (M8.2).
+        let floors: Vec<Fx> = self
+            .agents
+            .iter()
+            .filter_map(AgentState::hauler)
+            .map(|h| h.height)
+            .chain(self.threats.iter().map(|t| t.height))
+            .chain(self.projectiles.iter().map(|p| p.floor))
+            .collect();
+        if floors.iter().any(|&h| h != Fx::ZERO) {
+            bytes.extend(postcard::to_allocvec(&floors).expect("floors encode"));
+        }
         bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, &byte| (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3))
     }
 }
@@ -1168,6 +1218,8 @@ mod construction_tests;
 #[cfg(test)]
 mod fire_tests;
 #[cfg(test)]
+mod floors_tests;
+#[cfg(test)]
 mod health_tests;
 #[cfg(test)]
 mod hill_tests;
@@ -1180,6 +1232,10 @@ mod miner_tests;
 #[cfg(test)]
 mod lane_tests;
 #[cfg(test)]
+mod light_tests;
+#[cfg(test)]
+mod dark_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod combat_tests;
@@ -1189,6 +1245,8 @@ mod scene_tests;
 mod seat_tests;
 #[cfg(test)]
 mod tunnel_lab_tests;
+#[cfg(test)]
+mod town_volume_tests;
 #[cfg(test)]
 mod path_tests;
 #[cfg(test)]

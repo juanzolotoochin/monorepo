@@ -382,7 +382,10 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             let id = kind.as_deref().ok_or("A blueprint at a position needs its kind")?;
             let kind = s.building_kinds.iter().position(|k| k.id == id).ok_or("unknown building kind")? as u16;
             let position = service.to_sim(point(*position)?);
-            s.placement_check(kind, position, sim_world.terrain()).map_err(|r| r.message().to_string())?;
+            // The elder's feet, as the sim reads them: a lantern goes on the
+            // floor under it (M8.6).
+            let feet = service.player().and_then(|a| s.agents.get(a as usize)).map(|a| a.height());
+            s.placement_check_at(kind, position, feet, sim_world.terrain()).map_err(|r| r.message().to_string())?;
             world.resource_mut::<SessionService>().command(sim::CommandKind::PlaceBlueprint { kind, position });
             Ok(Pending::Applied)
         }

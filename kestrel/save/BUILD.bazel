@@ -22,6 +22,7 @@ rust_test(
     size = "small",
     compile_data = [
         "//kestrel/app/assets:levels/forest_supply.ron",
+        "//kestrel/app/assets:levels/sacred_tree.ron",
         "//kestrel/app/assets:levels/sacred_tree_supply.ron",
     ],
     crate = ":save",

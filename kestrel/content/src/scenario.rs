@@ -241,6 +241,20 @@ pub struct BuildingKind {
     pub health: u32,
     /// Installed one after another; installing the last one finishes it.
     pub parts: Vec<Part>,
+    /// A lantern's light (M8.6 of the Sacred Tree depths): a kind with one
+    /// makes nothing and shoots nothing; built, it lights what it sees on
+    /// its floor within `range` (the sim's light grid). Its output pile is
+    /// where it is delivered to, so its `output_distance` may be 0.
+    #[serde(default)]
+    pub light: Option<Light>,
+}
+
+/// A lantern's light (`BuildingKind::light`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Light {
+    /// Meters it lights out to, on its own floor and in its line of sight.
+    pub range: Fx,
 }
 
 /// What a possessing elder's Burst does: `units` at once into the output,
@@ -687,7 +701,7 @@ impl Scenario {
                 || k.label.len() > 128
                 || !ident(&k.skin)
                 || !within(k.radius, f(1, 10), Fx::from_int(3))
-                || !within(k.output_distance, k.radius, k.radius + Fx::from_int(4))
+                || !within(k.output_distance, if k.light.is_some() { Fx::ZERO } else { k.radius }, k.radius + Fx::from_int(4))
                 || !(1..=1000).contains(&k.health)
                 || k.parts.is_empty()
                 || k.parts.len() > 8
@@ -695,6 +709,17 @@ impl Scenario {
                 || k.parts.iter().any(|p| p.label.is_empty() || p.label.len() > 128 || !stacks(&p.materials));
             // A gatherer produces; a ballista shoots and has no production.
             let role = match (&k.product, &k.defence) {
+                _ if k.light.is_some() => {
+                    // A lantern lights, and does nothing else.
+                    k.product.is_none()
+                        && k.defence.is_none()
+                        && k.period == Fx::ZERO
+                        && k.cap == 0
+                        && k.possessed_cap == 0
+                        && k.possessed_multiplier == Fx::ZERO
+                        && k.burst.units == 0
+                        && k.light.as_ref().is_some_and(|l| within(l.range, Fx::ONE, Fx::from_int(16)))
+                }
                 (Some(product), None) => {
                     items.contains(product.as_str())
                         && within(k.period, f(1, 10), Fx::from_int(3600))
@@ -924,6 +949,21 @@ mod tests {
         assert_eq!((fireball.cooldown, fireball.damage, fireball.fire_radius, fireball.fire_seconds), (Fx::from_int(25), 1, "1.5".parse().unwrap(), Fx::from_int(4)));
         assert_eq!((fireball.burn_damage, fireball.burn_period, fireball.burn_linger), (1, "1.5".parse().unwrap(), Fx::ONE));
         assert_eq!(tree.buildings[0].kind, "wood_gatherer");
+        // A lantern (M8.6 of the depths design): 1 stone and 1 amber, once;
+        // it lights 6 m and makes, holds and shoots nothing.
+        let lantern = kind("lantern");
+        assert_eq!(lantern.light.as_ref().map(|l| l.range), Some(Fx::from_int(6)));
+        assert_eq!((lantern.product.as_deref(), lantern.defence.is_none(), lantern.cap, lantern.output_distance), (None, true, 0, Fx::ZERO));
+        assert_eq!(needs(lantern), [vec![("stone", 1), ("amber", 1)]]);
+        let invalid = |change: fn(&mut Scenario)| {
+            let mut scenario = Scenario::parse(SACRED_TREE).unwrap();
+            change(&mut scenario);
+            scenario.validate().is_err()
+        };
+        assert!(invalid(|s| s.building_kinds[2].light.as_mut().unwrap().range = Fx::ZERO));
+        assert!(invalid(|s| s.building_kinds[2].product = Some("wood".into())));
+        assert!(invalid(|s| s.building_kinds[2].cap = 1));
+        assert!(invalid(|s| s.building_kinds[2].output_distance = Fx::from_int(-1)));
         // The other scenes have none of it.
         let forest = Scenario::parse(FOREST).unwrap();
         assert!(forest.building_kinds.is_empty() && forest.buildings.is_empty() && forest.sprites.is_empty());
@@ -963,7 +1003,7 @@ mod tests {
     fn the_tree_piles_take_one_item_and_the_elder_carries_one() {
         let tree = Scenario::parse(SACRED_TREE).unwrap();
         let only: Vec<_> = tree.depots.iter().map(|d| (d.id.as_str(), d.only.as_deref())).collect();
-        assert_eq!(only, [("tree_wood", Some("wood")), ("tree_stone", Some("stone"))]);
+        assert_eq!(only, [("tree_wood", Some("wood")), ("tree_stone", Some("stone")), ("tree_amber", Some("amber"))]);
         assert!(tree.agents[0].one_kind && tree.agents[0].capacity == 5);
         // Other scenes' depots and cargo take any mix.
         let forest = Scenario::parse(FOREST).unwrap();

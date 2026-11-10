@@ -30,8 +30,18 @@ struct Cutaway {
     // height over the feet walls on the camera's side are cut to.
     light: vec4<f32>,
     // x: the inside light on ground in sight (of its albedo); y: the
-    // brightness the section keeps out of sight.
+    // brightness the section keeps out of sight; z: the peek factor (a
+    // notch over a shallow roof).
     inside: vec4<f32>,
+    // xyz: the elder's lamp; w: its glow, 0..1.
+    lamp: vec4<f32>,
+    // rgb: the lamp's colour.
+    lamp_color: vec4<f32>,
+    // Roofed ground's light (of its albedo): x the ambient, y the lamp, z
+    // the lanterns' channel; w the lamp's range.
+    under: vec4<f32>,
+    // rgb: the void beyond the rim round what is in sight.
+    void_color: vec4<f32>,
 };
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> cutaway: Cutaway;
 
@@ -54,27 +64,33 @@ fn cut(p: vec3<f32>) -> f32 {
 }
 
 // Line of sight: the height ground is hidden over at `xz` while inside:
-// the ceiling's, but `light.w` over the feet in the tiles from the
+// `sight.y`, the ceiling's or `cutaway::INSIDE_WALL` over the feet,
+// whichever is lower; at most `light.w` over the feet in the tiles from the
 // player's toward the camera (`window.w` tiles along x and z on the
 // camera's side), so a near wall doesn't hide the body. The box's sides
 // lie just inside the player tile's back edges (walls behind stay) and just
 // outside the far tiles' edges, so walls are cut whole (blocky, as the
 // voxels are) and a wall face on an edge is decided one way.
-fn plane_at(xz: vec2<f32>) -> f32 {
+fn in_box(xz: vec2<f32>) -> bool {
     let rel = (xz - round(cutaway.eye.xz)) * sign(cutaway.toward.xz);
     let n = cutaway.window.w;
-    let near = all(rel > vec2<f32>(-0.49)) && all(rel < vec2<f32>(n + 0.51));
-    let low = min(cutaway.eye.y + cutaway.light.w, cutaway.sight.y);
-    return select(cutaway.sight.y, low, near);
+    return all(rel > vec2<f32>(-0.49)) && all(rel < vec2<f32>(n + 0.51));
 }
 
-// Line of sight: how much of the ground at `p` is hidden (the inside
-// factor, dithered) over `plane_at`.
+fn plane_at(xz: vec2<f32>) -> f32 {
+    let low = min(cutaway.eye.y + cutaway.light.w, cutaway.sight.y);
+    return select(cutaway.sight.y, low, in_box(xz));
+}
+
+// Line of sight: how much of the ground at `p` is hidden (dithered) over
+// `plane_at`: the inside factor; in the near-wall box also the peek
+// factor, so a shallow roof (a stair just dug down) gets a notch over the
+// body and nothing else is cut.
 fn hidden(p: vec3<f32>) -> f32 {
     if cutaway.sight.z < 0.5 || p.y <= plane_at(p.xz) {
         return 0.0;
     }
-    return cutaway.sight.x;
+    return select(cutaway.sight.x, max(cutaway.sight.x, cutaway.inside.z), in_box(p.xz));
 }
 
 fn threshold(pixel: vec2<f32>) -> f32 {

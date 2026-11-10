@@ -21,13 +21,21 @@ impl Settlement {
         let items = self.depot_items();
         // Miners' dig claims as of last tick, and where their stone goes.
         let dig_claims: Vec<((i32, i32), AgentIx)> = self.agents.iter().enumerate().filter_map(|(i, a)| Some((a.sprite()?.dig_claim?, i as AgentIx))).collect();
-        let stone = self.stone_depot();
+        let (stone, amber) = (self.stone_depot(), self.amber_depot());
+        // Miners' lantern errands as of last tick (M8.6).
+        let errands: Vec<super::miners::Errand> = self
+            .agents
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.body.alive())
+            .filter_map(|(i, a)| super::miners::errand(i as AgentIx, a.sprite()?, &a.carry, &self.depots))
+            .collect();
         let danger = self.danger();
         let leader = self.player().and_then(|p| {
             let a = &self.agents[p as usize];
             Some((a.body.position, a.avatar()?.height))
         });
-        let Settlement { agents, characters, dock_owner, depots, links, piles, transfers, weapons, spawn, spawn_height, piano_serial, vehicles, buildings, building_kinds, .. } = self;
+        let Settlement { agents, characters, dock_owner, depots, links, piles, transfers, weapons, spawn, spawn_height, piano_serial, vehicles, buildings, building_kinds, light, .. } = self;
         let view = View {
             me: 0,
             tick,
@@ -44,8 +52,9 @@ impl Settlement {
             characters,
             buildings,
             building_kinds,
+            light,
         };
-        let ctx = Ctx { tick, characters, terrain, piles: piles.as_ref(), footprints: &footprints, dock_owner, depots, links, transfers, view, dig_claims: &dig_claims, stone, danger: &danger, leader };
+        let ctx = Ctx { tick, characters, terrain, piles: piles.as_ref(), footprints: &footprints, dock_owner, depots, links, transfers, view, dig_claims: &dig_claims, errands: &errands, stone, amber, danger: &danger, leader };
         agents.par_iter_mut().enumerate().for_each(|(i, a)| haulers::self_update(a, i as AgentIx, &ctx));
         self.vehicles_self_update(terrain);
         self.release_distant_piano_notes();

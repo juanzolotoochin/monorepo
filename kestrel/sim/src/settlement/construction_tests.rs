@@ -28,8 +28,9 @@ const TREE_WOOD: DepotIx = 0;
 const TREE_STONE: DepotIx = 1;
 const WOOD_GATHERER: BuildingKindIx = 0;
 const BALLISTA: BuildingKindIx = 1;
-/// The test-only kind (`tests::with_stone_gatherer`), after the ballista.
-const STONE_GATHERER: BuildingKindIx = 2;
+/// The test-only kind (`tests::with_stone_gatherer`), after the ballista
+/// and the lantern.
+const STONE_GATHERER: BuildingKindIx = 3;
 /// The prebuilt Wood Gatherer, and the first site put down.
 const PREBUILT: BuildingIx = 0;
 const FIRST_SITE: BuildingIx = 1;
@@ -195,7 +196,7 @@ fn dig_stone(sim: &mut Simulation) -> u32 {
     for from in [(x + 2, y), (x + 1, y)] {
         walk_to(sim, Terrain::pit_center((from.0 + 1, from.1)));
         walk_to(sim, Terrain::pit_center(from));
-        step(sim, &[command(CommandKind::DigDown { agent: ELDER })]);
+        step(sim, &[command(CommandKind::DigFront { agent: ELDER, direction: crate::volume::DigDirection::Down })]);
         assert!(settlement(sim).agents[ELDER as usize].avatar().unwrap().dig.is_some(), "a dig from {from:?}");
         until(sim, 5 * HZ, |sim| settlement(sim).agents[ELDER as usize].avatar().unwrap().dig.is_none());
     }
@@ -275,7 +276,7 @@ fn two_placements_on_one_tick_resolve_in_command_order() {
     assert_eq!(s.buildings.len(), 2);
     let b = &s.buildings[FIRST_SITE as usize];
     assert_eq!((b.kind, b.position, b.slot), (STONE_GATHERER, first, Slot::Empty));
-    assert_eq!(site(&sim, FIRST_SITE), (0, vec![0, 0]));
+    assert_eq!(site(&sim, FIRST_SITE), (0, vec![0, 0, 0]));
     assert!(s.events.contains(&Event::BlueprintPlaced { building: FIRST_SITE }));
     assert!(s.events.contains(&Event::BlueprintRefused { kind: WOOD_GATHERER, reason: PlacementRefusal::Blocked }));
     let terrain = sim.world().terrain();
@@ -306,7 +307,7 @@ fn a_site_takes_only_what_its_next_part_needs() {
     walk_to_building(&mut sim, FIRST_SITE);
     assert_eq!(target(&sim), Some((site_target, Interaction::Needs { building: FIRST_SITE, part: 0, needs: vec![(WOOD, 2)] })));
     step(&mut sim, &[interact(site_target)]);
-    assert_eq!((refusal(&sim), site(&sim, FIRST_SITE)), (None, (0, vec![0, 0])));
+    assert_eq!((refusal(&sim), site(&sim, FIRST_SITE)), (None, (0, vec![0, 0, 0])));
     // A bundle of stone: the foundation takes wood only.
     step(&mut sim, &[command(CommandKind::AddStock { depot: TREE_STONE, item: STONE, units: 3 })]);
     walk_to_dock(&mut sim, TREE_STONE);
@@ -323,7 +324,7 @@ fn a_site_takes_only_what_its_next_part_needs() {
     walk_to_building(&mut sim, FIRST_SITE);
     let Interaction::Bundle(job) = use_target(&mut sim, site_target) else { panic!("a delivery") };
     assert_eq!(job.remaining, 1);
-    assert_eq!((cargo(&sim, WOOD), site(&sim, FIRST_SITE)), (0, (0, vec![1, 0])));
+    assert_eq!((cargo(&sim, WOOD), site(&sim, FIRST_SITE)), (0, (0, vec![1, 0, 0])));
     assert_eq!(target(&sim), Some((site_target, Interaction::Needs { building: FIRST_SITE, part: 0, needs: vec![(WOOD, 1)] })));
     // Five more: it takes the one it lacks and leaves four in the bundle.
     step(&mut sim, &[command(CommandKind::AddStock { depot: TREE_WOOD, item: WOOD, units: 5 })]);
@@ -332,7 +333,7 @@ fn a_site_takes_only_what_its_next_part_needs() {
     walk_to_building(&mut sim, FIRST_SITE);
     let Interaction::Bundle(job) = use_target(&mut sim, site_target) else { panic!("a delivery") };
     assert_eq!(job.remaining, 1);
-    assert_eq!((cargo(&sim, WOOD), site(&sim, FIRST_SITE)), (4, (0, vec![2, 0])));
+    assert_eq!((cargo(&sim, WOOD), site(&sim, FIRST_SITE)), (4, (0, vec![2, 0, 0])));
     // Complete: the install, even with wood left in the bundle.
     assert_eq!(target(&sim), Some((site_target, Interaction::Install { building: FIRST_SITE, part: 0 })));
     // A pickup is no use on a site, whatever is asked.
@@ -357,7 +358,7 @@ fn installing_the_last_part_makes_the_building_and_a_sprite_staffs_it() {
     use_target(&mut sim, site_target);
     assert_eq!(use_target(&mut sim, site_target), Interaction::Install { building: FIRST_SITE, part: 0 });
     assert!(settlement(&sim).events.contains(&Event::PartInstalled { building: FIRST_SITE, part: 0, built: false }));
-    assert_eq!(site(&sim, FIRST_SITE), (1, vec![0, 0]));
+    assert_eq!(site(&sim, FIRST_SITE), (1, vec![0, 0, 0]));
     let wood = &settlement(&sim).balances()["wood"];
     assert_eq!((wood.supplied, wood.consumed, wood.carried), (5, 2, 3));
     assert!(wood.conserved);

@@ -4,7 +4,8 @@ Status: design agreed (2026-10-30), M1–M4 done (PR #131). The ballista
 prototype that follows is in [`SACRED_TREE_BALLISTA.md`](SACRED_TREE_BALLISTA.md) (PR #132), and
 mining after it in [`SACRED_TREE_MINING.md`](SACRED_TREE_MINING.md) (PR #133), then day and night in
 [`SACRED_TREE_DAYNIGHT.md`](SACRED_TREE_DAYNIGHT.md). Tunnels and floors over each other, on a
-separate map for now, in [`VERTICALITY.md`](VERTICALITY.md). Tasks in
+separate map, in [`VERTICALITY.md`](VERTICALITY.md), and then under the town itself, with
+lanterns, in [`SACRED_TREE_DEPTHS.md`](SACRED_TREE_DEPTHS.md) (M8 done 2026-11-08). Tasks in
 [`todo/sacred-tree.md`](todo/sacred-tree.md), one per step, by milestone.
 
 ## Goal

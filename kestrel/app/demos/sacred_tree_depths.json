@@ -1,0 +1,529 @@
+{
+  "version": 1,
+  "scene": "sacred-tree",
+  "fps": 30,
+  "width": 1440,
+  "height": 960,
+  "max_frames": 3600,
+  "steps": [
+    {
+      "op": "wait",
+      "frames": 45
+    },
+    {
+      "op": "settlement_stock",
+      "depot": "tree_stone",
+      "item": "stone",
+      "units": 1
+    },
+    {
+      "op": "settlement_stock",
+      "depot": "tree_amber",
+      "item": "amber",
+      "units": 1
+    },
+    {
+      "op": "settlement_rate",
+      "rate": 2.0
+    },
+    {
+      "op": "walk",
+      "position": [
+        -12,
+        0
+      ]
+    },
+    {
+      "op": "walk",
+      "position": [
+        -24,
+        -1
+      ]
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -1
+      ]
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -3
+      ]
+    },
+    {
+      "op": "settlement_rate",
+      "rate": 1.0
+    },
+    {
+      "op": "dig_front",
+      "direction": "Down"
+    },
+    {
+      "op": "wait",
+      "frames": 66
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -4
+      ]
+    },
+    {
+      "op": "dig_front",
+      "direction": "Down"
+    },
+    {
+      "op": "wait",
+      "frames": 66
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -5
+      ]
+    },
+    {
+      "op": "dig_front",
+      "direction": "Down"
+    },
+    {
+      "op": "wait",
+      "frames": 66
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -6
+      ]
+    },
+    {
+      "op": "dig_front",
+      "direction": "Down"
+    },
+    {
+      "op": "wait",
+      "frames": 66
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -7
+      ]
+    },
+    {
+      "op": "dig_front",
+      "direction": "Down"
+    },
+    {
+      "op": "wait",
+      "frames": 66
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -8
+      ]
+    },
+    {
+      "op": "dig_front",
+      "direction": "Down"
+    },
+    {
+      "op": "wait",
+      "frames": 66
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -9
+      ]
+    },
+    {
+      "op": "settlement_place_blueprint",
+      "kind": "lantern",
+      "position": [
+        -25,
+        -8
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 20
+    },
+    {
+      "op": "settlement_sprite_job",
+      "sprite": "sprite_reed",
+      "job": "mine"
+    },
+    {
+      "op": "settlement_sprite_job",
+      "sprite": "sprite_moss",
+      "job": "mine"
+    },
+    {
+      "op": "settlement_rate",
+      "rate": 2.0
+    },
+    {
+      "op": "dig"
+    },
+    {
+      "op": "wait",
+      "frames": 34
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -10
+      ]
+    },
+    {
+      "op": "dig"
+    },
+    {
+      "op": "wait",
+      "frames": 34
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -11
+      ]
+    },
+    {
+      "op": "dig"
+    },
+    {
+      "op": "wait",
+      "frames": 34
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -12
+      ]
+    },
+    {
+      "op": "dig"
+    },
+    {
+      "op": "wait",
+      "frames": 34
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -13
+      ]
+    },
+    {
+      "op": "dig"
+    },
+    {
+      "op": "wait",
+      "frames": 34
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -14
+      ]
+    },
+    {
+      "op": "dig"
+    },
+    {
+      "op": "wait",
+      "frames": 34
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -15
+      ]
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -11
+      ]
+    },
+    {
+      "op": "settlement_rate",
+      "rate": 4.0
+    },
+    {
+      "op": "wait",
+      "frames": 50
+    },
+    {
+      "op": "wait",
+      "frames": 50
+    },
+    {
+      "op": "wait",
+      "frames": 50
+    },
+    {
+      "op": "wait",
+      "frames": 50
+    },
+    {
+      "op": "wait",
+      "frames": 50
+    },
+    {
+      "op": "wait",
+      "frames": 50
+    },
+    {
+      "op": "wait",
+      "frames": 50
+    },
+    {
+      "op": "wait",
+      "frames": 50
+    },
+    {
+      "op": "settlement_rate",
+      "rate": 2.0
+    },
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "settlement_rate",
+      "rate": 4.0
+    },
+    {
+      "op": "wait",
+      "frames": 330
+    },
+    {
+      "op": "settlement_rate",
+      "rate": 2.0
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -7
+      ]
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -4
+      ]
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -2
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 30
+    },
+    {
+      "op": "settlement_rate",
+      "rate": 1.0
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -3
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 40
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -4
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 40
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -5
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 40
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -6
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 40
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -7
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 40
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -8
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 40
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -9
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 40
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -10
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 40
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -11
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 40
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -12
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 40
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -13
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 40
+    },
+    {
+      "op": "walk",
+      "position": [
+        -25,
+        -14
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 40
+    },
+    {
+      "op": "wait",
+      "frames": 150
+    },
+    {
+      "op": "settlement_rate",
+      "rate": 4.0
+    },
+    {
+      "op": "wait",
+      "frames": 300
+    },
+    {
+      "op": "settlement_rate",
+      "rate": 1.0
+    },
+    {
+      "op": "walk",
+      "position": [
+        -14,
+        0
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 120
+    }
+  ]
+}

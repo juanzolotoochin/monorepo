@@ -293,6 +293,26 @@ game_demo(
     tags = ["manual"],
 )
 
+# The Sacred Tree's depths through a day and a night (M8.8 of the depths
+# design): the elder digs a stair down at the west ramp's foot and a tunnel
+# on from it (the plain dig, F), puts a lantern's blueprint on the stair,
+# the miners bring its stone and amber and build it and mine the stair's
+# walls in its light (at 4x between), then at dusk the elder lures two
+# ghouls of the west column down into the lit tunnel, and at dawn the last
+# ghoul burns away by the ramp.
+game_demo(
+    name = "sacred_tree_depths_demo",
+    game = ":demo",
+    script = "demos/sacred_tree_depths.json",
+    tags = ["manual"],
+)
+
+filegroup(
+    name = "sacred_tree_depths_demo_video",
+    srcs = [":sacred_tree_depths_demo"],
+    output_group = "video",
+)
+
 game_demo(
     name = "combat_arena_demo",
     assertions = "demos/combat_arena.assertions.json",

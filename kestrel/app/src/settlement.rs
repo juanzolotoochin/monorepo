@@ -40,6 +40,8 @@ pub struct Settlement {
     produced_at: BTreeMap<usize, u64>,
     /// The tick each building last had a Burst, for its lamp's bigger flash.
     burst_at: BTreeMap<usize, u64>,
+    /// Each built lantern's point light, by building index (M8.6).
+    lantern_lights: BTreeMap<usize, Entity>,
     /// The elder's last interact refusal and the tick it came, shown over
     /// its head for `REFUSAL_SECONDS`.
     refusal: Option<(String, f32)>,
@@ -973,6 +975,7 @@ pub fn tick(world: &mut World) {
         let mut view = View::new(&config.skin, a.position);
         view.heading = a.heading;
         view.travel = a.travelled;
+        view.floor = volume_feet(world, a);
         if !config.controlled {
             desired.insert(format!("agent/{}", a.id), view);
         }
@@ -1016,9 +1019,12 @@ pub fn tick(world: &mut World) {
         v.activity = (1. - (sim.time() - d.fired_at as f32) / (0.25 * HZ)).max(0.);
         desired.insert(format!("defender/{}", config.id), v);
     }
+    let volume = in_volume(world);
     for t in sim.threats.values() {
         let mut v = View::new(&sim.config().waves[t.wave].skin, t.position);
         v.position.y = rise_offset(t.travelled);
+        // On its floor in a volume scene (M8.2), not the top one.
+        v.floor = volume.then(|| t.feet.unwrap_or(0.0));
         v.heading = t.heading;
         v.travel = t.travelled;
         let wounded = t.hp < sim.config().waves[t.wave].hp;
@@ -1332,6 +1338,16 @@ pub fn tick(world: &mut World) {
         );
         writes += changed;
         skipped += unchanged;
+        // Inside (line of sight, M8.5) what stands on a tile out of sight
+        // is hidden; outside everything shows.
+        let shown = world.get_resource::<crate::cutaway::SightView>().is_none_or(|s| s.shows(view.position));
+        if let Some(mut visibility) = world.get_mut::<Visibility>(rig.root) {
+            visibility.set_if_neq(if shown { Visibility::Inherited } else { Visibility::Hidden });
+        }
+    }
+    let mut glows = glows;
+    if let Some(sight) = world.get_resource::<crate::cutaway::SightView>() {
+        glows.retain(|g| sight.shows_label(g.1));
     }
     sync_glows(world, &mut state, glows);
     crate::telemetry::elapsed(world, "settlement_sync", sync_start);
@@ -1467,12 +1483,18 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
     let seconds = sim.time() / HZ;
     let burst = burst_indicator(world);
     let leave = leave_prompt(world);
+    let volume = in_volume(world);
+    let mut lanterns = Vec::new();
     for (i, b) in sim.buildings.iter().enumerate() {
         let kind = sim.config().building_kinds.iter().find(|k| k.id == b.kind).expect("a scenario building kind");
         let shape = state.building_shapes[&b.kind];
         let heading = facing(b.position, b.output_position);
         let mut v = View::new(&kind.skin, b.position);
         v.heading = heading;
+        // On its own floor in a volume scene (M8.6: a lantern in a tunnel).
+        if volume {
+            v.floor = Some(b.feet.unwrap_or(0.0));
+        }
         // A site shows its parts going in: a bare plot (ringed on the ground,
         // `input::hud`), then the skin at a share of its size for each part
         // installed, and whole once built.
@@ -1493,7 +1515,20 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
         let out = Vec3::new(b.output_position[0], 0., b.output_position[1]);
         inventory(desired, sim, &format!("output/{i}"), &b.output, out, heading, &OUTPUT_LAYOUT);
         let center = Vec3::new(b.position[0], 0., b.position[1]);
-        let center = center + Vec3::Y * ground(world, center);
+        let center = center + Vec3::Y * if volume { b.feet.unwrap_or(0.0) } else { ground(world, center) };
+        // A lantern (M8.6): built, it is its post and its light, with no
+        // card, lamp or pile; a site says what it needs, as any site.
+        if kind.light.is_some() {
+            if b.site.is_none() {
+                lanterns.push((i, center));
+                for key in [format!("building/{i}"), format!("output/{i}")] {
+                    if let Some(e) = state.labels.remove(&key) {
+                        world.despawn(e);
+                    }
+                }
+                continue;
+            }
+        }
         let (glow, status) = match (&b.occupant, b.status) {
             (Some(Occupant::Elder(_)), BuildingStatus::Full) => (Glow::Full, "FULL / POSSESSED".to_string()),
             (Some(Occupant::Elder(_)), BuildingStatus::NoAmmo) => (Glow::Full, "NO AMMO / POSSESSED".to_string()),
@@ -1600,16 +1635,25 @@ fn town(world: &mut World, state: &mut Settlement, sim: &Simulation, desired: &m
             world.despawn(e);
         }
     }
+    lantern_lights(world, state, &lanterns);
     // Dropped bundles: stacked on the ground in their item's skin, as an
     // output's units are, with their count ("3 WOOD").
     let mut piles = Vec::new();
     for p in &sim.ground_piles {
         let at = Vec3::new(p.position[0], 0., p.position[1]);
         inventory(desired, sim, &format!("ground/{}", p.id), &p.stock, at, 0.0, &OUTPUT_LAYOUT);
+        // On its own floor in a volume scene (M8.3), not the top one.
+        if volume {
+            let prefix = format!("ground/{}/", p.id);
+            for (_, view) in desired.range_mut(prefix.clone()..).take_while(|(k, _)| k.starts_with(&prefix)) {
+                view.floor = Some(p.feet.unwrap_or(0.0));
+            }
+        }
         let Some((id, units)) = p.stock.items.first_key_value() else { continue };
         let label = sim.config().items.iter().find(|it| it.id == *id).map_or_else(|| id.to_uppercase(), |it| it.label.clone());
         let key = format!("ground/{}", p.id);
-        let above = at + Vec3::Y * (ground(world, at) + 0.45);
+        let floor = if volume { p.feet.unwrap_or(0.0) } else { ground(world, at) };
+        let above = at + Vec3::Y * (floor + 0.45);
         town_caption(world, state, &key, above, format!("{units} {label}"), Color::srgb(0.98, 0.92, 0.70), String::new());
         piles.push(key);
     }
@@ -1862,11 +1906,67 @@ fn town_help(world: &mut World) {
     }
 }
 
-/// A sprite's feet in a volume scene (V.7): the floor the sim says it
-/// stands on, which may be under another; none elsewhere.
+/// A sprite's or hauler's feet in a volume scene (V.7, M8.2): the floor
+/// the sim says it stands on, which may be under another; none elsewhere.
 fn volume_feet(world: &World, a: &crate::legacy::AgentState) -> Option<f32> {
+    in_volume(world).then(|| a.feet.unwrap_or(0.0))
+}
+
+/// Whether the scene is a volume (V.1): then bodies are drawn at their
+/// feet (`legacy`'s `feet`, 0 m when it leaves them out), not on the top
+/// floor.
+fn in_volume(world: &World) -> bool {
     let service = world.resource::<crate::lockstep::SessionService>();
-    service.world().is_some_and(|w| w.terrain().volume.is_some()).then_some(a.feet).flatten()
+    service.world().is_some_and(|w| w.terrain().volume.is_some())
+}
+
+/// A built lantern's light (M8.6): a small warm point light under its
+/// head, no shadows, always on (a lantern burns forever). The ground under
+/// a roof is lit from the sim's light grid by the cutaway shader; this
+/// lights bodies and the lantern's surroundings the way the grid can't.
+const LANTERN_LUMENS: f32 = 60000.0;
+const LANTERN_RANGE: f32 = 6.0;
+/// The light's height over the lantern's foot: just under its head.
+const LANTERN_LIGHT_HEIGHT: f32 = 1.15;
+
+/// Keeps one point light per built lantern, `lanterns` (building index and
+/// foot), spawning new ones and dropping those gone.
+fn lantern_lights(world: &mut World, state: &mut Settlement, lanterns: &[(usize, Vec3)]) {
+    let gone: Vec<usize> = state.lantern_lights.keys().filter(|i| !lanterns.iter().any(|(j, _)| j == *i)).copied().collect();
+    for i in gone {
+        if let Some(e) = state.lantern_lights.remove(&i) {
+            if let Ok(e) = world.get_entity_mut(e) {
+                e.despawn();
+            }
+        }
+    }
+    for &(i, foot) in lanterns {
+        let at = Transform::from_translation(foot + Vec3::Y * LANTERN_LIGHT_HEIGHT);
+        match state.lantern_lights.get(&i).copied() {
+            Some(e) if world.get_entity(e).is_ok() => {
+                if let Some(mut transform) = world.get_mut::<Transform>(e) {
+                    *transform = at;
+                }
+            }
+            _ => {
+                let e = world
+                    .spawn((
+                        service::WorldScoped::default(),
+                        PointLight {
+                            color: Color::srgb(1.0, 0.66, 0.34),
+                            intensity: LANTERN_LUMENS,
+                            range: LANTERN_RANGE,
+                            radius: 0.12,
+                            shadow_maps_enabled: false,
+                            ..default()
+                        },
+                        at,
+                    ))
+                    .id();
+                state.lantern_lights.insert(i, e);
+            }
+        }
+    }
 }
 
 /// The drawn ground under `p`: a generated mine's ground and pits where the
@@ -2118,6 +2218,7 @@ fn producer_description(sim: &Simulation, p: &crate::legacy::Producer) -> String
 }
 pub fn captions(
     settlement: Res<Settlement>,
+    sight: Option<Res<crate::cutaway::SightView>>,
     camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>,
     windows: Query<&Window>,
     mut labels: Query<(
@@ -2168,7 +2269,8 @@ pub fn captions(
         };
         let expanded = hovered == Some(e);
         let folded = !p.building || !p.brief.is_empty();
-        *visibility = if expanded || (hovered.is_none() && folded) {
+        let in_sight = sight.as_ref().is_none_or(|s| s.shows_label(p.position));
+        *visibility = if in_sight && (expanded || (hovered.is_none() && folded)) {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -2380,6 +2482,9 @@ mod tests {
             burn: None,
             goal: Default::default(),
             stranded: false,
+            height: Default::default(),
+            chase: Vec::new(),
+            backoff: Default::default(),
         });
         (crate::legacy::Scenario::new(&scenario), s, center)
     }
@@ -2447,6 +2552,7 @@ mod tests {
             burning: false,
             chasing: None,
             attacking: None,
+            feet: None,
         }
     }
 

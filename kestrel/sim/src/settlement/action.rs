@@ -68,7 +68,8 @@ pub enum Action {
     DigDown,
     /// In a volume scene, dig the tile in front, level, down or up
     /// (`View::dig_volume`); elsewhere as `DigDown`. `DigDown` in a volume
-    /// scene is a level dig.
+    /// scene is the plain dig (F): level, or a step down where nothing is
+    /// left to take level in front (`View::dig_volume_plain`).
     DigFront(DigDirection),
     /// Take units from (or, with `deposit`, give units to) a depot; units
     /// move once the agent is at the dock.
@@ -160,8 +161,8 @@ impl Action {
 pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &CharacterDef, out: &mut ActionMessages) {
     match a.role {
         Role::Avatar(_) => avatar::act(a, action, view, def, out),
-        Role::Hauler(ref hauler) => haulers::act(&mut a.body, hauler, action, view),
-        Role::Sprite(ref sprite) => sprites::act(&mut a.body, sprite, action, view),
+        Role::Hauler(ref mut hauler) => haulers::act(&mut a.body, hauler, action, view),
+        Role::Sprite(ref mut sprite) => sprites::act(&mut a.body, sprite, action, view),
     }
 }
 
@@ -190,6 +191,9 @@ pub struct View<'a> {
     /// The buildings and their kinds, which a sprite plans its job over.
     pub buildings: &'a [BuildingState],
     pub building_kinds: &'a [BuildingKind],
+    /// The light grid (M8.6), refreshed before the tick: where sprites may
+    /// walk and work underground (M8.7, L3).
+    pub light: &'a super::light::LightGrid,
 }
 
 impl Settlement {
@@ -211,6 +215,7 @@ impl Settlement {
             characters: &self.characters,
             buildings: &self.buildings,
             building_kinds: &self.building_kinds,
+            light: &self.light,
         }
     }
 
@@ -230,6 +235,15 @@ impl Settlement {
         let a = self.agents.get(agent as usize)?;
         let height = a.avatar()?.height;
         Some(self.view(agent, tick, terrain).dig_volume(a.body.position, height, a.body.heading, a.body.base_radius, direction))
+    }
+
+    /// The tile and first layer `agent`'s plain dig (F) would dig now in a
+    /// volume scene, or why it can't (`View::dig_volume_plain`): for the
+    /// app's refusal hint.
+    pub fn dig_plain_of(&self, agent: AgentIx, tick: u64, terrain: &Terrain) -> Option<Result<((i32, i32), i32), DigRefusal>> {
+        let a = self.agents.get(agent as usize)?;
+        let height = a.avatar()?.height;
+        Some(self.view(agent, tick, terrain).dig_volume_plain(a.body.position, height, a.body.heading, a.body.base_radius))
     }
 }
 
@@ -269,6 +283,17 @@ impl View<'_> {
         self.dig_blocked(tile).map_or(Ok((tile, bottom)), Err)
     }
 
+    /// The plain dig in a volume scene (F, `DigDown`, M8.8): level
+    /// (`dig_volume`), or, where every cell a level dig would clear is
+    /// already empty (`Clear`: flat open ground, a tunnel's dug end), a
+    /// step down instead. Ctrl+F and Alt+F keep their one direction.
+    pub fn dig_volume_plain(&self, position: FxVec2, height: Fx, heading: Fx, radius: Fx) -> Result<((i32, i32), i32), DigRefusal> {
+        match self.dig_volume(position, height, heading, radius, DigDirection::Level) {
+            Err(DigRefusal::Clear) => self.dig_volume(position, height, heading, radius, DigDirection::Down),
+            level => level,
+        }
+    }
+
     /// What stands on `tile` that a dig in front refuses
     /// (`dig_in_front`), the ground aside: an obstacle (`Blocked`), or a
     /// pile, dock, output pile or slot spot (`Pile`). Cheap, unlike the
@@ -283,7 +308,17 @@ impl View<'_> {
         if self.terrain.blocking_obstacles().any(|o| touches(o.center, o.radius)) {
             return Some(DigRefusal::Blocked);
         }
-        let piles = self.piles.iter().flat_map(|lab| lab.piles.values()).map(|p| (p.position, super::piles::pile_radius(p.units())));
+        // In a volume a pile holds up only its own column (M8.8): one on a
+        // tunnel's dug tile reaching over the next doesn't stop the next
+        // tile's dig, which leaves the pile's floor as it is (the depths
+        // soak's elder, and the demo's, were stopped in their tunnels so).
+        let volume = self.terrain.volume.is_some();
+        let piles = self
+            .piles
+            .iter()
+            .flat_map(|lab| lab.piles.values())
+            .filter(|p| !volume || Terrain::pit_tile(p.position) == tile)
+            .map(|p| (p.position, super::piles::pile_radius(p.units())));
         let docks = self.depots.iter().map(|d| (d.position, DIG_CLEARANCE));
         let spots = self.buildings.iter().flat_map(|b| [b.output_position, b.slot_position(&self.building_kinds[b.kind as usize])]).map(|p| (p, DIG_CLEARANCE));
         if piles.chain(docks).chain(spots).any(|(p, radius)| touches(p, radius)) || self.piles.is_some_and(|lab| lab.blocks_dig(tile)) {

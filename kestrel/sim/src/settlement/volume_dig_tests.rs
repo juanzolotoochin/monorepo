@@ -95,6 +95,48 @@ fn each_direction_from_each_side_clears_the_four_cells_in_front() {
     }
 }
 
+/// The plain dig (F, `DigDown`, M8.8) digs level where there is a wall in
+/// front, and a step down where a level dig has nothing to take (flat open
+/// ground); Ctrl+F and Alt+F keep their one direction.
+#[test]
+fn the_plain_dig_goes_level_into_a_wall_and_down_on_flat_ground() {
+    let plain = |sim: &Simulation| {
+        let s = sim.world().settlement().unwrap();
+        s.dig_plain_of(agent(sim), sim.world().tick(), sim.world().terrain()).unwrap()
+    };
+    let dig_plain = |sim: &mut Simulation| {
+        let agent = agent(sim);
+        command(sim, CommandKind::DigDown { agent });
+        let started = me(sim).avatar().unwrap().dig.clone();
+        while me(sim).avatar().unwrap().dig.is_some() {
+            sim.step(&[]);
+            sim.world().settlement().unwrap().validate().unwrap();
+        }
+        started.map(|d| (d.tile, d.layer))
+    };
+    // In the room, a wall on every side: level.
+    let mut sim = room();
+    face(&mut sim, (1, 0));
+    let front = tile(sim.world().terrain(), 1, 0);
+    assert_eq!(plain(&sim), Ok((front, 0)));
+    assert_eq!(dig_plain(&mut sim), Some((front, Some(0))));
+    assert!((0..HEADROOM).all(|layer| !volume(&sim).is_solid(front, layer)));
+    assert!(volume(&sim).is_solid(front, -1), "the floor stays");
+    // Now that tile is clear level: the next plain dig there goes down.
+    assert_eq!(would_dig(&sim, DigDirection::Level), Err(DigRefusal::Clear));
+    assert_eq!(plain(&sim), Ok((front, -1)));
+    assert_eq!(dig_plain(&mut sim), Some((front, Some(-1))));
+    assert!(!volume(&sim).is_solid(front, -1), "a step down");
+    // On flat open ground: down, as Ctrl+F; Alt+F is still refused.
+    let mut sim = small("exosuit", &[], Fx::ZERO);
+    face(&mut sim, (0, 1));
+    let front = tile(sim.world().terrain(), 0, 1);
+    assert_eq!(plain(&sim), would_dig(&sim, DigDirection::Down));
+    assert_eq!(plain(&sim), Ok((front, -1)));
+    assert_eq!(would_dig(&sim, DigDirection::Up), Err(DigRefusal::Clear));
+    assert_eq!(dig_plain(&mut sim), Some((front, Some(-1))));
+}
+
 /// A dig never takes a tile any of the digger's footprint stands in: at a
 /// tile's edge, the next tile is its own too.
 #[test]

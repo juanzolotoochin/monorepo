@@ -224,3 +224,154 @@ fn the_walker_replays_as_the_simulation_does() {
     };
     assert_eq!(run(), run());
 }
+
+// Bounded paths (M8.1 of the depths design, `kestrel/SACRED_TREE_DEPTHS.md`):
+// a 3D plan expands at most `nav::PATH_BUDGET` nodes, and a plan that
+// can't reach its goal can still go as close as it got.
+
+/// Plans that exist across the Tunnel Lab, the longest it has (round the
+/// mountain to the bridge's stairs and up), are found well within the
+/// budget.
+#[test]
+fn paths_across_the_tunnel_lab_fit_in_the_budget() {
+    let sim = tunnel_lab();
+    let terrain = sim.world().terrain();
+    let plans = [
+        ((0.0, 8.0, 0), (28.0, -8.0, 0)),
+        ((0.0, 0.0, 0), (-11.0, 13.0, 5)),
+        ((28.0, -8.0, 0), (-11.0, 13.0, 5)),
+        ((-28.0, -28.0, 0), (28.0, 28.0, 0)),
+        ((-11.0, 13.0, 5), (-11.0, 13.0, 0)),
+    ];
+    let mut most = 0;
+    for ((sx, sz, sh), (gx, gz, gh)) in plans {
+        let (start, goal) = (meters(&sim, sx, sz), meters(&sim, gx, gz));
+        let plan = nav::path_toward_at(terrain, start, Fx::from_int(sh), goal, Some(Fx::from_int(gh)), RADIUS, &[]);
+        eprintln!("({sx}, {sz}, {sh}) to ({gx}, {gz}, {gh}): {} nodes", plan.expanded);
+        assert!(plan.reached, "({sx}, {sz}) to ({gx}, {gz}) at {gh} m");
+        assert_eq!(plan.route.last(), Some(&(goal, Fx::from_int(gh))));
+        most = most.max(plan.expanded);
+        assert_eq!(plan.route, nav::path_at(terrain, start, Fx::from_int(sh), goal, Some(Fx::from_int(gh)), RADIUS, &[]));
+    }
+    assert!(most < nav::PATH_BUDGET * 3 / 4, "{most} nodes");
+}
+
+/// The mountain's top, 8 m up, has no way up (its tiers are 1 m walls):
+/// the goal's flood runs out of nodes on the top before the search gets
+/// there, so a plan to it from the spawn is settled in a few hundred
+/// nodes instead of searching every floor of the map. `path_at` gives
+/// nothing; the partial plan goes as close as it gets, under the top on
+/// the tunnel's floor, and stops when it comes no nearer.
+#[test]
+fn a_plan_to_the_mountains_top_is_settled_by_the_goals_flood() {
+    let sim = tunnel_lab();
+    let terrain = sim.world().terrain();
+    let (start, goal) = (meters(&sim, 0.0, 0.0), meters(&sim, 14.0, 0.0));
+    let top = Some(Fx::from_int(8));
+    assert_eq!(terrain.footprint_near(goal, Fx::from_int(8), RADIUS), Some(Fx::from_int(8)), "a floor up there");
+    let full = nav::plan_at(terrain, start, Fx::ZERO, goal, top, RADIUS, &[], nav::PATH_BUDGET, false);
+    eprintln!("to the top: {} nodes", full.expanded);
+    assert!(full.route.is_empty() && !full.reached);
+    assert!(full.expanded <= 2 * nav::GOAL_FLOOD, "settled by the flood: {} nodes", full.expanded);
+    assert!(nav::path_at(terrain, start, Fx::ZERO, goal, top, RADIUS, &[]).is_empty());
+    let toward = nav::path_toward_at(terrain, start, Fx::ZERO, goal, top, RADIUS, &[]);
+    eprintln!("toward the top: {} nodes", toward.expanded);
+    assert!(!toward.reached);
+    assert!(toward.expanded <= nav::PATH_BUDGET / 4, "{} nodes", toward.expanded);
+    let &(end, feet) = toward.route.last().expect("a partial route");
+    assert_eq!(walked(terrain, start, Fx::ZERO, &toward.route), Fx::ZERO);
+    assert_eq!(feet, Fx::ZERO, "on the tunnel's floor");
+    assert!(nav::distance(end, goal) <= Fx::HALF, "under the top: {:?}", end - terrain.center);
+    // The same ground gives the same plan, and a clone of it too.
+    assert_eq!(toward, nav::path_toward_at(terrain, start, Fx::ZERO, goal, top, RADIUS, &[]));
+    assert_eq!(toward, nav::path_toward_at(&terrain.clone(), start, Fx::ZERO, goal, top, RADIUS, &[]));
+}
+
+/// A wall across the map, 4 m high, with no way through: the goal's side
+/// is too big for its flood, so the search goes on alone and stops at the
+/// budget (or when its own side runs out), with no route; a partial one
+/// ends at the wall.
+#[test]
+fn a_plan_past_a_wall_stops_at_the_budget() {
+    let sim = small("exosuit", &[(true, (3, -16), (6, 16), 0, 8)], Fx::ZERO);
+    let terrain = sim.world().terrain();
+    let (start, goal) = (meters(&sim, 0.0, 4.0), meters(&sim, 9.0, -4.0));
+    let ground = Some(Fx::ZERO);
+    for budget in [500, 2000] {
+        let plan = nav::plan_at(terrain, start, Fx::ZERO, goal, ground, RADIUS, &[], budget, false);
+        assert!(plan.route.is_empty() && !plan.reached);
+        assert_eq!(plan.expanded, budget, "stopped at the budget");
+    }
+    let whole = nav::plan_at(terrain, start, Fx::ZERO, goal, ground, RADIUS, &[], nav::PATH_BUDGET, false);
+    eprintln!("past the wall: {} nodes", whole.expanded);
+    assert!(whole.route.is_empty() && whole.expanded <= nav::PATH_BUDGET);
+    let toward = nav::plan_at(terrain, start, Fx::ZERO, goal, ground, RADIUS, &[], 2000, true);
+    assert!(!toward.reached && toward.expanded == 2000);
+    walked(terrain, start, Fx::ZERO, &toward.route);
+    let at = toward.route.last().unwrap().0 - terrain.center;
+    assert!(at.x >= Fx::from_int(2) && at.x < Fx::from_ratio(5, 2), "by the wall: {at:?}");
+}
+
+/// A pit 2 m deep with sheer sides: a plan into it from outside has no
+/// way, so the partial plan ends at the pit's edge, on the ground nearest
+/// the goal (a walker waits there for a player in the pit). A plan that
+/// runs out of budget before a goal it could reach is partial too.
+#[test]
+fn a_partial_plan_ends_at_the_reachable_point_nearest_the_goal() {
+    let sim = small("exosuit", &[(false, (5, -3), (8, 3), -4, 0)], Fx::ZERO);
+    let terrain = sim.world().terrain();
+    let (start, goal) = (meters(&sim, -2.0, 4.0), meters(&sim, 7.0, 2.0));
+    let down = Some(Fx::from_int(-2));
+    assert!(nav::path_at(terrain, start, Fx::ZERO, goal, down, RADIUS, &[]).is_empty());
+    let plan = nav::path_toward_at(terrain, start, Fx::ZERO, goal, down, RADIUS, &[]);
+    assert!(!plan.reached);
+    assert!(plan.expanded < nav::PATH_BUDGET, "the window has fewer nodes: {}", plan.expanded);
+    assert_eq!(walked(terrain, start, Fx::ZERO, &plan.route), Fx::ZERO, "on the ground");
+    // The pit's nearest side to the goal is its south one, 1.5 m off at
+    // 3.5 m; the body's radius keeps it a little further.
+    let end = plan.route.last().unwrap().0;
+    let gap = nav::distance(end, goal);
+    assert!(gap >= Fx::from_ratio(3, 2) && gap <= Fx::from_ratio(5, 2), "at the pit's edge by the goal: {:?}", end - terrain.center);
+    // Out of budget on the way to a goal it could reach: no route from
+    // `path_at`'s search, a partial one toward it.
+    let tunnel = tunnel_lab();
+    let terrain = tunnel.world().terrain();
+    let (start, goal) = (meters(&tunnel, 0.0, 8.0), meters(&tunnel, 28.0, -8.0));
+    let short = nav::plan_at(terrain, start, Fx::ZERO, goal, Some(Fx::ZERO), RADIUS, &[], 40, true);
+    assert!(!short.reached && short.expanded == 40);
+    assert!(!short.route.is_empty());
+    walked(terrain, start, Fx::ZERO, &short.route);
+    assert!(nav::distance(short.route.last().unwrap().0, goal) < nav::distance(start, goal), "closer to the goal");
+    assert!(nav::plan_at(terrain, start, Fx::ZERO, goal, Some(Fx::ZERO), RADIUS, &[], 40, false).route.is_empty());
+}
+
+/// The walker can't reach a player on the mountain's top: it walks as
+/// close as it gets (under the top, in the tunnel) and plans every
+/// `FAILED_REPLAN_TICKS`, not every `REPLAN_TICKS`.
+#[test]
+fn the_walker_backs_off_when_it_cant_reach_the_player() {
+    use super::follow::{FAILED_REPLAN_TICKS, REPLAN_TICKS};
+    let mut sim = tunnel_lab_with_walker();
+    super::tunnel_lab_tests::place(&mut sim, 14.0, 0.0, Fx::from_int(8));
+    let retry = |sim: &Simulation| {
+        let s = sim.world().settlement().unwrap();
+        s.agents.iter().find(|a| a.id == "walker_0").unwrap().sprite().unwrap().retry_at
+    };
+    let (mut plans, mut last) = (Vec::new(), retry(&sim));
+    for _ in 0..content::millis_to_ticks(20_000) {
+        let tick = sim.world().tick();
+        sim.step(&[]);
+        if retry(&sim) != last {
+            last = retry(&sim);
+            plans.push((tick, last - tick));
+        }
+    }
+    assert_eq!(player(&sim).1, Fx::from_int(8), "the player stays on the top");
+    assert!(plans.len() >= 3 && plans.iter().all(|&(_, wait)| wait == FAILED_REPLAN_TICKS), "every plan failed and backed off: {plans:?}");
+    assert!(plans.len() as u64 <= content::millis_to_ticks(20_000) / FAILED_REPLAN_TICKS + 1);
+    assert!(FAILED_REPLAN_TICKS > REPLAN_TICKS);
+    let (w, z) = walker(&sim);
+    assert_eq!(z, Fx::ZERO, "on the tunnel's floor");
+    assert!(nav::distance(w, player(&sim).0) <= Fx::ONE, "under the player: {:?}", w - sim.world().terrain().center);
+    sim.world().settlement().unwrap().validate().unwrap();
+}

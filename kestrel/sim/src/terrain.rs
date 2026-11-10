@@ -130,6 +130,12 @@ pub struct Terrain {
     /// [`Terrain::clear_cell`], which bump the revision.
     #[serde(default)]
     pub volume: Option<Volume>,
+    /// When the volume was made from the mine ([`Terrain::volume_from_mine`],
+    /// a town's), the layout laid over it (an empty one for none): so a save
+    /// stores only the volume's edits over [`Terrain::generated_volume`]
+    /// (M8.8). Not hashed: the volume is.
+    #[serde(default)]
+    pub mine_volume: Option<crate::volume::VolumeLayout>,
     #[serde(skip)]
     generated: Generated,
     /// Bumped by every change, so cached paths know to rebuild.
@@ -172,6 +178,7 @@ impl Terrain {
             undiggable: Vec::new(),
             mine: None,
             volume: None,
+            mine_volume: None,
             generated: Generated::default(),
             revision: 0,
         }
@@ -293,6 +300,125 @@ impl Terrain {
         Ok(())
     }
 
+    /// Makes the mine's ground, its hill raised, the terrain's volume (M8.3
+    /// of the depths design, T1 and T2): every tile a column from its top
+    /// ([`Mine::volume_top`], so a quarter-meter terrace step rounds down
+    /// to the layer under it) [`Terrain::max_layers`] deep, plus a layer of
+    /// bedrock, its veins in its cells ([`Mine::to_volume`]). Then
+    /// `layout`'s boxes apply over it, in tiles from the arena's center
+    /// tile as a scene's `volume:` has them (an authored mountain), and the
+    /// rock they raise over the generated ground gets the town's stone
+    /// veins ([`Mine::rock_vein`], by depth under the rock's face) where a
+    /// box put no ore. The mine stays: its spec says what its veins hold,
+    /// where its hill is and what each tile's ground was.
+    pub fn volume_from_mine(&mut self, layout: Option<&crate::volume::VolumeLayout>) -> Result<(), String> {
+        let layout = layout.cloned().unwrap_or(crate::volume::VolumeLayout { extent: 0, boxes: Vec::new() });
+        self.volume = Some(self.mine_ground(&layout)?);
+        self.mine_volume = Some(layout);
+        self.revision += 1;
+        Ok(())
+    }
+
+    /// The volume [`Terrain::volume_from_mine`] made, before anyone dug:
+    /// from the mine and the layout it kept. Nothing when the volume
+    /// wasn't made from the mine.
+    pub fn generated_volume(&self) -> Option<Volume> {
+        self.mine_ground(self.mine_volume.as_ref()?).ok()
+    }
+
+    /// The mine's ground as a volume with `layout` over it
+    /// ([`Terrain::volume_from_mine`]).
+    fn mine_ground(&self, layout: &crate::volume::VolumeLayout) -> Result<Volume, String> {
+        let layout = Some(layout).filter(|l| !l.boxes.is_empty());
+        let mine = self.mine().ok_or("a mine's volume needs a mine")?;
+        let center = Self::pit_tile(self.center);
+        let mut volume = mine.to_volume();
+        if let Some(layout) = layout {
+            let mut local = volume.shifted((-center.0, -center.1));
+            layout.apply(&mut local);
+            volume = local.shifted(center);
+            // Rock over the generated ground: stone veins by depth.
+            let mut raised = std::collections::BTreeSet::new();
+            for b in &layout.boxes {
+                if let crate::volume::VolumeBox::Solid { min, max, .. } = *b {
+                    for x in min[0]..=max[0] {
+                        for y in min[1]..=max[1] {
+                            raised.insert((x + center.0, y + center.1));
+                        }
+                    }
+                }
+            }
+            // A solid box sets its cells' ore, so one reaching down into the
+            // generated ground (to sit on it) took its veins out: they go
+            // back where the box put none.
+            let layers = self.max_layers as i32;
+            for tile in raised {
+                let (Some(was), Some(top)) = (mine.volume_top(tile), volume.top(tile)) else { continue };
+                for layer in was - layers..top {
+                    if !volume.is_solid(tile, layer) || volume.ore(tile, layer).is_some() {
+                        continue;
+                    }
+                    let mineral = if layer < was {
+                        mine.ore(tile, (was - 1 - layer) as u8)
+                    } else {
+                        mine.rock_vein(tile, (top - 1 - layer).clamp(0, u8::MAX as i32) as u8)
+                    };
+                    if mineral.is_some() {
+                        volume.set_ore(tile, layer, mineral);
+                    }
+                }
+            }
+        }
+        Ok(volume)
+    }
+
+    /// The layer a tile's ground had before anyone dug, in a mine's volume
+    /// ([`Mine::volume_top`]); nothing elsewhere.
+    pub fn generated_top(&self, tile: (i32, i32)) -> Option<i32> {
+        self.volume.as_ref()?;
+        self.mine()?.volume_top(tile)
+    }
+
+    /// How far `tile` is dug, as a number that grows with each dig: its pit
+    /// in heightfield scenes, and in volume scenes 128 less its top layer
+    /// (so a dig of its top cell, [`Terrain::dig_top`], adds one). What a
+    /// miner's dig checks to know it is done (`Step::Dig`).
+    pub fn dug(&self, tile: (i32, i32)) -> u8 {
+        match &self.volume {
+            Some(volume) => volume.top(tile).map_or(u8::MAX, |top| (128 - top).clamp(0, u8::MAX as i32) as u8),
+            None => self.pit(tile),
+        }
+    }
+
+    /// Whether anyone dug `tile` down: a pit, or in a mine's volume a top
+    /// under the generated ground's ([`Terrain::generated_top`]).
+    pub fn is_dug(&self, tile: (i32, i32)) -> bool {
+        match &self.volume {
+            Some(volume) => self.generated_top(tile).zip(volume.top(tile)).is_some_and(|(was, now)| now < was),
+            None => self.pit(tile) > 0,
+        }
+    }
+
+    /// The layer a dig of `tile` from the surface (a miner's, M8.3) takes
+    /// out of a volume, if it can: its top cell, unless that would empty
+    /// the column or open its top span onto a cave or tunnel under it (a
+    /// top span one cell thick). Nothing without a volume.
+    fn top_cell(&self, tile: (i32, i32)) -> Option<i32> {
+        let spans = self.volume.as_ref()?.spans(tile);
+        let top = spans.last()?;
+        (top.top - top.bottom >= 2).then_some(top.top - 1)
+    }
+
+    /// Takes the top cell out of `tile`'s column in a volume scene (a dig
+    /// from the surface: a miner's, `Settlement::dig_housekeeping`), if
+    /// [`Terrain::dig_refusal`] would allow it there. Returns its layer and
+    /// mineral (none for plain ground).
+    pub fn dig_top(&mut self, tile: (i32, i32)) -> Option<(i32, Option<u8>)> {
+        let layer = self.top_cell(tile)?;
+        let ore = self.volume.as_ref().and_then(|v| v.ore(tile, layer));
+        self.clear_cell(tile, layer).then_some((layer, ore))
+    }
+
     /// [`Terrain::ground`], with drops at zero.
     pub fn height(&self, p: FxVec2) -> Fx {
         self.ground(p).unwrap_or(Fx::ZERO)
@@ -398,7 +524,7 @@ impl Terrain {
         for i in 1..=steps {
             let p = a + (b - a) * Fx::from_ratio(i, steps);
             let Some(floor) = self.footprint_at(p, z, radius) else { return false };
-            if floor >= z - LAYER {
+            if floor >= z - LAYER - crate::volume::ROUNDING {
                 z = floor;
             }
         }
@@ -422,7 +548,7 @@ impl Terrain {
         for i in 1..=steps {
             let p = a + (b - a) * Fx::from_ratio(i, steps);
             let floor = self.footprint_at(p, z, radius)?;
-            if floor < z - LAYER {
+            if floor < z - LAYER - crate::volume::ROUNDING {
                 return None;
             }
             z = floor;
@@ -529,6 +655,17 @@ impl Terrain {
         }
         if tile == own {
             return Some(DigRefusal::OwnTile);
+        }
+        // In a volume (a town's, M8.3), a dig from the surface takes the
+        // top cell out: the depth rule as on the heightfield, the column's
+        // bottom as the pit's. Steepening and stranding aren't checked (M8.4
+        // turns miners to walls; a body walks up a layer a tile anyway).
+        if let Some(volume) = &self.volume {
+            let (Some(here), Some(there)) = (volume.top(own), volume.top(tile)) else { return Some(DigRefusal::Undiggable) };
+            if self.top_cell(tile).is_none() {
+                return Some(DigRefusal::Bottom);
+            }
+            return (there < here).then_some(DigRefusal::TooDeep);
         }
         if self.pit(tile) >= self.max_layers {
             return Some(DigRefusal::Bottom);

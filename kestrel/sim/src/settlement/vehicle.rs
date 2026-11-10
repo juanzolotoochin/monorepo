@@ -331,7 +331,7 @@ impl Settlement {
             // be boarded, if it can't.
             let mut buildings: Vec<(Fx, BuildingIx, Option<BundleRefusal>)> = (0..self.buildings.len() as BuildingIx)
                 .filter(|&b| wanted.is_none_or(|w| w == b))
-                .filter(|&b| self.buildings[b as usize].built())
+                .filter(|&b| self.buildings[b as usize].built() && !self.building_kind(b).is_lantern())
                 .map(|b| {
                     let building = &self.buildings[b as usize];
                     let spot = building.slot_position(&self.building_kinds[building.kind as usize]);

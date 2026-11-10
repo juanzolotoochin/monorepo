@@ -44,6 +44,19 @@ pub const DAWN_BURN: u64 = content::millis_to_ticks(2000);
 /// dodge it; the jetpack's hover (1.8 m) does. Every attacking character is
 /// a ghoul of one height, so it is a rule, not a character field.
 pub const SWING_HEIGHT: Fx = Fx::ONE;
+/// How far apart two bodies' feet may be and still stand on one floor, in
+/// a volume scene (M8.2): a swing, a strike, a shot, a fireball or a fire
+/// reaches a threat (or a threat a body) only within it. Floors stacked in
+/// one column are at least a body's headroom and a layer apart (2.5 m), so
+/// a ghoul on the ground can't hit a sprite in the tunnel under it; a ramp
+/// or a stair a layer or two off still counts as the same floor.
+pub const FLOOR_REACH: Fx = Fx::from_ratio(3, 2);
+
+/// Whether feet at `a` and `b` stand on one floor (`FLOOR_REACH`) in a
+/// volume scene; always elsewhere, where every body walks on the ground.
+pub(super) fn same_floor(terrain: &Terrain, a: Fx, b: Fx) -> bool {
+    terrain.volume.is_none() || (a - b).abs() <= FLOOR_REACH
+}
 
 /// A stable counter-based roll, as in the original game: outcomes never
 /// depend on how many unrelated hits happened elsewhere.
@@ -82,6 +95,58 @@ fn follow_route(t: &mut Threat, speed: Fx, full_hp: u32, tick: u64, terrain: &Te
             Some(to) => super::chase::steer(&mut t.position, to, stop, speed * wounded, terrain),
             None => {
                 super::haulers::move_route(&mut t.position, &mut t.route, speed * wounded);
+                // Stranded, it waits at its route's end instead of breaching.
+                if t.stranded && t.route.is_empty() {
+                    t.route.push(t.position);
+                }
+            }
+        }
+    }
+    let moved = distance(previous, t.position);
+    t.travelled += moved;
+    if moved > Fx::ZERO && !recoiling {
+        t.heading = nav::bearing(previous, t.position);
+    }
+    knocked
+}
+
+/// [`follow_route`] in a volume scene (M8.2): the same brain, on foot with
+/// a feet height (`Threat::height`, `Terrain::walk_at`). A chaser walks to
+/// `quarry` (its point and feet) by `chase::chase_at`; otherwise it walks
+/// its route, and if the ground refuses a step (a dig made it stale) it
+/// plans its way to its wave's `target` again from where it stands, when
+/// its backoff allows.
+#[allow(clippy::too_many_arguments)]
+fn follow_route_at(t: &mut Threat, speed: Fx, full_hp: u32, tick: u64, terrain: &Terrain, light: &super::light::LightGrid, quarry: Option<(FxVec2, Fx)>, stop: Fx, target: Option<FxVec2>) -> Fx {
+    let previous = t.position;
+    let recoiling = tick < t.stagger_until;
+    let mut knocked = Fx::ZERO;
+    if t.burn.is_some_and(|b| b.dawn) || tick < t.shocked_until || (!recoiling && t.windup.is_some()) {
+        // Burning in the sunrise, shocked, or planted for a swing.
+    } else if recoiling {
+        let next = t.position + t.knockback.div_int(content::TICKS_PER_SECOND as i64);
+        if terrain.clear(t.position, next, super::chase::WALK_CLEARANCE) {
+            if let Some(feet) = terrain.walk_at(t.position, next, t.height, super::chase::WALK_CLEARANCE) {
+                t.position = next;
+                t.height = feet;
+                knocked = distance(previous, next);
+            }
+        }
+        t.knockback = t.knockback * KNOCKBACK_DECAY;
+    } else {
+        let wounded = if t.hp < full_hp { Fx::from_ratio(11, 20) } else { Fx::ONE };
+        match quarry {
+            Some((to, feet)) => super::chase::chase_at(t, to, feet, stop, speed * wounded, tick, terrain, light),
+            None => {
+                let walked = super::chase::walk_route_at(&mut t.position, &mut t.height, &mut t.route, speed * wounded, terrain);
+                if let Some(target) = target.filter(|_| !walked && t.backoff.due(tick)) {
+                    let (route, reaches) = super::chase::route_home_at(terrain, light, t.position, t.height, target);
+                    t.backoff.planned(tick, reaches, 0);
+                    if !route.is_empty() {
+                        t.route = route;
+                        t.stranded = !reaches;
+                    }
+                }
                 // Stranded, it waits at its route's end instead of breaching.
                 if t.stranded && t.route.is_empty() {
                     t.route.push(t.position);
@@ -189,6 +254,21 @@ pub struct Threat {
     /// (`Settlement::retry_stranded`) and when the ground changes.
     #[serde(default)]
     pub stranded: bool,
+    /// Its feet's height in a volume scene (M8.2): the floor it walks on,
+    /// as `SpriteState::height` is a sprite's. Zero elsewhere, where
+    /// threats walk on `Terrain::ground`.
+    #[serde(default)]
+    pub height: Fx,
+    /// A chaser's route to its quarry in a volume scene (M8.2): a 3D path
+    /// (`nav::path_toward_at`), planned again when `backoff` says, as far
+    /// as it gets when the quarry is out of reach. Empty elsewhere, where a
+    /// chaser walks straight at its quarry, and while it walks `route`.
+    #[serde(default)]
+    pub chase: Vec<FxVec2>,
+    /// When it may plan again in a volume scene: a chase, or its route
+    /// home after the ground refused a step (M8.2).
+    #[serde(default)]
+    pub backoff: super::Backoff,
 }
 
 /// What a threat swings at: an agent (a player in reach, or the elder or
@@ -269,9 +349,24 @@ pub struct Projectile {
     pub arrival: u64,
     pub damage: u32,
     pub kind: ProjectileKind,
+    /// A player's arrow in a volume scene: the floor it flies over, its
+    /// shooter's feet (M8.2), so it hits only threats on that floor. Zero
+    /// elsewhere and for a ballista's shot, which flies over the top floor
+    /// at its launcher.
+    #[serde(default)]
+    pub floor: Fx,
 }
 
 impl Projectile {
+    /// The floor it flies over in a volume scene (M8.2): an arrow's
+    /// shooter's, a ballista's shot the top floor at its launcher.
+    fn floor_at(&self, terrain: &Terrain) -> Fx {
+        if self.item.is_some() {
+            terrain.height(self.from)
+        } else {
+            self.floor
+        }
+    }
     /// The segment flown during `tick`.
     fn segment(&self, tick: u64) -> (FxVec2, FxVec2) {
         let duration = Fx::from_int((self.arrival - self.born).max(1) as i32);
@@ -493,8 +588,10 @@ pub enum TossEnd {
     Pile { id: u32, slot: u32, position: FxVec2 },
     /// A slot in an avatar's backpack.
     Cargo { agent: AgentIx, slot: u32 },
-    /// The floor of a pit, where dug ore comes from.
-    Pit { position: FxVec2 },
+    /// The floor of a pit, where dug ore comes from, and its height: the
+    /// floor the dig cleared down to in a volume scene, the pit's floor
+    /// elsewhere (M8.2).
+    Pit { position: FxVec2, height: Fx },
     /// The collector's hopper.
     Collector { position: FxVec2 },
 }
@@ -609,7 +706,8 @@ impl Settlement {
                 (def.movement.walk / per_second, def.health.as_ref().map_or(0, |h| h.hp), stop)
             })
             .collect();
-        let (agents, buildings, kinds) = (&self.agents, &self.buildings, &self.building_kinds);
+        let (agents, buildings, kinds, waves, light) = (&self.agents, &self.buildings, &self.building_kinds, &self.waves, &self.light);
+        let volume = terrain.volume.is_some();
         let knockback_moved: Fx = self
             .threats
             .par_iter_mut()
@@ -618,13 +716,18 @@ impl Settlement {
                 // A building quarry is a disc: the chaser stops short of its
                 // edge rather than its center.
                 let quarry = match t.goal {
-                    super::chase::Goal::Chase(super::chase::Quarry::Agent(a)) => agents.get(a as usize).map(|a| (a.body.position, stop)),
+                    super::chase::Goal::Chase(super::chase::Quarry::Agent(a)) => agents.get(a as usize).map(|a| (a.body.position, a.height(), stop)),
                     super::chase::Goal::Chase(super::chase::Quarry::Building(b)) => {
-                        buildings.get(b as usize).map(|b| (b.position, stop + kinds[b.kind as usize].radius))
+                        buildings.get(b as usize).map(|b| (b.position, terrain.height(b.position), stop + kinds[b.kind as usize].radius))
                     }
                     super::chase::Goal::Tree => None,
                 };
-                let (quarry, stop) = quarry.map_or((None, stop), |(at, stop)| (Some(at), stop));
+                if volume {
+                    let (quarry, stop) = quarry.map_or((None, stop), |(at, feet, stop)| (Some((at, feet)), stop));
+                    let target = waves.get(t.wave as usize).map(|w| w.target).or(t.route.last().copied());
+                    return follow_route_at(t, speed, full_hp, tick, terrain, light, quarry, stop, target);
+                }
+                let (quarry, stop) = quarry.map_or((None, stop), |(at, _, stop)| (Some(at), stop));
                 follow_route(t, speed, full_hp, tick, terrain, quarry, stop)
             })
             .reduce(|| Fx::ZERO, |a, b| a + b);
@@ -675,10 +778,10 @@ impl Settlement {
         }
         for (i, d) in self.defenders.iter().enumerate() {
             let mut out = Messages::default();
-            self.aim_defender(i as u16, d, tick, &mut out);
+            self.aim_defender(i as u16, d, tick, terrain, &mut out);
             result.push((d.position, out));
         }
-        self.aim_buildings(tick, &mut result);
+        self.aim_buildings(tick, terrain, &mut result);
         for (i, a) in self.agents.iter().enumerate() {
             if a.avatar().is_some() {
                 let mut out = Messages::default();
@@ -703,8 +806,10 @@ impl Settlement {
     fn swing_reaches(&self, t: &Threat, target: SwingTarget, terrain: &Terrain) -> bool {
         let Some(attack) = self.threat_attack(t) else { return false };
         match target {
-            SwingTarget::Agent(agent) => self.agents.get(agent as usize).is_some_and(|a| self.swingable(a, terrain) && distance(t.position, a.body.position) <= attack.reach),
-            SwingTarget::Building(b) => self.breakable(b) && self.building_gap(t.position, b) <= attack.reach,
+            SwingTarget::Agent(agent) => self.agents.get(agent as usize).is_some_and(|a| {
+                self.swingable(a, terrain) && distance(t.position, a.body.position) <= attack.reach && same_floor(terrain, t.height, self.feet_floor(a, terrain))
+            }),
+            SwingTarget::Building(b) => self.breakable(b) && self.building_gap(t.position, b) <= attack.reach && self.on_building_floor(t, b, terrain),
         }
     }
 
@@ -734,11 +839,12 @@ impl Settlement {
         let (target, gap, reachable) = match t.goal {
             super::chase::Goal::Chase(super::chase::Quarry::Agent(agent)) => {
                 let a = self.agents.get(agent as usize)?;
-                (SwingTarget::Agent(agent), distance(t.position, a.body.position), self.swingable(a, terrain))
+                let floor = same_floor(terrain, t.height, self.feet_floor(a, terrain));
+                (SwingTarget::Agent(agent), distance(t.position, a.body.position), self.swingable(a, terrain) && floor)
             }
             super::chase::Goal::Chase(super::chase::Quarry::Building(b)) => {
                 self.buildings.get(b as usize)?;
-                (SwingTarget::Building(b), self.building_gap(t.position, b), self.breakable(b))
+                (SwingTarget::Building(b), self.building_gap(t.position, b), self.breakable(b) && self.on_building_floor(t, b, terrain))
             }
             super::chase::Goal::Tree => return None,
         };
@@ -756,6 +862,16 @@ impl Settlement {
         avatar.height - ground <= SWING_HEIGHT
     }
 
+    /// The floor agent `a` stands on, for a swing at it in a volume scene
+    /// (M8.2): its feet, or for an avatar in the air the floor under it
+    /// (`within_swing_height` checks how high over it it is). Zero
+    /// elsewhere, where it isn't read.
+    fn feet_floor(&self, a: &super::AgentState, terrain: &Terrain) -> Fx {
+        let Some(avatar) = a.avatar().filter(|_| terrain.volume.is_some()) else { return a.height() };
+        let radius = super::avatar::character_of(&self.characters, a).body.radius;
+        terrain.footprint_at(a.body.position, avatar.height, radius).unwrap_or(avatar.flight.support)
+    }
+
     /// Stage 3 for one hurtable player: every threat that could start a
     /// swing at it now. Stage 5 keeps the nearest player for each threat
     /// (`start_swings`). A player too high (`SWING_HEIGHT`) starts none.
@@ -764,9 +880,10 @@ impl Settlement {
             return;
         }
         let position = a.body.position;
+        let floor = self.feet_floor(a, terrain);
         for t in &self.threats {
             let Some(attack) = self.threat_attack(t) else { continue };
-            if !can_start_swing(t, tick) {
+            if !can_start_swing(t, tick) || !same_floor(terrain, t.height, floor) {
                 continue;
             }
             let gap = distance(t.position, position);
@@ -892,9 +1009,11 @@ impl Settlement {
             .min();
         let obstacle = static_obstacle.into_iter().map(|f| (f, None))
             .chain(cover.map(|(f, index)| (f, Some(index)))).min();
+        let floor = p.floor_at(terrain);
         let threat = self
             .threats
             .iter()
+            .filter(|t| same_floor(terrain, t.height, floor))
             .filter_map(|t| segment_disc(start, end, t.position, self.threat_radius(t)).map(|f| (f, t.id)))
             .min();
         match (threat, obstacle) {
@@ -909,11 +1028,11 @@ impl Settlement {
         }
     }
 
-    fn aim_defender(&self, index: u16, d: &DefenderState, tick: u64, out: &mut Messages) {
+    fn aim_defender(&self, index: u16, d: &DefenderState, tick: u64, terrain: &Terrain, out: &mut Messages) {
         if !d.enabled || d.ready_at > tick || self.depots[d.depot as usize].inventory.available(d.ammo) == 0 {
             return;
         }
-        if let Some(t) = self.pick_target(d.position, d.range) {
+        if let Some(t) = self.pick_target(d.position, d.range, terrain) {
             out.fire.push(Fire { defender: index, target: t.id, to: t.position });
         }
     }
@@ -921,13 +1040,15 @@ impl Settlement {
     /// What a ballista aims at (the Woodland Ballista's `DefenderState` and
     /// a ballista building's both): the nearest threat within `range` of
     /// `from` that the projectiles already in flight to it won't kill,
-    /// the lowest id on a tie.
-    pub(super) fn pick_target(&self, from: FxVec2, range: Fx) -> Option<&Threat> {
+    /// the lowest id on a tie. In a volume scene, only threats on the top
+    /// floor at `from`, which a ballista stands on (M8.2).
+    pub(super) fn pick_target(&self, from: FxVec2, range: Fx, terrain: &Terrain) -> Option<&Threat> {
+        let floor = terrain.volume.as_ref().map(|_| terrain.height(from));
         self.threats
             .iter()
             .filter(|t| {
                 let incoming: u32 = self.projectiles.iter().filter(|p| p.target == Some(t.id)).map(|p| p.damage).sum();
-                distance(from, t.position) <= range && incoming < t.hp
+                distance(from, t.position) <= range && incoming < t.hp && floor.is_none_or(|floor| same_floor(terrain, t.height, floor))
             })
             .min_by_key(|t| (distance(from, t.position), t.id))
     }
@@ -948,7 +1069,8 @@ impl Settlement {
                 let d = delta.length();
                 let in_cone = d < close || delta.dot(forward) / d > cone;
                 let visible = weapon == Weapon::Bow || terrain.clear(origin, t.position, Fx::from_ratio(1, 50));
-                (d <= reach && in_cone && visible).then_some((d, t.id))
+                // In a volume, only threats on the striker's floor (M8.2).
+                (d <= reach && in_cone && visible && same_floor(terrain, t.height, height)).then_some((d, t.id))
             })
             .collect();
         targets.sort();
@@ -980,7 +1102,7 @@ impl Settlement {
                     let mut chain: Vec<(Fx, u64)> = self
                         .threats
                         .iter()
-                        .filter(|t| t.id != first && distance(t.position, anchor) <= Fx::from_ratio(11, 5))
+                        .filter(|t| t.id != first && distance(t.position, anchor) <= Fx::from_ratio(11, 5) && same_floor(terrain, t.height, height))
                         .map(|t| (distance(t.position, anchor), t.id))
                         .collect();
                     chain.sort();
@@ -1053,6 +1175,7 @@ impl Settlement {
                 arrival: tick + flight,
                 damage: tuning.damage,
                 kind: ProjectileKind::Arrow,
+                floor: if terrain.volume.is_some() { self.agents[agent].height() } else { Fx::ZERO },
             });
             self.combat.shots += 1;
             return 1;
@@ -1267,6 +1390,7 @@ impl Settlement {
             arrival,
             damage: launcher.damage,
             kind: launcher.kind,
+            floor: Fx::ZERO,
         });
         self.events.push(event);
     }
@@ -1335,9 +1459,16 @@ impl Settlement {
     fn spawn(&mut self, w: usize, terrain: &Terrain) {
         // With no way to the tree, the wave sends its enemies as close
         // as they can walk (`Threat::stranded`).
+        // In a volume (M8.2) its enemies walk in on the surface, by a 3D
+        // path from there.
+        let feet = super::chase::surface_feet(terrain, self.waves[w].position);
         if self.waves[w].route.is_none() {
             let wave = &self.waves[w];
-            let (route, _) = nav::path_toward(terrain, wave.position, wave.target, super::chase::WALK_CLEARANCE);
+            let (route, _) = if terrain.volume.is_some() {
+                super::chase::route_home_at(terrain, &self.light, wave.position, feet, wave.target)
+            } else {
+                nav::path_toward(terrain, wave.position, wave.target, super::chase::WALK_CLEARANCE)
+            };
             self.waves[w].route = Some(route);
         }
         let wave = &self.waves[w];
@@ -1368,6 +1499,9 @@ impl Settlement {
             burn: None,
             goal: super::chase::Goal::Tree,
             stranded,
+            height: feet,
+            chase: Vec::new(),
+            backoff: super::Backoff::default(),
         });
         self.waves[w].spawned += 1;
     }

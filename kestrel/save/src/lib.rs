@@ -128,7 +128,25 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 /// 42: a sprite keeps its feet's height (`SpriteState::height`) and a pile
 ///     the floor it lies on (`Pile::height`), V.7 of the verticality
 ///     design; a sprite's job can be `SpriteJob::Follow`, appended.
-pub const FORMAT_VERSION: u32 = 42;
+/// 43: every body on a floor (M8.2 of the Sacred Tree depths): a hauler and
+///     a threat keep their feet's height (`HaulerState::height`,
+///     `Threat::height`), haulers, sprites and threats a replan backoff
+///     (`Backoff`), a threat its chase's 3D route (`Threat::chase`), and a
+///     player's arrow the floor it flies over (`Projectile::floor`).
+/// 44: miners mine walls (M8.4 of the Sacred Tree depths): a sprite's plan
+///     can hold a level wall dig (`sprites::Step::DigWall`, appended).
+/// 45: lanterns and the light grid (M8.6 of the Sacred Tree depths): a
+///     building kind keeps its light (`BuildingKind::light`), a building
+///     the floor it stands on (`BuildingState::height`), a miner's plan can
+///     fetch for, supply and install a lantern's site (`sprites::Step::Fetch`,
+///     `Supply`, `Install`, appended), and the pending messages a queue of
+///     miners' installs (`Messages::sprite_install`). The light grid itself
+///     is derived and recomputed on load, never saved.
+/// 46: a volume made from the mine (a town's) keeps the layout laid over
+///     it (`Terrain::mine_volume`) and is saved as its edits over the
+///     generated one (`WorldSection::volume_edits`, M8.8 of the Sacred
+///     Tree depths), remade at load.
+pub const FORMAT_VERSION: u32 = 46;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 
@@ -162,6 +180,10 @@ struct WorldSection {
     settlement: Option<sim::settlement::Settlement>,
     timers: Vec<Vec<(u64, sim::Id<sim::Mover>)>>,
     pending: sim::messages::Messages,
+    /// A volume made from the mine (a town's) is saved as its edits over
+    /// the generated one (`Terrain::generated_volume`), remade at load
+    /// (format 46): the town's save went from about 1.5 MB to a few KB.
+    volume_edits: Option<sim::volume::VolumeEdits>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,7 +223,12 @@ fn chunk_section_name(index: usize) -> String {
 
 /// Encodes the world, which must be between ticks.
 pub fn write(world: &World, content: &Content) -> Vec<u8> {
-    let state = world.to_state();
+    let mut state = world.to_state();
+    let base = state.terrain.volume.as_ref().and_then(|_| state.terrain.generated_volume());
+    let volume_edits = base.map(|base| {
+        let volume = state.terrain.volume.take().expect("checked above");
+        volume.edits_over(&base)
+    });
     let header = Header {
         game_version: GAME_VERSION.to_string(),
         rules_hash: content.rules_hash,
@@ -217,6 +244,7 @@ pub fn write(world: &World, content: &Content) -> Vec<u8> {
         settlement: state.settlement,
         timers: state.timers,
         pending: state.pending,
+        volume_edits,
     };
     let mut sections = vec![Section { name: "world".into(), data: encode(&world_section) }];
     for (index, chunk) in state.chunks.iter().enumerate() {
@@ -261,7 +289,11 @@ pub fn read_state(bytes: &[u8]) -> Result<(Header, WorldState), LoadError> {
     let (header, sections) = read_sections(bytes)?;
     let mut sections = sections.into_iter();
     let world = sections.next().filter(|s| s.name == "world").ok_or(LoadError::Corrupt("no world section".into()))?;
-    let world: WorldSection = postcard::from_bytes(&world.data).map_err(corrupt)?;
+    let mut world: WorldSection = postcard::from_bytes(&world.data).map_err(corrupt)?;
+    if let Some(edits) = &world.volume_edits {
+        let base = world.terrain.generated_volume().ok_or(LoadError::Invalid("volume edits without a generated volume".into()))?;
+        world.terrain.volume = Some(sim::volume::Volume::with_edits(base, edits));
+    }
     let mut chunks = Vec::with_capacity(world.config.chunk_count());
     for (index, section) in sections.enumerate() {
         if section.name != chunk_section_name(index) {
@@ -347,7 +379,7 @@ pub fn dump_ron(bytes: &[u8]) -> Result<String, LoadError> {
     };
     section("header", ron::ser::to_string_pretty(&header, pretty()));
     let WorldState { config, tick, ids, terrain, settlement, timers, pending, chunks } = state;
-    section("world", ron::ser::to_string_pretty(&WorldSection { config, tick, ids, terrain, settlement, timers, pending }, pretty()));
+    section("world", ron::ser::to_string_pretty(&WorldSection { config, tick, ids, terrain, settlement, timers, pending, volume_edits: None }, pretty()));
     for (index, chunk) in chunks.iter().enumerate() {
         section(&chunk_section_name(index), ron::ser::to_string_pretty(chunk, pretty()));
     }

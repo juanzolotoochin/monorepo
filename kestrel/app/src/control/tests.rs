@@ -723,7 +723,7 @@ fn the_elder_builds_a_wood_gatherer_that_a_sprite_works() {
     assert_eq!(report["status"], "passed", "{report}");
     let receipts = report["receipts"].as_array().unwrap();
     let state = |i: usize| &receipts[i]["state"]["settlement"];
-    assert_eq!(state(5)["interact"]["build_menu"], json!(["wood_gatherer", "ballista"]), "{}", state(5)["interact"]);
+    assert_eq!(state(5)["interact"]["build_menu"], json!(["wood_gatherer", "ballista", "lantern"]), "{}", state(5)["interact"]);
     let ghost = |i: usize| &state(i)["interact"]["ghost"];
     assert_eq!(state(8)["interact"]["placing"], "wood_gatherer");
     assert_eq!((&ghost(8)["valid"], &ghost(8)["reason"]), (&json!(false), &json!("BLOCKED")), "{}", ghost(8));
@@ -1194,9 +1194,13 @@ fn the_happy_path_plays_from_a_fresh_start() {
     // stands two tiles east of the vein's middle, facing west, and digs the
     // tile in front, a stone layer; then steps into that pit and digs the
     // vein's middle. Each layer drops 3 to 6 stone onto a pile beside it.
+    // The town's ground is a volume (M8.3): the first dig is a step down
+    // (Ctrl+F), the second, from inside that pit, a level one (F), each
+    // taking the tile's top cell.
     steps.extend([walk(21.0, -11.0), walk(20.0, -11.0)]);
     let at_vein = inspect(&mut steps);
-    steps.extend([Command::Dig, wait(3), walk(19.0, -11.0), Command::Dig, wait(3)]);
+    let dig = |direction| Command::DigFront { direction };
+    steps.extend([dig(sim::volume::DigDirection::Down), wait(3), walk(19.0, -11.0), dig(sim::volume::DigDirection::Level), wait(3)]);
     let dug = inspect(&mut steps);
     // 5. A bundle of 5 stone from the pile; the rest stays on the ground.
     steps.extend([target("PICK UP 5 STONE"), Command::SettlementInteract]);
@@ -1322,7 +1326,11 @@ fn the_happy_path_plays_from_a_fresh_start() {
     // ground to the tree.
     assert_eq!(sprite(left, "sprite_reed")["job"], "mine");
     let left_over = on_ground - 5;
-    assert!(tree(left, "tree_stone", "stone") >= 3 + left_over, "Reed brought the {left_over} left on the ground: {}", tree(left, "tree_stone", "stone"));
+    // (A unit may still be on its way, or in a sprite's hands for the last
+    // trip, as the receipt is taken.)
+    let stone = &receipts[left]["state"]["settlement"]["balances"]["stone"];
+    let on_the_way = stone["in_transit"].as_u64().unwrap_or(0) + stone["carried"].as_u64().unwrap_or(0);
+    assert!(tree(left, "tree_stone", "stone") + on_the_way >= 3 + left_over, "Reed brought the {left_over} left on the ground: {} and {on_the_way} on the way", tree(left, "tree_stone", "stone"));
     for i in [start, first_wood, stocked, at_vein, dug, picked, stone_stocked, wood_built, both, both_later, possessed, possessed_later, burst, left] {
         assert!(receipts[i]["state"]["settlement"]["balances"].as_object().unwrap().values().all(|b| b["conserved"] == true), "receipt {i}");
     }

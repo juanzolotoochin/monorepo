@@ -21,10 +21,10 @@ use super::action::{Action, View};
 use super::buildings::BurstRefusal;
 use super::interact::{self, Interaction};
 use super::{AgentIx, DepotState, InventoryRef, ItemIx, Kinds, Settlement};
-use crate::messages::{ActionMessages, BundleRefused, Burst, BurstRefused, CarryUnit, DropBundle, DropHaul, ElderFire, DropNotes, Install, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
+use crate::messages::{ActionMessages, BundleRefused, Burst, BurstRefused, CarryUnit, DropBundle, DropHaul, ElderFire, DropNotes, HaulStart, Install, Messages, ReserveStock, RestartMemory, StartHaul, StockChange, Strike};
 use crate::nav::{self, angle_between, distance};
 use crate::terrain::{Terrain, LAYER};
-use crate::volume::{DigDirection, BODY_HEIGHT};
+use crate::volume::BODY_HEIGHT;
 
 /// The longest player name, in characters.
 pub const NAME_CHARS: usize = 16;
@@ -574,7 +574,20 @@ impl Settlement {
         }
         self.act_agent(tick, me, action, terrain, out);
         for StartHaul { agent, start } in std::mem::take(&mut out.haul) {
-            self.piles.as_mut().expect("a haul starts only in the pile lab").start_haul(agent, start);
+            // A drop's new pile lies on the dropper's floor in a volume
+            // scene (M8.2), as a dropped bundle's does.
+            let dropped = match &start {
+                HaulStart::Replaced { start: Ok((walk, job)), .. } if terrain.volume.is_some() && walk.action.drop_position().is_some() => Some((walk.center, job.other)),
+                _ => None,
+            };
+            let lab = self.piles.as_mut().expect("a haul starts only in the pile lab");
+            lab.start_haul(agent, start);
+            if let Some((center, InventoryRef::Pile(id))) = dropped {
+                let feet = self.agents[agent as usize].height();
+                if let Some(pile) = lab.piles.get_mut(&id) {
+                    pile.height = terrain.footprint_near(center, feet, Fx::ZERO).unwrap_or(feet);
+                }
+            }
         }
     }
 
@@ -720,10 +733,20 @@ impl Settlement {
                     }
                 }
             }
-            // A miner's, if no one dug its layer out first (`Step::Dig`).
+            // A miner's, if no one dug its layer out first (`Step::Dig`): in
+            // a volume, the wall's cells from its floor up (`Step::DigWall`,
+            // M8.4), as the elder's level dig.
             if let Some(dig) = super::sprites::finish_dig(a, tick, terrain) {
-                if terrain.deepen(dig.tile) {
-                    dug.push(dig.tile);
+                match dig.layer {
+                    Some(bottom) => {
+                        let cleared = terrain.clear_column(dig.tile, bottom);
+                        cells.extend(cleared.into_iter().map(|(layer, ore)| (dig.tile, layer, ore, bottom)));
+                    }
+                    None => {
+                        if terrain.deepen(dig.tile) {
+                            dug.push(dig.tile);
+                        }
+                    }
                 }
             }
         }
@@ -739,19 +762,31 @@ impl Settlement {
         let spots = self.buildings.iter().flat_map(|b| [b.output_position, b.slot_position(&self.building_kinds[b.kind as usize])]);
         let targets: Vec<FxVec2> = docks.chain(spots).collect();
         let stone = self.item_index(crate::mine::STONE_ID);
+        // A town's volume (M8.3): plain cells are earth, stone and amber
+        // cells their items.
+        let town = terrain.mine.is_some_and(|m| m.veins == crate::mine::Veins::Stone);
+        let amber = self.item_index(crate::mine::AMBER_ID);
         for (tile, layer, ore, bottom) in cells {
             let Some(lab) = self.piles.as_mut() else { break };
             let item = match (ore, stone) {
                 (Some(mineral), _) if lab.has_minerals() => lab.item(mineral),
-                (None, Some(stone)) => stone,
+                (Some(crate::mine::STONE), Some(stone)) if town => stone,
+                (Some(crate::mine::AMBER), _) if town => match amber {
+                    Some(amber) => amber,
+                    None => continue,
+                },
+                (None, Some(stone)) if !town => stone,
                 _ => continue,
             };
-            let units = crate::mine::cell_yield(tile, layer);
+            // A town's amber is scarcer (M8.8): a unit a cell.
+            let units = if town && ore == Some(crate::mine::AMBER) { crate::mine::AMBER_YIELD } else { crate::mine::cell_yield(tile, layer) };
             let Some((id, first)) = lab.mined_at(item, units, tile, Some(bottom), terrain, &targets) else { continue };
             self.accounts[item as usize].generated += units as u64;
-            let Some(material) = ore else { continue };
+            // A town's stone and amber (no pile lab minerals) are just there.
+            let Some(material) = ore.filter(|_| lab.has_minerals()) else { continue };
             let position = lab.piles[&id].position;
-            let from = TossEnd::Pit { position: Terrain::pit_center(tile) };
+            // From the floor the dig cleared down to (M8.2).
+            let from = TossEnd::Pit { position: Terrain::pit_center(tile), height: crate::volume::height(bottom) };
             for slot in first..first + units {
                 self.events.push(Event::PileToss { material, from, to: TossEnd::Pile { id, slot, position }, ticks: ORE_FLIGHT_TICKS });
             }
@@ -773,7 +808,7 @@ impl Settlement {
                 continue;
             }
             let position = lab.piles[&id].position;
-            let from = TossEnd::Pit { position: Terrain::pit_center(tile) };
+            let from = TossEnd::Pit { position: Terrain::pit_center(tile), height: terrain.height(Terrain::pit_center(tile)) };
             for slot in first..first + units {
                 self.events.push(Event::PileToss { material, from, to: TossEnd::Pile { id, slot, position }, ticks: ORE_FLIGHT_TICKS });
             }
@@ -970,11 +1005,15 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
         }
         Action::Jetpack(enabled) => jetpack(avatar, enabled, def),
         Action::Jump => jump(avatar, view.tick, def),
-        // A volume scene digs the volume in front, level unless told down
-        // or up (V5 of the verticality design).
+        // A volume scene digs the volume in front, level, down or up as
+        // told (V5 of the verticality design); the plain dig (F) level, or
+        // a step down where nothing is left to take level (M8.8).
         Action::DigDown | Action::DigFront(_) if view.terrain.volume.is_some() => {
-            let direction = if let Action::DigFront(direction) = *action { direction } else { DigDirection::Level };
-            if let Ok((tile, layer)) = view.dig_volume(body.position, avatar.height, body.heading, def.body.radius, direction) {
+            let dug = match *action {
+                Action::DigFront(direction) => view.dig_volume(body.position, avatar.height, body.heading, def.body.radius, direction),
+                _ => view.dig_volume_plain(body.position, avatar.height, body.heading, def.body.radius),
+            };
+            if let Ok((tile, layer)) = dug {
                 dig(body, avatar, transferring, view.tick, view.terrain, def, tile, Some(layer));
             }
         }
@@ -1294,12 +1333,17 @@ fn set_intent(body: &mut Body, avatar: &mut AvatarState, intent: Intent, terrain
         let flying = avatar.flight.requested || avatar.flight.airborne;
         let radius = def.body.radius;
         let walkable = |p: FxVec2, q: FxVec2| flying || terrain.walkable(p, q, radius);
-        body.route = if terrain.volume.is_some() && !flying {
-            // On foot in a volume (V.7): a 3D path from the floor it stands
-            // on to whichever floor at the target it reaches first.
-            nav::path_at(terrain, body.position, avatar.height, target, None, radius, &[]).into_iter().map(|(p, _)| p).collect()
-        } else {
-            nav::path_with(terrain, body.position, target, radius, &[], &walkable)
+        // In a volume (V.7): a 3D path from the floor it stands on (the
+        // one under it, flying) to whichever floor at the target it
+        // reaches first. With the jetpack (M8.2) it flies over that path,
+        // so it comes down on the target's floor, not on the mountain over
+        // a tunnel; with no path on foot, straight there as elsewhere.
+        let floor = if flying { terrain.footprint_at(body.position, avatar.height, radius).unwrap_or(avatar.flight.support) } else { avatar.height };
+        let path = || nav::path_at(terrain, body.position, floor, target, None, radius, &[]).into_iter().map(|(p, _)| p).collect::<Vec<_>>();
+        body.route = match terrain.volume {
+            Some(_) if !flying => path(),
+            Some(_) => Some(path()).filter(|route| !route.is_empty()).unwrap_or_else(|| nav::path_with(terrain, body.position, target, radius, &[], &walkable)),
+            None => nav::path_with(terrain, body.position, target, radius, &[], &walkable),
         };
         avatar.run = run;
     } else if let Intent::Walk { run, .. } = intent {

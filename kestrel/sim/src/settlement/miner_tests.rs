@@ -1,9 +1,13 @@
-//! Miner sprites (M6.5 of the mining design, M9): a miner digs the nearest
-//! exposed stone it can reach from the tree, 4.5 times slower than the
-//! elder, and carries the drop to the tree's stone pile; two miners never
-//! dig the same tile; with nothing to dig, a miner waits beside the stone
-//! pile until the ground changes. Every test checks every invariant on
-//! every tick (`dig_tests::step`).
+//! Miner sprites (M6.5 of the mining design, M9): on a heightfield a
+//! miner digs the nearest exposed stone it can reach from the tree, 4.5
+//! times slower than the elder, and carries the drop to the tree's stone
+//! pile; two miners never dig the same tile; with nothing to dig, a miner
+//! waits beside the stone pile until the ground changes. In the town's
+//! volume (M8.4 of the depths design) a miner mines walls: a level dig
+//! into the tile beside it from its floor, never its floor or ceiling,
+//! never a protected column, walking to the wall in 3D; amber goes to the
+//! amber pile. Every test checks every invariant on every tick
+//! (`dig_tests::step`).
 
 use std::collections::BTreeSet;
 
@@ -14,9 +18,10 @@ use fx::{Fx, FxVec2};
 use super::dig_tests::{command, dig, facing, radius, stand, step, walk_to};
 use super::miners;
 use super::{AgentIx, SceneSetup, Settlement, SpriteJob, Step};
-use crate::mine::STONE_ID;
+use crate::mine::{AMBER, AMBER_ID, STONE_ID};
 use crate::nav;
 use crate::terrain::{Disc, Terrain};
+use crate::volume::{height, HEADROOM};
 use crate::{CommandKind, Simulation, World};
 
 const SUPPLY: &str = include_str!("../../../app/assets/levels/sacred_tree_supply.ron");
@@ -32,7 +37,7 @@ fn sprite_radius() -> Fx {
 }
 
 /// The Sacred Tree's map (its hill and exposed veins), with no waves.
-fn map() -> Simulation {
+pub(super) fn map() -> Simulation {
     let mut scenario = Scenario::parse(SUPPLY).unwrap();
     scenario.waves.clear();
     super::hill_tests::sacred_tree_map(scenario)
@@ -60,11 +65,11 @@ fn small_town(seed: u64) -> Simulation {
     Simulation::from_world(World::new_scene(1, &Content::builtin(), &setup).unwrap(), 1)
 }
 
-fn settlement(sim: &Simulation) -> &Settlement {
+pub(super) fn settlement(sim: &Simulation) -> &Settlement {
     sim.world().settlement().unwrap()
 }
 
-fn mine(sim: &mut Simulation, sprite: AgentIx) {
+pub(super) fn mine(sim: &mut Simulation, sprite: AgentIx) {
     step(sim, &[command(CommandKind::SetSpriteJob { agent: sprite, job: SpriteJob::Mine })]);
 }
 
@@ -85,43 +90,274 @@ fn stone_pile(sim: &Simulation) -> FxVec2 {
     s.depots[s.stone_depot().unwrap().1 as usize].position
 }
 
-/// A miner on the map walks down a ramp to the nearest exposed stone, digs
-/// a layer in 9 s facing it, picks up the drop and carries it up to the
-/// tree's stone pile.
-#[test]
-fn a_miner_digs_exposed_stone_and_carries_it_to_the_tree() {
-    let mut sim = map();
-    let targets = miners::search(sim.world().terrain(), Terrain::pit_tile(stone_pile(&sim)), sprite_radius());
-    assert!(!targets.is_empty(), "the map has exposed stone in reach");
-    mine(&mut sim, REED);
+/// The amber at the tree's amber pile.
+fn delivered_amber(sim: &Simulation) -> u32 {
+    settlement(sim).stock("tree_amber", "amber")
+}
+
+/// The amber dug out of the ground so far.
+fn dug_amber(sim: &Simulation) -> u64 {
+    let s = settlement(sim);
+    s.accounts[s.item_index(AMBER_ID).unwrap() as usize].generated
+}
+
+/// The tile `x`, `z` tiles from the tree's.
+pub(super) fn tile(sim: &Simulation, x: i32, z: i32) -> (i32, i32) {
+    let tree = Terrain::pit_tile(sim.world().terrain().center);
+    (tree.0 + x, tree.1 + z)
+}
+
+/// Takes the ore out of every cell of the town's volume for which `strip`
+/// holds (its tile from the tree's).
+pub(super) fn strip_ore(sim: &mut Simulation, strip: impl Fn((i32, i32)) -> bool) {
+    let tree = Terrain::pit_tile(sim.world().terrain().center);
+    let terrain = sim.world_mut().settlement_and_terrain_mut().1;
+    let volume = terrain.volume.as_mut().unwrap();
+    let cells: Vec<_> = volume.ore_cells().map(|(cell, _)| cell).filter(|&(t, _)| strip((t.0 - tree.0, t.1 - tree.1))).collect();
+    for (t, layer) in cells {
+        volume.set_ore(t, layer, None);
+    }
+    terrain.revision += 1;
+}
+
+/// A tunnel at the hill's north foot, dug straight into the cells: a
+/// trench from the surface at x 8, z -26 (from the tree), walled on its
+/// sides, down a layer a tile eastward for six tiles, then a roofed tunnel five tiles long at
+/// that floor, ending in a wall at x 19. The wall's four cells over the
+/// floor are amber, and so are its cell under them (the floor's) and over
+/// them (the ceiling's). Returns the wall's tile, the tunnel's last tile (where a
+/// miner stands to dig it) and the floor's layer.
+pub(super) fn tunnel(sim: &mut Simulation) -> ((i32, i32), (i32, i32), i32) {
+    tunnel_with(sim, true)
+}
+
+/// [`tunnel`], its trench walled on its sides or open to the ground beside
+/// it.
+pub(super) fn tunnel_with(sim: &mut Simulation, walled: bool) -> ((i32, i32), (i32, i32), i32) {
+    let (x0, z) = (8, -26);
+    let [start, wall, stand] = [x0, x0 + 11, x0 + 10].map(|x| tile(sim, x, z));
+    let terrain = sim.world_mut().settlement_and_terrain_mut().1;
+    let volume = terrain.volume.as_mut().unwrap();
+    let top = volume.top(start).unwrap();
+    let floor = top - 6;
+    for i in 0..6 {
+        volume.clear_box((start.0 + i, start.1), (start.0 + i, start.1), top - 1 - i, top + 8);
+    }
+    // Walled 2 m high from a tile before it, so a route only walks in and
+    // out along it (a string-pulled route cut diagonally from a sloped
+    // step onto the ground beside it once stuck its walker, fixed in M8.8:
+    // `a_miner_climbs_out_of_an_open_trench_sideways` digs it open).
+    for x in (start.0 - 1..start.0 + 6).filter(|_| walled) {
+        for side in [start.1 - 1, start.1 + 1] {
+            let ground = volume.top((x, side)).unwrap();
+            volume.fill_box((x, side), (x, side), ground, ground + HEADROOM);
+        }
+    }
+    for x in start.0 + 6..=stand.0 {
+        assert!(volume.top((x, start.1)).unwrap() > floor + HEADROOM, "the tunnel at x {x} has a roof");
+        volume.clear_box((x, start.1), (x, start.1), floor, floor + HEADROOM);
+    }
+    assert!(volume.top(wall).unwrap() > floor + HEADROOM);
+    for layer in floor - 1..=floor + HEADROOM {
+        assert!(volume.set_ore(wall, layer, Some(AMBER)), "the wall is solid at layer {layer}");
+    }
+    terrain.revision += 1;
+    (wall, stand, floor)
+}
+
+/// What `who` is up to, and the ground piles: for a failed check.
+pub(super) fn story(sim: &Simulation, who: AgentIx) -> String {
+    let s = settlement(sim);
+    let a = &s.agents[who as usize];
+    let sprite = a.sprite().unwrap();
+    let piles: Vec<_> = s.piles.as_ref().unwrap().piles.values().map(|p| (Terrain::pit_tile(p.position), p.item(), p.units(), p.height)).collect();
+    format!(
+        "plan {:?} step {}, at {:?} {:?} height {:?}, carrying {} {:?}, gave up {:?}, route {:?}, piles {piles:?}, {} s",
+        sprite.plan,
+        sprite.step,
+        Terrain::pit_tile(a.body.position),
+        a.body.position,
+        sprite.height,
+        a.carry.inventory.total(),
+        a.carry.inventory.kind(),
+        sprite.unreachable,
+        a.body.route.iter().take(4).collect::<Vec<_>>(),
+        sim.world().tick() / HZ
+    )
+}
+
+/// Runs until `who`'s first dig has started and ended, returning it.
+pub(super) fn first_dig(sim: &mut Simulation, who: AgentIx, seconds: u64) -> super::avatar::Dig {
     let mut first = None;
+    for _ in 0..seconds * HZ {
+        step(sim, &[]);
+        let sprite = settlement(sim).agents[who as usize].sprite().unwrap();
+        match (&first, &sprite.dig) {
+            (None, Some(dig)) => first = Some(dig.clone()),
+            (Some(_), None) => break,
+            _ => {}
+        }
+    }
+    first.unwrap_or_else(|| panic!("it dug: {}", story(sim, who)))
+}
+
+/// With ore only in the tunnel's end wall, a miner walks down the trench
+/// into the tunnel and digs the wall in front of it level, in 9 s: the four cells over its floor, never the
+/// floor's cell under them nor the ceiling's over them, nor its own tile.
+/// Then it carries the amber up to the tree's amber pile.
+#[test]
+fn a_miner_digs_a_tunnel_wall_beside_it_never_its_floor_or_ceiling() {
+    let mut sim = map();
+    let (wall, stand, floor) = tunnel(&mut sim);
+    // A lantern lights the tunnel: miners work only in light (M8.7).
+    let lantern_at = tile(&sim, 16, -26);
+    super::light_tests::light_up(&mut sim, lantern_at, floor);
+    let wall_from_tree = (wall.0 - tile(&sim, 0, 0).0, wall.1 - tile(&sim, 0, 0).1);
+    strip_ore(&mut sim, |t| t != wall_from_tree);
+    let targets = miners::search(sim.world().terrain(), &settlement(&sim).light, Terrain::pit_tile(stone_pile(&sim)), sprite_radius());
+    eprintln!("targets: {targets:?}");
+    assert_eq!((targets[0].tile, targets[0].stand, targets[0].wall), (wall, stand, Some(floor)), "the amber wall first");
+    assert!(targets.iter().all(|t| t.wall.is_some()), "walls only, in a volume");
+    let own = sim.world().terrain().volume.as_ref().unwrap().spans(stand).to_vec();
+    mine(&mut sim, REED);
+    let dig = first_dig(&mut sim, REED, 240);
+    assert_eq!((dig.tile, dig.layer), (wall, Some(floor)), "level, from its floor");
+    assert_eq!(dig.until - dig.started, ticks_from_60hz(540), "9 s, as a pit's layer");
+    let reed = &settlement(&sim).agents[REED as usize];
+    assert_eq!(Terrain::pit_tile(reed.body.position), stand, "dug from the tunnel's end");
+    assert!((reed.sprite().unwrap().height - height(floor)).abs() < Fx::HALF, "on the tunnel's floor");
+    let volume = sim.world().terrain().volume.as_ref().unwrap();
+    assert!((floor..floor + HEADROOM).all(|layer| !volume.is_solid(wall, layer)), "the wall's cells are dug");
+    for layer in [floor - 1, floor + HEADROOM] {
+        assert!(volume.is_solid(wall, layer) && volume.ore(wall, layer) == Some(AMBER), "the cell at layer {layer} stays");
+    }
+    assert_eq!(volume.spans(stand), &own[..], "its own tile is untouched");
+    assert_eq!(dug_amber(&sim), HEADROOM as u64 * crate::mine::AMBER_YIELD as u64, "a unit a cell");
     for _ in 0..240 * HZ {
         step(&mut sim, &[]);
-        let s = settlement(&sim);
-        let reed = s.agents[REED as usize].sprite().unwrap();
-        if first.is_none() {
-            first = reed.dig.clone();
-        }
-        if delivered(&sim) > 0 && s.agents[REED as usize].carry.job.is_none() && s.transfers.is_empty() {
+        if delivered_amber(&sim) as u64 == dug_amber(&sim) {
             break;
         }
     }
-    let dig = first.expect("it dug");
-    assert_eq!(dig.until - dig.started, ticks_from_60hz(540), "9 s a layer, 4.5 times the elder's 2 s");
-    assert_eq!(dig.tile, targets[0].tile, "the nearest stone from the tree");
+    assert_eq!(delivered_amber(&sim) as u64, dug_amber(&sim), "it carried the amber up to the tree: {}", story(&sim, REED));
+    eprintln!("the tunnel's amber at the tree at {} s", sim.world().tick() / HZ);
+}
+
+/// With ore only in the mountain, a miner walks from the tree round the
+/// hill, in at the cave's mouth, and digs amber from the hall's wall on
+/// its floor (-1 m), then brings it to the tree.
+#[test]
+fn a_miner_walks_into_the_mountain_cave_and_mines_amber() {
+    let mut sim = map();
+    let mountain = |t: (i32, i32)| (-16..=4).contains(&t.0) && (-68..=-47).contains(&t.1);
+    strip_ore(&mut sim, |t| !mountain(t));
+    // A lantern in the hall's middle lights it (M8.7: miners work in light).
+    let lantern_at = tile(&sim, -6, -50);
+    super::light_tests::light_up(&mut sim, lantern_at, -2);
+    mine(&mut sim, REED);
+    let dig = first_dig(&mut sim, REED, 300);
+    let (x, z) = (dig.tile.0 - tile(&sim, 0, 0).0, dig.tile.1 - tile(&sim, 0, 0).1);
+    assert!((-9..=-3).contains(&x) && (-54..=-47).contains(&z), "a wall of the cave's hall: {x}, {z}");
+    assert_eq!(dig.layer, Some(-2), "from the hall's floor");
+    assert!((settlement(&sim).agents[REED as usize].sprite().unwrap().height - height(-2)).abs() < Fx::HALF);
+    assert!(dug_amber(&sim) > 0, "it dug amber");
+    for _ in 0..300 * HZ {
+        step(&mut sim, &[]);
+        if delivered_amber(&sim) > 0 {
+            break;
+        }
+    }
+    assert!(delivered_amber(&sim) > 0, "and brought it out of the mountain to the tree: {}", story(&sim, REED));
+    eprintln!("the cave's amber at the tree at {} s", sim.world().tick() / HZ);
+}
+
+/// Miners never dig a protected column: amber in the hill's cliffs is no
+/// target, and the amber tunnel's wall with a pile on it (its column, at
+/// the surface) is left alone while the miners dig other walls.
+#[test]
+fn a_miner_never_digs_a_protected_column() {
+    let mut sim = map();
+    let (wall, _, floor) = tunnel(&mut sim);
+    // Lit, so the wall would be a target but for the pile (M8.7).
+    let lantern_at = tile(&sim, 16, -26);
+    super::light_tests::light_up(&mut sim, lantern_at, floor);
+    // Amber all through the plateau's north edge and the ground at its foot.
+    let cliff: Vec<(i32, i32)> = (-20..=-12).flat_map(|z| (-4..=4).map(move |x| (x, z))).map(|(x, z)| tile(&sim, x, z)).collect();
+    {
+        let terrain = sim.world_mut().settlement_and_terrain_mut().1;
+        let volume = terrain.volume.as_mut().unwrap();
+        for &t in &cliff {
+            for layer in -20..40 {
+                volume.set_ore(t, layer, Some(AMBER));
+            }
+        }
+        terrain.revision += 1;
+    }
     let terrain = sim.world().terrain();
-    assert!(terrain.pit(dig.tile) >= 1);
-    assert!(terrain.mine().unwrap().ore(dig.tile, 0).is_some(), "it dug stone");
-    assert!(delivered(&sim) >= 3, "a dig's 3 to 6 stone at the tree: {}", delivered(&sim));
-    assert!(delivered(&sim) as u64 <= dug_stone(&sim));
-    eprintln!("first stone at the tree at {} s", sim.world().tick() / HZ);
+    let hill: Vec<_> = cliff.iter().filter(|&&t| terrain.is_undiggable(t)).collect();
+    assert!(!hill.is_empty() && hill.len() < cliff.len(), "the plateau's edge and its foot");
+    let targets = miners::search(terrain, &settlement(&sim).light, Terrain::pit_tile(stone_pile(&sim)), sprite_radius());
+    assert!(targets.iter().all(|t| !terrain.is_undiggable(t.tile)), "no target on the hill: {targets:?}");
+    // Wood on the wall's column (miners don't fetch wood).
+    let wood = settlement(&sim).item_index("wood").unwrap();
+    let above = Terrain::pit_center(wall);
+    {
+        let (s, terrain) = sim.world_mut().settlement_and_terrain_mut();
+        let terrain = terrain.clone();
+        s.spill(wood, 3, above, Fx::ZERO, &terrain);
+        s.accounts[wood as usize].generated += 3;
+    }
+    // Moved onto the column's middle (the spill puts it beside).
+    let ground = sim.world().terrain().height(above);
+    let pile = sim.world_mut().settlement_mut().piles.as_mut().unwrap().piles.values_mut().find(|p| p.item() == Some(wood)).unwrap();
+    (pile.position, pile.height) = (above, ground);
+    assert_eq!(settlement(&sim).view(ELDER, 0, sim.world().terrain()).dig_blocked(wall), Some(crate::terrain::DigRefusal::Pile));
+    step(&mut sim, &[command(CommandKind::SetSpriteJob { agent: MOSS, job: SpriteJob::Mine }), command(CommandKind::SetSpriteJob { agent: REED, job: SpriteJob::Mine })]);
+    let mut digs = BTreeSet::new();
+    for _ in 0..120 * HZ {
+        step(&mut sim, &[]);
+        let s = settlement(&sim);
+        let view = s.view(ELDER, sim.world().tick(), sim.world().terrain());
+        for a in [MOSS, REED] {
+            // Checked as each dig starts: its own drop may land touching
+            // its tile as it ends.
+            if let Some(dig) = s.agents[a as usize].sprite().unwrap().dig.as_ref().filter(|d| d.started + 1 >= sim.world().tick()) {
+                assert!(!sim.world().terrain().is_undiggable(dig.tile) && view.dig_blocked(dig.tile).is_none(), "{a} digs a protected column {:?}: {:?}", dig.tile, view.dig_blocked(dig.tile));
+                digs.insert(dig.tile);
+            }
+        }
+    }
+    assert!(!digs.is_empty(), "they dug other walls");
+    let volume = sim.world().terrain().volume.as_ref().unwrap();
+    assert!((floor..floor + HEADROOM).all(|layer| volume.is_solid(wall, layer)), "the wall under the pile stands");
+    eprintln!("dug {digs:?}, none of the {} hill tiles", hill.len());
+}
+
+/// With no ore in any wall a miner can reach (the town stripped of it),
+/// a miner waits beside the tree's stone pile, digging nothing.
+#[test]
+fn with_no_faces_a_miner_idles_by_the_stone_pile() {
+    let mut sim = map();
+    strip_ore(&mut sim, |_| true);
+    assert!(miners::search(sim.world().terrain(), &settlement(&sim).light, Terrain::pit_tile(stone_pile(&sim)), sprite_radius()).is_empty());
+    mine(&mut sim, REED);
+    for _ in 0..30 * HZ {
+        step(&mut sim, &[]);
+        assert!(settlement(&sim).agents[REED as usize].sprite().unwrap().dig.is_none());
+    }
+    let reed = &settlement(&sim).agents[REED as usize];
+    let sprite = reed.sprite().unwrap();
+    assert_eq!((sprite.current(), sprite.dig_claim), (Some(Step::Wait), None), "{:?}", sprite.plan);
+    assert!(nav::distance(reed.body.position, stone_pile(&sim)) < Fx::from_int(2));
+    assert_eq!(dug_stone(&sim) + dug_amber(&sim), 0);
 }
 
 /// Miners are a steady but modest income (M6.7's tuning): two miners on
 /// the map, left alone for five minutes, bring stone to the tree every
 /// minute, but far less than the elder digs (a layer in 2 s, a vein's ten
 /// stone layers in a minute or so): enough to keep a ballista or two
-/// stocked between waves, not to stock them mid-wave.
+/// stocked between waves, not to stock them mid-wave. (Since M8.4 they mine
+/// walls; what they dig in the town's volume is reported, amber too.)
 #[test]
 fn two_miners_bring_a_steady_modest_income() {
     let mut sim = map();
@@ -135,7 +371,7 @@ fn two_miners_bring_a_steady_modest_income() {
         minutes.push(delivered(&sim) - before);
     }
     let total: u32 = minutes.iter().sum();
-    eprintln!("two miners, stone at the tree each minute: {minutes:?}, {total} in 5 min");
+    eprintln!("two miners, stone at the tree each minute: {minutes:?}, {total} in 5 min; amber {} at the tree, {} dug", delivered_amber(&sim), dug_amber(&sim));
     assert!(minutes[1..].iter().all(|&m| m > 0), "stone comes every minute after the first: {minutes:?}");
     assert!((MINER_INCOME.0..=MINER_INCOME.1).contains(&total), "{total} stone in 5 min: {minutes:?}");
 }
@@ -184,7 +420,7 @@ fn buried_vein() -> (u64, (i32, i32)) {
         let sim = small_town(seed);
         let (s, terrain) = (settlement(&sim), sim.world().terrain());
         let view = s.view(ELDER, 0, terrain);
-        let targets = miners::search(terrain, Terrain::pit_tile(stone_pile(&sim)), sprite_radius());
+        let targets = miners::search(terrain, &settlement(&sim).light, Terrain::pit_tile(stone_pile(&sim)), sprite_radius());
         if !targets.iter().all(|t| view.dig_blocked(t.tile).is_some()) {
             continue;
         }
@@ -268,15 +504,20 @@ fn a_miner_waits_for_stone_and_digs_what_the_elder_uncovers() {
 }
 
 /// Miners play the same on 1 and 4 threads, and on from a save: the cached
-/// search isn't saved, and the ground gives it back.
+/// search isn't saved, and the ground gives it back. In the town's volume
+/// the save holds a wall dig in a plan (`Step::DigWall`, format 44).
 #[test]
 fn miners_are_deterministic_across_threads_and_saves() {
     let run = |threads: usize, save_at: Option<u64>| {
         let mut sim = Simulation::from_world(map().into_world(), threads);
         let jobs = [command(CommandKind::SetSpriteJob { agent: MOSS, job: SpriteJob::Mine }), command(CommandKind::SetSpriteJob { agent: REED, job: SpriteJob::Mine })];
         let mut hashes = Vec::new();
+        let mut saved = false;
         for tick in 0..80 * HZ {
-            if Some(tick) == save_at {
+            // From `save_at` on, once a miner's plan holds a wall dig.
+            let walls = || settlement(&sim).agents.iter().filter_map(|a| a.sprite()).any(|s| s.plan.iter().any(|step| matches!(step, Step::DigWall { .. })));
+            if !saved && save_at.is_some_and(|at| tick >= at) && walls() {
+                saved = true;
                 let world = sim.into_world();
                 let bytes = postcard::to_allocvec(&world.to_state()).unwrap();
                 let rules = world.rules().clone();
@@ -286,10 +527,50 @@ fn miners_are_deterministic_across_threads_and_saves() {
             let turn = if tick == 0 { &jobs[..] } else { &[] };
             hashes.push(sim.step(turn).total);
         }
-        (hashes, dug_stone(&sim))
+        (hashes, dug_stone(&sim), saved)
     };
-    let (one, dug) = run(1, None);
+    let (one, dug, _) = run(1, None);
     assert!(dug > 0, "they dug in the time");
     assert_eq!(one, run(4, None).0, "the thread count changed the miners");
-    assert_eq!(one, run(2, Some(40 * HZ)).0, "a save mid-dig changed them");
+    let (saved, _, walls) = run(2, Some(30 * HZ));
+    assert!(walls, "saved while a miner planned a wall dig");
+    assert_eq!(one, saved, "a save mid-dig changed them");
 }
+
+/// A walker climbs out of a sloped stair step sideways (M8.8): with the
+/// trench of [`tunnel`] open to the ground beside it, the miner's route up
+/// from the tunnel with the amber cuts diagonally off the trench's first
+/// step onto the ground. That leg walks from its waypoint, not from a few
+/// centimeters down the slope short of it, where the walker used to pass
+/// the waypoint: it swerved along the step for minutes. Now it walks on to
+/// the waypoint, and up: never still or swerving in one place for long.
+#[test]
+fn a_miner_climbs_out_of_an_open_trench_sideways() {
+    let mut sim = map();
+    let (wall, _, floor) = tunnel_with(&mut sim, false);
+    let lantern_at = tile(&sim, 16, -26);
+    super::light_tests::light_up(&mut sim, lantern_at, floor);
+    let wall_from_tree = (wall.0 - tile(&sim, 0, 0).0, wall.1 - tile(&sim, 0, 0).1);
+    strip_ore(&mut sim, |t| t != wall_from_tree);
+    mine(&mut sim, REED);
+    // The longest it stayed within a meter of one spot while walking a
+    // route, in ticks.
+    let (mut anchor, mut since, mut longest) = (FxVec2::ZERO, 0u64, 0u64);
+    for _ in 0..300 * HZ {
+        step(&mut sim, &[]);
+        let a = &settlement(&sim).agents[REED as usize];
+        let t = sim.world().tick();
+        let digging = a.sprite().unwrap().dig.is_some();
+        if a.body.route.is_empty() || digging || nav::distance(a.body.position, anchor) > Fx::ONE {
+            (anchor, since) = (a.body.position, t);
+        }
+        longest = longest.max(t - since);
+        if delivered_amber(&sim) as u64 == dug_amber(&sim) && dug_amber(&sim) > 0 {
+            break;
+        }
+    }
+    eprintln!("the open trench's amber at the tree at {} s, longest in one spot {} ticks", sim.world().tick() / HZ, longest);
+    assert!(dug_amber(&sim) > 0 && delivered_amber(&sim) as u64 == dug_amber(&sim), "it carried the amber up to the tree: {}", story(&sim, REED));
+    assert!(longest < 5 * HZ, "never stuck in one spot for 5 s: {longest} ticks");
+}
+

@@ -445,7 +445,7 @@ impl PileLab {
 
     /// Dug ore: `units` of mineral `item` out of the pit at `tile`, onto a
     /// pile of the same ore beside it with room, or a new one on the nearest
-    /// open tile around that isn't steep, clear of `targets` (a town's docks, output piles
+    /// open tile around that isn't steep (in a volume, the dug tile last), clear of `targets` (a town's docks, output piles
     /// and slot spots) as a dropped bundle is. Returns the pile and the slot
     /// the first unit lands in, or nothing if there is nowhere to put it
     /// (the ore stays buried).
@@ -465,6 +465,9 @@ impl PileLab {
             .piles
             .iter()
             .filter(|(_, p)| p.source.is_none() && p.item() == Some(item) && p.inventory.free() >= units)
+            // In a volume, only a pile on the dig's floor (M8.4): not one
+            // on the mountain over a tunnel.
+            .filter(|(_, p)| volume.is_none_or(|(floor, _)| (p.height - crate::volume::height(floor)).abs() <= crate::volume::height(2)))
             .map(|(&id, p)| (nav::distance(p.position, pit), id))
             .filter(|&(d, _)| d < Fx::from_ratio(11, 5))
             .min();
@@ -482,6 +485,14 @@ impl PileLab {
         let radius = pile_radius(units);
         let mut around: Vec<(i32, i32)> = (-2..=2).flat_map(|y| (-2..=2).map(move |x| (x, y))).filter(|&o| o != (0, 0)).collect();
         around.sort_by_key(|&(x, y)| (x * x + y * y, y, x));
+        // In a volume, the dug tile itself last (M8.8), even crowding the
+        // piles already there: its cleared floor holds the pile when a
+        // tunnel a tile wide has its tiles behind the digger taken by
+        // earlier digs' piles (the depths soak's elder lost ten of
+        // fourteen amber cells so).
+        if volume.is_some() {
+            around.push((0, 0));
+        }
         let spot = around.into_iter().map(|(x, y)| (tile.0 + x, tile.1 + y)).find(|&t| {
             let center = Terrain::pit_center(t);
             // Not on ground the dig made steep (beside a pit two layers
@@ -493,7 +504,8 @@ impl PileLab {
             ground
                 && self.free_drop(terrain, center, units)
                 && targets.iter().all(|&p| nav::distance(p, center) > radius + DROP_CLEARANCE)
-                && self.piles.values().all(|p| nav::distance(p.position, center) > pile_radius(p.units()) + radius + Fx::from_ratio(1, 10))
+                // The dug tile, the last resort, may crowd the piles there.
+                && (t == tile || self.piles.values().all(|p| nav::distance(p.position, center) > pile_radius(p.units()) + radius + Fx::from_ratio(1, 10)))
         })?;
         let id = self.insert(item, Terrain::pit_center(spot), units, None);
         if let Some((floor, volume)) = volume {
@@ -1053,8 +1065,11 @@ impl Settlement {
     /// and other piles, clear of docks, output piles and slot spots). With
     /// none, onto the nearest pile of that item with room, or else at the
     /// first spot anyway: the units are never lost. Nothing reserves a
-    /// spilled pile, so it is picked up like any other.
+    /// spilled pile, so it is picked up like any other. In a volume scene a
+    /// new pile lies on the building's floor, the top one at its middle
+    /// (M8.2).
     pub(super) fn spill(&mut self, item: ItemIx, units: u32, center: FxVec2, radius: Fx, terrain: &Terrain) {
+        let floor = terrain.volume.as_ref().map(|_| terrain.height(center));
         let docks: Vec<FxVec2> = self.depots.iter().map(|d| d.position).collect();
         let spots: Vec<FxVec2> = self.buildings.iter().flat_map(|b| [b.output_position, b.slot_position(&self.building_kinds[b.kind as usize])]).collect();
         let lab = self.piles.as_mut().expect("a town has ground piles");
@@ -1066,8 +1081,14 @@ impl Settlement {
         };
         let ring = |gap: Fx, k: i32| center + nav::heading_vector((Fx::PI + Fx::PI).mul_int(k as i64).div_int(SPILL_SPOTS as i64)) * (radius + size + gap);
         let spot = SPILL_RINGS.iter().flat_map(|&gap| (0..SPILL_SPOTS).map(move |k| (gap, k))).map(|(gap, k)| ring(gap, k)).find(|&spot| fits(lab, spot));
+        let lie = |lab: &mut PileLab, id: PileId, spot: FxVec2| {
+            if let Some(floor) = floor {
+                lab.piles.get_mut(&id).expect("just made").height = terrain.footprint_near(spot, floor, Fx::ZERO).unwrap_or(floor);
+            }
+        };
         if let Some(spot) = spot {
-            lab.insert(item, spot, units, None);
+            let id = lab.insert(item, spot, units, None);
+            lie(lab, id, spot);
             return;
         }
         let merge = lab
@@ -1082,7 +1103,9 @@ impl Settlement {
                 debug_assert!(added, "the pile had room");
             }
             None => {
-                lab.insert(item, ring(SPILL_RINGS[0], 0), units, None);
+                let spot = ring(SPILL_RINGS[0], 0);
+                let id = lab.insert(item, spot, units, None);
+                lie(lab, id, spot);
             }
         }
     }

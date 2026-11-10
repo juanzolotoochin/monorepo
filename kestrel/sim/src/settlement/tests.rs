@@ -263,7 +263,9 @@ fn think(sim: &Simulation, a: &mut AgentState, me: AgentIx) -> Option<Action> {
         transfers: &s.transfers,
         view: s.view(me, tick, terrain),
         dig_claims: &[],
+        errands: &[],
         stone: None,
+        amber: None,
         danger: &[],
         leader: None,
     };
@@ -328,7 +330,7 @@ fn haulers_act_on_go_to_and_follow() {
     let a = s.agents[me as usize].clone();
     let mut hauler = a.hauler().unwrap().clone();
     let mut body = a.body.clone();
-    haulers::act(&mut body, &hauler, &go, &view);
+    haulers::act(&mut body, &mut hauler, &go, &view);
     assert!(!body.route.is_empty());
     assert_eq!(body.route, hauler.plan(&a.body, terrain, mill, &[]));
 
@@ -340,12 +342,12 @@ fn haulers_act_on_go_to_and_follow() {
     let mut body = a.body.clone();
     hauler.travel_heading = heading;
     let towed = hauler.plan(&body, terrain, mill, &[]);
-    haulers::act(&mut body, &hauler, &go, &view);
+    haulers::act(&mut body, &mut hauler, &go, &view);
     assert!(!body.route.is_empty());
     assert_eq!(body.route, towed);
 
     let route = vec![a.body.position + FxVec2::new(fx(1.0), fx(1.0)), mill];
-    haulers::act(&mut body, &hauler, &Action::Follow(route.clone()), &view);
+    haulers::act(&mut body, &mut hauler, &Action::Follow(route.clone()), &view);
     assert_eq!(body.route, route);
 
     let player = s.agent_index("player").unwrap();
@@ -451,6 +453,9 @@ fn set_characters_rejects_an_unknown_threat_character() {
         burn: None,
         goal: Default::default(),
         stranded: false,
+        height: Default::default(),
+        chase: Vec::new(),
+        backoff: Default::default(),
     };
     s.threats.push(threat);
     let error = s.set_characters(&characters).unwrap_err();

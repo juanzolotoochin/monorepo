@@ -130,7 +130,7 @@ fn the_elder_carries_a_bundle_of_five_and_the_tree_piles_take_their_item() {
     let cargo = &s.agents[ELDER as usize].carry.inventory;
     assert_eq!((cargo.capacity, cargo.kinds), (5, Kinds::OneKind));
     let kinds: Vec<_> = s.depots.iter().map(|d| d.inventory.kinds).collect();
-    assert_eq!(kinds, [Kinds::Only(WOOD), Kinds::Only(STONE)]);
+    assert_eq!(kinds, [Kinds::Only(WOOD), Kinds::Only(STONE), Kinds::Only(STONE + 1)], "wood, stone and amber");
     // Other scenes' cargo and depots hold any mix, as before.
     let forest = World::new_settlement(1, &Content::builtin(), &Scenario::parse(FOREST).unwrap(), &[]).unwrap();
     let forest = forest.settlement().unwrap();
