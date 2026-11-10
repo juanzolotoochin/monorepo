@@ -47,7 +47,8 @@ struct Cutaway {
     // Roofed ground's light (of its albedo): x the ambient, y the lamp, z
     // the lanterns' channel; w the lamp's range.
     under: vec4<f32>,
-    // rgb: the void beyond the rim round what is in sight.
+    // rgb: the void beyond the rim round what is in sight; w: the share of
+    // its albedo remembered ground keeps at least (the fog's night floor).
     void_color: vec4<f32>,
     // The fog of war. xy: its texture's lowest corner (world x, z); z: its
     // side; w: 1 in the fog mode.
@@ -237,12 +238,14 @@ fn fog_state(xz: vec2<f32>, roofed: f32) -> f32 {
     return sum / 6.0;
 }
 
-// The fog mode: `color` at `p` as the team knows it: in sight as it is,
-// seen before dimmed and greyed, never seen the void. Inside, roofed ground
+// The fog mode: `color` (of albedo `albedo`) at `p` as the team knows it:
+// in sight as it is, seen before dimmed and greyed (and by night at least
+// `void_color.w` of its albedo's grey, so it reads apart from never seen),
+// never seen the void. Inside, roofed ground
 // and walls (`grid`'s a 0) go by the elder's level, open ground by the
 // surface, blended by the inside factor. A wall face goes by the tile it
 // faces, a back face by its cap.
-fn fogged(color: vec3<f32>, p: vec3<f32>, n: vec3<f32>, is_front: bool) -> vec3<f32> {
+fn fogged(color: vec3<f32>, albedo: vec3<f32>, p: vec3<f32>, n: vec3<f32>, is_front: bool) -> vec3<f32> {
     let inside = cutaway.sight.x * cutaway.sight.z;
     var roofed = 0.0;
     var at = p;
@@ -254,7 +257,8 @@ fn fogged(color: vec3<f32>, p: vec3<f32>, n: vec3<f32>, is_front: bool) -> vec3<
     let seen = smoothstep(0.05, 0.45, state);
     let now = smoothstep(0.55, 0.95, state);
     let grey = vec3<f32>(dot(color, vec3<f32>(0.2126, 0.7152, 0.0722)));
-    let dim = mix(color, grey, cutaway.fog_look.y) * cutaway.fog_look.x;
+    let lum = vec3<f32>(0.2126, 0.7152, 0.0722);
+    let dim = max(mix(color, grey, cutaway.fog_look.y) * cutaway.fog_look.x, vec3<f32>(dot(albedo, lum) * cutaway.void_color.w));
     return mix(cutaway.void_color.rgb, mix(dim, color, now), seen);
 }
 
@@ -284,7 +288,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let gone = void_amount(in.world_position.xyz, normalize(in.world_normal), is_front);
     out.color = vec4<f32>(mix(out.color.rgb, cutaway.void_color.rgb, gone), out.color.a);
     if fog_on() {
-        out.color = vec4<f32>(fogged(out.color.rgb, in.world_position.xyz, normalize(in.world_normal), is_front), out.color.a);
+        out.color = vec4<f32>(fogged(out.color.rgb, pbr_input.material.base_color.rgb, in.world_position.xyz, normalize(in.world_normal), is_front), out.color.a);
     }
     return out;
 }

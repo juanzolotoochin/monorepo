@@ -104,10 +104,11 @@ impl Service for Digging {
         app.init_resource::<crate::prediction::DrawnAvatar>()
             .init_resource::<crate::cutaway::SightView>()
             .init_resource::<crate::fog::FogView>()
+            .init_resource::<crate::fog_dressing::FoggedMaterials>()
             .add_service_systems::<Self, _>(Phase::Mirror, (update, follow_camera).chain().run_if(active.clone()))
             .add_systems(
                 PostUpdate,
-                (feedback, toss_stone, fly_stones, (crate::fog::follow, crate::cutaway::follow, crate::cutaway::hide_outdoors).chain(), crate::walker_view::draw).after(bevy::transform::TransformSystems::Propagate).run_if(crate::control::rendered).run_if(active),
+                (feedback, toss_stone, fly_stones, (crate::fog::follow, crate::cutaway::follow, crate::cutaway::hide_outdoors, crate::fog_dressing::follow).chain(), crate::walker_view::draw).after(bevy::transform::TransformSystems::Propagate).run_if(crate::control::rendered).run_if(active),
             );
     }
 }

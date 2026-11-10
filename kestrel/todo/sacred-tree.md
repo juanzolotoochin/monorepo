@@ -4,34 +4,6 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M9.3 Hiding things in the fog
-
-- **Status:** open
-- **Why:** the fog must hide what the team can't see.
-- **What to do:** ghouls and other moving things are drawn only in sight;
-  buildings and piles in remembered ground show as last seen (F2), with
-  their labels. A ghoul within about 12 m of any elder, out of sight, shows
-  only its glowing eyes (through rock too) and growls (F6). Widen
-  `SightView::shows` from the inside view to the fog.
-- **Where:** `app/src/sight.rs`, `app/src/legacy.rs`, the piles, buildings
-  and ghoul views, audio.
-- **Found in:** fog design.
-- **Tests:** a hidden ghoul isn't drawn; eyes within 12 m only; last-seen
-  buildings and piles.
-  Note (from M9.1): `Fog::state(tile, Level)` and `Fog::near(tile, layer)`
-  answer per tile; a body on its top floor is `Level::Surface`, under a
-  roof its floor's level (`fog` module doc). "Last seen" needs a snapshot
-  of buildings and piles per cell when it goes from `Now` to `Seen`: the
-  grid keeps only the state; `Fog::update` rebuilds the `now` list, the
-  place to diff.
-  Note (from M9.2): the fog mode is `ViewMode::Fog` (`SightView::mode()`;
-  `SightView::fog` says the scene has a fog); `SightView::shows` and
-  `hide_outdoors` treat it as line of sight for now. The pines, ground
-  cover, lamp posts and the baked environment (`style::Environment`,
-  `cutaway::Outdoor`) are not fogged: they are their own materials and
-  stand at full colour in never-seen ground. Hiding them by tile (or a fog
-  term in their materials) belongs here.
-
 ## M9.4 Demo and review
 
 - **Status:** open
@@ -53,6 +25,35 @@ its milestones, in order; one PR per milestone.
   dusk at 4x in it, night outside; it has no hill, lantern or ghouls yet,
   and no F7 step (the control protocol has no key op). The town camera is
   close, so the fog's square edges are seldom in frame.
+  Note (from M9.3): the demo now carries wood out west, drops it (5 WOOD
+  at about (-30, 3)) and lays a ballista site at (-33, 6), both remembered
+  once the elder walks on; the cave's last 4x wait is shorter (210
+  frames) so the elder is at the west ramp's foot (-27, -9) as night's
+  column comes up: the first ghoul is heard at about frame 2500 (a growl,
+  the eyes), and from (-22, -3) at frame 2700 one is in sight and the next
+  shows by its eyes. `max_frames` can't pass 3600 (`fps * 120`, the
+  control protocol); the run ends near frame 2950. Growls are in the
+  report's `audio.events` (`growl`). The night floor (`FOG_FLOOR` 0.12)
+  and the eyes' size were judged on these frames only; check them in the
+  video. Out of scope for M9.3, in "Fog of war follow-ups" below.
+
+## Fog of war follow-ups
+
+- **Status:** open
+- **Why:** what M9.3 left simple, to look at after the review.
+- **What to do:** remembered buildings and piles keep their full colour on
+  dimmed ground (dim them with the ground, e.g. by a rig material fade);
+  a site's ground ring (`input::hud`) and lantern heads' glow aren't
+  fogged (the heads are emissive, so they stay bright in remembered
+  ground); the heard ghouls' eyes are UI marks of a fixed size, drawn over
+  everything (they don't scale with zoom, and stand over labels); other
+  players' elders, nametags and health bars aren't fogged (elders are eyes,
+  so always in sight; a dead elder's body isn't); the tree's piles' labels
+  and the sprites' tags at the plaza overlap at the town's zoom (from
+  before the fog); a cliff's face still takes its top tile's fog (M9.2).
+- **Where:** `app/src/settlement.rs` (`remember`), `app/src/heard.rs`,
+  `app/src/fog_dressing.rs`, `app/src/input/`.
+- **Found in:** M9.3.
 
 ## Depths follow-ups
 
@@ -285,6 +286,87 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M7.5.
 
 ## Done
+
+### M9.3 Hiding things in the fog
+
+- **Status:** done (branch `kestrel-sacred-tree-fog`)
+- **Why:** the fog must hide what the team can't see.
+- **What to do:** ghouls and other moving things are drawn only in sight;
+  buildings and piles in remembered ground show as last seen (F2), with
+  their labels. A ghoul within about 12 m of any elder, out of sight, shows
+  only its glowing eyes (through rock too) and growls (F6). Widen
+  `SightView::shows` from the inside view to the fog.
+- **Where:** `app/src/sight.rs`, `app/src/legacy.rs`, the piles, buildings
+  and ghoul views, audio.
+- **Found in:** fog design.
+- **Tests:** a hidden ghoul isn't drawn; eyes within 12 m only; last-seen
+  buildings and piles.
+  Note (from M9.1): `Fog::state(tile, Level)` and `Fog::near(tile, layer)`
+  answer per tile; a body on its top floor is `Level::Surface`, under a
+  roof its floor's level (`fog` module doc). "Last seen" needs a snapshot
+  of buildings and piles per cell when it goes from `Now` to `Seen`: the
+  grid keeps only the state; `Fog::update` rebuilds the `now` list, the
+  place to diff.
+  Note (from M9.2): the fog mode is `ViewMode::Fog` (`SightView::mode()`;
+  `SightView::fog` says the scene has a fog); `SightView::shows` and
+  `hide_outdoors` treat it as line of sight for now. The pines, ground
+  cover, lamp posts and the baked environment (`style::Environment`,
+  `cutaway::Outdoor`) are not fogged: they are their own materials and
+  stand at full colour in never-seen ground. Hiding them by tile (or a fog
+  term in their materials) belongs here.
+
+- **Done:** **Hiding** (`fog::Lookup`): what the team knows of a thing at
+  a point of the arena, on the level of the floor at or just under its
+  feet (`fog::REACH`, 1.2 m: a ramp, a flame over a head). In the fog mode
+  `SightView::sees` draws moving things (ghouls, sprites, haulers and their
+  cargo, transfers, projectiles, pinned ghouls; their tags, flames and the
+  buildings' lamps and fire glows) only in sight now, on their level, and
+  `SightView::keeps` draws what stays (buildings, outputs', ground piles'
+  and depots' units, their cards) where their ground was seen; inside the
+  line of sight's own hiding still applies. Other players' elders and the
+  team's sprites are eyes, so in sight; nametags and health bars are
+  players' only and untouched. **Last seen** (`settlement::remember`, the
+  simple version): each view that stays (`stays`, by key) is remembered as
+  drawn while its tile is in sight; while out of sight its remembered view
+  is drawn instead (frozen: a site built up, a unit taken, a building
+  broken still look as they did), one that came while nobody looked isn't
+  drawn, and what is gone is forgotten once its ground is in sight. Cards
+  keep their last text (`town_caption`) and stay while their thing is gone
+  (`forget`). At the start what stands on the remembered clearing is
+  remembered as it is. Built buildings are eyes (4 m), so they and their
+  outputs are in sight; the memory shows on sites and ground piles. Labels
+  go by their thing's feet (`Caption::feet`, `LabelFog`; the interact
+  prompt and the ghost's card are never fogged). Remembered things keep
+  their full colour (not dimmed as the ground). **Dressing**
+  (`fog_dressing.rs`, `shaders/fog_dressing.wesl`): in the town every
+  standard material of the baked environment and `Outdoor` (pines, the
+  plaza's grass box and dirt, bushes, the tree's split canopy, the lamp
+  posts) is drawn by a copy extended with the surface's fog, the ground's
+  texture and look (dim and grey seen before, black never seen); the
+  entity keeps its material (`Fogged`) and the copy follows its colour,
+  emissive and alpha (the canopy's fade, a lantern's glow at dusk;
+  `daylight` and `canopy` read either). **Night floor**
+  (`cutaway::FOG_FLOOR`, 0.12, in the uniform's `void.w`): remembered
+  ground and dressing keep at least that share of their albedo's grey, so
+  by night they read apart from never seen. **Eyes** (`heard.rs`, F6): a
+  ghoul out of sight within `heard::HEAR` (12 m, 3D) of any living
+  player's elder shows only two glowing eyes `heard::EYES` (1.45 m) over
+  its feet, UI drawn over the scene so no fog or rock hides them; further
+  off nothing. It growls (`sound::Cue::Growl`, a new procedural cue, 21
+  now; `app/web/audio.bzl`) when first heard, again after `GROWL_AGAIN`
+  (8 s) out of hearing, a pack's growls one (`GROWL_GAP`, 1.5 s), through
+  `Sound::play` (mute and demo recording respected). **Demo**
+  (`sacred_tree_fog.json`): the elder now takes wood from the tree, drops
+  it and lays a ballista site out west, and at night ends at the west
+  ramp's foot as the column comes up. Tests: `SightView::sees`/`keeps` by
+  mode and scene, `fog::Lookup` levels, `settlement::remember` (last seen,
+  never seen, gone, other modes), `stays`/`LabelFog`, `heard` (12 m, in
+  sight, growl), `fog_dressing` (swapped and following in the town, not
+  elsewhere). Screenshots (local plain build): a ghoul's eyes in the fog
+  at night by the west ramp, a ghoul in sight with the next one's eyes
+  beside it, the dropped pile and the site remembered by day, the pines
+  remembered by day and by night (dim and grey; by night remembered ground
+  reads apart from the never seen black, which at 0.05 it didn't).
 
 ### M9.2 Drawing the fog
 

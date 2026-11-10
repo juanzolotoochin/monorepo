@@ -161,10 +161,12 @@ fn light_up(world: &mut World, glow: f32) {
     for (light, mut point) in world.query::<(&NightLight, &mut PointLight)>().iter_mut(world) {
         point.intensity = light.full * glow;
     }
+    // In the town's fog a head is drawn by a fogged copy that follows its
+    // material (`fog_dressing::Fogged`).
     let heads: Vec<Handle<StandardMaterial>> = world
-        .query_filtered::<&MeshMaterial3d<StandardMaterial>, With<LanternHead>>()
+        .query_filtered::<AnyOf<(&MeshMaterial3d<StandardMaterial>, &crate::fog_dressing::Fogged)>, With<LanternHead>>()
         .iter(world)
-        .map(|m| m.0.clone())
+        .filter_map(|(m, f)| m.map(|m| m.0.clone()).or_else(|| f.map(|f| f.0.clone())))
         .collect();
     let emissive = LinearRgba::rgb(LANTERN_EMISSIVE[0] * glow, LANTERN_EMISSIVE[1] * glow, LANTERN_EMISSIVE[2] * glow);
     let mut materials = world.resource_mut::<Assets<StandardMaterial>>();

@@ -73,7 +73,12 @@
 //! changes, and eases from the last one over `fog::EASE` (dusk halving
 //! sight at once slides in). F7 cycles fog, line of sight and the cutaway
 //! in the town; other scenes have no fog and keep line of sight and the
-//! cutaway (F11).
+//! cutaway (F11). Things hide by the fog too (M9.3): moving things only in
+//! sight (`SightView::sees`), buildings and piles where their ground was
+//! seen, as last seen (`SightView::keeps`, `settlement`); the dressing has
+//! the fog in its own materials (`fog_dressing`). By night remembered
+//! ground keeps at least `FOG_FLOOR` of its albedo, so it reads apart from
+//! the never seen black.
 use crate::character::Player;
 use crate::effects::CameraRig;
 use bevy::{
@@ -179,6 +184,10 @@ pub const INSIDE_REACH: f32 = 0.7;
 pub const FOG_DIM: f32 = 0.45;
 /// ...and how far toward grey it goes.
 pub const FOG_GREY: f32 = 0.7;
+/// ...and at least this share of its albedo's brightness, so by night
+/// remembered ground reads apart from the never seen black (M9.3): the
+/// moon leaves it near black, under `FOG_DIM`'s share of its light.
+pub const FOG_FLOOR: f32 = 0.12;
 /// How far round a point the fog is sampled for its soft edge, meters.
 pub const FOG_SOFT: f32 = 0.8;
 /// The key that cycles the view modes (fog in the town, line of sight and
@@ -296,6 +305,26 @@ impl SightView {
     pub fn shows_label(&self, at: Vec3) -> bool {
         self.shows(at.with_y(self.hide.min(at.y)))
     }
+
+    /// Whether the fog mode is drawn (the town's, `ViewMode::Fog`).
+    pub fn fogged(&self) -> bool {
+        self.mode() == ViewMode::Fog
+    }
+
+    /// Whether a moving thing (a ghoul, a sprite, a hauler, a flying unit)
+    /// with its feet at `feet` is drawn: as [`SightView::shows`], and in
+    /// the fog mode only while the team sees it now (F2). `known` is what
+    /// the team knows there (`fog::Lookup::at`), none without a fog.
+    pub fn sees(&self, feet: Vec3, known: Option<crate::fog::State>) -> bool {
+        self.shows(feet) && (!self.fogged() || known.is_none_or(|k| k == crate::fog::State::Now))
+    }
+
+    /// Whether a thing that stays (a building, a pile) at `feet` is drawn:
+    /// as [`SightView::shows`], and in the fog mode not on ground never
+    /// seen (on ground seen before it is drawn as last seen, `settlement`).
+    pub fn keeps(&self, feet: Vec3, known: Option<crate::fog::State>) -> bool {
+        self.shows(feet) && (!self.fogged() || known.is_none_or(|k| k != crate::fog::State::Never))
+    }
 }
 
 /// Inside, roofed ground's light as a share of its albedo: the ambient,
@@ -372,7 +401,7 @@ pub struct CutawayUniform {
     pub lamp_color: Vec4,
     /// x: `AMBIENT`, y: `LAMP`, z: `LANTERN`, w: `LAMP_RANGE`.
     pub under: Vec4,
-    /// rgb: the void's colour (linear).
+    /// rgb: the void's colour (linear); w: `FOG_FLOOR`.
     pub void: Vec4,
     /// The fog of war. xy: its texture's lowest corner (arena x, z); z: its
     /// side in meters; w: 1 in the fog mode.
@@ -447,7 +476,7 @@ pub fn material(base: StandardMaterial, sight: Handle<Image>, fog: Handle<Image>
                 lamp: Vec4::ZERO,
                 lamp_color: lamp_color().extend(0.0),
                 under: Vec4::new(AMBIENT, LAMP, LANTERN, LAMP_RANGE),
-                void: Vec4::new(VOID[0], VOID[1], VOID[2], 0.0),
+                void: Vec4::new(VOID[0], VOID[1], VOID[2], FOG_FLOOR),
                 fog: Vec4::ZERO,
                 fog_look: Vec4::new(FOG_DIM, FOG_GREY, 1.0, FOG_SOFT),
             },
@@ -665,7 +694,7 @@ pub fn follow(
     cutaway.lamp = (feet + Vec3::Y * FILL_HEIGHT).extend(*glow);
     cutaway.lamp_color = lamp_color().extend(0.0);
     cutaway.under = Vec4::new(AMBIENT, LAMP, LANTERN, LAMP_RANGE);
-    cutaway.void = Vec4::new(VOID[0], VOID[1], VOID[2], 0.0);
+    cutaway.void = Vec4::new(VOID[0], VOID[1], VOID[2], FOG_FLOOR);
     let (window, ease) = fog_window.unwrap_or((Vec4::ZERO, 1.0));
     cutaway.fog = window;
     cutaway.fog_look = Vec4::new(FOG_DIM, FOG_GREY, ease, FOG_SOFT);
@@ -735,13 +764,37 @@ mod tests {
         assert!(view.shows(in_corridor - Vec3::Y * 0.5));
         // A label floats over the hidden height but goes by its tile.
         assert!(view.shows_label(in_corridor + Vec3::Y * 3.0));
-        // The fog mode hides inside as line of sight does (M9.3 widens it).
+        // The fog mode hides inside as line of sight does, and by the fog.
         view.fog = true;
         assert_eq!(view.mode(), ViewMode::Fog);
         assert!(view.shows(in_corridor) && !view.shows(in_rock));
+        assert!(!view.sees(in_rock, Some(crate::fog::State::Now)), "inside, out of the line of sight");
         // The cutaway mode shows everything.
         view.choice = ViewMode::Cutaway;
         assert!(view.shows(in_rock));
+    }
+
+    #[test]
+    fn in_the_fog_moving_things_show_only_in_sight_and_things_that_stay_where_seen() {
+        use crate::fog::State;
+        let mut view = SightView { fog: true, ..default() };
+        let out = Vec3::new(20.0, 0.0, 0.0);
+        // Outside, in the fog mode: a ghoul only in sight now...
+        assert!(view.sees(out, Some(State::Now)));
+        assert!(!view.sees(out, Some(State::Seen)), "a hidden ghoul isn't drawn");
+        assert!(!view.sees(out, Some(State::Never)));
+        // ...a building or a pile on ground seen before too (as last seen).
+        assert!(view.keeps(out, Some(State::Now)) && view.keeps(out, Some(State::Seen)));
+        assert!(!view.keeps(out, Some(State::Never)));
+        // Line of sight and the cutaway show everything outside, as before.
+        for mode in [ViewMode::Sight, ViewMode::Cutaway] {
+            view.choice = mode;
+            assert!(view.sees(out, Some(State::Never)) && view.keeps(out, Some(State::Never)), "{mode:?}");
+        }
+        // Other scenes have no fog: a choice of fog is line of sight there.
+        let view = SightView { choice: ViewMode::Fog, ..default() };
+        assert!(view.sees(out, Some(State::Never)));
+        assert!(view.sees(out, None));
     }
 
     #[test]

@@ -40,7 +40,8 @@ struct Cutaway {
     // Roofed ground's light (of its albedo): x the ambient, y the lamp, z
     // the lanterns' channel; w the lamp's range.
     under: vec4<f32>,
-    // rgb: the void beyond the rim round what is in sight.
+    // rgb: the void beyond the rim round what is in sight; w: the fog's
+    // night floor.
     void_color: vec4<f32>,
     // The fog of war. xy: its texture's lowest corner (world x, z); z: its
     // side; w: 1 in the fog mode.

@@ -22,7 +22,7 @@ rust_binary(
     name = "demo",
     srcs = glob(["src/**/*.rs"]),
     # Bevy's derive macros inspect Cargo.toml to locate the `bevy` re-exports.
-    compile_data = ["//:Cargo.toml", "actors/exosuit.ron", "shaders/cutaway.wesl", "shaders/cutaway_prepass.wesl", "shaders/grass.wesl"] + glob(["vfx/*.ron"]),
+    compile_data = ["//:Cargo.toml", "actors/exosuit.ron", "shaders/cutaway.wesl", "shaders/cutaway_prepass.wesl", "shaders/fog_dressing.wesl", "shaders/grass.wesl"] + glob(["vfx/*.ron"]),
     edition = "2021",
     link_deps = select({
         "@platforms//cpu:wasm32": [],
@@ -316,8 +316,10 @@ filegroup(
 # The Sacred Tree's fog of war (M9.2 of the fog design, M9.4 makes it the
 # review demo): the elder walks out from the tree west down the ramp and
 # round to the mountain's cave by day, the fog opening and staying
-# remembered, into the cave's passage, waits there to dusk at 4x, and comes
-# out under the night's shorter sight.
+# remembered (a pile dropped and a site laid out west stay as last seen,
+# M9.3), into the cave's passage, waits there to dusk at 4x, and comes out
+# under the night's shorter sight, to the west ramp's foot as the night's
+# column comes up it: heard by their eyes, then in sight.
 game_demo(
     name = "sacred_tree_fog_demo",
     game = ":demo",

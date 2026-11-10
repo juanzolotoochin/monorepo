@@ -36,6 +36,14 @@
 //! target needn't be clear, so a wall is seen by its face and what is
 //! behind it isn't.
 //!
+//! **Hiding by it** (M9.3, [`Lookup`]): what the team knows of a thing
+//! standing at a point of the arena: its tile, on the level of the floor at
+//! or just under its feet (a flame over a head reads the same; a label goes
+//! by its thing's feet).
+//! `settlement` draws moving things only in sight and keeps buildings and
+//! piles as last seen; `heard` shows a ghoul out of sight near an elder by
+//! its eyes.
+//!
 //! **Cost**: each eye keeps what it saw and its key (its tile, floor and
 //! range, and the terrain's revision); it is looked again only when the key
 //! changes, so an eye that doesn't move costs nothing. The light grid's
@@ -190,7 +198,6 @@ impl Fog {
     /// What the team knows of `tile`'s floor within a layer of `layer`
     /// under ground (and the walls an eye on those layers saw): the level
     /// as an elder standing on `layer` sees it.
-    #[cfg_attr(not(test), allow(dead_code))] // M9.2 draws by it.
     pub fn near(&self, tile: (i32, i32), layer: i32) -> State {
         State::of((layer - 1..=layer + 1).fold(0, |bits, l| bits | self.bits(Level::Layer(l), tile)))
     }
@@ -477,6 +484,49 @@ impl FogTexture {
     }
 }
 
+/// How far over a thing's feet a point still counts as standing on that
+/// floor (`Lookup::at`), meters: a ramp's slope or a sprite's flame over
+/// its head. The next floor up is at least 2.5 m over (`Volume::floors`).
+pub const REACH: f32 = 1.2;
+
+/// The fog with what it takes to answer for a point of the arena (meters
+/// from the town's center, as the view draws): the volume, for the floor a
+/// thing stands on, and the center's tile.
+pub struct Lookup<'a> {
+    pub fog: &'a Fog,
+    volume: &'a Volume,
+    center: (i32, i32),
+}
+
+impl<'a> Lookup<'a> {
+    pub fn new(fog: &'a Fog, volume: &'a Volume, center: (i32, i32)) -> Lookup<'a> {
+        Lookup { fog, volume, center }
+    }
+
+    /// The town's, while it has a fog.
+    pub fn of(view: &'a FogView, world: &'a sim::World) -> Option<Lookup<'a>> {
+        let terrain = world.terrain();
+        Some(Lookup::new(view.fog.as_ref()?, terrain.volume.as_ref()?, sim::terrain::Terrain::pit_tile(terrain.center)))
+    }
+
+    /// The tile under arena point `at` (`Terrain::pit_tile`).
+    pub fn tile(&self, at: bevy::math::Vec3) -> (i32, i32) {
+        ((at.x + 0.5).floor() as i32 + self.center.0, (at.z + 0.5).floor() as i32 + self.center.1)
+    }
+
+    /// What the team knows of what stands at arena point `at`: its tile on
+    /// the level of the highest floor at most [`REACH`] under it (the
+    /// surface without one, or when that floor is the top).
+    pub fn at(&self, at: bevy::math::Vec3) -> State {
+        let tile = self.tile(at);
+        let floor = self.volume.floors(tile).take_while(|&f| sim::volume::height(f).to_f32() <= at.y + REACH).last();
+        match floor.map(|f| level_of(self.volume, tile, f)) {
+            Some(Level::Layer(floor)) => self.fog.near(tile, floor),
+            _ => self.fog.state(tile, Level::Surface),
+        }
+    }
+}
+
 /// The town's fog this frame: none outside the town.
 #[derive(bevy::prelude::Resource, Default)]
 pub struct FogView {
@@ -669,6 +719,32 @@ mod tests {
         update(&mut fog, &volume, &[(agent("elder"), eye((5, 3), 0, ELDER_RANGE))]);
         assert_eq!(surface(&fog, (5, 0)), State::Now);
         assert_eq!(fog.near((5, 0), -8), State::Never);
+    }
+
+    #[test]
+    fn a_thing_is_known_on_the_level_it_stands_on() {
+        let volume = tunnel();
+        let mut fog = fog();
+        update(&mut fog, &volume, &[(agent("elder"), eye((2, 0), -8, range(ELDER_RANGE, false, true)))]);
+        let lookup = Lookup::new(&fog, &volume, (0, 0));
+        let tunnel = sim::volume::height(-8).to_f32();
+        // A ghoul in the tunnel, in sight; its flame or eyes over it too.
+        assert_eq!(lookup.at(bevy::math::Vec3::new(5.0, tunnel, 0.0)), State::Now);
+        assert_eq!(lookup.at(bevy::math::Vec3::new(5.0, tunnel + 1.1, 0.0)), State::Now);
+        assert_eq!(lookup.at(bevy::math::Vec3::new(5.4, tunnel - 0.3, 0.3)), State::Now, "on a ramp, a tile's middle");
+        // One on the ground over it, and one past the tunnel's sight: not.
+        assert_eq!(lookup.at(bevy::math::Vec3::new(5.0, 0.0, 0.0)), State::Never, "the surface over the tunnel");
+        assert_eq!(lookup.at(bevy::math::Vec3::new(15.0, tunnel, 0.0)), State::Never);
+        // From the surface, the surface: seen before once the elder walks off.
+        update(&mut fog, &volume, &[(agent("elder"), eye((5, 3), 0, ELDER_RANGE))]);
+        update(&mut fog, &volume, &[(agent("elder"), eye((-30, 3), 0, ELDER_RANGE))]);
+        let lookup = Lookup::new(&fog, &volume, (0, 0));
+        assert_eq!(lookup.at(bevy::math::Vec3::new(5.0, 0.0, 0.0)), State::Seen);
+        assert_eq!(lookup.at(bevy::math::Vec3::new(-30.0, 0.0, 3.0)), State::Now);
+        // The arena's center tile shifts it.
+        let lookup = Lookup::new(&fog, &volume, (-35, 0));
+        assert_eq!(lookup.tile(bevy::math::Vec3::new(5.0, 0.0, 3.4)), (-30, 3));
+        assert_eq!(lookup.at(bevy::math::Vec3::new(5.0, 0.0, 3.0)), State::Now);
     }
 
     #[test]

@@ -11,6 +11,16 @@
       "frames": 45
     },
     {
+      "op": "settlement_stock",
+      "depot": "tree_wood",
+      "item": "wood",
+      "units": 12
+    },
+    {
+      "op": "settlement_withdraw",
+      "depot": "tree_wood"
+    },
+    {
       "op": "walk",
       "position": [
         -12,
@@ -23,6 +33,27 @@
         -24,
         -1
       ]
+    },
+    {
+      "op": "walk",
+      "position": [
+        -30,
+        3
+      ]
+    },
+    {
+      "op": "settlement_drop"
+    },
+    {
+      "op": "settlement_place_blueprint",
+      "kind": "ballista",
+      "position": [
+        -33,
+        6
+      ]
+    },
+    {
+      "op": "settlement_cancel_build"
     },
     {
       "op": "walk",
@@ -113,7 +144,7 @@
     },
     {
       "op": "wait",
-      "frames": 300
+      "frames": 210
     },
     {
       "op": "settlement_rate",
@@ -141,19 +172,44 @@
       ]
     },
     {
+      "op": "walk",
+      "position": [
+        -20,
+        -24
+      ]
+    },
+    {
+      "op": "walk",
+      "position": [
+        -27,
+        -9
+      ]
+    },
+    {
+      "op": "wait",
+      "frames": 75
+    },
+    {
+      "op": "walk",
+      "position": [
+        -22,
+        -3
+      ]
+    },
+    {
       "op": "wait",
       "frames": 90
     },
     {
       "op": "walk",
       "position": [
-        -18,
-        -30
+        -30,
+        -12
       ]
     },
     {
       "op": "wait",
-      "frames": 120
+      "frames": 60
     }
   ]
 }
