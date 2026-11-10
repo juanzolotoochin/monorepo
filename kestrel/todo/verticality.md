@@ -4,6 +4,25 @@ Tunnels and levels: two or more floors over one x–y spot. The design is
 [`VERTICALITY.md`](../VERTICALITY.md) (decisions V1–V11). Tasks run in
 order, one agent each.
 
+## Line of sight follow-ups
+
+- **Status:** open
+- **Why:** the line of sight prototype (Done, below) only fades the
+  test walker and only shades the volume ground.
+- **What to do:** fade or dim other things out of sight while inside
+  (the collector and other scene objects, piles and their items, a
+  scenario's sprites, ghouls once they have a height); decide whether
+  the eye should follow the body within its tile (today the grid is from
+  the tile's middle, so the wedge steps a tile at a time); look at ground
+  on other levels in sight (a stair down into a pit: only the eye layer
+  blocks, and floors below the player are lit as if level); consider a
+  `view_mode` control op so demos can show both modes; tune the near-wall
+  box (`NEAR_TILES`, `NEAR_WALL`) for a turned camera and the brightness
+  by day and night (see "Lighting underground").
+- **Where:** `app/src/cutaway.rs`, `app/src/sight.rs`,
+  `app/shaders/cutaway.wesl`, `app/src/piles/`, `app/src/legacy.rs`.
+- **Found in:** the line of sight prototype.
+
 ## The Sacred Tree on a volume
 
 - **Status:** open
@@ -98,6 +117,89 @@ order, one agent each.
 - **Found in:** V.8.
 
 ## Done
+
+### Seeing inside by line of sight (prototype)
+
+- **Status:** done (branch `kestrel-verticality-sight`, no PR yet)
+- **Why:** V.6's cutaway cuts a fixed shape whatever the player can see,
+  and nibbles at the mountain outside. The idea from a devlog the user
+  shared ("Seamless Indoors-Outdoors Transition"): you only see the inside
+  when you're inside.
+- **What to do:** a prototype, the user's chosen options:
+  - outside (no ceiling over the head) nothing is cut;
+  - inside, everything above the current level's ceiling is hidden over
+    the whole view (the mountain goes), fading in and out over about
+    0.3 s as you cross a mouth;
+  - a flat line-of-sight pass on the player's level from head height:
+    what is in sight is lit, falling off with distance; what isn't is
+    dimmed, not black; the view out of a mouth has soft edges;
+  - other bodies out of sight fade out while inside;
+  - no fog of war (seen places don't stay revealed);
+  - view only: the sim, saves and the net protocol don't change;
+  - a key toggles back to V.6's cutaway to compare.
+- **Where:** `app/src/cutaway.rs`, its shaders, a new visibility module.
+- **Found in:** verticality follow-up, the user's devlog reference.
+- **Done:** the default view in volume scenes (`cutaway::ViewMode::Sight`);
+  **F7** (`cutaway::TOGGLE`; F3 and F4 are taken, F7 is free in the app and
+  the control protocol) switches to V.6's cylinder (`ViewMode::Cutaway`)
+  and back, with a corner label ("VIEW: LINE OF SIGHT (F7)" / "VIEW:
+  CUTAWAY (F7)", bottom left, 2.5 s); V.6's path is unchanged.
+  Inside test (`cutaway::follow`): `Terrain::ceiling_at` over the drawn
+  feet with a 0.7 m reach (`INSIDE_REACH`, wider than the body's 0.3 m,
+  so the roof starts going as the body goes under it rather than after
+  it is hidden); the factor moves at a constant rate, 0 to 1 in 0.3 s
+  (`sight::ease`, `sight::FADE`), drawn smoothstepped (`sight::shown`).
+  Hiding (`hidden` in both shaders, so the depth prepass cuts alike):
+  ground over the ceiling's height less 0.05 m (`HIDE_MARGIN`; the last
+  ceiling is kept while fading out) is discarded over the whole view by
+  the 4 × 4 ordered dither against the factor, so the mountain dissolves
+  in; walls under it stand, their cut tops the section colour. A 3 m wall
+  on the camera's side hid the body in the 3 m tunnel, so in a blocky box
+  of tiles from the player's tile to 4 tiles toward the camera along x
+  and z (`NEAR_TILES`) the plane is 1 m over the feet (`NEAR_WALL`); the
+  box's sides sit just off tile edges so walls are cut whole (a smooth
+  notch was tried and looked organic on voxels). Outside nothing is cut
+  (the V.6 cylinder is off in this mode); the mountain at the spawn is
+  whole. Visibility (`app/src/sight.rs`, pure): a 64 × 64 tile window
+  (`WINDOW`, the whole map) round the eye tile; a tile blocks when its
+  cell at layer floor + 3 (1.5–2 m over the feet, `EYE`) is solid
+  (`sight::blocks`); from five points in the eye tile to five in each
+  target tile, 25 rays, a grid walk (Amanatides–Woo) that must cross
+  only clear tiles before the target; the value is the share that
+  arrive (soft wedge sides); solid tiles take the best of their four
+  clear neighbours (their faces); then every tile at least 0.5 of its
+  brightest neighbour (`SPREAD`, a one-tile outward glow); recomputed only
+  when the eye tile, floor layer or `Terrain::revision` changes
+  (`sight::Key`). It goes to an R8 texture (linear sampling, world x–z
+  to uv) bound to `CutawayMaterial` (bindings 101/102, new uniform
+  fields `sight`, `window`, `eye`, `light`, `inside`). Shading
+  (`shade` in `cutaway.wesl`, blended by the factor): in sight,
+  (lit colour + 0.35 × albedo, `INSIDE_LIGHT`, since the mountain's
+  shadow still lies on the floors) × a falloff, full within 6 m (`NEAR`)
+  to 40% by 20 m (`FAR`, `FAR_LIGHT`); out of sight 25% (`DIM`), 35% of
+  the way to grey (`GREY`); the section out of sight 12% (`SECTION_DIM`),
+  so floors in sight read against the cut tops; a back face is shaded
+  where its view ray crosses the cut (`cap`), not deep down where it lies.
+  The fill light and shadows are as they were. Bodies: the test walker's
+  body has its own materials and fades by `SightView::body_alpha` (its
+  tile's visibility, 0 over the hidden height), hidden under 3%; the
+  player always shows. Tests in `sight::tests`:
+  `a_straight_tunnel_is_visible_end_to_end`,
+  `a_room_round_a_corner_is_not_visible`,
+  `the_view_out_of_a_mouth_widens_with_distance_and_has_a_soft_edge`,
+  `solid_walls_bordering_visible_floor_are_visible`,
+  `a_grid_is_recomputed_only_when_its_key_changes`,
+  `the_eye_band_is_the_head_not_the_feet`,
+  `in_the_tunnel_lab_the_tunnel_and_its_mouths_are_in_sight` and
+  `the_inside_factor_eases_over_the_fade`; `//kestrel/app:movement_test`
+  286/286. `app/demos/tunnel_lab.json` now also stops just inside the
+  west (x 7) and east (x 21) mouths. Screenshots (local
+  `tunnel_lab_demo`): outside by the mouth (whole mountain), mid-fade at
+  the west mouth, deep in the tunnel (a walled corridor, the body clear
+  in the near-wall box), looking out of each mouth (the lit wedge on the
+  ground outside), in the cave (its walls as boxes, the bridge gone), on
+  the bridge and at the dug stair (outside: nothing cut). Left open: the
+  entry "Line of sight follow-ups" above.
 
 ### V.8 Soak and demo
 

@@ -90,12 +90,16 @@ impl Service for Digging {
         let Some(terrain) = terrain else { return Digging::default() };
         let digging = Digging { pits: terrain.pits.clone(), volume: terrain.volume.clone(), revision: terrain.revision, cleared: Vec::new() };
         world.run_system_cached_with(build_ground, (terrain, center)).expect("building the dug ground");
+        if let Some(mut view) = world.get_resource_mut::<crate::cutaway::SightView>() {
+            view.reset();
+        }
         digging
     }
 
     fn systems(app: &mut App) {
         let active = in_state(WorldState::Active);
         app.init_resource::<crate::prediction::DrawnAvatar>()
+            .init_resource::<crate::cutaway::SightView>()
             .add_service_systems::<Self, _>(Phase::Mirror, (update, follow_camera).chain().run_if(active.clone()))
             .add_systems(
                 PostUpdate,
@@ -121,6 +125,7 @@ fn build_ground(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut cutaways: ResMut<Assets<crate::cutaway::CutawayMaterial>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     // A volume scene's ground is cut away over the player (`cutaway`).
     enum Ground {
@@ -131,7 +136,7 @@ fn build_ground(
         Ground::Cutaway(match cutaway {
             Some(cutaway) => cutaway.0.clone(),
             None => {
-                let material = cutaways.add(crate::cutaway::material(ground_material()));
+                let material = cutaways.add(crate::cutaway::material(ground_material(), images.add(crate::cutaway::sight_image())));
                 commands.insert_resource(crate::cutaway::CutawayGround(material.clone()));
                 material
             }

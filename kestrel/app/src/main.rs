@@ -8,6 +8,7 @@ mod character_catalog;
 mod clock_hud;
 mod combat;
 mod cutaway;
+mod sight;
 mod walker_view;
 mod control;
 mod daylight;
