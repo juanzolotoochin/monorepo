@@ -50,11 +50,13 @@ The Crawler Lab parks a **crawler** (`character/crawler.ron`, design in [`CRAWLE
 
 `app/src/vehicles.rs` draws each vehicle as a chassis, hood, roll bar and four wheels. The local player's rover is drawn from the player's own drawn transform, so the predicted driver and their rover never drift apart. Other rovers are interpolated between ticks. Each wheel eases onto the ground under it and the chassis tilts to them, so a terrace step lifts the front, then the back.
 
+A crawler is drawn from its rig, `app/actors/crawler.ron` (`app/src/crawler.rs`): the body's boxes and cylinders (timber hull, brass cab and helm, a railed cargo deck) and one leg's hip, thigh, shin and foot, mirrored to the four. Each leg is a two-bone solve from its hip on the deck to the ankle over the sim's foot, the foot upright under it and the knee bending up and outward; a foot out of reach eases the leg straight instead of snapping. A swinging foot rises over the higher of its two floors, crosses at the gait's `lift` and comes down onto its landing spot. Feet and body are interpolated between ticks; a foot the sim aims again glides to its new spot. While the local player pilots a crawler the camera's view widens by `PILOT_PULL` (1.4) and eases back after they climb down.
+
 ## Current limits
 
 - Rovers don't collide with avatars, haulers, threats or each other.
 - Clicking a point to drive to stops the rover instead of routing there.
 - The driver stands at the seat in their idle pose, and there's no on-screen "press G" prompt.
-- The rover is a built-in mesh, not a style skin.
+- The rover is a built-in mesh and the crawler a built-in rig, not style skins.
 
 `kestrel/todo/vehicles.md` lists these as tasks.

@@ -3,40 +3,6 @@
 The crawler prototype's design is [`CRAWLER.md`](../CRAWLER.md)
 (decisions C1–C12). Its tasks CR.1–CR.6 run in order, one agent each.
 
-## CR.3 Legs, IK and the camera
-
-- **Status:** open
-- **Why:** C8, C12: the legs must read.
-- **What to do:** a rig as data (`app/actors/crawler.ron`): body, cab,
-  hips, knees, shins and feet as boxes and cylinders. The view solves each
-  leg as a two-bone IK with the foot kept vertical and the knee high (C8),
-  swings feet along arcs between the sim's spots, eases the body to its
-  height and tilt, and interpolates other players' crawlers. The camera
-  pulls back while piloting.
-- **Where:** `app/src/vehicles.rs` (or `app/src/crawler.rs`),
-  `app/actors/`, the camera.
-- **Found in:** crawler design.
-- **Tests:** the IK reaches every planted foot with the knee over the hip
-  line; screenshots and a short video walking the lab.
-- **Notes from CR.2:** the sim's feet are `VehicleState::legs`
-  (`sim::settlement::crawler`): each foot's `spot` and `floor` (a tile's
-  level floor height), and while it swings its `Swing` (`to`, `floor`,
-  `progress` of the gait's `swing` ticks; at `progress == swing` it waits
-  for reach). Draw a swing from `spot` to `to` with `gait.lift` at the top
-  (the placeholder `draw_crawler` hops along a sine). The body is level at
-  `VehicleState::height` (its feet's level; the deck `deck` over it, the
-  hips at the deck); the sim eases it at `lift` (2.5 m/s), so ease it in
-  the view too. Feet aren't interpolated for other players' crawlers yet.
-  Ground under the body's box stays under its belly, 1.2 m under the deck
-  (`crawler::BELLY`); a rig hanging lower would clip the mesa's edge.
-- **Notes from CR.1:** `app/src/vehicles.rs` draws a crawler (a vehicle
-  whose character has a `crawler`) as a PLACEHOLDER: a timber box its
-  length and width hanging under the deck, a brass cab and rail on it,
-  and brass posts under the hips stretched to the ground
-  (`spawn_crawler`). Replace it; the wheel ground there now reads the
-  volume's floor as the sim does. The demo is `crawler_lab_demo`
-  (`app/demos/crawler_lab.json`).
-
 ## CR.4 Riders
 
 - **Status:** open
@@ -48,6 +14,13 @@ The crawler prototype's design is [`CRAWLER.md`](../CRAWLER.md)
 - **Found in:** crawler design.
 - **Tests:** four players board in order; a fifth can't; climbing down
   beside it, never into a pit.
+- **Notes from CR.3:** the deck's top is the rig's y = 0
+  (`actors/crawler.ron`): the cab covers z 0.8 to 2.3 m and stands 1.3 m
+  over it, the helm is at z 0.6, the cargo deck (crates, rail) z -0.4 to
+  -2.9. Seats for riders want clear deck: around (±0.7, -0.3) or on the
+  crates; move pieces in the rig if needed. The camera pull keys on the
+  drawn avatar's seat being a crawler's (`vehicles::draw`); decide whether
+  riders get it too.
 - **Notes from CR.2:** riders seated on the deck stay out of
   `crawler::standing` (it skips any avatar with a seat). Climbing down
   must not put an elder under a foot about to land: the feet avoid
@@ -70,6 +43,10 @@ The crawler prototype's design is [`CRAWLER.md`](../CRAWLER.md)
 - **Where:** `sim/src/settlement/vehicle.rs`, `combat.rs`, `messages.rs`.
 - **Found in:** crawler design.
 - **Tests:** a shove; a stomp; never a foot on an elder or sprite.
+- **Notes from CR.3:** a landing's view is `crawler::swing_point` at
+  `t = 1`: the sole comes down the last 40% of the swing fast, so a stomp
+  effect (dust, a thud) fits the tick the `Swing` becomes planted. The
+  drawn foot's pad is 0.7 m across (the rig's foot pieces).
 - **Notes from CR.2:** `foothold` already refuses spots on standing
   agents (`Standing`, radius + 0.4 m, within 1 m of the floor) and leaves
   threats out of that list, so a stomp is a landing (a `Swing` becoming
@@ -95,6 +72,16 @@ The crawler prototype's design is [`CRAWLER.md`](../CRAWLER.md)
 - **Where:** sim tests, `app/demos/`, docs.
 - **Found in:** crawler design.
 - **Tests:** the soak; the full suite.
+- **Notes from CR.3:** turning in place right after stopping at the pit
+  stalls (the body won't turn: a front foot's turned spot is over the pit
+  edge); the demo backs off 5 s first, and a test path that backed 3 s
+  still stalled at 41°. See "Crawler turns in place beside a pit". The
+  demo now climbs the plateau's south face (toward the camera; the north
+  face can't be seen from the follow camera) and ends turning south and
+  trotting, about 100 s. Tuning the gait or `lift` changes the view's
+  arcs too; the
+  rig's lengths (`actors/crawler.ron`) are checked against `reach` in
+  `crawler::tests`.
 - **Notes from CR.2:** `crawler_lab_tests::a_minute_driving_round_the_lab_validates`
   is the short soak (random sticks, `validate` and `validate_footholds`
   every tick); lengthen it. Tuning knobs: `WORKSPACE` (2 m) and `SETTLE`
@@ -135,7 +122,7 @@ The crawler prototype's design is [`CRAWLER.md`](../CRAWLER.md)
 
 - **Status:** open
 - **Why:** `app/src/vehicles.rs` builds a fixed mesh, ignoring the character's `view.skin` and the scene's style.
-- **What to do:** let a style supply the `rover` skin (chassis and wheel parts), with the built-in mesh as a fallback.
+- **What to do:** let a style supply the `rover` skin (chassis and wheel parts), with the built-in mesh as a fallback. The crawler's rig (`app/actors/crawler.ron`) is built in the same way: a style's `crawler` skin could re-dress its pieces by finish.
 - **Where:** `kestrel/app/src/vehicles.rs`, `style.rs`.
 - **Found in:** the vehicle prototype.
 
@@ -151,7 +138,113 @@ The crawler prototype's design is [`CRAWLER.md`](../CRAWLER.md)
 - **Where:** `kestrel/sim/src/settlement/crawler.rs`.
 - **Found in:** CR.2 of the crawler.
 
+## Crawler turns in place beside a pit
+
+- **Status:** open
+- **Why:** stopped with its front feet at the 3 m pit's edge, the crawler
+  turned in place (stick 90° off) doesn't turn at all, or turns a little
+  and stops, and a boost doesn't free it: the feet's turned resting spots
+  fall over the pit, no foothold is found, and the body can't turn on the
+  feet it has.
+- **What to do:** when the ideal spot has no foothold, try spots nearer
+  the body (or the body's side away from the gap) before staying down;
+  or let the turn walk the body back a little.
+- **Where:** `kestrel/sim/src/settlement/crawler.rs` (`foothold`, `fits`).
+- **Found in:** CR.3 of the crawler (the demo's turn at the pit).
+
+## Predict a joined pilot's crawler feet
+
+- **Status:** open
+- **Why:** on a joined client the pilot's body is drawn predicted (ahead
+  of the confirmed world) but its feet come from the confirmed ticks, so
+  a swing starts a round trip late under a body already moving.
+- **What to do:** keep the replay's vehicle (`AvatarReplay::vehicle`)
+  per predicted tick in `prediction::replay` and `DrawnState`, and draw
+  the local pilot's feet from it.
+- **Where:** `kestrel/app/src/prediction.rs`, `vehicles.rs`.
+- **Found in:** CR.3 of the crawler.
+
 ## Done
+
+## CR.3 Legs, IK and the camera
+
+- **Status:** done (branch `kestrel-crawler`, PR to come with CR.6)
+- **Why:** C8, C12: the legs must read.
+- **What to do:** a rig as data (`app/actors/crawler.ron`): body, cab,
+  hips, knees, shins and feet as boxes and cylinders. The view solves each
+  leg as a two-bone IK with the foot kept vertical and the knee high (C8),
+  swings feet along arcs between the sim's spots, eases the body to its
+  height and tilt, and interpolates other players' crawlers. The camera
+  pulls back while piloting.
+- **Where:** `app/src/vehicles.rs` (or `app/src/crawler.rs`),
+  `app/actors/`, the camera.
+- **Found in:** crawler design.
+- **Tests:** the IK reaches every planted foot with the knee over the hip
+  line; screenshots and a short video walking the lab.
+- **Done:** the rig is data, `app/actors/crawler.ron`, read by
+  `app/src/crawler.rs` (`Rig`, built in, compiled with the app): the
+  body's pieces (boxes and cylinders, each `turn`ed by degrees, in the
+  deck's frame) and one leg's `hip` pieces and `thigh`, `shin` and `foot`
+  segments, each a length and pieces in its own frame (y along it, z to
+  the knee's side); the other legs mirror it, at the sim's `hip` offsets.
+  Finishes are the Brasswood palette's (timber, dark timber, brass, iron
+  darkened, leather, canvas, cloth, a lamp's glow). The body: a timber
+  hull hanging no lower than `BELLY`, a brass-edged plank deck, a prow
+  lamp, a timber cab with a window band, brass roof and iron stack on the
+  front half, the helm on the middle where the pilot stands, and a railed
+  cargo deck of crates under canvas behind. Legs: thigh 1.8 m, shin 3.4
+  m, foot 0.45 m (thigh and shin reach 5.2 m, past `reach` 4.5 m by the
+  soft zone; the shin nearly twice the thigh keeps the knee high).
+  `crawler::solve`: hip (on the deck) to the ankle `foot` over the sole,
+  the knee in the plane through hip and ankle on the side of up and a
+  little outward (`KNEE_OUT`), so it never flips; out of reach the leg
+  eases straight over `SOFT_REACH` (0.25 m) instead of snapping, and a too
+  near ankle is drawn as far as the folded leg goes. `swing_point`: the
+  sole rises in the first 40% of the swing to `lift` over the higher of
+  its two floors, crosses between 20% and 80% (smoothstep) and comes down
+  in the last 40%. `vehicles::draw_crawler` replaces the placeholder: the
+  body level at the sim's height (interpolated, or the pilot's drawn
+  transform for the local pilot as before; no bob, it read fine without),
+  each foot's sole interpolated between the last two ticks' states
+  (`foot_point` on each), and a foot whose spot jumps (faster than
+  `FOOT_JUMP`, 30 m/s: the sim aimed a waiting swing again) glides there,
+  the gap halving every 0.06 s. Camera: `Vehicles::pull` eases (1.6/s)
+  toward `PILOT_PULL` (1.4) while the drawn local avatar's seat is a
+  crawler and back to 1 after; `effects::camera_feedback` scales the
+  orthographic view's height by it. The pilot reads on the deck behind
+  the cab. Demo `crawler_lab.json`: it now climbs the plateau's south
+  face (the north face is hidden from the follow camera), and after
+  stopping at the pit it backs off 5 s, turns in place south and trots
+  south along the strip between trench and pit. Tests: `crawler::tests` (the rig loads, validates,
+  reaches past `reach`, hangs no lower than the belly, and rejects bad
+  lengths and pieces; the solve's sole on its target, upright, the knee
+  0.5 m over the hip and outward at rest, easing past reach without a
+  jump; in the lab, up and down the step, west across the trench,
+  trotting, and turning in place by the spawn, every planted foot reached
+  within 1 mm with the knee off the hip–ankle line toward up and out, the
+  knee over the hip itself for 98% of planted feet (not for a far rear
+  foot under a body raised by its front feet on the step), and each
+  swing's arc above the volume's top floor at 99 samples), `vehicles::tests`
+  (the pull's easing; in the Crawler Lab app, the camera pulls back to
+  `PILOT_PULL` piloting and eases in after climbing down).
+- **Notes from CR.2:** the sim's feet are `VehicleState::legs`
+  (`sim::settlement::crawler`): each foot's `spot` and `floor` (a tile's
+  level floor height), and while it swings its `Swing` (`to`, `floor`,
+  `progress` of the gait's `swing` ticks; at `progress == swing` it waits
+  for reach). Draw a swing from `spot` to `to` with `gait.lift` at the top
+  (the placeholder `draw_crawler` hops along a sine). The body is level at
+  `VehicleState::height` (its feet's level; the deck `deck` over it, the
+  hips at the deck); the sim eases it at `lift` (2.5 m/s), so ease it in
+  the view too. Feet aren't interpolated for other players' crawlers yet.
+  Ground under the body's box stays under its belly, 1.2 m under the deck
+  (`crawler::BELLY`); a rig hanging lower would clip the mesa's edge.
+- **Notes from CR.1:** `app/src/vehicles.rs` draws a crawler (a vehicle
+  whose character has a `crawler`) as a PLACEHOLDER: a timber box its
+  length and width hanging under the deck, a brass cab and rail on it,
+  and brass posts under the hips stretched to the ground
+  (`spawn_crawler`). Replace it; the wheel ground there now reads the
+  volume's floor as the sim does. The demo is `crawler_lab_demo`
+  (`app/demos/crawler_lab.json`).
 
 ## CR.2 Gait and footholds in the sim
 

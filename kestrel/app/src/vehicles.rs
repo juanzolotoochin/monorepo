@@ -9,12 +9,13 @@
 //! Each wheel sits on the ground under its drawn position, eased so a
 //! terrace step lifts it over a few frames, and the chassis tilts to them.
 //!
-//! PLACEHOLDER until CR.3's rig (`kestrel/todo/vehicles.md`): a crawler (a
-//! vehicle with a `crawler` section) is drawn as a box its body's size, its
-//! top at the deck, level, with a cab on it and a post standing on each of
-//! its feet (`VehicleState::legs`) up to the deck: a planted foot where the
-//! simulation put it, a swinging one along a hop from where it lifted to
-//! where it lands.
+//! A crawler (a vehicle with a `crawler` section) is drawn from its rig
+//! (`crawler::Rig`, `actors/crawler.ron`): its body level at the height the
+//! simulation gives it, and each leg solved from its hip to its foot
+//! (`crawler::solve`). Feet stand where the simulation put them and swing
+//! along arcs between its spots (`crawler::swing_point`), interpolated
+//! between the last two ticks as the body is. While the local player pilots
+//! one, the camera pulls back (`Vehicles::pull`).
 
 use bevy::prelude::*;
 use fx::Fx;
@@ -33,15 +34,37 @@ const CHASSIS_LIFT: f32 = 0.46;
 const WHEEL_EASE: f32 = 22.0;
 /// Higher than the wheels' ground by this, the rover is in the air.
 const AIRBORNE: f32 = 0.05;
-/// A placeholder crawler's body, top to bottom (`crawler::BELLY`, which the
-/// simulation keeps clear of the ground), and its legs' thickness.
-const CRAWLER_BODY: f32 = 1.2;
-const CRAWLER_LEG: f32 = 0.35;
+/// How much farther the camera stands while the local player pilots a
+/// crawler: its view's height grows by this.
+pub const PILOT_PULL: f32 = 1.4;
+/// How quickly the camera pulls back or eases in, per second.
+const PULL_EASE: f32 = 1.6;
+/// A drawn foot whose spot moves faster than this (m/s) jumped: the
+/// simulation aimed its swing again. It glides there instead, the gap
+/// halving every `FOOT_GLIDE` seconds.
+const FOOT_JUMP: f32 = 30.0;
+const FOOT_GLIDE: f32 = 0.06;
 
 /// The rovers drawn in this world.
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct Vehicles {
     parts: Option<Parts>,
+    /// How far the camera is pulled back: 1 on foot, easing toward
+    /// `PILOT_PULL` while the local player pilots a crawler.
+    pull: f32,
+}
+
+impl Default for Vehicles {
+    fn default() -> Self {
+        Vehicles { parts: None, pull: 1.0 }
+    }
+}
+
+impl Vehicles {
+    /// The camera's pull (`effects::camera_feedback` scales its view by it).
+    pub fn pull(&self) -> f32 {
+        self.pull
+    }
 }
 
 struct Parts {
@@ -52,10 +75,21 @@ struct Parts {
     paint: Handle<StandardMaterial>,
     trim: Handle<StandardMaterial>,
     tire: Handle<StandardMaterial>,
-    /// A unit cube, scaled to a crawler's body, cab and legs.
+    /// A unit cube and a unit cylinder, scaled to a crawler's pieces, and
+    /// its finishes (`crawler::Finish::ALL` order).
     block: Handle<Mesh>,
-    brass: Handle<StandardMaterial>,
-    timber: Handle<StandardMaterial>,
+    drum: Handle<Mesh>,
+    finishes: Vec<Handle<StandardMaterial>>,
+}
+
+/// A crawler's drawn legs: each leg's hip, thigh, shin and foot, and where
+/// each sole was drawn last frame.
+struct DrawnLegs {
+    def: content::character::CrawlerDef,
+    segments: [[Entity; 4]; 4],
+    /// Each foot's spot last frame, and how far from it the foot is drawn
+    /// while it glides over a jump.
+    last: Option<([Vec3; 4], [Vec3; 4])>,
 }
 
 /// A drawn rover: its root turns with the heading, the chassis tilts.
@@ -64,8 +98,8 @@ pub struct Rover {
     index: usize,
     chassis: Entity,
     wheels: [Entity; 4],
-    /// A crawler's legs and deck: drawn as posts and a body box.
-    crawler: Option<content::character::CrawlerDef>,
+    /// A crawler's legs: drawn from its rig.
+    crawler: Option<DrawnLegs>,
     /// Each wheel's drawn contact height, eased toward the ground.
     contact: Option<[f32; 4]>,
     /// How far each wheel has turned, in radians.
@@ -100,14 +134,14 @@ fn parts(meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) ->
         trim: material(materials, 0.18, 0.18, 0.2, 0.7),
         tire: material(materials, 0.08, 0.08, 0.08, 0.95),
         block: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
-        brass: material(materials, 0.78, 0.56, 0.24, 0.4),
-        timber: material(materials, 0.42, 0.28, 0.15, 0.85),
+        drum: meshes.add(Cylinder::new(0.5, 1.0)),
+        finishes: crate::crawler::Finish::ALL.iter().map(|f| materials.add(f.material())).collect(),
     }
 }
 
 fn spawn(commands: &mut Commands, parts: &Parts, index: usize, wheelbase: f32, track: f32, crawler: Option<content::character::CrawlerDef>) -> Entity {
     if let Some(c) = crawler {
-        return spawn_crawler(commands, parts, index, wheelbase, track, c);
+        return spawn_crawler(commands, parts, index, c);
     }
     let chassis = commands
         .spawn((Mesh3d(parts.chassis.clone()), MeshMaterial3d(parts.paint.clone()), Transform::default()))
@@ -131,35 +165,41 @@ fn spawn(commands: &mut Commands, parts: &Parts, index: usize, wheelbase: f32, t
     root.id()
 }
 
-/// A placeholder crawler: a timber body box its length and width with a
-/// brass cab on its front half and a brass rail round its deck, and four
-/// brass posts under the hips (`draw` stretches them to the ground).
-fn spawn_crawler(commands: &mut Commands, parts: &Parts, index: usize, wheelbase: f32, track: f32, c: content::character::CrawlerDef) -> Entity {
-    let (length, width) = (c.length.to_f32(), c.width.to_f32());
-    let block = |material: &Handle<StandardMaterial>, at: Vec3, size: Vec3| {
-        (Mesh3d(parts.block.clone()), MeshMaterial3d(material.clone()), Transform::from_translation(at).with_scale(size))
+/// A crawler from its rig: the body under its root, and each leg's hip and
+/// segments, placed by `draw_crawler`.
+fn spawn_crawler(commands: &mut Commands, parts: &Parts, index: usize, c: content::character::CrawlerDef) -> Entity {
+    let rig = crate::crawler::builtin();
+    let piece = |p: &crate::crawler::Piece| {
+        let mesh = match p.shape {
+            crate::crawler::Shape::Box => parts.block.clone(),
+            crate::crawler::Shape::Cylinder => parts.drum.clone(),
+        };
+        let finish = crate::crawler::Finish::ALL.iter().position(|&f| f == p.material).expect("every finish");
+        (Mesh3d(mesh), MeshMaterial3d(parts.finishes[finish].clone()), p.transform())
     };
-    let chassis = commands
-        .spawn(block(&parts.timber, Vec3::ZERO, Vec3::new(width, CRAWLER_BODY, length)))
-        .with_children(|body| {
-            // The body's children are in its unit cube.
-            let cab = Vec3::new(1.8 / width, 1.5 / CRAWLER_BODY, 1.8 / length);
-            body.spawn(block(&parts.brass, Vec3::new(0.0, 0.5 + cab.y / 2.0, 0.25), cab));
-            body.spawn(block(&parts.brass, Vec3::new(0.0, 0.5, 0.0), Vec3::new(1.02, 0.12, 1.02)));
-        })
-        .id();
-    let local = [(-track, wheelbase), (track, wheelbase), (-track, -wheelbase), (track, -wheelbase)].map(|(x, z)| Vec3::new(x / 2.0, 0.0, z / 2.0));
-    // Posts on the feet, placed by `draw`.
-    let legs = local.map(|at| commands.spawn(block(&parts.brass, at, Vec3::new(CRAWLER_LEG, 1.0, CRAWLER_LEG))).id());
+    let mut group = |pieces: &[crate::crawler::Piece]| {
+        commands
+            .spawn((Transform::default(), Visibility::default()))
+            .with_children(|g| {
+                for p in pieces {
+                    g.spawn(piece(p));
+                }
+            })
+            .id()
+    };
+    let chassis = group(&rig.body);
+    let leg = &rig.leg;
+    let segments = [(); 4].map(|_| [&leg.hip[..], &leg.thigh.pieces[..], &leg.shin.pieces[..], &leg.foot.pieces[..]].map(&mut group));
+    let drawn = DrawnLegs { def: c, segments, last: None };
     let mut root = commands.spawn((
-        Rover { index, chassis, wheels: legs, crawler: Some(c), contact: None, spin: 0.0, last: None },
+        Rover { index, chassis, wheels: [chassis; 4], crawler: Some(drawn), contact: None, spin: 0.0, last: None },
         WorldScoped::default(),
         Transform::default(),
         Visibility::default(),
     ));
     root.add_child(chassis);
-    for leg in legs {
-        root.add_child(leg);
+    for entity in segments.iter().flatten() {
+        root.add_child(*entity);
     }
     root.id()
 }
@@ -199,6 +239,11 @@ fn draw(
     if current.vehicles.is_empty() {
         return;
     }
+    // The vehicle the local player is drawn sitting in, if any.
+    let mine = drawn.0.as_ref().and_then(|d| d.avatar().seat).and_then(sim::settlement::Seat::vehicle).map(usize::from);
+    let dt = time.delta_secs();
+    let piloting = mine.and_then(|i| current.vehicles.get(i)).is_some_and(|v| current.characters[v.character as usize].crawler.is_some());
+    vehicles.pull = eased_pull(vehicles.pull, piloting, dt);
     let parts = vehicles.parts.get_or_insert_with(|| parts(&mut meshes, &mut materials));
     let tuning = |v: &VehicleState| current.characters[v.character as usize].vehicle.expect("a vehicle character");
     let drawn_count = rovers.iter().count();
@@ -206,9 +251,6 @@ fn draw(
         let t = tuning(v);
         spawn(&mut commands, parts, index, t.wheelbase.to_f32(), t.track.to_f32(), current.characters[v.character as usize].crawler);
     }
-    // The vehicle the local player is drawn sitting in, if any.
-    let mine = drawn.0.as_ref().and_then(|d| d.avatar().seat).and_then(sim::settlement::Seat::vehicle).map(usize::from);
-    let dt = time.delta_secs();
     for (entity, mut rover) in &mut rovers {
         let Some(v) = current.vehicles.get(rover.index) else { continue };
         let t = tuning(v);
@@ -219,8 +261,8 @@ fn draw(
             }
             _ => interpolated(&mirror, rover.index, v),
         };
-        if let (Some(c), Some(legs)) = (rover.crawler, &v.legs) {
-            draw_crawler(&mut transforms, &rover, entity, &mirror, &pose, &c, legs);
+        if rover.crawler.is_some() && v.legs.is_some() {
+            draw_crawler(&mut transforms, &mut rover, entity, &mirror, &pose, v, dt);
             continue;
         }
         // The ground under each wheel where it is drawn: in a volume, the
@@ -267,44 +309,126 @@ fn draw(
     }
 }
 
-/// A placeholder crawler: its body level under its deck, at the height the
-/// simulation gives it, and a post on each foot up to the deck. A swinging
-/// foot hops from where it lifted to where it lands, `lift` at the top.
+/// The camera's pull after `dt` seconds more, easing toward `PILOT_PULL`
+/// while piloting a crawler and back to 1 after.
+pub fn eased_pull(pull: f32, piloting: bool, dt: f32) -> f32 {
+    let target = if piloting { PILOT_PULL } else { 1.0 };
+    pull + (target - pull) * (1.0 - (-PULL_EASE * dt).exp())
+}
+
+/// A crawler: its body level at the height the simulation gives it, its
+/// deck `deck` over that, and each leg solved from its hip to its foot.
+/// Feet are interpolated between the last two ticks; a foot whose spot
+/// jumps (`FOOT_JUMP`) glides there.
 fn draw_crawler(
     transforms: &mut Query<&mut Transform, Without<Player>>,
-    rover: &Rover,
+    rover: &mut Rover,
     entity: Entity,
     mirror: &WorldMirror,
     pose: &Pose,
-    c: &content::character::CrawlerDef,
-    legs: &sim::settlement::crawler::Legs,
+    v: &VehicleState,
+    dt: f32,
 ) {
+    let (index, chassis) = (rover.index, rover.chassis);
+    let drawn = rover.crawler.as_mut().expect("a crawler");
+    let c = drawn.def;
+    let legs = v.legs.as_ref().expect("a crawler's legs");
     let deck = pose.base + c.deck.to_f32();
     let root = Transform::from_translation(pose.at).with_rotation(Quat::from_rotation_y(pose.heading));
     if let Ok(mut t) = transforms.get_mut(entity) {
         *t = root;
     }
-    if let Ok(mut chassis) = transforms.get_mut(rover.chassis) {
-        chassis.translation.y = deck - CRAWLER_BODY / 2.0;
-        chassis.rotation = Quat::IDENTITY;
+    if let Ok(mut t) = transforms.get_mut(chassis) {
+        *t = Transform::from_xyz(0.0, deck, 0.0);
     }
-    let gait = legs.gait.def(c);
+    let view = |p| mirror.to_view(p);
+    let before = mirror.previous.as_ref().and_then(|p| p.vehicles.get(index)).and_then(|b| b.legs.as_ref()).unwrap_or(legs);
+    let target: [Vec3; 4] = std::array::from_fn(|i| {
+        let a = crate::crawler::foot_point(&before.feet[i], before, &c, view);
+        a.lerp(crate::crawler::foot_point(&legs.feet[i], legs, &c, view), mirror.alpha)
+    });
+    let dt = dt.max(0.0);
+    let jump = (FOOT_JUMP * dt).max(1.0);
+    let offset: [Vec3; 4] = match drawn.last {
+        // A crawler that moved far (a new scene, a respawn) snaps.
+        Some((last, offset)) if last.iter().zip(&target).all(|(l, t)| l.distance(*t) < 6.0) => std::array::from_fn(|i| {
+            let glide = offset[i] * 0.5f32.powf(dt / FOOT_GLIDE);
+            if last[i].distance(target[i]) > jump { glide + last[i] - target[i] } else { glide }
+        }),
+        _ => [Vec3::ZERO; 4],
+    };
+    drawn.last = Some((target, offset));
+    let shown: [Vec3; 4] = std::array::from_fn(|i| target[i] + offset[i]);
     let to_local = root.compute_affine().inverse();
-    for (foot, &post) in legs.feet.iter().zip(&rover.wheels) {
-        let (spot, floor) = match &foot.swing {
-            Some(s) => {
-                let t = s.progress as f32 / gait.swing as f32;
-                let at = mirror.to_view(foot.spot).lerp(mirror.to_view(s.to), t);
-                let hop = gait.lift.to_f32() * (std::f32::consts::PI * t).sin();
-                (at, foot.floor.to_f32() + (s.floor - foot.floor).to_f32() * t + hop)
+    let turn = root.rotation.inverse();
+    let rig = crate::crawler::builtin();
+    for (leg, segments) in drawn.segments.iter().enumerate() {
+        let (hip, out) = crate::crawler::hip_local(&c, leg, deck);
+        let out = root.rotation * out;
+        let solved = crate::crawler::solve(&rig.leg, root.transform_point(hip), out, shown[leg]);
+        for (frame, &segment) in solved.frames(out).iter().zip(segments) {
+            if let Ok(mut t) = transforms.get_mut(segment) {
+                *t = Transform::from_translation(to_local.transform_point3(frame.translation)).with_rotation(turn * frame.rotation);
             }
-            None => (mirror.to_view(foot.spot), foot.floor.to_f32()),
-        };
-        if let Ok(mut p) = transforms.get_mut(post) {
-            let length = (deck - floor).max(0.1);
-            let local = to_local.transform_point3(Vec3::new(spot.x, 0.0, spot.z));
-            p.translation = Vec3::new(local.x, floor + length / 2.0, local.z);
-            p.scale.y = length;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_pull_eases_out_while_piloting_and_back_after() {
+        let mut pull = 1.0;
+        for _ in 0..90 {
+            pull = eased_pull(pull, true, 1.0 / 30.0);
+        }
+        assert!((pull - PILOT_PULL).abs() < 0.05 * PILOT_PULL, "pulled back in 3 s: {pull}");
+        let half = eased_pull(1.0, true, 0.2);
+        assert!(half > 1.0 && half < 1.0 + (PILOT_PULL - 1.0) / 2.0, "eased, not snapped: {half}");
+        for _ in 0..90 {
+            pull = eased_pull(pull, false, 1.0 / 30.0);
+        }
+        assert!((pull - 1.0).abs() < 0.03, "back in: {pull}");
+    }
+
+    /// In the Crawler Lab the camera pulls back once the elder pilots the
+    /// crawler, and eases back in once they climb down.
+    #[test]
+    fn the_camera_pulls_back_while_piloting_a_crawler() {
+        let script = serde_json::json!({
+            "version": 1, "scene": "crawler-lab", "fps": 30, "width": 640, "height": 480, "max_frames": 600,
+            "steps": [
+                { "op": "wait", "frames": 30 },
+                { "op": "walk", "position": [0.6, 0] },
+                { "op": "wait", "frames": 20 },
+                { "op": "board" },
+                { "op": "wait", "frames": 120 },
+                { "op": "board" },
+                { "op": "wait", "frames": 150 }
+            ]
+        });
+        let options = crate::control::Options { simulation: true, script: Some(serde_json::from_value(script).unwrap()), ..default() };
+        let library = crate::assets::SceneLibrary::new();
+        let index = library.index("crawler-lab").unwrap();
+        let hub = crate::control::Hub::new(options.clone()).unwrap();
+        let mut app = crate::test_app(options, library, hub, crate::flow::Launch::single_player(index));
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f64(1.0 / 30.0)));
+        crate::start_world(&mut app);
+        let (mut most, mut piloted, mut last) = (1.0f32, false, 1.0);
+        for _ in 0..500 {
+            app.update();
+            let drawn = app.world().resource::<crate::prediction::DrawnAvatar>().0.as_ref().and_then(|d| d.avatar().seat);
+            piloted |= drawn.is_some();
+            last = app.world().get_resource::<Vehicles>().map_or(1.0, Vehicles::pull);
+            most = most.max(last);
+            if app.world().resource::<crate::control::Hub>().finished.is_some() {
+                break;
+            }
+        }
+        assert!(piloted, "the elder boarded");
+        assert!(most > PILOT_PULL - 0.05, "pulled back to {most}");
+        assert!(last < 1.05, "eased back in to {last}");
     }
 }
