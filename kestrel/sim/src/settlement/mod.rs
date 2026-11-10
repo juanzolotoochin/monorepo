@@ -1012,6 +1012,25 @@ impl Settlement {
                 crawler::check_reach(v, c)?;
             }
         }
+        self.validate_seats()
+    }
+
+    /// Every vehicle seat holds one elder at most, and a rider sits on a
+    /// crawler's deck, in one of its places (CR.4).
+    fn validate_seats(&self) -> Result<(), String> {
+        let mut taken = std::collections::BTreeSet::new();
+        for (i, seat) in self.agents.iter().enumerate().filter_map(|(i, a)| Some((i, a.avatar()?.seat?))) {
+            let Some(ix) = seat.aboard() else { continue };
+            let v = self.vehicles.get(ix as usize).ok_or_else(|| format!("agent {i} aboard a missing vehicle {ix}"))?;
+            if let Some(place) = seat.place() {
+                if self.characters[v.character as usize].crawler.is_none() || place as usize >= crawler::RIDERS.len() {
+                    return Err(format!("agent {i} rides vehicle {ix} in no place {place}"));
+                }
+            }
+            if !taken.insert((ix, seat.place())) {
+                return Err(format!("agent {i} shares a seat on vehicle {ix}"));
+            }
+        }
         Ok(())
     }
 

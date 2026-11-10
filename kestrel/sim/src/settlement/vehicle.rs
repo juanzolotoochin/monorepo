@@ -107,6 +107,16 @@ impl VehicleState {
         (self.position, self.height + tuning(def).seat)
     }
 
+    /// Where the driver (`None`) or the rider in `place` sits: a rider on
+    /// a crawler's deck at `crawler::RIDERS`, as high as the driver.
+    pub fn seat_at(&self, def: &CharacterDef, place: Option<u8>) -> (FxVec2, Fx) {
+        let (position, height) = self.seat(def);
+        match place {
+            Some(place) => (Pose::of(self).at(crawler::RIDERS[place as usize]), height),
+            None => (position, height),
+        }
+    }
+
     /// Meters per second along the ground.
     pub fn velocity(&self) -> FxVec2 {
         heading_vector(self.heading) * self.speed.mul_int(content::TICKS_PER_SECOND as i64)
@@ -332,12 +342,35 @@ impl Settlement {
         self.agents.iter().position(|a| a.avatar().is_some_and(|p| p.seat == Some(Seat::Vehicle(vehicle))))
     }
 
+    /// The agent riding vehicle `vehicle` in `place`, if anyone is.
+    pub fn rider_of(&self, vehicle: VehicleIx, place: u8) -> Option<usize> {
+        self.agents.iter().position(|a| a.avatar().is_some_and(|p| p.seat == Some(Seat::Rider { vehicle, place })))
+    }
+
+    /// The free seat of vehicle `ix` for an elder at `from`: the driver's
+    /// first, then, on a crawler, the nearest free rider's place on the
+    /// deck (the lower place on a tie). `None` when every seat is taken.
+    fn free_seat(&self, ix: VehicleIx, from: FxVec2) -> Option<Seat> {
+        if self.driver_of(ix).is_none() {
+            return Some(Seat::Vehicle(ix));
+        }
+        let v = &self.vehicles[ix as usize];
+        self.characters[v.character as usize].crawler.as_ref()?;
+        (0..crawler::RIDERS.len() as u8)
+            .filter(|&place| self.rider_of(ix, place).is_none())
+            .min_by_key(|&place| ((Pose::of(v).at(crawler::RIDERS[place as usize]) - from).length_squared(), place))
+            .map(|place| Seat::Rider { vehicle: ix, place })
+    }
+
     /// Stage 5: players climb into the nearest free seat in reach, in
     /// command order (players in order, `World::apply_commands`), so the
     /// first to reach for a seat gets it.
     ///
     /// - A vehicle is in reach within `BOARD_REACH` of touching it and free
-    ///   while nobody drives it, as it always was.
+    ///   while nobody drives it, as it always was. A crawler (CR.4) is in
+    ///   reach within `BOARD_REACH` of touching its body's box, and free
+    ///   while any of its four seats is: the cab first, then the nearest
+    ///   free place on the deck (`free_seat`).
     /// - A building (D3) is in reach while its slot spot is within the
     ///   interact reach, so the boarding key and interact (which names the
     ///   building, `building`) reach the same. Only a built one counts; it
@@ -364,15 +397,18 @@ impl Settlement {
             let (position, radius) = (a.body.position, a.radius());
             let vehicle = (0..self.vehicles.len())
                 .filter(|_| wanted.is_none())
-                .filter(|&ix| self.driver_of(ix as VehicleIx).is_none())
-                .map(|ix| {
+                .filter_map(|ix| Some((ix, self.free_seat(ix as VehicleIx, position)?)))
+                .map(|(ix, seat)| {
                     let v = &self.vehicles[ix];
-                    let reach = self.characters[v.character as usize].body.radius + radius + BOARD_REACH;
-                    ((v.position - position).length_squared(), reach, ix)
+                    let def = &self.characters[v.character as usize];
+                    match &def.crawler {
+                        Some(c) => (crawler::box_distance_squared(Pose::of(v), c, position), radius + BOARD_REACH, (ix, seat)),
+                        None => ((v.position - position).length_squared(), def.body.radius + radius + BOARD_REACH, (ix, seat)),
+                    }
                 })
                 .filter(|&(d2, reach, _)| d2 <= reach * reach)
-                .min_by_key(|&(d2, _, ix)| (d2, ix))
-                .map(|(d2, _, ix)| (d2, ix));
+                .min_by_key(|&(d2, _, (ix, _))| (d2, ix))
+                .map(|(d2, _, seat)| (d2, seat));
             // Built buildings in reach, nearest first, with why each can't
             // be boarded, if it can't.
             let mut buildings: Vec<(Fx, BuildingIx, Option<BundleRefusal>)> = (0..self.buildings.len() as BuildingIx)
@@ -388,8 +424,8 @@ impl Settlement {
             buildings.sort_by_key(|&(d2, b, _)| (d2, b));
             let building = buildings.iter().find(|(_, _, refusal)| refusal.is_none()).map(|&(d2, b, _)| (d2, b));
             match (vehicle, building) {
-                (Some((dv, ix)), Some((db, _))) if dv <= db => self.drive_off(agent, ix),
-                (Some((_, ix)), None) => self.drive_off(agent, ix),
+                (Some((dv, (ix, seat))), Some((db, _))) if dv <= db => self.drive_off(agent, ix, seat),
+                (Some((_, (ix, seat))), None) => self.drive_off(agent, ix, seat),
                 (_, Some((_, b))) => self.possess(agent, b, terrain),
                 (None, None) => {
                     let reason = match buildings.first() {
@@ -405,12 +441,15 @@ impl Settlement {
         }
     }
 
-    /// Seats `agent` in vehicle `ix`, stopping what it was doing.
-    fn drive_off(&mut self, agent: usize, ix: usize) {
+    /// Seats `agent` in vehicle `ix`'s `seat`, stopping what it was doing.
+    /// A new driver takes the controls at rest.
+    fn drive_off(&mut self, agent: usize, ix: usize, seat: Seat) {
         let AgentState { body, role: Role::Avatar(avatar), .. } = &mut self.agents[agent] else { return };
-        avatar.seat = Some(Seat::Vehicle(ix as VehicleIx));
+        avatar.seat = Some(seat);
         sit_down(body, avatar);
-        self.vehicles[ix].control = Control::default();
+        if seat.vehicle().is_some() {
+            self.vehicles[ix].control = Control::default();
+        }
     }
 
     /// Seats `agent` in building `b`'s slot (D3), stopping what it was
@@ -441,7 +480,7 @@ impl Settlement {
         sit_down(body, avatar);
     }
 
-    /// Housekeeping: drivers sit in their seats, and a vehicle nobody
+    /// Housekeeping: drivers and riders sit in their seats, and a vehicle nobody
     /// drives lets go of its controls. An elder possessing a building
     /// stands at its slot spot, facing it; a building whose elder no longer
     /// sits there (it left, died or respawned, `avatar::act`) empties its
@@ -453,8 +492,12 @@ impl Settlement {
             match avatar.seat {
                 Some(Seat::Vehicle(ix)) => {
                     let v = &self.vehicles[ix as usize];
-                    seat(body, avatar, v, &self.characters[v.character as usize]);
+                    seat(body, avatar, v, &self.characters[v.character as usize], None);
                     driven[ix as usize] = true;
+                }
+                Some(Seat::Rider { vehicle: ix, place }) => {
+                    let v = &self.vehicles[ix as usize];
+                    seat(body, avatar, v, &self.characters[v.character as usize], Some(place));
                 }
                 Some(Seat::Building(b)) => {
                     let building = &self.buildings[b as usize];
@@ -499,9 +542,10 @@ fn sit_down(body: &mut super::Body, avatar: &mut AvatarState) {
     body.push = FxVec2::ZERO;
 }
 
-/// Puts a driver in the vehicle's seat, facing its way.
-pub(super) fn seat(body: &mut super::Body, avatar: &mut AvatarState, v: &VehicleState, def: &CharacterDef) {
-    let (position, height) = v.seat(def);
+/// Puts a driver (`place` `None`) or a rider in their seat on the vehicle,
+/// facing its way.
+pub(super) fn seat(body: &mut super::Body, avatar: &mut AvatarState, v: &VehicleState, def: &CharacterDef, place: Option<u8>) {
+    let (position, height) = v.seat_at(def, place);
     body.position = position;
     body.heading = v.heading;
     body.velocity = FxVec2::ZERO;
@@ -512,8 +556,12 @@ pub(super) fn seat(body: &mut super::Body, avatar: &mut AvatarState, v: &Vehicle
 
 /// Where a driver climbing out stands: beside the vehicle (left, right,
 /// behind, then in front), on ground it could walk to from the seat's
-/// level. `None` when every side is blocked.
-pub(super) fn exit_spot(v: &VehicleState, def: &CharacterDef, radius: Fx, terrain: &Terrain) -> Option<(FxVec2, Fx)> {
+/// level. `None` when every side is blocked. A crawler's driver or rider
+/// (in `place`) climbs down beside its body's box (`crawler::exit_spot`).
+pub(super) fn exit_spot(v: &VehicleState, def: &CharacterDef, place: Option<u8>, radius: Fx, terrain: &Terrain) -> Option<(FxVec2, Fx)> {
+    if let Some(c) = &def.crawler {
+        return crawler::exit_spot(v, c, place, radius, terrain);
+    }
     let forward = heading_vector(v.heading);
     let right = FxVec2::new(forward.y, -forward.x);
     let gap = def.body.radius + radius + Fx::from_ratio(3, 20);

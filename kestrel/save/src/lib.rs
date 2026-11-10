@@ -149,7 +149,9 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 /// 47: a vehicle keeps a crawler's legs (`VehicleState::legs`: its feet,
 ///     where they stand or swing to, and its gait's clock, CR.2 of the
 ///     crawler).
-pub const FORMAT_VERSION: u32 = 47;
+/// 48: an avatar's seat can be a rider's place on a crawler's deck
+///     (`Seat::Rider`, appended; CR.4 of the crawler).
+pub const FORMAT_VERSION: u32 = 48;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

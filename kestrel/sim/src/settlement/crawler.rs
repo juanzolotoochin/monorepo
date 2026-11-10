@@ -524,6 +524,114 @@ pub(super) fn self_update(v: &mut VehicleState, terrain: &Terrain, def: &Charact
     v.legs = Some(legs);
 }
 
+// Riders (CR.4, C9): the pilot stands at the helm on the deck's middle (the
+// vehicle's one seat), and up to three riders sit on the cargo deck behind
+// it, at `RIDERS`. Boarding reaches the body's box, not a radius, and
+// climbing down puts an elder beside the box on a floor level with the
+// highest its feet stand on.
+
+/// Where the riders sit, from the deck's middle (the pilot's place): two
+/// in front of the crates, left and right, and one behind them. The rig
+/// (`app/actors/crawler.ron`) keeps these spots clear.
+pub const RIDERS: [Offset; 3] = [
+    Offset { along: Fx::from_ratio(-3, 4), across: Fx::from_ratio(-7, 10) },
+    Offset { along: Fx::from_ratio(-3, 4), across: Fx::from_ratio(7, 10) },
+    Offset { along: Fx::from_ratio(-12, 5), across: Fx::ZERO },
+];
+
+/// How far past the body's box an elder climbing down stands, beyond its
+/// own radius, in meters.
+const EXIT_GAP: Fx = Fx::from_ratio(3, 20);
+/// How far from a foot's spot (beyond both radii) an elder climbing down
+/// stands, in meters.
+const EXIT_FOOT_GAP: Fx = Fx::from_ratio(1, 5);
+/// The most a spot to climb down to lies above or below the highest floor
+/// its feet stand on, in meters.
+const EXIT_LEVEL: Fx = Fx::from_ratio(3, 5);
+
+impl Pose {
+    /// A point `along` the heading and `across` to the right of the middle.
+    pub fn at(self, o: Offset) -> FxVec2 {
+        let forward = heading_vector(self.heading);
+        let right = FxVec2::new(forward.y, -forward.x);
+        self.position + forward * o.along + right * o.across
+    }
+
+    /// `p` in the body's frame: along the heading and across to the right.
+    pub fn local(self, p: FxVec2) -> Offset {
+        let forward = heading_vector(self.heading);
+        let right = FxVec2::new(forward.y, -forward.x);
+        let d = p - self.position;
+        Offset { along: d.dot(forward), across: d.dot(right) }
+    }
+}
+
+/// How far `p` is from the body's box (its length and width, seen from
+/// above), squared; zero inside it.
+pub fn box_distance_squared(pose: Pose, c: &CrawlerDef, p: FxVec2) -> Fx {
+    let o = pose.local(p);
+    let (half_length, half_width) = (c.length / Fx::from_int(2), c.width / Fx::from_int(2));
+    let along = (o.along.abs() - half_length).max(Fx::ZERO);
+    let across = (o.across.abs() - half_width).max(Fx::ZERO);
+    along * along + across * across
+}
+
+/// Where an elder of `radius` climbing down from `place` (`None`: the
+/// pilot's, else a rider's) stands: its seat's own spot first (the
+/// pilot's beside the box's middle on the left, a front rider's beside
+/// the back on their side, the back rider's behind the box), then beside
+/// the box on the seat's side (the left for the middle seats), level with
+/// its middle, toward the back and the front; then the other side; then
+/// behind the box and in front of it. The spot
+/// is in the arena and clear of the terrain's discs and rock, its floor
+/// within `EXIT_LEVEL` of the highest floor its feet stand on (never down
+/// a pit or a trench, even with a foot down in it), and clear of every
+/// foot's spot and the spot each swinging foot lands on. `None` when
+/// every spot is blocked.
+pub fn exit_spot(v: &VehicleState, c: &CrawlerDef, place: Option<u8>, radius: Fx, terrain: &Terrain) -> Option<(FxVec2, Fx)> {
+    let legs = v.legs.as_ref()?;
+    let pose = Pose::of(v);
+    let side = Fx::from_int(if place.is_some_and(|p| RIDERS[p as usize].across > Fx::ZERO) { 1 } else { -1 });
+    let (half_length, half_width) = (c.length / Fx::from_int(2), c.width / Fx::from_int(2));
+    let (beside, end) = (half_width + radius + EXIT_GAP, half_length + radius + EXIT_GAP);
+    let along = Fx::from_ratio(3, 2);
+    let offsets = [
+        Offset { along: Fx::ZERO, across: side * beside },
+        Offset { along: -along, across: side * beside },
+        Offset { along, across: side * beside },
+        Offset { along: Fx::ZERO, across: -side * beside },
+        Offset { along: -along, across: -side * beside },
+        Offset { along, across: -side * beside },
+        Offset { along: -end, across: Fx::ZERO },
+        Offset { along: end, across: Fx::ZERO },
+    ];
+    // The highest floor it stands on: a foot down in a trench doesn't
+    // lead its elders down there.
+    let level = (0..4).map(|i| legs.landing(i).1).max()?;
+    // Each seat tries its own spot first, so four climbing down together
+    // land apart: the pilot's beside the middle, the front riders' beside
+    // the back, the back rider's behind.
+    let first = match place {
+        None => 0,
+        Some(p) if RIDERS[p as usize].across == Fx::ZERO => 6,
+        Some(_) => 1,
+    };
+    let offsets = std::iter::once(offsets[first]).chain(offsets.into_iter().enumerate().filter(|&(i, _)| i != first).map(|(_, o)| o));
+    let spots: Vec<FxVec2> = legs.feet.iter().map(|f| f.spot).chain(legs.feet.iter().filter_map(|f| f.swing.as_ref().map(|s| s.to))).collect();
+    let clearance = FOOT_RADIUS + radius + EXIT_FOOT_GAP;
+    offsets.into_iter().find_map(|o: Offset| {
+        let p = pose.at(o);
+        if !terrain.inside(p) || !terrain.clear(p, p, radius) {
+            return None;
+        }
+        if spots.iter().any(|&s| (s - p).length_squared() < clearance * clearance) {
+            return None;
+        }
+        let ground = terrain.footprint_near(p, level, radius)?;
+        ((ground - level).abs() <= EXIT_LEVEL).then_some((p, ground))
+    })
+}
+
 /// Every planted foot in reach of its hip and under it, and no more feet
 /// in the air than its gait lifts at once: in a trot, a diagonal pair.
 pub fn check_reach(v: &VehicleState, c: &CrawlerDef) -> Result<(), String> {

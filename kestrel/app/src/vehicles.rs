@@ -239,11 +239,15 @@ fn draw(
     if current.vehicles.is_empty() {
         return;
     }
-    // The vehicle the local player is drawn sitting in, if any.
-    let mine = drawn.0.as_ref().and_then(|d| d.avatar().seat).and_then(sim::settlement::Seat::vehicle).map(usize::from);
+    // The vehicle the local player is drawn sitting in, if any, driving or
+    // riding (CR.4), and a rider's place on the deck.
+    let seat = drawn.0.as_ref().and_then(|d| d.avatar().seat);
+    let mine = seat.and_then(sim::settlement::Seat::aboard).map(usize::from);
+    let place = seat.and_then(sim::settlement::Seat::place);
     let dt = time.delta_secs();
-    let piloting = mine.and_then(|i| current.vehicles.get(i)).is_some_and(|v| current.characters[v.character as usize].crawler.is_some());
-    vehicles.pull = eased_pull(vehicles.pull, piloting, dt);
+    // Riders get the pilot's wider view too: they see what it steps over.
+    let aboard = mine.and_then(|i| current.vehicles.get(i)).is_some_and(|v| current.characters[v.character as usize].crawler.is_some());
+    vehicles.pull = eased_pull(vehicles.pull, aboard, dt);
     let parts = vehicles.parts.get_or_insert_with(|| parts(&mut meshes, &mut materials));
     let tuning = |v: &VehicleState| current.characters[v.character as usize].vehicle.expect("a vehicle character");
     let drawn_count = rovers.iter().count();
@@ -257,7 +261,9 @@ fn draw(
         let pose = match (mine == Some(rover.index), player.single()) {
             (true, Ok(p)) => {
                 let (yaw, _, _) = p.rotation.to_euler(EulerRot::YXZ);
-                Pose { at: Vec3::new(p.translation.x, 0.0, p.translation.z), base: p.translation.y - t.seat.to_f32(), heading: yaw }
+                // A rider sits off the middle: the body is that far back.
+                let off = place.map_or(Vec3::ZERO, |place| rider_offset(yaw, place));
+                Pose { at: Vec3::new(p.translation.x, 0.0, p.translation.z) - off, base: p.translation.y - t.seat.to_f32(), heading: yaw }
             }
             _ => interpolated(&mirror, rover.index, v),
         };
@@ -309,10 +315,19 @@ fn draw(
     }
 }
 
+/// Where the rider in `place` sits from a crawler's middle, in the view, the
+/// crawler facing `heading` (`crawler::RIDERS`).
+fn rider_offset(heading: f32, place: u8) -> Vec3 {
+    let o = sim::settlement::crawler::RIDERS[place as usize];
+    let forward = Vec3::new(heading.sin(), 0.0, heading.cos());
+    let right = Vec3::new(heading.cos(), 0.0, -heading.sin());
+    forward * o.along.to_f32() + right * o.across.to_f32()
+}
+
 /// The camera's pull after `dt` seconds more, easing toward `PILOT_PULL`
-/// while piloting a crawler and back to 1 after.
-pub fn eased_pull(pull: f32, piloting: bool, dt: f32) -> f32 {
-    let target = if piloting { PILOT_PULL } else { 1.0 };
+/// while aboard a crawler (piloting or riding) and back to 1 after.
+pub fn eased_pull(pull: f32, aboard: bool, dt: f32) -> f32 {
+    let target = if aboard { PILOT_PULL } else { 1.0 };
     pull + (target - pull) * (1.0 - (-PULL_EASE * dt).exp())
 }
 
@@ -377,6 +392,25 @@ fn draw_crawler(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A local rider's crawler is drawn back from the rider by their place
+    /// as the simulation seats them (`VehicleState::seat_at`), at any
+    /// heading.
+    #[test]
+    fn a_riders_offset_matches_their_seat() {
+        let content = crate::lockstep::builtin_content();
+        let ix = content.names.character_index("crawler").unwrap();
+        let def = &content.rules.characters[ix as usize];
+        for degrees in [0, 37, 90, 200, 300] {
+            let heading = Fx::from_ratio(degrees * 31_416, 1_800_000);
+            let v = VehicleState { character: ix, position: fx::FxVec2::ZERO, heading, speed: Fx::ZERO, height: Fx::ZERO, fall: Fx::ZERO, wheels: [Fx::ZERO; 4], control: Default::default(), legs: None };
+            for place in 0..3 {
+                let (seat, _) = v.seat_at(def, Some(place));
+                let off = rider_offset(heading.to_f32(), place);
+                assert!((off - Vec3::new(seat.x.to_f32(), 0.0, seat.y.to_f32())).length() < 1e-3, "place {place} at {degrees} degrees: {off} vs {seat:?}");
+            }
+        }
+    }
 
     #[test]
     fn the_pull_eases_out_while_piloting_and_back_after() {

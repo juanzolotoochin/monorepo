@@ -283,6 +283,24 @@ mod tests {
         assert!(parse("(body: [], leg: ())").is_err());
     }
 
+    /// The riders' places on the deck (`crawler::RIDERS`, CR.4) are clear:
+    /// no piece standing on the deck within an elder's body of one, and
+    /// each place on the deck, off the cab and the pilot's helm.
+    #[test]
+    fn the_rig_keeps_the_riders_places_clear() {
+        let c = crawler();
+        let body = 0.3;
+        for (i, o) in sim::settlement::crawler::RIDERS.iter().enumerate() {
+            let (x, z) = (o.across.to_f32(), o.along.to_f32());
+            assert!(x.abs() < c.width.to_f32() / 2.0 - body && z.abs() < c.length.to_f32() / 2.0 - body, "rider {i} on the deck");
+            assert!(z < -0.3, "rider {i} behind the pilot and the helm");
+            for piece in builtin().body.iter().filter(|p| p.at[1] + p.size[1] / 2.0 > 0.05) {
+                let (dx, dz) = ((x - piece.at[0]).abs() - piece.size[0] / 2.0, (z - piece.at[2]).abs() - piece.size[2] / 2.0);
+                assert!(dx > body || dz > body, "rider {i} at ({x}, {z}) inside {piece:?}");
+            }
+        }
+    }
+
     /// The solve puts the sole on the foot it is given, upright, its knee
     /// over the hip and over the hip line; out of reach it eases straight,
     /// never past the target, never snapping.

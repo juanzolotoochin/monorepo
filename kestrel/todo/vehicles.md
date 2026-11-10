@@ -3,36 +3,6 @@
 The crawler prototype's design is [`CRAWLER.md`](../CRAWLER.md)
 (decisions C1–C12). Its tasks CR.1–CR.6 run in order, one agent each.
 
-## CR.4 Riders
-
-- **Status:** open
-- **Why:** C9: a pilot and three riders.
-- **What to do:** four seats (cab and deck); G boards the nearest free one
-  (the cab first); riders ride seated and can't steer; G climbs down to a
-  free floor spot beside it. Prediction and saves as the rover's driver.
-- **Where:** `sim/src/settlement/vehicle.rs`, `avatar.rs`, the view.
-- **Found in:** crawler design.
-- **Tests:** four players board in order; a fifth can't; climbing down
-  beside it, never into a pit.
-- **Notes from CR.3:** the deck's top is the rig's y = 0
-  (`actors/crawler.ron`): the cab covers z 0.8 to 2.3 m and stands 1.3 m
-  over it, the helm is at z 0.6, the cargo deck (crates, rail) z -0.4 to
-  -2.9. Seats for riders want clear deck: around (±0.7, -0.3) or on the
-  crates; move pieces in the rig if needed. The camera pull keys on the
-  drawn avatar's seat being a crawler's (`vehicles::draw`); decide whether
-  riders get it too.
-- **Notes from CR.2:** riders seated on the deck stay out of
-  `crawler::standing` (it skips any avatar with a seat). Climbing down
-  must not put an elder under a foot about to land: the feet avoid
-  standing bodies only when they pick a foothold, at lift.
-- **Notes from CR.1:** the one seat today is the rover's: boarding reaches
-  `body.radius` (1.5 m, half the width) + the elder's + 0.8 m from the
-  middle, so only beside the long sides, not at the ends; the lab parks
-  it 2.5 m from the spawn for that. `exit_spot` puts the pilot
-  `radius + 0.47` m out: just clear of the sides, but its behind and in
-  front fallbacks land under the 6 m body. Make the seats and the exit
-  spots follow the body's box.
-
 ## CR.5 Feet and bodies
 
 - **Status:** open
@@ -43,6 +13,12 @@ The crawler prototype's design is [`CRAWLER.md`](../CRAWLER.md)
 - **Where:** `sim/src/settlement/vehicle.rs`, `combat.rs`, `messages.rs`.
 - **Found in:** crawler design.
 - **Tests:** a shove; a stomp; never a foot on an elder or sprite.
+- **Notes from CR.4:** riders and the pilot are seated
+  (`Seat::Vehicle`, `Seat::Rider`) and so out of `crawler::standing`: a
+  stomp or shove must skip them too. An elder climbing down stands clear
+  of every foot's spot and swing landing (`crawler::exit_spot`) but not
+  of a foot that lifts later; the foothold then avoids them as a standing
+  body, as before.
 - **Notes from CR.3:** a landing's view is `crawler::swing_point` at
   `t = 1`: the sole comes down the last 40% of the swing fast, so a stomp
   effect (dust, a thud) fits the tick the `Swing` becomes planted. The
@@ -72,6 +48,13 @@ The crawler prototype's design is [`CRAWLER.md`](../CRAWLER.md)
 - **Where:** sim tests, `app/demos/`, docs.
 - **Found in:** crawler design.
 - **Tests:** the soak; the full suite.
+- **Notes from CR.4:** riders need other players: a demo script drives
+  only the local player (`control::protocol::Script`), so carrying riders
+  in the demo needs "Guests in demo scripts" first, or a video from a
+  hosted session with joined clients. The soak could seat riders with
+  `CommandKind::Join` and `Board` in the sim (`crawler_lab_tests`'s
+  `crawler_lab_with_guests` puts four guests beside it). Save format is
+  48. `docs/test-time.md` has no CR.4 row; add it with CR.6's.
 - **Notes from CR.3:** turning in place right after stopping at the pit
   stalls (the body won't turn: a front foot's turned spot is over the pit
   edge); the demo backs off 5 s first, and a test path that backed 3 s
@@ -113,7 +96,7 @@ The crawler prototype's design is [`CRAWLER.md`](../CRAWLER.md)
 ## Show a driver seated, and a boarding prompt
 
 - **Status:** open
-- **Why:** the driver stands at the seat in the idle pose, and nothing tells a player that G climbs in.
+- **Why:** the driver (and a crawler's riders, CR.4) stands at the seat in the idle pose, and nothing tells a player that G climbs in.
 - **What to do:** add a seated pose to the rig while `AvatarState::driving` is set. Show "G: DRIVE" in reach of a free rover, as the repair prompt does.
 - **Where:** `kestrel/app/src/rig.rs`, `scene.rs` (HUD prompts), `vehicles.rs`.
 - **Found in:** the vehicle prototype.
@@ -164,7 +147,138 @@ The crawler prototype's design is [`CRAWLER.md`](../CRAWLER.md)
 - **Where:** `kestrel/app/src/prediction.rs`, `vehicles.rs`.
 - **Found in:** CR.3 of the crawler.
 
+## Guests in demo scripts
+
+- **Status:** open
+- **Why:** a demo script (`app/demos/*.json`) drives only the local
+  player, so a demo can't show a crawler carrying riders (C9) or
+  anything else with several elders.
+- **What to do:** a script op that joins a scripted guest (a
+  `CommandKind::Join` under a new `PlayerId`) and ops that send that
+  guest's commands (walk, board), applied through the session like the
+  local player's.
+- **Where:** `kestrel/app/src/control/protocol.rs`, `control/mod.rs`,
+  `lockstep.rs`.
+- **Found in:** CR.4 of the crawler.
+
+## Predicted climb-out reads the confirmed vehicle
+
+- **Status:** open
+- **Why:** `AvatarReplay::apply` builds its view from the confirmed
+  settlement, so a predicted G off a moving vehicle picks its exit spot
+  beside where the vehicle was confirmed, not beside the replay's copy;
+  the sim then puts the elder beside where it is, and the view snaps by
+  the distance it moved in a round trip.
+- **What to do:** let the replay's view read its own vehicle copy (a
+  `Cow` of `vehicles` with the copy in place) for the seated branch of
+  `avatar::act`.
+- **Where:** `kestrel/sim/src/settlement/prediction.rs`, `action.rs`
+  (`View::vehicles`).
+- **Found in:** CR.4 of the crawler.
+
+## Riders climbing down together share a spot
+
+- **Status:** open
+- **Why:** climbing down reads no agents (`action::View` has none), so
+  two elders pressing G on one tick land on the same spot when one's own
+  spot is blocked and they fall back to the same one, overlapping until
+  bodies separate. Each seat has its own first spot, so it's rare.
+- **What to do:** pick the spot in stage 5 with the other elders known,
+  or skip spots taken this tick (a message, as boarding is).
+- **Where:** `kestrel/sim/src/settlement/crawler.rs` (`exit_spot`),
+  `avatar.rs`.
+- **Found in:** CR.4 of the crawler.
+
 ## Done
+
+## CR.4 Riders
+
+- **Status:** done (branch `kestrel-crawler`, PR to come with CR.6)
+- **Why:** C9: a pilot and three riders.
+- **What to do:** four seats (cab and deck); G boards the nearest free one
+  (the cab first); riders ride seated and can't steer; G climbs down to a
+  free floor spot beside it. Prediction and saves as the rover's driver.
+- **Where:** `sim/src/settlement/vehicle.rs`, `avatar.rs`, the view.
+- **Found in:** crawler design.
+- **Tests:** four players board in order; a fifth can't; climbing down
+  beside it, never into a pit.
+- **Notes from CR.3:** the deck's top is the rig's y = 0
+  (`actors/crawler.ron`): the cab covers z 0.8 to 2.3 m and stands 1.3 m
+  over it, the helm is at z 0.6, the cargo deck (crates, rail) z -0.4 to
+  -2.9. Seats for riders want clear deck: around (±0.7, -0.3) or on the
+  crates; move pieces in the rig if needed. The camera pull keys on the
+  drawn avatar's seat being a crawler's (`vehicles::draw`); decide whether
+  riders get it too.
+- **Notes from CR.2:** riders seated on the deck stay out of
+  `crawler::standing` (it skips any avatar with a seat). Climbing down
+  must not put an elder under a foot about to land: the feet avoid
+  standing bodies only when they pick a foothold, at lift.
+- **Notes from CR.1:** the one seat today is the rover's: boarding reaches
+  `body.radius` (1.5 m, half the width) + the elder's + 0.8 m from the
+  middle, so only beside the long sides, not at the ends; the lab parks
+  it 2.5 m from the spawn for that. `exit_spot` puts the pilot
+  `radius + 0.47` m out: just clear of the sides, but its behind and in
+  front fallbacks land under the 6 m body. Make the seats and the exit
+  spots follow the body's box.
+- **Done:** four seats: the pilot's (`Seat::Vehicle`, at the helm on
+  the deck's middle, as before) and three riders' places
+  (`Seat::Rider { vehicle, place }`, appended to `Seat`, save format 48),
+  `crawler::RIDERS` from the middle: (-0.75, -0.7) and (-0.75, 0.7)
+  (along, across) in front of the crates, and (-2.4, 0) behind them.
+  `Settlement::board` reaches a crawler within `BOARD_REACH` (0.8 m) past
+  the elder's radius of its 6 x 3 m box (`crawler::box_distance_squared`),
+  from any side or end (the rover keeps its radius), and takes its free
+  seat (`free_seat`): the cab first, else the free place nearest the
+  elder (lower place on a tie); stage 5 seats in command order, so five
+  on one tick give a pilot, three riders and nobody. Housekeeping keeps
+  riders in place (`VehicleState::seat_at`), facing the crawler's way at
+  the deck's height; a rider's commands go through `avatar::act`'s seated
+  branch, so movement does nothing (only `Seat::vehicle`, the pilot's,
+  drives), and a crawler with riders but no pilot stands still. A rider
+  doesn't move to the cab when the pilot leaves: they climb down and
+  board again. Climbing down (`crawler::exit_spot`, for pilot and riders;
+  the rover's `exit_spot` is unchanged): around the box, 0.15 m past it
+  beyond the elder's radius; each seat's own spot first, so four climbing
+  down on one tick land apart (the pilot's beside the middle on the left,
+  a front rider's 1.5 m back on their side, the back rider's behind),
+  then the seat's side at the middle, 1.5 m back and 1.5 m forward, the
+  other side, behind and in front; in the arena and `Terrain::clear`,
+  at least foot radius + elder radius + 0.2 m from every foot's spot and every swing's
+  landing spot, and its floor (`footprint_near`) within 0.6 m of the
+  highest floor its feet stand on, so never into the trench even with a
+  foot down in it (a first cut used the nearest foot's floor and let a
+  pilot down into the trench beside a foot in it). None: the elder stays
+  aboard. `Settlement::validate` checks every seat holds one elder and a
+  rider sits on a crawler in a real place. Prediction: `AvatarReplay`
+  copies the vehicle the avatar is aboard (`Seat::aboard`), pilot or
+  rider; a rider's runs on its confirmed controls, as if the pilot held
+  them (exact until the pilot's next command arrives), and `vehicle()`
+  returns it for riders too. View: the rig's crates moved to the cargo
+  deck's middle (z -1.2 to -2.0, a small one at the back right) to clear
+  the places; a local rider's crawler is drawn from the rider's drawn
+  transform less their place (`vehicles::rider_offset`), as the pilot's
+  is; the control protocol's `seat` reports `{"vehicle", "rider"}` for a
+  rider. Camera: riders get the pull-back too (`PILOT_PULL` while aboard
+  a crawler, pilot or rider): they see what it steps over. Riders stand in
+  the idle pose, like the pilot (see "Show a driver seated, and a
+  boarding prompt"). Tests: `crawler_lab_tests`
+  `a_pilot_and_three_riders_board_and_a_fifth_cannot` (five on one tick;
+  riders in place every tick of a 5 s walk; their sticks steer nothing,
+  with the pilot aboard or gone), `riders_climb_down_beside_it_on_the_ground`
+  (outside the box, on the ground, clear of the feet, the right-hand rider
+  on the right, the back one behind, all four apart), `climbing_down_never_goes_into_a_pit_or_under_a_foot`
+  (parked astride the trench's edge, a foot in it or past it: pilot and
+  left rider down on the right; in the sim too; a swing's landing spot
+  passed over), `riding_is_predicted_and_saved` (a rider's replay equals
+  the sim over 300 ticks while the pilot holds the stick; a postcard
+  round trip with riders continues with equal hashes); save
+  `a_crawler_saved_with_riders_aboard_continues` (`write`/`read`, same
+  bytes again, same steps after); app
+  `crawler::tests::the_rig_keeps_the_riders_places_clear` and
+  `vehicles::tests::a_riders_offset_matches_their_seat`. Sim golden
+  unchanged (no golden scene has a vehicle; the whole `sim_test` passed). No
+  screenshots: demo scripts drive only the local player, so a demo can't
+  seat riders (see "Guests in demo scripts").
 
 ## CR.3 Legs, IK and the camera
 

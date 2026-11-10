@@ -221,14 +221,33 @@ pub enum Seat {
     Vehicle(super::VehicleIx),
     /// Possessing a building, as its slot's `Occupant::Elder`.
     Building(super::BuildingIx),
+    /// Riding a crawler's deck (CR.4 of the crawler, format 48): `place`
+    /// indexes `crawler::RIDERS`. A rider can't steer.
+    Rider { vehicle: super::VehicleIx, place: u8 },
 }
 
 impl Seat {
-    /// The vehicle, if it is a vehicle's seat.
+    /// The vehicle, if it is a vehicle's driver's seat.
     pub fn vehicle(self) -> Option<super::VehicleIx> {
         match self {
             Seat::Vehicle(ix) => Some(ix),
+            Seat::Building(_) | Seat::Rider { .. } => None,
+        }
+    }
+
+    /// The vehicle it is aboard, driving or riding.
+    pub fn aboard(self) -> Option<super::VehicleIx> {
+        match self {
+            Seat::Vehicle(ix) | Seat::Rider { vehicle: ix, .. } => Some(ix),
             Seat::Building(_) => None,
+        }
+    }
+
+    /// The rider's place on the deck, if it is a rider's seat.
+    pub fn place(self) -> Option<u8> {
+        match self {
+            Seat::Rider { place, .. } => Some(place),
+            Seat::Vehicle(_) | Seat::Building(_) => None,
         }
     }
 
@@ -236,7 +255,7 @@ impl Seat {
     pub fn building(self) -> Option<super::BuildingIx> {
         match self {
             Seat::Building(b) => Some(b),
-            Seat::Vehicle(_) => None,
+            Seat::Vehicle(_) | Seat::Rider { .. } => None,
         }
     }
 }
@@ -894,14 +913,16 @@ pub(super) fn act(a: &mut AgentState, action: &Action, view: &View, def: &Charac
     // doesn't stop a dig, keep a released route or end on a cancel.
     let transferring = carry.job.as_ref().is_some_and(|j| !view.piles.is_some_and(|lab| lab.is_haul(j)));
     match avatar.seat {
-        Some(Seat::Vehicle(ix)) => {
+        Some(seat @ (Seat::Vehicle(_) | Seat::Rider { .. })) => {
             // Sitting in a vehicle, a player can look around, climb out,
-            // let go or respawn; movement went to the vehicle (`vehicle::drive`).
+            // let go or respawn; a driver's movement went to the vehicle
+            // (`vehicle::drive`), and a rider's does nothing.
+            let ix = seat.aboard().expect("aboard a vehicle");
             match *action {
                 Action::Board => {
                     let v = &view.vehicles[ix as usize];
                     let vehicle_def = &view.characters[v.character as usize];
-                    if let Some((position, ground)) = super::vehicle::exit_spot(v, vehicle_def, def.body.radius, view.terrain) {
+                    if let Some((position, ground)) = super::vehicle::exit_spot(v, vehicle_def, seat.place(), def.body.radius, view.terrain) {
                         avatar.seat = None;
                         body.position = position;
                         avatar.height = ground;

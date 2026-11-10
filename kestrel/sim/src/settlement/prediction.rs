@@ -35,8 +35,10 @@ pub struct AvatarReplay<'a> {
     terrain: &'a Terrain,
     me: AgentIx,
     state: AgentState,
-    /// The vehicle the avatar drove when the replay started, run alongside
-    /// it: the driver's movement steers it, so it is the driver's to predict.
+    /// The vehicle the avatar was aboard when the replay started, run
+    /// alongside it: the driver's movement steers it, so it is the driver's
+    /// to predict. A rider's runs on the controls as confirmed, as if its
+    /// driver held them (exact until the driver's next command).
     vehicle: Option<(VehicleIx, VehicleState)>,
     tick: u64,
     /// The events the last tick run showed.
@@ -54,7 +56,7 @@ impl Settlement {
     /// `tick`. `None` unless `agent` is a player avatar.
     pub fn replay_avatar<'a>(&'a self, agent: AgentIx, tick: u64, terrain: &'a Terrain) -> Option<AvatarReplay<'a>> {
         let state = self.agents.get(agent as usize).filter(|a| a.avatar().is_some())?.clone();
-        let vehicle = self.driving(agent as usize).map(|ix| (ix, self.vehicles[ix as usize].clone()));
+        let vehicle = self.seat(agent as usize).and_then(Seat::aboard).map(|ix| (ix, self.vehicles[ix as usize].clone()));
         let piles = self.piles.as_ref().map(Cow::Borrowed);
         Some(AvatarReplay { settlement: self, terrain, me: agent, state, vehicle, tick, events: Vec::new(), piles, actions: ActionMessages::default() })
     }
@@ -71,15 +73,15 @@ impl<'a> AvatarReplay<'a> {
         &self.state
     }
 
-    /// The vehicle the avatar drives as of `tick`, and its index, while it
-    /// still drives it. Climbing in waits for stage 5, so it is never
-    /// predicted; climbing out is. Boarding and leaving a building go the
+    /// The vehicle the avatar is aboard (driving or riding) as of `tick`,
+    /// and its index, while it still is. Climbing in waits for stage 5, so
+    /// it is never predicted; climbing out is. Boarding and leaving a building go the
     /// same way: in through stage 5, out in the avatar's own part, though
     /// the slot it leaves empties in housekeeping, which the replay leaves to
     /// the simulation.
     pub fn vehicle(&self) -> Option<(VehicleIx, &VehicleState)> {
         let (ix, v) = self.vehicle.as_ref()?;
-        (self.state.avatar()?.seat == Some(Seat::Vehicle(*ix))).then_some((*ix, v))
+        (self.state.avatar()?.seat.and_then(Seat::aboard) == Some(*ix)).then_some((*ix, v))
     }
 
     /// The confirmed settlement and terrain the replay started from.
@@ -138,12 +140,12 @@ impl<'a> AvatarReplay<'a> {
         let def = character_of(&s.characters, &self.state);
         let AgentState { body, role: Role::Avatar(state), .. } = &mut self.state else { unreachable!("replays start from avatars") };
         avatar::self_update(body, state, self.me, tick, terrain, self.piles.as_deref(), def);
-        if let Some((_, v)) = self.vehicle.as_mut().filter(|(ix, _)| state.seat == Some(Seat::Vehicle(*ix))) {
-            // As stage 2 drives it and housekeeping seats its driver.
-            // A crawler's feet keep clear of the bodies as confirmed.
+        if let Some((_, v)) = self.vehicle.as_mut().filter(|(ix, _)| state.seat.and_then(Seat::aboard) == Some(*ix)) {
+            // As stage 2 drives it and housekeeping seats its driver or
+            // rider. A crawler's feet keep clear of the bodies as confirmed.
             let vehicle_def = &s.characters[v.character as usize];
             vehicle::self_update_among(v, terrain, vehicle_def, &s.standing_for_crawlers());
-            vehicle::seat(body, state, v, vehicle_def);
+            vehicle::seat(body, state, v, vehicle_def, state.seat.and_then(Seat::place));
         }
         let mut out = Messages::default();
         s.read_avatar(self.me, &self.state, tick, terrain, &mut out);
