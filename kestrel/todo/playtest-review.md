@@ -1,28 +1,32 @@
 # Playtest review
 
-Decisions taken while the user was travelling (2026-11-05 to 2026-11-08)
+Decisions taken while the user was travelling (2026-11-05 to 2026-11-09)
 and reviewed only by video and screenshots. All were accepted "for now";
 each needs a look in a real play session before it is settled. Work on a
 decision only after that review: until then the current behaviour stands.
 
-The work is on three stacked branches, none merged:
+The work is on four stacked branches, none merged:
 
 1. `kestrel-verticality`: tunnels MVP and the Tunnel Lab (PR #135, open).
 2. `kestrel-verticality-sight`: seeing inside by line of sight (not pushed).
 3. `kestrel-sacred-tree-depths`: M8, the town on a volume with lanterns
    (not pushed, last commit 823d4a4).
+4. `kestrel-sacred-tree-fog`: M9, fog of war in the town (a prototype, not
+   pushed).
 
 Designs: [`VERTICALITY.md`](../VERTICALITY.md),
-[`SACRED_TREE_DEPTHS.md`](../SACRED_TREE_DEPTHS.md). Demo targets:
+[`SACRED_TREE_DEPTHS.md`](../SACRED_TREE_DEPTHS.md),
+[`SACRED_TREE_FOG.md`](../SACRED_TREE_FOG.md). Demo targets:
 `//kestrel/app:tunnel_lab_demo_video`,
-`//kestrel/app:sacred_tree_depths_demo_video`.
+`//kestrel/app:sacred_tree_depths_demo_video`,
+`//kestrel/app:sacred_tree_fog_demo_video`.
 
 ## Merge and push the stack
 
 - **Status:** open
-- **Why:** the three branches wait on the user; nothing past #135 is pushed.
-- **What to do:** after the playtest, merge #135, then push the sight and
-  depths branches and open their PRs (stacked, with `merge -s ours`
+- **Why:** the four branches wait on the user; nothing past #135 is pushed.
+- **What to do:** after the playtest, merge #135, then push the sight,
+  depths and fog branches and open their PRs (stacked, with `merge -s ours`
   rather than a force-push).
 - **Where:** the branches above.
 - **Found in:** M8.8 report.
@@ -95,6 +99,40 @@ Designs: [`VERTICALITY.md`](../VERTICALITY.md),
 - **Where:** `sim/src/settlement/light.rs`, `miners.rs`, `chase.rs`.
 - **Found in:** M8.6, M8.7.
 
+## Play the fog of war
+
+- **Status:** open
+- **Why:** the fog ([`SACRED_TREE_FOG.md`](../SACRED_TREE_FOG.md)) is a
+  prototype reviewed only by video (M9.4); the aim is what feels fun, not a
+  full simulation.
+- **What to do:** play a day and a night in the town and judge:
+  - **Ranges.** By day the elder sees 14 m, a sprite 6 m, the tree 8 m, a
+    built building 4 m, a lantern what it lights (6 m). By night and under
+    a roof the elder's and sprites' halve (7 m, 3 m); the tree and
+    buildings keep theirs, as lights. Too short, too long?
+  - **The start.** The town round the tree starts remembered out to 30 m
+    (the clearing and the ballista ring). Enough, or too much?
+  - **Remembered ground at night.** Seen ground is dimmed and greyed, and
+    by night keeps a floor of 0.12 so it reads apart from never-seen
+    black. Readable without being bright?
+  - **The eyes and the growl.** A ghoul out of sight within 12 m of an
+    elder (through rock too) shows two glowing eyes, a fixed-size mark
+    over everything, and growls once per pack. Does it warn enough, and is
+    12 m right?
+  - **Last-seen buildings and piles.** Out of sight, sites and piles show
+    as last seen (frozen), at full colour on dimmed ground.
+  - **F7's modes.** Fog, the inside view, the cutaway: which to keep, and
+    whether the fog replaces the inside view underground.
+  - **Ghouls ignore the fog for now** (F7 of the design): they turn on
+    whoever they see within 3 m and know where the tree is. The two
+    candidates after playing: light gives you away (ghouls spot whoever
+    stands in light from further), or breaking line of sight lets you
+    escape.
+- **Where:** `app/src/fog.rs`, `app/src/heard.rs`, `app/src/cutaway.rs`,
+  `app/shaders/cutaway.wesl`, `app/src/settlement.rs` (`remember`),
+  `sim/src/settlement/chase.rs` (for the ghouls).
+- **Found in:** M9.1–M9.4.
+
 ## Play the amber economy
 
 - **Status:** open
@@ -138,7 +176,8 @@ Designs: [`VERTICALITY.md`](../VERTICALITY.md),
 ## Other follow-ups
 
 Smaller open work from these milestones, not decisions to review:
-"Depths follow-ups" in [`sacred-tree.md`](sacred-tree.md); "Line of
+"Depths follow-ups" and "Fog of war follow-ups" in
+[`sacred-tree.md`](sacred-tree.md); "Line of
 sight follow-ups", "Collapse and support", "Pile reach in 3D", "The
 jetpack into a 2 m tunnel" and "Lighting underground" in
 [`verticality.md`](verticality.md).

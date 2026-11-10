@@ -1,7 +1,10 @@
 # Kestrel Sacred Tree fog of war (design)
 
-Status: agreed (2026-11-09), a prototype. Tasks in
-[`todo/sacred-tree.md`](todo/sacred-tree.md) under M9. It stacks on the
+Status: M9 done (2026-11-09), a prototype, reviewed by video (agreed
+2026-11-09). Tasks in [`todo/sacred-tree.md`](todo/sacred-tree.md) under
+M9 (done), what's left in its "Fog of war follow-ups", and what to judge in
+play in [`todo/playtest-review.md`](todo/playtest-review.md) ("Play the fog
+of war"). It stacks on the
 depths milestone ([`SACRED_TREE_DEPTHS.md`](SACRED_TREE_DEPTHS.md), branch
 `kestrel-sacred-tree-depths`, not merged) and the rules for the work in
 [`SACRED_TREE_HANDOFF.md`](SACRED_TREE_HANDOFF.md) apply here too. Design
@@ -105,6 +108,33 @@ what feels fun, not a full simulation.
 
 - Only the Sacred Tree town gets fog; F7 turns it off for comparison.
   Other scenes, the Tunnel Lab included, are unchanged.
+
+## What changed versus the design
+
+- The tree (8 m) and built buildings (4 m) keep their range at night, as
+  lights do; only the elder's and the sprites' sight halves (14 m to 7 m,
+  6 m to 3 m), and under a roof too (F1, F4).
+- The town round the tree starts remembered out to 30 m (the clearing and
+  the ballista ring), not only what is in sight (F9).
+- Drawn from an RGBA texture over the whole map (the surface, the elder's
+  level, and what was drawn before), eased over 0.4 s, so an edge moving a
+  tile slides and dusk halving sight doesn't pop; edges are soft, a few
+  meters wide.
+- Last seen is the simple version: a building's, site's or pile's view is
+  frozen as drawn while out of sight (a site built up or a unit taken still
+  look as they did); remembered things keep their full colour on dimmed
+  ground (a follow-up).
+- The pines, ground cover, lamp posts and baked dressing are fogged by
+  copies of their materials with the surface's fog, not hidden.
+- By night remembered ground keeps a floor of 0.12 of its grey, so it reads
+  apart from never-seen black.
+- A heard ghoul is two glowing eyes drawn as UI marks over everything (a
+  fixed size, 10 x 8 px each since the M9.4 review video; they don't scale
+  with zoom), with a new procedural growl cue, once per pack (F6).
+- F7 cycles three modes in the town: fog, the inside view, the cutaway
+  (F10, F11); other scenes keep line of sight and the cutaway.
+- Ghouls ignore the fog for now (F7 of the decisions): to decide after
+  playing.
 
 ## Consequences
 

@@ -4,56 +4,29 @@ The town MVP's design and decisions are in
 [`kestrel/SACRED_TREE_HANDOFF.md`](../SACRED_TREE_HANDOFF.md). Tasks follow
 its milestones, in order; one PR per milestone.
 
-## M9.4 Demo and review
-
-- **Status:** open
-- **Why:** the prototype is reviewed by video.
-- **What to do:** a demo script and video: the elder walks out from the
-  tree by day, the fog opening and staying remembered, the hill as a
-  lookout, a lantern's pool, dusk shortening sight, ghouls' eyes in the
-  fog, then in sight, and a tunnel. Screenshots; the full suite; a
-  `docs/test-time.md` row for M9; the design's status and what changed.
-- **Where:** `app/demos/`, `app/BUILD.bazel`, docs.
-- **Found in:** fog design.
-- **Tests:** the full suite.
-  Note (from M9.1): `fog::tests` prints the town's fog as text (2 m a
-  character) with `--test_arg=fog:: --test_output=all`; the M9.1 cost test's
-  numbers (0.6 ms a frame with every unit moving, unoptimized) are the
-  baseline for the demo's frame times.
-  Note (from M9.2): `app/demos/sacred_tree_fog.json`
-  (`:sacred_tree_fog_demo`) is a start: day out west, the cave's passage,
-  dusk at 4x in it, night outside; it has no hill, lantern or ghouls yet,
-  and no F7 step (the control protocol has no key op). The town camera is
-  close, so the fog's square edges are seldom in frame.
-  Note (from M9.3): the demo now carries wood out west, drops it (5 WOOD
-  at about (-30, 3)) and lays a ballista site at (-33, 6), both remembered
-  once the elder walks on; the cave's last 4x wait is shorter (210
-  frames) so the elder is at the west ramp's foot (-27, -9) as night's
-  column comes up: the first ghoul is heard at about frame 2500 (a growl,
-  the eyes), and from (-22, -3) at frame 2700 one is in sight and the next
-  shows by its eyes. `max_frames` can't pass 3600 (`fps * 120`, the
-  control protocol); the run ends near frame 2950. Growls are in the
-  report's `audio.events` (`growl`). The night floor (`FOG_FLOOR` 0.12)
-  and the eyes' size were judged on these frames only; check them in the
-  video. Out of scope for M9.3, in "Fog of war follow-ups" below.
-
 ## Fog of war follow-ups
 
 - **Status:** open
-- **Why:** what M9.3 left simple, to look at after the review.
+- **Why:** what M9.3 and M9.4 left simple, to look at after the review.
 - **What to do:** remembered buildings and piles keep their full colour on
   dimmed ground (dim them with the ground, e.g. by a rig material fade);
   a site's ground ring (`input::hud`) and lantern heads' glow aren't
   fogged (the heads are emissive, so they stay bright in remembered
-  ground); the heard ghouls' eyes are UI marks of a fixed size, drawn over
-  everything (they don't scale with zoom, and stand over labels); other
-  players' elders, nametags and health bars aren't fogged (elders are eyes,
-  so always in sight; a dead elder's body isn't); the tree's piles' labels
+  ground); the heard ghouls' eyes are UI marks of a fixed size (10 x 8
+  px each since M9.4), drawn over everything (they don't scale with zoom,
+  and stand over labels); other players' elders, nametags and health bars
+  aren't fogged (elders are eyes, so always in sight; a dead elder's body
+  isn't); the tree's piles' labels
   and the sprites' tags at the plaza overlap at the town's zoom (from
   before the fog); a cliff's face still takes its top tile's fog (M9.2).
+  From M9.4: demo scripts have no key op, so F7's modes aren't in the
+  video; the town camera is close, so the hill's lookout shows only a
+  corner of what it sees (a zoom op in demo scripts, as for the depths
+  demo); the fogged ground's light is dim by night, so the lantern's pool
+  reads by its shape more than its warmth.
 - **Where:** `app/src/settlement.rs` (`remember`), `app/src/heard.rs`,
   `app/src/fog_dressing.rs`, `app/src/input/`.
-- **Found in:** M9.3.
+- **Found in:** M9.3, M9.4.
 
 ## Depths follow-ups
 
@@ -286,6 +259,67 @@ its milestones, in order; one PR per milestone.
 - **Found in:** M7.5.
 
 ## Done
+
+### M9.4 Demo and review
+
+- **Status:** done (branch `kestrel-sacred-tree-fog`)
+- **Why:** the prototype is reviewed by video.
+- **What to do:** a demo script and video: the elder walks out from the
+  tree by day, the fog opening and staying remembered, the hill as a
+  lookout, a lantern's pool, dusk shortening sight, ghouls' eyes in the
+  fog, then in sight, and a tunnel. Screenshots; the full suite; a
+  `docs/test-time.md` row for M9; the design's status and what changed.
+- **Where:** `app/demos/`, `app/BUILD.bazel`, docs.
+- **Found in:** fog design.
+- **Tests:** the full suite.
+  Note (from M9.1): `fog::tests` prints the town's fog as text (2 m a
+  character) with `--test_arg=fog:: --test_output=all`; the M9.1 cost test's
+  numbers (0.6 ms a frame with every unit moving, unoptimized) are the
+  baseline for the demo's frame times.
+  Note (from M9.2): `app/demos/sacred_tree_fog.json`
+  (`:sacred_tree_fog_demo`) is a start: day out west, the cave's passage,
+  dusk at 4x in it, night outside; it has no hill, lantern or ghouls yet,
+  and no F7 step (the control protocol has no key op). The town camera is
+  close, so the fog's square edges are seldom in frame.
+  Note (from M9.3): the demo now carries wood out west, drops it (5 WOOD
+  at about (-30, 3)) and lays a ballista site at (-33, 6), both remembered
+  once the elder walks on; the cave's last 4x wait is shorter (210
+  frames) so the elder is at the west ramp's foot (-27, -9) as night's
+  column comes up: the first ghoul is heard at about frame 2500 (a growl,
+  the eyes), and from (-22, -3) at frame 2700 one is in sight and the next
+  shows by its eyes. `max_frames` can't pass 3600 (`fps * 120`, the
+  control protocol); the run ends near frame 2950. Growls are in the
+  report's `audio.events` (`growl`). The night floor (`FOG_FLOOR` 0.12)
+  and the eyes' size were judged on these frames only; check them in the
+  video. Out of scope for M9.3, in "Fog of war follow-ups" above.
+
+- **Done:** **Demo** (`app/demos/sacred_tree_fog.json`,
+  `:sacred_tree_fog_demo`, 3117 frames, 104 s at 30 fps; local plain
+  build): at dawn the elder carries wood to the hill's north-west corner
+  (-13, -13), a lookout: its sight runs down over the cliff and past the
+  town's 30 m start memory into black; down the west ramp and out west,
+  the fog opening and staying remembered (the dropped pile and the
+  ballista site, M9.3); a lantern site at (-30, -19), built by two miners
+  (`mine` job) from a stone and an amber stocked at the tree while the
+  elder goes round to the mountain's cave at 2x and waits in its passage
+  at 4x (about 25 s of video). It comes out late in the day and dusk falls
+  as it stands by the lantern (frame about 2390): its sight halves, the
+  lantern's pool stays. At the west ramp's foot (-27, -9) the night's
+  column rises 9 m off: two pairs of eyes and a growl (frame 2509), then a
+  step to (-25, -6) puts two ghouls in sight with the lantern's own pool
+  apart from the elder's, and the elder walks past the lantern on to
+  (-18, -28): its sight leaves, the pool stays in sight. **Eyes**
+  (`heard.rs`): bigger and brighter after the video (`DOT` 10 x 8 px,
+  `GAP` 10, the glow `MARGIN` 6 x 5, colour (1.0, 0.55, 0.1), halo 0.22);
+  at 6 x 5 they were lost at the town camera's distance in a phone-sized
+  video. The night floor (`FOG_FLOOR` 0.12) reads: remembered ground stays
+  grey apart from never-seen black, by the lantern too. Video and a 720p
+  copy (about 4 MB), screenshots: the lookout, out west remembered, dusk
+  halving sight, the eyes, ghouls in sight beside the lantern's pool, the
+  lantern's pool at night. Full suite 27/27 (`--build_tests_only`; the
+  plain `//kestrel/...` stops at analysis on the GPU demos).
+  Not shown: F7's modes (the control protocol has no key op); a tunnel
+  (the cave's passage stands in); the eyes through rock underground.
 
 ### M9.3 Hiding things in the fog
 
