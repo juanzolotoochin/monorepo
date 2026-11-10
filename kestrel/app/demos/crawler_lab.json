@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "scene": "crawler-lab",
+  "fps": 30,
+  "width": 1440,
+  "height": 960,
+  "max_frames": 1500,
+  "steps": [
+    { "op": "wait", "frames": 45 },
+    { "op": "walk", "position": [-1.5, 4] },
+    { "op": "wait", "frames": 30 },
+    { "op": "walk", "position": [0, -4.5] },
+    { "op": "wait", "frames": 45 },
+    { "op": "walk", "position": [0.6, 0] },
+    { "op": "wait", "frames": 20 },
+    { "op": "board" },
+    { "op": "wait", "frames": 30 },
+    { "op": "drive", "direction": [0, 1] },
+    { "op": "wait", "frames": 90 },
+    { "op": "drive", "direction": [0, 0] },
+    { "op": "wait", "frames": 45 },
+    { "op": "board" },
+    { "op": "wait", "frames": 30 },
+    { "op": "walk", "position": [-8, 6] },
+    { "op": "wait", "frames": 45 },
+    { "op": "walk", "position": [12, -10] },
+    { "op": "wait", "frames": 45 }
+  ]
+}

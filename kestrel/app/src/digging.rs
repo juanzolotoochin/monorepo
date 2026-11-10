@@ -82,7 +82,9 @@ impl Service for Digging {
     type Deps = (WorldMirror, SceneView, crate::character::Avatar);
 
     fn init(world: &mut World) -> Self {
-        if !world.resource::<SceneView>().has_feature(SceneFeature::Digging) {
+        // A volume is drawn here even where it can't be dug (the Crawler Lab).
+        let scene = world.resource::<SceneView>();
+        if !scene.has_feature(SceneFeature::Digging) && scene.pack.scene.volume.is_none() {
             return Digging::default();
         }
         let center = center_tile(world.resource::<WorldMirror>().center);

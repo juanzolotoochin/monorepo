@@ -1,0 +1,53 @@
+// The crawler prototype's map (kestrel/CRAWLER.md, C11): 64 x 64 m of
+// stone with every kind of ground the crawler steps over or stops at, and
+// room between them for its 6 x 3 m body to walk and turn. The elder
+// spawns beside the parked crawler; G climbs into its cab.
+//
+// The volume is in cells: tiles (1 m; tile (x, z) is centered on scene
+// meters x, z) and layers (0.5 m; layer k from k * 0.5 to (k + 1) * 0.5 m).
+// Boxes apply in order: a later Empty carves an earlier Solid. A box's min
+// and max tiles are both in it.
+//
+// Layout (tiles, x east, z south):
+// - Ground: layers -8 to 0 everywhere, its floor at 0 m.
+// - East, terraces and the 1.5 m step: three tiers of half a meter, each
+//   4 m deep, from x 8 east, z -6..6, up to a plateau at 1.5 m over
+//   x 16..30. Its north face (z -6) is a single 1.5 m step: the most a
+//   foot climbs (C5). Elders walk up the terraces.
+// - North, the cliff: a mesa x -6..6, z -26..-18, 2 m high all round:
+//   more than a foot climbs.
+// - West, the trench and the pit, z -8..8, 9 m of ground between them:
+//   the trench x -12..-11 (2 m wide, the widest gap a foot crosses) and
+//   2 m deep; the pit x -24..-22 (3 m wide, too wide) and 3 m deep.
+// - South, the moat: a ring 2 m wide and 2 m deep round an island
+//   x -6..6, z 16..26 (13 x 11 m) at 0 m. No water yet; it's a dry ditch.
+// - Ghouls (the supply) walk from the south-east corner past the crawler
+//   to the north-west one, chasing an elder who comes close.
+// Not dug: the camera follows the elder as in the dig scenes.
+Scene(id: "crawler-lab", player: "elder", features: [SlopedGround, CameraFollow],
+    name: "CRAWLER LAB / ROUGH GROUND",
+    spawn: (0.0, 0.0, 0.0),
+    industrial: false,
+    instances: [],
+    // The crawler, parked facing south (+z) beside the spawn.
+    vehicles: [(character: "crawler", position: (2.5, 0.0, 0.0), heading: 0.0)],
+    volume: Some((
+        extent: 32,
+        boxes: [
+            // The ground.
+            Solid(min: (-32, -32), max: (32, 32), bottom: -8, top: 0),
+            // The terraces up to the plateau, whose north face is the step.
+            Solid(min: (8, -6), max: (30, 6), bottom: 0, top: 1),
+            Solid(min: (12, -6), max: (30, 6), bottom: 1, top: 2),
+            Solid(min: (16, -6), max: (30, 6), bottom: 2, top: 3),
+            // The mesa and its cliff.
+            Solid(min: (-6, -26), max: (6, -18), bottom: 0, top: 4),
+            // The trench and the pit.
+            Empty(min: (-12, -8), max: (-11, 8), bottom: -4, top: 0),
+            Empty(min: (-24, -8), max: (-22, 8), bottom: -6, top: 0),
+            // The moat round its island.
+            Empty(min: (-8, 14), max: (8, 28), bottom: -4, top: 0),
+            Solid(min: (-6, 16), max: (6, 26), bottom: -4, top: 0),
+        ],
+    )),
+)

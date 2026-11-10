@@ -1,0 +1,37 @@
+// The crawler (kestrel/CRAWLER.md): a brass-and-timber engine on four
+// insect legs, about four elders big. A pilot climbs into its cab with G
+// and drives it with the movement controls; run trots. Its feet step up or
+// down 1.5 m (three layers) and across gaps up to 2 m.
+//
+// Until its legs walk (CR.2) it rolls like the rover on four points under
+// its hips, so `vehicle` leaves out the wheelbase, track, climb and seat:
+// the `crawler` section sets them (twice the hip's offsets, the step and
+// the deck).
+(
+    sim: (
+        brain: Vehicle,
+        // Half its width: what it pushes off and what a pilot reaches to
+        // board it.
+        body: (radius: 1.5),
+        movement: (walk: 1.6, run: 3.2),
+        vehicle: (
+            acceleration: 1.5, braking: 3, reverse: 0.8,
+            turn: 35,
+            lift: 1.5, gravity: 9.8,
+        ),
+        crawler: (
+            // 6 m long and 3 m wide, its deck 3 m over its feet (C2).
+            length: 6.0, width: 3.0, deck: 3.0,
+            // The front right leg; the others mirror it. A foot rests
+            // 1.1 m out from the body's side, a little ahead of its hip.
+            hip: (along: 2.4, across: 1.2),
+            stance: (along: 3.0, across: 2.6),
+            reach: 4.5, step: 1.5, gap: 2.0,
+            // A wave walk, one leg at a time with three down (2.4 s a
+            // round), and a diagonal trot on boost (1 s a round) (C7).
+            walk: (cycle: 144, swing: 33, lift: 0.9),
+            trot: (cycle: 60, swing: 27, lift: 0.6),
+        ),
+    ),
+    view: (skin: "crawler"),
+)

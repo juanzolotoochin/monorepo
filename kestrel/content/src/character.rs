@@ -57,6 +57,11 @@ pub struct CharacterDef {
     /// `rules_hash` adds it when any character has one.
     #[serde(skip)]
     pub vehicle: Option<VehicleDef>,
+    /// How a Vehicle with legs walks (the crawler). Left out of the
+    /// encoding like `attack`; `rules_hash` adds it when any character has
+    /// one.
+    #[serde(skip)]
+    pub crawler: Option<CrawlerDef>,
     /// How a FollowRoute character with an `attack` turns on an elder or
     /// sprite who comes close, and when it gives up (Sacred Tree, B5).
     /// Without it, it keeps to its route. Left out of the encoding like
@@ -130,6 +135,52 @@ pub struct VehicleDef {
     pub gravity: Fx,
     /// The driver's feet above the chassis base, in meters.
     pub seat: Fx,
+}
+
+/// How a crawler walks on four legs (`kestrel/CRAWLER.md`, C2, C5, C7), in
+/// simulation units. Offsets are meters from the body's middle, `along`
+/// its heading and `across` it; the front right leg's are written, and the
+/// other three mirror them (front left, front right, rear left, rear right,
+/// as `VehicleState::wheels`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CrawlerDef {
+    /// The body's length and width, in meters.
+    pub length: Fx,
+    pub width: Fx,
+    /// The deck over the planted feet, in meters: where the pilot stands.
+    pub deck: Fx,
+    /// Where a leg joins the body, at the deck's height.
+    pub hip: Offset,
+    /// Where a planted foot rests when the crawler stands still.
+    pub stance: Offset,
+    /// The farthest a foot gets from its hip, in meters.
+    pub reach: Fx,
+    /// The highest step a foot climbs or drops under the body, in meters.
+    pub step: Fx,
+    /// The widest gap a foot crosses between footholds, in meters.
+    pub gap: Fx,
+    /// One leg at a time, three always down (C7).
+    pub walk: GaitDef,
+    /// Diagonal pairs, two at a time, on boost (C7).
+    pub trot: GaitDef,
+}
+
+/// A point on a crawler's body, in meters from its middle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Offset {
+    pub along: Fx,
+    pub across: Fx,
+}
+
+/// A crawler's gait, in ticks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GaitDef {
+    /// Ticks for every leg to step once.
+    pub cycle: u64,
+    /// Ticks a foot is in the air.
+    pub swing: u64,
+    /// How high a swinging foot clears its path, in meters.
+    pub lift: Fx,
 }
 
 /// A threat's swing at a player, in simulation units.
@@ -392,8 +443,43 @@ pub(crate) struct SimFile {
     abilities: Option<Vec<AbilityFile>>,
     attack: Option<ThreatAttackFile>,
     vehicle: Option<VehicleFile>,
+    crawler: Option<CrawlerFile>,
     chase: Option<ChaseFile>,
     sprite: Option<SpriteFile>,
+}
+
+/// A Vehicle character's `crawler`: meters and 60 Hz frames. It sets the
+/// `vehicle` section's wheelbase and track (twice the hip's offsets),
+/// climb (the step) and seat (the deck), which it leaves out.
+#[derive(Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct CrawlerFile {
+    length: Option<Fx>,
+    width: Option<Fx>,
+    deck: Option<Fx>,
+    hip: Option<OffsetFile>,
+    stance: Option<OffsetFile>,
+    reach: Option<Fx>,
+    step: Option<Fx>,
+    gap: Option<Fx>,
+    walk: Option<GaitFile>,
+    trot: Option<GaitFile>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct OffsetFile {
+    along: Option<Fx>,
+    across: Option<Fx>,
+}
+
+/// 60 Hz frames, and meters; `lift` defaults to half a meter.
+#[derive(Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct GaitFile {
+    cycle: Option<u64>,
+    swing: Option<u64>,
+    lift: Option<Fx>,
 }
 
 /// A Sprite character's `sprite`: health, and 60 Hz frames dead.
@@ -545,7 +631,10 @@ macro_rules! merge_fields {
     };
 }
 
-merge_fields!(SimFile { brain, abilities } { body, movement, health, avatar, carry, attack, vehicle, chase, sprite });
+merge_fields!(SimFile { brain, abilities } { body, movement, health, avatar, carry, attack, vehicle, crawler, chase, sprite });
+merge_fields!(CrawlerFile { length, width, deck, reach, step, gap } { hip, stance, walk, trot });
+merge_fields!(OffsetFile { along, across } {});
+merge_fields!(GaitFile { cycle, swing, lift } {});
 merge_fields!(SpriteFile { health, respawn } { mine });
 merge_fields!(SpriteMineFile { dig, capacity, transfer } {});
 merge_fields!(ChaseFile { detect, leash, look } {});
@@ -648,7 +737,28 @@ pub(crate) fn character_def(file: SimFile) -> Result<CharacterDef, String> {
     if file.vehicle.is_some() && brain != Brain::Vehicle {
         return Err("only Vehicle characters have `vehicle`".into());
     }
-    let vehicle = file.vehicle.map(vehicle_def).transpose()?;
+    if file.crawler.is_some() && brain != Brain::Vehicle {
+        return Err("only Vehicle characters have `crawler`".into());
+    }
+    let crawler = file.crawler.map(crawler_def).transpose()?;
+    let mut vehicle_file = file.vehicle;
+    if let (Some(c), Some(v)) = (&crawler, &mut vehicle_file) {
+        // Until the crawler walks on its feet (CR.2) it rolls like a rover
+        // on four points under its hips.
+        let two = Fx::from_int(2);
+        for (field, value, from) in [
+            ("wheelbase", &mut v.wheelbase, c.hip.along * two),
+            ("track", &mut v.track, c.hip.across * two),
+            ("climb", &mut v.climb, c.step),
+            ("seat", &mut v.seat, c.deck),
+        ] {
+            if value.is_some() {
+                return Err(format!("a crawler's vehicle.{field} comes from its `crawler` section; leave it out"));
+            }
+            *value = Some(from);
+        }
+    }
+    let vehicle = vehicle_file.map(vehicle_def).transpose()?;
     if file.chase.is_some() && attack.is_none() {
         return Err("only FollowRoute characters with an `attack` have `chase`".into());
     }
@@ -657,7 +767,54 @@ pub(crate) fn character_def(file: SimFile) -> Result<CharacterDef, String> {
         return Err("only Sprite characters have `sprite`".into());
     }
     let sprite = file.sprite.map(sprite_def).transpose()?;
-    Ok(CharacterDef { brain, body: BodyDef { radius }, movement: MovementDef { walk, run }, health, avatar, carry, abilities, attack, vehicle, chase, sprite })
+    Ok(CharacterDef { brain, body: BodyDef { radius }, movement: MovementDef { walk, run }, health, avatar, carry, abilities, attack, vehicle, crawler, chase, sprite })
+}
+
+fn crawler_def(file: CrawlerFile) -> Result<CrawlerDef, String> {
+    let get = |value: Option<Fx>, field: &str, lo: Fx, hi: Fx| -> Result<Fx, String> {
+        let value = need(value, &format!("crawler.{field}"))?;
+        if !within(value, lo, hi) {
+            return Err(format!("crawler.{field} must be in [{}, {}] m", lo.to_f64(), hi.to_f64()));
+        }
+        Ok(value)
+    };
+    let (length, width) = (get(file.length, "length", Fx::ONE, Fx::from_int(16))?, get(file.width, "width", Fx::ONE, Fx::from_int(16))?);
+    let deck = get(file.deck, "deck", Fx::ONE, Fx::from_int(6))?;
+    let offset = |o: Option<OffsetFile>, field: &str, along: Fx, across: Fx| -> Result<Offset, String> {
+        let o = need(o, &format!("crawler.{field}"))?;
+        Ok(Offset {
+            along: get(o.along, &format!("{field}.along"), Fx::ZERO, along)?,
+            across: get(o.across, &format!("{field}.across"), Fx::ZERO, across)?,
+        })
+    };
+    let two = Fx::from_int(2);
+    // A hip is on the body; a foot rests no nearer the middle than its hip.
+    let hip = offset(file.hip, "hip", length / two, width / two)?;
+    let stance = offset(file.stance, "stance", Fx::from_int(16), Fx::from_int(16))?;
+    if stance.along < hip.along || stance.across < hip.across {
+        return Err("crawler.stance must be no nearer the middle than crawler.hip".into());
+    }
+    let reach = get(file.reach, "reach", Fx::ONE, Fx::from_int(12))?;
+    let (dx, dy) = (stance.along - hip.along, stance.across - hip.across);
+    if dx * dx + dy * dy + deck * deck > reach * reach {
+        return Err("crawler.reach must reach a resting foot (crawler.stance, crawler.deck down) from its hip".into());
+    }
+    let step = get(file.step, "step", Fx::ZERO, deck.min(Fx::from_int(3)))?;
+    let gap = get(file.gap, "gap", Fx::ZERO, reach)?;
+    let gait = |g: Option<GaitFile>, field: &str, legs: u64| -> Result<GaitDef, String> {
+        let g = need(g, &format!("crawler.{field}"))?;
+        let cycle = need(g.cycle, &format!("crawler.{field}.cycle"))?;
+        let swing = need(g.swing, &format!("crawler.{field}.swing"))?;
+        // Each leg (or pair) swings in its own slice of the cycle.
+        if !(1..=600).contains(&cycle) || swing == 0 || swing * legs > cycle {
+            return Err(format!("crawler.{field} needs 1..=600 frames a cycle and a swing of at most a {legs}th of it"));
+        }
+        let lift = get(Some(g.lift.unwrap_or(Fx::HALF)), &format!("{field}.lift"), Fx::from_ratio(1, 10), Fx::from_int(3))?;
+        Ok(GaitDef { cycle: ticks_from_60hz(cycle), swing: ticks_from_60hz(swing), lift })
+    };
+    let walk = gait(file.walk, "walk", 4)?;
+    let trot = gait(file.trot, "trot", 2)?;
+    Ok(CrawlerDef { length, width, deck, hip, stance, reach, step, gap, walk, trot })
 }
 
 fn sprite_def(file: SpriteFile) -> Result<SpriteDef, String> {
@@ -720,10 +877,10 @@ fn vehicle_def(file: VehicleFile) -> Result<VehicleDef, String> {
         turn: per_tick(degrees * Fx::PI / Fx::from_int(180)),
         wheelbase: get(file.wheelbase, "wheelbase", Fx::HALF, Fx::from_int(8), "m")?,
         track: get(file.track, "track", Fx::HALF, Fx::from_int(8), "m")?,
-        climb: get(file.climb, "climb", Fx::ZERO, Fx::from_int(2), "m")?,
+        climb: get(file.climb, "climb", Fx::ZERO, Fx::from_int(3), "m")?,
         lift: per_tick(get(file.lift, "lift", tenth, Fx::from_int(20), "m/s")?),
         gravity: per_tick(per_tick(get(file.gravity, "gravity", one, Fx::from_int(100), "m/s²")?)),
-        seat: get(file.seat, "seat", Fx::ZERO, Fx::from_int(3), "m")?,
+        seat: get(file.seat, "seat", Fx::ZERO, Fx::from_int(6), "m")?,
     })
 }
 

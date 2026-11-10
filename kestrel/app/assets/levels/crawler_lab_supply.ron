@@ -1,0 +1,17 @@
+// The Crawler Lab's rules (crawler_lab.ron): the elder, and three of the
+// Sacred Tree's ghouls a few seconds apart, walking from the south-east
+// corner past the parked crawler to the north-west one. Each turns on an
+// elder it sees within 3 m and gives up past 5 m. Player combat is off
+// (no player_health), so their swings do no harm; reaching the far corner
+// only counts against a base the lab doesn't have.
+(id: "crawler_lab", extent: 32.0,
+ items: [(id: "stone", label: "STONE", skin: "item_iron", scale: 0.45)],
+ depots: [], sources: [], links: [],
+ agents: [
+  (id: "elder", label: "ELDER", character: "elder", position: (0.0, 0.0), capacity: 5, one_kind: true, links: [], cargo_anchor: (0.0, 0.65, -0.19), equipment: None, controlled: true)
+ ],
+ producers: [], defenders: [],
+ waves: [
+  (id: "ghouls", position: (26.0, 20.0), target: (-28.0, -28.0), character: "ghoul_sacred_tree", first: 2.0, every: 6.0, count: 3)
+ ],
+ base_health: 100)

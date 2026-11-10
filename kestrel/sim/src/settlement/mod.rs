@@ -1246,6 +1246,8 @@ mod seat_tests;
 #[cfg(test)]
 mod tunnel_lab_tests;
 #[cfg(test)]
+mod crawler_lab_tests;
+#[cfg(test)]
 mod town_volume_tests;
 #[cfg(test)]
 mod path_tests;

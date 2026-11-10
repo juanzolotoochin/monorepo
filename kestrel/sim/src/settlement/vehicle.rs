@@ -15,11 +15,16 @@
 //!
 //! Driving is an arcade model in `Fx`: the stick is a direction on the
 //! ground, the vehicle turns toward it (or backs toward it, when it points
-//! behind) and speeds up toward the throttle. Four wheels sample the ground;
-//! a wheel rolls up a step no higher than `climb` and over any drop, and the
-//! chassis rides on their mean height, rising at `lift` and falling under
-//! `gravity`. Discs, rock columns and the arena edge block it like an
-//! avatar's body.
+//! behind) and speeds up toward the throttle. Four wheels sample the ground
+//! (in a volume, the floor each rolls on: `ground_under`); a wheel rolls up
+//! a step no higher than `climb` and over any drop, and the chassis rides on
+//! their mean height, rising at `lift` and falling under `gravity`. Discs,
+//! rock columns and the arena edge block it like an avatar's body.
+//!
+//! The crawler (`kestrel/CRAWLER.md`) is a vehicle too. Until its feet
+//! walk (CR.2) it rolls like this on four points under its hips, which its
+//! `crawler` section sets as the wheelbase and track, up steps of its
+//! `step` (1.5 m).
 
 use content::character::{CharacterDef, CharacterIx, VehicleDef};
 use fx::{Fx, FxVec2};
@@ -80,7 +85,7 @@ impl VehicleState {
     /// A parked vehicle at `position`, settled on the ground. `None` where
     /// a wheel would be over a drop or outside the arena.
     pub fn new(character: CharacterIx, def: &CharacterDef, position: FxVec2, heading: Fx, terrain: &Terrain) -> Option<VehicleState> {
-        let wheels = ground_under(terrain, wheel_points(position, heading, tuning(def)))?;
+        let wheels = ground_under(terrain, wheel_points(position, heading, tuning(def)), None)?;
         let height = mean(wheels);
         Some(VehicleState { character, position, heading, speed: Fx::ZERO, height, fall: Fx::ZERO, wheels, control: Control::default() })
     }
@@ -105,13 +110,22 @@ pub fn wheel_points(position: FxVec2, heading: Fx, vehicle: &VehicleDef) -> [FxV
     [position + ahead - side, position + ahead + side, position - ahead - side, position - ahead + side]
 }
 
-fn ground_under(terrain: &Terrain, points: [FxVec2; 4]) -> Option<[Fx; 4]> {
+/// The ground under each wheel. In a volume scene, given the wheels'
+/// ground before (`from`), each reads the floor it rolls on
+/// (`Terrain::floor`): the highest no more than `climb` and a layer over
+/// its last, so a wheel stays on its floor over a tunnel or a cave, and a
+/// wall too high to climb is its top or none (both refused by
+/// `rollable`). Elsewhere, and when parked, the top of the ground.
+fn ground_under(terrain: &Terrain, points: [FxVec2; 4], from: Option<([Fx; 4], Fx)>) -> Option<[Fx; 4]> {
     let mut ground = [Fx::ZERO; 4];
-    for (g, p) in ground.iter_mut().zip(points) {
+    for (i, (g, p)) in ground.iter_mut().zip(points).enumerate() {
         if !terrain.inside(p) {
             return None;
         }
-        *g = terrain.ground(p)?;
+        *g = match from {
+            Some((wheels, climb)) if terrain.volume.is_some() => terrain.floor(p, wheels[i] + climb)?,
+            _ => terrain.ground(p)?,
+        };
     }
     Some(ground)
 }
@@ -192,7 +206,7 @@ pub(super) fn self_update(v: &mut VehicleState, terrain: &Terrain, def: &Charact
     let vd = tuning(def);
     let radius = def.body.radius;
     // The ground under it may have been dug since.
-    if let Some(wheels) = ground_under(terrain, wheel_points(v.position, v.heading, vd)) {
+    if let Some(wheels) = ground_under(terrain, wheel_points(v.position, v.heading, vd), Some((v.wheels, vd.climb))) {
         v.wheels = wheels;
     }
     let top = if v.control.boost { def.movement.run } else { def.movement.walk }.div_int(content::TICKS_PER_SECOND as i64);
@@ -224,7 +238,7 @@ pub(super) fn self_update(v: &mut VehicleState, terrain: &Terrain, def: &Charact
     if rate > Fx::ZERO && turn != Fx::ZERO {
         let heading = v.heading + turn.clamp(-rate, rate);
         // A turn that would swing a wheel up a cliff or over the edge doesn't happen.
-        if let Some(wheels) = ground_under(terrain, wheel_points(v.position, heading, vd)).filter(|&w| rollable(v.wheels, w, vd.climb)) {
+        if let Some(wheels) = ground_under(terrain, wheel_points(v.position, heading, vd), Some((v.wheels, vd.climb))).filter(|&w| rollable(v.wheels, w, vd.climb)) {
             v.heading = heading;
             v.wheels = wheels;
         }
@@ -235,7 +249,7 @@ pub(super) fn self_update(v: &mut VehicleState, terrain: &Terrain, def: &Charact
     let steps = (delta.length() / SUBSTEP).ceil().floor_to_int().max(1);
     for _ in 0..steps {
         let candidate = push_out(terrain, v.position + delta.div_int(steps), radius);
-        match ground_under(terrain, wheel_points(candidate, v.heading, vd)).filter(|&w| rollable(v.wheels, w, vd.climb)) {
+        match ground_under(terrain, wheel_points(candidate, v.heading, vd), Some((v.wheels, vd.climb))).filter(|&w| rollable(v.wheels, w, vd.climb)) {
             Some(wheels) => {
                 v.position = candidate;
                 v.wheels = wheels;
