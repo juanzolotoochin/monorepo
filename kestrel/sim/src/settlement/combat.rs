@@ -752,7 +752,7 @@ impl Settlement {
         // Only avatars leave the ground.
         let Some(avatar) = a.avatar() else { return true };
         let radius = super::avatar::character_of(&self.characters, a).body.radius;
-        let ground = terrain.footprint(a.body.position, radius).unwrap_or(avatar.flight.support);
+        let ground = terrain.footprint_at(a.body.position, avatar.height, radius).unwrap_or(avatar.flight.support);
         avatar.height - ground <= SWING_HEIGHT
     }
 

@@ -133,7 +133,7 @@ fn a_pit_dug_in_a_ghouls_way_turns_it_round_the_pit() {
     dig_out(&mut sim, rest);
     sim.world_mut().settlement_and_terrain_mut().1.deepen(*last);
     let tick = sim.world().tick();
-    sim.world_mut().settlement_mut().agents[ELDER as usize].avatar_mut().unwrap().dig = Some(Dig { tile: *last, started: tick, until: tick + 1 });
+    sim.world_mut().settlement_mut().agents[ELDER as usize].avatar_mut().unwrap().dig = Some(Dig { tile: *last, started: tick, until: tick + 1, layer: None });
     step(&mut sim, &[]);
     let terrain = sim.world().terrain();
     assert_eq!(terrain.pit(*last), 2, "the elder's dig went in");

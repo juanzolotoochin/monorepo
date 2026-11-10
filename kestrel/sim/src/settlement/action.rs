@@ -37,6 +37,7 @@ use super::sprites;
 use super::{AgentIx, AgentState, BuildingKind, BuildingState, DepotIx, DepotState, Direction, InventoryRef, ItemIx, Role, Settlement, Transfer};
 use crate::messages::ActionMessages;
 use crate::terrain::{DigRefusal, Terrain};
+use crate::volume::DigDirection;
 use crate::CommandKind;
 
 /// How far a dig keeps from a tree pile's dock and a building's output pile
@@ -65,6 +66,10 @@ pub enum Action {
     /// Dig out a layer of the tile the agent stands on; in sloped scenes,
     /// of the tile in front of it (`View::dig_in_front`).
     DigDown,
+    /// In a volume scene, dig the tile in front, level, down or up
+    /// (`View::dig_volume`); elsewhere as `DigDown`. `DigDown` in a volume
+    /// scene is a level dig.
+    DigFront(DigDirection),
     /// Take units from (or, with `deposit`, give units to) a depot; units
     /// move once the agent is at the dock.
     Transfer { depot: DepotIx, item: ItemIx, units: u32, deposit: bool },
@@ -117,6 +122,7 @@ impl Action {
             CommandKind::Jetpack { agent, enabled } => (agent, Action::Jetpack(enabled)),
             CommandKind::Jump { agent } => (agent, Action::Jump),
             CommandKind::DigDown { agent } => (agent, Action::DigDown),
+            CommandKind::DigFront { agent, direction } => (agent, Action::DigFront(direction)),
             CommandKind::ReleaseDirectControl { agent } => (agent, Action::Release),
             CommandKind::RepairCover { agent, asset } => (agent, Action::RepairCover(asset)),
             CommandKind::Respawn { agent } => (agent, Action::Respawn),
@@ -216,6 +222,15 @@ impl Settlement {
         let body = &self.agents.get(agent as usize)?.body;
         Some(self.view(agent, tick, terrain).dig_in_front(body.position, body.heading, body.base_radius))
     }
+
+    /// The tile and first layer `agent` would dig in front of it now in a
+    /// volume scene `direction`-wise, or why it can't
+    /// (`View::dig_volume`): for the app's refusal hint.
+    pub fn dig_volume_of(&self, agent: AgentIx, tick: u64, terrain: &Terrain, direction: DigDirection) -> Option<Result<((i32, i32), i32), DigRefusal>> {
+        let a = self.agents.get(agent as usize)?;
+        let height = a.avatar()?.height;
+        Some(self.view(agent, tick, terrain).dig_volume(a.body.position, height, a.body.heading, a.body.base_radius, direction))
+    }
 }
 
 impl View<'_> {
@@ -241,6 +256,17 @@ impl View<'_> {
             return Err(refusal);
         }
         self.dig_blocked(tile).map_or(Ok(tile), Err)
+    }
+
+    /// The tile and first layer a digger of `radius` at `position`, its feet
+    /// at `height`, facing `heading`, digs `direction`-wise in a volume
+    /// scene (V5 of the verticality design): the tile in front
+    /// (`Terrain::front_tile`), if the volume allows it
+    /// (`Terrain::volume_dig`) and nothing stands on it (`dig_blocked`).
+    pub fn dig_volume(&self, position: FxVec2, height: Fx, heading: Fx, radius: Fx, direction: DigDirection) -> Result<((i32, i32), i32), DigRefusal> {
+        let tile = Terrain::front_tile(position, crate::nav::heading_vector(heading));
+        let bottom = self.terrain.volume_dig(position, height, radius, tile, direction)?;
+        self.dig_blocked(tile).map_or(Ok((tile, bottom)), Err)
     }
 
     /// What stands on `tile` that a dig in front refuses

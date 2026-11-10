@@ -338,12 +338,18 @@ pub struct AgentState {
     pub phase: String,
     pub cargo: Inventory,
     pub trailer: Option<Trailer>,
+    /// A sprite's feet height (`SpriteState::height`), interpolated: the
+    /// floor it stands on in a volume scene (V.7), 0 elsewhere.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feet: Option<f32>,
 }
 
 /// The job a miner sprite reports (`SpriteView::job`), and the one the
 /// control protocol names for `SpriteJob::Mine`: no building kind is
 /// called that.
 pub const MINE_JOB: &str = "mine";
+/// The job the test walker reports (`SpriteJob::Follow`, V.7).
+pub const FOLLOW_JOB: &str = "follow";
 
 /// What a sprite is doing, as the player reads it (A7).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -874,6 +880,10 @@ impl Simulation {
                     // pile view.
                     cargo: inventory(current.depot_cargo(a), a.carry.inventory.capacity),
                     trailer,
+                    feet: a.sprite().map(|s| {
+                        let now = s.height.to_f32();
+                        before.and_then(|b| b.sprite()).map_or(now, |b| b.height.to_f32() + (now - b.height.to_f32()) * alpha)
+                    }),
                 };
                 (a.id.clone(), state)
             })
@@ -1127,6 +1137,7 @@ impl Simulation {
                     s::SpriteJob::Idle => None,
                     s::SpriteJob::Staff(kind) => Some(current.building_kinds[kind as usize].id.clone()),
                     s::SpriteJob::Mine => Some(MINE_JOB.to_string()),
+                    s::SpriteJob::Follow => Some(FOLLOW_JOB.to_string()),
                 };
                 let respawn = current.characters[a.character as usize].sprite.map_or(0, |d| d.respawn);
                 let dead = (!a.body.alive()).then(|| (sprite.respawn_at.saturating_sub(respawn), sprite.respawn_at));

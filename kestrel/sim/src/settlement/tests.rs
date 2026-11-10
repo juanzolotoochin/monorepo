@@ -265,6 +265,7 @@ fn think(sim: &Simulation, a: &mut AgentState, me: AgentIx) -> Option<Action> {
         dig_claims: &[],
         stone: None,
         danger: &[],
+        leader: None,
     };
     haulers::think(a, me, &ctx)
 }

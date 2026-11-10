@@ -613,3 +613,100 @@ fn a_town_mine_keeps_its_hill() {
     assert!(terrain.is_undiggable(sim::terrain::Terrain::pit_tile(center)));
     assert_eq!(terrain, world.terrain());
 }
+
+/// A scene with a volume (format 40: `Terrain::volume`) loads with its
+/// spans and ore, and its floors over each other.
+#[test]
+fn a_volume_scene_keeps_its_cells_and_ore() {
+    use fx::Fx;
+    let content = Content::builtin();
+    let mut volume = sim::volume::Volume::default();
+    // Ground to 1 m, a bridge deck from 3 m to 4 m, ore in the deck.
+    volume.fill_box((-3, -3), (3, 3), 0, 2);
+    volume.fill_box((-1, -3), (1, 3), 6, 8);
+    volume.set_ore((0, 0), 7, Some(sim::mine::BLUE));
+    let setup = sim::settlement::SceneSetup {
+        player: "exosuit".into(),
+        extent: Fx::from_int(16),
+        sloped: true,
+        volume: Some(volume),
+        ..Default::default()
+    };
+    let mut world = sim::World::new_scene(5, &content, &setup).unwrap();
+    let mut terrain = world.terrain().clone();
+    let center = sim::terrain::Terrain::pit_tile(terrain.center);
+    let tunnel = (center.0 + 1, center.1);
+    assert!(terrain.clear_cell(tunnel, 1));
+    world.set_terrain(terrain);
+    let bytes = write(&world, &content);
+    let loaded = read(&bytes, &content).unwrap();
+    let terrain = loaded.terrain();
+    let volume = terrain.volume.as_ref().unwrap();
+    assert_eq!(volume.ore((center.0, center.1), 7), Some(sim::mine::BLUE));
+    assert!(!volume.is_solid(tunnel, 1) && volume.is_solid(tunnel, 0));
+    assert_eq!(volume.floors(center).collect::<Vec<_>>(), [2, 8]);
+    assert_eq!(terrain, world.terrain());
+    assert_eq!(sim::hash::hash_of(terrain), sim::hash::hash_of(world.terrain()));
+    assert_eq!(write(&loaded, &content), bytes, "saved again, the same bytes");
+}
+
+/// A volume dig in progress keeps its first layer (format 41), and a
+/// pit's dig keeps none.
+#[test]
+fn a_volume_dig_in_progress_keeps_its_layer() {
+    use fx::Fx;
+    let content = Content::builtin();
+    let mut volume = sim::volume::Volume::default();
+    volume.fill_box((-8, -8), (8, 8), -8, 0);
+    let setup = sim::settlement::SceneSetup { player: "exosuit".into(), extent: Fx::from_int(8), diggable: true, sloped: true, volume: Some(volume), ..Default::default() };
+    let mut sim = sim::Simulation::from_world(sim::World::new_scene(5, &content, &setup).unwrap(), 1);
+    let agent = sim.world().settlement().unwrap().player().unwrap();
+    sim.step(&[sim::Command { player: sim::PlayerId(0), kind: sim::CommandKind::DigFront { agent, direction: sim::volume::DigDirection::Down } }]);
+    let dig = sim.world().settlement().unwrap().agents[agent as usize].avatar().unwrap().dig.clone().expect("a dig started");
+    assert_eq!(dig.layer, Some(-1));
+    let bytes = write(sim.world(), &content);
+    let loaded = read(&bytes, &content).unwrap();
+    assert_eq!(loaded.settlement().unwrap().agents[agent as usize].avatar().unwrap().dig, Some(dig));
+    assert_eq!(write(&loaded, &content), bytes);
+}
+
+/// A volume scene keeps a sprite's feet (format 42): the test walker
+/// standing on a block 1 m up, which continues alike after loading.
+#[test]
+fn a_volume_scene_keeps_a_sprites_height() {
+    use fx::Fx;
+    let content = Content::builtin();
+    let scenario = content::scenario::Scenario::parse(
+        r#"(id: "walk", extent: 8.0, items: [(id: "ore", label: "ORE", skin: "ore", scale: 0.2)],
+         depots: [], sources: [], links: [],
+         agents: [(id: "player", label: "YOU", character: "exosuit", position: (0.0, 0.0), capacity: 8, links: [],
+                   cargo_anchor: (0.0, 0.65, -0.19), equipment: None, controlled: true)],
+         sprites: [(id: "walker", label: "WALKER", character: "sprite", position: (2.0, 0.0), follow: true)],
+         producers: [], defenders: [], waves: [], base_health: 1, player_health: 0)"#,
+    )
+    .unwrap();
+    let mut volume = sim::volume::Volume::default();
+    volume.fill_box((-8, -8), (8, 8), -8, 0);
+    volume.fill_box((1, -3), (5, 3), 0, 2);
+    let setup = sim::settlement::SceneSetup {
+        scenario: Some(scenario),
+        player: "exosuit".into(),
+        extent: Fx::from_int(8),
+        diggable: true,
+        sloped: true,
+        volume: Some(volume),
+        piles: Some(sim::settlement::PileSetup { capacity: 12, ..Default::default() }),
+        ..Default::default()
+    };
+    let mut sim = sim::Simulation::from_world(sim::World::new_scene(5, &content, &setup).unwrap(), 1);
+    let walker = |w: &sim::World| w.settlement().unwrap().agents.iter().find(|a| a.id == "walker").unwrap().sprite().unwrap().height;
+    assert_eq!(walker(sim.world()), Fx::ONE, "on the block");
+    let bytes = write(sim.world(), &content);
+    let loaded = read(&bytes, &content).unwrap();
+    assert_eq!(walker(&loaded), Fx::ONE);
+    assert_eq!(write(&loaded, &content), bytes);
+    let mut again = Simulation::from_world(loaded, 1);
+    for _ in 0..60 {
+        assert_eq!(sim.step(&[]).total, again.step(&[]).total);
+    }
+}

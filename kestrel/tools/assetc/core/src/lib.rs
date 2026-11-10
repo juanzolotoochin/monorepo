@@ -331,6 +331,19 @@ pub struct Scene {
     pub dig_layers: Option<u8>,
     #[serde(default)]
     pub terrain: Option<Terrain>,
+    /// The ground as solid and empty cells, so floors stand over floors
+    /// (tunnels, caves, bridges; `kestrel/VERTICALITY.md`): solid and empty
+    /// boxes in tiles and 0.5 m layers, applied in order
+    /// ([`sim::volume::VolumeLayout`] has the units). Needs `SlopedGround`;
+    /// the volume is the whole ground, so not with a mine or terrain.
+    #[serde(default)]
+    pub volume: Option<sim::volume::VolumeLayout>,
+    /// Test walkers (V.7 of the verticality design): where each starts
+    /// (scene meters; `y` is ignored, it stands on the floor nearest the
+    /// ground), a sprite that follows the player through the volume on 3D
+    /// paths and does nothing else.
+    #[serde(default)]
+    pub walkers: Vec<[f32; 3]>,
     #[serde(default)]
     pub style: Option<StyleProfile>,
     #[serde(default)]
@@ -711,6 +724,17 @@ impl ScenePack {
         if let Some(piles) = &self.scene.piles {
             piles.validate()?;
         }
+        if let Some(volume) = &self.scene.volume {
+            validate_volume(&self.scene, volume)?;
+        }
+        // Test walkers (V.7) walk a volume's floors, a few of them.
+        if !self.scene.walkers.is_empty() {
+            let Some(volume) = &self.scene.volume else { return Err("a scene's walkers walk a volume; give it one".into()) };
+            let extent = volume.extent as f32;
+            if self.scene.walkers.len() > 8 || self.scene.walkers.iter().any(|w| !w.iter().all(|v| v.is_finite()) || w[0].abs() > extent || w[2].abs() > extent) {
+                return Err("a scene has up to 8 walkers, inside its volume".into());
+            }
+        }
         if let Some(mine) = &self.scene.mine {
             if !(8.0..=128.0).contains(&mine.extent) || mine.extent.fract() != 0.0 {
                 return Err("a mine's extent must be a whole number of meters from 8 to 128".into());
@@ -761,6 +785,28 @@ impl ScenePack {
         Ok(pack)
     }
 }
+/// A scene's volume: its boxes make a map ([`sim::volume::VolumeLayout::validate`]),
+/// it is the scene's only ground and slopes, and the spawn stands on it.
+fn validate_volume(scene: &Scene, volume: &sim::volume::VolumeLayout) -> Result<()> {
+    volume.validate()?;
+    if scene.mine.is_some() || scene.terrain.is_some() {
+        return Err("a volume is the scene's ground: it can't have a mine or terrain too".into());
+    }
+    if !scene.features.contains(&SceneFeature::SlopedGround) {
+        return Err("a volume needs the SlopedGround feature".into());
+    }
+    let [x, _, z] = scene.spawn;
+    let half = volume.extent as f32 + 0.5;
+    if x.abs() >= half || z.abs() >= half {
+        return Err(format!("the spawn ({x}, {z}) is outside the volume's map"));
+    }
+    let tile = sim::terrain::Terrain::pit_tile(fx::FxVec2::new(fx::Fx::quantize(x), fx::Fx::quantize(z)));
+    if volume.build().top(tile).is_none() {
+        return Err(format!("the spawn ({x}, {z}) is over no ground in the volume"));
+    }
+    Ok(())
+}
+
 /// Stable content key shared by the tool and runtime cache.
 pub fn content_key(value: &impl Serialize) -> String {
     let bytes = serde_json::to_vec(value).expect("validated asset serializes");
@@ -861,6 +907,8 @@ mod tests {
                 day_cycle: None,
                 lanterns: vec![],
                 glow: None,
+                volume: None,
+                walkers: vec![],
                 instances: vec![Instance {
                     prefab: "rock".into(),
                     position: [0.0; 3],
@@ -917,6 +965,8 @@ mod tests {
                 day_cycle: None,
                 lanterns: vec![],
                 glow: None,
+                volume: None,
+                walkers: vec![],
                 terrain: Some(Terrain {
                     platforms: vec![TerrainPlatform {
                         min: [-1.0; 2],

@@ -148,6 +148,207 @@ pub fn path_toward(terrain: &Terrain, start: FxVec2, goal: FxVec2, radius: Fx) -
     search(&grid, start, goal, true).unwrap_or_default()
 }
 
+/// How long a string-pulled segment of a 3D path may get
+/// ([`path_at`]): pulling tries every node of a segment, so a cap keeps it
+/// cheap on long straight runs.
+const MAX_SEGMENT: i64 = 12;
+
+/// The nodes of the 3D lattice (V8 of the verticality design), made as the
+/// search reaches their lattice point: one per floor a body of `radius`
+/// fits on there, at the height its feet would be ([`Terrain::footprint_at`]
+/// from the floor's height).
+struct Floors {
+    /// By lattice point: the first node and how many.
+    cells: Vec<Option<(u32, u8)>>,
+    /// Every node made: its lattice point and feet height.
+    nodes: Vec<(usize, Fx)>,
+}
+
+impl Floors {
+    fn of(&mut self, grid: &Grid, cell: usize) -> std::ops::Range<usize> {
+        if let Some((first, count)) = self.cells[cell] {
+            return first as usize..first as usize + count as usize;
+        }
+        let p = grid.point(cell);
+        let volume = grid.terrain.volume.as_ref().expect("3D paths need a volume");
+        let mut heights: Vec<Fx> = if grid.terrain.inside(p) {
+            volume.floors(Terrain::pit_tile(p)).filter_map(|f| grid.terrain.footprint_at(p, crate::volume::height(f), grid.radius)).collect()
+        } else {
+            Vec::new()
+        };
+        heights.sort();
+        heights.dedup();
+        let first = self.nodes.len() as u32;
+        self.nodes.extend(heights.iter().map(|&h| (cell, h)));
+        self.cells[cell] = Some((first, heights.len() as u8));
+        first as usize..first as usize + heights.len()
+    }
+
+    /// The node at `cell` whose feet are within a layer of `z`, if any:
+    /// floors in a column are further apart than that.
+    fn at(&mut self, grid: &Grid, cell: usize, z: Fx) -> Option<usize> {
+        self.of(grid, cell).find(|&n| (self.nodes[n].1 - z).abs() <= crate::terrain::LAYER)
+    }
+}
+
+/// Where a walk from `a`, feet at `z`, straight to `b` puts the feet
+/// ([`Terrain::walk_at`]), if it passes the grid's obstacles too.
+fn walk(grid: &Grid, a: FxVec2, z: Fx, b: FxVec2) -> Option<Fx> {
+    if !grid.terrain.clear_with(a, b, grid.radius, grid.extra) {
+        return None;
+    }
+    grid.terrain.walk_at(a, b, z, grid.radius)
+}
+
+/// A path on foot through a volume scene (V8 of the verticality design)
+/// from `start`, its feet at `z`, to `goal`: on the floor there nearest
+/// `goal_z` (within a layer of its [`Terrain::footprint_near`]), or on
+/// any floor without one. Its waypoints come with the feet's height at
+/// each, the last at `goal`; empty if there is no way.
+///
+/// The nodes are the half-tile lattice's points, one per floor there
+/// (`Floors`); an edge joins neighbours where a body walks from one to the
+/// other ([`Terrain::walk_at`]: a step of at most a layer up or down, with
+/// headroom all the way, no drops). A* over them breaks ties by node, so
+/// the same ground gives the same path. String pulling joins nodes a
+/// straight walk joins, up to `MAX_SEGMENT` nodes a segment. Without a
+/// volume, [`path_avoiding`] with each waypoint's ground.
+pub fn path_at(terrain: &Terrain, start: FxVec2, z: Fx, goal: FxVec2, goal_z: Option<Fx>, radius: Fx, extra: &[Disc]) -> Vec<(FxVec2, Fx)> {
+    if terrain.volume.is_none() {
+        return path_avoiding(terrain, start, goal, radius, extra).into_iter().map(|p| (p, terrain.height(p))).collect();
+    }
+    let any = |_: FxVec2, _: FxVec2| true;
+    let grid = Grid::new(terrain, start, goal, radius, extra, &any);
+    let wanted = match goal_z {
+        Some(goal_z) => match terrain.footprint_near(goal, goal_z, radius) {
+            Some(floor) => Some(floor),
+            None => return Vec::new(),
+        },
+        None => None,
+    };
+    let arrives = |end: Fx| wanted.is_none_or(|w| (end - w).abs() <= crate::terrain::LAYER);
+    if let Some(end) = walk(&grid, start, z, goal).filter(|&end| arrives(end)) {
+        return vec![(goal, end)];
+    }
+    let (width, height) = (grid.width, grid.height);
+    let mut floors = Floors { cells: vec![None; width * height], nodes: Vec::new() };
+    let lattice = |p: FxVec2| -> (i64, i64) {
+        (((p.x - grid.origin.x) / SPACING).round().floor_to_int(), ((p.y - grid.origin.y) / SPACING).round().floor_to_int())
+    };
+    let near = |c: (i64, i64)| {
+        let ys = (c.1 - NEAR_NODES).max(0)..=(c.1 + NEAR_NODES).min(height as i64 - 1);
+        ys.flat_map(move |y| ((c.0 - NEAR_NODES).max(0)..=(c.0 + NEAR_NODES).min(width as i64 - 1)).map(move |x| (y * width as i64 + x) as usize))
+    };
+    // The start's node: the nearest it walks to (the lowest node on a tie).
+    let mut first = None;
+    for cell in near(lattice(start)) {
+        for n in floors.of(&grid, cell) {
+            let (at, h) = (grid.point(cell), floors.nodes[n].1);
+            let reached = walk(&grid, start, z, at).is_some_and(|end| (end - h).abs() <= crate::terrain::LAYER);
+            if reached {
+                let key = ((at - start).length_squared(), n);
+                if first.is_none_or(|(best, _)| key < best) {
+                    first = Some((key, n));
+                }
+            }
+        }
+    }
+    let Some((_, first)) = first else { return Vec::new() };
+    // The goal's nodes: those near it that walk onto the wanted floor there.
+    let mut last: Vec<(usize, Fx)> = Vec::new();
+    for cell in near(lattice(goal)) {
+        for n in floors.of(&grid, cell) {
+            if let Some(end) = walk(&grid, grid.point(cell), floors.nodes[n].1, goal).filter(|&end| arrives(end)) {
+                last.push((n, end));
+            }
+        }
+    }
+    if last.is_empty() {
+        return Vec::new();
+    }
+    let aim = lattice(goal);
+    let heuristic = |cell: usize| -> u32 {
+        let dx = ((cell % width) as i64).abs_diff(aim.0.clamp(0, width as i64 - 1)) as u32;
+        let dy = ((cell / width) as i64).abs_diff(aim.1.clamp(0, height as i64 - 1)) as u32;
+        10 * dx.max(dy) + 4 * dx.min(dy)
+    };
+    let mut costs: Vec<u32> = Vec::new();
+    let mut parents: Vec<usize> = Vec::new();
+    let grow = |costs: &mut Vec<u32>, parents: &mut Vec<usize>, len: usize| {
+        if costs.len() < len {
+            costs.resize(len, u32::MAX);
+            parents.resize(len, usize::MAX);
+        }
+    };
+    grow(&mut costs, &mut parents, floors.nodes.len());
+    costs[first] = 0;
+    let mut open = BinaryHeap::new();
+    open.push(Reverse((heuristic(floors.nodes[first].0), 0u32, first)));
+    let mut end = None;
+    while let Some(Reverse((_, cost, current))) = open.pop() {
+        if cost != costs[current] {
+            continue;
+        }
+        if let Some(&(n, h)) = last.iter().find(|&&(n, _)| n == current) {
+            end = Some((n, h));
+            break;
+        }
+        let (cell, z) = floors.nodes[current];
+        let (x, y) = ((cell % width) as i64, (cell / width) as i64);
+        for dy in -1..=1i64 {
+            for dx in -1..=1i64 {
+                let (nx, ny) = (x + dx, y + dy);
+                if (dx == 0 && dy == 0) || nx < 0 || ny < 0 || nx >= width as i64 || ny >= height as i64 {
+                    continue;
+                }
+                let next_cell = ny as usize * width + nx as usize;
+                let new_cost = cost + if dx != 0 && dy != 0 { 14 } else { 10 };
+                let Some(arrived) = walk(&grid, grid.point(cell), z, grid.point(next_cell)) else { continue };
+                let Some(next) = floors.at(&grid, next_cell, arrived) else { continue };
+                grow(&mut costs, &mut parents, floors.nodes.len());
+                if new_cost < costs[next] {
+                    costs[next] = new_cost;
+                    parents[next] = current;
+                    open.push(Reverse((new_cost + heuristic(next_cell), new_cost, next)));
+                }
+            }
+        }
+    }
+    let Some((end, arrival)) = end else { return Vec::new() };
+    let mut raw = vec![(goal, arrival)];
+    let mut node = end;
+    loop {
+        let (cell, h) = floors.nodes[node];
+        raw.push((grid.point(cell), h));
+        if node == first {
+            break;
+        }
+        node = parents[node];
+    }
+    raw.reverse();
+    // String pulling: from each waypoint, the furthest of the next nodes a
+    // straight walk reaches on their floor, stopping at the first it
+    // doesn't.
+    let mut result = Vec::new();
+    let (mut from, mut feet) = (start, z);
+    let mut i = 0;
+    while i < raw.len() {
+        let mut next = (i, raw[i].1);
+        for j in i..raw.len().min(i + MAX_SEGMENT as usize) {
+            match walk(&grid, from, feet, raw[j].0).filter(|&h| (h - raw[j].1).abs() <= crate::terrain::LAYER) {
+                Some(h) => next = (j, h),
+                None if j > i => break,
+                None => {}
+            }
+        }
+        from = raw[next.0].0;
+        feet = next.1;
+        result.push((from, feet));
+        i = next.0 + 1;
+    }
+    result
+}
+
 /// A* over `grid` from `start` to `goal`, string-pulled, and whether it
 /// reaches `goal`. With no way there, `None`, or, `toward`, the route to
 /// the reached node nearest `goal`.

@@ -592,6 +592,13 @@ fn start(world: &mut World, command: &Command, tick: u64) -> Result<Pending, Str
             world.resource_mut::<SessionService>().dig();
             Ok(Pending::Applied)
         }
+        Command::DigFront { direction } => {
+            if !world.resource::<SessionService>().world().is_some_and(|w| w.terrain().diggable && w.terrain().volume.is_some()) {
+                return Err("This scene has no volume to dig".into());
+            }
+            world.resource_mut::<SessionService>().dig_toward(*direction);
+            Ok(Pending::Applied)
+        }
         Command::AssertFlight { airborne, altitude, tolerance } => {
             if !altitude.is_finite() || !tolerance.is_finite() || !(0.0..=1.0).contains(tolerance) {
                 return Err("Flight assertion requires a finite altitude and tolerance in 0..1".into());

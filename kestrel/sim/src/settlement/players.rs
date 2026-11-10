@@ -43,7 +43,7 @@ impl Settlement {
         }
         let Some(template) = self.player().map(|i| self.agents[i as usize].clone()) else { return };
         let position = self.spawn_spot(player, terrain, template.body.home, template.radius());
-        let height = terrain.footprint(position, template.radius()).unwrap_or(self.spawn_height);
+        let height = terrain.footprint_near(position, self.spawn_height, template.radius()).unwrap_or(self.spawn_height);
         // Only the definition carries over; the state starts fresh.
         self.agents.push(AgentState {
             id: format!("player-{}", player.0),

@@ -31,9 +31,12 @@ rust_test(
         "//kestrel/app/assets:levels/forest_supply.ron",
         "//kestrel/app/assets:levels/sacred_tree.ron",
         "//kestrel/app/assets:levels/sacred_tree_supply.ron",
+        "//kestrel/app/assets:levels/tunnel_lab.ron",
     ],
     crate = ":sim",
     edition = "2021",
+    # The Tunnel Lab's tests read its scene's volume section.
+    deps = ["@crates//:ron"],
 )
 
 # Rewrites testdata/golden.txt after an intended change to simulation results.

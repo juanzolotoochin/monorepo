@@ -1,0 +1,71 @@
+// The verticality MVP's map (kestrel/VERTICALITY.md, V10): 64 x 64 m of
+// stone with a mountain 8 m high and a tunnel through it, and a cave under
+// a natural bridge (two floors over one spot), with ore inside.
+//
+// The volume is in cells: tiles (1 m; tile (x, z) is centered on scene
+// meters x, z) and layers (0.5 m; layer k from k * 0.5 to (k + 1) * 0.5 m).
+// Boxes apply in order: a later Empty carves an earlier Solid.
+//
+// Layout (tiles, x east, z south):
+// - Ground: layers -8 to 0 everywhere, its floor at 0 m.
+// - The mountain: tiers of 1 m, each a tile in, x 3..25 and z -12..12 at
+//   its foot up to x 10..18, z -5..5 at 8 m (layer 16).
+// - The tunnel: along x through z -1..1 (3 m wide), floor at 0 m, 3 m of
+//   headroom (layers 0..6); roofed from x 6 to 22, open cuts beyond.
+// - The bridge: a block x -18..-4, z 10..16, its top at 5 m (layer 10); the
+//   cave under it x -13..-9 through z 10..16, floor 0 m, 3 m high. Over
+//   (-11, 13) there are floors at 0 m and 5 m. Stairs a layer a tile climb
+//   its west side from x -27 (0.5 m) to x -19 (4.5 m), z 11..15.
+// - Ore: amber high in the mountain, blue in the tunnel's south wall,
+//   green deep under the mountain.
+Scene(id: "tunnel-lab", player: "exosuit", features: [Digging, SlopedGround],
+    name: "TUNNEL LAB / CAVES",
+    // On the open ground by the tunnel's west mouth.
+    spawn: (0.0, 0.0, 0.0),
+    industrial: false,
+    instances: [],
+    // The test walker (V.7): a sprite that follows the player through the
+    // tunnel and over the bridge on 3D paths, and does nothing else.
+    walkers: [(-2.0, 0.0, 3.0)],
+    // Dug ore lands in piles; carry it to the collector (V.4 digs here).
+    piles: Some((
+        capacity: 12,
+        dispensers: [],
+        piles: [],
+        collector: Some((-3.0, 0.0, -4.0)),
+    )),
+    volume: Some((
+        extent: 32,
+        boxes: [
+            // The ground.
+            Solid(min: (-32, -32), max: (32, 32), bottom: -8, top: 0),
+            // The mountain, a 1 m tier a tile in at a time.
+            Solid(min: (3, -12), max: (25, 12), bottom: 0, top: 2),
+            Solid(min: (4, -11), max: (24, 11), bottom: 2, top: 4),
+            Solid(min: (5, -10), max: (23, 10), bottom: 4, top: 6),
+            Solid(min: (6, -9), max: (22, 9), bottom: 6, top: 8),
+            Solid(min: (7, -8), max: (21, 8), bottom: 8, top: 10),
+            Solid(min: (8, -7), max: (20, 7), bottom: 10, top: 12),
+            Solid(min: (9, -6), max: (19, 6), bottom: 12, top: 14),
+            Solid(min: (10, -5), max: (18, 5), bottom: 14, top: 16),
+            // Ore pockets.
+            Solid(min: (11, 5), max: (13, 7), bottom: 9, top: 11, material: AmberOre),
+            Solid(min: (13, -3), max: (15, -2), bottom: 1, top: 4, material: BlueCrystal),
+            Solid(min: (17, 2), max: (18, 3), bottom: -4, top: -2, material: GreenMalachite),
+            // The tunnel.
+            Empty(min: (3, -1), max: (25, 1), bottom: 0, top: 6),
+            // The bridge, the cave under it, and the stairs up its west side.
+            Solid(min: (-18, 10), max: (-4, 16), bottom: 0, top: 10),
+            Empty(min: (-13, 10), max: (-9, 16), bottom: 0, top: 6),
+            Solid(min: (-27, 11), max: (-19, 15), bottom: 0, top: 1),
+            Solid(min: (-26, 11), max: (-19, 15), bottom: 1, top: 2),
+            Solid(min: (-25, 11), max: (-19, 15), bottom: 2, top: 3),
+            Solid(min: (-24, 11), max: (-19, 15), bottom: 3, top: 4),
+            Solid(min: (-23, 11), max: (-19, 15), bottom: 4, top: 5),
+            Solid(min: (-22, 11), max: (-19, 15), bottom: 5, top: 6),
+            Solid(min: (-21, 11), max: (-19, 15), bottom: 6, top: 7),
+            Solid(min: (-20, 11), max: (-19, 15), bottom: 7, top: 8),
+            Solid(min: (-19, 11), max: (-19, 15), bottom: 8, top: 9),
+        ],
+    )),
+)

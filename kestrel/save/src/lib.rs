@@ -120,7 +120,15 @@ pub use inputs::{InputLog, INPUT_FORMAT_VERSION, OLDEST_INPUT_FORMAT_VERSION};
 /// 39: night waves and dawn (M7.2): a wave's nights (`WaveState::nights`),
 ///     the settlement's day cycle and the threats the sunrise burned away
 ///     (`Settlement::clock`, `dispelled`), and a burn's `dawn`.
-pub const FORMAT_VERSION: u32 = 39;
+/// 40: the terrain keeps its volume, if the scene has one
+///     (`Terrain::volume`: solid spans per column and ore per cell, V.1 of
+///     the verticality design).
+/// 41: a dig keeps the first layer it clears in a volume scene
+///     (`avatar::Dig::layer`, V.4 of the verticality design).
+/// 42: a sprite keeps its feet's height (`SpriteState::height`) and a pile
+///     the floor it lies on (`Pile::height`), V.7 of the verticality
+///     design; a sprite's job can be `SpriteJob::Follow`, appended.
+pub const FORMAT_VERSION: u32 = 42;
 pub const GAME_VERSION: &str = "0.0.0-dev";
 const MAGIC: &[u8; 4] = b"GSAV";
 

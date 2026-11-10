@@ -291,6 +291,18 @@ impl SessionService {
         }
     }
 
+    /// Digs the volume in front of the avatar, level, down or up (V5 of the
+    /// verticality design), where the scene has a volume; elsewhere as
+    /// `dig`.
+    pub fn dig_toward(&mut self, direction: sim::volume::DigDirection) {
+        let Some(agent) = self.player() else { return };
+        match self.world().map(|w| w.terrain()) {
+            Some(terrain) if terrain.diggable && terrain.volume.is_some() => self.command(CommandKind::DigFront { agent, direction }),
+            Some(terrain) if terrain.diggable => self.command(CommandKind::DigDown { agent }),
+            _ => {}
+        }
+    }
+
     /// Whether every command sent so far has been applied.
     pub fn caught_up(&self) -> bool {
         self.world().is_some_and(|w| w.tick() > self.applies_at) && self.session.pending_inputs() == 0
@@ -313,8 +325,14 @@ impl SessionService {
 
     /// Ground at a rendered position, including generated terraces and dug pits.
     /// Character posing samples this; physics continues to use fixed-point terrain.
+    /// In volume scenes it is the floor under `p` at its height (`p.y`, a
+    /// body's feet; `Terrain::floor`), so a body in a tunnel stands on the
+    /// tunnel's floor, not the mountain over it; elsewhere `p.y` is ignored.
     pub fn ground_height(&self, p: Vec3) -> Option<f32> {
-        self.world()?.terrain().ground(self.to_sim(p)).map(|height| height.to_f32())
+        let terrain = self.world()?.terrain();
+        let at = self.to_sim(p);
+        let ground = if terrain.volume.is_some() { terrain.floor(at, Fx::quantize(p.y)) } else { terrain.ground(at) };
+        ground.map(|height| height.to_f32())
     }
 
     /// Writes the current world's recording, if asked to: `<path>.gsav` is
@@ -410,6 +428,7 @@ fn scene_setup(library: &SceneLibrary, index: usize, cache: &crate::assets::Mode
         memory_trial: scene.features.contains(&voxel_assets::SceneFeature::MemoryTrial),
         diggable: scene.features.contains(&voxel_assets::SceneFeature::Digging),
         sloped: scene.features.contains(&voxel_assets::SceneFeature::SlopedGround),
+        volume: scene.volume.as_ref().map(|volume| volume.build()),
         dig_layers: scene.dig_layers,
         mine: scene.mine.as_ref().map(|m| m.seed),
         // Centered on the tree when raised (`Terrain::raise_hill`).
@@ -421,6 +440,7 @@ fn scene_setup(library: &SceneLibrary, index: usize, cache: &crate::assets::Mode
             ramp_length: h.ramp_length,
             foot: h.foot,
         }),
+        walkers: scene.walkers.iter().map(|w| [q(w[0]), q(w[2])]).collect(),
         vehicles: scene.vehicles.iter().map(|v| sim::settlement::VehicleSetup {
             character: v.character.clone(),
             position: [q(v.position[0]), q(v.position[2])],

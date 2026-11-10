@@ -241,6 +241,9 @@ pub(super) struct Ctx<'a> {
     /// The enemies that chase, as they stand this tick (they move first):
     /// what a sprite off the hill flees from (`sprites::Alarm`).
     pub danger: &'a [super::sprites::Danger],
+    /// The player's avatar as it stood last tick, where and its feet's
+    /// height: what the test walker follows (`follow`).
+    pub leader: Option<(FxVec2, Fx)>,
 }
 
 pub(super) fn footprint(a: &AgentState) -> Footprint {
